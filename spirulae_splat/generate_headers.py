@@ -91,8 +91,6 @@ def generate_headers():
         'RasterizationBwd',
         'RasterizationEval3DFwd',
         'RasterizationEval3DBwd',
-        'RasterizationSortedEval3DFwd',
-        'RasterizationSortedEval3DBwd',
         'Optimizer',
         'FusedProjectionBwdOptim',
         'Densify',

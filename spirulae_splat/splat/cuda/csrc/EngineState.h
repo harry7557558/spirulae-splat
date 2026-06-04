@@ -25,9 +25,6 @@
 #include "RasterizationEval3DBwd.cuh"
 #include "RasterizationEval3DFwd.cuh"
 #include "RasterizationFwd.cuh"
-#include "RasterizationSortedEval3DBwd.cuh"
-#include "RasterizationSortedEval3DFwd.cuh"
-#include "SVHash.cuh"
 #include "SplatTileIntersector.cuh"
 #include "Visualizer.cuh"
 

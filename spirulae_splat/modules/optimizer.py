@@ -390,11 +390,6 @@ class OptimizerConfig:
     features_dc_lr: float = 0.005
     features_sh_lr: float = 0.005 / 20
 
-    features_ch_lr: float = 0.0025 / 5
-    sv_sites_lr: float = 0.01
-    sv_colors_lr: float = 0.0005
-    densities_lr: float = 0.05
-    densities_lr_final: Optional[float] = 0.0005
     background_dc_lr: float = 0.0025
     background_sh_lr: float = 0.0025 / 5
     bilagrid_lr: float = 2e-3  # 2e-3*sqrt(B) in paper

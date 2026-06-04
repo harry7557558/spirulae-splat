@@ -27,8 +27,7 @@ static void _alloc_grad_buffers() {
     // FragmentBwd::atomicStore), so those three slots must remain allocated;
     // opacity/dc/sh still go via the screen buffer or the fused optim path.
     if (engine().optim.use_fused_proj_bwd_optim) {
-        bool need_world_geom = (engine().primitive == "3dgut" ||
-                                engine().primitive == "3dgut_sv");
+        bool need_world_geom = (engine().primitive == "3dgut");
         if (need_world_geom) {
             engine().grad.means.resize("eng.v_means", N);
             engine().grad.quats.resize("eng.v_quats", N);
@@ -300,7 +299,7 @@ std::map<std::string, float> engine_compute_loss_backward(
             DeviceTensorFloatND(engine().grad.features_dc),   // [N, 3]
             DeviceTensorFloatND(engine().grad.features_sh),   // [N, K, 3]
         };
-    } else if (engine().primitive == "3dgut" || engine().primitive == "3dgut_sv") {
+    } else if (engine().primitive == "3dgut") {
         v_splats_w = {
             DeviceTensorFloatND(engine().grad.means),         // [N, 3]
             DeviceTensorFloatND(engine().grad.quats),         // [N, 4]

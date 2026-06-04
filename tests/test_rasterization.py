@@ -11,9 +11,6 @@ from gsplat.rendering import rasterization as gsplat_rasterization
 
 from spirulae_splat.splat.cuda import (
     ray_depth_to_linear_depth,
-    svhash_create_initial_volume,
-    svhash_get_voxels,
-    svhash_split_voxels,
 )
 
 from utils import check_close, timeit
@@ -34,12 +31,6 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
     renderer = Renderer(
         primitive="3dgut" if WITH_UT else ["3dgs", "mip"][IS_ANTIALIASED],
         splats_world=(means, quats, scales, opacities.unsqueeze(-1), features_dc, features_sh),
-        # primitive="opaque_triangle",
-        # splat_params=(means, quats, scales+1.8, opacities.unsqueeze(-1).repeat(1, 2), features_dc, features_sh, features_dc.unsqueeze(-2).repeat(1, 2, 1)),
-        # primitive="voxel",
-        # splat_params=(torch.cat((means, 5.0*torch.exp(scales.mean(-1, True))), dim=-1), 2.0*torch.exp(opacities).unsqueeze(-1).repeat(1, 8), features_dc, features_sh),
-        # splat_params=(voxels, 10.0*torch.exp(opacities)[voxel_indices], features_dc[:len(voxels)], features_sh[:len(voxels)]),
-        # splat_params=(voxels, densities_0[voxel_indices], features_dc_0, features_sh_0),
         cur_num_splats=len(means),
         packed=PACKED,
     )

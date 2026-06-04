@@ -67,54 +67,6 @@ __device__ bool getAABB(
     return opac > ALPHA_THRESHOLD && isfinite(dot(aabb_min, aabb_max));
 }
 
-// template<bool remap>
-// __device__ bool getAABB(
-//     const OpaqueTriangle::WorldBuffer& splatBuffer, long idx,
-//     float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
-// ) {
-//     float3 mean = splatBuffer.means[idx];
-//     float3 scales = splatBuffer.scales[idx];
-//     float4 quat = splatBuffer.quats[idx];
-
-//     float3 vert0, vert1, vert2;
-//     SlangProjectionUtils::map_opaque_triangle(mean, quat, scales, &vert0, &vert1, &vert2);
-
-//     aabb_min = {
-//         fmin(fmin(vert0.x, vert1.x), vert2.x),
-//         fmin(fmin(vert0.y, vert1.y), vert2.y),
-//         fmin(fmin(vert0.z, vert1.z), vert2.z),
-//     };
-//     aabb_max = {
-//         fmax(fmax(vert0.x, vert1.x), vert2.x),
-//         fmax(fmax(vert0.y, vert1.y), vert2.y),
-//         fmax(fmax(vert0.z, vert1.z), vert2.z),
-//     };
-
-//     if (remap) {
-//         aabb_min = remapAABB(aabb_min, rel_scale);
-//         aabb_max = remapAABB(aabb_max, rel_scale);
-//     }
-//     return isfinite(dot(aabb_min, aabb_max));
-// }
-
-// template<bool remap>
-// __device__ bool getAABB(
-//     const VoxelPrimitive::WorldBuffer& splatBuffer, long idx,
-//     float3 &aabb_min, float3 &aabb_max, float rel_scale = 1.0f
-// ) {
-//     float4 pos_size = splatBuffer.pos_size[idx];
-//     float x = pos_size.x, y = pos_size.y, z = pos_size.z, s = pos_size.w;
-
-//     aabb_min = { x, y, z };
-//     aabb_max = { x+s, y+s, z+s };
-
-//     if (remap) {
-//         aabb_min = remapAABB(aabb_min, rel_scale);
-//         aabb_max = remapAABB(aabb_max, rel_scale);
-//     }
-//     return isfinite(dot(aabb_min, aabb_max));
-// }
-
 
 template<ssplat::CameraModelType camera_model>
 struct Tile {
@@ -193,31 +145,6 @@ struct Tile {
             glm::length(mean - ro) :
             glm::dot(mean - ro, rd);  // negative if center is behind
     }
-
-    // __device__ __forceinline__ float isOverlap(const OpaqueTriangle::WorldBuffer& splatBuffer, long idx) const {
-    //     // TODO: primitive aware version with less false positives
-    //     float3 aabb_min, aabb_max;
-    //     bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
-    //     if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
-    //         return -1.0f;
-    //     float3 mean_ = 0.5f * (aabb_min + aabb_max);
-    //     glm::vec3 mean(mean_.x, mean_.y, mean_.z);
-    //     return camera_model != ssplat::CameraModelType::PINHOLE ?
-    //         glm::length(mean - ro) :
-    //         glm::dot(mean - ro, rd);  // negative if center is behind
-    // }
-
-    // __device__ __forceinline__ float isOverlap(const VoxelPrimitive::WorldBuffer& splatBuffer, long idx) const {
-    //     float3 aabb_min, aabb_max;
-    //     bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
-    //     if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
-    //         return -1.0f;
-    //     float3 mean_ = 0.5f * (aabb_min + aabb_max);
-    //     glm::vec3 mean(mean_.x, mean_.y, mean_.z);
-    //     return camera_model != ssplat::CameraModelType::PINHOLE ?
-    //         glm::length(mean - ro) :
-    //         glm::dot(mean - ro, rd);  // negative if center is behind
-    // }
 
 };
 

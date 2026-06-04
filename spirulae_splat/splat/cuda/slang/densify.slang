@@ -66,28 +66,6 @@ void revised_add_noise_3dgs(
 }
 
 [CudaDeviceExport]
-void mcmc_add_noise_triangle(
-    float scaler, float min_opacity,
-    inout float3 mean, float3 log_scale, float4 quat, float opac
-) {
-    float k = 0.5 / min_opacity;
-    float x0 = 1.0 - min_opacity;
-    float op_sigmoid = 1.0 / (1.0 + exp(-k * ((1.0 - opac) - x0)));
-
-    float3 vert0, vert1, vert2;
-    map_opaque_triangle(mean, normalize(quat), exp(log_scale), vert0, vert1, vert2);
-
-    float3 vertc = (vert0 + vert1 + vert2) / 3.0f;
-    float3 d0 = vert0 - vertc, d1 = vert1 - vertc, d2 = vert2 - vertc;
-    float3 dn = 0.5f * min(min(length(d0), length(d1)), length(d2)) * normalize(cross(d0, d1));
-    float3x3 covar = 0.5f * (outerProduct(d0) + outerProduct(d1) + outerProduct(d2) + outerProduct(dn)) / 3.5f;
-
-    float3 noise = randn3(float4(dot(mean, mean), dot(mean, log_scale), dot(log_scale, log_scale), dot(quat, float4(opac))));
-    noise = noise * scaler * op_sigmoid;
-    mean += mul(covar, noise);
-}
-
-[CudaDeviceExport]
 void long_axis_split_3dgs(
     float3 log_scale, float logit_opacity, float4 quat,
     out float3 new_log_scale, out float new_logit_opacity, out float3 mean_delta

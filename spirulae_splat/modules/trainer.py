@@ -36,14 +36,7 @@ from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 #         lr=0.0025 / 20, eps=1e-15,
 #         tr=1.0e-6 / 20, tr_final=1.0e-8 / 20, max_steps=30000,
 #     ),
-#     "features_ch": FusedAdamOptimizerConfig(lr=0.0025 / 5, eps=1e-15),
-#     "sv_sites": FusedAdamOptimizerConfig(lr=0.01, eps=1e-15),
-#     "sv_colors": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
 #     "opacities": FusedAdamOptimizerConfig(lr=0.05, eps=1e-15),
-#     "densities": FusedAdamOptimizerConfig(
-#         lr=0.05, eps=1e-15,
-#         lr_final=0.0005, max_steps=30000,
-#     ),
 #     "background_dc": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
 #     "background_sh": FusedAdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
 #     "bilateral_grid": FusedAdamOptimizerConfig(
@@ -666,100 +659,6 @@ class TrainerConfigPatched(TrainerConfig):
         primitive="mip", max_screen_size=float('inf'),  # TODO
     ))
     # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)  # TODO
-
-@dataclass
-class TrainerConfigTriangle(TrainerConfig):
-    """Method for triangle splatting"""
-    datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
-        compute_visibility_masks=True,
-    ))
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        primitive="opaque_triangle",
-        kernel_radius=0.5,
-        sh_degree=0,
-        bilagrid_shape=(16, 16, 8),
-        refine_stop_num_iter=0,
-        # alpha_reg_weight=0.0,
-        scale_reg=0.001,
-        # erank_reg=1.0,
-        # supersampling=2,
-        min_opacity=0.005,
-        supervision_warmup=0,
-        depth_supervision_weight=0.0,
-        normal_supervision_weight=0.04,
-        depth_distortion_reg=0.01,
-        normal_distortion_reg=0.005,
-        rgb_distortion_reg=0.01,
-        ssim_lambda=0.4,
-        preallocate_splat_tensors=False,  # TODO
-    ))
-    # optimizer: dict = field(default_factory=lambda: _TRIANGLE_OPTIMIZERS)  # TODO
-
-@dataclass
-class TrainerConfigTrianglePatched(TrainerConfig):
-    """Method for triangle splatting with patched batching"""
-    datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
-        compute_visibility_masks=True,
-        patch_batch_size=-1,
-        patch_size=64,
-        max_batch_per_epoch=800,
-    ))
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        primitive="opaque_triangle",
-        kernel_radius=0.5,
-        sh_degree=0,
-        bilagrid_shape=(16, 16, 8),
-        refine_stop_num_iter=0,
-        # alpha_reg_weight=0.0,
-        scale_reg=0.001,
-        # erank_reg=1.0,
-        # supersampling=2,
-        min_opacity=0.005,
-        supervision_warmup=0,
-        depth_supervision_weight=0.0,
-        normal_supervision_weight=0.04,
-        depth_distortion_reg=0.01,
-        normal_distortion_reg=0.005,
-        rgb_distortion_reg=0.01,
-        ssim_lambda=0.4,
-        reg_warmup_length=1000,
-        preallocate_splat_tensors=False,  # TODO
-
-        # packed=True,
-        use_bvh=True,
-        use_camera_optimizer=False,
-        # use_bilateral_grid=False,
-        # use_bilateral_grid_for_geometry=False,
-        alpha_reg_weight=0.0,
-        max_screen_size_clip_hardness=1.5,
-    ))
-    # optimizer: dict = field(default_factory=lambda: _TRIANGLE_OPTIMIZERS)  # TODO
-
-@dataclass
-class TrainerConfigVoxel(TrainerConfig):
-    """[WIP] Does not work at this time, do not use"""
-    # ^ This message will appear in `spirulae-train --help`
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        primitive="voxel",
-        use_mcmc=False,
-        sh_degree=0,
-        # use_bilateral_grid=False,
-        use_bilateral_grid_for_geometry=False,
-        alpha_reg_weight=0.0,
-        # alpha_loss_weight=0.0,
-        # alpha_loss_weight_under=0.0,
-        opacity_reg=0.0001,
-        scale_reg=0.0,
-        erank_reg=0.0,
-        erank_reg_s3=0.0,
-        depth_supervision_weight=0.0,
-        supervision_warmup=0,
-        depth_distortion_reg=0.01,
-        reg_warmup_length=100,
-        distortion_reg_warmup=100,
-        preallocate_splat_tensors=False,  # TODO
-    ))
-    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS)  # TODO
 
 
 _MODEL_PRESET_CONFINED = dict(

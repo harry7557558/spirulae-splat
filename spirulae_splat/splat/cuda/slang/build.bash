@@ -21,9 +21,6 @@ shaders=(
     "slang/ppisp.slang:${out_dir}/ppisp.cu"
     "slang/densify.slang:${out_dir}/densify.cu"
     "slang/primitive_3dgs.slang:${out_dir}/primitive_3dgs.cu"
-    # "slang/primitive_3dgs_sv.slang:${out_dir}/primitive_3dgs_sv.cu"
-    # "slang/primitive_opaque_triangle_eval3d.slang:${out_dir}/primitive_opaque_triangle_eval3d.cu"
-    # "slang/primitive_voxel.slang:${out_dir}/primitive_voxel.cu"
     "slang/harmonics.slang:${out_dir}/harmonics.cu"
 )
 
@@ -37,9 +34,6 @@ mv_targets=(
     "${out_dir}/ppisp.cu"
     "${out_dir}/densify.cu"
     "${out_dir}/primitive_3dgs.cu"
-    # "${out_dir}/primitive_3dgs_sv.cu"
-    # "${out_dir}/primitive_opaque_triangle_eval3d.cu"
-    # "${out_dir}/primitive_voxel.cu"
     "${out_dir}/harmonics.cu"
 )
 

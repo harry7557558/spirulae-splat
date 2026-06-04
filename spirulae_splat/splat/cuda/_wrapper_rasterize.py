@@ -54,7 +54,7 @@ from spirulae_splat.splat.cuda._wrapper_projection import add_gradient_component
 
 
 def rasterize_to_pixels(
-    primitive: Literal["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"],
+    primitive: Literal["3dgs", "mip", "3dgut"],
     splats: tuple[Tensor],  # means, quats, scales, opacities
     # colors: Tensor,  # [..., N, channels] or [nnz, channels]
     image_width: int,
@@ -75,15 +75,9 @@ def rasterize_to_pixels(
     if primitive in ["3dgs", "mip"]:
         _RasterizeToPixels = _RasterizeToPixels3DGS
         additional_args = [primitive == "mip", compute_hessian_diagonal, backward_info]
-    if primitive in ["3dgut", "3dgut_sv"]:
+    if primitive in ["3dgut"]:
         _RasterizeToPixels = _RasterizeToPixels3DGUT
         additional_args += [output_distortion, compute_hessian_diagonal, backward_info]
-    elif primitive in ["opaque_triangle"]:
-        _RasterizeToPixels = _RasterizeToPixelsOpaqueTriangle
-        additional_args += [backward_info]
-    elif primitive in ["voxel"]:
-        _RasterizeToPixels = _RasterizeToPixelsVoxelEval3D
-        additional_args += [backward_info]
 
     render_outputs, rasterize_ctx = _RasterizeToPixels.apply(
         *[(x.contiguous() if x is not None else None) for x in splats],
@@ -104,7 +98,7 @@ def rasterize_to_pixels(
     if primitive in ["3dgs", "mip"]:
         render_rgbs, render_depths, render_Ts = render_outputs
         return (render_rgbs, render_depths), render_Ts, {}
-    elif primitive in ["3dgut", "3dgut_sv"]:
+    elif primitive in ["3dgut"]:
         (
             render_rgbs, render_depths, render_Ts,
             distortion_rgbs, distortion_depths
@@ -115,35 +109,6 @@ def rasterize_to_pixels(
                 'depth_distortion': distortion_depths,
             }
         return (render_rgbs, render_depths), render_Ts, {}
-    elif primitive in ["opaque_triangle"]:
-        (
-            render_rgbs, render_depths, render_normals, render_Ts,
-            distortion_rgbs, distortion_depths, distortion_normals, max_blending
-        ) = render_outputs
-        return (
-            (render_rgbs, render_depths, render_normals), render_Ts,
-            {
-                'max_blending': max_blending,
-                'rgb_distortion': distortion_rgbs,
-                'depth_distortion': distortion_depths,
-                'normal_distortion': distortion_normals,
-            }
-        )
-    elif primitive in ["voxel"]:
-        (
-            render_rgbs, render_depths, render_Ts,
-            distortion_rgbs, distortion_depths, max_blending
-        ) = render_outputs
-        return (
-            (render_rgbs, render_depths), render_Ts,
-            {
-                'max_blending': max_blending,
-                'rgb_distortion': distortion_rgbs,
-                'depth_distortion': distortion_depths,
-            }
-        )
-    else:
-        raise NotImplementedError()
 
 
 
@@ -403,251 +368,5 @@ class _RasterizeToPixels3DGUT(_ManualFunction):
         return (
             v_means, v_quats, v_depths, v_proj_scales, v_proj_opacities, v_colors, v_backgrounds,
             None, None, None, None, None, None, None, v_viewmats, None, None, None, None, None
-        )
-
-
-class _RasterizeToPixelsOpaqueTriangle(_ManualFunction):
-
-    @staticmethod
-    def forward(
-        ctx,
-        # gauss params
-        hardness: Tensor,  # [..., N]
-        # proj outputs
-        depths: Tensor,  # [..., N, 1] or [nnz, 1]
-        verts: Tensor,  # [..., N, 3, 3] or [nnz, 3, 3]
-        rgbs: Tensor,  # [..., N, 3, 3] or [nnz, 3, 3]
-        normals: Tensor,  # [..., N, 3] or [nnz, 3]
-        # rest
-        backgrounds: Optional[Tensor],  # [..., channels]
-        max_blending_masks: Optional[Tensor],  # [..., image_height, image_width]
-        width: int,
-        height: int,
-        isect_offsets: Tensor,  # [..., tile_height, tile_width]
-        flatten_ids: Tensor,  # [n_isects]
-        viewmats: Tensor,
-        intrins: Tensor,
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
-        dist_coeffs: Optional[Tensor],
-        backward_info: Optional[dict] = None,
-    ) -> Tuple[Tensor, Tensor]:
-
-        camera_model = camera_model.upper()
-
-        # from time import perf_counter
-        # torch.cuda.synchronize()
-        # time0 = perf_counter()
-        (
-            (render_rgbs, render_depths, render_normals),
-            render_Ts, last_ids,
-            (render2_rgbs, render2_depths, render2_normals),
-            (distortion_rgbs, distortion_depths, distortion_normals),
-            max_blending
-        ) = _make_lazy_cuda_func("rasterization_opaque_triangle_forward")(
-            (hardness, depths, verts, rgbs, normals),
-            backward_info.get('gaussian_ids', None),
-            viewmats, intrins, camera_model, dist_coeffs,
-            backgrounds, max_blending_masks,
-            width, height, isect_offsets, flatten_ids,
-        )
-        # torch.cuda.synchronize()
-        # time1 = perf_counter()
-        # print(f"fwd: {1e3*(time1-time0):.2f} ms")
-
-        ctx.save_for_backward(
-            hardness, depths, verts, rgbs, normals,
-            viewmats, intrins, dist_coeffs,
-            backgrounds,
-            isect_offsets, flatten_ids, render_Ts, last_ids,
-            render_rgbs, render_depths, render_normals,
-            render2_rgbs, render2_depths, render2_normals
-        )
-        ctx.width = width
-        ctx.height = height
-        ctx.camera_model = camera_model
-        ctx.backward_info = backward_info
-
-        if dist_coeffs is not None:
-            render_rgbs = render_rgbs.clone()  # TODO
-
-        # render_alphas = 1.0 - render_Ts
-        return (
-            # render_rgbs, render_depths, render_normals, render_alphas,
-            render_rgbs, render_depths, render_normals, render_Ts,
-            distortion_rgbs, distortion_depths, distortion_normals, max_blending
-        )
-
-    @staticmethod
-    def backward(
-        ctx,
-        v_render_rgbs: Tensor,  # [..., H, W, 3]
-        v_render_depths: Tensor,  # [..., H, W, 1]
-        v_render_normals: Tensor,  # [..., H, W, 3]
-        v_render_Ts: Tensor,  # [..., H, W, 1]
-        v_distortion_rgbs: Tensor,  # [..., H, W, 3]
-        v_distortion_depths: Tensor,  # [..., H, W, 1]
-        v_distortion_normals: Tensor,  # [..., H, W, 3]
-        v_max_blending = None
-    ):
-        # assert v_max_blending is None, "max_blending does not support gradient"
-        (
-            hardness, depths, verts, rgbs, normals,
-            viewmats, intrins, dist_coeffs,
-            backgrounds,
-            isect_offsets, flatten_ids, render_Ts, last_ids,
-            render_rgbs, render_depths, render_normals,
-            render2_rgbs, render2_depths, render2_normals
-        ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-
-        # from time import perf_counter
-        # torch.cuda.synchronize()
-        # time0 = perf_counter()
-        (
-            (v_hardness, v_depths, v_verts, v_rgbs, v_normals),
-            v_viewmats,
-        ) = _make_lazy_cuda_func("rasterization_opaque_triangle_backward")(
-            (hardness, depths, verts, rgbs, normals),
-            ctx.backward_info.get('gaussian_ids', None),
-            viewmats, intrins, ctx.camera_model, dist_coeffs,
-            backgrounds,
-            width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
-            (render_rgbs, render_depths, render_normals),
-            (render2_rgbs, render2_depths, render2_normals),
-            (v_render_rgbs.contiguous(), v_render_depths.contiguous(), v_render_normals.contiguous()),
-            v_render_Ts.contiguous(),
-            (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous(), v_distortion_normals.contiguous()),
-            # ctx.needs_input_grad[12]
-        )
-        if ctx.needs_input_grad[12]:
-            raise NotImplementedError("Camera optimizer not supported for opaque triangle")
-        # torch.cuda.synchronize()
-        # time1 = perf_counter()
-        # print(f"bwd: {1e3*(time1-time0):.2f} ms")
-
-        v_backgrounds = None
-        if ctx.needs_input_grad[5]:
-            v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths, v_render_normals], dim=-1) * \
-                             render_Ts.float()).sum(dim=(-3, -2))
-
-        return (
-            v_hardness, v_depths, v_verts, v_rgbs, v_normals, v_backgrounds,
-            None, None, None, None, None, None, v_viewmats, None, None, None, None
-        )
-
-class _RasterizeToPixelsVoxelEval3D(_ManualFunction):
-    """Rasterize gaussians"""
-
-    @staticmethod
-    def forward(
-        ctx,
-        # gauss params
-        pos_sizes: Tensor,  # [..., N, 4]
-        densities: Tensor,  # [..., N, 8]
-        # proj outputs
-        colors: Tensor,  # [..., N, channels] or [nnz, channels]
-        # rest
-        backgrounds: Tensor,  # [..., channels], Optional
-        masks: Tensor,  # [..., tile_height, tile_width], Optional
-        width: int,
-        height: int,
-        isect_offsets: Tensor,  # [..., tile_height, tile_width]
-        flatten_ids: Tensor,  # [n_isects]
-        viewmats: Tensor,
-        intrins: Tensor,
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"],
-        dist_coeffs: Optional[Tensor],
-        backward_info: Optional[dict] = None,
-    ) -> Tuple[Tensor, Tensor]:
-
-        camera_model = camera_model.upper()
-
-        (
-            (render_rgbs, render_depths), render_Ts, last_ids,
-            (render2_rgbs, render2_depths),
-            (distortion_rgbs, distortion_depths),
-            max_blending
-        ) = _make_lazy_cuda_func("rasterization_voxel_forward")(
-            (pos_sizes, None, densities, colors),
-            backward_info.get('gaussian_ids', None),
-            viewmats, intrins, camera_model, dist_coeffs,
-            backgrounds, masks,
-            width, height, isect_offsets, flatten_ids,
-        )
-
-        ctx.save_for_backward(
-            pos_sizes, densities, colors,
-            viewmats, intrins, dist_coeffs,
-            backgrounds, masks,
-            isect_offsets, flatten_ids, render_Ts, last_ids,
-            render_rgbs, render_depths,
-            render2_rgbs, render2_depths,
-        )
-        ctx.width = width
-        ctx.height = height
-        ctx.camera_model = camera_model
-        ctx.backward_info = backward_info
-
-        # render_alphas = 1.0 - render_Ts
-        return (
-            # render_rgbs, render_depths, render_alphas,
-            render_rgbs, render_depths, render_Ts,
-            distortion_rgbs, distortion_depths, max_blending
-        )
-
-    @staticmethod
-    def backward(
-        ctx,
-        v_render_rgbs: Tensor,  # [..., H, W, 3]
-        v_render_depths: Tensor,  # [..., H, W, 1]
-        v_render_Ts: Tensor,  # [..., H, W, 1]
-        v_distortion_rgbs: Tensor,  # [..., H, W, 3]
-        v_distortion_depths: Tensor,  # [..., H, W, 1]
-        v_max_blending = None
-    ):
-        # assert v_max_blending is None, "max_blending does not support gradient"
-        (
-            pos_sizes, densities, colors,
-            viewmats, intrins, dist_coeffs,
-            backgrounds, masks,
-            isect_offsets, flatten_ids, render_Ts, last_ids,
-            render_rgbs, render_depths,
-            render2_rgbs, render2_depths,
-        ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-
-        (
-            (v_pos_sizes, v_depths, v_densities, v_colors),
-            v_viewmats,
-        ) = _make_lazy_cuda_func("rasterization_voxel_backward")(
-            (pos_sizes, None, densities, colors),
-            ctx.backward_info.get('gaussian_ids', None),
-            viewmats, intrins, ctx.camera_model, dist_coeffs,
-            backgrounds, masks,
-            width, height, isect_offsets, flatten_ids, render_Ts, last_ids,
-            (render_rgbs, render_depths),
-            (render2_rgbs, render2_depths),
-            None,
-            (v_render_rgbs.contiguous(), v_render_depths.contiguous()),
-            v_render_Ts.contiguous(),
-            (v_distortion_rgbs.contiguous(), v_distortion_depths.contiguous()),
-            ctx.needs_input_grad[10]
-        )
-        assert v_pos_sizes is None
-        assert v_depths is None
-        assert v_densities is not None
-        assert v_colors is not None
-
-        v_backgrounds = None
-        if ctx.needs_input_grad[3]:
-            v_backgrounds = (torch.cat([v_render_rgbs, v_render_depths], dim=-1) * \
-                             render_Ts.float()).sum(dim=(-3, -2))
-
-        return (
-            v_pos_sizes, v_densities,
-            v_colors, v_backgrounds,
-            None, None, None, None, None, None, v_viewmats, None, None, None, None
         )
 

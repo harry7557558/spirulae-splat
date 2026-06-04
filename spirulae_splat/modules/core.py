@@ -37,7 +37,7 @@ class Renderer:
 
     def __init__(
         self,
-        primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"],
+        primitive: Literal["3dgs", "mip", "3dgut"],
         splats_world: tuple[Tensor],  # means, quats, scales, opacities
         cur_num_splats: int,
         packed: bool = True,
@@ -48,35 +48,17 @@ class Renderer:
         for tensor in splats_world:
             assert tensor.is_contiguous(), "Tensor must be contiguous"
 
-        features_dc, features_sh, sv_sites, sv_colors = None, None, None, None
-        if primitive in ["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle"]:
-            if primitive in ["3dgs", "mip", "3dgut"]:
-                assert len(splats_world) == 6, "3DGS requires 6 params (means, quats, scales, opacities, color, sh)"
-                means, quats, scales, opacities, features_dc, features_sh = splats_world
-            elif primitive in ["3dgut_sv"]:
-                assert len(splats_world) == 6, "3DGS SV requires 6 params (means, quats, scales, opacities, sv_dir, sv_color)"
-                means, quats, scales, opacities, sv_sites, sv_colors = splats_world
-            else:
-                assert len(splats_world) == 7, "Opaque triangle requires 4 params (means, quats, scales, opacities, color, ch, sh)"
-                means, quats, scales, opacities, features_dc, features_sh, features_ch = splats_world
+        features_dc, features_sh = None, None
+        if primitive in ["3dgs", "mip", "3dgut"]:
+            assert len(splats_world) == 6, "3DGS requires 6 params (means, quats, scales, opacities, color, sh)"
+            means, quats, scales, opacities, features_dc, features_sh = splats_world
             assert len(means.shape) == 2, "means must have at 2 dimensions"
             N = means.shape[-2]
             device = means.device
             assert means.shape == (N, 3), means.shape
             assert quats.shape == (N, 4), quats.shape
             assert scales.shape == (N, 3), scales.shape
-            if primitive in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
-                assert opacities.shape == (N, 1), opacities.shape
-            else:
-                assert opacities.shape == (N, 2), opacities.shape
-                assert features_ch.shape == (N, 2, 3), features_ch.shape
-        elif primitive in ["voxel"]:
-            assert len(splats_world) == 4, "Voxel requires 4 params (pos_sizes, densities, features_dc, features_sh)"
-            pos_sizes, densities, features_dc, features_sh = splats_world
-            N = pos_sizes.shape[-2]
-            device = pos_sizes.device
-            assert pos_sizes.shape == (N, 4), pos_sizes.shape
-            assert densities.shape == (N, 8), densities.shape
+            assert opacities.shape == (N, 1), opacities.shape
         else:
             raise ValueError(f"Invalid primitive ({primitive})")
         if features_dc is not None and features_sh is not None:
@@ -86,10 +68,6 @@ class Renderer:
                 features_sh.shape == (N, 8, 3) or \
                 features_sh.shape == (N, 15, 3) or \
                 features_sh.shape == (N, 24, 3), features_sh.shape
-        if sv_sites is not None and sv_colors is not None:
-            num_sv = sv_sites.shape[-2]
-            assert sv_sites.shape == (N, num_sv, 3)
-            assert sv_colors.shape == (N, num_sv, 3)
 
         self.device = device
         self.cur_num_splats = cur_num_splats
@@ -555,7 +533,7 @@ class Renderer:
             if self.use_fused_proj_bwd_optim:
                 if self.primitive in ['3dgs', 'mip']:
                     self.v_splats_world = [None] * len(self.splats_world)
-                elif self.primitive in ['3dgut', '3dgut_sv']:
+                elif self.primitive in ['3dgut']:
                     self.v_splats_world = [
                         torch.zeros_like(self.splats_world[0]),  # means
                         torch.zeros_like(self.splats_world[1]),  # quats
@@ -594,7 +572,7 @@ class Renderer:
 
     def projection_forward(self):
         raise NotImplementedError("Use engine instead. Code below for reference.")
-        if self.primitive not in ["3dgs", "mip", "3dgut", "3dgut_sv"]:
+        if self.primitive not in ["3dgs", "mip", "3dgut"]:
             raise NotImplementedError()
 
         proj_returns = _make_lazy_cuda_func(
@@ -894,7 +872,7 @@ class Renderer:
         if self.primitive in ['3dgs', 'mip']:
             intersect_tile_splat_params = (self.splats_proj[0], self.splats_proj[2], self.splats_proj[3])
         if True:  # Note that GUT is already an approximation
-            if self.primitive in ['3dgut', '3dgut_sv']:
+            if self.primitive in ['3dgut']:
                 intersect_tile_splat_params = (None, self.splats_proj[0], self.splats_proj[1])
         isect_ids, flatten_ids, isect_offsets = _make_lazy_cuda_func(f"intersect_tile")(
             self.aabb,

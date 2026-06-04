@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 from spirulae_splat.modules.camera import Cameras, CameraType, _COLMAP_CAMERA_MODEL_TO_TYPE
-from spirulae_splat.viewer_legacy.utils import triangle_verts_to_quat_scale_mean
 
 from spirulae_splat.splat.cuda import _C
 

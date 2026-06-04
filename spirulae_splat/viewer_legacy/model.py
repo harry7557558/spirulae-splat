@@ -14,8 +14,6 @@ from spirulae_splat.splat.cuda import ray_depth_to_linear_depth
 from spirulae_splat.viewer_legacy.utils import (
     quat_to_rotmat,
     rotmat_to_quat,
-    quat_scale_to_triangle_verts,
-    triangle_verts_to_quat_scale_mean,
 )
 
 from spirulae_splat.viewer_legacy.camera import Camera
@@ -32,7 +30,7 @@ class SplatModel:
         self.flip_yz = False
         self.return_torch = False
         
-        self.primitive = "3dgut"  # type: Literal["3dgs", "mip", "3dgut", "opaque_triangle"]
+        self.primitive = "3dgut"  # type: Literal["3dgs", "mip", "3dgut"]
 
         self.dataparser_transform = np.eye(4)
         self.dataparser_scale = 1.0
@@ -116,8 +114,6 @@ class SplatModel:
         content = open(file_path).read()
         if "primitive: mip" in content:
             self.primitive = "mip"
-        elif "primitive: opaque_triangle" in content:
-            self.primitive = "opaque_triangle"
         print("Primitive:", self.primitive)
 
         relative_scale = re.findall(r"relative_scale:\s*([\d\.e\+\-]+)", content)
@@ -247,9 +243,6 @@ class SplatModel:
     def features_sh(self):
         return self.gauss_params["features_sh"]
     @property
-    def features_ch(self):
-        return self.gauss_params["features_ch"]
-    @property
     def opacities(self):
         return self.gauss_params["opacities"]
 
@@ -304,7 +297,7 @@ class SplatModel:
                         torch.ones_like(self.opacities),
                         torch.ones_like(self.opacities)
                     ], dim=-1),
-                    self.features_dc, self.features_sh, self.features_ch
+                    self.features_dc, self.features_sh
                 ),
                 viewmats=poses,  # [C, 4, 4]
                 intrins=intrinsics,  # [C, 4]

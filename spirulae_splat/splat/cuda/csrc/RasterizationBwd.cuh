@@ -8,9 +8,6 @@
 
 #include "Primitive3DGS.cuh"
 // #include "Primitive3DGUT.cuh"
-// #include "Primitive3DGUT_SV.cuh"
-// #include "PrimitiveOpaqueTriangle.cuh"
-// #include "PrimitiveVoxel.cuh"
 
 #include "common.cuh"
 

@@ -35,7 +35,7 @@ from spirulae_splat.modules.core import Renderer
 from spirulae_splat.splat.utils import resize_image
 from spirulae_splat.splat.background_sh import render_background_sh
 from spirulae_splat.splat.sh import num_sh_bases, spherical_harmonics
-from spirulae_splat.strategy import MCMCStrategy, OpaqueStrategy, SVRasterStrategy
+from spirulae_splat.strategy import MCMCStrategy
 
 # SplatTrainingLosses is no longer used; the only methods that were live are
 # inlined below (get_2dgs_reg_weights, get_static_losses → bilagrid metrics).
@@ -52,8 +52,6 @@ from spirulae_splat.splat.cuda._wrapper_per_pixel import (
 )
 from spirulae_splat.splat.cuda._wrapper_projection import scatter_max
 from spirulae_splat.splat.cuda import (
-    svhash_create_initial_volume,
-    svhash_get_voxels,
     _C,
 )
 
@@ -67,14 +65,12 @@ from spirulae_splat.splat import depth_to_normal
 class SpirulaeSplatModelConfig:
 
     # Representation
-    primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"] = "3dgut"
+    primitive: Literal["3dgs", "mip", "3dgut"] = "3dgut"
     """Splat primitive to use"""
     sh_degree: int = 3
     """Maximum degree of spherical harmonics to use."""
     sh_degree_warmup_every: int = 1000
     """Increase SH degree every this number of iterations"""
-    num_sv: int = 4  # 8
-    """Number of spherical voronoi to use."""
     background_mode: Literal["black", "noise", "sh"] = "black"
     """Background mode, black per convention, noise to discourage transparency, sh for skybox."""
     background_noise_warmup: int = 2000
@@ -83,8 +79,6 @@ class SpirulaeSplatModelConfig:
     """Weight of background noise at start of training (0 to 1). Higher value reduce the chance of washing away splat opacities near the beginning of training."""
     background_sh_degree: int = 4
     """SH degree for background color, only used when background_mode is sh."""
-    kernel_radius: float = 3.0
-    """Radius of the splatting kernel, 3.0 for Gaussian and 0.5 for triangle"""
 
     # Training loss
     relative_scale: Optional[float] = None
@@ -147,7 +141,7 @@ class SpirulaeSplatModelConfig:
     """Multiply number of splats by this number at each densification step"""
     use_revised_densification: bool = True
     """Whether to use revised densification instead of original MCMC."""
-    densify_score_mode: Literal["mean", "max", "median", "geom"] = "median"
+    densify_score_mode: Literal["mean", "max", "median", "geom"] = "mean"
     """How to accumulate per-splat scores across iterations for densification.
         "mean":   running mean of |w|.
         "max":    running max of |w|.
@@ -370,43 +364,11 @@ class SpirulaeSplatModel(torch.nn.Module):
                 self.opacities,
                 self.features_dc, self.features_sh
             )
-        if self.config.primitive in ['3dgut_sv']:
-            splat_params = (
-                self.means, self.quats, self.scales,
-                self.opacities,
-                self.sv_sites, self.sv_colors
-            )
-        elif self.config.primitive in ['opaque_triangle']:
-            # hardness = min(max(self.step / self.config.stop_refine_at, 0.1), 1.0)
-            opacity_floor = self.strategy.get_opacity_floor(self.step)
-            hardness = self.strategy.get_hardness(self.step)
-            splat_params = (
-                self.means, F.normalize(self.quats, dim=-1), self.scales,
-                #  hardness * torch.ones_like(self.opacities.squeeze(-1))
-                #  hardness + (1.0-hardness) * torch.sigmoid(self.opacities.squeeze(-1))
-                torch.concat([
-                    self.strategy.map_opacities(self.step, self.opacities),
-                    hardness * torch.ones_like(self.opacities)
-                ], dim=-1),
-                self.features_dc, self.features_sh, self.features_ch
-            )
-        elif self.config.primitive in ['voxel']:
-            # print(self.svhash)
-            # torch.cuda.synchronize()
-            # print(torch.amin(voxel_indices), torch.amax(voxel_indices), self.densities.shape)
-            # print(voxels)
-            # print(voxel_indices)
-            # exit(0)
-            splat_params = (
-                self.voxels, self.densities[self.voxel_indices],
-                self.features_dc, self.features_sh
-            )
-            # print([x.shape for x in splat_params])
 
         self.core = Renderer(
             self.config.primitive,
             [x.cpu().contiguous() for x in splat_params],
-            self.seed_points[0].shape[0],  # TODO: voxel
+            self.seed_points[0].shape[0],
             packed=(self.config.packed or self.config.use_bvh),
             use_bvh=self.config.use_bvh,
             use_fused_proj_bwd_optim=self.config.use_fused_proj_bwd_optim,
@@ -473,23 +435,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         if opacity_init is None:
             opacity_init = 0.1
 
-        if self.config.primitive in ["voxel"]:
-            means_mean, means_std = torch.mean(means, 0), torch.std(means, 0)
-            means_extend = 4.0 * means_std
-            pos_min = (means_mean - means_extend).detach().cpu().numpy()
-            pos_max = (means_mean + means_extend).detach().cpu().numpy()
-            num_voxels = len(means)
-            unit_size = 1.0 * np.cbrt(np.prod(pos_max - pos_min) / num_voxels)
-            pos_diff = np.ceil((pos_max - pos_min) / unit_size).astype(np.int32)
-            self.svhash = svhash_create_initial_volume(pos_min, pos_max, pos_diff)
-            self.voxels, self.voxel_indices = svhash_get_voxels(self.svhash)
-            num_verts = int(len(self.svhash[0]))
-            num_points = int(len(self.voxels))
-            density_init = 1.0 * opacity_init / np.cbrt(np.prod(means_std.detach().cpu().numpy()))
-            densities = density_init * torch.ones(num_verts)
-            # densities = torch.where(densities > 1.1, densities, 1.1 * (torch.log(densities) + 0.904689820196))
-
-        elif self.config.primitive in ["3dgs", "mip", "3dgut"] or True:
+        if self.config.primitive in ["3dgs", "mip", "3dgut"] or True:
             from time import perf_counter
             time0 = perf_counter()
             distances, indices = self.k_nearest_neighbor(means.data, 4)
@@ -497,7 +443,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             # print("k_nearest_neighbor time:", time1-time0)
             num_points = means.shape[0]
             scales = torch.sqrt(torch.from_numpy(distances**2).mean(-1, keepdim=True)).repeat(1, 3).float()
-            scales = torch.log(scale_init * scales / (self.config.kernel_radius/3.0) + 1e-8)
+            scales = torch.log(scale_init * scales + 1e-8)
             if self.config.suppress_initial_scales:
                 scales = self.suppress_initial_scales(means, scales)
             quats = F.normalize(torch.randn((num_points, 4)), dim=-1)
@@ -513,28 +459,19 @@ class SpirulaeSplatModel(torch.nn.Module):
             num_points = means.shape[0]
             S = np.prod(S, axis=-1, keepdims=True)**(1/3) * np.ones(S.shape)
             scales = S
-            scales = np.log(1.5*scales/self.config.kernel_radius+1e-8)
+            scales = np.log(1.5*scales+1e-8)
             scales = torch.from_numpy(scales.astype(np.float32))
             quats = torch.from_numpy(np.array(
                 Rotation.from_matrix(np.transpose(Vt, axes=(0, 2, 1))).as_quat(),
                 dtype=np.float32))
             opacities = torch.logit(0.1 * torch.ones(num_points, 1))
 
-        # if self.config.primitive in ["opaque_triangle"]:
-        if self.config.primitive in []:
-            M = quat_to_rotmat(quats) * torch.exp(scales[..., None, :])
-            means = means.unsqueeze(-2) + torch.bmm(M, torch.tensor([[
-                [1, 0, 0], [-0.5, 0.75**0.5, 0], [-0.5, -0.75**0.5, 0]
-            ]]).to(M).repeat(len(M), 1, 1))
-
         gauss_params = {}
-        if self.config.primitive in ["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle"]:
+        if self.config.primitive in ["3dgs", "mip", "3dgut"]:
             gauss_params['means'] = torch.nn.Parameter(means)
             gauss_params['quats'] = torch.nn.Parameter(quats)
             gauss_params['scales'] = torch.nn.Parameter(scales)
             gauss_params['opacities'] = torch.nn.Parameter(opacities)
-        elif self.config.primitive in ["voxel"]:
-            gauss_params['densities'] = torch.nn.Parameter(densities)
 
         # colors
         dim_sh = num_sh_bases(self.config.sh_degree)
@@ -571,22 +508,13 @@ class SpirulaeSplatModel(torch.nn.Module):
                 if not self.config.splat_color_is_linear:
                     seed_color = torch.where(seed_color < 0.0031308, 12.92 * seed_color, 1.055 * torch.relu(seed_color) ** (1/2.4) - 0.055)
 
-        if self.config.primitive in ["3dgs", "mip", "3dgut", "opaque_triangle", "voxel"]:
+        if self.config.primitive in ["3dgs", "mip", "3dgut"]:
             shs = torch.zeros((num_points, dim_sh, 3)).float()
             shs[:, 0, :3] = (seed_color - 0.5) / 0.28209479177387814
             if self.config.sh_degree > 0:
                 shs[:, 1:, 3:] = 0.0
             gauss_params['features_dc'] = torch.nn.Parameter(shs[:, 0, :].contiguous())
             gauss_params['features_sh'] = torch.nn.Parameter(shs[:, 1:, :].contiguous())
-
-        elif self.config.primitive in ["3dgut_sv"]:
-            sv_colors = seed_color.unsqueeze(1).repeat(1, self.config.num_sv, 1)
-            sv_sites = torch.zeros_like(sv_colors)
-            gauss_params['sv_colors'] = torch.nn.Parameter(sv_colors.contiguous())
-            gauss_params['sv_sites'] = torch.nn.Parameter(sv_sites.contiguous())
-
-        if self.config.primitive == "opaque_triangle":
-            gauss_params['features_ch'] = torch.nn.Parameter(torch.zeros((num_points, 2, 3)))
 
         new_num_points = num_points
         if self.config.use_mcmc and self.config.preallocate_splat_tensors:
@@ -649,8 +577,6 @@ class SpirulaeSplatModel(torch.nn.Module):
 
     @property
     def colors(self):
-        if self.config.primitive == "3dgut_sv":
-            return self.sv_colors.mean(-2) + 0.5
         C0 = 0.28209479177387814
         return self.features_dc * C0 + 0.5
 
@@ -682,18 +608,6 @@ class SpirulaeSplatModel(torch.nn.Module):
         return self._get_gauss_param("features_sh")
 
     @property
-    def features_ch(self):
-        return self._get_gauss_param("features_ch")
-
-    @property
-    def sv_sites(self):
-        return self._get_gauss_param("sv_sites")
-
-    @property
-    def sv_colors(self):
-        return self._get_gauss_param("sv_colors")
-
-    @property
     def opacities(self):
         param = self._get_gauss_param("opacities")
         # # TODO: properly do this in projection
@@ -703,18 +617,12 @@ class SpirulaeSplatModel(torch.nn.Module):
         #         param.data[num_splats:] = -10.0  # logit(1/255) ~ -5.54
         return param
 
-    @property
-    def densities(self):
-        # TODO: num_splats
-        return self._get_gauss_param("densities")
-
     def load_state_dict(self, dict, **kwargs):  # type: ignore
         # resize the parameters to match the new number of points
         self.step = self.trainer_config.num_iterations
         for p in ["means", "scales", "quats",
-                    "features_dc", "features_sh", "features_ch",
-                    "sv_sites", "sv_colors",
-                    "opacities", "densities"]:
+                    "features_dc", "features_sh",
+                    "opacities"]:
             if p in dict:
                 dict[f"gauss_params.{p}"] = dict[p]
         newp = dict["gauss_params.features_dc"].shape[0]
@@ -872,38 +780,6 @@ class SpirulaeSplatModel(torch.nn.Module):
 
     def step_post_backward(self):
         return  # TODO
-        if self.config.primitive == 'voxel':
-            raise NotImplementedError()
-            self.svhash, self.voxels, self.voxel_indices = \
-            self.strategy.step_post_backward(
-                self.svhash, self.voxels, self.voxel_indices,
-                params=self.gauss_params,
-                optimizers=self.optimizers,
-                state=self.strategy_state,
-                step=self.step,
-                info=self.info,
-                packed=(self.config.packed or self.config.use_bvh),
-            )
-        elif self.config.use_mcmc:
-            self.strategy.step_post_backward(
-                params=self.gauss_params,
-                optimizers=self.optimizers,
-                state=self.strategy_state,
-                step=self.step,
-                info=self.info,
-                lr=get_scheduled_lr(self.optimizers['means'].param_groups[0], self.step+1),
-                packed=(self.config.packed or self.config.use_bvh),
-            )
-        else:
-            raise NotImplementedError()
-            self.strategy.step_post_backward(
-                params=self.gauss_params,
-                optimizers=self.optimizers,
-                state=self.strategy_state,
-                step=self.step,
-                info=self.info,
-                packed=(self.config.packed or self.config.use_bvh),
-            )
 
     def get_gaussian_param_groups(self) -> Dict[str, List[Parameter]]:
         # Here we explicitly use the means, scales as parameters so that the user can override this function and
@@ -912,9 +788,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             name: [self.gauss_params[name]]
             for name in [
                 "means", "scales", "quats",
-                "features_dc", "features_sh", "features_ch",
-                "sv_sites", "sv_colors",
-                "opacities", "densities"
+                "features_dc", "features_sh",
+                "opacities"
             ] if name in self.gauss_params
         }
 
@@ -1126,11 +1001,6 @@ class SpirulaeSplatModel(torch.nn.Module):
         # rendering
         use_bvh = self.config.use_bvh and self.training and not val
         self.core.set_params(
-            # "voxel",
-            # (torch.cat((self.means, 20.0*torch.exp(self.scales.mean(-1, True))), dim=-1), torch.exp(self.opacities).repeat(1, 8), self.features_dc, self.features_sh),
-            # # (torch.cat((self.means, 0.025*torch.ones_like(self.scales.mean(-1, True))), dim=-1), torch.exp(self.opacities).repeat(1, 8), self.features_dc, self.features_sh),
-
-            # (self.means, hardness * torch.ones_like(self.opacities.squeeze(-1))),
             viewmats=viewmats,  # [C, 4, 4]
             intrins=intrins * self.config.supersampling,  # [C, 4]
             width=W * self.config.supersampling,

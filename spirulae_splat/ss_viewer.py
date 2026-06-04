@@ -16,7 +16,7 @@ from spirulae_splat.viewer.server import ViewerServer
 class ViewerConfig:
     ply: Path
     viewer_port: int = 7007
-    primitive: Literal["3dgs", "mip", "3dgut", "3dgut_sv", "opaque_triangle", "voxel"] = "3dgut"
+    primitive: Literal["3dgs", "mip", "3dgut"] = "3dgut"
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     open_browser: bool = False
 
@@ -91,11 +91,7 @@ class PlyViewer:
             features_sh = torch.zeros((count, 0, 3), dtype=torch.float32)
         features_sh = features_sh.contiguous().to(self.device)
 
-        if primitive == "opaque_triangle":
-            features_ch = torch.zeros((count, 2, 3), dtype=torch.float32, device=self.device)
-            splats_world = (means, quats, scales, opacities, features_dc, features_sh, features_ch)
-        else:
-            splats_world = (means, quats, scales, opacities, features_dc, features_sh)
+        splats_world = (means, quats, scales, opacities, features_dc, features_sh)
 
         return splats_world, count
 

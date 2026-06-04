@@ -7,8 +7,6 @@
 #include <gsplat/Common.h>
 
 #include "Primitive3DGS.cuh"
-#include "PrimitiveOpaqueTriangle.cuh"
-#include "PrimitiveVoxel.cuh"
 
 #include "common.cuh"
 #include "types.cuh"
@@ -76,29 +74,5 @@ intersect_splat_tile_3dgs(
     const TorchTensorView& dist_coeffs,
     float rel_scale
 );
-
-// std::tuple<at::Tensor, at::Tensor>
-// intersect_splat_tile_opaque_triangle(
-//     OpaqueTriangle::World::TensorTuple splats_tuple,
-//     unsigned width,
-//     unsigned height,
-//     const at::Tensor& viewmats,
-//     const at::Tensor& intrins,
-//     const std::string& camera_model,
-//     const TorchTensorView& dist_coeffs,
-//     float rel_scale
-// );
-
-// std::tuple<at::Tensor, at::Tensor>
-// intersect_splat_tile_voxel(
-//     VoxelPrimitive::World::TensorTuple splats_tuple,
-//     unsigned width,
-//     unsigned height,
-//     const at::Tensor& viewmats,
-//     const at::Tensor& intrins,
-//     const std::string& camera_model,
-//     const TorchTensorView& dist_coeffs,
-//     float rel_scale
-// );
 
 #endif

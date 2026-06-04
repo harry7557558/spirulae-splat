@@ -201,32 +201,11 @@ def generate_ProjectionFwd():
                 ],
                 ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
             )
-            # ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::PINHOLE"),
-            # ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::FISHEYE"),
-            # ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::PINHOLE"),
-            # ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::FISHEYE"),
-            # ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::PINHOLE"),
-            # ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::FISHEYE"),
-            # ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::PINHOLE"),
-            # ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::FISHEYE"),
-            # ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::PINHOLE"),
-            # ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::FISHEYE"),
-            # ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::PINHOLE"),
-            # ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::FISHEYE"),
-            # ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::PINHOLE"),
-            # ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::FISHEYE"),
-            # ("OpaqueTriangle", "ssplat::CameraModelType::PINHOLE"),
-            # ("OpaqueTriangle", "ssplat::CameraModelType::FISHEYE"),
-            # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE"),
-            # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE"),
         ]
         includes = [*(
             [("Primitive3DGS.cuh", kernel_filename)] * 6 +
             [("Primitive3DGUT.cuh", kernel_filename)] * 3
-        )] * 5 # + \
-            # [("Primitive3DGUT_SV.cuh", kernel_filename)] * 14 + \
-            # [("PrimitiveOpaqueTriangle.cuh", kernel_filename)] * 2 + \
-            # [("PrimitiveVoxel.cuh", kernel_filename)] * 2
+        )] * 5
 
         generate_kernel_instantiation(prefix, definition, map_header, map_body, includes)
 
@@ -246,32 +225,11 @@ def generate_ProjectionBwd():
             ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
             ["HessianDiagonalOutputMode::None", "HessianDiagonalOutputMode::Position", "HessianDiagonalOutputMode::AllReasonable"],
         )
-        # ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<2>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<3>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<4>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<5>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<6>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<7>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        # ("SphericalVoronoi3DGUT<8>", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        # ("OpaqueTriangle", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        # ("OpaqueTriangle", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
-        # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "HessianDiagonalOutputMode::None"),
-        # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "HessianDiagonalOutputMode::None"),
     ]
     includes = [*(
         [("Primitive3DGS.cuh", "ProjectionBwd_kernel.cuh")] * 18 +
         [("Primitive3DGUT.cuh", "ProjectionBwd_kernel.cuh")] * 9
-    )] * 5 #+ \
-        # [("Primitive3DGUT_SV.cuh", "ProjectionBwd_kernel.cuh")] * 14 + \
-        # [("PrimitiveOpaqueTriangle.cuh", "ProjectionBwd_kernel.cuh")] * 2 + \
-        # [("PrimitiveVoxel.cuh", "ProjectionBwd_kernel.cuh")] * 2
+    )] * 5
 
     generate_kernel_instantiation("ProjectionBwd", definition, map_header, map_body, includes)
 
@@ -356,13 +314,9 @@ def generate_RasterizationEval3DFwd():
             ["Vanilla3DGUT<0>"],
             ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
             ["true", "false"],
-        ),
-        # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "true", "true"),
-        # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "true", "true"),
+        )
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 6 #+ \
-        # [("Primitive3DGUT_SV.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 0 + \
-        # [("PrimitiveVoxel.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 2
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 6
 
     generate_kernel_instantiation("RasterizationEval3DFwd", definition, map_header, map_body, includes)
 
@@ -378,15 +332,9 @@ def generate_RasterizationEval3DBwd():
             ['true', 'false'],
             ['true', 'false'],
             ['true', 'false'],
-        ),
-        # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "false", "false", "false", "false"),
-        # ("VoxelPrimitive", "ssplat::CameraModelType::PINHOLE", "false", "true", "false", "false"),
-        # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "false", "false", "false", "false"),
-        # ("VoxelPrimitive", "ssplat::CameraModelType::FISHEYE", "false", "true", "false", "false"),
+        )
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 48 #+ \
-        # [("Primitive3DGUT_SV.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 0 + \
-        # [("PrimitiveVoxel.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 4
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 48
 
     generate_kernel_instantiation("RasterizationEval3DBwd", definition, map_header, map_body, includes)
 

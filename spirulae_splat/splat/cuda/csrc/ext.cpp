@@ -9,7 +9,6 @@
 #include "PixelWise.cuh"
 #include "FusedSSIM.cuh"
 #include "SplatTileIntersector.cuh"
-#include "SVHash.cuh"
 // #include "Projection.cuh"
 #include "ProjectionFwd.cuh"
 #include "ProjectionBwd.cuh"
@@ -18,8 +17,6 @@
 #include "RasterizationBwd.cuh"
 #include "RasterizationEval3DFwd.cuh"
 #include "RasterizationEval3DBwd.cuh"
-#include "RasterizationSortedEval3DFwd.cuh"
-#include "RasterizationSortedEval3DBwd.cuh"
 #include "Optimizer.cuh"
 #include "FusedProjectionBwdOptim.cuh"
 #include "Densify.cuh"
@@ -65,9 +62,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // m.def("intersect_tile_3dgs", &intersect_tile_3dgs_tensor);
     // m.def("intersect_tile_mip", &intersect_tile_3dgs_tensor);
     // m.def("intersect_tile_3dgut", &intersect_tile_3dgut_tensor);
-    // m.def("intersect_tile_3dgut_sv", &intersect_tile_3dgut_tensor);
-    // m.def("intersect_tile_opaque_triangle", &intersect_tile_opaque_triangle_tensor);
-    // m.def("intersect_tile_voxel", &intersect_tile_voxel_tensor);
 
     // BackgroundSphericalHarmonics.cuh — TorchTensorView API. Outputs are
     // caller-allocated; the C++ side fills them in place.
@@ -125,90 +119,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     #if 0
     // SplatTileIntersector.cuh
     m.def("intersect_splat_tile_3dgs", &intersect_splat_tile_3dgs);
-    // m.def("intersect_splat_tile_opaque_triangle", &intersect_splat_tile_opaque_triangle);
-    // m.def("intersect_splat_tile_voxel", &intersect_splat_tile_voxel);
-
-    // SVHash.cuh
-    m.def("svhash_create_initial_volume", &svhashCreateInitialVolume);
-    m.def("svhash_get_voxels", &svhashGetVoxels);
-    m.def("svhash_split_voxels", &svhashSplitVoxels);
 
     #endif
-
-#if 0
-    // PixelWise.cuh (partial)
-    m.def("rendered_depth_to_expected_depth_forward", &rendered_depth_to_expected_depth_forward);
-    m.def("rendered_depth_to_expected_depth_backward", &rendered_depth_to_expected_depth_backward);
-    m.def("ray_depth_to_linear_depth_forward", &ray_depth_to_linear_depth_forward);
-    m.def("ray_depth_to_linear_depth_backward", &ray_depth_to_linear_depth_backward);
-
-    // ProjectionFwd.cuh
-    m.def("projection_3dgs_forward", &projection_3dgs_forward);
-    m.def("projection_mip_forward", &projection_mip_forward);
-    m.def("projection_3dgut_forward", &projection_3dgut_forward);
-    m.def("projection_3dgut_sv_forward", &projection_3dgut_forward);
-    // m.def("projection_opaque_triangle_forward", &projection_opaque_triangle_forward);
-    // m.def("projection_voxel_forward", &projection_voxel_forward);
-
-    // ProjectionBwd.cuh
-    m.def("projection_3dgs_backward", &projection_3dgs_backward);
-    m.def("projection_mip_backward", &projection_mip_backward);
-    m.def("projection_3dgut_backward", &projection_3dgut_backward);
-    m.def("projection_3dgut_sv_backward", &projection_3dgut_backward);
-    // m.def("projection_opaque_triangle_backward", &projection_opaque_triangle_backward);
-    // m.def("projection_voxel_backward", &projection_voxel_backward);
-
-    // ProjectionBwd.cuh, second order
-    m.def("projection_3dgs_backward_with_position_hessian_diagonal", &projection_3dgs_backward_with_position_hessian_diagonal);
-    m.def("projection_mip_backward_with_position_hessian_diagonal", &projection_mip_backward_with_position_hessian_diagonal);
-    m.def("projection_3dgut_backward_with_position_hessian_diagonal", &projection_3dgut_backward_with_position_hessian_diagonal);
-    m.def("projection_3dgs_backward_with_hessian_diagonal", &projection_3dgs_backward_with_hessian_diagonal);
-    m.def("projection_mip_backward_with_hessian_diagonal", &projection_mip_backward_with_hessian_diagonal);
-    m.def("projection_3dgut_backward_with_hessian_diagonal", &projection_3dgut_backward_with_hessian_diagonal);
-
-    // ProjectionPackedFwd.cuh
-    m.def("projection_3dgs_packed_forward", &projection_3dgs_packed_forward);
-    m.def("projection_mip_packed_forward", &projection_mip_packed_forward);
-    m.def("projection_3dgut_packed_forward", &projection_3dgut_packed_forward);
-    m.def("projection_3dgut_sv_packed_forward", &projection_3dgut_packed_forward);
-    // m.def("projection_opaque_triangle_packed_forward", &projection_opaque_triangle_packed_forward);
-    // m.def("projection_voxel_packed_forward", &projection_voxel_packed_forward);
-#endif
-
-#if 0
-    // ProjectionHeteroFwd.cuh
-    m.def("projection_3dgs_hetero_forward", &projection_3dgs_hetero_forward);
-    m.def("projection_mip_hetero_forward", &projection_mip_hetero_forward);
-    m.def("projection_3dgut_hetero_forward", &projection_3dgut_hetero_forward);
-    // m.def("projection_opaque_triangle_hetero_forward", &projection_opaque_triangle_hetero_forward);
-
-    // ProjectionHeteroBwd.cuh
-    m.def("projection_3dgs_hetero_backward", &projection_3dgs_hetero_backward);
-    m.def("projection_mip_hetero_backward", &projection_mip_hetero_backward);
-    m.def("projection_3dgut_hetero_backward", &projection_3dgut_hetero_backward);
-    // m.def("projection_opaque_triangle_hetero_backward", &projection_opaque_triangle_hetero_backward);
-#endif
-
-#if 0
-    // RasterizationFwd.cuh and RasterizationBwd.cuh
-    m.def("rasterization_3dgs_forward", &rasterize_to_pixels_3dgs_fwd);
-    m.def("rasterization_3dgs_backward", &rasterize_to_pixels_3dgs_bwd);
-    m.def("rasterization_3dgs_backward_with_hessian_diagonal", &rasterize_to_pixels_3dgs_bwd_with_hessian_diagonal);
-    m.def("rasterization_mip_forward", &rasterize_to_pixels_mip_fwd);
-    m.def("rasterization_mip_backward", &rasterize_to_pixels_3dgs_bwd);
-    m.def("rasterization_mip_backward_with_hessian_diagonal", &rasterize_to_pixels_3dgs_bwd_with_hessian_diagonal);
-
-    // RasterizationEval3DFwd.cuh and RasterizationEval3DBwd.cuh
-    m.def("rasterization_3dgut_forward", &rasterize_to_pixels_3dgut_fwd);
-    m.def("rasterization_3dgut_backward", &rasterize_to_pixels_3dgut_bwd);
-    m.def("rasterization_3dgut_backward_with_hessian_diagonal", &rasterize_to_pixels_3dgut_bwd_with_hessian_diagonal);
-    m.def("rasterization_3dgut_sv_forward", &rasterize_to_pixels_3dgut_fwd);
-    m.def("rasterization_3dgut_sv_backward", &rasterize_to_pixels_3dgut_bwd);
-    // m.def("rasterization_opaque_triangle_forward", &rasterize_to_pixels_opaque_triangle_sorted_fwd);
-    // m.def("rasterization_opaque_triangle_backward", &rasterize_to_pixels_opaque_triangle_sorted_bwd);
-    // m.def("rasterization_voxel_forward", &rasterize_to_pixels_voxel_eval3d_fwd);
-    // m.def("rasterization_voxel_backward", &rasterize_to_pixels_voxel_eval3d_bwd);
-#endif
 
 #if 0
     // Optimizer.cuh

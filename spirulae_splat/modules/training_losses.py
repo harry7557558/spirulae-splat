@@ -1027,9 +1027,6 @@ class SplatTrainingLosses:
             loss_dict['ppisp_reg_color_mean'] = ppisp_reg_loss[4]
             loss_dict['ppisp_reg_crf_channel_var'] = ppisp_reg_loss[5]
 
-        if self.config.primitive == "voxel":
-            return loss_dict
-
         losses = _ComputePerSplatLosses.apply(
             gauss_scales, gauss_opacities, gauss_quats,
             self.config.opacity_reg * float(self.config.use_mcmc),

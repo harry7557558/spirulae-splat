@@ -44,8 +44,3 @@ compute_sh_backward = _make_lazy_cuda_func("compute_sh_backward")
 # misc
 blend_background_forward = _make_lazy_cuda_func("blend_background_forward")
 blend_background_backward = _make_lazy_cuda_func("blend_background_backward")
-
-# sparse voxel hash grid
-svhash_create_initial_volume = _make_lazy_cuda_func("svhash_create_initial_volume")
-svhash_get_voxels = _make_lazy_cuda_func("svhash_get_voxels")
-svhash_split_voxels = _make_lazy_cuda_func("svhash_split_voxels")
