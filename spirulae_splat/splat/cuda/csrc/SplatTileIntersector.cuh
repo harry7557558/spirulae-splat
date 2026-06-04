@@ -12,33 +12,27 @@
 #include "types.cuh"
 
 
-
-#if 0
-
 template<ssplat::CameraModelType camera_model>
 struct TileBuffers {
     long size;
     float width, height;
-    const glm::mat4* __restrict__ viewmats;
+    // Row-major 4x4 view matrices, stride 16 floats per tile.
+    const float* __restrict__ viewmats;
     const float4* __restrict__ intrins;  // fx, fy, cx, cy
     CameraDistortionCoeffsBuffer dist_coeffs;
 
     TileBuffers(
         unsigned width,
         unsigned height,
-        TorchTensorView viewmats,  // [B, 4, 4]
-        TorchTensorView intrins,  // [B, 4], fx, fy, cx, cy
-        const TorchTensorView& dist_coeffs
-    ) : width((float)width), height((float)height), dist_coeffs(dist_coeffs) {
-        // TODO: check dimension and shape
-
-        static_assert(sizeof(glm::mat4) == 16*sizeof(float));
-        static_assert(sizeof(glm::mat3) == 9*sizeof(float));
-
-        this->size = std::get<2>(viewmats)[0];
-        this->viewmats = (const glm::mat4*)std::get<0>(viewmats);
-        this->intrins = (const float4*)std::get<0>(intrins);
-    }
+        const float* viewmats_ptr,   // [B*16], row-major 4x4
+        const float4* intrins_ptr,   // [B], fx, fy, cx, cy
+        float* dist_coeffs_ptr,      // [B*10] or nullptr
+        long size
+    )
+        : size(size),
+          width((float)width), height((float)height),
+          viewmats(viewmats_ptr), intrins(intrins_ptr),
+          dist_coeffs(dist_coeffs_ptr) {}
 };
 
 
@@ -56,23 +50,21 @@ struct SplatTileIntersector {
         float rel_scale
     );
 
-    std::tuple<at::Tensor, at::Tensor> getIntersections_brute();
+    std::tuple<DeviceVector<int32_t>, DeviceVector<int32_t>> getIntersections_brute();
 
-    std::tuple<at::Tensor, at::Tensor> getIntersections_lbvh();
+    std::tuple<DeviceVector<int32_t>, DeviceVector<int32_t>> getIntersections_lbvh();
 
 };
 
 
-std::tuple<at::Tensor, at::Tensor>
+std::tuple<DeviceVector<int32_t>, DeviceVector<int32_t>>
 intersect_splat_tile_3dgs(
     std::vector<DeviceTensorFloatND> splats_tuple,
     unsigned width,
     unsigned height,
-    TorchTensorView viewmats,
-    TorchTensorView intrins,
+    DeviceVector<float> viewmats,       // [C*16], row-major 4x4 per camera
+    DeviceVector<float4> intrins,       // [C]
     const std::string& camera_model,
-    const TorchTensorView& dist_coeffs,
+    const DeviceTensor2D<float>& dist_coeffs,  // [C, 10], may be null
     float rel_scale
 );
-
-#endif

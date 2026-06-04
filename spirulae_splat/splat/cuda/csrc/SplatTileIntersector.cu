@@ -2,9 +2,6 @@
 
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
-#include <thrust/sort.h>
-#include <thrust/device_ptr.h>
-#include <vector>
 
 
 #include "generated/slang.cuh"
@@ -13,12 +10,6 @@ namespace SlangProjectionUtils {
 #include "generated/projection_utils.cuh"
 }
 
-#include <gsplat/Utils.cuh>
-
-
-#if 0
-
-// #define DEBUG
 
 
 __device__ __forceinline__ float remapFunction(float x, float rel_scale) {
@@ -70,18 +61,19 @@ __device__ bool getAABB(
 
 template<ssplat::CameraModelType camera_model>
 struct Tile {
-    glm::vec3 ro, rd;
-    glm::vec3 n0, n1, n2, n3;
+    float3 ro, rd;
+    float3 n0, n1, n2, n3;
 
     __device__ bool init(
         CameraDistortionCoeffs dist_coeffs,
         float x0, float x1, float y0, float y1,
-        glm::mat4x3 view
+        const float3 R0, const float3 R1, const float3 R2,  // columns of R (world rotation)
+        const float3 t                                       // translation
     ) {
-
-        glm::mat3 R = glm::transpose(glm::mat3(view));
-        ro = -R * glm::vec3(view[3]);
-        rd = R[2];
+        // Camera origin in world: ro = -R * t.  R has columns (R0, R1, R2).
+        ro = -(R0 * t.x + R1 * t.y + R2 * t.z);
+        // Camera forward (z-axis) in world.
+        rd = R2;
 
         // TODO: better way to handle this in nonlinear and partially invalid case
         // May not matter in training with small tiles, but obvious artifact when rendering >180deg fisheye
@@ -98,38 +90,37 @@ struct Tile {
             e2_ = e1_ + e3_ - e0_, valid2 = true;
         if (!valid3 && valid2 && valid0 && valid1)
             e3_ = e2_ + e0_ - e1_, valid3 = true;
-        glm::vec3 e0 = R * glm::vec3(e0_.x, e0_.y, e0_.z);
-        glm::vec3 e1 = R * glm::vec3(e1_.x, e1_.y, e1_.z);
-        glm::vec3 e2 = R * glm::vec3(e2_.x, e2_.y, e2_.z);
-        glm::vec3 e3 = R * glm::vec3(e3_.x, e3_.y, e3_.z);
+        // Camera-space rays -> world-space rays: e = R * e_cam.
+        float3 e0 = R0 * e0_.x + R1 * e0_.y + R2 * e0_.z;
+        float3 e1 = R0 * e1_.x + R1 * e1_.y + R2 * e1_.z;
+        float3 e2 = R0 * e2_.x + R1 * e2_.y + R2 * e2_.z;
+        float3 e3 = R0 * e3_.x + R1 * e3_.y + R2 * e3_.z;
 
-        n0 = glm::normalize(glm::cross(e0, e1));
-        n1 = glm::normalize(glm::cross(e1, e2));
-        n2 = glm::normalize(glm::cross(e2, e3));
-        n3 = glm::normalize(glm::cross(e3, e0));
+        n0 = normalize(cross(e0, e1));
+        n1 = normalize(cross(e1, e2));
+        n2 = normalize(cross(e2, e3));
+        n3 = normalize(cross(e3, e0));
         return (valid0 && valid1 && valid2 && valid3 &&
-            isfinite(glm::length(n0+n1+n2+n3)));
+            isfinite(length(n0+n1+n2+n3)));
     }
 
     __device__ __forceinline__ bool isOverlap(float3 aabb_min, float3 aabb_max) const {
 
-        float3 c_ = 0.5f*(aabb_min+aabb_max);
-        float3 r_ = 0.5f*(aabb_max-aabb_min);
-        glm::vec3 c = {c_.x, c_.y, c_.z};
-        glm::vec3 r = {r_.x, r_.y, r_.z};
+        float3 c = 0.5f*(aabb_min+aabb_max);
+        float3 r = 0.5f*(aabb_max-aabb_min);
 
         // intersection test using separating axis theorem
         // has false positive; TODO: tighter one may help performance, most latency is global memory load
-        glm::vec3 roc = c - ro;
-        float s0 = glm::dot(n0, roc) - glm::dot(r, glm::abs(n0));
-        float s1 = glm::dot(n1, roc) - glm::dot(r, glm::abs(n1));
-        float s2 = glm::dot(n2, roc) - glm::dot(r, glm::abs(n2));
-        float s3 = glm::dot(n3, roc) - glm::dot(r, glm::abs(n3));
-        float s = fmax(fmax(s0, s1), fmax(s2, s3));
+        float3 roc = c - ro;
+        float s0 = dot(n0, roc) - dot(r, fabs(n0));
+        float s1 = dot(n1, roc) - dot(r, fabs(n1));
+        float s2 = dot(n2, roc) - dot(r, fabs(n2));
+        float s3 = dot(n3, roc) - dot(r, fabs(n3));
+        float s = fmaxf(fmaxf(s0, s1), fmaxf(s2, s3));
         if (camera_model != ssplat::CameraModelType::PINHOLE)
             return s < 0.0f;
-        float sz = -glm::dot(rd, roc) - glm::dot(r, glm::abs(rd));
-        return fmax(s, sz) < 0.0f;
+        float sz = -dot(rd, roc) - dot(r, fabs(rd));
+        return fmaxf(s, sz) < 0.0f;
     }
 
     // return negative if no overlap, strictly positive for sorting ID
@@ -139,11 +130,10 @@ struct Tile {
         bool valid_aabb = getAABB<false>(splatBuffer, idx, aabb_min, aabb_max);
         if (!valid_aabb || !isOverlap(aabb_min, aabb_max))
             return -1.0f;
-        float3 mean_ = 0.5f * (aabb_min + aabb_max);
-        glm::vec3 mean(mean_.x, mean_.y, mean_.z);
+        float3 mean = 0.5f * (aabb_min + aabb_max);
         return camera_model != ssplat::CameraModelType::PINHOLE ?
-            glm::length(mean - ro) :
-            glm::dot(mean - ro, rd);  // negative if center is behind
+            length(mean - ro) :
+            dot(mean - ro, rd);  // negative if center is behind
     }
 
 };
@@ -152,24 +142,26 @@ struct Tile {
 template<ssplat::CameraModelType camera_model>
 __device__ __forceinline__ Tile<camera_model>
 loadTile(unsigned tileIdx, const TileBuffers<camera_model> buffers, bool& isActive) {
-    static_assert(sizeof(glm::mat4) == 16*sizeof(float));
-    static_assert(sizeof(glm::mat3) == 9*sizeof(float));
+    // Row-major 4x4 view matrix: m[4*row + col].  Top-left 3x3 is the world rotation R,
+    // right column is translation t.  Columns of R are read across the row stride.
+    const float* m = buffers.viewmats + 16 * tileIdx;
+    const float3 R0 = { m[ 0], m[ 4], m[ 8] };
+    const float3 R1 = { m[ 1], m[ 5], m[ 9] };
+    const float3 R2 = { m[ 2], m[ 6], m[10] };
+    const float3 t  = { m[ 3], m[ 7], m[11] };
 
-    glm::mat4 view = glm::transpose(buffers.viewmats[tileIdx]);
     float4 intrin = buffers.intrins[tileIdx];  // fx, fy, cx, cy
-
     float fx = intrin.x;
     float fy = intrin.y;
     float cx = intrin.z;
     float cy = intrin.w;
-    // printf("%f %f %f %f\n", fx, fy, cx, cy);
 
     Tile<camera_model> res;
     isActive &= res.init(
         buffers.dist_coeffs.load(tileIdx),
         -cx / fx, (buffers.width - cx) / fx,
         -cy / fy, (buffers.height - cy) / fy,
-        glm::mat4x3(glm::vec3(view[0]), glm::vec3(view[1]), glm::vec3(view[2]), glm::vec3(view[3]))
+        R0, R1, R2, t
     );
     return res;
 }
@@ -242,105 +234,11 @@ __device__ __forceinline__ uint64_t insert_2_zeros_between_bits(uint64_t x) {
 }
 
 
-template<typename T>
-__global__ void invertPermutation(
-    size_t size,
-    const T* __restrict__ perm,
-    T* __restrict__ inverse
-) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= size) return;
-    T p = perm[idx];
-    inverse[p] = (T)idx;
+__global__ void fillIota(int32_t* __restrict__ out, int64_t n) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    out[idx] = (int32_t)idx;
 }
-
-__global__ void gatherAndRemap(
-    size_t size,
-    const int32_t* __restrict__ subcell,
-    const int32_t* __restrict__ perm,
-    const int32_t* __restrict__ perm_inverse,
-    int32_t* __restrict__ subcell_out
-) {
-    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= size) return;
-    int32_t temp = subcell[perm[i]];
-    subcell_out[i] = (temp == -1) ? -1 : perm_inverse[temp];
-}
-
-__global__ void getCellDifferential(
-    unsigned num_elem,
-    const uint64_t* __restrict__ keys,
-    int32_t* __restrict__ cell_id_differentials,
-    int32_t* __restrict__ splat_differentials
-) {
-    unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid > num_elem) return;
-
-    uint64_t key = keys[tid];
-
-    cell_id_differentials[tid] = (tid == num_elem) ? 0 :
-        (int)((key >> 1) != (keys[tid+1] >> 1));
-
-    splat_differentials[tid] = (tid == num_elem) ? 0 :
-        (int)(key & 1);
-}
-
-__global__ void fillTreeSplats(
-    unsigned num_overlaps,
-    const uint64_t* __restrict__ cell_keys,
-    const int32_t* __restrict__ splat_ids,
-    const unsigned* __restrict__ splat_idx_map,
-    const unsigned* __restrict__ cell_id_map,
-    unsigned* __restrict__ splatRanges,
-    unsigned* __restrict__ splatIndices
-) {
-    unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= num_overlaps) return;
-
-    // filter only splats (not cells)
-    if ((int)cell_keys[tid] & 1 == 1) {
-
-        // update splat idx
-        unsigned splat_idx = splat_idx_map[tid];
-        splatIndices[splat_idx] = splat_ids[tid];
-
-        // update range
-        if (tid == 0 || cell_keys[tid] != cell_keys[tid-1])
-            splatRanges[cell_id_map[tid]*2] = splat_idx;
-        if (tid == num_overlaps-1 || cell_keys[tid] != cell_keys[tid+1])
-            splatRanges[cell_id_map[tid]*2+1] = splat_idx + 1;
-    }
-}
-
-
-template<typename T>
-__device__ __forceinline__ void lower_upper_bounds(
-    const T *arr, unsigned n, T value, unsigned &lo, unsigned &hi
-) {
-    unsigned left = 0, right = n;
-
-    // Find lower bound (first index >= value)
-    while (left < right) {
-        int mid = left + (right - left) / 2;
-        if (arr[mid] < value)
-            left = mid + 1;
-        else
-            right = mid;
-    }
-    lo = left;
-
-    // Find upper bound (first index > value)
-    right = n;
-    while (left < right) {
-        int mid = left + (right - left) / 2;
-        if (arr[mid] <= value)
-            left = mid + 1;
-        else
-            right = mid;
-    }
-    hi = left;
-}
-
 
 
 __global__ void fillTreeSubcells_initAABB(
@@ -352,43 +250,6 @@ __global__ void fillTreeSubcells_initAABB(
     treeAABB[2*tid+0] = make_float3(1e10);
     treeAABB[2*tid+1] = -make_float3(1e10);
 }
-
-template<uint BRANCH_FACTOR>
-__global__ void fillTreeSubcells_perOverlap(
-    unsigned num_overlaps,
-    unsigned num_cells,
-    const unsigned* __restrict__ cell_id_map,
-    const int32_t* __restrict__ subcell_ids,
-    const uint8_t* __restrict__ subcell_masks,
-    const float3* __restrict__ subcell_aabb,
-    int32_t* __restrict__ children,
-    float3* __restrict__ treeAABB
-) {
-    unsigned oid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (oid >= num_overlaps) return;
-    unsigned tid = cell_id_map[oid];
-
-    constexpr unsigned B3 = BRANCH_FACTOR * BRANCH_FACTOR * BRANCH_FACTOR;
-
-    // update children
-    int mask = (int)subcell_masks[oid];
-    if (mask != 0) {
-        unsigned cid = tid * B3 + (mask - 1);
-        unsigned sid = subcell_ids[oid];
-        atomicMax(&children[cid], cell_id_map[sid]);
-    }
-
-    // update AABB
-    float3 aabbMin = subcell_aabb[2*oid+0];
-    atomicMin(&treeAABB[2*tid+0].x, aabbMin.x);
-    atomicMin(&treeAABB[2*tid+0].y, aabbMin.y);
-    atomicMin(&treeAABB[2*tid+0].z, aabbMin.z);
-    float3 aabbMax = subcell_aabb[2*oid+1];
-    atomicMax(&treeAABB[2*tid+1].x, aabbMax.x);
-    atomicMax(&treeAABB[2*tid+1].y, aabbMax.y);
-    atomicMax(&treeAABB[2*tid+1].z, aabbMax.z);
-}
-
 
 
 template<typename Primitive, ssplat::CameraModelType camera_model>
@@ -471,7 +332,7 @@ __global__ void fillSplatSortingKeys(
 ) {
     unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= numSplats) return;
-    
+
     float3 aabb_min, aabb_max;
     bool valid_aabb = getAABB<true>(splatBuffer, tid, aabb_min, aabb_max, rel_scale);
     if (!valid_aabb) {
@@ -708,93 +569,6 @@ __global__ void computeLbvhAABB(
 
 
 template<typename Primitive, ssplat::CameraModelType camera_model>
-__global__ void getTileSplatIntersections_lbvh(
-    const TileBuffers<camera_model> tiles,
-    const typename Primitive::WorldBuffer splatBuffer,
-    const int2* __restrict__ internal_nodes,
-    float3* __restrict__ treeAABB,
-    uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
-    uint32_t* __restrict__ intersectionSplatID  // nullptr or to be filled
-) {
-    // one thread per tile
-    unsigned tileIdx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tileIdx >= tiles.size)
-        return;
-    uint laneIdx = tileIdx % WARP_SIZE;
-
-    bool isCountingPass = (intersectionSplatID == nullptr);
-    uint32_t intersectGlobalOffset = 0, intersectGlobalOffsetMax = 0;
-    if (!isCountingPass) {
-        intersectGlobalOffset = intersect_counts[tileIdx];
-        intersectGlobalOffsetMax = intersect_counts[tileIdx+1];
-    }
-
-    bool isActive = true;
-    Tile<camera_model> tile = loadTile(tileIdx, tiles, isActive);
-    if (!isActive) {
-        if (isCountingPass)
-            intersect_counts[tileIdx] = 0;
-        return;
-    }
-
-    struct StackElem {
-        uint32_t nodeIdx;
-    };
-    constexpr uint MAX_STACK_SIZE = 8*sizeof(int32_t)+1;
-    __shared__ StackElem stack[WARP_SIZE][MAX_STACK_SIZE];
-    uint stackSize = 0;
-    if (tile.isOverlap(treeAABB[0], treeAABB[1])) {
-        stack[laneIdx][stackSize] = { 0 };
-        stackSize++;
-    }
-    uint numSplatIntersects = 0;
-
-    for (uint _num_steps = 0; _num_steps < 65536; _num_steps++) {
-        if (stackSize == 0)
-            break;
-
-        --stackSize;
-        StackElem elem = stack[laneIdx][stackSize];
-        int2 node = internal_nodes[elem.nodeIdx];
-        // printf("[%u] stack %u - node %d %d\n", _num_steps, stackSize, node.x, node.y);
-
-        for (uint ci = 0; ci < 2; ci++) {
-            int childIdx = ci == 0 ? node.x : node.y;
-            // splat
-            if (childIdx < 0) {
-                int splatIdx = ~childIdx;
-                float overlap = tile.isOverlap(splatBuffer, splatIdx);
-                if (overlap > 0.0) {
-                    uint idx = numSplatIntersects + intersectGlobalOffset;
-                    if (idx < intersectGlobalOffsetMax) {
-                        intersectionSplatID[idx] = splatIdx;
-                    }
-                    numSplatIntersects += 1;
-                }
-            }
-            // node
-            else if (tile.isOverlap(treeAABB[2*childIdx+0], treeAABB[2*childIdx+1])
-                    && stackSize < MAX_STACK_SIZE) {
-                stack[laneIdx][stackSize] = { (uint)childIdx };
-                stackSize += 1;
-            }
-        }
-
-    }
-
-    if (isCountingPass)
-        intersect_counts[tileIdx] = numSplatIntersects;
-    else {
-        uint32_t idx = numSplatIntersects + intersectGlobalOffset;
-        while (idx < intersectGlobalOffsetMax) {
-            intersectionSplatID[idx] = 0;
-            ++idx;
-        }
-    }
-}
-
-
-template<typename Primitive, ssplat::CameraModelType camera_model>
 __global__ void getTileSplatIntersections_lbvh_warp(
     const TileBuffers<camera_model> tiles,
     const typename Primitive::WorldBuffer splatBuffer,
@@ -852,8 +626,6 @@ __global__ void getTileSplatIntersections_lbvh_warp(
 
     // handle this case where treeAABB may be uninitialized
     if (range.y-range.x == 1) {
-        // if (laneIdx == 0)
-        // printf("range.y-range.x == 1: %u %u %u\n", level, range.x, range.y);
         continue;
     }
 
@@ -961,102 +733,18 @@ __global__ void getTileSplatIntersections_lbvh_warp(
 }
 
 
-__forceinline__ at::Tensor exclusiveScan(at::Tensor &tensor) {
-    at::Tensor result = at::empty_like(tensor);
-    size_t temp_storage_bytes = 0;
-    cub::DeviceScan::ExclusiveSum(nullptr, temp_storage_bytes,
-        (unsigned*)tensor.data_ptr<int32_t>(),
-        (unsigned*)result.data_ptr<int32_t>(),
-        tensor.size(0));
-    at::Tensor temp_storage = at::empty({(long)temp_storage_bytes}, tensor.options().dtype(at::kByte));
-    cub::DeviceScan::ExclusiveSum(temp_storage.data_ptr<uint8_t>(), temp_storage_bytes,
-        (unsigned*)tensor.data_ptr<int32_t>(),
-        (unsigned*)result.data_ptr<int32_t>(),
-        tensor.size(0));
+__forceinline__ DeviceVector<int32_t> exclusiveScan(
+    const std::string& key, const DeviceVector<int32_t>& input
+) {
+    DeviceVector<int32_t> result;
+    result.resize(key, input.size());
+    CUB_WRAPPER(cub::DeviceScan::ExclusiveSum,
+        (unsigned*)input.data_ptr(),
+        (unsigned*)result.data_ptr(),
+        (int)input.size());
     return result;
 }
 
-__forceinline__ at::Tensor invertPermutation(at::Tensor &tensor) {
-    constexpr uint block = 256;
-    at::Tensor result = at::empty_like(tensor);
-    invertPermutation<int32_t><<<_LAUNCH_ARGS_1D(tensor.size(0), block)>>>(
-        tensor.size(0),
-        tensor.data_ptr<int32_t>(),
-        result.data_ptr<int32_t>()
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-    return result;
-}
-
-template<typename T>
-void _print_tensor(std::string name, at::Tensor tensor) {
-    printf("%s ", name.c_str());
-    // printf("\n"); return;
-    tensor = tensor.cpu();
-    if (tensor.ndimension() == 1) {
-        for (unsigned i = 0; i < tensor.size(0); i++)
-            printf("%lg ", (double)tensor.data_ptr<T>()[i]);
-    }
-    else if (tensor.ndimension() == 2) {
-        for (unsigned i = 0; i < tensor.size(0); i++) {
-            for (unsigned j = 0; j < tensor.size(1); j++)
-                printf("%lg ", (double)tensor.data_ptr<T>()[i*tensor.size(1)+j]);
-            printf(" ");
-        }
-    }
-    printf("\n");
-}
-
-// #define print_tensor(dtype, tensor) _print_tensor<dtype>(#tensor, tensor)
-#define print_tensor(dtype, tensor) ;
-
-
-#ifdef DEBUG
-void printAABB(float3 p0, float3 p1) {
-    float3 c = -0.5f*(p0+p1), r = -0.5f*(p1-p0);
-    printf("\\max\\left(\\left|x%+f\\right|%+f,\\left|y%+f\\right|%+f,\\left|z%+f\\right|%+f\\right)=0\n", c.x, r.x, c.y, r.y, c.z, r.z);
-}
-
-void printAABB_wireframe(float3 p0, float3 p1) {
-    // B\left(x_{0},y_{0},z_{0},x_{1},y_{1},z_{1},t\right)=\left[\left(x_{0},y_{0},z_{0}\right),\left(x_{1},y_{0},z_{0}\right),\left(x_{1},y_{1},z_{0}\right),\left(x_{0},y_{1},z_{0}\right),\left(x_{0},y_{0},z_{0}\right),\left(x_{0},y_{1},z_{0}\right),\left(x_{0},y_{1},z_{1}\right),\left(x_{0},y_{0},z_{1}\right),\left(x_{0},y_{0},z_{0}\right),\left(x_{1},y_{0},z_{0}\right),\left(x_{1},y_{0},z_{1}\right),\left(x_{0},y_{0},z_{1}\right)\right]\left(1-t\right)+\left[\left(x_{0},y_{0},z_{1}\right),\left(x_{1},y_{0},z_{1}\right),\left(x_{1},y_{1},z_{1}\right),\left(x_{0},y_{1},z_{1}\right),\left(x_{1},y_{0},z_{0}\right),\left(x_{1},y_{1},z_{0}\right),\left(x_{1},y_{1},z_{1}\right),\left(x_{1},y_{0},z_{1}\right),\left(x_{0},y_{1},z_{0}\right),\left(x_{1},y_{1},z_{0}\right),\left(x_{1},y_{1},z_{1}\right),\left(x_{0},y_{1},z_{1}\right)\right]t
-    printf("B\\left(%f,%f,%f,%f,%f,%f,t\\right)\n", p0.x, p0.y, p0.z, p1.x, p1.y, p1.z);
-}
-
-void printTile(glm::vec3 ro, glm::vec3 rd) {
-    rd = glm::normalize(rd);
-    printf("\\left(%f,%f,%f\\right)+\\left(%f,%f,%f\\right)100t\n",
-        ro.x, ro.y, ro.z, rd.x, rd.y, rd.z);
-}
-
-void printCells(at::Tensor cell_keys, at::Tensor splat_ids, at::Tensor subcell_masks, at::Tensor subcell_ids) {
-    int num_cells = cell_keys.size(0);
-    printf("%d overlaps\n", num_cells);
-    for (int i = 0; i < num_cells; i++) {
-        uint64_t cell_key = cell_keys[i].item().toUInt64();
-        int32_t splat_id = splat_ids[i].item().toInt();
-        uint8_t subcell_mask = subcell_masks[i].item().toByte();
-        int32_t subcell_id = subcell_ids[i].item().toInt();
-        printf("[%d] layer %d, offset %llx, alias %b, splat %d, subcell %03b, %d\n", i, (int)(cell_key>>58), cell_key>>1, (unsigned)(cell_key&1), splat_id, (unsigned)(subcell_mask==0?0:31-__builtin_clz((unsigned)subcell_mask)), subcell_id);
-    }
-}
-
-void checkMatch(std::string name, const at::Tensor &a, const at::Tensor &b) {
-    if (a.size(0) != b.size(0)) {
-        printf("%s: shape mismatch (%d != %d)\n", name.c_str(), (int)a.size(0), (int)b.size(0));
-        return;
-    }
-    int numdiff = at::abs(a - b).clip(0, 1).sum().item<int>();
-    printf("%s: %d / %d mismatch\n", name.c_str(), numdiff, (int)a.size(0));
-}
-
-void clearL2Cache() {
-    size_t l2_cache_size = 128 << 20;
-    void* temp_buffer;
-    cudaMalloc(&temp_buffer, l2_cache_size);
-    cudaMemset(temp_buffer, 0, l2_cache_size);
-    cudaFree(temp_buffer);
-}
-#endif
 
 
 template<typename Primitive, ssplat::CameraModelType camera_model>
@@ -1066,80 +754,48 @@ SplatTileIntersector<Primitive, camera_model>::SplatTileIntersector(
     float rel_scale
 ) : tiles(tiles), splats(splats), rel_scale(rel_scale)
 {
-    // if (splats.batchSize() != 1)
-    //     AT_ERROR("Patched mode only supports splat batch size 1");
     this->numSplats = splats.size();
-    
-    #ifdef DEBUG
-    std::chrono::system_clock::time_point t0, t1;
-
-    for (int i = 0; i < 10; i++) {
-        clearL2Cache();
-        t0 = std::chrono::high_resolution_clock::now();
-        // auto [icm1, sid1] = getIntersections_octree<12, 2>();
-        auto [icm1, sid1] = getIntersections_lbvh();
-        t1 = std::chrono::high_resolution_clock::now();
-        printf("tree: %.2f ms\n", std::chrono::duration<float>(t1-t0).count()*1e3f);
-
-        // continue;
-
-        clearL2Cache();
-        t0 = std::chrono::high_resolution_clock::now();
-        auto [icm0, sid0] = getIntersections_brute();
-        t1 = std::chrono::high_resolution_clock::now();
-        printf("brute: %.2f ms\n", std::chrono::duration<float>(t1-t0).count()*1e3f);
-
-        icm0 = icm0.cpu();
-        icm1 = icm1.cpu();
-        sid0 = sid0.cpu();
-        sid1 = sid1.cpu();
-        for (int k = 0; k+1 < icm0.size(0); k++) {
-            int i0 = icm0[k].item<int>();
-            int i1 = icm0[k+1].item<int>();
-            std::sort(sid0.data_ptr<int>()+i0, sid0.data_ptr<int>()+i1);
-            i0 = icm1[k].item<int>();
-            i1 = icm1[k+1].item<int>();
-            std::sort(sid1.data_ptr<int>()+i0, sid1.data_ptr<int>()+i1);
-        }
-        checkMatch("icm", icm1, icm0);
-        checkMatch("sid", sid1, sid0);
-    }
-    exit(0);
-    #endif
 }
 
 template<typename Primitive, ssplat::CameraModelType camera_model>
-std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
+std::tuple<DeviceVector<int32_t>, DeviceVector<int32_t>>
+SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
     constexpr unsigned warp = 32;
 
-    at::Tensor intersection_count = at::zeros({tiles.size+1}, kTensorOptionI32());
-    getTileSplatIntersections_brute<<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
+    DeviceVector<int32_t> intersection_count;
+    intersection_count.resize("sti.brute.count", tiles.size+1);
+    intersection_count.zero();
+    getTileSplatIntersections_brute<Primitive, camera_model><<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
+        numSplats,
         tiles, splats,
-        (uint32_t*)intersection_count.data_ptr<int32_t>(),
+        (uint32_t*)intersection_count.data_ptr(),
         nullptr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int, intersection_count);
 
-    at::Tensor intersection_count_map = exclusiveScan(intersection_count);
-    print_tensor(int, intersection_count_map);
-    unsigned total_intersections = (unsigned)intersection_count_map[(long)tiles.size].item<int32_t>();
+    DeviceVector<int32_t> intersection_count_map = exclusiveScan("sti.brute.count_map", intersection_count);
+    int32_t total_intersections = 0;
+    cudaMemcpy(&total_intersections,
+        intersection_count_map.data_ptr() + tiles.size,
+        sizeof(int32_t), cudaMemcpyDeviceToHost);
 
-    at::Tensor intersectionSplatID = at::empty({total_intersections}, kTensorOptionI32());
-    getTileSplatIntersections_brute<<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
+    DeviceVector<int32_t> intersectionSplatID;
+    intersectionSplatID.resize("sti.brute.ids", (int64_t)total_intersections);
+    getTileSplatIntersections_brute<Primitive, camera_model><<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
+        numSplats,
         tiles, splats,
-        (uint32_t*)intersection_count_map.data_ptr<int32_t>(),
-        (uint32_t*)intersectionSplatID.data_ptr<int32_t>()
+        (uint32_t*)intersection_count_map.data_ptr(),
+        (uint32_t*)intersectionSplatID.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int32_t, intersectionSplatID);
 
     return std::make_tuple(intersection_count_map, intersectionSplatID);
 }
 
 
 template<typename Primitive, ssplat::CameraModelType camera_model>
-std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
+std::tuple<DeviceVector<int32_t>, DeviceVector<int32_t>>
+SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
     // TODO: use a separate rotated AABB aligned with (1,1,1) for thin off-diagnoal Gaussians?
     constexpr uint MAX_NUM_LEVELS = 28;
     constexpr float BRANCH_FACTOR = 2.0f;
@@ -1150,345 +806,185 @@ std::tuple<at::Tensor, at::Tensor> SplatTileIntersector<Primitive, camera_model>
     constexpr int kFloatPInfByte = 0x7f;  // 0x7f7f7f7f -> 3.39615e+38
     constexpr int kFloatNInfByte = 0xfe;  // 0xfefefefe -> -1.69474e+38
 
-    // cudaDeviceSynchronize();
-
     // find splat AABB
-    at::Tensor splat_aabb = at::empty({numSplats, 2, 3}, kTensorOptionF32());
-    at::Tensor root_aabb_tensor = at::empty({2, 3}, kTensorOptionF32());
-    cudaMemset(root_aabb_tensor.data_ptr<float>()+0, kFloatPInfByte, 3*sizeof(float));
-    cudaMemset(root_aabb_tensor.data_ptr<float>()+3, kFloatNInfByte, 3*sizeof(float));
+    DeviceVector<float3> splat_aabb;
+    splat_aabb.resize("sti.lbvh.splat_aabb", numSplats * 2);
+    DeviceVector<float3> root_aabb;
+    root_aabb.resize("sti.lbvh.root_aabb", 2);
+    cudaMemset((float*)root_aabb.data_ptr() + 0, kFloatPInfByte, 3*sizeof(float));
+    cudaMemset((float*)root_aabb.data_ptr() + 3, kFloatNInfByte, 3*sizeof(float));
     computeSplatAABB<Primitive><<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
         numSplats, splats, rel_scale,
-        (float3*)splat_aabb.data_ptr<float>(),
-        (float3*)root_aabb_tensor.data_ptr<float>()
+        splat_aabb.data_ptr(),
+        root_aabb.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    #ifdef DEBUG
-    if (0) {
-        at::Tensor splat_aabb_cpu = splat_aabb.cpu();
-        for (int i = 0; i < numSplats; i++) {
-            float3* ps = (float3*)splat_aabb_cpu.data_ptr<float>() + 2*i;
-            printAABB(ps[0], ps[1]);
-        }
-    }
-    #endif
 
-    // find root AABB, pad them to cubes
-    glm::vec3 rootAABBMin, rootAABBMax;
+    // find root AABB on host, pad to a cube
+    float3 rootAABBMin, rootAABBMax;
     {
-        root_aabb_tensor = root_aabb_tensor.cpu();
-        glm::vec3* root_aabb = (glm::vec3*)root_aabb_tensor.data_ptr<float>();
-        rootAABBMin = root_aabb[0];
-        rootAABBMax = root_aabb[1];
-        glm::vec3 center = 0.5f * (rootAABBMax + rootAABBMin);
-        glm::vec3 extend = 0.5f * (rootAABBMax - rootAABBMin);
-        float max_size = 1.01f * fmax(extend.x, fmax(extend.y, extend.z));
-        rootAABBMin = center - glm::vec3(max_size);
-        rootAABBMax = center + glm::vec3(max_size);
+        float root_aabb_host[6];
+        cudaMemcpy(root_aabb_host, root_aabb.data_ptr(), 6*sizeof(float), cudaMemcpyDeviceToHost);
+        rootAABBMin = make_float3(root_aabb_host[0], root_aabb_host[1], root_aabb_host[2]);
+        rootAABBMax = make_float3(root_aabb_host[3], root_aabb_host[4], root_aabb_host[5]);
+        float3 center = 0.5f * (rootAABBMax + rootAABBMin);
+        float3 extend = 0.5f * (rootAABBMax - rootAABBMin);
+        float max_size = 1.01f * fmaxf(extend.x, fmaxf(extend.y, extend.z));
+        float3 max_size3 = {max_size, max_size, max_size};
+        rootAABBMin = center - max_size3;
+        rootAABBMax = center + max_size3;
     }
-    // printf("AABB: %f %f %f  %f %f %f\n", rootAABBMin.x, rootAABBMin.y, rootAABBMin.z, rootAABBMax.x, rootAABBMax.y, rootAABBMax.z);
-    // printAABB_wireframe(rootAABBMin, rootAABBMax);
 
     // compute sorting keys (level and Morton code)
-    at::Tensor morton = at::empty({numSplats}, kTensorOptionI64());
+    DeviceVector<int64_t> morton;
+    morton.resize("sti.lbvh.morton", numSplats);
     fillSplatSortingKeys<Primitive><<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
         numSplats, splats,
-        *(float3*)&rootAABBMin, *(float3*)&rootAABBMax, MAX_NUM_LEVELS, BRANCH_FACTOR, rel_scale,
-        (uint64_t*)morton.data_ptr<int64_t>()
+        rootAABBMin, rootAABBMax, MAX_NUM_LEVELS, BRANCH_FACTOR, rel_scale,
+        (uint64_t*)morton.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    auto [sorted_morton, splat_argsort] = at::sort(morton);
-    splat_argsort = splat_argsort.to(at::kInt);
+    // Sort morton keys with splat indices (iota) as values via CUB radix sort.
+    DeviceVector<int32_t> splat_argsort_in;
+    splat_argsort_in.resize("sti.lbvh.argsort_in", numSplats);
+    fillIota<<<_LAUNCH_ARGS_1D(numSplats, block)>>>(splat_argsort_in.data_ptr(), numSplats);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    at::Tensor tree_ranges = at::empty({MAX_NUM_LEVELS, 2}, kTensorOptionI32());
-    cudaMemset(tree_ranges.data_ptr<int32_t>(), 0xff, (2*MAX_NUM_LEVELS)*sizeof(int32_t));
+    DeviceVector<int64_t> sorted_morton;
+    sorted_morton.resize("sti.lbvh.sorted_morton", numSplats);
+    DeviceVector<int32_t> splat_argsort;
+    splat_argsort.resize("sti.lbvh.argsort", numSplats);
+    CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
+        (const uint64_t*)morton.data_ptr(),
+        (uint64_t*)sorted_morton.data_ptr(),
+        splat_argsort_in.data_ptr(),
+        splat_argsort.data_ptr(),
+        (int)numSplats);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    DeviceVector<int32_t> tree_ranges;
+    tree_ranges.resize("sti.lbvh.tree_ranges", MAX_NUM_LEVELS * 2);
+    cudaMemset(tree_ranges.data_ptr(), 0xff, (2*MAX_NUM_LEVELS)*sizeof(int32_t));
     fillLbvhTreeRanges<<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
         MAX_NUM_LEVELS, numSplats,
-        (uint64_t*)sorted_morton.data_ptr<int64_t>(),
-        (uint2*)tree_ranges.data_ptr<int32_t>()
+        (uint64_t*)sorted_morton.data_ptr(),
+        (uint2*)tree_ranges.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    // std::cout << tree_ranges << std::endl;
     sanitizeLbvhTreeRanges<<<_LAUNCH_ARGS_1D(MAX_NUM_LEVELS, WARP_SIZE)>>>(
         MAX_NUM_LEVELS,
-        (uint2*)tree_ranges.data_ptr<int32_t>()
+        (uint2*)tree_ranges.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    // std::cout << tree_ranges << std::endl;
-    // cudaDeviceSynchronize();
-    // exit(0);
-
-    #ifdef DEBUG
-    if (0) {
-        splat_aabb = at::index(splat_aabb, {splat_argsort});
-        // at::Tensor splat_idx = invertPermutation(splat_argsort);
-        at::Tensor splat_aabb_cpu = splat_aabb.cpu();
-        float3* aabb = (float3*)splat_aabb_cpu.data_ptr<float>();
-        printf("\\left[");
-        for (int i = 0; i < numSplats; i++) {
-            float3 p = 0.5f*(aabb[2*i]+aabb[2*i+1]);
-            printf("\\left(%f,%f,%f\\right),", p.x, p.y, p.z);
-        }
-        printf("\b\\right]\n");
-    }
-    #endif
-
-    // auto uniques = at::unique_consecutive(sorted_morton, true, true);
-    // int64_t num_unique = std::get<0>(uniques).numel();
-    // int64_t max_collision_count = std::get<2>(uniques).amax().item<int64_t>();
-    // printf("%d/%d collisions, %d max\n", (int)(numSplats-num_unique), (int)numSplats, (int)max_collision_count);
 
     // Build tree
-    at::Tensor internal_nodes = at::empty({numSplats-1, 2}, kTensorOptionI32());
-    at::Tensor parent_nodes = at::empty({numSplats-1}, kTensorOptionI32());
-    cudaMemset(parent_nodes.data_ptr<int32_t>(), 0xff, (numSplats-1)*sizeof(int32_t));
+    DeviceVector<int32_t> internal_nodes;
+    internal_nodes.resize("sti.lbvh.internal_nodes", (numSplats-1) * 2);
+    DeviceVector<int32_t> parent_nodes;
+    parent_nodes.resize("sti.lbvh.parent_nodes", numSplats-1);
+    cudaMemset(parent_nodes.data_ptr(), 0xff, (numSplats-1)*sizeof(int32_t));
     CHECK_DEVICE_ERROR(cudaGetLastError());
     fillLbvhInternalNodes<<<_LAUNCH_ARGS_1D(numSplats-1, block)>>>(
         MAX_NUM_LEVELS,
-        (uint2*)tree_ranges.data_ptr<int32_t>(),
-        (uint64_t*)sorted_morton.data_ptr<int64_t>(),
-        splat_argsort.data_ptr<int32_t>(),
-        (int2*)internal_nodes.data_ptr<int32_t>(),
-        parent_nodes.data_ptr<int32_t>()
+        (uint2*)tree_ranges.data_ptr(),
+        (uint64_t*)sorted_morton.data_ptr(),
+        splat_argsort.data_ptr(),
+        (int2*)internal_nodes.data_ptr(),
+        parent_nodes.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int, internal_nodes);
-    print_tensor(int, parent_nodes);
 
     // Compute AABB
-    at::Tensor treeAABB = at::empty({numSplats, 2, 3}, kTensorOptionF32());
+    DeviceVector<float3> treeAABB;
+    treeAABB.resize("sti.lbvh.tree_aabb", numSplats * 2);
     fillTreeSubcells_initAABB<<<_LAUNCH_ARGS_1D(numSplats-1, block)>>>(
         numSplats-1,
-        (float3*)treeAABB.data_ptr<float>()
+        treeAABB.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
     computeLbvhAABB<Primitive><<<_LAUNCH_ARGS_1D(numSplats-1, block)>>>(
         numSplats, splats, MAX_NUM_LEVELS,
-        (uint2*)tree_ranges.data_ptr<int32_t>(),
-        (int2*)internal_nodes.data_ptr<int32_t>(),
-        parent_nodes.data_ptr<int32_t>(),
-        (float3*)treeAABB.data_ptr<float>()
+        (uint2*)tree_ranges.data_ptr(),
+        (int2*)internal_nodes.data_ptr(),
+        parent_nodes.data_ptr(),
+        treeAABB.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    #ifdef DEBUG
-    if (0) {
-        at::Tensor treeAABB_cpu = treeAABB.cpu();
-        for (int i = 0; i < numSplats-1; i++) {
-            float3* p = (float3*)treeAABB_cpu.data_ptr<float>() + 2*i;
-            printAABB_wireframe(p[0], p[1]);
-        }
-    }
-    #endif
 
     // Traverse to find intersections
-    at::Tensor intersection_count = at::zeros({tiles.size+1}, kTensorOptionI32());
-    // cudaDeviceSynchronize();
-    // getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
-    getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp, 0, at::cuda::getCurrentCUDAStream()>>>(
+    DeviceVector<int32_t> intersection_count;
+    intersection_count.resize("sti.lbvh.count", tiles.size+1);
+    intersection_count.zero();
+    getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp>>>(
         tiles, splats, MAX_NUM_LEVELS,
-        (uint2*)tree_ranges.data_ptr<int32_t>(),
-        (int2*)internal_nodes.data_ptr<int32_t>(),
-        (float3*)treeAABB.data_ptr<float>(),
-        (uint32_t*)intersection_count.data_ptr<int32_t>(),
+        (uint2*)tree_ranges.data_ptr(),
+        (int2*)internal_nodes.data_ptr(),
+        treeAABB.data_ptr(),
+        (uint32_t*)intersection_count.data_ptr(),
         nullptr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int, intersection_count);
 
-    at::Tensor intersection_count_map = exclusiveScan(intersection_count);
-    print_tensor(int, intersection_count_map);
-    unsigned total_intersections = (unsigned)intersection_count_map[(long)tiles.size].item<int32_t>();
+    DeviceVector<int32_t> intersection_count_map = exclusiveScan("sti.lbvh.count_map", intersection_count);
+    int32_t total_intersections = 0;
+    cudaMemcpy(&total_intersections,
+        intersection_count_map.data_ptr() + tiles.size,
+        sizeof(int32_t), cudaMemcpyDeviceToHost);
 
-    at::Tensor intersectionSplatID = at::empty({total_intersections}, kTensorOptionI32());
-    // getTileSplatIntersections_lbvh<<<(tiles.size+warp-1)/warp, warp>>>(
-    getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp, 0, at::cuda::getCurrentCUDAStream()>>>(
+    DeviceVector<int32_t> intersectionSplatID;
+    intersectionSplatID.resize("sti.lbvh.ids", (int64_t)total_intersections);
+    getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp>>>(
         tiles, splats, MAX_NUM_LEVELS,
-        (uint2*)tree_ranges.data_ptr<int32_t>(),
-        (int2*)internal_nodes.data_ptr<int32_t>(),
-        (float3*)treeAABB.data_ptr<float>(),
-        (uint32_t*)intersection_count_map.data_ptr<int32_t>(),
-        (uint32_t*)intersectionSplatID.data_ptr<int32_t>()
+        (uint2*)tree_ranges.data_ptr(),
+        (int2*)internal_nodes.data_ptr(),
+        treeAABB.data_ptr(),
+        (uint32_t*)intersection_count_map.data_ptr(),
+        (uint32_t*)intersectionSplatID.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
-    print_tensor(int32_t, intersectionSplatID);
 
-    // cudaDeviceSynchronize();
     return std::make_tuple(intersection_count_map, intersectionSplatID);
 }
 
 
-#ifdef DEBUG
 
-#include <stdio.h>
-
-#include <regex>
-#include <filesystem>
-#include <fstream>
-
-at::Tensor loadBinaryToTensor(const std::string& filepath) {
-    namespace fs = std::filesystem;
-    
-    // Extract filename from path
-    fs::path p(filepath);
-    std::string filename = p.filename().string();
-    
-    // Remove extension if present
-    size_t dot_pos = filename.rfind('.');
-    if (dot_pos != std::string::npos) {
-        filename = filename.substr(0, dot_pos);
-    }
-    
-    // Parse dimensions from filename using regex
-    // Pattern: alphanumeric_name followed by numbers separated by underscores
-    std::regex pattern(R"(^[a-zA-Z0-9]+_(.+)$)");
-    std::smatch match;
-    
-    if (!std::regex_match(filename, match, pattern)) {
-        throw std::runtime_error("Filename does not match expected pattern");
-    }
-    
-    std::string dims_str = match[1].str();
-    
-    // Parse dimension values
-    std::vector<int64_t> shape;
-    std::stringstream ss(dims_str);
-    std::string token;
-    
-    while (std::getline(ss, token, '_')) {
-        if (!token.empty()) {
-            try {
-                shape.push_back(std::stoll(token));
-            } catch (const std::exception& e) {
-                throw std::runtime_error("Failed to parse dimension: " + token);
-            }
-        }
-    }
-    
-    if (shape.empty()) {
-        throw std::runtime_error("No dimensions found in filename");
-    }
-    
-    // Calculate total number of elements
-    int64_t total_elements = 1;
-    for (int64_t dim : shape) {
-        total_elements *= dim;
-    }
-    
-    // Read binary file
-    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file: " + filepath);
-    }
-    
-    std::streamsize file_size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    
-    int64_t expected_bytes = total_elements * sizeof(float);
-    if (file_size != expected_bytes) {
-        throw std::runtime_error(
-            "File size mismatch. Expected " + std::to_string(expected_bytes) +
-            " bytes, but file contains " + std::to_string(file_size) + " bytes"
-        );
-    }
-    
-    // Allocate buffer and read data
-    auto buffer = std::make_unique<float[]>(total_elements);
-    file.read(reinterpret_cast<char*>(buffer.get()), file_size);
-    file.close();
-    
-    if (!file) {
-        throw std::runtime_error("Failed to read file completely");
-    }
-    
-    // Create torch tensor on CUDA device
-    at::Tensor tensor = at::from_blob(
-        buffer.get(),
-        shape,
-        at::kFloat
-    ).clone();
-    
-    return tensor.to(at::kCUDA);
-}
-
-int main(int argc, char** argv) {
-    // auto seed = std::stoll(argv[3]);
-    // at::manual_seed(seed);
-
-    // unsigned num_splat = std::stod(argv[1]);
-    // at::Tensor means = at::randn({num_splat, 3}).cuda();
-    // at::Tensor scales = 0.2*at::randn({num_splat, 3}).cuda() - 0.4f*logf(num_splat) - 0.0f;
-    // at::Tensor opacs = at::randn({num_splat, 1}).cuda();
-    // at::Tensor quats = at::randn({num_splat, 4}).cuda();
-    // unsigned num_tiles = std::stod(argv[2]);
-    // auto [viewmats, intrins] = generate_random_camera_poses(num_tiles, seed);
-
-    // if (0) {
-    //     at::Tensor tile_ro_cpu = tile_apex.cpu();
-    //     at::Tensor tile_rd_cpu = tile_dirs.cpu();
-    //     for (unsigned i = 0; i < num_tiles; i++)
-    //         printTile(((glm::vec3*)tile_ro_cpu.data_ptr<float>())[i],
-    //         ((glm::vec3*)tile_rd_cpu.data_ptr<float>())[i]);
-    // }
-
-    // scales = at::exp(scales);
-    // opacs = at::sigmoid(opacs);
-
-    at::Tensor means = loadBinaryToTensor("means_1000000_3.bin");
-    at::Tensor scales = loadBinaryToTensor("scales_1000000_3.bin");
-    at::Tensor opacs = loadBinaryToTensor("opacities_1000000.bin");
-    at::Tensor quats = loadBinaryToTensor("quats_1000000_4.bin");
-    at::Tensor viewmats = loadBinaryToTensor("viewmats_256_4_4.bin");
-    at::Tensor intrins = loadBinaryToTensor("intrins_256_4.bin");
-
-    SplatTileIntersector::intersect_splat_tile(
-        means, scales, opacs, quats,
-        64, 64,
-        viewmats, intrins
-    );
-    return 0;
-}
-
-// /usr/local/cuda-12.8/bin/nvcc -I/media/harry/d/gs/spirulae-splat/spirulae_splat/splat/cuda/csrc/glm -I/home/harry/.venv/base/lib/python3.12/site-packages/torch/include -I/home/harry/.venv/base/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.8/include /media/harry/d/gs/spirulae-splat/spirulae_splat/splat/cuda/csrc/SplatTileIntersector.cu -o ./temp -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ -DDEBUG --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' -O3 --use_fast_math -lineinfo --generate-line-info --source-in-ptx --expt-relaxed-constexpr -Xcudafe=--diag_suppress=20012 -Xcudafe=--diag_suppress=550 -DTORCH_API_INCLUDE_EXTENSION_H -gencode=arch=compute_120,code=compute_120 -gencode=arch=compute_120,code=sm_120 -std=c++17 -L/home/harry/.venv/base/lib/python3.12/site-packages/torch/lib -L/usr/local/cuda-12.8/lib64 -L/usr/lib/x86_64-linux-gnu -lc10 -ltorch -ltorch_cpu -lcudart -lc10_cuda -ltorch_cuda
-
-
-#endif
-
-
-
-std::tuple<at::Tensor, at::Tensor>
+std::tuple<DeviceVector<int32_t>, DeviceVector<int32_t>>
 intersect_splat_tile_3dgs(
     std::vector<DeviceTensorFloatND> splats_tuple,
     unsigned width,
     unsigned height,
-    TorchTensorView viewmats,
-    TorchTensorView intrins,
+    DeviceVector<float> viewmats,        // [C*16] row-major 4x4
+    DeviceVector<float4> intrins,        // [C]
     const std::string& camera_model,
-    const TorchTensorView& dist_coeffs,
+    const DeviceTensor2D<float>& dist_coeffs,  // [C, 10] or null
     float rel_scale
 ) {
     Vanilla3DGS<0>::WorldBuffer splats_tensor(splats_tuple);
 
+    const float*  viewmats_ptr    = viewmats.data_ptr();
+    const float4* intrins_ptr     = intrins.data_ptr();
+    float*        dist_coeffs_ptr = dist_coeffs.data_ptr();
+    const long    num_cams        = intrins.size();
+
     if (cmt(camera_model) == ssplat::CameraModelType::PINHOLE) {
-        TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers =
-            {width, height, viewmats, intrins, dist_coeffs};
+        TileBuffers<ssplat::CameraModelType::PINHOLE> tile_buffers(
+            width, height, viewmats_ptr, intrins_ptr, dist_coeffs_ptr, num_cams);
         return SplatTileIntersector<Vanilla3DGS<0>, ssplat::CameraModelType::PINHOLE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else if (cmt(camera_model) == ssplat::CameraModelType::FISHEYE) {
-        TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers =
-            {width, height, viewmats, intrins, dist_coeffs};
+        TileBuffers<ssplat::CameraModelType::FISHEYE> tile_buffers(
+            width, height, viewmats_ptr, intrins_ptr, dist_coeffs_ptr, num_cams);
         return SplatTileIntersector<Vanilla3DGS<0>, ssplat::CameraModelType::FISHEYE>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else if (cmt(camera_model) == ssplat::CameraModelType::EQUISOLID) {
-        TileBuffers<ssplat::CameraModelType::EQUISOLID> tile_buffers =
-            {width, height, viewmats, intrins, dist_coeffs};
+        TileBuffers<ssplat::CameraModelType::EQUISOLID> tile_buffers(
+            width, height, viewmats_ptr, intrins_ptr, dist_coeffs_ptr, num_cams);
         return SplatTileIntersector<Vanilla3DGS<0>, ssplat::CameraModelType::EQUISOLID>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
     else
         throw std::runtime_error("Unsupported camera model");
 }
-
-#endif

@@ -38,6 +38,8 @@ struct CameraDistortionCoeffsBuffer {
         coeffs = (float*)std::get<0>(tensor);
     }
 
+    CameraDistortionCoeffsBuffer(float* ptr) : coeffs(ptr) {}
+
     #ifdef __CUDACC__
     __device__ CameraDistortionCoeffs load(long idx) const {
         CameraDistortionCoeffs res;

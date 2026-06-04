@@ -85,8 +85,6 @@ def generate_headers():
         'ProjectionFwd',
         'ProjectionBwd',
         'ProjectionPackedFwd',
-        'ProjectionHeteroFwd',
-        'ProjectionHeteroBwd',
         'RasterizationFwd',
         'RasterizationBwd',
         'RasterizationEval3DFwd',

@@ -649,12 +649,11 @@ class TrainerConfigPatched(TrainerConfig):
         max_batch_per_epoch=800,
     ))
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        # packed=True,
+        packed=True,
         use_bvh=True,
         use_camera_optimizer=False,
         use_bilateral_grid=False,
         use_bilateral_grid_for_geometry=False,  # TODO: slow
-        alpha_reg_weight=0.0,
         primitive="mip", max_screen_size=float('inf'),  # TODO
     ))
     # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)  # TODO
