@@ -5,12 +5,10 @@
 #include <cstdint>
 
 #include <Tensor.h>
+#include <Common.cuh>
 
 // #include "Primitive3DGS.cuh"
 #include "Primitive3DGUT.cuh"
-
-#include "types.cuh"
-#include "common.cuh"
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */

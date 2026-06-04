@@ -3,35 +3,23 @@ Template DataManager
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Literal, List, Tuple, Type, Union, Optional, Callable
+from typing import Dict, Literal, List, Tuple, Union, Optional, Callable
 from copy import deepcopy
 import random
 import math
 import os
-import hashlib
-import re
-import json
-import time
 
 import torch
 import numpy as np
 
-from collections import deque
-from functools import cached_property
-
 from spirulae_splat.modules.camera import Cameras, CameraType
 from spirulae_splat.modules.resample import warp_equirectangular_to_pinhole, warp_wide_to_pinhole
 
-from spirulae_splat.modules.dataset import SpirulaeSplatDataset, IndexedDatasetWrapper
-from spirulae_splat.modules.edge_detector import detect_edge, detect_edge_ms
+from spirulae_splat.modules.dataset import IndexedDatasetWrapper
 
 from concurrent.futures import ThreadPoolExecutor
-from torch.nn.parallel import DataParallel
 from torch.utils.data import DataLoader
 from torch.utils.data._utils.collate import default_collate
-
-from spirulae_splat.splat.cuda import _make_lazy_cuda_func
-from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 
 from tqdm import tqdm
 
@@ -44,17 +32,6 @@ class SpirulaeSplatDataManagerConfig:
     """Maximum number of batches per epoch, used for configuring batch size"""
     split_batch: bool = False
     """Whether to one large batch into many small batches to avoid OOM, at cost of slower training"""
-
-    patch_batch_size: Optional[int] = None  # 256
-    """If not None, batch patches instead of full images
-        Leave -1 to let program decide"""
-
-    patch_size: int = 64
-    """Patch size used in patch batching
-        Make this a multiple of 16 (tile size)
-        Affects training speed, optimal value depends on image focal length
-        Too small may lead to suboptimal performance in SSIM, as well as increasing VRAM usage / floating point issues
-        """
 
     cache_images: Literal["cpu-pageable", "cpu", "gpu", "disk"] = "cpu-pageable"
     """Image cache location. If "cpu", caches on cpu. If "gpu", caches on device.
@@ -69,9 +46,6 @@ class SpirulaeSplatDataManagerConfig:
     warp_to_pinhole: bool = False
     """Whether to split an image into 5 undistorted pinhole images.
         Can sometimes give better quality and compatibility for dataset captured by fisheye/360 cameras."""
-
-    start_resolution: Optional[int] = None
-    """Start training at this resolution and gradually increase resolution to improve convergence."""
 
     deblur_training_images: bool = False
     """Whether to use a custom trained deep learning model to deblur images before training"""
@@ -199,14 +173,6 @@ class SpirulaeSplatDataManager:
             f'The size of image ({data["image"].shape[1]}, {data["image"].shape[0]}) loaded '
             f'does not match the camera parameters ({camera.width.item(), camera.height.item()})'
         )
-        if self.config.patch_batch_size is not None:
-            for key in ['mask', 'depth', 'normal']:
-                if key not in data or data['image'].shape[:2] == data[key].shape[:2]:
-                    continue
-                data[key] = torch.nn.functional.interpolate(
-                    data[key].float().permute(2, 0, 1)[None],
-                    size=data['image'].shape[:2], mode='bilinear', align_corners=False
-                )[0].permute(1, 2, 0).to(data[key].dtype)
         if return_idx:
             return idx, data
         return data
@@ -327,77 +293,6 @@ class SpirulaeSplatDataManager:
             camera_flattened[key] = value
         return camera_flattened, batch
 
-    def get_tiles(self, batch_size: int, indices: List[int]):
-        # TODO: multithread with pytorch data loader
-
-        TILE_SIZE = 16
-        assert self.config.patch_size > 0 and self.config.patch_size % TILE_SIZE == 0, "Patch size must be a multiple of tile size"
-
-        # TODO: use IndexGroups with camera type support
-        if not hasattr(self, 'image_shapes'):
-            # self.image_shapes = torch.stack([self.train_dataset.cameras.height, self.train_dataset.cameras.width], dim=-1)
-            self.image_shapes = torch.tensor([im['image'].shape[:2] for im in self.cached_train])
-            assert (self.image_shapes >= self.config.patch_size).all(), "Image shape must be at least patch size"
-            self.effective_offsets = self.image_shapes - self.config.patch_size
-            
-            self.pixels_per_image = sum([w*h for (w, h) in self.image_shapes]) / len(self.image_shapes)
-            self.images_per_batch = max(len(self.cached_train) / self.config.max_batch_per_epoch, 1)
-
-        if batch_size == -1:
-            pixels_per_batch = self.pixels_per_image * self.images_per_batch
-            pixels_per_patch = self.config.patch_size**2
-            batch_size = max(int(pixels_per_batch // pixels_per_patch), 1)
-
-        image_indices = torch.Tensor(indices)[torch.randint(0, len(indices), (batch_size,))].long()
-        offsets = (torch.rand([batch_size, 2]) * self.effective_offsets[image_indices] + 0.5).long()
-        batch = { 'image': [] }
-        patch_offsets = []
-        for image_idx, (y0, x0) in zip(image_indices, offsets):
-            y0, x0 = y0.item(), x0.item()
-            y1 = y0 + self.config.patch_size
-            x1 = x0 + self.config.patch_size
-            image = self.cached_train[image_idx]
-            patch = image['image'][y0:y1, x0:x1]
-            batch['image'].append(patch)
-
-            for key in ['depth', 'normal', 'mask']:
-                if key not in image:
-                    continue
-                assert image[key].shape[:2] == image['image'].shape[:2], \
-                    f"image shape ({image['image'].shape[:2]}) and {key} shape ({image[key].shape[:2]}) mismatch"
-                patch = image[key][y0:y1, x0:x1]
-                if len(patch.shape) == 2:
-                    patch = patch.unsqueeze(-1)
-                if key not in batch:
-                    batch[key] = []
-                batch[key].append(patch)
-
-            patch_offsets.append((x0, y0))
-
-        # Engine path: keep training data on CPU; C++ does H→D each step.
-        for key in batch:
-            batch[key] = torch.stack(batch[key])
-
-        camera = self.train_dataset.cameras[image_indices]
-        if CameraType.EQUIRECTANGULAR.value in camera.camera_type:
-            raise NotImplementedError("Equirectangular is not supported in patched batching mode.")  # TODO
-        if self.config.warp_to_pinhole:
-            raise NotImplementedError("warp_to_pinhole is not supported in patched batching mode.")  # TODO
-        if camera.metadata is None:
-            camera.metadata = {}
-        camera.metadata['actual_height'] = camera.height.float().mean().item()
-        camera.metadata['actual_width'] = camera.width.float().mean().item()
-        camera.metadata['actual_images_per_batch'] = self.images_per_batch
-        camera.height = self.config.patch_size * torch.ones_like(camera.height)
-        camera.width = self.config.patch_size * torch.ones_like(camera.width)
-        camera.intrins[:, 2:3] -= offsets[:, 1:2].to(camera.intrins)
-        camera.intrins[:, 3:4] -= offsets[:, 0:1].to(camera.intrins)
-        # camera.metadata["num_unique_cam_idx"] = len(set(*image_indices))
-        camera.metadata["cam_idx"] = image_indices
-        camera.metadata["patch_offsets"] = torch.tensor(patch_offsets, dtype=torch.int32)
-
-        return camera, batch
-
     def setup_index_group_loaders(self):
         """Make separate lists for images with different shapes and camera models"""
 
@@ -430,29 +325,14 @@ class SpirulaeSplatDataManager:
 
         Returns a Camera instead of raybundle"""
 
-        # ---- profiling probes (gated by PROFILE_TRAIN_STEP) ----
-        if PROFILE_TRAIN_STEP:
-            _prof = getattr(self, "_nt_prof", None)
-            if _prof is None:
-                self._nt_prof = _prof = {
-                    "n": 0, "warmup": 10,
-                    "pre": 0, "get_batch": 0, "warp": 0, "pack": 0, "post": 0,
-                }
-            from time import perf_counter_ns as _t
-            _t0 = _t()
-
         if not hasattr(self, 'cached_train') and self.config.cache_images != "disk":
             self.cached_train = self._load_images("train", cache_images_device=self.config.cache_images)
 
-        # train_indices / val_indices are derived from train_dataset.val_indices,
-        # which doesn't change after construction. Recomputing them per iter
-        # was ~0.7 ms of pure Python overhead; cache on first call.
         if self.train_index_group_loader is None:
             self.val_indices = sorted(self.train_dataset.val_indices)
             self.train_indices = sorted(
                 set(range(len(self.train_dataset))).difference(self.train_dataset.val_indices))
             self.setup_index_group_loaders()
-        if PROFILE_TRAIN_STEP: _t1 = _t()
 
         def pack_batch(camera, batch, max_batch_size=None, _no_split_batch=False) -> List[Tuple[Cameras, Dict]]:
             if self.config.split_batch and not _no_split_batch:
@@ -488,101 +368,38 @@ class SpirulaeSplatDataManager:
             camera.metadata = metadata
             return [(camera, batch)]
 
-        if self.config.patch_batch_size is not None:
-            assert self.config.cache_images != "disk", "Disk caching not supported in patch batching mode"
-            assert not self.config.split_batch, "split_batch not supported in patch batching mode"  # TODO
-            results = [self.get_tiles(self.config.patch_batch_size, self.train_indices)]
-        else:
-            camera, batch = self.train_index_group_loader.get_batch()
-            if PROFILE_TRAIN_STEP: _t_gb = _t()
-            if camera['camera_type'][0] == CameraType.EQUIRECTANGULAR.value:
-                camera['camera_to_worlds'], camera['intrins'], camera['distortion_params'], batch['image'] = \
-                    warp_equirectangular_to_pinhole(camera['camera_to_worlds'].cuda(), batch['image'].cuda())
-                camera['height'], camera['width'] = batch['image'].shape[-3:-1]
-                if 'cam_idx' in camera.get('metadata', {}):
-                    camera['metadata']['cam_idx'] = torch.stack(sum([[6*i+j for j in range(6)] for i in camera['metadata']['cam_idx']], []))
-                camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
-            elif self.config.warp_to_pinhole:
-                if 'mask' not in batch:
-                    batch['mask'] = torch.ones((*batch['image'].shape[:3], 1), dtype=torch.bool, device=batch['image'].device)
-                for key in ['image', 'depth', 'normal', 'mask']:
-                    if key not in batch:
-                        continue
-                    elif key in ['depth', 'normal']:  # TODO: add support
-                        raise NotImplementedError("Depth and normal are not supported in warp to pinhole mode. Use --datamanager.no-load-depths and --datamanager.no-load-normals if needed.")
-                    if key in ['depth', 'mask'] and batch[key].ndim == 3:
-                        batch[key] = batch[key].unsqueeze(-1)
-                    returns = warp_wide_to_pinhole(camera['camera_type'][0], camera['intrins'].cuda(), camera['distortion_params'].cuda(), camera['camera_to_worlds'].cuda(), batch[key].cuda())
-                    batch[key] = returns[-1]
-                camera['camera_to_worlds'], camera['intrins'], camera['distortion_params'] = returns[:3]
-                camera['height'], camera['width'] = batch['image'].shape[-3:-1]
-                if 'cam_idx' in camera.get('metadata', {}):
-                    camera['metadata']['cam_idx'] = torch.stack(sum([[5*i+j for j in range(5)] for i in camera['metadata']['cam_idx']], []))
-                camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
-            if PROFILE_TRAIN_STEP: _t_warp = _t()
-            results = pack_batch(camera, batch)
-            if PROFILE_TRAIN_STEP: _t_pack = _t()
-
-        # Resolution scheduling
-        if self.config.start_resolution is not None and max_steps is not None:
-            assert self.config.patch_batch_size is None, "Random downscale is not supported in patched batching mode"
-            for camera, batch in results:
-                h, w = batch['image'].shape[-3:-1]
-                num_pixels_original = h*w
-                num_pixels_target = self.config.start_resolution**2
-                t = (step+0.5) / max_steps
-                target_size = math.sqrt(num_pixels_target * (1-t) + num_pixels_original * t)
-                # target_size = math.sqrt(num_pixels_target) * (1-t) + math.sqrt(num_pixels_original) * t
-                N = max(math.sqrt(num_pixels_original) / target_size, 1)
-                downscale = int(math.log2(1 + (2**N-1) * random.random()))  # https://www.desmos.com/calculator/a0geaz6own
-                if downscale == 0:
+        camera, batch = self.train_index_group_loader.get_batch()
+        if camera['camera_type'][0] == CameraType.EQUIRECTANGULAR.value:
+            camera['camera_to_worlds'], camera['intrins'], camera['distortion_params'], batch['image'] = \
+                warp_equirectangular_to_pinhole(camera['camera_to_worlds'].cuda(), batch['image'].cuda())
+            camera['height'], camera['width'] = batch['image'].shape[-3:-1]
+            if 'cam_idx' in camera.get('metadata', {}):
+                camera['metadata']['cam_idx'] = torch.stack(sum([[6*i+j for j in range(6)] for i in camera['metadata']['cam_idx']], []))
+            camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
+        elif self.config.warp_to_pinhole:
+            if 'mask' not in batch:
+                batch['mask'] = torch.ones((*batch['image'].shape[:3], 1), dtype=torch.bool, device=batch['image'].device)
+            for key in ['image', 'depth', 'normal', 'mask']:
+                if key not in batch:
                     continue
-
-                for key, value in batch.items():
-                    if not isinstance(value, torch.Tensor):
-                        continue
-                    if len(value.shape) == 4 and value.shape[1] == camera.height and value.shape[2] == camera.width:
-                        for i in range(downscale):  # TODO: single kernel
-                            value = _make_lazy_cuda_func("avg_pool_downsample")(value)
-                        batch[key] = value
-                    # TODO: metadata
-
-                # camera.rescale(1 / downscale, rounding_mode='floor')
-                camera.width //= 2**downscale
-                camera.height //= 2**downscale
-                camera.intrins /= 2**downscale
+                elif key in ['depth', 'normal']:  # TODO: add support
+                    raise NotImplementedError("Depth and normal are not supported in warp to pinhole mode. Use --datamanager.no-load-depths and --datamanager.no-load-normals if needed.")
+                if key in ['depth', 'mask'] and batch[key].ndim == 3:
+                    batch[key] = batch[key].unsqueeze(-1)
+                returns = warp_wide_to_pinhole(camera['camera_type'][0], camera['intrins'].cuda(), camera['distortion_params'].cuda(), camera['camera_to_worlds'].cuda(), batch[key].cuda())
+                batch[key] = returns[-1]
+            camera['camera_to_worlds'], camera['intrins'], camera['distortion_params'] = returns[:3]
+            camera['height'], camera['width'] = batch['image'].shape[-3:-1]
+            if 'cam_idx' in camera.get('metadata', {}):
+                camera['metadata']['cam_idx'] = torch.stack(sum([[5*i+j for j in range(5)] for i in camera['metadata']['cam_idx']], []))
+            camera['camera_type'] = [CameraType.PERSPECTIVE.value] * len(camera['intrins'])
+        results = pack_batch(camera, batch)
 
         val_batch_size = self.val_batch_size(True)
         has_val = len(self.train_dataset.val_indices) > 0 and val_batch_size > 0
         if has_val:
             val_camera, val_batch = self.val_index_group_loader.get_batch()
             val_results = pack_batch(val_camera, val_batch, val_batch_size)
-
-        if PROFILE_TRAIN_STEP:
-            _t_end = _t()
-            if _prof["warmup"] > 0:
-                _prof["warmup"] -= 1
-            else:
-                _prof["n"] += 1
-                _prof["pre"]       += (_t1 - _t0)
-                _prof["get_batch"] += (_t_gb - _t1)
-                _prof["warp"]      += (_t_warp - _t_gb)
-                _prof["pack"]      += (_t_pack - _t_warp)
-                _prof["post"]      += (_t_end - _t_pack)
-            if _prof["n"] >= 100:
-                n = _prof["n"]
-                print(
-                    f"[PROF_NT n={n}] "
-                    f"pre={_prof['pre']/n/1e6:.3f}ms "
-                    f"get_batch={_prof['get_batch']/n/1e6:.3f}ms "
-                    f"warp={_prof['warp']/n/1e6:.3f}ms "
-                    f"pack={_prof['pack']/n/1e6:.3f}ms "
-                    f"post={_prof['post']/n/1e6:.3f}ms",
-                    flush=True,
-                )
-                for k in ("pre", "get_batch", "warp", "pack", "post"):
-                    _prof[k] = 0
-                _prof["n"] = 0
 
         if has_val:
             return results, val_results

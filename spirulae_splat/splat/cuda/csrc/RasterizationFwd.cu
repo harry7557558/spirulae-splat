@@ -1,9 +1,6 @@
 #include "RasterizationFwd.cuh"
 
-#include <gsplat/Utils.cuh>
-
-#include "types.cuh"
-#include "common.cuh"
+#include <Common.cuh>
 
 
 #include <Tensor.h>

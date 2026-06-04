@@ -1,8 +1,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-#include <gsplat/Common.h>
-#include <gsplat/Utils.cuh>
+#include <Common.cuh>
 
 #ifndef NO_TORCH
 #define NO_TORCH
@@ -17,8 +16,6 @@ namespace SlangPixelWise {
 #include "generated/set_namespace.cuh"
 #include "generated/pixel_wise.cuh"
 }
-
-#include "types.cuh"
 
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
@@ -60,7 +57,7 @@ __forceinline__ __device__ float4 sqrtf(float4 v) {
 
 template<
     typename SplatPrimitive,
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
     bool use_scale_agnostic_mean,
     bool use_color_trust_region,
@@ -559,7 +556,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
 
 template<
     typename SplatPrimitive,
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
     const bool use_scale_agnostic_mean,
     const bool use_color_trust_region,

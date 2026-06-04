@@ -13,7 +13,7 @@ namespace SlangProjectionUtils {
 }
 #endif
 
-#include "common.cuh"
+#include "Common.cuh"
 
 #include <cub/cub.cuh>
 

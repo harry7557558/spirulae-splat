@@ -28,8 +28,6 @@
 #include "SplatTileIntersector.cuh"
 #include "Visualizer.cuh"
 
-#include "gsplat/Common.h"
-
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -51,7 +49,7 @@ struct CameraTable {
     int32_t num    = 0;
     int32_t width  = 0;
     int32_t height = 0;
-    ssplat::CameraModelType model = (ssplat::CameraModelType)-1;
+    CameraModelType model = (CameraModelType)-1;
     std::string model_str;
     DeviceTensor2D<float4> viewmats;      // [C, 4]
     DeviceVector<float4>   intrins;       // [C]

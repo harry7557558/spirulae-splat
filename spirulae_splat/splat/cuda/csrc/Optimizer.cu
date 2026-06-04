@@ -1,5 +1,3 @@
-#include "types.cuh"
-
 #include "generated/slang.cuh"
 namespace SlangProjectionUtils {
 #include "generated/set_namespace.cuh"
@@ -14,7 +12,8 @@ namespace SlangPerSplatLosses {
 #include "generated/per_splat_losses.cuh"
 }
 
-#include "common.cuh"
+#include <Common.cuh>
+#include <Tensor.h>
 
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;

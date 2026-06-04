@@ -1,6 +1,6 @@
 #include "FusedProjectionBwdOptim.cuh"
 
-#include <gsplat/Utils.cuh>
+#include <Common.cuh>
 
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
@@ -10,7 +10,7 @@ namespace cg = cooperative_groups;
 
 template<
     typename SplatPrimitive,
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
     const bool use_scale_agnostic_mean,
     const bool use_color_trust_region,
@@ -111,7 +111,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const uint32_t image_width,
     const uint32_t image_height,
-    const ssplat::CameraModelType camera_model,
+    const CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
     // fwd outputs
     DeviceVector<int32_t> camera_ids,
@@ -240,12 +240,12 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             scalar_step, steps_ptr \
         )
 
-    if (camera_model == ssplat::CameraModelType::PINHOLE)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::PINHOLE, hessian_diagonal_output_mode, use_scale_agnostic_mean, use_color_trust_region, color_is_linear> _LAUNCH_ARGS;
-    else if (camera_model == ssplat::CameraModelType::FISHEYE)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::FISHEYE, hessian_diagonal_output_mode, use_scale_agnostic_mean, use_color_trust_region, color_is_linear> _LAUNCH_ARGS;
-    else if (camera_model == ssplat::CameraModelType::EQUISOLID)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::EQUISOLID, hessian_diagonal_output_mode, use_scale_agnostic_mean, use_color_trust_region, color_is_linear> _LAUNCH_ARGS;
+    if (camera_model == CameraModelType::PINHOLE)
+        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE, hessian_diagonal_output_mode, use_scale_agnostic_mean, use_color_trust_region, color_is_linear> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::FISHEYE)
+        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE, hessian_diagonal_output_mode, use_scale_agnostic_mean, use_color_trust_region, color_is_linear> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::EQUISOLID)
+        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID, hessian_diagonal_output_mode, use_scale_agnostic_mean, use_color_trust_region, color_is_linear> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());

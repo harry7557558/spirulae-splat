@@ -12,9 +12,7 @@
 
 #include "BackgroundSphericalHarmonics.cuh"
 
-#include "common.cuh"
-#include "types.cuh"
-#include "gsplat/Common.h"
+#include "Common.cuh"
 
 #include "generated/slang.cuh"
 namespace SlangProjectionUtils {
@@ -232,7 +230,7 @@ static inline int64_t _batch_count(const TorchTensorView& t, int64_t per_item) {
 
 static inline int _camera_model_int(const std::string& camera_model) {
     auto cm = cmt(camera_model);
-    if (cm == (ssplat::CameraModelType)-1)
+    if (cm == (CameraModelType)-1)
         throw std::runtime_error("Camera model " + camera_model + " is not supported for skybox");
     return (int)cm;
 }

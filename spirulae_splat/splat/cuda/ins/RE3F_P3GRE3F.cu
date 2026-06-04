@@ -6,7 +6,7 @@
 
 template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    ssplat::CameraModelType::PINHOLE,
+    CameraModelType::PINHOLE,
     true
 >(
     cudaStream_t stream,
@@ -34,7 +34,7 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    ssplat::CameraModelType::PINHOLE,
+    CameraModelType::PINHOLE,
     false
 >(
     cudaStream_t stream,
@@ -62,7 +62,7 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    ssplat::CameraModelType::FISHEYE,
+    CameraModelType::FISHEYE,
     true
 >(
     cudaStream_t stream,
@@ -90,7 +90,7 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    ssplat::CameraModelType::FISHEYE,
+    CameraModelType::FISHEYE,
     false
 >(
     cudaStream_t stream,
@@ -118,7 +118,7 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    ssplat::CameraModelType::EQUISOLID,
+    CameraModelType::EQUISOLID,
     true
 >(
     cudaStream_t stream,
@@ -146,7 +146,7 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    ssplat::CameraModelType::EQUISOLID,
+    CameraModelType::EQUISOLID,
     false
 >(
     cudaStream_t stream,

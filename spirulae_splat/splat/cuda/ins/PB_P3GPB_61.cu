@@ -6,7 +6,7 @@
 
 template void projection_fused_bwd_kernel_wrapper<
     Vanilla3DGUT<3>,
-    ssplat::CameraModelType::FISHEYE,
+    CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::AllReasonable
 >(
     cudaStream_t stream,
@@ -38,7 +38,7 @@ template void projection_fused_bwd_kernel_wrapper<
 
 template void projection_fused_bwd_kernel_wrapper<
     Vanilla3DGUT<3>,
-    ssplat::CameraModelType::EQUISOLID,
+    CameraModelType::EQUISOLID,
     HessianDiagonalOutputMode::None
 >(
     cudaStream_t stream,

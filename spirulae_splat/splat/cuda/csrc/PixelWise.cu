@@ -16,7 +16,7 @@ namespace SlangPPISP {
 }
 #endif
 
-#include "common.cuh"
+#include "Common.cuh"
 
 
 static TensorView<float, 4> _bhw1_view(const TorchTensorView& tv) {
@@ -799,7 +799,7 @@ void overexposure_grad_add(
 
 
 __global__ void depth_to_points_forward_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const bool is_ray_depth,
@@ -825,7 +825,7 @@ __global__ void depth_to_points_forward_kernel(
     float3 out_point = SlangPixelWise::depth_to_point(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == ssplat::CameraModelType::FISHEYE,
+        camera_model == CameraModelType::FISHEYE,
         is_ray_depth,
         in_depth
     );
@@ -833,7 +833,7 @@ __global__ void depth_to_points_forward_kernel(
 }
 
 __global__ void depth_to_points_backward_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const bool is_ray_depth,
@@ -861,7 +861,7 @@ __global__ void depth_to_points_backward_kernel(
     float v_in_depth = SlangPixelWise::depth_to_point_vjp(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == ssplat::CameraModelType::FISHEYE,
+        camera_model == CameraModelType::FISHEYE,
         is_ray_depth,
         in_depth, v_out_point
     );
@@ -914,7 +914,7 @@ void depth_to_points_backward(
 
 
 __global__ void depth_to_normal_forward_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const bool is_ray_depth,
@@ -954,7 +954,7 @@ __global__ void depth_to_normal_forward_kernel(
     float3 normal = depth_to_normal(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == ssplat::CameraModelType::FISHEYE, is_ray_depth,
+        camera_model == CameraModelType::FISHEYE, is_ray_depth,
         depth
     );
 #else
@@ -970,7 +970,7 @@ __global__ void depth_to_normal_forward_kernel(
         float3 ray = SlangPixelWise::generate_ray_d2n(
             {(float)ig+0.5f, (float)jg+0.5f},
             {fx, fy, cx, cy}, dist_coeffs,
-            camera_model == ssplat::CameraModelType::FISHEYE, is_ray_depth
+            camera_model == CameraModelType::FISHEYE, is_ray_depth
         );
         shared_points[jt][it] = ray * depth;
     }
@@ -991,7 +991,7 @@ __global__ void depth_to_normal_forward_kernel(
 
 
 __global__ void depth_to_normal_backward_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const bool is_ray_depth,
@@ -1033,7 +1033,7 @@ __global__ void depth_to_normal_backward_kernel(
     depth_to_normal_vjp(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == ssplat::CameraModelType::FISHEYE, is_ray_depth,
+        camera_model == CameraModelType::FISHEYE, is_ray_depth,
         depth, v_normal, &v_depth
     );
     v_depths.atomicStore1(bid, j, i-1, v_depth.x);
@@ -1053,7 +1053,7 @@ __global__ void depth_to_normal_backward_kernel(
         float3 ray = SlangPixelWise::generate_ray_d2n(
             {(float)ig+0.5f, (float)jg+0.5f},
             {fx, fy, cx, cy}, dist_coeffs,
-            camera_model == ssplat::CameraModelType::FISHEYE, is_ray_depth
+            camera_model == CameraModelType::FISHEYE, is_ray_depth
         );
         shared_points[jt][it] = make_float4(ray.x, ray.y, ray.z, depth);
     }
@@ -1164,7 +1164,7 @@ void depth_to_normal_backward_tv(
 
 
 __global__ void depth_normal_loss_forward_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const bool is_ray_depth,
@@ -1206,7 +1206,7 @@ __global__ void depth_normal_loss_forward_kernel(
     float loss = SlangPixelWise::depth_normal_loss(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == ssplat::CameraModelType::FISHEYE, is_ray_depth,
+        camera_model == CameraModelType::FISHEYE, is_ray_depth,
         depth, gt_normal
     );
 #else
@@ -1217,7 +1217,7 @@ __global__ void depth_normal_loss_forward_kernel(
 
 
 __global__ void depth_normal_loss_backward_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const bool is_ray_depth,
@@ -1266,7 +1266,7 @@ __global__ void depth_normal_loss_backward_kernel(
     SlangPixelWise::depth_normal_loss_vjp(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == ssplat::CameraModelType::FISHEYE, is_ray_depth,
+        camera_model == CameraModelType::FISHEYE, is_ray_depth,
         depth, gt_normal, v_loss, &v_depth, &v_gt_normal
     );
     v_depths.atomicStore1(bid, j, i-1, v_depth.x);
@@ -1330,7 +1330,7 @@ void depth_normal_loss_backward(
 
 
 __global__ void ray_depth_to_linear_depth_forward_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const TensorView<float, 4> in_depths,  // [B, H, W, 1]
@@ -1355,13 +1355,13 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
     float out_depth = in_depth * SlangPixelWise::ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == ssplat::CameraModelType::FISHEYE
+        camera_model == CameraModelType::FISHEYE
     );
     out_depths.store1(bid, j, i, out_depth);
 }
 
 __global__ void ray_depth_to_linear_depth_backward_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const TensorView<float, 4> v_out_depths,  // [B, H, W, 1]
@@ -1386,7 +1386,7 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
     float factor = SlangPixelWise::ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == ssplat::CameraModelType::FISHEYE
+        camera_model == CameraModelType::FISHEYE
     );
     float v_in_depth = factor * v_out_depth;
     v_in_depths.store1(bid, j, i, v_in_depth);
@@ -1510,7 +1510,7 @@ inline __device__ T get_pixel_bilinear(
 
 template<bool is_undistort>
 __global__ void distort_image_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // [B, 4]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const TensorView<float, 4> in_image,  // [B, H, W, C]
@@ -1535,15 +1535,15 @@ __global__ void distort_image_kernel(
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
     if (is_undistort) {
         if (dot(uv, uv) > 0.0f && !SlangProjectionUtils::is_valid_distortion(
-            camera_model == ssplat::CameraModelType::FISHEYE ?
+            camera_model == CameraModelType::FISHEYE ?
                 normalize(uv) * atanf(length(uv)) : uv,
             dist_coeffs
         ))
             return;
-        uv = SlangProjectionUtils::distort_point(uv, camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs);
+        uv = SlangProjectionUtils::distort_point(uv, camera_model == CameraModelType::FISHEYE, dist_coeffs);
     }
     else {
-        if (!SlangProjectionUtils::undistort_point(uv, camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs, &uv))
+        if (!SlangProjectionUtils::undistort_point(uv, camera_model == CameraModelType::FISHEYE, dist_coeffs, &uv))
             return;
     }
 
@@ -1609,7 +1609,7 @@ void undistort_image_tensor(
 
 template<typename T>
 __global__ void warp_image_wide_to_pinhole_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // [B, 4]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     TensorView<T, 4> wide_image,  // [B, H, W, C]
@@ -1641,9 +1641,9 @@ __global__ void warp_image_wide_to_pinhole_kernel(
 
         float3 raydir = axis_z + tx * axis_x + ty * axis_y;
         float2 uv;
-        bool valid = camera_model == ssplat::CameraModelType::FISHEYE ?
+        bool valid = camera_model == CameraModelType::FISHEYE ?
                 SlangProjectionUtils::fisheye_proj_nav(raydir, intrin, dist_coeffs, &uv) :
-            camera_model == ssplat::CameraModelType::EQUISOLID ?
+            camera_model == CameraModelType::EQUISOLID ?
                 SlangProjectionUtils::equisolid_proj_nav(raydir, intrin, dist_coeffs, &uv) :
             SlangProjectionUtils::persp_proj_nav(raydir, intrin, dist_coeffs, &uv);
         if (valid) {
@@ -1791,7 +1791,7 @@ __forceinline__ __device__ float3 solve3(float3 col0, float3 col1, float3 col2, 
 
 template<WarpImageType type>
 __global__ void warp_image_pinhole_to_wide_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // [B, 4]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     TensorView<float, 4> wide_image,  // [B, H, W, C]
@@ -1823,7 +1823,7 @@ __global__ void warp_image_pinhole_to_wide_kernel(
 
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
     float3 raydir;
-    if (!SlangProjectionUtils::unproject_point(uv, camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs, &raydir)) {
+    if (!SlangProjectionUtils::unproject_point(uv, camera_model == CameraModelType::FISHEYE, dist_coeffs, &raydir)) {
         for (int c = 0; c < C; c++)
             wide_image.at(bid, j, i, c) = 0.0f;
         return;
@@ -2054,7 +2054,7 @@ void warp_points_pinhole_to_wide_tensor(
 // Resolve scale in relative depth -
 // The eigenvector corresponding to the smallest eigenvalue of this matrix tells how much depth maps need to be scaled
 __global__ void warp_depth_pinhole_to_wide_scale_matrix_kernel(
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // [B, 4]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
     const int out_w, const int out_h,
@@ -2081,7 +2081,7 @@ __global__ void warp_depth_pinhole_to_wide_scale_matrix_kernel(
 
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
     float3 raydir;
-    if (!SlangProjectionUtils::unproject_point(uv, camera_model == ssplat::CameraModelType::FISHEYE, dist_coeffs, &raydir))
+    if (!SlangProjectionUtils::unproject_point(uv, camera_model == CameraModelType::FISHEYE, dist_coeffs, &raydir))
         return;
 
     constexpr int MAX_K = 12;

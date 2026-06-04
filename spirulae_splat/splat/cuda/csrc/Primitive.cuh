@@ -1,7 +1,6 @@
 #pragma once
 
-#include "types.cuh"
-#include "common.cuh"
+#include "Common.cuh"
 
 #include <array>
 #include <tuple>

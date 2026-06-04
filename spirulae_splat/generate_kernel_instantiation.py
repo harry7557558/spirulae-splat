@@ -199,7 +199,7 @@ def generate_ProjectionFwd():
                     "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
                     "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
                 ],
-                ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
+                ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
             )
         ]
         includes = [*(
@@ -222,7 +222,7 @@ def generate_ProjectionBwd():
                 "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
                 "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
             ],
-            ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
+            ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
             ["HessianDiagonalOutputMode::None", "HessianDiagonalOutputMode::Position", "HessianDiagonalOutputMode::AllReasonable"],
         )
     ]
@@ -258,9 +258,9 @@ def generate_FusedProjectionBwdOptim():
         "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
         "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
     ]
-    cams = ["ssplat::CameraModelType::PINHOLE",
-            "ssplat::CameraModelType::FISHEYE",
-            "ssplat::CameraModelType::EQUISOLID"]
+    cams = ["CameraModelType::PINHOLE",
+            "CameraModelType::FISHEYE",
+            "CameraModelType::EQUISOLID"]
     map_body = [
         (prim, cam, "HessianDiagonalOutputMode::None", sam, tr, lin)
         for prim in primitives
@@ -312,7 +312,7 @@ def generate_RasterizationEval3DFwd():
     map_body = [
         *itertools.product(
             ["Vanilla3DGUT<0>"],
-            ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
+            ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
             ["true", "false"],
         )
     ]
@@ -327,7 +327,7 @@ def generate_RasterizationEval3DBwd():
     map_body = [
         *itertools.product(
             ["Vanilla3DGUT<0>"],
-            ["ssplat::CameraModelType::PINHOLE", "ssplat::CameraModelType::FISHEYE", "ssplat::CameraModelType::EQUISOLID"],
+            ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
             ['true', 'false'],
             ['true', 'false'],
             ['true', 'false'],

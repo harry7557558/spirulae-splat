@@ -1,9 +1,6 @@
 #include "RasterizationBwd.cuh"
 
-#include <gsplat/Utils.cuh>
-
-#include "types.cuh"
-#include "common.cuh"
+#include <Common.cuh>
 
 
 

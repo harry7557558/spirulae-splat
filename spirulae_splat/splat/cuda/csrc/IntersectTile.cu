@@ -6,10 +6,7 @@ namespace SlangProjectionUtils {
 #include "generated/projection_utils.cuh"
 }
 
-#include "common.cuh"
-
-#include <gsplat/Common.h>
-#include <gsplat/Utils.cuh>
+#include "Common.cuh"
 
 #include <cooperative_groups.h>
 

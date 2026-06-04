@@ -6,7 +6,7 @@
 
 template void projection_packed_fwd_kernel_wrapper<
     Vanilla3DGUT<3>,
-    ssplat::CameraModelType::PINHOLE
+    CameraModelType::PINHOLE
 >(
     cudaStream_t stream,
     const uint32_t C,
@@ -29,7 +29,7 @@ template void projection_packed_fwd_kernel_wrapper<
 
 template void projection_packed_fwd_kernel_wrapper<
     Vanilla3DGUT<3>,
-    ssplat::CameraModelType::FISHEYE
+    CameraModelType::FISHEYE
 >(
     cudaStream_t stream,
     const uint32_t C,
@@ -52,7 +52,7 @@ template void projection_packed_fwd_kernel_wrapper<
 
 template void projection_packed_fwd_kernel_wrapper<
     Vanilla3DGUT<3>,
-    ssplat::CameraModelType::EQUISOLID
+    CameraModelType::EQUISOLID
 >(
     cudaStream_t stream,
     const uint32_t C,
@@ -75,7 +75,7 @@ template void projection_packed_fwd_kernel_wrapper<
 
 template void projection_packed_fwd_kernel_wrapper<
     Vanilla3DGUT<4>,
-    ssplat::CameraModelType::PINHOLE
+    CameraModelType::PINHOLE
 >(
     cudaStream_t stream,
     const uint32_t C,
@@ -98,7 +98,7 @@ template void projection_packed_fwd_kernel_wrapper<
 
 template void projection_packed_fwd_kernel_wrapper<
     Vanilla3DGUT<4>,
-    ssplat::CameraModelType::FISHEYE
+    CameraModelType::FISHEYE
 >(
     cudaStream_t stream,
     const uint32_t C,
@@ -121,7 +121,7 @@ template void projection_packed_fwd_kernel_wrapper<
 
 template void projection_packed_fwd_kernel_wrapper<
     Vanilla3DGUT<4>,
-    ssplat::CameraModelType::EQUISOLID
+    CameraModelType::EQUISOLID
 >(
     cudaStream_t stream,
     const uint32_t C,

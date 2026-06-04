@@ -1,21 +1,19 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-#include <gsplat/Common.h>
-#include <gsplat/Utils.cuh>
+#include <Common.cuh>
 
 #ifndef NO_TORCH
 #define NO_TORCH
 #endif
 
-#include "types.cuh"
 
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
 
 
-template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model>
 __global__ void projection_packed_mask_kernel(
     const uint32_t C,
     const uint32_t N,
@@ -73,7 +71,7 @@ __global__ void projection_packed_mask_kernel(
 }
 
 
-template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model>
 __global__ void projection_packed_fwd_kernel(
     const uint32_t C,
     const uint32_t N,
@@ -148,7 +146,7 @@ __global__ void projection_packed_fwd_kernel(
 }
 
 
-template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model>
 void projection_packed_mask_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t C,
@@ -172,7 +170,7 @@ void projection_packed_mask_kernel_wrapper(
     );
 }
 
-template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model>
 void projection_packed_fwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t C,

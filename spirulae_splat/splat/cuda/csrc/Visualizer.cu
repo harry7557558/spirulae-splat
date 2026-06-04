@@ -9,16 +9,8 @@ namespace SlangProjectionUtils {
 }
 
 
-#include <gsplat/Common.h>
-#include <gsplat/Utils.cuh>
-
-#include "Tensor.h"
-#include "types.cuh"
-#include "common.cuh"
-
-#include "gsplat/Common.h"
-
-using ssplat::CameraModelType;
+#include <Tensor.h>
+#include <Common.cuh>
 
 
 
@@ -1134,7 +1126,7 @@ void blit_train_cameras_tensor(
         float ex = 0.5f * (h_aabb[3] - h_aabb[0]);
         float ey = 0.5f * (h_aabb[4] - h_aabb[1]);
         float ez = 0.5f * (h_aabb[5] - h_aabb[2]);
-        float ms = 1.01f * std::max({ex, ey, ez});
+        float ms = 1.01f * fmaxf(fmaxf(ex, ey), ez);
         rootAABBMin = {cx - ms, cy - ms, cz - ms};
         rootAABBMax = {cx + ms, cy + ms, cz + ms};
     }

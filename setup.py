@@ -115,7 +115,7 @@ def get_extensions():
     # extra_compile_args["nvcc"] += ['-rdc=true']
 
     # disable compile warnings for glm
-    extra_compile_args["nvcc"] += ['-Xcudafe=--diag_suppress=20012']
+    # extra_compile_args["nvcc"] += ['-Xcudafe=--diag_suppress=20012']
 
     # disable compile warnings for Slang generated code
     extra_compile_args["nvcc"] += ['-Xcudafe=--diag_suppress=550']

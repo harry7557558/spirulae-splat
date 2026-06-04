@@ -25,11 +25,7 @@ namespace SlangProjectionUtils {
 }
 #endif
 
-#include <gsplat/Common.h>
-#include <gsplat/Utils.cuh>
-
-#include "types.cuh"
-#include "common.cuh"
+#include <Common.cuh>
 
 
 #ifndef IS_EVAL3D
@@ -52,7 +48,7 @@ static_assert(TILE_SIZE_DY > 0 && TILE_SIZE_DY <= TILE_SIZE && TILE_SIZE % TILE_
 template <
     typename SplatPrimitive,
 #if IS_EVAL3D
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
 #endif
     bool output_distortion,
 #if IS_EVAL3D
@@ -506,7 +502,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 template <
     typename SplatPrimitive,
 #if IS_EVAL3D
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
 #endif
     bool output_distortion,
 #if IS_EVAL3D

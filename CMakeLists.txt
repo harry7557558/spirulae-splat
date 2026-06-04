@@ -139,7 +139,7 @@ add_library(csrc SHARED ${SPLAT_SOURCES})
 # Include directories
 target_include_directories(csrc PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc
-    ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc/glm
+    # ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc/glm
     ${Python3_INCLUDE_DIRS}
     ${PYTHON_ADDITION_INCLUDE_PATH}
 )

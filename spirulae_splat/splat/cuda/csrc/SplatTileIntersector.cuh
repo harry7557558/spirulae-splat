@@ -4,15 +4,12 @@
 
 #include <Tensor.h>
 
-#include <gsplat/Common.h>
+#include <Common.cuh>
 
 #include "Primitive3DGS.cuh"
 
-#include "common.cuh"
-#include "types.cuh"
 
-
-template<ssplat::CameraModelType camera_model>
+template<CameraModelType camera_model>
 struct TileBuffers {
     long size;
     float width, height;
@@ -36,7 +33,7 @@ struct TileBuffers {
 };
 
 
-template<typename Primitive, ssplat::CameraModelType camera_model>
+template<typename Primitive, CameraModelType camera_model>
 struct SplatTileIntersector {
 
     typename Primitive::WorldBuffer splats;

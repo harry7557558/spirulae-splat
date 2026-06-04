@@ -6,7 +6,7 @@
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     MipSplatting<3>,
-    ssplat::CameraModelType::PINHOLE,
+    CameraModelType::PINHOLE,
     HessianDiagonalOutputMode::None,
     false,
     true,
@@ -64,7 +64,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     MipSplatting<3>,
-    ssplat::CameraModelType::PINHOLE,
+    CameraModelType::PINHOLE,
     HessianDiagonalOutputMode::None,
     false,
     false,
@@ -122,7 +122,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     MipSplatting<3>,
-    ssplat::CameraModelType::FISHEYE,
+    CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None,
     true,
     false,
@@ -180,7 +180,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     MipSplatting<3>,
-    ssplat::CameraModelType::FISHEYE,
+    CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None,
     true,
     true,
@@ -238,7 +238,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     MipSplatting<3>,
-    ssplat::CameraModelType::FISHEYE,
+    CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None,
     true,
     true,
@@ -296,7 +296,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     MipSplatting<3>,
-    ssplat::CameraModelType::FISHEYE,
+    CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None,
     true,
     false,

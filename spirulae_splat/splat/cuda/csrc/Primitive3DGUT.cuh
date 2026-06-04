@@ -42,14 +42,14 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
             return *this;
         }
 
-        template<ssplat::CameraModelType camera_model>
+        template<CameraModelType camera_model>
         inline __device__ void project(
             ProjCamera cam,
             Vanilla3DGUT<sh_degree>::Screen& proj, float4& aabb, float& sorting_depth, float& radius
         ) {
             float2 xy;
             float depth;
-            if constexpr (camera_model == ssplat::CameraModelType::PINHOLE)
+            if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgut_persp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -57,7 +57,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     cam.width, cam.height,
                     &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
+            else if constexpr (camera_model == CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgut_fisheye(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -65,7 +65,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     cam.width, cam.height,
                     &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+            else if constexpr (camera_model == CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgut_equisolid(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -90,13 +90,13 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
             }
         }
 
-        template<ssplat::CameraModelType camera_model, bool atomic=true>
+        template<CameraModelType camera_model, bool atomic=true>
         inline __device__ void project_vjp(
             ProjCamera cam,
             Vanilla3DGUT<sh_degree>::Screen v_proj,
             Vanilla3DGUT<sh_degree>::World& v_world, float3x3 &v_R, float3 &v_t
         ) {
-            if constexpr (camera_model == ssplat::CameraModelType::PINHOLE)
+            if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgut_persp_vjp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -106,7 +106,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
                     &v_R, &v_t
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
+            else if constexpr (camera_model == CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgut_fisheye_vjp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -116,7 +116,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
                     &v_R, &v_t
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+            else if constexpr (camera_model == CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgut_equisolid_vjp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -149,14 +149,14 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
             #undef _ARGS
         }
 
-        template<ssplat::CameraModelType camera_model, bool atomic=true>
+        template<CameraModelType camera_model, bool atomic=true>
         inline __device__ void project_vjp_h_pos(
             ProjCamera cam,
             Vanilla3DGUT<sh_degree>::Screen v_proj, Vanilla3DGUT<sh_degree>::Screen vr_proj, Vanilla3DGUT<sh_degree>::Screen h_proj,
             Vanilla3DGUT<sh_degree>::World& v_world, float3x3 &v_R, float3 &v_t,
             float3& vr_world_pos, float3& h_world_pos
         ) {
-            if constexpr (camera_model == ssplat::CameraModelType::PINHOLE)
+            if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgut_persp_vjp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -168,7 +168,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
                     &v_R, &v_t, &vr_world_pos, &h_world_pos
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
+            else if constexpr (camera_model == CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgut_fisheye_vjp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -180,7 +180,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
                     &v_R, &v_t, &vr_world_pos, &h_world_pos
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+            else if constexpr (camera_model == CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgut_equisolid_vjp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -195,14 +195,14 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
             // TODO: features_dc
         }
 
-        template<ssplat::CameraModelType camera_model, bool atomic=true>
+        template<CameraModelType camera_model, bool atomic=true>
         inline __device__ void project_vjp_h_all(
             ProjCamera cam,
             Vanilla3DGUT<sh_degree>::Screen v_proj, Vanilla3DGUT<sh_degree>::Screen vr_proj, Vanilla3DGUT<sh_degree>::Screen h_proj,
             Vanilla3DGUT<sh_degree>::World& v_world, float3x3 &v_R, float3 &v_t,
             Vanilla3DGUT<sh_degree>::World& vr_world, Vanilla3DGUT<sh_degree>::World& h_world
         ) {
-            if constexpr (camera_model == ssplat::CameraModelType::PINHOLE)
+            if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgut_persp_vjp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -216,7 +216,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity,
                     &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
+            else if constexpr (camera_model == CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgut_fisheye_vjp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -230,7 +230,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity,
                     &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+            else if constexpr (camera_model == CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgut_equisolid_vjp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,

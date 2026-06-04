@@ -26,11 +26,7 @@ namespace SlangProjectionUtils {
 }
 #endif
 
-#include "types.cuh"
-#include "common.cuh"
-
-#include <gsplat/Common.h>
-#include <gsplat/Utils.cuh>
+#include <Common.cuh>
 
 #include "Primitive.cuh"
 
@@ -43,7 +39,7 @@ namespace SlangProjectionUtils {
 template<
     typename SplatPrimitive,
 #if IS_EVAL3D
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
 #endif
     bool output_distortion
 >
@@ -234,7 +230,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 template<
     typename SplatPrimitive,
 #if IS_EVAL3D
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
 #endif
     bool output_distortion
 >

@@ -1,5 +1,5 @@
 #define SLANG_PRELUDE_EXPORT
-#include "common.cuh"
+#include "Common.cuh"
 #include "Engine.h"
 
 #include "IntersectTile.cuh"
@@ -48,11 +48,11 @@ inline at::Tensor zeros_like_tensor(const at::Tensor& x) {
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
-    // py::enum_<ssplat::CameraModelType>(m, "SSplatCameraModelType")
-    //     .value("PINHOLE", ssplat::CameraModelType::PINHOLE)
-    //     .value("ORTHO", ssplat::CameraModelType::ORTHO)
-    //     .value("FISHEYE", ssplat::CameraModelType::FISHEYE)
-    //     .value("FTHETA", ssplat::CameraModelType::FTHETA)
+    // py::enum_<CameraModelType>(m, "SSplatCameraModelType")
+    //     .value("PINHOLE", CameraModelType::PINHOLE)
+    //     .value("ORTHO", CameraModelType::ORTHO)
+    //     .value("FISHEYE", CameraModelType::FISHEYE)
+    //     .value("FTHETA", CameraModelType::FTHETA)
     //     .export_values();
 
     m.attr("TILE_SIZE") = py::int_(TILE_SIZE);

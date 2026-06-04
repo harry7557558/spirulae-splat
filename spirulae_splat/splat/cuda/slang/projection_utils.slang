@@ -8,7 +8,7 @@
 
 static const float ALPHA_THRESHOLD = 1.0f/255.0f;
 
-// This must match Common.h
+// This must match Common.cuh
 enum CameraModelType {
     PINHOLE = 0,
     FISHEYE = 1,

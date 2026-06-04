@@ -1,12 +1,16 @@
 #pragma once
 
-#include <glm/glm.hpp>
-
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <vector_types.h>
 #include <type_traits>
+
+#include <cstdint>
+#include <string>
+#include <stdexcept>
+#include <tuple>
+#include <variant>
 
 #ifdef _MSC_VER
 /* Old compatibility names for C types.  */
@@ -15,15 +19,141 @@ typedef unsigned short int ushort;
 typedef unsigned int uint;
 #endif
 
-
-#ifdef __CUDACC__
-#include "generated/slang.cuh"
-#endif
-
 using std::max;
 using std::min;
 
+inline constexpr int WARP_SIZE = 32;
 
+inline constexpr int TILE_SIZE = 16;
+inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
+
+
+#ifdef __CUDACC__
+
+#include "generated/slang.cuh"
+
+#else  // #ifdef __CUDACC__
+
+template<typename T, size_t SIZE>
+struct FixedArray
+{
+    T m_data[SIZE];
+};
+
+#endif  // #ifdef __CUDACC__
+
+
+#ifdef __CUDACC__
+// k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2
+typedef FixedArray<float, 10> CameraDistortionCoeffs;
+#endif
+
+#include <Tensor.h>
+
+struct CameraDistortionCoeffsBuffer {
+    float* __restrict__ coeffs;
+
+    CameraDistortionCoeffsBuffer(const TorchTensorView &tensor) {
+        if (std::get<2>(tensor).size() != 2 || std::get<2>(tensor)[1] != 10)
+            throw std::runtime_error("dist coeffs must have shape (C, 10)");
+        if (std::get<1>(tensor) != sizeof(float))
+            throw std::runtime_error("dist coeffs must be float");
+        coeffs = (float*)std::get<0>(tensor);
+    }
+
+    CameraDistortionCoeffsBuffer(float* ptr) : coeffs(ptr) {}
+
+    #ifdef __CUDACC__
+    __device__ CameraDistortionCoeffs load(long idx) const {
+        CameraDistortionCoeffs res;
+        if (coeffs == nullptr) {
+            #pragma unroll
+            for (int i = 0; i < 10; i++)
+                res[i] = 0.0f;
+        } else {
+            float* c = coeffs + 10 * idx;
+            #pragma unroll
+            for (int i = 0; i < 10; i++)
+                res[i] = c[i];
+        }
+        return res;
+    }
+    #endif
+};
+
+enum class HessianDiagonalOutputMode {
+    None,
+    Position,
+    AllReasonable
+};
+
+// Camera Types
+// This must match projection_utils.slang
+enum class CameraModelType {
+    PINHOLE = 0,
+    FISHEYE = 1,
+    EQUISOLID = 2,
+    EQUIRECTANGULAR = 3,
+};
+
+inline CameraModelType cmt(const std::string &s) {
+    return (s == "PINHOLE") ? CameraModelType::PINHOLE :
+        (s == "FISHEYE") ? CameraModelType::FISHEYE :
+        (s == "EQUISOLID") ? CameraModelType::EQUISOLID :
+        (CameraModelType)-1;
+}
+
+
+// Kernel launcher
+
+#define CHECK_INPUT(x)
+#define DEVICE_GUARD(_ten)
+
+#define CHECK_DEVICE_ERROR(call)                                    \
+do {                                                                \
+    cudaError_t err = call;                                         \
+    if (err != cudaSuccess) {                                       \
+        fprintf(stderr, "\033[41mCUDA Error at %s:%d: %s\033[m\n",  \
+                __FILE__, __LINE__, cudaGetErrorString(err));       \
+        exit(EXIT_FAILURE);                                         \
+    }                                                               \
+} while (0)
+
+#define _CEIL_DIV(n,m) (((n)+(m)-1)/(m))
+
+#define _LAUNCH_ARGS_1D(n,b) ((n)==0?1:_CEIL_DIV(n,b)),b,0,(cudaStream_t)0
+#define _LAUNCH_ARGS_2D(nx,ny,bx,by) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),1),dim3(bx,by),0,(cudaStream_t)0
+#define _LAUNCH_ARGS_3D(nx,ny,nz,bx,by,bz) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),_CEIL_DIV(nz,bz)),dim3(bx,by,bz),0,(cudaStream_t)0
+
+//--------------
+#define CUDA_CALL(x)                                                           \
+    do {                                                                       \
+        if ((x) != cudaSuccess) {                                              \
+            printf(                                                            \
+                "Error at %s:%d - %s\n",                                       \
+                __FILE__,                                                      \
+                __LINE__,                                                      \
+                cudaGetErrorString(cudaGetLastError())                         \
+            );                                                                 \
+            exit(EXIT_FAILURE);                                                \
+        }                                                                      \
+    } while (0)
+
+
+// Routes CUB temporary storage through DeviceScratch (monotonically growing,
+// never fragmented) instead of the PyTorch caching allocator.
+#define CUB_WRAPPER(func, ...)                                                 \
+    do {                                                                       \
+        size_t _cub_temp_bytes = 0;                                            \
+        func(nullptr, _cub_temp_bytes, __VA_ARGS__);                           \
+        func(DeviceScratch::global().acquire(_cub_temp_bytes),                 \
+             _cub_temp_bytes, __VA_ARGS__);                                    \
+    } while (false)
+
+
+#ifdef __CUDACC__
+
+// Vector types
 
 #define _DEF_GENERIC_VEC_FUNCTIONAL_UNARY_OP(dtype, o) \
     __host__ __device__ __forceinline__ dtype##2 operator o(dtype##2 v) \
@@ -234,21 +364,16 @@ __host__ __device__ __forceinline__ float3 cross(float3 a, float3 b) {
     };
 }
 
-
-#ifdef __CUDACC__
 #ifdef SLANG_PRELUDE_EXPORT
 typedef Matrix<float, 2, 2> float2x2;
 typedef Matrix<float, 3, 3> float3x3;
 typedef Matrix<float, 4, 4> float4x4;
-#endif
 #endif
 
 
 ///////////////////////////////
 // Reduce / Atomic
 ///////////////////////////////
-
-#ifdef __CUDACC__
 
 __forceinline__ __device__ uint32_t _warpIdx() {
     // uint32_t warpId;
@@ -301,42 +426,6 @@ template <typename WarpT> inline __device__ void warpSum(float2 &val, WarpT &war
     val.y = cg::reduce(warp, val.y, cg::plus<float>());
 }
 
-template <typename WarpT> inline __device__ void warpSum(glm::vec4 &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<float>());
-    val.y = cg::reduce(warp, val.y, cg::plus<float>());
-    val.z = cg::reduce(warp, val.z, cg::plus<float>());
-    val.w = cg::reduce(warp, val.w, cg::plus<float>());
-}
-
-template <typename WarpT> inline __device__ void warpSum(glm::vec3 &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<float>());
-    val.y = cg::reduce(warp, val.y, cg::plus<float>());
-    val.z = cg::reduce(warp, val.z, cg::plus<float>());
-}
-
-template <typename WarpT> inline __device__ void warpSum(glm::vec2 &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<float>());
-    val.y = cg::reduce(warp, val.y, cg::plus<float>());
-}
-
-template <typename WarpT> inline __device__ void warpSum(glm::mat4 &val, WarpT &warp) {
-    warpSum(val[0], warp);
-    warpSum(val[1], warp);
-    warpSum(val[2], warp);
-    warpSum(val[3], warp);
-}
-
-template <typename WarpT> inline __device__ void warpSum(glm::mat3 &val, WarpT &warp) {
-    warpSum(val[0], warp);
-    warpSum(val[1], warp);
-    warpSum(val[2], warp);
-}
-
-template <typename WarpT> inline __device__ void warpSum(glm::mat2 &val, WarpT &warp) {
-    warpSum(val[0], warp);
-    warpSum(val[1], warp);
-}
-
 template <typename WarpT> inline __device__ void warpMax(float &val, WarpT &warp) {
     val = cg::reduce(warp, val, cg::greater<float>());
 }
@@ -367,30 +456,6 @@ inline __device__ void warpSum(float3 &val) {
 
 inline __device__ void warpSum(float2 &val) {
     warpSum(val.x); warpSum(val.y);
-}
-
-inline __device__ void warpSum(glm::vec4 &val) {
-    warpSum(val.x); warpSum(val.y); warpSum(val.z); warpSum(val.w);
-}
-
-inline __device__ void warpSum(glm::vec3 &val) {
-    warpSum(val.x); warpSum(val.y); warpSum(val.z);
-}
-
-inline __device__ void warpSum(glm::vec2 &val) {
-    warpSum(val.x); warpSum(val.y);
-}
-
-inline __device__ void warpSum(glm::mat4 &val) {
-    warpSum(val[0]); warpSum(val[1]); warpSum(val[2]); warpSum(val[3]);
-}
-
-inline __device__ void warpSum(glm::mat3 &val) {
-    warpSum(val[0]); warpSum(val[1]); warpSum(val[2]);
-}
-
-inline __device__ void warpSum(glm::mat2 &val) {
-    warpSum(val[0]); warpSum(val[1]);
 }
 
 inline __device__ void warpAtomicAdd(float* addr, float val) {
@@ -697,11 +762,6 @@ inline __device__ void atomicAddFVec(float4* p, float4 v) {
         blockAtomicAdd<reduce == 1 || reduce == WARP_SIZE ? 4 * WARP_SIZE : reduce>(p, v);
 }
 
-#endif  // #ifdef __CUDACC__
-
-
-
-#ifdef __CUDACC__
 
 // compute a*x*a where a is tiny number and x is large number, without underflowing floating points
 __forceinline__ __device__ float fmul_axa(float a, float x) {

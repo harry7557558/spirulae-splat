@@ -2,9 +2,7 @@
 #include <cstdint>
 
 
-#include <gsplat/Common.h>
-
-#include "types.cuh"
+#include "Common.cuh"
 
 #include "Primitive3DGS.cuh"
 #include "Primitive3DGUT.cuh"

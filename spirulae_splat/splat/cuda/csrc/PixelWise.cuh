@@ -1,7 +1,6 @@
 #pragma once
 
 
-#include "types.cuh"
 #include <Tensor.h>
 
 enum class RawPPISPRegLossIndex {

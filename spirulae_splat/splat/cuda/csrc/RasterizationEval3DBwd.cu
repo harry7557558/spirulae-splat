@@ -1,15 +1,12 @@
 #include "RasterizationEval3DBwd.cuh"
 
-#include <gsplat/Utils.cuh>
-
-#include "types.cuh"
-#include "common.cuh"
+#include <Common.cuh>
 
 
 
 template <
     typename SplatPrimitive,
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     bool output_distortion,
     bool output_viewmat_grad,
     bool output_hessian_diagonal,
@@ -65,7 +62,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,              // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
-    const ssplat::CameraModelType camera_model,
+    const CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
     // image size
     const uint32_t image_width,
@@ -128,29 +125,29 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             v_viewmats.data_ptr() \
         )
 
-    if (camera_model == ssplat::CameraModelType::PINHOLE) {
+    if (camera_model == CameraModelType::PINHOLE) {
         if (v_viewmats.data_ptr() != nullptr)
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                ssplat::CameraModelType::PINHOLE, output_distortion, true, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::PINHOLE, output_distortion, true, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
         else
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                ssplat::CameraModelType::PINHOLE, output_distortion, false, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::PINHOLE, output_distortion, false, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
     }
-    else if (camera_model == ssplat::CameraModelType::FISHEYE) {
+    else if (camera_model == CameraModelType::FISHEYE) {
         if (v_viewmats.data_ptr() != nullptr)
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                ssplat::CameraModelType::FISHEYE, output_distortion, true, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::FISHEYE, output_distortion, true, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
         else
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                ssplat::CameraModelType::FISHEYE, output_distortion, false, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::FISHEYE, output_distortion, false, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
     }
-    else if (camera_model == ssplat::CameraModelType::EQUISOLID) {
+    else if (camera_model == CameraModelType::EQUISOLID) {
         if (v_viewmats.data_ptr() != nullptr)
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                ssplat::CameraModelType::EQUISOLID, output_distortion, true, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::EQUISOLID, output_distortion, true, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
         else
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                ssplat::CameraModelType::EQUISOLID, output_distortion, false, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::EQUISOLID, output_distortion, false, output_hessian_diagonal, output_accum_weight> _LAUNCH_ARGS;
     }
     else
         throw std::runtime_error("Unsupported camera model");
@@ -175,7 +172,7 @@ inline std::tuple<
     DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
-    const ssplat::CameraModelType camera_model,
+    const CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
     // image size
     const uint32_t image_width,
@@ -286,7 +283,7 @@ inline std::tuple<
     DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
-    const ssplat::CameraModelType camera_model,
+    const CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
     // image size
     const uint32_t image_width,

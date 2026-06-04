@@ -9,7 +9,7 @@
 #include "Primitive3DGS.cuh"
 // #include "Primitive3DGUT.cuh"
 
-#include "common.cuh"
+#include "Common.cuh"
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */

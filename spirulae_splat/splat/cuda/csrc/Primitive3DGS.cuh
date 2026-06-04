@@ -35,12 +35,12 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
             return *this;
         }
 
-        template<ssplat::CameraModelType camera_model>
+        template<CameraModelType camera_model>
         inline __device__ void project(
             ProjCamera cam,
             typename _Base3DGS<sh_degree, antialiased>::Screen& screen, float4& aabb, float& sorting_depth, float& radius
         ) {
-            if constexpr (camera_model == ssplat::CameraModelType::PINHOLE)
+            if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgs_persp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -49,7 +49,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     cam.width, cam.height,
                     &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
+            else if constexpr (camera_model == CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgs_fisheye(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -57,7 +57,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     cam.width, cam.height,
                     &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+            else if constexpr (camera_model == CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgs_equisolid(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -82,13 +82,13 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
             }
         }
 
-        template<ssplat::CameraModelType camera_model, bool atomic=true>
+        template<CameraModelType camera_model, bool atomic=true>
         inline __device__ void project_vjp(
             ProjCamera cam,
             typename _Base3DGS<sh_degree, antialiased>::Screen v_screen,
             typename _Base3DGS<sh_degree, antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
         ) {
-            if constexpr (camera_model == ssplat::CameraModelType::PINHOLE)
+            if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgs_persp_vjp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -98,7 +98,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
                     &v_R, &v_t
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
+            else if constexpr (camera_model == CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgs_fisheye_vjp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -108,7 +108,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
                     &v_R, &v_t
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+            else if constexpr (camera_model == CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgs_equisolid_vjp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -141,7 +141,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
             #undef _ARGS
         }
 
-        template<ssplat::CameraModelType camera_model, bool atomic=true>
+        template<CameraModelType camera_model, bool atomic=true>
         inline __device__ void project_vjp_h_pos(
             ProjCamera cam,
             typename _Base3DGS<sh_degree, antialiased>::Screen v_proj,
@@ -150,7 +150,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
             typename _Base3DGS<sh_degree, antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
             float3 &vr_world_pos, float3 &h_world_pos
         ) {
-            if constexpr (camera_model == ssplat::CameraModelType::PINHOLE)
+            if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgs_persp_vjp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -162,7 +162,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
                     &v_R, &v_t, &vr_world_pos, &h_world_pos
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
+            else if constexpr (camera_model == CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgs_fisheye_vjp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -174,7 +174,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
                     &v_R, &v_t, &vr_world_pos, &h_world_pos
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+            else if constexpr (camera_model == CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgs_equisolid_vjp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -189,7 +189,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
             // TODO: features_dc
         }
 
-        template<ssplat::CameraModelType camera_model, bool atomic=true>
+        template<CameraModelType camera_model, bool atomic=true>
         inline __device__ void project_vjp_h_all(
             ProjCamera cam,
             typename _Base3DGS<sh_degree, antialiased>::Screen v_proj,
@@ -199,7 +199,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
             typename _Base3DGS<sh_degree, antialiased>::World& vr_world,
             typename _Base3DGS<sh_degree, antialiased>::World& h_world
         ) {
-            if constexpr (camera_model == ssplat::CameraModelType::PINHOLE)
+            if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgs_persp_vjp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -213,7 +213,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity,
                     &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::FISHEYE)
+            else if constexpr (camera_model == CameraModelType::FISHEYE)
                 Slang3DGS::projection_3dgs_fisheye_vjp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
@@ -227,7 +227,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     &vr_world.mean, &vr_world.quat, &vr_world.scale, &vr_world.opacity,
                     &h_world.mean, &h_world.quat, &h_world.scale, &h_world.opacity
                 );
-            else if constexpr (camera_model == ssplat::CameraModelType::EQUISOLID)
+            else if constexpr (camera_model == CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgs_equisolid_vjp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,

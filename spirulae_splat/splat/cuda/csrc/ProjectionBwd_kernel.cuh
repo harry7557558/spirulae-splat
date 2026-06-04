@@ -1,14 +1,13 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-#include <gsplat/Common.h>
-#include <gsplat/Utils.cuh>
+#include <Common.cuh>
 
 #ifndef NO_TORCH
 #define NO_TORCH
 #endif
 
-#include "types.cuh"
+#include "Common.cuh"
 
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
@@ -16,7 +15,7 @@ namespace cg = cooperative_groups;
 
 template<
     typename SplatPrimitive,
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode
 >
 __global__ void projection_fused_bwd_kernel(
@@ -142,7 +141,7 @@ __global__ void projection_fused_bwd_kernel(
 
 template<
     typename SplatPrimitive,
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode
 >
 void projection_fused_bwd_kernel_wrapper(

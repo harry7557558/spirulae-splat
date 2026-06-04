@@ -11,7 +11,7 @@ namespace SlangPerPixelLosses {
 #include "generated/per_pixel_losses.cuh"
 }
 
-#include "common.cuh"
+#include "Common.cuh"
 #include <Tensor.h>
 
 template<typename T>

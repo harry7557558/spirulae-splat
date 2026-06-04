@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common.cuh"
+#include "Common.cuh"
 #include <Tensor.h>
 
 

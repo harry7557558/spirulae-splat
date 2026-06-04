@@ -15,7 +15,7 @@
 #include <cuda_runtime.h>
 
 // Function-call-style macro (different from the original statement-style),
-// matching the form used by the rest of spirulae_splat/common.cuh.
+// matching the form used by the rest of spirulae_splat/Common.cuh.
 #ifndef CHECK_DEVICE_ERROR
 #define CHECK_DEVICE_ERROR(call)                                    \
 do {                                                                \

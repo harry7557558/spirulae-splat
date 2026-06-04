@@ -1,4 +1,4 @@
-#include "common.cuh"
+#include "Common.cuh"
 
 #if 0
 

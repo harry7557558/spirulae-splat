@@ -644,8 +644,8 @@ class TrainerConfigSquared(TrainerConfig):
 class TrainerConfigPatched(TrainerConfig):
     """Method with patched batching"""
     datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
-        patch_batch_size=-1,
-        patch_size=64,
+        # patch_batch_size=-1,
+        # patch_size=64,
         max_batch_per_epoch=800,
     ))
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
@@ -779,7 +779,6 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
     ))
     datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
         max_batch_per_epoch=9**9,
-        start_resolution=None,
         load_depths=False,
         load_normals=False,
     ))

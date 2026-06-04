@@ -1,9 +1,6 @@
 #include "RasterizationEval3DFwd.cuh"
 
-#include <gsplat/Utils.cuh>
-
-#include "types.cuh"
-#include "common.cuh"
+#include <Common.cuh>
 
 
 #include <Tensor.h>
@@ -11,7 +8,7 @@
 
 template<
     typename SplatPrimitive,
-    ssplat::CameraModelType camera_model,
+    CameraModelType camera_model,
     bool output_distortion
 >
 void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
@@ -48,7 +45,7 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
-    const ssplat::CameraModelType camera_model,
+    const CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
     // image size
     const uint32_t image_width,
@@ -86,15 +83,15 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
             output_distortion ? distortions.buffer() : RenderOutput::Buffer() \
         )
 
-    if (camera_model == ssplat::CameraModelType::PINHOLE)
+    if (camera_model == CameraModelType::PINHOLE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            ssplat::CameraModelType::PINHOLE, output_distortion> _LAUNCH_ARGS;
-    else if (camera_model == ssplat::CameraModelType::FISHEYE)
+            CameraModelType::PINHOLE, output_distortion> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::FISHEYE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            ssplat::CameraModelType::FISHEYE, output_distortion> _LAUNCH_ARGS;
-    else if (camera_model == ssplat::CameraModelType::EQUISOLID)
+            CameraModelType::FISHEYE, output_distortion> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::EQUISOLID)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            ssplat::CameraModelType::EQUISOLID, output_distortion> _LAUNCH_ARGS;
+            CameraModelType::EQUISOLID, output_distortion> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -118,7 +115,7 @@ inline std::tuple<
     DeviceVector<int32_t> gaussian_ids,
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
-    const ssplat::CameraModelType camera_model,
+    const CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
     // image size
     const uint32_t image_width,

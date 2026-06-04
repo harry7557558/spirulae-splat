@@ -6,7 +6,7 @@
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    ssplat::CameraModelType::EQUISOLID,
+    CameraModelType::EQUISOLID,
     false,
     false,
     true,
@@ -53,7 +53,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    ssplat::CameraModelType::EQUISOLID,
+    CameraModelType::EQUISOLID,
     false,
     false,
     false,
@@ -100,7 +100,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    ssplat::CameraModelType::EQUISOLID,
+    CameraModelType::EQUISOLID,
     false,
     false,
     false,

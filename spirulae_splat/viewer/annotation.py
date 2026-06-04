@@ -98,7 +98,7 @@ def annotate_train_cameras(
     R = R * torch.tensor([[[1.0, -1.0, -1.0]]]).cuda()
     camera_to_worlds = torch.concat((R, T), dim=-1)
 
-    # must match Common.h and projection_utils.slang
+    # must match Common.cuh and projection_utils.slang
     camera_model_mapper = {
         "PINHOLE": 0,
         "FISHEYE": 1,

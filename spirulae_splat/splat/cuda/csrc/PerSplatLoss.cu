@@ -12,7 +12,7 @@ namespace SlangPerSplatLosses {
 
 #if 0
 
-#include "common.cuh"
+#include "Common.cuh"
 
 __global__ void per_splat_losses_forward_kernel(
     const size_t num_points,

@@ -1,6 +1,6 @@
 #include "ProjectionPackedFwd.cuh"
 
-#include <gsplat/Utils.cuh>
+#include <Common.cuh>
 
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
@@ -10,7 +10,7 @@ namespace cg = cooperative_groups;
 #include <Tensor.h>
 
 
-template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model>
 void projection_packed_mask_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t C,
@@ -25,7 +25,7 @@ void projection_packed_mask_kernel_wrapper(
     bool *__restrict__ intersection_mask  // [C, N]
 );
 
-template<typename SplatPrimitive, ssplat::CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model>
 void projection_packed_fwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t C,
@@ -62,7 +62,7 @@ inline std::tuple<
     const uint32_t C,
     const uint32_t image_width,
     const uint32_t image_height,
-    const ssplat::CameraModelType camera_model,
+    const CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
     DeviceVector<float> radii
 ) {
@@ -80,12 +80,12 @@ inline std::tuple<
             intersection_mask.data_ptr() \
         )
 
-    if (camera_model == ssplat::CameraModelType::PINHOLE)
-        projection_packed_mask_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    else if (camera_model == ssplat::CameraModelType::FISHEYE)
-        projection_packed_mask_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
-    else if (camera_model == ssplat::CameraModelType::EQUISOLID)
-        projection_packed_mask_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::EQUISOLID> _LAUNCH_ARGS;
+    if (camera_model == CameraModelType::PINHOLE)
+        projection_packed_mask_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::FISHEYE)
+        projection_packed_mask_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::EQUISOLID)
+        projection_packed_mask_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -120,12 +120,12 @@ inline std::tuple<
             splats_screen \
         )
 
-    if (camera_model == ssplat::CameraModelType::PINHOLE)
-        projection_packed_fwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    else if (camera_model == ssplat::CameraModelType::FISHEYE)
-        projection_packed_fwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::FISHEYE> _LAUNCH_ARGS;
-    else if (camera_model == ssplat::CameraModelType::EQUISOLID)
-        projection_packed_fwd_kernel_wrapper<SplatPrimitive, ssplat::CameraModelType::EQUISOLID> _LAUNCH_ARGS;
+    if (camera_model == CameraModelType::PINHOLE)
+        projection_packed_fwd_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::FISHEYE)
+        projection_packed_fwd_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::EQUISOLID)
+        projection_packed_fwd_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
