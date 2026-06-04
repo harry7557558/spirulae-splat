@@ -261,7 +261,7 @@ class SpirulaeSplatModelConfig:
     """If enabled, sky from depth map will be used for masking. Alpha loss will always be applied for sky."""
     alpha_loss_weight: float = 0.01
     """Loss weight for alpha, applies when rendered alpha is above reference alpha"""
-    alpha_loss_weight_under: float = 0.005
+    alpha_loss_weight_under: float = 0.0
     """Loss weight for alpha, applies when rendered alpha is below reference alpha"""
     opacity_reg: float = 0.01  # 0.01 for MCMC
     """Encourage low opacity to aid densification, per MCMC."""

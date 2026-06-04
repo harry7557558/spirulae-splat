@@ -220,6 +220,12 @@ float depth_to_point_vjp(
 float3 points_to_normal(
     const float3 points[4] // x-, x+, y-, y+
 ) {
+    if (dot(points[0], points[0]) == 0.0 ||
+        dot(points[1], points[1]) == 0.0 ||
+        dot(points[2], points[2]) == 0.0 ||
+        dot(points[3], points[3]) == 0.0
+    ) return float3(0.0);
+
     float3 dx = points[1] - points[0];
     float3 dy = points[3] - points[2];
     float3 normal = cross(dx, -dy);
@@ -252,6 +258,9 @@ float3 depth_to_normal(
     const bool is_ray_depth,
     const float4 depths  // x-, x+, y-, y+
 ) {
+    if (depths.x == 0.0 || depths.y == 0.0 || depths.z == 0.0 || depths.w == 0.0)
+        return float3(0.0);
+
     float3 points[4];
 
     [ForceUnroll]

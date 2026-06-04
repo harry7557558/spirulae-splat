@@ -571,6 +571,8 @@ __global__ void blit_aabb_bvh_kernel(
     float depth = render_depths.load1(pix_y, pix_x);
     float opac = render_alphas.load1(pix_y, pix_x);
     depth /= fminf(fmaxf(opac, 1e-6f) / 0.5f, 1.0f);
+    if (depth == 0.0f)
+        depth = 1e10f;
 
     float counts[MSAA*MSAA] = {0.0f};
 
@@ -785,6 +787,8 @@ __global__ void blit_with_bvh_kernel(
     float depth = render_depths.load1(pix_y, pix_x);
     float opac = render_alphas.load1(pix_y, pix_x);
     depth /= fminf(fmaxf(opac, 1e-6f) / 0.5f, 1.0f);
+    if (depth == 0.0f)
+        depth = 1e10f;
 
     constexpr int MSAA = 2;
     float4 intrin = view_intrins[0];
