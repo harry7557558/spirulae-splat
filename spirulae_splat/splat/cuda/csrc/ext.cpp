@@ -1,4 +1,5 @@
 #define SLANG_PRELUDE_EXPORT
+#include "Camera.h"
 #include "Common.cuh"
 #include "Engine.h"
 
@@ -245,6 +246,41 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_optim_step", &engine_optim_step);
     m.def("engine_densify_step", &engine_densify_step);
     m.def("engine_train_step", &engine_train_step);
+
+    // ---- DataManager + managed train step ---------------------------------
+    py::enum_<CacheMode>(m, "DataManagerCacheMode")
+        .value("CPU",  CacheMode::CPU)
+        .value("DISK", CacheMode::DISK)
+        .export_values();
+
+    py::class_<DataManagerConfig>(m, "DataManagerConfig")
+        .def(py::init<>())
+        .def_readwrite("cache_mode",       &DataManagerConfig::cache_mode)
+        .def_readwrite("load_masks",       &DataManagerConfig::load_masks)
+        .def_readwrite("load_depths",      &DataManagerConfig::load_depths)
+        .def_readwrite("load_normals",     &DataManagerConfig::load_normals)
+        .def_readwrite("train_batch_size", &DataManagerConfig::train_batch_size)
+        .def_readwrite("val_batch_size",   &DataManagerConfig::val_batch_size)
+        .def_readwrite("seed",             &DataManagerConfig::seed)
+        .def_readwrite("workers_rgb",      &DataManagerConfig::workers_rgb)
+        .def_readwrite("workers_depth",    &DataManagerConfig::workers_depth)
+        .def_readwrite("workers_normal",   &DataManagerConfig::workers_normal)
+        .def_readwrite("prefetch_batches", &DataManagerConfig::prefetch_batches);
+
+    py::enum_<CameraModelType>(m, "CameraModelType")
+        .value("PINHOLE",         CameraModelType::PINHOLE)
+        .value("FISHEYE",         CameraModelType::FISHEYE)
+        .value("EQUISOLID",       CameraModelType::EQUISOLID)
+        .value("EQUIRECTANGULAR", CameraModelType::EQUIRECTANGULAR)
+        .export_values();
+
+    m.def("engine_setup_data_manager",   &engine_setup_data_manager);
+    m.def("engine_train_step_managed",   &engine_train_step_managed);
+
+    // COLMAP / NerfStudio camera-model string -> enum, mirroring
+    // dataparser.py's lookup table. Exposed so Trainer can build the
+    // enum without re-implementing the table on the Python side.
+    m.def("camera_model_from_name", &camera_model_from_name);
     m.def("engine_debug_forward", &engine_debug_forward);
     m.def("engine_copy_accum_buffer", &engine_copy_accum_buffer);
     m.def("engine_get_cur_num_splats", &engine_get_cur_num_splats);

@@ -1,7 +1,13 @@
 // Single-definition storage for the EngineState singleton.
 
+#include "DataManager.h"  // complete type needed for unique_ptr<DataManager> dtor
 #include "Engine.h"
 #include "EngineState.h"
+
+EngineState::EngineState()  = default;
+EngineState::~EngineState() = default;
+EngineState::EngineState(EngineState&&) noexcept = default;
+EngineState& EngineState::operator=(EngineState&&) noexcept = default;
 
 EngineState& engine() {
     static EngineState s;

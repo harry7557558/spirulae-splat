@@ -46,7 +46,6 @@ def get_image_mask_tensor_from_path(filepath: Path, height: int, width: int) -> 
 
 def get_image_from_path(
     filename: Path,
-    scale_factor: float,
 ):
     filename = Path(filename)
     assert filename.exists(), f"File `{filename}` does not exist"
@@ -92,10 +91,6 @@ def get_image_from_path(
     else:
         image = cv2.imread(filename, cv2.IMREAD_UNCHANGED)
     # image = cv2.cvtColor(cv2.imread(image_filename), cv2.COLOR_BGR2RGB)
-    if scale_factor != 1.0:
-        width, height, _ = image.shape
-        newsize = (int(width * scale_factor), int(height * scale_factor))
-        image = cv2.resize(image, newsize, cv2.INTER_LINEAR)
     if len(image.shape) == 2:
         image = image[:, :, None]
     if image.shape[2] == 1:
@@ -112,7 +107,6 @@ def get_depth_image_from_path(
     filepath: Path,
     height: int,
     width: int,
-    scale_factor: float,
     interpolation: int = cv2.INTER_NEAREST,
 ) -> torch.Tensor:
     """Loads, rescales and resizes depth images.
@@ -122,7 +116,6 @@ def get_depth_image_from_path(
         filepath: Path to depth image.
         height: Target depth image height.
         width: Target depth image width.
-        scale_factor: Factor by which to scale depth image.
         interpolation: Depth value interpolation for resizing.
 
     Returns:
@@ -131,11 +124,11 @@ def get_depth_image_from_path(
     filepath = Path(filepath)
     assert filepath.exists(), f"File `{filepath}` does not exist"
     if filepath.suffix == ".npy":
-        image = np.load(filepath).astype(np.float32) * scale_factor
+        image = np.load(filepath).astype(np.float32)
         # image = cv2.resize(image, (width, height), interpolation=interpolation)
     else:
         image = cv2.imread(str(filepath.absolute()), cv2.IMREAD_ANYDEPTH)
-        image = image.astype(np.float32) * scale_factor
+        image = image.astype(np.float32)
         # image = cv2.resize(image, (width, height), interpolation=interpolation)
     return torch.from_numpy(image[:, :, np.newaxis])
 
@@ -169,18 +162,14 @@ class SpirulaeSplatDataset:
 
     Args:
         dataparser_outputs: description of where and how to read input images.
-        scale_factor: The scaling factor for the dataparser outputs
     """
 
-    exclude_batch_keys_from_device: List[str] = ["image", "mask"]
     cameras: Cameras
 
-    def __init__(self, dataparser_outputs: dict, scale_factor: float = 1.0, *args, **kwargs):
+    def __init__(self, dataparser_outputs: dict, *args, **kwargs):
         self._dataparser_outputs = dataparser_outputs
-        self.scale_factor = scale_factor
         self.metadata = deepcopy(dataparser_outputs['metadata'])
         self.cameras = deepcopy(dataparser_outputs['cameras'])
-        self.cameras.rescale(scale_factor)
         self.mask_color = dataparser_outputs['metadata'].get("mask_color", None)
         self.val_indices = set(dataparser_outputs['metadata'].get("val_indices", []))
 
@@ -203,7 +192,7 @@ class SpirulaeSplatDataset:
             image_idx: The image index in the dataset.
         """
         image_filename = self._dataparser_outputs['image_filenames'][image_idx]
-        image = get_image_from_path(image_filename, self.scale_factor)
+        image = get_image_from_path(image_filename)
         assert image.dtype in [np.uint8, np.uint16, np.float16, np.float32], f"Unsupported image dtype {image.dtype} for image {image_filename}"
         assert image.shape[2] in [3, 4], f"Image shape of {image.shape} is in correct."
         return image
@@ -267,7 +256,7 @@ class SpirulaeSplatDataset:
             if self._dataparser_outputs['metadata'].get("depth_filenames", None) is not None:
                 depth_filepath = self._dataparser_outputs['metadata']["depth_filenames"][image_idx]
                 data["depth"] = get_depth_image_from_path(
-                    filepath=depth_filepath, scale_factor=self.scale_factor,
+                    filepath=depth_filepath,
                     width=data["image"].shape[1], height=data["image"].shape[0]
                 )
                 # assert data["depth"].shape[:2] == data["image"].shape[:2]

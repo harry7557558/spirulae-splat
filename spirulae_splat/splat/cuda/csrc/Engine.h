@@ -23,6 +23,7 @@
 #include "BilagridUtils.cuh"
 #include "Visualizer.cuh"
 
+#include "DataManager.h"
 #include "EngineConfig.h"
 
 #include <map>
@@ -219,6 +220,40 @@ std::map<std::string, float> engine_train_step(
     TorchTensorView bilagrid_cam_indices,
     const EngineStepConfig& cfg
 );
+
+
+// --- DataManager-driven training step --------------------------------------
+//
+// Two-call setup + fused per-step pull. `engine_setup_data_manager` installs
+// (or replaces) the engine's DataManager from a parsed dataset; subsequent
+// `engine_train_step_managed(...)` calls pull the next training batch
+// internally and run the same fused forward + loss/bwd + optim + densify
+// pipeline as `engine_train_step`.
+//
+// This is the "engine handles data loading" entrypoint — Python (or any
+// future C++ trainer) no longer constructs per-step GT/camera tensors.
+
+void engine_setup_data_manager(
+    DataManagerConfig         cfg,
+    CameraModelType           model,
+    std::vector<std::string>  image_filenames,
+    std::vector<std::string>  mask_filenames,
+    std::vector<std::string>  depth_filenames,
+    std::vector<std::string>  normal_filenames,
+    std::vector<int32_t>      widths,
+    std::vector<int32_t>      heights,
+    std::vector<float>        viewmats,
+    std::vector<float>        intrins,
+    std::vector<float>        dist_coeffs,
+    std::vector<int32_t>      train_indices,
+    std::vector<int32_t>      val_indices);
+
+std::map<std::string, float> engine_train_step_managed(
+    int step, int max_steps,
+    std::string primitive,
+    int sh_degree,
+    bool packed,
+    const EngineStepConfig& cfg);
 
 // --- Debug rendering ---
 

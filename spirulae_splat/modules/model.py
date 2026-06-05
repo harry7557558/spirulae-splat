@@ -1680,6 +1680,145 @@ class SpirulaeSplatModel(torch.nn.Module):
                     _prof[k] = 0
                 _prof["n"] = 0
 
+    def engine_train_step_managed(self, step: int):
+        """DataManager-driven fused training step.
+
+        The engine pulls the next batch (camera params + RGB/mask/depth/normal)
+        from the C++ DataManager installed by Trainer; this method only computes
+        the per-step Python config (loss weights, LR schedule, bilagrid / PPISP /
+        background args) and dispatches to ``core.engine_train_step_managed``.
+
+        Required precondition: ``Trainer._setup_cpp_data_manager()`` has been
+        called, installing widths/heights/viewmats/intrins/dist_coeffs on the
+        engine side at training-frame scale + supersampling. This entrypoint
+        therefore does NOT touch ``camera`` / ``batch`` — the on-engine state
+        already reflects all per-camera baking.
+        """
+        cfg = self.config
+
+        # Loss weights — identical schedule to engine_train_step.
+        dist_factor = min(step / max(cfg.distortion_reg_warmup, 1), 1.0)
+        reg_active = float(step >= cfg.reg_warmup_length)
+        sup_active = float(step > cfg.supervision_warmup)
+        alpha_reg_factor = cfg.alpha_reg_weight * min(step / max(cfg.alpha_reg_warmup, 1), 1.0)
+        loss_weights = [
+            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda),
+            cfg.l2_lambda * (1.0 - cfg.ssim_lambda),
+            sup_active * cfg.depth_supervision_weight,
+            sup_active * cfg.normal_supervision_weight,
+            cfg.apply_loss_for_mask * cfg.alpha_loss_weight,
+            cfg.apply_loss_for_mask * cfg.alpha_loss_weight_under,
+            reg_active * cfg.normal_reg_weight * dist_factor,
+            reg_active * alpha_reg_factor,
+            reg_active * cfg.rgb_distortion_reg * dist_factor,
+            reg_active * cfg.depth_distortion_reg * dist_factor,
+            reg_active * cfg.normal_distortion_reg * dist_factor,
+        ]
+        w_ssim = cfg.ssim_lambda
+        num_loss_scales = cfg.num_loss_scales + 1
+        compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
+        structure_only_loss_map = cfg.use_structure_only_loss_map
+
+        sh_degree_to_use = step // max(cfg.sh_degree_warmup_every, 1)
+        max_steps = self.trainer_config.num_iterations
+        optim_cfg = self.trainer_config.optimizer
+        max_steps_lr = optim_cfg.max_steps if optim_cfg.max_steps is not None else max_steps
+
+        # Bilagrid lazy init — feed sentinel-bearing dict so _maybe_init_bilagrid
+        # picks up depth/normal availability without an actual batch tensor.
+        synthetic_batch = {}
+        if getattr(self, '_dm_has_depths', False):
+            synthetic_batch['depth'] = True
+        if getattr(self, '_dm_has_normals', False):
+            synthetic_batch['normal'] = True
+        self._maybe_init_bilagrid(synthetic_batch)
+
+        if self._bilagrid_rgb_init:
+            bilagrid_lr_rgb = optim_cfg.get_scheduled_lr('bilagrid', step, max_steps_lr)
+            bilagrid_tv_weight_rgb = cfg.bilagrid_tv_loss_weight
+        else:
+            bilagrid_lr_rgb = 0.0
+            bilagrid_tv_weight_rgb = 0.0
+        if self._bilagrid_depth_init:
+            bilagrid_lr_depth = optim_cfg.get_scheduled_lr('bilagrid_depth', step, max_steps_lr)
+            bilagrid_tv_weight_depth = cfg.bilagrid_tv_loss_weight_geometry
+        else:
+            bilagrid_lr_depth = 0.0
+            bilagrid_tv_weight_depth = 0.0
+        if self._bilagrid_normal_init:
+            bilagrid_lr_normal = optim_cfg.get_scheduled_lr('bilagrid_normal', step, max_steps_lr)
+            bilagrid_tv_weight_normal = cfg.bilagrid_tv_loss_weight_geometry
+        else:
+            bilagrid_lr_normal = 0.0
+            bilagrid_tv_weight_normal = 0.0
+
+        # Background per-step args.
+        if cfg.background_mode == "noise":
+            rw = min(step / max(cfg.background_noise_warmup, 1), 1.0)
+            bg_randomize_weight = 1.0 - (1.0 - cfg.background_noise_pre_warmup) * (1.0 - rw)
+            bg_lr_dc = 0.0
+            bg_lr_sh = 0.0
+        elif cfg.background_mode == "sh":
+            bg_randomize_weight = 0.0
+            bg_lr_dc = optim_cfg.get_scheduled_lr('background_dc', step, max_steps_lr)
+            bg_lr_sh = optim_cfg.get_scheduled_lr('background_sh',    step, max_steps_lr)
+        else:
+            bg_randomize_weight = 0.0
+            bg_lr_dc = 0.0
+            bg_lr_sh = 0.0
+        bg_seed = int(step) & 0x7FFFFFFF
+
+        # PPISP per-step args.
+        if self._ppisp_init:
+            ppisp_lr = optim_cfg.get_scheduled_lr('ppisp', step, max_steps_lr)
+            ppisp_reg_exposure_mean   = cfg.ppisp_reg_exposure_mean
+            ppisp_reg_vig_center      = cfg.ppisp_reg_vig_center
+            ppisp_reg_vig_non_pos     = cfg.ppisp_reg_vig_non_pos
+            ppisp_reg_vig_channel_var = cfg.ppisp_reg_vig_channel_var
+            ppisp_reg_color_mean      = cfg.ppisp_reg_color_mean
+            ppisp_reg_crf_channel_var = cfg.ppisp_reg_crf_channel_var
+        else:
+            ppisp_lr = 0.0
+            ppisp_reg_exposure_mean = 0.0
+            ppisp_reg_vig_center = 0.0
+            ppisp_reg_vig_non_pos = 0.0
+            ppisp_reg_vig_channel_var = 0.0
+            ppisp_reg_color_mean = 0.0
+            ppisp_reg_crf_channel_var = 0.0
+
+        loss_dict = self.core.engine_train_step_managed(
+            step, max_steps,
+            sh_degree_to_use,
+            loss_weights, w_ssim, num_loss_scales,
+            compute_loss_map, structure_only_loss_map,
+            self.config, self.trainer_config.optimizer,
+            bilagrid_lr_rgb=bilagrid_lr_rgb,
+            bilagrid_lr_depth=bilagrid_lr_depth,
+            bilagrid_lr_normal=bilagrid_lr_normal,
+            bilagrid_tv_weight_rgb=bilagrid_tv_weight_rgb,
+            bilagrid_tv_weight_depth=bilagrid_tv_weight_depth,
+            bilagrid_tv_weight_normal=bilagrid_tv_weight_normal,
+            ppisp_lr=ppisp_lr,
+            ppisp_reg_exposure_mean=ppisp_reg_exposure_mean,
+            ppisp_reg_vig_center=ppisp_reg_vig_center,
+            ppisp_reg_vig_non_pos=ppisp_reg_vig_non_pos,
+            ppisp_reg_vig_channel_var=ppisp_reg_vig_channel_var,
+            ppisp_reg_color_mean=ppisp_reg_color_mean,
+            ppisp_reg_crf_channel_var=ppisp_reg_crf_channel_var,
+            bg_lr_dc=bg_lr_dc,
+            bg_lr_sh=bg_lr_sh,
+            bg_randomize_weight=bg_randomize_weight,
+            bg_seed=bg_seed,
+            overexposure_reg_weight=cfg.overexposure_reg,
+        )
+
+        for key, value in loss_dict.items():
+            self.training_verboser.add_metric(key, value)
+        self.training_verboser.add_metric("num_splats",     self.core.cur_num_splats, last_only=True)
+        self.training_verboser.add_metric("max_num_splats", self.core.max_num_splats, last_only=True)
+        self.training_verboser.add_metric("num_sh",         min(sh_degree_to_use, self.config.sh_degree), last_only=True)
+        self.training_verboser.add_metric("max_num_sh",     self.config.sh_degree, last_only=True)
+
     def get_loss_grad(self, outputs, batch, batch_size: int) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict."""
 

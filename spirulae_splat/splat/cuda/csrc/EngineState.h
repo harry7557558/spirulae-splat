@@ -29,8 +29,15 @@
 #include "Visualizer.cuh"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
+
+
+// Forward declaration so EngineState can hold a unique_ptr<DataManager>
+// without dragging the (thread- / queue- / stb_image-heavy) DataManager.h
+// into the dozens of TUs that include EngineState.h.
+class DataManager;
 
 
 // World splat parameters (allocated once at init; persistent on device).
@@ -256,6 +263,20 @@ struct EngineState {
     EngineBackground background;
     PpispState       ppisp;
     ColorSpaceState  color_space;
+
+    // Host-side dataset orchestrator (RGB / mask / depth / normal decode +
+    // batching). Set by engine_setup_data_manager(); when present, the new
+    // engine_train_step_managed() entrypoint pulls per-step inputs from it.
+    std::unique_ptr<DataManager> dm;
+
+    // Out-of-line ctor/dtor (defined in EngineState.cpp) so the
+    // std::unique_ptr<DataManager> deleter only needs the complete type at
+    // one site. Move ops are defaulted so engine_reset() can assign a fresh
+    // EngineState{} (rvalue); copy ops are deleted by the unique_ptr member.
+    EngineState();
+    ~EngineState();
+    EngineState(EngineState&&) noexcept;
+    EngineState& operator=(EngineState&&) noexcept;
 };
 
 

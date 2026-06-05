@@ -199,6 +199,13 @@ class Trainer:
         self.model.core.train_frame_scale = self._train_frame_scale
         # self.optimizers = create_optimizers(self.model, self.config.optimizer)
 
+        # When the C++ DataManager is enabled, install it on the engine once
+        # here. Per-step training will then go through
+        # ``model.engine_train_step_managed`` and bypass the Python data path.
+        self._use_cpp_dm = bool(self.config.datamanager.use_cpp_data_manager)
+        if self._use_cpp_dm:
+            self._setup_cpp_data_manager()
+
         self.output_dir = self._setup_output_dir()
         print(f"Output directory: {self.output_dir.absolute()}")
 
@@ -257,6 +264,146 @@ class Trainer:
             "latency_ms": avg_latency * 1000 if avg_latency else None,
             "paused": self._paused,
         }
+
+    def _setup_cpp_data_manager(self):
+        """Install the C++ DataManager on the engine from the parsed dataset.
+
+        Bakes per-camera viewmats / intrins / dist_coeffs into the same flat
+        layout the engine consumes — same R/T inverse + Y/Z flip + relative
+        scale that ``model.engine_train_step`` would have applied per step,
+        but done ONCE here so the C++ side can hand them to the engine
+        directly each step.
+
+        The managed path is currently restricted to plain, no-frills setups:
+        no camera optimizer, no per-image supersampling factor != 1,
+        no warp_to_pinhole, no equirectangular split, no split_batch,
+        no BVH primitive, and ``mask_color`` substitution must be off.
+        Anything else raises here so the user sees the limitation up front
+        rather than silently quality-regressing.
+        """
+        import spirulae_splat.csrc as _C
+
+        dm_cfg     = self.config.datamanager
+        model_cfg  = self.config.model
+        dpo        = self.dataparser_outputs_train
+
+        # ---- Feature-combination validation ------------------------------
+        if dm_cfg.warp_to_pinhole:
+            raise NotImplementedError("use_cpp_data_manager + warp_to_pinhole")
+        if dm_cfg.split_batch:
+            raise NotImplementedError("use_cpp_data_manager + split_batch")
+        if getattr(model_cfg, 'use_camera_optimizer', False):
+            raise NotImplementedError("use_cpp_data_manager + use_camera_optimizer")
+        supersampling = int(getattr(model_cfg, 'supersampling', 1))
+        if supersampling != 1:
+            raise NotImplementedError(
+                f"use_cpp_data_manager + supersampling={supersampling} (only 1 supported)")
+        if self.model.core.primitive not in ('3dgs', 'mip', '3dgut') or self.model.core.use_bvh:
+            raise NotImplementedError("use_cpp_data_manager requires non-BVH 3dgs/mip/3dgut primitive")
+        if dpo['metadata'].get('mask_color', None) is not None:
+            raise NotImplementedError("use_cpp_data_manager + mask_color")
+
+        cameras = dpo['cameras']
+        N = len(cameras)
+        if N == 0:
+            raise RuntimeError("use_cpp_data_manager: empty cameras")
+
+        # Uniform camera_model is required (the engine dispatches by enum once
+        # per step). The dataparser guarantees the list-of-strings convention.
+        cam_types = [str(t).upper() for t in cameras.camera_type]
+        if len(set(cam_types)) > 1:
+            raise NotImplementedError(
+                f"use_cpp_data_manager: non-uniform camera_type {set(cam_types)}")
+        cam_model_str = cam_types[0]
+        model_enum = _C.camera_model_from_name(cam_model_str) if hasattr(_C, 'camera_model_from_name') \
+            else getattr(_C.CameraModelType, cam_model_str)
+
+        # ---- Bake viewmats from c2w (R, T inverse + Y/Z flip + relative_scale)
+        # Mirrors lines 1446-1457 of model.engine_train_step. Done once on CPU.
+        c2w = cameras.camera_to_worlds.detach().cpu()
+        if c2w.dim() == 2:
+            c2w = c2w.unsqueeze(0)
+        c2w = c2w.float()  # [N, 3, 4]
+        R = c2w[:, :3, :3].clone()
+        T = c2w[:, :3, 3:4].clone()
+        if model_cfg.relative_scale is not None:
+            T = T * float(model_cfg.relative_scale)
+        R = R * torch.tensor([[[1.0, -1.0, -1.0]]])
+        R_inv = R.transpose(-1, -2)
+        T_inv = -torch.bmm(R_inv, T)
+        viewmats = torch.eye(4).unsqueeze(0).repeat(N, 1, 1).float()
+        viewmats[:, :3, :3] = R_inv
+        viewmats[:, :3, 3:4] = T_inv
+
+        # ---- Intrins + dist_coeffs ---------------------------------------
+        intrins = cameras.intrins.detach().cpu().float()
+        if intrins.dim() == 1:
+            intrins = intrins.unsqueeze(0).repeat(N, 1)
+        if cameras.distortion_params is None:
+            dist_coeffs = torch.zeros(N, 10, dtype=torch.float32)
+        else:
+            dist_coeffs = cameras.distortion_params.detach().cpu().float()
+            if dist_coeffs.dim() == 1:
+                dist_coeffs = dist_coeffs.unsqueeze(0).repeat(N, 1)
+            if dist_coeffs.shape[1] < 10:
+                pad = torch.zeros(N, 10 - dist_coeffs.shape[1], dtype=torch.float32)
+                dist_coeffs = torch.cat([dist_coeffs, pad], dim=1)
+
+        widths  = [int(w) for w in cameras.width.detach().cpu().flatten().tolist()]
+        heights = [int(h) for h in cameras.height.detach().cpu().flatten().tolist()]
+
+        # ---- File-path lists --------------------------------------------
+        def _strs(seq):
+            return [str(p) for p in seq] if seq is not None else []
+
+        image_filenames  = _strs(dpo['image_filenames'])
+        mask_filenames   = _strs(dpo.get('mask_filenames', None))
+        depth_filenames  = _strs(dpo['metadata'].get('depth_filenames',  None)) if dm_cfg.load_depths  else []
+        normal_filenames = _strs(dpo['metadata'].get('normal_filenames', None)) if dm_cfg.load_normals else []
+
+        # ---- Train / val split -------------------------------------------
+        val_set = set(int(i) for i in self.dataset_train.val_indices)
+        train_indices = [i for i in range(N) if i not in val_set]
+        val_indices   = sorted(val_set)
+
+        # Effective batch sizes — reuse the Python datamanager's policy so
+        # behavior matches at iteration scale.
+        train_bs = max(1, self.datamanager.train_batch_size(stochastic=False))
+        val_bs   = max(1, self.datamanager.val_batch_size(stochastic=False)) if val_indices else 1
+
+        # ---- Build the DataManagerConfig --------------------------------
+        cmap = {
+            "cpu":          _C.DataManagerCacheMode.CPU,
+            "cpu-pageable": _C.DataManagerCacheMode.CPU,
+            "disk":         _C.DataManagerCacheMode.DISK,
+        }
+        cache_key = dm_cfg.cache_images
+        if cache_key not in cmap:
+            raise NotImplementedError(
+                f"use_cpp_data_manager: cache_images='{cache_key}' (only "
+                "'cpu', 'cpu-pageable', or 'disk' are supported)")
+
+        c_cfg = _C.DataManagerConfig()
+        c_cfg.cache_mode       = cmap[cache_key]
+        c_cfg.load_masks       = (len(mask_filenames) > 0)
+        c_cfg.load_depths      = (len(depth_filenames) > 0)
+        c_cfg.load_normals     = (len(normal_filenames) > 0)
+        c_cfg.train_batch_size = train_bs
+        c_cfg.val_batch_size   = val_bs
+
+        _C.engine_setup_data_manager(
+            c_cfg, model_enum,
+            image_filenames, mask_filenames, depth_filenames, normal_filenames,
+            widths, heights,
+            viewmats.contiguous().flatten().tolist(),
+            intrins.contiguous().flatten().tolist(),
+            dist_coeffs.contiguous().flatten().tolist(),
+            train_indices, val_indices)
+
+        # Pass through to the model so engine_train_step_managed knows which
+        # bilagrid lazy-init branches are actually live this run.
+        self.model._dm_has_depths  = c_cfg.load_depths
+        self.model._dm_has_normals = c_cfg.load_normals
 
     def _setup_output_dir(self):
         if self.config.output_dir_name is not None:
@@ -346,28 +493,34 @@ class Trainer:
         self.model.step_cb(step)
         if PROFILE_TRAIN_STEP: t1 = _t()
 
-        inputs = self.datamanager.next_train(step, self.config.num_iterations)  # type: List[Tuple[Cameras, Dict]]
-        if isinstance(inputs, tuple):
-            train_inputs, val_inputs = inputs
-            if len(train_inputs) > 1 or len(val_inputs) > 1:
-                raise NotImplementedError("Validation with split_batch is not supported")  # TODO
-            train_inputs, val_inputs = train_inputs[0], val_inputs[0]
-            inputs = [((train_inputs[0], val_inputs[0]), (train_inputs[1], val_inputs[1]))]
-        if PROFILE_TRAIN_STEP: t2 = _t()
+        if self._use_cpp_dm:
+            # Managed path: engine pulls the next batch from its DataManager.
+            # Python doesn't touch GT / camera tensors per step.
+            if PROFILE_TRAIN_STEP: t2 = _t()
+            self.model.engine_train_step_managed(step)
+        else:
+            inputs = self.datamanager.next_train(step, self.config.num_iterations)  # type: List[Tuple[Cameras, Dict]]
+            if isinstance(inputs, tuple):
+                train_inputs, val_inputs = inputs
+                if len(train_inputs) > 1 or len(val_inputs) > 1:
+                    raise NotImplementedError("Validation with split_batch is not supported")  # TODO
+                train_inputs, val_inputs = train_inputs[0], val_inputs[0]
+                inputs = [((train_inputs[0], val_inputs[0]), (train_inputs[1], val_inputs[1]))]
+            if PROFILE_TRAIN_STEP: t2 = _t()
 
-        if len(inputs) != 1:
-            raise NotImplementedError()
-        for i, (camera, batch) in enumerate(inputs):
-            # Engine path: fused C++ training step (no render output H↔D copy)
-            if (self.model.core.primitive in ['3dgs', 'mip', '3dgut']
-                    and not self.model.core.use_bvh
-                    and not isinstance(camera, tuple)):
-                self.model.engine_train_step(camera, batch)
-            else:
-                model_outputs = self.model.get_outputs(camera)
-                loss_grad = self.model.get_loss_grad(model_outputs, batch, len(inputs))
-                self.model.backward(model_outputs, loss_grad)
-                self.model.optim_step()
+            if len(inputs) != 1:
+                raise NotImplementedError()
+            for i, (camera, batch) in enumerate(inputs):
+                # Engine path: fused C++ training step (no render output H↔D copy)
+                if (self.model.core.primitive in ['3dgs', 'mip', '3dgut']
+                        and not self.model.core.use_bvh
+                        and not isinstance(camera, tuple)):
+                    self.model.engine_train_step(camera, batch)
+                else:
+                    model_outputs = self.model.get_outputs(camera)
+                    loss_grad = self.model.get_loss_grad(model_outputs, batch, len(inputs))
+                    self.model.backward(model_outputs, loss_grad)
+                    self.model.optim_step()
 
         if PROFILE_TRAIN_STEP:
             t3 = _t()

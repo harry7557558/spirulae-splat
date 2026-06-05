@@ -499,6 +499,63 @@ class Renderer:
         self.sh_degree_to_use = sh_degree_to_use
         return result
 
+    def engine_train_step_managed(self, step, max_steps,
+                                  sh_degree_to_use,
+                                  loss_weights, w_ssim, num_loss_scales,
+                                  compute_loss_map, structure_only_loss_map,
+                                  model_config, optim_config,
+                                  bilagrid_lr_rgb=0.0, bilagrid_lr_depth=0.0,
+                                  bilagrid_lr_normal=0.0,
+                                  bilagrid_tv_weight_rgb=0.0,
+                                  bilagrid_tv_weight_depth=0.0,
+                                  bilagrid_tv_weight_normal=0.0,
+                                  ppisp_lr=0.0,
+                                  ppisp_reg_exposure_mean=0.0, ppisp_reg_vig_center=0.0,
+                                  ppisp_reg_vig_non_pos=0.0, ppisp_reg_vig_channel_var=0.0,
+                                  ppisp_reg_color_mean=0.0, ppisp_reg_crf_channel_var=0.0,
+                                  bg_lr_dc=0.0, bg_lr_sh=0.0,
+                                  bg_randomize_weight=0.0, bg_seed=0,
+                                  overexposure_reg_weight=0.0):
+        """DataManager-driven fused training step.
+
+        Same EngineStepConfig as ``engine_train_step`` but no per-batch tensors —
+        the C++ engine pulls the next batch from its installed DataManager
+        (see ``_C.engine_setup_data_manager``) and dispatches the fused
+        forward + loss/bwd + optim + densify pipeline. Returns the same
+        loss_dict shape."""
+        max_steps_lr = optim_config.max_steps if optim_config.max_steps is not None else max_steps
+
+        cfg = _C.EngineStepConfig()
+        cfg.loss.weights          = loss_weights
+        cfg.loss.w_ssim           = float(w_ssim)
+        cfg.loss.num_loss_scales  = int(num_loss_scales)
+        cfg.loss.compute_loss_map = bool(compute_loss_map)
+        cfg.loss.structure_only_loss_map = bool(structure_only_loss_map)
+        cfg.loss.overexposure_reg_weight = float(overexposure_reg_weight)
+        cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
+        cfg.densify  = self._build_densify_config(model_config)
+        cfg.bilagrid = self._build_bilagrid_step_config(
+            bilagrid_lr_rgb, bilagrid_lr_depth, bilagrid_lr_normal,
+            bilagrid_tv_weight_rgb, bilagrid_tv_weight_depth, bilagrid_tv_weight_normal)
+        cfg.ppisp    = self._build_ppisp_step_config(
+            ppisp_lr, ppisp_reg_exposure_mean, ppisp_reg_vig_center,
+            ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,
+            ppisp_reg_color_mean, ppisp_reg_crf_channel_var)
+        cfg.background = self._build_background_step_config(
+            bg_lr_dc, bg_lr_sh, bg_randomize_weight, bg_seed)
+
+        result = _C.engine_train_step_managed(
+            step, max_steps,
+            self.primitive, sh_degree_to_use, self.packed,
+            cfg,
+        )
+        num_added = int(result.pop("num_added", 0))
+        result.pop("cur_num_splats", None)
+        result.pop("max_num_splats", None)
+        self.cur_num_splats += num_added
+        self.sh_degree_to_use = sh_degree_to_use
+        return result
+
     def engine_densify_step(self, step, max_steps, model_config):
         """Run densification step via C++ Engine. All tensors managed by C++ pool."""
         num_added = _C.engine_densify_step(step, max_steps,
