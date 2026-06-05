@@ -275,9 +275,8 @@ class Trainer:
         directly each step.
 
         The managed path is currently restricted to plain, no-frills setups:
-        no camera optimizer, no per-image supersampling factor != 1,
-        no warp_to_pinhole, no equirectangular split, no split_batch,
-        no BVH primitive, and ``mask_color`` substitution must be off.
+        no camera optimizer, no warp_to_pinhole, no equirectangular split,
+        no split_batch, no BVH primitive.
         Anything else raises here so the user sees the limitation up front
         rather than silently quality-regressing.
         """
@@ -288,30 +287,20 @@ class Trainer:
         dpo        = self.dataparser_outputs_train
 
         # ---- Feature-combination validation ------------------------------
-        if dm_cfg.warp_to_pinhole:
-            raise NotImplementedError("use_cpp_data_manager + warp_to_pinhole")
         if dm_cfg.split_batch:
             raise NotImplementedError("use_cpp_data_manager + split_batch")
         if getattr(model_cfg, 'use_camera_optimizer', False):
             raise NotImplementedError("use_cpp_data_manager + use_camera_optimizer")
-        supersampling = int(getattr(model_cfg, 'supersampling', 1))
-        if supersampling != 1:
-            raise NotImplementedError(
-                f"use_cpp_data_manager + supersampling={supersampling} (only 1 supported)")
         if self.model.core.primitive not in ('3dgs', 'mip', '3dgut') or self.model.core.use_bvh:
             raise NotImplementedError("use_cpp_data_manager requires non-BVH 3dgs/mip/3dgut primitive")
-        if dpo['metadata'].get('mask_color', None) is not None:
-            raise NotImplementedError("use_cpp_data_manager + mask_color")
 
         cameras = dpo['cameras']
         N = len(cameras)
         if N == 0:
             raise RuntimeError("use_cpp_data_manager: empty cameras")
 
-        # Mixed camera models (e.g. pinhole + fisheye in one dataset) are OK:
-        # the C++ DataManager partitions images into groups by (W, H, model),
-        # and engine_train_step dispatches the per-batch model. We pass a
-        # per-camera enum int.
+        # Per-camera model enum int. Mixed models OK -- the C++ DataManager
+        # partitions by (W, H, model).
         cam_types = [str(t).upper() for t in cameras.camera_type]
         camera_models = []
         for s in cam_types:
@@ -319,39 +308,140 @@ class Trainer:
                 else getattr(_C.CameraModelType, s)
             camera_models.append(int(e))
 
-        # ---- Bake viewmats from c2w (R, T inverse + Y/Z flip + relative_scale)
-        # Mirrors lines 1446-1457 of model.engine_train_step. Done once on CPU.
-        c2w = cameras.camera_to_worlds.detach().cpu()
-        if c2w.dim() == 2:
-            c2w = c2w.unsqueeze(0)
-        c2w = c2w.float()  # [N, 3, 4]
-        R = c2w[:, :3, :3].clone()
-        T = c2w[:, :3, 3:4].clone()
+        # Per-camera input shape.
+        widths  = [int(w) for w in cameras.width.detach().cpu().flatten().tolist()]
+        heights = [int(h) for h in cameras.height.detach().cpu().flatten().tolist()]
+
+        # ---- Warp-to-pinhole split factor per camera --------------------
+        # FISHEYE / EQUISOLID -> K=5 when warp_to_pinhole is on.
+        # EQUIRECTANGULAR    -> K=6 always (regardless of flag).
+        # everything else    -> K=1 (pass-through).
+        from spirulae_splat.modules.camera import CameraType
+        PINHOLE_VAL  = int(_C.camera_model_from_name("PINHOLE"))
+        FISHEYE_VAL  = int(_C.camera_model_from_name("FISHEYE"))
+        EQUISOLID_VAL = int(_C.camera_model_from_name("EQUISOLID"))
+        EQUIRECT_VAL  = int(_C.camera_model_from_name("EQUIRECTANGULAR"))
+        K_per_camera = []
+        for cm in camera_models:
+            if cm == EQUIRECT_VAL:
+                K_per_camera.append(6)
+            elif dm_cfg.warp_to_pinhole and cm in (FISHEYE_VAL, EQUISOLID_VAL):
+                K_per_camera.append(5)
+            else:
+                K_per_camera.append(1)
+        any_warp = any(k > 1 for k in K_per_camera)
+        post_offsets = []
+        acc = 0
+        for k in K_per_camera:
+            post_offsets.append(acc); acc += k
+        n_post = acc
+
+        # Warp path cannot supply depth / normal / PPISP supervision.
+        if any_warp:
+            if dm_cfg.load_depths and dpo['metadata'].get('depth_filenames', None):
+                raise NotImplementedError(
+                    "use_cpp_data_manager warp (fisheye/equirectangular split) "
+                    "does not support depth supervision yet.")
+            if dm_cfg.load_normals and dpo['metadata'].get('normal_filenames', None):
+                raise NotImplementedError(
+                    "use_cpp_data_manager warp does not support normal supervision yet.")
+            if getattr(model_cfg, 'use_ppisp', False):
+                raise NotImplementedError(
+                    "use_cpp_data_manager warp does not support PPISP yet.")
+
+        # ---- Per-INPUT c2w / intrins / dist_coeffs (raw, host) ----------
+        c2w_all = cameras.camera_to_worlds.detach().cpu()
+        if c2w_all.dim() == 2:
+            c2w_all = c2w_all.unsqueeze(0)
+        c2w_all = c2w_all.float()  # [N, 3, 4]
+
+        input_intrins = cameras.intrins.detach().cpu().float()
+        if input_intrins.dim() == 1:
+            input_intrins = input_intrins.unsqueeze(0).repeat(N, 1)
+        if cameras.distortion_params is None:
+            input_dist_coeffs = torch.zeros(N, 10, dtype=torch.float32)
+        else:
+            input_dist_coeffs = cameras.distortion_params.detach().cpu().float()
+            if input_dist_coeffs.dim() == 1:
+                input_dist_coeffs = input_dist_coeffs.unsqueeze(0).repeat(N, 1)
+            if input_dist_coeffs.shape[1] < 10:
+                pad = torch.zeros(N, 10 - input_dist_coeffs.shape[1], dtype=torch.float32)
+                input_dist_coeffs = torch.cat([input_dist_coeffs, pad], dim=1)
+
+        # ---- Expand to POST-split c2w / intrins / dist_coeffs ------------
+        # Same algebra as modules/resample.py warp_*_to_pinhole, but on cameras
+        # only (no images): apply diag(1, -1, -1) flip on c2w R, rotate by the
+        # cubemap axis, flip back; copy T. Output intrins are canonical
+        # PINHOLE at fx=fy=cx=cy=out_shape/2; dist_coeffs are all zero.
+        import math
+        # 5- and 6-face cubemap axis tables (must match the C++ axes in
+        # DataManager.cpp's kAxesFisheye5 / kAxesEquirect6).
+        axes_5 = torch.tensor([
+            [[1,0,0],[0,1,0],[0,0,1]],
+            [[0,1,0],[0,0,1],[1,0,0]],
+            [[-1,0,0],[0,0,1],[0,1,0]],
+            [[0,-1,0],[0,0,1],[-1,0,0]],
+            [[1,0,0],[0,0,1],[0,-1,0]],
+        ], dtype=torch.float32)
+        axes_6 = torch.tensor([
+            [[1,0,0],[0,1,0],[0,0,1]],
+            [[0,0,-1],[0,1,0],[1,0,0]],
+            [[-1,0,0],[0,0,1],[0,1,0]],
+            [[0,-1,0],[0,0,1],[-1,0,0]],
+            [[1,0,0],[0,0,1],[0,-1,0]],
+            [[1,0,0],[0,-1,0],[0,0,-1]],
+        ], dtype=torch.float32)
+        D = torch.tensor([1.0, -1.0, -1.0])  # diag flip applied per face
+
+        post_c2w     = torch.zeros(n_post, 3, 4, dtype=torch.float32)
+        post_intrins = torch.zeros(n_post, 4, dtype=torch.float32)
+        post_dist    = torch.zeros(n_post, 10, dtype=torch.float32)
+        for i in range(N):
+            k_i = K_per_camera[i]
+            off = post_offsets[i]
+            ci  = c2w_all[i]  # [3, 4]
+            if k_i == 1:
+                post_c2w[off]     = ci
+                post_intrins[off] = input_intrins[i]
+                post_dist[off]    = input_dist_coeffs[i]
+                continue
+            # Pick the right axes table.
+            axes = axes_6 if k_i == 6 else axes_5
+            out_shape = int(math.ceil(math.sqrt(heights[i] * widths[i] / k_i)))
+            # Same algebra as modules/resample.py:
+            #   R' = R_orig * diag(1, -1, -1)             # OpenGL -> OpenCV flip
+            #   R_warp[k] = R' @ axes[k]^T                # cubemap rotation in OpenCV
+            #   R_post[k] = R_warp[k] * diag(1, -1, -1)   # OpenCV -> OpenGL flip
+            # The earlier `axes[k] @ R` form was wrong (left-multiply instead
+            # of right-multiply by axes^T); for face 0 it happened to give
+            # the right answer (axes[0] = I), so the bug only showed up for
+            # the non-identity faces -- exactly the symptom the user saw
+            # (a blurry / messy render after warp).
+            R = ci[:3, :3] * D[None, :]                  # [3, 3]
+            for k in range(k_i):
+                R_new = (R @ axes[k].T) * D[None, :]     # [3, 3]
+                post_c2w[off + k, :3, :3] = R_new
+                post_c2w[off + k, :3, 3]  = ci[:3, 3]
+                # Canonical pinhole intrins for the sub-image.
+                s = float(out_shape) / 2.0
+                post_intrins[off + k] = torch.tensor([s, s, s, s])
+                # Dist coeffs already zero.
+
+        # ---- c2w -> viewmat (R/T inverse + Y/Z flip + relative_scale) ---
+        # Matches model.engine_train_step's per-step formula.
+        R_v = post_c2w[:, :3, :3].clone()
+        T_v = post_c2w[:, :3, 3:4].clone()
         if model_cfg.relative_scale is not None:
-            T = T * float(model_cfg.relative_scale)
-        R = R * torch.tensor([[[1.0, -1.0, -1.0]]])
-        R_inv = R.transpose(-1, -2)
-        T_inv = -torch.bmm(R_inv, T)
-        viewmats = torch.eye(4).unsqueeze(0).repeat(N, 1, 1).float()
+            T_v = T_v * float(model_cfg.relative_scale)
+        R_v = R_v * torch.tensor([[[1.0, -1.0, -1.0]]])
+        R_inv = R_v.transpose(-1, -2)
+        T_inv = -torch.bmm(R_inv, T_v)
+        viewmats = torch.eye(4).unsqueeze(0).repeat(n_post, 1, 1).float()
         viewmats[:, :3, :3] = R_inv
         viewmats[:, :3, 3:4] = T_inv
 
-        # ---- Intrins + dist_coeffs ---------------------------------------
-        intrins = cameras.intrins.detach().cpu().float()
-        if intrins.dim() == 1:
-            intrins = intrins.unsqueeze(0).repeat(N, 1)
-        if cameras.distortion_params is None:
-            dist_coeffs = torch.zeros(N, 10, dtype=torch.float32)
-        else:
-            dist_coeffs = cameras.distortion_params.detach().cpu().float()
-            if dist_coeffs.dim() == 1:
-                dist_coeffs = dist_coeffs.unsqueeze(0).repeat(N, 1)
-            if dist_coeffs.shape[1] < 10:
-                pad = torch.zeros(N, 10 - dist_coeffs.shape[1], dtype=torch.float32)
-                dist_coeffs = torch.cat([dist_coeffs, pad], dim=1)
-
-        widths  = [int(w) for w in cameras.width.detach().cpu().flatten().tolist()]
-        heights = [int(h) for h in cameras.height.detach().cpu().flatten().tolist()]
+        intrins     = post_intrins
+        dist_coeffs = post_dist
 
         # ---- File-path lists --------------------------------------------
         def _strs(seq):
@@ -387,19 +477,34 @@ class Trainer:
         c_cfg = _C.DataManagerConfig()
         c_cfg.cache_mode       = cmap[cache_key]
         c_cfg.load_masks       = (len(mask_filenames) > 0)
-        c_cfg.load_depths      = (len(depth_filenames) > 0)
-        c_cfg.load_normals     = (len(normal_filenames) > 0)
+        c_cfg.load_depths      = (len(depth_filenames) > 0 and not any_warp)
+        c_cfg.load_normals     = (len(normal_filenames) > 0 and not any_warp)
         c_cfg.train_batch_size = train_bs
         c_cfg.val_batch_size   = val_bs
+        c_cfg.warp_to_pinhole  = bool(dm_cfg.warp_to_pinhole)
+
+        # Input intrins / dist_coeffs are needed by the wide warp kernel
+        # (fisheye / equisolid). Pass them even when only equirectangular
+        # warp is active -- the equirectangular kernel just ignores them.
+        input_intrins_list     = input_intrins.contiguous().flatten().tolist() if any_warp else []
+        input_dist_coeffs_list = input_dist_coeffs.contiguous().flatten().tolist() if any_warp else []
 
         _C.engine_setup_data_manager(
             c_cfg, camera_models,
             image_filenames, mask_filenames, depth_filenames, normal_filenames,
             widths, heights,
+            K_per_camera, post_offsets,
             viewmats.contiguous().flatten().tolist(),
             intrins.contiguous().flatten().tolist(),
             dist_coeffs.contiguous().flatten().tolist(),
+            input_intrins_list, input_dist_coeffs_list,
             train_indices, val_indices)
+
+        # When the warp path is active, the bilagrid table is sized to the
+        # POST-split camera count -- override the model's num_train_data
+        # accordingly (the model's own pre-init guess uses a uniform K).
+        if any_warp:
+            self.model.num_train_data = int(n_post)
 
         # Pass through to the model so engine_train_step_managed knows which
         # bilagrid lazy-init branches are actually live this run.
@@ -499,6 +604,22 @@ class Trainer:
             # Python doesn't touch GT / camera tensors per step.
             if PROFILE_TRAIN_STEP: t2 = _t()
             self.model.engine_train_step_managed(step)
+            # Optional: dump GT + render at specific steps for visual debugging.
+            # Enable with e.g. `SS_DEBUG_DUMP_STEPS=0,1,10,100 SS_DEBUG_DUMP_DIR=debug ss-train ...`
+            import os as _os
+            _dump_steps = _os.environ.get("SS_DEBUG_DUMP_STEPS", "")
+            if _dump_steps:
+                try:
+                    _steps = {int(s) for s in _dump_steps.split(",") if s.strip()}
+                except ValueError:
+                    _steps = set()
+                if step in _steps:
+                    from spirulae_splat.modules import debug_image as _dbg
+                    _dir = _os.environ.get("SS_DEBUG_DUMP_DIR", "debug")
+                    prefix = f"{_dir}/step{step:06d}"
+                    arrs = _dbg.dump_engine_step(prefix)
+                    for k, a in arrs.items():
+                        print(f"[debug_image] {prefix}_{k}: {_dbg.buffer_stats(a)}", flush=True)
         else:
             inputs = self.datamanager.next_train(step, self.config.num_iterations)  # type: List[Tuple[Cameras, Dict]]
             if isinstance(inputs, tuple):

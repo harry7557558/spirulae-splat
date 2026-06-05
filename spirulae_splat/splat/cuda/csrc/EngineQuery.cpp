@@ -79,6 +79,48 @@ void engine_copy_splats_to_host(
 }
 
 
+// ---------------------------------------------------------------------------
+// Debug introspection helpers. These pull the current engine training-data
+// + rendered images back to host so a Python utility can save / display them
+// for visual debugging (especially useful for the warp-to-pinhole path
+// where the on-engine GT is generated on GPU and never seen by Python).
+// ---------------------------------------------------------------------------
+
+// Shape getters: callers use these to size the host buffer before calling
+// the copy. Returns (B, H, W, C); zeros when the buffer is empty.
+std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_gt_rgb_shape() {
+    auto& t = engine().gt.rgb;
+    if (t.data_ptr() == nullptr) return {0, 0, 0, 0};
+    return {t.template size<0>(), t.template size<1>(), t.template size<2>(), 3LL};
+}
+
+std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_gt_alpha_shape() {
+    auto& t = engine().gt.alpha;
+    if (t.data_ptr() == nullptr) return {0, 0, 0, 0};
+    return {t.template size<0>(), t.template size<1>(), t.template size<2>(), 1LL};
+}
+
+std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_render_rgb_shape() {
+    auto& t = std::get<0>(engine().fwd.renders);
+    if (t.data_ptr() == nullptr) return {0, 0, 0, 0};
+    return {t.template size<0>(), t.template size<1>(), t.template size<2>(), 3LL};
+}
+
+void engine_copy_gt_rgb_to_host(TorchTensorView out) {
+    auto& t = engine().gt.rgb;
+    if (t.data_ptr() == nullptr || std::get<0>(out) == 0) return;
+    cudaMemcpy((void*)std::get<0>(out), t.data_ptr(),
+               t.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+}
+
+void engine_copy_gt_alpha_to_host(TorchTensorView out) {
+    auto& t = engine().gt.alpha;
+    if (t.data_ptr() == nullptr || std::get<0>(out) == 0) return;
+    cudaMemcpy((void*)std::get<0>(out), t.data_ptr(),
+               t.numel() * sizeof(bool), cudaMemcpyDeviceToHost);
+}
+
+
 std::vector<std::tuple<std::string, size_t, size_t>> engine_get_pool_breakdown() {
     return DevicePool::global().getBreakdown();
 }

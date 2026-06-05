@@ -29,9 +29,13 @@ void engine_setup_data_manager(
     std::vector<std::string>  normal_filenames,
     std::vector<int32_t>      widths,
     std::vector<int32_t>      heights,
+    std::vector<int32_t>      K_per_camera,
+    std::vector<int32_t>      post_offsets,
     std::vector<float>        viewmats,
     std::vector<float>        intrins,
     std::vector<float>        dist_coeffs,
+    std::vector<float>        input_intrins,
+    std::vector<float>        input_dist_coeffs,
     std::vector<int32_t>      train_indices,
     std::vector<int32_t>      val_indices)
 {
@@ -44,8 +48,10 @@ void engine_setup_data_manager(
         std::move(image_filenames),  std::move(mask_filenames),
         std::move(depth_filenames),  std::move(normal_filenames),
         std::move(widths),           std::move(heights),
+        std::move(K_per_camera),     std::move(post_offsets),
         std::move(viewmats),         std::move(intrins),
         std::move(dist_coeffs),
+        std::move(input_intrins),    std::move(input_dist_coeffs),
         std::move(train_indices),    std::move(val_indices));
 }
 
@@ -65,19 +71,55 @@ std::map<std::string, float> engine_train_step_managed(
 
     const DecodedBatch& b = engine().dm->next_train_batch();
 
-    // Bilagrid / PPISP cam selector — reuse the batch's dataset indices.
-    // The DataManager guarantees indices is non-null and length == b.num.
+    // Build the per-step bilagrid cam-indices buffer at POST-split size.
+    // For non-warp batches (K == 1) this is just `b.indices`. For warp
+    // batches it expands to {post_offsets[j] + k for j in 0..B_in for k}.
+    // Static buffer so we don't allocate per step.
+    static std::vector<int32_t> _bg_idx_buf;
+    _bg_idx_buf.resize((size_t)b.num);
+    if (b.K == 1) {
+        for (int j = 0; j < b.input_num; ++j) _bg_idx_buf[j] = b.indices[j];
+    } else {
+        int K = b.K;
+        for (int j = 0; j < b.input_num; ++j) {
+            int32_t off = b.post_offsets[j];
+            for (int k = 0; k < K; ++k) _bg_idx_buf[(size_t)j * K + k] = off + k;
+        }
+    }
     TorchTensorView bilagrid_cam_indices(
-        (uint64_t)b.indices.data(), 4,
+        (uint64_t)_bg_idx_buf.data(), 4,
         {(int64_t)b.num, 1LL});
 
-    return engine_train_step(
+    if (b.K <= 1) {
+        // Standard path: GT is already at engine shape, no warp needed.
+        return engine_train_step(
+            step, max_steps,
+            std::move(primitive), sh_degree, packed,
+            (int)b.width, (int)b.height,
+            camera_model_to_string(b.model),
+            b.viewmats_view, b.intrins_view, b.dist_coeffs_view,
+            b.rgb_view, b.depth_view, b.normal_view, b.mask_view,
+            bilagrid_cam_indices,
+            cfg);
+    }
+
+    // ---- Warp path: fisheye / equisolid + warp_to_pinhole OR equirectangular
+    if (std::get<0>(b.depth_view) != 0 || std::get<0>(b.normal_view) != 0) {
+        throw std::runtime_error(
+            "engine_train_step_managed: depth/normal GT not supported when "
+            "warp_to_pinhole splitting is active.");
+    }
+    return engine_train_step_warped(
         step, max_steps,
         std::move(primitive), sh_degree, packed,
         (int)b.width, (int)b.height,
-        camera_model_to_string(b.model),
         b.viewmats_view, b.intrins_view, b.dist_coeffs_view,
-        b.rgb_view, b.depth_view, b.normal_view, b.mask_view,
+        camera_model_to_string(b.input_model),
+        b.input_num, b.input_height, b.input_width, b.K,
+        b.input_intrins_view, b.input_dist_coeffs_view,
+        b.rgb_view, b.mask_view,
+        b.mask_height, b.mask_width,
+        (uint64_t)b.axes_dev,
         bilagrid_cam_indices,
         cfg);
 }

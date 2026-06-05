@@ -99,8 +99,6 @@ class SpirulaeSplatModelConfig:
     """What parameter sets to compute an approximation of Hessian diagonal as well as a Jacobian-residual product in backward pass. Required for second-order optimizer."""
     optimizer_offload: Literal[None, "sh", "all"] = None
     """Whether to offload optimizer momentum to CPU to save VRAM. This is only supported for Adam optimizer."""
-    supersampling: int = 1
-    """Antialiasing by rendering at higher resolution and downsampling to a lower resolution, as per triangle splatting +"""
     resolution_schedule: int = 3000
     """training starts at 1/d resolution, every n steps this is doubled"""
     num_downscales: int = 0
@@ -331,7 +329,15 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         self.num_train_data = len(self.cameras)
 
-        if CameraType.EQUIRECTANGULAR.value in cameras.camera_type:
+        # Pre-init guess at the post-split camera count for the bilagrid table.
+        # When use_cpp_data_manager is on, Trainer._setup_cpp_data_manager
+        # overrides this with the exact per-camera-K sum, so mixed datasets
+        # work even when this guess is approximate.
+        if trainer_config.datamanager.use_cpp_data_manager:
+            # Worst-case upper bound: every camera split 6x. The trainer
+            # downscales to the real per-camera sum right after model init.
+            self.num_train_data *= 6
+        elif CameraType.EQUIRECTANGULAR.value in cameras.camera_type:
             assert len(set(cameras.camera_type)) == 1, "Mixed equirectangular and pinhole/fisheye is not supported"
             self.num_train_data *= 6  # TODO
         elif trainer_config.datamanager.warp_to_pinhole:
@@ -948,9 +954,9 @@ class SpirulaeSplatModel(torch.nn.Module):
         use_bvh = self.config.use_bvh and self.training and not val
         self.core.set_params(
             viewmats=viewmats,  # [C, 4, 4]
-            intrins=intrins * self.config.supersampling,  # [C, 4]
-            width=W * self.config.supersampling,
-            height=H * self.config.supersampling,
+            intrins=intrins,  # [C, 4]
+            width=W,
+            height=H,
             sh_degree_to_use=self.step // max(self.config.sh_degree_warmup_every, 1),
             # packed=True,
             # use_bvh=True,
@@ -965,9 +971,6 @@ class SpirulaeSplatModel(torch.nn.Module):
         Ts = self.core.render_Ts
         meta = self.core.meta
         # torch.cuda.empty_cache()
-        if self.config.supersampling != 1:
-            rgbdn = [resize_image(im, self.config.supersampling) for im in rgbdn]
-            Ts = resize_image(Ts, self.config.supersampling)
 
         # if not self.training:
         #     W = gw*TILE_SIZE
@@ -1051,8 +1054,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             if key in meta:
                 value = meta[key]
                 if value is not None:
-                    if self.config.supersampling != 1:
-                        value = resize_image(value, self.config.supersampling)
                     if not self.training:
                         value = torch.sqrt(value + (1/255)**2) - (1/255)
                     outputs[key] = value
@@ -1455,16 +1456,13 @@ class SpirulaeSplatModel(torch.nn.Module):
         viewmats[:, :3, :3] = R_inv
         viewmats[:, :3, 3:4] = T_inv
         viewmats = viewmats.contiguous()
-        intrins = (camera.intrins * self.config.supersampling).contiguous()
+        intrins = camera.intrins.contiguous()
 
         dist_coeffs = None
         if camera.distortion_params is not None and camera.distortion_params.any():
             dist_coeffs = camera.distortion_params.contiguous()
         if dist_coeffs is None:
             dist_coeffs = torch.zeros(len(camera), 10, dtype=torch.float32, device=viewmats.device)
-
-        W_actual = W * self.config.supersampling
-        H_actual = H * self.config.supersampling
 
         if PROFILE_TRAIN_STEP: _t1 = _t()
         # --- GT data: hand raw bytes to the C++ engine ---
@@ -1616,7 +1614,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         loss_dict = self.core.engine_train_step(
             step, max_steps,
             sh_degree_to_use,
-            W_actual, H_actual, camera_model,
+            W, H, camera_model,
             viewmats, intrins, dist_coeffs,
             gt_rgb, gt_depth, gt_normal, gt_alpha,
             loss_weights, w_ssim, num_loss_scales, compute_loss_map,
@@ -1690,7 +1688,7 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         Required precondition: ``Trainer._setup_cpp_data_manager()`` has been
         called, installing widths/heights/viewmats/intrins/dist_coeffs on the
-        engine side at training-frame scale + supersampling. This entrypoint
+        engine side at training-frame scale. This entrypoint
         therefore does NOT touch ``camera`` / ``batch`` — the on-engine state
         already reflects all per-camera baking.
         """

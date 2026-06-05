@@ -79,6 +79,26 @@ void set_training_data(
     TorchTensorView gt_alpha         // [C, H, W, 1]
 );
 
+
+// Warp-fused GT upload used by engine_train_step_managed when the current
+// batch needs fisheye / equirectangular -> pinhole splitting. The GT RGB
+// (and optionally mask) byte buffer is warped on GPU directly into a
+// post-split float buffer; no full-res float intermediate is allocated.
+// Throws when PPISP is enabled. Depth / normal are silently dropped on
+// this path (the trainer must error before reaching here if they were
+// requested).
+void set_training_data_warped(
+    std::string  input_model_name,    // "FISHEYE" / "EQUISOLID" / "EQUIRECTANGULAR"
+    int B_in, int in_H, int in_W,
+    int K, int out_H, int out_W,
+    TorchTensorView gt_rgb,           // [B_in, in_H, in_W, 3] byte
+    TorchTensorView gt_alpha,         // [B_in, mask_in_H, mask_in_W, 1] uint8 (nullable)
+    int mask_in_H, int mask_in_W,
+    TorchTensorView input_intrins,    // [B_in, 4] float
+    TorchTensorView input_dist_coeffs,// [B_in, 10] float
+    uint64_t axes_dev                 // device float ptr [K, 3, 3]
+);
+
 // --- Forward ---
 
 void forward_3dgs(
@@ -222,6 +242,30 @@ std::map<std::string, float> engine_train_step(
 );
 
 
+// Warp-fused fused train step. Used by engine_train_step_managed when a batch
+// needs fisheye/equirectangular -> pinhole splitting. Camera table is set up
+// at POST-split (B*K) PINHOLE; GT is byte-warped on GPU into a float
+// post-split buffer with no intermediate full-res float image.
+std::map<std::string, float> engine_train_step_warped(
+    int step, int max_steps,
+    std::string primitive, int sh_degree, bool packed,
+    int out_W, int out_H,
+    TorchTensorView post_viewmats,
+    TorchTensorView post_intrins,
+    TorchTensorView post_dist_coeffs,
+    std::string input_camera_model,
+    int B_in, int in_H, int in_W, int K,
+    TorchTensorView input_intrins,
+    TorchTensorView input_dist_coeffs,
+    TorchTensorView gt_rgb_byte,
+    TorchTensorView gt_alpha_byte,
+    int mask_in_H, int mask_in_W,
+    uint64_t axes_dev,
+    TorchTensorView bilagrid_cam_indices,
+    const EngineStepConfig& cfg
+);
+
+
 // --- DataManager-driven training step --------------------------------------
 //
 // Two-call setup + fused per-step pull. `engine_setup_data_manager` installs
@@ -244,9 +288,20 @@ void engine_setup_data_manager(
     std::vector<std::string>  normal_filenames,
     std::vector<int32_t>      widths,
     std::vector<int32_t>      heights,
+    // Per-input split factor + exclusive-prefix-sum offset into the
+    // POST-split camera arrays below. Pass empty vectors to skip the warp
+    // path entirely (K defaults to 1 per camera).
+    std::vector<int32_t>      K_per_camera,
+    std::vector<int32_t>      post_offsets,
+    // POST-split camera params (length sum(K_per_camera) along the first dim).
     std::vector<float>        viewmats,
     std::vector<float>        intrins,
     std::vector<float>        dist_coeffs,
+    // Per-INPUT intrins / dist_coeffs (length N). Required for the wide
+    // warp kernel (fisheye / equisolid); pass empty when no fisheye-warp
+    // camera is in the dataset.
+    std::vector<float>        input_intrins,
+    std::vector<float>        input_dist_coeffs,
     std::vector<int32_t>      train_indices,
     std::vector<int32_t>      val_indices);
 
@@ -275,6 +330,16 @@ int64_t engine_get_cur_num_splats();
 // color space configured, `out_rgb` already holds the same values so the
 // caller can pass null. When the engine has a color space, `out_rgb` is the
 // sRGB post-conversion render and `out_rgb_raw` is the working-space version.
+// Debug introspection: shape + D->H copy for engine().gt.rgb / gt.alpha and
+// fwd.renders.rgb. Used by spirulae_splat.modules.debug_image to visualize
+// what the engine actually sees per step, especially on the warp path.
+std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_gt_rgb_shape();
+std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_gt_alpha_shape();
+std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_render_rgb_shape();
+void engine_copy_gt_rgb_to_host(TorchTensorView out);   // float [B, H, W, 3]
+void engine_copy_gt_alpha_to_host(TorchTensorView out); // bool  [B, H, W, 1]
+
+
 void engine_copy_render_to_host(
     TorchTensorView out_rgb,      // [C, H, W, 3] float32, CPU
     TorchTensorView out_depth,    // [C, H, W, 1] float32, CPU

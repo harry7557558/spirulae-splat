@@ -227,8 +227,6 @@ class SpirulaeSplatDataParserConfig:
     """The interval between frames to use for eval. Only used when eval_mode is eval-interval."""
     depth_unit_scale_factor: float = 1e-3
     """Scales the depth values to meters. Default value is 0.001 for a millimeter to meter conversion."""
-    mask_color: Optional[Tuple[float, float, float]] = None
-    """Replace the unknown pixels with this color. Relevant if you have a mask but still sample everywhere."""
 
     validation_fraction: float = 0.0
     """Use this fraction of training images for validation. Stop training when performance on validation images start to drop."""
@@ -560,7 +558,6 @@ class SpirulaeSplatDataparser:
                     "depth_filenames": depth_filenames_split if len(depth_filenames_split) > 0 else None,
                     "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
                     "normal_filenames": normal_filenames_split if len(normal_filenames_split) > 0 else None,
-                    "mask_color": self.config.mask_color,
                     **metadata,
                 },
             )

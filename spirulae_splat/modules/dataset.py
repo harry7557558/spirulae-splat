@@ -170,7 +170,6 @@ class SpirulaeSplatDataset:
         self._dataparser_outputs = dataparser_outputs
         self.metadata = deepcopy(dataparser_outputs['metadata'])
         self.cameras = deepcopy(dataparser_outputs['cameras'])
-        self.mask_color = dataparser_outputs['metadata'].get("mask_color", None)
         self.val_indices = set(dataparser_outputs['metadata'].get("val_indices", []))
 
         self.thumbnails = torch.empty(
@@ -268,10 +267,6 @@ class SpirulaeSplatDataset:
                     width=data["image"].shape[1], height=data["image"].shape[0]
                 )
                 # assert data["normal"].shape[:2] == data["image"].shape[:2]
-        if self.mask_color:
-            data["image"] = torch.where(
-                data["mask"] == 1.0, data["image"], torch.ones_like(data["image"]) * torch.tensor(self.mask_color)
-            )
 
         metadata = self.get_metadata(data)
         data.update(metadata)

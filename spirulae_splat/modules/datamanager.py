@@ -50,14 +50,14 @@ class SpirulaeSplatDataManagerConfig:
     deblur_training_images: bool = False
     """Whether to use a custom trained deep learning model to deblur images before training"""
 
-    use_cpp_data_manager: bool = False
+    use_cpp_data_manager: bool = True
     """If True, route training data loading + per-step camera/GT prep through the
         C++ DataManager (engine_setup_data_manager + engine_train_step_managed).
         The Python SpirulaeSplatDataManager is still constructed for the
         viewer / eval / render paths, but the training loop bypasses it. Maps
         ``cache_images`` -> CacheMode as: "cpu" / "cpu-pageable" -> CPU,
         "disk" -> DISK. ``warp_to_pinhole``, ``split_batch``,
-        ``model.use_camera_optimizer``, supersampling > 1, and the BVH
+        ``model.use_camera_optimizer``, and the BVH
         primitive are not supported on this path; the trainer raises a clear
         error when those are combined with the flag."""
 

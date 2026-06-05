@@ -306,6 +306,40 @@ void warp_image_equirectangular_to_pinhole_tensor(
 );
 
 
+void launch_warp_byte_to_float_wide(
+    std::string camera_model,
+    const float* d_intrins,                // [B, 4]
+    const float* d_dist_coeffs,            // [B, 10] (nullable -> all-zeros)
+    const void* d_byte, bool input_is_u16,
+    int B, int Hin, int Win, int C,
+    float* d_float_out, int K, int Hout, int Wout,
+    const float* d_axes);
+
+
+void launch_warp_byte_to_float_equi(
+    const void* d_byte, bool input_is_u16,
+    int B, int Hin, int Win, int C,
+    float* d_float_out, int K, int Hout, int Wout,
+    const float* d_axes);
+
+
+void launch_warp_mask_wide(
+    std::string camera_model,
+    const float* d_intrins,                // [B, 4]
+    const float* d_dist_coeffs,            // [B, 10] (nullable)
+    const uint8_t* d_byte_mask,
+    int B, int Hin, int Win,
+    uint8_t* d_byte_out, int K, int Hout, int Wout,
+    const float* d_axes);
+
+
+void launch_warp_mask_equi(
+    const uint8_t* d_byte_mask,
+    int B, int Hin, int Win,
+    uint8_t* d_byte_out, int K, int Hout, int Wout,
+    const float* d_axes);
+
+
 void warp_image_pinhole_to_wide_tensor(
     std::string camera_model,
     TorchTensorView intrins,            // [B, 4]

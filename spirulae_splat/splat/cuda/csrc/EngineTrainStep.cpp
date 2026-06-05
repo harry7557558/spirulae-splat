@@ -9,26 +9,18 @@
 #include <string>
 
 
-std::map<std::string, float> engine_train_step(
+// Inner training step: everything from "data is now in engine().gt + camera
+// table" through optim + densify. Both engine_train_step (caller stages GT
+// via set_training_data) and engine_train_step_warped (caller stages GT via
+// set_training_data_warped) call this.
+std::map<std::string, float> _engine_train_step_after_setup(
     int step, int max_steps,
     std::string primitive,
     int sh_degree,
     bool packed,
-    int width, int height, std::string camera_model,
-    TorchTensorView viewmats,
-    TorchTensorView intrins,
-    TorchTensorView dist_coeffs,
-    TorchTensorView gt_rgb,
-    TorchTensorView gt_depth,
-    TorchTensorView gt_normal,
-    TorchTensorView gt_alpha,
     TorchTensorView bilagrid_cam_indices,
     const EngineStepConfig& cfg
 ) {
-    // Camera + GT: H->D copy into pool
-    set_camera_params(width, height, camera_model, viewmats, intrins, dist_coeffs);
-    set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha);
-
     // Propagate the fused projection-bwd+optim flag to engine state BEFORE
     // forward/loss so engine_compute_loss_backward can skip projection_*_backward
     // and stash v_splats_s for the fused optim call below.
@@ -123,4 +115,68 @@ std::map<std::string, float> engine_train_step(
     loss_dict["cur_num_splats"] = (float)engine().cur_num_splats;
     loss_dict["max_num_splats"] = (float)engine().max_num_splats;
     return loss_dict;
+}
+
+
+// Standard (non-warp) public entry: stage camera + GT then run the inner step.
+std::map<std::string, float> engine_train_step(
+    int step, int max_steps,
+    std::string primitive,
+    int sh_degree,
+    bool packed,
+    int width, int height, std::string camera_model,
+    TorchTensorView viewmats,
+    TorchTensorView intrins,
+    TorchTensorView dist_coeffs,
+    TorchTensorView gt_rgb,
+    TorchTensorView gt_depth,
+    TorchTensorView gt_normal,
+    TorchTensorView gt_alpha,
+    TorchTensorView bilagrid_cam_indices,
+    const EngineStepConfig& cfg
+) {
+    set_camera_params(width, height, camera_model, viewmats, intrins, dist_coeffs);
+    set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha);
+    return _engine_train_step_after_setup(
+        step, max_steps, std::move(primitive), sh_degree, packed,
+        bilagrid_cam_indices, cfg);
+}
+
+
+// Warp public entry: stage POST-split camera params at (out_W, out_H) and
+// the byte GT through the fused warp kernel, then run the inner step.
+std::map<std::string, float> engine_train_step_warped(
+    int step, int max_steps,
+    std::string primitive, int sh_degree, bool packed,
+    // POST-split camera setup (B*K cameras, all PINHOLE).
+    int out_W, int out_H,
+    TorchTensorView post_viewmats,        // [B*K, 4, 4]
+    TorchTensorView post_intrins,         // [B*K, 4]
+    TorchTensorView post_dist_coeffs,     // [B*K, 10]
+    // Warp inputs (operate on INPUT shape).
+    std::string input_camera_model,       // "FISHEYE" / "EQUISOLID" / "EQUIRECTANGULAR"
+    int B_in, int in_H, int in_W,
+    int K,
+    TorchTensorView input_intrins,        // [B_in, 4]
+    TorchTensorView input_dist_coeffs,    // [B_in, 10]
+    TorchTensorView gt_rgb_byte,          // [B_in, in_H, in_W, 3] u8/u16
+    TorchTensorView gt_alpha_byte,        // [B_in, mask_in_H, mask_in_W, 1] u8 (nullable)
+    int mask_in_H, int mask_in_W,
+    uint64_t axes_dev,                    // device float ptr [K, 3, 3]
+    // Bilagrid cam indices in the POST-split index space.
+    TorchTensorView bilagrid_cam_indices,
+    const EngineStepConfig& cfg
+) {
+    // Camera table is set up at POST-split resolution + PINHOLE.
+    set_camera_params(out_W, out_H, "PINHOLE",
+                      post_viewmats, post_intrins, post_dist_coeffs);
+    // GT is warped on the fly into a float [B*K, out_H, out_W, 3] buffer.
+    set_training_data_warped(input_camera_model,
+                             B_in, in_H, in_W, K, out_H, out_W,
+                             gt_rgb_byte, gt_alpha_byte,
+                             mask_in_H, mask_in_W,
+                             input_intrins, input_dist_coeffs, axes_dev);
+    return _engine_train_step_after_setup(
+        step, max_steps, std::move(primitive), sh_degree, packed,
+        bilagrid_cam_indices, cfg);
 }

@@ -265,7 +265,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("workers_rgb",      &DataManagerConfig::workers_rgb)
         .def_readwrite("workers_depth",    &DataManagerConfig::workers_depth)
         .def_readwrite("workers_normal",   &DataManagerConfig::workers_normal)
-        .def_readwrite("prefetch_batches", &DataManagerConfig::prefetch_batches);
+        .def_readwrite("prefetch_batches", &DataManagerConfig::prefetch_batches)
+        .def_readwrite("warp_to_pinhole",  &DataManagerConfig::warp_to_pinhole);
 
     py::enum_<CameraModelType>(m, "CameraModelType")
         .value("PINHOLE",         CameraModelType::PINHOLE)
@@ -285,6 +286,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_copy_accum_buffer", &engine_copy_accum_buffer);
     m.def("engine_get_cur_num_splats", &engine_get_cur_num_splats);
     m.def("engine_copy_render_to_host", &engine_copy_render_to_host);
+    m.def("engine_get_gt_rgb_shape",     &engine_get_gt_rgb_shape);
+    m.def("engine_get_gt_alpha_shape",   &engine_get_gt_alpha_shape);
+    m.def("engine_get_render_rgb_shape", &engine_get_render_rgb_shape);
+    m.def("engine_copy_gt_rgb_to_host",  &engine_copy_gt_rgb_to_host);
+    m.def("engine_copy_gt_alpha_to_host",&engine_copy_gt_alpha_to_host);
     m.def("engine_copy_splats_to_host", &engine_copy_splats_to_host);
     m.def("engine_get_pool_breakdown", &engine_get_pool_breakdown);
     m.def("engine_get_scratch_bytes", &engine_get_scratch_bytes);
