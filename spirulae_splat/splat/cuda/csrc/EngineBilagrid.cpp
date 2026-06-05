@@ -156,10 +156,13 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         // pre = current gt.depth (pointer alias). The bilagrid sample kernel
         // reads `pre` and writes a fresh "post" buffer; we re-point gt.depth
         // at the post so the loss reads the transformed depth and the bwd
-        // hook still has the original gt via fwd_pre.
+        // hook still has the original gt via fwd_pre. The bilagrid acts on
+        // the GT depth at GT's own (H, W), which may differ from render shape.
         engine().bilagrid_depth.fwd_pre = engine().gt.depth;
+        int H_d = (int)engine().gt.depth.template size<1>();
+        int W_d = (int)engine().gt.depth.template size<2>();
         DeviceTensor3D<float> post_depth;
-        post_depth.resize("eng.bg.depth.post", C_batch, H, W);
+        post_depth.resize("eng.bg.depth.post", C_batch, H_d, W_d);
 
         // Compute per-image scalar (median quantile) over pre-bilagrid depth
         // (the un-transformed gt.depth) and scatter into the per-camera
@@ -168,7 +171,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         float* tmp_scalars = DevicePool::global().acquire<float>(
             "eng.bg.depth.tmp_scalars", (size_t)C_batch);
         TorchTensorView depth_tv((uint64_t)engine().bilagrid_depth.fwd_pre.data_ptr(),
-            4, {C_batch, H, W, 1, 1});
+            4, {C_batch, H_d, W_d, 1, 1});
         TorchTensorView scalar_tv((uint64_t)tmp_scalars, 4, {C_batch});
         compute_depth_scalars_tensor(depth_tv, /*patched=*/true, scalar_tv);
         // Scatter tmp_scalars -> scalar_full at cam_indices.
@@ -190,7 +193,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
             (const float*)engine().bilagrid_depth.fwd_pre.data_ptr(),
             scalar_full,  // kernel reads scalars[cam_indices[ni]]
             post_depth.data_ptr(),
-            /*N=*/C_batch, L, gH, gW, H, W,
+            /*N=*/C_batch, L, gH, gW, H_d, W_d,
             kBilagridStream, cam_idx_dev);
         engine().gt.depth = post_depth;
     }
@@ -199,8 +202,10 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
     if (engine().bilagrid_normal.enabled && engine().gt.normal.data_ptr() != nullptr) {
         // Same pointer-swap trick as depth: alias pre, write post, re-point gt.
         engine().bilagrid_normal.fwd_pre = engine().gt.normal;
+        int H_n = (int)engine().gt.normal.template size<1>();
+        int W_n = (int)engine().gt.normal.template size<2>();
         DeviceTensor3D<float3> post_normal;
-        post_normal.resize("eng.bg.normal.post", C_batch, H, W);
+        post_normal.resize("eng.bg.normal.post", C_batch, H_n, W_n);
 
         int L = (int)engine().bilagrid_normal.grids.size<1>();
         int gH = (int)engine().bilagrid_normal.grids.size<2>();
@@ -210,7 +215,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
             grid_ptr,
             (const float*)engine().bilagrid_normal.fwd_pre.data_ptr(),
             (float*)post_normal.data_ptr(),
-            /*N=*/C_batch, L, gH, gW, H, W,
+            /*N=*/C_batch, L, gH, gW, H_n, W_n,
             kBilagridStream, cam_idx_dev);
         engine().gt.normal = post_normal;
     }
@@ -302,6 +307,12 @@ void _engine_bilagrid_backward_hook(
         int L = (int)engine().bilagrid_depth.grids.size<1>();
         int gH = (int)engine().bilagrid_depth.grids.size<2>();
         int gW = (int)engine().bilagrid_depth.grids.size<3>();
+        // GT depth may have its own (H, W) distinct from render shape. The
+        // bilagrid kernel samples at the GT buffer's resolution; v_ref_depth
+        // has already been scatter-summed by the per-pixel loss kernel at
+        // exactly that resolution, so the two shapes match by construction.
+        int H_d = (int)engine().gt.depth.template size<1>();
+        int W_d = (int)engine().gt.depth.template size<2>();
         float* grid_ptr = engine().bilagrid_depth.grids.data_ptr();
         _ensure_bilagrid_batch_grad(engine().bilagrid_depth.image_grad,
                                     engine().bilagrid_depth.grids, C_batch,
@@ -314,7 +325,7 @@ void _engine_bilagrid_backward_hook(
             scalars,
             (const float*)std::get<0>(v_ref_depth),
             grad_grid_ptr, /*v_depth=*/nullptr,
-            /*N=*/C_batch, L, gH, gW, H, W,
+            /*N=*/C_batch, L, gH, gW, H_d, W_d,
             8, 8, 5, kBilagridStream, cam_idx_dev);
     }
 
@@ -327,6 +338,8 @@ void _engine_bilagrid_backward_hook(
         int L = (int)engine().bilagrid_normal.grids.size<1>();
         int gH = (int)engine().bilagrid_normal.grids.size<2>();
         int gW = (int)engine().bilagrid_normal.grids.size<3>();
+        int H_n = (int)engine().gt.normal.template size<1>();
+        int W_n = (int)engine().gt.normal.template size<2>();
         float* grid_ptr = engine().bilagrid_normal.grids.data_ptr();
         _ensure_bilagrid_batch_grad(engine().bilagrid_normal.image_grad,
                                     engine().bilagrid_normal.grids, C_batch,
@@ -337,7 +350,7 @@ void _engine_bilagrid_backward_hook(
             (const float*)engine().bilagrid_normal.fwd_pre.data_ptr(),
             (const float*)std::get<0>(v_ref_normal),
             grad_grid_ptr, /*v_rgb=*/nullptr,
-            /*N=*/C_batch, L, gH, gW, H, W,
+            /*N=*/C_batch, L, gH, gW, H_n, W_n,
             8, 8, 5, kBilagridStream, cam_idx_dev);
     }
 }

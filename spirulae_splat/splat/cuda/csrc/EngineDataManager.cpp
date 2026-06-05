@@ -22,7 +22,7 @@
 
 void engine_setup_data_manager(
     DataManagerConfig         cfg,
-    CameraModelType           model,
+    std::vector<int32_t>      camera_models,
     std::vector<std::string>  image_filenames,
     std::vector<std::string>  mask_filenames,
     std::vector<std::string>  depth_filenames,
@@ -40,7 +40,7 @@ void engine_setup_data_manager(
     engine().dm.reset();
 
     engine().dm = std::make_unique<DataManager>(
-        std::move(cfg), model,
+        std::move(cfg), std::move(camera_models),
         std::move(image_filenames),  std::move(mask_filenames),
         std::move(depth_filenames),  std::move(normal_filenames),
         std::move(widths),           std::move(heights),

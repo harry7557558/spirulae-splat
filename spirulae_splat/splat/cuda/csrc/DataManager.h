@@ -137,6 +137,18 @@ struct DecodedBatch {
     std::vector<uint8_t>   normal_buffer;
     PixelDType             normal_dtype = PixelDType::UINT8;
 
+    // Per-modality (H, W). Mask / depth / normal images are allowed to be a
+    // different resolution from the rendered RGB output — the engine's
+    // fused per-pixel loss kernel bilinearly samples from these buffers,
+    // so the data manager just exposes the raw on-disk shape and leaves the
+    // resize to the loss path. Zero when the modality is disabled / absent.
+    int32_t                mask_height   = 0;
+    int32_t                mask_width    = 0;
+    int32_t                depth_height  = 0;
+    int32_t                depth_width   = 0;
+    int32_t                normal_height = 0;
+    int32_t                normal_width  = 0;
+
     // Engine-facing TorchTensorViews. Lazily filled by `build_views()` once
     // the buffers are populated. The Engine consumes these directly via
     // set_camera_params / set_training_data.
@@ -181,7 +193,12 @@ public:
     // required to be disjoint; that's the caller's concern.
     DataManager(
         DataManagerConfig          config,
-        CameraModelType            model,
+        // Per-camera camera model (one int per camera, value matches the
+        // CameraModelType enum). The index-group builder partitions the
+        // dataset into homogeneous (W, H, model) buckets, so a mixed
+        // fisheye + pinhole dataset just produces an extra group rather
+        // than throwing.
+        std::vector<int32_t>       camera_models,
         std::vector<std::string>   image_filenames,
         std::vector<std::string>   mask_filenames,
         std::vector<std::string>   depth_filenames,

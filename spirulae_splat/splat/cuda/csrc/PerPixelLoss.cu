@@ -1,5 +1,6 @@
 #include "PerPixelLoss.cuh"
 #include "FusedSSIM.cuh"
+#include "Interpolation.cuh"
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -91,6 +92,13 @@ inline __device__ bool isTotalReduce(LossIndex idx) {
 __global__ void per_pixel_losses_forward_kernel(
     const size_t batch_size,
     const size_t pixels_per_image,
+    const int W_render, const int H_render,
+    // Per-modality GT (H, W). When the GT buffer is at the same resolution as
+    // the render the bilinear sampler reduces to a single-tap read (weight 1
+    // on the diagonal), so equal-shape datasets get bit-identical results.
+    const int W_ref_depth,  const int H_ref_depth,
+    const int W_ref_normal, const int H_ref_normal,
+    const int W_ref_alpha,  const int H_ref_alpha,
     const int64_t* __restrict__ camera_indices,
     const float3* __restrict__ render_rgb,
     const float3* __restrict__ ref_rgb,
@@ -115,23 +123,51 @@ __global__ void per_pixel_losses_forward_kernel(
         return;
     size_t idx = batch_idx * pixels_per_image + pixel_idx;
 
+    // (x, y) of this thread in the rendered-resolution grid -- used only as
+    // destination coords for the bilinear sampler when the GT modality is at
+    // a different shape.
+    int x_dst = (int)(pixel_idx % (size_t)W_render);
+    int y_dst = (int)(pixel_idx / (size_t)W_render);
+
     FixedArray<float, (uint)RawLossIndex::length> losses;
 
     bool inside = pixel_idx < pixels_per_image;
     if (inside) {
+        // GT modalities -- bilinear-sample at (x_dst, y_dst) into their own
+        // shape. When the GT shape equals render shape, this collapses to
+        // a single-tap read (weight 1 on the diagonal).
+        float ref_depth_v = 1.f;
+        if (ref_depth) {
+            ref_depth_v = bilinear_sample_f(
+                ref_depth, (int)batch_idx, x_dst, y_dst,
+                W_render, H_render, W_ref_depth, H_ref_depth);
+        }
+        float3 ref_normal_v = make_float3(0);
+        if (ref_normal) {
+            ref_normal_v = bilinear_sample_f3(
+                ref_normal, (int)batch_idx, x_dst, y_dst,
+                W_render, H_render, W_ref_normal, H_ref_normal);
+        }
+        bool ref_alpha_v = false;
+        if (ref_alpha) {
+            ref_alpha_v = nearest_sample_b(
+                ref_alpha, (int)batch_idx, x_dst, y_dst,
+                W_render, H_render, W_ref_alpha, H_ref_alpha);
+        }
+
         SlangPerPixelLosses::per_pixel_losses(
             render_rgb ? render_rgb[idx] : make_float3(0),
             ref_rgb ? ref_rgb[idx] : make_float3(0),
             render_depth ? render_depth[idx] : 1.f,
-            ref_depth ? ref_depth[idx] : 1.f,
+            ref_depth_v,
             render_normal ? render_normal[idx] : make_float3(0),
             depth_normal ? depth_normal[idx] : make_float3(0),
-            ref_normal ? ref_normal[idx] : make_float3(0),
+            ref_normal_v,
             render_Ts ? render_Ts[idx] : 1.f,
             rgb_dist ? rgb_dist[idx] : make_float3(0),
             depth_dist ? depth_dist[idx] : 0.f,
             normal_dist ? normal_dist[idx] : make_float3(0),
-            ref_alpha ? ref_alpha[idx] : false,
+            ref_alpha_v,
             has_mask,
             loss_weights,
             &losses
@@ -186,6 +222,10 @@ __global__ void per_pixel_losses_forward_kernel(
 __global__ void per_pixel_losses_backward_kernel(
     const size_t batch_size,
     const size_t pixels_per_image,
+    const int W_render, const int H_render,
+    const int W_ref_depth,  const int H_ref_depth,
+    const int W_ref_normal, const int H_ref_normal,
+    const int W_ref_alpha,  const int H_ref_alpha,
     const int64_t* __restrict__ camera_indices,
     const float3* __restrict__ render_rgb,
     const float3* __restrict__ ref_rgb,
@@ -223,6 +263,9 @@ __global__ void per_pixel_losses_backward_kernel(
     bool inside = pixel_idx < pixels_per_image;
     if (!inside) return;
 
+    int x_dst = (int)(pixel_idx % (size_t)W_render);
+    int y_dst = (int)(pixel_idx / (size_t)W_render);
+
     if (camera_indices != nullptr)
         batch_idx = camera_indices[batch_idx];
     FixedArray<float, (uint)RawLossIndex::length> v_losses;
@@ -248,19 +291,40 @@ __global__ void per_pixel_losses_backward_kernel(
     float temp_v_depth_dist;
     float3 temp_v_normal_dist;
 
+    // Re-sample the GT modalities the same way the forward did, so the bwd
+    // sees identical inputs.
+    float  ref_depth_v  = 1.f;
+    float3 ref_normal_v = make_float3(0);
+    bool   ref_alpha_v  = false;
+    if (ref_depth) {
+        ref_depth_v = bilinear_sample_f(
+            ref_depth, (int)batch_idx, x_dst, y_dst,
+            W_render, H_render, W_ref_depth, H_ref_depth);
+    }
+    if (ref_normal) {
+        ref_normal_v = bilinear_sample_f3(
+            ref_normal, (int)batch_idx, x_dst, y_dst,
+            W_render, H_render, W_ref_normal, H_ref_normal);
+    }
+    if (ref_alpha) {
+        ref_alpha_v = nearest_sample_b(
+            ref_alpha, (int)batch_idx, x_dst, y_dst,
+            W_render, H_render, W_ref_alpha, H_ref_alpha);
+    }
+
     SlangPerPixelLosses::per_pixel_losses_bwd(
         render_rgb ? render_rgb[idx] : make_float3(0),
         ref_rgb ? ref_rgb[idx] : make_float3(0),
         render_depth ? render_depth[idx] : 1.f,
-        ref_depth ? ref_depth[idx] : 1.f,
+        ref_depth_v,
         render_normal ? render_normal[idx] : make_float3(0),
         depth_normal ? depth_normal[idx] : make_float3(0),
-        ref_normal ? ref_normal[idx] : make_float3(0),
+        ref_normal_v,
         render_Ts ? render_Ts[idx] : 1.f,
         rgb_dist ? rgb_dist[idx] : make_float3(0),
         depth_dist ? depth_dist[idx] : 0.f,
         normal_dist ? normal_dist[idx] : make_float3(0),
-        ref_alpha ? ref_alpha[idx] : false,
+        ref_alpha_v,
         has_mask,
         loss_weights,
         v_losses,
@@ -277,17 +341,31 @@ __global__ void per_pixel_losses_backward_kernel(
         &temp_v_normal_dist
     );
 
-    if (v_render_rgb) v_render_rgb[idx] = temp_v_render_rgb;
-    if (v_ref_rgb) v_ref_rgb[idx] = temp_v_ref_rgb;
-    if (v_render_depth) v_render_depth[idx] = temp_v_render_depth;
-    if (v_ref_depth) v_ref_depth[idx] = temp_v_ref_depth;
+    // Render-resolution outputs: direct write (one writer per pixel).
+    if (v_render_rgb)    v_render_rgb[idx]    = temp_v_render_rgb;
+    if (v_ref_rgb)       v_ref_rgb[idx]       = temp_v_ref_rgb;
+    if (v_render_depth)  v_render_depth[idx]  = temp_v_render_depth;
     if (v_render_normal) v_render_normal[idx] = temp_v_render_normal;
-    if (v_depth_normal) v_depth_normal[idx] = temp_v_depth_normal;
-    if (v_ref_normal) v_ref_normal[idx] = temp_v_ref_normal;
-    if (v_render_Ts) v_render_Ts[idx] = temp_v_render_Ts;
-    if (v_rgb_dist) v_rgb_dist[idx] = temp_v_rgb_dist;
-    if (v_depth_dist) v_depth_dist[idx] = temp_v_depth_dist;
-    if (v_normal_dist) v_normal_dist[idx] = temp_v_normal_dist;
+    if (v_depth_normal)  v_depth_normal[idx]  = temp_v_depth_normal;
+    if (v_render_Ts)     v_render_Ts[idx]     = temp_v_render_Ts;
+    if (v_rgb_dist)      v_rgb_dist[idx]      = temp_v_rgb_dist;
+    if (v_depth_dist)    v_depth_dist[idx]    = temp_v_depth_dist;
+    if (v_normal_dist)   v_normal_dist[idx]   = temp_v_normal_dist;
+
+    // GT-resolution outputs: bilinear scatter (multiple render pixels may
+    // share a GT tap). Uses atomicAdd, so the v_ref_depth / v_ref_normal
+    // buffers MUST be zeroed before the kernel launch -- EngineLoss does
+    // that via _pool_alloc_f_zero / cudaMemsetAsync.
+    if (v_ref_depth) {
+        bilinear_scatter_add_f(
+            v_ref_depth, (int)batch_idx, x_dst, y_dst,
+            W_render, H_render, W_ref_depth, H_ref_depth, temp_v_ref_depth);
+    }
+    if (v_ref_normal) {
+        bilinear_scatter_add_f3(
+            v_ref_normal, (int)batch_idx, x_dst, y_dst,
+            W_render, H_render, W_ref_normal, H_ref_normal, temp_v_ref_normal);
+    }
 }
 
 __global__ void per_pixel_losses_reduce_forward_kernel(
@@ -357,8 +435,17 @@ __global__ void per_pixel_losses_reduce_backward_kernel(
 }
 
 
+// Read source (H, W) from a TorchTensorView shape [B, H, W, C], or (0, 0) if
+// the view is null. Used to pass per-modality dims to the kernel.
+static inline void _hw_or_zero(const TorchTensorView& tv, int& H, int& W) {
+    if (!_has(tv)) { H = 0; W = 0; return; }
+    const auto& s = std::get<2>(tv);
+    H = (int)s[1]; W = (int)s[2];
+}
+
 static void _compute_per_pixel_losses_forward(
     long B, long pixels_per_image,
+    int W_render, int H_render,
     TorchTensorView render_rgb,
     TorchTensorView ref_rgb,
     TorchTensorView render_depth,
@@ -379,8 +466,13 @@ static void _compute_per_pixel_losses_forward(
     float* raw_losses_ptr,
     float* losses_ptr
 ) {
+    int Hd, Wd; _hw_or_zero(ref_depth,  Hd, Wd);
+    int Hn, Wn; _hw_or_zero(ref_normal, Hn, Wn);
+    int Ha, Wa; _hw_or_zero(ref_alpha,  Ha, Wa);
     per_pixel_losses_forward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(
         B, pixels_per_image,
+        W_render, H_render,
+        Wd, Hd, Wn, Hn, Wa, Ha,
         _i64ptr(camera_indices),
         _f3ptr(render_rgb),
         _f3ptr(ref_rgb),
@@ -414,6 +506,7 @@ static void _compute_per_pixel_losses_forward(
 
 static void _compute_per_pixel_losses_backward(
     long B, long pixels_per_image,
+    int W_render, int H_render,
     TorchTensorView render_rgb,
     TorchTensorView ref_rgb,
     TorchTensorView render_depth,
@@ -446,8 +539,13 @@ static void _compute_per_pixel_losses_backward(
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
+    int Hd, Wd; _hw_or_zero(ref_depth,  Hd, Wd);
+    int Hn, Wn; _hw_or_zero(ref_normal, Hn, Wn);
+    int Ha, Wa; _hw_or_zero(ref_alpha,  Ha, Wa);
     per_pixel_losses_backward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(
         B, pixels_per_image,
+        W_render, H_render,
+        Wd, Hd, Wn, Hn, Wa, Ha,
         _i64ptr(camera_indices),
         _f3ptr(render_rgb),
         _f3ptr(ref_rgb),
@@ -641,22 +739,29 @@ LossValues compute_multi_scale_per_pixel_losses(
     rgb_dist_s[0] = rgb_dist; depth_dist_s[0] = depth_dist; normal_dist_s[0] = normal_dist;
     ref_alpha_s[0] = ref_alpha;
 
-    // Downsample to create scales
+    // Downsample to create scales. Each modality halves its OWN previous-scale
+    // shape (rather than the render shape) so GT modalities at a different
+    // resolution from the rendered output still produce a coherent per-scale
+    // pyramid. The per-pixel loss kernel then bilinearly samples between the
+    // render-scale grid and each modality's scale grid at each scale.
     for (int sc = 1; sc < num_loss_scales; ++sc) {
-        const auto& ps = std::get<2>(render_rgb_s[sc-1]);
-        long Hp = ps[1], Wp = ps[2];
-        long Hn = Hp / 2, Wn = Wp / 2;
         std::string pfx = "ppl.s" + std::to_string(sc) + ".";
 
         auto ds_f = [&](TorchTensorView& prev, TorchTensorView& curr, const std::string& name, int C) {
             if (_has(prev)) {
-                curr = _pool_alloc_f(pfx + name, B, Hn, Wn, C);
+                const auto& pps = std::get<2>(prev);
+                long nH = std::max((long)1, (long)pps[1] / 2);
+                long nW = std::max((long)1, (long)pps[2] / 2);
+                curr = _pool_alloc_f(pfx + name, B, nH, nW, C);
                 _avg_pool_downsample_float(prev, curr);
             }
         };
         auto ds_b = [&](TorchTensorView& prev, TorchTensorView& curr, const std::string& name) {
             if (_has(prev)) {
-                curr = _pool_alloc_b(pfx + name, B, Hn, Wn);
+                const auto& pps = std::get<2>(prev);
+                long nH = std::max((long)1, (long)pps[1] / 2);
+                long nW = std::max((long)1, (long)pps[2] / 2);
+                curr = _pool_alloc_b(pfx + name, B, nH, nW);
                 _avg_pool_downsample_bool(prev, curr);
             }
         };
@@ -675,7 +780,7 @@ LossValues compute_multi_scale_per_pixel_losses(
         ds_b(ref_alpha_s[sc-1], ref_alpha_s[sc], "ra");
     }
 
-    // Total losses accumulator — pool-backed device buffer (D->H read at end)
+    // Total losses accumulator -- pool-backed device buffer (D->H read at end)
     float* total_losses_ptr = DevicePool::global().acquire<float>(
         "ppl.total_losses", (uint)LossIndex::length);
     cudaMemset(total_losses_ptr, 0, (uint)LossIndex::length * sizeof(float));
@@ -704,12 +809,12 @@ LossValues compute_multi_scale_per_pixel_losses(
         }
 
         // When structure_only_loss_map is set, skip the per-pixel write into
-        // the loss map — the SSIM call below will populate it with the
+        // the loss map -- the SSIM call below will populate it with the
         // structure term only. The per-pixel kernel still runs to compute
         // raw_losses (used for grad / display).
         float* per_pixel_loss_map_ptr = structure_only_loss_map ? nullptr : loss_map_ptr;
         _compute_per_pixel_losses_forward(
-            B, ppi,
+            B, ppi, (int)Ws, (int)Hs,
             render_rgb_s[scale], ref_rgb_s[scale], render_depth_s[scale], ref_depth_s[scale],
             render_normal_s[scale], depth_normal_s[scale], ref_normal_s[scale], render_Ts_s[scale],
             rgb_dist_s[scale], depth_dist_s[scale], normal_dist_s[scale],
@@ -729,6 +834,10 @@ LossValues compute_multi_scale_per_pixel_losses(
         // by the pool's high-water-mark even when only the smaller scales
         // actually needed it.
         PerPixelGrads scale_grads = {};
+        // Per-scale grad scratches use the INPUT's own shape (so GT modalities
+        // at a different resolution from the render allocate at their own size,
+        // not the render-scale's). At scale 0 we still alias to the caller's
+        // grads_out buffer when provided (single contiguous write target).
         auto alloc_grad_f = [&](TorchTensorView& out, TorchTensorView grads_out_field,
                                 bool need, TorchTensorView& input,
                                 const std::string& name, int C) {
@@ -736,8 +845,9 @@ LossValues compute_multi_scale_per_pixel_losses(
             if (scale == 0 && _has(grads_out_field)) {
                 out = grads_out_field;  // alias: kernel writes straight to grads_out
             } else {
+                const auto& is = std::get<2>(input);
                 out = _pool_alloc_f("ppl.g." + name + ".s" + std::to_string(scale),
-                                    B, Hs, Ws, C);
+                                    is[0], is[1], is[2], C);
             }
         };
         alloc_grad_f(scale_grads.v_render_rgb, grads_out.v_render_rgb,     needs_input_grad[0],  render_rgb_s[scale],   "vrgb",  3);
@@ -752,8 +862,22 @@ LossValues compute_multi_scale_per_pixel_losses(
         alloc_grad_f(scale_grads.v_depth_dist, grads_out.v_depth_dist,     needs_input_grad[9],  depth_dist_s[scale],   "vdd",   1);
         alloc_grad_f(scale_grads.v_normal_dist, grads_out.v_normal_dist,   needs_input_grad[10], normal_dist_s[scale],  "vnd",   3);
 
+        // GT-resolution grads use atomicAdd inside the bwd kernel (one render
+        // pixel may scatter into 4 GT taps), so the destination buffer must
+        // start zeroed. Render-resolution grads (v_render_*) keep the direct
+        // single-writer pattern and don't need pre-zeroing.
+        auto zero_view = [](TorchTensorView tv) {
+            if (_has(tv)) {
+                const auto& sh = std::get<2>(tv);
+                size_t n = (size_t)sh[0] * (size_t)sh[1] * (size_t)sh[2] * (size_t)sh[3];
+                cudaMemsetAsync((void*)std::get<0>(tv), 0, n * sizeof(float));
+            }
+        };
+        zero_view(scale_grads.v_ref_depth);
+        zero_view(scale_grads.v_ref_normal);
+
         _compute_per_pixel_losses_backward(
-            B, ppi,
+            B, ppi, (int)Ws, (int)Hs,
             render_rgb_s[scale], ref_rgb_s[scale], render_depth_s[scale], ref_depth_s[scale],
             render_normal_s[scale], depth_normal_s[scale], ref_normal_s[scale], render_Ts_s[scale],
             rgb_dist_s[scale], depth_dist_s[scale], normal_dist_s[scale],
@@ -816,19 +940,33 @@ LossValues compute_multi_scale_per_pixel_losses(
 
         // Upsample gradients and accumulate into grads_out.
         // At scale 0 the per-scale buffer aliases grads_out (see alloc_grad_f
-        // above), so the copy becomes a self-copy — skip it via pointer check.
+        // above), so the copy becomes a self-copy -- skip it via pointer check.
+        //
+        // Each modality's grad shape comes from its own view (NOT from outer
+        // render H/W), because GT modalities (v_ref_depth, v_ref_normal) live
+        // at the GT's resolution, which may differ from render. The src view
+        // is the per-scale scratch (downsampled by 2^scale relative to its
+        // own modality), the dst view is the full-resolution accumulator.
         auto upsample_grad = [&](TorchTensorView& grad_scale, TorchTensorView& grad_acc, int C) {
             if (_has(grad_acc) && scale == 0) {
                 if (_fptr(grad_scale) == _fptr(grad_acc)) return;  // aliased
-                cudaMemcpy(_fptr(grad_acc), _fptr(grad_scale), B * H * W * C * sizeof(float), cudaMemcpyDeviceToDevice);
+                const auto& ds = std::get<2>(grad_acc);
+                long dB = ds[0], dH = ds[1], dW = ds[2];
+                cudaMemcpy(_fptr(grad_acc), _fptr(grad_scale),
+                           (size_t)dB * dH * dW * C * sizeof(float),
+                           cudaMemcpyDeviceToDevice);
                 return;
             }
             if (_has(grad_scale) && _has(grad_acc)) {
+                const auto& ds = std::get<2>(grad_acc);    // full-res dst
+                const auto& ss = std::get<2>(grad_scale);  // scale-s src
+                long dB = ds[0], dH = ds[1], dW = ds[2];
+                long sH = ss[1], sW = ss[2];
                 float a = (scale == 1 ? 1.0f / num_loss_scales : 1.0f);
                 float b = powf(0.25f, (float)scale) / num_loss_scales;
-                avg_pool_upsample_float_kernel<<<_LAUNCH_ARGS_3D(W, H, B, 16, 16, 1)>>>(
-                    _make_view4(_fptr(grad_acc), B, H, W, (long)C),
-                    _make_view4(_fptr(grad_scale), B, Hs, Ws, (long)C),
+                avg_pool_upsample_float_kernel<<<_LAUNCH_ARGS_3D(dW, dH, dB, 16, 16, 1)>>>(
+                    _make_view4(_fptr(grad_acc),   dB, dH, dW, (long)C),
+                    _make_view4(_fptr(grad_scale), dB, sH, sW, (long)C),
                     1 << scale, a, b
                 );
                 CHECK_DEVICE_ERROR(cudaGetLastError());

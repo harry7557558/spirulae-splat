@@ -5,8 +5,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
+#include <map>
+#include <tuple>
+#include <type_traits>
 #include <future>
 #include <numeric>
 #include <random>
@@ -77,12 +82,21 @@ private:
     bool                    _closed = false;
 };
 
-// One element of a per-image grouping. Each group is homogeneous in (W,H),
-// so a batch sampled from a single group has the contiguous shape the engine
-// expects.
+// One element of a per-image grouping. Each group is homogeneous in (W,H)
+// for RGB and uniform per modality (mask / depth / normal), so a batch
+// sampled from a single group has the contiguous shape the engine expects.
+//
+// Per-modality dims are per-GROUP rather than dataset-wide because a single
+// dataset may legitimately contain images of different resolutions (and
+// hence different mask / depth / normal resolutions); only within a batch
+// (= within a group) do the modality buffers need to be uniform.
 struct IndexGroup {
     int32_t              width  = 0;
     int32_t              height = 0;
+    CameraModelType      model  = (CameraModelType)-1;  // uniform within a group
+    int32_t              mask_h   = 0, mask_w   = 0;
+    int32_t              depth_h  = 0, depth_w  = 0;
+    int32_t              normal_h = 0, normal_w = 0;
     std::vector<int32_t> indices;       // dataset-global indices, shuffled
     size_t               cursor = 0;    // next index to emit
 
@@ -92,29 +106,6 @@ struct IndexGroup {
         cursor = 0;
     }
 };
-
-// Build (W,H)-keyed groups from a flat index list.
-std::vector<IndexGroup> build_index_groups(
-    const std::vector<int32_t>& flat_indices,
-    const std::vector<int32_t>& widths,
-    const std::vector<int32_t>& heights)
-{
-    std::unordered_map<uint64_t, IndexGroup> by_shape;
-    for (int32_t i : flat_indices) {
-        uint64_t key = ((uint64_t)(uint32_t)widths[i] << 32)
-                     | (uint64_t)(uint32_t)heights[i];
-        auto& g = by_shape[key];
-        if (g.indices.empty()) {
-            g.width  = widths[i];
-            g.height = heights[i];
-        }
-        g.indices.push_back(i);
-    }
-    std::vector<IndexGroup> out;
-    out.reserve(by_shape.size());
-    for (auto& kv : by_shape) out.emplace_back(std::move(kv.second));
-    return out;
-}
 
 // Group-size-weighted sampler — picks a group with probability proportional
 // to its size, mirroring datamanager.py:IndexGroups::random_idx().
@@ -172,55 +163,141 @@ void decode_rgb_into(const std::string& path,
     }
 }
 
+// ---- CPU resize helpers ---------------------------------------------------
+//
+// Used by the decoders and the CPU-cache copy path. Mismatched intra-group
+// modality shapes are resolved by upsampling smaller files to the group's
+// chosen (largest) shape:
+//   mask   -> nearest (boolean; bilinear would round badly at edges)
+//   depth  -> bilinear (smooth scalar field)
+//   normal -> bilinear per channel
+// All resizers use half-pixel-center sampling, matching the device-side
+// bilinear sampler in Interpolation.cuh.
+
+template<typename T, int C>
+inline void cpu_bilinear_resize(const T* src, int sh, int sw,
+                                T* dst, int dh, int dw)
+{
+    const float sx = (float)sw / (float)dw;
+    const float sy = (float)sh / (float)dh;
+    for (int y = 0; y < dh; ++y) {
+        float v  = ((float)y + 0.5f) * sy - 0.5f;
+        int   y0 = (int)std::floor(v);
+        float fy = v - (float)y0;
+        int   y0c = std::max(0, std::min(sh - 1, y0));
+        int   y1c = std::max(0, std::min(sh - 1, y0 + 1));
+        for (int x = 0; x < dw; ++x) {
+            float u  = ((float)x + 0.5f) * sx - 0.5f;
+            int   x0 = (int)std::floor(u);
+            float fx = u - (float)x0;
+            int   x0c = std::max(0, std::min(sw - 1, x0));
+            int   x1c = std::max(0, std::min(sw - 1, x0 + 1));
+            float w00 = (1.0f - fx) * (1.0f - fy);
+            float w10 = fx          * (1.0f - fy);
+            float w01 = (1.0f - fx) * fy;
+            float w11 = fx          * fy;
+            const T* p00 = src + ((size_t)y0c * sw + x0c) * C;
+            const T* p10 = src + ((size_t)y0c * sw + x1c) * C;
+            const T* p01 = src + ((size_t)y1c * sw + x0c) * C;
+            const T* p11 = src + ((size_t)y1c * sw + x1c) * C;
+            T*       q   = dst + ((size_t)y   * dw + x  ) * C;
+            for (int c = 0; c < C; ++c) {
+                float r = w00 * (float)p00[c] + w10 * (float)p10[c]
+                        + w01 * (float)p01[c] + w11 * (float)p11[c];
+                if constexpr (std::is_integral_v<T>) {
+                    r = std::round(r);
+                    if (r < 0.0f) r = 0.0f;
+                    float hi = (float)std::numeric_limits<T>::max();
+                    if (r > hi) r = hi;
+                }
+                q[c] = (T)r;
+            }
+        }
+    }
+}
+
+inline void cpu_nearest_resize_u8(const uint8_t* src, int sh, int sw,
+                                  uint8_t* dst, int dh, int dw)
+{
+    const float sx = (float)sw / (float)dw;
+    const float sy = (float)sh / (float)dh;
+    for (int y = 0; y < dh; ++y) {
+        float v  = ((float)y + 0.5f) * sy - 0.5f;
+        int   ys = std::max(0, std::min(sh - 1, (int)std::floor(v + 0.5f)));
+        for (int x = 0; x < dw; ++x) {
+            float u  = ((float)x + 0.5f) * sx - 0.5f;
+            int   xs = std::max(0, std::min(sw - 1, (int)std::floor(u + 0.5f)));
+            dst[(size_t)y * dw + x] = src[(size_t)ys * sw + xs];
+        }
+    }
+}
+
+
+// Modality decoders. `dst_h` / `dst_w` are the BATCH-slot shape (= group
+// shape); when the file is smaller it is upsampled (nearest for mask,
+// bilinear for depth / normal). The 1x1 mask case is a degenerate
+// nearest-neighbor broadcast and falls out for free.
+
 void decode_mask_into(const std::string& path,
-                      int expected_h, int expected_w,
+                      int dst_h, int dst_w,
                       uint8_t* dst)
 {
     int w, h, ch;
     stbi_uc* img = stbi_load(path.c_str(), &w, &h, &ch, 1);
     if (!img) throw std::runtime_error("DataManager: failed to load mask '" + path + "': " + stbi_failure_reason());
-    if (w != expected_w || h != expected_h) {
-        stbi_image_free(img);
-        throw std::runtime_error("DataManager: mask shape mismatch for '" + path + "'");
-    }
+
+    // Binarize on-disk pixels first so the broadcast / resize always emits
+    // strict 0/1 (matches the kernel's bool semantics).
     for (size_t i = 0; i < (size_t)w * h; ++i)
-        dst[i] = (uint8_t)(img[i] != 0);
+        img[i] = (uint8_t)(img[i] != 0);
+
+    if (w == dst_w && h == dst_h) {
+        std::memcpy(dst, img, (size_t)w * h);
+    } else {
+        cpu_nearest_resize_u8(img, h, w, dst, dst_h, dst_w);
+    }
     stbi_image_free(img);
 }
 
 void decode_depth_into(const std::string& path,
-                       int expected_h, int expected_w,
+                       int dst_h, int dst_w,
                        PixelDType dtype,
                        uint8_t* dst)
 {
     int w, h, ch;
-    if (dtype == PixelDType::UINT16) {
-        stbi_us* img = stbi_load_16(path.c_str(), &w, &h, &ch, 1);
-        if (!img) throw std::runtime_error("DataManager: failed to load 16-bit depth '" + path + "': " + stbi_failure_reason());
-        if (w != expected_w || h != expected_h) {
-            stbi_image_free(img);
-            throw std::runtime_error("DataManager: depth shape mismatch for '" + path + "'");
-        }
-        std::memcpy(dst, img, (size_t)w * h * sizeof(stbi_us));
-        stbi_image_free(img);
-    } else {
+    if (dtype != PixelDType::UINT16)
         throw std::runtime_error("DataManager: only 16-bit depth PNGs are supported in stb_image path");
+    stbi_us* img = stbi_load_16(path.c_str(), &w, &h, &ch, 1);
+    if (!img) throw std::runtime_error("DataManager: failed to load 16-bit depth '" + path + "': " + stbi_failure_reason());
+    if (w == dst_w && h == dst_h) {
+        std::memcpy(dst, img, (size_t)w * h * sizeof(stbi_us));
+    } else {
+        cpu_bilinear_resize<stbi_us, 1>(img, h, w, (stbi_us*)dst, dst_h, dst_w);
     }
+    stbi_image_free(img);
 }
 
 void decode_normal_into(const std::string& path,
-                        int expected_h, int expected_w,
+                        int dst_h, int dst_w,
                         uint8_t* dst)
 {
     int w, h, ch;
     stbi_uc* img = stbi_load(path.c_str(), &w, &h, &ch, 3);
     if (!img) throw std::runtime_error("DataManager: failed to load normal '" + path + "': " + stbi_failure_reason());
-    if (w != expected_w || h != expected_h) {
-        stbi_image_free(img);
-        throw std::runtime_error("DataManager: normal shape mismatch for '" + path + "'");
+    if (w == dst_w && h == dst_h) {
+        std::memcpy(dst, img, (size_t)w * h * 3);
+    } else {
+        cpu_bilinear_resize<stbi_uc, 3>(img, h, w, dst, dst_h, dst_w);
     }
-    std::memcpy(dst, img, (size_t)w * h * 3);
     stbi_image_free(img);
+}
+
+// Quick (W, H) probe via stb_image's header-only reader. Returns false on
+// error. Used at construction to discover per-modality on-disk shape.
+bool probe_image_shape(const std::string& path, int& w, int& h) {
+    int ch;
+    if (path.empty()) return false;
+    return stbi_info(path.c_str(), &w, &h, &ch) != 0;
 }
 
 // Detect on-disk RGB dtype (8-bit vs 16-bit). Both are decided by a single
@@ -254,15 +331,16 @@ void DecodedBatch::build_views() {
                       {B, H, W, 3LL});
     }
     if (!mask_buffer.empty()) {
-        mask_view = mk(mask_buffer.data(), 1, {B, H, W, 1LL});
+        mask_view = mk(mask_buffer.data(), 1,
+                       {B, (int64_t)mask_height, (int64_t)mask_width, 1LL});
     }
     if (!depth_buffer.empty()) {
         depth_view = mk(depth_buffer.data(), pixel_dtype_size(depth_dtype),
-                        {B, H, W, 1LL});
+                        {B, (int64_t)depth_height, (int64_t)depth_width, 1LL});
     }
     if (!normal_buffer.empty()) {
         normal_view = mk(normal_buffer.data(), pixel_dtype_size(normal_dtype),
-                         {B, H, W, 3LL});
+                         {B, (int64_t)normal_height, (int64_t)normal_width, 3LL});
     }
 }
 
@@ -275,7 +353,7 @@ public:
 
     DataManagerImpl(
         DataManagerConfig config,
-        CameraModelType   model,
+        std::vector<int32_t>     camera_models,   // per-camera enum int
         std::vector<std::string> image_filenames,
         std::vector<std::string> mask_filenames,
         std::vector<std::string> depth_filenames,
@@ -306,7 +384,10 @@ private:
 
     // ---- Shared input data ------------------------------------------------
     DataManagerConfig         _cfg;
-    CameraModelType           _model;
+    // Per-camera model enum value. Length matches the dataset N. Groups are
+    // partitioned by this so a mixed pinhole + fisheye dataset just yields
+    // two extra groups; batches stay homogeneous.
+    std::vector<int32_t>      _camera_models;
     std::vector<std::string>  _image_filenames;
     std::vector<std::string>  _mask_filenames;
     std::vector<std::string>  _depth_filenames;
@@ -323,6 +404,18 @@ private:
     std::vector<PixelDType>   _rgb_dtype;
     std::vector<PixelDType>   _depth_dtype;
     std::vector<PixelDType>   _normal_dtype;
+
+    // Per-image on-disk modality shape (W, H). 0 when the image has no
+    // file for that modality, or the modality is disabled. Probed in
+    // probe_dtypes() via stb_image's header-only reader; cost is ~one
+    // small open() per file.
+    //
+    // Uniformity is enforced PER-GROUP (see build_index_groups) rather than
+    // dataset-wide: a single dataset may legitimately mix image resolutions,
+    // and as long as a group is internally uniform the batch buffers work.
+    std::vector<int32_t> _mask_h_per,   _mask_w_per;
+    std::vector<int32_t> _depth_h_per,  _depth_w_per;
+    std::vector<int32_t> _normal_h_per, _normal_w_per;
 
     // ---- CPU mode preloaded buffers --------------------------------------
     //
@@ -383,6 +476,11 @@ private:
 
     // ---- Setup helpers ---------------------------------------------------
     void probe_dtypes();
+    // Build (W,H)-keyed groups, enforcing per-modality uniformity WITHIN
+    // each group (allowing 1x1 broadcast for mask). Throws on intra-group
+    // shape mismatch. Inter-group differences are fine.
+    std::vector<IndexGroup> build_index_groups_member(
+        const std::vector<int32_t>& flat_indices) const;
     void preload_cpu_cache();
     void allocate_batch(DecodedBatch& b,
                         const IndexGroup& g,
@@ -414,7 +512,7 @@ private:
 // ===========================================================================
 DataManagerImpl::DataManagerImpl(
     DataManagerConfig          config,
-    CameraModelType            model,
+    std::vector<int32_t>       camera_models,
     std::vector<std::string>   image_filenames,
     std::vector<std::string>   mask_filenames,
     std::vector<std::string>   depth_filenames,
@@ -426,7 +524,8 @@ DataManagerImpl::DataManagerImpl(
     std::vector<float>         dist_coeffs,
     std::vector<int32_t>       train_indices,
     std::vector<int32_t>       val_indices)
-    : _cfg(config), _model(model),
+    : _cfg(config),
+      _camera_models(std::move(camera_models)),
       _image_filenames(std::move(image_filenames)),
       _mask_filenames(std::move(mask_filenames)),
       _depth_filenames(std::move(depth_filenames)),
@@ -439,6 +538,8 @@ DataManagerImpl::DataManagerImpl(
       _val_indices(std::move(val_indices))
 {
     int64_t N = (int64_t)_image_filenames.size();
+    if ((int64_t)_camera_models.size() != N)
+        throw std::runtime_error("DataManager: camera_models length mismatch");
     if ((int64_t)_widths.size()  != N ||
         (int64_t)_heights.size() != N ||
         (int64_t)_viewmats.size()    != N * 16 ||
@@ -459,8 +560,8 @@ DataManagerImpl::DataManagerImpl(
 
     probe_dtypes();
 
-    _train_groups = build_index_groups(_train_indices, _widths, _heights);
-    _val_groups   = build_index_groups(_val_indices,   _widths, _heights);
+    _train_groups = build_index_groups_member(_train_indices);
+    _val_groups   = build_index_groups_member(_val_indices);
     for (auto& g : _train_groups) g.rewind(_rng, /*eval=*/false);
     for (auto& g : _val_groups)   g.rewind(_rng, /*eval=*/true);
     _train_sampler = GroupSampler(_train_groups);
@@ -493,6 +594,132 @@ void DataManagerImpl::probe_dtypes() {
     if (has_normals()) {
         _normal_dtype.assign((size_t)N, PixelDType::UINT8);
     }
+
+    // Probe per-image on-disk modality shape. Uniformity is enforced later
+    // in build_index_groups_member, per-group rather than dataset-wide --
+    // mixed-resolution datasets are OK as long as each (W,H) group is
+    // internally consistent.
+    auto probe_per_image = [&](const std::vector<std::string>& fns,
+                               const char* name,
+                               std::vector<int32_t>& out_h,
+                               std::vector<int32_t>& out_w) {
+        if (fns.empty()) return;
+        out_h.assign((size_t)N, 0);
+        out_w.assign((size_t)N, 0);
+        for (int64_t i = 0; i < N; ++i) {
+            if (fns[i].empty()) continue;
+            int wi, hi;
+            if (!probe_image_shape(fns[i], wi, hi))
+                throw std::runtime_error(std::string("DataManager: failed to probe ")
+                    + name + " '" + fns[i] + "'");
+            out_h[i] = (int32_t)hi;
+            out_w[i] = (int32_t)wi;
+        }
+    };
+    if (has_masks())   probe_per_image(_mask_filenames,   "mask",   _mask_h_per,   _mask_w_per);
+    if (has_depths())  probe_per_image(_depth_filenames,  "depth",  _depth_h_per,  _depth_w_per);
+    if (has_normals()) probe_per_image(_normal_filenames, "normal", _normal_h_per, _normal_w_per);
+}
+
+
+// Build per-image-shape groups (homogeneous (RGB W, H)) and pick each
+// group's modality shape as the LARGEST (by area) on-disk shape across
+// the group's images. Smaller modality files are upsampled at decode time
+// (nearest for mask, bilinear for depth/normal). Prints a single warning
+// per modality the first time a group requires upsampling.
+std::vector<IndexGroup> DataManagerImpl::build_index_groups_member(
+    const std::vector<int32_t>& flat_indices) const
+{
+    // Group key: (W, H, camera_model). std::map handles tuple keys natively,
+    // and group build happens once at construction, so we don't need an
+    // unordered_map's hash machinery here.
+    std::map<std::tuple<int32_t, int32_t, int32_t>, IndexGroup> by_shape;
+
+    // Track first per-modality mismatch for a one-shot warning. Mutable so
+    // this const method can update them; semantically they're cache.
+    static bool warned_mask = false, warned_depth = false, warned_normal = false;
+
+    for (int32_t i : flat_indices) {
+        auto key = std::make_tuple(_widths[i], _heights[i], _camera_models[i]);
+        auto& g = by_shape[key];
+        if (g.indices.empty()) {
+            g.width  = _widths[i];
+            g.height = _heights[i];
+            g.model  = (CameraModelType)_camera_models[i];
+        }
+
+        // Take the max-area shape across the group. We compare by area so
+        // mismatched aspect ratios collapse to a single (w, h) instead of
+        // arbitrarily picking one dim's max and stretching everything.
+        auto merge_max_area = [](int32_t h_i, int32_t w_i,
+                                 int32_t& g_h, int32_t& g_w,
+                                 bool& did_mismatch) {
+            if (h_i == 0 || w_i == 0) return;        // image lacks this modality
+            if (g_h == 0) { g_h = h_i; g_w = w_i; return; }
+            if (g_h == h_i && g_w == w_i) return;    // already matches
+            did_mismatch = true;
+            int64_t cur_area = (int64_t)g_h * g_w;
+            int64_t new_area = (int64_t)h_i * w_i;
+            if (new_area > cur_area) { g_h = h_i; g_w = w_i; }
+        };
+
+        bool mask_mm = false, depth_mm = false, normal_mm = false;
+        if (!_mask_h_per.empty()) {
+            // 1x1 mask is a known broadcast case (all-white / all-black). It
+            // contributes nothing to the max-area picker, so we just skip it
+            // and don't count it as a mismatch.
+            int32_t h_i = _mask_h_per[i], w_i = _mask_w_per[i];
+            if (!(h_i == 1 && w_i == 1)) {
+                merge_max_area(h_i, w_i, g.mask_h, g.mask_w, mask_mm);
+            }
+        }
+        if (!_depth_h_per.empty())
+            merge_max_area(_depth_h_per[i],  _depth_w_per[i],  g.depth_h,  g.depth_w,  depth_mm);
+        if (!_normal_h_per.empty())
+            merge_max_area(_normal_h_per[i], _normal_w_per[i], g.normal_h, g.normal_w, normal_mm);
+
+        if (mask_mm && !warned_mask) {
+            std::fprintf(stderr,
+                "[DataManager] warning: mismatched mask shapes within group "
+                "%dx%d; bilinear-nearest upsampling to %dx%d. "
+                "(Further mask warnings suppressed.)\n",
+                g.width, g.height, g.mask_w, g.mask_h);
+            std::fflush(stderr);
+            warned_mask = true;
+        }
+        if (depth_mm && !warned_depth) {
+            std::fprintf(stderr,
+                "[DataManager] warning: mismatched depth shapes within group "
+                "%dx%d; bilinear-upsampling to %dx%d. "
+                "(Further depth warnings suppressed.)\n",
+                g.width, g.height, g.depth_w, g.depth_h);
+            std::fflush(stderr);
+            warned_depth = true;
+        }
+        if (normal_mm && !warned_normal) {
+            std::fprintf(stderr,
+                "[DataManager] warning: mismatched normal shapes within group "
+                "%dx%d; bilinear-upsampling to %dx%d. "
+                "(Further normal warnings suppressed.)\n",
+                g.width, g.height, g.normal_w, g.normal_h);
+            std::fflush(stderr);
+            warned_normal = true;
+        }
+
+        g.indices.push_back(i);
+    }
+
+    std::vector<IndexGroup> out;
+    out.reserve(by_shape.size());
+    for (auto& kv : by_shape) {
+        auto& g = kv.second;
+        // Mask-only fallback: every mask in the group was 1x1 (or absent).
+        // Settle the batch shape at 1x1 -- one byte per image, the per-pixel
+        // kernel will read it as a scalar broadcast.
+        if (has_masks() && g.mask_h == 0) { g.mask_h = 1; g.mask_w = 1; }
+        out.emplace_back(std::move(g));
+    }
+    return out;
 }
 
 
@@ -530,19 +757,28 @@ void DataManagerImpl::preload_cpu_cache() {
                     _rgb_cache[i].assign(bytes, 0);
                     decode_rgb_into(_image_filenames[i], H, W, dt, _rgb_cache[i].data());
                 }
+                // Per-image modality shape (may differ across images; group
+                // uniformity was enforced at construction). Mask 1x1 stays
+                // 1x1 in cache and is broadcast at batch-fill time.
                 if (has_masks() && !_mask_filenames[i].empty()) {
-                    _mask_cache[i].assign((size_t)W * H, 0);
-                    decode_mask_into(_mask_filenames[i], H, W, _mask_cache[i].data());
+                    int32_t mh = _mask_h_per[i], mw = _mask_w_per[i];
+                    _mask_cache[i].assign((size_t)mw * mh, 0);
+                    decode_mask_into(_mask_filenames[i], mh, mw,
+                                     _mask_cache[i].data());
                 }
                 if (has_depths() && !_depth_filenames[i].empty()) {
                     PixelDType dt = _depth_dtype[i];
-                    size_t bytes = (size_t)W * H * pixel_dtype_size(dt);
+                    int32_t dh = _depth_h_per[i], dw = _depth_w_per[i];
+                    size_t bytes = (size_t)dw * dh * pixel_dtype_size(dt);
                     _depth_cache[i].assign(bytes, 0);
-                    decode_depth_into(_depth_filenames[i], H, W, dt, _depth_cache[i].data());
+                    decode_depth_into(_depth_filenames[i], dh, dw,
+                                      dt, _depth_cache[i].data());
                 }
                 if (has_normals() && !_normal_filenames[i].empty()) {
-                    _normal_cache[i].assign((size_t)W * H * 3, 0);
-                    decode_normal_into(_normal_filenames[i], H, W, _normal_cache[i].data());
+                    int32_t nh = _normal_h_per[i], nw = _normal_w_per[i];
+                    _normal_cache[i].assign((size_t)nw * nh * 3, 0);
+                    decode_normal_into(_normal_filenames[i], nh, nw,
+                                       _normal_cache[i].data());
                 }
 
                 int64_t d = done_count.fetch_add(1) + 1;
@@ -575,7 +811,7 @@ void DataManagerImpl::allocate_batch(
     b.width  = W;
     b.height = H;
     b.num    = B;
-    b.model  = _model;
+    b.model  = g.model;
     b.indices = ds_indices;
 
     b.viewmats.assign((size_t)B * 16, 0.0f);
@@ -588,24 +824,37 @@ void DataManagerImpl::allocate_batch(
     b.rgb_dtype = rgb_dt;
     b.rgb_buffer.assign((size_t)B * H * W * 3 * pixel_dtype_size(rgb_dt), 0);
 
-    if (has_masks())
-        b.mask_buffer.assign((size_t)B * H * W, 0);
-    else
-        b.mask_buffer.clear();
-
-    if (has_depths()) {
-        PixelDType d_dt = PixelDType::UINT16;
-        b.depth_dtype = d_dt;
-        b.depth_buffer.assign((size_t)B * H * W * pixel_dtype_size(d_dt), 0);
+    // Modality shapes are PER-GROUP -- different (W,H) groups may have
+    // different mask / depth / normal resolutions. allocate_batch reads
+    // them off the IndexGroup the batch was sampled from.
+    if (has_masks() && g.mask_h > 0 && g.mask_w > 0) {
+        b.mask_height = g.mask_h;
+        b.mask_width  = g.mask_w;
+        b.mask_buffer.assign((size_t)B * g.mask_h * g.mask_w, 0);
     } else {
-        b.depth_buffer.clear();
+        b.mask_buffer.clear();
+        b.mask_height = b.mask_width = 0;
     }
 
-    if (has_normals()) {
-        b.normal_dtype = PixelDType::UINT8;
-        b.normal_buffer.assign((size_t)B * H * W * 3, 0);
+    if (has_depths() && g.depth_h > 0 && g.depth_w > 0) {
+        PixelDType d_dt = PixelDType::UINT16;
+        b.depth_dtype  = d_dt;
+        b.depth_height = g.depth_h;
+        b.depth_width  = g.depth_w;
+        b.depth_buffer.assign((size_t)B * g.depth_h * g.depth_w * pixel_dtype_size(d_dt), 0);
+    } else {
+        b.depth_buffer.clear();
+        b.depth_height = b.depth_width = 0;
+    }
+
+    if (has_normals() && g.normal_h > 0 && g.normal_w > 0) {
+        b.normal_dtype  = PixelDType::UINT8;
+        b.normal_height = g.normal_h;
+        b.normal_width  = g.normal_w;
+        b.normal_buffer.assign((size_t)B * g.normal_h * g.normal_w * 3, 0);
     } else {
         b.normal_buffer.clear();
+        b.normal_height = b.normal_width = 0;
     }
 
     fill_camera_params(b);
@@ -623,24 +872,58 @@ void DataManagerImpl::fill_camera_params(DecodedBatch& b) {
 
 void DataManagerImpl::fill_batch_from_cache(DecodedBatch& b) {
     int B = b.num, H = b.height, W = b.width;
-    size_t rgb_row = (size_t)H * W * 3 * pixel_dtype_size(b.rgb_dtype);
-    size_t mask_row = (size_t)H * W;
-    size_t depth_row = (size_t)H * W * pixel_dtype_size(b.depth_dtype);
-    size_t normal_row = (size_t)H * W * 3;
+    size_t rgb_row    = (size_t)H * W * 3 * pixel_dtype_size(b.rgb_dtype);
+    size_t mask_row   = (size_t)b.mask_height   * b.mask_width;
+    size_t depth_row  = (size_t)b.depth_height  * b.depth_width * pixel_dtype_size(b.depth_dtype);
+    size_t normal_row = (size_t)b.normal_height * b.normal_width * 3;
 
     for (int j = 0; j < B; ++j) {
         int32_t i = b.indices[j];
         std::memcpy(b.rgb_buffer.data() + (size_t)j * rgb_row,
                     _rgb_cache[i].data(), rgb_row);
-        if (!b.mask_buffer.empty() && !_mask_cache.empty() && !_mask_cache[i].empty())
-            std::memcpy(b.mask_buffer.data() + (size_t)j * mask_row,
-                        _mask_cache[i].data(), mask_row);
-        if (!b.depth_buffer.empty() && !_depth_cache.empty() && !_depth_cache[i].empty())
-            std::memcpy(b.depth_buffer.data() + (size_t)j * depth_row,
-                        _depth_cache[i].data(), depth_row);
-        if (!b.normal_buffer.empty() && !_normal_cache.empty() && !_normal_cache[i].empty())
-            std::memcpy(b.normal_buffer.data() + (size_t)j * normal_row,
-                        _normal_cache[i].data(), normal_row);
+
+        // Mask: cache row at per-image on-disk shape, batch slot at group
+        // shape. If equal, memcpy. If cache is 1x1, broadcast (memset).
+        // Otherwise nearest-resize up to the group shape (binary preserving).
+        if (!b.mask_buffer.empty() && !_mask_cache.empty() && !_mask_cache[i].empty()) {
+            uint8_t* dst_row = b.mask_buffer.data() + (size_t)j * mask_row;
+            int32_t  ih = _mask_h_per[i], iw = _mask_w_per[i];
+            if (ih == 1 && iw == 1) {
+                std::memset(dst_row, _mask_cache[i][0] ? 1 : 0, mask_row);
+            } else if (ih == b.mask_height && iw == b.mask_width) {
+                std::memcpy(dst_row, _mask_cache[i].data(), mask_row);
+            } else {
+                cpu_nearest_resize_u8(_mask_cache[i].data(), ih, iw,
+                                      dst_row, b.mask_height, b.mask_width);
+            }
+        }
+
+        // Depth: bilinear resize when per-image shape != group shape.
+        if (!b.depth_buffer.empty() && !_depth_cache.empty() && !_depth_cache[i].empty()) {
+            uint8_t* dst_row = b.depth_buffer.data() + (size_t)j * depth_row;
+            int32_t  ih = _depth_h_per[i], iw = _depth_w_per[i];
+            if (ih == b.depth_height && iw == b.depth_width) {
+                std::memcpy(dst_row, _depth_cache[i].data(), depth_row);
+            } else {
+                // 16-bit, single channel.
+                cpu_bilinear_resize<stbi_us, 1>(
+                    (const stbi_us*)_depth_cache[i].data(), ih, iw,
+                    (stbi_us*)dst_row, b.depth_height, b.depth_width);
+            }
+        }
+
+        // Normal: bilinear per channel.
+        if (!b.normal_buffer.empty() && !_normal_cache.empty() && !_normal_cache[i].empty()) {
+            uint8_t* dst_row = b.normal_buffer.data() + (size_t)j * normal_row;
+            int32_t  ih = _normal_h_per[i], iw = _normal_w_per[i];
+            if (ih == b.normal_height && iw == b.normal_width) {
+                std::memcpy(dst_row, _normal_cache[i].data(), normal_row);
+            } else {
+                cpu_bilinear_resize<stbi_uc, 3>(
+                    _normal_cache[i].data(), ih, iw,
+                    dst_row, b.normal_height, b.normal_width);
+            }
+        }
     }
 }
 
@@ -759,7 +1042,7 @@ void DataManagerImpl::worker_loop_mask() {
     while (_q_mask->pop(job)) {
         if (_stop.load()) return;
         DecodedBatch& b = *job.batch;
-        int H = b.height, W = b.width;
+        int H = b.mask_height, W = b.mask_width;
         size_t row = (size_t)H * W;
         uint8_t* dst = b.mask_buffer.data() + (size_t)job.slot * row;
         decode_mask_into(_mask_filenames[job.ds_index], H, W, dst);
@@ -775,7 +1058,7 @@ void DataManagerImpl::worker_loop_depth() {
     while (_q_depth->pop(job)) {
         if (_stop.load()) return;
         DecodedBatch& b = *job.batch;
-        int H = b.height, W = b.width;
+        int H = b.depth_height, W = b.depth_width;
         size_t row = (size_t)H * W * pixel_dtype_size(b.depth_dtype);
         uint8_t* dst = b.depth_buffer.data() + (size_t)job.slot * row;
         decode_depth_into(_depth_filenames[job.ds_index], H, W,
@@ -792,7 +1075,7 @@ void DataManagerImpl::worker_loop_normal() {
     while (_q_normal->pop(job)) {
         if (_stop.load()) return;
         DecodedBatch& b = *job.batch;
-        int H = b.height, W = b.width;
+        int H = b.normal_height, W = b.normal_width;
         size_t row = (size_t)H * W * 3;
         uint8_t* dst = b.normal_buffer.data() + (size_t)job.slot * row;
         decode_normal_into(_normal_filenames[job.ds_index], H, W, dst);
@@ -951,7 +1234,7 @@ const DecodedBatch* DataManagerImpl::next_val_batch() {
 // ===========================================================================
 DataManager::DataManager(
     DataManagerConfig          config,
-    CameraModelType            model,
+    std::vector<int32_t>       camera_models,
     std::vector<std::string>   image_filenames,
     std::vector<std::string>   mask_filenames,
     std::vector<std::string>   depth_filenames,
@@ -965,7 +1248,7 @@ DataManager::DataManager(
     std::vector<int32_t>       val_indices)
 {
     _impl = std::make_unique<DataManagerImpl>(
-        std::move(config), model,
+        std::move(config), std::move(camera_models),
         std::move(image_filenames), std::move(mask_filenames),
         std::move(depth_filenames), std::move(normal_filenames),
         std::move(widths), std::move(heights),

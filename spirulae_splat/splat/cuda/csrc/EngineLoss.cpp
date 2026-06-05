@@ -152,11 +152,20 @@ std::map<std::string, float> engine_compute_loss_backward(
     if (compute_depth_normal) {
         pixel_grads.v_depth_normal = _pool_tv("eng.v_depth_normal", C, H, W, 3);
     }
+    // GT-modality grads live at the GT's own resolution (which may differ
+    // from render H, W). The per-pixel loss kernel bilinearly scatters into
+    // these buffers via atomicAdd, and bilagrid backward then consumes them
+    // at the GT's grid resolution. When the GT happens to match render shape
+    // these allocations match the previous behavior exactly.
     if (engine().bilagrid_depth.enabled) {
-        pixel_grads.v_ref_depth = _pool_tv("eng.v_ref_depth", C, H, W, 1);
+        long Hd = engine().gt.depth.template size<1>();
+        long Wd = engine().gt.depth.template size<2>();
+        pixel_grads.v_ref_depth = _pool_tv("eng.v_ref_depth", C, Hd, Wd, 1);
     }
     if (engine().bilagrid_normal.enabled) {
-        pixel_grads.v_ref_normal = _pool_tv("eng.v_ref_normal", C, H, W, 3);
+        long Hn = engine().gt.normal.template size<1>();
+        long Wn = engine().gt.normal.template size<2>();
+        pixel_grads.v_ref_normal = _pool_tv("eng.v_ref_normal", C, Hn, Wn, 3);
     }
     // TODO: allocate normal/distortion grads when those features are enabled
 

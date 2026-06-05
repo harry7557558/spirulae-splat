@@ -308,15 +308,16 @@ class Trainer:
         if N == 0:
             raise RuntimeError("use_cpp_data_manager: empty cameras")
 
-        # Uniform camera_model is required (the engine dispatches by enum once
-        # per step). The dataparser guarantees the list-of-strings convention.
+        # Mixed camera models (e.g. pinhole + fisheye in one dataset) are OK:
+        # the C++ DataManager partitions images into groups by (W, H, model),
+        # and engine_train_step dispatches the per-batch model. We pass a
+        # per-camera enum int.
         cam_types = [str(t).upper() for t in cameras.camera_type]
-        if len(set(cam_types)) > 1:
-            raise NotImplementedError(
-                f"use_cpp_data_manager: non-uniform camera_type {set(cam_types)}")
-        cam_model_str = cam_types[0]
-        model_enum = _C.camera_model_from_name(cam_model_str) if hasattr(_C, 'camera_model_from_name') \
-            else getattr(_C.CameraModelType, cam_model_str)
+        camera_models = []
+        for s in cam_types:
+            e = _C.camera_model_from_name(s) if hasattr(_C, 'camera_model_from_name') \
+                else getattr(_C.CameraModelType, s)
+            camera_models.append(int(e))
 
         # ---- Bake viewmats from c2w (R, T inverse + Y/Z flip + relative_scale)
         # Mirrors lines 1446-1457 of model.engine_train_step. Done once on CPU.
@@ -392,7 +393,7 @@ class Trainer:
         c_cfg.val_batch_size   = val_bs
 
         _C.engine_setup_data_manager(
-            c_cfg, model_enum,
+            c_cfg, camera_models,
             image_filenames, mask_filenames, depth_filenames, normal_filenames,
             widths, heights,
             viewmats.contiguous().flatten().tolist(),

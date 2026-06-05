@@ -235,7 +235,9 @@ std::map<std::string, float> engine_train_step(
 
 void engine_setup_data_manager(
     DataManagerConfig         cfg,
-    CameraModelType           model,
+    // Per-camera model enum value (int; cast to CameraModelType internally).
+    // Mixed pinhole + fisheye datasets just produce extra index groups.
+    std::vector<int32_t>      camera_models,
     std::vector<std::string>  image_filenames,
     std::vector<std::string>  mask_filenames,
     std::vector<std::string>  depth_filenames,
