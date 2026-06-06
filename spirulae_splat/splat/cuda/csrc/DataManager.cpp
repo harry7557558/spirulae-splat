@@ -510,7 +510,9 @@ public:
     bool    has_val()      const { return !_val_indices.empty(); }
     CacheMode cache_mode() const { return _cfg.cache_mode; }
 
-    bool has_masks()   const { return !_mask_filenames.empty()   && _cfg.load_masks; }
+    bool has_masks()   const {
+        return (_cfg.load_masks && !_mask_filenames.empty()) || _has_synth_masks;
+    }
     bool has_depths()  const { return !_depth_filenames.empty()  && _cfg.load_depths; }
     bool has_normals() const { return !_normal_filenames.empty() && _cfg.load_normals; }
 
@@ -534,6 +536,13 @@ private:
     const float*              _axes_equirect6_dev  = nullptr;  // [6, 3, 3]
     std::vector<std::string>  _image_filenames;
     std::vector<std::string>  _mask_filenames;
+    // Per-image synthetic-mask flag. Set for fisheye/equisolid inputs when
+    // warp_to_pinhole is on AND no real mask file is supplied. The
+    // probe/preload/disk-worker paths treat these slots as a 1x1 all-white
+    // mask, which the warp kernel projects into a proper post-split FOV
+    // mask (1 inside the lens, 0 outside).
+    std::vector<uint8_t>      _synth_white_mask;
+    bool                      _has_synth_masks = false;
     std::vector<std::string>  _depth_filenames;
     std::vector<std::string>  _normal_filenames;
     std::vector<int32_t>      _widths, _heights;
@@ -738,6 +747,42 @@ DataManagerImpl::DataManagerImpl(
     }
     if (!_mask_filenames.empty()   && (int64_t)_mask_filenames.size()   != N)
         throw std::runtime_error("DataManager: mask_filenames length mismatch");
+
+    // Synthesize a full-white mask for every image without a real mask
+    // file when load_masks is enabled. Two reasons:
+    //   1) warp_to_pinhole on fisheye/equisolid needs an in-FOV mask so
+    //      the unseen cubemap-face regions outside the lens get masked
+    //      out (warp_mask_wide projects the all-ones input -> FOV mask).
+    //   2) Once (1) flips on load_masks for the run, EVERY group has a
+    //      mask buffer allocated. Pinhole images in a mixed dataset
+    //      that don't have a real mask file would otherwise get the
+    //      default all-zero slot -- every pixel marked invalid, the
+    //      per-pixel loss kernels skip them, and they're effectively
+    //      never trained on (also why their thumbnail rendered as a
+    //      solid gray panel). Synthesizing all-ones for them makes the
+    //      "no mask file" case equivalent to "every pixel valid", which
+    //      is the conventional NeRF/3DGS interpretation.
+    // The equirectangular warp kernel projects an all-ones input to
+    // all-ones too (it covers the full sphere), so this is also
+    // correct for equirect inputs.
+    _synth_white_mask.assign((size_t)N, 0);
+    if (_cfg.load_masks) {
+        for (int64_t i = 0; i < N; ++i) {
+            bool has_real = (!_mask_filenames.empty() &&
+                             !_mask_filenames[i].empty());
+            if (!has_real) {
+                _synth_white_mask[i] = 1;
+                _has_synth_masks = true;
+            }
+        }
+        // Ensure _mask_filenames is sized to N so per-image lookups below
+        // are valid (entries for synthesized slots stay empty strings,
+        // which the probe / decode paths special-case).
+        if (_has_synth_masks && _mask_filenames.empty()) {
+            _mask_filenames.assign((size_t)N, std::string());
+        }
+    }
+
     if (!_depth_filenames.empty()  && (int64_t)_depth_filenames.size()  != N)
         throw std::runtime_error("DataManager: depth_filenames length mismatch");
     if (!_normal_filenames.empty() && (int64_t)_normal_filenames.size() != N)
@@ -807,6 +852,25 @@ void DataManagerImpl::probe_dtypes() {
         }
     };
     if (has_masks())   probe_per_image(_mask_filenames,   "mask",   _mask_h_per,   _mask_w_per);
+    // Synthesized white masks: match the per-input image shape exactly.
+    // The wide-warp mask kernel projects post-split pixels into the input
+    // (fisheye/equisolid) image with the original intrins, then does an
+    // (xs >= 0 && xs < W && ys >= 0 && ys < H) bounds check against the
+    // input mask shape -- so a 1x1 broadcast would fail for every pixel
+    // except (uv ~= 0,0) (i.e. the single center pixel of the front
+    // face). We therefore allocate a full-size all-ones mask at the
+    // input image's (H, W) so the projection's bounds check uses the
+    // real lens FOV (valid -> in-bounds -> 1, otherwise 0).
+    if (_has_synth_masks) {
+        if (_mask_h_per.empty()) _mask_h_per.assign((size_t)N, 0);
+        if (_mask_w_per.empty()) _mask_w_per.assign((size_t)N, 0);
+        for (int64_t i = 0; i < N; ++i) {
+            if (_synth_white_mask[(size_t)i]) {
+                _mask_h_per[(size_t)i] = _heights[(size_t)i];
+                _mask_w_per[(size_t)i] = _widths[(size_t)i];
+            }
+        }
+    }
     if (has_depths())  probe_per_image(_depth_filenames,  "depth",  _depth_h_per,  _depth_w_per);
     if (has_normals()) probe_per_image(_normal_filenames, "normal", _normal_h_per, _normal_w_per);
 }
@@ -1016,6 +1080,16 @@ void DataManagerImpl::preload_cpu_cache() {
                     decode_mask_into(_mask_filenames[i], mh, mw,
                                      _cfg.mask_boundary_offset,
                                      _mask_cache[i].data());
+                } else if (has_masks() && _synth_white_mask[(size_t)i]) {
+                    // Full-size all-ones mask matching the input image shape
+                    // (see constructor note: 1x1 broadcast breaks the warp
+                    // kernel's bounds check, leaving only the center pixel
+                    // as 1 -> "front face is gray" symptom). The disk path
+                    // memsets at H*W directly; here we mirror that into the
+                    // per-image cache so fill_batch_from_cache's memcpy
+                    // hits the equal-shape fast path.
+                    int32_t mh = _mask_h_per[i], mw = _mask_w_per[i];
+                    _mask_cache[i].assign((size_t)mw * mh, (uint8_t)1);
                 }
                 if (has_depths() && !_depth_filenames[i].empty()) {
                     PixelDType dt = _depth_dtype[i];
@@ -1340,8 +1414,14 @@ void DataManagerImpl::worker_loop_mask() {
         int H = b.mask_height, W = b.mask_width;
         size_t row = (size_t)H * W;
         uint8_t* dst = b.mask_buffer.data() + (size_t)job.slot * row;
-        decode_mask_into(_mask_filenames[job.ds_index], H, W,
-                         _cfg.mask_boundary_offset, dst);
+        if (_synth_white_mask.empty() ||
+            !_synth_white_mask[(size_t)job.ds_index]) {
+            decode_mask_into(_mask_filenames[job.ds_index], H, W,
+                             _cfg.mask_boundary_offset, dst);
+        } else {
+            // Synthesized all-white: skip disk read, fill the slot directly.
+            std::memset(dst, 1, (size_t)H * W);
+        }
         if (job.remaining->fetch_sub(1) == 1) {
             job.batch->build_views();
             job.ready_q->push(job.batch);
@@ -1467,8 +1547,11 @@ void DataManagerImpl::enqueue_batch(
 
         rgb_jobs.push_back(jb);
         if (has_masks()) {
-            if (!_mask_filenames[i].empty()) mask_jobs.push_back(jb);
-            else                              try_publish();  // skip slot
+            bool has_real  = !_mask_filenames[i].empty();
+            bool is_synth  = !_synth_white_mask.empty() &&
+                             _synth_white_mask[(size_t)i];
+            if (has_real || is_synth) mask_jobs.push_back(jb);
+            else                       try_publish();  // truly absent
         }
         if (has_depths()) {
             if (!_depth_filenames[i].empty()) depth_jobs.push_back(jb);

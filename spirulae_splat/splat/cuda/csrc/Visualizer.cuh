@@ -9,6 +9,19 @@
 
 
 
+void engine_blit_view(
+    std::string     buffer_key,
+    TorchTensorView render_buffer,
+    TorchTensorView render_depth,
+    TorchTensorView render_alpha,
+    int             view_camera_model,
+    TorchTensorView view_intrins,
+    TorchTensorView view_viewmat,
+    TorchTensorView view_dist_coeffs,
+    bool            show_training_cameras,
+    TorchTensorView out_rgb);
+
+
 void blit_train_cameras_tensor(
     TorchTensorView render_rgbs,      // [H, W, C] float32
     TorchTensorView render_depths,    // [H, W, 1] float32

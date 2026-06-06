@@ -67,6 +67,7 @@ class _Handler(BaseHTTPRequestHandler):
                 fx=fx, fy=fy, cx=cx, cy=cy,
                 width=width, height=height,
                 camera_model=camera_model,
+                buffer_key=buffer_key,
             )
             post_process_params = {
                 "show_training_cameras": show_training_cameras,
@@ -89,15 +90,25 @@ class _Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     return
 
-                if buffer_key not in result.buffers:
+                # Trainer._render inserts None placeholders for every supported
+                # viewer buffer so the dropdown can enumerate them all from a
+                # single render. The requested buffer_key is always actually
+                # rendered (see Trainer._render's want_keys logic), so a None
+                # value here means either an unsupported buffer or a request
+                # that didn't trigger rendering -- both 400s.
+                if buffer_key not in result.buffers \
+                        or result.buffers[buffer_key] is None:
                     self.send_response(400)
                     self.end_headers()
                     return
 
-                # Update last_keys
+                # Update last_keys (keep placeholder keys so the dropdown
+                # shows them; the encode path filters them out below).
                 _Handler.last_keys = list(result.buffers.keys())
 
-                # Encode to JPEG
+                # Encode to JPEG. result.buffers[buffer_key] is already an
+                # annotated CUDA uint8 [H,W,3] tensor (engine_blit_view); the
+                # post-processor closure threads through show_training_cameras.
                 jpeg_bytes = encode_buffer_to_jpeg(
                     result.buffers[buffer_key],
                     result.buffers.get("_post_processor", None),
@@ -163,13 +174,17 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(response).encode("utf-8"))
 
     def _default_render_for_keys(self) -> None:
-        # Default params
+        # Default params. Empty buffer_key signals to Trainer._render that the
+        # caller wants the FULL output dict (i.e. don't gate via want_keys),
+        # so the dropdown lists every available buffer including the
+        # debug-only ones (sh, refinement_score, depth_normal).
         c2w = np.eye(3, 4, dtype=np.float32)
         req = RenderRequest(
             c2w=c2w,
             fx=500, fy=500, cx=256, cy=256,
             width=512, height=512,
             camera_model="PINHOLE",
+            buffer_key="",
         )
         if self.render_worker:
             self.render_worker.submit(req)

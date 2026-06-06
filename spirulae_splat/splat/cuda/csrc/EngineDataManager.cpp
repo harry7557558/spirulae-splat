@@ -77,9 +77,15 @@ std::map<std::string, float> engine_train_step_managed(
     // Static buffer so we don't allocate per step.
     static std::vector<int32_t> _bg_idx_buf;
     _bg_idx_buf.resize((size_t)b.num);
-    if (b.K == 1) {
-        for (int j = 0; j < b.input_num; ++j) _bg_idx_buf[j] = b.indices[j];
-    } else {
+    // bilagrid_cam_indices must be the POST-split camera id, not the input
+    // dataset id. For mixed datasets (e.g. K=5 fisheye + K=1 pinhole) those
+    // diverge after the first K>1 input, so reading b.indices[j] for K==1
+    // batches points the thumbnail kernel + bilagrid + PPISP at fisheye
+    // slots and leaves the real pinhole slots blank.
+    // `b.post_offsets[j] = _post_offsets[b.indices[j]]` is the starting
+    // post-split slot for input image j, already populated by
+    // DataManager::allocate_batch.
+    {
         int K = b.K;
         for (int j = 0; j < b.input_num; ++j) {
             int32_t off = b.post_offsets[j];

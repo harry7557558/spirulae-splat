@@ -396,6 +396,9 @@ class Trainer:
         post_c2w     = torch.zeros(n_post, 3, 4, dtype=torch.float32)
         post_intrins = torch.zeros(n_post, 4, dtype=torch.float32)
         post_dist    = torch.zeros(n_post, 10, dtype=torch.float32)
+        post_widths        = [0] * n_post
+        post_heights       = [0] * n_post
+        post_camera_models = [0] * n_post   # int enum; viewer uses these
         for i in range(N):
             k_i = K_per_camera[i]
             off = post_offsets[i]
@@ -404,6 +407,9 @@ class Trainer:
                 post_c2w[off]     = ci
                 post_intrins[off] = input_intrins[i]
                 post_dist[off]    = input_dist_coeffs[i]
+                post_widths[off]        = widths[i]
+                post_heights[off]       = heights[i]
+                post_camera_models[off] = camera_models[i]
                 continue
             # Pick the right axes table.
             axes = axes_6 if k_i == 6 else axes_5
@@ -426,6 +432,10 @@ class Trainer:
                 s = float(out_shape) / 2.0
                 post_intrins[off + k] = torch.tensor([s, s, s, s])
                 # Dist coeffs already zero.
+                post_widths[off + k]        = out_shape
+                post_heights[off + k]       = out_shape
+                # Each post-split face is rendered/displayed as PINHOLE.
+                post_camera_models[off + k] = PINHOLE_VAL
 
         # ---- c2w -> viewmat (R/T inverse + Y/Z flip + relative_scale) ---
         # Matches model.engine_train_step's per-step formula.
@@ -476,7 +486,16 @@ class Trainer:
 
         c_cfg = _C.DataManagerConfig()
         c_cfg.cache_mode       = cmap[cache_key]
-        c_cfg.load_masks       = (len(mask_filenames) > 0)
+        # Enable masks also when warp_to_pinhole is on AND the dataset has
+        # any fisheye/equisolid input -- the C++ DataManager synthesizes
+        # a 1x1 all-white placeholder per such image so the wide-warp mask
+        # kernel produces a proper post-split FOV mask (1 inside lens, 0
+        # outside). Without a mask the unseen regions of each cubemap
+        # face stay black and the training loss bakes gray splats there.
+        _needs_synth_mask = dm_cfg.warp_to_pinhole and any(
+            cm in (FISHEYE_VAL, EQUISOLID_VAL) for cm in camera_models
+        )
+        c_cfg.load_masks       = (len(mask_filenames) > 0) or _needs_synth_mask
         c_cfg.load_depths      = (len(depth_filenames) > 0 and not any_warp)
         c_cfg.load_normals     = (len(normal_filenames) > 0 and not any_warp)
         c_cfg.train_batch_size = train_bs
@@ -506,6 +525,29 @@ class Trainer:
         # accordingly (the model's own pre-init guess uses a uniform K).
         if any_warp:
             self.model.num_train_data = int(n_post)
+
+        # Build a POST-split Cameras object for the viewer. For the warp
+        # path each input image is exposed as K=5 (fisheye/equisolid) or
+        # K=6 (equirectangular) PINHOLE sub-cameras at the cubemap face
+        # poses -- exactly matching what the engine renders + caches
+        # thumbnails for. For mixed datasets, the per-camera K table
+        # already handles the interleave (K=1 pass-through for native
+        # PINHOLE, K=5/6 split for the wide / equirect entries).
+        _INT_TO_NAME = {
+            PINHOLE_VAL:  "PINHOLE",
+            FISHEYE_VAL:  "FISHEYE",
+            EQUISOLID_VAL:"EQUISOLID",
+            EQUIRECT_VAL: "EQUIRECTANGULAR",
+        }
+        post_camera_type_names = [_INT_TO_NAME[m] for m in post_camera_models]
+        self._viewer_cameras = Cameras(
+            intrins           = post_intrins,
+            distortion_params = post_dist,
+            height            = torch.tensor(post_heights, dtype=torch.int32),
+            width             = torch.tensor(post_widths,  dtype=torch.int32),
+            camera_to_worlds  = post_c2w,
+            camera_type       = post_camera_type_names,
+        )
 
         # Pass through to the model so engine_train_step_managed knows which
         # bilagrid lazy-init branches are actually live this run.
@@ -545,7 +587,7 @@ class Trainer:
         with open(self.output_dir / "dataparser_transforms.json", "w") as f:
             json.dump(dataparser_transform_dict, f, indent=4)
 
-    def _render(self, c2w, fx, fy, cx, cy, w, h, camera_model):
+    def _render(self, c2w, fx, fy, cx, cy, w, h, camera_model, buffer_key="rgb"):
         if self._train_frame_scale != 1.0:
             # Viewer client sends c2w in the legacy normalized frame; remap to
             # the actual training frame before rendering so navigation feel
@@ -567,19 +609,42 @@ class Trainer:
             c2w = c2w_new
         camera = Cameras((fx, fy, cx, cy), [0.0]*10, h, w, torch.from_numpy(c2w), camera_model)
         camera = camera.to("cuda")
-        outputs = self.model.get_outputs(camera)
+        # Pass want_keys=[buffer_key] so the model can skip the SH /
+        # refinement_score debug renders + the depth_normal kernel when
+        # the viewer didn't ask for them. Empty buffer_key ("") means
+        # "render everything" -- used by the viewer's buffer-enumeration
+        # path so the dropdown sees every supported key.
+        want = None if not buffer_key else [buffer_key]
+        outputs = self.model.get_outputs(camera, want_keys=want)
+
+        # Stuff `None` placeholders into the output dict for every buffer the
+        # viewer's dropdown should know about. This lets the buffer-enumeration
+        # endpoint (and `last_keys` cache populated by the first hot render)
+        # list every supported key even though `want_keys` only rendered the
+        # currently selected one. The hot path stays fast because the actual
+        # tensors are only produced for the requested key; when the user
+        # switches to a previously-`None` slot, the next request renders it.
+        for _k in ["rgb", "depth", "alpha"] + ["normal"] * 0 + ["depth_normal",
+                   "sh", "refinement_score"]:
+            outputs.setdefault(_k, None)
+        # Use the post-split Cameras when available (CPP DataManager path).
+        # For the legacy Python DM path no warp split happens, so the
+        # per-input cameras are already the right thing for the viewer.
+        _viewer_cams = getattr(self, '_viewer_cameras', None)
+        if _viewer_cams is None:
+            _viewer_cams = self.dataset_train.cameras
         outputs['_post_processor'] = lambda tensor, **kwargs: annotate_train_cameras(
-            tensor, outputs['depth'], outputs['alpha'],
-            camera, self.dataset_train.cameras, self.dataset_train.thumbnails,
-            relative_scale=self.model.config.relative_scale,
-            warp_to_pinhole=self.datamanager.config.warp_to_pinhole, **kwargs
+            buffer_key, tensor,
+            outputs.get('depth', None), outputs['alpha'],
+            camera, _viewer_cams,
+            **kwargs
         )
         return outputs
 
-    def render(self, *args):
+    def render(self, *args, **kwargs):
         with self.lock:
             self.model.eval()
-            return self._render(*args)
+            return self._render(*args, **kwargs)
 
     def _train_step(self, step: int):
         # ---- profiling probes (gated by PROFILE_TRAIN_STEP) ----

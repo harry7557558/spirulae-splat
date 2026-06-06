@@ -889,8 +889,15 @@ class SpirulaeSplatModel(torch.nn.Module):
     def forward(self):
         raise NotImplementedError()
 
-    def get_outputs(self, camera: Cameras, val: bool=False) -> Dict[str, Union[torch.Tensor, List]]:
-        """Takes in a camera and returns a dictionary of outputs."""
+    def get_outputs(self, camera: Cameras, val: bool=False, want_keys=None) -> Dict[str, Union[torch.Tensor, List]]:
+        """Takes in a camera and returns a dictionary of outputs.
+
+        `want_keys` is an optional iterable of keys the caller is interested in.
+        Currently used to skip the debug SH/refinement_score renders and the
+        depth_normal kernel in the eval/viewer path when they weren't requested.
+        Passing None (default) keeps the legacy "render everything" behavior.
+        """
+        _want = set(want_keys) if want_keys is not None else None
 
         if isinstance(camera, Tuple) and len(camera) == 2:
             train_outputs = self.get_outputs(camera[0])
@@ -1033,7 +1040,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             render_normal = torch.where(Ts < 1.0, F.normalize(render_normal, dim=-1), render_normal)
 
         depth_normal = None
-        if depth_im_ref is not None and not self.training:
+        if (depth_im_ref is not None and not self.training
+                and (_want is None or 'depth_normal' in _want)):
             # depth_im_ref is CPU (from engine_copy_render_to_host). Move to CUDA for the kernel.
             depth_cuda = depth_im_ref.cuda().contiguous() if not depth_im_ref.is_cuda else depth_im_ref.contiguous()
             intrins_cuda = intrins.cuda().contiguous() if not intrins.is_cuda else intrins.contiguous()
@@ -1186,8 +1194,10 @@ class SpirulaeSplatModel(torch.nn.Module):
         # if not hasattr(self.core, 'densify_accum_buffer'):
         #     return outputs
 
-        # Debug SH: render with DC zeroed out to visualize SH-only contribution
-        if not self.training and True:
+        # Debug SH: render with DC zeroed out to visualize SH-only contribution.
+        # Skipped on the viewer hot path when the caller didn't request the
+        # `sh` buffer (want_keys gating).
+        if not self.training and (_want is None or 'sh' in _want):
             zero_dc = torch.zeros_like(self.features_dc)
             sh_rgb = self.core.engine_debug_forward(
                 override_features_dc=zero_dc,
@@ -1196,7 +1206,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             outputs['sh'] = sh_rgb[0]  # first camera
 
         # Debug densification: visualize per-splat accum weight as color
-        if not self.training and self.step > 1 and True:
+        if not self.training and self.step > 1 and (_want is None or 'refinement_score' in _want):
             accum_weight = self.core.engine_get_accum_weight()
             param_to_vis = accum_weight
             mean_val = param_to_vis.mean()
@@ -1329,7 +1339,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                     buckets['image'] += gib
                 elif key.startswith('eng.bg.') or key.startswith('eng.ppisp.'):
                     buckets['appearance'] += gib
-                elif key.startswith('vis.'):
+                elif key.startswith('vis.') or key.startswith('viewer.'):
                     buckets['viewer'] += gib
                 else:
                     buckets['other'] += gib

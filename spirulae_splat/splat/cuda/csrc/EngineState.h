@@ -264,6 +264,56 @@ struct PpispState {
 };
 
 
+// Compile-time thumbnail resolution. Square RGBA uint8; stored in
+// device-side cache populated during training data ingestion (set_training_data
+// / set_training_data_warped) and consumed by the viewer's blit kernel.
+#ifndef VIEWER_THUMBNAIL_SIZE
+#define VIEWER_THUMBNAIL_SIZE 64
+#endif
+
+
+// Viewer state: device-side per-post-camera thumbnail cache, BVH cache for
+// the training-camera frustum visualization, and a copy of the static
+// dataset-wide camera arrays (intrins / dist_coeffs / c2w / model / W / H).
+// All allocated lazily on engine_viewer_init(); kernels gated on
+// `initialized` so the training loop pays zero cost until the viewer asks.
+struct EngineViewerState {
+    bool   initialized = false;
+    int    N_post      = 0;   // total post-split training cameras
+
+    // Per-post-camera dataset arrays (uploaded once at init).
+    DeviceVector<float>   d_intrins;          // [N_post, 4]
+    DeviceVector<int32_t> d_widths;           // [N_post]
+    DeviceVector<int32_t> d_heights;          // [N_post]
+    DeviceVector<int32_t> d_camera_models;    // [N_post]
+    DeviceVector<float>   d_dist_coeffs;      // [N_post, 10]
+    DeviceVector<float>   d_camera_to_worlds; // [N_post, 3, 4] (y/z-flipped form)
+    float  camera_size = 0.0f;                // frustum render scale, from knn-dist
+
+    // Thumbnail cache: [N_post, S, S, 4] uint8, S = VIEWER_THUMBNAIL_SIZE.
+    // done_mask[i] = 1 once cam i's thumbnail has been written. Host fast-path
+    // counter `pending_thumb` is decremented as new ids first appear in
+    // training batches; once 0, the hook short-circuits.
+    DeviceVector<uint8_t> thumbnails;         // [N_post * S * S * 4]
+    DeviceVector<uint8_t> thumbnail_done_mask;// [N_post]
+    std::vector<uint8_t>  host_seen_mask;     // [N_post], 1 if id was ever passed
+    int    pending_thumb = 0;                 // N_post - sum(host_seen_mask)
+
+    // BVH cache for training-camera visualization. Built on the first
+    // engine_blit_view(show_training_cameras=true) call and reused forever
+    // (training cameras are static; camera_size also frozen at init).
+    bool   bvh_built = false;
+    DeviceVector<float>   bvh_lss_buffer;     // [num_lss * 2 * 4]
+    DeviceVector<float>   bvh_tri_buffer;     // [num_tri * 4 * 4]
+    DeviceVector<int32_t> bvh_lss_nodes;      // [num_lss * 2]  (int2)
+    DeviceVector<float>   bvh_lss_aabb;       // [num_lss * 2 * 3] (float3)
+    DeviceVector<int32_t> bvh_tri_nodes;      // [num_tri * 2]
+    DeviceVector<float>   bvh_tri_aabb;       // [num_tri * 2 * 3]
+    int    bvh_num_lss = 0;
+    int    bvh_num_tri = 0;
+};
+
+
 struct EngineState {
     // Top-level scalars + flags shared across sections.
     std::string primitive;
@@ -290,6 +340,9 @@ struct EngineState {
     EngineBackground background;
     PpispState       ppisp;
     ColorSpaceState  color_space;
+
+    // Viewer (BVH + thumbnail cache + dataset camera arrays).
+    EngineViewerState viewer;
 
     // Host-side dataset orchestrator (RGB / mask / depth / normal decode +
     // batching). Set by engine_setup_data_manager(); when present, the new

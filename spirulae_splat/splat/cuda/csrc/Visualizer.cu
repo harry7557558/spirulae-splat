@@ -11,6 +11,8 @@ namespace SlangProjectionUtils {
 
 #include <Tensor.h>
 #include <Common.cuh>
+#include "EngineState.h"
+#include "EngineCommon.h"
 
 
 
@@ -1033,6 +1035,391 @@ __global__ void compute_min_max_kernel(
 
     amax = cg::reduce(warp, amax, cg::greater<float>());
     if (warp.thread_rank() == 0) atomicMax(&min_max[1], amax);
+}
+
+
+// ---------------------------------------------------------------------------
+// engine_viewer_init: lazy one-shot upload of static dataset camera arrays +
+// allocation of the device-side thumbnail cache. Resets BVH cache flag so
+// the next show_training_cameras=true call rebuilds.
+// ---------------------------------------------------------------------------
+void engine_viewer_init(
+    TorchTensorView camera_models,
+    TorchTensorView intrins,
+    TorchTensorView dist_coeffs,
+    TorchTensorView camera_to_worlds,
+    TorchTensorView widths,
+    TorchTensorView heights,
+    float camera_size)
+{
+    auto& v = engine().viewer;
+    int64_t N = std::get<2>(intrins)[0];
+    if (N <= 0)
+        throw std::runtime_error("engine_viewer_init: N_post must be > 0");
+
+    v.N_post      = (int)N;
+    v.camera_size = camera_size;
+
+    // Upload dataset-wide arrays (host or device input). _hv_to_dv copies
+    // when host, zero-copies when device.
+    v.d_intrins          = _hv_to_dv<float>("viewer.intrins",
+                              TorchTensorView(std::get<0>(intrins), 4, {N * 4LL}));
+    v.d_widths           = _hv_to_dv<int32_t>("viewer.widths",  widths);
+    v.d_heights          = _hv_to_dv<int32_t>("viewer.heights", heights);
+    v.d_camera_models    = _hv_to_dv<int32_t>("viewer.cmodels", camera_models);
+    v.d_dist_coeffs      = _hv_to_dv<float>("viewer.dist",
+                              TorchTensorView(std::get<0>(dist_coeffs), 4, {N * 10LL}));
+    v.d_camera_to_worlds = _hv_to_dv<float>("viewer.c2w",
+                              TorchTensorView(std::get<0>(camera_to_worlds), 4, {N * 12LL}));
+
+    // Allocate thumbnail cache (N * S * S * 4 bytes; zero-initialized so
+    // unfilled cells render as transparent black).
+    constexpr int S = VIEWER_THUMBNAIL_SIZE;
+    v.thumbnails.resize("viewer.thumb", (int64_t)N * S * S * 4);
+    cudaMemset(v.thumbnails.data_ptr(), 0,
+               (size_t)N * S * S * 4 * sizeof(uint8_t));
+    v.thumbnail_done_mask.resize("viewer.thumb_done", N);
+    cudaMemset(v.thumbnail_done_mask.data_ptr(), 0, (size_t)N * sizeof(uint8_t));
+    v.host_seen_mask.assign((size_t)N, 0);
+    v.pending_thumb = (int)N;
+
+    v.bvh_built  = false;
+    v.initialized = true;
+}
+
+
+// ---------------------------------------------------------------------------
+// Thumbnail update: gather a downscaled RGBA per post-camera from the
+// already-byte->float-warped GT buffer at engine().gt.rgb. Called by
+// _engine_train_step_after_setup right after _set_cur_cam_indices uploads
+// the per-batch post-camera ids and engine().gt.rgb is populated. Cheap when
+// all slots are full (host counter short-circuits before any kernel launch).
+// ---------------------------------------------------------------------------
+
+__global__ void update_thumbnails_kernel(
+    const float3* __restrict__ rgb_float,    // [B_post * H * W] (float3)
+    int H_in, int W_in,
+    const int32_t* __restrict__ cam_indices, // [B_post] device-side
+    int B_post, int N, int S,
+    uint8_t* __restrict__ thumbnails,        // [N * S * S * 4]
+    uint8_t* __restrict__ done_mask,         // [N]
+    const bool*    __restrict__ alpha_mask   // [B_post * H * W] (bool) or nullptr
+) {
+    int b = blockIdx.x;
+    if (b >= B_post) return;
+    int post_idx = cam_indices[b];
+    if (post_idx < 0 || post_idx >= N) return;
+    if (done_mask[post_idx] != 0) return;  // already filled; skip
+
+    int tid = threadIdx.x;
+    int s_total = S * S;
+
+    const float3* src  = rgb_float + (size_t)b * H_in * W_in;
+    const bool*   msrc = (alpha_mask != nullptr)
+                            ? (alpha_mask + (size_t)b * H_in * W_in) : nullptr;
+    uint8_t* dst = thumbnails + (size_t)post_idx * S * S * 4;
+
+    float sx_step = (float)W_in / (float)S;
+    float sy_step = (float)H_in / (float)S;
+
+    for (int p = tid; p < s_total; p += blockDim.x) {
+        int sy = p / S;
+        int sx = p % S;
+        float u  = ((float)sx + 0.5f) * sx_step - 0.5f;
+        float vv = ((float)sy + 0.5f) * sy_step - 0.5f;
+        int x0 = (int)floorf(u);
+        int y0 = (int)floorf(vv);
+        float wx = u  - (float)x0;
+        float wy = vv - (float)y0;
+        int x1 = x0 + 1;
+        int y1 = y0 + 1;
+        x0 = max(0, min(W_in - 1, x0));
+        x1 = max(0, min(W_in - 1, x1));
+        y0 = max(0, min(H_in - 1, y0));
+        y1 = max(0, min(H_in - 1, y1));
+        float w00 = (1.0f - wx) * (1.0f - wy);
+        float w10 = wx           * (1.0f - wy);
+        float w01 = (1.0f - wx) * wy;
+        float w11 = wx           * wy;
+
+        // Mask-aware: bilinear-sample the binary mask; if the weighted
+        // coverage is < 0.5 the destination cell is mostly outside the
+        // valid-pixel region -- render as mid-gray (0.5) so masked borders
+        // are visually distinct from black image content.
+        float mask_cov = 1.0f;
+        if (msrc) {
+            float m00 = msrc[(size_t)y0 * W_in + x0] ? 1.0f : 0.0f;
+            float m10 = msrc[(size_t)y0 * W_in + x1] ? 1.0f : 0.0f;
+            float m01 = msrc[(size_t)y1 * W_in + x0] ? 1.0f : 0.0f;
+            float m11 = msrc[(size_t)y1 * W_in + x1] ? 1.0f : 0.0f;
+            mask_cov = m00*w00 + m10*w10 + m01*w01 + m11*w11;
+        }
+
+        float r, g, bb;
+        if (mask_cov < 0.5f) {
+            r = g = bb = 0.5f;
+        } else {
+            float3 c00 = src[(size_t)y0 * W_in + x0];
+            float3 c10 = src[(size_t)y0 * W_in + x1];
+            float3 c01 = src[(size_t)y1 * W_in + x0];
+            float3 c11 = src[(size_t)y1 * W_in + x1];
+            r  = c00.x*w00 + c10.x*w10 + c01.x*w01 + c11.x*w11;
+            g  = c00.y*w00 + c10.y*w10 + c01.y*w01 + c11.y*w11;
+            bb = c00.z*w00 + c10.z*w10 + c01.z*w01 + c11.z*w11;
+        }
+        uint8_t* o = dst + ((size_t)sy * S + sx) * 4;
+        o[0] = (uint8_t)fminf(fmaxf(255.0f * r  + 0.5f, 0.0f), 255.0f);
+        o[1] = (uint8_t)fminf(fmaxf(255.0f * g  + 0.5f, 0.0f), 255.0f);
+        o[2] = (uint8_t)fminf(fmaxf(255.0f * bb + 0.5f, 0.0f), 255.0f);
+        o[3] = 255;
+    }
+    __syncthreads();
+    if (tid == 0) done_mask[post_idx] = 1;
+}
+
+
+// Called from EngineTrainStep.cpp after _set_cur_cam_indices but before the
+// forward pass. cam_indices_tv is the same host or device int32 tensor used
+// by bilagrid (post-split layout).
+void engine_viewer_capture_thumbnails(TorchTensorView cam_indices_tv) {
+    auto& v = engine().viewer;
+    if (!v.initialized || v.pending_thumb <= 0) return;
+    if (!engine().gt.has_gt) return;
+    if (engine().gt.rgb.data_ptr() == nullptr) return;
+
+    int64_t B_post = engine().gt.rgb.size<0>();
+    int64_t H = engine().gt.rgb.size<1>();
+    int64_t W = engine().gt.rgb.size<2>();
+    if (B_post <= 0 || H <= 0 || W <= 0) return;
+
+    uint64_t ci_ptr = std::get<0>(cam_indices_tv);
+    if (ci_ptr == 0) return;
+
+    // Read cam_indices into host so we can update host_seen_mask + counter.
+    std::vector<int32_t> host_ci((size_t)B_post);
+    bool ci_on_device = _is_device_ptr((void*)ci_ptr);
+    if (ci_on_device) {
+        cudaMemcpy(host_ci.data(), (const void*)ci_ptr,
+                   (size_t)B_post * sizeof(int32_t),
+                   cudaMemcpyDeviceToHost);
+    } else {
+        std::memcpy(host_ci.data(), (const void*)ci_ptr,
+                    (size_t)B_post * sizeof(int32_t));
+    }
+
+    int newly = 0;
+    for (int j = 0; j < B_post; ++j) {
+        int idx = host_ci[j];
+        if (idx >= 0 && idx < v.N_post && !v.host_seen_mask[(size_t)idx]) {
+            v.host_seen_mask[(size_t)idx] = 1;
+            ++newly;
+        }
+    }
+    if (newly == 0) return;  // every id this batch is already cached
+    v.pending_thumb -= newly;
+
+    // Kernel reads cam_indices from device; use the engine's pre-uploaded
+    // bilagrid_cur_cam_indices buffer when available (already populated by
+    // _set_cur_cam_indices). Fall back to a one-shot H2D copy otherwise.
+    const int32_t* d_ci = engine().bilagrid_cur_cam_indices.data_ptr();
+    int32_t* tmp_ci = nullptr;
+    if (d_ci == nullptr) {
+        tmp_ci = DevicePool::global().acquire<int32_t>(
+            "viewer.cap_idx", (size_t)B_post);
+        cudaMemcpy(tmp_ci, host_ci.data(),
+                   (size_t)B_post * sizeof(int32_t),
+                   cudaMemcpyHostToDevice);
+        d_ci = tmp_ci;
+    }
+
+    // Optional GT mask -> mask-aware thumbnail (masked regions become gray).
+    const bool* d_alpha_mask = nullptr;
+    if (engine().gt.has_mask && engine().gt.alpha.data_ptr() != nullptr) {
+        // engine().gt.alpha is [B_post, H, W, 1] of bool; layout matches
+        // engine().gt.rgb's [B_post, H, W, 3] (same B / H / W).
+        d_alpha_mask = engine().gt.alpha.data_ptr();
+    }
+
+    update_thumbnails_kernel<<<(uint32_t)B_post, 128>>>(
+        (const float3*)engine().gt.rgb.data_ptr(),
+        (int)H, (int)W,
+        d_ci, (int)B_post, v.N_post, VIEWER_THUMBNAIL_SIZE,
+        v.thumbnails.data_ptr(),
+        v.thumbnail_done_mask.data_ptr(),
+        d_alpha_mask
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+// ---------------------------------------------------------------------------
+// engine_blit_view: stateful replacement for blit_train_cameras_tensor.
+// Caches the BVH (built from engine().viewer's cached dataset arrays) on
+// the first show_training_cameras=true call, reads thumbnails from the
+// engine's device-side cache, and writes annotated [H,W,3] uint8 output.
+// ---------------------------------------------------------------------------
+
+namespace {
+// Build the BVH into engine().viewer.bvh_* pool slots. Runs the same kernel
+// dance as blit_train_cameras_tensor's show-cams branch but emits to
+// dedicated "viewer.*" keys so the buffers survive across calls.
+void _viewer_build_bvh()
+{
+    auto& v = engine().viewer;
+    int64_t n = v.N_post;
+    constexpr int kFloatPInfByte = 0x7f;
+    constexpr int kFloatNInfByte = 0xfe;
+
+    uint32_t num_lss = (uint32_t)(n * 8 * kNumFrustumSegments);
+    uint32_t num_tri = (uint32_t)(n * 4 * kNumFrustumFaces * kNumFrustumFaces);
+
+    float4* lss_buffer = DevicePool::global().acquire<float4>("viewer.lss", (size_t)num_lss * 2);
+    float4* tri_buffer = DevicePool::global().acquire<float4>("viewer.tri", (size_t)num_tri * 4);
+
+    TorchTensorView dist_tv((uint64_t)v.d_dist_coeffs.data_ptr(), 4,
+                            {(int64_t)n, 10LL});
+    CameraDistortionCoeffsBuffer dist_buf(dist_tv);
+
+    fill_frustum_segments_kernel
+    <<<_LAUNCH_ARGS_1D(n * 4 * kNumFrustumSegments, 4 * kNumFrustumSegments)>>>(
+        (const float4*)v.d_intrins.data_ptr(),
+        v.d_widths.data_ptr(),
+        v.d_heights.data_ptr(),
+        v.d_camera_models.data_ptr(),
+        dist_buf,
+        v.d_camera_to_worlds.data_ptr(),
+        v.camera_size,
+        lss_buffer,
+        tri_buffer
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    float3* root_aabb = DevicePool::global().acquire<float3>("viewer.root_aabb", 2);
+    cudaMemset(root_aabb + 0, kFloatPInfByte, sizeof(float3));
+    cudaMemset(root_aabb + 1, kFloatNInfByte, sizeof(float3));
+    compute_aabb_kernel<VisPrimitive::LinearSweptSphere>
+    <<<_LAUNCH_ARGS_1D(num_lss, 256)>>>(num_lss, lss_buffer, root_aabb);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+    compute_aabb_kernel<VisPrimitive::Triangle>
+    <<<_LAUNCH_ARGS_1D(num_tri, 256)>>>(num_tri, tri_buffer, root_aabb);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    float3 rootAABBMin, rootAABBMax;
+    {
+        float h_aabb[6];
+        cudaMemcpy(h_aabb, root_aabb, 6 * sizeof(float), cudaMemcpyDeviceToHost);
+        float cx = 0.5f * (h_aabb[3] + h_aabb[0]);
+        float cy = 0.5f * (h_aabb[4] + h_aabb[1]);
+        float cz = 0.5f * (h_aabb[5] + h_aabb[2]);
+        float ex = 0.5f * (h_aabb[3] - h_aabb[0]);
+        float ey = 0.5f * (h_aabb[4] - h_aabb[1]);
+        float ez = 0.5f * (h_aabb[5] - h_aabb[2]);
+        float ms = 1.01f * fmaxf(fmaxf(ex, ey), ez);
+        rootAABBMin = {cx - ms, cy - ms, cz - ms};
+        rootAABBMax = {cx + ms, cy + ms, cz + ms};
+    }
+
+    // Reuse build_bvh<>; output (nodes / aabb) lands in pool slots keyed by
+    // the prefix, so subsequent calls with the same key reuse the memory.
+    auto lss_bvh = build_bvh<VisPrimitive::LinearSweptSphere>(
+        num_lss, lss_buffer, rootAABBMin, rootAABBMax, "viewer.lss_bvh");
+    auto tri_bvh = build_bvh<VisPrimitive::Triangle>(
+        num_tri, tri_buffer, rootAABBMin, rootAABBMax, "viewer.tri_bvh");
+    (void)lss_bvh; (void)tri_bvh;  // pool retains the memory via the keys
+
+    v.bvh_num_lss = (int)num_lss;
+    v.bvh_num_tri = (int)num_tri;
+    v.bvh_built = true;
+}
+} // anonymous namespace
+
+
+/*[AutoHeaderGeneratorExport]*/
+void engine_blit_view(
+    std::string     buffer_key,
+    TorchTensorView render_buffer,
+    TorchTensorView render_depth,
+    TorchTensorView render_alpha,
+    int             view_camera_model,
+    TorchTensorView view_intrins,
+    TorchTensorView view_viewmat,
+    TorchTensorView view_dist_coeffs,
+    bool            show_training_cameras,
+    TorchTensorView out_rgb)
+{
+    auto& v = engine().viewer;
+    if (!v.initialized) {
+        throw std::runtime_error(
+            "engine_blit_view: viewer not initialized; call engine_viewer_init() first.");
+    }
+
+    auto& rgb_shape = std::get<2>(render_buffer);
+    int64_t h = rgb_shape[0], w = rgb_shape[1], c = rgb_shape[2];
+    (void)buffer_key;  // shape (c==1 vs 3) already distinguishes colormap vs passthrough
+
+    constexpr int kFloatPInfByte = 0x7f;
+    constexpr int kFloatNInfByte = 0xfe;
+
+    float* min_max = nullptr;
+    if (c == 1) {
+        min_max = DevicePool::global().acquire<float>("viewer.min_max", 2);
+        cudaMemset(min_max + 0, kFloatPInfByte, sizeof(float));
+        cudaMemset(min_max + 1, kFloatNInfByte, sizeof(float));
+        compute_min_max_kernel<<<_LAUNCH_ARGS_2D(w, h, 16, 16)>>>(
+            tv_to_view<float, 3>(render_buffer), min_max);
+        CHECK_DEVICE_ERROR(cudaGetLastError());
+    }
+
+    // Thumbnails view from engine-cached buffer.
+    TensorView<uint8_t, 4> thumb_view;
+    thumb_view.data = v.thumbnails.data_ptr();
+    thumb_view.shape[0] = (long)v.N_post;
+    thumb_view.shape[1] = (long)VIEWER_THUMBNAIL_SIZE;
+    thumb_view.shape[2] = (long)VIEWER_THUMBNAIL_SIZE;
+    thumb_view.shape[3] = 4L;
+    thumb_view.strides[3] = 1L;
+    thumb_view.strides[2] = 4L;
+    thumb_view.strides[1] = (long)(VIEWER_THUMBNAIL_SIZE * 4);
+    thumb_view.strides[0] = (long)(VIEWER_THUMBNAIL_SIZE * VIEWER_THUMBNAIL_SIZE * 4);
+
+    const float4* lss_buffer = nullptr;
+    const int2*   lss_nodes  = nullptr;
+    const float3* lss_aabb   = nullptr;
+    const float4* tri_buffer = nullptr;
+    const int2*   tri_nodes  = nullptr;
+    const float3* tri_aabb   = nullptr;
+
+    if (show_training_cameras) {
+        if (!v.bvh_built) _viewer_build_bvh();
+        lss_buffer = (const float4*)DevicePool::global().acquire<float4>(
+            "viewer.lss", (size_t)v.bvh_num_lss * 2);
+        tri_buffer = (const float4*)DevicePool::global().acquire<float4>(
+            "viewer.tri", (size_t)v.bvh_num_tri * 4);
+        lss_nodes  = (const int2*)DevicePool::global().acquire<int32_t>(
+            "viewer.lss_bvh.nodes", (size_t)(v.bvh_num_lss - 1) * 2);
+        tri_nodes  = (const int2*)DevicePool::global().acquire<int32_t>(
+            "viewer.tri_bvh.nodes", (size_t)(v.bvh_num_tri - 1) * 2);
+        lss_aabb   = (const float3*)DevicePool::global().acquire<float3>(
+            "viewer.lss_bvh.aabb", (size_t)v.bvh_num_lss * 2);
+        tri_aabb   = (const float3*)DevicePool::global().acquire<float3>(
+            "viewer.tri_bvh.aabb", (size_t)v.bvh_num_tri * 2);
+    }
+
+    blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
+        tv_to_view<float, 3>(render_buffer),
+        tv_to_view<float, 3>(render_depth),
+        tv_to_view<float, 3>(render_alpha),
+        view_camera_model, (int)w, (int)h,
+        (float4*)std::get<0>(view_intrins),
+        (float*)std::get<0>(view_viewmat),
+        view_dist_coeffs,
+        lss_buffer, lss_nodes, lss_aabb,
+        tri_buffer, tri_nodes, tri_aabb,
+        thumb_view,
+        min_max,
+        tv_to_view<uint8_t, 3>(out_rgb)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 

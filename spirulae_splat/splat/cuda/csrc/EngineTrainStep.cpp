@@ -31,6 +31,15 @@ std::map<std::string, float> _engine_train_step_after_setup(
     // background blend (needs cam_indices for SH-mode rotation gather), so
     // both must be in place by the time we launch projection.
     _set_cur_cam_indices(bilagrid_cam_indices);
+
+    // Viewer: capture thumbnails of the GT for any new post-camera ids in
+    // this batch. No-op when the viewer hasn't been initialized or the
+    // host counter is already drained (all cams cached). Runs right here
+    // -- after _set_cur_cam_indices uploads the device indices and after
+    // engine().gt.rgb has been populated by set_training_data{,_warped}
+    // (called by the public engine_train_step{,_warped} before us).
+    engine_viewer_capture_thumbnails(bilagrid_cam_indices);
+
     if (engine().background.enabled) {
         engine_set_background_step_params(cfg.background.seed,
                                           cfg.background.randomize_weight);

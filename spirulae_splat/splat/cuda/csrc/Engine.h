@@ -361,6 +361,55 @@ void engine_copy_splats_to_host(
     TorchTensorView features_sh
 );
 
+// --- Viewer ---
+//
+// engine_viewer_init: lazy one-shot upload of the dataset-wide POST-split
+// camera arrays (intrins / dist_coeffs / c2w / camera_models / W / H) and
+// allocation of the device-side per-camera thumbnail cache + done-mask.
+// After this, every set_training_data / set_training_data_warped also runs
+// the thumbnail-fill kernel for any new post-camera ids in the batch (cheap
+// kernel; gated on host counter once all cams have a thumbnail). Idempotent;
+// safe to call multiple times (re-uploads + resets thumbnail state).
+//
+// camera_models / intrins / dist_coeffs / camera_to_worlds / widths /
+// heights are at POST-split layout (length N_post == sum over input
+// cameras of K), matching the DataManager's post-split arrays.
+//
+// camera_size: the visualization-frustum scale (knn-style), in world units.
+void engine_viewer_init(
+    TorchTensorView camera_models,   // [N_post]   int32
+    TorchTensorView intrins,         // [N_post,4] float32
+    TorchTensorView dist_coeffs,     // [N_post,10] float32
+    TorchTensorView camera_to_worlds,// [N_post,3,4] float32 (y/z-flipped form)
+    TorchTensorView widths,          // [N_post]   int32
+    TorchTensorView heights,         // [N_post]   int32
+    float camera_size);
+
+// engine_blit_view: fused viewer-render annotation. Caches the BVH on the
+// first show_training_cameras=true call; reads thumbnails out of the
+// engine's device-side cache (no thumbnails arg). buffer_key selects which
+// channel of the rendered output drives the colormap path:
+//   "rgb"          render_rgbs is [H,W,3] float -- passed through.
+//   "depth"        render_rgbs is [H,W,1] float -- turbo-colormapped.
+//   "alpha"        render_rgbs is [H,W,1] float -- viridis-colormapped.
+//   "normal"       [H,W,3] float in [0,1] -- passed through.
+//   "depth_normal" [H,W,3] float in [0,1] -- passed through.
+// depth + alpha are always [H,W,1] float and provide the occlusion test.
+// view_* fields describe the visualization camera; out_rgb is [H,W,3] uint8
+// (pre-allocated CUDA buffer).
+void engine_blit_view(
+    std::string     buffer_key,
+    TorchTensorView render_buffer,   // [H,W,1|3] float (channel matches buffer_key)
+    TorchTensorView render_depth,    // [H,W,1] float, may be null when buffer_key=="alpha"
+    TorchTensorView render_alpha,    // [H,W,1] float
+    int             view_camera_model,
+    TorchTensorView view_intrins,    // [1,4]   float
+    TorchTensorView view_viewmat,    // [4,4]   float
+    TorchTensorView view_dist_coeffs,
+    bool            show_training_cameras,
+    TorchTensorView out_rgb          // [H,W,3] uint8, pre-allocated CUDA
+);
+
 // Pool VRAM breakdown: [(key, used_bytes, cap_bytes), ...]
 std::vector<std::tuple<std::string, size_t, size_t>> engine_get_pool_breakdown();
 size_t engine_get_scratch_bytes();
