@@ -42,6 +42,23 @@ void fused_bilagrid_tv_adam(
     cudaStream_t stream
 );
 
+// --- RGB color-shift regularizer (BilagridShiftReg.cu). ---
+// Injects design (1) gradient on the POST-bilagrid v_render_rgb buffer and
+// updates an on-device per-channel EMA of mean(sign(post - pre)). All on
+// `stream`; no D->H readbacks.
+void bilagrid_rgb_shift_reg_step(
+    float* v_render_rgb,
+    const float* post_rgb,
+    const float* pre_rgb,
+    float* shift_reg_ema,           // [3] device
+    float* shift_reg_batch_sum,     // [3] device scratch
+    int N_pixels,                   // B * H * W
+    float weight,
+    float beta,
+    int64_t step,                   // # of EMA updates done BEFORE this call
+    cudaStream_t stream
+);
+
 // --- Fused bilagrid (image-grad + TV + AdaGrad) kernel (BilagridFusedAdam.cu). ---
 // Same gradient pipeline as fused_bilagrid_tv_adam, but applies an AdaGrad
 // update with lr_decay=0, weight_decay=0, initial_accumulator_value=0,

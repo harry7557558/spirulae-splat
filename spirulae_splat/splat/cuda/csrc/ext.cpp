@@ -213,7 +213,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("lr_normal",      &BilagridStepConfig::lr_normal)
         .def_readwrite("tv_weight_rgb",  &BilagridStepConfig::tv_weight_rgb)
         .def_readwrite("tv_weight_depth",  &BilagridStepConfig::tv_weight_depth)
-        .def_readwrite("tv_weight_normal", &BilagridStepConfig::tv_weight_normal);
+        .def_readwrite("tv_weight_normal", &BilagridStepConfig::tv_weight_normal)
+        .def_readwrite("shift_reg_weight_rgb", &BilagridStepConfig::shift_reg_weight_rgb)
+        .def_readwrite("shift_reg_beta_rgb",   &BilagridStepConfig::shift_reg_beta_rgb);
 
     py::class_<PpispStepConfig>(m, "PpispStepConfig")
         .def(py::init<>())

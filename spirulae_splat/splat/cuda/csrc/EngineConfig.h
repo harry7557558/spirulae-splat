@@ -108,6 +108,13 @@ struct BilagridStepConfig {
     float tv_weight_rgb  = 0.0f;
     float tv_weight_depth = 0.0f;
     float tv_weight_normal = 0.0f;
+    // RGB color-shift regularizer (design 1, BilagridShiftReg.cu). Penalizes
+    // the dataset-wide mean sign(post - pre); zero disables the kernel launch
+    // entirely. beta is the EMA decay (e.g. 1 - 1/T where T = #batches per
+    // epoch); ignored when weight is 0. Applied during loss backward, BEFORE
+    // bilagrid bwd consumes v_render_rgb.
+    float shift_reg_weight_rgb = 0.0f;
+    float shift_reg_beta_rgb   = 0.0f;
 };
 
 

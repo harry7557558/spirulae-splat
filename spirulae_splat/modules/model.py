@@ -209,8 +209,19 @@ class SpirulaeSplatModelConfig:
        (QuantizedTensorLog<8, 256>)."""
     bilagrid_tv_loss_weight: float = 10.0
     """Total variation loss weight for bilateral grid used for radiance"""
-    bilagrid_mean_reg_weight: float = 10.0
-    """Regularization to discourage bilateral grid color shift"""
+    bilagrid_shift_reg_weight: float = 0.0
+    """RGB bilagrid color-shift regularizer. Penalizes the
+        dataset-wide mean of sign(post-bilagrid - pre-bilagrid) per channel:
+        R = w * ||EMA[mean_p sign(post - pre)]||^2. The gradient is injected
+        on the POST-bilagrid v_render_rgb buffer and flows through the
+        bilagrid vjp into the grid params (and as a small leak into the
+        splats). 0 disables. Typical values: 0.01--1.0; tune w.r.t. main loss
+        scale."""
+    bilagrid_shift_reg_ema_period: int = 750
+    """EMA decay length for the bilagrid color-shift regularizer, in BATCHES.
+        beta = max(0, 1 - 1/period). Should be roughly the number of batches
+        per epoch so the EMA estimates the dataset-wide mean. Ignored when
+        bilagrid_shift_reg_weight = 0."""
     optimize_bilagrid_frequencies: bool = False
     """Whether to optimize bilagrid parameters in frequency domain instead of time domain"""
     bilagrid_tv_loss_weight_geometry: float = 10.0
@@ -1603,9 +1614,14 @@ class SpirulaeSplatModel(torch.nn.Module):
         if self._bilagrid_rgb_init:
             bilagrid_lr_rgb = optim_cfg.get_scheduled_lr(_bg_lr_keys[0], step, max_steps_lr)
             bilagrid_tv_weight_rgb = cfg.bilagrid_tv_loss_weight
+            bilagrid_shift_reg_weight_rgb = cfg.bilagrid_shift_reg_weight
+            _period = max(int(cfg.bilagrid_shift_reg_ema_period), 1)
+            bilagrid_shift_reg_beta_rgb = max(0.0, 1.0 - 1.0 / _period)
         else:
             bilagrid_lr_rgb = 0.0
             bilagrid_tv_weight_rgb = 0.0
+            bilagrid_shift_reg_weight_rgb = 0.0
+            bilagrid_shift_reg_beta_rgb = 0.0
         if self._bilagrid_depth_init:
             bilagrid_lr_depth = optim_cfg.get_scheduled_lr(_bg_lr_keys[1], step, max_steps_lr)
             bilagrid_tv_weight_depth = cfg.bilagrid_tv_loss_weight_geometry
@@ -1680,6 +1696,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             bilagrid_tv_weight_rgb=bilagrid_tv_weight_rgb,
             bilagrid_tv_weight_depth=bilagrid_tv_weight_depth,
             bilagrid_tv_weight_normal=bilagrid_tv_weight_normal,
+            bilagrid_shift_reg_weight_rgb=bilagrid_shift_reg_weight_rgb,
+            bilagrid_shift_reg_beta_rgb=bilagrid_shift_reg_beta_rgb,
             ppisp_lr=ppisp_lr,
             ppisp_reg_exposure_mean=ppisp_reg_exposure_mean,
             ppisp_reg_vig_center=ppisp_reg_vig_center,
@@ -1775,9 +1793,14 @@ class SpirulaeSplatModel(torch.nn.Module):
         if self._bilagrid_rgb_init:
             bilagrid_lr_rgb = optim_cfg.get_scheduled_lr(_bg_lr_keys[0], step, max_steps_lr)
             bilagrid_tv_weight_rgb = cfg.bilagrid_tv_loss_weight
+            bilagrid_shift_reg_weight_rgb = cfg.bilagrid_shift_reg_weight
+            _period = max(int(cfg.bilagrid_shift_reg_ema_period), 1)
+            bilagrid_shift_reg_beta_rgb = max(0.0, 1.0 - 1.0 / _period)
         else:
             bilagrid_lr_rgb = 0.0
             bilagrid_tv_weight_rgb = 0.0
+            bilagrid_shift_reg_weight_rgb = 0.0
+            bilagrid_shift_reg_beta_rgb = 0.0
         if self._bilagrid_depth_init:
             bilagrid_lr_depth = optim_cfg.get_scheduled_lr(_bg_lr_keys[1], step, max_steps_lr)
             bilagrid_tv_weight_depth = cfg.bilagrid_tv_loss_weight_geometry
@@ -1837,6 +1860,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             bilagrid_tv_weight_rgb=bilagrid_tv_weight_rgb,
             bilagrid_tv_weight_depth=bilagrid_tv_weight_depth,
             bilagrid_tv_weight_normal=bilagrid_tv_weight_normal,
+            bilagrid_shift_reg_weight_rgb=bilagrid_shift_reg_weight_rgb,
+            bilagrid_shift_reg_beta_rgb=bilagrid_shift_reg_beta_rgb,
             ppisp_lr=ppisp_lr,
             ppisp_reg_exposure_mean=ppisp_reg_exposure_mean,
             ppisp_reg_vig_center=ppisp_reg_vig_center,
