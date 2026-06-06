@@ -32,7 +32,7 @@
 
 
 // ============================================================
-// Engine API — not auto-generated; manually maintained
+// Engine API -- not auto-generated; manually maintained
 // ============================================================
 
 // --- Lifecycle ---
@@ -40,7 +40,7 @@
 // Reset the EngineState singleton to a freshly-constructed state and free all
 // device memory owned by the global pool + scratch buffer. Must be called
 // between training runs that swap datasets (e.g. ss_benchmark looping over
-// scenes) — without it the new run inherits the previous run's world splats,
+// scenes) -- without it the new run inherits the previous run's world splats,
 // camera table, bilagrid / PPISP / background config, optimizer moments, and
 // color-space matrices, which produces broken renders and wrong metrics.
 void engine_reset();
@@ -131,16 +131,21 @@ void engine_optim_step(int step, const OptimConfig& cfg);
 // after set_camera_params. RGB applies to the rendered prediction; depth and
 // normal apply to GT (matching the Python flow in training_losses.py).
 
-// quantize_optim: store Adam g1 / g2 as uint8 + per-256-cell float4 bounds
+// quantize_optim: store optimizer state as uint8 + per-256-cell bounds
 // (mirrors the SH-quantize path), trading a small numerical hit for ~3x
 // smaller optimizer-state VRAM. Configurable per-type so RGB and geometry
 // can be quantized independently.
+//
+// use_adagrad: if true, the bilagrid uses AdaGrad (lr_decay=0,
+// weight_decay=0, initial_accumulator_value=0, eps=1e-15) instead of Adam.
+// With quantize_optim=true, the per-cell accumulator is stored log-encoded
+// via QuantizedTensorLog<8, 256> (1 byte/cell + 1 float2/256-cell block).
 void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W,
-                              bool quantize_optim);
+                              bool quantize_optim, bool use_adagrad);
 void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
-                                bool quantize_optim);
+                                bool quantize_optim, bool use_adagrad);
 void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
-                                 bool quantize_optim);
+                                 bool quantize_optim, bool use_adagrad);
 
 // Apply forward bilagrid for the current batch. cam_indices is a [C_batch]
 // int32 tensor of per-image camera-table indices; pass null/empty for identity
@@ -169,7 +174,7 @@ void engine_ppisp_optim_step(int step, const PpispStepConfig& cfg);
 
 // --- Background blending (applied BEFORE bilagrid/PPISP) ---
 //
-// Two modes — exactly one of these init calls activates background blending:
+// Two modes -- exactly one of these init calls activates background blending:
 //   Noise: random per-pixel color, warmup-weighted via cfg.background.randomize_weight.
 //   SH:    skybox = SH(world ray dir), DC (slot 0) seeds the "background_color"
 //          plus higher-order bands; both updated by Adam when train_color=true.
@@ -274,7 +279,7 @@ std::map<std::string, float> engine_train_step_warped(
 // internally and run the same fused forward + loss/bwd + optim + densify
 // pipeline as `engine_train_step`.
 //
-// This is the "engine handles data loading" entrypoint — Python (or any
+// This is the "engine handles data loading" entrypoint -- Python (or any
 // future C++ trainer) no longer constructs per-step GT/camera tensors.
 
 void engine_setup_data_manager(

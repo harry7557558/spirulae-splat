@@ -1,6 +1,6 @@
 #pragma once
 
-// EngineState — all persistent device-resident state shared across the
+// EngineState -- all persistent device-resident state shared across the
 // engine_* entrypoints. State is a singleton struct accessed via `engine()`.
 // Sub-structs group related fields (world, camera, fwd, gt, grad, optim,
 // bilagrid_rgb/depth/normal, ppisp). The singleton lives in EngineState.cpp.
@@ -135,12 +135,21 @@ struct SplatOptim {
 };
 
 // One bilagrid channel (RGB / depth / normal).
+//
+// Two mutually exclusive optimizer paths:
+//   use_adagrad=false  -> Adam: g1/g2 (float) OR quant_state (uint8 AoS)
+//   use_adagrad=true   -> AdaGrad: accum_f (float) OR adagrad_quant (uint8 log)
 struct BilagridRGB {
     DeviceTensor5D<float>      grids;
     DeviceTensor5D<float>      image_grad;
+    // Adam state
     DeviceTensor5D<float>      g1, g2;
     QuantizedAdamState<8, 256> quant_state;
+    // AdaGrad state
+    DeviceTensor5D<float>      accum_f;
+    QuantizedTensorLog<8, 256> adagrad_quant;
     bool        quantize_optim     = false;
+    bool        use_adagrad        = false;
     bool        enabled            = false;
     bool        optim_initialized  = false;
     DeviceTensor3D<float3>     fwd_pre;            // pre-bilagrid render
@@ -152,7 +161,10 @@ struct BilagridDepth {
     DeviceTensor5D<float>      image_grad;
     DeviceTensor5D<float>      g1, g2;
     QuantizedAdamState<8, 256> quant_state;
+    DeviceTensor5D<float>      accum_f;
+    QuantizedTensorLog<8, 256> adagrad_quant;
     bool        quantize_optim     = false;
+    bool        use_adagrad        = false;
     bool        enabled            = false;
     bool        optim_initialized  = false;
     DeviceTensor3D<float>      fwd_pre;
@@ -163,7 +175,10 @@ struct BilagridNormal {
     DeviceTensor5D<float>      image_grad;
     DeviceTensor5D<float>      g1, g2;
     QuantizedAdamState<8, 256> quant_state;
+    DeviceTensor5D<float>      accum_f;
+    QuantizedTensorLog<8, 256> adagrad_quant;
     bool        quantize_optim     = false;
+    bool        use_adagrad        = false;
     bool        enabled            = false;
     bool        optim_initialized  = false;
     DeviceTensor3D<float3>     fwd_pre;

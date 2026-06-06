@@ -184,6 +184,14 @@ class SpirulaeSplatModelConfig:
     """Quantize the RGB bilagrid Adam optimizer state to uint8 to save VRAM."""
     quantize_bilagrid_geometry_optim: bool = True
     """Quantize the depth+normal bilagrid Adam optimizer state to uint8."""
+    use_adagrad_bilagrid_optim: bool = False
+    """Use AdaGrad (lr_decay=0, weight_decay=0, initial_accumulator_value=0,
+       eps=1e-15) instead of Adam for all bilateral-grid parameters (RGB +
+       depth + normal). When True, the bilagrid LR fields read from
+       OptimizerConfig switch to ``bilagrid_adagrad_*_lr``. If
+       ``quantize_bilagrid_*_optim`` is also True the per-cell AdaGrad
+       accumulator is stored block-wise log-quantized to uint8
+       (QuantizedTensorLog<8, 256>)."""
     bilagrid_tv_loss_weight: float = 10.0
     """Total variation loss weight for bilateral grid used for radiance"""
     bilagrid_mean_reg_weight: float = 10.0
@@ -702,6 +710,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 rgb_type=cfg.bilagrid_type,
                 rgb_LHW=(W_g, Y, X),
                 quantize_rgb_optim=cfg.quantize_bilagrid_optim,
+                use_adagrad=cfg.use_adagrad_bilagrid_optim,
             )
             self._bilagrid_rgb_init = True
 
@@ -716,6 +725,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 self.num_train_data,
                 depth_LHW=(W_g, Y, X),
                 quantize_geometry_optim=cfg.quantize_bilagrid_geometry_optim,
+                use_adagrad=cfg.use_adagrad_bilagrid_optim,
             )
             self._bilagrid_depth_init = True
 
@@ -730,6 +740,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 self.num_train_data,
                 normal_LHW=(W_g, Y, X),
                 quantize_geometry_optim=cfg.quantize_bilagrid_geometry_optim,
+                use_adagrad=cfg.use_adagrad_bilagrid_optim,
             )
             self._bilagrid_normal_init = True
 
@@ -1547,20 +1558,26 @@ class SpirulaeSplatModel(torch.nn.Module):
             bilagrid_cam_indices = camera.metadata['cam_idx'].flatten().to(torch.int32).contiguous()
         else:
             bilagrid_cam_indices = None
+        # When AdaGrad is enabled for bilagrids, swap to the dedicated AdaGrad
+        # LR schedule names; the scheduler logic itself is unchanged.
+        _bg_lr_keys = (
+            ('bilagrid_adagrad',        'bilagrid_adagrad_depth',  'bilagrid_adagrad_normal')
+            if cfg.use_adagrad_bilagrid_optim else
+            ('bilagrid',                'bilagrid_depth',          'bilagrid_normal'))
         if self._bilagrid_rgb_init:
-            bilagrid_lr_rgb = optim_cfg.get_scheduled_lr('bilagrid', step, max_steps_lr)
+            bilagrid_lr_rgb = optim_cfg.get_scheduled_lr(_bg_lr_keys[0], step, max_steps_lr)
             bilagrid_tv_weight_rgb = cfg.bilagrid_tv_loss_weight
         else:
             bilagrid_lr_rgb = 0.0
             bilagrid_tv_weight_rgb = 0.0
         if self._bilagrid_depth_init:
-            bilagrid_lr_depth = optim_cfg.get_scheduled_lr('bilagrid_depth', step, max_steps_lr)
+            bilagrid_lr_depth = optim_cfg.get_scheduled_lr(_bg_lr_keys[1], step, max_steps_lr)
             bilagrid_tv_weight_depth = cfg.bilagrid_tv_loss_weight_geometry
         else:
             bilagrid_lr_depth = 0.0
             bilagrid_tv_weight_depth = 0.0
         if self._bilagrid_normal_init:
-            bilagrid_lr_normal = optim_cfg.get_scheduled_lr('bilagrid_normal', step, max_steps_lr)
+            bilagrid_lr_normal = optim_cfg.get_scheduled_lr(_bg_lr_keys[2], step, max_steps_lr)
             bilagrid_tv_weight_normal = cfg.bilagrid_tv_loss_weight_geometry
         else:
             bilagrid_lr_normal = 0.0
@@ -1731,20 +1748,24 @@ class SpirulaeSplatModel(torch.nn.Module):
             synthetic_batch['normal'] = True
         self._maybe_init_bilagrid(synthetic_batch)
 
+        _bg_lr_keys = (
+            ('bilagrid_adagrad',        'bilagrid_adagrad_depth',  'bilagrid_adagrad_normal')
+            if cfg.use_adagrad_bilagrid_optim else
+            ('bilagrid',                'bilagrid_depth',          'bilagrid_normal'))
         if self._bilagrid_rgb_init:
-            bilagrid_lr_rgb = optim_cfg.get_scheduled_lr('bilagrid', step, max_steps_lr)
+            bilagrid_lr_rgb = optim_cfg.get_scheduled_lr(_bg_lr_keys[0], step, max_steps_lr)
             bilagrid_tv_weight_rgb = cfg.bilagrid_tv_loss_weight
         else:
             bilagrid_lr_rgb = 0.0
             bilagrid_tv_weight_rgb = 0.0
         if self._bilagrid_depth_init:
-            bilagrid_lr_depth = optim_cfg.get_scheduled_lr('bilagrid_depth', step, max_steps_lr)
+            bilagrid_lr_depth = optim_cfg.get_scheduled_lr(_bg_lr_keys[1], step, max_steps_lr)
             bilagrid_tv_weight_depth = cfg.bilagrid_tv_loss_weight_geometry
         else:
             bilagrid_lr_depth = 0.0
             bilagrid_tv_weight_depth = 0.0
         if self._bilagrid_normal_init:
-            bilagrid_lr_normal = optim_cfg.get_scheduled_lr('bilagrid_normal', step, max_steps_lr)
+            bilagrid_lr_normal = optim_cfg.get_scheduled_lr(_bg_lr_keys[2], step, max_steps_lr)
             bilagrid_tv_weight_normal = cfg.bilagrid_tv_loss_weight_geometry
         else:
             bilagrid_lr_normal = 0.0

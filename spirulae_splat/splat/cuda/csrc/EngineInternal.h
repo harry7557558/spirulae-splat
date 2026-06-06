@@ -1,6 +1,6 @@
 #pragma once
 
-// EngineInternal — declarations for engine-private helpers that cross file
+// EngineInternal -- declarations for engine-private helpers that cross file
 // boundaries within the Engine.cpp split, plus extern declarations for raw
 // device functions defined in other translation units (PixelWise.cu,
 // BilagridFusedAdam.cu, PpispInit.cu, BilagridInit.cu).
@@ -38,6 +38,27 @@ void fused_bilagrid_tv_adam(
     float lr,
     float tv_weight,
     int32_t adam_step,
+    bool quantize,
+    cudaStream_t stream
+);
+
+// --- Fused bilagrid (image-grad + TV + AdaGrad) kernel (BilagridFusedAdam.cu). ---
+// Same gradient pipeline as fused_bilagrid_tv_adam, but applies an AdaGrad
+// update with lr_decay=0, weight_decay=0, initial_accumulator_value=0,
+// eps=1e-15. The accumulator is float (one per cell) or, when quantize=true,
+// log-encoded uint8 via QuantizedTensorLog<8, 256> (1 byte/cell + a float2
+// (log min, log max) bound per 256-cell block).
+void fused_bilagrid_tv_adagrad(
+    float* grids,
+    float*   accum_f,                   // when !quantize
+    uint8_t* packed,                    // when quantize (log-encoded |accum|)
+    float2*  quant_bounds,              // when quantize, [n_blocks]
+    const float* image_grad,
+    const int*   cam_indices,
+    int N_grids, int C_batch, int C,
+    int L, int H, int W,
+    float lr,
+    float tv_weight,
     bool quantize,
     cudaStream_t stream
 );

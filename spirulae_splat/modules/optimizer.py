@@ -386,6 +386,9 @@ class OptimizerConfig:
     bilagrid_normal_lr: float = 5e-4
     bilagrid_normal_lr_final: Optional[float] = 4e-5
     bilagrid_normal_lr_warmup: int = 2000
+    bilagrid_adagrad_lr: float = 4e-2
+    bilagrid_adagrad_depth_lr: float = 4e-2
+    bilagrid_adagrad_normal_lr: float = 1e-2
     ppisp_lr: float = 2e-3
     ppisp_lr_final: Optional[float] = 2e-5
     ppisp_lr_warmup: int = 500   # TODO: pre-warmup

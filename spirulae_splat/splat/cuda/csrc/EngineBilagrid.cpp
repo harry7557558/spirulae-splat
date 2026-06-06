@@ -17,7 +17,7 @@ static constexpr cudaStream_t kBilagridStream = (cudaStream_t)0;
 
 
 void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W,
-                              bool quantize_optim) {
+                              bool quantize_optim, bool use_adagrad) {
     int C;
     if (type == "affine") C = 12;
     else if (type == "ppisp" || type == "loglinear") C = 9;
@@ -28,6 +28,7 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
     engine().bilagrid_rgb.type = type;
     engine().bilagrid_rgb.C = C;
     engine().bilagrid_rgb.quantize_optim = quantize_optim;
+    engine().bilagrid_rgb.use_adagrad = use_adagrad;
     engine().bilagrid_rgb.grids.resize("eng.bg.rgb.grids", n_grids, L, H, W, C);
     if (type == "affine") {
         engine().bilagrid_rgb.grids.zero();
@@ -41,10 +42,11 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
 }
 
 void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
-                                bool quantize_optim) {
+                                bool quantize_optim, bool use_adagrad) {
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_depth: n_grids must be > 0");
     engine().bilagrid_depth.quantize_optim = quantize_optim;
+    engine().bilagrid_depth.use_adagrad = use_adagrad;
     engine().bilagrid_depth.grids.resize("eng.bg.depth.grids", n_grids, L, H, W, 2);
     engine().bilagrid_depth.grids.zero();
     engine().bilagrid_depth.scalars.resize("eng.bg.depth.scalars", n_grids);
@@ -54,10 +56,11 @@ void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
 }
 
 void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
-                                 bool quantize_optim) {
+                                 bool quantize_optim, bool use_adagrad) {
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_normal: n_grids must be > 0");
     engine().bilagrid_normal.quantize_optim = quantize_optim;
+    engine().bilagrid_normal.use_adagrad = use_adagrad;
     engine().bilagrid_normal.grids.resize("eng.bg.normal.grids", n_grids, L, H, W, 3);
     engine().bilagrid_normal.grids.zero();
     engine().bilagrid_normal.enabled = true;
@@ -226,7 +229,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
 // instead of the full N_grids-wide dense table. Reads of the bilagrid grid
 // parameters still go through cam_indices for the true camera lookup. The
 // per-batch buffer is zeroed up front so the kernel's atomicAdds start clean.
-// The TV-loss contribution is no longer materialized here — it folds into the
+// The TV-loss contribution is no longer materialized here -- it folds into the
 // fused optimizer step (BilagridFusedAdam.cu).
 //
 // For RGB the kernel additionally overwrites v_render_rgb (post-bilagrid ->
@@ -247,9 +250,9 @@ static void _ensure_bilagrid_batch_grad(
 }
 
 void _engine_bilagrid_backward_hook(
-    TorchTensorView v_render_rgb,   // [C, H, W, 3] — overwritten when RGB enabled
-    TorchTensorView v_ref_depth,    // [C, H, W, 1] — input only
-    TorchTensorView v_ref_normal    // [C, H, W, 3] — input only
+    TorchTensorView v_render_rgb,   // [C, H, W, 3] -- overwritten when RGB enabled
+    TorchTensorView v_ref_depth,    // [C, H, W, 1] -- input only
+    TorchTensorView v_ref_normal    // [C, H, W, 3] -- input only
 ) {
     int H = engine().camera.height;
     int W = engine().camera.width;
@@ -359,17 +362,20 @@ void _engine_bilagrid_backward_hook(
 // Ensure bilagrid Adam moment buffers are allocated and zeroed for each
 // enabled bilagrid type. When quantize_optim is true, g1/g2 storage is uint8
 // (1 byte/cell) plus a float4 per 256-cell block holding the {g1 min, g1 max,
-// g2 min, g2 max} ranges — same scheme as the SH optimizer state.
+// g2 min, g2 max} ranges -- same scheme as the SH optimizer state.
 //
 // Note: the per-batch image_grad buffer is sized + zeroed per-iter in
 // _ensure_bilagrid_batch_grad (called from _engine_bilagrid_backward_hook),
 // since its size depends on the current batch size.
 void _ensure_bilagrid_optim_state() {
     auto setup = [](DeviceTensor5D<float>& grids,
-                    DeviceTensor5D<float>& g1,                 // used when !quantize
-                    DeviceTensor5D<float>& g2,                 // used when !quantize
-                    QuantizedAdamState<8, 256>& quant_state,   // used when quantize
+                    DeviceTensor5D<float>& g1,                 // Adam, !quantize
+                    DeviceTensor5D<float>& g2,                 // Adam, !quantize
+                    QuantizedAdamState<8, 256>& quant_state,   // Adam, quantize
+                    DeviceTensor5D<float>& accum_f,            // AdaGrad, !quantize
+                    QuantizedTensorLog<8, 256>& adagrad_quant, // AdaGrad, quantize
                     bool quantize_optim,
+                    bool use_adagrad,
                     const std::string& key_prefix,
                     bool& done) {
         if (done || grids.data_ptr() == nullptr) return;
@@ -377,16 +383,30 @@ void _ensure_bilagrid_optim_state() {
         int64_t L = grids.size<1>(), H = grids.size<2>(), W = grids.size<3>();
         int64_t C = grids.size<4>();
         int64_t numel = N * L * H * W * C;
-        if (quantize_optim) {
-            constexpr int64_t BLOCK_SIZE = QuantizedAdamState<8, 256>::kBlockSize;
-            int64_t n_blocks = (numel + BLOCK_SIZE - 1) / BLOCK_SIZE;
-            quant_state.resize(key_prefix + ".bg_quant", numel, n_blocks);
-            quant_state.zero();
+        if (use_adagrad) {
+            if (quantize_optim) {
+                constexpr int64_t BLOCK_SIZE =
+                    QuantizedTensorLog<8, 256>::kBlockSize;
+                int64_t n_blocks = (numel + BLOCK_SIZE - 1) / BLOCK_SIZE;
+                adagrad_quant.resize(key_prefix + ".bg_ag", numel, n_blocks);
+                adagrad_quant.zero();
+            } else {
+                accum_f.resize(key_prefix + ".accum", N, L, H, W, C);
+                accum_f.zero();
+            }
         } else {
-            g1.resize(key_prefix + ".g1", N, L, H, W, C);
-            g1.zero();
-            g2.resize(key_prefix + ".g2", N, L, H, W, C);
-            g2.zero();
+            if (quantize_optim) {
+                constexpr int64_t BLOCK_SIZE =
+                    QuantizedAdamState<8, 256>::kBlockSize;
+                int64_t n_blocks = (numel + BLOCK_SIZE - 1) / BLOCK_SIZE;
+                quant_state.resize(key_prefix + ".bg_quant", numel, n_blocks);
+                quant_state.zero();
+            } else {
+                g1.resize(key_prefix + ".g1", N, L, H, W, C);
+                g1.zero();
+                g2.resize(key_prefix + ".g2", N, L, H, W, C);
+                g2.zero();
+            }
         }
         done = true;
     };
@@ -394,21 +414,30 @@ void _ensure_bilagrid_optim_state() {
         setup(engine().bilagrid_rgb.grids,
               engine().bilagrid_rgb.g1, engine().bilagrid_rgb.g2,
               engine().bilagrid_rgb.quant_state,
+              engine().bilagrid_rgb.accum_f,
+              engine().bilagrid_rgb.adagrad_quant,
               engine().bilagrid_rgb.quantize_optim,
+              engine().bilagrid_rgb.use_adagrad,
               "eng.bg.rgb", engine().bilagrid_rgb.optim_initialized);
     }
     if (engine().bilagrid_depth.enabled) {
         setup(engine().bilagrid_depth.grids,
               engine().bilagrid_depth.g1, engine().bilagrid_depth.g2,
               engine().bilagrid_depth.quant_state,
+              engine().bilagrid_depth.accum_f,
+              engine().bilagrid_depth.adagrad_quant,
               engine().bilagrid_depth.quantize_optim,
+              engine().bilagrid_depth.use_adagrad,
               "eng.bg.depth", engine().bilagrid_depth.optim_initialized);
     }
     if (engine().bilagrid_normal.enabled) {
         setup(engine().bilagrid_normal.grids,
               engine().bilagrid_normal.g1, engine().bilagrid_normal.g2,
               engine().bilagrid_normal.quant_state,
+              engine().bilagrid_normal.accum_f,
+              engine().bilagrid_normal.adagrad_quant,
               engine().bilagrid_normal.quantize_optim,
+              engine().bilagrid_normal.use_adagrad,
               "eng.bg.normal", engine().bilagrid_normal.optim_initialized);
     }
 }
@@ -421,45 +450,64 @@ void engine_bilagrid_optim_step(int step, const BilagridStepConfig& cfg) {
 
     // Single fused pass per bilagrid type: reads the sparse per-batch
     // image_grad, computes the local TV gradient from `grids` neighbors, and
-    // applies Adam (float or uint8-quantized) in one kernel. The previous
-    // separate tv_loss_backward + zeroing of a dense grad table is gone —
-    // TV is inlined, image_grad is the only persistent gradient state and
-    // it gets re-zeroed at the start of the *next* iter's backward hook.
+    // applies Adam OR AdaGrad (float or uint8-quantized) in one kernel.
     auto run = [&](DeviceTensor5D<float>& grids,
                    DeviceTensor5D<float>& image_grad,
                    DeviceTensor5D<float>& g1,
                    DeviceTensor5D<float>& g2,
                    QuantizedAdamState<8, 256>& quant_state,
+                   DeviceTensor5D<float>& accum_f,
+                   QuantizedTensorLog<8, 256>& adagrad_quant,
                    bool quantize_optim,
+                   bool use_adagrad,
                    float lr, float tv_weight) {
         if (grids.data_ptr() == nullptr || lr <= 0.0f) return;
         if (image_grad.data_ptr() == nullptr) return;
         int N = (int)grids.size<0>();
         int L = (int)grids.size<1>(), H = (int)grids.size<2>(), W = (int)grids.size<3>();
         int C = (int)grids.size<4>();
-        fused_bilagrid_tv_adam(
-            grids.data_ptr(),
-            quantize_optim ? nullptr : g1.data_ptr(),
-            quantize_optim ? nullptr : g2.data_ptr(),
-            quantize_optim ? quant_state.packed_ptr() : nullptr,
-            quantize_optim ? quant_state.bounds_ptr() : nullptr,
-            image_grad.data_ptr(),
-            cam_idx_dev,
-            N, C_batch, C, L, H, W,
-            lr, tv_weight, adam_step,
-            quantize_optim, kBilagridStream);
+        if (use_adagrad) {
+            fused_bilagrid_tv_adagrad(
+                grids.data_ptr(),
+                quantize_optim ? nullptr : accum_f.data_ptr(),
+                quantize_optim ? adagrad_quant.packed_ptr() : nullptr,
+                quantize_optim ? adagrad_quant.bounds_ptr() : nullptr,
+                image_grad.data_ptr(),
+                cam_idx_dev,
+                N, C_batch, C, L, H, W,
+                lr, tv_weight,
+                quantize_optim, kBilagridStream);
+        } else {
+            fused_bilagrid_tv_adam(
+                grids.data_ptr(),
+                quantize_optim ? nullptr : g1.data_ptr(),
+                quantize_optim ? nullptr : g2.data_ptr(),
+                quantize_optim ? quant_state.packed_ptr() : nullptr,
+                quantize_optim ? quant_state.bounds_ptr() : nullptr,
+                image_grad.data_ptr(),
+                cam_idx_dev,
+                N, C_batch, C, L, H, W,
+                lr, tv_weight, adam_step,
+                quantize_optim, kBilagridStream);
+        }
     };
 
     run(engine().bilagrid_rgb.grids, engine().bilagrid_rgb.image_grad,
         engine().bilagrid_rgb.g1, engine().bilagrid_rgb.g2,
-        engine().bilagrid_rgb.quant_state, engine().bilagrid_rgb.quantize_optim,
+        engine().bilagrid_rgb.quant_state,
+        engine().bilagrid_rgb.accum_f, engine().bilagrid_rgb.adagrad_quant,
+        engine().bilagrid_rgb.quantize_optim, engine().bilagrid_rgb.use_adagrad,
         cfg.lr_rgb, cfg.tv_weight_rgb);
     run(engine().bilagrid_depth.grids, engine().bilagrid_depth.image_grad,
         engine().bilagrid_depth.g1, engine().bilagrid_depth.g2,
-        engine().bilagrid_depth.quant_state, engine().bilagrid_depth.quantize_optim,
+        engine().bilagrid_depth.quant_state,
+        engine().bilagrid_depth.accum_f, engine().bilagrid_depth.adagrad_quant,
+        engine().bilagrid_depth.quantize_optim, engine().bilagrid_depth.use_adagrad,
         cfg.lr_depth, cfg.tv_weight_depth);
     run(engine().bilagrid_normal.grids, engine().bilagrid_normal.image_grad,
         engine().bilagrid_normal.g1, engine().bilagrid_normal.g2,
-        engine().bilagrid_normal.quant_state, engine().bilagrid_normal.quantize_optim,
+        engine().bilagrid_normal.quant_state,
+        engine().bilagrid_normal.accum_f, engine().bilagrid_normal.adagrad_quant,
+        engine().bilagrid_normal.quantize_optim, engine().bilagrid_normal.use_adagrad,
         cfg.lr_normal, cfg.tv_weight_normal);
 }

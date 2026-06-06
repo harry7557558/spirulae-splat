@@ -21,7 +21,7 @@ typedef std::tuple<
 > TorchTensorView;
 
 
-// AsyncReadout<T> — pinned-host ring buffer for non-blocking D->H scalar readouts.
+// AsyncReadout<T> -- pinned-host ring buffer for non-blocking D->H scalar readouts.
 //
 // Usage pattern (one iteration of training):
 //     static AsyncReadout<float> R(N);
@@ -33,7 +33,7 @@ typedef std::tuple<
 // `read_previous()` returns the host pointer to the most-recently-issued slot
 // AFTER synchronizing on its completion event. Because there's a full
 // iteration of GPU work between issue() and the next read_previous(), the
-// event is essentially always already complete — `cudaEventSynchronize`
+// event is essentially always already complete -- `cudaEventSynchronize`
 // returns immediately, replacing what used to be a blocking `cudaMemcpy`.
 //
 // First call: read_previous() returns nullptr.
@@ -91,7 +91,7 @@ private:
 };
 
 
-// Global CUDA memory pool — keyed named buffers with high-water-mark semantics.
+// Global CUDA memory pool -- keyed named buffers with high-water-mark semantics.
 // Memory never shrinks on resize; only reallocates when the new size exceeds capacity.
 // freeAll() is the only way to release memory, call it at VRAM pressure or exit.
 // All DeviceVector/Tensor2D/3D resize() calls route through here.
@@ -104,7 +104,7 @@ class DevicePool {
 
     std::unordered_map<std::string, Slot> _slots;
     // Guards _slots. Multiple threads (e.g., trainer + viewer post-processor)
-    // call acquire concurrently — unprotected unordered_map operations
+    // call acquire concurrently -- unprotected unordered_map operations
     // (operator[] insert, rehash) are UB across threads.
     mutable std::mutex _mu;
 
@@ -228,7 +228,7 @@ inline void freeAllDeviceMemory() {
 }
 
 
-// 1D device vector — non-owning view; memory owned by DevicePool or PyTorch.
+// 1D device vector -- non-owning view; memory owned by DevicePool or PyTorch.
 template<typename T>
 class DeviceVector {
 protected:
@@ -297,7 +297,7 @@ public:
 };
 
 
-// 2D device tensor — non-owning view; memory owned by DevicePool or PyTorch.
+// 2D device tensor -- non-owning view; memory owned by DevicePool or PyTorch.
 template<typename T>
 class DeviceTensor2D {
 protected:
@@ -376,7 +376,7 @@ public:
 };
 
 
-// 3D device tensor — non-owning view; memory owned by DevicePool or PyTorch.
+// 3D device tensor -- non-owning view; memory owned by DevicePool or PyTorch.
 template<typename T>
 class DeviceTensor3D {
 protected:
@@ -459,7 +459,7 @@ public:
 };
 
 
-// 5D device tensor — non-owning view; memory owned by DevicePool or PyTorch.
+// 5D device tensor -- non-owning view; memory owned by DevicePool or PyTorch.
 // Channel-last expected (last dim packs into sizeof(T)); fits bilagrid [N,C,L,H,W]
 // when each cell is a single float.
 template<typename T>
@@ -549,7 +549,7 @@ public:
 
 
 // ============================================================================
-// QuantizedAdamState — joint (u, log_s) Adam optimizer-state quantization.
+// QuantizedAdamState -- joint (u, log_s) Adam optimizer-state quantization.
 //
 // Per cell the codec stores TWO linearly-quantized "primitive" values:
 //     primitives.x = u     = g1 / (sqrt(g2) + eps)
@@ -567,21 +567,21 @@ public:
 // Encode path is the same transformation reversed; the block-level min/max
 // reduction inside the kernels operates on the linearly-quantized primitives
 // (`u`, `log_s`), so the per-block bounds float4 means:
-//     bounds.x, bounds.y = (u_min, u_max)             — linear u domain
-//     bounds.z, bounds.w = (log_s_min, log_s_max)     — log-mapped sqrt(g2) domain
+//     bounds.x, bounds.y = (u_min, u_max)             -- linear u domain
+//     bounds.z, bounds.w = (log_s_min, log_s_max)     -- log-mapped sqrt(g2) domain
 //
 // Why log_s instead of plain sqrt(g2)? Empirically (see
 // scripts/investigate_quantization.py "SNR(u_next)" column) the next-step
 // Adam update u' = β1·g1 / sqrt(β2·g2 + ...) is dominated by errors in
-// sqrt(g2) at small magnitudes — exactly the region where linear quantization
+// sqrt(g2) at small magnitudes -- exactly the region where linear quantization
 // has the worst RELATIVE precision and where Adam's normalizer is most
 // sensitive. Storing log1p(sqrt_g2 / eps) gives uniform relative resolution
-// across all magnitudes within a block and consistently buys 20–30 dB on the
+// across all magnitudes within a block and consistently buys 20--30 dB on the
 // post-step SNR metric at no storage cost.
 //
 // Storage is array-of-structure (AoS) interleaved over the two primitives:
-//   BITS=8: 2 bytes/cell — byte[idx*2 + 0] = u_q, byte[idx*2 + 1] = log_s_q
-//   BITS=4: 1 byte/cell  — low nibble = u_q,    high nibble = log_s_q
+//   BITS=8: 2 bytes/cell -- byte[idx*2 + 0] = u_q, byte[idx*2 + 1] = log_s_q
+//   BITS=4: 1 byte/cell  -- low nibble = u_q,    high nibble = log_s_q
 // Quantization is endpoint-exact: q=0 -> lo, q=(kLevels-1) -> hi exactly.
 //
 // Hyperparameters (bit depth, block size, eps) are compile-time template
@@ -704,7 +704,7 @@ public:
         }
     }
 
-    // Encode (g1, g2) — internally derives (u, log_s) via g1g2_to_us.
+    // Encode (g1, g2) -- internally derives (u, log_s) via g1g2_to_us.
     __device__ static inline void encode_g1g2(
         uint8_t* __restrict__ packed_ptr, int64_t idx,
         float g1, float g2, float4 mm
@@ -714,7 +714,7 @@ public:
     }
 
     // (g1, g2) -> linearly-quantized primitives (u, log_s). Block reduction
-    // inside host kernels operates on these — both halves are min/max-reduced
+    // inside host kernels operates on these -- both halves are min/max-reduced
     // in their own (linear) domain to produce the per-block float4 bounds.
     __device__ static inline float2 g1g2_to_us(float g1, float g2) {
         float sqrt_g2 = sqrtf(fmaxf(g2, 0.0f));
@@ -725,7 +725,153 @@ public:
 };
 
 
-// ND device tensor — non-owning view.
+// ============================================================================
+// QuantizedTensorLog -- generic block-wise log-encoded quantized tensor.
+//
+// Stores a single non-negative scalar per cell as q ~ log1pf(v / eps), with
+// per-block (min, max) float2 bounds in the log domain. Endpoint-exact within
+// each block: q=0 -> decoded=lo, q=(kLevels-1) -> decoded=hi. Preserves the
+// 0 <-> 0 fixed point so an all-zero (`packed` + `bounds`) initial state
+// decodes to v = 0 exactly -- matches the "initial_accumulator_value=0" we use
+// for AdaGrad accumulators and saves a separate init pass.
+//
+// Not Adam-specific. Anything that wants relative-precision storage for one
+// non-negative value per cell (AdaGrad accum, running variance, occupancy
+// likelihood, ...) can reuse it. The bounds float2 always means
+// (log-domain min, log-domain max); the codec lives entirely in this class
+// and a caller need only:
+//     decode_v / encode_v       -- per-cell read / write
+//     forward_v / inverse_v     -- to do their own block-reduction in the
+//                                  log domain before writing bounds back
+//
+// Storage (AoS -- same per-cell stride conventions as QuantizedAdamState):
+//   BITS=8: 1 byte/cell -- packed[idx] = q
+//   BITS=4: 1 byte/2-cells -- low nibble = idx2k, high nibble = idx2k+1
+// ============================================================================
+
+template<int BITS, int BLOCK_SIZE = 256>
+class QuantizedTensorLog {
+public:
+    static_assert(BITS == 4 || BITS == 8,
+                  "QuantizedTensorLog: only 4-bit and 8-bit are supported");
+    static_assert(BLOCK_SIZE > 0 && (BLOCK_SIZE & (BLOCK_SIZE - 1)) == 0,
+                  "QuantizedTensorLog: BLOCK_SIZE must be a positive power of 2");
+
+    static constexpr int   kBits         = BITS;
+    static constexpr int   kBlockSize    = BLOCK_SIZE;
+    static constexpr int   kLevels       = 1 << BITS;
+    static constexpr float kQMax         = (float)(kLevels - 1);
+    static constexpr float kInvQMax      = 1.0f / kQMax;
+    // 8-bit: 1 byte per cell. 4-bit: 0.5 byte per cell (2 cells share a byte).
+    // packed_bytes() rounds up to the nearest byte for 4-bit.
+    static constexpr float kEps          = 1e-15f;
+
+    // Storage (non-owning views backed by the global DevicePool).
+    DeviceVector<uint8_t> packed;     // size = packed_bytes()
+    DeviceVector<float2>  bounds;     // size = n_bounds (caller-chosen)
+    int64_t n_cells  = 0;
+    int64_t n_bounds = 0;
+
+    // ---- Host: storage management ------------------------------------------
+
+    void resize(const std::string& key_prefix, int64_t cells, int64_t bnds) {
+        n_cells  = cells;
+        n_bounds = bnds;
+        packed.resize(key_prefix + ".q",  (size_t)packed_bytes_for(cells));
+        bounds.resize(key_prefix + ".qb", (size_t)bnds);
+    }
+
+    void zero() {
+        if (packed.data_ptr()) packed.zero();
+        if (bounds.data_ptr()) bounds.zero();
+    }
+
+    bool initialized() const { return packed.data_ptr() != nullptr; }
+
+    uint8_t* packed_ptr() const { return packed.data_ptr(); }
+    float2*  bounds_ptr() const { return bounds.data_ptr(); }
+
+    static int64_t packed_bytes_for(int64_t cells) {
+        if constexpr (BITS == 8) return cells;
+        else                     return (cells + 1) / 2;   // 4-bit, AoS
+    }
+    int64_t packed_bytes() const { return packed_bytes_for(n_cells); }
+    int64_t bounds_bytes() const { return n_bounds * (int64_t)sizeof(float2); }
+    int64_t total_bytes()  const { return packed_bytes() + bounds_bytes(); }
+
+    // ---- Device: codec primitives ------------------------------------------
+#ifdef __CUDACC__
+    // Forward / inverse log map. 0 <-> 0 fixed point.
+    __device__ static inline float forward_v(float v) {
+        return log1pf(fmaxf(v, 0.0f) * (1.0f / kEps));
+    }
+    __device__ static inline float inverse_v(float log_v) {
+        return kEps * expm1f(log_v);
+    }
+
+    // Decode the linearly-quantized log-primitive at cell `idx`. Returns
+    // the value in the LOG domain -- use inverse_v(...) to get back to v.
+    __device__ static inline float decode_log(
+        const uint8_t* __restrict__ packed_ptr, int64_t idx, float2 mm
+    ) {
+        float q;
+        if constexpr (BITS == 8) {
+            q = (float)packed_ptr[idx];
+        } else {  // BITS == 4
+            uint8_t b = packed_ptr[idx >> 1];
+            q = (idx & 1) ? (float)((b >> 4) & 0x0Fu) : (float)(b & 0x0Fu);
+        }
+        return mm.x + (mm.y - mm.x) * (q * kInvQMax);
+    }
+
+    // Decode + reconstruct v from the cell at `idx`.
+    __device__ static inline float decode_v(
+        const uint8_t* __restrict__ packed_ptr, int64_t idx, float2 mm
+    ) {
+        return inverse_v(decode_log(packed_ptr, idx, mm));
+    }
+
+    // Encode a log-domain value into the packed byte stream at cell `idx`.
+    // Endpoint-exact within mm. Callers typically obtain `log_v` via
+    // forward_v(v) and pass mm = the block-reduced log-domain bounds.
+    //
+    // NOTE: BITS==4 stores two cells per byte. Concurrent threads writing
+    // odd/even partners of the same byte will race. The bilagrid kernels
+    // serialize this with a __syncthreads() before the bytewise store --
+    // see fused_bilagrid_tv_adagrad_kernel for the pattern.
+    __device__ static inline void encode_log(
+        uint8_t* __restrict__ packed_ptr, int64_t idx,
+        float log_v, float2 mm
+    ) {
+        float range = fmaxf(mm.y - mm.x, kEps);
+        uint8_t q = (uint8_t)fminf(
+            fmaxf(roundf(kQMax * (log_v - mm.x) / range), 0.0f), kQMax);
+        if constexpr (BITS == 8) {
+            packed_ptr[idx] = q;
+        } else {  // BITS == 4
+            // 4-bit AoS: two cells per byte (idx&1 picks low/high nibble).
+            // Caller-synchronized -- see note above.
+            int64_t byte_idx = idx >> 1;
+            uint8_t old = packed_ptr[byte_idx];
+            uint8_t merged = (idx & 1)
+                ? (uint8_t)((old & 0x0Fu) | ((q & 0x0Fu) << 4))
+                : (uint8_t)((old & 0xF0u) | (q & 0x0Fu));
+            packed_ptr[byte_idx] = merged;
+        }
+    }
+
+    // Encode v directly -- internally calls forward_v.
+    __device__ static inline void encode_v(
+        uint8_t* __restrict__ packed_ptr, int64_t idx,
+        float v, float2 mm
+    ) {
+        encode_log(packed_ptr, idx, forward_v(v), mm);
+    }
+#endif // __CUDACC__
+};
+
+
+// ND device tensor -- non-owning view.
 // Intended for heterogeneous containers (e.g. std::vector of tensors with different ranks).
 // For fixed-rank device-friendly code, prefer DeviceVector/Tensor2D/Tensor3D.
 template<typename T>

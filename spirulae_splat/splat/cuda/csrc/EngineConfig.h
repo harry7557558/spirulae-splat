@@ -1,6 +1,6 @@
 #pragma once
 
-// EngineConfig — per-step config structs accepted by the engine_*_step
+// EngineConfig -- per-step config structs accepted by the engine_*_step
 // entrypoints. These collapse what used to be ~40-arg signatures into a
 // handful of typed bundles, while keeping all scheduling on the Python side
 // (every numeric field below is the already-resolved value for this step).
@@ -96,6 +96,11 @@ struct DensifyConfig {
 
 // Per-type Adam LR + TV regularization weight. lr <= 0 disables the channel
 // for the current step (so a single config covers "enabled but skipped" too).
+//
+// When the engine was init'd with use_adagrad=true for a given type, those
+// (lr_*) values are the AdaGrad LRs (typically larger than Adam's, e.g. 1e-1
+// for RGB, since AdaGrad's effective per-parameter LR shrinks as the
+// accumulator grows).
 struct BilagridStepConfig {
     float lr_rgb         = 0.0f;
     float lr_depth       = 0.0f;

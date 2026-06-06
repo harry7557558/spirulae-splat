@@ -201,7 +201,7 @@ void engine_save_checkpoint(
         meta << "image_height=" << s.camera.height << "\n";
         meta << "camera_model=" << s.camera.model_str << "\n";
         meta << "train_quantize_sh=" << (s.optim.quantize_sh ? 1 : 0) << "\n";
-        // QuantizedAdamState codec signature — tells offline tools which
+        // QuantizedAdamState codec signature -- tells offline tools which
         // byte-to-(g1, g2) inverse to use when reading the *_packed.npy
         // streams. Currently every quantized buffer (SH + bilagrid) uses the
         // same scheme: 8-bit AoS, 256-cell blocks, joint (u, log_s) primitives
@@ -222,6 +222,7 @@ void engine_save_checkpoint(
             meta << "bilagrid_rgb_H=" << s.bilagrid_rgb.grids.size<2>() << "\n";
             meta << "bilagrid_rgb_W=" << s.bilagrid_rgb.grids.size<3>() << "\n";
             meta << "bilagrid_rgb_quantize_optim=" << (s.bilagrid_rgb.quantize_optim ? 1 : 0) << "\n";
+            meta << "bilagrid_rgb_use_adagrad=" << (s.bilagrid_rgb.use_adagrad ? 1 : 0) << "\n";
         }
         if (s.bilagrid_depth.enabled) {
             meta << "bilagrid_depth_enabled=1\n";
@@ -229,6 +230,7 @@ void engine_save_checkpoint(
             meta << "bilagrid_depth_H=" << s.bilagrid_depth.grids.size<2>() << "\n";
             meta << "bilagrid_depth_W=" << s.bilagrid_depth.grids.size<3>() << "\n";
             meta << "bilagrid_depth_quantize_optim=" << (s.bilagrid_depth.quantize_optim ? 1 : 0) << "\n";
+            meta << "bilagrid_depth_use_adagrad=" << (s.bilagrid_depth.use_adagrad ? 1 : 0) << "\n";
         }
         if (s.bilagrid_normal.enabled) {
             meta << "bilagrid_normal_enabled=1\n";
@@ -236,6 +238,7 @@ void engine_save_checkpoint(
             meta << "bilagrid_normal_H=" << s.bilagrid_normal.grids.size<2>() << "\n";
             meta << "bilagrid_normal_W=" << s.bilagrid_normal.grids.size<3>() << "\n";
             meta << "bilagrid_normal_quantize_optim=" << (s.bilagrid_normal.quantize_optim ? 1 : 0) << "\n";
+            meta << "bilagrid_normal_use_adagrad=" << (s.bilagrid_normal.use_adagrad ? 1 : 0) << "\n";
         }
         if (s.ppisp.enabled) {
             meta << "ppisp_enabled=1\n";
@@ -352,35 +355,70 @@ void engine_save_checkpoint(
                               {(unsigned long)s.optim.accum_buffer.size(), 2ul});
     }
 
-    // Bilagrid grids + optimizer state, per type.
+    // Bilagrid grids + optimizer state, per type. Three optimizer layouts:
+    //   Adam float        : *_g1.npy, *_g2.npy
+    //   Adam quantized    : *_packed.npy (AoS u,sqrt_g2) + *_quant_bounds.npy
+    //   AdaGrad float     : *_accum.npy
+    //   AdaGrad quantized : *_accum_packed.npy + *_accum_bounds.npy (float2)
+    auto save_dv_f2 = [&](const char* name, const DeviceVector<float2>& v) {
+        if (!v.data_ptr() || v.size() == 0) return;
+        _ckpt_save_npy<float>(full_root / name,
+                              reinterpret_cast<const float*>(v.data_ptr()),
+                              (size_t)v.size() * 2,
+                              {(unsigned long)v.size(), 2ul});
+    };
     auto save_bilagrid = [&](const char* prefix, bool enabled, bool quantize,
+                             bool use_adagrad,
                              const DeviceTensor5D<float>& grids,
                              const DeviceTensor5D<float>& g1_f,
                              const DeviceTensor5D<float>& g2_f,
-                             const QuantizedAdamState<8, 256>& quant_state) {
+                             const QuantizedAdamState<8, 256>& quant_state,
+                             const DeviceTensor5D<float>& accum_f,
+                             const QuantizedTensorLog<8, 256>& adagrad_quant) {
         if (!enabled) return;
         save_5d((std::string(prefix) + ".npy").c_str(), grids);
-        if (quantize) {
-            // AoS packed (u, sqrt_g2) byte stream + per-block bounds.
-            save_dv_u8((std::string(prefix) + "_packed.npy").c_str(), quant_state.packed);
-            save_dv_f4((std::string(prefix) + "_quant_bounds.npy").c_str(), quant_state.bounds);
+        if (use_adagrad) {
+            if (quantize) {
+                save_dv_u8((std::string(prefix) + "_accum_packed.npy").c_str(),
+                           adagrad_quant.packed);
+                save_dv_f2((std::string(prefix) + "_accum_bounds.npy").c_str(),
+                           adagrad_quant.bounds);
+            } else {
+                save_5d((std::string(prefix) + "_accum.npy").c_str(), accum_f);
+            }
         } else {
-            save_5d((std::string(prefix) + "_g1.npy").c_str(), g1_f);
-            save_5d((std::string(prefix) + "_g2.npy").c_str(), g2_f);
+            if (quantize) {
+                save_dv_u8((std::string(prefix) + "_packed.npy").c_str(),
+                           quant_state.packed);
+                save_dv_f4((std::string(prefix) + "_quant_bounds.npy").c_str(),
+                           quant_state.bounds);
+            } else {
+                save_5d((std::string(prefix) + "_g1.npy").c_str(), g1_f);
+                save_5d((std::string(prefix) + "_g2.npy").c_str(), g2_f);
+            }
         }
     };
-    save_bilagrid("bilagrid_rgb",   s.bilagrid_rgb.enabled,   s.bilagrid_rgb.quantize_optim,
+    save_bilagrid("bilagrid_rgb",
+                  s.bilagrid_rgb.enabled, s.bilagrid_rgb.quantize_optim,
+                  s.bilagrid_rgb.use_adagrad,
                   s.bilagrid_rgb.grids, s.bilagrid_rgb.g1, s.bilagrid_rgb.g2,
-                  s.bilagrid_rgb.quant_state);
-    save_bilagrid("bilagrid_depth", s.bilagrid_depth.enabled, s.bilagrid_depth.quantize_optim,
+                  s.bilagrid_rgb.quant_state,
+                  s.bilagrid_rgb.accum_f, s.bilagrid_rgb.adagrad_quant);
+    save_bilagrid("bilagrid_depth",
+                  s.bilagrid_depth.enabled, s.bilagrid_depth.quantize_optim,
+                  s.bilagrid_depth.use_adagrad,
                   s.bilagrid_depth.grids, s.bilagrid_depth.g1, s.bilagrid_depth.g2,
-                  s.bilagrid_depth.quant_state);
+                  s.bilagrid_depth.quant_state,
+                  s.bilagrid_depth.accum_f, s.bilagrid_depth.adagrad_quant);
     if (s.bilagrid_depth.enabled) {
         save_dv_f1("bilagrid_depth_scalars.npy", s.bilagrid_depth.scalars);
     }
-    save_bilagrid("bilagrid_normal", s.bilagrid_normal.enabled, s.bilagrid_normal.quantize_optim,
+    save_bilagrid("bilagrid_normal",
+                  s.bilagrid_normal.enabled, s.bilagrid_normal.quantize_optim,
+                  s.bilagrid_normal.use_adagrad,
                   s.bilagrid_normal.grids, s.bilagrid_normal.g1, s.bilagrid_normal.g2,
-                  s.bilagrid_normal.quant_state);
+                  s.bilagrid_normal.quant_state,
+                  s.bilagrid_normal.accum_f, s.bilagrid_normal.adagrad_quant);
 
     // PPISP table + Adam moments.
     if (s.ppisp.enabled) {
