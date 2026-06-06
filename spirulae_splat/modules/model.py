@@ -74,10 +74,25 @@ class SpirulaeSplatModelConfig:
     relative_scale: Optional[float] = None
     """Manually set scale when a scene is poorly scaled, i.e. increase this for large datasets.
         If not set, will use a scale agnostic optimizer. To prevent this, set it to 1.0."""
-    l2_lambda: float = 0.0
+    l1_weight: float = 1.0
+    """Weight of L1 loss, default 1.0"""
+    l2_weight: float = 0.0
     """Weight of L2 loss, default 0.0"""
     ssim_lambda: float = 0.2
     """Weight of ssim loss; 0.2 for academic baseline, higher for potentially more high-frequency details, lower for less blurry background in outdoor scenes"""
+    # YUV (BT.601) per-pixel supervision. These are raw, relative weights —
+    # they sit on the same "element-wise RGB" budget as l2_lambda and the
+    # implicit RGB-L1 (whose raw weight is 1.0); the loss helper normalizes
+    # the full {RGB-L1, RGB-L2, Y-L1, Y-L2, U-L2, V-L2} group to sum to
+    # (1 - ssim_lambda), preserving the user's RGB-vs-YUV split.
+    l1_weight_y: float = 0.0
+    """Weight of per-pixel BT.601 luma (Y) L1 loss."""
+    l2_weight_y: float = 0.0
+    """Weight of per-pixel BT.601 luma (Y) L2 loss."""
+    l2_weight_u: float = 0.0
+    """Weight of per-pixel BT.601 chroma U L2 loss."""
+    l2_weight_v: float = 0.0
+    """Weight of per-pixel BT.601 chroma V L2 loss."""
     num_loss_scales: int = 0
     """Number of scales for image loss. For multi-scale loss, image is downscaled by 2 this number of times, and losses are averaged across scales. Improves convergence for high-resolution images."""
     use_camera_optimizer: bool = False
@@ -1347,6 +1362,60 @@ class SpirulaeSplatModel(torch.nn.Module):
         assert tensor.is_contiguous(), f"Tensor must be contiguous, got strides {tensor.stride()}"
         return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
 
+    def _build_loss_weights(self, step):
+        """Build the per-pixel loss_weights array passed to the engine.
+
+        The "element-wise RGB" group {RGB-L1, RGB-L2, Y-L1, Y-L2, U-L2, V-L2}
+        is normalized so its total equals ``1 - ssim_lambda``, and the split
+        between the RGB-only sub-group and the YUV sub-group preserves the
+        user's raw config ratio. RGB-internal L1/L2 split (l2_lambda) and the
+        YUV-internal ratios are also preserved.
+
+        With all four YUV weights at 0 (default), this reduces exactly to the
+        old (1 - l2_lambda) * (1 - ssim_lambda), l2_lambda * (1 - ssim_lambda)
+        split.
+
+        Order must match per_pixel_losses.slang::LossWeightIndex.
+        """
+        cfg = self.config
+        dist_factor = min(step / max(cfg.distortion_reg_warmup, 1), 1.0)
+        reg_active = float(step >= cfg.reg_warmup_length)
+        sup_active = float(step > cfg.supervision_warmup)
+        alpha_reg_factor = cfg.alpha_reg_weight * min(
+            step / max(cfg.alpha_reg_warmup, 1), 1.0)
+
+        # Raw element-wise RGB-group weights (relative). RGB-L1 fills the slot
+        # left by L2 inside the RGB sub-budget of 1.0; YUV weights are
+        # configured directly by the user.
+        w_rgb_l1_raw = max(0.0, cfg.l1_weight)
+        w_rgb_l2_raw = max(0.0, cfg.l2_weight)
+        w_y_l1_raw   = max(0.0, cfg.l1_weight_y)
+        w_y_l2_raw   = max(0.0, cfg.l2_weight_y)
+        w_u_l2_raw   = max(0.0, cfg.l2_weight_u)
+        w_v_l2_raw   = max(0.0, cfg.l2_weight_v)
+        total_raw = (w_rgb_l1_raw + w_rgb_l2_raw
+                     + w_y_l1_raw + w_y_l2_raw + w_u_l2_raw + w_v_l2_raw)
+        # When all weights are 0 (degenerate), keep zeros to avoid NaN.
+        scale = ((1.0 - cfg.ssim_lambda) / total_raw) if total_raw > 0.0 else 0.0
+
+        return [
+            w_rgb_l1_raw * scale,                              # RgbSupL1
+            w_rgb_l2_raw * scale,                              # RgbSupL2
+            w_y_l1_raw   * scale,                              # YSupL1
+            w_y_l2_raw   * scale,                              # YSupL2
+            w_u_l2_raw   * scale,                              # USupL2
+            w_v_l2_raw   * scale,                              # VSupL2
+            sup_active * cfg.depth_supervision_weight,         # DepthSup
+            sup_active * cfg.normal_supervision_weight,        # NormalSup
+            cfg.apply_loss_for_mask * cfg.alpha_loss_weight,   # AlphaSup
+            cfg.apply_loss_for_mask * cfg.alpha_loss_weight_under,  # AlphaSupUnder
+            reg_active * cfg.normal_reg_weight * dist_factor,  # NormalReg
+            reg_active * alpha_reg_factor,                     # AlphaReg
+            reg_active * cfg.rgb_distortion_reg * dist_factor,  # RgbDistReg
+            reg_active * cfg.depth_distortion_reg * dist_factor,  # DepthDistReg
+            reg_active * cfg.normal_distortion_reg * dist_factor,  # NormalDistReg
+        ]
+
     def _engine_get_loss_grad(self, outputs, batch, batch_size):
         """Engine path: compute loss + backward entirely in C++."""
 
@@ -1387,24 +1456,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         step = self.step
         cfg = self.config
 
-        dist_factor = min(step / max(cfg.distortion_reg_warmup, 1), 1.0)
-        reg_active = float(step >= cfg.reg_warmup_length)
-        sup_active = float(step > cfg.supervision_warmup)
-        alpha_reg_factor = cfg.alpha_reg_weight * min(step / max(cfg.alpha_reg_warmup, 1), 1.0)
-
-        loss_weights = [
-            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda),
-            cfg.l2_lambda * (1.0 - cfg.ssim_lambda),
-            sup_active * cfg.depth_supervision_weight,
-            sup_active * cfg.normal_supervision_weight,
-            cfg.apply_loss_for_mask * cfg.alpha_loss_weight,
-            cfg.apply_loss_for_mask * cfg.alpha_loss_weight_under,
-            reg_active * cfg.normal_reg_weight * dist_factor,
-            reg_active * alpha_reg_factor,
-            reg_active * cfg.rgb_distortion_reg * dist_factor,
-            reg_active * cfg.depth_distortion_reg * dist_factor,
-            reg_active * cfg.normal_distortion_reg * dist_factor,
-        ]
+        loss_weights = self._build_loss_weights(step)
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
@@ -1518,23 +1570,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         # --- Loss weights ---
         step = self.step
         cfg = self.config
-        dist_factor = min(step / max(cfg.distortion_reg_warmup, 1), 1.0)
-        reg_active = float(step >= cfg.reg_warmup_length)
-        sup_active = float(step > cfg.supervision_warmup)
-        alpha_reg_factor = cfg.alpha_reg_weight * min(step / max(cfg.alpha_reg_warmup, 1), 1.0)
-        loss_weights = [
-            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda),
-            cfg.l2_lambda * (1.0 - cfg.ssim_lambda),
-            sup_active * cfg.depth_supervision_weight,
-            sup_active * cfg.normal_supervision_weight,
-            cfg.apply_loss_for_mask * cfg.alpha_loss_weight,
-            cfg.apply_loss_for_mask * cfg.alpha_loss_weight_under,
-            reg_active * cfg.normal_reg_weight * dist_factor,
-            reg_active * alpha_reg_factor,
-            reg_active * cfg.rgb_distortion_reg * dist_factor,
-            reg_active * cfg.depth_distortion_reg * dist_factor,
-            reg_active * cfg.normal_distortion_reg * dist_factor,
-        ]
+        loss_weights = self._build_loss_weights(step)
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
@@ -1711,24 +1747,8 @@ class SpirulaeSplatModel(torch.nn.Module):
         """
         cfg = self.config
 
-        # Loss weights — identical schedule to engine_train_step.
-        dist_factor = min(step / max(cfg.distortion_reg_warmup, 1), 1.0)
-        reg_active = float(step >= cfg.reg_warmup_length)
-        sup_active = float(step > cfg.supervision_warmup)
-        alpha_reg_factor = cfg.alpha_reg_weight * min(step / max(cfg.alpha_reg_warmup, 1), 1.0)
-        loss_weights = [
-            (1.0 - cfg.l2_lambda) * (1.0 - cfg.ssim_lambda),
-            cfg.l2_lambda * (1.0 - cfg.ssim_lambda),
-            sup_active * cfg.depth_supervision_weight,
-            sup_active * cfg.normal_supervision_weight,
-            cfg.apply_loss_for_mask * cfg.alpha_loss_weight,
-            cfg.apply_loss_for_mask * cfg.alpha_loss_weight_under,
-            reg_active * cfg.normal_reg_weight * dist_factor,
-            reg_active * alpha_reg_factor,
-            reg_active * cfg.rgb_distortion_reg * dist_factor,
-            reg_active * cfg.depth_distortion_reg * dist_factor,
-            reg_active * cfg.normal_distortion_reg * dist_factor,
-        ]
+        # Loss weights -- identical schedule to engine_train_step.
+        loss_weights = self._build_loss_weights(step)
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)

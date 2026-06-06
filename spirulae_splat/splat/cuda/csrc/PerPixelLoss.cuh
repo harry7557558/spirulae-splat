@@ -32,6 +32,13 @@ enum class RawLossIndex {
 enum class LossWeightIndex {
     RgbSupL1,
     RgbSupL2,
+    // YUV (BT.601) per-pixel supervision; folded into RgbLoss in the slang
+    // kernel so it shares the MaskTotal divisor. Keep the order in sync with
+    // per_pixel_losses.slang::LossWeightIndex.
+    YSupL1,
+    YSupL2,
+    USupL2,
+    VSupL2,
     DepthSup,
     NormalSup,
     AlphaSup,

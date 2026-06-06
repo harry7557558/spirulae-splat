@@ -542,7 +542,7 @@ static void _compute_per_pixel_losses_backward(
     int Hd, Wd; _hw_or_zero(ref_depth,  Hd, Wd);
     int Hn, Wn; _hw_or_zero(ref_normal, Hn, Wn);
     int Ha, Wa; _hw_or_zero(ref_alpha,  Ha, Wa);
-    per_pixel_losses_backward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, WARP_SIZE*WARP_SIZE, 1)>>>(
+    per_pixel_losses_backward_kernel<<<_LAUNCH_ARGS_2D(pixels_per_image, B, 256, 1)>>>(
         B, pixels_per_image,
         W_render, H_render,
         Wd, Hd, Wn, Hn, Wa, Ha,

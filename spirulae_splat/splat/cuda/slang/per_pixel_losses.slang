@@ -81,6 +81,12 @@ enum RawLossIndex {
 enum LossWeightIndex {
     RgbSupL1,
     RgbSupL2,
+    // Per-pixel YUV (BT.601) supervision on top of plain RGB. Folded into
+    // RawLossIndex::RgbLoss so the same MaskTotal divisor applies.
+    YSupL1,
+    YSupL2,
+    USupL2,
+    VSupL2,
     DepthSup,
     NormalSup,
     AlphaSup,
@@ -92,6 +98,16 @@ enum LossWeightIndex {
     NormalDistReg,
     length
 };
+
+// BT.601 RGB (linear-ish) -> YUV. Used by the YSup* / USup* / VSup* losses.
+[ForceInline]
+[Differentiable]
+float3 rgb_to_yuv(float3 rgb) {
+    float Y =  0.299f * rgb.x + 0.587f * rgb.y + 0.114f * rgb.z;
+    float U = -0.14713f * rgb.x - 0.28886f * rgb.y + 0.436f * rgb.z;
+    float V =  0.615f * rgb.x - 0.51499f * rgb.y - 0.10001f * rgb.z;
+    return float3(Y, U, V);
+}
 
 [Differentiable]
 [CudaDeviceExport]
@@ -123,10 +139,20 @@ float[RawLossIndex::length] per_pixel_losses(
     bool normal_mask = (ref_normal.x + ref_normal.y + ref_normal.z > -2.366f);
     bool alpha_mask = (ref_depth != 0.0f);
 
-    // RGB - L1 and L2, for training and for PSNR calculation
+    // RGB - L1 and L2, plus YUV (BT.601) per-channel L1/L2, for training.
+    // RgbL2 stays plain-RGB (PSNR calculation).
+    float3 render_yuv = rgb_to_yuv(render_rgb);
+    float3 ref_yuv    = rgb_to_yuv(ref_rgb);
+    float dY = render_yuv.x - ref_yuv.x;
+    float dU = render_yuv.y - ref_yuv.y;
+    float dV = render_yuv.z - ref_yuv.z;
     losses[RawLossIndex::RgbLoss] = float(mask) * (
         weights[LossWeightIndex::RgbSupL1] * l1_loss(render_rgb, ref_rgb) +
-        weights[LossWeightIndex::RgbSupL2] * l2_loss(render_rgb, ref_rgb)
+        weights[LossWeightIndex::RgbSupL2] * l2_loss(render_rgb, ref_rgb) +
+        weights[LossWeightIndex::YSupL1]  * abs(dY) +
+        weights[LossWeightIndex::YSupL2]  * dY * dY +
+        weights[LossWeightIndex::USupL2]  * dU * dU +
+        weights[LossWeightIndex::VSupL2]  * dV * dV
     );
     losses[RawLossIndex::RgbL2] = float(mask) *
         clamp(l2_loss(render_rgb, ref_rgb), 0.0f, 1.0f);
