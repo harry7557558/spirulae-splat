@@ -43,6 +43,14 @@ class SpirulaeSplatDataManagerConfig:
     load_normals: bool = True
     """Whether to load normal maps, if exist"""
 
+    mask_boundary_offset: float = 0
+    """Signed boundary offset applied to binarized masks at decode time, as a
+        fraction of sqrt(W*H) of the decoded mask. Positive dilates (grows)
+        foreground, negative erodes (shrinks). Runs on CPU during data loading
+        via separable Felzenszwalb-Huttenlocher squared-Euclidean DT (exact,
+        O(N) per row + col). Only honored by the C++ data manager path
+        (``use_cpp_data_manager=True``)."""
+
     warp_to_pinhole: bool = False
     """Whether to split an image into 5 undistorted pinhole images.
         Can sometimes give better quality and compatibility for dataset captured by fisheye/360 cameras."""

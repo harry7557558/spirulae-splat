@@ -268,6 +268,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("workers_depth",    &DataManagerConfig::workers_depth)
         .def_readwrite("workers_normal",   &DataManagerConfig::workers_normal)
         .def_readwrite("prefetch_batches", &DataManagerConfig::prefetch_batches)
+        .def_readwrite("mask_boundary_offset",
+                                           &DataManagerConfig::mask_boundary_offset)
         .def_readwrite("warp_to_pinhole",  &DataManagerConfig::warp_to_pinhole);
 
     py::enum_<CameraModelType>(m, "CameraModelType")

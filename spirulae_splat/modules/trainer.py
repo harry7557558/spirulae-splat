@@ -482,6 +482,7 @@ class Trainer:
         c_cfg.train_batch_size = train_bs
         c_cfg.val_batch_size   = val_bs
         c_cfg.warp_to_pinhole  = bool(dm_cfg.warp_to_pinhole)
+        c_cfg.mask_boundary_offset = float(dm_cfg.mask_boundary_offset)
 
         # Input intrins / dist_coeffs are needed by the wide warp kernel
         # (fisheye / equisolid). Pass them even when only equirectangular

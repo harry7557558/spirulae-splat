@@ -75,13 +75,20 @@ struct DataManagerConfig {
 
     // Worker count per modality pool (DISK mode only). Defaults to a small
     // fixed number; tune up for fast disks / many CPU cores.
-    int workers_rgb    = 8;
+    int workers_rgb    = 16;
     int workers_depth  = 8;
     int workers_normal = 8;
 
     // How many batches to keep in flight in the prefetch pipeline (DISK only).
     // Hard upper bound on RAM consumed by ready / partially-ready batches.
     int prefetch_batches = 4;
+
+    // Signed boundary offset applied to binarized masks at decode time,
+    // expressed as a fraction of sqrt(W*H) of the decoded mask. Positive ->
+    // dilate (grow) foreground; negative -> erode (shrink) foreground; zero
+    // disables. Implemented via separable Felzenszwalb-Huttenlocher squared
+    // Euclidean distance transform on CPU (O(N) per row+col, exact).
+    float mask_boundary_offset = 0.0f;
 
     // When true: cameras with model FISHEYE or EQUISOLID get split into 5
     // cubemap-face pinhole sub-cameras at training time. PINHOLE cameras
