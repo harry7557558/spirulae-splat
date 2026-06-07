@@ -213,9 +213,23 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             h_splat_screen.load(h_splats_screen, idx);
         }
 
-        // Accumulate gradient
+        // Accumulate gradient. When VALUE_BITS != 32 the canonical SH storage
+        // is the packed codec buffer, NOT the fp32 features_sh array; pass the
+        // codec args through so project_vjp evaluates v_dir against the actual
+        // (decoded) SH coefficients. Without this, v_dir reads the stale fp32
+        // features_sh (left untouched by value-quant FPBO writeback) which is
+        // typically all zero -> biased v_means / v_R / v_t every step.
         if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::None) {
-            splat_world.template project_vjp<camera_model, false>(cam, v_splat_screen, v_splat_world, v_R, v_t);
+            if constexpr (VALUE_BITS == 32) {
+                splat_world.template project_vjp<camera_model, false, 32>(cam, v_splat_screen, v_splat_world, v_R, v_t);
+            } else {
+                const int64_t sh_base_vjp = (int64_t)3 * (int64_t)num_sh_buffer * (int64_t)gid;
+                const int64_t sh_bounds_stride_vjp = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+                splat_world.template project_vjp<camera_model, false, VALUE_BITS>(
+                    cam, v_splat_screen, v_splat_world, v_R, v_t,
+                    const_cast<uint8_t*>(sh_value_packed), sh_value_bounds,
+                    sh_base_vjp, sh_bounds_stride_vjp);
+            }
         } else if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
             splat_world.template project_vjp_h_pos<camera_model, false>(cam, v_splat_screen,
                 vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
@@ -576,6 +590,25 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             mm.z = fminf(fminf(fminf(mm.z, us_x.y), us_y.y), us_z.y);
             mm.w = fmaxf(fmaxf(fmaxf(mm.w, us_x.y), us_y.y), us_z.y);
         }
+        // SH-degree warmup: when num_sh_buffer > num_sh, the inactive cells
+        // (j in [num_sh, num_sh_buffer)) are zero-encoded after the reduce
+        // below so they decode to ~0 once they become active in a later
+        // step. That zero-encode is endpoint-safe only if BOTH bounds cover
+        // 0 -- expand the per-thread bound here so the block reduction
+        // produces a bound that includes 0. Done only in inside threads so
+        // outside-thread sentinels pass through the reduce unchanged.
+        if (num_sh_buffer > (uint32_t)num_sh) {
+            if constexpr (VALUE_BITS != 32) {
+                sh_value_new_mm.x = fminf(sh_value_new_mm.x, 0.0f);
+                sh_value_new_mm.y = fmaxf(sh_value_new_mm.y, 0.0f);
+            }
+            // (u=0, log_s=0) is the codec's (g1=0, g2=0) fixed point.
+            // log_s is non-negative, so forcing mm.z <= 0 is the only side
+            // that needs explicit clamping; mm.w already >= 0 from reduce.
+            mm.x = fminf(mm.x, 0.0f);
+            mm.y = fmaxf(mm.y, 0.0f);
+            mm.z = fminf(mm.z, 0.0f);
+        }
     }  // inside
 
         auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
@@ -660,6 +693,40 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
                 SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 0, v.x, sh_value_new_mm);
                 SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 1, v.y, sh_value_new_mm);
                 SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 2, v.z, sh_value_new_mm);
+            }
+        }
+
+        // SH-degree warmup: zero-encode the inactive cells (j in
+        // [num_sh, num_sh_buffer)) so that when the kernel template's
+        // num_sh increases at a later warmup step the newly-active bands
+        // decode to ~0 instead of the old bound's mm.x (which biases the
+        // first few Adam steps after each degree boundary). The bound
+        // expansion above guarantees the (0, 0) point is in range, so
+        // these encodes land near the codec's true zero fixed point.
+        // Runtime-gated -- becomes a no-op once num_sh == num_sh_buffer.
+        if (num_sh_buffer > (uint32_t)num_sh) {
+            // Adam state: encode (g1=0, g2=0).
+            #pragma unroll 1
+            for (int j = num_sh; j < (int)num_sh_buffer; ++j) {
+                SHQState::encode_g1g2(sh_packed_rw, sh_base + 3*j + 0, 0.0f, 0.0f, mm);
+                SHQState::encode_g1g2(sh_packed_rw, sh_base + 3*j + 1, 0.0f, 0.0f, mm);
+                SHQState::encode_g1g2(sh_packed_rw, sh_base + 3*j + 2, 0.0f, 0.0f, mm);
+            }
+            // SH values: encode 0 against the fresh, 0-inclusive bound.
+            if constexpr (VALUE_BITS == 8) {
+                #pragma unroll 1
+                for (int j = num_sh; j < (int)num_sh_buffer; ++j) {
+                    SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 0, 0.0f, sh_value_new_mm);
+                    SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 1, 0.0f, sh_value_new_mm);
+                    SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 2, 0.0f, sh_value_new_mm);
+                }
+            } else if constexpr (VALUE_BITS == 16) {
+                #pragma unroll 1
+                for (int j = num_sh; j < (int)num_sh_buffer; ++j) {
+                    SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 0, 0.0f, sh_value_new_mm);
+                    SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 1, 0.0f, sh_value_new_mm);
+                    SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 2, 0.0f, sh_value_new_mm);
+                }
             }
         }
     }

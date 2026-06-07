@@ -198,9 +198,10 @@ class SpirulaeSplatDataParserConfig:
     """Whether to check if image resolution match camera resolution and scale camera intrinsics accordingly if not.
         Set this to a number to divide intrinsics by that number, e.g. Mip-NeRF 360 and Zip-NeRF with images_(2|4)
         Set this to True to detect resolution, e.g. tankt_db"""
+    downscale_rounding_mode: Literal["floor", "ceil", "round"] = "floor"
+    """Rounding mode applied to camera width/height when dividing by `rescale_camera_to_fit`.
+        Use `round` to match the convention used by most image downscalers (e.g. Mip-NeRF 360 images_(2|4|8))."""
 
-    downscale_factor: Optional[int] = None
-    """How much to downscale images. If not set, images are chosen such that the max dimension is <1600px."""
     scene_scale: float = 1.0
     """How much to scale the region of interest by."""
     orientation_method: Literal["pca", "up", "vertical", "none", "gsplat"] = "up"
@@ -338,12 +339,16 @@ class SpirulaeSplatDataparser:
             )
 
             if not isinstance(self.config.rescale_camera_to_fit, bool):
-                fx[-1] /= self.config.rescale_camera_to_fit
-                fy[-1] /= self.config.rescale_camera_to_fit
-                cx[-1] /= self.config.rescale_camera_to_fit
-                cy[-1] /= self.config.rescale_camera_to_fit
-                height[-1] //= self.config.rescale_camera_to_fit
-                width[-1] //= self.config.rescale_camera_to_fit
+                scale = self.config.rescale_camera_to_fit
+                fx[-1] /= scale
+                fy[-1] /= scale
+                cx[-1] /= scale
+                cy[-1] /= scale
+                round_fn = {"floor": math.floor, "ceil": math.ceil, "round": round}[
+                    self.config.downscale_rounding_mode
+                ]
+                height[-1] = int(round_fn(height[-1] / scale))
+                width[-1] = int(round_fn(width[-1] / scale))
             elif isinstance(self.config.rescale_camera_to_fit, bool) and self.config.rescale_camera_to_fit:
                 with Image.open(fname) as img:
                     w, h = img.size

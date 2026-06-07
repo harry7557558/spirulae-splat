@@ -143,18 +143,18 @@ def _run_scene(
 
 
 def bench_360_v2(preset: str, path_to_360_v2: Path, output_prefix: Path,
-                 run_tag: str) -> List[Tuple[str, Optional[Dict]]]:
+                 run_tag: str, extra_cli_args: List[str]) -> List[Tuple[str, Optional[Dict]]]:
     if not (path_to_360_v2.exists() and path_to_360_v2.is_dir()):
         print("Dataset not found. Please download from http://storage.googleapis.com/gresearch/refraw360/360_v2.zip and unzip.")
         exit(0)
 
     scenes = [
-        ("bicycle", 4),
-        ("garden", 4),
-        ("stump", 4),
-        ("bonsai", 2),
-        ("counter", 2),
-        ("kitchen", 2),
+        # ("bicycle", 4),
+        # ("garden", 4),
+        # ("stump", 4),
+        # ("bonsai", 2),
+        # ("counter", 2),
+        # ("kitchen", 2),
         ("room", 2),
     ]
 
@@ -163,20 +163,25 @@ def bench_360_v2(preset: str, path_to_360_v2: Path, output_prefix: Path,
         print()
         print("Running:", scene)
         output_name = f"benchmark-{run_tag}-{scene}"
+        extra_args = list(extra_cli_args)[:]
+        extra_args.extend([
+            "--dataparser.downscale-rounding-mode",
+            "round" if scene == "garden" else "ceil"
+        ])
         metrics = _run_scene(
             preset=preset,
             data_dir=path_to_360_v2 / scene,
             output_prefix=output_prefix,
             output_name=output_name,
             downscale=downscale,
-            extra_args=[],
+            extra_args=extra_args,
         )
         results.append((scene, metrics))
     return results
 
 
 def bench_zipnerf(preset: str, path_to_zipnerf: Path, output_prefix: Path,
-                  run_tag: str) -> List[Tuple[str, Optional[Dict]]]:
+                  run_tag: str, extra_cli_args: List[str]) -> List[Tuple[str, Optional[Dict]]]:
     if not (path_to_zipnerf.exists() and path_to_zipnerf.is_dir()):
         print("Dataset not found. Please download from https://smerf-3d.github.io/#data.")
         exit(0)
@@ -201,9 +206,10 @@ def bench_zipnerf(preset: str, path_to_zipnerf: Path, output_prefix: Path,
             output_name=output_name,
             downscale=downscale,
             extra_args=[
-                "--model.no-use-bilateral-grid-for-geometry",
+                # "--model.no-use-bilateral-grid-for-geometry",
                 "--model.cap-max", str(cap_max_3x),
-            ],
+                "--dataparser.downscale-rounding-mode", "ceil",
+            ] + list(extra_cli_args),
         )
         results.append((scene, metrics))
     return results
@@ -243,7 +249,9 @@ def entrypoint():
     import datetime
 
     import tyro
-    benchmark_config = tyro.cli(BenchmarkConfig)
+    benchmark_config, extra_cli_args = tyro.cli(
+        BenchmarkConfig, return_unknown_args=True
+    )
 
     # Tag every scene from this benchmark run so its output dir is unique and
     # the metrics.json files don't collide with prior runs.
@@ -257,10 +265,10 @@ def entrypoint():
         ]
     elif benchmark_config.benchmark == "360_v2":
         all_metrics = bench_360_v2(benchmark_config.preset, benchmark_config.data,
-                                    output_prefix, run_tag)
+                                    output_prefix, run_tag, extra_cli_args)
     elif benchmark_config.benchmark == "zipnerf":
         all_metrics = bench_zipnerf(benchmark_config.preset, benchmark_config.data,
-                                     output_prefix, run_tag)
+                                     output_prefix, run_tag, extra_cli_args)
     else:
         raise NotImplementedError()
 
@@ -305,6 +313,8 @@ def entrypoint():
 
     message = f"## Benchmark Complete (`{benchmark_config.benchmark}`, `{benchmark_config.preset}`)\n"
     message += f"Your benchmark has completed. Here are the results:\n"
+    if extra_cli_args:
+        message += "Extra training args: `" + " ".join(extra_cli_args) + "`\n"
     if len(failed) > 0:
         message += "\n⚠️⚠️⚠️ Failed scene" + 's'*(len(failed)>1) + ": " + ', '.join([f"`{scene}`" for scene in failed]) + "\n"
     message += f"```\n{tabulate(all_data, headers, numalign='left')}\n```"
