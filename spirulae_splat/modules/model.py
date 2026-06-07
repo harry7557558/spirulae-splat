@@ -112,7 +112,7 @@ class SpirulaeSplatModelConfig:
         (param bits, optim bits) configurations.
             0 = off          : 32-bit param, fp32 optim
             1 = light        : 16-bit param, 8-bit packed optim (2 B / cell)
-            2 = heavy        :  8-bit param, 4-bit packed optim (1 B / cell)
+            2 = heavy        :  8-bit param, 8-bit packed optim (2 B / cell)
         Collapsing the prior independent param+optim bit controls into a
         single level cuts the FPBO kernel instantiations to ~3x fewer
         wrappers (the runtime dispatch enumerates 3 levels instead of 7

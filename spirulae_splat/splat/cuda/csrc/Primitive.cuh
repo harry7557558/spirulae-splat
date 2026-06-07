@@ -238,7 +238,17 @@ public:
                     throw std::runtime_error("Tensor size mismatch");
                 _strides[i] = _size == 0 ? 0 : (int32_t)(tensors[i].numel() / _size);
             } else {
-                _strides[i] = 0;
+                // Shape-only descriptor (e.g. world.features_sh when SH value
+                // quantization is on: the canonical store is the packed buffer
+                // but consumers like sh_degree() still need the row stride).
+                // Pointer arithmetic on a null _data[i] is fine as long as no
+                // kernel actually dereferences it (the VALUE_BITS != 32 paths
+                // read from the packed buffer instead). Skip default-
+                // constructed tensors (ndim == 0) -- e.g. unused vr/h gradient
+                // slots whose size(0) would throw "Invalid dimension".
+                _strides[i] = (tensors[i].get_ndim() > 0 && tensors[i].size(0) > 0)
+                    ? (int32_t)(tensors[i].numel() / tensors[i].size(0))
+                    : 0;
             }
         }
     }

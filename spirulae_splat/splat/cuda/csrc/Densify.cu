@@ -910,8 +910,13 @@ __global__ void relocate_with_long_axis_split_kernel(
 
     // appearance - copy
     features_dc[idx_dst] = features_dc[idx_src];
-    for (int i = 0; i < num_sh; ++i)  // TODO: slow; more cache friendly way to do so?
-        features_sh[num_sh*idx_dst+i] = features_sh[num_sh*idx_src+i];
+    // features_sh may be nullptr when SH-value quantization is on: the canonical
+    // store lives in the packed buffer (copied below via _copy_quant_sh_value),
+    // and the fp32 features_sh allocation is freed. Skip the fp32 copy then.
+    if (features_sh) {
+        for (int i = 0; i < num_sh; ++i)  // TODO: slow; more cache friendly way to do so?
+            features_sh[num_sh*idx_dst+i] = features_sh[num_sh*idx_src+i];
+    }
 
     // optimizer state - zero
 #if 1
@@ -1383,8 +1388,12 @@ __global__ void mcmc_update_relocation_kernel(
     scales[id_dst] = scales[id_src];
     opacs[id_dst] = opacs[id_src];
     features_dc[id_dst] = features_dc[id_src];
-    for (int i = 0; i < num_sh; ++i)  // TODO: slow; more cache friendly way to do so?
-        features_sh[num_sh*id_dst+i] = features_sh[num_sh*id_src+i];
+    // features_sh may be null under SH-value quantization (canonical store is
+    // the packed buffer; fp32 features_sh allocation is freed).
+    if (features_sh) {
+        for (int i = 0; i < num_sh; ++i)  // TODO: slow; more cache friendly way to do so?
+            features_sh[num_sh*id_dst+i] = features_sh[num_sh*id_src+i];
+    }
 }
 
 
@@ -1574,8 +1583,12 @@ __global__ void mcmc_update_add_kernel(
     scales[id_dst] = scales[id_src];
     opacs[id_dst] = opacs[id_src];
     features_dc[id_dst] = features_dc[id_src];
-    for (int i = 0; i < num_sh; ++i)  // TODO: slow; more cache friendly way to do so?
-        features_sh[num_sh*id_dst+i] = features_sh[num_sh*id_src+i];
+    // features_sh may be null under SH-value quantization (canonical store is
+    // the packed buffer; fp32 features_sh allocation is freed).
+    if (features_sh) {
+        for (int i = 0; i < num_sh; ++i)  // TODO: slow; more cache friendly way to do so?
+            features_sh[num_sh*id_dst+i] = features_sh[num_sh*id_src+i];
+    }
 
     // set grad to zero
     g1_means[id_dst] = make_float3(0.0f);

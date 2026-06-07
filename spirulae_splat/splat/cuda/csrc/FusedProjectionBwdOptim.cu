@@ -390,7 +390,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     // (7 combos) down to 3 valid combos:
     //   0 = off (32-bit value, fp32 optim)
     //   1 = light (16-bit value, 8-bit packed optim)
-    //   2 = heavy (8-bit value, 4-bit packed optim)
+    //   2 = heavy (8-bit value, 8-bit packed optim)
     const int dispatch_key =
         (int)use_scale_agnostic_mean
         | ((int)color_trust_linear << 1);

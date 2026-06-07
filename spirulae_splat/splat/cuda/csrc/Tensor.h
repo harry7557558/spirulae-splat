@@ -349,6 +349,16 @@ public:
         _numel_1 = numel_1;
     }
 
+    // Shape-only descriptor: keeps the [n0, n1] dims but holds no device
+    // memory. Used when the canonical storage moves to a packed/quantized
+    // buffer elsewhere but downstream code still expects shape info (e.g.,
+    // TensorArray's per-axis stride inference).
+    void set_shape_no_alloc(int64_t numel_0, int64_t numel_1) {
+        _data_ptr = nullptr;
+        _numel_0 = numel_0;
+        _numel_1 = numel_1;
+    }
+
     // fill zero
     void zero() {
         if (_data_ptr)
@@ -565,6 +575,10 @@ public:
         if (dim < 0 || dim >= ndim)
             throw std::runtime_error("Invalid dimension");
         return shape[dim];
+    }
+
+    int64_t get_ndim() const {
+        return ndim;
     }
 
     int64_t numel() const {

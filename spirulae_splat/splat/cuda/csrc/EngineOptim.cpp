@@ -52,6 +52,18 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits, bool use_p
     engine().optim.fused_state_active = fused;
     engine().world.sh_value_bits = sh_value_bits;
 
+    // SH VALUE-quant: canonical storage is the packed buffer below. Drop the
+    // fp32 features_sh allocation (sized N*K*float3 = 12*N*K bytes -- the
+    // largest world buffer on big scenes) and keep only its [N, K] shape
+    // descriptor so downstream consumers that derive sh_degree from the
+    // TensorArray stride still work. Re-alloc on flip back to fp32.
+    if (quantize_sh_value) {
+        DevicePool::global().free("world.features_sh");
+        engine().world.features_sh.set_shape_no_alloc(N, K);
+    } else if (engine().world.features_sh.data_ptr() == nullptr && N > 0 && K > 0) {
+        engine().world.features_sh.resize("world.features_sh", N, K);
+    }
+
     // g1 (exp_avg)
     engine().optim.g1_means.resize("eng.g1_means", N);
     engine().optim.g1_quats.resize("eng.g1_quats", N);
