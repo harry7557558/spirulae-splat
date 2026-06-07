@@ -14,6 +14,8 @@ namespace SlangPerSplatLosses {
 
 #include <Common.cuh>
 #include <Tensor.h>
+#include <stdexcept>
+#include <string>
 
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
@@ -1032,7 +1034,7 @@ __global__ void fused_adam_with_steps_8bit_kernel(
 }
 
 /*[AutoHeaderGeneratorExport]*/
-void fused_adam_step_8bit(
+void fused_adam_step_quantized(
     int64_t num_splats,
     DeviceTensorFloatND param,
     DeviceTensorFloatND grad,
@@ -1041,7 +1043,8 @@ void fused_adam_step_8bit(
     float lr,
     int32_t step, DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
-    float l2_reg_offset
+    float l2_reg_offset,
+    int bits                            // 4 or 8 -- selects QuantizedAdamState<BITS, 256>
 ) {
     int64_t param_numel = param.numel();
     if (param_numel == 0 || num_splats == 0)
@@ -1049,18 +1052,24 @@ void fused_adam_step_8bit(
     int stride = (int)(param_numel / num_splats);
     constexpr int BLOCK_SIZE = 256;
 
-    fused_adam_with_steps_8bit_kernel<BLOCK_SIZE, 8><<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(
-        param.data_ptr(),
-        grad.data_ptr(),
-        packed,
-        quant_bounds,
-        lr,
-        step, per_splat_steps.data_ptr(),
-        2.0f*l2_reg/(float)(num_splats*stride),
-        l2_reg_offset,
-        num_splats*stride,
-        stride
-    );
+    #define _ARGS_TAIL \
+        param.data_ptr(), grad.data_ptr(), packed, quant_bounds, \
+        lr, step, per_splat_steps.data_ptr(), \
+        2.0f*l2_reg/(float)(num_splats*stride), l2_reg_offset, \
+        num_splats*stride, stride
+
+    if (bits == 4) {
+        fused_adam_with_steps_8bit_kernel<BLOCK_SIZE, 4>
+            <<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(_ARGS_TAIL);
+    } else if (bits == 8) {
+        fused_adam_with_steps_8bit_kernel<BLOCK_SIZE, 8>
+            <<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(_ARGS_TAIL);
+    } else {
+        throw std::runtime_error(
+            "fused_adam_step_quantized: bits must be 4 or 8, got " +
+            std::to_string(bits));
+    }
+    #undef _ARGS_TAIL
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 

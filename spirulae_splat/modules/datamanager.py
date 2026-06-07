@@ -33,7 +33,7 @@ class SpirulaeSplatDataManagerConfig:
     split_batch: bool = False
     """Whether to one large batch into many small batches to avoid OOM, at cost of slower training"""
 
-    cache_images: Literal["cpu-pageable", "cpu", "gpu", "disk"] = "cpu-pageable"
+    cache_images: Literal["cpu-pageable", "cpu", "gpu", "disk"] = "disk"
     """Image cache location. If "cpu", caches on cpu. If "gpu", caches on device.
         If "cpu-pageable", cache on cpu pageable memory (saves RAM but may cause error if spill to swap memory).
         If "disk", cache on disk (limited support). """

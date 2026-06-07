@@ -15,16 +15,22 @@
 static constexpr int64_t kFpboBlock = 256;
 
 
-static void _ensure_optim_state(bool quantize_sh, bool use_per_splat_bias_correction = false) {
+static void _ensure_optim_state(int sh_optim_bits, bool use_per_splat_bias_correction = false) {
+    if (sh_optim_bits != 32 && sh_optim_bits != 8 && sh_optim_bits != 4) {
+        throw std::runtime_error(
+            "_ensure_optim_state: sh_optim_bits must be 32 (off), 4, or 8; got " +
+            std::to_string(sh_optim_bits));
+    }
+    bool quantize_sh = (sh_optim_bits != 32);
     bool fused = engine().optim.use_fused_proj_bwd_optim;
-    if (engine().optim.initialized && engine().optim.quantize_sh == quantize_sh
+    if (engine().optim.initialized && engine().optim.sh_optim_bits == sh_optim_bits
         && engine().optim.use_per_splat_bias_correction == use_per_splat_bias_correction
         && engine().optim.fused_state_active == fused)
         return;
 
     int64_t N = engine().max_num_splats;
     int64_t K = engine().num_sh;
-    engine().optim.quantize_sh = quantize_sh;
+    engine().optim.sh_optim_bits = sh_optim_bits;
     engine().optim.fused_state_active = fused;
 
     // g1 (exp_avg)
@@ -123,7 +129,7 @@ static inline DeviceTensorFloatND _fnd_view(float* ptr, int64_t N, int64_t P) {
 // in this path (raster_*_bwd's world atomicStore is null-pointer-guarded
 // per channel, and the fused kernel's atomicLoad uses the same guard).
 void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
-    _ensure_optim_state(cfg.quantize_sh,
+    _ensure_optim_state(cfg.sh_optim_bits,
                         cfg.use_per_splat_bias_correction);
 
     int64_t N = engine().cur_num_splats;
@@ -158,10 +164,11 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
 
     // SH g1/g2 view: zero-shaped empty view when quantized SH is active so
     // the kernel takes its quant path (driven by sh_packed != nullptr).
-    DeviceTensorFloatND g1_sh = cfg.quantize_sh
+    const bool quantize_sh = (cfg.sh_optim_bits != 32);
+    DeviceTensorFloatND g1_sh = quantize_sh
         ? DeviceTensorFloatND()
         : _fnd_view((float*)engine().optim.g1_features_sh.data_ptr(), M, K3);
-    DeviceTensorFloatND g2_sh = cfg.quantize_sh
+    DeviceTensorFloatND g2_sh = quantize_sh
         ? DeviceTensorFloatND()
         : _fnd_view((float*)engine().optim.g2_features_sh.data_ptr(), M, K3);
 
@@ -185,7 +192,7 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
     // SH quantization: pass packed-byte + per-block bounds when active.
     std::optional<TorchTensorView> sh_packed_opt   = std::nullopt;
     std::optional<TorchTensorView> sh_bounds_opt   = std::nullopt;
-    if (cfg.quantize_sh && engine().optim.sh_quant_state_fpbo.initialized()) {
+    if (quantize_sh && engine().optim.sh_quant_state_fpbo.initialized()) {
         auto& qs = engine().optim.sh_quant_state_fpbo;
         sh_packed_opt = TorchTensorView(
             (uint64_t)qs.packed_ptr(), 1, {qs.packed_bytes()});
@@ -241,7 +248,8 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
             cfg.use_color_trust_region,
             cfg.color_is_linear,
             cfg.eps_tr,
-            step_arg
+            step_arg,
+            cfg.sh_optim_bits
         );
     };
 
@@ -265,7 +273,7 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
         return;
     }
 
-    _ensure_optim_state(cfg.quantize_sh, cfg.use_per_splat_bias_correction);
+    _ensure_optim_state(cfg.sh_optim_bits, cfg.use_per_splat_bias_correction);
 
     int64_t N = engine().cur_num_splats;
 
@@ -318,18 +326,19 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
             cfg.sh_reg_weight, 0.5f / 0.28209479177387814f);
     }
 
-    if (cfg.quantize_sh && engine().optim.sh_quant_state.initialized()) {
+    if (cfg.sh_optim_bits != 32 && engine().optim.sh_quant_state.initialized()) {
         // SH-quant + TR is not supported by fused_adamtr_*_sh_optim (those
-        // kernels need fp32 g1/g2). Fall back to the plain 8-bit kernel.
+        // kernels need fp32 g1/g2). Fall back to the plain quantized kernel.
         // Document this as a limitation for callers; FPBO doesn't have this
         // restriction because the FPBO kernel handles both internally.
-        fused_adam_step_8bit(N,
+        fused_adam_step_quantized(N,
             DeviceTensorFloatND(engine().world.features_sh),
             DeviceTensorFloatND(engine().grad.features_sh),
             engine().optim.sh_quant_state.packed_ptr(),
             engine().optim.sh_quant_state.bounds_ptr(),
             cfg.lr_features_sh, step + 1, per_splat_steps,
-            cfg.sh_reg_weight, 0.0f);
+            cfg.sh_reg_weight, 0.0f,
+            cfg.sh_optim_bits);
     } else if (cfg.use_color_trust_region) {
         const int s1 = step + 1;
         const float beta1 = 0.9f, beta2 = 0.999f, eps = 1e-15f;

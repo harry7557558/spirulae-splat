@@ -64,7 +64,8 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const int32_t* __restrict__ steps
+    const int32_t* __restrict__ steps,
+    const int sh_quant_bits
 );
 
 
@@ -147,7 +148,8 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const std::optional<TorchTensorView> steps
+    const std::optional<TorchTensorView> steps,
+    const int sh_quant_bits
 ) {
     uint32_t C = (uint32_t)std::get<2>(viewmats)[0]; // number of cameras (first dim)
     // Note: viewmats shape is [C, 4, 4], so index 0 = C
@@ -237,7 +239,8 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             max_gauss_ratio, scale_regularization_weight, \
             mcmc_opacity_reg_weight, mcmc_scale_reg_weight, erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight, sh_reg_weight, \
             eps_tr, \
-            scalar_step, steps_ptr \
+            scalar_step, steps_ptr, \
+            sh_quant_bits \
         )
 
     if (camera_model == CameraModelType::PINHOLE)
@@ -314,7 +317,8 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     bool use_color_trust_region,
     bool color_is_linear,
     float eps_tr,
-    std::variant<int32_t, TorchTensorView> step
+    std::variant<int32_t, TorchTensorView> step,
+    int sh_quant_bits
 ) {
     int32_t scalar_step = std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1;
     std::optional<TorchTensorView> steps_view = std::get_if<TorchTensorView>(&step) ?
@@ -366,7 +370,8 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
         sh_reg_weight, \
         eps_tr, \
         scalar_step, \
-        steps_view \
+        steps_view, \
+        sh_quant_bits \
     )
     // Match projection_*_backward: cap kernel-template SH degree at the
     // runtime sh_degree_to_use so forward/backward agree on which bands
@@ -446,7 +451,8 @@ void fused_projection_bwd_optimizer_3dgs(
     bool use_color_trust_region,
     bool color_is_linear,
     float eps_tr,
-    std::variant<int32_t, TorchTensorView> step
+    std::variant<int32_t, TorchTensorView> step,
+    int sh_quant_bits
 ) {
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGS>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -459,7 +465,7 @@ void fused_projection_bwd_optimizer_3dgs(
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, eps_tr, step);
+        use_color_trust_region, color_is_linear, eps_tr, step, sh_quant_bits);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -505,7 +511,8 @@ void fused_projection_bwd_optimizer_mip(
     bool use_color_trust_region,
     bool color_is_linear,
     float eps_tr,
-    std::variant<int32_t, TorchTensorView> step
+    std::variant<int32_t, TorchTensorView> step,
+    int sh_quant_bits
 ) {
     _fused_projection_bwd_optimizer_dispatch<MipSplatting>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -518,7 +525,7 @@ void fused_projection_bwd_optimizer_mip(
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, eps_tr, step);
+        use_color_trust_region, color_is_linear, eps_tr, step, sh_quant_bits);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -564,7 +571,8 @@ void fused_projection_bwd_optimizer_3dgut(
     bool use_color_trust_region,
     bool color_is_linear,
     float eps_tr,
-    std::variant<int32_t, TorchTensorView> step
+    std::variant<int32_t, TorchTensorView> step,
+    int sh_quant_bits
 ) {
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGUT>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -577,7 +585,7 @@ void fused_projection_bwd_optimizer_3dgut(
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, eps_tr, step);
+        use_color_trust_region, color_is_linear, eps_tr, step, sh_quant_bits);
 }
 
 

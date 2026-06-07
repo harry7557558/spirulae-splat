@@ -105,7 +105,13 @@ struct SplatGrad {
 // Adam moment + densify aux state (pool-backed, persistent across steps).
 struct SplatOptim {
     bool initialized = false;
-    bool quantize_sh = false;
+    // SH Adam-state quantization bit depth (32 = off, 4 or 8 = packed). When
+    // off, g1_features_sh / g2_features_sh hold full fp32 moments. When 4/8,
+    // sh_quant_state (or sh_quant_state_fpbo) holds the joint-AoS encoded
+    // bytes + per-block bounds. Storage holders are typed `<8, 256>` so the
+    // packed buffer is sized pessimistically (8-bit footprint, 2 bytes/cell)
+    // regardless of sh_optim_bits; runtime dispatch picks the right codec.
+    int  sh_optim_bits = 32;
     bool use_per_splat_bias_correction = false;
 
     DeviceVector<float3>   g1_means,         g2_means;
@@ -113,12 +119,15 @@ struct SplatOptim {
     DeviceVector<float3>   g1_scales,        g2_scales;
     DeviceVector<float>    g1_opacities,     g2_opacities;
     DeviceVector<float3>   g1_features_dc,   g2_features_dc;
-    DeviceTensor2D<float3> g1_features_sh,   g2_features_sh;       // when !quantize
-    QuantizedAdamState<8, 256> sh_quant_state;                      // when  quantize
+    DeviceTensor2D<float3> g1_features_sh,   g2_features_sh;       // when sh_optim_bits == 32
+    QuantizedAdamState<8, 256> sh_quant_state;                     // when sh_optim_bits in {4, 8}
     // FPBO uses a different per-bound granularity (one float4 per 256 splats,
     // covering all 3*K cells per splat), so the kernel cannot reuse
-    // `sh_quant_state`. Allocated only when use_fused_proj_bwd_optim + quantize_sh.
+    // `sh_quant_state`. Allocated only when use_fused_proj_bwd_optim + sh_optim_bits!=32.
     QuantizedAdamState<8, 256> sh_quant_state_fpbo;
+
+    // Convenience flag mirroring `sh_optim_bits != 32`.
+    bool sh_quantize_enabled() const { return sh_optim_bits != 32; }
 
     DeviceVector<float>    radii;                  // [max_N]
     DeviceVector<float2>   accum_buffer;           // [max_N]
@@ -148,8 +157,12 @@ struct BilagridRGB {
     // AdaGrad state
     DeviceTensor5D<float>      accum_f;
     QuantizedTensorLog<8, 256> adagrad_quant;
-    bool        quantize_optim     = false;
+    // Bit depth for optimizer-state quantization: 32 = off, 4 or 8 = packed.
+    // Storage holders above are typed `<8, 256>` so allocation is pessimistic;
+    // runtime dispatch in the kernel launcher picks the codec template.
+    int         optim_bits         = 32;
     bool        use_adagrad        = false;
+    bool quantize_optim() const { return optim_bits != 32; }
     bool        enabled            = false;
     bool        optim_initialized  = false;
     DeviceTensor3D<float3>     fwd_pre;            // pre-bilagrid render
@@ -175,12 +188,13 @@ struct BilagridDepth {
     QuantizedAdamState<8, 256> quant_state;
     DeviceTensor5D<float>      accum_f;
     QuantizedTensorLog<8, 256> adagrad_quant;
-    bool        quantize_optim     = false;
+    int         optim_bits         = 32;
     bool        use_adagrad        = false;
     bool        enabled            = false;
     bool        optim_initialized  = false;
     DeviceTensor3D<float>      fwd_pre;
     DeviceVector<float>        scalars;            // per-camera median quantile
+    bool quantize_optim() const { return optim_bits != 32; }
 };
 struct BilagridNormal {
     DeviceTensor5D<float>      grids;
@@ -189,11 +203,12 @@ struct BilagridNormal {
     QuantizedAdamState<8, 256> quant_state;
     DeviceTensor5D<float>      accum_f;
     QuantizedTensorLog<8, 256> adagrad_quant;
-    bool        quantize_optim     = false;
+    int         optim_bits         = 32;
     bool        use_adagrad        = false;
     bool        enabled            = false;
     bool        optim_initialized  = false;
     DeviceTensor3D<float3>     fwd_pre;
+    bool quantize_optim() const { return optim_bits != 32; }
 };
 
 // Background blending. Applied BEFORE bilagrid/PPISP. Two modes:

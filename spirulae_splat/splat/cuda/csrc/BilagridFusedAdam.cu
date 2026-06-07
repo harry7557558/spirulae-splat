@@ -209,7 +209,9 @@ __global__ void fused_bilagrid_tv_adam_kernel(
 
 
 // Host-side dispatcher: picks the right template instantiation by channel
-// count and quantize flag, computes the launch grid, and calls the kernel.
+// count, quantize flag, and bit depth, computes the launch grid, and calls
+// the kernel. `quant_bits` is ignored when `quantize` is false; otherwise it
+// must be 4 or 8.
 void fused_bilagrid_tv_adam(
     float* grids,
     float*   g1_f,    float*   g2_f,           // null when quantize
@@ -223,6 +225,7 @@ void fused_bilagrid_tv_adam(
     float tv_weight,
     int32_t adam_step,
     bool quantize,
+    int  quant_bits,                           // 4 or 8 -- only used when quantize=true
     cudaStream_t stream
 ) {
     constexpr int BLOCK_SIZE = 256;
@@ -231,26 +234,39 @@ void fused_bilagrid_tv_adam(
     int blocks = (int)((total_cells + BLOCK_SIZE - 1) / BLOCK_SIZE);
     if (blocks == 0) return;
 
-    #define LAUNCH(CC, QQ) \
-        fused_bilagrid_tv_adam_kernel<BLOCK_SIZE, CC, QQ, 8> \
+    #define LAUNCH(CC, QQ, BB) \
+        fused_bilagrid_tv_adam_kernel<BLOCK_SIZE, CC, QQ, BB> \
             <<<blocks, BLOCK_SIZE, 0, stream>>>( \
                 grids, g1_f, g2_f, packed, quant_bounds, \
                 image_grad, cam_indices, \
                 N_grids, C_batch, L, H, W, \
                 lr, tv_weight, adam_step)
+    #define LAUNCH_NOQUANT(CC) \
+        do { switch (CC) { \
+            case 12: LAUNCH(12, false, 8); break; \
+            case 9:  LAUNCH(9,  false, 8); break; \
+            case 3:  LAUNCH(3,  false, 8); break; \
+            case 2:  LAUNCH(2,  false, 8); break; \
+        } } while (0)
+    #define LAUNCH_QUANT_BITS(CC, BB) \
+        do { switch (CC) { \
+            case 12: LAUNCH(12, true, BB); break; \
+            case 9:  LAUNCH(9,  true, BB); break; \
+            case 3:  LAUNCH(3,  true, BB); break; \
+            case 2:  LAUNCH(2,  true, BB); break; \
+        } } while (0)
 
-    if (quantize) {
-        if      (C == 12) { LAUNCH(12, true); }
-        else if (C == 9)  { LAUNCH(9,  true); }
-        else if (C == 3)  { LAUNCH(3,  true); }
-        else if (C == 2)  { LAUNCH(2,  true); }
+    if (!quantize) {
+        LAUNCH_NOQUANT(C);
+    } else if (quant_bits == 4) {
+        LAUNCH_QUANT_BITS(C, 4);
     } else {
-        if      (C == 12) { LAUNCH(12, false); }
-        else if (C == 9)  { LAUNCH(9,  false); }
-        else if (C == 3)  { LAUNCH(3,  false); }
-        else if (C == 2)  { LAUNCH(2,  false); }
+        // Default to 8-bit (legacy behavior).
+        LAUNCH_QUANT_BITS(C, 8);
     }
     #undef LAUNCH
+    #undef LAUNCH_NOQUANT
+    #undef LAUNCH_QUANT_BITS
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -392,10 +408,21 @@ __global__ void fused_bilagrid_tv_adagrad_kernel(
         __syncthreads();
         mm = shared_reduce[threadIdx.x / WARP_SIZE];
 
-        // 8-bit: 1 byte per cell; 4-bit packs two cells per byte and needs
-        // serialization between odd/even partners. Only QUANT_BITS=8 wired
-        // here for now (matches the BilagridFusedAdam 8-bit decision).
-        if (inside) QTL::encode_log(packed, idx, log_v, mm);
+        // 8-bit: 1 byte per cell -- threads write independent bytes, no race.
+        // 4-bit: packs two cells per byte. Adjacent threads with the same
+        // (idx >> 1) race on a single read-modify-write. Serialize into two
+        // phases (even threads write first; sync; odd threads then read the
+        // post-phase-1 byte and merge their high nibble). The middle sync also
+        // doubles as the post-store barrier before the bounds write.
+        if constexpr (QUANT_BITS == 4) {
+            if (inside && ((threadIdx.x & 1) == 0))
+                QTL::encode_log(packed, idx, log_v, mm);
+            __syncthreads();
+            if (inside && ((threadIdx.x & 1) == 1))
+                QTL::encode_log(packed, idx, log_v, mm);
+        } else {
+            if (inside) QTL::encode_log(packed, idx, log_v, mm);
+        }
         if (threadIdx.x == 0) quant_bounds[blockIdx.x] = mm;
     } else {
         if (inside) accum_f[idx] = accum;
@@ -415,6 +442,7 @@ void fused_bilagrid_tv_adagrad(
     float lr,
     float tv_weight,
     bool quantize,
+    int  quant_bits,                           // 4 or 8 -- only used when quantize=true
     cudaStream_t stream
 ) {
     constexpr int BLOCK_SIZE = 256;
@@ -423,25 +451,37 @@ void fused_bilagrid_tv_adagrad(
     int blocks = (int)((total_cells + BLOCK_SIZE - 1) / BLOCK_SIZE);
     if (blocks == 0) return;
 
-    #define LAUNCH(CC, QQ) \
-        fused_bilagrid_tv_adagrad_kernel<BLOCK_SIZE, CC, QQ, 8> \
+    #define LAUNCH(CC, QQ, BB) \
+        fused_bilagrid_tv_adagrad_kernel<BLOCK_SIZE, CC, QQ, BB> \
             <<<blocks, BLOCK_SIZE, 0, stream>>>( \
                 grids, accum_f, packed, quant_bounds, \
                 image_grad, cam_indices, \
                 N_grids, C_batch, L, H, W, \
                 lr, tv_weight)
+    #define LAUNCH_NOQUANT(CC) \
+        do { switch (CC) { \
+            case 12: LAUNCH(12, false, 8); break; \
+            case 9:  LAUNCH(9,  false, 8); break; \
+            case 3:  LAUNCH(3,  false, 8); break; \
+            case 2:  LAUNCH(2,  false, 8); break; \
+        } } while (0)
+    #define LAUNCH_QUANT_BITS(CC, BB) \
+        do { switch (CC) { \
+            case 12: LAUNCH(12, true, BB); break; \
+            case 9:  LAUNCH(9,  true, BB); break; \
+            case 3:  LAUNCH(3,  true, BB); break; \
+            case 2:  LAUNCH(2,  true, BB); break; \
+        } } while (0)
 
-    if (quantize) {
-        if      (C == 12) { LAUNCH(12, true); }
-        else if (C == 9)  { LAUNCH(9,  true); }
-        else if (C == 3)  { LAUNCH(3,  true); }
-        else if (C == 2)  { LAUNCH(2,  true); }
+    if (!quantize) {
+        LAUNCH_NOQUANT(C);
+    } else if (quant_bits == 4) {
+        LAUNCH_QUANT_BITS(C, 4);
     } else {
-        if      (C == 12) { LAUNCH(12, false); }
-        else if (C == 9)  { LAUNCH(9,  false); }
-        else if (C == 3)  { LAUNCH(3,  false); }
-        else if (C == 2)  { LAUNCH(2,  false); }
+        LAUNCH_QUANT_BITS(C, 8);
     }
     #undef LAUNCH
+    #undef LAUNCH_NOQUANT
+    #undef LAUNCH_QUANT_BITS
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

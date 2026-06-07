@@ -200,14 +200,16 @@ void engine_save_checkpoint(
         meta << "image_width=" << s.camera.width << "\n";
         meta << "image_height=" << s.camera.height << "\n";
         meta << "camera_model=" << s.camera.model_str << "\n";
-        meta << "train_quantize_sh=" << (s.optim.quantize_sh ? 1 : 0) << "\n";
+        // Bit depth (32 = no quant, 4 or 8 = packed). Replaces the old
+        // train_quantize_sh bool. Offline tools should treat absence of this
+        // key as "8 if train_quantize_sh==1 else 32" for back-compat.
+        meta << "sh_optim_bits=" << s.optim.sh_optim_bits << "\n";
         // QuantizedAdamState codec signature -- tells offline tools which
         // byte-to-(g1, g2) inverse to use when reading the *_packed.npy
-        // streams. Currently every quantized buffer (SH + bilagrid) uses the
-        // same scheme: 8-bit AoS, 256-cell blocks, joint (u, log_s) primitives
-        // with u linear and log_s = log1p(sqrt_g2 / eps), eps = 1e-15.
+        // streams. Codec scheme: joint (u, log_s) AoS with u linear and
+        // log_s = log1p(sqrt_g2 / eps), eps = 1e-15. The PER-BUFFER bit
+        // depth is given by sh_optim_bits / bilagrid_*_optim_bits below.
         meta << "quant_codec=joint_u_log_sqrt_g2_v1\n";
-        meta << "quant_bits=8\n";
         meta << "quant_block_size=256\n";
         meta << "quant_eps=1e-15\n";
         meta << "use_per_splat_bias_correction=" << (s.optim.use_per_splat_bias_correction ? 1 : 0) << "\n";
@@ -221,7 +223,7 @@ void engine_save_checkpoint(
             meta << "bilagrid_rgb_L=" << s.bilagrid_rgb.grids.size<1>() << "\n";
             meta << "bilagrid_rgb_H=" << s.bilagrid_rgb.grids.size<2>() << "\n";
             meta << "bilagrid_rgb_W=" << s.bilagrid_rgb.grids.size<3>() << "\n";
-            meta << "bilagrid_rgb_quantize_optim=" << (s.bilagrid_rgb.quantize_optim ? 1 : 0) << "\n";
+            meta << "bilagrid_rgb_optim_bits=" << s.bilagrid_rgb.optim_bits << "\n";
             meta << "bilagrid_rgb_use_adagrad=" << (s.bilagrid_rgb.use_adagrad ? 1 : 0) << "\n";
         }
         if (s.bilagrid_depth.enabled) {
@@ -229,7 +231,7 @@ void engine_save_checkpoint(
             meta << "bilagrid_depth_L=" << s.bilagrid_depth.grids.size<1>() << "\n";
             meta << "bilagrid_depth_H=" << s.bilagrid_depth.grids.size<2>() << "\n";
             meta << "bilagrid_depth_W=" << s.bilagrid_depth.grids.size<3>() << "\n";
-            meta << "bilagrid_depth_quantize_optim=" << (s.bilagrid_depth.quantize_optim ? 1 : 0) << "\n";
+            meta << "bilagrid_depth_optim_bits=" << s.bilagrid_depth.optim_bits << "\n";
             meta << "bilagrid_depth_use_adagrad=" << (s.bilagrid_depth.use_adagrad ? 1 : 0) << "\n";
         }
         if (s.bilagrid_normal.enabled) {
@@ -237,7 +239,7 @@ void engine_save_checkpoint(
             meta << "bilagrid_normal_L=" << s.bilagrid_normal.grids.size<1>() << "\n";
             meta << "bilagrid_normal_H=" << s.bilagrid_normal.grids.size<2>() << "\n";
             meta << "bilagrid_normal_W=" << s.bilagrid_normal.grids.size<3>() << "\n";
-            meta << "bilagrid_normal_quantize_optim=" << (s.bilagrid_normal.quantize_optim ? 1 : 0) << "\n";
+            meta << "bilagrid_normal_optim_bits=" << s.bilagrid_normal.optim_bits << "\n";
             meta << "bilagrid_normal_use_adagrad=" << (s.bilagrid_normal.use_adagrad ? 1 : 0) << "\n";
         }
         if (s.ppisp.enabled) {
@@ -323,7 +325,7 @@ void engine_save_checkpoint(
     save_dv_f1("g2_opacities.npy",    s.optim.g2_opacities);
     save_dv_f3("g1_features_dc.npy",  s.optim.g1_features_dc);
     save_dv_f3("g2_features_dc.npy",  s.optim.g2_features_dc);
-    if (s.optim.quantize_sh) {
+    if (s.optim.sh_quantize_enabled()) {
         // Joint (u, sqrt_g2) AoS: single packed byte stream + per-block bounds.
         // FPBO mode uses a different per-bound granularity, so it lives in a
         // separate state buffer.
@@ -399,13 +401,13 @@ void engine_save_checkpoint(
         }
     };
     save_bilagrid("bilagrid_rgb",
-                  s.bilagrid_rgb.enabled, s.bilagrid_rgb.quantize_optim,
+                  s.bilagrid_rgb.enabled, s.bilagrid_rgb.quantize_optim(),
                   s.bilagrid_rgb.use_adagrad,
                   s.bilagrid_rgb.grids, s.bilagrid_rgb.g1, s.bilagrid_rgb.g2,
                   s.bilagrid_rgb.quant_state,
                   s.bilagrid_rgb.accum_f, s.bilagrid_rgb.adagrad_quant);
     save_bilagrid("bilagrid_depth",
-                  s.bilagrid_depth.enabled, s.bilagrid_depth.quantize_optim,
+                  s.bilagrid_depth.enabled, s.bilagrid_depth.quantize_optim(),
                   s.bilagrid_depth.use_adagrad,
                   s.bilagrid_depth.grids, s.bilagrid_depth.g1, s.bilagrid_depth.g2,
                   s.bilagrid_depth.quant_state,
@@ -414,7 +416,7 @@ void engine_save_checkpoint(
         save_dv_f1("bilagrid_depth_scalars.npy", s.bilagrid_depth.scalars);
     }
     save_bilagrid("bilagrid_normal",
-                  s.bilagrid_normal.enabled, s.bilagrid_normal.quantize_optim,
+                  s.bilagrid_normal.enabled, s.bilagrid_normal.quantize_optim(),
                   s.bilagrid_normal.use_adagrad,
                   s.bilagrid_normal.grids, s.bilagrid_normal.g1, s.bilagrid_normal.g2,
                   s.bilagrid_normal.quant_state,

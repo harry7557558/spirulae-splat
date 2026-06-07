@@ -131,21 +131,20 @@ void engine_optim_step(int step, const OptimConfig& cfg);
 // after set_camera_params. RGB applies to the rendered prediction; depth and
 // normal apply to GT (matching the Python flow in training_losses.py).
 
-// quantize_optim: store optimizer state as uint8 + per-256-cell bounds
-// (mirrors the SH-quantize path), trading a small numerical hit for ~3x
-// smaller optimizer-state VRAM. Configurable per-type so RGB and geometry
-// can be quantized independently.
+// optim_bits: bit depth for the optimizer-state quantization. 32 = no quant
+// (full fp32 g1/g2 for Adam; fp32 accum for AdaGrad). 4 or 8 = packed
+// QuantizedAdamState<BITS, 256> for Adam OR QuantizedTensorLog<BITS, 256>
+// for AdaGrad. Configurable per-type so RGB and geometry can be quantized
+// independently.
 //
 // use_adagrad: if true, the bilagrid uses AdaGrad (lr_decay=0,
 // weight_decay=0, initial_accumulator_value=0, eps=1e-15) instead of Adam.
-// With quantize_optim=true, the per-cell accumulator is stored log-encoded
-// via QuantizedTensorLog<8, 256> (1 byte/cell + 1 float2/256-cell block).
 void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W,
-                              bool quantize_optim, bool use_adagrad);
+                              int optim_bits, bool use_adagrad);
 void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
-                                bool quantize_optim, bool use_adagrad);
+                                int optim_bits, bool use_adagrad);
 void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
-                                 bool quantize_optim, bool use_adagrad);
+                                 int optim_bits, bool use_adagrad);
 
 // Apply forward bilagrid for the current batch. cam_indices is a [C_batch]
 // int32 tensor of per-image camera-table indices; pass null/empty for identity

@@ -107,9 +107,11 @@ class SpirulaeSplatModelConfig:
     use_fused_proj_bwd_optim: bool = True
     """Whether to use fused projection backward and optimizer.
         More memory efficient for large number of Gaussians, with slight performance hit."""
-    quantize_sh_optim: bool = True
-    """Whether to quantize optimizer momentum for SH.
-        More memory efficient for large number of Gaussians."""
+    sh_optim_bits: int = 8
+    """Bit depth for SH Adam optimizer-state quantization. 32 = no quantization
+        (full fp32 g1/g2). 4 or 8 = packed QuantizedAdamState<BITS, 256> with
+        joint (u, log_s) AoS encoding. 4-bit is incompatible with densification
+        (only 8-bit currently has densify-side zero-encoding)."""
     compute_hessian_diagonal: Literal[None, "position", "all"] = None
     """What parameter sets to compute an approximation of Hessian diagonal as well as a Jacobian-residual product in backward pass. Required for second-order optimizer."""
     optimizer_offload: Literal[None, "sh", "all"] = None
@@ -195,18 +197,21 @@ class SpirulaeSplatModelConfig:
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
     bilagrid_shape_geometry: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid for depth and normal (X, Y, W)"""
-    quantize_bilagrid_optim: bool = True
-    """Quantize the RGB bilagrid Adam optimizer state to uint8 to save VRAM."""
-    quantize_bilagrid_geometry_optim: bool = True
-    """Quantize the depth+normal bilagrid Adam optimizer state to uint8."""
+    bilagrid_optim_bits: int = 8
+    """Bit depth for the RGB bilagrid optimizer state quantization. 32 = off
+        (fp32 g1/g2 for Adam, fp32 accum for AdaGrad). 4 or 8 = packed
+        QuantizedAdamState / QuantizedTensorLog at BITS."""
+    bilagrid_geometry_optim_bits: int = 8
+    """Bit depth for the depth+normal bilagrid optimizer state quantization.
+        Same semantics as bilagrid_optim_bits."""
     use_adagrad_bilagrid_optim: bool = False
     """Use AdaGrad (lr_decay=0, weight_decay=0, initial_accumulator_value=0,
        eps=1e-15) instead of Adam for all bilateral-grid parameters (RGB +
        depth + normal). When True, the bilagrid LR fields read from
        OptimizerConfig switch to ``bilagrid_adagrad_*_lr``. If
-       ``quantize_bilagrid_*_optim`` is also True the per-cell AdaGrad
-       accumulator is stored block-wise log-quantized to uint8
-       (QuantizedTensorLog<8, 256>)."""
+       ``bilagrid_*_optim_bits`` is 4 or 8 the per-cell AdaGrad accumulator
+       is stored block-wise log-quantized at that bit depth
+       (QuantizedTensorLog<BITS, 256>)."""
     bilagrid_tv_loss_weight: float = 10.0
     """Total variation loss weight for bilateral grid used for radiance"""
     bilagrid_shift_reg_weight: float = 0.0
@@ -400,7 +405,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             packed=(self.config.packed or self.config.use_bvh),
             use_bvh=self.config.use_bvh,
             use_fused_proj_bwd_optim=self.config.use_fused_proj_bwd_optim,
-            quantize_sh_optim=self.config.quantize_sh_optim,
+            sh_optim_bits=self.config.sh_optim_bits,
         )
 
         # Engine-side background blending. populate_modules already created the
@@ -735,7 +740,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 self.num_train_data,
                 rgb_type=cfg.bilagrid_type,
                 rgb_LHW=(W_g, Y, X),
-                quantize_rgb_optim=cfg.quantize_bilagrid_optim,
+                rgb_optim_bits=cfg.bilagrid_optim_bits,
                 use_adagrad=cfg.use_adagrad_bilagrid_optim,
             )
             self._bilagrid_rgb_init = True
@@ -750,7 +755,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.core.engine_init_bilagrid(
                 self.num_train_data,
                 depth_LHW=(W_g, Y, X),
-                quantize_geometry_optim=cfg.quantize_bilagrid_geometry_optim,
+                geometry_optim_bits=cfg.bilagrid_geometry_optim_bits,
                 use_adagrad=cfg.use_adagrad_bilagrid_optim,
             )
             self._bilagrid_depth_init = True
@@ -765,7 +770,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.core.engine_init_bilagrid(
                 self.num_train_data,
                 normal_LHW=(W_g, Y, X),
-                quantize_geometry_optim=cfg.quantize_bilagrid_geometry_optim,
+                geometry_optim_bits=cfg.bilagrid_geometry_optim_bits,
                 use_adagrad=cfg.use_adagrad_bilagrid_optim,
             )
             self._bilagrid_normal_init = True

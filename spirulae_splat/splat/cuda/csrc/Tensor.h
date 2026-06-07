@@ -548,6 +548,123 @@ public:
 };
 
 
+// ND device tensor -- non-owning view.
+// Intended for heterogeneous containers (e.g. std::vector of tensors with different ranks).
+// For fixed-rank device-friendly code, prefer DeviceVector/Tensor2D/Tensor3D.
+template<typename T>
+class DeviceTensorND {
+protected:
+
+    int64_t ndim;
+    std::vector<int64_t> shape;
+    T* __restrict__ _data_ptr;
+
+public:
+
+    int64_t size(int dim) const {
+        if (dim < 0 || dim >= ndim)
+            throw std::runtime_error("Invalid dimension");
+        return shape[dim];
+    }
+
+    int64_t numel() const {
+        int64_t n = 1;
+        for (int i = 0; i < ndim; i++) n *= shape[i];
+        return n;
+    }
+
+    T* data_ptr() const {
+        return _data_ptr;
+    }
+
+    DeviceTensorND() : _data_ptr(nullptr), ndim(0) {}
+
+    DeviceTensorND(const TorchTensorView& view) {
+        _data_ptr = (T*)std::get<0>(view);
+        uint32_t element_size = std::get<1>(view);
+        std::vector<int64_t> s = std::get<2>(view);
+        if (s.empty())
+            throw std::runtime_error("Expected non-empty tensor view");
+        if (s.back() * element_size != sizeof(T))
+            throw std::runtime_error("Element size mismatch");
+        ndim = (int64_t)s.size() - 1;
+        shape.assign(s.begin(), s.begin() + ndim);
+    }
+
+    DeviceTensorND(const DeviceVector<T>& vec) {
+        _data_ptr = vec.data_ptr();
+        ndim = 1;
+        shape = {vec.size()};
+    }
+
+    DeviceTensorND(const DeviceTensor2D<T>& tensor) {
+        _data_ptr = tensor.data_ptr();
+        ndim = 2;
+        shape = {tensor.template size<0>(), tensor.template size<1>()};
+    }
+
+    DeviceTensorND(const DeviceTensor3D<T>& tensor) {
+        _data_ptr = tensor.data_ptr();
+        ndim = 3;
+        shape = {tensor.template size<0>(), tensor.template size<1>(), tensor.template size<2>()};
+    }
+};
+
+
+class DeviceTensorFloatND : public DeviceTensorND<float> {
+public:
+    using DeviceTensorND::DeviceTensorND;
+
+    DeviceTensorFloatND(const DeviceVector<float2>& vec) {
+        _data_ptr = (float*)vec.data_ptr();
+        ndim = 2;
+        shape = {vec.size(), 2};
+    }
+    DeviceTensorFloatND(const DeviceTensor2D<float2>& tensor) {
+        _data_ptr = (float*)tensor.data_ptr();
+        ndim = 3;
+        shape = {tensor.template size<0>(), tensor.template size<1>(), 2};
+    }
+    DeviceTensorFloatND(const DeviceTensor3D<float2>& tensor) {
+        _data_ptr = (float*)tensor.data_ptr();
+        ndim = 4;
+        shape = {tensor.template size<0>(), tensor.template size<1>(), tensor.template size<2>(), 2};
+    }
+
+    DeviceTensorFloatND(const DeviceVector<float3>& vec) {
+        _data_ptr = (float*)vec.data_ptr();
+        ndim = 2;
+        shape = {vec.size(), 3};
+    }
+    DeviceTensorFloatND(const DeviceTensor2D<float3>& tensor) {
+        _data_ptr = (float*)tensor.data_ptr();
+        ndim = 3;
+        shape = {tensor.template size<0>(), tensor.template size<1>(), 3};
+    }
+    DeviceTensorFloatND(const DeviceTensor3D<float3>& tensor) {
+        _data_ptr = (float*)tensor.data_ptr();
+        ndim = 4;
+        shape = {tensor.template size<0>(), tensor.template size<1>(), tensor.template size<2>(), 3};
+    }
+
+    DeviceTensorFloatND(const DeviceVector<float4>& vec) {
+        _data_ptr = (float*)vec.data_ptr();
+        ndim = 2;
+        shape = {vec.size(), 4};
+    }
+    DeviceTensorFloatND(const DeviceTensor2D<float4>& tensor) {
+        _data_ptr = (float*)tensor.data_ptr();
+        ndim = 3;
+        shape = {tensor.template size<0>(), tensor.template size<1>(), 4};
+    }
+    DeviceTensorFloatND(const DeviceTensor3D<float4>& tensor) {
+        _data_ptr = (float*)tensor.data_ptr();
+        ndim = 4;
+        shape = {tensor.template size<0>(), tensor.template size<1>(), tensor.template size<2>(), 4};
+    }
+};
+
+
 // ============================================================================
 // QuantizedAdamState -- joint (u, log_s) Adam optimizer-state quantization.
 //
@@ -871,118 +988,108 @@ public:
 };
 
 
-// ND device tensor -- non-owning view.
-// Intended for heterogeneous containers (e.g. std::vector of tensors with different ranks).
-// For fixed-rank device-friendly code, prefer DeviceVector/Tensor2D/Tensor3D.
-template<typename T>
-class DeviceTensorND {
-protected:
+// ============================================================================
+// QuantizedTensor -- generic block-wise UNIFORM (linear) quantized tensor for a
+// single scalar value per cell. Sibling of QuantizedTensorLog, but with linear
+// (not log) quantization in the original value domain.
+//
+// Block-wise (min, max) float2 bounds per BLOCK_SIZE cells. Endpoint-exact
+// within each block: q=0 -> decoded=lo, q=(kLevels-1) -> decoded=hi.
+//
+// Targets value (parameter) quantization where the value range is naturally
+// bounded and small, so a linear codec captures it well without log-distortion
+// of the precision-versus-magnitude trade-off. The codec is the building block
+// for future SH-feature / bilagrid-grid value quantization (see "dequantize on
+// load" plan): every consumer kernel takes BITS as a template parameter and
+// calls decode_v on each read; the encoder writes once after the optimizer
+// step alongside the per-block bound reduction.
+//
+// Storage (AoS):
+//   BITS=8:  1 byte/cell  -- packed[idx]      = q
+//   BITS=16: 2 bytes/cell -- packed16[idx]    = q   (reinterpret to uint16_t*)
+//
+// 16-bit is the high-precision option; 8-bit is the compact option. We do not
+// support 4-bit here -- linear quantization at 4-bit is too coarse for the
+// dynamic range of typical parameter values (use the log codec for AdaGrad-
+// style accumulators where 4-bit pays off with log-encoding).
+// ============================================================================
 
-    int64_t ndim;
-    std::vector<int64_t> shape;
-    T* __restrict__ _data_ptr;
-
+template<int BITS, int BLOCK_SIZE = 256>
+class QuantizedTensor {
 public:
+    static_assert(BITS == 8 || BITS == 16,
+                  "QuantizedTensor: only 8-bit and 16-bit are supported "
+                  "(use QuantizedTensorLog for 4-bit log-domain storage)");
+    static_assert(BLOCK_SIZE > 0 && (BLOCK_SIZE & (BLOCK_SIZE - 1)) == 0,
+                  "QuantizedTensor: BLOCK_SIZE must be a positive power of 2");
 
-    int64_t size(int dim) const {
-        if (dim < 0 || dim >= ndim)
-            throw std::runtime_error("Invalid dimension");
-        return shape[dim];
-    }
+    static constexpr int   kBits         = BITS;
+    static constexpr int   kBlockSize    = BLOCK_SIZE;
+    static constexpr int   kLevels       = 1 << BITS;
+    static constexpr float kQMax         = (float)(kLevels - 1);
+    static constexpr float kInvQMax      = 1.0f / kQMax;
+    static constexpr int   kBytesPerCell = (BITS == 16) ? 2 : 1;
 
-    int64_t numel() const {
-        int64_t n = 1;
-        for (int i = 0; i < ndim; i++) n *= shape[i];
-        return n;
-    }
+    // Storage (non-owning views backed by the global DevicePool).
+    DeviceVector<uint8_t> packed;     // size = n_cells * kBytesPerCell
+    DeviceVector<float2>  bounds;     // size = n_bounds (caller-chosen)
+    int64_t n_cells  = 0;
+    int64_t n_bounds = 0;
 
-    T* data_ptr() const {
-        return _data_ptr;
-    }
+    // ---- Host: storage management ------------------------------------------
 
-    DeviceTensorND() : _data_ptr(nullptr), ndim(0) {}
-
-    DeviceTensorND(const TorchTensorView& view) {
-        _data_ptr = (T*)std::get<0>(view);
-        uint32_t element_size = std::get<1>(view);
-        std::vector<int64_t> s = std::get<2>(view);
-        if (s.empty())
-            throw std::runtime_error("Expected non-empty tensor view");
-        if (s.back() * element_size != sizeof(T))
-            throw std::runtime_error("Element size mismatch");
-        ndim = (int64_t)s.size() - 1;
-        shape.assign(s.begin(), s.begin() + ndim);
+    void resize(const std::string& key_prefix, int64_t cells, int64_t bnds) {
+        n_cells  = cells;
+        n_bounds = bnds;
+        packed.resize(key_prefix + ".q",  (size_t)(cells * kBytesPerCell));
+        bounds.resize(key_prefix + ".qb", (size_t)bnds);
     }
 
-    DeviceTensorND(const DeviceVector<T>& vec) {
-        _data_ptr = vec.data_ptr();
-        ndim = 1;
-        shape = {vec.size()};
+    void zero() {
+        if (packed.data_ptr()) packed.zero();
+        if (bounds.data_ptr()) bounds.zero();
     }
 
-    DeviceTensorND(const DeviceTensor2D<T>& tensor) {
-        _data_ptr = tensor.data_ptr();
-        ndim = 2;
-        shape = {tensor.template size<0>(), tensor.template size<1>()};
+    bool initialized() const { return packed.data_ptr() != nullptr; }
+
+    uint8_t* packed_ptr() const { return packed.data_ptr(); }
+    float2*  bounds_ptr() const { return bounds.data_ptr(); }
+
+    int64_t packed_bytes() const { return n_cells * (int64_t)kBytesPerCell; }
+    int64_t bounds_bytes() const { return n_bounds * (int64_t)sizeof(float2); }
+    int64_t total_bytes()  const { return packed_bytes() + bounds_bytes(); }
+
+    // ---- Device: codec primitives ------------------------------------------
+#ifdef __CUDACC__
+    // Decode the linearly-quantized value at cell `idx` directly (no log).
+    __device__ static inline float decode_v(
+        const uint8_t* __restrict__ packed_ptr, int64_t idx, float2 mm
+    ) {
+        float q;
+        if constexpr (BITS == 8) {
+            q = (float)packed_ptr[idx];
+        } else {  // BITS == 16
+            const uint16_t* p16 = reinterpret_cast<const uint16_t*>(packed_ptr);
+            q = (float)p16[idx];
+        }
+        return mm.x + (mm.y - mm.x) * (q * kInvQMax);
     }
 
-    DeviceTensorND(const DeviceTensor3D<T>& tensor) {
-        _data_ptr = tensor.data_ptr();
-        ndim = 3;
-        shape = {tensor.template size<0>(), tensor.template size<1>(), tensor.template size<2>()};
+    // Encode v into the packed byte stream at cell `idx`. Endpoint-exact
+    // within (mm.x, mm.y). Callers pass mm = the block-reduced bounds.
+    __device__ static inline void encode_v(
+        uint8_t* __restrict__ packed_ptr, int64_t idx,
+        float v, float2 mm
+    ) {
+        float range = fmaxf(mm.y - mm.x, 1e-30f);
+        float qf = roundf(kQMax * (v - mm.x) / range);
+        qf = fminf(fmaxf(qf, 0.0f), kQMax);
+        if constexpr (BITS == 8) {
+            packed_ptr[idx] = (uint8_t)qf;
+        } else {  // BITS == 16
+            uint16_t* p16 = reinterpret_cast<uint16_t*>(packed_ptr);
+            p16[idx] = (uint16_t)qf;
+        }
     }
-};
-
-
-class DeviceTensorFloatND : public DeviceTensorND<float> {
-public:
-    using DeviceTensorND::DeviceTensorND;
-
-    DeviceTensorFloatND(const DeviceVector<float2>& vec) {
-        _data_ptr = (float*)vec.data_ptr();
-        ndim = 2;
-        shape = {vec.size(), 2};
-    }
-    DeviceTensorFloatND(const DeviceTensor2D<float2>& tensor) {
-        _data_ptr = (float*)tensor.data_ptr();
-        ndim = 3;
-        shape = {tensor.template size<0>(), tensor.template size<1>(), 2};
-    }
-    DeviceTensorFloatND(const DeviceTensor3D<float2>& tensor) {
-        _data_ptr = (float*)tensor.data_ptr();
-        ndim = 4;
-        shape = {tensor.template size<0>(), tensor.template size<1>(), tensor.template size<2>(), 2};
-    }
-
-    DeviceTensorFloatND(const DeviceVector<float3>& vec) {
-        _data_ptr = (float*)vec.data_ptr();
-        ndim = 2;
-        shape = {vec.size(), 3};
-    }
-    DeviceTensorFloatND(const DeviceTensor2D<float3>& tensor) {
-        _data_ptr = (float*)tensor.data_ptr();
-        ndim = 3;
-        shape = {tensor.template size<0>(), tensor.template size<1>(), 3};
-    }
-    DeviceTensorFloatND(const DeviceTensor3D<float3>& tensor) {
-        _data_ptr = (float*)tensor.data_ptr();
-        ndim = 4;
-        shape = {tensor.template size<0>(), tensor.template size<1>(), tensor.template size<2>(), 3};
-    }
-
-    DeviceTensorFloatND(const DeviceVector<float4>& vec) {
-        _data_ptr = (float*)vec.data_ptr();
-        ndim = 2;
-        shape = {vec.size(), 4};
-    }
-    DeviceTensorFloatND(const DeviceTensor2D<float4>& tensor) {
-        _data_ptr = (float*)tensor.data_ptr();
-        ndim = 3;
-        shape = {tensor.template size<0>(), tensor.template size<1>(), 4};
-    }
-    DeviceTensorFloatND(const DeviceTensor3D<float4>& tensor) {
-        _data_ptr = (float*)tensor.data_ptr();
-        ndim = 4;
-        shape = {tensor.template size<0>(), tensor.template size<1>(), tensor.template size<2>(), 4};
-    }
+#endif // __CUDACC__
 };

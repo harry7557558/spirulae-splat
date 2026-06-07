@@ -144,7 +144,7 @@ void fused_adam_step(
 );
 
 
-void fused_adam_step_8bit(
+void fused_adam_step_quantized(
     int64_t num_splats,
     DeviceTensorFloatND param,
     DeviceTensorFloatND grad,
@@ -153,7 +153,8 @@ void fused_adam_step_8bit(
     float lr,
     int32_t step, DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
-    float l2_reg_offset
+    float l2_reg_offset,
+    int bits                            // 4 or 8 -- selects QuantizedAdamState<BITS, 256>
 );
 
 

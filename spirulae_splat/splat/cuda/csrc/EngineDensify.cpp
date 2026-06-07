@@ -33,11 +33,20 @@ static inline DeviceVector<T> _dv_flat(const TorchTensorView& tv) {
 
 
 int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
-    // _ensure_optim_state(engine().optim.quantize_sh);
-
     int64_t cur_num_splats = engine().cur_num_splats;
     int64_t max_num_splats = engine().max_num_splats;
-    bool quantize_sh = engine().optim.quantize_sh;
+    bool quantize_sh = engine().optim.sh_quantize_enabled();
+    if (quantize_sh && engine().optim.sh_optim_bits != 8) {
+        // Densify's _zero_quant_sh_for_splat writes 2 bytes/cell hardcoded
+        // (8-bit AoS layout). Supporting 4-bit here requires re-templating
+        // the helper + relocate kernels on the byte stride. Reject the
+        // configuration up front so we don't silently corrupt momentum.
+        throw std::runtime_error(
+            "engine_densify_step: SH-optim quantization at "
+            + std::to_string(engine().optim.sh_optim_bits)
+            + " bits is not yet supported alongside densification "
+              "(only 8-bit currently has densify-side zero-encoding).");
+    }
     int num_sh = engine().num_sh;
 
     bool use_revised = (cfg.use_revised_densification);

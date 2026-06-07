@@ -55,7 +55,10 @@ struct OptimConfig {
     float sh_reg_weight                = 0.0f;
 
     bool  use_scale_agnostic_mean         = false;
-    bool  quantize_sh                     = false;
+    // SH-Adam optimizer-state quantization bit depth. 32 = no quantization (full
+    // fp32 g1/g2). 4 or 8 = QuantizedAdamState<BITS, 256> with one float4 per
+    // 256-cell block of (u, sqrt_g2) bounds. Other values are rejected.
+    int   sh_optim_bits                   = 32;
     bool  use_per_splat_bias_correction   = false;
 
     // When true, fold projection-backward and Adam-based per-splat optim into

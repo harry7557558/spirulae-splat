@@ -26,6 +26,8 @@ void uint16_depth_to_float_raw(const uint16_t* d_in, float* d_out,
                                int B, int H, int W, int C);
 
 // --- Fused bilagrid (image-grad + TV + Adam) kernel (BilagridFusedAdam.cu). ---
+// quant_bits: 4 or 8 -- selects QuantizedAdamState<BITS, 256> codec when
+// quantize=true. Ignored when quantize=false.
 void fused_bilagrid_tv_adam(
     float* grids,
     float*   g1_f,    float*   g2_f,
@@ -39,6 +41,7 @@ void fused_bilagrid_tv_adam(
     float tv_weight,
     int32_t adam_step,
     bool quantize,
+    int  quant_bits,
     cudaStream_t stream
 );
 
@@ -63,8 +66,9 @@ void bilagrid_rgb_shift_reg_step(
 // Same gradient pipeline as fused_bilagrid_tv_adam, but applies an AdaGrad
 // update with lr_decay=0, weight_decay=0, initial_accumulator_value=0,
 // eps=1e-15. The accumulator is float (one per cell) or, when quantize=true,
-// log-encoded uint8 via QuantizedTensorLog<8, 256> (1 byte/cell + a float2
-// (log min, log max) bound per 256-cell block).
+// log-encoded uint8 via QuantizedTensorLog<BITS, 256> with BITS selected by
+// `quant_bits` (4 or 8). 4-bit serializes the byte-shared write between
+// odd/even thread partners with a __syncthreads inside the kernel.
 void fused_bilagrid_tv_adagrad(
     float* grids,
     float*   accum_f,                   // when !quantize
@@ -77,6 +81,7 @@ void fused_bilagrid_tv_adagrad(
     float lr,
     float tv_weight,
     bool quantize,
+    int  quant_bits,
     cudaStream_t stream
 );
 

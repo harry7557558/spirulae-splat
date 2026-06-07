@@ -186,7 +186,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("quat_norm_reg_weight",           &OptimConfig::quat_norm_reg_weight)
         .def_readwrite("sh_reg_weight",                  &OptimConfig::sh_reg_weight)
         .def_readwrite("use_scale_agnostic_mean",        &OptimConfig::use_scale_agnostic_mean)
-        .def_readwrite("quantize_sh",                    &OptimConfig::quantize_sh)
+        .def_readwrite("sh_optim_bits",                  &OptimConfig::sh_optim_bits)
         .def_readwrite("use_per_splat_bias_correction",  &OptimConfig::use_per_splat_bias_correction)
         .def_readwrite("use_fused_proj_bwd_optim",       &OptimConfig::use_fused_proj_bwd_optim)
         .def_readwrite("use_color_trust_region",         &OptimConfig::use_color_trust_region)

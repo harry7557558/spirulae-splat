@@ -1134,7 +1134,7 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         use_loss_map=False,
         use_long_axis_split=False,
         use_fused_proj_bwd_optim=False,
-        quantize_sh_optim=False,
+        sh_optim_bits=32,
         max_screen_size=float('inf'),
         max_world_size=float('inf'),
         suppress_initial_scales=False,

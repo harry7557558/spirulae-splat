@@ -57,7 +57,8 @@ void fused_projection_bwd_optimizer_3dgs(
     bool use_color_trust_region,
     bool color_is_linear,
     float eps_tr,
-    std::variant<int32_t, TorchTensorView> step
+    std::variant<int32_t, TorchTensorView> step,
+    int sh_quant_bits
 );
 
 
@@ -103,7 +104,8 @@ void fused_projection_bwd_optimizer_mip(
     bool use_color_trust_region,
     bool color_is_linear,
     float eps_tr,
-    std::variant<int32_t, TorchTensorView> step
+    std::variant<int32_t, TorchTensorView> step,
+    int sh_quant_bits
 );
 
 
@@ -149,5 +151,6 @@ void fused_projection_bwd_optimizer_3dgut(
     bool use_color_trust_region,
     bool color_is_linear,
     float eps_tr,
-    std::variant<int32_t, TorchTensorView> step
+    std::variant<int32_t, TorchTensorView> step,
+    int sh_quant_bits
 );

@@ -62,7 +62,8 @@ template<
     bool use_scale_agnostic_mean,
     bool use_color_trust_region,
     bool color_is_linear,
-    int BLOCK_SIZE
+    int BLOCK_SIZE,
+    int QUANT_BITS = 8     // SH-Adam quant bit depth: 4 or 8 (ignored when BLOCK_SIZE == 0)
 >
 #if 1
 __global__ void __launch_bounds__(512) fused_projection_bwd_optimizer_3dgs_kernel
@@ -441,7 +442,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         // QuantizedAdamState codec. Each cell = one (splat, coef, channel)
         // triple holds 2 bytes (u, sqrt_g2). The codec dequantizes and rebuilds
         // ordinary (g1, g2) so the Adam math below is unchanged.
-        using SHQState = QuantizedAdamState<8, BLOCK_SIZE>;
+        using SHQState = QuantizedAdamState<QUANT_BITS, BLOCK_SIZE>;
         // Index into the packed buffer must use the BUFFER's full SH stride
         // (engine().num_sh = model max). The template `num_sh` here equals
         // SplatPrimitive::num_sh(), which during SH warmup is capped at the
@@ -610,33 +611,48 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const int32_t* __restrict__ steps
+    const int32_t* __restrict__ steps,
+    const int sh_quant_bits        // 32 = no quant, 4 or 8 = packed quant
 ) {
     bool use_quant = (sh_packed != nullptr && sh_quant_bounds != nullptr);
     constexpr int BLOCK_SIZE = 256;
 
-    (use_quant ? fused_projection_bwd_optimizer_3dgs_kernel<
-        SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, BLOCK_SIZE
-    > : fused_projection_bwd_optimizer_3dgs_kernel<
-        SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, 0
-    >)<<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(
-        C, N, num_sh_buffer,
-        splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
-        camera_id_bounds, camera_ids, perm, aabb,
-        v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen,
-        g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds, //v_viewmats,
-        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh,
-        max_gauss_ratio,
-        scale_regularization_weight / (float)N,
-        mcmc_opacity_reg_weight / (float)N,
-        mcmc_scale_reg_weight / (float)N,
-        erank_reg_weight / (float)N,
-        erank_reg_weight_s3 / (float)N,
-        quat_norm_reg_weight / (float)N,
-        2.0f * sh_reg_weight / (float)(3*N),
-        eps_tr,
+    // Three compile-time variants: no quant (BLOCK_SIZE=0), 4-bit quant, 8-bit
+    // quant. Runtime `sh_quant_bits` picks between the two quant variants.
+    #define _ARGS_TAIL \
+        C, N, num_sh_buffer, \
+        splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height, \
+        camera_id_bounds, camera_ids, perm, aabb, \
+        v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen, \
+        g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds, \
+        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh, \
+        max_gauss_ratio, \
+        scale_regularization_weight / (float)N, \
+        mcmc_opacity_reg_weight / (float)N, \
+        mcmc_scale_reg_weight / (float)N, \
+        erank_reg_weight / (float)N, \
+        erank_reg_weight_s3 / (float)N, \
+        quat_norm_reg_weight / (float)N, \
+        2.0f * sh_reg_weight / (float)(3*N), \
+        eps_tr, \
         scalar_step, steps
-    );
+
+    if (!use_quant) {
+        fused_projection_bwd_optimizer_3dgs_kernel<
+            SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
+            use_color_trust_region, color_is_linear, 0, 8
+        ><<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(_ARGS_TAIL);
+    } else if (sh_quant_bits == 4) {
+        fused_projection_bwd_optimizer_3dgs_kernel<
+            SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
+            use_color_trust_region, color_is_linear, BLOCK_SIZE, 4
+        ><<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(_ARGS_TAIL);
+    } else {
+        // Default to 8-bit (legacy behavior).
+        fused_projection_bwd_optimizer_3dgs_kernel<
+            SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
+            use_color_trust_region, color_is_linear, BLOCK_SIZE, 8
+        ><<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(_ARGS_TAIL);
+    }
+    #undef _ARGS_TAIL
 }
