@@ -102,10 +102,10 @@ void relocate_splats_with_long_axis_split_tensor(
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<float2> densify_accum_buffer,
     DeviceVector<int32_t> bias_correction_steps,
-    bool is_quantized_sh,
+    int sh_optim_bits,
     int num_sh,
     // SH-quant bounds buffer + layout flag used to encode (g1=0, g2=0) into
-    // the dst splats' packed bytes. Null when is_quantized_sh is false.
+    // the dst splats' packed bytes. Null when sh_optim_bits == 32 (no quant).
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
     // SH VALUE-quant codec copy params. When sh_value_bits != 32 we also do
@@ -129,7 +129,7 @@ void add_splats_with_long_axis_split_tensor(
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<float2> densify_accum_buffer,
     DeviceVector<int32_t> bias_correction_steps,
-    bool is_quantized_sh,
+    int sh_optim_bits,
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
@@ -149,7 +149,7 @@ void relocate_splats_mcmc_tensor(
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<int32_t> bias_correction_steps,
-    bool is_quantized_sh,
+    int sh_optim_bits,
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
@@ -170,7 +170,7 @@ void add_splats_mcmc_tensor(
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<int32_t> bias_correction_steps,
-    bool is_quantized_sh,
+    int sh_optim_bits,
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,

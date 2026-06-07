@@ -670,10 +670,15 @@ void densify_update_weight(
 //   bounds_per_splat=false (regular Optimizer.cu): one float4 per 256 cells,
 //                                  so cells within a single splat may span
 //                                  multiple bounds slots.
+// Encode a single u or log_s value as the (BITS-bit) quantized nibble or byte
+// that decodes back to `zero_val` within the [lo, hi] block bound. Used by
+// densify to initialize dst splats' optim-state bytes to (g1 = 0, g2 = 0).
+template<int BITS>
 __device__ __forceinline__ uint8_t _quant_encode_zero_byte(float zero_val, float lo, float hi) {
+    constexpr float qmax = (BITS == 8) ? 255.0f : 15.0f;  // BITS == 4 -> 15
     float range = fmaxf(hi - lo, 1e-30f);
-    float qf = roundf(255.0f * (zero_val - lo) / range);
-    return (uint8_t)fminf(fmaxf(qf, 0.0f), 255.0f);
+    float qf = roundf(qmax * (zero_val - lo) / range);
+    return (uint8_t)fminf(fmaxf(qf, 0.0f), qmax);
 }
 
 // SH VALUE-quant codec copy: decode src splat's SH cells against src bounds
@@ -814,8 +819,27 @@ static inline void _launch_densify_copy_quant_sh_value(
 }
 
 
+// Per-cell stores for the joint QuantizedAdamState<BITS, 256> codec.
+//   BITS == 8: AoS layout, 2 bytes per cell -- byte[2k]=u_q, byte[2k+1]=log_s_q
+//   BITS == 4: joint nibbles, 1 byte per cell -- low nibble = u_q, high = log_s_q
+// Within densify both halves of every cell get zeroed for the dst splat, so
+// these stores don't race with neighbors at the cell boundary (each thread
+// owns its splat's full cell range).
+template<int BITS>
+__device__ __forceinline__ void _zero_quant_sh_store_cell(
+    uint8_t* __restrict__ packed, int64_t cell, uint8_t u_q, uint8_t log_s_q
+) {
+    if constexpr (BITS == 8) {
+        packed[cell * 2 + 0] = u_q;
+        packed[cell * 2 + 1] = log_s_q;
+    } else {  // BITS == 4
+        packed[cell] = (uint8_t)((u_q & 0x0Fu) | ((log_s_q & 0x0Fu) << 4));
+    }
+}
+
+template<int BITS>
 __device__ __forceinline__ void _zero_quant_sh_for_splat(
-    uint8_t* __restrict__ packed,           // 2 bytes per (splat, coef, channel)
+    uint8_t* __restrict__ packed,
     int64_t splat_idx,
     int num_sh,
     const float4* __restrict__ bounds,
@@ -825,21 +849,20 @@ __device__ __forceinline__ void _zero_quant_sh_for_splat(
     int64_t base_cell = splat_idx * cells_per_splat;
     if (bounds_per_splat) {
         float4 mm = bounds[splat_idx / 256];
-        uint8_t u_q     = _quant_encode_zero_byte(0.0f, mm.x, mm.y);
-        uint8_t log_s_q = _quant_encode_zero_byte(0.0f, mm.z, mm.w);
+        uint8_t u_q     = _quant_encode_zero_byte<BITS>(0.0f, mm.x, mm.y);
+        uint8_t log_s_q = _quant_encode_zero_byte<BITS>(0.0f, mm.z, mm.w);
         #pragma unroll 1
         for (int64_t c = 0; c < cells_per_splat; ++c) {
-            int64_t cell = base_cell + c;
-            packed[cell * 2 + 0] = u_q;
-            packed[cell * 2 + 1] = log_s_q;
+            _zero_quant_sh_store_cell<BITS>(packed, base_cell + c, u_q, log_s_q);
         }
     } else {
         #pragma unroll 1
         for (int64_t c = 0; c < cells_per_splat; ++c) {
             int64_t cell = base_cell + c;
             float4 mm = bounds[cell / 256];
-            packed[cell * 2 + 0] = _quant_encode_zero_byte(0.0f, mm.x, mm.y);
-            packed[cell * 2 + 1] = _quant_encode_zero_byte(0.0f, mm.z, mm.w);
+            uint8_t u_q     = _quant_encode_zero_byte<BITS>(0.0f, mm.x, mm.y);
+            uint8_t log_s_q = _quant_encode_zero_byte<BITS>(0.0f, mm.z, mm.w);
+            _zero_quant_sh_store_cell<BITS>(packed, cell, u_q, log_s_q);
         }
     }
 }
@@ -903,9 +926,14 @@ __global__ void relocate_with_long_axis_split_kernel(
     g1_features_dc[idx_dst] = make_float3(0.0f);
     g2_features_dc[idx_dst] = make_float3(0.0f);
     if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
-        // Quant path: write encoded (u=0, log_s=0) bytes; g1 and g2 alias
-        // the same packed buffer, so one pass covers both.
-        _zero_quant_sh_for_splat(
+        // 8-bit quant path: write encoded (u=0, log_s=0) bytes; g1 and g2
+        // alias the same packed buffer, so one pass covers both.
+        _zero_quant_sh_for_splat<8>(
+            (uint8_t*)g1_features_sh, idx_dst, num_sh,
+            sh_quant_bounds, sh_bounds_per_splat);
+    } else if constexpr (sizeof(g_features_sh_t3) == sizeof(uchar3)) {
+        // 4-bit quant path: joint nibbles, 1 byte/cell. Same aliasing as 8-bit.
+        _zero_quant_sh_for_splat<4>(
             (uint8_t*)g1_features_sh, idx_dst, num_sh,
             sh_quant_bounds, sh_bounds_per_splat);
     } else {
@@ -928,7 +956,11 @@ __global__ void relocate_with_long_axis_split_kernel(
     g1_features_dc[idx_src] = make_float3(0.0f);
     g2_features_dc[idx_src] = make_float3(0.0f);
     if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
-        _zero_quant_sh_for_splat(
+        _zero_quant_sh_for_splat<8>(
+            (uint8_t*)g1_features_sh, idx_src, num_sh,
+            sh_quant_bounds, sh_bounds_per_splat);
+    } else if constexpr (sizeof(g_features_sh_t3) == sizeof(uchar3)) {
+        _zero_quant_sh_for_splat<4>(
             (uint8_t*)g1_features_sh, idx_src, num_sh,
             sh_quant_bounds, sh_bounds_per_splat);
     } else {
@@ -1020,10 +1052,10 @@ void relocate_splats_with_long_axis_split_tensor(
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<float2> densify_accum_buffer,
     DeviceVector<int32_t> bias_correction_steps,
-    bool is_quantized_sh,
+    int sh_optim_bits,
     int num_sh,
     // SH-quant bounds buffer + layout flag used to encode (g1=0, g2=0) into
-    // the dst splats' packed bytes. Null when is_quantized_sh is false.
+    // the dst splats' packed bytes. Null when sh_optim_bits == 32 (no quant).
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
     // SH VALUE-quant codec copy params. When sh_value_bits != 32 we also do
@@ -1071,38 +1103,25 @@ void relocate_splats_with_long_axis_split_tensor(
         cur_num_splats, (float*)densify_accum_buffer.data_ptr(),
         densify_accum_buffer.size() * 2, mask, num_relocate, seed);
 
-    if (!is_quantized_sh)
-        relocate_with_long_axis_split_kernel<float3><<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>(
-            cur_num_splats,
-            num_relocate,
-            src_indices,
-            dst_indices,
-            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
-            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
-            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
-            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
-            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), g1_features_sh.data_ptr(), g2_features_sh.data_ptr(),
-            /*sh_quant_bounds=*/nullptr, /*sh_bounds_per_splat=*/false,
-            densify_accum_buffer.data_ptr(),
-            bias_correction_steps_ptr
-        );
-    else
-        relocate_with_long_axis_split_kernel<short3><<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>(
-            cur_num_splats,
-            num_relocate,
-            src_indices,
-            dst_indices,
-            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
-            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
-            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
-            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
-            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
-            sh_quant_bounds.data_ptr(), sh_bounds_per_splat,
-            densify_accum_buffer.data_ptr(),
-            bias_correction_steps_ptr
-        );
+    #define _DENSIFY_LAS_LAUNCH(T, bnd_ptr, bps) \
+            relocate_with_long_axis_split_kernel<T><<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>( \
+                cur_num_splats, \
+                num_relocate, \
+                src_indices, \
+                dst_indices, \
+                means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(), \
+                quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(), \
+                scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(), \
+                opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(), \
+                features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(), \
+                num_sh, features_sh.data_ptr(), (T*)g1_features_sh.data_ptr(), (T*)g2_features_sh.data_ptr(), \
+                bnd_ptr, bps, \
+                densify_accum_buffer.data_ptr(), \
+                bias_correction_steps_ptr)
+        if      (sh_optim_bits == 32) _DENSIFY_LAS_LAUNCH(float3, nullptr, false);
+        else if (sh_optim_bits == 8)  _DENSIFY_LAS_LAUNCH(short3, sh_quant_bounds.data_ptr(), sh_bounds_per_splat);
+        else if (sh_optim_bits == 4)  _DENSIFY_LAS_LAUNCH(uchar3, sh_quant_bounds.data_ptr(), sh_bounds_per_splat);
+        #undef _DENSIFY_LAS_LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     _launch_densify_copy_quant_sh_value(
@@ -1120,7 +1139,7 @@ void add_splats_with_long_axis_split_tensor(
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<float2> densify_accum_buffer,
     DeviceVector<int32_t> bias_correction_steps,
-    bool is_quantized_sh,
+    int sh_optim_bits,
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
@@ -1139,38 +1158,25 @@ void add_splats_with_long_axis_split_tensor(
         cur_num_splats, (float*)densify_accum_buffer.data_ptr(),
         densify_accum_buffer.size() * 2, nullptr, num_new_splats, seed);
 
-    if (!is_quantized_sh)
-        relocate_with_long_axis_split_kernel<float3><<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>(
-            cur_num_splats,
-            num_new_splats,
-            split_indices,
-            nullptr,
-            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
-            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
-            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
-            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
-            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), g1_features_sh.data_ptr(), g2_features_sh.data_ptr(),
-            /*sh_quant_bounds=*/nullptr, /*sh_bounds_per_splat=*/false,
-            densify_accum_buffer.data_ptr(),
-            bias_correction_steps_ptr
-        );
-    else
-        relocate_with_long_axis_split_kernel<short3><<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>(
-            cur_num_splats,
-            num_new_splats,
-            split_indices,
-            nullptr,
-            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
-            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
-            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
-            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
-            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
-            sh_quant_bounds.data_ptr(), sh_bounds_per_splat,
-            densify_accum_buffer.data_ptr(),
-            bias_correction_steps_ptr
-        );
+    #define _DENSIFY_LAS_ADD_LAUNCH(T, bnd_ptr, bps) \
+        relocate_with_long_axis_split_kernel<T><<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>( \
+            cur_num_splats, \
+            num_new_splats, \
+            split_indices, \
+            nullptr, \
+            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(), \
+            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(), \
+            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(), \
+            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(), \
+            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(), \
+            num_sh, features_sh.data_ptr(), (T*)g1_features_sh.data_ptr(), (T*)g2_features_sh.data_ptr(), \
+            bnd_ptr, bps, \
+            densify_accum_buffer.data_ptr(), \
+            bias_correction_steps_ptr)
+    if      (sh_optim_bits == 32) _DENSIFY_LAS_ADD_LAUNCH(float3, nullptr, false);
+    else if (sh_optim_bits == 8)  _DENSIFY_LAS_ADD_LAUNCH(short3, sh_quant_bounds.data_ptr(), sh_bounds_per_splat);
+    else if (sh_optim_bits == 4)  _DENSIFY_LAS_ADD_LAUNCH(uchar3, sh_quant_bounds.data_ptr(), sh_bounds_per_splat);
+    #undef _DENSIFY_LAS_ADD_LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     _launch_densify_copy_quant_sh_value(
@@ -1334,7 +1340,11 @@ __global__ void mcmc_compute_relocation_kernel(
     g1_features_dc[cur_idx] = make_float3(0.0f);
     g2_features_dc[cur_idx] = make_float3(0.0f);
     if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
-        _zero_quant_sh_for_splat(
+        _zero_quant_sh_for_splat<8>(
+            (uint8_t*)g1_features_sh, cur_idx, num_sh,
+            sh_quant_bounds, sh_bounds_per_splat);
+    } else if constexpr (sizeof(g_features_sh_t3) == sizeof(uchar3)) {
+        _zero_quant_sh_for_splat<4>(
             (uint8_t*)g1_features_sh, cur_idx, num_sh,
             sh_quant_bounds, sh_bounds_per_splat);
     } else {
@@ -1386,7 +1396,7 @@ void relocate_splats_mcmc_tensor(
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<int32_t> bias_correction_steps,
-    bool is_quantized_sh,
+    int sh_optim_bits,
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
@@ -1439,34 +1449,23 @@ void relocate_splats_mcmc_tensor(
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    if (!is_quantized_sh)
-        mcmc_compute_relocation_kernel<float3><<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
-            cur_num_splats,
-            min_opacity,
-            n_idx_buffer,
-            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
-            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
-            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
-            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
-            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), g1_features_sh.data_ptr(), g2_features_sh.data_ptr(),
-            /*sh_quant_bounds=*/nullptr, /*sh_bounds_per_splat=*/false,
-            bias_correction_steps_ptr
-        );
-    else
-        mcmc_compute_relocation_kernel<short3><<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
-            cur_num_splats,
-            min_opacity,
-            n_idx_buffer,
-            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
-            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
-            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
-            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
-            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
-            sh_quant_bounds.data_ptr(), sh_bounds_per_splat,
-            bias_correction_steps_ptr
-        );
+    #define _DENSIFY_MCMC_RELOC_LAUNCH(T, bnd_ptr, bps) \
+        mcmc_compute_relocation_kernel<T><<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>( \
+            cur_num_splats, \
+            min_opacity, \
+            n_idx_buffer, \
+            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(), \
+            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(), \
+            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(), \
+            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(), \
+            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(), \
+            num_sh, features_sh.data_ptr(), (T*)g1_features_sh.data_ptr(), (T*)g2_features_sh.data_ptr(), \
+            bnd_ptr, bps, \
+            bias_correction_steps_ptr)
+    if      (sh_optim_bits == 32) _DENSIFY_MCMC_RELOC_LAUNCH(float3, nullptr, false);
+    else if (sh_optim_bits == 8)  _DENSIFY_MCMC_RELOC_LAUNCH(short3, sh_quant_bounds.data_ptr(), sh_bounds_per_splat);
+    else if (sh_optim_bits == 4)  _DENSIFY_MCMC_RELOC_LAUNCH(uchar3, sh_quant_bounds.data_ptr(), sh_bounds_per_splat);
+    #undef _DENSIFY_MCMC_RELOC_LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     mcmc_update_relocation_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 64)>>>(
@@ -1590,7 +1589,11 @@ __global__ void mcmc_update_add_kernel(
     g1_features_dc[id_dst] = make_float3(0.0f);
     g2_features_dc[id_dst] = make_float3(0.0f);
     if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
-        _zero_quant_sh_for_splat(
+        _zero_quant_sh_for_splat<8>(
+            (uint8_t*)g1_features_sh, id_dst, num_sh,
+            sh_quant_bounds, sh_bounds_per_splat);
+    } else if constexpr (sizeof(g_features_sh_t3) == sizeof(uchar3)) {
+        _zero_quant_sh_for_splat<4>(
             (uint8_t*)g1_features_sh, id_dst, num_sh,
             sh_quant_bounds, sh_bounds_per_splat);
     } else {
@@ -1613,7 +1616,7 @@ void add_splats_mcmc_tensor(
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
     DeviceVector<int32_t> bias_correction_steps,
-    bool is_quantized_sh,
+    int sh_optim_bits,
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
@@ -1678,34 +1681,23 @@ void add_splats_mcmc_tensor(
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    if (!is_quantized_sh)
-        mcmc_update_add_kernel<float3><<<_LAUNCH_ARGS_1D(num_add, 64)>>>(
-            cur_num_splats,
-            num_add,
-            index_map,
-            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
-            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
-            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
-            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
-            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), g1_features_sh.data_ptr(), g2_features_sh.data_ptr(),
-            /*sh_quant_bounds=*/nullptr, /*sh_bounds_per_splat=*/false,
-            bias_correction_steps_ptr
-        );
-    else
-        mcmc_update_add_kernel<short3><<<_LAUNCH_ARGS_1D(num_add, 64)>>>(
-            cur_num_splats,
-            num_add,
-            index_map,
-            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
-            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
-            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
-            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(),
-            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(),
-            num_sh, features_sh.data_ptr(), (short3*)g1_features_sh.data_ptr(), (short3*)g2_features_sh.data_ptr(),
-            sh_quant_bounds.data_ptr(), sh_bounds_per_splat,
-            bias_correction_steps_ptr
-        );
+    #define _DENSIFY_MCMC_ADD_LAUNCH(T, bnd_ptr, bps) \
+        mcmc_update_add_kernel<T><<<_LAUNCH_ARGS_1D(num_add, 64)>>>( \
+            cur_num_splats, \
+            num_add, \
+            index_map, \
+            means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(), \
+            quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(), \
+            scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(), \
+            opacs.data_ptr(), g1_opacs.data_ptr(), g2_opacs.data_ptr(), \
+            features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(), \
+            num_sh, features_sh.data_ptr(), (T*)g1_features_sh.data_ptr(), (T*)g2_features_sh.data_ptr(), \
+            bnd_ptr, bps, \
+            bias_correction_steps_ptr)
+    if      (sh_optim_bits == 32) _DENSIFY_MCMC_ADD_LAUNCH(float3, nullptr, false);
+    else if (sh_optim_bits == 8)  _DENSIFY_MCMC_ADD_LAUNCH(short3, sh_quant_bounds.data_ptr(), sh_bounds_per_splat);
+    else if (sh_optim_bits == 4)  _DENSIFY_MCMC_ADD_LAUNCH(uchar3, sh_quant_bounds.data_ptr(), sh_bounds_per_splat);
+    #undef _DENSIFY_MCMC_ADD_LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     // mcmc_update_add: dst[i] = cur_num_splats + i, src[i] = index_map[i]

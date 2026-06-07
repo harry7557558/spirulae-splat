@@ -36,16 +36,16 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
     int64_t cur_num_splats = engine().cur_num_splats;
     int64_t max_num_splats = engine().max_num_splats;
     bool quantize_sh = engine().optim.sh_quantize_enabled();
-    if (quantize_sh && engine().optim.sh_optim_bits != 8) {
-        // Densify's _zero_quant_sh_for_splat writes 2 bytes/cell hardcoded
-        // (8-bit AoS layout). Supporting 4-bit here requires re-templating
-        // the helper + relocate kernels on the byte stride. Reject the
-        // configuration up front so we don't silently corrupt momentum.
+    const int sh_optim_bits = engine().optim.sh_optim_bits;
+    // The 4-bit (joint-nibble) path is wired through both _zero_quant_sh_for_splat
+    // and the relocate/MCMC kernels via uchar3 stride; 32 / 8 / 4 are all
+    // valid here. Anything else (e.g. 16) would silently mis-stride.
+    if (quantize_sh && sh_optim_bits != 8 && sh_optim_bits != 4) {
         throw std::runtime_error(
             "engine_densify_step: SH-optim quantization at "
-            + std::to_string(engine().optim.sh_optim_bits)
-            + " bits is not yet supported alongside densification "
-              "(only 8-bit currently has densify-side zero-encoding).");
+            + std::to_string(sh_optim_bits)
+            + " bits is not supported alongside densification "
+              "(only 4-bit and 8-bit are wired through the dst zero-encoding).");
     }
     // SH VALUE-quant: pick the right buffer (cell-block or FPBO layout) for
     // the codec-aware src->dst copy. We use clipping (no atomic bounds
@@ -213,7 +213,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
             dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
             dv_accum_buf, dv_bias_steps,
-            quantize_sh, num_sh,
+            sh_optim_bits, num_sh,
             dv_sh_quant_bounds, sh_bounds_per_splat,
             dv_sh_value_packed, dv_sh_value_bounds,
             sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
@@ -230,7 +230,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
                 dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
                 dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
                 dv_accum_buf, dv_bias_steps,
-                quantize_sh, num_sh,
+                sh_optim_bits, num_sh,
                 dv_sh_quant_bounds, sh_bounds_per_splat,
                 dv_sh_value_packed, dv_sh_value_bounds,
                 sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
@@ -245,7 +245,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
             dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
             dv_bias_steps,
-            quantize_sh, num_sh,
+            sh_optim_bits, num_sh,
             dv_sh_quant_bounds, sh_bounds_per_splat,
             dv_sh_value_packed, dv_sh_value_bounds,
             sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
@@ -262,7 +262,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
                 dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
                 dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
                 dv_bias_steps,
-                quantize_sh, num_sh,
+                sh_optim_bits, num_sh,
                 dv_sh_quant_bounds, sh_bounds_per_splat,
                 dv_sh_value_packed, dv_sh_value_bounds,
                 sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
