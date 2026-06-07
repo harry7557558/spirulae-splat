@@ -10,7 +10,7 @@ __global__ void bilagrid_depth_patched_sample_backward_v1_kernel_bilagrid(
 #else
 __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
-    const float* __restrict__ bilagrid,  // [N,L,H,W,2]
+    BilagridReader bilagrid,  // [N,L,H,W,2]
 #ifdef PATCHED
     const float* __restrict__ depth,  // [N,m,h,w,1]
 #else
@@ -294,7 +294,7 @@ __global__ void bilagrid_depth_patched_sample_backward_v1_kernel_depth(
 #else
 __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
 #endif
-    const float* __restrict__ bilagrid,  // [N,L,H,W,2]
+    BilagridReader bilagrid,  // [N,L,H,W,2]
 #ifdef PATCHED
     const float* __restrict__ depth,  // [N,m,h,w,1]
 #else

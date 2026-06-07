@@ -21,6 +21,7 @@
 // the user signed off on.
 
 #include "BilagridConfig.cuh"
+#include "BilagridReader.cuh"
 #include "Tensor.h"
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
@@ -32,12 +33,78 @@ namespace cg = cooperative_groups;
 #define WARP_SIZE 32
 #endif
 
-template<int BLOCK_SIZE, int C, bool QUANT, int QUANT_BITS = 8>
+
+// Block-wide min/max reduce of a float2 (lo, hi). Used to compute per-256-cell
+// value-quant bounds (one float2 per CUDA block, mirroring the codec layout).
+template<int BLOCK_SIZE>
+__device__ __forceinline__ float2 _bg_block_reduce_minmax_f2(float2 mm) {
+    cg::thread_block block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+    mm.x = cg::reduce(warp, mm.x, cg::less<float>());
+    mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
+    __shared__ float2 _bg_v_stage[BLOCK_SIZE / WARP_SIZE];
+    __syncthreads();
+    if (threadIdx.x % WARP_SIZE == 0)
+        _bg_v_stage[threadIdx.x / WARP_SIZE] = mm;
+    __syncthreads();
+    mm = (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+        ? _bg_v_stage[threadIdx.x]
+        : float2{1e30f, -1e30f};
+    mm.x = cg::reduce(warp, mm.x, cg::less<float>());
+    mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
+    __syncthreads();
+    if (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+        _bg_v_stage[threadIdx.x] = mm;
+    __syncthreads();
+    return _bg_v_stage[threadIdx.x / WARP_SIZE];
+}
+
+
+// One-shot encode of a fully-populated fp32 grid into the 16-bit packed
+// buffer + per-256-cell float2 bounds. Used during init (identity-init writes
+// fp32; encode runs once; fp32 buffer is then freed). Each CUDA block handles
+// 256 contiguous cells = exactly one codec block.
+template<int BLOCK_SIZE>
+__global__ void bilagrid_encode_q16_kernel(
+    const float* __restrict__ grids,            // [total_cells]
+    uint16_t*    __restrict__ grids_q16,        // [total_cells]
+    float2*      __restrict__ value_bounds,     // [n_blocks]
+    int64_t total_cells
+) {
+    const int64_t idx = (int64_t)blockIdx.x * BLOCK_SIZE + (int64_t)threadIdx.x;
+    const bool inside = idx < total_cells;
+    float v = inside ? grids[idx] : 0.0f;
+    float2 mm = inside ? float2{v, v} : float2{1e30f, -1e30f};
+    mm = _bg_block_reduce_minmax_f2<BLOCK_SIZE>(mm);
+    if (inside) bilagrid_encode_q16(grids_q16, idx, v, mm);
+    if (threadIdx.x == 0) value_bounds[blockIdx.x] = mm;
+}
+
+void bilagrid_encode_q16_launch(
+    const float* grids,
+    uint16_t* grids_q16,
+    float2* value_bounds,
+    int64_t total_cells,
+    cudaStream_t stream
+) {
+    constexpr int BLOCK_SIZE = 256;
+    int blocks = (int)((total_cells + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    if (blocks == 0) return;
+    bilagrid_encode_q16_kernel<BLOCK_SIZE>
+        <<<blocks, BLOCK_SIZE, 0, stream>>>(
+            grids, grids_q16, value_bounds, total_cells);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+template<int BLOCK_SIZE, int C, bool QUANT, int QUANT_BITS, bool VALUE_QUANT>
 __global__ void fused_bilagrid_tv_adam_kernel(
-    // Parameter table -- kept on device permanently. Read AND written here.
-    // Channel-last layout: the C channels of a single (l,h,w) cell are
-    // contiguous, then (cam, l, h, w) sweep outer.
-    float* __restrict__ grids,                  // [N_grids, L, H, W, C]
+    // Parameter table. Channel-last layout: the C channels of a single (l,h,w)
+    // cell are contiguous, then (cam, l, h, w) sweep outer. When !VALUE_QUANT
+    // `grids` is the canonical fp32 store (read+write). When VALUE_QUANT it is
+    // null and the canonical store is `grids_q16` + per-256-cell float2 bounds.
+    float* __restrict__ grids,                  // [N_grids, L, H, W, C] -- null when VALUE_QUANT
+    uint16_t* __restrict__ grids_q16,           // [total_cells]      when VALUE_QUANT
+    float2*   __restrict__ value_bounds,        // [n_blocks]         when VALUE_QUANT
     // Adam moments. float path or QuantizedAdamState path (mutually exclusive).
     float*   __restrict__ g1_f,                 // when !QUANT
     float*   __restrict__ g2_f,                 // when !QUANT
@@ -99,6 +166,15 @@ __global__ void fused_bilagrid_tv_adam_kernel(
         }
     }
 
+    // Grid reader: passes through fp32 or decodes from 16-bit packed bytes per
+    // cell. Uniform dispatch (one ptr-load branch in `operator[]`), no warp
+    // divergence. Across-block TV neighbor reads pick up whatever the other
+    // block has already written this step -- same partial-update semantic as
+    // the existing fp32 path.
+    BilagridReader br;
+    if constexpr (VALUE_QUANT) br = BilagridReader::from_q16(grids_q16, value_bounds);
+    else                       br = BilagridReader(grids);
+
     // ---- TV gradient (inline, same formula as tv_loss_backward_kernel) ----
     // Spatial neighbors at the same channel are stride C apart in channel-last
     // (W neighbor), W*C (H neighbor), H*W*C (L neighbor).
@@ -112,18 +188,18 @@ __global__ void fused_bilagrid_tv_adam_kernel(
 
         const int64_t cam_base = (int64_t)cam * L * H * W * C;
         const int64_t self_off = (((int64_t)l * H + h) * W + w) * C + ci;
-        const float val = grids[cam_base + self_off];
+        const float val = br[cam_base + self_off];
 
         const int64_t sx_step = (int64_t)C;
         const int64_t sy_step = (int64_t)W * C;
         const int64_t sz_step = (int64_t)H * W * C;
 
-        if (w > 0)     tv_g += (val - grids[cam_base + self_off - sx_step]) * sx;
-        if (w < W - 1) tv_g += (val - grids[cam_base + self_off + sx_step]) * sx;
-        if (h > 0)     tv_g += (val - grids[cam_base + self_off - sy_step]) * sy;
-        if (h < H - 1) tv_g += (val - grids[cam_base + self_off + sy_step]) * sy;
-        if (l > 0)     tv_g += (val - grids[cam_base + self_off - sz_step]) * sz;
-        if (l < L - 1) tv_g += (val - grids[cam_base + self_off + sz_step]) * sz;
+        if (w > 0)     tv_g += (val - br[cam_base + self_off - sx_step]) * sx;
+        if (w < W - 1) tv_g += (val - br[cam_base + self_off + sx_step]) * sx;
+        if (h > 0)     tv_g += (val - br[cam_base + self_off - sy_step]) * sy;
+        if (h < H - 1) tv_g += (val - br[cam_base + self_off + sy_step]) * sy;
+        if (l > 0)     tv_g += (val - br[cam_base + self_off - sz_step]) * sz;
+        if (l < L - 1) tv_g += (val - br[cam_base + self_off + sz_step]) * sz;
     }
 
     float v = image_g + tv_g;
@@ -134,7 +210,7 @@ __global__ void fused_bilagrid_tv_adam_kernel(
     const float inv_bc1  = 1.0f / (1.0f - powf(beta1, step_f));
     const float inv_bc2  = 1.0f / (1.0f - powf(beta2, step_f));
 
-    float x = inside ? grids[idx] : 0.0f;
+    float x = inside ? br[idx] : 0.0f;
     float g1, g2;
 
     using QState = QuantizedAdamState<QUANT_BITS, BLOCK_SIZE>;
@@ -159,7 +235,16 @@ __global__ void fused_bilagrid_tv_adam_kernel(
     g2 = beta2 * g2 + (1.0f - beta2) * v * v;
 
     x -= lr * inv_bc1 * g1 / (sqrtf(g2 * inv_bc2) + eps);
-    if (inside) grids[idx] = x;
+    // Value writeback. fp32: direct store. VALUE_QUANT: block-reduce min/max
+    // -> new bound, encode new value against new bound, write bound (thread 0).
+    if constexpr (VALUE_QUANT) {
+        float2 vmm = inside ? float2{x, x} : float2{1e30f, -1e30f};
+        vmm = _bg_block_reduce_minmax_f2<BLOCK_SIZE>(vmm);
+        if (inside) bilagrid_encode_q16(grids_q16, idx, x, vmm);
+        if (threadIdx.x == 0) value_bounds[blockIdx.x] = vmm;
+    } else {
+        if (inside) grids[idx] = x;
+    }
 
     // ---- Writeback (Adam moments) ----------------------------------------
     if constexpr (QUANT) {
@@ -213,10 +298,12 @@ __global__ void fused_bilagrid_tv_adam_kernel(
 // the kernel. `quant_bits` is ignored when `quantize` is false; otherwise it
 // must be 4 or 8.
 void fused_bilagrid_tv_adam(
-    float* grids,
-    float*   g1_f,    float*   g2_f,           // null when quantize
-    uint8_t* packed,                           // null when !quantize (AoS packed)
-    float4*  quant_bounds,                     // null when !quantize
+    float*    grids,                           // null when value_quantize
+    uint16_t* grids_q16,                       // when value_quantize
+    float2*   value_bounds,                    // when value_quantize
+    float*    g1_f,    float*   g2_f,          // null when quantize
+    uint8_t*  packed,                          // null when !quantize (AoS packed)
+    float4*   quant_bounds,                    // null when !quantize
     const float* image_grad,
     const int*   cam_indices,
     int N_grids, int C_batch, int C,
@@ -226,6 +313,7 @@ void fused_bilagrid_tv_adam(
     int32_t adam_step,
     bool quantize,
     int  quant_bits,                           // 4 or 8 -- only used when quantize=true
+    bool value_quantize,                       // when true: read/write 16-bit packed grid + bounds
     cudaStream_t stream
 ) {
     constexpr int BLOCK_SIZE = 256;
@@ -234,39 +322,36 @@ void fused_bilagrid_tv_adam(
     int blocks = (int)((total_cells + BLOCK_SIZE - 1) / BLOCK_SIZE);
     if (blocks == 0) return;
 
-    #define LAUNCH(CC, QQ, BB) \
-        fused_bilagrid_tv_adam_kernel<BLOCK_SIZE, CC, QQ, BB> \
+    #define LAUNCH(CC, QQ, BB, VQ) \
+        fused_bilagrid_tv_adam_kernel<BLOCK_SIZE, CC, QQ, BB, VQ> \
             <<<blocks, BLOCK_SIZE, 0, stream>>>( \
-                grids, g1_f, g2_f, packed, quant_bounds, \
+                grids, grids_q16, value_bounds, \
+                g1_f, g2_f, packed, quant_bounds, \
                 image_grad, cam_indices, \
                 N_grids, C_batch, L, H, W, \
                 lr, tv_weight, adam_step)
-    #define LAUNCH_NOQUANT(CC) \
+    #define LAUNCH_C(CC, QQ, BB, VQ) \
         do { switch (CC) { \
-            case 12: LAUNCH(12, false, 8); break; \
-            case 9:  LAUNCH(9,  false, 8); break; \
-            case 3:  LAUNCH(3,  false, 8); break; \
-            case 2:  LAUNCH(2,  false, 8); break; \
-        } } while (0)
-    #define LAUNCH_QUANT_BITS(CC, BB) \
-        do { switch (CC) { \
-            case 12: LAUNCH(12, true, BB); break; \
-            case 9:  LAUNCH(9,  true, BB); break; \
-            case 3:  LAUNCH(3,  true, BB); break; \
-            case 2:  LAUNCH(2,  true, BB); break; \
+            case 12: LAUNCH(12, QQ, BB, VQ); break; \
+            case 9:  LAUNCH(9,  QQ, BB, VQ); break; \
+            case 3:  LAUNCH(3,  QQ, BB, VQ); break; \
+            case 2:  LAUNCH(2,  QQ, BB, VQ); break; \
         } } while (0)
 
-    if (!quantize) {
-        LAUNCH_NOQUANT(C);
-    } else if (quant_bits == 4) {
-        LAUNCH_QUANT_BITS(C, 4);
+    // Adam-state quant: 32 -> QUANT=false; 4 -> QUANT=true, BITS=4; else BITS=8.
+    // Value quant: 32 -> VALUE_QUANT=false; else VALUE_QUANT=true.
+    const int qq = quantize ? (quant_bits == 4 ? 4 : 8) : 0;
+    if (!value_quantize) {
+        if (qq == 0)      LAUNCH_C(C, false, 8, false);
+        else if (qq == 4) LAUNCH_C(C, true,  4, false);
+        else              LAUNCH_C(C, true,  8, false);
     } else {
-        // Default to 8-bit (legacy behavior).
-        LAUNCH_QUANT_BITS(C, 8);
+        if (qq == 0)      LAUNCH_C(C, false, 8, true);
+        else if (qq == 4) LAUNCH_C(C, true,  4, true);
+        else              LAUNCH_C(C, true,  8, true);
     }
     #undef LAUNCH
-    #undef LAUNCH_NOQUANT
-    #undef LAUNCH_QUANT_BITS
+    #undef LAUNCH_C
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -289,9 +374,11 @@ void fused_bilagrid_tv_adam(
 // min/max).
 // ============================================================================
 
-template<int BLOCK_SIZE, int C, bool QUANT, int QUANT_BITS = 8>
+template<int BLOCK_SIZE, int C, bool QUANT, int QUANT_BITS, bool VALUE_QUANT>
 __global__ void fused_bilagrid_tv_adagrad_kernel(
-    float* __restrict__ grids,                  // [N_grids, L, H, W, C]
+    float* __restrict__ grids,                  // null when VALUE_QUANT
+    uint16_t* __restrict__ grids_q16,           // when VALUE_QUANT
+    float2*   __restrict__ value_bounds,        // when VALUE_QUANT
     float*   __restrict__ accum_f,              // when !QUANT
     uint8_t* __restrict__ packed,               // when QUANT
     float2*  __restrict__ quant_bounds,         // [n_blocks], when QUANT
@@ -338,6 +425,11 @@ __global__ void fused_bilagrid_tv_adagrad_kernel(
         }
     }
 
+    // Grid reader: see Adam kernel comment.
+    BilagridReader br;
+    if constexpr (VALUE_QUANT) br = BilagridReader::from_q16(grids_q16, value_bounds);
+    else                       br = BilagridReader(grids);
+
     // ---- TV gradient (inline, same formula as Adam kernel) --------------
     float tv_g = 0.0f;
     if (inside && tv_weight > 0.0f) {
@@ -348,25 +440,25 @@ __global__ void fused_bilagrid_tv_adagrad_kernel(
 
         const int64_t cam_base = (int64_t)cam * L * H * W * C;
         const int64_t self_off = (((int64_t)l * H + h) * W + w) * C + ci;
-        const float val = grids[cam_base + self_off];
+        const float val = br[cam_base + self_off];
 
         const int64_t sx_step = (int64_t)C;
         const int64_t sy_step = (int64_t)W * C;
         const int64_t sz_step = (int64_t)H * W * C;
 
-        if (w > 0)     tv_g += (val - grids[cam_base + self_off - sx_step]) * sx;
-        if (w < W - 1) tv_g += (val - grids[cam_base + self_off + sx_step]) * sx;
-        if (h > 0)     tv_g += (val - grids[cam_base + self_off - sy_step]) * sy;
-        if (h < H - 1) tv_g += (val - grids[cam_base + self_off + sy_step]) * sy;
-        if (l > 0)     tv_g += (val - grids[cam_base + self_off - sz_step]) * sz;
-        if (l < L - 1) tv_g += (val - grids[cam_base + self_off + sz_step]) * sz;
+        if (w > 0)     tv_g += (val - br[cam_base + self_off - sx_step]) * sx;
+        if (w < W - 1) tv_g += (val - br[cam_base + self_off + sx_step]) * sx;
+        if (h > 0)     tv_g += (val - br[cam_base + self_off - sy_step]) * sy;
+        if (h < H - 1) tv_g += (val - br[cam_base + self_off + sy_step]) * sy;
+        if (l > 0)     tv_g += (val - br[cam_base + self_off - sz_step]) * sz;
+        if (l < L - 1) tv_g += (val - br[cam_base + self_off + sz_step]) * sz;
     }
 
     float v = image_g + tv_g;
     if (!isfinite(v)) v = 0.0f;
 
     // ---- AdaGrad update --------------------------------------------------
-    float x = inside ? grids[idx] : 0.0f;
+    float x = inside ? br[idx] : 0.0f;
     float accum;
 
     using QTL = QuantizedTensorLog<QUANT_BITS, BLOCK_SIZE>;
@@ -380,7 +472,15 @@ __global__ void fused_bilagrid_tv_adagrad_kernel(
 
     accum += v * v;
     x -= lr * v / (sqrtf(accum) + eps);
-    if (inside) grids[idx] = x;
+    // Value writeback. fp32: direct store. VALUE_QUANT: block-reduce + encode.
+    if constexpr (VALUE_QUANT) {
+        float2 vmm = inside ? float2{x, x} : float2{1e30f, -1e30f};
+        vmm = _bg_block_reduce_minmax_f2<BLOCK_SIZE>(vmm);
+        if (inside) bilagrid_encode_q16(grids_q16, idx, x, vmm);
+        if (threadIdx.x == 0) value_bounds[blockIdx.x] = vmm;
+    } else {
+        if (inside) grids[idx] = x;
+    }
 
     // ---- Writeback -------------------------------------------------------
     if constexpr (QUANT) {
@@ -431,10 +531,12 @@ __global__ void fused_bilagrid_tv_adagrad_kernel(
 
 
 void fused_bilagrid_tv_adagrad(
-    float* grids,
-    float*   accum_f,                          // null when quantize
-    uint8_t* packed,                           // null when !quantize
-    float2*  quant_bounds,                     // null when !quantize
+    float*    grids,                           // null when value_quantize
+    uint16_t* grids_q16,                       // when value_quantize
+    float2*   value_bounds,                    // when value_quantize
+    float*    accum_f,                         // null when quantize
+    uint8_t*  packed,                          // null when !quantize
+    float2*   quant_bounds,                    // null when !quantize
     const float* image_grad,
     const int*   cam_indices,
     int N_grids, int C_batch, int C,
@@ -443,6 +545,7 @@ void fused_bilagrid_tv_adagrad(
     float tv_weight,
     bool quantize,
     int  quant_bits,                           // 4 or 8 -- only used when quantize=true
+    bool value_quantize,
     cudaStream_t stream
 ) {
     constexpr int BLOCK_SIZE = 256;
@@ -451,37 +554,33 @@ void fused_bilagrid_tv_adagrad(
     int blocks = (int)((total_cells + BLOCK_SIZE - 1) / BLOCK_SIZE);
     if (blocks == 0) return;
 
-    #define LAUNCH(CC, QQ, BB) \
-        fused_bilagrid_tv_adagrad_kernel<BLOCK_SIZE, CC, QQ, BB> \
+    #define LAUNCH(CC, QQ, BB, VQ) \
+        fused_bilagrid_tv_adagrad_kernel<BLOCK_SIZE, CC, QQ, BB, VQ> \
             <<<blocks, BLOCK_SIZE, 0, stream>>>( \
-                grids, accum_f, packed, quant_bounds, \
+                grids, grids_q16, value_bounds, \
+                accum_f, packed, quant_bounds, \
                 image_grad, cam_indices, \
                 N_grids, C_batch, L, H, W, \
                 lr, tv_weight)
-    #define LAUNCH_NOQUANT(CC) \
+    #define LAUNCH_C(CC, QQ, BB, VQ) \
         do { switch (CC) { \
-            case 12: LAUNCH(12, false, 8); break; \
-            case 9:  LAUNCH(9,  false, 8); break; \
-            case 3:  LAUNCH(3,  false, 8); break; \
-            case 2:  LAUNCH(2,  false, 8); break; \
-        } } while (0)
-    #define LAUNCH_QUANT_BITS(CC, BB) \
-        do { switch (CC) { \
-            case 12: LAUNCH(12, true, BB); break; \
-            case 9:  LAUNCH(9,  true, BB); break; \
-            case 3:  LAUNCH(3,  true, BB); break; \
-            case 2:  LAUNCH(2,  true, BB); break; \
+            case 12: LAUNCH(12, QQ, BB, VQ); break; \
+            case 9:  LAUNCH(9,  QQ, BB, VQ); break; \
+            case 3:  LAUNCH(3,  QQ, BB, VQ); break; \
+            case 2:  LAUNCH(2,  QQ, BB, VQ); break; \
         } } while (0)
 
-    if (!quantize) {
-        LAUNCH_NOQUANT(C);
-    } else if (quant_bits == 4) {
-        LAUNCH_QUANT_BITS(C, 4);
+    const int qq = quantize ? (quant_bits == 4 ? 4 : 8) : 0;
+    if (!value_quantize) {
+        if (qq == 0)      LAUNCH_C(C, false, 8, false);
+        else if (qq == 4) LAUNCH_C(C, true,  4, false);
+        else              LAUNCH_C(C, true,  8, false);
     } else {
-        LAUNCH_QUANT_BITS(C, 8);
+        if (qq == 0)      LAUNCH_C(C, false, 8, true);
+        else if (qq == 4) LAUNCH_C(C, true,  4, true);
+        else              LAUNCH_C(C, true,  8, true);
     }
     #undef LAUNCH
-    #undef LAUNCH_NOQUANT
-    #undef LAUNCH_QUANT_BITS
+    #undef LAUNCH_C
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

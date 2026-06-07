@@ -14,7 +14,7 @@ __global__ void bilagrid_ppisp_patched_sample_backward_v1_kernel_bilagrid(
 #else
 __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
-    const float* __restrict__ bilagrid,  // [N,L,H,W,9]
+    BilagridReader bilagrid,  // [N,L,H,W,9]
 #ifdef PATCHED
     const float* __restrict__ rgb_in,  // [N,m,h,w,3]
     const float* __restrict__ v_rgb_out,  // [N,m,h,w,3]
@@ -311,7 +311,7 @@ __global__ void bilagrid_ppisp_patched_sample_backward_v1_kernel_rgb(
 #else
 __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_rgb(
 #endif
-    const float* __restrict__ bilagrid,  // [N,L,H,W,9]
+    BilagridReader bilagrid,  // [N,L,H,W,9]
 #ifdef PATCHED
     const float* __restrict__ rgb_in,  // [N,m,h,w,3]
     const float* __restrict__ v_rgb_out,  // [N,m,h,w,3]

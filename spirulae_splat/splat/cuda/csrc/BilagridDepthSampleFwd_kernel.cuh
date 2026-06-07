@@ -6,7 +6,7 @@ __global__ void bilagrid_depth_patched_sample_forward_kernel(
 #else
 __global__ void bilagrid_depth_uniform_sample_forward_kernel(
 #endif
-    const float* __restrict__ bilagrid, // [N,L,H,W,2]
+    BilagridReader bilagrid, // [N,L,H,W,2]
 #ifdef PATCHED
     const float* __restrict__ depth,  // [N,m,h,w,1]
 #else

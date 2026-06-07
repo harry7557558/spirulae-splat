@@ -77,38 +77,45 @@ __constant__ float cGauss[HALO+1] = {
 // Utility: Safe pixel fetch w/ zero padding
 // ------------------------------------------
 __device__ __forceinline__ float3 get_pix_value(
-    const float3* img, 
+    const float3* img,
     int b, int y, int x,
     int H, int W
 ) {
-    if (x < 0 || x >= W || y < 0 || y >= H) {
+    if ((unsigned)x >= (unsigned)W || (unsigned)y >= (unsigned)H) {
         return make_float3(0);
     }
     return img[b * H * W + y * W + x];
 }
 
 __device__ __forceinline__ float get_pix_value(
-    const float3* img, 
+    const float3* img,
     int b, int y, int x, int c,
     int H, int W
 ) {
-    if (x < 0 || x >= W || y < 0 || y >= H) {
+    if ((unsigned)x >= (unsigned)W || (unsigned)y >= (unsigned)H) {
         return 0.0f;
     }
     return ((float*)img)[(b * H * W + y * W + x) * 3 + c];
 }
 
 __device__ __forceinline__ bool get_pix_value(
-    const bool* img, 
+    const bool* img,
     int b, int y, int x,
-    int H, int W
+    int B_mask, int H_mask, int W_mask
 ) {
     if (img == nullptr)
         return true;  // not masked
-    if (x < 0 || x >= W || y < 0 || y >= H) {
+    // Mask buffer's [B, H, W] may differ from img1's (e.g. a single
+    // smaller-resolution scene mask broadcast across renders, or per-scene
+    // mask uploaded at GT image dims that don't match the render dims).
+    // Without this clamp the read at any out-of-range (b, y, x) goes past
+    // the mask buffer end. Use unsigned compare to fold the negative checks.
+    if ((unsigned)b >= (unsigned)B_mask ||
+        (unsigned)x >= (unsigned)W_mask ||
+        (unsigned)y >= (unsigned)H_mask) {
         return true;  // to not mess up metrics
     }
-    return img[b * H * W + y * W + x];
+    return img[b * H_mask * W_mask + y * W_mask + x];
 }
 
 // ------------------------------------------
@@ -556,7 +563,8 @@ __global__ void memory_efficient_ssim_backward_kernel(
     int B, int H, int W,
     const float3* __restrict__ img1,   // [B, H, W, 3]
     const float3* __restrict__ img2,   // [B, H, W, 3]
-    const bool* __restrict__ masks,  // [B, H, W, 1]
+    const bool* __restrict__ masks,  // [B_mask, H_mask, W_mask, 1]
+    int B_mask, int H_mask, int W_mask,
     const float dL_dmap, // [1]
     float3* __restrict__ dL_dimg1,      // [B, H, W, 3]
     float* __restrict__ out_ssim_val,
@@ -622,7 +630,7 @@ __global__ void memory_efficient_ssim_backward_kernel(
 
                 float X = get_pix_value(img1, bIdx, gy, gx, ci, H, W);
                 float Y = get_pix_value(img2, bIdx, gy, gx, ci, H, W);
-                bool mask = get_pix_value(masks, bIdx, gy, gx, H, W);
+                bool mask = get_pix_value(masks, bIdx, gy, gx, B_mask, H_mask, W_mask);
                 if (!mask)
                     // X = Y = 0.5f;
                     X = Y;
@@ -858,7 +866,7 @@ __global__ void memory_efficient_ssim_backward_kernel(
         // final accumulation
         float p1 = get_pix_value(img1, bIdx, pix_y, pix_x, ci, H, W);
         float p2 = get_pix_value(img2, bIdx, pix_y, pix_x, ci, H, W);
-        bool mask = get_pix_value(masks, bIdx, pix_y, pix_x, H, W);
+        bool mask = get_pix_value(masks, bIdx, pix_y, pix_x, B_mask, H_mask, W_mask);
         float dL_dpix = sum0 + (2.f * p1) * sum1 + (p2) * sum2;
         if (!mask) {
             dL_dpix = 0.0f;
@@ -989,6 +997,7 @@ void fused_ssim_backward(
             (float3*)std::get<0>(img1),
             (float3*)std::get<0>(img2),
             nullptr,
+            /*B_mask=*/0, /*H_mask=*/0, /*W_mask=*/0,
             dL_dmap,
             (float3*)std::get<0>(dL_dimg1),
             nullptr, 1.0f, nullptr, false
@@ -1012,12 +1021,27 @@ static inline void _launch_fused_ssim_inplace(
 ) {
     const auto& s = std::get<2>(img1);
     int B = s[0], H = s[1], W = s[2];
+    // Mask's [B, H, W] may differ from img1's (e.g. broadcast mask or
+    // GT-resolution mask paired with renders at a different resolution).
+    // Pass the mask's own dims so the kernel's bounds check stays inside
+    // the mask buffer regardless of the per-pixel-loss image dims.
+    bool* mask_ptr = _nullable_b(mask);
+    int B_mask = 0, H_mask = 0, W_mask = 0;
+    if (mask_ptr != nullptr) {
+        const auto& ms = std::get<2>(mask);
+        if (ms.size() >= 3) {
+            B_mask = (int)ms[0];
+            H_mask = (int)ms[1];
+            W_mask = (int)ms[2];
+        }
+    }
 
     memory_efficient_ssim_backward_kernel<true><<<_LAUNCH_ARGS_3D(W, H, B, BLOCK_X_ME, BLOCK_Y_ME, 1)>>>(
         B, H, W,
         (float3*)std::get<0>(img1),
         (float3*)std::get<0>(img2),
-        _nullable_b(mask),
+        mask_ptr,
+        B_mask, H_mask, W_mask,
         dL_dmap,
         (float3*)std::get<0>(dL_dimg1),
         ssim_buf,

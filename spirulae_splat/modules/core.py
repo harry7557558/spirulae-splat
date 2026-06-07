@@ -304,42 +304,46 @@ class Renderer:
 
     def engine_init_bilagrid(self, n_grids, rgb_type=None, rgb_LHW=None,
                               depth_LHW=None, normal_LHW=None,
-                              rgb_optim_bits=32,
-                              geometry_optim_bits=32,
                               use_adagrad=False):
         """One-time allocation of C++ bilagrid storage. Pass `None` for any type
         to leave it disabled. Must be called after set_data_3dgs (i.e., after
         engine_forward has been invoked at least once).
 
-        rgb_optim_bits / geometry_optim_bits: bit depth for optimizer-state
-        quantization. 32 = no quantization (fp32 g1/g2 for Adam, fp32 accum for
-        AdaGrad). 4 or 8 = packed QuantizedAdamState<BITS, 256> (Adam) or
-        QuantizedTensorLog<BITS, 256> (AdaGrad). The RGB grid is much larger
-        than the geometry grids in photogrammetry-scale datasets, so the depth
-        is configurable per-axis.
+        Bilagrid bit depths are coupled to `self.quantization_level`:
+            level 0: 32-bit grids + fp32 optim state.
+            level 1: 16-bit linearly-quantized grids (QuantizedTensor<16, 256>
+                     packed bytes + per-256-cell float2 bounds) AND 8x2-bit
+                     packed optim state (QuantizedAdamState<8, 256> / Adam,
+                     QuantizedTensorLog<8, 256> / AdaGrad).
+        Both axes apply uniformly across RGB / depth / normal -- the bilagrid
+        path is small enough that per-type tuning doesn't pay off.
 
         use_adagrad: select AdaGrad over Adam for this bilagrid. Mirrored to
-        all three sub-types (RGB / depth / normal) in this call — bilagrids
+        all three sub-types (RGB / depth / normal) in this call -- bilagrids
         share the optimizer choice on the Python side."""
-        for label, b in (("rgb", rgb_optim_bits), ("geometry", geometry_optim_bits)):
-            if b not in (32, 8, 4):
-                raise ValueError(
-                    f"engine_init_bilagrid: {label}_optim_bits must be 32 (off), "
-                    f"4, or 8; got {b}")
+        if self.quantization_level == 0:
+            optim_bits = 32
+            value_bits = 32
+        else:
+            optim_bits = 8
+            value_bits = 16
         if rgb_type is not None and rgb_LHW is not None:
             L, H, W = rgb_LHW
             _C.engine_init_bilagrid_rgb(n_grids, rgb_type, L, H, W,
-                                        int(rgb_optim_bits),
+                                        int(optim_bits),
+                                        int(value_bits),
                                         bool(use_adagrad))
         if depth_LHW is not None:
             L, H, W = depth_LHW
             _C.engine_init_bilagrid_depth(n_grids, L, H, W,
-                                          int(geometry_optim_bits),
+                                          int(optim_bits),
+                                          int(value_bits),
                                           bool(use_adagrad))
         if normal_LHW is not None:
             L, H, W = normal_LHW
             _C.engine_init_bilagrid_normal(n_grids, L, H, W,
-                                           int(geometry_optim_bits),
+                                           int(optim_bits),
+                                           int(value_bits),
                                            bool(use_adagrad))
 
     def engine_bilagrid_forward(self, cam_indices):

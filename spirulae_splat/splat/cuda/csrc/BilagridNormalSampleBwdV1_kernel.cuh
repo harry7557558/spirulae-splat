@@ -12,7 +12,7 @@ __global__ void bilagrid_normal_patched_sample_backward_v1_kernel_bilagrid(
 #else
 __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
-    const float* __restrict__ bilagrid,  // [N,L,H,W,3]
+    BilagridReader bilagrid,  // [N,L,H,W,3]
 #ifdef PATCHED
     const float* __restrict__ normal_in,  // [N,m,h,w,3]
     const float* __restrict__ v_normal_out,  // [N,m,h,w,3]
@@ -292,7 +292,7 @@ __global__ void bilagrid_normal_patched_sample_backward_v1_kernel_normal(
 #else
 __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_normal(
 #endif
-    const float* __restrict__ bilagrid,  // [N,L,H,W,3]
+    BilagridReader bilagrid,  // [N,L,H,W,3]
 #ifdef PATCHED
     const float* __restrict__ normal_in,  // [N,m,h,w,3]
     const float* __restrict__ v_normal_out,  // [N,m,h,w,3]

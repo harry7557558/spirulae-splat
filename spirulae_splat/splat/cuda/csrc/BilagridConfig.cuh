@@ -28,4 +28,6 @@ do {                                                                \
 } while (0)
 #endif
 
+#include "BilagridReader.cuh"
+
 #endif  // __CUDACC__

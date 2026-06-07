@@ -532,6 +532,14 @@ public:
         _numel_0 = n0; _numel_1 = n1; _numel_2 = n2; _numel_3 = n3; _numel_4 = n4;
     }
 
+    // Shape-only descriptor: keep dims, drop the pool slot. Used when a
+    // packed/quantized buffer takes over as the canonical store but downstream
+    // code still queries size<>() for layout.
+    void set_shape_no_alloc(int64_t n0, int64_t n1, int64_t n2, int64_t n3, int64_t n4) {
+        _data_ptr = nullptr;
+        _numel_0 = n0; _numel_1 = n1; _numel_2 = n2; _numel_3 = n3; _numel_4 = n4;
+    }
+
     // fill zero
     void zero() {
         if (_data_ptr)

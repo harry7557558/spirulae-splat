@@ -7,7 +7,7 @@ using namespace bilagrid_ppisp;
 
 #ifdef PACKED
 __global__ void bilagrid_ppisp_packed_sample_forward_kernel(
-    const float* __restrict__ bilagrid, // [N,L,H,W,9]
+    BilagridReader bilagrid, // [N,L,H,W,9]
     const int64_t* __restrict__ image_indices,  // [nnz]
     const float* __restrict__ coords,  // [nnz,2]
     const float* __restrict__ rgb_in,  // [nnz,3]
@@ -16,7 +16,7 @@ __global__ void bilagrid_ppisp_packed_sample_forward_kernel(
     int nnz
 #else
 __global__ void bilagrid_ppisp_sample_forward_kernel(
-    const float* __restrict__ bilagrid, // [N,L,H,W,9]
+    BilagridReader bilagrid, // [N,L,H,W,9]
     const float* __restrict__ coords,  // [N,m,h,w,2]
     const float* __restrict__ rgb_in,  // [N,m,h,w,3]
     float* __restrict__ rgb_out,  // [N,m,h,w,3]

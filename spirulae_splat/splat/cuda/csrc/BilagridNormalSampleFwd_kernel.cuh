@@ -8,7 +8,7 @@ __global__ void bilagrid_normal_patched_sample_forward_kernel(
 #else
 __global__ void bilagrid_normal_uniform_sample_forward_kernel(
 #endif
-    const float* __restrict__ bilagrid, // [N,L,H,W,3]
+    BilagridReader bilagrid, // [N,L,H,W,3]
 #ifdef PATCHED
     const float* __restrict__ normal_in,  // [N,m,h,w,3]
     float* __restrict__ normal_out,  // [N,m,h,w,3]

@@ -150,7 +150,7 @@ def bench_360_v2(preset: str, path_to_360_v2: Path, output_prefix: Path,
 
     scenes = [
         # ("bicycle", 4),
-        # ("garden", 4),
+        ("garden", 4),
         # ("stump", 4),
         # ("bonsai", 2),
         # ("counter", 2),

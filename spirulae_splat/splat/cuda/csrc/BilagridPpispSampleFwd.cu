@@ -5,7 +5,7 @@
 
 
 void bilagrid_ppisp_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* coords,
     const float* rgb,
     float* output,
@@ -24,7 +24,7 @@ void bilagrid_ppisp_sample_forward(
 }
 
 void bilagrid_ppisp_packed_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const int64_t* image_indices,
     const float* coords,
     const float* rgb,

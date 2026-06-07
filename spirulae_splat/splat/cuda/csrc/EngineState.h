@@ -207,8 +207,15 @@ struct BilagridRGB {
     // Storage holders above are typed `<8, 256>` so allocation is pessimistic;
     // runtime dispatch in the kernel launcher picks the codec template.
     int         optim_bits         = 32;
+    // Value (grid-parameter) quantization. 32 = fp32 grids (canonical), 16 =
+    // 16-bit linear-quant packed buffer + per-256-cell float2 bounds (the
+    // canonical store; `grids` is left empty). Samplers read through
+    // BilagridReader which dispatches on the populated buffer.
+    int         value_bits         = 32;
+    QuantizedTensor<16, 256>   grids_quant;
     bool        use_adagrad        = false;
     bool quantize_optim() const { return optim_bits != 32; }
+    bool quantize_value() const { return value_bits != 32; }
     bool        enabled            = false;
     bool        optim_initialized  = false;
     DeviceTensor3D<float3>     fwd_pre;            // pre-bilagrid render
@@ -235,12 +242,15 @@ struct BilagridDepth {
     DeviceTensor5D<float>      accum_f;
     QuantizedTensorLog<8, 256> adagrad_quant;
     int         optim_bits         = 32;
+    int         value_bits         = 32;
+    QuantizedTensor<16, 256>   grids_quant;
     bool        use_adagrad        = false;
     bool        enabled            = false;
     bool        optim_initialized  = false;
     DeviceTensor3D<float>      fwd_pre;
     DeviceVector<float>        scalars;            // per-camera median quantile
     bool quantize_optim() const { return optim_bits != 32; }
+    bool quantize_value() const { return value_bits != 32; }
 };
 struct BilagridNormal {
     DeviceTensor5D<float>      grids;
@@ -250,11 +260,14 @@ struct BilagridNormal {
     DeviceTensor5D<float>      accum_f;
     QuantizedTensorLog<8, 256> adagrad_quant;
     int         optim_bits         = 32;
+    int         value_bits         = 32;
+    QuantizedTensor<16, 256>   grids_quant;
     bool        use_adagrad        = false;
     bool        enabled            = false;
     bool        optim_initialized  = false;
     DeviceTensor3D<float3>     fwd_pre;
     bool quantize_optim() const { return optim_bits != 32; }
+    bool quantize_value() const { return value_bits != 32; }
 };
 
 // Background blending. Applied BEFORE bilagrid/PPISP. Two modes:

@@ -36,7 +36,7 @@ __global__ void bilagrid_patched_sample_backward_v2_kernel(
 #else
 __global__ void bilagrid_uniform_sample_backward_v2_kernel(
 #endif
-    const float* __restrict__ bilagrid,  // [N,L,H,W,12]
+    BilagridReader bilagrid,  // [N,L,H,W,12]
 #ifdef PATCHED
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     const float* __restrict__ v_output,  // [N,m,h,w,3]
@@ -194,7 +194,9 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
             float r_coeff = (si==0 ? sr : si==1 ? sg : si==2 ? sb : 1.f);
             float gout = (di==0 ? dr : di==1 ? dg : db);
 
-            float v = __ldg(&bilagrid[bidx]);
+            // BilagridReader returns by value; can't take address for __ldg.
+            // The reader dispatches to fp32 passthrough or 16-bit decode.
+            float v = bilagrid[bidx];
 
             if (si < 3)
                 (si == 0 ? vr : si == 1 ? vg : vb) += v * f * gout;

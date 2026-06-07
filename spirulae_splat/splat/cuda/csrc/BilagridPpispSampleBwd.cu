@@ -14,7 +14,7 @@
 
 
 void bilagrid_ppisp_sample_backward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* coords,
     const float* rgb,
     const float* v_output,
@@ -50,7 +50,7 @@ void bilagrid_ppisp_sample_backward(
 
 
 void bilagrid_ppisp_packed_sample_backward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const int64_t* image_indices,
     const float* coords,
     const float* rgb,

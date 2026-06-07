@@ -249,7 +249,7 @@ __global__ void bilagrid_patched_sample_backward_v1_kernel_rgb(
 #else
 __global__ void bilagrid_uniform_sample_backward_v1_kernel_rgb(
 #endif
-    const float* __restrict__ bilagrid,  // [N_grids,L,H,W,12] or [N,L,H,W,12]
+    BilagridReader bilagrid,  // [N_grids,L,H,W,12] or [N,L,H,W,12]
 #ifdef PATCHED
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     const float* __restrict__ v_output,  // [N,m,h,w,3]

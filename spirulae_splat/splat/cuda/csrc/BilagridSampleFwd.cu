@@ -2,7 +2,7 @@
 
 
 __global__ void bilagrid_sample_forward_kernel(
-    const float* __restrict__ bilagrid, // [N,L,H,W,12]
+    BilagridReader bilagrid, // [N,L,H,W,12]
     const float* __restrict__ coords,  // [N,m,h,w,2]
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     float* __restrict__ output,  // [N,m,h,w,3]
@@ -102,7 +102,7 @@ __global__ void bilagrid_sample_forward_kernel(
 
 
 void bilagrid_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* coords,
     const float* rgb,
     float* output,

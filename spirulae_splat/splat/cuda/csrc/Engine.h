@@ -140,11 +140,11 @@ void engine_optim_step(int step, const OptimConfig& cfg);
 // use_adagrad: if true, the bilagrid uses AdaGrad (lr_decay=0,
 // weight_decay=0, initial_accumulator_value=0, eps=1e-15) instead of Adam.
 void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W,
-                              int optim_bits, bool use_adagrad);
+                              int optim_bits, int value_bits, bool use_adagrad);
 void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
-                                int optim_bits, bool use_adagrad);
+                                int optim_bits, int value_bits, bool use_adagrad);
 void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
-                                 int optim_bits, bool use_adagrad);
+                                 int optim_bits, int value_bits, bool use_adagrad);
 
 // Apply forward bilagrid for the current batch. cam_indices is a [C_batch]
 // int32 tensor of per-image camera-table indices; pass null/empty for identity

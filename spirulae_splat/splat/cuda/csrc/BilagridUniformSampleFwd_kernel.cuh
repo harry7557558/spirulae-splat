@@ -6,7 +6,7 @@ __global__ void bilagrid_patched_sample_forward_kernel(
 #else
 __global__ void bilagrid_uniform_sample_forward_kernel(
 #endif
-    const float* __restrict__ bilagrid, // [N_grids,L,H,W,12] or [N,L,H,W,12]
+    BilagridReader bilagrid, // [N_grids,L,H,W,12] or [N,L,H,W,12]
 #ifdef PATCHED
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     float* __restrict__ output,  // [N,m,h,w,3]

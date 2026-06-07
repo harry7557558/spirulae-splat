@@ -7,7 +7,7 @@ __global__ void bilagrid_sample_backward_kernel_cg(
 #else
 __global__ void bilagrid_sample_backward_kernel(
 #endif
-    const float* __restrict__ bilagrid,  // [N,L,H,W,12]
+    BilagridReader bilagrid,  // [N,L,H,W,12]
     const float* __restrict__ coords,  // [N,m,h,w,2]
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     const float* __restrict__ v_output,  // [N,m,h,w,3]

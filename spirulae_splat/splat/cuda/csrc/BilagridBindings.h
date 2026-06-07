@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "Tensor.h"
+#include "BilagridReader.cuh"
 
 
 // ============================================================================
@@ -16,7 +17,7 @@
 // ============================================================================
 
 void bilagrid_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* coords,
     const float* rgb,
     float* output,
@@ -26,7 +27,7 @@ void bilagrid_sample_forward(
 );
 
 void bilagrid_sample_backward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* coords,
     const float* rgb,
     const float* v_output,
@@ -39,7 +40,7 @@ void bilagrid_sample_backward(
 );
 
 void bilagrid_uniform_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     float* output,
     int N, int L, int H, int W,
@@ -49,7 +50,7 @@ void bilagrid_uniform_sample_forward(
 );
 
 void bilagrid_patched_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     float* output,
@@ -59,7 +60,7 @@ void bilagrid_patched_sample_forward(
 );
 
 void bilagrid_uniform_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const float* v_output,
     float* v_bilagrid,
@@ -73,7 +74,7 @@ void bilagrid_uniform_sample_backward_v1(
 );
 
 void bilagrid_patched_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     const float* v_output,
@@ -88,7 +89,7 @@ void bilagrid_patched_sample_backward_v1(
 );
 
 void bilagrid_uniform_sample_backward_v2(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const float* v_output,
     float* v_bilagrid,
@@ -99,7 +100,7 @@ void bilagrid_uniform_sample_backward_v2(
 );
 
 void bilagrid_patched_sample_backward_v2(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     const float* v_output,
@@ -111,7 +112,7 @@ void bilagrid_patched_sample_backward_v2(
 );
 
 void bilagrid_ppisp_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* coords,
     const float* rgb,
     float* output,
@@ -121,7 +122,7 @@ void bilagrid_ppisp_sample_forward(
 );
 
 void bilagrid_ppisp_sample_backward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* coords,
     const float* rgb,
     const float* v_output,
@@ -134,7 +135,7 @@ void bilagrid_ppisp_sample_backward(
 );
 
 void bilagrid_ppisp_packed_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const int64_t* image_indices,
     const float* coords,
     const float* rgb,
@@ -145,7 +146,7 @@ void bilagrid_ppisp_packed_sample_forward(
 );
 
 void bilagrid_ppisp_packed_sample_backward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const int64_t* image_indices,
     const float* coords,
     const float* rgb,
@@ -159,7 +160,7 @@ void bilagrid_ppisp_packed_sample_backward(
 );
 
 void bilagrid_ppisp_uniform_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     float* output,
     int N, int L, int H, int W,
@@ -169,7 +170,7 @@ void bilagrid_ppisp_uniform_sample_forward(
 );
 
 void bilagrid_ppisp_patched_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     float* output,
@@ -179,7 +180,7 @@ void bilagrid_ppisp_patched_sample_forward(
 );
 
 void bilagrid_ppisp_uniform_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const float* v_output,
     float* v_bilagrid,
@@ -193,7 +194,7 @@ void bilagrid_ppisp_uniform_sample_backward_v1(
 );
 
 void bilagrid_ppisp_patched_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     const float* v_output,
@@ -208,7 +209,7 @@ void bilagrid_ppisp_patched_sample_backward_v1(
 );
 
 void bilagrid_loglinear_uniform_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     float* output,
     int N, int L, int H, int W,
@@ -218,7 +219,7 @@ void bilagrid_loglinear_uniform_sample_forward(
 );
 
 void bilagrid_loglinear_patched_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     float* output,
@@ -228,7 +229,7 @@ void bilagrid_loglinear_patched_sample_forward(
 );
 
 void bilagrid_loglinear_uniform_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const float* v_output,
     float* v_bilagrid,
@@ -242,7 +243,7 @@ void bilagrid_loglinear_uniform_sample_backward_v1(
 );
 
 void bilagrid_loglinear_patched_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     const float* v_output,
@@ -257,7 +258,7 @@ void bilagrid_loglinear_patched_sample_backward_v1(
 );
 
 void bilagrid_depth_uniform_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* depth,
     const float* scalars,
     float* output,
@@ -268,7 +269,7 @@ void bilagrid_depth_uniform_sample_forward(
 );
 
 void bilagrid_depth_patched_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* depth,
     const float* scalars,
     const int* offsets,
@@ -279,7 +280,7 @@ void bilagrid_depth_patched_sample_forward(
 );
 
 void bilagrid_depth_uniform_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* depth,
     const float* scalars,
     const float* v_output,
@@ -294,7 +295,7 @@ void bilagrid_depth_uniform_sample_backward_v1(
 );
 
 void bilagrid_depth_patched_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* depth,
     const float* scalars,
     const int* offsets,
@@ -310,7 +311,7 @@ void bilagrid_depth_patched_sample_backward_v1(
 );
 
 void bilagrid_normal_uniform_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     float* output,
     int N, int L, int H, int W,
@@ -320,7 +321,7 @@ void bilagrid_normal_uniform_sample_forward(
 );
 
 void bilagrid_normal_patched_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     float* output,
@@ -330,7 +331,7 @@ void bilagrid_normal_patched_sample_forward(
 );
 
 void bilagrid_normal_uniform_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const float* v_output,
     float* v_bilagrid,
@@ -344,7 +345,7 @@ void bilagrid_normal_uniform_sample_backward_v1(
 );
 
 void bilagrid_normal_patched_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     const float* v_output,
@@ -359,14 +360,14 @@ void bilagrid_normal_patched_sample_backward_v1(
 );
 
 void tv_loss_forward(
-    const float* input,
+    BilagridReader bilagrid,
     float* tv_loss,
     int N, int C, int L, int H, int W,
     cudaStream_t stream
 );
 
 void tv_loss_backward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float v_tv_loss,
     float* v_bilagrid,
     int N, int C, int L, int H, int W, bool inplace,
@@ -374,14 +375,14 @@ void tv_loss_backward(
 );
 
 void channel_mean_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     float* channel_mean,
     int N, int C, int L, int H, int W,
     cudaStream_t stream
 );
 
 void channel_mean_backward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* v_channel_mean,
     float* v_bilagrid,
     int N, int C, int L, int H, int W, bool inplace,

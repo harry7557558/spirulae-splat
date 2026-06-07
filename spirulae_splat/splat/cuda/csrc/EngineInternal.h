@@ -29,10 +29,12 @@ void uint16_depth_to_float_raw(const uint16_t* d_in, float* d_out,
 // quant_bits: 4 or 8 -- selects QuantizedAdamState<BITS, 256> codec when
 // quantize=true. Ignored when quantize=false.
 void fused_bilagrid_tv_adam(
-    float* grids,
-    float*   g1_f,    float*   g2_f,
-    uint8_t* packed,                    // AoS packed (u, sqrt_g2) when quantize
-    float4*  quant_bounds,
+    float*    grids,                    // null when value_quantize
+    uint16_t* grids_q16,                // when value_quantize
+    float2*   value_bounds,             // when value_quantize
+    float*    g1_f,    float*  g2_f,
+    uint8_t*  packed,                   // AoS packed (u, sqrt_g2) when quantize
+    float4*   quant_bounds,
     const float* image_grad,
     const int*   cam_indices,
     int N_grids, int C_batch, int C,
@@ -42,6 +44,18 @@ void fused_bilagrid_tv_adam(
     int32_t adam_step,
     bool quantize,
     int  quant_bits,
+    bool value_quantize,
+    cudaStream_t stream
+);
+
+// --- One-shot encode of an fp32 bilagrid grid into 16-bit packed + bounds
+// (BilagridFusedAdam.cu). Called once after init when value-quant is on;
+// after this the fp32 buffer can be freed.
+void bilagrid_encode_q16_launch(
+    const float* grids,
+    uint16_t* grids_q16,
+    float2* value_bounds,
+    int64_t total_cells,
     cudaStream_t stream
 );
 
@@ -70,10 +84,12 @@ void bilagrid_rgb_shift_reg_step(
 // `quant_bits` (4 or 8). 4-bit serializes the byte-shared write between
 // odd/even thread partners with a __syncthreads inside the kernel.
 void fused_bilagrid_tv_adagrad(
-    float* grids,
-    float*   accum_f,                   // when !quantize
-    uint8_t* packed,                    // when quantize (log-encoded |accum|)
-    float2*  quant_bounds,              // when quantize, [n_blocks]
+    float*    grids,                    // null when value_quantize
+    uint16_t* grids_q16,                // when value_quantize
+    float2*   value_bounds,             // when value_quantize
+    float*    accum_f,                  // when !quantize
+    uint8_t*  packed,                   // when quantize (log-encoded |accum|)
+    float2*   quant_bounds,             // when quantize, [n_blocks]
     const float* image_grad,
     const int*   cam_indices,
     int N_grids, int C_batch, int C,
@@ -82,6 +98,7 @@ void fused_bilagrid_tv_adagrad(
     float tv_weight,
     bool quantize,
     int  quant_bits,
+    bool value_quantize,
     cudaStream_t stream
 );
 

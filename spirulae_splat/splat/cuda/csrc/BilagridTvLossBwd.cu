@@ -2,7 +2,7 @@
 
 template<int C, bool inplace>
 __global__ void tv_loss_backward_kernel(
-    const float* __restrict__ bilagrid,   // [N,C,L,H,W]
+    BilagridReader bilagrid,   // [N,C,L,H,W]
     const float v_tv_loss,                   // scalar gradient dL/d(tv_loss)
     float* __restrict__ v_bilagrid,     // [N,C,L,H,W]
     int N, int L, int H, int W
@@ -61,7 +61,7 @@ __global__ void tv_loss_backward_kernel(
 
 
 void tv_loss_backward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float v_tv_loss,
     float* v_bilagrid,
     int N, int C, int L, int H, int W, bool inplace,
@@ -123,7 +123,7 @@ __global__ void channel_mean_backward_kernel(
 
 
 void channel_mean_backward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* v_tv_loss,
     float* v_bilagrid,
     int N, int C, int L, int H, int W, bool inplace,

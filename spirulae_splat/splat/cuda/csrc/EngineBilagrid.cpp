@@ -8,6 +8,7 @@
 #include "EngineState.h"
 
 #include "BilagridBindings.h"
+#include "BilagridReader.cuh"
 
 #include <stdexcept>
 #include <string>
@@ -24,10 +25,61 @@ static void _validate_optim_bits(const char* fn, int bits) {
             std::to_string(bits));
     }
 }
+// Validate value_bits: 32 = off, 16 = enabled.
+static void _validate_value_bits(const char* fn, int bits) {
+    if (bits != 32 && bits != 16) {
+        throw std::runtime_error(
+            std::string(fn) + ": value_bits must be 32 (off) or 16; got " +
+            std::to_string(bits));
+    }
+}
+
+// Allocate the 16-bit packed grid + per-256-cell float2 bounds for a bilagrid
+// when value_bits == 16. The bound buffer is zeroed (mm = (0, 0) per block);
+// the first Adam step's value-bound block-reduce installs real bounds.
+template<typename BG>
+static void _alloc_grids_quant(BG& bg, const char* key_prefix, int64_t cells) {
+    constexpr int64_t BLOCK_SIZE = QuantizedTensor<16, 256>::kBlockSize;
+    int64_t n_bounds = (cells + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    bg.grids_quant.resize(std::string(key_prefix) + ".q", cells, n_bounds);
+    bg.grids_quant.zero();
+}
+
+// One-shot encode-then-free: encode the fp32 grids into the packed buffer +
+// bounds, then drop the fp32 pool slot. Subsequent sampler / Adam calls read
+// and write through `grids_quant` only. The DT5D's shape descriptor is kept
+// (set_shape_no_alloc) so downstream size<>() queries still work.
+template<typename BG>
+static void _encode_and_free_fp32(BG& bg, const char* fp32_pool_key) {
+    int64_t N = bg.grids.template size<0>();
+    int64_t L = bg.grids.template size<1>();
+    int64_t H = bg.grids.template size<2>();
+    int64_t W = bg.grids.template size<3>();
+    int64_t C = bg.grids.template size<4>();
+    int64_t total_cells = N * L * H * W * C;
+    bilagrid_encode_q16_launch(
+        bg.grids.data_ptr(),
+        (uint16_t*)bg.grids_quant.packed_ptr(),
+        bg.grids_quant.bounds_ptr(),
+        total_cells,
+        (cudaStream_t)0);
+    DevicePool::global().free(fp32_pool_key);
+    bg.grids.set_shape_no_alloc(N, L, H, W, C);
+}
+
+// Construct a BilagridReader that dispatches on the bilagrid's value_bits.
+template<typename BG>
+static inline BilagridReader _bg_reader(const BG& bg) {
+    if (bg.value_bits == 32) return BilagridReader(bg.grids.data_ptr());
+    return BilagridReader::from_q16(
+        (const uint16_t*)bg.grids_quant.packed_ptr(),
+        bg.grids_quant.bounds_ptr());
+}
 
 void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W,
-                              int optim_bits, bool use_adagrad) {
+                              int optim_bits, int value_bits, bool use_adagrad) {
     _validate_optim_bits("engine_init_bilagrid_rgb", optim_bits);
+    _validate_value_bits("engine_init_bilagrid_rgb", value_bits);
     int C;
     if (type == "affine") C = 12;
     else if (type == "ppisp" || type == "loglinear") C = 9;
@@ -38,7 +90,12 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
     engine().bilagrid_rgb.type = type;
     engine().bilagrid_rgb.C = C;
     engine().bilagrid_rgb.optim_bits = optim_bits;
+    engine().bilagrid_rgb.value_bits = value_bits;
     engine().bilagrid_rgb.use_adagrad = use_adagrad;
+    // fp32 grids is the working buffer regardless of value_bits during init
+    // (identity-init and zero-init both need fp32 writes); when quantized we
+    // encode it to packed below and then free the fp32 slot at first
+    // optimizer step (handled in EngineLoss / EngineBilagrid bilagrid step).
     engine().bilagrid_rgb.grids.resize("eng.bg.rgb.grids", n_grids, L, H, W, C);
     if (type == "affine") {
         engine().bilagrid_rgb.grids.zero();
@@ -47,34 +104,59 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
     } else {
         engine().bilagrid_rgb.grids.zero();
     }
+    if (value_bits == 16) {
+        int64_t cells = (int64_t)n_grids * L * H * W * C;
+        _alloc_grids_quant(engine().bilagrid_rgb, "eng.bg.rgb.grids_q", cells);
+        _encode_and_free_fp32(engine().bilagrid_rgb, "eng.bg.rgb.grids");
+    } else {
+        engine().bilagrid_rgb.grids_quant = QuantizedTensor<16, 256>();
+    }
     engine().bilagrid_rgb.enabled = true;
     engine().bilagrid_rgb.optim_initialized = false;
 }
 
 void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
-                                int optim_bits, bool use_adagrad) {
+                                int optim_bits, int value_bits, bool use_adagrad) {
     _validate_optim_bits("engine_init_bilagrid_depth", optim_bits);
+    _validate_value_bits("engine_init_bilagrid_depth", value_bits);
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_depth: n_grids must be > 0");
     engine().bilagrid_depth.optim_bits = optim_bits;
+    engine().bilagrid_depth.value_bits = value_bits;
     engine().bilagrid_depth.use_adagrad = use_adagrad;
     engine().bilagrid_depth.grids.resize("eng.bg.depth.grids", n_grids, L, H, W, 2);
     engine().bilagrid_depth.grids.zero();
     engine().bilagrid_depth.scalars.resize("eng.bg.depth.scalars", n_grids);
     engine().bilagrid_depth.scalars.zero();
+    if (value_bits == 16) {
+        int64_t cells = (int64_t)n_grids * L * H * W * 2;
+        _alloc_grids_quant(engine().bilagrid_depth, "eng.bg.depth.grids_q", cells);
+        _encode_and_free_fp32(engine().bilagrid_depth, "eng.bg.depth.grids");
+    } else {
+        engine().bilagrid_depth.grids_quant = QuantizedTensor<16, 256>();
+    }
     engine().bilagrid_depth.enabled = true;
     engine().bilagrid_depth.optim_initialized = false;
 }
 
 void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
-                                 int optim_bits, bool use_adagrad) {
+                                 int optim_bits, int value_bits, bool use_adagrad) {
     _validate_optim_bits("engine_init_bilagrid_normal", optim_bits);
+    _validate_value_bits("engine_init_bilagrid_normal", value_bits);
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_normal: n_grids must be > 0");
     engine().bilagrid_normal.optim_bits = optim_bits;
+    engine().bilagrid_normal.value_bits = value_bits;
     engine().bilagrid_normal.use_adagrad = use_adagrad;
     engine().bilagrid_normal.grids.resize("eng.bg.normal.grids", n_grids, L, H, W, 3);
     engine().bilagrid_normal.grids.zero();
+    if (value_bits == 16) {
+        int64_t cells = (int64_t)n_grids * L * H * W * 3;
+        _alloc_grids_quant(engine().bilagrid_normal, "eng.bg.normal.grids_q", cells);
+        _encode_and_free_fp32(engine().bilagrid_normal, "eng.bg.normal.grids");
+    } else {
+        engine().bilagrid_normal.grids_quant = QuantizedTensor<16, 256>();
+    }
     engine().bilagrid_normal.enabled = true;
     engine().bilagrid_normal.optim_initialized = false;
 }
@@ -83,17 +165,20 @@ void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
 // device buffer at [rgb_tv, depth_tv, normal_tv]; unset entries stay 0.
 void _engine_bilagrid_tv_into(float* tv_buf3_device) {
     cudaMemsetAsync(tv_buf3_device, 0, 3 * sizeof(float), kBilagridStream);
-    auto run = [&](DeviceTensor5D<float>& grids, int slot) {
-        if (grids.data_ptr() == nullptr) return;
-        int N = (int)grids.size<0>();
-        int L = (int)grids.size<1>(), H = (int)grids.size<2>(), W = (int)grids.size<3>();
-        int C = (int)grids.size<4>();
-        tv_loss_forward(grids.data_ptr(), tv_buf3_device + slot,
+    auto run = [&](auto& bg, int slot) {
+        if (bg.grids.template size<0>() == 0) return;
+        int N = (int)bg.grids.template size<0>();
+        int L = (int)bg.grids.template size<1>();
+        int H = (int)bg.grids.template size<2>();
+        int W = (int)bg.grids.template size<3>();
+        int C = (int)bg.grids.template size<4>();
+        BilagridReader br = _bg_reader(bg);
+        tv_loss_forward(br, tv_buf3_device + slot,
                         N, C, L, H, W, kBilagridStream);
     };
-    if (engine().bilagrid_rgb.enabled) run(engine().bilagrid_rgb.grids, 0);
-    if (engine().bilagrid_depth.enabled) run(engine().bilagrid_depth.grids, 1);
-    if (engine().bilagrid_normal.enabled) run(engine().bilagrid_normal.grids, 2);
+    if (engine().bilagrid_rgb.enabled) run(engine().bilagrid_rgb, 0);
+    if (engine().bilagrid_depth.enabled) run(engine().bilagrid_depth, 1);
+    if (engine().bilagrid_normal.enabled) run(engine().bilagrid_normal, 2);
 }
 
 // Populate engine().bilagrid_cur_cam_indices from a host or device int32
@@ -145,7 +230,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         int gH = (int)engine().bilagrid_rgb.grids.size<2>();
         int gW = (int)engine().bilagrid_rgb.grids.size<3>();
         // Pass the FULL grid table; kernel does the per-image indirect lookup.
-        float* grid_ptr = engine().bilagrid_rgb.grids.data_ptr();
+        BilagridReader grid_ptr = _bg_reader(engine().bilagrid_rgb);
 
         if (engine().bilagrid_rgb.type == "affine") {
             bilagrid_uniform_sample_forward(
@@ -202,7 +287,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         int L = (int)engine().bilagrid_depth.grids.size<1>();
         int gH = (int)engine().bilagrid_depth.grids.size<2>();
         int gW = (int)engine().bilagrid_depth.grids.size<3>();
-        float* grid_ptr = engine().bilagrid_depth.grids.data_ptr();
+        BilagridReader grid_ptr = _bg_reader(engine().bilagrid_depth);
         bilagrid_depth_uniform_sample_forward(
             grid_ptr,
             (const float*)engine().bilagrid_depth.fwd_pre.data_ptr(),
@@ -225,7 +310,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         int L = (int)engine().bilagrid_normal.grids.size<1>();
         int gH = (int)engine().bilagrid_normal.grids.size<2>();
         int gW = (int)engine().bilagrid_normal.grids.size<3>();
-        float* grid_ptr = engine().bilagrid_normal.grids.data_ptr();
+        BilagridReader grid_ptr = _bg_reader(engine().bilagrid_normal);
         bilagrid_normal_uniform_sample_forward(
             grid_ptr,
             (const float*)engine().bilagrid_normal.fwd_pre.data_ptr(),
@@ -252,7 +337,10 @@ static void _ensure_bilagrid_batch_grad(
     int C_batch,
     const std::string& key
 ) {
-    if (grids.data_ptr() == nullptr) return;
+    // grids may have data_ptr == nullptr when value_bits == 16 (canonical
+    // store is the packed buffer); shape descriptor is still alive. Gate on
+    // the SHAPE rather than data_ptr so the gradient buffer is still sized.
+    if (grids.size<0>() == 0) return;
     int L = (int)grids.size<1>();
     int H = (int)grids.size<2>();
     int W = (int)grids.size<3>();
@@ -278,7 +366,7 @@ void _engine_bilagrid_backward_hook(
         int L = (int)engine().bilagrid_rgb.grids.size<1>();
         int gH = (int)engine().bilagrid_rgb.grids.size<2>();
         int gW = (int)engine().bilagrid_rgb.grids.size<3>();
-        float* grid_ptr = engine().bilagrid_rgb.grids.data_ptr();
+        BilagridReader grid_ptr = _bg_reader(engine().bilagrid_rgb);
         _ensure_bilagrid_batch_grad(engine().bilagrid_rgb.image_grad,
                                     engine().bilagrid_rgb.grids, C_batch,
                                     "eng.bg.rgb.image_grad");
@@ -360,7 +448,7 @@ void _engine_bilagrid_backward_hook(
         // exactly that resolution, so the two shapes match by construction.
         int H_d = (int)engine().gt.depth.template size<1>();
         int W_d = (int)engine().gt.depth.template size<2>();
-        float* grid_ptr = engine().bilagrid_depth.grids.data_ptr();
+        BilagridReader grid_ptr = _bg_reader(engine().bilagrid_depth);
         _ensure_bilagrid_batch_grad(engine().bilagrid_depth.image_grad,
                                     engine().bilagrid_depth.grids, C_batch,
                                     "eng.bg.depth.image_grad");
@@ -387,7 +475,7 @@ void _engine_bilagrid_backward_hook(
         int gW = (int)engine().bilagrid_normal.grids.size<3>();
         int H_n = (int)engine().gt.normal.template size<1>();
         int W_n = (int)engine().gt.normal.template size<2>();
-        float* grid_ptr = engine().bilagrid_normal.grids.data_ptr();
+        BilagridReader grid_ptr = _bg_reader(engine().bilagrid_normal);
         _ensure_bilagrid_batch_grad(engine().bilagrid_normal.image_grad,
                                     engine().bilagrid_normal.grids, C_batch,
                                     "eng.bg.normal.image_grad");
@@ -423,7 +511,11 @@ void _ensure_bilagrid_optim_state() {
                     const std::string& key_prefix,
                     bool& done) {
         bool quantize_optim = (optim_bits != 32);
-        if (done || grids.data_ptr() == nullptr) return;
+        // Gate on the SHAPE descriptor, not data_ptr -- when value_bits=16 the
+        // fp32 grids buffer is freed (canonical store is grids_quant) but the
+        // optim state is sized off the same dims, so the allocation must
+        // still run.
+        if (done || grids.size<0>() == 0) return;
         int64_t N = grids.size<0>();
         int64_t L = grids.size<1>(), H = grids.size<2>(), W = grids.size<3>();
         int64_t C = grids.size<4>();
@@ -503,18 +595,25 @@ void engine_bilagrid_optim_step(int step, const BilagridStepConfig& cfg) {
                    QuantizedAdamState<8, 256>& quant_state,
                    DeviceTensor5D<float>& accum_f,
                    QuantizedTensorLog<8, 256>& adagrad_quant,
+                   QuantizedTensor<16, 256>& grids_quant,
                    int  optim_bits,
+                   int  value_bits,
                    bool use_adagrad,
+                   int N, int L, int H, int W, int C,
                    float lr, float tv_weight) {
-        if (grids.data_ptr() == nullptr || lr <= 0.0f) return;
+        if (lr <= 0.0f) return;
         if (image_grad.data_ptr() == nullptr) return;
         const bool quantize_optim = (optim_bits != 32);
-        int N = (int)grids.size<0>();
-        int L = (int)grids.size<1>(), H = (int)grids.size<2>(), W = (int)grids.size<3>();
-        int C = (int)grids.size<4>();
+        const bool value_quantize = (value_bits != 32);
+        // When value_quantize, grids.data_ptr() is null (freed after init);
+        // the kernel reads/writes via grids_quant. Otherwise grids is fp32.
+        float*    grids_fp32 = value_quantize ? nullptr            : grids.data_ptr();
+        uint16_t* grids_q16  = value_quantize ? (uint16_t*)grids_quant.packed_ptr() : nullptr;
+        float2*   value_bnd  = value_quantize ? grids_quant.bounds_ptr() : nullptr;
+        if (!value_quantize && grids_fp32 == nullptr) return;
         if (use_adagrad) {
             fused_bilagrid_tv_adagrad(
-                grids.data_ptr(),
+                grids_fp32, grids_q16, value_bnd,
                 quantize_optim ? nullptr : accum_f.data_ptr(),
                 quantize_optim ? adagrad_quant.packed_ptr() : nullptr,
                 quantize_optim ? adagrad_quant.bounds_ptr() : nullptr,
@@ -522,10 +621,10 @@ void engine_bilagrid_optim_step(int step, const BilagridStepConfig& cfg) {
                 cam_idx_dev,
                 N, C_batch, C, L, H, W,
                 lr, tv_weight,
-                quantize_optim, optim_bits, kBilagridStream);
+                quantize_optim, optim_bits, value_quantize, kBilagridStream);
         } else {
             fused_bilagrid_tv_adam(
-                grids.data_ptr(),
+                grids_fp32, grids_q16, value_bnd,
                 quantize_optim ? nullptr : g1.data_ptr(),
                 quantize_optim ? nullptr : g2.data_ptr(),
                 quantize_optim ? quant_state.packed_ptr() : nullptr,
@@ -534,26 +633,52 @@ void engine_bilagrid_optim_step(int step, const BilagridStepConfig& cfg) {
                 cam_idx_dev,
                 N, C_batch, C, L, H, W,
                 lr, tv_weight, adam_step,
-                quantize_optim, optim_bits, kBilagridStream);
+                quantize_optim, optim_bits, value_quantize, kBilagridStream);
         }
     };
 
-    run(engine().bilagrid_rgb.grids, engine().bilagrid_rgb.image_grad,
-        engine().bilagrid_rgb.g1, engine().bilagrid_rgb.g2,
-        engine().bilagrid_rgb.quant_state,
-        engine().bilagrid_rgb.accum_f, engine().bilagrid_rgb.adagrad_quant,
-        engine().bilagrid_rgb.optim_bits, engine().bilagrid_rgb.use_adagrad,
-        cfg.lr_rgb, cfg.tv_weight_rgb);
-    run(engine().bilagrid_depth.grids, engine().bilagrid_depth.image_grad,
-        engine().bilagrid_depth.g1, engine().bilagrid_depth.g2,
-        engine().bilagrid_depth.quant_state,
-        engine().bilagrid_depth.accum_f, engine().bilagrid_depth.adagrad_quant,
-        engine().bilagrid_depth.optim_bits, engine().bilagrid_depth.use_adagrad,
-        cfg.lr_depth, cfg.tv_weight_depth);
-    run(engine().bilagrid_normal.grids, engine().bilagrid_normal.image_grad,
-        engine().bilagrid_normal.g1, engine().bilagrid_normal.g2,
-        engine().bilagrid_normal.quant_state,
-        engine().bilagrid_normal.accum_f, engine().bilagrid_normal.adagrad_quant,
-        engine().bilagrid_normal.optim_bits, engine().bilagrid_normal.use_adagrad,
-        cfg.lr_normal, cfg.tv_weight_normal);
+    auto& brgb = engine().bilagrid_rgb;
+    auto& bdep = engine().bilagrid_depth;
+    auto& bnor = engine().bilagrid_normal;
+    // Use the value-bit-aware shape source for dims (when value-quant, fp32
+    // grids is empty so we need to fall back to grids_quant cell count).
+    auto get_dims = [](auto& bg, int channels) {
+        // Returns (N, L, H, W, C). When grids is alive use its size<>(); else
+        // derive from grids_quant.n_cells and channels (grids cells = N*L*H*W*C).
+        // We stash L/H/W in bg.value_LHW... actually simpler: keep grids
+        // alive as a shape-only descriptor (data_ptr can be null).
+        return std::make_tuple(
+            (int)bg.grids.template size<0>(),
+            (int)bg.grids.template size<1>(),
+            (int)bg.grids.template size<2>(),
+            (int)bg.grids.template size<3>(),
+            (int)bg.grids.template size<4>());
+    };
+    {
+        auto [N, L, H, W, C] = get_dims(brgb, brgb.C);
+        run(brgb.grids, brgb.image_grad, brgb.g1, brgb.g2,
+            brgb.quant_state, brgb.accum_f, brgb.adagrad_quant,
+            brgb.grids_quant,
+            brgb.optim_bits, brgb.value_bits, brgb.use_adagrad,
+            N, L, H, W, C,
+            cfg.lr_rgb, cfg.tv_weight_rgb);
+    }
+    {
+        auto [N, L, H, W, C] = get_dims(bdep, 2);
+        run(bdep.grids, bdep.image_grad, bdep.g1, bdep.g2,
+            bdep.quant_state, bdep.accum_f, bdep.adagrad_quant,
+            bdep.grids_quant,
+            bdep.optim_bits, bdep.value_bits, bdep.use_adagrad,
+            N, L, H, W, C,
+            cfg.lr_depth, cfg.tv_weight_depth);
+    }
+    {
+        auto [N, L, H, W, C] = get_dims(bnor, 3);
+        run(bnor.grids, bnor.image_grad, bnor.g1, bnor.g2,
+            bnor.quant_state, bnor.accum_f, bnor.adagrad_quant,
+            bnor.grids_quant,
+            bnor.optim_bits, bnor.value_bits, bnor.use_adagrad,
+            N, L, H, W, C,
+            cfg.lr_normal, cfg.tv_weight_normal);
+    }
 }

@@ -9,7 +9,7 @@
 
 
 void bilagrid_loglinear_uniform_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     float* output,
     int N, int L, int H, int W,
@@ -30,7 +30,7 @@ void bilagrid_loglinear_uniform_sample_forward(
 
 
 void bilagrid_loglinear_patched_sample_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     float* output,
@@ -50,7 +50,7 @@ void bilagrid_loglinear_patched_sample_forward(
 
 
 void bilagrid_loglinear_uniform_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const float* v_output,
     float* v_bilagrid,
@@ -106,7 +106,7 @@ void bilagrid_loglinear_uniform_sample_backward_v1(
 
 
 void bilagrid_loglinear_patched_sample_backward_v1(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     const float* v_output,
@@ -168,7 +168,7 @@ void bilagrid_loglinear_patched_sample_backward_v1(
 
 #if 0
 void bilagrid_loglinear_uniform_sample_backward_v2(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const float* v_output,
     float* v_bilagrid,
@@ -193,7 +193,7 @@ void bilagrid_loglinear_uniform_sample_backward_v2(
 
 
 void bilagrid_loglinear_patched_sample_backward_v2(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* rgb,
     const int* offsets,
     const float* v_output,

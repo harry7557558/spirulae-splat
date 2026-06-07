@@ -12,7 +12,7 @@ __global__ void bilagrid_ppisp_packed_sample_backward_kernel_cg(
 #else
 __global__ void bilagrid_ppisp_packed_sample_backward_kernel(
 #endif  // COMPUTE_COORDS_GRAD
-    const float* __restrict__ bilagrid,  // [N,L,H,W,9]
+    BilagridReader bilagrid,  // [N,L,H,W,9]
     const int64_t* __restrict__ image_indices,  // [nnz]
     const float* __restrict__ coords,  // [nnz,2]
     const float* __restrict__ rgb_in,  // [nnz,3]
@@ -30,7 +30,7 @@ __global__ void bilagrid_ppisp_sample_backward_kernel_cg(
 #else
 __global__ void bilagrid_ppisp_sample_backward_kernel(
 #endif  // COMPUTE_COORDS_GRAD
-    const float* __restrict__ bilagrid,  // [N,L,H,W,9]
+    BilagridReader bilagrid,  // [N,L,H,W,9]
     const float* __restrict__ coords,  // [N,m,h,w,2]
     const float* __restrict__ rgb_in,  // [N,m,h,w,3]
     const float* __restrict__ v_rgb_out,  // [N,m,h,w,3]

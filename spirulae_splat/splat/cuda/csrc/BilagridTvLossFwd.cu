@@ -9,7 +9,7 @@ namespace cg = cooperative_groups;
 
 template<int C>
 __global__ void tv_loss_forward_kernel(
-    const float* __restrict__ bilagrid,  // [N,C,L,H,W]
+    BilagridReader bilagrid,  // [N,C,L,H,W]
     float* __restrict__ tv_loss,
     int N, int L, int H, int W
 ) {
@@ -83,7 +83,7 @@ __global__ void tv_loss_forward_kernel(
 
 
 void tv_loss_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     float* tv_loss,
     int N, int C, int L, int H, int W,
     cudaStream_t stream
@@ -123,7 +123,7 @@ void tv_loss_forward(
 
 template<int C>
 __global__ void channel_mean_forward_kernel(
-    const float* __restrict__ bilagrid,  // [N,C,L,H,W]
+    BilagridReader bilagrid,  // [N,C,L,H,W]
     float* __restrict__ channel_mean,  // [C]
     int N, int L, int H, int W
 ) {
@@ -169,7 +169,7 @@ __global__ void channel_mean_forward_kernel(
 
 
 void channel_mean_forward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     float* channel_mean,
     int N, int C, int L, int H, int W,
     cudaStream_t stream

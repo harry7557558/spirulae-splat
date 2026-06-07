@@ -5,7 +5,7 @@
 
 
 void bilagrid_sample_backward(
-    const float* bilagrid,
+    BilagridReader bilagrid,
     const float* coords,
     const float* rgb,
     const float* v_output,
