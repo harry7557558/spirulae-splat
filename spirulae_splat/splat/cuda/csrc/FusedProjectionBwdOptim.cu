@@ -387,19 +387,18 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     // Pack (use_scale_agnostic_mean, color_trust_linear) into a 2-bit key.
     // LEVEL also becomes a template arg so each kernel.cu compiles ONE
     // specialization. LEVEL collapses the prior (QUANT_BITS, VALUE_BITS) axes
-    // (7 combos) down to 3 valid combos:
+    // down to 2 valid combos:
     //   0 = off (32-bit value, fp32 optim)
     //   1 = light (16-bit value, 8-bit packed optim)
-    //   2 = heavy (8-bit value, 8-bit packed optim)
     const int dispatch_key =
         (int)use_scale_agnostic_mean
         | ((int)color_trust_linear << 1);
     // Validate up front: bits == 32 / packed-not-allocated -> LEVEL must be 0;
     // any non-zero level requires the optim+value packed buffers to be live.
-    if (sh_quantization_level < 0 || sh_quantization_level > 2)
+    if (sh_quantization_level < 0 || sh_quantization_level > 1)
         throw std::runtime_error(
             "fused_projection_bwd_optimizer: sh_quantization_level must be "
-            "0, 1, or 2; got " + std::to_string(sh_quantization_level));
+            "0 or 1; got " + std::to_string(sh_quantization_level));
     #define LAUNCH_LEVEL(n, sam, ctl, level) \
         if (sh_degree == (n) && dispatch_key == ((int)(sam) | ((int)(ctl) << 1)) \
             && sh_quantization_level == (level)) \
@@ -407,8 +406,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
                 PrimT<n>, HessianDiagonalOutputMode::None, sam, ctl, level> _ARGS;
     #define LAUNCH_LEVELS(n, sam, ctl) \
         LAUNCH_LEVEL(n, sam, ctl, 0) \
-        LAUNCH_LEVEL(n, sam, ctl, 1) \
-        LAUNCH_LEVEL(n, sam, ctl, 2)
+        LAUNCH_LEVEL(n, sam, ctl, 1)
     #define LAUNCH(n) \
         LAUNCH_LEVELS(n, false, false) \
         LAUNCH_LEVELS(n, true,  false) \

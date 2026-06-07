@@ -70,10 +70,9 @@ struct OptimConfig {
     // optimizer state init until that work lands.
     int   sh_value_bits                   = 8;
     // Single SH quantization level. Collapses the FPBO dispatch's
-    // (sh_optim_bits, sh_value_bits) axes (7 combos) down to 3 instantiations:
+    // (sh_optim_bits, sh_value_bits) axes down to 2 instantiations:
     //   0 = off    : 32-bit fp32 value, 32-bit fp32 optim state
     //   1 = light  : 16-bit value,      8-bit (joint u,sqrt_g2 = 2B/cell) optim
-    //   2 = heavy  : 8-bit  value,      8-bit (joint u,sqrt_g2 = 2B/cell) optim
     // Python is expected to ALSO set sh_optim_bits / sh_value_bits to the
     // values implied by this level (the FPBO dispatcher only uses the level;
     // non-FPBO paths and EngineState still read the individual bits).

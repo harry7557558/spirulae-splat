@@ -739,10 +739,9 @@ template<
     const bool use_scale_agnostic_mean,
     const bool color_trust_linear,
     // SH quantization level. Single int collapses the prior (QUANT_BITS, VALUE_BITS)
-    // axes from 7 combos to 3, cutting FPBO instantiations by another 57%.
+    // axes into 2 combos:
     //   LEVEL == 0 : off          -- 32-bit value, 32-bit (fp32) optim state
     //   LEVEL == 1 : light        -- 16-bit value, 8x2-bit optim (2 B / cell)
-    //   LEVEL == 2 : heavy        -- 8-bit  value, 8x2-bit optim (2 B / cell)
     // The wrapper derives BLOCK_SIZE / QUANT_BITS / VALUE_BITS internally from
     // LEVEL via constexpr so the kernel template signature is unchanged.
     const int  LEVEL
@@ -807,13 +806,12 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     // Derive optim-state and value-quant bit widths from LEVEL:
     //   LEVEL 0: QUANT_BITS=0 (off), VALUE_BITS=32 (off)
     //   LEVEL 1: QUANT_BITS=8       VALUE_BITS=16
-    //   LEVEL 2: QUANT_BITS=8       VALUE_BITS=8
     // QUANT_BITS == 0 selects the kernel's no-quant path via its BLOCK_SIZE
     // template (0 = fp32 g1/g2); KERNEL_QUANT_BITS is passed through but
     // unused in that branch (it just needs to satisfy QuantizedAdamState's
     // static_assert).
     constexpr int LEVEL_QUANT_BITS = (LEVEL == 0) ? 0 : 8;
-    constexpr int LEVEL_VALUE_BITS = (LEVEL == 0) ? 32 : (LEVEL == 1) ? 16 : 8;
+    constexpr int LEVEL_VALUE_BITS = (LEVEL == 0) ? 32 : 16;
     constexpr int KERNEL_BLOCK_SIZE = (LEVEL_QUANT_BITS == 0) ? 0 : BLOCK_SIZE_LAUNCH;
     constexpr int KERNEL_QUANT_BITS = (LEVEL_QUANT_BITS == 0) ? 8 : LEVEL_QUANT_BITS;
     fused_projection_bwd_optimizer_3dgs_kernel<

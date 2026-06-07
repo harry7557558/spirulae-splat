@@ -240,11 +240,9 @@ def generate_FusedProjectionBwdOptim():
     # hessian_diagonal_output_mode, use_scale_agnostic_mean,
     # color_trust_linear, LEVEL.
     #
-    # LEVEL collapses the prior (QUANT_BITS, VALUE_BITS) axes (7 combos) into
-    # just 3 instantiations:
+    # LEVEL collapses the prior (QUANT_BITS, VALUE_BITS) axes into 2 combos:
     #   0 = off    (32-bit value, fp32 optim state)
     #   1 = light  (16-bit value, 8-bit packed optim)
-    #   2 = heavy  (8-bit value,  4-bit packed optim)
     # The wrapper derives BLOCK_SIZE / QUANT_BITS / VALUE_BITS internally via
     # constexpr, so each wrapper compiles ONE kernel specialization.
     map_header = ["typename SplatPrimitive", None, None, None, None, None]
@@ -264,16 +262,15 @@ def generate_FusedProjectionBwdOptim():
         for cam  in cams
         for sam  in ("true", "false")
         for ctl  in ("true", "false")
-        for level in ("0", "1", "2")
+        for level in ("0", "1")
     ]
-    # Per primitive: 3 cams * 2 sam * 2 ctl * 3 levels = 36 instantiations.
-    # 15 primitives * 36 = 540 total (down from the 1260 with separate
-    # qbits/vbits). The `primitives` list interleaves [3DGS, Mip, 3DGUT] per
-    # SH degree, so per SH degree we get 2*36 Primitive3DGS entries
-    # (3DGS+Mip) followed by 36 Primitive3DGUT entries.
+    # Per primitive: 3 cams * 2 sam * 2 ctl * 2 levels = 24 instantiations.
+    # 15 primitives * 24 = 360 total. The `primitives` list interleaves
+    # [3DGS, Mip, 3DGUT] per SH degree, so per SH degree we get 2*24
+    # Primitive3DGS entries (3DGS+Mip) followed by 24 Primitive3DGUT entries.
     includes = [*(
-        [("Primitive3DGS.cuh",   "FusedProjectionBwdOptim_kernel.cuh")] * (36 * 2) +
-        [("Primitive3DGUT.cuh",  "FusedProjectionBwdOptim_kernel.cuh")] * 36
+        [("Primitive3DGS.cuh",   "FusedProjectionBwdOptim_kernel.cuh")] * (24 * 2) +
+        [("Primitive3DGUT.cuh",  "FusedProjectionBwdOptim_kernel.cuh")] * 24
     )] * 5
 
     generate_kernel_instantiation("FusedProjectionBwdOptim", definition, map_header, map_body, includes)

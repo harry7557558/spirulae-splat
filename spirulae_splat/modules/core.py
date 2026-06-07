@@ -73,20 +73,19 @@ class Renderer:
         self.use_bvh = use_bvh
         self.use_fused_proj_bwd_optim = use_fused_proj_bwd_optim
         # Single SH quantization level. 0=off, 1=light (16-bit value + 8-bit
-        # optim), 2=heavy (8-bit value + 8-bit optim). Collapses the FPBO
-        # dispatcher's bit-pair axes into a single template parameter so the
-        # generated kernel-instantiation .cu files distribute work evenly and
-        # there are 3x fewer wrappers compared to enumerating each bit-pair.
-        if sh_quantization_level not in (0, 1, 2):
+        # optim). Collapses the FPBO dispatcher's bit-pair axes into a single
+        # template parameter so the generated kernel-instantiation .cu files
+        # distribute work evenly.
+        if sh_quantization_level not in (0, 1):
             raise ValueError(
-                f"sh_quantization_level must be 0 (off), 1 (light), or 2 (heavy); "
+                f"sh_quantization_level must be 0 (off) or 1 (light); "
                 f"got {sh_quantization_level}")
         self.sh_quantization_level = sh_quantization_level
         # Derived per-component bits. Used by non-FPBO paths
         # (fused_adam_step_quantized, EngineState) and by EngineCheckpoint
         # metadata. The FPBO dispatcher uses the level directly.
-        _level_to_optim_bits = {0: 32, 1: 8, 2: 8}
-        _level_to_value_bits = {0: 32, 1: 16, 2: 8}
+        _level_to_optim_bits = {0: 32, 1: 8}
+        _level_to_value_bits = {0: 32, 1: 16}
         self.sh_optim_bits = _level_to_optim_bits[sh_quantization_level]
         self.sh_value_bits = _level_to_value_bits[sh_quantization_level]
 
