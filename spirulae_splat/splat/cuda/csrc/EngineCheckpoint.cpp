@@ -80,10 +80,95 @@ void engine_save_checkpoint(
     auto h_opacities    = _ckpt_d2h<float >(s.world.opacities.data_ptr(),    (size_t)N);
     auto h_features_dc  = _ckpt_d2h<float3>(s.world.features_dc.data_ptr(),  (size_t)N);
     // features_sh is stored [max_N, K] contiguous; copying first N rows = N*K float3.
-    std::vector<float3> h_features_sh;
-    if (K > 0) {
+    // When sh_value_bits != 32 the canonical store is the packed buffer
+    // (`features_sh_quant{8,16}{,_fpbo}`); decode it on the host into the
+    // PLY row directly so we don't pay the ~N*K*12B fp32 staging allocation.
+    // The packed copy is ~N*3*K bytes (8-bit) or 2x (16-bit), much smaller
+    // than the fp32 staging would be.
+    const bool quant_sh_value = (K > 0) && s.world.sh_value_quantize_enabled();
+    const int  sh_value_bits  = s.world.sh_value_bits;
+
+    std::vector<float3> h_features_sh;            // fp32 path only
+    std::vector<uint8_t> h_value_packed;          // quant path only
+    std::vector<float2>  h_value_bounds;          // quant path only
+    int64_t  bounds_stride = 256;                 // quant path: cell-block vs fpbo
+    if (K > 0 && !quant_sh_value) {
         h_features_sh = _ckpt_d2h<float3>(s.world.features_sh.data_ptr(), (size_t)(N * K));
+    } else if (quant_sh_value) {
+        // Pick the populated layout. FPBO (per-splat-block) takes precedence
+        // since that's what `_ensure_optim_state` allocates when FPBO is on.
+        bool fpbo_layout = false;
+        const uint8_t* dev_packed = nullptr;
+        const float2*  dev_bounds = nullptr;
+        int64_t        dev_n_bounds = 0;
+        if (sh_value_bits == 8) {
+            if (s.world.features_sh_quant8_fpbo.initialized()) {
+                dev_packed = s.world.features_sh_quant8_fpbo.packed.data_ptr();
+                dev_bounds = s.world.features_sh_quant8_fpbo.bounds.data_ptr();
+                dev_n_bounds = s.world.features_sh_quant8_fpbo.n_bounds;
+                fpbo_layout = true;
+            } else if (s.world.features_sh_quant8.initialized()) {
+                dev_packed = s.world.features_sh_quant8.packed.data_ptr();
+                dev_bounds = s.world.features_sh_quant8.bounds.data_ptr();
+                dev_n_bounds = s.world.features_sh_quant8.n_bounds;
+            }
+        } else /* sh_value_bits == 16 */ {
+            if (s.world.features_sh_quant16_fpbo.initialized()) {
+                dev_packed = s.world.features_sh_quant16_fpbo.packed.data_ptr();
+                dev_bounds = s.world.features_sh_quant16_fpbo.bounds.data_ptr();
+                dev_n_bounds = s.world.features_sh_quant16_fpbo.n_bounds;
+                fpbo_layout = true;
+            } else if (s.world.features_sh_quant16.initialized()) {
+                dev_packed = s.world.features_sh_quant16.packed.data_ptr();
+                dev_bounds = s.world.features_sh_quant16.bounds.data_ptr();
+                dev_n_bounds = s.world.features_sh_quant16.n_bounds;
+            }
+        }
+        if (dev_packed != nullptr && dev_bounds != nullptr) {
+            // Copy only the bytes needed for the first N splats (skip the
+            // tail of the over-allocated max_N buffer).
+            const int64_t cells_needed = (int64_t)N * 3 * K;
+            const int bytes_per_cell = (sh_value_bits == 8) ? 1 : 2;
+            h_value_packed.resize((size_t)(cells_needed * bytes_per_cell));
+            cudaMemcpy(h_value_packed.data(), dev_packed,
+                       (size_t)(cells_needed * bytes_per_cell),
+                       cudaMemcpyDeviceToHost);
+            // Bounds layout: cell-block bounds_stride = 256;
+            //                fpbo (per-splat-block) bounds_stride = 256 * 3 * K.
+            int64_t n_bounds_needed;
+            if (fpbo_layout) {
+                bounds_stride = (int64_t)256 * 3 * (int64_t)K;
+                n_bounds_needed = (N + 255) / 256;
+            } else {
+                bounds_stride = 256;
+                n_bounds_needed = (cells_needed + 255) / 256;
+            }
+            // Don't run off the allocated bounds array.
+            n_bounds_needed = std::min(n_bounds_needed, dev_n_bounds);
+            h_value_bounds.resize((size_t)n_bounds_needed);
+            cudaMemcpy(h_value_bounds.data(), dev_bounds,
+                       (size_t)n_bounds_needed * sizeof(float2),
+                       cudaMemcpyDeviceToHost);
+        }
     }
+
+    // Decode one SH cell value on the host. Inlined into the PLY write loop
+    // below; safe no-op (returns 0) if quant buffers weren't populated.
+    auto decode_sh = [&](int64_t splat_i, int j, int ch) -> float {
+        if (h_value_packed.empty() || h_value_bounds.empty()) return 0.0f;
+        const int64_t cell = splat_i * (int64_t)3 * (int64_t)K + (int64_t)3 * j + (int64_t)ch;
+        const int64_t b_idx = cell / bounds_stride;
+        if (b_idx >= (int64_t)h_value_bounds.size()) return 0.0f;
+        const float2 mm = h_value_bounds[(size_t)b_idx];
+        if (sh_value_bits == 8) {
+            const uint8_t q = h_value_packed[(size_t)cell];
+            return mm.x + (mm.y - mm.x) * ((float)q * (1.0f / 255.0f));
+        } else {
+            const uint16_t* p16 = reinterpret_cast<const uint16_t*>(h_value_packed.data());
+            const uint16_t q = p16[(size_t)cell];
+            return mm.x + (mm.y - mm.x) * ((float)q * (1.0f / 65535.0f));
+        }
+    };
 
     // --- Filter mask: NaN/Inf + low-opacity (logit < logit(1/255) ~= -5.5373) ---
     const float OPA_MIN = -5.5373f;
@@ -96,7 +181,10 @@ void engine_save_checkpoint(
     for (int64_t i = 0; i < N; i++) {
         bool ok = fin3(h_means[i]) && fin4(h_quats[i]) && fin3(h_scales[i])
                   && fin1(h_opacities[i]) && fin3(h_features_dc[i]);
-        if (ok && K > 0) {
+        // Quant-decoded SH values are finite by construction (byte to fp32
+        // linear interp from finite bounds), so skip the NaN check on that
+        // path. The fp32 path still validates each coef.
+        if (ok && K > 0 && !quant_sh_value) {
             for (int j = 0; j < K; j++) {
                 if (!fin3(h_features_sh[i*K + j])) { ok = false; break; }
             }
@@ -141,10 +229,18 @@ void engine_save_checkpoint(
             row[p++] = h_means[i].x; row[p++] = h_means[i].y; row[p++] = h_means[i].z;
             row[p++] = 0.f; row[p++] = 0.f; row[p++] = 0.f;  // nx, ny, nz
             row[p++] = h_features_dc[i].x; row[p++] = h_features_dc[i].y; row[p++] = h_features_dc[i].z;
-            // SH rest in (3, K) order: r0..r_{K-1}, g0..g_{K-1}, b0..b_{K-1}
-            for (int j = 0; j < K; j++) row[p++] = h_features_sh[i*K + j].x;
-            for (int j = 0; j < K; j++) row[p++] = h_features_sh[i*K + j].y;
-            for (int j = 0; j < K; j++) row[p++] = h_features_sh[i*K + j].z;
+            // SH rest in (3, K) order: r0..r_{K-1}, g0..g_{K-1}, b0..b_{K-1}.
+            // Branch hoisted out of the inner loops so the codec decode only
+            // runs when value-quant is active.
+            if (quant_sh_value) {
+                for (int j = 0; j < K; j++) row[p++] = decode_sh(i, j, 0);
+                for (int j = 0; j < K; j++) row[p++] = decode_sh(i, j, 1);
+                for (int j = 0; j < K; j++) row[p++] = decode_sh(i, j, 2);
+            } else {
+                for (int j = 0; j < K; j++) row[p++] = h_features_sh[i*K + j].x;
+                for (int j = 0; j < K; j++) row[p++] = h_features_sh[i*K + j].y;
+                for (int j = 0; j < K; j++) row[p++] = h_features_sh[i*K + j].z;
+            }
             row[p++] = h_opacities[i];
             row[p++] = h_scales[i].x; row[p++] = h_scales[i].y; row[p++] = h_scales[i].z;
             row[p++] = h_quats[i].x; row[p++] = h_quats[i].y; row[p++] = h_quats[i].z; row[p++] = h_quats[i].w;

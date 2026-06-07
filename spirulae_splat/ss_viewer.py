@@ -111,7 +111,7 @@ class PlyViewer:
         viewmat[:3, 3:4] = T_inv
         return viewmat.unsqueeze(0)
 
-    def render(self, c2w, fx, fy, cx, cy, width, height, camera_model):
+    def render(self, c2w, fx, fy, cx, cy, width, height, camera_model, *args, **kwargs):
         camera_model = camera_model.upper()
         viewmats = self._camera_to_viewmat(c2w)
         intrins = torch.tensor([[fx, fy, cx, cy]], dtype=torch.float32, device=self.device)

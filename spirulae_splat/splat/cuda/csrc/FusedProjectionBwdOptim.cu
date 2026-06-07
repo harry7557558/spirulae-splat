@@ -13,8 +13,8 @@ template<
     CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
     const bool use_scale_agnostic_mean,
-    const bool use_color_trust_region,
-    const bool color_is_linear
+    const bool color_trust_linear,
+    const int  LEVEL
 >
 void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     cudaStream_t stream,
@@ -66,9 +66,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const int32_t* __restrict__ steps,
-    const int sh_quant_bits,
-    const int sh_value_bits
+    const int32_t* __restrict__ steps
 );
 
 
@@ -103,8 +101,8 @@ template<
     typename SplatPrimitive,
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
     bool use_scale_agnostic_mean,
-    bool use_color_trust_region,
-    bool color_is_linear
+    bool color_trust_linear,
+    int  LEVEL
 >
 inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     // fwd inputs
@@ -153,9 +151,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const std::optional<TorchTensorView> steps,
-    const int sh_quant_bits,
-    const int sh_value_bits
+    const std::optional<TorchTensorView> steps
 ) {
     uint32_t C = (uint32_t)std::get<2>(viewmats)[0]; // number of cameras (first dim)
     // Note: viewmats shape is [C, 4, 4], so index 0 = C
@@ -247,16 +243,15 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             max_gauss_ratio, scale_regularization_weight, \
             mcmc_opacity_reg_weight, mcmc_scale_reg_weight, erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight, sh_reg_weight, \
             eps_tr, \
-            scalar_step, steps_ptr, \
-            sh_quant_bits, sh_value_bits \
+            scalar_step, steps_ptr \
         )
 
     if (camera_model == CameraModelType::PINHOLE)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE, hessian_diagonal_output_mode, use_scale_agnostic_mean, use_color_trust_region, color_is_linear> _LAUNCH_ARGS;
+        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE, hessian_diagonal_output_mode, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::FISHEYE)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE, hessian_diagonal_output_mode, use_scale_agnostic_mean, use_color_trust_region, color_is_linear> _LAUNCH_ARGS;
+        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE, hessian_diagonal_output_mode, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::EQUISOLID)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID, hessian_diagonal_output_mode, use_scale_agnostic_mean, use_color_trust_region, color_is_linear> _LAUNCH_ARGS;
+        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID, hessian_diagonal_output_mode, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -324,12 +319,10 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
     bool use_scale_agnostic_mean,
-    bool use_color_trust_region,
-    bool color_is_linear,
+    bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits,
-    int sh_value_bits
+    int sh_quantization_level
 ) {
     int32_t scalar_step = std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1;
     std::optional<TorchTensorView> steps_view = std::get_if<TorchTensorView>(&step) ?
@@ -383,9 +376,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
         sh_reg_weight, \
         eps_tr, \
         scalar_step, \
-        steps_view, \
-        sh_quant_bits, \
-        sh_value_bits \
+        steps_view \
     )
     // Match projection_*_backward: cap kernel-template SH degree at the
     // runtime sh_degree_to_use so forward/backward agree on which bands
@@ -393,27 +384,40 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     // unused bands, which propagates through `v_viewdir` into `v_mean`).
     int sh_degree = typename PrimT<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = std::min(sh_degree, max_sh_degree);
-    // Pack the 3 bools (use_scale_agnostic_mean, use_color_trust_region,
-    // color_is_linear) into a single 3-bit key for the dispatch table.
+    // Pack (use_scale_agnostic_mean, color_trust_linear) into a 2-bit key.
+    // LEVEL also becomes a template arg so each kernel.cu compiles ONE
+    // specialization. LEVEL collapses the prior (QUANT_BITS, VALUE_BITS) axes
+    // (7 combos) down to 3 valid combos:
+    //   0 = off (32-bit value, fp32 optim)
+    //   1 = light (16-bit value, 8-bit packed optim)
+    //   2 = heavy (8-bit value, 4-bit packed optim)
     const int dispatch_key =
         (int)use_scale_agnostic_mean
-        | ((int)use_color_trust_region  << 1)
-        | ((int)color_is_linear         << 2);
-    #define LAUNCH_BOOL3(n, sam, tr, cl) \
-        if (sh_degree == (n) && dispatch_key == ((int)(sam) | ((int)(tr)<<1) | ((int)(cl)<<2))) \
-            return (void)launch_fused_projection_bwd_optimizer_3dgs_kernel<PrimT<n>, HessianDiagonalOutputMode::None, sam, tr, cl> _ARGS;
+        | ((int)color_trust_linear << 1);
+    // Validate up front: bits == 32 / packed-not-allocated -> LEVEL must be 0;
+    // any non-zero level requires the optim+value packed buffers to be live.
+    if (sh_quantization_level < 0 || sh_quantization_level > 2)
+        throw std::runtime_error(
+            "fused_projection_bwd_optimizer: sh_quantization_level must be "
+            "0, 1, or 2; got " + std::to_string(sh_quantization_level));
+    #define LAUNCH_LEVEL(n, sam, ctl, level) \
+        if (sh_degree == (n) && dispatch_key == ((int)(sam) | ((int)(ctl) << 1)) \
+            && sh_quantization_level == (level)) \
+            return (void)launch_fused_projection_bwd_optimizer_3dgs_kernel< \
+                PrimT<n>, HessianDiagonalOutputMode::None, sam, ctl, level> _ARGS;
+    #define LAUNCH_LEVELS(n, sam, ctl) \
+        LAUNCH_LEVEL(n, sam, ctl, 0) \
+        LAUNCH_LEVEL(n, sam, ctl, 1) \
+        LAUNCH_LEVEL(n, sam, ctl, 2)
     #define LAUNCH(n) \
-        LAUNCH_BOOL3(n, false, false, false) \
-        LAUNCH_BOOL3(n, true,  false, false) \
-        LAUNCH_BOOL3(n, false, true,  false) \
-        LAUNCH_BOOL3(n, true,  true,  false) \
-        LAUNCH_BOOL3(n, false, true,  true) \
-        LAUNCH_BOOL3(n, true,  true,  true) \
-        LAUNCH_BOOL3(n, false, false, true) \
-        LAUNCH_BOOL3(n, true,  false, true)
+        LAUNCH_LEVELS(n, false, false) \
+        LAUNCH_LEVELS(n, true,  false) \
+        LAUNCH_LEVELS(n, false, true) \
+        LAUNCH_LEVELS(n, true,  true)
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
-    #undef LAUNCH_BOOL3
+    #undef LAUNCH_LEVELS
+    #undef LAUNCH_LEVEL
     #undef _ARGS
 }
 
@@ -464,12 +468,10 @@ void fused_projection_bwd_optimizer_3dgs(
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
     bool use_scale_agnostic_mean,
-    bool use_color_trust_region,
-    bool color_is_linear,
+    bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits,
-    int sh_value_bits
+    int sh_quantization_level
 ) {
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGS>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -483,8 +485,8 @@ void fused_projection_bwd_optimizer_3dgs(
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, eps_tr, step,
-        sh_quant_bits, sh_value_bits);
+        color_trust_linear, eps_tr, step,
+        sh_quantization_level);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -529,12 +531,10 @@ void fused_projection_bwd_optimizer_mip(
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
     bool use_scale_agnostic_mean,
-    bool use_color_trust_region,
-    bool color_is_linear,
+    bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits,
-    int sh_value_bits
+    int sh_quantization_level
 ) {
     _fused_projection_bwd_optimizer_dispatch<MipSplatting>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -548,8 +548,8 @@ void fused_projection_bwd_optimizer_mip(
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, eps_tr, step,
-        sh_quant_bits, sh_value_bits);
+        color_trust_linear, eps_tr, step,
+        sh_quantization_level);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -594,12 +594,10 @@ void fused_projection_bwd_optimizer_3dgut(
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
     bool use_scale_agnostic_mean,
-    bool use_color_trust_region,
-    bool color_is_linear,
+    bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits,
-    int sh_value_bits
+    int sh_quantization_level
 ) {
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGUT>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -613,8 +611,8 @@ void fused_projection_bwd_optimizer_3dgut(
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, eps_tr, step,
-        sh_quant_bits, sh_value_bits);
+        color_trust_linear, eps_tr, step,
+        sh_quantization_level);
 }
 
 

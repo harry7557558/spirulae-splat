@@ -56,12 +56,10 @@ void fused_projection_bwd_optimizer_3dgs(
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
     bool use_scale_agnostic_mean,
-    bool use_color_trust_region,
-    bool color_is_linear,
+    bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits,
-    int sh_value_bits
+    int sh_quantization_level
 );
 
 
@@ -106,12 +104,10 @@ void fused_projection_bwd_optimizer_mip(
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
     bool use_scale_agnostic_mean,
-    bool use_color_trust_region,
-    bool color_is_linear,
+    bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits,
-    int sh_value_bits
+    int sh_quantization_level
 );
 
 
@@ -156,10 +152,8 @@ void fused_projection_bwd_optimizer_3dgut(
     const float quat_norm_reg_weight,
     const float sh_reg_weight,
     bool use_scale_agnostic_mean,
-    bool use_color_trust_region,
-    bool color_is_linear,
+    bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits,
-    int sh_value_bits
+    int sh_quantization_level
 );

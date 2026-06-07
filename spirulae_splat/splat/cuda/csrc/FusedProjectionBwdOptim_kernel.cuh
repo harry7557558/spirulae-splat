@@ -60,8 +60,14 @@ template<
     CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
     bool use_scale_agnostic_mean,
-    bool use_color_trust_region,
-    bool color_is_linear,
+    // Merged flag for the two color-space variants. In Python both
+    // `OptimConfig::use_color_trust_region` and `OptimConfig::color_is_linear`
+    // are wired to the same `splat_color_is_linear` flag (core.py), so
+    // collapsing the bool2 -> bool here halves the FPBO instantiation count
+    // on the color-space axis. Gates BOTH the trust-region clip on the
+    // per-channel Adam delta AND the linear-to-sRGB Jacobian inversion on
+    // the per-channel gradient.
+    bool color_trust_linear,
     int BLOCK_SIZE,
     int QUANT_BITS = 8,    // SH-Adam quant bit depth: 4 or 8 (ignored when BLOCK_SIZE == 0)
     int VALUE_BITS = 32    // SH-VALUE quant bit depth: 32 (off), 8, or 16. Per-splat-block
@@ -344,7 +350,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         // Linear -> sRGB Jacobian inversion on the gradient: divides the
         // working-color-space grad by d(sRGB)/d(linear) so the Adam update
         // is computed in the linear domain (matches fused_adamtr_linear_rgb).
-        if constexpr (color_is_linear) {
+        if constexpr (color_trust_linear) {
             v_dc.x /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * splat_world.features_dc.x + 0.5f);
             v_dc.y /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * splat_world.features_dc.y + 0.5f);
             v_dc.z /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * splat_world.features_dc.z + 0.5f);
@@ -354,7 +360,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         float3 denom = sqrtf(g2_feature_dc * inv_bias_correction2) + make_float3(eps);
         float3 delta = make_float3(-lr_features_dc * inv_bias_correction1) * (g1_feature_dc / denom);
 
-        if constexpr (use_color_trust_region) {
+        if constexpr (color_trust_linear) {
             // Trust-region clip in the working color space (matches
             // fused_adamtr_rgb_optim_kernel). delta_max = kSh0*sqrt(4*eps_tr*c/opac).
             float opac = sigmoid(splat_world.opacity);
@@ -390,13 +396,13 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     // (used for the clip radius). Both are computed once per splat from DC.
     float3 c_dc = make_float3(0.0f), c_dc_clamped = make_float3(0.0f);
     float3 clip_dc = make_float3(0.0f);
-    if constexpr (use_color_trust_region || color_is_linear) {
+    if constexpr (color_trust_linear || color_trust_linear) {
         if (inside) {
             c_dc = kSh0 * splat_world.features_dc + 0.5f;
             c_dc_clamped = fmaxf(c_dc, (1.0f/255.0f)*(1.0f/255.0f));
         }
     }
-    if constexpr (use_color_trust_region) {
+    if constexpr (color_trust_linear) {
         if (inside) {
             float opac = sigmoid(splat_world.opacity);
             float inv_opac = 1.0f / fmaxf(opac, 1e-12f);
@@ -414,7 +420,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         // Skip the float4 fast path when color-space trust region is on
         // (per-channel clip / linear correction breaks the lane-coupled fast
         // path). The scalar loop below handles every i.
-        if constexpr (!use_color_trust_region && !color_is_linear) {
+        if constexpr (!color_trust_linear && !color_trust_linear) {
             #pragma unroll
             for (; i+3 < 3*num_sh; i += 4) {
                 float4 sh_coeff = float4{sh_ptr[i], sh_ptr[i+1], sh_ptr[i+2], sh_ptr[i+3]};
@@ -434,13 +440,13 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             // Channel index 0/1/2 within (band, channel) layout.
             const int ch = i % 3;
             const float c_ch = (ch == 0) ? c_dc.x : (ch == 1) ? c_dc.y : c_dc.z;
-            if constexpr (color_is_linear) {
+            if constexpr (color_trust_linear) {
                 v_sh_coeff /= SlangPixelWise::linear_rgb_to_srgb_grad(c_ch);
             }
             float g1_feature_sh = beta1 * g1_sh_ptr[i] + (1.f - beta1) * v_sh_coeff;
             float g2_feature_sh = beta2 * g2_sh_ptr[i] + (1.f - beta2) * v_sh_coeff*v_sh_coeff;
             float delta = -lr_sh * g1_feature_sh / (sqrtf(g2_feature_sh * inv_bias_correction2) + eps);
-            if constexpr (use_color_trust_region) {
+            if constexpr (color_trust_linear) {
                 float clip = (ch == 0) ? clip_dc.x : (ch == 1) ? clip_dc.y : clip_dc.z;
                 delta = fminf(fmaxf(delta, -clip), clip);
                 delta = isfinite(delta) ? delta : 0.0f;
@@ -517,7 +523,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             // Linear -> sRGB Jacobian inversion on the per-channel grad
             // (matches fused_adamtr_linear_rgb_sh_optim_kernel). c_dc is the
             // DC color in [0, 1]; the divisor is d(sRGB)/d(linear) at that c.
-            if constexpr (color_is_linear) {
+            if constexpr (color_trust_linear) {
                 v_sh_coeff.x /= SlangPixelWise::linear_rgb_to_srgb_grad(c_dc.x);
                 v_sh_coeff.y /= SlangPixelWise::linear_rgb_to_srgb_grad(c_dc.y);
                 v_sh_coeff.z /= SlangPixelWise::linear_rgb_to_srgb_grad(c_dc.z);
@@ -530,7 +536,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
                 -lr_sh * g1_updated.y / denom.y,
                 -lr_sh * g1_updated.z / denom.z
             );
-            if constexpr (use_color_trust_region) {
+            if constexpr (color_trust_linear) {
                 // Per-channel trust-region clip using the DC's clip radius.
                 sh_delta.x = fminf(fmaxf(sh_delta.x, -clip_dc.x), clip_dc.x);
                 sh_delta.y = fminf(fmaxf(sh_delta.y, -clip_dc.y), clip_dc.y);
@@ -664,8 +670,15 @@ template<
     CameraModelType camera_model,
     HessianDiagonalOutputMode hessian_diagonal_output_mode,
     const bool use_scale_agnostic_mean,
-    const bool use_color_trust_region,
-    const bool color_is_linear
+    const bool color_trust_linear,
+    // SH quantization level. Single int collapses the prior (QUANT_BITS, VALUE_BITS)
+    // axes from 7 combos to 3, cutting FPBO instantiations by another 57%.
+    //   LEVEL == 0 : off          -- 32-bit value, 32-bit (fp32) optim state
+    //   LEVEL == 1 : light        -- 16-bit value, 8x2-bit optim (2 B / cell)
+    //   LEVEL == 2 : heavy        -- 8-bit  value, 4x2-bit optim (1 B / cell)
+    // The wrapper derives BLOCK_SIZE / QUANT_BITS / VALUE_BITS internally from
+    // LEVEL via constexpr so the kernel template signature is unchanged.
+    const int  LEVEL
 >
 void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     cudaStream_t stream,
@@ -717,63 +730,45 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const int32_t* __restrict__ steps,
-    const int sh_quant_bits,       // 32 = no quant, 4 or 8 = packed quant (optim state)
-    const int sh_value_bits        // 32 = no quant, 8 or 16 = packed quant (SH VALUE)
+    const int32_t* __restrict__ steps
 ) {
-    bool use_quant = (sh_packed != nullptr && sh_quant_bounds != nullptr);
-    constexpr int BLOCK_SIZE = 256;
-
-    // Three compile-time variants for the optim-state quant (BLOCK_SIZE
-    // template parameter): off (0), 4-bit, 8-bit. Multiplied by the
-    // SH-value-quant variants {32, 8, 16}. To keep instantiations bounded,
-    // VALUE_BITS != 32 is only wired through the BLOCK_SIZE != 0 paths --
-    // the BLOCK_SIZE == 0 + VALUE_BITS != 32 combo is not yet exposed
-    // (the kernel falls back to fp32 SH reads/writes when VALUE_BITS == 32,
-    // matching the legacy behavior).
-    #define _ARGS_TAIL \
-        C, N, num_sh_buffer, \
-        splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height, \
-        camera_id_bounds, camera_ids, perm, aabb, \
-        v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen, \
-        g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds, \
-        sh_value_packed, sh_value_bounds, \
-        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh, \
-        max_gauss_ratio, \
-        scale_regularization_weight / (float)N, \
-        mcmc_opacity_reg_weight / (float)N, \
-        mcmc_scale_reg_weight / (float)N, \
-        erank_reg_weight / (float)N, \
-        erank_reg_weight_s3 / (float)N, \
-        quat_norm_reg_weight / (float)N, \
-        2.0f * sh_reg_weight / (float)(3*N), \
-        eps_tr, \
-        scalar_step, steps
-
-    #define _LAUNCH(QUANT_BITS_, VALUE_BITS_) \
-        fused_projection_bwd_optimizer_3dgs_kernel< \
-            SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean, \
-            use_color_trust_region, color_is_linear, BLOCK_SIZE, QUANT_BITS_, VALUE_BITS_ \
-        ><<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(_ARGS_TAIL)
-
-    if (!use_quant) {
-        // BLOCK_SIZE == 0 -> optim-state-fp32 path. VALUE_BITS != 32 here is
-        // out of scope for now; the kernel's if-constexpr in that branch
-        // falls through to fp32 reads/writes regardless.
-        fused_projection_bwd_optimizer_3dgs_kernel<
-            SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
-            use_color_trust_region, color_is_linear, 0, 8, 32
-        ><<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(_ARGS_TAIL);
-    } else if (sh_quant_bits == 4) {
-        if (sh_value_bits == 8)        { _LAUNCH(4, 8);  }
-        else if (sh_value_bits == 16)  { _LAUNCH(4, 16); }
-        else                           { _LAUNCH(4, 32); }
-    } else {
-        // Default to 8-bit (legacy behavior).
-        if (sh_value_bits == 8)        { _LAUNCH(8, 8);  }
-        else if (sh_value_bits == 16)  { _LAUNCH(8, 16); }
-        else                           { _LAUNCH(8, 32); }
-    }
-    #undef _LAUNCH
-    #undef _ARGS_TAIL
+    // One kernel instantiation per wrapper instantiation -- the runtime
+    // dispatch on the SH quantization level has been lifted into the
+    // host-side dispatcher in FusedProjectionBwdOptim.cu so each translation
+    // unit compiles a single template specialization.
+    constexpr int BLOCK_SIZE_LAUNCH = 256;
+    // Derive optim-state and value-quant bit widths from LEVEL:
+    //   LEVEL 0: QUANT_BITS=0 (off), VALUE_BITS=32 (off)
+    //   LEVEL 1: QUANT_BITS=8       VALUE_BITS=16
+    //   LEVEL 2: QUANT_BITS=4       VALUE_BITS=8
+    // QUANT_BITS == 0 selects the kernel's no-quant path via its BLOCK_SIZE
+    // template (0 = fp32 g1/g2); KERNEL_QUANT_BITS is passed through but
+    // unused in that branch (it just needs to satisfy QuantizedAdamState's
+    // static_assert).
+    constexpr int LEVEL_QUANT_BITS = (LEVEL == 0) ? 0 : (LEVEL == 1) ? 8 : 4;
+    constexpr int LEVEL_VALUE_BITS = (LEVEL == 0) ? 32 : (LEVEL == 1) ? 16 : 8;
+    constexpr int KERNEL_BLOCK_SIZE = (LEVEL_QUANT_BITS == 0) ? 0 : BLOCK_SIZE_LAUNCH;
+    constexpr int KERNEL_QUANT_BITS = (LEVEL_QUANT_BITS == 0) ? 8 : LEVEL_QUANT_BITS;
+    fused_projection_bwd_optimizer_3dgs_kernel<
+        SplatPrimitive, camera_model, hessian_diagonal_output_mode,
+        use_scale_agnostic_mean, color_trust_linear,
+        KERNEL_BLOCK_SIZE, KERNEL_QUANT_BITS, LEVEL_VALUE_BITS
+    ><<<_CEIL_DIV(N, BLOCK_SIZE_LAUNCH), BLOCK_SIZE_LAUNCH, 0, stream>>>(
+        C, N, num_sh_buffer,
+        splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
+        camera_id_bounds, camera_ids, perm, aabb,
+        v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen,
+        g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
+        sh_value_packed, sh_value_bounds,
+        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh,
+        max_gauss_ratio,
+        scale_regularization_weight / (float)N,
+        mcmc_opacity_reg_weight / (float)N,
+        mcmc_scale_reg_weight / (float)N,
+        erank_reg_weight / (float)N,
+        erank_reg_weight_s3 / (float)N,
+        quat_norm_reg_weight / (float)N,
+        2.0f * sh_reg_weight / (float)(3*N),
+        eps_tr,
+        scalar_step, steps);
 }

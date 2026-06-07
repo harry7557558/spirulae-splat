@@ -236,21 +236,18 @@ def generate_ProjectionBwd():
 
 def generate_FusedProjectionBwdOptim():
     definition = extract_kernel_definition("FusedProjectionBwdOptim.cu", "fused_projection_bwd_optimizer_3dgs_kernel_wrapper")
-    # Six template args total: SplatPrimitive, camera_model,
+    # Six template args: SplatPrimitive, camera_model,
     # hessian_diagonal_output_mode, use_scale_agnostic_mean,
-    # use_color_trust_region, color_is_linear.
+    # color_trust_linear, LEVEL.
+    #
+    # LEVEL collapses the prior (QUANT_BITS, VALUE_BITS) axes (7 combos) into
+    # just 3 instantiations:
+    #   0 = off    (32-bit value, fp32 optim state)
+    #   1 = light  (16-bit value, 8-bit packed optim)
+    #   2 = heavy  (8-bit value,  4-bit packed optim)
+    # The wrapper derives BLOCK_SIZE / QUANT_BITS / VALUE_BITS internally via
+    # constexpr, so each wrapper compiles ONE kernel specialization.
     map_header = ["typename SplatPrimitive", None, None, None, None, None]
-    # Color-space combos: prune impossible (color_is_linear=true requires
-    # use_color_trust_region=true OR the linear-correction path is active,
-    # but the linear correction is also gated on color_is_linear). We keep:
-    #   (tr=F, lin=F): default, no color space
-    #   (tr=T, lin=F): wide-gamut + trust region
-    #   (tr=T, lin=T): linear + trust region (Python's
-    #                  fused_adamtr_linear_rgb_*_optim variants)
-    #   (tr=F, lin=T): linear gradient correction without TR clip (matches
-    #                  the legacy fused_adam_linear_rgb_optim variant)
-    color_combos = [("false", "false"), ("true", "false"),
-                    ("true",  "true"),  ("false", "true")]
     primitives = [
         "Vanilla3DGS<0>", "MipSplatting<0>", "Vanilla3DGUT<0>",
         "Vanilla3DGS<1>", "MipSplatting<1>", "Vanilla3DGUT<1>",
@@ -262,19 +259,21 @@ def generate_FusedProjectionBwdOptim():
             "CameraModelType::FISHEYE",
             "CameraModelType::EQUISOLID"]
     map_body = [
-        (prim, cam, "HessianDiagonalOutputMode::None", sam, tr, lin)
+        (prim, cam, "HessianDiagonalOutputMode::None", sam, ctl, level)
         for prim in primitives
         for cam  in cams
         for sam  in ("true", "false")
-        for (tr, lin) in color_combos
+        for ctl  in ("true", "false")
+        for level in ("0", "1", "2")
     ]
-    # Per primitive: 3 cams * 2 sam * 4 color_combos = 24 instantiations. The
-    # `primitives` list interleaves [3DGS, Mip, 3DGUT] per SH degree, so each
-    # SH degree contributes 2*24 Primitive3DGS entries (3DGS+Mip share the
-    # base) followed by 24 Primitive3DGUT entries. 5 degrees -> 360 total.
+    # Per primitive: 3 cams * 2 sam * 2 ctl * 3 levels = 36 instantiations.
+    # 15 primitives * 36 = 540 total (down from the 1260 with separate
+    # qbits/vbits). The `primitives` list interleaves [3DGS, Mip, 3DGUT] per
+    # SH degree, so per SH degree we get 2*36 Primitive3DGS entries
+    # (3DGS+Mip) followed by 36 Primitive3DGUT entries.
     includes = [*(
-        [("Primitive3DGS.cuh",   "FusedProjectionBwdOptim_kernel.cuh")] * 48 +
-        [("Primitive3DGUT.cuh",  "FusedProjectionBwdOptim_kernel.cuh")] * 24
+        [("Primitive3DGS.cuh",   "FusedProjectionBwdOptim_kernel.cuh")] * (36 * 2) +
+        [("Primitive3DGUT.cuh",  "FusedProjectionBwdOptim_kernel.cuh")] * 36
     )] * 5
 
     generate_kernel_instantiation("FusedProjectionBwdOptim", definition, map_header, map_body, includes)

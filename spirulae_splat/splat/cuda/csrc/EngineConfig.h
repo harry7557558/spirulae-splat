@@ -69,6 +69,15 @@ struct OptimConfig {
     // are not yet plumbed. Setting this != 32 at training time will throw at
     // optimizer state init until that work lands.
     int   sh_value_bits                   = 8;
+    // Single SH quantization level. Collapses the FPBO dispatch's
+    // (sh_optim_bits, sh_value_bits) axes (7 combos) down to 3 instantiations:
+    //   0 = off    : 32-bit fp32 value, 32-bit fp32 optim state
+    //   1 = light  : 16-bit value,      8-bit (joint u,sqrt_g2 = 2B/cell) optim
+    //   2 = heavy  : 8-bit  value,      4-bit (joint u,sqrt_g2 = 1B/cell) optim
+    // Python is expected to ALSO set sh_optim_bits / sh_value_bits to the
+    // values implied by this level (the FPBO dispatcher only uses the level;
+    // non-FPBO paths and EngineState still read the individual bits).
+    int   sh_quantization_level           = 0;
     bool  use_per_splat_bias_correction   = false;
 
     // When true, fold projection-backward and Adam-based per-splat optim into

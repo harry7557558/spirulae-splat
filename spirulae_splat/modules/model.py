@@ -107,11 +107,16 @@ class SpirulaeSplatModelConfig:
     use_fused_proj_bwd_optim: bool = True
     """Whether to use fused projection backward and optimizer.
         More memory efficient for large number of Gaussians, with slight performance hit."""
-    sh_optim_bits: int = 8
-    """Bit depth for SH Adam optimizer-state quantization. 32 = no quantization
-        (full fp32 g1/g2). 4 or 8 = packed QuantizedAdamState<BITS, 256> with
-        joint (u, log_s) AoS encoding. 4-bit is incompatible with densification
-        (only 8-bit currently has densify-side zero-encoding)."""
+    sh_quantization_level: int = 1
+    """SH quantization level: a single int that selects one of three
+        (param bits, optim bits) configurations.
+            0 = off          : 32-bit param, fp32 optim
+            1 = light        : 16-bit param, 8-bit packed optim (2 B / cell)
+            2 = heavy        :  8-bit param, 4-bit packed optim (1 B / cell)
+        Collapsing the prior independent param+optim bit controls into a
+        single level cuts the FPBO kernel instantiations to ~3x fewer
+        wrappers (the runtime dispatch enumerates 3 levels instead of 7
+        bit-pair combos)."""
     compute_hessian_diagonal: Literal[None, "position", "all"] = None
     """What parameter sets to compute an approximation of Hessian diagonal as well as a Jacobian-residual product in backward pass. Required for second-order optimizer."""
     optimizer_offload: Literal[None, "sh", "all"] = None
@@ -405,7 +410,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             packed=(self.config.packed or self.config.use_bvh),
             use_bvh=self.config.use_bvh,
             use_fused_proj_bwd_optim=self.config.use_fused_proj_bwd_optim,
-            sh_optim_bits=self.config.sh_optim_bits,
+            sh_quantization_level=self.config.sh_quantization_level,
         )
 
         # Engine-side background blending. populate_modules already created the

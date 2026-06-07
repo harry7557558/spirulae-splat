@@ -335,12 +335,13 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
             cfg.erank_reg_weight, cfg.erank_reg_weight_s3,
             cfg.quat_norm_reg_weight, cfg.sh_reg_weight,
             cfg.use_scale_agnostic_mean,
-            cfg.use_color_trust_region,
-            cfg.color_is_linear,
+            // The two flags are tied to the same Python source
+            // (splat_color_is_linear); collapse to one to halve the FPBO
+            // color-space instantiation axis.
+            cfg.use_color_trust_region || cfg.color_is_linear,
             cfg.eps_tr,
             step_arg,
-            cfg.sh_optim_bits,
-            cfg.sh_value_bits
+            cfg.sh_quantization_level
         );
     };
 

@@ -8,9 +8,9 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<0>,
     CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None,
-    false,
-    false,
-    false
+    true,
+    true,
+    0
 >(
     cudaStream_t stream,
     // fwd inputs
@@ -61,18 +61,16 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const int32_t* __restrict__ steps,
-    const int sh_quant_bits,
-    const int sh_value_bits
+    const int32_t* __restrict__ steps
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<0>,
     CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None,
-    false,
     true,
-    false
+    true,
+    1
 >(
     cudaStream_t stream,
     // fwd inputs
@@ -123,18 +121,16 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const int32_t* __restrict__ steps,
-    const int sh_quant_bits,
-    const int sh_value_bits
+    const int32_t* __restrict__ steps
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<0>,
     CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None,
-    false,
     true,
-    true
+    true,
+    2
 >(
     cudaStream_t stream,
     // fwd inputs
@@ -185,18 +181,16 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const int32_t* __restrict__ steps,
-    const int sh_quant_bits,
-    const int sh_value_bits
+    const int32_t* __restrict__ steps
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<0>,
     CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None,
+    true,
     false,
-    false,
-    true
+    0
 >(
     cudaStream_t stream,
     // fwd inputs
@@ -247,18 +241,16 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const int32_t* __restrict__ steps,
-    const int sh_quant_bits,
-    const int sh_value_bits
+    const int32_t* __restrict__ steps
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<0>,
-    CameraModelType::EQUISOLID,
+    CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None,
     true,
     false,
-    false
+    1
 >(
     cudaStream_t stream,
     // fwd inputs
@@ -309,18 +301,16 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const int32_t* __restrict__ steps,
-    const int sh_quant_bits,
-    const int sh_value_bits
+    const int32_t* __restrict__ steps
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<0>,
-    CameraModelType::EQUISOLID,
+    CameraModelType::FISHEYE,
     HessianDiagonalOutputMode::None,
     true,
-    true,
-    false
+    false,
+    2
 >(
     cudaStream_t stream,
     // fwd inputs
@@ -371,7 +361,5 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float sh_reg_weight,
     const float eps_tr,
     const int32_t scalar_step,
-    const int32_t* __restrict__ steps,
-    const int sh_quant_bits,
-    const int sh_value_bits
+    const int32_t* __restrict__ steps
 );
