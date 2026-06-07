@@ -10,6 +10,8 @@
 #include "Primitive3DGS.cuh"
 #include "Primitive3DGUT.cuh"
 
+#include "NonShQuantState.h"
+
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
 
@@ -40,6 +42,7 @@ void fused_projection_bwd_optimizer_3dgs(
     const std::optional<TorchTensorView> sh_quant_bounds,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
+    NonShQuantState non_sh,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -59,7 +62,7 @@ void fused_projection_bwd_optimizer_3dgs(
     bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quantization_level
+    int quantization_level
 );
 
 
@@ -88,6 +91,7 @@ void fused_projection_bwd_optimizer_mip(
     const std::optional<TorchTensorView> sh_quant_bounds,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
+    NonShQuantState non_sh,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -107,7 +111,7 @@ void fused_projection_bwd_optimizer_mip(
     bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quantization_level
+    int quantization_level
 );
 
 
@@ -136,6 +140,7 @@ void fused_projection_bwd_optimizer_3dgut(
     const std::optional<TorchTensorView> sh_quant_bounds,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
+    NonShQuantState non_sh,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -155,5 +160,5 @@ void fused_projection_bwd_optimizer_3dgut(
     bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quantization_level
+    int quantization_level
 );

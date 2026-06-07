@@ -142,6 +142,11 @@ struct SplatOptim {
     // packed buffer is sized pessimistically (8-bit footprint, 2 bytes/cell)
     // regardless of sh_optim_bits; runtime dispatch picks the right codec.
     int  sh_optim_bits = 32;
+    // Non-SH Adam-state quantization bit depth (means, quats, scales,
+    // opacities, features_dc). 32 = off; 16 = QuantizedAdamState<16, 256>
+    // per-attribute. FPBO-only. When 16, the fp32 g1_/g2_ buffers below are
+    // empty and the canonical store is the `*_quant_state_fpbo` packed buffer.
+    int  non_sh_optim_bits = 32;
     bool use_per_splat_bias_correction = false;
 
     DeviceVector<float3>   g1_means,         g2_means;
@@ -156,8 +161,19 @@ struct SplatOptim {
     // `sh_quant_state`. Allocated only when use_fused_proj_bwd_optim + sh_optim_bits!=32.
     QuantizedAdamState<8, 256> sh_quant_state_fpbo;
 
+    // Non-SH Adam-state quantization (FPBO-only). One quant state per
+    // attribute; each holds (cells = N * primitives_per_splat) packed bytes
+    // and (bounds = ceil(N / kFpboBlock)) float4 bounds. Allocated only when
+    // use_fused_proj_bwd_optim + non_sh_optim_bits != 32.
+    QuantizedAdamState<16, 256> means_quant_state_fpbo;            // 3 prim/splat
+    QuantizedAdamState<16, 256> quats_quant_state_fpbo;            // 4 prim/splat
+    QuantizedAdamState<16, 256> scales_quant_state_fpbo;           // 3 prim/splat
+    QuantizedAdamState<16, 256> opacities_quant_state_fpbo;        // 1 prim/splat
+    QuantizedAdamState<16, 256> features_dc_quant_state_fpbo;      // 3 prim/splat
+
     // Convenience flag mirroring `sh_optim_bits != 32`.
     bool sh_quantize_enabled() const { return sh_optim_bits != 32; }
+    bool non_sh_quantize_enabled() const { return non_sh_optim_bits != 32; }
 
     DeviceVector<float>    radii;                  // [max_N]
     DeviceVector<float2>   accum_buffer;           // [max_N]

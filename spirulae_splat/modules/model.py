@@ -107,7 +107,7 @@ class SpirulaeSplatModelConfig:
     use_fused_proj_bwd_optim: bool = True
     """Whether to use fused projection backward and optimizer.
         More memory efficient for large number of Gaussians, with slight performance hit."""
-    sh_quantization_level: int = 1
+    quantization_level: int = 1
     """SH quantization level: a single int that selects one of two
         (param bits, optim bits) configurations.
             0 = off          : 32-bit param, fp32 optim
@@ -407,7 +407,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             packed=(self.config.packed or self.config.use_bvh),
             use_bvh=self.config.use_bvh,
             use_fused_proj_bwd_optim=self.config.use_fused_proj_bwd_optim,
-            sh_quantization_level=self.config.sh_quantization_level,
+            quantization_level=self.config.quantization_level,
         )
 
         # Engine-side background blending. populate_modules already created the

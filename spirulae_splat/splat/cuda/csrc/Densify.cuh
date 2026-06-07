@@ -3,6 +3,8 @@
 
 #include <Tensor.h>
 
+#include "NonShQuantState.h"
+
 
 // densify_update_weight score mode. Mirrors DensifyConfig::score_mode.
 enum class DensifyScoreMode : int {
@@ -117,6 +119,9 @@ void relocate_splats_with_long_axis_split_tensor(
     int  sh_value_bits,             // 32 / 8 / 16
     bool sh_value_bounds_per_splat,
     int  num_sh_buffer,             // buffer stride for cell indexing
+    // Non-SH Adam-state quant: when enabled, each relocated dst splat gets
+    // its packed bytes set to codec-encoded zero against the current bound.
+    NonShQuantState non_sh,
     uint32_t seed
 );
 
@@ -138,6 +143,7 @@ void add_splats_with_long_axis_split_tensor(
     int  sh_value_bits,
     bool sh_value_bounds_per_splat,
     int  num_sh_buffer,
+    NonShQuantState non_sh,
     uint32_t seed
 );
 
@@ -158,6 +164,7 @@ void relocate_splats_mcmc_tensor(
     int  sh_value_bits,
     bool sh_value_bounds_per_splat,
     int  num_sh_buffer,
+    NonShQuantState non_sh,
     uint32_t seed
 );
 
@@ -179,6 +186,7 @@ void add_splats_mcmc_tensor(
     int  sh_value_bits,
     bool sh_value_bounds_per_splat,
     int  num_sh_buffer,
+    NonShQuantState non_sh,
     uint32_t seed
 );
 

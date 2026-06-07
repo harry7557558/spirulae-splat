@@ -69,14 +69,22 @@ struct OptimConfig {
     // are not yet plumbed. Setting this != 32 at training time will throw at
     // optimizer state init until that work lands.
     int   sh_value_bits                   = 8;
+    // Non-SH Adam-state quantization bit depth (means, quats, scales, opacities,
+    // features_dc). 32 = no quantization (full fp32 g1/g2). 16 =
+    // QuantizedAdamState<16, 256> -- joint (u, log_s) at 16-bit per primitive
+    // (4 B / cell). FPBO-only; the non-FPBO Adam kernel throws when this is
+    // non-32. Coupled to quantization_level on the Python side: level 1
+    // sets this to 16 automatically.
+    int   non_sh_optim_bits               = 32;
     // Single SH quantization level. Collapses the FPBO dispatch's
     // (sh_optim_bits, sh_value_bits) axes down to 2 instantiations:
-    //   0 = off    : 32-bit fp32 value, 32-bit fp32 optim state
-    //   1 = light  : 16-bit value,      8-bit (joint u,sqrt_g2 = 2B/cell) optim
-    // Python is expected to ALSO set sh_optim_bits / sh_value_bits to the
-    // values implied by this level (the FPBO dispatcher only uses the level;
-    // non-FPBO paths and EngineState still read the individual bits).
-    int   sh_quantization_level           = 0;
+    //   0 = off    : fp32 everywhere
+    //   1 = light  : 16-bit SH value, 8x2-bit SH optim, 16x2-bit non-SH optim
+    // Python is expected to ALSO set sh_optim_bits / sh_value_bits /
+    // non_sh_optim_bits to the values implied by this level (the FPBO
+    // dispatcher only uses the level; non-FPBO paths and EngineState still
+    // read the individual bits).
+    int   quantization_level           = 0;
     bool  use_per_splat_bias_correction   = false;
 
     // When true, fold projection-backward and Adam-based per-splat optim into

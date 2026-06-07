@@ -47,6 +47,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     float4* __restrict__ sh_quant_bounds,
     const uint8_t* __restrict__ sh_value_packed,
     float2* __restrict__ sh_value_bounds,
+    NonShQuantState non_sh,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -133,6 +134,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const std::optional<TorchTensorView> sh_quant_bounds,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
+    NonShQuantState non_sh,
     // optimizer params
     DeviceVector<float> radii,
     const float lr_means,
@@ -237,6 +239,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             sh_quant_bounds.has_value() ? (float4*)std::get<0>(sh_quant_bounds.value()) : nullptr, \
             sh_value_packed.has_value() ? (const uint8_t*)std::get<0>(sh_value_packed.value()) : nullptr, \
             sh_value_bounds.has_value() ? (float2*)std::get<0>(sh_value_bounds.value()) : nullptr, \
+            non_sh, \
             /*v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr */ \
             radii.data_ptr(), \
             lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh, \
@@ -302,6 +305,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     const std::optional<TorchTensorView> sh_quant_bounds,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
+    NonShQuantState non_sh,
     // optimizer params
     DeviceVector<float> radii,
     const float lr_means,
@@ -322,7 +326,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quantization_level
+    int quantization_level
 ) {
     int32_t scalar_step = std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1;
     std::optional<TorchTensorView> steps_view = std::get_if<TorchTensorView>(&step) ?
@@ -359,6 +363,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
         sh_quant_bounds, \
         sh_value_packed, \
         sh_value_bounds, \
+        non_sh, \
         radii, \
         lr_means, \
         lr_quats, \
@@ -395,13 +400,13 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
         | ((int)color_trust_linear << 1);
     // Validate up front: bits == 32 / packed-not-allocated -> LEVEL must be 0;
     // any non-zero level requires the optim+value packed buffers to be live.
-    if (sh_quantization_level < 0 || sh_quantization_level > 1)
+    if (quantization_level < 0 || quantization_level > 1)
         throw std::runtime_error(
-            "fused_projection_bwd_optimizer: sh_quantization_level must be "
-            "0 or 1; got " + std::to_string(sh_quantization_level));
+            "fused_projection_bwd_optimizer: quantization_level must be "
+            "0 or 1; got " + std::to_string(quantization_level));
     #define LAUNCH_LEVEL(n, sam, ctl, level) \
         if (sh_degree == (n) && dispatch_key == ((int)(sam) | ((int)(ctl) << 1)) \
-            && sh_quantization_level == (level)) \
+            && quantization_level == (level)) \
             return (void)launch_fused_projection_bwd_optimizer_3dgs_kernel< \
                 PrimT<n>, HessianDiagonalOutputMode::None, sam, ctl, level> _ARGS;
     #define LAUNCH_LEVELS(n, sam, ctl) \
@@ -450,6 +455,7 @@ void fused_projection_bwd_optimizer_3dgs(
     const std::optional<TorchTensorView> sh_quant_bounds,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
+    NonShQuantState non_sh,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -469,7 +475,7 @@ void fused_projection_bwd_optimizer_3dgs(
     bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quantization_level
+    int quantization_level
 ) {
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGS>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -478,13 +484,14 @@ void fused_projection_bwd_optimizer_3dgs(
         v_splats_screen, vr_splats_screen, h_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
+        non_sh,
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         lr_features_sh, max_gauss_ratio, scale_regularization_weight,
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
         color_trust_linear, eps_tr, step,
-        sh_quantization_level);
+        quantization_level);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -513,6 +520,7 @@ void fused_projection_bwd_optimizer_mip(
     const std::optional<TorchTensorView> sh_quant_bounds,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
+    NonShQuantState non_sh,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -532,7 +540,7 @@ void fused_projection_bwd_optimizer_mip(
     bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quantization_level
+    int quantization_level
 ) {
     _fused_projection_bwd_optimizer_dispatch<MipSplatting>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -541,13 +549,14 @@ void fused_projection_bwd_optimizer_mip(
         v_splats_screen, vr_splats_screen, h_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
+        non_sh,
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         lr_features_sh, max_gauss_ratio, scale_regularization_weight,
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
         color_trust_linear, eps_tr, step,
-        sh_quantization_level);
+        quantization_level);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -576,6 +585,7 @@ void fused_projection_bwd_optimizer_3dgut(
     const std::optional<TorchTensorView> sh_quant_bounds,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
+    NonShQuantState non_sh,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -595,7 +605,7 @@ void fused_projection_bwd_optimizer_3dgut(
     bool color_trust_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quantization_level
+    int quantization_level
 ) {
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGUT>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -604,13 +614,14 @@ void fused_projection_bwd_optimizer_3dgut(
         v_splats_screen, vr_splats_screen, h_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
+        non_sh,
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         lr_features_sh, max_gauss_ratio, scale_regularization_weight,
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
         color_trust_linear, eps_tr, step,
-        sh_quantization_level);
+        quantization_level);
 }
 
 

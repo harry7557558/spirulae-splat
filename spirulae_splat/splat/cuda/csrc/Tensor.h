@@ -711,8 +711,9 @@ public:
 // post-step SNR metric at no storage cost.
 //
 // Storage is array-of-structure (AoS) interleaved over the two primitives:
-//   BITS=8: 2 bytes/cell -- byte[idx*2 + 0] = u_q, byte[idx*2 + 1] = log_s_q
-//   BITS=4: 1 byte/cell  -- low nibble = u_q,    high nibble = log_s_q
+//   BITS=16: 4 bytes/cell -- (uint16_t u_q) || (uint16_t log_s_q)
+//   BITS=8:  2 bytes/cell -- byte[idx*2 + 0] = u_q, byte[idx*2 + 1] = log_s_q
+//   BITS=4:  1 byte/cell  -- low nibble = u_q,    high nibble = log_s_q
 // Quantization is endpoint-exact: q=0 -> lo, q=(kLevels-1) -> hi exactly.
 //
 // Hyperparameters (bit depth, block size, eps) are compile-time template
@@ -723,8 +724,8 @@ public:
 template<int BITS, int BLOCK_SIZE = 256>
 class QuantizedAdamState {
 public:
-    static_assert(BITS == 4 || BITS == 8,
-                  "QuantizedAdamState: only 4-bit and 8-bit are supported");
+    static_assert(BITS == 4 || BITS == 8 || BITS == 16,
+                  "QuantizedAdamState: only 4-bit, 8-bit, and 16-bit are supported");
     static_assert(BLOCK_SIZE > 0 && (BLOCK_SIZE & (BLOCK_SIZE - 1)) == 0,
                   "QuantizedAdamState: BLOCK_SIZE must be a positive power of 2");
 
@@ -733,7 +734,7 @@ public:
     static constexpr int   kLevels       = 1 << BITS;
     static constexpr float kQMax         = (float)(kLevels - 1);
     static constexpr float kInvQMax      = 1.0f / kQMax;
-    static constexpr int   kBytesPerCell = (BITS == 8) ? 2 : 1;
+    static constexpr int   kBytesPerCell = (BITS == 16) ? 4 : (BITS == 8) ? 2 : 1;
     static constexpr float kEps          = 1e-15f;   // matches Adam denominator
 
     // Storage (non-owning views backed by the global DevicePool).
@@ -787,7 +788,11 @@ public:
         const uint8_t* __restrict__ packed_ptr, int64_t idx, float4 mm
     ) {
         float u_q, s_q;
-        if constexpr (BITS == 8) {
+        if constexpr (BITS == 16) {
+            const uint16_t* p = reinterpret_cast<const uint16_t*>(packed_ptr);
+            u_q = (float)p[idx * 2 + 0];
+            s_q = (float)p[idx * 2 + 1];
+        } else if constexpr (BITS == 8) {
             u_q = (float)packed_ptr[idx * 2 + 0];
             s_q = (float)packed_ptr[idx * 2 + 1];
         } else {  // BITS == 4
@@ -823,14 +828,18 @@ public:
     ) {
         float u_range = fmaxf(mm.y - mm.x, kEps);
         float s_range = fmaxf(mm.w - mm.z, kEps);
-        uint8_t u_q = (uint8_t)fminf(
-            fmaxf(roundf(kQMax * (u_val     - mm.x) / u_range), 0.0f), kQMax);
-        uint8_t s_q = (uint8_t)fminf(
-            fmaxf(roundf(kQMax * (log_s_val - mm.z) / s_range), 0.0f), kQMax);
-        if constexpr (BITS == 8) {
-            packed_ptr[idx * 2 + 0] = u_q;
-            packed_ptr[idx * 2 + 1] = s_q;
+        float u_qf = fminf(fmaxf(roundf(kQMax * (u_val     - mm.x) / u_range), 0.0f), kQMax);
+        float s_qf = fminf(fmaxf(roundf(kQMax * (log_s_val - mm.z) / s_range), 0.0f), kQMax);
+        if constexpr (BITS == 16) {
+            uint16_t* p = reinterpret_cast<uint16_t*>(packed_ptr);
+            p[idx * 2 + 0] = (uint16_t)u_qf;
+            p[idx * 2 + 1] = (uint16_t)s_qf;
+        } else if constexpr (BITS == 8) {
+            packed_ptr[idx * 2 + 0] = (uint8_t)u_qf;
+            packed_ptr[idx * 2 + 1] = (uint8_t)s_qf;
         } else {  // BITS == 4
+            uint8_t u_q = (uint8_t)u_qf;
+            uint8_t s_q = (uint8_t)s_qf;
             packed_ptr[idx] = (uint8_t)((u_q & 0x0Fu) | ((s_q & 0x0Fu) << 4));
         }
     }

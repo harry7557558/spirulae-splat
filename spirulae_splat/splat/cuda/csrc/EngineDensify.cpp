@@ -171,6 +171,25 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
         }
     }
 
+    // Non-SH Adam-state quant bundle. Same struct as FPBO consumes; densify
+    // uses it only to encode (g1=0, g2=0) into each relocated dst splat's
+    // packed bytes against the current per-splat-block bound (FPBO layout).
+    NonShQuantState non_sh;
+    if (engine().optim.non_sh_optim_bits == 16
+        && engine().optim.means_quant_state_fpbo.initialized()) {
+        non_sh.enabled            = true;
+        non_sh.means_packed       = engine().optim.means_quant_state_fpbo.packed_ptr();
+        non_sh.quats_packed       = engine().optim.quats_quant_state_fpbo.packed_ptr();
+        non_sh.scales_packed      = engine().optim.scales_quant_state_fpbo.packed_ptr();
+        non_sh.opacities_packed   = engine().optim.opacities_quant_state_fpbo.packed_ptr();
+        non_sh.features_dc_packed = engine().optim.features_dc_quant_state_fpbo.packed_ptr();
+        non_sh.means_bounds       = engine().optim.means_quant_state_fpbo.bounds_ptr();
+        non_sh.quats_bounds       = engine().optim.quats_quant_state_fpbo.bounds_ptr();
+        non_sh.scales_bounds      = engine().optim.scales_quant_state_fpbo.bounds_ptr();
+        non_sh.opacities_bounds   = engine().optim.opacities_quant_state_fpbo.bounds_ptr();
+        non_sh.features_dc_bounds = engine().optim.features_dc_quant_state_fpbo.bounds_ptr();
+    }
+
     // Clip large splats
     if (std::isfinite(cfg.max_screen_size) || std::isfinite(cfg.max_world_size)) {
         densify_clip_scale_tensor(
@@ -217,6 +236,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             dv_sh_quant_bounds, sh_bounds_per_splat,
             dv_sh_value_packed, dv_sh_value_bounds,
             sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
+            non_sh,
             2 * step + 0
         );
 
@@ -234,6 +254,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
                 dv_sh_quant_bounds, sh_bounds_per_splat,
                 dv_sh_value_packed, dv_sh_value_bounds,
                 sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
+                non_sh,
                 2 * step + 1
             );
         }
@@ -249,6 +270,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             dv_sh_quant_bounds, sh_bounds_per_splat,
             dv_sh_value_packed, dv_sh_value_bounds,
             sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
+            non_sh,
             2 * step + 0
         );
 
@@ -266,6 +288,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
                 dv_sh_quant_bounds, sh_bounds_per_splat,
                 dv_sh_value_packed, dv_sh_value_bounds,
                 sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
+                non_sh,
                 2 * step + 1
             );
         }

@@ -3,6 +3,12 @@
 
 #include <Common.cuh>
 
+// For the NonShQuantState struct used in the kernel signature. FPBO.cuh
+// declares the host-side wrappers that take this struct and also defines it
+// at the top of the file (above the auto-generated section). Including it
+// here keeps the kernel-side and dispatcher-side definitions in sync.
+#include "FusedProjectionBwdOptim.cuh"
+
 #ifndef NO_TORCH
 #define NO_TORCH
 #endif
@@ -53,6 +59,88 @@ __forceinline__ __device__ float4 sqrtf(float4 v) {
         sqrtf(fmaxf(v.w, 0.0f))
     };
 }
+
+
+// Block-wide min/max reduction of a float4 (mm.xy = min/max of u-domain;
+// mm.zw = min/max of log_s-domain) into a value broadcast to every thread.
+// Used to compute per-FPBO-block quantization bounds for the joint
+// (u, log_s) Adam-state codec. Re-callable in sequence: each call ends with
+// __syncthreads(), and starts with __syncthreads() so the prior call's
+// shared-mem readers are done before the next call writes.
+template<int BLOCK_SIZE>
+__device__ inline float4 _block_reduce_minmax_f4(float4 mm) {
+    static_assert(BLOCK_SIZE > 0 && BLOCK_SIZE % WARP_SIZE == 0);
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
+    mm.x = cg::reduce(warp, mm.x, cg::less<float>());
+    mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
+    mm.z = cg::reduce(warp, mm.z, cg::less<float>());
+    mm.w = cg::reduce(warp, mm.w, cg::greater<float>());
+    __shared__ float4 _bm_stage[BLOCK_SIZE / WARP_SIZE];
+    __syncthreads();  // prior call's broadcast read (if any) finished
+    if (threadIdx.x % WARP_SIZE == 0)
+        _bm_stage[threadIdx.x / WARP_SIZE] = mm;
+    __syncthreads();
+    mm = (threadIdx.x < BLOCK_SIZE / WARP_SIZE) ?
+        _bm_stage[threadIdx.x] : make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    mm.x = cg::reduce(warp, mm.x, cg::less<float>());
+    mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
+    mm.z = cg::reduce(warp, mm.z, cg::less<float>());
+    mm.w = cg::reduce(warp, mm.w, cg::greater<float>());
+    __syncthreads();
+    if (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+        _bm_stage[threadIdx.x] = mm;
+    __syncthreads();
+    return _bm_stage[threadIdx.x / WARP_SIZE];
+}
+
+
+// Per-attribute non-SH Adam-state quantization helper. Wraps the
+// QuantizedAdamState<16, 256> codec for an attribute with PRIMS primitives
+// per splat (means/scales/features_dc: 3, quats: 4, opacities: 1). Each
+// per-splat "cell run" is PRIMS contiguous codec cells at base PRIMS*gid.
+template<int PRIMS>
+struct _NonShQ {
+    using NQB = QuantizedAdamState<16, 256>;
+
+    __device__ static inline void decode(
+        const uint8_t* __restrict__ packed, const float4* __restrict__ bounds,
+        int64_t gid, float* __restrict__ g1_out, float* __restrict__ g2_out
+    ) {
+        float4 mm_old = bounds[blockIdx.x];
+        int64_t base = (int64_t)PRIMS * gid;
+        #pragma unroll
+        for (int i = 0; i < PRIMS; ++i) {
+            float2 ab = NQB::decode_g1g2(packed, base + i, mm_old);
+            g1_out[i] = ab.x;
+            g2_out[i] = ab.y;
+        }
+    }
+
+    // Accumulate per-thread (u, log_s) min/max from (g1, g2) primitives into mm.
+    __device__ static inline void accumulate(
+        const float* __restrict__ g1, const float* __restrict__ g2, float4& mm
+    ) {
+        #pragma unroll
+        for (int i = 0; i < PRIMS; ++i) {
+            float2 us = NQB::g1g2_to_us(g1[i], g2[i]);
+            mm.x = fminf(mm.x, us.x);
+            mm.y = fmaxf(mm.y, us.x);
+            mm.z = fminf(mm.z, us.y);
+            mm.w = fmaxf(mm.w, us.y);
+        }
+    }
+
+    __device__ static inline void encode(
+        uint8_t* __restrict__ packed, int64_t gid,
+        const float* __restrict__ g1, const float* __restrict__ g2, float4 mm
+    ) {
+        int64_t base = (int64_t)PRIMS * gid;
+        #pragma unroll
+        for (int i = 0; i < PRIMS; ++i) {
+            NQB::encode_g1g2(packed, base + i, g1[i], g2[i], mm);
+        }
+    }
+};
 
 
 template<
@@ -116,6 +204,11 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     // SH stride (3 * num_sh_buffer cells per splat), same as sh_packed.
     const uint8_t* __restrict__ sh_value_packed,
     float2* __restrict__ sh_value_bounds,
+    // Non-SH Adam-state quantization (means, quats, scales, opacities,
+    // features_dc). enabled == false -> kernel reads/writes fp32 via the
+    // g1_/g2_splats_world buffers; enabled == true -> reads/writes the
+    // packed bytes against per-block float4 bounds.
+    NonShQuantState non_sh,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -302,42 +395,143 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     float inv_bias_correction1 = 1.0f / (1.0f - powf(beta1, step));
     float inv_bias_correction2 = 1.0f / (1.0f - powf(beta2, step));
 
+    // Hoisted per-thread state for non-SH Adam-state quantization. When
+    // non_sh.enabled, each attribute update below decodes old (g1, g2) from
+    // the packed buffer, does Adam math in fp32, then stashes the new values
+    // here + accumulates the per-thread (u, log_s) min/max into nq_mm_*.
+    // After all five attributes, a single reduce+encode pass below converts
+    // these into block-wide bounds + writes the new packed bytes.
+    constexpr bool NON_SH_QUANT = (BLOCK_SIZE > 0);
+    float3 nq_g1_scale = make_float3(0.f), nq_g2_scale = make_float3(0.f);
+    float4 nq_g1_quat  = make_float4(0.f), nq_g2_quat  = make_float4(0.f);
+    float  nq_g1_opac  = 0.f,               nq_g2_opac = 0.f;
+    float3 nq_g1_mean  = make_float3(0.f), nq_g2_mean  = make_float3(0.f);
+    float3 nq_g1_dc    = make_float3(0.f), nq_g2_dc    = make_float3(0.f);
+    float4 nq_mm_scale = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    float4 nq_mm_quat  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    float4 nq_mm_opac  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    float4 nq_mm_mean  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    float4 nq_mm_dc    = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+
     // update scales
     if (inside) {
-        float3 g1_scale = beta1 * g1_splats_world.scales(gid) + (1.f - beta1) * v_splat_world.scale;
-        float3 g2_scale = beta2 * g2_splats_world.scales(gid) + (1.f - beta2) * v_splat_world.scale*v_splat_world.scale;
+        float3 g1_scale, g2_scale;
+        if constexpr (NON_SH_QUANT) {
+            if (non_sh.enabled) {
+                _NonShQ<3>::decode(non_sh.scales_packed, non_sh.scales_bounds, gid,
+                                   (float*)&g1_scale, (float*)&g2_scale);
+            } else {
+                g1_scale = g1_splats_world.scales(gid);
+                g2_scale = g2_splats_world.scales(gid);
+            }
+        } else {
+            g1_scale = g1_splats_world.scales(gid);
+            g2_scale = g2_splats_world.scales(gid);
+        }
+        g1_scale = beta1 * g1_scale + (1.f - beta1) * v_splat_world.scale;
+        g2_scale = beta2 * g2_scale + (1.f - beta2) * v_splat_world.scale*v_splat_world.scale;
         float3 new_scale = splat_world.scale - lr_scales * inv_bias_correction1 * g1_scale / (sqrtf(g2_scale * inv_bias_correction2) + eps);
         splats_world.scales(gid) = new_scale;
-        g1_splats_world.scales(gid) = g1_scale;
-        g2_splats_world.scales(gid) = g2_scale;
+        if constexpr (NON_SH_QUANT) {
+            if (non_sh.enabled) {
+                nq_g1_scale = g1_scale;
+                nq_g2_scale = g2_scale;
+                _NonShQ<3>::accumulate((float*)&g1_scale, (float*)&g2_scale, nq_mm_scale);
+            } else {
+                g1_splats_world.scales(gid) = g1_scale;
+                g2_splats_world.scales(gid) = g2_scale;
+            }
+        } else {
+            g1_splats_world.scales(gid) = g1_scale;
+            g2_splats_world.scales(gid) = g2_scale;
+        }
     }
 
     // update quats (Riemannian)
     if (inside) {
         float4 new_quat = normalize(splat_world.quat);
         v_splat_world.quat -= dot(new_quat, v_splat_world.quat) * new_quat;
-        float4 g1_quat = beta1 * g1_splats_world.quats(gid) + (1.f - beta1) * v_splat_world.quat;
-        float4 g2_quat = beta2 * g2_splats_world.quats(gid) + (1.f - beta2) * v_splat_world.quat*v_splat_world.quat;
+        float4 g1_quat, g2_quat;
+        if constexpr (NON_SH_QUANT) {
+            if (non_sh.enabled) {
+                _NonShQ<4>::decode(non_sh.quats_packed, non_sh.quats_bounds, gid,
+                                   (float*)&g1_quat, (float*)&g2_quat);
+            } else {
+                g1_quat = g1_splats_world.quats(gid);
+                g2_quat = g2_splats_world.quats(gid);
+            }
+        } else {
+            g1_quat = g1_splats_world.quats(gid);
+            g2_quat = g2_splats_world.quats(gid);
+        }
+        g1_quat = beta1 * g1_quat + (1.f - beta1) * v_splat_world.quat;
+        g2_quat = beta2 * g2_quat + (1.f - beta2) * v_splat_world.quat*v_splat_world.quat;
         new_quat -= lr_quats * inv_bias_correction1 * g1_quat / (sqrtf(g2_quat * inv_bias_correction2) + eps);
         splats_world.quats(gid) = normalize(new_quat);
-        g1_splats_world.quats(gid) = g1_quat;
-        g2_splats_world.quats(gid) = g2_quat;
+        if constexpr (NON_SH_QUANT) {
+            if (non_sh.enabled) {
+                nq_g1_quat = g1_quat;
+                nq_g2_quat = g2_quat;
+                _NonShQ<4>::accumulate((float*)&g1_quat, (float*)&g2_quat, nq_mm_quat);
+            } else {
+                g1_splats_world.quats(gid) = g1_quat;
+                g2_splats_world.quats(gid) = g2_quat;
+            }
+        } else {
+            g1_splats_world.quats(gid) = g1_quat;
+            g2_splats_world.quats(gid) = g2_quat;
+        }
     }
 
     // update opacs
     if (inside) {
-        float g1_opac = beta1 * g1_splats_world.opacities(gid) + (1.f - beta1) * v_splat_world.opacity;
-        float g2_opac = beta2 * g2_splats_world.opacities(gid) + (1.f - beta2) * v_splat_world.opacity*v_splat_world.opacity;
+        float g1_opac, g2_opac;
+        if constexpr (NON_SH_QUANT) {
+            if (non_sh.enabled) {
+                _NonShQ<1>::decode(non_sh.opacities_packed, non_sh.opacities_bounds, gid,
+                                   &g1_opac, &g2_opac);
+            } else {
+                g1_opac = g1_splats_world.opacities(gid);
+                g2_opac = g2_splats_world.opacities(gid);
+            }
+        } else {
+            g1_opac = g1_splats_world.opacities(gid);
+            g2_opac = g2_splats_world.opacities(gid);
+        }
+        g1_opac = beta1 * g1_opac + (1.f - beta1) * v_splat_world.opacity;
+        g2_opac = beta2 * g2_opac + (1.f - beta2) * v_splat_world.opacity*v_splat_world.opacity;
         float new_opac = splat_world.opacity - lr_opacs * inv_bias_correction1 * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
         splats_world.opacities(gid) = new_opac;
-        g1_splats_world.opacities(gid) = g1_opac;
-        g2_splats_world.opacities(gid) = g2_opac;
+        if constexpr (NON_SH_QUANT) {
+            if (non_sh.enabled) {
+                nq_g1_opac = g1_opac;
+                nq_g2_opac = g2_opac;
+                _NonShQ<1>::accumulate(&g1_opac, &g2_opac, nq_mm_opac);
+            } else {
+                g1_splats_world.opacities(gid) = g1_opac;
+                g2_splats_world.opacities(gid) = g2_opac;
+            }
+        } else {
+            g1_splats_world.opacities(gid) = g1_opac;
+            g2_splats_world.opacities(gid) = g2_opac;
+        }
     }
 
     // update means (scale agnostic)
     if (inside) {
-        float3 g1_mean = g1_splats_world.means(gid);
-        float3 g2_mean = g2_splats_world.means(gid);
+        float3 g1_mean, g2_mean;
+        if constexpr (NON_SH_QUANT) {
+            if (non_sh.enabled) {
+                _NonShQ<3>::decode(non_sh.means_packed, non_sh.means_bounds, gid,
+                                   (float*)&g1_mean, (float*)&g2_mean);
+            } else {
+                g1_mean = g1_splats_world.means(gid);
+                g2_mean = g2_splats_world.means(gid);
+            }
+        } else {
+            g1_mean = g1_splats_world.means(gid);
+            g2_mean = g2_splats_world.means(gid);
+        }
         if constexpr (use_scale_agnostic_mean) {
             float3 v_mean_scaled_num = SlangProjectionUtils::apply_covar_to_vec(
                 splat_world.quat,
@@ -354,8 +548,19 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         }
         splats_world.means(gid) = splat_world.mean - lr_means * inv_bias_correction1 * g1_mean /
             (sqrtf(g2_mean * inv_bias_correction2) + eps); // unit: L or dimensionless for dimensionless lr_means
-        g1_splats_world.means(gid) = g1_mean;
-        g2_splats_world.means(gid) = g2_mean;
+        if constexpr (NON_SH_QUANT) {
+            if (non_sh.enabled) {
+                nq_g1_mean = g1_mean;
+                nq_g2_mean = g2_mean;
+                _NonShQ<3>::accumulate((float*)&g1_mean, (float*)&g2_mean, nq_mm_mean);
+            } else {
+                g1_splats_world.means(gid) = g1_mean;
+                g2_splats_world.means(gid) = g2_mean;
+            }
+        } else {
+            g1_splats_world.means(gid) = g1_mean;
+            g2_splats_world.means(gid) = g2_mean;
+        }
     }
 
     // update features_dc
@@ -369,8 +574,21 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             v_dc.y /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * splat_world.features_dc.y + 0.5f);
             v_dc.z /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * splat_world.features_dc.z + 0.5f);
         }
-        float3 g1_feature_dc = beta1 * g1_splats_world.features_dc(gid) + (1.f - beta1) * v_dc;
-        float3 g2_feature_dc = beta2 * g2_splats_world.features_dc(gid) + (1.f - beta2) * v_dc*v_dc;
+        float3 g1_feature_dc, g2_feature_dc;
+        if constexpr (NON_SH_QUANT) {
+            if (non_sh.enabled) {
+                _NonShQ<3>::decode(non_sh.features_dc_packed, non_sh.features_dc_bounds, gid,
+                                   (float*)&g1_feature_dc, (float*)&g2_feature_dc);
+            } else {
+                g1_feature_dc = g1_splats_world.features_dc(gid);
+                g2_feature_dc = g2_splats_world.features_dc(gid);
+            }
+        } else {
+            g1_feature_dc = g1_splats_world.features_dc(gid);
+            g2_feature_dc = g2_splats_world.features_dc(gid);
+        }
+        g1_feature_dc = beta1 * g1_feature_dc + (1.f - beta1) * v_dc;
+        g2_feature_dc = beta2 * g2_feature_dc + (1.f - beta2) * v_dc*v_dc;
         float3 denom = sqrtf(g2_feature_dc * inv_bias_correction2) + make_float3(eps);
         float3 delta = make_float3(-lr_features_dc * inv_bias_correction1) * (g1_feature_dc / denom);
 
@@ -392,8 +610,45 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             delta.z = isfinite(delta.z) ? delta.z : 0.0f;
         }
         splats_world.features_dc(gid) = splat_world.features_dc + delta;
-        g1_splats_world.features_dc(gid) = g1_feature_dc;
-        g2_splats_world.features_dc(gid) = g2_feature_dc;
+        if constexpr (NON_SH_QUANT) {
+            if (non_sh.enabled) {
+                nq_g1_dc = g1_feature_dc;
+                nq_g2_dc = g2_feature_dc;
+                _NonShQ<3>::accumulate((float*)&g1_feature_dc, (float*)&g2_feature_dc, nq_mm_dc);
+            } else {
+                g1_splats_world.features_dc(gid) = g1_feature_dc;
+                g2_splats_world.features_dc(gid) = g2_feature_dc;
+            }
+        } else {
+            g1_splats_world.features_dc(gid) = g1_feature_dc;
+            g2_splats_world.features_dc(gid) = g2_feature_dc;
+        }
+    }
+
+    // Non-SH Adam-state quant: block-reduce per-attribute (u, log_s) bounds,
+    // write bounds to global, then encode each splat's new (g1, g2) against
+    // the fresh block-wide bound. All threads participate in the reduces;
+    // outside-thread sentinel mm passes through min/max unchanged.
+    if constexpr (NON_SH_QUANT) {
+        if (non_sh.enabled) {
+            nq_mm_scale = _block_reduce_minmax_f4<BLOCK_SIZE>(nq_mm_scale);
+            if (threadIdx.x == 0) non_sh.scales_bounds[blockIdx.x] = nq_mm_scale;
+            nq_mm_quat = _block_reduce_minmax_f4<BLOCK_SIZE>(nq_mm_quat);
+            if (threadIdx.x == 0) non_sh.quats_bounds[blockIdx.x] = nq_mm_quat;
+            nq_mm_opac = _block_reduce_minmax_f4<BLOCK_SIZE>(nq_mm_opac);
+            if (threadIdx.x == 0) non_sh.opacities_bounds[blockIdx.x] = nq_mm_opac;
+            nq_mm_mean = _block_reduce_minmax_f4<BLOCK_SIZE>(nq_mm_mean);
+            if (threadIdx.x == 0) non_sh.means_bounds[blockIdx.x] = nq_mm_mean;
+            nq_mm_dc = _block_reduce_minmax_f4<BLOCK_SIZE>(nq_mm_dc);
+            if (threadIdx.x == 0) non_sh.features_dc_bounds[blockIdx.x] = nq_mm_dc;
+            if (inside) {
+                _NonShQ<3>::encode(non_sh.scales_packed,      gid, (float*)&nq_g1_scale, (float*)&nq_g2_scale, nq_mm_scale);
+                _NonShQ<4>::encode(non_sh.quats_packed,       gid, (float*)&nq_g1_quat,  (float*)&nq_g2_quat,  nq_mm_quat);
+                _NonShQ<1>::encode(non_sh.opacities_packed,   gid, &nq_g1_opac,          &nq_g2_opac,          nq_mm_opac);
+                _NonShQ<3>::encode(non_sh.means_packed,       gid, (float*)&nq_g1_mean,  (float*)&nq_g2_mean,  nq_mm_mean);
+                _NonShQ<3>::encode(non_sh.features_dc_packed, gid, (float*)&nq_g1_dc,    (float*)&nq_g2_dc,    nq_mm_dc);
+            }
+        }
     }
 
     // update features_sh
@@ -777,6 +1032,11 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     float4* __restrict__ sh_quant_bounds,
     const uint8_t* __restrict__ sh_value_packed,
     float2* __restrict__ sh_value_bounds,
+    // Non-SH Adam-state quantization (means, quats, scales, opacities,
+    // features_dc). enabled == false -> kernel reads/writes fp32 via the
+    // g1_/g2_splats_world buffers; enabled == true -> reads/writes the
+    // packed bytes against per-block float4 bounds.
+    NonShQuantState non_sh,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -825,6 +1085,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
         v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
+        non_sh,
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh,
         max_gauss_ratio,
         scale_regularization_weight / (float)N,

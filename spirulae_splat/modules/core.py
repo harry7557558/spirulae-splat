@@ -35,7 +35,7 @@ class Renderer:
         packed: bool = True,
         use_bvh: bool = False,
         use_fused_proj_bwd_optim: bool = False,
-        sh_quantization_level: int = 0,
+        quantization_level: int = 0,
     ):
         for tensor in splats_world:
             assert tensor.is_contiguous(), "Tensor must be contiguous"
@@ -76,18 +76,22 @@ class Renderer:
         # optim). Collapses the FPBO dispatcher's bit-pair axes into a single
         # template parameter so the generated kernel-instantiation .cu files
         # distribute work evenly.
-        if sh_quantization_level not in (0, 1):
+        if quantization_level not in (0, 1):
             raise ValueError(
-                f"sh_quantization_level must be 0 (off) or 1 (light); "
-                f"got {sh_quantization_level}")
-        self.sh_quantization_level = sh_quantization_level
+                f"quantization_level must be 0 (off) or 1 (light); "
+                f"got {quantization_level}")
+        self.quantization_level = quantization_level
         # Derived per-component bits. Used by non-FPBO paths
         # (fused_adam_step_quantized, EngineState) and by EngineCheckpoint
         # metadata. The FPBO dispatcher uses the level directly.
         _level_to_optim_bits = {0: 32, 1: 8}
         _level_to_value_bits = {0: 32, 1: 16}
-        self.sh_optim_bits = _level_to_optim_bits[sh_quantization_level]
-        self.sh_value_bits = _level_to_value_bits[sh_quantization_level]
+        # Non-SH Adam state (means, quats, scales, opacities, features_dc).
+        # Level 1 quantizes to 16-bit (joint u/log_s = 4 B/cell); FPBO-only.
+        _level_to_non_sh_optim_bits = {0: 32, 1: 16}
+        self.sh_optim_bits     = _level_to_optim_bits[quantization_level]
+        self.sh_value_bits     = _level_to_value_bits[quantization_level]
+        self.non_sh_optim_bits = _level_to_non_sh_optim_bits[quantization_level]
 
         # Set by engine_init_color_space; consulted by the forward path so it
         # can skip allocating a separate rgb_raw host buffer when no color
@@ -257,9 +261,10 @@ class Renderer:
         c.quat_norm_reg_weight        = model_config.quat_norm_reg
         c.sh_reg_weight               = model_config.sh_reg
         c.use_scale_agnostic_mean        = optim_config.use_scale_agnostic_mean
-        c.sh_quantization_level          = self.sh_quantization_level
+        c.quantization_level          = self.quantization_level
         c.sh_optim_bits                  = self.sh_optim_bits
         c.sh_value_bits                  = self.sh_value_bits
+        c.non_sh_optim_bits              = self.non_sh_optim_bits
         c.use_per_splat_bias_correction  = optim_config.use_per_splat_bias_correction
         c.use_fused_proj_bwd_optim       = self.use_fused_proj_bwd_optim
         c.color_is_linear = model_config.splat_color_is_linear

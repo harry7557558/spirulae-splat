@@ -837,6 +837,55 @@ __device__ __forceinline__ void _zero_quant_sh_store_cell(
     }
 }
 
+// Non-SH 16-bit Adam-state codec mirrors QuantizedAdamState<16, 256> in
+// Tensor.h: each cell is 4 bytes -- (uint16_t u_q)(uint16_t log_s_q). One
+// per-splat-block float4 bound covers all PRIMS cells per splat for the
+// attribute. Used by densify to initialize a relocated splat's optim-state
+// bytes so they decode to (g1 = 0, g2 = 0) against the block's CURRENT bound;
+// the next FPBO step's reduce expands the bound to cover the new value.
+// 0 may fall outside the current bound (e.g. mm.x > 0); the encode clamps to
+// the nearest endpoint then -- accepted small transient, identical to the
+// SH-value densify-copy strategy.
+__device__ __forceinline__ uint16_t _quant_encode_zero_word16(
+    float zero_val, float lo, float hi
+) {
+    constexpr float qmax = 65535.0f;
+    float range = fmaxf(hi - lo, 1e-30f);
+    float qf = roundf(qmax * (zero_val - lo) / range);
+    return (uint16_t)fminf(fmaxf(qf, 0.0f), qmax);
+}
+
+template<int PRIMS>
+__device__ __forceinline__ void _zero_quant_non_sh_for_splat(
+    uint8_t* __restrict__ packed,
+    const float4* __restrict__ bounds,
+    int64_t splat_idx
+) {
+    if (packed == nullptr || bounds == nullptr) return;
+    float4 mm = bounds[splat_idx / 256];
+    uint16_t u_q     = _quant_encode_zero_word16(0.0f, mm.x, mm.y);
+    uint16_t log_s_q = _quant_encode_zero_word16(0.0f, mm.z, mm.w);
+    int64_t base_cell = (int64_t)PRIMS * splat_idx;
+    uint16_t* p = reinterpret_cast<uint16_t*>(packed);
+    #pragma unroll
+    for (int i = 0; i < PRIMS; ++i) {
+        p[(base_cell + i) * 2 + 0] = u_q;
+        p[(base_cell + i) * 2 + 1] = log_s_q;
+    }
+}
+
+__device__ __forceinline__ void _zero_quant_non_sh_all(
+    const NonShQuantState& non_sh, int64_t splat_idx
+) {
+    if (!non_sh.enabled) return;
+    _zero_quant_non_sh_for_splat<3>(non_sh.means_packed,       non_sh.means_bounds,       splat_idx);
+    _zero_quant_non_sh_for_splat<4>(non_sh.quats_packed,       non_sh.quats_bounds,       splat_idx);
+    _zero_quant_non_sh_for_splat<3>(non_sh.scales_packed,      non_sh.scales_bounds,      splat_idx);
+    _zero_quant_non_sh_for_splat<1>(non_sh.opacities_packed,   non_sh.opacities_bounds,   splat_idx);
+    _zero_quant_non_sh_for_splat<3>(non_sh.features_dc_packed, non_sh.features_dc_bounds, splat_idx);
+}
+
+
 template<int BITS>
 __device__ __forceinline__ void _zero_quant_sh_for_splat(
     uint8_t* __restrict__ packed,
@@ -881,6 +930,7 @@ __global__ void relocate_with_long_axis_split_kernel(
     int num_sh, float3*__restrict__ features_sh, g_features_sh_t3*__restrict__ g1_features_sh, g_features_sh_t3*__restrict__ g2_features_sh,
     const float4* __restrict__ sh_quant_bounds,  // nullptr in non-quant mode
     bool sh_bounds_per_splat,
+    NonShQuantState non_sh,
     float2*__restrict__ densify_accum_buffer,
     int32_t* __restrict__ bias_correction_steps
 ) {
@@ -920,16 +970,24 @@ __global__ void relocate_with_long_axis_split_kernel(
 
     // optimizer state - zero
 #if 1
-    g1_means[idx_dst] = make_float3(0.0f);
-    g2_means[idx_dst] = make_float3(0.0f);
-    g1_quats[idx_dst] = make_float4(0.0f);
-    g2_quats[idx_dst] = make_float4(0.0f);
-    g1_scales[idx_dst] = make_float3(0.0f);
-    g2_scales[idx_dst] = make_float3(0.0f);
-    g1_opacs[idx_dst] = 0.0f;
-    g2_opacs[idx_dst] = 0.0f;
-    g1_features_dc[idx_dst] = make_float3(0.0f);
-    g2_features_dc[idx_dst] = make_float3(0.0f);
+    // Non-SH Adam state: fp32 path zeros the g1_/g2_ buffers directly;
+    // 16-bit quant path encodes (g1=0, g2=0) into the packed bytes against
+    // the current per-splat-block bound (which may not include 0 -- the
+    // encode clamps to the nearest endpoint and the next FPBO step's reduce
+    // expands the bound).
+    if (g1_means) {
+        g1_means[idx_dst] = make_float3(0.0f);
+        g2_means[idx_dst] = make_float3(0.0f);
+        g1_quats[idx_dst] = make_float4(0.0f);
+        g2_quats[idx_dst] = make_float4(0.0f);
+        g1_scales[idx_dst] = make_float3(0.0f);
+        g2_scales[idx_dst] = make_float3(0.0f);
+        g1_opacs[idx_dst] = 0.0f;
+        g2_opacs[idx_dst] = 0.0f;
+        g1_features_dc[idx_dst] = make_float3(0.0f);
+        g2_features_dc[idx_dst] = make_float3(0.0f);
+    }
+    _zero_quant_non_sh_all(non_sh, idx_dst);
     if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
         // 8-bit quant path: write encoded (u=0, log_s=0) bytes; g1 and g2
         // alias the same packed buffer, so one pass covers both.
@@ -1072,6 +1130,9 @@ void relocate_splats_with_long_axis_split_tensor(
     int  sh_value_bits,             // 32 / 8 / 16
     bool sh_value_bounds_per_splat,
     int  num_sh_buffer,             // buffer stride for cell indexing
+    // Non-SH Adam-state quant: when enabled, each relocated dst splat gets
+    // its packed bytes set to codec-encoded zero against the current bound.
+    NonShQuantState non_sh,
     uint32_t seed
 ) {
     int32_t* bias_correction_steps_ptr = bias_correction_steps.data_ptr();
@@ -1121,6 +1182,7 @@ void relocate_splats_with_long_axis_split_tensor(
                 features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(), \
                 num_sh, features_sh.data_ptr(), (T*)g1_features_sh.data_ptr(), (T*)g2_features_sh.data_ptr(), \
                 bnd_ptr, bps, \
+                non_sh, \
                 densify_accum_buffer.data_ptr(), \
                 bias_correction_steps_ptr)
         if      (sh_optim_bits == 32) _DENSIFY_LAS_LAUNCH(float3, nullptr, false);
@@ -1153,6 +1215,7 @@ void add_splats_with_long_axis_split_tensor(
     int  sh_value_bits,
     bool sh_value_bounds_per_splat,
     int  num_sh_buffer,
+    NonShQuantState non_sh,
     uint32_t seed
 ) {
     if (num_new_splats == 0)
@@ -1176,6 +1239,7 @@ void add_splats_with_long_axis_split_tensor(
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(), \
             num_sh, features_sh.data_ptr(), (T*)g1_features_sh.data_ptr(), (T*)g2_features_sh.data_ptr(), \
             bnd_ptr, bps, \
+            non_sh, \
             densify_accum_buffer.data_ptr(), \
             bias_correction_steps_ptr)
     if      (sh_optim_bits == 32) _DENSIFY_LAS_ADD_LAUNCH(float3, nullptr, false);
@@ -1315,6 +1379,7 @@ __global__ void mcmc_compute_relocation_kernel(
     int num_sh, float3*__restrict__ features_sh, g_features_sh_t3*__restrict__ g1_features_sh, g_features_sh_t3*__restrict__ g2_features_sh,
     const float4* __restrict__ sh_quant_bounds,
     bool sh_bounds_per_splat,
+    NonShQuantState non_sh,
     int32_t* __restrict__ bias_correction_steps
 ) {
     uint32_t cur_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1333,17 +1398,20 @@ __global__ void mcmc_compute_relocation_kernel(
     scales[cur_idx] = scale;
     opacs[cur_idx] = opac;
 
-    // set grad to zero
-    g1_means[cur_idx] = make_float3(0.0f);
-    g2_means[cur_idx] = make_float3(0.0f);
-    g1_quats[cur_idx] = make_float4(0.0f);
-    g2_quats[cur_idx] = make_float4(0.0f);
-    g1_scales[cur_idx] = make_float3(0.0f);
-    g2_scales[cur_idx] = make_float3(0.0f);
-    g1_opacs[cur_idx] = 0.0f;
-    g2_opacs[cur_idx] = 0.0f;
-    g1_features_dc[cur_idx] = make_float3(0.0f);
-    g2_features_dc[cur_idx] = make_float3(0.0f);
+    // set grad to zero (skip non-SH fp32 writes when those buffers are
+    // freed by FPBO non-SH Adam-state quantization; see relocate kernel).
+    if (g1_means) {
+        g1_means[cur_idx] = make_float3(0.0f);
+        g2_means[cur_idx] = make_float3(0.0f);
+        g1_quats[cur_idx] = make_float4(0.0f);
+        g2_quats[cur_idx] = make_float4(0.0f);
+        g1_scales[cur_idx] = make_float3(0.0f);
+        g2_scales[cur_idx] = make_float3(0.0f);
+        g1_opacs[cur_idx] = 0.0f;
+        g2_opacs[cur_idx] = 0.0f;
+        g1_features_dc[cur_idx] = make_float3(0.0f);
+        g2_features_dc[cur_idx] = make_float3(0.0f);
+    }
     if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
         _zero_quant_sh_for_splat<8>(
             (uint8_t*)g1_features_sh, cur_idx, num_sh,
@@ -1358,6 +1426,7 @@ __global__ void mcmc_compute_relocation_kernel(
             g2_features_sh[num_sh*cur_idx+i] = g_features_sh_t3{0,0,0};
         }
     }
+    _zero_quant_non_sh_all(non_sh, cur_idx);
     if (bias_correction_steps)
         bias_correction_steps[cur_idx] = 0;
 }
@@ -1414,6 +1483,7 @@ void relocate_splats_mcmc_tensor(
     int  sh_value_bits,
     bool sh_value_bounds_per_splat,
     int  num_sh_buffer,
+    NonShQuantState non_sh,
     uint32_t seed
 ) {
     int32_t* bias_correction_steps_ptr = bias_correction_steps.data_ptr();
@@ -1470,6 +1540,7 @@ void relocate_splats_mcmc_tensor(
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(), \
             num_sh, features_sh.data_ptr(), (T*)g1_features_sh.data_ptr(), (T*)g2_features_sh.data_ptr(), \
             bnd_ptr, bps, \
+            non_sh, \
             bias_correction_steps_ptr)
     if      (sh_optim_bits == 32) _DENSIFY_MCMC_RELOC_LAUNCH(float3, nullptr, false);
     else if (sh_optim_bits == 8)  _DENSIFY_MCMC_RELOC_LAUNCH(short3, sh_quant_bounds.data_ptr(), sh_bounds_per_splat);
@@ -1568,6 +1639,7 @@ __global__ void mcmc_update_add_kernel(
     int num_sh, float3*__restrict__ features_sh, g_features_sh_t3*__restrict__ g1_features_sh, g_features_sh_t3*__restrict__ g2_features_sh,
     const float4* __restrict__ sh_quant_bounds,
     bool sh_bounds_per_splat,
+    NonShQuantState non_sh,
     int32_t* __restrict__ bias_correction_steps
 ) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1590,17 +1662,20 @@ __global__ void mcmc_update_add_kernel(
             features_sh[num_sh*id_dst+i] = features_sh[num_sh*id_src+i];
     }
 
-    // set grad to zero
-    g1_means[id_dst] = make_float3(0.0f);
-    g2_means[id_dst] = make_float3(0.0f);
-    g1_quats[id_dst] = make_float4(0.0f);
-    g2_quats[id_dst] = make_float4(0.0f);
-    g1_scales[id_dst] = make_float3(0.0f);
-    g2_scales[id_dst] = make_float3(0.0f);
-    g1_opacs[id_dst] = 0.0f;
-    g2_opacs[id_dst] = 0.0f;
-    g1_features_dc[id_dst] = make_float3(0.0f);
-    g2_features_dc[id_dst] = make_float3(0.0f);
+    // set grad to zero (skip non-SH fp32 writes when freed by FPBO non-SH
+    // Adam-state quantization).
+    if (g1_means) {
+        g1_means[id_dst] = make_float3(0.0f);
+        g2_means[id_dst] = make_float3(0.0f);
+        g1_quats[id_dst] = make_float4(0.0f);
+        g2_quats[id_dst] = make_float4(0.0f);
+        g1_scales[id_dst] = make_float3(0.0f);
+        g2_scales[id_dst] = make_float3(0.0f);
+        g1_opacs[id_dst] = 0.0f;
+        g2_opacs[id_dst] = 0.0f;
+        g1_features_dc[id_dst] = make_float3(0.0f);
+        g2_features_dc[id_dst] = make_float3(0.0f);
+    }
     if constexpr (sizeof(g_features_sh_t3) == sizeof(short3)) {
         _zero_quant_sh_for_splat<8>(
             (uint8_t*)g1_features_sh, id_dst, num_sh,
@@ -1615,6 +1690,7 @@ __global__ void mcmc_update_add_kernel(
             g2_features_sh[num_sh*id_dst+i] = g_features_sh_t3{0,0,0};
         }
     }
+    _zero_quant_non_sh_all(non_sh, id_dst);
     if (bias_correction_steps)
         bias_correction_steps[id_dst] = 0;
 }
@@ -1638,6 +1714,7 @@ void add_splats_mcmc_tensor(
     int  sh_value_bits,
     bool sh_value_bounds_per_splat,
     int  num_sh_buffer,
+    NonShQuantState non_sh,
     uint32_t seed
 ) {
     if (num_add == 0)
@@ -1706,6 +1783,7 @@ void add_splats_mcmc_tensor(
             features_dc.data_ptr(), g1_features_dc.data_ptr(), g2_features_dc.data_ptr(), \
             num_sh, features_sh.data_ptr(), (T*)g1_features_sh.data_ptr(), (T*)g2_features_sh.data_ptr(), \
             bnd_ptr, bps, \
+            non_sh, \
             bias_correction_steps_ptr)
     if      (sh_optim_bits == 32) _DENSIFY_MCMC_ADD_LAUNCH(float3, nullptr, false);
     else if (sh_optim_bits == 8)  _DENSIFY_MCMC_ADD_LAUNCH(short3, sh_quant_bounds.data_ptr(), sh_bounds_per_splat);

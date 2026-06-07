@@ -15,7 +15,9 @@
 static constexpr int64_t kFpboBlock = 256;
 
 
-static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits, bool use_per_splat_bias_correction = false) {
+static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
+                                int non_sh_optim_bits,
+                                bool use_per_splat_bias_correction = false) {
     if (sh_optim_bits != 32 && sh_optim_bits != 8 && sh_optim_bits != 4) {
         throw std::runtime_error(
             "_ensure_optim_state: sh_optim_bits must be 32 (off), 4, or 8; got " +
@@ -26,8 +28,14 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits, bool use_p
             "_ensure_optim_state: sh_value_bits must be 32 (off), 8, or 16; got " +
             std::to_string(sh_value_bits));
     }
+    if (non_sh_optim_bits != 32 && non_sh_optim_bits != 16) {
+        throw std::runtime_error(
+            "_ensure_optim_state: non_sh_optim_bits must be 32 (off) or 16; got " +
+            std::to_string(non_sh_optim_bits));
+    }
     bool quantize_sh = (sh_optim_bits != 32);
     bool quantize_sh_value = (sh_value_bits != 32);
+    bool quantize_non_sh = (non_sh_optim_bits != 32);
     bool fused = engine().optim.use_fused_proj_bwd_optim;
     // For now, non-FPBO + value-quant requires its own kernel
     // (fused_adam_step_value_quantized) which isn't yet wired in the optim
@@ -40,8 +48,18 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits, bool use_p
             " currently requires use_fused_proj_bwd_optim = true (non-FPBO "
             "value-quant Adam kernel is not yet wired in this turn).");
     }
+    // Non-SH Adam-state quantization is FPBO-only. The non-FPBO Optimizer.cu
+    // path runs ordinary fp32 Adam updates and has no codec hook.
+    if (quantize_non_sh && !fused) {
+        throw std::runtime_error(
+            "_ensure_optim_state: non_sh_optim_bits = " +
+            std::to_string(non_sh_optim_bits) +
+            " requires use_fused_proj_bwd_optim = true (non-FPBO Adam path "
+            "does not support quantized non-SH Adam state).");
+    }
     if (engine().optim.initialized && engine().optim.sh_optim_bits == sh_optim_bits
         && engine().world.sh_value_bits == sh_value_bits
+        && engine().optim.non_sh_optim_bits == non_sh_optim_bits
         && engine().optim.use_per_splat_bias_correction == use_per_splat_bias_correction
         && engine().optim.fused_state_active == fused)
         return;
@@ -49,6 +67,7 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits, bool use_p
     int64_t N = engine().max_num_splats;
     int64_t K = engine().num_sh;
     engine().optim.sh_optim_bits = sh_optim_bits;
+    engine().optim.non_sh_optim_bits = non_sh_optim_bits;
     engine().optim.fused_state_active = fused;
     engine().world.sh_value_bits = sh_value_bits;
 
@@ -64,27 +83,69 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits, bool use_p
         engine().world.features_sh.resize("world.features_sh", N, K);
     }
 
-    // g1 (exp_avg)
-    engine().optim.g1_means.resize("eng.g1_means", N);
-    engine().optim.g1_quats.resize("eng.g1_quats", N);
-    engine().optim.g1_scales.resize("eng.g1_scales", N);
-    engine().optim.g1_opacities.resize("eng.g1_opacities", N);
-    engine().optim.g1_features_dc.resize("eng.g1_features_dc", N);
+    // g1 (exp_avg) / g2 (exp_avg_sq): FP32 buffers per attribute. When
+    // non_sh_optim_bits != 32 the canonical store is the per-attribute
+    // QuantizedAdamState packed buffer below; free the fp32 buffers then.
+    if (!quantize_non_sh) {
+        engine().optim.g1_means.resize       ("eng.g1_means",       N);
+        engine().optim.g1_quats.resize       ("eng.g1_quats",       N);
+        engine().optim.g1_scales.resize      ("eng.g1_scales",      N);
+        engine().optim.g1_opacities.resize   ("eng.g1_opacities",   N);
+        engine().optim.g1_features_dc.resize ("eng.g1_features_dc", N);
+        engine().optim.g2_means.resize       ("eng.g2_means",       N);
+        engine().optim.g2_quats.resize       ("eng.g2_quats",       N);
+        engine().optim.g2_scales.resize      ("eng.g2_scales",      N);
+        engine().optim.g2_opacities.resize   ("eng.g2_opacities",   N);
+        engine().optim.g2_features_dc.resize ("eng.g2_features_dc", N);
+    } else {
+        DevicePool::global().free("eng.g1_means");
+        DevicePool::global().free("eng.g1_quats");
+        DevicePool::global().free("eng.g1_scales");
+        DevicePool::global().free("eng.g1_opacities");
+        DevicePool::global().free("eng.g1_features_dc");
+        DevicePool::global().free("eng.g2_means");
+        DevicePool::global().free("eng.g2_quats");
+        DevicePool::global().free("eng.g2_scales");
+        DevicePool::global().free("eng.g2_opacities");
+        DevicePool::global().free("eng.g2_features_dc");
+        engine().optim.g1_means       = DeviceVector<float3>();
+        engine().optim.g1_quats       = DeviceVector<float4>();
+        engine().optim.g1_scales      = DeviceVector<float3>();
+        engine().optim.g1_opacities   = DeviceVector<float>();
+        engine().optim.g1_features_dc = DeviceVector<float3>();
+        engine().optim.g2_means       = DeviceVector<float3>();
+        engine().optim.g2_quats       = DeviceVector<float4>();
+        engine().optim.g2_scales      = DeviceVector<float3>();
+        engine().optim.g2_opacities   = DeviceVector<float>();
+        engine().optim.g2_features_dc = DeviceVector<float3>();
+    }
     if (!quantize_sh)
         engine().optim.g1_features_sh.resize("eng.g1_features_sh", N, K);
     else
         engine().optim.g1_features_sh = DeviceTensor2D<float3>();
-
-    // g2 (exp_avg_sq)
-    engine().optim.g2_means.resize("eng.g2_means", N);
-    engine().optim.g2_quats.resize("eng.g2_quats", N);
-    engine().optim.g2_scales.resize("eng.g2_scales", N);
-    engine().optim.g2_opacities.resize("eng.g2_opacities", N);
-    engine().optim.g2_features_dc.resize("eng.g2_features_dc", N);
     if (!quantize_sh)
         engine().optim.g2_features_sh.resize("eng.g2_features_sh", N, K);
     else
         engine().optim.g2_features_sh = DeviceTensor2D<float3>();
+
+    // Non-SH Adam-state quant: per-attribute QuantizedAdamState<16, 256>.
+    // FPBO-only (the non-FPBO Optimizer.cu path errors out above). cells =
+    // N * primitives_per_splat, bounds = ceil(N / kFpboBlock) -- one bound
+    // per 256-splat FPBO block covering all primitives of that attribute.
+    if (quantize_non_sh && fused) {
+        int64_t n_bounds = (N + kFpboBlock - 1) / kFpboBlock;
+        engine().optim.means_quant_state_fpbo       .resize("eng.means_qfpbo",       (int64_t)N * 3, n_bounds);
+        engine().optim.quats_quant_state_fpbo       .resize("eng.quats_qfpbo",       (int64_t)N * 4, n_bounds);
+        engine().optim.scales_quant_state_fpbo      .resize("eng.scales_qfpbo",      (int64_t)N * 3, n_bounds);
+        engine().optim.opacities_quant_state_fpbo   .resize("eng.opacities_qfpbo",   (int64_t)N * 1, n_bounds);
+        engine().optim.features_dc_quant_state_fpbo .resize("eng.features_dc_qfpbo", (int64_t)N * 3, n_bounds);
+    } else {
+        engine().optim.means_quant_state_fpbo       = QuantizedAdamState<16, 256>();
+        engine().optim.quats_quant_state_fpbo       = QuantizedAdamState<16, 256>();
+        engine().optim.scales_quant_state_fpbo      = QuantizedAdamState<16, 256>();
+        engine().optim.opacities_quant_state_fpbo   = QuantizedAdamState<16, 256>();
+        engine().optim.features_dc_quant_state_fpbo = QuantizedAdamState<16, 256>();
+    }
 
     // radii [max_N]
     engine().optim.radii.resize("eng.radii", N);
@@ -163,12 +224,23 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits, bool use_p
         engine().optim.bias_correction_steps = DeviceVector<int32_t>();
     }
 
-    // Zero everything on first init
-    engine().optim.g1_means.zero();       engine().optim.g2_means.zero();
-    engine().optim.g1_quats.zero();       engine().optim.g2_quats.zero();
-    engine().optim.g1_scales.zero();      engine().optim.g2_scales.zero();
-    engine().optim.g1_opacities.zero();   engine().optim.g2_opacities.zero();
-    engine().optim.g1_features_dc.zero(); engine().optim.g2_features_dc.zero();
+    // Zero everything on first init. For the quantized non-SH path the codec's
+    // (u=0, log_s=0) -> (g1=0, g2=0) fixed point makes zeroing the packed
+    // bytes a valid init (no encode pass needed); bounds get re-reduced on
+    // the first FPBO step.
+    if (!quantize_non_sh) {
+        engine().optim.g1_means.zero();       engine().optim.g2_means.zero();
+        engine().optim.g1_quats.zero();       engine().optim.g2_quats.zero();
+        engine().optim.g1_scales.zero();      engine().optim.g2_scales.zero();
+        engine().optim.g1_opacities.zero();   engine().optim.g2_opacities.zero();
+        engine().optim.g1_features_dc.zero(); engine().optim.g2_features_dc.zero();
+    } else {
+        engine().optim.means_quant_state_fpbo       .zero();
+        engine().optim.quats_quant_state_fpbo       .zero();
+        engine().optim.scales_quant_state_fpbo      .zero();
+        engine().optim.opacities_quant_state_fpbo   .zero();
+        engine().optim.features_dc_quant_state_fpbo .zero();
+    }
     if (quantize_sh && !fused) {
         engine().optim.sh_quant_state.zero();
     } else if (quantize_sh && fused) {
@@ -211,6 +283,7 @@ static inline DeviceTensorFloatND _fnd_view(float* ptr, int64_t N, int64_t P) {
 // per channel, and the fused kernel's atomicLoad uses the same guard).
 void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
     _ensure_optim_state(cfg.sh_optim_bits, cfg.sh_value_bits,
+                        cfg.non_sh_optim_bits,
                         cfg.use_per_splat_bias_correction);
 
     int64_t N = engine().cur_num_splats;
@@ -322,6 +395,24 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
             (uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
     }
 
+    // Non-SH Adam-state quant bundle. Pointers all populated when 16-bit
+    // quant is on (FPBO-only, enforced in _ensure_optim_state above).
+    NonShQuantState non_sh;
+    if (cfg.non_sh_optim_bits == 16
+        && engine().optim.means_quant_state_fpbo.initialized()) {
+        non_sh.enabled            = true;
+        non_sh.means_packed       = engine().optim.means_quant_state_fpbo.packed_ptr();
+        non_sh.quats_packed       = engine().optim.quats_quant_state_fpbo.packed_ptr();
+        non_sh.scales_packed      = engine().optim.scales_quant_state_fpbo.packed_ptr();
+        non_sh.opacities_packed   = engine().optim.opacities_quant_state_fpbo.packed_ptr();
+        non_sh.features_dc_packed = engine().optim.features_dc_quant_state_fpbo.packed_ptr();
+        non_sh.means_bounds       = engine().optim.means_quant_state_fpbo.bounds_ptr();
+        non_sh.quats_bounds       = engine().optim.quats_quant_state_fpbo.bounds_ptr();
+        non_sh.scales_bounds      = engine().optim.scales_quant_state_fpbo.bounds_ptr();
+        non_sh.opacities_bounds   = engine().optim.opacities_quant_state_fpbo.bounds_ptr();
+        non_sh.features_dc_bounds = engine().optim.features_dc_quant_state_fpbo.bounds_ptr();
+    }
+
     auto call_dispatch = [&](auto fn) {
         fn(
             N, max_sh_degree, splats_w,
@@ -339,6 +430,7 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
             g1, g2,
             sh_packed_opt, sh_bounds_opt,
             sh_value_packed_opt, sh_value_bounds_opt,
+            non_sh,
             engine().optim.radii,
             cfg.lr_means, cfg.lr_quats, cfg.lr_scales,
             cfg.lr_opacities, cfg.lr_features_dc, cfg.lr_features_sh,
@@ -353,7 +445,7 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
             cfg.use_color_trust_region || cfg.color_is_linear,
             cfg.eps_tr,
             step_arg,
-            cfg.sh_quantization_level
+            cfg.quantization_level
         );
     };
 
@@ -377,7 +469,8 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
         return;
     }
 
-    _ensure_optim_state(cfg.sh_optim_bits, cfg.sh_value_bits, cfg.use_per_splat_bias_correction);
+    _ensure_optim_state(cfg.sh_optim_bits, cfg.sh_value_bits,
+                        cfg.non_sh_optim_bits, cfg.use_per_splat_bias_correction);
 
     int64_t N = engine().cur_num_splats;
 
