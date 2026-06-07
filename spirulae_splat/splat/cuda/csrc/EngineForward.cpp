@@ -45,6 +45,41 @@ void forward_3dgs(
     engine().optim.radii.resize("eng.radii", engine().max_num_splats);
     engine().optim.radii.zero();
 
+    // SH VALUE-quant pointers. When sh_value_bits != 32, the canonical SH
+    // storage lives in engine().world.features_sh_quant{8,16}{,_fpbo} (the
+    // FPBO-layout variant when use_fused_proj_bwd_optim is on; cell-block
+    // otherwise). The projection forward kernels read from these via the
+    // codec when their VALUE_BITS template is non-32.
+    std::optional<TorchTensorView> sh_value_packed_opt = std::nullopt;
+    std::optional<TorchTensorView> sh_value_bounds_opt = std::nullopt;
+    const int sh_value_bits = engine().world.sh_value_bits;
+    const uint32_t num_sh_buffer = (uint32_t)engine().num_sh;
+    if (sh_value_bits == 8) {
+        auto pick = [&](auto& vq) {
+            if (!vq.initialized()) return;
+            sh_value_packed_opt = TorchTensorView(
+                (uint64_t)vq.packed_ptr(), 1, {vq.packed_bytes()});
+            sh_value_bounds_opt = TorchTensorView(
+                (uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
+        };
+        if (engine().world.features_sh_quant8_fpbo.initialized())
+            pick(engine().world.features_sh_quant8_fpbo);
+        else
+            pick(engine().world.features_sh_quant8);
+    } else if (sh_value_bits == 16) {
+        auto pick = [&](auto& vq) {
+            if (!vq.initialized()) return;
+            sh_value_packed_opt = TorchTensorView(
+                (uint64_t)vq.packed_ptr(), 1, {vq.packed_bytes()});
+            sh_value_bounds_opt = TorchTensorView(
+                (uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
+        };
+        if (engine().world.features_sh_quant16_fpbo.initialized())
+            pick(engine().world.features_sh_quant16_fpbo);
+        else
+            pick(engine().world.features_sh_quant16);
+    }
+
     // --- Projection ---
     if (packed) {
         DeviceVector<int32_t> cam_ids, gauss_ids;
@@ -57,7 +92,8 @@ void forward_3dgs(
                 _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
                 (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
                 engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-                engine().optim.radii);
+                engine().optim.radii,
+                sh_value_packed_opt, sh_value_bounds_opt, num_sh_buffer, sh_value_bits);
             cam_ids = a; gauss_ids = b; aabb_vec = c; depths_vec = d;
             engine().fwd.splats_s = e;
         } else if (primitive == "mip") {
@@ -66,7 +102,8 @@ void forward_3dgs(
                 _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
                 (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
                 engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-                engine().optim.radii);
+                engine().optim.radii,
+                sh_value_packed_opt, sh_value_bounds_opt, num_sh_buffer, sh_value_bits);
             cam_ids = a; gauss_ids = b; aabb_vec = c; depths_vec = d;
             engine().fwd.splats_s = e;
         } else if (primitive == "3dgut") {
@@ -75,7 +112,8 @@ void forward_3dgs(
                 _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
                 (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
                 engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-                engine().optim.radii);
+                engine().optim.radii,
+                sh_value_packed_opt, sh_value_bounds_opt, num_sh_buffer, sh_value_bits);
             cam_ids = a; gauss_ids = b; aabb_vec = c; depths_vec = d;
             engine().fwd.splats_s = e;
         } else {
@@ -97,7 +135,8 @@ void forward_3dgs(
                 _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
                 (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
                 engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-                engine().optim.radii);
+                engine().optim.radii,
+                sh_value_packed_opt, sh_value_bounds_opt, num_sh_buffer, sh_value_bits);
             aabb_2d = a; depths_2d = b;
             engine().fwd.splats_s = c;
         } else if (primitive == "mip") {
@@ -106,7 +145,8 @@ void forward_3dgs(
                 _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
                 (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
                 engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-                engine().optim.radii);
+                engine().optim.radii,
+                sh_value_packed_opt, sh_value_bounds_opt, num_sh_buffer, sh_value_bits);
             aabb_2d = a; depths_2d = b;
             engine().fwd.splats_s = c;
         } else if (primitive == "3dgut") {
@@ -115,7 +155,8 @@ void forward_3dgs(
                 _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
                 (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
                 engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-                engine().optim.radii);
+                engine().optim.radii,
+                sh_value_packed_opt, sh_value_bounds_opt, num_sh_buffer, sh_value_bits);
             aabb_2d = a; depths_2d = b;
             engine().fwd.splats_s = c;
         } else {

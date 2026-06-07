@@ -41,6 +41,14 @@ class DataManager;
 
 
 // World splat parameters (allocated once at init; persistent on device).
+//
+// SH value quantization:
+//   sh_value_bits == 32 -> canonical storage is `features_sh` (fp32 float3).
+//   sh_value_bits in {8, 16} -> canonical storage is the packed buffer inside
+//   `features_sh_quant`. Every consumer kernel decodes per-cell via the
+//   QuantizedTensor<BITS, 256> codec; every writer (optim step, densify copy)
+//   encodes + recomputes per-block bounds. `features_sh` is left empty in
+//   that case so the device-side allocation tracks the canonical buffer.
 struct WorldSplats {
     bool initialized = false;
     DeviceVector<float3>   means;
@@ -48,7 +56,29 @@ struct WorldSplats {
     DeviceVector<float3>   scales;
     DeviceVector<float>    opacities;
     DeviceVector<float3>   features_dc;
-    DeviceTensor2D<float3> features_sh;   // [max_N, num_sh]
+    DeviceTensor2D<float3> features_sh;   // [max_N, num_sh] when sh_value_bits == 32
+
+    // Packed value quantization (sh_value_bits in {8, 16}). Two layouts mirror
+    // the optim-state quant pattern (see SplatOptim::sh_quant_state*):
+    //
+    //   features_sh_quant{8,16}      -- per-CELL-block layout (block_size=256
+    //     cells per bound). Used by the non-FPBO Adam path (fused_adam_step)
+    //     and by forward/backward kernels via Primitive3DGS::project*.
+    //
+    //   features_sh_quant{8,16}_fpbo -- per-SPLAT-block layout (1 bound per 256
+    //     splats covering all 3*K cells per splat). Used by FPBO's inline
+    //     SH read+write: one FPBO block = 256 threads = 256 splats, so a single
+    //     bound per block keeps the writeback reduction one-shot.
+    //
+    // Only one of (cell-block, fpbo) is allocated per training run, selected
+    // by cfg.use_fused_proj_bwd_optim at _ensure_optim_state(). The unused
+    // half stays as a default-constructed (empty) tensor.
+    QuantizedTensor<8,  256> features_sh_quant8;
+    QuantizedTensor<16, 256> features_sh_quant16;
+    QuantizedTensor<8,  256> features_sh_quant8_fpbo;
+    QuantizedTensor<16, 256> features_sh_quant16_fpbo;
+    int  sh_value_bits = 32;
+    bool sh_value_quantize_enabled() const { return sh_value_bits != 32; }
 };
 
 // Camera table (re-copied each frame into pool).

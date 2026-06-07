@@ -47,7 +47,44 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             + " bits is not yet supported alongside densification "
               "(only 8-bit currently has densify-side zero-encoding).");
     }
+    // SH VALUE-quant: pick the right buffer (cell-block or FPBO layout) for
+    // the codec-aware src->dst copy. We use clipping (no atomic bounds
+    // expansion) -- inheritance precision is lost in the first densify step
+    // but the FPBO writeback's block-wide (min, max) reduction expands the
+    // bound on the next training step, so the child splat adapts within one
+    // iteration. See `_copy_quant_sh_value_for_splat` for the rationale.
+    int  sh_value_bits = engine().world.sh_value_bits;
+    DeviceVector<uint8_t> dv_sh_value_packed;
+    DeviceVector<float2>  dv_sh_value_bounds;
+    bool sh_value_bounds_per_splat = false;
+    if (sh_value_bits == 8) {
+        if (engine().world.features_sh_quant8_fpbo.initialized()) {
+            dv_sh_value_packed = engine().world.features_sh_quant8_fpbo.packed;
+            dv_sh_value_bounds = engine().world.features_sh_quant8_fpbo.bounds;
+            sh_value_bounds_per_splat = true;
+        } else if (engine().world.features_sh_quant8.initialized()) {
+            dv_sh_value_packed = engine().world.features_sh_quant8.packed;
+            dv_sh_value_bounds = engine().world.features_sh_quant8.bounds;
+            sh_value_bounds_per_splat = false;
+        }
+    } else if (sh_value_bits == 16) {
+        if (engine().world.features_sh_quant16_fpbo.initialized()) {
+            // QuantizedTensor<16>::packed is uint8_t storage with kBytesPerCell=2,
+            // so the DeviceVector<uint8_t> view passed to the densify kernel
+            // covers the raw byte stream; the kernel template parameter
+            // BITS=16 inside the codec re-interprets each pair of bytes as a
+            // uint16_t cell.
+            dv_sh_value_packed = engine().world.features_sh_quant16_fpbo.packed;
+            dv_sh_value_bounds = engine().world.features_sh_quant16_fpbo.bounds;
+            sh_value_bounds_per_splat = true;
+        } else if (engine().world.features_sh_quant16.initialized()) {
+            dv_sh_value_packed = engine().world.features_sh_quant16.packed;
+            dv_sh_value_bounds = engine().world.features_sh_quant16.bounds;
+            sh_value_bounds_per_splat = false;
+        }
+    }
     int num_sh = engine().num_sh;
+    int num_sh_buffer = num_sh;  // buffer stride = engine().num_sh (model max)
 
     bool use_revised = (cfg.use_revised_densification);
     bool densify_ongoing = (step < max_steps - cfg.refine_stop_num_iter);
@@ -178,6 +215,8 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             dv_accum_buf, dv_bias_steps,
             quantize_sh, num_sh,
             dv_sh_quant_bounds, sh_bounds_per_splat,
+            dv_sh_value_packed, dv_sh_value_bounds,
+            sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
             2 * step + 0
         );
 
@@ -193,6 +232,8 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
                 dv_accum_buf, dv_bias_steps,
                 quantize_sh, num_sh,
                 dv_sh_quant_bounds, sh_bounds_per_splat,
+                dv_sh_value_packed, dv_sh_value_bounds,
+                sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
                 2 * step + 1
             );
         }
@@ -206,6 +247,8 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             dv_bias_steps,
             quantize_sh, num_sh,
             dv_sh_quant_bounds, sh_bounds_per_splat,
+            dv_sh_value_packed, dv_sh_value_bounds,
+            sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
             2 * step + 0
         );
 
@@ -221,6 +264,8 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
                 dv_bias_steps,
                 quantize_sh, num_sh,
                 dv_sh_quant_bounds, sh_bounds_per_splat,
+                dv_sh_value_packed, dv_sh_value_bounds,
+                sh_value_bits, sh_value_bounds_per_splat, num_sh_buffer,
                 2 * step + 1
             );
         }

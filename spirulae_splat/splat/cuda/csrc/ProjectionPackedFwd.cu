@@ -22,7 +22,11 @@ void projection_packed_mask_kernel_wrapper(
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [C, N]
+    bool *__restrict__ intersection_mask,  // [C, N]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 template<typename SplatPrimitive, CameraModelType camera_model>
@@ -43,7 +47,11 @@ void projection_packed_fwd_kernel_wrapper(
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    typename SplatPrimitive::ScreenBuffer splats_screen  // [nnz, ...]
+    typename SplatPrimitive::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 
@@ -64,7 +72,11 @@ inline std::tuple<
     const uint32_t image_height,
     const CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
-    DeviceVector<float> radii
+    DeviceVector<float> radii,
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 ) {
     typename SplatPrimitive::WorldBuffer splats_world(in_splats);
 
@@ -77,7 +89,8 @@ inline std::tuple<
             (cudaStream_t)0, C, N, \
             splats_world, viewmats_ptr, intrins_ptr, dist_coeffs, \
             image_width, image_height, \
-            intersection_mask.data_ptr() \
+            intersection_mask.data_ptr(), \
+            sh_value_packed, sh_value_bounds, num_sh_buffer, sh_value_bits \
         )
 
     if (camera_model == CameraModelType::PINHOLE)
@@ -117,7 +130,8 @@ inline std::tuple<
             intersection_mask_scan.data_ptr(), \
             camera_ids.data_ptr(), gaussian_ids.data_ptr(), \
             aabb.data_ptr(), sorting_depths.data_ptr(), radii.data_ptr(), \
-            splats_screen \
+            splats_screen, \
+            sh_value_packed, sh_value_bounds, num_sh_buffer, sh_value_bits \
         )
 
     if (camera_model == CameraModelType::PINHOLE)
@@ -154,16 +168,25 @@ std::tuple<
     const uint32_t image_height,
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
-    DeviceVector<float> radii
+    DeviceVector<float> radii,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(in_splats).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
     uint32_t C = (uint32_t)std::get<2>(viewmats)[0];
     const float* vm = (const float*)std::get<0>(viewmats);
     const float4* intr = (const float4*)std::get<0>(intrins);
+    const uint8_t* vp = sh_value_packed.has_value()
+        ? (const uint8_t*)std::get<0>(sh_value_packed.value()) : nullptr;
+    const float2* vb = sh_value_bounds.has_value()
+        ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_packed_fwd_kernel<Vanilla3DGS<n>>( \
-            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii);
+            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii, \
+            vp, vb, num_sh_buffer, sh_value_bits);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};
@@ -188,16 +211,25 @@ std::tuple<
     const uint32_t image_height,
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
-    DeviceVector<float> radii
+    DeviceVector<float> radii,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(in_splats).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
     uint32_t C = (uint32_t)std::get<2>(viewmats)[0];
     const float* vm = (const float*)std::get<0>(viewmats);
     const float4* intr = (const float4*)std::get<0>(intrins);
+    const uint8_t* vp = sh_value_packed.has_value()
+        ? (const uint8_t*)std::get<0>(sh_value_packed.value()) : nullptr;
+    const float2* vb = sh_value_bounds.has_value()
+        ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_packed_fwd_kernel<MipSplatting<n>>( \
-            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii);
+            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii, \
+            vp, vb, num_sh_buffer, sh_value_bits);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};
@@ -223,16 +255,25 @@ std::tuple<
     const uint32_t image_height,
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
-    DeviceVector<float> radii
+    DeviceVector<float> radii,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(in_splats).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
     uint32_t C = (uint32_t)std::get<2>(viewmats)[0];
     const float* vm = (const float*)std::get<0>(viewmats);
     const float4* intr = (const float4*)std::get<0>(intrins);
+    const uint8_t* vp = sh_value_packed.has_value()
+        ? (const uint8_t*)std::get<0>(sh_value_packed.value()) : nullptr;
+    const float2* vb = sh_value_bounds.has_value()
+        ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_packed_fwd_kernel<Vanilla3DGUT<n>>( \
-            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii);
+            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii, \
+            vp, vb, num_sh_buffer, sh_value_bits);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};

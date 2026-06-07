@@ -24,7 +24,11 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    MipSplatting<1>::ScreenBuffer splats_screen  // [nnz, ...]
+    MipSplatting<1>::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -47,7 +51,11 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    MipSplatting<1>::ScreenBuffer splats_screen  // [nnz, ...]
+    MipSplatting<1>::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -70,7 +78,11 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    MipSplatting<1>::ScreenBuffer splats_screen  // [nnz, ...]
+    MipSplatting<1>::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -93,7 +105,11 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    Vanilla3DGS<2>::ScreenBuffer splats_screen  // [nnz, ...]
+    Vanilla3DGS<2>::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -116,7 +132,11 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    Vanilla3DGS<2>::ScreenBuffer splats_screen  // [nnz, ...]
+    Vanilla3DGS<2>::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -139,7 +159,11 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    Vanilla3DGS<2>::ScreenBuffer splats_screen  // [nnz, ...]
+    Vanilla3DGS<2>::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -162,7 +186,11 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    MipSplatting<2>::ScreenBuffer splats_screen  // [nnz, ...]
+    MipSplatting<2>::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -185,7 +213,11 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    MipSplatting<2>::ScreenBuffer splats_screen  // [nnz, ...]
+    MipSplatting<2>::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -208,5 +240,9 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    MipSplatting<2>::ScreenBuffer splats_screen  // [nnz, ...]
+    MipSplatting<2>::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );

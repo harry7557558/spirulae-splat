@@ -42,10 +42,17 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
             return *this;
         }
 
-        template<CameraModelType camera_model>
+        // See Primitive3DGS::project() for VALUE_BITS semantics. Identical
+        // contract; the 3dgut path uses a different projection geometry but
+        // shares the SH eval pipeline.
+        template<CameraModelType camera_model, int VALUE_BITS = 32>
         inline __device__ void project(
             ProjCamera cam,
-            Vanilla3DGUT<sh_degree>::Screen& proj, float4& aabb, float& sorting_depth, float& radius
+            Vanilla3DGUT<sh_degree>::Screen& proj, float4& aabb, float& sorting_depth, float& radius,
+            uint8_t* sh_packed = nullptr,
+            float2*  sh_bounds = nullptr,
+            int64_t  sh_base   = 0,
+            int64_t  sh_bounds_stride = 256
         ) {
             float2 xy;
             float depth;
@@ -74,27 +81,52 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity
                 );
             if (aabb.z > aabb.x && aabb.w > aabb.y) {
-                // proj.rgb = SlangHarmonics::sh_coeffs_to_color(
-                //     sh_degree, this->mean, cam.R, cam.t, this->features_dc, this->features_sh
-                // );
-                if constexpr (sh_degree == 0) proj.rgb = SlangHarmonics::sh0_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
-                else if constexpr (sh_degree == 1) proj.rgb = SlangHarmonics::sh1_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
-                else if constexpr (sh_degree == 2) proj.rgb = SlangHarmonics::sh2_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
-                else if constexpr (sh_degree == 3) proj.rgb = SlangHarmonics::sh3_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
-                else if constexpr (sh_degree == 4) proj.rgb = SlangHarmonics::sh4_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                if constexpr (VALUE_BITS == 32) {
+                    if constexpr (sh_degree == 0) proj.rgb = SlangHarmonics::sh0_to_color
+                        (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                    else if constexpr (sh_degree == 1) proj.rgb = SlangHarmonics::sh1_to_color
+                        (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                    else if constexpr (sh_degree == 2) proj.rgb = SlangHarmonics::sh2_to_color
+                        (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                    else if constexpr (sh_degree == 3) proj.rgb = SlangHarmonics::sh3_to_color
+                        (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                    else if constexpr (sh_degree == 4) proj.rgb = SlangHarmonics::sh4_to_color
+                        (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                } else if constexpr (VALUE_BITS == 8) {
+                    if constexpr (sh_degree == 0) proj.rgb = SlangHarmonics::sh0_to_color_q8
+                        (this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 1) proj.rgb = SlangHarmonics::sh1_to_color_q8
+                        (this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 2) proj.rgb = SlangHarmonics::sh2_to_color_q8
+                        (this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 3) proj.rgb = SlangHarmonics::sh3_to_color_q8
+                        (this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 4) proj.rgb = SlangHarmonics::sh4_to_color_q8
+                        (this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                } else if constexpr (VALUE_BITS == 16) {
+                    if constexpr (sh_degree == 0) proj.rgb = SlangHarmonics::sh0_to_color_q16
+                        (this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 1) proj.rgb = SlangHarmonics::sh1_to_color_q16
+                        (this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 2) proj.rgb = SlangHarmonics::sh2_to_color_q16
+                        (this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 3) proj.rgb = SlangHarmonics::sh3_to_color_q16
+                        (this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 4) proj.rgb = SlangHarmonics::sh4_to_color_q16
+                        (this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                }
             }
         }
 
-        template<CameraModelType camera_model, bool atomic=true>
+        template<CameraModelType camera_model, bool atomic=true, int VALUE_BITS = 32>
         inline __device__ void project_vjp(
             ProjCamera cam,
             Vanilla3DGUT<sh_degree>::Screen v_proj,
-            Vanilla3DGUT<sh_degree>::World& v_world, float3x3 &v_R, float3 &v_t
+            Vanilla3DGUT<sh_degree>::World& v_world, float3x3 &v_R, float3 &v_t,
+            uint8_t* sh_packed = nullptr,
+            float2*  sh_bounds = nullptr,
+            int64_t  sh_base   = 0,
+            int64_t  sh_bounds_stride = 256
         ) {
             if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgut_persp_vjp(
@@ -127,26 +159,66 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     &v_R, &v_t
                 );
             // SH: atomic for global memory, add for local/shared memory
-            #define _ARGS ( \
+            #define _ARGS_F32 ( \
                 this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh, \
                 v_proj.rgb, &v_world.features_dc, (float3*)v_world.features_sh, \
                 &v_world.mean, &v_R, &v_t \
             );
+            #define _ARGS_Q8 ( \
+                this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride, \
+                v_proj.rgb, &v_world.features_dc, (float3*)v_world.features_sh, \
+                &v_world.mean, &v_R, &v_t \
+            );
+            #define _ARGS_Q16 ( \
+                this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride, \
+                v_proj.rgb, &v_world.features_dc, (float3*)v_world.features_sh, \
+                &v_world.mean, &v_R, &v_t \
+            );
             if constexpr (atomic) {
-                if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_vjp_atomic _ARGS
-                else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_vjp_atomic _ARGS
-                else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_vjp_atomic _ARGS
-                else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_vjp_atomic _ARGS
-                else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_vjp_atomic _ARGS
+                if constexpr (VALUE_BITS == 32) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_vjp_atomic _ARGS_F32
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_vjp_atomic _ARGS_F32
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_vjp_atomic _ARGS_F32
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_vjp_atomic _ARGS_F32
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_vjp_atomic _ARGS_F32
+                } else if constexpr (VALUE_BITS == 8) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_q8_vjp_atomic _ARGS_Q8
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_q8_vjp_atomic _ARGS_Q8
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_q8_vjp_atomic _ARGS_Q8
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_q8_vjp_atomic _ARGS_Q8
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_q8_vjp_atomic _ARGS_Q8
+                } else if constexpr (VALUE_BITS == 16) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_q16_vjp_atomic _ARGS_Q16
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_q16_vjp_atomic _ARGS_Q16
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_q16_vjp_atomic _ARGS_Q16
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_q16_vjp_atomic _ARGS_Q16
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_q16_vjp_atomic _ARGS_Q16
+                }
             }
             else {
-                if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_vjp_inplace _ARGS
-                else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_vjp_inplace _ARGS
-                else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_vjp_inplace _ARGS
-                else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_vjp_inplace _ARGS
-                else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_vjp_inplace _ARGS
+                if constexpr (VALUE_BITS == 32) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_vjp_inplace _ARGS_F32
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_vjp_inplace _ARGS_F32
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_vjp_inplace _ARGS_F32
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_vjp_inplace _ARGS_F32
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_vjp_inplace _ARGS_F32
+                } else if constexpr (VALUE_BITS == 8) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_q8_vjp_inplace _ARGS_Q8
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_q8_vjp_inplace _ARGS_Q8
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_q8_vjp_inplace _ARGS_Q8
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_q8_vjp_inplace _ARGS_Q8
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_q8_vjp_inplace _ARGS_Q8
+                } else if constexpr (VALUE_BITS == 16) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_q16_vjp_inplace _ARGS_Q16
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_q16_vjp_inplace _ARGS_Q16
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_q16_vjp_inplace _ARGS_Q16
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_q16_vjp_inplace _ARGS_Q16
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_q16_vjp_inplace _ARGS_Q16
+                }
             }
-            #undef _ARGS
+            #undef _ARGS_F32
+            #undef _ARGS_Q8
+            #undef _ARGS_Q16
         }
 
         template<CameraModelType camera_model, bool atomic=true>

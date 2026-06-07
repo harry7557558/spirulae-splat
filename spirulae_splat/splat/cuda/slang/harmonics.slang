@@ -86,6 +86,60 @@ void sh_block_atomic_add_f3_512(float3 *dst, uint idx, float3 val, uint thread_i
 }
 
 
+// ----------------------------------------------------------------------------
+// SH value-quantization load helpers (q8 / q16).
+//
+// Canonical SH parameter storage when sh_value_bits != 32 is a packed
+// uint8_t / uint16_t buffer plus a per-block float2 (min, max) bounds table
+// at block_size = 256 cells. Cell layout for splat i, SH basis j, channel ch:
+//   cell_idx = base(i) + 3*j + ch       where base(i) = i * 3 * n_sh
+// Each cell decodes via QuantizedTensor<BITS, 256>:
+//   decoded = mm.x + (mm.y - mm.x) * (q / kQMax)
+// where mm = bounds[cell_idx / 256] and kQMax is 255 (q8) or 65535 (q16).
+//
+// SH read paths (sh_coeffs_to_color_q{8,16} forward + VJP) use these helpers
+// in place of `coeffs[j]`. The helpers are [ForceInline] so the divisions
+// constant-fold at the call site and the resulting per-coef load is 3 byte
+// loads + 3 float2 loads + 6 fmas. The VJP `v_coeffs` writes stay fp32 --
+// gradients always live in engine().grad.features_sh; only the canonical
+// SH PARAMETER buffer is quantized.
+//
+// bounds_stride: number of cells per bound. Two supported layouts:
+//   - per-CELL-block (codec block_size=256):  bounds_stride = 256
+//   - per-SPLAT-block (FPBO writeback layout): bounds_stride = 256 * 3 * num_sh_buffer
+//     i.e. ONE bound per 256 splats covering all 3*num_sh_buffer cells/splat.
+// The caller picks the stride based on which buffer is in use.
+// ----------------------------------------------------------------------------
+
+[ForceInline]
+float3 _sh_load_q8(uint8_t* packed, float2* bounds, int64_t base, int j, int64_t bounds_stride) {
+    int64_t cell0 = base + (int64_t)(3*j);
+    float2 mm0 = bounds[(int)(cell0       / bounds_stride)];
+    float2 mm1 = bounds[(int)((cell0 + 1) / bounds_stride)];
+    float2 mm2 = bounds[(int)((cell0 + 2) / bounds_stride)];
+    const float inv = 1.0f / 255.0f;
+    return float3(
+        mm0.x + (mm0.y - mm0.x) * (float(packed[cell0    ]) * inv),
+        mm1.x + (mm1.y - mm1.x) * (float(packed[cell0 + 1]) * inv),
+        mm2.x + (mm2.y - mm2.x) * (float(packed[cell0 + 2]) * inv)
+    );
+}
+
+[ForceInline]
+float3 _sh_load_q16(uint16_t* packed, float2* bounds, int64_t base, int j, int64_t bounds_stride) {
+    int64_t cell0 = base + (int64_t)(3*j);
+    float2 mm0 = bounds[(int)(cell0       / bounds_stride)];
+    float2 mm1 = bounds[(int)((cell0 + 1) / bounds_stride)];
+    float2 mm2 = bounds[(int)((cell0 + 2) / bounds_stride)];
+    const float inv = 1.0f / 65535.0f;
+    return float3(
+        mm0.x + (mm0.y - mm0.x) * (float(packed[cell0    ]) * inv),
+        mm1.x + (mm1.y - mm1.x) * (float(packed[cell0 + 1]) * inv),
+        mm2.x + (mm2.y - mm2.x) * (float(packed[cell0 + 2]) * inv)
+    );
+}
+
+
 [ForceInline]
 [Differentiable]
 float3 mean_viewmat_to_unnormalized_viewdir(float3 mean, float3x3 R, float3 t) {
@@ -1307,3 +1361,1037 @@ _DECL(0, float) _DECL(1, float) _DECL(2, float) _DECL(3, float) _DECL(4, float)
 _DECL_DIR(0, float3) _DECL_DIR(1, float3) _DECL_DIR(2, float3) _DECL_DIR(3, float3) _DECL_DIR(4, float3)
 
 #undef _DECL_DIR
+
+
+// ============================================================================
+// SH value-quantization parallel forms (q8 / q16).
+//
+// Mirrors the existing `sh_coeffs_to_color` / `_sh_coeffs_to_color_vjp` family
+// but reads coefficients via _sh_load_q{8,16}(packed, bounds, base, j) instead
+// of `coeffs[j]`. v_coeffs writes stay fp32 (gradients live in fp32; only
+// the param buffer is quantized). All bodies are mechanical copies of the
+// fp32 forms with `coeffs[i]` replaced by a local `_C(i)` macro that returns
+// float3 via the load helper. The fp32 forms above are untouched -- the
+// q8/q16 variants here are parallel functions, dispatched by the caller on
+// the compile-time bit-depth template parameter.
+//
+// Only the (mean, R, t) public form is exported (splat SH path). The direction-
+// only form is only used internally as the implementation of the (mean, R, t)
+// form's viewdir eval (and by background SH -- background SH stays fp32 per
+// scope decision; only splat features_sh gets value-quantized here).
+// ============================================================================
+
+
+// ---- direction-form forward (q8) -------------------------------------------
+[ForceInline]
+float3 sh_coeffs_to_color_q8(
+    const int degree,
+    const float3 viewdir,
+    float3 coeff_dc,
+    uint8_t* packed,
+    float2*  bounds,
+    int64_t  base,
+    int64_t  bounds_stride
+) {
+    #define _C(j) _sh_load_q8(packed, bounds, base, j, bounds_stride)
+    float3 colors = 0.2820947917738781f * coeff_dc;
+
+    if (degree <= 0)
+        return colors;
+
+    float inv_norm = rsqrt(
+        viewdir.x * viewdir.x + viewdir.y * viewdir.y + viewdir.z * viewdir.z
+    );
+    float x = viewdir.x * inv_norm;
+    float y = viewdir.y * inv_norm;
+    float z = viewdir.z * inv_norm;
+
+    float fTmp0A = 0.48860251190292f;
+    colors += fTmp0A *
+            (-y * _C(0) +
+            z * _C(1) -
+            x * _C(2));
+
+    if (degree <= 1)
+        return colors;
+
+    float z2 = z * z;
+    float fTmp0B = -1.092548430592079f * z;
+    float fTmp1A = 0.5462742152960395f;
+    float fC1 = x * x - y * y;
+    float fS1 = 2.f * x * y;
+    float pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
+    float pSH7 = fTmp0B * x;
+    float pSH5 = fTmp0B * y;
+    float pSH8 = fTmp1A * fC1;
+    float pSH4 = fTmp1A * fS1;
+    colors +=
+        pSH4 * _C(3) + pSH5 * _C(4) +
+        pSH6 * _C(5) + pSH7 * _C(6) +
+        pSH8 * _C(7);
+
+    if (degree <= 2)
+        return colors;
+
+    float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
+    float fTmp1B = 1.445305721320277f * z;
+    float fTmp2A = -0.5900435899266435f;
+    float fC2 = x * fC1 - y * fS1;
+    float fS2 = x * fS1 + y * fC1;
+    float pSH12 = z * (1.865881662950577f * z2 - 1.119528997770346f);
+    float pSH13 = fTmp0C * x;
+    float pSH11 = fTmp0C * y;
+    float pSH14 = fTmp1B * fC1;
+    float pSH10 = fTmp1B * fS1;
+    float pSH15 = fTmp2A * fC2;
+    float pSH9  = fTmp2A * fS2;
+    colors += pSH9  * _C(8) +
+            pSH10 * _C(9) +
+            pSH11 * _C(10) +
+            pSH12 * _C(11) +
+            pSH13 * _C(12) +
+            pSH14 * _C(13) +
+            pSH15 * _C(14);
+
+    if (degree <= 3)
+        return colors;
+
+    float fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
+    float fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
+    float fTmp2B = -1.770130769779931f * z;
+    float fC3 = x * fC2 - y * fS2;
+    float fS3 = x * fS2 + y * fC2;
+    float pSH20 = (1.984313483298443f * z * pSH12 - 1.006230589874905f * pSH6);
+    float pSH21 = fTmp0D * x;
+    float pSH19 = fTmp0D * y;
+    float pSH22 = fTmp1C * fC1;
+    float pSH18 = fTmp1C * fS1;
+    float pSH23 = fTmp2B * fC2;
+    float pSH17 = fTmp2B * fS2;
+    float pSH24 = 0.6258357354491763f * fC3;
+    float pSH16 = 0.6258357354491763f * fS3;
+
+    colors += pSH16 * _C(15) +
+                pSH17 * _C(16) +
+                pSH18 * _C(17) +
+                pSH19 * _C(18) +
+                pSH20 * _C(19) +
+                pSH21 * _C(20) +
+                pSH22 * _C(21) +
+                pSH23 * _C(22) +
+                pSH24 * _C(23);
+
+    #undef _C
+    return colors;
+}
+
+
+// ---- direction-form forward (q16) ------------------------------------------
+[ForceInline]
+float3 sh_coeffs_to_color_q16(
+    const int degree,
+    const float3 viewdir,
+    float3 coeff_dc,
+    uint16_t* packed,
+    float2*   bounds,
+    int64_t   base,
+    int64_t  bounds_stride
+) {
+    #define _C(j) _sh_load_q16(packed, bounds, base, j, bounds_stride)
+    float3 colors = 0.2820947917738781f * coeff_dc;
+
+    if (degree <= 0)
+        return colors;
+
+    float inv_norm = rsqrt(
+        viewdir.x * viewdir.x + viewdir.y * viewdir.y + viewdir.z * viewdir.z
+    );
+    float x = viewdir.x * inv_norm;
+    float y = viewdir.y * inv_norm;
+    float z = viewdir.z * inv_norm;
+
+    float fTmp0A = 0.48860251190292f;
+    colors += fTmp0A *
+            (-y * _C(0) +
+            z * _C(1) -
+            x * _C(2));
+
+    if (degree <= 1)
+        return colors;
+
+    float z2 = z * z;
+    float fTmp0B = -1.092548430592079f * z;
+    float fTmp1A = 0.5462742152960395f;
+    float fC1 = x * x - y * y;
+    float fS1 = 2.f * x * y;
+    float pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
+    float pSH7 = fTmp0B * x;
+    float pSH5 = fTmp0B * y;
+    float pSH8 = fTmp1A * fC1;
+    float pSH4 = fTmp1A * fS1;
+    colors +=
+        pSH4 * _C(3) + pSH5 * _C(4) +
+        pSH6 * _C(5) + pSH7 * _C(6) +
+        pSH8 * _C(7);
+
+    if (degree <= 2)
+        return colors;
+
+    float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
+    float fTmp1B = 1.445305721320277f * z;
+    float fTmp2A = -0.5900435899266435f;
+    float fC2 = x * fC1 - y * fS1;
+    float fS2 = x * fS1 + y * fC1;
+    float pSH12 = z * (1.865881662950577f * z2 - 1.119528997770346f);
+    float pSH13 = fTmp0C * x;
+    float pSH11 = fTmp0C * y;
+    float pSH14 = fTmp1B * fC1;
+    float pSH10 = fTmp1B * fS1;
+    float pSH15 = fTmp2A * fC2;
+    float pSH9  = fTmp2A * fS2;
+    colors += pSH9  * _C(8) +
+            pSH10 * _C(9) +
+            pSH11 * _C(10) +
+            pSH12 * _C(11) +
+            pSH13 * _C(12) +
+            pSH14 * _C(13) +
+            pSH15 * _C(14);
+
+    if (degree <= 3)
+        return colors;
+
+    float fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
+    float fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
+    float fTmp2B = -1.770130769779931f * z;
+    float fC3 = x * fC2 - y * fS2;
+    float fS3 = x * fS2 + y * fC2;
+    float pSH20 = (1.984313483298443f * z * pSH12 - 1.006230589874905f * pSH6);
+    float pSH21 = fTmp0D * x;
+    float pSH19 = fTmp0D * y;
+    float pSH22 = fTmp1C * fC1;
+    float pSH18 = fTmp1C * fS1;
+    float pSH23 = fTmp2B * fC2;
+    float pSH17 = fTmp2B * fS2;
+    float pSH24 = 0.6258357354491763f * fC3;
+    float pSH16 = 0.6258357354491763f * fS3;
+
+    colors += pSH16 * _C(15) +
+                pSH17 * _C(16) +
+                pSH18 * _C(17) +
+                pSH19 * _C(18) +
+                pSH20 * _C(19) +
+                pSH21 * _C(20) +
+                pSH22 * _C(21) +
+                pSH23 * _C(22) +
+                pSH24 * _C(23);
+
+    #undef _C
+    return colors;
+}
+
+
+// ---- direction-form VJP (q8) -----------------------------------------------
+// Body is a verbatim copy of _sh_coeffs_to_color_vjp<inplace>(float3* coeffs)
+// with `coeffs[i]` replaced by `_C(i)` (q8 codec load) and v_coeffs writes
+// kept as fp32 via the same sv(i, v) macro.
+[ForceInline]
+void _sh_coeffs_to_color_vjp_q8<let inplace: int>(
+    const int degree,
+    const float3 dir,
+    float3 coeff_dc,
+    uint8_t* packed,
+    float2*  bounds,
+    int64_t  base,
+    int64_t  bounds_stride,
+    const float3 v_colors,
+    inout float3 v_coeff_dc,
+    float3 *v_coeffs,
+    inout float3 v_dir,
+    uint thread_id
+) {
+    #define _C(j) _sh_load_q8(packed, bounds, base, j, bounds_stride)
+    #define sv(i, v) \
+        if (inplace == 0) v_coeffs[i] = (v); \
+        else if (inplace == 1) v_coeffs[i] += (v); \
+        else if (inplace == 2) { \
+            float3 temp = (v); \
+            if (isfinite(dot(temp, temp)) && dot(temp, temp) != 0.0) { \
+                InterlockedAdd(v_coeffs[i].x, temp.x); \
+                InterlockedAdd(v_coeffs[i].y, temp.y); \
+                InterlockedAdd(v_coeffs[i].z, temp.z); \
+            } \
+        } \
+        else if (inplace == 3) { \
+            sh_block_atomic_add_f3_512(v_coeffs, (uint)(i), (v), thread_id); \
+        }
+
+    if (inplace != 0) {
+        v_coeff_dc += 0.2820947917738781f * v_colors;
+    } else {
+        v_coeff_dc = 0.2820947917738781f * v_colors;
+    }
+    if (degree <= 0) {
+        if (inplace == 0) v_dir = float3(0);
+        return;
+    }
+
+    float inorm = rsqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    float x = dir.x * inorm;
+    float y = dir.y * inorm;
+    float z = dir.z * inorm;
+    float v_x = 0.f, v_y = 0.f, v_z = 0.f;
+
+    sv(0, -0.48860251190292f * y * v_colors);
+    sv(1, 0.48860251190292f * z * v_colors);
+    sv(2, -0.48860251190292f * x * v_colors);
+
+    v_x += -0.48860251190292f * dot(_C(2), v_colors);
+    v_y += -0.48860251190292f * dot(_C(0), v_colors);
+    v_z += 0.48860251190292f * dot(_C(1), v_colors);
+
+    if (degree <= 1) {
+        float3 dir_n = float3(x, y, z);
+        float3 v_dir_n = float3(v_x, v_y, v_z);
+        if (inplace != 0)
+            v_dir += (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        else
+            v_dir = (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        return;
+    }
+
+    float z2 = z * z;
+    float fTmp0B = -1.092548430592079f * z;
+    float fC1 = x * x - y * y;
+    float fS1 = 2.f * x * y;
+    float pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
+    float pSH7 = fTmp0B * x;
+    float pSH5 = fTmp0B * y;
+    float pSH8 = 0.5462742152960395f * fC1;
+    float pSH4 = 0.5462742152960395f * fS1;
+    sv(3, pSH4 * v_colors);
+    sv(4, pSH5 * v_colors);
+    sv(5, pSH6 * v_colors);
+    sv(6, pSH7 * v_colors);
+    sv(7, pSH8 * v_colors);
+
+    float fTmp0B_z, fC1_x, fC1_y, fS1_x, fS1_y, pSH6_z, pSH7_x, pSH7_z, pSH5_y,
+        pSH5_z, pSH8_x, pSH8_y, pSH4_x, pSH4_y;
+
+    fTmp0B_z = -1.092548430592079f;
+    fC1_x = 2.f * x;
+    fC1_y = -2.f * y;
+    fS1_x = 2.f * y;
+    fS1_y = 2.f * x;
+    pSH6_z = 2.f * 0.9461746957575601f * z;
+    pSH7_x = fTmp0B;
+    pSH7_z = fTmp0B_z * x;
+    pSH5_y = fTmp0B;
+    pSH5_z = fTmp0B_z * y;
+    pSH8_x = 0.5462742152960395f * fC1_x;
+    pSH8_y = 0.5462742152960395f * fC1_y;
+    pSH4_x = 0.5462742152960395f * fS1_x;
+    pSH4_y = 0.5462742152960395f * fS1_y;
+
+    v_x += dot(v_colors,
+            pSH4_x * _C(3) + pSH8_x * _C(7) +
+            pSH7_x * _C(6));
+    v_y += dot(v_colors,
+            pSH4_y * _C(3) + pSH8_y * _C(7) +
+            pSH5_y * _C(4));
+    v_z += dot(v_colors,
+            pSH6_z * _C(5) + pSH7_z * _C(6) +
+            pSH5_z * _C(4));
+
+    if (degree <= 2) {
+        float3 dir_n = float3(x, y, z);
+        float3 v_dir_n = float3(v_x, v_y, v_z);
+        if (inplace != 0)
+            v_dir += (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        else
+            v_dir = (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        return;
+    }
+
+    float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
+    float fTmp1B = 1.445305721320277f * z;
+    float fC2 = x * fC1 - y * fS1;
+    float fS2 = x * fS1 + y * fC1;
+    float pSH12 = z * (1.865881662950577f * z2 - 1.119528997770346f);
+    float pSH13 = fTmp0C * x;
+    float pSH11 = fTmp0C * y;
+    float pSH14 = fTmp1B * fC1;
+    float pSH10 = fTmp1B * fS1;
+    float pSH15 = -0.5900435899266435f * fC2;
+    float pSH9 = -0.5900435899266435f * fS2;
+    sv(8, pSH9 * v_colors);
+    sv(9, pSH10 * v_colors);
+    sv(10, pSH11 * v_colors);
+    sv(11, pSH12 * v_colors);
+    sv(12, pSH13 * v_colors);
+    sv(13, pSH14 * v_colors);
+    sv(14, pSH15 * v_colors);
+
+    float fTmp0C_z, fTmp1B_z, fC2_x, fC2_y, fS2_x, fS2_y, pSH12_z, pSH13_x,
+        pSH13_z, pSH11_y, pSH11_z, pSH14_x, pSH14_y, pSH14_z, pSH10_x, pSH10_y,
+        pSH10_z, pSH15_x, pSH15_y, pSH9_x, pSH9_y;
+
+    fTmp0C_z = -2.285228997322329f * 2.f * z;
+    fTmp1B_z = 1.445305721320277f;
+    fC2_x = fC1 + x * fC1_x - y * fS1_x;
+    fC2_y = x * fC1_y - fS1 - y * fS1_y;
+    fS2_x = fS1 + x * fS1_x + y * fC1_x;
+    fS2_y = x * fS1_y + fC1 + y * fC1_y;
+    pSH12_z = 3.f * 1.865881662950577f * z2 - 1.119528997770346f;
+    pSH13_x = fTmp0C;
+    pSH13_z = fTmp0C_z * x;
+    pSH11_y = fTmp0C;
+    pSH11_z = fTmp0C_z * y;
+    pSH14_x = fTmp1B * fC1_x;
+    pSH14_y = fTmp1B * fC1_y;
+    pSH14_z = fTmp1B_z * fC1;
+    pSH10_x = fTmp1B * fS1_x;
+    pSH10_y = fTmp1B * fS1_y;
+    pSH10_z = fTmp1B_z * fS1;
+    pSH15_x = -0.5900435899266435f * fC2_x;
+    pSH15_y = -0.5900435899266435f * fC2_y;
+    pSH9_x = -0.5900435899266435f * fS2_x;
+    pSH9_y = -0.5900435899266435f * fS2_y;
+
+    v_x += dot(v_colors,
+            pSH9_x * _C(8) + pSH15_x * _C(14) +
+            pSH10_x * _C(9) + pSH14_x * _C(13) +
+            pSH13_x * _C(12));
+
+    v_y += dot(v_colors,
+            pSH9_y * _C(8) + pSH15_y * _C(14) +
+            pSH10_y * _C(9) + pSH14_y * _C(13) +
+            pSH11_y * _C(10));
+
+    v_z += dot(v_colors,
+            pSH12_z * _C(11) + pSH13_z * _C(12) +
+            pSH11_z * _C(10) + pSH14_z * _C(13) +
+            pSH10_z * _C(9));
+
+    if (degree <= 3) {
+        float3 dir_n = float3(x, y, z);
+        float3 v_dir_n = float3(v_x, v_y, v_z);
+        if (inplace != 0)
+            v_dir += (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        else
+            v_dir = (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        return;
+    }
+
+    float fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
+    float fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
+    float fTmp2B = -1.770130769779931f * z;
+    float fC3 = x * fC2 - y * fS2;
+    float fS3 = x * fS2 + y * fC2;
+    float pSH20 = (1.984313483298443f * z * pSH12 + -1.006230589874905f * pSH6);
+    float pSH21 = fTmp0D * x;
+    float pSH19 = fTmp0D * y;
+    float pSH22 = fTmp1C * fC1;
+    float pSH18 = fTmp1C * fS1;
+    float pSH23 = fTmp2B * fC2;
+    float pSH17 = fTmp2B * fS2;
+    float pSH24 = 0.6258357354491763f * fC3;
+    float pSH16 = 0.6258357354491763f * fS3;
+    sv(15, pSH16 * v_colors);
+    sv(16, pSH17 * v_colors);
+    sv(17, pSH18 * v_colors);
+    sv(18, pSH19 * v_colors);
+    sv(19, pSH20 * v_colors);
+    sv(20, pSH21 * v_colors);
+    sv(21, pSH22 * v_colors);
+    sv(22, pSH23 * v_colors);
+    sv(23, pSH24 * v_colors);
+
+    float fTmp0D_z, fTmp1C_z, fTmp2B_z, fC3_x, fC3_y, fS3_x, fS3_y, pSH20_z,
+        pSH21_x, pSH21_z, pSH19_y, pSH19_z, pSH22_x, pSH22_y, pSH22_z, pSH18_x,
+        pSH18_y, pSH18_z, pSH23_x, pSH23_y, pSH23_z, pSH17_x, pSH17_y, pSH17_z,
+        pSH24_x, pSH24_y, pSH16_x, pSH16_y;
+
+    fTmp0D_z = 3.f * -4.683325804901025f * z2 + 2.007139630671868f;
+    fTmp1C_z = 2.f * 3.31161143515146f * z;
+    fTmp2B_z = -1.770130769779931f;
+    fC3_x = fC2 + x * fC2_x - y * fS2_x;
+    fC3_y = x * fC2_y - fS2 - y * fS2_y;
+    fS3_x = fS2 + y * fC2_x + x * fS2_x;
+    fS3_y = x * fS2_y + fC2 + y * fC2_y;
+    pSH20_z = 1.984313483298443f * (pSH12 + z * pSH12_z) +
+                -1.006230589874905f * pSH6_z;
+    pSH21_x = fTmp0D;
+    pSH21_z = fTmp0D_z * x;
+    pSH19_y = fTmp0D;
+    pSH19_z = fTmp0D_z * y;
+    pSH22_x = fTmp1C * fC1_x;
+    pSH22_y = fTmp1C * fC1_y;
+    pSH22_z = fTmp1C_z * fC1;
+    pSH18_x = fTmp1C * fS1_x;
+    pSH18_y = fTmp1C * fS1_y;
+    pSH18_z = fTmp1C_z * fS1;
+    pSH23_x = fTmp2B * fC2_x;
+    pSH23_y = fTmp2B * fC2_y;
+    pSH23_z = fTmp2B_z * fC2;
+    pSH17_x = fTmp2B * fS2_x;
+    pSH17_y = fTmp2B * fS2_y;
+    pSH17_z = fTmp2B_z * fS2;
+    pSH24_x = 0.6258357354491763f * fC3_x;
+    pSH24_y = 0.6258357354491763f * fC3_y;
+    pSH16_x = 0.6258357354491763f * fS3_x;
+    pSH16_y = 0.6258357354491763f * fS3_y;
+
+    v_x += dot(v_colors,
+            pSH16_x * _C(15) + pSH24_x * _C(23) +
+            pSH17_x * _C(16) + pSH23_x * _C(22) +
+            pSH18_x * _C(17) + pSH22_x * _C(21) +
+            pSH21_x * _C(20));
+    v_y += dot(v_colors,
+            pSH16_y * _C(15) + pSH24_y * _C(23) +
+            pSH17_y * _C(16) + pSH23_y * _C(22) +
+            pSH18_y * _C(17) + pSH22_y * _C(21) +
+            pSH19_y * _C(18));
+    v_z += dot(v_colors,
+            pSH20_z * _C(19) + pSH21_z * _C(20) +
+            pSH19_z * _C(18) + pSH22_z * _C(21) +
+            pSH18_z * _C(17) + pSH23_z * _C(22) +
+            pSH17_z * _C(16));
+
+    float3 dir_n = float3(x, y, z);
+    float3 v_dir_n = float3(v_x, v_y, v_z);
+    if (inplace != 0)
+        v_dir += (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+    else
+        v_dir = (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+
+    #undef sv
+    #undef _C
+}
+
+
+// ---- direction-form VJP (q8) -----------------------------------------------
+// Body is a verbatim copy of _sh_coeffs_to_color_vjp<inplace>(float3* coeffs)  // q16 -- body identical to q8 modulo load helper
+// with `coeffs[i]` replaced by `_C(i)` (q16 codec load) and v_coeffs writes
+// kept as fp32 via the same sv(i, v) macro.
+[ForceInline]
+void _sh_coeffs_to_color_vjp_q16<let inplace: int>(
+    const int degree,
+    const float3 dir,
+    float3 coeff_dc,
+    uint16_t* packed,
+    float2*  bounds,
+    int64_t  base,
+    int64_t  bounds_stride,
+    const float3 v_colors,
+    inout float3 v_coeff_dc,
+    float3 *v_coeffs,
+    inout float3 v_dir,
+    uint thread_id
+) {
+    #define _C(j) _sh_load_q16(packed, bounds, base, j, bounds_stride)
+    #define sv(i, v) \
+        if (inplace == 0) v_coeffs[i] = (v); \
+        else if (inplace == 1) v_coeffs[i] += (v); \
+        else if (inplace == 2) { \
+            float3 temp = (v); \
+            if (isfinite(dot(temp, temp)) && dot(temp, temp) != 0.0) { \
+                InterlockedAdd(v_coeffs[i].x, temp.x); \
+                InterlockedAdd(v_coeffs[i].y, temp.y); \
+                InterlockedAdd(v_coeffs[i].z, temp.z); \
+            } \
+        } \
+        else if (inplace == 3) { \
+            sh_block_atomic_add_f3_512(v_coeffs, (uint)(i), (v), thread_id); \
+        }
+
+    if (inplace != 0) {
+        v_coeff_dc += 0.2820947917738781f * v_colors;
+    } else {
+        v_coeff_dc = 0.2820947917738781f * v_colors;
+    }
+    if (degree <= 0) {
+        if (inplace == 0) v_dir = float3(0);
+        return;
+    }
+
+    float inorm = rsqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    float x = dir.x * inorm;
+    float y = dir.y * inorm;
+    float z = dir.z * inorm;
+    float v_x = 0.f, v_y = 0.f, v_z = 0.f;
+
+    sv(0, -0.48860251190292f * y * v_colors);
+    sv(1, 0.48860251190292f * z * v_colors);
+    sv(2, -0.48860251190292f * x * v_colors);
+
+    v_x += -0.48860251190292f * dot(_C(2), v_colors);
+    v_y += -0.48860251190292f * dot(_C(0), v_colors);
+    v_z += 0.48860251190292f * dot(_C(1), v_colors);
+
+    if (degree <= 1) {
+        float3 dir_n = float3(x, y, z);
+        float3 v_dir_n = float3(v_x, v_y, v_z);
+        if (inplace != 0)
+            v_dir += (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        else
+            v_dir = (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        return;
+    }
+
+    float z2 = z * z;
+    float fTmp0B = -1.092548430592079f * z;
+    float fC1 = x * x - y * y;
+    float fS1 = 2.f * x * y;
+    float pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
+    float pSH7 = fTmp0B * x;
+    float pSH5 = fTmp0B * y;
+    float pSH8 = 0.5462742152960395f * fC1;
+    float pSH4 = 0.5462742152960395f * fS1;
+    sv(3, pSH4 * v_colors);
+    sv(4, pSH5 * v_colors);
+    sv(5, pSH6 * v_colors);
+    sv(6, pSH7 * v_colors);
+    sv(7, pSH8 * v_colors);
+
+    float fTmp0B_z, fC1_x, fC1_y, fS1_x, fS1_y, pSH6_z, pSH7_x, pSH7_z, pSH5_y,
+        pSH5_z, pSH8_x, pSH8_y, pSH4_x, pSH4_y;
+
+    fTmp0B_z = -1.092548430592079f;
+    fC1_x = 2.f * x;
+    fC1_y = -2.f * y;
+    fS1_x = 2.f * y;
+    fS1_y = 2.f * x;
+    pSH6_z = 2.f * 0.9461746957575601f * z;
+    pSH7_x = fTmp0B;
+    pSH7_z = fTmp0B_z * x;
+    pSH5_y = fTmp0B;
+    pSH5_z = fTmp0B_z * y;
+    pSH8_x = 0.5462742152960395f * fC1_x;
+    pSH8_y = 0.5462742152960395f * fC1_y;
+    pSH4_x = 0.5462742152960395f * fS1_x;
+    pSH4_y = 0.5462742152960395f * fS1_y;
+
+    v_x += dot(v_colors,
+            pSH4_x * _C(3) + pSH8_x * _C(7) +
+            pSH7_x * _C(6));
+    v_y += dot(v_colors,
+            pSH4_y * _C(3) + pSH8_y * _C(7) +
+            pSH5_y * _C(4));
+    v_z += dot(v_colors,
+            pSH6_z * _C(5) + pSH7_z * _C(6) +
+            pSH5_z * _C(4));
+
+    if (degree <= 2) {
+        float3 dir_n = float3(x, y, z);
+        float3 v_dir_n = float3(v_x, v_y, v_z);
+        if (inplace != 0)
+            v_dir += (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        else
+            v_dir = (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        return;
+    }
+
+    float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
+    float fTmp1B = 1.445305721320277f * z;
+    float fC2 = x * fC1 - y * fS1;
+    float fS2 = x * fS1 + y * fC1;
+    float pSH12 = z * (1.865881662950577f * z2 - 1.119528997770346f);
+    float pSH13 = fTmp0C * x;
+    float pSH11 = fTmp0C * y;
+    float pSH14 = fTmp1B * fC1;
+    float pSH10 = fTmp1B * fS1;
+    float pSH15 = -0.5900435899266435f * fC2;
+    float pSH9 = -0.5900435899266435f * fS2;
+    sv(8, pSH9 * v_colors);
+    sv(9, pSH10 * v_colors);
+    sv(10, pSH11 * v_colors);
+    sv(11, pSH12 * v_colors);
+    sv(12, pSH13 * v_colors);
+    sv(13, pSH14 * v_colors);
+    sv(14, pSH15 * v_colors);
+
+    float fTmp0C_z, fTmp1B_z, fC2_x, fC2_y, fS2_x, fS2_y, pSH12_z, pSH13_x,
+        pSH13_z, pSH11_y, pSH11_z, pSH14_x, pSH14_y, pSH14_z, pSH10_x, pSH10_y,
+        pSH10_z, pSH15_x, pSH15_y, pSH9_x, pSH9_y;
+
+    fTmp0C_z = -2.285228997322329f * 2.f * z;
+    fTmp1B_z = 1.445305721320277f;
+    fC2_x = fC1 + x * fC1_x - y * fS1_x;
+    fC2_y = x * fC1_y - fS1 - y * fS1_y;
+    fS2_x = fS1 + x * fS1_x + y * fC1_x;
+    fS2_y = x * fS1_y + fC1 + y * fC1_y;
+    pSH12_z = 3.f * 1.865881662950577f * z2 - 1.119528997770346f;
+    pSH13_x = fTmp0C;
+    pSH13_z = fTmp0C_z * x;
+    pSH11_y = fTmp0C;
+    pSH11_z = fTmp0C_z * y;
+    pSH14_x = fTmp1B * fC1_x;
+    pSH14_y = fTmp1B * fC1_y;
+    pSH14_z = fTmp1B_z * fC1;
+    pSH10_x = fTmp1B * fS1_x;
+    pSH10_y = fTmp1B * fS1_y;
+    pSH10_z = fTmp1B_z * fS1;
+    pSH15_x = -0.5900435899266435f * fC2_x;
+    pSH15_y = -0.5900435899266435f * fC2_y;
+    pSH9_x = -0.5900435899266435f * fS2_x;
+    pSH9_y = -0.5900435899266435f * fS2_y;
+
+    v_x += dot(v_colors,
+            pSH9_x * _C(8) + pSH15_x * _C(14) +
+            pSH10_x * _C(9) + pSH14_x * _C(13) +
+            pSH13_x * _C(12));
+
+    v_y += dot(v_colors,
+            pSH9_y * _C(8) + pSH15_y * _C(14) +
+            pSH10_y * _C(9) + pSH14_y * _C(13) +
+            pSH11_y * _C(10));
+
+    v_z += dot(v_colors,
+            pSH12_z * _C(11) + pSH13_z * _C(12) +
+            pSH11_z * _C(10) + pSH14_z * _C(13) +
+            pSH10_z * _C(9));
+
+    if (degree <= 3) {
+        float3 dir_n = float3(x, y, z);
+        float3 v_dir_n = float3(v_x, v_y, v_z);
+        if (inplace != 0)
+            v_dir += (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        else
+            v_dir = (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+        return;
+    }
+
+    float fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
+    float fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
+    float fTmp2B = -1.770130769779931f * z;
+    float fC3 = x * fC2 - y * fS2;
+    float fS3 = x * fS2 + y * fC2;
+    float pSH20 = (1.984313483298443f * z * pSH12 + -1.006230589874905f * pSH6);
+    float pSH21 = fTmp0D * x;
+    float pSH19 = fTmp0D * y;
+    float pSH22 = fTmp1C * fC1;
+    float pSH18 = fTmp1C * fS1;
+    float pSH23 = fTmp2B * fC2;
+    float pSH17 = fTmp2B * fS2;
+    float pSH24 = 0.6258357354491763f * fC3;
+    float pSH16 = 0.6258357354491763f * fS3;
+    sv(15, pSH16 * v_colors);
+    sv(16, pSH17 * v_colors);
+    sv(17, pSH18 * v_colors);
+    sv(18, pSH19 * v_colors);
+    sv(19, pSH20 * v_colors);
+    sv(20, pSH21 * v_colors);
+    sv(21, pSH22 * v_colors);
+    sv(22, pSH23 * v_colors);
+    sv(23, pSH24 * v_colors);
+
+    float fTmp0D_z, fTmp1C_z, fTmp2B_z, fC3_x, fC3_y, fS3_x, fS3_y, pSH20_z,
+        pSH21_x, pSH21_z, pSH19_y, pSH19_z, pSH22_x, pSH22_y, pSH22_z, pSH18_x,
+        pSH18_y, pSH18_z, pSH23_x, pSH23_y, pSH23_z, pSH17_x, pSH17_y, pSH17_z,
+        pSH24_x, pSH24_y, pSH16_x, pSH16_y;
+
+    fTmp0D_z = 3.f * -4.683325804901025f * z2 + 2.007139630671868f;
+    fTmp1C_z = 2.f * 3.31161143515146f * z;
+    fTmp2B_z = -1.770130769779931f;
+    fC3_x = fC2 + x * fC2_x - y * fS2_x;
+    fC3_y = x * fC2_y - fS2 - y * fS2_y;
+    fS3_x = fS2 + y * fC2_x + x * fS2_x;
+    fS3_y = x * fS2_y + fC2 + y * fC2_y;
+    pSH20_z = 1.984313483298443f * (pSH12 + z * pSH12_z) +
+                -1.006230589874905f * pSH6_z;
+    pSH21_x = fTmp0D;
+    pSH21_z = fTmp0D_z * x;
+    pSH19_y = fTmp0D;
+    pSH19_z = fTmp0D_z * y;
+    pSH22_x = fTmp1C * fC1_x;
+    pSH22_y = fTmp1C * fC1_y;
+    pSH22_z = fTmp1C_z * fC1;
+    pSH18_x = fTmp1C * fS1_x;
+    pSH18_y = fTmp1C * fS1_y;
+    pSH18_z = fTmp1C_z * fS1;
+    pSH23_x = fTmp2B * fC2_x;
+    pSH23_y = fTmp2B * fC2_y;
+    pSH23_z = fTmp2B_z * fC2;
+    pSH17_x = fTmp2B * fS2_x;
+    pSH17_y = fTmp2B * fS2_y;
+    pSH17_z = fTmp2B_z * fS2;
+    pSH24_x = 0.6258357354491763f * fC3_x;
+    pSH24_y = 0.6258357354491763f * fC3_y;
+    pSH16_x = 0.6258357354491763f * fS3_x;
+    pSH16_y = 0.6258357354491763f * fS3_y;
+
+    v_x += dot(v_colors,
+            pSH16_x * _C(15) + pSH24_x * _C(23) +
+            pSH17_x * _C(16) + pSH23_x * _C(22) +
+            pSH18_x * _C(17) + pSH22_x * _C(21) +
+            pSH21_x * _C(20));
+    v_y += dot(v_colors,
+            pSH16_y * _C(15) + pSH24_y * _C(23) +
+            pSH17_y * _C(16) + pSH23_y * _C(22) +
+            pSH18_y * _C(17) + pSH22_y * _C(21) +
+            pSH19_y * _C(18));
+    v_z += dot(v_colors,
+            pSH20_z * _C(19) + pSH21_z * _C(20) +
+            pSH19_z * _C(18) + pSH22_z * _C(21) +
+            pSH18_z * _C(17) + pSH23_z * _C(22) +
+            pSH17_z * _C(16));
+
+    float3 dir_n = float3(x, y, z);
+    float3 v_dir_n = float3(v_x, v_y, v_z);
+    if (inplace != 0)
+        v_dir += (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+    else
+        v_dir = (v_dir_n - dot(v_dir_n, dir_n) * dir_n) * inorm;
+
+    #undef sv
+    #undef _C
+}
+
+
+// ---- direction-form public wrappers (q8) -----------------------------------
+[ForceInline]
+void sh_coeffs_to_color_vjp_q8(
+    const int degree,
+    const float3 dir,
+    float3 coeff_dc,
+    uint8_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    const float3 v_colors,
+    inout float3 v_coeff_dc,
+    float3* v_coeffs,
+    inout float3 v_dir
+) { _sh_coeffs_to_color_vjp_q8<0>(degree, dir, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_dir, 0u); }
+
+[ForceInline]
+void sh_coeffs_to_color_vjp_inplace_q8(
+    const int degree, const float3 dir, float3 coeff_dc,
+    uint8_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    const float3 v_colors,
+    inout float3 v_coeff_dc, float3* v_coeffs, inout float3 v_dir
+) { _sh_coeffs_to_color_vjp_q8<1>(degree, dir, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_dir, 0u); }
+
+[ForceInline]
+void sh_coeffs_to_color_vjp_atomic_q8(
+    const int degree, const float3 dir, float3 coeff_dc,
+    uint8_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    const float3 v_colors,
+    inout float3 v_coeff_dc, float3* v_coeffs, inout float3 v_dir
+) { _sh_coeffs_to_color_vjp_q8<2>(degree, dir, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_dir, 0u); }
+
+
+// ---- direction-form public wrappers (q16) ----------------------------------
+[ForceInline]
+void sh_coeffs_to_color_vjp_q16(
+    const int degree, const float3 dir, float3 coeff_dc,
+    uint16_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    const float3 v_colors,
+    inout float3 v_coeff_dc, float3* v_coeffs, inout float3 v_dir
+) { _sh_coeffs_to_color_vjp_q16<0>(degree, dir, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_dir, 0u); }
+
+[ForceInline]
+void sh_coeffs_to_color_vjp_inplace_q16(
+    const int degree, const float3 dir, float3 coeff_dc,
+    uint16_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    const float3 v_colors,
+    inout float3 v_coeff_dc, float3* v_coeffs, inout float3 v_dir
+) { _sh_coeffs_to_color_vjp_q16<1>(degree, dir, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_dir, 0u); }
+
+[ForceInline]
+void sh_coeffs_to_color_vjp_atomic_q16(
+    const int degree, const float3 dir, float3 coeff_dc,
+    uint16_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    const float3 v_colors,
+    inout float3 v_coeff_dc, float3* v_coeffs, inout float3 v_dir
+) { _sh_coeffs_to_color_vjp_q16<2>(degree, dir, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_dir, 0u); }
+
+
+// ---- (mean, R, t) form forward (q8) ----------------------------------------
+[ForceInline]
+float3 sh_coeffs_to_color_q8(
+    const int degree,
+    const float3 mean, const float3x3 R, const float3 t,
+    float3 coeff_dc,
+    uint8_t* packed, float2* bounds, int64_t base, int64_t bounds_stride
+) {
+    float3 viewdir = mean_viewmat_to_unnormalized_viewdir(mean, R, t);
+    float3 rgb = sh_coeffs_to_color_q8(degree, viewdir, coeff_dc, packed, bounds, base, bounds_stride);
+    return max(rgb + 0.5, 0.0);
+}
+
+// ---- (mean, R, t) form forward (q16) ---------------------------------------
+[ForceInline]
+float3 sh_coeffs_to_color_q16(
+    const int degree,
+    const float3 mean, const float3x3 R, const float3 t,
+    float3 coeff_dc,
+    uint16_t* packed, float2* bounds, int64_t base, int64_t bounds_stride
+) {
+    float3 viewdir = mean_viewmat_to_unnormalized_viewdir(mean, R, t);
+    float3 rgb = sh_coeffs_to_color_q16(degree, viewdir, coeff_dc, packed, bounds, base, bounds_stride);
+    return max(rgb + 0.5, 0.0);
+}
+
+
+// ---- (mean, R, t) form VJP (q8) --------------------------------------------
+[ForceInline]
+void _sh_coeffs_to_color_vjp_q8<let inplace: int>(
+    const int degree,
+    const float3 mean, const float3x3 R, const float3 t,
+    float3 coeff_dc,
+    uint8_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    float3 v_colors,
+    out float3 v_coeff_dc,
+    float3* v_coeffs,
+    out float3 v_mean, out float3x3 v_R, out float3 v_t
+) {
+    float3 viewdir = mean_viewmat_to_unnormalized_viewdir(mean, R, t);
+    float3 rgb = sh_coeffs_to_color_q8(degree, viewdir, coeff_dc, packed, bounds, base, bounds_stride);
+    v_colors *= float3(float(rgb.x >= -0.5), float(rgb.y >= -0.5), float(rgb.z >= -0.5));
+
+    float3 v_viewdir;
+    _sh_coeffs_to_color_vjp_q8<inplace>(
+        degree, viewdir, coeff_dc, packed, bounds, base, bounds_stride,
+        v_colors, v_coeff_dc, v_coeffs, v_viewdir, 0u);
+
+    DifferentialPair<float3> dp_mean = diffPair(mean);
+    DifferentialPair<float3x3> dp_R = diffPair(R);
+    DifferentialPair<float3> dp_t = diffPair(t);
+    bwd_diff(mean_viewmat_to_unnormalized_viewdir)(dp_mean, dp_R, dp_t, v_viewdir);
+    if (inplace == 0) {
+        v_mean = dp_mean.d;
+        v_R = dp_R.d;
+        v_t = dp_t.d;
+    } else {
+        v_mean += dp_mean.d;
+        v_R += dp_R.d;
+        v_t += dp_t.d;
+    }
+}
+
+// ---- (mean, R, t) form VJP (q16) -------------------------------------------
+[ForceInline]
+void _sh_coeffs_to_color_vjp_q16<let inplace: int>(
+    const int degree,
+    const float3 mean, const float3x3 R, const float3 t,
+    float3 coeff_dc,
+    uint16_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    float3 v_colors,
+    out float3 v_coeff_dc,
+    float3* v_coeffs,
+    out float3 v_mean, out float3x3 v_R, out float3 v_t
+) {
+    float3 viewdir = mean_viewmat_to_unnormalized_viewdir(mean, R, t);
+    float3 rgb = sh_coeffs_to_color_q16(degree, viewdir, coeff_dc, packed, bounds, base, bounds_stride);
+    v_colors *= float3(float(rgb.x >= -0.5), float(rgb.y >= -0.5), float(rgb.z >= -0.5));
+
+    float3 v_viewdir;
+    _sh_coeffs_to_color_vjp_q16<inplace>(
+        degree, viewdir, coeff_dc, packed, bounds, base, bounds_stride,
+        v_colors, v_coeff_dc, v_coeffs, v_viewdir, 0u);
+
+    DifferentialPair<float3> dp_mean = diffPair(mean);
+    DifferentialPair<float3x3> dp_R = diffPair(R);
+    DifferentialPair<float3> dp_t = diffPair(t);
+    bwd_diff(mean_viewmat_to_unnormalized_viewdir)(dp_mean, dp_R, dp_t, v_viewdir);
+    if (inplace == 0) {
+        v_mean = dp_mean.d;
+        v_R = dp_R.d;
+        v_t = dp_t.d;
+    } else {
+        v_mean += dp_mean.d;
+        v_R += dp_R.d;
+        v_t += dp_t.d;
+    }
+}
+
+
+// ---- (mean, R, t) form public wrappers (q8) --------------------------------
+[ForceInline]
+void sh_coeffs_to_color_vjp_q8(
+    const int degree,
+    const float3 mean, const float3x3 R, const float3 t,
+    float3 coeff_dc,
+    uint8_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    float3 v_colors,
+    out float3 v_coeff_dc, float3* v_coeffs,
+    out float3 v_mean, out float3x3 v_R, out float3 v_t
+) { _sh_coeffs_to_color_vjp_q8<0>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
+
+[ForceInline]
+void sh_coeffs_to_color_vjp_inplace_q8(
+    const int degree,
+    const float3 mean, const float3x3 R, const float3 t,
+    float3 coeff_dc,
+    uint8_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    float3 v_colors,
+    out float3 v_coeff_dc, float3* v_coeffs,
+    out float3 v_mean, out float3x3 v_R, out float3 v_t
+) { _sh_coeffs_to_color_vjp_q8<1>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
+
+[ForceInline]
+void sh_coeffs_to_color_vjp_atomic_q8(
+    const int degree,
+    const float3 mean, const float3x3 R, const float3 t,
+    float3 coeff_dc,
+    uint8_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    float3 v_colors,
+    out float3 v_coeff_dc, float3* v_coeffs,
+    out float3 v_mean, out float3x3 v_R, out float3 v_t
+) { _sh_coeffs_to_color_vjp_q8<2>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
+
+
+// ---- (mean, R, t) form public wrappers (q16) -------------------------------
+[ForceInline]
+void sh_coeffs_to_color_vjp_q16(
+    const int degree,
+    const float3 mean, const float3x3 R, const float3 t,
+    float3 coeff_dc,
+    uint16_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    float3 v_colors,
+    out float3 v_coeff_dc, float3* v_coeffs,
+    out float3 v_mean, out float3x3 v_R, out float3 v_t
+) { _sh_coeffs_to_color_vjp_q16<0>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
+
+[ForceInline]
+void sh_coeffs_to_color_vjp_inplace_q16(
+    const int degree,
+    const float3 mean, const float3x3 R, const float3 t,
+    float3 coeff_dc,
+    uint16_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    float3 v_colors,
+    out float3 v_coeff_dc, float3* v_coeffs,
+    out float3 v_mean, out float3x3 v_R, out float3 v_t
+) { _sh_coeffs_to_color_vjp_q16<1>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
+
+[ForceInline]
+void sh_coeffs_to_color_vjp_atomic_q16(
+    const int degree,
+    const float3 mean, const float3x3 R, const float3 t,
+    float3 coeff_dc,
+    uint16_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
+    float3 v_colors,
+    out float3 v_coeff_dc, float3* v_coeffs,
+    out float3 v_mean, out float3x3 v_R, out float3 v_t
+) { _sh_coeffs_to_color_vjp_q16<2>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
+
+
+// ---- exports (q8 / q16, splat path) ----------------------------------------
+// Per-degree (mean, R, t) entry points + the two VJP variants used by the
+// projection bwd: vjp_inplace (writes into local SH grad buffer) and
+// vjp_atomic (atomicAdd into global engine().grad.features_sh). The direction-
+// only background-SH path stays fp32 -- this export block only covers the
+// splat features_sh value-quant path.
+#define _DECL_Q(sh_degree, qbits, dtype) \
+    [CudaDeviceExport] \
+    float3 sh##sh_degree##_to_color_q##qbits(float3 mean, float3x3 R, float3 t, float3 coeff_dc, dtype* packed, float2* bounds, int64_t base, int64_t bounds_stride) \
+        { return sh_coeffs_to_color_q##qbits(sh_degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride); } \
+    [CudaDeviceExport] \
+    void sh##sh_degree##_to_color_q##qbits##_vjp_inplace(float3 mean, float3x3 R, float3 t, float3 coeff_dc, dtype* packed, float2* bounds, int64_t base, int64_t bounds_stride, float3 v_colors, out float3 v_coeff_dc, float3 *v_coeffs, out float3 v_mean, out float3x3 v_R, out float3 v_t) \
+        { sh_coeffs_to_color_vjp_inplace_q##qbits(sh_degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); } \
+    [CudaDeviceExport] \
+    void sh##sh_degree##_to_color_q##qbits##_vjp_atomic(float3 mean, float3x3 R, float3 t, float3 coeff_dc, dtype* packed, float2* bounds, int64_t base, int64_t bounds_stride, float3 v_colors, out float3 v_coeff_dc, float3 *v_coeffs, out float3 v_mean, out float3x3 v_R, out float3 v_t) \
+        { sh_coeffs_to_color_vjp_atomic_q##qbits(sh_degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); } \
+
+_DECL_Q(0,  8, uint8_t)  _DECL_Q(1,  8, uint8_t)  _DECL_Q(2,  8, uint8_t)  _DECL_Q(3,  8, uint8_t)  _DECL_Q(4,  8, uint8_t)
+_DECL_Q(0, 16, uint16_t) _DECL_Q(1, 16, uint16_t) _DECL_Q(2, 16, uint16_t) _DECL_Q(3, 16, uint16_t) _DECL_Q(4, 16, uint16_t)
+
+#undef _DECL_Q

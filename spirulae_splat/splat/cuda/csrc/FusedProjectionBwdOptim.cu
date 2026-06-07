@@ -45,6 +45,8 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     typename SplatPrimitive::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -65,7 +67,8 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float eps_tr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
-    const int sh_quant_bits
+    const int sh_quant_bits,
+    const int sh_value_bits
 );
 
 
@@ -130,6 +133,8 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,         // AoS packed SH state
     const std::optional<TorchTensorView> sh_quant_bounds,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
     // optimizer params
     DeviceVector<float> radii,
     const float lr_means,
@@ -149,7 +154,8 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const float eps_tr,
     const int32_t scalar_step,
     const std::optional<TorchTensorView> steps,
-    const int sh_quant_bits
+    const int sh_quant_bits,
+    const int sh_value_bits
 ) {
     uint32_t C = (uint32_t)std::get<2>(viewmats)[0]; // number of cameras (first dim)
     // Note: viewmats shape is [C, 4, 4], so index 0 = C
@@ -233,6 +239,8 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             g1_splats_world, g2_splats_world, \
             sh_packed.has_value() ? (const uint8_t*)std::get<0>(sh_packed.value()) : nullptr, \
             sh_quant_bounds.has_value() ? (float4*)std::get<0>(sh_quant_bounds.value()) : nullptr, \
+            sh_value_packed.has_value() ? (const uint8_t*)std::get<0>(sh_value_packed.value()) : nullptr, \
+            sh_value_bounds.has_value() ? (float2*)std::get<0>(sh_value_bounds.value()) : nullptr, \
             /*v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr */ \
             radii.data_ptr(), \
             lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh, \
@@ -240,7 +248,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             mcmc_opacity_reg_weight, mcmc_scale_reg_weight, erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight, sh_reg_weight, \
             eps_tr, \
             scalar_step, steps_ptr, \
-            sh_quant_bits \
+            sh_quant_bits, sh_value_bits \
         )
 
     if (camera_model == CameraModelType::PINHOLE)
@@ -297,6 +305,8 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,
     const std::optional<TorchTensorView> sh_quant_bounds,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
     // optimizer params
     DeviceVector<float> radii,
     const float lr_means,
@@ -318,7 +328,8 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     bool color_is_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits
+    int sh_quant_bits,
+    int sh_value_bits
 ) {
     int32_t scalar_step = std::get_if<int32_t>(&step) ? std::get<int32_t>(step) : -1;
     std::optional<TorchTensorView> steps_view = std::get_if<TorchTensorView>(&step) ?
@@ -353,6 +364,8 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
         g2_splats_world, \
         sh_packed, \
         sh_quant_bounds, \
+        sh_value_packed, \
+        sh_value_bounds, \
         radii, \
         lr_means, \
         lr_quats, \
@@ -371,7 +384,8 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
         eps_tr, \
         scalar_step, \
         steps_view, \
-        sh_quant_bits \
+        sh_quant_bits, \
+        sh_value_bits \
     )
     // Match projection_*_backward: cap kernel-template SH degree at the
     // runtime sh_degree_to_use so forward/backward agree on which bands
@@ -432,6 +446,8 @@ void fused_projection_bwd_optimizer_3dgs(
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,
     const std::optional<TorchTensorView> sh_quant_bounds,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -452,7 +468,8 @@ void fused_projection_bwd_optimizer_3dgs(
     bool color_is_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits
+    int sh_quant_bits,
+    int sh_value_bits
 ) {
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGS>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -460,12 +477,14 @@ void fused_projection_bwd_optimizer_3dgs(
         v_splats_world, vr_splats_world, h_splats_world,
         v_splats_screen, vr_splats_screen, h_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
+        sh_value_packed, sh_value_bounds,
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         lr_features_sh, max_gauss_ratio, scale_regularization_weight,
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, eps_tr, step, sh_quant_bits);
+        use_color_trust_region, color_is_linear, eps_tr, step,
+        sh_quant_bits, sh_value_bits);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -492,6 +511,8 @@ void fused_projection_bwd_optimizer_mip(
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,
     const std::optional<TorchTensorView> sh_quant_bounds,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -512,7 +533,8 @@ void fused_projection_bwd_optimizer_mip(
     bool color_is_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits
+    int sh_quant_bits,
+    int sh_value_bits
 ) {
     _fused_projection_bwd_optimizer_dispatch<MipSplatting>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -520,12 +542,14 @@ void fused_projection_bwd_optimizer_mip(
         v_splats_world, vr_splats_world, h_splats_world,
         v_splats_screen, vr_splats_screen, h_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
+        sh_value_packed, sh_value_bounds,
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         lr_features_sh, max_gauss_ratio, scale_regularization_weight,
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, eps_tr, step, sh_quant_bits);
+        use_color_trust_region, color_is_linear, eps_tr, step,
+        sh_quant_bits, sh_value_bits);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -552,6 +576,8 @@ void fused_projection_bwd_optimizer_3dgut(
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,
     const std::optional<TorchTensorView> sh_quant_bounds,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -572,7 +598,8 @@ void fused_projection_bwd_optimizer_3dgut(
     bool color_is_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits
+    int sh_quant_bits,
+    int sh_value_bits
 ) {
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGUT>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
@@ -580,12 +607,14 @@ void fused_projection_bwd_optimizer_3dgut(
         v_splats_world, vr_splats_world, h_splats_world,
         v_splats_screen, vr_splats_screen, h_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
+        sh_value_packed, sh_value_bounds,
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         lr_features_sh, max_gauss_ratio, scale_regularization_weight,
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
         sh_reg_weight, use_scale_agnostic_mean,
-        use_color_trust_region, color_is_linear, eps_tr, step, sh_quant_bits);
+        use_color_trust_region, color_is_linear, eps_tr, step,
+        sh_quant_bits, sh_value_bits);
 }
 
 

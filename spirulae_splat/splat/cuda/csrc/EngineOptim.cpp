@@ -15,15 +15,33 @@
 static constexpr int64_t kFpboBlock = 256;
 
 
-static void _ensure_optim_state(int sh_optim_bits, bool use_per_splat_bias_correction = false) {
+static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits, bool use_per_splat_bias_correction = false) {
     if (sh_optim_bits != 32 && sh_optim_bits != 8 && sh_optim_bits != 4) {
         throw std::runtime_error(
             "_ensure_optim_state: sh_optim_bits must be 32 (off), 4, or 8; got " +
             std::to_string(sh_optim_bits));
     }
+    if (sh_value_bits != 32 && sh_value_bits != 8 && sh_value_bits != 16) {
+        throw std::runtime_error(
+            "_ensure_optim_state: sh_value_bits must be 32 (off), 8, or 16; got " +
+            std::to_string(sh_value_bits));
+    }
     bool quantize_sh = (sh_optim_bits != 32);
+    bool quantize_sh_value = (sh_value_bits != 32);
     bool fused = engine().optim.use_fused_proj_bwd_optim;
+    // For now, non-FPBO + value-quant requires its own kernel
+    // (fused_adam_step_value_quantized) which isn't yet wired in the optim
+    // dispatcher. Allocations land here but the actual SH update kernel only
+    // exists for the FPBO path -- gate the unsupported combination clearly.
+    if (quantize_sh_value && !fused) {
+        throw std::runtime_error(
+            "_ensure_optim_state: sh_value_bits = " +
+            std::to_string(sh_value_bits) +
+            " currently requires use_fused_proj_bwd_optim = true (non-FPBO "
+            "value-quant Adam kernel is not yet wired in this turn).");
+    }
     if (engine().optim.initialized && engine().optim.sh_optim_bits == sh_optim_bits
+        && engine().world.sh_value_bits == sh_value_bits
         && engine().optim.use_per_splat_bias_correction == use_per_splat_bias_correction
         && engine().optim.fused_state_active == fused)
         return;
@@ -32,6 +50,7 @@ static void _ensure_optim_state(int sh_optim_bits, bool use_per_splat_bias_corre
     int64_t K = engine().num_sh;
     engine().optim.sh_optim_bits = sh_optim_bits;
     engine().optim.fused_state_active = fused;
+    engine().world.sh_value_bits = sh_value_bits;
 
     // g1 (exp_avg)
     engine().optim.g1_means.resize("eng.g1_means", N);
@@ -83,6 +102,47 @@ static void _ensure_optim_state(int sh_optim_bits, bool use_per_splat_bias_corre
         engine().optim.sh_quant_state_fpbo = QuantizedAdamState<8, 256>();
     }
 
+    // SH VALUE-quant storage. Mirror of the optim-state allocation above:
+    //   non-FPBO uses the per-CELL-block layout (`features_sh_quant{8,16}`),
+    //   FPBO uses the per-SPLAT-block layout (`features_sh_quant{8,16}_fpbo`).
+    // Bounds count per layout:
+    //   cell-block: ceil(sh_cells / 256)
+    //   fpbo:       ceil(N / 256)
+    // Only one of (cell-block, fpbo) is sized; the unused one is reset to an
+    // empty (default-constructed) view. The pool keeps the unused slot's prior
+    // allocation at zero cap.
+    {
+        constexpr int64_t BLOCK_SIZE = QuantizedTensor<8, 256>::kBlockSize;
+        int64_t v_bounds_cell = (sh_cells + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        int64_t v_bounds_fpbo = (N + kFpboBlock - 1) / kFpboBlock;
+        if (quantize_sh_value && sh_value_bits == 8 && !fused) {
+            engine().world.features_sh_quant8.resize("eng.world.sh_vq8", sh_cells, v_bounds_cell);
+            engine().world.features_sh_quant16 = QuantizedTensor<16, 256>();
+            engine().world.features_sh_quant8_fpbo  = QuantizedTensor<8,  256>();
+            engine().world.features_sh_quant16_fpbo = QuantizedTensor<16, 256>();
+        } else if (quantize_sh_value && sh_value_bits == 8 && fused) {
+            engine().world.features_sh_quant8_fpbo.resize("eng.world.sh_vq8_fpbo", sh_cells, v_bounds_fpbo);
+            engine().world.features_sh_quant16 = QuantizedTensor<16, 256>();
+            engine().world.features_sh_quant8  = QuantizedTensor<8,  256>();
+            engine().world.features_sh_quant16_fpbo = QuantizedTensor<16, 256>();
+        } else if (quantize_sh_value && sh_value_bits == 16 && !fused) {
+            engine().world.features_sh_quant16.resize("eng.world.sh_vq16", sh_cells, v_bounds_cell);
+            engine().world.features_sh_quant8  = QuantizedTensor<8,  256>();
+            engine().world.features_sh_quant8_fpbo  = QuantizedTensor<8,  256>();
+            engine().world.features_sh_quant16_fpbo = QuantizedTensor<16, 256>();
+        } else if (quantize_sh_value && sh_value_bits == 16 && fused) {
+            engine().world.features_sh_quant16_fpbo.resize("eng.world.sh_vq16_fpbo", sh_cells, v_bounds_fpbo);
+            engine().world.features_sh_quant8  = QuantizedTensor<8,  256>();
+            engine().world.features_sh_quant16 = QuantizedTensor<16, 256>();
+            engine().world.features_sh_quant8_fpbo  = QuantizedTensor<8,  256>();
+        } else {
+            engine().world.features_sh_quant8       = QuantizedTensor<8,  256>();
+            engine().world.features_sh_quant16      = QuantizedTensor<16, 256>();
+            engine().world.features_sh_quant8_fpbo  = QuantizedTensor<8,  256>();
+            engine().world.features_sh_quant16_fpbo = QuantizedTensor<16, 256>();
+        }
+    }
+
     // bias_correction_steps
     engine().optim.use_per_splat_bias_correction = use_per_splat_bias_correction;
     if (use_per_splat_bias_correction) {
@@ -105,6 +165,15 @@ static void _ensure_optim_state(int sh_optim_bits, bool use_per_splat_bias_corre
         engine().optim.g1_features_sh.zero();
         engine().optim.g2_features_sh.zero();
     }
+    // SH VALUE-quant zero-init. Initial features_sh is zero (only DC has
+    // non-zero defaults), so zeroing both packed bytes and bounds is a valid
+    // initial state -- the codec decodes byte=0 against bound=(0,0) to 0.0f.
+    // If non-zero initial values get baked in upstream, an encode pass would
+    // be needed here -- not done in this turn.
+    if (engine().world.features_sh_quant8.initialized())       engine().world.features_sh_quant8.zero();
+    if (engine().world.features_sh_quant16.initialized())      engine().world.features_sh_quant16.zero();
+    if (engine().world.features_sh_quant8_fpbo.initialized())  engine().world.features_sh_quant8_fpbo.zero();
+    if (engine().world.features_sh_quant16_fpbo.initialized()) engine().world.features_sh_quant16_fpbo.zero();
     engine().optim.accum_buffer.zero();
     engine().optim.bias_correction_steps.zero();
 
@@ -129,7 +198,7 @@ static inline DeviceTensorFloatND _fnd_view(float* ptr, int64_t N, int64_t P) {
 // in this path (raster_*_bwd's world atomicStore is null-pointer-guarded
 // per channel, and the fused kernel's atomicLoad uses the same guard).
 void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
-    _ensure_optim_state(cfg.sh_optim_bits,
+    _ensure_optim_state(cfg.sh_optim_bits, cfg.sh_value_bits,
                         cfg.use_per_splat_bias_correction);
 
     int64_t N = engine().cur_num_splats;
@@ -221,6 +290,26 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
     // otherwise SH backward computes spurious gradients on unused bands which
     // contaminate v_mean through the viewdir chain.
     int max_sh_degree = engine().sh_degree;
+    // SH VALUE-quant: pass packed + per-splat-block bounds when active. The
+    // FPBO kernel expects the per-splat-block layout (1 float2 per 256 splats)
+    // -- the allocation in _ensure_optim_state above set that up in
+    // engine().world.features_sh_quant{8,16}_fpbo.
+    std::optional<TorchTensorView> sh_value_packed_opt = std::nullopt;
+    std::optional<TorchTensorView> sh_value_bounds_opt = std::nullopt;
+    if (cfg.sh_value_bits == 8 && engine().world.features_sh_quant8_fpbo.initialized()) {
+        auto& vq = engine().world.features_sh_quant8_fpbo;
+        sh_value_packed_opt = TorchTensorView(
+            (uint64_t)vq.packed_ptr(), 1, {vq.packed_bytes()});
+        sh_value_bounds_opt = TorchTensorView(
+            (uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
+    } else if (cfg.sh_value_bits == 16 && engine().world.features_sh_quant16_fpbo.initialized()) {
+        auto& vq = engine().world.features_sh_quant16_fpbo;
+        sh_value_packed_opt = TorchTensorView(
+            (uint64_t)vq.packed_ptr(), 1, {vq.packed_bytes()});
+        sh_value_bounds_opt = TorchTensorView(
+            (uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
+    }
+
     auto call_dispatch = [&](auto fn) {
         fn(
             N, max_sh_degree, splats_w,
@@ -237,6 +326,7 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
             engine().fwd.v_splats_s, std::nullopt, std::nullopt,
             g1, g2,
             sh_packed_opt, sh_bounds_opt,
+            sh_value_packed_opt, sh_value_bounds_opt,
             engine().optim.radii,
             cfg.lr_means, cfg.lr_quats, cfg.lr_scales,
             cfg.lr_opacities, cfg.lr_features_dc, cfg.lr_features_sh,
@@ -249,7 +339,8 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
             cfg.color_is_linear,
             cfg.eps_tr,
             step_arg,
-            cfg.sh_optim_bits
+            cfg.sh_optim_bits,
+            cfg.sh_value_bits
         );
     };
 
@@ -273,7 +364,7 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
         return;
     }
 
-    _ensure_optim_state(cfg.sh_optim_bits, cfg.use_per_splat_bias_correction);
+    _ensure_optim_state(cfg.sh_optim_bits, cfg.sh_value_bits, cfg.use_per_splat_bias_correction);
 
     int64_t N = engine().cur_num_splats;
 

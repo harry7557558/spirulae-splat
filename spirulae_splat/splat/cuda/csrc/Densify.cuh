@@ -108,6 +108,15 @@ void relocate_splats_with_long_axis_split_tensor(
     // the dst splats' packed bytes. Null when is_quantized_sh is false.
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
+    // SH VALUE-quant codec copy params. When sh_value_bits != 32 we also do
+    // a codec-aware src->dst copy of the SH coefficient bytes (decode src,
+    // encode dst against current dst bounds; clipping is acceptable -- see
+    // _copy_quant_sh_value_for_splat for the rationale).
+    DeviceVector<uint8_t> sh_value_packed,
+    DeviceVector<float2>  sh_value_bounds,
+    int  sh_value_bits,             // 32 / 8 / 16
+    bool sh_value_bounds_per_splat,
+    int  num_sh_buffer,             // buffer stride for cell indexing
     uint32_t seed
 );
 
@@ -124,6 +133,11 @@ void add_splats_with_long_axis_split_tensor(
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
+    DeviceVector<uint8_t> sh_value_packed,
+    DeviceVector<float2>  sh_value_bounds,
+    int  sh_value_bits,
+    bool sh_value_bounds_per_splat,
+    int  num_sh_buffer,
     uint32_t seed
 );
 
@@ -139,6 +153,11 @@ void relocate_splats_mcmc_tensor(
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
+    DeviceVector<uint8_t> sh_value_packed,
+    DeviceVector<float2>  sh_value_bounds,
+    int  sh_value_bits,
+    bool sh_value_bounds_per_splat,
+    int  num_sh_buffer,
     uint32_t seed
 );
 
@@ -155,6 +174,11 @@ void add_splats_mcmc_tensor(
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
+    DeviceVector<uint8_t> sh_value_packed,
+    DeviceVector<float2>  sh_value_bounds,
+    int  sh_value_bits,
+    bool sh_value_bounds_per_splat,
+    int  num_sh_buffer,
     uint32_t seed
 );
 

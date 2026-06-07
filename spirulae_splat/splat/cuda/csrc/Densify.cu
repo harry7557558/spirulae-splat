@@ -676,6 +676,144 @@ __device__ __forceinline__ uint8_t _quant_encode_zero_byte(float zero_val, float
     return (uint8_t)fminf(fmaxf(qf, 0.0f), 255.0f);
 }
 
+// SH VALUE-quant codec copy: decode src splat's SH cells against src bounds
+// and encode into dst splat's cells against dst's CURRENT bounds. Cells
+// outside dst's current quant range are clipped at byte 0 or kQMax.
+//
+// For the "add" case the dst slot's bound starts at (0, 0) -- everything
+// clips to zero on the first densify step. The FPBO writeback's block-wide
+// (min, max) reduction expands the bound on the next training step, so the
+// child splat starts at SH=0 and adapts via Adam. Cleaner inheritance
+// (atomic bound expansion + neighbor re-encoding) is left for later.
+template<int BITS, bool BOUNDS_PER_SPLAT>
+__device__ __forceinline__ void _copy_quant_sh_value_for_splat(
+    uint8_t* __restrict__ packed,
+    float2*  __restrict__ bounds,
+    int64_t  src_splat,
+    int64_t  dst_splat,
+    int      num_sh,        // runtime SH count (degree-capped)
+    int      num_sh_buffer  // buffer stride (model max)
+) {
+    using Codec = QuantizedTensor<BITS, 256>;
+    int64_t src_base = src_splat * 3 * (int64_t)num_sh_buffer;
+    int64_t dst_base = dst_splat * 3 * (int64_t)num_sh_buffer;
+
+    float2 src_mm{0.f, 0.f}, dst_mm{0.f, 0.f};
+    if constexpr (BOUNDS_PER_SPLAT) {
+        src_mm = bounds[src_splat / 256];
+        dst_mm = bounds[dst_splat / 256];
+    }
+
+    int64_t cells = (int64_t)3 * num_sh;
+    #pragma unroll 1
+    for (int64_t c = 0; c < cells; ++c) {
+        int64_t src_cell = src_base + c;
+        int64_t dst_cell = dst_base + c;
+        if constexpr (!BOUNDS_PER_SPLAT) {
+            src_mm = bounds[src_cell / 256];
+            dst_mm = bounds[dst_cell / 256];
+        }
+        float v = Codec::decode_v(packed, src_cell, src_mm);
+        Codec::encode_v(packed, dst_cell, v, dst_mm);
+    }
+}
+
+template<int BITS, bool BOUNDS_PER_SPLAT>
+__global__ void densify_copy_quant_sh_value_kernel(
+    int64_t cur_num_splats,        // for default dst when dst_indices is null
+    int64_t num_pairs,
+    const int32_t* __restrict__ src_indices,
+    const int32_t* __restrict__ dst_indices,  // nullptr -> dst = cur_num_splats + idx
+    uint8_t* __restrict__ packed,
+    float2*  __restrict__ bounds,
+    int num_sh,
+    int num_sh_buffer
+) {
+    int64_t pair = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (pair >= num_pairs) return;
+    int32_t src = src_indices[pair];
+    int32_t dst = (dst_indices == nullptr)
+        ? (int32_t)(cur_num_splats + pair)
+        : dst_indices[pair];
+    _copy_quant_sh_value_for_splat<BITS, BOUNDS_PER_SPLAT>(
+        packed, bounds, src, dst, num_sh, num_sh_buffer);
+}
+
+// Variant: src given by index_map[dst]; copy only when index_map[dst] != dst.
+// Used by the MCMC relocate path (mcmc_update_relocation_kernel mirror).
+template<int BITS, bool BOUNDS_PER_SPLAT>
+__global__ void densify_copy_quant_sh_value_index_map_kernel(
+    int64_t num_splats,
+    const int32_t* __restrict__ index_map,   // [num_splats]
+    uint8_t* __restrict__ packed,
+    float2*  __restrict__ bounds,
+    int num_sh,
+    int num_sh_buffer
+) {
+    int64_t dst = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (dst >= num_splats) return;
+    int32_t src = index_map[dst];
+    if ((int64_t)src == dst) return;
+    _copy_quant_sh_value_for_splat<BITS, BOUNDS_PER_SPLAT>(
+        packed, bounds, src, dst, num_sh, num_sh_buffer);
+}
+
+static inline void _launch_densify_copy_quant_sh_value_index_map(
+    int64_t num_splats,
+    const int32_t* index_map,
+    uint8_t* packed,
+    float2*  bounds,
+    int      num_sh,
+    int      num_sh_buffer,
+    int      bits,
+    bool     bounds_per_splat
+) {
+    if (bits == 32 || num_splats == 0 || packed == nullptr || bounds == nullptr)
+        return;
+    constexpr int BLOCK = 256;
+    int grid = (int)((num_splats + BLOCK - 1) / BLOCK);
+    #define _LAUNCH(BB, BPS) \
+        densify_copy_quant_sh_value_index_map_kernel<BB, BPS><<<grid, BLOCK>>>( \
+            num_splats, index_map, packed, bounds, num_sh, num_sh_buffer)
+    if      (bits == 8  &&  bounds_per_splat) { _LAUNCH(8,  true);  }
+    else if (bits == 8  && !bounds_per_splat) { _LAUNCH(8,  false); }
+    else if (bits == 16 &&  bounds_per_splat) { _LAUNCH(16, true);  }
+    else if (bits == 16 && !bounds_per_splat) { _LAUNCH(16, false); }
+    #undef _LAUNCH
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+// Host-side launcher: dispatches the codec copy based on bits + bounds layout.
+// Safe no-op when bits == 32 (no value-quant) or num_pairs == 0.
+static inline void _launch_densify_copy_quant_sh_value(
+    int64_t cur_num_splats,
+    int64_t num_pairs,
+    const int32_t* src_indices,
+    const int32_t* dst_indices,
+    uint8_t* packed,
+    float2*  bounds,
+    int      num_sh,
+    int      num_sh_buffer,
+    int      bits,                  // 32 / 8 / 16
+    bool     bounds_per_splat
+) {
+    if (bits == 32 || num_pairs == 0 || packed == nullptr || bounds == nullptr)
+        return;
+    constexpr int BLOCK = 256;
+    int grid = (int)((num_pairs + BLOCK - 1) / BLOCK);
+    #define _LAUNCH(BB, BPS) \
+        densify_copy_quant_sh_value_kernel<BB, BPS><<<grid, BLOCK>>>( \
+            cur_num_splats, num_pairs, src_indices, dst_indices, \
+            packed, bounds, num_sh, num_sh_buffer)
+    if      (bits == 8  &&  bounds_per_splat) { _LAUNCH(8,  true);  }
+    else if (bits == 8  && !bounds_per_splat) { _LAUNCH(8,  false); }
+    else if (bits == 16 &&  bounds_per_splat) { _LAUNCH(16, true);  }
+    else if (bits == 16 && !bounds_per_splat) { _LAUNCH(16, false); }
+    #undef _LAUNCH
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
 __device__ __forceinline__ void _zero_quant_sh_for_splat(
     uint8_t* __restrict__ packed,           // 2 bytes per (splat, coef, channel)
     int64_t splat_idx,
@@ -888,6 +1026,15 @@ void relocate_splats_with_long_axis_split_tensor(
     // the dst splats' packed bytes. Null when is_quantized_sh is false.
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
+    // SH VALUE-quant codec copy params. When sh_value_bits != 32 we also do
+    // a codec-aware src->dst copy of the SH coefficient bytes (decode src,
+    // encode dst against current dst bounds; clipping is acceptable -- see
+    // _copy_quant_sh_value_for_splat for the rationale).
+    DeviceVector<uint8_t> sh_value_packed,
+    DeviceVector<float2>  sh_value_bounds,
+    int  sh_value_bits,             // 32 / 8 / 16
+    bool sh_value_bounds_per_splat,
+    int  num_sh_buffer,             // buffer stride for cell indexing
     uint32_t seed
 ) {
     int32_t* bias_correction_steps_ptr = bias_correction_steps.data_ptr();
@@ -957,6 +1104,11 @@ void relocate_splats_with_long_axis_split_tensor(
             bias_correction_steps_ptr
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    _launch_densify_copy_quant_sh_value(
+        cur_num_splats, num_relocate, src_indices, dst_indices,
+        sh_value_packed.data_ptr(), sh_value_bounds.data_ptr(),
+        num_sh, num_sh_buffer, sh_value_bits, sh_value_bounds_per_splat);
 }
 
 /*[AutoHeaderGeneratorExport]*/
@@ -972,6 +1124,11 @@ void add_splats_with_long_axis_split_tensor(
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
+    DeviceVector<uint8_t> sh_value_packed,
+    DeviceVector<float2>  sh_value_bounds,
+    int  sh_value_bits,
+    bool sh_value_bounds_per_splat,
+    int  num_sh_buffer,
     uint32_t seed
 ) {
     if (num_new_splats == 0)
@@ -1015,6 +1172,11 @@ void add_splats_with_long_axis_split_tensor(
             bias_correction_steps_ptr
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    _launch_densify_copy_quant_sh_value(
+        cur_num_splats, num_new_splats, split_indices, /*dst_indices=*/nullptr,
+        sh_value_packed.data_ptr(), sh_value_bounds.data_ptr(),
+        num_sh, num_sh_buffer, sh_value_bits, sh_value_bounds_per_splat);
 }
 
 
@@ -1228,6 +1390,11 @@ void relocate_splats_mcmc_tensor(
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
+    DeviceVector<uint8_t> sh_value_packed,
+    DeviceVector<float2>  sh_value_bounds,
+    int  sh_value_bits,
+    bool sh_value_bounds_per_splat,
+    int  num_sh_buffer,
     uint32_t seed
 ) {
     int32_t* bias_correction_steps_ptr = bias_correction_steps.data_ptr();
@@ -1313,6 +1480,11 @@ void relocate_splats_mcmc_tensor(
         num_sh, features_sh.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    _launch_densify_copy_quant_sh_value_index_map(
+        cur_num_splats, index_map,
+        sh_value_packed.data_ptr(), sh_value_bounds.data_ptr(),
+        num_sh, num_sh_buffer, sh_value_bits, sh_value_bounds_per_splat);
 }
 
 
@@ -1445,6 +1617,11 @@ void add_splats_mcmc_tensor(
     int num_sh,
     DeviceVector<float4> sh_quant_bounds,
     bool sh_bounds_per_splat,
+    DeviceVector<uint8_t> sh_value_packed,
+    DeviceVector<float2>  sh_value_bounds,
+    int  sh_value_bits,
+    bool sh_value_bounds_per_splat,
+    int  num_sh_buffer,
     uint32_t seed
 ) {
     if (num_add == 0)
@@ -1530,6 +1707,12 @@ void add_splats_mcmc_tensor(
             bias_correction_steps_ptr
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    // mcmc_update_add: dst[i] = cur_num_splats + i, src[i] = index_map[i]
+    _launch_densify_copy_quant_sh_value(
+        cur_num_splats, num_add, index_map, /*dst_indices=*/nullptr,
+        sh_value_packed.data_ptr(), sh_value_bounds.data_ptr(),
+        num_sh, num_sh_buffer, sh_value_bits, sh_value_bounds_per_splat);
 }
 
 

@@ -63,7 +63,13 @@ template<
     bool use_color_trust_region,
     bool color_is_linear,
     int BLOCK_SIZE,
-    int QUANT_BITS = 8     // SH-Adam quant bit depth: 4 or 8 (ignored when BLOCK_SIZE == 0)
+    int QUANT_BITS = 8,    // SH-Adam quant bit depth: 4 or 8 (ignored when BLOCK_SIZE == 0)
+    int VALUE_BITS = 32    // SH-VALUE quant bit depth: 32 (off), 8, or 16. Per-splat-block
+                            // bounds layout (one float2 per 256 splats) when != 32; only
+                            // wired through the BLOCK_SIZE != 0 path for now -- combining
+                            // VALUE_BITS != 32 with BLOCK_SIZE == 0 (fp32 optim state)
+                            // is deferred to a follow-up; the kernel falls back to
+                            // fp32 SH reads/writes in that combination.
 >
 #if 1
 __global__ void __launch_bounds__(512) fused_projection_bwd_optimizer_3dgs_kernel
@@ -98,6 +104,12 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     typename SplatPrimitive::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
+    // SH VALUE quant (per-splat-block layout: 1 float2 per 256 splats covering
+    // all 3*K cells per splat). Active when VALUE_BITS != 32. Read+written
+    // in place by the SH section below. The byte stride is the BUFFER's full
+    // SH stride (3 * num_sh_buffer cells per splat), same as sh_packed.
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -453,6 +465,23 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         float4 quant_bounds = sh_quant_bounds[blockIdx.x];
         float4 mm = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
 
+        // SH VALUE-quant: per-splat-block layout, one float2 bound per block of
+        // 256 splats covering all 3*K cells/splat. Mirrors the optim-state
+        // reduction below: read old bound at start, accumulate per-thread
+        // min/max during update, block-reduce, encode against new bound.
+        using SHValReader8  = QuantizedTensor<8,  BLOCK_SIZE>;
+        using SHValReader16 = QuantizedTensor<16, BLOCK_SIZE>;
+        uint8_t* sh_value_packed_rw = const_cast<uint8_t*>(sh_value_packed);
+        float2 sh_value_old_mm = (VALUE_BITS != 32 && sh_value_bounds != nullptr)
+            ? sh_value_bounds[blockIdx.x] : float2{0.f, 0.f};
+        float2 sh_value_new_mm = (VALUE_BITS != 32)
+            ? float2{1e30f, -1e30f} : float2{0.f, 0.f};
+        // Hold per-thread updated SH values until after the value-bounds
+        // block reduction, so we encode against the FRESH bounds (mirrors
+        // optim-state pattern -- mm computed across all 256 splats, then
+        // each thread encodes its 3*K cells).
+        float3 sh_updated_vals[num_sh];
+
         float3 g1_sh_vals[num_sh];
         float3 g2_sh_vals[num_sh];
 
@@ -466,7 +495,20 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             float3 g1_feature_sh = make_float3(g1g2_x.x, g1g2_y.x, g1g2_z.x);
             float3 g2_feature_sh = make_float3(g1g2_x.y, g1g2_y.y, g1g2_z.y);
 
-            float3 sh_coeff = make_float3(sh_ptr[3*j], sh_ptr[3*j+1], sh_ptr[3*j+2]);
+            // Read source SH value: fp32 directly OR codec-decode from packed
+            // bytes using the per-splat-block bound.
+            float3 sh_coeff;
+            if constexpr (VALUE_BITS == 32) {
+                sh_coeff = make_float3(sh_ptr[3*j], sh_ptr[3*j+1], sh_ptr[3*j+2]);
+            } else if constexpr (VALUE_BITS == 8) {
+                sh_coeff.x = SHValReader8::decode_v(sh_value_packed, sh_base + 3*j + 0, sh_value_old_mm);
+                sh_coeff.y = SHValReader8::decode_v(sh_value_packed, sh_base + 3*j + 1, sh_value_old_mm);
+                sh_coeff.z = SHValReader8::decode_v(sh_value_packed, sh_base + 3*j + 2, sh_value_old_mm);
+            } else /* VALUE_BITS == 16 */ {
+                sh_coeff.x = SHValReader16::decode_v(sh_value_packed, sh_base + 3*j + 0, sh_value_old_mm);
+                sh_coeff.y = SHValReader16::decode_v(sh_value_packed, sh_base + 3*j + 1, sh_value_old_mm);
+                sh_coeff.z = SHValReader16::decode_v(sh_value_packed, sh_base + 3*j + 2, sh_value_old_mm);
+            }
             float3 v_sh_coeff = make_float3(
                 v_sh_ptr[3*j] + reg_weight * sh_coeff.x,
                 v_sh_ptr[3*j+1] + reg_weight * sh_coeff.y,
@@ -498,9 +540,23 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
                 sh_delta.z = isfinite(sh_delta.z) ? sh_delta.z : 0.0f;
             }
             float3 sh_updated = sh_coeff + sh_delta;
-            sh_ptr[3*j] = sh_updated.x;
-            sh_ptr[3*j+1] = sh_updated.y;
-            sh_ptr[3*j+2] = sh_updated.z;
+            if constexpr (VALUE_BITS == 32) {
+                // fp32 path: write straight to global storage now (no later
+                // encode step is needed).
+                sh_ptr[3*j] = sh_updated.x;
+                sh_ptr[3*j+1] = sh_updated.y;
+                sh_ptr[3*j+2] = sh_updated.z;
+            } else {
+                // Defer encode until after the block-wide value-bounds reduce
+                // below -- the bounds need every thread's contribution before
+                // we know the encode range. Stash the new values and update
+                // this thread's running min/max.
+                sh_updated_vals[j] = sh_updated;
+                sh_value_new_mm.x = fminf(fminf(fminf(sh_value_new_mm.x,
+                    sh_updated.x), sh_updated.y), sh_updated.z);
+                sh_value_new_mm.y = fmaxf(fmaxf(fmaxf(sh_value_new_mm.y,
+                    sh_updated.x), sh_updated.y), sh_updated.z);
+            }
 
             g1_sh_vals[j] = g1_updated;
             g2_sh_vals[j] = g2_updated;
@@ -540,6 +596,34 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         if (threadIdx.x == 0)
             sh_quant_bounds[blockIdx.x] = mm;
 
+        // ---- SH VALUE bounds block reduction + encode (VALUE_BITS != 32) ----
+        // Mirrors the optim-state reduction above but on a float2 (min, max).
+        // Must run BEFORE the early-return for !inside threads -- the bounds
+        // reduction needs every thread to participate (out-of-range threads
+        // pass sentinel values that don't affect min/max).
+        if constexpr (VALUE_BITS != 32) {
+            if (!inside) sh_value_new_mm = float2{1e30f, -1e30f};
+            auto warp_v = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
+            sh_value_new_mm.x = cg::reduce(warp_v, sh_value_new_mm.x, cg::less<float>());
+            sh_value_new_mm.y = cg::reduce(warp_v, sh_value_new_mm.y, cg::greater<float>());
+            __shared__ float2 shared_reduce_v[BLOCK_SIZE / WARP_SIZE];
+            if (threadIdx.x % WARP_SIZE == 0)
+                shared_reduce_v[threadIdx.x / WARP_SIZE] = sh_value_new_mm;
+            __syncthreads();
+            sh_value_new_mm = (threadIdx.x < BLOCK_SIZE / WARP_SIZE) ?
+                shared_reduce_v[threadIdx.x] : float2{1e30f, -1e30f};
+            sh_value_new_mm.x = cg::reduce(warp_v, sh_value_new_mm.x, cg::less<float>());
+            sh_value_new_mm.y = cg::reduce(warp_v, sh_value_new_mm.y, cg::greater<float>());
+            __syncthreads();
+            if (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+                shared_reduce_v[threadIdx.x] = sh_value_new_mm;
+            __syncthreads();
+            sh_value_new_mm = shared_reduce_v[threadIdx.x / WARP_SIZE];
+
+            if (threadIdx.x == 0)
+                sh_value_bounds[blockIdx.x] = sh_value_new_mm;
+        }
+
         if (!inside)
             return;
 
@@ -551,6 +635,26 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             SHQState::encode_g1g2(sh_packed_rw, sh_base + 3*j + 0, g1_upd.x, g2_upd.x, mm);
             SHQState::encode_g1g2(sh_packed_rw, sh_base + 3*j + 1, g1_upd.y, g2_upd.y, mm);
             SHQState::encode_g1g2(sh_packed_rw, sh_base + 3*j + 2, g1_upd.z, g2_upd.z, mm);
+        }
+
+        // Re-encode the new SH VALUES via the linear codec against the fresh
+        // per-splat-block bound. Only the inside-block (gated above) runs.
+        if constexpr (VALUE_BITS == 8) {
+            #pragma unroll
+            for (int j = 0; j < num_sh; ++j) {
+                float3 v = sh_updated_vals[j];
+                SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 0, v.x, sh_value_new_mm);
+                SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 1, v.y, sh_value_new_mm);
+                SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 2, v.z, sh_value_new_mm);
+            }
+        } else if constexpr (VALUE_BITS == 16) {
+            #pragma unroll
+            for (int j = 0; j < num_sh; ++j) {
+                float3 v = sh_updated_vals[j];
+                SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 0, v.x, sh_value_new_mm);
+                SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 1, v.y, sh_value_new_mm);
+                SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 2, v.z, sh_value_new_mm);
+            }
         }
     }
 }
@@ -592,6 +696,8 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     typename SplatPrimitive::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -612,19 +718,26 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float eps_tr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
-    const int sh_quant_bits        // 32 = no quant, 4 or 8 = packed quant
+    const int sh_quant_bits,       // 32 = no quant, 4 or 8 = packed quant (optim state)
+    const int sh_value_bits        // 32 = no quant, 8 or 16 = packed quant (SH VALUE)
 ) {
     bool use_quant = (sh_packed != nullptr && sh_quant_bounds != nullptr);
     constexpr int BLOCK_SIZE = 256;
 
-    // Three compile-time variants: no quant (BLOCK_SIZE=0), 4-bit quant, 8-bit
-    // quant. Runtime `sh_quant_bits` picks between the two quant variants.
+    // Three compile-time variants for the optim-state quant (BLOCK_SIZE
+    // template parameter): off (0), 4-bit, 8-bit. Multiplied by the
+    // SH-value-quant variants {32, 8, 16}. To keep instantiations bounded,
+    // VALUE_BITS != 32 is only wired through the BLOCK_SIZE != 0 paths --
+    // the BLOCK_SIZE == 0 + VALUE_BITS != 32 combo is not yet exposed
+    // (the kernel falls back to fp32 SH reads/writes when VALUE_BITS == 32,
+    // matching the legacy behavior).
     #define _ARGS_TAIL \
         C, N, num_sh_buffer, \
         splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height, \
         camera_id_bounds, camera_ids, perm, aabb, \
         v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen, \
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds, \
+        sh_value_packed, sh_value_bounds, \
         radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh, \
         max_gauss_ratio, \
         scale_regularization_weight / (float)N, \
@@ -637,22 +750,30 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
         eps_tr, \
         scalar_step, steps
 
+    #define _LAUNCH(QUANT_BITS_, VALUE_BITS_) \
+        fused_projection_bwd_optimizer_3dgs_kernel< \
+            SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean, \
+            use_color_trust_region, color_is_linear, BLOCK_SIZE, QUANT_BITS_, VALUE_BITS_ \
+        ><<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(_ARGS_TAIL)
+
     if (!use_quant) {
+        // BLOCK_SIZE == 0 -> optim-state-fp32 path. VALUE_BITS != 32 here is
+        // out of scope for now; the kernel's if-constexpr in that branch
+        // falls through to fp32 reads/writes regardless.
         fused_projection_bwd_optimizer_3dgs_kernel<
             SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
-            use_color_trust_region, color_is_linear, 0, 8
+            use_color_trust_region, color_is_linear, 0, 8, 32
         ><<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(_ARGS_TAIL);
     } else if (sh_quant_bits == 4) {
-        fused_projection_bwd_optimizer_3dgs_kernel<
-            SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
-            use_color_trust_region, color_is_linear, BLOCK_SIZE, 4
-        ><<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(_ARGS_TAIL);
+        if (sh_value_bits == 8)        { _LAUNCH(4, 8);  }
+        else if (sh_value_bits == 16)  { _LAUNCH(4, 16); }
+        else                           { _LAUNCH(4, 32); }
     } else {
         // Default to 8-bit (legacy behavior).
-        fused_projection_bwd_optimizer_3dgs_kernel<
-            SplatPrimitive, camera_model, hessian_diagonal_output_mode, use_scale_agnostic_mean,
-            use_color_trust_region, color_is_linear, BLOCK_SIZE, 8
-        ><<<_CEIL_DIV(N, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(_ARGS_TAIL);
+        if (sh_value_bits == 8)        { _LAUNCH(8, 8);  }
+        else if (sh_value_bits == 16)  { _LAUNCH(8, 16); }
+        else                           { _LAUNCH(8, 32); }
     }
+    #undef _LAUNCH
     #undef _ARGS_TAIL
 }

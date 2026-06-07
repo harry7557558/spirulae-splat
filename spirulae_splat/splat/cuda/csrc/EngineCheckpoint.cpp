@@ -204,6 +204,12 @@ void engine_save_checkpoint(
         // train_quantize_sh bool. Offline tools should treat absence of this
         // key as "8 if train_quantize_sh==1 else 32" for back-compat.
         meta << "sh_optim_bits=" << s.optim.sh_optim_bits << "\n";
+        // SH VALUE-quant bit depth (32 = off, 8 or 16 = packed). When != 32,
+        // world_features_sh.npy is OMITTED and replaced by world_features_sh_packed.npy
+        // (uint8 raw, kBytesPerCell = 1 for 8-bit, 2 for 16-bit) plus
+        // world_features_sh_bounds.npy (float2 per block). The bound layout
+        // (cell-block vs per-splat-block) is signaled by world_features_sh_layout.
+        meta << "sh_value_bits=" << s.world.sh_value_bits << "\n";
         // QuantizedAdamState codec signature -- tells offline tools which
         // byte-to-(g1, g2) inverse to use when reading the *_packed.npy
         // streams. Codec scheme: joint (u, log_s) AoS with u linear and
@@ -312,7 +318,55 @@ void engine_save_checkpoint(
     save_dv_f3("world_scales.npy",       s.world.scales);
     save_dv_f1("world_opacities.npy",    s.world.opacities);
     save_dv_f3("world_features_dc.npy",  s.world.features_dc);
-    save_dt2d_f3("world_features_sh.npy", s.world.features_sh);
+    if (!s.world.sh_value_quantize_enabled()) {
+        save_dt2d_f3("world_features_sh.npy", s.world.features_sh);
+    } else {
+        // SH VALUE-quant active: canonical storage is packed bytes + per-block
+        // bounds. Only the populated layout (cell-block vs FPBO) gets written;
+        // the unused half is an empty (default-constructed) tensor and the
+        // saver skips zero-size buffers.
+        auto save_quant_pair = [&](const char* layout_tag,
+                                   const auto& q8, const auto& q16) {
+            // Helper to dump uint8_t* packed.
+            auto save_u8 = [&](const char* name, const uint8_t* data, size_t n) {
+                if (!data || n == 0) return;
+                _ckpt_save_npy<uint8_t>(full_root / name, data, n,
+                                        {(unsigned long)n});
+            };
+            auto save_f2 = [&](const char* name, const float2* data, size_t n) {
+                if (!data || n == 0) return;
+                _ckpt_save_npy<float>(full_root / name,
+                                      reinterpret_cast<const float*>(data),
+                                      n * 2,
+                                      {(unsigned long)n, 2ul});
+            };
+            if (s.world.sh_value_bits == 8 && q8.initialized()) {
+                save_u8("world_features_sh_packed.npy",
+                        q8.packed.data_ptr(), (size_t)q8.packed_bytes());
+                save_f2("world_features_sh_bounds.npy",
+                        q8.bounds.data_ptr(), (size_t)q8.n_bounds);
+            } else if (s.world.sh_value_bits == 16 && q16.initialized()) {
+                save_u8("world_features_sh_packed.npy",
+                        q16.packed.data_ptr(), (size_t)q16.packed_bytes());
+                save_f2("world_features_sh_bounds.npy",
+                        q16.bounds.data_ptr(), (size_t)q16.n_bounds);
+            }
+            // Layout marker so offline tools know how to index bounds:
+            //   cell  -> bounds[cell_idx / 256]
+            //   fpbo  -> bounds[splat_idx / 256]
+            std::ofstream layout(full_root / "world_features_sh_layout.txt");
+            layout << layout_tag << "\n";
+        };
+        // Use whichever layout actually has bytes; fall back to FPBO if both
+        // empty (shouldn't happen, but harmless).
+        bool cell_block_active = s.world.features_sh_quant8.initialized()
+                              || s.world.features_sh_quant16.initialized();
+        if (cell_block_active) {
+            save_quant_pair("cell", s.world.features_sh_quant8, s.world.features_sh_quant16);
+        } else {
+            save_quant_pair("fpbo", s.world.features_sh_quant8_fpbo, s.world.features_sh_quant16_fpbo);
+        }
+    }
 
     // World Adam optimizer state.
     save_dv_f3("g1_means.npy",        s.optim.g1_means);

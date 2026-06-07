@@ -28,7 +28,11 @@ std::tuple<
     const uint32_t image_height,
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
-    DeviceVector<float> radii
+    DeviceVector<float> radii,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 
@@ -45,7 +49,11 @@ std::tuple<
     const uint32_t image_height,
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
-    DeviceVector<float> radii
+    DeviceVector<float> radii,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );
 
 
@@ -62,5 +70,9 @@ std::tuple<
     const uint32_t image_height,
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
-    DeviceVector<float> radii
+    DeviceVector<float> radii,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 );

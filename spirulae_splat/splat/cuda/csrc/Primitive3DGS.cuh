@@ -35,10 +35,29 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
             return *this;
         }
 
-        template<CameraModelType camera_model>
+        // SH value-quantization parameters. When VALUE_BITS == 32 these are
+        // unused (defaults pass through) and the legacy fp32 path is taken:
+        // SH coefs are read from `this->features_sh` via the existing
+        // sh{N}_to_color slang exports.
+        // When VALUE_BITS in {8, 16}, callers pass:
+        //   sh_packed         : uint8_t/uint16_t* canonical buffer
+        //   sh_bounds         : float2* per-block (min, max) table
+        //   sh_base           : splat_idx * 3 * num_sh_buffer
+        //   sh_bounds_stride  : cells per bound. 256 for per-cell-block, OR
+        //                        256 * 3 * num_sh_buffer for per-splat-block
+        //                        (FPBO writeback layout). The slang helper
+        //                        does bounds[cell / bounds_stride], so the
+        //                        same code handles both layouts.
+        // The codec read is dispatched via the matching sh{N}_to_color_q{8,16}
+        // slang export, which decodes per-coef inside the SH eval loop.
+        template<CameraModelType camera_model, int VALUE_BITS = 32>
         inline __device__ void project(
             ProjCamera cam,
-            typename _Base3DGS<sh_degree, antialiased>::Screen& screen, float4& aabb, float& sorting_depth, float& radius
+            typename _Base3DGS<sh_degree, antialiased>::Screen& screen, float4& aabb, float& sorting_depth, float& radius,
+            uint8_t* sh_packed = nullptr,
+            float2*  sh_bounds = nullptr,
+            int64_t  sh_base   = 0,
+            int64_t  sh_bounds_stride = 256
         ) {
             if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgs_persp(
@@ -66,27 +85,60 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac
                 );
             if (aabb.z > aabb.x && aabb.w > aabb.y) {
-                // screen.rgb = SlangHarmonics::sh_coeffs_to_color(
-                //     sh_degree, this->mean, cam.R, cam.t, this->features_dc, this->features_sh
-                // );
-                if constexpr (sh_degree == 0) screen.rgb = SlangHarmonics::sh0_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
-                else if constexpr (sh_degree == 1) screen.rgb = SlangHarmonics::sh1_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
-                else if constexpr (sh_degree == 2) screen.rgb = SlangHarmonics::sh2_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
-                else if constexpr (sh_degree == 3) screen.rgb = SlangHarmonics::sh3_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
-                else if constexpr (sh_degree == 4) screen.rgb = SlangHarmonics::sh4_to_color
-                    (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                if constexpr (VALUE_BITS == 32) {
+                    // screen.rgb = SlangHarmonics::sh_coeffs_to_color(
+                    //     sh_degree, this->mean, cam.R, cam.t, this->features_dc, this->features_sh
+                    // );
+                    if constexpr (sh_degree == 0) screen.rgb = SlangHarmonics::sh0_to_color
+                        (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                    else if constexpr (sh_degree == 1) screen.rgb = SlangHarmonics::sh1_to_color
+                        (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                    else if constexpr (sh_degree == 2) screen.rgb = SlangHarmonics::sh2_to_color
+                        (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                    else if constexpr (sh_degree == 3) screen.rgb = SlangHarmonics::sh3_to_color
+                        (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                    else if constexpr (sh_degree == 4) screen.rgb = SlangHarmonics::sh4_to_color
+                        (this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh);
+                } else if constexpr (VALUE_BITS == 8) {
+                    if constexpr (sh_degree == 0) screen.rgb = SlangHarmonics::sh0_to_color_q8
+                        (this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 1) screen.rgb = SlangHarmonics::sh1_to_color_q8
+                        (this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 2) screen.rgb = SlangHarmonics::sh2_to_color_q8
+                        (this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 3) screen.rgb = SlangHarmonics::sh3_to_color_q8
+                        (this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 4) screen.rgb = SlangHarmonics::sh4_to_color_q8
+                        (this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                } else if constexpr (VALUE_BITS == 16) {
+                    if constexpr (sh_degree == 0) screen.rgb = SlangHarmonics::sh0_to_color_q16
+                        (this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 1) screen.rgb = SlangHarmonics::sh1_to_color_q16
+                        (this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 2) screen.rgb = SlangHarmonics::sh2_to_color_q16
+                        (this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 3) screen.rgb = SlangHarmonics::sh3_to_color_q16
+                        (this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                    else if constexpr (sh_degree == 4) screen.rgb = SlangHarmonics::sh4_to_color_q16
+                        (this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride);
+                }
             }
         }
 
-        template<CameraModelType camera_model, bool atomic=true>
+        // SH value-quant params follow the same pattern as project(): when
+        // VALUE_BITS == 32, sh_packed/sh_bounds are unused. The OUTPUT gradient
+        // buffer (`v_world.features_sh`) stays fp32 regardless of VALUE_BITS
+        // -- gradients always live in fp32 inside engine().grad.features_sh.
+        // Only the INPUT SH read (used for v_dir grads) goes through the codec.
+        template<CameraModelType camera_model, bool atomic=true, int VALUE_BITS = 32>
         inline __device__ void project_vjp(
             ProjCamera cam,
             typename _Base3DGS<sh_degree, antialiased>::Screen v_screen,
-            typename _Base3DGS<sh_degree, antialiased>::World& v_world, float3x3 &v_R, float3 &v_t
+            typename _Base3DGS<sh_degree, antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
+            uint8_t* sh_packed = nullptr,
+            float2*  sh_bounds = nullptr,
+            int64_t  sh_base   = 0,
+            int64_t  sh_bounds_stride = 256
         ) {
             if constexpr (camera_model == CameraModelType::PINHOLE)
                 Slang3DGS::projection_3dgs_persp_vjp(
@@ -119,26 +171,66 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     &v_R, &v_t
                 );
             // SH: atomic for global memory, add for local/shared memory
-            #define _ARGS ( \
+            #define _ARGS_F32 ( \
                 this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh, \
                 v_screen.rgb, &v_world.features_dc, (float3*)v_world.features_sh, \
                 &v_world.mean, &v_R, &v_t \
             );
+            #define _ARGS_Q8 ( \
+                this->mean, cam.R, cam.t, this->features_dc, sh_packed, sh_bounds, sh_base, sh_bounds_stride, \
+                v_screen.rgb, &v_world.features_dc, (float3*)v_world.features_sh, \
+                &v_world.mean, &v_R, &v_t \
+            );
+            #define _ARGS_Q16 ( \
+                this->mean, cam.R, cam.t, this->features_dc, (uint16_t*)sh_packed, sh_bounds, sh_base, sh_bounds_stride, \
+                v_screen.rgb, &v_world.features_dc, (float3*)v_world.features_sh, \
+                &v_world.mean, &v_R, &v_t \
+            );
             if constexpr (atomic) {
-                if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_vjp_atomic _ARGS
-                else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_vjp_atomic _ARGS
-                else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_vjp_atomic _ARGS
-                else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_vjp_atomic _ARGS
-                else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_vjp_atomic _ARGS
+                if constexpr (VALUE_BITS == 32) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_vjp_atomic _ARGS_F32
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_vjp_atomic _ARGS_F32
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_vjp_atomic _ARGS_F32
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_vjp_atomic _ARGS_F32
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_vjp_atomic _ARGS_F32
+                } else if constexpr (VALUE_BITS == 8) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_q8_vjp_atomic _ARGS_Q8
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_q8_vjp_atomic _ARGS_Q8
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_q8_vjp_atomic _ARGS_Q8
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_q8_vjp_atomic _ARGS_Q8
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_q8_vjp_atomic _ARGS_Q8
+                } else if constexpr (VALUE_BITS == 16) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_q16_vjp_atomic _ARGS_Q16
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_q16_vjp_atomic _ARGS_Q16
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_q16_vjp_atomic _ARGS_Q16
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_q16_vjp_atomic _ARGS_Q16
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_q16_vjp_atomic _ARGS_Q16
+                }
             }
             else {
-                if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_vjp_inplace _ARGS
-                else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_vjp_inplace _ARGS
-                else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_vjp_inplace _ARGS
-                else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_vjp_inplace _ARGS
-                else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_vjp_inplace _ARGS
+                if constexpr (VALUE_BITS == 32) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_vjp_inplace _ARGS_F32
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_vjp_inplace _ARGS_F32
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_vjp_inplace _ARGS_F32
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_vjp_inplace _ARGS_F32
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_vjp_inplace _ARGS_F32
+                } else if constexpr (VALUE_BITS == 8) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_q8_vjp_inplace _ARGS_Q8
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_q8_vjp_inplace _ARGS_Q8
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_q8_vjp_inplace _ARGS_Q8
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_q8_vjp_inplace _ARGS_Q8
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_q8_vjp_inplace _ARGS_Q8
+                } else if constexpr (VALUE_BITS == 16) {
+                    if constexpr (sh_degree == 0) SlangHarmonics::sh0_to_color_q16_vjp_inplace _ARGS_Q16
+                    else if constexpr (sh_degree == 1) SlangHarmonics::sh1_to_color_q16_vjp_inplace _ARGS_Q16
+                    else if constexpr (sh_degree == 2) SlangHarmonics::sh2_to_color_q16_vjp_inplace _ARGS_Q16
+                    else if constexpr (sh_degree == 3) SlangHarmonics::sh3_to_color_q16_vjp_inplace _ARGS_Q16
+                    else if constexpr (sh_degree == 4) SlangHarmonics::sh4_to_color_q16_vjp_inplace _ARGS_Q16
+                }
             }
-            #undef _ARGS
+            #undef _ARGS_F32
+            #undef _ARGS_Q8
+            #undef _ARGS_Q16
         }
 
         template<CameraModelType camera_model, bool atomic=true>

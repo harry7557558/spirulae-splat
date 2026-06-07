@@ -38,6 +38,8 @@ void fused_projection_bwd_optimizer_3dgs(
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,
     const std::optional<TorchTensorView> sh_quant_bounds,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -58,7 +60,8 @@ void fused_projection_bwd_optimizer_3dgs(
     bool color_is_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits
+    int sh_quant_bits,
+    int sh_value_bits
 );
 
 
@@ -85,6 +88,8 @@ void fused_projection_bwd_optimizer_mip(
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,
     const std::optional<TorchTensorView> sh_quant_bounds,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -105,7 +110,8 @@ void fused_projection_bwd_optimizer_mip(
     bool color_is_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits
+    int sh_quant_bits,
+    int sh_value_bits
 );
 
 
@@ -132,6 +138,8 @@ void fused_projection_bwd_optimizer_3dgut(
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,
     const std::optional<TorchTensorView> sh_quant_bounds,
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
     DeviceVector<float> radii,
     const float lr_means,
     const float lr_quats,
@@ -152,5 +160,6 @@ void fused_projection_bwd_optimizer_3dgut(
     bool color_is_linear,
     float eps_tr,
     std::variant<int32_t, TorchTensorView> step,
-    int sh_quant_bits
+    int sh_quant_bits,
+    int sh_value_bits
 );

@@ -59,6 +59,16 @@ struct OptimConfig {
     // fp32 g1/g2). 4 or 8 = QuantizedAdamState<BITS, 256> with one float4 per
     // 256-cell block of (u, sqrt_g2) bounds. Other values are rejected.
     int   sh_optim_bits                   = 32;
+    // SH PARAMETER (value) quantization bit depth. 32 = no quantization (full
+    // fp32 features_sh). 8 or 16 = QuantizedTensor<BITS, 256> with one float2
+    // per 256-cell block of (min, max) bounds; canonical storage is the packed
+    // buffer, and every consumer kernel dequantizes on load via the codec.
+    // Other values are rejected. NOTE: end-to-end kernel threading is
+    // multi-turn work; the engine currently allocates storage and exposes the
+    // flag but the read/write paths through Slang harmonics + FPBO + densify
+    // are not yet plumbed. Setting this != 32 at training time will throw at
+    // optimizer state init until that work lands.
+    int   sh_value_bits                   = 8;
     bool  use_per_splat_bias_correction   = false;
 
     // When true, fold projection-backward and Adam-based per-splat optim into

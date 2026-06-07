@@ -13,7 +13,7 @@ namespace cg = cooperative_groups;
 
 
 
-template<typename SplatPrimitive, CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model, int VALUE_BITS = 32>
 __global__ void projection_packed_mask_kernel(
     const uint32_t C,
     const uint32_t N,
@@ -24,7 +24,13 @@ __global__ void projection_packed_mask_kernel(
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [C, N]
+    bool *__restrict__ intersection_mask,  // [C, N]
+    // SH VALUE-quant. The mask kernel discards splat_screen.rgb but still
+    // calls project() which evaluates SH internally; passing the codec args
+    // keeps the SH eval well-defined when fp32 features_sh is stale.
+    const uint8_t* __restrict__ sh_value_packed = nullptr,
+    const float2* __restrict__ sh_value_bounds  = nullptr,
+    const uint32_t num_sh_buffer = 0
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -60,7 +66,18 @@ __global__ void projection_packed_mask_kernel(
     float4 aabb;
     float radius;
     typename SplatPrimitive::Screen splat_screen;
-    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth, radius);
+    if constexpr (VALUE_BITS == 32) {
+        splat_world.template project<camera_model, 32>(
+            cam, splat_screen, aabb, sorting_depth, radius);
+    } else {
+        const int64_t sh_base = (int64_t)3 * (int64_t)num_sh_buffer * gid;
+        const int64_t sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+        splat_world.template project<camera_model, VALUE_BITS>(
+            cam, splat_screen, aabb, sorting_depth, radius,
+            const_cast<uint8_t*>(sh_value_packed),
+            const_cast<float2*>(sh_value_bounds),
+            sh_base, sh_bounds_stride);
+    }
 
     // Save results
     aabb.x = fminf(fmaxf(aabb.x, 0.0f), image_width-1.0f);
@@ -71,7 +88,7 @@ __global__ void projection_packed_mask_kernel(
 }
 
 
-template<typename SplatPrimitive, CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model, int VALUE_BITS = 32>
 __global__ void projection_packed_fwd_kernel(
     const uint32_t C,
     const uint32_t N,
@@ -88,7 +105,10 @@ __global__ void projection_packed_fwd_kernel(
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,  // [nnz]
     float *__restrict__ radii,  // [N]
-    typename SplatPrimitive::ScreenBuffer splats_screen  // [nnz, ...]
+    typename SplatPrimitive::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed = nullptr,
+    const float2* __restrict__ sh_value_bounds  = nullptr,
+    const uint32_t num_sh_buffer = 0
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -130,7 +150,18 @@ __global__ void projection_packed_fwd_kernel(
     float4 aabb;
     float radius = 0.0f;
     typename SplatPrimitive::Screen splat_screen;
-    splat_world.project<camera_model>(cam, splat_screen, aabb, sorting_depth, radius);
+    if constexpr (VALUE_BITS == 32) {
+        splat_world.template project<camera_model, 32>(
+            cam, splat_screen, aabb, sorting_depth, radius);
+    } else {
+        const int64_t sh_base = (int64_t)3 * (int64_t)num_sh_buffer * gid;
+        const int64_t sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+        splat_world.template project<camera_model, VALUE_BITS>(
+            cam, splat_screen, aabb, sorting_depth, radius,
+            const_cast<uint8_t*>(sh_value_packed),
+            const_cast<float2*>(sh_value_bounds),
+            sh_base, sh_bounds_stride);
+    }
 
     // Save results
     camera_ids[out_idx] = (int32_t)cid;
@@ -158,16 +189,25 @@ void projection_packed_mask_kernel_wrapper(
     const uint32_t image_width,
     const uint32_t image_height,
     // outputs
-    bool *__restrict__ intersection_mask  // [C, N]
+    bool *__restrict__ intersection_mask,  // [C, N]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 ) {
     constexpr uint block = 128;
-    projection_packed_mask_kernel<SplatPrimitive, camera_model>
-    <<<_CEIL_DIV(C*N, block), block, 0, stream>>>(
-        C, N,
-        splats_world, viewmats, intrins, dist_coeffs_buffer,
-        image_width, image_height,
-        intersection_mask
-    );
+    #define _LAUNCH(VB) \
+        projection_packed_mask_kernel<SplatPrimitive, camera_model, VB> \
+        <<<_CEIL_DIV(C*N, block), block, 0, stream>>>( \
+            C, N, \
+            splats_world, viewmats, intrins, dist_coeffs_buffer, \
+            image_width, image_height, \
+            intersection_mask, \
+            sh_value_packed, sh_value_bounds, num_sh_buffer)
+    if      (sh_value_bits == 8)  { _LAUNCH(8); }
+    else if (sh_value_bits == 16) { _LAUNCH(16); }
+    else                          { _LAUNCH(32); }
+    #undef _LAUNCH
 }
 
 template<typename SplatPrimitive, CameraModelType camera_model>
@@ -188,15 +228,24 @@ void projection_packed_fwd_kernel_wrapper(
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    typename SplatPrimitive::ScreenBuffer splats_screen  // [nnz, ...]
+    typename SplatPrimitive::ScreenBuffer splats_screen,  // [nnz, ...]
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits
 ) {
     constexpr uint block = 128;
-    projection_packed_fwd_kernel<SplatPrimitive, camera_model>
-    <<<_CEIL_DIV(C*N, block), block, 0, stream>>>(
-        C, N,
-        splats_world, viewmats, intrins, dist_coeffs_buffer,
-        image_width, image_height,
-        intersection_mask_scan,
-        camera_ids, gaussian_ids, aabbs, sorting_depths, radii, splats_screen
-    );
+    #define _LAUNCH(VB) \
+        projection_packed_fwd_kernel<SplatPrimitive, camera_model, VB> \
+        <<<_CEIL_DIV(C*N, block), block, 0, stream>>>( \
+            C, N, \
+            splats_world, viewmats, intrins, dist_coeffs_buffer, \
+            image_width, image_height, \
+            intersection_mask_scan, \
+            camera_ids, gaussian_ids, aabbs, sorting_depths, radii, splats_screen, \
+            sh_value_packed, sh_value_bounds, num_sh_buffer)
+    if      (sh_value_bits == 8)  { _LAUNCH(8); }
+    else if (sh_value_bits == 16) { _LAUNCH(16); }
+    else                          { _LAUNCH(32); }
+    #undef _LAUNCH
 }

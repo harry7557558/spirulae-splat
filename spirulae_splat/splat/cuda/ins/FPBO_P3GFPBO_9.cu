@@ -40,6 +40,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<1>::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -60,7 +62,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float eps_tr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
-    const int sh_quant_bits
+    const int sh_quant_bits,
+    const int sh_value_bits
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
@@ -99,6 +102,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<1>::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -119,7 +124,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float eps_tr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
-    const int sh_quant_bits
+    const int sh_quant_bits,
+    const int sh_value_bits
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
@@ -158,6 +164,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<1>::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -178,7 +186,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float eps_tr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
-    const int sh_quant_bits
+    const int sh_quant_bits,
+    const int sh_value_bits
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
@@ -217,6 +226,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<1>::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -237,7 +248,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float eps_tr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
-    const int sh_quant_bits
+    const int sh_quant_bits,
+    const int sh_value_bits
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
@@ -276,6 +288,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<1>::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -296,7 +310,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float eps_tr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
-    const int sh_quant_bits
+    const int sh_quant_bits,
+    const int sh_value_bits
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
@@ -335,6 +350,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     Vanilla3DGS<1>::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
@@ -355,5 +372,6 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const float eps_tr,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
-    const int sh_quant_bits
+    const int sh_quant_bits,
+    const int sh_value_bits
 );
