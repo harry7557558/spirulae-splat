@@ -377,12 +377,15 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_rgb(
     float x = (float)wi / (float)(w-1) * (float)(W-1);
     float y = (float)hi / (float)(h-1) * (float)(H-1);
 #endif
-    float z = (kC2G_r * sr + kC2G_g * sg + kC2G_b * sb) * (L-1);
+    // Clamp gz to [0,1] -- matches forward and bilagrid-grad bwd branch.
+    float gz_raw = kC2G_r * sr + kC2G_g * sg + kC2G_b * sb;
+    float gz = fminf(fmaxf(gz_raw, 0.0f), 1.0f);
+    bool  gz_in_range = (gz_raw >= 0.0f && gz_raw <= 1.0f);
+    float z = gz * (L-1);
     int x0 = floorf(x), y0 = floorf(y), z0 = floorf(z);
     int x1 = min(x0+1, W-1);
     int y1 = min(y0+1, H-1);
-    int z1 = z0 + 1;
-    z0 = min(max(z0,0), L-1); z1 = min(max(z1,0), L-1);
+    int z1 = min(z0+1, L-1);
 
     float fx = x-x0, fy = y-y0, fz = z-z0;
 
@@ -477,6 +480,8 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_rgb(
         }
         gz_grad += dwdz[corner] * (L-1) * trilerp;
     }
+    // Zero gz_grad outside the [0,1] clamp range -- the clamp's vjp.
+    if (!gz_in_range) gz_grad = 0.0f;
     grad_rgb.x += kC2G_r * gz_grad;
     grad_rgb.y += kC2G_g * gz_grad;
     grad_rgb.z += kC2G_b * gz_grad;

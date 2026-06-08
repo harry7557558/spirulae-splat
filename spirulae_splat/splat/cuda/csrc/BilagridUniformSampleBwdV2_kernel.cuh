@@ -111,14 +111,17 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
     float x = (float)wi / (float)(w-1) * (float)(W-1);
     float y = (float)hi / (float)(h-1) * (float)(H-1);
 #endif
-    float z = (kC2G_r * sr + kC2G_g * sg + kC2G_b * sb) * (L-1);
+    // Clamp gz to [0,1] -- matches forward and V1 bilagrid-grad bwd branch.
+    float gz_raw = kC2G_r * sr + kC2G_g * sg + kC2G_b * sb;
+    float gz = fminf(fmaxf(gz_raw, 0.0f), 1.0f);
+    bool  gz_in_range = (gz_raw >= 0.0f && gz_raw <= 1.0f);
+    float z = gz * (L-1);
 
     // floor + ceil, clamped
     int x0 = floorf(x), y0 = floorf(y), z0 = floorf(z);
     int x1 = min(x0+1, W-1);
     int y1 = min(y0+1, H-1);
-    int z1 = z0 + 1;
-    z0 = min(max(z0,0), L-1); z1 = min(max(z1,0), L-1);
+    int z1 = min(z0+1, L-1);
 
     // fractional parts
     float fx = x - x0, fy = y - y0, fz = z - z0;
@@ -215,8 +218,9 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
     }
 #endif
 
-    // save gradient, with discontinuity masking
-    gz_grad *= (float)(z0 != z && z1 != z);
+    // Zero gz_grad outside the [0,1] clamp range -- the clamp's vjp.
+    // (Replaces the prior z-discontinuity heuristic; same intent.)
+    if (!gz_in_range) gz_grad = 0.0f;
     if (inside) {
         v_rgb[g_off+0] = vr + kC2G_r * gz_grad;
         v_rgb[g_off+1] = vg + kC2G_g * gz_grad;

@@ -48,6 +48,9 @@ __global__ void bilagrid_ppisp_sample_forward_kernel(
     float gx = coords[2*g_offset+0];
     float gy = coords[2*g_offset+1];
     float gz = kC2G_r * sr + kC2G_g * sg + kC2G_b * sb;
+    // Clamp gz to [0,1] -- equivalent to clipping z to [0, L-1]. Matches the
+    // backward branch (which clamps), so fz here is in [0,1] same as bwd's.
+    gz = fminf(fmaxf(gz, 0.0f), 1.0f);
     float x = gx * (W - 1);
     float y = gy * (H - 1);
     float z = gz * (L - 1);

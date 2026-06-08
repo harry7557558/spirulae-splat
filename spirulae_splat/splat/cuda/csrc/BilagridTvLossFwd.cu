@@ -9,7 +9,7 @@ namespace cg = cooperative_groups;
 
 template<int C>
 __global__ void tv_loss_forward_kernel(
-    BilagridReader bilagrid,  // [N,C,L,H,W]
+    BilagridReader bilagrid,  // [N,L,H,W,C] (channel-last)
     float* __restrict__ tv_loss,
     int N, int L, int H, int W
 ) {
@@ -22,29 +22,35 @@ __global__ void tv_loss_forward_kernel(
     // int ci = idx % C; idx /= C;
     int ni = idx;
 
+    // Channel-last strides: ci=1, wi=C, hi=W*C, li=H*W*C, ni=L*H*W*C.
+    const int sw = C;
+    const int sh = W * C;
+    const int sl = H * W * C;
+    const int sn = L * H * W * C;
+
     float tv_sum = 0.0f;
 
     if (inside) {
+        const int cell_base = ni * sn + li * sl + hi * sh + wi * sw;
         #pragma unroll
         for (int ci = 0; ci < C; ci++) {
-            
-        int base = (ni*C+ci)*L*H*W;
-        int cell_idx = base + (li*H+hi)*W+wi;
+
+        int cell_idx = cell_base + ci;
 
         float val = bilagrid[cell_idx];
 
         if (wi > 0) {
-            float val0 = bilagrid[cell_idx - 1];
+            float val0 = bilagrid[cell_idx - sw];
             float l2 = (val-val0) * (val-val0);
             tv_sum += l2 / (L*H*(W-1));
         }
         if (hi > 0) {
-            float val0 = bilagrid[cell_idx - W];
+            float val0 = bilagrid[cell_idx - sh];
             float l2 = (val-val0) * (val-val0);
             tv_sum += l2 / (L*(H-1)*W);
         }
         if (li > 0) {
-            float val0 = bilagrid[cell_idx - W*H];
+            float val0 = bilagrid[cell_idx - sl];
             float l2 = (val-val0) * (val-val0);
             tv_sum += l2 / ((L-1)*H*W);
         }
@@ -123,7 +129,7 @@ void tv_loss_forward(
 
 template<int C>
 __global__ void channel_mean_forward_kernel(
-    BilagridReader bilagrid,  // [N,C,L,H,W]
+    BilagridReader bilagrid,  // [N,L,H,W,C] (channel-last)
     float* __restrict__ channel_mean,  // [C]
     int N, int L, int H, int W
 ) {
@@ -140,15 +146,15 @@ __global__ void channel_mean_forward_kernel(
     __shared__ float sharedData[blockSize];
     int tid = (threadIdx.z * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x;
 
+    const int cell_base = ((((ni * L) + li) * H + hi) * W + wi) * C;
+
     #pragma unroll
     for (int ci = 0; ci < C; ci++) {
 
         float val = 0.0f;
 
         if (inside) {
-            int base = (ni*C+ci)*L*H*W;
-            int cell_idx = base + (li*H+hi)*W+wi;
-            val = bilagrid[cell_idx];
+            val = bilagrid[cell_base + ci];
         }
 
         sharedData[tid] = val;

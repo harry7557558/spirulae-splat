@@ -149,12 +149,12 @@ def bench_360_v2(preset: str, path_to_360_v2: Path, output_prefix: Path,
         exit(0)
 
     scenes = [
-        # ("bicycle", 4),
+        ("bicycle", 4),
         ("garden", 4),
-        # ("stump", 4),
-        # ("bonsai", 2),
-        # ("counter", 2),
-        # ("kitchen", 2),
+        ("stump", 4),
+        ("bonsai", 2),
+        ("counter", 2),
+        ("kitchen", 2),
         ("room", 2),
     ]
 

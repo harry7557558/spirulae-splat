@@ -2,9 +2,9 @@
 
 template<int C, bool inplace>
 __global__ void tv_loss_backward_kernel(
-    BilagridReader bilagrid,   // [N,C,L,H,W]
+    BilagridReader bilagrid,   // [N,L,H,W,C] (channel-last)
     const float v_tv_loss,                   // scalar gradient dL/d(tv_loss)
-    float* __restrict__ v_bilagrid,     // [N,C,L,H,W]
+    float* __restrict__ v_bilagrid,     // [N,L,H,W,C]
     int N, int L, int H, int W
 ) {
     int wi = blockIdx.x * blockDim.x + threadIdx.x;
@@ -20,35 +20,43 @@ __global__ void tv_loss_backward_kernel(
     float sy = s / (float)(L * (H - 1) * W);
     float sz = s / (float)((L - 1) * H * W);
 
+    // Channel-last strides.
+    const int sw = C;
+    const int sh = W * C;
+    const int sl = H * W * C;
+    const int sn = L * H * W * C;
+
+    const int cell_base = ni * sn + li * sl + hi * sh + wi * sw;
+
     for (int ci = 0; ci < C; ci++) {
 
-        int cell_idx = (((ni * C + ci) * L + li) * H + hi) * W + wi;
+        int cell_idx = cell_base + ci;
 
         float half_grad = 0.0f;
         float val = bilagrid[cell_idx];
 
         if (wi > 0) {
-            float val0 = bilagrid[cell_idx - 1];
+            float val0 = bilagrid[cell_idx - sw];
             half_grad += (val - val0) * sx;
         }
         if (wi < W - 1) {
-            float val0 = bilagrid[cell_idx + 1];
+            float val0 = bilagrid[cell_idx + sw];
             half_grad += (val - val0) * sx;
         }
         if (hi > 0) {
-            float val0 = bilagrid[cell_idx - W];
+            float val0 = bilagrid[cell_idx - sh];
             half_grad += (val - val0) * sy;
         }
         if (hi < H - 1) {
-            float val0 = bilagrid[cell_idx + W];
+            float val0 = bilagrid[cell_idx + sh];
             half_grad += (val - val0) * sy;
         }
         if (li > 0) {
-            float val0 = bilagrid[cell_idx - W*H];
+            float val0 = bilagrid[cell_idx - sl];
             half_grad += (val - val0) * sz;
         }
         if (li < L - 1) {
-            float val0 = bilagrid[cell_idx + W*H];
+            float val0 = bilagrid[cell_idx + sl];
             half_grad += (val - val0) * sz;
         }
 
@@ -97,7 +105,7 @@ void tv_loss_backward(
 template<int C, bool inplace>
 __global__ void channel_mean_backward_kernel(
     const float* __restrict__ v_channel_mean,    // [C]
-    float* __restrict__ v_bilagrid,     // [N,C,L,H,W]
+    float* __restrict__ v_bilagrid,     // [N,L,H,W,C] (channel-last)
     int N, int L, int H, int W
 ) {
     int wi = blockIdx.x * blockDim.x + threadIdx.x;
@@ -108,12 +116,14 @@ __global__ void channel_mean_backward_kernel(
     int li = idx % L; idx /= L;
     int ni = idx;
 
+    const int cell_base = ((((ni * L) + li) * H + hi) * W + wi) * C;
+
     #pragma unroll
     for (int ci = 0; ci < C; ci++) {
 
         float grad = v_channel_mean[ci] / (N*L*H*W);
 
-        int cell_idx = (((ni * C + ci) * L + li) * H + hi) * W + wi;
+        int cell_idx = cell_base + ci;
         if (inplace)
             v_bilagrid[cell_idx] += grad;
         else

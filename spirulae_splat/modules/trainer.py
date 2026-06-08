@@ -520,11 +520,15 @@ class Trainer:
             input_intrins_list, input_dist_coeffs_list,
             train_indices, val_indices)
 
-        # When the warp path is active, the bilagrid table is sized to the
-        # POST-split camera count -- override the model's num_train_data
-        # accordingly (the model's own pre-init guess uses a uniform K).
-        if any_warp:
-            self.model.num_train_data = int(n_post)
+        # The bilagrid (+ PPISP, + camera-optimizer) tables are sized off
+        # `self.model.num_train_data`. The model's pre-init uses a uniform
+        # K=6 upper bound for the C++ datamanager path since it has no
+        # per-camera K info at __init__ time; resolve it to the real
+        # post-split count now. For non-warp datasets (n_post == N), this
+        # shrinks the table back to N -- without this, bilagrid `n_grids`
+        # is 6x too large and the TV-loss normalization (~1/N_grids) makes
+        # the TV regularizer 6x weaker than intended.
+        self.model.num_train_data = int(n_post)
 
         # Build a POST-split Cameras object for the viewer. For the warp
         # path each input image is exposed as K=5 (fisheye/equisolid) or

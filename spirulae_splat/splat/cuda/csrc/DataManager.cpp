@@ -16,6 +16,7 @@
 #include <numeric>
 #include <random>
 #include <stdexcept>
+#include <set>
 #include <unordered_map>
 
 
@@ -141,41 +142,12 @@ private:
 // All decoders write directly into a pre-allocated batch slot `dst` (pointer
 // to the start of row 0 of this image's slot in the [B,H,W,C] buffer).
 //
-// `expected_h`, `expected_w` are the IndexGroup's promised dimensions; if the
-// decoded image disagrees we throw (the IndexGroup invariant was violated).
-
-void decode_rgb_into(const std::string& path,
-                     int expected_h, int expected_w,
-                     PixelDType dtype,
-                     uint8_t* dst)
-{
-    int w, h, ch;
-    if (dtype == PixelDType::UINT16) {
-        stbi_us* img = stbi_load_16(path.c_str(), &w, &h, &ch, 3);
-        if (!img) throw std::runtime_error("DataManager: failed to load 16-bit RGB '" + path + "': " + stbi_failure_reason());
-        if (w != expected_w || h != expected_h) {
-            stbi_image_free(img);
-            throw std::runtime_error("DataManager: rgb shape mismatch for '" + path + "', "
-                + std::to_string(w) + "x" + std::to_string(h) + " != expected "
-                + std::to_string(expected_w) + "x" + std::to_string(expected_h));
-        }
-        std::memcpy(dst, img, (size_t)w * h * 3 * sizeof(stbi_us));
-        stbi_image_free(img);
-    } else if (dtype == PixelDType::UINT8) {
-        stbi_uc* img = stbi_load(path.c_str(), &w, &h, &ch, 3);
-        if (!img) throw std::runtime_error("DataManager: failed to load 8-bit RGB '" + path + "': " + stbi_failure_reason());
-        if (w != expected_w || h != expected_h) {
-            stbi_image_free(img);
-            throw std::runtime_error("DataManager: rgb shape mismatch for '" + path + "', "
-                + std::to_string(w) + "x" + std::to_string(h) + " != expected "
-                + std::to_string(expected_w) + "x" + std::to_string(expected_h));
-        }
-        std::memcpy(dst, img, (size_t)w * h * 3);
-        stbi_image_free(img);
-    } else {
-        throw std::runtime_error("DataManager: float RGB inputs not supported in stb_image path");
-    }
-}
+// `expected_h`, `expected_w` are the IndexGroup's promised dimensions. If the
+// decoded image disagrees, the decoder warns (once per IndexGroup, keyed on
+// the expected (W,H) pair) and bilinearly resizes the image into the slot,
+// matching how mask / depth / normal already handle intra-group shape
+// drift. Matches the gsplat / nerfstudio convention of accepting off-by-one
+// downscale dims (e.g. Mip-NeRF 360 images_(2|4) round vs. floor).
 
 // ---- CPU resize helpers ---------------------------------------------------
 //
@@ -346,6 +318,61 @@ inline void apply_mask_boundary_offset_in_place(uint8_t* mask, int h, int w,
 // shape); when the file is smaller it is upsampled (nearest for mask,
 // bilinear for depth / normal). The 1x1 mask case is a degenerate
 // nearest-neighbor broadcast and falls out for free.
+
+// Emit a one-shot warning the first time a given (kind, expected_w,
+// expected_h) tuple sees an on-disk size mismatch. Keyed on the IndexGroup's
+// promised dims, so each group fires at most one warning per modality even
+// though the worker pool decodes many files concurrently.
+static void _warn_rgb_dim_mismatch_once(
+    const std::string& path,
+    int actual_w, int actual_h,
+    int expected_w, int expected_h)
+{
+    static std::mutex                       mu;
+    static std::set<std::pair<int, int>>    seen;
+    std::lock_guard<std::mutex> lk(mu);
+    auto key = std::make_pair(expected_w, expected_h);
+    if (seen.insert(key).second) {
+        std::fprintf(stderr,
+            "DataManager: rgb shape mismatch for '%s': %dx%d vs camera %dx%d. "
+            "Resizing on-disk image to match camera dims. "
+            "Suppressing further warnings for this group.\n",
+            path.c_str(),
+            actual_w, actual_h, expected_w, expected_h);
+        std::fflush(stderr);
+    }
+}
+
+void decode_rgb_into(const std::string& path,
+                     int expected_h, int expected_w,
+                     PixelDType dtype,
+                     uint8_t* dst)
+{
+    int w, h, ch;
+    if (dtype == PixelDType::UINT16) {
+        stbi_us* img = stbi_load_16(path.c_str(), &w, &h, &ch, 3);
+        if (!img) throw std::runtime_error("DataManager: failed to load 16-bit RGB '" + path + "': " + stbi_failure_reason());
+        if (w == expected_w && h == expected_h) {
+            std::memcpy(dst, img, (size_t)w * h * 3 * sizeof(stbi_us));
+        } else {
+            _warn_rgb_dim_mismatch_once(path, w, h, expected_w, expected_h);
+            cpu_bilinear_resize<stbi_us, 3>(img, h, w, (stbi_us*)dst, expected_h, expected_w);
+        }
+        stbi_image_free(img);
+    } else if (dtype == PixelDType::UINT8) {
+        stbi_uc* img = stbi_load(path.c_str(), &w, &h, &ch, 3);
+        if (!img) throw std::runtime_error("DataManager: failed to load 8-bit RGB '" + path + "': " + stbi_failure_reason());
+        if (w == expected_w && h == expected_h) {
+            std::memcpy(dst, img, (size_t)w * h * 3);
+        } else {
+            _warn_rgb_dim_mismatch_once(path, w, h, expected_w, expected_h);
+            cpu_bilinear_resize<stbi_uc, 3>(img, h, w, dst, expected_h, expected_w);
+        }
+        stbi_image_free(img);
+    } else {
+        throw std::runtime_error("DataManager: float RGB inputs not supported in stb_image path");
+    }
+}
 
 void decode_mask_into(const std::string& path,
                       int dst_h, int dst_w,

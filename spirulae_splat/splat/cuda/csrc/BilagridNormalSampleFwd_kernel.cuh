@@ -74,6 +74,9 @@ __global__ void bilagrid_normal_uniform_sample_forward_kernel(
 #endif
     // float gz = acosf(fminf(fmaxf(sb * inv_norm, -1.0f), 1.0f)) * (1.0f / (float)M_PI);
     float gz = 0.5f + 0.5f * sb * inv_norm;
+    // Clamp gz to [0,1] -- equivalent to clipping z to [0, L-1]. Matches the
+    // backward branch (which clamps), so fz here is in [0,1] same as bwd's.
+    gz = fminf(fmaxf(gz, 0.0f), 1.0f);
     float x = gx * (W - 1);
     float y = gy * (H - 1);
     float z = gz * (L - 1);
@@ -84,9 +87,7 @@ __global__ void bilagrid_normal_uniform_sample_forward_kernel(
     int z0 = (int)floorf(z);
     int x1 = min(x0+1, W-1);
     int y1 = min(y0+1, H-1);
-    int z1 = z0 + 1;
-    z0 = min(max(z0, 0), L-1);
-    z1 = min(max(z1, 0), L-1);
+    int z1 = min(z0+1, L-1);
 
     // interpolation parameters
     float fx = x - (float)x0;

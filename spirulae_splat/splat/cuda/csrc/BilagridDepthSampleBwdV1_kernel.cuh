@@ -367,12 +367,15 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
     float x = (float)wi / (float)(w-1) * (float)(W-1);
     float y = (float)hi / (float)(h-1) * (float)(H-1);
 #endif
-    float z = (sr / (sr + 1.0f)) * (L-1);
+    // Clamp gz to [0,1] -- matches forward and bilagrid-grad bwd branch.
+    float gz_raw = sr / (sr + 1.0f);
+    float gz = fminf(fmaxf(gz_raw, 0.0f), 1.0f);
+    bool  gz_in_range = (gz_raw >= 0.0f && gz_raw <= 1.0f);
+    float z = gz * (L-1);
     int x0 = floorf(x), y0 = floorf(y), z0 = floorf(z);
     int x1 = min(x0+1, W-1);
     int y1 = min(y0+1, H-1);
-    int z1 = z0 + 1;
-    z0 = min(max(z0,0), L-1); z1 = min(max(z1,0), L-1);
+    int z1 = min(z0+1, L-1);
 
     // fractional parts
     float fx = x - x0, fy = y - y0, fz = z - z0;
@@ -446,6 +449,8 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
         }
         gz_grad += dwdz[corner] * (L-1) * trilerp;
     }
+    // Zero gz_grad outside the [0,1] clamp range -- the clamp's vjp.
+    if (!gz_in_range) gz_grad = 0.0f;
     vr += gz_grad / ((sr+1.0f) * (sr+1.0f));
     vr *= scalar;
     v_depth[g_off] = isfinite(vr) ? vr : 0.0f;

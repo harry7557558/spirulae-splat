@@ -599,8 +599,8 @@ __global__ void densify_update_weight_kernel(
         weight *= sigmoid(opacs[idx]);
     if (accum_weight_scalar != nullptr)
         weight *= accum_weight_scalar[0];
-    if (weight == 0.0f)
-        return;
+    // if (weight == 0.0f)
+    //     return;
 
     float2 accum = accum_buffer[idx];
     if (score_mode == (int)DensifyScoreMode::Max) {

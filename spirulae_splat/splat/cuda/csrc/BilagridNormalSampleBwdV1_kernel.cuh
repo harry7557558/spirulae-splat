@@ -342,11 +342,14 @@ __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_normal(
 #else
     int g_off = ((ni * h + hi) * w + wi) * 3;
 #endif
+    // Keep sr/sg/sb as the RAW normal (no in-place normalization) and build a
+    // unit_normal explicitly where needed. Matches the forward kernel's style
+    // and the bilagrid-grad bwd branch, which both apply `* inv_norm` lazily.
     float sr = normal_in[g_off+0];
     float sg = normal_in[g_off+1];
     float sb = normal_in[g_off+2];
     float inv_norm = rsqrtf(sr*sr + sg*sg + sb*sb + 1e-20f);
-    sr *= inv_norm, sg *= inv_norm, sb *= inv_norm;
+    float3 unit_normal = {sr*inv_norm, sg*inv_norm, sb*inv_norm};
     float dr = v_normal_out[g_off+0];
     float dg = v_normal_out[g_off+1];
     float db = v_normal_out[g_off+2];
@@ -360,13 +363,16 @@ __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_normal(
     float x = (float)wi / (float)(w-1) * (float)(W-1);
     float y = (float)hi / (float)(h-1) * (float)(H-1);
 #endif
-    // float z = (acosf(fminf(fmaxf(sb, -1.0f), 1.0f)) * (1.0f / (float)M_PI)) * (L-1);
-    float z = (0.5f + 0.5f * sb) * (L-1);
+    // float z = (acosf(fminf(fmaxf(sb*inv_norm, -1.0f), 1.0f)) * (1.0f / (float)M_PI)) * (L-1);
+    // Clamp gz to [0,1] -- matches forward and bilagrid-grad bwd branch.
+    float gz_raw = 0.5f + 0.5f * sb * inv_norm;
+    float gz = fminf(fmaxf(gz_raw, 0.0f), 1.0f);
+    bool  gz_in_range = (gz_raw >= 0.0f && gz_raw <= 1.0f);
+    float z = gz * (L-1);
     int x0 = floorf(x), y0 = floorf(y), z0 = floorf(z);
     int x1 = min(x0+1, W-1);
     int y1 = min(y0+1, H-1);
-    int z1 = z0 + 1;
-    z0 = min(max(z0,0), L-1); z1 = min(max(z1,0), L-1);
+    int z1 = min(z0+1, L-1);
 
     float fx = x-x0, fy = y-y0, fz = z-z0;
 
@@ -407,11 +413,11 @@ __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_normal(
         (ci == 0 ? axis_angle.x : ci == 1 ? axis_angle.y : axis_angle.z) = val;
     }
 
-    // apply normal
-    float3 normal = {sr, sg, sb};
+    // apply normal -- rotate the UNIT normal, mirroring the forward.
     float3 grad_axis_angle = {0.0f, 0.0f, 0.0f};
-    float3 grad_normal = {0.0f, 0.0f, 0.0f};
-    axis_angle_rotate_bwd(axis_angle, normal, {dr, dg, db}, grad_axis_angle, grad_normal);
+    float3 grad_unit_normal = {0.0f, 0.0f, 0.0f};
+    axis_angle_rotate_bwd(axis_angle, unit_normal, {dr, dg, db},
+                          grad_axis_angle, grad_unit_normal);
 
     // spatial derivatives for coords
     float dwdz[8] = {
@@ -441,10 +447,18 @@ __global__ void bilagrid_normal_uniform_sample_backward_v1_kernel_normal(
         }
         gz_grad += dwdz[corner] * (L-1) * trilerp;
     }
-    // grad_normal.z += gz_grad * -rsqrtf(fmaxf(1.0f - sb*sb, 1e-20f)) * (1.0f / (float)M_PI);
-    grad_normal.z += 0.5f * gz_grad;
+    // Zero gz_grad outside the [0,1] clamp range -- the clamp's vjp.
+    if (!gz_in_range) gz_grad = 0.0f;
+    // d(gz)/d(unit_normal.z) = 0.5 since gz = 0.5 + 0.5*unit_normal.z.
+    grad_unit_normal.z += 0.5f * gz_grad;
 
-    grad_normal = mul3(add3(grad_normal, mul3(normal, -dot3(normal, grad_normal))), inv_norm);
+    // Convert grad_unit_normal -> grad_raw_normal via the vjp of n_raw -> unit:
+    //   d_unit/d_raw_j = (delta_ij - u_i*u_j) / |n|
+    // so grad_raw = (grad_unit - unit_normal * dot(unit_normal, grad_unit)) * inv_norm.
+    float3 grad_normal = mul3(
+        add3(grad_unit_normal,
+             mul3(unit_normal, -dot3(unit_normal, grad_unit_normal))),
+        inv_norm);
     v_normal_in[g_off+0] = isfinite(grad_normal.x) ? grad_normal.x : 0.0f;
     v_normal_in[g_off+1] = isfinite(grad_normal.y) ? grad_normal.y : 0.0f;
     v_normal_in[g_off+2] = isfinite(grad_normal.z) ? grad_normal.z : 0.0f;
