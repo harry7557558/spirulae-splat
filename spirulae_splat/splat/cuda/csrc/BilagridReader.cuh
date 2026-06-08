@@ -23,7 +23,7 @@ struct BilagridReader {
     // Implicit ctor from a raw fp32 pointer (and default ctor) so existing
     // launcher call sites that pass `grids.data_ptr()` keep working without
     // any change. The 16-bit path is opt-in via the static factory.
-    __host__ __device__ BilagridReader() = default;
+    BilagridReader() = default;
     __host__ __device__ BilagridReader(const float* p)
         : fp32(p), q16(nullptr), bounds(nullptr) {}
 

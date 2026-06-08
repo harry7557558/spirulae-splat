@@ -214,7 +214,7 @@ __global__ void fused_bilagrid_tv_adam_kernel(
     float g1, g2;
 
     using QState = QuantizedAdamState<QUANT_BITS, BLOCK_SIZE>;
-    float4 mm;
+    [[maybe_unused]] float4 mm;
     if constexpr (QUANT) {
         // Joint (u, sqrt(g2)) AoS quantization via QuantizedAdamState codec.
         mm = quant_bounds[blockIdx.x];
@@ -462,7 +462,7 @@ __global__ void fused_bilagrid_tv_adagrad_kernel(
     float accum;
 
     using QTL = QuantizedTensorLog<QUANT_BITS, BLOCK_SIZE>;
-    float2 mm;
+    [[maybe_unused]] float2 mm;
     if constexpr (QUANT) {
         mm = quant_bounds[blockIdx.x];
         accum = inside ? QTL::decode_v(packed, idx, mm) : 0.0f;

@@ -26,7 +26,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
     struct Screen;
 
     struct World : public _BasePrimitive3DGUT<sh_degree>::World{
-        __device__ World() = default;
+        World() = default;
         __device__ World(const typename _BasePrimitive3DGS<sh_degree>::World& other) {
             _BasePrimitive3DGS<sh_degree>::World::operator=(other);
         }
@@ -322,7 +322,7 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
     };
 
     struct Screen : public _BasePrimitive3DGUT<sh_degree>::Screen{
-        __device__ Screen() = default;
+        Screen() = default;
         __device__ Screen(const typename _BasePrimitive3DGUT<sh_degree>::Screen& other) {
             _BasePrimitive3DGUT<sh_degree>::Screen::operator=(other);
         }

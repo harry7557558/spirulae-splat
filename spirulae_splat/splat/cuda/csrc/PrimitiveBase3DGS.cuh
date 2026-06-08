@@ -258,7 +258,7 @@ struct _BasePrimitive3DGUT : _BasePrimitive3DGS<_sh_degree> {
 
     #ifdef __CUDACC__
     struct World : public _BasePrimitive3DGS<_sh_degree>::World {
-        __device__ World() = default;
+        World() = default;
         __device__ World(const typename _BasePrimitive3DGS<_sh_degree>::World& other) {
             _BasePrimitive3DGS<_sh_degree>::World::operator=(other);
         }

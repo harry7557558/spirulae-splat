@@ -11,6 +11,15 @@
 #include <stdexcept>
 #include <tuple>
 #include <variant>
+#include <array>
+#include <cmath>
+
+// MSVC's <cmath> doesn't expose M_PI unless _USE_MATH_DEFINES is set before
+// the first include. We can't rely on that ordering in TUs, so just define
+// the constants we use ourselves.
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #ifdef _MSC_VER
 /* Old compatibility names for C types.  */

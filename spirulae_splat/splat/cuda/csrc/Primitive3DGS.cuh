@@ -26,7 +26,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
 #ifdef __CUDACC__
 
     struct World : public _BasePrimitive3DGS<sh_degree>::World{
-        __device__ World() = default;
+        World() = default;
         __device__ World(const typename _BasePrimitive3DGS<sh_degree>::World& other) {
             _BasePrimitive3DGS<sh_degree>::World::operator=(other);
         }
@@ -339,7 +339,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
     };
 
     struct Screen : public _BasePrimitive3DGS<sh_degree>::Screen {
-        __device__ Screen() = default;
+        Screen() = default;
         __device__ Screen(const typename _BasePrimitive3DGS<sh_degree>::Screen& other) {
             _BasePrimitive3DGS<sh_degree>::Screen::operator=(other);
         }
@@ -350,7 +350,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
     };
 
     struct FragmentFwd : public _BasePrimitive3DGS<sh_degree>::Screen {
-        __device__ FragmentFwd() = default;
+        FragmentFwd() = default;
         __device__ FragmentFwd(const typename _BasePrimitive3DGS<sh_degree>::Screen& other) {
             _BasePrimitive3DGS<sh_degree>::Screen::operator=(other);
         }
@@ -438,7 +438,7 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
     };
 
     struct FragmentBwd : public FragmentFwd {
-        __device__ FragmentBwd() = default;
+        FragmentBwd() = default;
         __device__ FragmentBwd(const typename _BasePrimitive3DGS<sh_degree>::Screen& other) {
             _BasePrimitive3DGS<sh_degree>::Screen::operator=(other);
         }

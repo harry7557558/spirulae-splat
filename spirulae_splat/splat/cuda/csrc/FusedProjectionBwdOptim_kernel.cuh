@@ -256,8 +256,8 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
 
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
-    float3 vr_world_pos = {0.f, 0.f, 0.f};
-    float3 h_world_pos = {0.f, 0.f, 0.f};
+    [[maybe_unused]] float3 vr_world_pos = {0.f, 0.f, 0.f};
+    [[maybe_unused]] float3 h_world_pos = {0.f, 0.f, 0.f};
     if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
         if (inside) vr_world_pos = vr_splats_world.means(gid);
         if (inside) h_world_pos = h_splats_world.means(gid);
@@ -402,16 +402,16 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     // After all five attributes, a single reduce+encode pass below converts
     // these into block-wide bounds + writes the new packed bytes.
     constexpr bool NON_SH_QUANT = (BLOCK_SIZE > 0);
-    float3 nq_g1_scale = make_float3(0.f), nq_g2_scale = make_float3(0.f);
-    float4 nq_g1_quat  = make_float4(0.f), nq_g2_quat  = make_float4(0.f);
-    float  nq_g1_opac  = 0.f,               nq_g2_opac = 0.f;
-    float3 nq_g1_mean  = make_float3(0.f), nq_g2_mean  = make_float3(0.f);
-    float3 nq_g1_dc    = make_float3(0.f), nq_g2_dc    = make_float3(0.f);
-    float4 nq_mm_scale = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
-    float4 nq_mm_quat  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
-    float4 nq_mm_opac  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
-    float4 nq_mm_mean  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
-    float4 nq_mm_dc    = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    [[maybe_unused]] float3 nq_g1_scale = make_float3(0.f), nq_g2_scale = make_float3(0.f);
+    [[maybe_unused]] float4 nq_g1_quat  = make_float4(0.f), nq_g2_quat  = make_float4(0.f);
+    [[maybe_unused]] float  nq_g1_opac = 0.f, nq_g2_opac = 0.f;
+    [[maybe_unused]] float3 nq_g1_mean  = make_float3(0.f), nq_g2_mean  = make_float3(0.f);
+    [[maybe_unused]] float3 nq_g1_dc    = make_float3(0.f), nq_g2_dc    = make_float3(0.f);
+    [[maybe_unused]] float4 nq_mm_scale = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    [[maybe_unused]] float4 nq_mm_quat  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    [[maybe_unused]] float4 nq_mm_opac  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    [[maybe_unused]] float4 nq_mm_mean  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    [[maybe_unused]] float4 nq_mm_dc    = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
 
     // update scales
     if (inside) {
@@ -653,11 +653,11 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
 
     // update features_sh
     // TODO: more cache-friendly memory access pattern
-    int i = 0;
-    float lr_sh = lr_features_sh * inv_bias_correction1;
-    float* v_sh_ptr = v_splat_world.features_sh;
+    [[maybe_unused]] int i = 0;
+    [[maybe_unused]] float lr_sh = lr_features_sh * inv_bias_correction1;
+    [[maybe_unused]] float* v_sh_ptr = v_splat_world.features_sh;
     float* sh_ptr = splats_world.features_sh(gid);
-    const float reg_weight = sh_reg_weight * (1.0f / (float)num_sh);
+    [[maybe_unused]] const float reg_weight = sh_reg_weight * (1.0f / fmaxf((float)num_sh, 1.0f));
 
     // Per-channel DC color + clip radius for trust-region SH update (mirrors
     // fused_adamtr_rgb_sh_optim_kernel). c_dc is unclamped (used for the
@@ -708,7 +708,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             float v_sh_coeff = v_sh_ptr[i] + reg_weight * sh_coeff;
             // Channel index 0/1/2 within (band, channel) layout.
             const int ch = i % 3;
-            const float c_ch = (ch == 0) ? c_dc.x : (ch == 1) ? c_dc.y : c_dc.z;
+            [[maybe_unused]] const float c_ch = (ch == 0) ? c_dc.x : (ch == 1) ? c_dc.y : c_dc.z;
             if constexpr (color_trust_linear) {
                 v_sh_coeff /= SlangPixelWise::linear_rgb_to_srgb_grad(c_ch);
             }

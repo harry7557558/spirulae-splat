@@ -136,8 +136,8 @@ __global__ void intersect_tile_kernel(
         return;
     }
 
-    float2 xy = is_ellipse ? (proj_xy ? proj_xy[idx] : float2{0.5f*(xmin+xmax), 0.5f*(ymin+ymax)}) : float2{};
-    float3 conic = is_ellipse ? proj_conic[idx] : float3{};
+    [[maybe_unused]] float2 xy = is_ellipse ? (proj_xy ? proj_xy[idx] : float2{0.5f*(xmin+xmax), 0.5f*(ymin+ymax)}) : float2{};
+    [[maybe_unused]] float3 conic = is_ellipse ? proj_conic[idx] : float3{};
     if constexpr (is_ellipse)
         conic = conic * (0.5f / __logf(proj_opac[idx] / ALPHA_THRESHOLD));
 
