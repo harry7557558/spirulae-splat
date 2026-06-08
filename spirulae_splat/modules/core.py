@@ -224,13 +224,15 @@ class Renderer:
 
     def engine_compute_loss_backward(self, step, loss_weights, w_ssim,
                                      num_loss_scales, compute_loss_map,
-                                     structure_only_loss_map,
+                                     loss_map_mode,
+                                     robust_edge_aware_quantile,
                                      overexposure_reg_weight=0.0):
         """Compute loss + rasterization backward + projection backward in C++.
         Gradients are managed by C++ pool."""
         loss_dict = _C.engine_compute_loss_backward(
             step, loss_weights, w_ssim, num_loss_scales, compute_loss_map,
-            bool(structure_only_loss_map),
+            int(loss_map_mode),
+            float(robust_edge_aware_quantile),
             float(overexposure_reg_weight),
         )
         return loss_dict
@@ -481,7 +483,7 @@ class Renderer:
                           gt_rgb, gt_depth, gt_normal, gt_alpha,
                           # Loss config
                           loss_weights, w_ssim, num_loss_scales, compute_loss_map,
-                          structure_only_loss_map,
+                          loss_map_mode, robust_edge_aware_quantile,
                           # Configs
                           model_config, optim_config,
                           # Bilagrid (pass cam_indices + lrs + tv weights;
@@ -517,7 +519,8 @@ class Renderer:
         cfg.loss.w_ssim           = float(w_ssim)
         cfg.loss.num_loss_scales  = int(num_loss_scales)
         cfg.loss.compute_loss_map = bool(compute_loss_map)
-        cfg.loss.structure_only_loss_map = bool(structure_only_loss_map)
+        cfg.loss.loss_map_mode = int(loss_map_mode)
+        cfg.loss.robust_edge_aware_quantile = float(robust_edge_aware_quantile)
         cfg.loss.overexposure_reg_weight = float(overexposure_reg_weight)
         cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
         cfg.densify  = self._build_densify_config(model_config)
@@ -553,7 +556,8 @@ class Renderer:
     def engine_train_step_managed(self, step, max_steps,
                                   sh_degree_to_use,
                                   loss_weights, w_ssim, num_loss_scales,
-                                  compute_loss_map, structure_only_loss_map,
+                                  compute_loss_map, loss_map_mode,
+                                  robust_edge_aware_quantile,
                                   model_config, optim_config,
                                   bilagrid_lr_rgb=0.0, bilagrid_lr_depth=0.0,
                                   bilagrid_lr_normal=0.0,
@@ -583,7 +587,8 @@ class Renderer:
         cfg.loss.w_ssim           = float(w_ssim)
         cfg.loss.num_loss_scales  = int(num_loss_scales)
         cfg.loss.compute_loss_map = bool(compute_loss_map)
-        cfg.loss.structure_only_loss_map = bool(structure_only_loss_map)
+        cfg.loss.loss_map_mode = int(loss_map_mode)
+        cfg.loss.robust_edge_aware_quantile = float(robust_edge_aware_quantile)
         cfg.loss.overexposure_reg_weight = float(overexposure_reg_weight)
         cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
         cfg.densify  = self._build_densify_config(model_config)

@@ -152,19 +152,48 @@ class SpirulaeSplatModelConfig:
         "max":    running max of |w|.
         "median": running median of |w| (approximation).
         "geom":   running geometric mean of |w|."""
-    use_edge_aware_score: bool = False
-    """Whether to use edge aware score to guide densification.
-        If True, it computes edge aware score following https://arxiv.org/abs/2603.08661
-        Note that this is only active when use_revised_densification"""
-    use_loss_map: bool = True
-    """Whether to use loss map to guide densification.
-        Note that this is only active when use_revised_densification."""
-    use_structure_only_loss_map: bool = True
-    """When True, the densification loss map is filled only from the SSIM
-        structure term (no per-pixel L1/L2 / auxiliary supervisory terms and
-        no SSIM luminance/contrast). Intended to bias densification toward
-        pattern/edge mismatches instead of brightness/contrast errors.
+    densify_loss_map_mode: Literal[
+        "none",
+        "loss_full",
+        "ssim_full",
+        "ssim_cs",
+        "ssim_structure",
+        "edge_aware",
+        "robust_edge_aware",
+    ] = "ssim_structure"
+    """What gets accumulated into the per-pixel densification loss map. The
+        loss map is read by raster bwd to weight the per-splat accum_weight.
+        Only active when use_revised_densification. Modes:
+        "none":              no loss map (uniform alpha*T accumulation).
+        "loss_full":         per-pixel L1/L2 + auxiliary supervisory terms +
+                             full SSIM (luminance*contrast*structure).
+        "ssim_full":         full SSIM only.
+        "ssim_cs":           contrast*structure SSIM (no luminance).
+        "ssim_structure":    structure-only SSIM, biases toward pattern/edge
+                             mismatches and ignores brightness/contrast errors.
+        "edge_aware":        canny edge magnitude of GT rgb (Plenoxels-style,
+                             https://arxiv.org/abs/2603.08661). Biases
+                             densification toward GT edges directly, regardless
+                             of how well the splats already reconstruct them.
+        "robust_edge_aware": RobustNeRF-style Tukey biweight on the BT.601
+                             luma of |render - GT|, capped at the per-image
+                             `densify_robust_edge_aware_quantile`, then canny.
+                             Near-zero where the render already matches GT,
+                             zeroed past the quantile cutoff so distractor
+                             pixels (people/cars/operator) don't pull splats
+                             toward them, and luminance-shift tolerant since
+                             a global DC residual has no spatial gradient.
+        For num_loss_scales > 0 the map is computed per scale and the per-scale
+        results are averaged (matches the multi-scale loss accumulation).
         Affects loss_map only; training gradients and scalar losses unchanged."""
+    densify_robust_edge_aware_quantile: float = 0.9
+    """Per-image quantile of the luma residual used as the Tukey biweight
+        cutoff in `robust_edge_aware` mode. Pixels whose residual exceeds this
+        quantile get zero densification weight. Lower values are more
+        aggressive outlier rejection (good for distractor-heavy datasets);
+        higher are more permissive (good for clean datasets where real edges
+        may produce large residuals). Ignored unless
+        `densify_loss_map_mode == "robust_edge_aware"`."""
     use_long_axis_split: bool = True
     """whether to use long-axis split described in https://arxiv.org/abs/2508.12313 for relocation and sample add.
         When combined with use_revised_densification, this can give less blurry background details for unbounded outdoor scenes."""
@@ -339,6 +368,19 @@ class SpirulaeSplatModelConfig:
     early_stop_warmup: int = 12000
     """Warmup steps for early stop, will not early stop before this number of steps
         Recommend setting this number no less than regularization warmups"""
+
+
+# Map densify_loss_map_mode literal -> int passed to the C++ engine. Must
+# stay in sync with DensifyLossMapMode in PerPixelLoss.cuh.
+_DENSIFY_LOSS_MAP_MODE_TO_INT = {
+    "none":              0,
+    "loss_full":         1,
+    "ssim_full":         2,
+    "ssim_cs":           3,
+    "ssim_structure":    4,
+    "edge_aware":        5,
+    "robust_edge_aware": 6,
+}
 
 
 class SpirulaeSplatModel(torch.nn.Module):
@@ -1476,13 +1518,14 @@ class SpirulaeSplatModel(torch.nn.Module):
         loss_weights = self._build_loss_weights(step)
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
-        compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
-        structure_only_loss_map = cfg.use_structure_only_loss_map
+        loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
+        compute_loss_map = (loss_map_mode != 0) or (cfg.compute_hessian_diagonal is not None)
+        robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
 
         # --- Compute loss + backward via core (gradients managed by C++ pool) ---
         loss_dict = self.core.engine_compute_loss_backward(
             step, loss_weights, w_ssim, num_loss_scales, compute_loss_map,
-            structure_only_loss_map,
+            loss_map_mode, robust_edge_aware_quantile,
             overexposure_reg_weight=cfg.overexposure_reg,
         )
 
@@ -1590,8 +1633,9 @@ class SpirulaeSplatModel(torch.nn.Module):
         loss_weights = self._build_loss_weights(step)
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
-        compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
-        structure_only_loss_map = cfg.use_structure_only_loss_map
+        loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
+        compute_loss_map = (loss_map_mode != 0) or (cfg.compute_hessian_diagonal is not None)
+        robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
 
         sh_degree_to_use = step // max(cfg.sh_degree_warmup_every, 1)
         max_steps = self.trainer_config.num_iterations
@@ -1693,7 +1737,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             viewmats, intrins, dist_coeffs,
             gt_rgb, gt_depth, gt_normal, gt_alpha,
             loss_weights, w_ssim, num_loss_scales, compute_loss_map,
-            structure_only_loss_map,
+            loss_map_mode, robust_edge_aware_quantile,
             self.config, self.trainer_config.optimizer,
             bilagrid_cam_indices=bilagrid_cam_indices,
             bilagrid_lr_rgb=bilagrid_lr_rgb,
@@ -1775,8 +1819,9 @@ class SpirulaeSplatModel(torch.nn.Module):
         loss_weights = self._build_loss_weights(step)
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
-        compute_loss_map = cfg.use_loss_map or (cfg.compute_hessian_diagonal is not None)
-        structure_only_loss_map = cfg.use_structure_only_loss_map
+        loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
+        compute_loss_map = (loss_map_mode != 0) or (cfg.compute_hessian_diagonal is not None)
+        robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
 
         sh_degree_to_use = step // max(cfg.sh_degree_warmup_every, 1)
         max_steps = self.trainer_config.num_iterations
@@ -1858,7 +1903,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             step, max_steps,
             sh_degree_to_use,
             loss_weights, w_ssim, num_loss_scales,
-            compute_loss_map, structure_only_loss_map,
+            compute_loss_map, loss_map_mode, robust_edge_aware_quantile,
             self.config, self.trainer_config.optimizer,
             bilagrid_lr_rgb=bilagrid_lr_rgb,
             bilagrid_lr_depth=bilagrid_lr_depth,

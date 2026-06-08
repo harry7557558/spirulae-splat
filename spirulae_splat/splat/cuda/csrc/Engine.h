@@ -116,7 +116,8 @@ std::map<std::string, float> engine_compute_loss_backward(
     float w_ssim,
     int num_loss_scales,
     bool compute_loss_map,
-    bool structure_only_loss_map,
+    int loss_map_mode,
+    float robust_edge_aware_quantile,
     // Image-space overexposure regularization weight (see LossConfig).
     // Zero (default) disables the kernel launch entirely.
     float overexposure_reg_weight = 0.0f

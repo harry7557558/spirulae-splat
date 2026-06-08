@@ -166,7 +166,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("w_ssim",           &LossConfig::w_ssim)
         .def_readwrite("num_loss_scales",  &LossConfig::num_loss_scales)
         .def_readwrite("compute_loss_map", &LossConfig::compute_loss_map)
-        .def_readwrite("structure_only_loss_map", &LossConfig::structure_only_loss_map)
+        .def_readwrite("loss_map_mode", &LossConfig::loss_map_mode)
+        .def_readwrite("robust_edge_aware_quantile", &LossConfig::robust_edge_aware_quantile)
         .def_readwrite("overexposure_reg_weight", &LossConfig::overexposure_reg_weight);
 
     py::class_<OptimConfig>(m, "OptimConfig")

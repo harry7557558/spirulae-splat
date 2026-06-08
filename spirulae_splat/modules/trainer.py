@@ -1018,12 +1018,12 @@ _MODEL_PRESET_3DGS2TR = dict(
     compute_hessian_diagonal="all",
 )
 _MODEL_PRESET_LOW_TEXTURE = dict(
-    use_edge_aware_score=False,
+    densify_loss_map_mode="ssim_structure",
     use_revised_densification=False,
     use_long_axis_split=False,
 )
 _MODEL_PRESET_RICH_TEXTURE = dict(
-    use_edge_aware_score=True,
+    densify_loss_map_mode="edge_aware",
     use_revised_densification=True,
     use_long_axis_split=True,
     max_screen_size=0.2,  # default 0.3
@@ -1134,8 +1134,7 @@ class TrainerConfigAcademicBaseline(TrainerConfig):
         use_bilateral_grid_for_geometry=False,
         use_ppisp=False,
         use_revised_densification=False,
-        use_edge_aware_score=False,
-        use_loss_map=False,
+        densify_loss_map_mode="none",
         use_long_axis_split=False,
         use_fused_proj_bwd_optim=False,
         quantization_level=0,

@@ -7,6 +7,7 @@
 //  - Hard-core padding=same
 
 #include "FusedSSIM.cuh"
+#include "PerPixelLoss.cuh"  // SsimLossMapMode
 
 
 #include <cooperative_groups.h>
@@ -570,9 +571,14 @@ __global__ void memory_efficient_ssim_backward_kernel(
     float* __restrict__ out_ssim_val,
     float ssim_loss_map_weight,
     float* __restrict__ ssim_loss_map,
-    bool structure_only_loss_map
+    int ssim_loss_map_mode  // SsimLossMapMode: 0=skip, 1=LCS, 2=CS, 3=structure
 ) {
     auto block = cg::this_thread_block();
+    // Materialize the loss-map write target up front -- when the mode is
+    // SsimNone (0) we treat ssim_loss_map as null even if the caller passed
+    // a buffer (lets callers reuse one allocation across multiple SSIM calls
+    // with different modes).
+    float* lm_out = (ssim_loss_map_mode != 0) ? ssim_loss_map : nullptr;
 
     const int bIdx   = block.group_index().z;
     const int pix_y  = block.group_index().y * BLOCK_Y_ME + block.thread_index().y;
@@ -749,22 +755,25 @@ __global__ void memory_efficient_ssim_backward_kernel(
         float C_ = 2.f * mu1 * mu2 + kC1;
         float D_ = 2.f * sigma12 + kC2;
 
-        if ((out_ssim_val || ssim_loss_map)
+        if ((out_ssim_val || lm_out)
                 && lx < BLOCK_X_ME && (ly-HALO) < BLOCK_Y_ME
         ) {
             float ssim_v = (C_ * D_) / (A * B);
-            if (ssim_loss_map) {
-                // When structure_only_loss_map is set, write the per-channel
-                // SSIM structure term s(x,y) = (2*sigma12 + C2) / (2*sigma1*
-                // sigma2 + C2) = D_ / (2*sqrt(sigma1_sq*sigma2_sq) + C2)
-                // into the loss map instead of the full SSIM. This isolates
-                // pattern / edge similarity from luminance and contrast,
-                // intended for densification guidance.
+            if (lm_out) {
+                // ssim_loss_map_mode selects which SSIM variant gets folded
+                // into the densification loss map:
+                //   1 = LCS (full SSIM, same as ssim_v).
+                //   2 = CS (contrast*structure) -- D_ / B isolates spatial
+                //       pattern/contrast from luminance.
+                //   3 = structure only -- D_ / (2*sqrt(sigma1*sigma2) + C2),
+                //       biases densification toward pattern/edge mismatches.
                 float lm_v;
-                if (structure_only_loss_map) {
+                if (ssim_loss_map_mode == (int)SsimLossMapMode::SsimCs) {
+                    lm_v = D_ / B;
+                } else if (ssim_loss_map_mode == (int)SsimLossMapMode::SsimStr) {
                     float s1s2 = sqrtf(fmaxf(sigma1_sq, 0.0f) * fmaxf(sigma2_sq, 0.0f));
                     lm_v = D_ / (2.f * s1s2 + kC2);
-                } else {
+                } else {  // SsimFull (1) and any other non-zero value
                     lm_v = ssim_v;
                 }
                 if (ci == 0)
@@ -887,13 +896,13 @@ __global__ void memory_efficient_ssim_backward_kernel(
     #undef sData
     #undef sScratch
 
-    if (ssim_loss_map && pix_x < W && pix_y < H) {
+    if (lm_out && pix_x < W && pix_y < H) {
         float ssim_v = sSsim[threadIdx.y][threadIdx.x] / 3.0f;
         int out_idx = bIdx * num_pix + pix_id;
         if constexpr (inplace)
-            ssim_loss_map[out_idx] += ssim_loss_map_weight * (1.0f - ssim_v);
+            lm_out[out_idx] += ssim_loss_map_weight * (1.0f - ssim_v);
         else
-            ssim_loss_map[out_idx] = 1.0f - ssim_v;
+            lm_out[out_idx] = 1.0f - ssim_v;
     }
     if (out_ssim_val) {
         ssim_val /= 3*B*H*W;
@@ -1017,7 +1026,7 @@ static inline void _launch_fused_ssim_inplace(
     float* ssim_buf,                // non-null to receive SSIM scalar
     TorchTensorView ssim_loss_map,
     float ssim_loss_map_weight,
-    bool structure_only_loss_map
+    int ssim_loss_map_mode
 ) {
     const auto& s = std::get<2>(img1);
     int B = s[0], H = s[1], W = s[2];
@@ -1047,7 +1056,7 @@ static inline void _launch_fused_ssim_inplace(
         ssim_buf,
         ssim_loss_map_weight,
         _nullable_f(ssim_loss_map),
-        structure_only_loss_map
+        ssim_loss_map_mode
     );
 }
 
@@ -1061,7 +1070,7 @@ float fused_ssim_inplace(
     bool return_ssim_val,
     TorchTensorView ssim_loss_map,  // [B, H, W, 1] output, or null
     float ssim_loss_map_weight,
-    bool structure_only_loss_map
+    int ssim_loss_map_mode
 ) {
     float* ssim_buf = nullptr;
     if (return_ssim_val) {
@@ -1072,7 +1081,7 @@ float fused_ssim_inplace(
     _launch_fused_ssim_inplace(
         img1, img2, mask, dL_dmap, dL_dimg1,
         ssim_buf, ssim_loss_map, ssim_loss_map_weight,
-        structure_only_loss_map);
+        ssim_loss_map_mode);
 
     if (return_ssim_val) {
         float val;
@@ -1091,7 +1100,7 @@ float fused_ssim_inplace_async(
     TorchTensorView dL_dimg1,
     TorchTensorView ssim_loss_map,
     float ssim_loss_map_weight,
-    bool structure_only_loss_map,
+    int ssim_loss_map_mode,
     AsyncReadout<float>& readout
 ) {
     float* ssim_buf = DevicePool::global().acquire<float>("ssim_scalar", 1);
@@ -1100,7 +1109,7 @@ float fused_ssim_inplace_async(
     _launch_fused_ssim_inplace(
         img1, img2, mask, dL_dmap, dL_dimg1,
         ssim_buf, ssim_loss_map, ssim_loss_map_weight,
-        structure_only_loss_map);
+        ssim_loss_map_mode);
 
     const float* prev = readout.read_previous();
     float val = prev ? prev[0] : 0.0f;

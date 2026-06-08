@@ -19,12 +19,24 @@ struct LossConfig {
     float w_ssim          = 0.0f;
     int   num_loss_scales = 1;
     bool  compute_loss_map = false;
-    // When true, the densification loss map is filled with the SSIM structure
-    // term only (s(x,y) = (2*sigma12 + C2) / (2*sigma1*sigma2 + C2)) and the
-    // per-pixel L1/L2 + auxiliary supervisory terms are NOT accumulated into
-    // the map. Affects loss_map output only; gradients, scalar loss values
-    // and the SSIM display scalar are unchanged.
-    bool  structure_only_loss_map = false;
+    // Selects what the densification loss map is filled with. See
+    // DensifyLossMapMode in PerPixelLoss.cuh:
+    //   0 = None (no map populated; densification falls back to uniform alpha*T)
+    //   1 = LossFull (per-pixel L1/L2/aux + full SSIM LCS)
+    //   2 = SsimFull (full SSIM LCS only)
+    //   3 = SsimContrastStruct (D_/B, no luminance)
+    //   4 = SsimStructure (structure-only, D_/(2*sqrt(sig1*sig2)+C2))
+    //   5 = EdgeAware (canny edge magnitude of GT rgb)
+    //   6 = RobustEdgeAware (Tukey biweight on |render - GT| + canny;
+    //       cutoff at the per-image robust_edge_aware_quantile of |r|)
+    // Affects loss_map output only; gradients, scalar loss values and the
+    // SSIM display scalar are unchanged.
+    int   loss_map_mode = 0;
+    // Per-image quantile of the BT.601-luma residual used as the Tukey
+    // cutoff in RobustEdgeAware mode. Lower values are more aggressive
+    // outlier rejection (more pixels treated as distractors). Ignored
+    // unless loss_map_mode == 6. Typical values: 0.8-0.95; default 0.9.
+    float robust_edge_aware_quantile = 0.9f;
     // Image-space overexposure regularization weight. When non-zero, a
     // dedicated kernel adds dL/dx of L = w * mean(max(-x, x-1, 0)^2) directly
     // into v_render_rgb (in the pre-bilagrid / pre-PPISP / pre-color-space

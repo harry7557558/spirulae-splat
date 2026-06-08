@@ -42,7 +42,7 @@ float fused_ssim_inplace(
     bool return_ssim_val,
     TorchTensorView ssim_loss_map,  // [B, H, W, 1] output, or null
     float ssim_loss_map_weight,
-    bool structure_only_loss_map
+    int ssim_loss_map_mode
 );
 
 
@@ -54,6 +54,6 @@ float fused_ssim_inplace_async(
     TorchTensorView dL_dimg1,
     TorchTensorView ssim_loss_map,
     float ssim_loss_map_weight,
-    bool structure_only_loss_map,
+    int ssim_loss_map_mode,
     AsyncReadout<float>& readout
 );

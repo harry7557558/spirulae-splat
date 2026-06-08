@@ -71,6 +71,42 @@ struct PerPixelGrads {
     TorchTensorView v_render_Ts, v_rgb_dist, v_depth_dist, v_normal_dist;
 };
 
+// What gets accumulated into the densification loss_map. Numeric values are
+// shared with the Python config (model.py `densify_loss_map_mode`).
+//   None              -> loss_map_out is left null upstream; no kernel writes.
+//   LossFull          -> per-pixel L1/L2/aux + full SSIM(LCS).
+//   SsimFull          -> full SSIM(LCS) only.
+//   SsimContrastStruct -> SSIM contrast*structure (D_/B), no luminance.
+//   SsimStructure     -> SSIM structure only (D_/(2*sqrt(sig1*sig2)+C2)).
+//   EdgeAware         -> canny edge magnitude of GT rgb (Plenoxels-style
+//                        edge guidance, https://arxiv.org/abs/2603.08661).
+//   RobustEdgeAware   -> RobustNeRF-style Tukey biweight on the luma of
+//                        |render - GT|, followed by canny. Suppresses both
+//                        well-reconstructed regions and distractor pixels
+//                        (residuals above the q-quantile).
+enum class DensifyLossMapMode : int {
+    None = 0,
+    LossFull = 1,
+    SsimFull = 2,
+    SsimContrastStruct = 3,
+    SsimStructure = 4,
+    EdgeAware = 5,
+    RobustEdgeAware = 6,
+};
+
+// Mode dispatched to the SSIM kernel (the SSIM kernel doesn't need to know
+// about per-pixel L1/L2 or edge-aware; those are handled outside it).
+//   SsimNone  -> skip SSIM loss_map write.
+//   SsimFull  -> full SSIM(LCS).
+//   SsimCs    -> SSIM contrast*structure.
+//   SsimStr   -> SSIM structure only.
+enum class SsimLossMapMode : int {
+    SsimNone = 0,
+    SsimFull = 1,
+    SsimCs   = 2,
+    SsimStr  = 3,
+};
+
 // Per-step loss values returned by compute_multi_scale_per_pixel_losses.
 // Fields mirror LossIndex (raw weighted sums) plus ssim.
 struct LossValues {
@@ -114,6 +150,7 @@ LossValues compute_multi_scale_per_pixel_losses(
     long num_train_images,
     TorchTensorView camera_indices,
     TorchTensorView loss_map_out,
-    bool structure_only_loss_map,
+    int loss_map_mode,
+    float robust_edge_aware_quantile,
     PerPixelGrads& grads_out
 );

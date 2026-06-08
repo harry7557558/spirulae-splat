@@ -73,7 +73,8 @@ std::map<std::string, float> _engine_train_step_after_setup(
     std::map<std::string, float> loss_dict = engine_compute_loss_backward(
         step, cfg.loss.weights, cfg.loss.w_ssim,
         cfg.loss.num_loss_scales, cfg.loss.compute_loss_map,
-        cfg.loss.structure_only_loss_map,
+        cfg.loss.loss_map_mode,
+        cfg.loss.robust_edge_aware_quantile,
         cfg.loss.overexposure_reg_weight);
 
     // Optimizer (in-place on pool buffers, no copies)

@@ -1,6 +1,7 @@
 #include "PerPixelLoss.cuh"
 #include "FusedSSIM.cuh"
 #include "Interpolation.cuh"
+#include "Densify.cuh"  // canny_edge_filter_tensor
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -708,9 +709,29 @@ LossValues compute_multi_scale_per_pixel_losses(
     long num_train_images,
     TorchTensorView camera_indices,
     TorchTensorView loss_map_out,
-    bool structure_only_loss_map,
+    int loss_map_mode,
+    float robust_edge_aware_quantile,
     PerPixelGrads& grads_out
 ) {
+    const auto _mode = (DensifyLossMapMode)loss_map_mode;
+    // Per-pixel L1/L2/aux terms contribute to the loss map only for LossFull.
+    const bool _per_pixel_write = (_mode == DensifyLossMapMode::LossFull);
+    // SSIM kernel mode: skip its loss_map write entirely for None,
+    // EdgeAware and RobustEdgeAware modes; otherwise dispatch to LCS / CS /
+    // structure.
+    const int _ssim_mode = [&]() -> int {
+        switch (_mode) {
+            case DensifyLossMapMode::LossFull:
+            case DensifyLossMapMode::SsimFull:
+                return (int)SsimLossMapMode::SsimFull;
+            case DensifyLossMapMode::SsimContrastStruct:
+                return (int)SsimLossMapMode::SsimCs;
+            case DensifyLossMapMode::SsimStructure:
+                return (int)SsimLossMapMode::SsimStr;
+            default:
+                return (int)SsimLossMapMode::SsimNone;
+        }
+    }();
     const auto& s = std::get<2>(render_rgb);
     long B = s[0], H = s[1], W = s[2];
 
@@ -808,11 +829,11 @@ LossValues compute_multi_scale_per_pixel_losses(
             loss_map_ptr = _fptr(loss_map_scale);
         }
 
-        // When structure_only_loss_map is set, skip the per-pixel write into
-        // the loss map -- the SSIM call below will populate it with the
-        // structure term only. The per-pixel kernel still runs to compute
-        // raw_losses (used for grad / display).
-        float* per_pixel_loss_map_ptr = structure_only_loss_map ? nullptr : loss_map_ptr;
+        // Per-pixel L1/L2/aux terms are folded into the loss map only when
+        // mode is LossFull. For all other modes (ssim_*, edge_aware, none),
+        // the per-pixel kernel still runs to compute raw_losses (used for
+        // grad / display) but doesn't write into the loss map.
+        float* per_pixel_loss_map_ptr = _per_pixel_write ? loss_map_ptr : nullptr;
         _compute_per_pixel_losses_forward(
             B, ppi, (int)Ws, (int)Hs,
             render_rgb_s[scale], ref_rgb_s[scale], render_depth_s[scale], ref_depth_s[scale],
@@ -898,7 +919,7 @@ LossValues compute_multi_scale_per_pixel_losses(
                 scale_grads.v_render_rgb,
                 loss_map_scale,
                 w_ssim,
-                structure_only_loss_map,
+                _ssim_mode,
                 ssim_readout
             );
         } else {
@@ -909,8 +930,43 @@ LossValues compute_multi_scale_per_pixel_losses(
                 /*return_ssim_val=*/false,
                 loss_map_scale,
                 w_ssim,
-                structure_only_loss_map
+                _ssim_mode
             );
+        }
+
+        // Edge-aware loss maps. The SSIM kernel above skipped its loss-map
+        // write via _ssim_mode = SsimNone for both EdgeAware modes, and the
+        // per-pixel kernel skipped its write via _per_pixel_write = false,
+        // so loss_map_scale is still zero and the kernels below overwrite
+        // it cleanly. Multi-scale handled by the outer accumulator
+        // (avg_pool_upsample_float_kernel) the same way as the SSIM /
+        // per-pixel loss maps.
+        if (_has(loss_map_scale)) {
+            if (_mode == DensifyLossMapMode::EdgeAware) {
+                // Plenoxels-style: canny edge magnitude of GT rgb directly.
+                // No residual-awareness -- biases densification toward GT
+                // structure regardless of how well the splats already
+                // reconstruct it.
+                canny_edge_filter_tensor(
+                    DeviceTensor3D<float3>(ref_rgb_s[scale]),
+                    /*mask_in_ptr=*/_bptr(ref_alpha_s[scale]),
+                    DeviceTensor3D<float>(loss_map_scale)
+                );
+                CHECK_DEVICE_ERROR(cudaGetLastError());
+            } else if (_mode == DensifyLossMapMode::RobustEdgeAware) {
+                // RobustNeRF-style: Tukey biweight on |render - GT| (luma)
+                // capped at the per-image q-quantile, then canny. Near-zero
+                // for well-reconstructed regions, zeroed past the cutoff
+                // so distractor pixels don't pull splats toward them.
+                robust_canny_residual_tensor(
+                    DeviceTensor3D<float3>(render_rgb_s[scale]),
+                    DeviceTensor3D<float3>(ref_rgb_s[scale]),
+                    /*mask_in_ptr=*/_bptr(ref_alpha_s[scale]),
+                    robust_edge_aware_quantile,
+                    DeviceTensor3D<float>(loss_map_scale)
+                );
+                CHECK_DEVICE_ERROR(cudaGetLastError());
+            }
         }
 
         if (scale == 0)

@@ -240,3 +240,12 @@ void canny_edge_filter_tensor(
     bool* mask_in_ptr,
     DeviceTensor3D<float> img_out
 );
+
+
+void robust_canny_residual_tensor(
+    DeviceTensor3D<float3> render,   // [B, H, W, 3]
+    DeviceTensor3D<float3> ref,      // [B, H, W, 3]
+    bool* mask_in_ptr,               // optional [B*H*W] mask; nullptr for none
+    float quantile,                  // Tukey cutoff = per-image q-quantile of |r|
+    DeviceTensor3D<float> img_out    // [B, H, W, 1] -- written (not added)
+);
