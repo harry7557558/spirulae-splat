@@ -188,6 +188,56 @@ def extract_rosbag_frames(bag_path, image_dir, enhance_dir, max_frames, skip, ke
         print("Detected image topics:", all_image_topics)
 
 
+def _get_video_codec(video_path):
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name", "-of", "csv=p=0", video_path
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return result.stdout.strip().lower()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def _iter_frames_cv2(video_path):
+    video = cv2.VideoCapture(video_path)
+    if not video.isOpened():
+        print(f"Error: could not open {video_path}")
+        return
+    try:
+        while True:
+            success, frame = video.read()
+            if not success:
+                break
+            yield frame
+    finally:
+        video.release()
+
+
+def _iter_frames_pyav(video_path):
+    try:
+        import av
+    except ImportError:
+        print("Error: PyAV is required for AV1 video decoding.")
+        print("Install it with:  pip install av")
+        exit(1)
+    container = av.open(video_path)
+    try:
+        for frame in container.decode(video=0):
+            yield frame.to_ndarray(format='bgr24')
+    finally:
+        container.close()
+
+
+def iter_video_frames(video_path):
+    codec = _get_video_codec(video_path)
+    if codec == 'av1':
+        print(f"AV1 codec detected, using PyAV decoder.")
+        return _iter_frames_pyav(video_path)
+    return _iter_frames_cv2(video_path)
+
+
 def extract_video_frames(video_path, image_dir, enhance_dir, max_frames, skip, keep):
 
     def get_video_streams(video_path):
@@ -228,22 +278,13 @@ def extract_video_frames(video_path, image_dir, enhance_dir, max_frames, skip, k
             out_image_dir = image_dir
             out_enhance_dir = enhance_dir
 
-        video = cv2.VideoCapture(track_video_path)
-        if not video.isOpened():
-            print(f"Error: could not open {track_video_path}")
-            continue
-
         frame_selector = FrameSelector(out_image_dir, out_enhance_dir, max_frames, skip, keep)
 
-        while True:
-            success, frame = video.read()
-            if not success:
-                break
+        for frame in iter_video_frames(track_video_path):
             if not frame_selector.add_frame(frame):
                 break
 
         frame_selector.conclude()
-        video.release()
 
         if len(streams) > 1:
             os.remove(track_video_path)
