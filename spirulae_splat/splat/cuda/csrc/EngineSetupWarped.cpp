@@ -6,9 +6,10 @@
 // post-split output buffer; no intermediate full-resolution float image
 // is ever materialized.
 //
-// Depth / normal / PPISP are intentionally unsupported on this path -- the
-// caller must check up-front (the C++ side gives a hard error here if the
-// caller forgets).
+// Depth / normal GT are unsupported on this path (the warp kernels operate
+// only on RGB + binary mask). PPISP IS supported: it runs render-side on
+// the post-split pinhole sub-cameras, and N_grids must be sized to the
+// post-split camera count (one parameter slot per sub-camera).
 
 #include "Engine.h"
 #include "EngineCommon.h"
@@ -69,12 +70,9 @@ void set_training_data_warped(
     // by DataManager).
     uint64_t axes_dev)
 {
-    // ---- Refuse unsupported combinations early -----------------------------
-    if (engine().ppisp.enabled) {
-        throw std::runtime_error(
-            "set_training_data_warped: PPISP is not supported on the warp "
-            "path. Disable PPISP or disable warp_to_pinhole.");
-    }
+    // PPISP runs render-side on the POST-split pinhole sub-cameras (same
+    // shape as the bilagrid RGB path), so it works unchanged here -- no
+    // refusal needed.
     // Depth / normal: warp path doesn't supply them, but if the engine still
     // has stale ones around from a prior step, drop them so the loss kernels
     // see "no GT depth / normal" (rather than mismatched-shape garbage).

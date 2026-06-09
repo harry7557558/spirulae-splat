@@ -218,7 +218,7 @@ class SpirulaeSplatModelConfig:
         This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/)."""
     bilagrid_shape: Tuple[int, int, int] = (16, 16, 8)
     """Shape of the bilateral grid, typically `16 16 8`, or `8 8 4` for scenes with low-texture surfaces."""
-    bilagrid_type: Literal["affine", "ppisp", "loglinear"] = "loglinear"
+    bilagrid_type: Literal["affine", "ppisp", "loglinear"] = "ppisp"
     """What the bilateral grid predicts.
         affine: 4x3 matrix per original bilateral grid.
         ppisp: PPISP exposure and color parameters, generally gives less color shift but can be less numerically stable.
@@ -228,7 +228,7 @@ class SpirulaeSplatModelConfig:
     """If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)"""
     bilagrid_shape_geometry: Tuple[int, int, int] = (8, 8, 4)
     """Shape of the bilateral grid for depth and normal (X, Y, W)"""
-    use_adagrad_bilagrid_optim: bool = False
+    use_adagrad_bilagrid_optim: bool = True
     """Use AdaGrad (lr_decay=0, weight_decay=0, initial_accumulator_value=0,
        eps=1e-15) instead of Adam for all bilateral-grid parameters (RGB +
        depth + normal). When True, the bilagrid LR fields read from
@@ -237,7 +237,7 @@ class SpirulaeSplatModelConfig:
        16-bit value + 8x2-bit optimizer state across all three bilagrid types."""
     bilagrid_tv_loss_weight: float = 10.0
     """Total variation loss weight for bilateral grid used for radiance"""
-    bilagrid_shift_reg_weight: float = 0.0
+    bilagrid_shift_reg_weight: float = 0.1
     """RGB bilagrid color-shift regularizer. Penalizes the
         dataset-wide mean of sign(post-bilagrid - pre-bilagrid) per channel:
         R = w * ||EMA[mean_p sign(post - pre)]||^2. The gradient is injected
@@ -250,15 +250,24 @@ class SpirulaeSplatModelConfig:
         beta = max(0, 1 - 1/period). Should be roughly the number of batches
         per epoch so the EMA estimates the dataset-wide mean. Ignored when
         bilagrid_shift_reg_weight = 0."""
-    optimize_bilagrid_frequencies: bool = False
-    """Whether to optimize bilagrid parameters in frequency domain instead of time domain"""
     bilagrid_tv_loss_weight_geometry: float = 10.0
     """Total variation loss weight for bilateral grid used for geometry"""
-    use_ppisp: bool = False
+    use_ppisp: bool = True
     """If True, use the PPISP model (https://research.nvidia.com/labs/sil/projects/ppisp/) to handle per-pixel color distortions."""
     ppisp_param_type: Literal["original", "rqs"] = "rqs"
     """Parameterization for PPISP. "original" implements the original paper,
         "rqs" uses a parameterization that is more friendly to optimization and can produce better results in darker areas."""
+    use_adagrad_ppisp_optim: bool = True
+    """Use unscheduled AdaGrad (lr_decay=0, weight_decay=0,
+       initial_accumulator_value=0, eps=1e-15) instead of Adam for the PPISP
+       parameter table. When True, the PPISP LR reads from
+       ``OptimizerConfig.ppisp_adagrad_lr`` (constant) instead of the scheduled
+       ``ppisp_lr``. No quantization path either way."""
+    apply_ppisp_before_bilagrid: bool = True
+    """When True, the PPISP forward runs BEFORE the RGB bilagrid (and PPISP
+       backward runs AFTER bilagrid backward), i.e. render -> PPISP -> bilagrid
+       -> loss. Otherwise: render -> bilagrid -> PPISP -> loss. Only meaningful
+       when both ``use_bilateral_grid`` and ``use_ppisp`` are enabled."""
     ppisp_reg_exposure_mean: float = 1.0
     """Encourage exposure mean ~ 0 to resolve SH <-> exposure ambiguity in PPISP."""
     ppisp_reg_vig_center: float = 0.02
@@ -810,12 +819,15 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         # PPISP (RGB only): config flag + positive base LR. Always has supervision
         # via the rendering loss; no dataset-side gating needed.
+        _ppisp_lr_init = (optim_cfg.ppisp_adagrad_lr
+                          if cfg.use_adagrad_ppisp_optim else optim_cfg.ppisp_lr)
         if (not self._ppisp_init
                 and cfg.use_ppisp
-                and optim_cfg.ppisp_lr > 0.0):
+                and _ppisp_lr_init > 0.0):
             self.core.engine_init_ppisp(
                 self.num_train_data,
-                param_type=cfg.ppisp_param_type
+                param_type=cfg.ppisp_param_type,
+                use_adagrad=cfg.use_adagrad_ppisp_optim,
             )
             self._ppisp_init = True
 
@@ -1704,7 +1716,9 @@ class SpirulaeSplatModel(torch.nn.Module):
         # PPISP: zero LR and reg weights when not yet initialized — C++ side
         # treats this as a no-op.
         if self._ppisp_init:
-            ppisp_lr = optim_cfg.get_scheduled_lr('ppisp', step, max_steps_lr)
+            ppisp_lr = optim_cfg.get_scheduled_lr(
+                'ppisp_adagrad' if cfg.use_adagrad_ppisp_optim else 'ppisp',
+                step, max_steps_lr)
             ppisp_reg_exposure_mean   = cfg.ppisp_reg_exposure_mean
             ppisp_reg_vig_center      = cfg.ppisp_reg_vig_center
             ppisp_reg_vig_non_pos     = cfg.ppisp_reg_vig_non_pos
@@ -1755,6 +1769,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             ppisp_reg_vig_channel_var=ppisp_reg_vig_channel_var,
             ppisp_reg_color_mean=ppisp_reg_color_mean,
             ppisp_reg_crf_channel_var=ppisp_reg_crf_channel_var,
+            apply_ppisp_before_bilagrid=cfg.apply_ppisp_before_bilagrid,
             bg_lr_dc=bg_lr_dc,
             bg_lr_sh=bg_lr_sh,
             bg_randomize_weight=bg_randomize_weight,
@@ -1883,7 +1898,9 @@ class SpirulaeSplatModel(torch.nn.Module):
 
         # PPISP per-step args.
         if self._ppisp_init:
-            ppisp_lr = optim_cfg.get_scheduled_lr('ppisp', step, max_steps_lr)
+            ppisp_lr = optim_cfg.get_scheduled_lr(
+                'ppisp_adagrad' if cfg.use_adagrad_ppisp_optim else 'ppisp',
+                step, max_steps_lr)
             ppisp_reg_exposure_mean   = cfg.ppisp_reg_exposure_mean
             ppisp_reg_vig_center      = cfg.ppisp_reg_vig_center
             ppisp_reg_vig_non_pos     = cfg.ppisp_reg_vig_non_pos
@@ -1920,6 +1937,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             ppisp_reg_vig_channel_var=ppisp_reg_vig_channel_var,
             ppisp_reg_color_mean=ppisp_reg_color_mean,
             ppisp_reg_crf_channel_var=ppisp_reg_crf_channel_var,
+            apply_ppisp_before_bilagrid=cfg.apply_ppisp_before_bilagrid,
             bg_lr_dc=bg_lr_dc,
             bg_lr_sh=bg_lr_sh,
             bg_randomize_weight=bg_randomize_weight,

@@ -59,15 +59,15 @@ __global__ void bilagrid_rgb_shift_reg_inject_kernel(
         float3 post = post_rgb[idx];
         float3 pre  = pre_rgb[idx];
         // sign(x) -> {-1, 0, +1}; (x>0)-(x<0) is branchless.
-        sx = (float)((post.x > pre.x) - (post.x < pre.x));
-        sy = (float)((post.y > pre.y) - (post.y < pre.y));
-        sz = (float)((post.z > pre.z) - (post.z < pre.z));
+        sx = (float)(post.x > pre.x) - (float)(post.x < pre.x);
+        sy = (float)(post.y > pre.y) - (float)(post.y < pre.y);
+        sz = (float)(post.z > pre.z) - (float)(post.z < pre.z);
 
-        // Inject regularizer gradient on POST: + reg_coef * ema_hat[c] * sign(c[c]).
+        // Inject regularizer gradient on POST: - reg_coef * ema_hat[c] * sign(c[c]).
         float3 v = v_render_rgb[idx];
-        v.x += reg_coef * ema_s[0] * sx;
-        v.y += reg_coef * ema_s[1] * sy;
-        v.z += reg_coef * ema_s[2] * sz;
+        v.x -= reg_coef * ema_s[0] * sx;
+        v.y -= reg_coef * ema_s[1] * sy;
+        v.z -= reg_coef * ema_s[2] * sz;
         v_render_rgb[idx] = v;
 
         // Shared-memory atomicAdd is fast on modern GPUs; the 3-channel
@@ -125,12 +125,12 @@ void bilagrid_rgb_shift_reg_step(
     if (weight <= 0.0f || N_pixels <= 0) return;
     if (!shift_reg_ema || !shift_reg_batch_sum) return;
 
-    // Standard Adam-style bias correction. Use (step + 1) since after this
-    // call's update we'll have done that many EMA updates total.
     float bc = 1.0f - powf(beta, (float)(step + 1));
     if (bc < 1e-30f) bc = 1.0f;   // safety; ema is zero in this regime anyway
 
-    float reg_coef = 2.0f * weight / ((float)N_pixels * bc);
+    // float reg_coef = 2.0f * weight / ((float)N_pixels * bc);  // bias correction
+    // float reg_coef = 2.0f * weight / ((float)N_pixels);  // no bias correction
+    float reg_coef = 2.0f * weight * bc / ((float)N_pixels);  // warmup
 
     constexpr int BLOCK_SIZE = 256;
     int blocks = (N_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE;

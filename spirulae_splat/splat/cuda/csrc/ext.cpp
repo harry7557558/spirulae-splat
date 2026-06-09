@@ -225,8 +225,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     py::class_<PpispStepConfig>(m, "PpispStepConfig")
         .def(py::init<>())
-        .def_readwrite("lr",          &PpispStepConfig::lr)
-        .def_readwrite("reg_weights", &PpispStepConfig::reg_weights);
+        .def_readwrite("lr",                  &PpispStepConfig::lr)
+        .def_readwrite("reg_weights",         &PpispStepConfig::reg_weights)
+        .def_readwrite("run_before_bilagrid", &PpispStepConfig::run_before_bilagrid);
 
     py::class_<BackgroundStepConfig>(m, "BackgroundStepConfig")
         .def(py::init<>())

@@ -377,10 +377,15 @@ class Renderer:
             lr_rgb, lr_depth, lr_normal,
             tv_weight_rgb, tv_weight_depth, tv_weight_normal))
 
-    def engine_init_ppisp(self, n_grids, param_type="original"):
+    def engine_init_ppisp(self, n_grids, param_type="original",
+                           use_adagrad=False):
         """One-time allocation of C++ PPISP per-camera parameter table. Seeded
-        with the type's default values. Must be called after set_data_3dgs."""
-        _C.engine_init_ppisp(int(n_grids), str(param_type))
+        with the type's default values. Must be called after set_data_3dgs.
+
+        use_adagrad: select unscheduled AdaGrad (lr_decay=0, weight_decay=0,
+        initial_accumulator_value=0, eps=1e-15) over Adam. PPISP has no
+        quantization path -- state stays fp32 either way."""
+        _C.engine_init_ppisp(int(n_grids), str(param_type), bool(use_adagrad))
 
     def engine_ppisp_forward(self, cam_indices):
         """Apply PPISP forward in place on the current rendered RGB.
@@ -391,7 +396,8 @@ class Renderer:
     def _build_ppisp_step_config(lr,
                                  reg_exposure_mean, reg_vig_center,
                                  reg_vig_non_pos, reg_vig_channel_var,
-                                 reg_color_mean, reg_crf_channel_var):
+                                 reg_color_mean, reg_crf_channel_var,
+                                 run_before_bilagrid=False):
         c = _C.PpispStepConfig()
         c.lr = float(lr)
         # Order must match enum PPISPRegLossIndex
@@ -402,6 +408,9 @@ class Renderer:
             float(reg_vig_non_pos),   float(reg_vig_channel_var),
             float(reg_color_mean),    float(reg_crf_channel_var),
         ]
+        # Forward order: False -> bilagrid then PPISP (default); True -> PPISP
+        # then bilagrid. Backward order is auto-inverted on the C++ side.
+        c.run_before_bilagrid = bool(run_before_bilagrid)
         return c
 
     def engine_ppisp_optim_step(self, step, lr,
@@ -503,6 +512,10 @@ class Renderer:
                           ppisp_reg_exposure_mean=0.0, ppisp_reg_vig_center=0.0,
                           ppisp_reg_vig_non_pos=0.0, ppisp_reg_vig_channel_var=0.0,
                           ppisp_reg_color_mean=0.0, ppisp_reg_crf_channel_var=0.0,
+                          # When True, PPISP forward runs BEFORE bilagrid (and
+                          # PPISP bwd runs AFTER bilagrid bwd). Default False:
+                          # bilagrid -> PPISP. Ignored when only one is enabled.
+                          apply_ppisp_before_bilagrid=False,
                           # Background (ignored if engine_init_background_* was
                           # never called).
                           bg_lr_dc=0.0, bg_lr_sh=0.0,
@@ -532,7 +545,8 @@ class Renderer:
         cfg.ppisp    = self._build_ppisp_step_config(
             ppisp_lr, ppisp_reg_exposure_mean, ppisp_reg_vig_center,
             ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,
-            ppisp_reg_color_mean, ppisp_reg_crf_channel_var)
+            ppisp_reg_color_mean, ppisp_reg_crf_channel_var,
+            run_before_bilagrid=apply_ppisp_before_bilagrid)
         cfg.background = self._build_background_step_config(
             bg_lr_dc, bg_lr_sh, bg_randomize_weight, bg_seed)
 
@@ -570,6 +584,7 @@ class Renderer:
                                   ppisp_reg_exposure_mean=0.0, ppisp_reg_vig_center=0.0,
                                   ppisp_reg_vig_non_pos=0.0, ppisp_reg_vig_channel_var=0.0,
                                   ppisp_reg_color_mean=0.0, ppisp_reg_crf_channel_var=0.0,
+                                  apply_ppisp_before_bilagrid=False,
                                   bg_lr_dc=0.0, bg_lr_sh=0.0,
                                   bg_randomize_weight=0.0, bg_seed=0,
                                   overexposure_reg_weight=0.0):
@@ -600,7 +615,8 @@ class Renderer:
         cfg.ppisp    = self._build_ppisp_step_config(
             ppisp_lr, ppisp_reg_exposure_mean, ppisp_reg_vig_center,
             ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,
-            ppisp_reg_color_mean, ppisp_reg_crf_channel_var)
+            ppisp_reg_color_mean, ppisp_reg_crf_channel_var,
+            run_before_bilagrid=apply_ppisp_before_bilagrid)
         cfg.background = self._build_background_step_config(
             bg_lr_dc, bg_lr_sh, bg_randomize_weight, bg_seed)
 

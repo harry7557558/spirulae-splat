@@ -38,7 +38,7 @@ static TorchTensorView _ppisp_cam_indices_tv() {
     return TorchTensorView((uint64_t)ptr, 4, {n});
 }
 
-void engine_init_ppisp(int n_grids, std::string param_type) {
+void engine_init_ppisp(int n_grids, std::string param_type, bool use_adagrad) {
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_ppisp: n_grids must be > 0");
     int P;
@@ -50,6 +50,7 @@ void engine_init_ppisp(int n_grids, std::string param_type) {
 
     engine().ppisp.param_type = (param_type == "" ? std::string("original") : param_type);
     engine().ppisp.num_params = P;
+    engine().ppisp.use_adagrad = use_adagrad;
     engine().ppisp.params.resize("eng.ppisp.params", n_grids, P);
     if (engine().ppisp.param_type == "original") {
         ppisp_original_default_init(
@@ -98,7 +99,9 @@ void engine_ppisp_forward(TorchTensorView cam_indices) {
     fwd_rgb_tensor = post_rgb;
 }
 
-// Ensure PPISP Adam moment and gradient buffers are allocated + zeroed.
+// Ensure PPISP optimizer state buffers are allocated + zeroed. Adam uses
+// (g1, g2); AdaGrad uses (accum_f). grads is always allocated since both
+// paths read the per-camera parameter gradient.
 void _ensure_ppisp_optim_state() {
     if (engine().ppisp.optim_initialized) return;
     if (engine().ppisp.params.data_ptr() == nullptr) return;
@@ -106,10 +109,15 @@ void _ensure_ppisp_optim_state() {
     int64_t P = engine().ppisp.params.size<1>();
     engine().ppisp.grads.resize("eng.ppisp.grads", N, P);
     engine().ppisp.grads.zero();
-    engine().ppisp.g1.resize("eng.ppisp.g1", N, P);
-    engine().ppisp.g1.zero();
-    engine().ppisp.g2.resize("eng.ppisp.g2", N, P);
-    engine().ppisp.g2.zero();
+    if (engine().ppisp.use_adagrad) {
+        engine().ppisp.accum_f.resize("eng.ppisp.accum", N, P);
+        engine().ppisp.accum_f.zero();
+    } else {
+        engine().ppisp.g1.resize("eng.ppisp.g1", N, P);
+        engine().ppisp.g1.zero();
+        engine().ppisp.g2.resize("eng.ppisp.g2", N, P);
+        engine().ppisp.g2.zero();
+    }
     engine().ppisp.optim_initialized = true;
 }
 
@@ -235,14 +243,22 @@ void engine_ppisp_optim_step(int step, const PpispStepConfig& cfg) {
         TorchTensorView tv((uint64_t)p, 4, {numel, 1LL});
         return DeviceTensorFloatND(tv);
     };
-    DeviceVector<int32_t> no_per_splat_steps;
-    fused_adam_step(
-        numel,
-        flat_view(engine().ppisp.params.data_ptr()),
-        flat_view(engine().ppisp.grads.data_ptr()),
-        flat_view(engine().ppisp.g1.data_ptr()),
-        flat_view(engine().ppisp.g2.data_ptr()),
-        cfg.lr, step + 1, no_per_splat_steps,
-        /*l2_reg=*/0.0f, /*l2_reg_offset=*/0.0f);
+    if (engine().ppisp.use_adagrad) {
+        fused_adagrad_step(
+            flat_view(engine().ppisp.params.data_ptr()),
+            flat_view(engine().ppisp.grads.data_ptr()),
+            flat_view(engine().ppisp.accum_f.data_ptr()),
+            cfg.lr);
+    } else {
+        DeviceVector<int32_t> no_per_splat_steps;
+        fused_adam_step(
+            numel,
+            flat_view(engine().ppisp.params.data_ptr()),
+            flat_view(engine().ppisp.grads.data_ptr()),
+            flat_view(engine().ppisp.g1.data_ptr()),
+            flat_view(engine().ppisp.g2.data_ptr()),
+            cfg.lr, step + 1, no_per_splat_steps,
+            /*l2_reg=*/0.0f, /*l2_reg_offset=*/0.0f);
+    }
     engine().ppisp.grads.zero();
 }

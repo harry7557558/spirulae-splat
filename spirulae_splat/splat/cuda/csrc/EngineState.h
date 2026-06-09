@@ -326,15 +326,27 @@ struct ColorSpaceState {
 };
 
 // PPISP (RGB-only photometric correction; applied AFTER bilagrid).
+//
+// Optimizer selection (set at engine_init_ppisp):
+//   use_adagrad=false -> Adam: g1 (1st moment) + g2 (2nd moment), both fp32.
+//   use_adagrad=true  -> unscheduled AdaGrad: accum_f (squared-grad sum), fp32.
+// No quantization path for PPISP (parameter table is small: N_cam x ~36 fp).
 struct PpispState {
     DeviceTensor2D<float>  params;
     DeviceTensor2D<float>  grads;
-    DeviceTensor2D<float>  g1, g2;
+    DeviceTensor2D<float>  g1, g2;        // Adam (use_adagrad=false)
+    DeviceTensor2D<float>  accum_f;       // AdaGrad (use_adagrad=true)
     DeviceTensor3D<float3> fwd_pre;
     std::string param_type;
     int  num_params         = 0;
     bool enabled            = false;
     bool optim_initialized  = false;
+    bool use_adagrad        = false;
+    // Per-iteration: mirrors PpispStepConfig::run_before_bilagrid for the
+    // current step. The forward path stashes this before launching bilagrid /
+    // PPISP forwards; the backward hooks in EngineLoss.cpp read it back to
+    // invert the order. Reset each step.
+    bool cur_run_before_bilagrid = false;
 };
 
 

@@ -336,7 +336,10 @@ class Trainer:
             post_offsets.append(acc); acc += k
         n_post = acc
 
-        # Warp path cannot supply depth / normal / PPISP supervision.
+        # Warp path cannot supply depth / normal supervision (the warp kernels
+        # operate only on RGB + binary mask). PPISP IS supported on warp: it's
+        # render-side and runs on the POST-split pinhole sub-cameras, with one
+        # parameter slot per sub-camera (n_post total).
         if any_warp:
             if dm_cfg.load_depths and dpo['metadata'].get('depth_filenames', None):
                 raise NotImplementedError(
@@ -345,9 +348,6 @@ class Trainer:
             if dm_cfg.load_normals and dpo['metadata'].get('normal_filenames', None):
                 raise NotImplementedError(
                     "use_cpp_data_manager warp does not support normal supervision yet.")
-            if getattr(model_cfg, 'use_ppisp', False):
-                raise NotImplementedError(
-                    "use_cpp_data_manager warp does not support PPISP yet.")
 
         # ---- Per-INPUT c2w / intrins / dist_coeffs (raw, host) ----------
         c2w_all = cameras.camera_to_worlds.detach().cpu()

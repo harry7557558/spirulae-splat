@@ -392,6 +392,7 @@ class OptimizerConfig:
     ppisp_lr: float = 2e-3
     ppisp_lr_final: Optional[float] = 2e-5
     ppisp_lr_warmup: int = 500   # TODO: pre-warmup
+    ppisp_adagrad_lr: float = 1e-1
     camera_opt_lr: float = 1e-4
     camera_opt_lr_final: Optional[float] = 5e-7
     camera_opt_lr_warmup: int = 1000

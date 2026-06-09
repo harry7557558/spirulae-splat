@@ -49,16 +49,21 @@ std::map<std::string, float> _engine_train_step_after_setup(
     // place on fwd.renders.rgb when an engine background mode is active.
     forward_3dgs(primitive, sh_degree, packed);
 
-    // Bilagrid forward (between rendering and loss). No-op when disabled.
-    if (engine().bilagrid_rgb.enabled || engine().bilagrid_depth.enabled ||
-        engine().bilagrid_normal.enabled) {
-        engine_bilagrid_forward(bilagrid_cam_indices);
-    }
-
-    // PPISP forward (in place on rendered RGB, AFTER bilagrid). No-op when
-    // disabled.
-    if (engine().ppisp.enabled) {
-        engine_ppisp_forward(bilagrid_cam_indices);
+    // Forward order between bilagrid and PPISP is configurable via
+    // cfg.ppisp.run_before_bilagrid. Default (false): bilagrid -> PPISP.
+    // True: PPISP -> bilagrid. Both individually no-op when disabled. The
+    // bilagrid depth/normal forwards (GT-side) are independent of PPISP, so
+    // they're grouped with the RGB call regardless of order.
+    engine().ppisp.cur_run_before_bilagrid = cfg.ppisp.run_before_bilagrid;
+    const bool bg_enabled = engine().bilagrid_rgb.enabled ||
+                            engine().bilagrid_depth.enabled ||
+                            engine().bilagrid_normal.enabled;
+    if (engine().ppisp.cur_run_before_bilagrid) {
+        if (engine().ppisp.enabled) engine_ppisp_forward(bilagrid_cam_indices);
+        if (bg_enabled)             engine_bilagrid_forward(bilagrid_cam_indices);
+    } else {
+        if (bg_enabled)             engine_bilagrid_forward(bilagrid_cam_indices);
+        if (engine().ppisp.enabled) engine_ppisp_forward(bilagrid_cam_indices);
     }
 
     // Stash the color-shift regularizer per-step args for the bilagrid bwd

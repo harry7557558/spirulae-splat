@@ -946,6 +946,48 @@ void fused_adam_step(
 }
 
 
+// Unscheduled fp32 AdaGrad:
+//     accum += g*g
+//     x    -= lr * g / (sqrt(accum) + eps)
+// Matches torch.optim.Adagrad(lr_decay=0, weight_decay=0,
+// initial_accumulator_value=0, eps=1e-15).
+__global__ void fused_adagrad_kernel(
+    float* __restrict__ param,
+    const float* __restrict__ grad,
+    float* __restrict__ accum,
+    const float lr,
+    const int64_t numel
+) {
+    static constexpr float eps = 1e-15f;
+    const int64_t idx = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    if (idx >= numel) return;
+    float v = grad[idx];
+    if (!isfinite(v)) v = 0.0f;
+    float a = accum[idx] + v * v;
+    param[idx] -= lr * v / (sqrtf(a) + eps);
+    accum[idx] = a;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_adagrad_step(
+    DeviceTensorFloatND param,
+    DeviceTensorFloatND grad,
+    DeviceTensorFloatND accum,
+    float lr
+) {
+    int64_t numel = param.numel();
+    if (numel == 0) return;
+    fused_adagrad_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
+        param.data_ptr(),
+        grad.data_ptr(),
+        accum.data_ptr(),
+        lr,
+        numel
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
 template<int BLOCK_SIZE, int QUANT_BITS = 8>
 __global__ void fused_adam_with_steps_8bit_kernel(
     float* __restrict__ param,

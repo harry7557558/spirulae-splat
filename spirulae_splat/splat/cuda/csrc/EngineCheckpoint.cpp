@@ -348,6 +348,7 @@ void engine_save_checkpoint(
             meta << "ppisp_enabled=1\n";
             meta << "ppisp_param_type=" << s.ppisp.param_type << "\n";
             meta << "ppisp_num_params=" << s.ppisp.num_params << "\n";
+            meta << "ppisp_use_adagrad=" << (s.ppisp.use_adagrad ? 1 : 0) << "\n";
         }
     }
 
@@ -572,10 +573,14 @@ void engine_save_checkpoint(
                   s.bilagrid_normal.quant_state,
                   s.bilagrid_normal.accum_f, s.bilagrid_normal.adagrad_quant);
 
-    // PPISP table + Adam moments.
+    // PPISP table + optimizer state (Adam g1/g2 or AdaGrad accum).
     if (s.ppisp.enabled) {
         save_dt2d_f("ppisp.npy",    s.ppisp.params);
-        save_dt2d_f("ppisp_g1.npy", s.ppisp.g1);
-        save_dt2d_f("ppisp_g2.npy", s.ppisp.g2);
+        if (s.ppisp.use_adagrad) {
+            save_dt2d_f("ppisp_accum.npy", s.ppisp.accum_f);
+        } else {
+            save_dt2d_f("ppisp_g1.npy", s.ppisp.g1);
+            save_dt2d_f("ppisp_g2.npy", s.ppisp.g2);
+        }
     }
 }

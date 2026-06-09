@@ -144,6 +144,14 @@ void fused_adam_step(
 );
 
 
+void fused_adagrad_step(
+    DeviceTensorFloatND param,
+    DeviceTensorFloatND grad,
+    DeviceTensorFloatND accum,
+    float lr
+);
+
+
 void fused_adam_step_quantized(
     int64_t num_splats,
     DeviceTensorFloatND param,

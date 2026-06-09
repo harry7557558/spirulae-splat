@@ -159,7 +159,12 @@ void engine_bilagrid_optim_step(int step, const BilagridStepConfig& cfg);
 // --- PPISP (RGB only, applied AFTER bilagrid). ---
 // Allocates a per-camera PPISP parameter table and seeds it with the type's
 // default values ("original" -> 12 zeros, 12 zeros, 3x(a,a,b,0); "rqs" -> all 0).
-void engine_init_ppisp(int n_grids, std::string param_type);
+//
+// use_adagrad: if true, PPISP uses unscheduled AdaGrad (lr_decay=0,
+// weight_decay=0, initial_accumulator_value=0, eps=1e-15) instead of Adam.
+// No quantization path is provided for PPISP either way -- the parameter
+// table is small (N_cam x ~36 floats), so the fp32 store/state suffices.
+void engine_init_ppisp(int n_grids, std::string param_type, bool use_adagrad);
 
 // Apply PPISP forward in place on the current rendered RGB; saves a pre-PPISP
 // copy used by backward. cam_indices: [C_batch] int32, or null/empty for
@@ -167,9 +172,10 @@ void engine_init_ppisp(int n_grids, std::string param_type);
 // when bilagrid is also enabled).
 void engine_ppisp_forward(TorchTensorView cam_indices);
 
-// Adam step over the PPISP parameter table. Also folds in the 6 PPISP
-// regularization-loss gradients (using the provided per-loss weights) before
-// the Adam update. Pass loss weights in PPISPRegLossIndex order.
+// Optimizer step over the PPISP parameter table (Adam or AdaGrad depending on
+// use_adagrad at init). Also folds in the 6 PPISP regularization-loss gradients
+// (using the provided per-loss weights) before the update. Pass loss weights
+// in PPISPRegLossIndex order.
 void engine_ppisp_optim_step(int step, const PpispStepConfig& cfg);
 
 // --- Background blending (applied BEFORE bilagrid/PPISP) ---

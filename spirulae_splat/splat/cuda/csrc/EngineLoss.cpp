@@ -198,37 +198,47 @@ std::map<std::string, float> engine_compute_loss_backward(
         pixel_grads
     );
 
-    // --- PPISP backward hook ---
-    // Forward order is render -> bilagrid -> PPISP -> loss, so PPISP backward
-    // runs FIRST: it rewrites v_render_rgb (post-PPISP -> pre-PPISP) and
-    // accumulates the per-camera PPISP parameter gradient. The bilagrid hook
-    // below then consumes the pre-PPISP v_render_rgb.
-    if (engine().ppisp.enabled) {
-        _ensure_ppisp_optim_state();
-        _engine_ppisp_backward_hook(pixel_grads.v_render_rgb);
-    }
-
-    // --- Bilagrid backward hook ---
-    // Transforms v_render_rgb (post-bilagrid -> pre-bilagrid) and accumulates
-    // gradients into bilagrid_*_grads for any enabled bilagrid types. The
-    // updated v_render_rgb then flows into rasterization backward as usual.
-    // For depth / normal (gt-side), the loss-side gradient is consumed here
-    // and only the bilagrid grid gradient is retained.
-    if (engine().bilagrid_rgb.enabled || engine().bilagrid_depth.enabled ||
-        engine().bilagrid_normal.enabled) {
-        _ensure_bilagrid_optim_state();
-        _engine_bilagrid_backward_hook(
-            pixel_grads.v_render_rgb,
-            pixel_grads.v_ref_depth,
-            pixel_grads.v_ref_normal);
+    // --- PPISP / Bilagrid backward hooks ---
+    // Backward order is the inverse of forward (set in EngineTrainStep.cpp
+    // and stashed on engine().ppisp.cur_run_before_bilagrid):
+    //   forward bilagrid->PPISP  =>  backward PPISP first, then bilagrid.
+    //   forward PPISP->bilagrid  =>  backward bilagrid first, then PPISP.
+    // Each hook rewrites v_render_rgb (post-<self> -> pre-<self>) and
+    // accumulates parameter grads into its own buffer; the next hook then
+    // consumes the rewritten v_render_rgb. Depth/normal grids are GT-side
+    // and live entirely inside the bilagrid hook regardless of order.
+    auto _ppisp_bwd = [&]() {
+        if (engine().ppisp.enabled) {
+            _ensure_ppisp_optim_state();
+            _engine_ppisp_backward_hook(pixel_grads.v_render_rgb);
+        }
+    };
+    auto _bilagrid_bwd = [&]() {
+        if (engine().bilagrid_rgb.enabled || engine().bilagrid_depth.enabled ||
+            engine().bilagrid_normal.enabled) {
+            _ensure_bilagrid_optim_state();
+            _engine_bilagrid_backward_hook(
+                pixel_grads.v_render_rgb,
+                pixel_grads.v_ref_depth,
+                pixel_grads.v_ref_normal);
+        }
+    };
+    if (engine().ppisp.cur_run_before_bilagrid) {
+        _bilagrid_bwd();
+        _ppisp_bwd();
+    } else {
+        _ppisp_bwd();
+        _bilagrid_bwd();
     }
 
     // --- Color space backward hook ---
-    // Forward order is render -> bg -> rgb_to_srgb -> bilagrid -> PPISP ->
-    // loss, so the color space backward runs BETWEEN bilagrid bwd and the
-    // background bwd. It rewrites v_render_rgb (sRGB -> linear/wide-gamut)
-    // and restores engine().fwd.renders.rgb to the pre-conversion values
-    // so the background bwd consumes the right rgb. No-op when disabled.
+    // Forward order is render -> bg -> rgb_to_srgb -> {bilagrid, PPISP} ->
+    // loss (bilagrid/PPISP ordered per cfg.ppisp.run_before_bilagrid). Color
+    // space sits BEFORE both, so the bwd hook runs AFTER both bilagrid and
+    // PPISP bwd, regardless of their relative order. It rewrites v_render_rgb
+    // (sRGB -> linear/wide-gamut) and restores engine().fwd.renders.rgb to
+    // the pre-conversion values so the background bwd consumes the right rgb.
+    // No-op when disabled.
     if (engine().color_space.splat_enabled) {
         _engine_color_space_backward_hook(pixel_grads.v_render_rgb);
     }
