@@ -177,6 +177,62 @@ void bilagrid_ppisp_patched_sample_forward(
     cudaStream_t stream
 );
 
+// Grad-equality test: runs ONLY the grid-grad pass (v_bilagrid), with a
+// runtime choice between the original kernel and the shmem-preload variant.
+// Skips the rgb-grad companion pass (unchanged across variants).
+void bilagrid_loglinear_uniform_sample_backward_v1_choice(
+    BilagridReader bilagrid,
+    const float* rgb,
+    const float* v_output,
+    float* v_bilagrid,
+    int N, int L, int H, int W,
+    int h, int w,
+    const int target_tile_size,
+    bool use_shmem,
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
+);
+
+void bilagrid_normal_uniform_sample_backward_v1_choice(
+    BilagridReader bilagrid,
+    const float* rgb,
+    const float* v_output,
+    float* v_bilagrid,
+    int N, int L, int H, int W,
+    int h, int w,
+    const int target_tile_size,
+    bool use_shmem,
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
+);
+
+void bilagrid_depth_uniform_sample_backward_v1_choice(
+    BilagridReader bilagrid,
+    const float* depth,
+    const float* scalars,
+    const float* v_output,
+    float* v_bilagrid,
+    int N, int L, int H, int W,
+    int h, int w,
+    const int target_tile_size,
+    bool use_shmem,
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
+);
+
+void bilagrid_ppisp_uniform_sample_backward_v1_choice(
+    BilagridReader bilagrid,
+    const float* rgb,
+    const float* v_output,
+    float* v_bilagrid,
+    int N, int L, int H, int W,
+    int h, int w,
+    const int target_tile_size,
+    bool use_shmem,
+    cudaStream_t stream,
+    const int* grid_indices = nullptr
+);
+
 void bilagrid_ppisp_uniform_sample_backward_v1(
     BilagridReader bilagrid,
     const float* rgb,
@@ -469,6 +525,43 @@ void bilagrid_ppisp_uniform_sample_backward_tensor(
     TorchTensorView v_rgb,       // [N,m,h,w,3]
     int version,
     int target_tile_size
+);
+
+void bilagrid_ppisp_uniform_sample_backward_grid_grad_tensor(
+    TorchTensorView bilagrid,
+    TorchTensorView rgb,
+    TorchTensorView v_output,
+    TorchTensorView v_bilagrid,
+    int target_tile_size,
+    bool use_shmem
+);
+
+void bilagrid_loglinear_uniform_sample_backward_grid_grad_tensor(
+    TorchTensorView bilagrid,
+    TorchTensorView rgb,
+    TorchTensorView v_output,
+    TorchTensorView v_bilagrid,
+    int target_tile_size,
+    bool use_shmem
+);
+
+void bilagrid_normal_uniform_sample_backward_grid_grad_tensor(
+    TorchTensorView bilagrid,
+    TorchTensorView rgb,
+    TorchTensorView v_output,
+    TorchTensorView v_bilagrid,
+    int target_tile_size,
+    bool use_shmem
+);
+
+void bilagrid_depth_uniform_sample_backward_grid_grad_tensor(
+    TorchTensorView bilagrid,
+    TorchTensorView depth,
+    TorchTensorView scalars,
+    TorchTensorView v_output,
+    TorchTensorView v_bilagrid,
+    int target_tile_size,
+    bool use_shmem
 );
 
 void bilagrid_loglinear_uniform_sample_forward_tensor(
