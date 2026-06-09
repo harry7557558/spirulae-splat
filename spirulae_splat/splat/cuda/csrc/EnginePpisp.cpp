@@ -44,9 +44,10 @@ void engine_init_ppisp(int n_grids, std::string param_type, bool use_adagrad) {
     int P;
     if (param_type == "original" || param_type == "") P = 36;
     else if (param_type == "rqs") P = 39;
+    else if (param_type == "no_crf") P = 24;
     else throw std::runtime_error(
         "engine_init_ppisp: unknown param_type \"" + param_type +
-        "\", must be \"original\" or \"rqs\"");
+        "\", must be \"original\", \"rqs\", or \"no_crf\"");
 
     engine().ppisp.param_type = (param_type == "" ? std::string("original") : param_type);
     engine().ppisp.num_params = P;
@@ -161,9 +162,10 @@ float* _engine_ppisp_reg_loss_into(
     bool compute_grad
 ) {
     int N = (int)engine().ppisp.params.size<0>();
-    int kRaw = (engine().ppisp.param_type == "rqs")
-        ? (int)RawPPISPRegLossIndexRQS::length
-        : (int)RawPPISPRegLossIndex::length;
+    int kRaw =
+        (engine().ppisp.param_type == "rqs")    ? (int)RawPPISPRegLossIndexRQS::length :
+        (engine().ppisp.param_type == "no_crf") ? (int)RawPPISPRegLossIndexNoCRF::length :
+                                                  (int)RawPPISPRegLossIndex::length;
     int kLoss = (int)PPISPRegLossIndex::length;
 
     // Output losses (zeroed each call so the in-kernel write is a clean store).

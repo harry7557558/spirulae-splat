@@ -237,7 +237,7 @@ class SpirulaeSplatModelConfig:
        16-bit value + 8x2-bit optimizer state across all three bilagrid types."""
     bilagrid_tv_loss_weight: float = 10.0
     """Total variation loss weight for bilateral grid used for radiance"""
-    color_shift_reg_weight: float = 0.1
+    color_shift_reg_weight: float = 0.0
     """Color-shift regularizer for the combined bilagrid + PPISP color
         transform. Penalizes the dataset-wide mean of sign(post - pre) per
         channel, where `pre` is the splat-side rendered RGB (input to whichever
@@ -256,9 +256,10 @@ class SpirulaeSplatModelConfig:
     """Total variation loss weight for bilateral grid used for geometry"""
     use_ppisp: bool = True
     """If True, use the PPISP model (https://research.nvidia.com/labs/sil/projects/ppisp/) to handle per-pixel color distortions."""
-    ppisp_param_type: Literal["original", "rqs"] = "rqs"
+    ppisp_param_type: Literal["original", "rqs", "no_crf"] = "no_crf"
     """Parameterization for PPISP. "original" implements the original paper,
-        "rqs" uses a parameterization that is more friendly to optimization and can produce better results in darker areas."""
+        "rqs" uses a parameterization that is more friendly to optimization and can produce better results in darker areas,
+        "no_crf" omits the tone-curve (CRF) stage entirely and just clamps colors to [0,1] after exposure/vignetting/color correction."""
     use_adagrad_ppisp_optim: bool = True
     """Use unscheduled AdaGrad (lr_decay=0, weight_decay=0,
        initial_accumulator_value=0, eps=1e-15) instead of Adam for the PPISP

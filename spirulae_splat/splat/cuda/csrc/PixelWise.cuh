@@ -29,6 +29,28 @@ enum class RawPPISPRegLossIndex {
     length
 };
 
+enum class RawPPISPRegLossIndexNoCRF {
+    SumExposure,
+    SumVignettingCrSquared,
+    SumVignettingAlpha0Relu,
+    SumVignettingAlpha1Relu,
+    SumVignettingAlpha2Relu,
+    SumVignettingCxChannelVariance,
+    SumVignettingCyChannelVariance,
+    SumVignettingAlpha0ChannelVariance,
+    SumVignettingAlpha1ChannelVariance,
+    SumVignettingAlpha2ChannelVariance,
+    SumColorBx,
+    SumColorBy,
+    SumColorRx,
+    SumColorRy,
+    SumColorGx,
+    SumColorGy,
+    SumColorNx,
+    SumColorNy,
+    length
+};
+
 enum class RawPPISPRegLossIndexRQS {
     SumExposure,
     SumVignettingCrSquared,
