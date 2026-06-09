@@ -216,11 +216,19 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
 
             float fx = x - x0, fy = y - y0, fz = z - z0;
 
-            // Shmem indices for the 8 corners. The preload clamped indices
-            // identically, so these are guaranteed in [0, kPpispShmemFoot*).
-            const int sx0 = x0 - base_xi, sx1 = x1 - base_xi;
-            const int sy0 = y0 - base_yi, sy1 = y1 - base_yi;
-            const int sz0 = z0 - base_zi, sz1 = z1 - base_zi;
+            // Shmem indices for the 8 corners. Clamp defensively: with
+            // --use_fast_math, the pixel-loop's x = wi*(W-1)/(w-1) can round
+            // just below the integer it equals exactly under exact arithmetic
+            // (happens when wi falls on a `(xi-1)*(w-1)/(W-1)` integer
+            // boundary), producing x0 = xi-2 even though the loop bound
+            // assumed x0 >= xi-1. At such a boundary fx ~ 1 so the v0**
+            // weights are ~0 -- the clamp introduces sub-ULP error in accum.
+            const int sx0 = max(x0 - base_xi, 0);
+            const int sx1 = min(x1 - base_xi, kPpispShmemFootX - 1);
+            const int sy0 = max(y0 - base_yi, 0);
+            const int sy1 = min(y1 - base_yi, kPpispShmemFootY - 1);
+            const int sz0 = max(z0 - base_zi, 0);
+            const int sz1 = min(z1 - base_zi, kPpispShmemFootZ - 1);
 
             float exposure_param;
             ColorPPISPParams color_params;

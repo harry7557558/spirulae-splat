@@ -203,9 +203,14 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
                 if (xi == x1 && yi == y1) accum_t += fx * fy * fz;
             }
 
-            const int sx0 = x0 - base_xi, sx1 = x1 - base_xi;
-            const int sy0 = y0 - base_yi, sy1 = y1 - base_yi;
-            const int sz0 = z0 - base_zi, sz1 = z1 - base_zi;
+            // Clamp defensively: see BilagridPpispUniformSampleBwdV1_kernel.cuh
+            // for the fast-math integer-boundary rationale.
+            const int sx0 = max(x0 - base_xi, 0);
+            const int sx1 = min(x1 - base_xi, kDepthShmemFootX - 1);
+            const int sy0 = max(y0 - base_yi, 0);
+            const int sy1 = min(y1 - base_yi, kDepthShmemFootY - 1);
+            const int sz0 = max(z0 - base_zi, 0);
+            const int sz1 = min(z1 - base_zi, kDepthShmemFootZ - 1);
 
             float affine[kDepthShmemChans];
             #pragma unroll
