@@ -21,7 +21,6 @@
 #include "Optimizer.cuh"
 #include "FusedProjectionBwdOptim.cuh"
 #include "Densify.cuh"
-#include "BilagridBindings.h"
 #include "BilagridUtils.cuh"
 #include "Visualizer.cuh"
 
@@ -112,17 +111,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("ppisp_backward", &ppisp_backward);
     m.def("compute_ppsip_regularization_forward", &compute_ppsip_regularization_forward);
     m.def("compute_ppsip_regularization_backward", &compute_ppsip_regularization_backward);
-
-    // PPISP bilagrid v1 backward grid-grad pass, runtime kernel selector.
-    // Test/benchmark only; production code path picks at compile time.
-    m.def("bilagrid_ppisp_uniform_sample_backward_grid_grad",
-          &bilagrid_ppisp_uniform_sample_backward_grid_grad_tensor);
-    m.def("bilagrid_loglinear_uniform_sample_backward_grid_grad",
-          &bilagrid_loglinear_uniform_sample_backward_grid_grad_tensor);
-    m.def("bilagrid_normal_uniform_sample_backward_grid_grad",
-          &bilagrid_normal_uniform_sample_backward_grid_grad_tensor);
-    m.def("bilagrid_depth_uniform_sample_backward_grid_grad",
-          &bilagrid_depth_uniform_sample_backward_grid_grad_tensor);
 
     // FusedSSIM.cuh
     m.def("fused_ssim_forward", &fused_ssim_forward);

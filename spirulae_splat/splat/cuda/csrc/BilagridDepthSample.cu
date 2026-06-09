@@ -1,13 +1,10 @@
 #include "BilagridDepthSampleFwd_kernel.cuh"
 #include "BilagridDepthSampleBwdV1_kernel.cuh"
-#define BILAGRID_DEPTH_BWD_V1_USE_SHMEM
-#include "BilagridDepthSampleBwdV1Shmem_kernel.cuh"
 // #include "uniform_sample_depth_backward_v2.cu"
 
 #define PATCHED
 #include "BilagridDepthSampleFwd_kernel.cuh"
 #include "BilagridDepthSampleBwdV1_kernel.cuh"
-#include "BilagridDepthSampleBwdV1Shmem_kernel.cuh"
 // #include "uniform_sample_depth_backward_v2.cu"
 
 
@@ -56,68 +53,6 @@ void bilagrid_depth_patched_sample_forward(
 }
 
 
-template <bool USE_SHMEM>
-static inline void _bilagrid_depth_uniform_sample_bwd_v1_grid_grad(
-    BilagridReader bilagrid,
-    const float* depth,
-    const float* scalars,
-    const float* v_output,
-    float* v_bilagrid,
-    int N, int L, int H, int W,
-    int h, int w,
-    const int target_tile_size,
-    cudaStream_t stream,
-    const int* grid_indices
-) {
-    dim3 block = { kBilagridBwdV1BlockX, kBilagridBwdV1BlockY, kBilagridBwdV1BlockZ };
-    int mult_x = (2*w+W)/(block.x*W*target_tile_size);
-    int mult_y = (2*h+H)/(block.y*H*target_tile_size);
-    if (mult_x * mult_y < 4)
-        mult_x = mult_y = 1;
-    else {
-        mult_x = max(mult_x, 1) * block.x;
-        mult_y = max(mult_y, 1) * block.y;
-    }
-    dim3 bounds = {
-        (W*mult_x +block.x-1)/block.x,
-        (H*mult_y +block.y-1)/block.y,
-        (N*L +block.z-1)/block.z
-    };
-    if constexpr (USE_SHMEM) {
-        bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid_shmem<<<bounds, block, 0, stream>>>(
-            bilagrid, depth, scalars, v_output, v_bilagrid,
-            N, L, H, W, h, w, mult_x, mult_y, grid_indices);
-    } else {
-        bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid<<<bounds, block, 0, stream>>>(
-            bilagrid, depth, scalars, v_output, v_bilagrid,
-            N, L, H, W, h, w, mult_x, mult_y, grid_indices);
-    }
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-}
-
-void bilagrid_depth_uniform_sample_backward_v1_choice(
-    BilagridReader bilagrid,
-    const float* depth,
-    const float* scalars,
-    const float* v_output,
-    float* v_bilagrid,
-    int N, int L, int H, int W,
-    int h, int w,
-    const int target_tile_size,
-    bool use_shmem,
-    cudaStream_t stream,
-    const int* grid_indices
-) {
-    if (use_shmem)
-        _bilagrid_depth_uniform_sample_bwd_v1_grid_grad<true>(
-            bilagrid, depth, scalars, v_output, v_bilagrid, N, L, H, W, h, w,
-            target_tile_size, stream, grid_indices);
-    else
-        _bilagrid_depth_uniform_sample_bwd_v1_grid_grad<false>(
-            bilagrid, depth, scalars, v_output, v_bilagrid, N, L, H, W, h, w,
-            target_tile_size, stream, grid_indices);
-}
-
 void bilagrid_depth_uniform_sample_backward_v1(
     BilagridReader bilagrid,
     const float* depth,
@@ -132,13 +67,30 @@ void bilagrid_depth_uniform_sample_backward_v1(
     const int* grid_indices
 ) {
     // v_bilagrid (always needed: trains the bilagrid depth grid)
-#ifdef BILAGRID_DEPTH_BWD_V1_USE_SHMEM
-    _bilagrid_depth_uniform_sample_bwd_v1_grid_grad<true>(
-#else
-    _bilagrid_depth_uniform_sample_bwd_v1_grid_grad<false>(
-#endif
-        bilagrid, depth, scalars, v_output, v_bilagrid, N, L, H, W, h, w,
-        target_tile_size, stream, grid_indices);
+    {
+        dim3 block = { kBilagridBwdV1BlockX, kBilagridBwdV1BlockY, kBilagridBwdV1BlockZ };
+
+        int mult_x = (2*w+W)/(block.x*W*target_tile_size);
+        int mult_y = (2*h+H)/(block.y*H*target_tile_size);
+        if (mult_x * mult_y < 4)
+            mult_x = mult_y = 1;
+        else {
+            mult_x = max(mult_x, 1) * block.x;
+            mult_y = max(mult_y, 1) * block.y;
+        }
+
+        dim3 bounds = {
+            (W*mult_x +block.x-1)/block.x,
+            (H*mult_y +block.y-1)/block.y,
+            (N*L +block.z-1)/block.z
+        };
+        bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid<<<bounds, block, 0, stream>>>(
+            bilagrid, depth, scalars, v_output, v_bilagrid,
+            N, L, H, W, h, w, mult_x, mult_y,
+            grid_indices
+        );
+        CHECK_DEVICE_ERROR(cudaGetLastError());
+    }
 
     // v_depth: gradient w.r.t. pre-bilagrid input depth (i.e., the raw GT).
     // Skipped when the caller passes null — GT isn't a trainable parameter.
