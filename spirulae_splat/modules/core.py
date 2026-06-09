@@ -226,7 +226,9 @@ class Renderer:
                                      num_loss_scales, compute_loss_map,
                                      loss_map_mode,
                                      robust_edge_aware_quantile,
-                                     overexposure_reg_weight=0.0):
+                                     overexposure_reg_weight=0.0,
+                                     color_shift_reg_weight=0.0,
+                                     color_shift_reg_beta=0.0):
         """Compute loss + rasterization backward + projection backward in C++.
         Gradients are managed by C++ pool."""
         loss_dict = _C.engine_compute_loss_backward(
@@ -234,6 +236,8 @@ class Renderer:
             int(loss_map_mode),
             float(robust_edge_aware_quantile),
             float(overexposure_reg_weight),
+            float(color_shift_reg_weight),
+            float(color_shift_reg_beta),
         )
         return loss_dict
 
@@ -356,9 +360,7 @@ class Renderer:
 
     @staticmethod
     def _build_bilagrid_step_config(lr_rgb, lr_depth, lr_normal,
-                                     tv_weight_rgb, tv_weight_depth, tv_weight_normal,
-                                     shift_reg_weight_rgb=0.0,
-                                     shift_reg_beta_rgb=0.0):
+                                     tv_weight_rgb, tv_weight_depth, tv_weight_normal):
         c = _C.BilagridStepConfig()
         c.lr_rgb           = float(lr_rgb)
         c.lr_depth         = float(lr_depth)
@@ -366,8 +368,6 @@ class Renderer:
         c.tv_weight_rgb    = float(tv_weight_rgb)
         c.tv_weight_depth  = float(tv_weight_depth)
         c.tv_weight_normal = float(tv_weight_normal)
-        c.shift_reg_weight_rgb = float(shift_reg_weight_rgb)
-        c.shift_reg_beta_rgb   = float(shift_reg_beta_rgb)
         return c
 
     def engine_bilagrid_optim_step(self, step, lr_rgb, lr_depth, lr_normal,
@@ -502,10 +502,6 @@ class Renderer:
                           bilagrid_lr_rgb=0.0, bilagrid_lr_depth=0.0, bilagrid_lr_normal=0.0,
                           bilagrid_tv_weight_rgb=0.0, bilagrid_tv_weight_depth=0.0,
                           bilagrid_tv_weight_normal=0.0,
-                          # RGB bilagrid color-shift regularizer (design 1).
-                          # 0 disables. beta is the EMA decay.
-                          bilagrid_shift_reg_weight_rgb=0.0,
-                          bilagrid_shift_reg_beta_rgb=0.0,
                           # PPISP (ignored if engine_init_ppisp was never called).
                           # Reuses bilagrid_cam_idx for the camera selector.
                           ppisp_lr=0.0,
@@ -522,7 +518,12 @@ class Renderer:
                           bg_randomize_weight=0.0, bg_seed=0,
                           # Image-space overexposure regularization (model.py
                           # config field). Zero -> kernel not launched.
-                          overexposure_reg_weight=0.0):
+                          overexposure_reg_weight=0.0,
+                          # Combined bilagrid + PPISP color-shift regularizer
+                          # (design 1). Active when at least one of bilagrid_rgb
+                          # / PPISP is enabled. 0 disables.
+                          color_shift_reg_weight=0.0,
+                          color_shift_reg_beta=0.0):
         """Single fused training step (set_camera + set_gt + fwd + loss/bwd + optim + densify).
         All input tensors are CPU; returns loss_dict for verbose."""
         max_steps_lr = optim_config.max_steps if optim_config.max_steps is not None else max_steps
@@ -535,13 +536,13 @@ class Renderer:
         cfg.loss.loss_map_mode = int(loss_map_mode)
         cfg.loss.robust_edge_aware_quantile = float(robust_edge_aware_quantile)
         cfg.loss.overexposure_reg_weight = float(overexposure_reg_weight)
+        cfg.loss.color_shift_reg_weight = float(color_shift_reg_weight)
+        cfg.loss.color_shift_reg_beta   = float(color_shift_reg_beta)
         cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
         cfg.densify  = self._build_densify_config(model_config)
         cfg.bilagrid = self._build_bilagrid_step_config(
             bilagrid_lr_rgb, bilagrid_lr_depth, bilagrid_lr_normal,
-            bilagrid_tv_weight_rgb, bilagrid_tv_weight_depth, bilagrid_tv_weight_normal,
-            shift_reg_weight_rgb=bilagrid_shift_reg_weight_rgb,
-            shift_reg_beta_rgb=bilagrid_shift_reg_beta_rgb)
+            bilagrid_tv_weight_rgb, bilagrid_tv_weight_depth, bilagrid_tv_weight_normal)
         cfg.ppisp    = self._build_ppisp_step_config(
             ppisp_lr, ppisp_reg_exposure_mean, ppisp_reg_vig_center,
             ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,
@@ -578,8 +579,6 @@ class Renderer:
                                   bilagrid_tv_weight_rgb=0.0,
                                   bilagrid_tv_weight_depth=0.0,
                                   bilagrid_tv_weight_normal=0.0,
-                                  bilagrid_shift_reg_weight_rgb=0.0,
-                                  bilagrid_shift_reg_beta_rgb=0.0,
                                   ppisp_lr=0.0,
                                   ppisp_reg_exposure_mean=0.0, ppisp_reg_vig_center=0.0,
                                   ppisp_reg_vig_non_pos=0.0, ppisp_reg_vig_channel_var=0.0,
@@ -587,7 +586,9 @@ class Renderer:
                                   apply_ppisp_before_bilagrid=False,
                                   bg_lr_dc=0.0, bg_lr_sh=0.0,
                                   bg_randomize_weight=0.0, bg_seed=0,
-                                  overexposure_reg_weight=0.0):
+                                  overexposure_reg_weight=0.0,
+                                  color_shift_reg_weight=0.0,
+                                  color_shift_reg_beta=0.0):
         """DataManager-driven fused training step.
 
         Same EngineStepConfig as ``engine_train_step`` but no per-batch tensors —
@@ -605,13 +606,13 @@ class Renderer:
         cfg.loss.loss_map_mode = int(loss_map_mode)
         cfg.loss.robust_edge_aware_quantile = float(robust_edge_aware_quantile)
         cfg.loss.overexposure_reg_weight = float(overexposure_reg_weight)
+        cfg.loss.color_shift_reg_weight = float(color_shift_reg_weight)
+        cfg.loss.color_shift_reg_beta   = float(color_shift_reg_beta)
         cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
         cfg.densify  = self._build_densify_config(model_config)
         cfg.bilagrid = self._build_bilagrid_step_config(
             bilagrid_lr_rgb, bilagrid_lr_depth, bilagrid_lr_normal,
-            bilagrid_tv_weight_rgb, bilagrid_tv_weight_depth, bilagrid_tv_weight_normal,
-            shift_reg_weight_rgb=bilagrid_shift_reg_weight_rgb,
-            shift_reg_beta_rgb=bilagrid_shift_reg_beta_rgb)
+            bilagrid_tv_weight_rgb, bilagrid_tv_weight_depth, bilagrid_tv_weight_normal)
         cfg.ppisp    = self._build_ppisp_step_config(
             ppisp_lr, ppisp_reg_exposure_mean, ppisp_reg_vig_center,
             ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,

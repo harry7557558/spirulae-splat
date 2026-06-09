@@ -59,11 +59,13 @@ void bilagrid_encode_q16_launch(
     cudaStream_t stream
 );
 
-// --- RGB color-shift regularizer (BilagridShiftReg.cu). ---
-// Injects design (1) gradient on the POST-bilagrid v_render_rgb buffer and
-// updates an on-device per-channel EMA of mean(sign(post - pre)). All on
-// `stream`; no D->H readbacks.
-void bilagrid_rgb_shift_reg_step(
+// --- Color-shift regularizer for bilagrid + PPISP (ColorShiftReg.cu). ---
+// Injects design (1) gradient on the POST-transforms v_render_rgb buffer and
+// updates an on-device per-channel EMA of mean(sign(post - pre)). `pre` is
+// the splat-side rendered RGB (input to whichever of bilagrid / PPISP runs
+// first); `post` is the final post-both-transforms image. All on `stream`;
+// no D->H readbacks.
+void color_shift_reg_step(
     float* v_render_rgb,
     const float* post_rgb,
     const float* pre_rgb,

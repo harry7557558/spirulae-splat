@@ -120,7 +120,11 @@ std::map<std::string, float> engine_compute_loss_backward(
     float robust_edge_aware_quantile,
     // Image-space overexposure regularization weight (see LossConfig).
     // Zero (default) disables the kernel launch entirely.
-    float overexposure_reg_weight = 0.0f
+    float overexposure_reg_weight = 0.0f,
+    // Color-shift regularizer for combined bilagrid + PPISP (see LossConfig).
+    // Zero (default) disables the kernel launch entirely.
+    float color_shift_reg_weight  = 0.0f,
+    float color_shift_reg_beta    = 0.0f
 );
 
 // --- Optimizer step ---

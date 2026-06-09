@@ -221,18 +221,23 @@ struct BilagridRGB {
     DeviceTensor3D<float3>     fwd_pre;            // pre-bilagrid render
     std::string type;
     int         C = 0;
-    // Color-shift regularizer (design 1): EMA of mean_per_pixel(sign(post-pre))
-    // per channel, all on device. shift_reg_steps counts EMA updates so far
-    // (host int); the device-side EMA is not bias-corrected itself --
-    // BilagridShiftReg.cu applies (1 - beta^t) in the inject kernel's
-    // coefficient. Stashed per-step weight + beta read out of cur_shift_reg_*
-    // in the bwd hook (set from BilagridStepConfig before loss/backward).
-    DeviceVector<float> shift_reg_ema;       // [3]
-    DeviceVector<float> shift_reg_batch_sum; // [3] scratch (atomic-accumulated)
-    int64_t shift_reg_steps        = 0;
-    bool    shift_reg_initialized  = false;
-    float   cur_shift_reg_weight   = 0.0f;
-    float   cur_shift_reg_beta     = 0.0f;
+};
+
+// Color-shift regularizer (design 1): EMA of mean_per_pixel(sign(post-pre))
+// per channel, all on device. `steps` counts EMA updates so far (host int);
+// the device-side EMA is not bias-corrected itself -- ColorShiftReg.cu applies
+// (1 - beta^t) in the inject kernel's coefficient. `cur_weight` / `cur_beta`
+// are stashed per step from LossConfig and read by the loss bwd just before
+// the bilagrid / PPISP bwd hooks consume v_render_rgb. The state is shared
+// across both transforms because the regularizer penalizes their composed
+// effect, not either one in isolation.
+struct ColorShiftRegState {
+    DeviceVector<float> ema;        // [3]
+    DeviceVector<float> batch_sum;  // [3] scratch (atomic-accumulated)
+    int64_t steps        = 0;
+    bool    initialized  = false;
+    float   cur_weight   = 0.0f;
+    float   cur_beta     = 0.0f;
 };
 struct BilagridDepth {
     DeviceTensor5D<float>      grids;
@@ -426,6 +431,7 @@ struct EngineState {
     EngineBackground background;
     PpispState       ppisp;
     ColorSpaceState  color_space;
+    ColorShiftRegState color_shift_reg;
 
     // Viewer (BVH + thumbnail cache + dataset camera arrays).
     EngineViewerState viewer;

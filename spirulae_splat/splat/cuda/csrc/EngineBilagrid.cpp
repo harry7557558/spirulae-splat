@@ -377,38 +377,6 @@ void _engine_bilagrid_backward_hook(
         float* v_rgb_ptr = (float*)std::get<0>(v_render_rgb);
         const float* rgb_pre_ptr = (const float*)engine().bilagrid_rgb.fwd_pre.data_ptr();
 
-        // Color-shift regularizer (design 1): add the EMA-weighted gradient
-        // term to the POST-bilagrid v_render_rgb BEFORE bilagrid bwd runs, so
-        // the bilagrid vjp can route it to the grid params. All on device.
-        // post_rgb buffer is the bilagrid forward output, still pointed to by
-        // engine().fwd.renders.rgb at this point (color-space bwd runs AFTER
-        // this hook, not before).
-        if (engine().bilagrid_rgb.cur_shift_reg_weight > 0.0f) {
-            auto& bg = engine().bilagrid_rgb;
-            // Lazy-allocate the [3]-float EMA + batch-sum scratch on first hit.
-            if (!bg.shift_reg_initialized) {
-                bg.shift_reg_ema.resize("eng.bg.rgb.shift_reg_ema", 3);
-                bg.shift_reg_ema.zero();
-                bg.shift_reg_batch_sum.resize("eng.bg.rgb.shift_reg_bs", 3);
-                bg.shift_reg_batch_sum.zero();
-                bg.shift_reg_steps = 0;
-                bg.shift_reg_initialized = true;
-            }
-            const float* rgb_post_ptr =
-                (const float*)std::get<0>(engine().fwd.renders).data_ptr();
-            int N_pixels = C_batch * H * W;
-            bilagrid_rgb_shift_reg_step(
-                v_rgb_ptr, rgb_post_ptr, rgb_pre_ptr,
-                bg.shift_reg_ema.data_ptr(),
-                bg.shift_reg_batch_sum.data_ptr(),
-                N_pixels,
-                bg.cur_shift_reg_weight,
-                bg.cur_shift_reg_beta,
-                bg.shift_reg_steps,
-                kBilagridStream);
-            bg.shift_reg_steps += 1;
-        }
-
         if (engine().bilagrid_rgb.type == "affine") {
             bilagrid_uniform_sample_backward_v1(
                 grid_ptr, rgb_pre_ptr, v_rgb_ptr,

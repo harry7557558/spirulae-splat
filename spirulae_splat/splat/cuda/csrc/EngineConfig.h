@@ -43,6 +43,17 @@ struct LossConfig {
     // working space, which is what raster bwd consumes). The scalar loss is
     // never computed.
     float overexposure_reg_weight = 0.0f;
+    // Color-shift regularizer (design 1, ColorShiftReg.cu). Penalizes the
+    // dataset-wide mean sign(post - pre) across the COMBINED bilagrid + PPISP
+    // color transform: `pre` is the input to whichever of the two runs first
+    // and `post` is the final post-both image fed to the photometric loss.
+    // Zero disables the kernel launch entirely. beta is the EMA decay (e.g.
+    // 1 - 1/T where T = #batches per epoch); ignored when weight is 0.
+    // Applied during loss backward, BEFORE either bilagrid or PPISP bwd hooks
+    // consume v_render_rgb. Active when at least one of bilagrid_rgb / PPISP
+    // is enabled.
+    float color_shift_reg_weight = 0.0f;
+    float color_shift_reg_beta   = 0.0f;
 };
 
 
@@ -149,13 +160,6 @@ struct BilagridStepConfig {
     float tv_weight_rgb  = 0.0f;
     float tv_weight_depth = 0.0f;
     float tv_weight_normal = 0.0f;
-    // RGB color-shift regularizer (design 1, BilagridShiftReg.cu). Penalizes
-    // the dataset-wide mean sign(post - pre); zero disables the kernel launch
-    // entirely. beta is the EMA decay (e.g. 1 - 1/T where T = #batches per
-    // epoch); ignored when weight is 0. Applied during loss backward, BEFORE
-    // bilagrid bwd consumes v_render_rgb.
-    float shift_reg_weight_rgb = 0.0f;
-    float shift_reg_beta_rgb   = 0.0f;
 };
 
 

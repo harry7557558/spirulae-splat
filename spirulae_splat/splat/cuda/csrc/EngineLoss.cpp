@@ -69,7 +69,9 @@ std::map<std::string, float> engine_compute_loss_backward(
     bool compute_loss_map,
     int loss_map_mode,
     float robust_edge_aware_quantile,
-    float overexposure_reg_weight
+    float overexposure_reg_weight,
+    float color_shift_reg_weight,
+    float color_shift_reg_beta
 ) {
     // Validate that forward was run
     if (std::get<0>(engine().fwd.renders) .data_ptr() == nullptr)
@@ -197,6 +199,63 @@ std::map<std::string, float> engine_compute_loss_backward(
         robust_edge_aware_quantile,
         pixel_grads
     );
+
+    // --- Color-shift regularizer (combined bilagrid + PPISP) ---
+    // Inject the design-(1) gradient on v_render_rgb BEFORE either bilagrid /
+    // PPISP bwd runs, so each transform's vjp routes the contribution to its
+    // own parameter gradient. `pre` is the input to whichever of the two
+    // ran first in fwd; `post` is the final post-both-transforms image, which
+    // is still pointed to by engine().fwd.renders.rgb at this point (color
+    // space bwd runs strictly after the PPISP/bilagrid hooks).
+    {
+        const bool bg_rgb_on = engine().bilagrid_rgb.enabled;
+        const bool ppisp_on  = engine().ppisp.enabled;
+        if (color_shift_reg_weight > 0.0f && (bg_rgb_on || ppisp_on)) {
+            // Identify the "pre" buffer = input to the FIRST forward transform.
+            // Forward order (set in EngineTrainStep.cpp):
+            //   run_before_bilagrid=false -> bilagrid -> PPISP : pre = bilagrid_rgb.fwd_pre
+            //   run_before_bilagrid=true  -> PPISP    -> bilagrid : pre = ppisp.fwd_pre
+            // When only one of the two is on, that one's fwd_pre is the splat
+            // output regardless of the flag.
+            const float* pre_ptr = nullptr;
+            if (bg_rgb_on && ppisp_on) {
+                pre_ptr = engine().ppisp.cur_run_before_bilagrid
+                    ? (const float*)engine().ppisp.fwd_pre.data_ptr()
+                    : (const float*)engine().bilagrid_rgb.fwd_pre.data_ptr();
+            } else if (bg_rgb_on) {
+                pre_ptr = (const float*)engine().bilagrid_rgb.fwd_pre.data_ptr();
+            } else {
+                pre_ptr = (const float*)engine().ppisp.fwd_pre.data_ptr();
+            }
+            const float* post_ptr =
+                (const float*)std::get<0>(engine().fwd.renders).data_ptr();
+            float* v_rgb_ptr = (float*)std::get<0>(pixel_grads.v_render_rgb);
+            if (pre_ptr != nullptr && post_ptr != nullptr && v_rgb_ptr != nullptr) {
+                auto& cs = engine().color_shift_reg;
+                if (!cs.initialized) {
+                    cs.ema.resize("eng.color_shift_reg.ema", 3);
+                    cs.ema.zero();
+                    cs.batch_sum.resize("eng.color_shift_reg.batch_sum", 3);
+                    cs.batch_sum.zero();
+                    cs.steps = 0;
+                    cs.initialized = true;
+                }
+                cs.cur_weight = color_shift_reg_weight;
+                cs.cur_beta   = color_shift_reg_beta;
+                int N_pixels = (int)(C * H * W);
+                color_shift_reg_step(
+                    v_rgb_ptr, post_ptr, pre_ptr,
+                    cs.ema.data_ptr(),
+                    cs.batch_sum.data_ptr(),
+                    N_pixels,
+                    cs.cur_weight,
+                    cs.cur_beta,
+                    cs.steps,
+                    /*stream=*/(cudaStream_t)0);
+                cs.steps += 1;
+            }
+        }
+    }
 
     // --- PPISP / Bilagrid backward hooks ---
     // Backward order is the inverse of forward (set in EngineTrainStep.cpp

@@ -168,7 +168,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("compute_loss_map", &LossConfig::compute_loss_map)
         .def_readwrite("loss_map_mode", &LossConfig::loss_map_mode)
         .def_readwrite("robust_edge_aware_quantile", &LossConfig::robust_edge_aware_quantile)
-        .def_readwrite("overexposure_reg_weight", &LossConfig::overexposure_reg_weight);
+        .def_readwrite("overexposure_reg_weight", &LossConfig::overexposure_reg_weight)
+        .def_readwrite("color_shift_reg_weight",  &LossConfig::color_shift_reg_weight)
+        .def_readwrite("color_shift_reg_beta",    &LossConfig::color_shift_reg_beta);
 
     py::class_<OptimConfig>(m, "OptimConfig")
         .def(py::init<>())
@@ -219,9 +221,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("lr_normal",      &BilagridStepConfig::lr_normal)
         .def_readwrite("tv_weight_rgb",  &BilagridStepConfig::tv_weight_rgb)
         .def_readwrite("tv_weight_depth",  &BilagridStepConfig::tv_weight_depth)
-        .def_readwrite("tv_weight_normal", &BilagridStepConfig::tv_weight_normal)
-        .def_readwrite("shift_reg_weight_rgb", &BilagridStepConfig::shift_reg_weight_rgb)
-        .def_readwrite("shift_reg_beta_rgb",   &BilagridStepConfig::shift_reg_beta_rgb);
+        .def_readwrite("tv_weight_normal", &BilagridStepConfig::tv_weight_normal);
 
     py::class_<PpispStepConfig>(m, "PpispStepConfig")
         .def(py::init<>())

@@ -66,21 +66,15 @@ std::map<std::string, float> _engine_train_step_after_setup(
         if (engine().ppisp.enabled) engine_ppisp_forward(bilagrid_cam_indices);
     }
 
-    // Stash the color-shift regularizer per-step args for the bilagrid bwd
-    // hook to read. The hook runs inside engine_compute_loss_backward and
-    // has no other access to BilagridStepConfig.
-    if (engine().bilagrid_rgb.enabled) {
-        engine().bilagrid_rgb.cur_shift_reg_weight = cfg.bilagrid.shift_reg_weight_rgb;
-        engine().bilagrid_rgb.cur_shift_reg_beta   = cfg.bilagrid.shift_reg_beta_rgb;
-    }
-
     // Loss + backward (reads pool, writes pool grads; D->H only for scalar loss values)
     std::map<std::string, float> loss_dict = engine_compute_loss_backward(
         step, cfg.loss.weights, cfg.loss.w_ssim,
         cfg.loss.num_loss_scales, cfg.loss.compute_loss_map,
         cfg.loss.loss_map_mode,
         cfg.loss.robust_edge_aware_quantile,
-        cfg.loss.overexposure_reg_weight);
+        cfg.loss.overexposure_reg_weight,
+        cfg.loss.color_shift_reg_weight,
+        cfg.loss.color_shift_reg_beta);
 
     // Optimizer (in-place on pool buffers, no copies)
     engine_optim_step(step, cfg.optim);

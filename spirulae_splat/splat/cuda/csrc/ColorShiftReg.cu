@@ -1,20 +1,21 @@
-// Bilagrid RGB color-shift regularizer (design 1).
+// Color-shift regularizer for the bilagrid + PPISP color transforms.
 //
-// Goal: penalize the dataset-wide mean direction of the bilagrid correction
+// Goal: penalize the dataset-wide mean direction of the combined
+// (bilagrid+PPISP) color correction
 //
 //     R = w * || E_data[ mean_per_pixel( sign(post - pre) ) ] ||^2
 //
-// where post = bilagrid_forward(pre, grid). Injects the surrogate gradient
+// where `pre` is the splat-side rendered RGB (input to whichever of the two
+// transforms runs first) and `post` is the final post-both-transforms image
+// fed to the photometric loss. Injects the surrogate gradient
 //
 //     v_render_rgb_post[p, c] += (2 * w / (N * (1 - beta^t))) * ema[c] * sign(c_p[c])
 //
-// on the POST-bilagrid loss-side gradient buffer, BEFORE bilagrid_*_backward
-// runs. The bilagrid vjp then routes this contribution to (a) the grid
-// parameter gradient (what we actually want regularized) and (b) a small leak
-// into the pre-bilagrid (splat-side) gradient via the bilagrid's local
-// Jacobian. The leak is ~0 when the bilagrid is near-identity and grows as the
-// bilagrid acquires non-trivial gain - typically harmless given the splats are
-// being driven by the main RGB loss simultaneously.
+// on the POST-transform loss-side gradient buffer, BEFORE either of the
+// bilagrid / PPISP backward hooks runs. Each transform's vjp then routes the
+// contribution to its own parameter gradient (what we actually want
+// regularized) and a small leak into the upstream (splat-side) gradient via
+// its local Jacobian.
 //
 // EMA state is per-channel (3 floats on device). Updated each step as
 //
@@ -31,7 +32,7 @@
 
 
 template<int BLOCK_SIZE>
-__global__ void bilagrid_rgb_shift_reg_inject_kernel(
+__global__ void color_shift_reg_inject_kernel(
     float3* __restrict__ v_render_rgb,        // [N] gradient on POST render
     const float3* __restrict__ post_rgb,       // [N]
     const float3* __restrict__ pre_rgb,        // [N]
@@ -86,7 +87,7 @@ __global__ void bilagrid_rgb_shift_reg_inject_kernel(
 }
 
 
-__global__ void bilagrid_rgb_shift_reg_update_kernel(
+__global__ void color_shift_reg_update_kernel(
     float* __restrict__ ema,           // [3] in-place
     float* __restrict__ batch_sum,      // [3] in-place (reset to 0)
     float beta,
@@ -101,7 +102,7 @@ __global__ void bilagrid_rgb_shift_reg_update_kernel(
 }
 
 
-// Host dispatcher. Caller (the bilagrid bwd hook) is responsible for
+// Host dispatcher. Caller (the loss bwd) is responsible for
 // (1) allocating + zero-initing ema[3] and batch_sum[3] on first use, and
 // (2) tracking `step` (number of EMA updates performed so far, pre-this-call).
 //
@@ -110,7 +111,7 @@ __global__ void bilagrid_rgb_shift_reg_update_kernel(
 // avoid div-by-zero, but it doesn't matter because ema is zero anyway).
 //
 // All work runs on `stream`; no D->H copies, no host sync.
-void bilagrid_rgb_shift_reg_step(
+void color_shift_reg_step(
     float* v_render_rgb,
     const float* post_rgb,
     const float* pre_rgb,
@@ -135,7 +136,7 @@ void bilagrid_rgb_shift_reg_step(
     constexpr int BLOCK_SIZE = 256;
     int blocks = (N_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-    bilagrid_rgb_shift_reg_inject_kernel<BLOCK_SIZE>
+    color_shift_reg_inject_kernel<BLOCK_SIZE>
         <<<blocks, BLOCK_SIZE, 0, stream>>>(
             (float3*)v_render_rgb,
             (const float3*)post_rgb,
@@ -145,7 +146,7 @@ void bilagrid_rgb_shift_reg_step(
             N_pixels,
             reg_coef);
 
-    bilagrid_rgb_shift_reg_update_kernel<<<1, 4, 0, stream>>>(
+    color_shift_reg_update_kernel<<<1, 4, 0, stream>>>(
         shift_reg_ema, shift_reg_batch_sum, beta, 1.0f / (float)N_pixels);
 
     CHECK_DEVICE_ERROR(cudaGetLastError());
