@@ -382,20 +382,20 @@ void _engine_bilagrid_backward_hook(
                 grid_ptr, rgb_pre_ptr, v_rgb_ptr,
                 grad_grid_ptr, v_rgb_ptr,
                 /*N=*/C_batch, L, gH, gW, H, W,
-                /*block_x=*/8, /*block_y=*/8, /*target_tile_size=*/5,
+                /*target_tile_size=*/5,
                 kBilagridStream, cam_idx_dev);
         } else if (engine().bilagrid_rgb.type == "ppisp") {
             bilagrid_ppisp_uniform_sample_backward_v1(
                 grid_ptr, rgb_pre_ptr, v_rgb_ptr,
                 grad_grid_ptr, v_rgb_ptr,
                 /*N=*/C_batch, L, gH, gW, H, W,
-                8, 8, 5, kBilagridStream, cam_idx_dev);
+                5, kBilagridStream, cam_idx_dev);
         } else if (engine().bilagrid_rgb.type == "loglinear") {
             bilagrid_loglinear_uniform_sample_backward_v1(
                 grid_ptr, rgb_pre_ptr, v_rgb_ptr,
                 grad_grid_ptr, v_rgb_ptr,
                 /*N=*/C_batch, L, gH, gW, H, W,
-                8, 8, 5, kBilagridStream, cam_idx_dev);
+                5, kBilagridStream, cam_idx_dev);
         }
     }
 
@@ -429,7 +429,7 @@ void _engine_bilagrid_backward_hook(
             (const float*)std::get<0>(v_ref_depth),
             grad_grid_ptr, /*v_depth=*/nullptr,
             /*N=*/C_batch, L, gH, gW, H_d, W_d,
-            8, 8, 5, kBilagridStream, cam_idx_dev);
+            5, kBilagridStream, cam_idx_dev);
     }
 
     // --- Normal backward (accumulate; discard input grad) ---
@@ -454,7 +454,7 @@ void _engine_bilagrid_backward_hook(
             (const float*)std::get<0>(v_ref_normal),
             grad_grid_ptr, /*v_rgb=*/nullptr,
             /*N=*/C_batch, L, gH, gW, H_n, W_n,
-            8, 8, 5, kBilagridStream, cam_idx_dev);
+            5, kBilagridStream, cam_idx_dev);
     }
 }
 

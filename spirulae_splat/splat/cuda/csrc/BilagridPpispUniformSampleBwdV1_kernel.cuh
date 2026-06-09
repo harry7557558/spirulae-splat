@@ -41,7 +41,7 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
 ) {
 #ifdef PATCHED
-    int idx = blockIdx.z * blockDim.z + threadIdx.z;
+    int idx = blockIdx.z * kBilagridBwdV1BlockZ + threadIdx.z;
     bool inside = (idx < (N*m*L));
     int zi = idx % L; idx /= L;
     int m_batch_i = idx % m_batch_stride; idx /= m_batch_stride;
@@ -53,17 +53,17 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
     // int y_base = max((offset.y * H) / h0 - 1, 0);
     int x_base = 0, y_base = 0;
 
-    int x_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int y_idx = blockIdx.y * blockDim.y + threadIdx.y;
+    int x_idx = blockIdx.x * kBilagridBwdV1BlockX + threadIdx.x;
+    int y_idx = blockIdx.y * kBilagridBwdV1BlockY + threadIdx.y;
     int xi = x_idx / mult_x + x_base, xf = x_idx % mult_x;
     int yi = y_idx / mult_y + y_base, yf = y_idx % mult_y;
     // printf("x_idx=%d y_idx=%d  xi=%d xf=%d yi=%d yf=%d\n", x_idx, y_idx, xi, xf, yi, yf);
 
     inside &= (xi >= 0 && xi < W && yi >= 0 && yi < H);
 #else
-    int x_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int y_idx = blockIdx.y * blockDim.y + threadIdx.y;
-    int idx = blockIdx.z * blockDim.z + threadIdx.z;
+    int x_idx = blockIdx.x * kBilagridBwdV1BlockX + threadIdx.x;
+    int y_idx = blockIdx.y * kBilagridBwdV1BlockY + threadIdx.y;
+    int idx = blockIdx.z * kBilagridBwdV1BlockZ + threadIdx.z;
     int xi = x_idx / mult_x, xf = x_idx % mult_x;
     int yi = y_idx / mult_y, yf = y_idx % mult_y;
     bool inside = (xi < W && yi < H && idx < (N*L));
@@ -72,7 +72,7 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
     if (!inside && (
         mult_x*mult_y == 1 ||
-        (mult_x % blockDim.x != 0 || mult_y % blockDim.y != 0)
+        (mult_x % kBilagridBwdV1BlockX != 0 || mult_y % kBilagridBwdV1BlockY != 0)
     )) return;
 
 #ifndef PATCHED
@@ -125,7 +125,7 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
         // block_hi1 = max(block_hi1, block_hi0);
         if (!(block_wi1 > block_wi0 && block_hi1 > block_hi0) && (
             mult_x*mult_y == 1 ||
-            (mult_x % blockDim.x != 0 || mult_y % blockDim.y != 0)
+            (mult_x % kBilagridBwdV1BlockX != 0 || mult_y % kBilagridBwdV1BlockY != 0)
         )) continue;
         int wi0 = block_wi0+xf*x_step;
         int hi0 = block_hi0+yf*y_step;
@@ -269,7 +269,7 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
     }
 
     // out_idx can be different for each thread, fall back to global atomicAdd
-    if (mult_x % blockDim.x != 0 || mult_y % blockDim.y != 0) {
+    if (mult_x % kBilagridBwdV1BlockX != 0 || mult_y % kBilagridBwdV1BlockY != 0) {
         #pragma unroll
         for (int ci = 0; ci < 9; ci++) {
             int out_idx = out_idx_start + ci;
@@ -279,28 +279,10 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_bilagrid(
         return;
     }
 
-    // fast atomicAdd
-
-    __shared__ float sharedData[64];
-
-    int blockSize = blockDim.x * blockDim.y * blockDim.z;
-    int tid = (threadIdx.z * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x;
-
     #pragma unroll
     for (int ci = 0; ci < 9; ci++) {
-        int out_idx = out_idx_start + ci;
-
-        sharedData[tid] = isfinite(accum[ci]) ? accum[ci] : 0.0f;
+        bilagrid_bwd_v1_block_atomic_add(v_bilagrid + out_idx_start + ci, accum[ci]);
         __syncthreads();
-
-        for (int s = blockSize / 2; s > 0; s >>= 1) {
-            if (tid < s)
-                sharedData[tid] += sharedData[tid + s];
-            __syncthreads();
-        }
-
-        if (tid == 0)
-            atomicAdd(v_bilagrid + out_idx, sharedData[0]);
     }
 
 }
@@ -334,7 +316,7 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_rgb(
     , const int* __restrict__ grid_indices  // [N], or nullptr -> identity
 #endif
 ) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int idx = blockIdx.x * kBilagridBwdV1RgbThreads + threadIdx.x;
 #ifdef PATCHED
     int total = N * m * h * w;
 #else

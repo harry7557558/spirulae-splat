@@ -59,14 +59,13 @@ void bilagrid_normal_uniform_sample_backward_v1(
     float* v_rgb,              // null: skip the v_pre kernel (GT isn't trained)
     int N, int L, int H, int W,
     int h, int w,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     cudaStream_t stream,
     const int* grid_indices
 ) {
     // v_bilagrid (always needed: trains the bilagrid normal grid)
     {
-        dim3 block = { block_x, block_y, 1 };
+        dim3 block = { kBilagridBwdV1BlockX, kBilagridBwdV1BlockY, kBilagridBwdV1BlockZ };
 
         int mult_x = (2*w+W)/(block.x*W*target_tile_size);
         int mult_y = (2*h+H)/(block.y*H*target_tile_size);
@@ -94,9 +93,8 @@ void bilagrid_normal_uniform_sample_backward_v1(
     // normal). Skipped when the caller passes null — GT isn't trainable.
     if (v_rgb != nullptr) {
         int total = N * h * w;
-        int threads = 256;
-        int blocks = (total + threads - 1) / threads;
-        bilagrid_normal_uniform_sample_backward_v1_kernel_normal<<<blocks, threads, 0, stream>>>(
+        int blocks = (total + kBilagridBwdV1RgbThreads - 1) / kBilagridBwdV1RgbThreads;
+        bilagrid_normal_uniform_sample_backward_v1_kernel_normal<<<blocks, kBilagridBwdV1RgbThreads, 0, stream>>>(
             bilagrid, rgb, v_output,
             v_rgb,
             N, L, H, W, h, w,
@@ -116,14 +114,13 @@ void bilagrid_normal_patched_sample_backward_v1(
     float* v_rgb,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     const int mi_batch_size,
     cudaStream_t stream
 ) {
     // v_bilagrid
     {
-        dim3 block = { block_x, block_y, 1 };
+        dim3 block = { kBilagridBwdV1BlockX, kBilagridBwdV1BlockY, kBilagridBwdV1BlockZ };
     
         int mult_x = (2*w0+W)/(block.x*W*target_tile_size);
         int mult_y = (2*h0+H)/(block.y*H*target_tile_size);
@@ -157,9 +154,8 @@ void bilagrid_normal_patched_sample_backward_v1(
     // v_rgb
     {
         int total = N * m * h * w;
-        int threads = 256;
-        int blocks = (total + threads - 1) / threads;
-        bilagrid_normal_patched_sample_backward_v1_kernel_normal<<<blocks, threads, 0, stream>>>(
+        int blocks = (total + kBilagridBwdV1RgbThreads - 1) / kBilagridBwdV1RgbThreads;
+        bilagrid_normal_patched_sample_backward_v1_kernel_normal<<<blocks, kBilagridBwdV1RgbThreads, 0, stream>>>(
             bilagrid, rgb, v_output, v_rgb,
             N, L, H, W, m, h, w, h0, w0, offsets
         );

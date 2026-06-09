@@ -67,7 +67,6 @@ void bilagrid_uniform_sample_backward_v1(
     float* v_rgb,
     int N, int L, int H, int W,
     int h, int w,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     cudaStream_t stream,
     const int* grid_indices = nullptr
@@ -82,7 +81,6 @@ void bilagrid_patched_sample_backward_v1(
     float* v_rgb,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     const int mi_batch_size,
     cudaStream_t stream
@@ -187,7 +185,6 @@ void bilagrid_ppisp_uniform_sample_backward_v1(
     float* v_rgb,
     int N, int L, int H, int W,
     int h, int w,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     cudaStream_t stream,
     const int* grid_indices = nullptr
@@ -202,7 +199,6 @@ void bilagrid_ppisp_patched_sample_backward_v1(
     float* v_rgb,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     const int mi_batch_size,
     cudaStream_t stream
@@ -236,7 +232,6 @@ void bilagrid_loglinear_uniform_sample_backward_v1(
     float* v_rgb,
     int N, int L, int H, int W,
     int h, int w,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     cudaStream_t stream,
     const int* grid_indices = nullptr
@@ -251,7 +246,6 @@ void bilagrid_loglinear_patched_sample_backward_v1(
     float* v_rgb,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     const int mi_batch_size,
     cudaStream_t stream
@@ -288,7 +282,6 @@ void bilagrid_depth_uniform_sample_backward_v1(
     float* v_depth,
     int N, int L, int H, int W,
     int h, int w,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     cudaStream_t stream,
     const int* grid_indices = nullptr
@@ -304,7 +297,6 @@ void bilagrid_depth_patched_sample_backward_v1(
     float* v_depth,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     const int mi_batch_size,
     cudaStream_t stream
@@ -338,7 +330,6 @@ void bilagrid_normal_uniform_sample_backward_v1(
     float* v_rgb,
     int N, int L, int H, int W,
     int h, int w,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     cudaStream_t stream,
     const int* grid_indices = nullptr
@@ -353,7 +344,6 @@ void bilagrid_normal_patched_sample_backward_v1(
     float* v_rgb,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    const unsigned block_x, const unsigned block_y,
     const int target_tile_size,
     const int mi_batch_size,
     cudaStream_t stream
@@ -462,7 +452,6 @@ void bilagrid_uniform_sample_backward_tensor(
     TorchTensorView v_bilagrid,  // [N,12,L,H,W]
     TorchTensorView v_rgb,       // [N,m,h,w,3]
     int version,
-    int block_x, int block_y,
     int target_tile_size
 );
 
@@ -479,7 +468,6 @@ void bilagrid_ppisp_uniform_sample_backward_tensor(
     TorchTensorView v_bilagrid,  // [N,9,L,H,W]
     TorchTensorView v_rgb,       // [N,m,h,w,3]
     int version,
-    int block_x, int block_y,
     int target_tile_size
 );
 
@@ -496,7 +484,6 @@ void bilagrid_loglinear_uniform_sample_backward_tensor(
     TorchTensorView v_bilagrid,  // [N,9,L,H,W]
     TorchTensorView v_rgb,       // [N,m,h,w,3]
     int version,
-    int block_x, int block_y,
     int target_tile_size
 );
 
@@ -521,7 +508,6 @@ void bilagrid_depth_uniform_sample_backward_tensor(
     TorchTensorView v_bilagrid,  // [N,2,L,H,W]
     TorchTensorView v_depth,     // [N,m,h,w,1]
     int version,
-    int block_x, int block_y,
     int target_tile_size
 );
 
@@ -538,7 +524,6 @@ void bilagrid_normal_uniform_sample_backward_tensor(
     TorchTensorView v_bilagrid,  // [N,3,L,H,W]
     TorchTensorView v_rgb,       // [N,m,h,w,3]
     int version,
-    int block_x, int block_y,
     int target_tile_size
 );
 
