@@ -19,6 +19,13 @@ async def start_viewer_server(trainer: Trainer):
         render_fn=trainer.render,
         progress_fn=trainer.get_progress,
         pause_toggle_fn=trainer.toggle_pause,
+        # Set the "render desired" flag from the HTTP handler's submit() call,
+        # not later from the worker thread's render_fn invocation. The earlier
+        # this flips, the more reliably the training loop's next-iteration
+        # boundary will see it and yield the lock to the viewer. The worker
+        # clears it once it has fully drained pending requests.
+        on_render_submit=trainer._render_pending.set,
+        on_render_idle=trainer._render_pending.clear,
         http_host="0.0.0.0",
         http_port=trainer.config.viewer_port,
         open_browser=False,

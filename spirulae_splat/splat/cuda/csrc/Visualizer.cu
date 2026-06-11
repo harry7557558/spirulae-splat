@@ -13,7 +13,81 @@ namespace SlangProjectionUtils {
 #include <Common.cuh>
 #include "EngineState.h"
 #include "EngineCommon.h"
+#include "Interpolation.cuh"
 
+#include <mutex>
+
+
+// ---------------------------------------------------------------------------
+// Viewer concurrency primitives (file-scope rather than EngineState members so
+// engine_reset()'s move-assignment stays valid; these objects don't need to be
+// reset between scenes).
+//
+// What's protected:
+//   * Every field of engine().viewer (init flags, N_post, dataset arrays,
+//     thumbnail cache, BVH cache, host_seen_mask, pending_thumb).
+//   * Every DevicePool slot whose key starts with "viewer." -- they are owned
+//     exclusively by the three entrypoints below.
+//
+// Why a mutex is necessary:
+//   The training thread enters engine_viewer_capture_thumbnails from inside
+//   the training step. The viewer/HTTP thread enters engine_viewer_init and
+//   engine_blit_view from outside any Python lock (post_processor closure is
+//   invoked after Trainer.lock is released). Without serialization a
+//   first-time viewer connect could re-allocate v.thumbnails mid-capture and
+//   trigger an IMA from the kernel launched at the bottom of capture.
+// ---------------------------------------------------------------------------
+namespace {
+
+std::mutex& viewer_mutex() {
+    static std::mutex m;
+    return m;
+}
+
+// High-priority CUDA stream used by viewer kernels so the device scheduler
+// can pick them ahead of training-stream kernels when both are queued. Lazy
+// init: created once on first use, destroyed at process exit (we don't
+// destroy across engine_reset because the stream is not part of engine state).
+cudaStream_t viewer_stream() {
+    static cudaStream_t s = []() {
+        int lo = 0, hi = 0;
+        cudaDeviceGetStreamPriorityRange(&lo, &hi);  // hi is the higher-priority end
+        cudaStream_t out = nullptr;
+        cudaStreamCreateWithPriority(&out, cudaStreamNonBlocking, hi);
+        return out;
+    }();
+    return s;
+}
+
+// Make viewer_stream() wait until all work currently queued on the default
+// stream has completed. Use before launching a viewer kernel that reads data
+// written by the training (default) stream.
+inline void viewer_stream_wait_default() {
+    cudaEvent_t evt;
+    cudaEventCreateWithFlags(&evt, cudaEventDisableTiming);
+    cudaEventRecord(evt, /*default stream=*/0);
+    cudaStreamWaitEvent(viewer_stream(), evt, 0);
+    cudaEventDestroy(evt);
+}
+
+// Make the default stream wait until all work currently queued on
+// viewer_stream() has completed. Use before returning to Python from a viewer
+// entry point whose output tensor will be consumed on the default stream
+// (e.g. by tensor.cpu()).
+inline void default_stream_wait_viewer() {
+    cudaEvent_t evt;
+    cudaEventCreateWithFlags(&evt, cudaEventDisableTiming);
+    cudaEventRecord(evt, viewer_stream());
+    cudaStreamWaitEvent(/*default stream=*/0, evt, 0);
+    cudaEventDestroy(evt);
+}
+
+} // anonymous namespace
+
+// Launch-arg macros that target the viewer stream (mirror _LAUNCH_ARGS_*D in
+// Common.cuh which hard-code stream 0).
+#define _LAUNCH_ARGS_1D_VS(n,b) ((n)==0?1:_CEIL_DIV(n,b)),b,0,viewer_stream()
+#define _LAUNCH_ARGS_2D_VS(nx,ny,bx,by) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),1),dim3(bx,by),0,viewer_stream()
 
 
 inline constexpr int kNumFrustumSegments = 16;
@@ -1052,6 +1126,7 @@ void engine_viewer_init(
     TorchTensorView heights,
     float camera_size)
 {
+    std::lock_guard<std::mutex> _vlock(viewer_mutex());
     auto& v = engine().viewer;
     int64_t N = std::get<2>(intrins)[0];
     if (N <= 0)
@@ -1097,13 +1172,14 @@ void engine_viewer_init(
 // ---------------------------------------------------------------------------
 
 __global__ void update_thumbnails_kernel(
-    const float3* __restrict__ rgb_float,    // [B_post * H * W] (float3)
-    int H_in, int W_in,
+    const float3* __restrict__ rgb_float,    // [B_post, H_rgb, W_rgb] float3
+    int H_rgb, int W_rgb,
     const int32_t* __restrict__ cam_indices, // [B_post] device-side
     int B_post, int N, int S,
-    uint8_t* __restrict__ thumbnails,        // [N * S * S * 4]
+    uint8_t* __restrict__ thumbnails,        // [N, S, S, 4]
     uint8_t* __restrict__ done_mask,         // [N]
-    const bool*    __restrict__ alpha_mask   // [B_post * H * W] (bool) or nullptr
+    const bool*    __restrict__ alpha_mask,  // [B_post, H_alpha, W_alpha] bool or nullptr
+    int H_alpha, int W_alpha
 ) {
     int b = blockIdx.x;
     if (b >= B_post) return;
@@ -1113,64 +1189,29 @@ __global__ void update_thumbnails_kernel(
 
     int tid = threadIdx.x;
     int s_total = S * S;
-
-    const float3* src  = rgb_float + (size_t)b * H_in * W_in;
-    const bool*   msrc = (alpha_mask != nullptr)
-                            ? (alpha_mask + (size_t)b * H_in * W_in) : nullptr;
     uint8_t* dst = thumbnails + (size_t)post_idx * S * S * 4;
-
-    float sx_step = (float)W_in / (float)S;
-    float sy_step = (float)H_in / (float)S;
 
     for (int p = tid; p < s_total; p += blockDim.x) {
         int sy = p / S;
         int sx = p % S;
-        float u  = ((float)sx + 0.5f) * sx_step - 0.5f;
-        float vv = ((float)sy + 0.5f) * sy_step - 0.5f;
-        int x0 = (int)floorf(u);
-        int y0 = (int)floorf(vv);
-        float wx = u  - (float)x0;
-        float wy = vv - (float)y0;
-        int x1 = x0 + 1;
-        int y1 = y0 + 1;
-        x0 = max(0, min(W_in - 1, x0));
-        x1 = max(0, min(W_in - 1, x1));
-        y0 = max(0, min(H_in - 1, y0));
-        y1 = max(0, min(H_in - 1, y1));
-        float w00 = (1.0f - wx) * (1.0f - wy);
-        float w10 = wx           * (1.0f - wy);
-        float w01 = (1.0f - wx) * wy;
-        float w11 = wx           * wy;
 
-        // Mask-aware: bilinear-sample the binary mask; if the weighted
-        // coverage is < 0.5 the destination cell is mostly outside the
-        // valid-pixel region -- render as mid-gray (0.5) so masked borders
-        // are visually distinct from black image content.
-        float mask_cov = 1.0f;
-        if (msrc) {
-            float m00 = msrc[(size_t)y0 * W_in + x0] ? 1.0f : 0.0f;
-            float m10 = msrc[(size_t)y0 * W_in + x1] ? 1.0f : 0.0f;
-            float m01 = msrc[(size_t)y1 * W_in + x0] ? 1.0f : 0.0f;
-            float m11 = msrc[(size_t)y1 * W_in + x1] ? 1.0f : 0.0f;
-            mask_cov = m00*w00 + m10*w10 + m01*w01 + m11*w11;
+        // Bilinear RGB tap at the source resolution (matches per-pixel loss's
+        // bilinear_sample_f3 convention; works when the GT RGB shape differs
+        // from S x S).
+        float3 c = bilinear_sample_f3(rgb_float, b, sx, sy, S, S, W_rgb, H_rgb);
+
+        // Mask: nearest-neighbor sample at the mask's own resolution. Out-of-
+        // mask pixels render as mid-gray so masked borders are visually
+        // distinct from black image content.
+        if (alpha_mask != nullptr) {
+            bool inside = nearest_sample_b(alpha_mask, b, sx, sy, S, S, W_alpha, H_alpha);
+            if (!inside) c = make_float3(0.5f, 0.5f, 0.5f);
         }
 
-        float r, g, bb;
-        if (mask_cov < 0.5f) {
-            r = g = bb = 0.5f;
-        } else {
-            float3 c00 = src[(size_t)y0 * W_in + x0];
-            float3 c10 = src[(size_t)y0 * W_in + x1];
-            float3 c01 = src[(size_t)y1 * W_in + x0];
-            float3 c11 = src[(size_t)y1 * W_in + x1];
-            r  = c00.x*w00 + c10.x*w10 + c01.x*w01 + c11.x*w11;
-            g  = c00.y*w00 + c10.y*w10 + c01.y*w01 + c11.y*w11;
-            bb = c00.z*w00 + c10.z*w10 + c01.z*w01 + c11.z*w11;
-        }
         uint8_t* o = dst + ((size_t)sy * S + sx) * 4;
-        o[0] = (uint8_t)fminf(fmaxf(255.0f * r  + 0.5f, 0.0f), 255.0f);
-        o[1] = (uint8_t)fminf(fmaxf(255.0f * g  + 0.5f, 0.0f), 255.0f);
-        o[2] = (uint8_t)fminf(fmaxf(255.0f * bb + 0.5f, 0.0f), 255.0f);
+        o[0] = (uint8_t)fminf(fmaxf(255.0f * c.x + 0.5f, 0.0f), 255.0f);
+        o[1] = (uint8_t)fminf(fmaxf(255.0f * c.y + 0.5f, 0.0f), 255.0f);
+        o[2] = (uint8_t)fminf(fmaxf(255.0f * c.z + 0.5f, 0.0f), 255.0f);
         o[3] = 255;
     }
     __syncthreads();
@@ -1182,10 +1223,20 @@ __global__ void update_thumbnails_kernel(
 // forward pass. cam_indices_tv is the same host or device int32 tensor used
 // by bilagrid (post-split layout).
 void engine_viewer_capture_thumbnails(TorchTensorView cam_indices_tv) {
-    auto& v = engine().viewer;
-    if (!v.initialized || v.pending_thumb <= 0) return;
+    // Fast path: skip the lock when nothing to do. v.initialized and
+    // v.pending_thumb are written under the lock by engine_viewer_init /
+    // this function. Reading them lockless is OK as a hint -- a stale
+    // "not initialized" miss just delays the first capture by one step, and
+    // pending_thumb only decreases monotonically once init has happened.
+    if (!engine().viewer.initialized || engine().viewer.pending_thumb <= 0) return;
     if (!engine().gt.has_gt) return;
     if (engine().gt.rgb.data_ptr() == nullptr) return;
+
+    std::lock_guard<std::mutex> _vlock(viewer_mutex());
+    auto& v = engine().viewer;
+    // Re-check after acquiring the lock (init may have run; pending may have
+    // hit zero on another iter even before init).
+    if (!v.initialized || v.pending_thumb <= 0) return;
 
     int64_t B_post = engine().gt.rgb.size<0>();
     int64_t H = engine().gt.rgb.size<1>();
@@ -1202,6 +1253,7 @@ void engine_viewer_capture_thumbnails(TorchTensorView cam_indices_tv) {
         cudaMemcpy(host_ci.data(), (const void*)ci_ptr,
                    (size_t)B_post * sizeof(int32_t),
                    cudaMemcpyDeviceToHost);
+        CHECK_DEVICE_ERROR(cudaGetLastError());
     } else {
         std::memcpy(host_ci.data(), (const void*)ci_ptr,
                     (size_t)B_post * sizeof(int32_t));
@@ -1230,23 +1282,35 @@ void engine_viewer_capture_thumbnails(TorchTensorView cam_indices_tv) {
                    (size_t)B_post * sizeof(int32_t),
                    cudaMemcpyHostToDevice);
         d_ci = tmp_ci;
+        CHECK_DEVICE_ERROR(cudaGetLastError());
     }
 
     // Optional GT mask -> mask-aware thumbnail (masked regions become gray).
+    // The mask resolution can differ from gt.rgb (e.g. pit_renovation: RGB
+    // 1920x1920, mask 1600x1600) so we pass its own H/W and use a separate
+    // nearest sampler in the kernel.
     const bool* d_alpha_mask = nullptr;
-    if (engine().gt.has_mask && engine().gt.alpha.data_ptr() != nullptr) {
-        // engine().gt.alpha is [B_post, H, W, 1] of bool; layout matches
-        // engine().gt.rgb's [B_post, H, W, 3] (same B / H / W).
+    int H_alpha = 0, W_alpha = 0;
+    if (engine().gt.has_mask && engine().gt.alpha.data_ptr() != nullptr
+        && engine().gt.alpha.size<0>() == B_post) {
         d_alpha_mask = engine().gt.alpha.data_ptr();
+        H_alpha = (int)engine().gt.alpha.size<1>();
+        W_alpha = (int)engine().gt.alpha.size<2>();
     }
 
-    update_thumbnails_kernel<<<(uint32_t)B_post, 128>>>(
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+    // Launch on the high-priority viewer stream so this read of gt.rgb does
+    // not serialize behind subsequent training kernels queued on the default
+    // stream. gt.rgb was written by the default stream earlier in this same
+    // training step, so the viewer stream must wait on it first.
+    viewer_stream_wait_default();
+    update_thumbnails_kernel<<<(uint32_t)B_post, 128, 0, viewer_stream()>>>(
         (const float3*)engine().gt.rgb.data_ptr(),
         (int)H, (int)W,
         d_ci, (int)B_post, v.N_post, VIEWER_THUMBNAIL_SIZE,
         v.thumbnails.data_ptr(),
         v.thumbnail_done_mask.data_ptr(),
-        d_alpha_mask
+        d_alpha_mask, H_alpha, W_alpha
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -1347,6 +1411,7 @@ void engine_blit_view(
     bool            show_training_cameras,
     TorchTensorView out_rgb)
 {
+    std::lock_guard<std::mutex> _vlock(viewer_mutex());
     auto& v = engine().viewer;
     if (!v.initialized) {
         throw std::runtime_error(
@@ -1360,12 +1425,18 @@ void engine_blit_view(
     constexpr int kFloatPInfByte = 0x7f;
     constexpr int kFloatNInfByte = 0xfe;
 
+    // Viewer kernels run on a high-priority stream so they can preempt
+    // training kernels queued on the default stream. render_buffer /
+    // render_depth / render_alpha were written by the default stream (inside
+    // model.get_outputs), so the viewer stream must wait on them first.
+    viewer_stream_wait_default();
+
     float* min_max = nullptr;
     if (c == 1) {
         min_max = DevicePool::global().acquire<float>("viewer.min_max", 2);
-        cudaMemset(min_max + 0, kFloatPInfByte, sizeof(float));
-        cudaMemset(min_max + 1, kFloatNInfByte, sizeof(float));
-        compute_min_max_kernel<<<_LAUNCH_ARGS_2D(w, h, 16, 16)>>>(
+        cudaMemsetAsync(min_max + 0, kFloatPInfByte, sizeof(float), viewer_stream());
+        cudaMemsetAsync(min_max + 1, kFloatNInfByte, sizeof(float), viewer_stream());
+        compute_min_max_kernel<<<_LAUNCH_ARGS_2D_VS(w, h, 16, 16)>>>(
             tv_to_view<float, 3>(render_buffer), min_max);
         CHECK_DEVICE_ERROR(cudaGetLastError());
     }
@@ -1390,7 +1461,16 @@ void engine_blit_view(
     const float3* tri_aabb   = nullptr;
 
     if (show_training_cameras) {
-        if (!v.bvh_built) _viewer_build_bvh();
+        if (!v.bvh_built) {
+            // _viewer_build_bvh launches its kernels on the default stream
+            // (see build_bvh<>'s _LAUNCH_ARGS_1D usage and the synchronous
+            // cudaMemcpy of root_aabb inside). After it returns, the BVH
+            // buffers are populated relative to the default stream, so the
+            // viewer stream must wait on the default stream once more before
+            // the blit kernel reads them.
+            _viewer_build_bvh();
+            viewer_stream_wait_default();
+        }
         lss_buffer = (const float4*)DevicePool::global().acquire<float4>(
             "viewer.lss", (size_t)v.bvh_num_lss * 2);
         tri_buffer = (const float4*)DevicePool::global().acquire<float4>(
@@ -1405,7 +1485,7 @@ void engine_blit_view(
             "viewer.tri_bvh.aabb", (size_t)v.bvh_num_tri * 2);
     }
 
-    blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
+    blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D_VS(w, h, 8, 4)>>>(
         tv_to_view<float, 3>(render_buffer),
         tv_to_view<float, 3>(render_depth),
         tv_to_view<float, 3>(render_alpha),
@@ -1420,6 +1500,10 @@ void engine_blit_view(
         tv_to_view<uint8_t, 3>(out_rgb)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    // Ensure the default stream (which the Python caller will use to read
+    // out_rgb via .cpu()) waits for the viewer stream's blit kernel to finish.
+    default_stream_wait_viewer();
 }
 
 

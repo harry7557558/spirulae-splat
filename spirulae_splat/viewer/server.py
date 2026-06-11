@@ -19,6 +19,8 @@ class ViewerServer:
         *,
         progress_fn: Optional[Callable] = None,
         pause_toggle_fn: Optional[Callable] = None,
+        on_render_submit: Optional[Callable[[], None]] = None,
+        on_render_idle: Optional[Callable[[], None]] = None,
         http_host: str = "0.0.0.0",
         http_port: int = 7007,
         open_browser: bool = False,
@@ -26,6 +28,8 @@ class ViewerServer:
         self._render_fn = render_fn
         self._progress_fn = progress_fn
         self._pause_toggle_fn = pause_toggle_fn
+        self._on_render_submit = on_render_submit
+        self._on_render_idle = on_render_idle
         self._http_host = http_host
         self._http_port = http_port
         self._open_browser = open_browser
@@ -38,6 +42,8 @@ class ViewerServer:
         # 1. Render worker
         self._render_worker = RenderWorker(
             render_fn=self._render_fn,
+            on_submit=self._on_render_submit,
+            on_idle=self._on_render_idle,
         )
         self._render_worker.start()
 

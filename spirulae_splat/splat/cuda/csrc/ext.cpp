@@ -287,7 +287,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .export_values();
 
     m.def("engine_setup_data_manager",   &engine_setup_data_manager);
-    m.def("engine_train_step_managed",   &engine_train_step_managed);
+    // Release the GIL while engine_train_step_managed runs. This is the
+    // single longest-blocking C++ call in the hot path (~200 ms/step incl.
+    // the synchronous reads needed to populate loss_dict). Holding the GIL
+    // here starves the HTTP/render threads, turning a 250 ms render request
+    // into a multi-second wait. None of the C++ body touches Python objects
+    // (cfg is converted before entry; the returned std::map is converted
+    // after the GIL is reacquired), so releasing it is safe.
+    m.def("engine_train_step_managed",   &engine_train_step_managed,
+          pybind11::call_guard<pybind11::gil_scoped_release>());
 
     // COLMAP / NerfStudio camera-model string -> enum, mirroring
     // dataparser.py's lookup table. Exposed so Trainer can build the

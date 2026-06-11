@@ -19,6 +19,19 @@ class _Handler(BaseHTTPRequestHandler):
     pause_toggle_fn: Optional[Callable] = None
     last_keys: list[str] = []
 
+    def log_error(self, format, *args):  # noqa: A002
+        # Suppress per-request stderr noise from disconnected clients (browser
+        # tab refresh, latest-wins drops). Real exceptions still surface via
+        # the handle_error override on the server below.
+        pass
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            # Client went away between read and write -- nothing to log.
+            self.close_connection = True
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
@@ -68,7 +81,11 @@ class _Handler(BaseHTTPRequestHandler):
                 width=width, height=height,
                 camera_model=camera_model,
                 buffer_key=buffer_key,
+                show_training_cameras=show_training_cameras,
             )
+            # Post-process params are now baked into the render fn (via
+            # RenderRequest.show_training_cameras) so the closure path is
+            # not taken; kept as an empty fallback for the legacy code path.
             post_process_params = {
                 "show_training_cameras": show_training_cameras,
             }
@@ -126,14 +143,19 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self.send_response(500)
                 self.end_headers()
-        except BrokenPipeError as e:
-            self.send_response(400)
-            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            # Client gave up before we wrote the response (browser tab moved
+            # on, latest-wins dropped this request). Don't try to write a
+            # status code -- the socket is gone.
+            self.close_connection = True
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.send_response(400)
-            self.end_headers()
+            try:
+                self.send_response(400)
+                self.end_headers()
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
 
     def _handle_buffers(self) -> None:
         if not _Handler.last_keys:
@@ -200,6 +222,15 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
+class _QuietHTTPServer(HTTPServer):
+    def handle_error(self, request, client_address):
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+            return  # client disconnected mid-response; nothing to report
+        super().handle_error(request, client_address)
+
+
 class HTTPThread:
     """Serves the viewer HTML and handles requests on a background daemon thread."""
 
@@ -208,7 +239,7 @@ class HTTPThread:
         _Handler.render_worker = render_worker
         _Handler.progress_fn = progress_fn
         _Handler.pause_toggle_fn = pause_toggle_fn
-        self._server = HTTPServer((host, port), _Handler)
+        self._server = _QuietHTTPServer((host, port), _Handler)
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:

@@ -212,6 +212,13 @@ class Trainer:
         self._save_config_json()
 
         self.lock = threading.Lock()
+        # Lock-fairness signal: the render thread sets this before contending
+        # for `self.lock`. The training thread checks it at each iteration's
+        # acquire site and yields the OS scheduler enough times for the render
+        # thread to win the contended acquire. Without this, train_step's
+        # tight re-acquire after release would starve render for many
+        # iterations (observed: 7-30 s waits on a 200 ms/step run).
+        self._render_pending = threading.Event()
 
         # Progress tracking
         self.current_step = 0
@@ -645,10 +652,29 @@ class Trainer:
         )
         return outputs
 
-    def render(self, *args, **kwargs):
+    def render(self, c2w, fx, fy, cx, cy, w, h, camera_model,
+               buffer_key="rgb", *, show_training_cameras: bool = False):
+        # Invoking the post-processor + D->H copy inside this lock is what
+        # makes viewer requests respond quickly during training: it ensures
+        # the .cpu() Memcpy is queued on the default stream BEFORE the next
+        # train_step queues iter N+1's kernels. Otherwise the Memcpy has to
+        # wait for every queued training kernel, which can be ~1 s per iter
+        # on large scenes -- the source of the multi-second viewer lag.
+        # The "render desired" flag is driven by the RenderWorker's
+        # on_submit/on_idle hooks -- the HTTP submit() flips it before we
+        # ever get here, which is what lets train_step yield the lock at the
+        # very next iteration boundary instead of after several missed ones.
         with self.lock:
             self.model.eval()
-            return self._render(*args, **kwargs)
+            outputs = self._render(c2w, fx, fy, cx, cy, w, h,
+                                   camera_model, buffer_key)
+            if buffer_key and outputs.get(buffer_key) is not None:
+                pp = outputs.pop('_post_processor', None)
+                if pp is not None:
+                    annotated = pp(outputs[buffer_key],
+                                   show_training_cameras=show_training_cameras)
+                    outputs[buffer_key] = annotated.cpu().numpy()
+            return outputs
 
     def _train_step(self, step: int):
         # ---- profiling probes (gated by PROFILE_TRAIN_STEP) ----
@@ -757,6 +783,13 @@ class Trainer:
         # self.model.step_post_backward()
 
     def train_step(self, *args):
+        # Yield to a pending render before contending for self.lock. A short
+        # sleep is enough to let the render thread's blocked acquire win on
+        # Linux (pthread_mutex wakes the longest-waiting thread when the
+        # current owner has been idle); without it, the immediate re-acquire
+        # at the top of the next iter beats the render thread to the lock.
+        if self._render_pending.is_set():
+            time.sleep(0.001)
         with self.lock:
             self.model.train()
             return self._train_step(*args)

@@ -21,6 +21,7 @@ class RenderRequest:
     height: int
     camera_model: str             # "PINHOLE" | "FISHEYE"
     buffer_key: str = "rgb"       # which channel the viewer wants annotated
+    show_training_cameras: bool = False
     request_id: int = 0
 
 
@@ -36,8 +37,20 @@ class RenderWorker:
     def __init__(
         self,
         render_fn: Callable,
+        on_submit: Optional[Callable[[], None]] = None,
+        on_idle: Optional[Callable[[], None]] = None,
     ) -> None:
         self._render_fn = render_fn
+        # Called synchronously from the HTTP handler thread when submit() runs.
+        # Used by the trainer to flip a "render desired" flag *immediately*
+        # (before the worker thread has a chance to call render_fn) so the
+        # very next training-iteration boundary can yield the lock to render.
+        self._on_submit = on_submit
+        # Called from the worker thread once it finishes a render AND has no
+        # more pending work. Pairs with on_submit so the trainer's flag stays
+        # set across back-to-back submissions (which can otherwise let
+        # training sneak in between).
+        self._on_idle = on_idle
 
         # Latest pending request (None = idle)
         self._pending: Optional[RenderRequest] = None
@@ -68,6 +81,8 @@ class RenderWorker:
         req.request_id = self._request_counter
         with self._pending_lock:
             self._pending = req
+        if self._on_submit is not None:
+            self._on_submit()
         self._work_event.set()
 
     def get_result(self, timeout: float = 0.05) -> Optional[RenderResult]:
@@ -95,6 +110,7 @@ class RenderWorker:
                     req.width, req.height,
                     req.camera_model,
                     req.buffer_key,
+                    show_training_cameras=req.show_training_cameras,
                 )
                 result = RenderResult(request_id=req.request_id, buffers=buffers)
             except BrokenPipeError as e:
@@ -118,16 +134,33 @@ class RenderWorker:
                 except queue.Full:
                     pass
 
+            # Clear the "render desired" flag only if no follow-up request
+            # arrived while we were busy. Otherwise leave it set so training
+            # keeps yielding while the worker chews through the backlog.
+            if self._on_idle is not None:
+                with self._pending_lock:
+                    has_more = self._pending is not None
+                if not has_more:
+                    self._on_idle()
+
 
 def encode_buffer_to_jpeg(
     tensor: Any,
-    post_processor: Callable,
+    post_processor: Optional[Callable],
     quality: int,
     post_process_params: dict = {}
 ) -> bytes:
     import cv2
 
-    tensor = post_processor(tensor, **post_process_params).cpu().numpy()
+    # Trainer.render now invokes the post-processor + D->H copy itself under
+    # the trainer lock, so by the time we get here `tensor` is already a CPU
+    # numpy array. The legacy closure path (post_processor not None) is kept
+    # as a fallback in case other render fns still return GPU tensors.
+    if not isinstance(tensor, np.ndarray):
+        if post_processor is not None:
+            tensor = post_processor(tensor, **post_process_params).cpu().numpy()
+        else:
+            tensor = tensor.cpu().numpy()
 
     success, buf = cv2.imencode(
         '.jpg', cv2.cvtColor(tensor, cv2.COLOR_RGB2BGR),
