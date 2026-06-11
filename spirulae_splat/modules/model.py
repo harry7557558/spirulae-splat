@@ -1372,6 +1372,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                         or key.startswith('eng.g1_') \
                         or key.startswith('eng.g2_') \
                         or key.startswith('eng.sh_quant_') \
+                        or (key.startswith('eng.') and (key.endswith('.qb') or key.endswith('.q'))) \
                         or key in ('eng.radii', 'eng.accum_buffer',
                                    'eng.bias_correction_steps',
                                    'eng.quant_bounds_sh'):
@@ -1383,11 +1384,11 @@ class SpirulaeSplatModel(torch.nn.Module):
                         or key.startswith('raster_bwd.'):
                     buckets['splat x img'] += gib
                 elif key.startswith('render.') or key.startswith('renders.') \
+                        or key.startswith('ppl.') or key.startswith('eng.bg_') \
                         or key in ('eng.v_rgb', 'eng.v_depth', 'eng.v_Ts',
                                    'eng.v_depth_normal', 'eng.v_ref_depth',
                                    'eng.v_ref_normal',
                                    'eng.depth_normal', 'eng.loss_map',
-                                   'eng.bg_sky.v_Ts_scratch',
                                    'gt.rgb', 'gt.normal', 'gt.staging_u8'):
                     buckets['image'] += gib
                 elif key.startswith('eng.bg.') or key.startswith('eng.ppisp.'):

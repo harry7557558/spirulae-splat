@@ -71,5 +71,12 @@ def entrypoint():
     # trainer._train_with_profiling()
     trainer.eval()
 
+    if not config.disable_viewer and config.keep_viewer_alive:
+        print("Training and eval complete. Viewer still running -- press Ctrl-C to exit.")
+        try:
+            threading.Event().wait()
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+
 if __name__ == "__main__":
     entrypoint()

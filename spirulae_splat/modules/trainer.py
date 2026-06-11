@@ -147,6 +147,11 @@ class TrainerConfig:
     """If True, ss_trainer skips starting the viewer thread. Used by
         ss_benchmark so each scene runs without competing for the viewer port."""
 
+    keep_viewer_alive: bool = True
+    """If True, ss_trainer keeps the process (and thus the viewer) running
+        after training + eval finish, so the result can still be inspected in
+        the browser. Press Ctrl-C to exit. Ignored when disable_viewer=True."""
+
     dataparser: SpirulaeSplatDataParserConfig = field(default_factory=SpirulaeSplatDataParserConfig)
     """Specifies configurations for data parsing"""
 

@@ -429,7 +429,7 @@
       <div class="panel-section-title">Navigation</div>
       <div class="ctrl-row">
         <div class="ctrl-label"><span>Navigation Mode</span></div>
-        <select id="nav-mode">
+        <select id="nav-mode" autocomplete="off">
           <option value="turntable">Turntable</option>
           <option value="trackball">Trackball</option>
           <option value="fps">First Person</option>
@@ -441,7 +441,7 @@
           <span>Move Speed</span>
           <span class="val" id="speed-val">1.0</span>
         </div>
-        <input type="range" id="move-speed" min="-2" max="2" step="0.1" value="0"/>
+        <input type="range" id="move-speed" min="-2" max="2" step="0.1" value="0" autocomplete="off"/>
       </div>
       <button class="btn" id="btn-reset-pose">Reset Camera</button>
     </div>
@@ -452,7 +452,7 @@
 
       <div class="ctrl-row">
         <div class="ctrl-label"><span>Camera Model</span></div>
-        <select id="camera-model">
+        <select id="camera-model" autocomplete="off">
           <option value="PINHOLE">Pinhole</option>
           <option value="FISHEYE">Fisheye (Equidistant)</option>
           <option value="EQUISOLID">Fisheye (Equisolid)</option>
@@ -464,7 +464,7 @@
           <span>Field of View</span>
           <span class="val" id="fov-val">90°</span>
         </div>
-        <input type="range" id="fov-slider" min="10" max="150" step="1" value="90"/>
+        <input type="range" id="fov-slider" min="10" max="150" step="1" value="90" autocomplete="off"/>
       </div>
 
       <div class="ctrl-row">
@@ -472,7 +472,7 @@
           <span>Max Resolution</span>
           <span class="val" id="res-val">720p</span>
         </div>
-        <input type="range" id="res-slider" min="1" max="8" step="1" value="4"/>
+        <input type="range" id="res-slider" min="1" max="8" step="1" value="4" autocomplete="off"/>
       </div>
 
       <div class="ctrl-row">
@@ -480,7 +480,7 @@
           <span>JPEG Quality</span>
           <span class="val" id="quality-val">75</span>
         </div>
-        <input type="range" id="quality-slider" min="25" max="95" step="1" value="75"/>
+        <input type="range" id="quality-slider" min="25" max="95" step="1" value="75" autocomplete="off"/>
       </div>
 
       <div class="ctrl-row">
@@ -488,7 +488,7 @@
           <span>Update Rate</span>
           <span class="val" id="update-rate-val">0.5s</span>
         </div>
-        <input type="range" id="update-rate-slider" min="0.1" max="2.0" step="0.1" value="0.5"/>
+        <input type="range" id="update-rate-slider" min="0.1" max="2.0" step="0.1" value="0.5" autocomplete="off"/>
       </div>
 
     </div>
@@ -498,12 +498,12 @@
       <div class="panel-section-title">Visualize</div>
       <div class="ctrl-row">
         <div class="ctrl-label"><span>Buffer</span></div>
-        <select id="buffer-key">
+        <select id="buffer-key" autocomplete="off">
           <option value="rgb">rgb</option>
         </select>
       </div>
       <div class="ctrl-row">
-        <div class="ctrl-label"><label for="show-training-cameras"><span>Show Training Cameras</span></label><label class="toggle"><input type="checkbox" id="show-training-cameras" /></label></div>
+        <div class="ctrl-label"><label for="show-training-cameras"><span>Show Training Cameras</span></label><label class="toggle"><input type="checkbox" id="show-training-cameras" autocomplete="off" /></label></div>
       </div>
     </div>
 
@@ -897,7 +897,12 @@ async function fetchBuffers() {
   }
 }
 
-function sendRenderRequest() {
+let _lastBlobUrl = null;
+let _inFlight = false;
+let _retryScheduled = false;
+
+async function sendRenderRequest() {
+  if (_inFlight) return;
   const c2w_flat = cam.c2w().flat();
   const res = getResolution($("res-slider").value);
   const intrinsics = fovToIntrinsics($("fov-slider").value, res.w, res.h);
@@ -915,29 +920,43 @@ function sendRenderRequest() {
     jpeg_quality: settings.jpeg_quality,
     update_rate: settings.update_rate,
     show_training_cameras: settings.show_training_cameras,
-    no_cache: performance.now(),
   });
   const img = $("canvas-img");
-  const oldSrc = img.src;
-  img.src = `${CFG.serverUrl}/render?${params}`;
-  img.onerror = () => {
+  _inFlight = true;
+  setStatus("rendering");
+  try {
+    const resp = await fetch(`${CFG.serverUrl}/render?${params}`, { cache: "no-store" });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    // Atomic swap: only replace img.src once new bytes are in hand, so the
+    // previous frame stays visible until the new one is ready -- no flash.
+    const prev = _lastBlobUrl;
+    _lastBlobUrl = url;
+    img.src = url;
+    if (prev) URL.revokeObjectURL(prev);
+    const wasDisconnected = Nav.disabled;
+    Nav.disabled = false;
+    setStatus("ready");
+    Viewer.onFrameReceived();
+    if (wasDisconnected) Viewer.requestRender();
+  } catch (e) {
+    // Server is gone or returned an error. Leave img.src pointing at the last
+    // good blob URL (immune to Chrome's "Disable cache" -- it's local memory),
+    // mark disconnected, and let the retry loop probe the server.
     setStatus("disconnected");
     Nav.disabled = true;
-    img.src = oldSrc; // TODO: this isn't always cached
-    // retry after 5 seconds
-    setTimeout(() => {
-      if (Nav.disabled) sendRenderRequest();
-    }, 5000);
-  };
-  img.onload = () => {
-    if (Nav.disabled) {
-      Nav.disabled = false;
-      setStatus("disconnected")
-    }
-    else setStatus("ready");
     Viewer.onFrameReceived();
-  };
-  setStatus("rendering");
+    if (!_retryScheduled) {
+      _retryScheduled = true;
+      setTimeout(() => {
+        _retryScheduled = false;
+        if (Nav.disabled) sendRenderRequest();
+      }, 5000);
+    }
+  } finally {
+    _inFlight = false;
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1041,7 +1060,9 @@ const Viewer = (() => {
   }
 
   function loopRender() {
-    requestRender();
+    // While disconnected, the 5s retry in sendRenderRequest is the sole
+    // probe -- don't queue up fresh frames that will just fail and re-flash.
+    if (!Nav.disabled) requestRender();
     setTimeout(loopRender, getTargetInterval());
   }
 
