@@ -494,7 +494,7 @@ float3 apply_ppisp_no_crf(float3 rgb_in, no_diff float2 pix_coord, no_diff float
     rgb = apply_exposure(rgb, p.exposure);
     rgb = apply_vignetting(rgb, p.vignette_params, pix_coord, image_center, img_size);
     rgb = apply_color_correction_ppisp(rgb, p.color_params);
-    rgb = clamp(rgb, 0.0f, 1.0f);
+    // rgb = clamp(rgb, 0.0f, 1.0f);
     return rgb;
 }
 
