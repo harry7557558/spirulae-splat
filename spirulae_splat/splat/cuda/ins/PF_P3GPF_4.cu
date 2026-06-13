@@ -25,7 +25,11 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_fwd_kernel_wrapper<
@@ -49,7 +53,11 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_fwd_kernel_wrapper<
@@ -73,7 +81,11 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_fwd_kernel_wrapper<
@@ -97,7 +109,11 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_fwd_kernel_wrapper<
@@ -121,7 +137,11 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_fwd_kernel_wrapper<
@@ -145,7 +165,11 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_fwd_kernel_wrapper<
@@ -169,7 +193,11 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_fwd_kernel_wrapper<
@@ -193,7 +221,11 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_fwd_kernel_wrapper<
@@ -217,5 +249,9 @@ template void projection_fused_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
 );

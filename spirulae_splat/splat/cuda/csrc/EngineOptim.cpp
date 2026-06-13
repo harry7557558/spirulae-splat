@@ -37,26 +37,24 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
     bool quantize_sh_value = (sh_value_bits != 32);
     bool quantize_non_sh = (non_sh_optim_bits != 32);
     bool fused = engine().optim.use_fused_proj_bwd_optim;
-    // For now, non-FPBO + value-quant requires its own kernel
-    // (fused_adam_step_value_quantized) which isn't yet wired in the optim
-    // dispatcher. Allocations land here but the actual SH update kernel only
-    // exists for the FPBO path -- gate the unsupported combination clearly.
-    if (quantize_sh_value && !fused) {
+    // Non-FPBO + value-quant: requires BOTH optim-state quant AND value quant
+    // to be active (the kernel is a doubly-quantized Adam step that reads /
+    // writes through both codecs in lockstep, indexed per cell-block). Plain
+    // fp32 optim-state with quantized values isn't a supported combination.
+    if (quantize_sh_value && !fused && !quantize_sh) {
         throw std::runtime_error(
-            "_ensure_optim_state: sh_value_bits = " +
+            "_ensure_optim_state: non-FPBO sh_value_bits = " +
             std::to_string(sh_value_bits) +
-            " currently requires use_fused_proj_bwd_optim = true (non-FPBO "
-            "value-quant Adam kernel is not yet wired in this turn).");
+            " requires sh_optim_bits != 32 as well (the doubly-quantized "
+            "Adam kernel pairs the two codecs).");
     }
-    // Non-SH Adam-state quantization is FPBO-only. The non-FPBO Optimizer.cu
-    // path runs ordinary fp32 Adam updates and has no codec hook.
-    if (quantize_non_sh && !fused) {
-        throw std::runtime_error(
-            "_ensure_optim_state: non_sh_optim_bits = " +
-            std::to_string(non_sh_optim_bits) +
-            " requires use_fused_proj_bwd_optim = true (non-FPBO Adam path "
-            "does not support quantized non-SH Adam state).");
-    }
+    // Non-SH Adam-state quantization is now supported on the non-FPBO path
+    // via the doubly-quantized branch in fused_optim_3dgs_geometry_kernel
+    // (per-splat-block bound layout matches the kernel's 256-thread launch
+    // geometry). Both FPBO and non-FPBO use the same packed buffer layout
+    // (engine().optim.*_quant_state_fpbo), so no separate allocation path
+    // is needed; the kernel reads/writes through _OptimNonShQ when non_sh
+    // is enabled, just like FPBO's _NonShQ.
     if (engine().optim.initialized && engine().optim.sh_optim_bits == sh_optim_bits
         && engine().world.sh_value_bits == sh_value_bits
         && engine().optim.non_sh_optim_bits == non_sh_optim_bits
@@ -129,10 +127,11 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
         engine().optim.g2_features_sh = DeviceTensor2D<float3>();
 
     // Non-SH Adam-state quant: per-attribute QuantizedAdamState<16, 256>.
-    // FPBO-only (the non-FPBO Optimizer.cu path errors out above). cells =
-    // N * primitives_per_splat, bounds = ceil(N / kFpboBlock) -- one bound
-    // per 256-splat FPBO block covering all primitives of that attribute.
-    if (quantize_non_sh && fused) {
+    // Per-splat-block layout (one float4 bound per 256 splats, covering all
+    // primitives of that attribute). The non-FPBO geometry kernel launches
+    // the same 256-thread blocks, so it reads/writes the SAME layout via
+    // _OptimNonShQ.
+    if (quantize_non_sh) {
         int64_t n_bounds = (N + kFpboBlock - 1) / kFpboBlock;
         engine().optim.means_quant_state_fpbo       .resize("eng.means_qfpbo",       (int64_t)N * 3, n_bounds);
         engine().optim.quats_quant_state_fpbo       .resize("eng.quats_qfpbo",       (int64_t)N * 4, n_bounds);
@@ -488,56 +487,123 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
     const float grad_scale = engine().optim.grad_scale;
     const bool  zero_grad  = engine().optim.zero_grad_in_optim;
 
+    // Non-SH Adam-state quant bundle. Same struct as FPBO consumes; when
+    // enabled, the geometry kernel reads/writes the 5 non-SH attrs (means,
+    // quats, scales, opacities, features_dc) through the codec instead of
+    // the fp32 g1_*/g2_* DeviceVectors (which are freed in this mode).
+    NonShQuantState non_sh_optim;
+    if (cfg.non_sh_optim_bits == 16
+        && engine().optim.means_quant_state_fpbo.initialized()) {
+        non_sh_optim.enabled            = true;
+        non_sh_optim.means_packed       = engine().optim.means_quant_state_fpbo.packed_ptr();
+        non_sh_optim.quats_packed       = engine().optim.quats_quant_state_fpbo.packed_ptr();
+        non_sh_optim.scales_packed      = engine().optim.scales_quant_state_fpbo.packed_ptr();
+        non_sh_optim.opacities_packed   = engine().optim.opacities_quant_state_fpbo.packed_ptr();
+        non_sh_optim.features_dc_packed = engine().optim.features_dc_quant_state_fpbo.packed_ptr();
+        non_sh_optim.means_bounds       = engine().optim.means_quant_state_fpbo.bounds_ptr();
+        non_sh_optim.quats_bounds       = engine().optim.quats_quant_state_fpbo.bounds_ptr();
+        non_sh_optim.scales_bounds      = engine().optim.scales_quant_state_fpbo.bounds_ptr();
+        non_sh_optim.opacities_bounds   = engine().optim.opacities_quant_state_fpbo.bounds_ptr();
+        non_sh_optim.features_dc_bounds = engine().optim.features_dc_quant_state_fpbo.bounds_ptr();
+    }
+
     fused_optim_3dgs_geometry(
         N,
         engine().world.means,     engine().grad.means,     engine().optim.g1_means,     engine().optim.g2_means,
         engine().world.quats,     engine().grad.quats,     engine().optim.g1_quats,     engine().optim.g2_quats,
         engine().world.scales,    engine().grad.scales,    engine().optim.g1_scales,    engine().optim.g2_scales,
         engine().world.opacities, engine().grad.opacities, engine().optim.g1_opacities, engine().optim.g2_opacities,
+        engine().world.features_dc, engine().grad.features_dc,
         engine().optim.radii,
         cfg.lr_means, cfg.lr_quats, cfg.lr_scales, cfg.lr_opacities,
+        cfg.lr_features_dc,
         cfg.max_gauss_ratio, cfg.scale_regularization_weight,
         cfg.mcmc_opacity_reg_weight, cfg.mcmc_scale_reg_weight,
         cfg.erank_reg_weight, cfg.erank_reg_weight_s3, cfg.quat_norm_reg_weight,
+        cfg.sh_reg_weight,
         cfg.use_scale_agnostic_mean,
+        non_sh_optim,
         step + 1, per_splat_steps,
         grad_scale, zero_grad
     );
 
-    // DC color: trust-region Adam when the splat works in a non-sRGB color
-    // space, otherwise plain fused Adam. The TR variants live in
-    // Optimizer.cu (fused_adamtr_(linear_)rgb_optim) and clip each step to
-    // +/-kSh0*sqrt(4*eps_tr*c/opac) so the working-color-space update stays
-    // inside the model's confidence radius.
-    if (cfg.use_color_trust_region) {
-        const int s1 = step + 1;
-        const float beta1 = 0.9f, beta2 = 0.999f, eps = 1e-15f;
-        (cfg.color_is_linear ? fused_adamtr_linear_rgb_optim : fused_adamtr_rgb_optim)(
-            _dv_tv(engine().world.features_dc),
-            _dv_tv(engine().grad.features_dc),
-            _dv_tv(engine().optim.g1_features_dc),
-            _dv_tv(engine().optim.g2_features_dc),
-            _dv_tv(engine().world.opacities),
-            cfg.lr_features_dc,
-            beta1, beta2, eps, cfg.eps_tr, s1,
-            grad_scale, zero_grad
-        );
-    } else {
-        fused_adam_step(N,
-            DeviceTensorFloatND(engine().world.features_dc),
-            DeviceTensorFloatND(engine().grad.features_dc),
-            DeviceTensorFloatND(engine().optim.g1_features_dc),
-            DeviceTensorFloatND(engine().optim.g2_features_dc),
-            cfg.lr_features_dc, step + 1, per_splat_steps,
-            cfg.sh_reg_weight, 0.5f / 0.28209479177387814f,
-            grad_scale, zero_grad);
+    // DC color update path. When non-SH quant is on the geometry kernel
+    // already updated features_dc through the codec; skip the separate
+    // launch. Otherwise: trust-region Adam (linear/sRGB color space) or
+    // plain fused Adam, mirroring the previous behavior.
+    if (!non_sh_optim.enabled) {
+        if (cfg.use_color_trust_region) {
+            const int s1 = step + 1;
+            const float beta1 = 0.9f, beta2 = 0.999f, eps = 1e-15f;
+            (cfg.color_is_linear ? fused_adamtr_linear_rgb_optim : fused_adamtr_rgb_optim)(
+                _dv_tv(engine().world.features_dc),
+                _dv_tv(engine().grad.features_dc),
+                _dv_tv(engine().optim.g1_features_dc),
+                _dv_tv(engine().optim.g2_features_dc),
+                _dv_tv(engine().world.opacities),
+                cfg.lr_features_dc,
+                beta1, beta2, eps, cfg.eps_tr, s1,
+                grad_scale, zero_grad
+            );
+        } else {
+            fused_adam_step(N,
+                DeviceTensorFloatND(engine().world.features_dc),
+                DeviceTensorFloatND(engine().grad.features_dc),
+                DeviceTensorFloatND(engine().optim.g1_features_dc),
+                DeviceTensorFloatND(engine().optim.g2_features_dc),
+                cfg.lr_features_dc, step + 1, per_splat_steps,
+                cfg.sh_reg_weight, 0.5f / 0.28209479177387814f,
+                grad_scale, zero_grad);
+        }
     }
 
-    if (cfg.sh_optim_bits != 32 && engine().optim.sh_quant_state.initialized()) {
+    // SH update: pick the right kernel based on (quant value, quant optim,
+    // trust region). FPBO is handled by engine_fused_proj_bwd_optim_step
+    // above; everything below is the non-FPBO path.
+    //
+    //   (value-quant on  + optim-quant on)  -> doubly-quantized kernel
+    //   (value-quant off + optim-quant on)  -> singly-quantized (optim) kernel
+    //   (value-quant off + optim-quant off + TR)  -> TR Adam (fp32)
+    //   (value-quant off + optim-quant off)  -> plain fused Adam (fp32)
+    //
+    // Value-quant + optim-fp32 is rejected at _ensure_optim_state.
+    // SH-quant + TR is not supported (TR kernels need fp32 g1/g2), so the
+    // doubly-quant and singly-quant paths ignore use_color_trust_region.
+    if (cfg.sh_value_bits != 32
+        && engine().world.features_sh_quant8.initialized()) {
+        // 8-bit value + (4 or 8)-bit optim; canonical SH value lives in the
+        // packed buffer (engine().world.features_sh is unallocated here).
+        fused_adam_step_quantized_value(
+            N,
+            (int64_t)N * (int64_t)engine().num_sh * 3LL,
+            DeviceTensorFloatND(engine().grad.features_sh),
+            engine().optim.sh_quant_state.packed_ptr(),
+            engine().optim.sh_quant_state.bounds_ptr(),
+            engine().world.features_sh_quant8.packed_ptr(),
+            engine().world.features_sh_quant8.bounds_ptr(),
+            cfg.lr_features_sh, step + 1, per_splat_steps,
+            cfg.sh_reg_weight, 0.0f,
+            cfg.sh_optim_bits, /*value_bits=*/8,
+            grad_scale, zero_grad);
+    } else if (cfg.sh_value_bits != 32
+               && engine().world.features_sh_quant16.initialized()) {
+        // 16-bit value + (4 or 8)-bit optim.
+        fused_adam_step_quantized_value(
+            N,
+            (int64_t)N * (int64_t)engine().num_sh * 3LL,
+            DeviceTensorFloatND(engine().grad.features_sh),
+            engine().optim.sh_quant_state.packed_ptr(),
+            engine().optim.sh_quant_state.bounds_ptr(),
+            engine().world.features_sh_quant16.packed_ptr(),
+            engine().world.features_sh_quant16.bounds_ptr(),
+            cfg.lr_features_sh, step + 1, per_splat_steps,
+            cfg.sh_reg_weight, 0.0f,
+            cfg.sh_optim_bits, /*value_bits=*/16,
+            grad_scale, zero_grad);
+    } else if (cfg.sh_optim_bits != 32 && engine().optim.sh_quant_state.initialized()) {
+        // SH-quant (optim) only -- fp32 SH values. Plain quantized Adam kernel.
         // SH-quant + TR is not supported by fused_adamtr_*_sh_optim (those
         // kernels need fp32 g1/g2). Fall back to the plain quantized kernel.
-        // Document this as a limitation for callers; FPBO doesn't have this
-        // restriction because the FPBO kernel handles both internally.
         fused_adam_step_quantized(N,
             DeviceTensorFloatND(engine().world.features_sh),
             DeviceTensorFloatND(engine().grad.features_sh),

@@ -27,7 +27,11 @@ std::tuple<
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // SH value-bounds cell stride. 0 = FPBO per-splat-block layout
+    // (256 * 3 * num_sh_buffer cells/bound). 256 = non-FPBO per-cell-block
+    // layout. Plumbed unchanged from EngineForward.cpp.
+    const int64_t sh_bounds_stride
 );
 
 
@@ -43,7 +47,11 @@ std::tuple<
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // SH value-bounds cell stride. 0 = FPBO per-splat-block layout
+    // (256 * 3 * num_sh_buffer cells/bound). 256 = non-FPBO per-cell-block
+    // layout. Plumbed unchanged from EngineForward.cpp.
+    const int64_t sh_bounds_stride
 );
 
 
@@ -59,5 +67,9 @@ std::tuple<
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // SH value-bounds cell stride. 0 = FPBO per-splat-block layout
+    // (256 * 3 * num_sh_buffer cells/bound). 256 = non-FPBO per-cell-block
+    // layout. Plumbed unchanged from EngineForward.cpp.
+    const int64_t sh_bounds_stride
 );

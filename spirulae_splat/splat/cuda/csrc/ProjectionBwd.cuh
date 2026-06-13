@@ -34,7 +34,14 @@ void projection_3dgs_backward(
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
     // returns
     const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats
+    DeviceTensor2D<float>* v_viewmats,
+    // SH VALUE-quant. Nulls + sh_value_bits=32 leaves the bwd on the fp32
+    // SH path (callers without value-quant active pass std::nullopt + 32).
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 
@@ -57,7 +64,14 @@ void projection_mip_backward(
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
     // returns
     const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats
+    DeviceTensor2D<float>* v_viewmats,
+    // SH VALUE-quant. Nulls + sh_value_bits=32 leaves the bwd on the fp32
+    // SH path (callers without value-quant active pass std::nullopt + 32).
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 
@@ -80,5 +94,12 @@ void projection_3dgut_backward(
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
     // returns
     const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats
+    DeviceTensor2D<float>* v_viewmats,
+    // SH VALUE-quant. Nulls + sh_value_bits=32 leaves the bwd on the fp32
+    // SH path (callers without value-quant active pass std::nullopt + 32).
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );

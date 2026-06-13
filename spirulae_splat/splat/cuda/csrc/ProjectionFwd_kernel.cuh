@@ -27,12 +27,17 @@ __global__ void projection_fused_fwd_kernel(
     float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
     typename SplatPrimitive::ScreenBuffer splats_screen,
-    // SH VALUE-quant (active when VALUE_BITS != 32). Packed bytes + per-cell-
-    // block bounds (1 float2 per 256 cells); the cell stride is
-    // 3 * num_sh_buffer (the buffer's max SH count, NOT the runtime SH degree).
-    const uint8_t* __restrict__ sh_value_packed = nullptr,
-    const float2* __restrict__ sh_value_bounds  = nullptr,
-    const uint32_t num_sh_buffer = 0
+    // SH VALUE-quant (active when VALUE_BITS != 32). Packed bytes + per-block
+    // (min, max) bounds. The cell offset within a splat is 3 * num_sh_buffer
+    // (the buffer's max SH count, NOT the runtime SH degree). `sh_bounds_stride`
+    // is the number of CELLS covered by one float2 bound -- 256 for the
+    // non-FPBO per-cell-block layout, or 256 * 3 * num_sh_buffer for the FPBO
+    // per-splat-block layout (256 splats per block, all 3K cells/splat).
+    // 0 (legacy default) is treated as per-splat-block for back-compat with FPBO.
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int64_t  sh_bounds_stride
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -78,12 +83,14 @@ __global__ void projection_fused_fwd_kernel(
             cam, splat_screen, aabb, sorting_depth, radius);
     } else {
         const int64_t sh_base = (int64_t)3 * (int64_t)num_sh_buffer * gid;
-        const int64_t sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+        const int64_t stride = (sh_bounds_stride > 0)
+            ? sh_bounds_stride
+            : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
         splat_world.template project<camera_model, VALUE_BITS>(
             cam, splat_screen, aabb, sorting_depth, radius,
             const_cast<uint8_t*>(sh_value_packed),
             const_cast<float2*>(sh_value_bounds),
-            sh_base, sh_bounds_stride);
+            sh_base, stride);
     }
 
     // Save results
@@ -124,7 +131,10 @@ void projection_fused_fwd_kernel_wrapper(
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // 0 -> FPBO per-splat-block layout (256 * 3 * num_sh_buffer cells/bound);
+    // 256 -> non-FPBO per-cell-block layout. See projection_fused_fwd_kernel.
+    const int64_t sh_bounds_stride
 ) {
     constexpr uint block = 128;
     #define _LAUNCH(VB) \
@@ -134,7 +144,7 @@ void projection_fused_fwd_kernel_wrapper(
             splats_world, viewmats, intrins, dist_coeffs_buffer, \
             image_width, image_height, \
             aabbs, sorting_depths, radii, splats_screen, \
-            sh_value_packed, sh_value_bounds, num_sh_buffer)
+            sh_value_packed, sh_value_bounds, num_sh_buffer, sh_bounds_stride)
     if      (sh_value_bits == 8)  { _LAUNCH(8); }
     else if (sh_value_bits == 16) { _LAUNCH(16); }
     else                          { _LAUNCH(32); }

@@ -15,7 +15,8 @@ namespace cg = cooperative_groups;
 
 template<
     typename SplatPrimitive,
-    CameraModelType camera_model
+    CameraModelType camera_model,
+    int VALUE_BITS = 32
 >
 __global__ void projection_fused_bwd_kernel(
     // fwd inputs
@@ -35,7 +36,14 @@ __global__ void projection_fused_bwd_kernel(
     typename SplatPrimitive::ScreenBuffer v_splats_screen,
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splats_world,
-    float *__restrict__ v_viewmats // [C, 4, 4] optional
+    float *__restrict__ v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant args (active when VALUE_BITS != 32). project_vjp reads
+    // the source SH coefficients via the codec for the v_dir chain. Mirrors
+    // the forward kernel's args.
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int64_t sh_bounds_stride
 ) {
     uint32_t idx = cg::this_grid().thread_rank();
     uint32_t cid, gid;
@@ -79,7 +87,20 @@ __global__ void projection_fused_bwd_kernel(
     typename SplatPrimitive::World v_splat_world = SplatPrimitive::World::zero(v_splats_world, gid);
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
-    splat_world.template project_vjp<camera_model>(cam, v_splat_screen, v_splat_world, v_R, v_t);
+    if constexpr (VALUE_BITS == 32) {
+        splat_world.template project_vjp<camera_model, true, 32>(
+            cam, v_splat_screen, v_splat_world, v_R, v_t);
+    } else {
+        const int64_t sh_base = (int64_t)3 * (int64_t)num_sh_buffer * gid;
+        const int64_t stride = (sh_bounds_stride > 0)
+            ? sh_bounds_stride
+            : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+        splat_world.template project_vjp<camera_model, true, VALUE_BITS>(
+            cam, v_splat_screen, v_splat_world, v_R, v_t,
+            const_cast<uint8_t*>(sh_value_packed),
+            const_cast<float2*>(sh_value_bounds),
+            sh_base, stride);
+    }
 
     // Save results
     v_splat_world.atomicStore(v_splats_world, gid);
@@ -130,14 +151,27 @@ void projection_fused_bwd_kernel_wrapper(
     typename SplatPrimitive::ScreenBuffer v_splats_screen,
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). project_vjp uses these
+    // to evaluate the SH gradient against the codec'd source values.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 ) {
     constexpr uint block = 128;
-    projection_fused_bwd_kernel<SplatPrimitive, camera_model>
-    <<<_CEIL_DIV(C*N, block), block, 0, stream>>>(
-        C, N,
-        splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
-        camera_ids, gaussian_ids, aabb, v_splats_screen,
-        v_splats_world, v_viewmats
-    );
+    #define _LAUNCH(VB) \
+        projection_fused_bwd_kernel<SplatPrimitive, camera_model, VB> \
+        <<<_CEIL_DIV(C*N, block), block, 0, stream>>>( \
+            C, N, \
+            splats_world, viewmats, intrins, dist_coeffs_buffer, \
+            image_width, image_height, \
+            camera_ids, gaussian_ids, aabb, v_splats_screen, \
+            v_splats_world, v_viewmats, \
+            sh_value_packed, sh_value_bounds, num_sh_buffer, sh_bounds_stride)
+    if      (sh_value_bits == 8)  { _LAUNCH(8); }
+    else if (sh_value_bits == 16) { _LAUNCH(16); }
+    else                          { _LAUNCH(32); }
+    #undef _LAUNCH
 }

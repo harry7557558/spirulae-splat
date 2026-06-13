@@ -14,6 +14,7 @@ namespace SlangPerSplatLosses {
 
 #include <Common.cuh>
 #include <Tensor.h>
+#include "NonShQuantState.h"
 #include <stdexcept>
 #include <string>
 
@@ -683,7 +684,79 @@ void fused_adam_scale_agnostic_mean(
 // Fused geometry optimizer
 // ================
 
-template<bool use_scale_agnostic_mean, bool zero_grad>
+// Per-attribute non-SH Adam-state quantization helper. Identical math to the
+// FPBO kernel's _NonShQ helper (kept inline here to avoid pulling FPBO
+// templates into Optimizer.cu's TU). PRIMS is the per-splat cell count
+// (means/scales/dc=3, quats=4, opacities=1).
+template<int PRIMS>
+struct _OptimNonShQ {
+    using NQB = QuantizedAdamState<16, 256>;
+    __device__ static inline void decode(
+        const uint8_t* __restrict__ packed, const float4* __restrict__ bounds,
+        int64_t gid, float* __restrict__ g1_out, float* __restrict__ g2_out
+    ) {
+        float4 mm_old = bounds[blockIdx.x];
+        int64_t base = (int64_t)PRIMS * gid;
+        #pragma unroll
+        for (int i = 0; i < PRIMS; ++i) {
+            float2 ab = NQB::decode_g1g2(packed, base + i, mm_old);
+            g1_out[i] = ab.x;
+            g2_out[i] = ab.y;
+        }
+    }
+    __device__ static inline void accumulate(
+        const float* __restrict__ g1, const float* __restrict__ g2, float4& mm
+    ) {
+        #pragma unroll
+        for (int i = 0; i < PRIMS; ++i) {
+            float2 us = NQB::g1g2_to_us(g1[i], g2[i]);
+            mm.x = fminf(mm.x, us.x);
+            mm.y = fmaxf(mm.y, us.x);
+            mm.z = fminf(mm.z, us.y);
+            mm.w = fmaxf(mm.w, us.y);
+        }
+    }
+    __device__ static inline void encode(
+        uint8_t* __restrict__ packed, int64_t gid,
+        const float* __restrict__ g1, const float* __restrict__ g2, float4 mm
+    ) {
+        int64_t base = (int64_t)PRIMS * gid;
+        #pragma unroll
+        for (int i = 0; i < PRIMS; ++i) {
+            NQB::encode_g1g2(packed, base + i, g1[i], g2[i], mm);
+        }
+    }
+};
+
+// Block reduction over a float4 (paired min/max for u and sqrt_g2).
+template<int BLOCK_SIZE>
+__device__ inline float4 _optim_block_reduce_minmax_f4(float4 mm) {
+    cg::thread_block       block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+    mm.x = cg::reduce(warp, mm.x, cg::less<float>());
+    mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
+    mm.z = cg::reduce(warp, mm.z, cg::less<float>());
+    mm.w = cg::reduce(warp, mm.w, cg::greater<float>());
+    __shared__ float4 shared_reduce[BLOCK_SIZE / WARP_SIZE];
+    if (threadIdx.x % WARP_SIZE == 0)
+        shared_reduce[threadIdx.x / WARP_SIZE] = mm;
+    __syncthreads();
+    mm = (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+        ? shared_reduce[threadIdx.x]
+        : float4{1e30f, -1e30f, 1e30f, -1e30f};
+    mm.x = cg::reduce(warp, mm.x, cg::less<float>());
+    mm.y = cg::reduce(warp, mm.y, cg::greater<float>());
+    mm.z = cg::reduce(warp, mm.z, cg::less<float>());
+    mm.w = cg::reduce(warp, mm.w, cg::greater<float>());
+    __syncthreads();
+    if (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+        shared_reduce[threadIdx.x] = mm;
+    __syncthreads();
+    return shared_reduce[threadIdx.x / WARP_SIZE];
+}
+
+
+template<bool use_scale_agnostic_mean, bool zero_grad, bool non_sh_quant>
 __global__ void fused_optim_3dgs_geometry_kernel(
     float3* __restrict__ means,
     float3* __restrict__ v_means,
@@ -701,11 +774,16 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     float* __restrict__ v_opacities,
     float* __restrict__ g1_opacities,
     float* __restrict__ g2_opacities,
+    // features_dc -- only consumed when non_sh_quant is on; the non-quant path
+    // continues to drive features_dc via the separate fused_adam_step call.
+    float3* __restrict__ features_dc,
+    float3* __restrict__ v_features_dc,
     const float* __restrict__ radii,
     float lr_means,
     float lr_quats,
     float lr_scales,
     float lr_opacs,
+    float lr_features_dc,
     const float max_gauss_ratio,
     const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight,
@@ -713,7 +791,10 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float sh_reg_weight,
     const float grad_scale,
+    // Non-SH Adam-state quantization bundle. Only read when non_sh_quant is on.
+    const NonShQuantState non_sh,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
     const int64_t numel
@@ -721,115 +802,224 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     static constexpr float eps = 1e-15f;
     static constexpr float beta1 = 0.9f;
     static constexpr float beta2 = 0.999f;
+    static constexpr int   BLOCK_SIZE = 256;
+    static constexpr float kSh0 = 0.28209479177387814f;  // 1 / (2*sqrt(pi))
 
     const int64_t idx = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
-    if (idx >= numel) return;
+    bool inside = (idx < numel);
 
-    float step = (float)(steps != nullptr ? steps[idx] : scalar_step);
-    float inv_bias_correction1 = 1.0f / (1.0f - powf(beta1, step));
-    float inv_bias_correction2 = 1.0f / (1.0f - powf(beta2, step));
-    lr_means *= inv_bias_correction1;
-    lr_quats *= inv_bias_correction1;
-    lr_scales *= inv_bias_correction1;
-    lr_opacs *= inv_bias_correction1;
+    // Per-thread non-SH-quant state. Hoisted to function scope so the
+    // post-update block reduction can see all attrs together; only used when
+    // non_sh_quant is on.
+    [[maybe_unused]] float3 nq_g1_scale = make_float3(0.f), nq_g2_scale = make_float3(0.f);
+    [[maybe_unused]] float4 nq_g1_quat  = make_float4(0.f), nq_g2_quat  = make_float4(0.f);
+    [[maybe_unused]] float  nq_g1_opac = 0.f, nq_g2_opac = 0.f;
+    [[maybe_unused]] float3 nq_g1_mean = make_float3(0.f), nq_g2_mean = make_float3(0.f);
+    [[maybe_unused]] float3 nq_g1_dc   = make_float3(0.f), nq_g2_dc   = make_float3(0.f);
+    [[maybe_unused]] float4 nq_mm_scale = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    [[maybe_unused]] float4 nq_mm_quat  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    [[maybe_unused]] float4 nq_mm_opac  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    [[maybe_unused]] float4 nq_mm_mean  = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
+    [[maybe_unused]] float4 nq_mm_dc    = make_float4(1e30f, -1e30f, 1e30f, -1e30f);
 
-    // load params
-    float3 scale = scales[idx];
-    float4 quat = normalize(quats[idx]);
-    float opac = opacities[idx];
+    if (inside) {
+        float step = (float)(steps != nullptr ? steps[idx] : scalar_step);
+        float inv_bias_correction1 = 1.0f / (1.0f - powf(beta1, step));
+        float inv_bias_correction2 = 1.0f / (1.0f - powf(beta2, step));
+        lr_means *= inv_bias_correction1;
+        lr_quats *= inv_bias_correction1;
+        lr_scales *= inv_bias_correction1;
+        lr_opacs *= inv_bias_correction1;
+        lr_features_dc *= inv_bias_correction1;
 
-    // load gradient, with regularization
-    static constexpr int kNumPerSplatLosses = 5;
-    FixedArray<float, kNumPerSplatLosses> v_losses = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-    float3 v_scale = make_float3(0.0f);
-    float4 v_quat = make_float4(0.0f);
-    float v_opac = 0.0f;
-    SlangPerSplatLosses::per_splat_losses_bwd(
-        scale, opac, quat, v_losses,
-        &v_scale, &v_opac, &v_quat,
-        mcmc_opacity_reg_weight,
-        mcmc_scale_reg_weight,
-        max_gauss_ratio,
-        scale_regularization_weight,
-        erank_reg_weight,
-        erank_reg_weight_s3,
-        quat_norm_reg_weight
-    );
-    v_scale += grad_scale * v_scales[idx];
-    v_quat += grad_scale * v_quats[idx];
-    v_opac += grad_scale * v_opacities[idx];
-    if constexpr (zero_grad) {
-        v_scales[idx] = make_float3(0.0f);
-        v_quats[idx] = make_float4(0.0f);
-        v_opacities[idx] = 0.0f;
-    }
+        // load params
+        float3 scale = scales[idx];
+        float4 quat = normalize(quats[idx]);
+        float opac = opacities[idx];
 
-    // update scales
-    float3 g1_scale = beta1 * g1_scales[idx] + (1.f - beta1) * v_scale;
-    float3 g2_scale = beta2 * g2_scales[idx] + (1.f - beta2) * v_scale*v_scale;
-    float3 updated_scale = scale - lr_scales * g1_scale / (sqrtf(g2_scale * inv_bias_correction2) + eps);
-    scales[idx] = updated_scale;
-    g1_scales[idx] = g1_scale;
-    g2_scales[idx] = g2_scale;
-
-    // update quats (Riemannian)
-    v_quat -= dot(quat, v_quat) * quat;
-    float4 g1_quat = beta1 * g1_quats[idx] + (1.f - beta1) * v_quat;
-    float4 g2_quat = beta2 * g2_quats[idx] + (1.f - beta2) * v_quat*v_quat;
-    quats[idx] = normalize(quat - lr_quats * g1_quat / (sqrtf(g2_quat * inv_bias_correction2) + eps));
-    g1_quats[idx] = g1_quat;
-    g2_quats[idx] = g2_quat;
-
-    // update opacs
-    float g1_opac = beta1 * g1_opacities[idx] + (1.f - beta1) * v_opac;
-    float g2_opac = beta2 * g2_opacities[idx] + (1.f - beta2) * v_opac*v_opac;
-    float updated_opac = opac - lr_opacs * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
-    opacities[idx] = updated_opac;
-    g1_opacities[idx] = g1_opac;
-    g2_opacities[idx] = g2_opac;
-
-    // update means (scale agnostic)
-    float3 mean = means[idx];
-    float3 v_mean = grad_scale * v_means[idx];
-    if constexpr (zero_grad)
-        v_means[idx] = make_float3(0.0f);
-    float3 g1_mean = g1_means[idx];
-    float3 g2_mean = g2_means[idx];
-
-    float opac_post_sigmoid = sigmoid(opac);
-
-    if constexpr (use_scale_agnostic_mean) {
-        float3 v_mean_scaled_num = SlangProjectionUtils::apply_covar_to_vec(
-            quat,
-            {expf(0.5f*scale.x), expf(0.5f*scale.y), expf(0.5f*scale.z)},  // unit: L^0.5
-            v_mean  // unit: L^-1
-        ) * sqrtf(2.0f * __logf(fmaxf(255.0f * opac_post_sigmoid, 1.00001f)));  // unit: dimensionless
-    #if 1
-        float v_mean_scaled_den = radii[idx] * 0.6f;  // unit: dimensionless
-    #else
-        float3 scale_post_exp = float3{__expf(scale.x), __expf(scale.y), __expf(scale.z)};
-        v_mean_scaled_num = v_mean_scaled_num * (
-            fmaxf(scale_post_exp.x, fmaxf(scale_post_exp.y, scale_post_exp.z)) *
-                powf(powf(scale_post_exp.x*scale_post_exp.y, 1.6f) +
-                    powf(scale_post_exp.x*scale_post_exp.z, 1.6f) +
-                    powf(scale_post_exp.y*scale_post_exp.z, 1.6f), -0.5f / 1.6f)  // proportional to longest axis to visible radius ratio
+        // load gradient, with regularization
+        static constexpr int kNumPerSplatLosses = 5;
+        FixedArray<float, kNumPerSplatLosses> v_losses = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+        float3 v_scale = make_float3(0.0f);
+        float4 v_quat = make_float4(0.0f);
+        float v_opac = 0.0f;
+        SlangPerSplatLosses::per_splat_losses_bwd(
+            scale, opac, quat, v_losses,
+            &v_scale, &v_opac, &v_quat,
+            mcmc_opacity_reg_weight,
+            mcmc_scale_reg_weight,
+            max_gauss_ratio,
+            scale_regularization_weight,
+            erank_reg_weight,
+            erank_reg_weight_s3,
+            quat_norm_reg_weight
         );
-        float v_mean_scaled_den = radii[idx] * 0.9f;
-    #endif
-    #if 0
-        v_mean_scaled_num = v_mean_scaled_num / (v_mean_scaled_den + (eps * (float)numel));
-        v_mean_scaled_den = 1.0f;
-    #endif
-        g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;  // unit: dimensionless
-        g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean * v_mean_scaled_den*v_mean_scaled_den;  // unit: L^-2
-    } else {
-        g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean;  // unit: L^-1
-        g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean;  // unit: L^-2
-    }
+        v_scale += grad_scale * v_scales[idx];
+        v_quat += grad_scale * v_quats[idx];
+        v_opac += grad_scale * v_opacities[idx];
+        if constexpr (zero_grad) {
+            v_scales[idx] = make_float3(0.0f);
+            v_quats[idx] = make_float4(0.0f);
+            v_opacities[idx] = 0.0f;
+        }
 
-    means[idx] = mean - lr_means * g1_mean / (sqrtf(g2_mean * inv_bias_correction2) + eps); // unit: L or dimensionless for dimensionless lr_means
-    g1_means[idx] = g1_mean;
-    g2_means[idx] = g2_mean;
+        // update scales
+        float3 g1_scale, g2_scale;
+        if constexpr (non_sh_quant) {
+            _OptimNonShQ<3>::decode(non_sh.scales_packed, non_sh.scales_bounds, idx,
+                                    (float*)&g1_scale, (float*)&g2_scale);
+        } else {
+            g1_scale = g1_scales[idx];
+            g2_scale = g2_scales[idx];
+        }
+        g1_scale = beta1 * g1_scale + (1.f - beta1) * v_scale;
+        g2_scale = beta2 * g2_scale + (1.f - beta2) * v_scale*v_scale;
+        float3 updated_scale = scale - lr_scales * g1_scale / (sqrtf(g2_scale * inv_bias_correction2) + eps);
+        scales[idx] = updated_scale;
+        if constexpr (non_sh_quant) {
+            nq_g1_scale = g1_scale;
+            nq_g2_scale = g2_scale;
+            _OptimNonShQ<3>::accumulate((float*)&g1_scale, (float*)&g2_scale, nq_mm_scale);
+        } else {
+            g1_scales[idx] = g1_scale;
+            g2_scales[idx] = g2_scale;
+        }
+
+        // update quats (Riemannian)
+        v_quat -= dot(quat, v_quat) * quat;
+        float4 g1_quat, g2_quat;
+        if constexpr (non_sh_quant) {
+            _OptimNonShQ<4>::decode(non_sh.quats_packed, non_sh.quats_bounds, idx,
+                                    (float*)&g1_quat, (float*)&g2_quat);
+        } else {
+            g1_quat = g1_quats[idx];
+            g2_quat = g2_quats[idx];
+        }
+        g1_quat = beta1 * g1_quat + (1.f - beta1) * v_quat;
+        g2_quat = beta2 * g2_quat + (1.f - beta2) * v_quat*v_quat;
+        quats[idx] = normalize(quat - lr_quats * g1_quat / (sqrtf(g2_quat * inv_bias_correction2) + eps));
+        if constexpr (non_sh_quant) {
+            nq_g1_quat = g1_quat;
+            nq_g2_quat = g2_quat;
+            _OptimNonShQ<4>::accumulate((float*)&g1_quat, (float*)&g2_quat, nq_mm_quat);
+        } else {
+            g1_quats[idx] = g1_quat;
+            g2_quats[idx] = g2_quat;
+        }
+
+        // update opacs
+        float g1_opac, g2_opac;
+        if constexpr (non_sh_quant) {
+            _OptimNonShQ<1>::decode(non_sh.opacities_packed, non_sh.opacities_bounds, idx,
+                                    &g1_opac, &g2_opac);
+        } else {
+            g1_opac = g1_opacities[idx];
+            g2_opac = g2_opacities[idx];
+        }
+        g1_opac = beta1 * g1_opac + (1.f - beta1) * v_opac;
+        g2_opac = beta2 * g2_opac + (1.f - beta2) * v_opac*v_opac;
+        float updated_opac = opac - lr_opacs * g1_opac / (sqrtf(g2_opac * inv_bias_correction2) + eps);
+        opacities[idx] = updated_opac;
+        if constexpr (non_sh_quant) {
+            nq_g1_opac = g1_opac;
+            nq_g2_opac = g2_opac;
+            _OptimNonShQ<1>::accumulate(&g1_opac, &g2_opac, nq_mm_opac);
+        } else {
+            g1_opacities[idx] = g1_opac;
+            g2_opacities[idx] = g2_opac;
+        }
+
+        // update means (scale agnostic)
+        float3 mean = means[idx];
+        float3 v_mean = grad_scale * v_means[idx];
+        if constexpr (zero_grad)
+            v_means[idx] = make_float3(0.0f);
+        float3 g1_mean, g2_mean;
+        if constexpr (non_sh_quant) {
+            _OptimNonShQ<3>::decode(non_sh.means_packed, non_sh.means_bounds, idx,
+                                    (float*)&g1_mean, (float*)&g2_mean);
+        } else {
+            g1_mean = g1_means[idx];
+            g2_mean = g2_means[idx];
+        }
+
+        float opac_post_sigmoid = sigmoid(opac);
+
+        if constexpr (use_scale_agnostic_mean) {
+            float3 v_mean_scaled_num = SlangProjectionUtils::apply_covar_to_vec(
+                quat,
+                {expf(0.5f*scale.x), expf(0.5f*scale.y), expf(0.5f*scale.z)},
+                v_mean
+            ) * sqrtf(2.0f * __logf(fmaxf(255.0f * opac_post_sigmoid, 1.00001f)));
+            float v_mean_scaled_den = radii[idx] * 0.6f;
+            g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean_scaled_num;
+            g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean * v_mean_scaled_den*v_mean_scaled_den;
+        } else {
+            g1_mean = beta1 * g1_mean + (1.f - beta1) * v_mean;
+            g2_mean = beta2 * g2_mean + (1.f - beta2) * v_mean*v_mean;
+        }
+
+        means[idx] = mean - lr_means * g1_mean / (sqrtf(g2_mean * inv_bias_correction2) + eps);
+        if constexpr (non_sh_quant) {
+            nq_g1_mean = g1_mean;
+            nq_g2_mean = g2_mean;
+            _OptimNonShQ<3>::accumulate((float*)&g1_mean, (float*)&g2_mean, nq_mm_mean);
+        } else {
+            g1_means[idx] = g1_mean;
+            g2_means[idx] = g2_mean;
+        }
+
+        // update features_dc (only when non_sh_quant is on; the fp32 path
+        // keeps the separate fused_adam_step launch for features_dc).
+        if constexpr (non_sh_quant) {
+            float3 fdc  = features_dc[idx];
+            float3 v_dc = grad_scale * v_features_dc[idx];
+            if constexpr (zero_grad)
+                v_features_dc[idx] = make_float3(0.0f);
+            // L1-shrinkage regularization for SH/DC color: matches the
+            // existing fused_adam_step(features_dc) launch's
+            // l2_reg + l2_reg_offset = 0.5/kSh0 (mirror it here so non_sh_quant
+            // doesn't silently drop the DC color reg). reg pushes toward 0
+            // within [-0.5/kSh0, +0.5/kSh0] using a clamped grad.
+            const float dc_off = 0.5f / kSh0;
+            v_dc.x += sh_reg_weight * (fmaxf(fdc.x - dc_off, 0.f) + fminf(fdc.x + dc_off, 0.f));
+            v_dc.y += sh_reg_weight * (fmaxf(fdc.y - dc_off, 0.f) + fminf(fdc.y + dc_off, 0.f));
+            v_dc.z += sh_reg_weight * (fmaxf(fdc.z - dc_off, 0.f) + fminf(fdc.z + dc_off, 0.f));
+
+            float3 g1_dc, g2_dc;
+            _OptimNonShQ<3>::decode(non_sh.features_dc_packed, non_sh.features_dc_bounds, idx,
+                                    (float*)&g1_dc, (float*)&g2_dc);
+            g1_dc = beta1 * g1_dc + (1.f - beta1) * v_dc;
+            g2_dc = beta2 * g2_dc + (1.f - beta2) * v_dc*v_dc;
+            features_dc[idx] = fdc - lr_features_dc * g1_dc / (sqrtf(g2_dc * inv_bias_correction2) + eps);
+            nq_g1_dc = g1_dc;
+            nq_g2_dc = g2_dc;
+            _OptimNonShQ<3>::accumulate((float*)&g1_dc, (float*)&g2_dc, nq_mm_dc);
+        }
+    }  // inside
+
+    // Block-reduce per-attribute bounds (in u, sqrt_g2 basis) + encode.
+    // All threads must participate in the reduces; outside-threads pass
+    // sentinel min/max that don't perturb the result.
+    if constexpr (non_sh_quant) {
+        nq_mm_scale = _optim_block_reduce_minmax_f4<BLOCK_SIZE>(nq_mm_scale);
+        if (threadIdx.x == 0) non_sh.scales_bounds[blockIdx.x] = nq_mm_scale;
+        nq_mm_quat = _optim_block_reduce_minmax_f4<BLOCK_SIZE>(nq_mm_quat);
+        if (threadIdx.x == 0) non_sh.quats_bounds[blockIdx.x] = nq_mm_quat;
+        nq_mm_opac = _optim_block_reduce_minmax_f4<BLOCK_SIZE>(nq_mm_opac);
+        if (threadIdx.x == 0) non_sh.opacities_bounds[blockIdx.x] = nq_mm_opac;
+        nq_mm_mean = _optim_block_reduce_minmax_f4<BLOCK_SIZE>(nq_mm_mean);
+        if (threadIdx.x == 0) non_sh.means_bounds[blockIdx.x] = nq_mm_mean;
+        nq_mm_dc = _optim_block_reduce_minmax_f4<BLOCK_SIZE>(nq_mm_dc);
+        if (threadIdx.x == 0) non_sh.features_dc_bounds[blockIdx.x] = nq_mm_dc;
+        if (inside) {
+            _OptimNonShQ<3>::encode(non_sh.scales_packed,      idx, (float*)&nq_g1_scale, (float*)&nq_g2_scale, nq_mm_scale);
+            _OptimNonShQ<4>::encode(non_sh.quats_packed,       idx, (float*)&nq_g1_quat,  (float*)&nq_g2_quat,  nq_mm_quat);
+            _OptimNonShQ<1>::encode(non_sh.opacities_packed,   idx, &nq_g1_opac,          &nq_g2_opac,          nq_mm_opac);
+            _OptimNonShQ<3>::encode(non_sh.means_packed,       idx, (float*)&nq_g1_mean,  (float*)&nq_g2_mean,  nq_mm_mean);
+            _OptimNonShQ<3>::encode(non_sh.features_dc_packed, idx, (float*)&nq_g1_dc,    (float*)&nq_g2_dc,    nq_mm_dc);
+        }
+    }
 }
 
 
@@ -840,44 +1030,66 @@ void fused_optim_3dgs_geometry(
     DeviceVector<float4> quats, DeviceVector<float4> v_quats, DeviceVector<float4> g1_quats, DeviceVector<float4> g2_quats,
     DeviceVector<float3> scales, DeviceVector<float3> v_scales, DeviceVector<float3> g1_scales, DeviceVector<float3> g2_scales,
     DeviceVector<float> opacities, DeviceVector<float> v_opacities, DeviceVector<float> g1_opacities, DeviceVector<float> g2_opacities,
+    // features_dc + grad: consumed only when non_sh has its quant buffers
+    // populated (via non_sh.enabled flagged in `non_sh`). The fp32 path
+    // ignores them and runs the separate fused_adam_step features_dc call.
+    DeviceVector<float3> features_dc, DeviceVector<float3> v_features_dc,
     DeviceVector<float> radii,
     const float lr_means, const float lr_quats, const float lr_scales, const float lr_opacs,
+    const float lr_features_dc,
     const float max_gauss_ratio, const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight, const float mcmc_scale_reg_weight,
     const float erank_reg_weight, const float erank_reg_weight_s3, const float quat_norm_reg_weight,
+    const float sh_reg_weight,
     bool use_scale_agnostic_mean,
+    NonShQuantState non_sh,
     int32_t step, DeviceVector<int32_t> per_splat_steps,
     float grad_scale, bool zero_grad
 ) {
     if (num_splats == 0)
         return;
 
-    // Dispatch over (use_scale_agnostic_mean, zero_grad) -> 4 instantiations.
+    // Dispatch over (use_scale_agnostic_mean, zero_grad, non_sh_quant) -> 8 instantiations.
     using KFn = void(*)(
         float3*, float3*, float3*, float3*,
         float4*, float4*, float4*, float4*,
         float3*, float3*, float3*, float3*,
         float*,  float*,  float*,  float*,
+        float3*, float3*,
         const float*,
-        float, float, float, float,
+        float, float, float, float, float,
         const float, const float, const float, const float,
         const float, const float, const float, const float,
+        const float,
+        const NonShQuantState,
         const int32_t, const int32_t*, const int64_t);
     KFn kfn = nullptr;
+    const bool nq = non_sh.enabled;
     if (use_scale_agnostic_mean) {
-        kfn = zero_grad ? fused_optim_3dgs_geometry_kernel<true,  true>
-                        : fused_optim_3dgs_geometry_kernel<true,  false>;
+        if (zero_grad) {
+            kfn = nq ? fused_optim_3dgs_geometry_kernel<true,  true,  true>
+                     : fused_optim_3dgs_geometry_kernel<true,  true,  false>;
+        } else {
+            kfn = nq ? fused_optim_3dgs_geometry_kernel<true,  false, true>
+                     : fused_optim_3dgs_geometry_kernel<true,  false, false>;
+        }
     } else {
-        kfn = zero_grad ? fused_optim_3dgs_geometry_kernel<false, true>
-                        : fused_optim_3dgs_geometry_kernel<false, false>;
+        if (zero_grad) {
+            kfn = nq ? fused_optim_3dgs_geometry_kernel<false, true,  true>
+                     : fused_optim_3dgs_geometry_kernel<false, true,  false>;
+        } else {
+            kfn = nq ? fused_optim_3dgs_geometry_kernel<false, false, true>
+                     : fused_optim_3dgs_geometry_kernel<false, false, false>;
+        }
     }
     kfn<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
         means.data_ptr(), v_means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
         quats.data_ptr(), v_quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
         scales.data_ptr(), v_scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
         opacities.data_ptr(), v_opacities.data_ptr(), g1_opacities.data_ptr(), g2_opacities.data_ptr(),
+        features_dc.data_ptr(), v_features_dc.data_ptr(),
         (const float*)radii.data_ptr(),
-        lr_means, lr_quats, lr_scales, lr_opacs,
+        lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         max_gauss_ratio,
         scale_regularization_weight / (float)num_splats,
         mcmc_opacity_reg_weight / (float)num_splats,
@@ -885,7 +1097,9 @@ void fused_optim_3dgs_geometry(
         erank_reg_weight / (float)num_splats,
         erank_reg_weight_s3 / (float)num_splats,
         quat_norm_reg_weight / (float)num_splats,
+        sh_reg_weight,
         grad_scale,
+        non_sh,
         step, per_splat_steps.data_ptr(), num_splats
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -1156,6 +1370,199 @@ void fused_adam_step_quantized(
             std::to_string(bits));
     }
     #undef _ARGS_TAIL
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+// ================
+// Doubly-quantized fused Adam for SH features (non-FPBO).
+// Quantizes BOTH the optimizer state (g1, g2) AND the parameter value (sh
+// coeffs) against per-CELL-block (256 cells per block) min/max bounds:
+//
+//   * Optimizer state -- QuantizedAdamState<OPTIM_BITS, 256> in (u, sqrt_g2)
+//     basis, one float4 bound per block (u_min, u_max, sqrt_g2_min, sqrt_g2_max).
+//   * Parameter value -- QuantizedTensor<VALUE_BITS, 256>, one float2 bound
+//     per block (v_min, v_max).
+//
+// FPBO already handles this combo per-splat-block; this kernel mirrors the
+// math but indexes per-cell-block, matching the existing non-FPBO Adam
+// kernel's launch geometry. Used by engine_optim_step when sh_value_bits != 32
+// and use_fused_proj_bwd_optim is off (no fp32 features_sh exists then;
+// the packed buffer IS the canonical storage).
+// ================
+
+template<int BLOCK_SIZE, int OPTIM_BITS, int VALUE_BITS, bool zero_grad>
+__global__ void fused_adam_with_steps_qq_kernel(
+    float* __restrict__ grad,           // fp32 grad (still dense)
+    uint8_t* __restrict__ optim_packed, // optim-state packed (u, sqrt_g2)
+    float4*  __restrict__ optim_bounds, // per-cell-block float4 (u_mm, sqrt_g2_mm)
+    uint8_t* __restrict__ value_packed, // parameter-value packed
+    float2*  __restrict__ value_bounds, // per-cell-block float2 (v_min, v_max)
+    const float lr,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps,
+    const float decay,
+    const float decay_offset,
+    const float grad_scale,
+    const int64_t numel,
+    const int stride
+) {
+    using QState     = QuantizedAdamState<OPTIM_BITS, BLOCK_SIZE>;
+    using QValue     = QuantizedTensor<VALUE_BITS, BLOCK_SIZE>;
+    static constexpr float eps   = 1e-15f;
+    static constexpr float beta1 = 0.9f;
+    static constexpr float beta2 = 0.999f;
+
+    const int64_t idx = (int64_t)blockIdx.x * BLOCK_SIZE + (int64_t)threadIdx.x;
+    bool inside = (idx < numel);
+
+    float step = (float)(steps ? steps[idx / stride] : scalar_step);
+    float inv_bias_correction1 = 1.0f / (1.0f - powf(beta1, step));
+    float inv_bias_correction2 = 1.0f / (1.0f - powf(beta2, step));
+
+    // Decode old value from packed bytes against the block's old bound. Skip
+    // the load for out-of-range threads (they pass sentinels through the
+    // reduction so the bound only reflects inside threads' values).
+    float2 value_mm_old = inside ? value_bounds[blockIdx.x] : float2{0.f, 0.f};
+    float x = inside ? QValue::decode_v(value_packed, idx, value_mm_old) : 0.0f;
+
+    float v = inside ? grad[idx] : 0.0f;
+    if (!isfinite(v))
+        v = 0.0f;
+    if constexpr (zero_grad) {
+        if (inside) grad[idx] = 0.0f;
+    }
+    v *= grad_scale;
+    v += decay * (fmaxf(x - decay_offset, 0.0f) + fminf(x + decay_offset, 0.0f));
+
+    // Decode joint (u, sqrt_g2) for Adam state.
+    float4 optim_mm = optim_bounds[blockIdx.x];
+    float g1 = 0.0f, g2 = 0.0f;
+    if (inside) {
+        float2 g1g2 = QState::decode_g1g2(optim_packed, idx, optim_mm);
+        g1 = g1g2.x;
+        g2 = g1g2.y;
+    }
+
+    g1 = beta1 * g1 + (1.0f - beta1) * v;
+    g2 = beta2 * g2 + (1.0f - beta2) * v * v;
+
+    x -= lr * inv_bias_correction1 * g1 / (sqrtf(g2 * inv_bias_correction2) + eps);
+
+    // ---- value bounds block-reduce (float2 min/max) ----
+    float2 value_mm_new = inside ? float2{x, x} : float2{1e30f, -1e30f};
+
+    cg::thread_block       block = cg::this_thread_block();
+    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+    value_mm_new.x = cg::reduce(warp, value_mm_new.x, cg::less<float>());
+    value_mm_new.y = cg::reduce(warp, value_mm_new.y, cg::greater<float>());
+    __shared__ float2 shared_reduce_v[BLOCK_SIZE / WARP_SIZE];
+    if (threadIdx.x % WARP_SIZE == 0)
+        shared_reduce_v[threadIdx.x / WARP_SIZE] = value_mm_new;
+    __syncthreads();
+    value_mm_new = (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+        ? shared_reduce_v[threadIdx.x] : float2{1e30f, -1e30f};
+    value_mm_new.x = cg::reduce(warp, value_mm_new.x, cg::less<float>());
+    value_mm_new.y = cg::reduce(warp, value_mm_new.y, cg::greater<float>());
+    __syncthreads();
+    if (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+        shared_reduce_v[threadIdx.x] = value_mm_new;
+    __syncthreads();
+    value_mm_new = shared_reduce_v[threadIdx.x / WARP_SIZE];
+
+    // ---- optim state bounds block-reduce ((u, sqrt_g2) -> float4) ----
+    float2 us_new = QState::g1g2_to_us(g1, g2);
+    float u_new = us_new.x, sqrt_g2_new = us_new.y;
+    float4 optim_mm_new = inside
+        ? float4{u_new, u_new, sqrt_g2_new, sqrt_g2_new}
+        : float4{1e30f, -1e30f, 1e30f, -1e30f};
+    optim_mm_new.x = cg::reduce(warp, optim_mm_new.x, cg::less<float>());
+    optim_mm_new.y = cg::reduce(warp, optim_mm_new.y, cg::greater<float>());
+    optim_mm_new.z = cg::reduce(warp, optim_mm_new.z, cg::less<float>());
+    optim_mm_new.w = cg::reduce(warp, optim_mm_new.w, cg::greater<float>());
+    __shared__ float4 shared_reduce_o[BLOCK_SIZE / WARP_SIZE];
+    if (threadIdx.x % WARP_SIZE == 0)
+        shared_reduce_o[threadIdx.x / WARP_SIZE] = optim_mm_new;
+    __syncthreads();
+    optim_mm_new = (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+        ? shared_reduce_o[threadIdx.x]
+        : float4{1e30f, -1e30f, 1e30f, -1e30f};
+    optim_mm_new.x = cg::reduce(warp, optim_mm_new.x, cg::less<float>());
+    optim_mm_new.y = cg::reduce(warp, optim_mm_new.y, cg::greater<float>());
+    optim_mm_new.z = cg::reduce(warp, optim_mm_new.z, cg::less<float>());
+    optim_mm_new.w = cg::reduce(warp, optim_mm_new.w, cg::greater<float>());
+    __syncthreads();
+    if (threadIdx.x < BLOCK_SIZE / WARP_SIZE)
+        shared_reduce_o[threadIdx.x] = optim_mm_new;
+    __syncthreads();
+    optim_mm_new = shared_reduce_o[threadIdx.x / WARP_SIZE];
+
+    // Encode + write back. Each inside thread encodes its cell; thread 0 writes
+    // the per-block bounds.
+    if (inside) {
+        QValue::encode_v(value_packed, idx, x, value_mm_new);
+        QState::encode_us(optim_packed, idx, u_new, sqrt_g2_new, optim_mm_new);
+    }
+    if (threadIdx.x == 0) {
+        value_bounds[blockIdx.x] = value_mm_new;
+        optim_bounds[blockIdx.x] = optim_mm_new;
+    }
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void fused_adam_step_quantized_value(
+    int64_t num_splats,
+    int64_t param_numel,                // = num_splats * stride (e.g. 3 * num_sh)
+    DeviceTensorFloatND grad,           // fp32 dense [num_splats, stride]
+    uint8_t* optim_packed,
+    float4*  optim_bounds,
+    uint8_t* value_packed,
+    float2*  value_bounds,
+    float lr,
+    int32_t step, DeviceVector<int32_t> per_splat_steps,
+    float l2_reg,
+    float l2_reg_offset,
+    int optim_bits,                     // 4 or 8
+    int value_bits,                     // 8 or 16
+    float grad_scale, bool zero_grad
+) {
+    if (param_numel == 0 || num_splats == 0)
+        return;
+    int stride = (int)(param_numel / num_splats);
+    constexpr int BLOCK_SIZE = 256;
+
+    #define _ARGS_TAIL_QQ \
+        grad.data_ptr(), optim_packed, optim_bounds, value_packed, value_bounds, \
+        lr, step, per_splat_steps.data_ptr(), \
+        2.0f*l2_reg/(float)(num_splats*stride), l2_reg_offset, \
+        grad_scale, \
+        num_splats*stride, stride
+
+    // 4 instantiations: (optim_bits in {4, 8}) x (value_bits in {8, 16}) x
+    // (zero_grad in {false, true}). Throw on any other combination.
+    if (optim_bits == 4 && value_bits == 8) {
+        auto kfn = zero_grad ? fused_adam_with_steps_qq_kernel<BLOCK_SIZE, 4, 8,  true>
+                             : fused_adam_with_steps_qq_kernel<BLOCK_SIZE, 4, 8,  false>;
+        kfn<<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(_ARGS_TAIL_QQ);
+    } else if (optim_bits == 4 && value_bits == 16) {
+        auto kfn = zero_grad ? fused_adam_with_steps_qq_kernel<BLOCK_SIZE, 4, 16, true>
+                             : fused_adam_with_steps_qq_kernel<BLOCK_SIZE, 4, 16, false>;
+        kfn<<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(_ARGS_TAIL_QQ);
+    } else if (optim_bits == 8 && value_bits == 8) {
+        auto kfn = zero_grad ? fused_adam_with_steps_qq_kernel<BLOCK_SIZE, 8, 8,  true>
+                             : fused_adam_with_steps_qq_kernel<BLOCK_SIZE, 8, 8,  false>;
+        kfn<<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(_ARGS_TAIL_QQ);
+    } else if (optim_bits == 8 && value_bits == 16) {
+        auto kfn = zero_grad ? fused_adam_with_steps_qq_kernel<BLOCK_SIZE, 8, 16, true>
+                             : fused_adam_with_steps_qq_kernel<BLOCK_SIZE, 8, 16, false>;
+        kfn<<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(_ARGS_TAIL_QQ);
+    } else {
+        throw std::runtime_error(
+            "fused_adam_step_quantized_value: optim_bits in {4, 8} and "
+            "value_bits in {8, 16}; got optim_bits=" + std::to_string(optim_bits) +
+            ", value_bits=" + std::to_string(value_bits));
+    }
+    #undef _ARGS_TAIL_QQ
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 

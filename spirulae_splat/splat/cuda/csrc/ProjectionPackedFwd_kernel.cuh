@@ -30,7 +30,8 @@ __global__ void projection_packed_mask_kernel(
     // keeps the SH eval well-defined when fp32 features_sh is stale.
     const uint8_t* __restrict__ sh_value_packed = nullptr,
     const float2* __restrict__ sh_value_bounds  = nullptr,
-    const uint32_t num_sh_buffer = 0
+    const uint32_t num_sh_buffer = 0,
+    const int64_t  sh_bounds_stride = 0
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -71,12 +72,14 @@ __global__ void projection_packed_mask_kernel(
             cam, splat_screen, aabb, sorting_depth, radius);
     } else {
         const int64_t sh_base = (int64_t)3 * (int64_t)num_sh_buffer * gid;
-        const int64_t sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+        const int64_t stride = (sh_bounds_stride > 0)
+            ? sh_bounds_stride
+            : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
         splat_world.template project<camera_model, VALUE_BITS>(
             cam, splat_screen, aabb, sorting_depth, radius,
             const_cast<uint8_t*>(sh_value_packed),
             const_cast<float2*>(sh_value_bounds),
-            sh_base, sh_bounds_stride);
+            sh_base, stride);
     }
 
     // Save results
@@ -108,7 +111,8 @@ __global__ void projection_packed_fwd_kernel(
     typename SplatPrimitive::ScreenBuffer splats_screen,  // [nnz, ...]
     const uint8_t* __restrict__ sh_value_packed = nullptr,
     const float2* __restrict__ sh_value_bounds  = nullptr,
-    const uint32_t num_sh_buffer = 0
+    const uint32_t num_sh_buffer = 0,
+    const int64_t  sh_bounds_stride = 0
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -155,12 +159,14 @@ __global__ void projection_packed_fwd_kernel(
             cam, splat_screen, aabb, sorting_depth, radius);
     } else {
         const int64_t sh_base = (int64_t)3 * (int64_t)num_sh_buffer * gid;
-        const int64_t sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+        const int64_t stride = (sh_bounds_stride > 0)
+            ? sh_bounds_stride
+            : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
         splat_world.template project<camera_model, VALUE_BITS>(
             cam, splat_screen, aabb, sorting_depth, radius,
             const_cast<uint8_t*>(sh_value_packed),
             const_cast<float2*>(sh_value_bounds),
-            sh_base, sh_bounds_stride);
+            sh_base, stride);
     }
 
     // Save results
@@ -193,7 +199,8 @@ void projection_packed_mask_kernel_wrapper(
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 ) {
     constexpr uint block = 128;
     #define _LAUNCH(VB) \
@@ -203,7 +210,7 @@ void projection_packed_mask_kernel_wrapper(
             splats_world, viewmats, intrins, dist_coeffs_buffer, \
             image_width, image_height, \
             intersection_mask, \
-            sh_value_packed, sh_value_bounds, num_sh_buffer)
+            sh_value_packed, sh_value_bounds, num_sh_buffer, sh_bounds_stride)
     if      (sh_value_bits == 8)  { _LAUNCH(8); }
     else if (sh_value_bits == 16) { _LAUNCH(16); }
     else                          { _LAUNCH(32); }
@@ -232,7 +239,8 @@ void projection_packed_fwd_kernel_wrapper(
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 ) {
     constexpr uint block = 128;
     #define _LAUNCH(VB) \
@@ -243,7 +251,7 @@ void projection_packed_fwd_kernel_wrapper(
             image_width, image_height, \
             intersection_mask_scan, \
             camera_ids, gaussian_ids, aabbs, sorting_depths, radii, splats_screen, \
-            sh_value_packed, sh_value_bounds, num_sh_buffer)
+            sh_value_packed, sh_value_bounds, num_sh_buffer, sh_bounds_stride)
     if      (sh_value_bits == 8)  { _LAUNCH(8); }
     else if (sh_value_bits == 16) { _LAUNCH(16); }
     else                          { _LAUNCH(32); }

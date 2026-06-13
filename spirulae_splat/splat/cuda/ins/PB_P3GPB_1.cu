@@ -26,7 +26,14 @@ template void projection_fused_bwd_kernel_wrapper<
     MipSplatting<1>::ScreenBuffer v_splats_screen,
     // grad inputs
     MipSplatting<1>::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
+    // args; the bwd uses them to evaluate v_dir against the codec'd SH.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_bwd_kernel_wrapper<
@@ -51,7 +58,14 @@ template void projection_fused_bwd_kernel_wrapper<
     MipSplatting<1>::ScreenBuffer v_splats_screen,
     // grad inputs
     MipSplatting<1>::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
+    // args; the bwd uses them to evaluate v_dir against the codec'd SH.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_bwd_kernel_wrapper<
@@ -76,7 +90,14 @@ template void projection_fused_bwd_kernel_wrapper<
     MipSplatting<1>::ScreenBuffer v_splats_screen,
     // grad inputs
     MipSplatting<1>::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
+    // args; the bwd uses them to evaluate v_dir against the codec'd SH.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_bwd_kernel_wrapper<
@@ -101,7 +122,14 @@ template void projection_fused_bwd_kernel_wrapper<
     Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
     // grad inputs
     Vanilla3DGS<2>::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
+    // args; the bwd uses them to evaluate v_dir against the codec'd SH.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_bwd_kernel_wrapper<
@@ -126,7 +154,14 @@ template void projection_fused_bwd_kernel_wrapper<
     Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
     // grad inputs
     Vanilla3DGS<2>::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
+    // args; the bwd uses them to evaluate v_dir against the codec'd SH.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_bwd_kernel_wrapper<
@@ -151,7 +186,14 @@ template void projection_fused_bwd_kernel_wrapper<
     Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
     // grad inputs
     Vanilla3DGS<2>::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
+    // args; the bwd uses them to evaluate v_dir against the codec'd SH.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_bwd_kernel_wrapper<
@@ -176,7 +218,14 @@ template void projection_fused_bwd_kernel_wrapper<
     MipSplatting<2>::ScreenBuffer v_splats_screen,
     // grad inputs
     MipSplatting<2>::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
+    // args; the bwd uses them to evaluate v_dir against the codec'd SH.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_bwd_kernel_wrapper<
@@ -201,7 +250,14 @@ template void projection_fused_bwd_kernel_wrapper<
     MipSplatting<2>::ScreenBuffer v_splats_screen,
     // grad inputs
     MipSplatting<2>::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
+    // args; the bwd uses them to evaluate v_dir against the codec'd SH.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_fused_bwd_kernel_wrapper<
@@ -226,5 +282,12 @@ template void projection_fused_bwd_kernel_wrapper<
     MipSplatting<2>::ScreenBuffer v_splats_screen,
     // grad inputs
     MipSplatting<2>::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
+    // args; the bwd uses them to evaluate v_dir against the codec'd SH.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );

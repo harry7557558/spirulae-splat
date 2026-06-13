@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Tensor.h>
+#include "NonShQuantState.h"
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
@@ -121,12 +122,19 @@ void fused_optim_3dgs_geometry(
     DeviceVector<float4> quats, DeviceVector<float4> v_quats, DeviceVector<float4> g1_quats, DeviceVector<float4> g2_quats,
     DeviceVector<float3> scales, DeviceVector<float3> v_scales, DeviceVector<float3> g1_scales, DeviceVector<float3> g2_scales,
     DeviceVector<float> opacities, DeviceVector<float> v_opacities, DeviceVector<float> g1_opacities, DeviceVector<float> g2_opacities,
+    // features_dc + grad: consumed only when non_sh has its quant buffers
+    // populated (via non_sh.enabled flagged in `non_sh`). The fp32 path
+    // ignores them and runs the separate fused_adam_step features_dc call.
+    DeviceVector<float3> features_dc, DeviceVector<float3> v_features_dc,
     DeviceVector<float> radii,
     const float lr_means, const float lr_quats, const float lr_scales, const float lr_opacs,
+    const float lr_features_dc,
     const float max_gauss_ratio, const float scale_regularization_weight,
     const float mcmc_opacity_reg_weight, const float mcmc_scale_reg_weight,
     const float erank_reg_weight, const float erank_reg_weight_s3, const float quat_norm_reg_weight,
+    const float sh_reg_weight,
     bool use_scale_agnostic_mean,
+    NonShQuantState non_sh,
     int32_t step, DeviceVector<int32_t> per_splat_steps,
     float grad_scale, bool zero_grad
 );
@@ -165,6 +173,24 @@ void fused_adam_step_quantized(
     float l2_reg,
     float l2_reg_offset,
     int bits,                           // 4 or 8 -- selects QuantizedAdamState<BITS, 256>
+    float grad_scale, bool zero_grad
+);
+
+
+void fused_adam_step_quantized_value(
+    int64_t num_splats,
+    int64_t param_numel,                // = num_splats * stride (e.g. 3 * num_sh)
+    DeviceTensorFloatND grad,           // fp32 dense [num_splats, stride]
+    uint8_t* optim_packed,
+    float4*  optim_bounds,
+    uint8_t* value_packed,
+    float2*  value_bounds,
+    float lr,
+    int32_t step, DeviceVector<int32_t> per_splat_steps,
+    float l2_reg,
+    float l2_reg_offset,
+    int optim_bits,                     // 4 or 8
+    int value_bits,                     // 8 or 16
     float grad_scale, bool zero_grad
 );
 

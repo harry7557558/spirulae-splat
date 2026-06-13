@@ -25,7 +25,11 @@ void projection_fused_fwd_kernel_wrapper(
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
 );
 
 
@@ -51,7 +55,8 @@ inline std::tuple<
     const uint8_t* sh_value_packed,
     const float2* sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 ) {
     typename SplatPrimitive::WorldBuffer splats_world(in_splats);
 
@@ -68,7 +73,8 @@ inline std::tuple<
             image_width, image_height, \
             aabb.data_ptr(), sorting_depths.data_ptr(), radii.data_ptr(), \
             splats_screen, \
-            sh_value_packed, sh_value_bounds, num_sh_buffer, sh_value_bits \
+            sh_value_packed, sh_value_bounds, num_sh_buffer, sh_value_bits, \
+            sh_bounds_stride \
         )
 
     if (camera_model == CameraModelType::PINHOLE)
@@ -104,7 +110,11 @@ std::tuple<
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // SH value-bounds cell stride. 0 = FPBO per-splat-block layout
+    // (256 * 3 * num_sh_buffer cells/bound). 256 = non-FPBO per-cell-block
+    // layout. Plumbed unchanged from EngineForward.cpp.
+    const int64_t sh_bounds_stride
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(in_splats).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -118,7 +128,7 @@ std::tuple<
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_fused_fwd_kernel<Vanilla3DGS<n>>( \
             num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii, \
-            vp, vb, num_sh_buffer, sh_value_bits);
+            vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};
@@ -142,7 +152,11 @@ std::tuple<
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // SH value-bounds cell stride. 0 = FPBO per-splat-block layout
+    // (256 * 3 * num_sh_buffer cells/bound). 256 = non-FPBO per-cell-block
+    // layout. Plumbed unchanged from EngineForward.cpp.
+    const int64_t sh_bounds_stride
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(in_splats).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -156,7 +170,7 @@ std::tuple<
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_fused_fwd_kernel<MipSplatting<n>>( \
             num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii, \
-            vp, vb, num_sh_buffer, sh_value_bits);
+            vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};
@@ -181,7 +195,11 @@ std::tuple<
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    // SH value-bounds cell stride. 0 = FPBO per-splat-block layout
+    // (256 * 3 * num_sh_buffer cells/bound). 256 = non-FPBO per-cell-block
+    // layout. Plumbed unchanged from EngineForward.cpp.
+    const int64_t sh_bounds_stride
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(in_splats).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
@@ -195,7 +213,7 @@ std::tuple<
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_fused_fwd_kernel<Vanilla3DGUT<n>>( \
             num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii, \
-            vp, vb, num_sh_buffer, sh_value_bits);
+            vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
     return {};

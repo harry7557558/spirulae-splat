@@ -28,7 +28,8 @@ template void projection_packed_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -55,7 +56,8 @@ template void projection_packed_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -82,7 +84,8 @@ template void projection_packed_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -109,7 +112,8 @@ template void projection_packed_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -136,7 +140,8 @@ template void projection_packed_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 template void projection_packed_fwd_kernel_wrapper<
@@ -163,5 +168,6 @@ template void projection_packed_fwd_kernel_wrapper<
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
-    const int sh_value_bits
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );

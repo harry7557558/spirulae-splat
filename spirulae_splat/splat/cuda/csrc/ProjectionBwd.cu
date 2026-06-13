@@ -1,6 +1,7 @@
 #include "ProjectionBwd.cuh"
 
 #include <Common.cuh>
+#include <optional>
 
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
@@ -29,7 +30,14 @@ void projection_fused_bwd_kernel_wrapper(
     typename SplatPrimitive::ScreenBuffer v_splats_screen,
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splats_world,
-    float * v_viewmats // [C, 4, 4] optional
+    float * v_viewmats, // [C, 4, 4] optional
+    // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
+    // args; the bwd uses them to evaluate v_dir against the codec'd SH.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 );
 
 
@@ -52,7 +60,13 @@ inline void launch_projection_projection_fused_bwd_kernel(
     const std::vector<DeviceTensorFloatND> v_splats_screen,
     // returns
     std::vector<DeviceTensorFloatND> v_splats_world,
-    DeviceTensor2D<float>* v_viewmats
+    DeviceTensor2D<float>* v_viewmats,
+    // SH VALUE-quant args, plumbed through to project_vjp's SH read.
+    const uint8_t* sh_value_packed,
+    const float2* sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 ) {
     typename SplatPrimitive::WorldBuffer splats_world(splats_world_tuple);
     uint32_t C = (uint32_t)std::get<2>(viewmats)[0]; // number of cameras
@@ -76,7 +90,9 @@ inline void launch_projection_projection_fused_bwd_kernel(
             aabb.data_ptr(), \
             v_splats_screen, \
             v_splats_world, \
-            v_viewmats != nullptr ? v_viewmats->data_ptr() : nullptr \
+            v_viewmats != nullptr ? v_viewmats->data_ptr() : nullptr, \
+            sh_value_packed, sh_value_bounds, num_sh_buffer, sh_value_bits, \
+            sh_bounds_stride \
         )
 
     if (camera_model == CameraModelType::PINHOLE)
@@ -120,15 +136,27 @@ void projection_3dgs_backward(
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
     // returns
     const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats
+    DeviceTensor2D<float>* v_viewmats,
+    // SH VALUE-quant. Nulls + sh_value_bits=32 leaves the bwd on the fp32
+    // SH path (callers without value-quant active pass std::nullopt + 32).
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 ) {
     int sh_degree = Vanilla3DGS<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
+    const uint8_t* vp = sh_value_packed.has_value()
+        ? (const uint8_t*)std::get<0>(sh_value_packed.value()) : nullptr;
+    const float2* vb = sh_value_bounds.has_value()
+        ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, \
-            v_splats_world, v_viewmats);
+            v_splats_world, v_viewmats, \
+            vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
@@ -158,15 +186,27 @@ void projection_mip_backward(
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
     // returns
     const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats
+    DeviceTensor2D<float>* v_viewmats,
+    // SH VALUE-quant. Nulls + sh_value_bits=32 leaves the bwd on the fp32
+    // SH path (callers without value-quant active pass std::nullopt + 32).
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 ) {
     int sh_degree = MipSplatting<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
+    const uint8_t* vp = sh_value_packed.has_value()
+        ? (const uint8_t*)std::get<0>(sh_value_packed.value()) : nullptr;
+    const float2* vb = sh_value_bounds.has_value()
+        ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, \
-            v_splats_world, v_viewmats);
+            v_splats_world, v_viewmats, \
+            vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }
@@ -197,15 +237,27 @@ void projection_3dgut_backward(
     const std::vector<DeviceTensorFloatND> &v_splats_screen,
     // returns
     const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats
+    DeviceTensor2D<float>* v_viewmats,
+    // SH VALUE-quant. Nulls + sh_value_bits=32 leaves the bwd on the fp32
+    // SH path (callers without value-quant active pass std::nullopt + 32).
+    const std::optional<TorchTensorView> sh_value_packed,
+    const std::optional<TorchTensorView> sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride
 ) {
     int sh_degree = Vanilla3DGUT<0>::WorldBuffer(splats_world).sh_degree();
     sh_degree = min(sh_degree, max_sh_degree);
+    const uint8_t* vp = sh_value_packed.has_value()
+        ? (const uint8_t*)std::get<0>(sh_value_packed.value()) : nullptr;
+    const float2* vb = sh_value_bounds.has_value()
+        ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>>( \
             num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, \
-            v_splats_world, v_viewmats);
+            v_splats_world, v_viewmats, \
+            vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
 }

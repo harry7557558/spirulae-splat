@@ -465,30 +465,72 @@ std::map<std::string, float> engine_compute_loss_backward(
     // optimizer step; we just stash the screen-space gradients for that call.
     if (engine().optim.use_fused_proj_bwd_optim) {
         engine().fwd.v_splats_s = v_splats_s_out;
-    } else if (engine().primitive == "3dgs") {
-        projection_3dgs_backward(
-            engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
-            _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
-            (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-            engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-            engine().fwd.camera_ids, engine().fwd.gaussian_ids,
-            engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr);
-    } else if (engine().primitive == "mip") {
-        projection_mip_backward(
-            engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
-            _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
-            (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-            engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-            engine().fwd.camera_ids, engine().fwd.gaussian_ids,
-            engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr);
-    } else if (engine().primitive == "3dgut") {
-        projection_3dgut_backward(
-            engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
-            _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
-            (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-            engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-            engine().fwd.camera_ids, engine().fwd.gaussian_ids,
-            engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr);
+    } else {
+        // SH VALUE-quant: when active in non-FPBO mode, project_vjp reads
+        // the source SH via the codec instead of fp32 features_sh (which is
+        // unallocated). Pick the (packed, bounds) buffer + bounds-cell
+        // stride based on which storage layout was set up at allocation
+        // time (mirrors EngineForward.cpp).
+        std::optional<TorchTensorView> vp_opt = std::nullopt;
+        std::optional<TorchTensorView> vb_opt = std::nullopt;
+        int      sh_value_bits   = engine().world.sh_value_bits;
+        uint32_t num_sh_buffer   = (uint32_t)engine().num_sh;
+        int64_t  sh_bounds_stride = 0;
+        if (sh_value_bits == 8) {
+            auto pick = [&](auto& vq) {
+                if (!vq.initialized()) return;
+                vp_opt = TorchTensorView((uint64_t)vq.packed_ptr(), 1, {vq.packed_bytes()});
+                vb_opt = TorchTensorView((uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
+            };
+            if (engine().world.features_sh_quant8_fpbo.initialized()) {
+                pick(engine().world.features_sh_quant8_fpbo);
+                sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+            } else {
+                pick(engine().world.features_sh_quant8);
+                sh_bounds_stride = 256;
+            }
+        } else if (sh_value_bits == 16) {
+            auto pick = [&](auto& vq) {
+                if (!vq.initialized()) return;
+                vp_opt = TorchTensorView((uint64_t)vq.packed_ptr(), 1, {vq.packed_bytes()});
+                vb_opt = TorchTensorView((uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
+            };
+            if (engine().world.features_sh_quant16_fpbo.initialized()) {
+                pick(engine().world.features_sh_quant16_fpbo);
+                sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+            } else {
+                pick(engine().world.features_sh_quant16);
+                sh_bounds_stride = 256;
+            }
+        }
+        if (engine().primitive == "3dgs") {
+            projection_3dgs_backward(
+                engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
+                _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
+                (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
+                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                engine().fwd.camera_ids, engine().fwd.gaussian_ids,
+                engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
+                vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
+        } else if (engine().primitive == "mip") {
+            projection_mip_backward(
+                engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
+                _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
+                (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
+                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                engine().fwd.camera_ids, engine().fwd.gaussian_ids,
+                engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
+                vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
+        } else if (engine().primitive == "3dgut") {
+            projection_3dgut_backward(
+                engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
+                _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
+                (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
+                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                engine().fwd.camera_ids, engine().fwd.gaussian_ids,
+                engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
+                vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
+        }
     }
 
     // --- Build loss dict for display ---
