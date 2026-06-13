@@ -68,21 +68,6 @@ from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 #     lr_final=0.005, max_steps=10000, warmup_steps=1000, lr_pre_warmup=0.005
 # )
 
-# _TRIANGLE_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
-# _TRIANGLE_OPTIMIZERS["means"] = FusedAdamOptimizerConfig(
-#     lr=1.6e-4, eps=1e-15, lr_final=1.6e-6, max_steps=30000,
-# )
-# # _TRIANGLE_OPTIMIZERS["scales"] = FusedAdamOptimizerConfig(
-# #     lr=0.005, eps=1e-15, lr_final=0.0002, max_steps=30000,
-# # )
-# # _TRIANGLE_OPTIMIZERS["quats"] = FusedAdamOptimizerConfig(
-# #     lr=0.0005, eps=1e-15, lr_final=0.0001, max_steps=30000,
-# # )
-# _TRIANGLE_OPTIMIZERS["bilateral_grid"] = FusedAdamOptimizerConfig(
-#     lr=5e-4, eps=1e-15,
-#     lr_final=1e-6, max_steps=30000, warmup_steps=1000,
-# )
-
 # _SECOND_ORDER_POSITION_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
 # _SECOND_ORDER_POSITION_OPTIMIZERS["means"] = FusedNewtonOptimizerConfig(
 #     mode="mean", lr=1.0e-6, eps=1e-15,
@@ -113,7 +98,7 @@ from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 
 @dataclass
 class TrainerConfig:
-    """Default 3DGS method"""
+    """Generic method that works well for most datasets."""
 
     data: Path
     """Path to dataset. Can be a Nerfstudio or a COLMAP dataset."""
@@ -1005,151 +990,101 @@ class Trainer:
         print()
 
 
+# @dataclass
+# class TrainerConfigSquaredPos(TrainerConfig):
+#     """Method with second-order optimizer for positions"""
+#     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+#         compute_hessian_diagonal="position",
+#     ))
+#     # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
+
+
+# @dataclass
+# class TrainerConfigSquared(TrainerConfig):
+#     """Method with second-order optimizer"""
+#     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+#         compute_hessian_diagonal="all",
+#     ))
+#     # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)  # TODO
+
+
+# @dataclass
+# class TrainerConfigPatched(TrainerConfig):
+#     """Method with patched batching"""
+#     datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
+#         # patch_batch_size=-1,
+#         # patch_size=64,
+#         max_batch_per_epoch=800,
+#     ))
+#     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+#         packed=True,
+#         use_bvh=True,
+#         use_camera_optimizer=False,
+#         use_bilateral_grid=False,
+#         use_bilateral_grid_for_geometry=False,  # TODO: slow
+#         primitive="mip", max_screen_size=float('inf'),  # TODO
+#     ))
+#     # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)  # TODO
+
+
+
 @dataclass
-class TrainerConfigSquaredPos(TrainerConfig):
-    """Method with second-order optimizer for positions"""
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        compute_hessian_diagonal="position",
-    ))
-    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
-
-
-@dataclass
-class TrainerConfigSquared(TrainerConfig):
-    """Method with second-order optimizer"""
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        compute_hessian_diagonal="all",
-    ))
-    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)  # TODO
-
-
-@dataclass
-class TrainerConfigPatched(TrainerConfig):
-    """Method with patched batching"""
+class TrainerConfig360Camera(TrainerConfig):
+    """Preset for training on original distorted images captured by 360 cameras (e.g. Insta360, DJI Osmo). Recommended if your dataset contains fisheye images with a circle visible."""
     datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
-        # patch_batch_size=-1,
-        # patch_size=64,
-        max_batch_per_epoch=800,
+        warp_to_pinhole=True,
+        load_depths=False,
+        load_normals=False,  # TODO
+        mask_boundary_offset=-0.025,
     ))
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        packed=True,
-        use_bvh=True,
-        use_camera_optimizer=False,
-        use_bilateral_grid=False,
-        use_bilateral_grid_for_geometry=False,  # TODO: slow
-        primitive="mip", max_screen_size=float('inf'),  # TODO
+        densify_score_mode="median",
+        densify_loss_map_mode="robust_edge_aware",
+        densify_robust_edge_aware_quantile=0.9,
     ))
-    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)  # TODO
-
-
-_MODEL_PRESET_CONFINED = dict(
-    background_mode="noise",
-)
-_MODEL_PRESET_OPEN = dict(
-    background_mode="sh",
-    background_sh_degree=4,
-)
-_MODEL_PRESET_3DGS2TR_POS = dict(
-    compute_hessian_diagonal="position",
-)
-_MODEL_PRESET_3DGS2TR = dict(
-    compute_hessian_diagonal="all",
-)
-_MODEL_PRESET_LOW_TEXTURE = dict(
-    densify_loss_map_mode="ssim_structure",
-    use_revised_densification=False,
-    use_long_axis_split=False,
-)
-_MODEL_PRESET_RICH_TEXTURE = dict(
-    densify_loss_map_mode="edge_aware",
-    use_revised_densification=True,
-    use_long_axis_split=True,
-    max_screen_size=0.2,  # default 0.3
-)
-_MODEL_PRESET_NO_COLOR_SHIFT = dict(
-    use_bilateral_grid=True,
-    bilagrid_shape=(8, 8, 4),
-    bilagrid_type="loglinear",
-)
 
 
 @dataclass
-class TrainerConfigConfinedLowTexture(TrainerConfig):
-    """Preset for visually confined environments with large textureless surfaces."""
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        **_MODEL_PRESET_LOW_TEXTURE,
-        **_MODEL_PRESET_CONFINED,
-        **_MODEL_PRESET_NO_COLOR_SHIFT,
-    ))
-    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)  # TODO
-
-@dataclass
-class TrainerConfigConfined(TrainerConfig):
-    """Preset for visually confined environments with moderate to rich texture."""
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        **_MODEL_PRESET_CONFINED,
-        **_MODEL_PRESET_3DGS2TR_POS,
-        **_MODEL_PRESET_RICH_TEXTURE,
-    ))
-    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
-
-@dataclass
-class TrainerConfigConfinedSquared(TrainerConfig):
-    """[Unstable] Preset for visually confined environments with moderate to rich texture."""
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        **_MODEL_PRESET_CONFINED,
-        **_MODEL_PRESET_3DGS2TR,
-        **_MODEL_PRESET_RICH_TEXTURE,
-    ))
-    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)  # TODO
-
-@dataclass
-class TrainerConfigOpenLowTexture(TrainerConfig):
-    """Preset for open environments large textureless surfaces, a sky box will be trained."""
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        **_MODEL_PRESET_LOW_TEXTURE,
-        **_MODEL_PRESET_OPEN,
-        **_MODEL_PRESET_NO_COLOR_SHIFT,
-        # relative_scale=10.0,
-    ))
-    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)  # TODO
-
-@dataclass
-class TrainerConfigOpen(TrainerConfig):
-    """Preset for open environments, a sky box will be trained."""
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        **_MODEL_PRESET_OPEN,
-        **_MODEL_PRESET_3DGS2TR_POS,
-        **_MODEL_PRESET_RICH_TEXTURE,
-    ))
-    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
-
-@dataclass
-class TrainerConfigOpenSquared(TrainerConfig):
-    """[Unstable] Preset for open environments, a sky box will be trained."""
-    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        **_MODEL_PRESET_OPEN,
-        **_MODEL_PRESET_3DGS2TR,
-        **_MODEL_PRESET_RICH_TEXTURE,
-    ))
-    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)  # TODO
-
-@dataclass
-class TrainerConfigCenteredObject(TrainerConfig):
-    """Preset for centered objects, can also be used for human avatar."""
+class TrainerConfigInTheWild(TrainerConfig):
+    """Preset for in-the-wild datasets, like datasets consisting of internet images, or datasets with extreme lighting variation and/or un-masked outliers."""
     dataparser: SpirulaeSplatDataParserConfig = field(default_factory=lambda: SpirulaeSplatDataParserConfig(
         center_method="focus",
+        outlier_threshold=10.0,
+    ))
+    datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
+        load_depths=True,
+        load_normals=True,
+        mask_boundary_offset=-0.025,
     ))
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-        **_MODEL_PRESET_OPEN,
-        **_MODEL_PRESET_3DGS2TR,
-        **_MODEL_PRESET_RICH_TEXTURE,
-        **_MODEL_PRESET_NO_COLOR_SHIFT,
-        apply_loss_for_mask=True,
-        cap_max=100000,
+        densify_score_mode="median",
+        densify_loss_map_mode="robust_edge_aware",
+        densify_robust_edge_aware_quantile=0.75,
+        ssim_lambda=0.1,
     ))
-    # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)
-    # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
+
+
+@dataclass
+class TrainerConfigLinear(TrainerConfig):
+    """Preset for training splats in linear color spaces (e.g. ACEScg)."""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        splat_color_gamut="ACEScg",  # configurable
+        splat_color_is_linear=True,
+        image_color_gamut="Rec.2020",  # configurable
+        image_color_is_linear=False,  # configurable
+        background_mode="noise",
+    ))
+
+
+@dataclass
+class TrainerConfigSynthetic(TrainerConfig):
+    """Preset for training splats on synthetic datasets rendered with constant exposure."""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        use_bilateral_grid=False,
+        use_ppisp=False,
+        use_bilateral_grid_for_geometry=False,
+    ))
+
 
 @dataclass
 class TrainerConfigAcademicBaseline(TrainerConfig):

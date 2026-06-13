@@ -44,16 +44,10 @@ def entrypoint():
 
     Config = Union[
         Annotated[TrainerConfig, tyro.conf.subcommand(name="3dgs")],
-        Annotated[TrainerConfigSquaredPos, tyro.conf.subcommand(name="3dgs^2-pos")],
-        Annotated[TrainerConfigSquared, tyro.conf.subcommand(name="3dgs^2")],
-        Annotated[TrainerConfigPatched, tyro.conf.subcommand(name="3dgs-patched")],
-        Annotated[TrainerConfigConfinedLowTexture, tyro.conf.subcommand(name="3dgs-confined-low-texture")],
-        Annotated[TrainerConfigConfined, tyro.conf.subcommand(name="3dgs-confined")],
-        Annotated[TrainerConfigConfinedSquared, tyro.conf.subcommand(name="3dgs^2-confined")],
-        Annotated[TrainerConfigOpenLowTexture, tyro.conf.subcommand(name="3dgs-open-low-texture")],
-        Annotated[TrainerConfigOpen, tyro.conf.subcommand(name="3dgs-open")],
-        Annotated[TrainerConfigOpenSquared, tyro.conf.subcommand(name="3dgs^2-open")],
-        Annotated[TrainerConfigCenteredObject, tyro.conf.subcommand(name="3dgs-centered-object")],
+        Annotated[TrainerConfig360Camera, tyro.conf.subcommand(name="360-camera")],
+        Annotated[TrainerConfigInTheWild, tyro.conf.subcommand(name="in-the-wild")],
+        Annotated[TrainerConfigLinear, tyro.conf.subcommand(name="linear-color")],
+        Annotated[TrainerConfigSynthetic, tyro.conf.subcommand(name="synthetic")],
         Annotated[TrainerConfigAcademicBaseline, tyro.conf.subcommand(name="academic-baseline")],
     ]
 

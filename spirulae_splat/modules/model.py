@@ -548,6 +548,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             seed_color = self.seed_points[1] / 255
             if len(seed_color) != num_points:
                 seed_color = seed_color.mean(0, True).repeat(num_points, 1)
+            if (seed_color == seed_color[0][0]).all():
+                seed_color = torch.rand_like(seed_color)
         else:
             seed_color = torch.rand(num_points, 3)
 
