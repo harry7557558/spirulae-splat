@@ -38,60 +38,6 @@ void projection_3dgs_backward(
 );
 
 
-void projection_3dgs_backward_with_hessian_diagonal(
-    // fwd inputs
-    const int64_t num_splats,
-    const int max_sh_degree,
-    const std::vector<DeviceTensorFloatND> &splats_world,
-    TorchTensorView viewmats,  // [C, 4, 4]
-    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const TorchTensorView dist_coeffs,
-    // fwd outputs
-    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
-    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
-    const DeviceTensor2D<float4> aabb,  // [C, N]
-    // grad outputs
-    const std::vector<DeviceTensorFloatND> &v_splats_screen,
-    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
-    const std::vector<DeviceTensorFloatND> &h_splats_screen,
-    // returns
-    const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats,
-    const std::vector<DeviceTensorFloatND> &vr_splats_world,
-    const std::vector<DeviceTensorFloatND> &h_splats_world
-);
-
-
-void projection_3dgs_backward_with_position_hessian_diagonal(
-    // fwd inputs
-    const int64_t num_splats,
-    const int max_sh_degree,
-    const std::vector<DeviceTensorFloatND> &splats_world,
-    TorchTensorView viewmats,  // [C, 4, 4]
-    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const TorchTensorView dist_coeffs,
-    // fwd outputs
-    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
-    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
-    const DeviceTensor2D<float4> aabb,  // [C, N]
-    // grad outputs
-    const std::vector<DeviceTensorFloatND> &v_splats_screen,
-    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
-    const std::vector<DeviceTensorFloatND> &h_splats_screen,
-    // returns
-    const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats,
-    DeviceVector<float3>* vr_world_pos,
-    DeviceVector<float3>* h_world_pos
-);
-
-
 void projection_mip_backward(
     // fwd inputs
     const int64_t num_splats,
@@ -115,60 +61,6 @@ void projection_mip_backward(
 );
 
 
-void projection_mip_backward_with_hessian_diagonal(
-    // fwd inputs
-    const int64_t num_splats,
-    const int max_sh_degree,
-    const std::vector<DeviceTensorFloatND> &splats_world,
-    TorchTensorView viewmats,  // [C, 4, 4]
-    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const TorchTensorView dist_coeffs,
-    // fwd outputs
-    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
-    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
-    const DeviceTensor2D<float4> aabb,  // [C, N]
-    // grad outputs
-    const std::vector<DeviceTensorFloatND> &v_splats_screen,
-    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
-    const std::vector<DeviceTensorFloatND> &h_splats_screen,
-    // returns
-    const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats,
-    const std::vector<DeviceTensorFloatND> &vr_splats_world,
-    const std::vector<DeviceTensorFloatND> &h_splats_world
-);
-
-
-void projection_mip_backward_with_position_hessian_diagonal(
-    // fwd inputs
-    const int64_t num_splats,
-    const int max_sh_degree,
-    const std::vector<DeviceTensorFloatND> &splats_world,
-    TorchTensorView viewmats,  // [C, 4, 4]
-    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const TorchTensorView dist_coeffs,
-    // fwd outputs
-    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
-    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
-    const DeviceTensor2D<float4> aabb,  // [C, N]
-    // grad outputs
-    const std::vector<DeviceTensorFloatND> &v_splats_screen,
-    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
-    const std::vector<DeviceTensorFloatND> &h_splats_screen,
-    // returns
-    const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats,
-    DeviceVector<float3>* vr_world_pos,
-    DeviceVector<float3>* h_world_pos
-);
-
-
 void projection_3dgut_backward(
     // fwd inputs
     const int64_t num_splats,
@@ -189,58 +81,4 @@ void projection_3dgut_backward(
     // returns
     const std::vector<DeviceTensorFloatND> &v_splats_world,
     DeviceTensor2D<float>* v_viewmats
-);
-
-
-void projection_3dgut_backward_with_hessian_diagonal(
-    // fwd inputs
-    const int64_t num_splats,
-    const int max_sh_degree,
-    const std::vector<DeviceTensorFloatND> &splats_world,
-    TorchTensorView viewmats,  // [C, 4, 4]
-    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const TorchTensorView dist_coeffs,
-    // fwd outputs
-    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
-    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
-    const DeviceTensor2D<float4> aabb,  // [C, N]
-    // grad outputs
-    const std::vector<DeviceTensorFloatND> &v_splats_screen,
-    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
-    const std::vector<DeviceTensorFloatND> &h_splats_screen,
-    // returns
-    const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats,
-    const std::vector<DeviceTensorFloatND> &vr_splats_world,
-    const std::vector<DeviceTensorFloatND> &h_splats_world
-);
-
-
-void projection_3dgut_backward_with_position_hessian_diagonal(
-    // fwd inputs
-    const int64_t num_splats,
-    const int max_sh_degree,
-    const std::vector<DeviceTensorFloatND> &splats_world,
-    TorchTensorView viewmats,  // [C, 4, 4]
-    TorchTensorView intrins,   // [C, 4], fx, fy, cx, cy
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const std::string camera_model,
-    const TorchTensorView dist_coeffs,
-    // fwd outputs
-    const DeviceVector<int32_t> camera_ids,  // [nnz] or null
-    const DeviceVector<int32_t> gaussian_ids,  // [nnz] or null
-    const DeviceTensor2D<float4> aabb,  // [C, N]
-    // grad outputs
-    const std::vector<DeviceTensorFloatND> &v_splats_screen,
-    const std::vector<DeviceTensorFloatND> &vr_splats_screen,
-    const std::vector<DeviceTensorFloatND> &h_splats_screen,
-    // returns
-    const std::vector<DeviceTensorFloatND> &v_splats_world,
-    DeviceTensor2D<float>* v_viewmats,
-    DeviceVector<float3>* vr_world_pos,
-    DeviceVector<float3>* h_world_pos
 );

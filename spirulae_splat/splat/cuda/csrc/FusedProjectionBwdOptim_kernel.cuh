@@ -146,7 +146,6 @@ struct _NonShQ {
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
-    HessianDiagonalOutputMode hessian_diagonal_output_mode,
     bool use_scale_agnostic_mean,
     // Merged flag for the two color-space variants. In Python both
     // `OptimConfig::use_color_trust_region` and `OptimConfig::color_is_linear`
@@ -188,11 +187,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4] (original order)
     // grad outputs from rasterization
     typename SplatPrimitive::WorldBuffer v_splats_world,
-    typename SplatPrimitive::WorldBuffer vr_splats_world,
-    typename SplatPrimitive::WorldBuffer h_splats_world,
     typename SplatPrimitive::ScreenBuffer v_splats_screen,
-    typename SplatPrimitive::ScreenBuffer vr_splats_screen,
-    typename SplatPrimitive::ScreenBuffer h_splats_screen,
     // optimizer states
     typename SplatPrimitive::WorldBuffer g1_splats_world,
     typename SplatPrimitive::WorldBuffer g2_splats_world,
@@ -256,18 +251,6 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
 
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
-    [[maybe_unused]] float3 vr_world_pos = {0.f, 0.f, 0.f};
-    [[maybe_unused]] float3 h_world_pos = {0.f, 0.f, 0.f};
-    if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
-        if (inside) vr_world_pos = vr_splats_world.means(gid);
-        if (inside) h_world_pos = h_splats_world.means(gid);
-    }
-    typename SplatPrimitive::World vr_splat_world = SplatPrimitive::World::zero();
-    typename SplatPrimitive::World h_splat_world = SplatPrimitive::World::zero();
-    if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
-        if (inside) vr_splat_world.atomicLoad(vr_splat_world, gid);
-        if (inside) h_splat_world.atomicLoad(h_splat_world, gid);
-    }
 
     // Loop over intersections.
     // In packed mode `cid_t` is a SORTED position (sorted by gaussian_id),
@@ -298,13 +281,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
 
         // Load splat gradient
         typename SplatPrimitive::Screen v_splat_screen;
-        typename SplatPrimitive::Screen vr_splat_screen;
-        typename SplatPrimitive::Screen h_splat_screen;
         v_splat_screen.load(v_splats_screen, idx);
-        if (hessian_diagonal_output_mode != HessianDiagonalOutputMode::None) {
-            vr_splat_screen.load(vr_splats_screen, idx);
-            h_splat_screen.load(h_splats_screen, idx);
-        }
 
         // Accumulate gradient. When VALUE_BITS != 32 the canonical SH storage
         // is the packed codec buffer, NOT the fp32 features_sh array; pass the
@@ -312,23 +289,15 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         // (decoded) SH coefficients. Without this, v_dir reads the stale fp32
         // features_sh (left untouched by value-quant FPBO writeback) which is
         // typically all zero -> biased v_means / v_R / v_t every step.
-        if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::None) {
-            if constexpr (VALUE_BITS == 32) {
-                splat_world.template project_vjp<camera_model, false, 32>(cam, v_splat_screen, v_splat_world, v_R, v_t);
-            } else {
-                const int64_t sh_base_vjp = (int64_t)3 * (int64_t)num_sh_buffer * (int64_t)gid;
-                const int64_t sh_bounds_stride_vjp = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
-                splat_world.template project_vjp<camera_model, false, VALUE_BITS>(
-                    cam, v_splat_screen, v_splat_world, v_R, v_t,
-                    const_cast<uint8_t*>(sh_value_packed), sh_value_bounds,
-                    sh_base_vjp, sh_bounds_stride_vjp);
-            }
-        } else if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::Position) {
-            splat_world.template project_vjp_h_pos<camera_model, false>(cam, v_splat_screen,
-                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_world_pos, h_world_pos);
-        } else if constexpr (hessian_diagonal_output_mode == HessianDiagonalOutputMode::AllReasonable) {
-            splat_world.template project_vjp_h_all<camera_model, false>(cam, v_splat_screen,
-                vr_splat_screen, h_splat_screen, v_splat_world, v_R, v_t, vr_splat_world, h_splat_world);
+        if constexpr (VALUE_BITS == 32) {
+            splat_world.template project_vjp<camera_model, false, 32>(cam, v_splat_screen, v_splat_world, v_R, v_t);
+        } else {
+            const int64_t sh_base_vjp = (int64_t)3 * (int64_t)num_sh_buffer * (int64_t)gid;
+            const int64_t sh_bounds_stride_vjp = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+            splat_world.template project_vjp<camera_model, false, VALUE_BITS>(
+                cam, v_splat_screen, v_splat_world, v_R, v_t,
+                const_cast<uint8_t*>(sh_value_packed), sh_value_bounds,
+                sh_base_vjp, sh_bounds_stride_vjp);
         }
 
         // TODO: affects performance, refactor this as a template argument?
@@ -990,7 +959,6 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
-    HessianDiagonalOutputMode hessian_diagonal_output_mode,
     const bool use_scale_agnostic_mean,
     const bool color_trust_linear,
     // SH quantization level. Single int collapses the prior (QUANT_BITS, VALUE_BITS)
@@ -1020,11 +988,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4] (original order)
     // grad outputs from rasterization
     typename SplatPrimitive::WorldBuffer v_splats_world,
-    typename SplatPrimitive::WorldBuffer vr_splats_world,
-    typename SplatPrimitive::WorldBuffer h_splats_world,
     typename SplatPrimitive::ScreenBuffer v_splats_screen,
-    typename SplatPrimitive::ScreenBuffer vr_splats_screen,
-    typename SplatPrimitive::ScreenBuffer h_splats_screen,
     // optimizer states
     typename SplatPrimitive::WorldBuffer g1_splats_world,
     typename SplatPrimitive::WorldBuffer g2_splats_world,
@@ -1075,14 +1039,14 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     constexpr int KERNEL_BLOCK_SIZE = (LEVEL_QUANT_BITS == 0) ? 0 : BLOCK_SIZE_LAUNCH;
     constexpr int KERNEL_QUANT_BITS = (LEVEL_QUANT_BITS == 0) ? 8 : LEVEL_QUANT_BITS;
     fused_projection_bwd_optimizer_3dgs_kernel<
-        SplatPrimitive, camera_model, hessian_diagonal_output_mode,
+        SplatPrimitive, camera_model,
         use_scale_agnostic_mean, color_trust_linear,
         KERNEL_BLOCK_SIZE, KERNEL_QUANT_BITS, LEVEL_VALUE_BITS
     ><<<_CEIL_DIV(N, BLOCK_SIZE_LAUNCH), BLOCK_SIZE_LAUNCH, 0, stream>>>(
         C, N, num_sh_buffer,
         splats_world, viewmats, intrins, dist_coeffs_buffer, image_width, image_height,
         camera_id_bounds, camera_ids, perm, aabb,
-        v_splats_world, vr_splats_world, h_splats_world, v_splats_screen, vr_splats_screen, h_splats_screen,
+        v_splats_world, v_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
         non_sh,

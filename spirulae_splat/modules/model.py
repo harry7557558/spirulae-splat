@@ -114,8 +114,6 @@ class SpirulaeSplatModelConfig:
             1 = light        : 16-bit param, 8-bit packed optim (2 B / cell)
         Collapsing the prior independent param+optim bit controls into a
         single level minimizes the FPBO kernel instantiations."""
-    compute_hessian_diagonal: Literal[None, "position", "all"] = None
-    """What parameter sets to compute an approximation of Hessian diagonal as well as a Jacobian-residual product in backward pass. Required for second-order optimizer."""
     optimizer_offload: Literal[None, "sh", "all"] = None
     """Whether to offload optimizer momentum to CPU to save VRAM. This is only supported for Adam optimizer."""
     resolution_schedule: int = 3000
@@ -1062,7 +1060,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             relative_scale=self.config.relative_scale,
             camera_model=camera_model,
             output_distortion=any([c != 0.0 for c in self.get_2dgs_reg_weights()[0]]),
-            compute_hessian_diagonal=self.config.compute_hessian_diagonal,
             **kwargs,
         )
         self.core.forward()
@@ -1537,7 +1534,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
-        compute_loss_map = (loss_map_mode != 0) or (cfg.compute_hessian_diagonal is not None)
+        compute_loss_map = (loss_map_mode != 0)
         robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
 
         # --- Compute loss + backward via core (gradients managed by C++ pool) ---
@@ -1652,7 +1649,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
-        compute_loss_map = (loss_map_mode != 0) or (cfg.compute_hessian_diagonal is not None)
+        compute_loss_map = (loss_map_mode != 0)
         robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
 
         sh_degree_to_use = step // max(cfg.sh_degree_warmup_every, 1)
@@ -1845,7 +1842,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
-        compute_loss_map = (loss_map_mode != 0) or (cfg.compute_hessian_diagonal is not None)
+        compute_loss_map = (loss_map_mode != 0)
         robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
 
         sh_degree_to_use = step // max(cfg.sh_degree_warmup_every, 1)

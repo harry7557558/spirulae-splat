@@ -90,12 +90,6 @@ struct CameraDistortionCoeffsBuffer {
     #endif
 };
 
-enum class HessianDiagonalOutputMode {
-    None,
-    Position,
-    AllReasonable
-};
-
 // Camera Types
 // This must match projection_utils.slang
 enum class CameraModelType {

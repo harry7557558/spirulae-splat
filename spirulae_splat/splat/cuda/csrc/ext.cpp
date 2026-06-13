@@ -73,7 +73,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // PerSplatLoss.cuh
     m.def("compute_per_splat_losses_forward", &compute_per_splat_losses_forward);
     m.def("compute_per_splat_losses_backward", &compute_per_splat_losses_backward);
-    m.def("compute_per_splat_losses_backward_with_hessian_diagonal", &compute_per_splat_losses_backward_with_hessian_diagonal);
     #endif
 
     // PerPixelLoss.cuh

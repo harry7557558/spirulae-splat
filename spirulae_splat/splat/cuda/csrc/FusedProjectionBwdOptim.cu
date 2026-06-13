@@ -11,7 +11,6 @@ namespace cg = cooperative_groups;
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
-    HessianDiagonalOutputMode hessian_diagonal_output_mode,
     const bool use_scale_agnostic_mean,
     const bool color_trust_linear,
     const int  LEVEL
@@ -35,11 +34,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
     // grad outputs from rasterization
     typename SplatPrimitive::WorldBuffer v_splats_world,
-    typename SplatPrimitive::WorldBuffer vr_splats_world,
-    typename SplatPrimitive::WorldBuffer h_splats_world,
     typename SplatPrimitive::ScreenBuffer v_splats_screen,
-    typename SplatPrimitive::ScreenBuffer vr_splats_screen,
-    typename SplatPrimitive::ScreenBuffer h_splats_screen,
     // optimizer states
     typename SplatPrimitive::WorldBuffer g1_splats_world,
     typename SplatPrimitive::WorldBuffer g2_splats_world,
@@ -100,7 +95,6 @@ __global__ void camera_id_bounds_kernel(
 
 template<
     typename SplatPrimitive,
-    HessianDiagonalOutputMode hessian_diagonal_output_mode,
     bool use_scale_agnostic_mean,
     bool color_trust_linear,
     int  LEVEL
@@ -122,11 +116,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     DeviceTensorFloatND aabb,
     // grad outputs
     const std::vector<DeviceTensorFloatND> v_splats_world,
-    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_world,
-    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_world,
     const std::vector<DeviceTensorFloatND> v_splats_screen,
-    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_screen,
-    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_screen,
     // optimizer states
     const std::vector<DeviceTensorFloatND> g1_splats_world,
     const std::vector<DeviceTensorFloatND> g2_splats_world,
@@ -229,11 +219,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             packed ? sorted_perm_ptr : nullptr, \
             (float4*)aabb.data_ptr(), \
             v_splats_world, \
-            hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? vr_splats_world.value() : typename SplatPrimitive::WorldBuffer{}, \
-            hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? h_splats_world.value() : typename SplatPrimitive::WorldBuffer{}, \
             v_splats_screen, \
-            hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? vr_splats_screen.value() : typename SplatPrimitive::ScreenBuffer{}, \
-            hessian_diagonal_output_mode != HessianDiagonalOutputMode::None ? h_splats_screen.value() : typename SplatPrimitive::ScreenBuffer{}, \
             g1_splats_world, g2_splats_world, \
             sh_packed.has_value() ? (const uint8_t*)std::get<0>(sh_packed.value()) : nullptr, \
             sh_quant_bounds.has_value() ? (float4*)std::get<0>(sh_quant_bounds.value()) : nullptr, \
@@ -250,11 +236,11 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
         )
 
     if (camera_model == CameraModelType::PINHOLE)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE, hessian_diagonal_output_mode, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
+        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::FISHEYE)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE, hessian_diagonal_output_mode, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
+        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::EQUISOLID)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID, hessian_diagonal_output_mode, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
+        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -293,11 +279,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     DeviceTensorFloatND aabb,
     // grad outputs
     const std::vector<DeviceTensorFloatND> v_splats_world,
-    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_world,
-    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_world,
     const std::vector<DeviceTensorFloatND> v_splats_screen,
-    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_screen,
-    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_screen,
     // optimizer states
     const std::vector<DeviceTensorFloatND> g1_splats_world,
     const std::vector<DeviceTensorFloatND> g2_splats_world,
@@ -352,11 +334,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
         gaussian_ids, \
         aabb, \
         v_splats_world, \
-        vr_splats_world, \
-        h_splats_world, \
         v_splats_screen, \
-        vr_splats_screen, \
-        h_splats_screen, \
         g1_splats_world, \
         g2_splats_world, \
         sh_packed, \
@@ -408,7 +386,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
         if (sh_degree == (n) && dispatch_key == ((int)(sam) | ((int)(ctl) << 1)) \
             && quantization_level == (level)) \
             return (void)launch_fused_projection_bwd_optimizer_3dgs_kernel< \
-                PrimT<n>, HessianDiagonalOutputMode::None, sam, ctl, level> _ARGS;
+                PrimT<n>, sam, ctl, level> _ARGS;
     #define LAUNCH_LEVELS(n, sam, ctl) \
         LAUNCH_LEVEL(n, sam, ctl, 0) \
         LAUNCH_LEVEL(n, sam, ctl, 1)
@@ -444,11 +422,7 @@ void fused_projection_bwd_optimizer_3dgs(
     const DeviceVector<int32_t> gaussian_ids,
     DeviceTensorFloatND aabb,
     const std::vector<DeviceTensorFloatND> v_splats_world,
-    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_world,
-    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_world,
     const std::vector<DeviceTensorFloatND> v_splats_screen,
-    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_screen,
-    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_screen,
     const std::vector<DeviceTensorFloatND> g1_splats_world,
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,
@@ -480,8 +454,7 @@ void fused_projection_bwd_optimizer_3dgs(
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGS>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
         camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
-        v_splats_world, vr_splats_world, h_splats_world,
-        v_splats_screen, vr_splats_screen, h_splats_screen,
+        v_splats_world, v_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
         non_sh,
@@ -509,11 +482,7 @@ void fused_projection_bwd_optimizer_mip(
     const DeviceVector<int32_t> gaussian_ids,
     DeviceTensorFloatND aabb,
     const std::vector<DeviceTensorFloatND> v_splats_world,
-    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_world,
-    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_world,
     const std::vector<DeviceTensorFloatND> v_splats_screen,
-    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_screen,
-    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_screen,
     const std::vector<DeviceTensorFloatND> g1_splats_world,
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,
@@ -545,8 +514,7 @@ void fused_projection_bwd_optimizer_mip(
     _fused_projection_bwd_optimizer_dispatch<MipSplatting>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
         camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
-        v_splats_world, vr_splats_world, h_splats_world,
-        v_splats_screen, vr_splats_screen, h_splats_screen,
+        v_splats_world, v_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
         non_sh,
@@ -574,11 +542,7 @@ void fused_projection_bwd_optimizer_3dgut(
     const DeviceVector<int32_t> gaussian_ids,
     DeviceTensorFloatND aabb,
     const std::vector<DeviceTensorFloatND> v_splats_world,
-    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_world,
-    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_world,
     const std::vector<DeviceTensorFloatND> v_splats_screen,
-    const std::optional<std::vector<DeviceTensorFloatND>> vr_splats_screen,
-    const std::optional<std::vector<DeviceTensorFloatND>> h_splats_screen,
     const std::vector<DeviceTensorFloatND> g1_splats_world,
     const std::vector<DeviceTensorFloatND> g2_splats_world,
     const std::optional<TorchTensorView> sh_packed,
@@ -610,8 +574,7 @@ void fused_projection_bwd_optimizer_3dgut(
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGUT>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
         camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
-        v_splats_world, vr_splats_world, h_splats_world,
-        v_splats_screen, vr_splats_screen, h_splats_screen,
+        v_splats_world, v_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
         non_sh,

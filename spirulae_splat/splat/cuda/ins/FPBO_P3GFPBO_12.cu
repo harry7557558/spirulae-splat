@@ -5,253 +5,8 @@
 #include "FusedProjectionBwdOptim_kernel.cuh"
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
-    MipSplatting<1>,
-    CameraModelType::PINHOLE,
-    HessianDiagonalOutputMode::None,
-    true,
-    true,
-    0
->(
-    cudaStream_t stream,
-    // fwd inputs
-    const uint32_t C,
-    const uint32_t N,
-    const uint32_t num_sh_buffer,
-    MipSplatting<1>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [C, 4, 4]
-    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
-    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
-    const uint32_t image_width,
-    const uint32_t image_height,
-    // fwd outputs
-    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
-    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
-    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
-    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
-    // grad outputs from rasterization
-    MipSplatting<1>::WorldBuffer v_splats_world,
-    MipSplatting<1>::WorldBuffer vr_splats_world,
-    MipSplatting<1>::WorldBuffer h_splats_world,
-    MipSplatting<1>::ScreenBuffer v_splats_screen,
-    MipSplatting<1>::ScreenBuffer vr_splats_screen,
-    MipSplatting<1>::ScreenBuffer h_splats_screen,
-    // optimizer states
-    MipSplatting<1>::WorldBuffer g1_splats_world,
-    MipSplatting<1>::WorldBuffer g2_splats_world,
-    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
-    float4* __restrict__ sh_quant_bounds,
-    const uint8_t* __restrict__ sh_value_packed,
-    float2* __restrict__ sh_value_bounds,
-    NonShQuantState non_sh,
-    // float *__restrict__ v_viewmats // [C, 4, 4] optional
-    // optimizer params
-    const float* __restrict__ radii,
-    const float lr_means,
-    const float lr_quats,
-    const float lr_scales,
-    const float lr_opacs,
-    const float lr_features_dc,
-    const float lr_features_sh,
-    const float max_gauss_ratio,
-    const float scale_regularization_weight,
-    const float mcmc_opacity_reg_weight,
-    const float mcmc_scale_reg_weight,
-    const float erank_reg_weight,
-    const float erank_reg_weight_s3,
-    const float quat_norm_reg_weight,
-    const float sh_reg_weight,
-    const float eps_tr,
-    const int32_t scalar_step,
-    const int32_t* __restrict__ steps
-);
-
-template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
-    MipSplatting<1>,
-    CameraModelType::PINHOLE,
-    HessianDiagonalOutputMode::None,
-    true,
-    true,
-    1
->(
-    cudaStream_t stream,
-    // fwd inputs
-    const uint32_t C,
-    const uint32_t N,
-    const uint32_t num_sh_buffer,
-    MipSplatting<1>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [C, 4, 4]
-    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
-    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
-    const uint32_t image_width,
-    const uint32_t image_height,
-    // fwd outputs
-    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
-    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
-    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
-    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
-    // grad outputs from rasterization
-    MipSplatting<1>::WorldBuffer v_splats_world,
-    MipSplatting<1>::WorldBuffer vr_splats_world,
-    MipSplatting<1>::WorldBuffer h_splats_world,
-    MipSplatting<1>::ScreenBuffer v_splats_screen,
-    MipSplatting<1>::ScreenBuffer vr_splats_screen,
-    MipSplatting<1>::ScreenBuffer h_splats_screen,
-    // optimizer states
-    MipSplatting<1>::WorldBuffer g1_splats_world,
-    MipSplatting<1>::WorldBuffer g2_splats_world,
-    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
-    float4* __restrict__ sh_quant_bounds,
-    const uint8_t* __restrict__ sh_value_packed,
-    float2* __restrict__ sh_value_bounds,
-    NonShQuantState non_sh,
-    // float *__restrict__ v_viewmats // [C, 4, 4] optional
-    // optimizer params
-    const float* __restrict__ radii,
-    const float lr_means,
-    const float lr_quats,
-    const float lr_scales,
-    const float lr_opacs,
-    const float lr_features_dc,
-    const float lr_features_sh,
-    const float max_gauss_ratio,
-    const float scale_regularization_weight,
-    const float mcmc_opacity_reg_weight,
-    const float mcmc_scale_reg_weight,
-    const float erank_reg_weight,
-    const float erank_reg_weight_s3,
-    const float quat_norm_reg_weight,
-    const float sh_reg_weight,
-    const float eps_tr,
-    const int32_t scalar_step,
-    const int32_t* __restrict__ steps
-);
-
-template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
-    MipSplatting<1>,
-    CameraModelType::PINHOLE,
-    HessianDiagonalOutputMode::None,
-    true,
-    false,
-    0
->(
-    cudaStream_t stream,
-    // fwd inputs
-    const uint32_t C,
-    const uint32_t N,
-    const uint32_t num_sh_buffer,
-    MipSplatting<1>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [C, 4, 4]
-    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
-    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
-    const uint32_t image_width,
-    const uint32_t image_height,
-    // fwd outputs
-    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
-    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
-    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
-    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
-    // grad outputs from rasterization
-    MipSplatting<1>::WorldBuffer v_splats_world,
-    MipSplatting<1>::WorldBuffer vr_splats_world,
-    MipSplatting<1>::WorldBuffer h_splats_world,
-    MipSplatting<1>::ScreenBuffer v_splats_screen,
-    MipSplatting<1>::ScreenBuffer vr_splats_screen,
-    MipSplatting<1>::ScreenBuffer h_splats_screen,
-    // optimizer states
-    MipSplatting<1>::WorldBuffer g1_splats_world,
-    MipSplatting<1>::WorldBuffer g2_splats_world,
-    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
-    float4* __restrict__ sh_quant_bounds,
-    const uint8_t* __restrict__ sh_value_packed,
-    float2* __restrict__ sh_value_bounds,
-    NonShQuantState non_sh,
-    // float *__restrict__ v_viewmats // [C, 4, 4] optional
-    // optimizer params
-    const float* __restrict__ radii,
-    const float lr_means,
-    const float lr_quats,
-    const float lr_scales,
-    const float lr_opacs,
-    const float lr_features_dc,
-    const float lr_features_sh,
-    const float max_gauss_ratio,
-    const float scale_regularization_weight,
-    const float mcmc_opacity_reg_weight,
-    const float mcmc_scale_reg_weight,
-    const float erank_reg_weight,
-    const float erank_reg_weight_s3,
-    const float quat_norm_reg_weight,
-    const float sh_reg_weight,
-    const float eps_tr,
-    const int32_t scalar_step,
-    const int32_t* __restrict__ steps
-);
-
-template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
-    MipSplatting<1>,
-    CameraModelType::PINHOLE,
-    HessianDiagonalOutputMode::None,
-    true,
-    false,
-    1
->(
-    cudaStream_t stream,
-    // fwd inputs
-    const uint32_t C,
-    const uint32_t N,
-    const uint32_t num_sh_buffer,
-    MipSplatting<1>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [C, 4, 4]
-    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
-    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
-    const uint32_t image_width,
-    const uint32_t image_height,
-    // fwd outputs
-    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
-    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
-    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
-    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
-    // grad outputs from rasterization
-    MipSplatting<1>::WorldBuffer v_splats_world,
-    MipSplatting<1>::WorldBuffer vr_splats_world,
-    MipSplatting<1>::WorldBuffer h_splats_world,
-    MipSplatting<1>::ScreenBuffer v_splats_screen,
-    MipSplatting<1>::ScreenBuffer vr_splats_screen,
-    MipSplatting<1>::ScreenBuffer h_splats_screen,
-    // optimizer states
-    MipSplatting<1>::WorldBuffer g1_splats_world,
-    MipSplatting<1>::WorldBuffer g2_splats_world,
-    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
-    float4* __restrict__ sh_quant_bounds,
-    const uint8_t* __restrict__ sh_value_packed,
-    float2* __restrict__ sh_value_bounds,
-    NonShQuantState non_sh,
-    // float *__restrict__ v_viewmats // [C, 4, 4] optional
-    // optimizer params
-    const float* __restrict__ radii,
-    const float lr_means,
-    const float lr_quats,
-    const float lr_scales,
-    const float lr_opacs,
-    const float lr_features_dc,
-    const float lr_features_sh,
-    const float max_gauss_ratio,
-    const float scale_regularization_weight,
-    const float mcmc_opacity_reg_weight,
-    const float mcmc_scale_reg_weight,
-    const float erank_reg_weight,
-    const float erank_reg_weight_s3,
-    const float quat_norm_reg_weight,
-    const float sh_reg_weight,
-    const float eps_tr,
-    const int32_t scalar_step,
-    const int32_t* __restrict__ steps
-);
-
-template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
-    MipSplatting<1>,
-    CameraModelType::PINHOLE,
-    HessianDiagonalOutputMode::None,
+    Vanilla3DGS<2>,
+    CameraModelType::FISHEYE,
     false,
     true,
     0
@@ -261,7 +16,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const uint32_t C,
     const uint32_t N,
     const uint32_t num_sh_buffer,
-    MipSplatting<1>::WorldBuffer splats_world,
+    Vanilla3DGS<2>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -273,15 +28,11 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
     const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
     // grad outputs from rasterization
-    MipSplatting<1>::WorldBuffer v_splats_world,
-    MipSplatting<1>::WorldBuffer vr_splats_world,
-    MipSplatting<1>::WorldBuffer h_splats_world,
-    MipSplatting<1>::ScreenBuffer v_splats_screen,
-    MipSplatting<1>::ScreenBuffer vr_splats_screen,
-    MipSplatting<1>::ScreenBuffer h_splats_screen,
+    Vanilla3DGS<2>::WorldBuffer v_splats_world,
+    Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
     // optimizer states
-    MipSplatting<1>::WorldBuffer g1_splats_world,
-    MipSplatting<1>::WorldBuffer g2_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g1_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
     const uint8_t* __restrict__ sh_value_packed,
@@ -310,9 +61,8 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
 );
 
 template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
-    MipSplatting<1>,
-    CameraModelType::PINHOLE,
-    HessianDiagonalOutputMode::None,
+    Vanilla3DGS<2>,
+    CameraModelType::FISHEYE,
     false,
     true,
     1
@@ -322,7 +72,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const uint32_t C,
     const uint32_t N,
     const uint32_t num_sh_buffer,
-    MipSplatting<1>::WorldBuffer splats_world,
+    Vanilla3DGS<2>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -334,15 +84,403 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
     const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
     // grad outputs from rasterization
-    MipSplatting<1>::WorldBuffer v_splats_world,
-    MipSplatting<1>::WorldBuffer vr_splats_world,
-    MipSplatting<1>::WorldBuffer h_splats_world,
-    MipSplatting<1>::ScreenBuffer v_splats_screen,
-    MipSplatting<1>::ScreenBuffer vr_splats_screen,
-    MipSplatting<1>::ScreenBuffer h_splats_screen,
+    Vanilla3DGS<2>::WorldBuffer v_splats_world,
+    Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
     // optimizer states
-    MipSplatting<1>::WorldBuffer g1_splats_world,
-    MipSplatting<1>::WorldBuffer g2_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g1_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
+    float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
+    NonShQuantState non_sh,
+    // float *__restrict__ v_viewmats // [C, 4, 4] optional
+    // optimizer params
+    const float* __restrict__ radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float lr_features_dc,
+    const float lr_features_sh,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    const float eps_tr,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps
+);
+
+template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
+    Vanilla3DGS<2>,
+    CameraModelType::FISHEYE,
+    false,
+    false,
+    0
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t num_sh_buffer,
+    Vanilla3DGS<2>::WorldBuffer splats_world,
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
+    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
+    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
+    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
+    // grad outputs from rasterization
+    Vanilla3DGS<2>::WorldBuffer v_splats_world,
+    Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
+    // optimizer states
+    Vanilla3DGS<2>::WorldBuffer g1_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
+    float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
+    NonShQuantState non_sh,
+    // float *__restrict__ v_viewmats // [C, 4, 4] optional
+    // optimizer params
+    const float* __restrict__ radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float lr_features_dc,
+    const float lr_features_sh,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    const float eps_tr,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps
+);
+
+template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
+    Vanilla3DGS<2>,
+    CameraModelType::FISHEYE,
+    false,
+    false,
+    1
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t num_sh_buffer,
+    Vanilla3DGS<2>::WorldBuffer splats_world,
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
+    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
+    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
+    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
+    // grad outputs from rasterization
+    Vanilla3DGS<2>::WorldBuffer v_splats_world,
+    Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
+    // optimizer states
+    Vanilla3DGS<2>::WorldBuffer g1_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
+    float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
+    NonShQuantState non_sh,
+    // float *__restrict__ v_viewmats // [C, 4, 4] optional
+    // optimizer params
+    const float* __restrict__ radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float lr_features_dc,
+    const float lr_features_sh,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    const float eps_tr,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps
+);
+
+template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
+    Vanilla3DGS<2>,
+    CameraModelType::EQUISOLID,
+    true,
+    true,
+    0
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t num_sh_buffer,
+    Vanilla3DGS<2>::WorldBuffer splats_world,
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
+    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
+    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
+    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
+    // grad outputs from rasterization
+    Vanilla3DGS<2>::WorldBuffer v_splats_world,
+    Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
+    // optimizer states
+    Vanilla3DGS<2>::WorldBuffer g1_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
+    float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
+    NonShQuantState non_sh,
+    // float *__restrict__ v_viewmats // [C, 4, 4] optional
+    // optimizer params
+    const float* __restrict__ radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float lr_features_dc,
+    const float lr_features_sh,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    const float eps_tr,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps
+);
+
+template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
+    Vanilla3DGS<2>,
+    CameraModelType::EQUISOLID,
+    true,
+    true,
+    1
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t num_sh_buffer,
+    Vanilla3DGS<2>::WorldBuffer splats_world,
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
+    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
+    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
+    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
+    // grad outputs from rasterization
+    Vanilla3DGS<2>::WorldBuffer v_splats_world,
+    Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
+    // optimizer states
+    Vanilla3DGS<2>::WorldBuffer g1_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
+    float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
+    NonShQuantState non_sh,
+    // float *__restrict__ v_viewmats // [C, 4, 4] optional
+    // optimizer params
+    const float* __restrict__ radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float lr_features_dc,
+    const float lr_features_sh,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    const float eps_tr,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps
+);
+
+template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
+    Vanilla3DGS<2>,
+    CameraModelType::EQUISOLID,
+    true,
+    false,
+    0
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t num_sh_buffer,
+    Vanilla3DGS<2>::WorldBuffer splats_world,
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
+    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
+    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
+    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
+    // grad outputs from rasterization
+    Vanilla3DGS<2>::WorldBuffer v_splats_world,
+    Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
+    // optimizer states
+    Vanilla3DGS<2>::WorldBuffer g1_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
+    float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
+    NonShQuantState non_sh,
+    // float *__restrict__ v_viewmats // [C, 4, 4] optional
+    // optimizer params
+    const float* __restrict__ radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float lr_features_dc,
+    const float lr_features_sh,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    const float eps_tr,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps
+);
+
+template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
+    Vanilla3DGS<2>,
+    CameraModelType::EQUISOLID,
+    true,
+    false,
+    1
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t num_sh_buffer,
+    Vanilla3DGS<2>::WorldBuffer splats_world,
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
+    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
+    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
+    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
+    // grad outputs from rasterization
+    Vanilla3DGS<2>::WorldBuffer v_splats_world,
+    Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
+    // optimizer states
+    Vanilla3DGS<2>::WorldBuffer g1_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g2_splats_world,
+    const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
+    float4* __restrict__ sh_quant_bounds,
+    const uint8_t* __restrict__ sh_value_packed,
+    float2* __restrict__ sh_value_bounds,
+    NonShQuantState non_sh,
+    // float *__restrict__ v_viewmats // [C, 4, 4] optional
+    // optimizer params
+    const float* __restrict__ radii,
+    const float lr_means,
+    const float lr_quats,
+    const float lr_scales,
+    const float lr_opacs,
+    const float lr_features_dc,
+    const float lr_features_sh,
+    const float max_gauss_ratio,
+    const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight,
+    const float mcmc_scale_reg_weight,
+    const float erank_reg_weight,
+    const float erank_reg_weight_s3,
+    const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    const float eps_tr,
+    const int32_t scalar_step,
+    const int32_t* __restrict__ steps
+);
+
+template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
+    Vanilla3DGS<2>,
+    CameraModelType::EQUISOLID,
+    false,
+    true,
+    0
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t num_sh_buffer,
+    Vanilla3DGS<2>::WorldBuffer splats_world,
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t *__restrict__ camera_id_bounds,   // [N+1]
+    const int32_t *__restrict__ camera_ids,   // [nnz] -- ORIGINAL (unsorted) order
+    const int32_t *__restrict__ perm,         // [nnz] -- sorted_pos -> original_pos
+    const float4 *__restrict__ aabb,   // [C, N, 4] or [nnz, 4]
+    // grad outputs from rasterization
+    Vanilla3DGS<2>::WorldBuffer v_splats_world,
+    Vanilla3DGS<2>::ScreenBuffer v_splats_screen,
+    // optimizer states
+    Vanilla3DGS<2>::WorldBuffer g1_splats_world,
+    Vanilla3DGS<2>::WorldBuffer g2_splats_world,
     const uint8_t* __restrict__ sh_packed,      // AoS (u, sqrt_g2) packed SH state
     float4* __restrict__ sh_quant_bounds,
     const uint8_t* __restrict__ sh_value_packed,

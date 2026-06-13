@@ -68,10 +68,7 @@ def kernel_complexity_score(map_values, include_values):
     return (
         10.0 * len(include_values) +
         # 0.25 * sum(len(x) for x in map_values) +
-        2.0 * sum("<" in x or ">" in x for x in map_values) +
-        10.0 * ('HessianDiagonalOutputMode::None' in map_values) +
-        50.0 * ('HessianDiagonalOutputMode::Position' in map_values) +
-        100.0 * ('HessianDiagonalOutputMode::AllReasonable' in map_values)
+        2.0 * sum("<" in x or ">" in x for x in map_values)
     )
 
 
@@ -212,7 +209,7 @@ def generate_ProjectionFwd():
 
 def generate_ProjectionBwd():
     definition = extract_kernel_definition("ProjectionBwd.cu", "projection_fused_bwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None]
+    map_header = ["typename SplatPrimitive", None]
     map_body = [
         *itertools.product(
             [
@@ -223,12 +220,11 @@ def generate_ProjectionBwd():
                 "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
             ],
             ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
-            ["HessianDiagonalOutputMode::None", "HessianDiagonalOutputMode::Position", "HessianDiagonalOutputMode::AllReasonable"],
         )
     ]
     includes = [*(
-        [("Primitive3DGS.cuh", "ProjectionBwd_kernel.cuh")] * 18 +
-        [("Primitive3DGUT.cuh", "ProjectionBwd_kernel.cuh")] * 9
+        [("Primitive3DGS.cuh", "ProjectionBwd_kernel.cuh")] * 6 +
+        [("Primitive3DGUT.cuh", "ProjectionBwd_kernel.cuh")] * 3
     )] * 5
 
     generate_kernel_instantiation("ProjectionBwd", definition, map_header, map_body, includes)
@@ -245,7 +241,7 @@ def generate_FusedProjectionBwdOptim():
     #   1 = light  (16-bit value, 8-bit packed optim)
     # The wrapper derives BLOCK_SIZE / QUANT_BITS / VALUE_BITS internally via
     # constexpr, so each wrapper compiles ONE kernel specialization.
-    map_header = ["typename SplatPrimitive", None, None, None, None, None]
+    map_header = ["typename SplatPrimitive", None, None, None, None]
     primitives = [
         "Vanilla3DGS<0>", "MipSplatting<0>", "Vanilla3DGUT<0>",
         "Vanilla3DGS<1>", "MipSplatting<1>", "Vanilla3DGUT<1>",
@@ -257,7 +253,7 @@ def generate_FusedProjectionBwdOptim():
             "CameraModelType::FISHEYE",
             "CameraModelType::EQUISOLID"]
     map_body = [
-        (prim, cam, "HessianDiagonalOutputMode::None", sam, ctl, level)
+        (prim, cam, sam, ctl, level)
         for prim in primitives
         for cam  in cams
         for sam  in ("true", "false")
@@ -290,14 +286,13 @@ def generate_RasterizationFwd():
 
 def generate_RasterizationBwd():
     definition = extract_kernel_definition("RasterizationBwd.cu", "rasterize_to_pixels_bwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None, None]
+    map_header = ["typename SplatPrimitive", None, None]
     map_body = [*itertools.product(
         ["Vanilla3DGS<0>"],
         ["true", "false"],
         ["true", "false"],
-        ["true", "false"],
     )]
-    includes = [("Primitive3DGS.cuh", "RasterizationBwd_kernel.cuh")] * 8
+    includes = [("Primitive3DGS.cuh", "RasterizationBwd_kernel.cuh")] * 4
 
     generate_kernel_instantiation("RasterizationBwd", definition, map_header, map_body, includes)
 
@@ -319,7 +314,7 @@ def generate_RasterizationEval3DFwd():
 
 def generate_RasterizationEval3DBwd():
     definition = extract_kernel_definition("RasterizationEval3DBwd.cu", "rasterize_to_pixels_eval3d_bwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None, None, None, None]
+    map_header = ["typename SplatPrimitive", None, None, None, None]
     map_body = [
         *itertools.product(
             ["Vanilla3DGUT<0>"],
@@ -327,10 +322,9 @@ def generate_RasterizationEval3DBwd():
             ['true', 'false'],
             ['true', 'false'],
             ['true', 'false'],
-            ['true', 'false'],
         )
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 48
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 24
 
     generate_kernel_instantiation("RasterizationEval3DBwd", definition, map_header, map_body, includes)
 

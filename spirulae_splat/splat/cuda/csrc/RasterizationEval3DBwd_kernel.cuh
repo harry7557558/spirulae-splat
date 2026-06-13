@@ -54,7 +54,6 @@ template <
 #if IS_EVAL3D
     bool output_viewmat_grad,
 #endif
-    bool output_hessian_diagonal,
     bool output_accum_weight
 >
 #if IS_EVAL3D
@@ -94,10 +93,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
     typename SplatPrimitive::ScreenBuffer v_splat_sbuffer,
-    typename SplatPrimitive::WorldBuffer vr_splat_wbuffer,
-    typename SplatPrimitive::ScreenBuffer vr_splat_sbuffer,
-    typename SplatPrimitive::WorldBuffer h_splat_wbuffer,
-    typename SplatPrimitive::ScreenBuffer h_splat_sbuffer,
     float *__restrict__ o_accum_weight
 #if IS_EVAL3D
     ,
@@ -145,7 +140,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     __shared__ RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];
     __shared__ RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
 
-    __shared__ float hess_weight_map[output_hessian_diagonal ? BLOCK_SIZE : 1];
     __shared__ float accum_weight_map[output_accum_weight ? BLOCK_SIZE : 1];
 
 #if IS_EVAL3D
@@ -225,11 +219,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             accum_weight_map[pix_id_local] = (accum_weight_map_buffer != nullptr && inside) ?
                 accum_weight_map_buffer[pix_id_image_global] : 0.0f;
         }
-        if (output_hessian_diagonal) {
-            // https://www.desmos.com/calculator/ld9wg7cuxz
-            hess_weight_map[pix_id_local] = (loss_map_buffer != nullptr && inside) ?
-                0.5f / fmaxf(loss_map_buffer[pix_id_image_global], 1e-6f) : 0.0f;
-        }
     }
     block.sync();
 
@@ -269,8 +258,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
         // accumulate gradient
         typename SplatPrimitive::FragmentBwd v_splat = SplatPrimitive::FragmentBwd::zero(splat);
-        typename SplatPrimitive::FragmentBwd vr_splat = SplatPrimitive::FragmentBwd::zero(splat);
-        typename SplatPrimitive::FragmentBwd h_splat = SplatPrimitive::FragmentBwd::zero(splat);
         float accum_weight = 0.0f;
 
         // thread 0 takes last splat, 1 takes second last, etc.
@@ -385,24 +372,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             float3 v_ray_o_alpha = make_float3(0), v_ray_d_alpha = make_float3(0);
             float3 v_ray_o_color = make_float3(0), v_ray_d_color = make_float3(0);
         #endif
-            // TODO
-            // if (output_hessian_diagonal) {
-            //     typename SplatPrimitive::Screen v_splat_temp = SplatPrimitive::Screen::zero();
-            // #if IS_EVAL3D
-            //     v_splat_temp.addGradient(splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_ray_o_alpha, v_ray_d_alpha));
-            //     v_splat_temp.addGradient(splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_ray_o_color, v_ray_d_color));
-            // #else
-            //     v_splat_temp.addGradient(splat.evaluate_alpha_vjp(px, py, v_alpha));
-            //     v_splat_temp.addGradient(splat.evaluate_color_vjp(px, py, v_color));
-            // #endif
-            //     v_splat.addGradient(v_splat_temp);
-            //     // https://www.desmos.com/calculator/ld9wg7cuxz
-            //     float weight = 1.0f / sqrtf(fmaxf(v_c.dot(v_c) / 3.0f, 1e-30f));
-            //     vr_splat.addGradient(v_splat_temp, weight);
-            //     weight = hess_weight_map[pix_id] * weight * weight;
-            //     splat.precomputeBackward(v_splat_temp);
-            //     h_splat.addGaussNewtonHessianDiagonal(v_splat_temp, weight);
-            // } else
             {
             #if IS_EVAL3D
                 splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_splat, v_ray_o_alpha, v_ray_d_alpha);
@@ -435,10 +404,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         // accumulate gradient
         if (splat_idx >= range_start) {
             v_splat.atomicStore(v_splat_wbuffer, v_splat_sbuffer, splat_wid, splat_sid);
-            if constexpr (output_hessian_diagonal) {
-                vr_splat.atomicStore(vr_splat_wbuffer, vr_splat_sbuffer, splat_wid, splat_sid);
-                h_splat.atomicStore(h_splat_wbuffer, h_splat_sbuffer, splat_wid, splat_sid);
-            }
             if constexpr (output_accum_weight) {
                 // atomicAddFVec(o_accum_weight + splat_wid, accum_weight);
                 atomicMax(o_accum_weight + splat_wid, accum_weight);
@@ -508,7 +473,6 @@ template <
 #if IS_EVAL3D
     bool output_viewmat_grad,
 #endif
-    bool output_hessian_diagonal,
     bool output_accum_weight
 >
 #if IS_EVAL3D
@@ -549,10 +513,6 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
     typename SplatPrimitive::ScreenBuffer v_splat_sbuffer,
-    typename SplatPrimitive::WorldBuffer vr_splat_wbuffer,
-    typename SplatPrimitive::ScreenBuffer vr_splat_sbuffer,
-    typename SplatPrimitive::WorldBuffer h_splat_wbuffer,
-    typename SplatPrimitive::ScreenBuffer h_splat_sbuffer,
     float *__restrict__ o_accum_weight
 #if IS_EVAL3D
     ,
@@ -577,7 +537,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     #if IS_EVAL3D
         output_viewmat_grad,
     #endif
-        output_hessian_diagonal, output_accum_weight
+        output_accum_weight
     ><<<grid, threads, 0, stream>>>(
         I, N, n_isects,
         gaussian_ids, splat_wbuffer, splat_sbuffer,
@@ -590,7 +550,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
         render_output_buffer, render2_output_buffer, loss_map_buffer, accum_weight_map_buffer,
         v_render_output_buffer, v_render_Ts,
         v_distortions_output_buffer,
-        v_splat_wbuffer, v_splat_sbuffer, vr_splat_wbuffer, vr_splat_sbuffer, h_splat_wbuffer, h_splat_sbuffer,
+        v_splat_wbuffer, v_splat_sbuffer,
         o_accum_weight
     #if IS_EVAL3D
         , v_viewmats

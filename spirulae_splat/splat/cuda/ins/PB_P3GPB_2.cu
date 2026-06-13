@@ -5,15 +5,14 @@
 #include "ProjectionBwd_kernel.cuh"
 
 template void projection_fused_bwd_kernel_wrapper<
-    Vanilla3DGS<0>,
-    CameraModelType::FISHEYE,
-    HessianDiagonalOutputMode::Position
+    Vanilla3DGS<3>,
+    CameraModelType::PINHOLE
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<0>::WorldBuffer splats_world,
+    Vanilla3DGS<3>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -24,28 +23,21 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    Vanilla3DGS<0>::ScreenBuffer v_splats_screen,
-    Vanilla3DGS<0>::ScreenBuffer vr_splats_screen,
-    Vanilla3DGS<0>::ScreenBuffer h_splats_screen,
+    Vanilla3DGS<3>::ScreenBuffer v_splats_screen,
     // grad inputs
-    Vanilla3DGS<0>::WorldBuffer v_splats_world,
-    float3* vr_world_pos_buffer,
-    float3* h_world_pos_buffer,
-    Vanilla3DGS<0>::WorldBuffer vr_splats_world,
-    Vanilla3DGS<0>::WorldBuffer h_splats_world,
+    Vanilla3DGS<3>::WorldBuffer v_splats_world,
     float * v_viewmats // [C, 4, 4] optional
 );
 
 template void projection_fused_bwd_kernel_wrapper<
-    Vanilla3DGS<0>,
-    CameraModelType::FISHEYE,
-    HessianDiagonalOutputMode::AllReasonable
+    Vanilla3DGS<3>,
+    CameraModelType::FISHEYE
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<0>::WorldBuffer splats_world,
+    Vanilla3DGS<3>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -56,14 +48,183 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    Vanilla3DGS<0>::ScreenBuffer v_splats_screen,
-    Vanilla3DGS<0>::ScreenBuffer vr_splats_screen,
-    Vanilla3DGS<0>::ScreenBuffer h_splats_screen,
+    Vanilla3DGS<3>::ScreenBuffer v_splats_screen,
     // grad inputs
-    Vanilla3DGS<0>::WorldBuffer v_splats_world,
-    float3* vr_world_pos_buffer,
-    float3* h_world_pos_buffer,
-    Vanilla3DGS<0>::WorldBuffer vr_splats_world,
-    Vanilla3DGS<0>::WorldBuffer h_splats_world,
+    Vanilla3DGS<3>::WorldBuffer v_splats_world,
+    float * v_viewmats // [C, 4, 4] optional
+);
+
+template void projection_fused_bwd_kernel_wrapper<
+    Vanilla3DGS<3>,
+    CameraModelType::EQUISOLID
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    Vanilla3DGS<3>::WorldBuffer splats_world,
+    const float * viewmats, // [C, 4, 4]
+    const float4 * intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t * camera_ids,          // [nnz, 4]
+    const int32_t * gaussian_ids,          // [nnz, 4]
+    const float4 * aabb,          // [C, N, 4]
+    // grad outputs
+    Vanilla3DGS<3>::ScreenBuffer v_splats_screen,
+    // grad inputs
+    Vanilla3DGS<3>::WorldBuffer v_splats_world,
+    float * v_viewmats // [C, 4, 4] optional
+);
+
+template void projection_fused_bwd_kernel_wrapper<
+    MipSplatting<3>,
+    CameraModelType::PINHOLE
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    MipSplatting<3>::WorldBuffer splats_world,
+    const float * viewmats, // [C, 4, 4]
+    const float4 * intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t * camera_ids,          // [nnz, 4]
+    const int32_t * gaussian_ids,          // [nnz, 4]
+    const float4 * aabb,          // [C, N, 4]
+    // grad outputs
+    MipSplatting<3>::ScreenBuffer v_splats_screen,
+    // grad inputs
+    MipSplatting<3>::WorldBuffer v_splats_world,
+    float * v_viewmats // [C, 4, 4] optional
+);
+
+template void projection_fused_bwd_kernel_wrapper<
+    MipSplatting<3>,
+    CameraModelType::FISHEYE
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    MipSplatting<3>::WorldBuffer splats_world,
+    const float * viewmats, // [C, 4, 4]
+    const float4 * intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t * camera_ids,          // [nnz, 4]
+    const int32_t * gaussian_ids,          // [nnz, 4]
+    const float4 * aabb,          // [C, N, 4]
+    // grad outputs
+    MipSplatting<3>::ScreenBuffer v_splats_screen,
+    // grad inputs
+    MipSplatting<3>::WorldBuffer v_splats_world,
+    float * v_viewmats // [C, 4, 4] optional
+);
+
+template void projection_fused_bwd_kernel_wrapper<
+    MipSplatting<3>,
+    CameraModelType::EQUISOLID
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    MipSplatting<3>::WorldBuffer splats_world,
+    const float * viewmats, // [C, 4, 4]
+    const float4 * intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t * camera_ids,          // [nnz, 4]
+    const int32_t * gaussian_ids,          // [nnz, 4]
+    const float4 * aabb,          // [C, N, 4]
+    // grad outputs
+    MipSplatting<3>::ScreenBuffer v_splats_screen,
+    // grad inputs
+    MipSplatting<3>::WorldBuffer v_splats_world,
+    float * v_viewmats // [C, 4, 4] optional
+);
+
+template void projection_fused_bwd_kernel_wrapper<
+    Vanilla3DGS<4>,
+    CameraModelType::PINHOLE
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    Vanilla3DGS<4>::WorldBuffer splats_world,
+    const float * viewmats, // [C, 4, 4]
+    const float4 * intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t * camera_ids,          // [nnz, 4]
+    const int32_t * gaussian_ids,          // [nnz, 4]
+    const float4 * aabb,          // [C, N, 4]
+    // grad outputs
+    Vanilla3DGS<4>::ScreenBuffer v_splats_screen,
+    // grad inputs
+    Vanilla3DGS<4>::WorldBuffer v_splats_world,
+    float * v_viewmats // [C, 4, 4] optional
+);
+
+template void projection_fused_bwd_kernel_wrapper<
+    Vanilla3DGS<4>,
+    CameraModelType::FISHEYE
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    Vanilla3DGS<4>::WorldBuffer splats_world,
+    const float * viewmats, // [C, 4, 4]
+    const float4 * intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t * camera_ids,          // [nnz, 4]
+    const int32_t * gaussian_ids,          // [nnz, 4]
+    const float4 * aabb,          // [C, N, 4]
+    // grad outputs
+    Vanilla3DGS<4>::ScreenBuffer v_splats_screen,
+    // grad inputs
+    Vanilla3DGS<4>::WorldBuffer v_splats_world,
+    float * v_viewmats // [C, 4, 4] optional
+);
+
+template void projection_fused_bwd_kernel_wrapper<
+    Vanilla3DGS<4>,
+    CameraModelType::EQUISOLID
+>(
+    cudaStream_t stream,
+    // fwd inputs
+    const uint32_t C,
+    const uint32_t N,
+    Vanilla3DGS<4>::WorldBuffer splats_world,
+    const float * viewmats, // [C, 4, 4]
+    const float4 * intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const int32_t * camera_ids,          // [nnz, 4]
+    const int32_t * gaussian_ids,          // [nnz, 4]
+    const float4 * aabb,          // [C, N, 4]
+    // grad outputs
+    Vanilla3DGS<4>::ScreenBuffer v_splats_screen,
+    // grad inputs
+    Vanilla3DGS<4>::WorldBuffer v_splats_world,
     float * v_viewmats // [C, 4, 4] optional
 );
