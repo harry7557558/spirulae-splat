@@ -187,6 +187,20 @@ struct SplatOptim {
     // ran. Drives reallocation when the fused flag flips between steps (the
     // FPBO SH-quant layout differs from the regular Optimizer.cu layout).
     bool   fused_state_active       = false;
+
+    // ---- sub-batched training state ----
+    // When the engine is mid-train-step in sub-batched mode, the per-splat
+    // grad buffers must accumulate atomicAdds across sub-batches; only the
+    // FIRST sub-batch zeroes them. After all sub-batches finish, the optim
+    // step consumes the accumulated grad with grad_scale = 1/B (and zeroes
+    // it back as a fused side effect so the next train step starts fresh).
+    //
+    // Set by engine_train_step's sub-batch dispatcher around the
+    // forward+loss_bwd calls; engine_compute_loss_backward reads
+    // skip_grad_zero, engine_optim_step reads grad_scale + zero_grad.
+    bool   skip_grad_zero = false;     // _alloc_grad_buffers skips zeroing
+    float  grad_scale     = 1.0f;      // multiplied into v_* inside optim
+    bool   zero_grad_in_optim = false; // optim zeroes v_* after consuming
 };
 
 // One bilagrid channel (RGB / depth / normal).

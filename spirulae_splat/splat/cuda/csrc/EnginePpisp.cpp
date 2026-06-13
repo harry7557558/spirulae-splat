@@ -260,7 +260,8 @@ void engine_ppisp_optim_step(int step, const PpispStepConfig& cfg) {
             flat_view(engine().ppisp.g1.data_ptr()),
             flat_view(engine().ppisp.g2.data_ptr()),
             cfg.lr, step + 1, no_per_splat_steps,
-            /*l2_reg=*/0.0f, /*l2_reg_offset=*/0.0f);
+            /*l2_reg=*/0.0f, /*l2_reg_offset=*/0.0f,
+            /*grad_scale=*/1.0f, /*zero_grad=*/false);
     }
     engine().ppisp.grads.zero();
 }

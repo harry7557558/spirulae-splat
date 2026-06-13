@@ -194,6 +194,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("quantization_level",          &OptimConfig::quantization_level)
         .def_readwrite("use_per_splat_bias_correction",  &OptimConfig::use_per_splat_bias_correction)
         .def_readwrite("use_fused_proj_bwd_optim",       &OptimConfig::use_fused_proj_bwd_optim)
+        .def_readwrite("split_batch",     &OptimConfig::split_batch)
         .def_readwrite("use_color_trust_region",         &OptimConfig::use_color_trust_region)
         .def_readwrite("color_is_linear",                &OptimConfig::color_is_linear)
         .def_readwrite("eps_tr",                         &OptimConfig::eps_tr);

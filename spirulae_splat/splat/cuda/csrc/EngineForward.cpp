@@ -41,9 +41,20 @@ void forward_3dgs(
 
     DeviceTensorFloatND aabb_nd, depths_nd;
 
-    // Allocate and zero radii buffer before projection (kernel uses atomicMax)
+    // Allocate and zero radii buffer before projection (kernel uses atomicMax).
+    // In sub-batched mode, projection runs once per sub-batch; the optim step's
+    // scale-agnostic-mean term uses radii as the dimensionless screen-size
+    // denominator (lr * grad / (radii*0.6f)) -- if radii is 0 (splat absent
+    // from the *last* sub-batch's camera), the means update divides by
+    // ~eps and sends splats to infinity, so we must accumulate the
+    // atomicMax across sub-batches by zeroing ONLY on the first one.
+    // engine().optim.skip_grad_zero mirrors that same "is this the first
+    // sub-batch of the train step?" flag and is set by the sub-batch
+    // dispatcher in EngineTrainStep.cpp.
     engine().optim.radii.resize("eng.radii", engine().max_num_splats);
-    engine().optim.radii.zero();
+    if (!engine().optim.skip_grad_zero) {
+        engine().optim.radii.zero();
+    }
 
     // SH VALUE-quant pointers. When sh_value_bits != 32, the canonical SH
     // storage lives in engine().world.features_sh_quant{8,16}{,_fpbo} (the

@@ -117,6 +117,22 @@ struct OptimConfig {
     // full fp32 g1/g2 momentum (no `sh_quant_state`) in this mode.
     bool  use_fused_proj_bwd_optim        = false;
 
+    // When true, split the camera batch into one-camera sub-batches inside
+    // engine_train_step. Forward + bilagrid/PPISP fwd + loss + raster/proj
+    // bwd run once per sub-batch and atomicAdd into the per-splat grad
+    // accumulators; a single optimizer + bilagrid/PPISP optim + densify pass
+    // runs at the end. Inside the splat Adam kernels, the accumulated data
+    // gradient is scaled by `1/B` (B = full batch size) before adding the
+    // per-splat regularization terms, so per-image grad magnitude vs reg
+    // weight is batch-size invariant. Frees the per-sub-batch screen-space
+    // buffers (splats_s, aabb, depths, isect/flatten ids, render_Ts, raster
+    // bwd v_splats_s) between sub-batches -- peak VRAM scales by ~1/B.
+    //
+    // Not compatible with use_fused_proj_bwd_optim or use_color_trust_region
+    // in this turn; the engine throws when either is also set. Warped
+    // training_step path also throws (would need per-input-image splitting).
+    bool  split_batch      = false;
+
     // Trust-region color-space Adam.  Mirrors the
     // fused_adamtr_(linear_)rgb_(sh_)optim variants used in Python when
     // splat_color_is_linear or splat_color_gamut is set: the DC and SH color

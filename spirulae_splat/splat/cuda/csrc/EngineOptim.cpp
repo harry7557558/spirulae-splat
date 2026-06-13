@@ -481,6 +481,13 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
         per_splat_steps = engine().optim.bias_correction_steps;
     }
 
+    // Sub-batched training: grad_scale = 1/B and zero_grad_in_optim = true
+    // are stashed by engine_train_step's sub-batch dispatcher. When the
+    // dispatcher isn't active (single-batch training) these stay at the
+    // defaults (1.0f, false) and the kernels behave exactly as before.
+    const float grad_scale = engine().optim.grad_scale;
+    const bool  zero_grad  = engine().optim.zero_grad_in_optim;
+
     fused_optim_3dgs_geometry(
         N,
         engine().world.means,     engine().grad.means,     engine().optim.g1_means,     engine().optim.g2_means,
@@ -493,7 +500,8 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
         cfg.mcmc_opacity_reg_weight, cfg.mcmc_scale_reg_weight,
         cfg.erank_reg_weight, cfg.erank_reg_weight_s3, cfg.quat_norm_reg_weight,
         cfg.use_scale_agnostic_mean,
-        step + 1, per_splat_steps
+        step + 1, per_splat_steps,
+        grad_scale, zero_grad
     );
 
     // DC color: trust-region Adam when the splat works in a non-sRGB color
@@ -511,7 +519,8 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
             _dv_tv(engine().optim.g2_features_dc),
             _dv_tv(engine().world.opacities),
             cfg.lr_features_dc,
-            beta1, beta2, eps, cfg.eps_tr, s1
+            beta1, beta2, eps, cfg.eps_tr, s1,
+            grad_scale, zero_grad
         );
     } else {
         fused_adam_step(N,
@@ -520,7 +529,8 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
             DeviceTensorFloatND(engine().optim.g1_features_dc),
             DeviceTensorFloatND(engine().optim.g2_features_dc),
             cfg.lr_features_dc, step + 1, per_splat_steps,
-            cfg.sh_reg_weight, 0.5f / 0.28209479177387814f);
+            cfg.sh_reg_weight, 0.5f / 0.28209479177387814f,
+            grad_scale, zero_grad);
     }
 
     if (cfg.sh_optim_bits != 32 && engine().optim.sh_quant_state.initialized()) {
@@ -535,7 +545,8 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
             engine().optim.sh_quant_state.bounds_ptr(),
             cfg.lr_features_sh, step + 1, per_splat_steps,
             cfg.sh_reg_weight, 0.0f,
-            cfg.sh_optim_bits);
+            cfg.sh_optim_bits,
+            grad_scale, zero_grad);
     } else if (cfg.use_color_trust_region) {
         const int s1 = step + 1;
         const float beta1 = 0.9f, beta2 = 0.999f, eps = 1e-15f;
@@ -547,7 +558,8 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
             _dv_tv(engine().world.features_dc),
             _dv_tv(engine().world.opacities),
             cfg.lr_features_sh,
-            beta1, beta2, eps, cfg.eps_tr, s1
+            beta1, beta2, eps, cfg.eps_tr, s1,
+            grad_scale, zero_grad
         );
     } else {
         fused_adam_step(N,
@@ -556,6 +568,7 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
             DeviceTensorFloatND(engine().optim.g1_features_sh),
             DeviceTensorFloatND(engine().optim.g2_features_sh),
             cfg.lr_features_sh, step + 1, per_splat_steps,
-            cfg.sh_reg_weight, 0.0f);
+            cfg.sh_reg_weight, 0.0f,
+            grad_scale, zero_grad);
     }
 }

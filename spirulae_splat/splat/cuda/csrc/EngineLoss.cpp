@@ -52,12 +52,18 @@ static void _alloc_grad_buffers() {
     engine().grad.opacities.resize("eng.v_opacities", N);
     engine().grad.features_dc.resize("eng.v_features_dc", N);
     engine().grad.features_sh.resize("eng.v_features_sh", N, K);
-    engine().grad.means.zero();
-    engine().grad.quats.zero();
-    engine().grad.scales.zero();
-    engine().grad.opacities.zero();
-    engine().grad.features_dc.zero();
-    engine().grad.features_sh.zero();
+    // Sub-batched training: only the FIRST sub-batch zeroes the per-splat
+    // grad accumulators; subsequent sub-batches atomicAdd into them. The
+    // optim step then consumes the accumulated grad (with grad_scale = 1/B)
+    // and zeroes the buffer as a fused side effect.
+    if (!engine().optim.skip_grad_zero) {
+        engine().grad.means.zero();
+        engine().grad.quats.zero();
+        engine().grad.scales.zero();
+        engine().grad.opacities.zero();
+        engine().grad.features_dc.zero();
+        engine().grad.features_sh.zero();
+    }
 }
 
 

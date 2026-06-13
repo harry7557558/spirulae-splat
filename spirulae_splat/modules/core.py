@@ -35,6 +35,7 @@ class Renderer:
         packed: bool = True,
         use_bvh: bool = False,
         use_fused_proj_bwd_optim: bool = False,
+        split_batch: bool = False,
         quantization_level: int = 0,
     ):
         for tensor in splats_world:
@@ -72,6 +73,13 @@ class Renderer:
         self.packed = packed
         self.use_bvh = use_bvh
         self.use_fused_proj_bwd_optim = use_fused_proj_bwd_optim
+        # When True, engine_train_step splits the camera batch into one-camera
+        # sub-batches, atomic-adds per-splat grads across them, and runs a
+        # single optim+densify pass at the end (with grad_scale = 1/B inside
+        # the splat Adam kernels). Reduces peak VRAM by ~1/B for the
+        # immediate projection / rasterization buffers. Not compatible with
+        # use_fused_proj_bwd_optim or the warped train-step path.
+        self.split_batch = split_batch
         # Single SH quantization level. 0=off, 1=light (16-bit value + 8-bit
         # optim). Collapses the FPBO dispatcher's bit-pair axes into a single
         # template parameter so the generated kernel-instantiation .cu files
@@ -273,6 +281,7 @@ class Renderer:
         c.non_sh_optim_bits              = self.non_sh_optim_bits
         c.use_per_splat_bias_correction  = optim_config.use_per_splat_bias_correction
         c.use_fused_proj_bwd_optim       = self.use_fused_proj_bwd_optim
+        c.split_batch     = self.split_batch
         c.color_is_linear = model_config.splat_color_is_linear
         c.use_color_trust_region = model_config.splat_color_is_linear
         c.eps_tr = 1e-6 * 0.01 ** (step / max_steps)  # TODO: make this configurable

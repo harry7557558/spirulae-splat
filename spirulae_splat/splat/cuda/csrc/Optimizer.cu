@@ -683,22 +683,22 @@ void fused_adam_scale_agnostic_mean(
 // Fused geometry optimizer
 // ================
 
-template<bool use_scale_agnostic_mean>
+template<bool use_scale_agnostic_mean, bool zero_grad>
 __global__ void fused_optim_3dgs_geometry_kernel(
     float3* __restrict__ means,
-    const float3* __restrict__ v_means,
+    float3* __restrict__ v_means,
     float3* __restrict__ g1_means,
     float3* __restrict__ g2_means,
     float4* __restrict__ quats,
-    const float4* __restrict__ v_quats,
+    float4* __restrict__ v_quats,
     float4* __restrict__ g1_quats,
     float4* __restrict__ g2_quats,
     float3* __restrict__ scales,
-    const float3* __restrict__ v_scales,
+    float3* __restrict__ v_scales,
     float3* __restrict__ g1_scales,
     float3* __restrict__ g2_scales,
     float* __restrict__ opacities,
-    const float* __restrict__ v_opacities,
+    float* __restrict__ v_opacities,
     float* __restrict__ g1_opacities,
     float* __restrict__ g2_opacities,
     const float* __restrict__ radii,
@@ -713,6 +713,7 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     const float erank_reg_weight,
     const float erank_reg_weight_s3,
     const float quat_norm_reg_weight,
+    const float grad_scale,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
     const int64_t numel
@@ -754,9 +755,14 @@ __global__ void fused_optim_3dgs_geometry_kernel(
         erank_reg_weight_s3,
         quat_norm_reg_weight
     );
-    v_scale += v_scales[idx];
-    v_quat += v_quats[idx];
-    v_opac += v_opacities[idx];
+    v_scale += grad_scale * v_scales[idx];
+    v_quat += grad_scale * v_quats[idx];
+    v_opac += grad_scale * v_opacities[idx];
+    if constexpr (zero_grad) {
+        v_scales[idx] = make_float3(0.0f);
+        v_quats[idx] = make_float4(0.0f);
+        v_opacities[idx] = 0.0f;
+    }
 
     // update scales
     float3 g1_scale = beta1 * g1_scales[idx] + (1.f - beta1) * v_scale;
@@ -784,7 +790,9 @@ __global__ void fused_optim_3dgs_geometry_kernel(
 
     // update means (scale agnostic)
     float3 mean = means[idx];
-    float3 v_mean = v_means[idx];
+    float3 v_mean = grad_scale * v_means[idx];
+    if constexpr (zero_grad)
+        v_means[idx] = make_float3(0.0f);
     float3 g1_mean = g1_means[idx];
     float3 g2_mean = g2_means[idx];
 
@@ -838,15 +846,32 @@ void fused_optim_3dgs_geometry(
     const float mcmc_opacity_reg_weight, const float mcmc_scale_reg_weight,
     const float erank_reg_weight, const float erank_reg_weight_s3, const float quat_norm_reg_weight,
     bool use_scale_agnostic_mean,
-    int32_t step, DeviceVector<int32_t> per_splat_steps
+    int32_t step, DeviceVector<int32_t> per_splat_steps,
+    float grad_scale, bool zero_grad
 ) {
     if (num_splats == 0)
         return;
 
-    (use_scale_agnostic_mean ?
-        fused_optim_3dgs_geometry_kernel<true> :
-        fused_optim_3dgs_geometry_kernel<false>
-    )<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+    // Dispatch over (use_scale_agnostic_mean, zero_grad) -> 4 instantiations.
+    using KFn = void(*)(
+        float3*, float3*, float3*, float3*,
+        float4*, float4*, float4*, float4*,
+        float3*, float3*, float3*, float3*,
+        float*,  float*,  float*,  float*,
+        const float*,
+        float, float, float, float,
+        const float, const float, const float, const float,
+        const float, const float, const float, const float,
+        const int32_t, const int32_t*, const int64_t);
+    KFn kfn = nullptr;
+    if (use_scale_agnostic_mean) {
+        kfn = zero_grad ? fused_optim_3dgs_geometry_kernel<true,  true>
+                        : fused_optim_3dgs_geometry_kernel<true,  false>;
+    } else {
+        kfn = zero_grad ? fused_optim_3dgs_geometry_kernel<false, true>
+                        : fused_optim_3dgs_geometry_kernel<false, false>;
+    }
+    kfn<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
         means.data_ptr(), v_means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(),
         quats.data_ptr(), v_quats.data_ptr(), g1_quats.data_ptr(), g2_quats.data_ptr(),
         scales.data_ptr(), v_scales.data_ptr(), g1_scales.data_ptr(), g2_scales.data_ptr(),
@@ -860,6 +885,7 @@ void fused_optim_3dgs_geometry(
         erank_reg_weight / (float)num_splats,
         erank_reg_weight_s3 / (float)num_splats,
         quat_norm_reg_weight / (float)num_splats,
+        grad_scale,
         step, per_splat_steps.data_ptr(), num_splats
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -871,9 +897,10 @@ void fused_optim_3dgs_geometry(
 // Fused appearance optimizer
 // ================
 
+template<bool zero_grad>
 __global__ void fused_adam_with_steps_kernel(
     float* __restrict__ param,
-    const float* __restrict__ grad,
+    float* __restrict__ grad,
     float* __restrict__ exp_avg,
     float* __restrict__ exp_avg_sq,
     const float lr,
@@ -881,6 +908,7 @@ __global__ void fused_adam_with_steps_kernel(
     const int32_t* __restrict__ steps,
     const float decay,
     const float decay_offset,
+    const float grad_scale,
     const int64_t numel,
     const int stride
 ) {
@@ -899,15 +927,18 @@ __global__ void fused_adam_with_steps_kernel(
     float v = grad[idx];
     if (!isfinite(v))
         v = 0.0f;
+    if constexpr (zero_grad)
+        grad[idx] = 0.0f;
+    v *= grad_scale;
     v += decay * (fmaxf(x - decay_offset, 0.0f) + fminf(x + decay_offset, 0.0f));
     float g1 = exp_avg[idx];
     float g2 = exp_avg_sq[idx];
-    
+
     g1 = beta1 * g1 + (1.0f - beta1) * v;
     g2 = beta2 * g2 + (1.0f - beta2) * v * v;
 
     x -= lr * inv_bias_correction1 * g1 / (sqrtf(g2 * inv_bias_correction2) + eps);
-    
+
     param[idx] = x;
     exp_avg[idx] = g1;
     exp_avg_sq[idx] = g2;
@@ -923,14 +954,17 @@ void fused_adam_step(
     float lr,
     int32_t step, DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
-    float l2_reg_offset
+    float l2_reg_offset,
+    float grad_scale, bool zero_grad
 ) {
     int64_t param_numel = param.numel();
     if (param_numel == 0 || num_splats == 0)
         return;
     int stride = (int)(param_numel / num_splats);
 
-    fused_adam_with_steps_kernel<<<_LAUNCH_ARGS_1D(num_splats*stride, 256)>>>(
+    auto kfn = zero_grad ? fused_adam_with_steps_kernel<true>
+                         : fused_adam_with_steps_kernel<false>;
+    kfn<<<_LAUNCH_ARGS_1D(num_splats*stride, 256)>>>(
         param.data_ptr(),
         grad.data_ptr(),
         exp_avg.data_ptr(),
@@ -939,6 +973,7 @@ void fused_adam_step(
         step, per_splat_steps.data_ptr(),
         2.0f*l2_reg/(float)(num_splats*stride),
         l2_reg_offset,
+        grad_scale,
         num_splats*stride,
         stride
     );
@@ -988,10 +1023,10 @@ void fused_adagrad_step(
 }
 
 
-template<int BLOCK_SIZE, int QUANT_BITS = 8>
+template<int BLOCK_SIZE, int QUANT_BITS, bool zero_grad>
 __global__ void fused_adam_with_steps_8bit_kernel(
     float* __restrict__ param,
-    const float* __restrict__ grad,
+    float* __restrict__ grad,
     uint8_t* __restrict__ packed,       // AoS (u, sqrt_g2) packed cells
     float4* __restrict__ quant_bounds,  // (u_min, u_max, sqrt_g2_min, sqrt_g2_max)
     const float lr,
@@ -999,6 +1034,7 @@ __global__ void fused_adam_with_steps_8bit_kernel(
     const int32_t* __restrict__ steps,
     const float decay,
     const float decay_offset,
+    const float grad_scale,
     const int64_t numel,
     const int stride
 ) {
@@ -1018,6 +1054,10 @@ __global__ void fused_adam_with_steps_8bit_kernel(
     float v = inside ? grad[idx] : 0.0f;
     if (!isfinite(v))
         v = 0.0f;
+    if constexpr (zero_grad) {
+        if (inside) grad[idx] = 0.0f;
+    }
+    v *= grad_scale;
     v += decay * (fmaxf(x - decay_offset, 0.0f) + fminf(x + decay_offset, 0.0f));
 
     // Decode joint (u, sqrt(g2)) via QuantizedAdamState codec.
@@ -1086,7 +1126,8 @@ void fused_adam_step_quantized(
     int32_t step, DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
     float l2_reg_offset,
-    int bits                            // 4 or 8 -- selects QuantizedAdamState<BITS, 256>
+    int bits,                           // 4 or 8 -- selects QuantizedAdamState<BITS, 256>
+    float grad_scale, bool zero_grad
 ) {
     int64_t param_numel = param.numel();
     if (param_numel == 0 || num_splats == 0)
@@ -1098,14 +1139,17 @@ void fused_adam_step_quantized(
         param.data_ptr(), grad.data_ptr(), packed, quant_bounds, \
         lr, step, per_splat_steps.data_ptr(), \
         2.0f*l2_reg/(float)(num_splats*stride), l2_reg_offset, \
+        grad_scale, \
         num_splats*stride, stride
 
     if (bits == 4) {
-        fused_adam_with_steps_8bit_kernel<BLOCK_SIZE, 4>
-            <<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(_ARGS_TAIL);
+        auto kfn = zero_grad ? fused_adam_with_steps_8bit_kernel<BLOCK_SIZE, 4, true>
+                             : fused_adam_with_steps_8bit_kernel<BLOCK_SIZE, 4, false>;
+        kfn<<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(_ARGS_TAIL);
     } else if (bits == 8) {
-        fused_adam_with_steps_8bit_kernel<BLOCK_SIZE, 8>
-            <<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(_ARGS_TAIL);
+        auto kfn = zero_grad ? fused_adam_with_steps_8bit_kernel<BLOCK_SIZE, 8, true>
+                             : fused_adam_with_steps_8bit_kernel<BLOCK_SIZE, 8, false>;
+        kfn<<<_LAUNCH_ARGS_1D(num_splats*stride, BLOCK_SIZE)>>>(_ARGS_TAIL);
     } else {
         throw std::runtime_error(
             "fused_adam_step_quantized: bits must be 4 or 8, got " +
@@ -1802,11 +1846,11 @@ void fused_adam_linear_rgb_optim(
 // Trust Region Adam for RGB
 // ================
 
-template<bool is_linear>
+template<bool is_linear, bool zero_grad>
 __global__ void fused_adamtr_rgb_optim_kernel(
     const int num_gs,
     float3* __restrict__ rgbs,  // [N, 3]
-    const float3* __restrict__ grad,  // [N, 3]
+    float3* __restrict__ grad,  // [N, 3]
     float3* __restrict__ exp_avg,  // [N, 3]
     float3* __restrict__ exp_avg_sq,  // [N, 3]
     float* __restrict__ opacities,  // [N]
@@ -1817,18 +1861,21 @@ __global__ void fused_adamtr_rgb_optim_kernel(
     const float bias_correction2,
     const float eps,
     const float eps_tr,
+    const float grad_scale,
     const int step
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
+
     if (idx < num_gs) {
         // Bias correction terms
         // TODO: proper bias correction after densification
         const float step_size = lr / bias_correction1;
-        
+
         // Load values
         float3 x = rgbs[idx];
         float3 v = grad[idx];
+        if constexpr (zero_grad) grad[idx] = make_float3(0.0f);
+        v = grad_scale * v;
         float3 m_val = exp_avg[idx];
         float3 v_val = exp_avg_sq[idx];
 
@@ -1878,13 +1925,16 @@ void fused_adamtr_linear_rgb_optim(
     float beta2,
     float eps,
     float eps_tr,
-    int step
+    int step,
+    float grad_scale, bool zero_grad
 ) {
     const int num_gs = (int)(_tv_numel(param) / 3);
     if (num_gs == 0)
         return;
 
-    fused_adamtr_rgb_optim_kernel<true><<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+    auto kfn = zero_grad ? fused_adamtr_rgb_optim_kernel<true,  true>
+                         : fused_adamtr_rgb_optim_kernel<true,  false>;
+    kfn<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
         num_gs,
         (float3*)_tv_f(param),
         (float3*)_tv_f(grad),
@@ -1898,6 +1948,7 @@ void fused_adamtr_linear_rgb_optim(
         1.0f - powf(beta2, step),
         eps,
         eps_tr,
+        grad_scale,
         step
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -1915,13 +1966,16 @@ void fused_adamtr_rgb_optim(
     float beta2,
     float eps,
     float eps_tr,
-    int step
+    int step,
+    float grad_scale, bool zero_grad
 ) {
     const int num_gs = (int)(_tv_numel(param) / 3);
     if (num_gs == 0)
         return;
 
-    fused_adamtr_rgb_optim_kernel<false><<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+    auto kfn = zero_grad ? fused_adamtr_rgb_optim_kernel<false, true>
+                         : fused_adamtr_rgb_optim_kernel<false, false>;
+    kfn<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
         num_gs,
         (float3*)_tv_f(param),
         (float3*)_tv_f(grad),
@@ -1935,6 +1989,7 @@ void fused_adamtr_rgb_optim(
         1.0f - powf(beta2, step),
         eps,
         eps_tr,
+        grad_scale,
         step
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -1945,12 +2000,12 @@ void fused_adamtr_rgb_optim(
 // Trust Region Adam for linear RGB, SH coefficients
 // ================
 
-template<bool is_linear>
+template<bool is_linear, bool zero_grad>
 __global__ void fused_adamtr_rgb_sh_optim_kernel(
     const int num_params,
     const int num_sh,
     float* __restrict__ param,  // [N, K, 3]
-    const float* __restrict__ grad,  // [N, K, 3]
+    float* __restrict__ grad,  // [N, K, 3]
     float* __restrict__ exp_avg,  // [N, K, 3]
     float* __restrict__ exp_avg_sq,  // [N, K, 3]
     float* __restrict__ rgbs,  // [N, 3]
@@ -1962,18 +2017,21 @@ __global__ void fused_adamtr_rgb_sh_optim_kernel(
     const float bias_correction2,
     const float eps,
     const float eps_tr,
+    const float grad_scale,
     const int step
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
+
     if (idx < num_params) {
         // Bias correction terms
         // TODO: proper bias correction after densification
         const float step_size = lr / bias_correction1;
-        
+
         // Load values
         // float x = param[idx];
         float v = grad[idx];
+        if constexpr (zero_grad) grad[idx] = 0.0f;
+        v = grad_scale * v;
         float m_val = exp_avg[idx];
         float v_val = exp_avg_sq[idx];
 
@@ -2017,7 +2075,8 @@ void fused_adamtr_linear_rgb_sh_optim(
     float beta2,
     float eps,
     float eps_tr,
-    int step
+    int step,
+    float grad_scale, bool zero_grad
 ) {
     int64_t colors_numel = _tv_numel(colors);
     const int num_gs = (int)(colors_numel / 3);
@@ -2027,7 +2086,9 @@ void fused_adamtr_linear_rgb_sh_optim(
     if (num_sh == 0)
         return;
 
-    fused_adamtr_rgb_sh_optim_kernel<true><<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+    auto kfn = zero_grad ? fused_adamtr_rgb_sh_optim_kernel<true,  true>
+                         : fused_adamtr_rgb_sh_optim_kernel<true,  false>;
+    kfn<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
         num_gs,
         num_sh,
         _tv_f(param),
@@ -2043,6 +2104,7 @@ void fused_adamtr_linear_rgb_sh_optim(
         1.0f - powf(beta2, step),
         eps,
         eps_tr,
+        grad_scale,
         step
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -2061,7 +2123,8 @@ void fused_adamtr_rgb_sh_optim(
     float beta2,
     float eps,
     float eps_tr,
-    int step
+    int step,
+    float grad_scale, bool zero_grad
 ) {
     int64_t colors_numel = _tv_numel(colors);
     const int num_gs = (int)(colors_numel / 3);
@@ -2071,7 +2134,9 @@ void fused_adamtr_rgb_sh_optim(
     if (num_sh == 0)
         return;
 
-    fused_adamtr_rgb_sh_optim_kernel<false><<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
+    auto kfn = zero_grad ? fused_adamtr_rgb_sh_optim_kernel<false, true>
+                         : fused_adamtr_rgb_sh_optim_kernel<false, false>;
+    kfn<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
         num_gs,
         num_sh,
         _tv_f(param),
@@ -2087,6 +2152,7 @@ void fused_adamtr_rgb_sh_optim(
         1.0f - powf(beta2, step),
         eps,
         eps_tr,
+        grad_scale,
         step
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -2103,5 +2169,23 @@ __global__ void increment_int32_kernel(int32_t* __restrict__ data, int64_t n) {
 void increment_int32_inplace(DeviceVector<int32_t> data, int64_t n) {
     if (n == 0 || data.data_ptr() == nullptr) return;
     increment_int32_kernel<<<(n + 255) / 256, 256>>>(data.data_ptr(), n);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+// dst[i] += src[i] for i in [0, n). Used by the sub-batched training
+// dispatcher to accumulate per-sub-batch raster-bwd accum_weight buffers
+// into a persistent buffer that densify consumes at the end of the step.
+__global__ void float_add_into_kernel(float* __restrict__ dst,
+                                      const float* __restrict__ src,
+                                      int64_t n) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) dst[idx] += src[idx];
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void float_add_into(DeviceVector<float> dst, DeviceVector<float> src, int64_t n) {
+    if (n == 0 || dst.data_ptr() == nullptr || src.data_ptr() == nullptr) return;
+    float_add_into_kernel<<<(n + 255) / 256, 256>>>(dst.data_ptr(), src.data_ptr(), n);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

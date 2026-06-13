@@ -127,7 +127,8 @@ void fused_optim_3dgs_geometry(
     const float mcmc_opacity_reg_weight, const float mcmc_scale_reg_weight,
     const float erank_reg_weight, const float erank_reg_weight_s3, const float quat_norm_reg_weight,
     bool use_scale_agnostic_mean,
-    int32_t step, DeviceVector<int32_t> per_splat_steps
+    int32_t step, DeviceVector<int32_t> per_splat_steps,
+    float grad_scale, bool zero_grad
 );
 
 
@@ -140,7 +141,8 @@ void fused_adam_step(
     float lr,
     int32_t step, DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
-    float l2_reg_offset
+    float l2_reg_offset,
+    float grad_scale, bool zero_grad
 );
 
 
@@ -162,7 +164,8 @@ void fused_adam_step_quantized(
     int32_t step, DeviceVector<int32_t> per_splat_steps,
     float l2_reg,
     float l2_reg_offset,
-    int bits                            // 4 or 8 -- selects QuantizedAdamState<BITS, 256>
+    int bits,                           // 4 or 8 -- selects QuantizedAdamState<BITS, 256>
+    float grad_scale, bool zero_grad
 );
 
 
@@ -277,7 +280,8 @@ void fused_adamtr_linear_rgb_optim(
     float beta2,
     float eps,
     float eps_tr,
-    int step
+    int step,
+    float grad_scale, bool zero_grad
 );
 
 
@@ -292,7 +296,8 @@ void fused_adamtr_rgb_optim(
     float beta2,
     float eps,
     float eps_tr,
-    int step
+    int step,
+    float grad_scale, bool zero_grad
 );
 
 
@@ -308,7 +313,8 @@ void fused_adamtr_linear_rgb_sh_optim(
     float beta2,
     float eps,
     float eps_tr,
-    int step
+    int step,
+    float grad_scale, bool zero_grad
 );
 
 
@@ -324,8 +330,12 @@ void fused_adamtr_rgb_sh_optim(
     float beta2,
     float eps,
     float eps_tr,
-    int step
+    int step,
+    float grad_scale, bool zero_grad
 );
 
 
 void increment_int32_inplace(DeviceVector<int32_t> data, int64_t n);
+
+
+void float_add_into(DeviceVector<float> dst, DeviceVector<float> src, int64_t n);

@@ -107,6 +107,14 @@ class SpirulaeSplatModelConfig:
     use_fused_proj_bwd_optim: bool = True
     """Whether to use fused projection backward and optimizer.
         More memory efficient for large number of Gaussians, with slight performance hit."""
+    split_batch: bool = False
+    """Split the camera batch into one-camera sub-batches inside the C++ train step.
+        Per-splat grads accumulate via atomicAdd across sub-batches; a single
+        optim+densify pass at the end consumes the accumulator with grad_scale = 1/B.
+        Drops peak VRAM for the immediate projection / rasterization buffers by
+        roughly 1/B. Per-image grad magnitude vs regularization weight stays
+        batch-size invariant. Not compatible with use_fused_proj_bwd_optim or with
+        the warped train-step path."""
     quantization_level: int = 1
     """SH quantization level: a single int that selects one of two
         (param bits, optim bits) configurations.
@@ -451,6 +459,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             packed=(self.config.packed or self.config.use_bvh),
             use_bvh=self.config.use_bvh,
             use_fused_proj_bwd_optim=self.config.use_fused_proj_bwd_optim,
+            split_batch=self.config.split_batch,
             quantization_level=self.config.quantization_level,
         )
 
