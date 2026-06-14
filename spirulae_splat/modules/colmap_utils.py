@@ -212,11 +212,13 @@ def read_images_text(path):
     """
     images = {}
     with open(path, "r") as fid:
+        skip_line = False
         while True:
-            line = fid.readline()
-            if not line:
-                break
-            line = line.strip()
+            if not skip_line:
+                line = fid.readline()
+                if not line:
+                    break
+                line = line.strip()
             if len(line) > 0 and line[0] != "#":
                 elems = line.split()
                 image_id = int(elems[0])
@@ -224,7 +226,11 @@ def read_images_text(path):
                 tvec = np.array(tuple(map(float, elems[5:8])))
                 camera_id = int(elems[8])
                 image_name = elems[9]
-                elems = fid.readline().split()
+                elems = fid.readline().strip()
+                if not elems[-1].isnumeric():
+                    skip_line = True
+                    continue
+                elems = elems.split()
                 xys = np.column_stack([tuple(map(float, elems[0::3])), tuple(map(float, elems[1::3]))])
                 point3D_ids = np.array(tuple(map(int, elems[2::3])))
                 images[image_id] = Image(
@@ -236,6 +242,7 @@ def read_images_text(path):
                     xys=xys,
                     point3D_ids=point3D_ids,
                 )
+            skip_line = False
     return images
 
 

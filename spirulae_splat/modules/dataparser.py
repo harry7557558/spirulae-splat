@@ -594,10 +594,11 @@ class SpirulaeSplatDataparser:
                     colmap_points = load_colmap_points3D(recon_dir)
                     cam_id_to_camera = load_colmap_cameras(recon_dir)
                     im_id_to_image = load_colmap_images(recon_dir)
+                    okay = True
+                    print(f"Loaded COLMAP reconstruction from {recon_dir}")
+                    break
                 except:
-                    continue
-                okay = True
-                print(f"Loaded COLMAP reconstruction from {recon_dir}")
+                    pass
             if not okay:
                 raise ValueError("Could not find COLMAP reconstruction dir containing points, cameras, and images files. Specify --dataparser.colmap_recon_dir if needed.")
 

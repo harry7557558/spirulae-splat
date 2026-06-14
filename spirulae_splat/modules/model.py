@@ -1380,7 +1380,8 @@ class SpirulaeSplatModel(torch.nn.Module):
                         or key.startswith('eng.g1_') \
                         or key.startswith('eng.g2_') \
                         or key.startswith('eng.sh_quant_') \
-                        or (key.startswith('eng.') and (key.endswith('.qb') or key.endswith('.q'))) \
+                        or (key.startswith('eng.') and not key.startswith('eng.bg.')
+                            and (key.endswith('.qb') or key.endswith('.q'))) \
                         or key in ('eng.radii', 'eng.accum_buffer',
                                    'eng.bias_correction_steps',
                                    'eng.quant_bounds_sh'):
