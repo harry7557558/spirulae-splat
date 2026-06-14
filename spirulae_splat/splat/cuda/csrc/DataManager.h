@@ -305,6 +305,14 @@ public:
     bool has_depths()       const;
     bool has_normals()      const;
 
+    // Largest possible POST-split batch size (B_post) for a single training
+    // step, computed as train_batch_size (clamped to train-set size) times
+    // the max K_per_camera over train_indices. 1 means every train step
+    // produces exactly one POST-split camera (so split_batch sub-batching
+    // would be a no-op). Used by the engine to resolve the case where the
+    // user has both `split_batch` and `use_fused_proj_bwd_optim` enabled.
+    int64_t max_input_batch_size() const;
+
 private:
     std::unique_ptr<DataManagerImpl> _impl;
 };

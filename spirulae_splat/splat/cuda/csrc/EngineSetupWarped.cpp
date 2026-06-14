@@ -48,6 +48,26 @@ static const void* _h2d_stage_byte(
 }
 
 
+// Stage a small float array (per-input intrins / dist_coeffs) to device. The
+// wide warp kernels dereference these on-device as intrins[bid] /
+// dist_coeffs.load(bid); when the managed C++ DataManager drives this path the
+// views point at host std::vector memory (DecodedBatch hands out host
+// TorchTensorViews), so they must be copied to device first -- otherwise the
+// kernel faults on an illegal address. Zero-copy when already a device ptr.
+static const float* _h2d_stage_floats(
+    const TorchTensorView& src_tv, size_t numel, const char* slot)
+{
+    uint64_t src_ptr = std::get<0>(src_tv);
+    if (src_ptr == 0 || numel == 0) return nullptr;
+    if (_is_device_ptr((void*)src_ptr)) {
+        return (const float*)src_ptr;
+    }
+    float* p = DevicePool::global().acquire<float>(slot, numel);
+    cudaMemcpy(p, (void*)src_ptr, numel * sizeof(float), cudaMemcpyHostToDevice);
+    return p;
+}
+
+
 void set_training_data_warped(
     // Input-side camera model name (FISHEYE / EQUISOLID / EQUIRECTANGULAR).
     // The kernel dispatcher uses this to pick wide vs equirectangular warp.
@@ -103,9 +123,13 @@ void set_training_data_warped(
         (size_t)B_post * out_H * out_W * 3);
 
     // Wide path uses input intrins / dist_coeffs; equirectangular path
-    // doesn't (it ignores those args).
-    const float* d_intrins = (float*)std::get<0>(input_intrins);
-    const float* d_dist    = (float*)std::get<0>(input_dist_coeffs);
+    // doesn't (it ignores those args). Stage to device when host-resident --
+    // the managed DataManager passes host views, and the wide warp kernels
+    // dereference these pointers on-device.
+    const float* d_intrins = _h2d_stage_floats(
+        input_intrins, (size_t)B_in * 4, "warp.input_intrins");
+    const float* d_dist    = _h2d_stage_floats(
+        input_dist_coeffs, (size_t)B_in * 10, "warp.input_dist_coeffs");
 
     CameraModelType cm = cmt(input_model_name);
     if (cm == CameraModelType::EQUIRECTANGULAR) {

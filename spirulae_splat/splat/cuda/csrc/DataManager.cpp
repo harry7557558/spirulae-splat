@@ -537,6 +537,19 @@ public:
     bool    has_val()      const { return !_val_indices.empty(); }
     CacheMode cache_mode() const { return _cfg.cache_mode; }
 
+    // Largest INPUT-image batch size (pre-split) for a single training step.
+    // The engine's split_batch dispatcher carves a sub-batch per INPUT image
+    // (the K post-split cameras of one input stay together in one sub-batch,
+    // see _engine_train_step_split_warped), so this is what determines
+    // whether split_batch is a no-op (==1) vs. whether sub-batching matters
+    // (>1). Used by engine_train_step_managed to resolve split_batch vs FPBO
+    // when the user enables both.
+    int64_t max_input_batch_size() const {
+        if (_train_indices.empty()) return 0;
+        int64_t bs = (int64_t)std::max(1, _cfg.train_batch_size);
+        return std::min(bs, (int64_t)_train_indices.size());
+    }
+
     bool has_masks()   const {
         return (_cfg.load_masks && !_mask_filenames.empty()) || _has_synth_masks;
     }
@@ -1054,6 +1067,20 @@ std::vector<IndexGroup> DataManagerImpl::build_index_groups_member(
     out.reserve(by_shape.size());
     for (auto& kv : by_shape) {
         auto& g = kv.second;
+        // Warp groups (K>1) sample the mask with the INPUT-image intrinsics
+        // (warp_mask_wide_to_pinhole_kernel projects post-split pixels through
+        // fx/fy/cx/cy into image-pixel space), then index the mask buffer at
+        // its own resolution. If the mask buffer isn't at the input image
+        // resolution, those image-space coords land in the wrong place -- and
+        // when the mask is smaller than the image they fall out of bounds for
+        // most pixels, zeroing the FOV mask and masking the lens out of the
+        // loss. Pin the mask buffer to (height, width); per-image masks are
+        // nearest-resized to this shape at decode / fill time. (Synth white
+        // masks are already image-sized, so this is a no-op for them.)
+        if (has_masks() && g.K > 1 && g.mask_h > 0) {
+            g.mask_h = g.height;
+            g.mask_w = g.width;
+        }
         // Mask-only fallback: every mask in the group was 1x1 (or absent).
         // Settle the batch shape at 1x1 -- one byte per image, the per-pixel
         // kernel will read it as a scalar broadcast.
@@ -1679,3 +1706,4 @@ CacheMode DataManager::cache_mode()     const              { return _impl->cache
 bool      DataManager::has_masks()      const              { return _impl->has_masks(); }
 bool      DataManager::has_depths()     const              { return _impl->has_depths(); }
 bool      DataManager::has_normals()    const              { return _impl->has_normals(); }
+int64_t   DataManager::max_input_batch_size() const         { return _impl->max_input_batch_size(); }

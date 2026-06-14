@@ -17,6 +17,7 @@
 #include "Engine.h"
 #include "EngineState.h"
 
+#include <cstdio>
 #include <stdexcept>
 
 
@@ -56,18 +57,68 @@ void engine_setup_data_manager(
 }
 
 
+// Resolve the `split_batch` + `use_fused_proj_bwd_optim` conflict. Both
+// turned on at once is an inconsistency: split_batch loops over single
+// cameras and accumulates atomicAdd into world-grad buffers, whereas FPBO
+// folds projection-bwd into the optim kernel and never materializes those
+// buffers. If we know (from the DataManager) that the post-split batch
+// size will always be 1, split_batch is a no-op and FPBO is the correct
+// choice. Otherwise the user wants the memory win of split_batch and we
+// must turn FPBO off. Prints a one-shot warning describing the choice.
+static EngineStepConfig _resolve_split_vs_fpbo(const EngineStepConfig& cfg,
+                                               int64_t max_batch_known) {
+    if (!cfg.optim.split_batch || !cfg.optim.use_fused_proj_bwd_optim)
+        return cfg;
+    EngineStepConfig out = cfg;
+    static bool warned = false;
+    // max_batch_known == -1 -> caller couldn't determine ahead of time;
+    // treat as "may exceed 1" so the user gets the memory-safe path.
+    bool batch_le_one = (max_batch_known > 0 && max_batch_known <= 1);
+    if (batch_le_one) {
+        out.optim.split_batch = false;
+        if (!warned) {
+            fprintf(stderr,
+                "[spirulae_splat] WARNING: both `split_batch` and "
+                "`use_fused_proj_bwd_optim` are enabled, but the dataset's max "
+                "post-split batch size is 1; split_batch would be a no-op. "
+                "Disabling split_batch and keeping FPBO.\n");
+            warned = true;
+        }
+    } else {
+        out.optim.use_fused_proj_bwd_optim = false;
+        if (!warned) {
+            fprintf(stderr,
+                "[spirulae_splat] WARNING: both `split_batch` and "
+                "`use_fused_proj_bwd_optim` are enabled, but the post-split "
+                "batch size can exceed 1 (max=%lld); FPBO is incompatible with "
+                "sub-batched gradient accumulation. Disabling FPBO and keeping "
+                "split_batch.\n",
+                (long long)max_batch_known);
+            warned = true;
+        }
+    }
+    return out;
+}
+
+
 std::map<std::string, float> engine_train_step_managed(
     int step, int max_steps,
     std::string primitive,
     int sh_degree,
     bool packed,
-    const EngineStepConfig& cfg)
+    const EngineStepConfig& cfg_in)
 {
     if (!engine().dm) {
         throw std::runtime_error(
             "engine_train_step_managed: DataManager not configured — "
             "call engine_setup_data_manager(...) first.");
     }
+
+    // Resolve split_batch vs FPBO using the DataManager's view of the
+    // dataset (max train batch size × max K). Done once per session via
+    // the static warned flag inside the helper.
+    const EngineStepConfig cfg = _resolve_split_vs_fpbo(
+        cfg_in, engine().dm->max_input_batch_size());
 
     const DecodedBatch& b = engine().dm->next_train_batch();
 

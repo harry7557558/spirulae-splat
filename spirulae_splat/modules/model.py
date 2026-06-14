@@ -107,7 +107,7 @@ class SpirulaeSplatModelConfig:
     use_fused_proj_bwd_optim: bool = True
     """Whether to use fused projection backward and optimizer.
         More memory efficient for large number of Gaussians, with slight performance hit."""
-    split_batch: bool = False
+    split_batch: bool = True
     """Split the camera batch into one-camera sub-batches inside the C++ train step.
         Per-splat grads accumulate via atomicAdd across sub-batches; a single
         optim+densify pass at the end consumes the accumulator with grad_scale = 1/B.
