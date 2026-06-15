@@ -13,9 +13,9 @@ __global__ void tv_loss_forward_kernel(
     float* __restrict__ tv_loss,
     int N, int L, int H, int W
 ) {
-    int wi = blockIdx.x * blockDim.x + threadIdx.x;
-    int hi = blockIdx.y * blockDim.y + threadIdx.y;
-    int idx = blockIdx.z * blockDim.z + threadIdx.z;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int wi = blockIdx.y * blockDim.y + threadIdx.y;
+    int hi = blockIdx.z * blockDim.z + threadIdx.z;
     // bool inside = (wi < W && hi < H && idx < (L*C*N));
     bool inside = (wi < W && hi < H && idx < (L*N));
     int li = idx % L; idx /= L;
@@ -97,10 +97,10 @@ void tv_loss_forward(
     // TODO: optimize memory access pattern
     dim3 block = { 4, 4, 4 };
     dim3 bounds = {
+        // (N*C*L +block.z-1)/block.z,
+        (N*L +block.z-1)/block.z,
         (W +block.x-1)/block.x,
         (H +block.y-1)/block.y,
-        // (N*C*L +block.z-1)/block.z
-        (N*L +block.z-1)/block.z
     };
     if (C == 12)
         tv_loss_forward_kernel<12><<<bounds, block, 0, stream>>>(
