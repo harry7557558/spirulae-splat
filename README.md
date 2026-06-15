@@ -1,6 +1,6 @@
 # spirulae-splat
 
-> **Note to existing users:** Since early May 2026, Nerfstudio and GSplat dependencies are no longer needed. The interface has gone through major change (see "Quick Start" section below). You may find a backup of the original Nerfstudio+GSplat version in `nerfstudio` branch. If you see error or significant quality degrade compared to before, please let me know on Discord (@spirulae) or email (the one used by almost all of my git commits). Additionally, you may find latest features in `dev` branch that is more frequently updated.
+> **Note to existing users:** Since early May 2026, Nerfstudio and GSplat dependencies are no longer needed. The interface has gone through major change (see "Quick Start" section below). You may find a backup of the original Nerfstudio+GSplat version in `nerfstudio` branch, and a backup of an older version of `dev` branch in `dev-mid2026` branch. If you see error or significant quality degrade compared to before, please let me know on Discord (@spirulae) or email (the one used by almost all of my git commits). Additionally, you may find latest features in `dev` branch that is more frequently updated.
 
 This is my personal project that trains 3D Gaussian Splatting (3DGS) models.
 
@@ -8,7 +8,7 @@ If you find spirulae-splat helpful for your research, please cite corresponding 
 
 If you share 3DGS models trained with spirulae-splat, or incorporate any feature or idea into your code, product, or service, a mention of spirulae-splat with a link to this page is highly appreciated.
 
-Spirulae-splat has changed its license to GPLv3. If you wish to use part of its code in a more permissively licensed open source software, reach out to me and we can figure it out.
+Spirulae-splat has changed its license to GPLv3. If you wish to use part of its code in more permissively licensed open source software, reach out to me and we can figure it out.
 
 I'm also considering adding a few visuals to this README. If you have cool splats made with spirulae-splat and are willing to share either the full splats or some renders publicly, please don't hesitate to reach out.
 
@@ -16,16 +16,17 @@ I'm also considering adding a few visuals to this README. If you have cool splat
 - Unified densification strategy combining elements from MCMC and IGS/IGS+/MRNF
 - Bilateral grid and PPISP for exposure/WB correction
 - Camera models: perspective and equidistant fisheye (supports >180° fov), fully supports radial, tangential, and thin prism distortion coefficients
-- Training on images in linear and various wide-gamut color spaces, with EXR or 16-bit PNG images as input
-- Generalization from small objects to city-scale scenes with minimum tuning, as well as presets specific to each scene type
+- Training on images in linear and various wide-gamut color spaces
+- Generalization from small objects to city-scale scenes with minimum tuning
+- Extreme VRAM efficiency with quantized training
 - Depth and normal supervision using monocular geometry models
 - Masking (sky mode and people/car mode)
-- Second order optimizer and tile batching mode to improve convergence
 - 3DGS, anti-aliased 3DGS, and 3DGUT primitives, with improved cross-viewer compatibility
-- 2DGS-like depth regularization to discourage floaters
 - Skybox, with regularization to balance sky removal and discouraging transparency
+<!-- - Second order optimizer and tile batching mode to improve convergence
+- 2DGS-like depth regularization to discourage floaters
 - Select a subset of images for validation, early stop training when validation loss starts to increase
-- And more (see "Quick start" below).
+- And more (see "Quick start" below). -->
 
 <!-- ### Scripts (see `scripts`)
 - Extract frames from video, auto skip blurry frames
@@ -54,18 +55,12 @@ If you installed spirulae-splat successfully, there should be command named `spi
 Presets
 - Spirulae-splat provides presets. Run `spirulae-train <preset name> --data [DATASET_PATH] <additional args>` to use a preset.
 - List of presets:
-    - `3dgs`: A general-purpose preset. We recommend trying this one first.
-    - `3dgs-confined`: For confined environments (indoor scenes or outdoor scenes without much sky visible)
-    - `3dgs-open`: For open environments (outdoor scenes with sky visible)
-    - `3dgs-confined-low-texture`: For confined environments with large textureless surfaces
-    - `3dgs-open-low-texture`: For open environments with large textureless surfaces
-    - `3dgs-centered-object`: For small centered objects (e.g. small item on turntable, human avatar)
-    - `academic-baseline`: Use this to replicate academic baseline (3DGS MCMC) as faithful as it can be
-- Notes:
-    - `academic-baseline` is generally the fastest and most memory efficient option and the one that achieves the highest PSNR and SSIM on standard benchmarks (e.g. Mip-NeRF 360). For better visual quality on real-world datasets and compatibility across different viewers, choose a different preset.
-        - Note that this does not 100% replicate academic baseline. Known mismatches: no SH degree warm up, quaternion optimizer and initialization. When benchmarked on Mip-NeRF 360, it generally achieves better SSIM and LPIPS for outdoor scenes but worse PSNR for indoor scenes.
-    - `low-texture` presets are for large surfaces with nearly no texture (e.g. full white wall). For scenes with moderate texture, you can likely get better visual results without `low-texture`.
-    - `open` presets will train a sky box, and the PLY export script will export it to an equirectangular map. Choose a `confined` preset if you wish to keep sky as splats.
+    - `3dgs`: Generic method that works well for most datasets.
+    - `360-camera`: Preset for training on original distorted images captured by 360 cameras. Recommended if your dataset contains fisheye images with a circle visible.
+    - `in-the-wild`: Preset for in-the-wild datasets, like datasets consisting of internet images, or datasets with extreme lighting variation and/or un-masked outliers.
+    - `linear-color`: Preset for training splats in linear color spaces (e.g. ACEScg).
+    - `synthetic`: Preset for training splats on synthetic datasets rendered with constant exposure.
+    - `academic-baseline`: Preset that replicates 3DGS MCMC as faithful as possible.
 
 Datasets:
 - Spirulae-splat supports COLMAP and Nerfstudio datasets, as well as masks, depth and normal maps, etc. Dataset format can be specified with `--dataparser.data_format`. If not specified, it will automatically detect.
@@ -85,54 +80,53 @@ Gaussian representation
 - Set primitive using `--model.primitive` (default `3dgut`, change to `3dgs` or `mip` for potentially better compatibility across viewers and faster training)
 
 Exposure/WB correction
-- Bilateral grid is enabled by default, disable using `--model.no_use_bilateral_grid`
+- Both bilateral grid and PPISP are enabled by default, disable using `--model.no_use_bilateral_grid` and `--model.no_use_ppisp`.
 - Change shape from default `(16, 16, 8)` to `(8, 8, 4)` using `--model.bilagrid_shape 8 8 4` (sometimes gives less color shift)
-- `--model.use_ppisp` to enable PPISP, for less color shift but more floaters when there's environment lighting change
-- Enable bilateral grid and set `--model.bilagrid_type ppisp` to make bilateral grid predict PPISP parameters (exposure and color). Generally achieves less color shift for low-texture surfaces.
+- Bilateral grid types: `--model.bilagrid_type (affine|ppisp|loglinear)`. Affine is original bilateral grid, PPISP (default) gives less color shift, loglinear is similar to PPISP but is more stable to train.
+- PPISP types: `--model.ppisp_param_type (original|rqs|no_crf)`. Default is `no_crf` that gives more accurate colors.
+- Note: Unlike most training software, spirulae-splat uses AdaGrad instead of Adam optimizer for bilateral grid and PPISP (disable using `--model.no_use_adagrad_bilagrid_optim` and `--model.no_use_adagrad_ppisp_optim`). Order of application can be configured with `--model.apply_ppisp_before_bilagrid` and `--model.no_apply_ppisp_before_bilagrid`.
 
 Distorted/Fisheye/Spherical images
-- Spirulae-splat has been designed for directly operating on distorted images. Better results can be likely achieved by directly training on distorted images rather than converting into pinhole. (This is different from the case for e.g. LichtFeld Studio)
+- Spirulae-splat supports directly training on distorted images. Pointing `spirulae-train` to an distorted dataset will simply work. Spirulae-splat also supports datasets with mixed pinhole, fisheye, and equirectangular images.
+- `3dgs` preset works well for general pinhole, fisheye, and equirectangular datasets. If your dataset contains very wide fisheye images (especially those with a circle visible), we recommend `360-camera` preset, which will internally undistort a fisheye image to 5 pinhole faces.
 - By default, spirulae-splat uses `3dgut` primitive. To fall back to a Fisheye-GS style method for potentially better compatibility with conventional viewers (and faster training), set `--model.primitive` to `3dgs` (not anti-aliased), or `mip` (anti-aliased).
 - `--model.max_screen_size 0.3` is enabled by default for compatibility conventional viewers. Increase it for potentially better quality in built-in viewer, decrease it for better compatibility with other viewers (e.g. SuperSplat viewer, especially if you notice spikes or large floaters)
-- Supported camera models: perspective, equidistant and equisolid fisheye (supports >180° fov); Supported distortion parameters: k1-k4, p1, p2, sx1, sy1, b1, b2. For better reliability, use `scripts/process_data_(colmap|metashape).py` (instead of `ns-process-data`) to process data, or directly point to Metashape dataset.
-- There's limited support for training on equirectangular images supported by Nerfstudio and Metashape datasets. Spirulae-splat will internally resampling equirectangular images into 6 pinhole images of a cube face.
+- Supported camera models: perspective, equidistant and equisolid fisheye (supports >180° fov); Supported distortion parameters: k1-k4, p1, p2, sx1, sy1, b1, b2.
+
+In-the-wild images
+- Spirulae-splat has an `in-the-wild` preset that's designed to handle images with strong lighting variation and/or large unmasked distractors, like those from web-scraped images of landmarks
+- By default, this presets uses 0.9 L1 + 0.1 SSIM loss (instead of 0.8/0.2) `--densify_score_mode median` (instead of `mean` in `3dgs` preset), and `--densify_loss_map_mode robust_edge_aware` (instead of `ssim_structure` in `3dgs` preset).
+- Set `--densify_robust_edge_aware_quantile` (default 0.75) to a lower number for large distractors, and higher number for low distractor datasets for potentially higher quality.
 
 Background control
-- By default, background varies depends on preset, which can be black, random noise, or a sky box. To configure custom background:
-- To disable random noise (which intends to discourage transparency), use `--model.no_randomize_background`; (and otherwise `--model.randomize_background` to enable it)
-- To set to conventional black background, use `--model.background_color black --model.no_train_background_color`
-- To train a skybox, use `--model.background_color gray --model.background_sh_degree 4`
-- If mask is provided, set `--model.apply_loss_for_mask` to True to mask e.g. sky, background, and False to mask e.g. people and cars.
+- By default, spirulae-splat trains a black background, consistent with most 3DGS training software.
+- To discourage transparency, use `--model.background_mode noise`.
+- To train a skybox, use `--model.background_mode sh`.
+- If mask is provided, use `--model.apply_loss_for_mask` to mask e.g. sky, background, and False to mask e.g. people and cars.
 
-Training very large-scale scenes
-- Cache images on disk for large datasets (instead of loading everything into RAM that cause OOM): `--datamanager.cache_images disk` (default: `cpu-pageable`)
-- If you notice "splat blobs" with a `low-texture` preset, increase `--model.relative_scale` aggressively (default 10.0 for open and 1.0 otherwise)
-- Experimental multi-resolution loss that helps with convergence with high-resolution images: `--model.num_loss_scales 2` (default 0)
-- Batching for scenes with large number of images can be configured with `--datamanager.max_batch_per_epoch` (default 800), which automatically enables batching when number of input images is above this number.
-- Tips for training with limited VRAM
-    - In batching mode, all images are processed in a single batch by default. Set `--datamanager.split_batch True` to process one image at once, which can save VRAM a lot if you have many high-resolution images.
-    - Use `--model.optimizer_offload all` to offload Adam optimizer momentum to CPU, can save VRAM significantly at cost of slower training.
-    - On some platforms, setting environment variable `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` can reduce VRAM usage by 10%-20% with minimum speed overhead. Setting `PYTORCH_NO_CUDA_MEMORY_CACHING=1` can reduce peak VRAM even more but with slight speed overhead.
-    - If you are not using depth and normal supervision, setting `--model.use_bilateral_grid_for_geometry False` may save VRAM slightly.
-- To skip viewer thumbnail loading (if it takes too long in the beginning of training), append `nerfstudio-data --load_thumbnails False` to the end of training command.
+Training large-scale scenes
+- Spirulae-splat works out of box for scenes with various scale and complexity with extreme VRAM efficiency. Unlike some training software, there is no need to tune position learning rate, opacity regularization, etc. in spirulae-splat.
+- For high-resolution images, setting `--model.num_loss_scales` (default 0) may help convergence. We recommend 1 for 1080p images, 2 for 4k images, and 3 for 8k images.
 
-Unstable features
-- Training on images in linear color spaces: `--model.image_color_is_linear True`; Wide-gamut color spaces: `--model.image_color_gamut ACEScg` (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`, `DCI-3`)
-    - If you want splat and image to be in different color spaces, specify `--model.splat_color_is_linear` and `--model.splat_color_gamut` (supports all options in `--model.image_color_gamut` plus `Rec.709`).
-    - Specify `--model.convert_initial_point_cloud_color True` if colors in initial point cloud is in sRGB, and color in initial point cloud will be converted to splat's color space. If you don't specify True or False, it will auto decide based on arguments.
+Linear and wide-gamut color spaces
+- Use `linear-color` preset for training splats in linear color spaces. This assumes gamma-corrected Rec.2020 input images, and trains splats in linear ACEScg color space.
+- To specify linear color space for splat and input images, use `--model.image_color_is_linear` and `--model.splat_color_is_linear True`. 16 bit PNG is recommended for linear input images.
+- To specify color gamut for splat and input images, use `--model.image_color_gamut` and `--model.splat_color_gamut`. (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`, `DCI-3`)
+- Specify `--model.convert_initial_point_cloud_color True` if colors in initial point cloud is in sRGB, and color in initial point cloud will be converted to splat's color space. If you don't specify True or False, it will auto decide based on arguments.
+<!-- 
 - Batch many tiny tiles instead of whole images: `spirulae-train 3dgs-patched ...` instead of `spirulae-train 3dgs`
 - Validation (early stop training if loss on validation images start to increase): append `nerfstudio-data --validation_fraction 0.1` to the end of training command
 - Second-order optimizer using Jacobian-residual product and Hessian diagonal: `spirulae-train 3dgs^2-pos` (more stable) or `3dgs^2` (less stable) instead of `spirulae`. We also provide presets `3dgs^2-confined` and `3dgs^2-open` for the corresponding presets with `3dgs^2` methods, which otherwise run on `3dgs^2-pos`.
     - Note: on Windows, you may need to wrap parentheses around method name with `^2`. For example, use `spirulae-train "3dgs^2-pos"` instead of `spirulae-train 3dgs^2-pos`.
-- 2DGS-like depth regularization to discourage floaters: `--model.depth_distortion_reg 0.01`. Similar regularization can also be applied to RGB by setting `--model.rgb_distortion_reg` to a positive value.
+- 2DGS-like depth regularization to discourage floaters: `--model.depth_distortion_reg 0.01`. Similar regularization can also be applied to RGB by setting `--model.rgb_distortion_reg` to a positive value. -->
 
 Scripts
-- Use `scripts/export_ply_3dgs.py` to export PLY
-- To process data, use `scripts/process_data_colmap.py` and `scripts/process_data_metashape.py`, will bypass `ns-process-data` limitations (e.g. `THIN_PRISM_FISHEYE`)
 - Use `scripts/mask.py` to generate masks (Example usage: `python3 scripts/mask.py path/to/dataset --prompt "person; car; fisheye border"`). By default, this runs on [lang-sam](https://github.com/luca-medeiros/lang-segment-anything) model. Use `--model sam3` to switch to [SAM 3](https://github.com/facebookresearch/sam3) model for often better results (may require applying for access and logging in to Huggingface).
 - Use `scripts/predict_geometry.py` to generate depth and normal maps using [Metric3D v2](https://github.com/YvanYin/Metric3D) model, and optionally sky segmentation maps with various model options.
 - Use `scripts/extract_frames.py` to extract frames from a video, while skipping blurry frames. Supports various video formats, including most `.mp4`, `.mov`, and `.insv` videos.
 - `scripts/downscale_dataset.py`, `scripts/undistort_dataset.py`: self-explanatory
+<!-- - Use `scripts/export_ply_3dgs.py` to export PLY
+- To process data, use `scripts/process_data_colmap.py` and `scripts/process_data_metashape.py`, will bypass `ns-process-data` limitations (e.g. `THIN_PRISM_FISHEYE`) -->
 
 ## Acknowledgement
 
@@ -165,6 +159,7 @@ Spirulae-splat started as a Nerfstudio and GSplat fork, which implements ADC, Ab
 - *Improving Densification in 3D Gaussian Splatting for High-Fidelity Rendering*, by Deng et al. &ndash; https://arxiv.org/abs/2508.12313
 - *ImprovedGS+: A High-Performance C++/CUDA Re-Implementation Strategy for 3D Gaussian Splatting*, by Jordi Muñoz Vicente &ndash; https://arxiv.org/abs/2603.08661
 - LichtFeld Studio, by MrNeRF and other contributors &ndash; https://lichtfeld.io/
+- *RobustNeRF: Ignoring Distractors with Robust Losses*, by Sabour et al. &ndash; https://arxiv.org/abs/2302.00833
 - *AbsGS: Recovering Fine Details for 3D Gaussian Splatting*, by Ye et al. &ndash; https://arxiv.org/abs/2404.10484
 
 ### Exposure/WB correction
@@ -180,7 +175,7 @@ Spirulae-splat incorporates various optimizations, including kernel fusion throu
 - *CLM: Removing the GPU Memory Barrier for 3D Gaussian Splatting*, by Zhao et al. &ndash; https://arxiv.org/abs/2511.04951
 
 ### Additional features
-Spirulae-splat uses a trust-region second-order optimizer by default for a lot of presets, which achieves superior convergence agnostic of scene scale. Also, regularization is used to discourage anisotropic Gaussians. We support batching many tiles instead of whole images to achieve NeRF-like convergence and camera optimization performance, in which we use BVH for fast tile-Gaussian association computation. Skybox is also supported.
+Spirulae-splat uses trust-region optimizer for training stability. Also, regularization is used to discourage anisotropic Gaussians. There's experimental support for batching many tiles instead of whole images to achieve NeRF-like convergence and camera optimization performance, in which we use BVH for fast tile-Gaussian association computation. Skybox is also supported.
 - *3DGS^2-TR: Scalable Second-Order Trust-Region Method for 3D Gaussian Splatting*, by Hsiao et al. &ndash; https://arxiv.org/abs/2602.00395
 - *Effective Rank Analysis and Regularization for Enhanced 3D Gaussian Splatting*, by Hyung et al. &ndash; https://arxiv.org/abs/2406.11672
 - *PhysGaussian: Physics-Integrated 3D Gaussians for Generative Dynamics*, by Xie et al. &ndash; https://arxiv.org/abs/2311.12198
