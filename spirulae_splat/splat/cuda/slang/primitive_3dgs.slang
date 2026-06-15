@@ -430,7 +430,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     }
 
     float compensation;
-    static const float eps2d = 0.3;
+    const float eps2d = (antialiased ? 0.1 : 0.3);
     float det = add_blur(eps2d, covar2d, compensation);
     if (!assume_valid && det <= 0.f) {
         aabb_xyxy = float4(0.0f);
