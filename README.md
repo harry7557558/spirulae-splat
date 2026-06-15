@@ -95,7 +95,7 @@ Distorted/Fisheye/Spherical images
 
 In-the-wild images
 - Spirulae-splat has an `in-the-wild` preset that's designed to handle images with strong lighting variation and/or large unmasked distractors, like those from web-scraped images of landmarks
-- By default, this presets uses 0.9 L1 + 0.1 SSIM loss (instead of 0.8/0.2) `--densify_score_mode median` (instead of `mean` in `3dgs` preset), and `--densify_loss_map_mode robust_edge_aware` (instead of `ssim_structure` in `3dgs` preset).
+- By default, this presets uses 0.9 L1 + 0.1 SSIM loss (instead of 0.8/0.2), `--densify_score_mode median` (instead of `mean` in `3dgs` preset), and `--densify_loss_map_mode robust_edge_aware` (instead of `ssim_structure` in `3dgs` preset).
 - Set `--densify_robust_edge_aware_quantile` (default 0.75) to a lower number for large distractors, and higher number for low distractor datasets for potentially higher quality.
 
 Background control
@@ -141,7 +141,7 @@ We also thank various members from [MrNeRF & Brush](https://discord.gg/NqwTqVYVm
 In addition, spirulae-splat has been inspired by, or shares similarities with, ideas from the following works:
 
 ### Representation
-Spirulae-splat uses 3DGUT as the default method to handle camera distortion, as well as Fisheye-GS as a cheaper alternative, compatible with original 3DGS and anti-aliased versions. Spherical voronoi for direction-dependent color, as well as splatting opaque triangles, are partially supported, and there had been efforts toward implementing voxel primitives. Prior to mid 2025, spirulae-splat implements a modified 2DGS with polynomial kernels, but switched to 3DGS as it has become more standardized.
+Spirulae-splat uses 3DGUT as the default method to handle camera distortion, as well as Fisheye-GS as a cheaper alternative, compatible with original 3DGS and anti-aliased versions. Spherical voronoi for direction-dependent color, as well as splatting opaque triangles, are supported in `dev-mid2026` branch, and there had been efforts toward implementing voxel primitives. Prior to mid 2025, spirulae-splat implements a modified 2DGS with polynomial kernels, but switched to 3DGS as it has become more standardized.
 - *3D Gaussian Splatting for Real-Time Radiance Field Rendering*, by Kerbl et al. &ndash; https://arxiv.org/abs/2308.04079
 - *Mip-Splatting: Alias-free 3D Gaussian Splatting*, by Yu et al. &ndash; https://arxiv.org/abs/2311.16493
 - *3DGUT: Enabling Distorted Cameras and Secondary Rays in Gaussian Splatting*, by Wu et al. &ndash; https://arxiv.org/abs/2412.12507
@@ -168,14 +168,14 @@ Spirulae-splat mainly uses bilateral grid to handle changes in camera setting an
 - *PPISP: Physically-Plausible Compensation and Control of Photometric Variations in Radiance Field Reconstruction*, by Deutsch et al. &ndash; https://arxiv.org/abs/2601.18336
 
 ### Optimization
-Spirulae-splat incorporates various optimizations, including kernel fusion throughout implementation, optimized rasterization backward implementation, improved Gaussian-tile association, etc. Additionally, there are options to offload optimizer states to significantly reduce VRAM usage.
+To achieve high VRAM efficiency and acceptable training speed, spirulae-splat incorporates various optimizations, including kernel fusion throughout implementation, optimized rasterization backward implementation, improved Gaussian-tile association, etc. Previously, there were options to offload optimizer states to reduce VRAM usage at cost of slower training; current implementation addresses VRAM efficiency with quantization, with minimal impact on training speed and quality.
 - *Taming 3DGS: High-Quality Radiance Fields with Limited Resources*, by Mallick et al. &ndash; https://arxiv.org/abs/2406.15643
 - *StopThePop: Sorted Gaussian Splatting for View-Consistent Real-time Rendering*, by Radl et al. &ndash; https://arxiv.org/abs/2402.00525
 - *Faster-GS: Analyzing and Improving Gaussian Splatting Optimization*, by Hahlbohm et al. &ndash; https://arxiv.org/abs/2602.09999 (originally LichtFeld Studio bounty 001)
 - *CLM: Removing the GPU Memory Barrier for 3D Gaussian Splatting*, by Zhao et al. &ndash; https://arxiv.org/abs/2511.04951
 
 ### Additional features
-Spirulae-splat uses trust-region optimizer for training stability. Also, regularization is used to discourage anisotropic Gaussians. There's experimental support for batching many tiles instead of whole images to achieve NeRF-like convergence and camera optimization performance, in which we use BVH for fast tile-Gaussian association computation. Skybox is also supported.
+Spirulae-splat uses trust-region optimizer for training stability, and a second-order optimizer implementation is available in `dev-mid2026` branch. Also, regularization is used to discourage anisotropic Gaussians. There's experimental support for batching many tiles instead of whole images to achieve NeRF-like convergence and camera optimization performance, in which BVH is used for fast tile-Gaussian association computation. Skybox is also supported.
 - *3DGS^2-TR: Scalable Second-Order Trust-Region Method for 3D Gaussian Splatting*, by Hsiao et al. &ndash; https://arxiv.org/abs/2602.00395
 - *Effective Rank Analysis and Regularization for Enhanced 3D Gaussian Splatting*, by Hyung et al. &ndash; https://arxiv.org/abs/2406.11672
 - *PhysGaussian: Physics-Integrated 3D Gaussians for Generative Dynamics*, by Xie et al. &ndash; https://arxiv.org/abs/2311.12198
