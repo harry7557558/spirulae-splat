@@ -16,11 +16,6 @@ namespace SlangProjectionUtils {
 namespace cg = cooperative_groups;
 
 
-// inline constexpr int SAMPLE_TILE_WIDTH = 8;
-// inline constexpr int SAMPLE_TILE_HEIGHT = 4;
-inline constexpr int SAMPLE_TILE_WIDTH = TILE_SIZE;
-inline constexpr int SAMPLE_TILE_HEIGHT = TILE_SIZE;
-
 inline constexpr float kTransmitThreshold = 1e-4f;
 
 
@@ -61,13 +56,13 @@ inline __device__ int count_ellipse_grid_overlaps(
 
     int n_tiles = 0;
 
-    if (grid_ymax-grid_ymin <= grid_xmax-grid_xmin) {
+    if ((grid_ymax-grid_ymin)*TILE_SIZE_X <= (grid_xmax-grid_xmin)*TILE_SIZE_Y) {
         for (int y = grid_ymin; y < grid_ymax; y++) {
-            float y0 = y * TILE_SIZE - xy.y;
-            float y1 = y0 + TILE_SIZE;
+            float y0 = y * TILE_SIZE_Y - xy.y;
+            float y1 = y0 + TILE_SIZE_Y;
             float2 bound = ellipse_range_bound(inv_cov, y0, y1);
-            int x0 = int(floor((bound.x + xy.x) / TILE_SIZE));
-            int x1 = int(ceil((bound.y + xy.x) / TILE_SIZE));
+            int x0 = int(floor((bound.x + xy.x) / TILE_SIZE_X));
+            int x1 = int(ceil((bound.y + xy.x) / TILE_SIZE_X));
             x0 = clamp(x0, grid_xmin, grid_xmax);
             x1 = clamp(x1, grid_xmin, grid_xmax);
             n_tiles += max(x1-x0, 0);
@@ -75,11 +70,11 @@ inline __device__ int count_ellipse_grid_overlaps(
     } else {
         inv_cov = {inv_cov.z, inv_cov.y, inv_cov.x};
         for (int x = grid_xmin; x < grid_xmax; x++) {
-            float x0 = x * TILE_SIZE - xy.x;
-            float x1 = x0 + TILE_SIZE;
+            float x0 = x * TILE_SIZE_X - xy.x;
+            float x1 = x0 + TILE_SIZE_X;
             float2 bound = ellipse_range_bound(inv_cov, x0, x1);
-            int y0 = int(floor((bound.x + xy.y) / TILE_SIZE));
-            int y1 = int(ceil((bound.y + xy.y) / TILE_SIZE));
+            int y0 = int(floor((bound.x + xy.y) / TILE_SIZE_Y));
+            int y1 = int(ceil((bound.y + xy.y) / TILE_SIZE_Y));
             y0 = clamp(y0, grid_ymin, grid_ymax);
             y1 = clamp(y1, grid_ymin, grid_ymax);
             n_tiles += max(y1-y0, 0);
@@ -142,10 +137,10 @@ __global__ void intersect_tile_kernel(
         conic = conic * (0.5f / __logf(proj_opac[idx] / ALPHA_THRESHOLD));
 
     uint2 tile_min, tile_max;
-    tile_min.x = (uint32_t)min(max(0, (int)floorf((xmin + 0.5f) / TILE_SIZE)), (int)tile_width);
-    tile_min.y = (uint32_t)min(max(0, (int)floorf((ymin + 0.5f) / TILE_SIZE)), (int)tile_height);
-    tile_max.x = (uint32_t)min(max(0, (int)ceilf((xmax + 0.5f) / TILE_SIZE)), (int)tile_width);
-    tile_max.y = (uint32_t)min(max(0, (int)ceilf((ymax + 0.5f) / TILE_SIZE)), (int)tile_height);
+    tile_min.x = (uint32_t)min(max(0, (int)floorf((xmin + 0.5f) / TILE_SIZE_X)), (int)tile_width);
+    tile_min.y = (uint32_t)min(max(0, (int)floorf((ymin + 0.5f) / TILE_SIZE_Y)), (int)tile_height);
+    tile_max.x = (uint32_t)min(max(0, (int)ceilf((xmax + 0.5f) / TILE_SIZE_X)), (int)tile_width);
+    tile_max.y = (uint32_t)min(max(0, (int)ceilf((ymax + 0.5f) / TILE_SIZE_Y)), (int)tile_height);
     if constexpr (is_counting_pass) {
         // counting pass only writes out tiles_per_splat
         if constexpr (is_ellipse)
@@ -173,18 +168,18 @@ __global__ void intersect_tile_kernel(
     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_splat[idx - 1];
     int64_t max_idx = cum_tiles_per_splat[idx];
     if constexpr (is_ellipse) {
-        if (tile_max.y-tile_min.y <= tile_max.x-tile_min.x) {
+        if ((tile_max.y-tile_min.y)*TILE_SIZE_X <= (tile_max.x-tile_min.x)*TILE_SIZE_Y) {
             for (int y = tile_min.y; y < tile_max.y; y++) {
-                float y0 = y * TILE_SIZE - xy.y;
-                float y1 = y0 + TILE_SIZE;
+                float y0 = y * TILE_SIZE_Y - xy.y;
+                float y1 = y0 + TILE_SIZE_Y;
 
                 float2 bound = ellipse_range_bound(conic, y0, y1);
                 int min_x = clamp(
-                    (unsigned)floor((bound.x + xy.x) / TILE_SIZE),
+                    (unsigned)floor((bound.x + xy.x) / TILE_SIZE_X),
                     tile_min.x, tile_max.x
                 );
                 int max_x = clamp(
-                    (unsigned)ceil((bound.y + xy.x) / TILE_SIZE),
+                    (unsigned)ceil((bound.y + xy.x) / TILE_SIZE_X),
                     tile_min.x, tile_max.x
                 );
                 for (int x = min_x; x < max_x && cur_idx < max_idx; x++) {
@@ -197,16 +192,16 @@ __global__ void intersect_tile_kernel(
         } else {
             conic = {conic.z, conic.y, conic.x};
             for (int x = tile_min.x; x < tile_max.x; x++) {
-                float x0 = x * TILE_SIZE - xy.x;
-                float x1 = x0 + TILE_SIZE;
+                float x0 = x * TILE_SIZE_X - xy.x;
+                float x1 = x0 + TILE_SIZE_X;
 
                 float2 bound = ellipse_range_bound(conic, x0, x1);
                 int min_y = clamp(
-                    (unsigned)floor((bound.x + xy.y) / TILE_SIZE),
+                    (unsigned)floor((bound.x + xy.y) / TILE_SIZE_Y),
                     tile_min.y, tile_max.y
                 );
                 int max_y = clamp(
-                    (unsigned)ceil((bound.y + xy.y) / TILE_SIZE),
+                    (unsigned)ceil((bound.y + xy.y) / TILE_SIZE_Y),
                     tile_min.y, tile_max.y
                 );
                 for (int y = min_y; y < max_y && cur_idx < max_idx; y++) {
@@ -301,8 +296,8 @@ std::tuple<
     const uint32_t total_count = (uint32_t)depths.numel();
     const uint32_t N = packed ? total_count : total_count / I;
 
-    uint32_t tile_width = _CEIL_DIV(image_width, TILE_SIZE);
-    uint32_t tile_height = _CEIL_DIV(image_height, TILE_SIZE);
+    uint32_t tile_width = _CEIL_DIV(image_width, TILE_SIZE_X);
+    uint32_t tile_height = _CEIL_DIV(image_height, TILE_SIZE_Y);
     uint32_t n_tiles = tile_width * tile_height * I;
 
     /* Count tiles intersected per splat */
@@ -415,8 +410,8 @@ std::tuple<
     const uint32_t image_width,
     const uint32_t image_height
 ) {
-    uint32_t tile_width = _CEIL_DIV(image_width, TILE_SIZE);
-    uint32_t tile_height = _CEIL_DIV(image_height, TILE_SIZE);
+    uint32_t tile_width = _CEIL_DIV(image_width, TILE_SIZE_X);
+    uint32_t tile_height = _CEIL_DIV(image_height, TILE_SIZE_Y);
     int64_t n_in = isect_ids.size();
 
     /* Allocate output at max possible size; CUB writes actual count to d_num_selected */

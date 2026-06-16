@@ -49,15 +49,6 @@ inline at::Tensor zeros_like_tensor(const at::Tensor& x) {
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
-    // py::enum_<CameraModelType>(m, "SSplatCameraModelType")
-    //     .value("PINHOLE", CameraModelType::PINHOLE)
-    //     .value("ORTHO", CameraModelType::ORTHO)
-    //     .value("FISHEYE", CameraModelType::FISHEYE)
-    //     .value("FTHETA", CameraModelType::FTHETA)
-    //     .export_values();
-
-    m.attr("TILE_SIZE") = py::int_(TILE_SIZE);
-
     // IntersectTile.cuh
     m.def("intersect_tile", &do_intersect_tile_generic);
     // m.def("intersect_tile_3dgs", &intersect_tile_3dgs_tensor);
@@ -252,6 +243,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("set_training_data", &set_training_data);
     m.def("engine_forward_3dgs", &forward_3dgs);
     m.def("engine_compute_loss_backward", &engine_compute_loss_backward);
+    m.def("engine_backward_from_render_grad", &engine_backward_from_render_grad);
     m.def("engine_optim_step", &engine_optim_step);
     m.def("engine_densify_step", &engine_densify_step);
     m.def("engine_train_step", &engine_train_step);
@@ -311,6 +303,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_copy_gt_rgb_to_host",  &engine_copy_gt_rgb_to_host);
     m.def("engine_copy_gt_alpha_to_host",&engine_copy_gt_alpha_to_host);
     m.def("engine_copy_splats_to_host", &engine_copy_splats_to_host);
+    m.def("engine_copy_grads_to_host", &engine_copy_grads_to_host);
     m.def("engine_get_pool_breakdown", &engine_get_pool_breakdown);
     m.def("engine_get_scratch_bytes", &engine_get_scratch_bytes);
     m.def("engine_init_bilagrid_rgb", &engine_init_bilagrid_rgb);

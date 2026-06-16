@@ -127,6 +127,21 @@ std::map<std::string, float> engine_compute_loss_backward(
     float color_shift_reg_beta    = 0.0f
 );
 
+// --- Backward from supplied output cotangents (no loss) ---
+//
+// Drop-in for the old renderer.backward(v_render_colors, v_render_Ts): seeds
+// the rasterization backward with caller-supplied per-pixel cotangents instead
+// of a loss gradient, then runs raster + projection backward. Per-splat grads
+// land in engine().grad.* (read with engine_copy_grads_to_host). The seeds may
+// be host or device pointers (cudaMemcpyDefault auto-detects). forward_3dgs
+// must have run first. Note: the 3dgs / mip path does not accumulate a viewmats
+// gradient (projection bwd is called with v_viewmats = null).
+void engine_backward_from_render_grad(
+    TorchTensorView v_render_rgb,    // [C, H, W, 3] float32
+    TorchTensorView v_render_depth,  // [C, H, W, 1] float32
+    TorchTensorView v_render_Ts      // [C, H, W, 1] float32
+);
+
 // --- Optimizer step ---
 
 void engine_optim_step(int step, const OptimConfig& cfg);
@@ -363,6 +378,17 @@ void engine_copy_render_to_host(
 );
 
 void engine_copy_splats_to_host(
+    TorchTensorView means,
+    TorchTensorView quats,
+    TorchTensorView scales,
+    TorchTensorView opacities,
+    TorchTensorView features_dc,
+    TorchTensorView features_sh
+);
+
+// Per-splat gradients from the most recent backward. Same layout as
+// engine_copy_splats_to_host; buffers sized to max_num_splats.
+void engine_copy_grads_to_host(
     TorchTensorView means,
     TorchTensorView quats,
     TorchTensorView scales,

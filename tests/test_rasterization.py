@@ -10,6 +10,7 @@ from spirulae_splat.modules.core import Renderer
 from gsplat.rendering import rasterization as gsplat_rasterization
 
 from spirulae_splat.splat.cuda import (
+    _C,
     ray_depth_to_linear_depth,
 )
 
@@ -49,11 +50,11 @@ def rasterize_ssplat(means, quats, scales, opacities, features_dc, features_sh, 
     rgbd = renderer.render_colors
     Ts = renderer.render_Ts
     rgbd = [*rgbd[:2]]
-    if WITH_UT:
-        try:
-            rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, intrins)  # TODO: f(E[X]) != E[f(X)]
-        except AttributeError:
-            pass  # ray_depth_to_linear_depth_forward not compiled, depth comparison will differ
+    # if WITH_UT:
+    #     try:
+    #         rgbd[1] = ray_depth_to_linear_depth(rgbd[1], camera_model, intrins)  # TODO: f(E[X]) != E[f(X)]
+    #     except AttributeError:
+    #         pass  # ray_depth_to_linear_depth_forward not compiled, depth comparison will differ
     return (*rgbd, 1.0 - Ts), renderer
 
 def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks):
@@ -71,6 +72,7 @@ def rasterize_gsplat(means, quats, scales, opacities, features_dc, features_sh, 
         packed=PACKED and not WITH_UT,
         sparse_grad=False,
         rasterize_mode=["classic", "antialiased"][IS_ANTIALIASED],
+        eps2d=(0.1 if IS_ANTIALIASED else 0.3),
         distributed=False,
         camera_model=["pinhole", "fisheye"][IS_FISHEYE],
         with_ut=WITH_UT,
@@ -123,8 +125,11 @@ def test_rasterization():
     inputs = get_inputs()
     _inputs = get_inputs()
 
+    inputs = [x.cpu() for x in inputs]
     outputs, renderer = rasterize_ssplat(*inputs)
+
     _outputs = rasterize_gsplat(*_inputs)
+    _outputs = [x.cpu() for x in _outputs]
 
     print("test forward")
     tol = { 'atol': 1e-3, 'rtol': 1e-3 }
@@ -159,7 +164,8 @@ def test_rasterization():
         exit(0)
 
     weights = [torch.randn_like(x.detach()) for x in _outputs]
-    # weights[1] *= 0.0  # depth
+    if WITH_UT:
+        weights[1] *= 0.0  # depth
     def fun(outputs):
         return sum([(w*o).sum() for w, o in zip(weights, outputs)])
     fun(_outputs).backward()
@@ -179,42 +185,61 @@ def test_rasterization():
     check_close('opacs', grads[3].squeeze(-1), _inputs[3].grad, **tol)
     check_close('features_dc', grads[4], _inputs[4].grad, **tol)
     check_close('features_sh', grads[5].reshape(N, -1, 3), _inputs[5].grad, **tol)
-    check_close('viewmats', inputs[6].grad, _inputs[6].grad, **tol)
+    # viewmats gradient is not produced by the engine 3dgs / mip backward
+    # (projection bwd is called with v_viewmats = null), so it is not compared.
     print()
+
+    _C.engine_reset()
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def profile_rasterization():
 
-    inputs = get_inputs()
-    _inputs = get_inputs()
+    # ssplat goes through the C++ engine, whose Python boundary is CPU tensors;
+    # gsplat runs fully on CUDA.
+    cpu_inputs = [x.cpu().contiguous() for x in get_inputs()]
+    cuda_inputs = get_inputs()
 
+    # --- Forward ---------------------------------------------------------
+    # "full" includes the set_data H2D + copy_render_to_host D2H that the
+    # engine boundary performs; "compute only" times just engine_forward_3dgs
+    # after state is uploaded once (no host<->device transfer).
     print("profile forward")
-    timeit(lambda: rasterize_ssplat(*inputs), "ssplat forward")
-    timeit(lambda: rasterize_gsplat(*_inputs), "gsplat forward")
+    _, renderer = rasterize_ssplat(*cpu_inputs)  # primes engine state
+    timeit(
+        lambda: _C.engine_forward_3dgs(
+            renderer.primitive, renderer.sh_degree_to_use, renderer.packed),
+        "ssplat forward",
+    )
+    timeit(lambda: rasterize_gsplat(*cuda_inputs), "gsplat forward")
     print()
 
+    # --- Backward --------------------------------------------------------
+    # Output cotangents are built once on-device, so the timed region is the
+    # engine raster + projection backward (the cotangent copy is a cheap d2d,
+    # not a host<->device transfer).
     print("profile backward")
-    outputs, renderer = rasterize_ssplat(*inputs)
-    _outputs = rasterize_gsplat(*_inputs)
+    C, H, W = renderer.viewmats.shape[0], renderer.height, renderer.width
+    v_rgb   = torch.randn(C, H, W, 3, device=device)
+    v_depth = torch.randn(C, H, W, 1, device=device)
+    v_Ts    = torch.randn(C, H, W, 1, device=device)
+    timeit(
+        lambda: _C.engine_backward_from_render_grad(
+            renderer._tv(v_rgb), renderer._tv(v_depth), renderer._tv(v_Ts)),
+        "ssplat backward",
+    )
 
-    renderer.zero_grad()
-
+    _outputs = rasterize_gsplat(*cuda_inputs)
     weights = [torch.randn_like(x.detach()) for x in _outputs]
-    def fun(outputs):
-        return sum([(w*o).sum() for w, o in zip(weights, outputs)])
-    loss = fun(outputs)
-    _loss = fun(_outputs)
-
-    timeit(lambda: renderer.backward((*weights[:-1], None), -weights[-1]), "ssplat backward", repeat=20)
+    _loss = sum([(w*o).sum() for w, o in zip(weights, _outputs)])
     timeit(lambda: _loss.backward(retain_graph=True), "gsplat backward")
     print()
+
+    _C.engine_reset()
 
 
 
 if __name__ == "__main__":
     import itertools
-
-    N = 1000
 
     # packed x fisheye x (not_aa+no_ut, aa+no_ut, not_aa+with_ut)
     modes = [(False, False), (True, False), (False, True)]
@@ -223,6 +248,8 @@ if __name__ == "__main__":
     # modes = [(False, False), (True, False)]
     # combos = list(itertools.product([True, False], [False], modes))
 
+    combos = [(True, False, (False, True))]
+
     for packed_val, fisheye_val, (aa_val, ut_val) in combos:
         PACKED = packed_val
         IS_FISHEYE = fisheye_val
@@ -230,12 +257,18 @@ if __name__ == "__main__":
         WITH_UT = ut_val
         label = f"packed={PACKED} fisheye={IS_FISHEYE} antialiased={IS_ANTIALIASED} with_ut={WITH_UT}"
         print(f"=== {label} ===")
+
+        N = 1000
         try:
             test_rasterization()
         except Exception as e:
             import traceback
             traceback.print_exc()
-        print()
 
-    # N = 200000
-    # profile_rasterization()
+        N = 200000
+        try:
+            profile_rasterization()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+

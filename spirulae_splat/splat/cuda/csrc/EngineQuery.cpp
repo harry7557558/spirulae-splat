@@ -79,6 +79,31 @@ void engine_copy_splats_to_host(
 }
 
 
+// Per-splat gradients accumulated by the most recent engine backward
+// (engine_compute_loss_backward or engine_backward_from_render_grad). Buffers
+// are sized max_num_splats and zeroed at the start of each backward. Mirrors
+// engine_copy_splats_to_host but reads engine().grad.* instead of world.*.
+void engine_copy_grads_to_host(
+    TorchTensorView means,
+    TorchTensorView quats,
+    TorchTensorView scales,
+    TorchTensorView opacities,
+    TorchTensorView features_dc,
+    TorchTensorView features_sh
+) {
+    _dv_to_host(engine().grad.means, means);
+    _dv_to_host(engine().grad.quats, quats);
+    _dv_to_host(engine().grad.scales, scales);
+    _dv_to_host(engine().grad.opacities, opacities);
+    _dv_to_host(engine().grad.features_dc, features_dc);
+    // features_sh: DeviceTensor2D<float3>
+    if (engine().grad.features_sh.data_ptr() && std::get<0>(features_sh) != 0) {
+        cudaMemcpy((void*)std::get<0>(features_sh), engine().grad.features_sh.data_ptr(),
+                   engine().grad.features_sh.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+    }
+}
+
+
 // ---------------------------------------------------------------------------
 // Debug introspection helpers. These pull the current engine training-data
 // + rendered images back to host so a Python utility can save / display them
