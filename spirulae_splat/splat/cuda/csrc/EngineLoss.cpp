@@ -67,6 +67,231 @@ static void _alloc_grad_buffers() {
 }
 
 
+// Shared rasterization + projection backward tail. Consumes the per-pixel
+// output cotangents (v_render_rgb [C,H,W,3], v_render_depth / v_render_Ts
+// [C,H,W,1]; device pool buffers) and writes per-splat gradients into
+// engine().grad.* (plus the fused-path screen-space stash where applicable).
+// Callers must have run _alloc_grad_buffers() first. Used by the loss-driven
+// backward and by the direct cotangent-injection entrypoint
+// (engine_backward_from_render_grad).
+static void _engine_raster_proj_backward(
+    TorchTensorView v_render_rgb,
+    TorchTensorView v_render_depth,
+    TorchTensorView v_render_Ts_tv,
+    const DeviceTensor3D<float>& accum_weight_map
+) {
+    RenderOutput::TensorTuple v_render_outputs = std::make_tuple(
+        DeviceTensor3D<float3>(v_render_rgb),
+        DeviceTensor3D<float>(v_render_depth),
+        DeviceTensor3D<float3>()  // no normal gradient yet
+    );
+    DeviceTensor3D<float> v_render_Ts(v_render_Ts_tv);
+
+    // Build the world-grad vector handed to rasterize_*_bwd. Three cases:
+    //   - non-fused: all six slots are real per-channel grad buffers.
+    //   - fused + 3dgs / mip: empty vector; raster_*_bwd writes nothing into
+    //     the world buffer (its atomicStore is screen-only for those prims).
+    //   - fused + 3dgut: mean/quat/scale slots are real (raster_*_bwd atomic-
+    //     adds them); opacity/dc/sh slots are null (those flow via screen or
+    //     are accumulated inside the FPBO kernel).
+    std::vector<DeviceTensorFloatND> v_splats_w;
+    if (!engine().optim.use_fused_proj_bwd_optim) {
+        DeviceTensorFloatND v_fnd_opac;
+        {
+            TorchTensorView opac_tv((uint64_t)engine().grad.opacities.data_ptr(), 4,
+                {engine().grad.opacities.size(), 1LL, 1LL});
+            v_fnd_opac = DeviceTensorFloatND(opac_tv);  // ndim=2, shape=[N, 1]
+        }
+        v_splats_w = {
+            DeviceTensorFloatND(engine().grad.means),         // [N, 3]
+            DeviceTensorFloatND(engine().grad.quats),         // [N, 4]
+            DeviceTensorFloatND(engine().grad.scales),        // [N, 3]
+            v_fnd_opac,                                       // [N, 1]
+            DeviceTensorFloatND(engine().grad.features_dc),   // [N, 3]
+            DeviceTensorFloatND(engine().grad.features_sh),   // [N, K, 3]
+        };
+    } else if (engine().primitive == "3dgut") {
+        v_splats_w = {
+            DeviceTensorFloatND(engine().grad.means),         // [N, 3]
+            DeviceTensorFloatND(engine().grad.quats),         // [N, 4]
+            DeviceTensorFloatND(engine().grad.scales),        // [N, 3]
+            DeviceTensorFloatND(),                            // opacities -- null
+            DeviceTensorFloatND(),                            // features_dc -- null
+            DeviceTensorFloatND(),                            // features_sh -- null
+        };
+    }
+
+    std::vector<DeviceTensorFloatND> v_splats_w_out, v_splats_s_out;
+
+    if (engine().primitive == "3dgs" || engine().primitive == "mip") {
+        auto [vw, vs, accum_weight] = rasterize_to_pixels_3dgs_bwd(
+            engine().cur_num_splats,
+            engine().fwd.splats_w,
+            engine().fwd.splats_s,
+            engine().fwd.gaussian_ids,
+            (uint32_t)engine().camera.width,
+            (uint32_t)engine().camera.height,
+            engine().fwd.tile_offsets,
+            engine().fwd.flatten_ids,
+            engine().fwd.render_Ts,
+            engine().fwd.last_ids,
+            engine().fwd.renders,
+            accum_weight_map,
+            v_render_outputs,
+            v_render_Ts,
+            std::make_optional(v_splats_w),
+            std::nullopt
+        );
+        v_splats_w_out = vw;
+        v_splats_s_out = vs;
+        if (accum_weight.data_ptr()) engine().fwd.accum_weight = accum_weight;
+    } else if (engine().primitive == "3dgut") {
+        auto [vw, vs, vviewmats, accum_weight] = rasterize_to_pixels_3dgut_bwd(
+            engine().cur_num_splats,
+            engine().fwd.splats_w,
+            engine().fwd.splats_s,
+            engine().fwd.gaussian_ids,
+            _dt2d_tv(engine().camera.viewmats),
+            _dv_tv(engine().camera.intrins),
+            engine().camera.model_str,
+            _dt2d_tv(engine().camera.dist_coeffs),
+            (uint32_t)engine().camera.width,
+            (uint32_t)engine().camera.height,
+            engine().fwd.tile_offsets,
+            engine().fwd.flatten_ids,
+            engine().fwd.render_Ts,
+            engine().fwd.last_ids,
+            engine().fwd.renders,
+            std::nullopt,  // render2_outputs
+            DeviceTensor3D<float>(),  // loss_map
+            accum_weight_map,
+            v_render_outputs,
+            v_render_Ts,
+            std::nullopt,  // v_distortion_outputs
+            std::make_optional(v_splats_w),
+            std::nullopt,
+            false
+        );
+        v_splats_w_out = vw;
+        v_splats_s_out = vs;
+        if (accum_weight.data_ptr()) engine().fwd.accum_weight = accum_weight;
+    } else {
+        throw std::runtime_error("engine raster/proj backward: unknown primitive: " + engine().primitive);
+    }
+
+    // --- Projection backward ---
+    // In fused-proj-bwd-optim mode the projection backward is folded into the
+    // optimizer step; we just stash the screen-space gradients for that call.
+    if (engine().optim.use_fused_proj_bwd_optim) {
+        engine().fwd.v_splats_s = v_splats_s_out;
+    } else {
+        // SH VALUE-quant: when active in non-FPBO mode, project_vjp reads
+        // the source SH via the codec instead of fp32 features_sh (which is
+        // unallocated). Pick the (packed, bounds) buffer + bounds-cell
+        // stride based on which storage layout was set up at allocation
+        // time (mirrors EngineForward.cpp).
+        std::optional<TorchTensorView> vp_opt = std::nullopt;
+        std::optional<TorchTensorView> vb_opt = std::nullopt;
+        int      sh_value_bits   = engine().world.sh_value_bits;
+        uint32_t num_sh_buffer   = (uint32_t)engine().num_sh;
+        int64_t  sh_bounds_stride = 0;
+        if (sh_value_bits == 8) {
+            auto pick = [&](auto& vq) {
+                if (!vq.initialized()) return;
+                vp_opt = TorchTensorView((uint64_t)vq.packed_ptr(), 1, {vq.packed_bytes()});
+                vb_opt = TorchTensorView((uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
+            };
+            if (engine().world.features_sh_quant8_fpbo.initialized()) {
+                pick(engine().world.features_sh_quant8_fpbo);
+                sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+            } else {
+                pick(engine().world.features_sh_quant8);
+                sh_bounds_stride = 256;
+            }
+        } else if (sh_value_bits == 16) {
+            auto pick = [&](auto& vq) {
+                if (!vq.initialized()) return;
+                vp_opt = TorchTensorView((uint64_t)vq.packed_ptr(), 1, {vq.packed_bytes()});
+                vb_opt = TorchTensorView((uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
+            };
+            if (engine().world.features_sh_quant16_fpbo.initialized()) {
+                pick(engine().world.features_sh_quant16_fpbo);
+                sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+            } else {
+                pick(engine().world.features_sh_quant16);
+                sh_bounds_stride = 256;
+            }
+        }
+        if (engine().primitive == "3dgs") {
+            projection_3dgs_backward(
+                engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
+                _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
+                (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
+                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                engine().fwd.camera_ids, engine().fwd.gaussian_ids,
+                engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
+                vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
+        } else if (engine().primitive == "mip") {
+            projection_mip_backward(
+                engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
+                _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
+                (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
+                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                engine().fwd.camera_ids, engine().fwd.gaussian_ids,
+                engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
+                vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
+        } else if (engine().primitive == "3dgut") {
+            projection_3dgut_backward(
+                engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
+                _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
+                (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
+                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                engine().fwd.camera_ids, engine().fwd.gaussian_ids,
+                engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
+                vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
+        }
+    }
+}
+
+
+// Backward from caller-supplied output cotangents (the vjp seed), bypassing the
+// loss computation entirely. Mirrors the old per-kernel
+// renderer.backward(v_render_colors, v_render_Ts): copies host (or device)
+// v_render_* into pool buffers, then runs the shared raster + projection
+// backward. Per-splat gradients land in engine().grad.* (read back with
+// engine_copy_grads_to_host). forward_3dgs must have run first.
+void engine_backward_from_render_grad(
+    TorchTensorView v_render_rgb,    // [C, H, W, 3] float32
+    TorchTensorView v_render_depth,  // [C, H, W, 1] float32
+    TorchTensorView v_render_Ts      // [C, H, W, 1] float32
+) {
+    if (std::get<0>(engine().fwd.renders).data_ptr() == nullptr)
+        throw std::runtime_error("engine_backward_from_render_grad: forward_3dgs must be called first");
+
+    _alloc_grad_buffers();
+
+    int64_t C = engine().camera.num;
+    int64_t H = engine().camera.height;
+    int64_t W = engine().camera.width;
+
+    // Stage the cotangents into pool buffers. cudaMemcpyDefault auto-detects
+    // host vs device pointers (UVA), so the same entrypoint serves the
+    // correctness path (CPU seeds) and the profiling path (CUDA seeds).
+    TorchTensorView v_rgb_buf   = _pool_tv("eng.v_rgb",   C, H, W, 3);
+    TorchTensorView v_depth_buf = _pool_tv("eng.v_depth", C, H, W, 1);
+    TorchTensorView v_Ts_buf    = _pool_tv("eng.v_Ts",    C, H, W, 1);
+    cudaMemcpy((void*)std::get<0>(v_rgb_buf),   (void*)std::get<0>(v_render_rgb),
+               (size_t)C * H * W * 3 * sizeof(float), cudaMemcpyDefault);
+    cudaMemcpy((void*)std::get<0>(v_depth_buf), (void*)std::get<0>(v_render_depth),
+               (size_t)C * H * W * 1 * sizeof(float), cudaMemcpyDefault);
+    cudaMemcpy((void*)std::get<0>(v_Ts_buf),    (void*)std::get<0>(v_render_Ts),
+               (size_t)C * H * W * 1 * sizeof(float), cudaMemcpyDefault);
+
+    DeviceTensor3D<float> accum_weight_map;  // empty: no loss-map weighting
+    _engine_raster_proj_backward(v_rgb_buf, v_depth_buf, v_Ts_buf, accum_weight_map);
+}
+
+
 std::map<std::string, float> engine_compute_loss_backward(
     int step,
     std::array<float, (int)LossWeightIndex::length> loss_weights,
@@ -354,184 +579,16 @@ std::map<std::string, float> engine_compute_loss_backward(
     }
 
     // --- Rasterization + projection backward ---
-    // Build v_render_outputs from pixel_grads
-    RenderOutput::TensorTuple v_render_outputs = std::make_tuple(
-        DeviceTensor3D<float3>(pixel_grads.v_render_rgb),
-        DeviceTensor3D<float>(pixel_grads.v_render_depth),
-        DeviceTensor3D<float3>()  // no normal gradient yet
-    );
-    DeviceTensor3D<float> v_render_Ts(pixel_grads.v_render_Ts);
-
-    // Build the world-grad vector handed to rasterize_*_bwd. Three cases:
-    //   - non-fused: all six slots are real per-channel grad buffers.
-    //   - fused + 3dgs / mip: empty vector; raster_*_bwd writes nothing into
-    //     the world buffer (its atomicStore is screen-only for those prims).
-    //   - fused + 3dgut: mean/quat/scale slots are real (raster_*_bwd atomic-
-    //     adds them); opacity/dc/sh slots are null (those flow via screen or
-    //     are accumulated inside the FPBO kernel).
-    std::vector<DeviceTensorFloatND> v_splats_w;
-    if (!engine().optim.use_fused_proj_bwd_optim) {
-        DeviceTensorFloatND v_fnd_opac;
-        {
-            TorchTensorView opac_tv((uint64_t)engine().grad.opacities.data_ptr(), 4,
-                {engine().grad.opacities.size(), 1LL, 1LL});
-            v_fnd_opac = DeviceTensorFloatND(opac_tv);  // ndim=2, shape=[N, 1]
-        }
-        v_splats_w = {
-            DeviceTensorFloatND(engine().grad.means),         // [N, 3]
-            DeviceTensorFloatND(engine().grad.quats),         // [N, 4]
-            DeviceTensorFloatND(engine().grad.scales),        // [N, 3]
-            v_fnd_opac,                                       // [N, 1]
-            DeviceTensorFloatND(engine().grad.features_dc),   // [N, 3]
-            DeviceTensorFloatND(engine().grad.features_sh),   // [N, K, 3]
-        };
-    } else if (engine().primitive == "3dgut") {
-        v_splats_w = {
-            DeviceTensorFloatND(engine().grad.means),         // [N, 3]
-            DeviceTensorFloatND(engine().grad.quats),         // [N, 4]
-            DeviceTensorFloatND(engine().grad.scales),        // [N, 3]
-            DeviceTensorFloatND(),                            // opacities -- null
-            DeviceTensorFloatND(),                            // features_dc -- null
-            DeviceTensorFloatND(),                            // features_sh -- null
-        };
-    }
-
     // Build accum_weight_map from loss_map (pixel-space -> per-splat mapping in raster bwd)
     DeviceTensor3D<float> accum_weight_map;
     if (compute_loss_map && _tv_valid(loss_map_buf)) {
         accum_weight_map = DeviceTensor3D<float>(loss_map_buf);
     }
-
-    std::vector<DeviceTensorFloatND> v_splats_w_out, v_splats_s_out;
-
-    if (engine().primitive == "3dgs" || engine().primitive == "mip") {
-        auto [vw, vs, accum_weight] = rasterize_to_pixels_3dgs_bwd(
-            engine().cur_num_splats,
-            engine().fwd.splats_w,
-            engine().fwd.splats_s,
-            engine().fwd.gaussian_ids,
-            (uint32_t)engine().camera.width,
-            (uint32_t)engine().camera.height,
-            engine().fwd.tile_offsets,
-            engine().fwd.flatten_ids,
-            engine().fwd.render_Ts,
-            engine().fwd.last_ids,
-            engine().fwd.renders,
-            accum_weight_map,
-            v_render_outputs,
-            v_render_Ts,
-            std::make_optional(v_splats_w),
-            std::nullopt
-        );
-        v_splats_w_out = vw;
-        v_splats_s_out = vs;
-        if (accum_weight.data_ptr()) engine().fwd.accum_weight = accum_weight;
-    } else if (engine().primitive == "3dgut") {
-        auto [vw, vs, vviewmats, accum_weight] = rasterize_to_pixels_3dgut_bwd(
-            engine().cur_num_splats,
-            engine().fwd.splats_w,
-            engine().fwd.splats_s,
-            engine().fwd.gaussian_ids,
-            _dt2d_tv(engine().camera.viewmats),
-            _dv_tv(engine().camera.intrins),
-            engine().camera.model_str,
-            _dt2d_tv(engine().camera.dist_coeffs),
-            (uint32_t)engine().camera.width,
-            (uint32_t)engine().camera.height,
-            engine().fwd.tile_offsets,
-            engine().fwd.flatten_ids,
-            engine().fwd.render_Ts,
-            engine().fwd.last_ids,
-            engine().fwd.renders,
-            std::nullopt,  // render2_outputs
-            DeviceTensor3D<float>(),  // loss_map
-            accum_weight_map,
-            v_render_outputs,
-            v_render_Ts,
-            std::nullopt,  // v_distortion_outputs
-            std::make_optional(v_splats_w),
-            std::nullopt,
-            false
-        );
-        v_splats_w_out = vw;
-        v_splats_s_out = vs;
-        if (accum_weight.data_ptr()) engine().fwd.accum_weight = accum_weight;
-    } else {
-        throw std::runtime_error("engine_compute_loss_backward: unknown primitive: " + engine().primitive);
-    }
-
-    // --- Projection backward ---
-    // In fused-proj-bwd-optim mode the projection backward is folded into the
-    // optimizer step; we just stash the screen-space gradients for that call.
-    if (engine().optim.use_fused_proj_bwd_optim) {
-        engine().fwd.v_splats_s = v_splats_s_out;
-    } else {
-        // SH VALUE-quant: when active in non-FPBO mode, project_vjp reads
-        // the source SH via the codec instead of fp32 features_sh (which is
-        // unallocated). Pick the (packed, bounds) buffer + bounds-cell
-        // stride based on which storage layout was set up at allocation
-        // time (mirrors EngineForward.cpp).
-        std::optional<TorchTensorView> vp_opt = std::nullopt;
-        std::optional<TorchTensorView> vb_opt = std::nullopt;
-        int      sh_value_bits   = engine().world.sh_value_bits;
-        uint32_t num_sh_buffer   = (uint32_t)engine().num_sh;
-        int64_t  sh_bounds_stride = 0;
-        if (sh_value_bits == 8) {
-            auto pick = [&](auto& vq) {
-                if (!vq.initialized()) return;
-                vp_opt = TorchTensorView((uint64_t)vq.packed_ptr(), 1, {vq.packed_bytes()});
-                vb_opt = TorchTensorView((uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
-            };
-            if (engine().world.features_sh_quant8_fpbo.initialized()) {
-                pick(engine().world.features_sh_quant8_fpbo);
-                sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
-            } else {
-                pick(engine().world.features_sh_quant8);
-                sh_bounds_stride = 256;
-            }
-        } else if (sh_value_bits == 16) {
-            auto pick = [&](auto& vq) {
-                if (!vq.initialized()) return;
-                vp_opt = TorchTensorView((uint64_t)vq.packed_ptr(), 1, {vq.packed_bytes()});
-                vb_opt = TorchTensorView((uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
-            };
-            if (engine().world.features_sh_quant16_fpbo.initialized()) {
-                pick(engine().world.features_sh_quant16_fpbo);
-                sh_bounds_stride = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
-            } else {
-                pick(engine().world.features_sh_quant16);
-                sh_bounds_stride = 256;
-            }
-        }
-        if (engine().primitive == "3dgs") {
-            projection_3dgs_backward(
-                engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
-                _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
-                (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-                engine().fwd.camera_ids, engine().fwd.gaussian_ids,
-                engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
-                vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
-        } else if (engine().primitive == "mip") {
-            projection_mip_backward(
-                engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
-                _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
-                (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-                engine().fwd.camera_ids, engine().fwd.gaussian_ids,
-                engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
-                vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
-        } else if (engine().primitive == "3dgut") {
-            projection_3dgut_backward(
-                engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
-                _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
-                (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
-                engine().fwd.camera_ids, engine().fwd.gaussian_ids,
-                engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
-                vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
-        }
-    }
+    _engine_raster_proj_backward(
+        pixel_grads.v_render_rgb,
+        pixel_grads.v_render_depth,
+        pixel_grads.v_render_Ts,
+        accum_weight_map);
 
     // --- Build loss dict for display ---
     auto sdiv = [](float x, float y) -> float { return y != 0.0f ? x / y : 0.0f; };

@@ -653,7 +653,63 @@ class Renderer:
         _C.engine_copy_splats_to_host(*[self._tv(t) for t in self.splats_world])
 
     def zero_grad(self):
+        # Engine backward zeroes engine().grad.* at the start of every call
+        # (_alloc_grad_buffers), so there is nothing to clear here.
         return
+
+    def backward(self, v_render_colors, v_render_Ts):
+        """vjp from supplied output cotangents (the backward seed), bypassing
+        the loss. Mirrors the removed per-kernel backward:
+
+            v_render_colors = (v_rgb [C,H,W,3], v_depth [C,H,W,1], ...)
+                              extra / None entries are ignored.
+            v_render_Ts     = cotangent w.r.t. transmittance [C,H,W,1]
+                              (for alpha = 1 - T, pass -v_alpha).
+
+        Per-splat gradients are pulled back to host into self.v_splats_world
+        as (means, quats, scales, opacities[N,1], features_dc, features_sh[N,K,3]).
+
+        NOTE: v_depth is applied to the engine's raw rasterized depth
+        (sum of per-fragment weighted depths), which is what engine_forward
+        returns. gsplat's "ED" is that divided by alpha, so depth gradients are
+        only directly comparable once that normalization is accounted for (or
+        when the depth cotangent is zero). The 3dgs / mip path also does not
+        produce a viewmats gradient.
+        """
+        assert self.primitive in ['3dgs', 'mip', '3dgut'] and not self.use_bvh, \
+            "backward() is only implemented for the engine path"
+        C = self.viewmats.shape[0]
+        H, W = self.height, self.width
+
+        v_rgb = v_render_colors[0].contiguous()
+        if len(v_render_colors) > 1 and v_render_colors[1] is not None:
+            v_depth = v_render_colors[1].contiguous()
+        else:
+            v_depth = torch.zeros(C, H, W, 1, dtype=torch.float32)
+        v_Ts = v_render_Ts.contiguous()
+
+        _C.engine_backward_from_render_grad(
+            self._tv(v_rgb), self._tv(v_depth), self._tv(v_Ts)
+        )
+        self._read_back_grads()
+
+    def _read_back_grads(self):
+        """Copy engine().grad.* (D->H) into self.v_splats_world."""
+        N = self.max_num_splats
+        K = self.splats_world[5].shape[1] if len(self.splats_world) >= 6 else 0
+        v_means       = torch.empty(N, 3, dtype=torch.float32)
+        v_quats       = torch.empty(N, 4, dtype=torch.float32)
+        v_scales      = torch.empty(N, 3, dtype=torch.float32)
+        v_opacities   = torch.empty(N, 1, dtype=torch.float32)
+        v_features_dc = torch.empty(N, 3, dtype=torch.float32)
+        v_features_sh = torch.empty(N, K, 3, dtype=torch.float32)
+        _C.engine_copy_grads_to_host(
+            self._tv(v_means), self._tv(v_quats), self._tv(v_scales),
+            self._tv(v_opacities), self._tv(v_features_dc), self._tv(v_features_sh),
+        )
+        self.v_splats_world = (
+            v_means, v_quats, v_scales, v_opacities, v_features_dc, v_features_sh
+        )
 
     def projection_forward(self):
         raise NotImplementedError("Use engine instead. Code below for reference.")

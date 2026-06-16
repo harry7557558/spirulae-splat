@@ -37,12 +37,12 @@ constexpr uint SPLAT_BATCH_SIZE_NO_DISTORTION = WARP_SIZE;
 constexpr uint SPLAT_BATCH_SIZE_WITH_DISTORTION = WARP_SIZE;
 
 constexpr uint TILE_SIZE_DX = 8;
-// constexpr uint TILE_SIZE_DX = TILE_SIZE;
-static_assert(TILE_SIZE_DX > 0 && TILE_SIZE_DX <= TILE_SIZE && TILE_SIZE % TILE_SIZE_DX == 0);
+// constexpr uint TILE_SIZE_DX = TILE_SIZE_X;
+static_assert(TILE_SIZE_DX > 0 && TILE_SIZE_DX <= TILE_SIZE_X && TILE_SIZE_X % TILE_SIZE_DX == 0);
 
 constexpr uint TILE_SIZE_DY = 8;
-// constexpr uint TILE_SIZE_DY = TILE_SIZE;
-static_assert(TILE_SIZE_DY > 0 && TILE_SIZE_DY <= TILE_SIZE && TILE_SIZE % TILE_SIZE_DY == 0);
+// constexpr uint TILE_SIZE_DY = TILE_SIZE_Y;
+static_assert(TILE_SIZE_DY > 0 && TILE_SIZE_DY <= TILE_SIZE_Y && TILE_SIZE_Y % TILE_SIZE_DY == 0);
 
 
 template <
@@ -102,8 +102,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
     uint32_t image_id = block.group_index().x;
-    uint32_t tile_id = (block.group_index().y * TILE_SIZE_DY / TILE_SIZE) * tile_width +
-        (block.group_index().z * TILE_SIZE_DX / TILE_SIZE);
+    uint32_t tile_id = (block.group_index().y * TILE_SIZE_DY / TILE_SIZE_Y) * tile_width +
+        (block.group_index().z * TILE_SIZE_DX / TILE_SIZE_X);
     uint32_t thread_id = block.thread_rank();
 
     tile_offsets += image_id * tile_height * tile_width;
@@ -522,7 +522,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     dim3 threads = {output_distortion ?
         SPLAT_BATCH_SIZE_WITH_DISTORTION : SPLAT_BATCH_SIZE_NO_DISTORTION,
         1, 1};
-    dim3 grid = {I, tile_height * (TILE_SIZE / TILE_SIZE_DY), tile_width * (TILE_SIZE / TILE_SIZE_DX)};
+    dim3 grid = {I, tile_height * (TILE_SIZE_Y / TILE_SIZE_DY), tile_width * (TILE_SIZE_X / TILE_SIZE_DX)};
 
 #if IS_EVAL3D
     rasterize_to_pixels_eval3d_bwd_kernel<

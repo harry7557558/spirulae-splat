@@ -77,8 +77,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     auto block = cg::this_thread_block();
     int32_t image_id = blockIdx.x;
     int32_t tile_id = blockIdx.y * tile_width + blockIdx.z;
-    uint32_t i = blockIdx.y * TILE_SIZE + threadIdx.y;
-    uint32_t j = blockIdx.z * TILE_SIZE + threadIdx.x;
+    uint32_t i = blockIdx.y * TILE_SIZE_Y + threadIdx.y;
+    uint32_t j = blockIdx.z * TILE_SIZE_X + threadIdx.x;
 
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
@@ -125,7 +125,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         (image_id == I - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
-    constexpr uint BLOCK_SIZE = TILE_SIZE * TILE_SIZE;
+    constexpr uint BLOCK_SIZE = TILE_SIZE_X * TILE_SIZE_Y;
     uint32_t num_batches =
         (range_end - range_start + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -265,7 +265,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
 ) {
     // Each block covers a tile on the image. In total there are
     // I * tile_height * tile_width blocks.
-    dim3 threads = {TILE_SIZE, TILE_SIZE, 1};
+    dim3 threads = {TILE_SIZE_X, TILE_SIZE_Y, 1};
     dim3 grid = {I, tile_height, tile_width};
 
 #if IS_EVAL3D

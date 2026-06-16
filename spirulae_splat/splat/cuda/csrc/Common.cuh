@@ -33,7 +33,8 @@ using std::min;
 
 inline constexpr int WARP_SIZE = 32;
 
-inline constexpr int TILE_SIZE = 16;
+inline constexpr int TILE_SIZE_X = 16;
+inline constexpr int TILE_SIZE_Y = 16;
 inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
 
 

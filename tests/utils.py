@@ -29,6 +29,8 @@ def check_close(name, a, b, atol=1e-5, rtol=1e-5):
     if a.dtype != b.dtype:
         print(_color_text("dtype mismatch", 'r'))
         return
+    if a.device != b.device:
+        b = b.to(a.device)
     abserr = torch.amax(torch.abs(a-b))
     relerr = abserr / torch.fmax(torch.abs(a), torch.abs(b)).clip(min=1e-20).mean()
     abserr_μ = torch.mean(torch.abs(a-b))

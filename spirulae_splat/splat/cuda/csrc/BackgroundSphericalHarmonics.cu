@@ -268,7 +268,7 @@ void render_background_sh_forward(
 
     #define LAUNCH(DEG) \
         render_background_sh_forward_kernel<DEG> \
-            <<<_LAUNCH_ARGS_3D(w, h, b, TILE_SIZE, TILE_SIZE, 1)>>>( \
+            <<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
                 img_size, cm, p_vm, p_intrins, p_dist, p_sh_coeffs, p_out)
     switch (sh_degree) {
         case 0: LAUNCH(0); break;
