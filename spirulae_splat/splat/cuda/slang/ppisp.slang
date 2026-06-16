@@ -298,7 +298,6 @@ struct PPISPParamsRQS : IDifferentiable {
 static const int PPISP_RQS_NUM_PARAMS = 1 + 5 * 3 + 8 + 5 * 3;
 
 // "no_crf" variant: exposure + vignetting + color only, no CRF parameters.
-// Output is clamped to [0, 1] after color correction (no tone curve).
 struct PPISPParamsNoCRF : IDifferentiable {
     float exposure;
     VignettingChannelParams vignette_params[3];  // 5 x 3 params

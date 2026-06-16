@@ -2699,15 +2699,11 @@ __global__ void ppisp_backward_kernel(
     unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;
     unsigned bid = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned B = in_image.shape[0], H = in_image.shape[1], W = in_image.shape[2];
-    if (bid >= B || gid >= H*W)
-        return;
-    unsigned y = gid / W;
-    unsigned x = gid % W;
+    bool inside = (bid < B) && (gid < H*W);
+    unsigned y = inside ? gid / W : 0u;
+    unsigned x = inside ? gid % W : 0u;
 
-    int p_id = cam_indices ? cam_indices[bid] : (int)bid;
-
-    float3 pixel = in_image.load3(bid, y, x);
-    float3 v_out_pixel = v_out_image.load3(bid, y, x);
+    int p_id = (bid < B) ? (cam_indices ? cam_indices[bid] : (int)bid) : 0;
 
     static constexpr int kNumParams =
         (param_type == PPISPParamType::Original) ? kNumPPISPParams :
@@ -2735,43 +2731,51 @@ __global__ void ppisp_backward_kernel(
     }
 #endif
 
-    float3 v_pixel;
+    float3 v_pixel = make_float3(0.0f, 0.0f, 0.0f);
     FixedArray<float, kNumParams> v_params;
-    if (param_type == PPISPParamType::Original)
-        SlangPPISP::apply_ppisp_vjp(
-            pixel,
-            make_float2((float)x, (float)y),
-            make_float2(intrins[bid].z, intrins[bid].w),
-            make_float2(actual_image_width, actual_image_height),
-            *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
-            v_out_pixel,
-            &v_pixel,
-            reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&v_params)
-        );
-    else if (param_type == PPISPParamType::RQS)
-        SlangPPISP::apply_ppisp_rqs_vjp(
-            pixel,
-            make_float2((float)x, (float)y),
-            make_float2(intrins[bid].z, intrins[bid].w),
-            make_float2(actual_image_width, actual_image_height),
-            *reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
-            v_out_pixel,
-            &v_pixel,
-            reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&v_params)
-        );
-    else
-        SlangPPISP::apply_ppisp_no_crf_vjp(
-            pixel,
-            make_float2((float)x, (float)y),
-            make_float2(intrins[bid].z, intrins[bid].w),
-            make_float2(actual_image_width, actual_image_height),
-            *reinterpret_cast<FixedArray<float, kNumPPISPParamsNoCRF>*>(&params),
-            v_out_pixel,
-            &v_pixel,
-            reinterpret_cast<FixedArray<float, kNumPPISPParamsNoCRF>*>(&v_params)
-        );
+    #pragma unroll
+    for (int i = 0; i < kNumParams; i++)
+        v_params[i] = 0.0f;
 
-    v_in_image.store3(bid, y, x, v_pixel);
+    if (inside) {
+        float3 pixel = in_image.load3(bid, y, x);
+        float3 v_out_pixel = v_out_image.load3(bid, y, x);
+        if (param_type == PPISPParamType::Original)
+            SlangPPISP::apply_ppisp_vjp(
+                pixel,
+                make_float2((float)x, (float)y),
+                make_float2(intrins[bid].z, intrins[bid].w),
+                make_float2(actual_image_width, actual_image_height),
+                *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
+                v_out_pixel,
+                &v_pixel,
+                reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&v_params)
+            );
+        else if (param_type == PPISPParamType::RQS)
+            SlangPPISP::apply_ppisp_rqs_vjp(
+                pixel,
+                make_float2((float)x, (float)y),
+                make_float2(intrins[bid].z, intrins[bid].w),
+                make_float2(actual_image_width, actual_image_height),
+                *reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
+                v_out_pixel,
+                &v_pixel,
+                reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&v_params)
+            );
+        else
+            SlangPPISP::apply_ppisp_no_crf_vjp(
+                pixel,
+                make_float2((float)x, (float)y),
+                make_float2(intrins[bid].z, intrins[bid].w),
+                make_float2(actual_image_width, actual_image_height),
+                *reinterpret_cast<FixedArray<float, kNumPPISPParamsNoCRF>*>(&params),
+                v_out_pixel,
+                &v_pixel,
+                reinterpret_cast<FixedArray<float, kNumPPISPParamsNoCRF>*>(&v_params)
+            );
+
+        v_in_image.store3(bid, y, x, v_pixel);
+    }
 
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
@@ -2852,8 +2856,7 @@ __global__ void compute_raw_ppisp_regularization_forward_kernel(
     float* __restrict__ raw_losses  // [B+1, RawPPISPRegLossIndex::length]
 ) {
     unsigned bid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (bid >= B)
-        return;
+    bool inside = (bid < (unsigned)B);
 
     static constexpr int kNumParams =
         (param_type == PPISPParamType::Original) ? kNumPPISPParams :
@@ -2864,35 +2867,38 @@ __global__ void compute_raw_ppisp_regularization_forward_kernel(
         (param_type == PPISPParamType::RQS)      ? (int)RawPPISPRegLossIndexRQS::length :
                                                    (int)RawPPISPRegLossIndexNoCRF::length;
 
-    FixedArray<float, kNumParams> params;
-    #pragma unroll
-    for (int i = 0; i < kNumParams; i++) {
-        params[i] = ppisp_params[bid * kNumParams + i];
-    }
-
     FixedArray<float, kNumRawLosses> losses;
-    if (param_type == PPISPParamType::Original)
-        SlangPPISP::compute_raw_ppisp_regularization_loss(
-            *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
-            reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&losses)
-        );
-    else if (param_type == PPISPParamType::RQS)
-        SlangPPISP::compute_raw_ppisp_rqs_regularization_loss(
-            *reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
-            reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&losses)
-        );
-    else
-        SlangPPISP::compute_raw_ppisp_no_crf_regularization_loss(
-            *reinterpret_cast<FixedArray<float, kNumPPISPParamsNoCRF>*>(&params),
-            reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexNoCRF::length>*>(&losses)
-        );
+    if (inside) {
+        FixedArray<float, kNumParams> params;
+        #pragma unroll
+        for (int i = 0; i < kNumParams; i++) {
+            params[i] = ppisp_params[bid * kNumParams + i];
+        }
+
+        if (param_type == PPISPParamType::Original)
+            SlangPPISP::compute_raw_ppisp_regularization_loss(
+                *reinterpret_cast<FixedArray<float, kNumPPISPParams>*>(&params),
+                reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndex::length>*>(&losses)
+            );
+        else if (param_type == PPISPParamType::RQS)
+            SlangPPISP::compute_raw_ppisp_rqs_regularization_loss(
+                *reinterpret_cast<FixedArray<float, kNumPPISPParamsRQS>*>(&params),
+                reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexRQS::length>*>(&losses)
+            );
+        else
+            SlangPPISP::compute_raw_ppisp_no_crf_regularization_loss(
+                *reinterpret_cast<FixedArray<float, kNumPPISPParamsNoCRF>*>(&params),
+                reinterpret_cast<FixedArray<float, (int)RawPPISPRegLossIndexNoCRF::length>*>(&losses)
+            );
+    }
 
     auto block = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
     #pragma unroll
     for (int i = 0; i < kNumRawLosses; i++) {
-        float loss = isfinite(losses[i]) ? losses[i] : 0.0f;
-        raw_losses[bid*kNumRawLosses + i] = loss;
+        float loss = (inside && isfinite(losses[i])) ? losses[i] : 0.0f;
+        if (inside)
+            raw_losses[bid*kNumRawLosses + i] = loss;
         loss = cg::reduce(warp, loss, cg::plus<float>());
         if (threadIdx.x % WARP_SIZE == 0 && loss != 0.0f)
             atomicAdd(&raw_losses[B*kNumRawLosses + i], loss);
