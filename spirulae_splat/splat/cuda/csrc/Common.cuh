@@ -33,8 +33,16 @@ using std::min;
 
 inline constexpr int WARP_SIZE = 32;
 
-inline constexpr int TILE_SIZE_X = 16;
-inline constexpr int TILE_SIZE_Y = 16;
+inline constexpr int TILE_SIZE_X = 8;
+inline constexpr int TILE_SIZE_Y = 8;
+inline constexpr int MACRO_TILE_SIZE_X = 8;
+inline constexpr int MACRO_TILE_SIZE_Y = 4;
+
+static_assert(
+    (MACRO_TILE_SIZE_X * MACRO_TILE_SIZE_Y == 1) ||
+    (MACRO_TILE_SIZE_X * MACRO_TILE_SIZE_Y == WARP_SIZE)
+);
+
 inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
 
 

@@ -149,15 +149,15 @@ def test_rasterization():
         alpha = outputs[2].detach().cpu().numpy()
         _alpha = _outputs[2].detach().cpu().numpy()
         ax1.imshow(rgb[0])
-        # ax2.imshow(alpha[0])
+        ax2.imshow(alpha[0])
         # ax2.imshow(depth[0])
-        ax2.imshow(np.log10(np.abs(depth[0]-_depth[0])))
+        # ax2.imshow(np.log10(np.abs(depth[0]-_depth[0])))
         # ax2.imshow(rgb[1])
         # ax3.imshow(rgb[2])
         # ax4.imshow(rgb[3])
         ax3.imshow(_rgb[0])
-        # ax4.imshow(_alpha[0])
-        ax4.imshow(_depth[0])
+        ax4.imshow(_alpha[0])
+        # ax4.imshow(_depth[0])
         # ax4.imshow(_rgb[1])
         plt.show()
         # plt.savefig("/mnt/d/plot.png")
@@ -248,7 +248,9 @@ if __name__ == "__main__":
     # modes = [(False, False), (True, False)]
     # combos = list(itertools.product([True, False], [False], modes))
 
-    combos = [(True, False, (False, True))]
+    # combos = [(True, False, (False, True))]
+    # combos = [(True, False, (True, False))]
+    combos = [(True, False, (True, False)), (True, False, (False, True))]
 
     for packed_val, fisheye_val, (aa_val, ut_val) in combos:
         PACKED = packed_val
@@ -258,7 +260,7 @@ if __name__ == "__main__":
         label = f"packed={PACKED} fisheye={IS_FISHEYE} antialiased={IS_ANTIALIASED} with_ut={WITH_UT}"
         print(f"=== {label} ===")
 
-        N = 1000
+        N = 2000
         try:
             test_rasterization()
         except Exception as e:
