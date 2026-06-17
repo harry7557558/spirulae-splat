@@ -118,6 +118,210 @@ def get_inputs(seed=44):
     return inputs
 
 
+# ---------------------------------------------------------------------------
+# Representative synthetic scenes for profiling across gaussian distributions.
+# These are parametric stand-ins that reproduce the *projected* spatial density
+# and depth skew of real captures (not photometric realism). Each returns the
+# same 8-tuple as get_inputs().
+# ---------------------------------------------------------------------------
+import math
+
+
+def _look_at(eye, target, up=(0.0, 1.0, 0.0)):
+    eye = torch.tensor(eye, dtype=torch.float32)
+    target = torch.tensor(target, dtype=torch.float32)
+    up = torch.tensor(up, dtype=torch.float32)
+    fwd = target - eye
+    fwd = fwd / fwd.norm().clamp_min(1e-8)          # camera looks along +z
+    right = torch.linalg.cross(up, fwd)
+    right = right / right.norm().clamp_min(1e-8)
+    tup = torch.linalg.cross(fwd, right)
+    R = torch.stack([right, tup, fwd], dim=0)       # rows = camera axes in world
+    vm = torch.eye(4)
+    vm[:3, :3] = R
+    vm[:3, 3] = -(R @ eye)
+    return vm
+
+
+def _plane(n, center, u, v, jitter, gen):
+    # n points on a planar slab: center + a*u + b*v + c*normal, a,b in [-1,1]
+    center = torch.tensor(center, dtype=torch.float32)
+    u = torch.tensor(u, dtype=torch.float32)
+    v = torch.tensor(v, dtype=torch.float32)
+    nrm = torch.linalg.cross(u, v)
+    nrm = nrm / nrm.norm().clamp_min(1e-8)
+    a = torch.rand(n, 1, generator=gen) * 2 - 1
+    b = torch.rand(n, 1, generator=gen) * 2 - 1
+    c = (torch.rand(n, 1, generator=gen) * 2 - 1) * jitter
+    return center + a * u + b * v + c * nrm
+
+
+def _finish_scene(means, viewmats, scale_log_mean, opac_bias, seed):
+    n = means.shape[0]
+    g = torch.Generator().manual_seed(seed + 7)
+    quats = torch.nn.functional.normalize(torch.randn(n, 4, generator=g))
+    scales = torch.randn(n, 3, generator=g) * 0.5 + scale_log_mean
+    opacities = torch.randn(n, generator=g) + opac_bias
+    features_dc = torch.rand(n, 3, generator=g)
+    features_sh = 0.2 * torch.randn(n, (SH_DEGREE + 1) ** 2 - 1, 3, generator=g)
+    cx, cy = 0.5 * W, 0.5 * H
+    fx = fy = 0.4 * W
+    Ks = torch.tensor([[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]]).repeat(viewmats.shape[0], 1, 1).float()
+    inputs = (means, quats, scales, opacities, features_dc, features_sh, viewmats, Ks)
+    inputs = [torch.nn.Parameter(x.contiguous().to(device).clone()) for x in inputs]
+    if WITH_UT:
+        inputs = inputs[:-2] + [viewmats.to(device), Ks.to(device)]
+    return inputs
+
+
+def gen_scene(kind, n, seed=44):
+    g = torch.Generator().manual_seed(seed)
+
+    if kind == "uniform":
+        # baseline: gaussians spread through space, cameras around origin
+        means = torch.randn(n, 3, generator=g)
+        vms = [_look_at([3.0 * math.cos(2 * math.pi * k / B),
+                         0.5 * (k - (B - 1) / 2),
+                         3.0 * math.sin(2 * math.pi * k / B)], [0, 0, 0]) for k in range(B)]
+        return _finish_scene(means, torch.stack(vms), -4.5, 0.0, seed)
+
+    if kind == "object":
+        # small object-centered capture: dense compact blob + sparse far shell
+        n_obj = int(0.9 * n); n_bg = n - n_obj
+        obj = 0.5 * torch.randn(n_obj, 3, generator=g)
+        dirn = torch.nn.functional.normalize(torch.randn(n_bg, 3, generator=g))
+        bg = dirn * (8 + 4 * torch.rand(n_bg, 1, generator=g))
+        means = torch.cat([obj, bg], 0)
+        vms = [_look_at([3.2 * math.cos(2 * math.pi * k / B),
+                         0.7 * (k - (B - 1) / 2),
+                         3.2 * math.sin(2 * math.pi * k / B)], [0, 0, 0]) for k in range(B)]
+        return _finish_scene(means, torch.stack(vms), -5.3, 0.8, seed)
+
+    if kind == "street":
+        # narrow street: ground + two facades receding down +z, camera low.
+        # grazing ground + converging facades -> depth grows toward the horizon.
+        n3 = n // 3
+        ground = _plane(n3, [0, 0, 20], [6, 0, 0], [0, 0, 20], 0.05, g); ground[:, 1] = 0.0
+        facL = _plane(n3, [-3, 3, 20], [0, 3, 0], [0, 0, 20], 0.05, g)
+        facR = _plane(n - 2 * n3, [3, 3, 20], [0, 3, 0], [0, 0, 20], 0.05, g)
+        means = torch.cat([ground, facL, facR], 0)
+        vms = [_look_at([0.4 * (k - (B - 1) / 2), 1.2, -1.0 - 0.3 * k],
+                        [0.4 * (k - (B - 1) / 2), 1.0, 20]) for k in range(B)]
+        return _finish_scene(means, torch.stack(vms), -4.8, 1.0, seed)
+
+    if kind == "indoor":
+        # multi-room: box of 6 planes, camera inside looking toward a corner so
+        # two walls recede at a grazing angle (deep) and two are frontal (shallow).
+        nf = n // 6
+        planes = [
+            _plane(nf, [0, -2, 0], [5, 0, 0], [0, 0, 5], 0.05, g),   # floor
+            _plane(nf, [0, 3, 0], [5, 0, 0], [0, 0, 5], 0.05, g),    # ceiling
+            _plane(nf, [-5, 0.5, 0], [0, 2.5, 0], [0, 0, 5], 0.05, g),  # wall x-
+            _plane(nf, [5, 0.5, 0], [0, 2.5, 0], [0, 0, 5], 0.05, g),   # wall x+
+            _plane(nf, [0, 0.5, -5], [5, 0, 0], [0, 2.5, 0], 0.05, g),  # wall z-
+            _plane(n - 5 * nf, [0, 0.5, 5], [5, 0, 0], [0, 2.5, 0], 0.05, g),  # wall z+
+        ]
+        means = torch.cat(planes, 0)
+        vms = [_look_at([-2 + 0.5 * k, 0.0, -2 + 0.3 * k], [4, 0, 4]) for k in range(B)]
+        return _finish_scene(means, torch.stack(vms), -4.5, 0.5, seed)
+
+    if kind == "garden":
+        # unbounded outdoor: grazing ground + central foreground bushes + far shell
+        n_g = n // 3; n_f = n // 3; n_b = n - n_g - n_f
+        ground = _plane(n_g, [0, 0, 8], [12, 0, 0], [0, 0, 12], 0.03, g); ground[:, 1] = 0.0
+        fg = torch.stack([2.0 * torch.randn(n_f, generator=g),
+                          0.6 * torch.rand(n_f, generator=g),
+                          8 + 2.0 * torch.randn(n_f, generator=g)], dim=1)
+        dirn = torch.nn.functional.normalize(torch.randn(n_b, 3, generator=g))
+        shell = dirn.abs() * torch.tensor([30.0, 15.0, 30.0]) + torch.tensor([0.0, 2.0, 8.0])
+        means = torch.cat([ground, fg, shell], 0)
+        vms = [_look_at([0.6 * (k - (B - 1) / 2), 1.4, -1.0], [0, 0.6, 8]) for k in range(B)]
+        return _finish_scene(means, torch.stack(vms), -4.7, 0.7, seed)
+
+    raise ValueError(f"unknown scene {kind}")
+
+
+@torch.no_grad()
+def scene_tile_stats(means, viewmats, Ks):
+    # characterize skew: gaussian-center counts per tile (footprint ignored, so
+    # absolute counts under-read true binning, but the *skew* is representative)
+    m = means.detach().to(device).float()
+    out = {}
+    for name, (tx, ty) in [("macro", (64, 32)), ("micro", (8, 8))]:
+        nx = (W + tx - 1) // tx; ny = (H + ty - 1) // ty
+        mx = 0; nonempty = []
+        for c in range(viewmats.shape[0]):
+            R = viewmats[c, :3, :3].to(device).float(); t = viewmats[c, :3, 3].to(device).float()
+            cam = m @ R.T + t
+            z = cam[:, 2]
+            u = Ks[c, 0, 0].item() * cam[:, 0] / z + Ks[c, 0, 2].item()
+            v = Ks[c, 1, 1].item() * cam[:, 1] / z + Ks[c, 1, 2].item()
+            ok = (z > 1e-4) & (u >= 0) & (u < W) & (v >= 0) & (v < H)
+            idx = (v[ok] / ty).long() * nx + (u[ok] / tx).long()
+            cnt = torch.bincount(idx, minlength=nx * ny)
+            mx = max(mx, int(cnt.max().item()) if cnt.numel() else 0)
+            nz = cnt[cnt > 0]
+            if nz.numel():
+                nonempty.append(nz.float())
+        meanc = torch.cat(nonempty).mean().item() if nonempty else 0.0
+        out[name + "_max"] = mx
+        out[name + "_mean"] = meanc
+    return out
+
+
+def _time_ms(fn, warmup=3, repeat=30):
+    from time import perf_counter
+    for _ in range(warmup):
+        fn()
+    torch.cuda.synchronize()
+    t0 = perf_counter()
+    for _ in range(repeat):
+        fn()
+    torch.cuda.synchronize()
+    return 1e3 * (perf_counter() - t0) / repeat
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def profile_scenes(kinds=None, n=200000):
+    global N
+    N = n
+    if kinds is None:
+        kinds = ["uniform", "object", "garden", "street", "indoor"]
+    prim = "3dgut" if WITH_UT else ["3dgs", "mip"][IS_ANTIALIASED]
+
+    def _isect_vram_mb():
+        bd = _C.engine_get_pool_breakdown()
+        return sum(e[1] for e in bd if e[0].lower().startswith("isect.")) / 1e6
+
+    print(f"\n##### scene profiling (N={n}, primitive={prim}) #####")
+    print(f"{'scene':8s} | {'macro max/mean':>16s} | {'micro max/mean':>15s} | {'fwd ms':>7s} | {'bwd ms':>7s} | {'isectMB':>7s}")
+    for kind in kinds:
+        try:
+            inputs = gen_scene(kind, n)
+            st = scene_tile_stats(inputs[0], inputs[6], inputs[7])
+            cpu_inputs = [x.detach().cpu().contiguous() for x in inputs]
+            _, renderer = rasterize_ssplat(*cpu_inputs)
+            ft = _time_ms(lambda: _C.engine_forward_3dgs(
+                renderer.primitive, renderer.sh_degree_to_use, renderer.packed))
+            C, Hh, Ww = renderer.viewmats.shape[0], renderer.height, renderer.width
+            v_rgb = torch.randn(C, Hh, Ww, 3, device=device)
+            v_depth = torch.randn(C, Hh, Ww, 1, device=device)
+            v_Ts = torch.randn(C, Hh, Ww, 1, device=device)
+            bt = _time_ms(lambda: _C.engine_backward_from_render_grad(
+                renderer._tv(v_rgb), renderer._tv(v_depth), renderer._tv(v_Ts)))
+            vram = _isect_vram_mb()
+            print(f"{kind:8s} | {st['macro_max']:7d}/{st['macro_mean']:7.0f} | "
+                  f"{st['micro_max']:6d}/{st['micro_mean']:5.1f} | {ft:7.2f} | {bt:7.2f} | {vram:7.1f}")
+            _C.engine_reset()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            try:
+                _C.engine_reset()
+            except Exception:
+                pass
+
+
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_rasterization():
@@ -240,6 +444,18 @@ def profile_rasterization():
 
 if __name__ == "__main__":
     import itertools
+    import sys
+
+    # `python3 tests/test_rasterization.py scenes [ut]` -> benchmark the
+    # representative scenes instead of the correctness/profile suite.
+    if "scenes" in sys.argv:
+        PACKED = True; IS_FISHEYE = False
+        IS_ANTIALIASED = True; WITH_UT = False
+        profile_scenes()
+        if "ut" in sys.argv:
+            IS_ANTIALIASED = False; WITH_UT = True
+            profile_scenes()
+        sys.exit(0)
 
     # packed x fisheye x (not_aa+no_ut, aa+no_ut, not_aa+with_ut)
     modes = [(False, False), (True, False), (False, True)]

@@ -35,13 +35,12 @@ inline constexpr int WARP_SIZE = 32;
 
 inline constexpr int TILE_SIZE_X = 8;
 inline constexpr int TILE_SIZE_Y = 8;
-inline constexpr int MACRO_TILE_SIZE_X = 8;
-inline constexpr int MACRO_TILE_SIZE_Y = 4;
+inline constexpr int MACRO_TILE_SIZE_X = 2;
+inline constexpr int MACRO_TILE_SIZE_Y = 2;
 
-static_assert(
-    (MACRO_TILE_SIZE_X * MACRO_TILE_SIZE_Y == 1) ||
-    (MACRO_TILE_SIZE_X * MACRO_TILE_SIZE_Y == WARP_SIZE)
-);
+// The per-microtile forward and the backward work for any macro size; only the
+// (retired) macro-block forward required MACRO_NUM_TILES == WARP_SIZE.
+static_assert(MACRO_TILE_SIZE_X >= 1 && MACRO_TILE_SIZE_Y >= 1);
 
 inline constexpr float ALPHA_THRESHOLD = (1.f/255.f);
 
