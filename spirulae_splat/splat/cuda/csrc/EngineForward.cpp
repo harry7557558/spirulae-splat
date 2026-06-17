@@ -193,14 +193,32 @@ void forward_3dgs(
         depths_nd = DeviceTensorFloatND(depths_2d);            // [C, N] -> numel=C*N for intersect
     }
 
-    // --- Tile intersection (AABB mode) ---
+    // --- Tile intersection (ellipse mode) ---
     DeviceVector<int32_t>* image_ids_ptr = nullptr;
     if (packed && engine().fwd.camera_ids.data_ptr() != nullptr)
         image_ids_ptr = &engine().fwd.camera_ids;
 
+    // Hand the projected 2D conic / opacity (and center, when stored) to the
+    // intersector so it does the tighter ellipse-vs-tile test instead of a
+    // conservative AABB test. Screen-buffer layout differs per primitive:
+    //   3dgs / mip : [xy, depth, conic, opac, rgb]
+    //   3dgut      : [conic (aka "scale"), opacity, colors]; center := AABB
+    //                center, so proj_xy is left null.
+    DeviceTensorFloatND* proj_xy = nullptr;
+    DeviceTensorFloatND* proj_conic = nullptr;
+    DeviceTensorFloatND* proj_opac = nullptr;
+    if (primitive == "3dgut") {
+        proj_conic = &engine().fwd.splats_s[0];
+        proj_opac  = &engine().fwd.splats_s[1];
+    } else {  // 3dgs / mip
+        proj_xy    = &engine().fwd.splats_s[0];
+        proj_conic = &engine().fwd.splats_s[2];
+        proj_opac  = &engine().fwd.splats_s[3];
+    }
+
     auto [isect_ids, flatten_ids, tile_offsets] = do_intersect_tile_generic(
         aabb_nd, depths_nd,
-        nullptr, nullptr, nullptr,
+        proj_xy, proj_conic, proj_opac,
         (uint32_t)engine().camera.num,
         _dv_tv(engine().camera.intrins),
         (uint32_t)engine().camera.width,
@@ -236,6 +254,7 @@ void forward_3dgs(
             in_splats, engine().fwd.splats_s, engine().fwd.gaussian_ids,
             _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
             engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+            engine().fwd.aabb,
             (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
             tile_offsets, flatten_ids, false);
         renders = r; render_Ts = rTs; last_ids = lids;

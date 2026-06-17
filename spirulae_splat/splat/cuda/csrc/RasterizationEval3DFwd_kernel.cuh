@@ -38,6 +38,32 @@ namespace SlangProjectionUtils {
 inline constexpr uint32_t NUM_WARPS = 10;
 inline constexpr uint32_t NUM_THREADS = NUM_WARPS * WARP_SIZE;
 
+// Test whether the unit ellipse (x^T inv_cov x = 1, centered at origin) overlaps
+// an axis-aligned box [x0,x1]x[y0,y1]. Used to cull (gaussian, sub-tile) pairs.
+static __device__ __forceinline__ bool ellipse_box_overlap_test(
+    float3 inv_cov, float x0, float x1, float y0, float y1
+) {
+    float a = inv_cov.x, b = inv_cov.y, c = inv_cov.z;
+    // parabola vertex on the 4 edges (uses the un-doubled off-diagonal)
+    float wx = -b / c, wy = -b / a;
+    float u0 = fminf(fmaxf(x0 * wx, y0), y1);
+    float u1 = fminf(fmaxf(x1 * wx, y0), y1);
+    float v0 = fminf(fmaxf(y0 * wy, x0), x1);
+    float v1 = fminf(fmaxf(y1 * wy, x0), x1);
+    b *= 2.0f;
+    float mx = fminf(
+        a*x0*x0 + b*x0*u0 + c*u0*u0,
+        a*x1*x1 + b*x1*u1 + c*u1*u1
+    );
+    float my = fminf(
+        a*v0*v0 + b*v0*y0 + c*y0*y0,
+        a*v1*v1 + b*v1*y1 + c*y1*y1
+    );
+    // box contains the ellipse center, or the box boundary meets the ellipse
+    float mc = fmaxf(fmaxf(x0, -x1), fmaxf(y0, -y1));
+    return fminf(mc, fminf(mx, my) - 1.0f) < 0.f;
+}
+
 template<
     typename SplatPrimitive,
 #if IS_EVAL3D
@@ -60,6 +86,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const float4 *__restrict__ aabb,  // [..., N] projected 2D AABB (xmin,ymin,xmax,ymax)
 #endif
     const uint32_t image_width,
     const uint32_t image_height,
@@ -74,6 +101,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     RenderOutput::Buffer render_distortions // [I, image_height, image_width, ...]
 ) {
     uint32_t tid = threadIdx.x;
+    uint32_t wid = tid / WARP_SIZE;
     uint32_t lid = tid % WARP_SIZE;
     int32_t image_id = blockIdx.x;
     int32_t tile_id = blockIdx.y * tile_width + blockIdx.z;
@@ -132,6 +160,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // a whole depth batch of gaussians is loaded once and shared by every
     // sub-tile of the macro tile (they all sweep the same gaussian range)
     __shared__ typename SplatPrimitive::FragmentFwd splat_batch[DEPTH_BATCH_SPLATS];
+    // per-gaussian sub-tile intersection mask: bit s set => gaussian overlaps
+    // sub-tile s. MACRO_NUM_TILES == WARP_SIZE, so one uint32 holds all sub-tiles.
+    static_assert(MACRO_NUM_TILES <= 32);
+    __shared__ uint32_t isect_mask[DEPTH_BATCH_SPLATS];
 
     if (tid < MACRO_NUM_TILES)
         tile_done[tid] = false;
@@ -158,6 +190,57 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         int32_t g = flatten_ids[db_base + k]; // flatten index in [I * N] or [nnz]
         splat_batch[k].load(splat_wbuffer, splat_sbuffer,
             gaussian_ids ? gaussian_ids[g] : g % N, g);
+    }
+#if !IS_EVAL3D
+    __syncthreads();  // non-eval3d derives the mask from the just-loaded fragments
+#endif
+
+    // precompute, for each gaussian in the batch, the set of sub-tiles its
+    // footprint overlaps. One warp per gaussian, lane == sub-tile index, so a
+    // single __ballot packs all MACRO_NUM_TILES(<=32) sub-tiles into one word.
+    for (uint32_t g = wid; g < db_count; g += NUM_WARPS) {
+        bool hit = false;
+        if (lid < MACRO_NUM_TILES) {
+            uint32_t sx = lid % MACRO_TILE_SIZE_X;
+            uint32_t sy = lid / MACRO_TILE_SIZE_X;
+            float tx0 = (float)((blockIdx.z * MACRO_TILE_SIZE_X + sx) * TILE_SIZE_X);
+            float ty0 = (float)((blockIdx.y * MACRO_TILE_SIZE_Y + sy) * TILE_SIZE_Y);
+        #if IS_EVAL3D
+            // 3dgut keeps the projected 2D conic in the screen "scale" channel
+            // and the ellipse center is the AABB center; same alpha-threshold
+            // contour test as 2D splatting, matching the tile intersector.
+            int32_t sid = flatten_ids[db_base + g];
+            float opac = splat_sbuffer.opacities(sid);
+            if (opac > ALPHA_THRESHOLD) {
+                float3 conic = splat_sbuffer.scales(sid);
+                float4 bb = aabb[sid];
+                float ecx = 0.5f * (bb.x + bb.z);
+                float ecy = 0.5f * (bb.y + bb.w);
+                float kk = 0.5f / __logf(opac / ALPHA_THRESHOLD);
+                float3 inv_cov = { conic.x * kk, conic.y * kk, conic.z * kk };
+                hit = ellipse_box_overlap_test(
+                    inv_cov,
+                    tx0 - ecx, tx0 + TILE_SIZE_X - ecx,
+                    ty0 - ecy, ty0 + TILE_SIZE_Y - ecy
+                );
+            }
+        #else
+            // 2D splatting: exact ellipse vs sub-tile box at the alpha threshold
+            typename SplatPrimitive::FragmentFwd sp = splat_batch[g];
+            if (sp.opac > ALPHA_THRESHOLD) {
+                float kk = 0.5f / __logf(sp.opac / ALPHA_THRESHOLD);
+                float3 inv_cov = { sp.conic.x * kk, sp.conic.y * kk, sp.conic.z * kk };
+                hit = ellipse_box_overlap_test(
+                    inv_cov,
+                    tx0 - sp.xy.x, tx0 + TILE_SIZE_X - sp.xy.x,
+                    ty0 - sp.xy.y, ty0 + TILE_SIZE_Y - sp.xy.y
+                );
+            }
+        #endif
+        }
+        uint32_t m = __ballot_sync(~0u, hit);
+        if (lid == 0)
+            isect_mask[g] = m;
     }
     __syncthreads();
 
@@ -241,7 +324,14 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         uint32_t local_base = inner_batch * WARP_SIZE;
         uint32_t batch_start = db_base + local_base;  // global flatten index base
         uint32_t batch_size = min((uint32_t)WARP_SIZE, db_count - local_base);
-        for (uint32_t t = 0; t < batch_size; ++t) {
+        // skip gaussians whose footprint never reaches this sub-tile; the
+        // survivors are compacted via ballot so we only evaluate the hits
+        bool lane_hit = (lid < batch_size) &&
+            ((isect_mask[local_base + lid] >> tileIdx) & 1u);
+        uint32_t surv = __ballot_sync(~0u, lane_hit);
+        while (surv) {
+            uint32_t t = __ffs(surv) - 1;
+            surv &= surv - 1;
             if (done)
                 continue;
             typename SplatPrimitive::FragmentFwd splat = splat_batch[local_base + t];
@@ -277,7 +367,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
                 T = next_T;
             } else { done = true; saturated = true; }
 
-        }  // for (uint32_t t = 0; t < batch_size; ++t)
+        }  // while (surv)
     }
 
     // this sub-tile is only finished once every lane is done
@@ -353,6 +443,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const float4 *__restrict__ aabb,  // [..., N] projected 2D AABB (xmin,ymin,xmax,ymax)
 #endif
     const uint32_t image_width,
     const uint32_t image_height,
@@ -385,7 +476,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
         I, N, n_isects,
         gaussian_ids, splat_wbuffer, splat_sbuffer,
     #if IS_EVAL3D
-        viewmats, intrins, dist_coeffs_buffer,
+        viewmats, intrins, dist_coeffs_buffer, aabb,
     #endif
         image_width, image_height, tile_width, tile_height, tile_offsets, flatten_ids,
         render_colors, render_Ts, last_ids,

@@ -22,6 +22,7 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const float4 *__restrict__ aabb,  // [..., N] projected 2D AABB
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_width,
@@ -47,6 +48,7 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
+    DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -70,12 +72,13 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
 
     const float* viewmats_ptr = (const float*)std::get<0>(viewmats);
     const float4* intrins_ptr = (const float4*)std::get<0>(intrins);
+    const float4* aabb_ptr = (const float4*)aabb.data_ptr();
 
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)0, I, N, n_isects, \
             (uint32_t*)gaussian_ids.data_ptr(), \
             splats_w, splats_s, \
-            viewmats_ptr, intrins_ptr, dist_coeffs, \
+            viewmats_ptr, intrins_ptr, dist_coeffs, aabb_ptr, \
             image_width, image_height, tile_width, tile_height, \
             tile_offsets.data_ptr(), flatten_ids.data_ptr(), \
             renders, transmittances.data_ptr(), last_ids.data_ptr(), \
@@ -117,6 +120,7 @@ inline std::tuple<
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const CameraModelType camera_model,
     const TorchTensorView dist_coeffs,
+    DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -144,7 +148,7 @@ inline std::tuple<
     launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, output_distortion>(
         num_splats,
         splats_w, splats_s, gaussian_ids,
-        viewmats, intrins, camera_model, dist_coeffs,
+        viewmats, intrins, camera_model, dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
         renders, render_Ts, render_last_ids, renders2, distortions
     );
@@ -178,6 +182,7 @@ std::tuple<
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
     const TorchTensorView dist_coeffs,
+    DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -192,7 +197,7 @@ std::tuple<
     )(
         num_splats,
         splats_w, splats_s, gaussian_ids,
-        viewmats, intrins, cmt(camera_model), dist_coeffs,
+        viewmats, intrins, cmt(camera_model), dist_coeffs, aabb,
         image_width, image_height,
         tile_offsets, flatten_ids
     );
