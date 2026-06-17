@@ -38,32 +38,6 @@ namespace SlangProjectionUtils {
 inline constexpr uint32_t NUM_WARPS = 10;
 inline constexpr uint32_t NUM_THREADS = NUM_WARPS * WARP_SIZE;
 
-// Test whether the unit ellipse (x^T inv_cov x = 1, centered at origin) overlaps
-// an axis-aligned box [x0,x1]x[y0,y1]. Used to cull (gaussian, sub-tile) pairs.
-static __device__ __forceinline__ bool ellipse_box_overlap_test(
-    float3 inv_cov, float x0, float x1, float y0, float y1
-) {
-    float a = inv_cov.x, b = inv_cov.y, c = inv_cov.z;
-    // parabola vertex on the 4 edges (uses the un-doubled off-diagonal)
-    float wx = -b / c, wy = -b / a;
-    float u0 = fminf(fmaxf(x0 * wx, y0), y1);
-    float u1 = fminf(fmaxf(x1 * wx, y0), y1);
-    float v0 = fminf(fmaxf(y0 * wy, x0), x1);
-    float v1 = fminf(fmaxf(y1 * wy, x0), x1);
-    b *= 2.0f;
-    float mx = fminf(
-        a*x0*x0 + b*x0*u0 + c*u0*u0,
-        a*x1*x1 + b*x1*u1 + c*u1*u1
-    );
-    float my = fminf(
-        a*v0*v0 + b*v0*y0 + c*y0*y0,
-        a*v1*v1 + b*v1*y1 + c*y1*y1
-    );
-    // box contains the ellipse center, or the box boundary meets the ellipse
-    float mc = fmaxf(fmaxf(x0, -x1), fmaxf(y0, -y1));
-    return fminf(mc, fminf(mx, my) - 1.0f) < 0.f;
-}
-
 template<
     typename SplatPrimitive,
 #if IS_EVAL3D

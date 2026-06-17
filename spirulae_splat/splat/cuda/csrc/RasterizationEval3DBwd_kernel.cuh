@@ -70,6 +70,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const float4 *__restrict__ aabb,  // [..., N] projected 2D AABB (xmin,ymin,xmax,ymax)
 #endif
     const uint32_t image_width,
     const uint32_t image_height,
@@ -234,23 +235,78 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         // SPLAT_BATCH_SIZE = min(SPLAT_BATCH_SIZE_CONST, (SPLAT_BATCH_SIZE + WARP_SIZE) & ~(WARP_SIZE-1));
         SPLAT_BATCH_SIZE = min(SPLAT_BATCH_SIZE_CONST, max(SPLAT_BATCH_SIZE, 1u));
     }
-    const uint32_t num_splat_batches =
-        _CEIL_DIV(range_end - range_start, SPLAT_BATCH_SIZE);
+    // ---- microtile survivor compaction ------------------------------------
+    // The block owns one TILE_SIZE_DX x TILE_SIZE_DY sub-tile, but the macro-tile
+    // range it reads is >80% gaussians that never touch this sub-tile. The
+    // diagonal sweep length is fixed by the number of gaussians processed, so
+    // per-thread culling alone gives no speedup (culled lanes just idle while the
+    // warp still iterates). Instead we scan the range back-to-front, compact the
+    // survivors (same ellipse-vs-box test as the forward sub-tile mask) into
+    // shared, and only sweep those. surv[] is kept strictly back-to-front so the
+    // per-pixel undo stays a continuous back-to-front walk across batches.
+    constexpr int SURV_CAP = 8 * (int)WARP_SIZE;
+    __shared__ int32_t surv[SURV_CAP];
+    const float cull_bx0 = (float)(blockIdx.z * TILE_SIZE_DX);
+    const float cull_by0 = (float)(blockIdx.y * TILE_SIZE_DY);
 
-    // if (warp.thread_rank() == 0)
-    //     printf("range_start=%d range_end=%d num_splat_batches=%u\n", range_start, range_end, num_splat_batches);
-    for (uint32_t splat_b = 0; splat_b < num_splat_batches; ++splat_b) {
-        const int32_t splat_batch_end = range_end - 1 - SPLAT_BATCH_SIZE * splat_b;
-        const int32_t splat_batch_size = min(SPLAT_BATCH_SIZE, splat_batch_end + 1 - range_start);
-        const int32_t splat_idx = splat_batch_end - thread_id;
+  for (int32_t scan_end = range_end - 1; scan_end >= range_start; ) {
+
+    // fill surv[] with up to SURV_CAP survivors (back-to-front). The loop bounds
+    // (s, count) are warp-uniform, so __ballot_sync stays convergent.
+    int count = 0;
+    int32_t s = scan_end;
+    while (s >= range_start && count <= SURV_CAP - (int)WARP_SIZE) {
+        int32_t gi = s - (int32_t)thread_id;
+        bool ok = false;
+        if (gi >= range_start) {
+            int32_t sid = flatten_ids[gi];
+        #if IS_EVAL3D
+            // 3dgut keeps the 2D conic in the screen "scale" channel; center is
+            // the AABB center (matches the tile intersector / forward mask).
+            float c_opac = splat_sbuffer.opacities(sid);
+            float3 c_conic = splat_sbuffer.scales(sid);
+            float4 c_bb = aabb[sid];
+            float c_ex = 0.5f * (c_bb.x + c_bb.z);
+            float c_ey = 0.5f * (c_bb.y + c_bb.w);
+        #else
+            float c_opac = splat_sbuffer.opac(sid);
+            float3 c_conic = splat_sbuffer.conic(sid);
+            float2 c_xy = splat_sbuffer.xy(sid);
+            float c_ex = c_xy.x, c_ey = c_xy.y;
+        #endif
+            if (c_opac > ALPHA_THRESHOLD) {
+                float kk = 0.5f / __logf(c_opac / ALPHA_THRESHOLD);
+                float3 inv_cov = { c_conic.x*kk, c_conic.y*kk, c_conic.z*kk };
+                ok = ellipse_box_overlap_test(inv_cov,
+                    cull_bx0 - c_ex, cull_bx0 + TILE_SIZE_DX - c_ex,
+                    cull_by0 - c_ey, cull_by0 + TILE_SIZE_DY - c_ey);
+            }
+        }
+        uint32_t bal = __ballot_sync(~0u, ok);
+        int pos = count + __popc(bal & (((uint32_t)1 << thread_id) - 1));
+        if (ok) surv[pos] = gi;
+        count += __popc(bal);
+        s -= (int32_t)WARP_SIZE;
+    }
+    scan_end = s;  // next segment resumes here
+    __syncwarp();
+
+    // sweep the compacted survivors in batches of SPLAT_BATCH_SIZE
+    const int num_seg_batches = (count + (int)SPLAT_BATCH_SIZE - 1) / (int)SPLAT_BATCH_SIZE;
+    for (int splat_b = 0; splat_b < num_seg_batches; ++splat_b) {
+        const int batch_base = splat_b * (int)SPLAT_BATCH_SIZE;
+        const int splat_batch_size = min((int)SPLAT_BATCH_SIZE, count - batch_base);
+        const int surv_pos = batch_base + (int)thread_id;
+        const bool active = (surv_pos < count);
+        // thread 0 owns the back-most survivor of the batch (surv is back-to-front)
+        const int32_t splat_idx = active ? surv[surv_pos] : (range_start - 1);
 
         // load splats
         typename SplatPrimitive::FragmentBwd splat;
         uint32_t splat_wid, splat_sid;
-        if (splat_idx >= range_start) {
+        if (active) {
             splat_sid = flatten_ids[splat_idx]; // flatten index in [I * N] or [nnz]
             splat_wid = gaussian_ids ? gaussian_ids[splat_sid] : splat_sid % N;
-            // printf("%p w=%u s=%u\n", gaussian_ids, splat_wid, splat_sid);
             splat.load(splat_wbuffer, splat_sbuffer, splat_wid, splat_sid);
         }
 
@@ -258,18 +314,14 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         typename SplatPrimitive::FragmentBwd v_splat = SplatPrimitive::FragmentBwd::zero(splat);
         float accum_weight = 0.0f;
 
-        // thread 0 takes last splat, 1 takes second last, etc.
-        // at t=0, thread 0 (splat -1) undo pixel 0
-        // at t=1, thread 0 (splat -1) undo pixel 1, thread 1 (splat -2) undo pixel 0
-        // ......
-
-        // process gaussians in the current batch for this pixel
-        // 0 index is the furthest back gaussian in the batch
+        // at t=0, thread 0 (back-most survivor) undoes pixel 0; at t=1 it undoes
+        // pixel 1 while thread 1 undoes pixel 0; etc. -> each pixel sees survivors
+        // strictly back-to-front, continuous across batches and segments.
         for (int t = 0; t < splat_batch_size + BLOCK_SIZE - 1; ++t,
                 (SPLAT_BATCH_SIZE_CONST <= WARP_SIZE ? __syncwarp() : __syncthreads())
         ) {
             int pix_id = t - thread_id;
-            if (pix_id < 0 || pix_id >= BLOCK_SIZE || splat_idx < range_start)
+            if (pix_id < 0 || pix_id >= BLOCK_SIZE || !active)
                 continue;
         #if IS_EVAL3D
             float4 ray_d_pix_bin_final = shared_ray_d_pix_bin_final[pix_id];
@@ -399,15 +451,18 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
         }
 
-        // accumulate gradient
-        if (splat_idx >= range_start) {
+        // accumulate gradient (only survivors reach here)
+        if (active) {
             v_splat.atomicStore(v_splat_wbuffer, v_splat_sbuffer, splat_wid, splat_sid);
             if constexpr (output_accum_weight) {
                 // atomicAddFVec(o_accum_weight + splat_wid, accum_weight);
                 atomicMax(o_accum_weight + splat_wid, accum_weight);
             }
         }
-    }
+    }  // for splat_b (within segment)
+
+    __syncwarp();  // done reading surv[] before the next segment overwrites it
+  }  // segment loop
 #if IS_EVAL3D
     if (output_viewmat_grad) {
         // accumulate to viewmat gradient
@@ -490,6 +545,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     const float *__restrict__ viewmats, // [B, C, 4, 4]
     const float4 *__restrict__ intrins,  // [B, C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const float4 *__restrict__ aabb,  // [..., N] projected 2D AABB (xmin,ymin,xmax,ymax)
 #endif
     const uint32_t image_width,
     const uint32_t image_height,
@@ -544,7 +600,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
         I, N, n_isects,
         gaussian_ids, splat_wbuffer, splat_sbuffer,
     #if IS_EVAL3D
-        viewmats, intrins, dist_coeffs_buffer,
+        viewmats, intrins, dist_coeffs_buffer, aabb,
     #endif
         image_width, image_height, tile_width, tile_height,
         tile_offsets, flatten_ids,

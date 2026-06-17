@@ -155,6 +155,7 @@ static void _engine_raster_proj_backward(
             _dv_tv(engine().camera.intrins),
             engine().camera.model_str,
             _dt2d_tv(engine().camera.dist_coeffs),
+            engine().fwd.aabb,
             (uint32_t)engine().camera.width,
             (uint32_t)engine().camera.height,
             engine().fwd.tile_offsets,
