@@ -362,6 +362,67 @@ static void write_ply(const Mesh& mesh, const std::string& path) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Global orientation: make the winding consistent across the whole (closed,
+// manifold => orientable) surface. Flood-fill orientation across edge
+// adjacency so neighbours traverse their shared edge in opposite directions,
+// then flip each connected component as a whole if the consistent orientation
+// disagrees with the per-triangle outward guess from emission (majority vote),
+// so normals end up pointing outward.
+// ---------------------------------------------------------------------------
+static void orient_mesh(Mesh& mesh) {
+    const int nf = (int)mesh.F.size();
+    if (nf == 0) return;
+    auto& F = mesh.F;
+    const int64_t P = (int64_t)mesh.V.size();
+    auto ekey = [P](int a, int b) -> int64_t {
+        int64_t lo = a<b?a:b, hi = a<b?b:a; return lo*P + hi;
+    };
+
+    // undirected edge -> the (<=2) triangles on it
+    std::unordered_map<int64_t, std::array<int,2>> etri;
+    etri.reserve((size_t)nf * 3);
+    for (int t = 0; t < nf; ++t) {
+        const auto& f = F[t];
+        for (int k = 0; k < 3; ++k) {
+            auto& slot = etri.emplace(ekey(f[k], f[(k+1)%3]),
+                                      std::array<int,2>{-1,-1}).first->second;
+            if (slot[0] < 0) slot[0] = t; else if (slot[1] < 0) slot[1] = t;
+        }
+    }
+
+    // Flood-fill consistent winding. Neighbours are looked up by undirected
+    // edge each step (not a precomputed per-corner index) so they stay valid
+    // even after a triangle's winding is flipped.
+    std::vector<char> vis(nf, 0), flipped(nf, 0);
+    std::vector<int> stack, comp;
+    for (int seed = 0; seed < nf; ++seed) {
+        if (vis[seed]) continue;
+        vis[seed] = 1; stack.clear(); comp.clear();
+        stack.push_back(seed); comp.push_back(seed);
+        while (!stack.empty()) {
+            int t = stack.back(); stack.pop_back();
+            const auto& f = F[t];
+            for (int k = 0; k < 3; ++k) {
+                int a = f[k], b = f[(k+1)%3];
+                auto it = etri.find(ekey(a, b));
+                int nb = (it->second[0] == t) ? it->second[1] : it->second[0];
+                if (nb < 0 || vis[nb]) continue;
+                auto& g = F[nb];
+                bool same = false;  // neighbour traverses (a->b) the same way?
+                for (int m = 0; m < 3; ++m)
+                    if (g[m] == a && g[(m+1)%3] == b) { same = true; break; }
+                if (same) { std::swap(g[1], g[2]); flipped[nb] = 1; }
+                vis[nb] = 1; stack.push_back(nb); comp.push_back(nb);
+            }
+        }
+        // align the component's global sign with the emission (outward) guess
+        long fl = 0; for (int t : comp) fl += flipped[t];
+        if (fl * 2 > (long)comp.size())
+            for (int t : comp) std::swap(F[t][1], F[t][2]);
+    }
+}
+
 } // namespace
 
 bool generate_mesh(
@@ -441,12 +502,31 @@ bool generate_mesh(
     if (cfg.verbose) printf("[meshing] bisection (%.2fs)\n", secs_since(t4));
 
     // ---- 6. emit triangles ----
+    // Delaunay tets have no consistent signed-volume orientation, so the MT
+    // table's winding alone is not globally coherent. Orient every triangle by
+    // the field instead: its normal must point toward the EMPTY side (occ<iso),
+    // i.e. away from the occupied tet corners. This yields a consistently
+    // outward-facing, watertight mesh (good for backface culling / normals).
     auto t5 = Clock::now();
     for (int t = 0; t < M; ++t) {
         const int* c = cv + 4 * t;
         int code = (occ[c[0]] < iso ? 1 : 0) | (occ[c[1]] < iso ? 2 : 0) |
                    (occ[c[2]] < iso ? 4 : 0) | (occ[c[3]] < iso ? 8 : 0);
         const MTCase& mc = kMT[code];
+        if (mc.ntri == 0) continue;
+
+        // outward direction = (centroid of empty corners) - (centroid of solid)
+        float cin[3] = {0,0,0}, cout[3] = {0,0,0};
+        int nin = 0, nout = 0;
+        for (int k = 0; k < 4; ++k) {
+            const float* pc = &pts[3 * c[k]];
+            if (occ[c[k]] < iso) { cout[0]+=pc[0]; cout[1]+=pc[1]; cout[2]+=pc[2]; ++nout; }
+            else                 { cin[0]+=pc[0];  cin[1]+=pc[1];  cin[2]+=pc[2];  ++nin; }
+        }
+        float dout[3];
+        for (int a = 0; a < 3; ++a)
+            dout[a] = (nout ? cout[a]/nout : 0.f) - (nin ? cin[a]/nin : 0.f);
+
         for (int ti = 0; ti < mc.ntri; ++ti) {
             int vid[3];
             bool ok = true;
@@ -456,7 +536,19 @@ bool generate_mesh(
                 if (it == edge_id.end()) { ok = false; break; }
                 vid[k] = it->second;
             }
-            if (ok) mesh.F.push_back({vid[0], vid[1], vid[2]});
+            if (!ok) continue;
+            // flip winding if the triangle normal faces the solid side
+            const auto& P0 = mesh.V[vid[0]];
+            const auto& P1 = mesh.V[vid[1]];
+            const auto& P2 = mesh.V[vid[2]];
+            float e1[3] = {P1[0]-P0[0], P1[1]-P0[1], P1[2]-P0[2]};
+            float e2[3] = {P2[0]-P0[0], P2[1]-P0[1], P2[2]-P0[2]};
+            float nx = e1[1]*e2[2] - e1[2]*e2[1];
+            float ny = e1[2]*e2[0] - e1[0]*e2[2];
+            float nz = e1[0]*e2[1] - e1[1]*e2[0];
+            if (nx*dout[0] + ny*dout[1] + nz*dout[2] < 0.0f)
+                std::swap(vid[1], vid[2]);
+            mesh.F.push_back({vid[0], vid[1], vid[2]});
         }
     }
     if (cfg.verbose)
@@ -466,6 +558,11 @@ bool generate_mesh(
     auto t6 = Clock::now();
     merge_vertices(mesh, cfg.merge_factor, cfg.verbose, cfg.num_threads);
     if (cfg.verbose) printf("[meshing] merge (%.2fs)\n", secs_since(t6));
+
+    // ---- 7b. globally consistent, outward-facing winding ----
+    auto t7 = Clock::now();
+    orient_mesh(mesh);
+    if (cfg.verbose) printf("[meshing] orient (%.2fs)\n", secs_since(t7));
 
     // ---- 8. write ----
     write_ply(mesh, output_path);
