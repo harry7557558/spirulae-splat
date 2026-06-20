@@ -104,11 +104,11 @@ def main():
     ap.add_argument("--no-data", action="store_true",
                     help="ignore the dataset; use the static density occupancy field")
     ap.add_argument("--output", type=Path, default=None, help="output PLY path")
-    ap.add_argument("--iso", type=float, default=0.5)
+    ap.add_argument("--iso", type=float, default=0.3)
     ap.add_argument("--merge-factor", type=float, default=1.0,
                     help="local short-edge merge threshold multiplier (0 disables)")
-    ap.add_argument("--bisection-iters", type=int, default=20)
-    ap.add_argument("--max-cameras", type=int, default=64)
+    ap.add_argument("--bisection-iters", type=int, default=6)
+    ap.add_argument("--max-cameras", type=int, default=4)
     ap.add_argument("--max-grid-res", type=int, default=512)
     ap.add_argument("--grid-cell-factor", type=float, default=2.0)
     ap.add_argument("--num-threads", type=int, default=0)

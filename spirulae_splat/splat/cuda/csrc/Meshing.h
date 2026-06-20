@@ -29,7 +29,7 @@ namespace meshing {
 struct MeshingConfig {
     float iso = 0.5f;            // isosurface level on occupancy in [0,1]
     float merge_factor = 1.0f;   // local merge threshold multiplier; <=0 disables
-    int   bisection_iters = 20;  // bisection steps per cut edge
+    int   bisection_iters = 6;  // bisection steps per cut edge (2^-12 of edge length)
     int   max_cameras = 64;      // cap on cameras used (evenly subsampled)
     int   max_grid_res = 512;    // per-axis cap on the acceleration grid
     float grid_cell_factor = 2.0f; // cell size = factor * mean Gaussian radius
