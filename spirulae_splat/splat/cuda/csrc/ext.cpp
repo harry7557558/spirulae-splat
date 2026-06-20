@@ -28,6 +28,7 @@
 #include <torch/extension.h>
 
 #include "Delaunay3D.h"
+#include "Meshing.h"
 #include <cstring>
 
 // at::Tensor convenience wrappers — delegate to TorchTensorView-based functions
@@ -75,7 +76,67 @@ static std::vector<at::Tensor> delaunay3d_tensor(
     return {cells, adj};
 }
 
+// Meshing.h -- surface mesh extraction from a trained 3DGS model.
+// Splat params are CPU float32 tensors in standard inria-PLY convention
+// (raw quats, log scales, logit opacities). camera_positions may be empty
+// (no dataset -> static density occupancy). Writes a binary PLY.
+static bool generate_mesh_tensor(
+    at::Tensor means, at::Tensor quats, at::Tensor scales, at::Tensor opacities,
+    at::Tensor camera_positions,
+    const std::string& output_path,
+    double iso, double merge_factor, int64_t bisection_iters,
+    int64_t max_cameras, int64_t max_grid_res, double grid_cell_factor,
+    int64_t num_threads, bool verbose
+) {
+    auto f32 = [](at::Tensor t) { return t.to(at::kFloat).contiguous().cpu(); };
+    at::Tensor m = f32(means), q = f32(quats), s = f32(scales), o = f32(opacities);
+    int N = (int)m.size(0);
+    TORCH_CHECK(m.dim() == 2 && m.size(1) == 3, "means must be (N,3)");
+    TORCH_CHECK(q.size(0) == N && q.size(1) == 4, "quats must be (N,4)");
+    TORCH_CHECK(s.size(0) == N && s.size(1) == 3, "scales must be (N,3)");
+    TORCH_CHECK(o.numel() == N, "opacities must be (N,)");
+
+    int C = 0;
+    const float* cam_ptr = nullptr;
+    at::Tensor cam;
+    if (camera_positions.numel() > 0) {
+        cam = f32(camera_positions);
+        TORCH_CHECK(cam.dim() == 2 && cam.size(1) == 3, "camera_positions must be (C,3)");
+        C = (int)cam.size(0);
+        cam_ptr = cam.data_ptr<float>();
+    }
+
+    meshing::MeshingConfig cfg;
+    cfg.iso = (float)iso;
+    cfg.merge_factor = (float)merge_factor;
+    cfg.bisection_iters = (int)bisection_iters;
+    cfg.max_cameras = (int)max_cameras;
+    cfg.max_grid_res = (int)max_grid_res;
+    cfg.grid_cell_factor = (float)grid_cell_factor;
+    cfg.num_threads = (int)num_threads;
+    cfg.verbose = verbose;
+
+    return meshing::generate_mesh(
+        m.data_ptr<float>(), q.data_ptr<float>(), s.data_ptr<float>(), o.data_ptr<float>(),
+        N, cam_ptr, C, cfg, output_path);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+
+    // Meshing.h
+    m.def("generate_mesh", &generate_mesh_tensor,
+          "Extract a surface mesh from a trained 3DGS model and save to PLY",
+          pybind11::arg("means"), pybind11::arg("quats"),
+          pybind11::arg("scales"), pybind11::arg("opacities"),
+          pybind11::arg("camera_positions"), pybind11::arg("output_path"),
+          pybind11::arg("iso") = 0.5,
+          pybind11::arg("merge_factor") = 1.0,
+          pybind11::arg("bisection_iters") = 20,
+          pybind11::arg("max_cameras") = 64,
+          pybind11::arg("max_grid_res") = 512,
+          pybind11::arg("grid_cell_factor") = 2.0,
+          pybind11::arg("num_threads") = 0,
+          pybind11::arg("verbose") = true);
 
     // Delaunay3D.h
     m.def("delaunay3d", &delaunay3d_tensor,
