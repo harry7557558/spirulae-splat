@@ -27,6 +27,9 @@
 #define TORCH_INDUCTOR_CPP_WRAPPER
 #include <torch/extension.h>
 
+#include "Delaunay3D.h"
+#include <cstring>
+
 // at::Tensor convenience wrappers — delegate to TorchTensorView-based functions
 // needed by Primitive*.cuh code inside #ifndef NO_TORCH blocks
 static inline TorchTensorView _to_tv(const at::Tensor& t) {
@@ -47,7 +50,37 @@ inline at::Tensor zeros_like_tensor(const at::Tensor& x) {
     return y;
 }
 
+// Delaunay3D.h — self-contained multithreaded 3D Delaunay (CPU).
+// points: (N,3) tensor (any float/double dtype, moved to CPU double internally).
+// Returns {cell_vertices (M,4) int32, cell_adjacents (M,4) int32 (-1 on hull)}.
+static std::vector<at::Tensor> delaunay3d_tensor(
+    at::Tensor points, int64_t num_threads
+) {
+    TORCH_CHECK(points.dim() == 2 && points.size(1) == 3,
+                "delaunay3d: points must have shape (N,3)");
+    at::Tensor pts = points.to(at::kDouble).contiguous().cpu();
+    int n = (int)pts.size(0);
+    auto res = delaunay3d::compute_delaunay_3d(
+        pts.data_ptr<double>(), n, (int)num_threads, /*adjacency=*/true
+    );
+    auto opts = at::TensorOptions().dtype(at::kInt);
+    at::Tensor cells = at::empty({(int64_t)res.nb_cells, 4}, opts);
+    at::Tensor adj   = at::empty({(int64_t)res.nb_cells, 4}, opts);
+    if(res.nb_cells > 0) {
+        std::memcpy(cells.data_ptr<int>(), res.cell_vertices.data(),
+                    sizeof(int) * res.cell_vertices.size());
+        std::memcpy(adj.data_ptr<int>(), res.cell_adjacents.data(),
+                    sizeof(int) * res.cell_adjacents.size());
+    }
+    return {cells, adj};
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+
+    // Delaunay3D.h
+    m.def("delaunay3d", &delaunay3d_tensor,
+          "3D Delaunay triangulation (CPU, multithreaded)",
+          pybind11::arg("points"), pybind11::arg("num_threads") = 0);
 
     // IntersectTile.cuh
     m.def("intersect_tile", &do_intersect_tile_generic);
