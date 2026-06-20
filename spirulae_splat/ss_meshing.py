@@ -107,8 +107,8 @@ def main():
     ap.add_argument("--iso", type=float, default=0.3)
     ap.add_argument("--merge-factor", type=float, default=1.0,
                     help="local short-edge merge threshold multiplier (0 disables)")
-    ap.add_argument("--bisection-iters", type=int, default=6)
-    ap.add_argument("--max-cameras", type=int, default=4)
+    ap.add_argument("--bisection-iters", type=int, default=3)
+    ap.add_argument("--max-cameras", type=int, default=8)
     ap.add_argument("--max-grid-res", type=int, default=512)
     ap.add_argument("--grid-cell-factor", type=float, default=2.0)
     ap.add_argument("--num-threads", type=int, default=0)

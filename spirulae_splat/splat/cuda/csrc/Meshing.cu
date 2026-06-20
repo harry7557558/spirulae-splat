@@ -85,6 +85,78 @@ __device__ __forceinline__ float atomicMaxF(float* addr, float val) {
 }
 
 // ---------------------------------------------------------------------------
+// Host: pick k representative cameras out of C.
+//
+// For small k, uniform-interval (file-order) sampling clusters poorly and is
+// order-dependent. Instead run k-means (farthest-point seeding + Lloyd) on the
+// camera centers and return the MEDOID of each cluster -- the real camera
+// nearest the centroid. Medoids (not centroids) matter: averaging cameras that
+// surround an object lands near the object center, a useless ray origin.
+// Returns the selected positions interleaved (xyz), up to k of them.
+// ---------------------------------------------------------------------------
+static std::vector<float> select_cameras_kmeans(
+    const float* cam, int C, int k, int iters = 25
+) {
+    auto d2 = [&](int a, const float* c) {
+        float dx = cam[3*a]-c[0], dy = cam[3*a+1]-c[1], dz = cam[3*a+2]-c[2];
+        return dx*dx + dy*dy + dz*dz;
+    };
+    std::vector<float> cen(3 * k);
+    // farthest-point (k-center greedy) seeding -- deterministic, good spread
+    std::vector<float> mind(C, 1e30f);
+    int pick = 0;
+    for (int j = 0; j < k; ++j) {
+        cen[3*j] = cam[3*pick]; cen[3*j+1] = cam[3*pick+1]; cen[3*j+2] = cam[3*pick+2];
+        float best = -1.0f; int bi = 0;
+        for (int c = 0; c < C; ++c) {
+            float dd = d2(c, &cen[3*j]);
+            if (dd < mind[c]) mind[c] = dd;
+            if (mind[c] > best) { best = mind[c]; bi = c; }
+        }
+        pick = bi;
+    }
+    // Lloyd iterations
+    std::vector<int> assign(C, 0);
+    for (int it = 0; it < iters; ++it) {
+        bool changed = false;
+        for (int c = 0; c < C; ++c) {
+            int best = 0; float bd = 1e30f;
+            for (int j = 0; j < k; ++j) {
+                float dd = d2(c, &cen[3*j]);
+                if (dd < bd) { bd = dd; best = j; }
+            }
+            if (assign[c] != best) { assign[c] = best; changed = true; }
+        }
+        std::vector<double> sum(3 * k, 0.0);
+        std::vector<int> cnt(k, 0);
+        for (int c = 0; c < C; ++c) {
+            int j = assign[c];
+            sum[3*j] += cam[3*c]; sum[3*j+1] += cam[3*c+1]; sum[3*j+2] += cam[3*c+2];
+            ++cnt[j];
+        }
+        for (int j = 0; j < k; ++j)
+            if (cnt[j] > 0)
+                for (int a = 0; a < 3; ++a) cen[3*j+a] = (float)(sum[3*j+a] / cnt[j]);
+        if (!changed) break;
+    }
+    // medoid per non-empty cluster
+    std::vector<int> medoid(k, -1);
+    std::vector<float> mbest(k, 1e30f);
+    for (int c = 0; c < C; ++c) {
+        int j = assign[c];
+        float dd = d2(c, &cen[3*j]);
+        if (dd < mbest[j]) { mbest[j] = dd; medoid[j] = c; }
+    }
+    std::vector<float> out;
+    for (int j = 0; j < k; ++j)
+        if (medoid[j] >= 0) {
+            int c = medoid[j];
+            out.push_back(cam[3*c]); out.push_back(cam[3*c+1]); out.push_back(cam[3*c+2]);
+        }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Device-side view of the whole scene (Gaussians + LBVH + cameras). POD.
 // ---------------------------------------------------------------------------
 struct GpuScene {
@@ -283,7 +355,7 @@ __global__ void activate_kernel(
 __global__ void pointcloud_kernel(
     int num_kept, const int* __restrict__ kept,
     const float3* mean, const float3* ax0, const float3* ax1, const float3* ax2,
-    const float3* invs2, const float* k2, double* out
+    const float3* invs2, const float* k2, float* out
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= num_kept) return;
@@ -297,9 +369,9 @@ __global__ void pointcloud_kernel(
     float3 pts[7] = { m, m+o0, m-o0, m+o1, m-o1, m+o2, m-o2 };
     long base = (long)i * 21;
     for (int j = 0; j < 7; ++j) {
-        out[base + 3*j + 0] = (double)pts[j].x;
-        out[base + 3*j + 1] = (double)pts[j].y;
-        out[base + 3*j + 2] = (double)pts[j].z;
+        out[base + 3*j + 0] = pts[j].x;
+        out[base + 3*j + 1] = pts[j].y;
+        out[base + 3*j + 2] = pts[j].z;
     }
 }
 
@@ -418,33 +490,41 @@ __global__ void bvh_aabb_kernel(
 // Kernels: occupancy / bisection
 // ---------------------------------------------------------------------------
 __global__ void occ_kernel(
-    GpuScene s, const double* __restrict__ pts, int n, float* occ, int dynamic
+    GpuScene s, const float* __restrict__ pts, int n, float* occ, int dynamic
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
-    float3 p = make_float3((float)pts[3*i], (float)pts[3*i+1], (float)pts[3*i+2]);
+    float3 p = make_float3(pts[3*i], pts[3*i+1], pts[3*i+2]);
     occ[i] = occ_eval(s, p, dynamic != 0);
 }
 
 __global__ void bisect_kernel(
-    GpuScene s, const double* __restrict__ cloud,
+    GpuScene s, const float* __restrict__ cloud,
     const int* __restrict__ ea, const int* __restrict__ eb,
     const float* __restrict__ oa, const float* __restrict__ ob,
-    int n, int iters, int dynamic, double* out
+    int n, int iters, int dynamic, float* out
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     int a = ea[i], b = eb[i];
-    float3 pa = make_float3((float)cloud[3*a], (float)cloud[3*a+1], (float)cloud[3*a+2]);
-    float3 pb = make_float3((float)cloud[3*b], (float)cloud[3*b+1], (float)cloud[3*b+2]);
-    bool a_in = oa[i] >= s.iso;
+    float3 pa = make_float3(cloud[3*a], cloud[3*a+1], cloud[3*a+2]);
+    float3 pb = make_float3(cloud[3*b], cloud[3*b+1], cloud[3*b+2]);
+    // bisection narrows the bracket [pa,pb] straddling iso; we also carry the
+    // occupancy at each end so the final step is a linear interpolation rather
+    // than a midpoint -- much more accurate for the same iteration count.
+    float occa = oa[i], occb = ob[i];
+    bool a_in = occa >= s.iso;
     for (int it = 0; it < iters; ++it) {
         float3 mid = (pa + pb) * 0.5f;
         float om = occ_eval(s, mid, dynamic != 0);
-        if ((om >= s.iso) == a_in) pa = mid; else pb = mid;
+        if ((om >= s.iso) == a_in) { pa = mid; occa = om; }
+        else                       { pb = mid; occb = om; }
     }
-    float3 mid = (pa + pb) * 0.5f;
-    out[3*i+0] = (double)mid.x; out[3*i+1] = (double)mid.y; out[3*i+2] = (double)mid.z;
+    float denom = occb - occa;
+    float t = (fabsf(denom) > 1e-12f) ? (s.iso - occa) / denom : 0.5f;
+    t = fminf(fmaxf(t, 0.0f), 1.0f);
+    float3 cross = pa + (pb - pa) * t;
+    out[3*i+0] = cross.x; out[3*i+1] = cross.y; out[3*i+2] = cross.z;
 }
 
 // ---------------------------------------------------------------------------
@@ -619,41 +699,42 @@ OccupancyEvaluator::OccupancyEvaluator(
     }
     cudaFree(d_morton); cudaFree(d_iota);
 
-    // ---- cameras (subsample to max_cameras) ----
+    // ---- cameras: keep all, else select max_cameras representatives ----
     if (cam_pos != nullptr && num_cameras > 0) {
-        int stride = std::max(1, (num_cameras + cfg.max_cameras - 1) / cfg.max_cameras);
         std::vector<float> cams;
-        for (int c = 0; c < num_cameras; c += stride) {
-            cams.push_back(cam_pos[3*c]); cams.push_back(cam_pos[3*c+1]); cams.push_back(cam_pos[3*c+2]);
+        if (num_cameras <= cfg.max_cameras) {
+            cams.assign(cam_pos, cam_pos + 3 * num_cameras);
+        } else {
+            cams = select_cameras_kmeans(cam_pos, num_cameras, cfg.max_cameras);
         }
         impl_->num_cameras = (int)(cams.size()/3);
         impl_->campos = dmalloc<float3>(impl_->num_cameras);
         cudaMemcpy(impl_->campos, cams.data(), sizeof(float)*cams.size(), cudaMemcpyHostToDevice);
         if (cfg.verbose)
-            printf("[meshing] using %d/%d cameras (dataset occupancy)\n",
+            printf("[meshing] using %d/%d cameras (k-means medoids, dataset occupancy)\n",
                    impl_->num_cameras, num_cameras);
     }
 }
 
 OccupancyEvaluator::~OccupancyEvaluator() { delete impl_; }
 
-void OccupancyEvaluator::generate_point_cloud(std::vector<double>& xyz_out) {
+void OccupancyEvaluator::generate_point_cloud(std::vector<float>& xyz_out) {
     long n = (long)impl_->num_kept * 7;
     xyz_out.resize((size_t)n * 3);
-    double* d_out = dmalloc<double>((size_t)n * 3);
+    float* d_out = dmalloc<float>((size_t)n * 3);
     pointcloud_kernel<<<_LAUNCH_ARGS_1D(impl_->num_kept, 256)>>>(
         impl_->num_kept, impl_->kept,
         impl_->mean, impl_->ax0, impl_->ax1, impl_->ax2, impl_->invs2, impl_->k2, d_out);
     CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-    cudaMemcpy(xyz_out.data(), d_out, sizeof(double)*n*3, cudaMemcpyDeviceToHost);
+    cudaMemcpy(xyz_out.data(), d_out, sizeof(float)*n*3, cudaMemcpyDeviceToHost);
     cudaFree(d_out);
 }
 
-void OccupancyEvaluator::evaluate(const double* xyz, int n, float* occ_out) {
+void OccupancyEvaluator::evaluate(const float* xyz, int n, float* occ_out) {
     if (n <= 0) return;
-    double* d_xyz = dmalloc<double>((size_t)n*3);
-    float*  d_occ = dmalloc<float>(n);
-    cudaMemcpy(d_xyz, xyz, sizeof(double)*n*3, cudaMemcpyHostToDevice);
+    float* d_xyz = dmalloc<float>((size_t)n*3);
+    float* d_occ = dmalloc<float>(n);
+    cudaMemcpy(d_xyz, xyz, sizeof(float)*n*3, cudaMemcpyHostToDevice);
     GpuScene s = impl_->make_scene();
     int dynamic = impl_->num_cameras > 0 ? 1 : 0;
     occ_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_xyz, n, d_occ, dynamic);
@@ -663,18 +744,18 @@ void OccupancyEvaluator::evaluate(const double* xyz, int n, float* occ_out) {
 }
 
 void OccupancyEvaluator::bisect_edges(
-    const double* cloud_xyz,
+    const float* cloud_xyz,
     const int32_t* edge_a, const int32_t* edge_b,
     const float* occ_a, const float* occ_b,
-    int n_edges, double* xyz_out
+    int n_edges, float* xyz_out
 ) {
     if (n_edges <= 0) return;
     long ncloud = (long)num_points_;
-    double* d_cloud = dmalloc<double>((size_t)ncloud*3);
-    cudaMemcpy(d_cloud, cloud_xyz, sizeof(double)*ncloud*3, cudaMemcpyHostToDevice);
+    float* d_cloud = dmalloc<float>((size_t)ncloud*3);
+    cudaMemcpy(d_cloud, cloud_xyz, sizeof(float)*ncloud*3, cudaMemcpyHostToDevice);
     int* d_ea = dmalloc<int>(n_edges); int* d_eb = dmalloc<int>(n_edges);
     float* d_oa = dmalloc<float>(n_edges); float* d_ob = dmalloc<float>(n_edges);
-    double* d_out = dmalloc<double>((size_t)n_edges*3);
+    float* d_out = dmalloc<float>((size_t)n_edges*3);
     cudaMemcpy(d_ea, edge_a, sizeof(int)*n_edges, cudaMemcpyHostToDevice);
     cudaMemcpy(d_eb, edge_b, sizeof(int)*n_edges, cudaMemcpyHostToDevice);
     cudaMemcpy(d_oa, occ_a, sizeof(float)*n_edges, cudaMemcpyHostToDevice);
@@ -684,7 +765,7 @@ void OccupancyEvaluator::bisect_edges(
     bisect_kernel<<<_LAUNCH_ARGS_1D(n_edges, 128)>>>(
         s, d_cloud, d_ea, d_eb, d_oa, d_ob, n_edges, impl_->cfg.bisection_iters, dynamic, d_out);
     CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-    cudaMemcpy(xyz_out, d_out, sizeof(double)*n_edges*3, cudaMemcpyDeviceToHost);
+    cudaMemcpy(xyz_out, d_out, sizeof(float)*n_edges*3, cudaMemcpyDeviceToHost);
     cudaFree(d_cloud); cudaFree(d_ea); cudaFree(d_eb);
     cudaFree(d_oa); cudaFree(d_ob); cudaFree(d_out);
 }

@@ -29,7 +29,8 @@ namespace meshing {
 struct MeshingConfig {
     float iso = 0.5f;            // isosurface level on occupancy in [0,1]
     float merge_factor = 1.0f;   // local merge threshold multiplier; <=0 disables
-    int   bisection_iters = 6;  // bisection steps per cut edge (2^-12 of edge length)
+    int   bisection_iters = 3;  // bisection steps per cut edge; a linear
+                                // interpolation finishes the crossing estimate
     int   max_cameras = 64;      // cap on cameras used (evenly subsampled)
     int   max_grid_res = 512;    // per-axis cap on the acceleration grid
     float grid_cell_factor = 2.0f; // cell size = factor * mean Gaussian radius
@@ -37,9 +38,9 @@ struct MeshingConfig {
     bool  verbose = true;
 };
 
-// Owns the device-side Gaussian buffers and a uniform spatial grid built over
-// their support, plus the (optional) camera positions. Constructed once from
-// host-side raw activated/un-activated splat parameters, then reused.
+// Owns the device-side Gaussian buffers and an LBVH built over their support,
+// plus the (optional) camera positions. Constructed once from host-side raw
+// activated/un-activated splat parameters, then reused.
 //
 // All inputs are host pointers; the constructor uploads + activates internally.
 //   means      : [N*3]  (x,y,z)
@@ -59,22 +60,24 @@ public:
     OccupancyEvaluator(const OccupancyEvaluator&) = delete;
     OccupancyEvaluator& operator=(const OccupancyEvaluator&) = delete;
 
-    // Generate the 7-points-per-kept-Gaussian point cloud. Returns interleaved
-    // (x,y,z) doubles, ready for Delaunay3D. Size = 3 * num_points().
-    void generate_point_cloud(std::vector<double>& xyz_out);
+    // Generate the 7-points-per-kept-Gaussian point cloud, interleaved (x,y,z).
+    // Size = 3 * num_points(). float here; the caller widens to double only at
+    // the Delaunay boundary (the one place that needs the extra precision).
+    void generate_point_cloud(std::vector<float>& xyz_out);
 
-    // Evaluate the occupancy field at host points [n*3] doubles -> occ[n].
-    void evaluate(const double* xyz, int n, float* occ_out);
+    // Evaluate the occupancy field at host points [n*3] floats -> occ[n].
+    void evaluate(const float* xyz, int n, float* occ_out);
 
     // For each cut edge (a,b) with endpoint occupancies (occ_a,occ_b) straddling
-    // iso, bisection-search the crossing point. Endpoints are point-cloud
-    // indices into the cloud used to build this evaluator's point set.
-    // Writes crossing positions to xyz_out [n_edges*3] doubles.
+    // iso, bisection-search the crossing point (finished with a linear
+    // interpolation). Endpoints are point-cloud indices into the cloud used to
+    // build this evaluator's point set. Writes crossing positions to xyz_out
+    // [n_edges*3] floats.
     void bisect_edges(
-        const double* cloud_xyz,         // [num_points*3], the MT point cloud
+        const float* cloud_xyz,          // [num_points*3], the MT point cloud
         const int32_t* edge_a, const int32_t* edge_b,
         const float* occ_a, const float* occ_b,
-        int n_edges, double* xyz_out);
+        int n_edges, float* xyz_out);
 
     int num_points() const { return num_points_; }
     int num_kept()   const { return num_kept_; }

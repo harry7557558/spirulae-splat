@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 #include <array>
 #include <unordered_map>
@@ -23,6 +24,10 @@
 #include <fstream>
 #include <chrono>
 #include <stdexcept>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace meshing {
 
@@ -73,125 +78,257 @@ static inline int64_t edge_key(int a, int b, int64_t P) {
 // manifold stays manifold.
 // ---------------------------------------------------------------------------
 struct Mesh {
-    std::vector<std::array<double,3>> V;
+    std::vector<std::array<float,3>> V;
     std::vector<std::array<int,3>> F;
 };
 
-static void merge_vertices(Mesh& mesh, float merge_factor, bool verbose) {
+// Lock-free atomic min on a 64-bit slot (CAS loop).
+static inline void atomic_min_u64(uint64_t* p, uint64_t val) {
+    uint64_t old = *p;
+    while (val < old) {
+        uint64_t prev = __sync_val_compare_and_swap(p, old, val);
+        if (prev == old) break;
+        old = prev;
+    }
+}
+// Order-preserving bit key for a non-negative float (priority by edge length).
+static inline uint32_t float_key(float f) {
+    uint32_t u; std::memcpy(&u, &f, 4); return u;
+}
+
+// Parallel manifold-preserving short-edge merge.
+//
+// Collapses mesh edges shorter than a local threshold (merge_factor times the
+// average incident edge length at the shorter end), only when the edge-collapse
+// link condition holds (so anything locally manifold stays manifold).
+//
+// Parallelism is round-based: each round selects a set of collapsible edges
+// whose closed 1-rings are pairwise disjoint, then collapses them concurrently.
+// Independence is decided by a "claim" pass -- every candidate writes a
+// (length, id) priority into the claim slot of each vertex in its closed
+// neighborhood via atomic-min; an edge wins iff it owns every slot it touched.
+// The global-shortest candidate always wins, so each round makes progress, and
+// the winners' disjoint neighborhoods make the concurrent collapses race-free.
+// The outcome is deterministic regardless of thread count.
+static void merge_vertices(Mesh& mesh, float merge_factor, bool verbose, int num_threads) {
     const int nv = (int)mesh.V.size();
+    const long nf = (long)mesh.F.size();
     if (nv == 0 || merge_factor <= 0.0f) return;
+#ifdef _OPENMP
+    if (num_threads > 0) omp_set_num_threads(num_threads);
+    int nthreads = omp_get_max_threads();
+#else
+    int nthreads = 1;
+#endif
 
-    std::vector<std::array<double,3>>& V = mesh.V;
-    std::vector<std::unordered_set<int>> adj(nv);
-    std::vector<std::unordered_set<int>> vt(nv);   // incident triangle ids
+    std::vector<std::array<float,3>>& V = mesh.V;
+    std::vector<std::array<int,3>>& F = mesh.F;
+    std::vector<std::unordered_set<int>> adj(nv), vt(nv);
     std::vector<char> valive(nv, 1);
-    std::vector<char> talive(mesh.F.size(), 1);
+    std::vector<char> talive(nf, 1);
 
-    auto add_edge = [&](int a, int b) { adj[a].insert(b); adj[b].insert(a); };
-    for (int t = 0; t < (int)mesh.F.size(); ++t) {
-        auto& f = mesh.F[t];
-        if (f[0] == f[1] || f[1] == f[2] || f[0] == f[2]) { talive[t] = 0; continue; }
-        add_edge(f[0], f[1]); add_edge(f[1], f[2]); add_edge(f[2], f[0]);
-        vt[f[0]].insert(t); vt[f[1]].insert(t); vt[f[2]].insert(t);
+    #pragma omp parallel for schedule(static)
+    for (long t = 0; t < nf; ++t) {
+        const auto& f = F[t];
+        if (f[0]==f[1] || f[1]==f[2] || f[0]==f[2]) talive[t] = 0;
+    }
+
+    // adjacency + incident triangles, built lock-free: each thread owns a
+    // vertex range and only writes the sets it owns (scans all faces).
+    #pragma omp parallel
+    {
+    #ifdef _OPENMP
+        int nt = omp_get_num_threads(), tid = omp_get_thread_num();
+    #else
+        int nt = 1, tid = 0;
+    #endif
+        long lo = (long)nv * tid / nt, hi = (long)nv * (tid + 1) / nt;
+        for (long t = 0; t < nf; ++t) {
+            if (!talive[t]) continue;
+            const auto& f = F[t];
+            for (int k = 0; k < 3; ++k) {
+                int w = f[k];
+                if (w >= lo && w < hi) {
+                    adj[w].insert(f[(k+1)%3]);
+                    adj[w].insert(f[(k+2)%3]);
+                    vt[w].insert((int)t);
+                }
+            }
+        }
     }
 
     auto dist = [&](int a, int b) {
-        double dx = V[a][0]-V[b][0], dy = V[a][1]-V[b][1], dz = V[a][2]-V[b][2];
+        float dx = V[a][0]-V[b][0], dy = V[a][1]-V[b][1], dz = V[a][2]-V[b][2];
         return std::sqrt(dx*dx + dy*dy + dz*dz);
     };
 
-    // per-vertex average incident edge length -> local feature size
-    std::vector<double> Lavg(nv, 0.0);
+    std::vector<float> Lavg(nv, 0.0f);
+    #pragma omp parallel for schedule(dynamic, 4096)
     for (int v = 0; v < nv; ++v) {
         if (adj[v].empty()) continue;
-        double s = 0; for (int w : adj[v]) s += dist(v, w);
-        Lavg[v] = s / adj[v].size();
+        float s = 0; for (int w : adj[v]) s += dist(v, w);
+        Lavg[v] = s / (float)adj[v].size();
     }
 
-    struct Cand { double len; int u, v; };
-    std::vector<Cand> cands;
-    for (int u = 0; u < nv; ++u)
-        for (int w : adj[u]) {
-            if (w <= u) continue;
-            double l = dist(u, w);
-            double thr = merge_factor * std::min(Lavg[u], Lavg[w]);
-            if (l < thr) cands.push_back({l, u, w});
-        }
-    std::sort(cands.begin(), cands.end(),
-              [](const Cand& a, const Cand& b){ return a.len < b.len; });
-
-    // third vertices of triangles sharing edge (u,v)
-    auto edge_opposites = [&](int u, int v, std::vector<int>& out) {
-        out.clear();
+    // link condition for edge (u,v): common neighbors of u and v must be
+    // exactly the third vertices of triangles on that edge (1 boundary, 2
+    // interior). Read-only on the current topology.
+    auto link_ok = [&](int u, int v) -> bool {
+        int opp0 = -1, opp1 = -1, opp_cnt = 0;
         for (int t : vt[u]) {
             if (!talive[t]) continue;
-            auto& f = mesh.F[t];
+            const auto& f = F[t];
             bool hu=false, hv=false; int other=-1;
             for (int k=0;k<3;k++){ if(f[k]==u)hu=true; else if(f[k]==v)hv=true; else other=f[k]; }
-            if (hu && hv) out.push_back(other);
+            if (hu && hv) {
+                if (opp_cnt == 0) opp0 = other;
+                else if (opp_cnt == 1) opp1 = other;
+                else return false;   // >2 faces on edge -> already non-manifold
+                ++opp_cnt;
+            }
         }
+        const auto& au = adj[u]; const auto& av = adj[v];
+        const auto& small = (au.size() < av.size()) ? au : av;
+        const auto& big   = (au.size() < av.size()) ? av : au;
+        int common = 0;
+        for (int w : small) {
+            if (w == u || w == v) continue;
+            if (big.find(w) != big.end()) {
+                ++common;
+                if (w != opp0 && w != opp1) return false;
+            }
+        }
+        return common == opp_cnt;
     };
 
-    int collapses = 0;
-    for (const Cand& c : cands) {
-        int u = c.u, v = c.v;
-        if (!valive[u] || !valive[v]) continue;
-        if (adj[u].find(v) == adj[u].end()) continue;     // edge gone
-        double thr = merge_factor * std::min(Lavg[u], Lavg[v]);
-        if (dist(u, v) >= thr) continue;                  // no longer short
+    std::vector<uint64_t> claim(nv);
+    const uint64_t CLAIM_MAX = ~0ull;
+    struct Cand { int u, v; uint32_t lk; };  // lk = length priority key
 
-        // link condition: common neighbors == edge opposites
-        std::vector<int> opp; edge_opposites(u, v, opp);
-        std::unordered_set<int> oppset(opp.begin(), opp.end());
-        bool ok = true;
-        int common = 0;
-        for (int w : adj[u]) {
-            if (w == v) continue;
-            if (adj[v].find(w) != adj[v].end()) {
-                ++common;
-                if (oppset.find(w) == oppset.end()) { ok = false; break; }
+    // ---- gather the short-edge candidates ONCE (parallel) ----
+    // The link condition is (re)checked when a candidate is actually selected,
+    // not here -- like the original single pass, this avoids re-scanning the
+    // whole mesh every round.
+    std::vector<std::vector<Cand>> loc(nthreads);
+    #pragma omp parallel
+    {
+    #ifdef _OPENMP
+        int tid = omp_get_thread_num();
+    #else
+        int tid = 0;
+    #endif
+        auto& L = loc[tid];
+        #pragma omp for schedule(dynamic, 4096)
+        for (int u = 0; u < nv; ++u) {
+            for (int w : adj[u]) {
+                if (w <= u) continue;
+                float len = dist(u, w);
+                float thr = merge_factor * std::min(Lavg[u], Lavg[w]);
+                if (len < thr) L.push_back({u, w, float_key(len)});
             }
         }
-        if (!ok || common != (int)oppset.size()) continue;
+    }
+    std::vector<Cand> cands;
+    { size_t n=0; for (auto& l : loc) n += l.size(); cands.reserve(n); }
+    for (auto& l : loc) cands.insert(cands.end(), l.begin(), l.end());
 
-        // ---- collapse v -> u (move u to midpoint) ----
-        V[u][0] = 0.5*(V[u][0]+V[v][0]);
-        V[u][1] = 0.5*(V[u][1]+V[v][1]);
-        V[u][2] = 0.5*(V[u][2]+V[v][2]);
+    // ---- process in rounds over a shrinking candidate list ----
+    // Each round selects winners whose closed 1-rings are pairwise disjoint
+    // (claim/atomic-min by length priority) and collapses them concurrently.
+    // A winner is then removed whether it collapsed or was found invalid (dead
+    // endpoint / edge gone / no longer short / link condition) -- the global
+    // shortest candidate always wins, so every round removes >=1 candidate and
+    // the loop terminates.
+    long total_collapses = 0;
+    std::vector<char> done;
+    while (!cands.empty()) {
+        const int NC = (int)cands.size();
+        done.assign(NC, 0);
 
-        // retarget triangles incident to v
-        std::vector<int> vtris(vt[v].begin(), vt[v].end());
-        for (int t : vtris) {
-            if (!talive[t]) continue;
-            auto& f = mesh.F[t];
-            for (int k=0;k<3;k++) if (f[k]==v) f[k]=u;
-            if (f[0]==f[1] || f[1]==f[2] || f[0]==f[2]) {
-                talive[t] = 0;                  // degenerate -> drop
-            } else {
-                vt[u].insert(t);
+        #pragma omp parallel for schedule(static)
+        for (int v = 0; v < nv; ++v) claim[v] = CLAIM_MAX;
+
+        #pragma omp parallel for schedule(dynamic, 1024)
+        for (int ci = 0; ci < NC; ++ci) {
+            int u = cands[ci].u, v = cands[ci].v;
+            if (!valive[u] || !valive[v]) continue;
+            uint64_t key = ((uint64_t)cands[ci].lk << 32) | (uint32_t)ci;
+            atomic_min_u64(&claim[u], key);
+            atomic_min_u64(&claim[v], key);
+            for (int w : adj[u]) atomic_min_u64(&claim[w], key);
+            for (int w : adj[v]) atomic_min_u64(&claim[w], key);
+        }
+
+        long round_collapses = 0;
+        #pragma omp parallel for schedule(dynamic, 1024) reduction(+:round_collapses)
+        for (int ci = 0; ci < NC; ++ci) {
+            int u = cands[ci].u, v = cands[ci].v;
+            if (!valive[u] || !valive[v]) { done[ci] = 1; continue; }
+            uint64_t key = ((uint64_t)cands[ci].lk << 32) | (uint32_t)ci;
+            if (claim[u] != key || claim[v] != key) continue;  // not a winner; retry
+            bool win = true;
+            for (int w : adj[u]) if (claim[w] != key) { win = false; break; }
+            if (win) for (int w : adj[v]) if (claim[w] != key) { win = false; break; }
+            if (!win) continue;
+
+            // winner: consumed this round regardless of the outcome below
+            done[ci] = 1;
+            if (adj[u].find(v) == adj[u].end()) continue;           // edge gone
+            float len = dist(u, v);
+            if (len >= merge_factor * std::min(Lavg[u], Lavg[v])) continue;  // not short now
+            if (!link_ok(u, v)) continue;                           // would break manifold
+
+            // collapse v -> u (move u to midpoint); disjoint 1-rings => race-free
+            V[u][0] = 0.5f*(V[u][0]+V[v][0]);
+            V[u][1] = 0.5f*(V[u][1]+V[v][1]);
+            V[u][2] = 0.5f*(V[u][2]+V[v][2]);
+            for (int t : vt[v]) {
+                if (!talive[t]) continue;
+                auto& f = F[t];
+                for (int k=0;k<3;k++) if (f[k]==v) f[k]=u;
+                if (f[0]==f[1] || f[1]==f[2] || f[0]==f[2]) talive[t] = 0;
+                else vt[u].insert(t);
+            }
+            for (int w : adj[v]) {
+                adj[w].erase(v);
+                if (w != u) { adj[w].insert(u); adj[u].insert(w); }
+            }
+            adj[u].erase(v);
+            adj[v].clear(); vt[v].clear(); valive[v] = 0;
+            ++round_collapses;
+        }
+        total_collapses += round_collapses;
+
+        // ---- compact: keep candidates that are neither consumed nor dead ----
+        for (auto& l : loc) l.clear();
+        #pragma omp parallel
+        {
+        #ifdef _OPENMP
+            int tid = omp_get_thread_num();
+        #else
+            int tid = 0;
+        #endif
+            auto& L = loc[tid];
+            #pragma omp for schedule(static)
+            for (int ci = 0; ci < NC; ++ci) {
+                if (done[ci]) continue;
+                int u = cands[ci].u, v = cands[ci].v;
+                if (valive[u] && valive[v]) L.push_back(cands[ci]);
             }
         }
-        // update adjacency
-        for (int w : adj[v]) {
-            adj[w].erase(v);
-            if (w != u) { adj[w].insert(u); adj[u].insert(w); }
-        }
-        adj[u].erase(v);
-        adj[v].clear(); vt[v].clear(); valive[v] = 0;
-        ++collapses;
+        cands.clear();
+        for (auto& l : loc) cands.insert(cands.end(), l.begin(), l.end());
     }
 
     // ---- compact ----
     std::vector<int> remap(nv, -1);
-    std::vector<std::array<double,3>> newV;
-    newV.reserve(nv);
+    std::vector<std::array<float,3>> newV; newV.reserve(nv);
     for (int v = 0; v < nv; ++v)
         if (valive[v]) { remap[v] = (int)newV.size(); newV.push_back(V[v]); }
-    std::vector<std::array<int,3>> newF;
-    newF.reserve(mesh.F.size());
-    for (int t = 0; t < (int)mesh.F.size(); ++t) {
+    std::vector<std::array<int,3>> newF; newF.reserve(mesh.F.size());
+    for (long t = 0; t < nf; ++t) {
         if (!talive[t]) continue;
-        auto& f = mesh.F[t];
+        auto& f = F[t];
         int a=remap[f[0]], b=remap[f[1]], c2=remap[f[2]];
         if (a<0||b<0||c2<0||a==b||b==c2||a==c2) continue;
         newF.push_back({a,b,c2});
@@ -199,8 +336,8 @@ static void merge_vertices(Mesh& mesh, float merge_factor, bool verbose) {
     mesh.V.swap(newV);
     mesh.F.swap(newF);
     if (verbose)
-        printf("[meshing] merge: %d collapses -> %zu verts, %zu faces\n",
-               collapses, mesh.V.size(), mesh.F.size());
+        printf("[meshing] merge: %ld collapses -> %zu verts, %zu faces\n",
+               total_collapses, mesh.V.size(), mesh.F.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -215,10 +352,8 @@ static void write_ply(const Mesh& mesh, const std::string& path) {
     f << "element face " << mesh.F.size() << "\n";
     f << "property list uchar int vertex_indices\n";
     f << "end_header\n";
-    for (const auto& v : mesh.V) {
-        float xyz[3] = {(float)v[0], (float)v[1], (float)v[2]};
-        f.write(reinterpret_cast<const char*>(xyz), sizeof(xyz));
-    }
+    for (const auto& v : mesh.V)
+        f.write(reinterpret_cast<const char*>(v.data()), sizeof(float) * 3);
     for (const auto& tri : mesh.F) {
         unsigned char n = 3;
         f.write(reinterpret_cast<const char*>(&n), 1);
@@ -242,15 +377,16 @@ bool generate_mesh(
     OccupancyEvaluator ev(means, quats, log_scales, logit_opac, num_splats,
                           cam_pos, num_cameras, cfg);
 
-    // ---- 1. point cloud ----
-    std::vector<double> pts;
+    // ---- 1. point cloud (float everywhere except the Delaunay call) ----
+    std::vector<float> pts;
     ev.generate_point_cloud(pts);
     const int P = ev.num_points();
     if (cfg.verbose) printf("[meshing] point cloud: %d points (%.2fs)\n", P, secs_since(t0));
 
-    // ---- 2. Delaunay tetrahedralization ----
+    // ---- 2. Delaunay tetrahedralization (needs double precision) ----
     auto t1 = Clock::now();
-    auto tri = delaunay3d::compute_delaunay_3d(pts.data(), P, cfg.num_threads, false);
+    std::vector<double> pts_d(pts.begin(), pts.end());
+    auto tri = delaunay3d::compute_delaunay_3d(pts_d.data(), P, cfg.num_threads, false);
     const int M = tri.nb_cells;
     if (cfg.verbose)
         printf("[meshing] Delaunay: %d tets, %d threads (%.2fs)\n",
@@ -297,7 +433,7 @@ bool generate_mesh(
     Mesh mesh;
     mesh.V.resize(E);
     {
-        std::vector<double> xyz(3 * E);
+        std::vector<float> xyz(3 * E);
         ev.bisect_edges(pts.data(), ea.data(), eb.data(), oa.data(), ob.data(), E, xyz.data());
         for (int i = 0; i < E; ++i)
             mesh.V[i] = {xyz[3*i], xyz[3*i+1], xyz[3*i+2]};
@@ -328,7 +464,7 @@ bool generate_mesh(
 
     // ---- 7. manifold-preserving merge ----
     auto t6 = Clock::now();
-    merge_vertices(mesh, cfg.merge_factor, cfg.verbose);
+    merge_vertices(mesh, cfg.merge_factor, cfg.verbose, cfg.num_threads);
     if (cfg.verbose) printf("[meshing] merge (%.2fs)\n", secs_since(t6));
 
     // ---- 8. write ----

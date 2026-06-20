@@ -131,7 +131,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("camera_positions"), pybind11::arg("output_path"),
           pybind11::arg("iso") = 0.5,
           pybind11::arg("merge_factor") = 1.0,
-          pybind11::arg("bisection_iters") = 6,
+          pybind11::arg("bisection_iters") = 3,
           pybind11::arg("max_cameras") = 64,
           pybind11::arg("max_grid_res") = 512,
           pybind11::arg("grid_cell_factor") = 2.0,
