@@ -11,8 +11,10 @@ dynamic = ["description", "dependencies"]
 spirulae-train = "spirulae_splat.ss_trainer:entrypoint"
 spirulae-benchmark = "spirulae_splat.ss_benchmark:entrypoint"
 spirulae-viewer = "spirulae_splat.ss_viewer:entrypoint"
+spirulae-meshing = "spirulae_splat.ss_meshing:entrypoint"
 
 [tool.poetry.scripts]
 spirulae-train = "spirulae_splat.ss_trainer:entrypoint"
 spirulae-benchmark = "spirulae_splat.ss_benchmark:entrypoint"
 spirulae-viewer = "spirulae_splat.ss_viewer:entrypoint"
+spirulae-meshing = "spirulae_splat.ss_meshing:entrypoint"

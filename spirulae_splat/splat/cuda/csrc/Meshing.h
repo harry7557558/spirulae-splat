@@ -31,7 +31,7 @@ struct MeshingConfig {
     float merge_factor = 1.0f;   // local merge threshold multiplier; <=0 disables
     int   bisection_iters = 3;  // bisection steps per cut edge; a linear
                                 // interpolation finishes the crossing estimate
-    int   max_cameras = 64;      // cap on cameras used (evenly subsampled)
+    int   max_cameras = 32;      // cap on cameras used (evenly subsampled)
     int   max_grid_res = 512;    // per-axis cap on the acceleration grid
     float grid_cell_factor = 2.0f; // cell size = factor * mean Gaussian radius
     int   num_threads = 0;       // 0 = all hardware threads (Delaunay + host)
@@ -47,12 +47,14 @@ struct MeshingConfig {
 //   quats      : [N*4]  (w,x,y,z), un-normalized ok
 //   log_scales : [N*3]  log std-devs (exp activation)
 //   logit_opac : [N]    logit opacities (sigmoid activation)
+//   features_dc: [N*3]  SH band-0 (DC) color coefficients
 //   cam_pos    : [C*3]  camera centers in the SAME frame as means (may be null)
 class OccupancyEvaluator {
 public:
     OccupancyEvaluator(
         const float* means, const float* quats,
-        const float* log_scales, const float* logit_opac, int num_splats,
+        const float* log_scales, const float* logit_opac, const float* features_dc,
+        int num_splats,
         const float* cam_pos, int num_cameras,
         const MeshingConfig& cfg);
     ~OccupancyEvaluator();
@@ -79,6 +81,11 @@ public:
         const float* occ_a, const float* occ_b,
         int n_edges, float* xyz_out);
 
+    // Per-vertex RGB (in [0,1], interleaved) for host points [n*3]. Uses the
+    // camera-aware compositing when cameras are present, else the static
+    // density-weighted average, with a nearest-splat fallback.
+    void colorize(const float* verts, int n, float* rgb_out);
+
     int num_points() const { return num_points_; }
     int num_kept()   const { return num_kept_; }
 
@@ -93,7 +100,8 @@ private:
 // Returns true on success.
 bool generate_mesh(
     const float* means, const float* quats,
-    const float* log_scales, const float* logit_opac, int num_splats,
+    const float* log_scales, const float* logit_opac, const float* features_dc,
+    int num_splats,
     const float* cam_pos, int num_cameras,
     const MeshingConfig& cfg,
     const std::string& output_path);

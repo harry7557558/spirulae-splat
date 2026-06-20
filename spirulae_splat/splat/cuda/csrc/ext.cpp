@@ -82,7 +82,7 @@ static std::vector<at::Tensor> delaunay3d_tensor(
 // (no dataset -> static density occupancy). Writes a binary PLY.
 static bool generate_mesh_tensor(
     at::Tensor means, at::Tensor quats, at::Tensor scales, at::Tensor opacities,
-    at::Tensor camera_positions,
+    at::Tensor features_dc, at::Tensor camera_positions,
     const std::string& output_path,
     double iso, double merge_factor, int64_t bisection_iters,
     int64_t max_cameras, int64_t max_grid_res, double grid_cell_factor,
@@ -90,11 +90,14 @@ static bool generate_mesh_tensor(
 ) {
     auto f32 = [](at::Tensor t) { return t.to(at::kFloat).contiguous().cpu(); };
     at::Tensor m = f32(means), q = f32(quats), s = f32(scales), o = f32(opacities);
+    at::Tensor fdc = f32(features_dc);
     int N = (int)m.size(0);
     TORCH_CHECK(m.dim() == 2 && m.size(1) == 3, "means must be (N,3)");
     TORCH_CHECK(q.size(0) == N && q.size(1) == 4, "quats must be (N,4)");
     TORCH_CHECK(s.size(0) == N && s.size(1) == 3, "scales must be (N,3)");
     TORCH_CHECK(o.numel() == N, "opacities must be (N,)");
+    TORCH_CHECK(fdc.dim() == 2 && fdc.size(0) == N && fdc.size(1) == 3,
+                "features_dc must be (N,3)");
 
     int C = 0;
     const float* cam_ptr = nullptr;
@@ -118,7 +121,7 @@ static bool generate_mesh_tensor(
 
     return meshing::generate_mesh(
         m.data_ptr<float>(), q.data_ptr<float>(), s.data_ptr<float>(), o.data_ptr<float>(),
-        N, cam_ptr, C, cfg, output_path);
+        fdc.data_ptr<float>(), N, cam_ptr, C, cfg, output_path);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -128,7 +131,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Extract a surface mesh from a trained 3DGS model and save to PLY",
           pybind11::arg("means"), pybind11::arg("quats"),
           pybind11::arg("scales"), pybind11::arg("opacities"),
-          pybind11::arg("camera_positions"), pybind11::arg("output_path"),
+          pybind11::arg("features_dc"), pybind11::arg("camera_positions"),
+          pybind11::arg("output_path"),
           pybind11::arg("iso") = 0.5,
           pybind11::arg("merge_factor") = 1.0,
           pybind11::arg("bisection_iters") = 3,

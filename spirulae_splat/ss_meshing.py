@@ -49,11 +49,13 @@ def load_splats(ply_path: Path):
     quats = np.stack([v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]], axis=-1).astype(np.float32)
     scales = np.stack([v["scale_0"], v["scale_1"], v["scale_2"]], axis=-1).astype(np.float32)
     opacities = np.asarray(v["opacity"]).astype(np.float32)
+    features_dc = np.stack([v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]], axis=-1).astype(np.float32)
     return (
         torch.from_numpy(means),
         torch.from_numpy(quats),
         torch.from_numpy(scales),
         torch.from_numpy(opacities),
+        torch.from_numpy(features_dc),
     )
 
 
@@ -94,7 +96,7 @@ def load_camera_positions(run_dir: Path, data_dir: Path):
     return positions
 
 
-def main():
+def entrypoint():
     ap = argparse.ArgumentParser(description="Generate a mesh from a trained 3DGS model.")
     ap.add_argument("checkpoint", type=Path, help="run dir or *.ckpt dir")
     ap.add_argument("--data", type=Path, default=None,
@@ -104,11 +106,13 @@ def main():
     ap.add_argument("--no-data", action="store_true",
                     help="ignore the dataset; use the static density occupancy field")
     ap.add_argument("--output", type=Path, default=None, help="output PLY path")
-    ap.add_argument("--iso", type=float, default=0.3)
+    ap.add_argument("--iso", type=float, default=None,
+                    help="isosurface level. Default: 0.5 with cameras (--data), "
+                         "0.2 without.")
     ap.add_argument("--merge-factor", type=float, default=1.0,
                     help="local short-edge merge threshold multiplier (0 disables)")
     ap.add_argument("--bisection-iters", type=int, default=3)
-    ap.add_argument("--max-cameras", type=int, default=8)
+    ap.add_argument("--max-cameras", type=int, default=32)
     ap.add_argument("--max-grid-res", type=int, default=512)
     ap.add_argument("--grid-cell-factor", type=float, default=2.0)
     ap.add_argument("--num-threads", type=int, default=0)
@@ -117,7 +121,7 @@ def main():
 
     splat_ply, run_dir = _find_ckpt(args.checkpoint)
     print(f"[meshing] loading {splat_ply}")
-    means, quats, scales, opacities = load_splats(splat_ply)
+    means, quats, scales, opacities, features_dc = load_splats(splat_ply)
     print(f"[meshing] {means.shape[0]} Gaussians")
 
     cam_positions = torch.empty((0, 3), dtype=torch.float32)
@@ -136,14 +140,27 @@ def main():
             print(f"[meshing] loading cameras from {data_dir}")
             cam_positions = load_camera_positions(run_dir, Path(data_dir))
             print(f"[meshing] {cam_positions.shape[0]} cameras")
-        else:
-            print("[meshing] no dataset found; using static density occupancy field")
+
+    using_cameras = cam_positions.shape[0] > 0
+    if not using_cameras:
+        # Bold yellow recommendation -- the static field is markedly lower quality.
+        print("\033[1;33m"
+              "[meshing] No camera dataset in use: meshing from Gaussian densities "
+              "only.\n"
+              "          Pass --data <dataset_dir> to use camera-based occupancy, "
+              "which gives\n"
+              "          significantly better surfaces."
+              "\033[0m")
+
+    # iso default depends on the occupancy field: the camera (visual-hull-like)
+    # field is sharper, so a higher level sits on the surface.
+    iso = args.iso if args.iso is not None else (0.5 if using_cameras else 0.2)
 
     out_path = args.output if args.output is not None else (splat_ply.parent / "mesh.ply")
 
     _C.generate_mesh(
-        means, quats, scales, opacities, cam_positions, str(out_path),
-        iso=args.iso,
+        means, quats, scales, opacities, features_dc, cam_positions, str(out_path),
+        iso=iso,
         merge_factor=args.merge_factor,
         bisection_iters=args.bisection_iters,
         max_cameras=args.max_cameras,
@@ -156,4 +173,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    entrypoint()

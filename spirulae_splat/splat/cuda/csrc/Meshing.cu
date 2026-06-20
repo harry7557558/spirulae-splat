@@ -168,6 +168,7 @@ struct GpuScene {
     const float3* __restrict__ invs2; // 1 / sigma^2 per axis
     const float*  __restrict__ opac;  // sigmoid opacity
     const float*  __restrict__ k2;    // 2 ln(opac / ALPHA): Mahalanobis cutoff^2
+    const float3* __restrict__ gcol;  // base RGB from SH DC, in [0,1]
 
     // LBVH over kept Gaussians (leaf index = "kept position" kp)
     const int*    __restrict__ kept;        // [num_kept] kp -> original id
@@ -316,14 +317,182 @@ __device__ __forceinline__ float occ_eval(const GpuScene& s, float3 p, bool dyna
 }
 
 // ---------------------------------------------------------------------------
+// Vertex coloring from the splats' DC color (gcol).
+// ---------------------------------------------------------------------------
+// Same as seg_max_density but also reports the (clamped) closest-approach
+// parameter, needed to order splats front-to-back along a camera ray.
+__device__ __forceinline__ float seg_color_sample(
+    const GpuScene& s, int g, float3 o, float3 dir, float& tstar
+) {
+    float3 e = o - s.mean[g];
+    float e0 = dot3(e, s.ax0[g]), e1 = dot3(e, s.ax1[g]), e2 = dot3(e, s.ax2[g]);
+    float d0 = dot3(dir, s.ax0[g]), d1 = dot3(dir, s.ax1[g]), d2 = dot3(dir, s.ax2[g]);
+    float3 is = s.invs2[g];
+    float A = d0*d0*is.x + d1*d1*is.y + d2*d2*is.z;
+    float B = e0*d0*is.x + e1*d1*is.y + e2*d2*is.z;
+    float C = e0*e0*is.x + e1*e1*is.y + e2*e2*is.z;
+    float t = (A > 1e-20f) ? (-B / A) : 0.0f;
+    t = fminf(fmaxf(t, 0.0f), 1.0f);
+    tstar = t;
+    float q = A*t*t + 2.0f*B*t + C;
+    if (q >= s.k2[g]) return 0.0f;
+    return s.opac[g] * __expf(-0.5f * q);
+}
+
+// Density-weighted average color of the splats that contain p. Returns false
+// if p is inside no splat's support (e.g. a vertex nudged into a gap by merge).
+__device__ bool color_static(const GpuScene& s, float3 p, float3& out) {
+    float wsum = 0.0f; float3 csum = make_float3(0.f, 0.f, 0.f);
+    if (s.num_kept == 1) {
+        float d = density_at(s, s.kept[0], p);
+        if (d > 0.0f) { out = s.gcol[s.kept[0]]; return true; }
+        return false;
+    }
+    int stack[kStackSize]; int sp = 0;
+    if (!point_in_aabb(p, s.nodeAABB[0], s.nodeAABB[1])) return false;
+    stack[sp++] = 0;
+    while (sp > 0) {
+        int2 ch = s.internal[stack[--sp]];
+        #pragma unroll
+        for (int c = 0; c < 2; ++c) {
+            int child = c == 0 ? ch.x : ch.y;
+            if (child < 0) {
+                int kp = ~child;
+                if (point_in_aabb(p, s.leafMin[kp], s.leafMax[kp])) {
+                    int g = s.kept[kp];
+                    float d = density_at(s, g, p);
+                    if (d > 0.0f) { wsum += d; csum += s.gcol[g] * d; }
+                }
+            } else if (point_in_aabb(p, s.nodeAABB[2*child], s.nodeAABB[2*child+1])) {
+                if (sp < kStackSize) stack[sp++] = child;
+            }
+        }
+    }
+    if (wsum > 0.0f) { out = csum * (1.0f / wsum); return true; }
+    return false;
+}
+
+// Color of the splat whose center is nearest p (last-resort fallback).
+__device__ float3 color_nearest(const GpuScene& s, float3 p) {
+    if (s.num_kept <= 1) return s.gcol[s.kept[0]];
+    float best = 1e30f; int bg = s.kept[0];
+    int stack[kStackSize]; int sp = 0; stack[sp++] = 0;
+    while (sp > 0) {
+        int2 ch = s.internal[stack[--sp]];
+        #pragma unroll
+        for (int c = 0; c < 2; ++c) {
+            int child = c == 0 ? ch.x : ch.y;
+            if (child < 0) {
+                int g = s.kept[~child];
+                float3 d = p - s.mean[g];
+                float d2 = dot3(d, d);
+                if (d2 < best) { best = d2; bg = g; }
+            } else {
+                float3 lo = s.nodeAABB[2*child], hi = s.nodeAABB[2*child+1];
+                float dx = fmaxf(fmaxf(lo.x - p.x, p.x - hi.x), 0.0f);
+                float dy = fmaxf(fmaxf(lo.y - p.y, p.y - hi.y), 0.0f);
+                float dz = fmaxf(fmaxf(lo.z - p.z, p.z - hi.z), 0.0f);
+                if (dx*dx + dy*dy + dz*dz < best && sp < kStackSize) stack[sp++] = child;
+            }
+        }
+    }
+    return s.gcol[bg];
+}
+
+inline constexpr int kColorCap = 64;  // max splats composited per camera ray
+
+// Camera-aware color: for each camera, alpha-composite the splats front-to-back
+// along the segment camera->p (up to p), then average the per-camera colors
+// weighted by accumulated opacity. Falls back to the static color, then to the
+// nearest splat, when no camera ray deposits weight.
+__device__ float3 color_camera(const GpuScene& s, float3 p) {
+    float3 num = make_float3(0.f, 0.f, 0.f);
+    float den = 0.0f;
+
+    for (int ci = 0; ci < s.num_cameras; ++ci) {
+        float3 cam = s.campos[ci];
+        float3 dir = p - cam;             // segment cam->p, t in [0,1]
+
+        // gather hits (keep the CAP closest-to-camera ones)
+        float ts[kColorCap], dd[kColorCap]; float3 cc[kColorCap];
+        int cnt = 0; float tmax = -1.0f; int tmax_i = 0;
+        int stack[kStackSize]; int sp = 0;
+        if (s.num_kept >= 2 && seg_aabb(cam, dir, s.nodeAABB[0], s.nodeAABB[1]))
+            stack[sp++] = 0;
+        else if (s.num_kept == 1) { /* handled below via single leaf */ }
+        while (sp > 0) {
+            int2 ch = s.internal[stack[--sp]];
+            #pragma unroll
+            for (int c = 0; c < 2; ++c) {
+                int child = c == 0 ? ch.x : ch.y;
+                if (child < 0) {
+                    int kp = ~child;
+                    if (!seg_aabb(cam, dir, s.leafMin[kp], s.leafMax[kp])) continue;
+                    int g = s.kept[kp]; float tstar;
+                    float d = seg_color_sample(s, g, cam, dir, tstar);
+                    if (d <= ALPHA_THRESHOLD) continue;
+                    if (cnt < kColorCap) {
+                        ts[cnt] = tstar; dd[cnt] = d; cc[cnt] = s.gcol[g];
+                        if (tstar > tmax) { tmax = tstar; tmax_i = cnt; }
+                        ++cnt;
+                    } else if (tstar < tmax) {
+                        ts[tmax_i] = tstar; dd[tmax_i] = d; cc[tmax_i] = s.gcol[g];
+                        tmax = -1.0f;
+                        for (int j = 0; j < kColorCap; ++j)
+                            if (ts[j] > tmax) { tmax = ts[j]; tmax_i = j; }
+                    }
+                } else if (seg_aabb(cam, dir, s.nodeAABB[2*child], s.nodeAABB[2*child+1])) {
+                    if (sp < kStackSize) stack[sp++] = child;
+                }
+            }
+        }
+        if (cnt == 0) continue;
+
+        // insertion sort by t (front to back)
+        for (int a = 1; a < cnt; ++a) {
+            float kt = ts[a], kd = dd[a]; float3 kc = cc[a]; int b = a - 1;
+            while (b >= 0 && ts[b] > kt) { ts[b+1]=ts[b]; dd[b+1]=dd[b]; cc[b+1]=cc[b]; --b; }
+            ts[b+1]=kt; dd[b+1]=kd; cc[b+1]=kc;
+        }
+        // composite front-to-back (alpha-blend, transmittance-weighted)
+        float T = 1.0f; float3 Cc = make_float3(0.f, 0.f, 0.f);
+        for (int a = 0; a < cnt; ++a) {
+            float al = fminf(dd[a], 0.999f);
+            Cc += cc[a] * (T * al);
+            T *= (1.0f - al);
+            if (T < 1e-3f) break;
+        }
+        num += Cc; den += (1.0f - T);
+    }
+
+    if (den > 1e-6f) return num * (1.0f / den);
+    float3 cs;
+    if (color_static(s, p, cs)) return cs;
+    return color_nearest(s, p);
+}
+
+__global__ void colorize_kernel(
+    GpuScene s, const float* __restrict__ verts, int n, float* rgb, int dynamic
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float3 p = make_float3(verts[3*i], verts[3*i+1], verts[3*i+2]);
+    float3 col;
+    if (dynamic && false) col = color_camera(s, p);
+    else if (!color_static(s, p, col)) col = color_nearest(s, p);
+    rgb[3*i+0] = col.x; rgb[3*i+1] = col.y; rgb[3*i+2] = col.z;
+}
+
+// ---------------------------------------------------------------------------
 // Kernels: activation / point cloud
 // ---------------------------------------------------------------------------
 __global__ void activate_kernel(
     int N,
     const float* __restrict__ means,  const float* __restrict__ quats,
     const float* __restrict__ logsc,  const float* __restrict__ logit,
+    const float* __restrict__ fdc,
     float3* mean, float3* ax0, float3* ax1, float3* ax2,
-    float3* invs2, float* opac, float* radius, float* k2, int* valid
+    float3* invs2, float* opac, float* radius, float* k2, int* valid, float3* gcol
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N) return;
@@ -339,6 +508,13 @@ __global__ void activate_kernel(
 
     float sx = __expf(logsc[3*i]), sy = __expf(logsc[3*i+1]), sz = __expf(logsc[3*i+2]);
     invs2[i] = make_float3(1.0f/(sx*sx), 1.0f/(sy*sy), 1.0f/(sz*sz));
+
+    // base color from the SH band-0 (DC) coefficient
+    const float C0 = 0.28209479177387814f;
+    gcol[i] = make_float3(
+        fminf(fmaxf(0.5f + C0 * fdc[3*i+0], 0.0f), 1.0f),
+        fminf(fmaxf(0.5f + C0 * fdc[3*i+1], 0.0f), 1.0f),
+        fminf(fmaxf(0.5f + C0 * fdc[3*i+2], 0.0f), 1.0f));
 
     float op = 1.0f / (1.0f + __expf(-logit[i]));
     opac[i] = op;
@@ -361,6 +537,7 @@ __global__ void pointcloud_kernel(
     if (i >= num_kept) return;
     int g = kept[i];
     float k = sqrtf(k2[g]);
+    if (true) k *= 2.5f;  // address case when splats overlap
     float3 m = mean[g];
     float3 is = invs2[g];
     float3 o0 = ax0[g] * (k * rsqrtf(is.x));
@@ -542,6 +719,7 @@ struct OccupancyEvaluator::Impl {
 
     float3 *mean=nullptr, *ax0=nullptr, *ax1=nullptr, *ax2=nullptr, *invs2=nullptr;
     float  *opac=nullptr, *radius=nullptr, *k2=nullptr;
+    float3 *gcol=nullptr;
     int    *valid=nullptr;
 
     int *kept = nullptr;
@@ -556,7 +734,7 @@ struct OccupancyEvaluator::Impl {
 
     ~Impl() {
         for (void* p : {(void*)mean,(void*)ax0,(void*)ax1,(void*)ax2,(void*)invs2,
-                        (void*)opac,(void*)radius,(void*)k2,(void*)valid,(void*)kept,
+                        (void*)opac,(void*)radius,(void*)k2,(void*)gcol,(void*)valid,(void*)kept,
                         (void*)leafMin,(void*)leafMax,(void*)nodeAABB,(void*)internal,
                         (void*)campos})
             if (p) cudaFree(p);
@@ -565,7 +743,7 @@ struct OccupancyEvaluator::Impl {
     GpuScene make_scene() const {
         GpuScene s{};
         s.mean=mean; s.ax0=ax0; s.ax1=ax1; s.ax2=ax2; s.invs2=invs2;
-        s.opac=opac; s.k2=k2;
+        s.opac=opac; s.k2=k2; s.gcol=gcol;
         s.kept=kept; s.leafMin=leafMin; s.leafMax=leafMax;
         s.internal=internal; s.nodeAABB=nodeAABB; s.num_kept=num_kept;
         s.campos=campos; s.num_cameras=num_cameras;
@@ -576,7 +754,8 @@ struct OccupancyEvaluator::Impl {
 
 OccupancyEvaluator::OccupancyEvaluator(
     const float* means, const float* quats,
-    const float* log_scales, const float* logit_opac, int num_splats,
+    const float* log_scales, const float* logit_opac, const float* features_dc,
+    int num_splats,
     const float* cam_pos, int num_cameras,
     const MeshingConfig& cfg
 ) {
@@ -588,23 +767,25 @@ OccupancyEvaluator::OccupancyEvaluator(
     // ---- upload + activate ----
     float *d_means = dmalloc<float>((size_t)N*3), *d_quats = dmalloc<float>((size_t)N*4);
     float *d_logsc = dmalloc<float>((size_t)N*3), *d_logit = dmalloc<float>((size_t)N);
+    float *d_fdc = dmalloc<float>((size_t)N*3);
     cudaMemcpy(d_means, means, sizeof(float)*N*3, cudaMemcpyHostToDevice);
     cudaMemcpy(d_quats, quats, sizeof(float)*N*4, cudaMemcpyHostToDevice);
     cudaMemcpy(d_logsc, log_scales, sizeof(float)*N*3, cudaMemcpyHostToDevice);
     cudaMemcpy(d_logit, logit_opac, sizeof(float)*N, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_fdc, features_dc, sizeof(float)*N*3, cudaMemcpyHostToDevice);
 
     impl_->mean=dmalloc<float3>(N); impl_->ax0=dmalloc<float3>(N);
     impl_->ax1=dmalloc<float3>(N);  impl_->ax2=dmalloc<float3>(N);
     impl_->invs2=dmalloc<float3>(N); impl_->opac=dmalloc<float>(N);
     impl_->radius=dmalloc<float>(N); impl_->k2=dmalloc<float>(N);
-    impl_->valid=dmalloc<int>(N);
+    impl_->gcol=dmalloc<float3>(N); impl_->valid=dmalloc<int>(N);
 
     activate_kernel<<<_LAUNCH_ARGS_1D(N, 256)>>>(
-        N, d_means, d_quats, d_logsc, d_logit,
+        N, d_means, d_quats, d_logsc, d_logit, d_fdc,
         impl_->mean, impl_->ax0, impl_->ax1, impl_->ax2, impl_->invs2,
-        impl_->opac, impl_->radius, impl_->k2, impl_->valid);
+        impl_->opac, impl_->radius, impl_->k2, impl_->valid, impl_->gcol);
     CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-    cudaFree(d_means); cudaFree(d_quats); cudaFree(d_logsc); cudaFree(d_logit);
+    cudaFree(d_means); cudaFree(d_quats); cudaFree(d_logsc); cudaFree(d_logit); cudaFree(d_fdc);
 
     // ---- kept list + scene bbox (host) ----
     std::vector<float> h_mean(N*3);
@@ -768,6 +949,19 @@ void OccupancyEvaluator::bisect_edges(
     cudaMemcpy(xyz_out, d_out, sizeof(float)*n_edges*3, cudaMemcpyDeviceToHost);
     cudaFree(d_cloud); cudaFree(d_ea); cudaFree(d_eb);
     cudaFree(d_oa); cudaFree(d_ob); cudaFree(d_out);
+}
+
+void OccupancyEvaluator::colorize(const float* verts, int n, float* rgb_out) {
+    if (n <= 0) return;
+    float* d_v = dmalloc<float>((size_t)n*3);
+    float* d_c = dmalloc<float>((size_t)n*3);
+    cudaMemcpy(d_v, verts, sizeof(float)*n*3, cudaMemcpyHostToDevice);
+    GpuScene s = impl_->make_scene();
+    int dynamic = impl_->num_cameras > 0 ? 1 : 0;
+    colorize_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_v, n, d_c, dynamic);
+    CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+    cudaMemcpy(rgb_out, d_c, sizeof(float)*n*3, cudaMemcpyDeviceToHost);
+    cudaFree(d_v); cudaFree(d_c);
 }
 
 } // namespace meshing

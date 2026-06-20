@@ -80,6 +80,7 @@ static inline int64_t edge_key(int a, int b, int64_t P) {
 struct Mesh {
     std::vector<std::array<float,3>> V;
     std::vector<std::array<int,3>> F;
+    std::vector<std::array<unsigned char,3>> C;  // per-vertex RGB (optional)
 };
 
 // Lock-free atomic min on a 64-bit slot (CAS loop).
@@ -346,14 +347,20 @@ static void merge_vertices(Mesh& mesh, float merge_factor, bool verbose, int num
 static void write_ply(const Mesh& mesh, const std::string& path) {
     std::ofstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("meshing: cannot open " + path);
+    const bool has_color = mesh.C.size() == mesh.V.size();
     f << "ply\nformat binary_little_endian 1.0\n";
     f << "element vertex " << mesh.V.size() << "\n";
     f << "property float x\nproperty float y\nproperty float z\n";
+    if (has_color)
+        f << "property uchar red\nproperty uchar green\nproperty uchar blue\n";
     f << "element face " << mesh.F.size() << "\n";
     f << "property list uchar int vertex_indices\n";
     f << "end_header\n";
-    for (const auto& v : mesh.V)
-        f.write(reinterpret_cast<const char*>(v.data()), sizeof(float) * 3);
+    for (size_t i = 0; i < mesh.V.size(); ++i) {
+        f.write(reinterpret_cast<const char*>(mesh.V[i].data()), sizeof(float) * 3);
+        if (has_color)
+            f.write(reinterpret_cast<const char*>(mesh.C[i].data()), 3);
+    }
     for (const auto& tri : mesh.F) {
         unsigned char n = 3;
         f.write(reinterpret_cast<const char*>(&n), 1);
@@ -427,7 +434,8 @@ static void orient_mesh(Mesh& mesh) {
 
 bool generate_mesh(
     const float* means, const float* quats,
-    const float* log_scales, const float* logit_opac, int num_splats,
+    const float* log_scales, const float* logit_opac, const float* features_dc,
+    int num_splats,
     const float* cam_pos, int num_cameras,
     const MeshingConfig& cfg,
     const std::string& output_path
@@ -435,7 +443,7 @@ bool generate_mesh(
     const float iso = cfg.iso;
     auto t0 = Clock::now();
 
-    OccupancyEvaluator ev(means, quats, log_scales, logit_opac, num_splats,
+    OccupancyEvaluator ev(means, quats, log_scales, logit_opac, features_dc, num_splats,
                           cam_pos, num_cameras, cfg);
 
     // ---- 1. point cloud (float everywhere except the Delaunay call) ----
@@ -563,6 +571,20 @@ bool generate_mesh(
     auto t7 = Clock::now();
     orient_mesh(mesh);
     if (cfg.verbose) printf("[meshing] orient (%.2fs)\n", secs_since(t7));
+
+    // ---- 7c. per-vertex color from splats ----
+    auto t8 = Clock::now();
+    if (!mesh.V.empty()) {
+        const int nv = (int)mesh.V.size();
+        std::vector<float> rgb(3 * nv);
+        ev.colorize(&mesh.V[0][0], nv, rgb.data());
+        mesh.C.resize(nv);
+        for (int i = 0; i < nv; ++i)
+            for (int a = 0; a < 3; ++a)
+                mesh.C[i][a] = (unsigned char)std::min(std::max(
+                    (int)std::lround(rgb[3*i+a] * 255.0f), 0), 255);
+    }
+    if (cfg.verbose) printf("[meshing] color (%.2fs)\n", secs_since(t8));
 
     // ---- 8. write ----
     write_ply(mesh, output_path);
