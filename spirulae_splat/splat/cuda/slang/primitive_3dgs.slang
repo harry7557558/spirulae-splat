@@ -352,7 +352,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     posW2C(R, t, mean, mean_c);
     float cull_z = (camera_model == CameraModelType::PINHOLE) ?
         mean_c.z : length(mean_c);
-    depth = mean_c.z;
+    depth = length(mean_c);
     if (!assume_valid && cull_z <= 0.0f) {
         aabb_xyxy = float4(0.0f);
         return;

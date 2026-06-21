@@ -353,7 +353,8 @@ std::map<std::string, float> engine_compute_loss_backward(
     // Depth -> normal: derive depth_normal from rendered depth when gt_normal is provided
     // (matches training_losses.py logic: pred_normal is None, pred_depth exists, gt_normal exists).
     bool compute_depth_normal = (engine().gt.normal.data_ptr() != nullptr);
-    bool is_ray_depth = (engine().primitive != "3dgs" && engine().primitive != "mip");
+    // bool is_ray_depth = (engine().primitive != "3dgs" && engine().primitive != "mip");
+    bool is_ray_depth = true;
     if (compute_depth_normal) {
         depth_normal = _pool_tv("eng.depth_normal", C, H, W, 3);
         depth_to_normal_forward(
