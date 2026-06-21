@@ -13,6 +13,7 @@
 #include "Delaunay3D.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -437,6 +438,7 @@ bool generate_mesh(
     const float* log_scales, const float* logit_opac, const float* features_dc,
     int num_splats,
     const float* cam_pos, int num_cameras,
+    const CameraParams& cams,
     const MeshingConfig& cfg,
     const std::string& output_path
 ) {
@@ -444,7 +446,37 @@ bool generate_mesh(
     auto t0 = Clock::now();
 
     OccupancyEvaluator ev(means, quats, log_scales, logit_opac, features_dc, num_splats,
-                          cam_pos, num_cameras, cfg);
+                          cam_pos, num_cameras, cams, cfg);
+
+    // ---- debug: dump one camera's occupancy moments and bail out ----
+    // SS_MESH_DEBUG_RENDER=<cam_idx> -> /tmp/ss_moments.f32 (float32 [H,W,3]).
+    if (const char* dbg = std::getenv("SS_MESH_DEBUG_RENDER")) {
+        int cam = std::atoi(dbg);
+        std::vector<float> mom; int W = 0, H = 0;
+        if (!ev.debug_render_moments(cam, mom, W, H)) {
+            printf("[meshing] debug render unavailable (no camera intrinsics)\n");
+            return false;
+        }
+        double m0sum = 0; float m0max = 0, mn = 1e30f, mx = -1e30f;
+        size_t seen = 0;
+        for (size_t p = 0; p < (size_t)W * H; ++p) {
+            float m0 = mom[3*p], me = mom[3*p+1];
+            m0sum += m0; m0max = std::max(m0max, m0);
+            if (m0 > 0.5f) { mn = std::min(mn, me); mx = std::max(mx, me); ++seen; }
+        }
+        printf("[meshing] debug moments cam %d: %dx%d, mean m0=%.4f max m0=%.4f; "
+               "depth(m0>0.5) in [%.3f, %.3f] over %zu px\n",
+               cam, W, H, m0sum / ((double)W * H), m0max, mn, mx, seen);
+        FILE* f = std::fopen("/tmp/ss_moments.f32", "wb");
+        if (f) {
+            int hdr[3] = {H, W, 3};
+            std::fwrite(hdr, sizeof(int), 3, f);
+            std::fwrite(mom.data(), sizeof(float), mom.size(), f);
+            std::fclose(f);
+            printf("[meshing] wrote /tmp/ss_moments.f32 (header: H W 3, then floats)\n");
+        }
+        return true;
+    }
 
     // ---- 1. point cloud (float everywhere except the Delaunay call) ----
     std::vector<float> pts;

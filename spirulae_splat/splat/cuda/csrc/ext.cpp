@@ -86,7 +86,10 @@ static bool generate_mesh_tensor(
     const std::string& output_path,
     double iso, double merge_factor, int64_t bisection_iters,
     int64_t max_cameras, int64_t max_grid_res, double grid_cell_factor,
-    int64_t num_threads, bool verbose
+    int64_t num_threads, bool verbose,
+    at::Tensor viewmats, at::Tensor intrins, at::Tensor dist_coeffs,
+    at::Tensor cam_widths, at::Tensor cam_heights, const std::string& camera_model,
+    int64_t carve_k
 ) {
     auto f32 = [](at::Tensor t) { return t.to(at::kFloat).contiguous().cpu(); };
     at::Tensor m = f32(means), q = f32(quats), s = f32(scales), o = f32(opacities);
@@ -109,6 +112,41 @@ static bool generate_mesh_tensor(
         cam_ptr = cam.data_ptr<float>();
     }
 
+    // Optional camera intrinsics for the rasterize-and-sample path. Kept alive
+    // in this scope (vm/in/dc) so the pointers passed in CameraParams stay valid
+    // for the whole generate_mesh call.
+    meshing::CameraParams cams;
+    at::Tensor vm, in, dc, cw, ch;
+    if (C > 0 && viewmats.numel() > 0 && intrins.numel() > 0) {
+        vm = f32(viewmats);
+        in = f32(intrins);
+        TORCH_CHECK(vm.dim() == 3 && vm.size(0) == C && vm.size(1) == 4 && vm.size(2) == 4,
+                    "viewmats must be (C,4,4) matching camera_positions");
+        TORCH_CHECK(in.dim() == 2 && in.size(0) == C && in.size(1) == 4,
+                    "intrins must be (C,4): fx, fy, cx, cy");
+        cams.viewmats = vm.data_ptr<float>();
+        cams.intrins  = in.data_ptr<float>();
+        if (dist_coeffs.numel() > 0) {
+            dc = f32(dist_coeffs);
+            TORCH_CHECK(dc.dim() == 2 && dc.size(0) == C && dc.size(1) == 10,
+                        "dist_coeffs must be (C,10) in engine layout");
+            cams.dist_coeffs = dc.data_ptr<float>();
+        }
+        // Per-camera image size. Accept a scalar (broadcast to all cameras) or a
+        // (C,) tensor so datasets with mixed resolutions are supported.
+        auto i32 = [&](at::Tensor t) {
+            t = t.to(at::kInt).contiguous().cpu();
+            if (t.numel() == 1) t = t.expand({C}).contiguous();
+            TORCH_CHECK(t.numel() == C, "cam_widths/cam_heights must be scalar or (C,)");
+            return t;
+        };
+        cw = i32(cam_widths);
+        ch = i32(cam_heights);
+        cams.widths  = cw.data_ptr<int>();
+        cams.heights = ch.data_ptr<int>();
+        cams.camera_model = camera_model;
+    }
+
     meshing::MeshingConfig cfg;
     cfg.iso = (float)iso;
     cfg.merge_factor = (float)merge_factor;
@@ -118,10 +156,11 @@ static bool generate_mesh_tensor(
     cfg.grid_cell_factor = (float)grid_cell_factor;
     cfg.num_threads = (int)num_threads;
     cfg.verbose = verbose;
+    cfg.carve_k = (int)carve_k;
 
     return meshing::generate_mesh(
         m.data_ptr<float>(), q.data_ptr<float>(), s.data_ptr<float>(), o.data_ptr<float>(),
-        fdc.data_ptr<float>(), N, cam_ptr, C, cfg, output_path);
+        fdc.data_ptr<float>(), N, cam_ptr, C, cams, cfg, output_path);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -140,7 +179,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("max_grid_res") = 512,
           pybind11::arg("grid_cell_factor") = 2.0,
           pybind11::arg("num_threads") = 0,
-          pybind11::arg("verbose") = true);
+          pybind11::arg("verbose") = true,
+          pybind11::arg("viewmats") = at::Tensor(),
+          pybind11::arg("intrins") = at::Tensor(),
+          pybind11::arg("dist_coeffs") = at::Tensor(),
+          pybind11::arg("cam_widths") = at::Tensor(),
+          pybind11::arg("cam_heights") = at::Tensor(),
+          pybind11::arg("camera_model") = std::string("PINHOLE"),
+          pybind11::arg("carve_k") = 1);
 
     // Delaunay3D.h
     m.def("delaunay3d", &delaunay3d_tensor,

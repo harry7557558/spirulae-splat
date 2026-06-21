@@ -640,6 +640,9 @@ class SpirulaeSplatDataparser:
         dataset_dir_files = [Path(fn) for fn in os.listdir(self.dataset_dir)]
 
         # Load .xml file
+        if self.config.metashape_xml is not None and not self.config.metashape_xml.exists():
+            print("WARNING:", self.config.metashape_xml, "is set but does not exist.")
+            self.config.metashape_xml = None
         if self.config.metashape_xml is None:
             xml_files = [self.dataset_dir / fn for fn in dataset_dir_files if fn.suffix.lower() == ".xml"]
             if len(xml_files) == 0:
@@ -656,6 +659,9 @@ class SpirulaeSplatDataparser:
             raise ValueError(f"XML file {self.config.metashape_xml} must have a .xml extension")
 
         # Load .ply file
+        if self.config.metashape_ply is not None and not self.config.metashape_ply.exists():
+            print("WARNING:", self.config.metashape_ply, "is set but does not exist.")
+            self.config.metashape_ply = None
         if self.config.metashape_ply is None:
             ply_files = [fn for fn in dataset_dir_files if fn.suffix.lower() == ".ply"]
             if len(ply_files) == 0:
@@ -670,6 +676,9 @@ class SpirulaeSplatDataparser:
             raise ValueError(f"ply file {self.dataset_dir / self.config.metashape_ply} must have a .ply extension")
 
         # Load .psx file
+        if self.config.metashape_psx is not None and not self.config.metashape_psx.exists():
+            print("WARNING:", self.config.metashape_psx, "is set but does not exist.")
+            self.config.metashape_psx = None
         if self.config.metashape_psx is None:
             psx_files = [self.dataset_dir / fn for fn in dataset_dir_files if fn.suffix.lower() == ".psx"]
             if len(psx_files) > 1:

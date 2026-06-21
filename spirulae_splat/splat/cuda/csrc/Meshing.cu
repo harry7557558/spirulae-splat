@@ -16,6 +16,7 @@
  */
 
 #include "Meshing.h"
+#include "MeshingRaster.cuh"
 
 #include "Common.cuh"
 
@@ -95,7 +96,8 @@ __device__ __forceinline__ float atomicMaxF(float* addr, float val) {
 // Returns the selected positions interleaved (xyz), up to k of them.
 // ---------------------------------------------------------------------------
 static std::vector<float> select_cameras_kmeans(
-    const float* cam, int C, int k, int iters = 25
+    const float* cam, int C, int k, int iters = 25,
+    std::vector<int>* out_idx = nullptr
 ) {
     auto d2 = [&](int a, const float* c) {
         float dx = cam[3*a]-c[0], dy = cam[3*a+1]-c[1], dz = cam[3*a+2]-c[2];
@@ -152,6 +154,7 @@ static std::vector<float> select_cameras_kmeans(
         if (medoid[j] >= 0) {
             int c = medoid[j];
             out.push_back(cam[3*c]); out.push_back(cam[3*c+1]); out.push_back(cam[3*c+2]);
+            if (out_idx) out_idx->push_back(c);
         }
     return out;
 }
@@ -483,6 +486,34 @@ __global__ void colorize_kernel(
     rgb[3*i+0] = col.x; rgb[3*i+1] = col.y; rgb[3*i+2] = col.z;
 }
 
+// Combine the camera occlusion term with the view-independent static density,
+// mirroring the BVH field occ = 1 - (1-occ_static)(1-occ_front): occ_static
+// protects real surfaces (high density on any surface, regardless of view) from
+// being carved by an underestimating camera, while occ_front (the render term)
+// fills occluded interior and carves visible free space.
+__global__ void occ_combine_kernel(
+    int n, float* __restrict__ occ, const float* __restrict__ occ_static
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float a = occ_static[i], b = occ[i];
+    occ[i] = 1.0f - (1.0f - a) * (1.0f - b);
+}
+
+// Fallback for the render color path: verts the cameras couldn't color (rgb<0,
+// e.g. seen by no camera or fully occluded) get the static density-weighted color.
+__global__ void colorize_fallback_kernel(
+    GpuScene s, const float* __restrict__ verts, int n, float* rgb
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    if (rgb[3*i+0] >= 0.0f) return;
+    float3 p = make_float3(verts[3*i], verts[3*i+1], verts[3*i+2]);
+    float3 col;
+    if (!color_static(s, p, col)) col = color_nearest(s, p);
+    rgb[3*i+0] = col.x; rgb[3*i+1] = col.y; rgb[3*i+2] = col.z;
+}
+
 // ---------------------------------------------------------------------------
 // Kernels: activation / point cloud
 // ---------------------------------------------------------------------------
@@ -732,7 +763,22 @@ struct OccupancyEvaluator::Impl {
     float3 *campos = nullptr;
     int num_cameras = 0;
 
+    // Camera intrinsics for the rasterize-and-sample path. Host-side copies kept
+    // for the lifetime of the evaluator (the caller's tensors may be freed after
+    // construction); uploaded to device lazily by the render path (Phase 2+).
+    // Empty when the static (LBVH) occupancy path is in use.
+    std::vector<float> cam_viewmats;  // [C*16] row-major world->cam
+    std::vector<float> cam_intrins;   // [C*4]  fx, fy, cx, cy
+    std::vector<float> cam_dist;      // [C*10] engine distortion layout
+    std::vector<int> cam_widths;      // [C] per-camera image width
+    std::vector<int> cam_heights;     // [C] per-camera image height
+    std::string cam_model;
+    bool use_render = false;          // cams.valid() && cameras present
+    RenderContext* rctx = nullptr;    // built when use_render (MeshingRaster.cu)
+    std::vector<int> render_cam_indices;  // camera subset rendered per batch
+
     ~Impl() {
+        if (rctx) render_context_destroy(rctx);
         for (void* p : {(void*)mean,(void*)ax0,(void*)ax1,(void*)ax2,(void*)invs2,
                         (void*)opac,(void*)radius,(void*)k2,(void*)gcol,(void*)valid,(void*)kept,
                         (void*)leafMin,(void*)leafMax,(void*)nodeAABB,(void*)internal,
@@ -757,6 +803,7 @@ OccupancyEvaluator::OccupancyEvaluator(
     const float* log_scales, const float* logit_opac, const float* features_dc,
     int num_splats,
     const float* cam_pos, int num_cameras,
+    const CameraParams& cams,
     const MeshingConfig& cfg
 ) {
     impl_ = new Impl();
@@ -883,10 +930,16 @@ OccupancyEvaluator::OccupancyEvaluator(
     // ---- cameras: keep all, else select max_cameras representatives ----
     if (cam_pos != nullptr && num_cameras > 0) {
         std::vector<float> cams;
-        if (num_cameras <= cfg.max_cameras) {
+        std::vector<int>& sel = impl_->render_cam_indices;
+        auto max_cameras = cfg.max_cameras;
+        if (max_cameras <= 0)
+            max_cameras = num_cameras;
+        if (num_cameras <= max_cameras) {
             cams.assign(cam_pos, cam_pos + 3 * num_cameras);
+            sel.resize(num_cameras);
+            for (int c = 0; c < num_cameras; ++c) sel[c] = c;
         } else {
-            cams = select_cameras_kmeans(cam_pos, num_cameras, cfg.max_cameras);
+            cams = select_cameras_kmeans(cam_pos, num_cameras, max_cameras, 25, &sel);
         }
         impl_->num_cameras = (int)(cams.size()/3);
         impl_->campos = dmalloc<float3>(impl_->num_cameras);
@@ -895,9 +948,57 @@ OccupancyEvaluator::OccupancyEvaluator(
             printf("[meshing] using %d/%d cameras (k-means medoids, dataset occupancy)\n",
                    impl_->num_cameras, num_cameras);
     }
+
+    // ---- camera intrinsics (rasterize-and-sample path) ----
+    // Stored host-side now; the render path uploads + uses them in Phase 2+.
+    // For now this only records availability so generate_mesh can branch.
+    if (cams.valid() && num_cameras > 0) {
+        impl_->cam_viewmats.assign(cams.viewmats, cams.viewmats + (size_t)num_cameras * 16);
+        impl_->cam_intrins.assign(cams.intrins, cams.intrins + (size_t)num_cameras * 4);
+        impl_->cam_dist.assign((size_t)num_cameras * 10, 0.0f);
+        if (cams.dist_coeffs)
+            impl_->cam_dist.assign(cams.dist_coeffs, cams.dist_coeffs + (size_t)num_cameras * 10);
+        impl_->cam_widths.assign(cams.widths, cams.widths + num_cameras);
+        impl_->cam_heights.assign(cams.heights, cams.heights + num_cameras);
+        impl_->cam_model  = cams.camera_model;
+        impl_->use_render = true;
+        impl_->rctx = render_context_create(
+            means, quats, log_scales, logit_opac, features_dc, N,
+            impl_->cam_viewmats.data(), impl_->cam_intrins.data(),
+            impl_->cam_dist.empty() ? nullptr : impl_->cam_dist.data(),
+            num_cameras, impl_->cam_widths.data(), impl_->cam_heights.data(),
+            cams.camera_model, cfg.carve_k);
+        if (cfg.verbose) {
+            int w0 = impl_->cam_widths[0], h0 = impl_->cam_heights[0];
+            bool uniform = true;
+            for (int c = 1; c < num_cameras; ++c)
+                if (impl_->cam_widths[c] != w0 || impl_->cam_heights[c] != h0) { uniform = false; break; }
+            if (uniform)
+                printf("[meshing] camera intrinsics: %dx%d, model=%s (render path ready)\n",
+                       w0, h0, cams.camera_model.c_str());
+            else
+                printf("[meshing] camera intrinsics: per-camera resolution, model=%s (render path ready)\n",
+                       cams.camera_model.c_str());
+        }
+    }
 }
 
 OccupancyEvaluator::~OccupancyEvaluator() { delete impl_; }
+
+bool OccupancyEvaluator::debug_render_moments(
+    int cam_idx, std::vector<float>& out, int& width, int& height
+) {
+    if (!impl_->rctx) return false;
+    width = render_context_width(impl_->rctx, cam_idx);
+    height = render_context_height(impl_->rctx, cam_idx);
+    size_t npix = (size_t)width * height;
+    float3* d_mom = dmalloc<float3>(npix);
+    render_camera_moments(impl_->rctx, cam_idx, d_mom);
+    out.resize(npix * 3);
+    cudaMemcpy(out.data(), d_mom, sizeof(float3) * npix, cudaMemcpyDeviceToHost);
+    cudaFree(d_mom);
+    return true;
+}
 
 void OccupancyEvaluator::generate_point_cloud(std::vector<float>& xyz_out) {
     long n = (long)impl_->num_kept * 7;
@@ -916,10 +1017,22 @@ void OccupancyEvaluator::evaluate(const float* xyz, int n, float* occ_out) {
     float* d_xyz = dmalloc<float>((size_t)n*3);
     float* d_occ = dmalloc<float>(n);
     cudaMemcpy(d_xyz, xyz, sizeof(float)*n*3, cudaMemcpyHostToDevice);
-    GpuScene s = impl_->make_scene();
-    int dynamic = impl_->num_cameras > 0 ? 1 : 0;
-    occ_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_xyz, n, d_occ, dynamic);
-    CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+    if (impl_->use_render && !impl_->render_cam_indices.empty()) {
+        render_evaluate_occupancy(impl_->rctx, impl_->render_cam_indices.data(),
+            (int)impl_->render_cam_indices.size(), d_xyz, n, d_occ);
+        // protect surfaces with the static density term (BVH-equivalent field)
+        float* d_s = dmalloc<float>(n);
+        GpuScene s = impl_->make_scene();
+        occ_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_xyz, n, d_s, 0);
+        occ_combine_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(n, d_occ, d_s);
+        CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+        cudaFree(d_s);
+    } else {
+        GpuScene s = impl_->make_scene();
+        int dynamic = impl_->num_cameras > 0 ? 1 : 0;
+        occ_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_xyz, n, d_occ, dynamic);
+        CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+    }
     cudaMemcpy(occ_out, d_occ, sizeof(float)*n, cudaMemcpyDeviceToHost);
     cudaFree(d_xyz); cudaFree(d_occ);
 }
@@ -931,6 +1044,60 @@ void OccupancyEvaluator::bisect_edges(
     int n_edges, float* xyz_out
 ) {
     if (n_edges <= 0) return;
+
+    // Render path: host-driven bisection (each iteration renders all cameras and
+    // samples the midpoint batch), so the occupancy field is consistent with
+    // evaluate(). Finishes with a linear interpolation between the final bracket.
+    if (impl_->use_render && !impl_->render_cam_indices.empty()) {
+        const float iso = impl_->cfg.iso;
+        const int* idx = impl_->render_cam_indices.data();
+        const int ncam = (int)impl_->render_cam_indices.size();
+        std::vector<float> lo((size_t)n_edges*3), hi((size_t)n_edges*3);
+        for (int e = 0; e < n_edges; ++e) {
+            int a = edge_a[e], b = edge_b[e];
+            for (int t = 0; t < 3; ++t) {
+                lo[3*e+t] = cloud_xyz[3*a+t];
+                hi[3*e+t] = cloud_xyz[3*b+t];
+            }
+        }
+        std::vector<float> occ_lo(occ_a, occ_a + n_edges);
+        std::vector<float> occ_hi(occ_b, occ_b + n_edges);
+        std::vector<float> mid((size_t)n_edges*3), occ_mid(n_edges);
+        float* d_mid = dmalloc<float>((size_t)n_edges*3);
+        float* d_occ = dmalloc<float>(n_edges);
+        float* d_occ_s = dmalloc<float>(n_edges);
+        GpuScene s = impl_->make_scene();
+        for (int it = 0; it < impl_->cfg.bisection_iters; ++it) {
+            for (size_t k = 0; k < (size_t)n_edges*3; ++k) mid[k] = 0.5f*(lo[k]+hi[k]);
+            cudaMemcpy(d_mid, mid.data(), sizeof(float)*(size_t)n_edges*3, cudaMemcpyHostToDevice);
+            render_evaluate_occupancy(impl_->rctx, idx, ncam, d_mid, n_edges, d_occ);
+            occ_kernel<<<_LAUNCH_ARGS_1D(n_edges, 128)>>>(s, d_mid, n_edges, d_occ_s, 0);
+            occ_combine_kernel<<<_LAUNCH_ARGS_1D(n_edges, 128)>>>(n_edges, d_occ, d_occ_s);
+            CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+            cudaMemcpy(occ_mid.data(), d_occ, sizeof(float)*n_edges, cudaMemcpyDeviceToHost);
+            for (int e = 0; e < n_edges; ++e) {
+                bool mid_neg = (occ_mid[e] - iso) < 0.0f;
+                bool lo_neg  = (occ_lo[e]  - iso) < 0.0f;
+                if (mid_neg == lo_neg) {
+                    for (int t = 0; t < 3; ++t) lo[3*e+t] = mid[3*e+t];
+                    occ_lo[e] = occ_mid[e];
+                } else {
+                    for (int t = 0; t < 3; ++t) hi[3*e+t] = mid[3*e+t];
+                    occ_hi[e] = occ_mid[e];
+                }
+            }
+        }
+        for (int e = 0; e < n_edges; ++e) {
+            float denom = occ_hi[e] - occ_lo[e];
+            float t = (fabsf(denom) > 1e-12f) ? (iso - occ_lo[e]) / denom : 0.5f;
+            t = std::min(std::max(t, 0.0f), 1.0f);
+            for (int a = 0; a < 3; ++a)
+                xyz_out[3*e+a] = lo[3*e+a] + t * (hi[3*e+a] - lo[3*e+a]);
+        }
+        cudaFree(d_mid); cudaFree(d_occ); cudaFree(d_occ_s);
+        return;
+    }
+
     long ncloud = (long)num_points_;
     float* d_cloud = dmalloc<float>((size_t)ncloud*3);
     cudaMemcpy(d_cloud, cloud_xyz, sizeof(float)*ncloud*3, cudaMemcpyHostToDevice);
@@ -957,9 +1124,16 @@ void OccupancyEvaluator::colorize(const float* verts, int n, float* rgb_out) {
     float* d_c = dmalloc<float>((size_t)n*3);
     cudaMemcpy(d_v, verts, sizeof(float)*n*3, cudaMemcpyHostToDevice);
     GpuScene s = impl_->make_scene();
-    int dynamic = impl_->num_cameras > 0 ? 1 : 0;
-    colorize_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_v, n, d_c, dynamic);
-    CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+    if (impl_->use_render && !impl_->render_cam_indices.empty()) {
+        render_evaluate_color(impl_->rctx, impl_->render_cam_indices.data(),
+            (int)impl_->render_cam_indices.size(), d_v, n, d_c);
+        colorize_fallback_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_v, n, d_c);
+        CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+    } else {
+        int dynamic = impl_->num_cameras > 0 ? 1 : 0;
+        colorize_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_v, n, d_c, dynamic);
+        CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+    }
     cudaMemcpy(rgb_out, d_c, sizeof(float)*n*3, cudaMemcpyDeviceToHost);
     cudaFree(d_v); cudaFree(d_c);
 }

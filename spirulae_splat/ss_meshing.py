@@ -59,11 +59,91 @@ def load_splats(ply_path: Path):
     )
 
 
-def load_camera_positions(run_dir: Path, data_dir: Path):
-    """Parse the dataset and return camera centers in the splat coordinate frame."""
+# Dataparser distortion columns (see dataparser.DISTORTION_KEYS) -> engine [10]
+# layout expected by the 3DGUT projection (Camera.h kCameraDistortionParams:
+# k1,k2,p1,p2,k3,k4,k5,k6,sx1,sy1). Source order is k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2.
+# k5,k6 have no source column (filled with zero); b1,b2 (metashape) are dropped.
+# NOTE: only validated on near-zero-distortion scenes (mip360); revisit for a
+# heavily distorted dataset.
+_DIST_SRC = "k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2".split()
+_DIST_DST = ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "sx1", "sy1"]
+
+_IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".JPG", ".PNG"}
+
+
+def _resolve_render_resolution(dp_json, data_dir: Path, native_w, native_h):
+    """Pick the render resolution from config's image_dir/rescale_camera_to_fit.
+
+    The nerfstudio parse keys image paths off transforms.json's `file_path`
+    (typically full-res `images/`) and ignores `image_dir`, so a bool
+    `rescale_camera_to_fit=True` measures the wrong (full-res) image. We instead
+    honor `image_dir` directly: read the size of one actual image in
+    data_dir/image_dir and scale intrinsics to it. Falls back to the native
+    (parsed) resolution when image_dir is unset/missing. A numeric
+    `rescale_camera_to_fit` (divide-by-N) is applied when present.
+
+    `native_w`/`native_h` are per-camera int tensors (C,); datasets may mix
+    resolutions, so the same downscale ratio (sx, sy) is applied to each camera's
+    native size. Returns (widths(C,), heights(C,), sx, sy) where intrinsics scale
+    by the scalar (sx, sy).
+    """
+    native_w = torch.as_tensor(native_w).reshape(-1)
+    native_h = torch.as_tensor(native_h).reshape(-1)
+    w0, h0 = int(native_w[0]), int(native_h[0])
+
+    rescale = dp_json.get("rescale_camera_to_fit", False)
+    if not isinstance(rescale, bool) and isinstance(rescale, (int, float)) and rescale > 0:
+        rfn = {"floor": math.floor, "ceil": math.ceil, "round": round}.get(
+            dp_json.get("downscale_rounding_mode", "floor"), math.floor)
+        widths = torch.tensor([int(rfn(int(w) / rescale)) for w in native_w], dtype=torch.int32)
+        heights = torch.tensor([int(rfn(int(h) / rescale)) for h in native_h], dtype=torch.int32)
+        return widths, heights, 1.0 / rescale, 1.0 / rescale
+
+    image_dir = dp_json.get("image_dir", "images")
+    if image_dir:
+        d = Path(data_dir) / image_dir
+        if d.is_dir():
+            sample = next((p for p in sorted(d.iterdir())
+                           if p.is_file() and p.suffix in _IMG_EXTS), None)
+            if sample is not None:
+                from PIL import Image
+                with Image.open(sample) as im:
+                    tw, th = im.size
+                sx, sy = tw / w0, th / h0
+                widths = torch.round(native_w.float() * sx).to(torch.int32)
+                heights = torch.round(native_h.float() * sy).to(torch.int32)
+                return widths, heights, sx, sy
+    return native_w.to(torch.int32), native_h.to(torch.int32), 1.0, 1.0
+
+
+def _camera_type_to_model(camera_type) -> str:
+    """Map a nerfstudio/COLMAP CameraType value to an engine camera-model name."""
+    from spirulae_splat.modules.camera import CameraType
+    val = camera_type[0] if isinstance(camera_type, (list, tuple)) else camera_type
+    if hasattr(val, "item"):
+        val = val.item()
+    if val == CameraType.EQUIDISTANT.value:
+        return "FISHEYE"
+    if val == CameraType.EQUIRECTANGULAR.value:
+        return "EQUIRECTANGULAR"
+    return "PINHOLE"
+
+
+def load_cameras(run_dir: Path, data_dir: Path):
+    """Parse the dataset; return camera intrinsics/extrinsics in the splat frame.
+
+    Returns a dict with:
+      positions   (C,3)      camera centers (splat frame)
+      viewmats    (C,4,4)    world->camera (splat frame)
+      intrins     (C,4)      fx, fy, cx, cy
+      dist_coeffs (C,10)     engine distortion layout
+      width,height (C,) int  per-camera render size
+      camera_model str       engine model name
+    """
     from spirulae_splat.modules.dataparser import (
         SpirulaeSplatDataparser,
         SpirulaeSplatDataParserConfig,
+        DISTORTION_KEYS,
     )
 
     cfg_path = run_dir / "config.json"
@@ -82,18 +162,83 @@ def load_camera_positions(run_dir: Path, data_dir: Path):
             val = Path(val)
         setattr(cfg, k, val)
 
+    # The bool auto-rescale opens a full-res image per frame (slow) and, on the
+    # nerfstudio path, ignores image_dir -- we redo resolution from image_dir
+    # below, so disable it here. A numeric rescale is left for the parser.
+    if isinstance(getattr(cfg, "rescale_camera_to_fit", False), bool):
+        cfg.rescale_camera_to_fit = False
+
     parser = SpirulaeSplatDataparser(cfg, data_dir)
     train_out, _eval_out = parser.parse()
-    c2w = train_out["cameras"].camera_to_worlds  # (N, 3, 4)
+    cameras = train_out["cameras"]
+
+    c2w = cameras.camera_to_worlds  # (C, 3, 4)
     if c2w.dim() == 2:
         c2w = c2w.unsqueeze(0)
-    positions = c2w[:, :3, 3].contiguous().float()  # (N, 3)
+    c2w = c2w.float()
+    C = c2w.shape[0]
 
-    # The splats live in a frame scaled by relative_scale relative to c2w.
     rel = cfg_json.get("model", {}).get("relative_scale", None)
-    if rel is not None:
-        positions = positions * float(rel)
-    return positions
+    rel = float(rel) if rel is not None else 1.0
+
+    # The splats live in a frame scaled by relative_scale relative to c2w; scale
+    # the translation, leave rotation alone.
+    positions = (c2w[:, :3, 3].contiguous() * rel).float()  # (C, 3)
+
+    # Build (C,4,4) world->camera. c2w is camera->world (OpenGL: y up, z back);
+    # the projection expects OpenCV (y down, z forward), so flip the y,z columns
+    # of R before inverting -- matching ss_viewer._camera_to_viewmat. The camera
+    # translation is scaled by relative_scale (splat frame).
+    R = c2w[:, :3, :3] * torch.tensor([1.0, -1.0, -1.0])[None, None, :]
+    T = c2w[:, :3, 3:4] * rel
+    R_inv = R.transpose(-1, -2)
+    T_inv = -torch.matmul(R_inv, T)
+    viewmats = torch.eye(4).repeat(C, 1, 1)
+    viewmats[:, :3, :3] = R_inv
+    viewmats[:, :3, 3:4] = T_inv
+    viewmats = viewmats.contiguous().float()  # (C,4,4)
+
+    # intrins (fx, fy, cx, cy)
+    intr = cameras.intrins
+    if isinstance(intr, (tuple, list)):
+        intr = torch.stack([torch.as_tensor(x).reshape(C).float() for x in intr], dim=-1)
+    intrins = torch.as_tensor(intr).reshape(C, 4).contiguous().float()
+
+    # distortion -> engine [C,10] layout
+    dist_coeffs = torch.zeros(C, 10, dtype=torch.float32)
+    dp = getattr(cameras, "distortion_params", None)
+    if dp is not None and torch.as_tensor(dp).numel() > 0:
+        dp = torch.as_tensor(dp).reshape(C, -1).float()
+        src_idx = {k: i for i, k in enumerate(DISTORTION_KEYS)}
+        for j, key in enumerate(_DIST_DST):
+            if key in src_idx and src_idx[key] < dp.shape[1]:
+                dist_coeffs[:, j] = dp[:, src_idx[key]]
+
+    # Per-camera native size (datasets may mix resolutions); broadcast a scalar.
+    native_w = torch.as_tensor(cameras.width).reshape(-1).expand(C).contiguous()
+    native_h = torch.as_tensor(cameras.height).reshape(-1).expand(C).contiguous()
+
+    # Resolution honoring config's image_dir / rescale_camera_to_fit.
+    width, height, sx, sy = _resolve_render_resolution(dp_json, data_dir, native_w, native_h)
+    if (sx, sy) != (1.0, 1.0):
+        intrins[:, 0] *= sx  # fx
+        intrins[:, 1] *= sy  # fy
+        intrins[:, 2] *= sx  # cx
+        intrins[:, 3] *= sy  # cy
+        intrins = intrins.contiguous()
+
+    camera_model = _camera_type_to_model(cameras.camera_type)
+    camera_model = "PINHOLE"  # TODO
+
+    return {
+        "positions": positions,
+        "viewmats": viewmats,
+        "intrins": intrins,
+        "dist_coeffs": dist_coeffs,
+        "width": width,
+        "height": height,
+        "camera_model": camera_model,
+    }
 
 
 def entrypoint():
@@ -112,10 +257,17 @@ def entrypoint():
     ap.add_argument("--merge-factor", type=float, default=1.0,
                     help="local short-edge merge threshold multiplier (0 disables)")
     ap.add_argument("--bisection-iters", type=int, default=3)
-    ap.add_argument("--max-cameras", type=int, default=32)
+    ap.add_argument("--max-cameras", type=int, default=-1)
     ap.add_argument("--max-grid-res", type=int, default=512)
     ap.add_argument("--grid-cell-factor", type=float, default=2.0)
     ap.add_argument("--num-threads", type=int, default=0)
+    ap.add_argument("--occ-band", type=float, default=0.2,
+                    help="half-width of the accumulated-alpha band around iso used "
+                         "for the per-view occupancy crossing depths (render path)")
+    ap.add_argument("--carve-k", type=int, default=1,
+                    help="aggregate occupancy as the k-th smallest over cameras "
+                         "(k=1 = strict min/space-carving; k>1 is robust to a few "
+                         "underestimating views)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -125,6 +277,7 @@ def entrypoint():
     print(f"[meshing] {means.shape[0]} Gaussians")
 
     cam_positions = torch.empty((0, 3), dtype=torch.float32)
+    cams = None
     if not args.no_data:
         data_dir = args.data
         if data_dir is None:
@@ -138,8 +291,16 @@ def entrypoint():
                     data_dir = cand if cand.exists() else None
         if data_dir is not None and Path(data_dir).exists():
             print(f"[meshing] loading cameras from {data_dir}")
-            cam_positions = load_camera_positions(run_dir, Path(data_dir))
-            print(f"[meshing] {cam_positions.shape[0]} cameras")
+            cams = load_cameras(run_dir, Path(data_dir))
+            cam_positions = cams["positions"]
+            cw, chh = cams["width"], cams["height"]
+            if int(cw.min()) == int(cw.max()) and int(chh.min()) == int(chh.max()):
+                res_str = f"{int(cw[0])}x{int(chh[0])}"
+            else:
+                res_str = (f"{int(cw.min())}x{int(chh.min())}..{int(cw.max())}x{int(chh.max())} "
+                           "per-camera")
+            print(f"[meshing] {cam_positions.shape[0]} cameras "
+                  f"({res_str}, {cams['camera_model']})")
 
     using_cameras = cam_positions.shape[0] > 0
     if not using_cameras:
@@ -158,6 +319,17 @@ def entrypoint():
 
     out_path = args.output if args.output is not None else (splat_ply.parent / "mesh.ply")
 
+    cam_kwargs = {}
+    if cams is not None:
+        cam_kwargs = dict(
+            viewmats=cams["viewmats"],
+            intrins=cams["intrins"],
+            dist_coeffs=cams["dist_coeffs"],
+            cam_widths=cams["width"],
+            cam_heights=cams["height"],
+            camera_model=cams["camera_model"],
+        )
+
     _C.generate_mesh(
         means, quats, scales, opacities, features_dc, cam_positions, str(out_path),
         iso=iso,
@@ -168,6 +340,8 @@ def entrypoint():
         grid_cell_factor=args.grid_cell_factor,
         num_threads=args.num_threads,
         verbose=not args.quiet,
+        carve_k=args.carve_k,
+        **cam_kwargs,
     )
     print(f"[meshing] done -> {out_path}")
 
