@@ -104,6 +104,7 @@ struct ForwardCache {
     DeviceVector<int32_t>             flatten_ids;
     DeviceTensor3D<float>             render_Ts;
     DeviceTensor3D<float>             render_median; // [C,H,W] median depth, empty if not requested
+    DeviceTensor3D<float2>            render_median_anchor; // [C,H,W,2] near-anchor (z1,v1) for median bwd, empty if not requested
     DeviceTensor3D<int32_t>           last_ids;
     RenderOutput::TensorTuple         renders;
     DeviceVector<float>               accum_weight; // [max_num_splats] per-splat score from raster bwd

@@ -235,23 +235,24 @@ void forward_3dgs(
     DeviceTensor3D<float> render_Ts;
     DeviceTensor3D<int32_t> last_ids;
     DeviceTensor3D<float> render_median;
+    DeviceTensor3D<float2> render_median_anchor;
 
     if (primitive == "3dgs") {
-        auto [r, rTs, lids, r2, dist, med] = rasterize_to_pixels_3dgs_fwd(
+        auto [r, rTs, lids, r2, dist, med, ma] = rasterize_to_pixels_3dgs_fwd(
             engine().cur_num_splats,
             in_splats, engine().fwd.splats_s, engine().fwd.gaussian_ids,
             (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
             tile_offsets, flatten_ids, false, output_median);
-        renders = r; render_Ts = rTs; last_ids = lids; render_median = med;
+        renders = r; render_Ts = rTs; last_ids = lids; render_median = med; render_median_anchor = ma;
     } else if (primitive == "mip") {
-        auto [r, rTs, lids, r2, dist, med] = rasterize_to_pixels_mip_fwd(
+        auto [r, rTs, lids, r2, dist, med, ma] = rasterize_to_pixels_mip_fwd(
             engine().cur_num_splats,
             in_splats, engine().fwd.splats_s, engine().fwd.gaussian_ids,
             (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
             tile_offsets, flatten_ids, false, output_median);
-        renders = r; render_Ts = rTs; last_ids = lids; render_median = med;
+        renders = r; render_Ts = rTs; last_ids = lids; render_median = med; render_median_anchor = ma;
     } else if (primitive == "3dgut") {
-        auto [r, rTs, lids, r2, dist, med] = rasterize_to_pixels_3dgut_fwd(
+        auto [r, rTs, lids, r2, dist, med, ma] = rasterize_to_pixels_3dgut_fwd(
             engine().cur_num_splats,
             in_splats, engine().fwd.splats_s, engine().fwd.gaussian_ids,
             _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
@@ -259,12 +260,13 @@ void forward_3dgs(
             engine().fwd.aabb,
             (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
             tile_offsets, flatten_ids, false, output_median);
-        renders = r; render_Ts = rTs; last_ids = lids; render_median = med;
+        renders = r; render_Ts = rTs; last_ids = lids; render_median = med; render_median_anchor = ma;
     }
 
     engine().fwd.renders = renders;
     engine().fwd.render_Ts = render_Ts;
     engine().fwd.render_median = render_median;
+    engine().fwd.render_median_anchor = render_median_anchor;
     engine().fwd.last_ids = last_ids;
 
     // Background blend (in-place on fwd.renders.rgb). No-op when no

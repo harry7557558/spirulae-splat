@@ -34,6 +34,7 @@ void rasterize_to_pixels_eval3d_bwd_kernel_wrapper(
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -72,6 +73,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
+    const DeviceTensor3D<float2> render_median_anchor, // [I, H, W, 2], optional
     RenderOutput::Tensor render_outputs,
     RenderOutput::Tensor render2_outputs,
     const DeviceTensor3D<float> loss_map,
@@ -111,6 +113,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             image_width, image_height, tile_width, tile_height, \
             tile_offsets.data_ptr(), flatten_ids.data_ptr(), \
             render_Ts.data_ptr(), last_ids.data_ptr(), \
+            output_median ? render_median_anchor.data_ptr() : nullptr, \
             render_outputs, \
             render2_outputs.has_value() ? render2_outputs : RenderOutput::Buffer(), \
             loss_map.data_ptr(), \
@@ -180,6 +183,7 @@ inline std::tuple<
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
+    const DeviceTensor3D<float2> render_median_anchor, // [I, H, W, 2], optional
     RenderOutput::TensorTuple render_outputs_tuple,
     std::optional<RenderOutput::TensorTuple> render2_outputs_tuple,
     DeviceTensor3D<float> loss_map,  // [..., image_height, image_width, 1]
@@ -230,7 +234,7 @@ inline std::tuple<
         splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
-        render_Ts, last_ids, render_outputs,
+        render_Ts, last_ids, render_median_anchor, render_outputs,
         render2_outputs, loss_map, accum_weight_map,
         v_render_outputs, v_render_Ts,
         v_median,
@@ -272,6 +276,7 @@ inline std::tuple<
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
+    const DeviceTensor3D<float2> render_median_anchor, // [I, H, W, 2], optional
     RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
     DeviceTensor3D<float> loss_map,  // [..., image_height, image_width, 1]
@@ -291,7 +296,7 @@ inline std::tuple<
         num_splats, splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
-        render_Ts, last_ids, render_outputs, render2_outputs, loss_map, accum_weight_map,
+        render_Ts, last_ids, render_median_anchor, render_outputs, render2_outputs, loss_map, accum_weight_map,
         v_render_outputs, v_render_Ts, v_median, v_distortion_outputs, v_splats_w, v_splats_s,
         need_viewmat_grad
     );
@@ -328,6 +333,7 @@ std::tuple<
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
+    const DeviceTensor3D<float2> render_median_anchor, // [I, H, W, 2], optional
     RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
     DeviceTensor3D<float> loss_map,  // [..., image_height, image_width, 1]
@@ -358,7 +364,7 @@ std::tuple<
         num_splats, splats_w, splats_s, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
-        render_Ts, last_ids, render_outputs, render2_outputs, loss_map, accum_weight_map,
+        render_Ts, last_ids, render_median_anchor, render_outputs, render2_outputs, loss_map, accum_weight_map,
         v_render_outputs, v_render_Ts, v_median, v_distortion_outputs, v_splats_w, v_splats_s,
         need_viewmat_grad
     );

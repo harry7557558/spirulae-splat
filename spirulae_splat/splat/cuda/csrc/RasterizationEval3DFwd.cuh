@@ -21,7 +21,8 @@ std::tuple<
     DeviceTensor3D<int32_t>,  // last_ids
     RenderOutput::TensorTuple,  // renders2, optional
     RenderOutput::TensorTuple,  // distortions, optional
-    DeviceTensor3D<float>  // median depth, optional
+    DeviceTensor3D<float>,  // median depth, optional
+    DeviceTensor3D<float2>  // median near-anchor (z1, v1), optional
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
     int64_t num_splats,

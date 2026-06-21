@@ -39,6 +39,7 @@ std::tuple<
     // forward outputs
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
+    const DeviceTensor3D<float2> render_median_anchor, // [I, H, W, 2], optional
     RenderOutput::TensorTuple render_outputs,
     std::optional<RenderOutput::TensorTuple> render2_outputs,
     DeviceTensor3D<float> loss_map,  // [..., image_height, image_width, 1]

@@ -82,6 +82,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -144,13 +145,21 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     __shared__ float accum_weight_map[output_accum_weight ? BLOCK_SIZE : 1];
 
     // median depth backward state (per pixel). v_median = dL/d(median depth).
-    // pending_* carry the crossing's near-member contributions one step forward
-    // (set at the far member's step, consumed at the next, nearer splat's step).
-    // pending_Tfar == 0 means "no pending".
+    // The median is the 1/2-isosurface of the occupancy line through the near
+    // anchor (z1,v1) [first contributing splat, loaded from render_median_anchor]
+    // and the far anchor (z2,v2) [last contributing splat = last_ids, recovered
+    // locally at its step]. The full gradient is exact for a fixed anchor pair:
+    // depth grads to both anchors, occupancy grads via v_T injection at both
+    // steps. Because the bwd sweep is back-to-front, the far anchor is reached
+    // first; it computes both anchors' grads and stashes the near anchor's into
+    // median_pend_* (consumed when the near-anchor splat is later reached, matched
+    // by bit-identical depth == z1). median_pend_set != 0 means "pending armed".
     __shared__ float median_v[output_median ? BLOCK_SIZE : 1];
-    __shared__ float median_pending_zgrad[output_median ? BLOCK_SIZE : 1];
-    __shared__ float median_pending_zfar[output_median ? BLOCK_SIZE : 1];
-    __shared__ float median_pending_Tfar[output_median ? BLOCK_SIZE : 1];
+    __shared__ float median_z1[output_median ? BLOCK_SIZE : 1];
+    __shared__ float median_v1[output_median ? BLOCK_SIZE : 1];
+    __shared__ float median_pend_zgrad[output_median ? BLOCK_SIZE : 1];
+    __shared__ float median_pend_Tgrad[output_median ? BLOCK_SIZE : 1];
+    __shared__ int   median_pend_set[output_median ? BLOCK_SIZE : 1];
 
 #if IS_EVAL3D
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
@@ -233,9 +242,13 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         if constexpr (output_median) {
             median_v[pix_id_local] = (v_median != nullptr && inside) ?
                 v_median[pix_id_image_global] : 0.0f;
-            median_pending_zgrad[pix_id_local] = 0.0f;
-            median_pending_zfar[pix_id_local] = 0.0f;
-            median_pending_Tfar[pix_id_local] = 0.0f;
+            float2 anchor = (render_median_anchor != nullptr && inside) ?
+                render_median_anchor[pix_id_image_global] : make_float2(0.0f, 0.0f);
+            median_z1[pix_id_local] = anchor.x;
+            median_v1[pix_id_local] = anchor.y;
+            median_pend_zgrad[pix_id_local] = 0.0f;
+            median_pend_Tgrad[pix_id_local] = 0.0f;
+            median_pend_set[pix_id_local] = 0;
         }
     }
     block.sync();
@@ -389,39 +402,66 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
             RenderOutput v_c = v_pix_colors[pix_id];
 
-            // ---- median depth backward ----------------------------------
-            // The median is the post-T crossing of 1/2 with z interpolated in
-            // ln(T) between the two bracketing splats. Depth grads go to both
-            // bracketing splats at their own steps (f is local); the near +
-            // closer opacity grads enter via a single v_T1 injection at the
-            // near splat's step. The far splat's own opacity term is omitted.
+            // ---- median depth backward (moment-line) --------------------
+            // z_med = clamp(z1 + (1/2 - v1)/c1, z1, z2), c1 = (v2-v1)/(z2-z1),
+            // with anchors (z1,v1)=first and (z2,v2)=last contributing splat,
+            // occupancy v = 1 - T(post). Exact gradient for the fixed anchor
+            // pair: depth grads to z1,z2; occupancy grads as v_T injections
+            // (dL/dT = -v_v since v = 1 - T) at each anchor's step.
             float v_depth_median = 0.0f;
             if constexpr (output_median) {
-                const float c = -0.6931471805599453f;  // ln(1/2)
+            #if IS_EVAL3D
+                const int32_t bin_final = __float_as_int(ray_d_pix_bin_final.w);
+            #else
+                const int32_t bin_final = pix_bin_final[pix_id];
+            #endif
                 const float v_med = median_v[pix_id];
-                // Consume pending: current splat is the near member of the
-                // crossing detected at the previous (farther) splat's step.
-                if (median_pending_Tfar[pix_id] > 0.0f) {
-                    v_depth_median += median_pending_zgrad[pix_id];  // (1-f)*v_med
-                    float a_ln = __logf(T1);                          // ln T_near (=T_m)
-                    float b_ln = __logf(median_pending_Tfar[pix_id]); // ln T_far
-                    float dba = b_ln - a_ln;                          // b - a (<0)
-                    float inv = (fabsf(dba) > 1e-20f) ? (-1.0f / dba) : 0.0f;
-                    float S = v_med * (median_pending_zfar[pix_id] - color.depth) * inv;
-                    v_T1 += S / T1;       // route to near + closer opacities
-                    median_pending_Tfar[pix_id] = 0.0f;  // clear
+                // Far anchor: this is the last contributing splat (== last_ids).
+                if (splat_idx == bin_final && v_med != 0.0f) {
+                    const float z1 = median_z1[pix_id];
+                    const float v1 = median_v1[pix_id];
+                    const float z2 = color.depth;
+                    const float v2 = 1.0f - T1;     // occupancy after far splat
+                    const float dz = z2 - z1;
+                    const float dv = v2 - v1;
+                    if (z2 == z1) {
+                        // degenerate (single contributor): median = z1 = this splat
+                        v_depth_median += v_med;
+                    } else if (v2 >= 0.5f && fabsf(dz) > 1e-9f && fabsf(dv) > 1e-9f) {
+                        const float c1 = dv / dz;
+                        const float z_raw = z1 + (0.5f - v1) / c1;
+                        if (z_raw <= z1) {
+                            // clamped low -> median = z1: all grad to near depth
+                            median_pend_zgrad[pix_id] = v_med;
+                            median_pend_Tgrad[pix_id] = 0.0f;
+                            median_pend_set[pix_id] = 1;
+                        } else if (z_raw >= z2) {
+                            // clamped high -> median = z2: grad to far depth here
+                            v_depth_median += v_med;
+                        } else {
+                            // interior: exact moment-line gradient
+                            const float g = (0.5f - v1) / dv;     // z_med = z1 + g*dz
+                            const float inv_dv2 = 1.0f / (dv * dv);
+                            const float v_z1 = v_med * (1.0f - g);
+                            const float v_z2 = v_med * g;
+                            const float v_v1 = v_med * dz * (0.5f - v2) * inv_dv2;
+                            const float v_v2 = v_med * (-dz) * (0.5f - v1) * inv_dv2;
+                            // far anchor (this step): depth + occupancy (-> dL/dT)
+                            v_depth_median += v_z2;
+                            v_T1 += -v_v2;
+                            // near anchor: stash, consumed at its (nearer) step
+                            median_pend_zgrad[pix_id] = v_z1;
+                            median_pend_Tgrad[pix_id] = -v_v1;
+                            median_pend_set[pix_id] = 1;
+                        }
+                    }
                 }
-                // Detect crossing: current splat is the far member (post-T drops
-                // below 1/2 here: T0 >= 1/2 > T1). f is computable locally.
-                if (T0 >= 0.5f && T1 < 0.5f) {
-                    float a = __logf(T0);   // ln T_near
-                    float b = __logf(T1);   // ln T_far
-                    float d = b - a;
-                    float f = (fabsf(d) > 1e-20f) ? (c - a) / d : 0.0f;
-                    v_depth_median += f * v_med;                 // far member z grad
-                    median_pending_zgrad[pix_id] = (1.0f - f) * v_med;
-                    median_pending_zfar[pix_id] = color.depth;
-                    median_pending_Tfar[pix_id] = T1;
+                // Near anchor: matched by bit-identical depth (z1 came from this
+                // splat's color.depth in the forward). Reached after the far step.
+                if (median_pend_set[pix_id] && color.depth == median_z1[pix_id]) {
+                    v_depth_median += median_pend_zgrad[pix_id];
+                    v_T1 += median_pend_Tgrad[pix_id];
+                    median_pend_set[pix_id] = 0;
                 }
             }
 
@@ -613,6 +653,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -663,7 +704,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     #endif
         image_width, image_height, tile_width, tile_height,
         tile_offsets, flatten_ids,
-        render_Ts, last_ids,
+        render_Ts, last_ids, render_median_anchor,
         render_output_buffer, render2_output_buffer, loss_map_buffer, accum_weight_map_buffer,
         v_render_output_buffer, v_render_Ts,
         v_median,

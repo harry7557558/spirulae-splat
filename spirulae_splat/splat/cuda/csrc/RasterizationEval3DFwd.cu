@@ -35,7 +35,8 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
-    float *__restrict__ render_median // [I, image_height, image_width, 1], optional
+    float *__restrict__ render_median, // [I, image_height, image_width, 1], optional
+    float2 *__restrict__ render_median_anchor // [I, image_height, image_width, 2], optional
 );
 
 
@@ -63,7 +64,8 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     DeviceTensor3D<int32_t> last_ids,
     RenderOutput::Tensor renders2,
     RenderOutput::Tensor distortions,
-    DeviceTensor3D<float> render_median
+    DeviceTensor3D<float> render_median,
+    DeviceTensor3D<float2> render_median_anchor
 ) {
     // splats_w.size() returns max_num_splats (pre-allocated); the projection
     // layout uses cur_num_splats per camera stride. See RasterizationBwd.cu.
@@ -87,7 +89,8 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
             renders, transmittances.data_ptr(), last_ids.data_ptr(), \
             output_distortion ? renders2.buffer() : RenderOutput::Buffer(), \
             output_distortion ? distortions.buffer() : RenderOutput::Buffer(), \
-            output_median ? render_median.data_ptr() : nullptr \
+            output_median ? render_median.data_ptr() : nullptr, \
+            output_median ? render_median_anchor.data_ptr() : nullptr \
         )
 
     if (camera_model == CameraModelType::PINHOLE)
@@ -114,7 +117,8 @@ inline std::tuple<
     DeviceTensor3D<int32_t>,  // last_ids
     RenderOutput::TensorTuple,  // renders2, optional
     RenderOutput::TensorTuple,  // distortions, optional
-    DeviceTensor3D<float>  // median depth, optional
+    DeviceTensor3D<float>,  // median depth, optional
+    DeviceTensor3D<float2>  // median near-anchor (z1, v1), optional
 > rasterize_to_pixels_eval3d_fwd_tensor(
     // Gaussian parameters
     int64_t num_splats,  // = cur_num_splats
@@ -151,20 +155,24 @@ inline std::tuple<
     render_last_ids.resize("render.last_ids", batch, image_height, image_width);
 
     DeviceTensor3D<float> render_median;
-    if (output_median)
+    DeviceTensor3D<float2> render_median_anchor;
+    if (output_median) {
         render_median.resize("render.median", batch, image_height, image_width);
+        render_median_anchor.resize("render.median_anchor", batch, image_height, image_width);
+    }
 
     launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, output_distortion, output_median>(
         num_splats,
         splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
-        renders, render_Ts, render_last_ids, renders2, distortions, render_median
+        renders, render_Ts, render_last_ids, renders2, distortions,
+        render_median, render_median_anchor
     );
 
     return std::make_tuple(
         renders, render_Ts, render_last_ids,
-        renders2, distortions, render_median
+        renders2, distortions, render_median, render_median_anchor
     );
 }
 
@@ -181,7 +189,8 @@ std::tuple<
     DeviceTensor3D<int32_t>,  // last_ids
     RenderOutput::TensorTuple,  // renders2, optional
     RenderOutput::TensorTuple,  // distortions, optional
-    DeviceTensor3D<float>  // median depth, optional
+    DeviceTensor3D<float>,  // median depth, optional
+    DeviceTensor3D<float2>  // median near-anchor (z1, v1), optional
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
     int64_t num_splats,

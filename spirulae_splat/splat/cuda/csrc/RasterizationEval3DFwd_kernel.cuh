@@ -79,7 +79,9 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
-    float * render_median // [I, image_height, image_width, 1], optional
+    float * render_median, // [I, image_height, image_width, 1], optional
+    float2 * render_median_anchor // [I, image_height, image_width, 2], optional
+                                  // near-anchor (z1, v1) for the moment-line median backward
 ) {
     auto block = cg::this_thread_block();
     uint32_t tid = threadIdx.x;  // 0 .. TILE_AREA-1, one per pixel
@@ -93,8 +95,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
-    if constexpr (output_median)
+    if constexpr (output_median) {
         render_median += image_id * image_height * image_width;
+        render_median_anchor += image_id * image_height * image_width;
+    }
 
 #if IS_EVAL3D
     // Load camera
@@ -139,12 +143,18 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
 
-    // median depth: depth where post-splat transmittance crosses 1/2, with z
-    // interpolated linearly in ln(T). Virtual nearest point is (z=0, T=1).
-    // Stays 0 if T never drops below 1/2.
-    float median_depth = 0.0f;
-    float median_prev_z = 0.0f;
-    float median_prev_T = 1.0f;
+    // median depth: 1/2-isosurface of a linear occupancy model occ(z) = 1 - T(z),
+    // fit through the two stable endpoints -- the first and last *contributing*
+    // splats (occupancy v = 1 - T after that splat). z_med solves the line at
+    // occ = 1/2: z_med = z1 + (1/2 - v1)/c1, c1 = (v2 - v1)/(z2 - z1). This is a
+    // smooth (rational) function of the contributing opacities and the two anchor
+    // depths -- far fewer discontinuities than a per-splat 1/2-crossing, which
+    // hops between adjacent splats. Stays 0 if occupancy never reaches 1/2.
+    // Only the near anchor (z1, v1) is stored for backward (2 floats/pixel); the
+    // far anchor is recovered there (= last_ids splat, occupancy local at its step).
+    float med_z1 = 0.0f, med_v1 = 0.0f;  // near anchor (first contributing)
+    float med_z2 = 0.0f, med_v2 = 0.0f;  // far  anchor (last  contributing)
+    bool  med_has1 = false;
 
     RenderOutput pix_out = RenderOutput::zero();
     RenderOutput pix2_out = RenderOutput::zero();
@@ -244,24 +254,18 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
             const float next_T = T * (1.0f - alpha);
 
-            // median depth: detect the (unique) post-T crossing of 1/2.
-            // Done before the 1e-4 early-out so a splat that drops T past 1/2
-            // in one step is still captured. z is interpolated in ln(T).
-            if constexpr (output_median) {
-                if (median_prev_T >= 0.5f && next_T < 0.5f) {
-                    float a = __logf(median_prev_T);
-                    float b = __logf(next_T);
-                    float c = -0.6931471805599453f;  // ln(1/2)
-                    float d = b - a;
-                    float f = (fabsf(d) > 1e-20f) ? (c - a) / d : 0.0f;
-                    median_depth = median_prev_z + (color.depth - median_prev_z) * f;
-                }
-                median_prev_T = next_T;
-                median_prev_z = color.depth;
-            }
-
             if (next_T > 1e-4f) {
                 const float vis = alpha * T;
+
+                // moment-line median: record the first and last contributing
+                // splats as the line anchors (same set as cur_idx / last_ids, so
+                // the far anchor is recoverable in backward via last_ids). The
+                // occupancy after this splat is v = 1 - next_T.
+                if constexpr (output_median) {
+                    const float v = 1.0f - next_T;
+                    if (!med_has1) { med_z1 = color.depth; med_v1 = v; med_has1 = true; }
+                    med_z2 = color.depth; med_v2 = v;
+                }
                 if constexpr (output_distortion) {
                     distortion_out += (
                         color * color * (1.0f - T)
@@ -280,8 +284,26 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
     if (i < image_height && j < image_width) {
         render_Ts[pix_id] = T;
-        if constexpr (output_median)
+        if constexpr (output_median) {
+            // 1/2-isosurface of the occupancy line through (z1,v1)-(z2,v2).
+            // Valid only if occupancy reaches 1/2 (v2 >= 1/2) and the anchors are
+            // distinct in depth and occupancy; else median stays 0. Clamp the
+            // crossing to [z1, z2] so a faint near floater can't extrapolate it
+            // wildly (the clamp is mirrored in the backward).
+            float median_depth = 0.0f;
+            float dz = med_z2 - med_z1;
+            float dv = med_v2 - med_v1;
+            if (med_has1 && med_v2 >= 0.5f && fabsf(dz) > 1e-9f && fabsf(dv) > 1e-9f) {
+                float c1 = dv / dz;
+                float z = med_z1 + (0.5f - med_v1) / c1;
+                median_depth = fminf(fmaxf(z, med_z1), med_z2);
+            } else if (med_has1 && med_v2 >= 0.5f) {
+                // degenerate line (single contributor / coincident anchors)
+                median_depth = med_z1;
+            }
             render_median[pix_id] = median_depth;
+            render_median_anchor[pix_id] = make_float2(med_z1, med_v1);
+        }
         if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType))
             pix_out.depth /= fmaxf(1.0f - T, 1e-10f);
         pix_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_colors, pix_id_global);
@@ -333,7 +355,8 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
-    float *__restrict__ render_median // [I, image_height, image_width, 1], optional
+    float *__restrict__ render_median, // [I, image_height, image_width, 1], optional
+    float2 *__restrict__ render_median_anchor // [I, image_height, image_width, 2], optional
 ) {
     // One block per micro-tile. The macro tile spans MACRO_TILE_SIZE_{X,Y}
     // micro-tiles, so the grid is the macro-tile grid scaled up accordingly.
@@ -360,7 +383,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
         image_width, image_height, tile_width, tile_height, tile_offsets, flatten_ids,
         render_colors, render_Ts, last_ids,
         render_colors2, render_distortions,
-        render_median
+        render_median, render_median_anchor
     );
 }
 

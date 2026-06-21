@@ -11,9 +11,9 @@
 python3 spirulae_splat/generate_headers.py
 python3 spirulae_splat/generate_kernel_instantiation.py
 
-if [ ! -d "build" ]; then
+# if [ ! -d "build" ]; then
     cmake -G Ninja -B build
-fi
+# fi
 
 echo ""
 

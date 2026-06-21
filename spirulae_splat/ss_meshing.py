@@ -91,6 +91,8 @@ def _resolve_render_resolution(dp_json, data_dir: Path, native_w, native_h):
     native_h = torch.as_tensor(native_h).reshape(-1)
     w0, h0 = int(native_w[0]), int(native_h[0])
 
+    return native_w.to(torch.int32), native_h.to(torch.int32), 1.0, 1.0  # TODO
+
     rescale = dp_json.get("rescale_camera_to_fit", False)
     if not isinstance(rescale, bool) and isinstance(rescale, (int, float)) and rescale > 0:
         rfn = {"floor": math.floor, "ceil": math.ceil, "round": round}.get(

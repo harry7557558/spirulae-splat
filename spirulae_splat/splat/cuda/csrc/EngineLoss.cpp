@@ -136,6 +136,7 @@ static void _engine_raster_proj_backward(
             engine().fwd.flatten_ids,
             engine().fwd.render_Ts,
             engine().fwd.last_ids,
+            engine().fwd.render_median_anchor,
             engine().fwd.renders,
             accum_weight_map,
             v_render_outputs,
@@ -164,6 +165,7 @@ static void _engine_raster_proj_backward(
             engine().fwd.flatten_ids,
             engine().fwd.render_Ts,
             engine().fwd.last_ids,
+            engine().fwd.render_median_anchor,
             engine().fwd.renders,
             std::nullopt,  // render2_outputs
             DeviceTensor3D<float>(),  // loss_map

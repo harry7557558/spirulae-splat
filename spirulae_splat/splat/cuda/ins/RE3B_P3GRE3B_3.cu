@@ -33,6 +33,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -78,6 +79,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -123,6 +125,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -168,6 +171,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -213,6 +217,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -258,6 +263,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -303,6 +309,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -348,6 +355,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
@@ -393,6 +401,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // fwd outputs
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    const float2 *__restrict__ render_median_anchor, // [..., image_height, image_width, 2], optional
     RenderOutput::Buffer render_output_buffer,
     RenderOutput::Buffer render2_output_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
