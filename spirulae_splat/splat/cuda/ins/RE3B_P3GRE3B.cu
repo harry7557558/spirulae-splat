@@ -9,6 +9,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     CameraModelType::PINHOLE,
     true,
     true,
+    true,
     true
 >(
     cudaStream_t stream,
@@ -39,6 +40,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
@@ -50,6 +52,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    true,
     true,
     true,
     false
@@ -82,6 +85,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
@@ -93,6 +97,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    true,
     true,
     false,
     true
@@ -125,6 +130,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
@@ -136,6 +142,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    true,
     true,
     false,
     false
@@ -168,6 +175,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
@@ -179,6 +187,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    true,
     false,
     true,
     true
@@ -211,6 +220,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
@@ -222,6 +232,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    true,
     false,
     true,
     false
@@ -254,6 +265,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
@@ -265,6 +277,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    true,
     false,
     false,
     true
@@ -297,6 +310,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
@@ -308,6 +322,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    true,
     false,
     false,
     false
@@ -340,6 +355,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
@@ -350,7 +366,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
+    CameraModelType::PINHOLE,
+    false,
     true,
     true,
     true
@@ -383,6 +400,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,

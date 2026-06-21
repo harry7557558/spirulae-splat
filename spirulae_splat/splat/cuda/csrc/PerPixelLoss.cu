@@ -112,6 +112,8 @@ __global__ void per_pixel_losses_forward_kernel(
     const float3* __restrict__ rgb_dist,
     const float* __restrict__ depth_dist,
     const float3* __restrict__ normal_dist,
+    const float* __restrict__ median_depth,
+    const float3* __restrict__ median_normal,
     const bool* __restrict__ ref_alpha,
     bool has_mask,                          // gt_alpha buffer present (per-pixel mask)
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
@@ -168,6 +170,8 @@ __global__ void per_pixel_losses_forward_kernel(
             rgb_dist ? rgb_dist[idx] : make_float3(0),
             depth_dist ? depth_dist[idx] : 0.f,
             normal_dist ? normal_dist[idx] : make_float3(0),
+            median_depth ? median_depth[idx] : 0.f,
+            median_normal ? median_normal[idx] : make_float3(0),
             ref_alpha_v,
             has_mask,
             loss_weights,
@@ -185,7 +189,11 @@ __global__ void per_pixel_losses_forward_kernel(
                 losses[(int)RawLossIndex::AlphaReg] +
                 losses[(int)RawLossIndex::RgbDistReg] +
                 losses[(int)RawLossIndex::DepthDistReg] +
-                losses[(int)RawLossIndex::NormalDistReg]
+                losses[(int)RawLossIndex::NormalDistReg] +
+                losses[(int)RawLossIndex::MeanMedianDepthSup] +
+                losses[(int)RawLossIndex::MedianDepthNormalReg] +
+                losses[(int)RawLossIndex::MedianNormalSup] +
+                losses[(int)RawLossIndex::MedianRenderNormalReg]
             );
             // TODO: more accurate version
         }
@@ -239,6 +247,8 @@ __global__ void per_pixel_losses_backward_kernel(
     const float3* __restrict__ rgb_dist,
     const float* __restrict__ depth_dist,
     const float3* __restrict__ normal_dist,
+    const float* __restrict__ median_depth,
+    const float3* __restrict__ median_normal,
     const bool* __restrict__ ref_alpha,
     bool has_mask,                          // gt_alpha buffer present
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
@@ -253,7 +263,9 @@ __global__ void per_pixel_losses_backward_kernel(
     float* __restrict__ v_render_Ts,
     float3* __restrict__ v_rgb_dist,
     float* __restrict__ v_depth_dist,
-    float3* __restrict__ v_normal_dist
+    float3* __restrict__ v_normal_dist,
+    float* __restrict__ v_median_depth,
+    float3* __restrict__ v_median_normal
 ) {
     size_t pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t batch_idx = blockIdx.y * blockDim.y + threadIdx.y;
@@ -291,6 +303,8 @@ __global__ void per_pixel_losses_backward_kernel(
     float3 temp_v_rgb_dist;
     float temp_v_depth_dist;
     float3 temp_v_normal_dist;
+    float temp_v_median_depth;
+    float3 temp_v_median_normal;
 
     // Re-sample the GT modalities the same way the forward did, so the bwd
     // sees identical inputs.
@@ -325,6 +339,8 @@ __global__ void per_pixel_losses_backward_kernel(
         rgb_dist ? rgb_dist[idx] : make_float3(0),
         depth_dist ? depth_dist[idx] : 0.f,
         normal_dist ? normal_dist[idx] : make_float3(0),
+        median_depth ? median_depth[idx] : 0.f,
+        median_normal ? median_normal[idx] : make_float3(0),
         ref_alpha_v,
         has_mask,
         loss_weights,
@@ -339,7 +355,9 @@ __global__ void per_pixel_losses_backward_kernel(
         &temp_v_render_Ts,
         &temp_v_rgb_dist,
         &temp_v_depth_dist,
-        &temp_v_normal_dist
+        &temp_v_normal_dist,
+        &temp_v_median_depth,
+        &temp_v_median_normal
     );
 
     // Render-resolution outputs: direct write (one writer per pixel).
@@ -352,6 +370,8 @@ __global__ void per_pixel_losses_backward_kernel(
     if (v_rgb_dist)      v_rgb_dist[idx]      = temp_v_rgb_dist;
     if (v_depth_dist)    v_depth_dist[idx]    = temp_v_depth_dist;
     if (v_normal_dist)   v_normal_dist[idx]   = temp_v_normal_dist;
+    if (v_median_depth)  v_median_depth[idx]  = temp_v_median_depth;
+    if (v_median_normal) v_median_normal[idx] = temp_v_median_normal;
 
     // GT-resolution outputs: bilinear scatter (multiple render pixels may
     // share a GT tap). Uses atomicAdd, so the v_ref_depth / v_ref_normal
@@ -458,6 +478,8 @@ static void _compute_per_pixel_losses_forward(
     TorchTensorView rgb_dist,
     TorchTensorView depth_dist,
     TorchTensorView normal_dist,
+    TorchTensorView median_depth,
+    TorchTensorView median_normal,
     TorchTensorView ref_alpha,
     bool has_mask,
     FixedArray<float, (uint)LossWeightIndex::length> loss_weights,
@@ -486,6 +508,8 @@ static void _compute_per_pixel_losses_forward(
         _f3ptr(rgb_dist),
         _fptr(depth_dist),
         _f3ptr(normal_dist),
+        _fptr(median_depth),
+        _f3ptr(median_normal),
         _bptr(ref_alpha),
         has_mask,
         loss_weights,
@@ -519,6 +543,8 @@ static void _compute_per_pixel_losses_backward(
     TorchTensorView rgb_dist,
     TorchTensorView depth_dist,
     TorchTensorView normal_dist,
+    TorchTensorView median_depth,
+    TorchTensorView median_normal,
     TorchTensorView ref_alpha,
     bool has_mask,
     float* raw_losses_ptr,
@@ -559,6 +585,8 @@ static void _compute_per_pixel_losses_backward(
         _f3ptr(rgb_dist),
         _fptr(depth_dist),
         _f3ptr(normal_dist),
+        _fptr(median_depth),
+        _f3ptr(median_normal),
         _bptr(ref_alpha),
         has_mask,
         loss_weights,
@@ -573,7 +601,9 @@ static void _compute_per_pixel_losses_backward(
         _fptr(grads.v_render_Ts),
         _f3ptr(grads.v_rgb_dist),
         _fptr(grads.v_depth_dist),
-        _f3ptr(grads.v_normal_dist)
+        _f3ptr(grads.v_normal_dist),
+        _fptr(grads.v_median_depth),
+        _f3ptr(grads.v_median_normal)
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -700,6 +730,8 @@ LossValues compute_multi_scale_per_pixel_losses(
     TorchTensorView rgb_dist,
     TorchTensorView depth_dist,
     TorchTensorView normal_dist,
+    TorchTensorView median_depth,
+    TorchTensorView median_normal,
     TorchTensorView ref_alpha,
     bool has_mask,
     const std::array<float, (int)LossWeightIndex::length> loss_weights_0,
@@ -751,6 +783,7 @@ LossValues compute_multi_scale_per_pixel_losses(
     TorchTensorView render_normal_s[MAX_SCALES], depth_normal_s[MAX_SCALES], ref_normal_s[MAX_SCALES];
     TorchTensorView render_Ts_s[MAX_SCALES];
     TorchTensorView rgb_dist_s[MAX_SCALES], depth_dist_s[MAX_SCALES], normal_dist_s[MAX_SCALES];
+    TorchTensorView median_depth_s[MAX_SCALES], median_normal_s[MAX_SCALES];
     TorchTensorView ref_alpha_s[MAX_SCALES];
 
     render_rgb_s[0] = render_rgb; ref_rgb_s[0] = ref_rgb;
@@ -758,6 +791,7 @@ LossValues compute_multi_scale_per_pixel_losses(
     render_normal_s[0] = render_normal; depth_normal_s[0] = depth_normal; ref_normal_s[0] = ref_normal;
     render_Ts_s[0] = render_Ts;
     rgb_dist_s[0] = rgb_dist; depth_dist_s[0] = depth_dist; normal_dist_s[0] = normal_dist;
+    median_depth_s[0] = median_depth; median_normal_s[0] = median_normal;
     ref_alpha_s[0] = ref_alpha;
 
     // Downsample to create scales. Each modality halves its OWN previous-scale
@@ -798,6 +832,8 @@ LossValues compute_multi_scale_per_pixel_losses(
         ds_f(rgb_dist_s[sc-1], rgb_dist_s[sc], "rgbd", 3);
         ds_f(depth_dist_s[sc-1], depth_dist_s[sc], "dd", 1);
         ds_f(normal_dist_s[sc-1], normal_dist_s[sc], "nd", 3);
+        ds_f(median_depth_s[sc-1], median_depth_s[sc], "md", 1);
+        ds_f(median_normal_s[sc-1], median_normal_s[sc], "mn", 3);
         ds_b(ref_alpha_s[sc-1], ref_alpha_s[sc], "ra");
     }
 
@@ -839,6 +875,7 @@ LossValues compute_multi_scale_per_pixel_losses(
             render_rgb_s[scale], ref_rgb_s[scale], render_depth_s[scale], ref_depth_s[scale],
             render_normal_s[scale], depth_normal_s[scale], ref_normal_s[scale], render_Ts_s[scale],
             rgb_dist_s[scale], depth_dist_s[scale], normal_dist_s[scale],
+            median_depth_s[scale], median_normal_s[scale],
             ref_alpha_s[scale], has_mask,
             loss_weights, num_train_images, camera_indices,
             per_pixel_loss_map_ptr, raw_losses_ptr, losses_ptr
@@ -882,6 +919,10 @@ LossValues compute_multi_scale_per_pixel_losses(
         alloc_grad_f(scale_grads.v_rgb_dist,   grads_out.v_rgb_dist,       needs_input_grad[8],  rgb_dist_s[scale],     "vrgbd", 3);
         alloc_grad_f(scale_grads.v_depth_dist, grads_out.v_depth_dist,     needs_input_grad[9],  depth_dist_s[scale],   "vdd",   1);
         alloc_grad_f(scale_grads.v_normal_dist, grads_out.v_normal_dist,   needs_input_grad[10], normal_dist_s[scale],  "vnd",   3);
+        bool need_md = needs_input_grad.size() > 11 && needs_input_grad[11];
+        bool need_mn = needs_input_grad.size() > 12 && needs_input_grad[12];
+        alloc_grad_f(scale_grads.v_median_depth, grads_out.v_median_depth, need_md, median_depth_s[scale], "vmd", 1);
+        alloc_grad_f(scale_grads.v_median_normal, grads_out.v_median_normal, need_mn, median_normal_s[scale], "vmn", 3);
 
         // GT-resolution grads use atomicAdd inside the bwd kernel (one render
         // pixel may scatter into 4 GT taps), so the destination buffer must
@@ -902,6 +943,7 @@ LossValues compute_multi_scale_per_pixel_losses(
             render_rgb_s[scale], ref_rgb_s[scale], render_depth_s[scale], ref_depth_s[scale],
             render_normal_s[scale], depth_normal_s[scale], ref_normal_s[scale], render_Ts_s[scale],
             rgb_dist_s[scale], depth_dist_s[scale], normal_dist_s[scale],
+            median_depth_s[scale], median_normal_s[scale],
             ref_alpha_s[scale], has_mask,
             raw_losses_ptr, loss_weights, _fptr(v_losses),
             num_train_images, camera_indices, scale_grads
@@ -1040,6 +1082,8 @@ LossValues compute_multi_scale_per_pixel_losses(
         upsample_grad(scale_grads.v_rgb_dist, grads_out.v_rgb_dist, 3);
         upsample_grad(scale_grads.v_depth_dist, grads_out.v_depth_dist, 1);
         upsample_grad(scale_grads.v_normal_dist, grads_out.v_normal_dist, 3);
+        upsample_grad(scale_grads.v_median_depth, grads_out.v_median_depth, 1);
+        upsample_grad(scale_grads.v_median_normal, grads_out.v_median_normal, 3);
     }
 
     // Scale total losses by 1/num_scales (device-side)
@@ -1071,6 +1115,10 @@ LossValues compute_multi_scale_per_pixel_losses(
         out.rgb_dist_reg    = h_prev[(int)LossIndex::RgbDistReg];
         out.depth_dist_reg  = h_prev[(int)LossIndex::DepthDistReg];
         out.normal_dist_reg = h_prev[(int)LossIndex::NormalDistReg];
+        out.mean_median_depth_sup    = h_prev[(int)LossIndex::MeanMedianDepthSup];
+        out.median_depth_normal_reg  = h_prev[(int)LossIndex::MedianDepthNormalReg];
+        out.median_normal_sup        = h_prev[(int)LossIndex::MedianNormalSup];
+        out.median_render_normal_reg = h_prev[(int)LossIndex::MedianRenderNormalReg];
     }
     out.ssim = ssim_val;
     losses_readout.issue(total_losses_ptr);

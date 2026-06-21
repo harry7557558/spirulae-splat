@@ -39,6 +39,7 @@ std::tuple<
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,
+    const DeviceTensor3D<float> v_median,  // [I, H, W], optional
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 );

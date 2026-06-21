@@ -104,7 +104,8 @@ void set_training_data_warped(
 void forward_3dgs(
     std::string primitive,
     int sh_degree,
-    bool packed
+    bool packed,
+    bool output_median = false
 );
 
 // --- Loss + backward (combined) ---
@@ -374,7 +375,8 @@ void engine_copy_render_to_host(
     TorchTensorView out_rgb,      // [C, H, W, 3] float32, CPU
     TorchTensorView out_depth,    // [C, H, W, 1] float32, CPU
     TorchTensorView out_Ts,       // [C, H, W, 1] float32, CPU
-    TorchTensorView out_rgb_raw   // [C, H, W, 3] float32, CPU, optional
+    TorchTensorView out_rgb_raw,  // [C, H, W, 3] float32, CPU, optional
+    TorchTensorView out_median    // [C, H, W, 1] float32, CPU, optional
 );
 
 void engine_copy_splats_to_host(

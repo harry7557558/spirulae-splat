@@ -127,6 +127,7 @@ class Renderer:
         height: int,
         sh_degree_to_use: int = 4,
         output_distortion: bool = False,
+        output_median: bool = False,
         compute_hessian_diagonal: Literal[None, "position", "all"] = None,
         relative_scale: Optional[float] = None,
         accum_weight_map: Optional[Tensor] = None,
@@ -142,6 +143,7 @@ class Renderer:
         self.height = height
         self.sh_degree_to_use = sh_degree_to_use
         self.output_distortion = output_distortion
+        self.output_median = output_median
         self.compute_hessian_diagonal = compute_hessian_diagonal
         self.relative_scale = relative_scale
         self.accum_weight_map = accum_weight_map
@@ -182,10 +184,12 @@ class Renderer:
             self._tv(self.intrins),
             self._tv(dist_coeffs)
         )
+        output_median = getattr(self, "output_median", False)
         _C.engine_forward_3dgs(
             self.primitive,
             self.sh_degree_to_use,
             self.packed,
+            output_median,
         )
 
         rgb = torch.empty(C, H, W, 3, dtype=torch.float32)
@@ -197,13 +201,17 @@ class Renderer:
         # avoid a redundant D->H of the identical buffer.
         rgb_raw = torch.empty(C, H, W, 3, dtype=torch.float32) \
             if self._has_engine_color_space else rgb
+        median = torch.empty(C, H, W, 1, dtype=torch.float32) \
+            if output_median else None
         _C.engine_copy_render_to_host(
-            self._tv(rgb), self._tv(depth), self._tv(Ts), self._tv(rgb_raw)
+            self._tv(rgb), self._tv(depth), self._tv(Ts), self._tv(rgb_raw),
+            self._tv(median) if median is not None else (0, 0, [])
         )
 
         self.render_colors = (rgb, depth)
         self.render_Ts = Ts
         self.render_rgb_raw = rgb_raw
+        self.render_median = median
 
     def engine_debug_forward(self, override_features_dc=None, override_sh_degree=-1):
         """Re-render with custom features_dc and/or sh_degree for debugging.

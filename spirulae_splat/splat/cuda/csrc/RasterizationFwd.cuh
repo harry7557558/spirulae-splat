@@ -21,7 +21,8 @@ std::tuple<
     DeviceTensor3D<float>,  // transmittances
     DeviceTensor3D<int32_t>,  // last_ids
     RenderOutput::TensorTuple,  // renders2, optional
-    RenderOutput::TensorTuple  // distortions, optional
+    RenderOutput::TensorTuple,  // distortions, optional
+    DeviceTensor3D<float>  // median depth, optional
 > rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
     int64_t num_splats,
@@ -34,7 +35,8 @@ std::tuple<
     // intersections
     const DeviceTensor3D<int32_t> tile_offsets,
     const DeviceVector<int32_t> flatten_ids,
-    bool output_distortion
+    bool output_distortion,
+    bool output_median
 );
 
 
@@ -43,7 +45,8 @@ std::tuple<
     DeviceTensor3D<float>,  // transmittances
     DeviceTensor3D<int32_t>,  // last_ids
     RenderOutput::TensorTuple,  // renders2, optional
-    RenderOutput::TensorTuple  // distortions, optional
+    RenderOutput::TensorTuple,  // distortions, optional
+    DeviceTensor3D<float>  // median depth, optional
 > rasterize_to_pixels_mip_fwd(
     // Gaussian parameters
     int64_t num_splats,
@@ -56,5 +59,6 @@ std::tuple<
     // intersections
     const DeviceTensor3D<int32_t> tile_offsets,
     const DeviceVector<int32_t> flatten_ids,
-    bool output_distortion
+    bool output_distortion,
+    bool output_median
 );

@@ -274,57 +274,61 @@ def generate_FusedProjectionBwdOptim():
 
 def generate_RasterizationFwd():
     definition = extract_kernel_definition("RasterizationFwd.cu", "rasterize_to_pixels_fwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None]
+    map_header = ["typename SplatPrimitive", None, None]
     map_body = [*itertools.product(
         ["Vanilla3DGS<0>"],
-        ["true", "false"],
+        ["true", "false"],   # output_distortion
+        ["true", "false"],   # output_median
     )]
-    includes = [("Primitive3DGS.cuh", "RasterizationFwd_kernel.cuh")] * 2
+    includes = [("Primitive3DGS.cuh", "RasterizationFwd_kernel.cuh")] * 4
 
     generate_kernel_instantiation("RasterizationFwd", definition, map_header, map_body, includes)
 
 
 def generate_RasterizationBwd():
     definition = extract_kernel_definition("RasterizationBwd.cu", "rasterize_to_pixels_bwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None]
+    map_header = ["typename SplatPrimitive", None, None, None]
     map_body = [*itertools.product(
         ["Vanilla3DGS<0>"],
-        ["true", "false"],
-        ["true", "false"],
+        ["true", "false"],   # output_distortion
+        ["true", "false"],   # output_accum_weight
+        ["true", "false"],   # output_median
     )]
-    includes = [("Primitive3DGS.cuh", "RasterizationBwd_kernel.cuh")] * 4
+    includes = [("Primitive3DGS.cuh", "RasterizationBwd_kernel.cuh")] * 8
 
     generate_kernel_instantiation("RasterizationBwd", definition, map_header, map_body, includes)
 
 
 def generate_RasterizationEval3DFwd():
     definition = extract_kernel_definition("RasterizationEval3DFwd.cu", "rasterize_to_pixels_eval3d_fwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None]
+    map_header = ["typename SplatPrimitive", None, None, None]
     map_body = [
         *itertools.product(
             ["Vanilla3DGUT<0>"],
             ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
-            ["true", "false"],
+            ["true", "false"],   # output_distortion
+            ["true", "false"],   # output_median
         )
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 6
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 12
 
     generate_kernel_instantiation("RasterizationEval3DFwd", definition, map_header, map_body, includes)
 
 
 def generate_RasterizationEval3DBwd():
     definition = extract_kernel_definition("RasterizationEval3DBwd.cu", "rasterize_to_pixels_eval3d_bwd_kernel_wrapper")
-    map_header = ["typename SplatPrimitive", None, None, None, None]
+    map_header = ["typename SplatPrimitive", None, None, None, None, None]
     map_body = [
         *itertools.product(
             ["Vanilla3DGUT<0>"],
             ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
-            ['true', 'false'],
-            ['true', 'false'],
-            ['true', 'false'],
+            ['true', 'false'],   # output_distortion
+            ['true', 'false'],   # output_viewmat_grad
+            ['true', 'false'],   # output_accum_weight
+            ['true', 'false'],   # output_median
         )
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 24
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 48
 
     generate_kernel_instantiation("RasterizationEval3DBwd", definition, map_header, map_body, includes)
 

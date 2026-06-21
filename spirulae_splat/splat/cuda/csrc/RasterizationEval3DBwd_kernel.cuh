@@ -52,7 +52,8 @@ template <
 #if IS_EVAL3D
     bool output_viewmat_grad,
 #endif
-    bool output_accum_weight
+    bool output_accum_weight,
+    bool output_median
 >
 #if IS_EVAL3D
 __global__ void rasterize_to_pixels_eval3d_bwd_kernel(
@@ -88,6 +89,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
@@ -140,6 +142,15 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     __shared__ RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
 
     __shared__ float accum_weight_map[output_accum_weight ? BLOCK_SIZE : 1];
+
+    // median depth backward state (per pixel). v_median = dL/d(median depth).
+    // pending_* carry the crossing's near-member contributions one step forward
+    // (set at the far member's step, consumed at the next, nearer splat's step).
+    // pending_Tfar == 0 means "no pending".
+    __shared__ float median_v[output_median ? BLOCK_SIZE : 1];
+    __shared__ float median_pending_zgrad[output_median ? BLOCK_SIZE : 1];
+    __shared__ float median_pending_zfar[output_median ? BLOCK_SIZE : 1];
+    __shared__ float median_pending_Tfar[output_median ? BLOCK_SIZE : 1];
 
 #if IS_EVAL3D
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
@@ -217,6 +228,14 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         if (output_accum_weight) {
             accum_weight_map[pix_id_local] = (accum_weight_map_buffer != nullptr && inside) ?
                 accum_weight_map_buffer[pix_id_image_global] : 0.0f;
+        }
+
+        if constexpr (output_median) {
+            median_v[pix_id_local] = (v_median != nullptr && inside) ?
+                v_median[pix_id_image_global] : 0.0f;
+            median_pending_zgrad[pix_id_local] = 0.0f;
+            median_pending_zfar[pix_id_local] = 0.0f;
+            median_pending_Tfar[pix_id_local] = 0.0f;
         }
     }
     block.sync();
@@ -370,6 +389,42 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
             RenderOutput v_c = v_pix_colors[pix_id];
 
+            // ---- median depth backward ----------------------------------
+            // The median is the post-T crossing of 1/2 with z interpolated in
+            // ln(T) between the two bracketing splats. Depth grads go to both
+            // bracketing splats at their own steps (f is local); the near +
+            // closer opacity grads enter via a single v_T1 injection at the
+            // near splat's step. The far splat's own opacity term is omitted.
+            float v_depth_median = 0.0f;
+            if constexpr (output_median) {
+                const float c = -0.6931471805599453f;  // ln(1/2)
+                const float v_med = median_v[pix_id];
+                // Consume pending: current splat is the near member of the
+                // crossing detected at the previous (farther) splat's step.
+                if (median_pending_Tfar[pix_id] > 0.0f) {
+                    v_depth_median += median_pending_zgrad[pix_id];  // (1-f)*v_med
+                    float a_ln = __logf(T1);                          // ln T_near (=T_m)
+                    float b_ln = __logf(median_pending_Tfar[pix_id]); // ln T_far
+                    float dba = b_ln - a_ln;                          // b - a (<0)
+                    float inv = (fabsf(dba) > 1e-20f) ? (-1.0f / dba) : 0.0f;
+                    float S = v_med * (median_pending_zfar[pix_id] - color.depth) * inv;
+                    v_T1 += S / T1;       // route to near + closer opacities
+                    median_pending_Tfar[pix_id] = 0.0f;  // clear
+                }
+                // Detect crossing: current splat is the far member (post-T drops
+                // below 1/2 here: T0 >= 1/2 > T1). f is computable locally.
+                if (T0 >= 0.5f && T1 < 0.5f) {
+                    float a = __logf(T0);   // ln T_near
+                    float b = __logf(T1);   // ln T_far
+                    float d = b - a;
+                    float f = (fabsf(d) > 1e-20f) ? (c - a) / d : 0.0f;
+                    v_depth_median += f * v_med;                 // far member z grad
+                    median_pending_zgrad[pix_id] = (1.0f - f) * v_med;
+                    median_pending_zfar[pix_id] = color.depth;
+                    median_pending_Tfar[pix_id] = T1;
+                }
+            }
+
             // gradient to alpha:
             // \frac{dL}{d\alpha_{i}}
             // = \frac{dL}{dc_{1}}\frac{dc_{1}}{d\alpha_{i}}+\frac{dL}{dT_{1}}\frac{dT_{1}}{d\alpha_{i}}
@@ -381,6 +436,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             // = \frac{dL}{dc_{1}}\frac{dc_{1}}{dc_{i}}
             // = \alpha_{i}T_{0}\frac{dL}{dc_{1}}
             RenderOutput v_color = v_c * (alpha * T0);
+            v_color.depth += v_depth_median;  // median's direct depth grad to this splat
 
             // update pixel gradient:
             // \frac{dL}{dT_{0}}
@@ -526,7 +582,8 @@ template <
 #if IS_EVAL3D
     bool output_viewmat_grad,
 #endif
-    bool output_accum_weight
+    bool output_accum_weight,
+    bool output_median
 >
 #if IS_EVAL3D
 void rasterize_to_pixels_eval3d_bwd_kernel_wrapper(
@@ -563,6 +620,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
@@ -595,7 +653,8 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     #if IS_EVAL3D
         output_viewmat_grad,
     #endif
-        output_accum_weight
+        output_accum_weight,
+        output_median
     ><<<grid, threads, 0, stream>>>(
         I, N, n_isects,
         gaussian_ids, splat_wbuffer, splat_sbuffer,
@@ -607,6 +666,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
         render_Ts, last_ids,
         render_output_buffer, render2_output_buffer, loss_map_buffer, accum_weight_map_buffer,
         v_render_output_buffer, v_render_Ts,
+        v_median,
         v_distortions_output_buffer,
         v_splat_wbuffer, v_splat_sbuffer,
         o_accum_weight

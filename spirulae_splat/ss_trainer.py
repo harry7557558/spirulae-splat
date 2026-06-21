@@ -48,6 +48,7 @@ def entrypoint():
         Annotated[TrainerConfigInTheWild, tyro.conf.subcommand(name="in-the-wild")],
         Annotated[TrainerConfigLinear, tyro.conf.subcommand(name="linear-color")],
         Annotated[TrainerConfigSynthetic, tyro.conf.subcommand(name="synthetic")],
+        Annotated[TrainerConfigMeshing, tyro.conf.subcommand(name="meshing")],
         Annotated[TrainerConfigAcademicBaseline, tyro.conf.subcommand(name="academic-baseline")],
     ]
 

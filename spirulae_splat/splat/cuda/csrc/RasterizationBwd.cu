@@ -7,7 +7,8 @@
 template <
     typename SplatPrimitive,
     bool output_distortion,
-    bool output_accum_weight
+    bool output_accum_weight,
+    bool output_median
 >
 void rasterize_to_pixels_bwd_kernel_wrapper(
     cudaStream_t stream,
@@ -34,6 +35,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
@@ -41,7 +43,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     float *__restrict__ o_accum_weight
 );
 
-template <typename SplatPrimitive, bool output_distortion, bool output_accum_weight>
+template <typename SplatPrimitive, bool output_distortion, bool output_accum_weight, bool output_median>
 inline void launch_rasterize_to_pixels_bwd_kernel(
     // Gaussian parameters
     int64_t num_splats,  // = cur_num_splats; non-packed projection layout stride
@@ -64,6 +66,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     // gradients of outputs
     RenderOutput::Tensor v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width]
+    const DeviceTensor3D<float> v_median, // [..., image_height, image_width], optional
     RenderOutput::Tensor v_distortion_outputs,
     // outputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
@@ -84,7 +87,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
 
     if (n_isects == 0) return;
 
-    rasterize_to_pixels_bwd_kernel_wrapper<SplatPrimitive, output_distortion, output_accum_weight>(
+    rasterize_to_pixels_bwd_kernel_wrapper<SplatPrimitive, output_distortion, output_accum_weight, output_median>(
         (cudaStream_t)0, I, N, n_isects,
         (uint32_t*)gaussian_ids.data_ptr(),
         splat_wbuffer, splat_sbuffer,
@@ -95,6 +98,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
         loss_map.data_ptr(),
         accum_weight_map.data_ptr(),
         v_render_outputs, v_render_Ts.data_ptr(),
+        output_median ? v_median.data_ptr() : nullptr,
         v_distortion_outputs.has_value() ? v_distortion_outputs : RenderOutput::Buffer(),
         v_splat_wbuffer, v_splat_sbuffer,
         o_accum_weight.data_ptr()
@@ -103,7 +107,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
 }
 
 
-template<typename SplatPrimitive, bool output_distortion, bool output_accum_weight>
+template<typename SplatPrimitive, bool output_distortion, bool output_accum_weight, bool output_median>
 inline std::tuple<
     std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,  // gradient
     DeviceVector<float>  // accum_weight
@@ -129,6 +133,7 @@ inline std::tuple<
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,
+    const DeviceTensor3D<float> v_median,
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs_tuple,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
@@ -161,13 +166,14 @@ inline std::tuple<
     }
 
     launch_rasterize_to_pixels_bwd_kernel
-    <SplatPrimitive, output_distortion, output_accum_weight>(
+    <SplatPrimitive, output_distortion, output_accum_weight, output_median>(
         num_splats,
         splats_w, splats_s, gaussian_ids,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs,
         render2_outputs, loss_map, accum_weight_map,
         v_render_outputs, v_render_Ts,
+        v_median,
         v_distortion_outputs,
         v_splats_w.value(), v_splats_s.value(),
         o_accum_weight_3d
@@ -202,20 +208,24 @@ inline std::tuple<
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,
+    const DeviceTensor3D<float> v_median,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 ) {
     // TODO: add interface for output_distortion
-    auto [v_splats_w_1, v_splats_s_1, accum_weight] = (
-        accum_weight_map.data_ptr() != nullptr ?
-        _rasterize_to_pixels_bwd_tensor<SplatPrimitive, false, true> :
-        _rasterize_to_pixels_bwd_tensor<SplatPrimitive, false, false>
-    )(
+    const bool aw = accum_weight_map.data_ptr() != nullptr;
+    const bool md = v_median.data_ptr() != nullptr;
+    auto dispatch =
+        aw ? (md ? _rasterize_to_pixels_bwd_tensor<SplatPrimitive, false, true, true>
+                 : _rasterize_to_pixels_bwd_tensor<SplatPrimitive, false, true, false>)
+           : (md ? _rasterize_to_pixels_bwd_tensor<SplatPrimitive, false, false, true>
+                 : _rasterize_to_pixels_bwd_tensor<SplatPrimitive, false, false, false>);
+    auto [v_splats_w_1, v_splats_s_1, accum_weight] = dispatch(
         num_splats, splats_w, splats_s, gaussian_ids,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs_tuple, std::nullopt,
         DeviceTensor3D<float>(), accum_weight_map,
-        v_render_outputs, v_render_Ts, std::nullopt, v_splats_w, v_splats_s
+        v_render_outputs, v_render_Ts, v_median, std::nullopt, v_splats_w, v_splats_s
     );
     return std::make_tuple(v_splats_w_1, v_splats_s_1, accum_weight);
 }
@@ -250,6 +260,7 @@ std::tuple<
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,
+    const DeviceTensor3D<float> v_median,  // [I, H, W], optional
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 ) {
@@ -257,7 +268,7 @@ std::tuple<
         num_splats, splats_w, splats_s, gaussian_ids,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs_tuple, accum_weight_map, v_render_outputs, v_render_Ts,
-        v_splats_w, v_splats_s
+        v_median, v_splats_w, v_splats_s
     );
 }
 

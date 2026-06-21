@@ -68,6 +68,11 @@ enum RawLossIndex {
     RgbDistReg,
     DepthDistReg,
     NormalDistReg,
+    // median-depth losses
+    MeanMedianDepthSup,      // L1(mean depth, median depth)
+    MedianDepthNormalReg,    // normal_loss(median normal, depth normal)
+    MedianNormalSup,         // normal_loss(median normal, ref normal)
+    MedianRenderNormalReg,   // normal_loss(median normal, render normal)
     PixelsTotal,
     MaskTotal,
     DepthMaskTotal,
@@ -75,6 +80,11 @@ enum RawLossIndex {
     DepthNormalMaskTotal,
     NormalRegMaskTotal,
     AlphaMaskTotal,
+    // median-depth mask totals
+    MeanMedianDepthMaskTotal,
+    MedianDepthNormalMaskTotal,
+    MedianNormalMaskTotal,
+    MedianRenderNormalMaskTotal,
     length
 };
 
@@ -96,6 +106,11 @@ enum LossWeightIndex {
     RgbDistReg,
     DepthDistReg,
     NormalDistReg,
+    // median-depth loss weights (configured from model.py)
+    MeanMedianDepthSup,
+    MedianDepthNormalReg,
+    MedianNormalSup,
+    MedianRenderNormalReg,
     length
 };
 
@@ -123,11 +138,17 @@ float[RawLossIndex::length] per_pixel_losses(
     float3 rgb_dist,
     float depth_dist,
     float3 normal_dist,
+    float median_depth,
+    float3 median_normal,
     bool ref_alpha,
     no_diff bool has_mask,
     no_diff float[LossWeightIndex::length] weights
 ) {
     float[RawLossIndex::length] losses;
+
+    // Mean (expected) depth captured before the Pearson-depth log remap below,
+    // so the mean-vs-median L1 term sees the raw linear depth.
+    float mean_depth_raw = render_depth;
 
     // Derive per-pixel validity masks (was passed in as 4 separate bool buffers).
     //   mask         (RGB)          : 1 if no external mask, else gt_alpha.
@@ -181,6 +202,25 @@ float[RawLossIndex::length] per_pixel_losses(
     losses[RawLossIndex::NormalReg] = weights[LossWeightIndex::NormalReg] *
         float(render_normal_mask & depth_normal_mask) * normal_loss(render_normal, depth_normal);
 
+    // Median depth - L1 to mean depth + normal consistency against the depth
+    // normal, ref normal, and render normal. median_normal is the normal
+    // extracted from the median depth map (computed outside, like depth_normal).
+    bool median_normal_mask = true;
+    median_normal = normalize_normal(median_normal, median_normal_mask);
+    // 1) mean vs median depth L1, only where both depths are nonzero
+    bool mean_median_mask = mask && (mean_depth_raw != 0.0f) && (median_depth != 0.0f);
+    losses[RawLossIndex::MeanMedianDepthSup] = weights[LossWeightIndex::MeanMedianDepthSup] *
+        float(mean_median_mask) * abs(mean_depth_raw - median_depth);
+    // 2) median normal vs depth (mean) normal
+    losses[RawLossIndex::MedianDepthNormalReg] = weights[LossWeightIndex::MedianDepthNormalReg] *
+        float(median_normal_mask & depth_normal_mask) * normal_loss(median_normal, depth_normal);
+    // 3) median normal vs reference normal
+    losses[RawLossIndex::MedianNormalSup] = weights[LossWeightIndex::MedianNormalSup] *
+        float(median_normal_mask & normal_mask) * normal_loss(median_normal, ref_normal);
+    // 4) median normal vs render normal (render_normal is a placeholder for now)
+    losses[RawLossIndex::MedianRenderNormalReg] = weights[LossWeightIndex::MedianRenderNormalReg] *
+        float(median_normal_mask & render_normal_mask) * normal_loss(median_normal, render_normal);
+
     // Alpha - loss with mask + regularization to go to 0 or 1
     float render_alpha = clamp(1.0f-render_Ts, 0.0f, 1.0f);
     losses[RawLossIndex::AlphaSup] = weights[LossWeightIndex::AlphaSup] *
@@ -206,6 +246,10 @@ float[RawLossIndex::length] per_pixel_losses(
     losses[RawLossIndex::DepthNormalMaskTotal] = float(depth_normal_mask & normal_mask);
     losses[RawLossIndex::NormalRegMaskTotal] = float(render_normal_mask & depth_normal_mask);
     losses[RawLossIndex::AlphaMaskTotal] = float(alpha_mask);
+    losses[RawLossIndex::MeanMedianDepthMaskTotal] = float(mean_median_mask);
+    losses[RawLossIndex::MedianDepthNormalMaskTotal] = float(median_normal_mask & depth_normal_mask);
+    losses[RawLossIndex::MedianNormalMaskTotal] = float(median_normal_mask & normal_mask);
+    losses[RawLossIndex::MedianRenderNormalMaskTotal] = float(median_normal_mask & render_normal_mask);
 
     return losses;
 }
@@ -223,6 +267,8 @@ void per_pixel_losses_bwd(
     float3 rgb_dist,
     float depth_dist,
     float3 normal_dist,
+    float median_depth,
+    float3 median_normal,
     bool ref_alpha,
     bool has_mask,
     no_diff float[LossWeightIndex::length] weights,
@@ -237,7 +283,9 @@ void per_pixel_losses_bwd(
     out float v_render_Ts,
     out float3 v_rgb_dist,
     out float v_depth_dist,
-    out float3 v_normal_dist
+    out float3 v_normal_dist,
+    out float v_median_depth,
+    out float3 v_median_normal
 ) {
     DifferentialPair<float3> dp_render_rgb = diffPair(render_rgb);
     DifferentialPair<float3> dp_ref_rgb = diffPair(ref_rgb);
@@ -250,6 +298,8 @@ void per_pixel_losses_bwd(
     DifferentialPair<float3> dp_rgb_dist = diffPair(rgb_dist);
     DifferentialPair<float> dp_depth_dist = diffPair(depth_dist);
     DifferentialPair<float3> dp_normal_dist = diffPair(normal_dist);
+    DifferentialPair<float> dp_median_depth = diffPair(median_depth);
+    DifferentialPair<float3> dp_median_normal = diffPair(median_normal);
     bwd_diff(per_pixel_losses)(
         dp_render_rgb,
         dp_ref_rgb,
@@ -262,6 +312,8 @@ void per_pixel_losses_bwd(
         dp_rgb_dist,
         dp_depth_dist,
         dp_normal_dist,
+        dp_median_depth,
+        dp_median_normal,
         ref_alpha,
         has_mask,
         weights,
@@ -278,6 +330,8 @@ void per_pixel_losses_bwd(
     v_rgb_dist = dp_rgb_dist.d;
     v_depth_dist = dp_depth_dist.d;
     v_normal_dist = dp_normal_dist.d;
+    v_median_depth = dp_median_depth.d;
+    v_median_normal = dp_median_normal.d;
 }
 
 enum LossIndex {
@@ -291,6 +345,10 @@ enum LossIndex {
     RgbDistReg,
     DepthDistReg,
     NormalDistReg,
+    MeanMedianDepthSup,
+    MedianDepthNormalReg,
+    MedianNormalSup,
+    MedianRenderNormalReg,
     length
 };
 
@@ -357,6 +415,16 @@ float[LossIndex::length] per_pixel_losses_reduce(
         raw_losses[RawLossIndex::DepthDistReg] / max(raw_losses[RawLossIndex::PixelsTotal], 1);
     losses[LossIndex::NormalDistReg] =
         raw_losses[RawLossIndex::NormalDistReg] / max(raw_losses[RawLossIndex::PixelsTotal], 1);
+
+    // median-depth losses, each normalized by its own mask total
+    losses[LossIndex::MeanMedianDepthSup] =
+        raw_losses[RawLossIndex::MeanMedianDepthSup] / max(raw_losses[RawLossIndex::MeanMedianDepthMaskTotal], 1);
+    losses[LossIndex::MedianDepthNormalReg] =
+        raw_losses[RawLossIndex::MedianDepthNormalReg] / max(raw_losses[RawLossIndex::MedianDepthNormalMaskTotal], 1);
+    losses[LossIndex::MedianNormalSup] =
+        raw_losses[RawLossIndex::MedianNormalSup] / max(raw_losses[RawLossIndex::MedianNormalMaskTotal], 1);
+    losses[LossIndex::MedianRenderNormalReg] =
+        raw_losses[RawLossIndex::MedianRenderNormalReg] / max(raw_losses[RawLossIndex::MedianRenderNormalMaskTotal], 1);
 
     return losses;
 }

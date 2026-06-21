@@ -48,7 +48,8 @@ template<
 #if IS_EVAL3D
     CameraModelType camera_model,
 #endif
-    bool output_distortion
+    bool output_distortion,
+    bool output_median
 >
 #if IS_EVAL3D
 __global__ void rasterize_to_pixels_eval3d_fwd_kernel(
@@ -77,7 +78,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     float * render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
-    RenderOutput::Buffer render_distortions // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
+    float * render_median // [I, image_height, image_width, 1], optional
 ) {
     auto block = cg::this_thread_block();
     uint32_t tid = threadIdx.x;  // 0 .. TILE_AREA-1, one per pixel
@@ -91,6 +93,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     tile_offsets += image_id * tile_height * tile_width;
     render_Ts += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
+    if constexpr (output_median)
+        render_median += image_id * image_height * image_width;
 
 #if IS_EVAL3D
     // Load camera
@@ -134,6 +138,13 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
+
+    // median depth: depth where post-splat transmittance crosses 1/2, with z
+    // interpolated linearly in ln(T). Virtual nearest point is (z=0, T=1).
+    // Stays 0 if T never drops below 1/2.
+    float median_depth = 0.0f;
+    float median_prev_z = 0.0f;
+    float median_prev_T = 1.0f;
 
     RenderOutput pix_out = RenderOutput::zero();
     RenderOutput pix2_out = RenderOutput::zero();
@@ -232,6 +243,23 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         #endif
 
             const float next_T = T * (1.0f - alpha);
+
+            // median depth: detect the (unique) post-T crossing of 1/2.
+            // Done before the 1e-4 early-out so a splat that drops T past 1/2
+            // in one step is still captured. z is interpolated in ln(T).
+            if constexpr (output_median) {
+                if (median_prev_T >= 0.5f && next_T < 0.5f) {
+                    float a = __logf(median_prev_T);
+                    float b = __logf(next_T);
+                    float c = -0.6931471805599453f;  // ln(1/2)
+                    float d = b - a;
+                    float f = (fabsf(d) > 1e-20f) ? (c - a) / d : 0.0f;
+                    median_depth = median_prev_z + (color.depth - median_prev_z) * f;
+                }
+                median_prev_T = next_T;
+                median_prev_z = color.depth;
+            }
+
             if (next_T > 1e-4f) {
                 const float vis = alpha * T;
                 if constexpr (output_distortion) {
@@ -252,6 +280,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
     if (i < image_height && j < image_width) {
         render_Ts[pix_id] = T;
+        if constexpr (output_median)
+            render_median[pix_id] = median_depth;
         if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType))
             pix_out.depth /= fmaxf(1.0f - T, 1e-10f);
         pix_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_colors, pix_id_global);
@@ -271,7 +301,8 @@ template<
 #if IS_EVAL3D
     CameraModelType camera_model,
 #endif
-    bool output_distortion
+    bool output_distortion,
+    bool output_median
 >
 #if IS_EVAL3D
 void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
@@ -301,7 +332,8 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
-    RenderOutput::Buffer render_distortions // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
+    float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 ) {
     // One block per micro-tile. The macro tile spans MACRO_TILE_SIZE_{X,Y}
     // micro-tiles, so the grid is the macro-tile grid scaled up accordingly.
@@ -317,7 +349,8 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     #if IS_EVAL3D
         camera_model,
     #endif
-        output_distortion
+        output_distortion,
+        output_median
     ><<<grid, threads, 0, stream>>>(
         I, N, n_isects,
         gaussian_ids, splat_wbuffer, splat_sbuffer,
@@ -326,7 +359,8 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     #endif
         image_width, image_height, tile_width, tile_height, tile_offsets, flatten_ids,
         render_colors, render_Ts, last_ids,
-        render_colors2, render_distortions
+        render_colors2, render_distortions,
+        render_median
     );
 }
 

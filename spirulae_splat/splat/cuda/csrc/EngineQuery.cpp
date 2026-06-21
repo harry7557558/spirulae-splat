@@ -28,7 +28,8 @@ void engine_copy_render_to_host(
     TorchTensorView out_rgb,
     TorchTensorView out_depth,
     TorchTensorView out_Ts,
-    TorchTensorView out_rgb_raw
+    TorchTensorView out_rgb_raw,
+    TorchTensorView out_median
 ) {
     auto& renders = engine().fwd.renders;
     auto& rgb = std::get<0>(renders);
@@ -54,6 +55,10 @@ void engine_copy_render_to_host(
     if (std::get<0>(out_rgb_raw) != 0 && cs.fwd_pre.data_ptr() != nullptr) {
         cudaMemcpy((void*)std::get<0>(out_rgb_raw), cs.fwd_pre.data_ptr(),
                    cs.fwd_pre.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+    }
+    if (engine().fwd.render_median.data_ptr() && std::get<0>(out_median) != 0) {
+        cudaMemcpy((void*)std::get<0>(out_median), engine().fwd.render_median.data_ptr(),
+                   engine().fwd.render_median.numel() * sizeof(float), cudaMemcpyDeviceToHost);
     }
 }
 

@@ -78,7 +78,8 @@ static void _engine_raster_proj_backward(
     TorchTensorView v_render_rgb,
     TorchTensorView v_render_depth,
     TorchTensorView v_render_Ts_tv,
-    const DeviceTensor3D<float>& accum_weight_map
+    const DeviceTensor3D<float>& accum_weight_map,
+    const DeviceTensor3D<float>& v_median = DeviceTensor3D<float>()
 ) {
     RenderOutput::TensorTuple v_render_outputs = std::make_tuple(
         DeviceTensor3D<float3>(v_render_rgb),
@@ -139,6 +140,7 @@ static void _engine_raster_proj_backward(
             accum_weight_map,
             v_render_outputs,
             v_render_Ts,
+            v_median,
             std::make_optional(v_splats_w),
             std::nullopt
         );
@@ -168,6 +170,7 @@ static void _engine_raster_proj_backward(
             accum_weight_map,
             v_render_outputs,
             v_render_Ts,
+            v_median,
             std::nullopt,  // v_distortion_outputs
             std::make_optional(v_splats_w),
             std::nullopt,
@@ -352,7 +355,10 @@ std::map<std::string, float> engine_compute_loss_backward(
 
     // Depth -> normal: derive depth_normal from rendered depth when gt_normal is provided
     // (matches training_losses.py logic: pred_normal is None, pred_depth exists, gt_normal exists).
-    bool compute_depth_normal = (engine().gt.normal.data_ptr() != nullptr);
+    // Also needed (independently of gt_normal) by the median-vs-depth-normal
+    // regularizer, which compares the median normal against this depth normal.
+    bool compute_depth_normal = (engine().gt.normal.data_ptr() != nullptr) ||
+        loss_weights[(int)LossWeightIndex::MedianDepthNormalReg] > 0.0f;
     // bool is_ray_depth = (engine().primitive != "3dgs" && engine().primitive != "mip");
     bool is_ray_depth = true;
     if (compute_depth_normal) {
@@ -367,6 +373,33 @@ std::map<std::string, float> engine_compute_loss_backward(
         );
     }
 
+    // Median depth (+ its normal) for the median-depth loss terms. Present
+    // only when forward emitted it (output_median). The median normal is built
+    // from the median depth the same way depth_normal is, and only when one of
+    // the median-normal losses is active.
+    TorchTensorView median_depth = _tv_null();
+    TorchTensorView median_normal = _tv_null();
+    bool has_median = (engine().fwd.render_median.data_ptr() != nullptr);
+    bool median_normal_active =
+        loss_weights[(int)LossWeightIndex::MedianDepthNormalReg] > 0.0f ||
+        loss_weights[(int)LossWeightIndex::MedianNormalSup] > 0.0f ||
+        loss_weights[(int)LossWeightIndex::MedianRenderNormalReg] > 0.0f;
+    if (has_median) {
+        median_depth = TorchTensorView(
+            (uint64_t)engine().fwd.render_median.data_ptr(), 4, {C, H, W, 1});
+        if (median_normal_active) {
+            median_normal = _pool_tv("eng.median_normal", C, H, W, 3);
+            depth_to_normal_forward(
+                engine().camera.model_str,
+                _dv_tv(engine().camera.intrins),
+                _dt2d_tv(engine().camera.dist_coeffs),
+                is_ray_depth,
+                DeviceTensor3D<float>(median_depth),
+                DeviceTensor3D<float3>(median_normal)
+            );
+        }
+    }
+
     std::vector<bool> needs_input_grad = {
         true,                                  // pred_rgb
         false,                                 // gt_rgb
@@ -377,6 +410,8 @@ std::map<std::string, float> engine_compute_loss_backward(
         engine().bilagrid_normal.enabled,      // gt_normal (true when bilagrid normal)
         true,                                  // pred_transmittance
         true, true, true,                      // distortion
+        has_median,                            // pred_median_depth
+        has_median && median_normal_active,    // pred_median_normal
     };
 
     PerPixelGrads pixel_grads = {};
@@ -387,6 +422,11 @@ std::map<std::string, float> engine_compute_loss_backward(
     pixel_grads.v_render_Ts   = _pool_tv("eng.v_Ts",    C, H, W, 1);
     if (compute_depth_normal) {
         pixel_grads.v_depth_normal = _pool_tv("eng.v_depth_normal", C, H, W, 3);
+    }
+    if (has_median) {
+        pixel_grads.v_median_depth = _pool_tv("eng.v_median_depth", C, H, W, 1);
+        if (median_normal_active)
+            pixel_grads.v_median_normal = _pool_tv("eng.v_median_normal", C, H, W, 3);
     }
     // GT-modality grads live at the GT's own resolution (which may differ
     // from render H, W). The per-pixel loss kernel bilinearly scatters into
@@ -419,6 +459,8 @@ std::map<std::string, float> engine_compute_loss_backward(
         rgb_dist,
         depth_dist,
         normal_dist,
+        median_depth,
+        median_normal,
         _dt3d_tv(engine().gt.alpha),
         engine().gt.has_mask,
         loss_weights,
@@ -580,6 +622,20 @@ std::map<std::string, float> engine_compute_loss_backward(
         );
     }
 
+    // Median depth -> normal backward: fold v_median_normal into v_median_depth
+    // (in-place add), the same way as depth_normal above.
+    if (has_median && median_normal_active) {
+        depth_to_normal_backward(
+            engine().camera.model_str,
+            _dv_tv(engine().camera.intrins),
+            _dt2d_tv(engine().camera.dist_coeffs),
+            is_ray_depth,
+            DeviceTensor3D<float>(median_depth),
+            DeviceTensor3D<float3>(pixel_grads.v_median_normal),
+            DeviceTensor3D<float>(pixel_grads.v_median_depth)
+        );
+    }
+
     // --- Rasterization + projection backward ---
     // Build accum_weight_map from loss_map (pixel-space -> per-splat mapping in raster bwd)
     DeviceTensor3D<float> accum_weight_map;
@@ -590,7 +646,9 @@ std::map<std::string, float> engine_compute_loss_backward(
         pixel_grads.v_render_rgb,
         pixel_grads.v_render_depth,
         pixel_grads.v_render_Ts,
-        accum_weight_map);
+        accum_weight_map,
+        has_median ? DeviceTensor3D<float>(pixel_grads.v_median_depth)
+                   : DeviceTensor3D<float>());
 
     // --- Build loss dict for display ---
     auto sdiv = [](float x, float y) -> float { return y != 0.0f ? x / y : 0.0f; };
@@ -615,6 +673,14 @@ std::map<std::string, float> engine_compute_loss_backward(
         loss_weights[(int)LossWeightIndex::DepthDistReg]);
     loss_dict["normal_dist_reg"] = sdiv(lv.normal_dist_reg,
         loss_weights[(int)LossWeightIndex::NormalDistReg]);
+    loss_dict["mean_median_depth_loss"] = sdiv(lv.mean_median_depth_sup,
+        loss_weights[(int)LossWeightIndex::MeanMedianDepthSup]);
+    loss_dict["median_depth_normal_reg"] = sdiv(lv.median_depth_normal_reg,
+        loss_weights[(int)LossWeightIndex::MedianDepthNormalReg]);
+    loss_dict["median_normal_loss"] = sdiv(lv.median_normal_sup,
+        loss_weights[(int)LossWeightIndex::MedianNormalSup]);
+    loss_dict["median_render_normal_reg"] = sdiv(lv.median_render_normal_reg,
+        loss_weights[(int)LossWeightIndex::MedianRenderNormalReg]);
 
     return loss_dict;
 }

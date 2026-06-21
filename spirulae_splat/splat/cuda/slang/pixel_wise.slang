@@ -135,12 +135,51 @@ float3 rgb_to_srgb_bwd(
     return p_rgb.d;
 }
 
+// Unproject an undistorted, normalized image point to a ray direction.
+// Handles all camera models (PINHOLE / FISHEYE / EQUISOLID); EQUIRECTANGULAR
+// is currently unsupported and falls back to PINHOLE.
+// is_ray_depth: ray is unit length (depth measured along the ray);
+// otherwise the ray has z == 1 (depth measured along the optical axis).
+[Differentiable]
+float3 unproject_raydir(
+    float2 uv,
+    no_diff int camera_model,
+    no_diff bool is_ray_depth
+) {
+    CameraModelType model = (CameraModelType)camera_model;
+
+    float3 raydir;
+    bool is_unit = false;  // base ray already has unit length
+    if (model == CameraModelType::FISHEYE) {
+        float theta = length(uv);
+        raydir = float3(uv / max(theta, 1e-7f) * sin(theta), cos(theta));
+        is_unit = true;
+    }
+    else if (model == CameraModelType::EQUISOLID) {
+        float r = length(uv);
+        float z = 1.0f - 0.5f * r * r;
+        float s = sqrt(max(0.0f, 1.0f - 0.25f * r * r));
+        raydir = float3(uv * s, z);
+        is_unit = true;
+    }
+    else {
+        // PINHOLE (EQUIRECTANGULAR unsupported -> pinhole fallback)
+        raydir = float3(uv.x, uv.y, 1.0f);
+    }
+
+    if (is_ray_depth)
+        raydir = is_unit ? raydir : normalize(raydir);
+    else
+        raydir /= raydir.z;
+    return raydir;
+}
+
 [CudaDeviceExport]
 float3 generate_ray_d2n(
     const no_diff float2 pix_pos,
     const no_diff float4 intrins,
     const no_diff float[10] dist_coeffs,
-    const bool is_fisheye,
+    const int camera_model,
     const bool is_ray_depth
 ) {
     float2 uv = (pix_pos - intrins.zw) / intrins.xy;
@@ -148,20 +187,7 @@ float3 generate_ray_d2n(
         return float3(0);
     }
 
-    float3 raydir;
-    if (is_fisheye) {
-        float theta = length(uv);
-        raydir = float3(uv / max(theta, 1e-7f) * sin(theta), cos(theta));
-        if (!is_ray_depth)
-            raydir /= raydir.z;
-    }
-    else {
-        raydir = float3(uv.x, uv.y, 1.0f);
-        if (is_ray_depth)
-            raydir = normalize(raydir);
-    }
-
-    return raydir;
+    return unproject_raydir(uv, camera_model, is_ray_depth);
 }
 
 [CudaDeviceExport]
@@ -170,7 +196,7 @@ float3 depth_to_point(
     const no_diff float2 pix_pos,
     const no_diff float4 intrins,  // fx, fy, cx, cy
     const no_diff float[10] dist_coeffs,
-    const bool is_fisheye,
+    const int camera_model,
     const bool is_ray_depth,
     const float depth
 ) {
@@ -179,20 +205,7 @@ float3 depth_to_point(
         return float3(0.0f);
     }
 
-    float3 raydir;
-    if (is_fisheye) {
-        float theta = length(uv);
-        raydir = float3(uv/max(theta,1e-7f)*sin(theta), cos(theta));
-        if (!is_ray_depth)
-            raydir /= raydir.z;
-    }
-    else {
-        raydir = float3(uv.x, uv.y, 1.0f);
-        if (is_ray_depth)
-            raydir = normalize(raydir);
-    }
-
-    return depth * raydir;
+    return depth * unproject_raydir(uv, camera_model, is_ray_depth);
 }
 
 [CudaDeviceExport]
@@ -200,7 +213,7 @@ float depth_to_point_vjp(
     const no_diff float2 pix_pos,
     const no_diff float4 intrins,  // fx, fy, cx, cy
     const no_diff float[10] dist_coeffs,
-    const bool is_fisheye,
+    const int camera_model,
     const bool is_ray_depth,
     const float depth,
     const float3 v_point
@@ -209,7 +222,7 @@ float depth_to_point_vjp(
     bwd_diff(depth_to_point)(
         pix_pos,
         intrins, dist_coeffs,
-        is_fisheye, is_ray_depth,
+        camera_model, is_ray_depth,
         dp_depth, v_point
     );
     return dp_depth.d;
@@ -254,7 +267,7 @@ float3 depth_to_normal(
     const no_diff float2 pix_center,
     const no_diff float4 intrins,  // fx, fy, cx, cy
     const no_diff float[10] dist_coeffs,
-    const bool is_fisheye,
+    const int camera_model,
     const bool is_ray_depth,
     const float4 depths  // x-, x+, y-, y+
 ) {
@@ -274,20 +287,7 @@ float3 depth_to_normal(
             return float3(0.0f);
         }
 
-        float3 raydir;
-        if (is_fisheye) {
-            float theta = length(uv);
-            raydir = float3(uv/max(theta,1e-7f)*sin(theta), cos(theta));
-            if (!is_ray_depth)
-                raydir /= raydir.z;
-        }
-        else {
-            raydir = float3(uv.x, uv.y, 1.0f);
-            if (is_ray_depth)
-                raydir = normalize(raydir);
-        }
-
-        points[i] = depths[i] * raydir;
+        points[i] = depths[i] * unproject_raydir(uv, camera_model, is_ray_depth);
     }
 
     float3 dx = points[1] - points[0];
@@ -304,7 +304,7 @@ void depth_to_normal_vjp(
     const no_diff float2 pix_center,
     const no_diff float4 intrins,  // fx, fy, cx, cy
     const no_diff float[10] dist_coeffs,
-    const bool is_fisheye,
+    const int camera_model,
     const bool is_ray_depth,
     const float4 depths,  // x-, x+, y-, y+
     const float3 v_normal,
@@ -314,7 +314,7 @@ void depth_to_normal_vjp(
     bwd_diff(depth_to_normal)(
         pix_center,
         intrins, dist_coeffs,
-        is_fisheye, is_ray_depth,
+        camera_model, is_ray_depth,
         dp_depths, v_normal
     );
     v_depths = dp_depths.d;
@@ -327,7 +327,7 @@ float ray_depth_to_linear_depth_factor(
     const no_diff float2 pix_center,
     const no_diff float4 intrins,  // fx, fy, cx, cy
     const no_diff float[10] dist_coeffs,
-    const bool is_fisheye
+    const int camera_model
 ) {
 
     float2 uv = (pix_center - intrins.zw) / intrins.xy;
@@ -335,15 +335,8 @@ float ray_depth_to_linear_depth_factor(
     if (!no_diff undistort_point(uv, dist_coeffs, 12, uv))
         return 0.0f;
 
-    float3 raydir;
-    if (is_fisheye) {
-        float theta = length(uv);
-        raydir = float3(uv/max(theta,1e-7f)*sin(theta), cos(theta));
-        raydir /= raydir.z;
-    }
-    else {
-        raydir = float3(uv.x, uv.y, 1.0f);
-    }
+    // ray scaled to z == 1; factor = linear_depth / ray_depth
+    float3 raydir = unproject_raydir(uv, camera_model, false);
 
     return sign(raydir.z) / length(raydir);
 }
@@ -354,7 +347,7 @@ float depth_normal_loss(
     const no_diff float2 pix_center,
     const no_diff float4 intrins, // fx, fy, cx, cy
     const no_diff float[10] dist_coeffs,
-    const bool is_fisheye,
+    const int camera_model,
     const bool is_ray_depth,
     const float4 depths, // x-, x+, y-, y+
     float3 gt_normal
@@ -373,17 +366,7 @@ float depth_normal_loss(
             return 0.0f;
         }
 
-        if (is_fisheye) {
-            float theta = length(uv);
-            raydir = float3(uv / max(theta, 1e-7f) * sin(theta), cos(theta));
-            if (!is_ray_depth)
-                raydir /= raydir.z;
-        }
-        else {
-            raydir = float3(uv.x, uv.y, 1.0f);
-            if (is_ray_depth)
-                raydir = normalize(raydir);
-        }
+        raydir = unproject_raydir(uv, camera_model, is_ray_depth);
 
         if (i != 4)
             points[i] = depths[i] * raydir;
@@ -408,7 +391,7 @@ void depth_normal_loss_vjp(
     const no_diff float2 pix_center,
     const no_diff float4 intrins, // fx, fy, cx, cy
     const no_diff float[10] dist_coeffs,
-    const bool is_fisheye,
+    const int camera_model,
     const bool is_ray_depth,
     const float4 depths, // x-, x+, y-, y+
     const float3 gt_normal,
@@ -421,7 +404,7 @@ void depth_normal_loss_vjp(
     bwd_diff(depth_normal_loss)(
         pix_center,
         intrins, dist_coeffs,
-        is_fisheye, is_ray_depth,
+        camera_model, is_ray_depth,
         dp_depths, dp_gt_normal, v_loss
     );
     v_depths = dp_depths.d;

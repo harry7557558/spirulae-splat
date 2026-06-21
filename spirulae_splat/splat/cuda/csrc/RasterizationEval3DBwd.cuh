@@ -46,6 +46,7 @@ std::tuple<
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> v_median, // [..., image_height, image_width], optional
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s,

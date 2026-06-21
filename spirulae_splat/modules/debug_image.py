@@ -176,7 +176,7 @@ def get_engine_render_rgb() -> Optional[np.ndarray]:
     rgb = np.zeros((B, H, W, C), dtype=np.float32)
     depth = np.zeros((B, H, W, 1), dtype=np.float32)  # unused, but the
     Ts    = np.zeros((B, H, W, 1), dtype=np.float32)  # binding requires args
-    _C.engine_copy_render_to_host(_tv(rgb), _tv(depth), _tv(Ts), (0, 0, []))
+    _C.engine_copy_render_to_host(_tv(rgb), _tv(depth), _tv(Ts), (0, 0, []), (0, 0, []))
     return rgb
 
 

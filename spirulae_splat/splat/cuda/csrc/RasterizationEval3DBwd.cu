@@ -9,7 +9,8 @@ template <
     CameraModelType camera_model,
     bool output_distortion,
     bool output_viewmat_grad,
-    bool output_accum_weight
+    bool output_accum_weight,
+    bool output_median
 >
 void rasterize_to_pixels_eval3d_bwd_kernel_wrapper(
     cudaStream_t stream,
@@ -40,6 +41,7 @@ void rasterize_to_pixels_eval3d_bwd_kernel_wrapper(
     // grad outputs
     RenderOutput::Buffer v_render_output_buffer,
     const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
     RenderOutput::Buffer v_distortions_output_buffer,
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
@@ -49,7 +51,7 @@ void rasterize_to_pixels_eval3d_bwd_kernel_wrapper(
 );
 
 
-template <typename SplatPrimitive, bool output_distortion, bool output_accum_weight>
+template <typename SplatPrimitive, bool output_distortion, bool output_accum_weight, bool output_median>
 inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     // Gaussian parameters
     int64_t num_splats,  // = cur_num_splats; non-packed projection layout stride
@@ -77,6 +79,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     // gradients of outputs
     RenderOutput::Tensor v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> v_median, // [..., image_height, image_width], optional
     RenderOutput::Tensor v_distortion_outputs,
     // outputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
@@ -113,6 +116,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             loss_map.data_ptr(), \
             accum_weight_map.data_ptr(), \
             v_render_outputs, v_render_Ts.data_ptr(), \
+            output_median ? v_median.data_ptr() : nullptr, \
             v_distortion_outputs.has_value() ? v_distortion_outputs : RenderOutput::Buffer(), \
             v_splat_wbuffer, v_splat_sbuffer, \
             o_accum_weight.data_ptr(), \
@@ -122,26 +126,26 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     if (camera_model == CameraModelType::PINHOLE) {
         if (v_viewmats.data_ptr() != nullptr)
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::PINHOLE, output_distortion, true, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::PINHOLE, output_distortion, true, output_accum_weight, output_median> _LAUNCH_ARGS;
         else
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::PINHOLE, output_distortion, false, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::PINHOLE, output_distortion, false, output_accum_weight, output_median> _LAUNCH_ARGS;
     }
     else if (camera_model == CameraModelType::FISHEYE) {
         if (v_viewmats.data_ptr() != nullptr)
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::FISHEYE, output_distortion, true, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::FISHEYE, output_distortion, true, output_accum_weight, output_median> _LAUNCH_ARGS;
         else
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::FISHEYE, output_distortion, false, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::FISHEYE, output_distortion, false, output_accum_weight, output_median> _LAUNCH_ARGS;
     }
     else if (camera_model == CameraModelType::EQUISOLID) {
         if (v_viewmats.data_ptr() != nullptr)
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::EQUISOLID, output_distortion, true, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::EQUISOLID, output_distortion, true, output_accum_weight, output_median> _LAUNCH_ARGS;
         else
             rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::EQUISOLID, output_distortion, false, output_accum_weight> _LAUNCH_ARGS;
+                CameraModelType::EQUISOLID, output_distortion, false, output_accum_weight, output_median> _LAUNCH_ARGS;
     }
     else
         throw std::runtime_error("Unsupported camera model");
@@ -151,7 +155,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
 }
 
 
-template<typename SplatPrimitive, bool output_distortion, bool output_accum_weight>
+template<typename SplatPrimitive, bool output_distortion, bool output_accum_weight, bool output_median>
 inline std::tuple<
     std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,  // gradient
     DeviceTensor2D<float>,  // v_viewmats
@@ -183,6 +187,7 @@ inline std::tuple<
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> v_median, // [..., image_height, image_width], optional
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs_tuple,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s,
@@ -220,7 +225,7 @@ inline std::tuple<
         o_accum_weight_3d = DeviceTensor3D<float>(tv);
     }
 
-    launch_rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive, output_distortion, output_accum_weight>(
+    launch_rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive, output_distortion, output_accum_weight, output_median>(
         num_splats,
         splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs, aabb,
@@ -228,6 +233,7 @@ inline std::tuple<
         render_Ts, last_ids, render_outputs,
         render2_outputs, loss_map, accum_weight_map,
         v_render_outputs, v_render_Ts,
+        v_median,
         v_distortion_outputs,
         v_splats_w.value(), v_splats_s.value(),
         o_accum_weight_3d,
@@ -241,7 +247,7 @@ inline std::tuple<
 }
 
 
-template<typename SplatPrimitive, bool output_distortion, bool output_accum_weight>
+template<typename SplatPrimitive, bool output_distortion, bool output_accum_weight, bool output_median>
 inline std::tuple<
     std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,
     DeviceTensor2D<float>,  // v_viewmats
@@ -273,19 +279,20 @@ inline std::tuple<
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> v_median, // [..., image_height, image_width], optional
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s,
     bool need_viewmat_grad
 ) {
     auto [v_splats_w_1, v_splats_s_1, v_viewmats, accum_weight] =
-        _rasterize_to_pixels_eval3d_bwd_tensor<SplatPrimitive, output_distortion, output_accum_weight>
+        _rasterize_to_pixels_eval3d_bwd_tensor<SplatPrimitive, output_distortion, output_accum_weight, output_median>
     (
         num_splats, splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map, accum_weight_map,
-        v_render_outputs, v_render_Ts, v_distortion_outputs, v_splats_w, v_splats_s,
+        v_render_outputs, v_render_Ts, v_median, v_distortion_outputs, v_splats_w, v_splats_s,
         need_viewmat_grad
     );
     return std::make_tuple(v_splats_w_1, v_splats_s_1, v_viewmats, accum_weight);
@@ -328,25 +335,31 @@ std::tuple<
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]
+    const DeviceTensor3D<float> v_median, // [..., image_height, image_width], optional
     std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s,
     bool need_viewmat_grad
 ) {
-    using Fn = decltype(&rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, false>);
-    static constexpr Fn funcs[2][2] = { {
-        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, false>,
-        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, true>,
+    using Fn = decltype(&rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, false, false>);
+    static constexpr Fn funcs[2][2][2] = { {
+        { rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, false, false>,
+          rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, false, true> },
+        { rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, true, false>,
+          rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, false, true, true> },
     }, {
-        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, false>,
-        rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, true>,
+        { rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, false, false>,
+          rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, false, true> },
+        { rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, true, false>,
+          rasterize_to_pixels_eval3d_bwd_tensor<Vanilla3DGUT<0>, true, true, true> },
     } };
-    return funcs[v_distortion_outputs.has_value()][accum_weight_map.data_ptr() != nullptr](
+    return funcs[v_distortion_outputs.has_value()][accum_weight_map.data_ptr() != nullptr]
+                [v_median.data_ptr() != nullptr](
         num_splats, splats_w, splats_s, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, render2_outputs, loss_map, accum_weight_map,
-        v_render_outputs, v_render_Ts, v_distortion_outputs, v_splats_w, v_splats_s,
+        v_render_outputs, v_render_Ts, v_median, v_distortion_outputs, v_splats_w, v_splats_s,
         need_viewmat_grad
     );
 }

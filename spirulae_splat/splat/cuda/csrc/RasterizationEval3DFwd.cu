@@ -9,7 +9,8 @@
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
-    bool output_distortion
+    bool output_distortion,
+    bool output_median
 >
 void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     cudaStream_t stream,
@@ -33,11 +34,12 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
     RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
-    RenderOutput::Buffer render_distortions // [I, image_height, image_width, ...]
+    RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
+    float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
 
 
-template <typename SplatPrimitive, bool output_distortion>
+template <typename SplatPrimitive, bool output_distortion, bool output_median>
 inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     // Gaussian parameters
     int64_t num_splats,  // = cur_num_splats; non-packed projection layout stride
@@ -60,7 +62,8 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     DeviceTensor3D<float> transmittances,
     DeviceTensor3D<int32_t> last_ids,
     RenderOutput::Tensor renders2,
-    RenderOutput::Tensor distortions
+    RenderOutput::Tensor distortions,
+    DeviceTensor3D<float> render_median
 ) {
     // splats_w.size() returns max_num_splats (pre-allocated); the projection
     // layout uses cur_num_splats per camera stride. See RasterizationBwd.cu.
@@ -83,18 +86,19 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
             tile_offsets.data_ptr(), flatten_ids.data_ptr(), \
             renders, transmittances.data_ptr(), last_ids.data_ptr(), \
             output_distortion ? renders2.buffer() : RenderOutput::Buffer(), \
-            output_distortion ? distortions.buffer() : RenderOutput::Buffer() \
+            output_distortion ? distortions.buffer() : RenderOutput::Buffer(), \
+            output_median ? render_median.data_ptr() : nullptr \
         )
 
     if (camera_model == CameraModelType::PINHOLE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            CameraModelType::PINHOLE, output_distortion> _LAUNCH_ARGS;
+            CameraModelType::PINHOLE, output_distortion, output_median> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::FISHEYE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            CameraModelType::FISHEYE, output_distortion> _LAUNCH_ARGS;
+            CameraModelType::FISHEYE, output_distortion, output_median> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::EQUISOLID)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            CameraModelType::EQUISOLID, output_distortion> _LAUNCH_ARGS;
+            CameraModelType::EQUISOLID, output_distortion, output_median> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -103,13 +107,14 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
 }
 
 
-template <typename SplatPrimitive, bool output_distortion>
+template <typename SplatPrimitive, bool output_distortion, bool output_median>
 inline std::tuple<
     RenderOutput::TensorTuple,  // renders
     DeviceTensor3D<float>,  // transmittances
     DeviceTensor3D<int32_t>,  // last_ids
     RenderOutput::TensorTuple,  // renders2, optional
-    RenderOutput::TensorTuple  // distortions, optional
+    RenderOutput::TensorTuple,  // distortions, optional
+    DeviceTensor3D<float>  // median depth, optional
 > rasterize_to_pixels_eval3d_fwd_tensor(
     // Gaussian parameters
     int64_t num_splats,  // = cur_num_splats
@@ -145,17 +150,21 @@ inline std::tuple<
     render_Ts.resize("render.Ts", batch, image_height, image_width);
     render_last_ids.resize("render.last_ids", batch, image_height, image_width);
 
-    launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, output_distortion>(
+    DeviceTensor3D<float> render_median;
+    if (output_median)
+        render_median.resize("render.median", batch, image_height, image_width);
+
+    launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, output_distortion, output_median>(
         num_splats,
         splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
-        renders, render_Ts, render_last_ids, renders2, distortions
+        renders, render_Ts, render_last_ids, renders2, distortions, render_median
     );
 
     return std::make_tuple(
         renders, render_Ts, render_last_ids,
-        renders2, distortions
+        renders2, distortions, render_median
     );
 }
 
@@ -171,7 +180,8 @@ std::tuple<
     DeviceTensor3D<float>,  // transmittances
     DeviceTensor3D<int32_t>,  // last_ids
     RenderOutput::TensorTuple,  // renders2, optional
-    RenderOutput::TensorTuple  // distortions, optional
+    RenderOutput::TensorTuple,  // distortions, optional
+    DeviceTensor3D<float>  // median depth, optional
 > rasterize_to_pixels_3dgut_fwd(
     // Gaussian parameters
     int64_t num_splats,
@@ -189,12 +199,17 @@ std::tuple<
     // intersections
     const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
     const DeviceVector<int32_t> flatten_ids,    // [n_isects]
-    bool output_distortion
+    bool output_distortion,
+    bool output_median
 ) {
-    return (output_distortion ?
-        rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, true> :
-        rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, false>
-    )(
+    auto dispatch = output_distortion ?
+        (output_median ?
+            rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, true, true> :
+            rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, true, false>) :
+        (output_median ?
+            rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, false, true> :
+            rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, false, false>);
+    return dispatch(
         num_splats,
         splats_w, splats_s, gaussian_ids,
         viewmats, intrins, cmt(camera_model), dist_coeffs, aabb,

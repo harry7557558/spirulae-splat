@@ -19,6 +19,11 @@ enum class RawLossIndex {
     RgbDistReg,
     DepthDistReg,
     NormalDistReg,
+    // median-depth losses (mirror per_pixel_losses.slang::RawLossIndex)
+    MeanMedianDepthSup,
+    MedianDepthNormalReg,
+    MedianNormalSup,
+    MedianRenderNormalReg,
     PixelsTotal,
     MaskTotal,
     DepthMaskTotal,
@@ -26,6 +31,11 @@ enum class RawLossIndex {
     DepthNormalMaskTotal,
     NormalRegMaskTotal,
     AlphaMaskTotal,
+    // median-depth mask totals
+    MeanMedianDepthMaskTotal,
+    MedianDepthNormalMaskTotal,
+    MedianNormalMaskTotal,
+    MedianRenderNormalMaskTotal,
     length
 };
 
@@ -48,6 +58,11 @@ enum class LossWeightIndex {
     RgbDistReg,
     DepthDistReg,
     NormalDistReg,
+    // median-depth loss weights (configured from model.py)
+    MeanMedianDepthSup,
+    MedianDepthNormalReg,
+    MedianNormalSup,
+    MedianRenderNormalReg,
     length
 };
 
@@ -62,6 +77,10 @@ enum class LossIndex {
     RgbDistReg,
     DepthDistReg,
     NormalDistReg,
+    MeanMedianDepthSup,
+    MedianDepthNormalReg,
+    MedianNormalSup,
+    MedianRenderNormalReg,
     length
 };
 
@@ -69,6 +88,7 @@ struct PerPixelGrads {
     TorchTensorView v_render_rgb, v_ref_rgb, v_render_depth, v_ref_depth;
     TorchTensorView v_render_normal, v_depth_normal, v_ref_normal;
     TorchTensorView v_render_Ts, v_rgb_dist, v_depth_dist, v_normal_dist;
+    TorchTensorView v_median_depth, v_median_normal;
 };
 
 // What gets accumulated into the densification loss_map. Numeric values are
@@ -120,6 +140,10 @@ struct LossValues {
     float rgb_dist_reg;
     float depth_dist_reg;
     float normal_dist_reg;
+    float mean_median_depth_sup;
+    float median_depth_normal_reg;
+    float median_normal_sup;
+    float median_render_normal_reg;
     float ssim;
 };
 
@@ -141,6 +165,8 @@ LossValues compute_multi_scale_per_pixel_losses(
     TorchTensorView rgb_dist,
     TorchTensorView depth_dist,
     TorchTensorView normal_dist,
+    TorchTensorView median_depth,
+    TorchTensorView median_normal,
     TorchTensorView ref_alpha,
     bool has_mask,
     const std::array<float, (int)LossWeightIndex::length> loss_weights_0,

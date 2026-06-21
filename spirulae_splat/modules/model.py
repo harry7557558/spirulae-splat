@@ -375,6 +375,20 @@ class SpirulaeSplatModelConfig:
     normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
 
+    # Median-depth losses. The median depth is the depth where accumulated
+    # transmittance crosses 1/2 (sharper than the expected/mean depth). These
+    # are emitted by the rasterizer only when at least one weight below is > 0.
+    mean_median_depth_weight: float = 0.0
+    """L1 between the mean (expected) depth and the median depth, where both are nonzero."""
+    median_depth_normal_reg_weight: float = 0.0
+    """normal_loss between the normal from the median depth and the normal from the mean depth."""
+    median_normal_supervision_weight: float = 0.0
+    """normal_loss between the normal from the median depth and the reference (foundation-model) normal."""
+    median_render_normal_reg_weight: float = 0.0
+    """normal_loss between the normal from the median depth and the rendered normal (placeholder until render_normal exists)."""
+    median_warmup: int = 6000
+    """Linear warmup length (steps) shared by all four median-depth loss weights: each ramps 0->full over this many steps."""
+
     # Validation
     overfit_score_aggregation_mode: Literal['max', 'min', 'mean'] = 'min'
     """Mode to aggregate multiple overfitting objectives.
@@ -1069,11 +1083,18 @@ class SpirulaeSplatModel(torch.nn.Module):
             relative_scale=self.config.relative_scale,
             camera_model=camera_model,
             output_distortion=any([c != 0.0 for c in self.get_2dgs_reg_weights()[0]]),
+            output_median=any([
+                self.config.mean_median_depth_weight > 0.0,
+                self.config.median_depth_normal_reg_weight > 0.0,
+                self.config.median_normal_supervision_weight > 0.0,
+                self.config.median_render_normal_reg_weight > 0.0,
+            ]),
             **kwargs,
         )
         self.core.forward()
         rgbdn = self.core.render_colors
         Ts = self.core.render_Ts
+        median_im = getattr(self.core, 'render_median', None)
         meta = self.core.meta
         # torch.cuda.empty_cache()
 
@@ -1122,6 +1143,28 @@ class SpirulaeSplatModel(torch.nn.Module):
             )
             depth_normal = depth_normal_cuda.cpu()
 
+        # Median depth -> normal, same path as depth_normal above.
+        median_normal = None
+        if (median_im is not None and not self.training
+                and (_want is None or 'normal_median' in _want)):
+            median_cuda = median_im.cuda().contiguous() if not median_im.is_cuda else median_im.contiguous()
+            intrins_cuda = intrins.cuda().contiguous() if not intrins.is_cuda else intrins.contiguous()
+            if camera.distortion_params is not None:
+                dist_coeffs_cuda = camera.distortion_params.cuda().contiguous()
+            else:
+                dist_coeffs_cuda = torch.zeros(len(camera), 10, dtype=torch.float32, device='cuda')
+            median_normal_cuda = torch.empty(
+                *median_cuda.shape[:-1], 3, dtype=torch.float32, device='cuda')
+            _C.depth_to_normal_forward(
+                camera.camera_type[0].upper(),
+                self.core._tv(intrins_cuda),
+                self.core._tv(dist_coeffs_cuda),
+                self.config.primitive not in ['3dgs', 'mip'],  # is_ray_depth
+                self.core._tv(median_cuda),
+                self.core._tv(median_normal_cuda),
+            )
+            median_normal = median_normal_cuda.cpu()
+
         # radii = meta["radii"]
         # depths = meta["depths"]
 
@@ -1155,6 +1198,10 @@ class SpirulaeSplatModel(torch.nn.Module):
             outputs["normal"] = render_normal
         if depth_normal is not None:
             outputs["depth_normal"] = depth_normal
+        if median_im is not None:
+            outputs["depth_median"] = median_im
+        if median_normal is not None:
+            outputs["normal_median"] = median_normal
 
         for key in ['rgb_distortion', 'depth_distortion', 'normal_distortion']:
             if key in meta:
@@ -1180,10 +1227,14 @@ class SpirulaeSplatModel(torch.nn.Module):
             # outputs["depth"] = torch.clip(outputs["depth"], max=torch.quantile(outputs["depth"], 0.99))
             if self.config.relative_scale is not None:
                 outputs["depth"] /= self.config.relative_scale
+                if "depth_median" in outputs:
+                    outputs["depth_median"] = outputs["depth_median"] / self.config.relative_scale
             if "normal" in outputs:
                 outputs["normal"] = 0.5+0.5*outputs["normal"]
             if "depth_normal" in outputs:
                 outputs["depth_normal"] = 0.5+0.5*outputs["depth_normal"]
+            if "normal_median" in outputs:
+                outputs["normal_median"] = 0.5+0.5*outputs["normal_median"]
             # Color-space conversion (linear / wide-gamut -> sRGB) for the
             # rendered RGB + skybox is done entirely on the C++ side:
             # `outputs["rgb"]` comes from engine_copy_render_to_host which
@@ -1465,6 +1516,8 @@ class SpirulaeSplatModel(torch.nn.Module):
         dist_factor = min(step / max(cfg.distortion_reg_warmup, 1), 1.0)
         reg_active = float(step >= cfg.reg_warmup_length)
         sup_active = float(step > cfg.supervision_warmup)
+        # Single linear warmup shared by all four median-depth losses.
+        median_factor = min(step / max(cfg.median_warmup, 1), 1.0)
         alpha_reg_factor = cfg.alpha_reg_weight * min(
             step / max(cfg.alpha_reg_warmup, 1), 1.0)
 
@@ -1498,6 +1551,10 @@ class SpirulaeSplatModel(torch.nn.Module):
             reg_active * cfg.rgb_distortion_reg * dist_factor,  # RgbDistReg
             reg_active * cfg.depth_distortion_reg * dist_factor,  # DepthDistReg
             reg_active * cfg.normal_distortion_reg * dist_factor,  # NormalDistReg
+            median_factor * cfg.mean_median_depth_weight,          # MeanMedianDepthSup
+            median_factor * cfg.median_depth_normal_reg_weight,    # MedianDepthNormalReg
+            median_factor * cfg.median_normal_supervision_weight,  # MedianNormalSup
+            median_factor * cfg.median_render_normal_reg_weight,   # MedianRenderNormalReg
         ]
 
     def _engine_get_loss_grad(self, outputs, batch, batch_size):

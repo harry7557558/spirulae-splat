@@ -825,7 +825,7 @@ __global__ void depth_to_points_forward_kernel(
     float3 out_point = SlangPixelWise::depth_to_point(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == CameraModelType::FISHEYE,
+        (int)camera_model,
         is_ray_depth,
         in_depth
     );
@@ -861,7 +861,7 @@ __global__ void depth_to_points_backward_kernel(
     float v_in_depth = SlangPixelWise::depth_to_point_vjp(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == CameraModelType::FISHEYE,
+        (int)camera_model,
         is_ray_depth,
         in_depth, v_out_point
     );
@@ -954,7 +954,7 @@ __global__ void depth_to_normal_forward_kernel(
     float3 normal = depth_to_normal(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == CameraModelType::FISHEYE, is_ray_depth,
+        (int)camera_model, is_ray_depth,
         depth
     );
 #else
@@ -970,7 +970,7 @@ __global__ void depth_to_normal_forward_kernel(
         float3 ray = SlangPixelWise::generate_ray_d2n(
             {(float)ig+0.5f, (float)jg+0.5f},
             {fx, fy, cx, cy}, dist_coeffs,
-            camera_model == CameraModelType::FISHEYE, is_ray_depth
+            (int)camera_model, is_ray_depth
         );
         shared_points[jt][it] = ray * depth;
     }
@@ -1033,7 +1033,7 @@ __global__ void depth_to_normal_backward_kernel(
     depth_to_normal_vjp(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == CameraModelType::FISHEYE, is_ray_depth,
+        (int)camera_model, is_ray_depth,
         depth, v_normal, &v_depth
     );
     v_depths.atomicStore1(bid, j, i-1, v_depth.x);
@@ -1053,7 +1053,7 @@ __global__ void depth_to_normal_backward_kernel(
         float3 ray = SlangPixelWise::generate_ray_d2n(
             {(float)ig+0.5f, (float)jg+0.5f},
             {fx, fy, cx, cy}, dist_coeffs,
-            camera_model == CameraModelType::FISHEYE, is_ray_depth
+            (int)camera_model, is_ray_depth
         );
         shared_points[jt][it] = make_float4(ray.x, ray.y, ray.z, depth);
     }
@@ -1206,7 +1206,7 @@ __global__ void depth_normal_loss_forward_kernel(
     float loss = SlangPixelWise::depth_normal_loss(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == CameraModelType::FISHEYE, is_ray_depth,
+        (int)camera_model, is_ray_depth,
         depth, gt_normal
     );
 #else
@@ -1266,7 +1266,7 @@ __global__ void depth_normal_loss_backward_kernel(
     SlangPixelWise::depth_normal_loss_vjp(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == CameraModelType::FISHEYE, is_ray_depth,
+        (int)camera_model, is_ray_depth,
         depth, gt_normal, v_loss, &v_depth, &v_gt_normal
     );
     v_depths.atomicStore1(bid, j, i-1, v_depth.x);
@@ -1355,7 +1355,7 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
     float out_depth = in_depth * SlangPixelWise::ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == CameraModelType::FISHEYE
+        (int)camera_model
     );
     out_depths.store1(bid, j, i, out_depth);
 }
@@ -1386,7 +1386,7 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
     float factor = SlangPixelWise::ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
-        camera_model == CameraModelType::FISHEYE
+        (int)camera_model
     );
     float v_in_depth = factor * v_out_depth;
     v_in_depths.store1(bid, j, i, v_in_depth);
@@ -1536,14 +1536,17 @@ __global__ void distort_image_kernel(
     if (is_undistort) {
         if (dot(uv, uv) > 0.0f && !SlangProjectionUtils::is_valid_distortion(
             camera_model == CameraModelType::FISHEYE ?
-                normalize(uv) * atanf(length(uv)) : uv,
+                normalize(uv) * atanf(length(uv)) :
+            camera_model == CameraModelType::EQUISOLID ?
+                normalize(uv) * (2.0f * sinf(0.5f * atanf(length(uv)))) :
+            uv,
             dist_coeffs
         ))
             return;
-        uv = SlangProjectionUtils::distort_point(uv, camera_model == CameraModelType::FISHEYE, dist_coeffs);
+        uv = SlangProjectionUtils::distort_point(uv, (int)camera_model, dist_coeffs);
     }
     else {
-        if (!SlangProjectionUtils::undistort_point(uv, camera_model == CameraModelType::FISHEYE, dist_coeffs, &uv))
+        if (!SlangProjectionUtils::undistort_point(uv, (int)camera_model, dist_coeffs, &uv))
             return;
     }
 
@@ -2223,7 +2226,7 @@ __global__ void warp_image_pinhole_to_wide_kernel(
 
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
     float3 raydir;
-    if (!SlangProjectionUtils::unproject_point(uv, camera_model == CameraModelType::FISHEYE, dist_coeffs, &raydir)) {
+    if (!SlangProjectionUtils::unproject_point(uv, (int)camera_model, dist_coeffs, &raydir)) {
         for (int c = 0; c < C; c++)
             wide_image.at(bid, j, i, c) = 0.0f;
         return;
@@ -2481,7 +2484,7 @@ __global__ void warp_depth_pinhole_to_wide_scale_matrix_kernel(
 
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
     float3 raydir;
-    if (!SlangProjectionUtils::unproject_point(uv, camera_model == CameraModelType::FISHEYE, dist_coeffs, &raydir))
+    if (!SlangProjectionUtils::unproject_point(uv, (int)camera_model, dist_coeffs, &raydir))
         return;
 
     constexpr int MAX_K = 12;

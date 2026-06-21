@@ -626,6 +626,7 @@ class Trainer:
         # tensors are only produced for the requested key; when the user
         # switches to a previously-`None` slot, the next request renders it.
         for _k in ["rgb", "depth", "alpha"] + ["normal"] * 0 + ["depth_normal",
+                   "depth_median", "normal_median",
                    "sh", "refinement_score"]:
             outputs.setdefault(_k, None)
         # Use the post-split Cameras when available (CPP DataManager path).
@@ -1083,6 +1084,23 @@ class TrainerConfigSynthetic(TrainerConfig):
         use_bilateral_grid=False,
         use_ppisp=False,
         use_bilateral_grid_for_geometry=False,
+    ))
+
+
+@dataclass
+class TrainerConfigMeshing(TrainerConfig):
+    """Preset for training splats for meshing. Use `spirulae-meshing` to convert trained splats to mesh."""
+    model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        primitive="3dgut",
+        sh_degree=0,
+        background_mode="noise",
+        mean_median_depth_weight=0.01,
+        median_depth_normal_reg_weight=0.01,
+        normal_supervision_weight=0.01,
+        median_normal_supervision_weight=0.01,
+        median_render_normal_reg_weight=0.01,
+        erank_reg=0.01,
+        erank_reg_s3=0.01,
     ))
 
 
