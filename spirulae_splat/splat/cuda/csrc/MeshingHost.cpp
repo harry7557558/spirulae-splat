@@ -605,6 +605,7 @@ bool generate_mesh(
     if (cfg.verbose) printf("[meshing] orient (%.2fs)\n", secs_since(t7));
 
     // ---- 7c. per-vertex color from splats ----
+#if 0
     auto t8 = Clock::now();
     if (!mesh.V.empty()) {
         const int nv = (int)mesh.V.size();
@@ -617,6 +618,7 @@ bool generate_mesh(
                     (int)std::lround(rgb[3*i+a] * 255.0f), 0), 255);
     }
     if (cfg.verbose) printf("[meshing] color (%.2fs)\n", secs_since(t8));
+#endif
 
     // ---- 8. write ----
     write_ply(mesh, output_path);

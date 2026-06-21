@@ -159,20 +159,36 @@ __global__ void moments_fwd_kernel(
             const float next_T = T * (1.0f - alpha);
             if (next_T > 1e-4f) {
                 const float vis = alpha * T;
-                const float v = 1.0f - next_T;
+                // const float v = 1.0f - next_T;
+                const float v = sqrtf(fmaxf(-__logf(fmaxf(next_T, 1e-12f)), 1e-12f));
+            #if 1
                 if (z1 == 0.0f || (z2 == 0.0f && z <= z1))
                     z1 = z, v1 = v;
-                else if (z2 == 0.0f) {
+                else {
+                    if (z2 == 0.0f)
+                        z2 = z, v2 = v;
+                    else if (v > c0 + c1 * z) {
+                        if (z < z1) z1 = z, v1 = v;
+                        else z2 = z, v2 = v;
+                    }
+                    // if (1.0f - next_T <= 0.95f) {
+                    if (1.0f - T <= 0.9f) {  // TODO: too handy
+                        c1 = (v2 - v1) / (z2 - z1);
+                        c0 = v1 - c1 * z1;
+                    }
+                }
+            #else
+                if (z > z1)
                     z2 = z, v2 = v;
+                if ((v1 - 0.5f) * (v2 - 0.5f) < 0.0f) {
+                    // float u1 = __logf(1.0f - v1), u2 = __logf(1.0f - v2);
+                    // c1 = (u2 - u1) / (z2 - z1);
+                    // c0 = u1 - c1 * z1;
                     c1 = (v2 - v1) / (z2 - z1);
                     c0 = v1 - c1 * z1;
                 }
-                else if (v > c0 + c1 * z) {
-                    if (z < z1) z1 = z, v1 = v;
-                    else z2 = z, v2 = v;
-                    c1 = (v2 - v1) / (z2 - z1);
-                    c0 = v1 - c1 * z1;
-                }
+                z1 = z2, v1 = v2;
+            #endif
                 if (render_rgb) {
                     crgb.x += vis * col.rgb.x;
                     crgb.y += vis * col.rgb.y;

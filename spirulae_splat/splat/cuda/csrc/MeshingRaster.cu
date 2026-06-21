@@ -181,7 +181,42 @@ __device__ __forceinline__ bool occ_from_moment(
     float m0 = m.x, c0 = m.y, c1 = m.z;
     if (!(m0 > 0.0f))
         return false;
-    occ = fminf(m0, c0 + c1 * z);
+    #if 1
+    // occ = fminf(m0, c0 + c1 * z);
+    occ = fminf(m0, 1.0f - __expf(-powf(fmaxf(c0 + c1 * z, 0.0f), 2.0f)));
+    #else
+    if (c0 == 0.0f && c1 == 0.0f)
+        return false;
+    // occ = fminf(m0, 1.0f - expf(c0 + c1 * z));
+    occ = fmaxf(fminf(m0, c0 + c1 * z), 0.0f);
+    #endif
+    return true;
+}
+
+// Bilinear-sample occupancy at continuous pixel (u,v): evaluate the moment ->
+// occupancy at each of the 4 corner pixels first, then bilinearly blend the
+// resulting occupancies. Corners that abstain (occ_from_moment false) are
+// dropped and the weights renormalized over the valid corners; abstains only if
+// every corner abstains. This avoids blending moments across a surface edge
+// (sky m0=0 mixed into an object) before the nonlinear evaluation.
+__device__ __forceinline__ bool occ_bilinear(
+    const float3* img, int W, int H, float u, float v, float z, float& occ
+) {
+    float sx = u - 0.5f, sy = v - 0.5f;
+    int j0 = (int)floorf(sx), i0 = (int)floorf(sy);
+    float fx = sx - j0, fy = sy - i0;
+    int j1 = j0 + 1, i1 = i0 + 1;
+    j0 = min(max(j0, 0), W - 1); j1 = min(max(j1, 0), W - 1);
+    i0 = min(max(i0, 0), H - 1); i1 = min(max(i1, 0), H - 1);
+    const float3 m[4] = { img[i0*W+j0], img[i0*W+j1], img[i1*W+j0], img[i1*W+j1] };
+    const float w[4] = { (1-fx)*(1-fy), fx*(1-fy), (1-fx)*fy, fx*fy };
+    float acc = 0.0f, wsum = 0.0f;
+    for (int t = 0; t < 4; ++t) {
+        float o;
+        if (occ_from_moment(m[t], z, o)) { acc += w[t] * o; wsum += w[t]; }
+    }
+    if (wsum <= 0.0f) return false;
+    occ = acc / wsum;
     return true;
 }
 
@@ -258,7 +293,7 @@ __global__ void sample_occ_kernel(
     if (!project_point(viewmat, intrin, W, H, xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
         return;
     float occ;
-    if (!occ_from_moment(bilinear3(moments, W, H, u, v), z, occ))
+    if (!occ_bilinear(moments, W, H, u, v, z, occ))
         return;  // abstain
     // insert occ into the k smallest seen so far (ascending, +inf padded)
     float* arr = occ_kmin + (size_t)i * k;
@@ -341,7 +376,7 @@ __global__ void sample_color_kernel(
     if (!project_point(viewmat, intrin, W, H, xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
         return;
     float occ;
-    if (!occ_from_moment(bilinear3(moments, W, H, u, v), z, occ))
+    if (!occ_bilinear(moments, W, H, u, v, z, occ))
         return;  // abstain (no confident surface from this view)
     float w = 1.0f - occ;            // transmittance until the point
     if (w <= 1e-4f) return;
