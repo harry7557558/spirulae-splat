@@ -1124,15 +1124,12 @@ void OccupancyEvaluator::colorize(const float* verts, int n, float* rgb_out) {
     float* d_c = dmalloc<float>((size_t)n*3);
     cudaMemcpy(d_v, verts, sizeof(float)*n*3, cudaMemcpyHostToDevice);
     GpuScene s = impl_->make_scene();
-#if 1
     if (impl_->use_render && !impl_->render_cam_indices.empty()) {
         render_evaluate_color(impl_->rctx, impl_->render_cam_indices.data(),
             (int)impl_->render_cam_indices.size(), d_v, n, d_c);
         colorize_fallback_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_v, n, d_c);
         CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-    } else
-#endif
-    {
+    } else {
         int dynamic = impl_->num_cameras > 0 ? 1 : 0;
         colorize_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_v, n, d_c, dynamic);
         CHECK_DEVICE_ERROR(cudaDeviceSynchronize());

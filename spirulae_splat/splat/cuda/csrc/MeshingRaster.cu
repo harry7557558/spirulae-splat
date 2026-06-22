@@ -24,6 +24,16 @@
 #include "IntersectTile.cuh"           // do_intersect_tile_generic
 #include "RasterizationMomentsFwd.cuh" // rasterize_moments_3dgut_fwd
 
+#ifdef __CUDACC__
+// {persp,fisheye,equisolid}_proj_nav -- match the (possibly distorted) camera
+// model the occupancy/color images were rendered with. slang.cuh + FixedArray /
+// Matrix come in via Common.cuh above.
+namespace SlangProjectionUtils {
+#include "generated/set_namespace.cuh"
+#include "generated/projection_utils.cuh"
+}
+#endif
+
 namespace meshing {
 
 namespace {
@@ -156,17 +166,35 @@ __device__ __forceinline__ float3 bilinear3(
 
 // Project p (world) into the camera. Returns false if behind the camera or out
 // of frame; else fills pixel (u,v) and the along-ray depth z = |p_cam| (matches
-// the rasterizer's evaluate_color depth metric). PINHOLE only for now.
+// the rasterizer's evaluate_color depth metric). Uses the same projection +
+// distortion model the occupancy/color images were rendered with, so the sample
+// lands on the pixel the splats were actually rasterized to.
 __device__ __forceinline__ bool project_point(
-    const float* viewmat, const float* intrin, int W, int H,
+    const float* viewmat, const float* intrin, const float* dist,
+    CameraModelType model, int W, int H,
     float px, float py, float pz, float& u, float& v, float& z
 ) {
     float cx_ = viewmat[0]*px + viewmat[1]*py + viewmat[2]*pz + viewmat[3];
     float cy_ = viewmat[4]*px + viewmat[5]*py + viewmat[6]*pz + viewmat[7];
     float cz_ = viewmat[8]*px + viewmat[9]*py + viewmat[10]*pz + viewmat[11];
-    if (cz_ <= 1e-6f) return false;
-    u = intrin[0] * (cx_ / cz_) + intrin[2];
-    v = intrin[1] * (cy_ / cz_) + intrin[3];
+
+    float3 p_cam = make_float3(cx_, cy_, cz_);
+    float4 intr = make_float4(intrin[0], intrin[1], intrin[2], intrin[3]);
+    CameraDistortionCoeffs dist_coeffs;
+    #pragma unroll
+    for (int t = 0; t < 10; ++t) dist_coeffs[t] = dist ? dist[t] : 0.0f;
+
+    // proj_nav handles the behind-camera / invalid-distortion cases and returns
+    // pixel-space uv (already scaled by fx,fy and offset by cx,cy).
+    float2 uv;
+    bool valid =
+        (model == CameraModelType::FISHEYE)
+            ? SlangProjectionUtils::fisheye_proj_nav(p_cam, intr, dist_coeffs, &uv) :
+        (model == CameraModelType::EQUISOLID)
+            ? SlangProjectionUtils::equisolid_proj_nav(p_cam, intr, dist_coeffs, &uv) :
+            SlangProjectionUtils::persp_proj_nav(p_cam, intr, dist_coeffs, &uv);
+    if (!valid) return false;
+    u = uv.x; v = uv.y;
     if (u < 0.0f || u >= (float)W || v < 0.0f || v >= (float)H) return false;
     z = sqrtf(cx_*cx_ + cy_*cy_ + cz_*cz_);
     return true;
@@ -216,7 +244,8 @@ __device__ __forceinline__ bool occ_bilinear(
         if (occ_from_moment(m[t], z, o)) { acc += w[t] * o; wsum += w[t]; }
     }
     if (wsum <= 0.0f) return false;
-    occ = acc / wsum;
+    occ = (acc + 1e-6f) / (wsum + 1e-6f);
+    occ = fminf(fmaxf(occ, 0.0f), 1.0f);
     return true;
 }
 
@@ -283,6 +312,7 @@ namespace {
 __global__ void sample_occ_kernel(
     const float* __restrict__ xyz, int n,
     const float* __restrict__ viewmat, const float* __restrict__ intrin,
+    const float* __restrict__ dist, CameraModelType model,
     const float3* __restrict__ moments, int W, int H,
     int k,
     float* __restrict__ occ_kmin, int* __restrict__ cnt
@@ -290,7 +320,8 @@ __global__ void sample_occ_kernel(
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     float u, v, z;
-    if (!project_point(viewmat, intrin, W, H, xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
+    if (!project_point(viewmat, intrin, dist, model, W, H,
+                       xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
         return;
     float occ;
     if (!occ_bilinear(moments, W, H, u, v, z, occ))
@@ -347,6 +378,7 @@ void render_evaluate_occupancy(
         sample_occ_kernel<<<blocks, TPB>>>(
             d_xyz, n,
             ctx->d_viewmats + (size_t)cam * 16, ctx->d_intrins + (size_t)cam * 4,
+            ctx->d_dist + (size_t)cam * 10, cmt(ctx->model),
             d_moments, ctx->Ws[cam], ctx->Hs[cam], k,
             d_occ_kmin, d_cnt);
         CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -366,6 +398,7 @@ namespace {
 __global__ void sample_color_kernel(
     const float* __restrict__ xyz, int n,
     const float* __restrict__ viewmat, const float* __restrict__ intrin,
+    const float* __restrict__ dist, CameraModelType model,
     const float3* __restrict__ moments, const float3* __restrict__ rgb,
     int W, int H,
     float3* __restrict__ num, float* __restrict__ den
@@ -373,7 +406,8 @@ __global__ void sample_color_kernel(
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     float u, v, z;
-    if (!project_point(viewmat, intrin, W, H, xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
+    if (!project_point(viewmat, intrin, dist, model, W, H,
+                       xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
         return;
     float occ;
     if (!occ_bilinear(moments, W, H, u, v, z, occ))
@@ -392,13 +426,22 @@ __global__ void finalize_color_kernel(
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     float d = den[i];
+#if 0
     if (d > 1e-6f) {
         rgb[3*i+0] = num[i].x / d;
         rgb[3*i+1] = num[i].y / d;
         rgb[3*i+2] = num[i].z / d;
     } else {
+        // picked up by colorize_fallback_kernel
         rgb[3*i+0] = -1.0f; rgb[3*i+1] = -1.0f; rgb[3*i+2] = -1.0f;  // fallback
     }
+#else
+    constexpr float e = 1e-8f;
+    d = fmaxf(d, 0.0f) + e;
+    rgb[3*i+0] = (num[i].x + e) / d;
+    rgb[3*i+1] = (num[i].y + e) / d;
+    rgb[3*i+2] = (num[i].z + e) / d;
+#endif
 }
 
 } // namespace
@@ -426,6 +469,7 @@ void render_evaluate_color(
         sample_color_kernel<<<blocks, TPB>>>(
             d_xyz, n,
             ctx->d_viewmats + (size_t)cam * 16, ctx->d_intrins + (size_t)cam * 4,
+            ctx->d_dist + (size_t)cam * 10, cmt(ctx->model),
             d_moments, d_rgbimg, ctx->Ws[cam], ctx->Hs[cam],
             d_num, d_den);
         CHECK_DEVICE_ERROR(cudaGetLastError());

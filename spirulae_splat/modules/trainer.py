@@ -1093,6 +1093,8 @@ class TrainerConfigMeshing(TrainerConfig):
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         primitive="3dgut",
         sh_degree=0,
+        sh_reg=10.0,
+        overexposure_reg=10.0,
         background_mode="noise",
         mean_median_depth_weight=0.01,
         median_depth_normal_reg_weight=0.01,

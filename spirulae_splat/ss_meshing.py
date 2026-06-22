@@ -230,7 +230,6 @@ def load_cameras(run_dir: Path, data_dir: Path):
         intrins = intrins.contiguous()
 
     camera_model = _camera_type_to_model(cameras.camera_type)
-    camera_model = "PINHOLE"  # TODO
 
     return {
         "positions": positions,
