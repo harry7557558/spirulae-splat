@@ -19,6 +19,7 @@
 #include <cstring>
 #include <vector>
 #include <array>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
@@ -112,7 +113,8 @@ static inline uint32_t float_key(float f) {
 // The global-shortest candidate always wins, so each round makes progress, and
 // the winners' disjoint neighborhoods make the concurrent collapses race-free.
 // The outcome is deterministic regardless of thread count.
-static void merge_vertices(Mesh& mesh, float merge_factor, bool verbose, int num_threads) {
+static void merge_vertices(Mesh& mesh, float merge_factor, float max_flip_deg,
+                           bool verbose, int num_threads) {
     const int nv = (int)mesh.V.size();
     const long nf = (long)mesh.F.size();
     if (nv == 0 || merge_factor <= 0.0f) return;
@@ -203,6 +205,47 @@ static void merge_vertices(Mesh& mesh, float merge_factor, bool verbose, int num
         return common == opp_cnt;
     };
 
+    // Geometric guard: reject a collapse of edge (u,v) -> midpoint `np` if it
+    // would fold the surface or create a degenerate face. For every alive face
+    // incident to u or v (other than the two faces on the collapsing edge), the
+    // reshaped face's normal must not rotate past max_flip_deg, and must not go
+    // (near-)degenerate. Read-only on the current topology (winners' 1-rings are
+    // disjoint within a round, so this is race-free in the parallel collapse).
+    const float cos_flip = (max_flip_deg > 0.0f && max_flip_deg < 180.0f)
+                               ? std::cos(max_flip_deg * 0.017453292519943295f)
+                               : -2.0f;  // <= -1 sentinel: guard disabled
+    auto tri_normal = [&](const float* a, const float* b, const float* c,
+                          float& nx, float& ny, float& nz) {
+        float e1x=b[0]-a[0], e1y=b[1]-a[1], e1z=b[2]-a[2];
+        float e2x=c[0]-a[0], e2y=c[1]-a[1], e2z=c[2]-a[2];
+        nx = e1y*e2z - e1z*e2y; ny = e1z*e2x - e1x*e2z; nz = e1x*e2y - e1y*e2x;
+    };
+    auto geom_ok = [&](int u, int v, const float* np) -> bool {
+        if (cos_flip <= -1.0f) return true;                 // guard disabled
+        for (int pass = 0; pass < 2; ++pass) {
+            int center = pass == 0 ? u : v;                 // the vertex moving to np
+            for (int t : vt[center]) {
+                if (!talive[t]) continue;
+                const auto& f = F[t];
+                bool hu=false, hv=false;
+                for (int k=0;k<3;k++){ if(f[k]==u)hu=true; else if(f[k]==v)hv=true; }
+                if (hu && hv) continue;                     // face on the collapsed edge
+                const float* q0 = (f[0]==center) ? np : V[f[0]].data();
+                const float* q1 = (f[1]==center) ? np : V[f[1]].data();
+                const float* q2 = (f[2]==center) ? np : V[f[2]].data();
+                float ox,oy,oz, nx,ny,nz;
+                tri_normal(V[f[0]].data(), V[f[1]].data(), V[f[2]].data(), ox,oy,oz);
+                tri_normal(q0, q1, q2, nx, ny, nz);
+                float lo = std::sqrt(ox*ox+oy*oy+oz*oz);
+                float ln = std::sqrt(nx*nx+ny*ny+nz*nz);
+                if (ln < 1e-12f) return false;              // collapse -> degenerate
+                if (lo > 1e-12f &&
+                    (ox*nx + oy*ny + oz*nz) / (lo*ln) < cos_flip) return false;  // fold
+            }
+        }
+        return true;
+    };
+
     std::vector<uint64_t> claim(nv);
     const uint64_t CLAIM_MAX = ~0ull;
     struct Cand { int u, v; uint32_t lk; };  // lk = length priority key
@@ -279,11 +322,12 @@ static void merge_vertices(Mesh& mesh, float merge_factor, bool verbose, int num
             float len = dist(u, v);
             if (len >= merge_factor * std::min(Lavg[u], Lavg[v])) continue;  // not short now
             if (!link_ok(u, v)) continue;                           // would break manifold
+            float np[3] = {0.5f*(V[u][0]+V[v][0]), 0.5f*(V[u][1]+V[v][1]),
+                           0.5f*(V[u][2]+V[v][2])};
+            if (!geom_ok(u, v, np)) continue;                       // would fold / degenerate
 
             // collapse v -> u (move u to midpoint); disjoint 1-rings => race-free
-            V[u][0] = 0.5f*(V[u][0]+V[v][0]);
-            V[u][1] = 0.5f*(V[u][1]+V[v][1]);
-            V[u][2] = 0.5f*(V[u][2]+V[v][2]);
+            V[u][0] = np[0]; V[u][1] = np[1]; V[u][2] = np[2];
             for (int t : vt[v]) {
                 if (!talive[t]) continue;
                 auto& f = F[t];
@@ -402,14 +446,23 @@ static void orient_mesh(Mesh& mesh) {
     // Flood-fill consistent winding. Neighbours are looked up by undirected
     // edge each step (not a precomputed per-corner index) so they stay valid
     // even after a triangle's winding is flipped.
+    //
+    // BFS (a queue, via an index into `comp`), not DFS. For a clean orientable
+    // surface either gives a fully consistent result, but the extracted mesh can
+    // still contain small non-orientable defects (e.g. thin twisted sliver
+    // strips). Around such a defect SOME edge stays inconsistent no matter what,
+    // and the count of those leftover edges is the number of spanning-tree "back
+    // edges" closing an odd cycle -- far smaller for BFS's shallow tree than for
+    // DFS's long stringy one. BFS thus confines the residual front/back mixing
+    // to the immediate neighbourhood of each defect instead of smearing it along
+    // a deep traversal path across the surface.
     std::vector<char> vis(nf, 0), flipped(nf, 0);
-    std::vector<int> stack, comp;
+    std::vector<int> comp;
     for (int seed = 0; seed < nf; ++seed) {
         if (vis[seed]) continue;
-        vis[seed] = 1; stack.clear(); comp.clear();
-        stack.push_back(seed); comp.push_back(seed);
-        while (!stack.empty()) {
-            int t = stack.back(); stack.pop_back();
+        vis[seed] = 1; comp.clear(); comp.push_back(seed);
+        for (size_t h = 0; h < comp.size(); ++h) {
+            int t = comp[h];
             const auto& f = F[t];
             for (int k = 0; k < 3; ++k) {
                 int a = f[k], b = f[(k+1)%3];
@@ -421,7 +474,7 @@ static void orient_mesh(Mesh& mesh) {
                 for (int m = 0; m < 3; ++m)
                     if (g[m] == a && g[(m+1)%3] == b) { same = true; break; }
                 if (same) { std::swap(g[1], g[2]); flipped[nb] = 1; }
-                vis[nb] = 1; stack.push_back(nb); comp.push_back(nb);
+                vis[nb] = 1; comp.push_back(nb);
             }
         }
         // align the component's global sign with the emission (outward) guess
@@ -429,6 +482,275 @@ static void orient_mesh(Mesh& mesh) {
         if (fl * 2 > (long)comp.size())
             for (int t : comp) std::swap(F[t][1], F[t][2]);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate-face removal.
+//
+// Marching tetrahedra over a dense point cloud occasionally emits two coincident
+// triangles on the same vertex triple ("doublet" balloons of zero volume). They
+// are degenerate junk and, being isolated 2-triangle shells, survive the merge.
+// Drop every face whose (sorted) vertex triple was already seen, keeping one;
+// the leftover singleton then falls to the floater pass.
+// ---------------------------------------------------------------------------
+static void dedup_faces(Mesh& mesh, bool verbose) {
+    const long nf = (long)mesh.F.size();
+    if (nf == 0) return;
+    std::vector<std::array<int,4>> key(nf);
+    for (long t = 0; t < nf; ++t) {
+        int a = mesh.F[t][0], b = mesh.F[t][1], c = mesh.F[t][2];
+        if (a > b) std::swap(a, b);
+        if (b > c) std::swap(b, c);
+        if (a > b) std::swap(a, b);
+        key[t] = {a, b, c, (int)t};
+    }
+    std::sort(key.begin(), key.end());
+    std::vector<char> drop(nf, 0);
+    long ndup = 0;
+    for (long i = 1; i < nf; ++i)
+        if (key[i][0]==key[i-1][0] && key[i][1]==key[i-1][1] && key[i][2]==key[i-1][2]) {
+            drop[key[i][3]] = 1; ++ndup;
+        }
+    if (ndup == 0) return;
+    std::vector<std::array<int,3>> newF; newF.reserve(nf - ndup);
+    for (long t = 0; t < nf; ++t) if (!drop[t]) newF.push_back(mesh.F[t]);
+    mesh.F.swap(newF);
+    if (verbose)
+        printf("[meshing] dedup faces: removed %ld duplicate faces -> %zu faces\n",
+               ndup, mesh.F.size());
+}
+
+// ---------------------------------------------------------------------------
+// Floater removal: drop small disconnected components.
+//
+// Components are the connected components of the face graph (faces sharing a
+// vertex are connected, via a union-find over vertices). A component is a
+// "floater" when its face count is below min_faces; its faces are deleted and
+// the mesh compacted (orphan vertices, i.e. vertices no longer used by any face,
+// are dropped too). min_faces <= 1 disables the pass.
+// ---------------------------------------------------------------------------
+static void remove_floaters(Mesh& mesh, int min_faces, bool verbose) {
+    const int nv = (int)mesh.V.size();
+    const long nf = (long)mesh.F.size();
+    if (min_faces <= 1 || nv == 0 || nf == 0) return;
+
+    std::vector<int> parent(nv);
+    for (int i = 0; i < nv; ++i) parent[i] = i;
+    std::function<int(int)> find = [&](int x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    auto unite = [&](int a, int b) { a=find(a); b=find(b); if (a!=b) parent[a]=b; };
+    for (long t = 0; t < nf; ++t) {
+        const auto& f = mesh.F[t];
+        unite(f[0], f[1]); unite(f[1], f[2]);
+    }
+
+    std::unordered_map<int, long> comp_faces;        // root -> face count
+    for (long t = 0; t < nf; ++t) comp_faces[find(mesh.F[t][0])] += 1;
+    const long thresh = min_faces;
+
+    std::vector<int> remap(nv, -1);
+    std::vector<std::array<float,3>> newV; newV.reserve(nv);
+    std::vector<std::array<int,3>> newF; newF.reserve(mesh.F.size());
+    long dropped_f = 0;
+    for (long t = 0; t < nf; ++t) {
+        const auto& f = mesh.F[t];
+        if (comp_faces[find(f[0])] < thresh) { ++dropped_f; continue; }
+        int idx[3];
+        for (int k = 0; k < 3; ++k) {
+            int v = f[k];
+            if (remap[v] < 0) { remap[v] = (int)newV.size(); newV.push_back(mesh.V[v]); }
+            idx[k] = remap[v];
+        }
+        newF.push_back({idx[0], idx[1], idx[2]});
+    }
+    size_t removed_v = (size_t)nv - newV.size();
+    mesh.V.swap(newV);
+    mesh.F.swap(newF);
+    if (verbose)
+        printf("[meshing] floaters: removed %ld faces, %zu verts "
+               "-> %zu verts, %zu faces\n",
+               dropped_f, removed_v, mesh.V.size(), mesh.F.size());
+}
+
+// ---------------------------------------------------------------------------
+// Hole filling: triangulate small boundary loops.
+//
+// A boundary edge is one used by a single triangle. Boundary edges are chained
+// into loops (each boundary vertex on a clean manifold-with-boundary has exactly
+// two boundary edges). A loop with <= max_edges edges is filled: a 3-loop adds
+// one triangle; a longer loop gets a centroid fan (one new vertex at the loop
+// centroid plus a triangle per boundary edge). Larger loops (open scene / sky /
+// large unseen regions) are left open. Winding of the new faces is left to the
+// subsequent orient pass. New centroid vertices are colored by the later pass.
+// ---------------------------------------------------------------------------
+static void fill_holes(Mesh& mesh, int max_edges, bool verbose) {
+    const int nv = (int)mesh.V.size();
+    const long nf = (long)mesh.F.size();
+    if (max_edges <= 0 || nv == 0 || nf == 0) return;
+    const int64_t P = (int64_t)nv;
+    auto ekey = [P](int a, int b) -> int64_t {
+        int64_t lo = a<b?a:b, hi = a<b?b:a; return lo*P + hi;
+    };
+
+    // boundary edges = undirected edges incident to exactly one triangle
+    std::unordered_map<int64_t,int> ecount;
+    ecount.reserve((size_t)nf * 3);
+    for (long t = 0; t < nf; ++t) {
+        const auto& f = mesh.F[t];
+        for (int k = 0; k < 3; ++k) ecount[ekey(f[k], f[(k+1)%3])] += 1;
+    }
+    // boundary adjacency: vertex -> (neighbor, edge-id) for each boundary edge
+    struct BE { int w; int64_t key; };
+    std::unordered_map<int, std::vector<BE>> badj;
+    std::unordered_map<int64_t,char> used;
+    int n_bnd = 0;
+    for (long t = 0; t < nf; ++t) {
+        const auto& f = mesh.F[t];
+        for (int k = 0; k < 3; ++k) {
+            int a = f[k], b = f[(k+1)%3];
+            int64_t key = ekey(a, b);
+            if (ecount[key] != 1) continue;
+            if (used.emplace(key, 0).second) {   // first time we see this bnd edge
+                badj[a].push_back({b, key});
+                badj[b].push_back({a, key});
+                ++n_bnd;
+            }
+        }
+    }
+    if (n_bnd == 0) return;
+
+    long n_filled = 0, n_tris = 0;
+    std::vector<int> loop;
+    for (auto& kv : badj) {
+        for (BE& e0 : kv.second) {
+            if (used[e0.key]) continue;
+            // walk the loop starting along edge (start -> e0.w)
+            int start = kv.first;
+            loop.clear(); loop.push_back(start);
+            used[e0.key] = 1;
+            int prev = start, cur = e0.w;
+            bool closed = false, ok = true;
+            while ((int)loop.size() <= n_bnd) {
+                if (cur == start) { closed = true; break; }
+                loop.push_back(cur);
+                // pick the next unused boundary edge out of cur (prefer != prev)
+                int nxt = -1; int64_t nkey = -1;
+                auto it = badj.find(cur);
+                if (it != badj.end())
+                    for (BE& e : it->second)
+                        if (!used[e.key] && (nxt < 0 || e.w != prev)) { nxt = e.w; nkey = e.key; }
+                if (nxt < 0) { ok = false; break; }
+                used[nkey] = 1; prev = cur; cur = nxt;
+            }
+            if (!ok || !closed) continue;
+            const int n = (int)loop.size();
+            if (n < 3 || n > max_edges) continue;
+            // Only fill simple loops. A repeated vertex (a pinch point with >2
+            // boundary edges) would make a fan edge shared by >2 triangles, i.e.
+            // non-manifold; leave those holes open.
+            if (std::unordered_set<int>(loop.begin(), loop.end()).size() != (size_t)n)
+                continue;
+
+            // emit a triangle iff it is non-degenerate (skip collinear slivers)
+            auto push_tri = [&](int a, int b, int c) {
+                const auto& A = mesh.V[a]; const auto& B = mesh.V[b]; const auto& C = mesh.V[c];
+                float e1[3] = {B[0]-A[0], B[1]-A[1], B[2]-A[2]};
+                float e2[3] = {C[0]-A[0], C[1]-A[1], C[2]-A[2]};
+                float nx = e1[1]*e2[2]-e1[2]*e2[1], ny = e1[2]*e2[0]-e1[0]*e2[2],
+                      nz = e1[0]*e2[1]-e1[1]*e2[0];
+                if (nx*nx + ny*ny + nz*nz < 1e-24f) return;
+                mesh.F.push_back({a, b, c});
+                n_tris += 1;
+            };
+            if (n == 3) {
+                push_tri(loop[0], loop[1], loop[2]);
+            } else {
+                std::array<float,3> c = {0,0,0};
+                for (int v : loop) for (int a = 0; a < 3; ++a) c[a] += mesh.V[v][a];
+                for (int a = 0; a < 3; ++a) c[a] /= (float)n;
+                int ci = (int)mesh.V.size();
+                mesh.V.push_back(c);
+                for (int i = 0; i < n; ++i) push_tri(ci, loop[i], loop[(i+1)%n]);
+            }
+            ++n_filled;
+        }
+    }
+    if (verbose)
+        printf("[meshing] fill holes: filled %ld loops (<= %d edges), "
+               "added %ld faces -> %zu verts, %zu faces\n",
+               n_filled, max_edges, n_tris, mesh.V.size(), mesh.F.size());
+}
+
+// ---------------------------------------------------------------------------
+// Split non-manifold vertices.
+//
+// A vertex is non-manifold ("bowtie") when its incident triangles form more
+// than one edge-connected fan -- two surface sheets touching at a single point.
+// Edges may all be manifold (<= 2 triangles) yet such a vertex still breaks the
+// surface: the link is several cycles, not one, so orientation cannot be
+// propagated consistently across it (the flood-fill in orient_mesh leaves mixed
+// front/back faces). We duplicate the vertex into one copy per fan and reassign
+// each fan's triangles to its own copy. Geometry is unchanged (copies share the
+// position); the surface becomes a clean manifold-with-boundary, so the
+// subsequent orient pass yields a single consistent winding per component.
+// ---------------------------------------------------------------------------
+static void split_nonmanifold_vertices(Mesh& mesh, bool verbose) {
+    const int nv0 = (int)mesh.V.size();
+    const long nf = (long)mesh.F.size();
+    if (nv0 == 0 || nf == 0) return;
+
+    std::vector<std::vector<int>> vt(nv0);
+    for (long t = 0; t < nf; ++t)
+        for (int k = 0; k < 3; ++k) vt[mesh.F[t][k]].push_back((int)t);
+
+    std::unordered_map<int,int> parent;   // tri -> parent (local UF over incident tris)
+    std::unordered_map<int,int> w2rep;    // other endpoint w -> a tri carrying edge (v,w)
+    std::unordered_map<int,int> root2vid; // fan root -> assigned vertex id
+    auto find = [&](int x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    long n_split = 0, n_new = 0;
+    for (int v = 0; v < nv0; ++v) {
+        auto& tris = vt[v];
+        if (tris.size() < 2) continue;
+        // union incident triangles that share an edge (v,w)
+        parent.clear(); w2rep.clear();
+        for (int t : tris) parent[t] = t;
+        for (int t : tris) {
+            const auto& f = mesh.F[t];
+            for (int k = 0; k < 3; ++k) {
+                int w = f[k];
+                if (w == v) continue;
+                auto it = w2rep.find(w);
+                if (it == w2rep.end()) w2rep[w] = t;
+                else { int a = find(it->second), b = find(t); if (a != b) parent[a] = b; }
+            }
+        }
+        // first fan keeps v; each other fan gets a fresh copy
+        root2vid.clear();
+        int first_root = find(tris[0]);
+        for (int t : tris) {
+            int r = find(t);
+            if (r == first_root) continue;
+            int vid;
+            auto it = root2vid.find(r);
+            if (it == root2vid.end()) {
+                vid = (int)mesh.V.size();
+                mesh.V.push_back(mesh.V[v]);
+                root2vid[r] = vid;
+                ++n_new;
+            } else vid = it->second;
+            auto& f = mesh.F[t];
+            for (int k = 0; k < 3; ++k) if (f[k] == v) f[k] = vid;
+        }
+        if (!root2vid.empty()) ++n_split;
+    }
+    if (verbose)
+        printf("[meshing] split non-manifold verts: %ld split, %ld copies added "
+               "-> %zu verts\n", n_split, n_new, mesh.V.size());
 }
 
 } // namespace
@@ -594,10 +916,79 @@ bool generate_mesh(
     if (cfg.verbose)
         printf("[meshing] marching tets: %zu raw faces (%.2fs)\n", mesh.F.size(), secs_since(t5));
 
-    // ---- 7. manifold-preserving merge ----
+    // ---- 6b. cull vertices seen by no training camera (dataset path only) ----
+    // A vertex is kept iff some camera both sees it in-frame and has an
+    // unobstructed line of sight to it (occlusion tested against the mesh's own
+    // triangles via a GPU LBVH; see OccupancyEvaluator::cull_unseen_vertices).
+    // Removing a vertex drops every face incident to it. Since this only deletes
+    // faces, each surviving edge keeps <= its original triangle count, so the
+    // mesh stays manifold-with-boundary: the only new topology is boundary edges
+    // (holes). The downstream merge (link condition handles 1-triangle boundary
+    // edges) and orient (edge->triangle map allows the -1 "no neighbour" slot)
+    // are already boundary-safe, so no further repair is needed.
+    if (cfg.cull_unseen && ev.has_render_cameras() && !mesh.V.empty()) {
+        auto tc = Clock::now();
+        const int nv = (int)mesh.V.size();
+        const int nf = (int)mesh.F.size();
+        std::vector<unsigned char> vis(nv, 1);
+        ev.cull_unseen_vertices(
+            &mesh.V[0][0], nv, nf > 0 ? &mesh.F[0][0] : nullptr, nf, vis.data());
+
+        std::vector<int> remap(nv, -1);
+        std::vector<std::array<float,3>> newV; newV.reserve(nv);
+        for (int v = 0; v < nv; ++v)
+            if (vis[v]) { remap[v] = (int)newV.size(); newV.push_back(mesh.V[v]); }
+        std::vector<std::array<int,3>> newF; newF.reserve(mesh.F.size());
+        long dropped_f = 0;
+        for (int t = 0; t < nf; ++t) {
+            const auto& f = mesh.F[t];
+            if (!vis[f[0]] || !vis[f[1]] || !vis[f[2]]) { ++dropped_f; continue; }
+            newF.push_back({remap[f[0]], remap[f[1]], remap[f[2]]});
+        }
+        size_t removed_v = (size_t)nv - newV.size();
+        mesh.V.swap(newV);
+        mesh.F.swap(newF);
+        if (cfg.verbose)
+            printf("[meshing] cull unseen: removed %zu/%d verts, %ld faces "
+                   "-> %zu verts, %zu faces (%.2fs)\n",
+                   removed_v, nv, dropped_f, mesh.V.size(), mesh.F.size(), secs_since(tc));
+    }
+
+    // ---- 7. manifold-preserving merge (with fold/sliver guard) ----
     auto t6 = Clock::now();
-    merge_vertices(mesh, cfg.merge_factor, cfg.verbose, cfg.num_threads);
+    merge_vertices(mesh, cfg.merge_factor, cfg.merge_max_flip_deg, cfg.verbose, cfg.num_threads);
     if (cfg.verbose) printf("[meshing] merge (%.2fs)\n", secs_since(t6));
+
+    // ---- 7a. post-merge cleanup: drop floaters, then fill small holes ----
+    // Run after merge (final topology) and before orient so the orient pass
+    // gives the new fill faces a consistent, outward winding. Floaters first so
+    // we do not waste work filling holes in components about to be deleted.
+    // Order matters: split_nonmanifold_vertices runs BEFORE fill_holes.
+    //   - Culling deletes faces, which can split a vertex's fan and leave
+    //     non-manifold (bowtie) vertices; at those the boundary has >2 edges, so
+    //     a "butterfly" hole pinches through one point. Splitting first makes
+    //     every boundary vertex have exactly two boundary edges, so the boundary
+    //     becomes a set of disjoint simple loops -- a butterfly becomes two
+    //     separate simple loops that fill_holes can then fill (instead of being
+    //     skipped), and every filled loop is a true boundary circle. Filling a
+    //     disk onto a true boundary circle preserves orientability; filling the
+    //     bogus loops produced by ambiguous chaining at a bowtie did NOT (it was
+    //     the sole source of non-orientable defects -- MT+merge+cull alone are
+    //     orientable).
+    //   - The split also isolates vertex-only-attached doublets into their own
+    //     tiny components, which the final remove_floaters deletes.
+    // A second split runs AFTER fill: fill can occasionally close a loop in a way
+    // that leaves a single bowtie vertex, so re-splitting guarantees a fully
+    // vertex-manifold result (split preserves orientability). The final floater
+    // then removes whole isolated components (manifold-safe) left by either split.
+    auto tcl = Clock::now();
+    dedup_faces(mesh, cfg.verbose);
+    remove_floaters(mesh, cfg.floater_min_faces, cfg.verbose);
+    split_nonmanifold_vertices(mesh, cfg.verbose);
+    fill_holes(mesh, cfg.fill_hole_max_edges, cfg.verbose);
+    split_nonmanifold_vertices(mesh, cfg.verbose);
+    remove_floaters(mesh, cfg.floater_min_faces, cfg.verbose);
+    if (cfg.verbose) printf("[meshing] cleanup (%.2fs)\n", secs_since(tcl));
 
     // ---- 7b. globally consistent, outward-facing winding ----
     auto t7 = Clock::now();

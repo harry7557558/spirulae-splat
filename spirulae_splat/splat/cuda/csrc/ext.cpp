@@ -89,7 +89,8 @@ static bool generate_mesh_tensor(
     int64_t num_threads, bool verbose,
     at::Tensor viewmats, at::Tensor intrins, at::Tensor dist_coeffs,
     at::Tensor cam_widths, at::Tensor cam_heights, const std::string& camera_model,
-    int64_t carve_k
+    int64_t carve_k, bool cull_unseen,
+    double merge_max_flip_deg, int64_t floater_min_faces, int64_t fill_hole_max_edges
 ) {
     auto f32 = [](at::Tensor t) { return t.to(at::kFloat).contiguous().cpu(); };
     at::Tensor m = f32(means), q = f32(quats), s = f32(scales), o = f32(opacities);
@@ -157,6 +158,10 @@ static bool generate_mesh_tensor(
     cfg.num_threads = (int)num_threads;
     cfg.verbose = verbose;
     cfg.carve_k = (int)carve_k;
+    cfg.cull_unseen = cull_unseen;
+    cfg.merge_max_flip_deg = (float)merge_max_flip_deg;
+    cfg.floater_min_faces = (int)floater_min_faces;
+    cfg.fill_hole_max_edges = (int)fill_hole_max_edges;
 
     return meshing::generate_mesh(
         m.data_ptr<float>(), q.data_ptr<float>(), s.data_ptr<float>(), o.data_ptr<float>(),
@@ -186,7 +191,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("cam_widths") = at::Tensor(),
           pybind11::arg("cam_heights") = at::Tensor(),
           pybind11::arg("camera_model") = std::string("PINHOLE"),
-          pybind11::arg("carve_k") = 1);
+          pybind11::arg("carve_k") = 1,
+          pybind11::arg("cull_unseen") = true,
+          pybind11::arg("merge_max_flip_deg") = 60.0,
+          pybind11::arg("floater_min_faces") = 100,
+          pybind11::arg("fill_hole_max_edges") = 30);
 
     // Delaunay3D.h
     m.def("delaunay3d", &delaunay3d_tensor,

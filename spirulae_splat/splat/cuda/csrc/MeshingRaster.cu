@@ -11,6 +11,7 @@
 #include "MeshingRaster.cuh"
 
 #include <cuda_runtime.h>
+#include <cub/cub.cuh>
 #include <algorithm>
 #include <cstdint>
 #include <optional>
@@ -478,6 +479,368 @@ void render_evaluate_color(
     CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
 
     cudaFree(d_moments); cudaFree(d_rgbimg); cudaFree(d_num); cudaFree(d_den);
+}
+
+
+// ---------------------------------------------------------------------------
+// Visibility cull: drop mesh vertices seen by no camera.
+//
+// A vertex is "seen" by a camera when it projects inside that camera's frame
+// (project_point) AND the segment from the vertex to that camera's center is not
+// blocked by a mesh triangle that does NOT contain the vertex. Occlusion is
+// tested against an LBVH built over the mesh triangles (Karras radix tree,
+// mirroring the Gaussian LBVH in Meshing.cu). A vertex is kept iff >= 1 camera
+// sees it. Camera centers are recovered from each view matrix (C = -R^T t).
+// ---------------------------------------------------------------------------
+namespace {
+
+__device__ __forceinline__ float3 fmin3(float3 a, float3 b) {
+    return make_float3(fminf(a.x,b.x), fminf(a.y,b.y), fminf(a.z,b.z));
+}
+__device__ __forceinline__ float3 fmax3(float3 a, float3 b) {
+    return make_float3(fmaxf(a.x,b.x), fmaxf(a.y,b.y), fmaxf(a.z,b.z));
+}
+
+// 21-bit-per-axis Morton interleave (same as Meshing.cu's LBVH build).
+__device__ __forceinline__ uint64_t expand_bits_21(uint64_t x) {
+    x &= 0x1fffffULL;
+    x = (x | (x << 32)) & 0x1f00000000ffffULL;
+    x = (x | (x << 16)) & 0x1f0000ff0000ffULL;
+    x = (x | (x << 8))  & 0x100f00f00f00f00fULL;
+    x = (x | (x << 4))  & 0x10c30c30c30c30c3ULL;
+    x = (x | (x << 2))  & 0x1249249249249249ULL;
+    return x;
+}
+__device__ __forceinline__ uint64_t morton3D(float3 c /* in [0,1] */) {
+    const float s = (float)((1u << 21) - 1);
+    uint64_t xi = (uint64_t)fminf(fmaxf(c.x * s, 0.0f), s);
+    uint64_t yi = (uint64_t)fminf(fmaxf(c.y * s, 0.0f), s);
+    uint64_t zi = (uint64_t)fminf(fmaxf(c.z * s, 0.0f), s);
+    return (expand_bits_21(xi) << 2) | (expand_bits_21(yi) << 1) | expand_bits_21(zi);
+}
+
+__device__ __forceinline__ float atomicMinF(float* addr, float val) {
+    int* a = (int*)addr; int old = *a, assumed;
+    do { assumed = old;
+         if (__int_as_float(assumed) <= val) break;
+         old = atomicCAS(a, assumed, __float_as_int(val));
+    } while (assumed != old);
+    return __int_as_float(old);
+}
+__device__ __forceinline__ float atomicMaxF(float* addr, float val) {
+    int* a = (int*)addr; int old = *a, assumed;
+    do { assumed = old;
+         if (__int_as_float(assumed) >= val) break;
+         old = atomicCAS(a, assumed, __float_as_int(val));
+    } while (assumed != old);
+    return __int_as_float(old);
+}
+
+// Slab test: does segment o + t*dir, t in [0,1], touch the AABB?
+__device__ __forceinline__ bool seg_aabb(float3 o, float3 dir, float3 bmin, float3 bmax) {
+    float t0 = 0.0f, t1 = 1.0f;
+    #pragma unroll
+    for (int a = 0; a < 3; ++a) {
+        float oa = a==0?o.x:(a==1?o.y:o.z);
+        float da = a==0?dir.x:(a==1?dir.y:dir.z);
+        float lo = a==0?bmin.x:(a==1?bmin.y:bmin.z);
+        float hi = a==0?bmax.x:(a==1?bmax.y:bmax.z);
+        if (fabsf(da) < 1e-20f) { if (oa < lo || oa > hi) return false; }
+        else {
+            float inv = 1.0f / da;
+            float ta = (lo - oa) * inv, tb = (hi - oa) * inv;
+            if (ta > tb) { float tmp = ta; ta = tb; tb = tmp; }
+            t0 = fmaxf(t0, ta); t1 = fminf(t1, tb);
+            if (t0 > t1) return false;
+        }
+    }
+    return true;
+}
+
+// Moeller-Trumbore: segment o + t*dir intersects triangle (a,b,c)? Reports t.
+__device__ __forceinline__ bool ray_tri(
+    float3 o, float3 dir, float3 a, float3 b, float3 c, float& tout
+) {
+    float3 e1 = b - a, e2 = c - a;
+    float3 pv = cross(dir, e2);
+    float det = dot(e1, pv);
+    if (fabsf(det) < 1e-20f) return false;          // ray parallel to triangle
+    float inv = 1.0f / det;
+    float3 tv = o - a;
+    float u = dot(tv, pv) * inv;
+    if (u < -1e-6f || u > 1.0f + 1e-6f) return false;
+    float3 qv = cross(tv, e1);
+    float v = dot(dir, qv) * inv;
+    if (v < -1e-6f || u + v > 1.0f + 1e-6f) return false;
+    tout = dot(e2, qv) * inv;
+    return true;
+}
+
+// Does triangle `tid` (skipped if it contains vertex `vid`) block the open
+// segment o->cam? Parametric margins exclude intersections hugging the
+// endpoints: the near margin suppresses self-occlusion acne from triangles
+// adjacent to (but not containing) the vertex, biasing the borderline toward
+// "visible" so the surface is not over-culled.
+__device__ __forceinline__ bool tri_hits(
+    float3 o, float3 dir, int tid, int vid,
+    const float* __restrict__ verts, const int* __restrict__ faces
+) {
+    int ia = faces[3*tid], ib = faces[3*tid+1], ic = faces[3*tid+2];
+    if (ia == vid || ib == vid || ic == vid) return false;   // connected -> skip
+    float3 a = make_float3(verts[3*ia], verts[3*ia+1], verts[3*ia+2]);
+    float3 b = make_float3(verts[3*ib], verts[3*ib+1], verts[3*ib+2]);
+    float3 c = make_float3(verts[3*ic], verts[3*ic+1], verts[3*ic+2]);
+    float t;
+    return ray_tri(o, dir, a, b, c, t) && t > 1e-3f && t < 1.0f - 1e-4f;
+}
+
+inline constexpr int kCullStack = 64;
+
+__device__ bool seg_blocked(
+    float3 o, float3 cam, int vid,
+    const float* __restrict__ verts, const int* __restrict__ faces, int nf,
+    const float3* __restrict__ leafMin, const float3* __restrict__ leafMax,
+    const int2* __restrict__ internal, const float3* __restrict__ nodeAABB
+) {
+    float3 dir = cam - o;
+    if (nf < 2) {                       // no internal nodes: scan the (<=1) tris
+        for (int t = 0; t < nf; ++t)
+            if (tri_hits(o, dir, t, vid, verts, faces)) return true;
+        return false;
+    }
+    int stack[kCullStack]; int sp = 0;
+    if (!seg_aabb(o, dir, nodeAABB[0], nodeAABB[1])) return false;
+    stack[sp++] = 0;
+    while (sp > 0) {
+        int ni = stack[--sp];
+        int2 ch = internal[ni];
+        #pragma unroll
+        for (int cc = 0; cc < 2; ++cc) {
+            int child = cc == 0 ? ch.x : ch.y;
+            if (child < 0) {
+                int tid = ~child;
+                if (seg_aabb(o, dir, leafMin[tid], leafMax[tid]) &&
+                    tri_hits(o, dir, tid, vid, verts, faces))
+                    return true;
+            } else if (seg_aabb(o, dir, nodeAABB[2*child], nodeAABB[2*child+1])) {
+                if (sp < kCullStack) stack[sp++] = child;
+            }
+        }
+    }
+    return false;
+}
+
+// Per-triangle leaf AABB + centroid Morton code (and an iota id).
+__global__ void tri_prep_kernel(
+    int nf, const int* __restrict__ faces, const float* __restrict__ verts,
+    float3 bmin, float3 inv_ext,
+    float3* leafMin, float3* leafMax, uint64_t* morton, int* iota
+) {
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= nf) return;
+    int ia = faces[3*t], ib = faces[3*t+1], ic = faces[3*t+2];
+    float3 a = make_float3(verts[3*ia], verts[3*ia+1], verts[3*ia+2]);
+    float3 b = make_float3(verts[3*ib], verts[3*ib+1], verts[3*ib+2]);
+    float3 c = make_float3(verts[3*ic], verts[3*ic+1], verts[3*ic+2]);
+    leafMin[t] = fmin3(fmin3(a, b), c);
+    leafMax[t] = fmax3(fmax3(a, b), c);
+    float3 ctr = (a + b + c) * (1.0f / 3.0f);
+    float3 rc = make_float3((ctr.x - bmin.x) * inv_ext.x,
+                            (ctr.y - bmin.y) * inv_ext.y,
+                            (ctr.z - bmin.z) * inv_ext.z);
+    morton[t] = morton3D(rc);
+    iota[t] = t;
+}
+
+// Karras 2012 single-level radix tree (identical to Meshing.cu's bvh build).
+__global__ void tri_internal_kernel(
+    int n, const uint64_t* __restrict__ morton, const int* __restrict__ argsort,
+    int2* __restrict__ internal, int* __restrict__ parent
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n - 1) return;
+
+    #define delta(a, b) \
+        (((b) < 0 || (b) >= n) ? -1 : \
+         (morton[a] == morton[b] ? 64 + __clz((a) ^ (b)) \
+                                 : __clzll(morton[a] ^ morton[b])))
+
+    int d = delta(i, i+1) - delta(i, i-1);
+    d = d > 0 ? 1 : (d < 0 ? -1 : 0);
+    int delta_min = delta(i, i-d);
+    int lmax = 2;
+    while (delta(i, i + lmax*d) > delta_min) lmax <<= 1;
+    int l = 0;
+    for (int t = lmax >> 1; t >= 1; t >>= 1)
+        if (delta(i, i + (l+t)*d) > delta_min) l += t;
+    int j = i + l*d;
+    int delta_node = delta(i, j);
+    int sp_ = 0;
+    for (int tf = 2, t; (t = (l + tf - 1) / tf) >= 1; tf <<= 1)
+        if (delta(i, i + (sp_ + t)*d) > delta_node) sp_ += t;
+    int gamma = i + sp_*d + min(d, 0);
+
+    int left  = (min(i,j) == gamma)     ? ~argsort[gamma]     : gamma;
+    int right = (max(i,j) == gamma + 1) ? ~argsort[gamma+1]   : gamma + 1;
+    internal[i] = make_int2(left, right);
+    if (left  >= 0) atomicMax(&parent[left],  i);
+    if (right >= 0) atomicMax(&parent[right], i);
+    #undef delta
+}
+
+__global__ void tri_initaabb_kernel(int n_internal, float3* nodeAABB) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n_internal) return;
+    nodeAABB[2*i]   = make_float3(1e30f, 1e30f, 1e30f);
+    nodeAABB[2*i+1] = make_float3(-1e30f, -1e30f, -1e30f);
+}
+
+__global__ void tri_aabb_kernel(
+    int n,
+    const int2* __restrict__ internal, const int* __restrict__ parent,
+    const float3* __restrict__ leafMin, const float3* __restrict__ leafMax,
+    float3* __restrict__ nodeAABB
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n - 1) return;
+    int2 ch = internal[i];
+    if (ch.x >= 0 && ch.y >= 0) return;  // no leaf child -> filled from below
+
+    float3 bmin = make_float3(1e30f, 1e30f, 1e30f);
+    float3 bmax = make_float3(-1e30f, -1e30f, -1e30f);
+    if (ch.x < 0) { bmin = fmin3(bmin, leafMin[~ch.x]); bmax = fmax3(bmax, leafMax[~ch.x]); }
+    if (ch.y < 0) { bmin = fmin3(bmin, leafMin[~ch.y]); bmax = fmax3(bmax, leafMax[~ch.y]); }
+
+    int node = i;
+    do {
+        bool covered =
+            atomicMinF(&nodeAABB[2*node].x,   bmin.x) <= bmin.x &
+            atomicMinF(&nodeAABB[2*node].y,   bmin.y) <= bmin.y &
+            atomicMinF(&nodeAABB[2*node].z,   bmin.z) <= bmin.z &
+            atomicMaxF(&nodeAABB[2*node+1].x, bmax.x) >= bmax.x &
+            atomicMaxF(&nodeAABB[2*node+1].y, bmax.y) >= bmax.y &
+            atomicMaxF(&nodeAABB[2*node+1].z, bmax.z) >= bmax.z;
+        if (covered) break;
+        node = parent[node];
+    } while (node >= 0);
+}
+
+__global__ void cull_kernel(
+    const float* __restrict__ verts, int nv,
+    const int* __restrict__ faces, int nf,
+    const float* __restrict__ viewmats, const float* __restrict__ intrins,
+    const float* __restrict__ dist,
+    const int* __restrict__ Ws, const int* __restrict__ Hs,
+    CameraModelType model, int C,
+    const float3* __restrict__ leafMin, const float3* __restrict__ leafMax,
+    const int2* __restrict__ internal, const float3* __restrict__ nodeAABB,
+    unsigned char* __restrict__ visible
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nv) return;
+    float3 p = make_float3(verts[3*i], verts[3*i+1], verts[3*i+2]);
+    for (int c = 0; c < C; ++c) {
+        const float* vm = viewmats + (size_t)c * 16;
+        float u, v, z;
+        if (!project_point(vm, intrins + (size_t)c*4, dist + (size_t)c*10,
+                           model, Ws[c], Hs[c], p.x, p.y, p.z, u, v, z))
+            continue;                              // out of frame / behind camera
+        // camera center in world: C = -R^T t (viewmat row-major world->cam 4x4)
+        float3 cam = make_float3(
+            -(vm[0]*vm[3] + vm[4]*vm[7] + vm[8]*vm[11]),
+            -(vm[1]*vm[3] + vm[5]*vm[7] + vm[9]*vm[11]),
+            -(vm[2]*vm[3] + vm[6]*vm[7] + vm[10]*vm[11]));
+        if (!seg_blocked(p, cam, i, verts, faces, nf,
+                         leafMin, leafMax, internal, nodeAABB)) {
+            visible[i] = 1;                        // seen by this camera -> keep
+            return;
+        }
+    }
+    visible[i] = 0;                                // seen by no camera
+}
+
+} // namespace
+
+void render_cull_unseen_vertices(
+    RenderContext* ctx, const float* verts, int nv,
+    const int* faces, int nf, unsigned char* visible
+) {
+    if (nv <= 0) return;
+
+    float* d_verts = dmalloc_copy(verts, (size_t)nv * 3);
+    int*   d_faces = (nf > 0) ? dmalloc_copy(faces, (size_t)nf * 3) : nullptr;
+    int*   d_W = dmalloc_copy(ctx->Ws.data(), (size_t)ctx->C);
+    int*   d_H = dmalloc_copy(ctx->Hs.data(), (size_t)ctx->C);
+    unsigned char* d_vis = nullptr;
+    CHECK_DEVICE_ERROR(cudaMalloc(&d_vis, (size_t)nv));
+
+    // ---- triangle LBVH over the mesh faces ----
+    float3 *d_leafMin = nullptr, *d_leafMax = nullptr, *d_nodeAABB = nullptr;
+    int2   *d_internal = nullptr;
+    if (nf >= 1) {
+        // scene bbox over the mesh vertices (host) for Morton normalization. The
+        // mesh is a bounded surface, so a plain linear normalization suffices
+        // (no distant outliers like the Gaussian LBVH's coordinate remap).
+        float bb[6] = {1e30f,1e30f,1e30f,-1e30f,-1e30f,-1e30f};
+        for (int i = 0; i < nv; ++i)
+            for (int a = 0; a < 3; ++a) {
+                float x = verts[3*i+a];
+                bb[a] = std::min(bb[a], x); bb[3+a] = std::max(bb[3+a], x);
+            }
+        float3 bmin = make_float3(bb[0], bb[1], bb[2]);
+        float3 inv_ext = make_float3(1.0f/std::max(bb[3]-bb[0], 1e-12f),
+                                     1.0f/std::max(bb[4]-bb[1], 1e-12f),
+                                     1.0f/std::max(bb[5]-bb[2], 1e-12f));
+        CHECK_DEVICE_ERROR(cudaMalloc(&d_leafMin, (size_t)nf * sizeof(float3)));
+        CHECK_DEVICE_ERROR(cudaMalloc(&d_leafMax, (size_t)nf * sizeof(float3)));
+        uint64_t* d_morton = nullptr; int* d_iota = nullptr;
+        CHECK_DEVICE_ERROR(cudaMalloc(&d_morton, (size_t)nf * sizeof(uint64_t)));
+        CHECK_DEVICE_ERROR(cudaMalloc(&d_iota,   (size_t)nf * sizeof(int)));
+        tri_prep_kernel<<<_LAUNCH_ARGS_1D(nf, 256)>>>(
+            nf, d_faces, d_verts, bmin, inv_ext, d_leafMin, d_leafMax, d_morton, d_iota);
+        CHECK_DEVICE_ERROR(cudaGetLastError());
+
+        if (nf >= 2) {
+            uint64_t* d_morton_s = nullptr; int* d_argsort = nullptr;
+            CHECK_DEVICE_ERROR(cudaMalloc(&d_morton_s, (size_t)nf * sizeof(uint64_t)));
+            CHECK_DEVICE_ERROR(cudaMalloc(&d_argsort,  (size_t)nf * sizeof(int)));
+            CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
+                d_morton, d_morton_s, d_iota, d_argsort, nf);
+            CHECK_DEVICE_ERROR(cudaGetLastError());
+
+            CHECK_DEVICE_ERROR(cudaMalloc(&d_internal, (size_t)(nf - 1) * sizeof(int2)));
+            int* d_parent = nullptr;
+            CHECK_DEVICE_ERROR(cudaMalloc(&d_parent, (size_t)(nf - 1) * sizeof(int)));
+            cudaMemset(d_parent, 0xff, (size_t)(nf - 1) * sizeof(int));
+            tri_internal_kernel<<<_LAUNCH_ARGS_1D(nf - 1, 256)>>>(
+                nf, d_morton_s, d_argsort, d_internal, d_parent);
+            CHECK_DEVICE_ERROR(cudaGetLastError());
+
+            CHECK_DEVICE_ERROR(cudaMalloc(&d_nodeAABB, (size_t)2 * (nf - 1) * sizeof(float3)));
+            tri_initaabb_kernel<<<_LAUNCH_ARGS_1D(nf - 1, 256)>>>(nf - 1, d_nodeAABB);
+            tri_aabb_kernel<<<_LAUNCH_ARGS_1D(nf - 1, 256)>>>(
+                nf, d_internal, d_parent, d_leafMin, d_leafMax, d_nodeAABB);
+            CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+            cudaFree(d_morton_s); cudaFree(d_argsort); cudaFree(d_parent);
+        }
+        cudaFree(d_morton); cudaFree(d_iota);
+    }
+
+    const int TPB = 256;
+    int blocks = (nv + TPB - 1) / TPB;
+    cull_kernel<<<blocks, TPB>>>(
+        d_verts, nv, d_faces, nf,
+        ctx->d_viewmats, ctx->d_intrins, ctx->d_dist, d_W, d_H, cmt(ctx->model), ctx->C,
+        d_leafMin, d_leafMax, d_internal, d_nodeAABB, d_vis);
+    CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+    CHECK_DEVICE_ERROR(cudaMemcpy(visible, d_vis, (size_t)nv, cudaMemcpyDeviceToHost));
+
+    cudaFree(d_verts); if (d_faces) cudaFree(d_faces);
+    cudaFree(d_W); cudaFree(d_H); cudaFree(d_vis);
+    if (d_leafMin)  cudaFree(d_leafMin);
+    if (d_leafMax)  cudaFree(d_leafMax);
+    if (d_internal) cudaFree(d_internal);
+    if (d_nodeAABB) cudaFree(d_nodeAABB);
 }
 
 } // namespace meshing

@@ -269,6 +269,19 @@ def entrypoint():
                     help="aggregate occupancy as the k-th smallest over cameras "
                          "(k=1 = strict min/space-carving; k>1 is robust to a few "
                          "underestimating views)")
+    ap.add_argument("--no-cull-unseen", action="store_true",
+                    help="keep mesh vertices that no training camera sees "
+                         "(default: drop them; only applies with --data)")
+    ap.add_argument("--merge-max-flip-deg", type=float, default=60.0,
+                    help="reject a merge collapse that would rotate an incident "
+                         "face normal past this many degrees (avoids folds / "
+                         "slivers); <=0 or >=180 disables the guard")
+    ap.add_argument("--floater-min-faces", type=int, default=20,
+                    help="drop connected components with fewer than this many "
+                         "faces (<=1 disables)")
+    ap.add_argument("--fill-hole-max-edges", type=int, default=30,
+                    help="triangulate boundary loops with at most this many edges; "
+                         "larger holes stay open (0 disables hole filling)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -320,7 +333,9 @@ def entrypoint():
 
     out_path = args.output if args.output is not None else (splat_ply.parent / "mesh.ply")
 
-    cam_kwargs = {}
+    # Always pass the camera tensors explicitly: pybind cannot fall back on the
+    # binding's `at::Tensor()` defaults when these are omitted, so the no-data
+    # path must send empty tensors rather than leaving them unset.
     if cams is not None:
         cam_kwargs = dict(
             viewmats=cams["viewmats"],
@@ -329,6 +344,12 @@ def entrypoint():
             cam_widths=cams["width"],
             cam_heights=cams["height"],
             camera_model=cams["camera_model"],
+        )
+    else:
+        empty = torch.empty(0, dtype=torch.float32)
+        cam_kwargs = dict(
+            viewmats=empty, intrins=empty, dist_coeffs=empty,
+            cam_widths=empty, cam_heights=empty,
         )
 
     _C.generate_mesh(
@@ -342,6 +363,10 @@ def entrypoint():
         num_threads=args.num_threads,
         verbose=not args.quiet,
         carve_k=args.carve_k,
+        cull_unseen=not args.no_cull_unseen,
+        merge_max_flip_deg=args.merge_max_flip_deg,
+        floater_min_faces=args.floater_min_faces,
+        fill_hole_max_edges=args.fill_hole_max_edges,
         **cam_kwargs,
     )
     print(f"[meshing] done -> {out_path}")

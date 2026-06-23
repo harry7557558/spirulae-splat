@@ -1138,4 +1138,20 @@ void OccupancyEvaluator::colorize(const float* verts, int n, float* rgb_out) {
     cudaFree(d_v); cudaFree(d_c);
 }
 
+bool OccupancyEvaluator::has_render_cameras() const {
+    return impl_->use_render && impl_->rctx != nullptr;
+}
+
+void OccupancyEvaluator::cull_unseen_vertices(
+    const float* verts, int n, const int* faces, int n_faces, unsigned char* visible_out
+) {
+    if (n <= 0) return;
+    if (!has_render_cameras()) {
+        // No camera intrinsics: visibility is undefined, keep everything.
+        std::fill(visible_out, visible_out + n, (unsigned char)1);
+        return;
+    }
+    render_cull_unseen_vertices(impl_->rctx, verts, n, faces, n_faces, visible_out);
+}
+
 } // namespace meshing

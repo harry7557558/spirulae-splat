@@ -37,13 +37,26 @@ struct MeshingConfig {
     int   num_threads = 0;       // 0 = all hardware threads (Delaunay + host)
     bool  verbose = true;
 
+    // --- short-edge merge quality guard ---
+    // A collapse is rejected when it would fold the surface: if any reshaped
+    // incident face's normal would rotate by more than this many degrees, the
+    // collapse is skipped (the link condition keeps topology manifold but does
+    // not prevent geometric folds / slivers). <=0 or >=180 disables the guard.
+    float merge_max_flip_deg = 60.0f;
+
+    // --- post-merge cleanup ---
+    // Floater removal: drop connected components with fewer than this many
+    // faces. <=1 disables.
+    int   floater_min_faces = 100;
+
     // --- rasterize-and-sample occupancy/color (dataset path) ---
     // When camera intrinsics are supplied, occupancy/color come from rendering
     // each camera once (3DGUT) and sampling, instead of LBVH ray traversal.
     int   render_width = 0;      // 0 = use dataset-native width
     int   render_height = 0;     // 0 = use dataset-native height
-    int   fill_hole_max_edges = 2; // boundary loops with <= this many edges are
-                                   // triangulated; larger holes (sky) stay open
+    int   fill_hole_max_edges = 30; // boundary loops with <= this many edges are
+                                    // triangulated; larger holes (sky / large
+                                    // unseen regions) stay open. <=0 disables.
     bool  cull_unseen = true;    // drop final mesh verts seen by no camera
 
     // --- occupancy estimate robustness (render path) ---                                                         
@@ -130,6 +143,19 @@ public:
 
     int num_points() const { return num_points_; }
     int num_kept()   const { return num_kept_; }
+
+    // True when the rasterize-and-sample (dataset / camera-intrinsics) path is
+    // active, i.e. camera-based visibility culling is possible.
+    bool has_render_cameras() const;
+
+    // Mark which mesh vertices are seen by >= 1 camera: a vertex is seen when it
+    // projects in-frame AND the segment to that camera is not blocked by a mesh
+    // triangle that does not contain the vertex (occlusion via an LBVH over the
+    // faces). Host verts [n*3], faces [n_faces*3] -> visible_out [n] (1 = keep).
+    // When has_render_cameras() is false this is a no-op (all marked visible).
+    void cull_unseen_vertices(const float* verts, int n,
+                              const int* faces, int n_faces,
+                              unsigned char* visible_out);
 
     // Debug: render camera `cam_idx`'s occupancy moments (m0, mean_depth,
     // std_depth) into `out` [width*height*3], row-major. Returns false if the
