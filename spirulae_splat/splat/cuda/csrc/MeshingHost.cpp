@@ -577,31 +577,68 @@ static void remove_floaters(Mesh& mesh, int min_faces, bool verbose) {
 // ---------------------------------------------------------------------------
 // Hole filling: triangulate small boundary loops.
 //
-// A boundary edge is one used by a single triangle. Boundary edges are chained
-// into loops (each boundary vertex on a clean manifold-with-boundary has exactly
-// two boundary edges). A loop with <= max_edges edges is filled: a 3-loop adds
-// one triangle; a longer loop gets a centroid fan (one new vertex at the loop
-// centroid plus a triangle per boundary edge). Larger loops (open scene / sky /
-// large unseen regions) are left open. Winding of the new faces is left to the
-// subsequent orient pass. New centroid vertices are colored by the later pass.
+// A boundary edge is used by a single triangle. Boundary edges are chained into
+// loops (after split_nonmanifold_vertices every boundary vertex has exactly two
+// boundary edges, so the boundary is a set of disjoint cyclic loops). A loop is
+// filled when it is small relative to its connected component -- its bounding-box
+// diagonal is less than `ratio` times the component's bbox diagonal; larger loops
+// (open scene / sky / large unseen regions) stay open.
+//
+// Each fillable loop is triangulated with a minimum-weight polygon triangulation
+// (Liepa-style dynamic program over the cyclic boundary). This uses ONLY the
+// loop's own vertices -- no centroid -- so it adds no high-valence hub, and the
+// weight is each triangle's "thinness" (sum of squared edge lengths / area), so
+// the DP minimises sliver/thin triangles. Because every loop edge is covered by
+// exactly one fill triangle, fills are watertight (no spurious boundary edges).
+// Degenerate triangles get an infinite weight, so when a loop visits one position
+// via two distinct split-copy vertices ("overlapping" verts) the DP never joins
+// them with a (zero-area) triangle -- i.e. no edge between overlapping vertices --
+// it bridges the two sides through non-degenerate triangles instead. Winding is
+// left to the subsequent orient pass. Very large loops fall back to a (watertight)
+// centroid fan to keep the cubic DP bounded.
 // ---------------------------------------------------------------------------
-static void fill_holes(Mesh& mesh, int max_edges, bool verbose) {
+static void fill_holes(Mesh& mesh, float ratio, int max_edges, bool verbose) {
     const int nv = (int)mesh.V.size();
     const long nf = (long)mesh.F.size();
-    if (max_edges <= 0 || nv == 0 || nf == 0) return;
+    if ((ratio <= 0.0f && max_edges <= 0) || nv == 0 || nf == 0) return;
     const int64_t P = (int64_t)nv;
     auto ekey = [P](int a, int b) -> int64_t {
         int64_t lo = a<b?a:b, hi = a<b?b:a; return lo*P + hi;
     };
 
-    // boundary edges = undirected edges incident to exactly one triangle
+    // ---- connected components (union-find over verts via faces) + per-comp bbox ----
+    std::vector<int> parent(nv);
+    for (int i = 0; i < nv; ++i) parent[i] = i;
+    std::function<int(int)> find = [&](int x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    for (long t = 0; t < nf; ++t) {
+        const auto& f = mesh.F[t];
+        int a=find(f[0]), b=find(f[1]), c=find(f[2]);
+        if (a!=b) parent[a]=b; b=find(b); if (b!=c) parent[b]=c;
+    }
+    std::unordered_map<int,std::array<float,6>> caabb;  // root -> (min xyz, max xyz)
+    for (int v = 0; v < nv; ++v) {
+        int r = find(v); const auto& p = mesh.V[v];
+        auto it = caabb.find(r);
+        if (it == caabb.end()) caabb[r] = {p[0],p[1],p[2],p[0],p[1],p[2]};
+        else { auto& b = it->second;
+            for (int a=0;a<3;a++){ b[a]=std::min(b[a],p[a]); b[3+a]=std::max(b[3+a],p[a]); } }
+    }
+    auto comp_diag = [&](int r) {
+        const auto& b = caabb[r];
+        float dx=b[3]-b[0], dy=b[4]-b[1], dz=b[5]-b[2];
+        return std::sqrt(dx*dx + dy*dy + dz*dz);
+    };
+
+    // ---- boundary edges + adjacency ----
     std::unordered_map<int64_t,int> ecount;
     ecount.reserve((size_t)nf * 3);
     for (long t = 0; t < nf; ++t) {
         const auto& f = mesh.F[t];
         for (int k = 0; k < 3; ++k) ecount[ekey(f[k], f[(k+1)%3])] += 1;
     }
-    // boundary adjacency: vertex -> (neighbor, edge-id) for each boundary edge
     struct BE { int w; int64_t key; };
     std::unordered_map<int, std::vector<BE>> badj;
     std::unordered_map<int64_t,char> used;
@@ -612,7 +649,7 @@ static void fill_holes(Mesh& mesh, int max_edges, bool verbose) {
             int a = f[k], b = f[(k+1)%3];
             int64_t key = ekey(a, b);
             if (ecount[key] != 1) continue;
-            if (used.emplace(key, 0).second) {   // first time we see this bnd edge
+            if (used.emplace(key, 0).second) {
                 badj[a].push_back({b, key});
                 badj[b].push_back({a, key});
                 ++n_bnd;
@@ -622,11 +659,147 @@ static void fill_holes(Mesh& mesh, int max_edges, bool verbose) {
     if (n_bnd == 0) return;
 
     long n_filled = 0, n_tris = 0;
+
+    // Emit a fill triangle. We do NOT drop (near-)degenerate triangles: skipping
+    // one would leave its boundary edge uncovered, which (next to a coincident
+    // split-copy vertex) shows up as a spurious boundary in tools like MeshLab.
+    // The DP never picks degenerate triangles (they have infinite weight, so it
+    // splits instead); only the rare fan fallback emits the odd zero-area face,
+    // which is invisible but keeps the fill watertight.
+    auto push_tri = [&](int a, int b, int c) {
+        mesh.F.push_back({a, b, c});
+        n_tris += 1;
+    };
+    // triangle "thinness": (sum of squared edge lengths)/area; minimal (~3.46)
+    // for an equilateral triangle, large for slivers, +inf for (near-)degenerate.
+    auto tri_weight = [&](int a, int b, int c) -> float {
+        const auto& A = mesh.V[a]; const auto& B = mesh.V[b]; const auto& C = mesh.V[c];
+        float ux=B[0]-A[0], uy=B[1]-A[1], uz=B[2]-A[2];
+        float vx=C[0]-A[0], vy=C[1]-A[1], vz=C[2]-A[2];
+        float wx=C[0]-B[0], wy=C[1]-B[1], wz=C[2]-B[2];
+        float nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+        float area2 = std::sqrt(nx*nx+ny*ny+nz*nz);   // = 2*area
+        if (area2 < 1e-12f) return 1e30f;
+        float s = (ux*ux+uy*uy+uz*uz) + (vx*vx+vy*vy+vz*vz) + (wx*wx+wy*wy+wz*wz);
+        return s / area2;
+    };
+
+    // Minimum-weight triangulation of a cyclic sub-polygon L (Liepa DP). A
+    // diagonal that already exists as a mesh edge is forbidden (would put a 3rd
+    // triangle on it -> non-manifold). Returns false if no collision-free
+    // triangulation exists (caller then uses the collision-proof fan).
+    const int kDpMax = 250;   // cubic DP cap; larger loops are split first
+    std::vector<float> W;     // reused across calls
+    std::vector<int> O, st;
+    auto dp_fill = [&](const std::vector<int>& L) -> bool {
+        const int n = (int)L.size();
+        auto blocked = [&](int p, int q) -> bool {
+            int lo = p<q?p:q, hi = p<q?q:p;
+            if (hi == lo+1 || (lo == 0 && hi == n-1)) return false;  // boundary edge
+            return ecount.find(ekey(L[lo], L[hi])) != ecount.end();
+        };
+        W.assign((size_t)n*n, 0.0f);
+        O.assign((size_t)n*n, 0);
+        for (int gap = 2; gap < n; ++gap)
+            for (int i = 0; i + gap < n; ++i) {
+                int j = i + gap; float best = 1e30f; int bo = i+1;
+                for (int m = i+1; m < j; ++m) {
+                    float c = W[(size_t)i*n+m] + W[(size_t)m*n+j]
+                            + tri_weight(L[i], L[m], L[j]);
+                    if (blocked(i,m) || blocked(m,j) || blocked(i,j)) c = 1e30f;
+                    if (c < best) { best = c; bo = m; }
+                }
+                W[(size_t)i*n+j] = best; O[(size_t)i*n+j] = bo;
+            }
+        if (W[(size_t)0*n+(n-1)] >= 1e29f) return false;
+        st.clear(); st.push_back(0); st.push_back(n-1);
+        while (!st.empty()) {
+            int j = st.back(); st.pop_back();
+            int i = st.back(); st.pop_back();
+            if (j <= i+1) continue;
+            int m = O[(size_t)i*n+j];
+            push_tri(L[i], L[m], L[j]);
+            st.push_back(i); st.push_back(m);
+            st.push_back(m); st.push_back(j);
+        }
+        return true;
+    };
+    auto fan_fill = [&](const std::vector<int>& L) {     // collision-proof last resort
+        const int n = (int)L.size(); if (n < 3) return;
+        const long before = (long)mesh.F.size();
+        std::array<float,3> c = {0,0,0};
+        for (int v : L) for (int a=0;a<3;a++) c[a] += mesh.V[v][a];
+        for (int a=0;a<3;a++) c[a] /= (float)n;
+        int ci = (int)mesh.V.size(); mesh.V.push_back(c);
+        for (int i=0;i<n;++i) push_tri(ci, L[i], L[(i+1)%n]);
+        if ((long)mesh.F.size() == before) mesh.V.pop_back();
+    };
+
+    // Fill one boundary loop if it is small relative to its component. A large
+    // loop is recursively split by a non-colliding chord near its midpoint into
+    // two sub-loops (sharing only that chord) until each is small enough for the
+    // DP -- this avoids any high-valence hub vertex while keeping good triangle
+    // shape. The chord is recorded in `ecount` so no later diagonal reuses it.
+    std::vector<std::vector<int>> work;
+    auto fill_loop = [&](const std::vector<int>& L0) {
+        const int n0 = (int)L0.size();
+        if (n0 < 3) return;
+        float bb[6] = {1e30f,1e30f,1e30f,-1e30f,-1e30f,-1e30f};
+        for (int v : L0) { const auto& p = mesh.V[v];
+            for (int a=0;a<3;a++){ bb[a]=std::min(bb[a],p[a]); bb[3+a]=std::max(bb[3+a],p[a]); } }
+        float dx=bb[3]-bb[0], dy=bb[4]-bb[1], dz=bb[5]-bb[2];
+        // fill if EITHER criterion is met: small relative to its component, OR
+        // few enough edges (so tiny holes always fill, even in a small component).
+        bool ok_ratio = ratio > 0.0f &&
+                        std::sqrt(dx*dx+dy*dy+dz*dz) < ratio * comp_diag(find(L0[0]));
+        bool ok_edges = max_edges > 0 && n0 <= max_edges;
+        if (!ok_ratio && !ok_edges) return;
+        const long before = (long)mesh.F.size();
+
+        work.clear(); work.push_back(L0);
+        while (!work.empty()) {
+            std::vector<int> cur = std::move(work.back()); work.pop_back();
+            const int n = (int)cur.size();
+            if (n < 3) continue;
+            if (n == 3) { push_tri(cur[0], cur[1], cur[2]); continue; }
+            if (n <= kDpMax && dp_fill(cur)) continue;   // DP triangulated it cleanly
+            // Otherwise split (loop too big for the DP, or the DP found no
+            // collision-free triangulation -- smaller sub-loops usually resolve it,
+            // so splitting beats falling straight to the high-valence fan).
+            // Split at the SHORTEST non-colliding chord that divides the loop into
+            // two balanced arcs (each >= ~1/5 of the loop). Shortest-balanced finds
+            // a narrow neck instead of an arbitrary long diameter, so the split
+            // edge is short and the resulting triangles stay well-shaped; the
+            // balance bound also keeps the recursion shallow (O(n^2) overall).
+            const int lo = std::max(2, n/5), hi = std::min(n-2, (4*n)/5);
+            int bi = -1, bj = -1; float blen = 1e30f;
+            for (int i = 0; i < n; ++i) {
+                const auto& Pi = mesh.V[cur[i]];
+                for (int g = lo; g <= hi; ++g) {
+                    int j = i + g; if (j >= n) break;
+                    if (ecount.find(ekey(cur[i], cur[j])) != ecount.end()) continue;
+                    const auto& Pj = mesh.V[cur[j]];
+                    float ex=Pi[0]-Pj[0], ey=Pi[1]-Pj[1], ez=Pi[2]-Pj[2];
+                    float l = ex*ex + ey*ey + ez*ez;
+                    if (l < blen) { blen = l; bi = i; bj = j; }
+                }
+            }
+            if (bi < 0) { fan_fill(cur); continue; }     // no clean chord -> last resort
+            ecount[ekey(cur[bi], cur[bj])] += 1;          // reserve the chord
+            std::vector<int> A(cur.begin()+bi, cur.begin()+bj+1);
+            std::vector<int> B(cur.begin()+bj, cur.end());
+            B.insert(B.end(), cur.begin(), cur.begin()+bi+1);
+            work.push_back(std::move(A));
+            work.push_back(std::move(B));
+        }
+        if ((long)mesh.F.size() > before) ++n_filled;
+    };
+
+    // Walk each boundary loop and triangulate it.
     std::vector<int> loop;
     for (auto& kv : badj) {
         for (BE& e0 : kv.second) {
             if (used[e0.key]) continue;
-            // walk the loop starting along edge (start -> e0.w)
             int start = kv.first;
             loop.clear(); loop.push_back(start);
             used[e0.key] = 1;
@@ -635,7 +808,6 @@ static void fill_holes(Mesh& mesh, int max_edges, bool verbose) {
             while ((int)loop.size() <= n_bnd) {
                 if (cur == start) { closed = true; break; }
                 loop.push_back(cur);
-                // pick the next unused boundary edge out of cur (prefer != prev)
                 int nxt = -1; int64_t nkey = -1;
                 auto it = badj.find(cur);
                 if (it != badj.end())
@@ -644,43 +816,14 @@ static void fill_holes(Mesh& mesh, int max_edges, bool verbose) {
                 if (nxt < 0) { ok = false; break; }
                 used[nkey] = 1; prev = cur; cur = nxt;
             }
-            if (!ok || !closed) continue;
-            const int n = (int)loop.size();
-            if (n < 3 || n > max_edges) continue;
-            // Only fill simple loops. A repeated vertex (a pinch point with >2
-            // boundary edges) would make a fan edge shared by >2 triangles, i.e.
-            // non-manifold; leave those holes open.
-            if (std::unordered_set<int>(loop.begin(), loop.end()).size() != (size_t)n)
-                continue;
-
-            // emit a triangle iff it is non-degenerate (skip collinear slivers)
-            auto push_tri = [&](int a, int b, int c) {
-                const auto& A = mesh.V[a]; const auto& B = mesh.V[b]; const auto& C = mesh.V[c];
-                float e1[3] = {B[0]-A[0], B[1]-A[1], B[2]-A[2]};
-                float e2[3] = {C[0]-A[0], C[1]-A[1], C[2]-A[2]};
-                float nx = e1[1]*e2[2]-e1[2]*e2[1], ny = e1[2]*e2[0]-e1[0]*e2[2],
-                      nz = e1[0]*e2[1]-e1[1]*e2[0];
-                if (nx*nx + ny*ny + nz*nz < 1e-24f) return;
-                mesh.F.push_back({a, b, c});
-                n_tris += 1;
-            };
-            if (n == 3) {
-                push_tri(loop[0], loop[1], loop[2]);
-            } else {
-                std::array<float,3> c = {0,0,0};
-                for (int v : loop) for (int a = 0; a < 3; ++a) c[a] += mesh.V[v][a];
-                for (int a = 0; a < 3; ++a) c[a] /= (float)n;
-                int ci = (int)mesh.V.size();
-                mesh.V.push_back(c);
-                for (int i = 0; i < n; ++i) push_tri(ci, loop[i], loop[(i+1)%n]);
-            }
-            ++n_filled;
+            if (!ok || !closed || (int)loop.size() < 3) continue;
+            fill_loop(loop);
         }
     }
     if (verbose)
-        printf("[meshing] fill holes: filled %ld loops (<= %d edges), "
-               "added %ld faces -> %zu verts, %zu faces\n",
-               n_filled, max_edges, n_tris, mesh.V.size(), mesh.F.size());
+        printf("[meshing] fill holes: filled %ld loops (< %.3g x component size "
+               "or <= %d edges), added %ld faces -> %zu verts, %zu faces\n",
+               n_filled, ratio, max_edges, n_tris, mesh.V.size(), mesh.F.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -810,6 +953,7 @@ bool generate_mesh(
     auto t1 = Clock::now();
     std::vector<double> pts_d(pts.begin(), pts.end());
     auto tri = delaunay3d::compute_delaunay_3d(pts_d.data(), P, cfg.num_threads, false);
+    pts_d.clear(); pts_d.shrink_to_fit();
     const int M = tri.nb_cells;
     if (cfg.verbose)
         printf("[meshing] Delaunay: %d tets, %d threads (%.2fs)\n",
@@ -916,6 +1060,10 @@ bool generate_mesh(
     if (cfg.verbose)
         printf("[meshing] marching tets: %zu raw faces (%.2fs)\n", mesh.F.size(), secs_since(t5));
 
+    pts.clear(); pts.shrink_to_fit();
+    tri.cell_adjacents.clear(); tri.cell_adjacents.shrink_to_fit();
+    tri.cell_vertices.clear(); tri.cell_vertices.shrink_to_fit();
+
     // ---- 6b. cull vertices seen by no training camera (dataset path only) ----
     // A vertex is kept iff some camera both sees it in-frame and has an
     // unobstructed line of sight to it (occlusion tested against the mesh's own
@@ -985,7 +1133,7 @@ bool generate_mesh(
     dedup_faces(mesh, cfg.verbose);
     remove_floaters(mesh, cfg.floater_min_faces, cfg.verbose);
     split_nonmanifold_vertices(mesh, cfg.verbose);
-    fill_holes(mesh, cfg.fill_hole_max_edges, cfg.verbose);
+    fill_holes(mesh, cfg.fill_hole_ratio, cfg.fill_hole_max_edges, cfg.verbose);
     split_nonmanifold_vertices(mesh, cfg.verbose);
     remove_floaters(mesh, cfg.floater_min_faces, cfg.verbose);
     if (cfg.verbose) printf("[meshing] cleanup (%.2fs)\n", secs_since(tcl));

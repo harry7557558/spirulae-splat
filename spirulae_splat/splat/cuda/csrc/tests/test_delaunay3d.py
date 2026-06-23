@@ -57,7 +57,9 @@ def main():
     else:
         nthreads = 0
         torch.manual_seed(0)
-        pts = torch.rand(50000, 3)
+        # pts = torch.rand(50000, 3)
+        # pts = torch.randn(1000000, 3)
+        pts = (torch.randn(1000000, 3) + 100.0).half().float() - 100.0
 
     n = pts.shape[0]
     t0 = time.time()

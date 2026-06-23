@@ -144,20 +144,6 @@ namespace {
                  + fabsl(a02) * (fabsl(a10*a21) + fabsl(a11*a20));
         }
 
-        // Deterministic, order-consistent symbolic perturbation used when a
-        // predicate is exactly (within filter) degenerate. Returns the sign of
-        // the permutation that sorts the point pointers. All points share the
-        // same coordinate array, so pointer order == global vertex index order.
-        inline Sign sos_perturb(const double* const* p, int n) {
-            int parity = 0;
-            for(int i = 0; i < n; ++i) {
-                for(int j = i+1; j < n; ++j) {
-                    if(p[i] > p[j]) parity ^= 1;
-                }
-            }
-            return parity ? NEGATIVE : POSITIVE;
-        }
-
         // sign of det[ p1-p0 ; p2-p0 ; p3-p0 ]
         Sign orient_3d(
             const double* p0, const double* p1,
@@ -230,9 +216,42 @@ namespace {
             // result = sign(-det4)
             if(det4 < -bound) return POSITIVE;
             if(det4 >  bound) return NEGATIVE;
-            // degenerate: symbolic perturbation
-            const double* allp[5] = {p0,p1,p2,p3,p4};
-            return sos_perturb(allp, 5);
+
+            // Degenerate (the five points are co-spherical): resolve with a
+            // Simulation-of-Simplicity perturbation. The in-sphere value equals
+            // -Delta where Delta == det4 is the translation-invariant lifted
+            // determinant det[x_i, y_i, z_i, x_i^2+y_i^2+z_i^2] (i=0..3, relative
+            // to p4); see the derivation that Delta expands exactly to det4. We
+            // perturb the lifted "weight" coordinate of each point upward by an
+            // infinitesimal eps_i ordered by the global vertex index (== pointer
+            // order: all points share one coordinate array), the smallest-index
+            // point being dominant. Then
+            //     Delta_perturbed = sum_i eps_i * C_i,
+            //     C_i = (-1)^(i+3) * orient_det(the other four points),
+            // and the sign is given by the most dominant non-vanishing term.
+            // Because (p0,p1,p2,p3) is a non-degenerate tetrahedron, the term
+            // that drops p4 is always non-zero, so the cascade terminates. This
+            // is a realizable (regular-triangulation weight) perturbation and is
+            // therefore globally consistent.
+            {
+                const double* q[5] = {p0,p1,p2,p3,p4};
+                int order[5] = {0,1,2,3,4};
+                std::sort(order, order+5,
+                    [&](int a, int b){ return q[a] < q[b]; });
+                for(int k = 0; k < 5; ++k) {
+                    int i = order[k];
+                    const double* r[4];
+                    int m = 0;
+                    for(int j = 0; j < 5; ++j) if(j != i) r[m++] = q[j];
+                    Sign o = orient_3d(r[0], r[1], r[2], r[3]);
+                    if(o == ZERO) continue;
+                    // C_i sign = (-1)^(i+3) * o  (i odd -> +o, i even -> -o)
+                    Sign Ci = (i & 1) ? o : Sign(-o);
+                    // result = sign(-Delta_perturbed) = -sign(C_i)
+                    return Sign(-Ci);
+                }
+                return ZERO; // unreachable for a non-degenerate tetrahedron
+            }
         }
 
         // POSITIVE iff p3 is inside the circumscribed circle of the (coplanar)
@@ -286,8 +305,39 @@ namespace {
             real bound = 64.0L * LDBL_EPSILON * perm;
             if(prod >  bound) return POSITIVE;
             if(prod < -bound) return NEGATIVE;
-            const double* allp[4] = {p0,p1,p2,p3};
-            return sos_perturb(allp, 4);
+
+            // Degenerate (the four coplanar points are con-cyclic): resolve with
+            // the 2D analogue of the in_sphere Simulation-of-Simplicity above.
+            // In the projection plane the in-circle value is sign(Delta2 * o2)
+            // with Delta2 = det[X_i, Y_i, X_i^2+Y_i^2] (== inc) and
+            // o2 = orient2d(p0,p1,p2). Perturbing the lifted weights by an
+            // index-ordered eps gives Delta2_perturbed = sum_i eps_i * C2_i with
+            // C2_i = (-1)^(i+2) * orient2d(the other three points). Since
+            // (p0,p1,p2) is a non-degenerate triangle (o2 != 0), the term that
+            // drops p3 is non-zero, so the cascade terminates.
+            {
+                Sign so2 = (o2 > 0) ? POSITIVE : ((o2 < 0) ? NEGATIVE : ZERO);
+                int order[4] = {0,1,2,3};
+                const double* qq[4] = {p0,p1,p2,p3};
+                std::sort(order, order+4,
+                    [&](int a, int b){ return qq[a] < qq[b]; });
+                for(int k = 0; k < 4; ++k) {
+                    int i = order[k];
+                    int idx[3];
+                    int m = 0;
+                    for(int j = 0; j < 4; ++j) if(j != i) idx[m++] = j;
+                    real e =
+                        (X[idx[1]]-X[idx[0]])*(Y[idx[2]]-Y[idx[0]]) -
+                        (X[idx[2]]-X[idx[0]])*(Y[idx[1]]-Y[idx[0]]);
+                    Sign oe = (e > 0) ? POSITIVE : ((e < 0) ? NEGATIVE : ZERO);
+                    if(oe == ZERO) continue;
+                    // C2_i sign = (-1)^(i+2) * oe  (i odd -> -oe, i even -> +oe)
+                    Sign C2i = (i & 1) ? Sign(-oe) : oe;
+                    // result = sign(Delta2_perturbed * o2) = sign(C2_i) * sign(o2)
+                    return Sign(int(C2i) * int(so2));
+                }
+                return ZERO; // unreachable for a non-degenerate triangle
+            }
         }
 
         bool points_are_identical_3d(const double* p0, const double* p1) {
@@ -413,6 +463,7 @@ namespace {
         void clear() {
             nb_f_ = 0;
             OK_ = true;
+            non_manifold_ = false;
             ::memset(h2t_, END_OF_LIST, sizeof(h2t_));
         }
 
@@ -454,6 +505,16 @@ namespace {
             t2 = tglobal_[get_vv2t(v1,v0)];
         }
 
+        // True iff the recorded facets form a valid (manifold) cavity boundary.
+        // In a closed, oriented boundary every directed edge belongs to exactly
+        // one facet, so set_vv2t() never sees the same directed edge twice. On
+        // exactly-degenerate input (a point lying on the plane of a boundary
+        // facet) the conflict region can fail to be a topological ball and its
+        // boundary pinches, making some directed edge appear in two facets;
+        // set_vv2t() flags that. stellate_cavity() assumes a manifold boundary,
+        // so such a cavity must be skipped rather than triangulated.
+        bool boundary_is_manifold() const { return !non_manifold_; }
+
     private:
         static constexpr index_t        MAX_H = 1033;
         static constexpr local_index_t  END_OF_LIST = 255;
@@ -465,12 +526,20 @@ namespace {
         }
 
         void set_vv2t(index_t v1, index_t v2, local_index_t f) {
+            uint64_t K = (uint64_t(v1+1) << 32) | uint64_t(v2+1);
             index_t h = hash(v1,v2);
             index_t cur = h;
             do {
                 if(h2t_[cur] == END_OF_LIST) {
                     h2t_[cur] = f;
-                    h2v_[cur] = (uint64_t(v1+1) << 32) | uint64_t(v2+1);
+                    h2v_[cur] = K;
+                    return;
+                }
+                if(h2v_[cur] == K) {
+                    // This directed edge is already owned by another facet: the
+                    // cavity boundary is non-manifold (pinched). Flag it and keep
+                    // the first owner so get_vv2t() stays well defined.
+                    non_manifold_ = true;
                     return;
                 }
                 cur = (cur+1)%MAX_H;
@@ -498,6 +567,7 @@ namespace {
         index_t boundary_f_[MAX_F];
         index_t f2v_[MAX_F][3];
         bool OK_;
+        bool non_manifold_;
     };
 
     /*********************** spatial sort (BRIO/Hilbert) *******************/
@@ -779,6 +849,14 @@ namespace {
                         } else {
                             direction_ = !direction_;
                         }
+                    } else if(!memory_overflow_) {
+                        // Genuine failure unrelated to a thread conflict (e.g. a
+                        // point whose neighborhood is so degenerate that locate
+                        // cannot resolve it). Retrying would spin on the same
+                        // point forever; skip it to guarantee forward progress.
+                        // (memory_overflow_ is left to the sequential pass.)
+                        if(direction_) ++work_begin_;
+                        else --work_end_;
                     }
                 }
             }
@@ -895,6 +973,11 @@ namespace {
         bool insert(index_t v, index_t& hint) {
             if(v == v1_ || v == v2_ || v == v3_ || v == v4_) return true;
 
+            // Reset so that, on failure, interfering_thread_ == NO_THREAD
+            // reliably distinguishes a genuine (non-conflict) failure from a
+            // thread-contention rollback. acquire_tet() sets it on any conflict.
+            interfering_thread_ = NO_THREAD;
+
             Sign orient[4];
             index_t t = locate(vertex_ptr(v), hint, orient);
             if(t == NO_TETRAHEDRON) {
@@ -929,6 +1012,21 @@ namespace {
 
             index_t new_tet = NO_INDEX;
             if(cavity_.OK()) {
+                // On exactly-degenerate input (e.g. a point lying on the plane
+                // of a cavity boundary facet, which the weight-only in_sphere
+                // perturbation cannot push off) the conflict region may fail to
+                // be a topological ball, leaving a non-manifold boundary that
+                // stellate_cavity would turn into corrupt adjacency -> later
+                // segfaults / infinite loops. Skip such a point instead of
+                // corrupting the mesh: the triangulation is left unchanged
+                // (find_conflict_zone only set per-cell status, which
+                // release_tets() clears). For the downstream meshing this loses
+                // at most a handful of points in pinch configurations and never
+                // affects well-posed input.
+                if(!cavity_.boundary_is_manifold()) {
+                    release_tets();
+                    return true;
+                }
                 new_tet = stellate_cavity(v);
             } else {
                 new_tet = stellate_conflict_zone_iterative(v,t_bndry,f_bndry);
@@ -1083,8 +1181,21 @@ namespace {
             Sign orient_local[4];
             if(orient == nullptr) orient = orient_local;
 
+            // A non-degenerate straight-line walk visits every tet at most once,
+            // so it cannot take more than max_used_t_ steps. On exactly
+            // degenerate input (flat / zero-volume tets) the orientation tests
+            // can become inconsistent and the walk can cycle; bound it so locate
+            // fails cleanly (the caller then skips the point) instead of looping
+            // forever.
+            index_t walk_budget = 2 * max_used_t_ + 16;
+
         still_walking:
             {
+                if(walk_budget-- == 0) {
+                    if(t_pred != NO_TETRAHEDRON) release_tet(t_pred);
+                    if(owns_tet(t)) release_tet(t);
+                    return NO_TETRAHEDRON;
+                }
                 if(t_pred != NO_TETRAHEDRON) release_tet(t_pred);
                 if(tet_is_free(t)) return NO_TETRAHEDRON;
                 if(!owns_tet(t) && !acquire_tet(t)) return NO_TETRAHEDRON;

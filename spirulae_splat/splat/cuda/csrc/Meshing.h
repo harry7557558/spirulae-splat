@@ -54,9 +54,12 @@ struct MeshingConfig {
     // each camera once (3DGUT) and sampling, instead of LBVH ray traversal.
     int   render_width = 0;      // 0 = use dataset-native width
     int   render_height = 0;     // 0 = use dataset-native height
-    int   fill_hole_max_edges = 30; // boundary loops with <= this many edges are
-                                    // triangulated; larger holes (sky / large
-                                    // unseen regions) stay open. <=0 disables.
+    // A boundary loop is filled when EITHER criterion holds (<=0 disables that
+    // one): its bbox diagonal is < fill_hole_ratio * its connected component's
+    // bbox diagonal, OR it has <= fill_hole_max_edges edges (so tiny holes always
+    // fill). Larger holes (sky / large unseen regions) stay open.
+    float fill_hole_ratio = 0.05f;
+    int   fill_hole_max_edges = 12;
     bool  cull_unseen = true;    // drop final mesh verts seen by no camera
 
     // --- occupancy estimate robustness (render path) ---                                                         

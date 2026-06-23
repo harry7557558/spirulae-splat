@@ -276,12 +276,17 @@ def entrypoint():
                     help="reject a merge collapse that would rotate an incident "
                          "face normal past this many degrees (avoids folds / "
                          "slivers); <=0 or >=180 disables the guard")
-    ap.add_argument("--floater-min-faces", type=int, default=20,
+    ap.add_argument("--floater-min-faces", type=int, default=10,
                     help="drop connected components with fewer than this many "
                          "faces (<=1 disables)")
-    ap.add_argument("--fill-hole-max-edges", type=int, default=30,
-                    help="triangulate boundary loops with at most this many edges; "
-                         "larger holes stay open (0 disables hole filling)")
+    ap.add_argument("--fill-hole-ratio", type=float, default=0.05,
+                    help="fill a boundary loop when its bounding-box diagonal is "
+                         "less than this fraction of its connected component's "
+                         "bounding-box diagonal (0 disables this criterion)")
+    ap.add_argument("--fill-hole-max-edges", type=int, default=20,
+                    help="also fill any boundary loop with at most this many edges "
+                         "(so tiny holes always fill; 0 disables this criterion). "
+                         "A loop is filled if either criterion is met.")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -366,6 +371,7 @@ def entrypoint():
         cull_unseen=not args.no_cull_unseen,
         merge_max_flip_deg=args.merge_max_flip_deg,
         floater_min_faces=args.floater_min_faces,
+        fill_hole_ratio=args.fill_hole_ratio,
         fill_hole_max_edges=args.fill_hole_max_edges,
         **cam_kwargs,
     )
