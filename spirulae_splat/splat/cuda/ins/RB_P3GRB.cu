@@ -28,7 +28,7 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
@@ -66,7 +66,7 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
@@ -104,7 +104,7 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
@@ -142,7 +142,7 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
@@ -180,7 +180,7 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
@@ -218,7 +218,7 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
@@ -256,7 +256,7 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
@@ -294,7 +294,7 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs

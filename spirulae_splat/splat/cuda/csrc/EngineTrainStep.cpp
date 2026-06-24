@@ -64,7 +64,15 @@ static std::map<std::string, float> _engine_step_fwd_bwd_only(
 
     _set_cur_cam_indices(bilagrid_cam_indices);
 
-    forward_3dgs(primitive, sh_degree, packed);
+    // Enable distortion output when any distortion regularizer is active, so
+    // the forward emits the per-pixel distortion image consumed by the loss.
+    // Only 3dgut's (eval3d) backward consumes the distortion gradient; the 2D
+    // 3dgs/mip backward does not, so don't pay for it there.
+    const bool output_distortion = (primitive == "3dgut") && (
+        cfg.loss.weights[(int)LossWeightIndex::RgbDistReg]    != 0.0f ||
+        cfg.loss.weights[(int)LossWeightIndex::DepthDistReg]  != 0.0f ||
+        cfg.loss.weights[(int)LossWeightIndex::NormalDistReg] != 0.0f);
+    forward_3dgs(primitive, sh_degree, packed, /*output_median=*/false, output_distortion);
 
     engine().ppisp.cur_run_before_bilagrid = cfg.ppisp.run_before_bilagrid;
     const bool bg_enabled = engine().bilagrid_rgb.enabled ||

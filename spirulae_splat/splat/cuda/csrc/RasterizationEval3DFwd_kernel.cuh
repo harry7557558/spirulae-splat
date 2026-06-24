@@ -77,7 +77,6 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float * render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float * render_median // [I, image_height, image_width, 1], optional
 ) {
@@ -146,9 +145,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     float median_prev_z = 0.0f;
     float median_prev_T = 1.0f;
 
-    RenderOutput pix_out = RenderOutput::zero();
-    RenderOutput pix2_out = RenderOutput::zero();
-    RenderOutput distortion_out = RenderOutput::zero();
+    RenderOutput pix_out = RenderOutput::zero();   // C = sum_j w_j c_j (raw)
+    RenderOutput pix2_out = RenderOutput::zero();  // S = sum_j w_j c_j^2
 
     // gaussians overlapping this micro-tile's macro tile
     int32_t range_start = tile_offsets[tile_id];
@@ -262,14 +260,11 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
             if (next_T > 1e-4f) {
                 const float vis = alpha * T;
-                if constexpr (output_distortion) {
-                    distortion_out += (
-                        color * color * (1.0f - T)
-                        + color * pix_out * -2.0f
-                        + pix2_out
-                    ) * vis;
+                // Distortion uses the closed form D = W*S - C^2 (computed once
+                // after the loop), so here we only accumulate the second moment
+                // S; the per-splat distortion increment is no longer needed.
+                if constexpr (output_distortion)
                     pix2_out += color * color * vis;
-                }
                 pix_out += color * vis;
                 cur_idx = batch_start + t;
                 T = next_T;
@@ -282,16 +277,19 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         render_Ts[pix_id] = T;
         if constexpr (output_median)
             render_median[pix_id] = median_depth;
+        // distortion: closed form D = W*S - C^2, with W = 1 - T_final and the
+        // raw (un-normalized) accumulators C = pix_out, S = pix2_out. Must be
+        // evaluated before the depth channel of C is normalized below.
+        if constexpr (output_distortion) {
+            const float W = 1.0f - T;
+            RenderOutput distortion_out = pix2_out * W + pix_out * pix_out * -1.0f;
+            distortion_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_distortions, pix_id_global);
+        }
         if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType))
             pix_out.depth /= fmaxf(1.0f - T, 1e-10f);
         pix_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_colors, pix_id_global);
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
-        // distortion
-        if constexpr (output_distortion) {
-            pix2_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_colors2, pix_id_global);
-            distortion_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_distortions, pix_id_global);
-        }
     }
 
 }
@@ -331,7 +329,6 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 ) {
@@ -359,7 +356,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     #endif
         image_width, image_height, tile_width, tile_height, tile_offsets, flatten_ids,
         render_colors, render_Ts, last_ids,
-        render_colors2, render_distortions,
+        render_distortions,
         render_median
     );
 }

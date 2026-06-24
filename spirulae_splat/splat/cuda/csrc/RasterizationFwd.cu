@@ -24,7 +24,6 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, 3]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids,        // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
@@ -46,7 +45,6 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
     RenderOutput::Tensor renders,
     DeviceTensor3D<float> transmittances,
     DeviceTensor3D<int32_t> last_ids,
-    RenderOutput::Tensor renders2,
     RenderOutput::Tensor distortions,
     DeviceTensor3D<float> render_median
 ) {
@@ -73,7 +71,6 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
         renders,
         transmittances.data_ptr(),
         last_ids.data_ptr(),
-        output_distortion ? renders2.buffer() : RenderOutput::Buffer(),
         output_distortion ? distortions.buffer() : RenderOutput::Buffer(),
         output_median ? render_median.data_ptr() : nullptr
     );
@@ -86,7 +83,6 @@ inline std::tuple<
     RenderOutput::TensorTuple,  // renders
     DeviceTensor3D<float>,  // transmittances
     DeviceTensor3D<int32_t>,  // last_ids
-    RenderOutput::TensorTuple,  // renders2, optional
     RenderOutput::TensorTuple,  // distortions, optional
     DeviceTensor3D<float>  // median depth, optional
 > rasterize_to_pixels_fwd_tensor(
@@ -104,12 +100,10 @@ inline std::tuple<
 ) {
     int64_t batch = tile_offsets.size<0>();
 
-    RenderOutput::TensorTuple renders, renders2, distortions;
+    RenderOutput::TensorTuple renders, distortions;
     RenderOutput::resize<SplatPrimitive::pixelType>(
         renders, batch, image_height, image_width, "renders");
     if (output_distortion) {
-        RenderOutput::resize<SplatPrimitive::pixelType>(
-            renders2, batch, image_height, image_width, "renders2");
         RenderOutput::resize<SplatPrimitive::pixelType>(
             distortions, batch, image_height, image_width, "distortions");
     }
@@ -133,14 +127,13 @@ inline std::tuple<
         renders,
         render_Ts,
         render_last_ids,
-        renders2,
         distortions,
         render_median
     );
 
     return std::make_tuple(
         renders, render_Ts, render_last_ids,
-        renders2, distortions, render_median
+        distortions, render_median
     );
 }
 
@@ -156,7 +149,6 @@ std::tuple<
     RenderOutput::TensorTuple,  // renders
     DeviceTensor3D<float>,  // transmittances
     DeviceTensor3D<int32_t>,  // last_ids
-    RenderOutput::TensorTuple,  // renders2, optional
     RenderOutput::TensorTuple,  // distortions, optional
     DeviceTensor3D<float>  // median depth, optional
 > rasterize_to_pixels_3dgs_fwd(
@@ -200,7 +192,6 @@ std::tuple<
     RenderOutput::TensorTuple,  // renders
     DeviceTensor3D<float>,  // transmittances
     DeviceTensor3D<int32_t>,  // last_ids
-    RenderOutput::TensorTuple,  // renders2, optional
     RenderOutput::TensorTuple,  // distortions, optional
     DeviceTensor3D<float>  // median depth, optional
 > rasterize_to_pixels_mip_fwd(

@@ -29,7 +29,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
@@ -60,7 +60,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
     const DeviceTensor3D<float> render_Ts,   // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids,  // [I, image_height, image_width]
     RenderOutput::Tensor render_outputs,
-    RenderOutput::Tensor render2_outputs,
+    RenderOutput::Tensor distortion_fwd_outputs,
     const DeviceTensor3D<float> loss_map,
     const DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
@@ -94,7 +94,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
         image_width, image_height, tile_width, tile_height,
         tile_offsets.data_ptr(), flatten_ids.data_ptr(),
         render_Ts.data_ptr(), last_ids.data_ptr(), render_outputs,
-        render2_outputs.has_value() ? render2_outputs : RenderOutput::Buffer(),
+        distortion_fwd_outputs.has_value() ? distortion_fwd_outputs : RenderOutput::Buffer(),
         loss_map.data_ptr(),
         accum_weight_map.data_ptr(),
         v_render_outputs, v_render_Ts.data_ptr(),
@@ -127,7 +127,7 @@ inline std::tuple<
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::TensorTuple render_outputs_tuple,
-    std::optional<RenderOutput::TensorTuple> render2_outputs_tuple,
+    std::optional<RenderOutput::TensorTuple> distortion_fwd_outputs_tuple,
     DeviceTensor3D<float> loss_map,
     DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
@@ -144,10 +144,10 @@ inline std::tuple<
         v_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_bwd.v_screen");
 
     RenderOutput::Tensor render_outputs = render_outputs_tuple;
-    RenderOutput::Tensor render2_outputs;
+    RenderOutput::Tensor distortion_fwd_outputs;
     RenderOutput::Tensor v_distortion_outputs;
     if (output_distortion) {
-        render2_outputs = render2_outputs_tuple.value();
+        distortion_fwd_outputs = distortion_fwd_outputs_tuple.value();
         v_distortion_outputs = v_distortion_outputs_tuple.value();
     }
     DeviceVector<float> o_accum_weight;
@@ -171,7 +171,7 @@ inline std::tuple<
         splats_w, splats_s, gaussian_ids,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs,
-        render2_outputs, loss_map, accum_weight_map,
+        distortion_fwd_outputs, loss_map, accum_weight_map,
         v_render_outputs, v_render_Ts,
         v_median,
         v_distortion_outputs,

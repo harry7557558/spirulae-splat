@@ -627,6 +627,7 @@ class Trainer:
         # switches to a previously-`None` slot, the next request renders it.
         for _k in ["rgb", "depth", "alpha"] + ["normal"] * 0 + ["depth_normal",
                    "depth_median", "normal_median",
+                   "rgb_distortion", "depth_distortion",
                    "sh", "refinement_score"]:
             outputs.setdefault(_k, None)
         # Use the post-split Cameras when available (CPP DataManager path).
@@ -1096,6 +1097,8 @@ class TrainerConfigMeshing(TrainerConfig):
         sh_reg=10.0,
         overexposure_reg=10.0,
         background_mode="noise",
+        depth_distortion_reg=0.01,
+        normal_distortion_reg=0.01,
         mean_median_depth_weight=0.01,
         median_depth_normal_reg_weight=0.01,
         normal_supervision_weight=0.01,

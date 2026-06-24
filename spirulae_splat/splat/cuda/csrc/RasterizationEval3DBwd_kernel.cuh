@@ -83,7 +83,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
@@ -137,9 +137,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
     __shared__ RenderOutput v_pix_colors[BLOCK_SIZE];
 
-    __shared__ RenderOutput pix_colors[output_distortion ? BLOCK_SIZE : 1];
-    __shared__ RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];
+    // Closed-form distortion D = W*S - C^2 needs the per-pixel totals C, S and
+    // W = 1 - T_final held constant across the splat sweep (no longer evolved).
+    __shared__ RenderOutput pix_colors[output_distortion ? BLOCK_SIZE : 1];   // C
+    __shared__ RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];  // S
     __shared__ RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
+    __shared__ float dist_W[output_distortion ? BLOCK_SIZE : 1];              // 1 - T_final
 
     __shared__ float accum_weight_map[output_accum_weight ? BLOCK_SIZE : 1];
 
@@ -211,12 +214,22 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 float alpha = fmaxf(1.0f - render_Ts_local, 1e-10f);
                 pix_colors[pix_id_local].depth *= alpha;
             }
-            pix2_colors[pix_id_local] = (inside ?
-                render2_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
+            // Reconstruct the second moment S = (D + C^2) / W from the forward
+            // distortion image D = W*S - C^2, the (now un-normalized) accumulated
+            // color C = pix_colors and W = 1 - T_final, instead of storing a
+            // dedicated render2 buffer. Exact wherever W > 0; for empty pixels
+            // (W = 0) D = C = 0 and no splat is processed, so S is irrelevant.
+            float W = inside ? (1.0f - render_Ts_local) : 0.0f;
+            RenderOutput C = pix_colors[pix_id_local];
+            RenderOutput Dval = (inside ?
+                render_distortion_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
                 : RenderOutput::zero());
+            float invW = W > 1e-10f ? (1.0f / W) : 0.0f;
+            pix2_colors[pix_id_local] = (Dval + C * C) * invW;
             v_distortion_out[pix_id_local] = (inside ?
                 v_distortions_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
                 : RenderOutput::zero());
+            dist_W[pix_id_local] = W;
         }
 
     #if IS_EVAL3D
@@ -444,33 +457,27 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             // = \alpha_{i}\frac{dL}{dc_{1}}c_{i}+\frac{dL}{dT_{1}}\left(1-\alpha_{i}\right)
             float v_T0 = alpha * color.dot(v_c) + v_T1 * (1.0f - alpha);
 
-            // distortion
+            // distortion (closed form D = W*S - C^2)
+            // C = sum_j w_j c_j, S = sum_j w_j c_j^2 (totals, held constant),
+            // W = 1 - T_final = sum_j w_j, and this splat's weight w = alpha*T0.
+            // Treating the w_j as independent: dD/dc_k = 2 w (W c_k - C) and
+            // dD/dw_k = S + W c_k^2 - 2 C c_k (the +S term is the dW/dw_k = 1
+            // contribution). The dependence of W and of every w_j on the
+            // transmittance is carried by the existing v_T0/v_T1 recursion, so
+            // no separate global injection is needed.
             if (output_distortion) {
-                // \left(d_{1},s_{1}\right)=\left(d_{0}+\alpha_{i}T_{0}\left(c_{i}^{2}\left(1-T_{0}\right)-2c_{i}c_{0}+s_{0}\right),\ s_{0}+\alpha_{i}T_{0}c_{i}^{2}\right)
-                // \frac{dL}{ds}=0
                 RenderOutput v_dist = v_distortion_out[pix_id];
-                RenderOutput c0 =
-                    pix_colors[pix_id] + color * -alpha * T0;
-                RenderOutput s0 =
-                    pix2_colors[pix_id] + color * color * -alpha * T0;
-                // \frac{dL}{d\alpha_{i}}=\frac{dL}{dd_{1}}\frac{dd_{1}}{d\alpha_{i}}=T_{0}\left(c_{i}^{2}\left(1-T_{0}\right)-2c_{i}c_{0}+s_{0}\right)\frac{dL}{dd_{1}}
-                v_alpha += T0 * (
-                    color * color * (1.0f-T0) +
-                    color * c0 * -2.0f + s0
-                ).dot(v_dist);
-                // \frac{dL}{dc_{i}}=\frac{dL}{dd_{1}}\frac{dd_{1}}{dc_{i}}=2\alpha_{i}T_{0}\left(c_{i}\left(1-T_{0}\right)-c_{0}\right)\frac{dL}{dd_{1}}
-                v_color += (
-                    color * (1.0f-T0) +
-                    c0 * -1.0f
-                ) * v_dist * (2.0f * alpha * T0);
-                // \alpha_{i}\left(c_{i}^{2}\left(1-2T_{0}\right)-2c_{i}c_{0}+s_{0}\right)\frac{dL}{dd_{1}}
-                v_T0 += alpha * (
-                    color * color * (1.0f-2.0f*T0) +
-                    color * c0 * -2.0f + s0
-                ).dot(v_dist);
-                // undo pixel state
-                pix_colors[pix_id] = c0;
-                pix2_colors[pix_id] = s0;
+                RenderOutput C = pix_colors[pix_id];   // total sum_j w_j c_j
+                RenderOutput S = pix2_colors[pix_id];  // total sum_j w_j c_j^2
+                float W = dist_W[pix_id];              // 1 - T_final
+                float w = alpha * T0;                  // this splat's weight w_k
+
+                // dD/dc_k = 2 w (W c_k - C)
+                v_color += (color * W + C * -1.0f) * v_dist * (2.0f * w);
+                // dD/dw_k = S + W c_k^2 - 2 C c_k    (w_k = alpha * T0)
+                float g = (S + color * color * W + color * C * -2.0f).dot(v_dist);
+                v_alpha += T0 * g;
+                v_T0 += alpha * g;
             }
 
             // backward diff splat
@@ -614,7 +621,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
     RenderOutput::Buffer render_output_buffer,
-    RenderOutput::Buffer render2_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
     const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
     const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
     // grad outputs
@@ -664,7 +671,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
         image_width, image_height, tile_width, tile_height,
         tile_offsets, flatten_ids,
         render_Ts, last_ids,
-        render_output_buffer, render2_output_buffer, loss_map_buffer, accum_weight_map_buffer,
+        render_output_buffer, render_distortion_buffer, loss_map_buffer, accum_weight_map_buffer,
         v_render_output_buffer, v_render_Ts,
         v_median,
         v_distortions_output_buffer,

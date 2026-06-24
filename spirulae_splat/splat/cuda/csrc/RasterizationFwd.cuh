@@ -20,7 +20,6 @@ std::tuple<
     RenderOutput::TensorTuple,  // renders
     DeviceTensor3D<float>,  // transmittances
     DeviceTensor3D<int32_t>,  // last_ids
-    RenderOutput::TensorTuple,  // renders2, optional
     RenderOutput::TensorTuple,  // distortions, optional
     DeviceTensor3D<float>  // median depth, optional
 > rasterize_to_pixels_3dgs_fwd(
@@ -44,7 +43,6 @@ std::tuple<
     RenderOutput::TensorTuple,  // renders
     DeviceTensor3D<float>,  // transmittances
     DeviceTensor3D<int32_t>,  // last_ids
-    RenderOutput::TensorTuple,  // renders2, optional
     RenderOutput::TensorTuple,  // distortions, optional
     DeviceTensor3D<float>  // median depth, optional
 > rasterize_to_pixels_mip_fwd(

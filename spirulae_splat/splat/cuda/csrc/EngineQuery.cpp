@@ -63,6 +63,28 @@ void engine_copy_render_to_host(
 }
 
 
+// Per-pixel distortion image D = W*S - C^2 from the most recent forward
+// (populated only when output_distortion was requested). RGB_D primitives
+// emit rgb + depth only; normal is left empty. Mirrors
+// engine_copy_render_to_host. Null out_* args are skipped.
+void engine_copy_distortion_to_host(
+    TorchTensorView out_rgb_dist,    // [C, H, W, 3] float32, CPU, optional
+    TorchTensorView out_depth_dist   // [C, H, W, 1] float32, CPU, optional
+) {
+    auto& dist = engine().fwd.distortions;
+    auto& rgb = std::get<0>(dist);
+    auto& depth = std::get<1>(dist);
+    if (rgb.data_ptr() && std::get<0>(out_rgb_dist) != 0) {
+        cudaMemcpy((void*)std::get<0>(out_rgb_dist), rgb.data_ptr(),
+                   rgb.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+    }
+    if (depth.data_ptr() && std::get<0>(out_depth_dist) != 0) {
+        cudaMemcpy((void*)std::get<0>(out_depth_dist), depth.data_ptr(),
+                   depth.numel() * sizeof(float), cudaMemcpyDeviceToHost);
+    }
+}
+
+
 void engine_copy_splats_to_host(
     TorchTensorView means,
     TorchTensorView quats,

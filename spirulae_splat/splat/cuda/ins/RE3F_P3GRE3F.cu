@@ -30,7 +30,6 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
@@ -61,7 +60,6 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
@@ -92,7 +90,6 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
@@ -123,7 +120,6 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
@@ -154,7 +150,6 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
@@ -185,7 +180,6 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
@@ -216,7 +210,6 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
@@ -247,7 +240,6 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
@@ -278,7 +270,6 @@ template void rasterize_to_pixels_eval3d_fwd_kernel_wrapper<
     RenderOutput::Buffer render_colors, // [I, image_height, image_width, ...]
     float *__restrict__ render_Ts, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids, // [I, image_height, image_width]
-    RenderOutput::Buffer render_colors2, // [I, image_height, image_width, ...]
     RenderOutput::Buffer render_distortions, // [I, image_height, image_width, ...]
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );

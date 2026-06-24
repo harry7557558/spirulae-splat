@@ -453,6 +453,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_copy_accum_buffer", &engine_copy_accum_buffer);
     m.def("engine_get_cur_num_splats", &engine_get_cur_num_splats);
     m.def("engine_copy_render_to_host", &engine_copy_render_to_host);
+    m.def("engine_copy_distortion_to_host", &engine_copy_distortion_to_host);
     m.def("engine_get_gt_rgb_shape",     &engine_get_gt_rgb_shape);
     m.def("engine_get_gt_alpha_shape",   &engine_get_gt_alpha_shape);
     m.def("engine_get_render_rgb_shape", &engine_get_render_rgb_shape);

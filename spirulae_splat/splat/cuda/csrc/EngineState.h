@@ -106,6 +106,7 @@ struct ForwardCache {
     DeviceTensor3D<float>             render_median; // [C,H,W] median depth, empty if not requested
     DeviceTensor3D<int32_t>           last_ids;
     RenderOutput::TensorTuple         renders;
+    RenderOutput::TensorTuple         distortions;  // [C,H,W,...] D=W*S-C^2 per channel, empty if not requested
     DeviceVector<float>               accum_weight; // [max_num_splats] per-splat score from raster bwd
     // Screen-space gradient handed from rasterize_*_bwd. The default path
     // consumes this immediately inside projection_*_backward; the fused

@@ -1082,7 +1082,8 @@ class SpirulaeSplatModel(torch.nn.Module):
             # use_bvh=True,
             relative_scale=self.config.relative_scale,
             camera_model=camera_model,
-            output_distortion=any([c != 0.0 for c in self.get_2dgs_reg_weights()[0]]),
+            output_distortion=any([c != 0.0 for c in self.get_2dgs_reg_weights()[0]])
+                or (_want is not None and any('distortion' in (k or '') for k in _want)),
             output_median=any([
                 self.config.mean_median_depth_weight > 0.0,
                 self.config.median_depth_normal_reg_weight > 0.0,

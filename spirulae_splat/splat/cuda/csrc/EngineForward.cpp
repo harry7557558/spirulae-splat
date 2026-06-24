@@ -16,7 +16,8 @@ void forward_3dgs(
     std::string primitive,   // "3dgs", "mip", "3dgut"
     int sh_degree,
     bool packed,
-    bool output_median       // also emit per-pixel median depth
+    bool output_median,      // also emit per-pixel median depth
+    bool output_distortion   // also emit per-pixel distortion D = W*S - C^2
 ) {
     engine().primitive = primitive;
     engine().sh_degree = sh_degree;
@@ -232,37 +233,39 @@ void forward_3dgs(
 
     // --- Rasterization forward ---
     RenderOutput::TensorTuple renders;
+    RenderOutput::TensorTuple distortions;
     DeviceTensor3D<float> render_Ts;
     DeviceTensor3D<int32_t> last_ids;
     DeviceTensor3D<float> render_median;
 
     if (primitive == "3dgs") {
-        auto [r, rTs, lids, r2, dist, med] = rasterize_to_pixels_3dgs_fwd(
+        auto [r, rTs, lids, dist, med] = rasterize_to_pixels_3dgs_fwd(
             engine().cur_num_splats,
             in_splats, engine().fwd.splats_s, engine().fwd.gaussian_ids,
             (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-            tile_offsets, flatten_ids, false, output_median);
-        renders = r; render_Ts = rTs; last_ids = lids; render_median = med;
+            tile_offsets, flatten_ids, output_distortion, output_median);
+        renders = r; render_Ts = rTs; last_ids = lids; render_median = med; distortions = dist;
     } else if (primitive == "mip") {
-        auto [r, rTs, lids, r2, dist, med] = rasterize_to_pixels_mip_fwd(
+        auto [r, rTs, lids, dist, med] = rasterize_to_pixels_mip_fwd(
             engine().cur_num_splats,
             in_splats, engine().fwd.splats_s, engine().fwd.gaussian_ids,
             (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-            tile_offsets, flatten_ids, false, output_median);
-        renders = r; render_Ts = rTs; last_ids = lids; render_median = med;
+            tile_offsets, flatten_ids, output_distortion, output_median);
+        renders = r; render_Ts = rTs; last_ids = lids; render_median = med; distortions = dist;
     } else if (primitive == "3dgut") {
-        auto [r, rTs, lids, r2, dist, med] = rasterize_to_pixels_3dgut_fwd(
+        auto [r, rTs, lids, dist, med] = rasterize_to_pixels_3dgut_fwd(
             engine().cur_num_splats,
             in_splats, engine().fwd.splats_s, engine().fwd.gaussian_ids,
             _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
             engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
             engine().fwd.aabb,
             (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-            tile_offsets, flatten_ids, false, output_median);
-        renders = r; render_Ts = rTs; last_ids = lids; render_median = med;
+            tile_offsets, flatten_ids, output_distortion, output_median);
+        renders = r; render_Ts = rTs; last_ids = lids; render_median = med; distortions = dist;
     }
 
     engine().fwd.renders = renders;
+    engine().fwd.distortions = distortions;
     engine().fwd.render_Ts = render_Ts;
     engine().fwd.render_median = render_median;
     engine().fwd.last_ids = last_ids;

@@ -185,11 +185,16 @@ class Renderer:
             self._tv(dist_coeffs)
         )
         output_median = getattr(self, "output_median", False)
+        # Distortion is only producible by the eval3d (3dgut) forward; the 2D
+        # 3dgs/mip forward leaves the buffer empty.
+        output_distortion = getattr(self, "output_distortion", False) \
+            and self.primitive == "3dgut"
         _C.engine_forward_3dgs(
             self.primitive,
             self.sh_degree_to_use,
             self.packed,
             output_median,
+            output_distortion,
         )
 
         rgb = torch.empty(C, H, W, 3, dtype=torch.float32)
@@ -212,6 +217,17 @@ class Renderer:
         self.render_Ts = Ts
         self.render_rgb_raw = rgb_raw
         self.render_median = median
+
+        # Distortion image D = W*S - C^2 (per channel). RGB_D primitives emit
+        # rgb + depth only. Stored as (rgb_dist [C,H,W,3], depth_dist [C,H,W,1]).
+        if output_distortion:
+            rgb_dist = torch.empty(C, H, W, 3, dtype=torch.float32)
+            depth_dist = torch.empty(C, H, W, 1, dtype=torch.float32)
+            _C.engine_copy_distortion_to_host(
+                self._tv(rgb_dist), self._tv(depth_dist))
+            self.render_distortion = (rgb_dist, depth_dist)
+        else:
+            self.render_distortion = None
 
     def engine_debug_forward(self, override_features_dc=None, override_sh_degree=-1):
         """Re-render with custom features_dc and/or sh_degree for debugging.
@@ -950,6 +966,10 @@ class Renderer:
                 "camera_ids": None, "gaussian_ids": None, "depths": None,
                 "width": self.width, "height": self.height, "n_cameras": C,
             })
+            if getattr(self, "render_distortion", None) is not None:
+                rgb_dist, depth_dist = self.render_distortion
+                self.meta["rgb_distortion"] = rgb_dist
+                self.meta["depth_distortion"] = depth_dist
             return
 
         raise NotImplementedError("Use engine instead. Code below for reference.")
