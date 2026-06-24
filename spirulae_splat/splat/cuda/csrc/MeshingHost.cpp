@@ -896,6 +896,299 @@ static void split_nonmanifold_vertices(Mesh& mesh, bool verbose) {
                "-> %zu verts\n", n_split, n_new, mesh.V.size());
 }
 
+// ---------------------------------------------------------------------------
+// Narrow / degenerate face repair.
+//
+// Marching tets + merge + hole-fill can leave thin "sliver" triangles and the
+// odd zero-area face (e.g. the watertight fill placed a triangle across a
+// coincident split-copy "pinch"). Such faces have a smallest angle near 0 and
+// are harmful downstream (degenerate normals, bad simplification / physics). We
+// remove them with two fidelity-preserving local operations (Botsch & Kobbelt,
+// "A robust procedure to eliminate degenerate faces"):
+//
+//   * NEEDLE  (apex projects OUTSIDE the longest edge => one very short edge):
+//       collapse the shortest edge to its midpoint. Its two endpoints are nearly
+//       coincident, so the surface barely moves. Applied only when the
+//       edge-collapse link condition holds, so the mesh stays manifold -- in
+//       particular it REFUSES to re-merge the two copies of a split pinch vertex
+//       when that would re-create a bowtie (when the surrounding fill already
+//       bridged the two fans, the link condition passes and the merge is a clean
+//       win that removes the zero-area face).
+//
+//   * CAP     (apex projects INSIDE the longest edge => one angle near 180):
+//       flip the longest edge with its neighbour. The apex is ~on that edge, so
+//       the flip barely moves the surface but replaces the cap with two
+//       well-shaped triangles.
+//
+// Both operations are gated so the pass can never make things worse: a flip must
+// strictly improve the worst angle and keep both new triangles non-degenerate
+// and un-folded; a collapse must not rotate any reshaped face normal past 60
+// degrees or create a degenerate face. Winding is left to the later orient pass,
+// so the fold tests use a locally-consistent winding rather than the stored one.
+//
+// It iterates in "locked" rounds: within a round, once an operation touches a
+// vertex, any later candidate sharing that vertex is deferred to the next round
+// (so the stale per-round adjacency is never read after a local edit). It stops
+// when a round fixes nothing or a small round budget is hit. angle_deg <= 0
+// disables the pass. The collapse/flip both preserve manifoldness, so no
+// re-split is needed before orient.
+// ---------------------------------------------------------------------------
+static void fix_degenerate_faces(Mesh& mesh, float angle_deg, bool verbose) {
+    const int nv = (int)mesh.V.size();
+    if (angle_deg <= 0.0f || nv == 0 || mesh.F.empty()) return;
+    auto& V = mesh.V;
+    auto& F = mesh.F;
+    // A triangle is degenerate when its smallest angle < angle_deg, i.e. the
+    // cosine of that angle exceeds cos(angle_deg).
+    const float cos_small = std::cos(angle_deg * 0.017453292519943295f);
+    const float cos_fold = 0.5f;  // reshaped face normal may rotate <= 60 deg
+
+    auto sub = [](const std::array<float,3>& a, const std::array<float,3>& b) {
+        return std::array<float,3>{a[0]-b[0], a[1]-b[1], a[2]-b[2]};
+    };
+    auto cross = [](const std::array<float,3>& a, const std::array<float,3>& b) {
+        return std::array<float,3>{a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2],
+                                   a[0]*b[1]-a[1]*b[0]};
+    };
+    auto dot = [](const std::array<float,3>& a, const std::array<float,3>& b) {
+        return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+    };
+    auto nrm = [&](const std::array<float,3>& a) { return std::sqrt(dot(a,a)); };
+    auto d2  = [&](int a, int b) { auto e = sub(V[a], V[b]); return dot(e, e); };
+    // max cosine over the three angles = cosine of the SMALLEST angle (worst).
+    auto worst_cos = [&](int a, int b, int c) -> float {
+        float la = d2(b,c), lb = d2(c,a), lc = d2(a,b);
+        auto ang = [](float opp, float s1, float s2) {
+            float dn = 2.0f * std::sqrt(s1 * s2);
+            return dn > 1e-30f ? (s1 + s2 - opp) / dn : 1.0f;
+        };
+        return std::max(ang(la,lb,lc), std::max(ang(lb,lc,la), ang(lc,la,lb)));
+    };
+
+    std::vector<char> alive(F.size(), 1);
+    long n_collapse = 0, n_flip = 0;
+
+    const int kMaxRounds = 8;
+    for (int round = 0; round < kMaxRounds; ++round) {
+        const long nf = (long)F.size();
+        // vertex -> incident alive triangles (rebuilt each round)
+        std::vector<std::vector<int>> vt(nv);
+        for (long t = 0; t < nf; ++t) {
+            if (!alive[t]) continue;
+            const auto& f = F[t];
+            vt[f[0]].push_back((int)t);
+            vt[f[1]].push_back((int)t);
+            vt[f[2]].push_back((int)t);
+        }
+        std::vector<char> locked(nv, 0);
+        long applied = 0;
+
+        auto apex_of = [&](int t, int a, int b) {
+            const auto& f = F[t];
+            for (int k = 0; k < 3; ++k) if (f[k] != a && f[k] != b) return f[k];
+            return -1;
+        };
+        // the (<=2) alive faces on edge (a,b)
+        auto faces_on_edge = [&](int a, int b, int& t0, int& t1) -> int {
+            t0 = t1 = -1; int cnt = 0;
+            for (int t : vt[a]) {
+                if (!alive[t]) continue;
+                const auto& f = F[t];
+                if (f[0]==b || f[1]==b || f[2]==b) {
+                    if (cnt == 0) t0 = t; else if (cnt == 1) t1 = t;
+                    ++cnt;
+                }
+            }
+            return cnt;
+        };
+        auto edge_exists = [&](int a, int b) -> bool {
+            for (int t : vt[a]) {
+                if (!alive[t]) continue;
+                const auto& f = F[t];
+                if (f[0]==b || f[1]==b || f[2]==b) return true;
+            }
+            return false;
+        };
+        // a vertex is on the boundary if any incident edge has a single face
+        auto is_bnd = [&](int x) -> bool {
+            std::unordered_map<int,int> ec;
+            for (int t : vt[x]) {
+                if (!alive[t]) continue;
+                const auto& g = F[t];
+                for (int k=0;k<3;k++) if (g[k]!=x) ec[g[k]] += 1;
+            }
+            for (auto& kv : ec) if (kv.second == 1) return true;
+            return false;
+        };
+
+        for (long t = 0; t < nf; ++t) {
+            if (!alive[t]) continue;
+            const auto& f = F[t];
+            int i0 = f[0], i1 = f[1], i2 = f[2];
+            if (i0==i1 || i1==i2 || i0==i2) { alive[t] = 0; continue; }
+            if (locked[i0] || locked[i1] || locked[i2]) continue;
+            if (worst_cos(i0, i1, i2) <= cos_small) continue;  // not degenerate
+
+            float l0 = d2(i1,i2), l1 = d2(i2,i0), l2 = d2(i0,i1);  // opp i0,i1,i2
+            // shortest edge (sa,sb); longest edge (p0,p1) with apex pa
+            int sa, sb; float ls;
+            if (l0<=l1 && l0<=l2)      { sa=i1; sb=i2; ls=l0; }
+            else if (l1<=l2)          { sa=i2; sb=i0; ls=l1; }
+            else                      { sa=i0; sb=i1; ls=l2; }
+            int p0, p1, pa; float ll;
+            if (l0>=l1 && l0>=l2)      { p0=i1; p1=i2; pa=i0; ll=l0; }
+            else if (l1>=l2)          { p0=i2; p1=i0; pa=i1; ll=l1; }
+            else                      { p0=i0; p1=i1; pa=i2; ll=l2; }
+            (void)ls;
+
+            // classify by where the apex of the longest edge projects onto it
+            auto ev = sub(V[p1], V[p0]);
+            float tproj = ll > 1e-30f ? dot(sub(V[pa], V[p0]), ev) / ll : -1.0f;
+            bool is_cap = (tproj > 0.05f && tproj < 0.95f);
+
+            if (is_cap) {
+                // ---- CAP: flip the longest edge (p0,p1) ----
+                int t0, t1;
+                if (faces_on_edge(p0, p1, t0, t1) != 2) continue;  // boundary / nonmanifold
+                int o0 = apex_of(t0, p0, p1), o1 = apex_of(t1, p0, p1);
+                int d = (o0 == pa) ? o1 : o0;       // far apex (other triangle)
+                if (d < 0 || d == pa) continue;
+                if (locked[p0]||locked[p1]||locked[pa]||locked[d]) continue;
+                if (edge_exists(pa, d)) continue;   // flip would create a 3rd face on (pa,d)
+                // locally-consistent quad winding for the fold / improvement test
+                auto n0 = cross(sub(V[p1],V[p0]), sub(V[pa],V[p0]));
+                auto n1 = cross(sub(V[p0],V[p1]), sub(V[d ],V[p1]));
+                std::array<float,3> nav{n0[0]+n1[0], n0[1]+n1[1], n0[2]+n1[2]};
+                float lav = nrm(nav); if (lav < 1e-20f) continue;
+                nav[0]/=lav; nav[1]/=lav; nav[2]/=lav;
+                auto m0 = cross(sub(V[p1],V[pa]), sub(V[d ],V[pa]));  // (pa,p1,d)
+                auto m1 = cross(sub(V[d ],V[pa]), sub(V[p0],V[pa]));  // (pa,d,p0)
+                if (nrm(m0) < 1e-20f || nrm(m1) < 1e-20f) continue;  // new tri degenerate
+                if (dot(m0,nav) <= 0.0f || dot(m1,nav) <= 0.0f) continue;  // fold
+                float oldw = std::max(worst_cos(p0,p1,pa), worst_cos(p1,p0,d));
+                float neww = std::max(worst_cos(pa,p1,d), worst_cos(pa,d,p0));
+                if (neww >= oldw) continue;          // not an improvement
+                F[t0] = {pa, p1, d};
+                F[t1] = {pa, d, p0};
+                locked[p0]=locked[p1]=locked[pa]=locked[d]=1;
+                ++n_flip; ++applied;
+            } else {
+                // ---- NEEDLE: collapse the shortest edge (u,v) -> midpoint ----
+                int u = sa, v = sb;
+                if (locked[u] || locked[v]) continue;
+                // edge-collapse link condition (local). opposite verts of the
+                // (<=2) faces on (u,v); >2 => already non-manifold edge.
+                int opp[2]; int nopp = 0; bool nonmanif = false;
+                for (int t2 : vt[u]) {
+                    if (!alive[t2]) continue;
+                    const auto& g = F[t2];
+                    bool hu=false, hv=false; int other=-1;
+                    for (int k=0;k<3;k++){ if(g[k]==u)hu=true; else if(g[k]==v)hv=true; else other=g[k]; }
+                    if (hu && hv) {
+                        if (nopp < 2) opp[nopp] = other;
+                        if (++nopp > 2) { nonmanif = true; break; }
+                    }
+                }
+                if (nonmanif || nopp == 0) continue;
+                // boundary rule: collapsing an INTERIOR edge (2 faces) whose two
+                // endpoints are both on the boundary pinches the surface into a
+                // non-manifold vertex even though the link condition holds. Skip.
+                if (nopp == 2 && is_bnd(u) && is_bnd(v)) continue;
+                std::unordered_set<int> nbu;
+                for (int t2 : vt[u]) {
+                    if (!alive[t2]) continue; const auto& g = F[t2];
+                    for (int k=0;k<3;k++) if (g[k]!=u) nbu.insert(g[k]);
+                }
+                int common = 0; bool bad = false;
+                std::unordered_set<int> seen;
+                for (int t2 : vt[v]) {
+                    if (!alive[t2]) continue; const auto& g = F[t2];
+                    for (int k=0;k<3;k++) {
+                        int w = g[k];
+                        if (w==u || w==v) continue;
+                        if (!seen.insert(w).second) continue;
+                        if (nbu.count(w)) {
+                            ++common;
+                            if (w != opp[0] && !(nopp>1 && w == opp[1])) bad = true;
+                        }
+                    }
+                }
+                if (bad || common != nopp) continue;   // link condition fails
+                // geometric guard: midpoint must not fold / degenerate any face
+                std::array<float,3> np{0.5f*(V[u][0]+V[v][0]),
+                                       0.5f*(V[u][1]+V[v][1]),
+                                       0.5f*(V[u][2]+V[v][2])};
+                bool ok = true;
+                for (int pass = 0; pass < 2 && ok; ++pass) {
+                    int center = pass == 0 ? u : v;
+                    for (int t2 : vt[center]) {
+                        if (!alive[t2]) continue;
+                        const auto& g = F[t2];
+                        bool hu=false, hv=false;
+                        for (int k=0;k<3;k++){ if(g[k]==u)hu=true; else if(g[k]==v)hv=true; }
+                        if (hu && hv) continue;        // face on collapsed edge -> dies
+                        std::array<float,3> q0 = g[0]==center?np:V[g[0]];
+                        std::array<float,3> q1 = g[1]==center?np:V[g[1]];
+                        std::array<float,3> q2 = g[2]==center?np:V[g[2]];
+                        auto no = cross(sub(V[g[1]],V[g[0]]), sub(V[g[2]],V[g[0]]));
+                        auto nn = cross(sub(q1,q0), sub(q2,q0));
+                        float lo = nrm(no), ln = nrm(nn);
+                        if (ln < 1e-20f) { ok = false; break; }
+                        if (lo > 1e-20f && dot(no,nn)/(lo*ln) < cos_fold) { ok = false; break; }
+                    }
+                }
+                if (!ok) continue;
+                // apply: move u to midpoint, retarget v's faces, kill faces on (u,v)
+                V[u] = np;
+                for (int t2 : vt[u]) { if(!alive[t2])continue; const auto&g=F[t2]; locked[g[0]]=locked[g[1]]=locked[g[2]]=1; }
+                for (int t2 : vt[v]) { if(!alive[t2])continue; const auto&g=F[t2]; locked[g[0]]=locked[g[1]]=locked[g[2]]=1; }
+                for (int t2 : vt[v]) {
+                    if (!alive[t2]) continue;
+                    auto& g = F[t2];
+                    for (int k=0;k<3;k++) if (g[k]==v) g[k]=u;
+                    if (g[0]==g[1] || g[1]==g[2] || g[0]==g[2]) alive[t2] = 0;
+                }
+                ++n_collapse; ++applied;
+            }
+        }
+        if (applied == 0) break;
+    }
+
+    if (n_collapse == 0 && n_flip == 0) {
+        if (verbose) printf("[meshing] fix degenerate faces: none found\n");
+        return;
+    }
+
+    // compact: drop dead / index-degenerate faces and orphan vertices
+    const bool has_color = mesh.C.size() == mesh.V.size();
+    std::vector<std::array<int,3>> nF; nF.reserve(F.size());
+    for (size_t t = 0; t < F.size(); ++t) {
+        if (!alive[t]) continue;
+        const auto& f = F[t];
+        if (f[0]!=f[1] && f[1]!=f[2] && f[0]!=f[2]) nF.push_back(f);
+    }
+    std::vector<int> remap(nv, -1);
+    std::vector<std::array<float,3>> nV; nV.reserve(nv);
+    std::vector<std::array<unsigned char,3>> nC; if (has_color) nC.reserve(nv);
+    for (auto& f : nF)
+        for (int k = 0; k < 3; ++k) {
+            int v = f[k];
+            if (remap[v] < 0) {
+                remap[v] = (int)nV.size();
+                nV.push_back(V[v]);
+                if (has_color) nC.push_back(mesh.C[v]);
+            }
+            f[k] = remap[v];
+        }
+    mesh.V.swap(nV);
+    mesh.F.swap(nF);
+    if (has_color) mesh.C.swap(nC);
+    if (verbose)
+        printf("[meshing] fix degenerate faces: %ld collapses, %ld flips "
+               "-> %zu verts, %zu faces\n",
+               n_collapse, n_flip, mesh.V.size(), mesh.F.size());
+}
+
 } // namespace
 
 bool generate_mesh(
@@ -1103,6 +1396,7 @@ bool generate_mesh(
     }
 
     // ---- 7. manifold-preserving merge (with fold/sliver guard) ----
+  for (int iter = 0; iter < 2; ++iter) {
     auto t6 = Clock::now();
     merge_vertices(mesh, cfg.merge_factor, cfg.merge_max_flip_deg, cfg.verbose, cfg.num_threads);
     if (cfg.verbose) printf("[meshing] merge (%.2fs)\n", secs_since(t6));
@@ -1136,7 +1430,10 @@ bool generate_mesh(
     fill_holes(mesh, cfg.fill_hole_ratio, cfg.fill_hole_max_edges, cfg.verbose);
     split_nonmanifold_vertices(mesh, cfg.verbose);
     remove_floaters(mesh, cfg.floater_min_faces, cfg.verbose);
+    fix_degenerate_faces(mesh, cfg.degenerate_angle_deg, cfg.verbose);
+    dedup_faces(mesh, cfg.verbose);
     if (cfg.verbose) printf("[meshing] cleanup (%.2fs)\n", secs_since(tcl));
+  }
 
     // ---- 7b. globally consistent, outward-facing winding ----
     auto t7 = Clock::now();

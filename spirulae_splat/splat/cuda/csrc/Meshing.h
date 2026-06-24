@@ -49,6 +49,11 @@ struct MeshingConfig {
     // faces. <=1 disables.
     int   floater_min_faces = 100;
 
+    // Narrow/degenerate face repair: any triangle whose smallest angle is below
+    // this many degrees is removed by a fidelity-preserving local edit (collapse
+    // the short edge of a needle, or flip the long edge of a cap). <=0 disables.
+    float degenerate_angle_deg = 2.0f;
+
     // --- rasterize-and-sample occupancy/color (dataset path) ---
     // When camera intrinsics are supplied, occupancy/color come from rendering
     // each camera once (3DGUT) and sampling, instead of LBVH ray traversal.

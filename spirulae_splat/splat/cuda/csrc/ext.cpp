@@ -91,7 +91,7 @@ static bool generate_mesh_tensor(
     at::Tensor cam_widths, at::Tensor cam_heights, const std::string& camera_model,
     int64_t carve_k, bool cull_unseen,
     double merge_max_flip_deg, int64_t floater_min_faces, double fill_hole_ratio,
-    int64_t fill_hole_max_edges
+    int64_t fill_hole_max_edges, double degenerate_angle_deg
 ) {
     auto f32 = [](at::Tensor t) { return t.to(at::kFloat).contiguous().cpu(); };
     at::Tensor m = f32(means), q = f32(quats), s = f32(scales), o = f32(opacities);
@@ -164,6 +164,7 @@ static bool generate_mesh_tensor(
     cfg.floater_min_faces = (int)floater_min_faces;
     cfg.fill_hole_ratio = (float)fill_hole_ratio;
     cfg.fill_hole_max_edges = (int)fill_hole_max_edges;
+    cfg.degenerate_angle_deg = (float)degenerate_angle_deg;
 
     return meshing::generate_mesh(
         m.data_ptr<float>(), q.data_ptr<float>(), s.data_ptr<float>(), o.data_ptr<float>(),
@@ -198,7 +199,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("merge_max_flip_deg") = 60.0,
           pybind11::arg("floater_min_faces") = 100,
           pybind11::arg("fill_hole_ratio") = 0.05,
-          pybind11::arg("fill_hole_max_edges") = 12);
+          pybind11::arg("fill_hole_max_edges") = 12,
+          pybind11::arg("degenerate_angle_deg") = 2.0);
 
     // Delaunay3D.h
     m.def("delaunay3d", &delaunay3d_tensor,

@@ -287,6 +287,10 @@ def entrypoint():
                     help="also fill any boundary loop with at most this many edges "
                          "(so tiny holes always fill; 0 disables this criterion). "
                          "A loop is filled if either criterion is met.")
+    ap.add_argument("--degenerate-angle-deg", type=float, default=15.0,
+                    help="remove triangles whose smallest angle is below this many "
+                         "degrees by a fidelity-preserving local edit (collapse a "
+                         "needle's short edge, flip a cap's long edge); <=0 disables")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -373,6 +377,7 @@ def entrypoint():
         floater_min_faces=args.floater_min_faces,
         fill_hole_ratio=args.fill_hole_ratio,
         fill_hole_max_edges=args.fill_hole_max_edges,
+        degenerate_angle_deg=args.degenerate_angle_deg,
         **cam_kwargs,
     )
     print(f"[meshing] done -> {out_path}")
