@@ -6,8 +6,8 @@
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    true,
+    CameraModelType::PINHOLE,
+    DistortionType::RGB_D,
     true,
     false,
     true
@@ -51,8 +51,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    true,
+    CameraModelType::PINHOLE,
+    DistortionType::RGB_D,
     true,
     false,
     false
@@ -96,8 +96,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    true,
+    CameraModelType::PINHOLE,
+    DistortionType::RGB_D,
     false,
     true,
     true
@@ -141,8 +141,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    true,
+    CameraModelType::PINHOLE,
+    DistortionType::RGB_D,
     false,
     true,
     false
@@ -186,8 +186,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    true,
+    CameraModelType::PINHOLE,
+    DistortionType::RGB_D,
     false,
     false,
     true
@@ -231,8 +231,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    true,
+    CameraModelType::PINHOLE,
+    DistortionType::RGB_D,
     false,
     false,
     false
@@ -277,7 +277,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::FISHEYE,
-    false,
+    DistortionType::None,
     true,
     true,
     true
@@ -322,7 +322,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::FISHEYE,
-    false,
+    DistortionType::None,
     true,
     true,
     false
@@ -367,7 +367,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::FISHEYE,
-    false,
+    DistortionType::None,
     true,
     false,
     true

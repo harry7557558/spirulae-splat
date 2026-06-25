@@ -38,6 +38,6 @@ std::tuple<
     // intersections
     const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
     const DeviceVector<int32_t> flatten_ids,    // [n_isects]
-    bool output_distortion,
+    DistortionType dist_type,
     bool output_median
 );

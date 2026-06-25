@@ -7,7 +7,7 @@
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    false,
+    DistortionType::D,
     true,
     true,
     false
@@ -52,7 +52,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    false,
+    DistortionType::D,
     true,
     false,
     true
@@ -97,7 +97,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    false,
+    DistortionType::D,
     true,
     false,
     false
@@ -142,7 +142,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    false,
+    DistortionType::D,
     false,
     true,
     true
@@ -187,7 +187,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    false,
+    DistortionType::D,
     false,
     true,
     false
@@ -232,7 +232,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    false,
+    DistortionType::D,
     false,
     false,
     true
@@ -277,7 +277,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    false,
+    DistortionType::D,
     false,
     false,
     false
@@ -321,8 +321,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    true,
+    CameraModelType::PINHOLE,
+    DistortionType::RGB_D,
     true,
     true,
     true
@@ -366,8 +366,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    true,
+    CameraModelType::PINHOLE,
+    DistortionType::RGB_D,
     true,
     true,
     false

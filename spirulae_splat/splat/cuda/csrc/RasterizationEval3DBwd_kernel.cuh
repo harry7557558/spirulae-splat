@@ -48,7 +48,7 @@ template <
 #if IS_EVAL3D
     CameraModelType camera_model,
 #endif
-    bool output_distortion,
+    DistortionType dist_type,
 #if IS_EVAL3D
     bool output_viewmat_grad,
 #endif
@@ -134,15 +134,24 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 #else
     __shared__ int32_t pix_bin_final[BLOCK_SIZE];
 #endif
+    // Shared color/distortion state stored in the compile-time-sized form so an
+    // RGB_D primitive doesn't reserve the unused normal channel (less shared
+    // memory -> higher occupancy). Implicitly converts to/from RenderOutput.
+    using ROStore = RenderOutputStore<SplatPrimitive::pixelType>;
     __shared__ float2 pix_Ts_with_grad[BLOCK_SIZE];
-    __shared__ RenderOutput v_pix_colors[BLOCK_SIZE];
+    __shared__ ROStore v_pix_colors[BLOCK_SIZE];
 
     // Closed-form distortion D = W*S - C^2 needs the per-pixel totals C, S and
     // W = 1 - T_final held constant across the splat sweep (no longer evolved).
-    __shared__ RenderOutput pix_colors[output_distortion ? BLOCK_SIZE : 1];   // C
-    __shared__ RenderOutput pix2_colors[output_distortion ? BLOCK_SIZE : 1];  // S
-    __shared__ RenderOutput v_distortion_out[output_distortion ? BLOCK_SIZE : 1];
-    __shared__ float dist_W[output_distortion ? BLOCK_SIZE : 1];              // 1 - T_final
+    // These hold only the dist_type channels (not the full pixelType): the
+    // distortion gradient only touches the active distortion channels, so e.g.
+    // depth-only distortion (rgb weight 0) stores a single float per pixel here
+    // instead of float3+float -> less shared memory, better occupancy.
+    using DStore = DistortionStore<dist_type>;
+    __shared__ DStore pix_colors[dist_any(dist_type) ? BLOCK_SIZE : 1];   // C
+    __shared__ DStore pix2_colors[dist_any(dist_type) ? BLOCK_SIZE : 1];  // S
+    __shared__ DStore v_distortion_out[dist_any(dist_type) ? BLOCK_SIZE : 1];
+    __shared__ float dist_W[dist_any(dist_type) ? BLOCK_SIZE : 1];              // 1 - T_final
 
     __shared__ float accum_weight_map[output_accum_weight ? BLOCK_SIZE : 1];
 
@@ -162,7 +171,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     __shared__ float3 shared_v_ray_d[output_viewmat_grad ? BLOCK_SIZE : 1];
 #endif
 
-    constexpr uint SPLAT_BATCH_SIZE_CONST = output_distortion ?
+    constexpr uint SPLAT_BATCH_SIZE_CONST = dist_any(dist_type) ?
         SPLAT_BATCH_SIZE_WITH_DISTORTION : SPLAT_BATCH_SIZE_NO_DISTORTION;
 
     #pragma unroll
@@ -206,11 +215,13 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         pix_Ts_with_grad[pix_id_local] = {render_Ts_local, v_render_Ts_local};
         v_pix_colors[pix_id_local] = v_render_output_local;
 
-        if (output_distortion) {
+        if constexpr (dist_any(dist_type)) {
             pix_colors[pix_id_local] = (inside ?
                 render_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
                 : RenderOutput::zero());
-            if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType)) {
+            // Un-normalize the stored depth of C (render depth is depth/(1-T));
+            // guarded on the dist store actually holding depth.
+            if constexpr (dist_has_depth(dist_type)) {
                 float alpha = fmaxf(1.0f - render_Ts_local, 1e-10f);
                 pix_colors[pix_id_local].depth *= alpha;
             }
@@ -222,12 +233,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             float W = inside ? (1.0f - render_Ts_local) : 0.0f;
             RenderOutput C = pix_colors[pix_id_local];
             RenderOutput Dval = (inside ?
-                render_distortion_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
+                render_distortion_buffer.loadDistortion<dist_type>(pix_id_image_global)
                 : RenderOutput::zero());
             float invW = W > 1e-10f ? (1.0f / W) : 0.0f;
             pix2_colors[pix_id_local] = (Dval + C * C) * invW;
             v_distortion_out[pix_id_local] = (inside ?
-                v_distortions_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
+                v_distortions_output_buffer.loadDistortion<dist_type>(pix_id_image_global)
                 : RenderOutput::zero());
             dist_W[pix_id_local] = W;
         }
@@ -465,7 +476,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             // contribution). The dependence of W and of every w_j on the
             // transmittance is carried by the existing v_T0/v_T1 recursion, so
             // no separate global injection is needed.
-            if (output_distortion) {
+            if constexpr (dist_any(dist_type)) {
                 RenderOutput v_dist = v_distortion_out[pix_id];
                 RenderOutput C = pix_colors[pix_id];   // total sum_j w_j c_j
                 RenderOutput S = pix2_colors[pix_id];  // total sum_j w_j c_j^2
@@ -585,7 +596,7 @@ template <
 #if IS_EVAL3D
     CameraModelType camera_model,
 #endif
-    bool output_distortion,
+    DistortionType dist_type,
 #if IS_EVAL3D
     bool output_viewmat_grad,
 #endif
@@ -638,7 +649,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 #endif
 ) {
-    dim3 threads = {output_distortion ?
+    dim3 threads = {dist_any(dist_type) ?
         SPLAT_BATCH_SIZE_WITH_DISTORTION : SPLAT_BATCH_SIZE_NO_DISTORTION,
         1, 1};
     dim3 grid = {
@@ -656,7 +667,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     #if IS_EVAL3D
         camera_model,
     #endif
-        output_distortion,
+        dist_type,
     #if IS_EVAL3D
         output_viewmat_grad,
     #endif

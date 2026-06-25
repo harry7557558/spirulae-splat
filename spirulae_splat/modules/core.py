@@ -185,16 +185,18 @@ class Renderer:
             self._tv(dist_coeffs)
         )
         output_median = getattr(self, "output_median", False)
-        # Distortion is only producible by the eval3d (3dgut) forward; the 2D
-        # 3dgs/mip forward leaves the buffer empty.
+        # DistortionType (mirror Primitive.cuh): 0=None, 1=D, 2=RGB_D, 3=DN, 4=RGB_DN.
+        # For eval/viewer request the full set the primitive renders (RGB_D for
+        # all current primitives) so any distortion channel is viewable.
         output_distortion = getattr(self, "output_distortion", False) \
-            and self.primitive == "3dgut"
+            and self.primitive in ("3dgut", "3dgs", "mip")
+        dist_type = 2 if output_distortion else 0  # RGB_D when on, else None
         _C.engine_forward_3dgs(
             self.primitive,
             self.sh_degree_to_use,
             self.packed,
             output_median,
-            output_distortion,
+            dist_type,
         )
 
         rgb = torch.empty(C, H, W, 3, dtype=torch.float32)

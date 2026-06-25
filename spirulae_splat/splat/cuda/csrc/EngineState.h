@@ -18,6 +18,34 @@
 #include "PerSplatLoss.cuh"
 #include "PixelWise.cuh"
 #include "Primitive.cuh"
+
+// Explicit primitive -> rendered channel set. The only place the engine encodes
+// what each primitive renders; update here when adding a primitive (e.g. a
+// normal-rendering one would return RGB_DN).
+inline RenderOutputType engine_primitive_pixel_type(const std::string& primitive) {
+    if (primitive == "3dgs" || primitive == "mip" || primitive == "3dgut")
+        return RenderOutputType::RGB_D;
+    throw std::runtime_error("engine_primitive_pixel_type: unknown primitive: " + primitive);
+}
+
+// Pick the distortion channel set from the per-channel weights, restricted to
+// the channels the primitive actually renders. Depth is always included when
+// any distortion is active (it is the base 2DGS term, and the DistortionType
+// enum has no rgb-/normal-only forms). A nonzero normal weight on a primitive
+// that doesn't render normal is ignored.
+inline DistortionType engine_distortion_type(
+    RenderOutputType pt, float rgb_w, float depth_w, float normal_w
+) {
+    const bool want_rgb    = rgb_w != 0.0f;  // rgb is always rendered
+    const bool want_depth  = depth_w != 0.0f && RenderOutput::has_depth(pt);
+    const bool want_normal = normal_w != 0.0f && RenderOutput::has_normal(pt);
+    if (!(want_rgb || want_depth || want_normal))
+        return DistortionType::None;
+    if (want_rgb && want_normal) return DistortionType::RGB_DN;
+    if (want_normal)             return DistortionType::DN;
+    if (want_rgb)                return DistortionType::RGB_D;
+    return DistortionType::D;
+}
 #include "ProjectionBwd.cuh"
 #include "ProjectionFwd.cuh"
 #include "ProjectionPackedFwd.cuh"
@@ -106,7 +134,8 @@ struct ForwardCache {
     DeviceTensor3D<float>             render_median; // [C,H,W] median depth, empty if not requested
     DeviceTensor3D<int32_t>           last_ids;
     RenderOutput::TensorTuple         renders;
-    RenderOutput::TensorTuple         distortions;  // [C,H,W,...] D=W*S-C^2 per channel, empty if not requested
+    RenderOutput::TensorTuple         distortions;  // [C,H,W,...] D=W*S-C^2, only the dist_type channels allocated
+    DistortionType                    dist_type = DistortionType::None;  // which distortion channels the forward emitted
     DeviceVector<float>               accum_weight; // [max_num_splats] per-splat score from raster bwd
     // Screen-space gradient handed from rasterize_*_bwd. The default path
     // consumes this immediately inside projection_*_backward; the fused

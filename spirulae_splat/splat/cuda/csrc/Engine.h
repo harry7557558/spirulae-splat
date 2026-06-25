@@ -106,7 +106,7 @@ void forward_3dgs(
     int sh_degree,
     bool packed,
     bool output_median = false,
-    bool output_distortion = false
+    int dist_type = 0  // DistortionType (0=None,1=D,2=RGB_D,3=DN,4=RGB_DN)
 );
 
 // --- Loss + backward (combined) ---

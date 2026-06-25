@@ -17,8 +17,9 @@ void forward_3dgs(
     int sh_degree,
     bool packed,
     bool output_median,      // also emit per-pixel median depth
-    bool output_distortion   // also emit per-pixel distortion D = W*S - C^2
+    int dist_type_int        // distortion channel set (DistortionType); emits D = W*S - C^2
 ) {
+    const DistortionType dist_type = (DistortionType)dist_type_int;
     engine().primitive = primitive;
     engine().sh_degree = sh_degree;
     engine().packed = packed;
@@ -243,14 +244,14 @@ void forward_3dgs(
             engine().cur_num_splats,
             in_splats, engine().fwd.splats_s, engine().fwd.gaussian_ids,
             (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-            tile_offsets, flatten_ids, output_distortion, output_median);
+            tile_offsets, flatten_ids, dist_type, output_median);
         renders = r; render_Ts = rTs; last_ids = lids; render_median = med; distortions = dist;
     } else if (primitive == "mip") {
         auto [r, rTs, lids, dist, med] = rasterize_to_pixels_mip_fwd(
             engine().cur_num_splats,
             in_splats, engine().fwd.splats_s, engine().fwd.gaussian_ids,
             (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-            tile_offsets, flatten_ids, output_distortion, output_median);
+            tile_offsets, flatten_ids, dist_type, output_median);
         renders = r; render_Ts = rTs; last_ids = lids; render_median = med; distortions = dist;
     } else if (primitive == "3dgut") {
         auto [r, rTs, lids, dist, med] = rasterize_to_pixels_3dgut_fwd(
@@ -260,12 +261,13 @@ void forward_3dgs(
             engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
             engine().fwd.aabb,
             (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-            tile_offsets, flatten_ids, output_distortion, output_median);
+            tile_offsets, flatten_ids, dist_type, output_median);
         renders = r; render_Ts = rTs; last_ids = lids; render_median = med; distortions = dist;
     }
 
     engine().fwd.renders = renders;
     engine().fwd.distortions = distortions;
+    engine().fwd.dist_type = dist_type;
     engine().fwd.render_Ts = render_Ts;
     engine().fwd.render_median = render_median;
     engine().fwd.last_ids = last_ids;

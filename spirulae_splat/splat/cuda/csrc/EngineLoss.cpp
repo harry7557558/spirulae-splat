@@ -81,7 +81,8 @@ static void _engine_raster_proj_backward(
     const DeviceTensor3D<float>& accum_weight_map,
     const DeviceTensor3D<float>& v_median = DeviceTensor3D<float>(),
     TorchTensorView v_rgb_dist = _tv_null(),
-    TorchTensorView v_depth_dist = _tv_null()
+    TorchTensorView v_depth_dist = _tv_null(),
+    TorchTensorView v_normal_dist = _tv_null()
 ) {
     RenderOutput::TensorTuple v_render_outputs = std::make_tuple(
         DeviceTensor3D<float3>(v_render_rgb),
@@ -91,20 +92,22 @@ static void _engine_raster_proj_backward(
     DeviceTensor3D<float> v_render_Ts(v_render_Ts_tv);
 
     // Distortion: route the forward distortion image D (for the backward's
-    // S = (D + C^2)/W reconstruction) and its loss gradient to the 3dgut
-    // backward. Only when the forward emitted distortion and the per-pixel
-    // loss produced a gradient for it (RGB_D primitives: rgb + depth only).
-    const bool has_distortion =
-        std::get<0>(engine().fwd.distortions).data_ptr() != nullptr &&
-        std::get<0>(v_rgb_dist) != 0;
+    // S = (D + C^2)/W reconstruction) and its per-channel loss gradient to the
+    // raster backward, templated on engine().fwd.dist_type. Per-channel grad
+    // tensors are present only for the channels the forward emitted.
+    const DistortionType dist_type = engine().fwd.dist_type;
     std::optional<RenderOutput::TensorTuple> distortion_fwd_opt = std::nullopt;
     std::optional<RenderOutput::TensorTuple> v_distortion_opt = std::nullopt;
-    if (has_distortion) {
+    if (dist_any(dist_type)) {
         distortion_fwd_opt = engine().fwd.distortions;
+        // Build per-channel grad views ONLY for the channels dist_type carries.
+        // Absent channels arrive as null views (_tv_null, shape {0}); feeding
+        // those to DeviceTensor3D throws ("Expected 4D tensor view"), so leave
+        // them default-constructed (null) — e.g. dist_type=D has no rgb/normal.
         v_distortion_opt = std::make_tuple(
-            DeviceTensor3D<float3>(v_rgb_dist),
-            DeviceTensor3D<float>(v_depth_dist),
-            DeviceTensor3D<float3>()  // no normal distortion grad
+            dist_has_rgb(dist_type)    ? DeviceTensor3D<float3>(v_rgb_dist)    : DeviceTensor3D<float3>(),
+            dist_has_depth(dist_type)  ? DeviceTensor3D<float>(v_depth_dist)   : DeviceTensor3D<float>(),
+            dist_has_normal(dist_type) ? DeviceTensor3D<float3>(v_normal_dist) : DeviceTensor3D<float3>()
         );
     }
 
@@ -157,10 +160,13 @@ static void _engine_raster_proj_backward(
             engine().fwd.render_Ts,
             engine().fwd.last_ids,
             engine().fwd.renders,
+            distortion_fwd_opt,  // forward distortion D (for S reconstruction)
+            dist_type,
             accum_weight_map,
             v_render_outputs,
             v_render_Ts,
             v_median,
+            v_distortion_opt,  // gradient w.r.t. distortion image
             std::make_optional(v_splats_w),
             std::nullopt
         );
@@ -186,6 +192,7 @@ static void _engine_raster_proj_backward(
             engine().fwd.last_ids,
             engine().fwd.renders,
             distortion_fwd_opt,  // forward distortion D (for S reconstruction)
+            dist_type,
             DeviceTensor3D<float>(),  // loss_map
             accum_weight_map,
             v_render_outputs,
@@ -370,22 +377,29 @@ std::map<std::string, float> engine_compute_loss_backward(
     TorchTensorView render_normal = _tv_null();
     TorchTensorView depth_normal = _tv_null();
 
-    // Distortion image D = W*S - C^2 from the forward (per channel). RGB_D
-    // primitives emit rgb + depth only; normal distortion stays null until a
-    // normal-rendering primitive exists. When present, it feeds the distortion
-    // regularizer in the per-pixel loss (and its gradient flows to the raster
-    // backward, which reconstructs S from D).
-    const bool has_distortion =
+    // Distortion image D = W*S - C^2 from the forward, only the channels the
+    // forward's dist_type emitted (depth always when active; rgb/normal
+    // optional). Each present channel feeds the distortion regularizer in the
+    // per-pixel loss, and its gradient flows to the raster backward (which
+    // reconstructs S from D).
+    const bool has_rgb_dist =
         std::get<0>(engine().fwd.distortions).data_ptr() != nullptr;
+    const bool has_depth_dist =
+        std::get<1>(engine().fwd.distortions).data_ptr() != nullptr;
+    const bool has_normal_dist =
+        std::get<2>(engine().fwd.distortions).data_ptr() != nullptr;
     TorchTensorView rgb_dist = _tv_null();
     TorchTensorView depth_dist = _tv_null();
     TorchTensorView normal_dist = _tv_null();
-    if (has_distortion) {
+    if (has_rgb_dist)
         rgb_dist = TorchTensorView(
             (uint64_t)std::get<0>(engine().fwd.distortions).data_ptr(), 4, {C, H, W, 3});
+    if (has_depth_dist)
         depth_dist = TorchTensorView(
             (uint64_t)std::get<1>(engine().fwd.distortions).data_ptr(), 4, {C, H, W, 1});
-    }
+    if (has_normal_dist)
+        normal_dist = TorchTensorView(
+            (uint64_t)std::get<2>(engine().fwd.distortions).data_ptr(), 4, {C, H, W, 3});
 
     // Depth -> normal: derive depth_normal from rendered depth when gt_normal is provided
     // (matches training_losses.py logic: pred_normal is None, pred_depth exists, gt_normal exists).
@@ -443,7 +457,7 @@ std::map<std::string, float> engine_compute_loss_backward(
         true,                                  // pred_depth_normal
         engine().bilagrid_normal.enabled,      // gt_normal (true when bilagrid normal)
         true,                                  // pred_transmittance
-        has_distortion, has_distortion, false, // distortion (rgb, depth, normal)
+        has_rgb_dist, has_depth_dist, has_normal_dist, // distortion (rgb, depth, normal)
         has_median,                            // pred_median_depth
         has_median && median_normal_active,    // pred_median_normal
     };
@@ -479,10 +493,12 @@ std::map<std::string, float> engine_compute_loss_backward(
     }
     // Distortion gradient buffers (d loss / d D), consumed by the raster bwd.
     // RGB_D primitives: rgb + depth only; normal distortion grad stays null.
-    if (has_distortion) {
-        pixel_grads.v_rgb_dist   = _pool_tv("eng.v_rgb_dist",   C, H, W, 3);
-        pixel_grads.v_depth_dist = _pool_tv("eng.v_depth_dist", C, H, W, 1);
-    }
+    if (has_rgb_dist)
+        pixel_grads.v_rgb_dist    = _pool_tv("eng.v_rgb_dist",    C, H, W, 3);
+    if (has_depth_dist)
+        pixel_grads.v_depth_dist  = _pool_tv("eng.v_depth_dist",  C, H, W, 1);
+    if (has_normal_dist)
+        pixel_grads.v_normal_dist = _pool_tv("eng.v_normal_dist", C, H, W, 3);
 
     // --- Compute per-pixel losses + SSIM, get gradients ---
     LossValues lv = compute_multi_scale_per_pixel_losses(
@@ -689,7 +705,8 @@ std::map<std::string, float> engine_compute_loss_backward(
         has_median ? DeviceTensor3D<float>(pixel_grads.v_median_depth)
                    : DeviceTensor3D<float>(),
         pixel_grads.v_rgb_dist,
-        pixel_grads.v_depth_dist);
+        pixel_grads.v_depth_dist,
+        pixel_grads.v_normal_dist);
 
     // --- Build loss dict for display ---
     auto sdiv = [](float x, float y) -> float { return y != 0.0f ? x / y : 0.0f; };

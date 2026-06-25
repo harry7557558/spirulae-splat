@@ -35,11 +35,14 @@ std::tuple<
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::TensorTuple render_outputs_tuple,
+    std::optional<RenderOutput::TensorTuple> distortion_fwd_outputs,  // forward D
+    DistortionType dist_type,  // distortion channel set (None/D/RGB_D)
     DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,
     const DeviceTensor3D<float> v_median,  // [I, H, W], optional
+    std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 );

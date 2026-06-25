@@ -6,7 +6,7 @@
 
 template <
     typename SplatPrimitive,
-    bool output_distortion,
+    DistortionType dist_type,
     bool output_accum_weight,
     bool output_median
 >
@@ -43,7 +43,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     float *__restrict__ o_accum_weight
 );
 
-template <typename SplatPrimitive, bool output_distortion, bool output_accum_weight, bool output_median>
+template <typename SplatPrimitive, DistortionType dist_type, bool output_accum_weight, bool output_median>
 inline void launch_rasterize_to_pixels_bwd_kernel(
     // Gaussian parameters
     int64_t num_splats,  // = cur_num_splats; non-packed projection layout stride
@@ -87,7 +87,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
 
     if (n_isects == 0) return;
 
-    rasterize_to_pixels_bwd_kernel_wrapper<SplatPrimitive, output_distortion, output_accum_weight, output_median>(
+    rasterize_to_pixels_bwd_kernel_wrapper<SplatPrimitive, dist_type, output_accum_weight, output_median>(
         (cudaStream_t)0, I, N, n_isects,
         (uint32_t*)gaussian_ids.data_ptr(),
         splat_wbuffer, splat_sbuffer,
@@ -107,7 +107,7 @@ inline void launch_rasterize_to_pixels_bwd_kernel(
 }
 
 
-template<typename SplatPrimitive, bool output_distortion, bool output_accum_weight, bool output_median>
+template<typename SplatPrimitive, DistortionType dist_type, bool output_accum_weight, bool output_median>
 inline std::tuple<
     std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,  // gradient
     DeviceVector<float>  // accum_weight
@@ -146,7 +146,7 @@ inline std::tuple<
     RenderOutput::Tensor render_outputs = render_outputs_tuple;
     RenderOutput::Tensor distortion_fwd_outputs;
     RenderOutput::Tensor v_distortion_outputs;
-    if (output_distortion) {
+    if (dist_any(dist_type)) {
         distortion_fwd_outputs = distortion_fwd_outputs_tuple.value();
         v_distortion_outputs = v_distortion_outputs_tuple.value();
     }
@@ -166,7 +166,7 @@ inline std::tuple<
     }
 
     launch_rasterize_to_pixels_bwd_kernel
-    <SplatPrimitive, output_distortion, output_accum_weight, output_median>(
+    <SplatPrimitive, dist_type, output_accum_weight, output_median>(
         num_splats,
         splats_w, splats_s, gaussian_ids,
         image_width, image_height, tile_offsets, flatten_ids,
@@ -204,28 +204,40 @@ inline std::tuple<
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::TensorTuple render_outputs_tuple,
+    std::optional<RenderOutput::TensorTuple> distortion_fwd_outputs,  // forward D
+    DistortionType dist_type,  // distortion channel set (None/D/RGB_D)
     DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,
     const DeviceTensor3D<float> v_median,
+    std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 ) {
-    // TODO: add interface for output_distortion
+#define F(DT,A,M) _rasterize_to_pixels_bwd_tensor<SplatPrimitive, DistortionType::DT, A, M>
+    using Fn = decltype(&F(None,false,false));
+    // [dist_type: None/D/RGB_D][accum_weight][median]. DN/RGB_DN omitted
+    // (placeholders until a normal-rendering primitive exists).
+    static constexpr Fn funcs[3][2][2] = {
+        { { F(None,false,false),  F(None,false,true)  }, { F(None,true,false),  F(None,true,true)  } },
+        { { F(D,false,false),     F(D,false,true)     }, { F(D,true,false),     F(D,true,true)     } },
+        { { F(RGB_D,false,false), F(RGB_D,false,true) }, { F(RGB_D,true,false), F(RGB_D,true,true) } },
+    };
+#undef F
+    const int di = dist_type == DistortionType::None ? 0 :
+                   dist_type == DistortionType::D     ? 1 :
+                   dist_type == DistortionType::RGB_D ? 2 : -1;
+    if (di < 0)
+        throw std::runtime_error("rasterize_to_pixels_bwd: distortion type not instantiated (normal needs a normal-rendering primitive)");
     const bool aw = accum_weight_map.data_ptr() != nullptr;
     const bool md = v_median.data_ptr() != nullptr;
-    auto dispatch =
-        aw ? (md ? _rasterize_to_pixels_bwd_tensor<SplatPrimitive, false, true, true>
-                 : _rasterize_to_pixels_bwd_tensor<SplatPrimitive, false, true, false>)
-           : (md ? _rasterize_to_pixels_bwd_tensor<SplatPrimitive, false, false, true>
-                 : _rasterize_to_pixels_bwd_tensor<SplatPrimitive, false, false, false>);
-    auto [v_splats_w_1, v_splats_s_1, accum_weight] = dispatch(
+    auto [v_splats_w_1, v_splats_s_1, accum_weight] = funcs[di][aw][md](
         num_splats, splats_w, splats_s, gaussian_ids,
         image_width, image_height, tile_offsets, flatten_ids,
-        render_Ts, last_ids, render_outputs_tuple, std::nullopt,
+        render_Ts, last_ids, render_outputs_tuple, distortion_fwd_outputs,
         DeviceTensor3D<float>(), accum_weight_map,
-        v_render_outputs, v_render_Ts, v_median, std::nullopt, v_splats_w, v_splats_s
+        v_render_outputs, v_render_Ts, v_median, v_distortion_outputs, v_splats_w, v_splats_s
     );
     return std::make_tuple(v_splats_w_1, v_splats_s_1, accum_weight);
 }
@@ -256,19 +268,23 @@ std::tuple<
     const DeviceTensor3D<float> render_Ts,  // [I, image_height, image_width]
     const DeviceTensor3D<int32_t> last_ids, // [I, image_height, image_width]
     RenderOutput::TensorTuple render_outputs_tuple,
+    std::optional<RenderOutput::TensorTuple> distortion_fwd_outputs,  // forward D
+    DistortionType dist_type,  // distortion channel set (None/D/RGB_D)
     DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,
     const DeviceTensor3D<float> v_median,  // [I, H, W], optional
+    std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 ) {
     return rasterize_to_pixels_bwd_tensor<Vanilla3DGS<0>>(
         num_splats, splats_w, splats_s, gaussian_ids,
         image_width, image_height, tile_offsets, flatten_ids,
-        render_Ts, last_ids, render_outputs_tuple, accum_weight_map, v_render_outputs, v_render_Ts,
-        v_median, v_splats_w, v_splats_s
+        render_Ts, last_ids, render_outputs_tuple, distortion_fwd_outputs,
+        dist_type, accum_weight_map, v_render_outputs, v_render_Ts,
+        v_median, v_distortion_outputs, v_splats_w, v_splats_s
     );
 }
 

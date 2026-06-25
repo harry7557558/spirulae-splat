@@ -14,6 +14,23 @@ enum class RenderOutputType {
     RGB, RGB_D, RGB_DN
 };
 
+// Channel set for the distortion regularizer image D = W*S - C^2. Depth is
+// always present when distortion is active (it is the primary 2DGS term); rgb
+// and normal are independently optional. `None` disables distortion. DN /
+// RGB_DN require a normal-rendering primitive: they are defined and handled in
+// the kernels but not instantiated for RGB_D primitives (placeholders until a
+// normal-rendering primitive exists). Channels must be a subset of the
+// primitive's RenderOutputType.
+enum class DistortionType {
+    None, D, RGB_D, DN, RGB_DN
+};
+constexpr bool dist_any(DistortionType t)    { return t != DistortionType::None; }
+constexpr bool dist_has_rgb(DistortionType t)
+    { return t == DistortionType::RGB_D || t == DistortionType::RGB_DN; }
+constexpr bool dist_has_depth(DistortionType t)  { return t != DistortionType::None; }
+constexpr bool dist_has_normal(DistortionType t)
+    { return t == DistortionType::DN || t == DistortionType::RGB_DN; }
+
 class RenderOutput {
     static constexpr float _default_depth = 0.0f;
     static constexpr float3 _default_normal = {0.0f, 0.0f, 0.0f};
@@ -49,6 +66,22 @@ public:
             std::get<2>(tensors).resize(key + ".normal", batch, height, width);
     }
 
+    // Allocate only the distortion channels in `dt` (depth always when active;
+    // rgb/normal optional). Tensors for absent channels stay empty.
+    template<DistortionType dt>
+    static void resizeDistortion(
+        TensorTuple& tensors,
+        int64_t batch, int64_t height, int64_t width,
+        const std::string& key
+    ) {
+        if (dist_has_rgb(dt))
+            std::get<0>(tensors).resize(key + ".rgb", batch, height, width);
+        if (dist_has_depth(dt))
+            std::get<1>(tensors).resize(key + ".depth", batch, height, width);
+        if (dist_has_normal(dt))
+            std::get<2>(tensors).resize(key + ".normal", batch, height, width);
+    }
+
     struct Tensor {
         DeviceTensor3D<float3> rgbs;
         DeviceTensor3D<float> depths;
@@ -66,8 +99,15 @@ public:
             return std::make_tuple(rgbs, depths, normals);
         }
 
+        // True when ANY channel is allocated. Distortion tensors may carry
+        // only a subset of channels (e.g. depth-only distortion has rgbs ==
+        // nullptr but depths valid); keying solely on rgbs would wrongly drop
+        // the whole buffer and null-deref the present channel in the kernel.
+        // The render buffer always has rgb, so its behavior is unchanged.
         bool has_value() const {
-            return rgbs.data_ptr() != nullptr;
+            return rgbs.data_ptr() != nullptr ||
+                   depths.data_ptr() != nullptr ||
+                   normals.data_ptr() != nullptr;
         }
 
         long width() const {
@@ -104,6 +144,17 @@ public:
             rgbs[idx],
             has_depth(type) ? depths[idx] : _default_depth,
             has_normal(type) ? normals[idx] : _default_normal,
+        };
+    }
+
+    // Load only the distortion channels in `dt`; absent channels read as 0 so
+    // they contribute nothing to the (channel-masked) gradient.
+    template<DistortionType dt>
+    __device__ RenderOutput loadDistortion(long idx) const {
+        return {
+            dist_has_rgb(dt) ? rgbs[idx] : float3{0.0f, 0.0f, 0.0f},
+            dist_has_depth(dt) ? depths[idx] : _default_depth,
+            dist_has_normal(dt) ? normals[idx] : _default_normal,
         };
     }
 
@@ -166,8 +217,123 @@ public:
         if (has_normal(type)) buffer.normals[idx] = normal;
     }
 
+    // Save only the distortion channels in `dt`. Channels absent from `dt` are
+    // not written (their buffer pointer may be null / unallocated), and the
+    // values feeding them are dead-code-eliminated upstream.
+    template<DistortionType dt>
+    __device__ void saveDistortion(Buffer &buffer, long idx) {
+        if (dist_has_rgb(dt)) buffer.rgbs[idx] = rgb;
+        if (dist_has_depth(dt)) buffer.depths[idx] = depth;
+        if (dist_has_normal(dt)) buffer.normals[idx] = normal;
+    }
+
 #endif  // #ifdef __CUDACC__
 
+};
+
+
+// Compile-time-sized storage form of RenderOutput, holding only the channels
+// present in `type` (rgb always; depth/normal per has_depth/has_normal). Use it
+// for __shared__ arrays / buffers so an RGB_D primitive doesn't reserve the
+// unused normal float3 (saves shared memory -> better occupancy). Compute stays
+// on the full RenderOutput; conversions are implicit (operator= from a
+// RenderOutput, implicit cast back), so call sites need no .load()/.store().
+template<RenderOutputType type> struct RenderOutputStore;
+
+template<> struct RenderOutputStore<RenderOutputType::RGB> {
+    float3 rgb;
+#ifdef __CUDACC__
+    __device__ __forceinline__ RenderOutputStore& operator=(const RenderOutput& o)
+        { rgb = o.rgb; return *this; }
+    __device__ __forceinline__ operator RenderOutput() const
+        { return { rgb, 0.0f, {0.0f, 0.0f, 0.0f} }; }
+#endif
+};
+
+template<> struct RenderOutputStore<RenderOutputType::RGB_D> {
+    float3 rgb;
+    float depth;
+#ifdef __CUDACC__
+    __device__ __forceinline__ RenderOutputStore& operator=(const RenderOutput& o)
+        { rgb = o.rgb; depth = o.depth; return *this; }
+    __device__ __forceinline__ operator RenderOutput() const
+        { return { rgb, depth, {0.0f, 0.0f, 0.0f} }; }
+#endif
+};
+
+template<> struct RenderOutputStore<RenderOutputType::RGB_DN> {
+    float3 rgb;
+    float depth;
+    float3 normal;
+#ifdef __CUDACC__
+    __device__ __forceinline__ RenderOutputStore& operator=(const RenderOutput& o)
+        { rgb = o.rgb; depth = o.depth; normal = o.normal; return *this; }
+    __device__ __forceinline__ operator RenderOutput() const
+        { return { rgb, depth, normal }; }
+#endif
+};
+
+
+// Compile-time-sized storage for the distortion-path shared state (C, S, v_dist
+// in the raster backward). Holds only the channels in `dt` (depth always when
+// active; rgb/normal optional) — strictly the dist channels, NOT the
+// primitive's pixelType — so e.g. depth-only distortion (rgb weight 0) stores
+// just a float per pixel instead of a float3+float. Absent channels read as 0
+// in the implicit RenderOutput conversion, so they contribute nothing to the
+// channel-masked gradient.
+template<DistortionType dt> struct DistortionStore;
+
+template<> struct DistortionStore<DistortionType::None> {
+#ifdef __CUDACC__
+    // Never accessed (distortion blocks are if constexpr (dist_any) -> elided);
+    // present so the sized-1 shared array is a complete, trivially-constructed type.
+    __device__ __forceinline__ DistortionStore& operator=(const RenderOutput&) { return *this; }
+    __device__ __forceinline__ operator RenderOutput() const { return RenderOutput::zero(); }
+#endif
+};
+
+template<> struct DistortionStore<DistortionType::D> {
+    float depth;
+#ifdef __CUDACC__
+    __device__ __forceinline__ DistortionStore& operator=(const RenderOutput& o)
+        { depth = o.depth; return *this; }
+    __device__ __forceinline__ operator RenderOutput() const
+        { return { {0.0f, 0.0f, 0.0f}, depth, {0.0f, 0.0f, 0.0f} }; }
+#endif
+};
+
+template<> struct DistortionStore<DistortionType::RGB_D> {
+    float3 rgb;
+    float depth;
+#ifdef __CUDACC__
+    __device__ __forceinline__ DistortionStore& operator=(const RenderOutput& o)
+        { rgb = o.rgb; depth = o.depth; return *this; }
+    __device__ __forceinline__ operator RenderOutput() const
+        { return { rgb, depth, {0.0f, 0.0f, 0.0f} }; }
+#endif
+};
+
+template<> struct DistortionStore<DistortionType::DN> {
+    float depth;
+    float3 normal;
+#ifdef __CUDACC__
+    __device__ __forceinline__ DistortionStore& operator=(const RenderOutput& o)
+        { depth = o.depth; normal = o.normal; return *this; }
+    __device__ __forceinline__ operator RenderOutput() const
+        { return { {0.0f, 0.0f, 0.0f}, depth, normal }; }
+#endif
+};
+
+template<> struct DistortionStore<DistortionType::RGB_DN> {
+    float3 rgb;
+    float depth;
+    float3 normal;
+#ifdef __CUDACC__
+    __device__ __forceinline__ DistortionStore& operator=(const RenderOutput& o)
+        { rgb = o.rgb; depth = o.depth; normal = o.normal; return *this; }
+    __device__ __forceinline__ operator RenderOutput() const
+        { return { rgb, depth, normal }; }
+#endif
 };
 
 

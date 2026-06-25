@@ -48,7 +48,7 @@ template<
 #if IS_EVAL3D
     CameraModelType camera_model,
 #endif
-    bool output_distortion,
+    DistortionType dist_type,
     bool output_median
 >
 #if IS_EVAL3D
@@ -263,7 +263,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
                 // Distortion uses the closed form D = W*S - C^2 (computed once
                 // after the loop), so here we only accumulate the second moment
                 // S; the per-splat distortion increment is no longer needed.
-                if constexpr (output_distortion)
+                if constexpr (dist_any(dist_type))
                     pix2_out += color * color * vis;
                 pix_out += color * vis;
                 cur_idx = batch_start + t;
@@ -280,10 +280,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         // distortion: closed form D = W*S - C^2, with W = 1 - T_final and the
         // raw (un-normalized) accumulators C = pix_out, S = pix2_out. Must be
         // evaluated before the depth channel of C is normalized below.
-        if constexpr (output_distortion) {
+        if constexpr (dist_any(dist_type)) {
             const float W = 1.0f - T;
             RenderOutput distortion_out = pix2_out * W + pix_out * pix_out * -1.0f;
-            distortion_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_distortions, pix_id_global);
+            distortion_out.saveDistortion<dist_type>(render_distortions, pix_id_global);
         }
         if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType))
             pix_out.depth /= fmaxf(1.0f - T, 1e-10f);
@@ -299,7 +299,7 @@ template<
 #if IS_EVAL3D
     CameraModelType camera_model,
 #endif
-    bool output_distortion,
+    DistortionType dist_type,
     bool output_median
 >
 #if IS_EVAL3D
@@ -346,7 +346,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     #if IS_EVAL3D
         camera_model,
     #endif
-        output_distortion,
+        dist_type,
         output_median
     ><<<grid, threads, 0, stream>>>(
         I, N, n_isects,

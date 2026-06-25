@@ -277,10 +277,12 @@ def generate_RasterizationFwd():
     map_header = ["typename SplatPrimitive", None, None]
     map_body = [*itertools.product(
         ["Vanilla3DGS<0>"],
-        ["true", "false"],   # output_distortion
+        # distortion channel set; DN/RGB_DN (normal) added when a normal-
+        # rendering primitive exists.
+        ["DistortionType::None", "DistortionType::D", "DistortionType::RGB_D"],
         ["true", "false"],   # output_median
     )]
-    includes = [("Primitive3DGS.cuh", "RasterizationFwd_kernel.cuh")] * 4
+    includes = [("Primitive3DGS.cuh", "RasterizationFwd_kernel.cuh")] * 6
 
     generate_kernel_instantiation("RasterizationFwd", definition, map_header, map_body, includes)
 
@@ -290,11 +292,11 @@ def generate_RasterizationBwd():
     map_header = ["typename SplatPrimitive", None, None, None]
     map_body = [*itertools.product(
         ["Vanilla3DGS<0>"],
-        ["true", "false"],   # output_distortion
+        ["DistortionType::None", "DistortionType::D", "DistortionType::RGB_D"],  # dist_type
         ["true", "false"],   # output_accum_weight
         ["true", "false"],   # output_median
     )]
-    includes = [("Primitive3DGS.cuh", "RasterizationBwd_kernel.cuh")] * 8
+    includes = [("Primitive3DGS.cuh", "RasterizationBwd_kernel.cuh")] * 12
 
     generate_kernel_instantiation("RasterizationBwd", definition, map_header, map_body, includes)
 
@@ -306,11 +308,11 @@ def generate_RasterizationEval3DFwd():
         *itertools.product(
             ["Vanilla3DGUT<0>"],
             ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
-            ["true", "false"],   # output_distortion
+            ["DistortionType::None", "DistortionType::D", "DistortionType::RGB_D"],  # dist_type
             ["true", "false"],   # output_median
         )
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 12
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 18
 
     generate_kernel_instantiation("RasterizationEval3DFwd", definition, map_header, map_body, includes)
 
@@ -322,13 +324,13 @@ def generate_RasterizationEval3DBwd():
         *itertools.product(
             ["Vanilla3DGUT<0>"],
             ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
-            ['true', 'false'],   # output_distortion
+            ["DistortionType::None", "DistortionType::D", "DistortionType::RGB_D"],  # dist_type
             ['true', 'false'],   # output_viewmat_grad
             ['true', 'false'],   # output_accum_weight
             ['true', 'false'],   # output_median
         )
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 48
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 72
 
     generate_kernel_instantiation("RasterizationEval3DBwd", definition, map_header, map_body, includes)
 

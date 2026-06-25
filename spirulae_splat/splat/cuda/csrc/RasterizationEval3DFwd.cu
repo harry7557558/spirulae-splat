@@ -9,7 +9,7 @@
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
-    bool output_distortion,
+    DistortionType dist_type,
     bool output_median
 >
 void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
@@ -38,7 +38,7 @@ void rasterize_to_pixels_eval3d_fwd_kernel_wrapper(
 );
 
 
-template <typename SplatPrimitive, bool output_distortion, bool output_median>
+template <typename SplatPrimitive, DistortionType dist_type, bool output_median>
 inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     // Gaussian parameters
     int64_t num_splats,  // = cur_num_splats; non-packed projection layout stride
@@ -83,19 +83,19 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
             image_width, image_height, tile_width, tile_height, \
             tile_offsets.data_ptr(), flatten_ids.data_ptr(), \
             renders, transmittances.data_ptr(), last_ids.data_ptr(), \
-            output_distortion ? distortions.buffer() : RenderOutput::Buffer(), \
+            dist_any(dist_type) ? distortions.buffer() : RenderOutput::Buffer(), \
             output_median ? render_median.data_ptr() : nullptr \
         )
 
     if (camera_model == CameraModelType::PINHOLE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            CameraModelType::PINHOLE, output_distortion, output_median> _LAUNCH_ARGS;
+            CameraModelType::PINHOLE, dist_type, output_median> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::FISHEYE)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            CameraModelType::FISHEYE, output_distortion, output_median> _LAUNCH_ARGS;
+            CameraModelType::FISHEYE, dist_type, output_median> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::EQUISOLID)
         rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            CameraModelType::EQUISOLID, output_distortion, output_median> _LAUNCH_ARGS;
+            CameraModelType::EQUISOLID, dist_type, output_median> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -104,7 +104,7 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
 }
 
 
-template <typename SplatPrimitive, bool output_distortion, bool output_median>
+template <typename SplatPrimitive, DistortionType dist_type, bool output_median>
 inline std::tuple<
     RenderOutput::TensorTuple,  // renders
     DeviceTensor3D<float>,  // transmittances
@@ -134,10 +134,9 @@ inline std::tuple<
     RenderOutput::TensorTuple renders, distortions;
     RenderOutput::resize<SplatPrimitive::pixelType>(
         renders, batch, image_height, image_width, "renders");
-    if (output_distortion) {
-        RenderOutput::resize<SplatPrimitive::pixelType>(
-            distortions, batch, image_height, image_width, "distortions");
-    }
+    // Allocate only the distortion channels in dist_type (no-op when None).
+    RenderOutput::resizeDistortion<dist_type>(
+        distortions, batch, image_height, image_width, "distortions");
 
     DeviceTensor3D<float> render_Ts;
     DeviceTensor3D<int32_t> render_last_ids;
@@ -148,7 +147,7 @@ inline std::tuple<
     if (output_median)
         render_median.resize("render.median", batch, image_height, image_width);
 
-    launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, output_distortion, output_median>(
+    launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, dist_type, output_median>(
         num_splats,
         splats_w, splats_s, gaussian_ids,
         viewmats, intrins, camera_model, dist_coeffs, aabb,
@@ -192,16 +191,21 @@ std::tuple<
     // intersections
     const DeviceTensor3D<int32_t> tile_offsets, // [I, tile_height, tile_width]
     const DeviceVector<int32_t> flatten_ids,    // [n_isects]
-    bool output_distortion,
+    DistortionType dist_type,
     bool output_median
 ) {
-    auto dispatch = output_distortion ?
-        (output_median ?
-            rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, true, true> :
-            rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, true, false>) :
-        (output_median ?
-            rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, false, true> :
-            rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, false, false>);
+    // Only None/D/RGB_D are instantiated for this RGB_D primitive; DN/RGB_DN
+    // require a normal-rendering primitive (add their cases + generator entries
+    // when one exists).
+#define _DISPATCH_FWD(DT) (output_median ? \
+        rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, DT, true> : \
+        rasterize_to_pixels_eval3d_fwd_tensor<Vanilla3DGUT<0>, DT, false>)
+    auto dispatch =
+        dist_type == DistortionType::None  ? _DISPATCH_FWD(DistortionType::None) :
+        dist_type == DistortionType::D     ? _DISPATCH_FWD(DistortionType::D) :
+        dist_type == DistortionType::RGB_D ? _DISPATCH_FWD(DistortionType::RGB_D) :
+        throw std::runtime_error("rasterize_to_pixels_3dgut_fwd: distortion type not instantiated (normal needs a normal-rendering primitive)");
+#undef _DISPATCH_FWD
     return dispatch(
         num_splats,
         splats_w, splats_s, gaussian_ids,

@@ -6,7 +6,7 @@
 #include <Tensor.h>
 
 
-template <typename SplatPrimitive, bool output_distortion, bool output_median>
+template <typename SplatPrimitive, DistortionType dist_type, bool output_median>
 void rasterize_to_pixels_fwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t I,
@@ -28,7 +28,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
     float *__restrict__ render_median // [I, image_height, image_width, 1], optional
 );
 
-template <typename SplatPrimitive, bool output_distortion, bool output_median>
+template <typename SplatPrimitive, DistortionType dist_type, bool output_median>
 inline void launch_rasterize_to_pixels_fwd_kernel(
     // Gaussian parameters
     int64_t num_splats,  // = cur_num_splats; non-packed projection layout stride
@@ -57,7 +57,7 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
     uint32_t tile_width = tile_offsets.size<2>();
     uint32_t n_isects = flatten_ids.size();
 
-    rasterize_to_pixels_fwd_kernel_wrapper<SplatPrimitive, output_distortion, output_median>(
+    rasterize_to_pixels_fwd_kernel_wrapper<SplatPrimitive, dist_type, output_median>(
         (cudaStream_t)0,
         I, N, n_isects,
         (uint32_t*)gaussian_ids.data_ptr(),
@@ -71,14 +71,14 @@ inline void launch_rasterize_to_pixels_fwd_kernel(
         renders,
         transmittances.data_ptr(),
         last_ids.data_ptr(),
-        output_distortion ? distortions.buffer() : RenderOutput::Buffer(),
+        dist_any(dist_type) ? distortions.buffer() : RenderOutput::Buffer(),
         output_median ? render_median.data_ptr() : nullptr
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
-template <typename SplatPrimitive, bool output_distortion, bool output_median>
+template <typename SplatPrimitive, DistortionType dist_type, bool output_median>
 inline std::tuple<
     RenderOutput::TensorTuple,  // renders
     DeviceTensor3D<float>,  // transmittances
@@ -103,10 +103,9 @@ inline std::tuple<
     RenderOutput::TensorTuple renders, distortions;
     RenderOutput::resize<SplatPrimitive::pixelType>(
         renders, batch, image_height, image_width, "renders");
-    if (output_distortion) {
-        RenderOutput::resize<SplatPrimitive::pixelType>(
-            distortions, batch, image_height, image_width, "distortions");
-    }
+    // Allocate only the distortion channels in dist_type (no-op when None).
+    RenderOutput::resizeDistortion<dist_type>(
+        distortions, batch, image_height, image_width, "distortions");
 
     DeviceTensor3D<float> render_Ts;
     DeviceTensor3D<int32_t> render_last_ids;
@@ -117,7 +116,7 @@ inline std::tuple<
     if (output_median)
         render_median.resize("render.median", batch, image_height, image_width);
 
-    launch_rasterize_to_pixels_fwd_kernel<SplatPrimitive, output_distortion, output_median>(
+    launch_rasterize_to_pixels_fwd_kernel<SplatPrimitive, dist_type, output_median>(
         num_splats,
         splats_w, splats_s, gaussian_ids,
         image_width,
@@ -163,16 +162,20 @@ std::tuple<
     // intersections
     const DeviceTensor3D<int32_t> tile_offsets,
     const DeviceVector<int32_t> flatten_ids,
-    bool output_distortion,
+    DistortionType dist_type,
     bool output_median
 ) {
-    auto dispatch = output_distortion ?
-        (output_median ?
-            rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, true, true> :
-            rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, true, false>) :
-        (output_median ?
-            rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, false, true> :
-            rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, false, false>);
+    // Only None/D/RGB_D are instantiated (RGB_D primitive); DN/RGB_DN are
+    // placeholders until a normal-rendering primitive exists.
+#define _DISPATCH_FWD(DT) (output_median ? \
+        rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, DT, true> : \
+        rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, DT, false>)
+    auto dispatch =
+        dist_type == DistortionType::None  ? _DISPATCH_FWD(DistortionType::None) :
+        dist_type == DistortionType::D     ? _DISPATCH_FWD(DistortionType::D) :
+        dist_type == DistortionType::RGB_D ? _DISPATCH_FWD(DistortionType::RGB_D) :
+        throw std::runtime_error("rasterize_to_pixels_fwd: distortion type not instantiated (normal needs a normal-rendering primitive)");
+#undef _DISPATCH_FWD
     return dispatch(
         num_splats,
         splats_w, splats_s, gaussian_ids,
@@ -206,16 +209,20 @@ std::tuple<
     // intersections
     const DeviceTensor3D<int32_t> tile_offsets,
     const DeviceVector<int32_t> flatten_ids,
-    bool output_distortion,
+    DistortionType dist_type,
     bool output_median
 ) {
-    auto dispatch = output_distortion ?
-        (output_median ?
-            rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, true, true> :
-            rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, true, false>) :
-        (output_median ?
-            rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, false, true> :
-            rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, false, false>);
+    // Only None/D/RGB_D are instantiated (RGB_D primitive); DN/RGB_DN are
+    // placeholders until a normal-rendering primitive exists.
+#define _DISPATCH_FWD(DT) (output_median ? \
+        rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, DT, true> : \
+        rasterize_to_pixels_fwd_tensor<Vanilla3DGS<0>, DT, false>)
+    auto dispatch =
+        dist_type == DistortionType::None  ? _DISPATCH_FWD(DistortionType::None) :
+        dist_type == DistortionType::D     ? _DISPATCH_FWD(DistortionType::D) :
+        dist_type == DistortionType::RGB_D ? _DISPATCH_FWD(DistortionType::RGB_D) :
+        throw std::runtime_error("rasterize_to_pixels_fwd: distortion type not instantiated (normal needs a normal-rendering primitive)");
+#undef _DISPATCH_FWD
     return dispatch(
         num_splats,
         splats_w, splats_s, gaussian_ids,

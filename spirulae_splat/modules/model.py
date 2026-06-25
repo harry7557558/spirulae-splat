@@ -329,7 +329,7 @@ class SpirulaeSplatModelConfig:
     """Weight for alpha regularizer (encourage alpha to go to either 0 or 1)"""
     alpha_reg_warmup: int = 12000
     """warmup steps for alpha regularizer, regularization weight ramps up"""
-    reg_warmup_length: int = 3000
+    reg_warmup_length: int = 0
     """Warmup steps for depth, normal, and alpha regularizers.
        only apply regularizers after this many steps."""
     apply_loss_for_mask: bool = False
@@ -1082,7 +1082,12 @@ class SpirulaeSplatModel(torch.nn.Module):
             # use_bvh=True,
             relative_scale=self.config.relative_scale,
             camera_model=camera_model,
-            output_distortion=any([c != 0.0 for c in self.get_2dgs_reg_weights()[0]])
+            # Enable the eval/viewer distortion render when any distortion
+            # regularizer is configured, or on-demand when the viewer requests a
+            # distortion buffer. Which channels are actually produced is decided
+            # in C++ from the primitive's rendered channels (normal is honored
+            # only once a normal-rendering primitive exists).
+            output_distortion=any(c != 0.0 for c in self.get_2dgs_reg_weights()[0])
                 or (_want is not None and any('distortion' in (k or '') for k in _want)),
             output_median=any([
                 self.config.mean_median_depth_weight > 0.0,
