@@ -207,10 +207,19 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             v_render_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
              : RenderOutput::zero());
         if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType)) {
-            float inv_alpha = 1.0f / fmaxf(1.0f - render_Ts_local, 1e-10f);
+            float inv_alpha = 1.0f / fmaxf(1.0f - render_Ts_local, 1e-10f);  // 1/W
             float exp_depth = (inside ? render_output_buffer.depths[pix_id_image_global] : 0.0f);
-            v_render_Ts_local += exp_depth * v_render_output_local.depth * inv_alpha;
-            v_render_output_local.depth *= inv_alpha;
+            if constexpr (dist_has_depth(dist_type)) {
+                // Log-depth render: depth = exp(m), m = C_logz/W = ln(depth).
+                // dL/dC_logz = v_d * depth / W;  dL/dT = v_d * depth * m / W.
+                float m = __logf(fmaxf(exp_depth, DEPTH_DIST_EPS));
+                v_render_Ts_local += exp_depth * v_render_output_local.depth * m * inv_alpha;
+                v_render_output_local.depth *= exp_depth * inv_alpha;
+            } else {
+                // Linear render: depth = C_raw/W.  dL/dC_raw = v_d / W.
+                v_render_Ts_local += exp_depth * v_render_output_local.depth * inv_alpha;
+                v_render_output_local.depth *= inv_alpha;
+            }
         }
         pix_Ts_with_grad[pix_id_local] = {render_Ts_local, v_render_Ts_local};
         v_pix_colors[pix_id_local] = v_render_output_local;
@@ -219,11 +228,13 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             pix_colors[pix_id_local] = (inside ?
                 render_output_buffer.load<SplatPrimitive::pixelType>(pix_id_image_global)
                 : RenderOutput::zero());
-            // Un-normalize the stored depth of C (render depth is depth/(1-T));
-            // guarded on the dist store actually holding depth.
+            // Recover the distortion C for the depth channel. Render depth is
+            // exp(C_logz/W) (geometric-mean-style log depth), so the un-normalized
+            // log-depth mean C_logz = ln(depth) * W. rgb/normal C stay raw.
             if constexpr (dist_has_depth(dist_type)) {
-                float alpha = fmaxf(1.0f - render_Ts_local, 1e-10f);
-                pix_colors[pix_id_local].depth *= alpha;
+                float W = fmaxf(1.0f - render_Ts_local, 1e-10f);
+                pix_colors[pix_id_local].depth =
+                    __logf(fmaxf(pix_colors[pix_id_local].depth, DEPTH_DIST_EPS)) * W;
             }
             // Reconstruct the second moment S = (D + C^2) / W from the forward
             // distortion image D = W*S - C^2, the (now un-normalized) accumulated
@@ -449,24 +460,32 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
             }
 
+            // The depth channel was accumulated in log space (c = ln z) when
+            // depth distortion is active, so the accumulation-related gradients
+            // (alpha, T0, distortion) use `acc` (depth -> ln z); rgb/normal are
+            // unchanged (acc == color there). The resulting per-splat depth color
+            // gradient is converted from d/d(ln z) to d/dz via 1/z afterwards.
+            RenderOutput acc = color;
+            if constexpr (dist_has_depth(dist_type))
+                acc.depth = __logf(fmaxf(color.depth, DEPTH_DIST_EPS));
+
             // gradient to alpha:
             // \frac{dL}{d\alpha_{i}}
             // = \frac{dL}{dc_{1}}\frac{dc_{1}}{d\alpha_{i}}+\frac{dL}{dT_{1}}\frac{dT_{1}}{d\alpha_{i}}
             // = T_{0}\frac{dL}{dc_{1}}c_{i}-\frac{dL}{dT_{1}}T_{0}
-            float v_alpha = T0 * color.dot(v_c) -v_T1 * T0;
+            float v_alpha = T0 * acc.dot(v_c) -v_T1 * T0;
 
             // gradient to color:
             // \frac{dL}{dc_{i}}
             // = \frac{dL}{dc_{1}}\frac{dc_{1}}{dc_{i}}
             // = \alpha_{i}T_{0}\frac{dL}{dc_{1}}
-            RenderOutput v_color = v_c * (alpha * T0);
-            v_color.depth += v_depth_median;  // median's direct depth grad to this splat
+            RenderOutput v_color = v_c * (alpha * T0);  // depth: dL/d(ln z) so far
 
             // update pixel gradient:
             // \frac{dL}{dT_{0}}
             // = \frac{dL}{dc_{1}}\frac{dc_{1}}{dT_{0}}+\frac{dL}{dT_{1}}\frac{dT_{1}}{dT_{0}}
             // = \alpha_{i}\frac{dL}{dc_{1}}c_{i}+\frac{dL}{dT_{1}}\left(1-\alpha_{i}\right)
-            float v_T0 = alpha * color.dot(v_c) + v_T1 * (1.0f - alpha);
+            float v_T0 = alpha * acc.dot(v_c) + v_T1 * (1.0f - alpha);
 
             // distortion (closed form D = W*S - C^2)
             // C = sum_j w_j c_j, S = sum_j w_j c_j^2 (totals, held constant),
@@ -475,21 +494,28 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             // dD/dw_k = S + W c_k^2 - 2 C c_k (the +S term is the dW/dw_k = 1
             // contribution). The dependence of W and of every w_j on the
             // transmittance is carried by the existing v_T0/v_T1 recursion, so
-            // no separate global injection is needed.
+            // no separate global injection is needed. c_k = acc (depth in log).
             if constexpr (dist_any(dist_type)) {
                 RenderOutput v_dist = v_distortion_out[pix_id];
-                RenderOutput C = pix_colors[pix_id];   // total sum_j w_j c_j
-                RenderOutput S = pix2_colors[pix_id];  // total sum_j w_j c_j^2
+                RenderOutput C = pix_colors[pix_id];   // total sum_j w_j c_j (depth=C_logz)
+                RenderOutput S = pix2_colors[pix_id];  // total sum_j w_j c_j^2 (depth=S_logz)
                 float W = dist_W[pix_id];              // 1 - T_final
                 float w = alpha * T0;                  // this splat's weight w_k
 
                 // dD/dc_k = 2 w (W c_k - C)
-                v_color += (color * W + C * -1.0f) * v_dist * (2.0f * w);
+                v_color += (acc * W + C * -1.0f) * v_dist * (2.0f * w);
                 // dD/dw_k = S + W c_k^2 - 2 C c_k    (w_k = alpha * T0)
-                float g = (S + color * color * W + color * C * -2.0f).dot(v_dist);
+                float g = (S + acc * acc * W + acc * C * -2.0f).dot(v_dist);
                 v_alpha += T0 * g;
                 v_T0 += alpha * g;
             }
+
+            // Convert the depth color gradient from log space (d/d ln z) to ray
+            // depth (d/dz) via d(ln z)/dz = 1/z, then add the median's depth
+            // gradient (already in raw-z space). rgb/normal are unaffected.
+            if constexpr (dist_has_depth(dist_type))
+                v_color.depth *= 1.0f / fmaxf(color.depth, DEPTH_DIST_EPS);
+            v_color.depth += v_depth_median;  // median's direct depth grad to this splat
 
             // backward diff splat
         #if IS_EVAL3D

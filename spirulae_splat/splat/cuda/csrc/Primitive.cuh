@@ -31,6 +31,11 @@ constexpr bool dist_has_depth(DistortionType t)  { return t != DistortionType::N
 constexpr bool dist_has_normal(DistortionType t)
     { return t == DistortionType::DN || t == DistortionType::RGB_DN; }
 
+// Depth distortion operates on log depth (ln z). This floor keeps the log/exp
+// and the 1/z gradient chain finite for non-positive depths (the eval3d path
+// already guarantees z > 0; the 2D path does not). Must match in fwd + bwd.
+constexpr float DEPTH_DIST_EPS = 1e-6f;
+
 class RenderOutput {
     static constexpr float _default_depth = 0.0f;
     static constexpr float3 _default_normal = {0.0f, 0.0f, 0.0f};

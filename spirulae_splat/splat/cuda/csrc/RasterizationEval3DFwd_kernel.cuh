@@ -260,12 +260,20 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
             if (next_T > 1e-4f) {
                 const float vis = alpha * T;
+                // Depth distortion operates in log space: the depth channel is
+                // accumulated as ln(z) (rgb/normal unchanged), so C = pix_out and
+                // S = pix2_out are the log-depth moments. The rendered ray depth
+                // is recovered as exp(expected log depth) after the loop, so no
+                // extra global buffer is needed.
+                RenderOutput acc = color;
+                if constexpr (dist_has_depth(dist_type))
+                    acc.depth = __logf(fmaxf(color.depth, DEPTH_DIST_EPS));
                 // Distortion uses the closed form D = W*S - C^2 (computed once
                 // after the loop), so here we only accumulate the second moment
                 // S; the per-splat distortion increment is no longer needed.
                 if constexpr (dist_any(dist_type))
-                    pix2_out += color * color * vis;
-                pix_out += color * vis;
+                    pix2_out += acc * acc * vis;
+                pix_out += acc * vis;
                 cur_idx = batch_start + t;
                 T = next_T;
             } else done = true;
@@ -285,8 +293,15 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             RenderOutput distortion_out = pix2_out * W + pix_out * pix_out * -1.0f;
             distortion_out.saveDistortion<dist_type>(render_distortions, pix_id_global);
         }
-        if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType))
-            pix_out.depth /= fmaxf(1.0f - T, 1e-10f);
+        if constexpr (RenderOutput::has_depth(SplatPrimitive::pixelType)) {
+            const float invW = 1.0f / fmaxf(1.0f - T, 1e-10f);
+            if constexpr (dist_has_depth(dist_type))
+                // pix_out.depth holds C_logz = sum_j w_j ln z_j; render the
+                // geometric-mean-style depth = exp(expected log depth).
+                pix_out.depth = __expf(pix_out.depth * invW);
+            else
+                pix_out.depth *= invW;  // expected (arithmetic) ray depth
+        }
         pix_out.saveParamsToBuffer<SplatPrimitive::pixelType>(render_colors, pix_id_global);
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
