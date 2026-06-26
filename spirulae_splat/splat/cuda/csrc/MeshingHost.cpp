@@ -1357,6 +1357,13 @@ bool generate_mesh(
     tri.cell_adjacents.clear(); tri.cell_adjacents.shrink_to_fit();
     tri.cell_vertices.clear(); tri.cell_vertices.shrink_to_fit();
 
+    // ---- 7. merge (do this once to reduce chance of GPU OOM during 6b, but risk CPU OOM) ----
+    auto t6 = Clock::now();
+    merge_vertices(mesh, cfg.merge_factor, cfg.merge_max_flip_deg, cfg.verbose, cfg.num_threads);
+    if (cfg.verbose) printf("[meshing] merge (%.2fs)\n", secs_since(t6));
+
+  for (int iter = 0; iter < 2; ++iter) {
+
     // ---- 6b. cull vertices seen by no training camera (dataset path only) ----
     // A vertex is kept iff some camera both sees it in-frame and has an
     // unobstructed line of sight to it (occlusion tested against the mesh's own
@@ -1396,7 +1403,6 @@ bool generate_mesh(
     }
 
     // ---- 7. manifold-preserving merge (with fold/sliver guard) ----
-  for (int iter = 0; iter < 2; ++iter) {
     auto t6 = Clock::now();
     merge_vertices(mesh, cfg.merge_factor, cfg.merge_max_flip_deg, cfg.verbose, cfg.num_threads);
     if (cfg.verbose) printf("[meshing] merge (%.2fs)\n", secs_since(t6));

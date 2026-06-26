@@ -54,6 +54,12 @@ struct LossConfig {
     // is enabled.
     float color_shift_reg_weight = 0.0f;
     float color_shift_reg_beta   = 0.0f;
+    // Supervision depth maps may store either ray depth (Euclidean distance
+    // along the camera ray) or linear depth (z component). The rasterizer
+    // renders ray depth, so when this is false the freshly uploaded GT depth
+    // is converted from linear to ray depth in place (in set_training_data,
+    // before the depth bilateral grid). True = already ray depth, no-op.
+    bool  input_depth_is_ray_depth = true;
 };
 
 

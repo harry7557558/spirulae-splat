@@ -372,6 +372,12 @@ class SpirulaeSplatModelConfig:
     depth_supervision_weight: float = 0.0
     """Weight for depth supervision by comparing rendered depth with depth predicted by a foundation model
         Warn that this can reduce quality if AI generated depth is heavily biased"""
+    input_depth_is_ray_depth: bool = False
+    """Whether the input/supervision depth maps store ray depth (Euclidean distance along the camera
+        ray) rather than linear (z) depth. The rasterizer renders ray depth, so when this is False
+        (the common case, e.g. most foundation-model depths) the GT depth is converted from linear to
+        ray depth in place on the GPU before the depth bilateral grid / loss. Set True for depth maps
+        already in ray depth, e.g. >180deg fisheye captures where linear depth is ill-defined."""
     normal_supervision_weight: float = 0.01
     """Weight for normal supervision by comparing normal from rendered depth with normal from depth predicted by a foundation model"""
 

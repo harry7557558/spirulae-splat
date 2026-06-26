@@ -1429,6 +1429,70 @@ void ray_depth_to_linear_depth_backward(
 }
 
 
+// In-place conversion of LINEAR (z) depth to RAY depth (Euclidean distance
+// along the camera ray). Used for supervision depth maps that store linear
+// depth while the rasterizer renders ray depth. We reuse
+// ray_depth_to_linear_depth_factor (linear = ray * factor, factor =
+// sign(z)/length(raydir)); the inverse is ray = linear / factor. The
+// intrinsics are at the *image* resolution; (sx, sy) rescale them to the depth
+// map resolution (depth maps may differ in size from the rendered image). The
+// zero sentinel (no GT) and degenerate rays (undistort failure -> factor 0)
+// map to 0 (i.e. "no supervision here").
+__global__ void linear_depth_to_ray_depth_inplace_kernel(
+    CameraModelType camera_model,
+    const float4 *__restrict__ intrins,  // image-res fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    float sx, float sy,                  // depth_res / image_res scale
+    TensorView<float, 4> depths          // [B, Hd, Wd, 1] in/out
+) {
+    const int B = depths.shape[0],
+        H = depths.shape[1],
+        W = depths.shape[2];
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (bid >= B || i >= W || j >= H)
+        return;
+
+    // Intrinsics rescaled from image to depth-map resolution. Distortion
+    // coeffs operate on normalized image coordinates and are resolution
+    // independent, so they need no scaling.
+    float4 intrin = intrins[bid];
+    float fx = intrin.x * sx, fy = intrin.y * sy;
+    float cx = intrin.z * sx, cy = intrin.w * sy;
+    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+
+    float in_depth = depths.load1(bid, j, i);
+    float factor = SlangPixelWise::ray_depth_to_linear_depth_factor(
+        {(float)i+0.5f, (float)j+0.5f},
+        {fx, fy, cx, cy}, dist_coeffs,
+        (int)camera_model
+    );
+    float out_depth = (factor > 0.0f) ? (in_depth / factor) : 0.0f;
+    depths.store1(bid, j, i, out_depth);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void linear_depth_to_ray_depth_inplace(
+    std::string camera_model,
+    TorchTensorView intrins,        // [B, 4] at image resolution
+    TorchTensorView dist_coeffs,    // [B, 10]
+    int image_width, int image_height,
+    DeviceTensor3D<float> depths    // [B, Hd, Wd, 1] in/out
+) {
+    int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
+    if (b <= 0 || h <= 0 || w <= 0) return;
+    float sx = (image_width  > 0) ? (float)w / (float)image_width  : 1.0f;
+    float sy = (image_height > 0) ? (float)h / (float)image_height : 1.0f;
+
+    linear_depth_to_ray_depth_inplace_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
+        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
+        sx, sy, _dt3d_to_tv4<float>(depths)
+    );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
 // ================
 // Distort / Undistort
 // ================

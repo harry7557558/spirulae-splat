@@ -88,7 +88,8 @@ void set_training_data(
     TorchTensorView gt_rgb,
     TorchTensorView gt_depth,
     TorchTensorView gt_normal,
-    TorchTensorView gt_alpha
+    TorchTensorView gt_alpha,
+    bool input_depth_is_ray_depth
 ) {
     engine().gt.rgb    = _hv_to_dt3d_gt<float3>(gt_rgb,    "gt.rgb",    "rgb");
     engine().gt.depth  = _hv_to_dt3d_gt<float>(gt_depth,   "gt.depth",  "depth");
@@ -98,6 +99,21 @@ void set_training_data(
     engine().gt.alpha  = _hv_to_dt3d<bool>("gt.alpha", gt_alpha);
     engine().gt.has_gt    = (std::get<0>(gt_rgb) != 0);
     engine().gt.has_mask  = (std::get<0>(gt_alpha) != 0);
+
+    // Linear (z) depth -> ray depth, in place on the GPU buffer, before the
+    // depth bilateral grid / loss consume it. The rasterizer renders ray
+    // depth, so linear supervision depth must be converted to match. Uses the
+    // current camera intrinsics (set by set_camera_params just before this),
+    // rescaled inside the kernel to the depth map resolution.
+    if (!input_depth_is_ray_depth && engine().gt.depth.data_ptr() != nullptr) {
+        linear_depth_to_ray_depth_inplace(
+            engine().camera.model_str,
+            _dv_tv(engine().camera.intrins),
+            _dt2d_tv(engine().camera.dist_coeffs),
+            engine().camera.width, engine().camera.height,
+            engine().gt.depth
+        );
+    }
 
     // Apply image-side color space conversion (linear / wide-gamut -> sRGB)
     // in place on the freshly uploaded GT. No-op when no image color space

@@ -76,7 +76,11 @@ void set_training_data(
     TorchTensorView gt_normal,       // [C, H, W, 3]
     // External mask (per-pixel bool/uint8). Sets Buffers::has_mask. Null OK.
     // Drives the RGB mask + alpha-sup target inside per_pixel_losses.slang.
-    TorchTensorView gt_alpha         // [C, H, W, 1]
+    TorchTensorView gt_alpha,        // [C, H, W, 1]
+    // When false, the uploaded GT depth is treated as linear (z) depth and
+    // converted to ray depth in place (the rasterizer renders ray depth).
+    // True = the depth map already stores ray depth, no conversion.
+    bool input_depth_is_ray_depth = true
 );
 
 

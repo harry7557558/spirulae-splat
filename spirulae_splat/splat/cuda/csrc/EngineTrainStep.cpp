@@ -240,7 +240,8 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
     if (B == 1) {
         set_camera_params(width, height, camera_model,
                           viewmats, intrins, dist_coeffs);
-        set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha);
+        set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha,
+                          cfg.loss.input_depth_is_ray_depth);
         return _engine_train_step_after_setup(
             step, max_steps, std::move(primitive), sh_degree, packed,
             bilagrid_cam_indices, cfg);
@@ -294,7 +295,8 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
         TorchTensorView bgi_k = _slice_tv_first_dim(bilagrid_cam_indices, k);
 
         set_camera_params(width, height, camera_model, vmt_k, itr_k, dst_k);
-        set_training_data(rgb_k, dep_k, nrm_k, aph_k);
+        set_training_data(rgb_k, dep_k, nrm_k, aph_k,
+                          cfg.loss.input_depth_is_ray_depth);
 
         // Thumbnails: capture per-sub-batch with the sliced cam index. The
         // viewer host counter naturally throttles re-captures, so doing this
@@ -380,7 +382,8 @@ std::map<std::string, float> engine_train_step(
             bilagrid_cam_indices, cfg);
     }
     set_camera_params(width, height, camera_model, viewmats, intrins, dist_coeffs);
-    set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha);
+    set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha,
+                      cfg.loss.input_depth_is_ray_depth);
     return _engine_train_step_after_setup(
         step, max_steps, std::move(primitive), sh_degree, packed,
         bilagrid_cam_indices, cfg);

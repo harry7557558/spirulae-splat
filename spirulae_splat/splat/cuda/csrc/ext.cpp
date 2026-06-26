@@ -318,7 +318,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("robust_edge_aware_quantile", &LossConfig::robust_edge_aware_quantile)
         .def_readwrite("overexposure_reg_weight", &LossConfig::overexposure_reg_weight)
         .def_readwrite("color_shift_reg_weight",  &LossConfig::color_shift_reg_weight)
-        .def_readwrite("color_shift_reg_beta",    &LossConfig::color_shift_reg_beta);
+        .def_readwrite("color_shift_reg_beta",    &LossConfig::color_shift_reg_beta)
+        .def_readwrite("input_depth_is_ray_depth", &LossConfig::input_depth_is_ray_depth);
 
     py::class_<OptimConfig>(m, "OptimConfig")
         .def(py::init<>())
@@ -398,7 +399,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_reset", &engine_reset);
     m.def("set_data_3dgs", &set_data_3dgs);
     m.def("set_camera_params", &set_camera_params);
-    m.def("set_training_data", &set_training_data);
+    m.def("set_training_data", &set_training_data,
+          pybind11::arg("gt_rgb"), pybind11::arg("gt_depth"),
+          pybind11::arg("gt_normal"), pybind11::arg("gt_alpha"),
+          pybind11::arg("input_depth_is_ray_depth") = true);
     m.def("engine_forward_3dgs", &forward_3dgs);
     m.def("engine_compute_loss_backward", &engine_compute_loss_backward);
     m.def("engine_backward_from_render_grad", &engine_backward_from_render_grad);

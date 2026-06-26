@@ -291,6 +291,15 @@ void ray_depth_to_linear_depth_backward(
 );
 
 
+void linear_depth_to_ray_depth_inplace(
+    std::string camera_model,
+    TorchTensorView intrins,        // [B, 4] at image resolution
+    TorchTensorView dist_coeffs,    // [B, 10]
+    int image_width, int image_height,
+    DeviceTensor3D<float> depths    // [B, Hd, Wd, 1] in/out
+);
+
+
 void distort_image_tensor(
     std::string camera_model,
     TorchTensorView intrins,            // [B, 4]

@@ -573,6 +573,10 @@ class Renderer:
         cfg.loss.overexposure_reg_weight = float(overexposure_reg_weight)
         cfg.loss.color_shift_reg_weight = float(color_shift_reg_weight)
         cfg.loss.color_shift_reg_beta   = float(color_shift_reg_beta)
+        # When False, GT depth is linear (z) depth and is converted to ray
+        # depth in place on upload (set_training_data), to match the ray depth
+        # the rasterizer renders.
+        cfg.loss.input_depth_is_ray_depth = bool(model_config.input_depth_is_ray_depth)
         cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
         cfg.densify  = self._build_densify_config(model_config)
         cfg.bilagrid = self._build_bilagrid_step_config(
