@@ -299,11 +299,21 @@ class SpirulaeSplatDataparser:
         # sort the frames by fname
         fnames = []
         for frame in meta["frames"]:
+            self._add_auxiliary_buffers(frame)
             filepath = Path(frame["file_path"])
+            if filepath.suffix == ".webp":
+                print("WARNING:", filepath, "has unsupported image format, skipping")
+                del frame["file_path"]
+                continue
             fname = self._get_fname(filepath)
+            if not fname.exists():
+                print("WARNING:", filepath, "does not exist, skipping")
+                del frame["file_path"]
+                continue
             fnames.append(fname)
         inds = np.argsort(fnames)
         frames = [meta["frames"][ind] for ind in inds]
+        frames = [f for f in frames if 'file_path' in f]
 
         if np.isfinite(self.config.outlier_threshold):
             camera_positions = np.array([np.array(frame["transform_matrix"])[:3, 3] for frame in frames])
@@ -408,6 +418,12 @@ class SpirulaeSplatDataparser:
         # Load 3D points
         metadata = {}
         if _points3D is None:
+            if "ply_file_path" not in meta:
+                for possible_name in ["sparse_pc.ply", "pointcloud.ply"]:
+                    ply_file_path = self.dataset_dir / possible_name
+                    if ply_file_path.exists():
+                        meta["ply_file_path"] = possible_name
+                        break
             if "ply_file_path" not in meta:
                 raise ValueError("No initial point cloud found in transforms.json")
             ply_file_path = self.dataset_dir / meta["ply_file_path"]
@@ -622,7 +638,6 @@ class SpirulaeSplatDataparser:
                 raise ValueError(f"{image_filename} does not exist. Specify `--dataparser.image_dir` if needed.")
             frame['file_path'] = str(self.config.image_dir / Path(im.name))
 
-            self._add_auxiliary_buffers(frame)
             frames.append(frame)
 
         points = [*colmap_points.values()]
@@ -724,77 +739,78 @@ class SpirulaeSplatDataparser:
         for summary in summary_log:
             print(summary)
 
-        for frame in transforms[0]['frames']:
-            self._add_auxiliary_buffers(frame)
         return self._parse_nerfstudio_data(transforms[0])
 
     def _add_auxiliary_buffers(self, frame):
         name = str(Path(frame['file_path']).relative_to(self.config.image_dir))
 
-        for mask_filename in [
-            Path(name+".png"),
-            Path(name).with_suffix(".png"),
-            Path(name+".PNG"),
-            Path(name).with_suffix(".PNG"),
-            Path(name+".jpg"),
-            Path(name).with_suffix(".jpg"),
-            Path(name+".JPG"),
-            Path(name).with_suffix(".JPG"),
-            Path(name+".jpeg"),
-            Path(name).with_suffix(".jpeg"),
-            Path(name+".JPEG"),
-            Path(name).with_suffix(".JPEG"),
-            Path(name[:name.rfind('.')]+"_mask.png"),
-        ]:
-            if (self.dataset_dir / self.config.mask_dir / mask_filename).exists():
-                frame['mask_path'] = self.config.mask_dir / mask_filename
-                break
+        if 'mask_path' not in frame:
+            for mask_filename in [
+                Path(name+".png"),
+                Path(name).with_suffix(".png"),
+                Path(name+".PNG"),
+                Path(name).with_suffix(".PNG"),
+                Path(name+".jpg"),
+                Path(name).with_suffix(".jpg"),
+                Path(name+".JPG"),
+                Path(name).with_suffix(".JPG"),
+                Path(name+".jpeg"),
+                Path(name).with_suffix(".jpeg"),
+                Path(name+".JPEG"),
+                Path(name).with_suffix(".JPEG"),
+                Path(name[:name.rfind('.')]+"_mask.png"),
+            ]:
+                if (self.dataset_dir / self.config.mask_dir / mask_filename).exists():
+                    frame['mask_path'] = self.config.mask_dir / mask_filename
+                    break
 
         # depths
-        for depth_filename in [
-            Path(name).with_suffix(".png"),
-            Path(name).with_suffix(".jpg"),
-            Path(name).with_suffix(".jpeg"),
-            Path(name).with_suffix(".npy"),
-            Path(name).with_suffix(".npz"),
-            Path(name+".png"),
-            Path(name+".jpg"),
-            Path(name+".jpeg"),
-            Path(name+".npy"),
-            Path(name+".npz"),
-            Path(name).with_suffix(".PNG"),
-            Path(name).with_suffix(".JPG"),
-            Path(name).with_suffix(".JPEG"),
-            Path(name[:name.rfind('.')]+"_depth.png"),
-            Path(name[:name.rfind('.')]+"_depth.jpg"),
-            Path(name[:name.rfind('.')]+"_depth.jpeg"),
-        ]:
-            if (self.dataset_dir / self.config.depth_dir / depth_filename).exists():
-                frame['depth_file_path'] = self.config.depth_dir / depth_filename
-                break
+        if 'depth_file_path' not in frame:
+            for depth_filename in [
+                Path(name).with_suffix(".png"),
+                Path(name).with_suffix(".jpg"),
+                Path(name).with_suffix(".jpeg"),
+                Path(name).with_suffix(".npy"),
+                Path(name).with_suffix(".npz"),
+                Path(name+".png"),
+                Path(name+".jpg"),
+                Path(name+".jpeg"),
+                Path(name+".npy"),
+                Path(name+".npz"),
+                Path(name).with_suffix(".PNG"),
+                Path(name).with_suffix(".JPG"),
+                Path(name).with_suffix(".JPEG"),
+                Path(name[:name.rfind('.')]+"_depth.png"),
+                Path(name[:name.rfind('.')]+"_depth.jpg"),
+                Path(name[:name.rfind('.')]+"_depth.jpeg"),
+            ]:
+                if (self.dataset_dir / self.config.depth_dir / depth_filename).exists():
+                    frame['depth_file_path'] = self.config.depth_dir / depth_filename
+                    break
 
         # normals
-        for normal_filename in [
-            Path(name).with_suffix(".png"),
-            Path(name).with_suffix(".jpg"),
-            Path(name).with_suffix(".jpeg"),
-            Path(name).with_suffix(".npy"),
-            Path(name).with_suffix(".npz"),
-            Path(name+".png"),
-            Path(name+".jpg"),
-            Path(name+".jpeg"),
-            Path(name+".npy"),
-            Path(name+".npz"),
-            Path(name).with_suffix(".PNG"),
-            Path(name).with_suffix(".JPG"),
-            Path(name).with_suffix(".JPEG"),
-            Path(name[:name.rfind('.')]+"_normal.png"),
-            Path(name[:name.rfind('.')]+"_normal.jpg"),
-            Path(name[:name.rfind('.')]+"_normal.jpeg"),
-        ]:
-            if (self.dataset_dir / self.config.normal_dir / normal_filename).exists():
-                frame['normal_file_path'] = self.config.normal_dir / normal_filename
-                break
+        if 'normal_file_path' not in frame:
+            for normal_filename in [
+                Path(name).with_suffix(".png"),
+                Path(name).with_suffix(".jpg"),
+                Path(name).with_suffix(".jpeg"),
+                Path(name).with_suffix(".npy"),
+                Path(name).with_suffix(".npz"),
+                Path(name+".png"),
+                Path(name+".jpg"),
+                Path(name+".jpeg"),
+                Path(name+".npy"),
+                Path(name+".npz"),
+                Path(name).with_suffix(".PNG"),
+                Path(name).with_suffix(".JPG"),
+                Path(name).with_suffix(".JPEG"),
+                Path(name[:name.rfind('.')]+"_normal.png"),
+                Path(name[:name.rfind('.')]+"_normal.jpg"),
+                Path(name[:name.rfind('.')]+"_normal.jpeg"),
+            ]:
+                if (self.dataset_dir / self.config.normal_dir / normal_filename).exists():
+                    frame['normal_file_path'] = self.config.normal_dir / normal_filename
+                    break
 
 
     def _load_3D_points(self, ply_file_path: Path):

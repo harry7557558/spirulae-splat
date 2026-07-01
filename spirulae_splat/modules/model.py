@@ -136,6 +136,8 @@ class SpirulaeSplatModelConfig:
     """Whether to pre-allocate Gaussian attribute tensors to cap_max to avoid OOM during densification"""
     cap_max: int = 1_000_000
     """maximum number of splats, dataset-specific tuning required"""
+    min_init_fraction: float = 0.0
+    """minimum fraction of splats out of cap_max at initialization"""
     refine_every: int = 100
     """Densify every this number of steps"""
     refine_start_iter: int = 500
@@ -525,6 +527,16 @@ class SpirulaeSplatModel(torch.nn.Module):
 
     def populate_modules(self):
         if self.seed_points is not None:
+            min_init = max(int(min(self.config.min_init_fraction, 1.0) * self.config.cap_max), 1)
+            min_init = min(min_init, self.config.cap_max)
+            if len(self.seed_points[0]) < min_init:
+                distances, indices_1 = self.k_nearest_neighbor(self.seed_points[0], 2)
+                indices = torch.arange(min_init) % len(self.seed_points[0])
+                self.seed_points = [
+                    torch.lerp(t[indices], t[indices_1[indices, 0]], 0.5 * torch.randn_like(t[indices]))
+                    if i == 0 else t[indices]
+                    for (i, t) in enumerate(self.seed_points)
+                ]
             if len(self.seed_points[0]) > self.config.cap_max:
                 indices = torch.randperm(len(self.seed_points[0]))[:self.config.cap_max]
                 self.seed_points = [t[indices] for t in self.seed_points]

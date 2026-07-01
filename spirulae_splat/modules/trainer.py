@@ -1082,6 +1082,7 @@ class TrainerConfigLinear(TrainerConfig):
 class TrainerConfigSynthetic(TrainerConfig):
     """Preset for training splats on synthetic datasets rendered with constant exposure."""
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        min_init_fraction=0.1,
         use_bilateral_grid=False,
         use_ppisp=False,
         use_bilateral_grid_for_geometry=False,
