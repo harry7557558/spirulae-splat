@@ -83,6 +83,12 @@ if __name__ == "__main__":
 
     prompts = [s.strip() for s in args.prompt.split(';') if s.strip() != ""]
 
+    def map_image(image: Image.Image):
+        sc = args.max_image_size / max(image.size[0], image.size[1])
+        if sc < 1.0:
+            image = image.resize((int(image.size[0]*sc), int(image.size[1]*sc)))
+        return image
+
     # lang-sam
     if args.model != "sam3":
         try:
@@ -91,12 +97,6 @@ if __name__ == "__main__":
             print("lang-sam not found or not installed properly. Please install https://github.com/luca-medeiros/lang-segment-anything")
             exit(0)
         model = LangSAM(args.model, device="cuda")
-
-        def map_image(image: Image.Image):
-            sc = args.max_image_size / max(image.size[0], image.size[1])
-            if sc < 1.0:
-                image = image.resize((int(image.size[0]*sc), int(image.size[1]*sc)))
-            return image
 
         # prompts = ["fisheye circle"]
         def predict(images_pil: Image.Image):
@@ -124,6 +124,7 @@ if __name__ == "__main__":
         processor = Sam3Processor(model)
 
         def predict(image: list[Image.Image]):
+            image = map_image(image)
             return [
                 processor.set_text_prompt(state=processor.set_image(image), prompt=prompt)
                 for prompt in prompts
