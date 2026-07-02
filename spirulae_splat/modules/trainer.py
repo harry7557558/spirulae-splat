@@ -16,84 +16,11 @@ from spirulae_splat.modules.datamanager import SpirulaeSplatDataManagerConfig, S
 
 from spirulae_splat.modules.dataparser import SpirulaeSplatDataparser, SpirulaeSplatDataParserConfig
 from spirulae_splat.modules.dataset import SpirulaeSplatDataset
-from spirulae_splat.modules.optimizer import create_optimizers, FusedAdamOptimizerConfig, FusedNewtonOptimizerConfig, OptimizerConfig
+from spirulae_splat.modules.optimizer import OptimizerConfig
 
 from spirulae_splat.viewer.annotation import annotate_train_cameras
 from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 
-
-
-# _DEFAULT_OPTIMIZERS = {
-#     "_dummy": FusedAdamOptimizerConfig(lr=1.0, eps=0.0),
-#     "means": FusedAdamOptimizerConfig(
-#         lr=1.6e-4, eps=1e-15,
-#         lr_final=1.6e-6, max_steps=30000
-#     ),
-#     "scales": FusedAdamOptimizerConfig(lr=0.005, eps=1e-15),
-#     "quats": FusedAdamOptimizerConfig(lr=0.0005, eps=1e-15),
-#     "features_dc": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
-#     "features_sh": FusedAdamOptimizerConfig(
-#         lr=0.0025 / 20, eps=1e-15,
-#         tr=1.0e-6 / 20, tr_final=1.0e-8 / 20, max_steps=30000,
-#     ),
-#     "opacities": FusedAdamOptimizerConfig(lr=0.05, eps=1e-15),
-#     "background_dc": FusedAdamOptimizerConfig(lr=0.0025, eps=1e-15),
-#     "background_sh": FusedAdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
-#     "bilateral_grid": FusedAdamOptimizerConfig(
-#         lr=2e-3, eps=1e-15,
-#         lr_final=1e-4, max_steps=30000, warmup_steps=1000,
-#     ),
-#     "bilateral_grid_depth": FusedAdamOptimizerConfig(
-#         lr=2e-3, eps=1e-15,
-#         lr_final=1e-4, max_steps=30000, warmup_steps=2000,
-#     ),
-#     "bilateral_grid_normal": FusedAdamOptimizerConfig(
-#         lr=5e-4, eps=1e-15,
-#         lr_final=4e-5, max_steps=30000, warmup_steps=2000,
-#     ),
-#     "ppisp": FusedAdamOptimizerConfig(
-#         lr=2e-3, eps=1e-15,
-#         lr_final=2e-5, max_steps=30000, warmup_steps=500, lr_pre_warmup=2e-5
-#     ),
-#     "camera_opt": FusedAdamOptimizerConfig(
-#         lr=1e-4, eps=1e-15,
-#         lr_final=5e-7, max_steps=30000, warmup_steps=1000,
-#     ),
-# }
-
-# _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER = {**_DEFAULT_OPTIMIZERS}
-# _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER["scales"] = FusedAdamOptimizerConfig(
-#     # https://arxiv.org/abs/2603.08661
-#     lr=0.02, eps=1e-15,
-#     lr_final=0.005, max_steps=10000, warmup_steps=1000, lr_pre_warmup=0.005
-# )
-
-# _SECOND_ORDER_POSITION_OPTIMIZERS = {**_DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER}
-# _SECOND_ORDER_POSITION_OPTIMIZERS["means"] = FusedNewtonOptimizerConfig(
-#     mode="mean", lr=1.0e-6, eps=1e-15,
-#     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
-# )
-
-# _SECOND_ORDER_OPTIMIZERS = {**_SECOND_ORDER_POSITION_OPTIMIZERS}
-# # _SECOND_ORDER_OPTIMIZERS["quats"] = FusedNewtonOptimizerConfig(
-# #     mode="quat", lr=1.0e-6, eps=1e-15,
-# #     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
-# # )
-# _SECOND_ORDER_OPTIMIZERS["scales"] = FusedNewtonOptimizerConfig(
-#     mode="scale", lr=1.0e-6, eps=1e-15,
-#     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
-#     # mode="scale", lr=1.0e-5, eps=1e-15,
-#     # lr_final=1.0e-7, max_steps=30000, #warmup_steps=1000,
-# )
-# # TODO: investigate whether this messes up MCMC densification
-# # _SECOND_ORDER_OPTIMIZERS["opacities"] = FusedNewtonOptimizerConfig(
-# #     mode="opacity", lr=1.0e-6, eps=1e-15,
-# #     lr_final=1.0e-8, max_steps=30000, #warmup_steps=3000,
-# # )
-# # _SECOND_ORDER_OPTIMIZERS["features_dc"] = FusedNewtonOptimizerConfig(
-# #     mode="color", lr=1.0e-6, eps=1e-15,
-# #     lr_final=1.0e-8, max_steps=30000, #warmup_steps=1000,
-# # )
 
 
 @dataclass
@@ -187,14 +114,11 @@ class Trainer:
         # Push the frame scale into the engine wrapper so it can rescale
         # means_lr / scale_reg / max_world_size / noise_lr per step.
         self.model.core.train_frame_scale = self._train_frame_scale
-        # self.optimizers = create_optimizers(self.model, self.config.optimizer)
 
         # When the C++ DataManager is enabled, install it on the engine once
         # here. Per-step training will then go through
         # ``model.engine_train_step_managed`` and bypass the Python data path.
-        self._use_cpp_dm = bool(self.config.datamanager.use_cpp_data_manager)
-        if self._use_cpp_dm:
-            self._setup_cpp_data_manager()
+        self._setup_cpp_data_manager()
 
         self.output_dir = self._setup_output_dir()
         print(f"Output directory: {self.output_dir.absolute()}")
@@ -286,8 +210,6 @@ class Trainer:
         # ---- Feature-combination validation ------------------------------
         if dm_cfg.split_batch:
             raise NotImplementedError("use_cpp_data_manager + split_batch")
-        if getattr(model_cfg, 'use_camera_optimizer', False):
-            raise NotImplementedError("use_cpp_data_manager + use_camera_optimizer")
         if self.model.core.primitive not in ('3dgs', 'mip', '3dgut') or self.model.core.use_bvh:
             raise NotImplementedError("use_cpp_data_manager requires non-BVH 3dgs/mip/3dgut primitive")
 
@@ -681,56 +603,29 @@ class Trainer:
             from time import perf_counter_ns as _t
             t0 = _t()
 
-        # for optim in self.optimizers.values():
-        #     optim.zero_grad()
-        # self.model.step_cb(self.optimizers, step)
         self.model.step_cb(step)
         if PROFILE_TRAIN_STEP: t1 = _t()
 
-        if self._use_cpp_dm:
-            # Managed path: engine pulls the next batch from its DataManager.
-            # Python doesn't touch GT / camera tensors per step.
-            if PROFILE_TRAIN_STEP: t2 = _t()
-            self.model.engine_train_step_managed(step)
-            # Optional: dump GT + render at specific steps for visual debugging.
-            # Enable with e.g. `SS_DEBUG_DUMP_STEPS=0,1,10,100 SS_DEBUG_DUMP_DIR=debug ss-train ...`
-            import os as _os
-            _dump_steps = _os.environ.get("SS_DEBUG_DUMP_STEPS", "")
-            if _dump_steps:
-                try:
-                    _steps = {int(s) for s in _dump_steps.split(",") if s.strip()}
-                except ValueError:
-                    _steps = set()
-                if step in _steps:
-                    from spirulae_splat.modules import debug_image as _dbg
-                    _dir = _os.environ.get("SS_DEBUG_DUMP_DIR", "debug")
-                    prefix = f"{_dir}/step{step:06d}"
-                    arrs = _dbg.dump_engine_step(prefix)
-                    for k, a in arrs.items():
-                        print(f"[debug_image] {prefix}_{k}: {_dbg.buffer_stats(a)}", flush=True)
-        else:
-            inputs = self.datamanager.next_train(step, self.config.num_iterations)  # type: List[Tuple[Cameras, Dict]]
-            if isinstance(inputs, tuple):
-                train_inputs, val_inputs = inputs
-                if len(train_inputs) > 1 or len(val_inputs) > 1:
-                    raise NotImplementedError("Validation with split_batch is not supported")  # TODO
-                train_inputs, val_inputs = train_inputs[0], val_inputs[0]
-                inputs = [((train_inputs[0], val_inputs[0]), (train_inputs[1], val_inputs[1]))]
-            if PROFILE_TRAIN_STEP: t2 = _t()
-
-            if len(inputs) != 1:
-                raise NotImplementedError()
-            for i, (camera, batch) in enumerate(inputs):
-                # Engine path: fused C++ training step (no render output H↔D copy)
-                if (self.model.core.primitive in ['3dgs', 'mip', '3dgut']
-                        and not self.model.core.use_bvh
-                        and not isinstance(camera, tuple)):
-                    self.model.engine_train_step(camera, batch)
-                else:
-                    model_outputs = self.model.get_outputs(camera)
-                    loss_grad = self.model.get_loss_grad(model_outputs, batch, len(inputs))
-                    self.model.backward(model_outputs, loss_grad)
-                    self.model.optim_step()
+        # Managed path: engine pulls the next batch from its DataManager.
+        # Python doesn't touch GT / camera tensors per step.
+        if PROFILE_TRAIN_STEP: t2 = _t()
+        self.model.engine_train_step_managed(step)
+        # Optional: dump GT + render at specific steps for visual debugging.
+        # Enable with e.g. `SS_DEBUG_DUMP_STEPS=0,1,10,100 SS_DEBUG_DUMP_DIR=debug ss-train ...`
+        import os as _os
+        _dump_steps = _os.environ.get("SS_DEBUG_DUMP_STEPS", "")
+        if _dump_steps:
+            try:
+                _steps = {int(s) for s in _dump_steps.split(",") if s.strip()}
+            except ValueError:
+                _steps = set()
+            if step in _steps:
+                from spirulae_splat.modules import debug_image as _dbg
+                _dir = _os.environ.get("SS_DEBUG_DUMP_DIR", "debug")
+                prefix = f"{_dir}/step{step:06d}"
+                arrs = _dbg.dump_engine_step(prefix)
+                for k, a in arrs.items():
+                    print(f"[debug_image] {prefix}_{k}: {_dbg.buffer_stats(a)}", flush=True)
 
         if PROFILE_TRAIN_STEP:
             t3 = _t()
@@ -769,10 +664,6 @@ class Trainer:
                 for k in ("step_cb", "next_train", "engine", "gpu_drain", "verbose"):
                     _prof[k] = 0
                 _prof["n"] = 0
-
-        # for optim in self.optimizers.values():
-        #     optim.step()
-        # self.model.step_post_backward()
 
     def train_step(self, *args):
         # Yield to a pending render before contending for self.lock. A short
@@ -990,43 +881,6 @@ class Trainer:
         free, total = torch.cuda.mem_get_info()
         print(f"  GPU memory in use:        {(total - free) / 1024**2:8.2f} MiB")
         print()
-
-
-# @dataclass
-# class TrainerConfigSquaredPos(TrainerConfig):
-#     """Method with second-order optimizer for positions"""
-#     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-#         compute_hessian_diagonal="position",
-#     ))
-#     # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_POSITION_OPTIMIZERS)  # TODO
-
-
-# @dataclass
-# class TrainerConfigSquared(TrainerConfig):
-#     """Method with second-order optimizer"""
-#     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-#         compute_hessian_diagonal="all",
-#     ))
-#     # optimizer: dict = field(default_factory=lambda: _SECOND_ORDER_OPTIMIZERS)  # TODO
-
-
-# @dataclass
-# class TrainerConfigPatched(TrainerConfig):
-#     """Method with patched batching"""
-#     datamanager: SpirulaeSplatDataManagerConfig = field(default_factory=lambda: SpirulaeSplatDataManagerConfig(
-#         # patch_batch_size=-1,
-#         # patch_size=64,
-#         max_batch_per_epoch=800,
-#     ))
-#     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
-#         packed=True,
-#         use_bvh=True,
-#         use_camera_optimizer=False,
-#         use_bilateral_grid=False,
-#         use_bilateral_grid_for_geometry=False,  # TODO: slow
-#         primitive="mip", max_screen_size=float('inf'),  # TODO
-#     ))
-#     # optimizer: dict = field(default_factory=lambda: _DEFAULT_OPTIMIZERS_WITH_SCALE_SCHEDULER)  # TODO
 
 
 

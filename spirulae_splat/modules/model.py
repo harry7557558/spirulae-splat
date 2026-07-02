@@ -448,15 +448,10 @@ class SpirulaeSplatModel(torch.nn.Module):
         # When use_cpp_data_manager is on, Trainer._setup_cpp_data_manager
         # overrides this with the exact per-camera-K sum, so mixed datasets
         # work even when this guess is approximate.
-        if trainer_config.datamanager.use_cpp_data_manager:
+        if True:
             # Worst-case upper bound: every camera split 6x. The trainer
             # downscales to the real per-camera sum right after model init.
             self.num_train_data *= 6
-        elif CameraType.EQUIRECTANGULAR.value in cameras.camera_type:
-            assert len(set(cameras.camera_type)) == 1, "Mixed equirectangular and pinhole/fisheye is not supported"
-            self.num_train_data *= 6  # TODO
-        elif trainer_config.datamanager.warp_to_pinhole:
-            self.num_train_data *= 5  # TODO
 
         self.info = {}
 
@@ -780,10 +775,6 @@ class SpirulaeSplatModel(torch.nn.Module):
         scales += (original_mean - scales.mean().item())
         return scales
 
-    # def step_cb(self, optimizers: Dict, step: int):
-    #     self.step = step
-    #     self.optimizers = optimizers
-
     def step_cb(self, step: int):
         self.step = step
 
@@ -948,33 +939,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             return None
 
         raise NotImplementedError()
-        if self.config.randomize_background == True:
-            # return torch.rand_like(self.background_color).repeat(H, W, 1)
-            if rgb is None or transmittance is None:
-                return None
-            randomize_weight = min(self.step / max(self.config.randomize_background_warmup, 1), 1)
-            randomize_weight = 1.0 - (1.0 - self.config.randomize_background_pre_warmup) * (1.0 - randomize_weight)
-            return blend_background_noise(self.config.splat_color_is_linear, rgb, transmittance, randomize_weight)
-
-        elif not self.config.train_background_color and self.config.background_color == "black":
-            if rgb is None or transmittance is None:
-                return None
-            return rgb.clip_(0.0, 1.0)
-
-        elif not self.config.train_background_color or not (sh_degree > 0):
-            background = self.background_color[None].repeat(len(camera), H, W, 1)
-
-        else:
-            sh_coeffs = torch.cat((self.background_color.unsqueeze(0), self.background_sh), dim=0)  # [(deg+1)^2, 3]
-            background = render_background_sh(
-                W, H,
-                camera_model.upper(),
-                intrins, c2w[..., :3, :3], sh_degree, sh_coeffs
-            )
-
-        if rgb is None or transmittance is None:
-            return background
-        return blend_background(rgb, transmittance, background)
 
     @staticmethod
     def get_empty_outputs(width: int, height: int, background: torch.Tensor) -> Dict[str, Union[torch.Tensor, List]]:
@@ -1400,12 +1364,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             self.core.engine_densify_step(self.step, max_steps, self.config)
             return
         raise NotImplementedError()
-
-        # Legacy Python path
-        self.core.optim_step(self.config, optim_config, self.step, max_steps)
-        self.training_losses.optim_step(optim_config, self.step, max_steps)
-        self.core.densify_step(self.step, max_steps, self.config, None)
-        # self.step_post_backward()
 
     def verbose(self):
 
