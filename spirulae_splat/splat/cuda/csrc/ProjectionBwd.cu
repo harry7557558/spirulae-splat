@@ -73,12 +73,23 @@ inline void launch_projection_projection_fused_bwd_kernel(
     const float* viewmats_ptr = (const float*)std::get<0>(viewmats);
     const float4* intrins_ptr = (const float4*)std::get<0>(intrins);
 
-    if (camera_ids.data_ptr() && gaussian_ids.data_ptr()) {  // packed
+    const bool is_packed = (camera_ids.data_ptr() && gaussian_ids.data_ptr());
+    if (is_packed) {  // packed
         N = camera_ids.size();
         C = 1;
     }
 
     if (C*N == 0)
+        return;
+
+    // Packed forward that produced ZERO intersections (nnz == 0, e.g. a camera
+    // whose frustum contains no splats) leaves camera_ids / gaussian_ids empty
+    // and the [nnz, 1] aabb null. That is NOT non-packed mode -- without this
+    // guard the null camera_ids would be misread as "non-packed", and the
+    // kernel would index the null aabb over the (num_splats) C*N grid (illegal
+    // memory access at ProjectionBwd_kernel.cuh:57). Non-packed mode always
+    // passes a valid [C, N] aabb, so a null aabb here means "nothing to do".
+    if (!is_packed && aabb.data_ptr() == nullptr)
         return;
 
     #define _LAUNCH_ARGS ( \

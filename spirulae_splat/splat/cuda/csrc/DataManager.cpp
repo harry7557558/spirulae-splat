@@ -1471,13 +1471,17 @@ void DataManagerImpl::build_train_schedule_locked() {
         for (; off + (size_t)B <= n; off += (size_t)B) {
             SubBatchSpec s;
             s.group = (int32_t)gi;
-            s.picks.assign(idx.begin() + off, idx.begin() + off + B);
+            // Indexed push_back rather than assign(iter, iter): the latter's
+            // bulk memmove trips GCC 14's -Wnonnull on the zero-size edge case.
+            s.picks.reserve((size_t)B);
+            for (size_t t = off; t < off + (size_t)B; ++t) s.picks.push_back(idx[t]);
             _train_schedule.push_back(StepSpec{ std::move(s) });
         }
         if (off < n) {  // remainder of size n - off (in [1, B-1])
             SubBatchSpec s;
             s.group = (int32_t)gi;
-            s.picks.assign(idx.begin() + off, idx.end());
+            s.picks.reserve(n - off);
+            for (size_t t = off; t < n; ++t) s.picks.push_back(idx[t]);
             if (_train_groups[gi].K > 1)
                 _train_schedule.push_back(StepSpec{ std::move(s) });
             else
