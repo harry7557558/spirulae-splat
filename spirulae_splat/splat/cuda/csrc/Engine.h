@@ -302,6 +302,44 @@ std::map<std::string, float> engine_train_step_warped(
 );
 
 
+// One homogeneous, non-warp sub-batch of a heterogeneous training step. All
+// cameras in a sub-batch share (width, height, camera_model); different
+// sub-batches of the same step may differ. Views point at host buffers that
+// must stay alive for the whole engine_train_step_hetero call.
+struct HeteroSubBatch {
+    int width  = 0;
+    int height = 0;
+    int num    = 0;                       // number of cameras in this sub-batch
+    std::string     camera_model;
+    TorchTensorView viewmats{0, 0, {}};
+    TorchTensorView intrins{0, 0, {}};
+    TorchTensorView dist_coeffs{0, 0, {}};
+    TorchTensorView gt_rgb{0, 0, {}};
+    TorchTensorView gt_depth{0, 0, {}};
+    TorchTensorView gt_normal{0, 0, {}};
+    TorchTensorView gt_alpha{0, 0, {}};
+    TorchTensorView bilagrid_cam_indices{0, 0, {}};
+};
+
+
+// Heterogeneous (mixed-resolution) training step: one optimizer step whose
+// gradient is accumulated over `subs` sub-batches of differing (W, H, model),
+// then applied in a single optim + densify pass with grad_scale = 1 / (total
+// cameras). Requires the non-fused (split_batch) path -- FPBO folds grads into
+// the optim kernel and cannot span sub-batches. Used by
+// engine_train_step_managed for cross-group-packed steps. `subs` must contain
+// at least one entry (callers use the plain engine_train_step for a single
+// sub-batch).
+std::map<std::string, float> engine_train_step_hetero(
+    int step, int max_steps,
+    std::string primitive,
+    int sh_degree,
+    bool packed,
+    const std::vector<HeteroSubBatch>& subs,
+    const EngineStepConfig& cfg
+);
+
+
 // --- DataManager-driven training step --------------------------------------
 //
 // Two-call setup + fused per-step pull. `engine_setup_data_manager` installs

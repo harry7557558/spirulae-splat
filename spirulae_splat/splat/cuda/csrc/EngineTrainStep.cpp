@@ -356,6 +356,126 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
 }
 
 
+// Heterogeneous (mixed-resolution) training step. Generalizes the one-camera-
+// per-sub-batch split above to an OUTER loop over sub-batches of differing
+// (W, H, model): each camera of each sub-batch runs the full fwd + loss +
+// raster/proj backward and atomic-adds into the per-splat grad accumulators,
+// then a SINGLE optim + densify pass applies grad_scale = 1 / (total cameras).
+// This is how cross-group-packed steps (many small resolution groups) are
+// consumed. Non-warp only; the DataManager never packs K > 1 groups together.
+std::map<std::string, float> engine_train_step_hetero(
+    int step, int max_steps,
+    std::string primitive,
+    int sh_degree,
+    bool packed,
+    const std::vector<HeteroSubBatch>& subs,
+    const EngineStepConfig& cfg
+) {
+    if (cfg.optim.use_fused_proj_bwd_optim) {
+        throw std::runtime_error(
+            "engine_train_step_hetero requires the non-fused (split_batch) "
+            "path; FPBO folds grads into the optim kernel and cannot span "
+            "mixed-resolution sub-batches. Keep split_batch enabled.");
+    }
+    if (subs.empty())
+        throw std::runtime_error("engine_train_step_hetero: empty step");
+
+    // Total cameras across all sub-batches drives grad normalization + the
+    // per-call color_shift EMA decay.
+    int64_t total_cams = 0;
+    for (const auto& s : subs) {
+        const auto& vs = std::get<2>(s.viewmats);
+        int64_t nb = vs.empty() ? 0 : vs[0];
+        if (nb <= 0)
+            throw std::runtime_error("engine_train_step_hetero: empty sub-batch");
+        total_cams += nb;
+    }
+
+    if (engine().background.enabled) {
+        engine_set_background_step_params(cfg.background.seed,
+                                          cfg.background.randomize_weight);
+    }
+
+    // color_shift_reg EMA: the hook runs once per fwd/bwd, i.e. total_cams
+    // times per step, so use beta^(1/total_cams) to preserve the end-of-step
+    // EMA value (matching the single-batch and split-per-camera paths).
+    EngineStepConfig cfg_sub = cfg;
+    const float beta_orig = cfg.loss.color_shift_reg_beta;
+    if (beta_orig > 0.0f && beta_orig < 1.0f) {
+        cfg_sub.loss.color_shift_reg_beta = powf(beta_orig, 1.0f / (float)total_cams);
+    }
+
+    int64_t N_splats = engine().cur_num_splats;
+    DeviceVector<float> accum_weight_sum;
+    accum_weight_sum.resize("eng.subbatch.accum_weight_sum", N_splats);
+    accum_weight_sum.zero();
+
+    std::map<std::string, float> agg;
+    int64_t kcam = 0;   // global camera index across the whole step
+
+    for (const auto& s : subs) {
+        const auto& vs = std::get<2>(s.viewmats);
+        int64_t nb = vs[0];
+        for (int64_t c = 0; c < nb; ++c) {
+            // Zero grads + radii only on the VERY FIRST camera of the step;
+            // every subsequent camera (any sub-batch) atomic-adds into them.
+            engine().optim.skip_grad_zero = (kcam > 0);
+
+            TorchTensorView vmt_c = _slice_tv_first_dim(s.viewmats,    c);
+            TorchTensorView itr_c = _slice_tv_first_dim(s.intrins,     c);
+            TorchTensorView dst_c = _slice_tv_first_dim(s.dist_coeffs, c);
+            TorchTensorView rgb_c = _slice_tv_first_dim(s.gt_rgb,      c);
+            TorchTensorView dep_c = _slice_tv_first_dim(s.gt_depth,    c);
+            TorchTensorView nrm_c = _slice_tv_first_dim(s.gt_normal,   c);
+            TorchTensorView aph_c = _slice_tv_first_dim(s.gt_alpha,    c);
+            TorchTensorView bgi_c = _slice_tv_first_dim(s.bilagrid_cam_indices, c);
+
+            set_camera_params(s.width, s.height, s.camera_model,
+                              vmt_c, itr_c, dst_c);
+            set_training_data(rgb_c, dep_c, nrm_c, aph_c,
+                              cfg.loss.input_depth_is_ray_depth);
+
+            _set_cur_cam_indices(bgi_c);
+            engine_viewer_capture_thumbnails(bgi_c);
+
+            auto ld = _engine_step_fwd_bwd_only(
+                step, primitive, sh_degree, packed, bgi_c, cfg_sub);
+
+            if (engine().fwd.accum_weight.data_ptr() != nullptr) {
+                float_add_into(accum_weight_sum, engine().fwd.accum_weight, N_splats);
+            }
+
+            if (kcam == 0) {
+                agg = std::move(ld);
+            } else {
+                for (auto& [key, val] : ld) {
+                    auto it = agg.find(key);
+                    if (it == agg.end()) agg.emplace(key, val);
+                    else                 it->second += val;
+                }
+            }
+            ++kcam;
+        }
+    }
+    for (auto& [key, val] : agg) val /= (float)total_cams;
+
+    // Densify sees the per-splat score summed across every camera of the step.
+    engine().fwd.accum_weight = accum_weight_sum;
+
+    engine().optim.skip_grad_zero      = false;
+    engine().optim.grad_scale          = 1.0f / (float)total_cams;
+    engine().optim.zero_grad_in_optim  = true;
+
+    _engine_step_optim_and_densify(step, max_steps, cfg, agg);
+
+    // Restore single-batch defaults for any follow-up non-split step.
+    engine().optim.grad_scale         = 1.0f;
+    engine().optim.zero_grad_in_optim = false;
+
+    return agg;
+}
+
+
 // Standard (non-warp) public entry: stage camera + GT then run the inner step.
 std::map<std::string, float> engine_train_step(
     int step, int max_steps,

@@ -208,8 +208,13 @@ class Trainer:
         dpo        = self.dataparser_outputs_train
 
         # ---- Feature-combination validation ------------------------------
-        if dm_cfg.split_batch:
-            raise NotImplementedError("use_cpp_data_manager + split_batch")
+        # datamanager.split_batch (the Python data-path OOM workaround) is a
+        # no-op here: the C++ DataManager builds a deterministic once-per-epoch
+        # schedule and, on datasets with many small resolution groups, packs
+        # sub-B remainders across resolutions into a single optimizer step that
+        # the engine consumes via heterogeneous grad accumulation. Effective
+        # batch size (and hence FPBO vs. grad-accumulator VRAM) is derived from
+        # max_batch_per_epoch, so no extra flag is needed.
         if self.model.core.primitive not in ('3dgs', 'mip', '3dgut') or self.model.core.use_bvh:
             raise NotImplementedError("use_cpp_data_manager requires non-BVH 3dgs/mip/3dgut primitive")
 

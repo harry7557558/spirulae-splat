@@ -216,6 +216,21 @@ struct DecodedBatch {
 };
 
 
+// A single optimizer step's worth of training data: one or more homogeneous
+// sub-batches. Each `subs[i]` is internally uniform in (W, H, model). Steps
+// with a single sub-batch are the common case (a single-resolution dataset,
+// or a full B-image chunk of one resolution group) and are dispatched to the
+// engine exactly as before. Steps with several sub-batches arise from
+// cross-group remainder packing on datasets with many small resolution groups
+// (e.g. an internet image collection); the engine consumes them via its
+// heterogeneous grad-accumulation path (one optimizer step accumulating over
+// sub-batches of differing resolution). Cross-group packing is restricted to
+// non-warp (K == 1) groups, so a multi-sub-batch step never mixes warp faces.
+struct TrainStep {
+    std::vector<std::shared_ptr<DecodedBatch>> subs;
+};
+
+
 // ===========================================================================
 // Internal: per-modality prefetch worker pool (DISK mode)
 //
@@ -285,9 +300,17 @@ public:
 
     // ---- Batch fetch ------------------------------------------------------
 
+    // Block until the next training step is ready and return a reference to
+    // it. The step holds one or more homogeneous sub-batches (see TrainStep).
+    // The returned reference — and the DecodedBatch host buffers it points
+    // into — stay valid only until the next call to `next_train_step()`.
+    const TrainStep& next_train_step();
+
     // Block until the next training batch is ready and return a reference to
     // it. The returned reference is valid only until the next call to
-    // `next_train_batch()`.
+    // `next_train_batch()`. Convenience wrapper over `next_train_step()` that
+    // returns the first sub-batch; only meaningful when the active schedule is
+    // known to produce single-sub-batch steps.
     const DecodedBatch& next_train_batch();
 
     // Same for eval. Returns nullptr if no validation indices were configured.

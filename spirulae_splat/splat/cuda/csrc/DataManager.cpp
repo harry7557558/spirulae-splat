@@ -135,6 +135,20 @@ private:
     std::discrete_distribution<size_t> _dist;
 };
 
+// ---------------------------------------------------------------------------
+// Deterministic per-epoch training schedule
+// ---------------------------------------------------------------------------
+// One homogeneous sub-batch of a training step: a group index plus the
+// dataset-global image indices drawn from that group.
+struct SubBatchSpec {
+    int32_t              group = 0;   // index into the train IndexGroup vector
+    std::vector<int32_t> picks;       // dataset-global image indices
+};
+// One optimizer step = one or more homogeneous sub-batches. Most steps hold a
+// single sub-batch; cross-group remainder packing produces multi-sub-batch
+// (heterogeneous) steps. See TrainStep in DataManager.h.
+using StepSpec = std::vector<SubBatchSpec>;
+
 // ===========================================================================
 // Image decoders
 // ===========================================================================
@@ -529,6 +543,7 @@ public:
 
     ~DataManagerImpl();
 
+    const TrainStep&    next_train_step();
     const DecodedBatch& next_train_batch();
     const DecodedBatch* next_val_batch();
 
@@ -628,13 +643,19 @@ private:
     std::mt19937_64           _rng;
     std::vector<IndexGroup>   _train_groups;
     std::vector<IndexGroup>   _val_groups;
-    GroupSampler              _train_sampler;
     GroupSampler              _val_sampler;
 
-    // The currently-returned-to-caller batches. We hold one slot per kind so
-    // the reference returned by next_*_batch() stays valid until the next
-    // call to that same getter.
-    DecodedBatch              _cpu_train_batch;
+    // Deterministic per-epoch training schedule. Every training image appears
+    // exactly once per pass over `_train_schedule`; when the cursor reaches the
+    // end the schedule is rebuilt (reshuffled) for the next epoch. Built by
+    // build_train_schedule_locked() under _sampling_mu.
+    std::vector<StepSpec>     _train_schedule;
+    size_t                    _train_sched_cursor = 0;
+
+    // The currently-returned-to-caller data. We hold one slot per kind so the
+    // reference returned by next_*_batch()/next_train_step() stays valid until
+    // the next call to that same getter.
+    TrainStep                 _cpu_train_step;   // CPU-mode train (persistent)
     DecodedBatch              _cpu_val_batch;
 
     // ---- DISK mode: prefetch pipeline ------------------------------------
@@ -644,12 +665,16 @@ private:
         int32_t              ds_index   = 0;   // dataset-global image index
         std::shared_ptr<DecodedBatch>     batch;
         std::shared_ptr<std::atomic<int>> remaining;  // decrement on done
-        // The ready queue (train or val) this batch belongs to. The worker
-        // that decrements `remaining` to zero takes ownership of publishing
-        // the batch to this queue; no separate completer / scheduler-side
-        // wait is involved, so all four worker pools stay saturated while
-        // multiple batches are in flight.
+        // Exactly one of the two publish targets is set. For validation
+        // (single-batch) jobs, `ready_q` receives the finished DecodedBatch.
+        // For training (step) jobs, `step_q` receives the finished TrainStep
+        // (and `step` keeps all its sub-batches alive). The worker that
+        // decrements `remaining` to zero publishes; no separate completer /
+        // scheduler-side wait is involved, so all worker pools stay saturated
+        // while multiple batches/steps are in flight.
         BoundedQueue<std::shared_ptr<DecodedBatch>>* ready_q = nullptr;
+        std::shared_ptr<TrainStep>                   step;
+        BoundedQueue<std::shared_ptr<TrainStep>>*    step_q  = nullptr;
     };
 
     bool _disk_started = false;
@@ -658,7 +683,7 @@ private:
     std::unique_ptr<BoundedQueue<DecodeJob>> _q_mask;
     std::unique_ptr<BoundedQueue<DecodeJob>> _q_depth;
     std::unique_ptr<BoundedQueue<DecodeJob>> _q_normal;
-    std::unique_ptr<BoundedQueue<std::shared_ptr<DecodedBatch>>> _q_ready_train;
+    std::unique_ptr<BoundedQueue<std::shared_ptr<TrainStep>>>    _q_ready_train;
     std::unique_ptr<BoundedQueue<std::shared_ptr<DecodedBatch>>> _q_ready_val;
 
     std::vector<std::thread> _workers;
@@ -666,10 +691,14 @@ private:
     std::atomic<bool>        _stop{false};
     std::atomic<int64_t>     _next_batch_id{0};
 
-    // The shared_ptr<DecodedBatch> currently held alive on behalf of the
-    // most recent next_*_batch() return value.
-    std::shared_ptr<DecodedBatch> _last_train_held;
+    // The objects currently held alive on behalf of the most recent
+    // next_*() return value.
+    std::shared_ptr<TrainStep>    _last_train_step_held;
     std::shared_ptr<DecodedBatch> _last_val_held;
+
+    // Decrement a job's shared step/batch counter and, when it reaches zero,
+    // build the views and publish to the appropriate ready queue.
+    void publish_if_done(DecodeJob& job);
 
     // ---- Setup helpers ---------------------------------------------------
     void probe_dtypes();
@@ -695,6 +724,18 @@ private:
                                  int batch_size);
     void fill_batch_from_cache(DecodedBatch& b);
 
+    // ---- Deterministic epoch schedule (training) -------------------------
+    // Rebuild _train_schedule for a fresh epoch: shuffle each group, emit full
+    // B-image chunks as single-sub-batch steps, and pack sub-B remainders
+    // (non-warp groups only) across resolutions into <=B-image steps. Caller
+    // must hold _sampling_mu.
+    void build_train_schedule_locked();
+    // Return the next scheduled step, rebuilding the schedule at epoch
+    // boundaries. Thread-safe (locks _sampling_mu).
+    StepSpec next_train_step_spec();
+    // CPU-mode: materialize the next step's sub-batches from the cache.
+    const TrainStep& next_step_cpu();
+
     // Disk-mode helpers.
     void start_disk_pipeline();
     void stop_disk_pipeline();
@@ -705,6 +746,10 @@ private:
     void worker_loop_normal();
     void enqueue_batch(IndexGroup& group, int batch_size,
                        BoundedQueue<std::shared_ptr<DecodedBatch>>& ready_q);
+    // Disk-mode: allocate + enqueue decode jobs for a whole training step
+    // (one or more sub-batches), publishing the TrainStep when all decode.
+    void enqueue_step(const StepSpec& spec,
+                      BoundedQueue<std::shared_ptr<TrainStep>>& step_q);
 };
 
 
@@ -839,8 +884,15 @@ DataManagerImpl::DataManagerImpl(
     _val_groups   = build_index_groups_member(_val_indices);
     for (auto& g : _train_groups) g.rewind(_rng, /*eval=*/false);
     for (auto& g : _val_groups)   g.rewind(_rng, /*eval=*/true);
-    _train_sampler = GroupSampler(_train_groups);
     _val_sampler   = GroupSampler(_val_groups);
+
+    // Build the first epoch's deterministic training schedule (once-per-epoch
+    // traversal + cross-group remainder packing). The DISK scheduler thread
+    // started below draws from it, so build before spinning threads up.
+    {
+        std::lock_guard<std::mutex> lk(_sampling_mu);
+        build_train_schedule_locked();
+    }
 
     if (_cfg.cache_mode == CacheMode::CPU) {
         preload_cpu_cache();
@@ -1388,6 +1440,112 @@ DecodedBatch& DataManagerImpl::next_batch_cpu(
 
 
 // ===========================================================================
+// Deterministic epoch schedule (training)
+// ===========================================================================
+void DataManagerImpl::build_train_schedule_locked() {
+    _train_schedule.clear();
+    _train_sched_cursor = 0;
+    if (_train_groups.empty()) return;
+
+    // Target images per optimizer step. Derived (on the Python side) from
+    // max_batch_per_epoch as round(N / max_batch_per_epoch), so a full pass
+    // over the schedule is ~max_batch_per_epoch steps regardless of how the
+    // images are distributed across resolution groups. B == 1 => one image
+    // per step (no packing, no grad accumulator; FPBO path).
+    const int B = std::max(1, _cfg.train_batch_size);
+
+    // Fresh shuffle of every group for this epoch.
+    for (auto& g : _train_groups)
+        std::shuffle(g.indices.begin(), g.indices.end(), _rng);
+
+    // Full B-image chunks become their own single-sub-batch (homogeneous)
+    // steps. Sub-B remainders are collected for cross-group packing; warp
+    // groups (K > 1) are never packed with other resolutions (the engine's
+    // heterogeneous accumulation path is non-warp only), so their remainder
+    // is emitted as its own step.
+    std::vector<SubBatchSpec> remainders;
+    for (size_t gi = 0; gi < _train_groups.size(); ++gi) {
+        const auto& idx = _train_groups[gi].indices;
+        const size_t n  = idx.size();
+        size_t off = 0;
+        for (; off + (size_t)B <= n; off += (size_t)B) {
+            SubBatchSpec s;
+            s.group = (int32_t)gi;
+            s.picks.assign(idx.begin() + off, idx.begin() + off + B);
+            _train_schedule.push_back(StepSpec{ std::move(s) });
+        }
+        if (off < n) {  // remainder of size n - off (in [1, B-1])
+            SubBatchSpec s;
+            s.group = (int32_t)gi;
+            s.picks.assign(idx.begin() + off, idx.end());
+            if (_train_groups[gi].K > 1)
+                _train_schedule.push_back(StepSpec{ std::move(s) });
+            else
+                remainders.push_back(std::move(s));
+        }
+    }
+
+    // First-fit-decreasing bin packing of the non-warp remainders into steps
+    // of at most B images. Packing only combines fragments that fit, so large
+    // fragments end up alone (a homogeneous step) and only genuinely small
+    // fragments share a heterogeneous step -- minimizing the number of steps
+    // that need the (grad-accumulator) non-fused path.
+    std::sort(remainders.begin(), remainders.end(),
+              [](const SubBatchSpec& a, const SubBatchSpec& b) {
+                  return a.picks.size() > b.picks.size();
+              });
+    std::vector<StepSpec> bins;
+    std::vector<size_t>   fills;
+    for (auto& frag : remainders) {
+        const size_t fs = frag.picks.size();
+        int placed = -1;
+        for (size_t bi = 0; bi < bins.size(); ++bi) {
+            if (fills[bi] + fs <= (size_t)B) { placed = (int)bi; break; }
+        }
+        if (placed < 0) {
+            bins.emplace_back();
+            fills.push_back(0);
+            placed = (int)bins.size() - 1;
+        }
+        bins[placed].push_back(std::move(frag));
+        fills[placed] += fs;
+    }
+    for (auto& bin : bins)
+        _train_schedule.push_back(std::move(bin));
+
+    // Interleave step order so full-chunk and mixed steps don't cluster.
+    std::shuffle(_train_schedule.begin(), _train_schedule.end(), _rng);
+}
+
+StepSpec DataManagerImpl::next_train_step_spec() {
+    std::lock_guard<std::mutex> lk(_sampling_mu);
+    if (_train_groups.empty())
+        throw std::runtime_error("DataManager: no training indices configured");
+    if (_train_sched_cursor >= _train_schedule.size())
+        build_train_schedule_locked();   // next epoch
+    return _train_schedule[_train_sched_cursor++];
+}
+
+const TrainStep& DataManagerImpl::next_step_cpu() {
+    // Draw the next scheduled step (locks internally), then materialize its
+    // sub-batches from the CPU cache. Materialization touches only read-only
+    // caches and the single-consumer _cpu_train_step slot, so it runs outside
+    // the sampling lock.
+    StepSpec spec = next_train_step_spec();
+    TrainStep& st = _cpu_train_step;
+    st.subs.resize(spec.size());
+    for (size_t i = 0; i < spec.size(); ++i) {
+        if (!st.subs[i]) st.subs[i] = std::make_shared<DecodedBatch>();
+        DecodedBatch& b = *st.subs[i];
+        allocate_batch(b, _train_groups[spec[i].group], spec[i].picks);
+        fill_batch_from_cache(b);
+        b.build_views();
+    }
+    return st;
+}
+
+
+// ===========================================================================
 // DISK mode pipeline
 // ===========================================================================
 void DataManagerImpl::start_disk_pipeline() {
@@ -1400,7 +1558,7 @@ void DataManagerImpl::start_disk_pipeline() {
     _q_mask   = std::make_unique<BoundedQueue<DecodeJob>>((size_t)job_cap);
     _q_depth  = std::make_unique<BoundedQueue<DecodeJob>>((size_t)job_cap);
     _q_normal = std::make_unique<BoundedQueue<DecodeJob>>((size_t)job_cap);
-    _q_ready_train = std::make_unique<BoundedQueue<std::shared_ptr<DecodedBatch>>>((size_t)prefetch);
+    _q_ready_train = std::make_unique<BoundedQueue<std::shared_ptr<TrainStep>>>((size_t)prefetch);
     _q_ready_val   = std::make_unique<BoundedQueue<std::shared_ptr<DecodedBatch>>>((size_t)prefetch);
 
     int n_rgb_workers = std::max(1, _cfg.workers_rgb);
@@ -1453,10 +1611,7 @@ void DataManagerImpl::worker_loop_rgb() {
         uint8_t* dst = b.rgb_buffer.data() + (size_t)job.slot * row;
         decode_rgb_into(_image_filenames[job.ds_index], H, W,
                         b.rgb_dtype, dst);
-        if (job.remaining->fetch_sub(1) == 1) {
-            job.batch->build_views();
-            job.ready_q->push(job.batch);
-        }
+        publish_if_done(job);
     }
 }
 
@@ -1476,10 +1631,7 @@ void DataManagerImpl::worker_loop_mask() {
             // Synthesized all-white: skip disk read, fill the slot directly.
             std::memset(dst, 1, (size_t)H * W);
         }
-        if (job.remaining->fetch_sub(1) == 1) {
-            job.batch->build_views();
-            job.ready_q->push(job.batch);
-        }
+        publish_if_done(job);
     }
 }
 
@@ -1493,10 +1645,7 @@ void DataManagerImpl::worker_loop_depth() {
         uint8_t* dst = b.depth_buffer.data() + (size_t)job.slot * row;
         decode_depth_into(_depth_filenames[job.ds_index], H, W,
                           b.depth_dtype, dst);
-        if (job.remaining->fetch_sub(1) == 1) {
-            job.batch->build_views();
-            job.ready_q->push(job.batch);
-        }
+        publish_if_done(job);
     }
 }
 
@@ -1509,10 +1658,7 @@ void DataManagerImpl::worker_loop_normal() {
         size_t row = (size_t)H * W * 3;
         uint8_t* dst = b.normal_buffer.data() + (size_t)job.slot * row;
         decode_normal_into(_normal_filenames[job.ds_index], H, W, dst);
-        if (job.remaining->fetch_sub(1) == 1) {
-            job.batch->build_views();
-            job.ready_q->push(job.batch);
-        }
+        publish_if_done(job);
     }
 }
 
@@ -1524,11 +1670,8 @@ void DataManagerImpl::scheduler_loop() {
         // Alternate fill order: prefer training to validation, refill val
         // when ready_val is near-empty. (Simple heuristic.)
         if (!_train_groups.empty()) {
-            std::unique_lock<std::mutex> lk(_sampling_mu);
-            size_t gi = _train_sampler(_rng);
-            auto& g = _train_groups[gi];
-            lk.unlock();
-            enqueue_batch(g, _cfg.train_batch_size, *_q_ready_train);
+            StepSpec spec = next_train_step_spec();   // locks _sampling_mu
+            enqueue_step(spec, *_q_ready_train);
         }
         if (!_val_groups.empty()) {
             std::unique_lock<std::mutex> lk(_sampling_mu);
@@ -1633,19 +1776,119 @@ void DataManagerImpl::enqueue_batch(
 }
 
 
+void DataManagerImpl::publish_if_done(DecodeJob& job) {
+    // fetch_sub returns the value BEFORE the subtract, so == 1 means this call
+    // took the counter to zero: we own publishing.
+    if (job.remaining->fetch_sub(1) != 1) return;
+    if (job.step) {
+        for (auto& sub : job.step->subs) sub->build_views();
+        job.step_q->push(job.step);
+    } else {
+        job.batch->build_views();
+        job.ready_q->push(job.batch);
+    }
+}
+
+
+// Disk-mode: allocate shells + enqueue decode jobs for a whole training step.
+// A single shared `remaining` counter spans every sub-batch's jobs; the worker
+// that drives it to zero publishes the TrainStep. Mirrors enqueue_batch's
+// staging discipline (RGB is always present, so `remaining` can never reach
+// zero mid-staging before the RGB jobs are pushed).
+void DataManagerImpl::enqueue_step(
+    const StepSpec& spec,
+    BoundedQueue<std::shared_ptr<TrainStep>>& step_q)
+{
+    auto stepp = std::make_shared<TrainStep>();
+    stepp->subs.resize(spec.size());
+
+    int per_image = 1;
+    if (has_masks())   per_image += 1;
+    if (has_depths())  per_image += 1;
+    if (has_normals()) per_image += 1;
+
+    int total_jobs = 0;
+    for (const auto& s : spec) total_jobs += (int)s.picks.size() * per_image;
+    auto remaining = std::make_shared<std::atomic<int>>(total_jobs);
+
+    // Allocate every sub-batch shell up front so stepp->subs is complete
+    // before any job runs.
+    for (size_t i = 0; i < spec.size(); ++i) {
+        stepp->subs[i] = std::make_shared<DecodedBatch>();
+        allocate_batch(*stepp->subs[i], _train_groups[spec[i].group], spec[i].picks);
+    }
+
+    auto decrement_absent = [&]() {
+        DecodeJob j;
+        j.remaining = remaining;
+        j.step      = stepp;
+        j.step_q    = &step_q;
+        publish_if_done(j);
+    };
+
+    std::vector<DecodeJob> rgb_jobs, mask_jobs, depth_jobs, normal_jobs;
+    for (size_t i = 0; i < spec.size(); ++i) {
+        auto& sub = stepp->subs[i];
+        const auto& picks = spec[i].picks;
+        for (int j = 0; j < (int)picks.size(); ++j) {
+            int32_t idx = picks[j];
+
+            DecodeJob jb;
+            jb.slot      = j;
+            jb.ds_index  = idx;
+            jb.batch     = sub;
+            jb.remaining = remaining;
+            jb.step      = stepp;
+            jb.step_q    = &step_q;
+            jb.batch_id  = _next_batch_id.fetch_add(1);
+
+            rgb_jobs.push_back(jb);
+            if (has_masks()) {
+                bool has_real = !_mask_filenames[idx].empty();
+                bool is_synth = !_synth_white_mask.empty() &&
+                                _synth_white_mask[(size_t)idx];
+                if (has_real || is_synth) mask_jobs.push_back(jb);
+                else                       decrement_absent();
+            }
+            if (has_depths()) {
+                if (!_depth_filenames[idx].empty()) depth_jobs.push_back(jb);
+                else                                 decrement_absent();
+            }
+            if (has_normals()) {
+                if (!_normal_filenames[idx].empty()) normal_jobs.push_back(jb);
+                else                                  decrement_absent();
+            }
+        }
+    }
+
+    for (auto& jb : rgb_jobs)    if (!_q_rgb->push(std::move(jb))) return;
+    for (auto& jb : mask_jobs)   if (!_q_mask->push(std::move(jb))) return;
+    for (auto& jb : depth_jobs)  if (!_q_depth->push(std::move(jb))) return;
+    for (auto& jb : normal_jobs) if (!_q_normal->push(std::move(jb))) return;
+}
+
+
 // ===========================================================================
 // CPU vs DISK dispatch — public-facing fetch
 // ===========================================================================
-const DecodedBatch& DataManagerImpl::next_train_batch() {
+const TrainStep& DataManagerImpl::next_train_step() {
     if (_cfg.cache_mode == CacheMode::CPU) {
-        return next_batch_cpu(_cpu_train_batch, _train_groups,
-                              _train_sampler, _cfg.train_batch_size);
+        return next_step_cpu();
     }
-    std::shared_ptr<DecodedBatch> b;
-    if (!_q_ready_train->pop(b))
+    std::shared_ptr<TrainStep> s;
+    if (!_q_ready_train->pop(s))
         throw std::runtime_error("DataManager: train prefetch queue closed");
-    _last_train_held = b;
-    return *_last_train_held;
+    _last_train_step_held = s;
+    return *_last_train_step_held;
+}
+
+const DecodedBatch& DataManagerImpl::next_train_batch() {
+    // Convenience wrapper: valid only when the schedule yields single
+    // sub-batch steps (the common single-resolution / B==1 case).
+    const TrainStep& s = next_train_step();
+    if (s.subs.empty())
+        throw std::runtime_error("DataManager: empty training step");
+    return *s.subs.front();
 }
 
 const DecodedBatch* DataManagerImpl::next_val_batch() {
@@ -1697,6 +1940,7 @@ DataManager::DataManager(
 
 DataManager::~DataManager() = default;
 
+const TrainStep&    DataManager::next_train_step()         { return _impl->next_train_step(); }
 const DecodedBatch& DataManager::next_train_batch()        { return _impl->next_train_batch(); }
 const DecodedBatch* DataManager::next_val_batch()          { return _impl->next_val_batch(); }
 int64_t   DataManager::num_train()      const              { return _impl->num_train(); }
