@@ -902,6 +902,7 @@ class TrainerConfig360Camera(TrainerConfig):
         # densify_score_mode="median",
         densify_loss_map_mode="robust_edge_aware",
         densify_robust_edge_aware_quantile=0.99,
+        long_axis_split_opacity_k=(0.5, 0.6, 5000),
     ))
 
 
@@ -945,6 +946,7 @@ class TrainerConfigSynthetic(TrainerConfig):
         use_bilateral_grid=False,
         use_ppisp=False,
         use_bilateral_grid_for_geometry=False,
+        long_axis_split_opacity_k=(0.5, 0.75, 25000),
     ))
 
 

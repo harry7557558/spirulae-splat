@@ -224,10 +224,20 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
 
     int num_added = 0;
 
+    // Long-axis-split opacity split factor `k`, linearly scheduled over the
+    // first `las_split_opacity_k_warmup` steps (clamped to [init, final]).
+    float split_opacity_k = cfg.las_split_opacity_k_final;
+    if (cfg.las_split_opacity_k_warmup > 0) {
+        float t = (float)step / (float)cfg.las_split_opacity_k_warmup;
+        t = std::max(0.0f, std::min(1.0f, t));
+        split_opacity_k = cfg.las_split_opacity_k_init
+            + t * (cfg.las_split_opacity_k_final - cfg.las_split_opacity_k_init);
+    }
+
     if (do_densify && use_revised) {
         // Revised relocation (long axis split)
         relocate_splats_with_long_axis_split_tensor(
-            cur_num_splats, cfg.min_opacity,
+            cur_num_splats, cfg.min_opacity, split_opacity_k,
             dv_means, dv_quats, dv_scales, dv_opacs, dv_features_dc, dv_features_sh,
             dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
             dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,
@@ -245,7 +255,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
         num_added = (int)std::max((int64_t)0, n_target - cur_num_splats);
         if (num_added > 0) {
             add_splats_with_long_axis_split_tensor(
-                cur_num_splats, num_added,
+                cur_num_splats, num_added, split_opacity_k,
                 dv_means, dv_quats, dv_scales, dv_opacs, dv_features_dc, dv_features_sh,
                 dv_g1_means, dv_g1_quats, dv_g1_scales, dv_g1_opacs, dv_g1_features_dc, dv_g1_features_sh,
                 dv_g2_means, dv_g2_quats, dv_g2_scales, dv_g2_opacs, dv_g2_features_dc, dv_g2_features_sh,

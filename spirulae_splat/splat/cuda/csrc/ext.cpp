@@ -362,7 +362,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("noise_lr",                       &DensifyConfig::noise_lr)
         .def_readwrite("noise_lr_final",                 &DensifyConfig::noise_lr_final)
         .def_readwrite("use_revised_densification",      &DensifyConfig::use_revised_densification)
-        .def_readwrite("score_mode",                     &DensifyConfig::score_mode);
+        .def_readwrite("score_mode",                     &DensifyConfig::score_mode)
+        .def_readwrite("las_split_opacity_k_init",       &DensifyConfig::las_split_opacity_k_init)
+        .def_readwrite("las_split_opacity_k_final",      &DensifyConfig::las_split_opacity_k_final)
+        .def_readwrite("las_split_opacity_k_warmup",     &DensifyConfig::las_split_opacity_k_warmup);
 
     py::class_<BilagridStepConfig>(m, "BilagridStepConfig")
         .def(py::init<>())

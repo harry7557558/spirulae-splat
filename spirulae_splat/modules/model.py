@@ -205,6 +205,11 @@ class SpirulaeSplatModelConfig:
     use_long_axis_split: bool = True
     """whether to use long-axis split described in https://arxiv.org/abs/2508.12313 for relocation and sample add.
         When combined with use_revised_densification, this can give less blurry background details for unbounded outdoor scenes."""
+    long_axis_split_opacity_k: Tuple[float, float, int] = (0.6, 0.6, 4500)
+    """opacity split factor `k` for long-axis split, as (initial, final, warmup_steps).
+        Each split child keeps opacity `logit^-1(k / (1 + exp(-logit_opacity) - k))`; `k` is linearly
+        scheduled from `initial` to `final` over the first `warmup_steps` training steps, then held at `final`.
+        Larger `k` preserves more opacity per child (denser, sharper); smaller `k` fades children faster."""
     relocate_screen_size: float = float('inf')
     """if a gaussian is more than this fraction of screen space, relocate it
         Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras

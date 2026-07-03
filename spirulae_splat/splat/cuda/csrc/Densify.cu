@@ -920,6 +920,7 @@ template<typename g_features_sh_t3>
 __global__ void relocate_with_long_axis_split_kernel(
     int64_t cur_num_splats,
     int64_t num_new_splats,
+    float split_opacity_k,
     int32_t* __restrict__ src_indices,
     int32_t* __restrict__ dst_indices,
     float3*__restrict__ means, float3*__restrict__ g1_means, float3*__restrict__ g2_means,
@@ -947,6 +948,7 @@ __global__ void relocate_with_long_axis_split_kernel(
     float4 quat = quats[idx_src];
     float opac = opacs[idx_src], new_opac;
     SlangDensify::long_axis_split_3dgs(
+        split_opacity_k,
         scale, opac, quat,
         &new_scale, &new_opac, &mean_delta
     );
@@ -1110,6 +1112,7 @@ __global__ void compute_relocation_mask_kernel(
 void relocate_splats_with_long_axis_split_tensor(
     int64_t cur_num_splats,
     float min_opacity,
+    float split_opacity_k,
     DeviceVector<float3> means, DeviceVector<float4> quats, DeviceVector<float3> scales, DeviceVector<float> opacs, DeviceVector<float3> features_dc, DeviceVector<float3> features_sh,
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
@@ -1173,6 +1176,7 @@ void relocate_splats_with_long_axis_split_tensor(
             relocate_with_long_axis_split_kernel<T><<<_LAUNCH_ARGS_1D(num_relocate, 256)>>>( \
                 cur_num_splats, \
                 num_relocate, \
+                split_opacity_k, \
                 src_indices, \
                 dst_indices, \
                 means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(), \
@@ -1201,6 +1205,7 @@ void relocate_splats_with_long_axis_split_tensor(
 void add_splats_with_long_axis_split_tensor(
     int64_t cur_num_splats,
     int64_t num_new_splats,
+    float split_opacity_k,
     DeviceVector<float3> means, DeviceVector<float4> quats, DeviceVector<float3> scales, DeviceVector<float> opacs, DeviceVector<float3> features_dc, DeviceVector<float3> features_sh,
     DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
     DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
@@ -1230,6 +1235,7 @@ void add_splats_with_long_axis_split_tensor(
         relocate_with_long_axis_split_kernel<T><<<_LAUNCH_ARGS_1D(num_new_splats, 256)>>>( \
             cur_num_splats, \
             num_new_splats, \
+            split_opacity_k, \
             split_indices, \
             nullptr, \
             means.data_ptr(), g1_means.data_ptr(), g2_means.data_ptr(), \
@@ -1909,6 +1915,7 @@ void revised_add_noise_tensor(
 
 __global__ void long_axis_split_3dgs_kernel(
     long num_splats,
+    float split_opacity_k,
     const float3* __restrict__ log_scales,
     const float* __restrict__ logit_opacities,
     const float4* __restrict__ quats,
@@ -1921,6 +1928,7 @@ __global__ void long_axis_split_3dgs_kernel(
         return;
 
     SlangDensify::long_axis_split_3dgs(
+        split_opacity_k,
         log_scales[idx], logit_opacities[idx], quats[idx],
         &new_log_scales[idx], &new_logit_opacities[idx], &mean_deltas[idx]
     );
@@ -1929,6 +1937,7 @@ __global__ void long_axis_split_3dgs_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void long_axis_split_tensor(
     std::string primitive,
+    float split_opacity_k,
     DeviceVector<float3> log_scales,
     DeviceVector<float> logit_opacities,
     DeviceVector<float4> quats,
@@ -1944,6 +1953,7 @@ void long_axis_split_tensor(
     if (primitive == "3dgs" || primitive == "mip" || primitive == "3dgut")
         long_axis_split_3dgs_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
             num_splats,
+            split_opacity_k,
             log_scales.data_ptr(),
             logit_opacities.data_ptr(),
             quats.data_ptr(),

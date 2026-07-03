@@ -282,7 +282,7 @@ inline __device__ void revised_add_noise_3dgs(float scaler_1, float radii_0, flo
     return;
 }
 
-inline __device__ void long_axis_split_3dgs(float3  log_scale_2, float logit_opacity_0, float4  quat_2, float3  * new_log_scale_0, float * new_logit_opacity_0, float3  * mean_delta_0)
+inline __device__ void long_axis_split_3dgs(float k_0, float3  log_scale_2, float logit_opacity_0, float4  quat_2, float3  * new_log_scale_0, float * new_logit_opacity_0, float3  * mean_delta_0)
 {
     float _S23 = log_scale_2.x;
     float _S24 = log_scale_2.y;
@@ -331,7 +331,7 @@ inline __device__ void long_axis_split_3dgs(float3  log_scale_2, float logit_opa
     float wy_2 = _S27.x * _S27.z;
     float wz_2 = _S27.x * _S27.w;
     *mean_delta_0 = mul_1(transpose_0(makeMatrix<float, 3, 3> (1.0f - 2.0f * (y2_2 + z2_2), 2.0f * (xy_2 + wz_2), 2.0f * (xz_2 - wy_2), 2.0f * (xy_2 - wz_2), 1.0f - 2.0f * (x2_2 + z2_2), 2.0f * (yz_2 + wx_2), 2.0f * (xz_2 + wy_2), 2.0f * (yz_2 - wx_2), 1.0f - 2.0f * (x2_2 + y2_2))), *mean_delta_0);
-    *new_logit_opacity_0 = (F32_log((0.60000002384185791f / (1.0f + (F32_exp((- logit_opacity_0))) - 0.60000002384185791f))));
+    *new_logit_opacity_0 = (F32_log((k_0 / (1.0f + (F32_exp((- logit_opacity_0))) - k_0))));
     return;
 }
 

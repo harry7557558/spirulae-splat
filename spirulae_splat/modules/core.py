@@ -334,6 +334,10 @@ class Renderer:
             "median": 2,
             "geom":   3,
         }[str(getattr(model_config, "densify_score_mode", "mean"))]
+        k_init, k_final, k_warmup = model_config.long_axis_split_opacity_k
+        c.las_split_opacity_k_init      = float(k_init)
+        c.las_split_opacity_k_final     = float(k_final)
+        c.las_split_opacity_k_warmup    = int(k_warmup)
         return c
 
     def engine_optim_step(self, step, max_steps, model_config, optim_config):

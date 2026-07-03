@@ -165,6 +165,11 @@ struct DensifyConfig {
     float noise_lr_final                = 0.0f;
     bool use_revised_densification      = true;
     int  score_mode                     = 0;    // 0=mean, 1=max, 2=median, 3=geom
+    // Long-axis-split opacity split factor `k`, linearly scheduled from
+    // `las_split_opacity_k_init` to `..._final` over `..._warmup` steps.
+    float las_split_opacity_k_init      = 0.5f;
+    float las_split_opacity_k_final     = 0.6f;
+    int   las_split_opacity_k_warmup    = 4500;
 };
 
 
