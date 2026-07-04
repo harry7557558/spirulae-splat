@@ -84,7 +84,7 @@ static void quantile_of_abs_of_finite_elements_internal(
     if (B == 0)
         return;
     float* temp_ptr = DevicePool::global().acquire<float>(
-        "densify_quantile_temp", 1024 * B);
+        PoolSlot::DensifyQuantileTemp, 1024 * B);
 
     (return_reciprocal ? batch_quantile_masked_radix_select<true> :
         batch_quantile_masked_radix_select<false>
@@ -139,7 +139,7 @@ void normalize_by_median_inplace_tensor(
 
     // pool-allocate inv_median [B]
     float* inv_median = DevicePool::global().acquire<float>(
-        "densify_inv_median", B);
+        PoolSlot::DensifyInvMedian, B);
 
     quantile_of_abs_of_finite_elements_internal(
         data.data_ptr(), B, N, 0.5f, true, inv_median);
@@ -319,7 +319,7 @@ static int32_t* weighted_sample_without_replacement_internal(
     int stride = 2;  // above is incorrect during warmup
 
     float* sorting_values = DevicePool::global().acquire<float>(
-        "densify_wswr_sorting_values", numel);
+        PoolSlot::DensifyWswrSortingValues, numel);
 
     compute_efraimidis_spirakis_weight_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
         numel,
@@ -332,16 +332,16 @@ static int32_t* weighted_sample_without_replacement_internal(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     int32_t* out_idx = DevicePool::global().acquire<int32_t>(
-        "densify_wswr_out_idx", num_sample);
+        PoolSlot::DensifyWswrOutIdx, num_sample);
 
     float* d_keys_in = sorting_values;  // reuse
     float* d_keys_out = DevicePool::global().acquire<float>(
-        "densify_wswr_keys_out", numel);
+        PoolSlot::DensifyWswrKeysOut, numel);
 
     int32_t* d_indices_in = DevicePool::global().acquire<int32_t>(
-        "densify_wswr_indices_in", numel);
+        PoolSlot::DensifyWswrIndicesIn, numel);
     int32_t* d_indices_out = DevicePool::global().acquire<int32_t>(
-        "densify_wswr_indices_out", numel);
+        PoolSlot::DensifyWswrIndicesOut, numel);
 
     iota_kernel<<<_LAUNCH_ARGS_1D(numel, 256)>>>(
         numel,
@@ -1140,13 +1140,13 @@ void relocate_splats_with_long_axis_split_tensor(
 ) {
     int32_t* bias_correction_steps_ptr = bias_correction_steps.data_ptr();
     bool* mask = DevicePool::global().acquire<bool>(
-        "densify_reloc_mask", cur_num_splats);
+        PoolSlot::DensifyRelocMask, cur_num_splats);
     int32_t* num_relocate_ptr = DevicePool::global().acquire<int32_t>(
-        "densify_reloc_count", 1);
+        PoolSlot::DensifyRelocCount, 1);
     cudaMemset(num_relocate_ptr, 0, sizeof(int32_t));
 
     int32_t* dst_indices = DevicePool::global().acquire<int32_t>(
-        "densify_reloc_dst_indices", cur_num_splats);
+        PoolSlot::DensifyRelocDstIndices, cur_num_splats);
 
     compute_relocation_mask_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 256)>>>(
         cur_num_splats,
@@ -1494,7 +1494,7 @@ void relocate_splats_mcmc_tensor(
 ) {
     int32_t* bias_correction_steps_ptr = bias_correction_steps.data_ptr();
     float* sample_probs = DevicePool::global().acquire<float>(
-        "densify_mcmc_sample_probs", cur_num_splats);
+        PoolSlot::DensifyMcmcSampleProbs, cur_num_splats);
     mcmc_compute_relocation_probabilities_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 256)>>>(
         cur_num_splats,
         min_opacity,
@@ -1505,7 +1505,7 @@ void relocate_splats_mcmc_tensor(
 
     // CUB inclusive sum for cumsum
     float* sample_probs_cumsum = DevicePool::global().acquire<float>(
-        "densify_mcmc_sample_probs_cumsum", cur_num_splats);
+        PoolSlot::DensifyMcmcSampleProbsCumsum, cur_num_splats);
     {
         size_t temp_bytes = 0;
         cub::DeviceScan::InclusiveSum(
@@ -1519,9 +1519,9 @@ void relocate_splats_mcmc_tensor(
     }
 
     int32_t* index_map = DevicePool::global().acquire<int32_t>(
-        "densify_mcmc_index_map", cur_num_splats);
+        PoolSlot::DensifyMcmcIndexMap, cur_num_splats);
     int32_t* n_idx_buffer = DevicePool::global().acquire<int32_t>(
-        "densify_mcmc_n_idx_buffer", cur_num_splats);
+        PoolSlot::DensifyMcmcNIdxBuffer, cur_num_splats);
     cudaMemset(n_idx_buffer, 0, cur_num_splats * sizeof(int32_t));
 
     mcmc_compute_relocation_index_map_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 256)>>>(
@@ -1728,7 +1728,7 @@ void add_splats_mcmc_tensor(
     int32_t* bias_correction_steps_ptr = bias_correction_steps.data_ptr();
 
     float* sample_probs = DevicePool::global().acquire<float>(
-        "densify_mcmc_add_sample_probs", cur_num_splats);
+        PoolSlot::DensifyMcmcAddSampleProbs, cur_num_splats);
     mcmc_compute_relocation_probabilities_kernel<<<_LAUNCH_ARGS_1D(cur_num_splats, 256)>>>(
         cur_num_splats,
         min_opacity,
@@ -1739,7 +1739,7 @@ void add_splats_mcmc_tensor(
 
     // CUB inclusive sum for cumsum
     float* sample_probs_cumsum = DevicePool::global().acquire<float>(
-        "densify_mcmc_add_sample_probs_cumsum", cur_num_splats);
+        PoolSlot::DensifyMcmcAddSampleProbsCumsum, cur_num_splats);
     {
         size_t temp_bytes = 0;
         cub::DeviceScan::InclusiveSum(
@@ -1753,9 +1753,9 @@ void add_splats_mcmc_tensor(
     }
 
     int32_t* index_map = DevicePool::global().acquire<int32_t>(
-        "densify_mcmc_add_index_map", num_add);
+        PoolSlot::DensifyMcmcAddIndexMap, num_add);
     int32_t* n_idx_buffer = DevicePool::global().acquire<int32_t>(
-        "densify_mcmc_add_n_idx_buffer", cur_num_splats);
+        PoolSlot::DensifyMcmcAddNIdxBuffer, cur_num_splats);
     cudaMemset(n_idx_buffer, 0, cur_num_splats * sizeof(int32_t));
 
     mcmc_compute_add_index_map_kernel<<<_LAUNCH_ARGS_1D(num_add, 256)>>>(
@@ -2412,9 +2412,9 @@ void robust_canny_residual_tensor(
     // Pool scratch buffers. Same keys across scales/calls -- pool's high-water
     // mark holds the largest, smaller scales reuse the allocation.
     float* resid = DevicePool::global().acquire<float>(
-        "densify_robust_resid", (size_t)B * N);
+        PoolSlot::DensifyRobustResid, (size_t)B * N);
     float* c_buf = DevicePool::global().acquire<float>(
-        "densify_tukey_c", (size_t)B);
+        PoolSlot::DensifyTukeyC, (size_t)B);
 
     // 1) per-pixel BT.601-luma |render - ref|.
     _robust_residual_luma_kernel<<<_LAUNCH_ARGS_3D(W, H, B, 32, 32, 1)>>>(

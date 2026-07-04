@@ -75,37 +75,37 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
     // descriptor so downstream consumers that derive sh_degree from the
     // TensorArray stride still work. Re-alloc on flip back to fp32.
     if (quantize_sh_value) {
-        DevicePool::global().free("world.features_sh");
+        DevicePool::global().free(PoolSlot::WorldFeaturesSh);
         engine().world.features_sh.set_shape_no_alloc(N, K);
     } else if (engine().world.features_sh.data_ptr() == nullptr && N > 0 && K > 0) {
-        engine().world.features_sh.resize("world.features_sh", N, K);
+        engine().world.features_sh.resize(PoolSlot::WorldFeaturesSh, N, K);
     }
 
     // g1 (exp_avg) / g2 (exp_avg_sq): FP32 buffers per attribute. When
     // non_sh_optim_bits != 32 the canonical store is the per-attribute
     // QuantizedAdamState packed buffer below; free the fp32 buffers then.
     if (!quantize_non_sh) {
-        engine().optim.g1_means.resize       ("eng.g1_means",       N);
-        engine().optim.g1_quats.resize       ("eng.g1_quats",       N);
-        engine().optim.g1_scales.resize      ("eng.g1_scales",      N);
-        engine().optim.g1_opacities.resize   ("eng.g1_opacities",   N);
-        engine().optim.g1_features_dc.resize ("eng.g1_features_dc", N);
-        engine().optim.g2_means.resize       ("eng.g2_means",       N);
-        engine().optim.g2_quats.resize       ("eng.g2_quats",       N);
-        engine().optim.g2_scales.resize      ("eng.g2_scales",      N);
-        engine().optim.g2_opacities.resize   ("eng.g2_opacities",   N);
-        engine().optim.g2_features_dc.resize ("eng.g2_features_dc", N);
+        engine().optim.g1_means.resize       (PoolSlot::EngG1Means,       N);
+        engine().optim.g1_quats.resize       (PoolSlot::EngG1Quats,       N);
+        engine().optim.g1_scales.resize      (PoolSlot::EngG1Scales,      N);
+        engine().optim.g1_opacities.resize   (PoolSlot::EngG1Opacities,   N);
+        engine().optim.g1_features_dc.resize (PoolSlot::EngG1FeaturesDc, N);
+        engine().optim.g2_means.resize       (PoolSlot::EngG2Means,       N);
+        engine().optim.g2_quats.resize       (PoolSlot::EngG2Quats,       N);
+        engine().optim.g2_scales.resize      (PoolSlot::EngG2Scales,      N);
+        engine().optim.g2_opacities.resize   (PoolSlot::EngG2Opacities,   N);
+        engine().optim.g2_features_dc.resize (PoolSlot::EngG2FeaturesDc, N);
     } else {
-        DevicePool::global().free("eng.g1_means");
-        DevicePool::global().free("eng.g1_quats");
-        DevicePool::global().free("eng.g1_scales");
-        DevicePool::global().free("eng.g1_opacities");
-        DevicePool::global().free("eng.g1_features_dc");
-        DevicePool::global().free("eng.g2_means");
-        DevicePool::global().free("eng.g2_quats");
-        DevicePool::global().free("eng.g2_scales");
-        DevicePool::global().free("eng.g2_opacities");
-        DevicePool::global().free("eng.g2_features_dc");
+        DevicePool::global().free(PoolSlot::EngG1Means);
+        DevicePool::global().free(PoolSlot::EngG1Quats);
+        DevicePool::global().free(PoolSlot::EngG1Scales);
+        DevicePool::global().free(PoolSlot::EngG1Opacities);
+        DevicePool::global().free(PoolSlot::EngG1FeaturesDc);
+        DevicePool::global().free(PoolSlot::EngG2Means);
+        DevicePool::global().free(PoolSlot::EngG2Quats);
+        DevicePool::global().free(PoolSlot::EngG2Scales);
+        DevicePool::global().free(PoolSlot::EngG2Opacities);
+        DevicePool::global().free(PoolSlot::EngG2FeaturesDc);
         engine().optim.g1_means       = DeviceVector<float3>();
         engine().optim.g1_quats       = DeviceVector<float4>();
         engine().optim.g1_scales      = DeviceVector<float3>();
@@ -118,11 +118,11 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
         engine().optim.g2_features_dc = DeviceVector<float3>();
     }
     if (!quantize_sh)
-        engine().optim.g1_features_sh.resize("eng.g1_features_sh", N, K);
+        engine().optim.g1_features_sh.resize(PoolSlot::EngG1FeaturesSh, N, K);
     else
         engine().optim.g1_features_sh = DeviceTensor2D<float3>();
     if (!quantize_sh)
-        engine().optim.g2_features_sh.resize("eng.g2_features_sh", N, K);
+        engine().optim.g2_features_sh.resize(PoolSlot::EngG2FeaturesSh, N, K);
     else
         engine().optim.g2_features_sh = DeviceTensor2D<float3>();
 
@@ -133,11 +133,11 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
     // _OptimNonShQ.
     if (quantize_non_sh) {
         int64_t n_bounds = (N + kFpboBlock - 1) / kFpboBlock;
-        engine().optim.means_quant_state_fpbo       .resize("eng.means_qfpbo",       (int64_t)N * 3, n_bounds);
-        engine().optim.quats_quant_state_fpbo       .resize("eng.quats_qfpbo",       (int64_t)N * 4, n_bounds);
-        engine().optim.scales_quant_state_fpbo      .resize("eng.scales_qfpbo",      (int64_t)N * 3, n_bounds);
-        engine().optim.opacities_quant_state_fpbo   .resize("eng.opacities_qfpbo",   (int64_t)N * 1, n_bounds);
-        engine().optim.features_dc_quant_state_fpbo .resize("eng.features_dc_qfpbo", (int64_t)N * 3, n_bounds);
+        engine().optim.means_quant_state_fpbo       .resize(PoolSlot::EngMeansQfpbo,       (int64_t)N * 3, n_bounds);
+        engine().optim.quats_quant_state_fpbo       .resize(PoolSlot::EngQuatsQfpbo,       (int64_t)N * 4, n_bounds);
+        engine().optim.scales_quant_state_fpbo      .resize(PoolSlot::EngScalesQfpbo,      (int64_t)N * 3, n_bounds);
+        engine().optim.opacities_quant_state_fpbo   .resize(PoolSlot::EngOpacitiesQfpbo,   (int64_t)N * 1, n_bounds);
+        engine().optim.features_dc_quant_state_fpbo .resize(PoolSlot::EngFeaturesDcQfpbo, (int64_t)N * 3, n_bounds);
     } else {
         engine().optim.means_quant_state_fpbo       = QuantizedAdamState<16, 256>();
         engine().optim.quats_quant_state_fpbo       = QuantizedAdamState<16, 256>();
@@ -147,10 +147,10 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
     }
 
     // radii [max_N]
-    engine().optim.radii.resize("eng.radii", N);
+    engine().optim.radii.resize(PoolSlot::EngRadii, N);
 
     // accum_buffer [max_N]
-    engine().optim.accum_buffer.resize("eng.accum_buffer", N);
+    engine().optim.accum_buffer.resize(PoolSlot::EngAccumBuffer, N);
 
     // Joint (u, sqrt(g2)) Adam state for SH features.
     //   Non-fused path: Optimizer.cu's fused_adam_with_steps_8bit_kernel
@@ -163,11 +163,11 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
     if (quantize_sh && !fused) {
         constexpr int64_t BLOCK_SIZE = QuantizedAdamState<8, 256>::kBlockSize;
         int64_t sh_bounds = (sh_cells + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        engine().optim.sh_quant_state.resize("eng.sh_quant", sh_cells, sh_bounds);
+        engine().optim.sh_quant_state.resize(PoolSlot::EngShQuant, sh_cells, sh_bounds);
         engine().optim.sh_quant_state_fpbo = QuantizedAdamState<8, 256>();
     } else if (quantize_sh && fused) {
         int64_t sh_bounds = (N + kFpboBlock - 1) / kFpboBlock;
-        engine().optim.sh_quant_state_fpbo.resize("eng.sh_quant_fpbo", sh_cells, sh_bounds);
+        engine().optim.sh_quant_state_fpbo.resize(PoolSlot::EngShQuantFpbo, sh_cells, sh_bounds);
         engine().optim.sh_quant_state = QuantizedAdamState<8, 256>();
     } else {
         engine().optim.sh_quant_state      = QuantizedAdamState<8, 256>();
@@ -188,22 +188,22 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
         int64_t v_bounds_cell = (sh_cells + BLOCK_SIZE - 1) / BLOCK_SIZE;
         int64_t v_bounds_fpbo = (N + kFpboBlock - 1) / kFpboBlock;
         if (quantize_sh_value && sh_value_bits == 8 && !fused) {
-            engine().world.features_sh_quant8.resize("eng.world.sh_vq8", sh_cells, v_bounds_cell);
+            engine().world.features_sh_quant8.resize(PoolSlot::EngWorldShVq8, sh_cells, v_bounds_cell);
             engine().world.features_sh_quant16 = QuantizedTensor<16, 256>();
             engine().world.features_sh_quant8_fpbo  = QuantizedTensor<8,  256>();
             engine().world.features_sh_quant16_fpbo = QuantizedTensor<16, 256>();
         } else if (quantize_sh_value && sh_value_bits == 8 && fused) {
-            engine().world.features_sh_quant8_fpbo.resize("eng.world.sh_vq8_fpbo", sh_cells, v_bounds_fpbo);
+            engine().world.features_sh_quant8_fpbo.resize(PoolSlot::EngWorldShVq8Fpbo, sh_cells, v_bounds_fpbo);
             engine().world.features_sh_quant16 = QuantizedTensor<16, 256>();
             engine().world.features_sh_quant8  = QuantizedTensor<8,  256>();
             engine().world.features_sh_quant16_fpbo = QuantizedTensor<16, 256>();
         } else if (quantize_sh_value && sh_value_bits == 16 && !fused) {
-            engine().world.features_sh_quant16.resize("eng.world.sh_vq16", sh_cells, v_bounds_cell);
+            engine().world.features_sh_quant16.resize(PoolSlot::EngWorldShVq16, sh_cells, v_bounds_cell);
             engine().world.features_sh_quant8  = QuantizedTensor<8,  256>();
             engine().world.features_sh_quant8_fpbo  = QuantizedTensor<8,  256>();
             engine().world.features_sh_quant16_fpbo = QuantizedTensor<16, 256>();
         } else if (quantize_sh_value && sh_value_bits == 16 && fused) {
-            engine().world.features_sh_quant16_fpbo.resize("eng.world.sh_vq16_fpbo", sh_cells, v_bounds_fpbo);
+            engine().world.features_sh_quant16_fpbo.resize(PoolSlot::EngWorldShVq16Fpbo, sh_cells, v_bounds_fpbo);
             engine().world.features_sh_quant8  = QuantizedTensor<8,  256>();
             engine().world.features_sh_quant16 = QuantizedTensor<16, 256>();
             engine().world.features_sh_quant8_fpbo  = QuantizedTensor<8,  256>();
@@ -218,7 +218,7 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
     // bias_correction_steps
     engine().optim.use_per_splat_bias_correction = use_per_splat_bias_correction;
     if (use_per_splat_bias_correction) {
-        engine().optim.bias_correction_steps.resize("eng.bias_correction_steps", N);
+        engine().optim.bias_correction_steps.resize(PoolSlot::EngBiasCorrectionSteps, N);
     } else {
         engine().optim.bias_correction_steps = DeviceVector<int32_t>();
     }

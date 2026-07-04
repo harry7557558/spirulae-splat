@@ -54,7 +54,7 @@ void forward_3dgs(
     // engine().optim.skip_grad_zero mirrors that same "is this the first
     // sub-batch of the train step?" flag and is set by the sub-batch
     // dispatcher in EngineTrainStep.cpp.
-    engine().optim.radii.resize("eng.radii", engine().max_num_splats);
+    engine().optim.radii.resize(PoolSlot::EngRadii, engine().max_num_splats);
     if (!engine().optim.skip_grad_zero) {
         engine().optim.radii.zero();
     }
@@ -307,7 +307,7 @@ void engine_debug_forward(
     int  saved_sh = engine().sh_degree;
     bool saved_bg_enabled = engine().background.enabled;
     if (std::get<0>(override_features_dc) != 0)
-        engine().world.features_dc = _hv_to_dv<float3>("debug.features_dc", override_features_dc);
+        engine().world.features_dc = _hv_to_dv<float3>(PoolSlot::DebugFeaturesDc, override_features_dc);
     if (override_sh_degree >= 0)
         engine().sh_degree = override_sh_degree;
     engine().background.enabled = false;

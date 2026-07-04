@@ -31,17 +31,22 @@ static inline bool* _bptr(const TorchTensorView& tv) { return (bool*)std::get<0>
 static inline int64_t* _i64ptr(const TorchTensorView& tv) { return (int64_t*)std::get<0>(tv); }
 static inline bool _has(const TorchTensorView& tv) { return std::get<0>(tv) != 0; }
 
+// Per-scale/per-buffer loss scratch. Keys are built at runtime from a pyramid
+// scale index and buffer name ("ppl.s{n}.{name}", "ppl.g.{name}.s{n}") so they
+// have no compile-time PoolSlot -> dynamic Image scratch (never checkpointed).
 static inline TorchTensorView _pool_alloc_f(const std::string& key, long B, long H, long W, long C) {
-    float* p = DevicePool::global().acquire<float>(key, (size_t)(B * H * W * C));
+    float* p = (float*)DevicePool::global().acquire_dynamic(
+        VramCategory::Image, key, (size_t)(B * H * W * C) * sizeof(float));
     return TorchTensorView((uint64_t)p, 4, {B, H, W, C});
 }
-static inline TorchTensorView _pool_alloc_f_zero(const std::string& key, long B, long H, long W, long C) {
+static inline TorchTensorView _pool_alloc_f_zero(PoolSlot key, long B, long H, long W, long C) {
     float* p = DevicePool::global().acquire<float>(key, (size_t)(B * H * W * C));
     cudaMemset(p, 0, B * H * W * C * sizeof(float));
     return TorchTensorView((uint64_t)p, 4, {B, H, W, C});
 }
 static inline TorchTensorView _pool_alloc_b(const std::string& key, long B, long H, long W) {
-    bool* p = DevicePool::global().acquire<bool>(key, (size_t)(B * H * W));
+    bool* p = (bool*)DevicePool::global().acquire_dynamic(
+        VramCategory::Image, key, (size_t)(B * H * W) * sizeof(bool));
     return TorchTensorView((uint64_t)p, 1, {B, H, W, 1});
 }
 
@@ -555,7 +560,7 @@ static void _compute_per_pixel_losses_backward(
     PerPixelGrads& grads
 ) {
     float* v_raw_losses = DevicePool::global().acquire<float>(
-        "ppl.v_raw_losses", (size_t)(num_train_images+1) * (uint)RawLossIndex::length);
+        PoolSlot::PplVRawLosses, (size_t)(num_train_images+1) * (uint)RawLossIndex::length);
 
     per_pixel_losses_reduce_backward_kernel<<<_LAUNCH_ARGS_1D(num_train_images+1, WARP_SIZE)>>>(
         num_train_images,
@@ -839,7 +844,7 @@ LossValues compute_multi_scale_per_pixel_losses(
 
     // Total losses accumulator -- pool-backed device buffer (D->H read at end)
     float* total_losses_ptr = DevicePool::global().acquire<float>(
-        "ppl.total_losses", (uint)LossIndex::length);
+        PoolSlot::PplTotalLosses, (uint)LossIndex::length);
     cudaMemset(total_losses_ptr, 0, (uint)LossIndex::length * sizeof(float));
 
     float ssim_val = 0.0f;
@@ -851,17 +856,17 @@ LossValues compute_multi_scale_per_pixel_losses(
 
         // Forward losses
         float* raw_losses_ptr = DevicePool::global().acquire<float>(
-            "ppl.raw_losses", (size_t)(num_train_images+1) * (uint)RawLossIndex::length);
+            PoolSlot::PplRawLosses, (size_t)(num_train_images+1) * (uint)RawLossIndex::length);
         cudaMemset(raw_losses_ptr, 0, (size_t)(num_train_images+1) * (uint)RawLossIndex::length * sizeof(float));
 
         float* losses_ptr = DevicePool::global().acquire<float>(
-            "ppl.losses", (uint)LossIndex::length);
+            PoolSlot::PplLosses, (uint)LossIndex::length);
         cudaMemset(losses_ptr, 0, (uint)LossIndex::length * sizeof(float));
 
         float* loss_map_ptr = nullptr;
         TorchTensorView loss_map_scale = {};
         if (_has(loss_map_out)) {
-            loss_map_scale = _pool_alloc_f_zero("ppl.loss_map_scale", B, Hs, Ws, 1);
+            loss_map_scale = _pool_alloc_f_zero(PoolSlot::PplLossMapScale, B, Hs, Ws, 1);
             loss_map_ptr = _fptr(loss_map_scale);
         }
 

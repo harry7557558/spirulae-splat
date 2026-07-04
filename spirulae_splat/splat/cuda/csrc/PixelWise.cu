@@ -350,7 +350,7 @@ void rendered_depth_to_expected_depth_forward(
     const auto& s = std::get<2>(depth);
     int64_t b = s[0], h = s[1], w = s[2];
 
-    float* max_depth = DevicePool::global().acquire<float>("rdted_max_depth", b);
+    float* max_depth = DevicePool::global().acquire<float>(PoolSlot::RdtedMaxDepth, b);
     cudaMemset(max_depth, 0, b * sizeof(float));
 
     rendered_depth_to_expected_depth_forward_kernel<<<_LAUNCH_ARGS_2D(h*w, b, 256, 1)>>>(
@@ -3213,7 +3213,7 @@ void compute_ppsip_regularization_backward(
     if (param_type == "original" || param_type == "") {
         // v_raw_losses is a small scratch buffer
         float* v_raw_losses = DevicePool::global().acquire<float>(
-            "ppisp_v_raw_losses", (int)RawPPISPRegLossIndex::length);
+            PoolSlot::PpispVRawLosses, (int)RawPPISPRegLossIndex::length);
         cudaMemset(v_raw_losses, 0, (int)RawPPISPRegLossIndex::length * sizeof(float));
 
         compute_ppisp_regularization_backward_kernel<PPISPParamType::Original>
@@ -3237,7 +3237,7 @@ void compute_ppsip_regularization_backward(
     }
     else if (param_type == "rqs") {
         float* v_raw_losses = DevicePool::global().acquire<float>(
-            "ppisp_v_raw_losses", (int)RawPPISPRegLossIndexRQS::length);
+            PoolSlot::PpispVRawLosses, (int)RawPPISPRegLossIndexRQS::length);
         cudaMemset(v_raw_losses, 0, (int)RawPPISPRegLossIndexRQS::length * sizeof(float));
 
         compute_ppisp_regularization_backward_kernel<PPISPParamType::RQS>
@@ -3261,7 +3261,7 @@ void compute_ppsip_regularization_backward(
     }
     else if (param_type == "no_crf") {
         float* v_raw_losses = DevicePool::global().acquire<float>(
-            "ppisp_v_raw_losses", (int)RawPPISPRegLossIndexNoCRF::length);
+            PoolSlot::PpispVRawLosses, (int)RawPPISPRegLossIndexNoCRF::length);
         cudaMemset(v_raw_losses, 0, (int)RawPPISPRegLossIndexNoCRF::length * sizeof(float));
 
         compute_ppisp_regularization_backward_kernel<PPISPParamType::NoCRF>

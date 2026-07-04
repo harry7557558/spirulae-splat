@@ -52,7 +52,7 @@ void engine_init_ppisp(int n_grids, std::string param_type, bool use_adagrad) {
     engine().ppisp.param_type = (param_type == "" ? std::string("original") : param_type);
     engine().ppisp.num_params = P;
     engine().ppisp.use_adagrad = use_adagrad;
-    engine().ppisp.params.resize("eng.ppisp.params", n_grids, P);
+    engine().ppisp.params.resize(PoolSlot::EngPpispParams, n_grids, P);
     if (engine().ppisp.param_type == "original") {
         ppisp_original_default_init(
             engine().ppisp.params.data_ptr(), n_grids, kPpispStream);
@@ -86,7 +86,7 @@ void engine_ppisp_forward(TorchTensorView cam_indices) {
     engine().ppisp.fwd_pre = fwd_rgb_tensor;
 
     DeviceTensor3D<float3> post_rgb;
-    post_rgb.resize("eng.ppisp.rgb_post", C_batch, H, W);
+    post_rgb.resize(PoolSlot::EngPpispRgbPost, C_batch, H, W);
 
     ppisp_forward(
         engine().ppisp.fwd_pre,
@@ -108,15 +108,15 @@ void _ensure_ppisp_optim_state() {
     if (engine().ppisp.params.data_ptr() == nullptr) return;
     int64_t N = engine().ppisp.params.size<0>();
     int64_t P = engine().ppisp.params.size<1>();
-    engine().ppisp.grads.resize("eng.ppisp.grads", N, P);
+    engine().ppisp.grads.resize(PoolSlot::EngPpispGrads, N, P);
     engine().ppisp.grads.zero();
     if (engine().ppisp.use_adagrad) {
-        engine().ppisp.accum_f.resize("eng.ppisp.accum", N, P);
+        engine().ppisp.accum_f.resize(PoolSlot::EngPpispAccum, N, P);
         engine().ppisp.accum_f.zero();
     } else {
-        engine().ppisp.g1.resize("eng.ppisp.g1", N, P);
+        engine().ppisp.g1.resize(PoolSlot::EngPpispG1, N, P);
         engine().ppisp.g1.zero();
-        engine().ppisp.g2.resize("eng.ppisp.g2", N, P);
+        engine().ppisp.g2.resize(PoolSlot::EngPpispG2, N, P);
         engine().ppisp.g2.zero();
     }
     engine().ppisp.optim_initialized = true;
@@ -169,12 +169,12 @@ float* _engine_ppisp_reg_loss_into(
     int kLoss = (int)PPISPRegLossIndex::length;
 
     // Output losses (zeroed each call so the in-kernel write is a clean store).
-    float* losses_buf = DevicePool::global().acquire<float>("eng.ppisp.reg_losses", kLoss);
+    float* losses_buf = DevicePool::global().acquire<float>(PoolSlot::EngPpispRegLosses, kLoss);
     cudaMemsetAsync(losses_buf, 0, kLoss * sizeof(float), kPpispStream);
 
     // Raw losses scratch ([N+1, kRaw], pre-zeroed).
     float* raw_losses_buf = DevicePool::global().acquire<float>(
-        "eng.ppisp.reg_raw_losses", (size_t)(N + 1) * kRaw);
+        PoolSlot::EngPpispRegRawLosses, (size_t)(N + 1) * kRaw);
     cudaMemsetAsync(raw_losses_buf, 0, (size_t)(N + 1) * kRaw * sizeof(float),
                     kPpispStream);
 
@@ -192,7 +192,7 @@ float* _engine_ppisp_reg_loss_into(
     if (compute_grad) {
         // v_losses = ones[kLoss]: gradient flows back through reg-loss sum.
         float* v_losses = DevicePool::global().acquire<float>(
-            "eng.ppisp.v_reg_losses", kLoss);
+            PoolSlot::EngPpispVRegLosses, kLoss);
         std::vector<float> h_ones(kLoss, 1.0f);
         cudaMemcpyAsync(v_losses, h_ones.data(), kLoss * sizeof(float),
                         cudaMemcpyHostToDevice, kPpispStream);
@@ -201,7 +201,7 @@ float* _engine_ppisp_reg_loss_into(
         // Accumulate into ppisp_grads (the regularization backward writes a
         // fresh tensor, so use a scratch buffer and add in afterwards).
         float* v_params_scratch = DevicePool::global().acquire<float>(
-            "eng.ppisp.v_reg_params",
+            PoolSlot::EngPpispVRegParams,
             (size_t)N * engine().ppisp.num_params);
         cudaMemsetAsync(v_params_scratch, 0,
             (size_t)N * engine().ppisp.num_params * sizeof(float), kPpispStream);

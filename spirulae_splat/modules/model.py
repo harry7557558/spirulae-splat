@@ -1400,50 +1400,22 @@ class SpirulaeSplatModel(torch.nn.Module):
             # engine_train_step loss_dict each iteration (see verbose metrics).
 
             # VRAM breakdown (C++ pool only — PyTorch-side tensors are tracked
-            # separately by torch.cuda.memory_allocated). Each pool key gets
-            # mapped to one of five buckets by its prefix:
+            # separately by torch.cuda.memory_allocated). Each pool buffer's
+            # bucket is now the authoritative category tag carried by its
+            # pool-slot metadata (PoolSlots.h), returned per-buffer by the
+            # engine — no more guessing from the key prefix here:
             #   splat       : world params + grads + optim states (per-Gaussian)
             #   splat x img : projection outputs/gradients, tile intersection
             #   image       : image-space tensors (renders, GT copies, grads)
-            #   appearance  : appearance + geometry grids and ppisp merged
+            #   appearance  : bilagrid / background-SH / PPISP / color transforms
+            #   viewer      : interactive viewer + visualizer caches/scratch
             #   other       : everything else (camera tables, tiny scratches)
             from spirulae_splat.splat.cuda import _C
             buckets = {'splat': 0.0, 'splat x img': 0.0, 'image': 0.0,
                        'appearance': 0.0, 'viewer': 0.0, 'other': 0.0}
             GiB = 1024 ** 3
-            for key, _used, cap in _C.engine_get_pool_breakdown():
-                gib = cap / GiB
-                if key.startswith('world.') \
-                        or key.startswith('eng.v_') \
-                        or key.startswith('eng.g1_') \
-                        or key.startswith('eng.g2_') \
-                        or key.startswith('eng.sh_quant_') \
-                        or (key.startswith('eng.') and not key.startswith('eng.bg.')
-                            and (key.endswith('.qb') or key.endswith('.q'))) \
-                        or key in ('eng.radii', 'eng.accum_buffer',
-                                   'eng.bias_correction_steps',
-                                   'eng.quant_bounds_sh'):
-                    buckets['splat'] += gib
-                elif key.startswith('proj.') \
-                        or key.startswith('isect.') \
-                        or key.startswith('isect_post.') \
-                        or key.startswith('fused_proj_bwd.') \
-                        or key.startswith('raster_bwd.'):
-                    buckets['splat x img'] += gib
-                elif key.startswith('render.') or key.startswith('renders.') \
-                        or key.startswith('ppl.') or key.startswith('eng.bg_') \
-                        or key in ('eng.v_rgb', 'eng.v_depth', 'eng.v_Ts',
-                                   'eng.v_depth_normal', 'eng.v_ref_depth',
-                                   'eng.v_ref_normal',
-                                   'eng.depth_normal', 'eng.loss_map',
-                                   'gt.rgb', 'gt.normal', 'gt.staging_u8'):
-                    buckets['image'] += gib
-                elif key.startswith('eng.bg.') or key.startswith('eng.ppisp.'):
-                    buckets['appearance'] += gib
-                elif key.startswith('vis.') or key.startswith('viewer.'):
-                    buckets['viewer'] += gib
-                else:
-                    buckets['other'] += gib
+            for key, category, _used, cap in _C.engine_get_pool_breakdown_categorized():
+                buckets[category] = buckets.get(category, 0.0) + cap / GiB
             # DeviceScratch (workspace for cub::DeviceRadixSort etc.) is part
             # of the splat x image pipeline (used during tile intersection
             # sort + projection backward sort).

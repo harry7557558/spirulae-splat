@@ -37,11 +37,11 @@ static const void* _h2d_stage_byte(
         return (const void*)src_ptr;
     }
     if (out_is_u16) {
-        uint16_t* p = DevicePool::global().acquire<uint16_t>("gt.staging_u16", numel);
+        uint16_t* p = DevicePool::global().acquire<uint16_t>(PoolSlot::GtStagingU16, numel);
         cudaMemcpy(p, (void*)src_ptr, numel * sizeof(uint16_t), cudaMemcpyHostToDevice);
         return (const void*)p;
     } else {
-        uint8_t* p = DevicePool::global().acquire<uint8_t>("gt.staging_u8", numel);
+        uint8_t* p = DevicePool::global().acquire<uint8_t>(PoolSlot::GtStagingU8, numel);
         cudaMemcpy(p, (void*)src_ptr, numel * sizeof(uint8_t), cudaMemcpyHostToDevice);
         return (const void*)p;
     }
@@ -55,7 +55,7 @@ static const void* _h2d_stage_byte(
 // TorchTensorViews), so they must be copied to device first -- otherwise the
 // kernel faults on an illegal address. Zero-copy when already a device ptr.
 static const float* _h2d_stage_floats(
-    const TorchTensorView& src_tv, size_t numel, const char* slot)
+    const TorchTensorView& src_tv, size_t numel, PoolSlot slot)
 {
     uint64_t src_ptr = std::get<0>(src_tv);
     if (src_ptr == 0 || numel == 0) return nullptr;
@@ -119,7 +119,7 @@ void set_training_data_warped(
     // ---- Allocate POST-split float output buffer + run warp ---------------
     int B_post = B_in * K;
     float* d_rgb_float = DevicePool::global().acquire<float>(
-        "gt.rgb",
+        PoolSlot::GtRgb,
         (size_t)B_post * out_H * out_W * 3);
 
     // Wide path uses input intrins / dist_coeffs; equirectangular path
@@ -127,9 +127,9 @@ void set_training_data_warped(
     // the managed DataManager passes host views, and the wide warp kernels
     // dereference these pointers on-device.
     const float* d_intrins = _h2d_stage_floats(
-        input_intrins, (size_t)B_in * 4, "warp.input_intrins");
+        input_intrins, (size_t)B_in * 4, PoolSlot::WarpInputIntrins);
     const float* d_dist    = _h2d_stage_floats(
-        input_dist_coeffs, (size_t)B_in * 10, "warp.input_dist_coeffs");
+        input_dist_coeffs, (size_t)B_in * 10, PoolSlot::WarpInputDistCoeffs);
 
     CameraModelType cm = cmt(input_model_name);
     if (cm == CameraModelType::EQUIRECTANGULAR) {
@@ -166,7 +166,7 @@ void set_training_data_warped(
             throw std::runtime_error("set_training_data_warped: mask must be uint8");
         }
         uint8_t* d_mask_out = DevicePool::global().acquire<uint8_t>(
-            "gt.alpha",
+            PoolSlot::GtAlpha,
             (size_t)B_post * out_H * out_W);
         if (cm == CameraModelType::EQUIRECTANGULAR) {
             launch_warp_mask_equi(

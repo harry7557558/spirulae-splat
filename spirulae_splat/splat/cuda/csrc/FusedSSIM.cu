@@ -944,7 +944,7 @@ float fused_ssim_forward(
     const auto& s = std::get<2>(img1);
     int B = s[0], H = s[1], W = s[2];
 
-    float* ssim_buf = DevicePool::global().acquire<float>("ssim_scalar", 1);
+    float* ssim_buf = DevicePool::global().acquire<float>(PoolSlot::SsimScalar, 1);
     cudaMemset(ssim_buf, 0, sizeof(float));
 
     auto fwd = inplace ?
@@ -1074,7 +1074,7 @@ float fused_ssim_inplace(
 ) {
     float* ssim_buf = nullptr;
     if (return_ssim_val) {
-        ssim_buf = DevicePool::global().acquire<float>("ssim_scalar", 1);
+        ssim_buf = DevicePool::global().acquire<float>(PoolSlot::SsimScalar, 1);
         cudaMemset(ssim_buf, 0, sizeof(float));
     }
 
@@ -1103,7 +1103,7 @@ float fused_ssim_inplace_async(
     int ssim_loss_map_mode,
     AsyncReadout<float>& readout
 ) {
-    float* ssim_buf = DevicePool::global().acquire<float>("ssim_scalar", 1);
+    float* ssim_buf = DevicePool::global().acquire<float>(PoolSlot::SsimScalar, 1);
     cudaMemset(ssim_buf, 0, sizeof(float));
 
     _launch_fused_ssim_inplace(

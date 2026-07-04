@@ -139,9 +139,9 @@ inline std::tuple<
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 ) {
     if (!v_splats_w.has_value())
-        v_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, "raster_bwd.v_world");
+        v_splats_w = SplatPrimitive::WorldBuffer::zeros_pool(splats_w, PoolSlot::RasterBwdVWorld);
     if (!v_splats_s.has_value())
-        v_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, "raster_bwd.v_screen");
+        v_splats_s = SplatPrimitive::ScreenBuffer::zeros_pool(splats_s, PoolSlot::RasterBwdVScreen);
 
     RenderOutput::Tensor render_outputs = render_outputs_tuple;
     RenderOutput::Tensor distortion_fwd_outputs;
@@ -152,7 +152,7 @@ inline std::tuple<
     }
     DeviceVector<float> o_accum_weight;
     if (output_accum_weight) {
-        o_accum_weight.resize("raster_bwd.accum_weight", num_splats);
+        o_accum_weight.resize(PoolSlot::RasterBwdAccumWeight, num_splats);
         o_accum_weight.zero();
     }
 

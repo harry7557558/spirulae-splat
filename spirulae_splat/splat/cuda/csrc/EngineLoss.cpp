@@ -29,9 +29,9 @@ static void _alloc_grad_buffers() {
     if (engine().optim.use_fused_proj_bwd_optim) {
         bool need_world_geom = (engine().primitive == "3dgut");
         if (need_world_geom) {
-            engine().grad.means.resize("eng.v_means", N);
-            engine().grad.quats.resize("eng.v_quats", N);
-            engine().grad.scales.resize("eng.v_scales", N);
+            engine().grad.means.resize(PoolSlot::EngVMeans, N);
+            engine().grad.quats.resize(PoolSlot::EngVQuats, N);
+            engine().grad.scales.resize(PoolSlot::EngVScales, N);
             engine().grad.means.zero();
             engine().grad.quats.zero();
             engine().grad.scales.zero();
@@ -46,12 +46,12 @@ static void _alloc_grad_buffers() {
         return;
     }
 
-    engine().grad.means.resize("eng.v_means", N);
-    engine().grad.quats.resize("eng.v_quats", N);
-    engine().grad.scales.resize("eng.v_scales", N);
-    engine().grad.opacities.resize("eng.v_opacities", N);
-    engine().grad.features_dc.resize("eng.v_features_dc", N);
-    engine().grad.features_sh.resize("eng.v_features_sh", N, K);
+    engine().grad.means.resize(PoolSlot::EngVMeans, N);
+    engine().grad.quats.resize(PoolSlot::EngVQuats, N);
+    engine().grad.scales.resize(PoolSlot::EngVScales, N);
+    engine().grad.opacities.resize(PoolSlot::EngVOpacities, N);
+    engine().grad.features_dc.resize(PoolSlot::EngVFeaturesDc, N);
+    engine().grad.features_sh.resize(PoolSlot::EngVFeaturesSh, N, K);
     // Sub-batched training: only the FIRST sub-batch zeroes the per-splat
     // grad accumulators; subsequent sub-batches atomicAdd into them. The
     // optim step then consumes the accumulated grad (with grad_scale = 1/B)
@@ -308,9 +308,9 @@ void engine_backward_from_render_grad(
     // Stage the cotangents into pool buffers. cudaMemcpyDefault auto-detects
     // host vs device pointers (UVA), so the same entrypoint serves the
     // correctness path (CPU seeds) and the profiling path (CUDA seeds).
-    TorchTensorView v_rgb_buf   = _pool_tv("eng.v_rgb",   C, H, W, 3);
-    TorchTensorView v_depth_buf = _pool_tv("eng.v_depth", C, H, W, 1);
-    TorchTensorView v_Ts_buf    = _pool_tv("eng.v_Ts",    C, H, W, 1);
+    TorchTensorView v_rgb_buf   = _pool_tv(PoolSlot::EngVRgb,   C, H, W, 3);
+    TorchTensorView v_depth_buf = _pool_tv(PoolSlot::EngVDepth, C, H, W, 1);
+    TorchTensorView v_Ts_buf    = _pool_tv(PoolSlot::EngVTs,    C, H, W, 1);
     cudaMemcpy((void*)std::get<0>(v_rgb_buf),   (void*)std::get<0>(v_render_rgb),
                (size_t)C * H * W * 3 * sizeof(float), cudaMemcpyDefault);
     cudaMemcpy((void*)std::get<0>(v_depth_buf), (void*)std::get<0>(v_render_depth),
@@ -350,12 +350,12 @@ std::map<std::string, float> engine_compute_loss_backward(
 
     // Pool-allocate intermediates for loss computation
     TorchTensorView loss_map_buf = compute_loss_map ?
-        _pool_tv_zero("eng.loss_map", C, H, W, 1) : _tv_null();
+        _pool_tv_zero(PoolSlot::EngLossMap, C, H, W, 1) : _tv_null();
 
     // v_losses: constant vector [1, 0, 1, 1, ...] (1 for all, 0 for psnr slot)
     // Initialized once; pool never shrinks so pointer is stable
     static bool v_losses_initialized = false;
-    TorchTensorView v_losses_buf = _pool_tv_1d("eng.v_losses", (int)LossIndex::length);
+    TorchTensorView v_losses_buf = _pool_tv_1d(PoolSlot::EngVLosses, (int)LossIndex::length);
     if (!v_losses_initialized) {
         float h_v[(int)LossIndex::length];
         for (int i = 0; i < (int)LossIndex::length; i++) h_v[i] = 1.0f;
@@ -410,7 +410,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     // bool is_ray_depth = (engine().primitive != "3dgs" && engine().primitive != "mip");
     bool is_ray_depth = true;
     if (compute_depth_normal) {
-        depth_normal = _pool_tv("eng.depth_normal", C, H, W, 3);
+        depth_normal = _pool_tv(PoolSlot::EngDepthNormal, C, H, W, 3);
         depth_to_normal_forward(
             engine().camera.model_str,
             _dv_tv(engine().camera.intrins),
@@ -436,7 +436,7 @@ std::map<std::string, float> engine_compute_loss_backward(
         median_depth = TorchTensorView(
             (uint64_t)engine().fwd.render_median.data_ptr(), 4, {C, H, W, 1});
         if (median_normal_active) {
-            median_normal = _pool_tv("eng.median_normal", C, H, W, 3);
+            median_normal = _pool_tv(PoolSlot::EngMedianNormal, C, H, W, 3);
             depth_to_normal_forward(
                 engine().camera.model_str,
                 _dv_tv(engine().camera.intrins),
@@ -465,16 +465,16 @@ std::map<std::string, float> engine_compute_loss_backward(
     PerPixelGrads pixel_grads = {};
 
     // Allocate per-pixel gradient outputs
-    pixel_grads.v_render_rgb  = _pool_tv("eng.v_rgb",   C, H, W, 3);
-    pixel_grads.v_render_depth = _pool_tv("eng.v_depth", C, H, W, 1);
-    pixel_grads.v_render_Ts   = _pool_tv("eng.v_Ts",    C, H, W, 1);
+    pixel_grads.v_render_rgb  = _pool_tv(PoolSlot::EngVRgb,   C, H, W, 3);
+    pixel_grads.v_render_depth = _pool_tv(PoolSlot::EngVDepth, C, H, W, 1);
+    pixel_grads.v_render_Ts   = _pool_tv(PoolSlot::EngVTs,    C, H, W, 1);
     if (compute_depth_normal) {
-        pixel_grads.v_depth_normal = _pool_tv("eng.v_depth_normal", C, H, W, 3);
+        pixel_grads.v_depth_normal = _pool_tv(PoolSlot::EngVDepthNormal, C, H, W, 3);
     }
     if (has_median) {
-        pixel_grads.v_median_depth = _pool_tv("eng.v_median_depth", C, H, W, 1);
+        pixel_grads.v_median_depth = _pool_tv(PoolSlot::EngVMedianDepth, C, H, W, 1);
         if (median_normal_active)
-            pixel_grads.v_median_normal = _pool_tv("eng.v_median_normal", C, H, W, 3);
+            pixel_grads.v_median_normal = _pool_tv(PoolSlot::EngVMedianNormal, C, H, W, 3);
     }
     // GT-modality grads live at the GT's own resolution (which may differ
     // from render H, W). The per-pixel loss kernel bilinearly scatters into
@@ -484,21 +484,21 @@ std::map<std::string, float> engine_compute_loss_backward(
     if (engine().bilagrid_depth.enabled) {
         long Hd = engine().gt.depth.template size<1>();
         long Wd = engine().gt.depth.template size<2>();
-        pixel_grads.v_ref_depth = _pool_tv("eng.v_ref_depth", C, Hd, Wd, 1);
+        pixel_grads.v_ref_depth = _pool_tv(PoolSlot::EngVRefDepth, C, Hd, Wd, 1);
     }
     if (engine().bilagrid_normal.enabled) {
         long Hn = engine().gt.normal.template size<1>();
         long Wn = engine().gt.normal.template size<2>();
-        pixel_grads.v_ref_normal = _pool_tv("eng.v_ref_normal", C, Hn, Wn, 3);
+        pixel_grads.v_ref_normal = _pool_tv(PoolSlot::EngVRefNormal, C, Hn, Wn, 3);
     }
     // Distortion gradient buffers (d loss / d D), consumed by the raster bwd.
     // RGB_D primitives: rgb + depth only; normal distortion grad stays null.
     if (has_rgb_dist)
-        pixel_grads.v_rgb_dist    = _pool_tv("eng.v_rgb_dist",    C, H, W, 3);
+        pixel_grads.v_rgb_dist    = _pool_tv(PoolSlot::EngVRgbDist,    C, H, W, 3);
     if (has_depth_dist)
-        pixel_grads.v_depth_dist  = _pool_tv("eng.v_depth_dist",  C, H, W, 1);
+        pixel_grads.v_depth_dist  = _pool_tv(PoolSlot::EngVDepthDist,  C, H, W, 1);
     if (has_normal_dist)
-        pixel_grads.v_normal_dist = _pool_tv("eng.v_normal_dist", C, H, W, 3);
+        pixel_grads.v_normal_dist = _pool_tv(PoolSlot::EngVNormalDist, C, H, W, 3);
 
     // --- Compute per-pixel losses + SSIM, get gradients ---
     LossValues lv = compute_multi_scale_per_pixel_losses(
@@ -563,9 +563,9 @@ std::map<std::string, float> engine_compute_loss_backward(
             if (pre_ptr != nullptr && post_ptr != nullptr && v_rgb_ptr != nullptr) {
                 auto& cs = engine().color_shift_reg;
                 if (!cs.initialized) {
-                    cs.ema.resize("eng.color_shift_reg.ema", 3);
+                    cs.ema.resize(PoolSlot::EngColorShiftRegEma, 3);
                     cs.ema.zero();
-                    cs.batch_sum.resize("eng.color_shift_reg.batch_sum", 3);
+                    cs.batch_sum.resize(PoolSlot::EngColorShiftRegBatchSum, 3);
                     cs.batch_sum.zero();
                     cs.steps = 0;
                     cs.initialized = true;

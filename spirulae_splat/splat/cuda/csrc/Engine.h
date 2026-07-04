@@ -498,6 +498,9 @@ void engine_blit_view(
 
 // Pool VRAM breakdown: [(key, used_bytes, cap_bytes), ...]
 std::vector<std::tuple<std::string, size_t, size_t>> engine_get_pool_breakdown();
+// Same, with an authoritative category tag: [(key, category, used, cap), ...]
+std::vector<std::tuple<std::string, std::string, size_t, size_t>>
+engine_get_pool_breakdown_categorized();
 size_t engine_get_scratch_bytes();
 
 // --- Checkpoint save ---

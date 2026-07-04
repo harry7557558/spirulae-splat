@@ -471,6 +471,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_copy_splats_to_host", &engine_copy_splats_to_host);
     m.def("engine_copy_grads_to_host", &engine_copy_grads_to_host);
     m.def("engine_get_pool_breakdown", &engine_get_pool_breakdown);
+    m.def("engine_get_pool_breakdown_categorized", &engine_get_pool_breakdown_categorized);
     m.def("engine_get_scratch_bytes", &engine_get_scratch_bytes);
     m.def("engine_init_bilagrid_rgb", &engine_init_bilagrid_rgb);
     m.def("engine_init_bilagrid_depth", &engine_init_bilagrid_depth);
@@ -496,8 +497,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("inplace_scatter_add", &inplace_scatter_add_tensor);
     m.def("inplace_scatter_max", &inplace_scatter_max_tensor);
     m.def("weighted_sample_without_replacement", &weighted_sample_without_replacement_tensor);
-    m.def("densify_clip_scale", &densify_clip_scale_tensor);
-    m.def("densify_update_weight", &densify_update_weight);
+    m.def(PoolSlot::DensifyClipScale, &densify_clip_scale_tensor);
+    m.def(PoolSlot::DensifyUpdateWeight, &densify_update_weight);
     m.def("relocate_splats_with_long_axis_split", &relocate_splats_with_long_axis_split_tensor);
     m.def("add_splats_with_long_axis_split", &add_splats_with_long_axis_split_tensor);
     m.def("relocate_splats_mcmc", &relocate_splats_mcmc_tensor);

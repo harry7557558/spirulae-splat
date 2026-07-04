@@ -252,7 +252,7 @@ void compute_depth_scalars_tensor(
     int B = patched ? 1 : (int)_tv_dim(depth, 0);
     int N = (int)(_tv_numel(depth) / B);
     uint32_t* temp = DevicePool::global().acquire<uint32_t>(
-        "bilagrid.quantile_temp", (size_t)((256+5)*B));
+        PoolSlot::BilagridQuantileTemp, (size_t)((256+5)*B));
     batch_quantile_masked_radix_select<true>(
         _tv_cf(depth), B, N, 0.5f, _tv_f(output), temp, kStream);
 }

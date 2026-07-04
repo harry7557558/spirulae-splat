@@ -36,12 +36,12 @@ void set_data_3dgs(
     // Splats are set once and persist on device; subsequent calls are no-ops.
     if (engine().world.initialized) return;
 
-    engine().world.means       = _hv_to_dv<float3>("world.means", means);
-    engine().world.quats       = _hv_to_dv<float4>("world.quats", quats);
-    engine().world.scales      = _hv_to_dv<float3>("world.scales", scales);
-    engine().world.opacities   = _hv_to_dv<float>("world.opacities", opacities);
-    engine().world.features_dc = _hv_to_dv<float3>("world.features_dc", features_dc);
-    engine().world.features_sh = _hv_to_dt2d<float3>("world.features_sh", features_sh);
+    engine().world.means       = _hv_to_dv<float3>(PoolSlot::WorldMeans, means);
+    engine().world.quats       = _hv_to_dv<float4>(PoolSlot::WorldQuats, quats);
+    engine().world.scales      = _hv_to_dv<float3>(PoolSlot::WorldScales, scales);
+    engine().world.opacities   = _hv_to_dv<float>(PoolSlot::WorldOpacities, opacities);
+    engine().world.features_dc = _hv_to_dv<float3>(PoolSlot::WorldFeaturesDc, features_dc);
+    engine().world.features_sh = _hv_to_dt2d<float3>(PoolSlot::WorldFeaturesSh, features_sh);
 
     engine().world.initialized = true;
 }
@@ -73,14 +73,14 @@ void set_camera_params(
         if (_is_device_ptr((void*)src_ptr)) {
             ptr = (float4*)src_ptr;
         } else {
-            ptr = DevicePool::global().acquire<float4>("cam.viewmats", (size_t)(C * 4));
+            ptr = DevicePool::global().acquire<float4>(PoolSlot::CamViewmats, (size_t)(C * 4));
             cudaMemcpy(ptr, (void*)src_ptr, C * 4 * sizeof(float4), cudaMemcpyHostToDevice);
         }
         TorchTensorView dv_tv((uint64_t)ptr, 4, {C, 4LL, 4LL});
         engine().camera.viewmats = DeviceTensor2D<float4>(dv_tv);
     }
-    engine().camera.intrins     = _hv_to_dv<float4>("cam.intrins", intrins);
-    engine().camera.dist_coeffs = _hv_to_dt2d<float>("cam.dist_coeffs", dist_coeffs);
+    engine().camera.intrins     = _hv_to_dv<float4>(PoolSlot::CamIntrins, intrins);
+    engine().camera.dist_coeffs = _hv_to_dt2d<float>(PoolSlot::CamDistCoeffs, dist_coeffs);
 }
 
 
@@ -91,12 +91,12 @@ void set_training_data(
     TorchTensorView gt_alpha,
     bool input_depth_is_ray_depth
 ) {
-    engine().gt.rgb    = _hv_to_dt3d_gt<float3>(gt_rgb,    "gt.rgb",    "rgb");
-    engine().gt.depth  = _hv_to_dt3d_gt<float>(gt_depth,   "gt.depth",  "depth");
-    engine().gt.normal = _hv_to_dt3d_gt<float3>(gt_normal, "gt.normal", "normal");
+    engine().gt.rgb    = _hv_to_dt3d_gt<float3>(gt_rgb,    PoolSlot::GtRgb,    "rgb");
+    engine().gt.depth  = _hv_to_dt3d_gt<float>(gt_depth,   PoolSlot::GtDepth,  "depth");
+    engine().gt.normal = _hv_to_dt3d_gt<float3>(gt_normal, PoolSlot::GtNormal, "normal");
     // gt_alpha: small bool/uint8 buffer (the external mask). No conversion;
     // the slang kernel reads bool per pixel. Drives engine().gt.has_mask.
-    engine().gt.alpha  = _hv_to_dt3d<bool>("gt.alpha", gt_alpha);
+    engine().gt.alpha  = _hv_to_dt3d<bool>(PoolSlot::GtAlpha, gt_alpha);
     engine().gt.has_gt    = (std::get<0>(gt_rgb) != 0);
     engine().gt.has_mask  = (std::get<0>(gt_alpha) != 0);
 

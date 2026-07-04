@@ -96,7 +96,7 @@ inline bool _is_device_ptr(const void* ptr) {
 //     of an already-device source. ---
 
 template<typename T>
-inline DeviceVector<T> _hv_to_dv(const std::string& key, const TorchTensorView& src_tv) {
+inline DeviceVector<T> _hv_to_dv(PoolSlot key, const TorchTensorView& src_tv) {
     if (std::get<0>(src_tv) == 0) return DeviceVector<T>();
     int64_t n = std::get<2>(src_tv)[0];
     uint64_t src_ptr = std::get<0>(src_tv);
@@ -114,7 +114,7 @@ inline DeviceVector<T> _hv_to_dv(const std::string& key, const TorchTensorView& 
 }
 
 template<typename T>
-inline DeviceTensor2D<T> _hv_to_dt2d(const std::string& key, const TorchTensorView& src_tv) {
+inline DeviceTensor2D<T> _hv_to_dt2d(PoolSlot key, const TorchTensorView& src_tv) {
     if (std::get<0>(src_tv) == 0) return DeviceTensor2D<T>();
     auto& shape = std::get<2>(src_tv);
     int64_t n0 = shape[0], n1 = shape[1];
@@ -133,7 +133,7 @@ inline DeviceTensor2D<T> _hv_to_dt2d(const std::string& key, const TorchTensorVi
 }
 
 template<typename T>
-inline DeviceTensor3D<T> _hv_to_dt3d(const std::string& key, const TorchTensorView& src_tv) {
+inline DeviceTensor3D<T> _hv_to_dt3d(PoolSlot key, const TorchTensorView& src_tv) {
     if (std::get<0>(src_tv) == 0) return DeviceTensor3D<T>();
     auto& shape = std::get<2>(src_tv);
     int64_t n0 = shape[0], n1 = shape[1], n2 = shape[2];
@@ -180,16 +180,17 @@ inline void _dt3d_to_host(const DeviceTensor3D<T>& dt, const TorchTensorView& ho
 template<typename T>
 inline DeviceTensor3D<T> _hv_to_dt3d_gt(
     const TorchTensorView& src_tv,
-    const std::string& key,
+    PoolSlot key,
     const std::string& kind)
 {
     if (std::get<0>(src_tv) == 0) return DeviceTensor3D<T>();
     uint32_t elem_size = std::get<1>(src_tv);
     if (elem_size == 4) return _hv_to_dt3d<T>(key, src_tv);
 
+    const std::string key_name = slot_name(key);
     auto& shape = std::get<2>(src_tv);
     if (shape.size() != 4)
-        throw std::runtime_error(key + ": expected [B, H, W, C] shape");
+        throw std::runtime_error(key_name + ": expected [B, H, W, C] shape");
     int64_t B = shape[0], H = shape[1], W = shape[2], C = shape[3];
     int64_t numel = B * H * W * C;
     uint64_t src_ptr = std::get<0>(src_tv);
@@ -205,7 +206,7 @@ inline DeviceTensor3D<T> _hv_to_dt3d_gt(
             d_u8 = (const uint8_t*)src_ptr;
         } else {
             uint8_t* staging = DevicePool::global().acquire<uint8_t>(
-                "gt.staging_u8", (size_t)numel);
+                PoolSlot::GtStagingU8, (size_t)numel);
             cudaMemcpy(staging, (void*)src_ptr, numel * sizeof(uint8_t),
                        cudaMemcpyHostToDevice);
             d_u8 = staging;
@@ -215,7 +216,7 @@ inline DeviceTensor3D<T> _hv_to_dt3d_gt(
         } else if (kind == "normal") {
             uint8_normal_to_float_raw(d_u8, d_f, (int)B, (int)H, (int)W, (int)C);
         } else {
-            throw std::runtime_error(key + ": uint8 not supported for kind '" + kind + "'");
+            throw std::runtime_error(key_name + ": uint8 not supported for kind '" + kind + "'");
         }
     } else if (elem_size == 2) {
         const uint16_t* d_u16;
@@ -223,7 +224,7 @@ inline DeviceTensor3D<T> _hv_to_dt3d_gt(
             d_u16 = (const uint16_t*)src_ptr;
         } else {
             uint16_t* staging = DevicePool::global().acquire<uint16_t>(
-                "gt.staging_u16", (size_t)numel);
+                PoolSlot::GtStagingU16, (size_t)numel);
             cudaMemcpy(staging, (void*)src_ptr, numel * sizeof(uint16_t),
                        cudaMemcpyHostToDevice);
             d_u16 = staging;
@@ -233,10 +234,10 @@ inline DeviceTensor3D<T> _hv_to_dt3d_gt(
         } else if (kind == "depth") {
             uint16_depth_to_float_raw(d_u16, d_f, (int)B, (int)H, (int)W, (int)C);
         } else {
-            throw std::runtime_error(key + ": uint16 not supported for kind '" + kind + "'");
+            throw std::runtime_error(key_name + ": uint16 not supported for kind '" + kind + "'");
         }
     } else {
-        throw std::runtime_error(key + ": unsupported element_size (expected 1, 2, or 4)");
+        throw std::runtime_error(key_name + ": unsupported element_size (expected 1, 2, or 4)");
     }
 
     TorchTensorView tv((uint64_t)d_f, 4, {B, H, W, C});
@@ -254,42 +255,42 @@ inline bool _tv_valid(const TorchTensorView& tv) {
     return std::get<0>(tv) != 0;
 }
 
-inline TorchTensorView _pool_tv(const std::string& key,
+inline TorchTensorView _pool_tv(PoolSlot key,
                                 int64_t B, int64_t H, int64_t W, int64_t C) {
     float* p = DevicePool::global().acquire<float>(key, (size_t)(B * H * W * C));
     return TorchTensorView((uint64_t)p, 4, {B, H, W, C});
 }
 
-inline TorchTensorView _pool_tv_zero(const std::string& key,
+inline TorchTensorView _pool_tv_zero(PoolSlot key,
                                      int64_t B, int64_t H, int64_t W, int64_t C) {
     float* p = DevicePool::global().acquire<float>(key, (size_t)(B * H * W * C));
     cudaMemset(p, 0, B * H * W * C * sizeof(float));
     return TorchTensorView((uint64_t)p, 4, {B, H, W, C});
 }
 
-inline TorchTensorView _pool_tv_1d(const std::string& key, int64_t N) {
+inline TorchTensorView _pool_tv_1d(PoolSlot key, int64_t N) {
     float* p = DevicePool::global().acquire<float>(key, (size_t)N);
     return TorchTensorView((uint64_t)p, 4, {N});
 }
 
-inline TorchTensorView _pool_tv_1d_zero(const std::string& key, int64_t N) {
+inline TorchTensorView _pool_tv_1d_zero(PoolSlot key, int64_t N) {
     float* p = DevicePool::global().acquire<float>(key, (size_t)N);
     cudaMemset(p, 0, N * sizeof(float));
     return TorchTensorView((uint64_t)p, 4, {N});
 }
 
-inline TorchTensorView _pool_tv_2d(const std::string& key, int64_t N, int64_t C) {
+inline TorchTensorView _pool_tv_2d(PoolSlot key, int64_t N, int64_t C) {
     float* p = DevicePool::global().acquire<float>(key, (size_t)(N * C));
     return TorchTensorView((uint64_t)p, 4, {N, C});
 }
 
-inline TorchTensorView _pool_tv_3d_f(const std::string& key,
+inline TorchTensorView _pool_tv_3d_f(PoolSlot key,
                                      int64_t N, int64_t K, int64_t C) {
     float* p = DevicePool::global().acquire<float>(key, (size_t)(N * K * C));
     return TorchTensorView((uint64_t)p, 4, {N, K, C});
 }
 
-inline TorchTensorView _pool_tv_3d_u8(const std::string& key,
+inline TorchTensorView _pool_tv_3d_u8(PoolSlot key,
                                       int64_t N, int64_t K, int64_t C) {
     uint8_t* p = DevicePool::global().acquire<uint8_t>(key, (size_t)(N * K * C));
     return TorchTensorView((uint64_t)p, 1, {N, K, C});

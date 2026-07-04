@@ -130,7 +130,7 @@ RenderContext* render_context_create(
     ctx->d_intrins  = dmalloc_copy(intrins, (size_t)num_cameras * 4);
     ctx->d_dist     = dmalloc_copy(dist, (size_t)num_cameras * 10);  // null -> zeros
 
-    ctx->radii.resize("meshing.render.radii", N);
+    ctx->radii.resize(PoolSlot::MeshingRenderRadii, N);
     return ctx;
 }
 

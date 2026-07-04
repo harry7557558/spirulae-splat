@@ -302,7 +302,7 @@ void semi_offloaded_adam(
     float* m_ptr_host = _tv_f(exp_avg);
     float* v_ptr_host = _tv_f(exp_avg_sq);
 
-    float* buffer = DevicePool::global().acquire<float>("semi_offloaded_adam_buf", 2 * chunk_size);
+    float* buffer = DevicePool::global().acquire<float>(PoolSlot::SemiOffloadedAdamBuf, 2 * chunk_size);
     float* m_ptr_device = buffer;
     float* v_ptr_device = buffer + chunk_size;
 

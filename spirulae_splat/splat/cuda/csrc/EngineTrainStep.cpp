@@ -118,7 +118,7 @@ static void _engine_step_optim_and_densify(
         engine().bilagrid_normal.enabled) {
         engine_bilagrid_optim_step(step, cfg.bilagrid);
 
-        float* tv_buf = DevicePool::global().acquire<float>("eng.bg.tv_readout", 3);
+        float* tv_buf = DevicePool::global().acquire<float>(PoolSlot::EngBgTvReadout, 3);
         _engine_bilagrid_tv_into(tv_buf);
         static AsyncReadout<float> tv_readout(3);
         const float* h_tv = tv_readout.read_previous();
@@ -275,7 +275,7 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
     // engine().fwd.accum_weight at this buffer for the densify pass.
     int64_t N_splats = engine().cur_num_splats;
     DeviceVector<float> accum_weight_sum;
-    accum_weight_sum.resize("eng.subbatch.accum_weight_sum", N_splats);
+    accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum, N_splats);
     accum_weight_sum.zero();
 
     std::map<std::string, float> agg;
@@ -407,7 +407,7 @@ std::map<std::string, float> engine_train_step_hetero(
 
     int64_t N_splats = engine().cur_num_splats;
     DeviceVector<float> accum_weight_sum;
-    accum_weight_sum.resize("eng.subbatch.accum_weight_sum", N_splats);
+    accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum, N_splats);
     accum_weight_sum.zero();
 
     std::map<std::string, float> agg;
@@ -576,7 +576,7 @@ static std::map<std::string, float> _engine_train_step_split_warped(
 
     int64_t N_splats = engine().cur_num_splats;
     DeviceVector<float> accum_weight_sum;
-    accum_weight_sum.resize("eng.subbatch.accum_weight_sum", N_splats);
+    accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum, N_splats);
     accum_weight_sum.zero();
 
     std::map<std::string, float> agg;

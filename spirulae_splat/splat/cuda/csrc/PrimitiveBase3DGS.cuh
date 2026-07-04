@@ -126,14 +126,14 @@ struct _BasePrimitive3DGS {
                 0
             );
         }
-        static std::vector<DeviceTensorFloatND> empty_pool(int64_t size, int num_sh, const std::string& key_prefix) {
+        static std::vector<DeviceTensorFloatND> empty_pool(int64_t size, int num_sh, PoolSlot key_prefix) {
             return TensorArray<6>::empty_pool(size, {3, 4, 3, 1, 3, (int32_t)(3*num_sh)}, key_prefix);
         }
-        static std::vector<DeviceTensorFloatND> zeros_pool(int64_t size, int num_sh, const std::string& key_prefix) {
+        static std::vector<DeviceTensorFloatND> zeros_pool(int64_t size, int num_sh, PoolSlot key_prefix) {
             return TensorArray<6>::zeros_pool(size, {3, 4, 3, 1, 3, (int32_t)(3*num_sh)}, key_prefix);
         }
         static std::vector<DeviceTensorFloatND> zeros_pool(
-            const std::vector<DeviceTensorFloatND>& tmpl, const std::string& key_prefix) {
+            const std::vector<DeviceTensorFloatND>& tmpl, PoolSlot key_prefix) {
             return TensorArray<6>::zeros_pool(tmpl, key_prefix);
         }
     };
@@ -212,14 +212,14 @@ struct _BasePrimitive3DGS {
 
     #endif  // #ifdef __CUDACC__
 
-        static std::vector<DeviceTensorFloatND> empty_pool(int64_t size, const std::string& key_prefix) {
+        static std::vector<DeviceTensorFloatND> empty_pool(int64_t size, PoolSlot key_prefix) {
             return TensorArray<5>::empty_pool(size, {2, 1, 3, 1, 3}, key_prefix);
         }
-        static std::vector<DeviceTensorFloatND> zeros_pool(int64_t size, const std::string& key_prefix) {
+        static std::vector<DeviceTensorFloatND> zeros_pool(int64_t size, PoolSlot key_prefix) {
             return TensorArray<5>::zeros_pool(size, {2, 1, 3, 1, 3}, key_prefix);
         }
         static std::vector<DeviceTensorFloatND> zeros_pool(
-            const std::vector<DeviceTensorFloatND>& tmpl, const std::string& key_prefix) {
+            const std::vector<DeviceTensorFloatND>& tmpl, PoolSlot key_prefix) {
             return TensorArray<5>::zeros_pool(tmpl, key_prefix);
         }
     };
@@ -325,14 +325,14 @@ struct _BasePrimitive3DGUT : _BasePrimitive3DGS<_sh_degree> {
 
     #endif  // #ifdef __CUDACC__
 
-        static std::vector<DeviceTensorFloatND> empty_pool(int64_t size, const std::string& key_prefix) {
+        static std::vector<DeviceTensorFloatND> empty_pool(int64_t size, PoolSlot key_prefix) {
             return TensorArray<3>::empty_pool(size, {3, 1, 3}, key_prefix);
         }
-        static std::vector<DeviceTensorFloatND> zeros_pool(int64_t size, const std::string& key_prefix) {
+        static std::vector<DeviceTensorFloatND> zeros_pool(int64_t size, PoolSlot key_prefix) {
             return TensorArray<3>::zeros_pool(size, {-1, 1, 3}, key_prefix);
         }
         static std::vector<DeviceTensorFloatND> zeros_pool(
-            const std::vector<DeviceTensorFloatND>& tmpl, const std::string& key_prefix) {
+            const std::vector<DeviceTensorFloatND>& tmpl, PoolSlot key_prefix) {
             return TensorArray<3>::zeros_pool(tmpl, key_prefix);
         }
     };

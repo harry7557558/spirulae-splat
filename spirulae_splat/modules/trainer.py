@@ -946,7 +946,7 @@ class TrainerConfigSynthetic(TrainerConfig):
         use_bilateral_grid=False,
         use_ppisp=False,
         use_bilateral_grid_for_geometry=False,
-        long_axis_split_opacity_k=(0.5, 0.75, 25000),
+        long_axis_split_opacity_k=(0.5, 0.6, 25000),
     ))
 
 

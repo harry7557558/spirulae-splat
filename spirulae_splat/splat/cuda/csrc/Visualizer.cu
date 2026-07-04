@@ -1054,30 +1054,40 @@ inline BvhResult build_bvh(
     const std::string& key_prefix
 ) {
     auto& pool = DevicePool::global();
+    // BVH-build scratch keys are per-primitive prefixes ("viewer.lss_bvh" /
+    // "viewer.tri_bvh" / "vis.*"), assembled at runtime -> dynamic Viewer slots.
+    const VramCategory kBvhCat = VramCategory::Viewer;
 
-    uint64_t* morton = pool.acquire<uint64_t>(key_prefix + ".morton", num_elem);
+    uint64_t* morton = (uint64_t*)pool.acquire_dynamic(
+        kBvhCat, key_prefix + ".morton", (size_t)num_elem * sizeof(uint64_t));
     fill_sorting_keys_kernel<primitive><<<_LAUNCH_ARGS_1D(num_elem, 256)>>>(
         num_elem, buffer, rootAABBMin, rootAABBMax, morton);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    int32_t* argsort_in = pool.acquire<int32_t>(key_prefix + ".argsort_in", num_elem);
+    int32_t* argsort_in = (int32_t*)pool.acquire_dynamic(
+        kBvhCat, key_prefix + ".argsort_in", (size_t)num_elem * sizeof(int32_t));
     fill_identity_kernel<<<_LAUNCH_ARGS_1D(num_elem, 256)>>>(argsort_in, num_elem);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    uint64_t* sorted_morton = pool.acquire<uint64_t>(key_prefix + ".sorted_morton", num_elem);
-    int32_t* argsort = pool.acquire<int32_t>(key_prefix + ".argsort", num_elem);
+    uint64_t* sorted_morton = (uint64_t*)pool.acquire_dynamic(
+        kBvhCat, key_prefix + ".sorted_morton", (size_t)num_elem * sizeof(uint64_t));
+    int32_t* argsort = (int32_t*)pool.acquire_dynamic(
+        kBvhCat, key_prefix + ".argsort", (size_t)num_elem * sizeof(int32_t));
     CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
         morton, sorted_morton, argsort_in, argsort, (int)num_elem);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    int2* internal_nodes = (int2*)pool.acquire<int32_t>(key_prefix + ".nodes", (size_t)(num_elem - 1) * 2);
-    int32_t* parent_nodes = pool.acquire<int32_t>(key_prefix + ".parents", num_elem - 1);
+    int2* internal_nodes = (int2*)pool.acquire_dynamic(
+        kBvhCat, key_prefix + ".nodes", (size_t)(num_elem - 1) * 2 * sizeof(int32_t));
+    int32_t* parent_nodes = (int32_t*)pool.acquire_dynamic(
+        kBvhCat, key_prefix + ".parents", (size_t)(num_elem - 1) * sizeof(int32_t));
     cudaMemset(parent_nodes, 0xff, (num_elem - 1) * sizeof(int32_t));
     fill_lbvh_internal_nodes_kernel<<<_LAUNCH_ARGS_1D(num_elem - 1, 256)>>>(
         num_elem, sorted_morton, argsort, internal_nodes, parent_nodes);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    float3* treeAABB = pool.acquire<float3>(key_prefix + ".aabb", (size_t)num_elem * 2);
+    float3* treeAABB = (float3*)pool.acquire_dynamic(
+        kBvhCat, key_prefix + ".aabb", (size_t)num_elem * 2 * sizeof(float3));
     fill_tree_init_aabb_kernel<<<_LAUNCH_ARGS_1D(num_elem - 1, 256)>>>(num_elem - 1, treeAABB);
     CHECK_DEVICE_ERROR(cudaGetLastError());
     compute_lbvh_aabb_kernel<primitive><<<_LAUNCH_ARGS_1D(num_elem - 1, 256)>>>(
@@ -1137,23 +1147,23 @@ void engine_viewer_init(
 
     // Upload dataset-wide arrays (host or device input). _hv_to_dv copies
     // when host, zero-copies when device.
-    v.d_intrins          = _hv_to_dv<float>("viewer.intrins",
+    v.d_intrins          = _hv_to_dv<float>(PoolSlot::ViewerIntrins,
                               TorchTensorView(std::get<0>(intrins), 4, {N * 4LL}));
-    v.d_widths           = _hv_to_dv<int32_t>("viewer.widths",  widths);
-    v.d_heights          = _hv_to_dv<int32_t>("viewer.heights", heights);
-    v.d_camera_models    = _hv_to_dv<int32_t>("viewer.cmodels", camera_models);
-    v.d_dist_coeffs      = _hv_to_dv<float>("viewer.dist",
+    v.d_widths           = _hv_to_dv<int32_t>(PoolSlot::ViewerWidths,  widths);
+    v.d_heights          = _hv_to_dv<int32_t>(PoolSlot::ViewerHeights, heights);
+    v.d_camera_models    = _hv_to_dv<int32_t>(PoolSlot::ViewerCmodels, camera_models);
+    v.d_dist_coeffs      = _hv_to_dv<float>(PoolSlot::ViewerDist,
                               TorchTensorView(std::get<0>(dist_coeffs), 4, {N * 10LL}));
-    v.d_camera_to_worlds = _hv_to_dv<float>("viewer.c2w",
+    v.d_camera_to_worlds = _hv_to_dv<float>(PoolSlot::ViewerC2w,
                               TorchTensorView(std::get<0>(camera_to_worlds), 4, {N * 12LL}));
 
     // Allocate thumbnail cache (N * S * S * 4 bytes; zero-initialized so
     // unfilled cells render as transparent black).
     constexpr int S = VIEWER_THUMBNAIL_SIZE;
-    v.thumbnails.resize("viewer.thumb", (int64_t)N * S * S * 4);
+    v.thumbnails.resize(PoolSlot::ViewerThumb, (int64_t)N * S * S * 4);
     cudaMemset(v.thumbnails.data_ptr(), 0,
                (size_t)N * S * S * 4 * sizeof(uint8_t));
-    v.thumbnail_done_mask.resize("viewer.thumb_done", N);
+    v.thumbnail_done_mask.resize(PoolSlot::ViewerThumbDone, N);
     cudaMemset(v.thumbnail_done_mask.data_ptr(), 0, (size_t)N * sizeof(uint8_t));
     v.host_seen_mask.assign((size_t)N, 0);
     v.pending_thumb = (int)N;
@@ -1277,7 +1287,7 @@ void engine_viewer_capture_thumbnails(TorchTensorView cam_indices_tv) {
     int32_t* tmp_ci = nullptr;
     if (d_ci == nullptr) {
         tmp_ci = DevicePool::global().acquire<int32_t>(
-            "viewer.cap_idx", (size_t)B_post);
+            PoolSlot::ViewerCapIdx, (size_t)B_post);
         cudaMemcpy(tmp_ci, host_ci.data(),
                    (size_t)B_post * sizeof(int32_t),
                    cudaMemcpyHostToDevice);
@@ -1337,8 +1347,8 @@ void _viewer_build_bvh()
     uint32_t num_lss = (uint32_t)(n * 8 * kNumFrustumSegments);
     uint32_t num_tri = (uint32_t)(n * 4 * kNumFrustumFaces * kNumFrustumFaces);
 
-    float4* lss_buffer = DevicePool::global().acquire<float4>("viewer.lss", (size_t)num_lss * 2);
-    float4* tri_buffer = DevicePool::global().acquire<float4>("viewer.tri", (size_t)num_tri * 4);
+    float4* lss_buffer = DevicePool::global().acquire<float4>(PoolSlot::ViewerLss, (size_t)num_lss * 2);
+    float4* tri_buffer = DevicePool::global().acquire<float4>(PoolSlot::ViewerTri, (size_t)num_tri * 4);
 
     TorchTensorView dist_tv((uint64_t)v.d_dist_coeffs.data_ptr(), 4,
                             {(int64_t)n, 10LL});
@@ -1358,7 +1368,7 @@ void _viewer_build_bvh()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    float3* root_aabb = DevicePool::global().acquire<float3>("viewer.root_aabb", 2);
+    float3* root_aabb = DevicePool::global().acquire<float3>(PoolSlot::ViewerRootAabb, 2);
     cudaMemset(root_aabb + 0, kFloatPInfByte, sizeof(float3));
     cudaMemset(root_aabb + 1, kFloatNInfByte, sizeof(float3));
     compute_aabb_kernel<VisPrimitive::LinearSweptSphere>
@@ -1433,7 +1443,7 @@ void engine_blit_view(
 
     float* min_max = nullptr;
     if (c == 1) {
-        min_max = DevicePool::global().acquire<float>("viewer.min_max", 2);
+        min_max = DevicePool::global().acquire<float>(PoolSlot::ViewerMinMax, 2);
         cudaMemsetAsync(min_max + 0, kFloatPInfByte, sizeof(float), viewer_stream());
         cudaMemsetAsync(min_max + 1, kFloatNInfByte, sizeof(float), viewer_stream());
         compute_min_max_kernel<<<_LAUNCH_ARGS_2D_VS(w, h, 16, 16)>>>(
@@ -1472,17 +1482,17 @@ void engine_blit_view(
             viewer_stream_wait_default();
         }
         lss_buffer = (const float4*)DevicePool::global().acquire<float4>(
-            "viewer.lss", (size_t)v.bvh_num_lss * 2);
+            PoolSlot::ViewerLss, (size_t)v.bvh_num_lss * 2);
         tri_buffer = (const float4*)DevicePool::global().acquire<float4>(
-            "viewer.tri", (size_t)v.bvh_num_tri * 4);
+            PoolSlot::ViewerTri, (size_t)v.bvh_num_tri * 4);
         lss_nodes  = (const int2*)DevicePool::global().acquire<int32_t>(
-            "viewer.lss_bvh.nodes", (size_t)(v.bvh_num_lss - 1) * 2);
+            PoolSlot::ViewerLssBvhNodes, (size_t)(v.bvh_num_lss - 1) * 2);
         tri_nodes  = (const int2*)DevicePool::global().acquire<int32_t>(
-            "viewer.tri_bvh.nodes", (size_t)(v.bvh_num_tri - 1) * 2);
+            PoolSlot::ViewerTriBvhNodes, (size_t)(v.bvh_num_tri - 1) * 2);
         lss_aabb   = (const float3*)DevicePool::global().acquire<float3>(
-            "viewer.lss_bvh.aabb", (size_t)v.bvh_num_lss * 2);
+            PoolSlot::ViewerLssBvhAabb, (size_t)v.bvh_num_lss * 2);
         tri_aabb   = (const float3*)DevicePool::global().acquire<float3>(
-            "viewer.tri_bvh.aabb", (size_t)v.bvh_num_tri * 2);
+            PoolSlot::ViewerTriBvhAabb, (size_t)v.bvh_num_tri * 2);
     }
 
     blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D_VS(w, h, 8, 4)>>>(
@@ -1536,7 +1546,7 @@ void blit_train_cameras_tensor(
 
     float* min_max = nullptr;
     if (c == 1) {
-        min_max = DevicePool::global().acquire<float>("vis.min_max", 2);
+        min_max = DevicePool::global().acquire<float>(PoolSlot::VisMinMax, 2);
         cudaMemset(min_max + 0, kFloatPInfByte, sizeof(float));
         cudaMemset(min_max + 1, kFloatNInfByte, sizeof(float));
         compute_min_max_kernel<<<_LAUNCH_ARGS_2D(w, h, 16, 16)>>>(
@@ -1565,8 +1575,8 @@ void blit_train_cameras_tensor(
 
     uint32_t num_lss = (uint32_t)(n * 8 * kNumFrustumSegments);
     uint32_t num_tri = (uint32_t)(n * 4 * kNumFrustumFaces * kNumFrustumFaces);
-    float4* lss_buffer = DevicePool::global().acquire<float4>("vis.lss", (size_t)num_lss * 2);
-    float4* tri_buffer = DevicePool::global().acquire<float4>("vis.tri", (size_t)num_tri * 4);
+    float4* lss_buffer = DevicePool::global().acquire<float4>(PoolSlot::VisLss, (size_t)num_lss * 2);
+    float4* tri_buffer = DevicePool::global().acquire<float4>(PoolSlot::VisTri, (size_t)num_tri * 4);
     fill_frustum_segments_kernel
     <<<_LAUNCH_ARGS_1D(n * 4 * kNumFrustumSegments, 4 * kNumFrustumSegments)>>>(
         (float4*)std::get<0>(intrins),
@@ -1581,7 +1591,7 @@ void blit_train_cameras_tensor(
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    float3* root_aabb = DevicePool::global().acquire<float3>("vis.root_aabb", 2);
+    float3* root_aabb = DevicePool::global().acquire<float3>(PoolSlot::VisRootAabb, 2);
     cudaMemset(root_aabb + 0, kFloatPInfByte, sizeof(float3));
     cudaMemset(root_aabb + 1, kFloatNInfByte, sizeof(float3));
     compute_aabb_kernel<VisPrimitive::LinearSweptSphere>

@@ -173,9 +173,9 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
         // sorted position cid_t reads the wrong intersection. Sorting a
         // permutation instead lets the kernel recover the original
         // out_idx = perm[cid_t] for every aabb / screen-grad load.
-        gaussian_ids_sorted_buf.resize("fused_proj_bwd.gauss_sorted", nnz);
-        perm_buf.resize("fused_proj_bwd.perm", nnz);
-        perm_sorted_buf.resize("fused_proj_bwd.perm_sorted", nnz);
+        gaussian_ids_sorted_buf.resize(PoolSlot::FusedProjBwdGaussSorted, nnz);
+        perm_buf.resize(PoolSlot::FusedProjBwdPerm, nnz);
+        perm_sorted_buf.resize(PoolSlot::FusedProjBwdPermSorted, nnz);
 
         fpbo_iota_kernel<<<_LAUNCH_ARGS_1D(nnz, 256)>>>(
             nnz, perm_buf.data_ptr()
@@ -197,7 +197,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
         sorted_gaussian_ids_ptr = d_keys.selector ? gaussian_ids_sorted_buf.data_ptr() : gaussian_ids.data_ptr();
         sorted_perm_ptr = d_values.selector ? perm_sorted_buf.data_ptr() : perm_buf.data_ptr();
 
-        camera_id_bounds.resize("fused_proj_bwd.cam_bounds", (int64_t)(N+1));
+        camera_id_bounds.resize(PoolSlot::FusedProjBwdCamBounds, (int64_t)(N+1));
         camera_id_bounds_kernel<<<_LAUNCH_ARGS_1D(nnz+1, 256)>>>(
             nnz, N,
             sorted_gaussian_ids_ptr,

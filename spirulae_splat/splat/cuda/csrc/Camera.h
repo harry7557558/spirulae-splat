@@ -137,9 +137,10 @@ public:
         _validate_shape("intrins",    intrins,     {num, 4});
         _validate_shape("dist_coeffs", dist_coeffs, {num, kCameraDistortionParams});
 
-        _viewmats    = _upload_viewmats(key_prefix, viewmats);
-        _intrins     = _upload_dv<float4>(key_prefix + ".intrins", intrins);
-        _dist_coeffs = _upload_dt2d<float>(key_prefix + ".dist_coeffs", dist_coeffs);
+        (void)key_prefix;  // camera table always uses the cam.* pool slots
+        _viewmats    = _upload_viewmats(PoolSlot::CamViewmats, viewmats);
+        _intrins     = _upload_dv<float4>(PoolSlot::CamIntrins, intrins);
+        _dist_coeffs = _upload_dt2d<float>(PoolSlot::CamDistCoeffs, dist_coeffs);
 
         _widths.assign((size_t)num, width);
         _heights.assign((size_t)num, height);
@@ -165,9 +166,10 @@ public:
         if ((int64_t)_heights.size() != num)
             throw std::runtime_error("Cameras: heights size mismatch");
 
-        _viewmats    = _upload_viewmats(key_prefix, viewmats);
-        _intrins     = _upload_dv<float4>(key_prefix + ".intrins", intrins);
-        _dist_coeffs = _upload_dt2d<float>(key_prefix + ".dist_coeffs", dist_coeffs);
+        (void)key_prefix;  // camera table always uses the cam.* pool slots
+        _viewmats    = _upload_viewmats(PoolSlot::CamViewmats, viewmats);
+        _intrins     = _upload_dv<float4>(PoolSlot::CamIntrins, intrins);
+        _dist_coeffs = _upload_dt2d<float>(PoolSlot::CamDistCoeffs, dist_coeffs);
     }
 
     // 4) Shallow / non-owning view from existing device tensors. Underlying
@@ -247,7 +249,7 @@ private:
     // so this header has no Engine* dependency.
     template<typename T>
     static DeviceVector<T> _upload_dv(
-        const std::string& key, const TorchTensorView& tv)
+        PoolSlot key, const TorchTensorView& tv)
     {
         if (std::get<0>(tv) == 0) return DeviceVector<T>();
         int64_t n = std::get<2>(tv)[0];
@@ -269,7 +271,7 @@ private:
 
     template<typename T>
     static DeviceTensor2D<T> _upload_dt2d(
-        const std::string& key, const TorchTensorView& tv)
+        PoolSlot key, const TorchTensorView& tv)
     {
         if (std::get<0>(tv) == 0) return DeviceTensor2D<T>();
         const auto& shape = std::get<2>(tv);
@@ -293,7 +295,7 @@ private:
     // Viewmats arrive as a [N, 4, 4] tensor view. Treat each row of 4
     // floats as a float4 and store as DeviceTensor2D<float4>[N, 4].
     static DeviceTensor2D<float4> _upload_viewmats(
-        const std::string& key_prefix, const TorchTensorView& tv)
+        PoolSlot key, const TorchTensorView& tv)
     {
         if (std::get<0>(tv) == 0) return DeviceTensor2D<float4>();
         const auto& shape = std::get<2>(tv);
@@ -304,7 +306,7 @@ private:
             ptr = (float4*)src_ptr;
         } else {
             ptr = DevicePool::global().acquire<float4>(
-                key_prefix + ".viewmats", (size_t)(N * 4));
+                key, (size_t)(N * 4));
             cudaMemcpy(ptr, (void*)src_ptr, N * 4 * sizeof(float4),
                        cudaMemcpyHostToDevice);
         }

@@ -306,7 +306,7 @@ std::tuple<
 
     /* Count tiles intersected per splat */
     DeviceVector<int64_t> tiles_per_splat;
-    tiles_per_splat.resize("isect.tiles_per_splat", total_count);
+    tiles_per_splat.resize(PoolSlot::IsectTilesPerSplat, total_count);
     (proj_conic != nullptr ?
         intersect_tile_kernel<true, true> :
         intersect_tile_kernel<true, false>
@@ -328,7 +328,7 @@ std::tuple<
 
     /* Inclusive prefix sum -> cumulative tile counts */
     DeviceVector<int64_t> cum_tiles_per_splat;
-    cum_tiles_per_splat.resize("isect.cum_tiles", total_count);
+    cum_tiles_per_splat.resize(PoolSlot::IsectCumTiles, total_count);
     CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
         tiles_per_splat.data_ptr(), cum_tiles_per_splat.data_ptr(), (int)total_count);
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -341,7 +341,7 @@ std::tuple<
                    sizeof(int64_t), cudaMemcpyDeviceToHost);
 
     DeviceTensor3D<int32_t> offsets_out;
-    offsets_out.resize("isect.offsets", I, tile_height, tile_width);
+    offsets_out.resize(PoolSlot::IsectOffsets, I, tile_height, tile_width);
 
     if (n_isects == 0) {
         offsets_out.zero();
@@ -350,11 +350,11 @@ std::tuple<
 
     /* Write isect keys into double-buffer pair */
     DeviceVector<int64_t> isect_ids_a, isect_ids_b;
-    isect_ids_a.resize("isect.ids_a", n_isects);
-    isect_ids_b.resize("isect.ids_b", n_isects);
+    isect_ids_a.resize(PoolSlot::IsectIdsA, n_isects);
+    isect_ids_b.resize(PoolSlot::IsectIdsB, n_isects);
     DeviceVector<int32_t> flatten_ids_a, flatten_ids_b;
-    flatten_ids_a.resize("isect.flat_a", n_isects);
-    flatten_ids_b.resize("isect.flat_b", n_isects);
+    flatten_ids_a.resize(PoolSlot::IsectFlatA, n_isects);
+    flatten_ids_b.resize(PoolSlot::IsectFlatB, n_isects);
 
     (proj_conic != nullptr ?
         intersect_tile_kernel<false, true> :
@@ -420,11 +420,11 @@ std::tuple<
 
     /* Allocate output at max possible size; CUB writes actual count to d_num_selected */
     DeviceVector<int64_t> isect_ids_out;
-    isect_ids_out.resize("isect_post.ids", n_in);
+    isect_ids_out.resize(PoolSlot::IsectPostIds, n_in);
     DeviceVector<int32_t> flatten_ids_out;
-    flatten_ids_out.resize("isect_post.flat", n_in);
+    flatten_ids_out.resize(PoolSlot::IsectPostFlat, n_in);
     DeviceVector<int32_t> d_num_selected;
-    d_num_selected.resize("isect_post.num_sel", 1);
+    d_num_selected.resize(PoolSlot::IsectPostNumSel, 1);
 
     CUB_WRAPPER(cub::DeviceSelect::Flagged,
         isect_ids.data_ptr(), mask.data_ptr(),
@@ -437,12 +437,12 @@ std::tuple<
     /* Read back actual count and shrink logical sizes (no realloc — pool only grows) */
     int32_t n_isects = 0;
     cudaMemcpy(&n_isects, d_num_selected.data_ptr(), sizeof(int32_t), cudaMemcpyDeviceToHost);
-    isect_ids_out.resize("isect_post.ids", n_isects);
-    flatten_ids_out.resize("isect_post.flat", n_isects);
+    isect_ids_out.resize(PoolSlot::IsectPostIds, n_isects);
+    flatten_ids_out.resize(PoolSlot::IsectPostFlat, n_isects);
 
     /* Recompute per-tile start offsets */
     DeviceTensor3D<int32_t> offsets_out;
-    offsets_out.resize("isect_post.offsets", I, tile_height, tile_width);
+    offsets_out.resize(PoolSlot::IsectPostOffsets, I, tile_height, tile_width);
     intersect_offset_kernel<<<_LAUNCH_ARGS_1D(n_isects, 256)>>>(
         n_isects,
         isect_ids_out.data_ptr(),

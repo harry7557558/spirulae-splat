@@ -62,13 +62,15 @@ public:
     static void resize(
         TensorTuple& tensors,
         int64_t batch, int64_t height, int64_t width,
-        const std::string& key
+        PoolSlot key
     ) {
-        std::get<0>(tensors).resize(key + ".rgb", batch, height, width);
+        const VramCategory cat = slot_category(key);
+        const std::string  base = slot_name(key);
+        std::get<0>(tensors).resize_dynamic(cat, base + ".rgb", batch, height, width);
         if (has_depth(type))
-            std::get<1>(tensors).resize(key + ".depth", batch, height, width);
+            std::get<1>(tensors).resize_dynamic(cat, base + ".depth", batch, height, width);
         if (has_normal(type))
-            std::get<2>(tensors).resize(key + ".normal", batch, height, width);
+            std::get<2>(tensors).resize_dynamic(cat, base + ".normal", batch, height, width);
     }
 
     // Allocate only the distortion channels in `dt` (depth always when active;
@@ -77,14 +79,16 @@ public:
     static void resizeDistortion(
         TensorTuple& tensors,
         int64_t batch, int64_t height, int64_t width,
-        const std::string& key
+        PoolSlot key
     ) {
+        const VramCategory cat = slot_category(key);
+        const std::string  base = slot_name(key);
         if (dist_has_rgb(dt))
-            std::get<0>(tensors).resize(key + ".rgb", batch, height, width);
+            std::get<0>(tensors).resize_dynamic(cat, base + ".rgb", batch, height, width);
         if (dist_has_depth(dt))
-            std::get<1>(tensors).resize(key + ".depth", batch, height, width);
+            std::get<1>(tensors).resize_dynamic(cat, base + ".depth", batch, height, width);
         if (dist_has_normal(dt))
-            std::get<2>(tensors).resize(key + ".normal", batch, height, width);
+            std::get<2>(tensors).resize_dynamic(cat, base + ".normal", batch, height, width);
     }
 
     struct Tensor {
@@ -424,26 +428,30 @@ public:
         }
     }
 
+    // The N sub-buffers of an array are Never-class forward-cache scratch keyed
+    // "<slot>.<i>" at runtime -> dynamic slots, categorized by the base slot.
     static std::vector<DeviceTensorFloatND> empty_pool(
-        int64_t size, std::array<int32_t, N> strides, const std::string& key_prefix
+        int64_t size, std::array<int32_t, N> strides, PoolSlot key_prefix
     ) {
+        const VramCategory cat = slot_category(key_prefix);
+        const std::string  base = slot_name(key_prefix);
         std::vector<DeviceTensorFloatND> res;
         for (int i = 0; i < N; ++i) {
             if (strides[i] <= 0) { res.push_back(DeviceTensorFloatND()); continue; }
-            std::string key = key_prefix + "." + std::to_string(i);
+            std::string key = base + "." + std::to_string(i);
             switch (strides[i]) {
-                case 1: { DeviceVector<float>  b; b.resize(key, size); res.push_back(DeviceTensorFloatND(b)); break; }
-                case 2: { DeviceVector<float2> b; b.resize(key, size); res.push_back(DeviceTensorFloatND(b)); break; }
-                case 3: { DeviceVector<float3> b; b.resize(key, size); res.push_back(DeviceTensorFloatND(b)); break; }
-                case 4: { DeviceVector<float4> b; b.resize(key, size); res.push_back(DeviceTensorFloatND(b)); break; }
-                default: { DeviceTensor2D<float> b; b.resize(key, size, (int64_t)strides[i]); res.push_back(DeviceTensorFloatND(b)); break; }
+                case 1: { DeviceVector<float>  b; b.resize_dynamic(cat, key, size); res.push_back(DeviceTensorFloatND(b)); break; }
+                case 2: { DeviceVector<float2> b; b.resize_dynamic(cat, key, size); res.push_back(DeviceTensorFloatND(b)); break; }
+                case 3: { DeviceVector<float3> b; b.resize_dynamic(cat, key, size); res.push_back(DeviceTensorFloatND(b)); break; }
+                case 4: { DeviceVector<float4> b; b.resize_dynamic(cat, key, size); res.push_back(DeviceTensorFloatND(b)); break; }
+                default: { DeviceTensor2D<float> b; b.resize_dynamic(cat, key, size, (int64_t)strides[i]); res.push_back(DeviceTensorFloatND(b)); break; }
             }
         }
         return res;
     }
 
     static std::vector<DeviceTensorFloatND> zeros_pool(
-        int64_t size, std::array<int32_t, N> strides, const std::string& key_prefix
+        int64_t size, std::array<int32_t, N> strides, PoolSlot key_prefix
     ) {
         auto res = empty_pool(size, strides, key_prefix);
         for (auto& t : res)
@@ -453,7 +461,7 @@ public:
     }
 
     static std::vector<DeviceTensorFloatND> zeros_pool(
-        const std::vector<DeviceTensorFloatND>& tmpl_vec, const std::string& key_prefix
+        const std::vector<DeviceTensorFloatND>& tmpl_vec, PoolSlot key_prefix
     ) {
         TensorArray<N> tmpl(tmpl_vec);
         std::array<int32_t, N> strides_arr;

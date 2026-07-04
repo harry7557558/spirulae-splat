@@ -133,19 +133,19 @@ inline std::tuple<
 
     RenderOutput::TensorTuple renders, distortions;
     RenderOutput::resize<SplatPrimitive::pixelType>(
-        renders, batch, image_height, image_width, "renders");
+        renders, batch, image_height, image_width, PoolSlot::Renders);
     // Allocate only the distortion channels in dist_type (no-op when None).
     RenderOutput::resizeDistortion<dist_type>(
-        distortions, batch, image_height, image_width, "distortions");
+        distortions, batch, image_height, image_width, PoolSlot::Distortions);
 
     DeviceTensor3D<float> render_Ts;
     DeviceTensor3D<int32_t> render_last_ids;
-    render_Ts.resize("render.Ts", batch, image_height, image_width);
-    render_last_ids.resize("render.last_ids", batch, image_height, image_width);
+    render_Ts.resize(PoolSlot::RenderTs, batch, image_height, image_width);
+    render_last_ids.resize(PoolSlot::RenderLastIds, batch, image_height, image_width);
 
     DeviceTensor3D<float> render_median;
     if (output_median)
-        render_median.resize("render.median", batch, image_height, image_width);
+        render_median.resize(PoolSlot::RenderMedian, batch, image_height, image_width);
 
     launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, dist_type, output_median>(
         num_splats,

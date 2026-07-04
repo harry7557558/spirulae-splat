@@ -734,7 +734,7 @@ __global__ void getTileSplatIntersections_lbvh_warp(
 
 
 __forceinline__ DeviceVector<int32_t> exclusiveScan(
-    const std::string& key, const DeviceVector<int32_t>& input
+    PoolSlot key, const DeviceVector<int32_t>& input
 ) {
     DeviceVector<int32_t> result;
     result.resize(key, input.size());
@@ -763,7 +763,7 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
     constexpr unsigned warp = 32;
 
     DeviceVector<int32_t> intersection_count;
-    intersection_count.resize("sti.brute.count", tiles.size+1);
+    intersection_count.resize(PoolSlot::StiBruteCount, tiles.size+1);
     intersection_count.zero();
     getTileSplatIntersections_brute<Primitive, camera_model><<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
         numSplats,
@@ -773,14 +773,14 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    DeviceVector<int32_t> intersection_count_map = exclusiveScan("sti.brute.count_map", intersection_count);
+    DeviceVector<int32_t> intersection_count_map = exclusiveScan(PoolSlot::StiBruteCountMap, intersection_count);
     int32_t total_intersections = 0;
     cudaMemcpy(&total_intersections,
         intersection_count_map.data_ptr() + tiles.size,
         sizeof(int32_t), cudaMemcpyDeviceToHost);
 
     DeviceVector<int32_t> intersectionSplatID;
-    intersectionSplatID.resize("sti.brute.ids", (int64_t)total_intersections);
+    intersectionSplatID.resize(PoolSlot::StiBruteIds, (int64_t)total_intersections);
     getTileSplatIntersections_brute<Primitive, camera_model><<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
         numSplats,
         tiles, splats,
@@ -808,9 +808,9 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
 
     // find splat AABB
     DeviceVector<float3> splat_aabb;
-    splat_aabb.resize("sti.lbvh.splat_aabb", numSplats * 2);
+    splat_aabb.resize(PoolSlot::StiLbvhSplatAabb, numSplats * 2);
     DeviceVector<float3> root_aabb;
-    root_aabb.resize("sti.lbvh.root_aabb", 2);
+    root_aabb.resize(PoolSlot::StiLbvhRootAabb, 2);
     cudaMemset((float*)root_aabb.data_ptr() + 0, kFloatPInfByte, 3*sizeof(float));
     cudaMemset((float*)root_aabb.data_ptr() + 3, kFloatNInfByte, 3*sizeof(float));
     computeSplatAABB<Primitive><<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
@@ -837,7 +837,7 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
 
     // compute sorting keys (level and Morton code)
     DeviceVector<int64_t> morton;
-    morton.resize("sti.lbvh.morton", numSplats);
+    morton.resize(PoolSlot::StiLbvhMorton, numSplats);
     fillSplatSortingKeys<Primitive><<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
         numSplats, splats,
         rootAABBMin, rootAABBMax, MAX_NUM_LEVELS, BRANCH_FACTOR, rel_scale,
@@ -847,14 +847,14 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
 
     // Sort morton keys with splat indices (iota) as values via CUB radix sort.
     DeviceVector<int32_t> splat_argsort_in;
-    splat_argsort_in.resize("sti.lbvh.argsort_in", numSplats);
+    splat_argsort_in.resize(PoolSlot::StiLbvhArgsortIn, numSplats);
     fillIota<<<_LAUNCH_ARGS_1D(numSplats, block)>>>(splat_argsort_in.data_ptr(), numSplats);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     DeviceVector<int64_t> sorted_morton;
-    sorted_morton.resize("sti.lbvh.sorted_morton", numSplats);
+    sorted_morton.resize(PoolSlot::StiLbvhSortedMorton, numSplats);
     DeviceVector<int32_t> splat_argsort;
-    splat_argsort.resize("sti.lbvh.argsort", numSplats);
+    splat_argsort.resize(PoolSlot::StiLbvhArgsort, numSplats);
     CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
         (const uint64_t*)morton.data_ptr(),
         (uint64_t*)sorted_morton.data_ptr(),
@@ -864,7 +864,7 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     DeviceVector<int32_t> tree_ranges;
-    tree_ranges.resize("sti.lbvh.tree_ranges", MAX_NUM_LEVELS * 2);
+    tree_ranges.resize(PoolSlot::StiLbvhTreeRanges, MAX_NUM_LEVELS * 2);
     cudaMemset(tree_ranges.data_ptr(), 0xff, (2*MAX_NUM_LEVELS)*sizeof(int32_t));
     fillLbvhTreeRanges<<<_LAUNCH_ARGS_1D(numSplats, block)>>>(
         MAX_NUM_LEVELS, numSplats,
@@ -880,9 +880,9 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
 
     // Build tree
     DeviceVector<int32_t> internal_nodes;
-    internal_nodes.resize("sti.lbvh.internal_nodes", (numSplats-1) * 2);
+    internal_nodes.resize(PoolSlot::StiLbvhInternalNodes, (numSplats-1) * 2);
     DeviceVector<int32_t> parent_nodes;
-    parent_nodes.resize("sti.lbvh.parent_nodes", numSplats-1);
+    parent_nodes.resize(PoolSlot::StiLbvhParentNodes, numSplats-1);
     cudaMemset(parent_nodes.data_ptr(), 0xff, (numSplats-1)*sizeof(int32_t));
     CHECK_DEVICE_ERROR(cudaGetLastError());
     fillLbvhInternalNodes<<<_LAUNCH_ARGS_1D(numSplats-1, block)>>>(
@@ -897,7 +897,7 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
 
     // Compute AABB
     DeviceVector<float3> treeAABB;
-    treeAABB.resize("sti.lbvh.tree_aabb", numSplats * 2);
+    treeAABB.resize(PoolSlot::StiLbvhTreeAabb, numSplats * 2);
     fillTreeSubcells_initAABB<<<_LAUNCH_ARGS_1D(numSplats-1, block)>>>(
         numSplats-1,
         treeAABB.data_ptr()
@@ -914,7 +914,7 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
 
     // Traverse to find intersections
     DeviceVector<int32_t> intersection_count;
-    intersection_count.resize("sti.lbvh.count", tiles.size+1);
+    intersection_count.resize(PoolSlot::StiLbvhCount, tiles.size+1);
     intersection_count.zero();
     getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp>>>(
         tiles, splats, MAX_NUM_LEVELS,
@@ -926,14 +926,14 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
-    DeviceVector<int32_t> intersection_count_map = exclusiveScan("sti.lbvh.count_map", intersection_count);
+    DeviceVector<int32_t> intersection_count_map = exclusiveScan(PoolSlot::StiLbvhCountMap, intersection_count);
     int32_t total_intersections = 0;
     cudaMemcpy(&total_intersections,
         intersection_count_map.data_ptr() + tiles.size,
         sizeof(int32_t), cudaMemcpyDeviceToHost);
 
     DeviceVector<int32_t> intersectionSplatID;
-    intersectionSplatID.resize("sti.lbvh.ids", (int64_t)total_intersections);
+    intersectionSplatID.resize(PoolSlot::StiLbvhIds, (int64_t)total_intersections);
     getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp>>>(
         tiles, splats, MAX_NUM_LEVELS,
         (uint2*)tree_ranges.data_ptr(),

@@ -74,7 +74,7 @@ void engine_init_background_sh(int sh_degree,
     // sh_degree*(sh_degree+2), which is one short and produces an OOB read
     // on the last band).
     int64_t n = (int64_t)(sh_degree + 1) * (sh_degree + 1);
-    bg.sh_coeffs.resize("eng.bg_sky.sh_coeffs", n);
+    bg.sh_coeffs.resize(PoolSlot::EngBgSkyShCoeffs, n);
     bg.sh_coeffs.zero();
     bg.sh_optim_initialized = false;
 }
@@ -89,8 +89,8 @@ static void _ensure_bg_sh_optim_state() {
     if (bg.sh_optim_initialized) return;
     if (bg.mode != EngineBackground::Mode::Sh) return;
     int64_t n = bg.sh_coeffs.size();
-    bg.sh_g1.resize("eng.bg_sky.g1", n); bg.sh_g1.zero();
-    bg.sh_g2.resize("eng.bg_sky.g2", n); bg.sh_g2.zero();
+    bg.sh_g1.resize(PoolSlot::EngBgSkyG1, n); bg.sh_g1.zero();
+    bg.sh_g2.resize(PoolSlot::EngBgSkyG2, n); bg.sh_g2.zero();
     bg.sh_optim_initialized = true;
 }
 
@@ -185,7 +185,7 @@ void _engine_background_forward() {
     // 2. Evaluate skybox SH into a per-batch image using engine state buffers
     //    directly (no R_wc / dist_coeffs gather). render_background_sh_*
     //    handles per-batch cam_indices indirection internally.
-    bg.fwd_background.resize("eng.bg_sky.image", C_batch, H, W);
+    bg.fwd_background.resize(PoolSlot::EngBgSkyImage, C_batch, H, W);
     TorchTensorView bg_image_tv = _dt3d_tv(bg.fwd_background);
     BgShViews vs = _engine_bg_sh_views(C_batch);
     render_background_sh_forward(
@@ -197,7 +197,7 @@ void _engine_background_forward() {
     //    re-point engine().fwd.renders.rgb at the post buffer. The old buffer
     //    (now aliased by fwd_pre_blend_rgb) is preserved for backward.
     DeviceTensor3D<float3> post_rgb;
-    post_rgb.resize("eng.bg_sky.rgb_post", C_batch, H, W);
+    post_rgb.resize(PoolSlot::EngBgSkyRgbPost, C_batch, H, W);
     DeviceTensor3D<float3> bg_image(bg_image_tv);
     blend_background_forward(bg.fwd_pre_blend_rgb, Ts_in, bg_image, post_rgb);
     fwd_rgb_tensor = post_rgb;
@@ -233,7 +233,7 @@ void _engine_background_backward_hook(
     // Scratch v_Ts; blend backward writes here, then we accumulate into the
     // existing v_render_Ts (already populated by the per-pixel loss).
     float* v_Ts_scratch = DevicePool::global().acquire<float>(
-        "eng.bg_sky.v_Ts_scratch", (size_t)C_batch * H * W);
+        PoolSlot::EngBgSkyVTsScratch, (size_t)C_batch * H * W);
     TorchTensorView v_Ts_scratch_tv((uint64_t)v_Ts_scratch, 4,
         {(int64_t)C_batch, H, W, 1LL});
 
@@ -261,7 +261,7 @@ void _engine_background_backward_hook(
 
         // v_background scratch.
         float* v_bg_dev = DevicePool::global().acquire<float>(
-            "eng.bg_sky.v_bg", (size_t)C_batch * H * W * 3);
+            PoolSlot::EngBgSkyVBg, (size_t)C_batch * H * W * 3);
         TorchTensorView v_bg_tv((uint64_t)v_bg_dev, 4,
             {(int64_t)C_batch, H, W, 3LL});
         DeviceTensor3D<float3> v_bg(v_bg_tv);
@@ -273,7 +273,7 @@ void _engine_background_backward_hook(
         // v_sh_coeffs: zero per-iter, persists past hook for the optim step.
         int64_t sh_n = bg.sh_coeffs.size();
         float* v_sh_dev = DevicePool::global().acquire<float>(
-            "eng.bg_sky.v_sh", (size_t)sh_n * 3);
+            PoolSlot::EngBgSkyVSh, (size_t)sh_n * 3);
         cudaMemsetAsync(v_sh_dev, 0, sh_n * 3 * sizeof(float), kBgStream);
         TorchTensorView v_sh_tv((uint64_t)v_sh_dev, 4, {sh_n, 3LL});
 
@@ -314,7 +314,7 @@ void engine_background_optim_step(int step, const BackgroundStepConfig& cfg) {
     if (n == 0) return;
 
     float* v_sh_dev = DevicePool::global().acquire<float>(
-        "eng.bg_sky.v_sh", (size_t)n * 3);
+        PoolSlot::EngBgSkyVSh, (size_t)n * 3);
 
     DeviceVector<int32_t> no_per_splat_steps;
     int32_t adam_step = step + 1;
@@ -386,7 +386,7 @@ int engine_copy_background_to_host(TorchTensorView out_image) {
         const float3* src = bg.fwd_background.data_ptr();
         if (cs.splat_enabled) {
             float3* scratch = DevicePool::global().acquire<float3>(
-                "color_space.bg_srgb", (size_t)C_batch * H * W);
+                PoolSlot::ColorSpaceBgSrgb, (size_t)C_batch * H * W);
             DeviceTensor3D<float3> in_view(TorchTensorView(
                 (uint64_t)src, 4,
                 {(int64_t)C_batch, (int64_t)H, (int64_t)W, 3LL}));

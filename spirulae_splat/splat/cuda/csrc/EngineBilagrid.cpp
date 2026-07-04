@@ -38,10 +38,10 @@ static void _validate_value_bits(const char* fn, int bits) {
 // when value_bits == 16. The bound buffer is zeroed (mm = (0, 0) per block);
 // the first Adam step's value-bound block-reduce installs real bounds.
 template<typename BG>
-static void _alloc_grids_quant(BG& bg, const char* key_prefix, int64_t cells) {
+static void _alloc_grids_quant(BG& bg, PoolSlot slot, int64_t cells) {
     constexpr int64_t BLOCK_SIZE = QuantizedTensor<16, 256>::kBlockSize;
     int64_t n_bounds = (cells + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    bg.grids_quant.resize(std::string(key_prefix) + ".q", cells, n_bounds);
+    bg.grids_quant.resize(slot, cells, n_bounds);
     bg.grids_quant.zero();
 }
 
@@ -50,7 +50,7 @@ static void _alloc_grids_quant(BG& bg, const char* key_prefix, int64_t cells) {
 // and write through `grids_quant` only. The DT5D's shape descriptor is kept
 // (set_shape_no_alloc) so downstream size<>() queries still work.
 template<typename BG>
-static void _encode_and_free_fp32(BG& bg, const char* fp32_pool_key) {
+static void _encode_and_free_fp32(BG& bg, PoolSlot fp32_pool_key) {
     int64_t N = bg.grids.template size<0>();
     int64_t L = bg.grids.template size<1>();
     int64_t H = bg.grids.template size<2>();
@@ -96,7 +96,7 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
     // (identity-init and zero-init both need fp32 writes); when quantized we
     // encode it to packed below and then free the fp32 slot at first
     // optimizer step (handled in EngineLoss / EngineBilagrid bilagrid step).
-    engine().bilagrid_rgb.grids.resize("eng.bg.rgb.grids", n_grids, L, H, W, C);
+    engine().bilagrid_rgb.grids.resize(PoolSlot::EngBgRgbGrids, n_grids, L, H, W, C);
     if (type == "affine") {
         engine().bilagrid_rgb.grids.zero();
         bilagrid_affine_identity_init(
@@ -106,8 +106,8 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
     }
     if (value_bits == 16) {
         int64_t cells = (int64_t)n_grids * L * H * W * C;
-        _alloc_grids_quant(engine().bilagrid_rgb, "eng.bg.rgb.grids_q", cells);
-        _encode_and_free_fp32(engine().bilagrid_rgb, "eng.bg.rgb.grids");
+        _alloc_grids_quant(engine().bilagrid_rgb, PoolSlot::EngBgRgbGridsQ, cells);
+        _encode_and_free_fp32(engine().bilagrid_rgb, PoolSlot::EngBgRgbGrids);
     } else {
         engine().bilagrid_rgb.grids_quant = QuantizedTensor<16, 256>();
     }
@@ -124,14 +124,14 @@ void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
     engine().bilagrid_depth.optim_bits = optim_bits;
     engine().bilagrid_depth.value_bits = value_bits;
     engine().bilagrid_depth.use_adagrad = use_adagrad;
-    engine().bilagrid_depth.grids.resize("eng.bg.depth.grids", n_grids, L, H, W, 2);
+    engine().bilagrid_depth.grids.resize(PoolSlot::EngBgDepthGrids, n_grids, L, H, W, 2);
     engine().bilagrid_depth.grids.zero();
-    engine().bilagrid_depth.scalars.resize("eng.bg.depth.scalars", n_grids);
+    engine().bilagrid_depth.scalars.resize(PoolSlot::EngBgDepthScalars, n_grids);
     engine().bilagrid_depth.scalars.zero();
     if (value_bits == 16) {
         int64_t cells = (int64_t)n_grids * L * H * W * 2;
-        _alloc_grids_quant(engine().bilagrid_depth, "eng.bg.depth.grids_q", cells);
-        _encode_and_free_fp32(engine().bilagrid_depth, "eng.bg.depth.grids");
+        _alloc_grids_quant(engine().bilagrid_depth, PoolSlot::EngBgDepthGridsQ, cells);
+        _encode_and_free_fp32(engine().bilagrid_depth, PoolSlot::EngBgDepthGrids);
     } else {
         engine().bilagrid_depth.grids_quant = QuantizedTensor<16, 256>();
     }
@@ -148,12 +148,12 @@ void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
     engine().bilagrid_normal.optim_bits = optim_bits;
     engine().bilagrid_normal.value_bits = value_bits;
     engine().bilagrid_normal.use_adagrad = use_adagrad;
-    engine().bilagrid_normal.grids.resize("eng.bg.normal.grids", n_grids, L, H, W, 3);
+    engine().bilagrid_normal.grids.resize(PoolSlot::EngBgNormalGrids, n_grids, L, H, W, 3);
     engine().bilagrid_normal.grids.zero();
     if (value_bits == 16) {
         int64_t cells = (int64_t)n_grids * L * H * W * 3;
-        _alloc_grids_quant(engine().bilagrid_normal, "eng.bg.normal.grids_q", cells);
-        _encode_and_free_fp32(engine().bilagrid_normal, "eng.bg.normal.grids");
+        _alloc_grids_quant(engine().bilagrid_normal, PoolSlot::EngBgNormalGridsQ, cells);
+        _encode_and_free_fp32(engine().bilagrid_normal, PoolSlot::EngBgNormalGrids);
     } else {
         engine().bilagrid_normal.grids_quant = QuantizedTensor<16, 256>();
     }
@@ -190,7 +190,7 @@ void _set_cur_cam_indices(TorchTensorView tv) {
         engine().bilagrid_cur_cam_indices = DeviceVector<int32_t>();
     } else {
         engine().bilagrid_cur_cam_indices = _hv_to_dv<int32_t>(
-            "eng.bg.cam_indices", tv);
+            PoolSlot::EngBgCamIndices, tv);
     }
 }
 
@@ -222,7 +222,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         // write into a fresh "post" buffer, then re-point engine state.
         engine().bilagrid_rgb.fwd_pre = fwd_rgb_tensor;
         DeviceTensor3D<float3> post_rgb;
-        post_rgb.resize("eng.bg.rgb.post", C_batch, H, W);
+        post_rgb.resize(PoolSlot::EngBgRgbPost, C_batch, H, W);
         const float* in_ptr  = (const float*)engine().bilagrid_rgb.fwd_pre.data_ptr();
         float*       out_ptr = (float*)post_rgb.data_ptr();
 
@@ -262,14 +262,14 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         int H_d = (int)engine().gt.depth.template size<1>();
         int W_d = (int)engine().gt.depth.template size<2>();
         DeviceTensor3D<float> post_depth;
-        post_depth.resize("eng.bg.depth.post", C_batch, H_d, W_d);
+        post_depth.resize(PoolSlot::EngBgDepthPost, C_batch, H_d, W_d);
 
         // Compute per-image scalar (median quantile) over pre-bilagrid depth
         // (the un-transformed gt.depth) and scatter into the per-camera
         // scalars table at the cam_indices slots.
         float* scalar_full = engine().bilagrid_depth.scalars.data_ptr();
         float* tmp_scalars = DevicePool::global().acquire<float>(
-            "eng.bg.depth.tmp_scalars", (size_t)C_batch);
+            PoolSlot::EngBgDepthTmpScalars, (size_t)C_batch);
         TorchTensorView depth_tv((uint64_t)engine().bilagrid_depth.fwd_pre.data_ptr(),
             4, {C_batch, H_d, W_d, 1, 1});
         TorchTensorView scalar_tv((uint64_t)tmp_scalars, 4, {C_batch});
@@ -305,7 +305,7 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         int H_n = (int)engine().gt.normal.template size<1>();
         int W_n = (int)engine().gt.normal.template size<2>();
         DeviceTensor3D<float3> post_normal;
-        post_normal.resize("eng.bg.normal.post", C_batch, H_n, W_n);
+        post_normal.resize(PoolSlot::EngBgNormalPost, C_batch, H_n, W_n);
 
         int L = (int)engine().bilagrid_normal.grids.size<1>();
         int gH = (int)engine().bilagrid_normal.grids.size<2>();
@@ -335,7 +335,7 @@ static void _ensure_bilagrid_batch_grad(
     DeviceTensor5D<float>& grad,
     const DeviceTensor5D<float>& grids,
     int C_batch,
-    const std::string& key
+    PoolSlot key
 ) {
     // grids may have data_ptr == nullptr when value_bits == 16 (canonical
     // store is the packed buffer); shape descriptor is still alive. Gate on
@@ -369,7 +369,7 @@ void _engine_bilagrid_backward_hook(
         BilagridReader grid_ptr = _bg_reader(engine().bilagrid_rgb);
         _ensure_bilagrid_batch_grad(engine().bilagrid_rgb.image_grad,
                                     engine().bilagrid_rgb.grids, C_batch,
-                                    "eng.bg.rgb.image_grad");
+                                    PoolSlot::EngBgRgbImageGrad);
         float* grad_grid_ptr = engine().bilagrid_rgb.image_grad.data_ptr();
 
         // v_render_rgb is the gradient w.r.t. POST-bilagrid rgb (what entered loss).
@@ -419,7 +419,7 @@ void _engine_bilagrid_backward_hook(
         BilagridReader grid_ptr = _bg_reader(engine().bilagrid_depth);
         _ensure_bilagrid_batch_grad(engine().bilagrid_depth.image_grad,
                                     engine().bilagrid_depth.grids, C_batch,
-                                    "eng.bg.depth.image_grad");
+                                    PoolSlot::EngBgDepthImageGrad);
         float* grad_grid_ptr = engine().bilagrid_depth.image_grad.data_ptr();
         float* scalars = engine().bilagrid_depth.scalars.data_ptr();
         bilagrid_depth_uniform_sample_backward_v1(
@@ -446,7 +446,7 @@ void _engine_bilagrid_backward_hook(
         BilagridReader grid_ptr = _bg_reader(engine().bilagrid_normal);
         _ensure_bilagrid_batch_grad(engine().bilagrid_normal.image_grad,
                                     engine().bilagrid_normal.grids, C_batch,
-                                    "eng.bg.normal.image_grad");
+                                    PoolSlot::EngBgNormalImageGrad);
         float* grad_grid_ptr = engine().bilagrid_normal.image_grad.data_ptr();
         bilagrid_normal_uniform_sample_backward_v1(
             grid_ptr,
@@ -476,7 +476,8 @@ void _ensure_bilagrid_optim_state() {
                     QuantizedTensorLog<8, 256>& adagrad_quant, // AdaGrad, quantize
                     int  optim_bits,                            // 32 = off, 4 or 8
                     bool use_adagrad,
-                    const std::string& key_prefix,
+                    PoolSlot k_ag, PoolSlot k_accum, PoolSlot k_quant,
+                    PoolSlot k_g1, PoolSlot k_g2,
                     bool& done) {
         bool quantize_optim = (optim_bits != 32);
         // Gate on the SHAPE descriptor, not data_ptr -- when value_bits=16 the
@@ -493,10 +494,10 @@ void _ensure_bilagrid_optim_state() {
                 constexpr int64_t BLOCK_SIZE =
                     QuantizedTensorLog<8, 256>::kBlockSize;
                 int64_t n_blocks = (numel + BLOCK_SIZE - 1) / BLOCK_SIZE;
-                adagrad_quant.resize(key_prefix + ".bg_ag", numel, n_blocks);
+                adagrad_quant.resize(k_ag, numel, n_blocks);
                 adagrad_quant.zero();
             } else {
-                accum_f.resize(key_prefix + ".accum", N, L, H, W, C);
+                accum_f.resize(k_accum, N, L, H, W, C);
                 accum_f.zero();
             }
         } else {
@@ -504,12 +505,12 @@ void _ensure_bilagrid_optim_state() {
                 constexpr int64_t BLOCK_SIZE =
                     QuantizedAdamState<8, 256>::kBlockSize;
                 int64_t n_blocks = (numel + BLOCK_SIZE - 1) / BLOCK_SIZE;
-                quant_state.resize(key_prefix + ".bg_quant", numel, n_blocks);
+                quant_state.resize(k_quant, numel, n_blocks);
                 quant_state.zero();
             } else {
-                g1.resize(key_prefix + ".g1", N, L, H, W, C);
+                g1.resize(k_g1, N, L, H, W, C);
                 g1.zero();
-                g2.resize(key_prefix + ".g2", N, L, H, W, C);
+                g2.resize(k_g2, N, L, H, W, C);
                 g2.zero();
             }
         }
@@ -523,7 +524,9 @@ void _ensure_bilagrid_optim_state() {
               engine().bilagrid_rgb.adagrad_quant,
               engine().bilagrid_rgb.optim_bits,
               engine().bilagrid_rgb.use_adagrad,
-              "eng.bg.rgb", engine().bilagrid_rgb.optim_initialized);
+              PoolSlot::EngBgRgbBgAg, PoolSlot::EngBgRgbAccum, PoolSlot::EngBgRgbBgQuant,
+              PoolSlot::EngBgRgbG1, PoolSlot::EngBgRgbG2,
+              engine().bilagrid_rgb.optim_initialized);
     }
     if (engine().bilagrid_depth.enabled) {
         setup(engine().bilagrid_depth.grids,
@@ -533,7 +536,9 @@ void _ensure_bilagrid_optim_state() {
               engine().bilagrid_depth.adagrad_quant,
               engine().bilagrid_depth.optim_bits,
               engine().bilagrid_depth.use_adagrad,
-              "eng.bg.depth", engine().bilagrid_depth.optim_initialized);
+              PoolSlot::EngBgDepthBgAg, PoolSlot::EngBgDepthAccum, PoolSlot::EngBgDepthBgQuant,
+              PoolSlot::EngBgDepthG1, PoolSlot::EngBgDepthG2,
+              engine().bilagrid_depth.optim_initialized);
     }
     if (engine().bilagrid_normal.enabled) {
         setup(engine().bilagrid_normal.grids,
@@ -543,7 +548,9 @@ void _ensure_bilagrid_optim_state() {
               engine().bilagrid_normal.adagrad_quant,
               engine().bilagrid_normal.optim_bits,
               engine().bilagrid_normal.use_adagrad,
-              "eng.bg.normal", engine().bilagrid_normal.optim_initialized);
+              PoolSlot::EngBgNormalBgAg, PoolSlot::EngBgNormalAccum, PoolSlot::EngBgNormalBgQuant,
+              PoolSlot::EngBgNormalG1, PoolSlot::EngBgNormalG2,
+              engine().bilagrid_normal.optim_initialized);
     }
 }
 

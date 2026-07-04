@@ -61,11 +61,11 @@ inline std::tuple<
     typename SplatPrimitive::WorldBuffer splats_world(in_splats);
 
     DeviceTensor2D<float4> aabb;
-    aabb.resize("proj.aabb", C, N);
+    aabb.resize(PoolSlot::ProjAabb, C, N);
     DeviceTensor2D<float> sorting_depths;
-    sorting_depths.resize("proj.depths", C, N);
+    sorting_depths.resize(PoolSlot::ProjDepths, C, N);
 
-    std::vector<DeviceTensorFloatND> splats_screen = SplatPrimitive::ScreenBuffer::empty_pool(C*splats_world.size(), "proj.screen");
+    std::vector<DeviceTensorFloatND> splats_screen = SplatPrimitive::ScreenBuffer::empty_pool(C*splats_world.size(), PoolSlot::ProjScreen);
 
     #define _LAUNCH_ARGS ( \
             (cudaStream_t)0, C, N, \

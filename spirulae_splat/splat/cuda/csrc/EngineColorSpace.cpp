@@ -20,7 +20,7 @@
 
 
 static void _alloc_and_upload_matrix(
-    DeviceTensor2D<float3>& dst, const float* host9, const std::string& key
+    DeviceTensor2D<float3>& dst, const float* host9, PoolSlot key
 ) {
     dst.resize(key, 3, 3);
     cudaMemcpy(dst.data_ptr(), host9, 9 * sizeof(float), cudaMemcpyHostToDevice);
@@ -45,7 +45,7 @@ void engine_init_color_space(
         if (splat_color_matrix.size() != 9)
             throw std::runtime_error("engine_init_color_space: splat_color_matrix must have 9 elements");
         _alloc_and_upload_matrix(cs.splat_color_matrix, splat_color_matrix.data(),
-                                 "color_space.splat_matrix");
+                                 PoolSlot::ColorSpaceSplatMatrix);
     }
 
     cs.image_enabled   = image_enabled;
@@ -54,7 +54,7 @@ void engine_init_color_space(
         if (image_color_matrix.size() != 9)
             throw std::runtime_error("engine_init_color_space: image_color_matrix must have 9 elements");
         _alloc_and_upload_matrix(cs.image_color_matrix, image_color_matrix.data(),
-                                 "color_space.image_matrix");
+                                 PoolSlot::ColorSpaceImageMatrix);
     }
 }
 
@@ -75,7 +75,7 @@ void _engine_color_space_forward() {
 
     int64_t B = cs.fwd_pre.size<0>(), H = cs.fwd_pre.size<1>(), W = cs.fwd_pre.size<2>();
     DeviceTensor3D<float3> post_rgb;
-    post_rgb.resize("color_space.fwd_post", B, H, W);
+    post_rgb.resize(PoolSlot::ColorSpaceFwdPost, B, H, W);
     rgb_to_srgb_forward(cs.splat_is_linear, cs.fwd_pre, cs.splat_color_matrix,
                         post_rgb);
     fwd_rgb_tensor = post_rgb;

@@ -12,6 +12,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "PoolSlots.h"
+
 
 // Use this to communicate with Python, without need to compile/link ATen/LibTorch
 typedef std::tuple<
@@ -91,26 +93,50 @@ private:
 };
 
 
-// Global CUDA memory pool -- keyed named buffers with high-water-mark semantics.
-// Memory never shrinks on resize; only reallocates when the new size exceeds capacity.
-// freeAll() is the only way to release memory, call it at VRAM pressure or exit.
-// All DeviceVector/Tensor2D/3D resize() calls route through here.
+// Global CUDA memory pool -- enum-keyed buffers with high-water-mark semantics.
+// Memory never shrinks on resize; only reallocates when the new size exceeds
+// capacity. freeAll() is the only way to release everything; free(slot) drops a
+// single logical buffer. All DeviceVector/Tensor2D/3D/5D::resize() and
+// Quantized*::resize() calls route through here.
+//
+// Storage is a dense array indexed by PoolKey = (PoolSlot << kSubBits) | sub
+// (see PoolSlots.h). The array is fixed-size (kNumPoolKeys) so there is no
+// rehash/insert -- the mutex only serializes the cudaMalloc/Free. A small side
+// map holds `acquire_dynamic` scratch whose key is built from runtime-variable
+// content and therefore has no compile-time PoolSlot.
 class DevicePool {
     struct Slot {
         void*  ptr        = nullptr;
         size_t cap_bytes  = 0;  // allocated
         size_t used_bytes = 0;  // logical (last requested)
     };
+    struct DynSlot {
+        Slot         slot;
+        VramCategory cat = VramCategory::Other;
+    };
 
-    std::unordered_map<std::string, Slot> _slots;
-    // Guards _slots. Multiple threads (e.g., trainer + viewer post-processor)
-    // call acquire concurrently -- unprotected unordered_map operations
-    // (operator[] insert, rehash) are UB across threads.
+    std::vector<Slot> _slots;                          // indexed by PoolKey
+    std::unordered_map<std::string, DynSlot> _dyn;     // acquire_dynamic scratch
+    // Guards _slots / _dyn. Multiple threads (e.g., trainer + viewer
+    // post-processor) call acquire concurrently.
     mutable std::mutex _mu;
 
-    DevicePool() = default;
+    DevicePool() : _slots(kNumPoolKeys) {}
     DevicePool(const DevicePool&) = delete;
     DevicePool& operator=(const DevicePool&) = delete;
+
+    // Grow-if-needed on a Slot already selected by the caller (mutex held).
+    template<typename T>
+    static T* _acquire_into(Slot& slot, size_t n) {
+        size_t bytes = n * sizeof(T);
+        if (bytes > slot.cap_bytes) {
+            if (slot.ptr) cudaFree(slot.ptr);
+            cudaMalloc(&slot.ptr, bytes);
+            slot.cap_bytes = bytes;
+        }
+        slot.used_bytes = bytes;
+        return static_cast<T*>(slot.ptr);
+    }
 
 public:
     static DevicePool& global() {
@@ -121,52 +147,90 @@ public:
     // Return a pointer to at least `n` elements of type T for the given key.
     // Reallocates only when current capacity is exceeded.
     template<typename T>
-    T* acquire(const std::string& key, size_t n) {
+    T* acquire(PoolKey key, size_t n) {
         std::lock_guard<std::mutex> lock(_mu);
-        size_t bytes = n * sizeof(T);
-        auto& slot = _slots[key];
-        if (bytes > slot.cap_bytes) {
-            if (slot.ptr) cudaFree(slot.ptr);
-            cudaMalloc(&slot.ptr, bytes);
-            slot.cap_bytes = bytes;
-        }
-        slot.used_bytes = bytes;
-        return static_cast<T*>(slot.ptr);
+        return _acquire_into<T>(_slots[key], n);
     }
 
-    // Free a single named buffer and remove it from the pool.
-    void free(const std::string& key) {
+    // Convenience: acquire a (slot, sub) buffer. sub defaults to the main slot.
+    template<typename T>
+    T* acquire(PoolSlot slot, size_t n, uint32_t sub = kSubMain) {
+        return acquire<T>(pool_key(slot, sub), n);
+    }
+
+    // Escape hatch for Never-saved scratch whose key is built at runtime and so
+    // has no compile-time PoolSlot. `cat` places it in the VRAM report; `name`
+    // is the display/debug key. Returns raw bytes (caller casts).
+    void* acquire_dynamic(VramCategory cat, const std::string& name, size_t bytes) {
         std::lock_guard<std::mutex> lock(_mu);
-        auto it = _slots.find(key);
-        if (it != _slots.end()) {
-            if (it->second.ptr) cudaFree(it->second.ptr);
-            _slots.erase(it);
+        DynSlot& d = _dyn[name];
+        d.cat = cat;
+        return _acquire_into<uint8_t>(d.slot, bytes);
+    }
+
+    // Free a single logical buffer (all of its sub-allocations).
+    void free(PoolSlot slot) {
+        std::lock_guard<std::mutex> lock(_mu);
+        for (uint32_t sub = 0; sub <= kSubMask; ++sub) {
+            Slot& s = _slots[pool_key(slot, sub)];
+            if (s.ptr) { cudaFree(s.ptr); s = Slot{}; }
         }
     }
 
     // Free all managed CUDA memory.
     void freeAll() {
         std::lock_guard<std::mutex> lock(_mu);
-        for (auto& [key, slot] : _slots)
-            if (slot.ptr) cudaFree(slot.ptr);
-        _slots.clear();
+        for (auto& s : _slots) if (s.ptr) { cudaFree(s.ptr); s = Slot{}; }
+        for (auto& kv : _dyn) if (kv.second.slot.ptr) cudaFree(kv.second.slot.ptr);
+        _dyn.clear();
     }
 
     // Total bytes allocated (capacity, not logical size).
     size_t totalAllocBytes() const {
         std::lock_guard<std::mutex> lock(_mu);
         size_t total = 0;
-        for (auto& [k, s] : _slots) total += s.cap_bytes;
+        for (auto& s : _slots) total += s.cap_bytes;
+        for (auto& kv : _dyn)  total += kv.second.slot.cap_bytes;
         return total;
     }
 
-    // Per-slot breakdown: returns [(key, used_bytes, cap_bytes), ...]
+    // Per-slot breakdown: [(name, used_bytes, cap_bytes), ...]. Names are
+    // reconstructed byte-identically to the old string keys (slot_name + sub
+    // suffix), so existing consumers keep working.
     std::vector<std::tuple<std::string, size_t, size_t>> getBreakdown() const {
         std::lock_guard<std::mutex> lock(_mu);
         std::vector<std::tuple<std::string, size_t, size_t>> result;
-        result.reserve(_slots.size());
-        for (auto& [k, s] : _slots)
-            result.emplace_back(k, s.used_bytes, s.cap_bytes);
+        for (uint32_t i = 0; i < _slots.size(); ++i) {
+            const Slot& s = _slots[i];
+            if (!s.ptr && s.cap_bytes == 0) continue;
+            std::string name = std::string(slot_name(pool_key_slot(i)))
+                             + sub_suffix(pool_key_sub(i));
+            result.emplace_back(std::move(name), s.used_bytes, s.cap_bytes);
+        }
+        for (auto& kv : _dyn)
+            result.emplace_back(kv.first, kv.second.slot.used_bytes,
+                                kv.second.slot.cap_bytes);
+        return result;
+    }
+
+    // Categorized breakdown: [(name, category, used_bytes, cap_bytes), ...].
+    // category is (int)VramCategory. Used by the C++-driven VRAM report.
+    std::vector<std::tuple<std::string, int, size_t, size_t>>
+    getBreakdownCategorized() const {
+        std::lock_guard<std::mutex> lock(_mu);
+        std::vector<std::tuple<std::string, int, size_t, size_t>> result;
+        for (uint32_t i = 0; i < _slots.size(); ++i) {
+            const Slot& s = _slots[i];
+            if (!s.ptr && s.cap_bytes == 0) continue;
+            PoolSlot slot = pool_key_slot(i);
+            std::string name = std::string(slot_name(slot))
+                             + sub_suffix(pool_key_sub(i));
+            result.emplace_back(std::move(name), (int)slot_category(slot),
+                                s.used_bytes, s.cap_bytes);
+        }
+        for (auto& kv : _dyn)
+            result.emplace_back(kv.first, (int)kv.second.cat,
+                                kv.second.slot.used_bytes, kv.second.slot.cap_bytes);
         return result;
     }
 
@@ -265,8 +329,19 @@ public:
     DeviceVector& operator=(const DeviceVector&) = default;
 
     // Pool-backed resize: memory owned by DevicePool, this is a non-owning view.
-    void resize(const std::string& key, int64_t numel) {
-        _data_ptr = DevicePool::global().acquire<T>(key, (size_t)numel);
+    // `sub` selects a sub-allocation within the slot (default = main); the
+    // QuantizedTensor* codecs pass kSubPacked / kSubBounds.
+    void resize(PoolSlot slot, int64_t numel, uint32_t sub = kSubMain) {
+        _data_ptr = DevicePool::global().acquire<T>(slot, (size_t)numel, sub);
+        _numel = numel;
+    }
+
+    // Dynamic-keyed resize for Never-class scratch whose name is built at
+    // runtime (prefix + index / suffix). Routes to the pool's side map with an
+    // explicit category. See DevicePool::acquire_dynamic.
+    void resize_dynamic(VramCategory cat, const std::string& name, int64_t numel) {
+        _data_ptr = (T*)DevicePool::global().acquire_dynamic(
+            cat, name, (size_t)numel * sizeof(T));
         _numel = numel;
     }
 
@@ -343,8 +418,17 @@ public:
     DeviceTensor2D& operator=(const DeviceTensor2D&) = default;
 
     // Pool-backed resize: memory owned by DevicePool, this is a non-owning view.
-    void resize(const std::string& key, int64_t numel_0, int64_t numel_1) {
-        _data_ptr = DevicePool::global().acquire<T>(key, (size_t)(numel_0 * numel_1));
+    void resize(PoolSlot slot, int64_t numel_0, int64_t numel_1, uint32_t sub = kSubMain) {
+        _data_ptr = DevicePool::global().acquire<T>(slot, (size_t)(numel_0 * numel_1), sub);
+        _numel_0 = numel_0;
+        _numel_1 = numel_1;
+    }
+
+    // Dynamic-keyed resize (Never-class scratch, runtime-built name).
+    void resize_dynamic(VramCategory cat, const std::string& name,
+                        int64_t numel_0, int64_t numel_1) {
+        _data_ptr = (T*)DevicePool::global().acquire_dynamic(
+            cat, name, (size_t)(numel_0 * numel_1) * sizeof(T));
         _numel_0 = numel_0;
         _numel_1 = numel_1;
     }
@@ -435,8 +519,19 @@ public:
     DeviceTensor3D& operator=(const DeviceTensor3D&) = default;
 
     // Pool-backed resize: memory owned by DevicePool, this is a non-owning view.
-    void resize(const std::string& key, int64_t numel_0, int64_t numel_1, int64_t numel_2) {
-        _data_ptr = DevicePool::global().acquire<T>(key, (size_t)(numel_0 * numel_1 * numel_2));
+    void resize(PoolSlot slot, int64_t numel_0, int64_t numel_1, int64_t numel_2,
+                uint32_t sub = kSubMain) {
+        _data_ptr = DevicePool::global().acquire<T>(slot, (size_t)(numel_0 * numel_1 * numel_2), sub);
+        _numel_0 = numel_0;
+        _numel_1 = numel_1;
+        _numel_2 = numel_2;
+    }
+
+    // Dynamic-keyed resize (Never-class scratch, runtime-built name).
+    void resize_dynamic(VramCategory cat, const std::string& name,
+                        int64_t numel_0, int64_t numel_1, int64_t numel_2) {
+        _data_ptr = (T*)DevicePool::global().acquire_dynamic(
+            cat, name, (size_t)(numel_0 * numel_1 * numel_2) * sizeof(T));
         _numel_0 = numel_0;
         _numel_1 = numel_1;
         _numel_2 = numel_2;
@@ -527,8 +622,9 @@ public:
     DeviceTensor5D& operator=(const DeviceTensor5D&) = default;
 
     // Pool-backed resize: memory owned by DevicePool, this is a non-owning view.
-    void resize(const std::string& key, int64_t n0, int64_t n1, int64_t n2, int64_t n3, int64_t n4) {
-        _data_ptr = DevicePool::global().acquire<T>(key, (size_t)(n0 * n1 * n2 * n3 * n4));
+    void resize(PoolSlot slot, int64_t n0, int64_t n1, int64_t n2, int64_t n3, int64_t n4,
+                uint32_t sub = kSubMain) {
+        _data_ptr = DevicePool::global().acquire<T>(slot, (size_t)(n0 * n1 * n2 * n3 * n4), sub);
         _numel_0 = n0; _numel_1 = n1; _numel_2 = n2; _numel_3 = n3; _numel_4 = n4;
     }
 
@@ -753,11 +849,11 @@ public:
 
     // ---- Host: storage management ------------------------------------------
 
-    void resize(const std::string& key_prefix, int64_t cells, int64_t bnds) {
+    void resize(PoolSlot slot, int64_t cells, int64_t bnds) {
         n_cells  = cells;
         n_bounds = bnds;
-        packed.resize(key_prefix + ".q",  (size_t)(cells * kBytesPerCell));
-        bounds.resize(key_prefix + ".qb", (size_t)bnds);
+        packed.resize(slot, (size_t)(cells * kBytesPerCell), kSubPacked);
+        bounds.resize(slot, (size_t)bnds,                    kSubBounds);
     }
 
     void zero() {
@@ -922,11 +1018,11 @@ public:
 
     // ---- Host: storage management ------------------------------------------
 
-    void resize(const std::string& key_prefix, int64_t cells, int64_t bnds) {
+    void resize(PoolSlot slot, int64_t cells, int64_t bnds) {
         n_cells  = cells;
         n_bounds = bnds;
-        packed.resize(key_prefix + ".q",  (size_t)packed_bytes_for(cells));
-        bounds.resize(key_prefix + ".qb", (size_t)bnds);
+        packed.resize(slot, (size_t)packed_bytes_for(cells), kSubPacked);
+        bounds.resize(slot, (size_t)bnds,                    kSubBounds);
     }
 
     void zero() {
@@ -1069,11 +1165,11 @@ public:
 
     // ---- Host: storage management ------------------------------------------
 
-    void resize(const std::string& key_prefix, int64_t cells, int64_t bnds) {
+    void resize(PoolSlot slot, int64_t cells, int64_t bnds) {
         n_cells  = cells;
         n_bounds = bnds;
-        packed.resize(key_prefix + ".q",  (size_t)(cells * kBytesPerCell));
-        bounds.resize(key_prefix + ".qb", (size_t)bnds);
+        packed.resize(slot, (size_t)(cells * kBytesPerCell), kSubPacked);
+        bounds.resize(slot, (size_t)bnds,                    kSubBounds);
     }
 
     void zero() {
