@@ -488,6 +488,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("engine_copy_background_to_host", &engine_copy_background_to_host);
     m.def("engine_init_color_space", &engine_init_color_space);
     m.def("engine_save_checkpoint", &engine_save_checkpoint);
+    m.def("engine_load_checkpoint", &engine_load_checkpoint);
 
 #if 0
     // Densify.cuh

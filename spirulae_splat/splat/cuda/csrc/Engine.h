@@ -505,21 +505,29 @@ size_t engine_get_scratch_bytes();
 
 // --- Checkpoint save ---
 //
-// Default mode writes into `output_dir`:
-//   splat.ply              : cur_num_splats only, NaN+low-opacity-filtered
-//   bilagrid_rgb.npy       : [N_cam, C, L, H, W] float (when bilagrid RGB enabled)
-//   bilagrid_depth.npy     : [N_cam, 2, L, H, W] float (when enabled)
-//   bilagrid_depth_scalars.npy : [N_cam] float
-//   bilagrid_normal.npy    : [N_cam, 3, L, H, W] float (when enabled)
-//   ppisp.npy              : [N_cam, P] float (when PPISP enabled)
-//   meta.txt               : key=value training-state metadata
-//
-// `full_dump=true` additionally writes a `full/` subfolder containing every
-// world-splat parameter (sized to max_num_splats), every bilagrid grid and
-// PPISP table, and all Adam optimizer states (g1, g2; quantized variants when
-// active). One .npy per buffer, for offline inspection.
+// Writes into `output_dir`:
+//   splat.ply  : cur_num_splats only, NaN+low-opacity-filtered (inference).
+//   state.tar  : POSIX ustar (zero-dep) containing
+//                  state.json          -- runtime + validation manifest
+//                  <slot_name>.npy     -- one flat typed array per saved pool
+//                                         slot (e.g. world.means.npy,
+//                                         eng.sh_quant.q.npy). Quantized codecs
+//                                         emit .q (packed) and .qb (bounds).
+// Which slots are saved is driven by SaveClass metadata (PoolSlots.h), so the
+// set can never drift from the live buffers:
+//   full_dump=false -> Always slots  (appearance / inference params)
+//   full_dump=true  -> Always+Resume (world raw params + all optimizer state,
+//                                      i.e. sufficient to resume training)
+// The device->host copy is chunked, using no extra device memory.
 void engine_save_checkpoint(
     std::string output_dir,
     bool full_dump,
     int step
 );
+
+// Restore engine state from `input_dir`/state.tar (resume training). The engine
+// skeleton must already be configured (world seeded at max_num_splats; any
+// bilagrid/PPISP channels in the checkpoint initialized). Sets runtime scalars +
+// optimizer layout from state.json, force-allocates optimizer/appearance-optim
+// buffers, and restores every saved buffer by slot name. Returns the saved step.
+int engine_load_checkpoint(std::string input_dir);

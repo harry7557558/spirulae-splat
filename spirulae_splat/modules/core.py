@@ -511,13 +511,30 @@ class Renderer:
 
     def engine_save_checkpoint(self, output_dir, step, full_dump=False):
         """Write checkpoint files into ``output_dir`` (created if missing).
-        Always writes ``splat.ply`` (cur_num_splats only, NaN/low-opacity-filtered),
-        ``bilagrid_*.npy`` / ``ppisp.npy`` (when enabled) and ``meta.txt``.
-        When ``full_dump=True`` additionally writes a ``full/`` subfolder with
-        every world parameter (max_num_splats) plus Adam optimizer state."""
+        Always writes ``splat.ply`` (cur_num_splats only, NaN/low-opacity-filtered)
+        and ``state.tar`` -- a POSIX tar of ``state.json`` (runtime/validation
+        manifest) plus one flat typed ``.npy`` per saved pool buffer, named by its
+        DevicePool slot. ``full_dump=False`` saves the Always slots (appearance /
+        inference params); ``full_dump=True`` also saves the Resume slots (world
+        raw params + all optimizer state) needed to resume training. The buffer
+        set is selected by SaveClass metadata, so it stays in sync automatically."""
         import os
         os.makedirs(str(output_dir), exist_ok=True)
         _C.engine_save_checkpoint(str(output_dir), bool(full_dump), int(step))
+
+    def engine_load_checkpoint(self, input_dir):
+        """Restore engine state from ``input_dir``/state.tar (resume training).
+
+        Preconditions (established by the caller): the engine skeleton is
+        configured -- world seeded/allocated at max_num_splats (done by
+        ``set_data_3dgs`` during Renderer construction), and any bilagrid / PPISP
+        channels present in the checkpoint already initialized. This restores the
+        world raw params, optimizer state, densify aux, and appearance state from
+        the Resume-class .npy payloads and returns the saved training ``step``.
+        The engine's cur_num_splats is set by the loader; the caller mirrors it
+        onto ``self.cur_num_splats`` from the checkpoint's state.json. Requires a
+        ``save_full_checkpoint=True`` dump."""
+        return int(_C.engine_load_checkpoint(str(input_dir)))
 
     def engine_train_step(self, step, max_steps,
                           # Forward

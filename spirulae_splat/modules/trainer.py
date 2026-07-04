@@ -30,6 +30,13 @@ class TrainerConfig:
     data: Path
     """Path to dataset. Can be a Nerfstudio or a COLMAP dataset."""
 
+    resume: Optional[Path] = None
+    """Resume training from a checkpoint. Pass a run output dir (latest
+        step-*.ckpt is used) or a specific step-*.ckpt dir. The run's config.json
+        supplies the architecture/model/data config (run-control flags like
+        num_iterations / save cadence / viewer are still taken from the CLI);
+        requires the checkpoint to have been written with save_full_checkpoint."""
+
     output_dir_prefix: Path = Path("outputs")
     """Prefix to output directory"""
 
@@ -43,9 +50,11 @@ class TrainerConfig:
     save_only_latest_checkpoint: bool = True
     """Whether to save only last checkpoint"""
     save_full_checkpoint: bool = False
-    """If True, each checkpoint additionally dumps every world/bilagrid/PPISP
-        parameter and Adam optimizer state as one .npy per buffer in a `full/`
-        subfolder. Useful for offline inspection of training dynamics."""
+    """If True, each checkpoint's `state.tar` additionally includes the Resume
+        slots -- world raw parameters (at max_num_splats) plus all optimizer
+        state -- making the checkpoint sufficient to resume training, not just
+        for inference. If False, only the Always slots (appearance/inference
+        params) are saved alongside `splat.ply`."""
     save_eval_images: bool = False
     """Whether to save eval images at end of training"""
 
@@ -120,10 +129,19 @@ class Trainer:
         # ``model.engine_train_step_managed`` and bypass the Python data path.
         self._setup_cpp_data_manager()
 
+        # The engine skeleton (world seeded at max_num_splats + data manager) is
+        # now established -- exactly the precondition engine_load_checkpoint
+        # needs. Restore from a checkpoint if resuming; otherwise start at step 0.
+        self._start_step = 0
+        if self.config.resume is not None:
+            self._resume_from_checkpoint(self.config.resume)
+
         self.output_dir = self._setup_output_dir()
         print(f"Output directory: {self.output_dir.absolute()}")
 
-        self._save_config_json()
+        # Don't overwrite the source run's config.json when resuming.
+        if self.config.resume is None:
+            self._save_config_json()
 
         self.lock = threading.Lock()
         # Lock-fairness signal: the render thread sets this before contending
@@ -707,9 +725,9 @@ class Trainer:
         train_wall_start = time.perf_counter()
         self.start_time = time.time()
         self.last_step_time = self.start_time
-        for step in range(self.config.num_iterations):
+        for step in range(self._start_step, self.config.num_iterations):
             self._check_pause()  # Check if paused and wait if needed
-            if step > 0 and self.config.steps_per_save > 0 and step % self.config.steps_per_save == 0:
+            if step > self._start_step and self.config.steps_per_save > 0 and step % self.config.steps_per_save == 0:
                 self.save_checkpoint(step)
             # if step % 100 == 50:
             #     self.print_vram_breakdown()
@@ -808,6 +826,62 @@ class Trainer:
         with open(self.output_dir / "metrics.json", "w") as f:
             json.dump(metrics, f, indent=4)
 
+    def _resume_from_checkpoint(self, load_dir) -> None:
+        """Restore engine + training state from a full checkpoint. Called from
+        __init__ after the engine skeleton is built (world seeded at
+        max_num_splats, data manager installed). Appearance channels present in
+        the checkpoint are eagerly re-initialized here (with the config's dims,
+        which must match the checkpoint) so their pool slots exist as restore
+        targets and the per-step lazy init won't re-zero them."""
+        from spirulae_splat.modules.resume import (
+            resolve_checkpoint, read_state_json, check_compat)
+
+        run_dir, ckpt_dir = resolve_checkpoint(Path(load_dir))
+        state = read_state_json(ckpt_dir)
+        check_compat(self.config, state)
+
+        model = self.model
+        cfg = self.config.model
+
+        def _enabled(key):
+            return bool(state.get(key, {}).get("enabled"))
+
+        if _enabled("bilagrid_rgb") and not model._bilagrid_rgb_init:
+            X, Y, W_g = cfg.bilagrid_shape
+            model.core.engine_init_bilagrid(
+                model.num_train_data, rgb_type=cfg.bilagrid_type,
+                rgb_LHW=(W_g, Y, X), use_adagrad=cfg.use_adagrad_bilagrid_optim)
+            model._bilagrid_rgb_init = True
+        if _enabled("bilagrid_depth") and not model._bilagrid_depth_init:
+            X, Y, W_g = cfg.bilagrid_shape_geometry
+            model.core.engine_init_bilagrid(
+                model.num_train_data, depth_LHW=(W_g, Y, X),
+                use_adagrad=cfg.use_adagrad_bilagrid_optim)
+            model._bilagrid_depth_init = True
+        if _enabled("bilagrid_normal") and not model._bilagrid_normal_init:
+            X, Y, W_g = cfg.bilagrid_shape_geometry
+            model.core.engine_init_bilagrid(
+                model.num_train_data, normal_LHW=(W_g, Y, X),
+                use_adagrad=cfg.use_adagrad_bilagrid_optim)
+            model._bilagrid_normal_init = True
+        if _enabled("ppisp") and not model._ppisp_init:
+            model.core.engine_init_ppisp(
+                model.num_train_data, param_type=cfg.ppisp_param_type,
+                use_adagrad=cfg.use_adagrad_ppisp_optim)
+            model._ppisp_init = True
+
+        # Restore world raw params + optimizer + densify + appearance from the
+        # checkpoint's pool dump, then refresh the host gauss_params and step.
+        step = model.core.engine_load_checkpoint(ckpt_dir)
+        model.core.engine_sync_splats_to_host()
+        model.core.cur_num_splats = int(state.get("cur_num_splats",
+                                                  model.core.cur_num_splats))
+        model.step = step
+        self._start_step = step
+        self.current_step = step
+        print(f"Resumed from {ckpt_dir} at step {step} "
+              f"(cur_num_splats={model.core.cur_num_splats})")
+
     def save_checkpoint(self, step: int) -> None:
         # Checkpoints are now a directory (PLY + npy on the C++ side);
         # torch.save(model.state_dict()) no longer captures the engine buffers.
@@ -821,7 +895,7 @@ class Trainer:
             for f in self.output_dir.glob("step-*.ckpt"):
                 if f != ckpt_path:
                     if f.is_dir():
-                        shutil.rmtree(f)
+                        shutil.rmtree(f, ignore_errors=True)
                     else:
                         f.unlink()
 

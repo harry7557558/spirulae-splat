@@ -264,6 +264,17 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
 }
 
 
+// Public wrapper so the checkpoint loader can force-allocate optimizer state to
+// a saved layout without running a training step. Reads engine().optim.
+// use_fused_proj_bwd_optim (set by the loader from state.json) for the layout.
+void engine_ensure_optim_state(int sh_optim_bits, int sh_value_bits,
+                               int non_sh_optim_bits,
+                               bool use_per_splat_bias_correction) {
+    _ensure_optim_state(sh_optim_bits, sh_value_bits, non_sh_optim_bits,
+                        use_per_splat_bias_correction);
+}
+
+
 // Build a [N, P]-shaped DeviceTensorFloatND view over a raw float buffer used
 // for the per-attribute Adam state (g1/g2). Mirrors the layout produced by
 // `DeviceTensorFloatND(DeviceVector<floatK>)`.

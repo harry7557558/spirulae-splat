@@ -1,14 +1,25 @@
-// Engine checkpoint save (PLY + npy + meta.txt). Optional full/ dump of every
-// persistent buffer for offline inspection.
+// Engine checkpoint save.
+//   * splat.ply -- inference artifact (filtered, dequantized Gaussians).
+//   * state.tar -- resume payload: a zero-dep ustar of state.json + one flat
+//     typed .npy per saved pool buffer, selected by SaveClass metadata:
+//       full_dump=false -> Always slots (appearance/inference params)
+//       full_dump=true  -> Always + Resume (world raw + all optimizer state)
+//     The dump is metadata-driven (DevicePool::saved) so it can never fall out
+//     of sync with the buffer set, and it copies device->host in chunks with no
+//     extra device memory.
 
 #include "Engine.h"
+#include "EngineInternal.h"
 #include "EngineState.h"
 
+#include "CheckpointIO.h"
 #include "npy.hpp"
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -53,6 +64,92 @@ static npy::shape_t _ckpt_shape_5d(const DeviceTensor5D<T>& t) {
         (unsigned long)t.template size<3>(),
         (unsigned long)t.template size<4>(),
     };
+}
+
+// Runtime + validation manifest embedded in state.tar. JSON. Holds only what
+// the loader needs that config.json cannot supply (cur_num_splats, active SH
+// bands, allocated appearance dims) plus fields to fail-fast on a config /
+// checkpoint mismatch. Deliberately NOT a config duplicate.
+static std::string _build_state_json(EngineState& s, int step, bool full) {
+    std::ostringstream j;
+    auto b = [](bool v) { return v ? 1 : 0; };
+    j << "{\n";
+    j << "  \"format_version\": 1,\n";
+    j << "  \"full_resume\": " << b(full) << ",\n";
+    j << "  \"quant_codec\": \"joint_u_log_sqrt_g2_v1\",\n";
+    j << "  \"quant_block_size\": 256,\n";
+    j << "  \"quant_eps\": 1e-15,\n";
+    j << "  \"step\": " << step << ",\n";
+    j << "  \"primitive\": \"" << s.primitive << "\",\n";
+    j << "  \"cur_num_splats\": " << s.cur_num_splats << ",\n";
+    j << "  \"max_num_splats\": " << s.max_num_splats << ",\n";
+    j << "  \"num_sh\": " << s.num_sh << ",\n";
+    j << "  \"sh_degree\": " << s.sh_degree << ",\n";
+    j << "  \"packed\": " << b(s.packed) << ",\n";
+    j << "  \"sh_optim_bits\": " << s.optim.sh_optim_bits << ",\n";
+    j << "  \"sh_value_bits\": " << s.world.sh_value_bits << ",\n";
+    j << "  \"non_sh_optim_bits\": " << s.optim.non_sh_optim_bits << ",\n";
+    // Reflects the ACTUAL allocated optimizer-state layout (FPBO vs regular).
+    // The loader sets this before _ensure_optim_state so the restore targets
+    // match the saved slot set.
+    j << "  \"use_fused_proj_bwd_optim\": " << b(s.optim.fused_state_active) << ",\n";
+    j << "  \"use_per_splat_bias_correction\": "
+      << b(s.optim.use_per_splat_bias_correction) << ",\n";
+    j << "  \"camera\": {\"num\": " << s.camera.num
+      << ", \"width\": " << s.camera.width
+      << ", \"height\": " << s.camera.height
+      << ", \"model\": \"" << s.camera.model_str << "\"},\n";
+    // Bilagrid channels. `type`/`C` only exist on the RGB struct, so they are
+    // passed in explicitly (nullptr for depth/normal) to keep the lambda generic.
+    auto emit_bg = [&](const char* key, auto& bg, const std::string* type, int C) {
+        j << "  \"" << key << "\": {\"enabled\": " << b(bg.enabled);
+        if (bg.enabled) {
+            if (type) j << ", \"type\": \"" << *type << "\", \"C\": " << C;
+            j << ", \"L\": " << bg.grids.template size<1>()
+              << ", \"H\": " << bg.grids.template size<2>()
+              << ", \"W\": " << bg.grids.template size<3>()
+              << ", \"optim_bits\": " << bg.optim_bits
+              << ", \"value_bits\": " << bg.value_bits
+              << ", \"use_adagrad\": " << b(bg.use_adagrad);
+        }
+        j << "},\n";
+    };
+    emit_bg("bilagrid_rgb",    s.bilagrid_rgb,    &s.bilagrid_rgb.type, s.bilagrid_rgb.C);
+    emit_bg("bilagrid_depth",  s.bilagrid_depth,  nullptr, 0);
+    emit_bg("bilagrid_normal", s.bilagrid_normal, nullptr, 0);
+    j << "  \"ppisp\": {\"enabled\": " << b(s.ppisp.enabled);
+    if (s.ppisp.enabled)
+        j << ", \"param_type\": \"" << s.ppisp.param_type << "\""
+          << ", \"num_params\": " << s.ppisp.num_params
+          << ", \"use_adagrad\": " << b(s.ppisp.use_adagrad);
+    j << "}\n}\n";
+    return j.str();
+}
+
+// --- Minimal extractors for our own flat state.json (top-level keys only,
+//     which are unique, so a first-match find is sufficient). ---
+static bool _json_find(const std::string& s, const std::string& key, size_t& vpos) {
+    std::string pat = "\"" + key + "\"";
+    size_t k = s.find(pat);
+    if (k == std::string::npos) return false;
+    size_t c = s.find(':', k + pat.size());
+    if (c == std::string::npos) return false;
+    vpos = c + 1;
+    while (vpos < s.size() &&
+           (s[vpos] == ' ' || s[vpos] == '\t' || s[vpos] == '\n' || s[vpos] == '\r'))
+        ++vpos;
+    return true;
+}
+static int64_t _json_int(const std::string& s, const std::string& key, int64_t def) {
+    size_t v;
+    if (!_json_find(s, key, v)) return def;
+    return (int64_t)std::strtoll(s.c_str() + v, nullptr, 10);
+}
+static std::string _json_str(const std::string& s, const std::string& key) {
+    size_t v;
+    if (!_json_find(s, key, v) || s[v] != '"') return "";
+    size_t e = s.find('"', v + 1);
+    return (e == std::string::npos) ? "" : s.substr(v + 1, e - v - 1);
 }
 
 } // anon namespace
@@ -250,337 +347,128 @@ void engine_save_checkpoint(
         flush();
     }
 
-    // --- Top-level bilagrid / PPISP grids (param tables only, no optimizer state) ---
-    if (s.bilagrid_rgb.enabled) {
-        _ckpt_save_npy<float>(out_root / "bilagrid_rgb.npy",
-                              s.bilagrid_rgb.grids.data_ptr(),
-                              (size_t)s.bilagrid_rgb.grids.numel(),
-                              _ckpt_shape_5d(s.bilagrid_rgb.grids));
-    }
-    if (s.bilagrid_depth.enabled) {
-        _ckpt_save_npy<float>(out_root / "bilagrid_depth.npy",
-                              s.bilagrid_depth.grids.data_ptr(),
-                              (size_t)s.bilagrid_depth.grids.numel(),
-                              _ckpt_shape_5d(s.bilagrid_depth.grids));
-        if (s.bilagrid_depth.scalars.data_ptr() && s.bilagrid_depth.scalars.size() > 0) {
-            _ckpt_save_npy<float>(out_root / "bilagrid_depth_scalars.npy",
-                                  s.bilagrid_depth.scalars.data_ptr(),
-                                  (size_t)s.bilagrid_depth.scalars.size(),
-                                  {(unsigned long)s.bilagrid_depth.scalars.size()});
-        }
-    }
-    if (s.bilagrid_normal.enabled) {
-        _ckpt_save_npy<float>(out_root / "bilagrid_normal.npy",
-                              s.bilagrid_normal.grids.data_ptr(),
-                              (size_t)s.bilagrid_normal.grids.numel(),
-                              _ckpt_shape_5d(s.bilagrid_normal.grids));
-    }
-    if (s.ppisp.enabled) {
-        _ckpt_save_npy<float>(out_root / "ppisp.npy",
-                              s.ppisp.params.data_ptr(),
-                              (size_t)(s.ppisp.params.size<0>() * s.ppisp.params.size<1>()),
-                              {(unsigned long)s.ppisp.params.size<0>(),
-                               (unsigned long)s.ppisp.params.size<1>()});
-    }
+    // --- state.tar: metadata-driven resume payload (see file header) ---------
+    // Which buffers to serialize: Always (base) or Always+Resume (full resume).
+    const SaveClass save_min = full_dump ? SaveClass::Resume : SaveClass::Always;
 
-    // --- meta.txt ---
+    std::ofstream tar((out_root / "state.tar").string(), std::ios::binary);
+    if (!tar)
+        throw std::runtime_error("Failed to open state.tar for write: "
+                                 + (out_root / "state.tar").string());
+
+    // state.json -- runtime + validation manifest (config lives in config.json).
     {
-        std::ofstream meta((out_root / "meta.txt").string());
-        meta << "step=" << step << "\n";
-        meta << "primitive=" << s.primitive << "\n";
-        meta << "cur_num_splats=" << s.cur_num_splats << "\n";
-        meta << "max_num_splats=" << s.max_num_splats << "\n";
-        meta << "num_sh=" << s.num_sh << "\n";
-        meta << "sh_degree=" << s.sh_degree << "\n";
-        meta << "num_cameras=" << s.camera.num << "\n";
-        meta << "image_width=" << s.camera.width << "\n";
-        meta << "image_height=" << s.camera.height << "\n";
-        meta << "camera_model=" << s.camera.model_str << "\n";
-        // Bit depth (32 = no quant, 4 or 8 = packed). Replaces the old
-        // train_quantize_sh bool. Offline tools should treat absence of this
-        // key as "8 if train_quantize_sh==1 else 32" for back-compat.
-        meta << "sh_optim_bits=" << s.optim.sh_optim_bits << "\n";
-        // SH VALUE-quant bit depth (32 = off, 8 or 16 = packed). When != 32,
-        // world_features_sh.npy is OMITTED and replaced by world_features_sh_packed.npy
-        // (uint8 raw, kBytesPerCell = 1 for 8-bit, 2 for 16-bit) plus
-        // world_features_sh_bounds.npy (float2 per block). The bound layout
-        // (cell-block vs per-splat-block) is signaled by world_features_sh_layout.
-        meta << "sh_value_bits=" << s.world.sh_value_bits << "\n";
-        // QuantizedAdamState codec signature -- tells offline tools which
-        // byte-to-(g1, g2) inverse to use when reading the *_packed.npy
-        // streams. Codec scheme: joint (u, log_s) AoS with u linear and
-        // log_s = log1p(sqrt_g2 / eps), eps = 1e-15. The PER-BUFFER bit
-        // depth is given by sh_optim_bits / bilagrid_*_optim_bits below.
-        meta << "quant_codec=joint_u_log_sqrt_g2_v1\n";
-        meta << "quant_block_size=256\n";
-        meta << "quant_eps=1e-15\n";
-        meta << "use_per_splat_bias_correction=" << (s.optim.use_per_splat_bias_correction ? 1 : 0) << "\n";
-        meta << "ply_kept=" << kept << "\n";
-        meta << "ply_nan_dropped=" << nan_dropped << "\n";
-        meta << "ply_low_opacity_dropped=" << lowopa_dropped << "\n";
-        if (s.bilagrid_rgb.enabled) {
-            meta << "bilagrid_rgb_enabled=1\n";
-            meta << "bilagrid_rgb_type=" << s.bilagrid_rgb.type << "\n";
-            meta << "bilagrid_rgb_C=" << s.bilagrid_rgb.C << "\n";
-            meta << "bilagrid_rgb_L=" << s.bilagrid_rgb.grids.size<1>() << "\n";
-            meta << "bilagrid_rgb_H=" << s.bilagrid_rgb.grids.size<2>() << "\n";
-            meta << "bilagrid_rgb_W=" << s.bilagrid_rgb.grids.size<3>() << "\n";
-            meta << "bilagrid_rgb_optim_bits=" << s.bilagrid_rgb.optim_bits << "\n";
-            meta << "bilagrid_rgb_use_adagrad=" << (s.bilagrid_rgb.use_adagrad ? 1 : 0) << "\n";
-        }
-        if (s.bilagrid_depth.enabled) {
-            meta << "bilagrid_depth_enabled=1\n";
-            meta << "bilagrid_depth_L=" << s.bilagrid_depth.grids.size<1>() << "\n";
-            meta << "bilagrid_depth_H=" << s.bilagrid_depth.grids.size<2>() << "\n";
-            meta << "bilagrid_depth_W=" << s.bilagrid_depth.grids.size<3>() << "\n";
-            meta << "bilagrid_depth_optim_bits=" << s.bilagrid_depth.optim_bits << "\n";
-            meta << "bilagrid_depth_use_adagrad=" << (s.bilagrid_depth.use_adagrad ? 1 : 0) << "\n";
-        }
-        if (s.bilagrid_normal.enabled) {
-            meta << "bilagrid_normal_enabled=1\n";
-            meta << "bilagrid_normal_L=" << s.bilagrid_normal.grids.size<1>() << "\n";
-            meta << "bilagrid_normal_H=" << s.bilagrid_normal.grids.size<2>() << "\n";
-            meta << "bilagrid_normal_W=" << s.bilagrid_normal.grids.size<3>() << "\n";
-            meta << "bilagrid_normal_optim_bits=" << s.bilagrid_normal.optim_bits << "\n";
-            meta << "bilagrid_normal_use_adagrad=" << (s.bilagrid_normal.use_adagrad ? 1 : 0) << "\n";
-        }
-        if (s.ppisp.enabled) {
-            meta << "ppisp_enabled=1\n";
-            meta << "ppisp_param_type=" << s.ppisp.param_type << "\n";
-            meta << "ppisp_num_params=" << s.ppisp.num_params << "\n";
-            meta << "ppisp_use_adagrad=" << (s.ppisp.use_adagrad ? 1 : 0) << "\n";
-        }
+        std::string sj = _build_state_json(s, step, full_dump);
+        ckpt::tar_write_bytes(tar, "state.json", sj.data(), sj.size());
     }
 
-    if (!full_dump) return;
+    // One flat typed .npy per saved pool slot. Chunked D->H copy through a small
+    // reusable host buffer -- bounded host RAM, ZERO extra device memory.
+    std::vector<char> host_stage;
+    for (const auto& sl : DevicePool::global().saved(save_min)) {
+        ckpt::tar_write_npy_device(tar, sl.name + ".npy",
+                                   sl.ptr, sl.nbytes, sl.dtype_tag, host_stage);
+    }
+    ckpt::tar_finish(tar);
+}
 
-    // --- full/ subfolder: every persistent buffer, one .npy per buffer ---
-    fs::path full_root = out_root / "full";
-    _ckpt_mkdir(full_root);
 
-    // World splat parameters at s.max_num_splats (full table).
-    auto save_dv_f3 = [&](const char* name, const DeviceVector<float3>& v) {
-        if (!v.data_ptr() || v.size() == 0) return;
-        _ckpt_save_npy<float>(full_root / name,
-                              reinterpret_cast<const float*>(v.data_ptr()),
-                              (size_t)v.size() * 3,
-                              {(unsigned long)v.size(), 3ul});
-    };
-    auto save_dv_f4 = [&](const char* name, const DeviceVector<float4>& v) {
-        if (!v.data_ptr() || v.size() == 0) return;
-        _ckpt_save_npy<float>(full_root / name,
-                              reinterpret_cast<const float*>(v.data_ptr()),
-                              (size_t)v.size() * 4,
-                              {(unsigned long)v.size(), 4ul});
-    };
-    auto save_dv_f1 = [&](const char* name, const DeviceVector<float>& v) {
-        if (!v.data_ptr() || v.size() == 0) return;
-        _ckpt_save_npy<float>(full_root / name, v.data_ptr(),
-                              (size_t)v.size(), {(unsigned long)v.size()});
-    };
-    auto save_dt2d_f3 = [&](const char* name, const DeviceTensor2D<float3>& t) {
-        if (!t.data_ptr()) return;
-        _ckpt_save_npy<float>(full_root / name,
-                              reinterpret_cast<const float*>(t.data_ptr()),
-                              (size_t)t.size<0>() * t.size<1>() * 3,
-                              {(unsigned long)t.size<0>(), (unsigned long)t.size<1>(), 3ul});
-    };
-    auto save_dt2d_uc3 = [&](const char* name, const DeviceTensor2D<uchar3>& t) {
-        if (!t.data_ptr()) return;
-        _ckpt_save_npy<uint8_t>(full_root / name,
-                                reinterpret_cast<const uint8_t*>(t.data_ptr()),
-                                (size_t)t.size<0>() * t.size<1>() * 3,
-                                {(unsigned long)t.size<0>(), (unsigned long)t.size<1>(), 3ul});
-    };
-    auto save_dt2d_f = [&](const char* name, const DeviceTensor2D<float>& t) {
-        if (!t.data_ptr()) return;
-        _ckpt_save_npy<float>(full_root / name, t.data_ptr(),
-                              (size_t)t.size<0>() * t.size<1>(),
-                              {(unsigned long)t.size<0>(), (unsigned long)t.size<1>()});
-    };
-    auto save_5d = [&](const char* name, const DeviceTensor5D<float>& t) {
-        if (!t.data_ptr()) return;
-        _ckpt_save_npy<float>(full_root / name, t.data_ptr(),
-                              (size_t)t.numel(), _ckpt_shape_5d(t));
-    };
-    auto save_dv_u8 = [&](const char* name, const DeviceVector<uint8_t>& v) {
-        if (!v.data_ptr() || v.size() == 0) return;
-        _ckpt_save_npy<uint8_t>(full_root / name, v.data_ptr(),
-                                (size_t)v.size(), {(unsigned long)v.size()});
-    };
+// Restore engine state from a checkpoint's state.tar for resuming training.
+//
+// Preconditions (established by the resume flow from config.json): the engine
+// skeleton is configured -- world buffers seeded/allocated at max_num_splats
+// (set_data_3dgs), and any bilagrid/PPISP channels present in the checkpoint
+// initialized (engine_init_bilagrid_*/engine_init_ppisp). This function then:
+//   1. reads state.json and installs runtime scalars + the optimizer-state
+//      layout flags (quant bits, FPBO, bias correction),
+//   2. force-allocates optimizer + appearance-optimizer buffers to that layout
+//      (no training step is run; the _ensure_* calls only allocate + zero, and
+//      no-op for absent components),
+//   3. memcpies every saved .npy back into its pool slot by name (chunked
+//      H->D, no extra device memory), validating byte sizes,
+//   4. leaves *_initialized flags set so the lazy guards won't re-zero data.
+// Returns the saved training `step`.
+int engine_load_checkpoint(std::string input_dir) {
+    EngineState& s = engine();
 
-    // World params (s.max_num_splats sized).
-    save_dv_f3("world_means.npy",        s.world.means);
-    save_dv_f4("world_quats.npy",        s.world.quats);
-    save_dv_f3("world_scales.npy",       s.world.scales);
-    save_dv_f1("world_opacities.npy",    s.world.opacities);
-    save_dv_f3("world_features_dc.npy",  s.world.features_dc);
-    if (!s.world.sh_value_quantize_enabled()) {
-        save_dt2d_f3("world_features_sh.npy", s.world.features_sh);
-    } else {
-        // SH VALUE-quant active: canonical storage is packed bytes + per-block
-        // bounds. Only the populated layout (cell-block vs FPBO) gets written;
-        // the unused half is an empty (default-constructed) tensor and the
-        // saver skips zero-size buffers.
-        auto save_quant_pair = [&](const char* layout_tag,
-                                   const auto& q8, const auto& q16) {
-            // Helper to dump uint8_t* packed.
-            auto save_u8 = [&](const char* name, const uint8_t* data, size_t n) {
-                if (!data || n == 0) return;
-                _ckpt_save_npy<uint8_t>(full_root / name, data, n,
-                                        {(unsigned long)n});
-            };
-            auto save_f2 = [&](const char* name, const float2* data, size_t n) {
-                if (!data || n == 0) return;
-                _ckpt_save_npy<float>(full_root / name,
-                                      reinterpret_cast<const float*>(data),
-                                      n * 2,
-                                      {(unsigned long)n, 2ul});
-            };
-            if (s.world.sh_value_bits == 8 && q8.initialized()) {
-                save_u8("world_features_sh_packed.npy",
-                        q8.packed.data_ptr(), (size_t)q8.packed_bytes());
-                save_f2("world_features_sh_bounds.npy",
-                        q8.bounds.data_ptr(), (size_t)q8.n_bounds);
-            } else if (s.world.sh_value_bits == 16 && q16.initialized()) {
-                save_u8("world_features_sh_packed.npy",
-                        q16.packed.data_ptr(), (size_t)q16.packed_bytes());
-                save_f2("world_features_sh_bounds.npy",
-                        q16.bounds.data_ptr(), (size_t)q16.n_bounds);
-            }
-            // Layout marker so offline tools know how to index bounds:
-            //   cell  -> bounds[cell_idx / 256]
-            //   fpbo  -> bounds[splat_idx / 256]
-            std::ofstream layout(full_root / "world_features_sh_layout.txt");
-            layout << layout_tag << "\n";
-        };
-        // Use whichever layout actually has bytes; fall back to FPBO if both
-        // empty (shouldn't happen, but harmless).
-        bool cell_block_active = s.world.features_sh_quant8.initialized()
-                              || s.world.features_sh_quant16.initialized();
-        if (cell_block_active) {
-            save_quant_pair("cell", s.world.features_sh_quant8, s.world.features_sh_quant16);
-        } else {
-            save_quant_pair("fpbo", s.world.features_sh_quant8_fpbo, s.world.features_sh_quant16_fpbo);
-        }
+    fs::path tarpath = fs::path(input_dir) / "state.tar";
+    std::ifstream in(tarpath.string(), std::ios::binary);
+    if (!in)
+        throw std::runtime_error("engine_load_checkpoint: cannot open " + tarpath.string());
+
+    auto members = ckpt::tar_index(in);
+    std::string sj;
+    for (auto& m : members)
+        if (m.name == "state.json") { sj = ckpt::tar_read_member(in, m); break; }
+    if (sj.empty())
+        throw std::runtime_error("engine_load_checkpoint: state.json missing in "
+                                 + tarpath.string());
+
+    const int     step          = (int)_json_int(sj, "step", 0);
+    const int64_t cur_n         = _json_int(sj, "cur_num_splats", 0);
+    const int64_t max_n         = _json_int(sj, "max_num_splats", 0);
+    const int     num_sh        = (int)_json_int(sj, "num_sh", 0);
+    const int     sh_degree     = (int)_json_int(sj, "sh_degree", 0);
+    const int     packed        = (int)_json_int(sj, "packed", 0);
+    const int     sh_opt_bits   = (int)_json_int(sj, "sh_optim_bits", 32);
+    const int     sh_val_bits   = (int)_json_int(sj, "sh_value_bits", 32);
+    const int     non_sh_bits   = (int)_json_int(sj, "non_sh_optim_bits", 32);
+    const int     bias          = (int)_json_int(sj, "use_per_splat_bias_correction", 0);
+    const int     fused         = (int)_json_int(sj, "use_fused_proj_bwd_optim", 0);
+    const std::string primitive = _json_str(sj, "primitive");
+
+    // Capacity must match the skeleton, or per-slot byte counts won't line up.
+    if (s.max_num_splats != 0 && s.max_num_splats != max_n)
+        throw std::runtime_error(
+            "engine_load_checkpoint: max_num_splats mismatch (engine "
+            + std::to_string(s.max_num_splats) + " vs checkpoint "
+            + std::to_string(max_n) + ")");
+
+    // Install runtime scalars + optimizer layout from the checkpoint.
+    s.cur_num_splats = cur_n;
+    s.max_num_splats = max_n;
+    s.num_sh         = num_sh;
+    s.sh_degree      = sh_degree;
+    s.packed         = (packed != 0);
+    if (!primitive.empty()) s.primitive = primitive;
+    s.optim.use_per_splat_bias_correction = (bias != 0);
+    s.optim.use_fused_proj_bwd_optim      = (fused != 0);
+
+    // Force-allocate optimizer + appearance-optimizer state so the restore
+    // targets exist. No training step; no-ops for absent components.
+    engine_ensure_optim_state(sh_opt_bits, sh_val_bits, non_sh_bits, bias != 0);
+    _ensure_bilagrid_optim_state();
+    _ensure_ppisp_optim_state();
+
+    // Restore each saved .npy into its pool slot by name.
+    std::vector<char> host_stage;
+    int restored = 0;
+    for (auto& m : members) {
+        const std::string& fn = m.name;
+        if (fn.size() < 4 || fn.compare(fn.size() - 4, 4, ".npy") != 0) continue;
+        std::string base = fn.substr(0, fn.size() - 4);
+
+        PoolSlot slot; uint32_t sub;
+        if (!parse_saved_name(base, slot, sub))
+            throw std::runtime_error("engine_load_checkpoint: unknown slot '" + base + "'");
+
+        void*  ptr    = nullptr;
+        size_t nbytes = 0;
+        if (!DevicePool::global().lookup(slot, sub, ptr, nbytes))
+            throw std::runtime_error(
+                "engine_load_checkpoint: target slot not allocated for '" + base
+                + "' (config/checkpoint mismatch?)");
+
+        auto info = ckpt::npy_locate(in, m.data_offset, m.size);
+        if (info.data_bytes != nbytes)
+            throw std::runtime_error(
+                "engine_load_checkpoint: size mismatch for '" + base + "': checkpoint "
+                + std::to_string(info.data_bytes) + " vs slot " + std::to_string(nbytes));
+
+        ckpt::read_into_device(in, info.data_offset, ptr, nbytes, host_stage);
+        ++restored;
     }
 
-    // World Adam optimizer state.
-    save_dv_f3("g1_means.npy",        s.optim.g1_means);
-    save_dv_f3("g2_means.npy",        s.optim.g2_means);
-    save_dv_f4("g1_quats.npy",        s.optim.g1_quats);
-    save_dv_f4("g2_quats.npy",        s.optim.g2_quats);
-    save_dv_f3("g1_scales.npy",       s.optim.g1_scales);
-    save_dv_f3("g2_scales.npy",       s.optim.g2_scales);
-    save_dv_f1("g1_opacities.npy",    s.optim.g1_opacities);
-    save_dv_f1("g2_opacities.npy",    s.optim.g2_opacities);
-    save_dv_f3("g1_features_dc.npy",  s.optim.g1_features_dc);
-    save_dv_f3("g2_features_dc.npy",  s.optim.g2_features_dc);
-    if (s.optim.sh_quantize_enabled()) {
-        // Joint (u, sqrt_g2) AoS: single packed byte stream + per-block bounds.
-        // FPBO mode uses a different per-bound granularity, so it lives in a
-        // separate state buffer.
-        if (s.optim.sh_quant_state.packed.data_ptr())
-            save_dv_u8("sh_quant_packed.npy", s.optim.sh_quant_state.packed);
-        if (s.optim.sh_quant_state.bounds.data_ptr())
-            save_dv_f4("sh_quant_bounds.npy", s.optim.sh_quant_state.bounds);
-        if (s.optim.sh_quant_state_fpbo.packed.data_ptr())
-            save_dv_u8("sh_quant_packed_fpbo.npy", s.optim.sh_quant_state_fpbo.packed);
-        if (s.optim.sh_quant_state_fpbo.bounds.data_ptr())
-            save_dv_f4("sh_quant_bounds_fpbo.npy", s.optim.sh_quant_state_fpbo.bounds);
-    } else {
-        save_dt2d_f3("g1_features_sh.npy", s.optim.g1_features_sh);
-        save_dt2d_f3("g2_features_sh.npy", s.optim.g2_features_sh);
-    }
-
-    // Per-splat aux.
-    if (s.optim.use_per_splat_bias_correction
-        && s.optim.bias_correction_steps.data_ptr() && s.optim.bias_correction_steps.size() > 0) {
-        _ckpt_save_npy<int32_t>(full_root / "bias_correction_steps.npy",
-                                s.optim.bias_correction_steps.data_ptr(),
-                                (size_t)s.optim.bias_correction_steps.size(),
-                                {(unsigned long)s.optim.bias_correction_steps.size()});
-    }
-    if (s.optim.accum_buffer.data_ptr() && s.optim.accum_buffer.size() > 0) {
-        _ckpt_save_npy<float>(full_root / "accum_buffer.npy",
-                              reinterpret_cast<const float*>(s.optim.accum_buffer.data_ptr()),
-                              (size_t)s.optim.accum_buffer.size() * 2,
-                              {(unsigned long)s.optim.accum_buffer.size(), 2ul});
-    }
-
-    // Bilagrid grids + optimizer state, per type. Three optimizer layouts:
-    //   Adam float        : *_g1.npy, *_g2.npy
-    //   Adam quantized    : *_packed.npy (AoS u,sqrt_g2) + *_quant_bounds.npy
-    //   AdaGrad float     : *_accum.npy
-    //   AdaGrad quantized : *_accum_packed.npy + *_accum_bounds.npy (float2)
-    auto save_dv_f2 = [&](const char* name, const DeviceVector<float2>& v) {
-        if (!v.data_ptr() || v.size() == 0) return;
-        _ckpt_save_npy<float>(full_root / name,
-                              reinterpret_cast<const float*>(v.data_ptr()),
-                              (size_t)v.size() * 2,
-                              {(unsigned long)v.size(), 2ul});
-    };
-    auto save_bilagrid = [&](const char* prefix, bool enabled, bool quantize,
-                             bool use_adagrad,
-                             const DeviceTensor5D<float>& grids,
-                             const DeviceTensor5D<float>& g1_f,
-                             const DeviceTensor5D<float>& g2_f,
-                             const QuantizedAdamState<8, 256>& quant_state,
-                             const DeviceTensor5D<float>& accum_f,
-                             const QuantizedTensorLog<8, 256>& adagrad_quant) {
-        if (!enabled) return;
-        save_5d((std::string(prefix) + ".npy").c_str(), grids);
-        if (use_adagrad) {
-            if (quantize) {
-                save_dv_u8((std::string(prefix) + "_accum_packed.npy").c_str(),
-                           adagrad_quant.packed);
-                save_dv_f2((std::string(prefix) + "_accum_bounds.npy").c_str(),
-                           adagrad_quant.bounds);
-            } else {
-                save_5d((std::string(prefix) + "_accum.npy").c_str(), accum_f);
-            }
-        } else {
-            if (quantize) {
-                save_dv_u8((std::string(prefix) + "_packed.npy").c_str(),
-                           quant_state.packed);
-                save_dv_f4((std::string(prefix) + "_quant_bounds.npy").c_str(),
-                           quant_state.bounds);
-            } else {
-                save_5d((std::string(prefix) + "_g1.npy").c_str(), g1_f);
-                save_5d((std::string(prefix) + "_g2.npy").c_str(), g2_f);
-            }
-        }
-    };
-    save_bilagrid("bilagrid_rgb",
-                  s.bilagrid_rgb.enabled, s.bilagrid_rgb.quantize_optim(),
-                  s.bilagrid_rgb.use_adagrad,
-                  s.bilagrid_rgb.grids, s.bilagrid_rgb.g1, s.bilagrid_rgb.g2,
-                  s.bilagrid_rgb.quant_state,
-                  s.bilagrid_rgb.accum_f, s.bilagrid_rgb.adagrad_quant);
-    save_bilagrid("bilagrid_depth",
-                  s.bilagrid_depth.enabled, s.bilagrid_depth.quantize_optim(),
-                  s.bilagrid_depth.use_adagrad,
-                  s.bilagrid_depth.grids, s.bilagrid_depth.g1, s.bilagrid_depth.g2,
-                  s.bilagrid_depth.quant_state,
-                  s.bilagrid_depth.accum_f, s.bilagrid_depth.adagrad_quant);
-    if (s.bilagrid_depth.enabled) {
-        save_dv_f1("bilagrid_depth_scalars.npy", s.bilagrid_depth.scalars);
-    }
-    save_bilagrid("bilagrid_normal",
-                  s.bilagrid_normal.enabled, s.bilagrid_normal.quantize_optim(),
-                  s.bilagrid_normal.use_adagrad,
-                  s.bilagrid_normal.grids, s.bilagrid_normal.g1, s.bilagrid_normal.g2,
-                  s.bilagrid_normal.quant_state,
-                  s.bilagrid_normal.accum_f, s.bilagrid_normal.adagrad_quant);
-
-    // PPISP table + optimizer state (Adam g1/g2 or AdaGrad accum).
-    if (s.ppisp.enabled) {
-        save_dt2d_f("ppisp.npy",    s.ppisp.params);
-        if (s.ppisp.use_adagrad) {
-            save_dt2d_f("ppisp_accum.npy", s.ppisp.accum_f);
-        } else {
-            save_dt2d_f("ppisp_g1.npy", s.ppisp.g1);
-            save_dt2d_f("ppisp_g2.npy", s.ppisp.g2);
-        }
-    }
+    cudaDeviceSynchronize();
+    return step;
 }

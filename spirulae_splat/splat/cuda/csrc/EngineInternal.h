@@ -166,6 +166,12 @@ void _engine_color_space_apply_to_gt();
 // PPISP: backward hook + state setup + regularization-loss compute.
 void _engine_ppisp_backward_hook(TorchTensorView v_render_rgb);
 void _ensure_ppisp_optim_state();
+
+// Force-allocate splat optimizer state to a given quant layout (checkpoint
+// loader; no training step). Defined in EngineOptim.cpp.
+void engine_ensure_optim_state(int sh_optim_bits, int sh_value_bits,
+                               int non_sh_optim_bits,
+                               bool use_per_splat_bias_correction);
 // Returns a pool-backed [PPISPRegLossIndex::length] device buffer.
 float* _engine_ppisp_reg_loss_into(
     const std::array<float, (int)PPISPRegLossIndex::length>& loss_weights,

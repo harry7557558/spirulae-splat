@@ -6,6 +6,7 @@
 
 #include <mutex>
 #include <tuple>
+#include <type_traits>
 #include <variant>
 #include <vector>
 #include <stdexcept>
@@ -13,6 +14,47 @@
 #include <unordered_map>
 
 #include "PoolSlots.h"
+
+
+// Scalar dtype tags for .npy serialization of pool buffers. Vector types
+// (floatN / intN / ucharN) are tagged by their SCALAR component; a buffer is
+// serialized as a flat typed array of (bytes / scalar_size) elements, which
+// round-trips exactly. Recorded per-Slot in acquire<T>() so the checkpoint
+// writer stays generic (no per-buffer type knowledge).
+enum class NpyScalar : uint8_t { u1 = 0, u2, u4, u8, i4, i8, f2, f4, f8, b1 };
+
+template<typename T>
+constexpr NpyScalar npy_scalar_tag() {
+    if constexpr (std::is_same_v<T, float>  || std::is_same_v<T, float2> ||
+                  std::is_same_v<T, float3> || std::is_same_v<T, float4>) return NpyScalar::f4;
+    else if constexpr (std::is_same_v<T, double>)   return NpyScalar::f8;
+    else if constexpr (std::is_same_v<T, bool>      || std::is_same_v<T, uint8_t> ||
+                       std::is_same_v<T, uchar3>    || std::is_same_v<T, uchar4>) return NpyScalar::u1;
+    else if constexpr (std::is_same_v<T, uint16_t>) return NpyScalar::u2;
+    else if constexpr (std::is_same_v<T, uint32_t>) return NpyScalar::u4;
+    else if constexpr (std::is_same_v<T, uint64_t>) return NpyScalar::u8;
+    else if constexpr (std::is_same_v<T, int32_t>   || std::is_same_v<T, int2> ||
+                       std::is_same_v<T, int3>      || std::is_same_v<T, int4>) return NpyScalar::i4;
+    else if constexpr (std::is_same_v<T, int64_t>)  return NpyScalar::i8;
+    else return NpyScalar::u1;  // fallback: serialize raw bytes as uint8
+}
+
+// (numpy descr string, element size) for a tag. Used by the checkpoint writer.
+inline std::pair<const char*, size_t> npy_scalar_descr(NpyScalar t) {
+    switch (t) {
+        case NpyScalar::u1: return {"|u1", 1};
+        case NpyScalar::u2: return {"<u2", 2};
+        case NpyScalar::u4: return {"<u4", 4};
+        case NpyScalar::u8: return {"<u8", 8};
+        case NpyScalar::i4: return {"<i4", 4};
+        case NpyScalar::i8: return {"<i8", 8};
+        case NpyScalar::f2: return {"<f2", 2};
+        case NpyScalar::f4: return {"<f4", 4};
+        case NpyScalar::f8: return {"<f8", 8};
+        case NpyScalar::b1: return {"|b1", 1};
+        default:            return {"|u1", 1};
+    }
+}
 
 
 // Use this to communicate with Python, without need to compile/link ATen/LibTorch
@@ -106,9 +148,10 @@ private:
 // content and therefore has no compile-time PoolSlot.
 class DevicePool {
     struct Slot {
-        void*  ptr        = nullptr;
-        size_t cap_bytes  = 0;  // allocated
-        size_t used_bytes = 0;  // logical (last requested)
+        void*     ptr        = nullptr;
+        size_t    cap_bytes  = 0;  // allocated
+        size_t    used_bytes = 0;  // logical (last requested)
+        uint8_t   dtype_tag  = (uint8_t)NpyScalar::u1;  // scalar type of last acquire<T>
     };
     struct DynSlot {
         Slot         slot;
@@ -135,6 +178,7 @@ class DevicePool {
             slot.cap_bytes = bytes;
         }
         slot.used_bytes = bytes;
+        slot.dtype_tag  = (uint8_t)npy_scalar_tag<T>();
         return static_cast<T*>(slot.ptr);
     }
 
@@ -234,8 +278,85 @@ public:
         return result;
     }
 
+    // A live pool buffer selected for checkpointing. `name` is the display key
+    // (slot name + sub suffix, e.g. "eng.sh_quant.q"); `ptr`/`nbytes` are the
+    // device source for a D->H dump. Only enum slots participate -- dynamic
+    // scratch is always SaveClass::Never and never appears here.
+    struct SavedSlot {
+        std::string name;
+        const void* ptr;
+        size_t      nbytes;     // logical (used_bytes) to serialize
+        uint8_t     dtype_tag;
+        SaveClass   save;
+    };
+
+    // Enumerate every live slot whose SaveClass is >= `min`, in enum order.
+    //   min = SaveClass::Always -> appearance/inference params only
+    //   min = SaveClass::Resume -> also optimizer/world state (full resume)
+    // (Never < Resume < Always, so ">= min" gives the intended supersets.)
+    std::vector<SavedSlot> saved(SaveClass min) const {
+        std::lock_guard<std::mutex> lock(_mu);
+        std::vector<SavedSlot> out;
+        for (uint32_t i = 0; i < _slots.size(); ++i) {
+            const Slot& s = _slots[i];
+            if (!s.ptr || s.used_bytes == 0) continue;
+            PoolSlot slot = pool_key_slot(i);
+            SaveClass sc  = slot_save(slot);
+            if ((int)sc < (int)min) continue;
+            out.push_back({ std::string(slot_name(slot)) + sub_suffix(pool_key_sub(i)),
+                            s.ptr, s.used_bytes, s.dtype_tag, sc });
+        }
+        return out;
+    }
+
+    // Look up a live slot's device pointer + logical byte size, for restoring
+    // checkpoint bytes into an already-allocated buffer. False if not live.
+    bool lookup(PoolSlot slot, uint32_t sub, void*& ptr, size_t& nbytes) const {
+        std::lock_guard<std::mutex> lock(_mu);
+        const Slot& s = _slots[pool_key(slot, sub)];
+        if (!s.ptr || s.used_bytes == 0) return false;
+        ptr    = s.ptr;
+        nbytes = s.used_bytes;
+        return true;
+    }
+
     ~DevicePool() { freeAll(); }
 };
+
+
+// Reverse map: slot name string -> PoolSlot, built once from the metadata table.
+inline bool pool_slot_from_name(const std::string& name, PoolSlot& out) {
+    static const std::unordered_map<std::string, PoolSlot> kMap = [] {
+        std::unordered_map<std::string, PoolSlot> m;
+        for (size_t i = 0; i < (size_t)PoolSlot::Count; ++i)
+            m.emplace(kSlotMeta[i].name, (PoolSlot)i);
+        return m;
+    }();
+    auto it = kMap.find(name);
+    if (it == kMap.end()) return false;
+    out = it->second;
+    return true;
+}
+
+// Parse a saved-buffer name back into (slot, sub):
+//   "world.means"       -> (WorldMeans,  kSubMain)
+//   "eng.sh_quant.q"    -> (EngShQuant,  kSubPacked)
+//   "eng.sh_quant.qb"   -> (EngShQuant,  kSubBounds)
+// False if the base name is not a known slot.
+inline bool parse_saved_name(const std::string& name, PoolSlot& slot, uint32_t& sub) {
+    if (pool_slot_from_name(name, slot)) { sub = kSubMain; return true; }
+    auto ends_with = [&](const std::string& suf) {
+        return name.size() > suf.size() &&
+               name.compare(name.size() - suf.size(), suf.size(), suf) == 0;
+    };
+    if (ends_with(".qb") && pool_slot_from_name(name.substr(0, name.size() - 3), slot)) {
+        sub = kSubBounds; return true;
+    }
+    if (ends_with(".q") && pool_slot_from_name(name.substr(0, name.size() - 2), slot)) {
+        sub = kSubPacked; return true;
+    }
+    return false;
+}
 
 
 // Single reusable scratch buffer for CUB-style temporary allocations.

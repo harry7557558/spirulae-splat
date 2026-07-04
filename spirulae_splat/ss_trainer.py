@@ -53,6 +53,14 @@ def entrypoint():
     ]
 
     config = tyro.cli(Config)
+
+    # Resume: rebuild the config from the checkpoint's config.json (architecture
+    # / model / data-config), keeping CLI identity + explicitly-changed
+    # run-control fields. The Trainer then restores engine state in __init__.
+    if getattr(config, "resume", None) is not None:
+        from spirulae_splat.modules.resume import build_resume_config
+        config = build_resume_config(config)
+
     trainer = Trainer(config)
 
     if not config.disable_viewer:
