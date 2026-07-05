@@ -841,10 +841,12 @@ class Trainer:
         their pool slots exist as restore targets and the per-step lazy init
         won't re-zero them."""
         import shutil, tempfile
-        from spirulae_splat.modules.resume import resolve_checkpoint, read_state_json
+        from spirulae_splat.modules.resume import (
+            resolve_checkpoint, read_state_json, check_resumable)
         from spirulae_splat.modules.resume_adapt import adapt_checkpoint
 
         run_dir, ckpt_dir = resolve_checkpoint(Path(load_dir))
+        check_resumable(ckpt_dir)          # not-full checkpoint -> clear error
         state = read_state_json(ckpt_dir)
 
         model = self.model

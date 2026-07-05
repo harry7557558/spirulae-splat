@@ -76,8 +76,9 @@ def entrypoint():
         # folder unless --output-dir-* is given. The Trainer restores + layout-
         # adapts the engine state in __init__.
         from spirulae_splat.modules.resume import (
-            config_from_json, resolve_checkpoint, apply_preset)
-        run_dir, _ = resolve_checkpoint(Path(resume))
+            config_from_json, resolve_checkpoint, apply_preset, check_resumable)
+        run_dir, ckpt_dir = resolve_checkpoint(Path(resume))
+        check_resumable(ckpt_dir)          # fail fast before building the model
         base = config_from_json(run_dir / "config.json")
         base.resume = Path(resume)
         base.output_dir_prefix = run_dir.parent

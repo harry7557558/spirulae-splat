@@ -114,6 +114,35 @@ def read_state_json(ckpt_dir: Path) -> dict:
         return json.loads(member.read())
 
 
+def check_resumable(ckpt_dir: Path):
+    """Raise a clear error if the checkpoint cannot be used to RESUME training.
+
+    A checkpoint saved without ``save_full_checkpoint`` contains only the
+    Always-class buffers (appearance / inference params) + ``splat.ply`` -- not
+    the world parameters, optimizer moments, and densify state (the Resume-class
+    buffers) needed to continue training. Resuming from it would silently keep
+    the freshly-seeded model (wrong weights), so fail fast instead."""
+    ckpt_dir = Path(ckpt_dir)
+    tar = ckpt_dir / "state.tar"
+    if not tar.is_file():
+        raise FileNotFoundError(f"{tar} not found (not a checkpoint directory).")
+    with tarfile.open(tar) as tf:
+        names = set(tf.getnames())
+        sj = tf.extractfile("state.json")
+        state = json.loads(sj.read()) if sj is not None else {}
+    full = state.get("full_resume", None)
+    has_world = "world.means.npy" in names or "world.opacities.npy" in names
+    if full == 0 or not has_world:
+        raise RuntimeError(
+            f"Checkpoint '{ckpt_dir}' is NOT resumable: it was saved without "
+            f"save_full_checkpoint, so it holds only inference/appearance params "
+            f"and splat.ply -- not the world parameters + optimizer state required "
+            f"to resume training. Re-run the source training with "
+            f"`save_full_checkpoint=True` (or `--save-full-checkpoint`) so its "
+            f"checkpoints are resumable; this one is usable for inference/meshing "
+            f"(splat.ply) only.")
+
+
 # --- config compatibility gate ----------------------------------------------
 # Fields that DEFINE the on-device layout / model architecture. If a resume's
 # reconstructed config disagrees with the checkpoint's state.json on any of
