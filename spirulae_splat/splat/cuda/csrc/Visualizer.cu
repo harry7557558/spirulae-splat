@@ -156,7 +156,11 @@ __global__ void fill_frustum_segments_kernel(
             }
         }
         float3 p = raydir;
-        if (camera_model == CameraModelType::FISHEYE || camera_model == CameraModelType::EQUISOLID)
+        if (camera_model == CameraModelType::FISHEYE || camera_model == CameraModelType::EQUISOLID ||
+            camera_model == CameraModelType::EQUIRECTANGULAR)
+            // Wide / full-sphere models: place frustum verts on a sphere shell
+            // (the pinhole p/p.z below explodes on rays with p.z <= 0, e.g. the
+            // equirectangular back hemisphere).
             p = normalize(p) * sqrtf((2.0f*sxy*sxy + sz*sz) / 3.0f);
         else
             p = p * float3{sxy, sxy, sz} / p.z;
@@ -226,7 +230,8 @@ __global__ void fill_frustum_segments_kernel(
                 }
             }
             float3 p = raydir;
-        if (camera_model == CameraModelType::FISHEYE || camera_model == CameraModelType::EQUISOLID)
+        if (camera_model == CameraModelType::FISHEYE || camera_model == CameraModelType::EQUISOLID ||
+                camera_model == CameraModelType::EQUIRECTANGULAR)
                 p = normalize(p) * sqrtf((2.0f*sxy*sxy + sz*sz) / 3.0f);
             else
                 p = p * float3{sxy, sxy, sz} / p.z;
@@ -635,8 +640,6 @@ __global__ void blit_aabb_bvh_kernel(
                 view_camera_model, dist_coeffs,
                 &ray_d[i]
             );
-            if (view_camera_model == (int)CameraModelType::PINHOLE)
-                ray_d[i] = ray_d[i] * (1.0f / ray_d[i].z);
             ray_d[i] = SlangProjectionUtils::transform_ray_d(R, ray_d[i]);
         }
     }
@@ -897,9 +900,6 @@ __global__ void blit_with_bvh_kernel(
             inside &= length(uv) < (float)M_PI;
         if (view_camera_model == (int)CameraModelType::EQUISOLID)
             inside &= length(uv) < 2.0f;
-        if (view_camera_model == (int)CameraModelType::PINHOLE)
-            // ray_d = ray_d * (1.0f / ray_d.z);
-            depth *= ray_d.z;
         ray_d = SlangProjectionUtils::transform_ray_d(R, ray_d);
         if (!inside)
             continue;
@@ -1399,7 +1399,13 @@ void _viewer_build_bvh()
         num_lss, lss_buffer, rootAABBMin, rootAABBMax, "viewer.lss_bvh");
     auto tri_bvh = build_bvh<VisPrimitive::Triangle>(
         num_tri, tri_buffer, rootAABBMin, rootAABBMax, "viewer.tri_bvh");
-    (void)lss_bvh; (void)tri_bvh;  // pool retains the memory via the keys
+    // Keep the exact pointers build_bvh() allocated (string-keyed dynamic pool);
+    // engine_blit_view() reads these directly instead of re-acquiring by a
+    // different static PoolSlot enum (which would be a separate empty buffer).
+    v.bvh_lss_nodes_ptr = lss_bvh.nodes;
+    v.bvh_lss_aabb_ptr  = lss_bvh.aabb;
+    v.bvh_tri_nodes_ptr = tri_bvh.nodes;
+    v.bvh_tri_aabb_ptr  = tri_bvh.aabb;
 
     v.bvh_num_lss = (int)num_lss;
     v.bvh_num_tri = (int)num_tri;
@@ -1485,14 +1491,13 @@ void engine_blit_view(
             PoolSlot::ViewerLss, (size_t)v.bvh_num_lss * 2);
         tri_buffer = (const float4*)DevicePool::global().acquire<float4>(
             PoolSlot::ViewerTri, (size_t)v.bvh_num_tri * 4);
-        lss_nodes  = (const int2*)DevicePool::global().acquire<int32_t>(
-            PoolSlot::ViewerLssBvhNodes, (size_t)(v.bvh_num_lss - 1) * 2);
-        tri_nodes  = (const int2*)DevicePool::global().acquire<int32_t>(
-            PoolSlot::ViewerTriBvhNodes, (size_t)(v.bvh_num_tri - 1) * 2);
-        lss_aabb   = (const float3*)DevicePool::global().acquire<float3>(
-            PoolSlot::ViewerLssBvhAabb, (size_t)v.bvh_num_lss * 2);
-        tri_aabb   = (const float3*)DevicePool::global().acquire<float3>(
-            PoolSlot::ViewerTriBvhAabb, (size_t)v.bvh_num_tri * 2);
+        // Use the exact BVH allocations build_bvh() produced (see
+        // _viewer_build_bvh); re-acquiring by PoolSlot enum here would read a
+        // different, empty static buffer and draw no frustums (the 7632e51 bug).
+        lss_nodes  = (const int2*)  v.bvh_lss_nodes_ptr;
+        tri_nodes  = (const int2*)  v.bvh_tri_nodes_ptr;
+        lss_aabb   = (const float3*)v.bvh_lss_aabb_ptr;
+        tri_aabb   = (const float3*)v.bvh_tri_aabb_ptr;
     }
 
     blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D_VS(w, h, 8, 4)>>>(

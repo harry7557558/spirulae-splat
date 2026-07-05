@@ -103,6 +103,8 @@ inline std::tuple<
         projection_packed_mask_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::EQUISOLID)
         projection_packed_mask_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::EQUIRECTANGULAR)
+        projection_packed_mask_kernel_wrapper<SplatPrimitive, CameraModelType::EQUIRECTANGULAR> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -145,6 +147,8 @@ inline std::tuple<
         projection_packed_fwd_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::EQUISOLID)
         projection_packed_fwd_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::EQUIRECTANGULAR)
+        projection_packed_fwd_kernel_wrapper<SplatPrimitive, CameraModelType::EQUIRECTANGULAR> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());

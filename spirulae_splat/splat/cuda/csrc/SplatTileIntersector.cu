@@ -985,6 +985,12 @@ intersect_splat_tile_3dgs(
         return SplatTileIntersector<Vanilla3DGS<0>, CameraModelType::EQUISOLID>
             (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
     }
+    else if (cmt(camera_model) == CameraModelType::EQUIRECTANGULAR) {
+        TileBuffers<CameraModelType::EQUIRECTANGULAR> tile_buffers(
+            width, height, viewmats_ptr, intrins_ptr, dist_coeffs_ptr, num_cams);
+        return SplatTileIntersector<Vanilla3DGS<0>, CameraModelType::EQUIRECTANGULAR>
+            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
+    }
     else
         throw std::runtime_error("Unsupported camera model");
 }

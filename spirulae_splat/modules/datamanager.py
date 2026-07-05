@@ -51,8 +51,17 @@ class SpirulaeSplatDataManagerConfig:
         O(N) per row + col)."""
 
     warp_to_pinhole: bool = False
-    """Whether to split an image into 5 undistorted pinhole images.
+    """Whether to split a fisheye image into 5 undistorted pinhole images.
         Can sometimes give better quality and compatibility for dataset captured by fisheye/360 cameras."""
+
+    warp_spherical_to_pinhole: bool = True
+    """Whether to split an equirectangular (spherical panorama) image into 6 pinhole
+        cubemap faces for training. When True (default), equirectangular images are
+        split into 6 undistorted pinhole sub-images (the historical behavior). When
+        False, train directly on the equirectangular image using an equirectangular
+        projection/unprojection plugged into the linear/UT projection pipeline
+        (supports 3dgs/mip and 3dgut primitives). Direct equirectangular training does
+        not support depth/normal supervision."""
 
     deblur_training_images: bool = False
     """Whether to use a custom trained deep learning model to deblur images before training"""

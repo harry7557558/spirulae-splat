@@ -29,6 +29,7 @@ import json
 
 from spirulae_splat.modules.camera import (
     colmap_camera_model_to_type,
+    CameraType,
     Cameras,
 )
 from spirulae_splat.modules.colmap_utils import (
@@ -369,6 +370,21 @@ class SpirulaeSplatDataparser:
                 cy[-1] *= sy
                 width[-1] = w
                 height[-1] = h
+
+            # Equirectangular (spherical panorama) cameras use canonical panorama
+            # intrinsics: a full 360deg horizontal wrap across the image width and
+            # 180deg vertical over the image height, i.e. fx = fy = W/(2*pi),
+            # cx = W/2, cy = H/2. This matches both the direct equirectangular
+            # projection and the equirectangular->pinhole warp kernel. Any stored
+            # focal length (e.g. Metashape's w/2 for spherical sensors) is in a
+            # different convention and is intentionally overridden here so the
+            # training, eval, and viewer paths stay consistent.
+            if camera_type[-1] == CameraType.EQUIRECTANGULAR:
+                f_eq = width[-1] / (2.0 * math.pi)
+                fx[-1] = f_eq
+                fy[-1] = f_eq
+                cx[-1] = width[-1] / 2.0
+                cy[-1] = height[-1] / 2.0
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))

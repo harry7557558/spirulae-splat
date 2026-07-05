@@ -80,6 +80,14 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                     cam.width, cam.height,
                     &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity
                 );
+            else if constexpr (camera_model == CameraModelType::EQUIRECTANGULAR)
+                Slang3DGS::projection_3dgut_equirect(
+                    false,
+                    this->mean, this->quat, this->scale, this->opacity,
+                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+                    cam.width, cam.height,
+                    &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity
+                );
             if (aabb.z > aabb.x && aabb.w > aabb.y) {
                 if constexpr (VALUE_BITS == 32) {
                     if constexpr (sh_degree == 0) proj.rgb = SlangHarmonics::sh0_to_color
@@ -150,6 +158,16 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
                 );
             else if constexpr (camera_model == CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgut_equisolid_vjp(
+                    false,
+                    this->mean, this->quat, this->scale, this->opacity,
+                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+                    cam.width, cam.height,
+                    make_float2(0), 0.0f, v_proj.scale, v_proj.opacity,
+                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
+                    &v_R, &v_t
+                );
+            else if constexpr (camera_model == CameraModelType::EQUIRECTANGULAR)
+                Slang3DGS::projection_3dgut_equirect_vjp(
                     false,
                     this->mean, this->quat, this->scale, this->opacity,
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,

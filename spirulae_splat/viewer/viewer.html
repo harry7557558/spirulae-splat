@@ -456,6 +456,7 @@
           <option value="PINHOLE">Pinhole</option>
           <option value="FISHEYE">Fisheye (Equidistant)</option>
           <option value="EQUISOLID">Fisheye (Equisolid)</option>
+          <option value="EQUIRECTANGULAR">Equirectangular (360°)</option>
         </select>
       </div>
 
@@ -905,7 +906,13 @@ async function sendRenderRequest() {
   if (_inFlight) return;
   const c2w_flat = cam.c2w().flat();
   const res = getResolution($("res-slider").value);
-  const intrinsics = fovToIntrinsics($("fov-slider").value, res.w, res.h);
+  const camModel = $("camera-model").value;
+  // Equirectangular maps the full 360x180 panorama across the image: the FOV
+  // slider does not apply. Pixel -> (lon, lat) needs fx = w/(2pi), fy = h/pi so
+  // (px-cx)/fx spans [-pi, pi] and (py-cy)/fy spans [-pi/2, pi/2].
+  const intrinsics = camModel === "EQUIRECTANGULAR"
+    ? { fx: res.w / (2 * Math.PI), fy: res.h / Math.PI, cx: res.w / 2, cy: res.h / 2 }
+    : fovToIntrinsics($("fov-slider").value, res.w, res.h);
   const settings = getRenderSettings();
   const params = new URLSearchParams({
     buffer_key: $("buffer-key").value,
@@ -916,7 +923,7 @@ async function sendRenderRequest() {
     cy: res.h / 2,
     width: res.w,
     height: res.h,
-    camera_model: $("camera-model").value,
+    camera_model: camModel,
     jpeg_quality: settings.jpeg_quality,
     update_rate: settings.update_rate,
     show_training_cameras: settings.show_training_cameras,
@@ -1231,7 +1238,17 @@ $("update-rate-slider").addEventListener("input", e => {
 
 $("show-training-cameras").addEventListener("change", () => Viewer.requestRender());
 
-$("camera-model").addEventListener("change", () => Viewer.requestRender());
+function _syncCameraModelUI() {
+  // FOV has no meaning for a full 360 panorama; grey the slider out.
+  const isEquirect = $("camera-model").value === "EQUIRECTANGULAR";
+  const fov = $("fov-slider");
+  if (fov) {
+    fov.disabled = isEquirect;
+    fov.closest(".ctrl-row")?.style.setProperty("opacity", isEquirect ? "0.4" : "1");
+  }
+}
+$("camera-model").addEventListener("change", () => { _syncCameraModelUI(); Viewer.requestRender(); });
+_syncCameraModelUI();
 $("buffer-key").addEventListener("change", () => Viewer.requestRender());
 
 $("btn-reset-pose").addEventListener("click", () => {

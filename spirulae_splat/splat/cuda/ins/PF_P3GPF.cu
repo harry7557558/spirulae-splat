@@ -89,6 +89,34 @@ template void projection_fused_fwd_kernel_wrapper<
 );
 
 template void projection_fused_fwd_kernel_wrapper<
+    Vanilla3DGS<0>,
+    CameraModelType::EQUIRECTANGULAR
+>(
+    cudaStream_t stream,
+    const uint32_t C,
+    const uint32_t N,
+    Vanilla3DGS<0>::WorldBuffer splats_world,
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // outputs
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
+    float *__restrict__ radii,  // [N, 1]
+    Vanilla3DGS<0>::ScreenBuffer splats_screen,
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
+);
+
+template void projection_fused_fwd_kernel_wrapper<
     MipSplatting<0>,
     CameraModelType::PINHOLE
 >(
@@ -173,64 +201,36 @@ template void projection_fused_fwd_kernel_wrapper<
 );
 
 template void projection_fused_fwd_kernel_wrapper<
+    MipSplatting<0>,
+    CameraModelType::EQUIRECTANGULAR
+>(
+    cudaStream_t stream,
+    const uint32_t C,
+    const uint32_t N,
+    MipSplatting<0>::WorldBuffer splats_world,
+    const float *__restrict__ viewmats, // [C, 4, 4]
+    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // outputs
+    float4 *__restrict__ aabbs,         // [C, N, 4]
+    float *__restrict__ sorting_depths,  // [C, N, 1]
+    float *__restrict__ radii,  // [N, 1]
+    MipSplatting<0>::ScreenBuffer splats_screen,
+    const uint8_t* __restrict__ sh_value_packed,
+    const float2* __restrict__ sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
+    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
+    // 256 = per-cell block (non-FPBO value-quant allocation).
+    const int64_t sh_bounds_stride
+);
+
+template void projection_fused_fwd_kernel_wrapper<
     Vanilla3DGS<1>,
     CameraModelType::PINHOLE
->(
-    cudaStream_t stream,
-    const uint32_t C,
-    const uint32_t N,
-    Vanilla3DGS<1>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [C, 4, 4]
-    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
-    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
-    const uint32_t image_width,
-    const uint32_t image_height,
-    // outputs
-    float4 *__restrict__ aabbs,         // [C, N, 4]
-    float *__restrict__ sorting_depths,  // [C, N, 1]
-    float *__restrict__ radii,  // [N, 1]
-    Vanilla3DGS<1>::ScreenBuffer splats_screen,
-    const uint8_t* __restrict__ sh_value_packed,
-    const float2* __restrict__ sh_value_bounds,
-    const uint32_t num_sh_buffer,
-    const int sh_value_bits,
-    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
-    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
-    // 256 = per-cell block (non-FPBO value-quant allocation).
-    const int64_t sh_bounds_stride
-);
-
-template void projection_fused_fwd_kernel_wrapper<
-    Vanilla3DGS<1>,
-    CameraModelType::FISHEYE
->(
-    cudaStream_t stream,
-    const uint32_t C,
-    const uint32_t N,
-    Vanilla3DGS<1>::WorldBuffer splats_world,
-    const float *__restrict__ viewmats, // [C, 4, 4]
-    const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
-    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
-    const uint32_t image_width,
-    const uint32_t image_height,
-    // outputs
-    float4 *__restrict__ aabbs,         // [C, N, 4]
-    float *__restrict__ sorting_depths,  // [C, N, 1]
-    float *__restrict__ radii,  // [N, 1]
-    Vanilla3DGS<1>::ScreenBuffer splats_screen,
-    const uint8_t* __restrict__ sh_value_packed,
-    const float2* __restrict__ sh_value_bounds,
-    const uint32_t num_sh_buffer,
-    const int sh_value_bits,
-    // sh_bounds_stride: cells per value-quant bound. 0 (default) = per-splat
-    // block (256 * 3 * num_sh_buffer cells/bound, matching FPBO allocation).
-    // 256 = per-cell block (non-FPBO value-quant allocation).
-    const int64_t sh_bounds_stride
-);
-
-template void projection_fused_fwd_kernel_wrapper<
-    Vanilla3DGS<1>,
-    CameraModelType::EQUISOLID
 >(
     cudaStream_t stream,
     const uint32_t C,

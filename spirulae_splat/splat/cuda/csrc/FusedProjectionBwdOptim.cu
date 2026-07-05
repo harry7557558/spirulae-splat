@@ -241,6 +241,8 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
         fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
     else if (camera_model == CameraModelType::EQUISOLID)
         fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
+    else if (camera_model == CameraModelType::EQUIRECTANGULAR)
+        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::EQUIRECTANGULAR, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
     else
         throw std::runtime_error("Unsupported camera model");
     CHECK_DEVICE_ERROR(cudaGetLastError());

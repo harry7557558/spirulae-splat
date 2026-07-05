@@ -451,6 +451,68 @@ float2x3 equisolid_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float
     return J;
 }
 
+// Equirectangular (spherical panorama) projection.
+// Convention matches warp_image_equirectangular_to_pinhole_kernel in PixelWise.cu:
+//   lon = atan2(x, z), lat = atan2(y, hypot(x, z)),
+//   u = fx*lon + cx, v = fy*lat + cy,  with fx = fy = width/(2*pi), cx = w/2, cy = h/2.
+// Assumes no lens distortion (dist_coeffs are ignored). Every viewing direction
+// is valid, so the whole sphere projects; the atan2 seam at lon = +-pi and the
+// poles at lat = +-pi/2 are the expected sources of nonlinearity/discontinuity.
+[ForceInline]
+[Differentiable]
+float2 equirect_proj(float3 p_view) {
+    float lon = atan2(p_view.x, p_view.z);
+    float lat = atan2(p_view.y, length(p_view.xz));
+    return float2(lon, lat);
+}
+
+[ForceInline]
+[Differentiable]
+bool equirect_proj<let assume_valid : bool>(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+    out float2 uv
+) {
+    float2 lonlat = equirect_proj(p_view);
+    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+    uv = float2(fx * lonlat.x + cx, fy * lonlat.y + cy);
+    // full-sphere camera: no invalid region (dist_coeffs unused)
+    return true;
+}
+
+[CudaDeviceExport]
+bool equirect_proj_nav(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+    out float2 uv
+) {
+    return equirect_proj<false>(p_view, intrins, dist_coeffs, uv);
+}
+
+[ForceInline]
+[Differentiable]
+[CudaDeviceExport]
+float2x3 equirect_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
+    float2x3 J;
+    [ForceUnroll]
+    for (int i = 0; i < 3; ++i) {
+        DifferentialPair<float3> dp_p_view = diffPair(p_view,
+            float3(float(i == 0), float(i == 1), float(i == 2)));
+        DifferentialPair<float2> dp_uv;
+        fwd_diff(equirect_proj<true>)(dp_p_view, intrins, dist_coeffs, dp_uv);
+        J[0][i] = dp_uv.d.x;
+        J[1][i] = dp_uv.d.y;
+    }
+    return J;
+}
+
+// Inverse of equirect_proj: (lon, lat) angles -> unit ray direction.
+[ForceInline]
+[Differentiable]
+float3 equirect_unproj(float2 lonlat) {
+    float lon = lonlat.x, lat = lonlat.y;
+    float cl = cos(lat);
+    return float3(cl * sin(lon), sin(lat), cl * cos(lon));
+}
+
 [ForceInline]
 [Differentiable]
 float3 fisheye_unproj(float2 uv) {
@@ -583,6 +645,10 @@ float2 distort_point(
 ) {
     CameraModelType model = (CameraModelType)camera_model;
 
+    // Equirectangular has no lens distortion model: uv already holds (lon, lat).
+    if (model == CameraModelType::EQUIRECTANGULAR)
+        return uv;
+
     if (model == CameraModelType::FISHEYE) {
         float r = length(uv);
         float theta = atan(r);
@@ -608,6 +674,14 @@ bool undistort_point(
     out float2 uv_undist
 ) {
     CameraModelType model = (CameraModelType)camera_model;
+
+    // Equirectangular: uv already holds (lon, lat), no distortion to invert.
+    // The "undistorted" normalized coord is the perspective projection of the ray.
+    if (model == CameraModelType::EQUIRECTANGULAR) {
+        float3 rd = equirect_unproj(uv);
+        uv_undist = rd.xy / max(rd.z, 1e-12);
+        return true;
+    }
 
     if (!no_diff undistort_point(uv, dist_coeffs, 8, uv))
         return false;
@@ -644,6 +718,13 @@ bool unproject_point(
 
     raydir = float3(0);
 
+    // Equirectangular: uv holds (lon, lat); map straight to a direction. No
+    // distortion inversion (dist_coeffs ignored).
+    if (model == CameraModelType::EQUIRECTANGULAR) {
+        raydir = equirect_unproj(uv);
+        return true;
+    }
+
     if (!undistort_point(uv, dist_coeffs, 8, uv))
         return false;
 
@@ -675,6 +756,18 @@ bool generate_ray(
     out float3 raydir
 ) {
     CameraModelType model = (CameraModelType)camera_model;
+
+    // Equirectangular: uv holds (lon, lat). Reject pixels outside the valid
+    // angular range so black borders (partial-vertical-FOV panoramas) don't
+    // wrap; otherwise map (lon, lat) straight to a unit ray.
+    if (model == CameraModelType::EQUIRECTANGULAR) {
+        if (abs(uv.x) > 3.14159265358979 || abs(uv.y) > 1.57079632679490) {
+            raydir = float3(0);
+            return false;
+        }
+        raydir = equirect_unproj(uv);  // already unit length
+        return true;
+    }
 
     if (!no_diff undistort_point(uv, dist_coeffs, 8, uv)) {
         raydir = float3(0);
@@ -871,6 +964,10 @@ float3x3 outerProduct(float3 u) {
 float get_sorting_depth(CameraModelType camera_model, float3 p_view) {
     if (camera_model == CameraModelType::PINHOLE)
         return p_view.z;
+    // Equirectangular sees the full sphere, so sort strictly by distance
+    // (squared, monotonic) rather than the forward-biased fisheye heuristic.
+    if (camera_model == CameraModelType::EQUIRECTANGULAR)
+        return dot(p_view, p_view);
     // float z = p_view.z;
     // float z = max(p_view.z, sqrt(0.5f * dot(p_view, p_view)));
     // float z = 0.5f * (p_view.z + length(p_view));

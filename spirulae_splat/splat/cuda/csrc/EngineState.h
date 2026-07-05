@@ -447,6 +447,16 @@ struct EngineViewerState {
     DeviceVector<float>   bvh_tri_aabb;       // [num_tri * 2 * 3]
     int    bvh_num_lss = 0;
     int    bvh_num_tri = 0;
+
+    // Raw pointers to the BVH nodes/aabb that build_bvh() actually allocated.
+    // build_bvh() stores them in the string-keyed *dynamic* pool; engine_blit_view()
+    // must read that SAME allocation. Re-acquiring by a static PoolSlot enum returns
+    // a different, uninitialized buffer -- the string->enum pool-key refactor
+    // (7632e51) made the two diverge and silently broke "show training cameras".
+    const void* bvh_lss_nodes_ptr = nullptr;  // int2*
+    const void* bvh_lss_aabb_ptr  = nullptr;  // float3*
+    const void* bvh_tri_nodes_ptr = nullptr;  // int2*
+    const void* bvh_tri_aabb_ptr  = nullptr;  // float3*
 };
 
 

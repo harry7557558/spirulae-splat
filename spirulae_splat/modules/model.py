@@ -746,7 +746,14 @@ class SpirulaeSplatModel(torch.nn.Module):
         return distances[:, 1:].astype(np.float32), indices[:, 1:].astype(np.int64)
 
     def suppress_initial_scales(self, means: torch.Tensor, scales: torch.Tensor):
-        assert CameraType.EQUIRECTANGULAR.value not in self.cameras, "TODO: Not Implemented"
+        if CameraType.EQUIRECTANGULAR.value in self.cameras:
+            # cov_scale_init projects each splat through a pinhole/fisheye model
+            # to bound its initial scale by its pixel footprint; there is no
+            # equirectangular path yet. Skip the suppression rather than crash so
+            # direct equirectangular training still works (this is only an init
+            # heuristic). TODO: equirectangular cov_scale_init.
+            print("suppress_initial_scales: skipped (equirectangular not supported)")
+            return scales
 
         R = self.cameras.camera_to_worlds[:, :3, :3]  # 3 x 3
         T = self.cameras.camera_to_worlds[:, :3, 3:4]  # 3 x 1

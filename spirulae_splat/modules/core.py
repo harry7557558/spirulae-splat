@@ -132,7 +132,7 @@ class Renderer:
         relative_scale: Optional[float] = None,
         accum_weight_map: Optional[Tensor] = None,
         max_blending_masks: Optional[Tensor] = None,
-        camera_model: Literal["pinhole", "ortho", "fisheye", "equisolid"] = "pinhole",
+        camera_model: Literal["pinhole", "ortho", "fisheye", "equisolid", "equirectangular"] = "pinhole",
         dist_coeffs: Optional[Tensor] = None,  # [..., C, 10]
         actual_width: int = None,
         actual_height: int = None

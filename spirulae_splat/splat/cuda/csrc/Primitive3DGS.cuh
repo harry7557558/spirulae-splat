@@ -84,6 +84,14 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                     cam.width, cam.height,
                     &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac
                 );
+            else if constexpr (camera_model == CameraModelType::EQUIRECTANGULAR)
+                Slang3DGS::projection_3dgs_equirect(
+                    antialiased,
+                    this->mean, this->quat, this->scale, this->opacity,
+                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+                    cam.width, cam.height,
+                    &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac
+                );
             if (aabb.z > aabb.x && aabb.w > aabb.y) {
                 if constexpr (VALUE_BITS == 32) {
                     // screen.rgb = SlangHarmonics::sh_coeffs_to_color(
@@ -162,6 +170,16 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
                 );
             else if constexpr (camera_model == CameraModelType::EQUISOLID)
                 Slang3DGS::projection_3dgs_equisolid_vjp(
+                    antialiased,
+                    this->mean, this->quat, this->scale, this->opacity,
+                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
+                    cam.width, cam.height,
+                    v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac,
+                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
+                    &v_R, &v_t
+                );
+            else if constexpr (camera_model == CameraModelType::EQUIRECTANGULAR)
+                Slang3DGS::projection_3dgs_equirect_vjp(
                     antialiased,
                     this->mean, this->quat, this->scale, this->opacity,
                     cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,

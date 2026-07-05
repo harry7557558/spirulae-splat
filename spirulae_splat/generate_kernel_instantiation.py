@@ -196,12 +196,12 @@ def generate_ProjectionFwd():
                     "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
                     "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
                 ],
-                ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
+                ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID", "CameraModelType::EQUIRECTANGULAR"],
             )
         ]
         includes = [*(
-            [("Primitive3DGS.cuh", kernel_filename)] * 6 +
-            [("Primitive3DGUT.cuh", kernel_filename)] * 3
+            [("Primitive3DGS.cuh", kernel_filename)] * 8 +
+            [("Primitive3DGUT.cuh", kernel_filename)] * 4
         )] * 5
 
         generate_kernel_instantiation(prefix, definition, map_header, map_body, includes)
@@ -219,12 +219,12 @@ def generate_ProjectionBwd():
                 "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
                 "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
             ],
-            ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
+            ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID", "CameraModelType::EQUIRECTANGULAR"],
         )
     ]
     includes = [*(
-        [("Primitive3DGS.cuh", "ProjectionBwd_kernel.cuh")] * 6 +
-        [("Primitive3DGUT.cuh", "ProjectionBwd_kernel.cuh")] * 3
+        [("Primitive3DGS.cuh", "ProjectionBwd_kernel.cuh")] * 8 +
+        [("Primitive3DGUT.cuh", "ProjectionBwd_kernel.cuh")] * 4
     )] * 5
 
     generate_kernel_instantiation("ProjectionBwd", definition, map_header, map_body, includes)
@@ -251,7 +251,8 @@ def generate_FusedProjectionBwdOptim():
     ]
     cams = ["CameraModelType::PINHOLE",
             "CameraModelType::FISHEYE",
-            "CameraModelType::EQUISOLID"]
+            "CameraModelType::EQUISOLID",
+            "CameraModelType::EQUIRECTANGULAR"]
     map_body = [
         (prim, cam, sam, ctl, level)
         for prim in primitives
@@ -260,13 +261,13 @@ def generate_FusedProjectionBwdOptim():
         for ctl  in ("true", "false")
         for level in ("0", "1")
     ]
-    # Per primitive: 3 cams * 2 sam * 2 ctl * 2 levels = 24 instantiations.
-    # 15 primitives * 24 = 360 total. The `primitives` list interleaves
-    # [3DGS, Mip, 3DGUT] per SH degree, so per SH degree we get 2*24
-    # Primitive3DGS entries (3DGS+Mip) followed by 24 Primitive3DGUT entries.
+    # Per primitive: 4 cams * 2 sam * 2 ctl * 2 levels = 32 instantiations.
+    # 15 primitives * 32 = 480 total. The `primitives` list interleaves
+    # [3DGS, Mip, 3DGUT] per SH degree, so per SH degree we get 2*32
+    # Primitive3DGS entries (3DGS+Mip) followed by 32 Primitive3DGUT entries.
     includes = [*(
-        [("Primitive3DGS.cuh",   "FusedProjectionBwdOptim_kernel.cuh")] * (24 * 2) +
-        [("Primitive3DGUT.cuh",  "FusedProjectionBwdOptim_kernel.cuh")] * 24
+        [("Primitive3DGS.cuh",   "FusedProjectionBwdOptim_kernel.cuh")] * (32 * 2) +
+        [("Primitive3DGUT.cuh",  "FusedProjectionBwdOptim_kernel.cuh")] * 32
     )] * 5
 
     generate_kernel_instantiation("FusedProjectionBwdOptim", definition, map_header, map_body, includes)
@@ -307,12 +308,12 @@ def generate_RasterizationEval3DFwd():
     map_body = [
         *itertools.product(
             ["Vanilla3DGUT<0>"],
-            ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
+            ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID", "CameraModelType::EQUIRECTANGULAR"],
             ["DistortionType::None", "DistortionType::D", "DistortionType::RGB_D"],  # dist_type
             ["true", "false"],   # output_median
         )
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 18
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DFwd_kernel.cuh")] * 24
 
     generate_kernel_instantiation("RasterizationEval3DFwd", definition, map_header, map_body, includes)
 
@@ -323,14 +324,14 @@ def generate_RasterizationEval3DBwd():
     map_body = [
         *itertools.product(
             ["Vanilla3DGUT<0>"],
-            ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID"],
+            ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID", "CameraModelType::EQUIRECTANGULAR"],
             ["DistortionType::None", "DistortionType::D", "DistortionType::RGB_D"],  # dist_type
             ['true', 'false'],   # output_viewmat_grad
             ['true', 'false'],   # output_accum_weight
             ['true', 'false'],   # output_median
         )
     ]
-    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 72
+    includes = [("Primitive3DGUT.cuh", "RasterizationEval3DBwd_kernel.cuh")] * 96
 
     generate_kernel_instantiation("RasterizationEval3DBwd", definition, map_header, map_body, includes)
 

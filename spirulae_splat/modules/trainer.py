@@ -256,7 +256,8 @@ class Trainer:
 
         # ---- Warp-to-pinhole split factor per camera --------------------
         # FISHEYE / EQUISOLID -> K=5 when warp_to_pinhole is on.
-        # EQUIRECTANGULAR    -> K=6 always (regardless of flag).
+        # EQUIRECTANGULAR    -> K=6 when warp_spherical_to_pinhole is on (default);
+        #                       K=1 (pass-through, direct equirect training) when off.
         # everything else    -> K=1 (pass-through).
         from spirulae_splat.modules.camera import CameraType
         PINHOLE_VAL  = int(_C.camera_model_from_name("PINHOLE"))
@@ -266,12 +267,18 @@ class Trainer:
         K_per_camera = []
         for cm in camera_models:
             if cm == EQUIRECT_VAL:
-                K_per_camera.append(6)
+                K_per_camera.append(6 if dm_cfg.warp_spherical_to_pinhole else 1)
             elif dm_cfg.warp_to_pinhole and cm in (FISHEYE_VAL, EQUISOLID_VAL):
                 K_per_camera.append(5)
             else:
                 K_per_camera.append(1)
         any_warp = any(k > 1 for k in K_per_camera)
+        # Equirectangular cameras that pass through un-split are rendered with a
+        # direct equirectangular projection (no cubemap faces).
+        direct_equirect = any(
+            cm == EQUIRECT_VAL and K_per_camera[idx] == 1
+            for idx, cm in enumerate(camera_models)
+        )
         post_offsets = []
         acc = 0
         for k in K_per_camera:
@@ -290,6 +297,16 @@ class Trainer:
             if dm_cfg.load_normals and dpo['metadata'].get('normal_filenames', None):
                 raise NotImplementedError(
                     "use_cpp_data_manager warp does not support normal supervision yet.")
+        # TODO: depth / normal supervision for direct equirectangular training.
+        if direct_equirect:
+            if dm_cfg.load_depths and dpo['metadata'].get('depth_filenames', None):
+                raise NotImplementedError(
+                    "Direct equirectangular training (warp_spherical_to_pinhole=False) "
+                    "does not support depth supervision yet.")
+            if dm_cfg.load_normals and dpo['metadata'].get('normal_filenames', None):
+                raise NotImplementedError(
+                    "Direct equirectangular training (warp_spherical_to_pinhole=False) "
+                    "does not support normal supervision yet.")
 
         # ---- Per-INPUT c2w / intrins / dist_coeffs (raw, host) ----------
         c2w_all = cameras.camera_to_worlds.detach().cpu()
@@ -347,7 +364,17 @@ class Trainer:
             ci  = c2w_all[i]  # [3, 4]
             if k_i == 1:
                 post_c2w[off]     = ci
-                post_intrins[off] = input_intrins[i]
+                if camera_models[i] == EQUIRECT_VAL:
+                    # Direct equirectangular training. Force canonical panorama
+                    # intrinsics matching warp_image_equirectangular_to_pinhole_kernel
+                    # (PixelWise.cu): fx = fy = W/(2*pi), cx = W/2, cy = H/2. Stored
+                    # dataparser intrinsics for spherical sensors are not in this
+                    # convention, so they are intentionally ignored here.
+                    f_i = widths[i] / (2.0 * math.pi)
+                    post_intrins[off] = torch.tensor(
+                        [f_i, f_i, widths[i] / 2.0, heights[i] / 2.0])
+                else:
+                    post_intrins[off] = input_intrins[i]
                 post_dist[off]    = input_dist_coeffs[i]
                 post_widths[off]        = widths[i]
                 post_heights[off]       = heights[i]
@@ -438,8 +465,8 @@ class Trainer:
             cm in (FISHEYE_VAL, EQUISOLID_VAL) for cm in camera_models
         )
         c_cfg.load_masks       = (len(mask_filenames) > 0) or _needs_synth_mask
-        c_cfg.load_depths      = (len(depth_filenames) > 0 and not any_warp)
-        c_cfg.load_normals     = (len(normal_filenames) > 0 and not any_warp)
+        c_cfg.load_depths      = (len(depth_filenames) > 0 and not any_warp and not direct_equirect)
+        c_cfg.load_normals     = (len(normal_filenames) > 0 and not any_warp and not direct_equirect)
         c_cfg.train_batch_size = train_bs
         c_cfg.val_batch_size   = val_bs
         c_cfg.warp_to_pinhole  = bool(dm_cfg.warp_to_pinhole)
@@ -1007,8 +1034,8 @@ class TrainerConfig360Camera(TrainerConfig):
     ))
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
         # densify_score_mode="median",
-        densify_loss_map_mode="robust_edge_aware",
-        densify_robust_edge_aware_quantile=0.99,
+        # densify_loss_map_mode="robust_edge_aware",
+        # densify_robust_edge_aware_quantile=0.99,
         long_axis_split_opacity_k=(0.5, 0.6, 5000),
     ))
 
