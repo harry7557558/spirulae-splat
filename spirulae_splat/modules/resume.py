@@ -70,6 +70,26 @@ def config_from_json(json_path: Path):
     return _from_dict(TrainerConfig, data)
 
 
+def apply_preset(base, preset_inst, ref_inst):
+    """Re-impose a preset's characteristic settings on a resumed config.
+
+    On resume, `base` is the checkpoint's config.json. If the user selected a
+    DIFFERENT preset than the original run, this applies that preset's deviations
+    (e.g. `synthetic` disabling bilagrid/PPISP) on top of `base`, recursively.
+    A field is applied only where `preset_inst` differs from `ref_inst` (the
+    plain base-class defaults) -- so a preset's intentional overrides win over
+    the checkpoint, while fields the preset leaves at the base default keep the
+    checkpoint's value. Explicit CLI flags then override on top (via tyro's
+    default=). For a same-preset resume, preset_inst == ref_inst -> no change."""
+    for f in dataclasses.fields(preset_inst):
+        pv = getattr(preset_inst, f.name)
+        rv = getattr(ref_inst, f.name)
+        if dataclasses.is_dataclass(pv) and dataclasses.is_dataclass(rv):
+            apply_preset(getattr(base, f.name), pv, rv)
+        elif pv != rv:
+            setattr(base, f.name, pv)
+
+
 # --- checkpoint path resolution + state.json --------------------------------
 
 def resolve_checkpoint(path: Path):

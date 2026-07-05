@@ -829,57 +829,88 @@ class Trainer:
     def _resume_from_checkpoint(self, load_dir) -> None:
         """Restore engine + training state from a full checkpoint. Called from
         __init__ after the engine skeleton is built (world seeded at
-        max_num_splats, data manager installed). Appearance channels present in
-        the checkpoint are eagerly re-initialized here (with the config's dims,
-        which must match the checkpoint) so their pool slots exist as restore
-        targets and the per-step lazy init won't re-zero them."""
-        from spirulae_splat.modules.resume import (
-            resolve_checkpoint, read_state_json, check_compat)
+        max_num_splats, data manager installed).
+
+        Supports resuming with a DIFFERENT layout than the checkpoint: fewer
+        Gaussians (new smaller cap_max), a different SH degree, and with/without
+        bilagrid/PPISP. When the layouts differ, the checkpoint's buffers are
+        adapted on the CPU (resume_adapt: splat reduction, SH resample, quant
+        re-encode, bilagrid resample) to the target layout before loading -- no
+        extra VRAM. Appearance channels that both the checkpoint AND the current
+        config want are eagerly re-initialized here (at the config's dims) so
+        their pool slots exist as restore targets and the per-step lazy init
+        won't re-zero them."""
+        import shutil, tempfile
+        from spirulae_splat.modules.resume import resolve_checkpoint, read_state_json
+        from spirulae_splat.modules.resume_adapt import adapt_checkpoint
 
         run_dir, ckpt_dir = resolve_checkpoint(Path(load_dir))
         state = read_state_json(ckpt_dir)
-        check_compat(self.config, state)
 
         model = self.model
         cfg = self.config.model
+        opt = self.config.optimizer
+        n_img = model.num_train_data
 
-        def _enabled(key):
-            return bool(state.get(key, {}).get("enabled"))
+        # --- target layout from the (possibly changed) config ---------------
+        def _lhw(shape):                       # (grid_X, grid_Y, grid_W) -> (L,H,W)
+            X, Y, W_g = shape
+            return (W_g, Y, X)
+        geo = cfg.use_bilateral_grid_for_geometry
+        ppisp_lr = opt.ppisp_adagrad_lr if cfg.use_adagrad_ppisp_optim else opt.ppisp_lr
+        target = {
+            "max_num_splats": int(model.core.max_num_splats),
+            "num_sh": int(model.gauss_params["features_sh"].shape[1]),
+            "num_images": int(n_img),
+            "bilagrid": {
+                "rgb":    _lhw(cfg.bilagrid_shape) if (cfg.use_bilateral_grid and opt.bilagrid_lr > 0) else None,
+                "depth":  _lhw(cfg.bilagrid_shape_geometry) if (geo and opt.bilagrid_depth_lr > 0 and cfg.depth_supervision_weight > 0) else None,
+                "normal": _lhw(cfg.bilagrid_shape_geometry) if (geo and opt.bilagrid_normal_lr > 0 and cfg.normal_supervision_weight > 0) else None,
+            },
+            "ppisp": bool(cfg.use_ppisp and ppisp_lr > 0),
+        }
 
-        if _enabled("bilagrid_rgb") and not model._bilagrid_rgb_init:
-            X, Y, W_g = cfg.bilagrid_shape
+        # --- eager-init appearance the checkpoint has AND the config wants ---
+        def _ck_on(t):
+            return bool(state.get(f"bilagrid_{t}", {}).get("enabled"))
+        tbg = target["bilagrid"]
+        if tbg["rgb"] is not None and _ck_on("rgb") and not model._bilagrid_rgb_init:
             model.core.engine_init_bilagrid(
-                model.num_train_data, rgb_type=cfg.bilagrid_type,
-                rgb_LHW=(W_g, Y, X), use_adagrad=cfg.use_adagrad_bilagrid_optim)
+                n_img, rgb_type=cfg.bilagrid_type, rgb_LHW=tbg["rgb"],
+                use_adagrad=cfg.use_adagrad_bilagrid_optim)
             model._bilagrid_rgb_init = True
-        if _enabled("bilagrid_depth") and not model._bilagrid_depth_init:
-            X, Y, W_g = cfg.bilagrid_shape_geometry
+        if tbg["depth"] is not None and _ck_on("depth") and not model._bilagrid_depth_init:
             model.core.engine_init_bilagrid(
-                model.num_train_data, depth_LHW=(W_g, Y, X),
-                use_adagrad=cfg.use_adagrad_bilagrid_optim)
+                n_img, depth_LHW=tbg["depth"], use_adagrad=cfg.use_adagrad_bilagrid_optim)
             model._bilagrid_depth_init = True
-        if _enabled("bilagrid_normal") and not model._bilagrid_normal_init:
-            X, Y, W_g = cfg.bilagrid_shape_geometry
+        if tbg["normal"] is not None and _ck_on("normal") and not model._bilagrid_normal_init:
             model.core.engine_init_bilagrid(
-                model.num_train_data, normal_LHW=(W_g, Y, X),
-                use_adagrad=cfg.use_adagrad_bilagrid_optim)
+                n_img, normal_LHW=tbg["normal"], use_adagrad=cfg.use_adagrad_bilagrid_optim)
             model._bilagrid_normal_init = True
-        if _enabled("ppisp") and not model._ppisp_init:
+        if target["ppisp"] and bool(state.get("ppisp", {}).get("enabled")) and not model._ppisp_init:
             model.core.engine_init_ppisp(
-                model.num_train_data, param_type=cfg.ppisp_param_type,
-                use_adagrad=cfg.use_adagrad_ppisp_optim)
+                n_img, param_type=cfg.ppisp_param_type, use_adagrad=cfg.use_adagrad_ppisp_optim)
             model._ppisp_init = True
 
-        # Restore world raw params + optimizer + densify + appearance from the
-        # checkpoint's pool dump, then refresh the host gauss_params and step.
-        step = model.core.engine_load_checkpoint(ckpt_dir)
+        # --- adapt (CPU) if the layout differs, then load -------------------
+        tmp = tempfile.mkdtemp(prefix="ss_resume_")
+        try:
+            adapted = adapt_checkpoint(ckpt_dir, target, tmp)
+            load_from = adapted if adapted is not None else ckpt_dir
+            step = model.core.engine_load_checkpoint(load_from)
+            eff_state = read_state_json(load_from)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        # Refresh host gauss_params from the (restored) device world + step.
         model.core.engine_sync_splats_to_host()
-        model.core.cur_num_splats = int(state.get("cur_num_splats",
-                                                  model.core.cur_num_splats))
+        model.core.cur_num_splats = int(eff_state.get("cur_num_splats",
+                                                      model.core.cur_num_splats))
         model.step = step
         self._start_step = step
         self.current_step = step
-        print(f"Resumed from {ckpt_dir} at step {step} "
+        adapted_note = " (layout-adapted)" if adapted is not None else ""
+        print(f"Resumed from {ckpt_dir} at step {step}{adapted_note} "
               f"(cur_num_splats={model.core.cur_num_splats})")
 
     def save_checkpoint(self, step: int) -> None:

@@ -39,27 +39,68 @@ async def start_viewer(trainer: Trainer):
     await asyncio.create_task(start_viewer_server(trainer))
 
 
+def _find_resume(argv):
+    """Extract the --resume value from raw argv before tyro parsing."""
+    for i, a in enumerate(argv):
+        if a == "--resume" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--resume="):
+            return a.split("=", 1)[1]
+    return None
+
+
 def entrypoint():
+    import sys
     import tyro
+    from pathlib import Path
 
-    Config = Union[
-        Annotated[TrainerConfig, tyro.conf.subcommand(name="3dgs")],
-        Annotated[TrainerConfig360Camera, tyro.conf.subcommand(name="360-camera")],
-        Annotated[TrainerConfigInTheWild, tyro.conf.subcommand(name="in-the-wild")],
-        Annotated[TrainerConfigLinear, tyro.conf.subcommand(name="linear-color")],
-        Annotated[TrainerConfigSynthetic, tyro.conf.subcommand(name="synthetic")],
-        Annotated[TrainerConfigMeshing, tyro.conf.subcommand(name="meshing")],
-        Annotated[TrainerConfigAcademicBaseline, tyro.conf.subcommand(name="academic-baseline")],
-    ]
+    presets = {
+        "3dgs": TrainerConfig,
+        "360-camera": TrainerConfig360Camera,
+        "in-the-wild": TrainerConfigInTheWild,
+        "linear-color": TrainerConfigLinear,
+        "synthetic": TrainerConfigSynthetic,
+        "meshing": TrainerConfigMeshing,
+        "academic-baseline": TrainerConfigAcademicBaseline,
+    }
 
-    config = tyro.cli(Config)
+    argv = sys.argv[1:]
+    resume = _find_resume(argv)
 
-    # Resume: rebuild the config from the checkpoint's config.json (architecture
-    # / model / data-config), keeping CLI identity + explicitly-changed
-    # run-control fields. The Trainer then restores engine state in __init__.
-    if getattr(config, "resume", None) is not None:
-        from spirulae_splat.modules.resume import build_resume_config
-        config = build_resume_config(config)
+    if resume is not None:
+        # Resume: the checkpoint's config.json is the BASE. If the user selected a
+        # DIFFERENT preset than the original run, that preset's characteristic
+        # settings (e.g. `synthetic` disabling bilagrid/PPISP) are re-imposed on
+        # top; then flags the user explicitly passes (incl. --model.* overrides)
+        # win, via tyro's `default=`. Output defaults back to the checkpoint's run
+        # folder unless --output-dir-* is given. The Trainer restores + layout-
+        # adapts the engine state in __init__.
+        from spirulae_splat.modules.resume import (
+            config_from_json, resolve_checkpoint, apply_preset)
+        run_dir, _ = resolve_checkpoint(Path(resume))
+        base = config_from_json(run_dir / "config.json")
+        base.resume = Path(resume)
+        base.output_dir_prefix = run_dir.parent
+        base.output_dir_name = Path(run_dir.name)
+        # Leading token is the preset subcommand (e.g. "synthetic"); re-impose its
+        # deviations from the base defaults, then parse the remaining flags.
+        sub = argv[0] if (argv and not argv[0].startswith("-")) else None
+        rest = argv[1:] if sub is not None else argv
+        if sub in presets:
+            apply_preset(base, presets[sub](data=base.data),
+                         TrainerConfig(data=base.data))
+        config = tyro.cli(TrainerConfig, default=base, args=rest)
+    else:
+        Config = Union[
+            Annotated[TrainerConfig, tyro.conf.subcommand(name="3dgs")],
+            Annotated[TrainerConfig360Camera, tyro.conf.subcommand(name="360-camera")],
+            Annotated[TrainerConfigInTheWild, tyro.conf.subcommand(name="in-the-wild")],
+            Annotated[TrainerConfigLinear, tyro.conf.subcommand(name="linear-color")],
+            Annotated[TrainerConfigSynthetic, tyro.conf.subcommand(name="synthetic")],
+            Annotated[TrainerConfigMeshing, tyro.conf.subcommand(name="meshing")],
+            Annotated[TrainerConfigAcademicBaseline, tyro.conf.subcommand(name="academic-baseline")],
+        ]
+        config = tyro.cli(Config)
 
     trainer = Trainer(config)
 
