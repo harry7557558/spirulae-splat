@@ -53,6 +53,12 @@ def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str):
         if result_mask is None:
             result_mask = np.ones((1, 1), dtype=np.bool_)
 
+        # resize mask to match original image resolution (model may run at reduced size)
+        if result_mask.shape != (image.size[1], image.size[0]):
+            mask_img = Image.fromarray(result_mask.astype(np.uint8) * 255)
+            mask_img = mask_img.resize(image.size, Image.NEAREST)
+            result_mask = np.asarray(mask_img) > 127
+
         mask_path = mask_dir / (str(image_path) + ".png")
         os.makedirs(mask_path.parent, exist_ok=True)
         Image.fromarray(result_mask).save(mask_path)

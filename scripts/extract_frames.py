@@ -351,7 +351,7 @@ if __name__ == "__main__":
         open(os.path.join(dirname, 'run_colmap.bash'), 'w').write(f"""
 # {' '.join(__import__('sys').argv)}
 
-{open(os.path.join(cur_dir, "run_colmap_mask.bash")).read()}""".lstrip())
+{open(os.path.join(cur_dir, "run_colmap.bash")).read()}""".lstrip())
         # run_sam2.bash
         open(os.path.join(dirname, 'run_sam2.bash'), 'w').write(f"""
 # Run this from SAM2 install directory, after downloading checkpoints
