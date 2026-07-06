@@ -162,11 +162,8 @@ std::map<std::string, float> engine_train_step_managed(
         }
 
         // ---- Warp path: fisheye / equisolid + warp_to_pinhole OR equirect --
-        if (std::get<0>(b.depth_view) != 0 || std::get<0>(b.normal_view) != 0) {
-            throw std::runtime_error(
-                "engine_train_step_managed: depth/normal GT not supported when "
-                "warp_to_pinhole splitting is active.");
-        }
+        // Depth is warped to per-face ray depth, normal is rotated into each
+        // face's camera frame (see set_training_data_warped).
         return engine_train_step_warped(
             step, max_steps,
             std::move(primitive), sh_degree, packed,
@@ -177,6 +174,8 @@ std::map<std::string, float> engine_train_step_managed(
             b.input_intrins_view, b.input_dist_coeffs_view,
             b.rgb_view, b.mask_view,
             b.mask_height, b.mask_width,
+            b.depth_view, b.depth_height, b.depth_width,
+            b.normal_view, b.normal_height, b.normal_width,
             (uint64_t)b.axes_dev,
             bilagrid_cam_indices,
             cfg);

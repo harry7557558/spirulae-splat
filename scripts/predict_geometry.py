@@ -36,68 +36,18 @@ class Config:
     dataset_dir: str
     max_size: int = 1600  # result not always better at high res
 
-
-def refine_depth_with_normal(depth: torch.Tensor, normal: torch.Tensor, intrins, is_ray_depth: bool):
-    depth /= depth[depth > 0.0].mean()
-    # depth = torch.ones_like(depth)
-    # depth = torch.rand_like(depth)
-    depth = depth.permute(0, 3, 1, 2).contiguous()
-    shape = depth.shape
-    depth = torch.nn.Parameter(depth.flatten())
-    optimizer = torch.optim.LBFGS(
-        [depth],
-        lr=1,
-        max_iter=1,
-        history_size=5,
-        # line_search_fn="strong_wolfe"
-    )
-    # optimizer = torch.optim.Adam(
-    #     [depth],
-    #     lr=1e-3,
-    # )
-    camera_model, intrins, dist_coeffs = intrins
-    intrins = torch.Tensor(intrins).flatten()[None].repeat(shape[0], 1).cuda()
-    dist_coeffs = torch.Tensor(dist_coeffs).flatten()[None].repeat(shape[0], 1).cuda()
-    normal = F.normalize(normal, dim=-1)
-
-    num_res = 3
-    normals = [normal]
-    for i in range(num_res):
-        normals.append(F.avg_pool2d(normals[-1].permute(0, 3, 1, 2), 2).permute(0, 2, 3, 1))
-
-    depth_i = None
-    normal_i = None
-    def closure():
-        nonlocal depth_i
-        nonlocal normal_i
-        optimizer.zero_grad()
-
-        loss = 0.0
-        depth_i = depth.reshape(shape)
-        for i in range(num_res+1):
-            loss_map = depth_normal_loss(
-                depth_i.permute(0, 2, 3, 1).contiguous(), normals[i],
-                camera_model, intrins*2**-i, dist_coeffs, is_ray_depth
-            )
-            loss_i = loss_map.mean()
-            loss = loss + loss_i * (1/(num_res+1))
-            if i != num_res:
-                depth_i = F.avg_pool2d(depth_i, 2)
-        loss.backward()
-        print(loss.item())
-        return loss
-    for iter in range(1000):
-        print(iter)
-        optimizer.step(closure)
-        # closure()
-        # optimizer.step()
-    depth = torch.clip(depth, torch.quantile(depth, 0.001), torch.quantile(depth, 0.999))
-    depth = depth.data.reshape(shape)
-    return depth.permute(0, 2, 3, 1).contiguous()
-    return 0.5+0.5*depth_to_normal(
-        depth.permute(0, 2, 3, 1).contiguous(),
-        camera_model, intrins, dist_coeffs, is_ray_depth=is_ray_depth
-    )
+    # Overrides for the per-image geometry decisions. None => decide
+    # automatically (legacy behavior). Set from the CLI flags.
+    #   warp_to_pinhole: whether to split a wide fisheye into several pinhole
+    #       faces before running the model (vs. undistorting to a single
+    #       pinhole). Auto: only for fisheye that would lose too much FOV under
+    #       a single undistortion, and only for metric3d.
+    #   ray_depth: whether the saved depth stores ray depth (Euclidean distance
+    #       along the camera ray) rather than linear (z) depth. Auto: ray depth
+    #       exactly when the wide->pinhole split is used. Must match the
+    #       trainer's `input_depth_is_ray_depth`.
+    warp_to_pinhole: Optional[bool] = None
+    ray_depth: Optional[bool] = None
 
 
 def expand_white_area(boolean_image, offset):
@@ -147,6 +97,25 @@ def expand_white_area(boolean_image, offset):
         return expanded_image_bool
 
 
+def linear_to_ray_depth(depth: torch.Tensor, intrins_fxfycxcy) -> torch.Tensor:
+    """Convert linear (z) depth to ray depth in a pinhole frame.
+
+    ray = z * sqrt(x_n^2 + y_n^2 + 1), with x_n=(px+0.5-cx)/fx, y_n=(py+0.5-cy)/fy.
+    `depth` is [B, H, W, 1]; the intrinsics are for its own resolution.
+    """
+    fx, fy, cx, cy = intrins_fxfycxcy
+    _, H, W, _ = depth.shape
+    ys, xs = torch.meshgrid(
+        torch.arange(H, device=depth.device, dtype=torch.float32),
+        torch.arange(W, device=depth.device, dtype=torch.float32),
+        indexing='ij',
+    )
+    xn = (xs + 0.5 - cx) / fx
+    yn = (ys + 0.5 - cy) / fy
+    sec = torch.sqrt(xn * xn + yn * yn + 1.0)
+    return depth * sec[None, :, :, None]
+
+
 def process_image(
     model_type: Literal['metric3d', 'da3', 'da3+lang-sam', 'metric3d+da3+lang-sam'],
     models: Tuple,
@@ -178,12 +147,30 @@ def process_image(
     )
     # is_ray_depth = (intrins[0].lower() == "fisheye")
 
+    # Decide whether to split a wide fisheye into several pinhole faces
+    # ("warp to pinhole") vs. undistorting to a single pinhole. Auto (the
+    # legacy heuristic): only for a fisheye that would lose too much FOV under
+    # a single undistortion, and only for metric3d. Config.warp_to_pinhole
+    # overrides the decision when not None.
+    if Config.warp_to_pinhole is None:
+        do_warp = (
+            intrins[0].lower() == "fisheye"
+            and model_type == "metric3d"  # TODO: add support for other models
+            and distort_image(torch.ones_like(image[..., :1]), *intrins).mean().item() <= 0.75
+        )
+    else:
+        do_warp = Config.warp_to_pinhole
+
+    # Whether the saved depth stores ray depth (Euclidean distance along the
+    # camera ray) rather than linear (z) depth. Auto: ray depth exactly when we
+    # split into pinhole faces (each face keeps the wide capture's ray
+    # semantics); linear when we undistort to a single pinhole. Must match the
+    # trainer's `input_depth_is_ray_depth`.
+    is_ray_depth = do_warp if Config.ray_depth is None else Config.ray_depth
+
     axes = None
-    if intrins[0].lower() != "fisheye" or \
-        distort_image(torch.ones_like(image[..., :1]), *intrins).mean().item() > 0.75 \
-            or model_type != "metric3d":  # TODO: add support for other models
+    if not do_warp:
         image = undistort_image(image, *intrins)
-        is_ray_depth = False
     else:
         # split into multiple images for very wide fisheye, to minimize loss of fov
         r2, r3, r6 = 2**0.5, 3**0.5, 6**0.5
@@ -218,8 +205,6 @@ def process_image(
         ]).float().cuda()
         axes[:, 0:2] *= 1.25
 
-        is_ray_depth = True
-
     if axes is not None:
         original_shape = image.shape
         target_size = int(np.sqrt(original_shape[1]*original_shape[2]/len(axes)))
@@ -237,11 +222,6 @@ def process_image(
         if axes is not None:
             pred_depth = warp_depth_pinhole_to_wide(pred_depth.permute(0, 2, 3, 1)[None], *intrins, axes, *original_shape[1:3], is_ray_depth=is_ray_depth)
             pred_normal = warp_points_pinhole_to_wide(pred_normal.permute(0, 2, 3, 1)[None], *intrins, axes, *original_shape[1:3])
-            # pred_depth = refine_depth_with_normal(pred_depth, pred_normal, intrins, is_ray_depth)
-            # import matplotlib.pyplot as plt
-            # plt.imshow((pred_depth)[0].cpu().numpy())
-            # plt.show()
-            # exit(0)
             pred_depth = pred_depth.permute(0, 3, 1, 2)
             pred_normal = pred_normal.permute(0, 3, 1, 2)
 
@@ -302,6 +282,12 @@ def process_image(
     if depth_save_path is not None:
         pred_depth /= sky_depth
         if axes is None:
+            # Undistort path: metric3d gives linear (z) depth in the pinhole
+            # frame. When ray depth is requested, convert before distorting
+            # back to the input frame (the split path already handles this via
+            # warp_depth_pinhole_to_wide's is_ray_depth).
+            if is_ray_depth:
+                pred_depth = linear_to_ray_depth(pred_depth, intrins[1])
             pred_depth = distort_image(pred_depth, *intrins)
         pred_depth = pred_depth[0]
         if pred_sky is not None:
@@ -438,6 +424,10 @@ def process_dir(dataset_dir: str, include_normal: bool, include_sky: bool):
         )
 
 
+def _tristate(value):
+    return {"auto": None, "yes": True, "no": False}[value]
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
@@ -445,6 +435,17 @@ if __name__ == "__main__":
     parser.add_argument("dataset_dir", nargs=1, help="Path to the dataset folder.")
     # parser.add_argument("--normal", action="store_true", help="Whether to predict normal in addition to depth.")
     parser.add_argument("--sky", action="store_true", help="Whether to predict sky for full images. Useful for highly distorted fisheye images.")
+    parser.add_argument(
+        "--warp-to-pinhole", choices=["auto", "yes", "no"], default="auto",
+        help="Whether to split a wide fisheye into pinhole faces before running "
+             "the model. 'auto' uses the FOV-loss heuristic (default).")
+    parser.add_argument(
+        "--ray-depth", choices=["auto", "yes", "no"], default="auto",
+        help="Whether the saved depth stores ray depth (vs. linear/z depth). "
+             "'auto' picks ray depth iff the wide->pinhole split is used "
+             "(default). Must match the trainer's input_depth_is_ray_depth.")
     args = parser.parse_args()
+    Config.warp_to_pinhole = _tristate(args.warp_to_pinhole)
+    Config.ray_depth = _tristate(args.ray_depth)
     # process_dir(args.dataset_dir[0], args.normal, args.sky)
     process_dir(args.dataset_dir[0], True, args.sky)

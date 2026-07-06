@@ -534,6 +534,10 @@ static std::map<std::string, float> _engine_train_step_split_warped(
     TorchTensorView gt_rgb_byte,
     TorchTensorView gt_alpha_byte,
     int mask_in_H, int mask_in_W,
+    TorchTensorView gt_depth_byte,
+    int depth_in_H, int depth_in_W,
+    TorchTensorView gt_normal_byte,
+    int normal_in_H, int normal_in_W,
     uint64_t axes_dev,
     TorchTensorView bilagrid_cam_indices,
     const EngineStepConfig& cfg
@@ -558,6 +562,9 @@ static std::map<std::string, float> _engine_train_step_split_warped(
                                  B_in, in_H, in_W, K, out_H, out_W,
                                  gt_rgb_byte, gt_alpha_byte,
                                  mask_in_H, mask_in_W,
+                                 gt_depth_byte, depth_in_H, depth_in_W,
+                                 gt_normal_byte, normal_in_H, normal_in_W,
+                                 cfg.loss.input_depth_is_ray_depth,
                                  input_intrins, input_dist_coeffs, axes_dev);
         return _engine_train_step_after_setup(
             step, max_steps, std::move(primitive), sh_degree, packed,
@@ -588,6 +595,8 @@ static std::map<std::string, float> _engine_train_step_split_warped(
         // Per-input-image slices (B_in axis).
         TorchTensorView rgb_k   = _slice_tv_first_dim(gt_rgb_byte,        k);
         TorchTensorView mask_k  = _slice_tv_first_dim(gt_alpha_byte,      k);
+        TorchTensorView dep_k   = _slice_tv_first_dim(gt_depth_byte,      k);
+        TorchTensorView nrm_k   = _slice_tv_first_dim(gt_normal_byte,     k);
         TorchTensorView i_itr_k = _slice_tv_first_dim(input_intrins,      k);
         TorchTensorView i_dst_k = _slice_tv_first_dim(input_dist_coeffs,  k);
 
@@ -603,6 +612,9 @@ static std::map<std::string, float> _engine_train_step_split_warped(
                                  /*B_in=*/1, in_H, in_W, K, out_H, out_W,
                                  rgb_k, mask_k,
                                  mask_in_H, mask_in_W,
+                                 dep_k, depth_in_H, depth_in_W,
+                                 nrm_k, normal_in_H, normal_in_W,
+                                 cfg.loss.input_depth_is_ray_depth,
                                  i_itr_k, i_dst_k, axes_dev);
 
         _set_cur_cam_indices(bgi_k);
@@ -665,6 +677,10 @@ std::map<std::string, float> engine_train_step_warped(
     TorchTensorView gt_rgb_byte,          // [B_in, in_H, in_W, 3] u8/u16
     TorchTensorView gt_alpha_byte,        // [B_in, mask_in_H, mask_in_W, 1] u8 (nullable)
     int mask_in_H, int mask_in_W,
+    TorchTensorView gt_depth_byte,        // [B_in, depth_in_H, depth_in_W, 1] u16/f32 (nullable)
+    int depth_in_H, int depth_in_W,
+    TorchTensorView gt_normal_byte,       // [B_in, normal_in_H, normal_in_W, 3] u8/f32 (nullable)
+    int normal_in_H, int normal_in_W,
     uint64_t axes_dev,                    // device float ptr [K, 3, 3]
     // Bilagrid cam indices in the POST-split index space.
     TorchTensorView bilagrid_cam_indices,
@@ -677,6 +693,8 @@ std::map<std::string, float> engine_train_step_warped(
             std::move(input_camera_model), B_in, in_H, in_W, K,
             input_intrins, input_dist_coeffs,
             gt_rgb_byte, gt_alpha_byte, mask_in_H, mask_in_W,
+            gt_depth_byte, depth_in_H, depth_in_W,
+            gt_normal_byte, normal_in_H, normal_in_W,
             axes_dev, bilagrid_cam_indices, cfg);
     }
     // Camera table is set up at POST-split resolution + PINHOLE.
@@ -687,6 +705,9 @@ std::map<std::string, float> engine_train_step_warped(
                              B_in, in_H, in_W, K, out_H, out_W,
                              gt_rgb_byte, gt_alpha_byte,
                              mask_in_H, mask_in_W,
+                             gt_depth_byte, depth_in_H, depth_in_W,
+                             gt_normal_byte, normal_in_H, normal_in_W,
+                             cfg.loss.input_depth_is_ray_depth,
                              input_intrins, input_dist_coeffs, axes_dev);
     return _engine_train_step_after_setup(
         step, max_steps, std::move(primitive), sh_degree, packed,

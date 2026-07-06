@@ -86,11 +86,11 @@ void set_training_data(
 
 // Warp-fused GT upload used by engine_train_step_managed when the current
 // batch needs fisheye / equirectangular -> pinhole splitting. The GT RGB
-// (and optionally mask) byte buffer is warped on GPU directly into a
-// post-split float buffer; no full-res float intermediate is allocated.
-// Throws when PPISP is enabled. Depth / normal are silently dropped on
-// this path (the trainer must error before reaching here if they were
-// requested).
+// (and optionally mask / depth / normal) byte buffer is warped on GPU
+// directly into a post-split float buffer; no full-res float intermediate is
+// allocated. Throws when PPISP is enabled. Depth is warped to per-face ray
+// depth; normal is rotated into each face's camera frame. Pass null
+// gt_depth / gt_normal to disable those.
 void set_training_data_warped(
     std::string  input_model_name,    // "FISHEYE" / "EQUISOLID" / "EQUIRECTANGULAR"
     int B_in, int in_H, int in_W,
@@ -98,6 +98,11 @@ void set_training_data_warped(
     TorchTensorView gt_rgb,           // [B_in, in_H, in_W, 3] byte
     TorchTensorView gt_alpha,         // [B_in, mask_in_H, mask_in_W, 1] uint8 (nullable)
     int mask_in_H, int mask_in_W,
+    TorchTensorView gt_depth,         // [B_in, depth_in_H, depth_in_W, 1] u16/f32 (nullable)
+    int depth_in_H, int depth_in_W,
+    TorchTensorView gt_normal,        // [B_in, normal_in_H, normal_in_W, 3] u8/f32 (nullable)
+    int normal_in_H, int normal_in_W,
+    bool input_depth_is_ray_depth,    // interpretation of the wide GT depth
     TorchTensorView input_intrins,    // [B_in, 4] float
     TorchTensorView input_dist_coeffs,// [B_in, 10] float
     uint64_t axes_dev                 // device float ptr [K, 3, 3]
@@ -299,6 +304,10 @@ std::map<std::string, float> engine_train_step_warped(
     TorchTensorView gt_rgb_byte,
     TorchTensorView gt_alpha_byte,
     int mask_in_H, int mask_in_W,
+    TorchTensorView gt_depth_byte,
+    int depth_in_H, int depth_in_W,
+    TorchTensorView gt_normal_byte,
+    int normal_in_H, int normal_in_W,
     uint64_t axes_dev,
     TorchTensorView bilagrid_cam_indices,
     const EngineStepConfig& cfg

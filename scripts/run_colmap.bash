@@ -24,7 +24,7 @@ mkdir -p sparse
 
 # solve bundle adjustment
 # optionally add `--Mapper.ba_global_backend CASPAR` for speed
-colmap mapper --database_path database.db --image_path ./$image_path --output_path sparse --Mapper.ba_use_gpu 1
+colmap mapper --database_path database.db --image_path ./$image_path --output_path sparse --Mapper.ba_use_gpu 1 --Mapper.structure_less_registration_fallback 0
 #colmap mapper --database_path database.db --image_path ./$image_path --output_path sparse --Mapper.ba_use_gpu 1 --Mapper.ba_refine_extra_params 0 --Mapper.init_min_tri_angle 4
 #colmap global_mapper --database_path database.db --image_path ./$image_path --output_path sparse --GlobalMapper.ba_ceres_use_gpu 1 --GlobalMapper.ba_refine_extra_params 0
 

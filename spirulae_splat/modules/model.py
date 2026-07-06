@@ -1142,7 +1142,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 camera.camera_type[0].upper(),
                 self.core._tv(intrins_cuda),
                 self.core._tv(dist_coeffs_cuda),
-                self.config.primitive not in ['3dgs', 'mip'],  # is_ray_depth
+                True,  # is_ray_depth
                 self.core._tv(depth_cuda),
                 self.core._tv(depth_normal_cuda),
             )
@@ -1164,7 +1164,7 @@ class SpirulaeSplatModel(torch.nn.Module):
                 camera.camera_type[0].upper(),
                 self.core._tv(intrins_cuda),
                 self.core._tv(dist_coeffs_cuda),
-                self.config.primitive not in ['3dgs', 'mip'],  # is_ray_depth
+                True,  # is_ray_depth
                 self.core._tv(median_cuda),
                 self.core._tv(median_normal_cuda),
             )

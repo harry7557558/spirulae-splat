@@ -371,6 +371,42 @@ void launch_warp_mask_equi(
     const float* d_axes);
 
 
+void launch_warp_depth_wide(
+    std::string camera_model,
+    const float* d_intrins,
+    const float* d_dist_coeffs,
+    const void* d_depth, uint32_t elem_size,
+    int B, int Hin, int Win,
+    int in_H, int in_W,
+    float* d_float_out, int K, int Hout, int Wout,
+    const float* d_axes, bool input_is_ray_depth);
+
+
+void launch_warp_depth_equi(
+    const void* d_depth, uint32_t elem_size,
+    int B, int Hin, int Win,
+    float* d_float_out, int K, int Hout, int Wout,
+    const float* d_axes, bool input_is_ray_depth);
+
+
+void launch_warp_normal_wide(
+    std::string camera_model,
+    const float* d_intrins,
+    const float* d_dist_coeffs,
+    const void* d_normal, uint32_t elem_size,
+    int B, int Hin, int Win,
+    int in_H, int in_W,
+    float* d_float_out, int K, int Hout, int Wout,
+    const float* d_axes);
+
+
+void launch_warp_normal_equi(
+    const void* d_normal, uint32_t elem_size,
+    int B, int Hin, int Win,
+    float* d_float_out, int K, int Hout, int Wout,
+    const float* d_axes);
+
+
 void warp_image_pinhole_to_wide_tensor(
     std::string camera_model,
     TorchTensorView intrins,            // [B, 4]

@@ -81,6 +81,14 @@ void set_training_data_warped(
     // Optional mask at (potentially different) input shape, uint8.
     TorchTensorView gt_alpha,
     int mask_in_H, int mask_in_W,
+    // Optional GT depth (uint16 raw counts / float) and normal (uint8 /
+    // float) at their own input shapes. Depth is warped to per-face ray
+    // depth; normal is rotated into each face's camera frame.
+    TorchTensorView gt_depth,
+    int depth_in_H, int depth_in_W,
+    TorchTensorView gt_normal,
+    int normal_in_H, int normal_in_W,
+    bool input_depth_is_ray_depth,
     // Per-INPUT-camera intrins + dist_coeffs (used by the wide warp; ignored
     // by the equirectangular kernel). Both are TorchTensorView so they can
     // be zero-copy when already on device.
@@ -93,9 +101,8 @@ void set_training_data_warped(
     // PPISP runs render-side on the POST-split pinhole sub-cameras (same
     // shape as the bilagrid RGB path), so it works unchanged here -- no
     // refusal needed.
-    // Depth / normal: warp path doesn't supply them, but if the engine still
-    // has stale ones around from a prior step, drop them so the loss kernels
-    // see "no GT depth / normal" (rather than mismatched-shape garbage).
+    // Depth / normal are warped below; clear stale buffers first so a step
+    // that supplies neither leaves the loss kernels seeing "no GT".
     engine().gt.depth  = DeviceTensor3D<float>();
     engine().gt.normal = DeviceTensor3D<float3>();
 
@@ -185,6 +192,75 @@ void set_training_data_warped(
     } else {
         engine().gt.alpha = DeviceTensor3D<bool>();
         engine().gt.has_mask = false;
+    }
+
+    // ---- Depth warp -------------------------------------------------------
+    // Wide GT depth -> per-face ray depth float [B_post, out_H, out_W, 1].
+    // Already ray depth on output, so the loss must NOT re-convert (the
+    // caller sets the engine's ray-depth handling accordingly).
+    if (std::get<0>(gt_depth) != 0) {
+        uint32_t d_elem = std::get<1>(gt_depth);
+        size_t d_numel  = (size_t)B_in * depth_in_H * depth_in_W;
+        const void* d_depth_in;
+        if (d_elem == 4) {
+            d_depth_in = (const void*)_h2d_stage_floats(
+                gt_depth, d_numel, PoolSlot::GtStagingU16);
+        } else {
+            bool d_u16 = false;
+            d_depth_in = _h2d_stage_byte(gt_depth, d_numel, d_elem, d_u16);
+        }
+        float* d_depth_out = DevicePool::global().acquire<float>(
+            PoolSlot::GtDepth, (size_t)B_post * out_H * out_W);
+        if (cm == CameraModelType::EQUIRECTANGULAR) {
+            launch_warp_depth_equi(
+                d_depth_in, d_elem, B_in, depth_in_H, depth_in_W,
+                d_depth_out, K, out_H, out_W,
+                (const float*)axes_dev, input_depth_is_ray_depth);
+        } else {
+            launch_warp_depth_wide(
+                input_model_name, d_intrins, d_dist,
+                d_depth_in, d_elem, B_in, depth_in_H, depth_in_W,
+                in_H, in_W, d_depth_out, K, out_H, out_W,
+                (const float*)axes_dev, input_depth_is_ray_depth);
+        }
+        TorchTensorView dv((uint64_t)d_depth_out, 4,
+                           {(int64_t)B_post, (int64_t)out_H, (int64_t)out_W, 1LL});
+        engine().gt.depth = DeviceTensor3D<float>(dv);
+    }
+
+    // ---- Normal warp ------------------------------------------------------
+    // Wide GT normal (INPUT camera frame) -> per-face camera-frame normal
+    // float3 [B_post, out_H, out_W, 3], rotated by the face axes.
+    if (std::get<0>(gt_normal) != 0) {
+        uint32_t n_elem = std::get<1>(gt_normal);
+        size_t n_numel  = (size_t)B_in * normal_in_H * normal_in_W * 3;
+        const void* d_normal_in;
+        if (n_elem == 4) {
+            d_normal_in = (const void*)_h2d_stage_floats(
+                gt_normal, n_numel, PoolSlot::GtStagingU8);
+        } else {
+            bool n_u16 = false;
+            d_normal_in = _h2d_stage_byte(gt_normal, n_numel, n_elem, n_u16);
+            if (n_u16)
+                throw std::runtime_error(
+                    "set_training_data_warped: normal must be uint8 or float32");
+        }
+        float* d_normal_out = DevicePool::global().acquire<float>(
+            PoolSlot::GtNormal, (size_t)B_post * out_H * out_W * 3);
+        if (cm == CameraModelType::EQUIRECTANGULAR) {
+            launch_warp_normal_equi(
+                d_normal_in, n_elem, B_in, normal_in_H, normal_in_W,
+                d_normal_out, K, out_H, out_W, (const float*)axes_dev);
+        } else {
+            launch_warp_normal_wide(
+                input_model_name, d_intrins, d_dist,
+                d_normal_in, n_elem, B_in, normal_in_H, normal_in_W,
+                in_H, in_W, d_normal_out, K, out_H, out_W,
+                (const float*)axes_dev);
+        }
+        TorchTensorView dv((uint64_t)d_normal_out, 4,
+                           {(int64_t)B_post, (int64_t)out_H, (int64_t)out_W, 3LL});
+        engine().gt.normal = DeviceTensor3D<float3>(dv);
     }
 
     engine().gt.has_gt = true;
