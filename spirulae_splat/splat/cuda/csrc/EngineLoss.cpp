@@ -9,6 +9,8 @@
 #include "ProjectionBwd.cuh"
 #include "RasterizationBwd.cuh"
 
+#include <algorithm>
+#include <cmath>
 #include <map>
 #include <stdexcept>
 #include <vector>
@@ -328,6 +330,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     std::array<float, (int)LossWeightIndex::length> loss_weights,
     float w_ssim,
     int num_loss_scales,
+    int loss_scale_min_pixels,
     bool compute_loss_map,
     int loss_map_mode,
     float robust_edge_aware_quantile,
@@ -347,6 +350,23 @@ std::map<std::string, float> engine_compute_loss_backward(
     int64_t C = engine().camera.num;
     int64_t H = engine().camera.height;
     int64_t W = engine().camera.width;
+
+    // Resolution-adaptive multi-scale loss: when loss_scale_min_pixels > 0 it
+    // overrides num_loss_scales based on this step's render resolution, so that
+    // the smallest image dimension is halved down toward (but not below) the
+    // requested pixel count. e.g. loss_scale_min_pixels=2000 -> min dim 1999
+    // gives 1 scale, 2000 gives 2, 4000 gives 3, 8000 gives 4. Adapts per step,
+    // so mixed-resolution datasets pick the right count per image automatically.
+    if (loss_scale_min_pixels > 0) {
+        int64_t min_dim = std::min(H, W);
+        int auto_scales = 1;
+        if (min_dim >= (int64_t)loss_scale_min_pixels)
+            auto_scales = (int)std::floor(
+                std::log2((double)min_dim / (double)loss_scale_min_pixels)) + 2;
+        // Clamp to the kernel's MAX_SCALES (see PerPixelLoss.cu) so extreme
+        // resolutions saturate the scale count rather than throwing.
+        num_loss_scales = std::min(auto_scales, 4);
+    }
 
     // Pool-allocate intermediates for loss computation
     TorchTensorView loss_map_buf = compute_loss_map ?

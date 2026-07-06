@@ -121,6 +121,9 @@ std::map<std::string, float> engine_compute_loss_backward(
     std::array<float, (int)LossWeightIndex::length> loss_weights,
     float w_ssim,
     int num_loss_scales,
+    // When positive, overrides num_loss_scales based on the render resolution
+    // (see LossConfig::loss_scale_min_pixels). Zero leaves it untouched.
+    int loss_scale_min_pixels,
     bool compute_loss_map,
     int loss_map_mode,
     float robust_edge_aware_quantile,

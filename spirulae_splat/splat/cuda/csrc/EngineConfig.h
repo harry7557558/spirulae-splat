@@ -18,6 +18,15 @@ struct LossConfig {
     std::array<float, (int)LossWeightIndex::length> weights{};
     float w_ssim          = 0.0f;
     int   num_loss_scales = 1;
+    // When positive, overrides num_loss_scales per train step based on the
+    // render resolution: the number of scales is chosen so that the smallest
+    // image dimension is downscaled toward (but not below) this pixel count.
+    // Concretely num_loss_scales = floor(log2(min(H,W) / loss_scale_min_pixels))
+    // + 1 for min(H,W) >= loss_scale_min_pixels, else the single-scale default.
+    // This adapts automatically to datasets with mixed image resolutions, since
+    // each step's own resolution drives its scale count. Zero (default) leaves
+    // num_loss_scales untouched.
+    int   loss_scale_min_pixels = 0;
     bool  compute_loss_map = false;
     // Selects what the densification loss map is filled with. See
     // DensifyLossMapMode in PerPixelLoss.cuh:

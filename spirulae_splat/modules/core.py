@@ -262,11 +262,13 @@ class Renderer:
                                      robust_edge_aware_quantile,
                                      overexposure_reg_weight=0.0,
                                      color_shift_reg_weight=0.0,
-                                     color_shift_reg_beta=0.0):
+                                     color_shift_reg_beta=0.0,
+                                     loss_scale_min_pixels=0):
         """Compute loss + rasterization backward + projection backward in C++.
         Gradients are managed by C++ pool."""
         loss_dict = _C.engine_compute_loss_backward(
-            step, loss_weights, w_ssim, num_loss_scales, compute_loss_map,
+            step, loss_weights, w_ssim, num_loss_scales,
+            int(loss_scale_min_pixels), compute_loss_map,
             int(loss_map_mode),
             float(robust_edge_aware_quantile),
             float(overexposure_reg_weight),
@@ -588,6 +590,7 @@ class Renderer:
         cfg.loss.weights          = loss_weights
         cfg.loss.w_ssim           = float(w_ssim)
         cfg.loss.num_loss_scales  = int(num_loss_scales)
+        cfg.loss.loss_scale_min_pixels = int(getattr(model_config, "loss_scale_min_pixels", 0))
         cfg.loss.compute_loss_map = bool(compute_loss_map)
         cfg.loss.loss_map_mode = int(loss_map_mode)
         cfg.loss.robust_edge_aware_quantile = float(robust_edge_aware_quantile)
@@ -662,6 +665,7 @@ class Renderer:
         cfg.loss.weights          = loss_weights
         cfg.loss.w_ssim           = float(w_ssim)
         cfg.loss.num_loss_scales  = int(num_loss_scales)
+        cfg.loss.loss_scale_min_pixels = int(getattr(model_config, "loss_scale_min_pixels", 0))
         cfg.loss.compute_loss_map = bool(compute_loss_map)
         cfg.loss.loss_map_mode = int(loss_map_mode)
         cfg.loss.robust_edge_aware_quantile = float(robust_edge_aware_quantile)

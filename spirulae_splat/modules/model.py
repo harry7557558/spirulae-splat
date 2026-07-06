@@ -55,7 +55,7 @@ from spirulae_splat.splat import depth_to_normal
 class SpirulaeSplatModelConfig:
 
     # Representation
-    primitive: Literal["3dgs", "mip", "3dgut"] = "3dgut"
+    primitive: Literal["3dgs", "mip", "3dgut"] = "3dgs"
     """Splat primitive to use"""
     sh_degree: int = 3
     """Maximum degree of spherical harmonics to use."""
@@ -95,6 +95,11 @@ class SpirulaeSplatModelConfig:
     """Weight of per-pixel BT.601 chroma V L2 loss."""
     num_loss_scales: int = 0
     """Number of scales for image loss. For multi-scale loss, image is downscaled by 2 this number of times, and losses are averaged across scales. Improves convergence for high-resolution images."""
+    loss_scale_min_pixels: int = 1920
+    """If positive, overrides num_loss_scales per image based on resolution, in units of pixels.
+        num_loss_scales is chosen so the smallest image dimension is halved down toward (but not below) this many pixels.
+        e.g. with 2000: min dim 1999 -> num_loss_scales=0, 2000 -> 1, 4000 -> 2, 8000 -> 3, etc.
+        Adapts per training step, so datasets with mixed image resolutions get the right count per image automatically."""
     use_camera_optimizer: bool = False
     """Whether to use camera optimizer
         Note: this only works well in patch batching mode"""
@@ -1575,6 +1580,7 @@ class SpirulaeSplatModel(torch.nn.Module):
             step, loss_weights, w_ssim, num_loss_scales, compute_loss_map,
             loss_map_mode, robust_edge_aware_quantile,
             overexposure_reg_weight=cfg.overexposure_reg,
+            loss_scale_min_pixels=cfg.loss_scale_min_pixels,
         )
 
         for key, value in loss_dict.items():
