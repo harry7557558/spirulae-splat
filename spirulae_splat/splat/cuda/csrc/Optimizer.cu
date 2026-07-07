@@ -779,6 +779,10 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     float3* __restrict__ features_dc,
     float3* __restrict__ v_features_dc,
     const float* __restrict__ radii,
+    // [N] optional densification score output: ||dL/dmean_world|| * max
+    // post-exp world scale, written per splat when non-null (see
+    // DensifyConfig::score_blend_world_grad).
+    float* __restrict__ densify_score,
     float lr_means,
     float lr_quats,
     float lr_scales,
@@ -934,6 +938,14 @@ __global__ void fused_optim_3dgs_geometry_kernel(
         float3 v_mean = grad_scale * v_means[idx];
         if constexpr (zero_grad)
             v_means[idx] = make_float3(0.0f);
+        // densification score: ||dL/dmean_world|| * max post-exp world scale.
+        // v_mean is the (1/B-scaled) batch-accumulated data gradient; `scale`
+        // holds the pre-update log scales loaded above. The grad_scale factor
+        // is a global constant and doesn't affect relative ranking.
+        if (densify_score != nullptr) {
+            float s_max = fmaxf(fmaxf(scale.x, scale.y), scale.z);
+            densify_score[idx] = expf(s_max) * sqrtf(dot(v_mean, v_mean));
+        }
         float3 g1_mean, g2_mean;
         if constexpr (non_sh_quant) {
             _OptimNonShQ<3>::decode(non_sh.means_packed, non_sh.means_bounds, idx,
@@ -1035,6 +1047,8 @@ void fused_optim_3dgs_geometry(
     // ignores them and runs the separate fused_adam_step features_dc call.
     DeviceVector<float3> features_dc, DeviceVector<float3> v_features_dc,
     DeviceVector<float> radii,
+    // optional [N] densification world-grad score output; empty disables.
+    DeviceVector<float> densify_score,
     const float lr_means, const float lr_quats, const float lr_scales, const float lr_opacs,
     const float lr_features_dc,
     const float max_gauss_ratio, const float scale_regularization_weight,
@@ -1057,6 +1071,7 @@ void fused_optim_3dgs_geometry(
         float*,  float*,  float*,  float*,
         float3*, float3*,
         const float*,
+        float*,
         float, float, float, float, float,
         const float, const float, const float, const float,
         const float, const float, const float, const float,
@@ -1089,6 +1104,7 @@ void fused_optim_3dgs_geometry(
         opacities.data_ptr(), v_opacities.data_ptr(), g1_opacities.data_ptr(), g2_opacities.data_ptr(),
         features_dc.data_ptr(), v_features_dc.data_ptr(),
         (const float*)radii.data_ptr(),
+        densify_score.data_ptr(),
         lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         max_gauss_ratio,
         scale_regularization_weight / (float)num_splats,

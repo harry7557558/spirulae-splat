@@ -127,6 +127,8 @@ void fused_optim_3dgs_geometry(
     // ignores them and runs the separate fused_adam_step features_dc call.
     DeviceVector<float3> features_dc, DeviceVector<float3> v_features_dc,
     DeviceVector<float> radii,
+    // optional [N] densification world-grad score output; empty disables.
+    DeviceVector<float> densify_score,
     const float lr_means, const float lr_quats, const float lr_scales, const float lr_opacs,
     const float lr_features_dc,
     const float max_gauss_ratio, const float scale_regularization_weight,

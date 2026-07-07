@@ -165,6 +165,18 @@ class SpirulaeSplatModelConfig:
         "max":    running max of |w|.
         "median": running median of |w| (approximation).
         "geom":   running geometric mean of |w|."""
+    densify_score_blend_world_grad: float = 0.0
+    """Blend weight `w` in [0, 1] between the image-space loss score and the
+        world-space gradient score for densification. The per-step score is
+        (image-space accum_weight)^(1-w) * (||dL/dmean_world|| * max post-exp
+        world scale)^w. The world-grad term favors world-space-large splats
+        (e.g. distant background in unbounded outdoor scenes) that the
+        image-space score under-weights; the geometric blend is invariant to
+        each score's global scale so no cross-normalization is needed.
+        0 (default) = image-space score only, identical cost and behavior to
+        before. 1 = world-grad score only; the per-pixel densification loss
+        map (densify_loss_map_mode) is skipped entirely. In between, both
+        scores are computed (one extra float per splat of VRAM)."""
     densify_loss_map_mode: Literal[
         "none",
         "loss_full",
@@ -1572,6 +1584,12 @@ class SpirulaeSplatModel(torch.nn.Module):
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
+        # blend w >= 1: densification uses the world-grad score exclusively,
+        # and the per-pixel loss map's only consumer is the densify
+        # accum_weight -- skip computing it (and the raster-bwd accum_weight
+        # output it drives) entirely.
+        if cfg.densify_score_blend_world_grad >= 1.0:
+            loss_map_mode = 0
         compute_loss_map = (loss_map_mode != 0)
         robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
 
@@ -1688,6 +1706,12 @@ class SpirulaeSplatModel(torch.nn.Module):
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
+        # blend w >= 1: densification uses the world-grad score exclusively,
+        # and the per-pixel loss map's only consumer is the densify
+        # accum_weight -- skip computing it (and the raster-bwd accum_weight
+        # output it drives) entirely.
+        if cfg.densify_score_blend_world_grad >= 1.0:
+            loss_map_mode = 0
         compute_loss_map = (loss_map_mode != 0)
         robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
 
@@ -1881,6 +1905,12 @@ class SpirulaeSplatModel(torch.nn.Module):
         w_ssim = cfg.ssim_lambda
         num_loss_scales = cfg.num_loss_scales + 1
         loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
+        # blend w >= 1: densification uses the world-grad score exclusively,
+        # and the per-pixel loss map's only consumer is the densify
+        # accum_weight -- skip computing it (and the raster-bwd accum_weight
+        # output it drives) entirely.
+        if cfg.densify_score_blend_world_grad >= 1.0:
+            loss_map_mode = 0
         compute_loss_map = (loss_map_mode != 0)
         robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
 

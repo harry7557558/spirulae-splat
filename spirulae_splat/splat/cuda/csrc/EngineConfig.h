@@ -132,6 +132,14 @@ struct OptimConfig {
     // full fp32 g1/g2 momentum (no `sh_quant_state`) in this mode.
     bool  use_fused_proj_bwd_optim        = false;
 
+    // When true, the splat optim step writes engine().fwd.world_grad_score
+    // (per-splat ||dL/dmean_world|| * max post-exp world scale) for the
+    // densification score blend (DensifyConfig::score_blend_world_grad).
+    // Both v_mean and the world scales already live in registers at the
+    // optimizer's mean-update, so the write costs one [N] float store; when
+    // false no buffer is allocated and the kernels skip the store entirely.
+    bool  write_densify_world_grad_score  = false;
+
     // When true, split the camera batch into one-camera sub-batches inside
     // engine_train_step. Forward + bilagrid/PPISP fwd + loss + raster/proj
     // bwd run once per sub-batch and atomicAdd into the per-splat grad
@@ -174,6 +182,14 @@ struct DensifyConfig {
     float noise_lr_final                = 0.0f;
     bool use_revised_densification      = true;
     int  score_mode                     = 0;    // 0=mean, 1=max, 2=median, 3=geom
+    // Blend weight `w` between the image-space accum_weight score and the
+    // world-space gradient score: per-step weight =
+    //   accum_weight^(1-w) * (||dL/dmean_world|| * max post-exp scale)^w.
+    // 0 (default) = accum_weight only (identical to before, no extra buffer);
+    // 1 = world-grad score only (accum_weight production can be skipped);
+    // in between = geometric blend, ranking-invariant to each score's global
+    // scale. Requires OptimConfig::write_densify_world_grad_score when > 0.
+    float score_blend_world_grad        = 0.0f;
     // Long-axis-split opacity split factor `k`, linearly scheduled from
     // `las_split_opacity_k_init` to `..._final` over `..._warmup` steps.
     float las_split_opacity_k_init      = 0.5f;

@@ -137,6 +137,12 @@ struct ForwardCache {
     RenderOutput::TensorTuple         distortions;  // [C,H,W,...] D=W*S-C^2, only the dist_type channels allocated
     DistortionType                    dist_type = DistortionType::None;  // which distortion channels the forward emitted
     DeviceVector<float>               accum_weight; // [max_num_splats] per-splat score from raster bwd
+    // [max_num_splats] per-splat ||dL/dmean_world|| * max post-exp world
+    // scale, written by the splat optim step (both FPBO and non-FPBO paths)
+    // when OptimConfig::write_densify_world_grad_score is set. Consumed by
+    // engine_densify_step as the blend partner of accum_weight
+    // (DensifyConfig::score_blend_world_grad). Empty when disabled.
+    DeviceVector<float>               world_grad_score;
     // Screen-space gradient handed from rasterize_*_bwd. The default path
     // consumes this immediately inside projection_*_backward; the fused
     // projection-bwd+optim path stashes it here for the optim step.

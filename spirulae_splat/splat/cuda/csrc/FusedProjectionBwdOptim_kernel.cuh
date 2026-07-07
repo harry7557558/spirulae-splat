@@ -207,6 +207,10 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    // [N] optional densification score output: ||dL/dmean_world|| * max
+    // post-exp world scale, written per splat when non-null (see
+    // DensifyConfig::score_blend_world_grad).
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -484,6 +488,16 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
             g1_splats_world.opacities(gid) = g1_opac;
             g2_splats_world.opacities(gid) = g2_opac;
         }
+    }
+
+    // densification score: ||dL/dmean_world|| * max post-exp world scale.
+    // v_splat_world.mean is the complete batch-summed data gradient here
+    // (raster-bwd world contribution via atomicLoad + per-camera projection
+    // contributions from the intersection loop); the per-splat regularizers
+    // above touch scale/quat/opacity/dc only.
+    if (inside && densify_score != nullptr) {
+        float s_max = fmaxf(fmaxf(splat_world.scale.x, splat_world.scale.y), splat_world.scale.z);
+        densify_score[gid] = expf(s_max) * sqrtf(dot(v_splat_world.mean, v_splat_world.mean));
     }
 
     // update means (scale agnostic)
@@ -1004,6 +1018,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -1050,7 +1065,8 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
         non_sh,
-        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh,
+        radii, densify_score,
+        lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh,
         max_gauss_ratio,
         scale_regularization_weight / (float)N,
         mcmc_opacity_reg_weight / (float)N,

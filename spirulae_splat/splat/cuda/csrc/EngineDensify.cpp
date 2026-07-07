@@ -202,13 +202,30 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
         );
     }
 
-    // Update densification score using accum_weight from rasterization backward
+    // Update densification score using accum_weight from rasterization
+    // backward, optionally geometrically blended with the world-grad score
+    // (||dL/dmean_world|| * max post-exp scale) written by the optim step:
+    //   weight = accum_weight^(1-w) * world_grad_score^w.
+    // w == 0: accum_weight only (no world-grad buffer allocated at all).
+    // w == 1: world-grad score only, passed as the single score buffer (the
+    //         Python side also skips the loss map / raster-bwd accum_weight
+    //         production in this case).
     if (densify_ongoing && use_revised && dv_accum_buf.data_ptr() != nullptr) {
+        const float blend_w = cfg.score_blend_world_grad;
+        DeviceVector<float> wg_score = engine().fwd.world_grad_score;
+
         DeviceVector<float> score;
-        if (engine().fwd.accum_weight.data_ptr() != nullptr) {
-            score = engine().fwd.accum_weight;
+        DeviceVector<float> score2;  // stays null unless 0 < w < 1
+        if (blend_w >= 1.0f && wg_score.data_ptr() != nullptr) {
+            score = wg_score;
         } else {
-            score = engine().grad.opacities.data_ptr() ? engine().grad.opacities : dv_opacs;
+            if (engine().fwd.accum_weight.data_ptr() != nullptr) {
+                score = engine().fwd.accum_weight;
+            } else {
+                score = engine().grad.opacities.data_ptr() ? engine().grad.opacities : dv_opacs;
+            }
+            if (blend_w > 0.0f && wg_score.data_ptr() != nullptr)
+                score2 = wg_score;
         }
 
         densify_update_weight(
@@ -217,6 +234,8 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             nullptr,
             (float*)dv_opacs.data_ptr(),
             score,
+            score2,
+            blend_w,
             dv_accum_buf,
             cfg.score_mode
         );

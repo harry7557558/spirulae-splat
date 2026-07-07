@@ -41,6 +41,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -97,6 +98,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -153,6 +155,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -209,6 +212,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -265,6 +269,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -321,6 +326,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -377,6 +383,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -433,6 +440,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -489,6 +497,7 @@ template void fused_projection_bwd_optimizer_3dgs_kernel_wrapper<
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,

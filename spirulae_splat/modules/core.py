@@ -309,6 +309,9 @@ class Renderer:
         c.non_sh_optim_bits              = self.non_sh_optim_bits
         c.use_per_splat_bias_correction  = optim_config.use_per_splat_bias_correction
         c.use_fused_proj_bwd_optim       = self.use_fused_proj_bwd_optim
+        c.write_densify_world_grad_score = (
+            float(getattr(model_config, "densify_score_blend_world_grad", 0.0)) > 0.0
+            and model_config.use_revised_densification)
         c.split_batch     = self.split_batch
         c.color_is_linear = model_config.splat_color_is_linear
         c.use_color_trust_region = model_config.splat_color_is_linear
@@ -336,6 +339,8 @@ class Renderer:
             "median": 2,
             "geom":   3,
         }[str(getattr(model_config, "densify_score_mode", "mean"))]
+        c.score_blend_world_grad        = float(getattr(
+            model_config, "densify_score_blend_world_grad", 0.0))
         k_init, k_final, k_warmup = model_config.long_axis_split_opacity_k
         c.las_split_opacity_k_init      = float(k_init)
         c.las_split_opacity_k_final     = float(k_final)

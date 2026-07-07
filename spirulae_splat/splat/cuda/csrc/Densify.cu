@@ -585,6 +585,8 @@ __global__ void densify_update_weight_kernel(
     const float* __restrict__ opacs,  // [N], optional
     const float* __restrict__ accum_weight_scalar,  // [1]
     const float* __restrict__ accum_weight,  // [N]
+    const float* __restrict__ accum_weight2,  // [N], optional blend partner
+    float blend_w,  // weight of accum_weight2 in the geometric blend
     float2* __restrict__ accum_buffer  // [N, 2]
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -595,6 +597,13 @@ __global__ void densify_update_weight_kernel(
         return;
 
     float weight = fabsf(accum_weight[idx]);
+    // Geometric blend: weight^(1-w) * |accum_weight2|^w. Invariant (up to a
+    // global factor) to each score's overall scale, so relative ranking --
+    // all downstream consumers care about -- needs no cross-normalization.
+    // The w == 0 / w == 1 cases are short-circuited by the caller passing a
+    // single buffer, so no powf is spent there.
+    if (accum_weight2 != nullptr)
+        weight = powf(weight, 1.0f - blend_w) * powf(fabsf(accum_weight2[idx]), blend_w);
     if (opacs)
         weight *= sigmoid(opacs[idx]);
     if (accum_weight_scalar != nullptr)
@@ -635,6 +644,8 @@ void densify_update_weight(
     float3* scales_ptr,
     float* opacs_ptr,
     DeviceVector<float> accum_weight,
+    DeviceVector<float> accum_weight2,
+    float blend_w,
     DeviceVector<float2> accum_buffer,
     int score_mode
 ) {
@@ -645,6 +656,8 @@ void densify_update_weight(
         opacs_ptr,
         nullptr,
         accum_weight.data_ptr(),
+        accum_weight2.data_ptr(),
+        blend_w,
         accum_buffer.data_ptr()
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());

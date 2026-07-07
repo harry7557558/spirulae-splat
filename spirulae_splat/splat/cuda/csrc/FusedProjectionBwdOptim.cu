@@ -46,6 +46,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     // float *__restrict__ v_viewmats // [C, 4, 4] optional
     // optimizer params
     const float* __restrict__ radii,
+    float* __restrict__ densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -127,6 +128,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     NonShQuantState non_sh,
     // optimizer params
     DeviceVector<float> radii,
+    DeviceVector<float> densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -228,6 +230,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             non_sh, \
             /*v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr */ \
             radii.data_ptr(), \
+            densify_score.data_ptr(), \
             lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc, lr_features_sh, \
             max_gauss_ratio, scale_regularization_weight, \
             mcmc_opacity_reg_weight, mcmc_scale_reg_weight, erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight, sh_reg_weight, \
@@ -292,6 +295,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     NonShQuantState non_sh,
     // optimizer params
     DeviceVector<float> radii,
+    DeviceVector<float> densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -345,6 +349,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
         sh_value_bounds, \
         non_sh, \
         radii, \
+        densify_score, \
         lr_means, \
         lr_quats, \
         lr_scales, \
@@ -433,6 +438,7 @@ void fused_projection_bwd_optimizer_3dgs(
     const std::optional<TorchTensorView> sh_value_bounds,
     NonShQuantState non_sh,
     DeviceVector<float> radii,
+    DeviceVector<float> densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -460,7 +466,7 @@ void fused_projection_bwd_optimizer_3dgs(
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
         non_sh,
-        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
+        radii, densify_score, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         lr_features_sh, max_gauss_ratio, scale_regularization_weight,
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
@@ -493,6 +499,7 @@ void fused_projection_bwd_optimizer_mip(
     const std::optional<TorchTensorView> sh_value_bounds,
     NonShQuantState non_sh,
     DeviceVector<float> radii,
+    DeviceVector<float> densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -520,7 +527,7 @@ void fused_projection_bwd_optimizer_mip(
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
         non_sh,
-        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
+        radii, densify_score, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         lr_features_sh, max_gauss_ratio, scale_regularization_weight,
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,
@@ -553,6 +560,7 @@ void fused_projection_bwd_optimizer_3dgut(
     const std::optional<TorchTensorView> sh_value_bounds,
     NonShQuantState non_sh,
     DeviceVector<float> radii,
+    DeviceVector<float> densify_score,
     const float lr_means,
     const float lr_quats,
     const float lr_scales,
@@ -580,7 +588,7 @@ void fused_projection_bwd_optimizer_3dgut(
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
         non_sh,
-        radii, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
+        radii, densify_score, lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc,
         lr_features_sh, max_gauss_ratio, scale_regularization_weight,
         mcmc_opacity_reg_weight, mcmc_scale_reg_weight,
         erank_reg_weight, erank_reg_weight_s3, quat_norm_reg_weight,

@@ -405,6 +405,19 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
             (uint64_t)vq.bounds_ptr(), 4, {vq.n_bounds, 2LL});
     }
 
+    // Densification world-grad score output. Allocated (pool-backed) only
+    // when the score blend is enabled; a null buffer makes the kernel skip
+    // the per-splat store. Consumed by engine_densify_step, which runs after
+    // this optim step within the same training step.
+    DeviceVector<float> densify_score;
+    if (cfg.write_densify_world_grad_score) {
+        engine().fwd.world_grad_score.resize(
+            PoolSlot::EngDensifyWorldGradScore, engine().max_num_splats);
+        densify_score = engine().fwd.world_grad_score;
+    } else {
+        engine().fwd.world_grad_score = DeviceVector<float>();
+    }
+
     // Non-SH Adam-state quant bundle. Pointers all populated when 16-bit
     // quant is on (FPBO-only, enforced in _ensure_optim_state above).
     NonShQuantState non_sh;
@@ -442,6 +455,7 @@ void engine_fused_proj_bwd_optim_step(int step, const OptimConfig& cfg) {
             sh_value_packed_opt, sh_value_bounds_opt,
             non_sh,
             engine().optim.radii,
+            densify_score,
             cfg.lr_means, cfg.lr_quats, cfg.lr_scales,
             cfg.lr_opacities, cfg.lr_features_dc, cfg.lr_features_sh,
             cfg.max_gauss_ratio, cfg.scale_regularization_weight,
@@ -518,6 +532,21 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
         non_sh_optim.features_dc_bounds = engine().optim.features_dc_quant_state_fpbo.bounds_ptr();
     }
 
+    // Densification world-grad score output. Allocated (pool-backed) only
+    // when the score blend is enabled; a null buffer makes the kernel skip
+    // the per-splat store. Must be written here (not read from grad.means at
+    // densify time): the geometry kernel consumes the batch-accumulated mean
+    // gradient this step and zeroes it as a fused side effect in split-batch
+    // mode.
+    DeviceVector<float> densify_score;
+    if (cfg.write_densify_world_grad_score) {
+        engine().fwd.world_grad_score.resize(
+            PoolSlot::EngDensifyWorldGradScore, engine().max_num_splats);
+        densify_score = engine().fwd.world_grad_score;
+    } else {
+        engine().fwd.world_grad_score = DeviceVector<float>();
+    }
+
     fused_optim_3dgs_geometry(
         N,
         engine().world.means,     engine().grad.means,     engine().optim.g1_means,     engine().optim.g2_means,
@@ -526,6 +555,7 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
         engine().world.opacities, engine().grad.opacities, engine().optim.g1_opacities, engine().optim.g2_opacities,
         engine().world.features_dc, engine().grad.features_dc,
         engine().optim.radii,
+        densify_score,
         cfg.lr_means, cfg.lr_quats, cfg.lr_scales, cfg.lr_opacities,
         cfg.lr_features_dc,
         cfg.max_gauss_ratio, cfg.scale_regularization_weight,

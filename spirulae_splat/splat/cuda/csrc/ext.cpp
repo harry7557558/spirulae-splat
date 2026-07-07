@@ -345,6 +345,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("quantization_level",          &OptimConfig::quantization_level)
         .def_readwrite("use_per_splat_bias_correction",  &OptimConfig::use_per_splat_bias_correction)
         .def_readwrite("use_fused_proj_bwd_optim",       &OptimConfig::use_fused_proj_bwd_optim)
+        .def_readwrite("write_densify_world_grad_score", &OptimConfig::write_densify_world_grad_score)
         .def_readwrite("split_batch",     &OptimConfig::split_batch)
         .def_readwrite("use_color_trust_region",         &OptimConfig::use_color_trust_region)
         .def_readwrite("color_is_linear",                &OptimConfig::color_is_linear)
@@ -364,6 +365,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("noise_lr_final",                 &DensifyConfig::noise_lr_final)
         .def_readwrite("use_revised_densification",      &DensifyConfig::use_revised_densification)
         .def_readwrite("score_mode",                     &DensifyConfig::score_mode)
+        .def_readwrite("score_blend_world_grad",         &DensifyConfig::score_blend_world_grad)
         .def_readwrite("las_split_opacity_k_init",       &DensifyConfig::las_split_opacity_k_init)
         .def_readwrite("las_split_opacity_k_final",      &DensifyConfig::las_split_opacity_k_final)
         .def_readwrite("las_split_opacity_k_warmup",     &DensifyConfig::las_split_opacity_k_warmup);

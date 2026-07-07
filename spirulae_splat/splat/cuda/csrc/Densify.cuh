@@ -91,6 +91,8 @@ void densify_update_weight(
     float3* scales_ptr,
     float* opacs_ptr,
     DeviceVector<float> accum_weight,
+    DeviceVector<float> accum_weight2,
+    float blend_w,
     DeviceVector<float2> accum_buffer,
     int score_mode
 );
