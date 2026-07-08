@@ -1035,7 +1035,7 @@ class TrainerConfig360Camera(TrainerConfig):
 
 @dataclass
 class TrainerConfigInTheWild(TrainerConfig):
-    """Preset for in-the-wild datasets, like datasets consisting of internet images, or datasets with extreme lighting variation and/or un-masked outliers."""
+    """Preset for datasets consisting of internet images, with extreme lighting variation, with un-masked outliers, and/or shot with long focal lengths."""
     dataparser: SpirulaeSplatDataParserConfig = field(default_factory=lambda: SpirulaeSplatDataParserConfig(
         center_method="focus",
         outlier_threshold=10.0,
@@ -1049,7 +1049,19 @@ class TrainerConfigInTheWild(TrainerConfig):
         densify_score_mode="median",
         densify_loss_map_mode="robust_edge_aware",
         densify_robust_edge_aware_quantile=0.75,
+        # densify_score_blend_world_grad=0.1,
         ssim_lambda=0.1,
+        rgb_distortion_reg=0.1,
+        depth_distortion_reg=0.01,
+        sh_degree_warmup_every=0,
+        long_axis_split_opacity_k=(0.5, 0.6, 30000),
+        noise_lr=10.0,
+        noise_lr_final=0.1,
+        erank_reg=0.1,
+    ))
+    optimizer: OptimizerConfig = field(default_factory=lambda: OptimizerConfig(
+        means_lr=5.0e-5,
+        means_lr_final=1.0e-7,
     ))
 
 

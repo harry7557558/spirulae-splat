@@ -602,8 +602,11 @@ __global__ void densify_update_weight_kernel(
     // all downstream consumers care about -- needs no cross-normalization.
     // The w == 0 / w == 1 cases are short-circuited by the caller passing a
     // single buffer, so no powf is spent there.
-    if (accum_weight2 != nullptr)
+    if (accum_weight2 != nullptr) {
         weight = powf(weight, 1.0f - blend_w) * powf(fabsf(accum_weight2[idx]), blend_w);
+        if (!isfinite(weight))
+            weight = 0.0f;
+    }
     if (opacs)
         weight *= sigmoid(opacs[idx]);
     if (accum_weight_scalar != nullptr)
