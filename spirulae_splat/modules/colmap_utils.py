@@ -227,7 +227,7 @@ def read_images_text(path):
                 camera_id = int(elems[8])
                 image_name = elems[9]
                 elems = fid.readline().strip()
-                if not elems[-1].isnumeric():
+                if len(elems) > 0 and not elems[-1].isnumeric():
                     skip_line = True
                     continue
                 elems = elems.split()
