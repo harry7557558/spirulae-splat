@@ -32,3 +32,5 @@ echo ""
 cmake --build build --verbose -j"${JOBS}"
 
 mv build/libcsrc.so ./spirulae_splat/csrc.so
+# keep ssplat-train's $ORIGIN lookup working after the rename
+ln -sfr ./spirulae_splat/csrc.so build/libcsrc.so

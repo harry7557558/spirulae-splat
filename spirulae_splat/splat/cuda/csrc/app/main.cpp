@@ -25,6 +25,7 @@
 
 #include "../Engine.h"
 #include "DatasetParser.h"
+#include "Knn.h"
 #include "Viewer.h"
 #include "generated/cli_config.h"
 
@@ -404,60 +405,6 @@ struct SeedSplats {
     std::vector<float> features_sh;  // [cap, dim_sh-1, 3]  (zeros)
 };
 
-// Mean distance to the k nearest neighbors via a uniform spatial hash
-// (27-cell neighborhood). Approximate stand-in for the Python
-// k_nearest_neighbor; falls back to the cell size when a neighborhood is
-// empty.
-std::vector<float> knn_mean_dist(const std::vector<float>& xyz, int64_t n, int k) {
-    float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
-    for (int64_t i = 0; i < n; i++)
-        for (int d = 0; d < 3; d++) {
-            lo[d] = std::min(lo[d], xyz[i*3+d]);
-            hi[d] = std::max(hi[d], xyz[i*3+d]);
-        }
-    double vol = std::max((double)(hi[0]-lo[0]) * (hi[1]-lo[1]) * (hi[2]-lo[2]), 1e-30);
-    float cell = (float)std::cbrt(vol / std::max<int64_t>(n, 1) * 2.0);
-    cell = std::max(cell, 1e-12f);
-
-    auto cell_key = [&](float x, float y, float z) -> uint64_t {
-        int64_t cx = (int64_t)std::floor((x - lo[0]) / cell);
-        int64_t cy = (int64_t)std::floor((y - lo[1]) / cell);
-        int64_t cz = (int64_t)std::floor((z - lo[2]) / cell);
-        return ((uint64_t)(cx & 0x1FFFFF) << 42) |
-               ((uint64_t)(cy & 0x1FFFFF) << 21) |
-               ((uint64_t)(cz & 0x1FFFFF));
-    };
-    std::unordered_map<uint64_t, std::vector<int32_t>> grid;
-    grid.reserve(n);
-    for (int64_t i = 0; i < n; i++)
-        grid[cell_key(xyz[i*3], xyz[i*3+1], xyz[i*3+2])].push_back((int32_t)i);
-
-    std::vector<float> out(n);
-    std::vector<float> d2s;
-    for (int64_t i = 0; i < n; i++) {
-        d2s.clear();
-        float x = xyz[i*3], y = xyz[i*3+1], z = xyz[i*3+2];
-        for (int dx = -1; dx <= 1; dx++)
-        for (int dy = -1; dy <= 1; dy++)
-        for (int dz = -1; dz <= 1; dz++) {
-            auto it = grid.find(cell_key(x + dx*cell, y + dy*cell, z + dz*cell));
-            if (it == grid.end()) continue;
-            for (int32_t j : it->second) {
-                if (j == (int32_t)i) continue;
-                float ddx = xyz[j*3]-x, ddy = xyz[j*3+1]-y, ddz = xyz[j*3+2]-z;
-                d2s.push_back(ddx*ddx + ddy*ddy + ddz*ddz);
-            }
-        }
-        if (d2s.empty()) { out[i] = cell; continue; }
-        int kk = std::min<int>(k, (int)d2s.size());
-        std::partial_sort(d2s.begin(), d2s.begin() + kk, d2s.end());
-        double acc = 0.0;
-        for (int j = 0; j < kk; j++) acc += d2s[j];
-        out[i] = (float)std::sqrt(acc / kk);   // sqrt(mean(d^2)), model.py:582
-    }
-    return out;
-}
-
 SeedSplats seed_splats(const ColmapPoints3D& pts, const SsplatConfig& cfg,
                        const ColorResolution& color) {
     std::mt19937 rng(42);
@@ -510,7 +457,7 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const SsplatConfig& cfg,
 
     // log(scale_init * sqrt(mean d^2 of 4-NN)) over xyz (model.py:578-583).
     // TODO: suppress_initial_scales (model.py:584-585).
-    std::vector<float> nn = knn_mean_dist(s.means, num, 4);
+    std::vector<float> nn = knn::mean_knn_dist(s.means, num, 4);
     for (int64_t i = 0; i < num; i++) {
         float v = std::log(scale_init * nn[i] + 1e-8f);
         s.scales[i*3+0] = s.scales[i*3+1] = s.scales[i*3+2] = v;
