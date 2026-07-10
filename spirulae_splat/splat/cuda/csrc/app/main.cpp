@@ -24,7 +24,7 @@
 //   camera optimizer, BVH primitive, nerfstudio/metashape data formats.
 
 #include "../Engine.h"
-#include "ColmapParser.h"
+#include "DatasetParser.h"
 #include "generated/cli_config.h"
 
 #ifndef _WIN32
@@ -35,6 +35,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -236,6 +237,51 @@ void save_config_json(const SsplatConfig& c, const fs::path& out_dir,
     SSPLAT_CONFIG_FIELDS(SSPLAT_DUMP)
 #undef SSPLAT_DUMP
     if (*open_group) std::fprintf(f, "\n    }");
+    std::fprintf(f, "\n}\n");
+    std::fclose(f);
+}
+
+
+// Debug dump for numeric verification against the Python dataparser /
+// trainer camera algebra (SSPLAT_DUMP_CAMERAS=<path> env). Full precision.
+void dump_cameras_json(const char* path, const ParsedDataset& ds,
+                       const PostSplitCameras& post) {
+    FILE* f = std::fopen(path, "w");
+    if (!f) throw std::runtime_error(std::string("cannot write ") + path);
+    auto arr_f = [&](const char* k, const std::vector<float>& v) {
+        std::fprintf(f, "\"%s\": [", k);
+        for (size_t i = 0; i < v.size(); i++)
+            std::fprintf(f, "%s%.9g", i ? "," : "", v[i]);
+        std::fprintf(f, "]");
+    };
+    auto arr_i = [&](const char* k, const std::vector<int32_t>& v) {
+        std::fprintf(f, "\"%s\": [", k);
+        for (size_t i = 0; i < v.size(); i++)
+            std::fprintf(f, "%s%d", i ? "," : "", v[i]);
+        std::fprintf(f, "]");
+    };
+    std::fprintf(f, "{\n\"num_cameras\": %lld,\n\"n_post\": %lld,\n"
+                 "\"train_frame_scale\": %.9g,\n\"num_points\": %lld,\n",
+                 (long long)ds.num_cameras, (long long)post.n_post,
+                 ds.train_frame_scale, (long long)ds.points.num());
+    std::fprintf(f, "\"image_filenames\": [");
+    for (size_t i = 0; i < ds.image_filenames.size(); i++)
+        std::fprintf(f, "%s\"%s\"", i ? "," : "", ds.image_filenames[i].c_str());
+    std::fprintf(f, "],\n");
+    arr_i("camera_models", ds.camera_models);   std::fprintf(f, ",\n");
+    arr_i("widths", ds.widths);                 std::fprintf(f, ",\n");
+    arr_i("heights", ds.heights);               std::fprintf(f, ",\n");
+    arr_f("c2w", ds.c2w);                       std::fprintf(f, ",\n");
+    arr_i("K_per_camera", post.K_per_camera);   std::fprintf(f, ",\n");
+    arr_i("post_offsets", post.post_offsets);   std::fprintf(f, ",\n");
+    arr_f("viewmats", post.viewmats);           std::fprintf(f, ",\n");
+    arr_f("intrins", post.intrins);             std::fprintf(f, ",\n");
+    arr_f("dist_coeffs", post.dist_coeffs);     std::fprintf(f, ",\n");
+    arr_f("input_intrins", post.input_intrins); std::fprintf(f, ",\n");
+    arr_f("input_dist_coeffs", post.input_dist_coeffs); std::fprintf(f, ",\n");
+    std::vector<float> pts_head(ds.points.xyz.begin(),
+        ds.points.xyz.begin() + std::min<size_t>(ds.points.xyz.size(), 30));
+    arr_f("points_head", pts_head);
     std::fprintf(f, "\n}\n");
     std::fclose(f);
 }
@@ -759,14 +805,13 @@ int main(int argc, char** argv) {
                 " is not supported by the standalone CLI yet; use spirulae-train");
         };
         if (!cfg.resume.empty())            not_impl("--resume");
-        if (cfg.warp_to_pinhole)            not_impl("--warp-to-pinhole");
         if (cfg.use_bvh)                    not_impl("--use-bvh");
         if (cfg.use_camera_optimizer)       not_impl("--use-camera-optimizer");
         if (cfg.deblur_training_images)     not_impl("--deblur-training-images");
         if (!cfg.optimizer_offload.empty()) not_impl("--optimizer-offload");
         if (cfg.save_eval_images)           not_impl("--save-eval-images");
-        if (!cfg.data_format.empty() && cfg.data_format != "colmap")
-            not_impl(("--data-format " + cfg.data_format).c_str());
+        if (cfg.data_format == "metashape")
+            not_impl("--data-format metashape");
         if (cfg.cache_images == "gpu")      not_impl("--cache-images gpu");
         if (cfg.rescale_camera_to_fit < 0)  not_impl("--rescale-camera-to-fit auto-detect");
         if (cfg.num_downscales > 0)
@@ -786,7 +831,7 @@ int main(int argc, char** argv) {
             not_impl(("--primitive " + cfg.primitive).c_str());
 
         // ---- Parse dataset -------------------------------------------------
-        ColmapParserConfig pcfg;
+        DatasetParserConfig pcfg;
         pcfg.recon_dir            = cfg.colmap_recon_dir;
         pcfg.image_dir            = cfg.image_dir;
         pcfg.mask_dir             = cfg.mask_dir;
@@ -796,26 +841,49 @@ int main(int argc, char** argv) {
         pcfg.eval_mode            = cfg.eval_mode;
         pcfg.eval_interval        = cfg.eval_interval;
         pcfg.train_split_fraction = cfg.train_split_fraction;
-        pcfg.rescale_camera_to_fit = cfg.rescale_camera_to_fit;
-        ParsedDataset ds = parse_colmap_dataset(cfg.data, pcfg);
+        pcfg.outlier_threshold    = cfg.outlier_threshold;
+        pcfg.rescale_camera_to_fit   = cfg.rescale_camera_to_fit;
+        pcfg.downscale_rounding_mode = cfg.downscale_rounding_mode;
+        ParsedDataset ds = parse_dataset(cfg.data, pcfg, cfg.data_format);
 
         // relative_scale: scale the world like model.py:561 (means) +
-        // trainer.py:407 (viewmat T). auto_scale_poses=False forces the
-        // normalized-frame scale to 1 (dataparser.py:466-468).
+        // trainer.py:407 (viewmat T; c2w t scaled here, pre-bake).
+        // auto_scale_poses=False forces the normalized-frame scale to 1
+        // (dataparser.py:466-468).
         if (cfg.relative_scale.has_value()) {
             float rs = *cfg.relative_scale;
             for (auto& v : ds.points.xyz) v *= rs;
             for (int64_t i = 0; i < ds.num_cameras; i++)
-                for (int r = 0; r < 3; r++) {
-                    ds.viewmats[i*16 + r*4 + 3] *= rs;
-                    ds.c2w[i*12 + r*4 + 3]      *= rs;
-                }
+                for (int r = 0; r < 3; r++)
+                    ds.c2w[i*12 + r*4 + 3] *= rs;
         }
         if (!cfg.auto_scale_poses) ds.train_frame_scale = 1.0f;
 
-        std::printf("Parsed %lld cameras, %lld seed points (train_frame_scale=%.4g)\n",
-                    (long long)ds.num_cameras, (long long)ds.points.num(),
-                    ds.train_frame_scale);
+        // POST-split camera bake (identity when no warp flag applies).
+        PostSplitCameras post = bake_post_split(
+            ds, cfg.warp_to_pinhole, cfg.warp_spherical_to_pinhole);
+
+        // Warp-path feature guards (trainer.py:294-303).
+        bool has_depth  = !ds.depth_filenames.empty()  && cfg.load_depths;
+        bool has_normal = !ds.normal_filenames.empty() && cfg.load_normals;
+        if (post.direct_equirect && (has_depth || has_normal))
+            throw std::runtime_error(
+                "Direct equirectangular training (warp_spherical_to_pinhole=0) "
+                "does not support depth/normal supervision yet.");
+
+        std::printf("Parsed %lld cameras (%lld post-split), %lld seed points "
+                    "(train_frame_scale=%.4g)\n",
+                    (long long)ds.num_cameras, (long long)post.n_post,
+                    (long long)ds.points.num(), ds.train_frame_scale);
+
+        // Hidden debug flag (set via env to avoid polluting the config):
+        // dump parsed + post-split arrays as JSON and exit, for numeric
+        // verification against the Python dataparser/trainer algebra.
+        if (const char* dump = std::getenv("SSPLAT_DUMP_CAMERAS")) {
+            dump_cameras_json(dump, ds, post);
+            std::printf("Dumped cameras to %s\n", dump);
+            return 0;
+        }
 
         // ---- Output dir (trainer.py _setup_output_dir:524) ------------------
         fs::path out_dir;
@@ -868,7 +936,7 @@ int main(int argc, char** argv) {
                 image_cs_on ? vec(gamut_to_rec709(color.image_gamut)) : std::vector<float>{});
         }
 
-        // ---- DataManager (trainer.py _setup_cpp_data_manager, non-warp) ----
+        // ---- DataManager (trainer.py _setup_cpp_data_manager) ---------------
         const int64_t N = ds.num_cameras;
         int64_t num_val = (int64_t)ds.val_indices.size();
         int64_t num_train = N - num_val;
@@ -881,23 +949,28 @@ int main(int argc, char** argv) {
 
         DataManagerConfig dm;
         dm.cache_mode  = (cfg.cache_images == "disk") ? CacheMode::DISK : CacheMode::CPU;
-        dm.load_masks  = !ds.mask_filenames.empty();
-        bool has_depth  = !ds.depth_filenames.empty()  && cfg.load_depths;
-        bool has_normal = !ds.normal_filenames.empty() && cfg.load_normals;
+        // Enable masks also when the fisheye warp is active with no on-disk
+        // masks -- the DataManager synthesizes a 1x1 white placeholder per
+        // such image so the wide-warp kernel produces the post-split FOV
+        // mask (1 inside the lens circle, 0 outside). Without it the unseen
+        // face regions train as black (trainer.py:452-461).
+        dm.load_masks  = !ds.mask_filenames.empty() || post.any_fisheye_warp;
         dm.load_depths      = has_depth;
         dm.load_normals     = has_normal;
         dm.train_batch_size = train_bs;
         dm.val_batch_size   = val_bs;
         dm.mask_boundary_offset = cfg.mask_boundary_offset;
+        dm.warp_to_pinhole  = cfg.warp_to_pinhole;
         engine_setup_data_manager(
             dm, ds.camera_models,
             ds.image_filenames, ds.mask_filenames,
             has_depth ? ds.depth_filenames : std::vector<std::string>{},
             has_normal ? ds.normal_filenames : std::vector<std::string>{},
             ds.widths, ds.heights,
-            /*K_per_camera=*/{}, /*post_offsets=*/{},
-            ds.viewmats, ds.intrins, ds.dist_coeffs,
-            /*input_intrins=*/{}, /*input_dist_coeffs=*/{},
+            post.any_warp ? post.K_per_camera : std::vector<int32_t>{},
+            post.any_warp ? post.post_offsets : std::vector<int32_t>{},
+            post.viewmats, post.intrins, post.dist_coeffs,
+            post.input_intrins, post.input_dist_coeffs,
             ds.train_indices, ds.val_indices);
 
         // ---- Bilagrid / PPISP init (model.py _maybe_init_bilagrid:823). ----
@@ -910,7 +983,10 @@ int main(int argc, char** argv) {
             throw std::runtime_error("quantization_level must be 0 or 1");
         int optim_bits = cfg.quantization_level == 0 ? 32 : 8;
         int value_bits = cfg.quantization_level == 0 ? 32 : 16;
-        int n_grids = (int)N;   // num_train_data (n_post == N without warp)
+        // num_train_data resolves to the POST-split camera count -- the
+        // bilagrid / PPISP tables have one slot per post camera and the
+        // TV-loss normalization depends on it (trainer.py:486-494).
+        int n_grids = (int)post.n_post;
 
         if (cfg.use_bilateral_grid &&
             (cfg.use_adagrad_bilagrid_optim ? cfg.bilagrid_adagrad_lr

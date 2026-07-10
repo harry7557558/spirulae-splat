@@ -28,9 +28,17 @@ cmake -G Ninja -B build -DSSPLAT_BUILD_CLI=ON && cmake --build build --target ss
 | File | Role |
 |---|---|
 | `main.cpp` | CLI parsing, engine setup, train loop, checkpointing. Ports of the Python managed path (see mapping below). |
-| `ColmapParser.h/.cpp` | Standalone COLMAP **binary** reader + dataset bake into engine-native arrays (`ParsedDataset`). |
+| `DatasetParser.h` | Public dataset structs: `DatasetParserConfig`, `ParsedDataset` (per-INPUT cameras), `PostSplitCameras` + `bake_post_split()` (warp expansion), parse fns, shared `dsparse::` helpers. |
+| `ColmapParser.cpp` | COLMAP **binary** reader (text TODO) + format auto-detect dispatcher (`parse_dataset`: transforms.json → nerfstudio, else COLMAP). |
+| `NerfstudioParser.cpp` | transforms.json reader + self-contained PLY point reader (ascii + binary_little_endian). |
+| `DatasetCommon.cpp` | Shared bakes: normalized-frame scale, eval/val splits, aux-file discovery, geometric-median outlier filter, **`bake_post_split`** (fisheye 5-face / equirect 6-face cubemap expansion; axes MUST match `DataManager.cpp` `kAxesFisheye5`/`kAxesEquirect6`). |
+| `Json.h` | Minimal dependency-free JSON parser (handles Python `Infinity`/`NaN`). |
 | `generated/cli_config.h` | AUTO-GENERATED — do not edit. `SsplatConfig` struct (all 189 config fields, defaults baked), `SSPLAT_CONFIG_FIELDS(X)` X-macro flag table, `ssplat_apply_preset()`. |
 | `../../../../generate_cli_config.py` | The generator. AST-parses the Python config dataclasses (no torch import → works on fresh checkout). Run by `build_develop.bash`. |
+
+Debug: `SSPLAT_DUMP_CAMERAS=<path> ssplat-train ...` dumps parsed + post-split
+camera arrays as JSON and exits before engine setup — used to diff against
+the Python dataparser/trainer algebra (see verification notes below).
 
 ## Config codegen (source of truth = Python dataclasses)
 
@@ -69,17 +77,27 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
 | `model.py:546 populate_modules` (seeding) | `seed_splats()` — min_init/cap resolution, 4-NN log scales (spatial-hash approx), logit opacity, DC from SfM color incl. gamut conversion |
 | `model.py:823 _maybe_init_bilagrid` | static init before the loop (dataset modalities known up front); bilagrid_shape (X,Y,W) → engine (L=W,H=Y,W=X) |
 | `model.py:505-543` background + color space | `resolve_color()` + init calls; gamut matrices ported from `_wrapper_per_pixel.py:111` |
-| `trainer.py:207 _setup_cpp_data_manager` (non-warp) | DataManager setup; batch-size policy from `datamanager.py:91` (non-stochastic) |
-| `dataparser.py` COLMAP branch | `ColmapParser.cpp` — w2c→c2w flip (dataparser.py:644), viewmat bake (trainer.py:403), `train_frame_scale` from orient-up/center/auto-scale (scalar only; `train_frame="points"` leaves poses raw), eval_mode splits, aux mask/depth/normal discovery |
+| `trainer.py:207 _setup_cpp_data_manager` (incl. warp) | DataManager setup; batch-size policy from `datamanager.py:91` (non-stochastic); K/post arrays from `bake_post_split` |
+| `trainer.py:257-414` warp expansion | `DatasetCommon.cpp bake_post_split()` — K (fisheye/equisolid=5, equirect=6 or direct), cubemap-axis c2w expansion, canonical PINHOLE intrins at `out_shape=ceil(sqrt(HW/K))`, viewmat bake over POST arrays, per-INPUT intrins for the wide-warp kernel, synthetic-FOV-mask `load_masks` enable (trainer.py:452-461), direct-equirect canonical intrins + depth/normal guard |
+| `dataparser.py` COLMAP branch | `ColmapParser.cpp` — w2c→c2w flip (dataparser.py:644), `train_frame_scale` over ALL frames pre-split, eval_mode splits, aux mask/depth/normal discovery, outlier filter |
+| `dataparser.py _parse_nerfstudio_data` | `NerfstudioParser.cpp` — frame/meta intrinsics fallback, DISTORTION_KEYS, .webp/missing-file skip, filename sort, geometric-median outlier filter (dataparser.py:138-173), equirect canonical intrins, `applied_transform` inverse on poses+points (train_frame="points", dataparser.py:501-531), frame-specified mask/depth/normal paths with directory-probe fallback |
 | `trainer.py:741 train` / `:939 save_checkpoint` | loop + `save_checkpoint` lambda (step-%09d.ckpt dirs, latest-only pruning) |
 
-## Verified working (banana dataset smoke runs)
+## Verified working
 
-- All presets train and converge (3dgs: PSNR 26.7 @ 500 steps); linear-color
-  exercises color-space init + trust region; meshing exercises 3dgut + median
-  losses; academic-baseline exercises interval eval split + non-FPBO + fp32.
-- `360-camera` fails **cleanly** ("warp-to-pinhole not supported") — its
-  defining feature is unported; better loud than mistrained.
+- All presets train and converge (banana COLMAP set — 3dgs: PSNR 26.7 @ 500
+  steps); linear-color exercises color-space init + trust region; meshing
+  exercises 3dgut + median losses; academic-baseline exercises interval eval
+  split + non-FPBO + fp32.
+- **360-camera preset works end-to-end** (SharkWipf_SampleDataset, 400×3840²
+  nerfstudio fisheye + masks): 5-face warp (400→2000 post cameras), warped
+  GT upload, synthetic FOV masks, bilagrid/PPISP at n_post slots. Behavior
+  parity vs Python trainer at 300 steps: PSNR 17.7 vs 17.1, SSIM 0.775 vs
+  0.737, same ~72 ms/step (deltas are RNG-level: seeding/batch order).
+- Numeric verification (2026-07-10): C++ `SSPLAT_DUMP_CAMERAS` dump vs
+  Python — nerfstudio c2w/points/order/train_frame_scale AND the full warp
+  expansion (K, offsets, 2000×viewmats/intrins/dist, input intrins) all
+  match to float32 precision.
 - Checkpoint cadence + `save_only_latest_checkpoint` pruning + final save.
 
 ## ⚠️ Gotchas
@@ -97,37 +115,35 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
 
 ## TODOs (rough priority)
 
-1. **warp_to_pinhole port** — unblocks the `360-camera` preset. Port
-   `trainer.py:257-401`: per-camera K (fisheye/equisolid=5, equirect=6),
-   post-split camera expansion (cubemap axes must match DataManager.cpp's
-   `kAxesFisheye5`/`kAxesEquirect6`), pass K_per_camera/post_offsets/input
-   intrins to `engine_setup_data_manager`. Also direct-equirect (K=1)
-   canonical intrins (trainer.py:361-369).
-2. **Eval pass + metrics** — iterate `next_val_batch` / render train views,
+1. **Eval pass + metrics** — iterate `next_val_batch` / render train views,
    PSNR/SSIM from engine buffers; then `validation_fraction` early-stop
    (model config `overfit_score_*`, `early_stop_*` fields are parsed but
    unused).
-3. **Resume** — `engine_load_checkpoint` after skeleton setup
+2. **Resume** — `engine_load_checkpoint` after skeleton setup
    (trainer.py:132-137); config.json round-trip (CLI dump is close to but
    not tyro-compatible; decide on a shared format).
-4. **Viewer hook** — `engine_viewer_init` + render thread
+3. **Viewer hook** — `engine_viewer_init` + render thread
    (`forward_3dgs`/`engine_blit_view`); this becomes the ImGui viewport in
-   Phase 2.
-5. Seeding fidelity: jitter repeated seed points toward a neighbor
+   Phase 2. Post-split camera W/H/model arrays for `engine_viewer_init`
+   are not kept by `bake_post_split` yet (add when the viewer lands).
+4. Seeding fidelity: jitter repeated seed points toward a neighbor
    (model.py:550-556) instead of exact duplication; `suppress_initial_scales`
    (model.py:584/700s); exact kNN if quality differs.
-6. `rescale_camera_to_fit` auto-detect (probe image resolution,
-   dataparser.py:363-372); COLMAP **text** format fallback; nerfstudio
-   `transforms.json` + Metashape parsers (need a JSON/XML dep decision).
-7. Non-default orientation/center methods (`pca`/`vertical`/`gsplat`/`focus`)
+5. `rescale_camera_to_fit` auto-detect (probe image resolution,
+   dataparser.py:363-372); COLMAP **text** format fallback; Metashape
+   parser (XML; the JSON/PLY parsers in Json.h / NerfstudioParser.cpp are
+   already dependency-free building blocks).
+6. Non-default orientation/center methods (`pca`/`vertical`/`gsplat`/`focus`)
    — currently approximated as `up`/`poses` with a warning (only affects
    `train_frame_scale`).
-8. Windows: MSVC+nvcc CI build, `cudart_static`, then installer (Phase 3).
+7. Windows: MSVC+nvcc CI build, `cudart_static`, then installer (Phase 3).
 
 ## Unsupported-by-design (guarded with clear errors)
 
 `--resume`, `--use-bvh`, `--use-camera-optimizer`,
 `--deblur-training-images`, `--optimizer-offload`, `--save-eval-images`,
-`--data-format nerfstudio|metashape`, `--cache-images gpu`,
-`--train-frame` ≠ points, `--rescale-camera-to-fit` auto mode.
-`--num-downscales` warns and is ignored (Python-data-path feature).
+`--data-format metashape`, `--cache-images gpu`,
+`--train-frame` ≠ points, `--rescale-camera-to-fit` auto mode,
+direct-equirect (`--warp-spherical-to-pinhole 0`) with depth/normal
+supervision. `--num-downscales` warns and is ignored (Python-data-path
+feature).

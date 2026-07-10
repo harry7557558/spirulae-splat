@@ -188,6 +188,8 @@ if(SSPLAT_BUILD_CLI)
     add_executable(ssplat-train
         spirulae_splat/splat/cuda/csrc/app/main.cpp
         spirulae_splat/splat/cuda/csrc/app/ColmapParser.cpp
+        spirulae_splat/splat/cuda/csrc/app/NerfstudioParser.cpp
+        spirulae_splat/splat/cuda/csrc/app/DatasetCommon.cpp
     )
     find_package(CUDAToolkit REQUIRED)
     target_include_directories(ssplat-train PRIVATE

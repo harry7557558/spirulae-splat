@@ -1,8 +1,9 @@
-// ColmapParser.cpp -- see ColmapParser.h. Port of modules/colmap_utils.py
-// (binary readers) + the COLMAP branch of modules/dataparser.py (frame
-// assembly, aux-buffer discovery, pose conventions, normalization scale).
+// ColmapParser.cpp -- COLMAP-format reader for DatasetParser.h. Port of
+// modules/colmap_utils.py (binary readers) + the COLMAP branch of
+// modules/dataparser.py (frame assembly, pose conventions). Shared bake
+// helpers live in DatasetCommon.cpp.
 
-#include "ColmapParser.h"
+#include "DatasetParser.h"
 
 #include "../Camera.h"   // camera_model_from_name
 
@@ -11,7 +12,6 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
-#include <numeric>
 #include <stdexcept>
 
 namespace fs = std::filesystem;
@@ -201,110 +201,28 @@ BakedIntrins bake_colmap_intrins(const ColmapCamera& cam) {
     return o;
 }
 
-
-// ===========================================================================
-// Pose math
-// ===========================================================================
-
-using Mat3 = std::array<std::array<double, 3>, 3>;
-using Vec3 = std::array<double, 3>;
-
 // colmap_utils.py qvec2rotmat (world->camera rotation from (w,x,y,z)).
-Mat3 qvec2rotmat(const std::array<double, 4>& q) {
+void qvec2rotmat(const std::array<double, 4>& q, double R[3][3]) {
     double w = q[0], x = q[1], y = q[2], z = q[3];
-    return {{
-        {1 - 2*y*y - 2*z*z, 2*x*y - 2*w*z,     2*x*z + 2*w*y},
-        {2*x*y + 2*w*z,     1 - 2*x*x - 2*z*z, 2*y*z - 2*w*x},
-        {2*x*z - 2*w*y,     2*y*z + 2*w*x,     1 - 2*x*x - 2*y*y},
-    }};
+    R[0][0] = 1 - 2*y*y - 2*z*z; R[0][1] = 2*x*y - 2*w*z;     R[0][2] = 2*x*z + 2*w*y;
+    R[1][0] = 2*x*y + 2*w*z;     R[1][1] = 1 - 2*x*x - 2*z*z; R[1][2] = 2*y*z - 2*w*x;
+    R[2][0] = 2*x*z - 2*w*y;     R[2][1] = 2*y*z + 2*w*x;     R[2][2] = 1 - 2*x*x - 2*y*y;
 }
 
 // dataparser.py:644-649 -- COLMAP w2c -> nerfstudio/OpenGL c2w:
 //   c2w[:3,:3] = R^T with columns 1, 2 negated (OpenCV -> OpenGL axis flip)
 //   c2w[:3,3]  = -R^T @ t
-struct C2W { Mat3 R; Vec3 t; };
-C2W colmap_to_c2w(const ColmapImage& im) {
-    Mat3 R = qvec2rotmat(im.qvec);
-    C2W o;
+void colmap_to_c2w(const ColmapImage& im, float* out12) {
+    double R[3][3];
+    qvec2rotmat(im.qvec, R);
     static const double flip[3] = {1.0, -1.0, -1.0};
-    for (int i = 0; i < 3; i++)
-        for (int j = 0; j < 3; j++)
-            o.R[i][j] = R[j][i] * flip[j];
-    for (int i = 0; i < 3; i++) {
-        o.t[i] = 0.0;
-        for (int j = 0; j < 3; j++) o.t[i] -= R[j][i] * im.tvec[j];
+    for (int r = 0; r < 3; r++) {
+        for (int c = 0; c < 3; c++)
+            out12[r*4 + c] = (float)(R[c][r] * flip[c]);
+        double t = 0.0;
+        for (int c = 0; c < 3; c++) t -= R[c][r] * im.tvec[c];
+        out12[r*4 + 3] = (float)t;
     }
-    return o;
-}
-
-// Normalized-frame scale factor: auto_orient_and_center_poses(method="up",
-// center_method="poses") followed by auto_scale_poses
-// (dataparser.py:461-468). Only the resulting scalar matters for
-// train_frame="points" -- poses/points themselves stay untouched -- so this
-// implements just enough of camera_utils.auto_orient_and_center_poses to
-// reproduce scale_factor:
-//   up      = normalize(mean of c2w Y columns)
-//   R_align = rotation taking `up` to +Z (Rodrigues)
-//   center  = mean camera position
-//   scale_factor = 1 / max |R_align @ (pos - center)|
-// TODO: "pca" / "vertical" / "gsplat" orientation methods (camera_utils.py).
-double compute_normalized_scale_factor(const std::vector<C2W>& poses) {
-    Vec3 up{0, 0, 0}, center{0, 0, 0};
-    for (const auto& p : poses) {
-        for (int i = 0; i < 3; i++) up[i]     += p.R[i][1];
-        for (int i = 0; i < 3; i++) center[i] += p.t[i];
-    }
-    double un = std::sqrt(up[0]*up[0] + up[1]*up[1] + up[2]*up[2]);
-    for (auto& u : up) u /= std::max(un, 1e-12);
-    for (auto& c : center) c /= (double)poses.size();
-
-    // Rodrigues rotation aligning `up` with (0, 0, 1).
-    Vec3 axis = {up[1], -up[0], 0.0};                  // up x z
-    double s = std::sqrt(axis[0]*axis[0] + axis[1]*axis[1]);
-    double c = up[2];
-    Mat3 R_align = {{{1,0,0},{0,1,0},{0,0,1}}};
-    if (s > 1e-12) {
-        for (auto& a : axis) a /= s;
-        double C = 1.0 - c;
-        R_align = {{
-            {c + axis[0]*axis[0]*C,       axis[0]*axis[1]*C - axis[2]*s, axis[1]*s},
-            {axis[0]*axis[1]*C + axis[2]*s, c + axis[1]*axis[1]*C,      -axis[0]*s},
-            {-axis[1]*s,                   axis[0]*s,                    c},
-        }};
-    } else if (c < 0.0) {
-        R_align = {{{1,0,0},{0,-1,0},{0,0,-1}}};       // up == -z: flip
-    }
-
-    double max_abs = 0.0;
-    for (const auto& p : poses) {
-        Vec3 d = {p.t[0] - center[0], p.t[1] - center[1], p.t[2] - center[2]};
-        for (int i = 0; i < 3; i++) {
-            double v = R_align[i][0]*d[0] + R_align[i][1]*d[1] + R_align[i][2]*d[2];
-            max_abs = std::max(max_abs, std::abs(v));
-        }
-    }
-    return 1.0 / std::max(max_abs, 1e-12);
-}
-
-// Auxiliary buffer discovery (dataparser.py _add_auxiliary_buffers, trimmed
-// candidate list). Returns "" when no file matches.
-std::string find_aux_file(const fs::path& aux_dir, const std::string& rel_name,
-                          const char* suffix_tag) {
-    if (!fs::is_directory(aux_dir)) return "";
-    fs::path rel(rel_name);
-    std::string stem_rel = (rel.parent_path() / rel.stem()).string();
-    const std::string exts[] = {".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG"};
-    std::vector<std::string> candidates;
-    for (const auto& e : exts) {
-        candidates.push_back(rel_name + e);   // image.jpg.png
-        candidates.push_back(stem_rel + e);   // image.png
-    }
-    candidates.push_back(stem_rel + "_" + suffix_tag + ".png");   // image_mask.png
-    for (const auto& cand : candidates) {
-        fs::path p = aux_dir / cand;
-        if (fs::exists(p)) return p.string();
-    }
-    return "";
 }
 
 }  // namespace
@@ -315,7 +233,7 @@ std::string find_aux_file(const fs::path& aux_dir, const std::string& rel_name,
 // ===========================================================================
 
 ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
-                                   const ColmapParserConfig& cfg) {
+                                   const DatasetParserConfig& cfg) {
     // ---- Locate the reconstruction (dataparser.py:609-635) ---------------
     std::vector<std::string> probe;
     if (!cfg.recon_dir.empty()) probe = {cfg.recon_dir};
@@ -347,59 +265,60 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
     std::sort(frames.begin(), frames.end(),
               [](const ColmapImage* a, const ColmapImage* b) { return a->name < b->name; });
 
-    // ---- Train/eval split: keep only the train subset (dataparser.py
-    // eval_mode; get_train_eval_split_* at dataparser.py:51-129). ----------
-    if (cfg.eval_mode != "all") {
-        const int64_t n_all = (int64_t)frames.size();
-        std::vector<const ColmapImage*> train;
-        if (cfg.eval_mode == "fraction") {
-            int64_t num_train = (int64_t)std::ceil((double)n_all * cfg.train_split_fraction);
-            std::vector<char> keep(n_all, 0);
-            for (int64_t k = 0; k < num_train; k++)
-                keep[(num_train == 1) ? 0 : (int64_t)std::llround(
-                    (double)k * (double)(n_all - 1) / (double)(num_train - 1))] = 1;
-            for (int64_t i = 0; i < n_all; i++) if (keep[i]) train.push_back(frames[i]);
-        } else if (cfg.eval_mode == "interval") {
-            for (int64_t i = 0; i < n_all; i++)
-                if (cfg.eval_interval <= 0 || i % cfg.eval_interval != 0)
-                    train.push_back(frames[i]);
-        } else if (cfg.eval_mode == "filename") {
-            for (const auto* f : frames) {
-                std::string base = fs::path(f->name).filename().string();
-                if (base.find("train") != std::string::npos) train.push_back(f);
-                else if (base.find("eval") == std::string::npos)
-                    throw std::runtime_error(
-                        "ColmapParser: eval_mode=filename requires 'train'/'eval' "
-                        "in every image name; got " + f->name);
-            }
-        } else {
-            throw std::runtime_error("ColmapParser: unknown eval_mode " + cfg.eval_mode);
-        }
-        if (train.empty())
-            throw std::runtime_error("ColmapParser: eval_mode split left no training images");
-        frames = std::move(train);
+    // ---- All-frame c2w (needed for outlier filter + train_frame_scale) ----
+    int64_t n_all = (int64_t)frames.size();
+    std::vector<float> c2w_all(n_all * 12);
+    std::vector<double> positions(n_all * 3);
+    for (int64_t i = 0; i < n_all; i++) {
+        colmap_to_c2w(*frames[i], &c2w_all[i*12]);
+        for (int r = 0; r < 3; r++) positions[i*3 + r] = c2w_all[i*12 + r*4 + 3];
     }
+
+    // ---- Outlier rejection (dataparser.py:319-325) -------------------------
+    {
+        std::vector<char> keep = dsparse::outlier_keep_mask(
+            positions, n_all, cfg.outlier_threshold);
+        std::vector<const ColmapImage*> kept;
+        std::vector<float> kept_c2w;
+        for (int64_t i = 0; i < n_all; i++) {
+            if (!keep[i]) continue;
+            kept.push_back(frames[i]);
+            kept_c2w.insert(kept_c2w.end(), &c2w_all[i*12], &c2w_all[i*12] + 12);
+        }
+        frames = std::move(kept);
+        c2w_all = std::move(kept_c2w);
+        n_all = (int64_t)frames.size();
+    }
+
+    // ---- train_frame_scale over ALL post-outlier frames (train + eval,
+    // matching the Python dataparser, which splits after normalization) -----
+    double scale_factor = dsparse::compute_normalized_scale_factor(c2w_all, n_all);
+    float train_frame_scale = (float)(scale_factor != 0.0 ? 1.0 / scale_factor : 1.0);
+
+    // ---- eval_mode train subset --------------------------------------------
+    std::vector<std::string> names(n_all);
+    for (int64_t i = 0; i < n_all; i++) names[i] = frames[i]->name;
+    std::vector<int64_t> subset = dsparse::train_subset(n_all, names, cfg);
 
     fs::path image_dir = fs::path(dataset_dir) / cfg.image_dir;
 
     ParsedDataset ds;
-    const int64_t N = (int64_t)frames.size();
+    const int64_t N = (int64_t)subset.size();
     ds.num_cameras = N;
+    ds.train_frame_scale = train_frame_scale;
     ds.camera_models.reserve(N);
     ds.image_filenames.reserve(N);
     ds.widths.reserve(N);
     ds.heights.reserve(N);
     ds.c2w.resize(N * 12);
-    ds.viewmats.resize(N * 16);
     ds.intrins.resize(N * 4);
     ds.dist_coeffs.resize(N * 10);
 
     std::vector<std::string> mask_files(N), depth_files(N), normal_files(N);
     bool any_mask = false, any_depth = false, any_normal = false;
 
-    std::vector<C2W> poses(N);
-
-    for (int64_t i = 0; i < N; i++) {
+    for (int64_t j = 0; j < N; j++) {
+        const int64_t i = subset[j];
         const ColmapImage& im = *frames[i];
         auto cam_it = cameras.find(im.camera_id);
         if (cam_it == cameras.end())
@@ -419,85 +338,62 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
         if (cfg.rescale_camera_to_fit > 0.0f) {
             float s = cfg.rescale_camera_to_fit;
             bi.fx /= s; bi.fy /= s; bi.cx /= s; bi.cy /= s;
-            W = std::floor(W / s); H = std::floor(H / s);   // TODO: rounding modes
+            auto round_dim = [&](float v) {
+                if (cfg.downscale_rounding_mode == "ceil")  return std::ceil(v / s);
+                if (cfg.downscale_rounding_mode == "round") return std::round(v / s);
+                return std::floor(v / s);
+            };
+            W = round_dim(W); H = round_dim(H);
         }
         ds.widths.push_back((int32_t)W);
         ds.heights.push_back((int32_t)H);
-        ds.intrins[i*4 + 0] = bi.fx;
-        ds.intrins[i*4 + 1] = bi.fy;
-        ds.intrins[i*4 + 2] = bi.cx;
-        ds.intrins[i*4 + 3] = bi.cy;
-        std::copy(bi.dist.begin(), bi.dist.end(), ds.dist_coeffs.begin() + i*10);
+        ds.intrins[j*4 + 0] = bi.fx;
+        ds.intrins[j*4 + 1] = bi.fy;
+        ds.intrins[j*4 + 2] = bi.cx;
+        ds.intrins[j*4 + 3] = bi.cy;
+        std::copy(bi.dist.begin(), bi.dist.end(), ds.dist_coeffs.begin() + j*10);
 
         CameraModelType model = camera_model_from_name(bi.model_name);
         if ((int)model < 0)
             throw std::runtime_error("ColmapParser: unmapped camera model " + bi.model_name);
         ds.camera_models.push_back((int32_t)model);
 
-        poses[i] = colmap_to_c2w(im);
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++)
-                ds.c2w[i*12 + r*4 + c] = (float)poses[i].R[r][c];
-            ds.c2w[i*12 + r*4 + 3] = (float)poses[i].t[r];
-        }
+        std::copy(&c2w_all[i*12], &c2w_all[i*12] + 12, &ds.c2w[j*12]);
 
         // Auxiliary supervision buffers, discovered by filename convention.
-        mask_files[i]   = find_aux_file(fs::path(dataset_dir) / cfg.mask_dir,   im.name, "mask");
-        depth_files[i]  = find_aux_file(fs::path(dataset_dir) / cfg.depth_dir,  im.name, "depth");
-        normal_files[i] = find_aux_file(fs::path(dataset_dir) / cfg.normal_dir, im.name, "normal");
-        any_mask   |= !mask_files[i].empty();
-        any_depth  |= !depth_files[i].empty();
-        any_normal |= !normal_files[i].empty();
+        mask_files[j]   = dsparse::find_aux_file(
+            (fs::path(dataset_dir) / cfg.mask_dir).string(),   im.name, "mask");
+        depth_files[j]  = dsparse::find_aux_file(
+            (fs::path(dataset_dir) / cfg.depth_dir).string(),  im.name, "depth");
+        normal_files[j] = dsparse::find_aux_file(
+            (fs::path(dataset_dir) / cfg.normal_dir).string(), im.name, "normal");
+        any_mask   |= !mask_files[j].empty();
+        any_depth  |= !depth_files[j].empty();
+        any_normal |= !normal_files[j].empty();
     }
     if (any_mask)   ds.mask_filenames   = std::move(mask_files);
     if (any_depth)  ds.depth_filenames  = std::move(depth_files);
     if (any_normal) ds.normal_filenames = std::move(normal_files);
 
-    // ---- Bake c2w -> engine viewmats (trainer.py:403-414) ----------------
-    // R_v = c2w R with columns 1, 2 negated (OpenGL -> OpenCV); then
-    // viewmat = [R_v^T | -R_v^T t; 0 0 0 1]. TODO: relative_scale on T.
-    for (int64_t i = 0; i < N; i++) {
-        static const double flip[3] = {1.0, -1.0, -1.0};
-        double Rv[3][3];
-        for (int r = 0; r < 3; r++)
-            for (int c = 0; c < 3; c++)
-                Rv[r][c] = poses[i].R[r][c] * flip[c];
-        float* vm = ds.viewmats.data() + i*16;
-        for (int r = 0; r < 3; r++) {
-            double ti = 0.0;
-            for (int c = 0; c < 3; c++) {
-                vm[r*4 + c] = (float)Rv[c][r];          // R_v^T
-                ti -= Rv[c][r] * poses[i].t[c];
-            }
-            vm[r*4 + 3] = (float)ti;
-        }
-        vm[12] = 0.f; vm[13] = 0.f; vm[14] = 0.f; vm[15] = 1.f;
-    }
-
-    // ---- train_frame_scale (train_frame="points": poses stay raw) --------
-    double scale_factor = compute_normalized_scale_factor(poses);
-    ds.train_frame_scale = (float)(scale_factor != 0.0 ? 1.0 / scale_factor : 1.0);
-
-    // ---- Seed points ------------------------------------------------------
     ds.points = read_points3D_binary(recon_dir);
-
-    // ---- Train / val split (eval_mode="all" + validation_fraction) -------
-    // Port of get_train_eval_split_fraction with fraction =
-    // 1 - validation_fraction: val indices are linspace-spread, train = all
-    // (matching trainer.py:428-431, where train excludes the val set).
-    std::vector<char> is_val(N, 0);
-    if (cfg.validation_fraction > 0.0f && N > 1) {
-        int64_t num_train = (int64_t)std::ceil((double)N * (1.0 - cfg.validation_fraction));
-        std::vector<char> is_train(N, 0);
-        for (int64_t k = 0; k < num_train; k++) {
-            int64_t idx = (num_train == 1) ? 0
-                : (int64_t)std::llround((double)k * (double)(N - 1) / (double)(num_train - 1));
-            is_train[idx] = 1;
-        }
-        for (int64_t i = 0; i < N; i++) is_val[i] = !is_train[i];
-    }
-    for (int64_t i = 0; i < N; i++)
-        (is_val[i] ? ds.val_indices : ds.train_indices).push_back((int32_t)i);
-
+    dsparse::assign_val_split(ds, cfg.validation_fraction);
     return ds;
+}
+
+
+// ===========================================================================
+// Format dispatch / auto-detect (dataparser.py parse():246-269, same probe
+// order: nerfstudio first, then COLMAP; Metashape unsupported).
+// ===========================================================================
+
+ParsedDataset parse_dataset(const std::string& dataset_dir,
+                            const DatasetParserConfig& cfg,
+                            const std::string& format) {
+    if (format == "colmap")     return parse_colmap_dataset(dataset_dir, cfg);
+    if (format == "nerfstudio") return parse_nerfstudio_dataset(dataset_dir, cfg);
+    if (!format.empty())
+        throw std::runtime_error("unsupported data format: " + format);
+    if (fs::exists(fs::path(dataset_dir) / "transforms.json"))
+        return parse_nerfstudio_dataset(dataset_dir, cfg);
+    return parse_colmap_dataset(dataset_dir, cfg);
 }
