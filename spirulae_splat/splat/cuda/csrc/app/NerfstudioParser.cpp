@@ -340,8 +340,11 @@ ParsedDataset parse_nerfstudio_dataset(const std::string& dataset_dir,
         n_all = (int64_t)frames.size();
     }
 
-    // ---- train_frame_scale (all post-outlier frames, pre-split) --------------
-    double scale_factor = dsparse::compute_normalized_scale_factor(c2w_all, n_all);
+    // ---- train_frame_scale + normalized-frame similarity (all post-outlier
+    // frames, pre-split). ------------------------------------------------------
+    double T_n_from_camera[16];
+    double scale_factor = dsparse::compute_normalized_transform(
+        c2w_all, n_all, T_n_from_camera);
 
     // ---- eval_mode train subset ----------------------------------------------
     std::vector<std::string> names(n_all);
@@ -460,7 +463,10 @@ ParsedDataset parse_nerfstudio_dataset(const std::string& dataset_dir,
 
     // ---- applied_transform inverse (train_frame="points" branch,
     // dataparser.py:501-531): poses and points go back to the ORIGINAL
-    // (pre-applied_transform) frame. ------------------------------------------
+    // (pre-applied_transform) frame. Also folds into the viewer remap:
+    // train_to_normalized = inv(T_n_from_camera @ applied) (dataparser.py:536).
+    double T_n_from_train[16];
+    std::copy(T_n_from_camera, T_n_from_camera + 16, T_n_from_train);
     if (const JsonValue* at = meta.find("applied_transform")) {
         double A[3][3], b[3];
         for (int r = 0; r < 3; r++) {
@@ -473,6 +479,18 @@ ParsedDataset parse_nerfstudio_dataset(const std::string& dataset_dir,
             for (int c = 0; c < 3; c++)
                 if (A[r][c] != (r == c ? 1.0 : 0.0) || b[r] != 0.0) { identity = false; break; }
         if (!identity) {
+            // T_n_from_train = T_n_from_camera @ applied (both affine, 0001 rows)
+            double ap[16] = {A[0][0],A[0][1],A[0][2],b[0],
+                             A[1][0],A[1][1],A[1][2],b[1],
+                             A[2][0],A[2][1],A[2][2],b[2],
+                             0,0,0,1};
+            for (int r = 0; r < 4; r++)
+                for (int c = 0; c < 4; c++) {
+                    double v = 0.0;
+                    for (int m = 0; m < 4; m++)
+                        v += T_n_from_camera[r*4 + m] * ap[m*4 + c];
+                    T_n_from_train[r*4 + c] = v;
+                }
             double Ai[3][3];
             invert3x3d(A, Ai);
             double bi[3];
@@ -498,6 +516,10 @@ ParsedDataset parse_nerfstudio_dataset(const std::string& dataset_dir,
             }
         }
     }
+
+    double T_remap[16];
+    dsparse::invert_affine4x4(T_n_from_train, T_remap);
+    for (int k = 0; k < 16; k++) ds.train_to_normalized[k] = (float)T_remap[k];
 
     dsparse::assign_val_split(ds, cfg.validation_fraction);
     return ds;

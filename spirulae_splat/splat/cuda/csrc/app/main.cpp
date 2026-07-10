@@ -25,6 +25,7 @@
 
 #include "../Engine.h"
 #include "DatasetParser.h"
+#include "Viewer.h"
 #include "generated/cli_config.h"
 
 #ifndef _WIN32
@@ -32,16 +33,20 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <filesystem>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -279,6 +284,8 @@ void dump_cameras_json(const char* path, const ParsedDataset& ds,
     arr_f("dist_coeffs", post.dist_coeffs);     std::fprintf(f, ",\n");
     arr_f("input_intrins", post.input_intrins); std::fprintf(f, ",\n");
     arr_f("input_dist_coeffs", post.input_dist_coeffs); std::fprintf(f, ",\n");
+    std::vector<float> t2n(ds.train_to_normalized.begin(), ds.train_to_normalized.end());
+    arr_f("train_to_normalized", t2n);          std::fprintf(f, ",\n");
     std::vector<float> pts_head(ds.points.xyz.begin(),
         ds.points.xyz.begin() + std::min<size_t>(ds.points.xyz.size(), 30));
     arr_f("points_head", pts_head);
@@ -1062,18 +1069,111 @@ int main(int argc, char** argv) {
             }
         };
 
+        // ---- Viewer + train-loop coordination state -------------------------
+        // Mirrors Trainer's lock + _render_pending fairness signal
+        // (trainer.py:146-153) and the pause event (trainer.py:161-179).
+        std::mutex engine_mutex;
+        std::atomic<bool> render_pending{false};
+        std::atomic<bool> paused{false};
+        std::atomic<int>  cur_step{0};
+        std::mutex progress_mutex;               // guards the latency window
+        std::deque<double> step_latencies;       // last 100, seconds
+        auto train_start = std::chrono::steady_clock::now();
+
+        ViewerServer viewer;
+        bool viewer_on = !cfg.disable_viewer;
+        if (viewer_on) {
+            ViewerRenderConfig vc;
+            vc.primitive = cfg.primitive;
+            vc.packed = cfg.packed || cfg.use_bvh;
+            vc.sh_degree_warmup_every = cfg.sh_degree_warmup_every;
+            vc.relative_scale = cfg.relative_scale;
+            vc.output_median = cfg.mean_median_depth_weight > 0.0f ||
+                               cfg.median_depth_normal_reg_weight > 0.0f ||
+                               cfg.median_normal_supervision_weight > 0.0f ||
+                               cfg.median_render_normal_reg_weight > 0.0f;
+            vc.distortion_reg_on = cfg.rgb_distortion_reg != 0.0f ||
+                                   cfg.depth_distortion_reg != 0.0f ||
+                                   cfg.normal_distortion_reg != 0.0f;
+            vc.train_frame_scale = ds.train_frame_scale;
+            vc.train_to_normalized = ds.train_to_normalized;
+
+            ViewerHooks hooks;
+            hooks.engine_mutex = &engine_mutex;
+            hooks.current_step = [&] { return cur_step.load(); };
+            hooks.set_render_pending = [&](bool v) { render_pending = v; };
+            hooks.pause_toggle = [&] {
+                bool now = !paused.load();
+                paused = now;
+                return now;
+            };
+            // Trainer.get_progress port (trainer.py:181-205).
+            hooks.progress_json = [&]() -> std::string {
+                int step = cur_step.load();
+                double elapsed = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - train_start).count();
+                double avg = 0.0;
+                size_t nlat = 0;
+                {
+                    std::lock_guard<std::mutex> lk(progress_mutex);
+                    for (double v : step_latencies) avg += v;
+                    nlat = step_latencies.size();
+                }
+                if (nlat) avg /= (double)nlat;
+                char buf[256];
+                if (nlat && step > 0) {
+                    double eta = (cfg.num_iterations - step) * avg;
+                    std::snprintf(buf, sizeof buf,
+                        "{\"step\": %d, \"total_steps\": %d, \"elapsed_time\": %.3f, "
+                        "\"eta\": %.3f, \"latency_ms\": %.3f, \"paused\": %s}",
+                        step, cfg.num_iterations, elapsed, eta, avg * 1000.0,
+                        paused.load() ? "true" : "false");
+                } else {
+                    std::snprintf(buf, sizeof buf,
+                        "{\"step\": %d, \"total_steps\": %d, \"elapsed_time\": %.3f, "
+                        "\"eta\": null, \"latency_ms\": null, \"paused\": %s}",
+                        step, cfg.num_iterations, elapsed,
+                        paused.load() ? "true" : "false");
+                }
+                return buf;
+            };
+
+            viewer.start("0.0.0.0", cfg.viewer_port, vc, hooks, post);
+            std::printf("Viewer at http://0.0.0.0:%d/ (forward the port for "
+                        "remote boxes: ssh -L %d:localhost:%d <host>)\n",
+                        cfg.viewer_port, cfg.viewer_port, cfg.viewer_port);
+        }
+
         // ---- Train loop (trainer.py train:741) ------------------------------
         std::string primitive = cfg.primitive;
         bool packed = cfg.packed || cfg.use_bvh;
         auto t0 = std::chrono::steady_clock::now();
         for (int step = 0; step < cfg.num_iterations; step++) {
-            if (step > 0 && cfg.steps_per_save > 0 && step % cfg.steps_per_save == 0)
-                save_checkpoint(step);
+            // Pause gate + render-fairness yield: give the viewer's render
+            // worker an uncontended window to take the engine mutex.
+            while (paused.load())
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            while (render_pending.load())
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
 
-            int sh_degree_to_use = step / std::max(cfg.sh_degree_warmup_every, 1);
-            EngineStepConfig sc = build_step_config(cfg, st, step);
-            std::map<std::string, float> losses = engine_train_step_managed(
-                step, cfg.num_iterations, primitive, sh_degree_to_use, packed, sc);
+            auto step_start = std::chrono::steady_clock::now();
+            std::map<std::string, float> losses;
+            {
+                std::lock_guard<std::mutex> lk(engine_mutex);
+                if (step > 0 && cfg.steps_per_save > 0 && step % cfg.steps_per_save == 0)
+                    save_checkpoint(step);
+                int sh_degree_to_use = step / std::max(cfg.sh_degree_warmup_every, 1);
+                EngineStepConfig sc = build_step_config(cfg, st, step);
+                losses = engine_train_step_managed(
+                    step, cfg.num_iterations, primitive, sh_degree_to_use, packed, sc);
+            }
+            cur_step = step + 1;
+            {
+                std::lock_guard<std::mutex> lk(progress_mutex);
+                step_latencies.push_back(std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - step_start).count());
+                if (step_latencies.size() > 100) step_latencies.pop_front();
+            }
 
             if (step % 100 == 0 || step == cfg.num_iterations - 1) {
                 double dt = std::chrono::duration<double>(
@@ -1090,9 +1190,19 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (cfg.steps_per_save != 0) save_checkpoint(cfg.num_iterations);
+        if (cfg.steps_per_save != 0) {
+            std::lock_guard<std::mutex> lk(engine_mutex);
+            save_checkpoint(cfg.num_iterations);
+        }
         std::printf("Checkpoint saved to: %s\n", fs::absolute(out_dir).string().c_str());
-        // TODO: eval pass over val_indices (PSNR/SSIM), early stopping, viewer.
+        // TODO: eval pass over val_indices (PSNR/SSIM), early stopping.
+
+        if (viewer_on && cfg.keep_viewer_alive) {
+            std::printf("Training complete. Viewer still running -- press "
+                        "Ctrl-C to exit.\n");
+            std::fflush(stdout);
+            for (;;) std::this_thread::sleep_for(std::chrono::seconds(3600));
+        }
 
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());

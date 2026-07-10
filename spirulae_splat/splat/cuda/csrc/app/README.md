@@ -33,8 +33,11 @@ cmake -G Ninja -B build -DSSPLAT_BUILD_CLI=ON && cmake --build build --target ss
 | `NerfstudioParser.cpp` | transforms.json reader + self-contained PLY point reader (ascii + binary_little_endian). |
 | `DatasetCommon.cpp` | Shared bakes: normalized-frame scale, eval/val splits, aux-file discovery, geometric-median outlier filter, **`bake_post_split`** (fisheye 5-face / equirect 6-face cubemap expansion; axes MUST match `DataManager.cpp` `kAxesFisheye5`/`kAxesEquirect6`). |
 | `Json.h` | Minimal dependency-free JSON parser (handles Python `Infinity`/`NaN`). |
+| `HttpServer.h/.cpp` | Minimal HTTP/1.0 GET server (POSIX sockets; winsock shim compiles but untested). Serial request handling — parity with Python's non-threading `HTTPServer`. |
+| `Viewer.h/.cpp` | Web-viewer server port (viewer/server.py + http_server.py + render_worker.py + annotation.py): latest-wins render worker, `get_outputs` viewer subset, `engine_blit_view` GPU annotation/colormap, stb JPEG encode. Serves the **unchanged** `viewer.html` (embedded at configure time via CMake hex; `SSPLAT_VIEWER_HTML=<path>` env overrides for dev). |
 | `generated/cli_config.h` | AUTO-GENERATED — do not edit. `SsplatConfig` struct (all 189 config fields, defaults baked), `SSPLAT_CONFIG_FIELDS(X)` X-macro flag table, `ssplat_apply_preset()`. |
 | `../../../../generate_cli_config.py` | The generator. AST-parses the Python config dataclasses (no torch import → works on fresh checkout). Run by `build_develop.bash`. |
+| `../stb_image_write.h` | vendored (public domain, v1.16) for viewer JPEG encoding. |
 
 Debug: `SSPLAT_DUMP_CAMERAS=<path> ssplat-train ...` dumps parsed + post-split
 camera arrays as JSON and exits before engine setup — used to diff against
@@ -82,6 +85,7 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
 | `dataparser.py` COLMAP branch | `ColmapParser.cpp` — w2c→c2w flip (dataparser.py:644), `train_frame_scale` over ALL frames pre-split, eval_mode splits, aux mask/depth/normal discovery, outlier filter |
 | `dataparser.py _parse_nerfstudio_data` | `NerfstudioParser.cpp` — frame/meta intrinsics fallback, DISTORTION_KEYS, .webp/missing-file skip, filename sort, geometric-median outlier filter (dataparser.py:138-173), equirect canonical intrins, `applied_transform` inverse on poses+points (train_frame="points", dataparser.py:501-531), frame-specified mask/depth/normal paths with directory-probe fallback |
 | `trainer.py:741 train` / `:939 save_checkpoint` | loop + `save_checkpoint` lambda (step-%09d.ckpt dirs, latest-only pruning) |
+| `viewer/*` + `trainer.py render/_render/get_progress/toggle_pause` | `Viewer.cpp` + main.cpp hooks — engine mutex shared with the train loop, `render_pending` fairness yield (trainer.py:146-153), pause gate, `/progress` JSON, c2w normalized→train remap via `ParsedDataset.train_to_normalized` (verified vs `dpo['train_to_normalized_transform']`), `camera_size` kNN heuristic (annotation.py:32) |
 
 ## Verified working
 
@@ -99,6 +103,13 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
   expansion (K, offsets, 2000×viewmats/intrins/dist, input intrins) all
   match to float32 precision.
 - Checkpoint cadence + `save_only_latest_checkpoint` pruning + final save.
+- **Web viewer** (2026-07-10, SharkWipf run): browser client unchanged; `/`,
+  `/render` (rgb / depth / alpha / depth_normal / distortion buffers, JPEG,
+  training-camera frusta + thumbnails via `engine_blit_view`), `/buffers`,
+  `/progress`, `/pause-toggle` all exercised live during training —
+  step latency stayed ~72 ms/step with concurrent renders, pause froze and
+  resumed the loop, `keep_viewer_alive` serves after training completes.
+  Headless-friendly: `ssh -L 7007:localhost:7007 <box>`.
 
 ## ⚠️ Gotchas
 
@@ -122,10 +133,10 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
 2. **Resume** — `engine_load_checkpoint` after skeleton setup
    (trainer.py:132-137); config.json round-trip (CLI dump is close to but
    not tyro-compatible; decide on a shared format).
-3. **Viewer hook** — `engine_viewer_init` + render thread
-   (`forward_3dgs`/`engine_blit_view`); this becomes the ImGui viewport in
-   Phase 2. Post-split camera W/H/model arrays for `engine_viewer_init`
-   are not kept by `bake_post_split` yet (add when the viewer lands).
+3. **ImGui native viewport (Phase 2)** — reuse `Viewer.cpp`'s render path
+   (everything up to the JPEG encode); swap HTTP+JPEG for CUDA-GL interop.
+   The web viewer stays as the headless/cloud fallback. Debug-only `sh` /
+   `refinement_score` buffers (engine_debug_forward) not ported.
 4. Seeding fidelity: jitter repeated seed points toward a neighbor
    (model.py:550-556) instead of exact duplication; `suppress_initial_scales`
    (model.py:584/700s); exact kNN if quality differs.

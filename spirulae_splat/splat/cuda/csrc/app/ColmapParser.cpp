@@ -290,9 +290,13 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
         n_all = (int64_t)frames.size();
     }
 
-    // ---- train_frame_scale over ALL post-outlier frames (train + eval,
-    // matching the Python dataparser, which splits after normalization) -----
-    double scale_factor = dsparse::compute_normalized_scale_factor(c2w_all, n_all);
+    // ---- train_frame_scale + viewer remap transform over ALL post-outlier
+    // frames (train + eval, matching the Python dataparser, which splits
+    // after normalization). No applied_transform on the COLMAP path, so
+    // train_to_normalized = inv(T_n_from_camera). -----------------------------
+    double T_n[16], T_inv[16];
+    double scale_factor = dsparse::compute_normalized_transform(c2w_all, n_all, T_n);
+    dsparse::invert_affine4x4(T_n, T_inv);
     float train_frame_scale = (float)(scale_factor != 0.0 ? 1.0 / scale_factor : 1.0);
 
     // ---- eval_mode train subset --------------------------------------------
@@ -306,6 +310,7 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
     const int64_t N = (int64_t)subset.size();
     ds.num_cameras = N;
     ds.train_frame_scale = train_frame_scale;
+    for (int k = 0; k < 16; k++) ds.train_to_normalized[k] = (float)T_inv[k];
     ds.camera_models.reserve(N);
     ds.image_filenames.reserve(N);
     ds.widths.reserve(N);

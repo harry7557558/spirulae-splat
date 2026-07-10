@@ -143,6 +143,14 @@ struct ParsedDataset {
     // train_frame="points" branch). Computed over ALL frames (before the
     // eval_mode subset is dropped), like the Python dataparser.
     float                    train_frame_scale = 1.0f;
+
+    // Similarity mapping a normalized-frame point into the training frame
+    // (dataparser.py:493-537 "train_to_normalized_transform" -- the name is
+    // historical; the stored value is inv(T_n_from_train)). The viewer
+    // client navigates in the normalized frame; Trainer._render remaps its
+    // c2w through this before rendering (trainer.py:557-576). Row-major
+    // 4x4; identity when train_frame_scale == 1.
+    std::array<float, 16>    train_to_normalized{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 };
 
 ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
@@ -184,6 +192,14 @@ struct PostSplitCameras {
     std::vector<float>   intrins;        // [N_post, 4]
     std::vector<float>   dist_coeffs;    // [N_post, 10]
 
+    // Viewer (engine_viewer_init) arrays, POST-split: camera-to-world in the
+    // y/z-flipped form the blit kernel expects (annotation.py:103-106), plus
+    // per-post W/H/model.
+    std::vector<float>   c2w_flip;       // [N_post, 3, 4]
+    std::vector<int32_t> post_widths;    // [N_post]
+    std::vector<int32_t> post_heights;   // [N_post]
+    std::vector<int32_t> post_models;    // [N_post] CameraModelType (faces = PINHOLE)
+
     // Per-INPUT copies for the wide-warp kernel; empty when !any_warp.
     std::vector<float>   input_intrins;      // [N, 4]
     std::vector<float>   input_dist_coeffs;  // [N, 10]
@@ -204,6 +220,16 @@ namespace dsparse {
 // center="poses", auto-scale). Only the scalar matters for
 // train_frame="points". Returns 1/max_abs (the dataparser's scale_factor).
 double compute_normalized_scale_factor(const std::vector<float>& c2w, int64_t n);
+
+// Full normalized-frame similarity: writes the row-major 4x4
+// T_n_from_camera = scale * [R_align | -R_align @ center] (dataparser.py
+// T_n_from_camera, lines 497-499) and returns scale_factor. The viewer
+// remap transform is inv(T_n_from_camera @ applied_transform).
+double compute_normalized_transform(const std::vector<float>& c2w, int64_t n,
+                                    double T_out[16]);
+
+// inv([A|b; 0 1]) for a general invertible 3x3 A (row-major 4x4 in/out).
+void invert_affine4x4(const double in[16], double out[16]);
 
 // eval_mode train subset over N sorted frames; identity for "all".
 // `names` are image filenames (used by eval_mode="filename").

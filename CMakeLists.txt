@@ -185,15 +185,32 @@ set_property(TARGET csrc PROPERTY CUDA_STANDARD 17)
 
 option(SSPLAT_BUILD_CLI "Build the standalone ssplat-train CLI" OFF)
 if(SSPLAT_BUILD_CLI)
+    # Embed the (unchanged) web viewer client into the binary so the exe is
+    # self-contained. Regenerated at configure time when viewer.html changes.
+    set(SSPLAT_VIEWER_HTML ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/viewer/viewer.html)
+    set(SSPLAT_VIEWER_HTML_HDR ${CMAKE_BINARY_DIR}/app_generated/viewer_html.h)
+    file(READ ${SSPLAT_VIEWER_HTML} _ssplat_vh HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _ssplat_vh_bytes ${_ssplat_vh})
+    file(WRITE ${SSPLAT_VIEWER_HTML_HDR}
+        "#pragma once\n"
+        "// AUTO-GENERATED from spirulae_splat/viewer/viewer.html -- do not edit.\n"
+        "#include <cstddef>\n"
+        "inline const unsigned char kViewerHtml[] = {${_ssplat_vh_bytes}};\n"
+        "inline const size_t kViewerHtmlSize = sizeof(kViewerHtml);\n")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${SSPLAT_VIEWER_HTML})
+
     add_executable(ssplat-train
         spirulae_splat/splat/cuda/csrc/app/main.cpp
         spirulae_splat/splat/cuda/csrc/app/ColmapParser.cpp
         spirulae_splat/splat/cuda/csrc/app/NerfstudioParser.cpp
         spirulae_splat/splat/cuda/csrc/app/DatasetCommon.cpp
+        spirulae_splat/splat/cuda/csrc/app/HttpServer.cpp
+        spirulae_splat/splat/cuda/csrc/app/Viewer.cpp
     )
     find_package(CUDAToolkit REQUIRED)
     target_include_directories(ssplat-train PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc
+        ${CMAKE_BINARY_DIR}
         ${CUDAToolkit_INCLUDE_DIRS}
     )
     # libpython is only needed because csrc's pybind/libtorch_python layer

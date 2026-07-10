@@ -25,7 +25,10 @@ namespace dsparse {
 //   scale_factor = 1 / max |R_align @ (pos - center)|
 // TODO: "pca" / "vertical" / "gsplat" / "focus" methods.
 // ---------------------------------------------------------------------------
-double compute_normalized_scale_factor(const std::vector<float>& c2w, int64_t n) {
+double compute_normalized_transform(const std::vector<float>& c2w, int64_t n,
+                                     double T_out[16]) {
+    std::fill(T_out, T_out + 16, 0.0);
+    T_out[0] = T_out[5] = T_out[10] = T_out[15] = 1.0;
     if (n <= 0) return 1.0;
     double up[3] = {0, 0, 0}, center[3] = {0, 0, 0};
     for (int64_t i = 0; i < n; i++) {
@@ -63,7 +66,44 @@ double compute_normalized_scale_factor(const std::vector<float>& c2w, int64_t n)
             max_abs = std::max(max_abs,
                 std::abs(R[r][0]*d[0] + R[r][1]*d[1] + R[r][2]*d[2]));
     }
-    return 1.0 / std::max(max_abs, 1e-12);
+    double scale_factor = 1.0 / std::max(max_abs, 1e-12);
+
+    // T_n_from_camera = scale * [R_align | -R_align @ center]
+    for (int r = 0; r < 3; r++) {
+        double t = 0.0;
+        for (int col = 0; col < 3; col++) {
+            T_out[r*4 + col] = R[r][col] * scale_factor;
+            t -= R[r][col] * center[col];
+        }
+        T_out[r*4 + 3] = t * scale_factor;
+    }
+    return scale_factor;
+}
+
+double compute_normalized_scale_factor(const std::vector<float>& c2w, int64_t n) {
+    double T[16];
+    return compute_normalized_transform(c2w, n, T);
+}
+
+void invert_affine4x4(const double in[16], double out[16]) {
+    double a = in[0], b = in[1], c = in[2],
+           d = in[4], e = in[5], g = in[6],
+           h = in[8], i = in[9], j = in[10];
+    double det = a*(e*j - g*i) - b*(d*j - g*h) + c*(d*i - e*h);
+    if (std::abs(det) < 1e-30)
+        throw std::runtime_error("invert_affine4x4: singular matrix");
+    double inv = 1.0 / det;
+    double Ai[3][3] = {
+        {(e*j - g*i)*inv, (c*i - b*j)*inv, (b*g - c*e)*inv},
+        {(g*h - d*j)*inv, (a*j - c*h)*inv, (c*d - a*g)*inv},
+        {(d*i - e*h)*inv, (b*h - a*i)*inv, (a*e - b*d)*inv},
+    };
+    for (int r = 0; r < 3; r++) {
+        for (int col = 0; col < 3; col++) out[r*4 + col] = Ai[r][col];
+        out[r*4 + 3] = -(Ai[r][0]*in[3] + Ai[r][1]*in[7] + Ai[r][2]*in[11]);
+    }
+    out[12] = out[13] = out[14] = 0.0;
+    out[15] = 1.0;
 }
 
 
@@ -285,6 +325,10 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
     out.viewmats.assign(n_post * 16, 0.f);
     out.intrins.assign(n_post * 4, 0.f);
     out.dist_coeffs.assign(n_post * 10, 0.f);
+    out.c2w_flip.assign(n_post * 12, 0.f);
+    out.post_widths.assign(n_post, 0);
+    out.post_heights.assign(n_post, 0);
+    out.post_models.assign(n_post, PINHOLE_V);
 
     // POST-split c2w staging (double; algebra matches trainer.py:355-401).
     std::vector<double> post_c2w(n_post * 12);
@@ -300,6 +344,9 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
 
         if (K == 1) {
             std::copy(&ci[0][0], &ci[0][0] + 12, &post_c2w[off*12]);
+            out.post_widths[off]  = ds.widths[i];
+            out.post_heights[off] = ds.heights[i];
+            out.post_models[off]  = ds.camera_models[i];
             if (ds.camera_models[i] == EQUIRECT_V) {
                 // Direct equirectangular: canonical panorama intrinsics
                 // matching the equirect projection kernel (trainer.py:361-369).
@@ -341,11 +388,15 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
             float s = out_shape / 2.0f;
             for (int c = 0; c < 4; c++) out.intrins[(off + k)*4 + c] = s;
             // dist_coeffs stay zero; faces render as canonical PINHOLE.
+            out.post_widths[off + k]  = out_shape;
+            out.post_heights[off + k] = out_shape;
         }
     }
 
     // c2w -> engine viewmat over the POST arrays (trainer.py:403-414):
     // R_v = R_post * diag(1,-1,-1) (columns); viewmat = [R_v^T | -R_v^T t].
+    // [R_v | t] is also the y/z-flipped c2w form the viewer blit expects
+    // (annotation.py:103-106).
     for (int64_t j = 0; j < n_post; j++) {
         const double* pc = &post_c2w[j*12];
         double Rv[3][3], t[3];
@@ -354,13 +405,16 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
             t[r] = pc[r*4 + 3];
         }
         float* vm = &out.viewmats[j*16];
+        float* cf = &out.c2w_flip[j*12];
         for (int r = 0; r < 3; r++) {
             double ti = 0.0;
             for (int c = 0; c < 3; c++) {
                 vm[r*4 + c] = (float)Rv[c][r];
+                cf[r*4 + c] = (float)Rv[r][c];
                 ti -= Rv[c][r] * t[c];
             }
             vm[r*4 + 3] = (float)ti;
+            cf[r*4 + 3] = (float)t[r];
         }
         vm[15] = 1.f;
     }
