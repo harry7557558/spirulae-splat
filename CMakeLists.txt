@@ -177,4 +177,43 @@ endif()
 set_property(TARGET csrc PROPERTY CXX_STANDARD 17)
 set_property(TARGET csrc PROPERTY CUDA_STANDARD 17)
 
+# ---------------------------------------------------------------------------
+# Standalone CLI trainer (skeleton) -- no Python at runtime; links the csrc
+# shared library for the engine. Off by default so the normal extension
+# build is unaffected.
+# ---------------------------------------------------------------------------
+
+option(SSPLAT_BUILD_CLI "Build the standalone ssplat-train CLI" OFF)
+if(SSPLAT_BUILD_CLI)
+    add_executable(ssplat-train
+        spirulae_splat/splat/cuda/csrc/app/main.cpp
+        spirulae_splat/splat/cuda/csrc/app/ColmapParser.cpp
+    )
+    find_package(CUDAToolkit REQUIRED)
+    target_include_directories(ssplat-train PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc
+        ${CUDAToolkit_INCLUDE_DIRS}
+    )
+    # libpython is only needed because csrc's pybind/libtorch_python layer
+    # leaves CPython symbols undefined (a Python process normally provides
+    # them at import time). Drops out with the no-torch build.
+    find_package(Python3 REQUIRED COMPONENTS Development.Embed)
+    target_link_libraries(ssplat-train PRIVATE csrc CUDA::cudart Python3::Python)
+    target_compile_options(ssplat-train PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>
+    )
+    # Statically link libstdc++ into the exe so its C++ runtime calls bind at
+    # link time. Without this, libtorch.so (pulled in via csrc) interposes
+    # its own bundled std::filesystem symbols at load time, and e.g.
+    # remove_all resolves to an ABI-incompatible copy that jumps to null.
+    if(NOT WIN32)
+        target_link_options(ssplat-train PRIVATE -static-libgcc -static-libstdc++)
+    endif()
+    # libcsrc.so is renamed to spirulae_splat/csrc.so by build_develop.bash;
+    # keep the exe's lookup pointing at the build tree copy.
+    set_property(TARGET ssplat-train PROPERTY BUILD_RPATH
+        "$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
+    set_property(TARGET ssplat-train PROPERTY CXX_STANDARD 17)
+endif()
+
 message(STATUS "spirulae_splat CUDA extension configured.")
