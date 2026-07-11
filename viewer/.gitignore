@@ -1,0 +1,2 @@
+# CMake / Emscripten build tree (artifacts are copied into js/ by the build)
+build/

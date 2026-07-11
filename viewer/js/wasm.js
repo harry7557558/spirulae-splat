@@ -1,0 +1,334 @@
+// WASM bridge + model loading. Wraps the native parser (ssv_wasm) and adds the
+// JS-side GLTF/GLB path. Large PLY/OBJ files are streamed directly into the
+// WASM heap (chunked) so we never allocate a >2GB JS ArrayBuffer.
+
+let Module = null;
+
+export async function initWasm() {
+  const factory = (await import('./ssv_wasm.js')).default;
+  Module = await factory({
+    locateFile: (p) => new URL(p, import.meta.url).href,
+  });
+  return Module;
+}
+
+const C = {
+  parse:   (ptr,len,hint)=>Module.ccall('ssv_parse','number',['number','number','number'],[ptr,len,hint]),
+  alloc:   (n)=>Module.ccall('ssv_alloc','number',['number'],[n]),
+  free:    (p)=>Module.ccall('ssv_free',null,['number'],[p]),
+};
+function call(name, ret='number', args=[], vals=[]) { return Module.ccall(name, ret, args, vals); }
+function f32(ptr, n) { return new Float32Array(Module.HEAPF32.buffer, ptr, n); }
+function u32(ptr, n) { return new Uint32Array(Module.HEAPU32.buffer, ptr, n); }
+function u8(ptr, n)  { return new Uint8Array(Module.HEAPU8.buffer, ptr, n); }
+
+// ---- stream a File into the WASM heap; returns {ptr, len} ----
+async function fileToHeap(file) {
+  const len = file.size;
+  const ptr = C.alloc(len);
+  if (!ptr) throw new Error(`out of memory allocating ${len} bytes`);
+  const reader = file.stream().getReader();
+  let off = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    // HEAPU8 view may change if the heap grows elsewhere; re-fetch each chunk
+    new Uint8Array(Module.HEAPU8.buffer).set(value, ptr + off);
+    off += value.length;
+  }
+  return { ptr, len };
+}
+
+// ---- extract splat views (into heap) after a successful parse ----
+function readSplat() {
+  const count = call('ssv_splat_count');
+  const shDegree = call('ssv_splat_sh_degree');
+  const shRest = call('ssv_splat_sh_rest');
+  const data = {
+    count, shDegree, shRest,
+    posop: f32(call('ssv_splat_posop'), count*4),
+    quat:  f32(call('ssv_splat_quat'), count*4),
+    scale: f32(call('ssv_splat_scale'), count*3),
+    fdc:   f32(call('ssv_splat_fdc'), count*3),
+    sh:    shRest>0 ? f32(call('ssv_splat_sh'), count*shRest*3) : null,
+  };
+  return data;
+}
+function readMesh() {
+  const nv = call('ssv_mesh_nv'), nt = call('ssv_mesh_nt');
+  const nrm = call('ssv_mesh_normal'), col = call('ssv_mesh_color'), uv = call('ssv_mesh_uv');
+  return {
+    nv, nt,
+    pos: f32(call('ssv_mesh_pos'), nv*3),
+    normal: nrm ? f32(nrm, nv*3) : null,
+    color: col ? u8(col, nv*3) : null,
+    uv: uv ? f32(uv, nv*2) : null,
+    idx: u32(call('ssv_mesh_idx'), nt*3),
+  };
+}
+
+// ---- public: parse a PLY / OBJ file via WASM ----
+async function loadNative(file, hint) {
+  const { ptr, len } = await fileToHeap(file);
+  const kind = C.parse(ptr, len, hint);
+  C.free(ptr);
+  if (kind === 1) return { kind:'splat', data: readSplat() };
+  if (kind === 2) return { kind:'mesh', data: readMesh() };
+  throw new Error('failed to parse file (unrecognized format)');
+}
+
+// register a JS-built mesh (from GLTF) with WASM for stats/histograms/bbox
+function registerMesh(m) {
+  const nv = m.nv, nt = m.nt;
+  const pp = C.alloc(nv*3*4); new Float32Array(Module.HEAPF32.buffer, pp, nv*3).set(m.pos);
+  let np=0, cp=0, up=0;
+  if (m.normal) { np = C.alloc(nv*3*4); new Float32Array(Module.HEAPF32.buffer, np, nv*3).set(m.normal); }
+  if (m.color)  { cp = C.alloc(nv*3);   new Uint8Array(Module.HEAPU8.buffer, cp, nv*3).set(m.color); }
+  if (m.uv)     { up = C.alloc(nv*2*4); new Float32Array(Module.HEAPF32.buffer, up, nv*2).set(m.uv); }
+  const ip = C.alloc(nt*3*4); new Uint32Array(Module.HEAPU32.buffer, ip, nt*3).set(m.idx);
+  Module.ccall('ssv_set_mesh', null,
+    ['number','number','number','number','number','number','number'],
+    [nv, nt, pp, np, cp, up, ip]);
+  C.free(pp); if(np)C.free(np); if(cp)C.free(cp); if(up)C.free(up); C.free(ip);
+}
+
+// ---------------------------------------------------------------------------
+// GLTF / GLB (pure JS). Only the attributes spirulae emits are needed but the
+// reader is written generally for robustness.
+// ---------------------------------------------------------------------------
+const COMP = { 5120:Int8Array, 5121:Uint8Array, 5122:Int16Array, 5123:Uint16Array, 5125:Uint32Array, 5126:Float32Array };
+const NCOMP = { SCALAR:1, VEC2:2, VEC3:3, VEC4:4, MAT4:16 };
+
+function accessorArray(gltf, buffers, idx) {
+  const acc = gltf.accessors[idx];
+  const view = gltf.bufferViews[acc.bufferView];
+  const buf = buffers[view.buffer];
+  const compCtor = COMP[acc.componentType];
+  const nc = NCOMP[acc.type];
+  const byteOffset = (view.byteOffset||0) + (acc.byteOffset||0);
+  const count = acc.count;
+  const elemBytes = compCtor.BYTES_PER_ELEMENT * nc;
+  const stride = view.byteStride || elemBytes;
+  const out = new Float32Array(count*nc);
+  const dv = new DataView(buf);
+  const getters = {
+    5120:(o)=>Math.max(dv.getInt8(o)/127,-1), 5121:(o)=>dv.getUint8(o)/255,
+    5122:(o)=>Math.max(dv.getInt16(o,true)/32767,-1), 5123:(o)=>dv.getUint16(o,true)/65535,
+    5125:(o)=>dv.getUint32(o,true), 5126:(o)=>dv.getFloat32(o,true),
+  };
+  const raw = {
+    5120:(o)=>dv.getInt8(o), 5121:(o)=>dv.getUint8(o), 5122:(o)=>dv.getInt16(o,true),
+    5123:(o)=>dv.getUint16(o,true), 5125:(o)=>dv.getUint32(o,true), 5126:(o)=>dv.getFloat32(o,true),
+  };
+  const get = acc.normalized ? getters[acc.componentType] : raw[acc.componentType];
+  for (let i=0;i<count;i++)
+    for (let c=0;c<nc;c++)
+      out[i*nc+c] = get(byteOffset + i*stride + c*compCtor.BYTES_PER_ELEMENT);
+  return { array: out, nc, count };
+}
+
+function indexArray(gltf, buffers, idx) {
+  const acc = gltf.accessors[idx];
+  const view = gltf.bufferViews[acc.bufferView];
+  const buf = buffers[view.buffer];
+  const ctor = COMP[acc.componentType];
+  const byteOffset = (view.byteOffset||0) + (acc.byteOffset||0);
+  return new ctor(buf, byteOffset, acc.count);
+}
+
+function srgbEncode(x){ return x<0.0031308 ? 12.92*x : 1.055*Math.pow(x,1/2.4)-0.055; }
+
+async function parseGLTF(gltf, buffers, resolveImage) {
+  // gather primitives across all meshes/nodes (identity transforms in practice)
+  const positions=[], normals=[], uvs=[], colors=[], indices=[];
+  let hasN=false, hasUV=false, hasC=false;
+  let vbase=0;
+  let texSource = -1;
+  const nodes = gltf.nodes||[];
+  const meshUsed = new Set();
+  const meshList = [];
+  const walk = (ni) => {
+    const node = nodes[ni]; if(!node) return;
+    if (node.mesh != null) meshList.push(node.mesh);
+    (node.children||[]).forEach(walk);
+  };
+  if (gltf.scenes && gltf.scenes[gltf.scene??0]) (gltf.scenes[gltf.scene??0].nodes||[]).forEach(walk);
+  if (meshList.length===0) gltf.meshes?.forEach((_,i)=>meshList.push(i));
+
+  for (const mi of meshList) {
+    const mesh = gltf.meshes[mi];
+    for (const prim of mesh.primitives) {
+      if (prim.mode != null && prim.mode !== 4) continue; // triangles only
+      const attr = prim.attributes;
+      const pos = accessorArray(gltf, buffers, attr.POSITION);
+      const nV = pos.count;
+      for (let i=0;i<nV*3;i++) positions.push(pos.array[i]);
+      if (attr.NORMAL!=null){ hasN=true; const a=accessorArray(gltf,buffers,attr.NORMAL); for(let i=0;i<nV*3;i++) normals.push(a.array[i]); }
+      else for(let i=0;i<nV*3;i++) normals.push(0);
+      if (attr.TEXCOORD_0!=null){ hasUV=true; const a=accessorArray(gltf,buffers,attr.TEXCOORD_0); for(let i=0;i<nV*2;i++) uvs.push(a.array[i]); }
+      else for(let i=0;i<nV*2;i++) uvs.push(0);
+      if (attr.COLOR_0!=null){ hasC=true; const a=accessorArray(gltf,buffers,attr.COLOR_0); const s=a.nc;
+        for(let i=0;i<nV;i++){ // COLOR_0 is linear; encode to sRGB u8
+          colors.push(Math.round(255*Math.min(1,Math.max(0,srgbEncode(a.array[i*s]||0)))));
+          colors.push(Math.round(255*Math.min(1,Math.max(0,srgbEncode(a.array[i*s+1]||0)))));
+          colors.push(Math.round(255*Math.min(1,Math.max(0,srgbEncode(a.array[i*s+2]||0)))));
+        } }
+      else for(let i=0;i<nV*3;i++) colors.push(200);
+      // indices
+      if (prim.indices!=null){ const ia=indexArray(gltf,buffers,prim.indices); for(let i=0;i<ia.length;i++) indices.push(vbase+ia[i]); }
+      else for(let i=0;i<nV;i++) indices.push(vbase+i);
+      vbase += nV;
+      // texture
+      if (texSource<0 && prim.material!=null){
+        const mat=gltf.materials?.[prim.material];
+        const ti=mat?.pbrMetallicRoughness?.baseColorTexture?.index ?? mat?.emissiveTexture?.index;
+        if (ti!=null){ const tex=gltf.textures[ti]; if(tex && tex.source!=null) texSource=tex.source; }
+      }
+    }
+  }
+  const m = {
+    nv: positions.length/3, nt: indices.length/3,
+    pos: new Float32Array(positions),
+    normal: hasN ? new Float32Array(normals) : null,
+    uv: hasUV ? new Float32Array(uvs) : null,
+    color: hasC ? new Uint8Array(colors) : null,
+    idx: new Uint32Array(indices),
+  };
+  let image = null;
+  if (texSource >= 0 && gltf.images && gltf.images[texSource]) {
+    image = await resolveImage(gltf.images[texSource]);
+  }
+  return { mesh: m, image };
+}
+
+function parseGLB(buffer) {
+  const dv = new DataView(buffer);
+  if (dv.getUint32(0,true) !== 0x46546C67) throw new Error('bad GLB magic');
+  let off = 12, json=null, bin=null;
+  while (off < dv.byteLength) {
+    const len = dv.getUint32(off,true), type = dv.getUint32(off+4,true); off+=8;
+    if (type===0x4E4F534A) json = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, off, len)));
+    else if (type===0x004E4942) bin = buffer.slice(off, off+len);
+    off += len;
+    if (len % 4) off += 4 - (len%4);
+  }
+  return { json, bin };
+}
+
+async function loadGLTFFromFiles(mainFile, siblings) {
+  const name = mainFile.name.toLowerCase();
+  const findSibling = (uri) => {
+    const base = decodeURIComponent(uri.split('/').pop());
+    return siblings.find(f => f.name === base || f.name.endsWith('/'+base));
+  };
+  let gltf, buffers = [], glbBin = null;
+  if (name.endsWith('.glb')) {
+    const { json, bin } = parseGLB(await mainFile.arrayBuffer());
+    gltf = json; glbBin = bin;
+    for (const b of gltf.buffers||[]) {
+      if (b.uri == null) buffers.push(glbBin);
+      else buffers.push(await uriToArrayBuffer(b.uri, findSibling));
+    }
+  } else {
+    gltf = JSON.parse(await mainFile.text());
+    for (const b of gltf.buffers||[]) buffers.push(await uriToArrayBuffer(b.uri, findSibling));
+  }
+  const resolveImage = async (img) => {
+    let blob;
+    if (img.bufferView != null) {
+      const view = gltf.bufferViews[img.bufferView];
+      const buf = buffers[view.buffer];
+      blob = new Blob([new Uint8Array(buf, view.byteOffset||0, view.byteLength)], { type: img.mimeType||'image/png' });
+    } else if (img.uri) {
+      if (img.uri.startsWith('data:')) blob = await (await fetch(img.uri)).blob();
+      else { const f = findSibling(img.uri); if(!f) return null; blob = f; }
+    } else return null;
+    try { return await createImageBitmap(blob); }
+    catch { return null; }
+  };
+  const { mesh, image } = await parseGLTF(gltf, buffers, resolveImage);
+  registerMesh(mesh);
+  return { kind:'mesh', data: mesh, image };
+}
+
+async function uriToArrayBuffer(uri, findSibling) {
+  if (uri.startsWith('data:')) return await (await fetch(uri)).arrayBuffer();
+  const f = findSibling(uri);
+  if (!f) throw new Error(`missing external file referenced by GLTF: ${uri}`);
+  return await f.arrayBuffer();
+}
+
+// ---------------------------------------------------------------------------
+// OBJ external resources (mtl + texture image)
+// ---------------------------------------------------------------------------
+async function loadOBJTexture(objFile, text, siblings) {
+  // find mtllib, then map_Kd within it
+  const mtlMatch = text.match(/^mtllib\s+(.+)$/m);
+  if (!mtlMatch) return null;
+  const mtlName = mtlMatch[1].trim();
+  const mtlFile = siblings.find(f => f.name === mtlName || f.name.endsWith('/'+mtlName));
+  if (!mtlFile) return null;
+  const mtl = await mtlFile.text();
+  const map = mtl.match(/^\s*map_Kd\s+(.+)$/m);
+  if (!map) return null;
+  const texName = map[1].trim().split(/[\\/]/).pop();
+  const texFile = siblings.find(f => f.name === texName || f.name.endsWith('/'+texName));
+  if (!texFile) return null;
+  try { return await createImageBitmap(texFile); } catch { return null; }
+}
+
+// ---------------------------------------------------------------------------
+// Top-level: given the dropped/selected FileList, load a model.
+// ---------------------------------------------------------------------------
+export async function loadModel(files) {
+  const list = Array.from(files);
+  // pick the main model file
+  const exts = ['.ply','.glb','.gltf','.obj'];
+  const main = list.find(f => exts.some(e => f.name.toLowerCase().endsWith(e)));
+  if (!main) throw new Error('no supported model file found (.ply/.obj/.gltf/.glb)');
+  const lname = main.name.toLowerCase();
+  if (lname.endsWith('.gltf') || lname.endsWith('.glb')) {
+    return await loadGLTFFromFiles(main, list);
+  }
+  if (lname.endsWith('.obj')) {
+    const text = await main.text();
+    const image = await loadOBJTexture(main, text, list);
+    // parse geometry via WASM (needs raw bytes)
+    const res = await loadNative(main, 1);
+    res.image = image;
+    return res;
+  }
+  // PLY (splat or mesh, auto-detected)
+  return await loadNative(main, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Runtime queries backed by WASM (operate on the currently loaded model)
+// ---------------------------------------------------------------------------
+export function sortSplats(dx, dy, dz) {
+  const ptr = Module.ccall('ssv_sort','number',['number','number','number'],[dx,dy,dz]);
+  const n = call('ssv_splat_count');
+  if (!ptr || !n) return null;
+  return u32(ptr, n);
+}
+export function splatHistogram(param, nbins) {
+  const ptr = call('ssv_splat_histogram','number',['number','number'],[param,nbins]);
+  const mm = f32(call('ssv_histogram_minmax'), 2);
+  return { bins: f32(ptr, nbins).slice(), min: mm[0], max: mm[1] };
+}
+export function meshHistogram(param, nbins) {
+  const ptr = call('ssv_mesh_histogram','number',['number','number'],[param,nbins]);
+  const mm = f32(call('ssv_histogram_minmax'), 2);
+  return { bins: f32(ptr, nbins).slice(), min: mm[0], max: mm[1] };
+}
+export function meshEdgeCount() { return call('ssv_mesh_edge_count'); }
+export function bbox() { return f32(call('ssv_bbox'), 6).slice(); }
+// robust fit sphere: [cx, cy, cz, medianDistance]
+export function fitSphere() { return f32(call('ssv_fit_sphere'), 4).slice(); }
+// nearest ray/mesh hit distance (model-native frame), or -1
+export function raycastMesh(ox, oy, oz, dx, dy, dz) {
+  return call('ssv_raycast_mesh','number',
+    ['number','number','number','number','number','number'], [ox,oy,oz,dx,dy,dz]);
+}
+export function freeSplat() { call('ssv_free_splat', null); }
+export function freeMesh() { call('ssv_free_mesh', null); }

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Spirulae Splat & Mesh Viewer</title>
+<link rel="icon" href="https://harry7557558.github.io/favicon.ico">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="header">
+  <div id="logo">🐚 Spirulae <b>Viewer</b></div>
+  <div id="status-dot"></div>
+  <div id="status-text">Ready</div>
+  <div id="fps"></div>
+  <button id="panel-toggle" title="Toggle panel">⚙️</button>
+</div>
+
+<div id="main">
+  <div id="viewport">
+    <canvas id="glcanvas"></canvas>
+    <div id="drop-hint">
+      <div class="big">Drop a model to view</div>
+      <div class="sub">3D Gaussian Splats (<b>.ply</b>) &nbsp;·&nbsp; Meshes (<b>.ply .obj .gltf .glb</b>)<br>
+      Drag &amp; drop a file, or click to browse. For textured .gltf/.obj drop the model plus its <b>.bin/.mtl/image</b> files together.</div>
+    </div>
+    <div id="overlay"></div>
+    <div id="nav-legend"></div>
+    <input autocomplete="off" type="file" id="file-input" multiple accept=".ply,.obj,.gltf,.glb,.bin,.mtl,.png,.jpg,.jpeg" style="display:none">
+  </div>
+
+  <div id="panel">
+    <!-- MODEL -->
+    <div class="section" id="sec-model">
+      <div class="section-title">Model</div>
+      <div class="stat"><span>File</span><span id="st-file">—</span></div>
+      <div class="stat"><span>Type</span><span id="st-type">—</span></div>
+      <div id="st-splat-stats" style="display:none">
+        <div class="stat"><span>Splats</span><span id="st-count">—</span></div>
+        <div class="stat"><span>SH degree</span><span id="st-sh">—</span></div>
+      </div>
+      <div id="st-mesh-stats" style="display:none">
+        <div class="stat"><span>Vertices</span><span id="st-verts">—</span></div>
+        <div class="stat"><span>Edges</span><span id="st-edges">—</span></div>
+        <div class="stat"><span>Faces</span><span id="st-faces">—</span></div>
+      </div>
+    </div>
+
+    <!-- NAVIGATION -->
+    <div class="section">
+      <div class="section-title">Navigation</div>
+      <div class="row">
+        <div class="label"><span>Mode</span></div>
+        <select autocomplete="off" id="nav-mode">
+          <option value="turntable">Turntable</option>
+          <option value="trackball">Trackball</option>
+          <option value="fps">First Person</option>
+          <option value="fly">Free Fly</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="label"><span>Move Speed</span><span class="val" id="v-speed">1.0×</span></div>
+        <input autocomplete="off" type="range" id="move-speed" min="-2" max="2" step="0.1" value="0">
+      </div>
+      <div class="row"><button class="btn" id="btn-reset">Reset Camera</button></div>
+    </div>
+
+    <!-- SPLAT RENDER -->
+    <div class="section hidden" id="sec-splat">
+      <div class="section-title">Gaussian Splatting</div>
+      <div class="row">
+        <div class="label"><span>Primitive</span></div>
+        <select autocomplete="off" id="primitive">
+          <option value="0">3DGS</option>
+          <option value="1">Mip (antialiased)</option>
+          <option value="2">3DGUT (unscented)</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="label"><span>Color Gamut</span></div>
+        <select autocomplete="off" id="gamut">
+          <option>Rec.709</option><option>DCI-P3</option><option>Rec.2020</option>
+          <option>AdobeRGB</option><option>ACEScg</option><option>ACES2065-1</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="label"><span>Linear Color</span>
+          <label class="toggle"><input autocomplete="off" type="checkbox" id="linear"><span class="track"></span></label>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label"><span>SH Degree</span><span class="val" id="v-shdeg">0</span></div>
+        <input autocomplete="off" type="range" id="shdeg" min="0" max="0" step="1" value="0">
+      </div>
+      <div class="row">
+        <div class="label"><span>Exposure</span><span class="val" id="v-exposure">1.00</span></div>
+        <input autocomplete="off" type="range" id="exposure" min="-2" max="2" step="0.05" value="0">
+      </div>
+    </div>
+
+    <!-- MESH RENDER -->
+    <div class="section hidden" id="sec-mesh">
+      <div class="section-title">Mesh</div>
+      <div class="row">
+        <div class="label"><span>Shading</span>
+          <label class="toggle"><input autocomplete="off" type="checkbox" id="shade" checked><span class="track"></span></label>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label"><span>Flat Shading</span>
+          <label class="toggle"><input autocomplete="off" type="checkbox" id="flat-shade"><span class="track"></span></label>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label"><span>Vertex/Texture Color</span>
+          <label class="toggle"><input autocomplete="off" type="checkbox" id="mesh-color" checked><span class="track"></span></label>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCENE -->
+    <div class="section">
+      <div class="section-title">Scene</div>
+      <div class="row">
+        <div class="label"><span>Camera</span></div>
+        <select autocomplete="off" id="camera-model">
+          <option value="perspective">Perspective</option>
+          <option value="orthographic">Orthographic</option>
+          <option value="fisheye">Fisheye (equidistant)</option>
+          <option value="equisolid">Fisheye (equisolid)</option>
+          <option value="equirectangular">Equirectangular 360°</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="label"><span>Field of View</span><span class="val" id="v-fov">60°</span></div>
+        <input autocomplete="off" type="range" id="fov" min="10" max="180" step="1" value="60">
+      </div>
+      <div class="row">
+        <div class="label"><span>Y Up (off: Z up)</span>
+          <label class="toggle"><input autocomplete="off" type="checkbox" id="up-axis"><span class="track"></span></label>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label"><span>Show Axes / Grid</span>
+          <label class="toggle"><input autocomplete="off" type="checkbox" id="grid" checked><span class="track"></span></label>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label"><span>Background</span></div>
+        <input autocomplete="off" type="color" id="bg-color" value="#0a0b0e">
+      </div>
+    </div>
+
+    <!-- DISTRIBUTIONS -->
+    <div class="section" id="sec-hist">
+      <div class="section-title">Distributions</div>
+      <div class="row">
+        <select autocomplete="off" id="hist-param"></select>
+      </div>
+      <div class="row"><button class="btn" id="btn-hist">Compute Histogram</button></div>
+      <canvas id="hist-canvas"></canvas>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
