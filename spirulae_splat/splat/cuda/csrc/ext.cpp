@@ -79,7 +79,9 @@ static std::vector<at::Tensor> delaunay3d_tensor(
 // Meshing.h -- surface mesh extraction from a trained 3DGS model.
 // Splat params are CPU float32 tensors in standard inria-PLY convention
 // (raw quats, log scales, logit opacities). camera_positions may be empty
-// (no dataset -> static density occupancy). Writes a binary PLY.
+// (no dataset -> static density occupancy). Writes the mesh in one or more of
+// PLY/OBJ/GLTF/GLB (comma-separated `formats`), colored per `color_mode`
+// (none / vertex / texture; incompatible format+mode pairs raise).
 static bool generate_mesh_tensor(
     at::Tensor means, at::Tensor quats, at::Tensor scales, at::Tensor opacities,
     at::Tensor features_dc, at::Tensor camera_positions,
@@ -91,7 +93,10 @@ static bool generate_mesh_tensor(
     at::Tensor cam_widths, at::Tensor cam_heights, const std::string& camera_model,
     int64_t carve_k, bool cull_unseen,
     double merge_max_flip_deg, int64_t floater_min_faces, double fill_hole_ratio,
-    int64_t fill_hole_max_edges, double degenerate_angle_deg
+    int64_t fill_hole_max_edges, double degenerate_angle_deg,
+    const std::string& color_mode, const std::string& formats,
+    int64_t texture_size, int64_t tex_gutter_px, double chart_angle_deg,
+    int64_t quality_iters
 ) {
     auto f32 = [](at::Tensor t) { return t.to(at::kFloat).contiguous().cpu(); };
     at::Tensor m = f32(means), q = f32(quats), s = f32(scales), o = f32(opacities);
@@ -166,6 +171,24 @@ static bool generate_mesh_tensor(
     cfg.fill_hole_max_edges = (int)fill_hole_max_edges;
     cfg.degenerate_angle_deg = (float)degenerate_angle_deg;
 
+    if (color_mode == "none")         cfg.color_mode = meshing::MeshColorMode::None;
+    else if (color_mode == "vertex")  cfg.color_mode = meshing::MeshColorMode::Vertex;
+    else if (color_mode == "texture") cfg.color_mode = meshing::MeshColorMode::Texture;
+    else TORCH_CHECK(false, "color_mode must be none/vertex/texture, got ", color_mode);
+    // throws on unknown formats / bad "+jpeg<q>" encodings / duplicates
+    std::vector<meshing::MeshFormatSpec> specs = meshing::parse_mesh_formats(formats);
+    TORCH_CHECK(!specs.empty(), "formats must name at least one of ply/obj/gltf/glb");
+    cfg.formats.clear();
+    for (const auto& spec : specs) {
+        std::string err = meshing::check_export_support(spec, cfg.color_mode);
+        TORCH_CHECK(err.empty(), err);
+        cfg.formats.push_back(spec.token());
+    }
+    cfg.texture_size = (int)texture_size;
+    cfg.tex_gutter_px = (int)tex_gutter_px;
+    cfg.chart_angle_deg = (float)chart_angle_deg;
+    cfg.quality_iters = (int)quality_iters;
+
     return meshing::generate_mesh(
         m.data_ptr<float>(), q.data_ptr<float>(), s.data_ptr<float>(), o.data_ptr<float>(),
         fdc.data_ptr<float>(), N, cam_ptr, C, cams, cfg, output_path);
@@ -200,7 +223,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("floater_min_faces") = 100,
           pybind11::arg("fill_hole_ratio") = 0.05,
           pybind11::arg("fill_hole_max_edges") = 12,
-          pybind11::arg("degenerate_angle_deg") = 2.0);
+          pybind11::arg("degenerate_angle_deg") = 2.0,
+          pybind11::arg("color_mode") = std::string("vertex"),
+          pybind11::arg("formats") = std::string("ply"),
+          pybind11::arg("texture_size") = 2048,
+          pybind11::arg("tex_gutter_px") = 4,
+          pybind11::arg("chart_angle_deg") = 60.0,
+          pybind11::arg("quality_iters") = 3);
 
     // Delaunay3D.h
     m.def("delaunay3d", &delaunay3d_tensor,

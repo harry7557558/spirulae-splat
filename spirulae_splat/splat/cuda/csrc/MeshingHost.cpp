@@ -10,6 +10,8 @@
  */
 
 #include "Meshing.h"
+#include "MeshExport.h"
+#include "MeshUV.h"
 #include "Delaunay3D.h"
 
 #ifdef _MSC_VER
@@ -83,11 +85,9 @@ static inline int64_t edge_key(int a, int b, int64_t P) {
 // when it satisfies the edge-collapse link condition, so anything locally
 // manifold stays manifold.
 // ---------------------------------------------------------------------------
-struct Mesh {
-    std::vector<std::array<float,3>> V;
-    std::vector<std::array<int,3>> F;
-    std::vector<std::array<unsigned char,3>> C;  // per-vertex RGB (optional)
-};
+// The pipeline operates on the shared export container (V/F/C, plus N/UV/
+// texture filled by the export stage). Post-processing only touches V/F/C.
+using Mesh = MeshData;
 
 // Lock-free atomic min on a 64-bit slot (CAS loop).
 static inline void atomic_min_u64(uint64_t* p, uint64_t val) {
@@ -393,34 +393,6 @@ static void merge_vertices(Mesh& mesh, float merge_factor, float max_flip_deg,
     if (verbose)
         printf("[meshing] merge: %ld collapses -> %zu verts, %zu faces\n",
                total_collapses, mesh.V.size(), mesh.F.size());
-}
-
-// ---------------------------------------------------------------------------
-// Binary little-endian PLY writer (float vertices, uchar/int faces).
-// ---------------------------------------------------------------------------
-static void write_ply(const Mesh& mesh, const std::string& path) {
-    std::ofstream f(path, std::ios::binary);
-    if (!f) throw std::runtime_error("meshing: cannot open " + path);
-    const bool has_color = mesh.C.size() == mesh.V.size();
-    f << "ply\nformat binary_little_endian 1.0\n";
-    f << "element vertex " << mesh.V.size() << "\n";
-    f << "property float x\nproperty float y\nproperty float z\n";
-    if (has_color)
-        f << "property uchar red\nproperty uchar green\nproperty uchar blue\n";
-    f << "element face " << mesh.F.size() << "\n";
-    f << "property list uchar int vertex_indices\n";
-    f << "end_header\n";
-    for (size_t i = 0; i < mesh.V.size(); ++i) {
-        f.write(reinterpret_cast<const char*>(mesh.V[i].data()), sizeof(float) * 3);
-        if (has_color)
-            f.write(reinterpret_cast<const char*>(mesh.C[i].data()), 3);
-    }
-    for (const auto& tri : mesh.F) {
-        unsigned char n = 3;
-        f.write(reinterpret_cast<const char*>(&n), 1);
-        int idx[3] = {tri[0], tri[1], tri[2]};
-        f.write(reinterpret_cast<const char*>(idx), sizeof(idx));
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1198,6 +1170,233 @@ static void fix_degenerate_faces(Mesh& mesh, float angle_deg, bool verbose) {
                n_collapse, n_flip, mesh.V.size(), mesh.F.size());
 }
 
+// ---------------------------------------------------------------------------
+// Mesh quality improvement: valence-optimizing edge flips + guarded
+// tangential smoothing (the flip/relax half of Botsch-Kobbelt isotropic
+// remeshing; no splits/collapses, so vertex count and features are kept).
+//
+//   * FLIP an interior edge when it strictly reduces the squared deviation of
+//     the four touched vertices' valences from ideal (6 interior, 4 boundary),
+//     guarded so the two new triangles are non-degenerate, do not fold
+//     against the old quad normal, and do not push the quad's minimum angle
+//     below 30 degrees (or below its previous minimum when already worse).
+//     This is what fixes bad valences and, with it, most awkward angles.
+//
+//   * TANGENTIAL SMOOTHING moves each interior vertex toward the area-
+//     weighted centroid of its 1-ring, projected onto the tangent plane of
+//     the vertex normal -- to first order the surface does not move, only the
+//     triangulation slides along it. A vertex whose move would fold or
+//     degenerate an incident face is reverted. Boundary vertices stay fixed.
+// ---------------------------------------------------------------------------
+static void improve_mesh_quality(Mesh& mesh, int iters, bool verbose,
+                                 int num_threads) {
+    const int nv = (int)mesh.V.size();
+    const long nf = (long)mesh.F.size();
+    if (iters <= 0 || nv == 0 || nf == 0) return;
+#ifdef _OPENMP
+    if (num_threads > 0) omp_set_num_threads(num_threads);
+#endif
+    auto& V = mesh.V;
+    auto& F = mesh.F;
+    const int64_t P = (int64_t)nv;
+    auto ekey = [P](int a, int b) -> int64_t {
+        int64_t lo = a<b?a:b, hi = a<b?b:a; return lo*P + hi;
+    };
+    auto sub = [](const std::array<float,3>& a, const std::array<float,3>& b) {
+        return std::array<float,3>{a[0]-b[0], a[1]-b[1], a[2]-b[2]};
+    };
+    auto cross = [](const std::array<float,3>& a, const std::array<float,3>& b) {
+        return std::array<float,3>{a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2],
+                                   a[0]*b[1]-a[1]*b[0]};
+    };
+    auto dot = [](const std::array<float,3>& a, const std::array<float,3>& b) {
+        return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+    };
+    auto nrm = [&](const std::array<float,3>& a) { return std::sqrt(dot(a,a)); };
+    // minimum angle (cos of max angle... we need min angle) of a triangle via
+    // squared edge lengths; returns the cosine of the SMALLEST angle (max cos)
+    auto min_angle_cos = [&](int a, int b, int c) -> float {
+        auto d2 = [&](int p, int q) { auto e = sub(V[p], V[q]); return dot(e, e); };
+        float la = d2(b,c), lb = d2(c,a), lc = d2(a,b);
+        auto co = [](float opp, float s1, float s2) {
+            float dn = 2.0f * std::sqrt(s1 * s2);
+            return dn > 1e-30f ? (s1 + s2 - opp) / dn : 1.0f;
+        };
+        return std::max(co(la,lb,lc), std::max(co(lb,lc,la), co(lc,la,lb)));
+    };
+    const float kAngleFloorCos = std::cos(30.0f * 0.017453292519943295f);
+
+    long total_flips = 0, total_moved = 0;
+    for (int pass = 0; pass < iters; ++pass) {
+        // ---- rebuild connectivity for this pass ----
+        // edge -> the (<=2) faces on it
+        std::unordered_map<int64_t, std::array<int,2>> etri;
+        etri.reserve((size_t)nf * 3 / 2);
+        bool nonmanifold = false;
+        for (long t = 0; t < nf; ++t) {
+            const auto& f = F[t];
+            for (int k = 0; k < 3; ++k) {
+                auto& slot = etri.emplace(ekey(f[k], f[(k+1)%3]),
+                                          std::array<int,2>{-1,-1}).first->second;
+                if (slot[0] < 0) slot[0] = (int)t;
+                else if (slot[1] < 0) slot[1] = (int)t;
+                else nonmanifold = true;   // shouldn't happen; be safe below
+            }
+        }
+        std::vector<char> is_bnd(nv, 0);
+        std::vector<int> val(nv, 0);   // valence = incident (unique) edges
+        for (const auto& kv : etri) {
+            int a = (int)(kv.first / P), b = (int)(kv.first % P);
+            ++val[a]; ++val[b];
+            if (kv.second[1] < 0) { is_bnd[a] = 1; is_bnd[b] = 1; }
+        }
+
+        // ---- valence-optimizing flips (serial; updates are local) ----
+        long flips = 0;
+        auto ideal = [&](int v) { return is_bnd[v] ? 4 : 6; };
+        std::vector<int64_t> keys;
+        keys.reserve(etri.size());
+        for (const auto& kv : etri) keys.push_back(kv.first);
+        for (int64_t key : keys) {
+            auto it = etri.find(key);
+            if (it == etri.end()) continue;
+            int t0 = it->second[0], t1 = it->second[1];
+            if (t0 < 0 || t1 < 0) continue;              // boundary edge
+            int a = (int)(key / P), b = (int)(key % P);
+            const auto& f0 = F[t0];
+            const auto& f1 = F[t1];
+            // verify faces still carry the edge (map may be stale after flips)
+            auto has_edge = [&](const std::array<int,3>& f) {
+                int cnt = 0;
+                for (int k = 0; k < 3; ++k) if (f[k]==a || f[k]==b) ++cnt;
+                return cnt == 2;
+            };
+            if (!has_edge(f0) || !has_edge(f1)) continue;
+            int c = -1, d = -1;
+            for (int k = 0; k < 3; ++k) { if (f0[k]!=a && f0[k]!=b) c = f0[k];
+                                          if (f1[k]!=a && f1[k]!=b) d = f1[k]; }
+            if (c < 0 || d < 0 || c == d) continue;
+            if (etri.count(ekey(c, d))) continue;        // (c,d) already exists
+            // valence gain: a,b lose one; c,d gain one
+            auto sq = [](int x) { return x * x; };
+            int before = sq(val[a]-ideal(a)) + sq(val[b]-ideal(b))
+                       + sq(val[c]-ideal(c)) + sq(val[d]-ideal(d));
+            int after  = sq(val[a]-1-ideal(a)) + sq(val[b]-1-ideal(b))
+                       + sq(val[c]+1-ideal(c)) + sq(val[d]+1-ideal(d));
+            if (after >= before) continue;
+            if (val[a] <= 3 || val[b] <= 3) continue;    // avoid valence-2 spikes
+            // geometric guards: locally consistent winding around the quad.
+            // old: (a,b,c) + (b,a,d); new: (c,d,a)... derive winding from f0:
+            // find orientation of (a,b) in f0 to keep consistency.
+            bool ab_in_f0 = false;
+            for (int k = 0; k < 3; ++k)
+                if (f0[k]==a && f0[(k+1)%3]==b) ab_in_f0 = true;
+            int aa = ab_in_f0 ? a : b, bb = ab_in_f0 ? b : a;
+            // old tris: (aa,bb,c), (bb,aa,d); new tris: (c,d,bb), (d,c,aa)
+            auto n0 = cross(sub(V[bb],V[aa]), sub(V[c],V[aa]));
+            auto n1 = cross(sub(V[aa],V[bb]), sub(V[d],V[bb]));
+            std::array<float,3> nav{n0[0]+n1[0], n0[1]+n1[1], n0[2]+n1[2]};
+            float lav = nrm(nav);
+            if (lav < 1e-20f) continue;
+            auto m0 = cross(sub(V[d],V[c]), sub(V[bb],V[c]));   // (c,d,bb)
+            auto m1 = cross(sub(V[c],V[d]), sub(V[aa],V[d]));   // (d,c,aa)
+            if (nrm(m0) < 1e-20f || nrm(m1) < 1e-20f) continue; // degenerate
+            if (dot(m0,nav) <= 0.0f || dot(m1,nav) <= 0.0f) continue;  // fold
+            // angle floor: don't create angles below 30 deg unless the quad
+            // was already worse, in which case require strict improvement
+            float old_worst = std::max(min_angle_cos(aa,bb,c), min_angle_cos(bb,aa,d));
+            float new_worst = std::max(min_angle_cos(c,d,bb), min_angle_cos(d,c,aa));
+            if (new_worst > kAngleFloorCos && new_worst >= old_worst) continue;
+            // apply: rewrite the two faces, update valences + edge map
+            F[t0] = {c, d, bb};
+            F[t1] = {d, c, aa};
+            --val[a]; --val[b]; ++val[c]; ++val[d];
+            etri.erase(it);
+            etri.emplace(ekey(c, d), std::array<int,2>{t0, t1});
+            // reassign the four quad-boundary edges to the new faces
+            auto retag = [&](int u, int v, int oldt, int newt) {
+                auto jt = etri.find(ekey(u, v));
+                if (jt == etri.end()) return;
+                if (jt->second[0] == oldt) jt->second[0] = newt;
+                else if (jt->second[1] == oldt) jt->second[1] = newt;
+            };
+            retag(aa, c, t0, t1);  // old f0 had (aa,c); new owner of (aa,c) is t1? see below
+            // new tris: t0 = (c,d,bb) owns edges (c,d),(d,bb),(bb,c)
+            //           t1 = (d,c,aa) owns edges (d,c),(c,aa),(aa,d)
+            // old tris: t0 = (aa,bb,c) owned (aa,bb),(bb,c),(c,aa)
+            //           t1 = (bb,aa,d) owned (bb,aa),(aa,d),(d,bb)
+            // (bb,c): stays with t0. (c,aa): t0 -> t1. (aa,d): stays with t1.
+            // (d,bb): t1 -> t0. retag(aa,c,...) above already moved (c,aa).
+            retag(d, bb, t1, t0);
+            ++flips;
+        }
+        (void)nonmanifold;
+
+        // ---- tangential smoothing (Jacobi step with fold-revert) ----
+        // area-weighted 1-ring centroid + vertex normal
+        std::vector<std::array<float,3>> cent(nv, {0,0,0});
+        std::vector<float> wsum(nv, 0.0f);
+        std::vector<std::array<float,3>> vnorm(nv, {0,0,0});
+        for (long t = 0; t < nf; ++t) {
+            const auto& f = F[t];
+            auto n = cross(sub(V[f[1]],V[f[0]]), sub(V[f[2]],V[f[0]]));
+            float area = 0.5f * nrm(n);
+            std::array<float,3> fc{(V[f[0]][0]+V[f[1]][0]+V[f[2]][0])/3.0f,
+                                   (V[f[0]][1]+V[f[1]][1]+V[f[2]][1])/3.0f,
+                                   (V[f[0]][2]+V[f[1]][2]+V[f[2]][2])/3.0f};
+            for (int k = 0; k < 3; ++k) {
+                int v = f[k];
+                for (int x = 0; x < 3; ++x) {
+                    cent[v][x] += area * fc[x];
+                    vnorm[v][x] += n[x];
+                }
+                wsum[v] += area;
+            }
+        }
+        std::vector<std::array<float,3>> newV = V;
+        #pragma omp parallel for schedule(static)
+        for (int v = 0; v < nv; ++v) {
+            if (is_bnd[v] || wsum[v] <= 1e-30f) continue;
+            float ln = nrm(vnorm[v]);
+            if (ln < 1e-20f) continue;
+            std::array<float,3> n{vnorm[v][0]/ln, vnorm[v][1]/ln, vnorm[v][2]/ln};
+            std::array<float,3> d{cent[v][0]/wsum[v] - V[v][0],
+                                  cent[v][1]/wsum[v] - V[v][1],
+                                  cent[v][2]/wsum[v] - V[v][2]};
+            float dn = dot(d, n);
+            const float lambda = 0.5f;
+            for (int x = 0; x < 3; ++x)
+                newV[v][x] = V[v][x] + lambda * (d[x] - dn * n[x]);
+        }
+        // fold-revert: a vertex whose move flips/degenerates an incident face
+        // goes back to its old position (checked against the OLD face normal)
+        std::vector<char> revert(nv, 0);
+        #pragma omp parallel for schedule(static)
+        for (long t = 0; t < nf; ++t) {
+            const auto& f = F[t];
+            auto no = cross(sub(V[f[1]],V[f[0]]), sub(V[f[2]],V[f[0]]));
+            auto nn = cross(sub(newV[f[1]],newV[f[0]]), sub(newV[f[2]],newV[f[0]]));
+            float lo = nrm(no), lnn = nrm(nn);
+            if (lnn < 1e-20f || (lo > 1e-20f && dot(no,nn) <= 0.0f))
+                for (int k = 0; k < 3; ++k) revert[f[k]] = 1;
+        }
+        long moved = 0;
+        for (int v = 0; v < nv; ++v) {
+            if (revert[v] || is_bnd[v]) continue;
+            if (newV[v][0]!=V[v][0] || newV[v][1]!=V[v][1] || newV[v][2]!=V[v][2]) {
+                V[v] = newV[v];
+                ++moved;
+            }
+        }
+        total_flips += flips;
+        total_moved += moved;
+        if (flips == 0 && moved == 0) break;
+    }
+    if (verbose)
+        printf("[meshing] quality: %ld valence flips, %ld tangential moves "
+               "(%d iters)\n", total_flips, total_moved, iters);
+}
+
 } // namespace
 
 bool generate_mesh(
@@ -1211,6 +1410,29 @@ bool generate_mesh(
 ) {
     const float iso = cfg.iso;
     auto t0 = Clock::now();
+
+    // ---- validate the export request BEFORE any heavy work ----
+    std::string formats_csv;
+    for (const auto& f : cfg.formats)
+        formats_csv += (formats_csv.empty() ? "" : ",") + f;
+    if (formats_csv.empty()) formats_csv = "ply";
+    std::vector<MeshFormatSpec> formats = parse_mesh_formats(formats_csv);
+    std::string out_base = output_path;
+    for (const char* ext : {".ply", ".obj", ".gltf", ".glb"}) {
+        size_t n = std::strlen(ext);
+        if (out_base.size() > n &&
+            out_base.compare(out_base.size() - n, n, ext) == 0) {
+            out_base.resize(out_base.size() - n);
+            break;
+        }
+    }
+    for (const auto& spec : formats) {
+        std::string err = check_export_support(spec, cfg.color_mode);
+        if (!err.empty()) {
+            fprintf(stderr, "[meshing] error: %s\n", err.c_str());
+            return false;
+        }
+    }
 
     OccupancyEvaluator ev(means, quats, log_scales, logit_opac, features_dc, num_splats,
                           cam_pos, num_cameras, cams, cfg);
@@ -1450,14 +1672,29 @@ bool generate_mesh(
     if (cfg.verbose) printf("[meshing] cleanup (%.2fs)\n", secs_since(tcl));
   }
 
+    // ---- 7a2. valence flips + tangential relaxation ----
+    if (cfg.quality_iters > 0) {
+        auto tq = Clock::now();
+        improve_mesh_quality(mesh, cfg.quality_iters, cfg.verbose, cfg.num_threads);
+        // the relaxation moved vertices; one more degenerate sweep catches
+        // slivers that were locked before
+        fix_degenerate_faces(mesh, cfg.degenerate_angle_deg, cfg.verbose);
+        if (cfg.verbose)
+            printf("[meshing] quality (%.2fs)\n", secs_since(tq));
+    }
+
     // ---- 7b. globally consistent, outward-facing winding ----
     auto t7 = Clock::now();
     orient_mesh(mesh);
     if (cfg.verbose) printf("[meshing] orient (%.2fs)\n", secs_since(t7));
 
-    // ---- 7c. per-vertex color from splats ----
+    // ---- 7c. smooth vertex normals (before any seam split, so normals stay
+    //      continuous across UV seams) ----
+    compute_vertex_normals(mesh);
+
+    // ---- 7d. color: per-vertex, or a baked texture atlas ----
     auto t8 = Clock::now();
-    if (!mesh.V.empty()) {
+    if (cfg.color_mode == MeshColorMode::Vertex && !mesh.V.empty()) {
         const int nv = (int)mesh.V.size();
         std::vector<float> rgb(3 * nv);
         ev.colorize(&mesh.V[0][0], nv, rgb.data());
@@ -1466,13 +1703,28 @@ bool generate_mesh(
             for (int a = 0; a < 3; ++a)
                 mesh.C[i][a] = (unsigned char)std::min(std::max(
                     (int)std::lround(rgb[3*i+a] * 255.0f), 0), 255);
+        if (cfg.verbose) printf("[meshing] color (%.2fs)\n", secs_since(t8));
+    } else if (cfg.color_mode == MeshColorMode::Texture && !mesh.V.empty()) {
+        UVAtlasConfig uvcfg;
+        uvcfg.texture_size = cfg.texture_size;
+        uvcfg.gutter_px = cfg.tex_gutter_px;
+        uvcfg.chart_angle_deg = cfg.chart_angle_deg;
+        uvcfg.num_threads = cfg.num_threads;
+        uvcfg.verbose = cfg.verbose;
+        std::vector<int> face_chart = build_uv_atlas(mesh, uvcfg);
+        bake_texture(mesh, face_chart, uvcfg,
+                     [&](const float* xyz, int n, float* rgb) {
+                         ev.colorize(xyz, n, rgb);
+                     });
+        if (cfg.verbose) printf("[meshing] texture (%.2fs)\n", secs_since(t8));
     }
-    if (cfg.verbose) printf("[meshing] color (%.2fs)\n", secs_since(t8));
 
     // ---- 8. write ----
-    write_ply(mesh, output_path);
-    printf("[meshing] wrote %s: %zu vertices, %zu faces (total %.2fs)\n",
-           output_path.c_str(), mesh.V.size(), mesh.F.size(), secs_since(t0));
+    if (cfg.verbose) print_mesh_stats(mesh);
+    for (const auto& spec : formats)
+        write_mesh(mesh, cfg.color_mode, spec, out_base, /*verbose=*/true);
+    printf("[meshing] done: %zu vertices, %zu faces (total %.2fs)\n",
+           mesh.V.size(), mesh.F.size(), secs_since(t0));
     return true;
 }
 

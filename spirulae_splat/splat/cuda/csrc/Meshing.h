@@ -24,6 +24,8 @@
 #include <string>
 #include <vector>
 
+#include "MeshExport.h"   // MeshColorMode + format helpers
+
 namespace meshing {
 
 struct MeshingConfig {
@@ -54,6 +56,11 @@ struct MeshingConfig {
     // the short edge of a needle, or flip the long edge of a cap). <=0 disables.
     float degenerate_angle_deg = 2.0f;
 
+    // Valence-optimizing edge flips + guarded tangential smoothing iterations
+    // (improves triangle angles/valences without moving the surface to first
+    // order). <=0 disables.
+    int   quality_iters = 3;
+
     // --- rasterize-and-sample occupancy/color (dataset path) ---
     // When camera intrinsics are supplied, occupancy/color come from rendering
     // each camera once (3DGUT) and sampling, instead of LBVH ray traversal.
@@ -79,9 +86,19 @@ struct MeshingConfig {
     //   carve_k : aggregate occupancy as the k-th SMALLEST over the cameras that                                  
     //       see the point (k=1 = strict min / space carving; k>1 ignores the                                      
     //       k-1 most-underestimating views, trading carving power for robustness).                                
-    bool  occ_normalize = true;                                                                                    
+    bool  occ_normalize = true;
     float occ_m0_thresh = 0.5f;
     int   carve_k = 1;
+
+    // --- export ---
+    // Output color: none, per-vertex color, or a baked texture atlas (UVs via
+    // LSCM charts, see MeshUV.h). Formats that cannot represent the chosen
+    // mode (PLY+texture, OBJ+vertex) are rejected up front.
+    MeshColorMode color_mode = MeshColorMode::Vertex;
+    std::vector<std::string> formats = {"ply"};   // any of ply obj gltf glb
+    int   texture_size = 2048;      // square texture atlas resolution
+    int   tex_gutter_px = 4;        // atlas spacing between charts (texels)
+    float chart_angle_deg = 60.0f;  // max normal deviation within a UV chart
 };
 
 // Full camera intrinsics/extrinsics for the rasterize-and-sample (dataset)

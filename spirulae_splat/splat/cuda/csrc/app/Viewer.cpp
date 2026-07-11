@@ -15,8 +15,8 @@
 
 #include <cuda_runtime.h>
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STBI_WRITE_NO_STDIO
+// Implementation lives in csrc/stb_image_write_impl.cpp (shared with the
+// mesh texture export); declarations only here.
 #include "../external/stb_image_write.h"
 
 #include "app_generated/viewer_html.h"   // kViewerHtml[] (CMake-embedded)

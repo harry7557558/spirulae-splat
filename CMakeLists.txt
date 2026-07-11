@@ -322,6 +322,37 @@ if(SSPLAT_BUILD_CLI)
         set_property(TARGET ssplat-train PROPERTY BUILD_RPATH "$ORIGIN")
     endif()
     set_property(TARGET ssplat-train PROPERTY CXX_STANDARD 17)
+
+    # ---- standalone mesh-extraction CLI (shares the dataset parsers) ----
+    add_executable(ssplat-mesh
+        spirulae_splat/splat/cuda/csrc/app/mesh_main.cpp
+        spirulae_splat/splat/cuda/csrc/app/ColmapParser.cpp
+        spirulae_splat/splat/cuda/csrc/app/NerfstudioParser.cpp
+        spirulae_splat/splat/cuda/csrc/app/MetashapeParser.cpp
+        spirulae_splat/splat/cuda/csrc/app/DatasetCommon.cpp
+        spirulae_splat/splat/cuda/csrc/external/miniz.c
+    )
+    target_include_directories(ssplat-mesh PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc
+        ${CUDAToolkit_INCLUDE_DIRS}
+    )
+    target_link_libraries(ssplat-mesh PRIVATE csrc CUDA::cudart)
+    if(SSPLAT_WITH_TORCH)
+        target_link_libraries(ssplat-mesh PRIVATE Python3::Python)
+    endif()
+    target_compile_options(ssplat-mesh PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>
+    )
+    if(SSPLAT_WITH_TORCH AND NOT WIN32)
+        target_link_options(ssplat-mesh PRIVATE -static-libgcc -static-libstdc++)
+    endif()
+    if(SSPLAT_WITH_TORCH)
+        set_property(TARGET ssplat-mesh PROPERTY BUILD_RPATH
+            "$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
+    else()
+        set_property(TARGET ssplat-mesh PROPERTY BUILD_RPATH "$ORIGIN")
+    endif()
+    set_property(TARGET ssplat-mesh PROPERTY CXX_STANDARD 17)
 endif()
 
 message(STATUS "spirulae_splat CUDA extension configured.")

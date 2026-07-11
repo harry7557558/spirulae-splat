@@ -9,8 +9,9 @@ Usage:
     python -m spirulae_splat.ss_meshing <checkpoint_dir> [--data <dataset_dir>]
 
 `checkpoint_dir` is either a run directory (containing config.json and a
-`step-*.ckpt/` folder) or a `*.ckpt` directory directly. The mesh is written to
-`mesh.ply` next to the checkpoint's `splat.ply`.
+`step-*.ckpt/` folder) or a `*.ckpt` directory directly. The mesh is written
+next to the checkpoint's `splat.ply` as `mesh.<ext>` for each requested
+--format (ply, obj, gltf, glb), colored per --color (none / vertex / texture).
 """
 
 from __future__ import annotations
@@ -166,8 +167,11 @@ def load_cameras(run_dir: Path, data_dir: Path):
 
     # The bool auto-rescale opens a full-res image per frame (slow) and, on the
     # nerfstudio path, ignores image_dir -- we redo resolution from image_dir
-    # below, so disable it here. A numeric rescale is left for the parser.
-    if isinstance(getattr(cfg, "rescale_camera_to_fit", False), bool):
+    # below, so disable it here. A positive numeric rescale is left for the
+    # parser; the C++ CLI stores "off" as the number 0 (and "auto" as -1),
+    # which would otherwise divide intrinsics by zero.
+    rcf = getattr(cfg, "rescale_camera_to_fit", False)
+    if isinstance(rcf, bool) or (isinstance(rcf, (int, float)) and rcf <= 0):
         cfg.rescale_camera_to_fit = False
 
     parser = SpirulaeSplatDataparser(cfg, data_dir)
@@ -251,7 +255,24 @@ def entrypoint():
                          "the static (density-only) occupancy field.")
     ap.add_argument("--no-data", action="store_true",
                     help="ignore the dataset; use the static density occupancy field")
-    ap.add_argument("--output", type=Path, default=None, help="output PLY path")
+    ap.add_argument("--output", type=Path, default=None,
+                    help="output base path (a known mesh extension is stripped; "
+                         "one file per requested format is written next to it)")
+    ap.add_argument("--format", type=str, default="ply",
+                    help="comma-separated output formats: ply, obj, gltf, glb. "
+                         "With --color texture a format may carry a texture "
+                         "encoding suffix: glb+png (default), glb+jpg "
+                         "(JPEG quality 95), glb+jpeg75 (JPEG quality 75)")
+    ap.add_argument("--color", type=str, default="vertex",
+                    choices=["none", "vertex", "texture"],
+                    help="mesh color: none, per-vertex color, or a baked texture "
+                         "atlas. PLY+texture and OBJ+vertex are rejected.")
+    ap.add_argument("--texture-size", type=int, default=2048,
+                    help="texture atlas resolution (square)")
+    ap.add_argument("--tex-gutter-px", type=int, default=4,
+                    help="atlas spacing between UV charts, in texels")
+    ap.add_argument("--chart-angle-deg", type=float, default=60.0,
+                    help="max face-normal deviation within a UV chart")
     ap.add_argument("--iso", type=float, default=None,
                     help="isosurface level. Default: 0.5 with cameras (--data), "
                          "0.2 without.")
@@ -287,12 +308,46 @@ def entrypoint():
                     help="also fill any boundary loop with at most this many edges "
                          "(so tiny holes always fill; 0 disables this criterion). "
                          "A loop is filled if either criterion is met.")
+    ap.add_argument("--quality-iters", type=int, default=3,
+                    help="valence-flip + tangential-relaxation iterations "
+                         "(improves triangle shape/valence; 0 disables)")
     ap.add_argument("--degenerate-angle-deg", type=float, default=15.0,
                     help="remove triangles whose smallest angle is below this many "
                          "degrees by a fidelity-preserving local edit (collapse a "
                          "needle's short edge, flip a cap's long edge); <=0 disables")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+
+    # Validate the export request before any heavy work. A token is
+    # "fmt[+png|+jpg|+jpeg<quality>]"; the C++ side re-validates in depth.
+    import re
+    tokens = [f.strip().lower().lstrip(".") for f in args.format.split(",") if f.strip()]
+    known = {"ply", "obj", "gltf", "glb"}
+    formats, bases = [], []
+    for tok in tokens:
+        m = re.fullmatch(r"(ply|obj|gltf|glb)(?:\+(png|jpe?g(\d+)?))?", tok)
+        if not m:
+            ap.error(f"--format: invalid token {tok!r} (expected one of "
+                     f"{', '.join(sorted(known))}, optionally with +png, "
+                     f"+jpg, or +jpeg<quality>)")
+        base, enc, quality = m.group(1), m.group(2), m.group(3)
+        if base in bases:
+            ap.error(f"--format: {base!r} requested more than once")
+        if enc and args.color != "texture":
+            ap.error(f"--format: {tok!r} has a texture encoding but --color "
+                     f"is not texture")
+        if quality is not None and not (1 <= int(quality) <= 100):
+            ap.error(f"--format: {tok!r}: JPEG quality must be in 1..100")
+        bases.append(base)
+        formats.append(tok)
+    if not formats:
+        ap.error("--format: no valid format given")
+    if args.color == "texture" and "ply" in bases:
+        ap.error("PLY does not support textured meshes; use --color vertex "
+                 "or drop ply from --format")
+    if args.color == "vertex" and "obj" in bases:
+        ap.error("OBJ has no standard per-vertex color; use --color texture "
+                 "or drop obj from --format")
 
     splat_ply, run_dir = _find_ckpt(args.checkpoint)
     print(f"[meshing] loading {splat_ply}")
@@ -378,9 +433,17 @@ def entrypoint():
         fill_hole_ratio=args.fill_hole_ratio,
         fill_hole_max_edges=args.fill_hole_max_edges,
         degenerate_angle_deg=args.degenerate_angle_deg,
+        quality_iters=args.quality_iters,
+        color_mode=args.color,
+        formats=",".join(formats),
+        texture_size=args.texture_size,
+        tex_gutter_px=args.tex_gutter_px,
+        chart_angle_deg=args.chart_angle_deg,
         **cam_kwargs,
     )
-    print(f"[meshing] done -> {out_path}")
+    base = out_path.parent / out_path.stem if out_path.suffix.lower() in \
+        {".ply", ".obj", ".gltf", ".glb"} else out_path
+    print(f"[meshing] done -> {base}.{{{','.join(bases)}}}")
 
 
 if __name__ == "__main__":

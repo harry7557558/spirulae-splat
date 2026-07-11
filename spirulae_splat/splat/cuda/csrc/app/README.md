@@ -73,6 +73,37 @@ Debug: `SSPLAT_DUMP_CAMERAS=<path> ssplat-train ...` dumps parsed + post-split
 camera arrays as JSON and exits before engine setup — used to diff against
 the Python dataparser/trainer algebra (see verification notes below).
 
+## Mesh extraction (`ssplat-mesh`)
+
+C++ twin of `spirulae_splat/ss_meshing.py` (same engine code path:
+`Meshing.h` / `MeshingHost.cpp` / `MeshUV.cpp` / `MeshExport.cpp`). Built by
+the same `SSPLAT_BUILD_CLI` block; `mesh_main.cpp` + the dataset parsers, no
+HTTP/viewer.
+
+```bash
+./build/ssplat-mesh <ckpt> [--data <dir>] [--format ply,obj,gltf,glb] \
+    [--color none|vertex|texture] [--texture-size 2048] [--flag value ...]
+```
+
+- `<ckpt>` = run dir (config.json + `step-*.ckpt/`), a `*.ckpt` dir, or a
+  `splat.ply` directly. `--data` defaults to config.json's `data`; the
+  dataparser settings (image_dir, recon dir, metashape paths, numeric
+  rescale) and `model.relative_scale` are honored from config.json.
+- Color modes: `none`, `vertex` (per-vertex RGB), `texture` (LSCM UV atlas +
+  baked image). Unsupported pairs error out up front: PLY+texture, OBJ+vertex.
+- With `--color texture`, a format token may carry the texture encoding:
+  `glb+png` (default), `glb+jpg` (JPEG q95), `glb+jpeg75` (JPEG q75) — works
+  for obj/gltf/glb; JPEG is part of core glTF (`image/jpeg`).
+- Output: one file per `--format` next to the checkpoint's splat.ply
+  (`mesh.ply` / `.obj`+`.mtl`+tex / `.gltf`+`.bin`(+tex) / `.glb`), all
+  emitted dependency-free (PNG/JPEG via vendored stb_image_write). `.glb`
+  embeds the texture; validated clean with gltf_validator.
+- glTF compatibility: plain PBR material (no KHR_materials_unlit — partially
+  supporting viewers rendered it solid white), uint16 indices when they fit,
+  float VEC3 COLOR_0 — matching the Khronos sample-model conventions.
+- `splat.ply` reader expects float32 binary-little-endian properties (what
+  both the Python trainer and `EngineCheckpoint.cpp` write).
+
 ## Config codegen (source of truth = Python dataclasses)
 
 `spirulae_splat/generate_cli_config.py` parses `TrainerConfig` (+ preset
