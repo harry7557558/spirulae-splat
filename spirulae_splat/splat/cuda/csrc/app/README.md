@@ -19,9 +19,36 @@ cmake -G Ninja -B build -DSSPLAT_BUILD_CLI=ON && cmake --build build --target ss
   `-`/`_` interchangeable; bools take a value (`--warp-to-pinhole 1`);
   `--key=value` works (arity-1 only); `none` clears optionals; tuples take N
   values (`--bilagrid-shape 8 8 4`). `--help` shows preset-resolved defaults.
-- Links `libcsrc` (which still links libtorch + libpython on this branch);
-  the app code itself has no torch dependency and should survive the
-  `260524-no-torch` migration unchanged except for the CMake link line.
+
+### Building without Torch/Python
+
+Torch + Python are only needed for the Python extension (`ext.cpp`); the
+engine and app code are torch-free. CMake falls back automatically when
+`import torch` fails or python3 is missing; `-DSSPLAT_NO_TORCH=ON` forces it:
+
+```bash
+cmake -G Ninja -B build_notorch -DSSPLAT_NO_TORCH=ON && cmake --build build_notorch
+```
+
+In this mode `csrc` is a STATIC lib (the engine API has no dllexport
+annotations, and this yields a self-contained exe — deps are just libcudart +
+system libs), `SSPLAT_BUILD_CLI` is forced ON, CUDA archs come from
+`nvidia-smi --query-gpu=compute_cap` (override with `-DTORCH_CUDA_ARCH_LIST`),
+and the libpython link + static-libstdc++/nftw interposition workarounds are
+skipped (they exist only because of libtorch). Generated headers
+(`csrc/generated/`, `app/generated/`, `cuda/ins/`) are committed, so a fresh
+checkout builds with no Python at all. With Torch present the extension build
+is unchanged (shared `libcsrc`, same flags as before).
+
+Windows (VS2022 + CUDA toolkit): run `build_develop.bat` from any cmd prompt —
+it locates VS via vswhere and ALWAYS calls vcvars64 (an ambient cl/INCLUDE may
+reference an uninstalled SDK), picks the newest installed CUDA toolkit
+(ambient CUDA_PATH may pin one too old for the MSVC in use), falls back to
+VS-bundled cmake/ninja, and configures with `-DSSPLAT_NO_TORCH=ON` (a broken
+torch install would abort configure from inside TorchConfig.cmake — QUIET
+can't suppress errors raised inside a found package config). Manual
+equivalent from a vcvars64 shell:
+`cmake -G Ninja -B build -DSSPLAT_NO_TORCH=ON -DCMAKE_BUILD_TYPE=Release`.
 
 ## Files
 
@@ -157,7 +184,11 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
 6. Non-default orientation/center methods (`pca`/`vertical`/`gsplat`/`focus`)
    — currently approximated as `up`/`poses` with a warning (only affects
    `train_frame_scale`).
-7. Windows: MSVC+nvcc CI build, `cudart_static`, then installer (Phase 3).
+7. Windows: MSVC+nvcc build DONE (2026-07-10, VS2022 + CUDA 12.8 on an
+   RTX 3090: no-torch static build links `ssplat-train.exe` and trains
+   mipnerf360/garden; only source fix needed was an MSVC branch for a GCC
+   atomic builtin in `MeshingHost.cpp`). Remaining: `cudart_static`, CI,
+   installer (Phase 3).
 
 ## Unsupported-by-design (guarded with clear errors)
 

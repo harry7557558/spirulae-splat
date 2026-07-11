@@ -1,20 +1,20 @@
 #!/bin/bash
 
-# script_dir=$(dirname "$(realpath "$0")")
-# build_dir=${script_dir}/.torch_extensions
+# Development build for Linux. Extra arguments are passed to CMake, e.g.
+#   ./build_develop.bash -DSSPLAT_NO_TORCH=ON
+# builds only the standalone ssplat-train (no Torch/Python needed).
 
-# mkdir -p $build_dir
-# TMPDIR=$build_dir \
-#     pip install -e . --no-build-isolation -v \
-#     --cache-dir $build_dir
+# Regenerate headers/config. Skipped when python3 is unavailable -- the
+# generated files are committed, so the build still works without it.
+if command -v python3 >/dev/null 2>&1; then
+    python3 spirulae_splat/generate_headers.py
+    python3 spirulae_splat/generate_kernel_instantiation.py
+    python3 spirulae_splat/generate_cli_config.py
+else
+    echo "python3 not found -- skipping codegen (using committed generated files)"
+fi
 
-python3 spirulae_splat/generate_headers.py
-python3 spirulae_splat/generate_kernel_instantiation.py
-python3 spirulae_splat/generate_cli_config.py
-
-# if [ ! -d "build" ]; then
-    cmake -G Ninja -B build
-# fi
+cmake -G Ninja -B build "$@"
 
 echo ""
 
@@ -31,6 +31,10 @@ echo "Using jobs    : ${JOBS}"
 echo ""
 cmake --build build --verbose -j"${JOBS}"
 
-mv build/libcsrc.so ./spirulae_splat/csrc.so
-# keep ssplat-train's $ORIGIN lookup working after the rename
-ln -sfr ./spirulae_splat/csrc.so build/libcsrc.so
+# Torch build only: expose the extension as spirulae_splat/csrc.so, with a
+# symlink back so ssplat-train's $ORIGIN lookup keeps working. A no-torch
+# build makes a static libcsrc.a and a self-contained exe -- nothing to move.
+if [ -f build/libcsrc.so ] && [ ! -L build/libcsrc.so ]; then
+    mv build/libcsrc.so ./spirulae_splat/csrc.so
+    ln -sfr ./spirulae_splat/csrc.so build/libcsrc.so
+fi

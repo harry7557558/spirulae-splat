@@ -806,8 +806,8 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     static constexpr float eps = 1e-15f;
     static constexpr float beta1 = 0.9f;
     static constexpr float beta2 = 0.999f;
-    static constexpr int   BLOCK_SIZE = 256;
-    static constexpr float kSh0 = 0.28209479177387814f;  // 1 / (2*sqrt(pi))
+    [[maybe_unused]] static constexpr int   BLOCK_SIZE = 256;
+    [[maybe_unused]] static constexpr float kSh0 = 0.28209479177387814f;  // 1 / (2*sqrt(pi))
 
     const int64_t idx = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
     bool inside = (idx < numel);

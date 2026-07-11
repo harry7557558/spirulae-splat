@@ -12,6 +12,10 @@
 #include "Meshing.h"
 #include "Delaunay3D.h"
 
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
+
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -89,7 +93,12 @@ struct Mesh {
 static inline void atomic_min_u64(uint64_t* p, uint64_t val) {
     uint64_t old = *p;
     while (val < old) {
+#ifdef _MSC_VER
+        uint64_t prev = (uint64_t)_InterlockedCompareExchange64(
+            reinterpret_cast<volatile long long*>(p), (long long)val, (long long)old);
+#else
         uint64_t prev = __sync_val_compare_and_swap(p, old, val);
+#endif
         if (prev == old) break;
         old = prev;
     }

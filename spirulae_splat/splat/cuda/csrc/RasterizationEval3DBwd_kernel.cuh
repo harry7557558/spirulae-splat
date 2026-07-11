@@ -148,10 +148,10 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     // depth-only distortion (rgb weight 0) stores a single float per pixel here
     // instead of float3+float -> less shared memory, better occupancy.
     using DStore = DistortionStore<dist_type>;
-    __shared__ DStore pix_colors[dist_any(dist_type) ? BLOCK_SIZE : 1];   // C
-    __shared__ DStore pix2_colors[dist_any(dist_type) ? BLOCK_SIZE : 1];  // S
-    __shared__ DStore v_distortion_out[dist_any(dist_type) ? BLOCK_SIZE : 1];
-    __shared__ float dist_W[dist_any(dist_type) ? BLOCK_SIZE : 1];              // 1 - T_final
+    [[maybe_unused]] __shared__ DStore pix_colors[dist_any(dist_type) ? BLOCK_SIZE : 1];   // C
+    [[maybe_unused]] __shared__ DStore pix2_colors[dist_any(dist_type) ? BLOCK_SIZE : 1];  // S
+    [[maybe_unused]] __shared__ DStore v_distortion_out[dist_any(dist_type) ? BLOCK_SIZE : 1];
+    [[maybe_unused]] __shared__ float dist_W[dist_any(dist_type) ? BLOCK_SIZE : 1];        // 1 - T_final
 
     __shared__ float accum_weight_map[output_accum_weight ? BLOCK_SIZE : 1];
 
@@ -159,10 +159,10 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     // pending_* carry the crossing's near-member contributions one step forward
     // (set at the far member's step, consumed at the next, nearer splat's step).
     // pending_Tfar == 0 means "no pending".
-    __shared__ float median_v[output_median ? BLOCK_SIZE : 1];
-    __shared__ float median_pending_zgrad[output_median ? BLOCK_SIZE : 1];
-    __shared__ float median_pending_zfar[output_median ? BLOCK_SIZE : 1];
-    __shared__ float median_pending_Tfar[output_median ? BLOCK_SIZE : 1];
+    [[maybe_unused]] __shared__ float median_v[output_median ? BLOCK_SIZE : 1];
+    [[maybe_unused]] __shared__ float median_pending_zgrad[output_median ? BLOCK_SIZE : 1];
+    [[maybe_unused]] __shared__ float median_pending_zfar[output_median ? BLOCK_SIZE : 1];
+    [[maybe_unused]] __shared__ float median_pending_Tfar[output_median ? BLOCK_SIZE : 1];
 
 #if IS_EVAL3D
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
@@ -366,7 +366,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
         // accumulate gradient
         typename SplatPrimitive::FragmentBwd v_splat = SplatPrimitive::FragmentBwd::zero(splat);
-        float accum_weight = 0.0f;
+        [[maybe_unused]] float accum_weight = 0.0f;
 
         // at t=0, thread 0 (back-most survivor) undoes pixel 0; at t=1 it undoes
         // pixel 1 while thread 1 undoes pixel 0; etc. -> each pixel sees survivors
@@ -527,7 +527,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 splat.evaluate_alpha_vjp(ray_o, ray_d, v_alpha, v_splat, v_ray_o_alpha, v_ray_d_alpha);
                 splat.evaluate_color_vjp(ray_o, ray_d, v_color, v_splat, v_ray_o_color, v_ray_d_color);
             #else
-                float old_opac = v_splat.opac;
                 splat.evaluate_alpha_vjp(px, py, v_alpha, v_splat);
                 splat.evaluate_color_vjp(px, py, v_color, v_splat);
             #endif

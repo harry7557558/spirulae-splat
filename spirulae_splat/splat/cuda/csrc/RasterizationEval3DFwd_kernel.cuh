@@ -141,9 +141,9 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // median depth: depth where post-splat transmittance crosses 1/2, with z
     // interpolated linearly in ln(T). Virtual nearest point is (z=0, T=1).
     // Stays 0 if T never drops below 1/2.
-    float median_depth = 0.0f;
-    float median_prev_z = 0.0f;
-    float median_prev_T = 1.0f;
+    [[maybe_unused]] float median_depth = 0.0f;
+    [[maybe_unused]] float median_prev_z = 0.0f;
+    [[maybe_unused]] float median_prev_T = 1.0f;
 
     RenderOutput pix_out = RenderOutput::zero();   // C = sum_j w_j c_j (raw)
     RenderOutput pix2_out = RenderOutput::zero();  // S = sum_j w_j c_j^2

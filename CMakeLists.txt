@@ -5,29 +5,55 @@ project(spirulae_splat LANGUAGES C CXX CUDA)
 
 
 # ---------------------------------------------------------------------------
-# Find Torch
+# Find Torch (optional)
+#
+# Torch + Python are only needed for the Python extension module (ext.cpp).
+# When either is missing -- or SSPLAT_NO_TORCH=ON -- the extension is skipped
+# and only the standalone ssplat-train CLI is built (engine is torch-free).
 # ---------------------------------------------------------------------------
 
-execute_process(
-    COMMAND python3 -c "import torch; print(torch.utils.cmake_prefix_path)"
-    OUTPUT_VARIABLE PYTORCH_CMAKE_PREDIX_PATH
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-message(STATUS "PyTorch CMake prefix path: ${PYTORCH_PATH}")
+option(SSPLAT_BUILD_CLI "Build the standalone ssplat-train CLI" OFF)
+option(SSPLAT_NO_TORCH "Skip Torch/Python even if present; build only ssplat-train" OFF)
 
-execute_process(
-    COMMAND python3 -c "import sysconfig; print(sysconfig.get_paths()['include'])"
-    OUTPUT_VARIABLE PYTHON_ADDITION_INCLUDE_PATH
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-message(STATUS "Python additional include path: ${PYTHON_ADDITION_INCLUDE_PATH}")
+set(SSPLAT_WITH_TORCH OFF)
+if(NOT SSPLAT_NO_TORCH)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        execute_process(
+            COMMAND ${Python3_EXECUTABLE} -c "import torch; print(torch.utils.cmake_prefix_path)"
+            OUTPUT_VARIABLE PYTORCH_CMAKE_PREFIX_PATH
+            RESULT_VARIABLE SSPLAT_TORCH_PROBE_RESULT
+            ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        message(STATUS "PyTorch CMake prefix path: ${PYTORCH_CMAKE_PREFIX_PATH}")
 
-set(CMAKE_PREFIX_PATH ${PYTORCH_CMAKE_PREDIX_PATH})
+        execute_process(
+            COMMAND ${Python3_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_paths()['include'])"
+            OUTPUT_VARIABLE PYTHON_ADDITION_INCLUDE_PATH
+            ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        message(STATUS "Python additional include path: ${PYTHON_ADDITION_INCLUDE_PATH}")
 
-find_package(Torch REQUIRED)
-message(STATUS "Found Torch: ${TORCH_VERSION}")
+        if(SSPLAT_TORCH_PROBE_RESULT EQUAL 0)
+            set(CMAKE_PREFIX_PATH ${PYTORCH_CMAKE_PREFIX_PATH})
+            find_package(Torch QUIET)
+        endif()
+    endif()
 
-find_package(Python3 REQUIRED)
+    if(Torch_FOUND)
+        message(STATUS "Found Torch: ${TORCH_VERSION}")
+        find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib")
+        set(SSPLAT_WITH_TORCH ON)
+    endif()
+endif()
 
-find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib")
+if(NOT SSPLAT_WITH_TORCH)
+    message(STATUS "Torch/Python3 not available (or SSPLAT_NO_TORCH=ON) -- "
+        "skipping the Python extension; building the standalone ssplat-train CLI only.")
+    set(SSPLAT_BUILD_CLI ON)
+endif()
+
+find_package(CUDAToolkit REQUIRED)
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +71,12 @@ foreach(src ${SPLAT_SOURCES})
     endif()
 endforeach()
 
+if(NOT SSPLAT_WITH_TORCH)
+    # ext.cpp (the pybind11 module) is the only Torch-dependent source.
+    list(REMOVE_ITEM SPLAT_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc/ext.cpp)
+endif()
+
 # message(STATUS "Extension sources:")
 # foreach(src ${SPLAT_SOURCES})
 #     message(STATUS "  ${src}")
@@ -54,17 +86,38 @@ endforeach()
 # Detect CUDA architectures
 # ---------------------------------------------------------------------------
 if(NOT DEFINED TORCH_CUDA_ARCH_LIST)
-    execute_process(
-        COMMAND python3 -c "import torch; print(' '.join(f'{a[0]}{a[1]}' for a in [torch.cuda.get_device_capability(i) for i in range(torch.cuda.device_count())]))"
-        OUTPUT_VARIABLE TORCH_CUDA_ARCH_LIST
-        OUTPUT_STRIP_TRAILING_WHITESPACE)
-
-    if(TORCH_CUDA_ARCH_LIST STREQUAL "")
-        message(FATAL_ERROR "CUDA is required for this extension.")
+    if(SSPLAT_WITH_TORCH)
+        execute_process(
+            COMMAND ${Python3_EXECUTABLE} -c "import torch; print(' '.join(f'{a[0]}{a[1]}' for a in [torch.cuda.get_device_capability(i) for i in range(torch.cuda.device_count())]))"
+            OUTPUT_VARIABLE TORCH_CUDA_ARCH_LIST
+            ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
     endif()
-else()
-    string(REGEX REPLACE "\\." "" TORCH_CUDA_ARCH_LIST "${TORCH_CUDA_ARCH_LIST}")
+
+    if(NOT TORCH_CUDA_ARCH_LIST)
+        # No Torch (or Torch saw no device): ask the driver directly.
+        execute_process(
+            COMMAND nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+            OUTPUT_VARIABLE SSPLAT_SMI_CAPS
+            RESULT_VARIABLE SSPLAT_SMI_RESULT
+            ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(SSPLAT_SMI_RESULT EQUAL 0)
+            string(REPLACE "\r" "" SSPLAT_SMI_CAPS "${SSPLAT_SMI_CAPS}")
+            string(REPLACE "\n" " " TORCH_CUDA_ARCH_LIST "${SSPLAT_SMI_CAPS}")
+        endif()
+    endif()
+
+    if(NOT TORCH_CUDA_ARCH_LIST)
+        message(FATAL_ERROR "Could not detect a CUDA GPU. "
+            "Pass -DTORCH_CUDA_ARCH_LIST=\"8.6\" (or similar) to set the target architecture.")
+    endif()
 endif()
+
+# normalize: "8.6" / "8.6 7.5" / "86;75" all become a deduped list like "86;75"
+string(REGEX REPLACE "\\." "" TORCH_CUDA_ARCH_LIST "${TORCH_CUDA_ARCH_LIST}")
+string(REPLACE " " ";" TORCH_CUDA_ARCH_LIST "${TORCH_CUDA_ARCH_LIST}")
+list(REMOVE_DUPLICATES TORCH_CUDA_ARCH_LIST)
 
 message(STATUS "CUDA architecture(s): ${TORCH_CUDA_ARCH_LIST}")
 
@@ -81,21 +134,30 @@ endforeach()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(SPLAT_CXX_FLAGS "-O3")
-# set(SPLAT_CXX_FLAGS "-g")
-if(NOT WIN32)
+if(MSVC)
+    set(SPLAT_CXX_FLAGS "/O2")
+else()
+    set(SPLAT_CXX_FLAGS "-O3")
+    # set(SPLAT_CXX_FLAGS "-g")
     list(APPEND SPLAT_CXX_FLAGS "-Wno-sign-compare")
+endif()
+
+if(WIN32)
+    add_compile_definitions(_USE_MATH_DEFINES NOMINMAX _CRT_SECURE_NO_WARNINGS)
 endif()
 
 # Detect OpenMP
 find_package(OpenMP)
-if(OpenMP_FOUND AND NOT APPLE)
+if(OpenMP_CXX_FOUND AND NOT APPLE)
     message(STATUS "Compiling with OpenMP")
     list(APPEND SPLAT_CXX_FLAGS "-DAT_PARALLEL_OPENMP")
-    if(WIN32)
-        list(APPEND SPLAT_CXX_FLAGS "/openmp")
-    else()
-        list(APPEND SPLAT_CXX_FLAGS "-fopenmp")
+    if(SSPLAT_WITH_TORCH)
+        # Compile flag only: the OpenMP runtime comes from torch's bundled
+        # libgomp. Linking the system one too would shadow it (CMake warns
+        # about the unsafe rpath). The no-torch build instead links the
+        # OpenMP::OpenMP_CXX target, whose flags are language-guarded so
+        # nvcc never sees them.
+        list(APPEND SPLAT_CXX_FLAGS ${OpenMP_CXX_FLAGS})
     endif()
 else()
     message(STATUS "Compiling without OpenMP...")
@@ -134,14 +196,20 @@ endif()
 # Define the extension module
 # ---------------------------------------------------------------------------
 
-add_library(csrc SHARED ${SPLAT_SOURCES})
+if(SSPLAT_WITH_TORCH)
+    add_library(csrc SHARED ${SPLAT_SOURCES})
+else()
+    # The engine API has no dllexport annotations (Linux .so exports
+    # everything by default); a static lib sidesteps that on Windows and
+    # makes ssplat-train a self-contained executable.
+    add_library(csrc STATIC ${SPLAT_SOURCES})
+endif()
 
 # Include directories
 target_include_directories(csrc PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc
     # ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc/glm
-    ${Python3_INCLUDE_DIRS}
-    ${PYTHON_ADDITION_INCLUDE_PATH}
+    ${CUDAToolkit_INCLUDE_DIRS}
 )
 
 # Definitions
@@ -149,16 +217,30 @@ if(WIN32)
     target_compile_definitions(csrc PRIVATE spirulae_splat_EXPORTS)
 endif()
 
-target_compile_definitions(csrc PRIVATE
-    $<$<COMPILE_LANGUAGE:CXX>:TORCH_EXTENSION_NAME=csrc>
-)
+if(SSPLAT_WITH_TORCH)
+    target_include_directories(csrc PRIVATE
+        ${Python3_INCLUDE_DIRS}
+        ${PYTHON_ADDITION_INCLUDE_PATH}
+    )
 
-# Link Torch
-target_link_libraries(csrc
-    ${TORCH_LIBRARIES}
-    ${TORCH_PYTHON_LIBRARY}
-    ${Python3_LIBRARIES}
-)
+    target_compile_definitions(csrc PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:TORCH_EXTENSION_NAME=csrc>
+    )
+
+    # Link Torch
+    target_link_libraries(csrc
+        ${TORCH_LIBRARIES}
+        ${TORCH_PYTHON_LIBRARY}
+        ${Python3_LIBRARIES}
+    )
+else()
+    # Torch normally drags these in for us
+    find_package(Threads REQUIRED)
+    target_link_libraries(csrc CUDA::cudart Threads::Threads)
+    if(OpenMP_CXX_FOUND AND NOT APPLE)
+        target_link_libraries(csrc OpenMP::OpenMP_CXX)
+    endif()
+endif()
 
 # Apply flags
 target_compile_options(csrc PRIVATE
@@ -178,12 +260,11 @@ set_property(TARGET csrc PROPERTY CXX_STANDARD 17)
 set_property(TARGET csrc PROPERTY CUDA_STANDARD 17)
 
 # ---------------------------------------------------------------------------
-# Standalone CLI trainer (skeleton) -- no Python at runtime; links the csrc
-# shared library for the engine. Off by default so the normal extension
-# build is unaffected.
+# Standalone CLI trainer -- no Python at runtime; links the csrc shared
+# library for the engine. Off by default (unless Torch is unavailable, which
+# forces it on) so the normal extension build is unaffected.
 # ---------------------------------------------------------------------------
 
-option(SSPLAT_BUILD_CLI "Build the standalone ssplat-train CLI" OFF)
 if(SSPLAT_BUILD_CLI)
     # Embed the (unchanged) web viewer client into the binary so the exe is
     # self-contained. Regenerated at configure time when viewer.html changes.
@@ -209,17 +290,19 @@ if(SSPLAT_BUILD_CLI)
         spirulae_splat/splat/cuda/csrc/app/Viewer.cpp
         spirulae_splat/splat/cuda/csrc/external/miniz.c
     )
-    find_package(CUDAToolkit REQUIRED)
     target_include_directories(ssplat-train PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc
         ${CMAKE_BINARY_DIR}
         ${CUDAToolkit_INCLUDE_DIRS}
     )
-    # libpython is only needed because csrc's pybind/libtorch_python layer
-    # leaves CPython symbols undefined (a Python process normally provides
-    # them at import time). Drops out with the no-torch build.
-    find_package(Python3 REQUIRED COMPONENTS Development.Embed)
-    target_link_libraries(ssplat-train PRIVATE csrc CUDA::cudart Python3::Python)
+    target_link_libraries(ssplat-train PRIVATE csrc CUDA::cudart)
+    if(SSPLAT_WITH_TORCH)
+        # libpython is only needed because csrc's pybind/libtorch_python layer
+        # leaves CPython symbols undefined (a Python process normally provides
+        # them at import time). Drops out with the no-torch build.
+        find_package(Python3 REQUIRED COMPONENTS Development.Embed)
+        target_link_libraries(ssplat-train PRIVATE Python3::Python)
+    endif()
     target_compile_options(ssplat-train PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>
     )
@@ -227,13 +310,17 @@ if(SSPLAT_BUILD_CLI)
     # link time. Without this, libtorch.so (pulled in via csrc) interposes
     # its own bundled std::filesystem symbols at load time, and e.g.
     # remove_all resolves to an ABI-incompatible copy that jumps to null.
-    if(NOT WIN32)
+    if(SSPLAT_WITH_TORCH AND NOT WIN32)
         target_link_options(ssplat-train PRIVATE -static-libgcc -static-libstdc++)
     endif()
     # libcsrc.so is renamed to spirulae_splat/csrc.so by build_develop.bash;
     # keep the exe's lookup pointing at the build tree copy.
-    set_property(TARGET ssplat-train PROPERTY BUILD_RPATH
-        "$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
+    if(SSPLAT_WITH_TORCH)
+        set_property(TARGET ssplat-train PROPERTY BUILD_RPATH
+            "$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
+    else()
+        set_property(TARGET ssplat-train PROPERTY BUILD_RPATH "$ORIGIN")
+    endif()
     set_property(TARGET ssplat-train PROPERTY CXX_STANDARD 17)
 endif()
 
