@@ -12,9 +12,12 @@ changes.
 
 ## Features
 
-- **3D Gaussian Splatting** (`.ply`, INRIA/spirulae layout, including very large
-  files — the file is streamed straight into the WASM heap, so no 2 GB JS
-  `ArrayBuffer` limit).
+- **3D Gaussian Splatting** (`.ply`, INRIA/spirulae layout, including very
+  large files — binary PLY is parsed **streaming** through a small chunk
+  buffer, non-position attributes are stored as half floats, and the SH
+  texture / mesh index buffers are split into chunks below per-resource GPU
+  limits, so 4–5 GB, 20M-splat SH3 models load and render; tested with
+  2.5 GB and 4.9 GB scans).
   - Primitive select: **3DGS**, **Mip** (antialiased), **3DGUT** (unscented
     transform projection; fragments evaluate the 3D Gaussian along per-pixel
     rays, "eval3d"). 3DGS/Mip use analytic projection Jacobians with the
@@ -23,6 +26,10 @@ changes.
     ACES2065-1) and a **linear-color** toggle, matching the training pipeline's
     `rgb_to_srgb` conventions.
   - Spherical harmonics up to degree 4, exposure.
+  - Depth sorting matches the training code's `get_sorting_depth`: planar for
+    perspective/orthographic, distance for equirectangular, and a smooth
+    |z|/radial blend for fisheye — content behind the camera composites
+    correctly in >180° views.
   - GPU-friendly: attributes live in `TEXTURE_2D_ARRAY`s laid out so arbitrarily
     large models render **even under a small `MAX_TEXTURE_SIZE`** (tiles into
     array layers).

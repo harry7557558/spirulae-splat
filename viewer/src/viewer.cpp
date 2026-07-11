@@ -32,15 +32,55 @@
 
 static const float SH_C0 = 0.28209479177387814f;
 
+// ---- IEEE 754 half-float conversion. Everything except positions/opacity is
+// stored as f16: it halves the memory of multi-GB models (a 20M-splat SH3
+// model would not fit the 4GB wasm32 heap in f32) and uploads directly into
+// RGBA16F/RGB16F textures without a driver-side conversion pass. ----
+static inline uint16_t f2h(float f) {
+    uint32_t x; memcpy(&x, &f, 4);
+    uint32_t sign = (x >> 16) & 0x8000u;
+    int32_t  exp  = (int32_t)((x >> 23) & 0xff) - 127 + 15;
+    uint32_t man  = x & 0x7fffffu;
+    if (exp <= 0) {                       // subnormal / underflow
+        if (exp < -10) return (uint16_t)sign;
+        man |= 0x800000u;
+        uint32_t shift = (uint32_t)(14 - exp);
+        uint16_t v = (uint16_t)(man >> shift);
+        if ((man >> (shift - 1)) & 1u) v++;               // round to nearest
+        return (uint16_t)(sign | v);
+    }
+    if (exp >= 31) return (uint16_t)(sign | 0x7c00u);     // inf / overflow
+    uint16_t v = (uint16_t)(sign | ((uint32_t)exp << 10) | (man >> 13));
+    if (man & 0x1000u) v++;               // round (carry into exponent is fine)
+    return v;
+}
+static inline float h2f(uint16_t h) {
+    uint32_t sign = ((uint32_t)h & 0x8000u) << 16;
+    uint32_t exp  = (h >> 10) & 0x1fu;
+    uint32_t man  = h & 0x3ffu;
+    uint32_t x;
+    if (exp == 0) {
+        if (!man) x = sign;
+        else {                             // subnormal
+            exp = 127 - 15 + 1;
+            while (!(man & 0x400u)) { man <<= 1; exp--; }
+            man &= 0x3ffu;
+            x = sign | (exp << 23) | (man << 13);
+        }
+    } else if (exp == 31) x = sign | 0x7f800000u | (man << 13);
+    else x = sign | ((exp - 15 + 127) << 23) | (man << 13);
+    float f; memcpy(&f, &x, 4); return f;
+}
+
 struct SplatData {
     uint32_t count = 0;
-    int sh_degree = 0;         // 0..4
-    int sh_rest = 0;           // rest coeffs per channel K (0,3,8,15,24)
-    std::vector<float> posop;  // count*4 : x,y,z, opacity(sigmoid in [0,1])
-    std::vector<float> quat;   // count*4 : x,y,z,w (normalized)
-    std::vector<float> scale;  // count*3 : exp(log_scale) world-space
-    std::vector<float> fdc;    // count*3 : raw f_dc (SH DC coeff)
-    std::vector<float> sh;     // count*sh_rest*3 : rest coeffs, [coeff][channel]
+    int sh_degree = 0;            // 0..4
+    int sh_rest = 0;              // rest coeffs per channel K (0,3,8,15,24)
+    std::vector<float> posop;     // count*4 : x,y,z, opacity(sigmoid) — f32
+    std::vector<uint16_t> quat;   // count*4 : x,y,z,w (normalized) — f16
+    std::vector<uint16_t> scale;  // count*3 : exp(log_scale) world — f16
+    std::vector<uint16_t> fdc;    // count*3 : raw f_dc — f16
+    std::vector<uint16_t> sh;     // count*sh_rest*3 : [coeff][channel] — f16
     void clear() {
         count = 0; sh_degree = 0; sh_rest = 0;
         posop.clear(); quat.clear(); scale.clear(); fdc.clear(); sh.clear();
@@ -206,6 +246,98 @@ static bool parse_ply_header(const uint8_t* data, size_t len, PlyHeader& h) {
 
 // ---------- 3DGS splat PLY ----------
 
+// Per-record parsing context for binary-LE splat vertices, shared by the
+// whole-buffer and streaming paths. splat_ctx_init also (re)allocates the
+// destination arrays (idempotent if already sized).
+struct SplatRecCtx {
+    int stride = 0;
+    std::vector<int> off, type;                 // per-prop byte offset / type
+    int ix=-1,iy=-1,iz=-1,io=-1;
+    int is0=-1,is1=-1,is2=-1;
+    int ir0=-1,ir1=-1,ir2=-1,ir3=-1;
+    int id0=-1,id1=-1,id2=-1;
+    int ired=-1,igrn=-1,iblu=-1;
+    std::vector<int> irest;                     // f_rest_* in file order (3*Kf)
+    int K=0, Kf=0;
+    bool has_fdc=false, has_rgb=false;
+    double rd(const uint8_t* rec, int k) const { return read_scalar_le(rec+off[k], type[k]); }
+};
+
+static bool splat_ctx_init(SplatRecCtx& ctx, const PlyElem& ve) {
+    uint64_t N = ve.count;
+    std::unordered_map<std::string,int> idx;
+    for (size_t k=0;k<ve.props.size();k++){
+        if (ve.props[k].is_list) return false;  // no list props in splat vertices
+        idx[ve.props[k].name]=(int)k;
+    }
+    auto has=[&](const char*n){return idx.count(n)>0;};
+    auto gi=[&](const char*n){auto it=idx.find(n);return it==idx.end()?-1:it->second;};
+    ctx.off.resize(ve.props.size()); ctx.type.resize(ve.props.size());
+    int stride=0;
+    for(size_t k=0;k<ve.props.size();k++){
+        ctx.off[k]=stride; ctx.type[k]=ve.props[k].type;
+        stride+=ply_type_size(ve.props[k].type);
+    }
+    ctx.stride=stride;
+    int rest=0; while(has(("f_rest_"+std::to_string(rest)).c_str())) rest++;
+    ctx.Kf=rest/3;
+    g_splat.count=(uint32_t)N;
+    g_splat.sh_degree=(ctx.Kf>=24)?4:(ctx.Kf>=15)?3:(ctx.Kf>=8)?2:(ctx.Kf>=3)?1:0;
+    static const int K_OF_DEG[5]={0,3,8,15,24};
+    ctx.K=K_OF_DEG[g_splat.sh_degree];
+    g_splat.sh_rest=ctx.K;
+    g_splat.posop.resize(N*4); g_splat.quat.resize(N*4);
+    g_splat.scale.resize(N*3); g_splat.fdc.resize(N*3);
+    if(ctx.K>0) g_splat.sh.assign((size_t)N*ctx.K*3, 0);
+    ctx.ix=gi("x"); ctx.iy=gi("y"); ctx.iz=gi("z");
+    ctx.io=has("opacity")?gi("opacity"):gi("alpha");
+    ctx.is0=gi("scale_0"); ctx.is1=gi("scale_1"); ctx.is2=gi("scale_2");
+    ctx.ir0=gi("rot_0"); ctx.ir1=gi("rot_1"); ctx.ir2=gi("rot_2"); ctx.ir3=gi("rot_3");
+    ctx.id0=gi("f_dc_0"); ctx.id1=gi("f_dc_1"); ctx.id2=gi("f_dc_2");
+    ctx.ired=gi("red"); ctx.igrn=gi("green"); ctx.iblu=gi("blue");
+    ctx.irest.resize(rest);
+    for(int r=0;r<rest;r++) ctx.irest[r]=gi(("f_rest_"+std::to_string(r)).c_str());
+    ctx.has_fdc=has("f_dc_0"); ctx.has_rgb=has("red")&&has("green")&&has("blue");
+    return ctx.ix>=0 && ctx.iy>=0 && ctx.iz>=0 && stride>0;
+}
+
+static inline void splat_parse_record(const SplatRecCtx& c, const uint8_t* rec, uint64_t i){
+    g_splat.posop[i*4+0]=(float)c.rd(rec,c.ix);
+    g_splat.posop[i*4+1]=(float)c.rd(rec,c.iy);
+    g_splat.posop[i*4+2]=(float)c.rd(rec,c.iz);
+    g_splat.posop[i*4+3]= c.io>=0 ? sigmoidf((float)c.rd(rec,c.io)) : 1.0f;
+    // quat stored wxyz (rot_0=w). Output xyzw normalized (f16).
+    float qw= c.ir0>=0?(float)c.rd(rec,c.ir0):1.f;
+    float qx= c.ir1>=0?(float)c.rd(rec,c.ir1):0.f;
+    float qy= c.ir2>=0?(float)c.rd(rec,c.ir2):0.f;
+    float qz= c.ir3>=0?(float)c.rd(rec,c.ir3):0.f;
+    float qn=std::sqrt(qx*qx+qy*qy+qz*qz+qw*qw); if(qn<1e-12f)qn=1.f;
+    g_splat.quat[i*4+0]=f2h(qx/qn); g_splat.quat[i*4+1]=f2h(qy/qn);
+    g_splat.quat[i*4+2]=f2h(qz/qn); g_splat.quat[i*4+3]=f2h(qw/qn);
+    g_splat.scale[i*3+0]= f2h(c.is0>=0?std::exp((float)c.rd(rec,c.is0)):1.f);
+    g_splat.scale[i*3+1]= f2h(c.is1>=0?std::exp((float)c.rd(rec,c.is1)):1.f);
+    g_splat.scale[i*3+2]= f2h(c.is2>=0?std::exp((float)c.rd(rec,c.is2)):1.f);
+    if (c.has_fdc){
+        g_splat.fdc[i*3+0]=f2h((float)c.rd(rec,c.id0));
+        g_splat.fdc[i*3+1]=f2h((float)c.rd(rec,c.id1));
+        g_splat.fdc[i*3+2]=f2h((float)c.rd(rec,c.id2));
+    } else if (c.has_rgb){
+        // convert display rgb (0..255) back into an f_dc so shader path is uniform
+        g_splat.fdc[i*3+0]=f2h(((float)c.rd(rec,c.ired)/255.f-0.5f)/SH_C0);
+        g_splat.fdc[i*3+1]=f2h(((float)c.rd(rec,c.igrn)/255.f-0.5f)/SH_C0);
+        g_splat.fdc[i*3+2]=f2h(((float)c.rd(rec,c.iblu)/255.f-0.5f)/SH_C0);
+    }
+    if (c.K>0){
+        // PLY rest is channel-major with the FILE's per-channel count:
+        // [Kf red][Kf green][Kf blue]
+        for (int ch=0;ch<3;ch++)
+            for (int k=0;k<c.K;k++){
+                int src=c.irest[ch*c.Kf+k];
+                g_splat.sh[((size_t)i*c.K+k)*3+ch]= f2h(src>=0?(float)c.rd(rec,src):0.f);
+            }
+    }
+}
+
 static bool parse_splat_ply(const uint8_t* data, size_t len, const PlyHeader& h,
                             const PlyElem& ve) {
     uint64_t N = ve.count;
@@ -231,70 +363,18 @@ static bool parse_splat_ply(const uint8_t* data, size_t len, const PlyHeader& h,
     static const int K_OF_DEG[5] = {0, 3, 8, 15, 24};
     int K = K_OF_DEG[g_splat.sh_degree];   // clamped to a complete degree
     g_splat.sh_rest = K;
-    if (K>0) g_splat.sh.assign((size_t)N*K*3, 0.0f);
+    if (K>0) g_splat.sh.assign((size_t)N*K*3, 0);
 
     bool has_fdc = has("f_dc_0");
     bool has_rgb = has("red") && has("green") && has("blue");
 
     if (h.format == 1) {
-        // binary little-endian: compute record stride and per-prop offsets
-        std::vector<int> off(ve.props.size());
-        int stride = 0;
-        for (size_t k=0;k<ve.props.size();k++){
-            off[k]=stride;
-            stride += ply_type_size(ve.props[k].type); // no list props in splat vertex
-        }
-        const int ix=gi("x"),iy=gi("y"),iz=gi("z");
-        const int io=has("opacity")?gi("opacity"):gi("alpha");
-        const int is0=gi("scale_0"),is1=gi("scale_1"),is2=gi("scale_2");
-        const int ir0=gi("rot_0"),ir1=gi("rot_1"),ir2=gi("rot_2"),ir3=gi("rot_3");
-        const int id0=gi("f_dc_0"),id1=gi("f_dc_1"),id2=gi("f_dc_2");
-        const int ired=gi("red"),igrn=gi("green"),iblu=gi("blue");
-        std::vector<int> irest(rest);
-        for (int r=0;r<rest;r++) irest[r]=gi(("f_rest_"+std::to_string(r)).c_str());
-
+        SplatRecCtx ctx;
+        if (!splat_ctx_init(ctx, ve)) return false;
         const uint8_t* base = data + h.data_offset;
-        if (h.data_offset + (uint64_t)stride*N > len) return false;
-        auto rd=[&](const uint8_t* rec,int k)->double{
-            return read_scalar_le(rec+off[k], ve.props[k].type);
-        };
-        for (uint64_t i=0;i<N;i++){
-            const uint8_t* rec = base + (size_t)i*stride;
-            g_splat.posop[i*4+0]=(float)rd(rec,ix);
-            g_splat.posop[i*4+1]=(float)rd(rec,iy);
-            g_splat.posop[i*4+2]=(float)rd(rec,iz);
-            g_splat.posop[i*4+3]= io>=0 ? sigmoidf((float)rd(rec,io)) : 1.0f;
-            // quat stored wxyz (rot_0=w). Output xyzw normalized.
-            float qw= ir0>=0?(float)rd(rec,ir0):1.f;
-            float qx= ir1>=0?(float)rd(rec,ir1):0.f;
-            float qy= ir2>=0?(float)rd(rec,ir2):0.f;
-            float qz= ir3>=0?(float)rd(rec,ir3):0.f;
-            float qn=std::sqrt(qx*qx+qy*qy+qz*qz+qw*qw); if(qn<1e-12f)qn=1.f;
-            g_splat.quat[i*4+0]=qx/qn; g_splat.quat[i*4+1]=qy/qn;
-            g_splat.quat[i*4+2]=qz/qn; g_splat.quat[i*4+3]=qw/qn;
-            g_splat.scale[i*3+0]= is0>=0?std::exp((float)rd(rec,is0)):1.f;
-            g_splat.scale[i*3+1]= is1>=0?std::exp((float)rd(rec,is1)):1.f;
-            g_splat.scale[i*3+2]= is2>=0?std::exp((float)rd(rec,is2)):1.f;
-            if (has_fdc){
-                g_splat.fdc[i*3+0]=(float)rd(rec,id0);
-                g_splat.fdc[i*3+1]=(float)rd(rec,id1);
-                g_splat.fdc[i*3+2]=(float)rd(rec,id2);
-            } else if (has_rgb){
-                // convert display rgb (0..255) back into an f_dc so shader path is uniform
-                g_splat.fdc[i*3+0]=((float)rd(rec,ired)/255.f-0.5f)/SH_C0;
-                g_splat.fdc[i*3+1]=((float)rd(rec,igrn)/255.f-0.5f)/SH_C0;
-                g_splat.fdc[i*3+2]=((float)rd(rec,iblu)/255.f-0.5f)/SH_C0;
-            }
-            if (K>0){
-                // PLY rest is channel-major with the FILE's per-channel count:
-                // [Kf red][Kf green][Kf blue]
-                for (int c=0;c<3;c++)
-                    for (int k=0;k<K;k++){
-                        int src=irest[c*Kf+k];
-                        g_splat.sh[((size_t)i*K+k)*3+c]= src>=0?(float)rd(rec,src):0.f;
-                    }
-            }
-        }
+        if (h.data_offset + (uint64_t)ctx.stride*N > len) return false;
+        for (uint64_t i=0;i<N;i++)
+            splat_parse_record(ctx, base + (size_t)i*ctx.stride, i);
         return true;
     } else if (h.format == 0) {
         // ascii
@@ -315,13 +395,13 @@ static bool parse_splat_ply(const uint8_t* data, size_t len, const PlyHeader& h,
             float qw=(float)v("rot_0"),qx=(float)v("rot_1"),qy=(float)v("rot_2"),qz=(float)v("rot_3");
             if(!has("rot_0")){qw=1;qx=qy=qz=0;}
             float qn=std::sqrt(qx*qx+qy*qy+qz*qz+qw*qw); if(qn<1e-12f)qn=1.f;
-            g_splat.quat[i*4+0]=qx/qn;g_splat.quat[i*4+1]=qy/qn;g_splat.quat[i*4+2]=qz/qn;g_splat.quat[i*4+3]=qw/qn;
-            g_splat.scale[i*3+0]=has("scale_0")?std::exp((float)v("scale_0")):1.f;
-            g_splat.scale[i*3+1]=has("scale_1")?std::exp((float)v("scale_1")):1.f;
-            g_splat.scale[i*3+2]=has("scale_2")?std::exp((float)v("scale_2")):1.f;
-            if(has_fdc){g_splat.fdc[i*3+0]=(float)v("f_dc_0");g_splat.fdc[i*3+1]=(float)v("f_dc_1");g_splat.fdc[i*3+2]=(float)v("f_dc_2");}
-            else if(has_rgb){g_splat.fdc[i*3+0]=((float)v("red")/255.f-0.5f)/SH_C0;g_splat.fdc[i*3+1]=((float)v("green")/255.f-0.5f)/SH_C0;g_splat.fdc[i*3+2]=((float)v("blue")/255.f-0.5f)/SH_C0;}
-            if(K>0){for(int c=0;c<3;c++)for(int k=0;k<K;k++){g_splat.sh[((size_t)i*K+k)*3+c]=(float)v(("f_rest_"+std::to_string(c*Kf+k)).c_str());}}
+            g_splat.quat[i*4+0]=f2h(qx/qn);g_splat.quat[i*4+1]=f2h(qy/qn);g_splat.quat[i*4+2]=f2h(qz/qn);g_splat.quat[i*4+3]=f2h(qw/qn);
+            g_splat.scale[i*3+0]=f2h(has("scale_0")?std::exp((float)v("scale_0")):1.f);
+            g_splat.scale[i*3+1]=f2h(has("scale_1")?std::exp((float)v("scale_1")):1.f);
+            g_splat.scale[i*3+2]=f2h(has("scale_2")?std::exp((float)v("scale_2")):1.f);
+            if(has_fdc){g_splat.fdc[i*3+0]=f2h((float)v("f_dc_0"));g_splat.fdc[i*3+1]=f2h((float)v("f_dc_1"));g_splat.fdc[i*3+2]=f2h((float)v("f_dc_2"));}
+            else if(has_rgb){g_splat.fdc[i*3+0]=f2h(((float)v("red")/255.f-0.5f)/SH_C0);g_splat.fdc[i*3+1]=f2h(((float)v("green")/255.f-0.5f)/SH_C0);g_splat.fdc[i*3+2]=f2h(((float)v("blue")/255.f-0.5f)/SH_C0);}
+            if(K>0){for(int c=0;c<3;c++)for(int k=0;k<K;k++){g_splat.sh[((size_t)i*K+k)*3+c]=f2h((float)v(("f_rest_"+std::to_string(c*Kf+k)).c_str()));}}
         }
         return true;
     }
@@ -329,6 +409,58 @@ static bool parse_splat_ply(const uint8_t* data, size_t len, const PlyHeader& h,
 }
 
 // ---------- mesh PLY ----------
+
+// Per-record parsing context for binary-LE mesh vertices (shared by the
+// whole-buffer and streaming paths). Allocates destination arrays.
+struct MeshRecCtx {
+    int stride = 0;
+    std::vector<int> off, type;
+    int ix=-1,iy=-1,iz=-1, inx=-1,iny=-1,inz=-1, ir=-1,ig=-1,ib=-1, iu=-1,iv=-1;
+    bool has_n=false, has_c=false, has_uv=false;
+    double rd(const uint8_t* rec, int k) const { return read_scalar_le(rec+off[k], type[k]); }
+};
+
+static bool mesh_ctx_init(MeshRecCtx& ctx, const PlyElem& ve) {
+    uint64_t N = ve.count;
+    std::unordered_map<std::string,int> idx;
+    for (size_t k=0;k<ve.props.size();k++){
+        if (ve.props[k].is_list) return false;  // vertex list props unsupported
+        idx[ve.props[k].name]=(int)k;
+    }
+    auto has=[&](const char*n){return idx.count(n)>0;};
+    auto gi=[&](const char*n){auto it=idx.find(n);return it==idx.end()?-1:it->second;};
+    ctx.off.resize(ve.props.size()); ctx.type.resize(ve.props.size());
+    int stride=0;
+    for(size_t k=0;k<ve.props.size();k++){
+        ctx.off[k]=stride; ctx.type[k]=ve.props[k].type;
+        stride+=ply_type_size(ve.props[k].type);
+    }
+    ctx.stride=stride;
+    ctx.has_n = has("nx")&&has("ny")&&has("nz");
+    ctx.has_c = has("red")&&has("green")&&has("blue");
+    ctx.has_uv= (has("u")&&has("v"))||(has("s")&&has("t"))||(has("texture_u")&&has("texture_v"));
+    const char* un=has("u")?"u":has("s")?"s":"texture_u";
+    const char* vn=has("v")?"v":has("t")?"t":"texture_v";
+    g_mesh.nv=(uint32_t)N;
+    g_mesh.pos.resize(N*3);
+    if(ctx.has_n) g_mesh.normal.resize(N*3);
+    if(ctx.has_c) g_mesh.color.resize(N*3);
+    if(ctx.has_uv) g_mesh.uv.resize(N*2);
+    ctx.ix=gi("x");ctx.iy=gi("y");ctx.iz=gi("z");
+    ctx.inx=gi("nx");ctx.iny=gi("ny");ctx.inz=gi("nz");
+    ctx.ir=gi("red");ctx.ig=gi("green");ctx.ib=gi("blue");
+    ctx.iu=gi(un);ctx.iv=gi(vn);
+    return ctx.ix>=0 && ctx.iy>=0 && ctx.iz>=0 && stride>0;
+}
+
+static inline void mesh_parse_vertex(const MeshRecCtx& c, const uint8_t* rec, uint64_t i){
+    g_mesh.pos[i*3+0]=(float)c.rd(rec,c.ix);
+    g_mesh.pos[i*3+1]=(float)c.rd(rec,c.iy);
+    g_mesh.pos[i*3+2]=(float)c.rd(rec,c.iz);
+    if(c.has_n){g_mesh.normal[i*3+0]=(float)c.rd(rec,c.inx);g_mesh.normal[i*3+1]=(float)c.rd(rec,c.iny);g_mesh.normal[i*3+2]=(float)c.rd(rec,c.inz);}
+    if(c.has_c){g_mesh.color[i*3+0]=(uint8_t)c.rd(rec,c.ir);g_mesh.color[i*3+1]=(uint8_t)c.rd(rec,c.ig);g_mesh.color[i*3+2]=(uint8_t)c.rd(rec,c.ib);}
+    if(c.has_uv){g_mesh.uv[i*2+0]=(float)c.rd(rec,c.iu);g_mesh.uv[i*2+1]=(float)c.rd(rec,c.iv);}
+}
 
 static bool parse_mesh_ply(const uint8_t* data, size_t len, const PlyHeader& h,
                            const PlyElem& ve, const PlyElem* fe) {
@@ -352,22 +484,13 @@ static bool parse_mesh_ply(const uint8_t* data, size_t len, const PlyHeader& h,
     const char* vn=has("v")?"v":has("t")?"t":"texture_v";
 
     if (h.format == 1) {
-        std::vector<int> off(ve.props.size()); int stride=0;
-        for(size_t k=0;k<ve.props.size();k++){off[k]=stride;stride+=ply_type_size(ve.props[k].type);}
+        MeshRecCtx ctx;
+        if (!mesh_ctx_init(ctx, ve)) return false;
+        const int stride = ctx.stride;
         const uint8_t* base=data+h.data_offset;
         if(h.data_offset+(uint64_t)stride*N>len) return false;
-        auto rd=[&](const uint8_t*rec,int k)->double{return read_scalar_le(rec+off[k],ve.props[k].type);};
-        const int ix=gi("x"),iy=gi("y"),iz=gi("z");
-        const int inx=gi("nx"),iny=gi("ny"),inz=gi("nz");
-        const int ir=gi("red"),ig=gi("green"),ib=gi("blue");
-        const int iu=gi(un),iv=gi(vn);
-        for(uint64_t i=0;i<N;i++){
-            const uint8_t*rec=base+(size_t)i*stride;
-            g_mesh.pos[i*3+0]=(float)rd(rec,ix);g_mesh.pos[i*3+1]=(float)rd(rec,iy);g_mesh.pos[i*3+2]=(float)rd(rec,iz);
-            if(has_n){g_mesh.normal[i*3+0]=(float)rd(rec,inx);g_mesh.normal[i*3+1]=(float)rd(rec,iny);g_mesh.normal[i*3+2]=(float)rd(rec,inz);}
-            if(has_c){g_mesh.color[i*3+0]=(uint8_t)rd(rec,ir);g_mesh.color[i*3+1]=(uint8_t)rd(rec,ig);g_mesh.color[i*3+2]=(uint8_t)rd(rec,ib);}
-            if(has_uv){g_mesh.uv[i*2+0]=(float)rd(rec,iu);g_mesh.uv[i*2+1]=(float)rd(rec,iv);}
-        }
+        for(uint64_t i=0;i<N;i++)
+            mesh_parse_vertex(ctx, base+(size_t)i*stride, i);
         // faces
         if(fe && fe->count>0){
             // find list prop
@@ -555,6 +678,123 @@ KEEP void ssv_set_mesh(uint32_t nv, uint32_t nt,
 }
 
 // ---------------------------------------------------------------------------
+// Streaming parse (binary little-endian PLY only). For multi-GB files the
+// whole-buffer path would need file + parsed arrays resident at once, which
+// exceeds the wasm32 4GB heap; here JS feeds chunks and only a small carry
+// buffer is retained. Usage: ssv_stream_begin(header bytes incl. end_header)
+// -> 1 splat / 2 mesh / 3 unsupported (caller falls back) / 0 error; then
+// ssv_stream_chunk() per chunk; ssv_stream_end() -> kind.
+// ---------------------------------------------------------------------------
+namespace stream {
+    static int kind = 0;                  // 1 splat, 2 mesh
+    static SplatRecCtx sctx;
+    static MeshRecCtx mctx;
+    static uint64_t vcount = 0, vdone = 0;
+    static uint64_t fcount = 0, fdone = 0;
+    static int f_cts = 0, f_es = 0;       // face list count/elem sizes
+    static int f_ct = PT_NONE, f_et = PT_NONE;
+    static bool ok = true;
+    static std::vector<uint8_t> carry;    // unconsumed bytes across chunks
+}
+
+KEEP int ssv_stream_begin(uint8_t* hdr, uint32_t hlen) {
+    using namespace stream;
+    g_last_kind = 0; kind = 0; ok = true;
+    vdone = fdone = 0; carry.clear();
+    if (hlen < 3 || hdr[0]!='p'||hdr[1]!='l'||hdr[2]!='y') return 0;
+    PlyHeader h;
+    if (!parse_ply_header(hdr, hlen, h)) return 0;
+    if (h.format != 1) return 3;          // ascii / big-endian: not streamable
+    const PlyElem* ve=nullptr; const PlyElem* fe=nullptr;
+    for (auto& e : h.elems){ if(e.name=="vertex")ve=&e; else if(e.name=="face")fe=&e; }
+    if (!ve) return 0;
+    std::unordered_map<std::string,int> vp;
+    for(size_t k=0;k<ve->props.size();k++) vp[ve->props[k].name]=(int)k;
+    bool looks_splat = vp.count("scale_0") && (vp.count("opacity")||vp.count("alpha")) && vp.count("rot_0");
+    vcount = ve->count;
+    if (looks_splat && !fe) {
+        g_splat.clear();
+        if (!splat_ctx_init(sctx, *ve)) return 0;
+        fcount = 0;
+        kind = 1;
+    } else if (!fe && !looks_splat) {
+        return 0;                          // plain point cloud: unsupported
+    } else {
+        if (fe) {
+            int lp=-1; for(size_t k=0;k<fe->props.size();k++) if(fe->props[k].is_list){lp=(int)k;break;}
+            if (lp<0) return 3;
+            f_ct = fe->props[lp].count_type; f_et = fe->props[lp].type;
+            f_cts = ply_type_size(f_ct); f_es = ply_type_size(f_et);
+            fcount = fe->count;
+        } else fcount = 0;
+        g_mesh.clear();
+        if (!mesh_ctx_init(mctx, *ve)) return 0;
+        if (fcount) g_mesh.idx.reserve(fcount*3);
+        kind = 2;
+    }
+    return kind;
+}
+
+KEEP int ssv_stream_chunk(uint8_t* data, uint32_t len) {
+    using namespace stream;
+    if (!kind || !ok) return -1;
+    // append to carry (chunk sizes are small; one extra copy is fine)
+    carry.insert(carry.end(), data, data+len);
+    const uint8_t* p = carry.data();
+    size_t avail = carry.size();
+    size_t used = 0;
+    const int stride = (kind==1) ? sctx.stride : mctx.stride;
+    // vertices (fixed stride)
+    while (vdone < vcount && avail - used >= (size_t)stride) {
+        if (kind==1) splat_parse_record(sctx, p+used, vdone);
+        else         mesh_parse_vertex(mctx, p+used, vdone);
+        used += stride; vdone++;
+    }
+    // faces (variable-size list records)
+    if (kind==2 && vdone==vcount) {
+        while (fdone < fcount) {
+            if (avail - used < (size_t)f_cts) break;
+            int nverts=(int)read_scalar_le(p+used, f_ct);
+            size_t recsz = (size_t)f_cts + (size_t)nverts*f_es;
+            if (nverts < 0 || nverts > 1024) { ok=false; return -2; }
+            if (avail - used < recsz) break;
+            const uint8_t* fp = p+used+f_cts;
+            if (nverts >= 3) {
+                uint32_t v0=(uint32_t)read_scalar_le(fp, f_et);
+                uint32_t prev=(uint32_t)read_scalar_le(fp+f_es, f_et);
+                for(int t=2;t<nverts;t++){
+                    uint32_t cur=(uint32_t)read_scalar_le(fp+(size_t)t*f_es, f_et);
+                    g_mesh.idx.push_back(v0);
+                    g_mesh.idx.push_back(prev);
+                    g_mesh.idx.push_back(cur);
+                    prev=cur;
+                }
+            }
+            used += recsz; fdone++;
+        }
+    }
+    carry.erase(carry.begin(), carry.begin()+used);
+    return 0;
+}
+
+KEEP int ssv_stream_end() {
+    using namespace stream;
+    carry.clear(); carry.shrink_to_fit();
+    if (!kind || !ok) { kind = 0; return 0; }
+    if (vdone < vcount) { kind = 0; return 0; }   // truncated file
+    if (kind==2) g_mesh.nt = (uint32_t)(g_mesh.idx.size()/3);
+    g_last_kind = kind;
+    int r = kind; kind = 0;
+    return r;
+}
+
+// free the (large) SH rest array once it has been uploaded to the GPU;
+// sorting / histograms / picking never read it
+KEEP void ssv_free_splat_sh(){
+    g_splat.sh.clear(); g_splat.sh.shrink_to_fit();
+}
+
+// ---------------------------------------------------------------------------
 // Accessors
 // ---------------------------------------------------------------------------
 KEEP int ssv_kind(){ return g_last_kind; }
@@ -563,10 +803,11 @@ KEEP uint32_t ssv_splat_count(){ return g_splat.count; }
 KEEP int ssv_splat_sh_degree(){ return g_splat.sh_degree; }
 KEEP int ssv_splat_sh_rest(){ return g_splat.sh_rest; }
 KEEP float* ssv_splat_posop(){ return g_splat.posop.data(); }
-KEEP float* ssv_splat_quat(){ return g_splat.quat.data(); }
-KEEP float* ssv_splat_scale(){ return g_splat.scale.data(); }
-KEEP float* ssv_splat_fdc(){ return g_splat.fdc.data(); }
-KEEP float* ssv_splat_sh(){ return g_splat.sh.data(); }
+// quat/scale/fdc/sh are stored as IEEE half floats (upload as HALF_FLOAT)
+KEEP uint16_t* ssv_splat_quat(){ return g_splat.quat.data(); }
+KEEP uint16_t* ssv_splat_scale(){ return g_splat.scale.data(); }
+KEEP uint16_t* ssv_splat_fdc(){ return g_splat.fdc.data(); }
+KEEP uint16_t* ssv_splat_sh(){ return g_splat.sh.data(); }
 
 KEEP uint32_t ssv_mesh_nv(){ return g_mesh.nv; }
 KEEP uint32_t ssv_mesh_nt(){ return g_mesh.nt; }
@@ -579,9 +820,12 @@ KEEP uint32_t* ssv_mesh_idx(){ return g_mesh.idx.data(); }
 KEEP void ssv_free_splat(){ g_splat.clear(); }
 KEEP void ssv_free_mesh(){ g_mesh.clear(); }
 
-// number of unique undirected edges (for statistics)
+// number of unique undirected edges (for statistics). For huge meshes the
+// hash set would not fit in memory; fall back to the 2-manifold estimate
+// E = 3T/2 (exact for closed triangle meshes).
 KEEP uint32_t ssv_mesh_edge_count(){
     if(g_mesh.nt==0) return 0;
+    if(g_mesh.nt > 20000000u) return (uint32_t)(((uint64_t)g_mesh.nt*3+1)/2);
     std::unordered_map<uint64_t,uint8_t> es;
     es.reserve(g_mesh.nt*3);
     auto add=[&](uint32_t a,uint32_t b){ if(a>b){uint32_t t=a;a=b;b=t;} es[((uint64_t)a<<32)|b]=1; };
@@ -593,20 +837,38 @@ KEEP uint32_t ssv_mesh_edge_count(){
 }
 
 // ---------------------------------------------------------------------------
-// Depth sort (16-bit counting sort, back-to-front along view direction)
-// dir = camera forward (world space, into the scene). Splats with larger
-// dot(pos,dir) are farther; we emit far -> near for "over" blending.
-// Returns pointer to count uint32 indices.
+// Depth sort (16-bit counting sort, back-to-front). Sorting depth follows
+// get_sorting_depth in projection_utils.slang:
+//   mode 0 (perspective/orthographic): planar depth dot(pos, dir) — fast,
+//     camera position irrelevant.
+//   mode 1 (equirectangular): distance from the camera (full-sphere view).
+//   mode 2 (fisheye/equisolid): sqrt(sqrt(z^4 + (1/512)*(x^2+y^2)^2)) in
+//     camera coordinates — continuous across the z=0 boundary so >180° views
+//     with splats behind the camera sort correctly.
+// (cx,cy,cz) = camera position, (dx,dy,dz) = unit forward, both in the
+// model's native frame. Emits far -> near for "over" blending.
 // ---------------------------------------------------------------------------
-KEEP uint32_t* ssv_sort(float dx, float dy, float dz){
+KEEP uint32_t* ssv_sort(int mode, float cx, float cy, float cz,
+                        float dx, float dy, float dz){
     uint32_t N=g_splat.count;
     if(N==0){ g_order.clear(); return nullptr; }
     if(g_order.size()!=N) g_order.resize(N);
     const float* P=g_splat.posop.data();
-    // find min/max projection
+    auto depth=[&](uint32_t i)->float{
+        float x=P[i*4], y=P[i*4+1], z=P[i*4+2];
+        if(mode==0) return x*dx+y*dy+z*dz;
+        float rx=x-cx, ry=y-cy, rz=z-cz;
+        float r2=rx*rx+ry*ry+rz*rz;
+        if(mode==1) return r2;
+        float zc=rx*dx+ry*dy+rz*dz;             // forward component
+        float p2=r2-zc*zc; if(p2<0.f)p2=0.f;    // squared radial component
+        float z2=zc*zc;
+        return std::sqrt(std::sqrt(z2*z2 + p2*p2*(1.0f/512.0f)));
+    };
+    // find min/max depth
     float mn=1e30f, mx=-1e30f;
     for(uint32_t i=0;i<N;i++){
-        float d=P[i*4]*dx+P[i*4+1]*dy+P[i*4+2]*dz;
+        float d=depth(i);
         if(d<mn)mn=d; if(d>mx)mx=d;
     }
     float range=mx-mn; if(range<1e-12f)range=1e-12f;
@@ -615,7 +877,7 @@ KEEP uint32_t* ssv_sort(float dx, float dy, float dz){
     static std::vector<uint16_t> key; if(key.size()!=N) key.resize(N);
     float scale=(B-1)/range;
     for(uint32_t i=0;i<N;i++){
-        float d=P[i*4]*dx+P[i*4+1]*dy+P[i*4+2]*dz;
+        float d=depth(i);
         int q=(int)((d-mn)*scale);
         if(q<0)q=0; if(q>=B)q=B-1;
         // reverse so that farthest (largest d) comes first
@@ -638,24 +900,25 @@ KEEP uint32_t* ssv_sort(float dx, float dy, float dz){
 //        6 log10 sx,7 sy,8 sz, 9 anisotropy(log10 smax/smin)
 // out_minmax[0..1] filled. bins written to g_bins (nbins).
 static float splat_param(uint32_t i, int param){
-    const float* S=g_splat.scale.data();
+    const uint16_t* S=g_splat.scale.data();
     switch(param){
         case 0: return g_splat.posop[i*4+3];
-        case 1: { float a=S[i*3],b=S[i*3+1],c=S[i*3+2]; return std::log10(std::cbrt(a*b*c)+1e-20f);}
+        case 1: { float a=h2f(S[i*3]),b=h2f(S[i*3+1]),c=h2f(S[i*3+2]); return std::log10(std::cbrt(a*b*c)+1e-20f);}
         case 2: {
-            float a=S[i*3]*S[i*3], b=S[i*3+1]*S[i*3+1], c=S[i*3+2]*S[i*3+2];
+            float sa=h2f(S[i*3]),sb=h2f(S[i*3+1]),sc=h2f(S[i*3+2]);
+            float a=sa*sa, b=sb*sb, c=sc*sc;
             float s=a+b+c; if(s<1e-30f)return 1.f;
             float p0=a/s,p1=b/s,p2=c/s; float e=0;
             if(p0>1e-12f)e-=p0*std::log(p0); if(p1>1e-12f)e-=p1*std::log(p1); if(p2>1e-12f)e-=p2*std::log(p2);
             return std::exp(e);
         }
-        case 3: return std::fmax(0.f,std::fmin(1.f,0.5f+SH_C0*g_splat.fdc[i*3+0]));
-        case 4: return std::fmax(0.f,std::fmin(1.f,0.5f+SH_C0*g_splat.fdc[i*3+1]));
-        case 5: return std::fmax(0.f,std::fmin(1.f,0.5f+SH_C0*g_splat.fdc[i*3+2]));
-        case 6: return std::log10(S[i*3]+1e-20f);
-        case 7: return std::log10(S[i*3+1]+1e-20f);
-        case 8: return std::log10(S[i*3+2]+1e-20f);
-        case 9: { float a=S[i*3],b=S[i*3+1],c=S[i*3+2]; float mx=std::fmax(a,std::fmax(b,c)),mn=std::fmin(a,std::fmin(b,c)); return std::log10(mx/(mn+1e-20f)+1e-20f);}
+        case 3: return std::fmax(0.f,std::fmin(1.f,0.5f+SH_C0*h2f(g_splat.fdc[i*3+0])));
+        case 4: return std::fmax(0.f,std::fmin(1.f,0.5f+SH_C0*h2f(g_splat.fdc[i*3+1])));
+        case 5: return std::fmax(0.f,std::fmin(1.f,0.5f+SH_C0*h2f(g_splat.fdc[i*3+2])));
+        case 6: return std::log10(h2f(S[i*3])+1e-20f);
+        case 7: return std::log10(h2f(S[i*3+1])+1e-20f);
+        case 8: return std::log10(h2f(S[i*3+2])+1e-20f);
+        case 9: { float a=h2f(S[i*3]),b=h2f(S[i*3+1]),c=h2f(S[i*3+2]); float mx=std::fmax(a,std::fmax(b,c)),mn=std::fmin(a,std::fmin(b,c)); return std::log10(mx/(mn+1e-20f)+1e-20f);}
     }
     return 0;
 }
@@ -679,9 +942,17 @@ KEEP float* ssv_mesh_histogram(int param, int nbins){
     const float* P=g_mesh.pos.data();
     std::vector<float> vals;
     if(param==0){
-        std::unordered_map<uint64_t,uint8_t> es; es.reserve(g_mesh.nt*3);
-        auto edge=[&](uint32_t a,uint32_t b){if(a>b){uint32_t t=a;a=b;b=t;}uint64_t k=((uint64_t)a<<32)|b;if(es.emplace(k,1).second){float dx=P[a*3]-P[b*3],dy=P[a*3+1]-P[b*3+1],dz=P[a*3+2]-P[b*3+2];vals.push_back(std::log10(std::sqrt(dx*dx+dy*dy+dz*dz)+1e-20f));}};
-        for(size_t f=0;f<g_mesh.nt;f++){uint32_t a=g_mesh.idx[f*3],b=g_mesh.idx[f*3+1],c=g_mesh.idx[f*3+2];edge(a,b);edge(b,c);edge(c,a);}
+        if (g_mesh.nt > 20000000u) {
+            // huge mesh: skip dedup (hash set would not fit); interior edges
+            // are counted twice but the distribution shape is unchanged
+            vals.reserve((size_t)g_mesh.nt*3);
+            auto edge=[&](uint32_t a,uint32_t b){float dx=P[a*3]-P[b*3],dy=P[a*3+1]-P[b*3+1],dz=P[a*3+2]-P[b*3+2];vals.push_back(std::log10(std::sqrt(dx*dx+dy*dy+dz*dz)+1e-20f));};
+            for(size_t f=0;f<g_mesh.nt;f++){uint32_t a=g_mesh.idx[f*3],b=g_mesh.idx[f*3+1],c=g_mesh.idx[f*3+2];edge(a,b);edge(b,c);edge(c,a);}
+        } else {
+            std::unordered_map<uint64_t,uint8_t> es; es.reserve(g_mesh.nt*3);
+            auto edge=[&](uint32_t a,uint32_t b){if(a>b){uint32_t t=a;a=b;b=t;}uint64_t k=((uint64_t)a<<32)|b;if(es.emplace(k,1).second){float dx=P[a*3]-P[b*3],dy=P[a*3+1]-P[b*3+1],dz=P[a*3+2]-P[b*3+2];vals.push_back(std::log10(std::sqrt(dx*dx+dy*dy+dz*dz)+1e-20f));}};
+            for(size_t f=0;f<g_mesh.nt;f++){uint32_t a=g_mesh.idx[f*3],b=g_mesh.idx[f*3+1],c=g_mesh.idx[f*3+2];edge(a,b);edge(b,c);edge(c,a);}
+        }
     } else if(param==1){
         vals.reserve(g_mesh.nt);
         for(size_t f=0;f<g_mesh.nt;f++){uint32_t a=g_mesh.idx[f*3],b=g_mesh.idx[f*3+1],c=g_mesh.idx[f*3+2];

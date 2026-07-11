@@ -12,15 +12,18 @@ export async function initWasm() {
   return Module;
 }
 
+// WASM pointers come back through ccall as SIGNED i32; once the heap grows
+// past 2GB they read as negative numbers — always normalize with >>> 0.
 const C = {
   parse:   (ptr,len,hint)=>Module.ccall('ssv_parse','number',['number','number','number'],[ptr,len,hint]),
-  alloc:   (n)=>Module.ccall('ssv_alloc','number',['number'],[n]),
+  alloc:   (n)=>Module.ccall('ssv_alloc','number',['number'],[n]) >>> 0,
   free:    (p)=>Module.ccall('ssv_free',null,['number'],[p]),
 };
 function call(name, ret='number', args=[], vals=[]) { return Module.ccall(name, ret, args, vals); }
-function f32(ptr, n) { return new Float32Array(Module.HEAPF32.buffer, ptr, n); }
-function u32(ptr, n) { return new Uint32Array(Module.HEAPU32.buffer, ptr, n); }
-function u8(ptr, n)  { return new Uint8Array(Module.HEAPU8.buffer, ptr, n); }
+function f32(ptr, n) { return new Float32Array(Module.HEAPF32.buffer, ptr >>> 0, n); }
+function u32(ptr, n) { return new Uint32Array(Module.HEAPU32.buffer, ptr >>> 0, n); }
+function u16(ptr, n) { return new Uint16Array(Module.HEAPU16.buffer, ptr >>> 0, n); }
+function u8(ptr, n)  { return new Uint8Array(Module.HEAPU8.buffer, ptr >>> 0, n); }
 
 // ---- stream a File into the WASM heap; returns {ptr, len} ----
 async function fileToHeap(file) {
@@ -40,6 +43,8 @@ async function fileToHeap(file) {
 }
 
 // ---- extract splat views (into heap) after a successful parse ----
+// posop is f32; quat/scale/fdc/sh are IEEE half floats (Uint16Array views,
+// uploaded to RGBA16F/RGB16F textures as HALF_FLOAT with zero conversion).
 function readSplat() {
   const count = call('ssv_splat_count');
   const shDegree = call('ssv_splat_sh_degree');
@@ -47,10 +52,10 @@ function readSplat() {
   const data = {
     count, shDegree, shRest,
     posop: f32(call('ssv_splat_posop'), count*4),
-    quat:  f32(call('ssv_splat_quat'), count*4),
-    scale: f32(call('ssv_splat_scale'), count*3),
-    fdc:   f32(call('ssv_splat_fdc'), count*3),
-    sh:    shRest>0 ? f32(call('ssv_splat_sh'), count*shRest*3) : null,
+    quat:  u16(call('ssv_splat_quat'), count*4),
+    scale: u16(call('ssv_splat_scale'), count*3),
+    fdc:   u16(call('ssv_splat_fdc'), count*3),
+    sh:    shRest>0 ? u16(call('ssv_splat_sh'), count*shRest*3) : null,
   };
   return data;
 }
@@ -67,8 +72,55 @@ function readMesh() {
   };
 }
 
+// ---- streaming parse for binary-LE PLY: the file is fed through a small
+// chunk buffer, so multi-GB models never need file + parsed data resident in
+// the heap at once. Returns null if the file should use the whole-buffer
+// fallback (not a PLY, ascii PLY, ...). ----
+async function tryStreamPly(file) {
+  const headBuf = new Uint8Array(await file.slice(0, 1<<20).arrayBuffer());
+  if (headBuf.length < 16 || headBuf[0]!==0x70 || headBuf[1]!==0x6c || headBuf[2]!==0x79) return null; // 'ply'
+  const text = new TextDecoder('latin1').decode(headBuf);
+  const m = text.indexOf('end_header');
+  if (m < 0) return null;
+  let hdrEnd = m + 'end_header'.length;
+  if (text[hdrEnd] === '\r') hdrEnd++;
+  if (text[hdrEnd] === '\n') hdrEnd++;
+  const hp = C.alloc(hdrEnd);
+  new Uint8Array(Module.HEAPU8.buffer).set(headBuf.subarray(0, hdrEnd), hp);
+  const mode = call('ssv_stream_begin','number',['number','number'],[hp, hdrEnd]);
+  C.free(hp);
+  if (mode !== 1 && mode !== 2) return null;   // unsupported for streaming -> fallback
+
+  let buf = 0, cap = 0, err = 0;
+  const feed = (bytes) => {
+    if (!bytes.length) return 0;
+    if (bytes.length > cap) { if (buf) C.free(buf); cap = bytes.length; buf = C.alloc(cap); }
+    new Uint8Array(Module.HEAPU8.buffer).set(bytes, buf);
+    return call('ssv_stream_chunk','number',['number','number'],[buf, bytes.length]);
+  };
+  err = feed(headBuf.subarray(hdrEnd));
+  if (!err && file.size > headBuf.length) {
+    const reader = file.slice(headBuf.length).stream().getReader();
+    while (!err) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      err = feed(value);
+    }
+  }
+  if (buf) C.free(buf);
+  const kind = call('ssv_stream_end');
+  if (err) throw new Error('failed to parse PLY (bad face data)');
+  if (kind === 1) return { kind:'splat', data: readSplat() };
+  if (kind === 2) return { kind:'mesh', data: readMesh() };
+  throw new Error('failed to parse PLY (truncated file?)');
+}
+
 // ---- public: parse a PLY / OBJ file via WASM ----
 async function loadNative(file, hint) {
+  if (hint !== 1) {
+    const res = await tryStreamPly(file);
+    if (res) return res;
+  }
   const { ptr, len } = await fileToHeap(file);
   const kind = C.parse(ptr, len, hint);
   C.free(ptr);
@@ -305,12 +357,17 @@ export async function loadModel(files) {
 // ---------------------------------------------------------------------------
 // Runtime queries backed by WASM (operate on the currently loaded model)
 // ---------------------------------------------------------------------------
-export function sortSplats(dx, dy, dz) {
-  const ptr = Module.ccall('ssv_sort','number',['number','number','number'],[dx,dy,dz]);
+// mode: 0 planar (perspective/ortho), 1 distance (equirect), 2 fisheye-blend
+export function sortSplats(mode, cx, cy, cz, dx, dy, dz) {
+  const ptr = Module.ccall('ssv_sort','number',
+    ['number','number','number','number','number','number','number'],
+    [mode, cx, cy, cz, dx, dy, dz]) >>> 0;
   const n = call('ssv_splat_count');
   if (!ptr || !n) return null;
   return u32(ptr, n);
 }
+// free the big SH array after its texture upload (histograms don't need it)
+export function freeSplatSh() { call('ssv_free_splat_sh', null); }
 export function splatHistogram(param, nbins) {
   const ptr = call('ssv_splat_histogram','number',['number','number'],[param,nbins]);
   const mm = f32(call('ssv_histogram_minmax'), 2);

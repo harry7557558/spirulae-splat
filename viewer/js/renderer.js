@@ -34,29 +34,51 @@ function withDefines(src, defs) {
   return src.replace(/^(#version[^\n]*\n)/, `$1${lines}\n`);
 }
 
-// choose a compact (W,H,L) layout for `count` texels within maxTex
-function layout(count, maxTex) {
+// choose a (W,H,L) layout for `count` texels. Layers are capped at 2048x2048
+// (4M texels) so uploads never need a padded full-size copy, growing toward
+// maxTex only if the hardware layer limit would be exceeded.
+function layout(count, maxTex, maxLayers = 256) {
   count = Math.max(count, 1);
-  let W = 1; while (W*W < count) W <<= 1;
-  W = Math.min(W, maxTex);
-  let H = Math.ceil(count / W);
-  let L = 1;
-  if (H > maxTex) { H = maxTex; L = Math.ceil(count / (W*H)); }
-  return { W, H, L };
+  const capW = Math.min(2048, maxTex);
+  if (count <= capW * capW) {          // small model: single compact layer
+    let W = 1; while (W*W < count) W <<= 1;
+    W = Math.min(W, maxTex);
+    return { W, H: Math.max(Math.ceil(count / W), 1), L: 1 };
+  }
+  let W = capW, H = capW;
+  while (Math.ceil(count / (W*H)) > maxLayers && (W < maxTex || H < maxTex)) {
+    if (H <= W) H = Math.min(H*2, maxTex); else W = Math.min(W*2, maxTex);
+  }
+  return { W, H, L: Math.ceil(count / (W*H)) };
 }
 
-// upload a per-splat attribute into a 2D array texture (FLOAT source data)
-function makeArrayTex(gl, data, count, comps, internalFormat, W, H, L) {
+// Allocate a (W,H,L) array texture and upload `count` texels straight from a
+// (typically WASM-heap) view — full layers, then full rows, then the row tail.
+// No padded intermediate copy: for multi-GB models that copy would double
+// peak memory. RGB16F/RGB formats upload 3-component data as-is.
+function uploadLayered(gl, view, count, comps, internalFormat, format, type, W, H, L) {
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
   gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  const total = W*H*L*comps;
-  let src = data;
-  if (data.length !== total) { src = new Float32Array(total); src.set(data.subarray(0, Math.min(data.length, total))); }
-  gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, internalFormat, W, H, L, 0, gl.RGBA, gl.FLOAT, src);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, internalFormat, W, H, L, 0, format, type, null);
+  const perLayer = W*H;
+  let done = 0, l = 0;
+  while (done < count) {
+    const inLayer = Math.min(perLayer, count - done);
+    const rows = Math.floor(inLayer / W);
+    if (rows > 0)
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, l, W, rows, 1, format, type,
+                       view.subarray(done*comps, (done + rows*W)*comps));
+    const tail = inLayer - rows*W;
+    if (tail > 0)
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, rows, l, tail, 1, 1, format, type,
+                       view.subarray((done + rows*W)*comps, (done + inLayer)*comps));
+    done += inLayer; l++;
+  }
   return tex;
 }
 
@@ -99,10 +121,11 @@ export class Renderer {
     const gl = this.gl, m = this.model;
     if (!m) return;
     if (m.type === 'splat') {
-      for (const t of [m.posT,m.rotT,m.scaleT,m.colT,m.shT]) if (t) gl.deleteTexture(t);
+      for (const t of [m.posT,m.rotT,m.scaleT,m.colT,...(m.shT||[])]) if (t) gl.deleteTexture(t);
       gl.deleteBuffer(m.indexBuf); gl.deleteVertexArray(m.vao);
     } else if (m.type === 'mesh') {
-      for (const b of [m.posB,m.nrmB,m.colB,m.uvB,m.idxB]) if (b) gl.deleteBuffer(b);
+      for (const b of [m.posB,m.nrmB,m.colB,m.uvB]) if (b) gl.deleteBuffer(b);
+      for (const p of (m.idxParts||[])) gl.deleteBuffer(p.buf);
       if (m.tex) gl.deleteTexture(m.tex);
       gl.deleteVertexArray(m.vao);
     }
@@ -110,28 +133,37 @@ export class Renderer {
   }
 
   // ---- splat model ----
+  // data.posop is f32; quat/scale/fdc/sh are half floats (Uint16Array views)
+  // and upload directly as HALF_FLOAT with no conversion or padding.
   setSplat(data) {
     this._freeModel();
     const gl = this.gl;
     const N = data.count;
-    const lay = layout(N, this.maxTex);
-    const posT = makeArrayTex(gl, data.posop, N, 4, gl.RGBA32F, lay.W, lay.H, lay.L);
-    const rotT = makeArrayTex(gl, data.quat, N, 4, gl.RGBA16F, lay.W, lay.H, lay.L);
-    // scale (3) padded to 4
-    const scale4 = new Float32Array(N*4);
-    for (let i=0;i<N;i++){ scale4[i*4]=data.scale[i*3]; scale4[i*4+1]=data.scale[i*3+1]; scale4[i*4+2]=data.scale[i*3+2]; }
-    const scaleT = makeArrayTex(gl, scale4, N, 4, gl.RGBA16F, lay.W, lay.H, lay.L);
-    const col4 = new Float32Array(N*4);
-    for (let i=0;i<N;i++){ col4[i*4]=data.fdc[i*3]; col4[i*4+1]=data.fdc[i*3+1]; col4[i*4+2]=data.fdc[i*3+2]; }
-    const colT = makeArrayTex(gl, col4, N, 4, gl.RGBA16F, lay.W, lay.H, lay.L);
+    const maxLayers = gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS);
+    const lay = layout(N, this.maxTex, maxLayers);
+    const posT   = uploadLayered(gl, data.posop, N, 4, gl.RGBA32F, gl.RGBA, gl.FLOAT,      lay.W, lay.H, lay.L);
+    const rotT   = uploadLayered(gl, data.quat,  N, 4, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, lay.W, lay.H, lay.L);
+    const scaleT = uploadLayered(gl, data.scale, N, 3, gl.RGB16F,  gl.RGB,  gl.HALF_FLOAT, lay.W, lay.H, lay.L);
+    const colT   = uploadLayered(gl, data.fdc,   N, 3, gl.RGB16F,  gl.RGB,  gl.HALF_FLOAT, lay.W, lay.H, lay.L);
 
-    let shT = null, shLay = { W:1, H:1, L:1 };
+    // SH is by far the largest attribute; split it across up to 4 textures by
+    // layer ranges so no single GL resource exceeds ~512MB (SwiftShader's
+    // Vulkan and D3D11 both cap per-resource allocations).
+    let shT = null, shLay = { W:1, H:1, L:1 }, shChunkLayers = 1;
     if (data.shRest > 0 && data.sh && data.sh.length) {
       const K = data.shRest, M = N*K;
-      shLay = layout(M, this.maxTex);
-      const sh4 = new Float32Array(M*4);
-      for (let i=0;i<M;i++){ sh4[i*4]=data.sh[i*3]; sh4[i*4+1]=data.sh[i*3+1]; sh4[i*4+2]=data.sh[i*3+2]; }
-      shT = makeArrayTex(gl, sh4, M, 4, gl.RGBA16F, shLay.W, shLay.H, shLay.L);
+      shLay = layout(M, this.maxTex, maxLayers);
+      const layerBytes = shLay.W * shLay.H * 8;          // RGB16F is stored padded
+      const nChunks = Math.min(4, Math.max(1, Math.ceil(shLay.L * layerBytes / (512 << 20))));
+      shChunkLayers = Math.ceil(shLay.L / nChunks);
+      shT = [];
+      for (let l0 = 0; l0 < shLay.L; l0 += shChunkLayers) {
+        const Lc = Math.min(shChunkLayers, shLay.L - l0);
+        const t0 = l0 * shLay.W * shLay.H;
+        const cnt = Math.min(M - t0, shLay.W * shLay.H * Lc);
+        shT.push(uploadLayered(gl, data.sh.subarray(t0*3), cnt, 3,
+                               gl.RGB16F, gl.RGB, gl.HALF_FLOAT, shLay.W, shLay.H, Lc));
+      }
     }
 
     // sorted-index instanced buffer (initialized 0..N-1)
@@ -149,7 +181,7 @@ export class Renderer {
 
     this.model = {
       type:'splat', count:N, shDegree:data.shDegree, shRest:data.shRest,
-      posT, rotT, scaleT, colT, shT, lay, shLay, indexBuf, vao,
+      posT, rotT, scaleT, colT, shT, shChunkLayers, lay, shLay, indexBuf, vao,
     };
   }
 
@@ -179,16 +211,27 @@ export class Renderer {
     if (data.normal) nrmB = mkBuf(data.normal, 1, 3);
     else { gl.disableVertexAttribArray(1); gl.vertexAttrib3f(1, 0, 0, 0); }  // zero => FS uses face normals
     if (data.color) {
-      const cf = new Float32Array(data.color.length);
-      for (let i=0;i<cf.length;i++) cf[i] = data.color[i]/255;
-      colB = mkBuf(cf, 2, 3);
+      // normalized ubyte attribute — no float conversion copy (large meshes)
+      colB = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, colB);
+      gl.bufferData(gl.ARRAY_BUFFER, data.color, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(2);
+      gl.vertexAttribPointer(2, 3, gl.UNSIGNED_BYTE, true, 0, 0);
     } else { gl.disableVertexAttribArray(2); gl.vertexAttrib3f(2, 0.78, 0.78, 0.78); }
     if (data.uv) uvB = mkBuf(data.uv, 3, 2);
     else { gl.disableVertexAttribArray(3); gl.vertexAttrib2f(3, 0, 0); }
 
-    const idxB = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxB);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data.idx, gl.STATIC_DRAW);
+    // split the index buffer into ~256MB chunks (per-resource size limits);
+    // the chunk size MUST be a multiple of 3 to not split a triangle
+    const idxParts = [];
+    const CHUNK = 63 << 20;   // indices per part (252MB), divisible by 3
+    for (let i0 = 0; i0 < data.idx.length; i0 += CHUNK) {
+      const part = data.idx.subarray(i0, Math.min(i0 + CHUNK, data.idx.length));
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, part, gl.STATIC_DRAW);
+      idxParts.push({ buf, count: part.length });
+    }
     gl.bindVertexArray(null);
 
     let tex = null, mode = 0;
@@ -204,7 +247,7 @@ export class Renderer {
       mode = 2;
     } else if (data.color) mode = 1;
 
-    this.model = { type:'mesh', nt:data.nt, vao, posB, nrmB, colB, uvB, idxB, tex, mode };
+    this.model = { type:'mesh', nt:data.nt, vao, posB, nrmB, colB, uvB, idxParts, tex, mode };
   }
 
   // ---- HDR target ----
@@ -339,9 +382,11 @@ export class Renderer {
     gl.uniform1i(u.uShRest, m.shRest);
     gl.uniform2i(u.uDim, m.lay.W, m.lay.H);
     gl.uniform2i(u.uShDim, m.shLay.W, m.shLay.H);
+    gl.uniform1i(u.uShChunkLayers, Math.max(m.shChunkLayers || 1, 1));
     const bind = (loc, tex, unit) => { gl.activeTexture(gl.TEXTURE0+unit); gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex); gl.uniform1i(loc, unit); };
     bind(u.uPos, m.posT, 0); bind(u.uRot, m.rotT, 1); bind(u.uScale, m.scaleT, 2); bind(u.uCol, m.colT, 3);
-    bind(u.uSh, m.shT || m.colT, 4);
+    const sh = m.shT || [];
+    for (let c = 0; c < 4; c++) bind(u['uSh'+c], sh[c] || sh[0] || m.colT, 4+c);
   }
 
   _drawSplats(viewR, camPos, U, intr, cameraModel, w, h, opts) {
@@ -438,7 +483,10 @@ export class Renderer {
     gl.uniform2f(u.uNearFar, near, far);
     if (m.mode === 2) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, m.tex); gl.uniform1i(u.uTex, 0); }
     gl.bindVertexArray(m.vao);
-    gl.drawElements(gl.TRIANGLES, m.nt*3, gl.UNSIGNED_INT, 0);
+    for (const p of m.idxParts) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, p.buf);
+      gl.drawElements(gl.TRIANGLES, p.count, gl.UNSIGNED_INT, 0);
+    }
     gl.bindVertexArray(null);
     gl.disable(gl.DEPTH_TEST);
   }

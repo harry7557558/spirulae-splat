@@ -1,7 +1,7 @@
 // Application entry: wires the WASM loader, WebGL renderer, camera controller,
 // and the UI panel together.
 
-import { initWasm, loadModel, sortSplats, splatHistogram, meshHistogram, meshEdgeCount, fitSphere, raycastMesh } from './wasm.js';
+import { initWasm, loadModel, sortSplats, freeSplatSh, splatHistogram, meshHistogram, meshEdgeCount, fitSphere, raycastMesh } from './wasm.js';
 import { Renderer } from './renderer.js';
 import { Camera, Nav } from './camera.js';
 import { v3, mat3 } from './linalg.js';
@@ -101,7 +101,7 @@ function loop(now) {
   if (nav.gamepadTick(dt)) dirty = true;
 
   if (dirty) {
-    if (model && model.type === 'splat') maybeSort(true);
+    if (model && model.type === 'splat') maybeSort(false);
     renderer.render(camera, opts);
     dirty = false;
   }
@@ -138,13 +138,29 @@ function forwardNative() {
   // camera forward in the model's native frame: U^T * forward_canonical
   return v3.norm(mat3.mulVec(mat3.transpose(upTransform()), camera.forward()));
 }
+function camPosNative() {
+  return mat3.mulVec(mat3.transpose(upTransform()), camera.pos);
+}
+// Sorting-depth mode (must match ssv_sort): planar depth for perspective /
+// orthographic; camera distance for equirectangular; a smooth |z|/radial
+// blend for fisheye so >180° views with splats behind the camera sort right.
+function sortMode() {
+  return camera.model === 'equirectangular' ? 1
+       : (camera.model === 'fisheye' || camera.model === 'equisolid') ? 2 : 0;
+}
+let lastSortPos = [0,0,0], lastSortMode = -1;
 function maybeSort(force) {
   if (!model || model.type !== 'splat') return;
   const d = forwardNative();
-  if (!force && v3.dot(d, lastSortDir) > Math.cos(0.06)) return;
-  const order = sortSplats(d[0], d[1], d[2]);
+  const mode = sortMode();
+  const c = camPosNative();
+  if (!force && mode === lastSortMode &&
+      v3.dot(d, lastSortDir) > Math.cos(0.06) &&
+      // nonplanar depths depend on the camera position too
+      !(mode > 0 && v3.len(v3.sub(c, lastSortPos)) > 0.01 * nav._sceneScale)) return;
+  const order = sortSplats(mode, c[0], c[1], c[2], d[0], d[1], d[2]);
   if (order) renderer.updateSplatOrder(order);
-  lastSortDir = d;
+  lastSortDir = d; lastSortPos = c; lastSortMode = mode;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +186,7 @@ async function load(files) {
     const firstModel = !model;
     if (res.kind === 'splat') {
       renderer.setSplat(res.data);
+      freeSplatSh();   // SH lives on the GPU now; drop the WASM copy
       model = { type:'splat', count: res.data.count, shDegree: res.data.shDegree };
       showSplatUI(res.data);
     } else {

@@ -137,7 +137,14 @@ uniform sampler2DArray uPos;        // (x,y,z,opacity)
 uniform sampler2DArray uRot;        // (qx,qy,qz,qw)
 uniform sampler2DArray uScale;      // (sx,sy,sz,_)  exp-scale (world)
 uniform sampler2DArray uCol;        // (r,g,b,_)     raw f_dc
-uniform sampler2DArray uSh;         // rest SH coeffs, uShRest texels/splat
+// Rest SH coeffs, uShRest texels/splat. Split by layer ranges across up to 4
+// textures: a single multi-GB texture exceeds per-resource limits of some
+// GL/Vulkan/D3D implementations. Unused chunks alias chunk 0.
+uniform sampler2DArray uSh0;
+uniform sampler2DArray uSh1;
+uniform sampler2DArray uSh2;
+uniform sampler2DArray uSh3;
+uniform int   uShChunkLayers;       // layers per chunk
 uniform ivec2 uDim;                 // layout for pos/rot/scale/col (T=1)
 uniform ivec2 uShDim;               // layout for sh texture
 uniform int   uShDegree;
@@ -165,7 +172,15 @@ ${TEX_FETCH}
 ${PROJ_GLSL}
 
 vec4 fetch1(sampler2DArray tex, int i) { return texelFetch(tex, texCoord(i, uDim), 0); }
-vec3 fetchSh(int i, int k) { return texelFetch(uSh, texCoord(i*uShRest + k, uShDim), 0).rgb; }
+vec3 fetchSh(int i, int k) {
+  ivec3 c = texCoord(i*uShRest + k, uShDim);
+  int ch = c.z / uShChunkLayers;
+  c.z -= ch * uShChunkLayers;
+  return (ch == 0) ? texelFetch(uSh0, c, 0).rgb
+       : (ch == 1) ? texelFetch(uSh1, c, 0).rgb
+       : (ch == 2) ? texelFetch(uSh2, c, 0).rgb
+       :             texelFetch(uSh3, c, 0).rgb;
+}
 
 mat3 quatToMat3(vec4 q) {
   float x=q.x,y=q.y,z=q.z,w=q.w;
