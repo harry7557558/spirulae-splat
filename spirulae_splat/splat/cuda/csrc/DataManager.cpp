@@ -1,7 +1,7 @@
 // DataManager — see DataManager.h for the public contract.
 
 #include "DataManager.h"
-#include "stb_image.h"
+#include "external/stb_image.h"
 
 #include <algorithm>
 #include <chrono>

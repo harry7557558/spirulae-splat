@@ -13,7 +13,7 @@
 #include "EngineState.h"
 
 #include "CheckpointIO.h"
-#include "npy.hpp"
+#include "external/npy.hpp"
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>

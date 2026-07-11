@@ -1,5 +1,5 @@
 // Single translation unit that materializes the stb_image implementation.
-// All other TUs `#include "stb_image.h"` to get the declarations only.
+// All other TUs `#include "external/stb_image.h"` to get the declarations only.
 
 #define STB_IMAGE_IMPLEMENTATION
 
@@ -19,7 +19,7 @@
 #  pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #endif
 
-#include "stb_image.h"
+#include "external/stb_image.h"
 
 #if defined(__GNUC__)
 #  pragma GCC diagnostic pop

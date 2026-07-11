@@ -17,7 +17,7 @@
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STBI_WRITE_NO_STDIO
-#include "../stb_image_write.h"
+#include "../external/stb_image_write.h"
 
 #include "app_generated/viewer_html.h"   // kViewerHtml[] (CMake-embedded)
 

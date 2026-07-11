@@ -203,9 +203,11 @@ if(SSPLAT_BUILD_CLI)
         spirulae_splat/splat/cuda/csrc/app/main.cpp
         spirulae_splat/splat/cuda/csrc/app/ColmapParser.cpp
         spirulae_splat/splat/cuda/csrc/app/NerfstudioParser.cpp
+        spirulae_splat/splat/cuda/csrc/app/MetashapeParser.cpp
         spirulae_splat/splat/cuda/csrc/app/DatasetCommon.cpp
         spirulae_splat/splat/cuda/csrc/app/HttpServer.cpp
         spirulae_splat/splat/cuda/csrc/app/Viewer.cpp
+        spirulae_splat/splat/cuda/csrc/external/miniz.c
     )
     find_package(CUDAToolkit REQUIRED)
     target_include_directories(ssplat-train PRIVATE

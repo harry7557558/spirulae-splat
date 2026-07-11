@@ -5,13 +5,17 @@
 // app/Json.h, PLY reader in NerfstudioParser.cpp, stb handles images in
 // the engine's DataManager).
 //
-// Two formats, mirroring modules/dataparser.py:
+// Three formats, mirroring modules/dataparser.py:
 //   parse_colmap_dataset      cameras.bin / images.bin / points3D.bin
 //                             (ColmapParser.cpp; binary only, text TODO)
 //   parse_nerfstudio_dataset  transforms.json + PLY point cloud
 //                             (NerfstudioParser.cpp)
-//   parse_dataset             auto-detect: nerfstudio first, then COLMAP
-//                             (Python probes in the same order)
+//   parse_metashape_dataset   Metashape camera-export .xml + .ply (+ optional
+//                             .psx project for filename disambiguation)
+//                             (MetashapeParser.cpp; XML via app/Xml.h, zips
+//                             via external/miniz)
+//   parse_dataset             auto-detect: nerfstudio, then COLMAP, then
+//                             Metashape (Python probes in the same order)
 //
 // Both produce a ParsedDataset of PER-INPUT cameras in the raw
 // train_frame="points" frame (poses/points as stored; the normalized-frame
@@ -104,6 +108,14 @@ struct DatasetParserConfig {
     // first image's actual resolution (dataparser.py:363-372).
     float       rescale_camera_to_fit = 0.0f;
     std::string downscale_rounding_mode = "floor";   // floor | ceil | round
+
+    // Metashape inputs (parse_metashape_dataset). Relative paths resolve
+    // against the dataset dir; empty = auto-detect a unique candidate in the
+    // dataset dir (.psx is optional -- used only to disambiguate camera ->
+    // image filename matching).
+    std::string metashape_xml;
+    std::string metashape_ply;
+    std::string metashape_psx;
 };
 
 // Everything main.cpp needs, PER-INPUT camera (length N), sorted by image
@@ -157,8 +169,18 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
                                    const DatasetParserConfig& cfg);
 ParsedDataset parse_nerfstudio_dataset(const std::string& dataset_dir,
                                        const DatasetParserConfig& cfg);
+ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
+                                      const DatasetParserConfig& cfg);
 
-// Auto-detect (format = "") or dispatch ("colmap" / "nerfstudio").
+// Nerfstudio back-end over an already-built transforms.json-shaped meta
+// (NerfstudioParser.cpp; used by the Metashape front-end).
+struct JsonValue;
+ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
+                                    const std::string& dataset_dir,
+                                    const DatasetParserConfig& cfg);
+
+// Auto-detect (format = "") or dispatch ("colmap" / "nerfstudio" /
+// "metashape").
 ParsedDataset parse_dataset(const std::string& dataset_dir,
                             const DatasetParserConfig& cfg,
                             const std::string& format);

@@ -29,15 +29,18 @@ cmake -G Ninja -B build -DSSPLAT_BUILD_CLI=ON && cmake --build build --target ss
 |---|---|
 | `main.cpp` | CLI parsing, engine setup, train loop, checkpointing. Ports of the Python managed path (see mapping below). |
 | `DatasetParser.h` | Public dataset structs: `DatasetParserConfig`, `ParsedDataset` (per-INPUT cameras), `PostSplitCameras` + `bake_post_split()` (warp expansion), parse fns, shared `dsparse::` helpers. |
-| `ColmapParser.cpp` | COLMAP **binary** reader (text TODO) + format auto-detect dispatcher (`parse_dataset`: transforms.json → nerfstudio, else COLMAP). |
-| `NerfstudioParser.cpp` | transforms.json reader + self-contained PLY point reader (ascii + binary_little_endian). |
+| `ColmapParser.cpp` | COLMAP **binary** reader (text TODO) + format auto-detect dispatcher (`parse_dataset`: transforms.json → nerfstudio, else try COLMAP, else Metashape — Python's probe order). |
+| `NerfstudioParser.cpp` | transforms.json reader + self-contained PLY point reader (ascii + binary_little_endian). Split into `parse_nerfstudio_dataset` (reads the file) and `parse_nerfstudio_meta` (consumes a transforms-shaped `JsonValue`; the Metashape front-end feeds this). |
+| `MetashapeParser.cpp` | Metashape camera-export `.xml` + `.ply` reader (port of `_parser_metashape_data` + `metashape_utils.py`): sensor intrinsics (`calibration[@class!='initial']`, p1/p2 swap, b1/b2÷f), component transforms, OpenCV→OpenGL flip, camera→image matching (photo-path suffix via the optional `.psx` project's zipped camera table, else label substring). Builds a transforms-shaped meta → `parse_nerfstudio_meta`. |
 | `DatasetCommon.cpp` | Shared bakes: normalized-frame scale, eval/val splits, aux-file discovery, geometric-median outlier filter, **`bake_post_split`** (fisheye 5-face / equirect 6-face cubemap expansion; axes MUST match `DataManager.cpp` `kAxesFisheye5`/`kAxesEquirect6`). |
 | `Json.h` | Minimal dependency-free JSON parser (handles Python `Infinity`/`NaN`). |
+| `Xml.h` | Minimal dependency-free XML parser (ElementTree subset: `attr`/`find`/`findall`/recursive `iter`; comments/PI/CDATA/DOCTYPE skipped, standard entities). Metashape nests `<camera>` in `<group>` and `<camera_ids>` in `<partition>` — the recursive `iter` is load-bearing. |
+| `Knn.h` | Exact kd-tree kNN (multi-threaded queries) for `seed_splats` scale init; replaced the hash-grid approx that degenerated to O(N²) on SfM outliers. |
 | `HttpServer.h/.cpp` | Minimal HTTP/1.0 GET server (POSIX sockets; winsock shim compiles but untested). Serial request handling — parity with Python's non-threading `HTTPServer`. |
 | `Viewer.h/.cpp` | Web-viewer server port (viewer/server.py + http_server.py + render_worker.py + annotation.py): latest-wins render worker, `get_outputs` viewer subset, `engine_blit_view` GPU annotation/colormap, stb JPEG encode. Serves the **unchanged** `viewer.html` (embedded at configure time via CMake hex; `SSPLAT_VIEWER_HTML=<path>` env overrides for dev). |
 | `generated/cli_config.h` | AUTO-GENERATED — do not edit. `SsplatConfig` struct (all 189 config fields, defaults baked), `SSPLAT_CONFIG_FIELDS(X)` X-macro flag table, `ssplat_apply_preset()`. |
 | `../../../../generate_cli_config.py` | The generator. AST-parses the Python config dataclasses (no torch import → works on fresh checkout). Run by `build_develop.bash`. |
-| `../stb_image_write.h` | vendored (public domain, v1.16) for viewer JPEG encoding. |
+| `../external/` | All vendored third-party code (marked `linguist-vendored` in `.gitattributes` along with the generated dirs): `stb_image.h`/`stb_image_write.h` (images), `npy.hpp` (checkpoints), `miniz.c/.h` (zip reading for the Metashape `.psx` camera table; compiled into `ssplat-train` only). |
 
 Debug: `SSPLAT_DUMP_CAMERAS=<path> ssplat-train ...` dumps parsed + post-split
 camera arrays as JSON and exits before engine setup — used to diff against
@@ -77,7 +80,7 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
 | `core.py:280 _build_optim_config` | in `build_step_config()` — incl. scale-agnostic mean, `scale_reg/alpha`, quantization level→bits (core.py:95), eps_tr schedule |
 | `core.py:321 _build_densify_config` | in `build_step_config()` — `noise_lr_scalar = use_revised ? 1 : alpha`, `max_world_size * alpha` |
 | `model.py:1887 engine_train_step_managed` per-step args | in `build_step_config()` — bilagrid/PPISP LRs (AdaGrad switches to constant `*_adagrad_lr`), background noise ramp / SH LRs, color-shift EMA beta |
-| `model.py:546 populate_modules` (seeding) | `seed_splats()` — min_init/cap resolution, 4-NN log scales (spatial-hash approx), logit opacity, DC from SfM color incl. gamut conversion |
+| `model.py:546 populate_modules` (seeding) | `seed_splats()` — min_init/cap resolution, 4-NN log scales (exact kd-tree, `Knn.h`), logit opacity, DC from SfM color incl. gamut conversion |
 | `model.py:823 _maybe_init_bilagrid` | static init before the loop (dataset modalities known up front); bilagrid_shape (X,Y,W) → engine (L=W,H=Y,W=X) |
 | `model.py:505-543` background + color space | `resolve_color()` + init calls; gamut matrices ported from `_wrapper_per_pixel.py:111` |
 | `trainer.py:207 _setup_cpp_data_manager` (incl. warp) | DataManager setup; batch-size policy from `datamanager.py:91` (non-stochastic); K/post arrays from `bake_post_split` |
@@ -102,6 +105,14 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
   Python — nerfstudio c2w/points/order/train_frame_scale AND the full warp
   expansion (K, offsets, 2000×viewmats/intrins/dist, input intrins) all
   match to float32 precision.
+- **Metashape parser** (2026-07-10, dye_alley 732-frame dual-fisheye rig):
+  all 732 cameras match the Python metashape path to float32 precision
+  (c2w, intrins, dist incl. p1/p2 swap + b1/b2 scaling, points, order,
+  train_frame_scale); `.psx` camera-table disambiguation exercised (labels
+  alone are ambiguous across `cam1`/`cam2`); trains end-to-end and
+  auto-detect falls through COLMAP→Metashape correctly. Deliberate
+  deviation: with multiple components we train on the **largest** (Python's
+  reversed-sort quirk picks the smallest).
 - Checkpoint cadence + `save_only_latest_checkpoint` pruning + final save.
 - **Web viewer** (2026-07-10, SharkWipf run): browser client unchanged; `/`,
   `/render` (rgb / depth / alpha / depth_normal / distortion buffers, JPEG,
@@ -139,11 +150,10 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
    `refinement_score` buffers (engine_debug_forward) not ported.
 4. Seeding fidelity: jitter repeated seed points toward a neighbor
    (model.py:550-556) instead of exact duplication; `suppress_initial_scales`
-   (model.py:584/700s); exact kNN if quality differs.
+   (model.py:584/700s). (Exact kNN: DONE, `Knn.h`.)
 5. `rescale_camera_to_fit` auto-detect (probe image resolution,
-   dataparser.py:363-372); COLMAP **text** format fallback; Metashape
-   parser (XML; the JSON/PLY parsers in Json.h / NerfstudioParser.cpp are
-   already dependency-free building blocks).
+   dataparser.py:363-372); COLMAP **text** format fallback. (Metashape
+   parser: DONE, `MetashapeParser.cpp`.)
 6. Non-default orientation/center methods (`pca`/`vertical`/`gsplat`/`focus`)
    — currently approximated as `up`/`poses` with a warning (only affects
    `train_frame_scale`).
@@ -153,7 +163,7 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
 
 `--resume`, `--use-bvh`, `--use-camera-optimizer`,
 `--deblur-training-images`, `--optimizer-offload`, `--save-eval-images`,
-`--data-format metashape`, `--cache-images gpu`,
+`--cache-images gpu`,
 `--train-frame` ≠ points, `--rescale-camera-to-fit` auto mode,
 direct-equirect (`--warp-spherical-to-pinhole 0`) with depth/normal
 supervision. `--num-downscales` warns and is ignored (Python-data-path

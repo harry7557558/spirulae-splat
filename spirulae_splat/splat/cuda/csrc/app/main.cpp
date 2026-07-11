@@ -764,8 +764,6 @@ int main(int argc, char** argv) {
         if (cfg.deblur_training_images)     not_impl("--deblur-training-images");
         if (!cfg.optimizer_offload.empty()) not_impl("--optimizer-offload");
         if (cfg.save_eval_images)           not_impl("--save-eval-images");
-        if (cfg.data_format == "metashape")
-            not_impl("--data-format metashape");
         if (cfg.cache_images == "gpu")      not_impl("--cache-images gpu");
         if (cfg.rescale_camera_to_fit < 0)  not_impl("--rescale-camera-to-fit auto-detect");
         if (cfg.num_downscales > 0)
@@ -798,6 +796,9 @@ int main(int argc, char** argv) {
         pcfg.outlier_threshold    = cfg.outlier_threshold;
         pcfg.rescale_camera_to_fit   = cfg.rescale_camera_to_fit;
         pcfg.downscale_rounding_mode = cfg.downscale_rounding_mode;
+        pcfg.metashape_xml           = cfg.metashape_xml;
+        pcfg.metashape_ply           = cfg.metashape_ply;
+        pcfg.metashape_psx           = cfg.metashape_psx;
         ParsedDataset ds = parse_dataset(cfg.data, pcfg, cfg.data_format);
 
         // relative_scale: scale the world like model.py:561 (means) +

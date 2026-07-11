@@ -269,12 +269,21 @@ std::string rel_to_image_dir(const std::string& file_path, const std::string& im
 
 ParsedDataset parse_nerfstudio_dataset(const std::string& dataset_dir,
                                        const DatasetParserConfig& cfg) {
-    fs::path root(dataset_dir);
-    fs::path transforms_path = root / "transforms.json";
+    fs::path transforms_path = fs::path(dataset_dir) / "transforms.json";
     if (!fs::exists(transforms_path))
         throw std::runtime_error("NerfstudioParser: " + transforms_path.string() +
                                  " does not exist");
     JsonValue meta = json_parse_file(transforms_path.string());
+    return parse_nerfstudio_meta(meta, dataset_dir, cfg);
+}
+
+// Shared back-end: consumes an already-built transforms.json-shaped meta.
+// The Metashape parser feeds this directly, mirroring Python's
+// _parser_metashape_data -> _parse_nerfstudio_data(transforms[0]).
+ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
+                                    const std::string& dataset_dir,
+                                    const DatasetParserConfig& cfg) {
+    fs::path root(dataset_dir);
     const JsonValue* jframes = meta.find("frames");
     if (!jframes || !jframes->is_array() || jframes->arr.empty())
         throw std::runtime_error("NerfstudioParser: no frames in transforms.json");

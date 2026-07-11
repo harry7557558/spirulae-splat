@@ -672,8 +672,11 @@ class SpirulaeSplatDataparser:
 
         # Load .xml file
         if self.config.metashape_xml is not None and not self.config.metashape_xml.exists():
-            print("WARNING:", self.config.metashape_xml, "is set but does not exist.")
-            self.config.metashape_xml = None
+            # relative paths are resolved against the dataset directory
+            self.config.metashape_xml = self.dataset_dir / self.config.metashape_xml
+            if not self.config.metashape_xml.exists():
+                print("WARNING:", self.config.metashape_xml, "is set but does not exist.")
+                self.config.metashape_xml = None
         if self.config.metashape_xml is None:
             xml_files = [self.dataset_dir / fn for fn in dataset_dir_files if fn.suffix.lower() == ".xml"]
             if len(xml_files) == 0:
@@ -682,15 +685,15 @@ class SpirulaeSplatDataparser:
                 raise ValueError("Multiple XML file found in dataset_dir. Please specify using --dataparser.metashape_xml")
             self.config.metashape_xml = xml_files[0]
             print("Using XML file found:", self.config.metashape_xml)
-        elif not self.config.metashape_xml.exists():
-            self.config.metashape_xml = self.dataset_dir / self.config.metashape_xml
         if not self.config.metashape_xml.exists():
             raise ValueError(f"XML file {self.config.metashape_xml} doesn't exist")
         if self.config.metashape_xml.suffix.lower() != ".xml":
             raise ValueError(f"XML file {self.config.metashape_xml} must have a .xml extension")
 
         # Load .ply file
-        if self.config.metashape_ply is not None and not self.config.metashape_ply.exists():
+        # kept relative to dataset_dir (joined downstream via ply_file_path)
+        if self.config.metashape_ply is not None and \
+                not (self.dataset_dir / self.config.metashape_ply).exists():
             print("WARNING:", self.config.metashape_ply, "is set but does not exist.")
             self.config.metashape_ply = None
         if self.config.metashape_ply is None:
@@ -708,8 +711,11 @@ class SpirulaeSplatDataparser:
 
         # Load .psx file
         if self.config.metashape_psx is not None and not self.config.metashape_psx.exists():
-            print("WARNING:", self.config.metashape_psx, "is set but does not exist.")
-            self.config.metashape_psx = None
+            # relative paths are resolved against the dataset directory
+            self.config.metashape_psx = self.dataset_dir / self.config.metashape_psx
+            if not self.config.metashape_psx.exists():
+                print("WARNING:", self.config.metashape_psx, "is set but does not exist.")
+                self.config.metashape_psx = None
         if self.config.metashape_psx is None:
             psx_files = [self.dataset_dir / fn for fn in dataset_dir_files if fn.suffix.lower() == ".psx"]
             if len(psx_files) > 1:
@@ -717,10 +723,6 @@ class SpirulaeSplatDataparser:
             if len(psx_files) != 0:
                 self.config.metashape_psx = psx_files[0]
                 print("Using PSX file found:", self.config.metashape_psx)
-        if self.config.metashape_psx is not None and not self.config.metashape_psx.exists():
-            self.config.metashape_psx = self.dataset_dir / self.config.metashape_psx
-            if not self.config.metashape_psx.exists():
-                raise ValueError(f"psx file {self.config.metashape_psx} doesn't exist")
         camera_dict = None
         if self.config.metashape_psx is not None:
             if self.config.metashape_psx.suffix.lower() != ".psx":

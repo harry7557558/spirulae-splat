@@ -388,7 +388,7 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
 
 // ===========================================================================
 // Format dispatch / auto-detect (dataparser.py parse():246-269, same probe
-// order: nerfstudio first, then COLMAP; Metashape unsupported).
+// order: nerfstudio first, then COLMAP, then Metashape).
 // ===========================================================================
 
 ParsedDataset parse_dataset(const std::string& dataset_dir,
@@ -396,9 +396,16 @@ ParsedDataset parse_dataset(const std::string& dataset_dir,
                             const std::string& format) {
     if (format == "colmap")     return parse_colmap_dataset(dataset_dir, cfg);
     if (format == "nerfstudio") return parse_nerfstudio_dataset(dataset_dir, cfg);
+    if (format == "metashape")  return parse_metashape_dataset(dataset_dir, cfg);
     if (!format.empty())
         throw std::runtime_error("unsupported data format: " + format);
     if (fs::exists(fs::path(dataset_dir) / "transforms.json"))
         return parse_nerfstudio_dataset(dataset_dir, cfg);
-    return parse_colmap_dataset(dataset_dir, cfg);
+    try {
+        return parse_colmap_dataset(dataset_dir, cfg);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Failed to parse COLMAP data: %s\n", e.what());
+        std::fprintf(stderr, "Attempting to parse Metashape data...\n");
+    }
+    return parse_metashape_dataset(dataset_dir, cfg);
 }
