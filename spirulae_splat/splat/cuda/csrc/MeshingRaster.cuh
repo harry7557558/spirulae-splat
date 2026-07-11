@@ -63,6 +63,14 @@ void render_evaluate_color(
     RenderContext*, const int* cam_indices, int num_cams,
     const float* d_xyz, int n, float* d_rgb);
 
+// Evaluate the observed screen-space resolution at device query points d_xyz
+// [n*3]: d_dens [n] receives max over the cameras that see the point (frustum
+// + moment-based occlusion test) of focal_px / depth, i.e. pixels per world
+// unit. Points seen by no camera get 0.
+void render_evaluate_view_density(
+    RenderContext*, const int* cam_indices, int num_cams,
+    const float* d_xyz, int n, float* d_dens);
+
 // Visibility cull. For each mesh vertex, decide whether some camera sees it: it
 // projects in-frame (project_point) AND the segment vertex->camera is not
 // blocked by a mesh triangle that does not contain the vertex (tested against an

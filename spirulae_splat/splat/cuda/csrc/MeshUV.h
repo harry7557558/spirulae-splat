@@ -34,19 +34,28 @@
 namespace meshing {
 
 struct UVAtlasConfig {
-    int   texture_size = 2048;     // square atlas resolution
+    int   texture_size = 0;        // square atlas resolution; 0 = auto (from
+                                   // the face_weight texel budget, power of
+                                   // two clamped to [1024, 8192])
     int   gutter_px = 4;           // min spacing between charts, in texels
     float chart_angle_deg = 60.0f; // max face-normal deviation within a chart
     int   max_chart_faces = 0;     // 0 = auto (clamp(nf/40, 1024, 65536))
     int   num_threads = 0;         // 0 = all hardware threads
     bool  verbose = true;
+    // Optional per-face desired texel count ([nf], positive). Texel density
+    // then follows the training views' observed resolution (weight = 3D area
+    // x (best-view focal/z)^2 = the face's projected pixel area) instead of
+    // giving every face an equal share. Empty = 1 per face.
+    std::vector<float> face_weight;
 };
 
 // Compute the UV atlas for mesh.V/F: rewrites V and F (vertices on chart
 // seams are duplicated, so UVs are per-vertex), duplicates N/C alongside, and
 // fills mesh.UV with coordinates in [0,1]^2 (origin top-left). Returns the
 // chart id per face (used by bake_texture for race-free parallelism).
-std::vector<int> build_uv_atlas(MeshData& mesh, const UVAtlasConfig& cfg);
+// cfg is non-const: texture_size == 0 is resolved to the auto-chosen
+// resolution (bake_texture must see the same cfg afterwards).
+std::vector<int> build_uv_atlas(MeshData& mesh, UVAtlasConfig& cfg);
 
 // Rasterize the atlas and bake mesh.texture (RGB8, cfg.texture_size square).
 // `colorize(xyz, n, rgb_out)` evaluates the model color at n 3D points

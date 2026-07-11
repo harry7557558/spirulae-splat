@@ -82,7 +82,7 @@ HTTP/viewer.
 
 ```bash
 ./build/ssplat-mesh <ckpt> [--data <dir>] [--format ply,obj,gltf,glb] \
-    [--color none|vertex|texture] [--texture-size 2048] [--flag value ...]
+    [--color none|vertex|texture] [--texture-size 0] [--flag value ...]
 ```
 
 - `<ckpt>` = run dir (config.json + `step-*.ckpt/`), a `*.ckpt` dir, or a

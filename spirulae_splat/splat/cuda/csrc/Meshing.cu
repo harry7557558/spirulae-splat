@@ -1138,6 +1138,21 @@ void OccupancyEvaluator::colorize(const float* verts, int n, float* rgb_out) {
     cudaFree(d_v); cudaFree(d_c);
 }
 
+void OccupancyEvaluator::view_texel_density(const float* verts, int n, float* dens_out) {
+    if (n <= 0) return;
+    if (!(impl_->use_render && !impl_->render_cam_indices.empty())) {
+        std::fill(dens_out, dens_out + n, 0.0f);
+        return;
+    }
+    float* d_v = dmalloc<float>((size_t)n*3);
+    float* d_d = dmalloc<float>(n);
+    cudaMemcpy(d_v, verts, sizeof(float)*(size_t)n*3, cudaMemcpyHostToDevice);
+    render_evaluate_view_density(impl_->rctx, impl_->render_cam_indices.data(),
+        (int)impl_->render_cam_indices.size(), d_v, n, d_d);
+    cudaMemcpy(dens_out, d_d, sizeof(float)*(size_t)n, cudaMemcpyDeviceToHost);
+    cudaFree(d_v); cudaFree(d_d);
+}
+
 bool OccupancyEvaluator::has_render_cameras() const {
     return impl_->use_render && impl_->rctx != nullptr;
 }

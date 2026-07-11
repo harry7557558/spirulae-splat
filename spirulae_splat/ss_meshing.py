@@ -267,8 +267,10 @@ def entrypoint():
                     choices=["none", "vertex", "texture"],
                     help="mesh color: none, per-vertex color, or a baked texture "
                          "atlas. PLY+texture and OBJ+vertex are rejected.")
-    ap.add_argument("--texture-size", type=int, default=2048,
-                    help="texture atlas resolution (square)")
+    ap.add_argument("--texture-size", type=int, default=0,
+                    help="texture atlas resolution (square); 0 = auto from the "
+                         "observed-detail texel budget (power of two in "
+                         "[1024, 8192])")
     ap.add_argument("--tex-gutter-px", type=int, default=4,
                     help="atlas spacing between UV charts, in texels")
     ap.add_argument("--chart-angle-deg", type=float, default=60.0,

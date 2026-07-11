@@ -96,7 +96,9 @@ struct MeshingConfig {
     // mode (PLY+texture, OBJ+vertex) are rejected up front.
     MeshColorMode color_mode = MeshColorMode::Vertex;
     std::vector<std::string> formats = {"ply"};   // any of ply obj gltf glb
-    int   texture_size = 2048;      // square texture atlas resolution
+    int   texture_size = 0;         // square texture atlas resolution;
+                                    // 0 = auto from the observed-detail texel
+                                    // budget (power of two in [1024, 8192])
     int   tex_gutter_px = 4;        // atlas spacing between charts (texels)
     float chart_angle_deg = 60.0f;  // max normal deviation within a UV chart
 };
@@ -165,6 +167,13 @@ public:
     // camera-aware compositing when cameras are present, else the static
     // density-weighted average, with a nearest-splat fallback.
     void colorize(const float* verts, int n, float* rgb_out);
+
+    // Per-point observed screen-space resolution for host points [n*3]:
+    // max over the cameras that see the point of focal_px / depth (pixels per
+    // world unit). 0 for unseen points, and 0 everywhere when the render
+    // (camera) path is unavailable. Used to budget texture-atlas texels by how
+    // much detail the training views actually captured at each surface point.
+    void view_texel_density(const float* verts, int n, float* dens_out);
 
     int num_points() const { return num_points_; }
     int num_kept()   const { return num_kept_; }

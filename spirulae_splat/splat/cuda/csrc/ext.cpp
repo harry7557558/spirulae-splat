@@ -226,7 +226,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("degenerate_angle_deg") = 2.0,
           pybind11::arg("color_mode") = std::string("vertex"),
           pybind11::arg("formats") = std::string("ply"),
-          pybind11::arg("texture_size") = 2048,
+          pybind11::arg("texture_size") = 0,  // 0 = auto
           pybind11::arg("tex_gutter_px") = 4,
           pybind11::arg("chart_angle_deg") = 60.0,
           pybind11::arg("quality_iters") = 3);

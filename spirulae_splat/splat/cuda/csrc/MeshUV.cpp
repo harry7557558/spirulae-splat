@@ -431,11 +431,14 @@ struct ChartParam {
 };
 
 // LSCM for one chart. faces index into F; local vertex order defined here.
+// target_area: desired chart UV area in texel-budget units (face count when
+// no per-face weights are in use); the chart is rescaled to it on success.
 // Returns false when even the fallback fails (degenerate chart) -- caller
 // assigns a tiny dummy square.
 static bool param_chart_lscm(
     const std::vector<int>& faces,
     const std::vector<V3>& V, const std::vector<std::array<int,3>>& F,
+    double target_area,
     ChartParam& out
 ) {
     // ---- local indexing ----
@@ -611,34 +614,62 @@ static bool param_chart_lscm(
         else out.uv[l] = {x[l], x[n + l]};
     }
 
-    // ---- validate: NaN / flipped triangles ----
+    // ---- validate: NaN / flipped / collapsed triangles ----
     // Flipped UV triangles OVERLAP in the atlas -- the bake then writes one
     // surface region's colors over another's, which shows up as patchwork.
     // So the tolerance is strict: a handful of (tiny, near-degenerate) flips
     // pass; anything more fails and the caller splits the chart and retries.
-    auto count_flips = [&](long& n_neg, long& n_pos) {
-        n_neg = n_pos = 0;
-        for (const auto& f : LF) {
-            double ax = out.uv[f[1]][0] - out.uv[f[0]][0];
-            double ay = out.uv[f[1]][1] - out.uv[f[0]][1];
-            double bx = out.uv[f[2]][0] - out.uv[f[0]][0];
-            double by = out.uv[f[2]][1] - out.uv[f[0]][1];
-            double a2 = ax * by - ay * bx;
-            if (a2 > 0) ++n_pos; else if (a2 < 0) ++n_neg;
-        }
+    // 3D face areas, for the collapse test below
+    std::vector<double> a3(nt);
+    double a3_sum = 0.0;
+    for (int t = 0; t < nt; ++t) {
+        const auto& f = LF[t];
+        V3 nn = cross(sub(vpos(f[1]), vpos(f[0])), sub(vpos(f[2]), vpos(f[0])));
+        a3[t] = 0.5 * (double)norm3(nn);
+        a3_sum += a3[t];
+    }
+    auto uv_area2 = [&](int t) {   // signed doubled UV area of face t
+        const auto& f = LF[t];
+        double ax = out.uv[f[1]][0] - out.uv[f[0]][0];
+        double ay = out.uv[f[1]][1] - out.uv[f[0]][1];
+        double bx = out.uv[f[2]][0] - out.uv[f[0]][0];
+        double by = out.uv[f[2]][1] - out.uv[f[0]][1];
+        return ax * by - ay * bx;
     };
     auto acceptable = [&]() -> bool {
         for (const auto& uv : out.uv)
             if (!std::isfinite(uv[0]) || !std::isfinite(uv[1])) return false;
-        long n_neg, n_pos;
-        count_flips(n_neg, n_pos);
+        long n_neg = 0, n_pos = 0;
+        double uv_sum = 0.0;
+        for (int t = 0; t < nt; ++t) {
+            double a2 = uv_area2(t);
+            if (a2 > 0) ++n_pos; else if (a2 < 0) ++n_neg;
+            uv_sum += 0.5 * std::fabs(a2);
+        }
         if (n_pos + n_neg == 0) return false;
         long flipped = std::min(n_pos, n_neg);
-        return flipped <= std::max<long>(1, nt / 500);
+        if (flipped > std::max<long>(1, nt / 500)) return false;
+        // collapsed faces: UV area far below the face's area-proportional
+        // share means the whole face samples ~one texel -- it bakes as a flat
+        // patch (folded planar projections were the main source: a fold maps
+        // a face at |cos| ~ 0 of its share). Conformal maps under the 60-deg
+        // chart cone keep per-face scale variation way above 2%, so a strict
+        // relative floor separates the two cleanly.
+        if (a3_sum > 0.0 && uv_sum > 0.0) {
+            long n_collapsed = 0;
+            for (int t = 0; t < nt; ++t) {
+                double share = a3[t] / a3_sum;     // conformal expectation
+                double got = 0.5 * std::fabs(uv_area2(t)) / uv_sum;
+                if (share > 1e-9 && got < 0.02 * share) ++n_collapsed;
+            }
+            if (n_collapsed > std::max<long>(2, nt / 50)) return false;
+        }
+        return true;
     };
     if (!acceptable()) {
         // ---- fallback: project on the best-fit (area-weighted normal) plane
-        //      (subject to the same acceptance test) ----
+        //      (subject to the same acceptance test -- a folded chart fails it
+        //      and is split further by the caller; single faces always pass) ----
         V3 avgN = {0, 0, 0};
         for (const auto& f : LF) {
             V3 nn = cross(sub(vpos(f[1]), vpos(f[0])), sub(vpos(f[2]), vpos(f[0])));
@@ -654,27 +685,20 @@ static bool param_chart_lscm(
         V3 tv = cross(avgN, tu);
         for (int i = 0; i < n; ++i)
             out.uv[i] = {(double)dot3(vpos(i), tu), (double)dot3(vpos(i), tv)};
-        // tiny charts always pass (bounded overlap beats infinite splitting)
-        if (nt > 8 && !acceptable()) return false;
+        if (!acceptable()) return false;
     }
 
-    // ---- normalize scale: UV area == face count ----
-    // Texel density follows MESH DENSITY, not world area: the mesh's vertex/
-    // face density is proportional to the trained splat density, i.e. to how
-    // much detail the training views actually captured. Plain world-area
+    // ---- normalize scale: UV area == target texel budget ----
+    // The target follows how much detail the training views captured (the
+    // caller sums per-face projected-pixel-area weights when cameras are
+    // available, and falls back to the face count -- itself proportional to
+    // the trained splat density -- without them). Plain world-area
     // normalization wastes most of an unbounded scene's atlas on huge distant
-    // ground/wall charts; giving every face the same expected texel budget
-    // concentrates resolution on the well-observed subject instead.
+    // ground/wall charts.
     double area2 = 0.0;
-    for (const auto& f : LF) {
-        double ax = out.uv[f[1]][0] - out.uv[f[0]][0];
-        double ay = out.uv[f[1]][1] - out.uv[f[0]][1];
-        double bx = out.uv[f[2]][0] - out.uv[f[0]][0];
-        double by = out.uv[f[2]][1] - out.uv[f[0]][1];
-        area2 += 0.5 * std::fabs(ax * by - ay * bx);
-    }
-    if (!(area2 > 1e-300)) return false;
-    double s = std::sqrt((double)nt / area2);
+    for (int t = 0; t < nt; ++t) area2 += 0.5 * std::fabs(uv_area2(t));
+    if (!(area2 > 1e-300) || !(target_area > 0.0)) return false;
+    double s = std::sqrt(target_area / area2);
     for (auto& uv : out.uv) { uv[0] *= s; uv[1] *= s; }
 
     // bbox sanity: a numerically collapsed ("line") parameterization can pass
@@ -687,7 +711,8 @@ static bool param_chart_lscm(
         y0 = std::min(y0, uv[1]); y1 = std::max(y1, uv[1]);
     }
     double ext = std::max(x1 - x0, y1 - y0);
-    if (!std::isfinite(ext) || ext > 100.0 * std::sqrt((double)nt)) return false;
+    if (!std::isfinite(ext) || ext > 100.0 * std::sqrt(std::max(target_area, 1e-4)))
+        return false;
     return true;
 }
 
@@ -771,13 +796,15 @@ static void orient_chart(ChartParam& c) {
 // strip of width `W`; returns used height. offsets receive the rect origin
 // (content, i.e. pad included).
 static double skyline_pack(std::vector<ChartParam>& charts,
-                           const std::vector<int>& order, double W, double pad,
+                           const std::vector<int>& order, double W,
+                           const std::vector<double>& pads,
                            std::vector<V2>& offsets) {
     struct Node { double x, w, y; };
     std::vector<Node> sky = {{0.0, W, 0.0}};
     double used_h = 0.0;
     offsets.resize(charts.size());
     for (int ci : order) {
+        double pad = pads[ci];
         double rw = charts[ci].w + 2 * pad, rh = charts[ci].h + 2 * pad;
         rw = std::min(rw, W);
         // find placement minimizing (y, x)
@@ -839,7 +866,7 @@ static double skyline_pack(std::vector<ChartParam>& charts,
 // ---------------------------------------------------------------------------
 // build_uv_atlas
 // ---------------------------------------------------------------------------
-std::vector<int> build_uv_atlas(MeshData& mesh, const UVAtlasConfig& cfg) {
+std::vector<int> build_uv_atlas(MeshData& mesh, UVAtlasConfig& cfg) {
     auto t0 = Clock::now();
     const size_t nf = mesh.F.size();
     const size_t nv = mesh.V.size();
@@ -849,6 +876,35 @@ std::vector<int> build_uv_atlas(MeshData& mesh, const UVAtlasConfig& cfg) {
 #ifdef _OPENMP
     if (cfg.num_threads > 0) omp_set_num_threads(cfg.num_threads);
 #endif
+
+    // per-chart texel budget (face count when no per-face weights given)
+    const bool has_fw = cfg.face_weight.size() == nf;
+    auto chart_weight = [&](const std::vector<int>& faces) -> double {
+        if (!has_fw) return (double)faces.size();
+        double s = 0.0;
+        for (int t : faces) s += std::max(cfg.face_weight[t], 0.0f);
+        return std::max(s, 1e-6);
+    };
+
+    // resolve auto texture size from the total texel budget: face weights are
+    // absolute (projected pixel area in the best view), so their sum is the
+    // resolution at which the atlas can hold everything the views captured
+    if (cfg.texture_size <= 0) {
+        double budget = 0.0;
+        if (has_fw)
+            for (float w : cfg.face_weight) budget += std::max(w, 0.0f);
+        else
+            budget = 4.0 * (double)nf;
+        // ~60% effective packing; nearest power of two in [1024, 8192]
+        // (log-space rounding: only double when the budget is past sqrt(2)x)
+        double side = std::sqrt(std::max(budget, 1.0) / 0.6);
+        int ts = 1024;
+        while ((double)ts * 1.41421356 < side && ts < 8192) ts <<= 1;
+        cfg.texture_size = ts;
+        if (cfg.verbose)
+            printf("[meshing] uv: auto texture size %d (budget %.3g texels)\n",
+                   cfg.texture_size, budget);
+    }
 
     // face normals + areas
     std::vector<V3> faceN(nf);
@@ -890,6 +946,7 @@ std::vector<int> build_uv_atlas(MeshData& mesh, const UVAtlasConfig& cfg) {
         #pragma omp parallel for schedule(dynamic, 1)
         for (int i = 0; i < np; ++i)
             ok[i] = param_chart_lscm(chart_faces[pending[i]], mesh.V, mesh.F,
+                                     chart_weight(chart_faces[pending[i]]),
                                      batch[i]) ? 1 : 0;
         std::vector<int> next;
         for (int i = 0; i < np; ++i) {
@@ -967,10 +1024,21 @@ std::vector<int> build_uv_atlas(MeshData& mesh, const UVAtlasConfig& cfg) {
         max_dim = std::max(max_dim, std::max(p.w, p.h));
     }
     if (total_area <= 0) total_area = 1e-12;
-    // estimated atlas side in UV units at ~75% efficiency; the gutter is
-    // gutter_px at that estimated texel size
+    // estimated atlas side in UV units at ~75% efficiency; pads are laid out
+    // at that estimated texel size. Tiny charts get a 1px pad -- with tens of
+    // thousands of few-texel charts, a full gutter on each would spend a
+    // large share of the atlas on spacing.
     double side_est = std::max(std::sqrt(total_area / 0.75), max_dim);
-    double pad = (double)cfg.gutter_px * side_est / (double)cfg.texture_size * 0.5;
+    double texel_uv = side_est / (double)cfg.texture_size;
+    std::vector<double> pads(ncp);
+    double max_pad = 0.0;
+    for (size_t i = 0; i < ncp; ++i) {
+        bool tiny = std::min(params[i].w, params[i].h) < 4.0 * texel_uv;
+        double px = tiny ? std::max(1.0, 0.25 * cfg.gutter_px)
+                         : 0.5 * cfg.gutter_px;
+        pads[i] = px * texel_uv;
+        max_pad = std::max(max_pad, pads[i]);
+    }
 
     std::vector<int> order(ncp);
     for (size_t i = 0; i < ncp; ++i) order[i] = (int)i;
@@ -978,18 +1046,19 @@ std::vector<int> build_uv_atlas(MeshData& mesh, const UVAtlasConfig& cfg) {
         return params[a].h > params[b].h;
     });
     std::vector<V2> offsets;
-    double W = side_est, H = skyline_pack(params, order, W, pad, offsets);
+    double W = side_est, H = skyline_pack(params, order, W, pads, offsets);
     if (H > 1.05 * W || H < 0.7 * W) {       // rebalance once toward square
-        W = std::max(std::sqrt(W * H), max_dim + 2 * pad);
-        H = skyline_pack(params, order, W, pad, offsets);
+        W = std::max(std::sqrt(W * H), max_dim + 2 * max_pad);
+        H = skyline_pack(params, order, W, pads, offsets);
     }
     double side = std::max(W, H);
     double inv_side = 1.0 / side;
-    // chart UV area == face count, so this is the average texels per face
+    // chart UV area == texel budget, so this is texels delivered per texel
+    // asked for (the budget overcommits when it exceeds the atlas)
     double px_per_unit = (double)cfg.texture_size * inv_side;
     if (cfg.verbose)
         printf("[meshing] uv: packed %zu charts, %.0f%% efficiency, "
-               "~%.2g texels/face (%.2fs)\n",
+               "%.2g texels per budget unit (%.2fs)\n",
                ncp, 100.0 * total_area / (side * side),
                px_per_unit * px_per_unit, secs_since(t2));
 

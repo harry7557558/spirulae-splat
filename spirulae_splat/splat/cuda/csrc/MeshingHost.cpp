@@ -1711,6 +1711,53 @@ bool generate_mesh(
         uvcfg.chart_angle_deg = cfg.chart_angle_deg;
         uvcfg.num_threads = cfg.num_threads;
         uvcfg.verbose = cfg.verbose;
+        // Texel budget per face = its projected pixel area in the best
+        // unoccluded training view (3D area x (focal/z)^2): texels go where
+        // the views actually captured detail. Face count alone starves
+        // smooth-but-prominent surfaces -- big splats mean big faces, yet the
+        // cameras may have seen them close-up -- and world area wastes the
+        // atlas on huge distant background faces.
+        if (ev.has_render_cameras()) {
+            const size_t nvv = mesh.V.size(), nff = mesh.F.size();
+            std::vector<float> nu(nvv, 0.0f);
+            ev.view_texel_density(&mesh.V[0][0], (int)nvv, nu.data());
+            // cap at the 99th percentile: a camera nearly touching a surface
+            // must not hog the whole atlas
+            std::vector<float> pos;
+            pos.reserve(nvv);
+            for (float v : nu) if (v > 0.0f) pos.push_back(v);
+            if (!pos.empty()) {
+                size_t q = (size_t)(0.99 * (double)(pos.size() - 1));
+                std::nth_element(pos.begin(), pos.begin() + q, pos.end());
+                const float nu_cap = std::max(pos[q], 1e-12f);
+                std::vector<float> w(nff, 0.0f);
+                std::vector<float> wpos;
+                wpos.reserve(nff);
+                for (size_t t = 0; t < nff; ++t) {
+                    const auto& f = mesh.F[t];
+                    const auto &A = mesh.V[f[0]], &B = mesh.V[f[1]], &C = mesh.V[f[2]];
+                    float e1[3] = {B[0]-A[0], B[1]-A[1], B[2]-A[2]};
+                    float e2[3] = {C[0]-A[0], C[1]-A[1], C[2]-A[2]};
+                    float cx = e1[1]*e2[2] - e1[2]*e2[1];
+                    float cy = e1[2]*e2[0] - e1[0]*e2[2];
+                    float cz = e1[0]*e2[1] - e1[1]*e2[0];
+                    float a3d = 0.5f * std::sqrt(cx*cx + cy*cy + cz*cz);
+                    float nf_ = std::min(std::max({nu[f[0]], nu[f[1]], nu[f[2]]}),
+                                         nu_cap);
+                    w[t] = a3d * nf_ * nf_;
+                    if (w[t] > 0.0f) wpos.push_back(w[t]);
+                }
+                // unseen faces (interior, undercarriage) still get a small
+                // share so they don't collapse to a single texel
+                if (!wpos.empty()) {
+                    size_t m = wpos.size() / 2;
+                    std::nth_element(wpos.begin(), wpos.begin() + m, wpos.end());
+                    const float floor_w = 0.05f * std::max(wpos[m], 1e-12f);
+                    for (auto& v : w) v = std::max(v, floor_w);
+                    uvcfg.face_weight = std::move(w);
+                }
+            }
+        }
         std::vector<int> face_chart = build_uv_atlas(mesh, uvcfg);
         bake_texture(mesh, face_chart, uvcfg,
                      [&](const float* xyz, int n, float* rgb) {

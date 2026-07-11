@@ -19,6 +19,13 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
+
 #include "external/stb_image_write.h"
 
 namespace meshing {
@@ -34,6 +41,20 @@ namespace {
 std::string basename_of(const std::string& path) {
     size_t p = path.find_last_of("/\\");
     return p == std::string::npos ? path : path.substr(p + 1);
+}
+
+// Create every missing directory prefix of `path` (a file path). Failures are
+// ignored here; the subsequent fopen reports real problems with context.
+void ensure_parent_dirs(const std::string& path) {
+    for (size_t i = 1; i < path.size(); ++i) {
+        if (path[i] != '/' && path[i] != '\\') continue;
+        std::string dir = path.substr(0, i);
+#ifdef _WIN32
+        _mkdir(dir.c_str());
+#else
+        mkdir(dir.c_str(), 0755);
+#endif
+    }
 }
 
 std::ofstream open_binary(const std::string& path) {
@@ -473,6 +494,7 @@ void write_mesh(const MeshData& mesh, MeshColorMode mode,
     std::string err = check_export_support(spec, mode);
     if (!err.empty()) fail(err);
     check_mesh(mesh, mode);
+    ensure_parent_dirs(base_path);
 
     const std::string& fmt = spec.fmt;
     if (fmt == "ply")       write_ply_file(mesh, mode, base_path);

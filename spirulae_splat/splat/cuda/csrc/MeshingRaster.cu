@@ -411,13 +411,25 @@ __global__ void sample_color_kernel(
                        xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
         return;
     float occ;
-    if (!occ_bilinear(moments, W, H, u, v, z, occ))
+    // Sample the occlusion slightly IN FRONT of the point (2% of depth):
+    // extracted surfaces often sit under a skin of low-opacity splat fuzz
+    // whose own alpha would otherwise read as "occluded" and reject every
+    // view of a perfectly visible surface (the pixel color DOES show this
+    // surface, through the fuzz). True foreground occluders (a fender in
+    // front of a wheel) sit much farther than 2% in front and still reject.
+    if (!occ_bilinear(moments, W, H, u, v, 0.98f * z, occ))
         return;  // abstain (no confident surface from this view)
-    float w = 1.0f - occ;            // transmittance until the point
-    if (w <= 1e-4f) return;
+    float w = 1.0f - occ;            // transmittance until just before the point
+    // The rendered pixel color is the FULL composite along the ray: a fraction
+    // (1-w) of it comes from splats in FRONT of the point. A linear weight let
+    // half-occluded views paint occluder colors onto the surface behind them
+    // (wheels picked up fender/body colors), so views that barely see the
+    // point are dropped and the rest sharpened (w^4) to favor clear views.
+    if (w <= 0.15f) return;
+    float w4 = w * w; w4 *= w4;
     float3 c = bilinear3(rgb, W, H, u, v);
-    num[i].x += w * c.x; num[i].y += w * c.y; num[i].z += w * c.z;
-    den[i] += w;
+    num[i].x += w4 * c.x; num[i].y += w4 * c.y; num[i].z += w4 * c.z;
+    den[i] += w4;
 }
 
 __global__ void finalize_color_kernel(
@@ -427,22 +439,16 @@ __global__ void finalize_color_kernel(
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     float d = den[i];
-#if 0
-    if (d > 1e-6f) {
+    // No view sees the point with meaningful transmittance (fully occluded /
+    // interior): mark for colorize_fallback_kernel (static density-weighted
+    // color) instead of averaging a handful of contaminated samples.
+    if (d > 1e-4f) {
         rgb[3*i+0] = num[i].x / d;
         rgb[3*i+1] = num[i].y / d;
         rgb[3*i+2] = num[i].z / d;
     } else {
-        // picked up by colorize_fallback_kernel
-        rgb[3*i+0] = -1.0f; rgb[3*i+1] = -1.0f; rgb[3*i+2] = -1.0f;  // fallback
+        rgb[3*i+0] = -1.0f; rgb[3*i+1] = -1.0f; rgb[3*i+2] = -1.0f;
     }
-#else
-    constexpr float e = 1e-8f;
-    d = fmaxf(d, 0.0f) + e;
-    rgb[3*i+0] = (num[i].x + e) / d;
-    rgb[3*i+1] = (num[i].y + e) / d;
-    rgb[3*i+2] = (num[i].z + e) / d;
-#endif
 }
 
 } // namespace
@@ -479,6 +485,66 @@ void render_evaluate_color(
     CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
 
     cudaFree(d_moments); cudaFree(d_rgbimg); cudaFree(d_num); cudaFree(d_den);
+}
+
+
+// ---------------------------------------------------------------------------
+// View texel density (max over the cameras that see the point of focal/z --
+// the screen-space resolution, in pixels per world unit, at which the training
+// views observed the surface there)
+// ---------------------------------------------------------------------------
+namespace {
+
+__global__ void sample_view_density_kernel(
+    const float* __restrict__ xyz, int n,
+    const float* __restrict__ viewmat, const float* __restrict__ intrin,
+    const float* __restrict__ dist, CameraModelType model,
+    const float3* __restrict__ moments, int W, int H,
+    float* __restrict__ dens
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float u, v, z;
+    if (!project_point(viewmat, intrin, dist, model, W, H,
+                       xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
+        return;
+    float occ;
+    // same front-shifted sample as the color path: tolerate surface fuzz
+    if (!occ_bilinear(moments, W, H, u, v, 0.98f * z, occ))
+        return;
+    if (1.0f - occ < 0.25f) return;  // (mostly) occluded from this view
+    float f = sqrtf(fmaxf(intrin[0] * intrin[1], 0.0f));
+    float nu = f / fmaxf(z, 1e-9f);
+    if (nu > dens[i]) dens[i] = nu;
+}
+
+} // namespace
+
+void render_evaluate_view_density(
+    RenderContext* ctx, const int* cam_indices, int num_cams,
+    const float* d_xyz, int n, float* d_dens
+) {
+    if (n <= 0) return;
+    const size_t npix = (size_t)ctx->Wmax * ctx->Hmax;
+    float3* d_moments = nullptr;
+    CHECK_DEVICE_ERROR(cudaMalloc(&d_moments, npix * sizeof(float3)));
+    CHECK_DEVICE_ERROR(cudaMemset(d_dens, 0, (size_t)n * sizeof(float)));
+
+    const int TPB = 256;
+    int blocks = (n + TPB - 1) / TPB;
+    for (int ci = 0; ci < num_cams; ++ci) {
+        int cam = cam_indices[ci];
+        render_one(ctx, cam, d_moments, nullptr);
+        sample_view_density_kernel<<<blocks, TPB>>>(
+            d_xyz, n,
+            ctx->d_viewmats + (size_t)cam * 16, ctx->d_intrins + (size_t)cam * 4,
+            ctx->d_dist + (size_t)cam * 10, cmt(ctx->model),
+            d_moments, ctx->Ws[cam], ctx->Hs[cam],
+            d_dens);
+        CHECK_DEVICE_ERROR(cudaGetLastError());
+    }
+    CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
+    cudaFree(d_moments);
 }
 
 
