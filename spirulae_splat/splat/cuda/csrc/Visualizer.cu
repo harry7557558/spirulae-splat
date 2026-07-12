@@ -1172,6 +1172,13 @@ void engine_viewer_init(
     v.initialized = true;
 }
 
+void engine_viewer_set_camera_size(float camera_size) {
+    std::lock_guard<std::mutex> _vlock(viewer_mutex());
+    auto& v = engine().viewer;
+    if (!v.initialized) return;
+    v.camera_size = camera_size;
+}
+
 
 // ---------------------------------------------------------------------------
 // Thumbnail update: gather a downscaled RGBA per post-camera from the

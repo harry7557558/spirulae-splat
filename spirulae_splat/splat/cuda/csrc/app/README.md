@@ -53,7 +53,7 @@ equivalent from a vcvars64 shell:
 
 ## Native GUI (`ssplat-gui`, Phase 2)
 
-Dear ImGui + GLFW + OpenGL 3.2-core desktop app ("Spirulae Splat Studio").
+Dear ImGui + GLFW + OpenGL 3.2-core desktop app ("Spirulae Splat").
 Off by default; enable with:
 
 ```bash
@@ -81,19 +81,32 @@ GUI (Basic Options) for remote monitoring.
 | File | Role |
 |---|---|
 | `gui/GuiMain.cpp` | GLFW window + GL 3.2 core context + ImGui bootstrap, dark style, DPI scale, frame loop, close-confirm flow. |
-| `gui/GuiApp.h/.cpp` | Screens (Home / COLMAP / Train), layout, wiring; recents + tool paths persisted to `~/.config/spirulae-splat/gui.conf` (`%APPDATA%` on Windows). |
+| `gui/GuiApp.h/.cpp` | Screens (Home / COLMAP / Train), layout, wiring; recents + tool paths persisted to `~/.config/spirulae-splat/gui.conf` (`%APPDATA%` on Windows). Session-destroying navigation (Home / open-dataset / quit during training) goes through a stop-and-save confirm modal with a deferred pending-action; output folder defaults to `<dataset>/outputs` with a Browse button + resolved-run-path preview. Editing any dataset-parsing option (dataparser group via the generated `parse_settings_equal`, plus warp/load/scale flags) marks the dataset dirty and auto-reloads it once the edited widget loses focus. NOTE: `open_dataset`/`add_recent` take `std::string` **by value** — callers pass `_recents` elements and `add_recent` mutates that vector (a const& dangles; this was a real bug that corrupted the path to ""). |
 | `gui/ConfigUI.h/.cpp` | The X-macro-generated options editor. Zero per-field special cases (only `data` is hidden, managed by the dataset picker). |
-| `gui/ViewportPanel.h/.cpp` | Native viewport: RenderWorker client + GL texture upload; turntable navigation matching viewer.html (Z-up normalized frame; orbit/pan/zoom), buffer picker, camera-frusta overlay, render-scale + live-refresh throttle (0.15 s) so rendering steals little step time. Initial framing: seed-point centroid target, median camera distance, camera-centroid direction. |
+| `gui/ViewportPanel.h/.cpp` | Native viewport with two backends behind the browser-identical NavCamera navigation: **Preview** = GL point cloud + frusta as soon as the dataset parses (PreviewRenderer), **Engine** = RenderWorker once training starts, with all four web-viewer camera models (Pinhole / Fisheye-equidistant / Fisheye-equisolid / Equirectangular; `fovToIntrinsics` + per-model FOV ranges ported from viewer.html). Buffer picker, camera-frusta overlay with a live **frustum-size slider** (`ViewRequest::cam_size_scale`), render-scale + live-refresh throttle (0.15 s). Initial framing: seed-point centroid target, median camera distance, camera-centroid direction. |
+| `gui/NavCamera.h/.cpp` | 1:1 port of viewer.html's `cam`/`quat`/`Nav`: quaternion camera, four modes (Turntable / Trackball / First Person / Free Fly), same sensitivities and mappings for **mouse** (LMB orbit-or-look, RMB/MMB/Shift pan, wheel dolly), **keyboard** (WASD/arrows, E/Q up-down or Fly-roll, active while the pointer is over the viewport), **gamepad** (GLFW gamepad API: left stick move, right stick look, triggers up-down/roll -- including the browser quirk that triggers only translate while the left stick is deflected), and **touch** via the OS's pointer/gesture emulation (single finger = orbit; system pinch/pan gestures arrive as wheel; GLFW exposes no raw multitouch). Keep in sync with viewer.html's Nav. The initial pose replicates `cam.reset()` verbatim (target = client-frame origin = the CAMERA-POSE center via center_method="poses", pos=[0,0,1], orbit(0,-250)) -- verified pixel-equivalent against a `/render` fetch from ssplat-train's web viewer at the client's default c2w. `SSPLAT_NAV_DEBUG=1` logs per-frame mouse-drag nav decisions (button/pan/target/pos) to stderr. |
+| `gui/PreviewRenderer.h/.cpp` + `gui/GlLoader.h/.cpp` | Offscreen-FBO GL renderer for the dataset preview (sparse points, vertex-colored + per-input camera frusta as center+offset lines scaled by a uniform, edges subdivided 8x so they curve under distortion). The vertex shader implements the same camera models as the engine viewer (pinhole / fisheye-equidistant / equisolid / equirectangular; `u_s` = fx/(W/2), fy/(H/2), linear view-distance depth), so the preview -> engine transition at training start keeps pose AND intrinsics with no jump (ViewportPanel `maybe_frame` re-frames only when the dataset identity changes; navigation done in the preview carries into training, verified pixel-aligned at fisheye 333°). GlLoader = minimal namespaced (`glx::`) proc loader via glfwGetProcAddress; no GLEW/GLAD. |
 | `gui/TrainRunner.h/.cpp` | TrainerSession on a worker thread: phases Idle→Loading→Ready→Preparing→Training→Done, pause/stop, metric history for plots, optional ViewerServer. Lifetime rule: viewport detaches before the session is replaced. |
-| `gui/ColmapRunner.h/.cpp` | images/video → COLMAP dataset: ffmpeg frame extraction (video), feature_extractor → exhaustive/sequential matcher (auto: sequential for video / >400 images) → mapper, quality presets, GPU toggle. Photo-folder inputs are indexed **in place** (no copy) — the absolute image dir is recorded in `<ws>/ssplat_dataset.json` and passed as `image_dir` (parsers join `dataset_dir / image_dir`, absolute wins). |
+| `gui/ColmapRunner.h/.cpp` | images/video → COLMAP dataset. Requires **COLMAP >= 4.x** (version probed from `colmap help`; 3.x-era `use_gpu` flags are gone — flags follow `scripts/run_colmap.bash`): feature_extractor (camera model = any the parser supports; single camera / per-folder / per-image) → exhaustive / sequential (overlap + **quadratic overlap**, on by default) / **vocab-tree** matcher (tree auto-found near the workspace/cache or downloaded via curl into `~/.cache/spirulae-splat`; auto picks sequential for video, exhaustive <=400 photos, vocab tree beyond) → mapper (`ba_use_gpu`) → optional bundle_adjuster refinement. Optional **AI masking**: the CMake-embedded `scripts/mask.py` runs via external Python (lang-segment-anything / SAM-3), masks feed `ImageReader.mask_path` + the trainer's masks dir; missing-package output is detected and surfaced with install instructions. Photo-folder inputs are indexed **in place**, recursively (no copy) — the absolute image dir is recorded in `<ws>/ssplat_dataset.json`. Multi-track `.insv` videos split into `images/cam<N>/` + per-folder cameras. The mapper may emit several partial models — the trainers auto-pick the largest (below). |
+| `gui/FrameSelect.h/.cpp` | Blur-aware video frame selection (multithreaded C++ port of `scripts/extract_frames.py`): ffmpeg extracts candidates at (target fps x sharpness window) with `-nostdin` (**without it ffmpeg can hang reading stdin** — the "stuck at ffmpeg" bug), then the sharpest per window is kept (variance of 3x3 Laplacian on mean-subtracted 512^2 gray, scored across all cores). |
 | `gui/FileDialog.h/.cpp` | Built-in ImGui file/folder browser (no native-dialog dep; works over WSLg/remote X). |
-| `gui/Subprocess.h/.cpp` | Cross-platform subprocess with merged stdout/stderr line streaming + kill-on-cancel (fork/execvp + process group on POSIX, CreateProcess + pipe on Windows). |
+| `gui/Subprocess.h/.cpp` | Cross-platform subprocess with merged stdout/stderr line streaming + kill-on-cancel (fork/execvp + process group on POSIX, CreateProcess + pipe on Windows). Bare `\r` ends a log line (ffmpeg/curl progress). |
 
-Verified 2026-07-12 (WSLg, RTX 5070): full E2E on mipnerf360/garden driven
-via synthetic X input — open dataset → preview parse → set steps/downscale →
-train 600 steps (8 ms/step incl. live viewport) → orbit/zoom/depth-buffer/
-frusta overlay → checkpoint saved → Train Again state. CLI re-verified
-unchanged after the TrainerCore/RenderWorker extraction (see below).
+The frustum-size control also reaches the web viewer: viewer.html gained a
+"Camera Size" slider sending `camera_size_scale` per /render; the render
+worker applies it via the new `engine_viewer_set_camera_size()` (Engine.h /
+Visualizer.cu), which updates the scale without re-running
+`engine_viewer_init` (that would wipe the thumbnail cache).
+
+Verified 2026-07-12 (WSLg, RTX 5070, COLMAP 4.2, driven via synthetic X
+input): garden → dataset preview (points + frusta + size slider) → train
+400-600 steps (8-24 ms/step incl. live viewport) → orbit/zoom/depth-buffer/
+frusta-with-thumbnails → checkpoint saved → Train Again; Home-during-training
+confirm modal; video (60-frame test clip) → ffmpeg candidates → sharpness
+selection → COLMAP sequential → mapper → BA refine → "Open in Trainer" →
+trained; `mask.py` invocation verified against a real lang-sam install
+(24 masks). CLI re-verified unchanged after the TrainerCore/RenderWorker
+extraction (see below).
 
 ## Files
 
@@ -103,7 +116,7 @@ unchanged after the TrainerCore/RenderWorker extraction (see below).
 | `TrainerCore.h/.cpp` | **Shared trainer session** (extracted from main.cpp 2026-07-12, code moved verbatim): color-space resolution, `seed_splats`, `build_step_config`/`build_loss_weights`, `scheduled_lr`, `save_config_json`, and `TrainerSession` = check_config / load_dataset / setup_engine / train(callbacks) / save_checkpoint / progress_json + the engine mutex + pause/stop/render-pending atomics + `make_viewer_config/hooks`. Used by both `ssplat-train` and `ssplat-gui`. |
 | `RenderWorker.h/.cpp` | **Shared interactive render path** (extracted from Viewer.cpp 2026-07-12): latest-wins worker thread, c2w remap + engine render + display transforms + `engine_blit_view`, returns RGB8; `viewer_upload_cameras()`. Viewer.cpp adds HTTP+JPEG on top; the GUI viewport uploads to a GL texture. |
 | `DatasetParser.h` | Public dataset structs: `DatasetParserConfig`, `ParsedDataset` (per-INPUT cameras), `PostSplitCameras` + `bake_post_split()` (warp expansion), parse fns, shared `dsparse::` helpers. |
-| `ColmapParser.cpp` | COLMAP **binary** reader (text TODO) + format auto-detect dispatcher (`parse_dataset`: transforms.json → nerfstudio, else try COLMAP, else Metashape — Python's probe order). |
+| `ColmapParser.cpp` | COLMAP binary + text reader + format auto-detect dispatcher (`parse_dataset`: transforms.json → nerfstudio, else try COLMAP, else Metashape — Python's probe order). When `colmap_recon_dir` is not set, models under `sparse/*` and `colmap/sparse/*` are enumerated and the one with the most registered images wins (sparse/0 is NOT necessarily the largest; count read cheaply from the images.bin header / images.txt comment). Python's `dataparser.py _parse_colmap_data` does the same. |
 | `NerfstudioParser.cpp` | transforms.json reader + self-contained PLY point reader (ascii + binary_little_endian). Split into `parse_nerfstudio_dataset` (reads the file) and `parse_nerfstudio_meta` (consumes a transforms-shaped `JsonValue`; the Metashape front-end feeds this). |
 | `MetashapeParser.cpp` | Metashape camera-export `.xml` + `.ply` reader (port of `_parser_metashape_data` + `metashape_utils.py`): sensor intrinsics (`calibration[@class!='initial']`, p1/p2 swap, b1/b2÷f), component transforms, OpenCV→OpenGL flip, camera→image matching (photo-path suffix via the optional `.psx` project's zipped camera table, else label substring). Builds a transforms-shaped meta → `parse_nerfstudio_meta`. |
 | `DatasetCommon.cpp` | Shared bakes: normalized-frame scale, eval/val splits, aux-file discovery, geometric-median outlier filter, **`bake_post_split`** (fisheye 5-face / equirect 6-face cubemap expansion; axes MUST match `DataManager.cpp` `kAxesFisheye5`/`kAxesEquirect6`). |

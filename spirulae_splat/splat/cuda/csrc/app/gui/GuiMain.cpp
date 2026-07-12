@@ -1,4 +1,4 @@
-// GuiMain.cpp -- Spirulae Splat Studio entry point: GLFW window + OpenGL 3.2
+// GuiMain.cpp -- Spirulae Splat entry point: GLFW window + OpenGL 3.2
 // core context (lowest version that also satisfies macOS) + Dear ImGui
 // bootstrap, then hands every frame to gui::GuiApp.
 
@@ -65,7 +65,7 @@ int main(int, char**) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(1600, 950, "Spirulae Splat Studio",
+    GLFWwindow* window = glfwCreateWindow(1600, 950, "Spirulae Splat",
                                           nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "error: failed to create window / GL context\n");

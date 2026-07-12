@@ -228,7 +228,7 @@ struct SsplatConfig {
     X(disable_viewer, "disable_viewer", "disable_viewer", "trainer", "", "If True, ss_trainer skips starting the viewer thread. Used by ss_benchmark so each scene runs without competing for the viewer port.") \
     X(keep_viewer_alive, "keep_viewer_alive", "keep_viewer_alive", "trainer", "", "If True, ss_trainer keeps the process (and thus the viewer) running after training + eval finish, so the result can still be inspected in the browser. Press Ctrl-C to exit. Ignored when disable_viewer=True.") \
     X(data_format, "data_format", "data_format", "dataparser", "colmap|nerfstudio|metashape|none", "Data format, leave None to auto detect") \
-    X(colmap_recon_dir, "colmap_recon_dir", "colmap_recon_dir", "dataparser", "none", "Path to COLMAP reconstruction relative to dataset directory (e.g. sparse/0). Will auto detect if not specified.") \
+    X(colmap_recon_dir, "colmap_recon_dir", "colmap_recon_dir", "dataparser", "none", "Path to COLMAP reconstruction relative to dataset directory (e.g. sparse/0). Will auto detect if not specified (picking the model with the most registered images when several exist).") \
     X(image_dir, "image_dir", "image_dir", "dataparser", "", "Path to images relative to dataset directory, used for COLMAP and Metashape datasets") \
     X(mask_dir, "mask_dir", "mask_dir", "dataparser", "", "Path to masks relative to dataset directory, used for COLMAP and Metashape datasets") \
     X(depth_dir, "depth_dir", "depth_dir", "dataparser", "", "Path to depth maps relative to dataset directory, used for COLMAP and Metashape datasets") \

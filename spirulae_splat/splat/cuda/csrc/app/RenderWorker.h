@@ -47,6 +47,10 @@ struct ViewerRenderConfig {
     // Viewer-client c2w remap into the training frame (trainer.py:557-576).
     float train_frame_scale = 1.0f;
     std::array<float, 16> train_to_normalized{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    // Unscaled frustum size from the camera-kNN heuristic (the return value
+    // of viewer_upload_cameras). Multiplied by ViewRequest::cam_size_scale
+    // per render; 0 disables live frustum-size updates.
+    float base_camera_size = 0.0f;
 };
 
 struct ViewerHooks {
@@ -74,6 +78,9 @@ struct ViewRequest {
     std::string model = "PINHOLE";
     std::string key = "rgb";
     bool show_cams = false;
+    // Frustum-size multiplier applied to cfg.base_camera_size when
+    // show_cams is on (user-facing "camera size" slider).
+    float cam_size_scale = 1.0f;
 };
 
 struct ViewResult {
@@ -112,5 +119,11 @@ private:
 // One-shot upload of the post-split camera table for frustum annotation +
 // thumbnails (annotation.ensure_viewer_initialized port: engine_viewer_init
 // + the camera_size kNN heuristic). Call after engine_setup_data_manager,
-// before rendering with show_cams.
-void viewer_upload_cameras(const PostSplitCameras& post);
+// before rendering with show_cams. Returns the kNN-based camera size, for
+// ViewerRenderConfig::base_camera_size.
+float viewer_upload_cameras(const PostSplitCameras& post);
+
+// The kNN camera-size heuristic on its own (0.2 * median 4-NN camera
+// distance), for renderers that draw frusta without the engine (the GUI's
+// dataset preview).
+float viewer_camera_size_heuristic(const PostSplitCameras& post);

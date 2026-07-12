@@ -406,6 +406,20 @@ if(SSPLAT_BUILD_GUI)
     target_link_libraries(imgui_glfw PUBLIC glfw)
     set_property(TARGET imgui_glfw PROPERTY CXX_STANDARD 17)
 
+    # Embed scripts/mask.py (AI masking helper, run via external Python) so
+    # the exe is self-contained. Same mechanism as the viewer.html embed.
+    set(SSPLAT_MASK_PY ${CMAKE_CURRENT_SOURCE_DIR}/scripts/mask.py)
+    set(SSPLAT_MASK_PY_HDR ${CMAKE_BINARY_DIR}/app_generated/mask_py.h)
+    file(READ ${SSPLAT_MASK_PY} _ssplat_mp HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _ssplat_mp_bytes ${_ssplat_mp})
+    file(WRITE ${SSPLAT_MASK_PY_HDR}
+        "#pragma once\n"
+        "// AUTO-GENERATED from scripts/mask.py -- do not edit.\n"
+        "#include <cstddef>\n"
+        "inline const unsigned char kMaskPy[] = {${_ssplat_mp_bytes}};\n"
+        "inline const size_t kMaskPySize = sizeof(kMaskPy);\n")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${SSPLAT_MASK_PY})
+
     add_executable(ssplat-gui
         spirulae_splat/splat/cuda/csrc/app/gui/GuiMain.cpp
         spirulae_splat/splat/cuda/csrc/app/gui/GuiApp.cpp
@@ -413,7 +427,11 @@ if(SSPLAT_BUILD_GUI)
         spirulae_splat/splat/cuda/csrc/app/gui/FileDialog.cpp
         spirulae_splat/splat/cuda/csrc/app/gui/Subprocess.cpp
         spirulae_splat/splat/cuda/csrc/app/gui/ColmapRunner.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/FrameSelect.cpp
         spirulae_splat/splat/cuda/csrc/app/gui/TrainRunner.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/GlLoader.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/NavCamera.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/PreviewRenderer.cpp
         spirulae_splat/splat/cuda/csrc/app/gui/ViewportPanel.cpp
         spirulae_splat/splat/cuda/csrc/app/TrainerCore.cpp
         spirulae_splat/splat/cuda/csrc/app/RenderWorker.cpp

@@ -4,51 +4,69 @@
 
 #include "../TrainerCore.h"
 #include "ConfigUI.h"   // help_tooltip_on_hover
+#include "GlLoader.h"   // GL types + 1.1 entry points
 
 #include "imgui.h"
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <GL/gl.h>
-#elif defined(__APPLE__)
-#define GL_SILENCE_DEPRECATION
-#include <OpenGL/gl.h>
-#else
-#include <GL/gl.h>
-#endif
-
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace gui {
 
 namespace {
 
-void v3_normalize(float v[3]) {
-    float n = std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-    if (n < 1e-12f) { v[0] = 1; v[1] = 0; v[2] = 0; return; }
-    v[0] /= n; v[1] /= n; v[2] /= n;
-}
-void v3_cross(const float a[3], const float b[3], float out[3]) {
-    out[0] = a[1]*b[2] - a[2]*b[1];
-    out[1] = a[2]*b[0] - a[0]*b[2];
-    out[2] = a[0]*b[1] - a[1]*b[0];
+// Camera models offered by the web client (viewer.html #camera-model), with
+// per-model FOV ranges (viewer.html FOV_RANGE; EQUIRECTANGULAR is a fixed
+// full-sphere view with no FOV).
+struct ViewerCamModel {
+    const char* name;      // engine camera_model string
+    const char* label;
+    float fov_min, fov_max;
+};
+const ViewerCamModel kViewerCameraModels[] = {
+    {"PINHOLE",         "Pinhole",                 10, 150},
+    {"FISHEYE",         "Fisheye (Equidistant)",   10, 360},
+    {"EQUISOLID",       "Fisheye (Equisolid)",     10, 360},
+    {"EQUIRECTANGULAR", "Equirectangular (360\xc2\xb0)", 0, 0},
+};
+
+// fovToIntrinsics port: inverting the actual projection (not the pinhole tan
+// map) makes the slider a true field of view for the fisheye models.
+void fov_to_intrinsics(float fov_deg, int w, int h, const char* model,
+                       float& fx, float& fy) {
+    float fov_rad = fov_deg * 3.14159265358979f / 180.0f;
+    if (!std::strcmp(model, "FISHEYE"))
+        fx = (w / 2.0f) / (fov_rad / 2.0f);                     // r = f*theta
+    else if (!std::strcmp(model, "EQUISOLID"))
+        fx = (w / 2.0f) / (2.0f * std::sin(fov_rad / 4.0f));    // r = 2f sin(theta/2)
+    else
+        fx = (w / 2.0f) / std::tan(fov_rad / 2.0f);             // pinhole
+    fy = fx;
 }
 
 }  // namespace
 
-void ViewportPanel::attach(ssplat::TrainerSession& session) {
-    detach();
-    _worker.start(session.make_viewer_config(), session.make_viewer_hooks());
-    _buffer_keys = _worker.buffer_keys();
-    _buffer_idx = std::min<int>(_buffer_idx, (int)_buffer_keys.size() - 1);
+// ---------------------------------------------------------------------------
+// Framing + camera math
+// ---------------------------------------------------------------------------
 
-    // ---- frame the scene in the client (normalized) frame ------------------
-    // The render path remaps client c2w through train_to_normalized when
-    // train_frame_scale != 1, so positions must be framed in that space:
-    // p_normalized = inv(train_to_normalized) * p_train.
+void ViewportPanel::compute_framing(const ssplat::TrainerSession& session) {
+    // Match the web viewer's cam.reset() exactly: target = client-frame
+    // origin (the normalized frame is centered on the CAMERA POSES via
+    // center_method="poses", i.e. the captured object for object-centric
+    // datasets -- NOT the point-cloud centroid, which distant background
+    // points drag far away), pos = [0,0,1], then orbit(0, -250).
+    _cam.pos[0] = 0; _cam.pos[1] = 0; _cam.pos[2] = 1;
+    _cam.rot[0] = _cam.rot[1] = _cam.rot[2] = 0; _cam.rot[3] = 1;
+    _cam.target[0] = _cam.target[1] = _cam.target[2] = 0;
+    _cam.orbit(0, -250);
+    _home = _cam;
+
+    // Scene radius (drives only the preview depth range): spread of the
+    // camera positions in the client frame.
     double A[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     const auto& ds = session.ds;
     if (ds.train_frame_scale != 1.0f) {
@@ -56,114 +74,119 @@ void ViewportPanel::attach(ssplat::TrainerSession& session) {
         for (int i = 0; i < 16; i++) T[i] = ds.train_to_normalized[i];
         dsparse::invert_affine4x4(T, A);
     }
-    auto map_pt = [&](const float p[3], double out[3]) {
-        for (int r = 0; r < 3; r++)
-            out[r] = A[r*4+0]*p[0] + A[r*4+1]*p[1] + A[r*4+2]*p[2] + A[r*4+3];
-    };
-
-    // Target = centroid of the seed points (the scene), sampled.
-    double centroid[3] = {0, 0, 0};
-    int64_t n_pts = ds.points.num();
-    if (n_pts > 0) {
-        int64_t stride = std::max<int64_t>(1, n_pts / 10000);
-        int64_t cnt = 0;
-        for (int64_t i = 0; i < n_pts; i += stride, cnt++) {
-            double q[3];
-            map_pt(&ds.points.xyz[i*3], q);
-            for (int r = 0; r < 3; r++) centroid[r] += q[r];
-        }
-        for (int r = 0; r < 3; r++) centroid[r] /= std::max<int64_t>(cnt, 1);
-    }
-
-    // Distance / start direction from the camera ring.
-    double cam_c[3] = {0, 0, 0};
-    std::vector<double> dists;
-    dists.reserve(ds.num_cameras);
+    double radius = 1.0;
     for (int64_t i = 0; i < ds.num_cameras; i++) {
         float p[3] = {ds.c2w[i*12 + 3], ds.c2w[i*12 + 7], ds.c2w[i*12 + 11]};
         double q[3];
-        map_pt(p, q);
-        for (int r = 0; r < 3; r++) cam_c[r] += q[r];
-        double dx = q[0]-centroid[0], dy = q[1]-centroid[1], dz = q[2]-centroid[2];
-        dists.push_back(std::sqrt(dx*dx + dy*dy + dz*dz));
+        for (int r = 0; r < 3; r++)
+            q[r] = A[r*4+0]*p[0] + A[r*4+1]*p[1] + A[r*4+2]*p[2] + A[r*4+3];
+        radius = std::max(radius, std::sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2]));
     }
-    double dist = 3.0;
-    if (!dists.empty()) {
-        for (int r = 0; r < 3; r++) cam_c[r] /= (double)ds.num_cameras;
-        std::nth_element(dists.begin(), dists.begin() + dists.size()/2, dists.end());
-        dist = std::max(1e-3, 1.4 * dists[dists.size()/2]);
-    }
-
-    for (int r = 0; r < 3; r++)
-        _home_target[r] = _target[r] = (float)centroid[r];
-    _home_dist = _dist = (float)dist;
-    double dir[3] = {cam_c[0]-centroid[0], cam_c[1]-centroid[1], cam_c[2]-centroid[2]};
-    double dn = std::sqrt(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
-    if (dn > 1e-9) {
-        _yaw = (float)std::atan2(dir[1], dir[0]);
-        _pitch = (float)std::asin(std::clamp(dir[2] / dn, -0.95, 0.95));
-    } else {
-        _yaw = 0.0f;
-        _pitch = 0.6f;
-    }
-
-    _pending = 0;
+    _home_dist = (float)radius;
     _dirty = true;
-    _last_error.clear();
-    _attached = true;
 }
 
-void ViewportPanel::detach() {
-    if (!_attached) return;
-    _worker.stop();
-    _pending = 0;
-    _attached = false;
+void ViewportPanel::maybe_frame(const ssplat::TrainerSession& session) {
+    std::string key = session.cfg.data + ":" +
+        std::to_string(session.ds.num_cameras) + ":" +
+        std::to_string(session.ds.points.num());
+    if (key == _framed_key) return;   // same dataset: keep the current pose
+    _framed_key = key;
+    compute_framing(session);
+    _show_cams = true;   // default on for a fresh dataset preview
 }
 
 void ViewportPanel::reset_view() {
-    std::memcpy(_target, _home_target, sizeof _target);
-    _dist = _home_dist;
+    _cam = _home;
     _dirty = true;
 }
 
+const char* ViewportPanel::camera_model_name() const {
+    return kViewerCameraModels[_cam_model].name;
+}
+float ViewportPanel::fov_min() const { return kViewerCameraModels[_cam_model].fov_min; }
+float ViewportPanel::fov_max() const { return kViewerCameraModels[_cam_model].fov_max; }
+
+void ViewportPanel::compute_intrinsics(int W, int H, float& fx, float& fy) const {
+    const char* model = camera_model_name();
+    if (!std::strcmp(model, "EQUIRECTANGULAR")) {
+        // Full 360x180 panorama across the image (viewer.html
+        // sendRenderRequest): fx = w/2pi, fy = h/pi.
+        fx = (float)W / (2.0f * 3.14159265358979f);
+        fy = (float)H / 3.14159265358979f;
+    } else {
+        fov_to_intrinsics(_fov_deg[_cam_model], W, H, model, fx, fy);
+    }
+}
+
+void ViewportPanel::build_request(ViewRequest& q, int W, int H) const {
+    _cam.c2w(q.c2w);
+    compute_intrinsics(W, H, q.fx, q.fy);
+    q.cx = 0.5f * (float)W;
+    q.cy = 0.5f * (float)H;
+    q.W = W;
+    q.H = H;
+    q.model = camera_model_name();
+    q.key = _buffer_keys.empty() ? "rgb" : _buffer_keys[_buffer_idx];
+    q.show_cams = _show_cams;
+    q.cam_size_scale = _frustum_scale;
+}
+
+// Row-major world-to-view for the GL preview (inverse of the camera c2w).
+void ViewportPanel::view_matrix(float out[16]) const {
+    float m[12];
+    _cam.c2w(m);
+    // c2w columns are the view axes; view = [R^T | -R^T pos].
+    for (int r = 0; r < 3; r++) {
+        float ax = m[0*4 + r], ay = m[1*4 + r], az = m[2*4 + r];
+        out[r*4 + 0] = ax;
+        out[r*4 + 1] = ay;
+        out[r*4 + 2] = az;
+        out[r*4 + 3] = -(ax*m[3] + ay*m[7] + az*m[11]);
+    }
+    out[12] = out[13] = out[14] = 0;
+    out[15] = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Attach / detach
+// ---------------------------------------------------------------------------
+
+void ViewportPanel::attach_preview(ssplat::TrainerSession& session) {
+    detach();
+    if (!_preview.build(session)) {
+        _last_error = "preview renderer unavailable (OpenGL 3.2 required)";
+        return;
+    }
+    maybe_frame(session);
+    _last_error.clear();
+    _mode = Mode::Preview;
+}
+
+void ViewportPanel::attach(ssplat::TrainerSession& session) {
+    detach();
+    _worker.start(session.make_viewer_config(), session.make_viewer_hooks());
+    _buffer_keys = _worker.buffer_keys();
+    _buffer_idx = std::min<int>(_buffer_idx, (int)_buffer_keys.size() - 1);
+    maybe_frame(session);
+    _pending = 0;
+    _last_error.clear();
+    _mode = Mode::Engine;
+}
+
+void ViewportPanel::detach() {
+    if (_mode == Mode::Engine) _worker.stop();
+    _pending = 0;
+    _mode = Mode::None;
+}
+
 void ViewportPanel::destroy_gl() {
+    _preview.destroy_gl();
     if (_tex) {
         GLuint t = (GLuint)_tex;
         glDeleteTextures(1, &t);
         _tex = 0;
     }
-}
-
-void ViewportPanel::build_request(ViewRequest& q, int W, int H) const {
-    // Orbit camera -> OpenGL-convention c2w in the Z-up client frame.
-    float cp = std::cos(_pitch), sp = std::sin(_pitch);
-    float cy = std::cos(_yaw), sy = std::sin(_yaw);
-    float eye[3] = {_target[0] + _dist * cp * cy,
-                    _target[1] + _dist * cp * sy,
-                    _target[2] + _dist * sp};
-    float f[3] = {_target[0] - eye[0], _target[1] - eye[1], _target[2] - eye[2]};
-    v3_normalize(f);
-    const float up_w[3] = {0, 0, 1};
-    float r[3], u[3];
-    v3_cross(f, up_w, r);
-    v3_normalize(r);
-    v3_cross(r, f, u);
-    for (int i = 0; i < 3; i++) {
-        q.c2w[i*4 + 0] = r[i];
-        q.c2w[i*4 + 1] = u[i];
-        q.c2w[i*4 + 2] = -f[i];
-        q.c2w[i*4 + 3] = eye[i];
-    }
-    float fy = 0.5f * (float)H / std::tan(0.5f * _fov_deg * 3.14159265f / 180.0f);
-    q.fx = fy;
-    q.fy = fy;
-    q.cx = 0.5f * (float)W;
-    q.cy = 0.5f * (float)H;
-    q.W = W;
-    q.H = H;
-    q.model = "PINHOLE";
-    q.key = _buffer_keys.empty() ? "rgb" : _buffer_keys[_buffer_idx];
-    q.show_cams = _show_cams;
 }
 
 void ViewportPanel::upload(const ViewResult& res) {
@@ -185,10 +208,100 @@ void ViewportPanel::upload(const ViewResult& res) {
     _tex_h = res.H;
 }
 
-void ViewportPanel::draw(bool training) {
-    // ---- controls row -------------------------------------------------------
-    if (!_buffer_keys.empty()) {
-        ImGui::SetNextItemWidth(140);
+// ---------------------------------------------------------------------------
+// Input (browser-identical: viewer.html event wiring)
+// ---------------------------------------------------------------------------
+
+void ViewportPanel::handle_input(float /*item_h*/) {
+    ImGuiIO& io = ImGui::GetIO();
+    bool hovered = ImGui::IsItemHovered();
+
+    // Pointer (mouse; single-touch and OS touch/trackpad gestures arrive as
+    // emulated mouse + wheel events -- one finger orbits, two-finger
+    // pan/pinch maps to the wheel). Drag mapping per viewer.html:
+    //   MMB / RMB / Shift+drag -> pan
+    //   LMB: orbit (turntable/trackball) or look (fps/fly)
+    if (hovered && !_dragging) {
+        for (int b : {ImGuiMouseButton_Left, ImGuiMouseButton_Right,
+                      ImGuiMouseButton_Middle}) {
+            if (ImGui::IsMouseClicked(b)) {
+                _dragging = true;
+                _drag_button = b;
+                break;
+            }
+        }
+    }
+    if (_dragging) {
+        if (!ImGui::IsMouseDown(_drag_button)) {
+            _dragging = false;
+        } else {
+            float dx = io.MouseDelta.x, dy = io.MouseDelta.y;
+            if (dx != 0 || dy != 0) {
+                bool is_pan = _drag_button == ImGuiMouseButton_Right ||
+                              _drag_button == ImGuiMouseButton_Middle ||
+                              io.KeyShift;
+                if (std::getenv("SSPLAT_NAV_DEBUG"))
+                    std::fprintf(stderr,
+                        "[nav] btn=%d pan=%d shift=%d d=(%.0f,%.0f) tgt=(%.3f,%.3f,%.3f) pos=(%.3f,%.3f,%.3f)\n",
+                        _drag_button, (int)is_pan, (int)io.KeyShift, dx, dy,
+                        _cam.target[0], _cam.target[1], _cam.target[2],
+                        _cam.pos[0], _cam.pos[1], _cam.pos[2]);
+                if (is_pan)
+                    _cam.pan(dx, dy);
+                else if (_cam.mode == NavCamera::Turntable ||
+                         _cam.mode == NavCamera::Trackball)
+                    _cam.orbit(dx, dy);
+                else
+                    _cam.look(dx, dy);
+                _dirty = true;
+            }
+        }
+    }
+
+    // Scroll = dolly (browser wheel deltaY is ~+-100 per notch, ImGui is
+    // +-1 with the opposite sign convention).
+    if (hovered && io.MouseWheel != 0.0f) {
+        _cam.dolly(-io.MouseWheel * 100.0f);
+        _dirty = true;
+    }
+
+    // Keyboard (viewer.html listens on the window; here: while the pointer
+    // is over the viewport or dragging, and no text field wants input).
+    if ((hovered || _dragging) && !io.WantTextInput) {
+        NavCamera::Keys k;
+        k.w = ImGui::IsKeyDown(ImGuiKey_W);
+        k.a = ImGui::IsKeyDown(ImGuiKey_A);
+        k.s = ImGui::IsKeyDown(ImGuiKey_S);
+        k.d = ImGui::IsKeyDown(ImGuiKey_D);
+        k.e = ImGui::IsKeyDown(ImGuiKey_E);
+        k.q = ImGui::IsKeyDown(ImGuiKey_Q);
+        k.up = ImGui::IsKeyDown(ImGuiKey_UpArrow);
+        k.down = ImGui::IsKeyDown(ImGuiKey_DownArrow);
+        k.left = ImGui::IsKeyDown(ImGuiKey_LeftArrow);
+        k.right = ImGui::IsKeyDown(ImGuiKey_RightArrow);
+        float dt = std::min(io.DeltaTime, 0.1f);
+        if (_cam.keyboard_tick(dt, k)) _dirty = true;
+    }
+
+    // Gamepad: always active, like the browser's gamepadTick loop.
+    {
+        float dt = std::min(io.DeltaTime, 0.1f);
+        if (_cam.gamepad_tick(dt)) _dirty = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Draw
+// ---------------------------------------------------------------------------
+
+void ViewportPanel::draw_controls(bool engine) {
+    // All controls fit on one row on a wide enough viewport; otherwise the
+    // navigation/camera group wraps to a second row.
+    bool one_row = ImGui::GetContentRegionAvail().x >= 1120.0f;
+
+    // ---- display group ----
+    if (engine && !_buffer_keys.empty()) {
+        ImGui::SetNextItemWidth(130);
         if (ImGui::BeginCombo("##buffer", _buffer_keys[_buffer_idx].c_str())) {
             for (int i = 0; i < (int)_buffer_keys.size(); i++)
                 if (ImGui::Selectable(_buffer_keys[i].c_str(), i == _buffer_idx)) {
@@ -201,40 +314,137 @@ void ViewportPanel::draw(bool training) {
                               "alpha, normals from depth, ...).");
         ImGui::SameLine();
     }
+    if (!engine) {
+        ImGui::TextDisabled("dataset preview");
+        help_tooltip_on_hover("Sparse SfM point cloud and camera poses of the "
+                              "loaded dataset. Training replaces this with "
+                              "the live splat render.");
+        ImGui::SameLine();
+    }
     if (ImGui::Checkbox("cameras", &_show_cams)) _dirty = true;
-    help_tooltip_on_hover("Overlay the training camera frusta (with image "
-                          "thumbnails once training has visited them).");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(70);
-    const char* scales[] = {"50%", "75%", "100%"};
-    if (ImGui::Combo("##scale", &_scale_idx, scales, 3)) _dirty = true;
-    help_tooltip_on_hover("Render resolution relative to the viewport size. "
-                          "Lower is faster and steals less time from training.");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(110);
-    if (ImGui::SliderFloat("##fov", &_fov_deg, 20.0f, 120.0f, "fov %.0f\xc2\xb0"))
-        _dirty = true;
+    help_tooltip_on_hover("Overlay the training camera frusta (during "
+                          "training, with image thumbnails once visited).");
+    if (_show_cams) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110);
+        if (ImGui::SliderFloat("##fsize", &_frustum_scale, 0.1f, 10.0f,
+                               "size x%.2f", ImGuiSliderFlags_Logarithmic))
+            _dirty = true;
+        help_tooltip_on_hover("Camera frustum display size.");
+    }
+    if (engine) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(66);
+        const char* scales[] = {"50%", "75%", "100%"};
+        if (ImGui::Combo("##scale", &_scale_idx, scales, 3)) _dirty = true;
+        help_tooltip_on_hover("Render resolution relative to the viewport "
+                              "size. Lower is faster and steals less time "
+                              "from training.");
+        ImGui::SameLine();
+        ImGui::Checkbox("live", &_auto_refresh);
+        help_tooltip_on_hover("Continuously re-render while training so the "
+                              "viewport follows the optimization.");
+    }
     ImGui::SameLine();
     if (ImGui::Button("Reset view")) reset_view();
-    ImGui::SameLine();
-    ImGui::Checkbox("live", &_auto_refresh);
-    help_tooltip_on_hover("Continuously re-render while training so the "
-                          "viewport follows the optimization.");
 
-    // ---- image region --------------------------------------------------------
+    // ---- navigation + camera group ----
+    if (one_row) ImGui::SameLine();
+    const char* nav_modes[] = {"Turntable", "Trackball", "First Person", "Free Fly"};
+    int nav = (int)_cam.mode;
+    ImGui::SetNextItemWidth(110);
+    if (ImGui::Combo("##navmode", &nav, nav_modes, 4))
+        _cam.mode = (NavCamera::Mode)nav;
+    help_tooltip_on_hover(
+        "Navigation mode (identical to the web viewer):\n"
+        "Turntable / Trackball -- LMB orbit, RMB/MMB/Shift pan, wheel zoom\n"
+        "First Person / Free Fly -- LMB look, WASD/arrows move, E/Q up-down "
+        "(Free Fly: E/Q roll)\nGamepad: left stick move, right stick look, "
+        "triggers up-down/roll.");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100);
+    ImGui::SliderFloat("##speed", &_cam.speed_exp, -2.0f, 2.0f, "spd 10^%.1f");
+    help_tooltip_on_hover("Move speed for pan / keyboard / gamepad "
+                          "(log scale; the web viewer's Move Speed slider).");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160);
+    if (ImGui::BeginCombo("##cammodel", kViewerCameraModels[_cam_model].label)) {
+        for (int i = 0; i < 4; i++)
+            if (ImGui::Selectable(kViewerCameraModels[i].label, i == _cam_model)) {
+                _cam_model = i;
+                // Clamp the remembered FOV into the new model's range
+                // (viewer.html _syncCameraModelUI).
+                if (fov_max() > 0)
+                    _fov_deg[i] = std::clamp(_fov_deg[i], fov_min(), fov_max());
+                _dirty = true;
+            }
+        ImGui::EndCombo();
+    }
+    help_tooltip_on_hover("Projection used for the viewport (preview and "
+                          "training render) -- same options as the web "
+                          "viewer.");
+    ImGui::SameLine();
+    if (fov_max() > 0) {
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::SliderFloat("##fov", &_fov_deg[_cam_model],
+                               fov_min(), fov_max(), "fov %.0f\xc2\xb0"))
+            _dirty = true;
+    } else {
+        ImGui::TextDisabled("360\xc2\xb0 x 180\xc2\xb0");
+    }
+}
+
+void ViewportPanel::draw(bool training) {
+    draw_controls(_mode == Mode::Engine);
+
     ImVec2 avail = ImGui::GetContentRegionAvail();
     avail.x = std::max(avail.x, 64.0f);
     avail.y = std::max(avail.y, 64.0f);
 
-    if (!_attached) {
+    if (_mode == Mode::None) {
         ImGui::Dummy(ImVec2(avail.x, avail.y * 0.4f));
-        const char* msg = "Viewport activates when training starts";
+        const char* msg = _last_error.empty()
+            ? "Open a dataset to see it here" : _last_error.c_str();
         float tw = ImGui::CalcTextSize(msg).x;
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - tw) * 0.5f);
+        ImGui::SetCursorPosX(std::max(0.0f, (ImGui::GetWindowWidth() - tw) * 0.5f));
         ImGui::TextDisabled("%s", msg);
         return;
     }
 
+    if (_mode == Mode::Preview) draw_preview(avail);
+    else                        draw_engine(training, avail);
+}
+
+void ViewportPanel::draw_preview(const ImVec2& avail) {
+    int W = (int)std::clamp(avail.x, 64.0f, 4096.0f);
+    int H = (int)std::clamp(avail.y, 64.0f, 4096.0f);
+    float view[16];
+    view_matrix(view);
+    // Same intrinsics as the engine render request -> seamless transition.
+    float fx, fy;
+    compute_intrinsics(W, H, fx, fy);
+    unsigned tex = _preview.render(W, H, view,
+                                   (PreviewProjection)_cam_model,
+                                   fx / (0.5f * W), fy / (0.5f * H),
+                                   _home_dist, _show_cams, _frustum_scale);
+    if (!tex) {
+        ImGui::TextDisabled("preview render failed");
+        return;
+    }
+    // FBO textures are bottom-up; flip V.
+    ImGui::Image((ImTextureID)(intptr_t)tex, ImVec2((float)W, (float)H),
+                 ImVec2(0, 1), ImVec2(1, 0));
+    handle_input((float)H);
+
+    char info[96];
+    std::snprintf(info, sizeof info, "%lld points",
+                  (long long)_preview.num_points());
+    ImVec2 p = ImGui::GetItemRectMin();
+    ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + 8, p.y + 6),
+                                        IM_COL32(200, 200, 200, 180), info);
+}
+
+void ViewportPanel::draw_engine(bool training, const ImVec2& avail) {
     // Poll the in-flight render.
     if (_pending) {
         ViewResult res;
@@ -274,40 +484,7 @@ void ViewportPanel::draw(bool training) {
         ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + pad.x,
                                    ImGui::GetCursorPosY() + pad.y));
         ImGui::Image((ImTextureID)(intptr_t)_tex, size);
-
-        // ---- navigation ------------------------------------------------------
-        if (ImGui::IsItemHovered()) {
-            ImGuiIO& io = ImGui::GetIO();
-            if (io.MouseWheel != 0.0f) {
-                _dist *= std::exp(-io.MouseWheel * 0.15f);
-                _dist = std::clamp(_dist, 1e-4f, 1e5f);
-                _dirty = true;
-            }
-            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f)) {
-                _yaw   -= io.MouseDelta.x * 0.008f;
-                _pitch += io.MouseDelta.y * 0.008f;
-                _pitch = std::clamp(_pitch, -1.55f, 1.55f);
-                if (io.MouseDelta.x || io.MouseDelta.y) _dirty = true;
-            }
-            bool pan = ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f) ||
-                       ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f);
-            if (pan && (io.MouseDelta.x || io.MouseDelta.y)) {
-                // Pixel-accurate pan at the target depth.
-                float ppu = 2.0f * _dist *
-                    std::tan(0.5f * _fov_deg * 3.14159265f / 180.0f) / size.y;
-                float cp = std::cos(_pitch), sp = std::sin(_pitch);
-                float cy = std::cos(_yaw), sy = std::sin(_yaw);
-                float f[3] = {-cp * cy, -cp * sy, -sp};
-                const float up_w[3] = {0, 0, 1};
-                float r[3], u[3];
-                v3_cross(f, up_w, r);
-                v3_normalize(r);
-                v3_cross(r, f, u);
-                for (int i = 0; i < 3; i++)
-                    _target[i] += (-io.MouseDelta.x * r[i] + io.MouseDelta.y * u[i]) * ppu;
-                _dirty = true;
-            }
-        }
+        handle_input(size.y);
     } else {
         ImGui::Dummy(ImVec2(avail.x, avail.y * 0.4f));
         const char* msg = _last_error.empty() ? "Rendering..." : _last_error.c_str();

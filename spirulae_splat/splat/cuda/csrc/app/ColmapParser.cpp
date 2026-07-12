@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 namespace fs = std::filesystem;
@@ -352,12 +353,71 @@ void colmap_to_c2w(const ColmapImage& im, float* out12) {
 // parse_colmap_dataset
 // ===========================================================================
 
+// Registered-image count of a COLMAP model dir, without parsing the whole
+// reconstruction: images.bin starts with a uint64 count; images.txt carries
+// it in a header comment (else count non-comment lines / 2). -1 = no model.
+static int64_t colmap_model_num_images(const fs::path& dir) {
+    if (FILE* f = std::fopen((dir / "images.bin").string().c_str(), "rb")) {
+        uint64_t n = 0;
+        bool ok = std::fread(&n, sizeof n, 1, f) == 1;
+        std::fclose(f);
+        if (ok) return (int64_t)n;
+    }
+    std::ifstream t(dir / "images.txt");
+    if (t) {
+        std::string line;
+        int64_t rows = 0;
+        while (std::getline(t, line)) {
+            if (!line.empty() && line[0] == '#') {
+                size_t p = line.find("Number of images:");
+                if (p != std::string::npos)
+                    return std::atoll(line.c_str() + p + 17);
+                continue;
+            }
+            if (!line.empty()) rows++;
+        }
+        return rows / 2;   // each image = header line + 2D-points line
+    }
+    return -1;
+}
+
 ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
                                    const DatasetParserConfig& cfg) {
     // ---- Locate the reconstruction (dataparser.py:609-635) ---------------
     std::vector<std::string> probe;
-    if (!cfg.recon_dir.empty()) probe = {cfg.recon_dir};
-    else probe = {"sparse/0", "colmap/sparse/0", "sparse", "colmap", ""};
+    if (!cfg.recon_dir.empty()) {
+        probe = {cfg.recon_dir};
+    } else {
+        // COLMAP writes one model per subdirectory (sparse/0, sparse/1, ...)
+        // and the largest is NOT necessarily sparse/0 -- enumerate them and
+        // try the one with the most registered images first.
+        struct Model { int64_t n; std::string rel; };
+        std::vector<Model> models;
+        std::error_code ec;
+        for (const char* parent : {"sparse", "colmap/sparse"}) {
+            fs::path p = fs::path(dataset_dir) / parent;
+            if (!fs::is_directory(p, ec)) continue;
+            for (fs::directory_iterator it(p, ec), end; !ec && it != end;
+                 it.increment(ec)) {
+                if (!it->is_directory(ec)) continue;
+                int64_t n = colmap_model_num_images(it->path());
+                if (n >= 0)
+                    models.push_back({n,
+                        (fs::path(parent) / it->path().filename()).generic_string()});
+            }
+        }
+        std::sort(models.begin(), models.end(), [](const Model& a, const Model& b) {
+            return a.n != b.n ? a.n > b.n : a.rel < b.rel;
+        });
+        if (models.size() > 1)
+            std::printf("Found %zu COLMAP models under %s; using %s "
+                        "(%lld registered images)\n",
+                        models.size(), dataset_dir.c_str(),
+                        models[0].rel.c_str(), (long long)models[0].n);
+        for (const auto& m : models) probe.push_back(m.rel);
+        for (const char* rel : {"sparse/0", "colmap/sparse/0", "sparse", "colmap", ""})
+            probe.push_back(rel);
+    }
 
     // points3D is required only in strict (trainer) mode; the lenient viewer
     // accepts a cameras-only reconstruction (poses / frustums). Binary and

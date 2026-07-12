@@ -114,7 +114,7 @@ void TrainRunner::start_training(const SsplatConfig& cfg, const std::string& pre
             s->check_config();
             s->load_dataset();
             s->setup_engine();
-            viewer_upload_cameras(s->post);   // frusta for show-cameras
+            s->viewer_base_camera_size = viewer_upload_cameras(s->post);
             _engine_ready = true;
 
             // Optional web viewer alongside the native viewport.

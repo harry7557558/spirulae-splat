@@ -325,6 +325,12 @@ struct RenderWorker::Impl {
             else if (q.key == "depth_distortion" && want_dist) { buf = &depthd; C = 1; }
             else throw std::runtime_error("unsupported buffer_key: " + q.key);
 
+            // Live frustum-size control: cheap host-side set, serialized by
+            // the engine's internal viewer mutex.
+            if (q.show_cams && cfg.base_camera_size > 0.0f)
+                engine_viewer_set_camera_size(
+                    cfg.base_camera_size * std::max(q.cam_size_scale, 1e-3f));
+
             // Annotate + colormap on GPU (annotation.annotate_train_cameras).
             float* db = (float*)d_buffer.upload(buf->data(), npx * C * 4);
             float* dz = (float*)d_depth.upload(depth.data(), npx * 4);
@@ -398,8 +404,12 @@ std::vector<std::string> RenderWorker::buffer_keys() const {
     return keys;
 }
 
-void viewer_upload_cameras(const PostSplitCameras& post) {
-    float camera_size = 0.2f * (float)camera_knn_dist(post.c2w_flip, post.n_post);
+float viewer_camera_size_heuristic(const PostSplitCameras& post) {
+    return 0.2f * (float)camera_knn_dist(post.c2w_flip, post.n_post);
+}
+
+float viewer_upload_cameras(const PostSplitCameras& post) {
+    float camera_size = viewer_camera_size_heuristic(post);
     engine_viewer_init(
         tvp(post.post_models.data(), 4, {post.n_post}),
         tvp(post.intrins.data(), 4, {post.n_post, 4}),
@@ -408,4 +418,5 @@ void viewer_upload_cameras(const PostSplitCameras& post) {
         tvp(post.post_widths.data(), 4, {post.n_post}),
         tvp(post.post_heights.data(), 4, {post.n_post}),
         camera_size);
+    return camera_size;
 }

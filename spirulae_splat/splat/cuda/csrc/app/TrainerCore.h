@@ -154,6 +154,10 @@ public:
     // Filled by setup_engine().
     std::filesystem::path out_dir;
     RunState st;
+    // Set by the front-end from viewer_upload_cameras()'s return value;
+    // copied into ViewerRenderConfig::base_camera_size for the live
+    // frustum-size control.
+    float viewer_base_camera_size = 0.0f;
 
     // Coordination between the train loop, viewer render workers, and
     // front-end controls (same dance as trainer.py:146-179).

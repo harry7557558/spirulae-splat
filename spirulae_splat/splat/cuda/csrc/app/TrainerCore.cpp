@@ -835,6 +835,7 @@ ViewerRenderConfig TrainerSession::make_viewer_config() const {
                            cfg.normal_distortion_reg != 0.0f;
     vc.train_frame_scale = ds.train_frame_scale;
     vc.train_to_normalized = ds.train_to_normalized;
+    vc.base_camera_size = viewer_base_camera_size;
     return vc;
 }
 

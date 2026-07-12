@@ -1,8 +1,8 @@
 #pragma once
 
-// GuiApp -- top-level UI for Spirulae Splat Studio: screens, layout, state
-// wiring between the config editor, COLMAP runner, train runner, and the
-// native viewport.
+// GuiApp -- top-level UI for Spirulae Splat: screens, layout, state wiring
+// between the config editor, COLMAP runner, train runner, and the native
+// viewport.
 
 #include "../generated/cli_config.h"
 #include "ColmapRunner.h"
@@ -37,24 +37,36 @@ public:
 private:
     enum class Screen { Home, Colmap, Train };
     enum class PickAction {
-        None, OpenDataset, ColmapImages, ColmapVideo, ColmapWorkspace
+        None, OpenDataset, ColmapImages, ColmapVideo, ColmapWorkspace,
+        OutputPrefix, VocabTree
     };
+    // Session-destroying actions deferred behind the "stop training?"
+    // confirmation (and executed once the stop has completed).
+    enum class Pending { None, GoHome, OpenDataset, Quit };
 
     // ---- persistence (recents + tool paths) ----
     static std::string settings_path();
     void load_settings();
     void save_settings();
-    void add_recent(const std::string& path);
+    // By value: callers pass elements of _recents, which this mutates.
+    void add_recent(std::string path);
 
     // ---- actions ----
-    void open_dataset(const std::string& dir, const std::string& image_dir = "");
+    // By value: callers pass elements of _recents, which open_dataset
+    // mutates via add_recent (a const& here would dangle).
+    void open_dataset(std::string dir, std::string image_dir = "");
+    // Route for user-initiated opens: confirms first when training.
+    void request_open_dataset(std::string dir);
+    void request_go_home();
     void apply_preset(const std::string& preset);
     void start_training();
+    bool training_busy() const;   // Preparing or Training
 
     // ---- screens ----
     void draw_menu_bar();
     void draw_home();
     void draw_colmap();
+    void draw_colmap_options();
     void draw_train();
     void draw_train_settings();      // left panel
     void draw_basic_options();
@@ -62,14 +74,20 @@ private:
     void draw_metrics();
     void draw_status_strip();
     void draw_log_panel(float height);
-    void draw_exit_confirm();
+    void draw_confirm_modal();
     void handle_dialog_result(const std::string& path);
+    void run_pending_if_stopped();
     void append_logs();
     void log(const std::string& s);
 
     Screen _screen = Screen::Home;
     bool _quit = false;
-    bool _confirm_exit = false;
+    bool _open_confirm = false;      // arm the stop-training modal
+    bool _confirm_shown = false;     // modal currently expected open
+    bool _stop_confirmed = false;    // user chose "Stop & Save"
+    Pending _pending = Pending::None;
+    std::string _pending_path;       // dataset dir for Pending::OpenDataset
+    bool _parse_dirty = false;       // dataparser option edited -> reload
 
     // Config being edited + the preset baseline it diffs against.
     SsplatConfig _cfg;
@@ -90,6 +108,11 @@ private:
     std::vector<std::string> _recents;
     std::string _colmap_exe = "colmap";
     std::string _ffmpeg_exe = "ffmpeg";
+#ifdef _WIN32
+    std::string _python_exe = "python";
+#else
+    std::string _python_exe = "python3";
+#endif
 
     // Log console.
     std::deque<std::string> _log;

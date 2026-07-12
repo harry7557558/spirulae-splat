@@ -180,7 +180,7 @@ class SpirulaeSplatDataParserConfig:
     data_format: Literal["colmap", "nerfstudio", "metashape", None] = None
     """Data format, leave None to auto detect"""
     colmap_recon_dir: Optional[Path] = None
-    """Path to COLMAP reconstruction relative to dataset directory (e.g. sparse/0). Will auto detect if not specified."""
+    """Path to COLMAP reconstruction relative to dataset directory (e.g. sparse/0). Will auto detect if not specified (picking the model with the most registered images when several exist)."""
     image_dir: Path = Path("images")
     """Path to images relative to dataset directory, used for COLMAP and Metashape datasets"""
     mask_dir: Path = Path("masks")
@@ -613,8 +613,30 @@ class SpirulaeSplatDataparser:
             cam_id_to_camera = load_colmap_cameras(recon_dir)
             im_id_to_image = load_colmap_images(recon_dir)
         else:
+            # COLMAP writes one model per subdirectory (sparse/0, sparse/1,
+            # ...) and the largest is NOT necessarily sparse/0 -- enumerate
+            # the models and try the one with the most registered images
+            # first, then fall back to the legacy probe list.
+            model_dirs = []
+            for parent in [Path("sparse"), Path("colmap/sparse")]:
+                parent_abs = self.dataset_dir / parent
+                if not parent_abs.is_dir():
+                    continue
+                for child in sorted(parent_abs.iterdir()):
+                    if not child.is_dir():
+                        continue
+                    try:
+                        n = len(load_colmap_images(child))
+                    except Exception:
+                        continue
+                    model_dirs.append((n, parent / child.name))
+            model_dirs.sort(key=lambda t: (-t[0], str(t[1])))
+            if len(model_dirs) > 1:
+                print(f"Found {len(model_dirs)} COLMAP models; using "
+                      f"{model_dirs[0][1]} ({model_dirs[0][0]} registered images)")
+
             okay = False
-            for colmap_recon_dir in [
+            for colmap_recon_dir in [d for _, d in model_dirs] + [
                 Path("sparse/0"),
                 Path("colmap/sparse/0"),
                 Path("sparse"),

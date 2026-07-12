@@ -88,6 +88,7 @@ struct ViewerServer::Impl {
         q.model = req.get("camera_model", "PINHOLE");
         int quality = req.get_int("jpeg_quality", 75);
         q.show_cams = req.get_bool("show_training_cameras", false);
+        q.cam_size_scale = (float)req.get_double("camera_size_scale", 1.0);
 
         constexpr int MAX_DIM = 2160;   // prevent OOM (http_server.py:74)
         if (q.W <= 0 || q.H <= 0 || std::max(q.W, q.H) > MAX_DIM)
@@ -142,7 +143,7 @@ void ViewerServer::start(const std::string& host, int port,
     // One-shot upload of the post-split camera table for frustum annotation
     // + thumbnails (annotation.ensure_viewer_initialized). Host views are
     // fine -- the engine copies.
-    viewer_upload_cameras(post);
+    cfg.base_camera_size = viewer_upload_cameras(post);
 
     im.worker.start(std::move(cfg), std::move(hooks));
     im.buffer_keys = im.worker.buffer_keys();

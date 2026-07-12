@@ -483,6 +483,11 @@ void engine_viewer_init(
     TorchTensorView heights,         // [N_post]   int32
     float camera_size);
 
+// Update just the visualization-frustum scale without re-running
+// engine_viewer_init (which would reset the thumbnail cache). No-op until
+// engine_viewer_init has run. Host-only; safe from any thread.
+void engine_viewer_set_camera_size(float camera_size);
+
 // engine_blit_view: fused viewer-render annotation. Caches the BVH on the
 // first show_training_cameras=true call; reads thumbnails out of the
 // engine's device-side cache (no thumbnails arg). buffer_key selects which

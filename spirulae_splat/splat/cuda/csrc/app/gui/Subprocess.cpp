@@ -24,16 +24,20 @@ namespace gui {
 
 namespace {
 
-// Feed a chunk into the line splitter.
+// Feed a chunk into the line splitter. Both '\n' and a bare '\r' end a line
+// -- ffmpeg/curl emit progress as '\r'-terminated updates that would
+// otherwise never surface in the log (and look like a hang).
 void emit_lines(std::string& acc, const char* buf, size_t n,
                 const std::function<void(const std::string&)>& on_line) {
     acc.append(buf, n);
     size_t pos = 0, nl;
-    while ((nl = acc.find('\n', pos)) != std::string::npos) {
-        size_t end = nl;
-        if (end > pos && acc[end - 1] == '\r') end--;
-        if (on_line) on_line(acc.substr(pos, end - pos));
-        pos = nl + 1;
+    while ((nl = acc.find_first_of("\r\n", pos)) != std::string::npos) {
+        if (acc[nl] == '\r' && nl + 1 >= acc.size())
+            break;   // might be the first half of a \r\n; wait for more
+        size_t next = nl + 1;
+        if (acc[nl] == '\r' && acc[next] == '\n') next++;
+        if (nl > pos && on_line) on_line(acc.substr(pos, nl - pos));
+        pos = next;
     }
     acc.erase(0, pos);
 }
