@@ -1,10 +1,11 @@
-# Standalone CLI Trainer (`ssplat-train`)
+# Standalone CLI Trainer (`ssplat-train`) + Native GUI (`ssplat-gui`)
 
-Working notes for the no-Python trainer under `csrc/app/`. Written 2026-07-10;
-covers code structure, verification status, and remaining ports. Long-term
-context: this is Phase 1 of GUI-app plan (standalone C++ trainer → Dear
-ImGui/GLFW GUI in the same binary → Windows/Linux packaging; kernels stay in
-Slang for the eventual Vulkan/cross-vendor port).
+Working notes for the no-Python trainer under `csrc/app/`. Written 2026-07-10,
+GUI added 2026-07-12; covers code structure, verification status, and
+remaining ports. Long-term context: Phase 1 (standalone C++ trainer) and
+Phase 2 (Dear ImGui/GLFW GUI) of the GUI-app plan are done; Phase 3 is
+Windows/Linux packaging; kernels stay in Slang for the eventual
+Vulkan/cross-vendor port.
 
 ## Build & run
 
@@ -50,11 +51,57 @@ can't suppress errors raised inside a found package config). Manual
 equivalent from a vcvars64 shell:
 `cmake -G Ninja -B build -DSSPLAT_NO_TORCH=ON -DCMAKE_BUILD_TYPE=Release`.
 
+## Native GUI (`ssplat-gui`, Phase 2)
+
+Dear ImGui + GLFW + OpenGL 3.2-core desktop app ("Spirulae Splat Studio").
+Off by default; enable with:
+
+```bash
+cmake -G Ninja -B build -DSSPLAT_BUILD_GUI=ON   # composes with -DSSPLAT_NO_TORCH=ON
+cmake --build build --target ssplat-gui
+```
+
+GLFW 3.4 and imgui v1.92.8 are pinned and fetched at configure time via
+FetchContent (network needed once; on WSL drvfs mounts git may need
+`safe.directory` entries for `build/_deps/{glfw,imgui}-src`). Only system dep
+is OpenGL + X11/Wayland dev packages on Linux; Windows (MSVC) and macOS
+(GL 3.2 forward-compat) code paths are in place — macOS still needs the
+CUDA→Vulkan port to actually run the engine.
+
+Design: novice path is Home → "Open a Dataset" (or "Create Dataset from
+Photos/Video", which drives external `colmap`/`ffmpeg` CLIs with live log +
+cancel) → preset dropdown + a curated Basic Options list → Start Training →
+live native viewport. Advanced path: "All Options" editor **generated from
+the `SSPLAT_CONFIG_FIELDS` X-macro** — all config fields, grouped by
+sub-config, searchable, Python docstrings as tooltips, modified-from-preset
+highlighting with right-click reset; new Python config fields appear
+automatically after codegen. Web viewer can be additionally served from the
+GUI (Basic Options) for remote monitoring.
+
+| File | Role |
+|---|---|
+| `gui/GuiMain.cpp` | GLFW window + GL 3.2 core context + ImGui bootstrap, dark style, DPI scale, frame loop, close-confirm flow. |
+| `gui/GuiApp.h/.cpp` | Screens (Home / COLMAP / Train), layout, wiring; recents + tool paths persisted to `~/.config/spirulae-splat/gui.conf` (`%APPDATA%` on Windows). |
+| `gui/ConfigUI.h/.cpp` | The X-macro-generated options editor. Zero per-field special cases (only `data` is hidden, managed by the dataset picker). |
+| `gui/ViewportPanel.h/.cpp` | Native viewport: RenderWorker client + GL texture upload; turntable navigation matching viewer.html (Z-up normalized frame; orbit/pan/zoom), buffer picker, camera-frusta overlay, render-scale + live-refresh throttle (0.15 s) so rendering steals little step time. Initial framing: seed-point centroid target, median camera distance, camera-centroid direction. |
+| `gui/TrainRunner.h/.cpp` | TrainerSession on a worker thread: phases Idle→Loading→Ready→Preparing→Training→Done, pause/stop, metric history for plots, optional ViewerServer. Lifetime rule: viewport detaches before the session is replaced. |
+| `gui/ColmapRunner.h/.cpp` | images/video → COLMAP dataset: ffmpeg frame extraction (video), feature_extractor → exhaustive/sequential matcher (auto: sequential for video / >400 images) → mapper, quality presets, GPU toggle. Photo-folder inputs are indexed **in place** (no copy) — the absolute image dir is recorded in `<ws>/ssplat_dataset.json` and passed as `image_dir` (parsers join `dataset_dir / image_dir`, absolute wins). |
+| `gui/FileDialog.h/.cpp` | Built-in ImGui file/folder browser (no native-dialog dep; works over WSLg/remote X). |
+| `gui/Subprocess.h/.cpp` | Cross-platform subprocess with merged stdout/stderr line streaming + kill-on-cancel (fork/execvp + process group on POSIX, CreateProcess + pipe on Windows). |
+
+Verified 2026-07-12 (WSLg, RTX 5070): full E2E on mipnerf360/garden driven
+via synthetic X input — open dataset → preview parse → set steps/downscale →
+train 600 steps (8 ms/step incl. live viewport) → orbit/zoom/depth-buffer/
+frusta overlay → checkpoint saved → Train Again state. CLI re-verified
+unchanged after the TrainerCore/RenderWorker extraction (see below).
+
 ## Files
 
 | File | Role |
 |---|---|
-| `main.cpp` | CLI parsing, engine setup, train loop, checkpointing. Ports of the Python managed path (see mapping below). |
+| `main.cpp` | CLI parsing (`--help`, flag table), stdout progress printing, web-viewer wiring. The engine plumbing lives in TrainerCore (below). |
+| `TrainerCore.h/.cpp` | **Shared trainer session** (extracted from main.cpp 2026-07-12, code moved verbatim): color-space resolution, `seed_splats`, `build_step_config`/`build_loss_weights`, `scheduled_lr`, `save_config_json`, and `TrainerSession` = check_config / load_dataset / setup_engine / train(callbacks) / save_checkpoint / progress_json + the engine mutex + pause/stop/render-pending atomics + `make_viewer_config/hooks`. Used by both `ssplat-train` and `ssplat-gui`. |
+| `RenderWorker.h/.cpp` | **Shared interactive render path** (extracted from Viewer.cpp 2026-07-12): latest-wins worker thread, c2w remap + engine render + display transforms + `engine_blit_view`, returns RGB8; `viewer_upload_cameras()`. Viewer.cpp adds HTTP+JPEG on top; the GUI viewport uploads to a GL texture. |
 | `DatasetParser.h` | Public dataset structs: `DatasetParserConfig`, `ParsedDataset` (per-INPUT cameras), `PostSplitCameras` + `bake_post_split()` (warp expansion), parse fns, shared `dsparse::` helpers. |
 | `ColmapParser.cpp` | COLMAP **binary** reader (text TODO) + format auto-detect dispatcher (`parse_dataset`: transforms.json → nerfstudio, else try COLMAP, else Metashape — Python's probe order). |
 | `NerfstudioParser.cpp` | transforms.json reader + self-contained PLY point reader (ascii + binary_little_endian). Split into `parse_nerfstudio_dataset` (reads the file) and `parse_nerfstudio_meta` (consumes a transforms-shaped `JsonValue`; the Metashape front-end feeds this). |
@@ -192,6 +239,11 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
   symbols undefined; drops out with no-torch.
 - Engine auto-resolves `split_batch`+FPBO conflicts via
   `max_input_batch_size` (prints a warning) — pass both through as Python does.
+- **Pre-existing**: the process can dump core during exit teardown after a
+  completed run (observed on both pre- and post-refactor `ssplat-train`
+  2026-07-12; likely a DataManager/engine thread racing static destruction).
+  Harmless — all output is already on disk — but worth fixing before
+  packaging (Phase 3).
 
 ## TODOs (rough priority)
 
@@ -202,10 +254,11 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
 2. **Resume** — `engine_load_checkpoint` after skeleton setup
    (trainer.py:132-137); config.json round-trip (CLI dump is close to but
    not tyro-compatible; decide on a shared format).
-3. **ImGui native viewport (Phase 2)** — reuse `Viewer.cpp`'s render path
-   (everything up to the JPEG encode); swap HTTP+JPEG for CUDA-GL interop.
-   The web viewer stays as the headless/cloud fallback. Debug-only `sh` /
-   `refinement_score` buffers (engine_debug_forward) not ported.
+3. ~~ImGui native viewport (Phase 2)~~ DONE 2026-07-12 (`ssplat-gui`, see
+   above). Still open within it: CUDA-GL interop upload (currently D2H +
+   glTexImage2D — fine at viewport sizes), debug-only `sh` /
+   `refinement_score` buffers (engine_debug_forward) not ported, COLMAP
+   progress bar is stage-based only, no mesh-export UI (use `ssplat-mesh`).
 4. Seeding fidelity: jitter repeated seed points toward a neighbor
    (model.py:550-556) instead of exact duplication; `suppress_initial_scales`
    (model.py:584/700s). (Exact kNN: DONE, `Knn.h`.)

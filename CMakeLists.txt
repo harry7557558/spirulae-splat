@@ -13,6 +13,7 @@ project(spirulae_splat LANGUAGES C CXX CUDA)
 # ---------------------------------------------------------------------------
 
 option(SSPLAT_BUILD_CLI "Build the standalone ssplat-train CLI" OFF)
+option(SSPLAT_BUILD_GUI "Build the native GUI app ssplat-gui (fetches GLFW + Dear ImGui)" OFF)
 option(SSPLAT_NO_TORCH "Skip Torch/Python even if present; build only ssplat-train" OFF)
 
 set(SSPLAT_WITH_TORCH OFF)
@@ -265,7 +266,7 @@ set_property(TARGET csrc PROPERTY CUDA_STANDARD 17)
 # forces it on) so the normal extension build is unaffected.
 # ---------------------------------------------------------------------------
 
-if(SSPLAT_BUILD_CLI)
+if(SSPLAT_BUILD_CLI OR SSPLAT_BUILD_GUI)
     # Embed the (unchanged) web viewer client into the binary so the exe is
     # self-contained. Regenerated at configure time when viewer.html changes.
     set(SSPLAT_VIEWER_HTML ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/viewer/viewer.html)
@@ -279,14 +280,18 @@ if(SSPLAT_BUILD_CLI)
         "inline const unsigned char kViewerHtml[] = {${_ssplat_vh_bytes}};\n"
         "inline const size_t kViewerHtmlSize = sizeof(kViewerHtml);\n")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${SSPLAT_VIEWER_HTML})
+endif()
 
+if(SSPLAT_BUILD_CLI)
     add_executable(ssplat-train
         spirulae_splat/splat/cuda/csrc/app/main.cpp
+        spirulae_splat/splat/cuda/csrc/app/TrainerCore.cpp
         spirulae_splat/splat/cuda/csrc/app/ColmapParser.cpp
         spirulae_splat/splat/cuda/csrc/app/NerfstudioParser.cpp
         spirulae_splat/splat/cuda/csrc/app/MetashapeParser.cpp
         spirulae_splat/splat/cuda/csrc/app/DatasetCommon.cpp
         spirulae_splat/splat/cuda/csrc/app/HttpServer.cpp
+        spirulae_splat/splat/cuda/csrc/app/RenderWorker.cpp
         spirulae_splat/splat/cuda/csrc/app/Viewer.cpp
         spirulae_splat/splat/cuda/csrc/external/miniz.c
     )
@@ -353,6 +358,98 @@ if(SSPLAT_BUILD_CLI)
         set_property(TARGET ssplat-mesh PROPERTY BUILD_RPATH "$ORIGIN")
     endif()
     set_property(TARGET ssplat-mesh PROPERTY CXX_STANDARD 17)
+endif()
+
+# ---------------------------------------------------------------------------
+# Native GUI (ssplat-gui) -- optional, off by default. Dear ImGui + GLFW +
+# OpenGL 3 (imgui's embedded GL loader; no GLEW/GLAD). Dependencies are
+# fetched at configure time via FetchContent and built statically, so the
+# only system requirements are OpenGL dev headers (Linux: libgl1-mesa-dev +
+# xorg-dev for GLFW; Windows/macOS: nothing extra).
+# ---------------------------------------------------------------------------
+
+if(SSPLAT_BUILD_GUI)
+    include(FetchContent)
+
+    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(glfw
+        GIT_REPOSITORY https://github.com/glfw/glfw.git
+        GIT_TAG        3.4
+        GIT_SHALLOW    TRUE)
+    FetchContent_Declare(imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG        v1.92.8
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(glfw imgui)
+
+    find_package(OpenGL REQUIRED)
+
+    # imgui ships no CMakeLists; build the core + glfw/gl3 backends +
+    # std::string InputText helper as a small static lib.
+    add_library(imgui_glfw STATIC
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+        ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
+    )
+    target_include_directories(imgui_glfw PUBLIC
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
+        ${imgui_SOURCE_DIR}/misc/cpp
+    )
+    target_link_libraries(imgui_glfw PUBLIC glfw)
+    set_property(TARGET imgui_glfw PROPERTY CXX_STANDARD 17)
+
+    add_executable(ssplat-gui
+        spirulae_splat/splat/cuda/csrc/app/gui/GuiMain.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/GuiApp.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/ConfigUI.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/FileDialog.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/Subprocess.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/ColmapRunner.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/TrainRunner.cpp
+        spirulae_splat/splat/cuda/csrc/app/gui/ViewportPanel.cpp
+        spirulae_splat/splat/cuda/csrc/app/TrainerCore.cpp
+        spirulae_splat/splat/cuda/csrc/app/RenderWorker.cpp
+        spirulae_splat/splat/cuda/csrc/app/HttpServer.cpp
+        spirulae_splat/splat/cuda/csrc/app/Viewer.cpp
+        spirulae_splat/splat/cuda/csrc/app/ColmapParser.cpp
+        spirulae_splat/splat/cuda/csrc/app/NerfstudioParser.cpp
+        spirulae_splat/splat/cuda/csrc/app/MetashapeParser.cpp
+        spirulae_splat/splat/cuda/csrc/app/DatasetCommon.cpp
+        spirulae_splat/splat/cuda/csrc/external/miniz.c
+    )
+    target_include_directories(ssplat-gui PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc
+        ${CMAKE_BINARY_DIR}
+        ${CUDAToolkit_INCLUDE_DIRS}
+    )
+    target_link_libraries(ssplat-gui PRIVATE
+        csrc CUDA::cudart imgui_glfw OpenGL::GL)
+    if(SSPLAT_WITH_TORCH)
+        find_package(Python3 REQUIRED COMPONENTS Development.Embed)
+        target_link_libraries(ssplat-gui PRIVATE Python3::Python)
+    endif()
+    target_compile_options(ssplat-gui PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>
+    )
+    # Same libtorch std::filesystem interposition workaround as ssplat-train.
+    if(SSPLAT_WITH_TORCH AND NOT WIN32)
+        target_link_options(ssplat-gui PRIVATE -static-libgcc -static-libstdc++)
+    endif()
+    if(SSPLAT_WITH_TORCH)
+        set_property(TARGET ssplat-gui PROPERTY BUILD_RPATH
+            "$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
+    else()
+        set_property(TARGET ssplat-gui PROPERTY BUILD_RPATH "$ORIGIN")
+    endif()
+    set_property(TARGET ssplat-gui PROPERTY CXX_STANDARD 17)
 endif()
 
 message(STATUS "spirulae_splat CUDA extension configured.")
