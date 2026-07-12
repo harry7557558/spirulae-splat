@@ -1227,6 +1227,8 @@ $("move-speed").addEventListener("input", e => {
 });
 
 $("fov-slider").addEventListener("input", e => {
+  const m = $("camera-model").value;
+  if (m !== "EQUIRECTANGULAR") _fovMemory[m] = +e.target.value;
   $("fov-val").textContent = e.target.value + "°";
   Viewer.requestRender();
 });
@@ -1249,23 +1251,30 @@ $("update-rate-slider").addEventListener("input", e => {
 
 $("show-training-cameras").addEventListener("change", () => Viewer.requestRender());
 
+const _fovMemory = {};   // last FOV (deg) per camera model, restored on switch back
+let _fovModel = null;    // model the fov slider's value currently belongs to
 function _syncCameraModelUI() {
   // FOV has no meaning for a full 360 panorama; grey the slider out.
   const model = $("camera-model").value;
   const isEquirect = model === "EQUIRECTANGULAR";
   const fov = $("fov-slider");
   if (fov) {
+    // remember the outgoing model's FOV before retargeting the slider
+    if (_fovModel && _fovModel !== "EQUIRECTANGULAR") _fovMemory[_fovModel] = +fov.value;
     fov.disabled = isEquirect;
     fov.closest(".ctrl-row")?.style.setProperty("opacity", isEquirect ? "0.4" : "1");
-    // Per-model FOV range; clamp the current value on switch (a >180° fisheye
-    // FOV must not carry over to pinhole). Equirectangular has no range.
+    // Per-model FOV range; restore the model's remembered FOV, or clamp the
+    // current value on first use (a >180° fisheye FOV must not carry over to
+    // pinhole). Equirectangular has no range (slider untouched).
     if (!isEquirect) {
       const [lo, hi] = FOV_RANGE[model] || [10, 150];
       fov.min = lo; fov.max = hi;
-      const v = Math.min(Math.max(+fov.value, lo), hi);
+      const mem = _fovMemory[model];
+      const v = Math.min(Math.max(mem != null ? mem : +fov.value, lo), hi);
       fov.value = v;
       $("fov-val").textContent = v + "°";
     }
+    _fovModel = model;
   }
 }
 $("camera-model").addEventListener("change", () => { _syncCameraModelUI(); Viewer.requestRender(); });

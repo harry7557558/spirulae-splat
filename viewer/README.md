@@ -69,15 +69,20 @@ plain C++17 with no CUDA dependency (see `csrc/CameraModel.h`).
     per-camera projection: the image border is discretized and unprojected
     through the camera model (pinhole / fisheye / equisolid / equirectangular)
     **including OpenCV distortion** (Newton undistort, `k1–k4 p1 p2 s1 s2 b1
-    b2`), so a fisheye camera's frustum visibly bulges. Point size and frustum
+    b2`), so a fisheye camera's frustum visibly bulges. Wide cameras get an
+    image-aligned wire dome (fisheye) or a lat/long wire globe
+    (equirectangular) instead of a lone border ring. Point size and frustum
     size are adjustable; either layer can be hidden.
   - A compact info panel: source format, image / point counts, camera groups,
     per-model image counts.
   - **Component picker** when the dataset has several reconstructions
     (`sparse/0`, `sparse/1`, multiple Metashape `<component>` chunks, …).
-  - **Hover** a camera to see its intrinsics (model, fx/fy/cx/cy, distortion);
-    **double-click** a camera to view the scene from it (average focal,
-    cx/cy/distortion omitted); double-click the point cloud to recenter.
+  - **Hover** anywhere on a camera frustum (ray-picked, not just its apex) to
+    see its intrinsics (model, fx/fy/cx/cy, distortion); **double-click** a
+    camera to view the scene from it (average focal, cx/cy/distortion
+    omitted); double-click the point cloud to recenter. Picking is
+    depth-ordered: whatever is visually in front at the cursor — frustum or
+    point cloud — wins.
   - Degrades gracefully: dropping only `sparse/`, only a `transforms.json`,
     only a Metashape `.xml`, or only a point-cloud `.ply` shows whatever is
     available (images are never required, or read at all — only the metadata

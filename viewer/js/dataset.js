@@ -98,19 +98,26 @@ function generateRay(u, v, model, d) {
 
 function norm3(x, y, z) { const l = Math.hypot(x, y, z) || 1; return [x/l, y/l, z/l]; }
 
-// Camera-space border points of a size-1 frustum (CV convention).
+// Camera-space size-1 frustum wireframe (CV convention).
 // key: model + resolution + intrinsics + distortion.
+//
+// Pinhole keeps the classic look: image-border rectangle + 4 apex->corner
+// anchors. Wide models (fisheye / equisolid / equirectangular) sit on a sphere
+// shell where a lone border loop reads as a scribble (a >180-degree fisheye's
+// border is a ring *behind* the camera), so they additionally get image-aligned
+// interior gridlines — the wireframe of the textured uv-grid surface the
+// training viewer rasterizes (fill_frustum_segments_kernel faces) — making the
+// dome / globe shape and the view orientation legible. For equirectangular the
+// corner-interpolated border is degenerate (poles collapse, left/right edges
+// coincide), so the border is dropped entirely in favor of the pixel-grid
+// meridians + parallels.
+//
+// Returns { lines: [{pts, closed, dim}], anchors: [point], maxR }.
 function frustumTemplate(cam) {
   const { fx, fy, model, dist } = cam;
   const w = cam.w || Math.round(2*cam.cx) || 1;
   const h = cam.h || Math.round(2*cam.cy) || 1;
   const cx = cam.cx, cy = cam.cy;
-  const corners = [
-    [-cx/fx,      -cy/fy],
-    [(w-cx)/fx,   -cy/fy],
-    [(w-cx)/fx,   (h-cy)/fy],
-    [-cx/fx,      (h-cy)/fy],
-  ];
   // Depth-placement scale factors (Visualizer.cu:123-127) at size = 1.
   const a = Math.sqrt(fx*fy/(w*h));
   const rs = 1/Math.sqrt(a);
@@ -123,14 +130,11 @@ function frustumTemplate(cam) {
     if (Math.abs(dir[2]) < 1e-6) return [0,0,0];
     return [dir[0]*sxy/dir[2], dir[1]*sxy/dir[2], sz];             // z = sz plane
   };
-  const pts = [];
-  for (let i = 0; i < 4*NSEG; i++) {
-    const ci = Math.floor(i/NSEG), t = (i % NSEG)/NSEG;
-    const u = corners[ci][0] + (corners[(ci+1)%4][0] - corners[ci][0])*t;
-    const v = corners[ci][1] + (corners[(ci+1)%4][1] - corners[ci][1])*t;
+  // Unproject one normalized image point; outside the valid domain, shrink uv
+  // toward the principal point until it re-enters (Visualizer.cu:146-157).
+  const ray = (u, v) => {
     let dir = generateRay(u, v, model, dist);
     if (!dir) {
-      // shrink uv toward the image center until it re-enters the valid domain
       let t0 = 0, t1 = 1, best = null;
       for (let k = 0; k < 12; k++) {
         const s = 0.5*(t0+t1);
@@ -139,34 +143,112 @@ function frustumTemplate(cam) {
       }
       dir = best || [0, 0, 1];
     }
-    pts.push(place(dir));
+    return dir;
+  };
+  // Polyline between two pixel coords, n segments, placed on the frustum.
+  // Wide-model gridlines span up to a full circle, so they get 2x the border's
+  // per-edge sampling to stay smooth close up.
+  const sample = (x0, y0, x1, y1, n = NSEG) => {
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i/n;
+      const u = (x0 + (x1-x0)*t - cx)/fx, v = (y0 + (y1-y0)*t - cy)/fy;
+      pts.push(place(ray(u, v)));
+    }
+    return pts;
+  };
+  const degenerate = (pts) => {  // e.g. an equirect border row collapsed to a pole
+    const p0 = pts[0];
+    return pts.every(p => Math.hypot(p[0]-p0[0], p[1]-p0[1], p[2]-p0[2]) < 1e-5*shell + 1e-12);
+  };
+
+  const lines = [], anchors = [];
+  if (model === M_EQUIRECT) {
+    // Lat/long wire globe over the pixel grid (covers partial panoramas too:
+    // the i=0/4, j=0/4 lines *are* the image border). Center meridian + center
+    // parallel bright as the view-direction cue, the rest dim.
+    for (let i = 0; i <= 4; i++) {
+      const mer = sample(w*i/4, 0, w*i/4, h, 2*NSEG);
+      if (!degenerate(mer)) lines.push({ pts: mer, closed: false, dim: i !== 2 });
+      const par = sample(0, h*i/4, w, h*i/4, 2*NSEG);
+      if (!degenerate(par)) lines.push({ pts: par, closed: false, dim: i !== 2 });
+    }
+    anchors.push(place(ray((w/2-cx)/fx, (h/2-cy)/fy)));      // view direction
+  } else {
+    // image-border loop (4 edges, corners at indices 0, NSEG, 2*NSEG, 3*NSEG)
+    const corners = [[0,0], [w,0], [w,h], [0,h]];
+    const border = [];
+    for (let e = 0; e < 4; e++) {
+      const [xa, ya] = corners[e], [xb, yb] = corners[(e+1)%4];
+      border.push(...sample(xa, ya, xb, yb).slice(0, NSEG));
+    }
+    lines.push({ pts: border, closed: true, dim: false });
+    if (wide) {
+      // interior gridlines -> wire dome
+      for (let i = 1; i <= 3; i++) {
+        lines.push({ pts: sample(w*i/4, 0, w*i/4, h, 2*NSEG), closed: false, dim: true });
+        lines.push({ pts: sample(0, h*i/4, w, h*i/4, 2*NSEG), closed: false, dim: true });
+      }
+    }
+    // Anchors: apex->corner when the corners are in the front hemisphere
+    // (classic pyramid); for wider cameras they cross the dome interior and
+    // scribble, so use a single apex->view-direction anchor instead.
+    const cornerPts = [border[0], border[NSEG], border[2*NSEG], border[3*NSEG]];
+    if (!wide || cornerPts.every(p => p[2] > 0))
+      anchors.push(...cornerPts);
+    else
+      anchors.push(place(ray((w/2-cx)/fx, (h/2-cy)/fy)));
   }
-  return pts;   // 4*NSEG points; corners at indices 0, NSEG, 2*NSEG, 3*NSEG
+
+  let maxR = 0;
+  for (const l of lines) for (const p of l.pts) maxR = Math.max(maxR, Math.hypot(p[0], p[1], p[2]));
+  for (const p of anchors) maxR = Math.max(maxR, Math.hypot(p[0], p[1], p[2]));
+  return { lines, anchors, maxR };
+}
+
+// GL line-list vertex count of a template (used to preallocate buffers).
+function templateVertCount(tmpl) {
+  const ASEG = 4;
+  let n = 0;
+  for (const l of tmpl.lines) n += 2*(l.pts.length - 1 + (l.closed ? 1 : 0));
+  return n + tmpl.anchors.length*ASEG*2;
 }
 
 // Build the frustum line geometry for all cameras.
-// Returns { apex:Float32Array, offset:Float32Array, colors:Uint8Array, count, ranges }.
+// Returns { apex:Float32Array, offset:Float32Array, colors:Uint8Array, count,
+//           ranges, pickR:Float32Array } — pickR[i] is the size-1 bounding-
+//           sphere radius around camera i's center (multiply by the frustum-
+//           size slider for ray picking, see pickCamera in main.js).
 export function buildFrustums(cameras) {
   const N = cameras.length;
-  if (!N) return { apex: new Float32Array(0), offset: new Float32Array(0), colors: new Uint8Array(0), count: 0, ranges: [] };
-  const ASEG = 4;                     // subdivisions per apex->corner anchor line
-  const VPC = 4*NSEG*2 + 4*ASEG*2;    // vertices per camera (border loop + 4 anchors)
-  const total = N*VPC;
-  const apex = new Float32Array(total*3);
-  const offset = new Float32Array(total*3);
-  const colors = new Uint8Array(total*3);
-  const ranges = new Array(N);
+  if (!N) return { apex: new Float32Array(0), offset: new Float32Array(0), colors: new Uint8Array(0), count: 0, ranges: [], pickR: new Float32Array(0) };
+  const ASEG = 4;                     // subdivisions per apex anchor line
 
   const templates = new Map();
   const keyOf = (c) => c.model+'|'+c.w+'|'+c.h+'|'+c.fx.toFixed(3)+'|'+c.fy.toFixed(3)+
                        '|'+c.cx.toFixed(3)+'|'+c.cy.toFixed(3)+'|'+c.dist.join(',');
+  const camTmpl = new Array(N);
+  let total = 0;
+  for (let i = 0; i < N; i++) {
+    const key = keyOf(cameras[i]);
+    let tmpl = templates.get(key);
+    if (!tmpl) { tmpl = frustumTemplate(cameras[i]); templates.set(key, tmpl); }
+    camTmpl[i] = tmpl;
+    total += templateVertCount(tmpl);
+  }
+
+  const apex = new Float32Array(total*3);
+  const offset = new Float32Array(total*3);
+  const colors = new Uint8Array(total*3);
+  const ranges = new Array(N);
+  const pickR = new Float32Array(N);
+  const DIM = FRUSTUM_COLOR.map(c => Math.round(c*0.5));   // interior gridlines
 
   let vp = 0;   // vertex pointer
   for (let i = 0; i < N; i++) {
     const cam = cameras[i];
-    const key = keyOf(cam);
-    let tmpl = templates.get(key);
-    if (!tmpl) { tmpl = frustumTemplate(cam); templates.set(key, tmpl); }
+    const tmpl = camTmpl[i];
+    pickR[i] = tmpl.maxR;
 
     // c2w [3,4] row-major, OpenGL/nerfstudio. CV cam->world rotation = negate
     // the y,z columns; translation is the camera center.
@@ -183,30 +265,33 @@ export function buildFrustums(cameras) {
       R[1][0]*p[0] + R[1][1]*p[1] + R[1][2]*p[2],
       R[2][0]*p[0] + R[2][1]*p[1] + R[2][2]*p[2],
     ];
-    const worldOff = tmpl.map(off);
 
     const start = vp;
-    const push = (o) => {
+    const push = (o, col) => {
       apex[vp*3] = tx; apex[vp*3+1] = ty; apex[vp*3+2] = tz;
       offset[vp*3] = o[0]; offset[vp*3+1] = o[1]; offset[vp*3+2] = o[2];
-      colors[vp*3] = FRUSTUM_COLOR[0]; colors[vp*3+1] = FRUSTUM_COLOR[1]; colors[vp*3+2] = FRUSTUM_COLOR[2];
+      colors[vp*3] = col[0]; colors[vp*3+1] = col[1]; colors[vp*3+2] = col[2];
       vp++;
     };
-    // border loop
-    const n = 4*NSEG;
-    for (let j = 0; j < n; j++) { push(worldOff[j]); push(worldOff[(j+1)%n]); }
-    // 4 anchor lines: apex -> each image corner, subdivided so they curve
+    for (const line of tmpl.lines) {
+      const pts = line.pts.map(off);
+      const col = line.dim ? DIM : FRUSTUM_COLOR;
+      const n = pts.length;
+      for (let j = 0; j + 1 < n; j++) { push(pts[j], col); push(pts[j+1], col); }
+      if (line.closed) { push(pts[n-1], col); push(pts[0], col); }
+    }
+    // anchor lines: apex -> corner / view direction, subdivided so they curve
     // correctly (and split at seams) under nonlinear display cameras
-    for (let k = 0; k < 4; k++) {
-      const o = worldOff[k*NSEG];
+    for (const p of tmpl.anchors) {
+      const o = off(p);
       for (let j = 0; j < ASEG; j++) {
-        push([o[0]*j/ASEG, o[1]*j/ASEG, o[2]*j/ASEG]);
-        push([o[0]*(j+1)/ASEG, o[1]*(j+1)/ASEG, o[2]*(j+1)/ASEG]);
+        push([o[0]*j/ASEG, o[1]*j/ASEG, o[2]*j/ASEG], FRUSTUM_COLOR);
+        push([o[0]*(j+1)/ASEG, o[1]*(j+1)/ASEG, o[2]*(j+1)/ASEG], FRUSTUM_COLOR);
       }
     }
     ranges[i] = { start, count: vp - start };
   }
-  return { apex, offset, colors, count: total, ranges };
+  return { apex, offset, colors, count: total, ranges, pickR };
 }
 
 // ---------------------------------------------------------------------------

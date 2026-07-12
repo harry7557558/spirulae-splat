@@ -26,7 +26,7 @@ const opts = {
 };
 
 // dataset session state (cameras metadata for hover/pick/view-from-camera)
-let dataset = null;   // { cameras, components, token, fit, frustumBase, frustumMult }
+let dataset = null;   // { cameras, components, token, fit, frustumBase, frustumMult, pickR }
 
 // Valid FOV range (degrees) per display camera model: tan blows up toward
 // 180° for the linear models; the fisheye projections are defined to 360°.
@@ -35,6 +35,9 @@ const FOV_RANGE = {
   perspective: [10, 150], orthographic: [10, 150],
   fisheye: [10, 360], equisolid: [10, 360],
 };
+// Last FOV per display model (radians), restored when switching back to that
+// model — a 210° fisheye view must not drag a 100° perspective FOV to 150°.
+const fovMemory = {};
 
 function setStatus(text, cls='') { $('status-text').textContent = text; $('status-dot').className = cls; }
 
@@ -364,6 +367,7 @@ async function loadDataset(entries, token) {
     components: res.components || (dataset && dataset.components) || [],
     token: res.selectedToken || token,
     fit, frustumBase, frustumMult,
+    pickR: res.frustum.pickR,   // size-1 per-camera frustum radii (ray picking)
   };
   model = { type:'dataset', numCameras: res.cameras.length, numPoints: res.points.count };
   opts.hoverCam = -1;
@@ -540,9 +544,10 @@ function wireInput() {
     const [px, py] = canvasPixel(e);
     const hit = pickCamera(px, py);
     if (opts.hoverCam !== hit) { opts.hoverCam = hit; dirty = true; }
+    vp.style.cursor = hit >= 0 ? 'pointer' : '';
     if (hit >= 0) showTooltip(e, hit); else hideTooltip();
   });
-  vp.addEventListener('pointerleave', () => { if (opts.hoverCam !== -1) { opts.hoverCam = -1; dirty = true; } hideTooltip(); });
+  vp.addEventListener('pointerleave', () => { if (opts.hoverCam !== -1) { opts.hoverCam = -1; dirty = true; } vp.style.cursor = ''; hideTooltip(); });
 
   // drag & drop / file picker (folder-aware)
   vp.addEventListener('dragover', (e) => { e.preventDefault(); vp.classList.add('dragover'); });
@@ -620,21 +625,86 @@ function projectWorld(p) {
   return [fx*r*dx + cx, fy*r*dy + cy, v3.len(pc)];
 }
 
-// Nearest camera whose center projects within a pixel threshold of (px,py).
-// Hidden cameras are not pickable (no hover tooltip, no double-click).
-function pickCamera(px, py) {
-  if (!dataset || !opts.showFrustums) return -1;
+// World-space (canonical frame) view ray through canvas pixel (px,py) under
+// the current display camera model. rd is unit length.
+function cursorRay(px, py) {
+  const intr = renderer._intrinsics(camera, canvas.width, canvas.height);
+  const uv = [(px - intr.cx)/intr.fx, (py - intr.cy)/intr.fy];
+  const R = camera.rotMat3();
+  if (camera.model === 'orthographic')
+    return { ro: v3.add(camera.pos, mat3.mulVec(R, [uv[0], uv[1], 0])), rd: mat3.mulVec(R, [0, 0, -1]) };
+  return { ro: camera.pos, rd: mat3.mulVec(R, unprojectDir(uv)) };
+}
+
+// Camera frustum under the cursor: { i, t } (index + depth along the cursor
+// ray) or null. Casts the view ray against each camera's frustum bounding
+// sphere (center = camera position, radius = frustum extent x size slider) so
+// pointing anywhere on/inside a frustum counts — not just near its apex.
+// Nearest surface hit wins; a sphere the eye is inside is skipped (when
+// viewing *from* a camera you interact with the scene, not with that camera's
+// own shell). Falls back to nearest projected center within a pixel threshold
+// so tiny/faraway frustums stay pickable. Hidden cameras are not pickable
+// (no hover tooltip, no double-click).
+function pickCameraHit(px, py) {
+  if (!dataset || !opts.showFrustums) return null;
   const U = upTransform();
+  const cams = dataset.cameras;
+  const pickR = dataset.pickR;
+  const scale = opts.frustumScale || 1.0;
+  const { ro, rd } = cursorRay(px, py);
+  let best = -1, bestT = Infinity;
+  for (let i = 0; i < cams.length; i++) {
+    const m = cams[i].c2w;
+    const c = mat3.mulVec(U, [m[3], m[7], m[11]]);
+    const r = (pickR ? pickR[i] : 0) * scale;
+    const oc = v3.sub(c, ro);
+    const oc2 = v3.dot(oc, oc);
+    if (oc2 <= r*r) continue;                    // eye inside this frustum
+    const b = v3.dot(oc, rd);
+    if (b <= 0) continue;                        // behind the ray origin
+    const d2 = oc2 - b*b;
+    if (d2 > r*r) continue;
+    const t = b - Math.sqrt(r*r - d2);
+    if (t < bestT) { bestT = t; best = i; }
+  }
+  if (best >= 0) return { i: best, t: bestT };
+  // fallback: nearest projected camera center within a pixel threshold
   const thr = 18 * (window.devicePixelRatio || 1);
-  let best = -1, bestD = thr*thr;
-  for (let i = 0; i < dataset.cameras.length; i++) {
-    const m = dataset.cameras[i].c2w;
-    const sp = projectWorld(mat3.mulVec(U, [m[3], m[7], m[11]]));
+  let bestD = thr*thr, bestB = 0;
+  for (let i = 0; i < cams.length; i++) {
+    const m = cams[i].c2w;
+    const c = mat3.mulVec(U, [m[3], m[7], m[11]]);
+    const sp = projectWorld(c);
     if (!sp || sp[2] <= 0) continue;
     const dx = sp[0]-px, dy = sp[1]-py, d = dx*dx + dy*dy;
-    if (d < bestD) { bestD = d; best = i; }
+    if (d < bestD) { bestD = d; best = i; bestB = v3.dot(v3.sub(c, ro), rd); }
   }
-  return best;
+  return best >= 0 ? { i: best, t: bestB } : null;
+}
+
+// Point-cloud point under the cursor: { t, p } (depth + canonical-frame
+// position) or null. Nearest point along the ray within a 3% angular cone.
+function datasetPointHit(px, py) {
+  const { ro, rd } = cursorRay(px, py);
+  const Ut = mat3.transpose(upTransform());
+  const on = mat3.mulVec(Ut, ro), dn = mat3.mulVec(Ut, rd);
+  const pick = dsPickPoint(on[0],on[1],on[2], dn[0],dn[1],dn[2]);
+  if (pick.index >= 0 && pick.t > 0 && pick.perp < 0.03 * pick.t)
+    return { t: pick.t, p: v3.add(ro, v3.scale(rd, pick.t)) };
+  return null;
+}
+
+// Camera under the cursor as the user *sees* it: a frustum occluded by the
+// rendered point cloud (a point-cloud hit nearer along the ray) is not
+// picked. Keeps hover and double-click consistent with the visible scene.
+function pickCamera(px, py) {
+  const hit = pickCameraHit(px, py);
+  if (!hit) return -1;
+  if (opts.showPoints && dataset) {
+    const pt = datasetPointHit(px, py);
+    if (pt && pt.t < hit.t) return -1;
+  }
+  return hit.i;
 }
 
 // Set the interactive camera to look through dataset camera i: same pose and
@@ -665,26 +735,12 @@ function viewFromCamera(i) {
   const range = FOV_RANGE[displayModel];
   if (range) {
     camera.fov = Math.min(Math.max(fov, range[0]*Math.PI/180), range[1]*Math.PI/180);
+    fovMemory[displayModel] = camera.fov;   // this model's FOV is now the dataset camera's
     const deg = Math.round(camera.fov*180/Math.PI);
     $('fov').value = deg;
     $('v-fov').textContent = deg + '°';
   }
   dirty = true;
-}
-
-// Recenter on the point cloud under the cursor (dataset).
-function datasetRecenter(px, py) {
-  const intr = renderer._intrinsics(camera, canvas.width, canvas.height);
-  const uv = [(px - intr.cx)/intr.fx, (py - intr.cy)/intr.fy];
-  const R = camera.rotMat3();
-  let ro, rd;
-  if (camera.model === 'orthographic') { ro = v3.add(camera.pos, mat3.mulVec(R,[uv[0],uv[1],0])); rd = mat3.mulVec(R,[0,0,-1]); }
-  else { ro = camera.pos; rd = mat3.mulVec(R, unprojectDir(uv)); }
-  const Ut = mat3.transpose(upTransform());
-  const on = mat3.mulVec(Ut, ro), dn = mat3.mulVec(Ut, rd);
-  const pick = dsPickPoint(on[0],on[1],on[2], dn[0],dn[1],dn[2]);
-  if (pick.index >= 0 && pick.t > 0 && pick.perp < 0.03 * pick.t)
-    recenterAt(v3.add(ro, v3.scale(rd, pick.t)));
 }
 
 function showTooltip(e, i) {
@@ -735,8 +791,12 @@ function pickRecenter(e) {
   if (!model) return;
   const [px, py] = canvasPixel(e);
   if (model.type === 'dataset') {
-    const cam = pickCamera(px, py);
-    if (cam >= 0) viewFromCamera(cam); else datasetRecenter(px, py);
+    // act on whatever is visually in front at the cursor: a camera frustum or
+    // the point cloud (each only if shown), compared by depth along the ray
+    const camHit = pickCameraHit(px, py);
+    const ptHit = opts.showPoints ? datasetPointHit(px, py) : null;
+    if (camHit && (!ptHit || camHit.t <= ptHit.t)) viewFromCamera(camHit.i);
+    else if (ptHit) recenterAt(ptHit.p);
     return;
   }
   const intr = renderer._intrinsics(camera, canvas.width, canvas.height);
@@ -804,25 +864,30 @@ function wireControls() {
   bind('shade','change', e => { opts.shade = e.target.checked; dirty=true; });
 
   bind('camera-model','change', e => {
+    const prev = opts.cameraModel;
+    if (FOV_RANGE[prev]) fovMemory[prev] = camera.fov;   // remember the outgoing model's FOV
     opts.cameraModel = e.target.value; camera.model = e.target.value;
     // FOV is meaningless for equirectangular (full 360×180)
     $('fov').disabled = (e.target.value === 'equirectangular');
     $('fov').parentElement.style.opacity = $('fov').disabled ? 0.4 : 1;
-    // Per-model FOV range (fisheye reaches past 180°; pinhole must not), and
-    // clamp the current FOV on switch — e.g. a 213° fisheye view switched
-    // back to perspective would otherwise keep an impossible FOV.
+    // Per-model FOV range (fisheye reaches past 180°; pinhole must not).
+    // Switching to a model restores its remembered FOV; a model used for the
+    // first time inherits the current FOV clamped into its range — e.g. a
+    // 213° fisheye view switched back to a never-adjusted perspective would
+    // otherwise keep an impossible FOV.
     // Equirectangular has no range (slider disabled, camera.fov untouched).
     const range = FOV_RANGE[e.target.value];
     if (range) {
       const [lo, hi] = range;
       $('fov').min = lo; $('fov').max = hi;
-      const deg = Math.min(Math.max(Math.round(camera.fov*180/Math.PI), lo), hi);
-      camera.fov = deg*Math.PI/180;
+      const mem = fovMemory[e.target.value];
+      camera.fov = Math.min(Math.max(mem != null ? mem : camera.fov, lo*Math.PI/180), hi*Math.PI/180);
+      const deg = Math.round(camera.fov*180/Math.PI);   // slider is integer-stepped
       $('fov').value = deg; $('v-fov').textContent = deg + '°';
     }
     dirty=true;
   });
-  bind('fov','input', e => { camera.fov = +e.target.value*Math.PI/180; $('v-fov').textContent = e.target.value+'°'; dirty=true; });
+  bind('fov','input', e => { camera.fov = +e.target.value*Math.PI/180; fovMemory[camera.model] = camera.fov; $('v-fov').textContent = e.target.value+'°'; dirty=true; });
   bind('up-axis','change', e => setUpAxis(e.target.checked ? 'y' : 'z'));
   bind('flat-shade','change', e => { opts.flatShade = e.target.checked; dirty=true; });
   bind('mesh-color','change', e => { opts.meshColor = e.target.checked; dirty=true; });
