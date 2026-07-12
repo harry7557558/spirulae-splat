@@ -848,12 +848,11 @@ KEEP uint32_t ssv_mesh_edge_count(){
 // (cx,cy,cz) = camera position, (dx,dy,dz) = unit forward, both in the
 // model's native frame. Emits far -> near for "over" blending.
 // ---------------------------------------------------------------------------
-KEEP uint32_t* ssv_sort(int mode, float cx, float cy, float cz,
-                        float dx, float dy, float dz){
-    uint32_t N=g_splat.count;
+static uint32_t* sort_positions(const float* P, uint32_t N,
+                                int mode, float cx, float cy, float cz,
+                                float dx, float dy, float dz){
     if(N==0){ g_order.clear(); return nullptr; }
     if(g_order.size()!=N) g_order.resize(N);
-    const float* P=g_splat.posop.data();
     auto depth=[&](uint32_t i)->float{
         float x=P[i*4], y=P[i*4+1], z=P[i*4+2];
         if(mode==0) return x*dx+y*dy+z*dz;
@@ -891,6 +890,28 @@ KEEP uint32_t* ssv_sort(int mode, float cx, float cy, float cz,
         g_order[cnt[k]++]=i;
     }
     return g_order.data();
+}
+
+KEEP uint32_t* ssv_sort(int mode, float cx, float cy, float cz,
+                        float dx, float dy, float dz){
+    return sort_positions(g_splat.posop.data(), g_splat.count,
+                          mode, cx,cy,cz, dx,dy,dz);
+}
+
+// External-positions sort, for the sort worker: the worker runs its own
+// instance of this module holding only a copy of (x,y,z,opacity)*N, so the
+// counting sort runs at native speed off the main thread.
+static std::vector<float> g_wpos;
+
+KEEP float* ssw_init(uint32_t n){
+    g_wpos.resize((size_t)n*4);
+    return g_wpos.data();
+}
+
+KEEP uint32_t* ssw_sort(int mode, float cx, float cy, float cz,
+                        float dx, float dy, float dz){
+    return sort_positions(g_wpos.data(), (uint32_t)(g_wpos.size()/4),
+                          mode, cx,cy,cz, dx,dy,dz);
 }
 
 // ---------------------------------------------------------------------------

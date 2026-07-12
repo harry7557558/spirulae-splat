@@ -40,6 +40,7 @@ async function boot() {
   camera = new Camera();
   nav = new Nav(camera);
   nav.onChange = () => { dirty = true; };
+  initSortWorker();
   wireInput();
   wireControls();
   syncControls();       // apply any browser-restored control values on refresh
@@ -89,6 +90,7 @@ window.__viewer = {
   get nav() { return nav; },
   get camera() { return camera; },
   snapshot: () => { if (model && model.type==='splat') maybeSort(true); renderer.render(camera, opts); return renderer.snapshot(); },
+  get sortStats() { return sortStats; },
 };
 
 // ---------------------------------------------------------------------------
@@ -149,6 +151,43 @@ function sortMode() {
        : (camera.model === 'fisheye' || camera.model === 'equisolid') ? 2 : 0;
 }
 let lastSortPos = [0,0,0], lastSortMode = -1;
+
+// ---- asynchronous depth sorting ----
+// The counting sort is O(N) but at 10-20M splats it takes 100s of ms; run it
+// in a worker so look-around never blocks the render loop. The GPU keeps
+// drawing with the previous order until a fresh one arrives (latest request
+// wins; at most one sort in flight). A synchronous WASM path remains for the
+// initial sort after load and for snapshot() (deterministic tests).
+let sortWorker = null, sortWorkerOk = false;
+let sortBusy = false, sortPending = null, sortGen = 0;
+const sortStats = { async: 0, sync: 0 };
+function initSortWorker() {
+  try {
+    sortWorker = new Worker(new URL('./sortworker.js', import.meta.url), { type: 'module' });
+    sortWorker.onmessage = (e) => {
+      const d = e.data;
+      if (d.type !== 'sorted') return;
+      sortBusy = false;
+      if (d.gen === sortGen && d.order.byteLength > 0 && model && model.type === 'splat') {
+        renderer.updateSplatOrder(new Uint32Array(d.order));
+        sortStats.async++;
+        sortStats.native = !!d.native;
+        dirty = true;
+        sortWorker.postMessage({ type: 'recycle', buffer: d.order }, [d.order]);
+      }
+      if (sortPending) { const r = sortPending; sortPending = null; sortBusy = true; sortWorker.postMessage(r); }
+    };
+    sortWorker.onerror = () => { sortWorkerOk = false; };  // fall back to sync
+    sortWorkerOk = true;
+  } catch { sortWorkerOk = false; }
+}
+function sortWorkerInitModel(data) {
+  sortGen++; sortPending = null;
+  if (!sortWorkerOk || !sortWorker) return;
+  const posCopy = new Float32Array(data.posop);   // worker owns its own copy
+  sortWorker.postMessage({ type: 'init', gen: sortGen, count: data.count, positions: posCopy.buffer }, [posCopy.buffer]);
+}
+
 function maybeSort(force) {
   if (!model || model.type !== 'splat') return;
   const d = forwardNative();
@@ -158,9 +197,16 @@ function maybeSort(force) {
       v3.dot(d, lastSortDir) > Math.cos(0.06) &&
       // nonplanar depths depend on the camera position too
       !(mode > 0 && v3.len(v3.sub(c, lastSortPos)) > 0.01 * nav._sceneScale)) return;
+  lastSortDir = d; lastSortPos = c; lastSortMode = mode;
+  if (sortWorkerOk && !force) {
+    const req = { type: 'sort', gen: sortGen, mode, c, d };
+    if (sortBusy) sortPending = req;                 // latest wins
+    else { sortBusy = true; sortWorker.postMessage(req); }
+    return;
+  }
   const order = sortSplats(mode, c[0], c[1], c[2], d[0], d[1], d[2]);
   if (order) renderer.updateSplatOrder(order);
-  lastSortDir = d; lastSortPos = c; lastSortMode = mode;
+  sortStats.sync++;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,10 +233,12 @@ async function load(files) {
     if (res.kind === 'splat') {
       renderer.setSplat(res.data);
       freeSplatSh();   // SH lives on the GPU now; drop the WASM copy
+      sortWorkerInitModel(res.data);
       model = { type:'splat', count: res.data.count, shDegree: res.data.shDegree };
       showSplatUI(res.data);
     } else {
       renderer.setMesh(res.data, res.image || null);
+      sortGen++; sortPending = null;   // invalidate any in-flight splat sort
       model = { type:'mesh', nv: res.data.nv, nt: res.data.nt };
       showMeshUI(res.data);
     }
@@ -199,7 +247,8 @@ async function load(files) {
     // the current view. The scene scale (move/zoom speed) is still refreshed.
     if (firstModel) fitModel();
     else { const fs = fitSphere(); nav._sceneScale = 2.0 * fs[3] || 1; }
-    lastSortDir = [0,0,0];
+    lastSortDir = [0,0,0]; lastSortMode = -1;
+    if (model.type === 'splat') maybeSort(true);   // initial order, synchronous
     histCache.clear();
     updateHistParams();
     $('drop-hint').style.display = 'none';

@@ -29,7 +29,10 @@ changes.
   - Depth sorting matches the training code's `get_sorting_depth`: planar for
     perspective/orthographic, distance for equirectangular, and a smooth
     |z|/radial blend for fisheye — content behind the camera composites
-    correctly in >180° views.
+    correctly in >180° views. Sorting runs **asynchronously in a Web Worker**
+    that hosts its own instance of the WASM module (native counting sort over
+    a positions copy), so looking around never blocks the render loop; results
+    apply latest-wins when ready.
   - GPU-friendly: attributes live in `TEXTURE_2D_ARRAY`s laid out so arbitrarily
     large models render **even under a small `MAX_TEXTURE_SIZE`** (tiles into
     array layers).
@@ -95,6 +98,7 @@ js/
   renderer.js        WebGL2 renderer (splat HDR pass, mesh, grid, tonemap)
   shaders.js         GLSL (splat / grid / tonemap / mesh)
   camera.js          camera + navigation modes
+  sortworker.js      async depth-sort worker (own WASM instance)
   wasm.js            WASM bridge + streaming loader + GLTF/GLB (JS)
   colors.js          gamut matrices
   linalg.js          vec/quat/mat helpers
