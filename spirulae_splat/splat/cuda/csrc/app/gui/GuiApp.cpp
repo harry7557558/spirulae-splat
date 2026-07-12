@@ -188,21 +188,10 @@ void GuiApp::apply_preset(const std::string& preset) {
 void GuiApp::open_dataset(std::string dir, std::string image_dir) {
     if (dir.empty()) return;
     _cfg.data = dir;
-    if (!image_dir.empty()) {
-        _cfg.image_dir = image_dir;
-    } else {
-        // COLMAP-runner datasets record their (possibly external) image dir.
-        _cfg.image_dir = _defaults.image_dir;
-        std::error_code ec;
-        fs::path marker = fs::path(dir) / "ssplat_dataset.json";
-        if (fs::exists(marker, ec)) {
-            try {
-                JsonValue v = json_parse_file(marker.string());
-                if (const JsonValue* d = v.find("image_dir"))
-                    if (!d->as_string().empty()) _cfg.image_dir = d->as_string();
-            } catch (...) {}
-        }
-    }
+    // image_dir: the COLMAP runner hands its (possibly external) image dir
+    // over in-memory right after a run; otherwise the dataparser default
+    // applies and the user can set data.image_dir under Advanced.
+    _cfg.image_dir = !image_dir.empty() ? image_dir : _defaults.image_dir;
     // Default the output next to the dataset -- much easier to find than a
     // CWD-relative "outputs" for someone who launched from a desktop icon.
     // Follows the dataset unless the user customized it (i.e. it still
@@ -271,6 +260,100 @@ void GuiApp::run_pending_if_stopped() {
     }
 }
 
+static bool is_image_ext(const fs::path& p) {
+    std::string e = p.extension().string();
+    for (auto& c : e) c = (char)std::tolower((unsigned char)c);
+    return e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".webp" ||
+           e == ".tif" || e == ".tiff" || e == ".bmp";
+}
+
+void GuiApp::handle_drop(const std::string& path) {
+    std::error_code ec;
+    fs::path p(path);
+    if (fs::is_directory(p, ec)) {
+        // SfM dataset markers first (a processed dataset usually also
+        // contains an images folder -- opening wins over re-running COLMAP).
+        bool dataset = fs::exists(p / "transforms.json", ec) ||
+                       fs::is_directory(p / "sparse", ec) ||
+                       fs::is_directory(p / "colmap", ec);
+        if (!dataset) {
+            // Metashape export: a camera .xml next to a point-cloud .ply
+            // (what MetashapeParser probes for).
+            bool has_xml = false, has_ply = false;
+            for (fs::directory_iterator it(p, ec), end; !ec && it != end;
+                 it.increment(ec)) {
+                if (!it->is_regular_file(ec)) continue;
+                std::string e = it->path().extension().string();
+                for (auto& c : e) c = (char)std::tolower((unsigned char)c);
+                has_xml = has_xml || e == ".xml";
+                has_ply = has_ply || e == ".ply";
+            }
+            dataset = has_xml && has_ply;
+        }
+        if (dataset) {
+            request_open_dataset(path);
+            return;
+        }
+        bool has_image = false;
+        for (fs::recursive_directory_iterator it(
+                 p, fs::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; it.increment(ec))
+            if (it->is_regular_file(ec) && is_image_ext(it->path())) {
+                has_image = true;
+                break;
+            }
+        if (has_image) {
+            if (training_busy()) {
+                log("Dropped photo folder ignored: stop training first");
+                return;
+            }
+            _pick = PickAction::ColmapImages;
+            handle_dialog_result(path);
+            return;
+        }
+        log("Dropped folder contains no dataset or images: " + path);
+        return;
+    }
+    if (fs::is_regular_file(p, ec)) {
+        std::string ext = p.extension().string();
+        for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+        static const char* kVideoExt[] = {".mp4", ".mov", ".avi", ".mkv",
+                                          ".insv", ".webm", ".mts", ".m2ts",
+                                          ".360", ".ts", ".wmv"};
+        for (const char* v : kVideoExt)
+            if (ext == v) {
+                if (training_busy()) {
+                    log("Dropped video ignored: stop training first");
+                    return;
+                }
+                _pick = PickAction::ColmapVideo;
+                handle_dialog_result(path);
+                return;
+            }
+        // A file from inside a dataset (transforms.json, database.db, a
+        // COLMAP .bin/.txt, a Metashape camera .xml) opens the dataset it
+        // belongs to.
+        if (p.filename() == "transforms.json" || ext == ".db" ||
+            ext == ".bin" || ext == ".txt" || ext == ".xml") {
+            request_open_dataset(p.parent_path().string());
+            return;
+        }
+        log("Unsupported dropped file: " + path);
+    }
+}
+
+// Default COLMAP workspace: never point at an existing non-empty directory
+// (e.g. a previous run) -- append _2, _3, ... instead of overwriting.
+static std::string fresh_workspace(const std::string& base) {
+    std::error_code ec;
+    if (!fs::exists(base, ec) || fs::is_empty(base, ec)) return base;
+    for (int i = 2; i < 1000; i++) {
+        std::string cand = base + "_" + std::to_string(i);
+        if (!fs::exists(cand, ec) || fs::is_empty(cand, ec)) return cand;
+    }
+    return base;
+}
+
 void GuiApp::handle_dialog_result(const std::string& path) {
     switch (_pick) {
         case PickAction::OpenDataset:
@@ -279,14 +362,37 @@ void GuiApp::handle_dialog_result(const std::string& path) {
         case PickAction::ColmapImages:
             _colmap_job.input_path = path;
             _colmap_job.is_video = false;
-            _colmap_job.workspace = path + "_dataset";
+            _colmap_job.workspace = fresh_workspace(path + "_dataset");
+            _colmap_job.matcher = 1;   // photos default to exhaustive
             _screen = Screen::Colmap;
             break;
         case PickAction::ColmapVideo: {
             _colmap_job.input_path = path;
             _colmap_job.is_video = true;
             fs::path p(path);
-            _colmap_job.workspace = (p.parent_path() / (p.stem().string() + "_dataset")).string();
+            _colmap_job.workspace = fresh_workspace(
+                (p.parent_path() / (p.stem().string() + "_dataset")).string());
+            _colmap_job.matcher = 2;   // frames are ordered: sequential
+            // 360-camera preset for Insta360 .insv files: dual-fisheye
+            // tracks land in one folder per lens (one COLMAP camera each),
+            // THIN_PRISM_FISHEYE fits the lenses, and the known Insta360
+            // focal length (fx = fy ~ 0.269 * width on every X5 dataset
+            // measured) makes fisheye mapper initialization reliable.
+            // Exhaustive matching, not sequential: the two lens tracks are
+            // concatenated (not temporally interleaved) so sequential
+            // neighbors miss the cross-lens pairs -- on a real X5 capture
+            // exhaustive + model merge registered 116/118 frames where
+            // sequential + loop detection topped out at 68 (frame counts
+            // at 0.5-2 fps stay well within exhaustive range).
+            std::string ext = p.extension().string();
+            for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+            if (ext == ".insv") {
+                _colmap_job.camera_model = "THIN_PRISM_FISHEYE";
+                _colmap_job.camera_mode = 1;
+                _colmap_job.init_focal_factor = 0.269f;
+                _colmap_job.matcher = 1;
+                _colmap_job.seq_loop_closure = true;   // if switched to sequential
+            }
             _screen = Screen::Colmap;
             break;
         }
@@ -449,6 +555,9 @@ void GuiApp::draw_home() {
     help_tooltip_on_hover(
         "Pick a video walking around a scene or object. The least blurry "
         "frames are extracted with ffmpeg, then processed with COLMAP.");
+    ImGui::Spacing();
+    ImGui::TextDisabled("...or drop a dataset folder, photo folder, or "
+                        "video file anywhere in this window");
 
     if (!_recents.empty()) {
         ImGui::Dummy(ImVec2(0, 18));
@@ -506,14 +615,40 @@ void GuiApp::draw_colmap_options() {
         "(multi-track 360 videos switch to this automatically). \"Per "
         "image\" when zoom/focus varied between shots.");
 
-    const char* matchers[] = {"Auto", "Exhaustive", "Sequential", "Vocabulary tree"};
+    const char* features[] = {"SIFT (classic)", "ALIKED (neural)"};
     ImGui::SetNextItemWidth(180);
-    ImGui::Combo("Matcher", &_colmap_job.matcher, matchers, 4);
+    if (ImGui::Combo("Features", &_colmap_job.feature_type, features, 2))
+        _colmap_job.lightglue = _colmap_job.feature_type == 1;
     help_tooltip_on_hover(
-        "How image pairs are matched. Auto: sequential for video, "
-        "exhaustive up to ~400 photos, vocabulary tree beyond. The "
-        "vocabulary tree file is found next to the dataset or downloaded "
-        "automatically (one-time).");
+        "Keypoint detector/descriptor. SIFT is the robust default. ALIKED "
+        "(learned, via ONNX; models auto-download) finds strong matches in "
+        "low-texture or wide-baseline footage with far fewer keypoints, "
+        "pairs with LightGlue matching, but does not support the "
+        "vocabulary tree (tree indexes SIFT descriptors).");
+
+    const char* matchers[] = {"Exhaustive", "Sequential", "Vocabulary tree"};
+    int matcher_idx = _colmap_job.matcher - 1;
+    if (matcher_idx < 0 || matcher_idx > 2)
+        matcher_idx = _colmap_job.is_video ? 1 : 0;
+    ImGui::SetNextItemWidth(180);
+    ImGui::Combo("Matcher", &matcher_idx, matchers, 3);
+    _colmap_job.matcher = matcher_idx + 1;
+    help_tooltip_on_hover(
+        "How image pairs are matched. Exhaustive tries every pair (best "
+        "quality, O(n^2) -- fine up to a few hundred images). Sequential "
+        "matches temporal neighbors (video). Vocabulary tree scales to "
+        "thousands of unordered photos (the tree file is found next to the "
+        "dataset or downloaded automatically, one-time).");
+    if (_colmap_job.matcher == 2) {
+        ImGui::Indent();
+        ImGui::Checkbox("Loop closure detection", &_colmap_job.seq_loop_closure);
+        help_tooltip_on_hover(
+            "SequentialMatching.loop_detection: retrieve visually similar "
+            "non-neighbor frames via the vocabulary tree and match them, "
+            "closing loops when the camera revisits a spot. SIFT features "
+            "only.");
+        ImGui::Unindent();
+    }
 
     if (_colmap_job.is_video) {
         ImGui::SetNextItemWidth(180);
@@ -559,10 +694,30 @@ void GuiApp::draw_colmap_options() {
 
     // ---- advanced ----
     if (ImGui::CollapsingHeader("Advanced")) {
+        bool fisheye = _colmap_job.camera_model.find("FISHEYE") != std::string::npos;
+        ImGui::SetNextItemWidth(180);
+        ImGui::InputFloat("Initial focal length (x width, 0 = unknown)",
+                          &_colmap_job.init_focal_factor, 0, 0, "%.4g");
+        help_tooltip_on_hover(
+            "Seed COLMAP with fx = fy = factor * image width (principal "
+            "point centered, zero distortion) instead of its generic guess. "
+            "A known focal length stabilizes mapper initialization a lot, "
+            "especially for fisheye lenses. Insta360 X5: ~0.269 (set "
+            "automatically for .insv input).");
+        ImGui::SetNextItemWidth(280);
+        ImGui::InputTextWithHint("Initial camera params",
+                                 "fx,fy,cx,cy,... (overrides focal length)",
+                                 &_colmap_job.camera_params);
+        help_tooltip_on_hover(
+            "Raw ImageReader.camera_params for the selected camera model "
+            "(full calibration prior). Leave empty to use the focal-length "
+            "factor above, or both empty for COLMAP's default "
+            "initialization.");
         ImGui::SetNextItemWidth(180);
         ImGui::InputInt("Max features (0 = auto)", &_colmap_job.max_num_features, 0, 0);
-        help_tooltip_on_hover("SiftExtraction.max_num_features; overrides "
-                              "the Quality preset when non-zero.");
+        help_tooltip_on_hover("SiftExtraction / AlikedExtraction "
+                              ".max_num_features; overrides the Quality "
+                              "preset when non-zero.");
         ImGui::SetNextItemWidth(180);
         ImGui::InputInt("Max image size (0 = off)", &_colmap_job.max_image_size, 0, 0);
         help_tooltip_on_hover("FeatureExtraction.max_image_size: downscale "
@@ -581,15 +736,140 @@ void GuiApp::draw_colmap_options() {
             help_tooltip_on_hover("Upper bound on extracted frames; the "
                                   "sharpness window grows to stay under it.");
         }
-        ImGui::Checkbox("Affine SIFT + guided matching", &_colmap_job.estimate_affine_shape);
-        help_tooltip_on_hover("SiftExtraction.estimate_affine_shape + "
-                              "FeatureMatching.guided_matching: slower but "
-                              "more robust matching.");
+        ImGui::Checkbox("LightGlue matching", &_colmap_job.lightglue);
+        help_tooltip_on_hover("Neural feature matcher (FeatureMatching.type "
+                              "*_LIGHTGLUE): more matches on hard pairs than "
+                              "brute-force descriptor distance. Default for "
+                              "ALIKED features; also works with SIFT.");
+        if (_colmap_job.feature_type == 0) {
+            ImGui::Checkbox("Affine SIFT + guided matching",
+                            &_colmap_job.estimate_affine_shape);
+            help_tooltip_on_hover("SiftExtraction.estimate_affine_shape + "
+                                  "FeatureMatching.guided_matching: slower but "
+                                  "more robust matching.");
+        }
+        const char* extra_modes[] = {"Auto", "During mapping", "Final pass only"};
+        ImGui::SetNextItemWidth(180);
+        ImGui::Combo("Distortion refinement", &_colmap_job.mapper_extra_params,
+                     extra_modes, 3);
+        help_tooltip_on_hover(
+            "When distortion coefficients are optimized. \"Final pass "
+            "only\" holds them fixed during mapping "
+            "(Mapper.ba_refine_extra_params 0) -- more stable for "
+            "low-distortion perspective lenses -- and recovers them in the "
+            "final refinement pass. Auto: final-pass-only for perspective "
+            "models, during mapping for fisheye.");
+        ImGui::SetNextItemWidth(180);
+        ImGui::InputInt("Min matches per pair (0 = default)",
+                        &_colmap_job.min_num_matches, 0, 0);
+        help_tooltip_on_hover("Mapper.min_num_matches (default 15): image "
+                              "pairs with fewer inlier matches are ignored "
+                              "by the mapper. Raise to suppress spurious "
+                              "registrations, lower for sparse overlap.");
+        ImGui::SeparatorText("Repetitive scenes");
+        help_tooltip_on_hover(
+            "Large scenes with repeating structure (several similar rooms, "
+            "tiled facades) often weld physically different but "
+            "similar-looking parts together. These make matching and "
+            "registration stricter to suppress that; 0 = COLMAP default.");
+        // Preset levels filling the five fields below (editing any field
+        // afterwards shows "Custom"). Stricter = fewer wrong welds but
+        // fewer registered images on genuinely weak overlap.
+        struct RepLevel {
+            const char* name;
+            float ratio; int pair_in; int reg_in; float reg_ratio; float err;
+        };
+        static const RepLevel kRepLevels[] = {
+            {"Off (COLMAP defaults)", 0.0f,    0,   0, 0.0f,  0.0f},
+            {"Low",                   0.75f,  30,  40, 0.30f, 10.0f},
+            {"Medium",                0.70f,  60,  60, 0.40f,  8.0f},
+            {"High",                  0.62f, 100, 100, 0.50f,  6.0f},
+        };
+        int rep_idx = -1;
+        for (int i = 0; i < 4; i++)
+            if (_colmap_job.match_max_ratio == kRepLevels[i].ratio &&
+                _colmap_job.min_inliers_per_pair == kRepLevels[i].pair_in &&
+                _colmap_job.abs_pose_min_num_inliers == kRepLevels[i].reg_in &&
+                _colmap_job.abs_pose_min_inlier_ratio == kRepLevels[i].reg_ratio &&
+                _colmap_job.abs_pose_max_error == kRepLevels[i].err) {
+                rep_idx = i;
+                break;
+            }
+        ImGui::SetNextItemWidth(180);
+        if (ImGui::BeginCombo("Repetitive level",
+                              rep_idx < 0 ? "Custom" : kRepLevels[rep_idx].name)) {
+            for (int i = 0; i < 4; i++)
+                if (ImGui::Selectable(kRepLevels[i].name, rep_idx == i)) {
+                    _colmap_job.match_max_ratio = kRepLevels[i].ratio;
+                    _colmap_job.min_inliers_per_pair = kRepLevels[i].pair_in;
+                    _colmap_job.abs_pose_min_num_inliers = kRepLevels[i].reg_in;
+                    _colmap_job.abs_pose_min_inlier_ratio = kRepLevels[i].reg_ratio;
+                    _colmap_job.abs_pose_max_error = kRepLevels[i].err;
+                }
+            ImGui::EndCombo();
+        }
+        help_tooltip_on_hover(
+            "How aggressively wrong matches are suppressed; fills the "
+            "fields below. Low: mild tightening, keeps registration rate. "
+            "Medium: good first attempt for multi-room indoor captures. "
+            "High: for heavy repetition (identical rooms/facades) -- "
+            "expect fewer registered images if overlap is thin.");
+        ImGui::SetNextItemWidth(180);
+        ImGui::InputFloat("Match ratio test (0 = default 0.8)",
+                          &_colmap_job.match_max_ratio, 0, 0, "%.3g");
+        help_tooltip_on_hover(
+            "SiftMatching.max_ratio, the Lowe ratio test: a feature match "
+            "is kept only when its best match is this much better than the "
+            "second best. LOWER is stricter -- try 0.6-0.7 when repetitive "
+            "texture creates false matches. SIFT only.");
+        ImGui::SetNextItemWidth(180);
+        ImGui::InputInt("Min inliers per pair (0 = default 15)",
+                        &_colmap_job.min_inliers_per_pair, 0, 0);
+        help_tooltip_on_hover(
+            "TwoViewGeometry.min_num_inliers: image pairs whose geometric "
+            "verification finds fewer inliers are discarded outright. "
+            "Raise to 50-100 so weakly-supported (usually false) links "
+            "between similar-looking areas never enter the database.");
+        ImGui::SetNextItemWidth(180);
+        ImGui::InputInt("Min inliers to register (0 = default 30)",
+                        &_colmap_job.abs_pose_min_num_inliers, 0, 0);
+        help_tooltip_on_hover(
+            "Mapper.abs_pose_min_num_inliers: minimum absolute-pose inliers "
+            "to register an image into the model. Raise to 50-100 to stop "
+            "images from registering onto the wrong (similar-looking) part "
+            "of the scene.");
+        ImGui::SetNextItemWidth(180);
+        ImGui::InputFloat("Min inlier ratio to register (0 = default 0.25)",
+                          &_colmap_job.abs_pose_min_inlier_ratio, 0, 0, "%.3g");
+        help_tooltip_on_hover(
+            "Mapper.abs_pose_min_inlier_ratio: minimum fraction of 2D-3D "
+            "correspondences that must be pose inliers. Try 0.35-0.5 for "
+            "stricter registration.");
+        ImGui::SetNextItemWidth(180);
+        ImGui::InputFloat("Max registration error px (0 = default 12)",
+                          &_colmap_job.abs_pose_max_error, 0, 0, "%.3g");
+        help_tooltip_on_hover(
+            "Mapper.abs_pose_max_error: reprojection error threshold (px) "
+            "for absolute-pose RANSAC when registering images. Lower "
+            "(6-8) = stricter; combine with the inlier thresholds above.");
+        ImGui::Separator();
+        if (fisheye) ImGui::BeginDisabled();
         ImGui::Checkbox("GPU bundle adjustment", &_colmap_job.ba_use_gpu);
-        help_tooltip_on_hover("Mapper.ba_use_gpu.");
+        if (fisheye) ImGui::EndDisabled();
+        help_tooltip_on_hover(fisheye
+            ? "Mapper.ba_use_gpu -- unavailable: COLMAP's GPU bundle "
+              "adjustment does not support fisheye camera models yet."
+            : "Mapper.ba_use_gpu.");
+        ImGui::Checkbox("Merge partial models", &_colmap_job.merge_models);
+        help_tooltip_on_hover(
+            "When the mapper splits the scene into several partial models, "
+            "try colmap model_merger to fuse them (kept only when the "
+            "merged model registers more images). The trainer otherwise "
+            "auto-picks the largest partial model.");
         ImGui::Checkbox("Final refinement pass", &_colmap_job.final_bundle_adjust);
-        help_tooltip_on_hover("Run bundle_adjuster after mapping, refining "
-                              "focal length, principal point, and distortion "
+        help_tooltip_on_hover("Run bundle_adjuster after mapping on the "
+                              "largest (or merged) model, refining focal "
+                              "length, principal point, and distortion "
                               "(as in scripts/run_colmap.bash).");
         ImGui::SetNextItemWidth(-160);
         ImGui::InputTextWithHint("##vocab", "vocabulary tree (auto find/download)",
@@ -660,6 +940,30 @@ void GuiApp::draw_colmap() {
     }
     ImGui::SameLine();
     ImGui::TextUnformatted("output dataset folder");
+
+    // Resume: when the chosen workspace already holds a (partial) run,
+    // completed stages can be reused instead of starting from scratch.
+    {
+        std::error_code ec;
+        fs::path ws(_colmap_job.workspace);
+        bool prior = !_colmap_job.workspace.empty() &&
+                     (fs::exists(ws / "database.db", ec) ||
+                      (fs::is_directory(ws / "images", ec) &&
+                       !fs::is_empty(ws / "images", ec)) ||
+                      fs::is_directory(ws / "sparse", ec));
+        if (prior) {
+            ImGui::Checkbox("Resume previous run", &_colmap_job.resume);
+            help_tooltip_on_hover(
+                "This folder contains a previous (possibly interrupted) "
+                "run. When checked, completed work is reused: extracted "
+                "video frames, masks, features and matches already in "
+                "database.db, and finished sparse models -- only the "
+                "missing stages run. Uncheck to require an empty folder "
+                "instead (nothing is deleted automatically).");
+            ImGui::SameLine();
+            ImGui::TextDisabled("(previous run detected in this folder)");
+        }
+    }
 
     ImGui::Spacing();
     draw_colmap_options();

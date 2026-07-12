@@ -88,6 +88,7 @@ struct ViewerServer::Impl {
         q.model = req.get("camera_model", "PINHOLE");
         int quality = req.get_int("jpeg_quality", 75);
         q.show_cams = req.get_bool("show_training_cameras", false);
+        q.show_grid = req.get_bool("show_grid", false);
         q.cam_size_scale = (float)req.get_double("camera_size_scale", 1.0);
 
         constexpr int MAX_DIM = 2160;   // prevent OOM (http_server.py:74)
@@ -144,6 +145,7 @@ void ViewerServer::start(const std::string& host, int port,
     // + thumbnails (annotation.ensure_viewer_initialized). Host views are
     // fine -- the engine copies.
     cfg.base_camera_size = viewer_upload_cameras(post);
+    viewer_upload_grid(post, cfg.train_to_normalized, cfg.train_frame_scale);
 
     im.worker.start(std::move(cfg), std::move(hooks));
     im.buffer_keys = im.worker.buffer_keys();

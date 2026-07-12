@@ -23,6 +23,10 @@ int64_t engine_get_cur_num_splats() {
     return engine().cur_num_splats;
 }
 
+int64_t engine_get_max_num_splats() {
+    return engine().max_num_splats;
+}
+
 
 void engine_copy_render_to_host(
     TorchTensorView out_rgb,

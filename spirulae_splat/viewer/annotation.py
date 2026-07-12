@@ -124,6 +124,13 @@ def ensure_viewer_initialized(cameras: Cameras) -> None:
         _tv(cmodels, keep), _tv(intrins, keep), _tv(dist, keep), _tv(c2w, keep),
         _tv(widths, keep), _tv(heights, keep), float(camera_size),
     )
+    # Axes/grid overlay (drawn when a render asks for show_grid). The Python
+    # trainer's cameras already live in the z-up normalized frame, so the
+    # normalized->render transform is identity and the scene radius is the
+    # camera distance from the origin.
+    radius = float(T.squeeze(-1).norm(dim=-1).max().clamp(min=1e-6))
+    identity = torch.eye(3, 4, dtype=torch.float32).contiguous()
+    _C.engine_viewer_set_grid(radius, _tv(identity, keep))
     setattr(cameras, _INIT_KEY, True)
 
 
@@ -159,6 +166,7 @@ def annotate_train_cameras(
     view_viewmat[:, :3, 3:4] = T_inv
 
     show_train = bool(kwargs.get("show_training_cameras", False))
+    show_grid = bool(kwargs.get("show_grid", False))
 
     h, w = buffer.shape[0], buffer.shape[1]
     out_rgb = torch.empty(h, w, 3, dtype=torch.uint8,
@@ -178,6 +186,7 @@ def annotate_train_cameras(
         _CAMERA_MODEL_INT[view_camera.camera_type[0].upper()],
         _tv(view_intrins, keep), _tv(view_viewmat, keep), _tv(view_dist, keep),
         show_train,
+        show_grid,
         _tv(out_rgb, keep),
     )
     return out_rgb

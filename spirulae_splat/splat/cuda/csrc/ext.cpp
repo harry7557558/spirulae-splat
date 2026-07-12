@@ -334,6 +334,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Visualizer.cuh
     m.def("blit_train_cameras", &blit_train_cameras_tensor);
     m.def("engine_viewer_init", &engine_viewer_init);
+    m.def("engine_viewer_set_grid", &engine_viewer_set_grid);
     m.def("engine_blit_view",   &engine_blit_view);
 
     // Engine.h - config structs (built on the Python side, passed to engine_*_step).
@@ -552,5 +553,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Visualizer.cuh
     m.def("blit_train_cameras", &blit_train_cameras_tensor);
     m.def("engine_viewer_init", &engine_viewer_init);
+    m.def("engine_viewer_set_grid", &engine_viewer_set_grid);
     m.def("engine_blit_view",   &engine_blit_view);
 }

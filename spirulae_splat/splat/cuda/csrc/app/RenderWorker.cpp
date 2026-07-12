@@ -237,7 +237,12 @@ struct RenderWorker::Impl {
 
         float intr[4] = {q.fx, q.fy, q.cx, q.cy};
         float dist0[10] = {0};
-        bool want_dist = cfg.distortion_reg_on ||
+        // Distortion images are FULL render resolution (never-freed pool
+        // slots) -- emit them only when the user is actually LOOKING at a
+        // distortion buffer, and only offer those buffers when a distortion
+        // regularizer is configured (buffer_keys). Zero reg weights = zero
+        // extra VRAM.
+        bool want_dist = cfg.distortion_reg_on &&
                          q.key.find("distortion") != std::string::npos;
         bool want_median = cfg.output_median;
         int sh_deg = hooks.current_step
@@ -309,6 +314,17 @@ struct RenderWorker::Impl {
                 return n_host;
             };
 
+            // Debug renders (model.py get_outputs:1329-1354): re-run the
+            // forward with overridden splat DC colors. engine_debug_forward
+            // requires the forward_3dgs above and copies the result to host.
+            auto debug_render = [&](const std::vector<float>& dc, int deg) {
+                std::vector<float> out(npx * 3);
+                int64_t nsp = (int64_t)dc.size() / 3;
+                engine_debug_forward(tvp(dc.data(), 4, {nsp, 3}), deg,
+                                     tvp(out.data(), 4, {1, H, W, 3}));
+                return out;
+            };
+
             // Select the display buffer for the requested key.
             std::vector<float> local;
             const std::vector<float>* buf = nullptr;
@@ -323,6 +339,41 @@ struct RenderWorker::Impl {
                 { local = depth_normal_display(median); buf = &local; }
             else if (q.key == "rgb_distortion" && want_dist)   { buf = &rgbd; }
             else if (q.key == "depth_distortion" && want_dist) { buf = &depthd; C = 1; }
+            else if (q.key == "sh") {
+                // SH-only view: render with the DC color zeroed. The
+                // override must be MAX-splat sized (the engine validates
+                // world-buffer sizes against max_num_splats).
+                int64_t nmax = engine_get_max_num_splats();
+                std::vector<float> zero_dc((size_t)nmax * 3, 0.0f);
+                local = debug_render(zero_dc, sh_deg);
+                buf = &local;
+            }
+            else if (q.key == "refinement_score") {
+                // Densification score: per-splat accum weight (raster bwd)
+                // normalized and rendered as a flat color, shown
+                // single-channel (turbo colormap). Padded to max splats
+                // like model.py:1348.
+                int64_t nsp = engine_get_cur_num_splats();
+                int64_t nmax = engine_get_max_num_splats();
+                std::vector<float> aw((size_t)nsp * 2, 0.0f);
+                engine_copy_accum_buffer(tvp(aw.data(), 4, {nsp, 2}));
+                double mean = 0.0;
+                for (int64_t i = 0; i < nsp; i++) mean += aw[i*2];
+                mean = nsp > 0 ? mean / nsp : 0.0;
+                std::vector<float> dc((size_t)nmax * 3, 0.0f);
+                for (int64_t i = 0; i < nsp; i++) {
+                    float x = aw[i*2];
+                    if (mean > 0) x = (float)(x / mean);
+                    x = (x - 0.5f) / 0.28f;
+                    dc[i*3] = dc[i*3+1] = dc[i*3+2] = x;
+                }
+                std::vector<float> vis = debug_render(dc, 0);
+                local.resize(npx);
+                for (int64_t i = 0; i < npx; i++)
+                    local[i] = (vis[i*3] + vis[i*3+1] + vis[i*3+2]) / 3.0f;
+                buf = &local;
+                C = 1;
+            }
             else throw std::runtime_error("unsupported buffer_key: " + q.key);
 
             // Live frustum-size control: cheap host-side set, serialized by
@@ -349,6 +400,7 @@ struct RenderWorker::Impl {
                 tvp(dv, 4, {4, 4}),
                 tvp(dc, 4, {1, 10}),
                 q.show_cams,
+                q.show_grid,
                 tvp(dout, 1, {H, W, 3}));
             if (cudaMemcpy(out_host.data(), dout, npx * 3,
                            cudaMemcpyDeviceToHost) != cudaSuccess)
@@ -399,8 +451,15 @@ std::vector<std::string> RenderWorker::buffer_keys() const {
         keys.push_back("depth_median");
         keys.push_back("normal_median");
     }
-    keys.push_back("rgb_distortion");
-    keys.push_back("depth_distortion");
+    // Distortion buffers only when a distortion regularizer is configured:
+    // they are full-resolution never-freed pool allocations, so with zero
+    // reg weights they are neither offered nor computed (no VRAM).
+    if (_impl->cfg.distortion_reg_on) {
+        keys.push_back("rgb_distortion");
+        keys.push_back("depth_distortion");
+    }
+    keys.push_back("sh");
+    keys.push_back("refinement_score");
     return keys;
 }
 
@@ -419,4 +478,32 @@ float viewer_upload_cameras(const PostSplitCameras& post) {
         tvp(post.post_heights.data(), 4, {post.n_post}),
         camera_size);
     return camera_size;
+}
+
+void viewer_upload_grid(const PostSplitCameras& post,
+                        const std::array<float, 16>& train_to_normalized,
+                        float train_frame_scale) {
+    // Scene radius in the normalized frame = max normalized camera |p|
+    // (camera positions are the translation column of c2w; the y/z flip
+    // leaves it untouched). train_to_normalized maps normalized -> train,
+    // so positions map through its inverse.
+    double A[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    if (train_frame_scale != 1.0f) {
+        double T[16];
+        for (int i = 0; i < 16; i++) T[i] = train_to_normalized[i];
+        dsparse::invert_affine4x4(T, A);
+    }
+    double radius = 0.0;
+    for (int64_t i = 0; i < post.n_post; i++) {
+        const float* M = &post.c2w_flip[i*12];
+        double p[3] = {M[3], M[7], M[11]}, q[3];
+        for (int r = 0; r < 3; r++)
+            q[r] = A[r*4+0]*p[0] + A[r*4+1]*p[1] + A[r*4+2]*p[2] + A[r*4+3];
+        radius = std::max(radius,
+                          std::sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2]));
+    }
+    float n2t[12];
+    for (int i = 0; i < 12; i++) n2t[i] = train_to_normalized[i];
+    engine_viewer_set_grid((float)std::max(radius, 1e-6),
+                           tvp(n2t, 4, {3, 4}));
 }

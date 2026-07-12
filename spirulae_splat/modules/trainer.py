@@ -591,10 +591,17 @@ class Trainer:
         # currently selected one. The hot path stays fast because the actual
         # tensors are only produced for the requested key; when the user
         # switches to a previously-`None` slot, the next request renders it.
-        for _k in ["rgb", "depth", "alpha"] + ["normal"] * 0 + ["depth_normal",
-                   "depth_median", "normal_median",
-                   "rgb_distortion", "depth_distortion",
-                   "sh", "refinement_score"]:
+        # Distortion buffers are offered only when a distortion regularizer
+        # is configured: producing them costs full-resolution VRAM (the
+        # rasterizer's distortion channels), so zero reg weights = the
+        # buffers neither appear in the dropdown nor get rendered.
+        _dist_on = (getattr(self.model.config, 'rgb_distortion_reg', 0.0) != 0.0 or
+                    getattr(self.model.config, 'depth_distortion_reg', 0.0) != 0.0 or
+                    getattr(self.model.config, 'normal_distortion_reg', 0.0) != 0.0)
+        for _k in (["rgb", "depth", "alpha"] + ["normal"] * 0 + ["depth_normal",
+                   "depth_median", "normal_median"] +
+                   (["rgb_distortion", "depth_distortion"] if _dist_on else []) +
+                   ["sh", "refinement_score"]):
             outputs.setdefault(_k, None)
         # Use the post-split Cameras when available (CPP DataManager path).
         # For the legacy Python DM path no warp split happens, so the
@@ -611,7 +618,8 @@ class Trainer:
         return outputs
 
     def render(self, c2w, fx, fy, cx, cy, w, h, camera_model,
-               buffer_key="rgb", *, show_training_cameras: bool = False):
+               buffer_key="rgb", *, show_training_cameras: bool = False,
+               show_grid: bool = False):
         # Invoking the post-processor + D->H copy inside this lock is what
         # makes viewer requests respond quickly during training: it ensures
         # the .cpu() Memcpy is queued on the default stream BEFORE the next
@@ -630,7 +638,8 @@ class Trainer:
                 pp = outputs.pop('_post_processor', None)
                 if pp is not None:
                     annotated = pp(outputs[buffer_key],
-                                   show_training_cameras=show_training_cameras)
+                                   show_training_cameras=show_training_cameras,
+                                   show_grid=show_grid)
                     outputs[buffer_key] = annotated.cpu().numpy()
             return outputs
 

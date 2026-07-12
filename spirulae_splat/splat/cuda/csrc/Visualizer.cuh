@@ -19,6 +19,7 @@ void engine_blit_view(
     TorchTensorView view_viewmat,
     TorchTensorView view_dist_coeffs,
     bool            show_training_cameras,
+    bool            show_overlay,
     TorchTensorView out_rgb);
 
 

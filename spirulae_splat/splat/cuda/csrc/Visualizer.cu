@@ -811,6 +811,13 @@ __global__ void blit_with_bvh_kernel(
     const float4* __restrict__ tri_buffer,
     const int2* __restrict__ tri_nodes,
     const float3* __restrict__ tri_aabb,
+    // The LSS buffer is [camera frusta | overlay segments]: indices >=
+    // num_cam_lss are axes/grid capsules with per-segment colors; the two
+    // classes are gated independently by show_cams / show_overlay.
+    const float* __restrict__ overlay_colors,  // [M, 3], overlay part only
+    const int num_cam_lss,
+    const bool show_cams,
+    const bool show_overlay,
     const TensorView<uint8_t, 4> thumbnails,
     const float* __restrict__ min_max,
     TensorView<uint8_t, 3> out_rgbs
@@ -935,6 +942,9 @@ __global__ void blit_with_bvh_kernel(
                     // leaf
                     if (childIdx < 0) {
                         int idx = ~childIdx;
+                        bool overlay = idx >= num_cam_lss;
+                        if (overlay ? !show_overlay : !show_cams)
+                            continue;
                         float4 e0 = lss_buffer[2*idx], e1 = lss_buffer[2*idx+1];
                         float t_temp = ray_linear_swept_sphere_intersection(
                             {e0.x, e0.y, e0.z}, {e1.x, e1.y, e1.z}, e0.w, e1.w,
@@ -942,7 +952,14 @@ __global__ void blit_with_bvh_kernel(
                         );
                         if (t_temp > 0.0f) {
                             tmax = t_temp;
-                            rgb = make_float3(gray >= gray_threshold ? 0.1f : 0.85f);
+                            if (overlay) {
+                                const float* c = overlay_colors
+                                                 + 3*(idx - num_cam_lss);
+                                rgb = make_float3(c[0], c[1], c[2]);
+                            } else {
+                                rgb = make_float3(
+                                    gray >= gray_threshold ? 0.1f : 0.85f);
+                            }
                             alpha = 1.0f;
                         }
                     }
@@ -1177,6 +1194,78 @@ void engine_viewer_set_camera_size(float camera_size) {
     auto& v = engine().viewer;
     if (!v.initialized) return;
     v.camera_size = camera_size;
+    // engine_blit_view rebuilds the cached BVH when this differs from the
+    // size it was built at (bvh_camera_size), so live slider changes apply.
+}
+
+// ---------------------------------------------------------------------------
+// engine_viewer_set_grid: build the axes/grid overlay (host-side) and upload
+// it. The grid lives in the z-up NORMALIZED frame -- ground plane at z=0,
+// minor cells at a power of 10 chosen from the scene radius, brighter lines
+// every 10th, positive X/Y/Z half-axes in the web viewer's colors -- and is
+// mapped into the frame the engine renders in through norm_to_train (pass
+// identity when they coincide). Each cell edge is one capsule so lines curve
+// correctly under fisheye/equirectangular view cameras. radius = scene
+// radius in NORMALIZED units (e.g. max normalized camera distance).
+// ---------------------------------------------------------------------------
+void engine_viewer_set_grid(float radius, TorchTensorView norm_to_train)
+{
+    std::lock_guard<std::mutex> _vlock(viewer_mutex());
+    auto& v = engine().viewer;
+    if (!v.initialized) return;
+
+    const float* T = (const float*)std::get<0>(norm_to_train);  // [3,4] row-major, host
+    float sT = sqrtf(T[0]*T[0] + T[4]*T[4] + T[8]*T[8]);
+    if (!(sT > 0.0f)) sT = 1.0f;
+    auto map_pt = [&](float x, float y, float z, float out[3]) {
+        out[0] = T[0]*x + T[1]*y + T[2]*z  + T[3];
+        out[1] = T[4]*x + T[5]*y + T[6]*z  + T[7];
+        out[2] = T[8]*x + T[9]*y + T[10]*z + T[11];
+    };
+
+    const float s = powf(10.0f, floorf(log10f(fmaxf(radius, 1e-6f) / 2.0f)));
+    constexpr int kHalf = 20;               // half-extent in minor cells
+    const float rr = 0.0015f * fmaxf(radius, 1e-6f) * sT;   // capsule radius
+    const float kMinor[3] = {0.28f, 0.30f, 0.33f};
+    const float kMajor[3] = {0.45f, 0.47f, 0.50f};
+    const float kAxis[3][3] = {{0.98f, 0.20f, 0.31f},       // +X
+                               {0.55f, 0.86f, 0.00f},       // +Y
+                               {0.16f, 0.55f, 0.98f}};      // +Z
+
+    std::vector<float> segs, colors;
+    segs.reserve((4*kHalf + 2) * 2*kHalf * 8 * 2 + 3*kHalf*8);
+    colors.reserve(segs.capacity() * 3 / 8);
+    auto seg = [&](float ax, float ay, float az, float bx, float by, float bz,
+                   float r, const float c[3]) {
+        float p[3];
+        map_pt(ax, ay, az, p);
+        segs.insert(segs.end(), {p[0], p[1], p[2], r});
+        map_pt(bx, by, bz, p);
+        segs.insert(segs.end(), {p[0], p[1], p[2], r});
+        colors.insert(colors.end(), {c[0], c[1], c[2]});
+    };
+    for (int i = -kHalf; i <= kHalf; i++) {
+        const float* c = (i % 10 == 0) ? kMajor : kMinor;
+        for (int j = -kHalf; j < kHalf; j++) {
+            seg(i*s, j*s, 0, i*s, (j+1)*s, 0, rr, c);       // along Y
+            seg(j*s, i*s, 0, (j+1)*s, i*s, 0, rr, c);       // along X
+        }
+    }
+    for (int a = 0; a < 3; a++)                              // half-axes
+        for (int j = 0; j < kHalf; j++) {
+            float p0[3] = {0, 0, 0}, p1[3] = {0, 0, 0};
+            p0[a] = j*s;
+            p1[a] = (j+1)*s;
+            seg(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], 2.0f*rr, kAxis[a]);
+        }
+
+    int64_t M = (int64_t)colors.size() / 3;
+    v.d_overlay_segs = _hv_to_dv<float>(PoolSlot::ViewerOverlaySegs,
+        TorchTensorView((uint64_t)segs.data(), 4, {M * 8}));
+    v.d_overlay_colors = _hv_to_dv<float>(PoolSlot::ViewerOverlayColors,
+        TorchTensorView((uint64_t)colors.data(), 4, {M * 3}));
+    v.num_overlay = (int)M;
+    v.bvh_built = false;   // rebuilt (with the overlay appended) on next use
 }
 
 
@@ -1351,7 +1440,8 @@ void _viewer_build_bvh()
     constexpr int kFloatPInfByte = 0x7f;
     constexpr int kFloatNInfByte = 0xfe;
 
-    uint32_t num_lss = (uint32_t)(n * 8 * kNumFrustumSegments);
+    uint32_t num_cam_lss = (uint32_t)(n * 8 * kNumFrustumSegments);
+    uint32_t num_lss = num_cam_lss + (uint32_t)v.num_overlay;
     uint32_t num_tri = (uint32_t)(n * 4 * kNumFrustumFaces * kNumFrustumFaces);
 
     float4* lss_buffer = DevicePool::global().acquire<float4>(PoolSlot::ViewerLss, (size_t)num_lss * 2);
@@ -1374,6 +1464,14 @@ void _viewer_build_bvh()
         tri_buffer
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
+
+    // Overlay (axes/grid) capsules appended after the frusta; the blit
+    // kernel tells the two classes apart by segment index (bvh_num_cam_lss).
+    if (v.num_overlay > 0)
+        cudaMemcpy(lss_buffer + (size_t)num_cam_lss * 2,
+                   v.d_overlay_segs.data_ptr(),
+                   (size_t)v.num_overlay * 2 * sizeof(float4),
+                   cudaMemcpyDeviceToDevice);
 
     float3* root_aabb = DevicePool::global().acquire<float3>(PoolSlot::ViewerRootAabb, 2);
     cudaMemset(root_aabb + 0, kFloatPInfByte, sizeof(float3));
@@ -1416,6 +1514,8 @@ void _viewer_build_bvh()
 
     v.bvh_num_lss = (int)num_lss;
     v.bvh_num_tri = (int)num_tri;
+    v.bvh_num_cam_lss = (int)num_cam_lss;
+    v.bvh_camera_size = v.camera_size;
     v.bvh_built = true;
 }
 } // anonymous namespace
@@ -1432,6 +1532,7 @@ void engine_blit_view(
     TorchTensorView view_viewmat,
     TorchTensorView view_dist_coeffs,
     bool            show_training_cameras,
+    bool            show_overlay,
     TorchTensorView out_rgb)
 {
     std::lock_guard<std::mutex> _vlock(viewer_mutex());
@@ -1440,6 +1541,7 @@ void engine_blit_view(
         throw std::runtime_error(
             "engine_blit_view: viewer not initialized; call engine_viewer_init() first.");
     }
+    show_overlay = show_overlay && v.num_overlay > 0;
 
     auto& rgb_shape = std::get<2>(render_buffer);
     int64_t h = rgb_shape[0], w = rgb_shape[1], c = rgb_shape[2];
@@ -1483,8 +1585,11 @@ void engine_blit_view(
     const int2*   tri_nodes  = nullptr;
     const float3* tri_aabb   = nullptr;
 
-    if (show_training_cameras) {
-        if (!v.bvh_built) {
+    if (show_training_cameras || show_overlay) {
+        // Rebuild when never built, or when the live camera size changed
+        // since the cached build (the frustum-size slider), or when a new
+        // overlay was uploaded (engine_viewer_set_grid clears bvh_built).
+        if (!v.bvh_built || v.bvh_camera_size != v.camera_size) {
             // _viewer_build_bvh launches its kernels on the default stream
             // (see build_bvh<>'s _LAUNCH_ARGS_1D usage and the synchronous
             // cudaMemcpy of root_aabb inside). After it returns, the BVH
@@ -1496,15 +1601,17 @@ void engine_blit_view(
         }
         lss_buffer = (const float4*)DevicePool::global().acquire<float4>(
             PoolSlot::ViewerLss, (size_t)v.bvh_num_lss * 2);
-        tri_buffer = (const float4*)DevicePool::global().acquire<float4>(
-            PoolSlot::ViewerTri, (size_t)v.bvh_num_tri * 4);
         // Use the exact BVH allocations build_bvh() produced (see
         // _viewer_build_bvh); re-acquiring by PoolSlot enum here would read a
         // different, empty static buffer and draw no frustums (the 7632e51 bug).
         lss_nodes  = (const int2*)  v.bvh_lss_nodes_ptr;
-        tri_nodes  = (const int2*)  v.bvh_tri_nodes_ptr;
         lss_aabb   = (const float3*)v.bvh_lss_aabb_ptr;
-        tri_aabb   = (const float3*)v.bvh_tri_aabb_ptr;
+        if (show_training_cameras) {   // thumbnails only with the frusta
+            tri_buffer = (const float4*)DevicePool::global().acquire<float4>(
+                PoolSlot::ViewerTri, (size_t)v.bvh_num_tri * 4);
+            tri_nodes  = (const int2*)  v.bvh_tri_nodes_ptr;
+            tri_aabb   = (const float3*)v.bvh_tri_aabb_ptr;
+        }
     }
 
     blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D_VS(w, h, 8, 4)>>>(
@@ -1517,6 +1624,10 @@ void engine_blit_view(
         view_dist_coeffs,
         lss_buffer, lss_nodes, lss_aabb,
         tri_buffer, tri_nodes, tri_aabb,
+        (const float*)v.d_overlay_colors.data_ptr(),
+        v.bvh_num_cam_lss,
+        show_training_cameras,
+        show_overlay,
         thumb_view,
         min_max,
         tv_to_view<uint8_t, 3>(out_rgb)
@@ -1577,6 +1688,7 @@ void blit_train_cameras_tensor(
             view_dist_coeffs,
             nullptr, nullptr, nullptr,
             nullptr, nullptr, nullptr,
+            nullptr, 0, false, false,
             tv_to_view<uint8_t, 4>(thumbnails),
             min_max,
             tv_to_view<uint8_t, 3>(out_rgb)
@@ -1647,6 +1759,7 @@ void blit_train_cameras_tensor(
         tri_buffer,
         tri_bvh.nodes,
         tri_bvh.aabb,
+        nullptr, (int)num_lss, true, false,   // no overlay in the legacy path
         tv_to_view<uint8_t, 4>(thumbnails),
         min_max,
         tv_to_view<uint8_t, 3>(out_rgb)

@@ -54,7 +54,7 @@ plain C++17 with no CUDA dependency (see `csrc/CameraModel.h`).
   analytic Jacobians / sigma-point projection; mesh triangles crossing a
   projection discontinuity (the equirect seam, the fisheye backward point) are
   discarded, and fragments outside a fisheye image circle are clipped.
-- A distance-adaptive **axes + grid** overlay (stays legible at any zoom) and a
+- A rasterized, depth-tested **axes + grid** overlay (scene-scaled cells) and a
   configurable background.
 - **Statistics** (splat count / vertices / edges / faces) and on-demand
   **parameter histograms** (opacity, scale, effective rank, RGB, anisotropy for
@@ -141,8 +141,8 @@ index.html          UI + panel
 css/style.css        theme (adapted from the training viewer)
 js/
   main.js            app wiring, input, render loop, sorting
-  renderer.js        WebGL2 renderer (splat HDR pass, mesh, dataset, grid, tonemap)
-  shaders.js         GLSL (splat / grid / tonemap / mesh / points / frustum lines)
+  renderer.js        WebGL2 renderer (splat HDR pass, mesh, dataset, grid lines, tonemap)
+  shaders.js         GLSL (splat / tonemap / mesh / points / frustum+grid lines)
   camera.js          camera + navigation modes
   dataset.js         dataset load orchestration + frustum geometry (undistort)
   sortworker.js      async depth-sort worker (own WASM instance)

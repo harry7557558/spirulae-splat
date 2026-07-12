@@ -312,13 +312,23 @@ void engine_debug_forward(
         engine().sh_degree = override_sh_degree;
     engine().background.enabled = false;
 
-    forward_3dgs(engine().primitive, engine().sh_degree, engine().packed);
+    // Restore even when the forward throws: leaving the debug features_dc
+    // swapped in would fail every subsequent training step (tensor size
+    // mismatch) and kill the session over a bad debug render.
+    try {
+        forward_3dgs(engine().primitive, engine().sh_degree, engine().packed);
 
-    // Copy rgb result D->H
-    auto& rgb = std::get<0>(engine().fwd.renders);
-    if (rgb.data_ptr() && std::get<0>(out_rgb) != 0) {
-        cudaMemcpy((void*)std::get<0>(out_rgb), rgb.data_ptr(),
-                   rgb.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+        // Copy rgb result D->H
+        auto& rgb = std::get<0>(engine().fwd.renders);
+        if (rgb.data_ptr() && std::get<0>(out_rgb) != 0) {
+            cudaMemcpy((void*)std::get<0>(out_rgb), rgb.data_ptr(),
+                       rgb.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+        }
+    } catch (...) {
+        engine().world.features_dc   = saved_dc;
+        engine().sh_degree           = saved_sh;
+        engine().background.enabled  = saved_bg_enabled;
+        throw;
     }
 
     // Restore

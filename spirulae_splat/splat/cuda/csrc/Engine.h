@@ -410,6 +410,7 @@ void engine_debug_forward(
 
 void engine_copy_accum_buffer(TorchTensorView dst);
 int64_t engine_get_cur_num_splats();
+int64_t engine_get_max_num_splats();
 
 // `out_rgb_raw` is the pre-color-space-conversion render (linear / wide-gamut)
 // stashed by the color-space forward hook. Null OK; when the engine has no
@@ -485,11 +486,21 @@ void engine_viewer_init(
 
 // Update just the visualization-frustum scale without re-running
 // engine_viewer_init (which would reset the thumbnail cache). No-op until
-// engine_viewer_init has run. Host-only; safe from any thread.
+// engine_viewer_init has run. Host-only; safe from any thread. The cached
+// visualization BVH is rebuilt on the next blit when the size changed.
 void engine_viewer_set_camera_size(float camera_size);
 
+// Build + upload the axes/grid overlay (capsule line segments appended to
+// the camera-frustum BVH, drawn when engine_blit_view's show_overlay is
+// set). radius = scene radius in the z-up NORMALIZED frame (sizes the grid
+// and picks a power-of-10 cell); norm_to_train = [3,4] row-major host
+// float mapping normalized -> render frame (identity when equal). No-op
+// until engine_viewer_init has run.
+void engine_viewer_set_grid(float radius, TorchTensorView norm_to_train);
+
 // engine_blit_view: fused viewer-render annotation. Caches the BVH on the
-// first show_training_cameras=true call; reads thumbnails out of the
+// first call that shows cameras or the overlay (rebuilt when camera_size
+// or the overlay changes); reads thumbnails out of the
 // engine's device-side cache (no thumbnails arg). buffer_key selects which
 // channel of the rendered output drives the colormap path:
 //   "rgb"          render_rgbs is [H,W,3] float -- passed through.
@@ -510,6 +521,7 @@ void engine_blit_view(
     TorchTensorView view_viewmat,    // [4,4]   float
     TorchTensorView view_dist_coeffs,
     bool            show_training_cameras,
+    bool            show_overlay,    // axes/grid from engine_viewer_set_grid
     TorchTensorView out_rgb          // [H,W,3] uint8, pre-allocated CUDA
 );
 

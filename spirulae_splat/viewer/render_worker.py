@@ -22,6 +22,7 @@ class RenderRequest:
     camera_model: str             # "PINHOLE" | "FISHEYE"
     buffer_key: str = "rgb"       # which channel the viewer wants annotated
     show_training_cameras: bool = False
+    show_grid: bool = False
     request_id: int = 0
 
 
@@ -111,6 +112,7 @@ class RenderWorker:
                     req.camera_model,
                     req.buffer_key,
                     show_training_cameras=req.show_training_cameras,
+                    show_grid=req.show_grid,
                 )
                 result = RenderResult(request_id=req.request_id, buffers=buffers)
             except BrokenPipeError as e:

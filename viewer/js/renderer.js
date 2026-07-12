@@ -2,7 +2,7 @@
 // (depth-tested), plus a screen-space grid/axes overlay. Only one model is
 // resident at a time; loading another frees the previous GPU resources.
 
-import { SPLAT_VS, SPLAT_FS, SPLAT_FS_3D, PICK_FS, PICK_FS_3D, FULLSCREEN_VS, GRID_FS, TONEMAP_FS, MESH_VS, MESH_FS, POINT_VS, POINT_FS, LINE_VS, LINE_FS } from './shaders.js';
+import { SPLAT_VS, SPLAT_FS, SPLAT_FS_3D, PICK_FS, PICK_FS_3D, FULLSCREEN_VS, TONEMAP_FS, MESH_VS, MESH_FS, POINT_VS, POINT_FS, LINE_VS, LINE_FS } from './shaders.js';
 import { mat3, mat4, quat } from './linalg.js';
 
 function compile(gl, type, src) {
@@ -364,7 +364,7 @@ export class Renderer {
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.disable(gl.DEPTH_TEST);
 
-      if (opts.showGrid) this._drawGrid(viewR, camPos, U, intr, cameraModel, true);
+      if (opts.showGrid) this._drawGrid(cam, viewR, camPos, U, cameraModel, w, h, opts, true);
 
       // splat pass (over blending; alpha accumulates coverage)
       gl.enable(gl.BLEND);
@@ -390,40 +390,102 @@ export class Renderer {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.clearColor(bg[0], bg[1], bg[2], 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      if (opts.showGrid) { gl.disable(gl.DEPTH_TEST); this._drawGrid(viewR, camPos, U, intr, cameraModel, false); }
+      if (opts.showGrid) this._drawGrid(cam, viewR, camPos, U, cameraModel, w, h, opts, false);
       this._drawMesh(cam, viewR, camPos, U, w, h, opts);
     } else if (this.model && this.model.type === 'dataset') {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.clearColor(bg[0], bg[1], bg[2], 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      if (opts.showGrid) { gl.disable(gl.DEPTH_TEST); this._drawGrid(viewR, camPos, U, intr, cameraModel, false); }
+      if (opts.showGrid) this._drawGrid(cam, viewR, camPos, U, cameraModel, w, h, opts, false);
       this._drawDataset(cam, viewR, camPos, U, cameraModel, w, h, opts);
     } else {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.clearColor(bg[0], bg[1], bg[2], 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      if (opts.showGrid) { gl.disable(gl.DEPTH_TEST); this._drawGrid(viewR, camPos, U, intr, cameraModel, false); }
+      if (opts.showGrid) this._drawGrid(cam, viewR, camPos, U, cameraModel, w, h, opts, false);
     }
   }
 
-  _drawGrid(viewR, camPos, U, intr, cameraModel, intoHdr) {
+  // Grid/axes line geometry in the model's NATIVE frame (the up-axis U is
+  // applied by the line shader like dataset geometry): ground plane at
+  // z=0 native, minor cells at a power of 10 from the scene radius
+  // (opts.gridSpacing, set by main.js on fit), brighter lines every 10th,
+  // positive X/Y/Z half-axes. One segment per cell edge doubles as the
+  // subdivision that keeps lines curved (and seam-discarded, LINE_FS)
+  // under the fisheye / equirectangular display cameras.
+  _ensureGrid(spacing) {
+    if (this.grid && this.grid.spacing === spacing) return;
     const gl = this.gl;
-    const { prog, u } = this._prog('grid', FULLSCREEN_VS, GRID_FS, { CAM_MODEL: cameraModel });
+    const HALF = 20;                       // half-extent in minor cells
+    const s = spacing;
+    const MINOR = [71, 77, 84], MAJOR = [115, 120, 128];
+    const AXIS = [[250, 51, 79], [140, 219, 0], [41, 140, 250]];  // +X +Y +Z
+    const pos = [], col = [];
+    const seg = (a, b, c) => { pos.push(...a, ...b); col.push(...c, ...c); };
+    for (let i = -HALF; i <= HALF; i++) {
+      const c = (i % 10 === 0) ? MAJOR : MINOR;
+      for (let j = -HALF; j < HALF; j++) {
+        seg([i*s, j*s, 0], [i*s, (j+1)*s, 0], c);
+        seg([j*s, i*s, 0], [(j+1)*s, i*s, 0], c);
+      }
+    }
+    for (let a = 0; a < 3; a++)            // positive half-axes, drawn last
+      for (let j = 0; j < HALF; j++) {
+        const p0 = [0, 0, 0], p1 = [0, 0, 0];
+        p0[a] = j*s; p1[a] = (j+1)*s;
+        seg(p0, p1, AXIS[a]);
+      }
+    if (!this.grid) {
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      const posBuf = gl.createBuffer(), colBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+      gl.enableVertexAttribArray(0);       // aApex = the vertex position
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+      gl.enableVertexAttribArray(2);       // aColor
+      gl.vertexAttribPointer(2, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+      // aOffset (attrib 1) stays a disabled array; the draw sets the
+      // generic value to 0 (and uFrustumScale = 0) so pos = aApex.
+      gl.bindVertexArray(null);
+      this.grid = { vao, posBuf, colBuf, count: 0, spacing: 0 };
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.grid.posBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pos), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.grid.colBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Uint8Array(col), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    this.grid.count = pos.length / 3;
+    this.grid.spacing = spacing;
+  }
+
+  // Rasterized, depth-tested grid/axes via the dataset line pipeline
+  // (replaces the old fullscreen-raymarch GRID_FS overlay). Into the HDR
+  // splat buffer (no depth attachment) the lines write transmittance 0 and
+  // the splats blend over them; on the canvas paths they depth-test/write
+  // against the mesh / point cloud / frusta like any other geometry.
+  _drawGrid(cam, viewR, camPos, U, cameraModel, w, h, opts, intoHdr) {
+    const gl = this.gl;
+    this._ensureGrid(opts.gridSpacing || 1);
+    const { prog, u } = this._prog('line', LINE_VS, LINE_FS, { CAM_MODEL: cameraModel });
     gl.useProgram(prog);
-    gl.uniformMatrix3fv(u.uViewR, false, viewR);
-    gl.uniform3fv(u.uCamPos, camPos);
-    // grid/axes are evaluated in the model's native frame (Y-up/Z-up aware)
-    gl.uniformMatrix3fv(u.uUpT, false, mat3.transpose(U));
-    gl.uniform2f(u.uFocal, intr.fx, intr.fy);
-    gl.uniform2f(u.uCenter, intr.cx, intr.cy);
-    gl.enable(gl.BLEND);
-    // into HDR: alpha is transmittance -> multiply it down (ZERO, 1-src_a).
-    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA,
-                         intoHdr?gl.ZERO:gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.bindVertexArray(this.emptyVao);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    this._datasetUniforms(u, cam, viewR, camPos, U, w, h);
+    gl.uniform1f(u.uFrustumScale, 0.0);
+    gl.uniform1i(u.uUseUniform, 0);
+    if (intoHdr) {
+      // alpha channel = transmittance: opaque lines zero it, splats occlude.
+      gl.enable(gl.BLEND);
+      gl.blendFuncSeparate(gl.ONE, gl.ZERO, gl.ZERO, gl.ZERO);
+    } else {
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+    }
+    gl.bindVertexArray(this.grid.vao);
+    gl.vertexAttrib3f(1, 0, 0, 0);   // aOffset generic value (see _ensureGrid)
+    gl.drawArrays(gl.LINES, 0, this.grid.count);
     gl.bindVertexArray(null);
-    gl.disable(gl.BLEND);
+    if (intoHdr) gl.disable(gl.BLEND);
+    else gl.disable(gl.DEPTH_TEST);
   }
 
   // set the shared splat-program uniforms + texture binds (render and pick)

@@ -86,6 +86,7 @@ private:
     int _buffer_idx = 0;
     std::vector<std::string> _buffer_keys;
     bool _show_cams = false;
+    bool _show_grid = false;         // axes + ground-plane grid overlay
     float _frustum_scale = 1.0f;     // camera-frustum size multiplier
     int _scale_idx = 1;              // 0 = 50%, 1 = 75%, 2 = 100%
     bool _auto_refresh = true;

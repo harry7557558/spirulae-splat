@@ -505,6 +505,7 @@
       </div>
       <div class="ctrl-row">
         <div class="ctrl-label"><label for="show-training-cameras"><span>Show Training Cameras</span></label><label class="toggle"><input type="checkbox" id="show-training-cameras" autocomplete="off" /></label></div>
+        <div class="ctrl-label"><label for="show-grid"><span>Show Axes / Grid</span></label><label class="toggle"><input type="checkbox" id="show-grid" autocomplete="off" /></label></div>
       </div>
       <div class="ctrl-row">
         <div class="ctrl-label">
@@ -680,6 +681,7 @@ function getRenderSettings() {
     jpeg_quality: parseInt($("quality-slider").value, 10),
     update_rate: parseFloat($("update-rate-slider").value),
     show_training_cameras: $("show-training-cameras").checked ? "1" : "0",
+    show_grid: $("show-grid").checked ? "1" : "0",
     // log-scale slider in [-1, 1] -> scale in [0.1, 10]
     camera_size_scale: Math.pow(10, parseFloat($("camera-size-slider").value)).toFixed(3),
   };
@@ -947,6 +949,7 @@ async function sendRenderRequest() {
     jpeg_quality: settings.jpeg_quality,
     update_rate: settings.update_rate,
     show_training_cameras: settings.show_training_cameras,
+    show_grid: settings.show_grid,
     camera_size_scale: settings.camera_size_scale,
   });
   const img = $("canvas-img");
@@ -1260,6 +1263,7 @@ $("update-rate-slider").addEventListener("input", e => {
 });
 
 $("show-training-cameras").addEventListener("change", () => Viewer.requestRender());
+$("show-grid").addEventListener("change", () => Viewer.requestRender());
 
 $("camera-size-slider").addEventListener("input", e => {
   $("camera-size-val").textContent = "x" + Math.pow(10, parseFloat(e.target.value)).toFixed(2);

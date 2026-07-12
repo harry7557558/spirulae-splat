@@ -32,10 +32,12 @@ public:
     // Render into the internal FBO; returns the color texture (0 on error).
     // view is a row-major 4x4 world-to-view matrix. sx/sy are the engine
     // intrinsics normalized to NDC: fx/(W/2), fy/(H/2). frustum_scale
-    // multiplies the base camera size; scene_radius drives the depth range.
+    // multiplies the base camera size; scene_radius drives the depth range
+    // and sizes the grid.
     unsigned render(int W, int H, const float view[16],
                     PreviewProjection proj, float sx, float sy,
-                    float scene_radius, bool show_cams, float frustum_scale);
+                    float scene_radius, bool show_cams, float frustum_scale,
+                    bool show_grid);
 
     // Base frustum size (kNN heuristic, normalized frame).
     float base_camera_size() const { return _base_cam_size; }
@@ -51,11 +53,17 @@ private:
     bool _gl_ok = false;
     unsigned _prog = 0;
     int _u_view = -1, _u_scale = -1, _u_color = -1;
-    int _u_model = -1, _u_s = -1, _u_zrange = -1;
+    int _u_model = -1, _u_s = -1, _u_zrange = -1, _u_vp = -1;
+    void ensure_grid(float scene_radius);
+
     unsigned _vao_pts = 0, _vbo_pts = 0;
     unsigned _vao_cam = 0, _vbo_cam = 0;
+    unsigned _vao_grid = 0, _vbo_grid = 0;
+    int64_t _num_grid_verts = 0;
+    float _grid_spacing = 0.0f;      // minor cell size the grid was built at
     int64_t _num_points = 0;
-    int64_t _num_cam_verts = 0;
+    int64_t _num_cam_verts = 0;    // total frustum verts (bright then dim)
+    int64_t _num_cam_bright = 0;   // border + anchor verts (drawn full-color)
     float _base_cam_size = 0.1f;
 
     unsigned _fbo = 0, _color_tex = 0, _depth_rb = 0;

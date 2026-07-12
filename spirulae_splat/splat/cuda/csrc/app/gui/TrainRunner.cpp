@@ -115,6 +115,11 @@ void TrainRunner::start_training(const SsplatConfig& cfg, const std::string& pre
             s->load_dataset();
             s->setup_engine();
             s->viewer_base_camera_size = viewer_upload_cameras(s->post);
+            {
+                auto vc = s->make_viewer_config();
+                viewer_upload_grid(s->post, vc.train_to_normalized,
+                                   vc.train_frame_scale);
+            }
             _engine_ready = true;
 
             // Optional web viewer alongside the native viewport.

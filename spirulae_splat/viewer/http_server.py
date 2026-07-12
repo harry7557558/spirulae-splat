@@ -70,6 +70,7 @@ class _Handler(BaseHTTPRequestHandler):
             camera_model = query.get("camera_model", ["PINHOLE"])[0]
             jpeg_quality = int(query.get("jpeg_quality", [75])[0])
             show_training_cameras = query.get("show_training_cameras", ["0"])[0].lower() in ("1", "true", "yes")
+            show_grid = query.get("show_grid", ["0"])[0].lower() in ("1", "true", "yes")
 
             MAX_DIM = 2160
             if max(width, height) > 2160:  # prevent OOM
@@ -82,12 +83,14 @@ class _Handler(BaseHTTPRequestHandler):
                 camera_model=camera_model,
                 buffer_key=buffer_key,
                 show_training_cameras=show_training_cameras,
+                show_grid=show_grid,
             )
             # Post-process params are now baked into the render fn (via
             # RenderRequest.show_training_cameras) so the closure path is
             # not taken; kept as an empty fallback for the legacy code path.
             post_process_params = {
                 "show_training_cameras": show_training_cameras,
+                "show_grid": show_grid,
             }
             if self.render_worker:
                 self.render_worker.submit(req)

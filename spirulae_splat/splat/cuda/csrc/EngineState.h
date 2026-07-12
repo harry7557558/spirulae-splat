@@ -441,10 +441,21 @@ struct EngineViewerState {
     std::vector<uint8_t>  host_seen_mask;     // [N_post], 1 if id was ever passed
     int    pending_thumb = 0;                 // N_post - sum(host_seen_mask)
 
-    // BVH cache for training-camera visualization. Built on the first
-    // engine_blit_view(show_training_cameras=true) call and reused forever
-    // (training cameras are static; camera_size also frozen at init).
+    // Overlay line segments (axes / grid): world-frame capsules appended
+    // after the camera frusta in the LSS buffer at BVH build, with
+    // per-segment colors (frusta keep their adaptive black/white).
+    // Uploaded via engine_viewer_set_overlay; gated per request by
+    // engine_blit_view's show_overlay.
+    DeviceVector<float> d_overlay_segs;    // [M, 2, 4] endpoint xyzr pairs
+    DeviceVector<float> d_overlay_colors;  // [M, 3]
+    int    num_overlay = 0;
+
+    // BVH cache for training-camera + overlay visualization. Built on the
+    // first engine_blit_view call that needs it; rebuilt when camera_size
+    // or the overlay changes (training cameras themselves are static).
     bool   bvh_built = false;
+    float  bvh_camera_size = -1.0f;        // camera_size the BVH was built at
+    int    bvh_num_cam_lss = 0;            // frustum capsules before overlay
     DeviceVector<float>   bvh_lss_buffer;     // [num_lss * 2 * 4]
     DeviceVector<float>   bvh_tri_buffer;     // [num_tri * 4 * 4]
     DeviceVector<int32_t> bvh_lss_nodes;      // [num_lss * 2]  (int2)

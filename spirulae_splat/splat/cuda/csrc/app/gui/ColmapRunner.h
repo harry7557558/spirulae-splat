@@ -11,21 +11,25 @@
 //           .insv files split into images/cam<N>/ with one camera per folder
 //   [optional] AI masking via the embedded scripts/mask.py (external Python
 //           with lang-segment-anything; masks feed COLMAP and the trainer)
-//   feature_extractor -> exhaustive / sequential / vocab-tree matcher (the
-//           vocab tree is auto-found or downloaded) -> mapper ->
-//           [optional] bundle_adjuster refinement
+//   feature_extractor (SIFT or ALIKED; optional initial camera params) ->
+//           exhaustive / sequential (+ optional vocab-tree loop closure) /
+//           vocab-tree matcher (the tree is auto-found or downloaded;
+//           optional LightGlue matching) -> mapper -> best-effort
+//           model_merger when the scene splits into partial models ->
+//           [optional] bundle_adjuster refinement on the largest model
 //
 // Output layout (what the dataset parsers auto-detect):
 //   <workspace>/database.db
 //   <workspace>/sparse/0/{cameras,images,points3D}.bin
 //   <workspace>/images/            (video input: extracted frames)
 //   <workspace>/masks/             (when masking is enabled)
-//   <workspace>/ssplat_dataset.json  (records the image dir when the source
-//                                     images are referenced in place)
 //
 // For a folder-of-images input the images are NOT copied; COLMAP indexes
 // them where they are (recursively) and the GUI passes the absolute path as
-// image_dir (the parsers join dataset_dir / image_dir, absolute wins).
+// image_dir for the immediate open (the parsers join dataset_dir /
+// image_dir, absolute wins). No marker file is written -- when re-opening
+// such a dataset later, set data.image_dir in the dataparser options (video
+// datasets need nothing: images/ is the default).
 
 #include <atomic>
 #include <mutex>
@@ -47,6 +51,13 @@ struct ColmapJob {
     std::string input_path;              // images folder, or a video file
     bool is_video = false;
     std::string workspace;               // output dataset dir (created)
+    bool resume = true;                  // reuse artifacts an interrupted
+                                         // run left in the workspace:
+                                         // extracted frames, masks (mask.py
+                                         // resumes), features + matches
+                                         // (COLMAP skips existing DB rows),
+                                         // and completed sparse models.
+                                         // false = require a clean folder.
     std::string colmap_exe = "colmap";
     std::string ffmpeg_exe = "ffmpeg";
     std::string python_exe = "python3";  // for the masking script
@@ -56,11 +67,23 @@ struct ColmapJob {
     int camera_mode = 0;                 // 0 = one shared camera,
                                          // 1 = one per subfolder,
                                          // 2 = one per image
+    float init_focal_factor = 0.0f;      // > 0: initial fx = fy = factor *
+                                         // image width (composed into
+                                         // ImageReader.camera_params with
+                                         // centered principal point)
+    std::string camera_params;           // raw ImageReader.camera_params
+                                         // (overrides init_focal_factor)
 
-    // Matching
+    // Features & matching
+    int feature_type = 0;                // 0 = SIFT, 1 = ALIKED (neural)
+    bool lightglue = false;              // LightGlue neural matching
     int quality = 1;                     // 0 = fast, 1 = balanced, 2 = high
-    int matcher = 0;                     // 0 auto, 1 exhaustive,
-                                         // 2 sequential, 3 vocab tree
+    int matcher = 1;                     // 1 exhaustive, 2 sequential,
+                                         // 3 vocab tree (no auto: the GUI
+                                         // presets a default per input type
+                                         // and the user confirms it)
+    bool seq_loop_closure = true;        // sequential: vocab-tree loop
+                                         // detection (SIFT features only)
 
     // Video extraction
     float video_fps = 2.0f;              // kept frames per second
@@ -72,8 +95,34 @@ struct ColmapJob {
     int max_image_size = 0;              // 0 = COLMAP default
     int seq_overlap = 10;                // sequential matcher overlap
     bool seq_quadratic_overlap = true;   // match frame i with i +- 2^k too
-    bool estimate_affine_shape = false;  // + guided feature matching
-    bool ba_use_gpu = true;              // Mapper.ba_use_gpu
+    bool estimate_affine_shape = false;  // + guided feature matching (SIFT)
+    bool ba_use_gpu = true;              // Mapper.ba_use_gpu (forced off for
+                                         // fisheye models: not supported)
+    int mapper_extra_params = 0;         // Mapper.ba_refine_extra_params:
+                                         // 0 auto (fix for perspective
+                                         //   models, refine for fisheye),
+                                         // 1 refine during mapping,
+                                         // 2 fix until the final BA pass
+    int min_num_matches = 0;             // 0 = COLMAP default (15)
+
+    // Wrong-match suppression for large scenes with repetitive texture
+    // (multiple similar rooms etc.), where visually similar but physically
+    // different parts get matched and weld together. All 0 = COLMAP
+    // defaults; see the GUI tooltips for suggested values.
+    float match_max_ratio = 0.0f;        // SiftMatching.max_ratio (def 0.8;
+                                         // lower = stricter Lowe ratio test)
+    int   min_inliers_per_pair = 0;      // TwoViewGeometry.min_num_inliers
+                                         // (def 15; raise to drop weakly
+                                         // verified pairs entirely)
+    int   abs_pose_min_num_inliers = 0;  // Mapper.abs_pose_min_num_inliers
+                                         // (def 30; raise = stricter image
+                                         // registration)
+    float abs_pose_min_inlier_ratio = 0; // Mapper.abs_pose_min_inlier_ratio
+                                         // (def 0.25)
+    float abs_pose_max_error = 0.0f;     // Mapper.abs_pose_max_error px
+                                         // (def 12; lower = stricter)
+    bool merge_models = true;            // try model_merger when the mapper
+                                         // splits into partial models
     bool final_bundle_adjust = true;     // bundle_adjuster refinement pass
     std::string vocab_tree_path;         // "" = auto find / download
 
@@ -110,6 +159,9 @@ private:
     std::string resolve_vocab_tree(const ColmapJob& job);
     bool run_masking(const ColmapJob& job, const std::string& images,
                      std::string& err);
+    // Mean reprojection error of a model (colmap model_analyzer); a large
+    // sentinel when it cannot be determined.
+    double model_reproj_error(const ColmapJob& job, const std::string& model);
 
     std::thread _worker;
     std::atomic<State> _state{State::Idle};

@@ -129,6 +129,7 @@ void ViewportPanel::build_request(ViewRequest& q, int W, int H) const {
     q.model = camera_model_name();
     q.key = _buffer_keys.empty() ? "rgb" : _buffer_keys[_buffer_idx];
     q.show_cams = _show_cams;
+    q.show_grid = _show_grid;
     q.cam_size_scale = _frustum_scale;
 }
 
@@ -297,7 +298,7 @@ void ViewportPanel::handle_input(float /*item_h*/) {
 void ViewportPanel::draw_controls(bool engine) {
     // All controls fit on one row on a wide enough viewport; otherwise the
     // navigation/camera group wraps to a second row.
-    bool one_row = ImGui::GetContentRegionAvail().x >= 1120.0f;
+    bool one_row = ImGui::GetContentRegionAvail().x >= 1190.0f;
 
     // ---- display group ----
     if (engine && !_buffer_keys.empty()) {
@@ -322,6 +323,8 @@ void ViewportPanel::draw_controls(bool engine) {
         ImGui::SameLine();
     }
     if (ImGui::Checkbox("cameras", &_show_cams)) _dirty = true;
+    ImGui::SameLine();
+    if (ImGui::Checkbox("grid", &_show_grid)) _dirty = true;
     help_tooltip_on_hover("Overlay the training camera frusta (during "
                           "training, with image thumbnails once visited).");
     if (_show_cams) {
@@ -426,7 +429,8 @@ void ViewportPanel::draw_preview(const ImVec2& avail) {
     unsigned tex = _preview.render(W, H, view,
                                    (PreviewProjection)_cam_model,
                                    fx / (0.5f * W), fy / (0.5f * H),
-                                   _home_dist, _show_cams, _frustum_scale);
+                                   _home_dist, _show_cams, _frustum_scale,
+                                   _show_grid);
     if (!tex) {
         ImGui::TextDisabled("preview render failed");
         return;

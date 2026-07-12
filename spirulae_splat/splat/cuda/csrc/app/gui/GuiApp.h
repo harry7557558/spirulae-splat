@@ -57,6 +57,14 @@ private:
     void open_dataset(std::string dir, std::string image_dir = "");
     // Route for user-initiated opens: confirms first when training.
     void request_open_dataset(std::string dir);
+
+public:
+    // Drag-and-drop entry (GLFW drop callback, main thread): auto-detects
+    // whether the path is an SfM dataset folder, a folder of photos, or a
+    // video file, and routes it like the corresponding Home-screen action.
+    void handle_drop(const std::string& path);
+
+private:
     void request_go_home();
     void apply_preset(const std::string& preset);
     void start_training();

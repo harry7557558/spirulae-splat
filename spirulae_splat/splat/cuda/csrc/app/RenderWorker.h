@@ -78,6 +78,7 @@ struct ViewRequest {
     std::string model = "PINHOLE";
     std::string key = "rgb";
     bool show_cams = false;
+    bool show_grid = false;   // axes/grid overlay (viewer_upload_grid)
     // Frustum-size multiplier applied to cfg.base_camera_size when
     // show_cams is on (user-facing "camera size" slider).
     float cam_size_scale = 1.0f;
@@ -107,8 +108,9 @@ public:
 
     const ViewerRenderConfig& config() const;
 
-    // Viewable buffer keys for this config (the Python /buffers set minus
-    // the debug-only sh / refinement_score renders).
+    // Viewable buffer keys for this config (the Python /buffers set; the
+    // distortion buffers appear only when a distortion regularizer is
+    // configured -- they cost full-resolution VRAM to produce).
     std::vector<std::string> buffer_keys() const;
 
 private:
@@ -127,3 +129,12 @@ float viewer_upload_cameras(const PostSplitCameras& post);
 // distance), for renderers that draw frusta without the engine (the GUI's
 // dataset preview).
 float viewer_camera_size_heuristic(const PostSplitCameras& post);
+
+// One-shot upload of the axes/grid overlay (engine_viewer_set_grid). The
+// grid lives in the z-up normalized client frame and is mapped into the
+// training frame through train_to_normalized (ViewerRenderConfig's remap;
+// identity when train_frame_scale == 1). Call alongside
+// viewer_upload_cameras; drawn when ViewRequest::show_grid is set.
+void viewer_upload_grid(const PostSplitCameras& post,
+                        const std::array<float, 16>& train_to_normalized,
+                        float train_frame_scale);

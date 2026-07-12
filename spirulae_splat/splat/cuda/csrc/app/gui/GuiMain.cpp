@@ -90,6 +90,14 @@ int main(int, char**) {
 
     {
         gui::GuiApp app;
+        // Drag-and-drop onto the window: auto-detect dataset folder / photo
+        // folder / video file (fires on the main thread via glfwPollEvents).
+        glfwSetWindowUserPointer(window, &app);
+        glfwSetDropCallback(window, [](GLFWwindow* w, int count,
+                                       const char** paths) {
+            auto* a = (gui::GuiApp*)glfwGetWindowUserPointer(w);
+            if (a && count > 0 && paths && paths[0]) a->handle_drop(paths[0]);
+        });
         while (!app.wants_exit()) {
             glfwPollEvents();
             if (glfwWindowShouldClose(window)) {
