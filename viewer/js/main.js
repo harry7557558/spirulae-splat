@@ -1,10 +1,11 @@
 // Application entry: wires the WASM loader, WebGL renderer, camera controller,
 // and the UI panel together.
 
-import { initWasm, loadModel, sortSplats, freeSplatSh, splatHistogram, meshHistogram, meshEdgeCount, fitSphere, raycastMesh } from './wasm.js';
+import { initWasm, loadModel, sortSplats, freeSplatSh, splatHistogram, meshHistogram, meshEdgeCount, fitSphere, raycastMesh, dsFree, dsPickPoint } from './wasm.js';
+import { loadDatasetFiles, parseDatasetComponent } from './dataset.js';
 import { Renderer } from './renderer.js';
 import { Camera, Nav } from './camera.js';
-import { v3, mat3 } from './linalg.js';
+import { v3, mat3, quat } from './linalg.js';
 import { GAMUTS, toColMajor, hexToRgb } from './colors.js';
 import { drawHistogram } from './histogram.js';
 
@@ -20,9 +21,34 @@ const opts = {
   shDegree: 0, exposure: 1.0, opacityScale: 1.0,
   cameraModel: 'perspective', upAxis: 'z', showGrid: true,
   background: hexToRgb('0a0b0e'), shade: true, flatShade: false, meshColor: true,
+  // dataset (point cloud + camera frustums)
+  pointSize: 2.0, frustumScale: 1.0, showPoints: true, showFrustums: true, hoverCam: -1,
+};
+
+// dataset session state (cameras metadata for hover/pick/view-from-camera)
+let dataset = null;   // { cameras, components, token, fit, frustumBase, frustumMult }
+
+// Valid FOV range (degrees) per display camera model: tan blows up toward
+// 180° for the linear models; the fisheye projections are defined to 360°.
+// Equirectangular has no entry — it is a fixed full-sphere view (no FOV).
+const FOV_RANGE = {
+  perspective: [10, 150], orthographic: [10, 150],
+  fisheye: [10, 360], equisolid: [10, 360],
 };
 
 function setStatus(text, cls='') { $('status-text').textContent = text; $('status-dot').className = cls; }
+
+// Transient popup over the viewport, so load problems are visible without
+// opening the console. Auto-hides; a new message replaces the previous one.
+let toastTimer = null;
+function showToast(msg, isError = true) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = isError ? 'err' : 'warn';
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = 'none'; }, 8000);
+}
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -72,7 +98,7 @@ async function fetchModelFiles(url) {
     for (const b of g.buffers||[]) if (b.uri && !b.uri.startsWith('data:')) await add(b.uri.split('/').pop());
     for (const im of g.images||[]) if (im.uri && !im.uri.startsWith('data:')) await add(im.uri.split('/').pop());
   } else if (lname.endsWith('.obj')) {
-    const t = await files[0].text();
+    const t = await files[0].slice(0, 1 << 18).text();   // mtllib is in the header
     const mtl = t.match(/^mtllib\s+(.+)$/m);
     if (mtl) { const mn = mtl[1].trim(); await add(mn);
       const mf = files.find(f=>f.name===mn);
@@ -91,6 +117,9 @@ window.__viewer = {
   get camera() { return camera; },
   snapshot: () => { if (model && model.type==='splat') maybeSort(true); renderer.render(camera, opts); return renderer.snapshot(); },
   get sortStats() { return sortStats; },
+  get dataset() { return dataset; },
+  viewFromCamera: (i) => viewFromCamera(i),
+  pickCamera: (px, py) => pickCamera(px, py),
 };
 
 // ---------------------------------------------------------------------------
@@ -121,6 +150,7 @@ function upTransform() {
 // outliers that make a bounding-box fit useless.
 function fitModel() {
   if (!model) return;
+  if (model.type === 'dataset') { if (dataset) fitDataset(dataset.fit); return; }
   const fs = fitSphere();                       // [cx,cy,cz, medianDist] (native frame)
   const c = mat3.mulVec(upTransform(), [fs[0], fs[1], fs[2]]);
   const r = 2.0 * fs[3] || 1;
@@ -225,49 +255,149 @@ function resize() {
 // ---------------------------------------------------------------------------
 // Model loading
 // ---------------------------------------------------------------------------
-async function load(files) {
-  setStatus('Loading model…', '');
+// Normalize a drop / picker input to entries [{path, getFile}] (path relative,
+// for MEMFS mounting + sibling lookup). getFile() materializes the File
+// LAZILY: a dropped dataset folder can hold thousands of high-resolution
+// images, and creating a File per image (a filesystem stat each) up front
+// froze the load for a long time even though only the small metadata files
+// are ever read.
+function toEntries(input) {
+  return Array.from(input).map(e =>
+    e && e.getFile ? e :                                            // already lazy
+    e && e.file ? { path: e.path, getFile: async () => e.file } :   // {file, path}
+    { path: e.webkitRelativePath || e.name, getFile: async () => e });  // File
+}
+// COLMAP / Nerfstudio / Metashape signal in the dropped set.
+function looksLikeDataset(entries) {
+  return entries.some(e => {
+    const p = e.path.toLowerCase();
+    return /(^|\/)(cameras|images|points3d)\.(bin|txt)$/.test(p)
+        || /(^|\/)transforms[^/]*\.json$/.test(p)
+        || /\.(xml|psx)$/.test(p);
+  });
+}
+
+async function load(input) {
+  const entries = toEntries(input);
   try {
-    const res = await loadModel(files);
-    const firstModel = !model;
-    if (res.kind === 'splat') {
-      renderer.setSplat(res.data);
-      freeSplatSh();   // SH lives on the GPU now; drop the WASM copy
-      sortWorkerInitModel(res.data);
-      model = { type:'splat', count: res.data.count, shDegree: res.data.shDegree };
-      showSplatUI(res.data);
-    } else {
-      renderer.setMesh(res.data, res.image || null);
-      sortGen++; sortPending = null;   // invalidate any in-flight splat sort
-      model = { type:'mesh', nv: res.data.nv, nt: res.data.nt };
-      showMeshUI(res.data);
+    if (looksLikeDataset(entries)) { await loadDataset(entries); return; }
+    try {
+      await loadSingleModel(entries);
+    } catch (e) {
+      // A bare XYZ(RGB) point-cloud .ply is not a splat/mesh — try the dataset
+      // path (the bridge shows it as a point cloud).
+      if (entries.some(x => /\.ply$/i.test(x.path))) {
+        try { await loadDataset(entries); return; } catch {}
+      }
+      throw e;
     }
-    // Only fit the camera for the first model of the session: replacing the
-    // model (e.g. dropping the mesh of the same object after a splat) keeps
-    // the current view. The scene scale (move/zoom speed) is still refreshed.
-    if (firstModel) fitModel();
-    else { const fs = fitSphere(); nav._sceneScale = 2.0 * fs[3] || 1; }
-    lastSortDir = [0,0,0]; lastSortMode = -1;
-    if (model.type === 'splat') maybeSort(true);   // initial order, synchronous
-    histCache.clear();
-    updateHistParams();
-    $('drop-hint').style.display = 'none';
-    const name = Array.from(files).find(f=>/\.(ply|obj|gltf|glb)$/i.test(f.name))?.name || '';
-    $('st-file').textContent = name.length>22 ? '…'+name.slice(-21) : name;
-    setStatus(model.type==='splat' ? 'Splat model loaded' : 'Mesh loaded', 'ok');
-    dirty = true;
   } catch (e) {
     console.error(e);
     setStatus('Load error: ' + e.message, 'err');
+    showToast('Load error: ' + e.message);
   }
+}
+
+async function loadSingleModel(entries) {
+  setStatus('Loading model…', '');
+  // Materialize only files a model load can use: the model itself, plus
+  // external resources (.bin/.mtl/images) when a .gltf/.obj needs siblings —
+  // never thousands of unrelated dataset images.
+  const needsSiblings = entries.some(e => /\.(gltf|obj)$/i.test(e.path));
+  let wanted = entries.filter(e => /\.(ply|obj|gltf|glb)$/i.test(e.path) ||
+    (needsSiblings && /\.(bin|mtl|png|jpg|jpeg|webp)$/i.test(e.path)));
+  if (!wanted.length) wanted = entries;
+  const files = await Promise.all(wanted.map(e => e.getFile()));
+  const res = await loadModel(files);
+  const firstModel = !model;
+  if (dataset) { try { dsFree(); } catch {} }   // release the retained point cloud
+  dataset = null;
+  if (res.kind === 'splat') {
+    renderer.setSplat(res.data);
+    freeSplatSh();   // SH lives on the GPU now; drop the WASM copy
+    sortWorkerInitModel(res.data);
+    model = { type:'splat', count: res.data.count, shDegree: res.data.shDegree };
+    showSplatUI(res.data);
+  } else {
+    renderer.setMesh(res.data, res.image || null);
+    sortGen++; sortPending = null;   // invalidate any in-flight splat sort
+    model = { type:'mesh', nv: res.data.nv, nt: res.data.nt };
+    showMeshUI(res.data);
+  }
+  // Only fit the camera for the first model of the session: replacing the
+  // model (e.g. dropping the mesh of the same object after a splat) keeps
+  // the current view. The scene scale (move/zoom speed) is still refreshed.
+  if (firstModel) fitModel();
+  else { const fs = fitSphere(); nav._sceneScale = 2.0 * fs[3] || 1; }
+  lastSortDir = [0,0,0]; lastSortMode = -1;
+  if (model.type === 'splat') maybeSort(true);   // initial order, synchronous
+  histCache.clear();
+  updateHistParams();
+  $('drop-hint').style.display = 'none';
+  const name = files.find(f=>/\.(ply|obj|gltf|glb)$/i.test(f.name))?.name || '';
+  $('st-file').textContent = name.length>22 ? '…'+name.slice(-21) : name;
+  setStatus(model.type==='splat' ? 'Splat model loaded' : 'Mesh loaded', 'ok');
+  dirty = true;
+}
+
+// Load a COLMAP / Nerfstudio / Metashape dataset (or bare point cloud).
+// `token` selects a component of an already-mounted dataset (picker switch);
+// omit it to mount `entries` and auto-select the first component.
+async function loadDataset(entries, token) {
+  setStatus(token ? 'Loading component…' : 'Loading dataset…', '');
+  const res = token
+    ? { ...parseDatasetComponent(token), components: dataset.components, selectedToken: token }
+    : await loadDatasetFiles(entries);
+
+  const firstDataset = !model || model.type !== 'dataset';
+  renderer.setDataset({ points: res.points, frustum: res.frustum });
+  // Keep the wasm-side dataset resident so double-click point picking
+  // (dsPickPoint) still works; it is freed when a non-dataset model loads.
+  sortGen++; sortPending = null;       // invalidate any in-flight splat sort
+
+  const fit = res.fit;
+  const frustumBase = 0.02 * (fit[3] || 1);
+  const frustumMult = dataset ? dataset.frustumMult : 1.0;
+  opts.frustumScale = frustumBase * frustumMult;
+  dataset = {
+    cameras: res.cameras,
+    components: res.components || (dataset && dataset.components) || [],
+    token: res.selectedToken || token,
+    fit, frustumBase, frustumMult,
+  };
+  model = { type:'dataset', numCameras: res.cameras.length, numPoints: res.points.count };
+  opts.hoverCam = -1;
+  showDatasetUI(res.summary);
+  if (firstDataset || token) fitDataset(fit); else nav._sceneScale = 2.0*(fit[3]||1);
+  histCache.clear(); updateHistParams();
+  $('drop-hint').style.display = 'none';
+  const label = (dataset.components.find(c=>c.token===dataset.token) || {}).label || 'dataset';
+  $('st-file').textContent = label.length>24 ? label.slice(0,23)+'…' : label;
+  if (res.error) {
+    // parser threw partway but something usable was salvaged — tell the user
+    setStatus('Dataset partially loaded', 'err');
+    showToast('Dataset partially loaded: ' + res.error);
+  } else {
+    setStatus('Dataset loaded', 'ok');
+  }
+  dirty = true;
+}
+
+function fitDataset(fit) {
+  const c = mat3.mulVec(upTransform(), [fit[0], fit[1], fit[2]]);
+  nav.fitSphere(c, 2.0*(fit[3] || 1), [0,0,1]);
 }
 
 function showSplatUI(data) {
   $('sec-splat').classList.remove('hidden');
   $('sec-mesh').classList.add('hidden');
+  $('sec-dataset').classList.add('hidden');
+  $('sec-hist').style.display = '';
   $('st-type').textContent = '3D Gaussian Splats';
   $('st-splat-stats').style.display = '';
   $('st-mesh-stats').style.display = 'none';
+  $('st-dataset-stats').style.display = 'none';
+  $('ds-component-row').style.display = 'none';
   $('st-count').textContent = data.count.toLocaleString();
   $('st-sh').textContent = data.shDegree;
   // slider range 0..model degree, defaulting to the model's actual degree
@@ -277,14 +407,51 @@ function showSplatUI(data) {
 function showMeshUI(data) {
   $('sec-mesh').classList.remove('hidden');
   $('sec-splat').classList.add('hidden');
+  $('sec-dataset').classList.add('hidden');
+  $('sec-hist').style.display = '';
   $('st-type').textContent = data.uv ? 'Textured mesh' : (data.color ? 'Vertex-color mesh' : 'Mesh');
   $('st-splat-stats').style.display = 'none';
   $('st-mesh-stats').style.display = '';
+  $('st-dataset-stats').style.display = 'none';
+  $('ds-component-row').style.display = 'none';
   $('st-verts').textContent = data.nv.toLocaleString();
   $('st-faces').textContent = data.nt.toLocaleString();
   $('st-edges').textContent = '…';
   // edge count can be a touch slow for huge meshes; compute async-ish
   setTimeout(() => { try { $('st-edges').textContent = meshEdgeCount().toLocaleString(); } catch {} }, 0);
+}
+
+function showDatasetUI(summary) {
+  $('sec-splat').classList.add('hidden');
+  $('sec-mesh').classList.add('hidden');
+  $('sec-dataset').classList.remove('hidden');
+  $('sec-hist').style.display = 'none';    // no per-splat distributions for datasets
+  $('st-splat-stats').style.display = 'none';
+  $('st-mesh-stats').style.display = 'none';
+  $('st-dataset-stats').style.display = '';
+  $('st-type').textContent = summary.format || 'Dataset';
+  $('st-ds-images').textContent = (summary.num_images ?? 0).toLocaleString();
+  $('st-ds-points').textContent = (summary.num_points ?? 0).toLocaleString();
+  $('st-ds-groups').textContent = (summary.num_groups ?? 0).toLocaleString();
+  // per-model breakdown
+  const models = summary.models || {};
+  const parts = Object.entries(models).map(([k, v]) => `${k.toLowerCase()}: ${v}`);
+  $('st-ds-models').textContent = parts.length ? parts.join(', ') : '—';
+
+  // component picker (only meaningful with >1 component; still lists skipped)
+  const sel = $('ds-component');
+  const comps = (dataset && dataset.components) || [];
+  sel.innerHTML = '';
+  for (const c of comps) {
+    const o = document.createElement('option');
+    o.value = c.token;
+    let lbl = c.label;
+    if (c.cameras >= 0) lbl += ` (${c.cameras} cam${c.cameras===1?'':'s'})`;
+    o.textContent = lbl;
+    sel.appendChild(o);
+  }
+  sel.value = (dataset && dataset.token) || (comps[0] && comps[0].token) || '';
+  $('ds-component-row').style.display = comps.length > 1 ? '' : 'none';
 }
 
 // ---------------------------------------------------------------------------
@@ -306,7 +473,7 @@ function updateHistParams() {
   const ctx = $('hist-canvas').getContext('2d'); ctx.clearRect(0,0,9999,9999);
 }
 function computeHistogram() {
-  if (!model) return;
+  if (!model || model.type === 'dataset') return;
   const param = +$('hist-param').value;
   const key = model.type + ':' + param;
   let hist = histCache.get(key);
@@ -367,13 +534,179 @@ function wireInput() {
   window.addEventListener('keyup', (e) => nav.keyUp(e.key.toLowerCase()));
   window.addEventListener('blur', () => nav._keys.clear());
 
-  // drag & drop / file picker
+  // hover a camera frustum -> intrinsics tooltip (dataset only, no button held)
+  vp.addEventListener('pointermove', (e) => {
+    if (!model || model.type !== 'dataset' || !dataset || e.buttons) { hideTooltip(); return; }
+    const [px, py] = canvasPixel(e);
+    const hit = pickCamera(px, py);
+    if (opts.hoverCam !== hit) { opts.hoverCam = hit; dirty = true; }
+    if (hit >= 0) showTooltip(e, hit); else hideTooltip();
+  });
+  vp.addEventListener('pointerleave', () => { if (opts.hoverCam !== -1) { opts.hoverCam = -1; dirty = true; } hideTooltip(); });
+
+  // drag & drop / file picker (folder-aware)
   vp.addEventListener('dragover', (e) => { e.preventDefault(); vp.classList.add('dragover'); });
   vp.addEventListener('dragleave', () => vp.classList.remove('dragover'));
-  vp.addEventListener('drop', (e) => { e.preventDefault(); vp.classList.remove('dragover'); if (e.dataTransfer.files.length) load(e.dataTransfer.files); });
+  vp.addEventListener('drop', async (e) => {
+    e.preventDefault(); vp.classList.remove('dragover');
+    const entries = await gatherEntries(e.dataTransfer);
+    if (entries.length) load(entries);
+  });
   $('file-input').addEventListener('change', (e) => { if (e.target.files.length) load(e.target.files); });
   $('drop-hint').addEventListener('pointerup', () => $('file-input').click());
 }
+
+// Recursively collect dropped files (folders via webkitGetAsEntry) into
+// [{path, getFile}] keeping relative paths for MEMFS mounting + sibling
+// lookup. Only directory LISTINGS happen here — entry.file() (a filesystem
+// stat + File creation per file, the expensive part for folders with
+// thousands of images) is deferred into getFile() and only ever runs for the
+// files a load path actually reads.
+async function gatherEntries(dt) {
+  const items = dt.items ? Array.from(dt.items) : [];
+  const roots = [];
+  for (const it of items) {
+    if (it.kind === 'file' && it.webkitGetAsEntry) { const en = it.webkitGetAsEntry(); if (en) roots.push(en); }
+  }
+  if (!roots.length)
+    return Array.from(dt.files || []).map(f => ({ path: f.webkitRelativePath || f.name, getFile: async () => f }));
+  const out = [];
+  const progress = () => { if (out.length % 500 === 0) setStatus(`Scanning folder… (${out.length.toLocaleString()} files)`); };
+  const walk = (entry, prefix) => new Promise((resolve) => {
+    if (entry.isFile) {
+      out.push({
+        path: prefix + entry.name,
+        getFile: () => new Promise((res, rej) => entry.file(res, rej)),
+      });
+      progress();
+      resolve();
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const readBatch = () => reader.readEntries(async (ents) => {
+        if (!ents.length) { resolve(); return; }
+        await Promise.all(ents.map(en => walk(en, prefix + entry.name + '/')));
+        readBatch();   // directory entries arrive in batches until empty
+      }, () => resolve());
+      readBatch();
+    } else resolve();
+  });
+  setStatus('Scanning folder…');
+  await Promise.all(roots.map(r => walk(r, '')));
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Dataset picking helpers (frustum hover / view-from-camera / point recenter).
+// ---------------------------------------------------------------------------
+// Project a canonical-frame world point to canvas pixels (device, y-up), or
+// null if it is behind / outside the current camera model's domain. Mirrors
+// projectCam in shaders.js.
+function projectWorld(p) {
+  const pc = mat3.mulVec(camera.viewR(), v3.sub(p, camera.pos));   // camera space (-Z fwd)
+  const intr = renderer._intrinsics(camera, canvas.width, canvas.height);
+  const { fx, fy, cx, cy } = intr;
+  const m = camera.model;
+  if (m === 'orthographic') return [fx*pc[0]+cx, fy*pc[1]+cy, -pc[2]];
+  if (m === 'perspective') { const t = -pc[2]; if (t <= 1e-6) return null; return [fx*(pc[0]/t)+cx, fy*(pc[1]/t)+cy, t]; }
+  if (m === 'equirectangular') {
+    const lam = Math.atan2(pc[0], -pc[2]), phi = Math.atan2(pc[1], Math.hypot(pc[0], pc[2]));
+    return [cx + lam*fx, cy + phi*fy, v3.len(pc)];
+  }
+  // fisheye / equisolid
+  const lxy = Math.hypot(pc[0], pc[1]);
+  const theta = Math.atan2(lxy, -pc[2]);
+  const dx = lxy > 1e-9 ? pc[0]/lxy : 0, dy = lxy > 1e-9 ? pc[1]/lxy : 0;
+  const r = m === 'equisolid' ? 2*Math.sin(0.5*theta) : theta;
+  return [fx*r*dx + cx, fy*r*dy + cy, v3.len(pc)];
+}
+
+// Nearest camera whose center projects within a pixel threshold of (px,py).
+// Hidden cameras are not pickable (no hover tooltip, no double-click).
+function pickCamera(px, py) {
+  if (!dataset || !opts.showFrustums) return -1;
+  const U = upTransform();
+  const thr = 18 * (window.devicePixelRatio || 1);
+  let best = -1, bestD = thr*thr;
+  for (let i = 0; i < dataset.cameras.length; i++) {
+    const m = dataset.cameras[i].c2w;
+    const sp = projectWorld(mat3.mulVec(U, [m[3], m[7], m[11]]));
+    if (!sp || sp[2] <= 0) continue;
+    const dx = sp[0]-px, dy = sp[1]-py, d = dx*dx + dy*dy;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+// Set the interactive camera to look through dataset camera i: same pose and
+// the matching display camera model (average focal for the FOV; cx/cy and
+// distortion omitted — the display projection is the ideal model).
+function viewFromCamera(i) {
+  const cam = dataset.cameras[i];
+  const m = cam.c2w, U = upTransform();
+  const Rnat = [m[0],m[4],m[8],  m[1],m[5],m[9],  m[2],m[6],m[10]];   // cam->world (native, col-major)
+  camera.pos = mat3.mulVec(U, [m[3], m[7], m[11]]);
+  camera.rot = quat.fromMat3(mat3.mul(U, Rnat));
+  camera.target = v3.add(camera.pos, v3.scale(camera.forward(), nav._sceneScale));
+
+  // dataset CameraModelType -> display model (renderer CAM_MODEL names)
+  const displayModel = ['perspective','fisheye','equisolid','equirectangular'][cam.model] || 'perspective';
+  const f = (cam.fx + cam.fy) / 2;
+  const h = cam.h || 2*cam.cy || 0;
+  const s = Math.min(cam.w || h, h);    // display fisheye FOV spans min(w,h)
+  let fov = camera.fov;
+  if (f > 0 && h > 0) {
+    if (cam.model === 1)      fov = s / f;                                    // equidistant: r = f*theta
+    else if (cam.model === 2) fov = 4*Math.asin(Math.min(s/(4*f), 1));        // r = 2f sin(theta/2)
+    else if (cam.model !== 3) fov = 2*Math.atan(h/(2*f));                     // pinhole (equirect: fov unused)
+  }
+  const sel = $('camera-model');
+  sel.value = displayModel;
+  sel.dispatchEvent(new Event('change'));   // sets opts.cameraModel, camera.model, FOV range
+  const range = FOV_RANGE[displayModel];
+  if (range) {
+    camera.fov = Math.min(Math.max(fov, range[0]*Math.PI/180), range[1]*Math.PI/180);
+    const deg = Math.round(camera.fov*180/Math.PI);
+    $('fov').value = deg;
+    $('v-fov').textContent = deg + '°';
+  }
+  dirty = true;
+}
+
+// Recenter on the point cloud under the cursor (dataset).
+function datasetRecenter(px, py) {
+  const intr = renderer._intrinsics(camera, canvas.width, canvas.height);
+  const uv = [(px - intr.cx)/intr.fx, (py - intr.cy)/intr.fy];
+  const R = camera.rotMat3();
+  let ro, rd;
+  if (camera.model === 'orthographic') { ro = v3.add(camera.pos, mat3.mulVec(R,[uv[0],uv[1],0])); rd = mat3.mulVec(R,[0,0,-1]); }
+  else { ro = camera.pos; rd = mat3.mulVec(R, unprojectDir(uv)); }
+  const Ut = mat3.transpose(upTransform());
+  const on = mat3.mulVec(Ut, ro), dn = mat3.mulVec(Ut, rd);
+  const pick = dsPickPoint(on[0],on[1],on[2], dn[0],dn[1],dn[2]);
+  if (pick.index >= 0 && pick.t > 0 && pick.perp < 0.03 * pick.t)
+    recenterAt(v3.add(ro, v3.scale(rd, pick.t)));
+}
+
+function showTooltip(e, i) {
+  const cam = dataset.cameras[i];
+  const el = $('cam-tooltip');
+  const MODEL = ['Pinhole','Fisheye','Equisolid','Equirectangular'];
+  const d = cam.dist || [];
+  const nz = d.some(x => x);
+  const dlabels = ['k1','k2','k3','k4','p1','p2','s1','s2','b1','b2'];
+  const dstr = nz ? d.map((x,j)=> x ? `${dlabels[j]} ${x.toFixed(4)}` : null).filter(Boolean).join(', ') : 'none';
+  el.innerHTML =
+    `<b>${cam.name || 'camera ' + i}</b><br>` +
+    `${MODEL[cam.model] || 'model ' + cam.model} · ${cam.w}×${cam.h}<br>` +
+    `fx ${cam.fx.toFixed(1)}  fy ${cam.fy.toFixed(1)}<br>` +
+    `cx ${cam.cx.toFixed(1)}  cy ${cam.cy.toFixed(1)}<br>` +
+    `dist: ${dstr}`;
+  const rect = canvas.getBoundingClientRect();
+  el.style.left = (e.clientX - rect.left + 14) + 'px';
+  el.style.top  = (e.clientY - rect.top + 14) + 'px';
+  el.style.display = 'block';
+}
+function hideTooltip() { const el = $('cam-tooltip'); if (el) el.style.display = 'none'; }
 // ---------------------------------------------------------------------------
 // Double-click view centering (MeshLab-style): find the 3D point under the
 // cursor — GPU depth accumulation for splats, WASM brute-force raycast for
@@ -401,6 +734,11 @@ function unprojectDir(uv) {
 function pickRecenter(e) {
   if (!model) return;
   const [px, py] = canvasPixel(e);
+  if (model.type === 'dataset') {
+    const cam = pickCamera(px, py);
+    if (cam >= 0) viewFromCamera(cam); else datasetRecenter(px, py);
+    return;
+  }
   const intr = renderer._intrinsics(camera, canvas.width, canvas.height);
   const uv = [(px - intr.cx)/intr.fx, (py - intr.cy)/intr.fy];
   const R = camera.rotMat3();            // cam -> world (canonical)
@@ -470,6 +808,18 @@ function wireControls() {
     // FOV is meaningless for equirectangular (full 360×180)
     $('fov').disabled = (e.target.value === 'equirectangular');
     $('fov').parentElement.style.opacity = $('fov').disabled ? 0.4 : 1;
+    // Per-model FOV range (fisheye reaches past 180°; pinhole must not), and
+    // clamp the current FOV on switch — e.g. a 213° fisheye view switched
+    // back to perspective would otherwise keep an impossible FOV.
+    // Equirectangular has no range (slider disabled, camera.fov untouched).
+    const range = FOV_RANGE[e.target.value];
+    if (range) {
+      const [lo, hi] = range;
+      $('fov').min = lo; $('fov').max = hi;
+      const deg = Math.min(Math.max(Math.round(camera.fov*180/Math.PI), lo), hi);
+      camera.fov = deg*Math.PI/180;
+      $('fov').value = deg; $('v-fov').textContent = deg + '°';
+    }
     dirty=true;
   });
   bind('fov','input', e => { camera.fov = +e.target.value*Math.PI/180; $('v-fov').textContent = e.target.value+'°'; dirty=true; });
@@ -478,6 +828,21 @@ function wireControls() {
   bind('mesh-color','change', e => { opts.meshColor = e.target.checked; dirty=true; });
   bind('grid','change', e => { opts.showGrid = e.target.checked; dirty=true; });
   bind('bg-color','input', e => { opts.background = hexToRgb(e.target.value); dirty=true; });
+
+  // dataset controls
+  bind('ds-component','change', async e => {
+    if (!dataset) return;
+    try { await loadDataset(null, e.target.value); }
+    catch (err) { console.error(err); setStatus('Load error: ' + err.message, 'err'); showToast('Load error: ' + err.message); }
+  });
+  bind('point-size','input', e => { opts.pointSize = +e.target.value; $('v-point-size').textContent = (+e.target.value).toFixed(1); dirty=true; });
+  bind('frustum-size','input', e => {
+    const mult = Math.pow(10, +e.target.value);
+    if (dataset) { dataset.frustumMult = mult; opts.frustumScale = dataset.frustumBase * mult; }
+    $('v-frustum-size').textContent = mult.toFixed(2)+'×'; dirty=true;
+  });
+  bind('show-points','change', e => { opts.showPoints = e.target.checked; dirty=true; });
+  bind('show-frustums','change', e => { opts.showFrustums = e.target.checked; dirty=true; });
 
   bind('hist-param','change', () => computeHistogram());
   bind('btn-hist','click', () => computeHistogram());

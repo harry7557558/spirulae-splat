@@ -719,6 +719,113 @@ void main() {
 }
 `;
 
+// ---------------------------------------------------------------------------
+// DATASET point-cloud + camera-frustum shaders (specialized by CAM_MODEL).
+// Same projection contract as MESH_VS: a real MVP for the linear cameras, and
+// the analytic projectCam path (writing NDC directly) for fisheye/equirect.
+// Positions arrive in the model's NATIVE frame; uModelR = U applies the up-axis.
+// ---------------------------------------------------------------------------
+// Project a native-frame position `pos` to clip space (shared by points/lines).
+const DATASET_PROJECT = /* glsl */`
+#if CAM_MODEL <= 1
+  gl_Position = uMVP * vec4(pos, 1.0);
+#else
+  vec3 pw = uModelR * pos;
+  vec3 pc = uViewR * (pw - uCamPos);
+  vec3 pr = projectCam(pc, uFocal, uCenter);
+  vec2 ndc = 2.0*pr.xy/uViewport - 1.0;
+  float ndcz = clamp((pr.z - uNearFar.x)/(uNearFar.y - uNearFar.x), 0.0, 1.0)*2.0 - 1.0;
+  gl_Position = (pr.z < uNearFar.x) ? vec4(0.0,0.0,2.0,1.0) : vec4(ndc, ndcz, 1.0);
+#endif
+`;
+
+export const POINT_VS = /* glsl */`#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aColor;
+uniform mat4 uMVP;
+uniform mat3 uModelR, uViewR;
+uniform vec3 uCamPos;
+uniform vec2 uFocal, uCenter, uViewport, uNearFar;
+uniform float uPointSize;
+out vec3 vColor;
+#if CAM_MODEL >= 2
+${PROJ_GLSL}
+#endif
+void main() {
+  vColor = aColor;
+  vec3 pos = aPos;
+${DATASET_PROJECT}
+  gl_PointSize = uPointSize;
+}
+`;
+
+export const POINT_FS = /* glsl */`#version 300 es
+precision highp float;
+in vec3 vColor;
+uniform vec2 uFocal, uCenter;
+out vec4 outColor;
+void main() {
+${DOMAIN_DISCARD}
+  vec2 d = gl_PointCoord * 2.0 - 1.0;
+  if (dot(d, d) > 1.0) discard;            // round sprite
+  outColor = vec4(vColor, 1.0);
+}
+`;
+
+// Frustum lines: each vertex is (apex + unit-offset * uFrustumScale) in native
+// frame, so the frustum-size slider is a cheap GPU uniform (no CPU rebuild).
+export const LINE_VS = /* glsl */`#version 300 es
+precision highp float;
+layout(location=0) in vec3 aApex;
+layout(location=1) in vec3 aOffset;
+layout(location=2) in vec3 aColor;
+uniform mat4 uMVP;
+uniform mat3 uModelR, uViewR;
+uniform vec3 uCamPos;
+uniform vec2 uFocal, uCenter, uViewport, uNearFar;
+uniform float uFrustumScale;
+uniform int uUseUniform;
+uniform vec3 uColor;
+out vec3 vColor;
+#if CAM_MODEL >= 2
+out vec3 vPosCam;                    // camera-space position (seam discard)
+${PROJ_GLSL}
+#endif
+void main() {
+  vColor = (uUseUniform == 1) ? uColor : aColor;
+  vec3 pos = aApex + aOffset * uFrustumScale;
+${DATASET_PROJECT}
+#if CAM_MODEL >= 2
+  vPosCam = pc;
+#endif
+}
+`;
+
+export const LINE_FS = /* glsl */`#version 300 es
+precision highp float;
+in vec3 vColor;
+uniform vec2 uFocal, uCenter;
+#if CAM_MODEL >= 2
+in vec3 vPosCam;
+uniform vec2 uViewport;
+${PROJ_GLSL}
+#endif
+out vec4 outColor;
+void main() {
+#if CAM_MODEL >= 2
+${DOMAIN_DISCARD}
+  // Same seam handling as MESH_FS: a segment crossing a projection
+  // discontinuity (equirect ±180° seam, fisheye backward point) rasterizes as
+  // the chord between the wrapped endpoints; re-projecting the interpolated
+  // camera-space position exposes it as a huge reprojection error.
+  vec2 err = projectCam(vPosCam, uFocal, uCenter).xy - gl_FragCoord.xy;
+  if (length(err) > 0.05*min(uViewport.x, uViewport.y)) discard;
+#endif
+  outColor = vec4(vColor, 1.0);
+}
+`;
+
 export const MESH_FS = /* glsl */`#version 300 es
 precision highp float;
 in vec3 vNormal;

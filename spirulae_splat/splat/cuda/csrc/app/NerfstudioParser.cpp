@@ -4,13 +4,15 @@
 // point-cloud reader. JSON via app/Json.h; no external dependencies.
 
 #include "DatasetParser.h"
+#include "FastFloat.h"
 #include "Json.h"
 
-#include "../Camera.h"   // camera_model_from_name
+#include "../CameraModel.h"   // camera_model_from_name (CUDA-free)
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <stdexcept>
@@ -145,6 +147,22 @@ ColmapPoints3D read_ply_points(const std::string& path) {
         }
     }
 
+    // ---- Slurp the data section once ----------------------------------------
+    // Per-row fgetc/fread through the stdio layer (worse still under
+    // Emscripten's virtual FS) made large ascii clouds take tens of seconds;
+    // reading the rest of the file into one buffer and pointer-walking it
+    // parses the same 60+ MB in well under a second.
+    long data_off = std::ftell(f);
+    std::fseek(f, 0, SEEK_END);
+    long fsize = std::ftell(f);
+    std::fseek(f, data_off, SEEK_SET);
+    std::string buf;
+    buf.resize((size_t)(fsize > data_off ? fsize - data_off : 0));
+    if (!buf.empty() && std::fread(&buf[0], 1, buf.size(), f) != buf.size())
+        throw std::runtime_error("PLY: cannot read " + path);
+    const char* p = buf.data();
+    const char* end = buf.data() + buf.size();
+
     // ---- Locate the vertex element ------------------------------------------
     ColmapPoints3D pts;
     for (const auto& el : elements) {
@@ -154,10 +172,14 @@ ColmapPoints3D read_ply_points(const std::string& path) {
                 throw std::runtime_error(
                     "PLY: list property before vertex element not supported in " + path);
             if (binary) {
-                if (std::fseek(f, (long)(el.count * el.stride()), SEEK_CUR) != 0)
-                    throw std::runtime_error("PLY: truncated " + path);
+                p += el.count * el.stride();
+                if (p > end) throw std::runtime_error("PLY: truncated " + path);
             } else {
-                for (int64_t i = 0; i < el.count; i++) read_header_line(f, path);
+                for (int64_t i = 0; i < el.count; i++) {
+                    const char* nl = (const char*)std::memchr(p, '\n', end - p);
+                    if (!nl) throw std::runtime_error("PLY: truncated " + path);
+                    p = nl + 1;
+                }
             }
             continue;
         }
@@ -170,9 +192,10 @@ ColmapPoints3D read_ply_points(const std::string& path) {
         if (ir < 0 || ig < 0 || ib < 0)
             throw std::runtime_error("PLY: vertex element missing red/green/blue in " + path);
 
-        std::vector<size_t> offsets(el.props.size());
+        const size_t nprops = el.props.size();
+        std::vector<size_t> offsets(nprops);
         size_t off = 0;
-        for (size_t i = 0; i < el.props.size(); i++) {
+        for (size_t i = 0; i < nprops; i++) {
             offsets[i] = off;
             off += ply_type_size(el.props[i].type);
         }
@@ -187,29 +210,35 @@ ColmapPoints3D read_ply_points(const std::string& path) {
         pts.xyz.resize(el.count * 3);
         pts.rgb.resize(el.count * 3);
         if (binary) {
-            std::vector<uint8_t> row(stride);
+            if ((int64_t)(end - p) < el.count * (int64_t)stride)
+                throw std::runtime_error("PLY: truncated " + path);
             for (int64_t i = 0; i < el.count; i++) {
-                if (std::fread(row.data(), 1, stride, f) != stride)
-                    throw std::runtime_error("PLY: truncated " + path);
-                pts.xyz[i*3 + 0] = (float)ply_read_scalar(&row[offsets[ix]], el.props[ix].type);
-                pts.xyz[i*3 + 1] = (float)ply_read_scalar(&row[offsets[iy]], el.props[iy].type);
-                pts.xyz[i*3 + 2] = (float)ply_read_scalar(&row[offsets[iz]], el.props[iz].type);
-                pts.rgb[i*3 + 0] = to_u8(ply_read_scalar(&row[offsets[ir]], el.props[ir].type), el.props[ir].type);
-                pts.rgb[i*3 + 1] = to_u8(ply_read_scalar(&row[offsets[ig]], el.props[ig].type), el.props[ig].type);
-                pts.rgb[i*3 + 2] = to_u8(ply_read_scalar(&row[offsets[ib]], el.props[ib].type), el.props[ib].type);
+                const uint8_t* row = (const uint8_t*)p + (size_t)i * stride;
+                pts.xyz[i*3 + 0] = (float)ply_read_scalar(row + offsets[ix], el.props[ix].type);
+                pts.xyz[i*3 + 1] = (float)ply_read_scalar(row + offsets[iy], el.props[iy].type);
+                pts.xyz[i*3 + 2] = (float)ply_read_scalar(row + offsets[iz], el.props[iz].type);
+                pts.rgb[i*3 + 0] = to_u8(ply_read_scalar(row + offsets[ir], el.props[ir].type), el.props[ir].type);
+                pts.rgb[i*3 + 1] = to_u8(ply_read_scalar(row + offsets[ig], el.props[ig].type), el.props[ig].type);
+                pts.rgb[i*3 + 2] = to_u8(ply_read_scalar(row + offsets[ib], el.props[ib].type), el.props[ib].type);
             }
         } else {
+            // strtod-walk: no per-row line/token allocations. strtod skips
+            // leading whitespace (including newlines), so rows self-delimit.
+            std::vector<double> vals(nprops);
             for (int64_t i = 0; i < el.count; i++) {
-                auto tok = split_ws(read_header_line(f, path));
-                if (tok.size() < el.props.size())
-                    throw std::runtime_error("PLY: short ascii row in " + path);
-                auto val = [&](int k) { return std::stod(tok[k]); };
-                pts.xyz[i*3 + 0] = (float)val(ix);
-                pts.xyz[i*3 + 1] = (float)val(iy);
-                pts.xyz[i*3 + 2] = (float)val(iz);
-                pts.rgb[i*3 + 0] = to_u8(val(ir), el.props[ir].type);
-                pts.rgb[i*3 + 1] = to_u8(val(ig), el.props[ig].type);
-                pts.rgb[i*3 + 2] = to_u8(val(ib), el.props[ib].type);
+                for (size_t k = 0; k < nprops; k++) {
+                    char* q;
+                    vals[k] = fast_strtod(p, &q);
+                    if (q == p)
+                        throw std::runtime_error("PLY: short ascii row in " + path);
+                    p = q;
+                }
+                pts.xyz[i*3 + 0] = (float)vals[ix];
+                pts.xyz[i*3 + 1] = (float)vals[iy];
+                pts.xyz[i*3 + 2] = (float)vals[iz];
+                pts.rgb[i*3 + 0] = to_u8(vals[ir], el.props[ir].type);
+                pts.rgb[i*3 + 1] = to_u8(vals[ig], el.props[ig].type);
+                pts.rgb[i*3 + 2] = to_u8(vals[ib], el.props[ib].type);
             }
         }
         if (pts.num() == 0)
@@ -301,7 +330,7 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
             continue;
         }
         fs::path abs = root / file_path;
-        if (!fs::exists(abs)) {
+        if (cfg.require_image_files && !fs::exists(abs)) {
             std::fprintf(stderr, "WARNING: %s does not exist, skipping\n",
                          file_path.c_str());
             continue;
@@ -464,11 +493,16 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
         for (const char* cand : {"sparse_pc.ply", "pointcloud.ply"})
             if (fs::exists(root / cand)) { ply_rel = cand; break; }
     }
-    if (ply_rel.empty())
-        throw std::runtime_error(
-            "NerfstudioParser: no initial point cloud found (ply_file_path / "
-            "sparse_pc.ply / pointcloud.ply)");
-    ds.points = read_ply_points((root / ply_rel).string());
+    if (ply_rel.empty()) {
+        // Lenient (viewer) mode: a transforms.json with no point cloud still
+        // yields camera poses / frustums. The trainer requires the seed cloud.
+        if (cfg.require_image_files)
+            throw std::runtime_error(
+                "NerfstudioParser: no initial point cloud found (ply_file_path / "
+                "sparse_pc.ply / pointcloud.ply)");
+    } else if (cfg.require_image_files || fs::exists(root / ply_rel)) {
+        ds.points = read_ply_points((root / ply_rel).string());
+    }
 
     // ---- applied_transform inverse (train_frame="points" branch,
     // dataparser.py:501-531): poses and points go back to the ORIGINAL

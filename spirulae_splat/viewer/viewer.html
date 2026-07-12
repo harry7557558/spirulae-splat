@@ -676,12 +676,23 @@ function getRenderSettings() {
   };
 }
 
-function fovToIntrinsics(fovDeg, w, h) {
+// FOV (horizontal, degrees) -> intrinsics, per camera model. Inverting the
+// actual projection (not the pinhole tan map) makes the slider a true field
+// of view for the fisheye models, which can then reach past 180°.
+function fovToIntrinsics(fovDeg, w, h, model) {
   const fovRad = fovDeg * Math.PI / 180;
-  const fx = (w / 2) / Math.tan(fovRad / 2);
+  let fx;
+  if (model === "FISHEYE")        fx = (w / 2) / (fovRad / 2);               // equidistant: r = f*theta
+  else if (model === "EQUISOLID") fx = (w / 2) / (2 * Math.sin(fovRad / 4)); // r = 2f sin(theta/2)
+  else                            fx = (w / 2) / Math.tan(fovRad / 2);       // pinhole
   const fy = fx;
   return { fx, fy, cx: w/2, cy: h/2 };
 }
+
+// Valid FOV range (degrees) per camera model: tan blows up toward 180 for
+// pinhole; the fisheye projections are defined all the way to 360.
+// EQUIRECTANGULAR has no entry — fixed full-sphere view, no FOV.
+const FOV_RANGE = { PINHOLE: [10, 150], FISHEYE: [10, 360], EQUISOLID: [10, 360] };
 
 // ═══════════════════════════════════════════════════════
 // Navigation
@@ -912,7 +923,7 @@ async function sendRenderRequest() {
   // (px-cx)/fx spans [-pi, pi] and (py-cy)/fy spans [-pi/2, pi/2].
   const intrinsics = camModel === "EQUIRECTANGULAR"
     ? { fx: res.w / (2 * Math.PI), fy: res.h / Math.PI, cx: res.w / 2, cy: res.h / 2 }
-    : fovToIntrinsics($("fov-slider").value, res.w, res.h);
+    : fovToIntrinsics($("fov-slider").value, res.w, res.h, camModel);
   const settings = getRenderSettings();
   const params = new URLSearchParams({
     buffer_key: $("buffer-key").value,
@@ -1240,11 +1251,21 @@ $("show-training-cameras").addEventListener("change", () => Viewer.requestRender
 
 function _syncCameraModelUI() {
   // FOV has no meaning for a full 360 panorama; grey the slider out.
-  const isEquirect = $("camera-model").value === "EQUIRECTANGULAR";
+  const model = $("camera-model").value;
+  const isEquirect = model === "EQUIRECTANGULAR";
   const fov = $("fov-slider");
   if (fov) {
     fov.disabled = isEquirect;
     fov.closest(".ctrl-row")?.style.setProperty("opacity", isEquirect ? "0.4" : "1");
+    // Per-model FOV range; clamp the current value on switch (a >180° fisheye
+    // FOV must not carry over to pinhole). Equirectangular has no range.
+    if (!isEquirect) {
+      const [lo, hi] = FOV_RANGE[model] || [10, 150];
+      fov.min = lo; fov.max = hi;
+      const v = Math.min(Math.max(+fov.value, lo), hi);
+      fov.value = v;
+      $("fov-val").textContent = v + "°";
+    }
   }
 }
 $("camera-model").addEventListener("change", () => { _syncCameraModelUI(); Viewer.requestRender(); });

@@ -2,7 +2,7 @@
 // (depth-tested), plus a screen-space grid/axes overlay. Only one model is
 // resident at a time; loading another frees the previous GPU resources.
 
-import { SPLAT_VS, SPLAT_FS, SPLAT_FS_3D, PICK_FS, PICK_FS_3D, FULLSCREEN_VS, GRID_FS, TONEMAP_FS, MESH_VS, MESH_FS } from './shaders.js';
+import { SPLAT_VS, SPLAT_FS, SPLAT_FS_3D, PICK_FS, PICK_FS_3D, FULLSCREEN_VS, GRID_FS, TONEMAP_FS, MESH_VS, MESH_FS, POINT_VS, POINT_FS, LINE_VS, LINE_FS } from './shaders.js';
 import { mat3, mat4, quat } from './linalg.js';
 
 function compile(gl, type, src) {
@@ -128,8 +128,63 @@ export class Renderer {
       for (const p of (m.idxParts||[])) gl.deleteBuffer(p.buf);
       if (m.tex) gl.deleteTexture(m.tex);
       gl.deleteVertexArray(m.vao);
+    } else if (m.type === 'dataset') {
+      for (const b of [m.ptPos,m.ptCol,m.lnApex,m.lnOff,m.lnCol]) if (b) gl.deleteBuffer(b);
+      for (const v of [m.ptVao,m.lnVao]) if (v) gl.deleteVertexArray(v);
     }
     this.model = null;
+  }
+
+  // ---- dataset model (point cloud + camera frustums) ----
+  // data.points = {count, xyz:Float32Array, rgb:Uint8Array|null}
+  // data.frustum = {positions:Float32Array, colors:Uint8Array, count, ranges}
+  setDataset(data) {
+    this._freeModel();
+    const gl = this.gl;
+    const pts = data.points || { count: 0 };
+    const fr  = data.frustum || { count: 0 };
+
+    // point cloud
+    let ptVao=null, ptPos=null, ptCol=null;
+    if (pts.count > 0) {
+      ptVao = gl.createVertexArray(); gl.bindVertexArray(ptVao);
+      ptPos = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, ptPos);
+      gl.bufferData(gl.ARRAY_BUFFER, pts.xyz, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+      if (pts.rgb) {
+        ptCol = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, ptCol);
+        gl.bufferData(gl.ARRAY_BUFFER, pts.rgb, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+      } else { gl.disableVertexAttribArray(1); gl.vertexAttrib3f(1, 0.75, 0.75, 0.78); }
+      gl.bindVertexArray(null);
+    }
+
+    // frustum line segments: aApex(0) + aOffset(1) + aColor(2)
+    let lnVao=null, lnApex=null, lnOff=null, lnCol=null;
+    if (fr.count > 0) {
+      lnVao = gl.createVertexArray(); gl.bindVertexArray(lnVao);
+      lnApex = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, lnApex);
+      gl.bufferData(gl.ARRAY_BUFFER, fr.apex, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+      lnOff = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, lnOff);
+      gl.bufferData(gl.ARRAY_BUFFER, fr.offset, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+      lnCol = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, lnCol);
+      gl.bufferData(gl.ARRAY_BUFFER, fr.colors, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+      gl.bindVertexArray(null);
+    }
+
+    this.model = {
+      type:'dataset',
+      ptVao, ptPos, ptCol, ptCount: pts.count,
+      lnVao, lnApex, lnOff, lnCol, lnCount: fr.count, ranges: fr.ranges || [],
+    };
   }
 
   // ---- splat model ----
@@ -337,6 +392,12 @@ export class Renderer {
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       if (opts.showGrid) { gl.disable(gl.DEPTH_TEST); this._drawGrid(viewR, camPos, U, intr, cameraModel, false); }
       this._drawMesh(cam, viewR, camPos, U, w, h, opts);
+    } else if (this.model && this.model.type === 'dataset') {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.clearColor(bg[0], bg[1], bg[2], 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      if (opts.showGrid) { gl.disable(gl.DEPTH_TEST); this._drawGrid(viewR, camPos, U, intr, cameraModel, false); }
+      this._drawDataset(cam, viewR, camPos, U, cameraModel, w, h, opts);
     } else {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.clearColor(bg[0], bg[1], bg[2], 1);
@@ -488,6 +549,65 @@ export class Renderer {
       gl.drawElements(gl.TRIANGLES, p.count, gl.UNSIGNED_INT, 0);
     }
     gl.bindVertexArray(null);
+    gl.disable(gl.DEPTH_TEST);
+  }
+
+  // ---- dataset: point cloud + camera frustums ----
+  // Build the mesh-style view/proj (linear cameras) and the shared analytic
+  // uniforms (nonlinear cameras), then draw points and frustum lines.
+  _datasetUniforms(u, cam, viewR, camPos, U, w, h) {
+    const gl = this.gl;
+    const near = Math.max(cam.dist()*0.001, 1e-4), far = cam.dist()*100 + 100;
+    const view = mat4.view(mat3.transpose(viewR), camPos);
+    const proj = cam.model === 'orthographic'
+      ? (() => { const hh = cam.dist()*Math.tan(cam.fov/2), hw = hh*w/h; return mat4.ortho(-hw,hw,-hh,hh,near,far); })()
+      : mat4.perspective(cam.fov, w/h, near, far);
+    const model4 = new Float32Array([U[0],U[1],U[2],0, U[3],U[4],U[5],0, U[6],U[7],U[8],0, 0,0,0,1]);
+    const mvp = mat4.mul(mat4.mul(proj, view), model4);
+    const intr = this._intrinsics(cam, w, h);
+    gl.uniformMatrix4fv(u.uMVP, false, mvp);
+    gl.uniformMatrix3fv(u.uModelR, false, U);
+    gl.uniformMatrix3fv(u.uViewR, false, viewR);
+    gl.uniform3fv(u.uCamPos, camPos);
+    gl.uniform2f(u.uFocal, intr.fx, intr.fy);
+    gl.uniform2f(u.uCenter, intr.cx, intr.cy);
+    gl.uniform2f(u.uViewport, w, h);
+    gl.uniform2f(u.uNearFar, near, far);
+  }
+
+  _drawDataset(cam, viewR, camPos, U, cameraModel, w, h, opts) {
+    const gl = this.gl, m = this.model;
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+
+    if (m.ptCount > 0 && opts.showPoints !== false) {
+      const { prog, u } = this._prog('point', POINT_VS, POINT_FS, { CAM_MODEL: cameraModel });
+      gl.useProgram(prog);
+      this._datasetUniforms(u, cam, viewR, camPos, U, w, h);
+      gl.uniform1f(u.uPointSize, opts.pointSize || 2.0);
+      gl.bindVertexArray(m.ptVao);
+      gl.drawArrays(gl.POINTS, 0, m.ptCount);
+      gl.bindVertexArray(null);
+    }
+
+    if (m.lnCount > 0 && opts.showFrustums !== false) {
+      const { prog, u } = this._prog('line', LINE_VS, LINE_FS, { CAM_MODEL: cameraModel });
+      gl.useProgram(prog);
+      this._datasetUniforms(u, cam, viewR, camPos, U, w, h);
+      gl.uniform1f(u.uFrustumScale, opts.frustumScale || 1.0);
+      gl.uniform1i(u.uUseUniform, 0);
+      gl.bindVertexArray(m.lnVao);
+      gl.drawArrays(gl.LINES, 0, m.lnCount);
+      // highlight the hovered/selected camera by redrawing its range
+      const hi = opts.hoverCam;
+      if (hi != null && hi >= 0 && hi < m.ranges.length) {
+        const r = m.ranges[hi];
+        gl.uniform1i(u.uUseUniform, 1);
+        gl.uniform3f(u.uColor, 1.0, 0.85, 0.1);
+        gl.drawArrays(gl.LINES, r.start, r.count);
+      }
+      gl.bindVertexArray(null);
+    }
     gl.disable(gl.DEPTH_TEST);
   }
 }

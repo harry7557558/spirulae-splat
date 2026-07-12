@@ -343,8 +343,10 @@ export async function loadModel(files) {
     return await loadGLTFFromFiles(main, list);
   }
   if (lname.endsWith('.obj')) {
-    const text = await main.text();
-    const image = await loadOBJTexture(main, text, list);
+    // mtllib sits in the file header — decoding the entire (possibly 100+ MB)
+    // OBJ into a JS string just to find it took seconds and doubled memory.
+    const head = await main.slice(0, 1 << 18).text();
+    const image = await loadOBJTexture(main, head, list);
     // parse geometry via WASM (needs raw bytes)
     const res = await loadNative(main, 1);
     res.image = image;
@@ -389,3 +391,111 @@ export function raycastMesh(ox, oy, oz, dx, dy, dz) {
 }
 export function freeSplat() { call('ssv_free_splat', null); }
 export function freeMesh() { call('ssv_free_mesh', null); }
+
+// ---------------------------------------------------------------------------
+// Dataset bridge (COLMAP / Nerfstudio / Metashape). Files are mounted into
+// Emscripten's MEMFS under /data; the native parsers (dataset_bridge.cpp) run
+// against that virtual filesystem. Only metadata files are mounted — image
+// pixels are never copied (the parsers only need poses/points).
+// ---------------------------------------------------------------------------
+const DS_META_EXT = new Set(['bin','json','ply','xml','psx','txt','zip']);
+
+function fsRmrf(path) {
+  const FS = Module.FS;
+  let st; try { st = FS.stat(path); } catch { return; }
+  if (FS.isDir(st.mode)) {
+    for (const e of FS.readdir(path)) {
+      if (e === '.' || e === '..') continue;
+      fsRmrf(path + '/' + e);
+    }
+    try { FS.rmdir(path); } catch {}
+  } else { try { FS.unlink(path); } catch {} }
+}
+function fsMkdirp(path) {
+  let cur = '';
+  for (const p of path.split('/')) {
+    if (!p) continue;
+    cur += '/' + p;
+    try { Module.FS.mkdir(cur); } catch {}
+  }
+}
+
+// entries: [{path, getFile}] (path relative, forward slashes; getFile
+// materializes the File lazily). Extension-filters BEFORE materializing, so a
+// dataset folder full of high-resolution images never stats or reads them.
+// Returns #mounted.
+export async function dsMount(entries) {
+  fsRmrf('/data');
+  try { Module.FS.mkdir('/data'); } catch {}
+  let n = 0;
+  for (const entry of entries) {
+    const rel = String(entry.path).replace(/^\/+/, '').replace(/\\/g, '/');
+    const ext = (rel.split('.').pop() || '').toLowerCase();
+    if (!DS_META_EXT.has(ext)) continue;
+    const file = await entry.getFile();
+    const dst = '/data/' + rel;
+    const slash = dst.lastIndexOf('/');
+    if (slash > 0) fsMkdirp(dst.slice(0, slash));
+    const buf = new Uint8Array(await file.arrayBuffer());
+    Module.FS.writeFile(dst, buf);
+    n++;
+  }
+  return n;
+}
+
+export function dsEnumerate() {
+  call('ssv_ds_enumerate');
+  const json = Module.ccall('ssv_ds_json', 'string', [], []);
+  try { return JSON.parse(json); } catch { return []; }
+}
+export function dsParse(token) {
+  return Module.ccall('ssv_ds_parse', 'number', ['string'], [token]);
+}
+export function dsReadCameras() {
+  const n = call('ssv_ds_num_cameras');
+  const out = [];
+  if (!n) return out;
+  const names = Module.ccall('ssv_ds_image_names', 'string', [], []).split('\n');
+  const models  = new Int32Array(Module.HEAP32.buffer, call('ssv_ds_cam_models') >>> 0, n);
+  const intr    = f32(call('ssv_ds_cam_intrins') >>> 0, n*4);
+  const distPtr = call('ssv_ds_cam_dist') >>> 0;
+  const dist    = distPtr ? f32(distPtr, n*10) : null;
+  const c2w     = f32(call('ssv_ds_cam_c2w') >>> 0, n*12);
+  const widths  = new Int32Array(Module.HEAP32.buffer, call('ssv_ds_cam_widths') >>> 0, n);
+  const heights = new Int32Array(Module.HEAP32.buffer, call('ssv_ds_cam_heights') >>> 0, n);
+  for (let i = 0; i < n; i++) {
+    out.push({
+      model: models[i],
+      fx: intr[i*4], fy: intr[i*4+1], cx: intr[i*4+2], cy: intr[i*4+3],
+      dist: dist ? Array.from(dist.subarray(i*10, i*10+10)) : new Array(10).fill(0),
+      c2w: Array.from(c2w.subarray(i*12, i*12+12)),
+      w: widths[i], h: heights[i],
+      name: names[i] || '',
+    });
+  }
+  return out;
+}
+// Live heap views — upload to the GPU before any further wasm allocation.
+export function dsReadPoints() {
+  const np = call('ssv_ds_num_points');
+  if (!np) return { count: 0, xyz: null, rgb: null };
+  const xyzP = call('ssv_ds_points_xyz') >>> 0;
+  const rgbP = call('ssv_ds_points_rgb') >>> 0;
+  return { count: np, xyz: f32(xyzP, np*3), rgb: rgbP ? u8(rgbP, np*3) : null };
+}
+export function dsSummary() {
+  const json = Module.ccall('ssv_ds_summary_json', 'string', [], []);
+  try { return JSON.parse(json); } catch { return {}; }
+}
+// last parse error ("" = clean load; non-empty with a loaded dataset = partial)
+export function dsLastError() {
+  return Module.ccall('ssv_ds_last_error', 'string', [], []);
+}
+export function dsFitSphere() { return f32(call('ssv_ds_fit_sphere') >>> 0, 4).slice(); }
+export function dsPickPoint(ox, oy, oz, dx, dy, dz) {
+  const ptr = Module.ccall('ssv_ds_pick_point', 'number',
+    ['number','number','number','number','number','number'], [ox,oy,oz,dx,dy,dz]) >>> 0;
+  const p = f32(ptr, 3);
+  return { index: p[0]|0, t: p[1], perp: p[2] };
+}
+export function dsFree() { call('ssv_ds_free'); }

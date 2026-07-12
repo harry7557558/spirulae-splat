@@ -20,13 +20,16 @@
   <div id="viewport">
     <canvas id="glcanvas"></canvas>
     <div id="drop-hint">
-      <div class="big">Drop a model to view</div>
+      <div class="big">Drop a model or dataset to view</div>
       <div class="sub">3D Gaussian Splats (<b>.ply</b>) &nbsp;·&nbsp; Meshes (<b>.ply .obj .gltf .glb</b>)<br>
-      Drag &amp; drop a file, or click to browse. For textured .gltf/.obj drop the model plus its <b>.bin/.mtl/image</b> files together.</div>
+      Datasets: <b>COLMAP</b> · <b>Nerfstudio</b> · <b>Metashape</b> — drop the folder or its files.<br>
+      Drag &amp; drop, or click to browse. For textured .gltf/.obj drop the model plus its <b>.bin/.mtl/image</b> files together.</div>
     </div>
     <div id="overlay"></div>
+    <div id="cam-tooltip"></div>
+    <div id="toast"></div>
     <div id="nav-legend"></div>
-    <input autocomplete="off" type="file" id="file-input" multiple accept=".ply,.obj,.gltf,.glb,.bin,.mtl,.png,.jpg,.jpeg" style="display:none">
+    <input autocomplete="off" type="file" id="file-input" multiple accept=".ply,.obj,.gltf,.glb,.bin,.mtl,.png,.jpg,.jpeg,.json,.xml,.psx,.txt" style="display:none">
   </div>
 
   <div id="panel">
@@ -44,6 +47,16 @@
         <div class="stat"><span>Edges</span><span id="st-edges">—</span></div>
         <div class="stat"><span>Faces</span><span id="st-faces">—</span></div>
       </div>
+      <div id="st-dataset-stats" style="display:none">
+        <div class="stat"><span>Images</span><span id="st-ds-images">—</span></div>
+        <div class="stat"><span>Points</span><span id="st-ds-points">—</span></div>
+        <div class="stat"><span>Camera groups</span><span id="st-ds-groups">—</span></div>
+        <div class="stat"><span>Models</span><span id="st-ds-models">—</span></div>
+      </div>
+      <div class="row" id="ds-component-row" style="display:none">
+        <div class="label"><span>Component</span></div>
+        <select autocomplete="off" id="ds-component"></select>
+      </div>
     </div>
 
     <!-- NAVIGATION -->
@@ -53,7 +66,7 @@
         <div class="label"><span>Mode</span></div>
         <select autocomplete="off" id="nav-mode">
           <option value="turntable">Turntable</option>
-          <option value="trackball">Trackball</option>
+          <option value="trackball" selected>Trackball</option>
           <option value="fps">First Person</option>
           <option value="fly">Free Fly</option>
         </select>
@@ -118,6 +131,29 @@
       </div>
     </div>
 
+    <!-- DATASET (point cloud + camera frustums) -->
+    <div class="section hidden" id="sec-dataset">
+      <div class="section-title">Dataset</div>
+      <div class="row">
+        <div class="label"><span>Point Size</span><span class="val" id="v-point-size">2.0</span></div>
+        <input autocomplete="off" type="range" id="point-size" min="1" max="8" step="0.5" value="2">
+      </div>
+      <div class="row">
+        <div class="label"><span>Frustum Size</span><span class="val" id="v-frustum-size">1.00×</span></div>
+        <input autocomplete="off" type="range" id="frustum-size" min="-1" max="1" step="0.05" value="0">
+      </div>
+      <div class="row">
+        <div class="label"><span>Show Point Cloud</span>
+          <label class="toggle"><input autocomplete="off" type="checkbox" id="show-points" checked><span class="track"></span></label>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label"><span>Show Cameras</span>
+          <label class="toggle"><input autocomplete="off" type="checkbox" id="show-frustums" checked><span class="track"></span></label>
+        </div>
+      </div>
+    </div>
+
     <!-- SCENE -->
     <div class="section">
       <div class="section-title">Scene</div>
@@ -133,7 +169,7 @@
       </div>
       <div class="row">
         <div class="label"><span>Field of View</span><span class="val" id="v-fov">60°</span></div>
-        <input autocomplete="off" type="range" id="fov" min="10" max="180" step="1" value="60">
+        <input autocomplete="off" type="range" id="fov" min="10" max="150" step="1" value="60">
       </div>
       <div class="row">
         <div class="label"><span>Y Up (off: Z up)</span>
@@ -142,7 +178,7 @@
       </div>
       <div class="row">
         <div class="label"><span>Show Axes / Grid</span>
-          <label class="toggle"><input autocomplete="off" type="checkbox" id="grid" checked><span class="track"></span></label>
+          <label class="toggle"><input autocomplete="off" type="checkbox" id="grid"><span class="track"></span></label>
         </div>
       </div>
       <div class="row">

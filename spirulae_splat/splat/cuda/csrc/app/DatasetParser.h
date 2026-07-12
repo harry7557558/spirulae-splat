@@ -6,8 +6,8 @@
 // the engine's DataManager).
 //
 // Three formats, mirroring modules/dataparser.py:
-//   parse_colmap_dataset      cameras.bin / images.bin / points3D.bin
-//                             (ColmapParser.cpp; binary only, text TODO)
+//   parse_colmap_dataset      cameras / images / points3D, .bin or .txt
+//                             (ColmapParser.cpp)
 //   parse_nerfstudio_dataset  transforms.json + PLY point cloud
 //                             (NerfstudioParser.cpp)
 //   parse_metashape_dataset   Metashape camera-export .xml + .ply (+ optional
@@ -65,6 +65,11 @@ std::map<int32_t, ColmapCamera> read_cameras_binary(const std::string& recon_dir
 std::map<int32_t, ColmapImage>  read_images_binary(const std::string& recon_dir);
 ColmapPoints3D                  read_points3D_binary(const std::string& recon_dir);
 
+// Text-format equivalents (cameras.txt / images.txt / points3D.txt).
+std::map<int32_t, ColmapCamera> read_cameras_text(const std::string& recon_dir);
+std::map<int32_t, ColmapImage>  read_images_text(const std::string& recon_dir);
+ColmapPoints3D                  read_points3D_text(const std::string& recon_dir);
+
 // PLY point-cloud reader (ascii + binary_little_endian; x/y/z of any float
 // or double type, red/green/blue uchar or float). NerfstudioParser.cpp.
 ColmapPoints3D read_ply_points(const std::string& path);
@@ -83,6 +88,13 @@ struct DatasetParserConfig {
     std::string mask_dir   = "masks";
     std::string depth_dir  = "depths";
     std::string normal_dir = "normals";
+
+    // When false, frames whose image file is missing on disk are kept (with
+    // their computed path) instead of being skipped/rejected. The trainer
+    // needs the pixels (default true); the standalone viewer only needs the
+    // camera poses, so it parses cameras from a dataset whose images were not
+    // provided (e.g. dropping just the sparse/ folder).
+    bool require_image_files = true;
 
     // Fraction of training images held out for validation (linspace-spread,
     // matching get_train_eval_split_fraction). 0 = no validation set.
@@ -116,6 +128,12 @@ struct DatasetParserConfig {
     std::string metashape_xml;
     std::string metashape_ply;
     std::string metashape_psx;
+
+    // Which <component> group to use when a Metashape export contains several.
+    // -1 (default) keeps the historical behavior: train on the largest group.
+    // >= 0 selects that component-group index (document order); the viewer uses
+    // this to let the user pick a component.
+    int metashape_component = -1;
 };
 
 // Everything main.cpp needs, PER-INPUT camera (length N), sorted by image

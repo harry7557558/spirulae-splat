@@ -259,8 +259,10 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
 
     fs::path xml_path = resolve_input(root, cfg.metashape_xml, ".xml", true,
                                       "metashape-xml");
-    fs::path ply_path = resolve_input(root, cfg.metashape_ply, ".ply", true,
-                                      "metashape-ply");
+    // The point cloud is mandatory for training but optional in lenient
+    // (viewer) mode, where an XML alone still yields camera frustums.
+    fs::path ply_path = resolve_input(root, cfg.metashape_ply, ".ply",
+                                      cfg.require_image_files, "metashape-ply");
     fs::path psx_path = resolve_input(root, cfg.metashape_psx, ".psx", false,
                                       "metashape-psx");
 
@@ -286,16 +288,19 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
     }
 
     // ---- Image file list (relative to the dataset dir) ---------------------
+    // In lenient (viewer) mode a missing image directory is tolerated; camera
+    // labels stand in for filenames below.
     fs::path image_dir = root / cfg.image_dir;
-    if (!fs::is_directory(image_dir))
+    if (!fs::is_directory(image_dir) && cfg.require_image_files)
         throw std::runtime_error("MetashapeParser: image directory " +
                                  image_dir.string() +
                                  " does not exist; specify using --image-dir");
     std::vector<std::string> image_filenames;
-    for (const auto& entry : fs::recursive_directory_iterator(image_dir))
-        if (entry.is_regular_file())
-            image_filenames.push_back(
-                fs::relative(entry.path(), root).generic_string());
+    if (fs::is_directory(image_dir))
+        for (const auto& entry : fs::recursive_directory_iterator(image_dir))
+            if (entry.is_regular_file())
+                image_filenames.push_back(
+                    fs::relative(entry.path(), root).generic_string());
 
     // ---- Camera-export XML (metashape_to_json) ------------------------------
     XmlNode doc = xml_parse_file(xml_path.string());
@@ -442,7 +447,11 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
         std::string label_s = label ? *label : ("camera " + *cam_id);
 
         std::vector<std::string> matches;
-        if (have_camera_dict) {
+        if (image_filenames.empty() && !cfg.require_image_files) {
+            // Lenient mode with no images on disk: the camera label stands in
+            // for the filename (poses/frustums only).
+            matches = {label_s};
+        } else if (have_camera_dict) {
             auto it = camera_dict.find(*cam_id);
             if (it == camera_dict.end()) {
                 std::fprintf(stderr, "WARNING: camera %s not in project camera "
@@ -513,6 +522,13 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
                 if (valid_cameras.count(id)) counts[g]++;
             if (counts[g] > best_count) { best_count = counts[g]; best = g; }
         }
+        // Explicit component selection (viewer component picker) overrides the
+        // largest-group default.
+        if (cfg.metashape_component >= 0 &&
+            (size_t)cfg.metashape_component < component_groups.size()) {
+            best = (size_t)cfg.metashape_component;
+            best_count = counts[best];
+        }
         if (component_groups.size() > 1)
             std::fprintf(stderr, "WARNING: %zu components found in Metashape "
                          "export; training on the largest (%zu of %zu aligned "
@@ -573,8 +589,9 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
 
     JsonValue meta = jobj();
     jset(meta, "frames", std::move(frames));
-    jset(meta, "ply_file_path",
-         jstr(fs::relative(ply_path, root).generic_string()));
+    if (!ply_path.empty())
+        jset(meta, "ply_file_path",
+             jstr(fs::relative(ply_path, root).generic_string()));
 
     if (num_skipped > 0)
         std::printf("%lld image%s skipped.\n", (long long)num_skipped,

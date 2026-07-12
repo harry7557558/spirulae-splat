@@ -24,6 +24,12 @@
 
 #include <emscripten.h>
 
+// Fast decimal parsing (FastFloat.h lives with the shared dataset parsers;
+// the viewer CMake adds that directory to the include path). musl's
+// strtod/strtof cost ~1.5us per call — tens of seconds over a 100+ MB OBJ
+// or ascii PLY.
+#include "FastFloat.h"
+
 #define KEEP EMSCRIPTEN_KEEPALIVE extern "C"
 
 // ---------------------------------------------------------------------------
@@ -383,7 +389,7 @@ static bool parse_splat_ply(const uint8_t* data, size_t len, const PlyHeader& h,
         std::vector<double> vals(ve.props.size());
         for (uint64_t i=0;i<N;i++){
             for (size_t k=0;k<ve.props.size();k++){
-                char* np; vals[k]=strtod(p,&np);
+                char* np; vals[k]=fast_strtod(p,&np);
                 if(np==p){ return i>0; } p=np;
                 if(p>=end && k+1<ve.props.size()) return false;
             }
@@ -525,7 +531,7 @@ static bool parse_mesh_ply(const uint8_t* data, size_t len, const PlyHeader& h,
         const char* end=(const char*)data+len;
         std::vector<double> vals(ve.props.size());
         for(uint64_t i=0;i<N;i++){
-            for(size_t k=0;k<ve.props.size();k++){char*np;vals[k]=strtod(p,&np);if(np==p)return i>0;p=np;}
+            for(size_t k=0;k<ve.props.size();k++){char*np;vals[k]=fast_strtod(p,&np);if(np==p)return i>0;p=np;}
             auto v=[&](const char*n)->double{int j=gi(n);return j<0?0.0:vals[j];};
             g_mesh.pos[i*3+0]=(float)v("x");g_mesh.pos[i*3+1]=(float)v("y");g_mesh.pos[i*3+2]=(float)v("z");
             if(has_n){g_mesh.normal[i*3+0]=(float)v("nx");g_mesh.normal[i*3+1]=(float)v("ny");g_mesh.normal[i*3+2]=(float)v("nz");}
@@ -535,9 +541,9 @@ static bool parse_mesh_ply(const uint8_t* data, size_t len, const PlyHeader& h,
         if(fe&&fe->count>0){
             g_mesh.idx.reserve(fe->count*3);
             for(uint64_t f=0;f<fe->count;f++){
-                char*np;long nverts=strtol(p,&np,10);if(np==p)break;p=np;
+                char*np;long nverts=(long)fast_strtol(p,&np);if(np==p)break;p=np;
                 std::vector<int> poly(nverts);
-                for(long t=0;t<nverts;t++){poly[t]=(int)strtol(p,&np,10);p=np;}
+                for(long t=0;t<nverts;t++){poly[t]=(int)fast_strtol(p,&np);p=np;}
                 for(long t=2;t<nverts;t++){g_mesh.idx.push_back(poly[0]);g_mesh.idx.push_back(poly[t-1]);g_mesh.idx.push_back(poly[t]);}
             }
             g_mesh.nt=(uint32_t)(g_mesh.idx.size()/3);
@@ -551,12 +557,63 @@ static bool parse_mesh_ply(const uint8_t* data, size_t len, const PlyHeader& h,
 // OBJ parsing
 // ---------------------------------------------------------------------------
 
+// Flat open-addressing u64 -> u32 map for OBJ face-vertex dedup.
+// std::unordered_map allocates a node per insert — for a 100+ MB OBJ that is
+// tens of millions of mallocs and dominated the parse time.
+struct FlatMap {
+    std::vector<uint64_t> keys;
+    std::vector<uint32_t> vals;      // 0xFFFFFFFF = empty
+    size_t mask = 0, count = 0;
+
+    static inline uint64_t mix(uint64_t x) {   // splitmix64 finalizer
+        x += 0x9e3779b97f4a7c15ull;
+        x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+        x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+        return x ^ (x >> 31);
+    }
+    void init(size_t cap) {
+        size_t n = 64;
+        while (n < cap * 2) n <<= 1;
+        keys.assign(n, 0);
+        vals.assign(n, 0xFFFFFFFFu);
+        mask = n - 1;
+        count = 0;
+    }
+    void grow() {
+        std::vector<uint64_t> ok = std::move(keys);
+        std::vector<uint32_t> ov = std::move(vals);
+        size_t n = (mask + 1) << 1;
+        keys.assign(n, 0);
+        vals.assign(n, 0xFFFFFFFFu);
+        mask = n - 1;
+        for (size_t i = 0; i < ov.size(); i++) {
+            if (ov[i] == 0xFFFFFFFFu) continue;
+            size_t j = mix(ok[i]) & mask;
+            while (vals[j] != 0xFFFFFFFFu) j = (j + 1) & mask;
+            keys[j] = ok[i]; vals[j] = ov[i];
+        }
+    }
+    // returns existing value, or inserts `next` and returns it
+    uint32_t find_or_insert(uint64_t key, uint32_t next, bool* inserted) {
+        if ((count + 1) * 2 > mask + 1) grow();
+        size_t j = mix(key) & mask;
+        while (vals[j] != 0xFFFFFFFFu) {
+            if (keys[j] == key) { *inserted = false; return vals[j]; }
+            j = (j + 1) & mask;
+        }
+        keys[j] = key; vals[j] = next; count++;
+        *inserted = true;
+        return next;
+    }
+};
+
 static bool parse_obj(const uint8_t* data, size_t len) {
     g_mesh.clear();
     std::vector<float> V, VT, VN;   // raw pools
     V.reserve(1<<16);
     // face vertex uniquification: key -> new index
-    std::unordered_map<uint64_t, uint32_t> vmap;
+    FlatMap vmap;
+    vmap.init(len / 64 + 64);       // ~bytes per face line, avoids most rehashes
     std::vector<uint32_t> idx;
     std::vector<float> pos, nrm, uv;
     bool any_vt=false, any_vn=false;
@@ -565,7 +622,7 @@ static bool parse_obj(const uint8_t* data, size_t len) {
     const char* end=(const char*)data+len;
 
     auto skipws=[&](){while(p<end&&(*p==' '||*p=='\t'))p++;};
-    auto parsef=[&]()->float{skipws();char*np;float f=strtof(p,&np);p=np;return f;};
+    auto parsef=[&]()->float{skipws();char*np;float f=fast_strtof(p,&np);p=np;return f;};
 
     auto resolve=[&](long vi,long ti,long ni)->uint32_t{
         long nvp=(long)(V.size()/3);
@@ -575,16 +632,15 @@ static bool parse_obj(const uint8_t* data, size_t len) {
         if(ti>0)ti-=1; else if(ti<0)ti=nvt+ti; else ti=-1;
         if(ni>0)ni-=1; else if(ni<0)ni=nvn+ni; else ni=-1;
         uint64_t key=((uint64_t)(uint32_t)vi)*2654435761u ^ ((uint64_t)(uint32_t)(ti+1)<<21) ^ ((uint64_t)(uint32_t)(ni+1)<<42);
-        auto it=vmap.find(key);
-        if(it!=vmap.end()) return it->second;
-        uint32_t ni_out=(uint32_t)(pos.size()/3);
+        bool inserted;
+        uint32_t ni_out=vmap.find_or_insert(key,(uint32_t)(pos.size()/3),&inserted);
+        if(!inserted) return ni_out;
         if(vi>=0&&vi<nvp){pos.push_back(V[vi*3]);pos.push_back(V[vi*3+1]);pos.push_back(V[vi*3+2]);}
         else{pos.push_back(0);pos.push_back(0);pos.push_back(0);}
         if(ti>=0&&ti<nvt){uv.push_back(VT[ti*2]);uv.push_back(1.0f-VT[ti*2+1]);any_vt=true;}
         else{uv.push_back(0);uv.push_back(0);}
         if(ni>=0&&ni<nvn){nrm.push_back(VN[ni*3]);nrm.push_back(VN[ni*3+1]);nrm.push_back(VN[ni*3+2]);any_vn=true;}
         else{nrm.push_back(0);nrm.push_back(0);nrm.push_back(0);}
-        vmap.emplace(key,ni_out);
         return ni_out;
     };
 
@@ -605,11 +661,11 @@ static bool parse_obj(const uint8_t* data, size_t len) {
                 if(p>=end||*p=='\n'||*p=='\r') break;
                 // parse v[/vt][/vn]
                 char* np;
-                long vi=strtol(p,&np,10); if(np==p) break; p=np;
+                long vi=(long)fast_strtol(p,&np); if(np==p) break; p=np;
                 long ti=0,ni=0;
                 if(p<end&&*p=='/'){ p++;
-                    if(p<end&&*p!='/'){ ti=strtol(p,&np,10); p=np; }
-                    if(p<end&&*p=='/'){ p++; ni=strtol(p,&np,10); p=np; }
+                    if(p<end&&*p!='/'){ ti=(long)fast_strtol(p,&np); p=np; }
+                    if(p<end&&*p=='/'){ p++; ni=(long)fast_strtol(p,&np); p=np; }
                 }
                 face[fn++]=resolve(vi,ti,ni);
             }

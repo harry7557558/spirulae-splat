@@ -4,7 +4,7 @@
 
 #include "DatasetParser.h"
 
-#include "../Camera.h"   // camera_model_from_name
+#include "../CameraModel.h"   // camera_model_from_name (CUDA-free)
 
 #include <algorithm>
 #include <cmath>

@@ -4,12 +4,15 @@
 // helpers live in DatasetCommon.cpp.
 
 #include "DatasetParser.h"
+#include "FastFloat.h"
 
-#include "../Camera.h"   // camera_model_from_name
+#include "../CameraModel.h"   // camera_model_from_name (CUDA-free)
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <stdexcept>
@@ -139,6 +142,123 @@ ColmapPoints3D read_points3D_binary(const std::string& recon_dir) {
 
 
 // ===========================================================================
+// Text-format readers (cameras.txt / images.txt / points3D.txt), port of
+// colmap_utils.py read_*_text. '#' lines are comments; fields are
+// whitespace-separated (image names therefore contain no spaces, matching
+// COLMAP's own text reader); each image record is followed by one raw
+// POINTS2D line (possibly empty) which is skipped.
+// ===========================================================================
+
+namespace {
+
+struct TextReader {
+    std::string data;
+    size_t pos = 0;
+
+    explicit TextReader(const std::string& p) {
+        FILE* f = std::fopen(p.c_str(), "rb");
+        if (!f) throw std::runtime_error("ColmapParser: cannot open " + p);
+        std::fseek(f, 0, SEEK_END);
+        long n = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        data.resize(n > 0 ? (size_t)n : 0);
+        size_t got = data.empty() ? 0 : std::fread(&data[0], 1, data.size(), f);
+        std::fclose(f);
+        if (got != data.size())
+            throw std::runtime_error("ColmapParser: cannot read " + p);
+    }
+    // next non-comment, non-empty line; false at EOF
+    bool next_line(const char** s, const char** e) {
+        while (pos < data.size()) {
+            size_t eol = data.find('\n', pos);
+            if (eol == std::string::npos) eol = data.size();
+            size_t b = pos, t = eol;
+            pos = eol + 1;
+            while (b < t && (data[b]==' '||data[b]=='\t'||data[b]=='\r')) b++;
+            while (t > b && (data[t-1]=='\r'||data[t-1]==' '||data[t-1]=='\t')) t--;
+            if (b >= t || data[b] == '#') continue;
+            *s = data.c_str() + b;
+            *e = data.c_str() + t;
+            return true;
+        }
+        return false;
+    }
+    // consume exactly one raw line (an empty POINTS2D line still counts)
+    void skip_raw_line() {
+        size_t eol = data.find('\n', pos);
+        pos = (eol == std::string::npos) ? data.size() : eol + 1;
+    }
+};
+
+}  // namespace
+
+std::map<int32_t, ColmapCamera> read_cameras_text(const std::string& recon_dir) {
+    TextReader r(recon_dir + "/cameras.txt");
+    std::map<int32_t, ColmapCamera> cameras;
+    const char *s, *e;
+    while (r.next_line(&s, &e)) {
+        ColmapCamera cam;
+        char* p;
+        cam.camera_id = (int32_t)std::strtol(s, &p, 10);
+        while (p < e && std::isspace((unsigned char)*p)) p++;
+        const char* m0 = p;
+        while (p < e && !std::isspace((unsigned char)*p)) p++;
+        cam.model.assign(m0, (size_t)(p - m0));
+        cam.width  = std::strtoull(p, &p, 10);
+        cam.height = std::strtoull(p, &p, 10);
+        for (;;) {
+            char* q;
+            double v = fast_strtod(p, &q);
+            if (q == p || q > e) break;      // no more params on this line
+            cam.params.push_back(v);
+            p = q;
+        }
+        if (cam.model.empty())
+            throw std::runtime_error("ColmapParser: malformed cameras.txt line");
+        cameras[cam.camera_id] = std::move(cam);
+    }
+    return cameras;
+}
+
+std::map<int32_t, ColmapImage> read_images_text(const std::string& recon_dir) {
+    TextReader r(recon_dir + "/images.txt");
+    std::map<int32_t, ColmapImage> images;
+    const char *s, *e;
+    while (r.next_line(&s, &e)) {
+        ColmapImage im;
+        char* p;
+        im.image_id = (int32_t)fast_strtol(s, &p);
+        for (auto& q : im.qvec) q = fast_strtod(p, &p);
+        for (auto& t : im.tvec) t = fast_strtod(p, &p);
+        im.camera_id = (int32_t)fast_strtol(p, &p);
+        while (p < e && std::isspace((unsigned char)*p)) p++;
+        const char* n0 = p;
+        while (p < e && !std::isspace((unsigned char)*p)) p++;
+        im.name.assign(n0, (size_t)(p - n0));
+        if (im.name.empty())
+            throw std::runtime_error("ColmapParser: malformed images.txt line");
+        r.skip_raw_line();                   // POINTS2D[] line (may be empty)
+        images[im.image_id] = std::move(im);
+    }
+    return images;
+}
+
+ColmapPoints3D read_points3D_text(const std::string& recon_dir) {
+    TextReader r(recon_dir + "/points3D.txt");
+    ColmapPoints3D pts;
+    const char *s, *e;
+    while (r.next_line(&s, &e)) {
+        char* p;
+        fast_strtol(s, &p);                  // point3D_id
+        for (int k = 0; k < 3; k++) pts.xyz.push_back((float)fast_strtod(p, &p));
+        for (int k = 0; k < 3; k++) pts.rgb.push_back((uint8_t)fast_strtol(p, &p));
+        // reprojection error + track: rest of line, skipped
+    }
+    return pts;
+}
+
+
+// ===========================================================================
 // Camera-param normalization (port of parse_colmap_camera_params,
 // colmap_utils.py:431) + engine dist_coeffs layout (dataparser.py
 // DISTORTION_KEYS = k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2).
@@ -239,24 +359,31 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
     if (!cfg.recon_dir.empty()) probe = {cfg.recon_dir};
     else probe = {"sparse/0", "colmap/sparse/0", "sparse", "colmap", ""};
 
+    // points3D is required only in strict (trainer) mode; the lenient viewer
+    // accepts a cameras-only reconstruction (poses / frustums). Binary and
+    // text (cameras.txt / images.txt / points3D.txt) formats both count.
+    auto has_recon = [&](const fs::path& d, const char* ext) {
+        return fs::exists(d / (std::string("cameras.") + ext)) &&
+               fs::exists(d / (std::string("images.") + ext)) &&
+               (fs::exists(d / (std::string("points3D.") + ext)) ||
+                !cfg.require_image_files);
+    };
     std::string recon_dir;
+    bool text_format = false;
     for (const auto& rel : probe) {
         fs::path d = fs::path(dataset_dir) / rel;
-        if (fs::exists(d / "cameras.bin") && fs::exists(d / "images.bin") &&
-            fs::exists(d / "points3D.bin")) {
-            recon_dir = d.string();
-            break;
-        }
-        // TODO: text-format fallback (cameras.txt / images.txt / points3D.txt),
-        // port of colmap_utils.py read_*_text.
+        if (has_recon(d, "bin")) { recon_dir = d.string(); break; }
+        if (has_recon(d, "txt")) { recon_dir = d.string(); text_format = true; break; }
     }
     if (recon_dir.empty())
         throw std::runtime_error(
-            "ColmapParser: no COLMAP reconstruction (cameras.bin/images.bin/"
-            "points3D.bin) found under " + dataset_dir);
+            "ColmapParser: no COLMAP reconstruction (cameras/images/points3D"
+            " .bin or .txt) found under " + dataset_dir);
 
-    auto cameras = read_cameras_binary(recon_dir);
-    auto images  = read_images_binary(recon_dir);
+    auto cameras = text_format ? read_cameras_text(recon_dir)
+                               : read_cameras_binary(recon_dir);
+    auto images  = text_format ? read_images_text(recon_dir)
+                               : read_images_binary(recon_dir);
 
     // ---- Assemble frames sorted by image filename (dataparser.py:300-316) -
     std::vector<const ColmapImage*> frames;
@@ -333,7 +460,7 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
         const ColmapCamera& cam = cam_it->second;
 
         fs::path img_path = image_dir / im.name;
-        if (!fs::exists(img_path))
+        if (cfg.require_image_files && !fs::exists(img_path))
             throw std::runtime_error("ColmapParser: " + img_path.string() +
                                      " does not exist (set --image-dir if needed)");
         ds.image_filenames.push_back(img_path.string());
@@ -380,7 +507,14 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
     if (any_depth)  ds.depth_filenames  = std::move(depth_files);
     if (any_normal) ds.normal_filenames = std::move(normal_files);
 
-    ds.points = read_points3D_binary(recon_dir);
+    // In lenient (viewer) mode, tolerate a missing points3D file so a
+    // cameras-only reconstruction still yields camera poses / frustums.
+    if (fs::exists(fs::path(recon_dir) / "points3D.bin"))
+        ds.points = read_points3D_binary(recon_dir);
+    else if (fs::exists(fs::path(recon_dir) / "points3D.txt"))
+        ds.points = read_points3D_text(recon_dir);
+    else if (cfg.require_image_files)
+        ds.points = read_points3D_binary(recon_dir);   // throws "cannot open"
     dsparse::assign_val_split(ds, cfg.validation_fraction);
     return ds;
 }

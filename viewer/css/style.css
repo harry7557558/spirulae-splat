@@ -58,6 +58,21 @@ body {
   position:absolute; right:10px; bottom:8px; font-size:10px; color: var(--text-dim);
   pointer-events:none; text-align:right; text-shadow:0 1px 2px #000;
 }
+#cam-tooltip {
+  position:absolute; display:none; pointer-events:none; z-index:5;
+  background: rgba(19,21,28,0.94); border:1px solid var(--panel-border);
+  border-radius:5px; padding:6px 8px; font-size:10px; line-height:1.5;
+  color: var(--text); max-width:260px; box-shadow:0 4px 14px #000a;
+}
+#cam-tooltip b { color: var(--text-bright); }
+#toast {
+  position:absolute; display:none; left:50%; bottom:28px; transform:translateX(-50%);
+  z-index:6; pointer-events:none; max-width:70%;
+  background: rgba(19,21,28,0.96); border:1px solid var(--err);
+  border-radius:6px; padding:8px 14px; font-size:11px; line-height:1.5;
+  color: var(--text-bright); box-shadow:0 4px 16px #000c;
+}
+#toast.warn { border-color: #c9a227; }
 
 #panel {
   width: var(--panel-width); flex:none; background: var(--panel-bg);
