@@ -18,6 +18,37 @@ from io import StringIO
 from contextlib import redirect_stdout
 
 
+def is_valid_mask(mask_path: Path) -> bool:
+    if not mask_path.is_file():
+        return False
+    try:
+        with Image.open(mask_path) as img:
+            img.verify()
+        # verify() doesn't decode pixel data; a truncated file can pass it
+        with Image.open(mask_path) as img:
+            img.load()
+        return True
+    except Exception:
+        return False
+
+
+def union_masks(outputs) -> Optional[np.ndarray]:
+    """Union of all instance masks across outputs, as a 2D bool array.
+    Returns None if nothing was detected."""
+    result = None
+    for output in outputs:
+        masks = output['masks']
+        if len(masks) == 0:
+            continue
+        if not isinstance(masks, np.ndarray):
+            masks = masks.cpu().numpy()
+        masks = np.any(masks, axis=tuple(range(masks.ndim - 2)))
+        if not np.any(masks):
+            continue
+        result = masks if result is None else (result | masks)
+    return result
+
+
 def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str):
 
     image_dir = Path(dataset_dir) / image_dir
@@ -30,28 +61,25 @@ def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str):
             image_files.append(file_path)
 
     for image_path in tqdm(sorted(image_files)):
+        mask_path = mask_dir / (str(image_path) + ".png")
+        if is_valid_mask(mask_path):
+            continue
         try:
             image = Image.open(image_dir / image_path).convert("RGB")
         except:
             continue
         with redirect_stdout(StringIO()):
-            outputs = predictor(image)
-        result_mask = None
-        for output in outputs:
-            masks = output['masks']
-            if len(masks) == 0:
-                continue
-            if not isinstance(masks, np.ndarray):
-                masks = np.any(masks.cpu().numpy(), axis=0)
-            if not np.any(masks):
-                continue
-            masks = ~np.any(masks, axis=0)
-            if result_mask is None:
-                result_mask = masks
-            else:
-                result_mask &= masks
-        if result_mask is None:
+            pos_outputs, neg_outputs = predictor(image)
+        pos_union = union_masks(pos_outputs)
+        if pos_union is None:
             result_mask = np.ones((1, 1), dtype=np.bool_)
+        else:
+            neg_union = union_masks(neg_outputs)
+            if neg_union is not None:
+                # regions matching a negative prompt are kept even if they
+                # also match a positive prompt
+                pos_union &= ~neg_union
+            result_mask = ~pos_union
 
         # resize mask to match original image resolution (model may run at reduced size)
         if result_mask.shape != (image.size[1], image.size[0]):
@@ -59,9 +87,12 @@ def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str):
             mask_img = mask_img.resize(image.size, Image.NEAREST)
             result_mask = np.asarray(mask_img) > 127
 
-        mask_path = mask_dir / (str(image_path) + ".png")
         os.makedirs(mask_path.parent, exist_ok=True)
-        Image.fromarray(result_mask).save(mask_path)
+        # write to a temp file then rename, so a crash mid-write can't leave a
+        # corrupted file at the final path
+        tmp_path = mask_path.with_name(mask_path.name + ".tmp")
+        Image.fromarray(result_mask).save(tmp_path, format="PNG")
+        os.replace(tmp_path, mask_path)
 
         if False:
             import matplotlib.pyplot as plt
@@ -79,6 +110,10 @@ if __name__ == "__main__":
     parser.add_argument("--prompt", required=True,
                         help="Text prompt for mask objects, semicolon separated. "
                             "Example: \"people; cars; shadow; fisheye border\"")
+    parser.add_argument("--negative_prompt", "--negative-prompt", default="",
+                        help="Text prompt for objects to exclude from masking, semicolon separated. "
+                            "Regions matching these are kept even if they also match --prompt. "
+                            "Example: --prompt \"person\" --negative_prompt \"person in painting\"")
     parser.add_argument("--images", default="images", help="Subfolder containing images. Default: images")
     parser.add_argument("--masks", default="masks", help="Subfolder to save masks. Default: masks")
     parser.add_argument("--max_image_size", type=int, default=1600, help="Maximum image size. Default: 1600")
@@ -88,6 +123,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     prompts = [s.strip() for s in args.prompt.split(';') if s.strip() != ""]
+    neg_prompts = [s.strip() for s in args.negative_prompt.split(';') if s.strip() != ""]
 
     def map_image(image: Image.Image):
         sc = args.max_image_size / max(image.size[0], image.size[1])
@@ -104,19 +140,12 @@ if __name__ == "__main__":
             exit(0)
         model = LangSAM(args.model, device="cuda")
 
-        # prompts = ["fisheye circle"]
-        def predict(images_pil: Image.Image):
-            images_pil = [map_image(images_pil)]
+        all_prompts = prompts + neg_prompts
 
-            results = model.predict(images_pil*len(prompts), prompts, args.box_threshold, args.text_threshold)
-            return results
-
-            results = []
-            for prompt in prompts:
-                pred = model.predict(images_pil, [prompt], args.box_threshold, args.text_threshold)
-                results.extend(pred)
-            print(results)
-            return results
+        def predict(image_pil: Image.Image):
+            images_pil = [map_image(image_pil)]
+            results = model.predict(images_pil*len(all_prompts), all_prompts, args.box_threshold, args.text_threshold)
+            return results[:len(prompts)], results[len(prompts):]
 
     # SAM-3 (better in quality, need to request access)
     else:
@@ -126,15 +155,34 @@ if __name__ == "__main__":
         except ImportError:
             print("SAM-3 not found or not installed properly. Please install https://github.com/facebookresearch/sam3.git")
             exit(0)
+        import torch
         model = build_sam3_image_model()
         processor = Sam3Processor(model)
 
-        def predict(image: list[Image.Image]):
+        # text features are independent of the image; compute them once for
+        # the whole dataset instead of per image
+        with torch.inference_mode():
+            text_features = {
+                prompt: model.backbone.forward_text([prompt], device=processor.device)
+                for prompt in prompts + neg_prompts
+            }
+
+        def predict_prompt(state, prompt):
+            state["backbone_out"].update(text_features[prompt])
+            if "geometric_prompt" not in state:
+                state["geometric_prompt"] = model._get_dummy_prompt()
+            processor._forward_grounding(state)
+            # _forward_grounding overwrites state["masks"] on each call
+            return {"masks": state["masks"]}
+
+        def predict(image: Image.Image):
             image = map_image(image)
-            return [
-                processor.set_text_prompt(state=processor.set_image(image), prompt=prompt)
-                for prompt in prompts
-            ]
+            # image embedding is independent of the prompt; run the backbone
+            # once and reuse it for all prompts
+            state = processor.set_image(image)
+            pos = [predict_prompt(state, prompt) for prompt in prompts]
+            neg = [predict_prompt(state, prompt) for prompt in neg_prompts]
+            return pos, neg
 
     process(
         predict,
