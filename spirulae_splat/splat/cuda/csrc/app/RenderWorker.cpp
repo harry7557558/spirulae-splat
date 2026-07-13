@@ -168,7 +168,7 @@ struct RenderWorker::Impl {
             res.W = p.q.W;
             res.H = p.q.H;
             try {
-                res.rgb8 = render_once(p.q);
+                res.rgb8 = render_once(p.q, res);
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "[viewer] render error: %s\n", e.what());
                 res.error = e.what();
@@ -188,7 +188,7 @@ struct RenderWorker::Impl {
 
     // ---- the actual render (trainer._render + get_outputs viewer subset) ---
 
-    std::vector<uint8_t> render_once(const ViewRequest& q) {
+    std::vector<uint8_t> render_once(const ViewRequest& q, ViewResult& res) {
         const int W = q.W, H = q.H;
         const int64_t npx = (int64_t)W * H;
         static const float D[3] = {1.f, -1.f, -1.f};
@@ -305,6 +305,45 @@ struct RenderWorker::Impl {
             for (int64_t i = 0; i < npx; i++) {
                 float a = 1.0f - Ts[i];
                 alpha3[i*3] = alpha3[i*3+1] = alpha3[i*3+2] = a;
+            }
+
+            // Double-click pick: the 3D point under the requested pixel,
+            // from buffers this render already downloaded (no extra VRAM).
+            // depth holds ray depth in TRAIN units here (inv_rs applied),
+            // alpha-premultiplied like the blit kernel reads it.
+            if (q.pick_px >= 0 && q.pick_px < W &&
+                q.pick_py >= 0 && q.pick_py < H) {
+                int64_t pi = (int64_t)q.pick_py * W + q.pick_px;
+                float a = alpha3[pi*3];
+                float d = depth[pi] /
+                          std::min(std::max(a, 1e-6f) / 0.5f, 1.0f);
+                float dcv[3];
+                if (a > 0.1f && d > 0.0f &&
+                    viewer_pixel_ray((int)camera_model_from_name(q.model),
+                                     ((float)q.pick_px + 0.5f - q.cx) / q.fx,
+                                     ((float)q.pick_py + 0.5f - q.cy) / q.fy,
+                                     dcv)) {
+                    // CV ray -> train frame through the remapped c2w (the
+                    // y/z column flip turns CV into the OpenGL basis).
+                    float p[3];
+                    for (int r = 0; r < 3; r++)
+                        p[r] = c2w[r*4+3] + d * (c2w[r*4+0]*dcv[0] -
+                                                 c2w[r*4+1]*dcv[1] -
+                                                 c2w[r*4+2]*dcv[2]);
+                    // Train -> client normalized frame (inverse similarity,
+                    // same gating as the forward remap above).
+                    if (cfg.train_frame_scale != 1.0f) {
+                        const auto& T = cfg.train_to_normalized;
+                        double s2 = (double)T[0]*T[0] + (double)T[4]*T[4] +
+                                    (double)T[8]*T[8];
+                        float e[3] = {p[0]-T[3], p[1]-T[7], p[2]-T[11]};
+                        for (int r = 0; r < 3; r++)
+                            p[r] = (float)((T[0*4+r]*e[0] + T[1*4+r]*e[1] +
+                                            T[2*4+r]*e[2]) / s2);
+                    }
+                    res.pick_hit = true;
+                    for (int r = 0; r < 3; r++) res.pick_point[r] = p[r];
+                }
             }
 
             // depth -> normal display (0.5 + 0.5n), via the engine kernel on
@@ -492,6 +531,41 @@ float viewer_upload_cameras(const PostSplitCameras& post) {
         tvp(post.post_heights.data(), 4, {post.n_post}),
         camera_size);
     return camera_size;
+}
+
+bool viewer_pixel_ray(int camera_model, float u, float v, float dir[3]) {
+    constexpr float kPi = 3.14159265358979323846f;
+    if (camera_model == 3) {                       // equirectangular
+        if (std::abs(u) > kPi || std::abs(v) > 0.5f * kPi) return false;
+        float cl = std::cos(v);
+        dir[0] = cl * std::sin(u);
+        dir[1] = std::sin(v);
+        dir[2] = cl * std::cos(u);
+        return true;
+    }
+    if (camera_model == 1) {                       // fisheye (equidistant)
+        float r = std::sqrt(u*u + v*v);
+        if (r >= kPi) return false;
+        float s = r < 1e-3f ? 1.0f - r*r/6.0f : std::sin(r) / r;
+        dir[0] = u * s;
+        dir[1] = v * s;
+        dir[2] = std::cos(r);
+        return true;
+    }
+    if (camera_model == 2) {                       // equisolid
+        float r2 = u*u + v*v;
+        if (r2 >= 4.0f) return false;
+        float s = std::sqrt(std::max(0.0f, 1.0f - 0.25f * r2));
+        dir[0] = u * s;
+        dir[1] = v * s;
+        dir[2] = 1.0f - 0.5f * r2;
+        return true;
+    }
+    float n = std::sqrt(u*u + v*v + 1.0f);         // pinhole
+    dir[0] = u / n;
+    dir[1] = v / n;
+    dir[2] = 1.0f / n;
+    return true;
 }
 
 void viewer_upload_grid(const PostSplitCameras& post) {

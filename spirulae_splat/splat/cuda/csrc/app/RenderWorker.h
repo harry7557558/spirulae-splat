@@ -89,6 +89,10 @@ struct ViewRequest {
     // Frustum-size multiplier applied to cfg.base_camera_size when
     // show_cams is on (user-facing "camera size" slider).
     float cam_size_scale = 1.0f;
+    // Double-click pick: when >= 0, also return the 3D point under this
+    // pixel (render resolution), read from the ray-depth channel the render
+    // already downloads -- no extra VRAM or render pass.
+    int pick_px = -1, pick_py = -1;
 };
 
 struct ViewResult {
@@ -96,6 +100,10 @@ struct ViewResult {
     int W = 0, H = 0;
     std::vector<uint8_t> rgb8;   // [H, W, 3]
     std::string error;           // non-empty on failure
+    // Pick result (ViewRequest::pick_px/py): point under the pixel in the
+    // client's normalized frame; pick_hit false = background / invalid ray.
+    bool pick_hit = false;
+    float pick_point[3] = {0, 0, 0};
 };
 
 class RenderWorker {
@@ -136,6 +144,13 @@ float viewer_upload_cameras(const PostSplitCameras& post);
 // distance), for renderers that draw frusta without the engine (the GUI's
 // dataset preview).
 float viewer_camera_size_heuristic(const PostSplitCameras& post);
+
+// Unit ray direction (CV convention: x right, y down, z forward) for a
+// viewer pixel, u = (px - cx)/fx, v = (py - cy)/fy. Host port of
+// projection_utils generate_ray for the distortion-free display models
+// 0 pinhole / 1 fisheye-equidistant / 2 equisolid / 3 equirectangular;
+// false when the pixel is outside the model's domain.
+bool viewer_pixel_ray(int camera_model, float u, float v, float dir[3]);
 
 // One-shot upload of the axes/grid overlay (engine_viewer_set_grid). The
 // grid is axis-aligned in the engine's training frame -- the frame splats

@@ -10,6 +10,7 @@
 // the hand-off to the engine render at training start is seamless.
 
 #include <cstdint>
+#include <vector>
 
 namespace ssplat { class TrainerSession; }
 
@@ -45,6 +46,12 @@ public:
     float base_camera_size() const { return _base_cam_size; }
     int64_t num_points() const { return _num_points; }
 
+    // Double-click pick: nearest displayed point to the ray (normalized
+    // frame, rd unit) by angular distance, accepted within a 3% cone --
+    // port of the web viewer's ssv_ds_pick_point + datasetPointHit.
+    bool pick_point(const float ro[3], const float rd[3],
+                    float out[3]) const;
+
     void destroy_gl();
 
 private:
@@ -73,6 +80,9 @@ private:
     float _t2n[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
     float _t2n_scale = 1.0f;         // normalized units per train unit
     int64_t _num_points = 0;
+    // Host copy of the displayed (stride-sampled, normalized-frame) points
+    // for double-click picking. CPU RAM only.
+    std::vector<float> _pick_xyz;
     int64_t _num_cam_verts = 0;    // total frustum verts (bright then dim)
     int64_t _num_cam_bright = 0;   // border + anchor verts (drawn full-color)
     float _base_cam_size = 0.1f;

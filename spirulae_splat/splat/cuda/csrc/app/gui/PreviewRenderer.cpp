@@ -556,6 +556,13 @@ bool PreviewRenderer::build(const ssplat::TrainerSession& session) {
         pts.push_back(v);
     }
     _num_points = (int64_t)pts.size();
+    // Keep the displayed points host-side for double-click picking.
+    _pick_xyz.resize(pts.size() * 3);
+    for (size_t i = 0; i < pts.size(); i++) {
+        _pick_xyz[i*3 + 0] = pts[i].px;
+        _pick_xyz[i*3 + 1] = pts[i].py;
+        _pick_xyz[i*3 + 2] = pts[i].pz;
+    }
 
     // ---- camera frusta (per-INPUT cameras, true camera model) ---------------
     // Size-1 templates in CV camera space via frustum_template (cached per
@@ -669,6 +676,33 @@ bool PreviewRenderer::build(const ssplat::TrainerSession& session) {
 
     _gl_ok = true;
     _built = true;
+    return true;
+}
+
+bool PreviewRenderer::pick_point(const float ro[3], const float rd[3],
+                                 float out[3]) const {
+    // Nearest point to the ray by angular distance (perp/t), like the web
+    // viewer's ssv_ds_pick_point; accepted within a 3% cone (rd is unit).
+    if (_pick_xyz.empty()) return false;
+    double best_score = 1e30;
+    double best_t = 0.0, best_perp = 1e30;
+    for (size_t i = 0; i * 3 < _pick_xyz.size(); i++) {
+        double rx = _pick_xyz[i*3+0] - ro[0];
+        double ry = _pick_xyz[i*3+1] - ro[1];
+        double rz = _pick_xyz[i*3+2] - ro[2];
+        double t = rx*rd[0] + ry*rd[1] + rz*rd[2];
+        if (t <= 0.0) continue;
+        double px = rx - t*rd[0], py = ry - t*rd[1], pz = rz - t*rd[2];
+        double perp = std::sqrt(px*px + py*py + pz*pz);
+        double score = perp / t;
+        if (score < best_score) {
+            best_score = score;
+            best_t = t;
+            best_perp = perp;
+        }
+    }
+    if (!(best_t > 0.0) || best_perp >= 0.03 * best_t) return false;
+    for (int r = 0; r < 3; r++) out[r] = ro[r] + (float)best_t * rd[r];
     return true;
 }
 

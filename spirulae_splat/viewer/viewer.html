@@ -1112,6 +1112,74 @@ const Viewer = (() => {
 const vp = $("viewport");
 let _button = -1;
 
+// Double-click centering: ask the server for the 3D point under the cursor
+// (/pick reads the depth channel of a render at the current camera -- no
+// extra VRAM), then pan laterally so it sits on the optical axis and make
+// it the orbit pivot (the standalone webgl viewer's recenterAt). Servers
+// without /pick (the Python viewer) return 404 -> no-op.
+let _pickInFlight = false;
+async function pickRecenter(e) {
+  if (_pickInFlight) return;
+  const img = $("canvas-img");
+  if (!img.src) return;
+  const res = getResolution($("res-slider").value);
+  const rect = img.getBoundingClientRect();
+  // object-fit: contain -> undo the letterboxing inside the img element
+  const scale = Math.min(rect.width / res.w, rect.height / res.h);
+  if (!(scale > 0)) return;
+  const ox = (rect.width - res.w * scale) / 2;
+  const oy = (rect.height - res.h * scale) / 2;
+  const px = Math.floor((e.clientX - rect.left - ox) / scale);
+  const py = Math.floor((e.clientY - rect.top - oy) / scale);
+  if (px < 0 || py < 0 || px >= res.w || py >= res.h) return;
+  const camModel = $("camera-model").value;
+  const intrinsics = camModel === "EQUIRECTANGULAR"
+    ? { fx: res.w / (2 * Math.PI), fy: res.h / Math.PI }
+    : fovToIntrinsics($("fov-slider").value, res.w, res.h, camModel);
+  const params = new URLSearchParams({
+    c2w: cam.c2w().flat().join(","),
+    fx: intrinsics.fx,
+    fy: intrinsics.fy,
+    cx: res.w / 2,
+    cy: res.h / 2,
+    width: res.w,
+    height: res.h,
+    camera_model: camModel,
+    px, py,
+  });
+  _pickInFlight = true;
+  try {
+    const resp = await fetch(`${CFG.serverUrl}/pick?${params}`, { cache: "no-store" });
+    if (!resp.ok) return;
+    const j = await resp.json();
+    if (j.hit) recenterAt(j.p);
+  } catch {
+    // server without /pick, or transient network error: ignore
+  } finally {
+    _pickInFlight = false;
+  }
+}
+function recenterAt(p) {
+  const fwd = cam.forward();
+  const rel = v3.sub(p, cam.pos);
+  const d = v3.dot(rel, fwd);
+  if (d > 0) {
+    cam.pos = v3.add(cam.pos, v3.sub(rel, v3.scale(fwd, d)));
+  } else {
+    // behind the camera plane (possible with >180° models): rotate toward it
+    const dir = v3.norm(rel);
+    const axis = v3.cross(fwd, dir);
+    const s = v3.len(axis);
+    if (s > 1e-9)
+      cam.rot = quat.norm(quat.mul(
+        quat.fromAxisAngle(v3.scale(axis, 1 / s), Math.atan2(s, v3.dot(fwd, dir))),
+        cam.rot));
+  }
+  cam.target = p.slice();
+  Viewer.requestRender();
+}
+vp.addEventListener("dblclick", e => { e.preventDefault(); pickRecenter(e); });
+
 vp.addEventListener("pointerdown", e => {
   vp.setPointerCapture(e.pointerId);
   Nav._pointers[e.pointerId] = {x: e.clientX, y: e.clientY};

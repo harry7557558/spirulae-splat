@@ -101,6 +101,26 @@ void ViewportPanel::reset_view() {
     _dirty = true;
 }
 
+void ViewportPanel::recenter_at(const float p[3]) {
+    // viewer.html recenterAt: lateral pan keeps the view orientation; the
+    // point becomes the orbit pivot.
+    float fwd[3];
+    _cam.axis_forward(fwd);
+    float rel[3] = {p[0] - _cam.pos[0], p[1] - _cam.pos[1],
+                    p[2] - _cam.pos[2]};
+    float d = rel[0]*fwd[0] + rel[1]*fwd[1] + rel[2]*fwd[2];
+    if (d > 0.0f) {
+        for (int i = 0; i < 3; i++)
+            _cam.pos[i] += rel[i] - d * fwd[i];
+    } else {
+        float up[3], eye[3] = {_cam.pos[0], _cam.pos[1], _cam.pos[2]};
+        _cam.axis_up(up);
+        _cam.look_at(eye, p, up);
+    }
+    for (int i = 0; i < 3; i++) _cam.target[i] = p[i];
+    _dirty = true;
+}
+
 const char* ViewportPanel::camera_model_name() const {
     return kViewerCameraModels[_cam_model].name;
 }
@@ -265,6 +285,21 @@ void ViewportPanel::handle_input(float /*item_h*/) {
                     _cam.look(dx, dy);
                 _dirty = true;
             }
+        }
+    }
+
+    // Double-click = center the view on the 3D content under the cursor
+    // (viewer.html pickRecenter). Recorded here as fractional image
+    // coordinates; resolved by the mode-specific draw (preview: CPU point
+    // pick, engine: depth readback on the next render).
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        ImVec2 mn = ImGui::GetItemRectMin();
+        ImVec2 sz = ImGui::GetItemRectSize();
+        if (sz.x > 0 && sz.y > 0) {
+            _dbl_u = (io.MousePos.x - mn.x) / sz.x;
+            _dbl_v = (io.MousePos.y - mn.y) / sz.y;
+            _dbl_pending = true;
+            _dirty = true;
         }
     }
 
@@ -449,6 +484,24 @@ void ViewportPanel::draw_preview(const ImVec2& avail) {
                  ImVec2(0, 1), ImVec2(1, 0));
     handle_input((float)H);
 
+    // Double-click centering: CPU pick against the displayed point cloud
+    // (nearest point along the cursor ray, 3% angular cone).
+    if (_dbl_pending) {
+        _dbl_pending = false;
+        float u = (_dbl_u - 0.5f) * (float)W / fx;
+        float v = (_dbl_v - 0.5f) * (float)H / fy;
+        float dcv[3];
+        if (viewer_pixel_ray(_cam_model, u, v, dcv)) {
+            float m[12];
+            _cam.c2w(m);
+            float ro[3] = {m[3], m[7], m[11]}, rd[3], p[3];
+            // CV ray -> world through the OpenGL c2w (y/z column flip).
+            for (int r = 0; r < 3; r++)
+                rd[r] = m[r*4+0]*dcv[0] - m[r*4+1]*dcv[1] - m[r*4+2]*dcv[2];
+            if (_preview.pick_point(ro, rd, p)) recenter_at(p);
+        }
+    }
+
     char info[96];
     std::snprintf(info, sizeof info, "%lld points",
                   (long long)_preview.num_points());
@@ -466,6 +519,8 @@ void ViewportPanel::draw_engine(bool training, const ImVec2& avail) {
             if (res.error.empty()) {
                 upload(res);
                 _last_error.clear();
+                // Double-click centering result (background clicks miss).
+                if (res.pick_hit) recenter_at(res.pick_point);
             } else {
                 _last_error = res.error;
             }
@@ -481,6 +536,13 @@ void ViewportPanel::draw_engine(bool training, const ImVec2& avail) {
     if (!_pending && want) {
         ViewRequest q;
         build_request(q, W, H);
+        // Attach a pending double-click pick to this render; the picked
+        // point comes back with the result (depth readback, no extra pass).
+        if (_dbl_pending) {
+            q.pick_px = (int)(_dbl_u * (float)W);
+            q.pick_py = (int)(_dbl_v * (float)H);
+            _dbl_pending = false;
+        }
         _pending = _worker.submit(q);
         _last_submit = now;
         _dirty = false;

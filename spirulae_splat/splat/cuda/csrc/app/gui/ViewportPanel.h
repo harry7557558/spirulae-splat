@@ -54,6 +54,11 @@ private:
     // intrinsics (no jump when training starts).
     void maybe_frame(const ssplat::TrainerSession& session);
     void reset_view();
+    // Double-click centering (webgl viewer's recenterAt): pan laterally so
+    // p (normalized frame) sits on the optical axis and make it the orbit
+    // pivot; if p is behind the camera plane (>180-degree models), rotate
+    // toward it instead.
+    void recenter_at(const float p[3]);
     const char* camera_model_name() const;
     float fov_min() const;
     float fov_max() const;
@@ -80,6 +85,10 @@ private:
     std::string _framed_key;         // dataset identity the pose belongs to
     bool _dragging = false;
     int _drag_button = 0;            // ImGuiMouseButton at drag start
+    // Pending double-click pick, as fractional viewport-image coordinates
+    // (set in handle_input; consumed by draw_preview / draw_engine).
+    bool _dbl_pending = false;
+    float _dbl_u = 0.0f, _dbl_v = 0.0f;
 
     // Camera model + per-model FOV memory (browser _fovMemory equivalent).
     int _cam_model = 0;              // index into kViewerCameraModels
