@@ -619,7 +619,8 @@ class Trainer:
 
     def render(self, c2w, fx, fy, cx, cy, w, h, camera_model,
                buffer_key="rgb", *, show_training_cameras: bool = False,
-               show_grid: bool = False):
+               show_grid: bool = False, grid_dist: float = 0.0,
+               grid_target=(0.0, 0.0, 0.0)):
         # Invoking the post-processor + D->H copy inside this lock is what
         # makes viewer requests respond quickly during training: it ensures
         # the .cpu() Memcpy is queued on the default stream BEFORE the next
@@ -637,9 +638,18 @@ class Trainer:
             if buffer_key and outputs.get(buffer_key) is not None:
                 pp = outputs.pop('_post_processor', None)
                 if pp is not None:
+                    # Client (normalized-frame) grid inputs -> engine frame,
+                    # like the c2w remap: distance scales by the similarity,
+                    # the orbit target maps through it.
+                    gt = np.asarray(grid_target, dtype=np.float64)
+                    if self._train_frame_scale != 1.0:
+                        T = self._train_to_normalized_transform.detach().cpu().numpy()
+                        gt = T[:3, :3] @ gt + T[:3, 3]
                     annotated = pp(outputs[buffer_key],
                                    show_training_cameras=show_training_cameras,
-                                   show_grid=show_grid)
+                                   show_grid=show_grid,
+                                   grid_dist=grid_dist * self._train_frame_scale,
+                                   grid_target=tuple(float(x) for x in gt))
                     outputs[buffer_key] = annotated.cpu().numpy()
             return outputs
 

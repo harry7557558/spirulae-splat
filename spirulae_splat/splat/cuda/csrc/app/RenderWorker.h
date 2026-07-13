@@ -79,6 +79,13 @@ struct ViewRequest {
     std::string key = "rgb";
     bool show_cams = false;
     bool show_grid = false;   // axes/grid overlay (viewer_upload_grid)
+    // Nav view distance (camera to orbit target) in the client's normalized
+    // frame; drives the zoom-adaptive grid cell size. 0 = unknown (the grid
+    // keeps its current spacing and center).
+    float grid_dist = 0.0f;
+    // Nav orbit target (client's normalized frame); the grid's line patch
+    // recenters on it so it stays under the viewer at any zoom.
+    float grid_target[3] = {0, 0, 0};
     // Frustum-size multiplier applied to cfg.base_camera_size when
     // show_cams is on (user-facing "camera size" slider).
     float cam_size_scale = 1.0f;
@@ -131,10 +138,9 @@ float viewer_upload_cameras(const PostSplitCameras& post);
 float viewer_camera_size_heuristic(const PostSplitCameras& post);
 
 // One-shot upload of the axes/grid overlay (engine_viewer_set_grid). The
-// grid lives in the z-up normalized client frame and is mapped into the
-// training frame through train_to_normalized (ViewerRenderConfig's remap;
-// identity when train_frame_scale == 1). Call alongside
-// viewer_upload_cameras; drawn when ViewRequest::show_grid is set.
-void viewer_upload_grid(const PostSplitCameras& post,
-                        const std::array<float, 16>& train_to_normalized,
-                        float train_frame_scale);
+// grid is axis-aligned in the engine's training frame -- the frame splats
+// are saved in -- so grid lines mark round coordinates of the exported
+// model; its cell size then adapts to ViewRequest::grid_dist per render.
+// Call alongside viewer_upload_cameras; drawn when ViewRequest::show_grid
+// is set.
+void viewer_upload_grid(const PostSplitCameras& post);

@@ -449,6 +449,10 @@ struct EngineViewerState {
     DeviceVector<float> d_overlay_segs;    // [M, 2, 4] endpoint xyzr pairs
     DeviceVector<float> d_overlay_colors;  // [M, 3]
     int    num_overlay = 0;
+    float  grid_radius = 0.0f;             // scene radius (engine frame)
+    float  grid_spacing = 0.0f;            // minor cell size the overlay was built at
+    int    grid_half = 0;                  // half-extent (in minor cells) ditto
+    float  grid_center[2] = {0, 0};        // patch center (lattice-snapped) ditto
 
     // BVH cache for training-camera + overlay visualization. Built on the
     // first engine_blit_view call that needs it; rebuilt when camera_size

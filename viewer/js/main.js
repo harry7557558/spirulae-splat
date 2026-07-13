@@ -19,7 +19,7 @@ let lastSortDir = [0,0,0];
 const opts = {
   primitive: 0, gamut: toColMajor(GAMUTS['Rec.709']), isLinear: false,
   shDegree: 0, exposure: 1.0, opacityScale: 1.0,
-  cameraModel: 'perspective', upAxis: 'z', showGrid: true, gridSpacing: 1,
+  cameraModel: 'perspective', upAxis: 'z', showGrid: true, gridRadius: 1,
   background: hexToRgb('0a0b0e'), shade: true, flatShade: false, meshColor: true,
   // dataset (point cloud + camera frustums)
   pointSize: 2.0, frustumScale: 1.0, showPoints: true, showFrustums: true, hoverCam: -1,
@@ -157,7 +157,7 @@ function fitModel() {
   const fs = fitSphere();                       // [cx,cy,cz, medianDist] (native frame)
   const c = mat3.mulVec(upTransform(), [fs[0], fs[1], fs[2]]);
   const r = 2.0 * fs[3] || 1;
-  opts.gridSpacing = gridSpacingFor(r);
+  opts.gridRadius = r;
   nav.fitSphere(c, r, [0,0,1]);
 }
 // Switch the up axis: the model (and its native-frame grid) visibly rotates
@@ -332,7 +332,7 @@ async function loadSingleModel(entries) {
   // model (e.g. dropping the mesh of the same object after a splat) keeps
   // the current view. The scene scale (move/zoom speed) is still refreshed.
   if (firstModel) fitModel();
-  else { const fs = fitSphere(); nav._sceneScale = 2.0 * fs[3] || 1; opts.gridSpacing = gridSpacingFor(nav._sceneScale); }
+  else { const fs = fitSphere(); nav._sceneScale = 2.0 * fs[3] || 1; opts.gridRadius = nav._sceneScale; }
   lastSortDir = [0,0,0]; lastSortMode = -1;
   if (model.type === 'splat') maybeSort(true);   // initial order, synchronous
   histCache.clear();
@@ -390,14 +390,8 @@ async function loadDataset(entries, token) {
 
 function fitDataset(fit) {
   const c = mat3.mulVec(upTransform(), [fit[0], fit[1], fit[2]]);
-  opts.gridSpacing = gridSpacingFor(2.0*(fit[3] || 1));
+  opts.gridRadius = 2.0*(fit[3] || 1);
   nav.fitSphere(c, 2.0*(fit[3] || 1), [0,0,1]);
-}
-
-// Minor grid cell: the power of 10 that gives a readable density at the
-// scene's scale (same rule as the native viewers).
-function gridSpacingFor(radius) {
-  return Math.pow(10, Math.floor(Math.log10(Math.max(radius, 1e-6) / 2)));
 }
 
 function showSplatUI(data) {

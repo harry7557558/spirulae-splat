@@ -687,11 +687,15 @@ precision highp float;
 layout(location=0) in vec3 aApex;
 layout(location=1) in vec3 aOffset;
 layout(location=2) in vec3 aColor;
+layout(location=3) in vec3 aDelta;   // this-endpoint minus other-endpoint,
+                                     // pre-scale (frusta: offset units,
+                                     // grid: position units)
 uniform mat4 uMVP;
 uniform mat3 uModelR, uViewR;
 uniform vec3 uCamPos;
 uniform vec2 uFocal, uCenter, uViewport, uNearFar;
 uniform float uFrustumScale;
+uniform float uDeltaScale;           // uFrustumScale for frusta, 1 for grid
 uniform int uUseUniform;
 uniform vec3 uColor;
 out vec3 vColor;
@@ -699,12 +703,30 @@ out vec3 vColor;
 out vec3 vPosCam;                    // camera-space position (seam discard)
 ${PROJ_GLSL}
 #endif
+#if CAM_MODEL == 4
+out float vKill;                     // whole-segment equirect seam kill
+#endif
 void main() {
   vColor = (uUseUniform == 1) ? uColor : aColor;
   vec3 pos = aApex + aOffset * uFrustumScale;
 ${DATASET_PROJECT}
 #if CAM_MODEL >= 2
   vPosCam = pc;
+#endif
+#if CAM_MODEL == 4
+  // A segment whose chord crosses the equirect ±180° azimuth seam (the
+  // half-plane x = 0, z > 0 in camera space) rasterizes as the wrapped
+  // chord: no fragment of it is valid, and the reprojection check in
+  // LINE_FS alone keeps ~5%-of-viewport stubs at both ends (the error
+  // shrinks to zero at the endpoints), which stack into ladder artifacts
+  // at the image edges. Both vertices see both endpoints via aDelta and
+  // compute the same flag, so it interpolates flat.
+  vec3 pc2 = uViewR * (uModelR * (pos - aDelta * uDeltaScale) - uCamPos);
+  vKill = 0.0;
+  if (pc.x * pc2.x < 0.0) {
+    float t = pc.x / (pc.x - pc2.x);
+    if (mix(pc.z, pc2.z, t) > 0.0) vKill = 1.0;
+  }
 #endif
 }
 `;
@@ -718,8 +740,14 @@ in vec3 vPosCam;
 uniform vec2 uViewport;
 ${PROJ_GLSL}
 #endif
+#if CAM_MODEL == 4
+in float vKill;
+#endif
 out vec4 outColor;
 void main() {
+#if CAM_MODEL == 4
+  if (vKill > 0.5) discard;          // segment crosses the equirect seam
+#endif
 #if CAM_MODEL >= 2
 ${DOMAIN_DISCARD}
   // Same seam handling as MESH_FS: a segment crossing a projection

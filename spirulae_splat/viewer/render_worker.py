@@ -23,6 +23,8 @@ class RenderRequest:
     buffer_key: str = "rgb"       # which channel the viewer wants annotated
     show_training_cameras: bool = False
     show_grid: bool = False
+    grid_dist: float = 0.0        # nav distance (normalized frame) for the grid
+    grid_target: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # nav orbit target
     request_id: int = 0
 
 
@@ -113,9 +115,11 @@ class RenderWorker:
                     req.buffer_key,
                     show_training_cameras=req.show_training_cameras,
                     show_grid=req.show_grid,
+                    grid_dist=req.grid_dist,
+                    grid_target=req.grid_target,
                 )
                 result = RenderResult(request_id=req.request_id, buffers=buffers)
-            except BrokenPipeError as e:
+            except BrokenPipeError as exc:
                 result = RenderResult(request_id=req.request_id, buffers={}, error=str(exc))
             except Exception as exc:
                 import traceback

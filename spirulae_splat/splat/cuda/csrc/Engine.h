@@ -492,11 +492,13 @@ void engine_viewer_set_camera_size(float camera_size);
 
 // Build + upload the axes/grid overlay (capsule line segments appended to
 // the camera-frustum BVH, drawn when engine_blit_view's show_overlay is
-// set). radius = scene radius in the z-up NORMALIZED frame (sizes the grid
-// and picks a power-of-10 cell); norm_to_train = [3,4] row-major host
-// float mapping normalized -> render frame (identity when equal). No-op
-// until engine_viewer_init has run.
-void engine_viewer_set_grid(float radius, TorchTensorView norm_to_train);
+// set). Axis-aligned in the ENGINE's own frame -- the frame splats are
+// trained and saved in -- so lines mark round coordinates of the exported
+// model. radius = scene radius in that frame (grid extent); view_distance =
+// initial nav distance for the power-of-10 cell size (<= 0 uses radius).
+// Per-render zoom / recenter updates arrive via engine_blit_view's
+// grid_dist / grid_target. No-op until engine_viewer_init has run.
+void engine_viewer_set_grid(float radius, float view_distance);
 
 // engine_blit_view: fused viewer-render annotation. Caches the BVH on the
 // first call that shows cameras or the overlay (rebuilt when camera_size
@@ -522,6 +524,12 @@ void engine_blit_view(
     TorchTensorView view_dist_coeffs,
     bool            show_training_cameras,
     bool            show_overlay,    // axes/grid from engine_viewer_set_grid
+    float           grid_dist,       // nav distance (engine frame) for the
+                                     // zoom-adaptive grid decade; <= 0 keeps
+                                     // the current spacing
+    float           grid_target_x,   // nav orbit target (engine frame); the
+    float           grid_target_y,   // grid line patch recenters on it so it
+    float           grid_target_z,   // stays under the viewer at any zoom
     TorchTensorView out_rgb          // [H,W,3] uint8, pre-allocated CUDA
 );
 

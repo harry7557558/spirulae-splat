@@ -1199,33 +1199,41 @@ void engine_viewer_set_camera_size(float camera_size) {
 }
 
 // ---------------------------------------------------------------------------
-// engine_viewer_set_grid: build the axes/grid overlay (host-side) and upload
-// it. The grid lives in the z-up NORMALIZED frame -- ground plane at z=0,
-// minor cells at a power of 10 chosen from the scene radius, brighter lines
-// every 10th, positive X/Y/Z half-axes in the web viewer's colors -- and is
-// mapped into the frame the engine renders in through norm_to_train (pass
-// identity when they coincide). Each cell edge is one capsule so lines curve
-// correctly under fisheye/equirectangular view cameras. radius = scene
-// radius in NORMALIZED units (e.g. max normalized camera distance).
+// Axes/grid overlay. The grid lives in the ENGINE's own frame -- the frame
+// splats are trained and SAVED in (usually the raw dataset frame; the
+// standalone web viewer draws its grid in the same model-native frame) --
+// so grid lines mark round coordinates of the exported model. Ground plane
+// at z=0, minor cells at the power of 10 chosen from the current view
+// distance (zoom-adaptive; re-derived per blit through engine_blit_view's
+// grid_dist), brighter lines every 10th, positive X/Y/Z half-axes in the
+// web viewer's colors. The finite line patch follows the nav target
+// (snapped to the lattice, with hysteresis) so the grid stays under the
+// viewer at any zoom; lines always sit at global multiples of the cell
+// size and the axes stay anchored at the frame origin. Each cell edge is
+// one capsule so lines curve correctly under fisheye/equirectangular view
+// cameras.
 // ---------------------------------------------------------------------------
-void engine_viewer_set_grid(float radius, TorchTensorView norm_to_train)
+static void _viewer_build_grid(float view_dist,      // viewer_mutex held
+                               const float target[3])
 {
-    std::lock_guard<std::mutex> _vlock(viewer_mutex());
     auto& v = engine().viewer;
-    if (!v.initialized) return;
+    const float radius = v.grid_radius;
+    const float s = powf(10.0f, floorf(log10f(fmaxf(view_dist, 1e-6f) / 2.0f)));
+    // Cover the scene, but keep the segment count bounded when zoomed far
+    // in; never fewer cells than the legacy fixed extent.
+    int half = (int)ceilf(radius / s);
+    half = half < 20 ? 20 : (half > 100 ? 100 : half);
+    // Recenter only when the target drifts toward the patch edge, so slow
+    // pans don't rebuild (and re-BVH) every frame.
+    bool recenter = fabsf(target[0] - v.grid_center[0]) > 0.25f * half * s ||
+                    fabsf(target[1] - v.grid_center[1]) > 0.25f * half * s;
+    if (v.num_overlay > 0 && s == v.grid_spacing && half == v.grid_half &&
+        !recenter)
+        return;
+    const long gx0 = lroundf(target[0] / s), gy0 = lroundf(target[1] / s);
+    const float cx = gx0 * s, cy = gy0 * s;
 
-    const float* T = (const float*)std::get<0>(norm_to_train);  // [3,4] row-major, host
-    float sT = sqrtf(T[0]*T[0] + T[4]*T[4] + T[8]*T[8]);
-    if (!(sT > 0.0f)) sT = 1.0f;
-    auto map_pt = [&](float x, float y, float z, float out[3]) {
-        out[0] = T[0]*x + T[1]*y + T[2]*z  + T[3];
-        out[1] = T[4]*x + T[5]*y + T[6]*z  + T[7];
-        out[2] = T[8]*x + T[9]*y + T[10]*z + T[11];
-    };
-
-    const float s = powf(10.0f, floorf(log10f(fmaxf(radius, 1e-6f) / 2.0f)));
-    constexpr int kHalf = 20;               // half-extent in minor cells
-    const float rr = 0.0015f * fmaxf(radius, 1e-6f) * sT;   // capsule radius
+    const float rr = 0.004f * s;            // capsule radius (axes 2x)
     const float kMinor[3] = {0.28f, 0.30f, 0.33f};
     const float kMajor[3] = {0.45f, 0.47f, 0.50f};
     const float kAxis[3][3] = {{0.98f, 0.20f, 0.31f},       // +X
@@ -1233,26 +1241,25 @@ void engine_viewer_set_grid(float radius, TorchTensorView norm_to_train)
                                {0.16f, 0.55f, 0.98f}};      // +Z
 
     std::vector<float> segs, colors;
-    segs.reserve((4*kHalf + 2) * 2*kHalf * 8 * 2 + 3*kHalf*8);
+    segs.reserve(((size_t)(4*half + 2) * 2*half + 3*half) * 8);
     colors.reserve(segs.capacity() * 3 / 8);
     auto seg = [&](float ax, float ay, float az, float bx, float by, float bz,
                    float r, const float c[3]) {
-        float p[3];
-        map_pt(ax, ay, az, p);
-        segs.insert(segs.end(), {p[0], p[1], p[2], r});
-        map_pt(bx, by, bz, p);
-        segs.insert(segs.end(), {p[0], p[1], p[2], r});
+        segs.insert(segs.end(), {ax, ay, az, r});
+        segs.insert(segs.end(), {bx, by, bz, r});
         colors.insert(colors.end(), {c[0], c[1], c[2]});
     };
-    for (int i = -kHalf; i <= kHalf; i++) {
-        const float* c = (i % 10 == 0) ? kMajor : kMinor;
-        for (int j = -kHalf; j < kHalf; j++) {
-            seg(i*s, j*s, 0, i*s, (j+1)*s, 0, rr, c);       // along Y
-            seg(j*s, i*s, 0, (j+1)*s, i*s, 0, rr, c);       // along X
+    for (int i = -half; i <= half; i++) {
+        // Major/minor from the GLOBAL line index, not the patch-local one.
+        const float* cX = ((gx0 + i) % 10 == 0) ? kMajor : kMinor;
+        const float* cY = ((gy0 + i) % 10 == 0) ? kMajor : kMinor;
+        for (int j = -half; j < half; j++) {
+            seg(cx + i*s, cy + j*s, 0, cx + i*s, cy + (j+1)*s, 0, rr, cX);
+            seg(cx + j*s, cy + i*s, 0, cx + (j+1)*s, cy + i*s, 0, rr, cY);
         }
     }
     for (int a = 0; a < 3; a++)                              // half-axes
-        for (int j = 0; j < kHalf; j++) {
+        for (int j = 0; j < half; j++) {
             float p0[3] = {0, 0, 0}, p1[3] = {0, 0, 0};
             p0[a] = j*s;
             p1[a] = (j+1)*s;
@@ -1265,7 +1272,27 @@ void engine_viewer_set_grid(float radius, TorchTensorView norm_to_train)
     v.d_overlay_colors = _hv_to_dv<float>(PoolSlot::ViewerOverlayColors,
         TorchTensorView((uint64_t)colors.data(), 4, {M * 3}));
     v.num_overlay = (int)M;
+    v.grid_spacing = s;
+    v.grid_half = half;
+    v.grid_center[0] = cx;
+    v.grid_center[1] = cy;
     v.bvh_built = false;   // rebuilt (with the overlay appended) on next use
+}
+
+// radius = scene radius in the engine frame (grid extent); view_distance =
+// initial nav distance in the engine frame for the spacing decade (<= 0
+// falls back to radius). Later zoom / recenter updates come in via
+// engine_blit_view's grid_dist / grid_target.
+void engine_viewer_set_grid(float radius, float view_distance)
+{
+    std::lock_guard<std::mutex> _vlock(viewer_mutex());
+    auto& v = engine().viewer;
+    if (!v.initialized) return;
+    v.grid_radius = fmaxf(radius, 1e-6f);
+    v.grid_spacing = 0.0f;   // force a rebuild
+    const float origin[3] = {0, 0, 0};
+    _viewer_build_grid(view_distance > 0.0f ? view_distance : v.grid_radius,
+                       origin);
 }
 
 
@@ -1533,6 +1560,10 @@ void engine_blit_view(
     TorchTensorView view_dist_coeffs,
     bool            show_training_cameras,
     bool            show_overlay,
+    float           grid_dist,
+    float           grid_target_x,
+    float           grid_target_y,
+    float           grid_target_z,
     TorchTensorView out_rgb)
 {
     std::lock_guard<std::mutex> _vlock(viewer_mutex());
@@ -1540,6 +1571,13 @@ void engine_blit_view(
     if (!v.initialized) {
         throw std::runtime_error(
             "engine_blit_view: viewer not initialized; call engine_viewer_init() first.");
+    }
+    // Zoom-adaptive grid: re-derive the cell decade from the client's nav
+    // distance and recenter the patch on its orbit target (engine-frame
+    // units). No-op unless the decade changed or the target drifted.
+    if (show_overlay && grid_dist > 0.0f && v.grid_radius > 0.0f) {
+        const float target[3] = {grid_target_x, grid_target_y, grid_target_z};
+        _viewer_build_grid(grid_dist, target);
     }
     show_overlay = show_overlay && v.num_overlay > 0;
 

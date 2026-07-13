@@ -215,6 +215,18 @@ struct RenderWorker::Impl {
             }
             std::memcpy(c2w, out, sizeof c2w);
         }
+        // Grid overlay inputs, mapped like the c2w: distance scales by the
+        // similarity, the orbit target maps through it.
+        float grid_dist = q.grid_dist * cfg.train_frame_scale;
+        float grid_target[3] = {q.grid_target[0], q.grid_target[1],
+                                q.grid_target[2]};
+        if (cfg.train_frame_scale != 1.0f) {
+            const auto& T = cfg.train_to_normalized;
+            for (int r = 0; r < 3; r++)
+                grid_target[r] = T[r*4+0]*q.grid_target[0] +
+                                 T[r*4+1]*q.grid_target[1] +
+                                 T[r*4+2]*q.grid_target[2] + T[r*4+3];
+        }
 
         // c2w -> engine viewmat (model.py get_outputs:1016-1025).
         double t[3] = {c2w[3], c2w[7], c2w[11]};
@@ -401,6 +413,8 @@ struct RenderWorker::Impl {
                 tvp(dc, 4, {1, 10}),
                 q.show_cams,
                 q.show_grid,
+                grid_dist,
+                grid_target[0], grid_target[1], grid_target[2],
                 tvp(dout, 1, {H, W, 3}));
             if (cudaMemcpy(out_host.data(), dout, npx * 3,
                            cudaMemcpyDeviceToHost) != cudaSuccess)
@@ -480,30 +494,16 @@ float viewer_upload_cameras(const PostSplitCameras& post) {
     return camera_size;
 }
 
-void viewer_upload_grid(const PostSplitCameras& post,
-                        const std::array<float, 16>& train_to_normalized,
-                        float train_frame_scale) {
-    // Scene radius in the normalized frame = max normalized camera |p|
-    // (camera positions are the translation column of c2w; the y/z flip
-    // leaves it untouched). train_to_normalized maps normalized -> train,
-    // so positions map through its inverse.
-    double A[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-    if (train_frame_scale != 1.0f) {
-        double T[16];
-        for (int i = 0; i < 16; i++) T[i] = train_to_normalized[i];
-        dsparse::invert_affine4x4(T, A);
-    }
+void viewer_upload_grid(const PostSplitCameras& post) {
+    // Scene radius in the engine (training/saved) frame = max camera |p|;
+    // camera positions are the translation column of c2w (the y/z flip
+    // leaves it untouched).
     double radius = 0.0;
     for (int64_t i = 0; i < post.n_post; i++) {
         const float* M = &post.c2w_flip[i*12];
-        double p[3] = {M[3], M[7], M[11]}, q[3];
-        for (int r = 0; r < 3; r++)
-            q[r] = A[r*4+0]*p[0] + A[r*4+1]*p[1] + A[r*4+2]*p[2] + A[r*4+3];
         radius = std::max(radius,
-                          std::sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2]));
+                          std::sqrt((double)M[3]*M[3] + (double)M[7]*M[7] +
+                                    (double)M[11]*M[11]));
     }
-    float n2t[12];
-    for (int i = 0; i < 12; i++) n2t[i] = train_to_normalized[i];
-    engine_viewer_set_grid((float)std::max(radius, 1e-6),
-                           tvp(n2t, 4, {3, 4}));
+    engine_viewer_set_grid((float)std::max(radius, 1e-6), 0.0f);
 }

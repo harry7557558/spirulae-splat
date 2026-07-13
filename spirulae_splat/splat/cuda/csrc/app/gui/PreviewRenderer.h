@@ -33,11 +33,13 @@ public:
     // view is a row-major 4x4 world-to-view matrix. sx/sy are the engine
     // intrinsics normalized to NDC: fx/(W/2), fy/(H/2). frustum_scale
     // multiplies the base camera size; scene_radius drives the depth range
-    // and sizes the grid.
+    // and the grid extent; view_dist + view_target (nav pose, normalized
+    // frame) drive the zoom-adaptive grid cell size and its patch center.
     unsigned render(int W, int H, const float view[16],
                     PreviewProjection proj, float sx, float sy,
-                    float scene_radius, bool show_cams, float frustum_scale,
-                    bool show_grid);
+                    float scene_radius, float view_dist,
+                    const float view_target[3], bool show_cams,
+                    float frustum_scale, bool show_grid);
 
     // Base frustum size (kNN heuristic, normalized frame).
     float base_camera_size() const { return _base_cam_size; }
@@ -52,15 +54,24 @@ private:
     bool _built = false;
     bool _gl_ok = false;
     unsigned _prog = 0;
-    int _u_view = -1, _u_scale = -1, _u_color = -1;
+    int _u_view = -1, _u_scale = -1, _u_dscale = -1, _u_color = -1;
     int _u_model = -1, _u_s = -1, _u_zrange = -1, _u_vp = -1;
-    void ensure_grid(float scene_radius);
+    void ensure_grid(float scene_radius, float view_dist,
+                     const float target_norm[3]);
 
     unsigned _vao_pts = 0, _vbo_pts = 0;
     unsigned _vao_cam = 0, _vbo_cam = 0;
     unsigned _vao_grid = 0, _vbo_grid = 0;
     int64_t _num_grid_verts = 0;
-    float _grid_spacing = 0.0f;      // minor cell size the grid was built at
+    float _grid_spacing = 0.0f;      // minor cell size (train units) built at
+    int _grid_half = 0;              // half-extent (minor cells) built at
+    float _grid_center[2] = {0, 0};  // patch center (train units) built at
+    // train -> normalized similarity (set in build; identity by default):
+    // the grid is generated in the training/saved frame so its lines mark
+    // round coordinates of the exported model, then mapped into the
+    // normalized frame the preview renders in.
+    float _t2n[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
+    float _t2n_scale = 1.0f;         // normalized units per train unit
     int64_t _num_points = 0;
     int64_t _num_cam_verts = 0;    // total frustum verts (bright then dim)
     int64_t _num_cam_bright = 0;   // border + anchor verts (drawn full-color)

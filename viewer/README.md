@@ -54,7 +54,9 @@ plain C++17 with no CUDA dependency (see `csrc/CameraModel.h`).
   analytic Jacobians / sigma-point projection; mesh triangles crossing a
   projection discontinuity (the equirect seam, the fisheye backward point) are
   discarded, and fragments outside a fisheye image circle are clipped.
-- A rasterized, depth-tested **axes + grid** overlay (scene-scaled cells) and a
+- A rasterized, depth-tested **axes + grid** overlay in the model's native
+  frame (power-of-10 cells that adapt to the zoom level; the line patch
+  follows the orbit target while staying on the global lattice) and a
   configurable background.
 - **Statistics** (splat count / vertices / edges / faces) and on-demand
   **parameter histograms** (opacity, scale, effective rank, RGB, anisotropy for

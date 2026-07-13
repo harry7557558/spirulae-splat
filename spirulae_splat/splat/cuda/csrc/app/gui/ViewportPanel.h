@@ -58,6 +58,9 @@ private:
     float fov_min() const;
     float fov_max() const;
     void compute_intrinsics(int W, int H, float& fx, float& fy) const;
+    // Camera-to-orbit-target distance (normalized frame); drives the
+    // zoom-adaptive grid cell size.
+    float nav_dist() const;
     void build_request(ViewRequest& q, int W, int H) const;
     void view_matrix(float out[16]) const;   // row-major world-to-view
     void upload(const ViewResult& res);

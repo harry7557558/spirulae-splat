@@ -291,7 +291,16 @@ export function buildFrustums(cameras) {
     }
     ranges[i] = { start, count: vp - start };
   }
-  return { apex, offset, colors, count: total, ranges, pickR };
+  // aDelta = this-endpoint minus other-endpoint of each GL_LINES pair (in
+  // offset units; the apex is shared within a pair), so LINE_VS can kill
+  // whole segments that cross the equirect seam.
+  const delta = new Float32Array(total*3);
+  for (let v = 0; v + 1 < total; v += 2)
+    for (let k = 0; k < 3; k++) {
+      const d = offset[v*3+k] - offset[(v+1)*3+k];
+      delta[v*3+k] = d; delta[(v+1)*3+k] = -d;
+    }
+  return { apex, offset, delta, colors, count: total, ranges, pickR };
 }
 
 // ---------------------------------------------------------------------------

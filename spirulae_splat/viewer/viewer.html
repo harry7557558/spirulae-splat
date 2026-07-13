@@ -950,6 +950,10 @@ async function sendRenderRequest() {
     update_rate: settings.update_rate,
     show_training_cameras: settings.show_training_cameras,
     show_grid: settings.show_grid,
+    // nav view distance + orbit target: the axes/grid overlay adapts its
+    // cell size to the zoom and recenters its line patch on the target
+    grid_dist: v3.len(v3.sub(cam.pos, cam.target)),
+    grid_tx: cam.target[0], grid_ty: cam.target[1], grid_tz: cam.target[2],
     camera_size_scale: settings.camera_size_scale,
   });
   const img = $("canvas-img");

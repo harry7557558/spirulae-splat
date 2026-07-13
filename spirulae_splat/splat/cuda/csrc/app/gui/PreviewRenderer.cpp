@@ -33,6 +33,13 @@ namespace {
 // chord between the wrapped endpoints; re-projecting the interpolated
 // view-space position exposes such fragments as a huge reprojection error
 // (same fix as the web viewer's LINE_FS, viewer/js/shaders.js).
+// The reprojection check alone still keeps ~5%-of-viewport stubs at both
+// ends of a wrapped segment (the error shrinks to zero at the endpoints),
+// which stack into ladder artifacts at the equirect image edges. Line
+// vertices therefore also carry a_delta = this-endpoint minus
+// other-endpoint (pre-scale), and the vertex shader kills the WHOLE
+// segment (v_kill) when its chord crosses the equirect seam -- the
+// half-plane x = 0, z > 0 in view space (azimuth +-180 degrees).
 const char* kProj = R"(
 uniform int u_model;
 uniform vec2 u_s;
@@ -58,12 +65,15 @@ vec2 project_ndc(vec3 v, out bool clipped) {
 const char* kVertMain = R"(
 in vec3 a_pos;
 in vec3 a_aux;
+in vec3 a_delta;
 uniform mat4 u_view;
 uniform float u_scale;
+uniform float u_dscale;
 uniform vec4 u_color;
 uniform vec2 u_zrange;
 out vec4 v_col;
 out vec3 v_view;
+out float v_kill;
 void main() {
     vec3 p = a_pos + u_scale * a_aux;
     vec3 v = (u_view * vec4(p, 1.0)).xyz;
@@ -74,6 +84,16 @@ void main() {
     if (clipped) z = 3.0;
     v_col = (u_color.a > 0.0) ? u_color : vec4(a_aux, 1.0);
     v_view = v;
+    // Whole-segment equirect seam kill (see the comment above kProj). Both
+    // vertices of a segment compute the same flag, so it interpolates flat.
+    v_kill = 0.0;
+    if (u_model == 3) {
+        vec3 v2 = (u_view * vec4(p - u_dscale * a_delta, 1.0)).xyz;
+        if (v.x * v2.x < 0.0) {
+            float t = v.x / (v.x - v2.x);
+            if (mix(v.z, v2.z, t) > 0.0) v_kill = 1.0;
+        }
+    }
     gl_Position = vec4(ndc, z, 1.0);
 }
 )";
@@ -81,9 +101,11 @@ void main() {
 const char* kFragMain = R"(
 in vec4 v_col;
 in vec3 v_view;
+in float v_kill;
 uniform vec2 u_vp;
 out vec4 frag;
 void main() {
+    if (v_kill > 0.5) discard;
     bool clipped;
     vec2 ndc = project_ndc(v_view, clipped);
     vec2 px = (0.5 * ndc + 0.5) * u_vp;
@@ -110,6 +132,30 @@ GLuint compile(GLenum type, const char* src) {
 }
 
 struct V { float px, py, pz, ax, ay, az; };
+// Line vertex: V plus a_delta = this-endpoint minus other-endpoint of the
+// segment, pre-scale (frusta: in offset units; grid: in position units), so
+// the vertex shader can kill whole segments crossing the equirect seam.
+struct VL { float px, py, pz, ax, ay, az, dx, dy, dz; };
+
+// Fill the deltas of a GL_LINES vertex array built as consecutive pairs.
+// For frusta both vertices of a pair share a_pos (the camera center), so the
+// endpoint difference is the a_aux (offset) difference; for the grid a_aux
+// is the color and u_scale = 0, so it is the a_pos difference. delta_from_aux
+// selects which.
+void fill_line_deltas(std::vector<VL>& v, bool delta_from_aux) {
+    for (size_t i = 0; i + 1 < v.size(); i += 2) {
+        VL& a = v[i];
+        VL& b = v[i + 1];
+        float d[3];
+        if (delta_from_aux) {
+            d[0] = a.ax - b.ax; d[1] = a.ay - b.ay; d[2] = a.az - b.az;
+        } else {
+            d[0] = a.px - b.px; d[1] = a.py - b.py; d[2] = a.pz - b.pz;
+        }
+        a.dx = d[0]; a.dy = d[1]; a.dz = d[2];
+        b.dx = -d[0]; b.dy = -d[1]; b.dz = -d[2];
+    }
+}
 
 // ---- camera-frustum template --------------------------------------------
 // Port of viewer/js/dataset.js frustumTemplate / generateRay (itself a port
@@ -334,6 +380,7 @@ bool PreviewRenderer::ensure_program() {
     glx::AttachShader(_prog, fs);
     glx::BindAttribLocation(_prog, 0, "a_pos");
     glx::BindAttribLocation(_prog, 1, "a_aux");
+    glx::BindAttribLocation(_prog, 2, "a_delta");
     glx::LinkProgram(_prog);
     glx::DeleteShader(vs);
     glx::DeleteShader(fs);
@@ -349,6 +396,7 @@ bool PreviewRenderer::ensure_program() {
     }
     _u_view = glx::GetUniformLocation(_prog, "u_view");
     _u_scale = glx::GetUniformLocation(_prog, "u_scale");
+    _u_dscale = glx::GetUniformLocation(_prog, "u_dscale");
     _u_color = glx::GetUniformLocation(_prog, "u_color");
     _u_model = glx::GetUniformLocation(_prog, "u_model");
     _u_s = glx::GetUniformLocation(_prog, "u_s");
@@ -357,45 +405,81 @@ bool PreviewRenderer::ensure_program() {
     return true;
 }
 
-// Ground-plane grid + axes in the normalized (z-up) frame, sized from the
-// scene radius: minor cells at a power of 10, brighter lines every 10th,
-// positive X/Y/Z half-axes in the web viewer's colors. Each cell edge is
-// one line segment, which doubles as the subdivision that keeps lines
-// curved (and seam-safe) under the nonlinear preview projections.
-void PreviewRenderer::ensure_grid(float scene_radius) {
-    float s = std::pow(10.0f, std::floor(std::log10(
-                  std::max(scene_radius, 1e-6f) / 2.0f)));
-    if (_vao_grid && s == _grid_spacing) return;
-    constexpr int kHalf = 20;              // half-extent in minor cells
-    const float H = kHalf * s;
+// Ground-plane grid + axes, generated in the TRAINING (saved-splat) frame
+// so lines mark round coordinates of the exported model, then mapped into
+// the normalized frame the preview renders in (_t2n). Minor cells at a
+// power of 10 from the current view distance (zoom-adaptive), brighter
+// lines every 10th; the finite line patch follows the nav target (snapped
+// to the lattice, with hysteresis) so the grid stays under the viewer at
+// any zoom, while the positive X/Y/Z half-axes stay anchored at the frame
+// origin. Cell edges are subdivided so lines stay curved (and seam-safe)
+// under the nonlinear preview projections.
+void PreviewRenderer::ensure_grid(float scene_radius, float view_dist,
+                                  const float target_norm[3]) {
+    // Normalized-frame inputs -> train units, where the cell decade lives.
+    const float a = _t2n_scale > 0.0f ? _t2n_scale : 1.0f;
+    const float dist_t = std::max(view_dist, 1e-6f) / a;
+    const float radius_t = std::max(scene_radius, 1e-6f) / a;
+    float s = std::pow(10.0f, std::floor(std::log10(dist_t / 2.0f)));
+    int half = (int)std::ceil(radius_t / s);
+    half = std::clamp(half, 20, 100);
+    // Orbit target -> train frame (inverse of the _t2n similarity:
+    // M = aR|t  =>  p_t = M^T (p_n - t) / a^2).
+    float d[3] = {target_norm[0] - _t2n[3], target_norm[1] - _t2n[7],
+                  target_norm[2] - _t2n[11]};
+    float tx = (_t2n[0]*d[0] + _t2n[4]*d[1] + _t2n[8]*d[2]) / (a*a);
+    float ty = (_t2n[1]*d[0] + _t2n[5]*d[1] + _t2n[9]*d[2]) / (a*a);
+    // Recenter only when the target drifts toward the patch edge, so slow
+    // pans don't rebuild the VBO every frame.
+    bool recenter = std::abs(tx - _grid_center[0]) > 0.25f * half * s ||
+                    std::abs(ty - _grid_center[1]) > 0.25f * half * s;
+    if (_vao_grid && s == _grid_spacing && half == _grid_half && !recenter)
+        return;
+    const long gx0 = std::lround(tx / s), gy0 = std::lround(ty / s);
+    const float cx = gx0 * s, cy = gy0 * s;
+    constexpr int kSub = 4;                // sub-segments per cell edge
     const float kMinor[3] = {0.28f, 0.30f, 0.33f};
     const float kMajor[3] = {0.45f, 0.47f, 0.50f};
     const float kAxis[3][3] = {{0.98f, 0.20f, 0.31f},    // +X
                                {0.55f, 0.86f, 0.00f},    // +Y
                                {0.16f, 0.55f, 0.98f}};   // +Z
-    std::vector<V> g;
-    g.reserve((4*kHalf + 2) * 2*kHalf * 2 * 2 + 6*kHalf);
+    std::vector<VL> g;
+    g.reserve(((size_t)(4*half + 2) * 2*half + 3*half) * 2 * kSub);
+    auto vert = [&](float x, float y, float z, const float c[3]) {
+        // train -> normalized (the preview's world frame)
+        g.push_back({_t2n[0]*x + _t2n[1]*y + _t2n[2]*z  + _t2n[3],
+                     _t2n[4]*x + _t2n[5]*y + _t2n[6]*z  + _t2n[7],
+                     _t2n[8]*x + _t2n[9]*y + _t2n[10]*z + _t2n[11],
+                     c[0], c[1], c[2], 0, 0, 0});
+    };
     auto seg = [&](float ax, float ay, float az, float bx, float by, float bz,
                    const float c[3]) {
-        g.push_back({ax, ay, az, c[0], c[1], c[2]});
-        g.push_back({bx, by, bz, c[0], c[1], c[2]});
+        for (int k = 0; k < kSub; k++) {
+            float t0 = (float)k / kSub, t1 = (float)(k + 1) / kSub;
+            vert(ax + (bx-ax)*t0, ay + (by-ay)*t0, az + (bz-az)*t0, c);
+            vert(ax + (bx-ax)*t1, ay + (by-ay)*t1, az + (bz-az)*t1, c);
+        }
     };
-    for (int i = -kHalf; i <= kHalf; i++) {
-        const float* c = (i % 10 == 0) ? kMajor : kMinor;
-        for (int j = -kHalf; j < kHalf; j++) {
-            seg(i*s, j*s, 0, i*s, (j+1)*s, 0, c);      // along Y
-            seg(j*s, i*s, 0, (j+1)*s, i*s, 0, c);      // along X
+    for (int i = -half; i <= half; i++) {
+        // Major/minor from the GLOBAL line index, not the patch-local one.
+        const float* cX = ((gx0 + i) % 10 == 0) ? kMajor : kMinor;
+        const float* cY = ((gy0 + i) % 10 == 0) ? kMajor : kMinor;
+        for (int j = -half; j < half; j++) {
+            seg(cx + i*s, cy + j*s, 0, cx + i*s, cy + (j+1)*s, 0, cX);
+            seg(cx + j*s, cy + i*s, 0, cx + (j+1)*s, cy + i*s, 0, cY);
         }
     }
     // Positive half-axes drawn last so they win the equal-depth tie against
     // the grid lines they overlap.
-    for (int a = 0; a < 3; a++)
-        for (int j = 0; j < kHalf; j++) {
+    for (int a2 = 0; a2 < 3; a2++)
+        for (int j = 0; j < half; j++) {
             float p0[3] = {0, 0, 0}, p1[3] = {0, 0, 0};
-            p0[a] = j*s;
-            p1[a] = (j+1)*s;
-            seg(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], kAxis[a]);
+            p0[a2] = j*s;
+            p1[a2] = (j+1)*s;
+            seg(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], kAxis[a2]);
         }
+
+    fill_line_deltas(g, /*delta_from_aux=*/false);
 
     if (!_vao_grid) {
         GLuint va = 0, vb = 0;
@@ -406,19 +490,25 @@ void PreviewRenderer::ensure_grid(float scene_radius) {
         glx::BindVertexArray(va);
         glx::BindBuffer(GL_ARRAY_BUFFER, vb);
         glx::EnableVertexAttribArray(0);
-        glx::VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(V), (void*)0);
+        glx::VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(VL), (void*)0);
         glx::EnableVertexAttribArray(1);
-        glx::VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(V),
+        glx::VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(VL),
                                  (void*)(3 * sizeof(float)));
+        glx::EnableVertexAttribArray(2);
+        glx::VertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(VL),
+                                 (void*)(6 * sizeof(float)));
     } else {
         glx::BindVertexArray(_vao_grid);
         glx::BindBuffer(GL_ARRAY_BUFFER, (GLuint)_vbo_grid);
     }
-    glx::BufferData(GL_ARRAY_BUFFER, (glx::glSizeiptr)(g.size() * sizeof(V)),
+    glx::BufferData(GL_ARRAY_BUFFER, (glx::glSizeiptr)(g.size() * sizeof(VL)),
                     g.data(), GL_STATIC_DRAW);
     glx::BindVertexArray(0);
     _num_grid_verts = (int64_t)g.size();
     _grid_spacing = s;
+    _grid_half = half;
+    _grid_center[0] = cx;
+    _grid_center[1] = cy;
 }
 
 bool PreviewRenderer::build(const ssplat::TrainerSession& session) {
@@ -445,6 +535,10 @@ bool PreviewRenderer::build(const ssplat::TrainerSession& session) {
         for (int r = 0; r < 3; r++)
             out[r] = (float)((A[r*4+0]*d[0] + A[r*4+1]*d[1] + A[r*4+2]*d[2]) / sA);
     };
+    // Keep the similarity around for ensure_grid: the grid is generated in
+    // the training frame and mapped into the preview's normalized frame.
+    for (int r = 0; r < 12; r++) _t2n[r] = (float)A[r];
+    _t2n_scale = (float)sA;
 
     // ---- point cloud (capped; stride-sampled) -------------------------------
     int64_t n_src = ds.points.num();
@@ -468,7 +562,7 @@ bool PreviewRenderer::build(const ssplat::TrainerSession& session) {
     // distinct intrinsics), rotated into the normalized frame. Bright verts
     // (border + anchors) first, dim interior gridlines after, so render()
     // can draw the two ranges with different colors.
-    std::vector<V> bright, dim;
+    std::vector<VL> bright, dim;
     std::unordered_map<std::string, FrustumTemplate> templates;
     for (int64_t i = 0; i < ds.num_cameras; i++) {
         const float* M = &ds.c2w[i*12];
@@ -504,8 +598,8 @@ bool PreviewRenderer::build(const ssplat::TrainerSession& session) {
 
         // CV cam-space point -> normalized-frame offset: the CV cam->world
         // rotation is the OpenGL c2w basis with the y,z columns negated.
-        auto emit = [&](std::vector<V>& out, const P3& p) {
-            V v;
+        auto emit = [&](std::vector<VL>& out, const P3& p) {
+            VL v = {};
             v.px = c[0]; v.py = c[1]; v.pz = c[2];
             v.ax = p.x*X[0] - p.y*Y[0] - p.z*Z[0];
             v.ay = p.x*X[1] - p.y*Y[1] - p.z*Z[1];
@@ -513,7 +607,7 @@ bool PreviewRenderer::build(const ssplat::TrainerSession& session) {
             out.push_back(v);
         };
         for (const FrustumLine& line : tmpl.lines) {
-            std::vector<V>& out = line.dim ? dim : bright;
+            std::vector<VL>& out = line.dim ? dim : bright;
             size_t n = line.pts.size();
             for (size_t j = 0; j + 1 < n; j++) {
                 emit(out, line.pts[j]);
@@ -534,33 +628,44 @@ bool PreviewRenderer::build(const ssplat::TrainerSession& session) {
         }
     }
     _num_cam_bright = (int64_t)bright.size();
-    std::vector<V> cams = std::move(bright);
+    std::vector<VL> cams = std::move(bright);
     cams.insert(cams.end(), dim.begin(), dim.end());
     _num_cam_verts = (int64_t)cams.size();
+    fill_line_deltas(cams, /*delta_from_aux=*/true);
 
     // Base frustum size: the engine's kNN heuristic (train frame) mapped to
     // normalized units.
     _base_cam_size = viewer_camera_size_heuristic(session.post) * (float)sA;
 
-    auto make_vao = [&](unsigned& vao, unsigned& vbo, const std::vector<V>& data) {
+    auto make_vao = [&](unsigned& vao, unsigned& vbo, const void* data,
+                        size_t bytes, size_t stride, bool with_delta) {
         GLuint va = 0, vb = 0;
         glx::GenVertexArrays(1, &va);
         glx::GenBuffers(1, &vb);
         glx::BindVertexArray(va);
         glx::BindBuffer(GL_ARRAY_BUFFER, vb);
-        glx::BufferData(GL_ARRAY_BUFFER, (glx::glSizeiptr)(data.size() * sizeof(V)),
-                        data.data(), GL_STATIC_DRAW);
+        glx::BufferData(GL_ARRAY_BUFFER, (glx::glSizeiptr)bytes, data,
+                        GL_STATIC_DRAW);
         glx::EnableVertexAttribArray(0);
-        glx::VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(V), (void*)0);
+        glx::VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, (int)stride, (void*)0);
         glx::EnableVertexAttribArray(1);
-        glx::VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(V),
+        glx::VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, (int)stride,
                                  (void*)(3 * sizeof(float)));
+        if (with_delta) {
+            glx::EnableVertexAttribArray(2);
+            glx::VertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, (int)stride,
+                                     (void*)(6 * sizeof(float)));
+        }
+        // else: attribute 2 stays disabled -> the generic (0,0,0) value,
+        // so a_delta = 0 and the seam kill is a no-op (points).
         glx::BindVertexArray(0);
         vao = va;
         vbo = vb;
     };
-    make_vao(_vao_pts, _vbo_pts, pts);
-    make_vao(_vao_cam, _vbo_cam, cams);
+    make_vao(_vao_pts, _vbo_pts, pts.data(), pts.size() * sizeof(V),
+             sizeof(V), false);
+    make_vao(_vao_cam, _vbo_cam, cams.data(), cams.size() * sizeof(VL),
+             sizeof(VL), true);
 
     _gl_ok = true;
     _built = true;
@@ -598,11 +703,12 @@ bool PreviewRenderer::ensure_fbo(int W, int H) {
 
 unsigned PreviewRenderer::render(int W, int H, const float view[16],
                                  PreviewProjection proj, float sx, float sy,
-                                 float scene_radius, bool show_cams,
+                                 float scene_radius, float view_dist,
+                                 const float view_target[3], bool show_cams,
                                  float frustum_scale, bool show_grid) {
     if (!_built || !_gl_ok || W < 1 || H < 1) return 0;
     if (!ensure_fbo(W, H)) return 0;
-    if (show_grid) ensure_grid(scene_radius);
+    if (show_grid) ensure_grid(scene_radius, view_dist, view_target);
 
     float zn = std::max(1e-5f, 0.002f * scene_radius);
     float zf = std::max(10.0f * zn, 500.0f * scene_radius);
@@ -621,25 +727,31 @@ unsigned PreviewRenderer::render(int W, int H, const float view[16],
     glx::Uniform2f(_u_zrange, zn, zf);
     glx::Uniform2f(_u_vp, (float)W, (float)H);
 
-    // Grid + axes (aux = vertex color; depth-tested like everything else).
+    // Grid + axes (aux = vertex color; depth-tested like everything else;
+    // a_delta in position units -> u_dscale = 1).
     if (show_grid && _num_grid_verts > 0) {
         glx::Uniform1f(_u_scale, 0.0f);
+        glx::Uniform1f(_u_dscale, 1.0f);
         glx::Uniform4f(_u_color, 0, 0, 0, 0);
         glx::BindVertexArray(_vao_grid);
         glDrawArrays(GL_LINES, 0, (GLsizei)_num_grid_verts);
     }
 
-    // Point cloud (aux = vertex color).
+    // Point cloud (aux = vertex color; a_delta disabled -> seam kill no-op).
     glPointSize(2.0f);
     glx::Uniform1f(_u_scale, 0.0f);
+    glx::Uniform1f(_u_dscale, 0.0f);
     glx::Uniform4f(_u_color, 0, 0, 0, 0);
     glx::BindVertexArray(_vao_pts);
     glDrawArrays(GL_POINTS, 0, (GLsizei)_num_points);
 
     // Camera frusta (aux = offset): bright border/anchor range, then the
-    // dimmed interior gridlines of wide (dome/globe) cameras.
+    // dimmed interior gridlines of wide (dome/globe) cameras. a_delta is in
+    // offset units -> u_dscale = the live frustum scale.
     if (show_cams && _num_cam_verts > 0) {
-        glx::Uniform1f(_u_scale, _base_cam_size * std::max(frustum_scale, 1e-3f));
+        float fs = _base_cam_size * std::max(frustum_scale, 1e-3f);
+        glx::Uniform1f(_u_scale, fs);
+        glx::Uniform1f(_u_dscale, fs);
         glx::BindVertexArray(_vao_cam);
         glx::Uniform4f(_u_color, 1.0f, 0.62f, 0.25f, 1.0f);
         glDrawArrays(GL_LINES, 0, (GLsizei)_num_cam_bright);
@@ -666,6 +778,8 @@ void PreviewRenderer::destroy_gl() {
     _vbo_grid = _vao_grid = 0;
     _num_grid_verts = 0;
     _grid_spacing = 0.0f;
+    _grid_half = 0;
+    _grid_center[0] = _grid_center[1] = 0.0f;
     if (_fbo) {
         GLuint fbo = (GLuint)_fbo;
         glx::DeleteFramebuffers(1, &fbo);

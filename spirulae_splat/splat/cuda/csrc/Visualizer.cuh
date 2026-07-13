@@ -20,6 +20,10 @@ void engine_blit_view(
     TorchTensorView view_dist_coeffs,
     bool            show_training_cameras,
     bool            show_overlay,
+    float           grid_dist,
+    float           grid_target_x,
+    float           grid_target_y,
+    float           grid_target_z,
     TorchTensorView out_rgb);
 
 

@@ -119,6 +119,13 @@ void ViewportPanel::compute_intrinsics(int W, int H, float& fx, float& fy) const
     }
 }
 
+float ViewportPanel::nav_dist() const {
+    float dx = _cam.pos[0] - _cam.target[0];
+    float dy = _cam.pos[1] - _cam.target[1];
+    float dz = _cam.pos[2] - _cam.target[2];
+    return std::sqrt(dx*dx + dy*dy + dz*dz);
+}
+
 void ViewportPanel::build_request(ViewRequest& q, int W, int H) const {
     _cam.c2w(q.c2w);
     compute_intrinsics(W, H, q.fx, q.fy);
@@ -130,6 +137,8 @@ void ViewportPanel::build_request(ViewRequest& q, int W, int H) const {
     q.key = _buffer_keys.empty() ? "rgb" : _buffer_keys[_buffer_idx];
     q.show_cams = _show_cams;
     q.show_grid = _show_grid;
+    q.grid_dist = nav_dist();
+    for (int i = 0; i < 3; i++) q.grid_target[i] = _cam.target[i];
     q.cam_size_scale = _frustum_scale;
 }
 
@@ -323,10 +332,6 @@ void ViewportPanel::draw_controls(bool engine) {
         ImGui::SameLine();
     }
     if (ImGui::Checkbox("cameras", &_show_cams)) _dirty = true;
-    ImGui::SameLine();
-    if (ImGui::Checkbox("grid", &_show_grid)) _dirty = true;
-    help_tooltip_on_hover("Overlay the training camera frusta (during "
-                          "training, with image thumbnails once visited).");
     if (_show_cams) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110);
@@ -335,6 +340,10 @@ void ViewportPanel::draw_controls(bool engine) {
             _dirty = true;
         help_tooltip_on_hover("Camera frustum display size.");
     }
+    ImGui::SameLine();
+    if (ImGui::Checkbox("grid", &_show_grid)) _dirty = true;
+    help_tooltip_on_hover("Overlay the training camera frusta (during "
+                          "training, with image thumbnails once visited).");
     if (engine) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(66);
@@ -429,8 +438,8 @@ void ViewportPanel::draw_preview(const ImVec2& avail) {
     unsigned tex = _preview.render(W, H, view,
                                    (PreviewProjection)_cam_model,
                                    fx / (0.5f * W), fy / (0.5f * H),
-                                   _home_dist, _show_cams, _frustum_scale,
-                                   _show_grid);
+                                   _home_dist, nav_dist(), _cam.target,
+                                   _show_cams, _frustum_scale, _show_grid);
     if (!tex) {
         ImGui::TextDisabled("preview render failed");
         return;

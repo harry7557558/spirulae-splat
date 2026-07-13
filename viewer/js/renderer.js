@@ -129,7 +129,7 @@ export class Renderer {
       if (m.tex) gl.deleteTexture(m.tex);
       gl.deleteVertexArray(m.vao);
     } else if (m.type === 'dataset') {
-      for (const b of [m.ptPos,m.ptCol,m.lnApex,m.lnOff,m.lnCol]) if (b) gl.deleteBuffer(b);
+      for (const b of [m.ptPos,m.ptCol,m.lnApex,m.lnOff,m.lnCol,m.lnDelta]) if (b) gl.deleteBuffer(b);
       for (const v of [m.ptVao,m.lnVao]) if (v) gl.deleteVertexArray(v);
     }
     this.model = null;
@@ -161,8 +161,8 @@ export class Renderer {
       gl.bindVertexArray(null);
     }
 
-    // frustum line segments: aApex(0) + aOffset(1) + aColor(2)
-    let lnVao=null, lnApex=null, lnOff=null, lnCol=null;
+    // frustum line segments: aApex(0) + aOffset(1) + aColor(2) + aDelta(3)
+    let lnVao=null, lnApex=null, lnOff=null, lnCol=null, lnDelta=null;
     if (fr.count > 0) {
       lnVao = gl.createVertexArray(); gl.bindVertexArray(lnVao);
       lnApex = gl.createBuffer();
@@ -177,13 +177,17 @@ export class Renderer {
       gl.bindBuffer(gl.ARRAY_BUFFER, lnCol);
       gl.bufferData(gl.ARRAY_BUFFER, fr.colors, gl.STATIC_DRAW);
       gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+      lnDelta = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, lnDelta);
+      gl.bufferData(gl.ARRAY_BUFFER, fr.delta, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 3, gl.FLOAT, false, 0, 0);
       gl.bindVertexArray(null);
     }
 
     this.model = {
       type:'dataset',
       ptVao, ptPos, ptCol, ptCount: pts.count,
-      lnVao, lnApex, lnOff, lnCol, lnCount: fr.count, ranges: fr.ranges || [],
+      lnVao, lnApex, lnOff, lnCol, lnDelta, lnCount: fr.count, ranges: fr.ranges || [],
     };
   }
 
@@ -408,29 +412,48 @@ export class Renderer {
 
   // Grid/axes line geometry in the model's NATIVE frame (the up-axis U is
   // applied by the line shader like dataset geometry): ground plane at
-  // z=0 native, minor cells at a power of 10 from the scene radius
-  // (opts.gridSpacing, set by main.js on fit), brighter lines every 10th,
-  // positive X/Y/Z half-axes. One segment per cell edge doubles as the
-  // subdivision that keeps lines curved (and seam-discarded, LINE_FS)
-  // under the fisheye / equirectangular display cameras.
-  _ensureGrid(spacing) {
-    if (this.grid && this.grid.spacing === spacing) return;
+  // z=0 native, minor cells at a power of 10 from the current view
+  // distance (zoom-adaptive; see _drawGrid), brighter lines every 10th.
+  // The finite line patch follows the nav target (snapped to the lattice,
+  // with hysteresis) so the grid stays under the viewer at any zoom, while
+  // the positive X/Y/Z half-axes stay anchored at the native origin. Cell
+  // edges are subdivided so lines stay curved (and seam-discarded,
+  // LINE_FS) under the fisheye / equirectangular display cameras.
+  _ensureGrid(spacing, half, tx, ty) {
+    const g0 = this.grid;
+    if (g0 && g0.spacing === spacing && g0.half === half &&
+        Math.abs(tx - g0.cx) <= 0.25*half*spacing &&
+        Math.abs(ty - g0.cy) <= 0.25*half*spacing) return;
     const gl = this.gl;
-    const HALF = 20;                       // half-extent in minor cells
+    const SUB = 4;                         // sub-segments per cell edge
     const s = spacing;
+    const gx0 = Math.round(tx / s), gy0 = Math.round(ty / s);
+    const cx = gx0 * s, cy = gy0 * s;      // patch center, lattice-snapped
     const MINOR = [71, 77, 84], MAJOR = [115, 120, 128];
     const AXIS = [[250, 51, 79], [140, 219, 0], [41, 140, 250]];  // +X +Y +Z
-    const pos = [], col = [];
-    const seg = (a, b, c) => { pos.push(...a, ...b); col.push(...c, ...c); };
-    for (let i = -HALF; i <= HALF; i++) {
-      const c = (i % 10 === 0) ? MAJOR : MINOR;
-      for (let j = -HALF; j < HALF; j++) {
-        seg([i*s, j*s, 0], [i*s, (j+1)*s, 0], c);
-        seg([j*s, i*s, 0], [(j+1)*s, i*s, 0], c);
+    const pos = [], col = [], dlt = [];
+    const seg = (a, b, c) => {
+      for (let k = 0; k < SUB; k++) {
+        const t0 = k/SUB, t1 = (k+1)/SUB;
+        for (const t of [t0, t1])
+          pos.push(a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t);
+        col.push(...c, ...c);
+        // aDelta = this-endpoint minus other-endpoint (equirect seam kill)
+        const d = [(b[0]-a[0])/SUB, (b[1]-a[1])/SUB, (b[2]-a[2])/SUB];
+        dlt.push(-d[0], -d[1], -d[2], d[0], d[1], d[2]);
+      }
+    };
+    for (let i = -half; i <= half; i++) {
+      // major/minor from the GLOBAL line index, not the patch-local one
+      const cX = ((gx0 + i) % 10 === 0) ? MAJOR : MINOR;
+      const cY = ((gy0 + i) % 10 === 0) ? MAJOR : MINOR;
+      for (let j = -half; j < half; j++) {
+        seg([cx + i*s, cy + j*s, 0], [cx + i*s, cy + (j+1)*s, 0], cX);
+        seg([cx + j*s, cy + i*s, 0], [cx + (j+1)*s, cy + i*s, 0], cY);
       }
     }
     for (let a = 0; a < 3; a++)            // positive half-axes, drawn last
-      for (let j = 0; j < HALF; j++) {
+      for (let j = 0; j < half; j++) {
         const p0 = [0, 0, 0], p1 = [0, 0, 0];
         p0[a] = j*s; p1[a] = (j+1)*s;
         seg(p0, p1, AXIS[a]);
@@ -438,25 +461,34 @@ export class Renderer {
     if (!this.grid) {
       const vao = gl.createVertexArray();
       gl.bindVertexArray(vao);
-      const posBuf = gl.createBuffer(), colBuf = gl.createBuffer();
+      const posBuf = gl.createBuffer(), colBuf = gl.createBuffer(),
+            dltBuf = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
       gl.enableVertexAttribArray(0);       // aApex = the vertex position
       gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
       gl.enableVertexAttribArray(2);       // aColor
       gl.vertexAttribPointer(2, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, dltBuf);
+      gl.enableVertexAttribArray(3);       // aDelta (uDeltaScale = 1)
+      gl.vertexAttribPointer(3, 3, gl.FLOAT, false, 0, 0);
       // aOffset (attrib 1) stays a disabled array; the draw sets the
       // generic value to 0 (and uFrustumScale = 0) so pos = aApex.
       gl.bindVertexArray(null);
-      this.grid = { vao, posBuf, colBuf, count: 0, spacing: 0 };
+      this.grid = { vao, posBuf, colBuf, dltBuf, count: 0, spacing: 0, half: 0, cx: 0, cy: 0 };
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, this.grid.posBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pos), gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.grid.colBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Uint8Array(col), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.grid.dltBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(dlt), gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     this.grid.count = pos.length / 3;
     this.grid.spacing = spacing;
+    this.grid.half = half;
+    this.grid.cx = cx;
+    this.grid.cy = cy;
   }
 
   // Rasterized, depth-tested grid/axes via the dataset line pipeline
@@ -466,11 +498,19 @@ export class Renderer {
   // against the mesh / point cloud / frusta like any other geometry.
   _drawGrid(cam, viewR, camPos, U, cameraModel, w, h, opts, intoHdr) {
     const gl = this.gl;
-    this._ensureGrid(opts.gridSpacing || 1);
+    // Zoom-adaptive cell size: decade of the nav view distance (native
+    // units -- the up transform is a pure rotation); extent covers the
+    // scene radius (opts.gridRadius, set by main.js on fit) up to a cap;
+    // the patch recenters on the orbit target (native frame).
+    const s = Math.pow(10, Math.floor(Math.log10(Math.max(cam.dist(), 1e-6) / 2)));
+    const half = Math.min(100, Math.max(20, Math.ceil((opts.gridRadius || 1) / s)));
+    const tNat = mat3.mulVec(mat3.transpose(U), cam.target);
+    this._ensureGrid(s, half, tNat[0], tNat[1]);
     const { prog, u } = this._prog('line', LINE_VS, LINE_FS, { CAM_MODEL: cameraModel });
     gl.useProgram(prog);
     this._datasetUniforms(u, cam, viewR, camPos, U, w, h);
     gl.uniform1f(u.uFrustumScale, 0.0);
+    gl.uniform1f(u.uDeltaScale, 1.0);   // grid aDelta is in position units
     gl.uniform1i(u.uUseUniform, 0);
     if (intoHdr) {
       // alpha channel = transmittance: opaque lines zero it, splats occlude.
@@ -657,6 +697,7 @@ export class Renderer {
       gl.useProgram(prog);
       this._datasetUniforms(u, cam, viewR, camPos, U, w, h);
       gl.uniform1f(u.uFrustumScale, opts.frustumScale || 1.0);
+      gl.uniform1f(u.uDeltaScale, opts.frustumScale || 1.0);  // aDelta in offset units
       gl.uniform1i(u.uUseUniform, 0);
       gl.bindVertexArray(m.lnVao);
       gl.drawArrays(gl.LINES, 0, m.lnCount);
