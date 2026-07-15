@@ -10,7 +10,7 @@ export class Camera {
     this.pos = [0, 0, 3];
     this.rot = quat.identity();          // camera-to-world; camera looks down -Z
     this.target = [0, 0, 0];
-    this.fov = 60 * Math.PI / 180;       // vertical FOV (radians)
+    this.fov = 90 * Math.PI / 180;       // vertical FOV (radians)
     this.model = 'perspective';          // 'perspective' | 'orthographic'
   }
   right()   { return quat.rotVec(this.rot, [1, 0, 0]); }

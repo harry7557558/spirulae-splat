@@ -20,6 +20,8 @@
 #include <stdexcept>
 #include <thread>
 
+#include <cuda_runtime.h>
+
 namespace fs = std::filesystem;
 
 namespace ssplat {
@@ -560,7 +562,54 @@ void TrainerSession::load_dataset() {
     log(buf);
 }
 
+// Pre-flight GPU check. A binary compiled by a newer CUDA toolkit than the
+// installed driver supports links and loads fine, but every kernel launch then
+// fails -- and cudaGetErrorString can't name the resulting error, so it shows
+// up as the cryptic "CUDA Error ...: (null)". Detect the mismatch up front and
+// report it with the numbers and the fix, instead of dying deep in a kernel.
+static void check_cuda_runtime() {
+    auto fmt = [](int v) {
+        return std::to_string(v / 1000) + "." + std::to_string((v % 1000) / 10);
+    };
+    // cudaRuntimeGetVersion is answered by the statically-linked runtime and
+    // does not touch the driver -- it tells us which CUDA toolkit built this
+    // binary even when the driver is unusable.
+    int runtime_ver = 0;
+    cudaRuntimeGetVersion(&runtime_ver);
+    std::string built_with = runtime_ver ? " (this binary was built with CUDA "
+                                           + fmt(runtime_ver) + ")" : "";
+
+    // The first driver-backed call triggers lazy CUDA init; if the driver is
+    // too old for the runtime it fails here with cudaErrorInsufficientDriver
+    // instead of much later inside a kernel launch (where cudaGetErrorString
+    // returns null -> the cryptic "CUDA Error ...: (null)").
+    int dev_count = 0;
+    cudaError_t cerr = cudaGetDeviceCount(&dev_count);
+    if (cerr == cudaErrorInsufficientDriver) {
+        int driver_ver = 0;
+        cudaDriverGetVersion(&driver_ver);  // 0 if the driver is far too old
+        std::string drv = driver_ver
+            ? "The installed NVIDIA driver supports only up to CUDA "
+              + fmt(driver_ver) + "."
+            : "The installed NVIDIA driver is too old.";
+        throw std::runtime_error(
+            "NVIDIA driver too old for this build. " + drv + built_with +
+            " Update the GPU driver, or rebuild against an older CUDA toolkit that matches the driver.");
+    }
+    if (cerr != cudaSuccess) {
+        const char* s = cudaGetErrorString(cerr);
+        throw std::runtime_error(
+            std::string("CUDA initialization failed: ") +
+            (s ? s : "unknown error") + built_with +
+            ". Check the NVIDIA driver / GPU installation.");
+    }
+    if (dev_count == 0)
+        throw std::runtime_error("No CUDA-capable GPU detected.");
+}
+
 void TrainerSession::setup_engine() {
+    check_cuda_runtime();
+
     // ---- Output dir (trainer.py _setup_output_dir:524) ----------------------
     if (!cfg.output_dir_name.empty()) {
         out_dir = fs::path(cfg.output_dir_prefix) / cfg.output_dir_name;

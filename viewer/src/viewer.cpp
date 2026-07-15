@@ -904,17 +904,18 @@ KEEP uint32_t ssv_mesh_edge_count(){
 // (cx,cy,cz) = camera position, (dx,dy,dz) = unit forward, both in the
 // model's native frame. Emits far -> near for "over" blending.
 // ---------------------------------------------------------------------------
+template<int mode>
 static uint32_t* sort_positions(const float* P, uint32_t N,
-                                int mode, float cx, float cy, float cz,
+                                float cx, float cy, float cz,
                                 float dx, float dy, float dz){
     if(N==0){ g_order.clear(); return nullptr; }
     if(g_order.size()!=N) g_order.resize(N);
     auto depth=[&](uint32_t i)->float{
         float x=P[i*4], y=P[i*4+1], z=P[i*4+2];
-        if(mode==0) return x*dx+y*dy+z*dz;
+        if constexpr(mode==0) return x*dx+y*dy+z*dz;
         float rx=x-cx, ry=y-cy, rz=z-cz;
         float r2=rx*rx+ry*ry+rz*rz;
-        if(mode==1) return r2;
+        if constexpr(mode==1) return std::sqrt(r2);
         float zc=rx*dx+ry*dy+rz*dz;             // forward component
         float p2=r2-zc*zc; if(p2<0.f)p2=0.f;    // squared radial component
         float z2=zc*zc;
@@ -950,8 +951,11 @@ static uint32_t* sort_positions(const float* P, uint32_t N,
 
 KEEP uint32_t* ssv_sort(int mode, float cx, float cy, float cz,
                         float dx, float dy, float dz){
-    return sort_positions(g_splat.posop.data(), g_splat.count,
-                          mode, cx,cy,cz, dx,dy,dz);
+    return (mode == 0 ? sort_positions<0> :
+            mode == 1 ? sort_positions<1> :
+            sort_positions<2>
+        )(g_splat.posop.data(), g_splat.count,
+                          cx,cy,cz, dx,dy,dz);
 }
 
 // External-positions sort, for the sort worker: the worker runs its own
@@ -966,8 +970,11 @@ KEEP float* ssw_init(uint32_t n){
 
 KEEP uint32_t* ssw_sort(int mode, float cx, float cy, float cz,
                         float dx, float dy, float dz){
-    return sort_positions(g_wpos.data(), (uint32_t)(g_wpos.size()/4),
-                          mode, cx,cy,cz, dx,dy,dz);
+    return (mode == 0 ? sort_positions<0> :
+            mode == 1 ? sort_positions<1> :
+            sort_positions<2>
+        )(g_wpos.data(), (uint32_t)(g_wpos.size()/4),
+                          cx,cy,cz, dx,dy,dz);
 }
 
 // ---------------------------------------------------------------------------

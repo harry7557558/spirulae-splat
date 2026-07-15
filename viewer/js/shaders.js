@@ -391,6 +391,10 @@ void main() {
   if (mean2d.x+be.x < 0.0 || mean2d.x-be.x > uViewport.x ||
       mean2d.y+be.y < 0.0 || mean2d.y-be.y > uViewport.y) { cull(); return; }
 
+  // cull small splats for rendering speed
+  if (dot(be, be) < 4.0)
+     { cull(); return; }
+
   vCenterPx = mean2d;
   vec2 corner = vec2((gl_VertexID & 1) == 0 ? -1.0 : 1.0,
                      (gl_VertexID & 2) == 0 ? -1.0 : 1.0);

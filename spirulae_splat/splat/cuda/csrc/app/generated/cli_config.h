@@ -431,6 +431,7 @@ inline bool ssplat_apply_preset(SsplatConfig& c, const std::string& name) {
     if (name == "360-camera") {
         c.warp_to_pinhole = true;
         c.mask_boundary_offset = -0.025f;
+        c.primitive = "mip";
         c.long_axis_split_opacity_k = {0.5f, 0.6f, 15000.0f};
         c.input_depth_is_ray_depth = true;
         return true;

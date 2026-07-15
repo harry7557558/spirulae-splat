@@ -1044,6 +1044,7 @@ class TrainerConfig360Camera(TrainerConfig):
         mask_boundary_offset=-0.025,
     ))
     model: SpirulaeSplatModelConfig = field(default_factory=lambda: SpirulaeSplatModelConfig(
+        primitive="mip",
         # densify_score_mode="median",
         # densify_loss_map_mode="robust_edge_aware",
         # densify_robust_edge_aware_quantile=0.99,

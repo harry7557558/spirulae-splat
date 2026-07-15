@@ -59,6 +59,9 @@
 #ifndef GL_PROGRAM_POINT_SIZE
 #define GL_PROGRAM_POINT_SIZE    0x8642
 #endif
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE         0x812F
+#endif
 
 namespace glx {
 
