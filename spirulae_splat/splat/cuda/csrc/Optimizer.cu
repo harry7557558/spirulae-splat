@@ -15,6 +15,8 @@ namespace SlangPerSplatLosses {
 #include <Common.cuh>
 #include <Tensor.h>
 #include "NonShQuantState.h"
+#include "GradQuant.cuh"
+#include "ProjectionBwdQuantGrad.cuh"   // GradQuantBuffers
 #include <stdexcept>
 #include <string>
 
@@ -799,6 +801,12 @@ __global__ void fused_optim_3dgs_geometry_kernel(
     const float grad_scale,
     // Non-SH Adam-state quantization bundle. Only read when non_sh_quant is on.
     const NonShQuantState non_sh,
+    // Block-wise QUANTIZED gradient input (non-FPBO grad-quant path). For each
+    // attribute whose *_packed is non-null the per-splat grad is decoded from
+    // the codec instead of the fp32 v_* buffer (which is unallocated then);
+    // 3dgut leaves means/quats/scales null so they stay fp32. Bound index is
+    // blockIdx.x (256 splats/block, matching the encode kernel).
+    const GradQuantBuffers gq,
     const int32_t scalar_step,
     const int32_t* __restrict__ steps,
     const int64_t numel
@@ -858,13 +866,22 @@ __global__ void fused_optim_3dgs_geometry_kernel(
             erank_reg_weight_s3,
             quat_norm_reg_weight
         );
-        v_scale += grad_scale * v_scales[idx];
-        v_quat += grad_scale * v_quats[idx];
-        v_opac += grad_scale * v_opacities[idx];
+        // Data gradient: decode from the block-wise quantized grad buffer when
+        // present (3dgs/mip), else read the fp32 v_* buffer (3dgut geom / off).
+        float3 gd_scale; float4 gd_quat; float gd_opac;
+        if (gq.scales_packed) { float _v[3]; gradq::Codec<16>::decode(gq.scales_packed, (int64_t)3*idx, 3, gq.scales_bounds[blockIdx.x], _v); gd_scale = make_float3(_v[0], _v[1], _v[2]); }
+        else                  { gd_scale = v_scales[idx]; }
+        if (gq.quats_packed)  { float _v[4]; gradq::Codec<16>::decode(gq.quats_packed,  (int64_t)4*idx, 4, gq.quats_bounds[blockIdx.x],  _v); gd_quat  = make_float4(_v[0], _v[1], _v[2], _v[3]); }
+        else                  { gd_quat = v_quats[idx]; }
+        if (gq.opac_packed)   { float _v[1]; gradq::Codec<16>::decode(gq.opac_packed,   (int64_t)1*idx, 1, gq.opac_bounds[blockIdx.x],   _v); gd_opac  = _v[0]; }
+        else                  { gd_opac = v_opacities[idx]; }
+        v_scale += grad_scale * gd_scale;
+        v_quat  += grad_scale * gd_quat;
+        v_opac  += grad_scale * gd_opac;
         if constexpr (zero_grad) {
-            v_scales[idx] = make_float3(0.0f);
-            v_quats[idx] = make_float4(0.0f);
-            v_opacities[idx] = 0.0f;
+            if (!gq.scales_packed) v_scales[idx] = make_float3(0.0f);
+            if (!gq.quats_packed)  v_quats[idx] = make_float4(0.0f);
+            if (!gq.opac_packed)   v_opacities[idx] = 0.0f;
         }
 
         // update scales
@@ -935,9 +952,12 @@ __global__ void fused_optim_3dgs_geometry_kernel(
 
         // update means (scale agnostic)
         float3 mean = means[idx];
-        float3 v_mean = grad_scale * v_means[idx];
+        float3 gd_mean;
+        if (gq.means_packed) { float _v[3]; gradq::Codec<16>::decode(gq.means_packed, (int64_t)3*idx, 3, gq.means_bounds[blockIdx.x], _v); gd_mean = make_float3(_v[0], _v[1], _v[2]); }
+        else                 { gd_mean = v_means[idx]; }
+        float3 v_mean = grad_scale * gd_mean;
         if constexpr (zero_grad)
-            v_means[idx] = make_float3(0.0f);
+            if (!gq.means_packed) v_means[idx] = make_float3(0.0f);
         // densification score: ||dL/dmean_world|| * max post-exp world scale.
         // v_mean is the (1/B-scaled) batch-accumulated data gradient; `scale`
         // holds the pre-update log scales loaded above. The grad_scale factor
@@ -985,9 +1005,12 @@ __global__ void fused_optim_3dgs_geometry_kernel(
         // keeps the separate fused_adam_step launch for features_dc).
         if constexpr (non_sh_quant) {
             float3 fdc  = features_dc[idx];
-            float3 v_dc = grad_scale * v_features_dc[idx];
+            float3 gd_dc;
+            if (gq.dc_packed) { float _v[3]; gradq::Codec<16>::decode(gq.dc_packed, (int64_t)3*idx, 3, gq.dc_bounds[blockIdx.x], _v); gd_dc = make_float3(_v[0], _v[1], _v[2]); }
+            else              { gd_dc = v_features_dc[idx]; }
+            float3 v_dc = grad_scale * gd_dc;
             if constexpr (zero_grad)
-                v_features_dc[idx] = make_float3(0.0f);
+                if (!gq.dc_packed) v_features_dc[idx] = make_float3(0.0f);
             // L1-shrinkage regularization for SH/DC color: matches the
             // existing fused_adam_step(features_dc) launch's
             // l2_reg + l2_reg_offset = 0.5/kSh0 (mirror it here so non_sh_quant
@@ -1057,6 +1080,7 @@ void fused_optim_3dgs_geometry(
     const float sh_reg_weight,
     bool use_scale_agnostic_mean,
     NonShQuantState non_sh,
+    GradQuantBuffers gq,
     int32_t step, DeviceVector<int32_t> per_splat_steps,
     float grad_scale, bool zero_grad
 ) {
@@ -1077,6 +1101,7 @@ void fused_optim_3dgs_geometry(
         const float, const float, const float, const float,
         const float,
         const NonShQuantState,
+        const GradQuantBuffers,
         const int32_t, const int32_t*, const int64_t);
     KFn kfn = nullptr;
     const bool nq = non_sh.enabled;
@@ -1116,6 +1141,7 @@ void fused_optim_3dgs_geometry(
         sh_reg_weight,
         grad_scale,
         non_sh,
+        gq,
         step, per_splat_steps.data_ptr(), num_splats
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
@@ -1409,7 +1435,12 @@ void fused_adam_step_quantized(
 
 template<int BLOCK_SIZE, int OPTIM_BITS, int VALUE_BITS, bool zero_grad>
 __global__ void fused_adam_with_steps_qq_kernel(
-    float* __restrict__ grad,           // fp32 grad (still dense)
+    float* __restrict__ grad,           // fp32 grad (dense); null when grad-quant on
+    // Block-wise QUANTIZED SH grad (non-FPBO grad-quant path). When
+    // grad_q_packed != null the grad is decoded from the 8-bit codec (cell idx,
+    // per-splat-block bound at (idx/stride)/256) instead of grad[idx].
+    const uint8_t* __restrict__ grad_q_packed,
+    const float2*  __restrict__ grad_q_bounds,
     uint8_t* __restrict__ optim_packed, // optim-state packed (u, sqrt_g2)
     float4*  __restrict__ optim_bounds, // per-cell-block float4 (u_mm, sqrt_g2_mm)
     uint8_t* __restrict__ value_packed, // parameter-value packed
@@ -1442,11 +1473,17 @@ __global__ void fused_adam_with_steps_qq_kernel(
     float2 value_mm_old = inside ? value_bounds[blockIdx.x] : float2{0.f, 0.f};
     float x = inside ? QValue::decode_v(value_packed, idx, value_mm_old) : 0.0f;
 
-    float v = inside ? grad[idx] : 0.0f;
+    float v;
+    if (grad_q_packed) {
+        float2 gmm = inside ? grad_q_bounds[(idx / stride) / 256] : float2{0.f, 0.f};
+        v = inside ? gradq::Codec<8>::decode1(grad_q_packed, idx, gmm) : 0.0f;
+    } else {
+        v = inside ? grad[idx] : 0.0f;
+    }
     if (!isfinite(v))
         v = 0.0f;
     if constexpr (zero_grad) {
-        if (inside) grad[idx] = 0.0f;
+        if (inside && grad) grad[idx] = 0.0f;   // quantized grad is zeroed via _alloc_grad_buffers
     }
     v *= grad_scale;
     v += decay * (fmaxf(x - decay_offset, 0.0f) + fminf(x + decay_offset, 0.0f));
@@ -1529,7 +1566,11 @@ __global__ void fused_adam_with_steps_qq_kernel(
 void fused_adam_step_quantized_value(
     int64_t num_splats,
     int64_t param_numel,                // = num_splats * stride (e.g. 3 * num_sh)
-    DeviceTensorFloatND grad,           // fp32 dense [num_splats, stride]
+    DeviceTensorFloatND grad,           // fp32 dense [num_splats, stride]; null under grad-quant
+    // Block-wise quantized SH grad (non-FPBO grad-quant path); null keeps the
+    // fp32 `grad` read.
+    const uint8_t* grad_q_packed,
+    const float2*  grad_q_bounds,
     uint8_t* optim_packed,
     float4*  optim_bounds,
     uint8_t* value_packed,
@@ -1548,7 +1589,7 @@ void fused_adam_step_quantized_value(
     constexpr int BLOCK_SIZE = 256;
 
     #define _ARGS_TAIL_QQ \
-        grad.data_ptr(), optim_packed, optim_bounds, value_packed, value_bounds, \
+        grad.data_ptr(), grad_q_packed, grad_q_bounds, optim_packed, optim_bounds, value_packed, value_bounds, \
         lr, step, per_splat_steps.data_ptr(), \
         2.0f*l2_reg/(float)(num_splats*stride), l2_reg_offset, \
         grad_scale, \

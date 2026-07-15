@@ -61,6 +61,11 @@ static std::map<std::string, float> _engine_step_fwd_bwd_only(
     const EngineStepConfig& cfg
 ) {
     engine().optim.use_fused_proj_bwd_optim = cfg.optim.use_fused_proj_bwd_optim;
+    // Block-wise quantized gradient accumulation: only on the non-FPBO path
+    // (FPBO already avoids fp32 grad buffers) and only when quantization is on.
+    // Preserves split_batch via the projection-bwd kernel's requantize-accumulate.
+    engine().grad.quantize_grad =
+        !cfg.optim.use_fused_proj_bwd_optim && (cfg.optim.quantization_level != 0);
 
     _set_cur_cam_indices(bilagrid_cam_indices);
 
@@ -278,6 +283,11 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
     DeviceVector<float> accum_weight_sum;
     accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum, N_splats);
     accum_weight_sum.zero();
+    // Drop the previous step's re-pointed view (set below for densify): when
+    // this step's raster bwd doesn't produce accum_weight (e.g. score_blend_
+    // world_grad == 1), the stale view would otherwise pass the null check in
+    // the loop and dangle once the pool moves (densify growth, viewer render).
+    engine().fwd.accum_weight = DeviceVector<float>();
 
     std::map<std::string, float> agg;
 
@@ -410,6 +420,8 @@ std::map<std::string, float> engine_train_step_hetero(
     DeviceVector<float> accum_weight_sum;
     accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum, N_splats);
     accum_weight_sum.zero();
+    // Drop the previous step's re-pointed view (see per-sub-batch path).
+    engine().fwd.accum_weight = DeviceVector<float>();
 
     std::map<std::string, float> agg;
     int64_t kcam = 0;   // global camera index across the whole step
@@ -586,6 +598,8 @@ static std::map<std::string, float> _engine_train_step_split_warped(
     DeviceVector<float> accum_weight_sum;
     accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum, N_splats);
     accum_weight_sum.zero();
+    // Drop the previous step's re-pointed view (see per-sub-batch path).
+    engine().fwd.accum_weight = DeviceVector<float>();
 
     std::map<std::string, float> agg;
 

@@ -133,6 +133,13 @@ enum class SaveClass : uint8_t {
   X(EngVOpacities                  , "eng.v_opacities",                   Splat    , Never) \
   X(EngVFeaturesDc                 , "eng.v_features_dc",                 Splat    , Never) \
   X(EngVFeaturesSh                 , "eng.v_features_sh",                 Splat    , Never) \
+  /* ---- gradients (block-wise quantized; non-FPBO grad-quant path) ---- */ \
+  X(EngVMeansQ                     , "eng.v_means_q",                     Splat    , Never)  /* +.q/.qb */ \
+  X(EngVQuatsQ                     , "eng.v_quats_q",                     Splat    , Never)  /* +.q/.qb */ \
+  X(EngVScalesQ                    , "eng.v_scales_q",                    Splat    , Never)  /* +.q/.qb */ \
+  X(EngVOpacitiesQ                 , "eng.v_opacities_q",                 Splat    , Never)  /* +.q/.qb */ \
+  X(EngVFeaturesDcQ                , "eng.v_features_dc_q",               Splat    , Never)  /* +.q/.qb */ \
+  X(EngVFeaturesShQ                , "eng.v_features_sh_q",               Splat    , Never)  /* +.q/.qb */ \
   X(EngVRgb                        , "eng.v_rgb",                         Image    , Never) \
   X(EngVDepth                      , "eng.v_depth",                       Image    , Never) \
   X(EngVTs                         , "eng.v_Ts",                          Image    , Never) \

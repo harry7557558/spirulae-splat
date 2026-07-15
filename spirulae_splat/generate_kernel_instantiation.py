@@ -230,6 +230,29 @@ def generate_ProjectionBwd():
     generate_kernel_instantiation("ProjectionBwd", definition, map_header, map_body, includes)
 
 
+def generate_ProjectionBwdQuantGrad():
+    definition = extract_kernel_definition("ProjectionBwdQuantGrad.cu", "projection_bwd_quantgrad_kernel_wrapper")
+    map_header = ["typename SplatPrimitive", None]
+    map_body = [
+        *itertools.product(
+            [
+                "Vanilla3DGS<0>", "MipSplatting<0>", "Vanilla3DGUT<0>",
+                "Vanilla3DGS<1>", "MipSplatting<1>", "Vanilla3DGUT<1>",
+                "Vanilla3DGS<2>", "MipSplatting<2>", "Vanilla3DGUT<2>",
+                "Vanilla3DGS<3>", "MipSplatting<3>", "Vanilla3DGUT<3>",
+                "Vanilla3DGS<4>", "MipSplatting<4>", "Vanilla3DGUT<4>",
+            ],
+            ["CameraModelType::PINHOLE", "CameraModelType::FISHEYE", "CameraModelType::EQUISOLID", "CameraModelType::EQUIRECTANGULAR"],
+        )
+    ]
+    includes = [*(
+        [("Primitive3DGS.cuh", "ProjectionBwdQuantGrad_kernel.cuh")] * 8 +
+        [("Primitive3DGUT.cuh", "ProjectionBwdQuantGrad_kernel.cuh")] * 4
+    )] * 5
+
+    generate_kernel_instantiation("ProjectionBwdQuantGrad", definition, map_header, map_body, includes)
+
+
 def generate_FusedProjectionBwdOptim():
     definition = extract_kernel_definition("FusedProjectionBwdOptim.cu", "fused_projection_bwd_optimizer_3dgs_kernel_wrapper")
     # Six template args: SplatPrimitive, camera_model,
@@ -338,6 +361,7 @@ def generate_RasterizationEval3DBwd():
 
 generate_ProjectionFwd()
 generate_ProjectionBwd()
+generate_ProjectionBwdQuantGrad()
 generate_FusedProjectionBwdOptim()
 generate_RasterizationFwd()
 generate_RasterizationBwd()

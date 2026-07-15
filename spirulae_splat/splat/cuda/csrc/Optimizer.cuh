@@ -2,6 +2,7 @@
 
 #include <Tensor.h>
 #include "NonShQuantState.h"
+#include "ProjectionBwdQuantGrad.cuh"   // GradQuantBuffers
 
 
 /* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */
@@ -137,6 +138,7 @@ void fused_optim_3dgs_geometry(
     const float sh_reg_weight,
     bool use_scale_agnostic_mean,
     NonShQuantState non_sh,
+    GradQuantBuffers gq,
     int32_t step, DeviceVector<int32_t> per_splat_steps,
     float grad_scale, bool zero_grad
 );
@@ -182,7 +184,11 @@ void fused_adam_step_quantized(
 void fused_adam_step_quantized_value(
     int64_t num_splats,
     int64_t param_numel,                // = num_splats * stride (e.g. 3 * num_sh)
-    DeviceTensorFloatND grad,           // fp32 dense [num_splats, stride]
+    DeviceTensorFloatND grad,           // fp32 dense [num_splats, stride]; null under grad-quant
+    // Block-wise quantized SH grad (non-FPBO grad-quant path); null keeps the
+    // fp32 `grad` read.
+    const uint8_t* grad_q_packed,
+    const float2*  grad_q_bounds,
     uint8_t* optim_packed,
     float4*  optim_bounds,
     uint8_t* value_packed,

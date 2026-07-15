@@ -7,6 +7,7 @@
 
 #include "BilagridBindings.h"
 #include "ProjectionBwd.cuh"
+#include "ProjectionBwdQuantGrad.cuh"
 #include "RasterizationBwd.cuh"
 
 #include <algorithm>
@@ -47,6 +48,64 @@ static void _alloc_grad_buffers() {
         engine().grad.features_sh  = DeviceTensor2D<float3>();
         return;
     }
+
+    // Block-wise quantized gradient accumulation (non-FPBO, grad-quant path).
+    // Per-splat-block bounds: one float2 per 256 splats (n_bounds = ceil(N/256)).
+    // 3dgs/mip quantize all six attributes; 3dgut keeps means/quats/scales fp32
+    // (they receive rasterization-backward atomicAdds) and quantizes the rest.
+    // Zeroing is skip_grad_zero-gated (first sub-batch only); the projection-bwd
+    // kernel then decode-accumulates each sub-batch. Zero bounds -> decode 0.
+    if (engine().grad.quantize_grad) {
+        const bool is_gut = (engine().primitive == "3dgut");
+        const int64_t n_bounds = (N + 255) / 256;
+        const bool skip_zero = engine().optim.skip_grad_zero;
+
+        if (is_gut) {
+            engine().grad.means.resize(PoolSlot::EngVMeans, N);
+            engine().grad.quats.resize(PoolSlot::EngVQuats, N);
+            engine().grad.scales.resize(PoolSlot::EngVScales, N);
+            engine().grad.means_q  = QuantizedTensor<16, 256>();
+            engine().grad.quats_q  = QuantizedTensor<16, 256>();
+            engine().grad.scales_q = QuantizedTensor<16, 256>();
+            if (!skip_zero) {
+                engine().grad.means.zero();
+                engine().grad.quats.zero();
+                engine().grad.scales.zero();
+            }
+        } else {
+            engine().grad.means  = DeviceVector<float3>();
+            engine().grad.quats  = DeviceVector<float4>();
+            engine().grad.scales = DeviceVector<float3>();
+            engine().grad.means_q .resize(PoolSlot::EngVMeansQ,  (int64_t)N * 3, n_bounds);
+            engine().grad.quats_q .resize(PoolSlot::EngVQuatsQ,  (int64_t)N * 4, n_bounds);
+            engine().grad.scales_q.resize(PoolSlot::EngVScalesQ, (int64_t)N * 3, n_bounds);
+            if (!skip_zero) {
+                engine().grad.means_q.zero();
+                engine().grad.quats_q.zero();
+                engine().grad.scales_q.zero();
+            }
+        }
+        engine().grad.opacities   = DeviceVector<float>();
+        engine().grad.features_dc = DeviceVector<float3>();
+        engine().grad.features_sh = DeviceTensor2D<float3>();
+        engine().grad.opacities_q  .resize(PoolSlot::EngVOpacitiesQ,  (int64_t)N * 1, n_bounds);
+        engine().grad.features_dc_q.resize(PoolSlot::EngVFeaturesDcQ, (int64_t)N * 3, n_bounds);
+        engine().grad.features_sh_q.resize(PoolSlot::EngVFeaturesShQ, (int64_t)N * K * 3, n_bounds);
+        if (!skip_zero) {
+            engine().grad.opacities_q.zero();
+            engine().grad.features_dc_q.zero();
+            engine().grad.features_sh_q.zero();
+        }
+        return;
+    }
+
+    // Non-quantized fp32 grad path. Release any quantized holders (mode switch).
+    engine().grad.means_q       = QuantizedTensor<16, 256>();
+    engine().grad.quats_q       = QuantizedTensor<16, 256>();
+    engine().grad.scales_q      = QuantizedTensor<16, 256>();
+    engine().grad.opacities_q   = QuantizedTensor<16, 256>();
+    engine().grad.features_dc_q = QuantizedTensor<16, 256>();
+    engine().grad.features_sh_q = QuantizedTensor<8,  256>();
 
     engine().grad.means.resize(PoolSlot::EngVMeans, N);
     engine().grad.quats.resize(PoolSlot::EngVQuats, N);
@@ -120,8 +179,13 @@ static void _engine_raster_proj_backward(
     //   - fused + 3dgut: mean/quat/scale slots are real (raster_*_bwd atomic-
     //     adds them); opacity/dc/sh slots are null (those flow via screen or
     //     are accumulated inside the FPBO kernel).
+    //   - grad-quant (non-fused, quantized grad): same raster handoff as fused
+    //     -- 3dgs/mip empty (screen-only), 3dgut mean/quat/scale into the fp32
+    //     world buffer; the projection contribution is folded in by the
+    //     requantize-accumulate projection-bwd kernel below.
+    const bool grad_q = engine().grad.quantize_grad;
     std::vector<DeviceTensorFloatND> v_splats_w;
-    if (!engine().optim.use_fused_proj_bwd_optim) {
+    if (!engine().optim.use_fused_proj_bwd_optim && !grad_q) {
         DeviceTensorFloatND v_fnd_opac;
         {
             TorchTensorView opac_tv((uint64_t)engine().grad.opacities.data_ptr(), 4,
@@ -255,7 +319,33 @@ static void _engine_raster_proj_backward(
                 sh_bounds_stride = 256;
             }
         }
-        if (engine().primitive == "3dgs") {
+        // Grad-quant path: non-atomic, block-wise quantized requantize-accumulate
+        // projection backward. Reads/writes engine().grad.*_q (per-splat-block);
+        // for 3dgut, means/quats/scales are the fp32 v_splats_w_out (raster's
+        // world contribution) that the kernel adds the projection grad onto.
+        if (grad_q) {
+            GradQuantBuffers gq;
+            auto& g = engine().grad;
+            if (g.means_q.initialized())       { gq.means_packed  = g.means_q.packed_ptr();       gq.means_bounds  = g.means_q.bounds_ptr(); }
+            if (g.quats_q.initialized())       { gq.quats_packed  = g.quats_q.packed_ptr();       gq.quats_bounds  = g.quats_q.bounds_ptr(); }
+            if (g.scales_q.initialized())      { gq.scales_packed = g.scales_q.packed_ptr();      gq.scales_bounds = g.scales_q.bounds_ptr(); }
+            if (g.opacities_q.initialized())   { gq.opac_packed   = g.opacities_q.packed_ptr();   gq.opac_bounds   = g.opacities_q.bounds_ptr(); }
+            if (g.features_dc_q.initialized()) { gq.dc_packed     = g.features_dc_q.packed_ptr(); gq.dc_bounds     = g.features_dc_q.bounds_ptr(); }
+            if (g.features_sh_q.initialized()) { gq.sh_packed     = g.features_sh_q.packed_ptr(); gq.sh_bounds     = g.features_sh_q.bounds_ptr(); }
+            auto call_qg = [&](auto fn) {
+                fn(engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
+                   _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
+                   (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
+                   engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                   engine().fwd.camera_ids, engine().fwd.gaussian_ids, engine().fwd.aabb,
+                   v_splats_s_out, v_splats_w_out, gq,
+                   vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
+            };
+            if (engine().primitive == "3dgs")       call_qg(projection_3dgs_backward_quantgrad);
+            else if (engine().primitive == "mip")   call_qg(projection_mip_backward_quantgrad);
+            else if (engine().primitive == "3dgut") call_qg(projection_3dgut_backward_quantgrad);
+            else throw std::runtime_error("grad-quant projection backward: unknown primitive: " + engine().primitive);
+        } else if (engine().primitive == "3dgs") {
             projection_3dgs_backward(
                 engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
                 _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
@@ -301,6 +391,9 @@ void engine_backward_from_render_grad(
     if (std::get<0>(engine().fwd.renders).data_ptr() == nullptr)
         throw std::runtime_error("engine_backward_from_render_grad: forward_3dgs must be called first");
 
+    // Cotangent-injection / grad-readback path: keep grad fp32 so host readback
+    // (engine_copy_grads_to_host) sees dense buffers, not the packed codec.
+    engine().grad.quantize_grad = false;
     _alloc_grad_buffers();
 
     int64_t C = engine().camera.num;

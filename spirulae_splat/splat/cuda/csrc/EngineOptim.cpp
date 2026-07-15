@@ -547,6 +547,20 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
         engine().fwd.world_grad_score = DeviceVector<float>();
     }
 
+    // Block-wise quantized gradient input (non-FPBO grad-quant path). Populated
+    // per attribute from engine().grad.*_q; a null *_packed makes the geometry
+    // kernel read the fp32 v_* buffer for that attribute (3dgut means/quats/
+    // scales, or grad-quant off).
+    GradQuantBuffers grad_q;
+    {
+        auto& g = engine().grad;
+        if (g.means_q.initialized())       { grad_q.means_packed  = g.means_q.packed_ptr();       grad_q.means_bounds  = g.means_q.bounds_ptr(); }
+        if (g.quats_q.initialized())       { grad_q.quats_packed  = g.quats_q.packed_ptr();       grad_q.quats_bounds  = g.quats_q.bounds_ptr(); }
+        if (g.scales_q.initialized())      { grad_q.scales_packed = g.scales_q.packed_ptr();      grad_q.scales_bounds = g.scales_q.bounds_ptr(); }
+        if (g.opacities_q.initialized())   { grad_q.opac_packed   = g.opacities_q.packed_ptr();   grad_q.opac_bounds   = g.opacities_q.bounds_ptr(); }
+        if (g.features_dc_q.initialized()) { grad_q.dc_packed     = g.features_dc_q.packed_ptr(); grad_q.dc_bounds     = g.features_dc_q.bounds_ptr(); }
+    }
+
     fused_optim_3dgs_geometry(
         N,
         engine().world.means,     engine().grad.means,     engine().optim.g1_means,     engine().optim.g2_means,
@@ -564,6 +578,7 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
         cfg.sh_reg_weight,
         cfg.use_scale_agnostic_mean,
         non_sh_optim,
+        grad_q,
         step + 1, per_splat_steps,
         grad_scale, zero_grad
     );
@@ -610,6 +625,15 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
     // Value-quant + optim-fp32 is rejected at _ensure_optim_state.
     // SH-quant + TR is not supported (TR kernels need fp32 g1/g2), so the
     // doubly-quant and singly-quant paths ignore use_color_trust_region.
+    // Block-wise quantized SH grad (non-FPBO grad-quant path). Null keeps the
+    // fp32 grad read; when set, the doubly-quantized kernel decodes SH grad
+    // from the 8-bit codec (per-splat-block bound) instead of dense features_sh.
+    const uint8_t* sh_grad_q_packed = nullptr;
+    const float2*  sh_grad_q_bounds = nullptr;
+    if (engine().grad.quantize_grad && engine().grad.features_sh_q.initialized()) {
+        sh_grad_q_packed = engine().grad.features_sh_q.packed_ptr();
+        sh_grad_q_bounds = engine().grad.features_sh_q.bounds_ptr();
+    }
     if (cfg.sh_value_bits != 32
         && engine().world.features_sh_quant8.initialized()) {
         // 8-bit value + (4 or 8)-bit optim; canonical SH value lives in the
@@ -618,6 +642,7 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
             N,
             (int64_t)N * (int64_t)engine().num_sh * 3LL,
             DeviceTensorFloatND(engine().grad.features_sh),
+            sh_grad_q_packed, sh_grad_q_bounds,
             engine().optim.sh_quant_state.packed_ptr(),
             engine().optim.sh_quant_state.bounds_ptr(),
             engine().world.features_sh_quant8.packed_ptr(),
@@ -633,6 +658,7 @@ void engine_optim_step(int step, const OptimConfig& cfg) {
             N,
             (int64_t)N * (int64_t)engine().num_sh * 3LL,
             DeviceTensorFloatND(engine().grad.features_sh),
+            sh_grad_q_packed, sh_grad_q_bounds,
             engine().optim.sh_quant_state.packed_ptr(),
             engine().optim.sh_quant_state.bounds_ptr(),
             engine().world.features_sh_quant16.packed_ptr(),
