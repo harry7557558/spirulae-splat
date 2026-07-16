@@ -113,6 +113,7 @@ struct MeshData {
 static SplatData g_splat;
 static MeshData  g_mesh;
 static std::vector<uint32_t> g_order;   // sorted splat indices
+static std::vector<float> g_depths;
 static std::vector<float> g_bins;       // histogram output
 static float g_minmax[2];
 static int g_last_kind = 0;             // 0 none, 1 splat, 2 mesh
@@ -908,8 +909,9 @@ template<int mode>
 static uint32_t* sort_positions(const float* P, uint32_t N,
                                 float cx, float cy, float cz,
                                 float dx, float dy, float dz){
-    if(N==0){ g_order.clear(); return nullptr; }
+    if(N==0){ g_order.clear(); g_depths.clear(); return nullptr; }
     if(g_order.size()!=N) g_order.resize(N);
+    if(g_depths.size()!=N) g_depths.resize(N);
     auto depth=[&](uint32_t i)->float{
         float x=P[i*4], y=P[i*4+1], z=P[i*4+2];
         if constexpr(mode==0) return x*dx+y*dy+z*dz;
@@ -925,7 +927,12 @@ static uint32_t* sort_positions(const float* P, uint32_t N,
     float mn=1e30f, mx=-1e30f;
     for(uint32_t i=0;i<N;i++){
         float d=depth(i);
+        if constexpr(mode==0)
+            d = copysignf(std::sqrt(fabsf(d)), d);
+        else
+            d = std::sqrt(d);
         if(d<mn)mn=d; if(d>mx)mx=d;
+        g_depths[i] = d;
     }
     float range=mx-mn; if(range<1e-12f)range=1e-12f;
     const int B=65536;
@@ -933,7 +940,7 @@ static uint32_t* sort_positions(const float* P, uint32_t N,
     static std::vector<uint16_t> key; if(key.size()!=N) key.resize(N);
     float scale=(B-1)/range;
     for(uint32_t i=0;i<N;i++){
-        float d=depth(i);
+        float d=g_depths[i];
         int q=(int)((d-mn)*scale);
         if(q<0)q=0; if(q>=B)q=B-1;
         // reverse so that farthest (largest d) comes first
