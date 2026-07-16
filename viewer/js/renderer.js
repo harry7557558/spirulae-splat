@@ -192,18 +192,30 @@ export class Renderer {
   }
 
   // ---- splat model ----
-  // data.posop is f32; quat/scale/fdc/sh are half floats (Uint16Array views)
-  // and upload directly as HALF_FLOAT with no conversion or padding.
+  // data.posop is f32; quat/scale/fdc are half floats (Uint16Array views) and
+  // upload directly as HALF_FLOAT with no conversion or padding; scale.w is
+  // the per-splat SH quantization scale. sh is snorm8 (Int8Array views,
+  // RGB8_SNORM textures) — half the VRAM of the former f16 SH.
+  // Returns true on success, or 'oom-sh' if the GPU ran out of memory during
+  // the SH upload (everything freed; the caller may reduce the SH degree and
+  // retry). Base-attribute OOM throws — there is no smaller model to fall
+  // back to.
   setSplat(data) {
     this._freeModel();
     const gl = this.gl;
+    while (gl.getError() !== gl.NO_ERROR) {}   // drain stale error flags
     const N = data.count;
     const maxLayers = gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS);
     const lay = layout(N, this.maxTex, maxLayers);
     const posT   = uploadLayered(gl, data.posop, N, 4, gl.RGBA32F, gl.RGBA, gl.FLOAT,      lay.W, lay.H, lay.L);
     const rotT   = uploadLayered(gl, data.quat,  N, 4, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, lay.W, lay.H, lay.L);
-    const scaleT = uploadLayered(gl, data.scale, N, 3, gl.RGB16F,  gl.RGB,  gl.HALF_FLOAT, lay.W, lay.H, lay.L);
+    const scaleT = uploadLayered(gl, data.scale, N, 4, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, lay.W, lay.H, lay.L);
     const colT   = uploadLayered(gl, data.fdc,   N, 3, gl.RGB16F,  gl.RGB,  gl.HALF_FLOAT, lay.W, lay.H, lay.L);
+    const baseT = [posT, rotT, scaleT, colT];
+    if (gl.getError() !== gl.NO_ERROR) {
+      for (const t of baseT) gl.deleteTexture(t);
+      throw new Error('out of GPU memory (splat attributes)');
+    }
 
     // SH is by far the largest attribute; split it across up to 4 textures by
     // layer ranges so no single GL resource exceeds ~512MB (SwiftShader's
@@ -212,7 +224,7 @@ export class Renderer {
     if (data.shRest > 0 && data.sh && data.sh.length) {
       const K = data.shRest, M = N*K;
       shLay = layout(M, this.maxTex, maxLayers);
-      const layerBytes = shLay.W * shLay.H * 8;          // RGB16F is stored padded
+      const layerBytes = shLay.W * shLay.H * 4;          // RGB8 is stored padded
       const nChunks = Math.min(4, Math.max(1, Math.ceil(shLay.L * layerBytes / (512 << 20))));
       shChunkLayers = Math.ceil(shLay.L / nChunks);
       shT = [];
@@ -221,7 +233,11 @@ export class Renderer {
         const t0 = l0 * shLay.W * shLay.H;
         const cnt = Math.min(M - t0, shLay.W * shLay.H * Lc);
         shT.push(uploadLayered(gl, data.sh.subarray(t0*3), cnt, 3,
-                               gl.RGB16F, gl.RGB, gl.HALF_FLOAT, shLay.W, shLay.H, Lc));
+                               gl.RGB8_SNORM, gl.RGB, gl.BYTE, shLay.W, shLay.H, Lc));
+        if (gl.getError() !== gl.NO_ERROR) {
+          for (const t of [...baseT, ...shT]) gl.deleteTexture(t);
+          return 'oom-sh';
+        }
       }
     }
 
@@ -242,6 +258,7 @@ export class Renderer {
       type:'splat', count:N, shDegree:data.shDegree, shRest:data.shRest,
       posT, rotT, scaleT, colT, shT, shChunkLayers, lay, shLay, indexBuf, vao,
     };
+    return true;
   }
 
   updateSplatOrder(orderU32) {

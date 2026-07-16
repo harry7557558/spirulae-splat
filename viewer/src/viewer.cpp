@@ -78,15 +78,28 @@ static inline float h2f(uint16_t h) {
     float f; memcpy(&f, &x, 4); return f;
 }
 
+// ---- signed 8-bit quantization of the rest SH coefficients (GPU SNORM:
+// decode = max(v/127, -1)). Quantized Gaussian-wise: one f16 scale per splat
+// (the max |coeff|), each coeff an int8. Halves SH memory again vs f16 —
+// for a 40M-splat SH2 model the SH texture drops from 2.5GB to 1.26GB. ----
+static inline int8_t q8(float v, float inv_scale) {
+    float q = v * inv_scale * 127.0f;
+    int i = (int)(q >= 0.0f ? q + 0.5f : q - 0.5f);
+    if (i > 127) i = 127; if (i < -127) i = -127;
+    return (int8_t)i;
+}
+
 struct SplatData {
     uint32_t count = 0;
     int sh_degree = 0;            // 0..4
     int sh_rest = 0;              // rest coeffs per channel K (0,3,8,15,24)
     std::vector<float> posop;     // count*4 : x,y,z, opacity(sigmoid) — f32
     std::vector<uint16_t> quat;   // count*4 : x,y,z,w (normalized) — f16
-    std::vector<uint16_t> scale;  // count*3 : exp(log_scale) world — f16
+    std::vector<uint16_t> scale;  // count*4 : exp(log_scale) world — f16;
+                                  //   [3] = per-splat SH quantization scale
     std::vector<uint16_t> fdc;    // count*3 : raw f_dc — f16
-    std::vector<uint16_t> sh;     // count*sh_rest*3 : [coeff][channel] — f16
+    std::vector<int8_t> sh;       // count*sh_rest*3 : [coeff][channel] —
+                                  //   snorm8, x scale[i*4+3]
     void clear() {
         count = 0; sh_degree = 0; sh_rest = 0;
         posop.clear(); quat.clear(); scale.clear(); fdc.clear(); sh.clear();
@@ -294,7 +307,7 @@ static bool splat_ctx_init(SplatRecCtx& ctx, const PlyElem& ve) {
     ctx.K=K_OF_DEG[g_splat.sh_degree];
     g_splat.sh_rest=ctx.K;
     g_splat.posop.resize(N*4); g_splat.quat.resize(N*4);
-    g_splat.scale.resize(N*3); g_splat.fdc.resize(N*3);
+    g_splat.scale.resize(N*4); g_splat.fdc.resize(N*3);
     if(ctx.K>0) g_splat.sh.assign((size_t)N*ctx.K*3, 0);
     ctx.ix=gi("x"); ctx.iy=gi("y"); ctx.iz=gi("z");
     ctx.io=has("opacity")?gi("opacity"):gi("alpha");
@@ -308,22 +321,41 @@ static bool splat_ctx_init(SplatRecCtx& ctx, const PlyElem& ve) {
     return ctx.ix>=0 && ctx.iy>=0 && ctx.iz>=0 && stride>0;
 }
 
+// quat: input wxyz (rot_0=w), stored xyzw normalized f16
+static inline void splat_store_quat(uint64_t i, float qw, float qx, float qy, float qz){
+    float qn=std::sqrt(qx*qx+qy*qy+qz*qz+qw*qw); if(qn<1e-12f)qn=1.f;
+    g_splat.quat[i*4+0]=f2h(qx/qn); g_splat.quat[i*4+1]=f2h(qy/qn);
+    g_splat.quat[i*4+2]=f2h(qz/qn); g_splat.quat[i*4+3]=f2h(qw/qn);
+}
+// rest SH for one splat, [coeff][channel] floats: Gaussian-wise 8-bit quantize
+// against the (f16-rounded) max |coeff|, scale into scale[i*4+3]
+static inline void splat_store_sh(uint64_t i, int K, const float* r){
+    float mx=0.f;
+    for (int k=0;k<K*3;k++){
+        float a=std::fabs(r[k]);
+        if (a<1e18f && a>mx) mx=a;    // ignore inf/NaN garbage coeffs
+    }
+    uint16_t sh_h = f2h(mx);
+    g_splat.scale[i*4+3] = sh_h;
+    float s = h2f(sh_h);
+    float inv = s>0.f ? 1.0f/s : 0.f;
+    int8_t* dst = &g_splat.sh[(size_t)i*K*3];
+    for (int k=0;k<K*3;k++) dst[k]=q8(r[k],inv);
+}
+
 static inline void splat_parse_record(const SplatRecCtx& c, const uint8_t* rec, uint64_t i){
     g_splat.posop[i*4+0]=(float)c.rd(rec,c.ix);
     g_splat.posop[i*4+1]=(float)c.rd(rec,c.iy);
     g_splat.posop[i*4+2]=(float)c.rd(rec,c.iz);
     g_splat.posop[i*4+3]= c.io>=0 ? sigmoidf((float)c.rd(rec,c.io)) : 1.0f;
-    // quat stored wxyz (rot_0=w). Output xyzw normalized (f16).
-    float qw= c.ir0>=0?(float)c.rd(rec,c.ir0):1.f;
-    float qx= c.ir1>=0?(float)c.rd(rec,c.ir1):0.f;
-    float qy= c.ir2>=0?(float)c.rd(rec,c.ir2):0.f;
-    float qz= c.ir3>=0?(float)c.rd(rec,c.ir3):0.f;
-    float qn=std::sqrt(qx*qx+qy*qy+qz*qz+qw*qw); if(qn<1e-12f)qn=1.f;
-    g_splat.quat[i*4+0]=f2h(qx/qn); g_splat.quat[i*4+1]=f2h(qy/qn);
-    g_splat.quat[i*4+2]=f2h(qz/qn); g_splat.quat[i*4+3]=f2h(qw/qn);
-    g_splat.scale[i*3+0]= f2h(c.is0>=0?std::exp((float)c.rd(rec,c.is0)):1.f);
-    g_splat.scale[i*3+1]= f2h(c.is1>=0?std::exp((float)c.rd(rec,c.is1)):1.f);
-    g_splat.scale[i*3+2]= f2h(c.is2>=0?std::exp((float)c.rd(rec,c.is2)):1.f);
+    splat_store_quat(i,
+        c.ir0>=0?(float)c.rd(rec,c.ir0):1.f,
+        c.ir1>=0?(float)c.rd(rec,c.ir1):0.f,
+        c.ir2>=0?(float)c.rd(rec,c.ir2):0.f,
+        c.ir3>=0?(float)c.rd(rec,c.ir3):0.f);
+    g_splat.scale[i*4+0]= f2h(c.is0>=0?std::exp((float)c.rd(rec,c.is0)):1.f);
+    g_splat.scale[i*4+1]= f2h(c.is1>=0?std::exp((float)c.rd(rec,c.is1)):1.f);
+    g_splat.scale[i*4+2]= f2h(c.is2>=0?std::exp((float)c.rd(rec,c.is2)):1.f);
     if (c.has_fdc){
         g_splat.fdc[i*3+0]=f2h((float)c.rd(rec,c.id0));
         g_splat.fdc[i*3+1]=f2h((float)c.rd(rec,c.id1));
@@ -337,12 +369,14 @@ static inline void splat_parse_record(const SplatRecCtx& c, const uint8_t* rec, 
     if (c.K>0){
         // PLY rest is channel-major with the FILE's per-channel count:
         // [Kf red][Kf green][Kf blue]
+        float r[24*3];
         for (int ch=0;ch<3;ch++)
             for (int k=0;k<c.K;k++){
                 int src=c.irest[ch*c.Kf+k];
-                g_splat.sh[((size_t)i*c.K+k)*3+ch]= f2h(src>=0?(float)c.rd(rec,src):0.f);
+                r[k*3+ch]= src>=0?(float)c.rd(rec,src):0.f;
             }
-    }
+        splat_store_sh(i, c.K, r);
+    } else g_splat.scale[i*4+3]=0;
 }
 
 static bool parse_splat_ply(const uint8_t* data, size_t len, const PlyHeader& h,
@@ -352,7 +386,7 @@ static bool parse_splat_ply(const uint8_t* data, size_t len, const PlyHeader& h,
     g_splat.count = (uint32_t)N;
     g_splat.posop.resize(N*4);
     g_splat.quat.resize(N*4);
-    g_splat.scale.resize(N*3);
+    g_splat.scale.resize(N*4);
     g_splat.fdc.resize(N*3);
 
     // Map property name -> index within the vertex record.
@@ -401,14 +435,17 @@ static bool parse_splat_ply(const uint8_t* data, size_t len, const PlyHeader& h,
             g_splat.posop[i*4+3]= (has("opacity")||has("alpha")) ? sigmoidf((float)(has("opacity")?v("opacity"):v("alpha"))) : 1.0f;
             float qw=(float)v("rot_0"),qx=(float)v("rot_1"),qy=(float)v("rot_2"),qz=(float)v("rot_3");
             if(!has("rot_0")){qw=1;qx=qy=qz=0;}
-            float qn=std::sqrt(qx*qx+qy*qy+qz*qz+qw*qw); if(qn<1e-12f)qn=1.f;
-            g_splat.quat[i*4+0]=f2h(qx/qn);g_splat.quat[i*4+1]=f2h(qy/qn);g_splat.quat[i*4+2]=f2h(qz/qn);g_splat.quat[i*4+3]=f2h(qw/qn);
-            g_splat.scale[i*3+0]=f2h(has("scale_0")?std::exp((float)v("scale_0")):1.f);
-            g_splat.scale[i*3+1]=f2h(has("scale_1")?std::exp((float)v("scale_1")):1.f);
-            g_splat.scale[i*3+2]=f2h(has("scale_2")?std::exp((float)v("scale_2")):1.f);
+            splat_store_quat(i,qw,qx,qy,qz);
+            g_splat.scale[i*4+0]=f2h(has("scale_0")?std::exp((float)v("scale_0")):1.f);
+            g_splat.scale[i*4+1]=f2h(has("scale_1")?std::exp((float)v("scale_1")):1.f);
+            g_splat.scale[i*4+2]=f2h(has("scale_2")?std::exp((float)v("scale_2")):1.f);
             if(has_fdc){g_splat.fdc[i*3+0]=f2h((float)v("f_dc_0"));g_splat.fdc[i*3+1]=f2h((float)v("f_dc_1"));g_splat.fdc[i*3+2]=f2h((float)v("f_dc_2"));}
             else if(has_rgb){g_splat.fdc[i*3+0]=f2h(((float)v("red")/255.f-0.5f)/SH_C0);g_splat.fdc[i*3+1]=f2h(((float)v("green")/255.f-0.5f)/SH_C0);g_splat.fdc[i*3+2]=f2h(((float)v("blue")/255.f-0.5f)/SH_C0);}
-            if(K>0){for(int c=0;c<3;c++)for(int k=0;k<K;k++){g_splat.sh[((size_t)i*K+k)*3+c]=f2h((float)v(("f_rest_"+std::to_string(c*Kf+k)).c_str()));}}
+            if(K>0){
+                float r[24*3];
+                for(int c=0;c<3;c++)for(int k=0;k<K;k++) r[k*3+c]=(float)v(("f_rest_"+std::to_string(c*Kf+k)).c_str());
+                splat_store_sh(i,K,r);
+            } else g_splat.scale[i*4+3]=0;
         }
         return true;
     }
@@ -688,6 +725,116 @@ static bool parse_obj(const uint8_t* data, size_t len) {
 }
 
 // ---------------------------------------------------------------------------
+// Morton (Z-order) reorder of the parsed splats. PLYs from training come in
+// densification order — effectively random in space — so the depth-sorted
+// draw order fetches attribute texels scattered across multi-GB textures.
+// Reordering by a 30-bit Morton code makes splats that are close in space
+// close in the textures: depth-sorted rendering and the counting sort then
+// touch memory coherently (GPU texture cache + CPU cache). The quantization
+// box is median-centered so far-away outlier splats can't squash the grid.
+// ---------------------------------------------------------------------------
+static inline uint32_t morton_expand10(uint32_t x){   // 10 bits -> every 3rd bit
+    x &= 0x3ffu;
+    x = (x | (x << 16)) & 0x030000ffu;
+    x = (x | (x <<  8)) & 0x0300f00fu;
+    x = (x | (x <<  4)) & 0x030c30c3u;
+    x = (x | (x <<  2)) & 0x09249249u;
+    return x;
+}
+
+static void splat_morton_reorder(){
+    const uint32_t N = g_splat.count;
+    if (N < 4096) return;                 // fits in cache anyway
+    const float* P = g_splat.posop.data();
+    // robust box: per-axis median center (subsampled), radius = 4x median
+    // distance (see ssv_fit_sphere); outliers clamp to the box faces
+    float c[3]; float R;
+    {
+        const uint32_t MAXS = 1u<<19;
+        uint32_t step = (N + MAXS - 1) / MAXS; if (step < 1) step = 1;
+        std::vector<float> tmp; tmp.reserve((N + step - 1) / step);
+        for (int k = 0; k < 3; k++) {
+            tmp.clear();
+            for (uint32_t i = 0; i < N; i += step) tmp.push_back(P[(size_t)i*4+k]);
+            std::nth_element(tmp.begin(), tmp.begin()+tmp.size()/2, tmp.end());
+            c[k] = tmp[tmp.size()/2];
+        }
+        tmp.clear();
+        for (uint32_t i = 0; i < N; i += step) {
+            float dx=P[(size_t)i*4]-c[0], dy=P[(size_t)i*4+1]-c[1], dz=P[(size_t)i*4+2]-c[2];
+            tmp.push_back(dx*dx+dy*dy+dz*dz);
+        }
+        std::nth_element(tmp.begin(), tmp.begin()+tmp.size()/2, tmp.end());
+        R = 4.0f * std::sqrt(tmp[tmp.size()/2]);
+        if (!(R > 0.f)) return;           // degenerate (all points coincide)
+    }
+    // 30-bit morton codes (10 bits/axis over the clamped box)
+    std::vector<uint32_t> code(N), order(N), tmpo(N);
+    const float inv = 1024.0f / (2.0f * R);
+    for (uint32_t i = 0; i < N; i++) {
+        uint32_t m = 0;
+        for (int k = 0; k < 3; k++) {
+            float t = (P[(size_t)i*4+k] - (c[k] - R)) * inv;
+            int q = (int)t;
+            if (q < 0) q = 0; if (q > 1023) q = 1023;
+            m |= morton_expand10((uint32_t)q) << k;
+        }
+        code[i] = m; order[i] = i;
+    }
+    // stable LSD radix sort of `order` by code (4x8-bit passes, ping-pong)
+    {
+        std::vector<uint32_t> cnt(257);
+        uint32_t *a = order.data(), *b = tmpo.data();
+        for (int p = 0; p < 4; p++) {
+            std::fill(cnt.begin(), cnt.end(), 0u);
+            const int sh = p*8;
+            for (uint32_t i = 0; i < N; i++) cnt[((code[a[i]] >> sh) & 0xffu) + 1]++;
+            for (int j = 0; j < 256; j++) cnt[j+1] += cnt[j];
+            for (uint32_t i = 0; i < N; i++) b[cnt[(code[a[i]] >> sh) & 0xffu]++] = a[i];
+            std::swap(a, b);
+        }
+        // 4 passes => result is back in order.data()
+    }
+    code.clear(); code.shrink_to_fit();
+    tmpo.clear(); tmpo.shrink_to_fit();
+    // apply the gather permutation new[j] = old[order[j]] to every attribute
+    // in place (cycle walk + visited bitset — no per-attribute temp copy,
+    // which would double peak memory for the multi-GB SH array)
+    const int K = g_splat.sh_rest;
+    std::vector<uint64_t> vis((N + 63) / 64, 0);
+    float tp[4]; uint16_t tq[4], ts[4], tf[3]; int8_t tsh[24*3];
+    int8_t* SH = g_splat.sh.empty() ? nullptr : g_splat.sh.data();
+    for (uint32_t s = 0; s < N; s++) {
+        if ((vis[s >> 6] >> (s & 63)) & 1u) continue;
+        if (order[s] == s) continue;
+        memcpy(tp, &g_splat.posop[(size_t)s*4], 16);
+        memcpy(tq, &g_splat.quat[(size_t)s*4], 8);
+        memcpy(ts, &g_splat.scale[(size_t)s*4], 8);
+        memcpy(tf, &g_splat.fdc[(size_t)s*3], 6);
+        if (SH) memcpy(tsh, SH + (size_t)s*K*3, K*3);
+        uint32_t cur = s;
+        for (;;) {
+            vis[cur >> 6] |= 1ull << (cur & 63);
+            uint32_t src = order[cur];
+            if (src == s) {
+                memcpy(&g_splat.posop[(size_t)cur*4], tp, 16);
+                memcpy(&g_splat.quat[(size_t)cur*4], tq, 8);
+                memcpy(&g_splat.scale[(size_t)cur*4], ts, 8);
+                memcpy(&g_splat.fdc[(size_t)cur*3], tf, 6);
+                if (SH) memcpy(SH + (size_t)cur*K*3, tsh, K*3);
+                break;
+            }
+            memcpy(&g_splat.posop[(size_t)cur*4], &g_splat.posop[(size_t)src*4], 16);
+            memcpy(&g_splat.quat[(size_t)cur*4], &g_splat.quat[(size_t)src*4], 8);
+            memcpy(&g_splat.scale[(size_t)cur*4], &g_splat.scale[(size_t)src*4], 8);
+            memcpy(&g_splat.fdc[(size_t)cur*3], &g_splat.fdc[(size_t)src*3], 6);
+            if (SH) memcpy(SH + (size_t)cur*K*3, SH + (size_t)src*K*3, K*3);
+            cur = src;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Public parse entry
 // ---------------------------------------------------------------------------
 // hint: 0 auto (by content), 1 obj
@@ -713,7 +860,10 @@ KEEP int ssv_parse(uint8_t* data, uint32_t len, int hint) {
             if(parse_mesh_ply(data,len,h,*ve,fe)){g_last_kind=2;return 2;}
             return 0;
         }
-        if (looks_splat) { if(parse_splat_ply(data,len,h,*ve)){g_last_kind=1;return 1;} return 0; }
+        if (looks_splat) {
+            if(parse_splat_ply(data,len,h,*ve)){ splat_morton_reorder(); g_last_kind=1; return 1; }
+            return 0;
+        }
         if (fe){ if(parse_mesh_ply(data,len,h,*ve,fe)){g_last_kind=2;return 2;} }
         return 0;
     }
@@ -840,15 +990,40 @@ KEEP int ssv_stream_end() {
     if (!kind || !ok) { kind = 0; return 0; }
     if (vdone < vcount) { kind = 0; return 0; }   // truncated file
     if (kind==2) g_mesh.nt = (uint32_t)(g_mesh.idx.size()/3);
+    if (kind==1) splat_morton_reorder();
     g_last_kind = kind;
     int r = kind; kind = 0;
     return r;
 }
 
-// free the (large) SH rest array once it has been uploaded to the GPU;
-// sorting / histograms / picking never read it
+// free the (large) SH rest array — and the quats — once they have been
+// uploaded to the GPU; sorting / histograms / picking never read them
 KEEP void ssv_free_splat_sh(){
     g_splat.sh.clear(); g_splat.sh.shrink_to_fit();
+    g_splat.quat.clear(); g_splat.quat.shrink_to_fit();
+}
+
+// Drop the rest-SH degree in place (compact the per-splat coeff runs) so the
+// caller can retry a failed GPU upload with a smaller texture. Returns the
+// new degree. Must be called before ssv_free_splat_sh.
+KEEP int ssv_reduce_sh(int new_degree){
+    static const int K_OF_DEG[5] = {0, 3, 8, 15, 24};
+    if (new_degree < 0) new_degree = 0;
+    if (new_degree >= g_splat.sh_degree) return g_splat.sh_degree;
+    const int K = g_splat.sh_rest, newK = K_OF_DEG[new_degree];
+    const uint32_t N = g_splat.count;
+    if (newK == 0) {
+        g_splat.sh.clear(); g_splat.sh.shrink_to_fit();
+    } else {
+        int8_t* SH = g_splat.sh.data();
+        for (uint32_t i = 1; i < N; i++)
+            memmove(SH + (size_t)i*newK*3, SH + (size_t)i*K*3, (size_t)newK*3);
+        g_splat.sh.resize((size_t)N*newK*3);
+        g_splat.sh.shrink_to_fit();
+    }
+    g_splat.sh_rest = newK;
+    g_splat.sh_degree = new_degree;
+    return new_degree;
 }
 
 // ---------------------------------------------------------------------------
@@ -860,11 +1035,12 @@ KEEP uint32_t ssv_splat_count(){ return g_splat.count; }
 KEEP int ssv_splat_sh_degree(){ return g_splat.sh_degree; }
 KEEP int ssv_splat_sh_rest(){ return g_splat.sh_rest; }
 KEEP float* ssv_splat_posop(){ return g_splat.posop.data(); }
-// quat/scale/fdc/sh are stored as IEEE half floats (upload as HALF_FLOAT)
+// quat/scale/fdc are IEEE half floats (upload as HALF_FLOAT); scale is
+// 4-strided with the per-splat SH quantization scale in [3]. sh is snorm8.
 KEEP uint16_t* ssv_splat_quat(){ return g_splat.quat.data(); }
 KEEP uint16_t* ssv_splat_scale(){ return g_splat.scale.data(); }
 KEEP uint16_t* ssv_splat_fdc(){ return g_splat.fdc.data(); }
-KEEP uint16_t* ssv_splat_sh(){ return g_splat.sh.data(); }
+KEEP int8_t* ssv_splat_sh(){ return g_splat.sh.data(); }
 
 KEEP uint32_t ssv_mesh_nv(){ return g_mesh.nv; }
 KEEP uint32_t ssv_mesh_nt(){ return g_mesh.nt; }
@@ -906,14 +1082,14 @@ KEEP uint32_t ssv_mesh_edge_count(){
 // model's native frame. Emits far -> near for "over" blending.
 // ---------------------------------------------------------------------------
 template<int mode>
-static uint32_t* sort_positions(const float* P, uint32_t N,
+static uint32_t* sort_positions(const float* P, uint32_t N, int stride,
                                 float cx, float cy, float cz,
                                 float dx, float dy, float dz){
     if(N==0){ g_order.clear(); g_depths.clear(); return nullptr; }
     if(g_order.size()!=N) g_order.resize(N);
     if(g_depths.size()!=N) g_depths.resize(N);
     auto depth=[&](uint32_t i)->float{
-        float x=P[i*4], y=P[i*4+1], z=P[i*4+2];
+        float x=P[i*stride], y=P[i*stride+1], z=P[i*stride+2];
         if constexpr(mode==0) return x*dx+y*dy+z*dz;
         float rx=x-cx, ry=y-cy, rz=z-cz;
         float r2=rx*rx+ry*ry+rz*rz;
@@ -961,17 +1137,17 @@ KEEP uint32_t* ssv_sort(int mode, float cx, float cy, float cz,
     return (mode == 0 ? sort_positions<0> :
             mode == 1 ? sort_positions<1> :
             sort_positions<2>
-        )(g_splat.posop.data(), g_splat.count,
+        )(g_splat.posop.data(), g_splat.count, 4,
                           cx,cy,cz, dx,dy,dz);
 }
 
 // External-positions sort, for the sort worker: the worker runs its own
-// instance of this module holding only a copy of (x,y,z,opacity)*N, so the
+// instance of this module holding only a copy of (x,y,z)*N, so the
 // counting sort runs at native speed off the main thread.
 static std::vector<float> g_wpos;
 
 KEEP float* ssw_init(uint32_t n){
-    g_wpos.resize((size_t)n*4);
+    g_wpos.resize((size_t)n*3);
     return g_wpos.data();
 }
 
@@ -980,7 +1156,7 @@ KEEP uint32_t* ssw_sort(int mode, float cx, float cy, float cz,
     return (mode == 0 ? sort_positions<0> :
             mode == 1 ? sort_positions<1> :
             sort_positions<2>
-        )(g_wpos.data(), (uint32_t)(g_wpos.size()/4),
+        )(g_wpos.data(), (uint32_t)(g_wpos.size()/3), 3,
                           cx,cy,cz, dx,dy,dz);
 }
 
@@ -991,12 +1167,12 @@ KEEP uint32_t* ssw_sort(int mode, float cx, float cy, float cz,
 //        6 log10 sx,7 sy,8 sz, 9 anisotropy(log10 smax/smin)
 // out_minmax[0..1] filled. bins written to g_bins (nbins).
 static float splat_param(uint32_t i, int param){
-    const uint16_t* S=g_splat.scale.data();
+    const uint16_t* S=g_splat.scale.data();   // 4-strided ([3] = SH quant scale)
     switch(param){
         case 0: return g_splat.posop[i*4+3];
-        case 1: { float a=h2f(S[i*3]),b=h2f(S[i*3+1]),c=h2f(S[i*3+2]); return std::log10(std::cbrt(a*b*c)+1e-20f);}
+        case 1: { float a=h2f(S[i*4]),b=h2f(S[i*4+1]),c=h2f(S[i*4+2]); return std::log10(std::cbrt(a*b*c)+1e-20f);}
         case 2: {
-            float sa=h2f(S[i*3]),sb=h2f(S[i*3+1]),sc=h2f(S[i*3+2]);
+            float sa=h2f(S[i*4]),sb=h2f(S[i*4+1]),sc=h2f(S[i*4+2]);
             float a=sa*sa, b=sb*sb, c=sc*sc;
             float s=a+b+c; if(s<1e-30f)return 1.f;
             float p0=a/s,p1=b/s,p2=c/s; float e=0;
@@ -1006,10 +1182,10 @@ static float splat_param(uint32_t i, int param){
         case 3: return std::fmax(0.f,std::fmin(1.f,0.5f+SH_C0*h2f(g_splat.fdc[i*3+0])));
         case 4: return std::fmax(0.f,std::fmin(1.f,0.5f+SH_C0*h2f(g_splat.fdc[i*3+1])));
         case 5: return std::fmax(0.f,std::fmin(1.f,0.5f+SH_C0*h2f(g_splat.fdc[i*3+2])));
-        case 6: return std::log10(h2f(S[i*3])+1e-20f);
-        case 7: return std::log10(h2f(S[i*3+1])+1e-20f);
-        case 8: return std::log10(h2f(S[i*3+2])+1e-20f);
-        case 9: { float a=h2f(S[i*3]),b=h2f(S[i*3+1]),c=h2f(S[i*3+2]); float mx=std::fmax(a,std::fmax(b,c)),mn=std::fmin(a,std::fmin(b,c)); return std::log10(mx/(mn+1e-20f)+1e-20f);}
+        case 6: return std::log10(h2f(S[i*4])+1e-20f);
+        case 7: return std::log10(h2f(S[i*4+1])+1e-20f);
+        case 8: return std::log10(h2f(S[i*4+2])+1e-20f);
+        case 9: { float a=h2f(S[i*4]),b=h2f(S[i*4+1]),c=h2f(S[i*4+2]); float mx=std::fmax(a,std::fmax(b,c)),mn=std::fmin(a,std::fmin(b,c)); return std::log10(mx/(mn+1e-20f)+1e-20f);}
     }
     return 0;
 }

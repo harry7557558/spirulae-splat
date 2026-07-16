@@ -135,11 +135,14 @@ layout(location=0) in uint aIndex;  // per-instance splat index (sorted)
 
 uniform sampler2DArray uPos;        // (x,y,z,opacity)
 uniform sampler2DArray uRot;        // (qx,qy,qz,qw)
-uniform sampler2DArray uScale;      // (sx,sy,sz,_)  exp-scale (world)
+uniform sampler2DArray uScale;      // (sx,sy,sz, shScale)  exp-scale (world);
+                                    // w = per-splat SH quantization scale
 uniform sampler2DArray uCol;        // (r,g,b,_)     raw f_dc
-// Rest SH coeffs, uShRest texels/splat. Split by layer ranges across up to 4
-// textures: a single multi-GB texture exceeds per-resource limits of some
-// GL/Vulkan/D3D implementations. Unused chunks alias chunk 0.
+// Rest SH coeffs, uShRest texels/splat, snorm8 (RGB8_SNORM): the true coeff
+// is texel * uScale.w (Gaussian-wise 8-bit quantization). Split by layer
+// ranges across up to 4 textures: a single multi-GB texture exceeds
+// per-resource limits of some GL/Vulkan/D3D implementations. Unused chunks
+// alias chunk 0.
 uniform sampler2DArray uSh0;
 uniform sampler2DArray uSh1;
 uniform sampler2DArray uSh2;
@@ -192,29 +195,31 @@ mat3 quatToMat3(vec4 q) {
 
 vec3 projCam(vec3 pc) { return projectCam(pc, uFocal, uCenter); }
 
-// ---- spherical harmonics (real, up to degree 4; matches harmonics.slang) ----
-vec3 evalColor(vec3 pw) {
+// ---- spherical harmonics (real, up to degree 4; matches harmonics.slang).
+// The rest coeffs are snorm8; the sum is de-quantized once by shScale
+// (uScale.w), which distributes over the per-splat-constant scale. ----
+vec3 evalColor(vec3 pw, float shScale) {
   vec3 dc = fetch1(uCol, int(aIndex)).rgb;
   vec3 c = 0.2820947917738781 * dc;
   if (uShDegree >= 1) {
     vec3 d = normalize(pw - uCamPos);
     float x=d.x, y=d.y, z=d.z;
-    c += 0.4886025119029199 * (-y*fetchSh(int(aIndex),0) + z*fetchSh(int(aIndex),1) - x*fetchSh(int(aIndex),2));
+    vec3 r = 0.4886025119029199 * (-y*fetchSh(int(aIndex),0) + z*fetchSh(int(aIndex),1) - x*fetchSh(int(aIndex),2));
     if (uShDegree >= 2) {
       float xx=x*x, yy=y*y, zz=z*z, xy=x*y, yz=y*z, xz=x*z;
-      c += 1.0925484305920792*xy*fetchSh(int(aIndex),3);
-      c += -1.0925484305920792*yz*fetchSh(int(aIndex),4);
-      c += (0.9461746957575601*zz-0.31539156525252005)*fetchSh(int(aIndex),5);
-      c += -1.0925484305920792*xz*fetchSh(int(aIndex),6);
-      c += 0.5462742152960396*(xx-yy)*fetchSh(int(aIndex),7);
+      r += 1.0925484305920792*xy*fetchSh(int(aIndex),3);
+      r += -1.0925484305920792*yz*fetchSh(int(aIndex),4);
+      r += (0.9461746957575601*zz-0.31539156525252005)*fetchSh(int(aIndex),5);
+      r += -1.0925484305920792*xz*fetchSh(int(aIndex),6);
+      r += 0.5462742152960396*(xx-yy)*fetchSh(int(aIndex),7);
       if (uShDegree >= 3) {
-        c += -0.5900435899266435*y*(3.0*xx-yy)*fetchSh(int(aIndex),8);
-        c += 2.890611442640554*xy*z*fetchSh(int(aIndex),9);
-        c += -0.4570457994644658*y*(4.0*zz-xx-yy)*fetchSh(int(aIndex),10);
-        c += 0.3731763325901154*z*(2.0*zz-3.0*xx-3.0*yy)*fetchSh(int(aIndex),11);
-        c += -0.4570457994644658*x*(4.0*zz-xx-yy)*fetchSh(int(aIndex),12);
-        c += 1.445305721320277*z*(xx-yy)*fetchSh(int(aIndex),13);
-        c += -0.5900435899266435*x*(xx-3.0*yy)*fetchSh(int(aIndex),14);
+        r += -0.5900435899266435*y*(3.0*xx-yy)*fetchSh(int(aIndex),8);
+        r += 2.890611442640554*xy*z*fetchSh(int(aIndex),9);
+        r += -0.4570457994644658*y*(4.0*zz-xx-yy)*fetchSh(int(aIndex),10);
+        r += 0.3731763325901154*z*(2.0*zz-3.0*xx-3.0*yy)*fetchSh(int(aIndex),11);
+        r += -0.4570457994644658*x*(4.0*zz-xx-yy)*fetchSh(int(aIndex),12);
+        r += 1.445305721320277*z*(xx-yy)*fetchSh(int(aIndex),13);
+        r += -0.5900435899266435*x*(xx-3.0*yy)*fetchSh(int(aIndex),14);
         if (uShDegree >= 4) {
           float fC1=xx-yy, fS1=2.0*xy;
           float fC2=x*fC1-y*fS1, fS2=x*fS1+y*fC1;
@@ -224,18 +229,19 @@ vec3 evalColor(vec3 pw) {
           float fTmp0D = z*(-4.683325804901025*zz + 2.007139630671868);
           float fTmp1C = 3.31161143515146*zz - 0.47308734787878;
           float fTmp2B = -1.770130769779931*z;
-          c += (0.6258357354491763*fS3)*fetchSh(int(aIndex),15);
-          c += (fTmp2B*fS2)*fetchSh(int(aIndex),16);
-          c += (fTmp1C*fS1)*fetchSh(int(aIndex),17);
-          c += (fTmp0D*y)*fetchSh(int(aIndex),18);
-          c += (1.984313483298443*z*pSH12 - 1.006230589874905*pSH6)*fetchSh(int(aIndex),19);
-          c += (fTmp0D*x)*fetchSh(int(aIndex),20);
-          c += (fTmp1C*fC1)*fetchSh(int(aIndex),21);
-          c += (fTmp2B*fC2)*fetchSh(int(aIndex),22);
-          c += (0.6258357354491763*fC3)*fetchSh(int(aIndex),23);
+          r += (0.6258357354491763*fS3)*fetchSh(int(aIndex),15);
+          r += (fTmp2B*fS2)*fetchSh(int(aIndex),16);
+          r += (fTmp1C*fS1)*fetchSh(int(aIndex),17);
+          r += (fTmp0D*y)*fetchSh(int(aIndex),18);
+          r += (1.984313483298443*z*pSH12 - 1.006230589874905*pSH6)*fetchSh(int(aIndex),19);
+          r += (fTmp0D*x)*fetchSh(int(aIndex),20);
+          r += (fTmp1C*fC1)*fetchSh(int(aIndex),21);
+          r += (fTmp2B*fC2)*fetchSh(int(aIndex),22);
+          r += (0.6258357354491763*fC3)*fetchSh(int(aIndex),23);
         }
       }
     }
+    c += shScale * r;
   }
   return max(c + 0.5, 0.0);
 }
@@ -253,7 +259,8 @@ void main() {
   if (vDepth < uNear) { cull(); return; }
 
   vec4 q = fetch1(uRot, idx);
-  vec3 scale = fetch1(uScale, idx).xyz;
+  vec4 scaleSh = fetch1(uScale, idx);   // xyz = world scale, w = SH quant scale
+  vec3 scale = scaleSh.xyz;
   mat3 Rq = quatToMat3(q);
 
   mat2 cov2d;
@@ -399,7 +406,7 @@ void main() {
   vec2 corner = vec2((gl_VertexID & 1) == 0 ? -1.0 : 1.0,
                      (gl_VertexID & 2) == 0 ? -1.0 : 1.0);
   vec2 px = mean2d + corner.x*semi1 + corner.y*semi2;
-  vColor = vec4(evalColor(pw), min(opacity, 0.999));
+  vColor = vec4(evalColor(pw, scaleSh.w), min(opacity, 0.999));
   gl_Position = vec4(2.0*px/uViewport - 1.0, 0.0, 1.0);
 }
 `;

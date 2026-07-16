@@ -19,10 +19,18 @@ plain C++17 with no CUDA dependency (see `csrc/CameraModel.h`).
 
 - **3D Gaussian Splatting** (`.ply`, INRIA/spirulae layout, including very
   large files — binary PLY is parsed **streaming** through a small chunk
-  buffer, non-position attributes are stored as half floats, and the SH
+  buffer, non-position attributes are stored as half floats, rest SH
+  coefficients are **8-bit quantized** (Gaussian-wise scale, `RGB8_SNORM`
+  textures — half the VRAM and heap of f16, visually lossless), and the SH
   texture / mesh index buffers are split into chunks below per-resource GPU
-  limits, so 4–5 GB, 20M-splat SH3 models load and render; tested with
-  2.5 GB and 4.9 GB scans).
+  limits; tested with a 6.4 GB, 39M-splat SH2 scan (~3 GB VRAM). Splats are
+  **Morton-reordered** at load so the depth-sorted draw order touches
+  attribute textures cache-coherently (several-fold frame-rate gain on
+  multi-10M-splat models); the async sort worker keeps only an xyz copy.
+  Deep-linked `?model=` URLs stream straight into the parser (no Blob
+  buffering, so multi-GB hosted models load). If the GPU runs out of memory
+  on the SH textures, the viewer drops one SH degree at a time and retries
+  instead of failing.
   - Primitive select: **3DGS**, **Mip** (antialiased), **3DGUT** (unscented
     transform projection; fragments evaluate the 3D Gaussian along per-pixel
     rays, "eval3d"). 3DGS/Mip use analytic projection Jacobians with the

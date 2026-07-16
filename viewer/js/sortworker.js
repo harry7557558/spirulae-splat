@@ -5,7 +5,7 @@
 // WASM module fails to load, falls back to an equivalent pure-JS sort.
 //
 // Protocol:
-//   {type:'init', gen, count, positions: ArrayBuffer}   (x,y,z,opacity)*N f32
+//   {type:'init', gen, count, positions: ArrayBuffer}   (x,y,z)*N f32
 //   {type:'sort', gen, mode, c:[3], d:[3]}
 //     -> {type:'sorted', gen, order: ArrayBuffer}       (empty if stale)
 //   {type:'recycle', buffer: ArrayBuffer}                return for reuse
@@ -42,11 +42,11 @@ function handle(m) {
     if (Module) {
       wposPtr = Module.ccall('ssw_init', 'number', ['number'], [N]) >>> 0;
       if (wposPtr) {
-        new Float32Array(Module.HEAPF32.buffer, wposPtr, N * 4).set(src);
+        new Float32Array(Module.HEAPF32.buffer, wposPtr, N * 3).set(src);
         pos = null;  // heap copy owns the data now
         return;
       }
-      // allocation failed (shouldn't happen — positions are N*16 bytes)
+      // allocation failed (shouldn't happen — positions are N*12 bytes)
     }
     pos = src;
     key = new Uint16Array(N);
@@ -84,7 +84,7 @@ function jsSort(mode, c, d, order) {
   // depth per ssv_sort: 0 planar, 1 distance^2 (equirect),
   // 2 sqrt(sqrt(z^4 + (x^2+y^2)^2/512)) (fisheye/equisolid)
   const depth = (i) => {
-    const x = P[i * 4], y = P[i * 4 + 1], z = P[i * 4 + 2];
+    const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
     if (mode === 0) return x * dx + y * dy + z * dz;
     const rx = x - cx, ry = y - cy, rz = z - cz;
     const r2 = rx * rx + ry * ry + rz * rz;

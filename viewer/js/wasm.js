@@ -24,6 +24,7 @@ function f32(ptr, n) { return new Float32Array(Module.HEAPF32.buffer, ptr >>> 0,
 function u32(ptr, n) { return new Uint32Array(Module.HEAPU32.buffer, ptr >>> 0, n); }
 function u16(ptr, n) { return new Uint16Array(Module.HEAPU16.buffer, ptr >>> 0, n); }
 function u8(ptr, n)  { return new Uint8Array(Module.HEAPU8.buffer, ptr >>> 0, n); }
+function i8(ptr, n)  { return new Int8Array(Module.HEAPU8.buffer, ptr >>> 0, n); }
 
 // ---- stream a File into the WASM heap; returns {ptr, len} ----
 async function fileToHeap(file) {
@@ -43,8 +44,10 @@ async function fileToHeap(file) {
 }
 
 // ---- extract splat views (into heap) after a successful parse ----
-// posop is f32; quat/scale/fdc/sh are IEEE half floats (Uint16Array views,
-// uploaded to RGBA16F/RGB16F textures as HALF_FLOAT with zero conversion).
+// posop is f32; quat/scale/fdc are IEEE half floats (Uint16Array views,
+// uploaded to RGBA16F textures as HALF_FLOAT with zero conversion). scale is
+// 4-strided: [3] holds the per-splat SH quantization scale. sh is snorm8
+// (Int8Array, uploaded to RGB8_SNORM): coeff = (sh/127) * scale[i*4+3].
 function readSplat() {
   const count = call('ssv_splat_count');
   const shDegree = call('ssv_splat_sh_degree');
@@ -53,9 +56,9 @@ function readSplat() {
     count, shDegree, shRest,
     posop: f32(call('ssv_splat_posop'), count*4),
     quat:  u16(call('ssv_splat_quat'), count*4),
-    scale: u16(call('ssv_splat_scale'), count*3),
+    scale: u16(call('ssv_splat_scale'), count*4),
     fdc:   u16(call('ssv_splat_fdc'), count*3),
-    sh:    shRest>0 ? u16(call('ssv_splat_sh'), count*shRest*3) : null,
+    sh:    shRest>0 ? i8(call('ssv_splat_sh'), count*shRest*3) : null,
   };
   return data;
 }
@@ -74,10 +77,11 @@ function readMesh() {
 
 // ---- streaming parse for binary-LE PLY: the file is fed through a small
 // chunk buffer, so multi-GB models never need file + parsed data resident in
-// the heap at once. Returns null if the file should use the whole-buffer
-// fallback (not a PLY, ascii PLY, ...). ----
-async function tryStreamPly(file) {
-  const headBuf = new Uint8Array(await file.slice(0, 1<<20).arrayBuffer());
+// the heap at once. Returns null if the input should use the whole-buffer
+// fallback (not a PLY, ascii PLY, ...) — in that case the rest reader has
+// not been touched. getRestReader() supplies the bytes AFTER headBuf (or
+// null if headBuf already holds the whole file). ----
+async function tryStreamPlyParts(headBuf, getRestReader) {
   if (headBuf.length < 16 || headBuf[0]!==0x70 || headBuf[1]!==0x6c || headBuf[2]!==0x79) return null; // 'ply'
   const text = new TextDecoder('latin1').decode(headBuf);
   const m = text.indexOf('end_header');
@@ -99,8 +103,8 @@ async function tryStreamPly(file) {
     return call('ssv_stream_chunk','number',['number','number'],[buf, bytes.length]);
   };
   err = feed(headBuf.subarray(hdrEnd));
-  if (!err && file.size > headBuf.length) {
-    const reader = file.slice(headBuf.length).stream().getReader();
+  const reader = err ? null : await getRestReader();
+  if (reader) {
     while (!err) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -113,6 +117,34 @@ async function tryStreamPly(file) {
   if (kind === 1) return { kind:'splat', data: readSplat() };
   if (kind === 2) return { kind:'mesh', data: readMesh() };
   throw new Error('failed to parse PLY (truncated file?)');
+}
+
+async function tryStreamPly(file) {
+  const headBuf = new Uint8Array(await file.slice(0, 1<<20).arrayBuffer());
+  return tryStreamPlyParts(headBuf, async () =>
+    file.size > headBuf.length ? file.slice(headBuf.length).stream().getReader() : null);
+}
+
+// ---- streaming load from a URL (deep-linked models): the response body is
+// fed straight into the streaming parser, so a multi-GB hosted PLY is never
+// buffered as a Blob/File (Chrome's fetch().blob() fails outright on files
+// this large). Non-streamable payloads fall back to a (small) buffered File.
+export async function loadModelFromUrl(url, name) {
+  const resp = await fetch(url);
+  if (!resp.ok || !resp.body) throw new Error(`fetch failed (${resp.status})`);
+  const reader = resp.body.getReader();
+  let head = new Uint8Array(0), exhausted = false;
+  while (head.length < (1<<20)) {
+    const { done, value } = await reader.read();
+    if (done) { exhausted = true; break; }
+    const nh = new Uint8Array(head.length + value.length);
+    nh.set(head); nh.set(value, head.length); head = nh;
+  }
+  const res = await tryStreamPlyParts(head, async () => exhausted ? null : reader);
+  if (res) return res;
+  try { reader.cancel(); } catch {}
+  const file = new File([await (await fetch(url)).blob()], name);
+  return await loadNative(file, 0);
 }
 
 // ---- public: parse a PLY / OBJ file via WASM ----
@@ -338,6 +370,7 @@ export async function loadModel(files) {
   const exts = ['.ply','.glb','.gltf','.obj'];
   const main = list.find(f => exts.some(e => f.name.toLowerCase().endsWith(e)));
   if (!main) throw new Error('no supported model file found (.ply/.obj/.gltf/.glb)');
+  if (main.urlStream) return await loadModelFromUrl(main.urlStream, main.name);
   const lname = main.name.toLowerCase();
   if (lname.endsWith('.gltf') || lname.endsWith('.glb')) {
     return await loadGLTFFromFiles(main, list);
@@ -368,8 +401,14 @@ export function sortSplats(mode, cx, cy, cz, dx, dy, dz) {
   if (!ptr || !n) return null;
   return u32(ptr, n);
 }
-// free the big SH array after its texture upload (histograms don't need it)
+// free the big SH array (and quats) after their texture upload — sorting,
+// histograms and picking never read them
 export function freeSplatSh() { call('ssv_free_splat_sh', null); }
+// drop the rest-SH degree in place (GPU-OOM fallback) and return fresh views
+export function reduceSh(newDegree) {
+  call('ssv_reduce_sh', 'number', ['number'], [newDegree]);
+  return readSplat();
+}
 export function splatHistogram(param, nbins) {
   const ptr = call('ssv_splat_histogram','number',['number','number'],[param,nbins]);
   const mm = f32(call('ssv_histogram_minmax'), 2);

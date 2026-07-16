@@ -1,7 +1,7 @@
 // Application entry: wires the WASM loader, WebGL renderer, camera controller,
 // and the UI panel together.
 
-import { initWasm, loadModel, sortSplats, freeSplatSh, splatHistogram, meshHistogram, meshEdgeCount, fitSphere, raycastMesh, dsFree, dsPickPoint } from './wasm.js';
+import { initWasm, loadModel, sortSplats, freeSplatSh, reduceSh, splatHistogram, meshHistogram, meshEdgeCount, fitSphere, raycastMesh, dsFree, dsPickPoint } from './wasm.js';
 import { loadDatasetFiles, parseDatasetComponent } from './dataset.js';
 import { Renderer } from './renderer.js';
 import { Camera, Nav } from './camera.js';
@@ -89,9 +89,17 @@ async function boot() {
 
 // Fetch a model URL plus any sibling files it references (so hosting a
 // textured .gltf/.obj with external .bin/.mtl/image works from a link).
+// PLY urls are NOT buffered here: a marker entry routes them through the
+// streaming loader (loadModelFromUrl), so a multi-GB hosted splat never
+// materializes as a Blob.
 async function fetchModelFiles(url) {
   const dir = url.slice(0, url.lastIndexOf('/')+1);
   const name = url.split('/').pop().split('?')[0];
+  if (name.toLowerCase().endsWith('.ply')) {
+    const marker = { path: name, name, urlStream: url };
+    marker.getFile = async () => marker;
+    return [marker];
+  }
   const fetchFile = async (u, n) => new File([await (await fetch(u)).blob()], n);
   const files = [await fetchFile(url, name)];
   const lname = name.toLowerCase();
@@ -218,8 +226,14 @@ function initSortWorker() {
 function sortWorkerInitModel(data) {
   sortGen++; sortPending = null;
   if (!sortWorkerOk || !sortWorker) return;
-  const posCopy = new Float32Array(data.posop);   // worker owns its own copy
-  sortWorker.postMessage({ type: 'init', gen: sortGen, count: data.count, positions: posCopy.buffer }, [posCopy.buffer]);
+  // the worker owns its own copy — xyz only (the sort never reads opacity),
+  // 12 instead of 16 bytes per splat
+  const N = data.count, src = data.posop;
+  const xyz = new Float32Array(N * 3);
+  for (let i = 0, j = 0, k = 0; i < N; i++, j += 3, k += 4) {
+    xyz[j] = src[k]; xyz[j+1] = src[k+1]; xyz[j+2] = src[k+2];
+  }
+  sortWorker.postMessage({ type: 'init', gen: sortGen, count: N, positions: xyz.buffer }, [xyz.buffer]);
 }
 
 function maybeSort(force) {
@@ -317,11 +331,19 @@ async function loadSingleModel(entries) {
   if (dataset) { try { dsFree(); } catch {} }   // release the retained point cloud
   dataset = null;
   if (res.kind === 'splat') {
-    renderer.setSplat(res.data);
-    freeSplatSh();   // SH lives on the GPU now; drop the WASM copy
-    sortWorkerInitModel(res.data);
-    model = { type:'splat', count: res.data.count, shDegree: res.data.shDegree };
-    showSplatUI(res.data);
+    // Upload; if the GPU runs out of memory on the (dominant) SH textures,
+    // drop one SH degree at a time and retry — a huge model renders with
+    // reduced view-dependence instead of failing outright.
+    let data = res.data;
+    while (renderer.setSplat(data) === 'oom-sh') {
+      const deg = data.shDegree - 1;
+      data = reduceSh(deg);
+      showToast(`Out of GPU memory — SH degree reduced to ${deg}`, false);
+    }
+    freeSplatSh();   // SH lives on the GPU now; drop the WASM copy (+ quats)
+    sortWorkerInitModel(data);
+    model = { type:'splat', count: data.count, shDegree: data.shDegree };
+    showSplatUI(data);
   } else {
     renderer.setMesh(res.data, res.image || null);
     sortGen++; sortPending = null;   // invalidate any in-flight splat sort
