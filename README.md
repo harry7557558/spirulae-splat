@@ -1,7 +1,5 @@
 # spirulae-splat
 
-> **Note to existing users:** Since early May 2026, Nerfstudio and GSplat dependencies are no longer needed. The interface has gone through major change (see "Quick Start" section below). You may find a backup of the original Nerfstudio+GSplat version in `nerfstudio` branch, and a backup of an older version of `dev` branch in `dev-mid2026` branch. If you see error or significant quality degrade compared to before, please let me know on Discord (@spirulae) or email (the one used by almost all of my git commits). Additionally, you may find latest features in `dev` branch that is more frequently updated.
-
 This is my personal project that trains 3D Gaussian Splatting (3DGS) models.
 
 If you find spirulae-splat helpful for your research, please cite corresponding works (see "Acknowledgement" section below).
@@ -10,16 +8,17 @@ If you share 3DGS models trained with spirulae-splat, or incorporate any feature
 
 Spirulae-splat has changed its license to GPLv3. If you wish to use part of its code in more permissively licensed open source software, reach out to me and we can figure it out.
 
-I'm also considering adding a few visuals to this README. If you have cool splats made with spirulae-splat and are willing to share either the full splats or some renders publicly, please don't hesitate to reach out.
+Some splats trained with spirulae-splat may be found on [my SuperSplat profile](https://superspl.at/user?id=harry7557558). I'm also considering adding a few visuals to this README. If you have cool splats made with spirulae-splat and are willing to share either the full splats or some renders publicly, please don't hesitate to reach out.
 
 ### Features
 - Unified densification strategy combining elements from MCMC and IGS/IGS+/MRNF
+- Extreme VRAM efficiency with quantized training &ndash; Up to 10 million SH3 Gaussians in 8GB VRAM
 - Bilateral grid and PPISP for exposure/WB correction
+- Generalization from small objects to city-scale scenes with minimum tuning
 - Camera models: perspective and equidistant fisheye (supports >180° fov), fully supports radial, tangential, and thin prism distortion coefficients
 - Training on images in linear and various wide-gamut color spaces
-- Generalization from small objects to city-scale scenes with minimum tuning
-- Extreme VRAM efficiency with quantized training
 - Depth and normal supervision using monocular geometry models
+- Mesh generation: Convert trained splats to vertex-color and/or textured mesh in multiple formats
 - Masking (sky mode and people/car mode)
 - 3DGS, anti-aliased 3DGS, and 3DGUT primitives, with improved cross-viewer compatibility
 - Skybox, with regularization to balance sky removal and discouraging transparency
@@ -36,21 +35,57 @@ I'm also considering adding a few visuals to this README. If you have cool splat
 - And more, etc. -->
 
 ## Installation
-Make sure you have a recent version of CUDA and PyTorch installed. Clone the repository and run the commands:
+
+Make sure you have a recent version of CUDA installed. On Windows, you also need MSVC compiler compatible with your CUDA version.
+
+Spirulae-splat provides two installation modes:
+
+- Native CLI/GUI trainer: A newly added standardalone module that does not depend on Python/PyTorch. Provides same functionality as legacy Python/PyTorch trainer.
+
+- Legacy Python/PyTorch trainer: Use this if you want to use spirulae-splat as a Python module. This may be deprecated in the future.
+
+### Native CLI/GUI trainer
+
+Make sure you have CMake available. Clone the repository and run the commands:
+
+#### Linux:
 
 ```bash
 cd spirulae-splat/
-git submodule update --init
+bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON
+```
+
+If it builds successfully, you may find compiled binaries under `build/ssplat-train` (for CLI) and `build/ssplat-gui` (for GUI).
+
+#### Windows:
+
+```bat
+cd spirulae-splat\
+bash build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON
+```
+
+If it builds successfully, you may find compiled programs under `build\ssplat-train.exe` (for CLI) and `build\ssplat-gui.exe` (for GUI).
+
+### Legacy Python/PyTorch trainer
+
+Make sure you have a recent version of PyTorch installed that's compatible with your CUDA version. Clone the repository and run the commands:
+
+```bash
+cd spirulae-splat/
 pip install -e . --no-build-isolation  # optionally with -v
 ```
 
 The `pip install` step may take a few minutes. If you are running out of system resources during installation, set environment variable `MAX_JOBS` to a lower number (default is max number of concurrent CPU threads).
 
-Use default (master) branch for a stable version. Use `dev` branch if you want to try some more recent features.
+If you installed spirulae-splat successfully, there should be command named `spirulae-train`.
+
+<!-- Use default (master) branch for a stable version. Use `dev` branch if you want to try some more recent features. -->
 
 ## Quick start
 
-If you installed spirulae-splat successfully, there should be command named `spirulae-train`. Run `spirulae-train --help`, or `spirulae-train <preset name> --help` for detailed usage.
+For native GUI, open the program and follow the instructions. For native CLI, run `path/to/build/ssplat-train --help` for detailed usage. For Python CLI, run `spirulae-train --help`, or `spirulae-train <preset name> --help` for details.
+
+> Note: Below specification is for legacy Python CLI. For native CLI, replace `spirulae-train` with `ssplat-train` (add it to path or specify full path), and drop any `dataparser.`, `datamanager.`, `model.`, etc. (e.g. `--model.cap_max` becomes `--cap_max`). For native GUI, it should be as intuitive as most other 3DGS training programs.
 
 Presets
 - Spirulae-splat provides presets. Run `spirulae-train <preset name> --data [DATASET_PATH] <additional args>` to use a preset.
@@ -59,6 +94,7 @@ Presets
     - `360-camera`: Preset for training on original distorted images captured by 360 cameras. Recommended if your dataset contains fisheye images with a circle visible.
     - `in-the-wild`: Preset for in-the-wild datasets, like datasets consisting of internet images, or datasets with extreme lighting variation and/or un-masked outliers.
     - `linear-color`: Preset for training splats in linear color spaces (e.g. ACEScg).
+    - `meshing`: Preset for meshing. After training. use `spirulae-meshing` (Python CLI) or `ssplat-mesh` (native CLI) to extract mesh.
     - `synthetic`: Preset for training splats on synthetic datasets rendered with constant exposure.
     - `academic-baseline`: Preset that replicates 3DGS MCMC as faithful as possible.
 
@@ -73,6 +109,7 @@ Datasets:
 Viewer
 - Similar to Nerfstudio and GSplat, you can open the link `http://localhost:7007/` in a web browser to view training progress.
 - To change the port from 7007 to some other value, use `--viewer_port <port number>`.
+- By default, viewer continues running after training. To make it exit when training finishes, use `--no_keep_viewer_alive`. Viewer can be disabled with `--disable_viewer`.
 
 Gaussian representation
 - Change number of Gaussians: `--model.cap_max 6000000` (default 1000000)
@@ -174,13 +211,21 @@ To achieve high VRAM efficiency and acceptable training speed, spirulae-splat in
 - *Faster-GS: Analyzing and Improving Gaussian Splatting Optimization*, by Hahlbohm et al. &ndash; https://arxiv.org/abs/2602.09999 (originally LichtFeld Studio bounty 001)
 - *CLM: Removing the GPU Memory Barrier for 3D Gaussian Splatting*, by Zhao et al. &ndash; https://arxiv.org/abs/2511.04951
 
-### Additional features
-Spirulae-splat uses trust-region optimizer for training stability, and a second-order optimizer implementation is available in `dev-mid2026` branch. Also, regularization is used to discourage anisotropic Gaussians. There's experimental support for batching many tiles instead of whole images to achieve NeRF-like convergence and camera optimization performance, in which BVH is used for fast tile-Gaussian association computation. Skybox is also supported.
-- *3DGS^2-TR: Scalable Second-Order Trust-Region Method for 3D Gaussian Splatting*, by Hsiao et al. &ndash; https://arxiv.org/abs/2602.00395
+### Meshing
+Spiruale-splat is able to generate mesh from 3DGS models, by evaluating an opacity field and then apply marching tetrahedra on Delaunay triangulated meshes. Depth distortion and Gaussian anisotropy regularizations are used to ensure mesh fidelity.
+- *Gaussian Opacity Fields: Efficient Adaptive Surface Reconstruction in Unbounded Scenes*, by Yu et al. &ndash; https://arxiv.org/abs/2404.10772
+- *From Blobs to Spokes: High-Fidelity Surface Reconstruction via Oriented Gaussians*, by Gomez et al. &ndash; https://arxiv.org/abs/2604.07337
+- *RaDe-GS: Rasterizing Depth in Gaussian Splatting*, by Zhang et al. &ndash; https://arxiv.org/abs/2406.01467
 - *Effective Rank Analysis and Regularization for Enhanced 3D Gaussian Splatting*, by Hyung et al. &ndash; https://arxiv.org/abs/2406.11672
 - *PhysGaussian: Physics-Integrated 3D Gaussians for Generative Dynamics*, by Xie et al. &ndash; https://arxiv.org/abs/2311.12198
-- *Tile-wise vs. Image-wise: Random-Tile Loss and Training Paradigm for Gaussian Splatting*, by Zhang et al. &ndash; [openaccess.thecvf.com](https://openaccess.thecvf.com/content/ICCV2025/html/Zhang_Tile-wise_vs._Image-wise_Random-Tile_Loss_and_Training_Paradigm_for_Gaussian_ICCV_2025_paper.html)
 - *Fast BVH Construction on GPUs*, by Lauterbach et al. &ndash; https://luebke.us/publications/eg09.pdf
+- *Maximizing Parallelism in the Construction of BVHs, Octrees, and k-d Trees*, by Tero Karras. &ndash; https://developer.nvidia.com/blog/parallelforall/wp-content/uploads/2012/11/karras2012hpg_paper.pdf
+- Geogram, by Bruno Levy and other contributors &ndash; https://github.com/BrunoLevy/geogram
+
+### Additional features
+Spirulae-splat uses trust-region optimizer for training stability, and a second-order optimizer implementation is available in `dev-mid2026` branch. There's experimental support for batching many tiles instead of whole images to achieve NeRF-like convergence and camera optimization performance, in which BVH is used for fast tile-Gaussian association computation. Skybox is also supported.
+- *3DGS^2-TR: Scalable Second-Order Trust-Region Method for 3D Gaussian Splatting*, by Hsiao et al. &ndash; https://arxiv.org/abs/2602.00395
+- *Tile-wise vs. Image-wise: Random-Tile Loss and Training Paradigm for Gaussian Splatting*, by Zhang et al. &ndash; [openaccess.thecvf.com](https://openaccess.thecvf.com/content/ICCV2025/html/Zhang_Tile-wise_vs._Image-wise_Random-Tile_Loss_and_Training_Paradigm_for_Gaussian_ICCV_2025_paper.html)
 - *Splatfacto-W: A Nerfstudio Implementation of Gaussian Splatting for Unconstrained Photo Collections*, by Xu et al. &ndash; https://arxiv.org/abs/2407.12306
 
 ### Foundation models
