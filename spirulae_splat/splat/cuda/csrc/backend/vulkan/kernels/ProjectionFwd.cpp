@@ -54,6 +54,8 @@ launch_projection_fwd_vk(
     DeviceVector<float>& radii,
     const std::optional<TorchTensorView>& sh_value_packed,
     const int sh_value_bits) {
+    // TODO(sh-value-quant): support sh_value_bits 8/16 — per-entry q8/q16
+    // blobs feature-gated on shaderInt8/16-bit-storage (see README).
     if (sh_value_bits != 32 || sh_value_packed.has_value())
         throw std::runtime_error(
             "Vulkan backend: SH value-quantization (sh_value_bits != 32) is "
@@ -189,6 +191,7 @@ std::tuple<
     const int64_t sh_bounds_stride
 ) {
     (void)sh_value_bounds; (void)num_sh_buffer; (void)sh_bounds_stride;
+    // TODO(sh-value-quant): same as launch_projection_fwd_vk above.
     if (sh_value_bits != 32 || sh_value_packed.has_value())
         throw std::runtime_error(
             "Vulkan backend: SH value-quantization (sh_value_bits != 32) is "

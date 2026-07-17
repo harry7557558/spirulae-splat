@@ -178,9 +178,13 @@ if(SSPLAT_BACKEND STREQUAL "vulkan")
     endforeach()
 
     # Cross-backend parity tools (same sources build in the CUDA branch).
-    add_executable(projection_parity
-        ${SSPLAT_CSRC}/backend/tests/projection_parity.cpp)
-    target_link_libraries(projection_parity PRIVATE ssplat_backend_vulkan)
+    file(GLOB SSPLAT_PARITY_TESTS CONFIGURE_DEPENDS
+        ${SSPLAT_CSRC}/backend/tests/*.cpp)
+    foreach(test_src ${SSPLAT_PARITY_TESTS})
+        get_filename_component(test_name ${test_src} NAME_WE)
+        add_executable(${test_name} ${test_src})
+        target_link_libraries(${test_name} PRIVATE ssplat_backend_vulkan)
+    endforeach()
 
     return()  # the rest of this file is the CUDA build
 endif()
@@ -464,21 +468,27 @@ endif()
 # twin executable compares against them). See csrc/backend/vulkan/README.md.
 option(SSPLAT_BUILD_BACKEND_TESTS "Build backend parity test tools" OFF)
 if(SSPLAT_BUILD_BACKEND_TESTS)
-    add_executable(projection_parity
-        spirulae_splat/splat/cuda/csrc/backend/tests/projection_parity.cpp)
-    target_include_directories(projection_parity PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc
-        ${CUDAToolkit_INCLUDE_DIRS})
-    target_link_libraries(projection_parity PRIVATE csrc CUDA::cudart)
     if(SSPLAT_WITH_TORCH)
         # Same libpython + static-libstdc++ notes as ssplat-train below.
         find_package(Python3 REQUIRED COMPONENTS Development.Embed)
-        target_link_libraries(projection_parity PRIVATE Python3::Python)
-        if(NOT WIN32)
-            target_link_options(projection_parity PRIVATE
-                -static-libgcc -static-libstdc++)
-        endif()
     endif()
+    file(GLOB SSPLAT_PARITY_TESTS CONFIGURE_DEPENDS
+        spirulae_splat/splat/cuda/csrc/backend/tests/*.cpp)
+    foreach(test_src ${SSPLAT_PARITY_TESTS})
+        get_filename_component(test_name ${test_src} NAME_WE)
+        add_executable(${test_name} ${test_src})
+        target_include_directories(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc
+            ${CUDAToolkit_INCLUDE_DIRS})
+        target_link_libraries(${test_name} PRIVATE csrc CUDA::cudart)
+        if(SSPLAT_WITH_TORCH)
+            target_link_libraries(${test_name} PRIVATE Python3::Python)
+            if(NOT WIN32)
+                target_link_options(${test_name} PRIVATE
+                    -static-libgcc -static-libstdc++)
+            endif()
+        endif()
+    endforeach()
 endif()
 
 if(SSPLAT_BUILD_CLI)

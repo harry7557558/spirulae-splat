@@ -158,8 +158,8 @@ Parity-tested against CPU references on every available device.
 | 0 | Runtime (this doc's memory/stream model) + pipeline layer + smoke test | DONE 2026-07 |
 | 1 | SortScan (64-bit radix, scans, select) + parity tests | DONE 2026-07 |
 | 2 | Projection fwd (3 primitives × spec-const cams/SH) + parity vs CUDA | DONE 2026-07 incl. 3DGUT + packed (SH value-quant pending) |
-| 3 | Background SH fwd, tile intersect (key gen + offsets over SortScan) | — |
-| 4 | Rasterization fwd (2D + eval3D shared source), visualizer blit | — |
+| 3 | Background SH fwd, tile intersect (key gen + offsets over SortScan) | DONE 2026-07 |
+| 4 | Rasterization fwd (2D + eval3D shared source), visualizer blit | raster fwd DONE 2026-07 (visualizer blit pending) |
 | 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | — |
 
 Phase-0/1 hard-won portability rules (validated on NVIDIA proprietary,
@@ -170,7 +170,10 @@ Mesa ANV, llvmpipe — all tests + validation layers clean on all three):
   device supports it. Intel/ANV's default is a VARYING SIMD width, which
   silently breaks `tid / WaveGetLaneCount()` subgroup indexing (the radix
   sort produced garbage on Intel until pinned). Kernel workgroup sizes must
-  stay multiples of every plausible subgroup size (8..128).
+  stay multiples of every plausible subgroup size (8..128). Specifically the
+  **X dimension** must be the multiple (VUID-02757 under
+  REQUIRE_FULL_SUBGROUPS) — a 16x16 workgroup fails even though its total is
+  256, so 2D kernels use flat 64/128/256-wide X layouts.
 - **No 8-bit types in shaders.** `uint8_t` loads / `uint8_t*` push-constant
   members require shaderInt8 / 8-bit-storage features outside the baseline.
   Byte arrays are read as packed u32 words (`load_flag_byte` pattern);
@@ -198,10 +201,46 @@ readback. Parity: `backend/tests/projection_parity.cpp` builds under BOTH
 backends (CUDA `-DSSPLAT_BUILD_BACKEND_TESTS=ON` dumps, Vulkan compares);
 30 fused + 6 packed configs, ~5.2M floats, zero tolerance violations on all
 three local devices (packed nnz and compaction order match exactly).
-Pending in this phase: SH value-quant — the q8/q16 harmonics exports need
+**TODO (SH value-quant)** — the one open phase-2 item, marked
+`TODO(sh-value-quant)` at the throw sites in `kernels/ProjectionFwd.cpp` and
+`kernels/ProjectionPackedFwd.cpp`: the q8/q16 harmonics exports need
 per-entry blobs gated on shaderInt8/16-bit-storage features (per-entry
 compilation keeps the capabilities out of the baseline blobs), plus parity
 inputs in the engine's real codec layout.
+
+Phase-3 + raster-fwd state (full forward render): the whole
+projection -> tile-intersect -> rasterize -> background chain now runs on
+Vulkan.
+
+- `kernels/BackgroundShFwd.cpp` + `slang/vulkan/background_sh.slang`:
+  per-pixel skybox via the same `generate_ray` / `transform_ray_d` /
+  `sh{N}_to_color_dir` exports the CUDA kernel wraps. SH degree is a spec
+  constant; camera model is a runtime int (as in CUDA). The backward throws
+  until the training phase (`TODO` in the file).
+- `kernels/IntersectTile.cpp` + `slang/vulkan/intersect_tile.slang`:
+  `do_intersect_tile_generic` = count -> `backend::inclusive_sum<int64>` ->
+  8-byte n_isects readback -> key write -> `backend::sort_pairs<int64,int32>`
+  (begin 0, end 32 + tile bits, exactly the CUB call) -> offset kernel.
+  Ellipse-vs-AABB mode is a runtime null-check on proj_conic (the CUDA
+  template bool only folds that check). `do_intersect_tile_post` has no
+  callers and is not ported.
+- `kernels/RasterizeFwd.cpp` + `slang/vulkan/rasterize_fwd.slang`: closely
+  follows RasterizationEval3DFwd_kernel.cuh (the CUDA source of both the 2D
+  and eval3D kernels). Two entries (2D shared by 3DGS/MIP; 3DGUT eval3d
+  reusing `evaluate_alpha_3dgs` / `evaluate_color_3dgs` /
+  `compute_3dgut_iscl_rot`), spec axes kCameraModel (eval3d) / kDistType
+  (None, D, RGB_D) / kOutputMedian. 64-thread micro-tile workgroups;
+  CUDA's `__syncthreads_count(done)` early-out is a monotonic groupshared
+  counter (each thread adds exactly once, on its done transition; the
+  loop-top barrier publishes it). Params via the ring.
+- Parity: `backend/tests/render_parity.cpp` (background images + 8
+  full-pipeline configs across primitives / packed / distortion / median,
+  ~5.7M floats). NVIDIA: zero violations. Intel / llvmpipe: <= 0.0008%
+  violations — near-tie depth keys sort differently when the projected
+  depths differ in the last ulp across compilers, reordering the blend for
+  a handful of pixels; the violation-fraction cap absorbs this.
+- build_spirv.py's entry scanner now tolerates `//` comments between the
+  [shader]/[numthreads] attributes and `void`.
 
 Each phase lands with tests that run on all local Vulkan devices (RTX 5070 =
 NVIDIA proprietary, Intel iGPU = Mesa ANV, llvmpipe = CPU/no-float-atomics

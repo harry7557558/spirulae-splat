@@ -38,7 +38,7 @@ COMPILE_ARGS = [
 ]
 
 ENTRY_RE = re.compile(
-    r'\[shader\("compute"\)\]\s*(?:\[[^\]]*\]\s*)*void\s+(\w+)\s*\(')
+    r'\[shader\("compute"\)\]\s*(?:(?:\[[^\]]*\]|//[^\n]*)\s*)*void\s+(\w+)\s*\(')
 # Macro-instantiated entry points: a line-initial `DEF_FOO(entry_name, ...)`
 # where DEF_FOO is a local macro wrapping [shader("compute")].
 MACRO_ENTRY_RE = re.compile(r'^DEF_\w+\(\s*(\w+)\s*[,)]', re.MULTILINE)
