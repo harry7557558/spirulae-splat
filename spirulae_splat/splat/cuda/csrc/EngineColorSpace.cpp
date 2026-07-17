@@ -23,7 +23,7 @@ static void _alloc_and_upload_matrix(
     DeviceTensor2D<float3>& dst, const float* host9, PoolSlot key
 ) {
     dst.resize(key, 3, 3);
-    cudaMemcpy(dst.data_ptr(), host9, 9 * sizeof(float), cudaMemcpyHostToDevice);
+    backend::memcpy_sync(dst.data_ptr(), host9, 9 * sizeof(float), backend::MemcpyKind::HostToDevice);
 }
 
 

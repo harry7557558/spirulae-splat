@@ -40,7 +40,7 @@ template<typename T>
 static std::vector<T> _ckpt_d2h(const T* d_ptr, size_t n) {
     std::vector<T> host(n);
     if (n > 0 && d_ptr != nullptr) {
-        cudaMemcpy(host.data(), d_ptr, n * sizeof(T), cudaMemcpyDeviceToHost);
+        backend::memcpy_sync(host.data(), d_ptr, n * sizeof(T), backend::MemcpyKind::DeviceToHost);
     }
     return host;
 }
@@ -165,7 +165,7 @@ void engine_save_checkpoint(
     fs::path out_root(output_dir);
     _ckpt_mkdir(out_root);
 
-    cudaDeviceSynchronize();
+    backend::device_synchronize();
 
     const int64_t N = s.cur_num_splats;
     const int K = s.num_sh;
@@ -227,9 +227,9 @@ void engine_save_checkpoint(
             const int64_t cells_needed = (int64_t)N * 3 * K;
             const int bytes_per_cell = (sh_value_bits == 8) ? 1 : 2;
             h_value_packed.resize((size_t)(cells_needed * bytes_per_cell));
-            cudaMemcpy(h_value_packed.data(), dev_packed,
+            backend::memcpy_sync(h_value_packed.data(), dev_packed,
                        (size_t)(cells_needed * bytes_per_cell),
-                       cudaMemcpyDeviceToHost);
+                       backend::MemcpyKind::DeviceToHost);
             // Bounds layout: cell-block bounds_stride = 256;
             //                fpbo (per-splat-block) bounds_stride = 256 * 3 * K.
             int64_t n_bounds_needed;
@@ -243,9 +243,9 @@ void engine_save_checkpoint(
             // Don't run off the allocated bounds array.
             n_bounds_needed = std::min(n_bounds_needed, dev_n_bounds);
             h_value_bounds.resize((size_t)n_bounds_needed);
-            cudaMemcpy(h_value_bounds.data(), dev_bounds,
+            backend::memcpy_sync(h_value_bounds.data(), dev_bounds,
                        (size_t)n_bounds_needed * sizeof(float2),
-                       cudaMemcpyDeviceToHost);
+                       backend::MemcpyKind::DeviceToHost);
         }
     }
 
@@ -469,6 +469,6 @@ int engine_load_checkpoint(std::string input_dir) {
         ++restored;
     }
 
-    cudaDeviceSynchronize();
+    backend::device_synchronize();
     return step;
 }

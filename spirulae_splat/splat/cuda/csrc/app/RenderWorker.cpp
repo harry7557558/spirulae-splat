@@ -7,8 +7,6 @@
 #include "../Engine.h"    // engine render + viewer entry points
 #include "../Camera.h"    // camera_model_from_name
 
-#include <cuda_runtime.h>
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -37,10 +35,11 @@ struct DevBuf {
     size_t cap = 0;
     void* ensure(size_t bytes) {
         if (bytes > cap) {
-            if (ptr) cudaFree(ptr);
-            if (cudaMalloc(&ptr, bytes) != cudaSuccess) {
-                ptr = nullptr; cap = 0;
-                throw std::runtime_error("viewer: cudaMalloc failed");
+            if (ptr) backend::device_free(ptr);
+            ptr = backend::device_malloc(bytes);
+            if (!ptr) {
+                cap = 0;
+                throw std::runtime_error("viewer: device malloc failed");
             }
             cap = bytes;
         }
@@ -48,11 +47,12 @@ struct DevBuf {
     }
     void* upload(const void* host, size_t bytes) {
         void* p = ensure(bytes);
-        if (cudaMemcpy(p, host, bytes, cudaMemcpyHostToDevice) != cudaSuccess)
+        backend::memcpy_sync(p, host, bytes, backend::MemcpyKind::HostToDevice);
+        if (backend::last_error())
             throw std::runtime_error("viewer: H2D copy failed");
         return p;
     }
-    ~DevBuf() { if (ptr) cudaFree(ptr); }
+    ~DevBuf() { if (ptr) backend::device_free(ptr); }
 };
 
 // Median distance to the 4th-nearest unique camera position, for the frustum
@@ -358,8 +358,9 @@ struct RenderWorker::Impl {
                     /*is_ray_depth=*/true,
                     tvp(dd, 4, {1, H, W, 1}), tvp(dn, 4, {1, H, W, 3}));
                 std::vector<float> n_host(npx * 3);
-                if (cudaMemcpy(n_host.data(), dn, npx * 12,
-                               cudaMemcpyDeviceToHost) != cudaSuccess)
+                backend::memcpy_sync(n_host.data(), dn, npx * 12,
+                                     backend::MemcpyKind::DeviceToHost);
+                if (backend::last_error())
                     throw std::runtime_error("viewer: normal D2H failed");
                 for (auto& v : n_host) v = 0.5f + 0.5f * v;
                 return n_host;
@@ -455,8 +456,9 @@ struct RenderWorker::Impl {
                 grid_dist,
                 grid_target[0], grid_target[1], grid_target[2],
                 tvp(dout, 1, {H, W, 3}));
-            if (cudaMemcpy(out_host.data(), dout, npx * 3,
-                           cudaMemcpyDeviceToHost) != cudaSuccess)
+            backend::memcpy_sync(out_host.data(), dout, npx * 3,
+                                 backend::MemcpyKind::DeviceToHost);
+            if (backend::last_error())
                 throw std::runtime_error("viewer: blit D2H failed");
         }
         return out_host;

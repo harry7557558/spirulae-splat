@@ -1,9 +1,9 @@
 #pragma once
 
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include "backend/api/BackendTypes.h"
+#ifdef __CUDACC__
 #include <cuda_fp16.h>
-#include <vector_types.h>
+#endif
 #include <type_traits>
 
 #include <cstdint>

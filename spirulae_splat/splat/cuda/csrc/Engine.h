@@ -147,7 +147,7 @@ std::map<std::string, float> engine_compute_loss_backward(
 // the rasterization backward with caller-supplied per-pixel cotangents instead
 // of a loss gradient, then runs raster + projection backward. Per-splat grads
 // land in engine().grad.* (read with engine_copy_grads_to_host). The seeds may
-// be host or device pointers (cudaMemcpyDefault auto-detects). forward_3dgs
+// be host or device pointers (backend::MemcpyKind::Auto auto-detects). forward_3dgs
 // must have run first. Note: the 3dgs / mip path does not accumulate a viewmats
 // gradient (projection bwd is called with v_viewmats = null).
 void engine_backward_from_render_grad(

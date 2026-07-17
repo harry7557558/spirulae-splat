@@ -269,7 +269,7 @@ struct QuantileWorkspace {
 } // namespace
 
 template<bool invert_quantile>
-cudaError_t batch_quantile_masked_radix_select(
+int batch_quantile_masked_radix_select(
     const float* d_x,   // [B*N], row-major
     int B,
     int N,
@@ -351,7 +351,7 @@ cudaError_t batch_quantile_masked_radix_select(
     return cudaSuccess;
 }
 
-template cudaError_t batch_quantile_masked_radix_select<false>(
+template int batch_quantile_masked_radix_select<false>(
     const float* d_x,   // [B*N], row-major
     int B,
     int N,
@@ -361,7 +361,7 @@ template cudaError_t batch_quantile_masked_radix_select<false>(
     cudaStream_t stream
 );
 
-template cudaError_t batch_quantile_masked_radix_select<true>(
+template int batch_quantile_masked_radix_select<true>(
     const float* d_x,   // [B*N], row-major
     int B,
     int N,

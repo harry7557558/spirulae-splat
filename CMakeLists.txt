@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
-project(spirulae_splat LANGUAGES C CXX CUDA)
+project(spirulae_splat LANGUAGES C CXX)  # CUDA enabled below unless SSPLAT_BACKEND=vulkan
 
 # This file is intended to be used with `build_develop.bash` for development purpose.
 
@@ -15,6 +15,46 @@ project(spirulae_splat LANGUAGES C CXX CUDA)
 option(SSPLAT_BUILD_CLI "Build the standalone ssplat-train CLI" OFF)
 option(SSPLAT_BUILD_GUI "Build the native GUI app ssplat-gui (fetches GLFW + Dear ImGui)" OFF)
 option(SSPLAT_NO_TORCH "Skip Torch/Python even if present; build only ssplat-train" OFF)
+
+# ---------------------------------------------------------------------------
+# Compute backend selection
+#
+# cuda (default): the full build, exactly as before.
+# vulkan: WORK IN PROGRESS -- no kernel implementations yet. Compiles the
+# portable engine layer (Engine*.cpp + host support) against the backend API
+# (csrc/backend/, see its README.md) with SSPLAT_BACKEND_VULKAN defined and
+# WITHOUT the CUDA toolkit. Produces a compile-check object library only --
+# no executables and no Python extension.
+# ---------------------------------------------------------------------------
+set(SSPLAT_BACKEND "cuda" CACHE STRING "Compute backend: cuda | vulkan (vulkan is WIP)")
+set_property(CACHE SSPLAT_BACKEND PROPERTY STRINGS cuda vulkan)
+
+if(SSPLAT_BACKEND STREQUAL "vulkan")
+    message(STATUS "SSPLAT_BACKEND=vulkan (work in progress): compile-checking "
+        "the portable engine layer; no executables are produced.")
+
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    file(GLOB SSPLAT_PORTABLE_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc/*.cpp)
+    list(REMOVE_ITEM SSPLAT_PORTABLE_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc/ext.cpp)
+
+    add_library(csrc_portable OBJECT ${SSPLAT_PORTABLE_SOURCES})
+    target_compile_definitions(csrc_portable PUBLIC SSPLAT_BACKEND_VULKAN)
+    target_include_directories(csrc_portable PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc)
+
+    find_package(OpenMP)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(csrc_portable PUBLIC OpenMP::OpenMP_CXX)
+    endif()
+
+    return()  # the rest of this file is the CUDA build
+endif()
+
+enable_language(CUDA)
 
 set(SSPLAT_WITH_TORCH OFF)
 if(NOT SSPLAT_NO_TORCH)

@@ -20,7 +20,9 @@
 #include <stdexcept>
 #include <thread>
 
-#include <cuda_runtime.h>
+#ifndef SSPLAT_BACKEND_VULKAN
+#include <cuda_runtime.h>  // check_cuda_runtime() driver/runtime preflight
+#endif
 
 namespace fs = std::filesystem;
 
@@ -567,6 +569,9 @@ void TrainerSession::load_dataset() {
 // fails -- and cudaGetErrorString can't name the resulting error, so it shows
 // up as the cryptic "CUDA Error ...: (null)". Detect the mismatch up front and
 // report it with the numbers and the fix, instead of dying deep in a kernel.
+// CUDA-backend-specific diagnostics by design; the Vulkan backend replaces
+// this with instance/physical-device enumeration at the same call site.
+#ifndef SSPLAT_BACKEND_VULKAN
 static void check_cuda_runtime() {
     auto fmt = [](int v) {
         return std::to_string(v / 1000) + "." + std::to_string((v % 1000) / 10);
@@ -606,9 +611,12 @@ static void check_cuda_runtime() {
     if (dev_count == 0)
         throw std::runtime_error("No CUDA-capable GPU detected.");
 }
+#endif  // SSPLAT_BACKEND_VULKAN
 
 void TrainerSession::setup_engine() {
+#ifndef SSPLAT_BACKEND_VULKAN
     check_cuda_runtime();
+#endif
 
     // ---- Output dir (trainer.py _setup_output_dir:524) ----------------------
     if (!cfg.output_dir_name.empty()) {

@@ -38,11 +38,11 @@ static const void* _h2d_stage_byte(
     }
     if (out_is_u16) {
         uint16_t* p = DevicePool::global().acquire<uint16_t>(PoolSlot::GtStagingU16, numel);
-        cudaMemcpy(p, (void*)src_ptr, numel * sizeof(uint16_t), cudaMemcpyHostToDevice);
+        backend::memcpy_sync(p, (void*)src_ptr, numel * sizeof(uint16_t), backend::MemcpyKind::HostToDevice);
         return (const void*)p;
     } else {
         uint8_t* p = DevicePool::global().acquire<uint8_t>(PoolSlot::GtStagingU8, numel);
-        cudaMemcpy(p, (void*)src_ptr, numel * sizeof(uint8_t), cudaMemcpyHostToDevice);
+        backend::memcpy_sync(p, (void*)src_ptr, numel * sizeof(uint8_t), backend::MemcpyKind::HostToDevice);
         return (const void*)p;
     }
 }
@@ -63,7 +63,7 @@ static const float* _h2d_stage_floats(
         return (const float*)src_ptr;
     }
     float* p = DevicePool::global().acquire<float>(slot, numel);
-    cudaMemcpy(p, (void*)src_ptr, numel * sizeof(float), cudaMemcpyHostToDevice);
+    backend::memcpy_sync(p, (void*)src_ptr, numel * sizeof(float), backend::MemcpyKind::HostToDevice);
     return p;
 }
 

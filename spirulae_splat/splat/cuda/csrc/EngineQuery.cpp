@@ -13,9 +13,9 @@ void engine_copy_accum_buffer(TorchTensorView dst) {
     int64_t dst_n = std::get<2>(dst)[0];
     int64_t src_n = engine().optim.accum_buffer.size();
     int64_t n = std::min(dst_n, src_n);
-    cudaMemcpy((void*)std::get<0>(dst),
+    backend::memcpy_sync((void*)std::get<0>(dst),
                engine().optim.accum_buffer.data_ptr(),
-               n * sizeof(float2), cudaMemcpyDeviceToHost);
+               n * sizeof(float2), backend::MemcpyKind::DeviceToHost);
 }
 
 
@@ -39,16 +39,16 @@ void engine_copy_render_to_host(
     auto& rgb = std::get<0>(renders);
     auto& depth = std::get<1>(renders);
     if (rgb.data_ptr() && std::get<0>(out_rgb) != 0) {
-        cudaMemcpy((void*)std::get<0>(out_rgb), rgb.data_ptr(),
-                   rgb.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+        backend::memcpy_sync((void*)std::get<0>(out_rgb), rgb.data_ptr(),
+                   rgb.numel() * sizeof(float3), backend::MemcpyKind::DeviceToHost);
     }
     if (depth.data_ptr() && std::get<0>(out_depth) != 0) {
-        cudaMemcpy((void*)std::get<0>(out_depth), depth.data_ptr(),
-                   depth.numel() * sizeof(float), cudaMemcpyDeviceToHost);
+        backend::memcpy_sync((void*)std::get<0>(out_depth), depth.data_ptr(),
+                   depth.numel() * sizeof(float), backend::MemcpyKind::DeviceToHost);
     }
     if (engine().fwd.render_Ts.data_ptr() && std::get<0>(out_Ts) != 0) {
-        cudaMemcpy((void*)std::get<0>(out_Ts), engine().fwd.render_Ts.data_ptr(),
-                   engine().fwd.render_Ts.numel() * sizeof(float), cudaMemcpyDeviceToHost);
+        backend::memcpy_sync((void*)std::get<0>(out_Ts), engine().fwd.render_Ts.data_ptr(),
+                   engine().fwd.render_Ts.numel() * sizeof(float), backend::MemcpyKind::DeviceToHost);
     }
     // Pre-conversion (linear / wide-gamut) render is stashed by the color
     // space forward hook into cs.fwd_pre. When the engine has no color
@@ -57,12 +57,12 @@ void engine_copy_render_to_host(
     // identical buffer.
     auto& cs = engine().color_space;
     if (std::get<0>(out_rgb_raw) != 0 && cs.fwd_pre.data_ptr() != nullptr) {
-        cudaMemcpy((void*)std::get<0>(out_rgb_raw), cs.fwd_pre.data_ptr(),
-                   cs.fwd_pre.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+        backend::memcpy_sync((void*)std::get<0>(out_rgb_raw), cs.fwd_pre.data_ptr(),
+                   cs.fwd_pre.numel() * sizeof(float3), backend::MemcpyKind::DeviceToHost);
     }
     if (engine().fwd.render_median.data_ptr() && std::get<0>(out_median) != 0) {
-        cudaMemcpy((void*)std::get<0>(out_median), engine().fwd.render_median.data_ptr(),
-                   engine().fwd.render_median.numel() * sizeof(float), cudaMemcpyDeviceToHost);
+        backend::memcpy_sync((void*)std::get<0>(out_median), engine().fwd.render_median.data_ptr(),
+                   engine().fwd.render_median.numel() * sizeof(float), backend::MemcpyKind::DeviceToHost);
     }
 }
 
@@ -79,12 +79,12 @@ void engine_copy_distortion_to_host(
     auto& rgb = std::get<0>(dist);
     auto& depth = std::get<1>(dist);
     if (rgb.data_ptr() && std::get<0>(out_rgb_dist) != 0) {
-        cudaMemcpy((void*)std::get<0>(out_rgb_dist), rgb.data_ptr(),
-                   rgb.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+        backend::memcpy_sync((void*)std::get<0>(out_rgb_dist), rgb.data_ptr(),
+                   rgb.numel() * sizeof(float3), backend::MemcpyKind::DeviceToHost);
     }
     if (depth.data_ptr() && std::get<0>(out_depth_dist) != 0) {
-        cudaMemcpy((void*)std::get<0>(out_depth_dist), depth.data_ptr(),
-                   depth.numel() * sizeof(float), cudaMemcpyDeviceToHost);
+        backend::memcpy_sync((void*)std::get<0>(out_depth_dist), depth.data_ptr(),
+                   depth.numel() * sizeof(float), backend::MemcpyKind::DeviceToHost);
     }
 }
 
@@ -104,8 +104,8 @@ void engine_copy_splats_to_host(
     _dv_to_host(engine().world.features_dc, features_dc);
     // features_sh: DeviceTensor2D<float3>
     if (engine().world.features_sh.data_ptr() && std::get<0>(features_sh) != 0) {
-        cudaMemcpy((void*)std::get<0>(features_sh), engine().world.features_sh.data_ptr(),
-                   engine().world.features_sh.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+        backend::memcpy_sync((void*)std::get<0>(features_sh), engine().world.features_sh.data_ptr(),
+                   engine().world.features_sh.numel() * sizeof(float3), backend::MemcpyKind::DeviceToHost);
     }
 }
 
@@ -129,8 +129,8 @@ void engine_copy_grads_to_host(
     _dv_to_host(engine().grad.features_dc, features_dc);
     // features_sh: DeviceTensor2D<float3>
     if (engine().grad.features_sh.data_ptr() && std::get<0>(features_sh) != 0) {
-        cudaMemcpy((void*)std::get<0>(features_sh), engine().grad.features_sh.data_ptr(),
-                   engine().grad.features_sh.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+        backend::memcpy_sync((void*)std::get<0>(features_sh), engine().grad.features_sh.data_ptr(),
+                   engine().grad.features_sh.numel() * sizeof(float3), backend::MemcpyKind::DeviceToHost);
     }
 }
 
@@ -165,15 +165,15 @@ std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_render_rgb_shape() {
 void engine_copy_gt_rgb_to_host(TorchTensorView out) {
     auto& t = engine().gt.rgb;
     if (t.data_ptr() == nullptr || std::get<0>(out) == 0) return;
-    cudaMemcpy((void*)std::get<0>(out), t.data_ptr(),
-               t.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+    backend::memcpy_sync((void*)std::get<0>(out), t.data_ptr(),
+               t.numel() * sizeof(float3), backend::MemcpyKind::DeviceToHost);
 }
 
 void engine_copy_gt_alpha_to_host(TorchTensorView out) {
     auto& t = engine().gt.alpha;
     if (t.data_ptr() == nullptr || std::get<0>(out) == 0) return;
-    cudaMemcpy((void*)std::get<0>(out), t.data_ptr(),
-               t.numel() * sizeof(bool), cudaMemcpyDeviceToHost);
+    backend::memcpy_sync((void*)std::get<0>(out), t.data_ptr(),
+               t.numel() * sizeof(bool), backend::MemcpyKind::DeviceToHost);
 }
 
 

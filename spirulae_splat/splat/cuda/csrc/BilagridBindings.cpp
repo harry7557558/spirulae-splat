@@ -13,14 +13,14 @@
 
 // Quantile selector (defined in Quantile.cu)
 template<bool invert_quantile>
-cudaError_t batch_quantile_masked_radix_select(
+int batch_quantile_masked_radix_select(
     const float* d_x,
     int B,
     int N,
     float q,
     float* d_out,
     uint32_t* temp,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 
@@ -48,7 +48,7 @@ static inline int64_t _tv_numel(const TorchTensorView& tv) {
     return n;
 }
 
-constexpr cudaStream_t kStream = (cudaStream_t)0;
+constexpr backend::Stream kStream = backend::kDefaultStream;
 
 
 // ============================================================================

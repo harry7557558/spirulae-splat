@@ -5,7 +5,6 @@
 // torch::Tensor; this header replaces them with TorchTensorView and pre-allocated
 // output buffers (the caller is responsible for allocation).
 
-#include <cuda_runtime.h>
 #include <cstdint>
 
 #include "Tensor.h"
@@ -23,7 +22,7 @@ void bilagrid_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_sample_backward(
@@ -36,7 +35,7 @@ void bilagrid_sample_backward(
     float* v_rgb,
     int N, int L, int H, int W,
     int m, int h, int w,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_uniform_sample_forward(
@@ -45,7 +44,7 @@ void bilagrid_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int h, int w,
-    cudaStream_t stream,
+    backend::Stream stream,
     const int* grid_indices = nullptr
 );
 
@@ -56,7 +55,7 @@ void bilagrid_patched_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_uniform_sample_backward_v1(
@@ -68,7 +67,7 @@ void bilagrid_uniform_sample_backward_v1(
     int N, int L, int H, int W,
     int h, int w,
     const int target_tile_size,
-    cudaStream_t stream,
+    backend::Stream stream,
     const int* grid_indices = nullptr
 );
 
@@ -83,7 +82,7 @@ void bilagrid_patched_sample_backward_v1(
     int m, int h, int w, int h0, int w0,
     const int target_tile_size,
     const int mi_batch_size,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_uniform_sample_backward_v2(
@@ -94,7 +93,7 @@ void bilagrid_uniform_sample_backward_v2(
     float* v_rgb,
     int N, int L, int H, int W,
     int h, int w,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_patched_sample_backward_v2(
@@ -106,7 +105,7 @@ void bilagrid_patched_sample_backward_v2(
     float* v_rgb,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_ppisp_sample_forward(
@@ -116,7 +115,7 @@ void bilagrid_ppisp_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_ppisp_sample_backward(
@@ -129,7 +128,7 @@ void bilagrid_ppisp_sample_backward(
     float* v_rgb,
     int N, int L, int H, int W,
     int m, int h, int w,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_ppisp_packed_sample_forward(
@@ -140,7 +139,7 @@ void bilagrid_ppisp_packed_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int nnz,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_ppisp_packed_sample_backward(
@@ -154,7 +153,7 @@ void bilagrid_ppisp_packed_sample_backward(
     float* v_rgb,
     int N, int L, int H, int W,
     int nnz,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_ppisp_uniform_sample_forward(
@@ -163,7 +162,7 @@ void bilagrid_ppisp_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int h, int w,
-    cudaStream_t stream,
+    backend::Stream stream,
     const int* grid_indices = nullptr
 );
 
@@ -174,7 +173,7 @@ void bilagrid_ppisp_patched_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_ppisp_uniform_sample_backward_v1(
@@ -186,7 +185,7 @@ void bilagrid_ppisp_uniform_sample_backward_v1(
     int N, int L, int H, int W,
     int h, int w,
     const int target_tile_size,
-    cudaStream_t stream,
+    backend::Stream stream,
     const int* grid_indices = nullptr
 );
 
@@ -201,7 +200,7 @@ void bilagrid_ppisp_patched_sample_backward_v1(
     int m, int h, int w, int h0, int w0,
     const int target_tile_size,
     const int mi_batch_size,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_loglinear_uniform_sample_forward(
@@ -210,7 +209,7 @@ void bilagrid_loglinear_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int h, int w,
-    cudaStream_t stream,
+    backend::Stream stream,
     const int* grid_indices = nullptr
 );
 
@@ -221,7 +220,7 @@ void bilagrid_loglinear_patched_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_loglinear_uniform_sample_backward_v1(
@@ -233,7 +232,7 @@ void bilagrid_loglinear_uniform_sample_backward_v1(
     int N, int L, int H, int W,
     int h, int w,
     const int target_tile_size,
-    cudaStream_t stream,
+    backend::Stream stream,
     const int* grid_indices = nullptr
 );
 
@@ -248,7 +247,7 @@ void bilagrid_loglinear_patched_sample_backward_v1(
     int m, int h, int w, int h0, int w0,
     const int target_tile_size,
     const int mi_batch_size,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_depth_uniform_sample_forward(
@@ -258,7 +257,7 @@ void bilagrid_depth_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int h, int w,
-    cudaStream_t stream,
+    backend::Stream stream,
     const int* grid_indices = nullptr
 );
 
@@ -270,7 +269,7 @@ void bilagrid_depth_patched_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_depth_uniform_sample_backward_v1(
@@ -283,7 +282,7 @@ void bilagrid_depth_uniform_sample_backward_v1(
     int N, int L, int H, int W,
     int h, int w,
     const int target_tile_size,
-    cudaStream_t stream,
+    backend::Stream stream,
     const int* grid_indices = nullptr
 );
 
@@ -299,7 +298,7 @@ void bilagrid_depth_patched_sample_backward_v1(
     int m, int h, int w, int h0, int w0,
     const int target_tile_size,
     const int mi_batch_size,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_normal_uniform_sample_forward(
@@ -308,7 +307,7 @@ void bilagrid_normal_uniform_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int h, int w,
-    cudaStream_t stream,
+    backend::Stream stream,
     const int* grid_indices = nullptr
 );
 
@@ -319,7 +318,7 @@ void bilagrid_normal_patched_sample_forward(
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w, int h0, int w0,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void bilagrid_normal_uniform_sample_backward_v1(
@@ -331,7 +330,7 @@ void bilagrid_normal_uniform_sample_backward_v1(
     int N, int L, int H, int W,
     int h, int w,
     const int target_tile_size,
-    cudaStream_t stream,
+    backend::Stream stream,
     const int* grid_indices = nullptr
 );
 
@@ -346,14 +345,14 @@ void bilagrid_normal_patched_sample_backward_v1(
     int m, int h, int w, int h0, int w0,
     const int target_tile_size,
     const int mi_batch_size,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void tv_loss_forward(
     BilagridReader bilagrid,
     float* tv_loss,
     int N, int C, int L, int H, int W,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void tv_loss_backward(
@@ -361,14 +360,14 @@ void tv_loss_backward(
     const float v_tv_loss,
     float* v_bilagrid,
     int N, int C, int L, int H, int W, bool inplace,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void channel_mean_forward(
     BilagridReader bilagrid,
     float* channel_mean,
     int N, int C, int L, int H, int W,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 void channel_mean_backward(
@@ -376,7 +375,7 @@ void channel_mean_backward(
     const float* v_channel_mean,
     float* v_bilagrid,
     int N, int C, int L, int H, int W, bool inplace,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 
