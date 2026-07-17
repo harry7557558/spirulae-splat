@@ -19,12 +19,16 @@ struct ProjectionFwdParams {
     uint64_t viewmats, intrins, dist_coeffs;
     uint64_t out_aabb, out_depths, out_radii;
     uint64_t s_xy, s_depth, s_conic, s_opac, s_rgb;
+    uint64_t sh_packed, sh_bounds;
+    int64_t sh_bounds_stride;
     uint32_t sh_stride;
     uint32_t C, N;
     uint32_t width, height;
     uint32_t wgs_per_row;
+    uint32_t num_sh_buffer;
+    uint32_t _pad0;
 };
-static_assert(sizeof(ProjectionFwdParams) == 17 * 8 + 6 * 4,
+static_assert(sizeof(ProjectionFwdParams) == 20 * 8 + 8 * 4,
               "params layout must match the slang struct");
 
 // Mirrors Projection3dgutParams in slang/vulkan/projection_fwd.slang.
@@ -33,13 +37,46 @@ struct Projection3dgutParams {
     uint64_t viewmats, intrins, dist_coeffs;
     uint64_t out_aabb, out_depths, out_radii;
     uint64_t s_scale, s_opac, s_rgb;
+    uint64_t sh_packed, sh_bounds;
+    int64_t sh_bounds_stride;
     uint32_t sh_stride;
     uint32_t C, N;
     uint32_t width, height;
     uint32_t wgs_per_row;
+    uint32_t num_sh_buffer;
+    uint32_t _pad0;
 };
-static_assert(sizeof(Projection3dgutParams) == 15 * 8 + 6 * 4,
+static_assert(sizeof(Projection3dgutParams) == 18 * 8 + 8 * 4,
               "params layout must match the slang struct");
+
+// Shared validation + resolution of the SH value-quant launch args. Returns
+// the kShValueBits spec value (0 = fp32). Mirrors the CUDA kernel's stride
+// default: 0 -> FPBO per-splat-block layout (256 * 3 * num_sh_buffer).
+uint32_t resolve_sh_quant(
+    const std::optional<TorchTensorView>& sh_value_packed,
+    const std::optional<TorchTensorView>& sh_value_bounds,
+    const uint32_t num_sh_buffer, const int sh_value_bits,
+    const int64_t sh_bounds_stride,
+    uint64_t* out_packed, uint64_t* out_bounds, int64_t* out_stride) {
+    *out_packed = 0;
+    *out_bounds = 0;
+    *out_stride = 1;  // never 0 (the shader divides by it)
+    if (sh_value_bits == 32)
+        return 0;
+    if (sh_value_bits != 8 && sh_value_bits != 16)
+        throw std::runtime_error(
+            "projection forward: sh_value_bits must be 8, 16 or 32");
+    if (!sh_value_packed.has_value() || !sh_value_bounds.has_value())
+        throw std::runtime_error(
+            "projection forward: sh_value_bits != 32 requires "
+            "sh_value_packed and sh_value_bounds");
+    *out_packed = std::get<0>(sh_value_packed.value());
+    *out_bounds = std::get<0>(sh_value_bounds.value());
+    *out_stride = sh_bounds_stride > 0
+                      ? sh_bounds_stride
+                      : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+    return (uint32_t)sh_value_bits;
+}
 
 std::tuple<DeviceTensor2D<float4>, DeviceTensor2D<float>,
            std::vector<DeviceTensorFloatND>>
@@ -53,13 +90,16 @@ launch_projection_fwd_vk(
     const std::string& camera_model, const TorchTensorView& dist_coeffs,
     DeviceVector<float>& radii,
     const std::optional<TorchTensorView>& sh_value_packed,
-    const int sh_value_bits) {
-    // TODO(sh-value-quant): support sh_value_bits 8/16 — per-entry q8/q16
-    // blobs feature-gated on shaderInt8/16-bit-storage (see README).
-    if (sh_value_bits != 32 || sh_value_packed.has_value())
-        throw std::runtime_error(
-            "Vulkan backend: SH value-quantization (sh_value_bits != 32) is "
-            "not implemented yet");
+    const std::optional<TorchTensorView>& sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride) {
+    uint64_t q_packed, q_bounds;
+    int64_t q_stride;
+    const uint32_t spec_bits =
+        resolve_sh_quant(sh_value_packed, sh_value_bounds, num_sh_buffer,
+                         sh_value_bits, sh_bounds_stride, &q_packed,
+                         &q_bounds, &q_stride);
 
     CameraModelType cam = cmt(camera_model);
     if ((int)cam < 0 || (int)cam > 3)
@@ -104,6 +144,10 @@ launch_projection_fwd_vk(
     p.s_conic = (uint64_t)sb.raw_data(2);
     p.s_opac = (uint64_t)sb.raw_data(3);
     p.s_rgb = (uint64_t)sb.raw_data(4);
+    p.sh_packed = q_packed;
+    p.sh_bounds = q_bounds;
+    p.sh_bounds_stride = q_stride;
+    p.num_sh_buffer = num_sh_buffer;
     p.C = C;
     p.N = (uint32_t)N;
     p.width = image_width;
@@ -117,7 +161,7 @@ launch_projection_fwd_vk(
     std::memcpy(params_mapped, &p, sizeof(p));
 
     backend::vk::SpecList spec{(uint32_t)cam, (uint32_t)sh_degree,
-                               antialiased ? 1u : 0u};
+                               antialiased ? 1u : 0u, spec_bits};
     if (!backend::vk::dispatch(backend::kDefaultStream,
                                "projection_fwd.projection_fwd_3dgs", spec,
                                per_row, rows, 1, &params_addr,
@@ -146,11 +190,11 @@ std::tuple<
     const int sh_value_bits,
     const int64_t sh_bounds_stride
 ) {
-    (void)sh_value_bounds; (void)num_sh_buffer; (void)sh_bounds_stride;
     return launch_projection_fwd_vk(
         /*antialiased=*/false, num_splats, in_splats, max_sh_degree,
         viewmats, intrins, image_width, image_height, camera_model,
-        dist_coeffs, radii, sh_value_packed, sh_value_bits);
+        dist_coeffs, radii, sh_value_packed, sh_value_bounds,
+        num_sh_buffer, sh_value_bits, sh_bounds_stride);
 }
 
 std::tuple<
@@ -168,11 +212,11 @@ std::tuple<
     const int sh_value_bits,
     const int64_t sh_bounds_stride
 ) {
-    (void)sh_value_bounds; (void)num_sh_buffer; (void)sh_bounds_stride;
     return launch_projection_fwd_vk(
         /*antialiased=*/true, num_splats, in_splats, max_sh_degree,
         viewmats, intrins, image_width, image_height, camera_model,
-        dist_coeffs, radii, sh_value_packed, sh_value_bits);
+        dist_coeffs, radii, sh_value_packed, sh_value_bounds,
+        num_sh_buffer, sh_value_bits, sh_bounds_stride);
 }
 
 std::tuple<
@@ -190,12 +234,12 @@ std::tuple<
     const int sh_value_bits,
     const int64_t sh_bounds_stride
 ) {
-    (void)sh_value_bounds; (void)num_sh_buffer; (void)sh_bounds_stride;
-    // TODO(sh-value-quant): same as launch_projection_fwd_vk above.
-    if (sh_value_bits != 32 || sh_value_packed.has_value())
-        throw std::runtime_error(
-            "Vulkan backend: SH value-quantization (sh_value_bits != 32) is "
-            "not implemented yet");
+    uint64_t q_packed, q_bounds;
+    int64_t q_stride;
+    const uint32_t spec_bits =
+        resolve_sh_quant(sh_value_packed, sh_value_bounds, num_sh_buffer,
+                         sh_value_bits, sh_bounds_stride, &q_packed,
+                         &q_bounds, &q_stride);
 
     CameraModelType cam = cmt(camera_model);
     if ((int)cam < 0 || (int)cam > 3)
@@ -239,6 +283,10 @@ std::tuple<
     p.s_scale = (uint64_t)sb.raw_data(0);
     p.s_opac = (uint64_t)sb.raw_data(1);
     p.s_rgb = (uint64_t)sb.raw_data(2);
+    p.sh_packed = q_packed;
+    p.sh_bounds = q_bounds;
+    p.sh_bounds_stride = q_stride;
+    p.num_sh_buffer = num_sh_buffer;
     p.C = C;
     p.N = (uint32_t)N;
     p.width = image_width;
@@ -251,7 +299,8 @@ std::tuple<
         throw std::runtime_error("Vulkan backend: params ring failed");
     std::memcpy(params_mapped, &p, sizeof(p));
 
-    backend::vk::SpecList spec{(uint32_t)cam, (uint32_t)sh_degree, 0u};
+    backend::vk::SpecList spec{(uint32_t)cam, (uint32_t)sh_degree, 0u,
+                               spec_bits};
     if (!backend::vk::dispatch(backend::kDefaultStream,
                                "projection_fwd.projection_fwd_3dgut", spec,
                                per_row, rows, 1, &params_addr,

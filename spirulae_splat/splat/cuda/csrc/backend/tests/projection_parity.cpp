@@ -147,6 +147,76 @@ int main(int argc, char** argv) {
                                  C * N * chans[s]);
                 }
 
+    // --- SH value-quant (q8/q16) fused configs ---
+    // Codec-layout inputs: packed cells (cell = base(i) + 3*j + ch, base =
+    // i * 3 * NUM_SH) plus per-block (min, max) bounds in both layouts:
+    // per-cell-block (stride 256) and FPBO per-splat-block (stride arg 0).
+    // features_sh becomes a shape-only null descriptor, as in the engine.
+    const int64_t cells = N * 3 * NUM_SH;
+    std::vector<uint8_t> q8(cells);
+    std::vector<uint16_t> q16(cells);
+    for (auto& v : q8) v = (uint8_t)(rng() & 0xff);
+    for (auto& v : q16) v = (uint16_t)(rng() & 0xffff);
+    auto gen_bounds = [&](int64_t stride) {
+        int64_t nb = (cells + stride - 1) / stride;
+        std::vector<float> b(2 * nb);
+        for (int64_t i = 0; i < nb; i++) {
+            b[2 * i] = uf(-0.5f, 0.1f);
+            b[2 * i + 1] = b[2 * i] + uf(0.05f, 0.8f);
+        }
+        return b;
+    };
+    std::vector<float> bounds_cell = gen_bounds(256);
+    std::vector<float> bounds_fpbo = gen_bounds((int64_t)256 * 3 * NUM_SH);
+    uint8_t* d_q8 = upload(q8);
+    uint16_t* d_q16 = upload(q16);
+    float* d_bcell = upload(bounds_cell);
+    float* d_bfpbo = upload(bounds_fpbo);
+
+    std::vector<DeviceTensorFloatND> in_splats_q = in_splats;
+    in_splats_q[5] = DeviceTensorFloatND(ttv(nullptr, {N, NUM_SH * 3, 1}));
+
+    auto quant_args = [&](int bits, int fpbo) {
+        TorchTensorView packed_tv =
+            ttv(bits == 8 ? (const void*)d_q8 : (const void*)d_q16,
+                {cells, 1});
+        TorchTensorView bounds_tv = ttv(
+            fpbo ? d_bfpbo : d_bcell,
+            {(int64_t)(fpbo ? bounds_fpbo : bounds_cell).size() / 2, 2});
+        return std::make_pair(packed_tv, bounds_tv);
+    };
+
+    for (int prim = 0; prim < 3; prim++)
+        for (int bits = 8; bits <= 16; bits += 8)
+            for (int fpbo = 0; fpbo < 2; fpbo++) {
+                backend::memset_sync(d_radii, 0, N * sizeof(float));
+                auto fn = prim == 0   ? projection_3dgs_forward
+                          : prim == 1 ? projection_mip_forward
+                                      : projection_3dgut_forward;
+                auto [packed_tv, bounds_tv] = quant_args(bits, fpbo);
+                auto out = fn(
+                    N, 3, in_splats_q, ttv(d_vm, {C, 16}),
+                    ttv(d_intr, {C, 4}), W, H, cams[prim],
+                    ttv(d_dist, {C, 10}), radii, packed_tv, bounds_tv,
+                    (uint32_t)NUM_SH, bits, fpbo ? 0 : 256);
+                backend::device_synchronize();
+                if (const char* err = backend::last_error()) {
+                    std::fprintf(stderr, "backend error (quant): %s\n", err);
+                    return 1;
+                }
+                auto& aabb = std::get<0>(out);
+                auto& depths = std::get<1>(out);
+                auto& screen = std::get<2>(out);
+                readback(acc, (const float*)aabb.data_ptr(), C * N * 4);
+                readback(acc, depths.data_ptr(), C * N);
+                readback(acc, d_radii, N);
+                const int chans_2d[5] = {2, 1, 3, 1, 3};
+                const int chans_ut[3] = {3, 1, 3};
+                const int* chans = prim == 2 ? chans_ut : chans_2d;
+                for (size_t s = 0; s < screen.size(); s++)
+                    readback(acc, screen[s].data_ptr(), C * N * chans[s]);
+            }
+
     // --- packed projection: nnz-compacted outputs (ids exact via float) ---
     for (int prim = 0; prim < 3; prim++)
         for (int ci = 0; ci < 4; ci += 3) {  // PINHOLE + EQUIRECTANGULAR
@@ -185,6 +255,47 @@ int main(int argc, char** argv) {
             for (size_t s = 0; s < screen.size(); s++)
                 readback(acc, screen[s].data_ptr(), nnz * chans[s]);
         }
+
+    // --- packed + quant: one q8 cell-block and one q16 FPBO config ---
+    for (int k = 0; k < 2; k++) {
+        const int prim = k == 0 ? 0 : 2;
+        const int bits = k == 0 ? 8 : 16;
+        const int fpbo = k;
+        backend::memset_sync(d_radii, 0, N * sizeof(float));
+        auto fn = prim == 0 ? projection_3dgs_packed_forward
+                            : projection_3dgut_packed_forward;
+        auto [packed_tv, bounds_tv] = quant_args(bits, fpbo);
+        auto out = fn(N, 3, in_splats_q, ttv(d_vm, {C, 16}),
+                      ttv(d_intr, {C, 4}), W, H, cams[k],
+                      ttv(d_dist, {C, 10}), radii, packed_tv, bounds_tv,
+                      (uint32_t)NUM_SH, bits, fpbo ? 0 : 256);
+        backend::device_synchronize();
+        if (const char* err = backend::last_error()) {
+            std::fprintf(stderr, "backend error (packed quant): %s\n", err);
+            return 1;
+        }
+        auto& cam_ids = std::get<0>(out);
+        auto& gauss_ids = std::get<1>(out);
+        auto& aabb = std::get<2>(out);
+        auto& depths = std::get<3>(out);
+        auto& screen = std::get<4>(out);
+        int64_t nnz = cam_ids.size();
+        acc.push_back((float)nnz);
+        std::vector<int32_t> ids(2 * nnz);
+        backend::memcpy_sync(ids.data(), cam_ids.data_ptr(), nnz * 4,
+                             MemcpyKind::DeviceToHost);
+        backend::memcpy_sync(ids.data() + nnz, gauss_ids.data_ptr(), nnz * 4,
+                             MemcpyKind::DeviceToHost);
+        for (int32_t v : ids) acc.push_back((float)v);
+        readback(acc, (const float*)aabb.data_ptr(), nnz * 4);
+        readback(acc, depths.data_ptr(), nnz);
+        readback(acc, d_radii, N);
+        const int chans_2d[5] = {2, 1, 3, 1, 3};
+        const int chans_ut[3] = {3, 1, 3};
+        const int* chans = prim == 2 ? chans_ut : chans_2d;
+        for (size_t s = 0; s < screen.size(); s++)
+            readback(acc, screen[s].data_ptr(), nnz * chans[s]);
+    }
 
     if (dumping) {
         std::ofstream f(argv[2], std::ios::binary);

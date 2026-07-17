@@ -6,10 +6,8 @@
 //   kCameraModel  = CameraModelType (0..3)
 //   kShDegree     = 0..4
 //   kAntialiased  = 0 (Vanilla3DGS) | 1 (MipSplatting)
-// SH value-quantization (VALUE_BITS 8/16) is not wired yet — the launcher
-// rejects it; the q8/q16 harmonics exports are already SPIR-V-compatible
-// modulo the no-8-bit-types rule (README), so it lands with the training
-// phase.
+//   kShValueBits  = 0 (fp32) | 8 | 16 (the CUDA VALUE_BITS template axis;
+//                   decode via sh_quant.slang's word-based q8/q16 loads)
 //
 // Params exceed the 128-byte push floor -> delivered via the params ring
 // (push constant = one device address).
@@ -18,6 +16,7 @@
 #include "primitive_3dgs.slang"
 #include "harmonics.slang"
 #undef CudaDeviceExport
+#include "sh_quant.slang"
 
 [SpecializationConstant]
 const int kCameraModel = 0;
@@ -25,6 +24,36 @@ const int kCameraModel = 0;
 const int kShDegree = 0;
 [SpecializationConstant]
 const int kAntialiased = 0;
+[SpecializationConstant]
+const int kShValueBits = 0;
+
+// SH -> rgb for one splat, gated exactly like _Base3DGS::project /
+// Primitive3DGUT::project: fp32 features_sh when kShValueBits == 0, else the
+// q8/q16 codec path (base = gid * 3 * num_sh_buffer, matching the encode
+// side; bounds_stride is resolved by the host launcher).
+[ForceInline]
+float3 eval_splat_color(float3 mean, float3x3 R, float3 t, float3 dc,
+                        float* features_sh, uint sh_stride, uint gid,
+                        uint* sh_packed, float2* sh_bounds,
+                        uint num_sh_buffer, int64_t sh_bounds_stride) {
+    if (kShValueBits == 8 || kShValueBits == 16) {
+        int64_t base = (int64_t)3 * (int64_t)num_sh_buffer * (int64_t)gid;
+        if (kShValueBits == 8)
+            return sh_to_color_qw<8>(kShDegree, mean, R, t, dc, sh_packed,
+                                     sh_bounds, base, sh_bounds_stride);
+        return sh_to_color_qw<16>(kShDegree, mean, R, t, dc, sh_packed,
+                                  sh_bounds, base, sh_bounds_stride);
+    }
+    float3* sh = (float3*)(features_sh + gid * sh_stride);
+    switch (kShDegree) {
+    case 0: return sh0_to_color(mean, R, t, dc, sh);
+    case 1: return sh1_to_color(mean, R, t, dc, sh);
+    case 2: return sh2_to_color(mean, R, t, dc, sh);
+    case 3: return sh3_to_color(mean, R, t, dc, sh);
+    case 4: return sh4_to_color(mean, R, t, dc, sh);
+    }
+    return float3(0.0f);
+}
 
 struct ProjectionFwdParams {
     // WorldBuffer (TensorArray<6>) flattened; layouts [N,3] [N,4] [N,3]
@@ -49,12 +78,18 @@ struct ProjectionFwdParams {
     float* s_conic;
     float* s_opac;
     float* s_rgb;
+    // SH value-quant (kShValueBits 8/16); null / 0 in the fp32 path.
+    uint* sh_packed;
+    float2* sh_bounds;
+    int64_t sh_bounds_stride;  // cells per bound, resolved host-side
     uint32_t sh_stride;   // floats per splat in features_sh
     uint32_t C;
     uint32_t N;
     uint32_t width;
     uint32_t height;
     uint32_t wgs_per_row; // grid fold (flat id = wg.y * wgs_per_row*128 + x)
+    uint32_t num_sh_buffer;
+    uint32_t _pad0;
 };
 
 void run_projection<let cam: CameraModelType>(ProjectionFwdParams p,
@@ -104,16 +139,10 @@ void run_projection<let cam: CameraModelType>(ProjectionFwdParams p,
 
     // SH -> rgb, gated exactly like _Base3DGS::project.
     float3 rgb = float3(0.0f);
-    if (aabb.z > aabb.x && aabb.w > aabb.y) {
-        float3* sh = (float3*)(p.features_sh + gid * p.sh_stride);
-        switch (kShDegree) {
-        case 0: rgb = sh0_to_color(mean, R, t, dc, sh); break;
-        case 1: rgb = sh1_to_color(mean, R, t, dc, sh); break;
-        case 2: rgb = sh2_to_color(mean, R, t, dc, sh); break;
-        case 3: rgb = sh3_to_color(mean, R, t, dc, sh); break;
-        case 4: rgb = sh4_to_color(mean, R, t, dc, sh); break;
-        }
-    }
+    if (aabb.z > aabb.x && aabb.w > aabb.y)
+        rgb = eval_splat_color(mean, R, t, dc, p.features_sh, p.sh_stride,
+                               gid, p.sh_packed, p.sh_bounds,
+                               p.num_sh_buffer, p.sh_bounds_stride);
 
     // store (mirrors the kernel epilogue: clamp, degenerate cull, atomics)
     aabb.x = clamp(aabb.x, 0.0f, float(p.width) - 1.0f);
@@ -185,12 +214,17 @@ struct Projection3dgutParams {
     float* s_scale;  // [C*N,3]
     float* s_opac;   // [C*N,1]
     float* s_rgb;    // [C*N,3]
+    uint* sh_packed;
+    float2* sh_bounds;
+    int64_t sh_bounds_stride;
     uint32_t sh_stride;
     uint32_t C;
     uint32_t N;
     uint32_t width;
     uint32_t height;
     uint32_t wgs_per_row;
+    uint32_t num_sh_buffer;
+    uint32_t _pad0;
 };
 
 void run_projection_3dgut<let cam: CameraModelType>(Projection3dgutParams p,
@@ -237,16 +271,10 @@ void run_projection_3dgut<let cam: CameraModelType>(Projection3dgutParams p,
         aabb, sorting_depth, radius, xy, depth, s_scale, s_opac);
 
     float3 rgb = float3(0.0f);
-    if (aabb.z > aabb.x && aabb.w > aabb.y) {
-        float3* sh = (float3*)(p.features_sh + gid * p.sh_stride);
-        switch (kShDegree) {
-        case 0: rgb = sh0_to_color(mean, R, t, dc, sh); break;
-        case 1: rgb = sh1_to_color(mean, R, t, dc, sh); break;
-        case 2: rgb = sh2_to_color(mean, R, t, dc, sh); break;
-        case 3: rgb = sh3_to_color(mean, R, t, dc, sh); break;
-        case 4: rgb = sh4_to_color(mean, R, t, dc, sh); break;
-        }
-    }
+    if (aabb.z > aabb.x && aabb.w > aabb.y)
+        rgb = eval_splat_color(mean, R, t, dc, p.features_sh, p.sh_stride,
+                               gid, p.sh_packed, p.sh_bounds,
+                               p.num_sh_buffer, p.sh_bounds_stride);
 
     aabb.x = clamp(aabb.x, 0.0f, float(p.width) - 1.0f);
     aabb.y = clamp(aabb.y, 0.0f, float(p.height) - 1.0f);
@@ -411,12 +439,17 @@ struct PackedFwdParams {
     float* s2;
     float* s3;
     float* s4;
+    uint* sh_packed;
+    float2* sh_bounds;
+    int64_t sh_bounds_stride;
     uint32_t sh_stride;
     uint32_t C;
     uint32_t N;
     uint32_t width;
     uint32_t height;
     uint32_t wgs_per_row;
+    uint32_t num_sh_buffer;
+    uint32_t _pad0;
 };
 
 void run_packed_fwd<let cam: CameraModelType, let eval3d: bool>(
@@ -466,16 +499,10 @@ void run_packed_fwd<let cam: CameraModelType, let eval3d: bool>(
         aabb, sorting_depth, radius, xy, depth, conic, opac);
 
     float3 rgb = float3(0.0f);
-    if (aabb.z > aabb.x && aabb.w > aabb.y) {
-        float3* sh = (float3*)(p.features_sh + gid * p.sh_stride);
-        switch (kShDegree) {
-        case 0: rgb = sh0_to_color(mean, R, t, dc, sh); break;
-        case 1: rgb = sh1_to_color(mean, R, t, dc, sh); break;
-        case 2: rgb = sh2_to_color(mean, R, t, dc, sh); break;
-        case 3: rgb = sh3_to_color(mean, R, t, dc, sh); break;
-        case 4: rgb = sh4_to_color(mean, R, t, dc, sh); break;
-        }
-    }
+    if (aabb.z > aabb.x && aabb.w > aabb.y)
+        rgb = eval_splat_color(mean, R, t, dc, p.features_sh, p.sh_stride,
+                               gid, p.sh_packed, p.sh_bounds,
+                               p.num_sh_buffer, p.sh_bounds_stride);
 
     p.out_camera_ids[out_idx] = int(cid);
     p.out_gaussian_ids[out_idx] = int(gid);

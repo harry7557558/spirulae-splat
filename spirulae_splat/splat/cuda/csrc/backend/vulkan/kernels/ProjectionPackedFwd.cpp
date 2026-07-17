@@ -34,11 +34,42 @@ struct PackedFwdParams {
     uint64_t out_camera_ids, out_gaussian_ids, out_aabb, out_depths,
         out_radii;
     uint64_t s0, s1, s2, s3, s4;
+    uint64_t sh_packed, sh_bounds;
+    int64_t sh_bounds_stride;
     uint32_t sh_stride;
     uint32_t C, N, width, height, wgs_per_row;
+    uint32_t num_sh_buffer;
+    uint32_t _pad0;
 };
-static_assert(sizeof(PackedFwdParams) == 20 * 8 + 6 * 4,
+static_assert(sizeof(PackedFwdParams) == 23 * 8 + 8 * 4,
               "params layout must match the slang struct");
+
+// Same contract as resolve_sh_quant in ProjectionFwd.cpp (per-TU copy).
+uint32_t resolve_sh_quant(
+    const std::optional<TorchTensorView>& sh_value_packed,
+    const std::optional<TorchTensorView>& sh_value_bounds,
+    const uint32_t num_sh_buffer, const int sh_value_bits,
+    const int64_t sh_bounds_stride,
+    uint64_t* out_packed, uint64_t* out_bounds, int64_t* out_stride) {
+    *out_packed = 0;
+    *out_bounds = 0;
+    *out_stride = 1;  // never 0 (the shader divides by it)
+    if (sh_value_bits == 32)
+        return 0;
+    if (sh_value_bits != 8 && sh_value_bits != 16)
+        throw std::runtime_error(
+            "packed projection forward: sh_value_bits must be 8, 16 or 32");
+    if (!sh_value_packed.has_value() || !sh_value_bounds.has_value())
+        throw std::runtime_error(
+            "packed projection forward: sh_value_bits != 32 requires "
+            "sh_value_packed and sh_value_bounds");
+    *out_packed = std::get<0>(sh_value_packed.value());
+    *out_bounds = std::get<0>(sh_value_bounds.value());
+    *out_stride = sh_bounds_stride > 0
+                      ? sh_bounds_stride
+                      : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
+    return (uint32_t)sh_value_bits;
+}
 
 std::tuple<DeviceVector<int32_t>, DeviceVector<int32_t>, DeviceVector<float4>,
            DeviceVector<float>, std::vector<DeviceTensorFloatND>>
@@ -52,13 +83,16 @@ launch_projection_packed_vk(
     const std::string& camera_model, const TorchTensorView& dist_coeffs,
     DeviceVector<float>& radii,
     const std::optional<TorchTensorView>& sh_value_packed,
-    const int sh_value_bits) {
-    // TODO(sh-value-quant): support sh_value_bits 8/16 — per-entry q8/q16
-    // blobs feature-gated on shaderInt8/16-bit-storage (see README).
-    if (sh_value_bits != 32 || sh_value_packed.has_value())
-        throw std::runtime_error(
-            "Vulkan backend: SH value-quantization (sh_value_bits != 32) is "
-            "not implemented yet");
+    const std::optional<TorchTensorView>& sh_value_bounds,
+    const uint32_t num_sh_buffer,
+    const int sh_value_bits,
+    const int64_t sh_bounds_stride) {
+    uint64_t q_packed, q_bounds;
+    int64_t q_stride;
+    const uint32_t spec_bits =
+        resolve_sh_quant(sh_value_packed, sh_value_bounds, num_sh_buffer,
+                         sh_value_bits, sh_bounds_stride, &q_packed,
+                         &q_bounds, &q_stride);
 
     CameraModelType cam = cmt(camera_model);
     if ((int)cam < 0 || (int)cam > 3)
@@ -96,9 +130,10 @@ launch_projection_packed_vk(
     mp.wgs_per_row = per_row;
 
     // Spec IDs: 0 = camera model, 1 = SH degree (unused by the mask),
-    // 2 = antialiased, 3 = eval3d.
+    // 2 = antialiased, 3 = SH value bits (unused by the mask), 4 = eval3d.
     backend::vk::SpecList spec{(uint32_t)cam, (uint32_t)sh_degree,
-                               antialiased ? 1u : 0u, eval3d ? 1u : 0u};
+                               antialiased ? 1u : 0u, spec_bits,
+                               eval3d ? 1u : 0u};
     if (!backend::vk::dispatch(backend::kDefaultStream,
                                "projection_fwd.projection_packed_mask", spec,
                                per_row, rows, 1, &mp, sizeof(mp)))
@@ -158,6 +193,10 @@ launch_projection_packed_vk(
             p.s3 = (uint64_t)sb.raw_data(3);
             p.s4 = (uint64_t)sb.raw_data(4);
         }
+        p.sh_packed = q_packed;
+        p.sh_bounds = q_bounds;
+        p.sh_bounds_stride = q_stride;
+        p.num_sh_buffer = num_sh_buffer;
         p.C = C;
         p.N = (uint32_t)N;
         p.width = image_width;
@@ -207,11 +246,11 @@ std::tuple<                                                                  \
     const int sh_value_bits,                                                 \
     const int64_t sh_bounds_stride                                           \
 ) {                                                                          \
-    (void)sh_value_bounds; (void)num_sh_buffer; (void)sh_bounds_stride;      \
     return launch_projection_packed_vk(                                      \
         eval3d, antialiased, num_splats, in_splats, max_sh_degree,           \
         viewmats, intrins, image_width, image_height, camera_model,          \
-        dist_coeffs, radii, sh_value_packed, sh_value_bits);                 \
+        dist_coeffs, radii, sh_value_packed, sh_value_bounds,                \
+        num_sh_buffer, sh_value_bits, sh_bounds_stride);                     \
 }
 
 _SSPLAT_DEF_PACKED(projection_3dgs_packed_forward, false, false)

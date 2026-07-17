@@ -157,10 +157,10 @@ Parity-tested against CPU references on every available device.
 |---|---|---|
 | 0 | Runtime (this doc's memory/stream model) + pipeline layer + smoke test | DONE 2026-07 |
 | 1 | SortScan (64-bit radix, scans, select) + parity tests | DONE 2026-07 |
-| 2 | Projection fwd (3 primitives × spec-const cams/SH) + parity vs CUDA | DONE 2026-07 incl. 3DGUT + packed (SH value-quant pending) |
+| 2 | Projection fwd (3 primitives × spec-const cams/SH) + parity vs CUDA | DONE 2026-07 incl. 3DGUT + packed + SH value-quant q8/q16 |
 | 3 | Background SH fwd, tile intersect (key gen + offsets over SortScan) | DONE 2026-07 |
-| 4 | Rasterization fwd (2D + eval3D shared source), visualizer blit | raster fwd DONE 2026-07 (visualizer blit pending) |
-| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | — |
+| 4 | Rasterization fwd (2D + eval3D shared source), visualizer blit | DONE 2026-07 (+ render-path PixelWise, engine-level end-to-end parity) |
+| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | — (throwing stubs keep the engine linking; see below) |
 
 Phase-0/1 hard-won portability rules (validated on NVIDIA proprietary,
 Mesa ANV, llvmpipe — all tests + validation layers clean on all three):
@@ -199,14 +199,22 @@ Packed projection substitutes an int32 0/1 mask (bool would need 8-bit
 stores) scanned by `backend::inclusive_sum<int32>` with a 4-byte nnz
 readback. Parity: `backend/tests/projection_parity.cpp` builds under BOTH
 backends (CUDA `-DSSPLAT_BUILD_BACKEND_TESTS=ON` dumps, Vulkan compares);
-30 fused + 6 packed configs, ~5.2M floats, zero tolerance violations on all
-three local devices (packed nnz and compaction order match exactly).
-**TODO (SH value-quant)** — the one open phase-2 item, marked
-`TODO(sh-value-quant)` at the throw sites in `kernels/ProjectionFwd.cpp` and
-`kernels/ProjectionPackedFwd.cpp`: the q8/q16 harmonics exports need
-per-entry blobs gated on shaderInt8/16-bit-storage features (per-entry
-compilation keeps the capabilities out of the baseline blobs), plus parity
-inputs in the engine's real codec layout.
+30 fused + 6 packed fp32 configs plus 12 fused + 2 packed value-quant
+configs, ~7.2M floats, zero tolerance violations on all three local devices
+(packed nnz and compaction order match exactly).
+
+**SH value-quant (q8/q16)** is implemented WITHOUT any 8/16-bit device
+features: `slang/vulkan/sh_quant.slang` mirrors harmonics.slang's
+`_sh_load_q{8,16}` + `sh_coeffs_to_color_q{8,16}` math but reads the packed
+byte/short buffer as u32 words (the no-8-bit-types rule above), so quantized
+checkpoints render on the plain baseline. `kShValueBits` (0/8/16) is a new
+spec-constant axis on the projection entries (declared before `kEval3d`,
+which is now spec id 4); bounds / base / stride plumb through the params
+structs with the CUDA kernels' exact semantics (stride 0 -> the FPBO
+per-splat-block default). Gotcha: the bounds-block division must run in
+u32 — Intel/ANV effectively hangs (30+ min CPU-bound in the driver compiler)
+lowering the slang-emitted 64-bit integer division; u32 is identical while
+the packed buffer stays under 2^32 cells.
 
 Phase-3 + raster-fwd state (full forward render): the whole
 projection -> tile-intersect -> rasterize -> background chain now runs on
@@ -241,6 +249,61 @@ Vulkan.
   a handful of pixels; the violation-fraction cap absorbs this.
 - build_spirv.py's entry scanner now tolerates `//` comments between the
   [shader]/[numthreads] attributes and `void`.
+
+Phase-4 completion + engine-level end-to-end (2026-07): the REAL engine
+render path (`forward_3dgs` -> background blend -> color space ->
+depth-normal -> `engine_blit_view`) runs on Vulkan, verified against CUDA at
+the engine level.
+
+- `kernels/PixelWiseRender.cpp` + `slang/vulkan/pixel_wise_render.slang`:
+  the render-path PixelWise subset — `blend_background_forward`,
+  `blend_background_noise_forward` (hash_uint3 ported bit-exact),
+  `rgb_to_srgb_forward`, `depth_to_normal_forward{,_tv}` (16x16 shared-mem
+  apron tile as a flat 256-thread workgroup per the X-dim subgroup rule).
+- `kernels/Visualizer.cpp` + `slang/vulkan/visualizer.slang`: full
+  visualizer — frustum geometry, LBVH build (morton keys over
+  `backend::sort_pairs<int64,int32>` bits 0..63, Karras internal nodes,
+  bottom-up AABBs), depth min/max, the annotate/colormap/overlay blit, the
+  thumbnail capture, and both entry points (`engine_blit_view` cached path +
+  legacy `blit_train_cameras_tensor`). Portability substitutions: float
+  atomicMin/Max as InterlockedMin/Max over an ORDER-PRESERVING u32 mapping
+  (exact; tree AABBs unmapped by a small pass, min_max decoded by the
+  consumer), the 8x4 warp-ballot gray fit as a groupshared serial reduction
+  (CUDA assumes warp==32), all uint8 I/O as u32 words with a separate RGB8
+  pack kernel writing the [H,W,3] byte image in whole words (tail lands in
+  the allocation's 4-byte rounding). Viewer work runs on the default stream
+  (the high-priority viewer stream nuance is dropped; single-queue
+  submission order already serializes). `SSPLAT_VIS_DEBUG_SYNC=1` syncs +
+  reports after every visualizer dispatch (how the Intel hang below was
+  bisected).
+- **UB-loop portability rule**: Visualizer.cu's Karras split search
+  (`for (tf = 2; (t = (l+tf-1)/tf) >= 1; tf <<= 1)`) terminates only through
+  signed-overflow / divide-by-zero UB. NVIDIA and llvmpipe happen to exit;
+  Intel spins forever -> VK_ERROR_DEVICE_LOST. The port uses the bounded
+  ceil-halving form (identical probe sequence and converged split). Grep any
+  future kernel port for loops whose exit depends on overflow.
+- `EngineBackground.cu` became portable `EngineBackground.cpp` (its one raw
+  kernel replaced by the existing `float_add_into` launcher, cudaMemcpy* ->
+  backend::). It now compiles into BOTH backends unchanged.
+- **Training stubs**: `kernels/TrainingStubs.gen.cpp` (generated by
+  `spirulae_splat/generate_vulkan_stubs.py` from a link probe of
+  csrc_portable vs the backend lib) + `TrainingStubsManual.cpp` (the
+  quantile template + meshing::OccupancyEvaluator methods) provide throwing
+  definitions for every still-CUDA-only launch function, so the FULL
+  portable engine links against ssplat_backend_vulkan today. Regenerate
+  after porting a module (a ported symbol must lose its stub). The
+  kernel-level parity tools never pull these objects (static-lib
+  granularity), so they stay engine-free.
+- Parity: `backend/tests/engine/engine_render_parity.cpp` links the whole
+  portable engine (CMake `backend/tests/engine/` group; CUDA branch builds
+  it against csrc under SSPLAT_BUILD_BACKEND_TESTS). It drives
+  set_data_3dgs / set_camera_params / engine_init_background_{sh,noise} /
+  engine_init_color_space / forward_3dgs (4 primitive-camera configs +
+  noise-mode config) / depth_to_normal / engine_viewer_init + set_grid +
+  engine_blit_view. ~4.1M floats: NVIDIA zero violations; Intel/llvmpipe
+  <= 0.0005% (the usual near-tie sort flips). 259K blit bytes: <= 0.014%
+  of bytes differ by more than 2 (frustum-line edge pixels at rounding /
+  gray-threshold boundaries). Validation clean on all three devices.
 
 Each phase lands with tests that run on all local Vulkan devices (RTX 5070 =
 NVIDIA proprietary, Intel iGPU = Mesa ANV, llvmpipe = CPU/no-float-atomics

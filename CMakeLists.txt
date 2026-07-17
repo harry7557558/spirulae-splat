@@ -186,6 +186,20 @@ if(SSPLAT_BACKEND STREQUAL "vulkan")
         target_link_libraries(${test_name} PRIVATE ssplat_backend_vulkan)
     endforeach()
 
+    # Engine-level parity tools: drive the real engine (forward_3dgs +
+    # background + blit) through the portable layer. The backend lib
+    # provides the ported kernels plus throwing stubs
+    # (kernels/TrainingStubs*.cpp) for everything still CUDA-only.
+    find_package(Threads REQUIRED)
+    file(GLOB SSPLAT_ENGINE_TESTS CONFIGURE_DEPENDS
+        ${SSPLAT_CSRC}/backend/tests/engine/*.cpp)
+    foreach(test_src ${SSPLAT_ENGINE_TESTS})
+        get_filename_component(test_name ${test_src} NAME_WE)
+        add_executable(${test_name} ${test_src})
+        target_link_libraries(${test_name} PRIVATE csrc_portable
+            ssplat_backend_vulkan Threads::Threads)
+    endforeach()
+
     return()  # the rest of this file is the CUDA build
 endif()
 
@@ -473,7 +487,8 @@ if(SSPLAT_BUILD_BACKEND_TESTS)
         find_package(Python3 REQUIRED COMPONENTS Development.Embed)
     endif()
     file(GLOB SSPLAT_PARITY_TESTS CONFIGURE_DEPENDS
-        spirulae_splat/splat/cuda/csrc/backend/tests/*.cpp)
+        spirulae_splat/splat/cuda/csrc/backend/tests/*.cpp
+        spirulae_splat/splat/cuda/csrc/backend/tests/engine/*.cpp)
     foreach(test_src ${SSPLAT_PARITY_TESTS})
         get_filename_component(test_name ${test_src} NAME_WE)
         add_executable(${test_name} ${test_src})

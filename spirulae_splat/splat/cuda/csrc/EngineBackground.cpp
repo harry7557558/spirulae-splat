@@ -31,21 +31,6 @@
 #include <stdexcept>
 
 
-static constexpr cudaStream_t kBgStream = (cudaStream_t)0;
-
-
-// ---- Small device helpers ---------------------------------------------------
-
-// dst[i] += src[i] over n floats.
-__global__ void engine_bg_add_inplace_kernel(
-    const float* __restrict__ src, float* __restrict__ dst, int64_t n)
-{
-    int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    dst[i] += src[i];
-}
-
-
 // ============================================================================
 // Init / setters
 // ============================================================================
@@ -274,7 +259,8 @@ void _engine_background_backward_hook(
         int64_t sh_n = bg.sh_coeffs.size();
         float* v_sh_dev = DevicePool::global().acquire<float>(
             PoolSlot::EngBgSkyVSh, (size_t)sh_n * 3);
-        cudaMemsetAsync(v_sh_dev, 0, sh_n * 3 * sizeof(float), kBgStream);
+        backend::memset_async(v_sh_dev, 0, sh_n * 3 * sizeof(float),
+                              backend::kDefaultStream);
         TorchTensorView v_sh_tv((uint64_t)v_sh_dev, 4, {sh_n, 3LL});
 
         TorchTensorView bg_image_tv = _dt3d_tv(bg.fwd_background);
@@ -292,10 +278,11 @@ void _engine_background_backward_hook(
     // v_render_Ts += v_Ts_scratch
     {
         int64_t numel = (int64_t)C_batch * H * W;
-        int threads = 256;
-        int64_t blocks = (numel + threads - 1) / threads;
-        engine_bg_add_inplace_kernel<<<(unsigned)blocks, threads, 0, kBgStream>>>(
-            v_Ts_scratch, (float*)std::get<0>(v_render_Ts), numel);
+        DeviceVector<float> dst(TorchTensorView(std::get<0>(v_render_Ts), 4,
+                                                {numel, 1LL}));
+        DeviceVector<float> src(TorchTensorView((uint64_t)v_Ts_scratch, 4,
+                                                {numel, 1LL}));
+        float_add_into(dst, src, numel);
     }
 }
 
@@ -397,8 +384,8 @@ int engine_copy_background_to_host(TorchTensorView out_image) {
                                 cs.splat_color_matrix, out_view);
             src = scratch;
         }
-        cudaMemcpy((void*)std::get<0>(out_image), src, nbytes,
-                   cudaMemcpyDeviceToHost);
+        backend::memcpy_sync((void*)std::get<0>(out_image), src, nbytes,
+                             backend::MemcpyKind::DeviceToHost);
         return 1;
     }
 
