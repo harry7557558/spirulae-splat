@@ -321,8 +321,8 @@ void engine_debug_forward(
         // Copy rgb result D->H
         auto& rgb = std::get<0>(engine().fwd.renders);
         if (rgb.data_ptr() && std::get<0>(out_rgb) != 0) {
-            cudaMemcpy((void*)std::get<0>(out_rgb), rgb.data_ptr(),
-                       rgb.numel() * sizeof(float3), cudaMemcpyDeviceToHost);
+            backend::memcpy_sync((void*)std::get<0>(out_rgb), rgb.data_ptr(),
+                       rgb.numel() * sizeof(float3), backend::MemcpyKind::DeviceToHost);
         }
     } catch (...) {
         engine().world.features_dc   = saved_dc;

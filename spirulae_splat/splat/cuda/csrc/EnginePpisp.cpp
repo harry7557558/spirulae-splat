@@ -13,7 +13,7 @@
 #include <vector>
 
 
-static constexpr cudaStream_t kPpispStream = (cudaStream_t)0;
+static constexpr backend::Stream kPpispStream = (backend::Stream)0;
 
 // Build a TorchTensorView for the full [N_cam, P] PPISP parameter table.
 static TorchTensorView _ppisp_params_full_tv(DeviceTensor2D<float>& table) {
@@ -170,12 +170,12 @@ float* _engine_ppisp_reg_loss_into(
 
     // Output losses (zeroed each call so the in-kernel write is a clean store).
     float* losses_buf = DevicePool::global().acquire<float>(PoolSlot::EngPpispRegLosses, kLoss);
-    cudaMemsetAsync(losses_buf, 0, kLoss * sizeof(float), kPpispStream);
+    backend::memset_async(losses_buf, 0, kLoss * sizeof(float), kPpispStream);
 
     // Raw losses scratch ([N+1, kRaw], pre-zeroed).
     float* raw_losses_buf = DevicePool::global().acquire<float>(
         PoolSlot::EngPpispRegRawLosses, (size_t)(N + 1) * kRaw);
-    cudaMemsetAsync(raw_losses_buf, 0, (size_t)(N + 1) * kRaw * sizeof(float),
+    backend::memset_async(raw_losses_buf, 0, (size_t)(N + 1) * kRaw * sizeof(float),
                     kPpispStream);
 
     TorchTensorView params_tv(
@@ -194,8 +194,8 @@ float* _engine_ppisp_reg_loss_into(
         float* v_losses = DevicePool::global().acquire<float>(
             PoolSlot::EngPpispVRegLosses, kLoss);
         std::vector<float> h_ones(kLoss, 1.0f);
-        cudaMemcpyAsync(v_losses, h_ones.data(), kLoss * sizeof(float),
-                        cudaMemcpyHostToDevice, kPpispStream);
+        backend::memcpy_async(v_losses, h_ones.data(), kLoss * sizeof(float),
+                        backend::MemcpyKind::HostToDevice, kPpispStream);
         TorchTensorView v_losses_tv((uint64_t)v_losses, 4, {(int64_t)kLoss});
 
         // Accumulate into ppisp_grads (the regularization backward writes a
@@ -203,7 +203,7 @@ float* _engine_ppisp_reg_loss_into(
         float* v_params_scratch = DevicePool::global().acquire<float>(
             PoolSlot::EngPpispVRegParams,
             (size_t)N * engine().ppisp.num_params);
-        cudaMemsetAsync(v_params_scratch, 0,
+        backend::memset_async(v_params_scratch, 0,
             (size_t)N * engine().ppisp.num_params * sizeof(float), kPpispStream);
         TorchTensorView v_params_tv(
             (uint64_t)v_params_scratch, 4,

@@ -400,18 +400,18 @@ void engine_backward_from_render_grad(
     int64_t H = engine().camera.height;
     int64_t W = engine().camera.width;
 
-    // Stage the cotangents into pool buffers. cudaMemcpyDefault auto-detects
+    // Stage the cotangents into pool buffers. backend::MemcpyKind::Auto auto-detects
     // host vs device pointers (UVA), so the same entrypoint serves the
     // correctness path (CPU seeds) and the profiling path (CUDA seeds).
     TorchTensorView v_rgb_buf   = _pool_tv(PoolSlot::EngVRgb,   C, H, W, 3);
     TorchTensorView v_depth_buf = _pool_tv(PoolSlot::EngVDepth, C, H, W, 1);
     TorchTensorView v_Ts_buf    = _pool_tv(PoolSlot::EngVTs,    C, H, W, 1);
-    cudaMemcpy((void*)std::get<0>(v_rgb_buf),   (void*)std::get<0>(v_render_rgb),
-               (size_t)C * H * W * 3 * sizeof(float), cudaMemcpyDefault);
-    cudaMemcpy((void*)std::get<0>(v_depth_buf), (void*)std::get<0>(v_render_depth),
-               (size_t)C * H * W * 1 * sizeof(float), cudaMemcpyDefault);
-    cudaMemcpy((void*)std::get<0>(v_Ts_buf),    (void*)std::get<0>(v_render_Ts),
-               (size_t)C * H * W * 1 * sizeof(float), cudaMemcpyDefault);
+    backend::memcpy_sync((void*)std::get<0>(v_rgb_buf),   (void*)std::get<0>(v_render_rgb),
+               (size_t)C * H * W * 3 * sizeof(float), backend::MemcpyKind::Auto);
+    backend::memcpy_sync((void*)std::get<0>(v_depth_buf), (void*)std::get<0>(v_render_depth),
+               (size_t)C * H * W * 1 * sizeof(float), backend::MemcpyKind::Auto);
+    backend::memcpy_sync((void*)std::get<0>(v_Ts_buf),    (void*)std::get<0>(v_render_Ts),
+               (size_t)C * H * W * 1 * sizeof(float), backend::MemcpyKind::Auto);
 
     DeviceTensor3D<float> accum_weight_map;  // empty: no loss-map weighting
     _engine_raster_proj_backward(v_rgb_buf, v_depth_buf, v_Ts_buf, accum_weight_map);
@@ -473,7 +473,7 @@ std::map<std::string, float> engine_compute_loss_backward(
         float h_v[(int)LossIndex::length];
         for (int i = 0; i < (int)LossIndex::length; i++) h_v[i] = 1.0f;
         h_v[(int)LossIndex::RgbPSNR] = 0.0f;
-        cudaMemcpy((void*)std::get<0>(v_losses_buf), h_v, sizeof(h_v), cudaMemcpyHostToDevice);
+        backend::memcpy_sync((void*)std::get<0>(v_losses_buf), h_v, sizeof(h_v), backend::MemcpyKind::HostToDevice);
         v_losses_initialized = true;
     }
 
@@ -694,7 +694,7 @@ std::map<std::string, float> engine_compute_loss_backward(
                     cs.cur_weight,
                     cs.cur_beta,
                     cs.steps,
-                    /*stream=*/(cudaStream_t)0);
+                    /*stream=*/(backend::Stream)0);
                 cs.steps += 1;
             }
         }

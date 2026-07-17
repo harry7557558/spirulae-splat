@@ -391,6 +391,11 @@ public:
         return _size;
     }
 
+    // Raw component access for backend launchers that flatten the buffer
+    // into a kernel-params struct (backend/vulkan). Host-callable.
+    float* raw_data(int i) const { return _data[i]; }
+    int32_t raw_stride(int i) const { return _strides[i]; }
+
     TensorArray(std::vector<DeviceTensorFloatND> tensors) {
         if (tensors.size() == 0) {
             _size = 0;

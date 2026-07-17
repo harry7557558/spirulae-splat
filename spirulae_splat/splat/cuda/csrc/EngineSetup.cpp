@@ -74,7 +74,7 @@ void set_camera_params(
             ptr = (float4*)src_ptr;
         } else {
             ptr = DevicePool::global().acquire<float4>(PoolSlot::CamViewmats, (size_t)(C * 4));
-            cudaMemcpy(ptr, (void*)src_ptr, C * 4 * sizeof(float4), cudaMemcpyHostToDevice);
+            backend::memcpy_sync(ptr, (void*)src_ptr, C * 4 * sizeof(float4), backend::MemcpyKind::HostToDevice);
         }
         TorchTensorView dv_tv((uint64_t)ptr, 4, {C, 4LL, 4LL});
         engine().camera.viewmats = DeviceTensor2D<float4>(dv_tv);

@@ -1,7 +1,6 @@
 #include "Tensor.h"
 
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include "backend/api/BackendTypes.h"
 #include <cstdint>
 #include <string>
 

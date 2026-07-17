@@ -14,7 +14,7 @@
 #include <string>
 
 
-static constexpr cudaStream_t kBilagridStream = (cudaStream_t)0;
+static constexpr backend::Stream kBilagridStream = (backend::Stream)0;
 
 
 // Validate optim_bits: 32 = off, 4 or 8 = enabled.
@@ -62,7 +62,7 @@ static void _encode_and_free_fp32(BG& bg, PoolSlot fp32_pool_key) {
         (uint16_t*)bg.grids_quant.packed_ptr(),
         bg.grids_quant.bounds_ptr(),
         total_cells,
-        (cudaStream_t)0);
+        (backend::Stream)0);
     DevicePool::global().free(fp32_pool_key);
     bg.grids.set_shape_no_alloc(N, L, H, W, C);
 }
@@ -164,7 +164,7 @@ void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
 // Compute TV losses for each enabled bilagrid into a pool-backed 3-float
 // device buffer at [rgb_tv, depth_tv, normal_tv]; unset entries stay 0.
 void _engine_bilagrid_tv_into(float* tv_buf3_device) {
-    cudaMemsetAsync(tv_buf3_device, 0, 3 * sizeof(float), kBilagridStream);
+    backend::memset_async(tv_buf3_device, 0, 3 * sizeof(float), kBilagridStream);
     auto run = [&](auto& bg, int slot) {
         if (bg.grids.template size<0>() == 0) return;
         int N = (int)bg.grids.template size<0>();
@@ -280,8 +280,8 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
                                     scalar_full, kBilagridStream);
         } else {
             // Identity: tmp_scalars[i] -> scalar_full[i].
-            cudaMemcpyAsync(scalar_full, tmp_scalars,
-                C_batch * sizeof(float), cudaMemcpyDeviceToDevice, kBilagridStream);
+            backend::memcpy_async(scalar_full, tmp_scalars,
+                C_batch * sizeof(float), backend::MemcpyKind::DeviceToDevice, kBilagridStream);
         }
 
         int L = (int)engine().bilagrid_depth.grids.size<1>();

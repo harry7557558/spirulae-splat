@@ -64,8 +64,6 @@
 #include "Common.cuh"
 #include "Tensor.h"
 
-#include <cuda_runtime.h>
-
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -233,15 +231,7 @@ private:
 
     // Source pointer location: device vs. pageable-host.
     static bool _is_device_ptr(const void* ptr) {
-        if (ptr == nullptr) return false;
-        cudaPointerAttributes attr{};
-        cudaError_t err = cudaPointerGetAttributes(&attr, ptr);
-        if (err != cudaSuccess) {
-            cudaGetLastError();  // pageable-host pointer is unregistered
-            return false;
-        }
-        return attr.type == cudaMemoryTypeDevice
-            || attr.type == cudaMemoryTypeManaged;
+        return backend::is_device_pointer(ptr);
     }
 
     // Zero-copy view if `tv` is already on device; otherwise pool-acquire
@@ -259,8 +249,8 @@ private:
             ptr = (T*)src_ptr;
         } else {
             ptr = DevicePool::global().acquire<T>(key, (size_t)n);
-            cudaMemcpy(ptr, (void*)src_ptr, n * sizeof(T),
-                       cudaMemcpyHostToDevice);
+            backend::memcpy_sync(ptr, (void*)src_ptr, n * sizeof(T),
+                       backend::MemcpyKind::HostToDevice);
         }
         constexpr uint32_t elem = (sizeof(T) % 4 == 0) ? 4 : 1;
         constexpr int64_t  dim1 = (sizeof(T) % 4 == 0) ? (int64_t)sizeof(T)/4
@@ -282,8 +272,8 @@ private:
             ptr = (T*)src_ptr;
         } else {
             ptr = DevicePool::global().acquire<T>(key, (size_t)(n0 * n1));
-            cudaMemcpy(ptr, (void*)src_ptr, n0 * n1 * sizeof(T),
-                       cudaMemcpyHostToDevice);
+            backend::memcpy_sync(ptr, (void*)src_ptr, n0 * n1 * sizeof(T),
+                       backend::MemcpyKind::HostToDevice);
         }
         constexpr uint32_t elem = (sizeof(T) % 4 == 0) ? 4 : 1;
         constexpr int64_t  dim2 = (sizeof(T) % 4 == 0) ? (int64_t)sizeof(T)/4
@@ -307,8 +297,8 @@ private:
         } else {
             ptr = DevicePool::global().acquire<float4>(
                 key, (size_t)(N * 4));
-            cudaMemcpy(ptr, (void*)src_ptr, N * 4 * sizeof(float4),
-                       cudaMemcpyHostToDevice);
+            backend::memcpy_sync(ptr, (void*)src_ptr, N * 4 * sizeof(float4),
+                       backend::MemcpyKind::HostToDevice);
         }
         TorchTensorView dv_tv((uint64_t)ptr, 4, {N, 4LL, 4LL});
         return DeviceTensor2D<float4>(dv_tv);

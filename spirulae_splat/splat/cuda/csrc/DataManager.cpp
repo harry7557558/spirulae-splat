@@ -999,12 +999,12 @@ void DataManagerImpl::upload_cubemap_axes() {
     }
     if (need_fisheye5) {
         float* p = DevicePool::global().acquire<float>(PoolSlot::DmAxesFisheye5, 5 * 9);
-        cudaMemcpy(p, kAxesFisheye5, sizeof(kAxesFisheye5), cudaMemcpyHostToDevice);
+        backend::memcpy_sync(p, kAxesFisheye5, sizeof(kAxesFisheye5), backend::MemcpyKind::HostToDevice);
         _axes_fisheye5_dev = p;
     }
     if (need_equirect6) {
         float* p = DevicePool::global().acquire<float>(PoolSlot::DmAxesEquirect6, 6 * 9);
-        cudaMemcpy(p, kAxesEquirect6, sizeof(kAxesEquirect6), cudaMemcpyHostToDevice);
+        backend::memcpy_sync(p, kAxesEquirect6, sizeof(kAxesEquirect6), backend::MemcpyKind::HostToDevice);
         _axes_equirect6_dev = p;
     }
 }

@@ -81,15 +81,7 @@ inline TorchTensorView _dt3d_tv(const DeviceTensor3D<T>& dt) {
 
 // --- Source pointer location: device vs. pageable-host. ---
 inline bool _is_device_ptr(const void* ptr) {
-    if (ptr == nullptr) return false;
-    cudaPointerAttributes attr{};
-    cudaError_t err = cudaPointerGetAttributes(&attr, ptr);
-    if (err != cudaSuccess) {
-        // Pageable host pointer is unregistered -> reset error and treat as host.
-        cudaGetLastError();
-        return false;
-    }
-    return attr.type == cudaMemoryTypeDevice || attr.type == cudaMemoryTypeManaged;
+    return backend::is_device_pointer(ptr);
 }
 
 // --- Pool-acquire + H->D copy from a host TorchTensorView, OR zero-copy view
@@ -105,7 +97,7 @@ inline DeviceVector<T> _hv_to_dv(PoolSlot key, const TorchTensorView& src_tv) {
         ptr = (T*)src_ptr;
     } else {
         ptr = DevicePool::global().acquire<T>(key, (size_t)n);
-        cudaMemcpy(ptr, (void*)src_ptr, n * sizeof(T), cudaMemcpyHostToDevice);
+        backend::memcpy_sync(ptr, (void*)src_ptr, n * sizeof(T), backend::MemcpyKind::HostToDevice);
     }
     TorchTensorView dv_tv((uint64_t)ptr,
         (uint32_t)(sizeof(T) % 4 == 0 ? 4 : 1),
@@ -124,7 +116,7 @@ inline DeviceTensor2D<T> _hv_to_dt2d(PoolSlot key, const TorchTensorView& src_tv
         ptr = (T*)src_ptr;
     } else {
         ptr = DevicePool::global().acquire<T>(key, (size_t)(n0 * n1));
-        cudaMemcpy(ptr, (void*)src_ptr, n0 * n1 * sizeof(T), cudaMemcpyHostToDevice);
+        backend::memcpy_sync(ptr, (void*)src_ptr, n0 * n1 * sizeof(T), backend::MemcpyKind::HostToDevice);
     }
     TorchTensorView tv((uint64_t)ptr,
         (uint32_t)(sizeof(T) % 4 == 0 ? 4 : 1),
@@ -143,7 +135,7 @@ inline DeviceTensor3D<T> _hv_to_dt3d(PoolSlot key, const TorchTensorView& src_tv
         ptr = (T*)src_ptr;
     } else {
         ptr = DevicePool::global().acquire<T>(key, (size_t)(n0 * n1 * n2));
-        cudaMemcpy(ptr, (void*)src_ptr, n0 * n1 * n2 * sizeof(T), cudaMemcpyHostToDevice);
+        backend::memcpy_sync(ptr, (void*)src_ptr, n0 * n1 * n2 * sizeof(T), backend::MemcpyKind::HostToDevice);
     }
     TorchTensorView tv((uint64_t)ptr,
         (uint32_t)(sizeof(T) % 4 == 0 ? 4 : 1),
@@ -157,15 +149,15 @@ template<typename T>
 inline void _dv_to_host(const DeviceVector<T>& dv, const TorchTensorView& host_tv) {
     if (dv.data_ptr() == nullptr || std::get<0>(host_tv) == 0) return;
     int64_t n = dv.size();
-    cudaMemcpy((void*)std::get<0>(host_tv), dv.data_ptr(),
-               n * sizeof(T), cudaMemcpyDeviceToHost);
+    backend::memcpy_sync((void*)std::get<0>(host_tv), dv.data_ptr(),
+               n * sizeof(T), backend::MemcpyKind::DeviceToHost);
 }
 
 template<typename T>
 inline void _dt3d_to_host(const DeviceTensor3D<T>& dt, const TorchTensorView& host_tv) {
     if (dt.data_ptr() == nullptr || std::get<0>(host_tv) == 0) return;
-    cudaMemcpy((void*)std::get<0>(host_tv), dt.data_ptr(),
-               dt.numel() * sizeof(T), cudaMemcpyDeviceToHost);
+    backend::memcpy_sync((void*)std::get<0>(host_tv), dt.data_ptr(),
+               dt.numel() * sizeof(T), backend::MemcpyKind::DeviceToHost);
 }
 
 
@@ -207,8 +199,8 @@ inline DeviceTensor3D<T> _hv_to_dt3d_gt(
         } else {
             uint8_t* staging = DevicePool::global().acquire<uint8_t>(
                 PoolSlot::GtStagingU8, (size_t)numel);
-            cudaMemcpy(staging, (void*)src_ptr, numel * sizeof(uint8_t),
-                       cudaMemcpyHostToDevice);
+            backend::memcpy_sync(staging, (void*)src_ptr, numel * sizeof(uint8_t),
+                       backend::MemcpyKind::HostToDevice);
             d_u8 = staging;
         }
         if (kind == "rgb") {
@@ -225,8 +217,8 @@ inline DeviceTensor3D<T> _hv_to_dt3d_gt(
         } else {
             uint16_t* staging = DevicePool::global().acquire<uint16_t>(
                 PoolSlot::GtStagingU16, (size_t)numel);
-            cudaMemcpy(staging, (void*)src_ptr, numel * sizeof(uint16_t),
-                       cudaMemcpyHostToDevice);
+            backend::memcpy_sync(staging, (void*)src_ptr, numel * sizeof(uint16_t),
+                       backend::MemcpyKind::HostToDevice);
             d_u16 = staging;
         }
         if (kind == "rgb") {
@@ -264,7 +256,7 @@ inline TorchTensorView _pool_tv(PoolSlot key,
 inline TorchTensorView _pool_tv_zero(PoolSlot key,
                                      int64_t B, int64_t H, int64_t W, int64_t C) {
     float* p = DevicePool::global().acquire<float>(key, (size_t)(B * H * W * C));
-    cudaMemset(p, 0, B * H * W * C * sizeof(float));
+    backend::memset_sync(p, 0, B * H * W * C * sizeof(float));
     return TorchTensorView((uint64_t)p, 4, {B, H, W, C});
 }
 
@@ -275,7 +267,7 @@ inline TorchTensorView _pool_tv_1d(PoolSlot key, int64_t N) {
 
 inline TorchTensorView _pool_tv_1d_zero(PoolSlot key, int64_t N) {
     float* p = DevicePool::global().acquire<float>(key, (size_t)N);
-    cudaMemset(p, 0, N * sizeof(float));
+    backend::memset_sync(p, 0, N * sizeof(float));
     return TorchTensorView((uint64_t)p, 4, {N});
 }
 
@@ -300,5 +292,5 @@ inline void _zero_tv(const TorchTensorView& tv) {
     if (std::get<0>(tv) == 0) return;
     int64_t bytes = std::get<1>(tv);
     for (auto s : std::get<2>(tv)) bytes *= s;
-    cudaMemset((void*)std::get<0>(tv), 0, bytes);
+    backend::memset_sync((void*)std::get<0>(tv), 0, bytes);
 }

@@ -62,7 +62,7 @@ static TensorView<float, 4> _dt3d_float_to_tv4_1ch(const DeviceTensor3D<float>& 
 // ================
 
 template<bool invert_quantile>
-cudaError_t batch_quantile_masked_radix_select(
+int batch_quantile_masked_radix_select(
     const float* d_x,
     int B,
     int N,

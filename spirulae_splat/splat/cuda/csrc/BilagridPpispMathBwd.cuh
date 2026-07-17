@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include <cuda_runtime.h>
+#include "backend/api/BackendTypes.h"
 
 #include "BilagridPpispMath.cuh"
 

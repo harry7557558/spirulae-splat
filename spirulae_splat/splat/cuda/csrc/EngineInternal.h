@@ -8,7 +8,8 @@
 // Anything declared here is intentionally not part of the public Engine.h API.
 
 #include "Tensor.h"
-#include "PerPixelLoss.cuh"   // PPISPRegLossIndex, etc., via PixelWise.cuh chain
+#include "PerPixelLoss.cuh"   // LossIndex / LossValues / PerPixelGrads
+#include "PixelWise.cuh"      // PPISPRegLossIndex
 
 #include <array>
 #include <cstdint>
@@ -45,7 +46,7 @@ void fused_bilagrid_tv_adam(
     bool quantize,
     int  quant_bits,
     bool value_quantize,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 // --- One-shot encode of an fp32 bilagrid grid into 16-bit packed + bounds
@@ -56,7 +57,7 @@ void bilagrid_encode_q16_launch(
     uint16_t* grids_q16,
     float2* value_bounds,
     int64_t total_cells,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 // --- Color-shift regularizer for bilagrid + PPISP (ColorShiftReg.cu). ---
@@ -75,7 +76,7 @@ void color_shift_reg_step(
     float weight,
     float beta,
     int64_t step,                   // # of EMA updates done BEFORE this call
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 // --- Fused bilagrid (image-grad + TV + AdaGrad) kernel (BilagridFusedAdam.cu). ---
@@ -101,25 +102,25 @@ void fused_bilagrid_tv_adagrad(
     bool quantize,
     int  quant_bits,
     bool value_quantize,
-    cudaStream_t stream
+    backend::Stream stream
 );
 
 // --- Bilagrid affine identity init (BilagridInit.cu). ---
 void bilagrid_affine_identity_init(
-    float* grids, int N, int L, int H, int W, cudaStream_t stream);
+    float* grids, int N, int L, int H, int W, backend::Stream stream);
 
 // --- PPISP "original" default initializer (PpispInit.cu). ---
 void ppisp_original_default_init(
-    float* params, int N, cudaStream_t stream);
+    float* params, int N, backend::Stream stream);
 
 // --- PPISP elementwise grad accumulation (PpispInit.cu). ---
 void ppisp_add_into_grad(
-    const float* src, float* dst, size_t n, cudaStream_t stream);
+    const float* src, float* dst, size_t n, backend::Stream stream);
 
 // --- Scatter per-image scalars into a per-camera table (BilagridInit.cu). ---
 void bilagrid_scatter_floats(
     const float* src, const int* indices, int n,
-    float* dst, cudaStream_t stream);
+    float* dst, backend::Stream stream);
 
 
 // --- Cross-section helpers within the Engine split. ---

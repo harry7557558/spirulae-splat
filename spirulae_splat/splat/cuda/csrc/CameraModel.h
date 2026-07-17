@@ -3,7 +3,8 @@
 // CUDA-free camera-model enum + name helpers.
 //
 // CameraModelType and camera_model_from_name were historically defined in
-// Common.cuh / Camera.h, which transitively pull in <cuda_runtime.h>. The
+// Common.cuh / Camera.h, which under the CUDA backend transitively pull in
+// <cuda_runtime.h> (via backend/api/BackendTypes.h). The
 // standalone dataset parsers (app/ColmapParser.cpp, app/NerfstudioParser.cpp,
 // app/MetashapeParser.cpp, app/DatasetCommon.cpp) only need these two trivial
 // symbols, and are also compiled for WebAssembly (viewer/), where CUDA headers

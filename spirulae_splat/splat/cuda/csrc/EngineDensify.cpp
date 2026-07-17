@@ -325,7 +325,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
 
     // Reset accum buffer after densification step
     if (do_densify && dv_accum_buf.data_ptr() != nullptr) {
-        cudaMemset(dv_accum_buf.data_ptr(), 0, dv_accum_buf.size() * sizeof(float2));
+        backend::memset_sync(dv_accum_buf.data_ptr(), 0, dv_accum_buf.size() * sizeof(float2));
     }
 
     // Add MCMC noise

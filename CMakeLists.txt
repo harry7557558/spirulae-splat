@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
-project(spirulae_splat LANGUAGES C CXX CUDA)
+project(spirulae_splat LANGUAGES C CXX)  # CUDA enabled below unless SSPLAT_BACKEND=vulkan
 
 # This file is intended to be used with `build_develop.bash` for development purpose.
 
@@ -15,6 +15,181 @@ project(spirulae_splat LANGUAGES C CXX CUDA)
 option(SSPLAT_BUILD_CLI "Build the standalone ssplat-train CLI" OFF)
 option(SSPLAT_BUILD_GUI "Build the native GUI app ssplat-gui (fetches GLFW + Dear ImGui)" OFF)
 option(SSPLAT_NO_TORCH "Skip Torch/Python even if present; build only ssplat-train" OFF)
+
+# ---------------------------------------------------------------------------
+# Compute backend selection
+#
+# cuda (default): the full build, exactly as before.
+# vulkan: WORK IN PROGRESS -- no kernel implementations yet. Compiles the
+# portable engine layer (Engine*.cpp + host support) against the backend API
+# (csrc/backend/, see its README.md) with SSPLAT_BACKEND_VULKAN defined and
+# WITHOUT the CUDA toolkit. Produces a compile-check object library only --
+# no executables and no Python extension.
+# ---------------------------------------------------------------------------
+set(SSPLAT_BACKEND "cuda" CACHE STRING "Compute backend: cuda | vulkan (vulkan is WIP)")
+set_property(CACHE SSPLAT_BACKEND PROPERTY STRINGS cuda vulkan)
+
+if(SSPLAT_BACKEND STREQUAL "vulkan")
+    message(STATUS "SSPLAT_BACKEND=vulkan (work in progress): portable engine "
+        "layer + backend/vulkan runtime; kernel coverage is tracked in "
+        "csrc/backend/vulkan/README.md.")
+
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    set(SSPLAT_CSRC ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc)
+
+    find_package(Vulkan REQUIRED)
+
+    # Portable engine layer (compile-checked; links against the Vulkan
+    # runtime once kernel launchers exist for the symbols it needs).
+    file(GLOB SSPLAT_PORTABLE_SOURCES ${SSPLAT_CSRC}/*.cpp)
+    list(REMOVE_ITEM SSPLAT_PORTABLE_SOURCES ${SSPLAT_CSRC}/ext.cpp)
+
+    add_library(csrc_portable OBJECT ${SSPLAT_PORTABLE_SOURCES})
+    target_compile_definitions(csrc_portable PUBLIC SSPLAT_BACKEND_VULKAN)
+    target_include_directories(csrc_portable PUBLIC ${SSPLAT_CSRC})
+
+    find_package(OpenMP)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(csrc_portable PUBLIC OpenMP::OpenMP_CXX)
+    endif()
+
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+    # ---- slangc: locate a matching compiler or fetch the pinned release ----
+    # SPIR-V blobs are never committed; they are compiled at build time
+    # (checksum-cached in the build tree) and embedded below.
+    set(SSPLAT_SLANG_VERSION "2026.2.1")
+    set(SSPLAT_SLANGC "" CACHE FILEPATH
+        "slangc to use (empty = find in PATH, fetch on miss/mismatch)")
+
+    function(_ssplat_slangc_version exe out_var)
+        set(${out_var} "" PARENT_SCOPE)
+        if(NOT exe OR NOT EXISTS ${exe})
+            return()
+        endif()
+        execute_process(COMMAND ${exe} -v
+            OUTPUT_VARIABLE _v ERROR_VARIABLE _v
+            OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _r)
+        if(_r EQUAL 0)
+            string(STRIP "${_v}" _v)
+            set(${out_var} "${_v}" PARENT_SCOPE)
+        endif()
+    endfunction()
+
+    set(_slangc "${SSPLAT_SLANGC}")
+    if(NOT _slangc)
+        find_program(_slangc_in_path slangc)
+        if(_slangc_in_path)
+            set(_slangc ${_slangc_in_path})
+        endif()
+    endif()
+    _ssplat_slangc_version("${_slangc}" _slangc_ver)
+    if(NOT _slangc_ver STREQUAL SSPLAT_SLANG_VERSION)
+        if(_slangc)
+            message(STATUS "slangc at ${_slangc} is version '${_slangc_ver}' "
+                "(need ${SSPLAT_SLANG_VERSION}); fetching the pinned release")
+        else()
+            message(STATUS "slangc not found; fetching the pinned release "
+                "${SSPLAT_SLANG_VERSION}")
+        endif()
+        if(WIN32)
+            set(_slang_plat "windows-x86_64")
+            set(_slang_ext "zip")
+            set(_slang_exe "bin/slangc.exe")
+        else()
+            if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+                set(_slang_arch "aarch64")
+            else()
+                set(_slang_arch "x86_64")
+            endif()
+            if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+                set(_slang_plat "macos-${_slang_arch}")
+            else()
+                set(_slang_plat "linux-${_slang_arch}")
+            endif()
+            set(_slang_ext "tar.gz")
+            set(_slang_exe "bin/slangc")
+        endif()
+        set(_slang_name "slang-${SSPLAT_SLANG_VERSION}-${_slang_plat}")
+        set(_slang_dir ${CMAKE_CURRENT_BINARY_DIR}/${_slang_name})
+        set(_slangc ${_slang_dir}/${_slang_exe})
+        if(NOT EXISTS ${_slangc})
+            set(_slang_url "https://github.com/shader-slang/slang/releases/download/v${SSPLAT_SLANG_VERSION}/${_slang_name}.${_slang_ext}")
+            set(_slang_archive ${CMAKE_CURRENT_BINARY_DIR}/${_slang_name}.${_slang_ext})
+            message(STATUS "Downloading ${_slang_url}")
+            file(DOWNLOAD ${_slang_url} ${_slang_archive}
+                SHOW_PROGRESS STATUS _dl_status)
+            list(GET _dl_status 0 _dl_code)
+            if(NOT _dl_code EQUAL 0)
+                message(FATAL_ERROR "Failed to download slang release: "
+                    "${_dl_status}. Install slang-${SSPLAT_SLANG_VERSION} "
+                    "and pass -DSSPLAT_SLANGC=/path/to/slangc.")
+            endif()
+            file(ARCHIVE_EXTRACT INPUT ${_slang_archive}
+                DESTINATION ${_slang_dir})
+            file(REMOVE ${_slang_archive})
+        endif()
+        _ssplat_slangc_version("${_slangc}" _slangc_ver)
+        if(NOT _slangc_ver STREQUAL SSPLAT_SLANG_VERSION)
+            message(FATAL_ERROR "Fetched slangc reports version "
+                "'${_slangc_ver}', expected ${SSPLAT_SLANG_VERSION}")
+        endif()
+    endif()
+    message(STATUS "Using slangc ${_slangc} (${_slangc_ver})")
+
+    # ---- compile Slang -> SPIR-V (build tree, checksum-cached) and embed ----
+    set(SSPLAT_CUDA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda)
+    file(GLOB_RECURSE SSPLAT_SLANG_SOURCES CONFIGURE_DEPENDS
+        ${SSPLAT_CUDA_DIR}/slang/*.slang)
+    set(SSPLAT_SPIRV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spirv)
+    set(SSPLAT_SPIRV_EMBED ${CMAKE_CURRENT_BINARY_DIR}/vk_shaders_embedded.cpp)
+    add_custom_command(
+        OUTPUT ${SSPLAT_SPIRV_EMBED}
+        COMMAND ${Python3_EXECUTABLE} slang/build_spirv.py
+            --out-dir ${SSPLAT_SPIRV_DIR} --slangc ${_slangc}
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/embed_spirv.py
+            ${SSPLAT_SPIRV_DIR} ${SSPLAT_SPIRV_EMBED}
+        WORKING_DIRECTORY ${SSPLAT_CUDA_DIR}
+        DEPENDS ${SSPLAT_SLANG_SOURCES}
+            ${SSPLAT_CUDA_DIR}/slang/build_spirv.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/embed_spirv.py
+        COMMENT "Compiling Slang -> SPIR-V and embedding")
+
+    # Vulkan backend runtime (device context, memory, streams, events) and
+    # kernel launchers.
+    file(GLOB SSPLAT_VULKAN_SOURCES CONFIGURE_DEPENDS ${SSPLAT_CSRC}/backend/vulkan/*.cpp
+        ${SSPLAT_CSRC}/backend/vulkan/kernels/*.cpp)
+    list(APPEND SSPLAT_VULKAN_SOURCES ${SSPLAT_SPIRV_EMBED})
+    add_library(ssplat_backend_vulkan STATIC ${SSPLAT_VULKAN_SOURCES})
+    target_compile_definitions(ssplat_backend_vulkan PUBLIC SSPLAT_BACKEND_VULKAN)
+    target_include_directories(ssplat_backend_vulkan PUBLIC ${SSPLAT_CSRC})
+    target_link_libraries(ssplat_backend_vulkan PUBLIC Vulkan::Vulkan)
+
+    # Backend tests (run manually; see backend/vulkan/README.md).
+    file(GLOB SSPLAT_VULKAN_TESTS CONFIGURE_DEPENDS ${SSPLAT_CSRC}/backend/vulkan/tests/*.cpp)
+    foreach(test_src ${SSPLAT_VULKAN_TESTS})
+        get_filename_component(test_name ${test_src} NAME_WE)
+        add_executable(${test_name} ${test_src})
+        target_link_libraries(${test_name} PRIVATE ssplat_backend_vulkan)
+    endforeach()
+
+    # Cross-backend parity tools (same sources build in the CUDA branch).
+    file(GLOB SSPLAT_PARITY_TESTS CONFIGURE_DEPENDS
+        ${SSPLAT_CSRC}/backend/tests/*.cpp)
+    foreach(test_src ${SSPLAT_PARITY_TESTS})
+        get_filename_component(test_name ${test_src} NAME_WE)
+        add_executable(${test_name} ${test_src})
+        target_link_libraries(${test_name} PRIVATE ssplat_backend_vulkan)
+    endforeach()
+
+    return()  # the rest of this file is the CUDA build
+endif()
+
+enable_language(CUDA)
 
 set(SSPLAT_WITH_TORCH OFF)
 if(NOT SSPLAT_NO_TORCH)
@@ -287,6 +462,33 @@ if(SSPLAT_BUILD_CLI OR SSPLAT_BUILD_GUI)
         "inline const unsigned char kViewerHtml[] = {${_ssplat_vh_bytes}};\n"
         "inline const size_t kViewerHtmlSize = sizeof(kViewerHtml);\n")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${SSPLAT_VIEWER_HTML})
+endif()
+
+# Cross-backend parity tools (dump reference outputs; the Vulkan build's
+# twin executable compares against them). See csrc/backend/vulkan/README.md.
+option(SSPLAT_BUILD_BACKEND_TESTS "Build backend parity test tools" OFF)
+if(SSPLAT_BUILD_BACKEND_TESTS)
+    if(SSPLAT_WITH_TORCH)
+        # Same libpython + static-libstdc++ notes as ssplat-train below.
+        find_package(Python3 REQUIRED COMPONENTS Development.Embed)
+    endif()
+    file(GLOB SSPLAT_PARITY_TESTS CONFIGURE_DEPENDS
+        spirulae_splat/splat/cuda/csrc/backend/tests/*.cpp)
+    foreach(test_src ${SSPLAT_PARITY_TESTS})
+        get_filename_component(test_name ${test_src} NAME_WE)
+        add_executable(${test_name} ${test_src})
+        target_include_directories(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc
+            ${CUDAToolkit_INCLUDE_DIRS})
+        target_link_libraries(${test_name} PRIVATE csrc CUDA::cudart)
+        if(SSPLAT_WITH_TORCH)
+            target_link_libraries(${test_name} PRIVATE Python3::Python)
+            if(NOT WIN32)
+                target_link_options(${test_name} PRIVATE
+                    -static-libgcc -static-libstdc++)
+            endif()
+        endif()
+    endforeach()
 endif()
 
 if(SSPLAT_BUILD_CLI)

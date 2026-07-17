@@ -25,8 +25,6 @@
 #include <utility>
 #include <vector>
 
-#include <cuda_runtime.h>
-
 #include "Tensor.h"   // NpyScalar, npy_scalar_descr
 
 
@@ -117,7 +115,7 @@ inline void tar_write_npy_device(std::ostream& out, const std::string& name,
     const char* src = (const char*)dptr;
     for (size_t off = 0; off < nbytes; ) {
         size_t n = std::min(CHUNK, nbytes - off);
-        cudaMemcpy(host.data(), src + off, n, cudaMemcpyDeviceToHost);
+        backend::memcpy_sync(host.data(), src + off, n, backend::MemcpyKind::DeviceToHost);
         out.write(host.data(), (std::streamsize)n);
         off += n;
     }
@@ -224,7 +222,7 @@ inline void read_into_device(std::istream& in, uint64_t offset,
     for (size_t off = 0; off < nbytes; ) {
         size_t n = std::min(CHUNK, nbytes - off);
         in.read(host.data(), (std::streamsize)n);
-        cudaMemcpy(dst + off, host.data(), n, cudaMemcpyHostToDevice);
+        backend::memcpy_sync(dst + off, host.data(), n, backend::MemcpyKind::HostToDevice);
         off += n;
     }
 }

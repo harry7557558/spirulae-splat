@@ -1,8 +1,9 @@
 #pragma once
 
-#include <cuda.h>
-#include <cuda_runtime.h>
 #include <cstdint>
+
+#include "backend/api/BackendTypes.h"
+#include "backend/api/BackendRuntime.h"
 
 #include <mutex>
 #include <tuple>
@@ -77,8 +78,8 @@ typedef std::tuple<
 // `read_previous()` returns the host pointer to the most-recently-issued slot
 // AFTER synchronizing on its completion event. Because there's a full
 // iteration of GPU work between issue() and the next read_previous(), the
-// event is essentially always already complete -- `cudaEventSynchronize`
-// returns immediately, replacing what used to be a blocking `cudaMemcpy`.
+// event is essentially always already complete -- the event sync returns
+// immediately, replacing what used to be a blocking device-to-host memcpy.
 //
 // First call: read_previous() returns nullptr.
 template<typename T>
@@ -90,26 +91,26 @@ public:
           _valid(n_slots, false), _next_write(0)
     {
         for (int i = 0; i < _n_slots; ++i) {
-            cudaMallocHost(&_h[i], (size_t)_n_elems * sizeof(T));
-            cudaEventCreateWithFlags(&_evt[i], cudaEventDisableTiming);
+            _h[i] = (T*)backend::host_malloc_pinned((size_t)_n_elems * sizeof(T));
+            _evt[i] = backend::event_create(false);
         }
     }
 
     ~AsyncReadout() {
         for (int i = 0; i < _n_slots; ++i) {
-            if (_h[i]) cudaFreeHost(_h[i]);
-            cudaEventDestroy(_evt[i]);
+            if (_h[i]) backend::host_free_pinned(_h[i]);
+            backend::event_destroy(_evt[i]);
         }
     }
 
     AsyncReadout(const AsyncReadout&) = delete;
     AsyncReadout& operator=(const AsyncReadout&) = delete;
 
-    void issue(const T* d_src, cudaStream_t stream = 0) {
+    void issue(const T* d_src, backend::Stream stream = backend::kDefaultStream) {
         int i = _next_write;
-        cudaMemcpyAsync(_h[i], d_src, (size_t)_n_elems * sizeof(T),
-                        cudaMemcpyDeviceToHost, stream);
-        cudaEventRecord(_evt[i], stream);
+        backend::memcpy_async(_h[i], d_src, (size_t)_n_elems * sizeof(T),
+                              backend::MemcpyKind::DeviceToHost, stream);
+        backend::event_record(_evt[i], stream);
         _valid[i] = true;
         _next_write = (_next_write + 1) % _n_slots;
     }
@@ -119,7 +120,7 @@ public:
     const T* read_previous() {
         int i = (_next_write + _n_slots - 1) % _n_slots;
         if (!_valid[i]) return nullptr;
-        cudaEventSynchronize(_evt[i]);
+        backend::event_synchronize(_evt[i]);
         return _h[i];
     }
 
@@ -129,13 +130,13 @@ private:
     int _n_elems;
     int _n_slots;
     std::vector<T*> _h;
-    std::vector<cudaEvent_t> _evt;
+    std::vector<backend::Event*> _evt;
     std::vector<bool> _valid;
     int _next_write;
 };
 
 
-// Global CUDA memory pool -- enum-keyed buffers with high-water-mark semantics.
+// Global device memory pool -- enum-keyed buffers with high-water-mark semantics.
 // Memory never shrinks on resize; only reallocates when the new size exceeds
 // capacity. freeAll() is the only way to release everything; free(slot) drops a
 // single logical buffer. All DeviceVector/Tensor2D/3D/5D::resize() and
@@ -143,7 +144,7 @@ private:
 //
 // Storage is a dense array indexed by PoolKey = (PoolSlot << kSubBits) | sub
 // (see PoolSlots.h). The array is fixed-size (kNumPoolKeys) so there is no
-// rehash/insert -- the mutex only serializes the cudaMalloc/Free. A small side
+// rehash/insert -- the mutex only serializes the device malloc/free. A small side
 // map holds `acquire_dynamic` scratch whose key is built from runtime-variable
 // content and therefore has no compile-time PoolSlot.
 class DevicePool {
@@ -173,8 +174,8 @@ class DevicePool {
     static T* _acquire_into(Slot& slot, size_t n) {
         size_t bytes = n * sizeof(T);
         if (bytes > slot.cap_bytes) {
-            if (slot.ptr) cudaFree(slot.ptr);
-            cudaMalloc(&slot.ptr, bytes);
+            if (slot.ptr) backend::device_free(slot.ptr);
+            slot.ptr = backend::device_malloc(bytes);
             slot.cap_bytes = bytes;
         }
         slot.used_bytes = bytes;
@@ -217,15 +218,15 @@ public:
         std::lock_guard<std::mutex> lock(_mu);
         for (uint32_t sub = 0; sub <= kSubMask; ++sub) {
             Slot& s = _slots[pool_key(slot, sub)];
-            if (s.ptr) { cudaFree(s.ptr); s = Slot{}; }
+            if (s.ptr) { backend::device_free(s.ptr); s = Slot{}; }
         }
     }
 
-    // Free all managed CUDA memory.
+    // Free all managed device memory.
     void freeAll() {
         std::lock_guard<std::mutex> lock(_mu);
-        for (auto& s : _slots) if (s.ptr) { cudaFree(s.ptr); s = Slot{}; }
-        for (auto& kv : _dyn) if (kv.second.slot.ptr) cudaFree(kv.second.slot.ptr);
+        for (auto& s : _slots) if (s.ptr) { backend::device_free(s.ptr); s = Slot{}; }
+        for (auto& kv : _dyn) if (kv.second.slot.ptr) backend::device_free(kv.second.slot.ptr);
         _dyn.clear();
     }
 
@@ -378,14 +379,15 @@ public:
 
     // Returns a pointer to at least `bytes` bytes of device scratch space.
     // Note: callers using the returned pointer asynchronously across threads must
-    // synchronize externally; cudaFree's implicit device sync inside (when
-    // growing) ensures any in-flight kernel using the previous buffer completes
-    // before the new allocation.
+    // synchronize externally; device_free's implicit device sync (a documented
+    // part of the BackendRuntime contract, matching cudaFree) ensures any
+    // in-flight kernel using the previous buffer completes before the new
+    // allocation when growing.
     void* acquire(size_t bytes) {
         std::lock_guard<std::mutex> lock(_mu);
         if (bytes > _cap) {
-            if (_ptr) cudaFree(_ptr);
-            cudaMalloc(&_ptr, bytes);
+            if (_ptr) backend::device_free(_ptr);
+            _ptr = backend::device_malloc(bytes);
             _cap = bytes;
         }
         return _ptr;
@@ -398,7 +400,7 @@ public:
 
     void freeAll() {
         std::lock_guard<std::mutex> lock(_mu);
-        if (_ptr) { cudaFree(_ptr); _ptr = nullptr; _cap = 0; }
+        if (_ptr) { backend::device_free(_ptr); _ptr = nullptr; _cap = 0; }
     }
 
     ~DeviceScratch() { freeAll(); }
@@ -469,7 +471,7 @@ public:
     // fill zero
     void zero() {
         if (_data_ptr)
-            cudaMemset(_data_ptr, 0, _numel * sizeof(T));
+            backend::memset_sync(_data_ptr, 0, _numel * sizeof(T));
     }
 
 #ifdef __CUDACC__
@@ -567,7 +569,7 @@ public:
     // fill zero
     void zero() {
         if (_data_ptr)
-            cudaMemset(_data_ptr, 0, _numel_0 * _numel_1 * sizeof(T));
+            backend::memset_sync(_data_ptr, 0, _numel_0 * _numel_1 * sizeof(T));
     }
 
 #ifdef __CUDACC__
@@ -661,7 +663,7 @@ public:
     // fill zero
     void zero() {
         if (_data_ptr)
-            cudaMemset(_data_ptr, 0, _numel_0 * _numel_1 * _numel_2 * sizeof(T));
+            backend::memset_sync(_data_ptr, 0, _numel_0 * _numel_1 * _numel_2 * sizeof(T));
     }
 
 #ifdef __CUDACC__
@@ -760,7 +762,7 @@ public:
     // fill zero
     void zero() {
         if (_data_ptr)
-            cudaMemset(_data_ptr, 0, _numel_0 * _numel_1 * _numel_2 * _numel_3 * _numel_4 * sizeof(T));
+            backend::memset_sync(_data_ptr, 0, _numel_0 * _numel_1 * _numel_2 * _numel_3 * _numel_4 * sizeof(T));
     }
 
 #ifdef __CUDACC__
