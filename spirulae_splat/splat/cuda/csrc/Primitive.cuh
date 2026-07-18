@@ -461,7 +461,8 @@ public:
         auto res = empty_pool(size, strides, key_prefix);
         for (auto& t : res)
             if (t.data_ptr() != nullptr)
-                cudaMemset(t.data_ptr(), 0, (size_t)t.numel() * sizeof(float));
+                backend::memset_sync(t.data_ptr(), 0,
+                                     (size_t)t.numel() * sizeof(float));
         return res;
     }
 

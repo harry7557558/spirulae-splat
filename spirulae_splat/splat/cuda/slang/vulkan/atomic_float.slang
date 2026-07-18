@@ -5,6 +5,20 @@
 // tolerance-based wherever this is used. The loop's exit is a successful
 // CAS (well-defined; not a UB-terminated loop — see README loop rules).
 
+// Float atomic max mirroring Common.cuh's atomicMax(float*, float): signed
+// int max for non-negative v, unsigned min for negative v (IEEE order in
+// both halves). Single atomic — no CAS loop needed.
+[ForceInline]
+void atomic_max_f32(float* addr, float v) {
+    if (asint(v) >= 0) {
+        int* w = (int*)addr;
+        InterlockedMax(w[0], asint(v));
+    } else {
+        uint* w = (uint*)addr;
+        InterlockedMin(w[0], asuint(v));
+    }
+}
+
 [ForceInline]
 void atomic_add_f32(float* addr, float v) {
     if (v == 0.0f) return;

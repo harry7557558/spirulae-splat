@@ -15,8 +15,6 @@
 #include <PixelWise.cuh>
 #include <ProjectionBwd.cuh>
 #include <ProjectionBwdQuantGrad.cuh>
-#include <RasterizationBwd.cuh>
-#include <RasterizationEval3DBwd.cuh>
 
 #include <stdexcept>
 #include <string>
@@ -1051,78 +1049,6 @@ void projection_mip_backward_quantgrad(
     const int sh_value_bits,
     const int64_t sh_value_bounds_stride
 ) { _vk_stub("projection_mip_backward_quantgrad"); }
-
-// from RasterizationBwd.cuh
-std::tuple<
-    std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,   
-    DeviceVector<float>   
-> rasterize_to_pixels_3dgs_bwd(
-     
-    int64_t num_splats,
-    std::vector<DeviceTensorFloatND> splats_w,
-    std::vector<DeviceTensorFloatND> splats_s,
-    DeviceVector<int32_t> gaussian_ids,
-     
-    const uint32_t image_width,
-    const uint32_t image_height,
-     
-    const DeviceTensor3D<int32_t> tile_offsets,  
-    const DeviceVector<int32_t> flatten_ids,     
-     
-    const DeviceTensor3D<float> render_Ts,   
-    const DeviceTensor3D<int32_t> last_ids,  
-    RenderOutput::TensorTuple render_outputs_tuple,
-    std::optional<RenderOutput::TensorTuple> distortion_fwd_outputs,   
-    DistortionType dist_type,   
-    DeviceTensor3D<float> accum_weight_map,   
-     
-    RenderOutput::TensorTuple v_render_outputs,
-    const DeviceTensor3D<float> v_render_Ts,
-    const DeviceTensor3D<float> v_median,   
-    std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
-    std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
-    std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
-) { _vk_stub("rasterize_to_pixels_3dgs_bwd"); }
-
-// from RasterizationEval3DBwd.cuh
-std::tuple<
-    std::vector<DeviceTensorFloatND>, std::vector<DeviceTensorFloatND>,   
-    DeviceTensor2D<float>,   
-    DeviceVector<float>   
-> rasterize_to_pixels_3dgut_bwd(
-     
-    int64_t num_splats,
-    std::vector<DeviceTensorFloatND> splats_w,
-    std::vector<DeviceTensorFloatND> splats_s,
-    DeviceVector<int32_t> gaussian_ids,
-    TorchTensorView viewmats,   
-    TorchTensorView intrins,   
-    const std::string camera_model,
-    const TorchTensorView dist_coeffs,
-    DeviceTensor2D<float4> aabb,   
-     
-    const uint32_t image_width,
-    const uint32_t image_height,
-     
-    const DeviceTensor3D<int32_t> tile_offsets,  
-    const DeviceVector<int32_t> flatten_ids,     
-     
-    const DeviceTensor3D<float> render_Ts,   
-    const DeviceTensor3D<int32_t> last_ids,  
-    RenderOutput::TensorTuple render_outputs,
-    std::optional<RenderOutput::TensorTuple> distortion_fwd_outputs,
-    DistortionType dist_type,   
-    DeviceTensor3D<float> loss_map,   
-    DeviceTensor3D<float> accum_weight_map,   
-     
-    RenderOutput::TensorTuple v_render_outputs,
-    const DeviceTensor3D<float> v_render_Ts,  
-    const DeviceTensor3D<float> v_median,  
-    std::optional<RenderOutput::TensorTuple> v_distortion_outputs,
-    std::optional<std::vector<DeviceTensorFloatND>> v_splats_w,
-    std::optional<std::vector<DeviceTensorFloatND>> v_splats_s,
-    bool need_viewmat_grad
-) { _vk_stub("rasterize_to_pixels_3dgut_bwd"); }
 
 // from Densify.cuh
 void relocate_splats_mcmc_tensor(

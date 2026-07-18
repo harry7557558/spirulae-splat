@@ -1,0 +1,827 @@
+// Tile rasterization backward (Vulkan backend), closely following
+// csrc/RasterizationEval3DBwd_kernel.cuh (which also generates the 2D
+// backward via IS_EVAL3D=0; two entries here because the fragment types
+// differ). Geometry matches CUDA: a 32-thread workgroup owns one 8x8
+// sub-tile (TILE_SIZE_DX x TILE_SIZE_DY = 64 pixels, 2 pixels/thread at
+// state load), grid (I, tile_height*2, tile_width*2); the macro-tile
+// gaussian range is scanned back-to-front, survivors of the ellipse/box
+// sub-tile test are compacted into shared, and the batch sweep is a
+// diagonal systolic walk: at step t, thread k undoes pixel (t - k) for its
+// survivor splat k, so every pixel sees splats strictly back-to-front.
+//
+// Portability substitutions vs the CUDA kernel (see backend README):
+//  - __syncwarp() stepping -> full workgroup barriers (the block IS one
+//    CUDA warp; barriers make the schedule subgroup-size independent). The
+//    sweep body lives in an inlined function so its early-outs are returns,
+//    never skipping the caller's barrier.
+//  - __ballot_sync survivor compaction -> WavePrefixCountBits + per-wave
+//    totals staged in groupshared (valid under pinned full subgroups).
+//  - atomicAdd/atomicMax on floats -> atomic_add_f32 / atomic_max_f32
+//    (atomic_float.slang), with CUDA atomicAddFVec's isfinite filter.
+//
+// Render pixel type is RGB_D for all current primitives; color state is
+// carried as float4 (rgb, depth) so RenderOutput dot/mul/add are plain
+// vector ops. Distortion state also uses float4 with the inactive channels
+// zeroed in v_dist (their contributions vanish identically).
+//
+// Variants (specialization constants, matching the CUDA template axes):
+//   kCameraModel  = CameraModelType 0..3 (3dgut entry only)
+//   kDistType     = 0 None | 1 D | 2 RGB_D
+//   kOutputMedian = 0 | 1
+//   kAccumWeight  = 0 | 1  (o_accum_weight + accum_weight_map wired)
+//   kViewmatGrad  = 0 | 1  (3dgut entry only)
+//   kPacked       = 0 | 1  (gaussian_ids present)
+
+#define CudaDeviceExport ForceInline
+#include "projection_utils.slang"
+#undef CudaDeviceExport
+
+#include "raster_common.slang"
+#include "atomic_float.slang"
+
+[SpecializationConstant]
+const int kCameraModel = 0;
+[SpecializationConstant]
+const int kDistType = 0;
+[SpecializationConstant]
+const int kOutputMedian = 0;
+[SpecializationConstant]
+const int kAccumWeight = 0;
+[SpecializationConstant]
+const int kViewmatGrad = 0;
+[SpecializationConstant]
+const int kPacked = 0;
+
+static const uint TILE_SIZE_DX = 8;
+static const uint TILE_SIZE_DY = 8;
+static const uint RB_BLOCK = TILE_SIZE_DX * TILE_SIZE_DY;  // 64 pixels
+static const uint RB_THREADS = 32;                         // = SPLAT_BATCH
+static const int SURV_CAP = 8 * (int)RB_THREADS;
+
+[ForceInline]
+bool _rb_finitef(float v) {
+    return (asuint(v) & 0x7f800000u) != 0x7f800000u;
+}
+
+[ForceInline]
+void _rb_atomic_add(float* addr, float v) {
+    if (_rb_finitef(v)) atomic_add_f32(addr, v);
+}
+
+// ---- shared pixel state (indexed by local pixel id 0..63) ----------------
+groupshared float2 _rb_Tg[RB_BLOCK];     // (T, v_T), evolves during sweep
+groupshared float4 _rb_vpix[RB_BLOCK];   // v_render color (rgb, depth-pre)
+groupshared float4 _rb_C[RB_BLOCK];      // distortion totals C
+groupshared float4 _rb_S[RB_BLOCK];      // distortion second moments S
+groupshared float4 _rb_vdist[RB_BLOCK];  // v of distortion image
+groupshared float _rb_W[RB_BLOCK];       // 1 - T_final
+groupshared float _rb_awmap[RB_BLOCK];
+groupshared float _rb_medv[RB_BLOCK];
+groupshared float _rb_medzg[RB_BLOCK];
+groupshared float _rb_medzf[RB_BLOCK];
+groupshared float _rb_medTf[RB_BLOCK];
+groupshared int _rb_bin[RB_BLOCK];       // 2d: last_ids
+groupshared float4 _rb_raybin[RB_BLOCK]; // 3dgut: (ray_d, bin as bits)
+groupshared float3 _rb_vrayd[RB_BLOCK];  // 3dgut viewmat grad per pixel
+groupshared int _rb_surv[SURV_CAP];
+groupshared uint _rb_wtot[RB_THREADS];   // per-wave compaction totals
+groupshared float _rb_red[RB_THREADS];   // viewmat-grad reduction scratch
+
+// Load the per-pixel color/distortion/median state shared by both entries.
+// `pix` is the local pixel id, `gpix` the in-image pixel id (valid only when
+// inside). Returns nothing; fills the groupshared arrays.
+[ForceInline]
+void _rb_load_pixel_state(
+    uint pix, bool inside, uint image_pix,  // image_id * H * W + gpix
+    float* render_Ts_img, float* v_render_Ts_img, uint gpix,
+    float* out_rgb, float* out_depth, float* dist_rgb, float* dist_depth,
+    float* v_out_rgb, float* v_out_depth, float* v_dist_rgb,
+    float* v_dist_depth, float* awmap, float* v_median) {
+    float T = inside ? render_Ts_img[gpix] : 0.0f;
+    float v_T = inside ? v_render_Ts_img[gpix] : 0.0f;
+    float4 v_c = float4(0.0f);
+    if (inside) {
+        v_c = float4(v_out_rgb[3 * image_pix], v_out_rgb[3 * image_pix + 1],
+                     v_out_rgb[3 * image_pix + 2], v_out_depth[image_pix]);
+    }
+    // depth channel: convert dL/d(render depth) to dL/d(accumulated C).
+    {
+        float inv_alpha = 1.0f / max(1.0f - T, 1e-10f);
+        float exp_depth = inside ? out_depth[image_pix] : 0.0f;
+        if (kDistType != 0) {
+            float m = log(max(exp_depth, DEPTH_DIST_EPS));
+            v_T += exp_depth * v_c.w * m * inv_alpha;
+            v_c.w *= exp_depth * inv_alpha;
+        } else {
+            v_T += exp_depth * v_c.w * inv_alpha;
+            v_c.w *= inv_alpha;
+        }
+    }
+    _rb_Tg[pix] = float2(T, v_T);
+    _rb_vpix[pix] = v_c;
+
+    if (kDistType != 0) {
+        float4 C = float4(0.0f);
+        float4 Dv = float4(0.0f);
+        float4 v_d = float4(0.0f);
+        if (inside) {
+            C = float4(out_rgb[3 * image_pix], out_rgb[3 * image_pix + 1],
+                       out_rgb[3 * image_pix + 2], out_depth[image_pix]);
+            Dv.w = dist_depth[image_pix];
+            v_d.w = v_dist_depth[image_pix];
+            if (kDistType == 2) {
+                Dv.xyz = float3(dist_rgb[3 * image_pix],
+                                dist_rgb[3 * image_pix + 1],
+                                dist_rgb[3 * image_pix + 2]);
+                v_d.xyz = float3(v_dist_rgb[3 * image_pix],
+                                 v_dist_rgb[3 * image_pix + 1],
+                                 v_dist_rgb[3 * image_pix + 2]);
+            }
+        }
+        float W = max(1.0f - T, 1e-10f);
+        C.w = log(max(C.w, DEPTH_DIST_EPS)) * W;   // un-normalized C_logz
+        float Wr = inside ? (1.0f - T) : 0.0f;
+        float invW = Wr > 1e-10f ? (1.0f / Wr) : 0.0f;
+        _rb_C[pix] = C;
+        _rb_S[pix] = (Dv + C * C) * invW;
+        _rb_vdist[pix] = v_d;
+        _rb_W[pix] = Wr;
+    }
+    if (kAccumWeight != 0)
+        _rb_awmap[pix] = inside ? awmap[image_pix] : 0.0f;
+    if (kOutputMedian != 0) {
+        _rb_medv[pix] = inside ? v_median[image_pix] : 0.0f;
+        _rb_medzg[pix] = 0.0f;
+        _rb_medzf[pix] = 0.0f;
+        _rb_medTf[pix] = 0.0f;
+    }
+}
+
+// Common pixel-undo math from alpha + color to (v_alpha, v_color) plus the
+// shared-state updates. Returns false when the pixel is skipped.
+[ForceInline]
+bool _rb_pixel_grad(int pix_id, float alpha, float4 color,
+                    out float v_alpha, out float4 v_color) {
+    float T1 = _rb_Tg[pix_id].x;
+    float v_T1 = _rb_Tg[pix_id].y;
+    float ra = 1.0f / (1.0f - alpha);
+    float T0 = T1 * ra;
+    float4 v_c = _rb_vpix[pix_id];
+
+    // ---- median depth backward (see CUDA comments) ----
+    float v_depth_median = 0.0f;
+    if (kOutputMedian != 0) {
+        const float lnhalf = -0.6931471805599453f;
+        float v_med = _rb_medv[pix_id];
+        if (_rb_medTf[pix_id] > 0.0f) {
+            v_depth_median += _rb_medzg[pix_id];
+            float a_ln = log(T1);
+            float b_ln = log(_rb_medTf[pix_id]);
+            float dba = b_ln - a_ln;
+            float inv = (abs(dba) > 1e-20f) ? (-1.0f / dba) : 0.0f;
+            float S = v_med * (_rb_medzf[pix_id] - color.w) * inv;
+            v_T1 += S / T1;
+            _rb_medTf[pix_id] = 0.0f;
+        }
+        if (T0 >= 0.5f && T1 < 0.5f) {
+            float a = log(T0);
+            float b = log(T1);
+            float d = b - a;
+            float f = (abs(d) > 1e-20f) ? (lnhalf - a) / d : 0.0f;
+            v_depth_median += f * v_med;
+            _rb_medzg[pix_id] = (1.0f - f) * v_med;
+            _rb_medzf[pix_id] = color.w;
+            _rb_medTf[pix_id] = T1;
+        }
+    }
+
+    float4 acc = color;
+    if (kDistType != 0) acc.w = log(max(color.w, DEPTH_DIST_EPS));
+
+    v_alpha = T0 * dot(acc, v_c) - v_T1 * T0;
+    v_color = v_c * (alpha * T0);
+    float v_T0 = alpha * dot(acc, v_c) + v_T1 * (1.0f - alpha);
+
+    if (kDistType != 0) {
+        float4 v_dist = _rb_vdist[pix_id];
+        float4 C = _rb_C[pix_id];
+        float4 S = _rb_S[pix_id];
+        float W = _rb_W[pix_id];
+        float w = alpha * T0;
+        v_color += (acc * W - C) * v_dist * (2.0f * w);
+        float g = dot(S + acc * acc * W - acc * C * 2.0f, v_dist);
+        v_alpha += T0 * g;
+        v_T0 += alpha * g;
+    }
+
+    if (kDistType != 0) v_color.w *= 1.0f / max(color.w, DEPTH_DIST_EPS);
+    v_color.w += v_depth_median;
+
+    _rb_Tg[pix_id] = float2(T0, v_T0);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// 2D backward (Vanilla3DGS / MipSplatting)
+// ---------------------------------------------------------------------------
+
+struct Raster2dBwdParams {  // via params ring
+    float* s_xy;
+    float* s_depth;
+    float* s_conic;
+    float* s_opac;
+    float* s_rgb;
+    int* gaussian_ids;   // kPacked only (fallback-backed otherwise)
+    int* tile_offsets;
+    int* flatten_ids;
+    float* render_Ts;    // [I,H,W]
+    int* last_ids;       // [I,H,W]
+    float* out_rgb;      // [I,H,W,3]
+    float* out_depth;    // [I,H,W]
+    float* dist_rgb;     // kDistType == 2
+    float* dist_depth;   // kDistType != 0
+    float* awmap;        // kAccumWeight
+    float* v_out_rgb;
+    float* v_out_depth;
+    float* v_render_Ts;
+    float* v_median;     // kOutputMedian
+    float* v_dist_rgb;
+    float* v_dist_depth;
+    float* v_s_xy;
+    float* v_s_depth;
+    float* v_s_conic;
+    float* v_s_opac;
+    float* v_s_rgb;
+    float* o_accum_weight;  // kAccumWeight
+    uint32_t I;
+    uint32_t N;
+    uint32_t n_isects;
+    uint32_t width;
+    uint32_t height;
+    uint32_t tile_width;
+    uint32_t tile_height;
+    uint32_t _pad0;
+};
+
+struct Frag2d_ {
+    float2 xy;
+    float depth;
+    float3 conic;
+    float opac;
+    float3 rgb;
+};
+
+[ForceInline]
+float _rb2_alpha(Frag2d_ s, float px, float py) {
+    float2 delta = float2(s.xy.x - px, s.xy.y - py);
+    float sigma =
+        0.5f * (s.conic.x * delta.x * delta.x +
+                s.conic.z * delta.y * delta.y) +
+        s.conic.y * delta.x * delta.y;
+    float vis = exp(-sigma);
+    float alpha = min(0.999f, s.opac * vis);
+    return sigma < 0.f ? 0.f : alpha;
+}
+
+[ForceInline]
+void _rb2_alpha_vjp(Frag2d_ s, float px, float py, float v_alpha,
+                    inout Frag2d_ v) {
+    float2 delta = float2(s.xy.x - px, s.xy.y - py);
+    float sigma =
+        0.5f * (s.conic.x * delta.x * delta.x +
+                s.conic.z * delta.y * delta.y) +
+        s.conic.y * delta.x * delta.y;
+    float vis = exp(-sigma);
+    if (sigma >= 0.f && s.opac * vis <= 0.999f) {
+        float v_sigma = -s.opac * vis * v_alpha;
+        v.conic += float3(0.5f * v_sigma * delta.x * delta.x,
+                          v_sigma * delta.x * delta.y,
+                          0.5f * v_sigma * delta.y * delta.y);
+        v.xy += float2(
+            v_sigma * (s.conic.x * delta.x + s.conic.y * delta.y),
+            v_sigma * (s.conic.y * delta.x + s.conic.z * delta.y));
+        v.opac += vis * v_alpha;
+    }
+}
+
+// One sweep step for the 2D entry; early-outs are plain returns so the
+// caller's barrier is never skipped.
+[ForceInline]
+void _rb2_step(Raster2dBwdParams p, int pix_id, int splat_idx, bool active,
+               uint wg_y, uint wg_z, Frag2d_ splat, inout Frag2d_ v_splat,
+               inout float accum_weight) {
+    if (pix_id < 0 || pix_id >= (int)RB_BLOCK || !active) return;
+    if (splat_idx > _rb_bin[pix_id]) return;
+    int gx = int(wg_z * TILE_SIZE_DX) + pix_id % (int)TILE_SIZE_DX;
+    int gy = int(wg_y * TILE_SIZE_DY) + pix_id / (int)TILE_SIZE_DX;
+    float px = float(gx) + 0.5f;
+    float py = float(gy) + 0.5f;
+
+    float alpha = _rb2_alpha(splat, px, py);
+    if (alpha <= ALPHA_THRESHOLD) return;
+    float4 color = float4(splat.rgb, splat.depth);
+
+    float v_alpha;
+    float4 v_color;
+    _rb_pixel_grad(pix_id, alpha, color, v_alpha, v_color);
+
+    _rb2_alpha_vjp(splat, px, py, v_alpha, v_splat);
+    v_splat.rgb += v_color.xyz;
+    v_splat.depth += v_color.w;
+
+    if (kAccumWeight != 0) {
+        float T0 = _rb_Tg[pix_id].x;  // just updated: T0 stored in .x
+        // CUDA computes the weight with the pre-update T0 = T1/(1-alpha);
+        // _rb_pixel_grad stored exactly that, so reuse it.
+        accum_weight = max(accum_weight, _rb_awmap[pix_id] * alpha * T0);
+    }
+}
+
+[shader("compute")]
+[numthreads(32, 1, 1)]
+void rasterize_bwd_2d(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                      uniform Raster2dBwdParams* pp) {
+    Raster2dBwdParams p = *pp;
+    uint image_id = wg.x;
+    uint tile_id =
+        (wg.y * TILE_SIZE_DY / (TILE_SIZE_Y * MACRO_TILE_SIZE_Y)) *
+            p.tile_width +
+        (wg.z * TILE_SIZE_DX / (TILE_SIZE_X * MACRO_TILE_SIZE_X));
+    uint img_off = image_id * p.height * p.width;
+
+    // ---- load pixel state (2 pixels per thread) ----
+    for (uint pix0 = 0; pix0 < RB_BLOCK; pix0 += RB_THREADS) {
+        uint pix = pix0 + tid;
+        int gx = int(wg.z * TILE_SIZE_DX) + int(pix % TILE_SIZE_DX);
+        int gy = int(wg.y * TILE_SIZE_DY) + int(pix / TILE_SIZE_DX);
+        uint gpix = uint(gy) * p.width + uint(gx);
+        bool inside = (gx < int(p.width) && gy < int(p.height));
+        _rb_bin[pix] = inside ? p.last_ids[img_off + gpix] : -1;
+        _rb_load_pixel_state(
+            pix, inside, img_off + gpix, p.render_Ts + img_off,
+            p.v_render_Ts + img_off, gpix, p.out_rgb, p.out_depth,
+            p.dist_rgb, p.dist_depth, p.v_out_rgb, p.v_out_depth,
+            p.v_dist_rgb, p.v_dist_depth, p.awmap, p.v_median);
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    int range_start = p.tile_offsets[image_id * p.tile_height * p.tile_width +
+                                     tile_id];
+    int range_end =
+        (image_id == p.I - 1 &&
+         tile_id == p.tile_width * p.tile_height - 1)
+            ? int(p.n_isects)
+            : p.tile_offsets[image_id * p.tile_height * p.tile_width +
+                             tile_id + 1];
+
+    float cull_bx0 = float(wg.z * TILE_SIZE_DX);
+    float cull_by0 = float(wg.y * TILE_SIZE_DY);
+    uint wsize = WaveGetLaneCount();
+    uint n_waves = RB_THREADS / wsize;
+
+    for (int scan_end = range_end - 1; scan_end >= range_start;) {
+        // ---- survivor compaction (back-to-front) ----
+        int count = 0;
+        int s = scan_end;
+        while (s >= range_start && count <= SURV_CAP - (int)RB_THREADS) {
+            int gi = s - int(tid);
+            bool ok = false;
+            if (gi >= range_start) {
+                int sid = p.flatten_ids[gi];
+                float c_opac = p.s_opac[sid];
+                float3 c_conic = float3(p.s_conic[3 * sid],
+                                        p.s_conic[3 * sid + 1],
+                                        p.s_conic[3 * sid + 2]);
+                float c_ex = p.s_xy[2 * sid];
+                float c_ey = p.s_xy[2 * sid + 1];
+                if (c_opac > ALPHA_THRESHOLD) {
+                    float kk = 0.5f / log(c_opac / ALPHA_THRESHOLD);
+                    float3 inv_cov = c_conic * kk;
+                    ok = ellipse_box_overlap_test(
+                        inv_cov, cull_bx0 - c_ex,
+                        cull_bx0 + TILE_SIZE_DX - c_ex, cull_by0 - c_ey,
+                        cull_by0 + TILE_SIZE_DY - c_ey);
+                }
+            }
+            uint prefix = WavePrefixCountBits(ok);
+            uint wtotal = WaveActiveCountBits(ok);
+            GroupMemoryBarrierWithGroupSync();
+            if (WaveGetLaneIndex() == 0) _rb_wtot[tid / wsize] = wtotal;
+            GroupMemoryBarrierWithGroupSync();
+            uint base = 0;
+            for (uint i = 0; i < tid / wsize; i++) base += _rb_wtot[i];
+            uint total = 0;
+            for (uint i = 0; i < n_waves; i++) total += _rb_wtot[i];
+            if (ok) _rb_surv[count + int(base + prefix)] = gi;
+            count += int(total);
+            s -= int(RB_THREADS);
+        }
+        scan_end = s;
+        GroupMemoryBarrierWithGroupSync();
+
+        // ---- sweep compacted survivors in batches of 32 ----
+        int num_batches = (count + (int)RB_THREADS - 1) / (int)RB_THREADS;
+        for (int b = 0; b < num_batches; b++) {
+            int surv_pos = b * (int)RB_THREADS + int(tid);
+            bool active = surv_pos < count;
+            int splat_idx = active ? _rb_surv[surv_pos] : (range_start - 1);
+            int batch_size = min((int)RB_THREADS, count - b * (int)RB_THREADS);
+
+            Frag2d_ splat = {float2(0.0f), 0.0f, float3(0.0f), 0.0f,
+                             float3(0.0f)};
+            uint splat_sid = 0;
+            if (active) {
+                splat_sid = uint(p.flatten_ids[splat_idx]);
+                splat.xy = float2(p.s_xy[2 * splat_sid],
+                                  p.s_xy[2 * splat_sid + 1]);
+                splat.depth = p.s_depth[splat_sid];
+                splat.conic = float3(p.s_conic[3 * splat_sid],
+                                     p.s_conic[3 * splat_sid + 1],
+                                     p.s_conic[3 * splat_sid + 2]);
+                splat.opac = p.s_opac[splat_sid];
+                splat.rgb = float3(p.s_rgb[3 * splat_sid],
+                                   p.s_rgb[3 * splat_sid + 1],
+                                   p.s_rgb[3 * splat_sid + 2]);
+            }
+            Frag2d_ v_splat = {float2(0.0f), 0.0f, float3(0.0f), 0.0f,
+                               float3(0.0f)};
+            float accum_weight = 0.0f;
+
+            for (int t = 0; t < batch_size + (int)RB_BLOCK - 1; t++) {
+                _rb2_step(p, t - int(tid), splat_idx, active, wg.y, wg.z,
+                          splat, v_splat, accum_weight);
+                GroupMemoryBarrierWithGroupSync();
+            }
+
+            if (active) {
+                uint wid = kPacked != 0 ? uint(p.gaussian_ids[splat_sid])
+                                        : splat_sid % p.N;
+                _rb_atomic_add(p.v_s_xy + 2 * splat_sid, v_splat.xy.x);
+                _rb_atomic_add(p.v_s_xy + 2 * splat_sid + 1, v_splat.xy.y);
+                _rb_atomic_add(p.v_s_depth + splat_sid, v_splat.depth);
+                _rb_atomic_add(p.v_s_conic + 3 * splat_sid, v_splat.conic.x);
+                _rb_atomic_add(p.v_s_conic + 3 * splat_sid + 1,
+                               v_splat.conic.y);
+                _rb_atomic_add(p.v_s_conic + 3 * splat_sid + 2,
+                               v_splat.conic.z);
+                _rb_atomic_add(p.v_s_opac + splat_sid, v_splat.opac);
+                _rb_atomic_add(p.v_s_rgb + 3 * splat_sid, v_splat.rgb.x);
+                _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 1, v_splat.rgb.y);
+                _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 2, v_splat.rgb.z);
+                if (kAccumWeight != 0)
+                    atomic_max_f32(p.o_accum_weight + wid, accum_weight);
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();  // done reading surv[]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 3DGUT backward
+// ---------------------------------------------------------------------------
+
+struct Raster3dgutBwdParams {  // via params ring
+    float* means;
+    float* quats;
+    float* scales;    // WORLD scales (fragment load)
+    float* s_scale;   // SCREEN "scale" slot = projected 2D conic (culling)
+    float* s_opac;
+    float* s_rgb;
+    int* gaussian_ids;
+    float* viewmats;     // [I,16]
+    float4* intrins;     // [I]
+    float* dist_coeffs;  // [I,10] (fallback-backed)
+    float4* aabb;
+    int* tile_offsets;
+    int* flatten_ids;
+    float* render_Ts;
+    int* last_ids;
+    float* out_rgb;
+    float* out_depth;
+    float* dist_rgb;
+    float* dist_depth;
+    float* awmap;
+    float* v_out_rgb;
+    float* v_out_depth;
+    float* v_render_Ts;
+    float* v_median;
+    float* v_dist_rgb;
+    float* v_dist_depth;
+    float* v_means;
+    float* v_quats;
+    float* v_scales;
+    float* v_s_opac;
+    float* v_s_rgb;
+    float* o_accum_weight;
+    float* v_viewmats;   // [I,16], kViewmatGrad
+    uint32_t I;
+    uint32_t N;
+    uint32_t n_isects;
+    uint32_t width;
+    uint32_t height;
+    uint32_t tile_width;
+    uint32_t tile_height;
+    uint32_t _pad0;
+};
+
+struct Frag3dgut_ {
+    float3 mean;
+    float3x3 iscl_rot;
+    float opacity;
+    float3 rgb;
+};
+
+struct VFrag3dgut_ {
+    float3 mean;
+    float3x3 iscl_rot;
+    float opacity;
+    float3 rgb;
+};
+
+// One sweep step for the 3dgut entry.
+[ForceInline]
+void _rb3_step(Raster3dgutBwdParams p, int pix_id, int splat_idx,
+               bool active, float3 ray_o, Frag3dgut_ splat,
+               inout VFrag3dgut_ v_splat, inout float accum_weight,
+               inout float3 total_v_ray_o) {
+    if (pix_id < 0 || pix_id >= (int)RB_BLOCK || !active) return;
+    float4 rb = _rb_raybin[pix_id];
+    if (splat_idx > asint(rb.w)) return;
+    float3 ray_d = rb.xyz;
+
+    float alpha = evaluate_alpha_3dgs(splat.mean, splat.iscl_rot,
+                                      splat.opacity, ray_o, ray_d);
+    if (alpha <= ALPHA_THRESHOLD || dot(ray_d, ray_d) == 0.0f) return;
+
+    float3 c_rgb;
+    float c_depth;
+    evaluate_color_3dgs(splat.mean, splat.iscl_rot, splat.opacity, splat.rgb,
+                        ray_o, ray_d, c_rgb, c_depth);
+    if (c_depth <= 0.0f) return;
+    float4 color = float4(c_rgb, c_depth);
+
+    float v_alpha;
+    float4 v_color;
+    _rb_pixel_grad(pix_id, alpha, color, v_alpha, v_color);
+
+    float3 v_mean;
+    float3x3 v_ir;
+    float v_op;
+    float3 v_ray_o_a, v_ray_d_a;
+    evaluate_alpha_3dgs_vjp(splat.mean, splat.iscl_rot, splat.opacity, ray_o,
+                            ray_d, v_alpha, v_mean, v_ir, v_op, v_ray_o_a,
+                            v_ray_d_a);
+    v_splat.mean += v_mean;
+    v_splat.iscl_rot += v_ir;
+    v_splat.opacity += v_op;
+
+    float3 v_rgb;
+    float3 v_ray_o_c, v_ray_d_c;
+    evaluate_color_3dgs_vjp(splat.mean, splat.iscl_rot, splat.opacity,
+                            splat.rgb, ray_o, ray_d, v_color.xyz, v_color.w,
+                            v_mean, v_ir, v_op, v_rgb, v_ray_o_c, v_ray_d_c);
+    v_splat.mean += v_mean;
+    v_splat.iscl_rot += v_ir;
+    v_splat.opacity += v_op;
+    v_splat.rgb += v_rgb;
+
+    if (kAccumWeight != 0) {
+        float T0 = _rb_Tg[pix_id].x;
+        accum_weight = max(accum_weight, _rb_awmap[pix_id] * alpha * T0);
+    }
+    if (kViewmatGrad != 0) {
+        total_v_ray_o += v_ray_o_a + v_ray_o_c;
+        _rb_vrayd[pix_id] += v_ray_d_a + v_ray_d_c;
+    }
+}
+
+// Workgroup-reduce `val` over the 32 threads and atomically add the sum to
+// `dst` (thread 0 issues the add). Deterministic serial combine.
+[ForceInline]
+void _rb3_reduce_add(float* dst, float val, uint tid) {
+    GroupMemoryBarrierWithGroupSync();
+    _rb_red[tid] = _rb_finitef(val) ? val : 0.0f;
+    GroupMemoryBarrierWithGroupSync();
+    if (tid == 0) {
+        float s = 0.0f;
+        for (uint i = 0; i < RB_THREADS; i++) s += _rb_red[i];
+        if (s != 0.0f) atomic_add_f32(dst, s);
+    }
+}
+
+[shader("compute")]
+[numthreads(32, 1, 1)]
+void rasterize_bwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                         uniform Raster3dgutBwdParams* pp) {
+    Raster3dgutBwdParams p = *pp;
+    uint image_id = wg.x;
+    uint tile_id =
+        (wg.y * TILE_SIZE_DY / (TILE_SIZE_Y * MACRO_TILE_SIZE_Y)) *
+            p.tile_width +
+        (wg.z * TILE_SIZE_DX / (TILE_SIZE_X * MACRO_TILE_SIZE_X));
+    uint img_off = image_id * p.height * p.width;
+
+    float* vm = p.viewmats + image_id * 16;
+    float3x3 R;
+    [ForceUnroll]
+    for (int r = 0; r < 3; r++)
+        R[r] = float3(vm[4 * r + 0], vm[4 * r + 1], vm[4 * r + 2]);
+    float3 tvec = float3(vm[3], vm[7], vm[11]);
+    float4 intrin = p.intrins[image_id];
+    float dist[10];
+    [ForceUnroll]
+    for (int k = 0; k < 10; k++)
+        dist[k] = p.dist_coeffs == nullptr ? 0.0f
+                                           : p.dist_coeffs[10 * image_id + k];
+    float3 ray_o = transform_ray_o(R, tvec);
+    float3 total_v_ray_o = float3(0.0f);
+
+    // ---- load pixel state (2 pixels per thread) ----
+    for (uint pix0 = 0; pix0 < RB_BLOCK; pix0 += RB_THREADS) {
+        uint pix = pix0 + tid;
+        int gx = int(wg.z * TILE_SIZE_DX) + int(pix % TILE_SIZE_DX);
+        int gy = int(wg.y * TILE_SIZE_DY) + int(pix / TILE_SIZE_DX);
+        uint gpix = uint(gy) * p.width + uint(gx);
+        bool inside = (gx < int(p.width) && gy < int(p.height));
+        int bin_final = inside ? p.last_ids[img_off + gpix] : -1;
+        float px = float(gx) + 0.5f;
+        float py = float(gy) + 0.5f;
+        float3 raydir;
+        bool ray_ok = generate_ray(
+            float2((px - intrin.z) / intrin.x, (py - intrin.w) / intrin.y),
+            kCameraModel, dist, raydir);
+        inside = inside && ray_ok;
+        float3 ray_d = transform_ray_d(R, raydir);
+        _rb_raybin[pix] = float4(ray_d, asfloat(bin_final));
+        if (kViewmatGrad != 0) _rb_vrayd[pix] = float3(0.0f);
+        _rb_load_pixel_state(
+            pix, inside, img_off + gpix, p.render_Ts + img_off,
+            p.v_render_Ts + img_off, gpix, p.out_rgb, p.out_depth,
+            p.dist_rgb, p.dist_depth, p.v_out_rgb, p.v_out_depth,
+            p.v_dist_rgb, p.v_dist_depth, p.awmap, p.v_median);
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    int range_start = p.tile_offsets[image_id * p.tile_height * p.tile_width +
+                                     tile_id];
+    int range_end =
+        (image_id == p.I - 1 &&
+         tile_id == p.tile_width * p.tile_height - 1)
+            ? int(p.n_isects)
+            : p.tile_offsets[image_id * p.tile_height * p.tile_width +
+                             tile_id + 1];
+
+    float cull_bx0 = float(wg.z * TILE_SIZE_DX);
+    float cull_by0 = float(wg.y * TILE_SIZE_DY);
+    uint wsize = WaveGetLaneCount();
+    uint n_waves = RB_THREADS / wsize;
+
+    for (int scan_end = range_end - 1; scan_end >= range_start;) {
+        int count = 0;
+        int s = scan_end;
+        while (s >= range_start && count <= SURV_CAP - (int)RB_THREADS) {
+            int gi = s - int(tid);
+            bool ok = false;
+            if (gi >= range_start) {
+                int sid = p.flatten_ids[gi];
+                float c_opac = p.s_opac[sid];
+                // 3dgut keeps the projected 2D conic in the screen "scale"
+                // slot; ellipse center is the AABB center.
+                float3 c_conic = float3(p.s_scale[3 * sid],
+                                        p.s_scale[3 * sid + 1],
+                                        p.s_scale[3 * sid + 2]);
+                float4 c_bb = p.aabb[sid];
+                float c_ex = 0.5f * (c_bb.x + c_bb.z);
+                float c_ey = 0.5f * (c_bb.y + c_bb.w);
+                if (c_opac > ALPHA_THRESHOLD) {
+                    float kk = 0.5f / log(c_opac / ALPHA_THRESHOLD);
+                    float3 inv_cov = c_conic * kk;
+                    ok = ellipse_box_overlap_test(
+                        inv_cov, cull_bx0 - c_ex,
+                        cull_bx0 + TILE_SIZE_DX - c_ex, cull_by0 - c_ey,
+                        cull_by0 + TILE_SIZE_DY - c_ey);
+                }
+            }
+            uint prefix = WavePrefixCountBits(ok);
+            uint wtotal = WaveActiveCountBits(ok);
+            GroupMemoryBarrierWithGroupSync();
+            if (WaveGetLaneIndex() == 0) _rb_wtot[tid / wsize] = wtotal;
+            GroupMemoryBarrierWithGroupSync();
+            uint base = 0;
+            for (uint i = 0; i < tid / wsize; i++) base += _rb_wtot[i];
+            uint total = 0;
+            for (uint i = 0; i < n_waves; i++) total += _rb_wtot[i];
+            if (ok) _rb_surv[count + int(base + prefix)] = gi;
+            count += int(total);
+            s -= int(RB_THREADS);
+        }
+        scan_end = s;
+        GroupMemoryBarrierWithGroupSync();
+
+        int num_batches = (count + (int)RB_THREADS - 1) / (int)RB_THREADS;
+        for (int b = 0; b < num_batches; b++) {
+            int surv_pos = b * (int)RB_THREADS + int(tid);
+            bool active = surv_pos < count;
+            int splat_idx = active ? _rb_surv[surv_pos] : (range_start - 1);
+            int batch_size = min((int)RB_THREADS, count - b * (int)RB_THREADS);
+
+            Frag3dgut_ splat;
+            splat.mean = float3(0.0f);
+            splat.iscl_rot = float3x3(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+                                      0.0f, 0.0f, 1.0f);
+            splat.opacity = 0.0f;
+            splat.rgb = float3(0.0f);
+            uint splat_sid = 0;
+            uint splat_wid = 0;
+            float4 quat = float4(1, 0, 0, 0);
+            float3 wscale = float3(0.0f);
+            if (active) {
+                splat_sid = uint(p.flatten_ids[splat_idx]);
+                splat_wid = kPacked != 0 ? uint(p.gaussian_ids[splat_sid])
+                                         : splat_sid % p.N;
+                splat.mean = float3(p.means[3 * splat_wid],
+                                    p.means[3 * splat_wid + 1],
+                                    p.means[3 * splat_wid + 2]);
+                quat = float4(p.quats[4 * splat_wid],
+                              p.quats[4 * splat_wid + 1],
+                              p.quats[4 * splat_wid + 2],
+                              p.quats[4 * splat_wid + 3]);
+                wscale = float3(p.scales[3 * splat_wid],
+                                p.scales[3 * splat_wid + 1],
+                                p.scales[3 * splat_wid + 2]);
+                splat.iscl_rot = compute_3dgut_iscl_rot(quat, wscale);
+                splat.opacity = p.s_opac[splat_sid];
+                splat.rgb = float3(p.s_rgb[3 * splat_sid],
+                                   p.s_rgb[3 * splat_sid + 1],
+                                   p.s_rgb[3 * splat_sid + 2]);
+            }
+            VFrag3dgut_ v_splat;
+            v_splat.mean = float3(0.0f);
+            v_splat.iscl_rot = float3x3(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                        0.0f, 0.0f, 0.0f);
+            v_splat.opacity = 0.0f;
+            v_splat.rgb = float3(0.0f);
+            float accum_weight = 0.0f;
+
+            for (int t = 0; t < batch_size + (int)RB_BLOCK - 1; t++) {
+                _rb3_step(p, t - int(tid), splat_idx, active, ray_o, splat,
+                          v_splat, accum_weight, total_v_ray_o);
+                GroupMemoryBarrierWithGroupSync();
+            }
+
+            if (active) {
+                float4 v_quat;
+                float3 v_scale;
+                compute_3dgut_iscl_rot_vjp(quat, wscale, v_splat.iscl_rot,
+                                           v_quat, v_scale);
+                _rb_atomic_add(p.v_means + 3 * splat_wid, v_splat.mean.x);
+                _rb_atomic_add(p.v_means + 3 * splat_wid + 1, v_splat.mean.y);
+                _rb_atomic_add(p.v_means + 3 * splat_wid + 2, v_splat.mean.z);
+                _rb_atomic_add(p.v_quats + 4 * splat_wid, v_quat.x);
+                _rb_atomic_add(p.v_quats + 4 * splat_wid + 1, v_quat.y);
+                _rb_atomic_add(p.v_quats + 4 * splat_wid + 2, v_quat.z);
+                _rb_atomic_add(p.v_quats + 4 * splat_wid + 3, v_quat.w);
+                _rb_atomic_add(p.v_scales + 3 * splat_wid, v_scale.x);
+                _rb_atomic_add(p.v_scales + 3 * splat_wid + 1, v_scale.y);
+                _rb_atomic_add(p.v_scales + 3 * splat_wid + 2, v_scale.z);
+                _rb_atomic_add(p.v_s_opac + splat_sid, v_splat.opacity);
+                _rb_atomic_add(p.v_s_rgb + 3 * splat_sid, v_splat.rgb.x);
+                _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 1, v_splat.rgb.y);
+                _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 2, v_splat.rgb.z);
+                if (kAccumWeight != 0)
+                    atomic_max_f32(p.o_accum_weight + splat_wid,
+                                   accum_weight);
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    // ---- viewmat gradient tail ----
+    if (kViewmatGrad != 0) {
+        float3x3 v_R;
+        float3 v_t;
+        transform_ray_o_vjp(R, tvec, total_v_ray_o, v_R, v_t);
+        for (uint pix0 = 0; pix0 < RB_BLOCK; pix0 += RB_THREADS) {
+            uint pix = pix0 + tid;
+            float4 rb = _rb_raybin[pix];
+            float3 raydir = undo_transform_ray_d(R, rb.xyz);
+            float3x3 v_R_delta;
+            float3 tmp;
+            transform_ray_d_vjp(R, raydir, _rb_vrayd[pix], v_R_delta, tmp);
+            v_R += v_R_delta;
+        }
+        float* v_viewmat = p.v_viewmats + image_id * 16;
+        _rb3_reduce_add(v_viewmat + 0, v_R[0].x, tid);
+        _rb3_reduce_add(v_viewmat + 1, v_R[0].y, tid);
+        _rb3_reduce_add(v_viewmat + 2, v_R[0].z, tid);
+        _rb3_reduce_add(v_viewmat + 3, v_t.x, tid);
+        _rb3_reduce_add(v_viewmat + 4, v_R[1].x, tid);
+        _rb3_reduce_add(v_viewmat + 5, v_R[1].y, tid);
+        _rb3_reduce_add(v_viewmat + 6, v_R[1].z, tid);
+        _rb3_reduce_add(v_viewmat + 7, v_t.y, tid);
+        _rb3_reduce_add(v_viewmat + 8, v_R[2].x, tid);
+        _rb3_reduce_add(v_viewmat + 9, v_R[2].y, tid);
+        _rb3_reduce_add(v_viewmat + 10, v_R[2].z, tid);
+        _rb3_reduce_add(v_viewmat + 11, v_t.z, tid);
+    }
+}
