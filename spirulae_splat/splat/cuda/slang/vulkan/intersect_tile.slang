@@ -97,6 +97,16 @@ struct IsectCountParams {  // 56 bytes: pushed directly
     uint32_t wgs_per_row;
 };
 
+// Mode flags as specialization constants. Spec-folded so no load ever sits
+// behind a runtime branch over a possibly-null device pointer (llvmpipe's
+// JIT can speculate such loads; see backend README).
+[SpecializationConstant]
+const int kEllipse = 0;  // proj_conic/proj_opac present (ellipse counting)
+[SpecializationConstant]
+const int kHasXy = 0;    // proj_xy present (else AABB center)
+[SpecializationConstant]
+const int kPacked = 0;   // image_ids present (packed projection)
+
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void intersect_tile_count(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -113,8 +123,8 @@ void intersect_tile_count(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint2 tile_min, tile_max;
     tile_range(aabb, p.tile_width, p.tile_height, tile_min, tile_max);
 
-    if (p.proj_conic != nullptr) {
-        float2 xy = p.proj_xy != nullptr
+    if (kEllipse != 0) {
+        float2 xy = kHasXy != 0
             ? float2(p.proj_xy[2 * idx], p.proj_xy[2 * idx + 1])
             : float2(0.5f * (aabb.x + aabb.z), 0.5f * (aabb.y + aabb.w));
         float3 conic = float3(p.proj_conic[3 * idx], p.proj_conic[3 * idx + 1],
@@ -159,7 +169,7 @@ void intersect_tile_write(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint idx = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
     if (idx >= p.total) return;
 
-    int64_t iid = p.image_ids != nullptr ? int64_t(p.image_ids[idx])
+    int64_t iid = kPacked != 0 ? int64_t(p.image_ids[idx])
                                          : int64_t(idx / p.N);
     int64_t cur_idx = (idx == 0) ? 0 : p.cum_tiles[idx - 1];
     int64_t max_idx = p.cum_tiles[idx];
@@ -190,8 +200,8 @@ void intersect_tile_write(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     else  // positive
         depth_u32 ^= (1u << 31);
 
-    if (p.proj_conic != nullptr) {
-        float2 xy = p.proj_xy != nullptr
+    if (kEllipse != 0) {
+        float2 xy = kHasXy != 0
             ? float2(p.proj_xy[2 * idx], p.proj_xy[2 * idx + 1])
             : float2(0.5f * (aabb.x + aabb.z), 0.5f * (aabb.y + aabb.w));
         float3 conic = float3(p.proj_conic[3 * idx], p.proj_conic[3 * idx + 1],

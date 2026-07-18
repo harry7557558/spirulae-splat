@@ -5,19 +5,6 @@
 // portable engine layer; calling one throws. Regenerate after porting a
 // module (a ported symbol must lose its stub) or when the engine grows new
 // kernel calls.
-//
-// NOT auto-stubbed (templates / class methods) — kept in TrainingStubsManual.cpp:
-//   int batch_quantile_masked_radix_select<true>(float const*, int, int, float, float*, unsigned int*, void*)
-//   meshing::OccupancyEvaluator::OccupancyEvaluator(float const*, float const*, float const*, float const*, float const*, int, float const*, int, meshing::CameraParams const&, meshing::MeshingConfig const&)
-//   meshing::OccupancyEvaluator::bisect_edges(float const*, int const*, int const*, float const*, float const*, int, float*)
-//   meshing::OccupancyEvaluator::colorize(float const*, int, float*)
-//   meshing::OccupancyEvaluator::cull_unseen_vertices(float const*, int, int const*, int, unsigned char*)
-//   meshing::OccupancyEvaluator::debug_render_moments(int, std::vector<float, std::allocator<float> >&, int&, int&)
-//   meshing::OccupancyEvaluator::evaluate(float const*, int, float*)
-//   meshing::OccupancyEvaluator::generate_point_cloud(std::vector<float, std::allocator<float> >&)
-//   meshing::OccupancyEvaluator::has_render_cameras() const
-//   meshing::OccupancyEvaluator::view_texel_density(float const*, int, float*)
-//   meshing::OccupancyEvaluator::~OccupancyEvaluator()
 
 #include <BilagridBindings.h>
 #include <Densify.cuh>
@@ -440,29 +427,6 @@ void bilagrid_uniform_sample_forward(
     backend::Stream stream,
     const int* grid_indices ) { _vk_stub("bilagrid_uniform_sample_forward"); }
 
-// from PixelWise.cuh
-void blend_background_backward(
-    DeviceTensor3D<float3> rgb,               
-    DeviceTensor3D<float>  transmittance,     
-    DeviceTensor3D<float3> background,        
-    DeviceTensor3D<float3> v_out_rgb,         
-    DeviceTensor3D<float3> v_rgb,             
-    DeviceTensor3D<float>  v_transmittance,   
-    DeviceTensor3D<float3> v_background       
-) { _vk_stub("blend_background_backward"); }
-
-// from PixelWise.cuh
-void blend_background_noise_backward(
-    bool is_linear,
-    DeviceTensor3D<float3> rgb,               
-    DeviceTensor3D<float>  transmittance,     
-    float randomize_weight,
-    uint32_t seed,
-    DeviceTensor3D<float3> v_out_rgb,         
-    DeviceTensor3D<float3> v_rgb,             
-    DeviceTensor3D<float>  v_transmittance    
-) { _vk_stub("blend_background_noise_backward"); }
-
 // from BilagridBindings.h
 void channel_mean_backward(
     BilagridReader bilagrid,
@@ -479,20 +443,6 @@ void channel_mean_forward(
     int N, int C, int L, int H, int W,
     backend::Stream stream
 ) { _vk_stub("channel_mean_forward"); }
-
-// from EngineInternal.h
-void color_shift_reg_step(
-    float* v_render_rgb,
-    const float* post_rgb,
-    const float* pre_rgb,
-    float* shift_reg_ema,            
-    float* shift_reg_batch_sum,      
-    int N_pixels,                    
-    float weight,
-    float beta,
-    int64_t step,                    
-    backend::Stream stream
-) { _vk_stub("color_shift_reg_step"); }
 
 // from PerPixelLoss.cuh
 LossValues compute_multi_scale_per_pixel_losses(
@@ -553,92 +503,6 @@ void densify_clip_scale_tensor(
     float clip_hardness,
     float max_scale3d
 ) { _vk_stub("densify_clip_scale_tensor"); }
-
-// from Densify.cuh
-void densify_update_weight(
-    int64_t num_splats,
-    DeviceVector<float> radii,
-    float3* scales_ptr,
-    float* opacs_ptr,
-    DeviceVector<float> accum_weight,
-    DeviceVector<float> accum_weight2,
-    float blend_w,
-    DeviceVector<float2> accum_buffer,
-    int score_mode
-) { _vk_stub("densify_update_weight"); }
-
-// from PixelWise.cuh
-void depth_to_normal_backward(
-    std::string camera_model,
-    TorchTensorView intrins,             
-    TorchTensorView dist_coeffs,         
-    bool is_ray_depth,
-    DeviceTensor3D<float>  depths,       
-    DeviceTensor3D<float3> v_normals,    
-    DeviceTensor3D<float>  v_depths      
-) { _vk_stub("depth_to_normal_backward"); }
-
-// from Optimizer.cuh
-void float_add_into(DeviceVector<float> dst, DeviceVector<float> src, int64_t n) { _vk_stub("float_add_into"); }
-
-// from Optimizer.cuh
-void fused_adagrad_step(
-    DeviceTensorFloatND param,
-    DeviceTensorFloatND grad,
-    DeviceTensorFloatND accum,
-    float lr
-) { _vk_stub("fused_adagrad_step"); }
-
-// from Optimizer.cuh
-void fused_adam_step(
-    int64_t num_splats,
-    DeviceTensorFloatND param,
-    DeviceTensorFloatND grad,
-    DeviceTensorFloatND exp_avg,
-    DeviceTensorFloatND exp_avg_sq,
-    float lr,
-    int32_t step, DeviceVector<int32_t> per_splat_steps,
-    float l2_reg,
-    float l2_reg_offset,
-    float grad_scale, bool zero_grad
-) { _vk_stub("fused_adam_step"); }
-
-// from Optimizer.cuh
-void fused_adam_step_quantized(
-    int64_t num_splats,
-    DeviceTensorFloatND param,
-    DeviceTensorFloatND grad,
-    uint8_t* packed,                     
-    float4* quant_bounds,
-    float lr,
-    int32_t step, DeviceVector<int32_t> per_splat_steps,
-    float l2_reg,
-    float l2_reg_offset,
-    int bits,                            
-    float grad_scale, bool zero_grad
-) { _vk_stub("fused_adam_step_quantized"); }
-
-// from Optimizer.cuh
-void fused_adam_step_quantized_value(
-    int64_t num_splats,
-    int64_t param_numel,                 
-    DeviceTensorFloatND grad,            
-     
-     
-    const uint8_t* grad_q_packed,
-    const float2*  grad_q_bounds,
-    uint8_t* optim_packed,
-    float4*  optim_bounds,
-    uint8_t* value_packed,
-    float2*  value_bounds,
-    float lr,
-    int32_t step, DeviceVector<int32_t> per_splat_steps,
-    float l2_reg,
-    float l2_reg_offset,
-    int optim_bits,                      
-    int value_bits,                      
-    float grad_scale, bool zero_grad
-) { _vk_stub("fused_adam_step_quantized_value"); }
 
 // from Optimizer.cuh
 void fused_adamtr_linear_rgb_optim(
@@ -912,9 +776,6 @@ void fused_projection_bwd_optimizer_mip(
     int quantization_level
 ) { _vk_stub("fused_projection_bwd_optimizer_mip"); }
 
-// from Optimizer.cuh
-void increment_int32_inplace(DeviceVector<int32_t> data, int64_t n) { _vk_stub("increment_int32_inplace"); }
-
 // from PixelWise.cuh
 void launch_warp_byte_to_float_equi(
     const void* d_byte, bool input_is_u16,
@@ -985,15 +846,6 @@ void launch_warp_normal_wide(
     float* d_float_out, int K, int Hout, int Wout,
     const float* d_axes) { _vk_stub("launch_warp_normal_wide"); }
 
-// from PixelWise.cuh
-void linear_depth_to_ray_depth_inplace(
-    std::string camera_model,
-    TorchTensorView intrins,         
-    TorchTensorView dist_coeffs,     
-    int image_width, int image_height,
-    DeviceTensor3D<float> depths     
-) { _vk_stub("linear_depth_to_ray_depth_inplace"); }
-
 // from Densify.cuh
 void mcmc_add_noise_tensor(
     int64_t num_splats,
@@ -1003,13 +855,6 @@ void mcmc_add_noise_tensor(
     DeviceVector<float4> quats,
     DeviceVector<float> opacs
 ) { _vk_stub("mcmc_add_noise_tensor"); }
-
-// from PixelWise.cuh
-void overexposure_grad_add(
-    DeviceTensor3D<float3> rgb,     
-    float weight,                   
-    DeviceTensor3D<float3> v_rgb    
-) { _vk_stub("overexposure_grad_add"); }
 
 // from EngineInternal.h
 void ppisp_add_into_grad(
@@ -1341,15 +1186,6 @@ void revised_add_noise_tensor(
     DeviceVector<float4> quats,
     DeviceVector<float> opacs
 ) { _vk_stub("revised_add_noise_tensor"); }
-
-// from PixelWise.cuh
-void rgb_to_srgb_backward(
-    bool is_input_linear,
-    DeviceTensor3D<float3> rgb,           
-    DeviceTensor2D<float3> color_matrix,  
-    DeviceTensor3D<float3> v_out_rgb,     
-    DeviceTensor3D<float3> v_rgb          
-) { _vk_stub("rgb_to_srgb_backward"); }
 
 // from BilagridBindings.h
 void tv_loss_backward(

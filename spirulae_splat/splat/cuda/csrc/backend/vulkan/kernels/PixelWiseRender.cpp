@@ -7,10 +7,7 @@
 #include <PixelWise.cuh>
 #include <Common.cuh>
 
-#include "../VulkanInternal.h"
-#include "../VulkanPipelines.h"
-
-#include <stdexcept>
+#include "KernelCommon.h"
 
 namespace {
 
@@ -46,26 +43,6 @@ struct DepthToNormalParams {
 };
 static_assert(sizeof(DepthToNormalParams) == 4 * 8 + 6 * 4, "layout");
 
-struct Fold {
-    uint32_t per_row, rows;
-};
-
-Fold fold_1d(int64_t total, uint32_t block) {
-    uint32_t wgs = (uint32_t)((total + block - 1) / block);
-    uint32_t per_row = std::min(std::max(wgs, 1u), 65535u);
-    return {per_row, (wgs + per_row - 1) / per_row};
-}
-
-void dispatch_flat(const char* entry, const backend::vk::SpecList& spec,
-                   int64_t total, const void* params, uint32_t size) {
-    if (total <= 0) return;
-    Fold f = fold_1d(total, 128);
-    if (!backend::vk::dispatch(backend::kDefaultStream, entry, spec,
-                               f.per_row, f.rows, 1, params, size))
-        throw std::runtime_error(std::string("Vulkan backend: dispatch of ") +
-                                 entry + " failed");
-}
-
 }  // namespace
 
 /* API definitions matching csrc/PixelWise.cuh (render-path subset) */
@@ -83,9 +60,9 @@ void blend_background_forward(
     p.background = (uint64_t)background.data_ptr();
     p.out_rgb = (uint64_t)out_rgb.data_ptr();
     p.total = (uint32_t)total;
-    p.wgs_per_row = fold_1d(total, 128).per_row;
-    dispatch_flat("pixel_wise_render.blend_background_fwd",
-                  backend::vk::SpecList{}, total, &p, sizeof(p));
+    vkk::dispatch_flat("pixel_wise_render.blend_background_fwd",
+                       backend::vk::SpecList{}, total, 128, &p, sizeof(p),
+                       &p.wgs_per_row);
 }
 
 void blend_background_noise_forward(
@@ -106,10 +83,9 @@ void blend_background_noise_forward(
     p.seed = seed;
     p.HW = (uint32_t)hw;
     p.total = (uint32_t)total;
-    p.wgs_per_row = fold_1d(total, 128).per_row;
-    dispatch_flat("pixel_wise_render.blend_background_noise_fwd",
-                  backend::vk::SpecList{is_linear ? 1u : 0u}, total, &p,
-                  sizeof(p));
+    vkk::dispatch_flat("pixel_wise_render.blend_background_noise_fwd",
+                       backend::vk::SpecList{is_linear ? 1u : 0u}, total, 128,
+                       &p, sizeof(p), &p.wgs_per_row);
 }
 
 void rgb_to_srgb_forward(
@@ -124,10 +100,9 @@ void rgb_to_srgb_forward(
     p.color_matrix = (uint64_t)color_matrix.data_ptr();
     p.out_rgb = (uint64_t)out_rgb.data_ptr();
     p.total = (uint32_t)total;
-    p.wgs_per_row = fold_1d(total, 128).per_row;
-    dispatch_flat("pixel_wise_render.rgb_to_srgb_fwd",
-                  backend::vk::SpecList{is_input_linear ? 1u : 0u}, total, &p,
-                  sizeof(p));
+    vkk::dispatch_flat("pixel_wise_render.rgb_to_srgb_fwd",
+                       backend::vk::SpecList{is_input_linear ? 1u : 0u},
+                       total, 128, &p, sizeof(p), &p.wgs_per_row);
 }
 
 void depth_to_normal_forward(
@@ -144,7 +119,7 @@ void depth_to_normal_forward(
     if (B * H * W == 0) return;
     DepthToNormalParams p{};
     p.intrins = std::get<0>(intrins);
-    p.dist_coeffs = std::get<0>(dist_coeffs);
+    p.dist_coeffs = vkk::or_fallback(std::get<0>(dist_coeffs));
     p.depths = (uint64_t)depths.data_ptr();
     p.normals = (uint64_t)normals.data_ptr();
     p.W = W;
@@ -152,12 +127,9 @@ void depth_to_normal_forward(
     p.B = B;
     p.is_ray_depth = is_ray_depth ? 1u : 0u;
     p.camera_model = (int32_t)cmt(camera_model);
-    if (!backend::vk::dispatch(backend::kDefaultStream,
-                               "pixel_wise_render.depth_to_normal_fwd",
-                               backend::vk::SpecList{}, (W + 15) / 16,
-                               (H + 15) / 16, B, &p, sizeof(p)))
-        throw std::runtime_error(
-            "Vulkan backend: depth_to_normal dispatch failed");
+    vkk::dispatch("pixel_wise_render.depth_to_normal_fwd",
+                  backend::vk::SpecList{}, (W + 15) / 16, (H + 15) / 16, B,
+                  &p, sizeof(p));
 }
 
 void depth_to_normal_forward_tv(

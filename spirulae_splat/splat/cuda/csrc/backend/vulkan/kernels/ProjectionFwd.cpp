@@ -5,11 +5,7 @@
 
 #include <ProjectionFwd.cuh>
 
-#include "../VulkanInternal.h"
-#include "../VulkanPipelines.h"
-
-#include <cstring>
-#include <stdexcept>
+#include "KernelCommon.h"
 
 namespace {
 
@@ -49,34 +45,7 @@ struct Projection3dgutParams {
 static_assert(sizeof(Projection3dgutParams) == 18 * 8 + 8 * 4,
               "params layout must match the slang struct");
 
-// Shared validation + resolution of the SH value-quant launch args. Returns
-// the kShValueBits spec value (0 = fp32). Mirrors the CUDA kernel's stride
-// default: 0 -> FPBO per-splat-block layout (256 * 3 * num_sh_buffer).
-uint32_t resolve_sh_quant(
-    const std::optional<TorchTensorView>& sh_value_packed,
-    const std::optional<TorchTensorView>& sh_value_bounds,
-    const uint32_t num_sh_buffer, const int sh_value_bits,
-    const int64_t sh_bounds_stride,
-    uint64_t* out_packed, uint64_t* out_bounds, int64_t* out_stride) {
-    *out_packed = 0;
-    *out_bounds = 0;
-    *out_stride = 1;  // never 0 (the shader divides by it)
-    if (sh_value_bits == 32)
-        return 0;
-    if (sh_value_bits != 8 && sh_value_bits != 16)
-        throw std::runtime_error(
-            "projection forward: sh_value_bits must be 8, 16 or 32");
-    if (!sh_value_packed.has_value() || !sh_value_bounds.has_value())
-        throw std::runtime_error(
-            "projection forward: sh_value_bits != 32 requires "
-            "sh_value_packed and sh_value_bounds");
-    *out_packed = std::get<0>(sh_value_packed.value());
-    *out_bounds = std::get<0>(sh_value_bounds.value());
-    *out_stride = sh_bounds_stride > 0
-                      ? sh_bounds_stride
-                      : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
-    return (uint32_t)sh_value_bits;
-}
+using vkk::resolve_sh_quant;
 
 std::tuple<DeviceTensor2D<float4>, DeviceTensor2D<float>,
            std::vector<DeviceTensorFloatND>>
@@ -135,7 +104,7 @@ launch_projection_fwd_vk(
     p.sh_stride = (uint32_t)wb.raw_stride(5);
     p.viewmats = std::get<0>(viewmats);
     p.intrins = std::get<0>(intrins);
-    p.dist_coeffs = std::get<0>(dist_coeffs);
+    p.dist_coeffs = vkk::or_fallback(std::get<0>(dist_coeffs));
     p.out_aabb = (uint64_t)aabb.data_ptr();
     p.out_depths = (uint64_t)sorting_depths.data_ptr();
     p.out_radii = (uint64_t)radii.data_ptr();
@@ -154,19 +123,10 @@ launch_projection_fwd_vk(
     p.height = image_height;
     p.wgs_per_row = per_row;
 
-    uint64_t params_addr = 0;
-    void* params_mapped = nullptr;
-    if (!backend::vk::params_alloc(sizeof(p), &params_addr, &params_mapped))
-        throw std::runtime_error("Vulkan backend: params ring failed");
-    std::memcpy(params_mapped, &p, sizeof(p));
-
     backend::vk::SpecList spec{(uint32_t)cam, (uint32_t)sh_degree,
                                antialiased ? 1u : 0u, spec_bits};
-    if (!backend::vk::dispatch(backend::kDefaultStream,
-                               "projection_fwd.projection_fwd_3dgs", spec,
-                               per_row, rows, 1, &params_addr,
-                               sizeof(params_addr)))
-        throw std::runtime_error("Vulkan backend: projection dispatch failed");
+    vkk::dispatch_ring("projection_fwd.projection_fwd_3dgs", spec, per_row,
+                       rows, 1, &p, sizeof(p));
 
     return std::make_tuple(aabb, sorting_depths, splats_screen);
 }
@@ -276,7 +236,7 @@ std::tuple<
     p.sh_stride = (uint32_t)wb.raw_stride(5);
     p.viewmats = std::get<0>(viewmats);
     p.intrins = std::get<0>(intrins);
-    p.dist_coeffs = std::get<0>(dist_coeffs);
+    p.dist_coeffs = vkk::or_fallback(std::get<0>(dist_coeffs));
     p.out_aabb = (uint64_t)aabb.data_ptr();
     p.out_depths = (uint64_t)sorting_depths.data_ptr();
     p.out_radii = (uint64_t)radii.data_ptr();
@@ -293,19 +253,10 @@ std::tuple<
     p.height = image_height;
     p.wgs_per_row = per_row;
 
-    uint64_t params_addr = 0;
-    void* params_mapped = nullptr;
-    if (!backend::vk::params_alloc(sizeof(p), &params_addr, &params_mapped))
-        throw std::runtime_error("Vulkan backend: params ring failed");
-    std::memcpy(params_mapped, &p, sizeof(p));
-
     backend::vk::SpecList spec{(uint32_t)cam, (uint32_t)sh_degree, 0u,
                                spec_bits};
-    if (!backend::vk::dispatch(backend::kDefaultStream,
-                               "projection_fwd.projection_fwd_3dgut", spec,
-                               per_row, rows, 1, &params_addr,
-                               sizeof(params_addr)))
-        throw std::runtime_error("Vulkan backend: projection dispatch failed");
+    vkk::dispatch_ring("projection_fwd.projection_fwd_3dgut", spec, per_row,
+                       rows, 1, &p, sizeof(p));
 
     return std::make_tuple(aabb, sorting_depths, splats_screen);
 }

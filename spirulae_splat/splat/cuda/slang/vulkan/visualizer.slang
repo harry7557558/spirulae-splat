@@ -744,7 +744,7 @@ float3 get_thumbnail_bilinear(uint* thumb_words, uint TW, uint TH, uint bid,
 // scratch; vis_pack_rgb8 packs the [H,W,3] byte image afterwards.
 // ---------------------------------------------------------------------------
 
-struct VisBlitParams {  // 16 ptrs + 9 scalars: via params ring
+struct VisBlitParams {  // 16 ptrs + 11 scalars: via params ring
     float* render_rgbs;    // [H,W,C] C in {1,3}
     float* render_depths;  // [H,W,1]
     float* render_alphas;  // [H,W,1]
@@ -770,6 +770,8 @@ struct VisBlitParams {  // 16 ptrs + 9 scalars: via params ring
     int32_t show_overlay;
     int32_t thumb_w;
     int32_t thumb_h;
+    int32_t has_lss;   // lss_buffer/nodes/aabb valid (flag, not ptr-null:
+    int32_t has_tri;   // see backend README on speculated loads)
 };
 
 static const float kGrayThreshold = 0.1657f;
@@ -886,7 +888,7 @@ void vis_blit(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float tmax = depth;
 
         // BVH traversal: linear swept spheres
-        if (p.lss_buffer != nullptr) {
+        if (p.has_lss != 0) {
             uint stackSize = 0;
             float3 bmin = p.lss_aabb[0], bmax = p.lss_aabb[1];
             if (ray_aabb_intersection(0.5f * (bmin + bmax),
@@ -942,7 +944,7 @@ void vis_blit(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         }
 
         // BVH traversal: thumbnail triangles
-        if (p.tri_buffer != nullptr) {
+        if (p.has_tri != 0) {
             uint stackSize = 0;
             float3 bmin = p.tri_aabb[0], bmax = p.tri_aabb[1];
             if (ray_aabb_intersection(0.5f * (bmin + bmax),
@@ -1053,7 +1055,7 @@ struct VisThumbParams {  // 5 ptrs + 8 scalars = 72 bytes: pushed directly
     int32_t S;
     int32_t H_alpha;
     int32_t W_alpha;
-    int32_t _pad0;
+    int32_t has_alpha;  // alpha_mask valid (flag, not ptr-null)
 };
 
 [ForceInline]
@@ -1119,7 +1121,7 @@ void vis_update_thumbnails(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         int sx = px % S;
         float3 c = thumb_bilinear_sample_f3(p.rgb_float, b, sx, sy, S, S,
                                             p.W_rgb, p.H_rgb);
-        if (p.alpha_mask != nullptr) {
+        if (p.has_alpha != 0) {
             bool inside = thumb_nearest_sample_b(p.alpha_mask, b, sx, sy, S,
                                                  S, p.W_alpha, p.H_alpha);
             if (!inside) c = float3(0.5f, 0.5f, 0.5f);

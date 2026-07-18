@@ -25,8 +25,7 @@
 #include <EngineCommon.h>
 
 #include "../../common/SortScan.h"
-#include "../VulkanInternal.h"
-#include "../VulkanPipelines.h"
+#include "KernelCommon.h"
 
 #include <cmath>
 #include <cstdio>
@@ -60,41 +59,6 @@ float funmap_ordered(uint32_t u) {
     return f;
 }
 
-struct Fold {
-    uint32_t per_row, rows;
-};
-Fold fold_1d(int64_t total, uint32_t block) {
-    uint32_t wgs = (uint32_t)((total + block - 1) / block);
-    uint32_t per_row = std::min(std::max(wgs, 1u), 65535u);
-    return {per_row, (wgs + per_row - 1) / per_row};
-}
-
-void vis_dispatch(const char* entry, const backend::vk::SpecList& spec,
-                  uint32_t gx, uint32_t gy, uint32_t gz, const void* params,
-                  uint32_t size) {
-    if (!backend::vk::dispatch(backend::kDefaultStream, entry, spec, gx, gy,
-                               gz, params, size)) {
-        const char* detail = backend::last_error();
-        throw std::runtime_error(std::string("Vulkan backend: dispatch of ") +
-                                 entry + " failed" +
-                                 (detail ? std::string(": ") + detail : ""));
-    }
-    if (std::getenv("SSPLAT_VIS_DEBUG_SYNC")) {
-        backend::device_synchronize();
-        const char* err = backend::last_error();
-        std::fprintf(stderr, "[vis-sync] %s: %s\n", entry,
-                     err ? err : "ok");
-    }
-}
-
-void vis_dispatch_flat(const char* entry, const backend::vk::SpecList& spec,
-                       int64_t total, uint32_t block, void* params,
-                       uint32_t size, uint32_t* wgs_per_row_field) {
-    if (total <= 0) return;
-    Fold f = fold_1d(total, block);
-    *wgs_per_row_field = f.per_row;
-    vis_dispatch(entry, spec, f.per_row, f.rows, 1, params, size);
-}
 
 /* ---- param mirrors (see slang/vulkan/visualizer.slang) ---- */
 
@@ -166,9 +130,10 @@ struct VisBlitParams {
     uint64_t overlay_colors, thumbnails, min_max, out_rgba;
     int32_t view_camera_model, width, height, rgb_channels;
     int32_t num_cam_lss, show_cams, show_overlay, thumb_w, thumb_h;
+    int32_t has_lss, has_tri;
     int32_t _pad0;
 };
-static_assert(sizeof(VisBlitParams) == 16 * 8 + 10 * 4, "layout");
+static_assert(sizeof(VisBlitParams) == 16 * 8 + 12 * 4, "layout");
 
 struct VisPackParams {
     uint64_t rgba, out_rgb8;
@@ -178,7 +143,7 @@ static_assert(sizeof(VisPackParams) == 2 * 8 + 2 * 4, "layout");
 
 struct VisThumbParams {
     uint64_t rgb_float, cam_indices, thumbnails, done_mask, alpha_mask;
-    int32_t H_rgb, W_rgb, B_post, N, S, H_alpha, W_alpha, _pad0;
+    int32_t H_rgb, W_rgb, B_post, N, S, H_alpha, W_alpha, has_alpha;
 };
 static_assert(sizeof(VisThumbParams) == 5 * 8 + 8 * 4, "layout");
 
@@ -214,7 +179,7 @@ BvhResult build_bvh_vk(uint32_t vis_prim, uint32_t num_elem,
         p.rmax_y = root.max[1];
         p.rmax_z = root.max[2];
         p.num_elem = num_elem;
-        vis_dispatch_flat("visualizer.vis_fill_morton", spec, num_elem, 256,
+        vkk::dispatch_flat("visualizer.vis_fill_morton", spec, num_elem, 256,
                           &p, sizeof(p), &p.wgs_per_row);
     }
 
@@ -224,7 +189,7 @@ BvhResult build_bvh_vk(uint32_t vis_prim, uint32_t num_elem,
         VisIdentityParams p{};
         p.data = (uint64_t)argsort_in;
         p.n = num_elem;
-        vis_dispatch_flat("visualizer.vis_fill_identity",
+        vkk::dispatch_flat("visualizer.vis_fill_identity",
                           backend::vk::SpecList{}, num_elem, 256, &p,
                           sizeof(p), &p.wgs_per_row);
     }
@@ -252,7 +217,7 @@ BvhResult build_bvh_vk(uint32_t vis_prim, uint32_t num_elem,
         p.internal_nodes = (uint64_t)internal_nodes;
         p.parent_nodes = (uint64_t)parent_nodes;
         p.num_elements = num_elem;
-        vis_dispatch_flat("visualizer.vis_lbvh_nodes",
+        vkk::dispatch_flat("visualizer.vis_lbvh_nodes",
                           backend::vk::SpecList{}, (int64_t)num_elem - 1, 256,
                           &p, sizeof(p), &p.wgs_per_row);
     }
@@ -263,7 +228,7 @@ BvhResult build_bvh_vk(uint32_t vis_prim, uint32_t num_elem,
         VisTreeInitParams p{};
         p.treeAABB = (uint64_t)treeAABB;
         p.num_cells = num_elem - 1;
-        vis_dispatch_flat("visualizer.vis_tree_init_aabb",
+        vkk::dispatch_flat("visualizer.vis_tree_init_aabb",
                           backend::vk::SpecList{}, (int64_t)num_elem - 1, 256,
                           &p, sizeof(p), &p.wgs_per_row);
     }
@@ -274,7 +239,7 @@ BvhResult build_bvh_vk(uint32_t vis_prim, uint32_t num_elem,
         p.parent_nodes = (uint64_t)parent_nodes;
         p.treeAABB = (uint64_t)treeAABB;
         p.num_elements = num_elem;
-        vis_dispatch_flat("visualizer.vis_lbvh_aabb", spec,
+        vkk::dispatch_flat("visualizer.vis_lbvh_aabb", spec,
                           (int64_t)num_elem - 1, 256, &p, sizeof(p),
                           &p.wgs_per_row);
     }
@@ -282,7 +247,7 @@ BvhResult build_bvh_vk(uint32_t vis_prim, uint32_t num_elem,
         VisUnmapParams p{};
         p.words = (uint64_t)treeAABB;
         p.n = (num_elem - 1) * 6;
-        vis_dispatch_flat("visualizer.vis_unmap_aabb",
+        vkk::dispatch_flat("visualizer.vis_unmap_aabb",
                           backend::vk::SpecList{},
                           (int64_t)(num_elem - 1) * 6, 256, &p, sizeof(p),
                           &p.wgs_per_row);
@@ -325,13 +290,13 @@ void fill_frustums(int64_t n, const void* intrins, const void* widths,
     p.widths = (uint64_t)widths;
     p.heights = (uint64_t)heights;
     p.camera_models = (uint64_t)camera_models;
-    p.dist_coeffs = (uint64_t)dist_coeffs;
+    p.dist_coeffs = vkk::or_fallback(dist_coeffs);
     p.camera_to_worlds = (uint64_t)c2w;
     p.lss_buffer = (uint64_t)lss_buffer;
     p.tri_buffer = (uint64_t)tri_buffer;
     p.size = size;
     p.N = (uint32_t)n;
-    vis_dispatch("visualizer.vis_fill_frustum", backend::vk::SpecList{},
+    vkk::dispatch("visualizer.vis_fill_frustum", backend::vk::SpecList{},
                  (uint32_t)n, 1, 1, &p, sizeof(p));
 }
 
@@ -342,7 +307,7 @@ void reduce_root_aabb(void* root_aabb, uint32_t vis_prim, const void* buffer,
     p.buffer = (uint64_t)buffer;
     p.aabb_reduced = (uint64_t)root_aabb;
     p.num_elem = (uint32_t)num_elem;
-    vis_dispatch_flat("visualizer.vis_compute_aabb",
+    vkk::dispatch_flat("visualizer.vis_compute_aabb",
                       backend::vk::SpecList{vis_prim}, num_elem, 256, &p,
                       sizeof(p), &p.wgs_per_row);
 }
@@ -361,7 +326,7 @@ void* compute_min_max(PoolSlot slot, const void* depths, int64_t total) {
     p.depths = (uint64_t)depths;
     p.min_max = (uint64_t)min_max;
     p.total = (uint32_t)total;
-    vis_dispatch_flat("visualizer.vis_min_max", backend::vk::SpecList{},
+    vkk::dispatch_flat("visualizer.vis_min_max", backend::vk::SpecList{},
                       total, 256, &p, sizeof(p), &p.wgs_per_row);
     return min_max;
 }
@@ -399,16 +364,16 @@ void run_blit(const TorchTensorView& render_rgbs,
     p.render_alphas = std::get<0>(render_alphas);
     p.view_intrins = std::get<0>(view_intrins);
     p.view_viewmat = std::get<0>(view_viewmat);
-    p.view_dist = std::get<0>(view_dist_coeffs);
-    p.lss_buffer = (uint64_t)geom.lss_buffer;
-    p.lss_nodes = (uint64_t)geom.lss_nodes;
-    p.lss_aabb = (uint64_t)geom.lss_aabb;
-    p.tri_buffer = (uint64_t)geom.tri_buffer;
-    p.tri_nodes = (uint64_t)geom.tri_nodes;
-    p.tri_aabb = (uint64_t)geom.tri_aabb;
-    p.overlay_colors = (uint64_t)geom.overlay_colors;
-    p.thumbnails = (uint64_t)thumbnails;
-    p.min_max = (uint64_t)min_max;
+    p.view_dist = vkk::or_fallback(std::get<0>(view_dist_coeffs));
+    p.lss_buffer = vkk::or_fallback(geom.lss_buffer);
+    p.lss_nodes = vkk::or_fallback(geom.lss_nodes);
+    p.lss_aabb = vkk::or_fallback(geom.lss_aabb);
+    p.tri_buffer = vkk::or_fallback(geom.tri_buffer);
+    p.tri_nodes = vkk::or_fallback(geom.tri_nodes);
+    p.tri_aabb = vkk::or_fallback(geom.tri_aabb);
+    p.overlay_colors = vkk::or_fallback(geom.overlay_colors);
+    p.thumbnails = vkk::or_fallback(thumbnails);
+    p.min_max = vkk::or_fallback(min_max);
     p.out_rgba = (uint64_t)rgba;
     p.view_camera_model = view_camera_model;
     p.width = (int32_t)w;
@@ -419,13 +384,15 @@ void run_blit(const TorchTensorView& render_rgbs,
     p.show_overlay = geom.show_overlay ? 1 : 0;
     p.thumb_w = thumb_w;
     p.thumb_h = thumb_h;
+    p.has_lss = geom.lss_buffer ? 1 : 0;
+    p.has_tri = geom.tri_buffer ? 1 : 0;
 
     uint64_t params_addr = 0;
     void* params_mapped = nullptr;
     if (!backend::vk::params_alloc(sizeof(p), &params_addr, &params_mapped))
         throw std::runtime_error("Vulkan backend: params ring failed");
     std::memcpy(params_mapped, &p, sizeof(p));
-    vis_dispatch("visualizer.vis_blit", backend::vk::SpecList{},
+    vkk::dispatch("visualizer.vis_blit", backend::vk::SpecList{},
                  (uint32_t)((w + 7) / 8), (uint32_t)((h + 3) / 4), 1,
                  &params_addr, sizeof(params_addr));
 
@@ -434,7 +401,7 @@ void run_blit(const TorchTensorView& render_rgbs,
     pk.out_rgb8 = std::get<0>(out_rgb);
     pk.total_bytes = (uint32_t)(3 * h * w);
     const int64_t words = (pk.total_bytes + 3) / 4;
-    vis_dispatch_flat("visualizer.vis_pack_rgb8", backend::vk::SpecList{},
+    vkk::dispatch_flat("visualizer.vis_pack_rgb8", backend::vk::SpecList{},
                       words, 256, &pk, sizeof(pk), &pk.wgs_per_row);
 }
 
@@ -686,7 +653,7 @@ void engine_viewer_capture_thumbnails(TorchTensorView cam_indices_tv) {
     p.cam_indices = (uint64_t)d_ci;
     p.thumbnails = (uint64_t)v.thumbnails.data_ptr();
     p.done_mask = (uint64_t)v.thumbnail_done_mask.data_ptr();
-    p.alpha_mask = (uint64_t)d_alpha_mask;
+    p.alpha_mask = vkk::or_fallback(d_alpha_mask);
     p.H_rgb = (int)H;
     p.W_rgb = (int)W;
     p.B_post = (int)B_post;
@@ -694,7 +661,8 @@ void engine_viewer_capture_thumbnails(TorchTensorView cam_indices_tv) {
     p.S = VIEWER_THUMBNAIL_SIZE;
     p.H_alpha = H_alpha;
     p.W_alpha = W_alpha;
-    vis_dispatch("visualizer.vis_update_thumbnails", backend::vk::SpecList{},
+    p.has_alpha = d_alpha_mask ? 1 : 0;
+    vkk::dispatch("visualizer.vis_update_thumbnails", backend::vk::SpecList{},
                  (uint32_t)B_post, 1, 1, &p, sizeof(p));
 }
 

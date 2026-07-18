@@ -40,6 +40,10 @@ const int kCameraModel = 0;
 const int kDistType = 0;
 [SpecializationConstant]
 const int kOutputMedian = 0;
+// gaussian_ids present (packed projection); spec-folded so the null pointer
+// never sits behind a runtime branch (see backend README).
+[SpecializationConstant]
+const int kRasterPacked = 0;
 
 // Test whether the unit ellipse (x^T inv_cov x = 1, centered at origin)
 // overlaps an axis-aligned box [x0,x1]x[y0,y1]. Port of Common.cuh
@@ -441,7 +445,7 @@ void rasterize_fwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         bool hit = false;
         if (idx < range_end) {
             int g = p.flatten_ids[idx];
-            uint wi = p.gaussian_ids != nullptr ? uint(p.gaussian_ids[g])
+            uint wi = kRasterPacked != 0 ? uint(p.gaussian_ids[g])
                                                 : uint(g) % p.N;
             // 3dgut keeps the projected 2D conic in the screen "scale"
             // channel and the ellipse center is the AABB center. Cull here,

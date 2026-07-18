@@ -8,10 +8,7 @@
 #include <IntersectTile.cuh>
 
 #include "../../common/SortScan.h"
-#include "../VulkanInternal.h"
-#include "../VulkanPipelines.h"
-
-#include <stdexcept>
+#include "KernelCommon.h"
 
 namespace {
 
@@ -40,15 +37,6 @@ struct IsectOffsetParams {
 };
 static_assert(sizeof(IsectOffsetParams) == 2 * 8 + 3 * 4 + 4 /*pad*/,
               "params layout must match the slang struct");
-
-struct Grid {
-    uint32_t per_row, rows;
-};
-Grid fold_1d(uint64_t threads, uint32_t block) {
-    uint32_t wgs = (uint32_t)((threads + block - 1) / block);
-    uint32_t per_row = std::min(std::max(wgs, 1u), 65535u);
-    return {per_row, (wgs + per_row - 1) / per_row};
-}
 
 }  // namespace
 
@@ -84,11 +72,15 @@ std::tuple<
     const uint64_t p_conic = proj_conic ? (uint64_t)proj_conic->data_ptr() : 0;
     const uint64_t p_opac = proj_opac ? (uint64_t)proj_opac->data_ptr() : 0;
 
+    // Spec IDs: 0 = kEllipse, 1 = kHasXy, 2 = kPacked (see intersect_tile.slang).
+    const backend::vk::SpecList mode_spec{p_conic ? 1u : 0u, p_xy ? 1u : 0u,
+                                          packed ? 1u : 0u};
+
     /* Count tiles intersected per splat */
     DeviceVector<int64_t> tiles_per_splat;
     tiles_per_splat.resize(PoolSlot::IsectTilesPerSplat, total_count);
     {
-        Grid g = fold_1d(total_count, 256);
+        vkk::Fold g = vkk::fold_1d(total_count, 256);
         IsectCountParams cp{};
         cp.aabb = (uint64_t)aabb.data_ptr();
         cp.proj_xy = p_xy;
@@ -99,11 +91,8 @@ std::tuple<
         cp.tile_height = tile_height;
         cp.total = total_count;
         cp.wgs_per_row = g.per_row;
-        if (!backend::vk::dispatch(backend::kDefaultStream,
-                                   "intersect_tile.intersect_tile_count", {},
-                                   g.per_row, g.rows, 1, &cp, sizeof(cp)))
-            throw std::runtime_error(
-                "Vulkan backend: intersect count dispatch failed");
+        vkk::dispatch("intersect_tile.intersect_tile_count", mode_spec, g.per_row,
+                      g.rows, 1, &cp, sizeof(cp));
     }
 
     /* Inclusive prefix sum -> cumulative tile counts */
@@ -139,7 +128,7 @@ std::tuple<
     flatten_ids_b.resize(PoolSlot::IsectFlatB, n_isects);
 
     {
-        Grid g = fold_1d(total_count, 256);
+        vkk::Fold g = vkk::fold_1d(total_count, 256);
         IsectWriteParams wp{};
         wp.image_ids = packed ? (uint64_t)image_ids->data_ptr() : 0;
         wp.aabb = (uint64_t)aabb.data_ptr();
@@ -155,11 +144,8 @@ std::tuple<
         wp.tile_height = tile_height;
         wp.total = total_count;
         wp.wgs_per_row = g.per_row;
-        if (!backend::vk::dispatch(backend::kDefaultStream,
-                                   "intersect_tile.intersect_tile_write", {},
-                                   g.per_row, g.rows, 1, &wp, sizeof(wp)))
-            throw std::runtime_error(
-                "Vulkan backend: intersect write dispatch failed");
+        vkk::dispatch("intersect_tile.intersect_tile_write", mode_spec, g.per_row,
+                      g.rows, 1, &wp, sizeof(wp));
     }
 
     /* Sort by (tile_id << 32 | depth) key */
@@ -179,18 +165,15 @@ std::tuple<
 
     /* Compute per-tile start offsets */
     {
-        Grid g = fold_1d(n_isects, 256);
+        vkk::Fold g = vkk::fold_1d(n_isects, 256);
         IsectOffsetParams op{};
         op.isect_ids = (uint64_t)isect_ids_out.data_ptr();
         op.offsets = (uint64_t)offsets_out.data_ptr();
         op.n_isects = (uint32_t)n_isects;
         op.n_offsets = n_tiles;
         op.wgs_per_row = g.per_row;
-        if (!backend::vk::dispatch(backend::kDefaultStream,
-                                   "intersect_tile.intersect_offset", {},
-                                   g.per_row, g.rows, 1, &op, sizeof(op)))
-            throw std::runtime_error(
-                "Vulkan backend: intersect offset dispatch failed");
+        vkk::dispatch("intersect_tile.intersect_offset", {}, g.per_row,
+                      g.rows, 1, &op, sizeof(op));
     }
 
     return std::make_tuple(isect_ids_out, flatten_ids_out, offsets_out);

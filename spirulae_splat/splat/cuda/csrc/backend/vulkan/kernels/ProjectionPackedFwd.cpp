@@ -8,11 +8,7 @@
 #include <ProjectionPackedFwd.cuh>
 
 #include "../../common/SortScan.h"
-#include "../VulkanInternal.h"
-#include "../VulkanPipelines.h"
-
-#include <cstring>
-#include <stdexcept>
+#include "KernelCommon.h"
 
 namespace {
 
@@ -44,32 +40,7 @@ struct PackedFwdParams {
 static_assert(sizeof(PackedFwdParams) == 23 * 8 + 8 * 4,
               "params layout must match the slang struct");
 
-// Same contract as resolve_sh_quant in ProjectionFwd.cpp (per-TU copy).
-uint32_t resolve_sh_quant(
-    const std::optional<TorchTensorView>& sh_value_packed,
-    const std::optional<TorchTensorView>& sh_value_bounds,
-    const uint32_t num_sh_buffer, const int sh_value_bits,
-    const int64_t sh_bounds_stride,
-    uint64_t* out_packed, uint64_t* out_bounds, int64_t* out_stride) {
-    *out_packed = 0;
-    *out_bounds = 0;
-    *out_stride = 1;  // never 0 (the shader divides by it)
-    if (sh_value_bits == 32)
-        return 0;
-    if (sh_value_bits != 8 && sh_value_bits != 16)
-        throw std::runtime_error(
-            "packed projection forward: sh_value_bits must be 8, 16 or 32");
-    if (!sh_value_packed.has_value() || !sh_value_bounds.has_value())
-        throw std::runtime_error(
-            "packed projection forward: sh_value_bits != 32 requires "
-            "sh_value_packed and sh_value_bounds");
-    *out_packed = std::get<0>(sh_value_packed.value());
-    *out_bounds = std::get<0>(sh_value_bounds.value());
-    *out_stride = sh_bounds_stride > 0
-                      ? sh_bounds_stride
-                      : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
-    return (uint32_t)sh_value_bits;
-}
+using vkk::resolve_sh_quant;
 
 std::tuple<DeviceVector<int32_t>, DeviceVector<int32_t>, DeviceVector<float4>,
            DeviceVector<float>, std::vector<DeviceTensorFloatND>>
@@ -121,7 +92,7 @@ launch_projection_packed_vk(
     mp.opacities = (uint64_t)wb.raw_data(3);
     mp.viewmats = std::get<0>(viewmats);
     mp.intrins = std::get<0>(intrins);
-    mp.dist_coeffs = std::get<0>(dist_coeffs);
+    mp.dist_coeffs = vkk::or_fallback(std::get<0>(dist_coeffs));
     mp.out_mask = (uint64_t)mask.data_ptr();
     mp.C = C;
     mp.N = (uint32_t)N;
@@ -134,10 +105,8 @@ launch_projection_packed_vk(
     backend::vk::SpecList spec{(uint32_t)cam, (uint32_t)sh_degree,
                                antialiased ? 1u : 0u, spec_bits,
                                eval3d ? 1u : 0u};
-    if (!backend::vk::dispatch(backend::kDefaultStream,
-                               "projection_fwd.projection_packed_mask", spec,
-                               per_row, rows, 1, &mp, sizeof(mp)))
-        throw std::runtime_error("Vulkan backend: packed mask dispatch failed");
+    vkk::dispatch("projection_fwd.projection_packed_mask", spec, per_row,
+                  rows, 1, &mp, sizeof(mp));
 
     backend::inclusive_sum<int32_t>(mask.data_ptr(), mask_scan.data_ptr(),
                                     (int64_t)C * N);
@@ -203,18 +172,8 @@ launch_projection_packed_vk(
         p.height = image_height;
         p.wgs_per_row = per_row;
 
-        uint64_t params_addr = 0;
-        void* params_mapped = nullptr;
-        if (!backend::vk::params_alloc(sizeof(p), &params_addr,
-                                       &params_mapped))
-            throw std::runtime_error("Vulkan backend: params ring failed");
-        std::memcpy(params_mapped, &p, sizeof(p));
-        if (!backend::vk::dispatch(backend::kDefaultStream,
-                                   "projection_fwd.projection_packed_fwd",
-                                   spec, per_row, rows, 1, &params_addr,
-                                   sizeof(params_addr)))
-            throw std::runtime_error(
-                "Vulkan backend: packed fwd dispatch failed");
+        vkk::dispatch_ring("projection_fwd.projection_packed_fwd", spec,
+                           per_row, rows, 1, &p, sizeof(p));
     }
 
     return std::make_tuple(camera_ids, gaussian_ids, aabb, sorting_depths,

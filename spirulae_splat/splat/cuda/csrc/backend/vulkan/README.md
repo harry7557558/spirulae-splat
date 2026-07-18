@@ -160,7 +160,7 @@ Parity-tested against CPU references on every available device.
 | 2 | Projection fwd (3 primitives × spec-const cams/SH) + parity vs CUDA | DONE 2026-07 incl. 3DGUT + packed + SH value-quant q8/q16 |
 | 3 | Background SH fwd, tile intersect (key gen + offsets over SortScan) | DONE 2026-07 |
 | 4 | Rasterization fwd (2D + eval3D shared source), visualizer blit | DONE 2026-07 (+ render-path PixelWise, engine-level end-to-end parity) |
-| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | — (throwing stubs keep the engine linking; see below) |
+| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | IN PROGRESS: optimizer/utility kernels + pixel-wise backwards + background-SH backward DONE 2026-07 (optim_parity, pwtrain_parity); remaining launchers still throwing stubs |
 
 Phase-0/1 hard-won portability rules (validated on NVIDIA proprietary,
 Mesa ANV, llvmpipe — all tests + validation layers clean on all three):
@@ -273,9 +273,9 @@ the engine level.
   pack kernel writing the [H,W,3] byte image in whole words (tail lands in
   the allocation's 4-byte rounding). Viewer work runs on the default stream
   (the high-priority viewer stream nuance is dropped; single-queue
-  submission order already serializes). `SSPLAT_VIS_DEBUG_SYNC=1` syncs +
-  reports after every visualizer dispatch (how the Intel hang below was
-  bisected).
+  submission order already serializes). `SSPLAT_VK_DEBUG_SYNC=1` (legacy alias
+  `SSPLAT_VIS_DEBUG_SYNC`) syncs + reports after EVERY kernel dispatch —
+  the standard way to bisect device-lost/segfault failures to a kernel.
 - **UB-loop portability rule**: Visualizer.cu's Karras split search
   (`for (tf = 2; (t = (l+tf-1)/tf) >= 1; tf <<= 1)`) terminates only through
   signed-overflow / divide-by-zero UB. NVIDIA and llvmpipe happen to exit;
@@ -285,6 +285,61 @@ the engine level.
 - `EngineBackground.cu` became portable `EngineBackground.cpp` (its one raw
   kernel replaced by the existing `float_add_into` launcher, cudaMemcpy* ->
   backend::). It now compiles into BOTH backends unchanged.
+- **Speculated-load portability rule (llvmpipe segfault)**: llvmpipe's LLVM
+  JIT can SPECULATE a load that sits behind a runtime branch — a
+  constant-offset load guarded by `if (p.ptr != nullptr)` executed with a
+  null device address segfaulted the process (densify_update_weight's
+  accum_weight_scalar; discrete GPUs shrug off null BDA reads, the CPU JIT
+  does not). Rules, now applied across every kernel TU: a params pointer
+  field a shader may load through is NEVER null — launchers substitute
+  `vkk::or_fallback()` (a 4 KB zeroed allocation in KernelCommon.h);
+  "null means zeros" inputs (dist_coeffs and friends) just read the
+  fallback; "null selects a mode" moved to specialization constants
+  (intersect_tile kEllipse/kHasXy/kPacked, rasterize_fwd kRasterPacked —
+  spec-folding removes the dead load entirely) or explicit flag fields
+  (blit has_lss/has_tri, thumbnails has_alpha, optimizer has_steps/
+  grad_quant, densify use_opacs/use_w2). Guarded STORES are fine (never
+  speculated).
+- **Shared launcher helpers** live in `kernels/KernelCommon.h` (namespace
+  `vkk`): fold_1d 65535-grid folding, dispatch/dispatch_flat/dispatch_ring
+  (throwing, debug-sync hook), or_fallback, resolve_sh_quant. New kernel TUs
+  should not hand-roll these.
+- **Optimizer port (phase 5, first slice)**: `kernels/Optimizer.cpp` +
+  `slang/vulkan/optimizer.slang` implement fused_adam_step (fp32),
+  fused_adam_step_quantized (4/8-bit state), fused_adam_step_quantized_value
+  (state x value x optional gradq int8 grad), fused_adagrad_step,
+  float_add_into, increment_int32_inplace; `kernels/Densify.cpp` +
+  `densify.slang` implement densify_update_weight. The quantized-state
+  codecs live in `slang/vulkan/optim_quant.slang` (QuantizedAdamState /
+  QuantizedTensor / gradq::Codec<8> mirrors): packed cells are read as u32
+  words and written by cooperative word assembly in groupshared (a
+  256-cell quant block is always word-aligned; CUDA leaves final-word tail
+  bytes untouched, the port zeroes them — nothing reads them). CUDA's
+  warp-shuffle min/max block reductions became a deterministic groupshared
+  serial reduction; log1pf/expm1f are emulated with the compensated forms
+  (parity: codes within +-1 step). Kernels with barriers mask work with
+  `inside`/`blk_ok` instead of early returns so every thread reaches every
+  barrier. `optim_parity` (dump/compare like the others) covers all of it:
+  158k floats + 148k codes, 0 violations on NVIDIA/Intel/llvmpipe.
+  densify_update_weight's Median mode draws contraction-sensitive hash14
+  randomness — parity compares only its deterministic count channel.
+- **Pixel-wise training + background-SH backward (phase 5, second slice)**:
+  `kernels/PixelWiseTrain.cpp` + `pixel_wise_train.slang` implement the
+  blend/noise/srgb backwards, overexposure_grad_add, depth_to_normal_backward
+  (16x16 tile apron + neighbor scatter), linear_depth_to_ray_depth_inplace,
+  and color_shift_reg_step (ColorShiftReg.cu; shared-mem float atomics ->
+  groupshared serial reduce + one portable atomic add per channel/block).
+  `atomic_float.slang` provides the portable float atomic add: a
+  compare-exchange loop over the u32 bit image (no VK_EXT_shader_atomic_float
+  dependency; same nondeterministic ordering as CUDA atomicAdd).
+  render_background_sh_backward replaces CUDA's warp==32 block-atomic SH
+  reduction (`sh_block_atomic_add_f3_512`) with an atomics-free design: a
+  fixed grid of 16384 grid-striding threads each accumulates a private
+  float3 scratch slice through the plain `sh{N}_to_color_dir_vjp_inplace`
+  exports, then a single-workgroup deterministic reduce folds slices into
+  v_sh_coeffs. `pwtrain_parity` covers all of it (incl. bg SH fwd+bwd at
+  degrees 1/3): 221k floats, <=0.003% violations x 3 devices (the outliers
+  are fisheye-boundary pixels of the undistort iteration).
 - **Training stubs**: `kernels/TrainingStubs.gen.cpp` (generated by
   `spirulae_splat/generate_vulkan_stubs.py` from a link probe of
   csrc_portable vs the backend lib) + `TrainingStubsManual.cpp` (the

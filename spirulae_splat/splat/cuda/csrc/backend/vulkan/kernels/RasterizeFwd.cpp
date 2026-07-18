@@ -8,11 +8,7 @@
 #include <RasterizationFwd.cuh>
 #include <RasterizationEval3DFwd.cuh>
 
-#include "../VulkanInternal.h"
-#include "../VulkanPipelines.h"
-
-#include <cstring>
-#include <stdexcept>
+#include "KernelCommon.h"
 
 namespace {
 
@@ -85,17 +81,8 @@ RasterOutputs alloc_raster_outputs(int64_t batch, uint32_t image_height,
 void dispatch_raster(const char* entry, const backend::vk::SpecList& spec,
                      uint32_t I, uint32_t tile_width, uint32_t tile_height,
                      const void* params, uint32_t params_size) {
-    uint64_t params_addr = 0;
-    void* params_mapped = nullptr;
-    if (!backend::vk::params_alloc(params_size, &params_addr, &params_mapped))
-        throw std::runtime_error("Vulkan backend: params ring failed");
-    std::memcpy(params_mapped, params, params_size);
-    if (!backend::vk::dispatch(backend::kDefaultStream, entry, spec, I,
-                               tile_height * MACRO_TILE_SIZE_Y,
-                               tile_width * MACRO_TILE_SIZE_X, &params_addr,
-                               sizeof(params_addr)))
-        throw std::runtime_error(
-            "Vulkan backend: rasterization dispatch failed");
+    vkk::dispatch_ring(entry, spec, I, tile_height * MACRO_TILE_SIZE_Y,
+                       tile_width * MACRO_TILE_SIZE_X, params, params_size);
 }
 
 // Shared implementation of the 2D forward (Vanilla3DGS + MipSplatting: the
@@ -252,7 +239,7 @@ std::tuple<
     p.s_rgb = (uint64_t)sb.raw_data(2);
     p.viewmats = std::get<0>(viewmats);
     p.intrins = std::get<0>(intrins);
-    p.dist_coeffs = std::get<0>(dist_coeffs);
+    p.dist_coeffs = vkk::or_fallback(std::get<0>(dist_coeffs));
     p.aabb = (uint64_t)aabb.data_ptr();
     p.tile_offsets = (uint64_t)tile_offsets.data_ptr();
     p.flatten_ids = (uint64_t)flatten_ids.data_ptr();
@@ -273,8 +260,11 @@ std::tuple<
     p.tile_width = tile_width;
     p.tile_height = tile_height;
 
+    // Spec IDs: 0 = camera model, 1 = dist type, 2 = median,
+    // 3 = kRasterPacked (gaussian_ids present).
     backend::vk::SpecList spec{(uint32_t)cam, dist_spec(dist_type),
-                               output_median ? 1u : 0u};
+                               output_median ? 1u : 0u,
+                               gaussian_ids.data_ptr() ? 1u : 0u};
     dispatch_raster("rasterize_fwd.rasterize_fwd_3dgut", spec,
                     (uint32_t)batch, tile_width, tile_height, &p, sizeof(p));
 
