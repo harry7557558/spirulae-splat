@@ -282,21 +282,38 @@ float2x2 valid_distortion_log_barrier_hess(float2 uv, no_diff float[10] dist_coe
 }
 #endif
 
+// Value-returning core (assume-valid path). The bool wrapper below and the
+// fwd_diff Jacobians both build on this: slangc crashes on bwd-of-fwd_diff
+// through `out`-parameter differentiable functions (shader-slang/slang
+// #11160), and the documented workaround is returning the value instead.
+[ForceInline]
+[Differentiable]
+float2 persp_proj_uv(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs
+) {
+    float2 uv = p_view.xy / p_view.z;
+    uv = camera_distortion(uv, dist_coeffs);
+    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+    return float2(
+        fx * uv.x + cx,
+        fy * uv.y + cy
+    );
+}
+
 [ForceInline]
 [Differentiable]
 bool persp_proj<let assume_valid : bool>(
     float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
     out float2 uv
 ) {
-    uv = p_view.xy / p_view.z;
-    if (!assume_valid && (p_view.z < 0.0 || !is_valid_distortion(uv, dist_coeffs)))
-        return false;
-    uv = camera_distortion(uv, dist_coeffs);
-    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
-    uv = float2(
-        fx * uv.x + cx,
-        fy * uv.y + cy
-    );
+    if (!assume_valid) {
+        float2 uv0 = p_view.xy / p_view.z;
+        if (p_view.z < 0.0 || !is_valid_distortion(uv0, dist_coeffs)) {
+            uv = uv0;
+            return false;
+        }
+    }
+    uv = persp_proj_uv(p_view, intrins, dist_coeffs);
     return true;
 }
 
@@ -326,10 +343,9 @@ float2x3 persp_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10]
     for (int i = 0; i < 3; ++i) {
         DifferentialPair<float3> dp_p_view = diffPair(p_view,
             float3(float(i == 0), float(i == 1), float(i == 2)));
-        DifferentialPair<float2> dp_uv;
-        fwd_diff(persp_proj<true>)(dp_p_view, intrins, dist_coeffs, dp_uv);
-        J[0][i] = dp_uv.d.x;
-        J[1][i] = dp_uv.d.y;
+        float2 duv = fwd_diff(persp_proj_uv)(dp_p_view, intrins, dist_coeffs).d;
+        J[0][i] = duv.x;
+        J[1][i] = duv.y;
     }
 #endif
     return J;
@@ -355,22 +371,51 @@ float2 equisolid_proj(float3 p_view) {
     return p_view.xy * k;
 }
 
+// Value-returning core; see persp_proj_uv for why (slang #11160).
+[ForceInline]
+[Differentiable]
+float2 fisheye_proj_uv(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs
+) {
+    float2 uv = fisheye_proj(p_view);
+    uv = camera_distortion(uv, dist_coeffs);
+    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+    return float2(
+        fx * uv.x + cx,
+        fy * uv.y + cy
+    );
+}
+
 [ForceInline]
 [Differentiable]
 bool fisheye_proj<let assume_valid : bool>(
     float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
     out float2 uv
 ) {
-    uv = fisheye_proj(p_view);
-    if (!assume_valid && !is_valid_distortion(uv, dist_coeffs))
-        return false;
+    if (!assume_valid) {
+        float2 uv0 = fisheye_proj(p_view);
+        if (!is_valid_distortion(uv0, dist_coeffs)) {
+            uv = uv0;
+            return false;
+        }
+    }
+    uv = fisheye_proj_uv(p_view, intrins, dist_coeffs);
+    return true;
+}
+
+// Value-returning core; see persp_proj_uv for why (slang #11160).
+[ForceInline]
+[Differentiable]
+float2 equisolid_proj_uv(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs
+) {
+    float2 uv = equisolid_proj(p_view);
     uv = camera_distortion(uv, dist_coeffs);
     float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
-    uv = float2(
+    return float2(
         fx * uv.x + cx,
         fy * uv.y + cy
     );
-    return true;
 }
 
 [ForceInline]
@@ -379,15 +424,14 @@ bool equisolid_proj<let assume_valid : bool>(
     float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
     out float2 uv
 ) {
-    uv = equisolid_proj(p_view);
-    if (!assume_valid && !is_valid_distortion(uv, dist_coeffs))
-        return false;
-    uv = camera_distortion(uv, dist_coeffs);
-    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
-    uv = float2(
-        fx * uv.x + cx,
-        fy * uv.y + cy
-    );
+    if (!assume_valid) {
+        float2 uv0 = equisolid_proj(p_view);
+        if (!is_valid_distortion(uv0, dist_coeffs)) {
+            uv = uv0;
+            return false;
+        }
+    }
+    uv = equisolid_proj_uv(p_view, intrins, dist_coeffs);
     return true;
 }
 
@@ -425,10 +469,9 @@ float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[1
     for (int i = 0; i < 3; ++i) {
         DifferentialPair<float3> dp_p_view = diffPair(p_view,
             float3(float(i == 0), float(i == 1), float(i == 2)));
-        DifferentialPair<float2> dp_uv;
-        fwd_diff(fisheye_proj<true>)(dp_p_view, intrins, dist_coeffs, dp_uv);
-        J[0][i] = dp_uv.d.x;
-        J[1][i] = dp_uv.d.y;
+        float2 duv = fwd_diff(fisheye_proj_uv)(dp_p_view, intrins, dist_coeffs).d;
+        J[0][i] = duv.x;
+        J[1][i] = duv.y;
     }
 #endif
     return J;
@@ -443,10 +486,9 @@ float2x3 equisolid_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float
     for (int i = 0; i < 3; ++i) {
         DifferentialPair<float3> dp_p_view = diffPair(p_view,
             float3(float(i == 0), float(i == 1), float(i == 2)));
-        DifferentialPair<float2> dp_uv;
-        fwd_diff(equisolid_proj<true>)(dp_p_view, intrins, dist_coeffs, dp_uv);
-        J[0][i] = dp_uv.d.x;
-        J[1][i] = dp_uv.d.y;
+        float2 duv = fwd_diff(equisolid_proj_uv)(dp_p_view, intrins, dist_coeffs).d;
+        J[0][i] = duv.x;
+        J[1][i] = duv.y;
     }
     return J;
 }
@@ -466,15 +508,24 @@ float2 equirect_proj(float3 p_view) {
     return float2(lon, lat);
 }
 
+// Value-returning core; see persp_proj_uv for why (slang #11160).
+[ForceInline]
+[Differentiable]
+float2 equirect_proj_uv(
+    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs
+) {
+    float2 lonlat = equirect_proj(p_view);
+    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+    return float2(fx * lonlat.x + cx, fy * lonlat.y + cy);
+}
+
 [ForceInline]
 [Differentiable]
 bool equirect_proj<let assume_valid : bool>(
     float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
     out float2 uv
 ) {
-    float2 lonlat = equirect_proj(p_view);
-    float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
-    uv = float2(fx * lonlat.x + cx, fy * lonlat.y + cy);
+    uv = equirect_proj_uv(p_view, intrins, dist_coeffs);
     // full-sphere camera: no invalid region (dist_coeffs unused)
     return true;
 }
@@ -496,10 +547,9 @@ float2x3 equirect_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[
     for (int i = 0; i < 3; ++i) {
         DifferentialPair<float3> dp_p_view = diffPair(p_view,
             float3(float(i == 0), float(i == 1), float(i == 2)));
-        DifferentialPair<float2> dp_uv;
-        fwd_diff(equirect_proj<true>)(dp_p_view, intrins, dist_coeffs, dp_uv);
-        J[0][i] = dp_uv.d.x;
-        J[1][i] = dp_uv.d.y;
+        float2 duv = fwd_diff(equirect_proj_uv)(dp_p_view, intrins, dist_coeffs).d;
+        J[0][i] = duv.x;
+        J[1][i] = duv.y;
     }
     return J;
 }

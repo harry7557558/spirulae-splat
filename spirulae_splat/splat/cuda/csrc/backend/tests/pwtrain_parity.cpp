@@ -248,14 +248,28 @@ int main(int argc, char** argv) {
     std::vector<float> ref(nf);
     f.read((char*)ref.data(), nf * 4);
 
+    if (const char* gp = std::getenv("PWTRAIN_DUMP_GOT")) {
+        std::ofstream g(gp, std::ios::binary);
+        int64_t n2 = (int64_t)acc.size();
+        g.write((const char*)&n2, 8);
+        g.write((const char*)acc.data(), n2 * 4);
+    }
     int64_t viol = 0;
     double max_abs = 0;
+    int64_t first_viol = -1, last_viol = -1;
     for (int64_t i = 0; i < nf; i++) {
         double d = std::fabs((double)acc[i] - (double)ref[i]);
         double tol = 5e-3 + 5e-4 * std::fabs((double)ref[i]);
         max_abs = std::max(max_abs, d);
-        if (d > tol) viol++;
+        if (d > tol) {
+            if (first_viol < 0) first_viol = i;
+            last_viol = i;
+            viol++;
+        }
     }
+    if (viol)
+        std::printf("pwtrain_parity: violation index range [%lld, %lld]\n",
+                    (long long)first_viol, (long long)last_viol);
     double frac = nf ? (double)viol / (double)nf : 0.0;
     std::printf("pwtrain_parity: %lld floats, max_abs %.3g, violations %lld "
                 "(%.5f%%)\n",

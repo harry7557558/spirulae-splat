@@ -633,9 +633,12 @@ _DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_equirect, CameraModelTy
     inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, \
     inout float3x3 v_R, inout float3 v_t
 
+// Generic over the projection interface (not an existential parameter):
+// slangc 2026.12 crashes IR-gen on `bwd_diff` of a static method reached
+// through an interface-typed VALUE parameter; the generic-constraint form
+// compiles on both 2026.2.1 (CUDA emission) and 2026.12 (SPIR-V).
 [ForceInline]
-void _projection_3dgs_vjp(
-    _DiffProjection3DGS projectionInterface,
+void _projection_3dgs_vjp<ProjT : _DiffProjection3DGS>(
     _projection_3dgs_vjp_ARGS
 ) {
     DifferentialPair<float3> dp_mean = diffPair(mean);
@@ -644,7 +647,7 @@ void _projection_3dgs_vjp(
     DifferentialPair<float> dp_in_opacity = diffPair(in_opacity);
     DifferentialPair<float3x3> dp_R = diffPair(R);
     DifferentialPair<float3> dp_t = diffPair(t);
-    bwd_diff(projectionInterface.projection)(
+    bwd_diff(ProjT::projection)(
         antialiased,
         dp_mean, dp_quat, dp_scale, dp_in_opacity, dp_R, dp_t,
         fx, fy, cx, cy, dist_coeffs,
@@ -664,8 +667,7 @@ void _projection_3dgs_vjp(
     void funname( \
         _projection_3dgs_vjp_ARGS \
     ) { \
-        return _projection_3dgs_vjp( \
-            _InterfaceName(), \
+        return _projection_3dgs_vjp<_InterfaceName>( \
             antialiased, \
             mean, quat, scale, in_opacity, R, t, \
             fx, fy, cx, cy, dist_coeffs, \

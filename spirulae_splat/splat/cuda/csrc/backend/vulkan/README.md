@@ -9,7 +9,8 @@ per buffer, busy-wait single fence, per-variant `-D` shader builds,
 descriptor-set data plane, compiled-out error handling) are deliberately not
 reproduced.
 
-## Verified premises (probed 2026-07 with slang-2026.2.1, SDK 1.3.296)
+## Verified premises (probed 2026-07 with slang-2026.2.1, SDK 1.3.296;
+## Vulkan backend now pins slang-2026.12.0.1 — see "Slang compiler notes")
 
 - The existing `slang/*.slang` device functions compile to SPIR-V unchanged:
   a compute entry point that `#include`s `primitive_3dgs.slang` and calls
@@ -138,6 +139,36 @@ self-contained. CMake locates slangc in PATH / `-DSSPLAT_SLANGC=`, checks
 mismatch downloads + extracts the pinned GitHub release into the build tree
 (platform-detected archive; verified again after extraction).
 
+## Slang compiler notes (2026-07: pinned 2026.12.0.1 for SPIR-V)
+
+The Vulkan backend pins `SSPLAT_SLANG_VERSION = 2026.12.0.1` (root
+CMakeLists); the CUDA emission flow stays on 2026.2.1. The upgrade was
+needed because 2026.2.1 could not compile the projection-backward autodiff
+(bwd_diff of the full projection chain). Slang autodiff has a history of
+bugs (see shader-slang/slang #8777, #11160, both filed from this project) —
+three were worked around in the CANONICAL slang sources (all verified to
+still compile + emit identical CUDA exports with 2026.2.1):
+
+- `primitive_3dgs.slang`: `_projection_3dgs_vjp` took the projection
+  interface as an existential VALUE parameter and called
+  `bwd_diff(iface.projection)` — 2026.12 segfaults IR-gen on this shape.
+  Rewritten as a generic constraint (`<ProjT : _DiffProjection3DGS>` +
+  `bwd_diff(ProjT::projection)`).
+- `projection_utils.slang`: the `*_proj_jac` Jacobians used
+  `fwd_diff(*_proj<true>)` where the projection writes through an `out`
+  parameter — the exact bwd-of-fwd x out-param combination of issue #11160.
+  Each camera projection now has a value-returning `*_proj_uv` core (used
+  by both the bool wrapper and the Jacobians; identical primal ops in every
+  path).
+- `pixel_wise.slang`: 2026.12 SPIR-V codegen constant-folds the SCALAR's
+  derivative of `scalar * vector` to zero under bwd_diff — SILENT wrong
+  code (v_transmittance in blend_background came back all-zero; caught by
+  pwtrain_parity). Worked around with an explicit
+  `float3(t, t, t) * vector` splat. RULE: when a differentiable function
+  needs the gradient of a scalar that multiplies a vector, write the splat
+  explicitly, and treat parity coverage of every scalar gradient as
+  mandatory.
+
 ## Sort / scan (backend/common/SortScan.h implementation)
 
 Implemented in Slang (not the vendored GLSL): classic 3-kernel LSD radix
@@ -160,7 +191,7 @@ Parity-tested against CPU references on every available device.
 | 2 | Projection fwd (3 primitives × spec-const cams/SH) + parity vs CUDA | DONE 2026-07 incl. 3DGUT + packed + SH value-quant q8/q16 |
 | 3 | Background SH fwd, tile intersect (key gen + offsets over SortScan) | DONE 2026-07 |
 | 4 | Rasterization fwd (2D + eval3D shared source), visualizer blit | DONE 2026-07 (+ render-path PixelWise, engine-level end-to-end parity) |
-| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | IN PROGRESS: optimizer/utility kernels, pixel-wise backwards, background-SH backward, rasterization backward DONE 2026-07 (optim_parity, pwtrain_parity, raster_bwd_parity); remaining launchers still throwing stubs |
+| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | IN PROGRESS: optimizer/utility kernels, pixel-wise backwards, background-SH backward, rasterization backward, projection backward family (plain + quantgrad + fused-optimizer) DONE 2026-07 (optim_parity, pwtrain_parity, raster_bwd_parity, proj_bwd_parity, projqgrad_parity, fpbo_parity); remaining launchers still throwing stubs |
 
 Phase-0/1 hard-won portability rules (validated on NVIDIA proprietary,
 Mesa ANV, llvmpipe — all tests + validation layers clean on all three):
@@ -363,6 +394,57 @@ the engine level.
   against an NVIDIA-Vulkan dump of the SAME shader (identical diffs).
   Note: Primitive.cuh zeros_pool had a leftover raw cudaMemset (host code)
   -> backend::memset_sync (both backends re-verified).
+- **Projection backward family (phase 5, fourth slice)**: three kernels over
+  shared machinery in `proj_bwd_common.slang` (splat/camera loaders, the
+  per-intersection projection VJP wrappers over the primitive_3dgs.slang
+  autodiff exports, SH color VJP dispatch, CAS scatter helpers) +
+  `sh_vjp.slang` (register-array mirror of harmonics.slang's
+  `_sh_coeffs_to_color_vjp` float3 form — SPIR-V physical pointers cannot
+  address locals and the CUDA `_vjp_atomic` variant needs float
+  InterlockedAdd, so the VJP accumulates into an `inout float3[24]` and
+  callers either keep it in registers or scatter with atomic_add_f32; source
+  coefficients decode once via fp32 or the word-based q8/q16 codec).
+  - `kernels/ProjectionBwd.cpp` + `projection_bwd.slang`
+    (projection_{3dgs,mip,3dgut}_backward): one thread per intersection,
+    spec axes camera/degree/antialiased/value-bits/packed/viewmat-grad;
+    world grads + optional v_viewmats accumulate with CAS adds (CUDA's
+    labeled-partition warp reduce is a perf shortcut with the same
+    order-nondeterministic sums). `proj_bwd_parity`: 1.24M gradient floats
+    over 7 configs (3 primitives, 4 cameras, packed, q8/q16, viewmat grad).
+  - `kernels/ProjectionBwdQuantGrad.cpp` + `projection_qgrad.slang`
+    (projection_*_backward_quantgrad): splat-parallel camera loop in
+    registers, then decode -> add -> block-reduce bounds -> encode onto the
+    signed-symmetric gradq codec (16-bit non-SH / 8-bit SH, added to
+    optim_quant.slang together with `vkq_store_u16/u8` — And+Or masked
+    sub-word atomic stores for per-splat cell runs that need not be
+    word-aligned; disjoint masks commute under any interleaving). Packed
+    preprocessing (identity-perm radix sort by gaussian id via
+    backend::sort_pairs + [N+1] camera ranges) lives in
+    `vkk::build_packed_camera_ranges`, shared with FPBO. Active attributes
+    are a spec bitmask (kGqMask) so inactive loads are dead at pipeline
+    creation. `projqgrad_parity`: two sub-batch calls (the second decodes
+    real state), 62k floats + 845k codes, +-1 quantum.
+  - `kernels/FusedProjectionBwdOptim.cpp` + `fpbo.slang`
+    (fused_projection_bwd_optimizer_*): the 1080-line CUDA kernel —
+    camera-loop gradients + per-splat regularizers (per_splat_losses.slang)
+    + in-place Adam on all six attributes with optional 16-bit qadam non-SH
+    state, 8-bit qadam SH state and the 16-bit SH value codec (LEVEL axis).
+    11 spec axes; block reduces via the deterministic oq_block_reduce
+    helpers. `fpbo_parity`: two steps from the zero quantized state, 1.81M
+    floats + 915k codes over 5 configs. Two test-design caveats mirrored
+    from CUDA semantics: N must be a multiple of the 256 block (the CUDA
+    kernel reads tail-thread aabb/screen entries it later discards — fine
+    against pooled slack, not against exact-size test buffers), and
+    scale-agnostic means x non-SH quant is excluded from comparison (mixed
+    g1/g2 units make u = g1/sqrt(g2) unbounded for radii==0 splats, so +-1
+    quantum decode differences amplify chaotically — inherent to the lossy
+    codec, on CUDA too).
+  - Porting this slice surfaced a HOST bug worth remembering:
+    `backend::vk::SpecList` had a fixed 8-entry array and the 11-spec fpbo
+    dispatch overflowed it in the initializer-list constructor (clobbering
+    `count` and beyond) — NVIDIA segfaulted inside pipeline creation,
+    llvmpipe silently ran with garbage spec values. kMax is now 16 with an
+    assert; if a kernel ever needs more axes, raise kMax explicitly.
 - **Training stubs**: `kernels/TrainingStubs.gen.cpp` (generated by
   `spirulae_splat/generate_vulkan_stubs.py` from a link probe of
   csrc_portable vs the backend lib) + `TrainingStubsManual.cpp` (the

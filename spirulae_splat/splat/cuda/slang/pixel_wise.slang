@@ -32,7 +32,12 @@ void rendered_depth_to_expected_depth_bwd(
 [Differentiable]
 [CudaDeviceExport]
 float3 blend_background(float3 rgb, float transmittance, float3 background) {
-    return clamp(rgb + transmittance * background, 0.0, 1.0);
+    // Explicit splat: slangc 2026.12 (SPIR-V) constant-folds the SCALAR's
+    // derivative of `scalar * vector` to zero under bwd_diff, silently
+    // zeroing v_transmittance. float3(t, t, t) * vector keeps the gradient
+    // on both compilers (identical primal math).
+    return clamp(rgb + float3(transmittance, transmittance, transmittance)
+                           * background, 0.0, 1.0);
 }
 
 [CudaDeviceExport]

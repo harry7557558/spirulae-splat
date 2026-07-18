@@ -60,7 +60,7 @@ if(SSPLAT_BACKEND STREQUAL "vulkan")
     # ---- slangc: locate a matching compiler or fetch the pinned release ----
     # SPIR-V blobs are never committed; they are compiled at build time
     # (checksum-cached in the build tree) and embedded below.
-    set(SSPLAT_SLANG_VERSION "2026.2.1")
+    set(SSPLAT_SLANG_VERSION "2026.12.0.1")
     set(SSPLAT_SLANGC "" CACHE FILEPATH
         "slangc to use (empty = find in PATH, fetch on miss/mismatch)")
 

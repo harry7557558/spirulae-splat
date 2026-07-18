@@ -10,18 +10,27 @@
 
 #include "VulkanInternal.h"
 
+#include <cassert>
 #include <initializer_list>
 
 namespace backend {
 namespace vk {
 
 struct SpecList {
-    static constexpr uint32_t kMax = 8;
+    // Sized for the widest kernel (fpbo: 11 spec axes). The assert exists
+    // because overflowing this array once corrupted the adjacent `count`
+    // field and crashed the NVIDIA driver at pipeline creation -- raise kMax
+    // when a kernel needs more axes.
+    static constexpr uint32_t kMax = 16;
     uint32_t values[kMax] = {};
     uint32_t count = 0;
     SpecList() = default;
     SpecList(std::initializer_list<uint32_t> v) {
-        for (uint32_t x : v) values[count++] = x;
+        assert(v.size() <= kMax && "SpecList: too many spec constants");
+        for (uint32_t x : v) {
+            if (count >= kMax) break;
+            values[count++] = x;
+        }
     }
 };
 

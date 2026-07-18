@@ -207,14 +207,77 @@ void qtensor_store<let BITS : int>(uint* packed, uint idx, uint tid,
 }
 
 // ---------------------------------------------------------------------------
-// gradq::Codec<8> — signed symmetric gradient codec (int8 cells).
+// Masked sub-word atomic stores. For packed layouts where one thread owns a
+// CONTIGUOUS cell run that need not be word-aligned (per-splat runs in the
+// grad-quant / FPBO writebacks), neighbor threads can share a word. And+Or
+// with disjoint masks is correct under any interleaving: each atomic only
+// touches the owner's bits, so the final word is
+// (old & ~maskA & ~maskB) | bitsA | bitsB regardless of order.
 // ---------------------------------------------------------------------------
 
 [ForceInline]
+void vkq_store_u16(uint* packed, uint idx, uint h) {  // idx in halfwords
+    uint shift = 16u * (idx & 1u);
+    InterlockedAnd(packed[idx >> 1], ~(0xffffu << shift));
+    InterlockedOr(packed[idx >> 1], (h & 0xffffu) << shift);
+}
+
+[ForceInline]
+void vkq_store_u8(uint* packed, uint idx, uint b) {  // idx in bytes
+    uint shift = 8u * (idx & 3u);
+    InterlockedAnd(packed[idx >> 2], ~(0xffu << shift));
+    InterlockedOr(packed[idx >> 2], (b & 0xffu) << shift);
+}
+
+// ---------------------------------------------------------------------------
+// gradq::Codec<BITS> — signed symmetric gradient codec (int8/int16 cells,
+// codes in [-qmax, qmax] scaled by the block amplitude; code 0 decodes to
+// exactly 0). Mirrors csrc/GradQuant.cuh.
+// ---------------------------------------------------------------------------
+
+[ForceInline]
+float gradq_amp(float2 mm) { return max(abs(mm.x), abs(mm.y)); }
+
+[ForceInline]
+float gradq_qmax<let BITS : int>() { return BITS == 16 ? 32767.0f : 127.0f; }
+
+[ForceInline]
+float gradq_decode1<let BITS : int>(uint* packed, uint cell, float2 mm) {
+    int s;
+    if (BITS == 16) {
+        uint w = packed[cell >> 1];
+        uint h = (w >> (16u * (cell & 1u))) & 0xffffu;
+        s = (int(h) << 16) >> 16;  // sign-extend int16
+    } else {
+        uint w = packed[cell >> 2];
+        uint b = (w >> (8u * (cell & 3u))) & 0xffu;
+        s = (int(b) << 24) >> 24;  // sign-extend int8
+    }
+    return float(s) * (gradq_amp(mm) * (1.0f / gradq_qmax<BITS>()));
+}
+
+[ForceInline]
 float gradq8_decode1(uint* packed, uint cell, float2 mm) {
-    uint w = packed[cell >> 2];
-    uint b = (w >> (8u * (cell & 3u))) & 0xffu;
-    int s = (int(b) << 24) >> 24;  // sign-extend int8
-    float amp = max(abs(mm.x), abs(mm.y));
-    return float(s) * (amp * (1.0f / 127.0f));
+    return gradq_decode1<8>(packed, cell, mm);
+}
+
+// Round-half-even, matching CUDA rintf in gradq::Codec::encode1.
+[ForceInline]
+float _gq_rne(float x) {
+    float f = floor(x);
+    float d = x - f;
+    if (d < 0.5f) return f;
+    if (d > 0.5f) return f + 1.0f;
+    return (f - 2.0f * floor(0.5f * f)) == 0.0f ? f : f + 1.0f;
+}
+
+// Encode one value to its signed code bits (caller stores via vkq_store_*).
+[ForceInline]
+uint gradq_encode1<let BITS : int>(float v, float2 mm) {
+    float a = gradq_amp(mm);
+    float qmax = gradq_qmax<BITS>();
+    float qf = (a > 0.0f) ? _gq_rne(v * (qmax / a)) : 0.0f;
+    qf = clamp(qf, -qmax, qmax);
+    int q = int(qf);
+    return uint(q) & (BITS == 16 ? 0xffffu : 0xffu);
 }
