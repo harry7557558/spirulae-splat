@@ -1,7 +1,14 @@
-// suppress CudaDeviceExport to reduce code size
+// suppress CudaDeviceExport to reduce code size (CUDA emission); when an
+// includer already maps the attribute (Vulkan backend), keep its mapping.
+#ifndef CudaDeviceExport
+#define _DENSIFY_LOCAL_CDE
 #define CudaDeviceExport Differentiable
+#endif
 #include "projection_utils.slang"
+#ifdef _DENSIFY_LOCAL_CDE
 #undef CudaDeviceExport
+#undef _DENSIFY_LOCAL_CDE
+#endif
 
 [CudaDeviceExport]
 void mcmc_add_noise_3dgs(

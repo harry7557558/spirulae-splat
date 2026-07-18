@@ -7,9 +7,7 @@
 // kernel calls.
 
 #include <BilagridBindings.h>
-#include <Densify.cuh>
 #include <EngineInternal.h>
-#include <Optimizer.cuh>
 #include <PerPixelLoss.cuh>
 #include <PixelWise.cuh>
 
@@ -22,51 +20,6 @@ namespace {
                              " is not implemented yet (training phase)");
 }
 }  // namespace
-
-// from Densify.cuh
-void add_splats_mcmc_tensor(
-    int64_t cur_num_splats,
-    int64_t num_add,
-    float min_opacity,
-    DeviceVector<float3> means, DeviceVector<float4> quats, DeviceVector<float3> scales, DeviceVector<float> opacs, DeviceVector<float3> features_dc, DeviceVector<float3> features_sh,
-    DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
-    DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
-    DeviceVector<int32_t> bias_correction_steps,
-    int sh_optim_bits,
-    int num_sh,
-    DeviceVector<float4> sh_quant_bounds,
-    bool sh_bounds_per_splat,
-    DeviceVector<uint8_t> sh_value_packed,
-    DeviceVector<float2>  sh_value_bounds,
-    int  sh_value_bits,
-    bool sh_value_bounds_per_splat,
-    int  num_sh_buffer,
-    NonShQuantState non_sh,
-    uint32_t seed
-) { _vk_stub("add_splats_mcmc_tensor"); }
-
-// from Densify.cuh
-void add_splats_with_long_axis_split_tensor(
-    int64_t cur_num_splats,
-    int64_t num_new_splats,
-    float split_opacity_k,
-    DeviceVector<float3> means, DeviceVector<float4> quats, DeviceVector<float3> scales, DeviceVector<float> opacs, DeviceVector<float3> features_dc, DeviceVector<float3> features_sh,
-    DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
-    DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
-    DeviceVector<float2> densify_accum_buffer,
-    DeviceVector<int32_t> bias_correction_steps,
-    int sh_optim_bits,
-    int num_sh,
-    DeviceVector<float4> sh_quant_bounds,
-    bool sh_bounds_per_splat,
-    DeviceVector<uint8_t> sh_value_packed,
-    DeviceVector<float2>  sh_value_bounds,
-    int  sh_value_bits,
-    bool sh_value_bounds_per_splat,
-    int  num_sh_buffer,
-    NonShQuantState non_sh,
-    uint32_t seed
-) { _vk_stub("add_splats_with_long_axis_split_tensor"); }
 
 // from EngineInternal.h
 void bilagrid_affine_identity_init(
@@ -488,83 +441,6 @@ void compute_ppsip_regularization_forward(
     TorchTensorView raw_losses           
 ) { _vk_stub("compute_ppsip_regularization_forward"); }
 
-// from Densify.cuh
-void densify_clip_scale_tensor(
-    int64_t num_splats,
-    DeviceVector<float> radii,
-    DeviceVector<float3> log_scales,
-    float* logit_opacs_ptr,
-    float max_scale2d,
-    float clip_hardness,
-    float max_scale3d
-) { _vk_stub("densify_clip_scale_tensor"); }
-
-// from Optimizer.cuh
-void fused_adamtr_linear_rgb_optim(
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
-    TorchTensorView opacities,
-    float lr,
-    float beta1,
-    float beta2,
-    float eps,
-    float eps_tr,
-    int step,
-    float grad_scale, bool zero_grad
-) { _vk_stub("fused_adamtr_linear_rgb_optim"); }
-
-// from Optimizer.cuh
-void fused_adamtr_linear_rgb_sh_optim(
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
-    TorchTensorView colors,
-    TorchTensorView opacities,
-    float lr,
-    float beta1,
-    float beta2,
-    float eps,
-    float eps_tr,
-    int step,
-    float grad_scale, bool zero_grad
-) { _vk_stub("fused_adamtr_linear_rgb_sh_optim"); }
-
-// from Optimizer.cuh
-void fused_adamtr_rgb_optim(
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
-    TorchTensorView opacities,
-    float lr,
-    float beta1,
-    float beta2,
-    float eps,
-    float eps_tr,
-    int step,
-    float grad_scale, bool zero_grad
-) { _vk_stub("fused_adamtr_rgb_optim"); }
-
-// from Optimizer.cuh
-void fused_adamtr_rgb_sh_optim(
-    TorchTensorView param,
-    TorchTensorView grad,
-    TorchTensorView exp_avg,
-    TorchTensorView exp_avg_sq,
-    TorchTensorView colors,
-    TorchTensorView opacities,
-    float lr,
-    float beta1,
-    float beta2,
-    float eps,
-    float eps_tr,
-    int step,
-    float grad_scale, bool zero_grad
-) { _vk_stub("fused_adamtr_rgb_sh_optim"); }
-
 // from EngineInternal.h
 void fused_bilagrid_tv_adagrad(
     float*    grids,                     
@@ -605,33 +481,6 @@ void fused_bilagrid_tv_adam(
     bool value_quantize,
     backend::Stream stream
 ) { _vk_stub("fused_bilagrid_tv_adam"); }
-
-// from Optimizer.cuh
-void fused_optim_3dgs_geometry(
-    int64_t num_splats,
-    DeviceVector<float3> means, DeviceVector<float3> v_means, DeviceVector<float3> g1_means, DeviceVector<float3> g2_means,
-    DeviceVector<float4> quats, DeviceVector<float4> v_quats, DeviceVector<float4> g1_quats, DeviceVector<float4> g2_quats,
-    DeviceVector<float3> scales, DeviceVector<float3> v_scales, DeviceVector<float3> g1_scales, DeviceVector<float3> g2_scales,
-    DeviceVector<float> opacities, DeviceVector<float> v_opacities, DeviceVector<float> g1_opacities, DeviceVector<float> g2_opacities,
-     
-     
-     
-    DeviceVector<float3> features_dc, DeviceVector<float3> v_features_dc,
-    DeviceVector<float> radii,
-     
-    DeviceVector<float> densify_score,
-    const float lr_means, const float lr_quats, const float lr_scales, const float lr_opacs,
-    const float lr_features_dc,
-    const float max_gauss_ratio, const float scale_regularization_weight,
-    const float mcmc_opacity_reg_weight, const float mcmc_scale_reg_weight,
-    const float erank_reg_weight, const float erank_reg_weight_s3, const float quat_norm_reg_weight,
-    const float sh_reg_weight,
-    bool use_scale_agnostic_mean,
-    NonShQuantState non_sh,
-    GradQuantBuffers gq,
-    int32_t step, DeviceVector<int32_t> per_splat_steps,
-    float grad_scale, bool zero_grad
-) { _vk_stub("fused_optim_3dgs_geometry"); }
 
 // from PixelWise.cuh
 void launch_warp_byte_to_float_equi(
@@ -703,16 +552,6 @@ void launch_warp_normal_wide(
     float* d_float_out, int K, int Hout, int Wout,
     const float* d_axes) { _vk_stub("launch_warp_normal_wide"); }
 
-// from Densify.cuh
-void mcmc_add_noise_tensor(
-    int64_t num_splats,
-    float scaler,
-    DeviceVector<float3> means,
-    DeviceVector<float3> log_scales,
-    DeviceVector<float4> quats,
-    DeviceVector<float> opacs
-) { _vk_stub("mcmc_add_noise_tensor"); }
-
 // from EngineInternal.h
 void ppisp_add_into_grad(
     const float* src, float* dst, size_t n, backend::Stream stream) { _vk_stub("ppisp_add_into_grad"); }
@@ -746,69 +585,6 @@ void ppisp_forward(
 // from EngineInternal.h
 void ppisp_original_default_init(
     float* params, int N, backend::Stream stream) { _vk_stub("ppisp_original_default_init"); }
-
-// from Densify.cuh
-void relocate_splats_mcmc_tensor(
-    int64_t cur_num_splats,
-    float min_opacity,
-    DeviceVector<float3> means, DeviceVector<float4> quats, DeviceVector<float3> scales, DeviceVector<float> opacs, DeviceVector<float3> features_dc, DeviceVector<float3> features_sh,
-    DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
-    DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
-    DeviceVector<int32_t> bias_correction_steps,
-    int sh_optim_bits,
-    int num_sh,
-    DeviceVector<float4> sh_quant_bounds,
-    bool sh_bounds_per_splat,
-    DeviceVector<uint8_t> sh_value_packed,
-    DeviceVector<float2>  sh_value_bounds,
-    int  sh_value_bits,
-    bool sh_value_bounds_per_splat,
-    int  num_sh_buffer,
-    NonShQuantState non_sh,
-    uint32_t seed
-) { _vk_stub("relocate_splats_mcmc_tensor"); }
-
-// from Densify.cuh
-void relocate_splats_with_long_axis_split_tensor(
-    int64_t cur_num_splats,
-    float min_opacity,
-    float split_opacity_k,
-    DeviceVector<float3> means, DeviceVector<float4> quats, DeviceVector<float3> scales, DeviceVector<float> opacs, DeviceVector<float3> features_dc, DeviceVector<float3> features_sh,
-    DeviceVector<float3> g1_means, DeviceVector<float4> g1_quats, DeviceVector<float3> g1_scales, DeviceVector<float> g1_opacs, DeviceVector<float3> g1_features_dc, DeviceVector<float3> g1_features_sh,
-    DeviceVector<float3> g2_means, DeviceVector<float4> g2_quats, DeviceVector<float3> g2_scales, DeviceVector<float> g2_opacs, DeviceVector<float3> g2_features_dc, DeviceVector<float3> g2_features_sh,
-    DeviceVector<float2> densify_accum_buffer,
-    DeviceVector<int32_t> bias_correction_steps,
-    int sh_optim_bits,
-    int num_sh,
-     
-     
-    DeviceVector<float4> sh_quant_bounds,
-    bool sh_bounds_per_splat,
-     
-     
-     
-     
-    DeviceVector<uint8_t> sh_value_packed,
-    DeviceVector<float2>  sh_value_bounds,
-    int  sh_value_bits,              
-    bool sh_value_bounds_per_splat,
-    int  num_sh_buffer,              
-     
-     
-    NonShQuantState non_sh,
-    uint32_t seed
-) { _vk_stub("relocate_splats_with_long_axis_split_tensor"); }
-
-// from Densify.cuh
-void revised_add_noise_tensor(
-    int64_t num_splats,
-    float scaler,
-    DeviceVector<float> radii,
-    DeviceVector<float3> means,
-    DeviceVector<float3> log_scales,
-    DeviceVector<float4> quats,
-    DeviceVector<float> opacs
-) { _vk_stub("revised_add_noise_tensor"); }
 
 // from BilagridBindings.h
 void tv_loss_backward(

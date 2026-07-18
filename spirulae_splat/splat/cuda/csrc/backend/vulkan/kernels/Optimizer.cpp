@@ -1,13 +1,15 @@
 // Vulkan implementation of the optimizer launch APIs the portable engine
 // references (csrc/Optimizer.cuh): fused_adam_step (fp32 / quantized-state /
-// doubly-quantized), fused_adagrad_step, float_add_into,
-// increment_int32_inplace. Device work: slang/vulkan/optimizer.slang. The
-// remaining Optimizer.cu entry points (adamtr color variants, the fused
-// 3DGS geometry step) land with the densify/MCMC port.
+// doubly-quantized), fused_adagrad_step, the trust-region adamtr color
+// variants, the fused 3DGS geometry step, float_add_into,
+// increment_int32_inplace. Device work: slang/vulkan/optimizer.slang,
+// optim_color.slang and optim_geometry.slang.
 
 #include <Optimizer.cuh>
 
 #include "KernelCommon.h"
+
+#include <cmath>
 
 namespace {
 
@@ -254,4 +256,272 @@ void increment_int32_inplace(DeviceVector<int32_t> data, int64_t n) {
     p.n = checked_u32_numel(n, "increment_int32_inplace");
     vkk::dispatch_flat("optimizer.increment_i32", backend::vk::SpecList{}, n,
                        256, &p, sizeof(p), &p.wgs_per_row);
+}
+
+namespace {
+
+// Mirrors AdamTrRgbParams in slang/vulkan/optim_color.slang.
+struct AdamTrRgbParams {
+    uint64_t rgbs, grad, exp_avg, exp_avg_sq, opacities;
+    float lr, bias_correction1, bias_correction2, eps, eps_tr, grad_scale;
+    uint32_t is_linear, zero_grad, num_gs, wgs_per_row;
+};
+static_assert(sizeof(AdamTrRgbParams) == 5 * 8 + 10 * 4,
+              "params layout must match the slang struct");
+
+// Mirrors AdamTrRgbShParams.
+struct AdamTrRgbShParams {
+    uint64_t param, grad, exp_avg, exp_avg_sq, rgbs, opacities;
+    float lr, bias_correction1, bias_correction2, eps, eps_tr, grad_scale;
+    uint32_t is_linear, zero_grad, num_params, num_sh, wgs_per_row;
+    uint32_t _pad0;
+};
+static_assert(sizeof(AdamTrRgbShParams) == 6 * 8 + 12 * 4,
+              "params layout must match the slang struct");
+
+// Mirrors OptimGeoParams in slang/vulkan/optim_geometry.slang.
+struct OptimGeoParams {
+    uint64_t means, v_means, g1_means, g2_means;
+    uint64_t quats, v_quats, g1_quats, g2_quats;
+    uint64_t scales, v_scales, g1_scales, g2_scales;
+    uint64_t opacities, v_opacities, g1_opacities, g2_opacities;
+    uint64_t features_dc, v_features_dc;
+    uint64_t radii, densify_score, steps;
+    uint64_t gq_means_packed, gq_means_bounds, gq_quats_packed,
+        gq_quats_bounds, gq_scales_packed, gq_scales_bounds, gq_opac_packed,
+        gq_opac_bounds, gq_dc_packed, gq_dc_bounds;
+    uint64_t nq_means_packed, nq_quats_packed, nq_scales_packed,
+        nq_opacities_packed, nq_dc_packed;
+    uint64_t nq_means_bounds, nq_quats_bounds, nq_scales_bounds,
+        nq_opacities_bounds, nq_dc_bounds;
+    float lr_means, lr_quats, lr_scales, lr_opacs, lr_features_dc;
+    float max_gauss_ratio, scale_regularization_weight,
+        mcmc_opacity_reg_weight, mcmc_scale_reg_weight, erank_reg_weight,
+        erank_reg_weight_s3, quat_norm_reg_weight, sh_reg_weight, grad_scale;
+    int32_t scalar_step;
+    uint32_t has_steps, has_densify_score, numel, wgs_per_row;
+    uint32_t _pad0;
+};
+static_assert(sizeof(OptimGeoParams) == 41 * 8 + 20 * 4,
+              "params layout must match the slang struct");
+
+int64_t tv_numel(const TorchTensorView& tv) {
+    int64_t n = 1;
+    for (auto s : std::get<2>(tv)) n *= s;
+    return n;
+}
+
+void launch_adamtr_rgb(bool is_linear, TorchTensorView param,
+                       TorchTensorView grad, TorchTensorView exp_avg,
+                       TorchTensorView exp_avg_sq, TorchTensorView opacities,
+                       float lr, float beta1, float beta2, float eps,
+                       float eps_tr, int step, float grad_scale,
+                       bool zero_grad) {
+    int64_t num_gs = tv_numel(param) / 3;
+    if (num_gs == 0) return;
+    AdamTrRgbParams p{};
+    p.rgbs = std::get<0>(param);
+    p.grad = std::get<0>(grad);
+    p.exp_avg = std::get<0>(exp_avg);
+    p.exp_avg_sq = std::get<0>(exp_avg_sq);
+    p.opacities = std::get<0>(opacities);
+    p.lr = lr;
+    p.bias_correction1 = 1.0f - std::pow(beta1, (float)step);
+    p.bias_correction2 = 1.0f - std::pow(beta2, (float)step);
+    p.eps = eps;
+    p.eps_tr = eps_tr;
+    p.grad_scale = grad_scale;
+    p.is_linear = is_linear ? 1u : 0u;
+    p.zero_grad = zero_grad ? 1u : 0u;
+    p.num_gs = checked_u32_numel(num_gs, "fused_adamtr_rgb_optim");
+    vkk::dispatch_flat("optim_color.fused_adamtr_rgb",
+                       backend::vk::SpecList{}, num_gs, 256, &p, sizeof(p),
+                       &p.wgs_per_row);
+}
+
+// NOTE: mirrors the CUDA launch exactly, including its quirk — the grid is
+// sized for num_gs threads and num_params = num_gs, so only the first
+// num_gs SCALARS of the [N, K, 3] SH tensor are updated per call (see
+// slang/vulkan/optim_color.slang).
+void launch_adamtr_rgb_sh(bool is_linear, TorchTensorView param,
+                          TorchTensorView grad, TorchTensorView exp_avg,
+                          TorchTensorView exp_avg_sq, TorchTensorView colors,
+                          TorchTensorView opacities, float lr, float beta1,
+                          float beta2, float eps, float eps_tr, int step,
+                          float grad_scale, bool zero_grad) {
+    int64_t colors_numel = tv_numel(colors);
+    int64_t num_gs = colors_numel / 3;
+    if (num_gs == 0) return;
+    int64_t num_sh = tv_numel(param) / colors_numel;
+    if (num_sh == 0) return;
+    AdamTrRgbShParams p{};
+    p.param = std::get<0>(param);
+    p.grad = std::get<0>(grad);
+    p.exp_avg = std::get<0>(exp_avg);
+    p.exp_avg_sq = std::get<0>(exp_avg_sq);
+    p.rgbs = std::get<0>(colors);
+    p.opacities = std::get<0>(opacities);
+    p.lr = lr;
+    p.bias_correction1 = 1.0f - std::pow(beta1, (float)step);
+    p.bias_correction2 = 1.0f - std::pow(beta2, (float)step);
+    p.eps = eps;
+    p.eps_tr = eps_tr;
+    p.grad_scale = grad_scale;
+    p.is_linear = is_linear ? 1u : 0u;
+    p.zero_grad = zero_grad ? 1u : 0u;
+    p.num_params = checked_u32_numel(num_gs, "fused_adamtr_rgb_sh_optim");
+    p.num_sh = (uint32_t)num_sh;
+    vkk::dispatch_flat("optim_color.fused_adamtr_rgb_sh",
+                       backend::vk::SpecList{}, num_gs, 256, &p, sizeof(p),
+                       &p.wgs_per_row);
+}
+
+}  // namespace
+
+void fused_adamtr_linear_rgb_optim(
+    TorchTensorView param, TorchTensorView grad, TorchTensorView exp_avg,
+    TorchTensorView exp_avg_sq, TorchTensorView opacities, float lr,
+    float beta1, float beta2, float eps, float eps_tr, int step,
+    float grad_scale, bool zero_grad
+) {
+    launch_adamtr_rgb(true, param, grad, exp_avg, exp_avg_sq, opacities, lr,
+                      beta1, beta2, eps, eps_tr, step, grad_scale, zero_grad);
+}
+
+void fused_adamtr_rgb_optim(
+    TorchTensorView param, TorchTensorView grad, TorchTensorView exp_avg,
+    TorchTensorView exp_avg_sq, TorchTensorView opacities, float lr,
+    float beta1, float beta2, float eps, float eps_tr, int step,
+    float grad_scale, bool zero_grad
+) {
+    launch_adamtr_rgb(false, param, grad, exp_avg, exp_avg_sq, opacities, lr,
+                      beta1, beta2, eps, eps_tr, step, grad_scale, zero_grad);
+}
+
+void fused_adamtr_linear_rgb_sh_optim(
+    TorchTensorView param, TorchTensorView grad, TorchTensorView exp_avg,
+    TorchTensorView exp_avg_sq, TorchTensorView colors,
+    TorchTensorView opacities, float lr, float beta1, float beta2, float eps,
+    float eps_tr, int step, float grad_scale, bool zero_grad
+) {
+    launch_adamtr_rgb_sh(true, param, grad, exp_avg, exp_avg_sq, colors,
+                         opacities, lr, beta1, beta2, eps, eps_tr, step,
+                         grad_scale, zero_grad);
+}
+
+void fused_adamtr_rgb_sh_optim(
+    TorchTensorView param, TorchTensorView grad, TorchTensorView exp_avg,
+    TorchTensorView exp_avg_sq, TorchTensorView colors,
+    TorchTensorView opacities, float lr, float beta1, float beta2, float eps,
+    float eps_tr, int step, float grad_scale, bool zero_grad
+) {
+    launch_adamtr_rgb_sh(false, param, grad, exp_avg, exp_avg_sq, colors,
+                         opacities, lr, beta1, beta2, eps, eps_tr, step,
+                         grad_scale, zero_grad);
+}
+
+void fused_optim_3dgs_geometry(
+    int64_t num_splats,
+    DeviceVector<float3> means, DeviceVector<float3> v_means, DeviceVector<float3> g1_means, DeviceVector<float3> g2_means,
+    DeviceVector<float4> quats, DeviceVector<float4> v_quats, DeviceVector<float4> g1_quats, DeviceVector<float4> g2_quats,
+    DeviceVector<float3> scales, DeviceVector<float3> v_scales, DeviceVector<float3> g1_scales, DeviceVector<float3> g2_scales,
+    DeviceVector<float> opacities, DeviceVector<float> v_opacities, DeviceVector<float> g1_opacities, DeviceVector<float> g2_opacities,
+    DeviceVector<float3> features_dc, DeviceVector<float3> v_features_dc,
+    DeviceVector<float> radii,
+    DeviceVector<float> densify_score,
+    const float lr_means, const float lr_quats, const float lr_scales, const float lr_opacs,
+    const float lr_features_dc,
+    const float max_gauss_ratio, const float scale_regularization_weight,
+    const float mcmc_opacity_reg_weight, const float mcmc_scale_reg_weight,
+    const float erank_reg_weight, const float erank_reg_weight_s3, const float quat_norm_reg_weight,
+    const float sh_reg_weight,
+    bool use_scale_agnostic_mean,
+    NonShQuantState non_sh,
+    GradQuantBuffers gq,
+    int32_t step, DeviceVector<int32_t> per_splat_steps,
+    float grad_scale, bool zero_grad
+) {
+    if (num_splats == 0) return;
+
+    OptimGeoParams p{};
+    p.means = (uint64_t)means.data_ptr();
+    p.v_means = vkk::or_fallback(v_means.data_ptr());
+    p.g1_means = vkk::or_fallback(g1_means.data_ptr());
+    p.g2_means = vkk::or_fallback(g2_means.data_ptr());
+    p.quats = (uint64_t)quats.data_ptr();
+    p.v_quats = vkk::or_fallback(v_quats.data_ptr());
+    p.g1_quats = vkk::or_fallback(g1_quats.data_ptr());
+    p.g2_quats = vkk::or_fallback(g2_quats.data_ptr());
+    p.scales = (uint64_t)scales.data_ptr();
+    p.v_scales = vkk::or_fallback(v_scales.data_ptr());
+    p.g1_scales = vkk::or_fallback(g1_scales.data_ptr());
+    p.g2_scales = vkk::or_fallback(g2_scales.data_ptr());
+    p.opacities = (uint64_t)opacities.data_ptr();
+    p.v_opacities = vkk::or_fallback(v_opacities.data_ptr());
+    p.g1_opacities = vkk::or_fallback(g1_opacities.data_ptr());
+    p.g2_opacities = vkk::or_fallback(g2_opacities.data_ptr());
+    p.features_dc = vkk::or_fallback(features_dc.data_ptr());
+    p.v_features_dc = vkk::or_fallback(v_features_dc.data_ptr());
+    p.radii = vkk::or_fallback(radii.data_ptr());
+    p.densify_score = vkk::or_fallback(densify_score.data_ptr());
+    p.steps = vkk::or_fallback(per_splat_steps.data_ptr());
+
+    uint32_t gq_mask = 0;
+    p.gq_means_packed = vkk::or_fallback(gq.means_packed);
+    p.gq_means_bounds = vkk::or_fallback(gq.means_bounds);
+    if (gq.means_packed) gq_mask |= 1;
+    p.gq_quats_packed = vkk::or_fallback(gq.quats_packed);
+    p.gq_quats_bounds = vkk::or_fallback(gq.quats_bounds);
+    if (gq.quats_packed) gq_mask |= 2;
+    p.gq_scales_packed = vkk::or_fallback(gq.scales_packed);
+    p.gq_scales_bounds = vkk::or_fallback(gq.scales_bounds);
+    if (gq.scales_packed) gq_mask |= 4;
+    p.gq_opac_packed = vkk::or_fallback(gq.opac_packed);
+    p.gq_opac_bounds = vkk::or_fallback(gq.opac_bounds);
+    if (gq.opac_packed) gq_mask |= 8;
+    p.gq_dc_packed = vkk::or_fallback(gq.dc_packed);
+    p.gq_dc_bounds = vkk::or_fallback(gq.dc_bounds);
+    if (gq.dc_packed) gq_mask |= 16;
+
+    p.nq_means_packed = vkk::or_fallback(non_sh.means_packed);
+    p.nq_quats_packed = vkk::or_fallback(non_sh.quats_packed);
+    p.nq_scales_packed = vkk::or_fallback(non_sh.scales_packed);
+    p.nq_opacities_packed = vkk::or_fallback(non_sh.opacities_packed);
+    p.nq_dc_packed = vkk::or_fallback(non_sh.features_dc_packed);
+    p.nq_means_bounds = vkk::or_fallback(non_sh.means_bounds);
+    p.nq_quats_bounds = vkk::or_fallback(non_sh.quats_bounds);
+    p.nq_scales_bounds = vkk::or_fallback(non_sh.scales_bounds);
+    p.nq_opacities_bounds = vkk::or_fallback(non_sh.opacities_bounds);
+    p.nq_dc_bounds = vkk::or_fallback(non_sh.features_dc_bounds);
+
+    p.lr_means = lr_means;
+    p.lr_quats = lr_quats;
+    p.lr_scales = lr_scales;
+    p.lr_opacs = lr_opacs;
+    p.lr_features_dc = lr_features_dc;
+    p.max_gauss_ratio = max_gauss_ratio;
+    p.scale_regularization_weight =
+        scale_regularization_weight / (float)num_splats;
+    p.mcmc_opacity_reg_weight = mcmc_opacity_reg_weight / (float)num_splats;
+    p.mcmc_scale_reg_weight = mcmc_scale_reg_weight / (float)num_splats;
+    p.erank_reg_weight = erank_reg_weight / (float)num_splats;
+    p.erank_reg_weight_s3 = erank_reg_weight_s3 / (float)num_splats;
+    p.quat_norm_reg_weight = quat_norm_reg_weight / (float)num_splats;
+    p.sh_reg_weight = sh_reg_weight;
+    p.grad_scale = grad_scale;
+    p.scalar_step = step;
+    p.has_steps = per_splat_steps.data_ptr() ? 1u : 0u;
+    p.has_densify_score = densify_score.data_ptr() ? 1u : 0u;
+    p.numel = checked_u32_numel(num_splats, "fused_optim_3dgs_geometry");
+
+    backend::vk::SpecList spec{
+        use_scale_agnostic_mean ? 1u : 0u,
+        zero_grad ? 1u : 0u,
+        non_sh.enabled ? 1u : 0u,
+        gq_mask,
+    };
+    vkk::Fold f = vkk::fold_1d(num_splats, 256);
+    p.wgs_per_row = f.per_row;
+    vkk::dispatch_ring("optim_geometry.fused_optim_3dgs_geometry", spec,
+                       f.per_row, f.rows, 1, &p, sizeof(p));
 }

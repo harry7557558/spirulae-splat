@@ -145,67 +145,9 @@ struct FpboParams {
 [ForceInline]
 float _fp_sigmoid(float x) { return 1.0f / (1.0f + exp(-x)); }
 
-[ForceInline]
-float3 _fp_sqrt3(float3 v) {
-    return float3(sqrt(max(v.x, 0.0f)), sqrt(max(v.y, 0.0f)),
-                  sqrt(max(v.z, 0.0f)));
-}
-[ForceInline]
-float4 _fp_sqrt4(float4 v) {
-    return float4(sqrt(max(v.x, 0.0f)), sqrt(max(v.y, 0.0f)),
-                  sqrt(max(v.z, 0.0f)), sqrt(max(v.w, 0.0f)));
-}
-
-// Non-SH attribute Adam-state IO: fp32 g1/g2 buffers or the 16-bit qadam
-// codec (word/cell, per-splat run at base PRIMS*gid).
-[ForceInline]
-void _fp_state_read<let PRIMS : int>(bool quant, uint* packed, float4* bounds,
-                                     float* g1_buf, float* g2_buf,
-                                     uint block_id, uint gid,
-                                     out float g1[PRIMS],
-                                     out float g2[PRIMS]) {
-    if (quant) {
-        float4 mm_old = bounds[block_id];
-        [ForceUnroll]
-        for (int i = 0; i < PRIMS; i++) {
-            float2 ab = qadam_decode_g1g2<16>(packed,
-                                              uint(PRIMS) * gid + uint(i),
-                                              mm_old);
-            g1[i] = ab.x;
-            g2[i] = ab.y;
-        }
-    } else {
-        [ForceUnroll]
-        for (int i = 0; i < PRIMS; i++) {
-            g1[i] = g1_buf[PRIMS * gid + i];
-            g2[i] = g2_buf[PRIMS * gid + i];
-        }
-    }
-}
-
-[ForceInline]
-void _fp_accum_us<let PRIMS : int>(float g1[PRIMS], float g2[PRIMS],
-                                   inout float4 mm) {
-    [ForceUnroll]
-    for (int i = 0; i < PRIMS; i++) {
-        float2 us = qadam_g1g2_to_us(g1[i], g2[i]);
-        mm.x = min(mm.x, us.x);
-        mm.y = max(mm.y, us.x);
-        mm.z = min(mm.z, us.y);
-        mm.w = max(mm.w, us.y);
-    }
-}
-
-[ForceInline]
-void _fp_state_encode<let PRIMS : int>(uint* packed, uint gid, float g1[PRIMS],
-                                       float g2[PRIMS], float4 mm) {
-    [ForceUnroll]
-    for (int i = 0; i < PRIMS; i++) {
-        float2 us = qadam_g1g2_to_us(g1[i], g2[i]);
-        uint2 q = qadam_quantize_us<16>(us.x, us.y, mm);
-        packed[uint(PRIMS) * gid + uint(i)] = q.x | (q.y << 16);
-    }
-}
+// Non-SH attribute Adam-state IO + clamped sqrt helpers live in
+// optim_quant.slang (oq_state_read / oq_accum_us / oq_state_encode /
+// oq_sqrt3 / oq_sqrt4), shared with optim_geometry.slang.
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -332,7 +274,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     // update scales
     if (inside) {
         float g1[3], g2[3];
-        _fp_state_read<3>(kNonShQuant != 0, p.nq_scales_packed,
+        oq_state_read<3>(kNonShQuant != 0, p.nq_scales_packed,
                           p.nq_scales_bounds, p.g1_scales, p.g2_scales,
                           block_id, gid, g1, g2);
         [ForceUnroll]
@@ -345,7 +287,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float3 g2v = float3(g2[0], g2[1], g2[2]);
         float3 new_scale =
             s.scale - p.lr_scales * ibc1 * g1v /
-                          (_fp_sqrt3(g2v * ibc2) + float3(kFpboEps));
+                          (oq_sqrt3(g2v * ibc2) + float3(kFpboEps));
         p.scales[3 * gid] = new_scale.x;
         p.scales[3 * gid + 1] = new_scale.y;
         p.scales[3 * gid + 2] = new_scale.z;
@@ -355,7 +297,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 nq_g1_scale[i] = g1[i];
                 nq_g2_scale[i] = g2[i];
             }
-            _fp_accum_us<3>(g1, g2, nq_mm_scale);
+            oq_accum_us<3>(g1, g2, nq_mm_scale);
         } else {
             [ForceUnroll]
             for (int i = 0; i < 3; i++) {
@@ -370,7 +312,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float4 new_quat = normalize(s.quat);
         g.v_quat -= dot(new_quat, g.v_quat) * new_quat;
         float g1[4], g2[4];
-        _fp_state_read<4>(kNonShQuant != 0, p.nq_quats_packed,
+        oq_state_read<4>(kNonShQuant != 0, p.nq_quats_packed,
                           p.nq_quats_bounds, p.g1_quats, p.g2_quats,
                           block_id, gid, g1, g2);
         [ForceUnroll]
@@ -382,7 +324,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float4 g1v = float4(g1[0], g1[1], g1[2], g1[3]);
         float4 g2v = float4(g2[0], g2[1], g2[2], g2[3]);
         new_quat -= p.lr_quats * ibc1 * g1v /
-                    (_fp_sqrt4(g2v * ibc2) + float4(kFpboEps));
+                    (oq_sqrt4(g2v * ibc2) + float4(kFpboEps));
         new_quat = normalize(new_quat);
         p.quats[4 * gid] = new_quat.x;
         p.quats[4 * gid + 1] = new_quat.y;
@@ -394,7 +336,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 nq_g1_quat[i] = g1[i];
                 nq_g2_quat[i] = g2[i];
             }
-            _fp_accum_us<4>(g1, g2, nq_mm_quat);
+            oq_accum_us<4>(g1, g2, nq_mm_quat);
         } else {
             [ForceUnroll]
             for (int i = 0; i < 4; i++) {
@@ -407,7 +349,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     // update opacities
     if (inside) {
         float g1[1], g2[1];
-        _fp_state_read<1>(kNonShQuant != 0, p.nq_opacities_packed,
+        oq_state_read<1>(kNonShQuant != 0, p.nq_opacities_packed,
                           p.nq_opacities_bounds, p.g1_opacities,
                           p.g2_opacities, block_id, gid, g1, g2);
         g1[0] = kFpboBeta1 * g1[0] + (1.0f - kFpboBeta1) * g.v_opacity;
@@ -420,7 +362,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         if (kNonShQuant != 0) {
             nq_g1_opac[0] = g1[0];
             nq_g2_opac[0] = g2[0];
-            _fp_accum_us<1>(g1, g2, nq_mm_opac);
+            oq_accum_us<1>(g1, g2, nq_mm_opac);
         } else {
             p.g1_opacities[gid] = g1[0];
             p.g2_opacities[gid] = g2[0];
@@ -437,7 +379,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     // update means (optionally scale-agnostic)
     if (inside) {
         float g1[3], g2[3];
-        _fp_state_read<3>(kNonShQuant != 0, p.nq_means_packed,
+        oq_state_read<3>(kNonShQuant != 0, p.nq_means_packed,
                           p.nq_means_bounds, p.g1_means, p.g2_means,
                           block_id, gid, g1, g2);
         if (kScaleAgnostic != 0) {
@@ -469,7 +411,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float3 g2v = float3(g2[0], g2[1], g2[2]);
         float3 new_mean =
             s.mean - p.lr_means * ibc1 * g1v /
-                         (_fp_sqrt3(g2v * ibc2) + float3(kFpboEps));
+                         (oq_sqrt3(g2v * ibc2) + float3(kFpboEps));
         p.means[3 * gid] = new_mean.x;
         p.means[3 * gid + 1] = new_mean.y;
         p.means[3 * gid + 2] = new_mean.z;
@@ -479,7 +421,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 nq_g1_mean[i] = g1[i];
                 nq_g2_mean[i] = g2[i];
             }
-            _fp_accum_us<3>(g1, g2, nq_mm_mean);
+            oq_accum_us<3>(g1, g2, nq_mm_mean);
         } else {
             [ForceUnroll]
             for (int i = 0; i < 3; i++) {
@@ -498,7 +440,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
             v_dc.z /= linear_rgb_to_srgb_grad(kSh0 * s.dc.z + 0.5f);
         }
         float g1[3], g2[3];
-        _fp_state_read<3>(kNonShQuant != 0, p.nq_dc_packed, p.nq_dc_bounds,
+        oq_state_read<3>(kNonShQuant != 0, p.nq_dc_packed, p.nq_dc_bounds,
                           p.g1_dc, p.g2_dc, block_id, gid, g1, g2);
         [ForceUnroll]
         for (int i = 0; i < 3; i++) {
@@ -508,7 +450,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         }
         float3 g1v = float3(g1[0], g1[1], g1[2]);
         float3 g2v = float3(g2[0], g2[1], g2[2]);
-        float3 denom = _fp_sqrt3(g2v * ibc2) + float3(kFpboEps);
+        float3 denom = oq_sqrt3(g2v * ibc2) + float3(kFpboEps);
         float3 delta = float3(-p.lr_features_dc * ibc1) * (g1v / denom);
         if (kColorTrust != 0) {
             float opac = _fp_sigmoid(s.in_opacity);
@@ -516,7 +458,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                            float3((1.0f / 255.0f) * (1.0f / 255.0f)));
             float inv_opac = 1.0f / max(opac, 1e-12f);
             float3 clipv =
-                kSh0 * _fp_sqrt3(float3(4.0f * p.eps_tr * c.x * inv_opac,
+                kSh0 * oq_sqrt3(float3(4.0f * p.eps_tr * c.x * inv_opac,
                                         4.0f * p.eps_tr * c.y * inv_opac,
                                         4.0f * p.eps_tr * c.z * inv_opac));
             delta = clamp(delta, -clipv, clipv);
@@ -534,7 +476,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 nq_g1_dc[i] = g1[i];
                 nq_g2_dc[i] = g2[i];
             }
-            _fp_accum_us<3>(g1, g2, nq_mm_dc);
+            oq_accum_us<3>(g1, g2, nq_mm_dc);
         } else {
             [ForceUnroll]
             for (int i = 0; i < 3; i++) {
@@ -558,15 +500,15 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         nq_mm_dc = oq_block_reduce_mm4(nq_mm_dc, tid);
         if (tid == 0) p.nq_dc_bounds[block_id] = nq_mm_dc;
         if (inside) {
-            _fp_state_encode<3>(p.nq_scales_packed, gid, nq_g1_scale,
+            oq_state_encode<3>(p.nq_scales_packed, gid, nq_g1_scale,
                                 nq_g2_scale, nq_mm_scale);
-            _fp_state_encode<4>(p.nq_quats_packed, gid, nq_g1_quat,
+            oq_state_encode<4>(p.nq_quats_packed, gid, nq_g1_quat,
                                 nq_g2_quat, nq_mm_quat);
-            _fp_state_encode<1>(p.nq_opacities_packed, gid, nq_g1_opac,
+            oq_state_encode<1>(p.nq_opacities_packed, gid, nq_g1_opac,
                                 nq_g2_opac, nq_mm_opac);
-            _fp_state_encode<3>(p.nq_means_packed, gid, nq_g1_mean,
+            oq_state_encode<3>(p.nq_means_packed, gid, nq_g1_mean,
                                 nq_g2_mean, nq_mm_mean);
-            _fp_state_encode<3>(p.nq_dc_packed, gid, nq_g1_dc, nq_g2_dc,
+            oq_state_encode<3>(p.nq_dc_packed, gid, nq_g1_dc, nq_g2_dc,
                                 nq_mm_dc);
         }
     }
@@ -587,7 +529,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float opac = _fp_sigmoid(s.in_opacity);
         float inv_opac = 1.0f / max(opac, 1e-12f);
         clip_dc = kSh0 *
-                  _fp_sqrt3(float3(4.0f * p.eps_tr * c_dc_clamped.x * inv_opac,
+                  oq_sqrt3(float3(4.0f * p.eps_tr * c_dc_clamped.x * inv_opac,
                                    4.0f * p.eps_tr * c_dc_clamped.y * inv_opac,
                                    4.0f * p.eps_tr * c_dc_clamped.z *
                                        inv_opac));
@@ -673,7 +615,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 float3 g2_upd = kFpboBeta2 * g2v +
                                 (1.0f - kFpboBeta2) * v_sh_coeff *
                                     v_sh_coeff;
-                float3 denom = _fp_sqrt3(g2_upd * ibc2) + float3(kFpboEps);
+                float3 denom = oq_sqrt3(g2_upd * ibc2) + float3(kFpboEps);
                 float3 sh_delta = float3(-lr_sh) * (g1_upd / denom);
                 if (kColorTrust != 0) {
                     sh_delta = clamp(sh_delta, -clip_dc, clip_dc);

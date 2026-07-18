@@ -22,7 +22,13 @@
 //                                    hi/lo double-sort), exploiting
 //                                    begin_bit/end_bit to skip unused passes.
 //   sort_pairs<int32_t, int32_t>   — densify / packed projection / visualizer
+//                                    (densify weighted sampling sorts float
+//                                    keys through the order-preserving
+//                                    uint32 flip transform on this overload)
 //   inclusive_sum / exclusive_sum  — int32 and int64 counters
+//   inclusive_sum<float>           — densify MCMC sampling cumsum (Vulkan
+//                                    backend only; the CUDA launcher calls
+//                                    CUB directly in Densify.cu)
 //   select_flagged                 — int32 ids
 // Callers pass begin_bit/end_bit exactly as with CUB to skip radix passes.
 

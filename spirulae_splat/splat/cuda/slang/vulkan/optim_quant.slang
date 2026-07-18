@@ -281,3 +281,69 @@ uint gradq_encode1<let BITS : int>(float v, float2 mm) {
     int q = int(qf);
     return uint(q) & (BITS == 16 ? 0xffffu : 0xffu);
 }
+
+// ---------------------------------------------------------------------------
+// Non-SH attribute Adam-state IO shared by the FPBO and fused-3DGS-geometry
+// optimizer kernels: fp32 g1/g2 buffers or the 16-bit qadam codec
+// (word/cell, per-splat run at base PRIMS*gid, one bound per 256 splats).
+// ---------------------------------------------------------------------------
+
+[ForceInline]
+float3 oq_sqrt3(float3 v) {
+    return float3(sqrt(max(v.x, 0.0f)), sqrt(max(v.y, 0.0f)),
+                  sqrt(max(v.z, 0.0f)));
+}
+[ForceInline]
+float4 oq_sqrt4(float4 v) {
+    return float4(sqrt(max(v.x, 0.0f)), sqrt(max(v.y, 0.0f)),
+                  sqrt(max(v.z, 0.0f)), sqrt(max(v.w, 0.0f)));
+}
+
+[ForceInline]
+void oq_state_read<let PRIMS : int>(bool quant, uint* packed, float4* bounds,
+                                    float* g1_buf, float* g2_buf,
+                                    uint block_id, uint gid,
+                                    out float g1[PRIMS],
+                                    out float g2[PRIMS]) {
+    if (quant) {
+        float4 mm_old = bounds[block_id];
+        [ForceUnroll]
+        for (int i = 0; i < PRIMS; i++) {
+            float2 ab = qadam_decode_g1g2<16>(packed,
+                                              uint(PRIMS) * gid + uint(i),
+                                              mm_old);
+            g1[i] = ab.x;
+            g2[i] = ab.y;
+        }
+    } else {
+        [ForceUnroll]
+        for (int i = 0; i < PRIMS; i++) {
+            g1[i] = g1_buf[PRIMS * gid + i];
+            g2[i] = g2_buf[PRIMS * gid + i];
+        }
+    }
+}
+
+[ForceInline]
+void oq_accum_us<let PRIMS : int>(float g1[PRIMS], float g2[PRIMS],
+                                  inout float4 mm) {
+    [ForceUnroll]
+    for (int i = 0; i < PRIMS; i++) {
+        float2 us = qadam_g1g2_to_us(g1[i], g2[i]);
+        mm.x = min(mm.x, us.x);
+        mm.y = max(mm.y, us.x);
+        mm.z = min(mm.z, us.y);
+        mm.w = max(mm.w, us.y);
+    }
+}
+
+[ForceInline]
+void oq_state_encode<let PRIMS : int>(uint* packed, uint gid, float g1[PRIMS],
+                                      float g2[PRIMS], float4 mm) {
+    [ForceUnroll]
+    for (int i = 0; i < PRIMS; i++) {
+        float2 us = qadam_g1g2_to_us(g1[i], g2[i]);
+        uint2 q = qadam_quantize_us<16>(us.x, us.y, mm);
+        packed[uint(PRIMS) * gid + uint(i)] = q.x | (q.y << 16);
+    }
+}

@@ -179,8 +179,14 @@ the 64-bit requirement is DECIDED — tile keys are `(tile_id << 32) |
 ordered_float_depth` and 32-bit packing overflows on large real-world
 scenes). Values int32. Host side ping-pongs the caller's `DoubleBuffer`
 exactly like CUB. `inclusive_sum`/`exclusive_sum` = two-level
-workgroup-scan; `select_flagged` = scan + scatter + count readback.
-Parity-tested against CPU references on every available device.
+workgroup-scan (int32/int64, plus a float inclusive_sum for the densify
+MCMC sampling cumsum — deterministic per device, but its summation
+association differs from CUB's so cross-backend float cumsums agree only
+to rounding); `select_flagged` = scan + scatter + count readback.
+Parity-tested against CPU references on every available device. Float
+keys are sorted by emitting the order-preserving uint32 flip transform
+from the producing kernel and sorting raw-unsigned via the int32 overload
+(matches CUB's float-key order bit-exactly for identical key bits).
 
 ## Phase order (from ../README.md step 5) and status
 
@@ -191,7 +197,7 @@ Parity-tested against CPU references on every available device.
 | 2 | Projection fwd (3 primitives × spec-const cams/SH) + parity vs CUDA | DONE 2026-07 incl. 3DGUT + packed + SH value-quant q8/q16 |
 | 3 | Background SH fwd, tile intersect (key gen + offsets over SortScan) | DONE 2026-07 |
 | 4 | Rasterization fwd (2D + eval3D shared source), visualizer blit | DONE 2026-07 (+ render-path PixelWise, engine-level end-to-end parity) |
-| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | IN PROGRESS: optimizer/utility kernels, pixel-wise backwards, background-SH backward, rasterization backward, projection backward family (plain + quantgrad + fused-optimizer) DONE 2026-07 (optim_parity, pwtrain_parity, raster_bwd_parity, proj_bwd_parity, projqgrad_parity, fpbo_parity); remaining launchers still throwing stubs |
+| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | IN PROGRESS: optimizer/utility kernels, pixel-wise backwards, background-SH backward, rasterization backward, projection backward family (plain + quantgrad + fused-optimizer), densify/MCMC + remaining optimizer variants (adamtr color, fused 3DGS geometry) DONE 2026-07 (optim_parity, pwtrain_parity, raster_bwd_parity, proj_bwd_parity, projqgrad_parity, fpbo_parity, optimgeo_parity, densify_parity); remaining launchers still throwing stubs |
 
 Phase-0/1 hard-won portability rules (validated on NVIDIA proprietary,
 Mesa ANV, llvmpipe — all tests + validation layers clean on all three):
@@ -445,6 +451,56 @@ the engine level.
     `count` and beyond) — NVIDIA segfaulted inside pipeline creation,
     llvmpipe silently ran with garbage spec values. kMax is now 16 with an
     assert; if a kernel ever needs more axes, raise kMax explicitly.
+- **Densify/MCMC + remaining optimizer variants (phase 5, fifth slice)**:
+  `kernels/Densify.cpp` implements the full densification API
+  (densify_clip_scale, MCMC/revised noise, long-axis-split relocate/add,
+  MCMC relocate/add) over `slang/vulkan/densify.slang`, which includes the
+  canonical `slang/densify.slang` device code (long_axis_split_3dgs, the
+  randn3 noise kernels) and mirrors the Densify.cu-only mcmc_relocation
+  math; `kernels/Optimizer.cpp` gains the adamtr trust-region color
+  variants (`slang/vulkan/optim_color.slang`) and the fused 3DGS geometry
+  step (`slang/vulkan/optim_geometry.slang`, sharing the FPBO helpers
+  refactored into optim_quant.slang: oq_state_read/oq_accum_us/
+  oq_state_encode/oq_sqrt3/oq_sqrt4). Design notes:
+  - **Weighted sampling without replacement**: the efraimidis-spirakis
+    float key `w / log(1 - u)` is emitted through the order-preserving
+    uint32 flip (`b ^= (b >> 31) ? 0xffffffff : 0x80000000`), so the
+    raw-unsigned radix sort reproduces CUB's float-key ascending order for
+    identical key bits. The `u` draw hashes (seed, blockIdx, threadIdx)
+    with an integer hash (bit-exact both backends); the kernels keep
+    CUDA's 256-thread linearized geometry so hashes match.
+  - **Float cumsum**: `backend::inclusive_sum<float>` (new
+    scan_blocks/spine/add_f32 entries in sort_scan.slang) feeds the MCMC
+    binary-search draws. Its summation association differs from CUB's, so
+    cross-backend cumsums agree only to rounding — rare boundary flips in
+    the sampled indices are expected and the parity tool budgets for them
+    (loose channel / code violation caps; each flip rewrites one splat's
+    row).
+  - **Relocation compaction** keeps CUDA's atomic-counter form, so the
+    src→dst PAIRING is scheduling-dependent (true on CUDA alone);
+    densify_parity's relocate configs are built with exactly one
+    relocating splat, while the add path (same kernel, deterministic
+    dst = cur + i, 300-600 concurrent dsts) covers the multi-splat
+    behavior including neighbor-word And+Or masked stores in the 8/4-bit
+    SH-state zeroing and 16/8-bit value-codec copies.
+  - **Spec IDs follow declaration order per module** (kShOptimBits = 0,
+    kShValueBits = 1 in densify.slang): the copy-kernel dispatch initially
+    passed `SpecList{bits}`, which set kShOptimBits instead and left
+    kShValueBits at its default 16 — in the 8-bit value config the copy
+    then ran 16-bit halfword stores at 2x the byte offset, corrupting
+    neighboring pool buffers. When a dispatch only cares about a later
+    spec axis it must still supply the earlier IDs.
+  - The adamtr kernels mirror two upstream CUDA quirks bit-for-bit
+    (flagged, not fixed): they never write exp_avg/exp_avg_sq back, and
+    the SH variant launches num_gs threads over an element-indexed
+    [N, K, 3] tensor so only the first num_gs scalars update per call.
+  - Parity: `optimgeo_parity` (1.04M floats + 86K codes; 4 geometry
+    configs covering scale-agnostic means, per-splat steps, densify score,
+    zero-init non-SH 16-bit qadam two-step protocol, 16-bit grad-quant
+    decode; 4 adamtr variants) and `densify_parity` (24K tight + 3.24M
+    loose floats + 2.8M codes; 10 configs over sh_optim_bits 32/8/4 x
+    sh_value_bits 32/16/8 x bounds layouts x non-SH quant x degree
+    warmup). All three devices pass; validation clean.
 - **Training stubs**: `kernels/TrainingStubs.gen.cpp` (generated by
   `spirulae_splat/generate_vulkan_stubs.py` from a link probe of
   csrc_portable vs the backend lib) + `TrainingStubsManual.cpp` (the
