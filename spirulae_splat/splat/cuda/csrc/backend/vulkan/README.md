@@ -197,7 +197,7 @@ from the producing kernel and sorting raw-unsigned via the int32 overload
 | 2 | Projection fwd (3 primitives × spec-const cams/SH) + parity vs CUDA | DONE 2026-07 incl. 3DGUT + packed + SH value-quant q8/q16 |
 | 3 | Background SH fwd, tile intersect (key gen + offsets over SortScan) | DONE 2026-07 |
 | 4 | Rasterization fwd (2D + eval3D shared source), visualizer blit | DONE 2026-07 (+ render-path PixelWise, engine-level end-to-end parity) |
-| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | IN PROGRESS: optimizer/utility kernels, pixel-wise backwards, background-SH backward, rasterization backward, projection backward family (plain + quantgrad + fused-optimizer), densify/MCMC + remaining optimizer variants (adamtr color, fused 3DGS geometry) DONE 2026-07 (optim_parity, pwtrain_parity, raster_bwd_parity, proj_bwd_parity, projqgrad_parity, fpbo_parity, optimgeo_parity, densify_parity); remaining launchers still throwing stubs |
+| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | IN PROGRESS: optimizer/utility kernels, pixel-wise backwards, background-SH backward, rasterization backward, projection backward family (plain + quantgrad + fused-optimizer), densify/MCMC + remaining optimizer variants (adamtr color, fused 3DGS geometry), bilagrid/PPISP color pipeline (all five sampler families, TV/channel-mean, fused TV-Adam/AdaGrad, PPISP image transform + reg losses) DONE 2026-07 (optim_parity, pwtrain_parity, raster_bwd_parity, proj_bwd_parity, projqgrad_parity, fpbo_parity, optimgeo_parity, densify_parity, bilagrid_parity, ppisp_parity); remaining stubs: dataset warp/conversion + multi-scale loss stack (13) |
 
 Phase-0/1 hard-won portability rules (validated on NVIDIA proprietary,
 Mesa ANV, llvmpipe — all tests + validation layers clean on all three):
@@ -501,6 +501,68 @@ the engine level.
     loose floats + 2.8M codes; 10 configs over sh_optim_bits 32/8/4 x
     sh_value_bits 32/16/8 x bounds layouts x non-SH quant x degree
     warmup). All three devices pass; validation clean.
+- **Bilagrid/PPISP color pipeline (phase 5, sixth slice)**:
+  `kernels/Bilagrid.cpp` implements the full csrc/BilagridBindings.h raw
+  launcher family (affine / PPISP / log-linear / depth / normal samplers:
+  uniform + patched + per-pixel-coords + packed, forward + backward v1/v2)
+  plus TV loss / channel mean and the EngineInternal.h fused
+  TV-Adam/AdaGrad, q16 encode, identity init and scatter;
+  `kernels/PpispImage.cpp` implements the PixelWise.cuh PPISP image
+  transform + regularization APIs and the PpispInit.cu helpers. Device
+  work: `slang/vulkan/bilagrid_{common,affine,ppisp,loglinear,depth,
+  normal,tv,optim}.slang` + `ppisp_image.slang` (37 new entries). Design
+  notes:
+  - **BilagridReader** maps to three never-null pointer fields
+    (`vkk::or_fallback`) + a `kValueQuant` spec constant; the
+    `grid_indices == nullptr -> identity` semantic becomes a
+    has_grid_indices flag field (llvmpipe speculation rule). Uniform vs
+    patched layouts share one entry via a `kPatched` spec axis.
+  - **PPISP math is the canonical slang** (`slang/ppisp.slang`) on both
+    backends: the image transform + reg losses call the same
+    apply_ppisp* / compute_*_loss* exports the CUDA build gets through
+    generated/ppisp.cuh, so ppisp_parity's per-pixel values AND gradients
+    are tight-channel. The bilagrid-PPISP samplers reuse
+    apply_exposure/apply_color_correction_ppisp with Slang autodiff for
+    the backward — analytically equal to the hand-written CUDA chain in
+    BilagridPpispMathBwd.cuh but rounded differently, so those gradients
+    are loose-channel. The normal family's axis-angle backward is a
+    hand-written Rodrigues-form gradient upstream (NOT autodiff of its
+    forward), so it is hand-mirrored term by term and stays tight.
+  - **backward_v1 grid-grad kernels** keep CUDA's logical 8x8 block
+    geometry / mult_x-mult_y tile decomposition exactly (the per-thread
+    pixel-range partition determines the writeback structure), but run as
+    flat 64-wide workgroups with an in-shader 8x8 decode — the pinned
+    subgroup size requires workgroup X to be a multiple of 32 (VUID-02757;
+    same reason the TV/channel-mean 4x4x4 blocks and the single-thread
+    reg-loss finals are 64-/32-wide with logical decode / a tid-0 guard).
+    The warp-shuffle block reduce becomes a groupshared tree
+    (`bg_block_add_64`); CUDA's fast/slow writeback three-path split is
+    preserved.
+  - **Fused TV-Adam/AdaGrad**: one 256-cell codec block per workgroup;
+    Adam moments through QuantizedAdamState<4|8>, the AdaGrad accumulator
+    through a new QuantizedTensorLog<4|8> port in optim_quant.slang
+    (qtlog_*; the CUDA 4-bit odd/even two-phase byte serialization is
+    subsumed by the cooperative whole-word store). The cross-block TV
+    neighbor reads race with value writeback on BOTH backends (documented
+    partial-update semantic); bilagrid_parity therefore runs tv_weight > 0
+    only in the fp32-state configs — through the QUANTIZED states'
+    log-domain block bounds (log1p(sqrt(g2)/eps) of near-zero cells) the
+    tiny race shift rescales entire blocks of codes, and llvmpipe's
+    sequential block execution makes the race systematic.
+  - A residual cross-backend sensitivity worth knowing: a single 4-bit
+    state code on a rounding boundary (FMA contraction differences) can
+    shift one cell's next-step value by ~lr * (state range / 15); if that
+    cell is a value-quant block's min/max, the whole block's 16-bit codes
+    shift by a fixed offset (~300 codes = ~0.007 in value space on
+    NVIDIA). Same +-1-flip amplification class as fpbo_parity; the code
+    violation caps budget for it.
+  - Parity: `bilagrid_parity` (372K tight + 207K loose floats + 20K
+    codes; all 30 sampler launchers incl. q16 readers, grid_indices,
+    mult>1 block-reduce path, mi batching, packed int64 indices; TV /
+    channel mean; 4 fused-optimizer configs x Adam/AdaGrad; encode/init/
+    scatter utils) and `ppisp_parity` (63K tight + 0.9K loose; 3 param
+    types x cam_indices on/off + reg fwd/bwd with synthetic deterministic
+    bwd inputs). All three devices pass; validation clean.
 - **Training stubs**: `kernels/TrainingStubs.gen.cpp` (generated by
   `spirulae_splat/generate_vulkan_stubs.py` from a link probe of
   csrc_portable vs the backend lib) + `TrainingStubsManual.cpp` (the

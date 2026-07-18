@@ -207,6 +207,76 @@ void qtensor_store<let BITS : int>(uint* packed, uint idx, uint tid,
 }
 
 // ---------------------------------------------------------------------------
+// QuantizedTensorLog<BITS, 256> — non-negative scalar per cell, stored as a
+// linearly-quantized log1p(v / eps) with per-block (log-min, log-max) float2
+// bounds. 0 <-> 0 fixed point (all-zero packed + bounds decode to v = 0).
+//   BITS=8: byte/cell   BITS=4: nibble/cell (two cells per byte)
+// Mirrors csrc/Tensor.h QuantizedTensorLog (bilagrid AdaGrad accumulator).
+// ---------------------------------------------------------------------------
+
+[ForceInline]
+float qtlog_forward_v(float v) {
+    return _oq_log1p(max(v, 0.0f) * (1.0f / kAdamEps));
+}
+
+[ForceInline]
+float qtlog_inverse_v(float log_v) {
+    return kAdamEps * _oq_expm1(log_v);
+}
+
+[ForceInline]
+float qtlog_decode_log<let BITS : int>(uint* packed, uint idx, float2 mm) {
+    float q;
+    if (BITS == 8) {
+        uint w = packed[idx >> 2];
+        q = float((w >> (8u * (idx & 3u))) & 0xffu);
+    } else {  // BITS == 4
+        uint w = packed[idx >> 3];
+        q = float((w >> (4u * (idx & 7u))) & 0xfu);
+    }
+    return mm.x + (mm.y - mm.x) * (q / float((1 << BITS) - 1));
+}
+
+[ForceInline]
+float qtlog_decode_v<let BITS : int>(uint* packed, uint idx, float2 mm) {
+    return qtlog_inverse_v(qtlog_decode_log<BITS>(packed, idx, mm));
+}
+
+[ForceInline]
+uint qtlog_quantize_log<let BITS : int>(float log_v, float2 mm) {
+    float qmax = float((1 << BITS) - 1);
+    float range = max(mm.y - mm.x, kAdamEps);
+    return uint(clamp(_oq_round(qmax * (log_v - mm.x) / range), 0.0f, qmax));
+}
+
+// Cooperative packed store of one cell's log-code. Call from ALL 256 threads
+// (barriers inside); `inside` gates the actual memory writes. Subsumes the
+// CUDA 4-bit odd/even two-phase serialization: whole words are assembled in
+// groupshared and stored once.
+[ForceInline]
+void qtlog_store<let BITS : int>(uint* packed, uint idx, uint tid,
+                                 bool inside, uint q) {
+    GroupMemoryBarrierWithGroupSync();
+    _oq_pack[tid] = inside ? q : 0u;
+    GroupMemoryBarrierWithGroupSync();
+    if (BITS == 8) {
+        if ((tid & 3u) == 0u && inside)
+            packed[idx >> 2] = _oq_pack[tid] | (_oq_pack[tid + 1] << 8) |
+                               (_oq_pack[tid + 2] << 16) |
+                               (_oq_pack[tid + 3] << 24);
+    } else {  // BITS == 4
+        if ((tid & 7u) == 0u && inside) {
+            uint w = 0u;
+            [ForceUnroll]
+            for (uint k = 0; k < 8; k++)
+                w |= (_oq_pack[tid + k] & 0xfu) << (4u * k);
+            packed[idx >> 3] = w;
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+}
+
+// ---------------------------------------------------------------------------
 // Masked sub-word atomic stores. For packed layouts where one thread owns a
 // CONTIGUOUS cell run that need not be word-aligned (per-splat runs in the
 // grad-quant / FPBO writebacks), neighbor threads can share a word. And+Or
