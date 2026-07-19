@@ -6,8 +6,6 @@
 // module (a ported symbol must lose its stub) or when the engine grows new
 // kernel calls.
 
-#include <EngineInternal.h>
-#include <PixelWise.cuh>
 
 #include <stdexcept>
 #include <string>
@@ -18,89 +16,3 @@ namespace {
                              " is not implemented yet (training phase)");
 }
 }  // namespace
-
-// from PixelWise.cuh
-void launch_warp_byte_to_float_equi(
-    const void* d_byte, bool input_is_u16,
-    int B, int Hin, int Win, int C,
-    float* d_float_out, int K, int Hout, int Wout,
-    const float* d_axes) { _vk_stub("launch_warp_byte_to_float_equi"); }
-
-// from PixelWise.cuh
-void launch_warp_byte_to_float_wide(
-    std::string camera_model,
-    const float* d_intrins,                 
-    const float* d_dist_coeffs,             
-    const void* d_byte, bool input_is_u16,
-    int B, int Hin, int Win, int C,
-    float* d_float_out, int K, int Hout, int Wout,
-    const float* d_axes) { _vk_stub("launch_warp_byte_to_float_wide"); }
-
-// from PixelWise.cuh
-void launch_warp_depth_equi(
-    const void* d_depth, uint32_t elem_size,
-    int B, int Hin, int Win,
-    float* d_float_out, int K, int Hout, int Wout,
-    const float* d_axes, bool input_is_ray_depth) { _vk_stub("launch_warp_depth_equi"); }
-
-// from PixelWise.cuh
-void launch_warp_depth_wide(
-    std::string camera_model,
-    const float* d_intrins,
-    const float* d_dist_coeffs,
-    const void* d_depth, uint32_t elem_size,
-    int B, int Hin, int Win,
-    int in_H, int in_W,
-    float* d_float_out, int K, int Hout, int Wout,
-    const float* d_axes, bool input_is_ray_depth) { _vk_stub("launch_warp_depth_wide"); }
-
-// from PixelWise.cuh
-void launch_warp_mask_equi(
-    const uint8_t* d_byte_mask,
-    int B, int Hin, int Win,
-    uint8_t* d_byte_out, int K, int Hout, int Wout,
-    const float* d_axes) { _vk_stub("launch_warp_mask_equi"); }
-
-// from PixelWise.cuh
-void launch_warp_mask_wide(
-    std::string camera_model,
-    const float* d_intrins,                 
-    const float* d_dist_coeffs,             
-    const uint8_t* d_byte_mask,
-    int B, int Hin, int Win,
-    uint8_t* d_byte_out, int K, int Hout, int Wout,
-    const float* d_axes) { _vk_stub("launch_warp_mask_wide"); }
-
-// from PixelWise.cuh
-void launch_warp_normal_equi(
-    const void* d_normal, uint32_t elem_size,
-    int B, int Hin, int Win,
-    float* d_float_out, int K, int Hout, int Wout,
-    const float* d_axes) { _vk_stub("launch_warp_normal_equi"); }
-
-// from PixelWise.cuh
-void launch_warp_normal_wide(
-    std::string camera_model,
-    const float* d_intrins,
-    const float* d_dist_coeffs,
-    const void* d_normal, uint32_t elem_size,
-    int B, int Hin, int Win,
-    int in_H, int in_W,
-    float* d_float_out, int K, int Hout, int Wout,
-    const float* d_axes) { _vk_stub("launch_warp_normal_wide"); }
-
-// from EngineInternal.h
-void uint16_depth_to_float_raw(const uint16_t* d_in, float* d_out,
-                               int B, int H, int W, int C) { _vk_stub("uint16_depth_to_float_raw"); }
-
-// from EngineInternal.h
-void uint16_image_to_float_raw(const uint16_t* d_in, float* d_out,
-                               int B, int H, int W, int C) { _vk_stub("uint16_image_to_float_raw"); }
-
-// from EngineInternal.h
-void uint8_image_to_float_raw (const uint8_t*  d_in, float* d_out,
-                               int B, int H, int W, int C) { _vk_stub("uint8_image_to_float_raw"); }
-
-// from EngineInternal.h
-void uint8_normal_to_float_raw(const uint8_t*  d_in, float* d_out,
-                               int B, int H, int W, int C) { _vk_stub("uint8_normal_to_float_raw"); }

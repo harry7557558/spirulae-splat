@@ -197,7 +197,7 @@ from the producing kernel and sorting raw-unsigned via the int32 overload
 | 2 | Projection fwd (3 primitives × spec-const cams/SH) + parity vs CUDA | DONE 2026-07 incl. 3DGUT + packed + SH value-quant q8/q16 |
 | 3 | Background SH fwd, tile intersect (key gen + offsets over SortScan) | DONE 2026-07 |
 | 4 | Rasterization fwd (2D + eval3D shared source), visualizer blit | DONE 2026-07 (+ render-path PixelWise, engine-level end-to-end parity) |
-| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | IN PROGRESS: optimizer/utility kernels, pixel-wise backwards, background-SH backward, rasterization backward, projection backward family (plain + quantgrad + fused-optimizer), densify/MCMC + remaining optimizer variants (adamtr color, fused 3DGS geometry), bilagrid/PPISP color pipeline (all five sampler families, TV/channel-mean, fused TV-Adam/AdaGrad, PPISP image transform + reg losses), multi-scale per-pixel loss stack (per-pixel fused losses, fused SSIM, image pyramid, edge-aware maps, quantile radix-select) DONE 2026-07 (optim_parity, pwtrain_parity, raster_bwd_parity, proj_bwd_parity, projqgrad_parity, fpbo_parity, optimgeo_parity, densify_parity, bilagrid_parity, ppisp_parity, msloss_parity); remaining stubs: dataset warp/conversion (12) |
+| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | DONE 2026-07: optimizer/utility kernels, pixel-wise backwards, background-SH backward, rasterization backward, projection backward family (plain + quantgrad + fused-optimizer), densify/MCMC + remaining optimizer variants (adamtr color, fused 3DGS geometry), bilagrid/PPISP color pipeline (all five sampler families, TV/channel-mean, fused TV-Adam/AdaGrad, PPISP image transform + reg losses), multi-scale per-pixel loss stack (per-pixel fused losses, fused SSIM, image pyramid, edge-aware maps, quantile radix-select), dataset warp/conversion kernels + end-to-end train-step verification (optim_parity, pwtrain_parity, raster_bwd_parity, proj_bwd_parity, projqgrad_parity, fpbo_parity, optimgeo_parity, densify_parity, bilagrid_parity, ppisp_parity, msloss_parity, warp_parity, engine_train_parity). NO training-kernel stubs remain (TrainingStubsManual.cpp still stubs meshing::OccupancyEvaluator) |
 
 Phase-0/1 hard-won portability rules (validated on NVIDIA proprietary,
 Mesa ANV, llvmpipe — all tests + validation layers clean on all three):
@@ -608,6 +608,47 @@ the engine level.
     normal_loss's 0.5/sqrt(cos_sim_loss) gradient near aligned normals
     under bilinear-resampled GT, and the Pearson-depth chain fed by
     atomic-order-dependent sums); validation clean.
+- **Dataset warp/conversion + end-to-end training (phase 5, eighth and
+  final slice)**: `kernels/Warp.cpp` implements the 12 remaining launch
+  APIs — the fused byte->float GT warps of PixelWise.cu
+  (`launch_warp_{byte_to_float,mask,depth,normal}_{wide,equi}`) plus the
+  raw converters (`uint8/16_{image,depth,normal}_to_float_raw` and the
+  DeviceTensor3D wrappers). Device work in `warp.slang`:
+  - The wide warps project each pinhole-face ray through the CANONICAL
+    `projection_utils.slang` `*_proj_nav` exports (same functions the
+    CUDA kernels call), with the camera model as a runtime params field
+    exactly like the CUDA `CameraModelType` argument — every path loads
+    through the same pointers, so the branch is speculation-safe on
+    llvmpipe. The CUDA `T_in` template axis becomes an `elem_kind` field
+    (u8/u16/f32 extracted from u32 words).
+  - Warp entries run 16x16 logical tiles as flat 256-wide workgroups over
+    a `(ceil(W/16), ceil(H/16), B)` grid; the mask warps instead map one
+    thread per whole u32 OUTPUT word in the flat byte space (4 bytes
+    decoded independently, one store, no atomics; allocations are
+    16-byte rounded so the trailing partial word stays in bounds).
+  - Non-wrap bilinear/nearest coordinates are pre-clamped to a window
+    that preserves the all-taps-padding result — float->int conversion
+    of an unbounded projected uv is UB that the CUDA kernels only avoid
+    by accident of the `valid` guard.
+  - One `bytes_to_float` entry (elem_kind + scale + offset) covers all
+    four raw converters.
+  - Parity: `warp_parity` (170K floats, one tight channel — everything
+    here is deterministic per-pixel math; <= 0.0012% violations, isolated
+    proj_nav valid-flip / nearest-rounding boundary pixels) and
+    `engine_train_parity`, the end-to-end training check: it drives the
+    REAL fused train-step entrypoints — 4x engine_train_step (pinhole,
+    u8 rgb + u16 depth + u8 normal + u8 mask GT through the raw
+    converters, multi-scale loss + SSIM + loss map + Adam) then 2x2
+    engine_train_step_warped (fisheye + equirectangular inputs split to
+    K=2 pinhole faces through the fused warps) — and compares the
+    engine's post-warp GT buffers (tight, zero violations), the per-step
+    loss maps and the splat parameters after all 8 optimizer steps
+    (loose, <= 0.05% — isolated Adam sign-flips on near-zero atomically
+    accumulated gradients). All three devices pass; validation clean.
+  - Test-authoring gotcha: EngineDensify's step gate evaluates
+    `step % refine_every` whenever `step > refine_start_iter`, so
+    "densify disabled" configs must keep refine_every nonzero (a zero
+    default SIGFPEs) — disable via a large refine_start_iter.
 - **Training stubs**: `kernels/TrainingStubs.gen.cpp` (generated by
   `spirulae_splat/generate_vulkan_stubs.py` from a link probe of
   csrc_portable vs the backend lib) + `TrainingStubsManual.cpp`
