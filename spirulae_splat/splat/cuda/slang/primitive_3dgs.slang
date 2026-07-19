@@ -73,6 +73,7 @@ bool persp_proj_3dgs<let assume_valid : bool>(
     out float2 mean2d
 ) {
     float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
+    cov2d = float2x2(0.0f);
 
     bool valid = persp_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
     if (!assume_valid && !valid)
@@ -170,6 +171,7 @@ bool fisheye_proj_3dgs<let assume_valid : bool>(
     out float2x2 cov2d,
     out float2 mean2d
 ) {
+    cov2d = float2x2(0.0f);
     bool valid = fisheye_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
     if (!assume_valid && !valid)
         return false;
@@ -191,6 +193,7 @@ bool equisolid_proj_3dgs<let assume_valid : bool>(
     out float2x2 cov2d,
     out float2 mean2d
 ) {
+    cov2d = float2x2(0.0f);
     bool valid = equisolid_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
     if (!assume_valid && !valid)
         return false;
@@ -417,6 +420,14 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
 void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, let eval3d: bool>(
     _projection_3dgs_ARGS
 ) {
+    // Culled early returns leave every output at this "invalid" state
+    // (aabb_xyxy == 0 is the marker consumers test).
+    aabb_xyxy = float4(0.0f);
+    sorting_depth = 0.0f;
+    radius = 0.0f;
+    mean2d = float2(0.0f);
+    conic = float3(0.0f);
+    opacity = 0.0f;
 
     // transform Gaussian center to camera space
     float3 mean_c;
@@ -430,7 +441,7 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
     }
 
     float4 intrins = { fx, fy, cx, cy };
-    float2x2 covar2d;
+    float2x2 covar2d = float2x2(0.0f);
     opacity = 1.0 / (1.0 + exp(-in_opacity));
 
     bool is_valid = true;

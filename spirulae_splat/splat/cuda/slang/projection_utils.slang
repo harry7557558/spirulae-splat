@@ -724,6 +724,7 @@ bool undistort_point(
     out float2 uv_undist
 ) {
     CameraModelType model = (CameraModelType)camera_model;
+    uv_undist = float2(0.0f);
 
     // Equirectangular: uv already holds (lon, lat), no distortion to invert.
     // The "undistorted" normalized coord is the perspective projection of the ray.
@@ -733,8 +734,10 @@ bool undistort_point(
         return true;
     }
 
-    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv))
+    float2 uv_u;
+    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv_u))
         return false;
+    uv = uv_u;
 
     float3 raydir;
     if (model == CameraModelType::FISHEYE) {
@@ -775,8 +778,10 @@ bool unproject_point(
         return true;
     }
 
-    if (!undistort_point(uv, dist_coeffs, 8, uv))
+    float2 uv_u;
+    if (!undistort_point(uv, dist_coeffs, 8, uv_u))
         return false;
+    uv = uv_u;
 
     if (model == CameraModelType::FISHEYE) {
         float r = length(uv);
@@ -819,10 +824,12 @@ bool generate_ray(
         return true;
     }
 
-    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv)) {
+    float2 uv_u;
+    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv_u)) {
         raydir = float3(0);
         return false;
     }
+    uv = uv_u;
 
     if (model == CameraModelType::FISHEYE) {
         float r = length(uv);

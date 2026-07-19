@@ -3,9 +3,11 @@
 #include "../api/BackendRuntime.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 namespace backend {
@@ -303,7 +305,20 @@ void Context::init() {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
     fatomic.shaderBufferFloat32AtomicAdd = VK_TRUE;
 
+    // SSPLAT_VK_NATIVE_ATOMICS=0 forces the CAS-loop shader variants on a
+    // native-capable device (A/B timing, exercising the fallback blobs).
+    if (const char* env = std::getenv("SSPLAT_VK_NATIVE_ATOMICS");
+        env && env[0] == '0')
+        _caps.float32_atomic_add = false;
+
     std::vector<const char*> extensions;
+    // Shader blobs carry NonSemantic debug info (build_spirv.py -g2, for
+    // profiler source correlation); a 1.2 device must enable this extension
+    // for SPV_KHR_non_semantic_info to be legal (core in 1.3). Universally
+    // present on current drivers; stripped-debug fallback not needed.
+    if (has_extension(_physical,
+                      VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME))
+        extensions.push_back(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME);
     if (_caps.float32_atomic_add &&
         has_extension(_physical, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME)) {
         extensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
@@ -381,6 +396,13 @@ void Context::init() {
         return;
     }
 
+    // Poll-based waits by default on real GPUs; SSPLAT_VK_POLL_WAIT=0/1
+    // forces either mode (mainly for A/B timing).
+    _poll_waits =
+        probe.props.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU;
+    if (const char* env = std::getenv("SSPLAT_VK_POLL_WAIT"); env && env[0])
+        _poll_waits = env[0] != '0';
+
     g_context_device.store(best);
     g_context_created.store(true);
 
@@ -432,6 +454,27 @@ uint64_t Context::submit(VkCommandBuffer cb) {
 
 bool Context::wait(uint64_t value) {
     if (value == 0) return true;
+    // Poll the counter first (the timeline analog of vkGetFenceStatus,
+    // measurably cheaper than the blocking vkWaitSemaphores path on desktop
+    // drivers). The spin is bounded so a stuck device (device fault) ends up
+    // parked in the blocking wait instead of burning a core; CPU devices
+    // (llvmpipe) skip it entirely — the spinning host thread would compete
+    // with the driver's own worker threads.
+    if (_poll_waits) {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(100);
+        do {
+            uint64_t current = 0;
+            VkResult r =
+                vkGetSemaphoreCounterValue(_device, _timeline, &current);
+            if (r != VK_SUCCESS) {
+                set_error("vkGetSemaphoreCounterValue failed", r);
+                return false;
+            }
+            if (current >= value) return true;
+            std::this_thread::yield();
+        } while (std::chrono::steady_clock::now() < deadline);
+    }
     VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
     wi.semaphoreCount = 1;
     wi.pSemaphores = &_timeline;

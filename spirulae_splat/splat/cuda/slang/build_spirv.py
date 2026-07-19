@@ -8,7 +8,12 @@ slangc (or downloads the pinned release) and passes it via --slangc.
 
 Entry points are discovered by scanning for [shader("compute")] markers and
 line-initial DEF_*(name, ...) macro instantiations. Each entry compiles to
-its own <stem>.<entry>.spv. A checksum cache (<out-dir>/checksums.json)
+its own <stem>.<entry>.spv. Entries whose include closure calls
+atomic_add_f32 (see vulkan/atomic_float.slang) additionally compile a
+<stem>.<entry>.atomicadd.spv variant with -DSSPLAT_NATIVE_F32_ATOMIC_ADD
+(native OpAtomicFAddEXT instead of the CAS-loop emulation); the pipeline
+layer (VulkanPipelines.cpp) picks that blob on devices with
+shaderBufferFloat32AtomicAdd. A checksum cache (<out-dir>/checksums.json)
 keyed per entry over the source, its transitive #include closure, the
 compile arguments, and this script skips up-to-date blobs.
 
@@ -33,9 +38,17 @@ COMPILE_ARGS = [
     "-target", "spirv",
     "-stage", "compute",
     "-O2",
-    "-ignore-capabilities",
-    "-line-directive-mode", "none",
+    # "-ignore-capabilities",
+    # "-line-directive-mode", "none",
+    "-g2",
 ]
+
+# Native float-atomic variant (must match kNativeF32AtomicSuffix in
+# csrc/backend/vulkan/VulkanPipelines.cpp).
+ATOMIC_HEADER = os.path.normpath(os.path.join(SRC_DIR, "atomic_float.slang"))
+ATOMIC_SUFFIX = ".atomicadd"
+ATOMIC_DEFINE = "-DSSPLAT_NATIVE_F32_ATOMIC_ADD"
+ATOMIC_CALL_RE = re.compile(r'\batomic_add_f32\s*\(')
 
 ENTRY_RE = re.compile(
     r'\[shader\("compute"\)\]\s*(?:(?:\[[^\]]*\]|//[^\n]*)\s*)*void\s+(\w+)\s*\(')
@@ -87,6 +100,16 @@ def entry_checksum(source, entry, args):
     return h.hexdigest()
 
 
+def uses_float_atomic_add(source):
+    """True when the entry's include closure calls atomic_add_f32 (the
+    definition in atomic_float.slang itself does not count)."""
+    closure = include_closure(source)
+    if ATOMIC_HEADER not in (os.path.normpath(p) for p in closure):
+        return False
+    return any(ATOMIC_CALL_RE.search(open(dep).read())
+               for dep in closure if os.path.normpath(dep) != ATOMIC_HEADER)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", required=True)
@@ -109,29 +132,43 @@ def main():
         except (json.JSONDecodeError, OSError):
             cache = {}
 
+    sources = [os.path.join(SRC_DIR, f) for f in sorted(os.listdir(SRC_DIR))
+               if f.endswith(".slang")]
+    # Files pulled in as headers by another source; entry-less .slang files
+    # are only suspicious when nothing includes them.
+    included = set()
+    for source in sources:
+        included.update(os.path.normpath(p) for p in include_closure(source)
+                        if os.path.normpath(p) != os.path.normpath(source))
+
     jobs = []
-    for fname in sorted(os.listdir(SRC_DIR)):
-        if not fname.endswith(".slang"):
-            continue
-        source = os.path.join(SRC_DIR, fname)
+    expected = set()  # every (stem, entry, variant) key live in the sources
+    for source in sources:
+        fname = os.path.basename(source)
         stem = fname[:-len(".slang")]
         entries = find_entries(source)
-        if not entries:
+        if not entries and os.path.normpath(source) not in included:
             print(f"warning: no compute entry points in {source}")
+        variants = [("", [])]
+        if uses_float_atomic_add(source):
+            variants.append((ATOMIC_SUFFIX, [ATOMIC_DEFINE]))
         for entry in entries:
-            out = os.path.join(out_dir, f"{stem}.{entry}.spv")
-            checksum = entry_checksum(source, entry, COMPILE_ARGS)
-            if cache.get(f"{stem}.{entry}") == checksum and \
-                    os.path.exists(out):
-                print(f"  up-to-date: {out}")
-                continue
-            jobs.append((source, entry, out, f"{stem}.{entry}", checksum))
+            for suffix, extra_args in variants:
+                key = f"{stem}.{entry}{suffix}"
+                expected.add(key)
+                out = os.path.join(out_dir, key + ".spv")
+                args = COMPILE_ARGS + extra_args
+                checksum = entry_checksum(source, entry, args)
+                if cache.get(key) == checksum and os.path.exists(out):
+                    print(f"  up-to-date: {out}")
+                    continue
+                jobs.append((source, entry, out, key, checksum, args))
 
     def compile_one(job):
-        source, entry, out, key, checksum = job
+        source, entry, out, key, checksum, args = job
         cmd = [slangc, source, "-entry", entry, "-o", out]
         cmd += [f"-I{d}" for d in INCLUDE_DIRS]
-        cmd += COMPILE_ARGS
+        cmd += args
         proc = subprocess.run(cmd, capture_output=True, text=True)
         return key, checksum, out, proc
 
@@ -149,9 +186,9 @@ def main():
                 print(f"  built: {out}")
                 cache[key] = checksum
 
-    # Drop stale blobs whose entry no longer exists.
-    live = {f"{s}.{e}.spv" for s, e, o, k, c in jobs} | {
-        k + ".spv" for k in cache}
+    # Drop cache entries and blobs whose entry (or variant) no longer exists.
+    cache = {k: v for k, v in cache.items() if k in expected}
+    live = {k + ".spv" for k in expected}
     for f in os.listdir(out_dir):
         if f.endswith(".spv") and f not in live:
             os.remove(os.path.join(out_dir, f))

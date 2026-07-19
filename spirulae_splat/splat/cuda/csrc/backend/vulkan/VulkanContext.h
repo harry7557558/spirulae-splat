@@ -56,7 +56,9 @@ public:
     uint64_t submit(VkCommandBuffer cb);
 
     // Blocks until the queue timeline reaches `value`. Returns false on
-    // device loss / wait failure (sticky error set).
+    // device loss / wait failure (sticky error set). On GPU devices this
+    // spin-polls vkGetSemaphoreCounterValue briefly before falling back to
+    // the (slower) blocking vkWaitSemaphores.
     bool wait(uint64_t value);
 
     // Last value handed out by submit(). wait(last_submitted()) is a full
@@ -91,6 +93,7 @@ private:
     uint32_t _queue_family = 0;
     VkSemaphore _timeline = VK_NULL_HANDLE;
     uint64_t _last_value = 0;
+    bool _poll_waits = false;
     std::mutex _submit_mutex;
     Capabilities _caps;
     std::string _device_name;

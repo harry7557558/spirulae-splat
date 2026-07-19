@@ -188,11 +188,12 @@ float3 generate_ray_d2n(
     const bool is_ray_depth
 ) {
     float2 uv = (pix_pos - intrins.zw) / intrins.xy;
-    if (!undistort_point(uv, dist_coeffs, 12, uv)) {
+    float2 uv_u;
+    if (!undistort_point(uv, dist_coeffs, 12, uv_u)) {
         return float3(0);
     }
 
-    return unproject_raydir(uv, camera_model, is_ray_depth);
+    return unproject_raydir(uv_u, camera_model, is_ray_depth);
 }
 
 [CudaDeviceExport]
@@ -206,11 +207,12 @@ float3 depth_to_point(
     const float depth
 ) {
     float2 uv = (pix_pos - intrins.zw) / intrins.xy;
-    if (!no_diff undistort_point(uv, dist_coeffs, 12, uv)) {
+    float2 uv_u;
+    if (!no_diff undistort_point(uv, dist_coeffs, 12, uv_u)) {
         return float3(0.0f);
     }
 
-    return depth * unproject_raydir(uv, camera_model, is_ray_depth);
+    return depth * unproject_raydir(uv_u, camera_model, is_ray_depth);
 }
 
 [CudaDeviceExport]
@@ -288,11 +290,12 @@ float3 depth_to_normal(
         );
 
         float2 uv = (pix_pos - intrins.zw) / intrins.xy;
-        if (!no_diff undistort_point(uv, dist_coeffs, 12, uv)) {
+        float2 uv_u;
+        if (!no_diff undistort_point(uv, dist_coeffs, 12, uv_u)) {
             return float3(0.0f);
         }
 
-        points[i] = depths[i] * unproject_raydir(uv, camera_model, is_ray_depth);
+        points[i] = depths[i] * unproject_raydir(uv_u, camera_model, is_ray_depth);
     }
 
     float3 dx = points[1] - points[0];
@@ -337,11 +340,12 @@ float ray_depth_to_linear_depth_factor(
 
     float2 uv = (pix_center - intrins.zw) / intrins.xy;
 
-    if (!no_diff undistort_point(uv, dist_coeffs, 12, uv))
+    float2 uv_u;
+    if (!no_diff undistort_point(uv, dist_coeffs, 12, uv_u))
         return 0.0f;
 
     // ray scaled to z == 1; factor = linear_depth / ray_depth
-    float3 raydir = unproject_raydir(uv, camera_model, false);
+    float3 raydir = unproject_raydir(uv_u, camera_model, false);
 
     return sign(raydir.z) / length(raydir);
 }
@@ -367,11 +371,12 @@ float depth_normal_loss(
         );
 
         float2 uv = (pix_pos - intrins.zw) / intrins.xy;
-        if (!no_diff undistort_point(uv, dist_coeffs, 12, uv)) {
+        float2 uv_u;
+        if (!no_diff undistort_point(uv, dist_coeffs, 12, uv_u)) {
             return 0.0f;
         }
 
-        raydir = unproject_raydir(uv, camera_model, is_ray_depth);
+        raydir = unproject_raydir(uv_u, camera_model, is_ray_depth);
 
         if (i != 4)
             points[i] = depths[i] * raydir;

@@ -31,9 +31,12 @@ Apple silicon). Optional, probed per device and reflected as pipeline
 variants where needed:
 
 - `VK_EXT_shader_atomic_float` (`shaderBufferFloat32AtomicAdd`) — training
-  backward passes (~1,069 float atomicAdd sites). Absent on MoltenVK and
-  llvmpipe → CAS-loop emulation variant selected AT RUNTIME (unlike
-  VkSplat, where the emulated variants were never built or dispatched).
+  backward passes (~1,069 float atomicAdd sites). Every entry that calls
+  `atomic_add_f32` is compiled twice by `slang/build_spirv.py`: the base
+  blob uses a CAS-loop emulation (MoltenVK, llvmpipe), and a
+  `.atomicadd`-suffixed blob uses native `OpAtomicFAddEXT`; the pipeline
+  layer picks per device at module load (no in-shader branch). Unlike
+  VkSplat, both variants are always built.
   Forward/render path does not need it (only float atomicMax on radii,
   which is integer-monotonic on non-negative floats → emulate with
   u32 atomicMax over the float bit pattern; exact, not a CAS loop).
@@ -87,9 +90,13 @@ dropped for now and noted as a limitation).
   monotonically increasing value. Submission order on the single queue
   serializes streams — a strictly stronger ordering than CUDA streams,
   never weaker.
-- Flush points: `stream_synchronize` / `device_synchronize` (wait timeline
-  — `vkWaitSemaphores`, never fence busy-wait), sync memcpy/memset,
-  `event_record`, staging-ring reclamation.
+- Flush points: `stream_synchronize` / `device_synchronize` (wait timeline),
+  sync memcpy/memset, `event_record`, staging-ring reclamation. Timeline
+  waits on GPU devices spin-poll `vkGetSemaphoreCounterValue` (bounded, then
+  fall back to blocking `vkWaitSemaphores`) — the blocking path measures
+  slower on desktop drivers, the same way `vkGetFenceStatus` polling beats
+  `vkWaitForFences`. CPU devices (llvmpipe) always block
+  (`SSPLAT_VK_POLL_WAIT=0/1` overrides).
 - Barriers: a conservative global `COMPUTE|TRANSFER → COMPUTE|TRANSFER`
   memory barrier after every dispatch/copy inside a batch reproduces CUDA
   stream ordering exactly. Per-resource narrowing is a later optimization,

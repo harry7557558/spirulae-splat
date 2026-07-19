@@ -1081,6 +1081,8 @@ float3 sh_coeffs_to_color(
 }
 
 
+// v_mean/v_R/v_t are inout: with inplace != 0 the vjp accumulates onto the
+// caller's running gradient (inplace == 0 overwrites).
 [ForceInline]
 void _sh_coeffs_to_color_vjp<let inplace: int>(
     const int degree,
@@ -1092,9 +1094,9 @@ void _sh_coeffs_to_color_vjp<let inplace: int>(
     float3 v_colors,
     out float3 v_coeff_dc,
     float3 *v_coeffs,
-    out float3 v_mean,
-    out float3x3 v_R,
-    out float3 v_t
+    inout float3 v_mean,
+    inout float3x3 v_R,
+    inout float3 v_t
 ) {
     float3 viewdir = mean_viewmat_to_unnormalized_viewdir(mean, R, t);
     float3 rgb = sh_coeffs_to_color(degree, viewdir, coeff_dc, coeffs);  // TODO: pre-compute
@@ -1139,6 +1141,9 @@ void sh_coeffs_to_color_vjp(
     out float3x3 v_R,
     out float3 v_t
 ) {
+    v_mean = float3(0.0f);
+    v_R = float3x3(0.0f);
+    v_t = float3(0.0f);
     return _sh_coeffs_to_color_vjp<0>
         (degree, mean, R, t, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t);
 }
@@ -1155,9 +1160,9 @@ void sh_coeffs_to_color_vjp_inplace(
     float3 v_colors,
     out float3 v_coeff_dc,
     float3 *v_coeffs,
-    out float3 v_mean,
-    out float3x3 v_R,
-    out float3 v_t
+    inout float3 v_mean,
+    inout float3x3 v_R,
+    inout float3 v_t
 ) {
     return _sh_coeffs_to_color_vjp<1>
         (degree, mean, R, t, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t);
@@ -1175,15 +1180,16 @@ void sh_coeffs_to_color_vjp_atomic(
     float3 v_colors,
     out float3 v_coeff_dc,
     float3 *v_coeffs,
-    out float3 v_mean,
-    out float3x3 v_R,
-    out float3 v_t
+    inout float3 v_mean,
+    inout float3x3 v_R,
+    inout float3 v_t
 ) {
     return _sh_coeffs_to_color_vjp<2>
         (degree, mean, R, t, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t);
 }
 
 
+// v_mean/v_R/v_t inout: see the float3-coeffs overload above.
 [ForceInline]
 void _sh_coeffs_to_color_vjp<let inplace: int>(
     const int degree,
@@ -1195,9 +1201,9 @@ void _sh_coeffs_to_color_vjp<let inplace: int>(
     float3 v_colors,
     out float3 v_coeff_dc,
     float *v_coeffs,
-    out float3 v_mean,
-    out float3x3 v_R,
-    out float3 v_t
+    inout float3 v_mean,
+    inout float3x3 v_R,
+    inout float3 v_t
 ) {
     float3 viewdir = mean_viewmat_to_unnormalized_viewdir(mean, R, t);
     float3 rgb = sh_coeffs_to_color(degree, viewdir, coeff_dc, coeffs);  // TODO: pre-compute
@@ -1239,6 +1245,9 @@ void sh_coeffs_to_color_vjp(
     out float3x3 v_R,
     out float3 v_t
 ) {
+    v_mean = float3(0.0f);
+    v_R = float3x3(0.0f);
+    v_t = float3(0.0f);
     return _sh_coeffs_to_color_vjp<0>
         (degree, mean, R, t, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t);
 }
@@ -1255,9 +1264,9 @@ void sh_coeffs_to_color_vjp_inplace(
     float3 v_colors,
     out float3 v_coeff_dc,
     float *v_coeffs,
-    out float3 v_mean,
-    out float3x3 v_R,
-    out float3 v_t
+    inout float3 v_mean,
+    inout float3x3 v_R,
+    inout float3 v_t
 ) {
     return _sh_coeffs_to_color_vjp<1>
         (degree, mean, R, t, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t);
@@ -1275,9 +1284,9 @@ void sh_coeffs_to_color_vjp_atomic(
     float3 v_colors,
     out float3 v_coeff_dc,
     float *v_coeffs,
-    out float3 v_mean,
-    out float3x3 v_R,
-    out float3 v_t
+    inout float3 v_mean,
+    inout float3x3 v_R,
+    inout float3 v_t
 ) {
     return _sh_coeffs_to_color_vjp<2>
         (degree, mean, R, t, coeff_dc, coeffs, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t);
@@ -2241,7 +2250,7 @@ void _sh_coeffs_to_color_vjp_q8<let inplace: int>(
     float3 v_colors,
     out float3 v_coeff_dc,
     float3* v_coeffs,
-    out float3 v_mean, out float3x3 v_R, out float3 v_t
+    inout float3 v_mean, inout float3x3 v_R, inout float3 v_t
 ) {
     float3 viewdir = mean_viewmat_to_unnormalized_viewdir(mean, R, t);
     float3 rgb = sh_coeffs_to_color_q8(degree, viewdir, coeff_dc, packed, bounds, base, bounds_stride);
@@ -2277,7 +2286,7 @@ void _sh_coeffs_to_color_vjp_q16<let inplace: int>(
     float3 v_colors,
     out float3 v_coeff_dc,
     float3* v_coeffs,
-    out float3 v_mean, out float3x3 v_R, out float3 v_t
+    inout float3 v_mean, inout float3x3 v_R, inout float3 v_t
 ) {
     float3 viewdir = mean_viewmat_to_unnormalized_viewdir(mean, R, t);
     float3 rgb = sh_coeffs_to_color_q16(degree, viewdir, coeff_dc, packed, bounds, base, bounds_stride);
@@ -2314,7 +2323,10 @@ void sh_coeffs_to_color_vjp_q8(
     float3 v_colors,
     out float3 v_coeff_dc, float3* v_coeffs,
     out float3 v_mean, out float3x3 v_R, out float3 v_t
-) { _sh_coeffs_to_color_vjp_q8<0>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
+) {
+    v_mean = float3(0.0f); v_R = float3x3(0.0f); v_t = float3(0.0f);
+    _sh_coeffs_to_color_vjp_q8<0>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t);
+}
 
 [ForceInline]
 void sh_coeffs_to_color_vjp_inplace_q8(
@@ -2324,7 +2336,7 @@ void sh_coeffs_to_color_vjp_inplace_q8(
     uint8_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
     float3 v_colors,
     out float3 v_coeff_dc, float3* v_coeffs,
-    out float3 v_mean, out float3x3 v_R, out float3 v_t
+    inout float3 v_mean, inout float3x3 v_R, inout float3 v_t
 ) { _sh_coeffs_to_color_vjp_q8<1>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
 
 [ForceInline]
@@ -2335,7 +2347,7 @@ void sh_coeffs_to_color_vjp_atomic_q8(
     uint8_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
     float3 v_colors,
     out float3 v_coeff_dc, float3* v_coeffs,
-    out float3 v_mean, out float3x3 v_R, out float3 v_t
+    inout float3 v_mean, inout float3x3 v_R, inout float3 v_t
 ) { _sh_coeffs_to_color_vjp_q8<2>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
 
 
@@ -2349,7 +2361,10 @@ void sh_coeffs_to_color_vjp_q16(
     float3 v_colors,
     out float3 v_coeff_dc, float3* v_coeffs,
     out float3 v_mean, out float3x3 v_R, out float3 v_t
-) { _sh_coeffs_to_color_vjp_q16<0>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
+) {
+    v_mean = float3(0.0f); v_R = float3x3(0.0f); v_t = float3(0.0f);
+    _sh_coeffs_to_color_vjp_q16<0>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t);
+}
 
 [ForceInline]
 void sh_coeffs_to_color_vjp_inplace_q16(
@@ -2359,7 +2374,7 @@ void sh_coeffs_to_color_vjp_inplace_q16(
     uint16_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
     float3 v_colors,
     out float3 v_coeff_dc, float3* v_coeffs,
-    out float3 v_mean, out float3x3 v_R, out float3 v_t
+    inout float3 v_mean, inout float3x3 v_R, inout float3 v_t
 ) { _sh_coeffs_to_color_vjp_q16<1>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
 
 [ForceInline]
@@ -2370,7 +2385,7 @@ void sh_coeffs_to_color_vjp_atomic_q16(
     uint16_t* packed, float2* bounds, int64_t base, int64_t bounds_stride,
     float3 v_colors,
     out float3 v_coeff_dc, float3* v_coeffs,
-    out float3 v_mean, out float3x3 v_R, out float3 v_t
+    inout float3 v_mean, inout float3x3 v_R, inout float3 v_t
 ) { _sh_coeffs_to_color_vjp_q16<2>(degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); }
 
 
@@ -2385,10 +2400,10 @@ void sh_coeffs_to_color_vjp_atomic_q16(
     float3 sh##sh_degree##_to_color_q##qbits(float3 mean, float3x3 R, float3 t, float3 coeff_dc, dtype* packed, float2* bounds, int64_t base, int64_t bounds_stride) \
         { return sh_coeffs_to_color_q##qbits(sh_degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride); } \
     [CudaDeviceExport] \
-    void sh##sh_degree##_to_color_q##qbits##_vjp_inplace(float3 mean, float3x3 R, float3 t, float3 coeff_dc, dtype* packed, float2* bounds, int64_t base, int64_t bounds_stride, float3 v_colors, out float3 v_coeff_dc, float3 *v_coeffs, out float3 v_mean, out float3x3 v_R, out float3 v_t) \
+    void sh##sh_degree##_to_color_q##qbits##_vjp_inplace(float3 mean, float3x3 R, float3 t, float3 coeff_dc, dtype* packed, float2* bounds, int64_t base, int64_t bounds_stride, float3 v_colors, out float3 v_coeff_dc, float3 *v_coeffs, inout float3 v_mean, inout float3x3 v_R, inout float3 v_t) \
         { sh_coeffs_to_color_vjp_inplace_q##qbits(sh_degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); } \
     [CudaDeviceExport] \
-    void sh##sh_degree##_to_color_q##qbits##_vjp_atomic(float3 mean, float3x3 R, float3 t, float3 coeff_dc, dtype* packed, float2* bounds, int64_t base, int64_t bounds_stride, float3 v_colors, out float3 v_coeff_dc, float3 *v_coeffs, out float3 v_mean, out float3x3 v_R, out float3 v_t) \
+    void sh##sh_degree##_to_color_q##qbits##_vjp_atomic(float3 mean, float3x3 R, float3 t, float3 coeff_dc, dtype* packed, float2* bounds, int64_t base, int64_t bounds_stride, float3 v_colors, out float3 v_coeff_dc, float3 *v_coeffs, inout float3 v_mean, inout float3x3 v_R, inout float3 v_t) \
         { sh_coeffs_to_color_vjp_atomic_q##qbits(sh_degree, mean, R, t, coeff_dc, packed, bounds, base, bounds_stride, v_colors, v_coeff_dc, v_coeffs, v_mean, v_R, v_t); } \
 
 _DECL_Q(0,  8, uint8_t)  _DECL_Q(1,  8, uint8_t)  _DECL_Q(2,  8, uint8_t)  _DECL_Q(3,  8, uint8_t)  _DECL_Q(4,  8, uint8_t)

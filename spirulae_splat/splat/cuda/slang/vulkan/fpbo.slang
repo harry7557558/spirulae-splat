@@ -263,11 +263,13 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float ibc2 = 1.0f / (1.0f - pow(kFpboBeta2, step));
 
     // Hoisted quantized-state registers + per-thread (u, log_s) bounds.
-    float nq_g1_scale[3], nq_g2_scale[3];
-    float nq_g1_quat[4], nq_g2_quat[4];
-    float nq_g1_opac[1], nq_g2_opac[1];
-    float nq_g1_mean[3], nq_g2_mean[3];
-    float nq_g1_dc[3], nq_g2_dc[3];
+    // Zero-init: assigned under `inside` in the per-attribute update blocks
+    // and consumed under the same guard by oq_state_encode below.
+    float nq_g1_scale[3] = {}, nq_g2_scale[3] = {};
+    float nq_g1_quat[4] = {}, nq_g2_quat[4] = {};
+    float nq_g1_opac[1] = {}, nq_g2_opac[1] = {};
+    float nq_g1_mean[3] = {}, nq_g2_mean[3] = {};
+    float nq_g1_dc[3] = {}, nq_g2_dc[3] = {};
     float4 nq_mm_scale = float4(1e30f, -1e30f, 1e30f, -1e30f);
     float4 nq_mm_quat = float4(1e30f, -1e30f, 1e30f, -1e30f);
     float4 nq_mm_opac = float4(1e30f, -1e30f, 1e30f, -1e30f);
@@ -584,9 +586,11 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
             inside ? p.sh_value_bounds[block_id] : float2(0.0f, 0.0f);
         float2 sh_value_new_mm = float2(1e30f, -1e30f);
 
-        float3 sh_updated_vals[24];
-        float3 g1_sh_vals[24];
-        float3 g2_sh_vals[24];
+        // Zero-init: filled under `inside` and re-read below under the same
+        // guard for the value-quant writeback.
+        float3 sh_updated_vals[24] = {};
+        float3 g1_sh_vals[24] = {};
+        float3 g2_sh_vals[24] = {};
 
         if (inside) {
             for (int j = 0; j < num_sh; ++j) {

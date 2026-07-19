@@ -1,9 +1,16 @@
 // Portable float atomic add (Vulkan backend). VK_EXT_shader_atomic_float is
-// not baseline (and absent under MoltenVK), so atomic float adds run as a
-// compare-exchange loop over the value's u32 bit image — same
+// not baseline (and absent under MoltenVK), so the default atomic_add_f32 is
+// a compare-exchange loop over the value's u32 bit image — same
 // nondeterministic accumulation order as CUDA atomicAdd, so parity stays
 // tolerance-based wherever this is used. The loop's exit is a successful
 // CAS (well-defined; not a UB-terminated loop — see README loop rules).
+//
+// Under -DSSPLAT_NATIVE_F32_ATOMIC_ADD the emulation is replaced by the
+// native OpAtomicFAddEXT (SPV_EXT_shader_atomic_float_add): build_spirv.py
+// compiles every entry whose include closure reaches this file a second
+// time with the define, and the pipeline layer picks the native blob when
+// the device enabled shaderBufferFloat32AtomicAdd — so the choice is made
+// at pipeline creation, never as a runtime branch in the shader.
 
 // Float atomic max mirroring Common.cuh's atomicMax(float*, float): signed
 // int max for non-negative v, unsigned min for negative v (IEEE order in
@@ -19,6 +26,16 @@ void atomic_max_f32(float* addr, float v) {
     }
 }
 
+#ifdef SSPLAT_NATIVE_F32_ATOMIC_ADD
+
+[ForceInline]
+void atomic_add_f32(float* addr, float v) {
+    if (v == 0.0f) return;
+    InterlockedAdd(addr[0], v);
+}
+
+#else
+
 [ForceInline]
 void atomic_add_f32(float* addr, float v) {
     if (v == 0.0f) return;
@@ -32,3 +49,5 @@ void atomic_add_f32(float* addr, float v) {
         expected = prev;
     }
 }
+
+#endif

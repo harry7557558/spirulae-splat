@@ -31,10 +31,20 @@ const SpirvBlob* find_blob(const char* name) {
     return nullptr;
 }
 
+// Entries that use atomic_add_f32 also embed a native-OpAtomicFAddEXT
+// variant under this suffix (see slang/build_spirv.py); devices with
+// shaderBufferFloat32AtomicAdd load it instead of the CAS-loop blob. The
+// choice is per-device-fixed, so caching modules under the base name stays
+// correct.
+constexpr const char* kNativeF32AtomicSuffix = ".atomicadd";
+
 VkShaderModule get_module(const std::string& name) {
     auto it = g_modules.find(name);
     if (it != g_modules.end()) return it->second;
-    const SpirvBlob* blob = find_blob(name.c_str());
+    const SpirvBlob* blob = nullptr;
+    if (Context::get().caps().float32_atomic_add)
+        blob = find_blob((name + kNativeF32AtomicSuffix).c_str());
+    if (!blob) blob = find_blob(name.c_str());
     if (!blob) {
         set_error("no embedded SPIR-V blob with this entry name (rerun "
                   "slang/build_spirv.py?)", VK_SUCCESS);
