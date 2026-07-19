@@ -1110,7 +1110,7 @@ void GuiApp::draw_train_settings() {
                               cur >= 0 ? curd.name : "(no device found)")) {
             for (int i = 0; i < n_dev; i++) {
                 backend::DeviceInfo d = backend::device_info(i);
-                char label[300];
+                char label[324];
                 std::snprintf(label, sizeof(label), "%s (%s, %llu MB)%s##d%d",
                               d.name, d.type,
                               (unsigned long long)(d.vram_bytes >> 20),
@@ -1343,7 +1343,7 @@ void GuiApp::draw_metrics() {
     }
     const auto& last = pts.back();
     char overlay[64];
-    std::snprintf(overlay, sizeof overlay, "PSNR %.2f", last.psnr);
+    std::snprintf(overlay, sizeof overlay, "\n\n\nPSNR %.2f", last.psnr);
     ImGui::PlotLines("##psnr", psnr.data(), (int)psnr.size(), 0, overlay,
                      FLT_MAX, FLT_MAX, ImVec2(-8, 64));
     ImGui::Text("splats: %s   ssim: %.3f   loss: %.4f",

@@ -22,6 +22,8 @@
 #include <stdexcept>
 #include <string>
 
+struct CUstream_st;
+
 namespace backend {
 
 enum class MemcpyKind {

@@ -534,6 +534,9 @@ if(SSPLAT_BUILD_CLI)
         ${CUDAToolkit_INCLUDE_DIRS}
     )
     target_link_libraries(ssplat-train PRIVATE ${SSPLAT_APP_LIBS})
+    if (WIN32)
+        target_link_libraries(ssplat-train PRIVATE ws2_32)
+    endif()
     if(SSPLAT_WITH_TORCH)
         # libpython is only needed because csrc's pybind/libtorch_python layer
         # leaves CPython symbols undefined (a Python process normally provides

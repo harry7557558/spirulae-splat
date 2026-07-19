@@ -843,6 +843,8 @@ struct TensorView {
     long shape[ndim];
     long strides[ndim];
 
+#ifdef __CUDACC__
+
     using vec2_t =
         typename std::conditional<std::is_same<T, float>::value, float2,
         typename std::conditional<std::is_same<T, int>::value, int2,
@@ -952,6 +954,8 @@ struct TensorView {
         { static_assert(ndim == 3); at(i0, i1, 0) = v.x; at(i0, i1, 1) = v.y; at(i0, i1, 2) = v.z; at(i0, i1, 3) = v.w; }
     __device__ void store4(long i0, long i1, long i2, vec4_t v)
         { static_assert(ndim == 4); at(i0, i1, i2, 0) = v.x; at(i0, i1, i2, 1) = v.y; at(i0, i1, i2, 2) = v.z; at(i0, i1, i2, 3) = v.w; }
+
+#endif  // #ifdef __CUDACC__
 
 };
 
