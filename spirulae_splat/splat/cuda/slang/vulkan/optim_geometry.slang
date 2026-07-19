@@ -139,6 +139,9 @@ void fused_optim_3dgs_geometry(uint3 wg: SV_GroupID,
     uint block_id = wg.y * p.wgs_per_row + wg.x;
     uint gid = block_id * 256 + tid;
     bool inside = gid < p.numel;
+    // Grid-fold tail: block_id can pad past the last quant block, so bounds
+    // writes below are blk_ok-gated (optimizer.slang convention).
+    bool blk_ok = block_id < (p.numel + 255u) / 256u;
 
     // Hoisted quantized-state registers + per-thread (u, log_s) bounds.
     float nq_g1_scale[3], nq_g2_scale[3];
@@ -442,15 +445,15 @@ void fused_optim_3dgs_geometry(uint3 wg: SV_GroupID,
     // outside-threads pass sentinels.
     if (kNonShQuant != 0) {
         nq_mm_scale = oq_block_reduce_mm4(nq_mm_scale, tid);
-        if (tid == 0) p.nq_scales_bounds[block_id] = nq_mm_scale;
+        if (tid == 0 && blk_ok) p.nq_scales_bounds[block_id] = nq_mm_scale;
         nq_mm_quat = oq_block_reduce_mm4(nq_mm_quat, tid);
-        if (tid == 0) p.nq_quats_bounds[block_id] = nq_mm_quat;
+        if (tid == 0 && blk_ok) p.nq_quats_bounds[block_id] = nq_mm_quat;
         nq_mm_opac = oq_block_reduce_mm4(nq_mm_opac, tid);
-        if (tid == 0) p.nq_opacities_bounds[block_id] = nq_mm_opac;
+        if (tid == 0 && blk_ok) p.nq_opacities_bounds[block_id] = nq_mm_opac;
         nq_mm_mean = oq_block_reduce_mm4(nq_mm_mean, tid);
-        if (tid == 0) p.nq_means_bounds[block_id] = nq_mm_mean;
+        if (tid == 0 && blk_ok) p.nq_means_bounds[block_id] = nq_mm_mean;
         nq_mm_dc = oq_block_reduce_mm4(nq_mm_dc, tid);
-        if (tid == 0) p.nq_dc_bounds[block_id] = nq_mm_dc;
+        if (tid == 0 && blk_ok) p.nq_dc_bounds[block_id] = nq_mm_dc;
         if (inside) {
             oq_state_encode<3>(p.nq_scales_packed, gid, nq_g1_scale,
                                nq_g2_scale, nq_mm_scale);

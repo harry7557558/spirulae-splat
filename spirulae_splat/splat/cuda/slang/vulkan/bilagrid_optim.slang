@@ -138,6 +138,13 @@ void bilagrid_tv_adam(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     const float beta2 = 0.999f;
 
     uint block_id = wg.y * p.wgs_per_row + wg.x;
+    // Grid-fold tail: the last fold row can pad past the final quant block.
+    // Bounds reads use a clamped block index (in-bounds even if a CPU JIT
+    // speculates them) and writes are blk_ok-gated; barriers still see every
+    // thread. Same convention as optimizer.slang.
+    uint n_blocks = (p.total_cells + 255u) / 256u;
+    bool blk_ok = block_id < n_blocks;
+    uint blk_rd = min(block_id, n_blocks - 1u);
     uint idx = block_id * 256 + tid;
     bool inside = idx < p.total_cells;
 
@@ -150,7 +157,7 @@ void bilagrid_tv_adam(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
     float g1, g2;
     if (kQuantBits != 0) {
-        float4 mm = p.quant_bounds4[block_id];
+        float4 mm = p.quant_bounds4[blk_rd];
         if (inside) {
             float2 g1g2 = kQuantBits == 4
                               ? qadam_decode_g1g2<4>(p.packed, idx, mm)
@@ -184,7 +191,7 @@ void bilagrid_tv_adam(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
             uint2 q = qadam_quantize_us<8>(us.x, us.y, mm);
             qadam_store<8>(p.packed, idx, tid, inside, q);
         }
-        if (tid == 0) p.quant_bounds4[block_id] = mm;
+        if (tid == 0 && blk_ok) p.quant_bounds4[block_id] = mm;
     } else {
         if (inside) {
             p.g1_f[idx] = g1;
@@ -200,6 +207,10 @@ void bilagrid_tv_adagrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     const float eps = 1e-15f;
 
     uint block_id = wg.y * p.wgs_per_row + wg.x;
+    // Grid-fold tail handling: see bilagrid_tv_adam.
+    uint n_blocks = (p.total_cells + 255u) / 256u;
+    bool blk_ok = block_id < n_blocks;
+    uint blk_rd = min(block_id, n_blocks - 1u);
     uint idx = block_id * 256 + tid;
     bool inside = idx < p.total_cells;
 
@@ -208,7 +219,7 @@ void bilagrid_tv_adagrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
     float accum;
     if (kQuantBits != 0) {
-        float2 mm = p.quant_bounds2[block_id];
+        float2 mm = p.quant_bounds2[blk_rd];
         if (inside) {
             accum = kQuantBits == 4 ? qtlog_decode_v<4>(p.packed, idx, mm)
                                     : qtlog_decode_v<8>(p.packed, idx, mm);
@@ -234,7 +245,7 @@ void bilagrid_tv_adagrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
             uint q = inside ? qtlog_quantize_log<8>(log_v, lm) : 0u;
             qtlog_store<8>(p.packed, idx, tid, inside, q);
         }
-        if (tid == 0) p.quant_bounds2[block_id] = lm;
+        if (tid == 0 && blk_ok) p.quant_bounds2[block_id] = lm;
     } else {
         if (inside) p.g1_f[idx] = accum;
     }

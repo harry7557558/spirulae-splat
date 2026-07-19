@@ -146,11 +146,59 @@ template <typename T, size_t N> std::string value_str(const std::array<T, N>& v)
     return s;
 }
 
+// ---- Compute device listing / selection -----------------------------------
+
+// Applies --device (index or case-sensitive name substring) through the
+// backend-neutral device API, then prints the device table VkSplat-style
+// (all visible devices, '*' on the one in use).
+void select_and_print_devices(const std::string& requested) {
+    int n = backend::device_count();
+    if (n == 0) {
+        if (!requested.empty())
+            throw std::runtime_error("--device: no compute devices found");
+        return;  // let the backend report its own error on first use
+    }
+    if (!requested.empty()) {
+        char* end = nullptr;
+        long idx = std::strtol(requested.c_str(), &end, 10);
+        int want = -1;
+        if (end && *end == '\0') {
+            want = (int)idx;
+        } else {
+            for (int i = 0; i < n && want < 0; i++) {
+                backend::DeviceInfo d = backend::device_info(i);
+                if (d.usable &&
+                    std::string(d.name).find(requested) != std::string::npos)
+                    want = i;
+            }
+        }
+        if (want < 0 || !backend::device_select(want))
+            throw std::runtime_error(
+                "--device " + requested +
+                ": no usable device matches (see the device list printed by "
+                "a run without --device)");
+    }
+    int cur = backend::device_current();
+    std::printf("Devices:\n");
+    for (int i = 0; i < n; i++) {
+        backend::DeviceInfo d = backend::device_info(i);
+        std::printf("  %c [%d] %s (%s, %llu MB)%s\n", i == cur ? '*' : ' ',
+                    i, d.name, d.type,
+                    (unsigned long long)(d.vram_bytes >> 20),
+                    d.usable ? "" : "  [missing required features]");
+    }
+    std::fflush(stdout);
+}
+
 void print_help(const char* argv0, const SsplatConfig& c) {
     std::printf("usage: %s [<preset>] --data <dataset_dir> [--flag value ...]\n\n", argv0);
     std::printf("presets (tyro subcommands; default: 3dgs):\n");
     for (const auto& p : kSsplatPresets)
         std::printf("  %-18s %s\n", p.name, p.help);
+    std::printf("\napp flags:\n");
+    std::printf("  --device <index|name substring>\n"
+                "      Compute device to train on (default: auto). The device"
+                " list prints at startup.\n");
     std::printf("\nflags ('-' and '_' interchangeable; bools take 0/1; 'none' clears "
                 "optional values;\n defaults shown for the selected preset):\n");
     const char* cur_group = "";
@@ -244,11 +292,19 @@ int main(int argc, char** argv) {
             throw std::runtime_error("unknown preset '" + preset + "'; expected one of:" + names);
         }
 
+        std::string device_flag;
         for (int i = argi; i < argc; i++) {
             std::string arg = argv[i];
             if (arg == "--help" || arg == "-h") { print_help(argv[0], cfg); return 0; }
             if (arg.rfind("--", 0) != 0)
                 throw std::runtime_error("unexpected argument: " + arg + " (flags are --key value)");
+            // App-level flag, not part of the generated training config.
+            if (arg.rfind("--device=", 0) == 0) { device_flag = arg.substr(9); continue; }
+            if (arg == "--device") {
+                if (i + 1 >= argc) throw std::runtime_error("--device: missing value");
+                device_flag = argv[++i];
+                continue;
+            }
             // --key=value form: re-parse via a 2-token mini-argv. Tuple
             // fields need N separate tokens, so = only supports arity 1.
             std::string key = arg;
@@ -273,6 +329,8 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--" #member " is required");
         SSPLAT_CONFIG_REQUIRED_FIELDS(SSPLAT_CHECK_REQUIRED)
 #undef SSPLAT_CHECK_REQUIRED
+
+        select_and_print_devices(device_flag);
 
         // ---- Session -------------------------------------------------------
         TrainerSession session;

@@ -92,6 +92,7 @@ struct SsplatConfig {
     int refine_every = 100;
     int refine_start_iter = 500;
     int refine_stop_num_iter = 5000;
+    int refine_stop_iter = 25000;
     float noise_lr = 80.0f;
     float noise_lr_final = 0.8f;
     float min_opacity = 0.005f;
@@ -291,6 +292,7 @@ struct SsplatConfig {
     X(refine_every, "refine_every", "refine_every", "model", "", "Densify every this number of steps") \
     X(refine_start_iter, "refine_start_iter", "refine_start_iter", "model", "", "Start densification at this number of steps") \
     X(refine_stop_num_iter, "refine_stop_num_iter", "refine_stop_num_iter", "model", "", "Stop densification at this number of steps before maximum number of training iterations") \
+    X(refine_stop_iter, "refine_stop_iter", "refine_stop_iter", "model", "", "Densification runs until max(this, num_iterations - refine_stop_num_iter). Without this floor, runs shorter than refine_stop_num_iter would never densify at all (num_iterations - refine_stop_num_iter goes negative), which confuses users.") \
     X(noise_lr, "noise_lr", "noise_lr", "model", "", "MCMC-like noise injection magnitude at start of training") \
     X(noise_lr_final, "noise_lr_final", "noise_lr_final", "model", "", "MCMC-like noise injection magnitude at end of training") \
     X(min_opacity, "min_opacity", "min_opacity", "model", "", "Minimum Gaussian opacity before relocation") \

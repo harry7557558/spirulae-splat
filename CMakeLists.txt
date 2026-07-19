@@ -20,19 +20,21 @@ option(SSPLAT_NO_TORCH "Skip Torch/Python even if present; build only ssplat-tra
 # Compute backend selection
 #
 # cuda (default): the full build, exactly as before.
-# vulkan: WORK IN PROGRESS -- no kernel implementations yet. Compiles the
-# portable engine layer (Engine*.cpp + host support) against the backend API
-# (csrc/backend/, see its README.md) with SSPLAT_BACKEND_VULKAN defined and
-# WITHOUT the CUDA toolkit. Produces a compile-check object library only --
-# no executables and no Python extension.
+# vulkan: the portable engine layer (Engine*.cpp + host support) against the
+# Vulkan compute runtime (csrc/backend/vulkan/, see its README.md), built
+# WITHOUT the CUDA toolkit. Produces the backend tests, the ssplat-train CLI
+# (always) and ssplat-gui (with SSPLAT_BUILD_GUI=ON); no Python extension.
 # ---------------------------------------------------------------------------
-set(SSPLAT_BACKEND "cuda" CACHE STRING "Compute backend: cuda | vulkan (vulkan is WIP)")
+set(SSPLAT_BACKEND "cuda" CACHE STRING "Compute backend: cuda | vulkan")
 set_property(CACHE SSPLAT_BACKEND PROPERTY STRINGS cuda vulkan)
 
 if(SSPLAT_BACKEND STREQUAL "vulkan")
-    message(STATUS "SSPLAT_BACKEND=vulkan (work in progress): portable engine "
-        "layer + backend/vulkan runtime; kernel coverage is tracked in "
+    message(STATUS "SSPLAT_BACKEND=vulkan: portable engine layer + "
+        "backend/vulkan runtime; kernel coverage is tracked in "
         "csrc/backend/vulkan/README.md.")
+    # The Python extension is CUDA-only, so the CLI trainer is this build's
+    # primary artifact (same forcing as the CUDA no-torch build).
+    set(SSPLAT_BUILD_CLI ON)
 
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -200,8 +202,11 @@ if(SSPLAT_BACKEND STREQUAL "vulkan")
             ssplat_backend_vulkan Threads::Threads)
     endforeach()
 
-    return()  # the rest of this file is the CUDA build
-endif()
+    # Torch/Python extension is CUDA-only; the app targets below build
+    # against the portable engine + Vulkan backend instead.
+    set(SSPLAT_WITH_TORCH OFF)
+    set(SSPLAT_APP_LIBS csrc_portable ssplat_backend_vulkan Threads::Threads)
+else()
 
 enable_language(CUDA)
 
@@ -456,6 +461,9 @@ endif()
 set_property(TARGET csrc PROPERTY CXX_STANDARD 17)
 set_property(TARGET csrc PROPERTY CUDA_STANDARD 17)
 
+set(SSPLAT_APP_LIBS csrc CUDA::cudart)
+endif()  # SSPLAT_BACKEND (vulkan | cuda core; app targets below are shared)
+
 # ---------------------------------------------------------------------------
 # Standalone CLI trainer -- no Python at runtime; links the csrc shared
 # library for the engine. Off by default (unless Torch is unavailable, which
@@ -480,8 +488,9 @@ endif()
 
 # Cross-backend parity tools (dump reference outputs; the Vulkan build's
 # twin executable compares against them). See csrc/backend/vulkan/README.md.
+# The Vulkan branch builds its comparing twins unconditionally above.
 option(SSPLAT_BUILD_BACKEND_TESTS "Build backend parity test tools" OFF)
-if(SSPLAT_BUILD_BACKEND_TESTS)
+if(SSPLAT_BUILD_BACKEND_TESTS AND NOT SSPLAT_BACKEND STREQUAL "vulkan")
     if(SSPLAT_WITH_TORCH)
         # Same libpython + static-libstdc++ notes as ssplat-train below.
         find_package(Python3 REQUIRED COMPONENTS Development.Embed)
@@ -524,7 +533,7 @@ if(SSPLAT_BUILD_CLI)
         ${CMAKE_BINARY_DIR}
         ${CUDAToolkit_INCLUDE_DIRS}
     )
-    target_link_libraries(ssplat-train PRIVATE csrc CUDA::cudart)
+    target_link_libraries(ssplat-train PRIVATE ${SSPLAT_APP_LIBS})
     if(SSPLAT_WITH_TORCH)
         # libpython is only needed because csrc's pybind/libtorch_python layer
         # leaves CPython symbols undefined (a Python process normally provides
@@ -553,6 +562,9 @@ if(SSPLAT_BUILD_CLI)
     set_property(TARGET ssplat-train PROPERTY CXX_STANDARD 17)
 
     # ---- standalone mesh-extraction CLI (shares the dataset parsers) ----
+    # CUDA-only: the Vulkan backend stubs the meshing kernels
+    # (meshing::OccupancyEvaluator), so the tool would throw at startup.
+    if(NOT SSPLAT_BACKEND STREQUAL "vulkan")
     add_executable(ssplat-mesh
         spirulae_splat/splat/cuda/csrc/app/mesh_main.cpp
         spirulae_splat/splat/cuda/csrc/app/ColmapParser.cpp
@@ -582,6 +594,7 @@ if(SSPLAT_BUILD_CLI)
         set_property(TARGET ssplat-mesh PROPERTY BUILD_RPATH "$ORIGIN")
     endif()
     set_property(TARGET ssplat-mesh PROPERTY CXX_STANDARD 17)
+    endif()  # NOT vulkan (ssplat-mesh)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -673,7 +686,7 @@ if(SSPLAT_BUILD_GUI)
         ${CUDAToolkit_INCLUDE_DIRS}
     )
     target_link_libraries(ssplat-gui PRIVATE
-        csrc CUDA::cudart imgui_glfw OpenGL::GL)
+        ${SSPLAT_APP_LIBS} imgui_glfw OpenGL::GL)
     if(SSPLAT_WITH_TORCH)
         find_package(Python3 REQUIRED COMPONENTS Development.Embed)
         target_link_libraries(ssplat-gui PRIVATE Python3::Python)
@@ -694,4 +707,4 @@ if(SSPLAT_BUILD_GUI)
     set_property(TARGET ssplat-gui PROPERTY CXX_STANDARD 17)
 endif()
 
-message(STATUS "spirulae_splat CUDA extension configured.")
+message(STATUS "spirulae_splat configured (backend: ${SSPLAT_BACKEND}).")

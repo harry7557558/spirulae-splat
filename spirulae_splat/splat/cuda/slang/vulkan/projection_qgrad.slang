@@ -97,7 +97,8 @@ struct ProjectionQgradParams {
 [ForceInline]
 void _qg_nonsh<let PRIMS : int>(bool active, uint* packed, float2* bounds,
                                 uint block_id, uint gid, uint tid,
-                                bool inside, float vals_in[PRIMS]) {
+                                bool inside, bool blk_ok,
+                                float vals_in[PRIMS]) {
     float vals[PRIMS];
     float2 mm_t = float2(1e30f, -1e30f);
     if (active && inside) {
@@ -116,7 +117,7 @@ void _qg_nonsh<let PRIMS : int>(bool active, uint* packed, float2* bounds,
             vals[i] = 0.0f;
     }
     float2 mm = oq_block_reduce_mm2(mm_t, tid);
-    if (active && tid == 0)
+    if (active && tid == 0 && blk_ok)
         bounds[block_id] = mm;
     if (active && inside) {
         [ForceUnroll]
@@ -134,6 +135,9 @@ void projection_qgrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint block_id = wg.y * p.wgs_per_row + wg.x;
     uint gid = block_id * 256 + tid;
     bool inside = gid < p.N;
+    // Grid-fold tail: block_id can pad past the last quant block, so bounds
+    // writes are blk_ok-gated (optimizer.slang convention).
+    bool blk_ok = block_id < (p.N + 255u) / 256u;
 
     int cid_0 = 0, cid_1 = int(p.C);
     if (kPacked != 0) {
@@ -201,19 +205,22 @@ void projection_qgrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     {
         float vm[3] = {g.v_mean.x, g.v_mean.y, g.v_mean.z};
         _qg_nonsh<3>((kGqMask & 1) != 0, p.gq_means_packed,
-                     p.gq_means_bounds, block_id, gid, tid, inside, vm);
+                     p.gq_means_bounds, block_id, gid, tid, inside, blk_ok,
+                     vm);
         float vq[4] = {g.v_quat.x, g.v_quat.y, g.v_quat.z, g.v_quat.w};
         _qg_nonsh<4>((kGqMask & 2) != 0, p.gq_quats_packed,
-                     p.gq_quats_bounds, block_id, gid, tid, inside, vq);
+                     p.gq_quats_bounds, block_id, gid, tid, inside, blk_ok,
+                     vq);
         float vs[3] = {g.v_scale.x, g.v_scale.y, g.v_scale.z};
         _qg_nonsh<3>((kGqMask & 4) != 0, p.gq_scales_packed,
-                     p.gq_scales_bounds, block_id, gid, tid, inside, vs);
+                     p.gq_scales_bounds, block_id, gid, tid, inside, blk_ok,
+                     vs);
         float vo[1] = {g.v_opacity};
         _qg_nonsh<1>((kGqMask & 8) != 0, p.gq_opac_packed, p.gq_opac_bounds,
-                     block_id, gid, tid, inside, vo);
+                     block_id, gid, tid, inside, blk_ok, vo);
         float vd[3] = {g.v_dc.x, g.v_dc.y, g.v_dc.z};
         _qg_nonsh<3>((kGqMask & 16) != 0, p.gq_dc_packed, p.gq_dc_bounds,
-                     block_id, gid, tid, inside, vd);
+                     block_id, gid, tid, inside, blk_ok, vd);
     }
 
     // SH grad (8-bit): two passes over the full 3*K cells so inactive
@@ -237,7 +244,7 @@ void projection_qgrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
             }
         }
         sh_mm = oq_block_reduce_mm2(sh_mm, tid);
-        if (tid == 0)
+        if (tid == 0 && blk_ok)
             p.gq_sh_bounds[block_id] = sh_mm;
         if (inside) {
             for (int c = 0; c < total; ++c) {

@@ -40,6 +40,30 @@ using Stream = void*;
 #endif
 inline constexpr Stream kDefaultStream = nullptr;
 
+// --- device enumeration / selection ---
+// A process runs on ONE device, picked lazily on the first device operation.
+// Enumeration is side-effect-free (it does not initialize the backend), so
+// apps can list devices and call device_select before starting work.
+struct DeviceInfo {
+    char name[256];       // human-readable device name ("" if index invalid)
+    const char* type;     // "discrete"|"integrated"|"virtual"|"cpu"|"other"
+                          // (static storage)
+    uint64_t vram_bytes;  // device-local memory
+    bool usable;          // meets the backend's feature requirements
+};
+// Number of devices visible to the backend (0: none / no driver).
+int device_count();
+// Info for device `index` in [0, device_count()).
+DeviceInfo device_info(int index);
+// Selects the device used by all subsequent backend work. Call before the
+// first device operation. Returns false if `index` is out of range or not
+// usable, or if the backend already initialized on a different device.
+bool device_select(int index);
+// Index of the device in use — or, before the backend initializes, the one
+// it would pick (explicit selection, then backend env override, then
+// auto-score). -1 if no usable device.
+int device_current();
+
 // --- memory ---
 void* device_malloc(size_t bytes);
 // CONTRACT: device_free must ensure all in-flight device work that may

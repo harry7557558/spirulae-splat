@@ -5,7 +5,49 @@
 
 #include <cuda_runtime.h>
 
+#include <cstdio>
+
 namespace backend {
+
+// --- device enumeration / selection ---
+inline int device_count() {
+    int n = 0;
+    if (cudaGetDeviceCount(&n) != cudaSuccess) {
+        cudaGetLastError();
+        return 0;
+    }
+    return n;
+}
+inline DeviceInfo device_info(int index) {
+    DeviceInfo info{};
+    info.type = "other";
+    cudaDeviceProp prop{};
+    if (index < 0 || cudaGetDeviceProperties(&prop, index) != cudaSuccess) {
+        cudaGetLastError();
+        return info;
+    }
+    std::snprintf(info.name, sizeof(info.name), "%s", prop.name);
+    info.type = prop.integrated ? "integrated" : "discrete";
+    info.vram_bytes = (uint64_t)prop.totalGlobalMem;
+    info.usable = true;
+    return info;
+}
+inline bool device_select(int index) {
+    if (index < 0 || index >= device_count()) return false;
+    if (cudaSetDevice(index) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    return true;
+}
+inline int device_current() {
+    int d = -1;
+    if (cudaGetDevice(&d) != cudaSuccess) {
+        cudaGetLastError();
+        return -1;
+    }
+    return d;
+}
 
 inline cudaMemcpyKind _to_cuda(MemcpyKind kind) {
     switch (kind) {

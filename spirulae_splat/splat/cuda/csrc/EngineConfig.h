@@ -172,6 +172,11 @@ struct OptimConfig {
 struct DensifyConfig {
     int   refine_start_iter             = 0;
     int   refine_stop_num_iter          = 0;
+    // Densification runs until max(refine_stop_iter, max_steps -
+    // refine_stop_num_iter). The absolute floor keeps densification active
+    // in runs shorter than refine_stop_num_iter, where the relative rule
+    // alone would disable it entirely.
+    int   refine_stop_iter              = 0;
     int   refine_every                  = 0;
     float growth_factor                 = 1.0f;
     float min_opacity                   = 0.0f;

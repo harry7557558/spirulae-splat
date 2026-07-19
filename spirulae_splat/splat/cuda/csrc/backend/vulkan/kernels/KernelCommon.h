@@ -53,6 +53,9 @@ inline bool debug_sync_enabled() {
 inline void dispatch(const char* entry, const backend::vk::SpecList& spec,
                      uint32_t gx, uint32_t gy, uint32_t gz,
                      const void* params, uint32_t size) {
+    if (debug_sync_enabled())
+        std::fprintf(stderr, "[vk-sync] %s (%u,%u,%u)...\n", entry, gx, gy,
+                     gz);
     if (!backend::vk::dispatch(backend::kDefaultStream, entry, spec, gx, gy,
                                gz, params, size)) {
         const char* detail = backend::last_error();

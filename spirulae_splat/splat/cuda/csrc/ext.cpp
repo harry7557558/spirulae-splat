@@ -385,6 +385,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def(py::init<>())
         .def_readwrite("refine_start_iter",              &DensifyConfig::refine_start_iter)
         .def_readwrite("refine_stop_num_iter",           &DensifyConfig::refine_stop_num_iter)
+        .def_readwrite("refine_stop_iter",               &DensifyConfig::refine_stop_iter)
         .def_readwrite("refine_every",                   &DensifyConfig::refine_every)
         .def_readwrite("growth_factor",                  &DensifyConfig::growth_factor)
         .def_readwrite("min_opacity",                    &DensifyConfig::min_opacity)

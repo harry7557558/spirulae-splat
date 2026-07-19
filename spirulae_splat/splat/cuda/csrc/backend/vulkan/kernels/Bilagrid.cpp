@@ -585,8 +585,11 @@ void launch_family_bwd_v1(
         p.has_grid_indices = (!patched && grid_indices != nullptr) ? 1 : 0;
         vkk::dispatch(e.v1_grid, spec, gx, gy, gz, &p, sizeof(p));
     }
-    // input-grad kernel
-    {
+    // input-grad kernel. null v_in = skip (the engine's depth/normal hooks
+    // discard the GT-side grad; the CUDA launchers guard the same way) --
+    // dispatching anyway would write C*h*w*12 bytes through a null device
+    // address, which faults the device into a wait that never returns.
+    if (v_in != nullptr) {
         int64_t total = patched ? (int64_t)N * m * h * w : (int64_t)N * h * w;
         BgV1RgbParams p{};
         p.fp32 = r.fp32; p.q16 = r.q16; p.vbounds = r.vbounds;

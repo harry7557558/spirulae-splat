@@ -87,7 +87,9 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
     int num_sh_buffer = num_sh;  // buffer stride = engine().num_sh (model max)
 
     bool use_revised = (cfg.use_revised_densification);
-    bool densify_ongoing = (step < max_steps - cfg.refine_stop_num_iter);
+    bool densify_ongoing =
+        (step < std::max(cfg.refine_stop_iter,
+                         max_steps - cfg.refine_stop_num_iter));
     bool do_densify = densify_ongoing && (step > cfg.refine_start_iter && step % cfg.refine_every == 0);
     float progress = ((float)step + 0.5f) / (float)max_steps;
 

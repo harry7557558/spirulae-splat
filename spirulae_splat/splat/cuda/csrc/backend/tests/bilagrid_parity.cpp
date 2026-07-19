@@ -490,6 +490,17 @@ void test_normal(Rng& r) {
             Hg, Wg, h, w, 1, backend::kDefaultStream, nullptr);
         readback_f(g_tight, v_normal, 3 * np);
         readback_f(g_loose, v_grid, (int64_t)N_img * 3 * L * Hg * Wg);
+
+        // null input-grad path: the engine's depth/normal hooks discard the
+        // GT-side grad by passing v_rgb = nullptr, which must SKIP the
+        // input-grad kernel (dispatching it would write through null; the
+        // Vulkan port once faulted the device here). Grid grads must match
+        // the non-null call on freshly zeroed accumulators.
+        float* v_grid2 = alloc_zero<float>((int64_t)N_img * 3 * L * Hg * Wg);
+        bilagrid_normal_uniform_sample_backward_v1(
+            g.reader(vq != 0), normal_in, v_out, v_grid2, nullptr, N_img, L,
+            Hg, Wg, h, w, 1, backend::kDefaultStream, nullptr);
+        readback_f(g_loose, v_grid2, (int64_t)N_img * 3 * L * Hg * Wg);
     }
     // patched
     {
@@ -669,6 +680,64 @@ void test_fused_optim(Rng& r) {
 }
 
 /* ========================================================================
+ * Fused-optimizer grid-fold tail
+ * ======================================================================== */
+
+// >65535 workgroups folds the flat dispatch into two grid rows
+// (KernelCommon.h fold_1d) and the second row ends in padding blocks. Those
+// blocks must not touch the per-block quant-bounds arrays past their end —
+// an out-of-bounds device write faults the device into a wait that never
+// returns (the vicon-dataset training hang: 966 cameras x 12 x 2048 cells).
+// Smallest crossing size, quantized state (the bounds-indexed path),
+// tv_weight 0 (see test_fused_optim). Values/codes are sliced (head + a
+// tail window spanning both fold rows' real blocks) to keep the ref small;
+// the bounds arrays — what the bug clobbered — read back in full.
+void test_fold_tail(Rng& r) {
+    const int N_grids = 262145, C = 2, L = 2, Hg = 4, Wg = 4, C_batch = 1;
+    const int64_t cells = (int64_t)N_grids * C * L * Hg * Wg;  // 16,777,280
+    const int64_t n_blocks = (cells + 255) / 256;  // 65,537: 2 fold rows
+    const int64_t head = 4096, tail = 8192;
+    const float lr = 1e-2f;
+
+    float* image_grad = upload(
+        r.vec((int64_t)C_batch * C * L * Hg * Wg, -0.3f, 0.3f));
+    for (int variant = 0; variant < 2; variant++) {  // 0 adam, 1 adagrad
+        float* grids = upload(r.vec(cells, -0.6f, 0.8f));
+        int64_t packed_bytes = variant == 0 ? cells * 2 : cells;
+        uint8_t* packed = alloc_zero<uint8_t>(packed_bytes);
+        float4* qb4 = variant == 0 ? alloc_zero<float4>(n_blocks) : nullptr;
+        float2* qb2 = variant == 0 ? nullptr : alloc_zero<float2>(n_blocks);
+
+        if (variant == 0) {
+            fused_bilagrid_tv_adam(grids, nullptr, nullptr, nullptr, nullptr,
+                                   packed, qb4, image_grad, nullptr, N_grids,
+                                   C_batch, C, L, Hg, Wg, lr, 0.0f, 7, true,
+                                   8, false, backend::kDefaultStream);
+        } else {
+            fused_bilagrid_tv_adagrad(grids, nullptr, nullptr, nullptr,
+                                      packed, qb2, image_grad, nullptr,
+                                      N_grids, C_batch, C, L, Hg, Wg, lr,
+                                      0.0f, true, 8, false,
+                                      backend::kDefaultStream);
+        }
+
+        if (variant == 0)
+            readback_f(g_loose, (const float*)qb4, 4 * n_blocks);
+        else
+            readback_f(g_loose, (const float*)qb2, 2 * n_blocks);
+        readback_f(g_loose, grids, head);
+        readback_f(g_loose, grids + (cells - tail), tail);
+        readback_codes(g_codes, packed + (packed_bytes - tail), tail, 8);
+
+        backend::device_free(grids);
+        backend::device_free(packed);
+        if (qb4) backend::device_free(qb4);
+        if (qb2) backend::device_free(qb2);
+    }
+    backend::device_free(image_grad);
+}
+
+/* ========================================================================
  * Utilities: q16 encode, identity init, scatter, ppisp init / add
  * ======================================================================== */
 
@@ -746,6 +815,7 @@ int main(int argc, char** argv) {
     test_normal(r);
     test_tv(r);
     test_fused_optim(r);
+    test_fold_tail(r);
     test_utils(r);
 
     auto write_all = [&](const char* path) {

@@ -1,5 +1,8 @@
 #include "VulkanContext.h"
 
+#include "../api/BackendRuntime.h"
+
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -121,6 +124,97 @@ bool has_extension(VkPhysicalDevice pd, const char* name) {
     return false;
 }
 
+// --- device enumeration / selection (backs the backend::device_* API) ---
+// Physical devices are addressed by their vkEnumeratePhysicalDevices index;
+// enumeration uses a throwaway instance so listing devices never initializes
+// the Context singleton (or its VkDevice). The index is assumed stable
+// across instances of the same loader — standard practice (VkSplat does the
+// same).
+
+struct EnumeratedDevice {
+    std::string name;
+    VkPhysicalDeviceType type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
+    uint64_t vram = 0;
+    bool usable = false;
+};
+
+std::atomic<int> g_requested_device{-1};  // backend::device_select
+std::atomic<bool> g_context_created{false};
+std::atomic<int> g_context_device{-1};
+
+const std::vector<EnumeratedDevice>& enumerate_devices() {
+    static const std::vector<EnumeratedDevice> list = [] {
+        std::vector<EnumeratedDevice> out;
+        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+        app.pApplicationName = "spirulae-splat";
+        app.apiVersion = VK_API_VERSION_1_2;
+        VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+        ici.pApplicationInfo = &app;
+        VkInstance inst = VK_NULL_HANDLE;
+        if (vkCreateInstance(&ici, nullptr, &inst) != VK_SUCCESS) return out;
+        uint32_t n = 0;
+        vkEnumeratePhysicalDevices(inst, &n, nullptr);
+        std::vector<VkPhysicalDevice> devices(n);
+        vkEnumeratePhysicalDevices(inst, &n, devices.data());
+        for (uint32_t i = 0; i < n; i++) {
+            DeviceProbe p = probe_device(devices[i]);
+            EnumeratedDevice d;
+            d.name = p.props.deviceName;
+            d.type = p.props.deviceType;
+            d.vram = (uint64_t)device_local_vram(devices[i]);
+            d.usable = p.required_ok;
+            out.push_back(std::move(d));
+        }
+        vkDestroyInstance(inst, nullptr);
+        return out;
+    }();
+    return list;
+}
+
+// Selection precedence: backend::device_select > SSPLAT_VK_DEVICE env
+// (index or name substring) > auto-score (discrete > integrated > others,
+// VRAM tie-break). -1 if nothing usable matches.
+int resolve_device_index() {
+    const std::vector<EnumeratedDevice>& list = enumerate_devices();
+    int req = g_requested_device.load();
+    if (req >= 0)
+        return (req < (int)list.size() && list[req].usable) ? req : -1;
+    if (const char* want = std::getenv("SSPLAT_VK_DEVICE");
+        want && want[0]) {
+        char* end = nullptr;
+        long idx = std::strtol(want, &end, 10);
+        bool numeric = end && *end == '\0';
+        for (int i = 0; i < (int)list.size(); i++) {
+            bool matches = numeric
+                ? (idx == (long)i)
+                : (list[i].name.find(want) != std::string::npos);
+            if (!matches) continue;
+            if (!list[i].usable) {
+                std::fprintf(stderr,
+                    "[ssplat-vk] requested device '%s' lacks required "
+                    "features (Vulkan 1.2 + shaderInt64 + "
+                    "bufferDeviceAddress + timelineSemaphore)\n",
+                    list[i].name.c_str());
+                continue;
+            }
+            return i;
+        }
+        return -1;
+    }
+    int best = -1;
+    long best_score = -1;
+    for (int i = 0; i < (int)list.size(); i++) {
+        if (!list[i].usable) continue;
+        long score = device_type_score(list[i].type) * 1000000 +
+                     (long)(list[i].vram >> 30);
+        if (score > best_score) {
+            best_score = score;
+            best = i;
+        }
+    }
+    return best;
+}
+
 }  // namespace
 
 Context& Context::get() {
@@ -158,48 +252,19 @@ void Context::init() {
         return;
     }
 
-    const char* want = std::getenv("SSPLAT_VK_DEVICE");
-    int best = -1;
-    long best_score = -1;
-    std::vector<DeviceProbe> probes(n);
-    for (uint32_t i = 0; i < n; i++) {
-        probes[i] = probe_device(devices[i]);
-        const DeviceProbe& p = probes[i];
-        bool viable = p.required_ok;
-        if (want && want[0]) {
-            char* end = nullptr;
-            long idx = std::strtol(want, &end, 10);
-            bool matches = (end && *end == '\0')
-                ? (idx == (long)i)
-                : (std::strstr(p.props.deviceName, want) != nullptr);
-            if (!matches) continue;
-            if (!viable) {
-                std::fprintf(stderr,
-                    "[ssplat-vk] requested device '%s' lacks required "
-                    "features (Vulkan 1.2 + shaderInt64 + "
-                    "bufferDeviceAddress + timelineSemaphore)\n",
-                    p.props.deviceName);
-                continue;
-            }
-            best = (int)i;
-            break;
-        }
-        if (!viable) continue;
-        long score = device_type_score(p.props.deviceType) * 1000000 +
-                     (long)(device_local_vram(devices[i]) >> 30);
-        if (score > best_score) {
-            best_score = score;
-            best = (int)i;
-        }
-    }
-    if (best < 0) {
+    const int best = resolve_device_index();
+    if (best < 0 || best >= (int)n) {
         set_error("no viable Vulkan device (need Vulkan 1.2 + shaderInt64 + "
                   "bufferDeviceAddress + timelineSemaphore)", VK_SUCCESS);
         return;
     }
 
     _physical = devices[best];
-    const DeviceProbe& probe = probes[best];
+    const DeviceProbe probe = probe_device(_physical);
+    if (!probe.required_ok) {  // paranoia: index drifted across instances
+        set_error("selected Vulkan device lost required features", VK_SUCCESS);
+        return;
+    }
     _queue_family = probe.queue_family;
     _device_name = probe.props.deviceName;
     vkGetPhysicalDeviceMemoryProperties(_physical, &_mem_props);
@@ -316,6 +381,9 @@ void Context::init() {
         return;
     }
 
+    g_context_device.store(best);
+    g_context_created.store(true);
+
     if (std::getenv("SSPLAT_VK_VERBOSE")) {
         std::fprintf(stderr,
             "[ssplat-vk] using %s (%s), subgroup %u, push %uB, "
@@ -387,4 +455,39 @@ uint32_t Context::find_memory_type(uint32_t type_bits,
 }
 
 }  // namespace vk
+
+// --- backend::device_* (BackendRuntime.h) ---
+
+int device_count() { return (int)vk::enumerate_devices().size(); }
+
+DeviceInfo device_info(int index) {
+    DeviceInfo info{};
+    info.type = "other";
+    const auto& list = vk::enumerate_devices();
+    if (index < 0 || index >= (int)list.size()) return info;
+    const auto& d = list[index];
+    std::snprintf(info.name, sizeof(info.name), "%s", d.name.c_str());
+    info.type = vk::device_type_name(d.type);
+    info.vram_bytes = d.vram;
+    info.usable = d.usable;
+    return info;
+}
+
+bool device_select(int index) {
+    const auto& list = vk::enumerate_devices();
+    if (index < 0 || index >= (int)list.size() || !list[index].usable)
+        return false;
+    // After the context exists the device cannot change; selecting the one
+    // already in use is a no-op success.
+    if (vk::g_context_created.load())
+        return vk::g_context_device.load() == index;
+    vk::g_requested_device.store(index);
+    return true;
+}
+
+int device_current() {
+    if (vk::g_context_created.load()) return vk::g_context_device.load();
+    return vk::resolve_device_index();
+}
+
 }  // namespace backend

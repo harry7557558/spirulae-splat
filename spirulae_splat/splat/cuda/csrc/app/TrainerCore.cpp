@@ -338,6 +338,7 @@ EngineStepConfig build_step_config(const SsplatConfig& c, const RunState& st, in
     float noise_lr_scalar = c.use_revised_densification ? 1.0f : alpha;
     cfg.densify.refine_start_iter             = c.refine_start_iter;
     cfg.densify.refine_stop_num_iter          = c.refine_stop_num_iter;
+    cfg.densify.refine_stop_iter              = c.refine_stop_iter;
     cfg.densify.refine_every                  = c.refine_every;
     cfg.densify.growth_factor                 = c.growth_factor;
     cfg.densify.min_opacity                   = c.min_opacity;

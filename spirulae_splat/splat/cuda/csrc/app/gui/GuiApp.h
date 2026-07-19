@@ -96,6 +96,7 @@ private:
     Pending _pending = Pending::None;
     std::string _pending_path;       // dataset dir for Pending::OpenDataset
     bool _parse_dirty = false;       // dataparser option edited -> reload
+    bool _device_locked = false;     // backend initialized -> device fixed
 
     // Config being edited + the preset baseline it diffs against.
     SsplatConfig _cfg;

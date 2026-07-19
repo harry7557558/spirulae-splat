@@ -232,6 +232,9 @@ void GuiApp::request_go_home() {
 void GuiApp::start_training() {
     if (_cfg.data.empty()) return;
     _viewport.detach();
+    // Engine setup initializes the backend on the selected device; from
+    // here on the device combo is display-only (one device per process).
+    _device_locked = true;
     _runner.start_training(_cfg, _preset);
 }
 
@@ -1087,6 +1090,40 @@ void GuiApp::draw_train_settings() {
         _dialog.open("Open Dataset Folder", FileDialog::Mode::Folder);
     }
     ImGui::EndDisabled();
+
+    // ---- device ----
+    ImGui::SeparatorText("Device");
+    {
+        int n_dev = backend::device_count();
+        int cur = backend::device_current();
+        backend::DeviceInfo curd = backend::device_info(cur);
+        ImGui::BeginDisabled(_device_locked || busy || n_dev == 0);
+        ImGui::SetNextItemWidth(-8);
+        if (ImGui::BeginCombo("##device",
+                              cur >= 0 ? curd.name : "(no device found)")) {
+            for (int i = 0; i < n_dev; i++) {
+                backend::DeviceInfo d = backend::device_info(i);
+                char label[300];
+                std::snprintf(label, sizeof(label), "%s (%s, %llu MB)%s##d%d",
+                              d.name, d.type,
+                              (unsigned long long)(d.vram_bytes >> 20),
+                              d.usable ? "" : " [unsupported]", i);
+                ImGui::BeginDisabled(!d.usable);
+                bool sel = i == cur;
+                if (ImGui::Selectable(label, sel)) backend::device_select(i);
+                if (sel) ImGui::SetItemDefaultFocus();
+                ImGui::EndDisabled();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+        if (_device_locked) {
+            ImGui::PushTextWrapPos();
+            ImGui::TextColored(kDim, "Device is fixed once training starts; "
+                                     "restart the app to change it.");
+            ImGui::PopTextWrapPos();
+        }
+    }
 
     // ---- preset + options ----
     // Snapshot: any change to a dataset-parsing option below triggers an

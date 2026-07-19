@@ -324,6 +324,7 @@ class Renderer:
         c = _C.DensifyConfig()
         c.refine_start_iter             = model_config.refine_start_iter
         c.refine_stop_num_iter          = model_config.refine_stop_num_iter
+        c.refine_stop_iter              = int(getattr(model_config, "refine_stop_iter", 25000))
         c.refine_every                  = model_config.refine_every
         c.growth_factor                 = model_config.growth_factor
         c.min_opacity                   = model_config.min_opacity

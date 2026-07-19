@@ -149,6 +149,10 @@ class SpirulaeSplatModelConfig:
     """Start densification at this number of steps"""
     refine_stop_num_iter: int = 5000
     """Stop densification at this number of steps before maximum number of training iterations"""
+    refine_stop_iter: int = 25000
+    """Densification runs until max(this, num_iterations - refine_stop_num_iter).
+    Without this floor, runs shorter than refine_stop_num_iter would never densify at all
+    (num_iterations - refine_stop_num_iter goes negative), which confuses users."""
     noise_lr: float = 80.0  # 5e5 * 1.6e-4
     """MCMC-like noise injection magnitude at start of training"""
     noise_lr_final: float = 0.8  # 5e5 * 1.6e-6
