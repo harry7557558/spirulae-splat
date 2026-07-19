@@ -175,7 +175,11 @@ class DevicePool {
         size_t bytes = n * sizeof(T);
         if (bytes > slot.cap_bytes) {
             if (slot.ptr) backend::device_free(slot.ptr);
-            slot.ptr = backend::device_malloc(bytes);
+            // Reset before the (throwing) allocation so an OOM leaves the slot
+            // in a consistent empty state rather than {null ptr, stale cap}.
+            slot.ptr = nullptr;
+            slot.cap_bytes = 0;
+            slot.ptr = backend::device_malloc_checked(bytes);
             slot.cap_bytes = bytes;
         }
         slot.used_bytes = bytes;
@@ -387,7 +391,9 @@ public:
         std::lock_guard<std::mutex> lock(_mu);
         if (bytes > _cap) {
             if (_ptr) backend::device_free(_ptr);
-            _ptr = backend::device_malloc(bytes);
+            _ptr = nullptr;
+            _cap = 0;
+            _ptr = backend::device_malloc_checked(bytes, "scratch buffer");
             _cap = bytes;
         }
         return _ptr;

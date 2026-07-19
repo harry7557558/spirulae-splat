@@ -5,9 +5,34 @@
 
 #include <cuda_runtime.h>
 
+#include <atomic>
 #include <cstdio>
+#include <mutex>
+#include <unordered_map>
 
 namespace backend {
+
+// --- process VRAM accounting ---
+// The CUDA runtime has no per-process memory query (only cudaMemGetInfo, which
+// is device-wide). We track the live byte total of device_malloc allocations
+// ourselves; device_free takes only a pointer, so a side table remembers each
+// allocation's size. Inline-function statics are one-per-program, so the
+// counter/table are shared across all translation units. Allocation is pooled
+// upstream (Tensor.h), so this map is touched rarely, not per frame.
+namespace detail {
+inline std::mutex& alloc_mutex() {
+    static std::mutex m;
+    return m;
+}
+inline std::unordered_map<void*, size_t>& alloc_sizes() {
+    static std::unordered_map<void*, size_t> m;
+    return m;
+}
+inline std::atomic<uint64_t>& device_bytes() {
+    static std::atomic<uint64_t> v{0};
+    return v;
+}
+}  // namespace detail
 
 // --- device enumeration / selection ---
 inline int device_count() {
@@ -48,6 +73,22 @@ inline int device_current() {
     }
     return d;
 }
+inline MemoryUsage memory_usage() {
+    MemoryUsage m;
+    size_t free_bytes = 0, total_bytes = 0;
+    if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess &&
+        total_bytes > 0) {
+        m.total_bytes = (uint64_t)total_bytes;
+        m.used_bytes = (uint64_t)(total_bytes - free_bytes);
+        m.has_total = true;
+        m.has_used = true;
+    } else {
+        cudaGetLastError();
+    }
+    m.process_bytes = detail::device_bytes().load(std::memory_order_relaxed);
+    m.has_process = true;
+    return m;
+}
 
 inline cudaMemcpyKind _to_cuda(MemcpyKind kind) {
     switch (kind) {
@@ -83,9 +124,25 @@ inline bool is_device_pointer(const void* ptr) {
 inline void* device_malloc(size_t bytes) {
     void* ptr = nullptr;
     cudaMalloc(&ptr, bytes);
+    if (ptr) {
+        std::lock_guard<std::mutex> lock(detail::alloc_mutex());
+        detail::alloc_sizes()[ptr] = bytes;
+        detail::device_bytes().fetch_add(bytes, std::memory_order_relaxed);
+    }
     return ptr;
 }
-inline void device_free(void* ptr) { cudaFree(ptr); }
+inline void device_free(void* ptr) {
+    if (ptr) {
+        std::lock_guard<std::mutex> lock(detail::alloc_mutex());
+        auto& sizes = detail::alloc_sizes();
+        auto it = sizes.find(ptr);
+        if (it != sizes.end()) {
+            detail::device_bytes().fetch_sub(it->second, std::memory_order_relaxed);
+            sizes.erase(it);
+        }
+    }
+    cudaFree(ptr);
+}
 inline void* host_malloc_pinned(size_t bytes) {
     void* ptr = nullptr;
     cudaMallocHost(&ptr, bytes);

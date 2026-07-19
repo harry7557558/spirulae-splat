@@ -36,11 +36,9 @@ struct DevBuf {
     void* ensure(size_t bytes) {
         if (bytes > cap) {
             if (ptr) backend::device_free(ptr);
-            ptr = backend::device_malloc(bytes);
-            if (!ptr) {
-                cap = 0;
-                throw std::runtime_error("viewer: device malloc failed");
-            }
+            ptr = nullptr;
+            cap = 0;
+            ptr = backend::device_malloc_checked(bytes, "viewer buffer");
             cap = bytes;
         }
         return ptr;

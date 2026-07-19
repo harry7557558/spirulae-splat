@@ -19,6 +19,7 @@ namespace vk {
 // ok() and have no flags here.
 struct Capabilities {
     bool float32_atomic_add = false;  // VK_EXT_shader_atomic_float
+    bool memory_budget = false;       // VK_EXT_memory_budget (usage reporting)
     bool timestamps = false;
     double timestamp_period_ns = 0.0;
     uint32_t subgroup_size = 0;       // advertised default; never assumed 32

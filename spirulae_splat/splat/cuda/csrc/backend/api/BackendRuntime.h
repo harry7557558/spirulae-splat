@@ -18,6 +18,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <stdexcept>
+#include <string>
 
 namespace backend {
 
@@ -64,6 +67,22 @@ bool device_select(int index);
 // auto-score). -1 if no usable device.
 int device_current();
 
+// --- device memory usage (best-effort, for status/telemetry UIs) ---
+// Snapshot of VRAM usage on the current device. Each field is independently
+// optional: a backend leaves a value at 0 with its has_* flag false when the
+// corresponding query is unavailable (no driver support, extension missing,
+// no device selected yet). Callers must fall back on the flags rather than
+// treat 0 as "empty". Never throws; cheap enough to poll per frame.
+struct MemoryUsage {
+    uint64_t process_bytes = 0;  // device memory allocated by THIS process
+    uint64_t used_bytes = 0;     // device memory in use system-wide (all apps)
+    uint64_t total_bytes = 0;    // device-local memory capacity
+    bool has_process = false;
+    bool has_used = false;
+    bool has_total = false;
+};
+MemoryUsage memory_usage();
+
 // --- memory ---
 void* device_malloc(size_t bytes);
 // CONTRACT: device_free must ensure all in-flight device work that may
@@ -73,6 +92,46 @@ void* device_malloc(size_t bytes);
 void  device_free(void* ptr);
 void* host_malloc_pinned(size_t bytes);  // cudaMallocHost / persistently-mapped staging
 void  host_free_pinned(void* ptr);
+
+// --- out-of-memory reporting ---
+// device_malloc returns null on failure (cudaMalloc semantics), and most call
+// sites cannot recover -- they need to abort with a message a user can act on
+// rather than dereference the null. These helpers build that message from
+// memory_usage()/device_info() so it names the size that failed and what the
+// device already holds, and works identically on both backends.
+inline std::string _fmt_bytes(uint64_t bytes) {
+    char buf[32];
+    double mib = (double)bytes / (1024.0 * 1024.0);
+    if (mib >= 1024.0) std::snprintf(buf, sizeof buf, "%.2f GiB", mib / 1024.0);
+    else               std::snprintf(buf, sizeof buf, "%.0f MiB", mib);
+    return buf;
+}
+// `what` optionally names the buffer being allocated (for diagnostics).
+[[noreturn]] inline void throw_out_of_memory(size_t bytes,
+                                             const char* what = nullptr) {
+    MemoryUsage m = memory_usage();
+    DeviceInfo d = device_info(device_current());
+    std::string msg = "out of GPU memory: could not allocate " +
+                      _fmt_bytes(bytes);
+    if (what && what[0]) { msg += " for "; msg += what; }
+    if (d.name[0]) { msg += " on "; msg += d.name; }
+    msg += ".";
+    if (m.has_used && m.has_total)
+        msg += " Device memory in use: " + _fmt_bytes(m.used_bytes) + " / " +
+               _fmt_bytes(m.total_bytes) + ".";
+    if (m.has_process)
+        msg += " Used by this process: " + _fmt_bytes(m.process_bytes) + ".";
+    msg += " Try a smaller model (fewer splats / SH), a lower "
+           "training image resolution, or a GPU with more memory.";
+    throw std::runtime_error(msg);
+}
+// device_malloc that throws the friendly OOM error above instead of returning
+// null. A zero-byte request still returns null (a valid no-op allocation).
+inline void* device_malloc_checked(size_t bytes, const char* what = nullptr) {
+    void* ptr = device_malloc(bytes);
+    if (!ptr && bytes > 0) throw_out_of_memory(bytes, what);
+    return ptr;
+}
 
 void memcpy_sync(void* dst, const void* src, size_t bytes, MemcpyKind kind);
 void memcpy_async(void* dst, const void* src, size_t bytes, MemcpyKind kind,

@@ -18,6 +18,10 @@ namespace vk {
 std::mutex g_error_mutex;
 std::string g_error;
 
+// Live device_malloc byte total, defined in VulkanRuntime.cpp; read below by
+// backend::memory_usage() for the process VRAM figure.
+extern std::atomic<uint64_t> g_device_bytes;
+
 void set_error(const char* what, VkResult result) {
     std::lock_guard<std::mutex> lock(g_error_mutex);
     if (!g_error.empty()) return;  // sticky: keep the FIRST error
@@ -327,6 +331,14 @@ void Context::init() {
         _caps.float32_atomic_add = false;
     }
 
+    // VK_EXT_memory_budget: lets memory_usage() report system-wide usage and
+    // budget (no feature struct, just enable it). Widely supported; absence
+    // just leaves the "in use" figure unavailable.
+    if (has_extension(_physical, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
+        extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        _caps.memory_budget = true;
+    }
+
     // Pin the compute subgroup size when the device lets us (see
     // Capabilities::required_subgroup_size).
     VkPhysicalDeviceSubgroupSizeControlFeaturesEXT fsgc{
@@ -531,6 +543,49 @@ bool device_select(int index) {
 int device_current() {
     if (vk::g_context_created.load()) return vk::g_context_device.load();
     return vk::resolve_device_index();
+}
+
+MemoryUsage memory_usage() {
+    MemoryUsage m;
+    const int idx = device_current();
+    const auto& list = vk::enumerate_devices();
+    if (idx >= 0 && idx < (int)list.size() && list[idx].vram > 0) {
+        m.total_bytes = list[idx].vram;
+        m.has_total = true;
+    }
+    m.process_bytes = vk::g_device_bytes.load(std::memory_order_relaxed);
+    m.has_process = true;
+
+    // System-wide "in use" needs a live device with VK_EXT_memory_budget.
+    // heapBudget already discounts memory held by other applications, so
+    //   system_free ~= sum(budget - usage) over device-local heaps
+    //   system_used  = total - system_free
+    // (an estimate; Vulkan exposes no exact system-wide counter). Never call
+    // Context::get() before it exists — that would create the device just to
+    // read a status number.
+    if (vk::g_context_created.load() && vk::Context::get().ok() &&
+        vk::Context::get().caps().memory_budget && m.has_total) {
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+        VkPhysicalDeviceMemoryProperties2 mp2{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+        mp2.pNext = &budget;
+        vkGetPhysicalDeviceMemoryProperties2(vk::Context::get().physical(),
+                                             &mp2);
+        uint64_t free_head = 0;
+        const auto& mp = mp2.memoryProperties;
+        for (uint32_t i = 0; i < mp.memoryHeapCount; i++) {
+            if (!(mp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT))
+                continue;
+            const uint64_t b = budget.heapBudget[i], u = budget.heapUsage[i];
+            if (b > u) free_head += b - u;
+        }
+        if (free_head <= m.total_bytes) {
+            m.used_bytes = m.total_bytes - free_head;
+            m.has_used = true;
+        }
+    }
+    return m;
 }
 
 }  // namespace backend

@@ -23,7 +23,14 @@ namespace {
 
 const ImVec4 kOk(0.35f, 0.85f, 0.45f, 1.0f);
 const ImVec4 kErr(1.0f, 0.42f, 0.42f, 1.0f);
+const ImVec4 kWarn(0.95f, 0.75f, 0.30f, 1.0f);
 const ImVec4 kDim(0.6f, 0.6f, 0.6f, 1.0f);
+
+std::string format_gib(uint64_t bytes) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%.2f", (double)bytes / (1024.0 * 1024.0 * 1024.0));
+    return buf;
+}
 
 std::string format_eta(double s) {
     if (s < 0) return "--:--";
@@ -1223,7 +1230,7 @@ void GuiApp::draw_basic_options() {
             "Splat primitive. 3dgs: standard 3D Gaussian splatting. mip: "
             "anti-aliased Mip-Splatting, reduces shimmering when zooming "
             "out. 3dgut: Unscented-Transform projection, exact for "
-            "distorted (fisheye/wide) cameras; used by the meshing preset.");
+            "distorted (fisheye/equirectangular) cameras.");
     }
 
     int ds_idx = _cfg.rescale_camera_to_fit == 2.0f ? 1
@@ -1238,33 +1245,24 @@ void GuiApp::draw_basic_options() {
     help_tooltip_on_hover(
         "Train at a fraction of the input resolution. Downscaling trains "
         "much faster and saves VRAM; use it for 4K+ footage or quick "
-        "previews. (Also matches pre-downscaled images_2 / images_4 "
-        "folders of academic datasets.)");
+        "previews.");
 
     ImGui::SetNextItemWidth(w);
     ImGui::SliderInt("Color detail (SH)", &_cfg.sh_degree, 0, 4);
     help_tooltip_on_hover(
         "Spherical-harmonics degree for view-dependent color (reflections, "
         "highlights). 3 is standard; 0 gives flat colors and the smallest "
-        "model.");
+        "model; 4 may have limited compatibility with mainstream viewers.");
 
-    ImGui::Checkbox("Split fisheye into pinhole views", &_cfg.warp_to_pinhole);
+    ImGui::Checkbox("Bilateral Grid color correction", &_cfg.use_bilateral_grid);
     help_tooltip_on_hover(
-        "For fisheye / 360-camera footage: split each image into 5 "
-        "undistorted views for training. Enabled by the 360-camera preset.");
+        "Use bilateral grid to correct color variation across images. Suitable for environment lighting change. "
+        "Uncheck for faster and more memory efficient training.");
 
-    bool web = !_cfg.disable_viewer;
-    if (ImGui::Checkbox("Also serve web viewer", &web))
-        _cfg.disable_viewer = !web;
+    ImGui::Checkbox("PPISP color correction", &_cfg.use_ppisp);
     help_tooltip_on_hover(
-        "Additionally serve the browser-based viewer while training, e.g. "
-        "to monitor from another device. The native viewport here works "
-        "either way.");
-    if (web) {
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(90);
-        ImGui::InputInt("port", &_cfg.viewer_port, 0, 0);
-    }
+        "Use PPISP to correcting color variation across images. Suitable for camera vignetting and exposure/WB change. "
+        "Uncheck for faster training.");
 }
 
 void GuiApp::draw_train_controls() {
@@ -1353,6 +1351,11 @@ void GuiApp::draw_metrics() {
 }
 
 void GuiApp::draw_status_strip() {
+    // Strip content region, captured before any widget consumes it -- used to
+    // right-align the VRAM readout on the second (text) row.
+    const float x0 = ImGui::GetCursorPosX();
+    const float avail = ImGui::GetContentRegionAvail().x;
+
     TrainRunner::Phase ph = _runner.phase();
     ssplat::TrainerProgress p = _runner.latest_progress();
     if (ph == TrainRunner::Phase::Training && p.total_steps > 0) {
@@ -1381,6 +1384,48 @@ void GuiApp::draw_status_strip() {
         ImGui::ProgressBar(0.0f, ImVec2(-8, 0), "idle");
         ImGui::TextDisabled(" ");
     }
+
+    draw_vram_readout(x0, avail);
+}
+
+void GuiApp::draw_vram_readout(float x0, float avail) {
+    // Poll the backend at ~2 Hz; the driver queries are cheap but there is no
+    // reason to hit them every frame.
+    double now = ImGui::GetTime();
+    if (_vram_polled_at < 0.0 || now - _vram_polled_at > 0.5) {
+        _vram = backend::memory_usage();
+        _vram_polled_at = now;
+    }
+    const backend::MemoryUsage& m = _vram;
+
+    // Nothing queryable (no device / all queries failed): stay silent rather
+    // than show a confusing "n/a".
+    if (!m.has_process && !m.has_used && !m.has_total) return;
+
+    auto part = [](bool has, uint64_t bytes) {
+        return has ? format_gib(bytes) : std::string("?");
+    };
+    // proc / used / total, in GiB (the hover tooltip spells out which is
+    // which). '?' stands in for any figure the backend couldn't query.
+    std::string text = "VRAM " + part(m.has_process, m.process_bytes) + " / " +
+                       part(m.has_used, m.used_bytes) + " / " +
+                       part(m.has_total, m.total_bytes) + " GiB";
+
+    // Color by system-wide pressure when known, else neutral.
+    ImVec4 color = kDim;
+    if (m.has_used && m.has_total && m.total_bytes > 0) {
+        double frac = (double)m.used_bytes / (double)m.total_bytes;
+        color = frac >= 0.9 ? kErr : frac >= 0.7 ? kWarn : kOk;
+    }
+
+    float tw = ImGui::CalcTextSize(text.c_str()).x;
+    float target = x0 + avail - tw - 8.0f;  // 8 px right pad, matches the bar
+    ImGui::SameLine();
+    if (target > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(target);
+    ImGui::TextColored(color, "%s", text.c_str());
+    help_tooltip_on_hover(
+        "GPU memory (GiB): used by this process / total in use system-wide / "
+        "device capacity. '?' means the backend could not query that value.");
 }
 
 void GuiApp::draw_log_panel(float height) {

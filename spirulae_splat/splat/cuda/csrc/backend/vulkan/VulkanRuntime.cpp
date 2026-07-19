@@ -11,6 +11,7 @@
 #include "VulkanInternal.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -24,6 +25,11 @@ namespace vk {
 
 extern std::mutex g_error_mutex;   // VulkanContext.cpp
 extern std::string g_error;
+
+// Live device_malloc byte total (process VRAM estimate). Defined here, read
+// by backend::memory_usage() in VulkanContext.cpp. Host-pinned allocations
+// are excluded — they are not device-local VRAM.
+std::atomic<uint64_t> g_device_bytes{0};
 
 namespace {
 
@@ -425,6 +431,7 @@ void* device_malloc(size_t bytes) {
         std::lock_guard<std::mutex> lock(vk::g_alloc_mutex);
         vk::g_device_allocs[a.base] = a;
     }
+    vk::g_device_bytes.fetch_add(a.size, std::memory_order_relaxed);
     return (void*)a.base;
 }
 
@@ -442,6 +449,7 @@ void device_free(void* ptr) {
         a = it->second;
         vk::g_device_allocs.erase(it);
     }
+    vk::g_device_bytes.fetch_sub(a.size, std::memory_order_relaxed);
     // Contract (BackendRuntime.h): all in-flight work completes first.
     vk::Context::get().wait(vk::flush_all_streams());
     vk::destroy_allocation(a);

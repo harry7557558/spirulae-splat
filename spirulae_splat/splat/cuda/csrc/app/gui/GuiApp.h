@@ -4,6 +4,7 @@
 // between the config editor, COLMAP runner, train runner, and the native
 // viewport.
 
+#include "../../backend/api/BackendRuntime.h"
 #include "../generated/cli_config.h"
 #include "ColmapRunner.h"
 #include "ConfigUI.h"
@@ -81,6 +82,9 @@ private:
     void draw_train_controls();
     void draw_metrics();
     void draw_status_strip();
+    // Right-aligned VRAM readout on the status strip; x0/avail describe the
+    // strip's content region (window-local left edge and width).
+    void draw_vram_readout(float x0, float avail);
     void draw_log_panel(float height);
     void draw_confirm_modal();
     void handle_dialog_result(const std::string& path);
@@ -127,6 +131,10 @@ private:
     std::deque<std::string> _log;
     bool _log_autoscroll = true;
     bool _show_log = true;
+
+    // VRAM readout on the status strip, polled from the backend at ~2 Hz.
+    backend::MemoryUsage _vram;
+    double _vram_polled_at = -1.0;
 };
 
 }  // namespace gui
