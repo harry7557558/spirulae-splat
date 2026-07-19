@@ -367,6 +367,8 @@ void Context::init() {
                 want = sgc_props.minSubgroupSize;
             if (want > sgc_props.maxSubgroupSize)
                 want = sgc_props.maxSubgroupSize;
+            if (want > 32)  // TODO: not supported by shaders
+                want = 32;
             _caps.required_subgroup_size = want;
             extensions.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
             fsgc.subgroupSizeControl = VK_TRUE;
