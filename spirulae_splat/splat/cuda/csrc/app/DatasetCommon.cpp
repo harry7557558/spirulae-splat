@@ -13,6 +13,8 @@
 
 namespace fs = std::filesystem;
 
+constexpr double kPi = 3.14159265358979323846;   // MSVC has no M_PI by default
+
 
 namespace dsparse {
 
@@ -350,7 +352,7 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
             if (ds.camera_models[i] == EQUIRECT_V) {
                 // Direct equirectangular: canonical panorama intrinsics
                 // matching the equirect projection kernel (trainer.py:361-369).
-                double f = ds.widths[i] / (2.0 * M_PI);
+                double f = ds.widths[i] / (2.0 * kPi);
                 out.intrins[off*4 + 0] = (float)f;
                 out.intrins[off*4 + 1] = (float)f;
                 out.intrins[off*4 + 2] = ds.widths[i]  / 2.0f;

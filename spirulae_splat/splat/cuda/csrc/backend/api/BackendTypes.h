@@ -19,8 +19,11 @@
 #define __device__
 #define __host__
 #define __forceinline__ inline
-// __restrict__ is understood natively by GCC/Clang. MSVC would need
-// `#define __restrict__ __restrict` here.
+// __restrict__ is understood natively by GCC/Clang, but MSVC spells it
+// `__restrict`, so map it there.
+#ifdef _MSC_VER
+#define __restrict__ __restrict
+#endif
 
 // Alignments per CUDA vector_types.h: 2- and 4-component types align to
 // their full size (uchar4 -> 4, float2 -> 8, float4/int4/uint4 -> 16);

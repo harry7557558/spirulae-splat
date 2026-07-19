@@ -19,6 +19,8 @@
 
 namespace fs = std::filesystem;
 
+constexpr double kPi = 3.14159265358979323846;   // MSVC has no M_PI by default
+
 
 // ===========================================================================
 // PLY reader (ascii + binary_little_endian). Reads x/y/z (+ red/green/blue)
@@ -443,7 +445,7 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
 
         // Equirectangular: canonical panorama intrinsics (dataparser.py:374-387).
         if ((int)model == EQUIRECT_V) {
-            fx = fy = W / (2.0 * M_PI);
+            fx = fy = W / (2.0 * kPi);
             cx = W / 2.0;
             cy = H / 2.0;
         }
