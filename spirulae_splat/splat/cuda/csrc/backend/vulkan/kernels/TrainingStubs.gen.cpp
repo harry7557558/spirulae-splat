@@ -7,7 +7,6 @@
 // kernel calls.
 
 #include <EngineInternal.h>
-#include <PerPixelLoss.cuh>
 #include <PixelWise.cuh>
 
 #include <stdexcept>
@@ -19,36 +18,6 @@ namespace {
                              " is not implemented yet (training phase)");
 }
 }  // namespace
-
-// from PerPixelLoss.cuh
-LossValues compute_multi_scale_per_pixel_losses(
-    int num_loss_scales,
-    TorchTensorView render_rgb,
-    TorchTensorView ref_rgb,
-    TorchTensorView render_depth,
-    TorchTensorView ref_depth,
-    TorchTensorView render_normal,
-    TorchTensorView depth_normal,
-    TorchTensorView ref_normal,
-    TorchTensorView render_Ts,
-    TorchTensorView rgb_dist,
-    TorchTensorView depth_dist,
-    TorchTensorView normal_dist,
-    TorchTensorView median_depth,
-    TorchTensorView median_normal,
-    TorchTensorView ref_alpha,
-    bool has_mask,
-    const std::array<float, (int)LossWeightIndex::length> loss_weights_0,
-    const float w_ssim,
-    TorchTensorView v_losses,
-    std::vector<bool> needs_input_grad,
-    long num_train_images,
-    TorchTensorView camera_indices,
-    TorchTensorView loss_map_out,
-    int loss_map_mode,
-    float robust_edge_aware_quantile,
-    PerPixelGrads& grads_out
-) { _vk_stub("compute_multi_scale_per_pixel_losses"); }
 
 // from PixelWise.cuh
 void launch_warp_byte_to_float_equi(

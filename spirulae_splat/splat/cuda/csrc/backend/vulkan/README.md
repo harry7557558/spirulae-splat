@@ -197,7 +197,7 @@ from the producing kernel and sorting raw-unsigned via the int32 overload
 | 2 | Projection fwd (3 primitives × spec-const cams/SH) + parity vs CUDA | DONE 2026-07 incl. 3DGUT + packed + SH value-quant q8/q16 |
 | 3 | Background SH fwd, tile intersect (key gen + offsets over SortScan) | DONE 2026-07 |
 | 4 | Rasterization fwd (2D + eval3D shared source), visualizer blit | DONE 2026-07 (+ render-path PixelWise, engine-level end-to-end parity) |
-| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | IN PROGRESS: optimizer/utility kernels, pixel-wise backwards, background-SH backward, rasterization backward, projection backward family (plain + quantgrad + fused-optimizer), densify/MCMC + remaining optimizer variants (adamtr color, fused 3DGS geometry), bilagrid/PPISP color pipeline (all five sampler families, TV/channel-mean, fused TV-Adam/AdaGrad, PPISP image transform + reg losses) DONE 2026-07 (optim_parity, pwtrain_parity, raster_bwd_parity, proj_bwd_parity, projqgrad_parity, fpbo_parity, optimgeo_parity, densify_parity, bilagrid_parity, ppisp_parity); remaining stubs: dataset warp/conversion + multi-scale loss stack (13) |
+| 5 | Training: losses, backwards (float-atomic variants), optimizer, densify | IN PROGRESS: optimizer/utility kernels, pixel-wise backwards, background-SH backward, rasterization backward, projection backward family (plain + quantgrad + fused-optimizer), densify/MCMC + remaining optimizer variants (adamtr color, fused 3DGS geometry), bilagrid/PPISP color pipeline (all five sampler families, TV/channel-mean, fused TV-Adam/AdaGrad, PPISP image transform + reg losses), multi-scale per-pixel loss stack (per-pixel fused losses, fused SSIM, image pyramid, edge-aware maps, quantile radix-select) DONE 2026-07 (optim_parity, pwtrain_parity, raster_bwd_parity, proj_bwd_parity, projqgrad_parity, fpbo_parity, optimgeo_parity, densify_parity, bilagrid_parity, ppisp_parity, msloss_parity); remaining stubs: dataset warp/conversion (12) |
 
 Phase-0/1 hard-won portability rules (validated on NVIDIA proprietary,
 Mesa ANV, llvmpipe — all tests + validation layers clean on all three):
@@ -563,10 +563,55 @@ the engine level.
     scatter utils) and `ppisp_parity` (63K tight + 0.9K loose; 3 param
     types x cam_indices on/off + reg fwd/bwd with synthetic deterministic
     bwd inputs). All three devices pass; validation clean.
+- **Multi-scale per-pixel loss stack (phase 5, seventh slice)**:
+  `kernels/PerPixelLoss.cpp` mirrors `compute_multi_scale_per_pixel_losses`
+  (PerPixelLoss.cu) end to end — pyramid construction, per-scale grad
+  aliasing/upsample accumulation, and the one-iteration-behind AsyncReadout
+  loss/SSIM display path (DevicePool + AsyncReadout are backend-portable).
+  `kernels/Quantile.cpp` implements `batch_quantile_masked_radix_select`
+  for real (was a manual stub; the `<true>` instantiation is used by
+  BilagridBindings). Device work in 4 new modules:
+  - `multi_scale_loss.slang` includes the CANONICAL
+    `slang/per_pixel_losses.slang` (CudaDeviceExport -> ForceInline, like
+    ppisp), so the per-pixel loss math and its autodiff backward are the
+    same functions CUDA emits -> per-pixel grads land tight. Bilinear
+    GT-resolution sampling/scatter re-derived from Interpolation.cuh.
+    Optional buffers become in_flags/out_flags bit fields over never-null
+    (or_fallback) pointers; bool masks are read via u32 words and the bool
+    2x-downsample writes one whole u32 word per thread (And/Or atomics for
+    the tail word) since 8-bit storage isn't baseline.
+  - `fused_ssim.slang` ports the memory-efficient inplace SSIM
+    forward+backward. CUDA's 24x24 tile needs ~68 KB of shared overlays,
+    over llvmpipe's 32 KB floor -> restructured to 16x16 logical tiles in
+    flat 256-wide workgroups (~30 KB, same buffer1/buffer2 overlay reuse).
+    Every per-pixel output is a pure function of the zero-padded input, so
+    tile size does not change the map or dL/dimg1 (tight); only the
+    display-only scalar's accumulation grouping differs (loose).
+  - `canny.slang` (canny rgb/scalar + BT.601 residual luma + Tukey
+    biweight) with globally-clamped loads -> per-pixel deterministic, so
+    even the RobustEdgeAware densification map compares tight.
+  - `quantile.slang`: 4-pass radix select over float bit images; all
+    integer histograms/atomics -> bit-exact across backends and devices.
+  - Two CUDA-reference quirks surfaced (both display-only, documented in
+    msloss_parity.cpp): the SSIM scalar sums over TILE-GRID positions, so
+    non-multiple-of-tile images pick up zero-padded out-of-image
+    contributions that differ 24-vs-16; and Common.cuh's
+    `blockAtomicAdd<576>` reduces its 18 warp partials with power-of-two
+    shuffle strides, silently dropping warps 8 and 17 (~4% low on the
+    CUDA side; the Vulkan value matches a numpy brute force of the same
+    center set exactly). Gradients and loss values are unaffected.
+  - Parity: `msloss_parity` (432K tight + 22K loose; 6 configs covering
+    all 7 loss-map modes, equal-shape + scaled GT modalities, masks at
+    equal/different resolutions, camera_indices, 1-3 pyramid scales, plus
+    direct quantile checks with NaN/Inf/zero poisoning). All three
+    devices pass (<= 0.018% tight — isolated branch-flip classes:
+    normal_loss's 0.5/sqrt(cos_sim_loss) gradient near aligned normals
+    under bilinear-resampled GT, and the Pearson-depth chain fed by
+    atomic-order-dependent sums); validation clean.
 - **Training stubs**: `kernels/TrainingStubs.gen.cpp` (generated by
   `spirulae_splat/generate_vulkan_stubs.py` from a link probe of
-  csrc_portable vs the backend lib) + `TrainingStubsManual.cpp` (the
-  quantile template + meshing::OccupancyEvaluator methods) provide throwing
+  csrc_portable vs the backend lib) + `TrainingStubsManual.cpp`
+  (meshing::OccupancyEvaluator methods) provide throwing
   definitions for every still-CUDA-only launch function, so the FULL
   portable engine links against ssplat_backend_vulkan today. Regenerate
   after porting a module (a ported symbol must lose its stub). The

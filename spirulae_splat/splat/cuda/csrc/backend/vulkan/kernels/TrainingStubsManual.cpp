@@ -1,8 +1,8 @@
 // Hand-written companions to TrainingStubs.gen.cpp: throwing stubs for the
-// symbols the generator cannot auto-stub (a function template and the
-// meshing::OccupancyEvaluator class methods). Same contract — they satisfy
-// the linker for the portable engine layer under the Vulkan backend; calling
-// one throws. Remove entries as the corresponding modules get ported.
+// symbols the generator cannot auto-stub (the meshing::OccupancyEvaluator
+// class methods). Same contract — they satisfy the linker for the portable
+// engine layer under the Vulkan backend; calling one throws. Remove entries
+// as the corresponding modules get ported.
 
 #include <Meshing.h>
 #include <Tensor.h>
@@ -17,20 +17,6 @@ namespace {
                              " is not implemented yet (training phase)");
 }
 }  // namespace
-
-// Quantile selector (Quantile.cu). Only the <true> instantiation is
-// referenced by the engine layer (BilagridBindings.cpp).
-template<bool invert_quantile>
-int batch_quantile_masked_radix_select(
-    const float* d_x, int B, int N, float q, float* d_out, uint32_t* temp,
-    backend::Stream stream
-) {
-    (void)d_x; (void)B; (void)N; (void)q; (void)d_out; (void)temp;
-    (void)stream;
-    _vk_stub("batch_quantile_masked_radix_select");
-}
-template int batch_quantile_masked_radix_select<true>(
-    const float*, int, int, float, float*, uint32_t*, backend::Stream);
 
 // Meshing occupancy evaluator (Meshing.cu). The constructor throws, so no
 // other method can ever run on a live object; the destructor must stay
