@@ -16,6 +16,8 @@
 // log1pf/expm1f closely but not bit-exactly; parity tests allow +-1
 // quantization step on packed cells.
 
+#include "int8_compat.slang"
+
 static const float kAdamEps = 1e-15f;
 
 [ForceInline]
@@ -173,8 +175,7 @@ float qtensor_decode_v<let BITS : int>(uint* packed, uint idx, float2 mm) {
         uint w = packed[idx >> 1];
         q = float((w >> (16u * (idx & 1u))) & 0xffffu);
     } else {  // BITS == 8
-        uint w = packed[idx >> 2];
-        q = float((w >> (8u * (idx & 3u))) & 0xffu);
+        q = float(u8_load(packed, idx));
     }
     return mm.x + (mm.y - mm.x) * (q / float((1 << BITS) - 1));
 }
@@ -228,8 +229,7 @@ float qtlog_inverse_v(float log_v) {
 float qtlog_decode_log<let BITS : int>(uint* packed, uint idx, float2 mm) {
     float q;
     if (BITS == 8) {
-        uint w = packed[idx >> 2];
-        q = float((w >> (8u * (idx & 3u))) & 0xffu);
+        q = float(u8_load(packed, idx));
     } else {  // BITS == 4
         uint w = packed[idx >> 3];
         q = float((w >> (4u * (idx & 7u))) & 0xfu);
@@ -294,9 +294,7 @@ void vkq_store_u16(uint* packed, uint idx, uint h) {  // idx in halfwords
 
 [ForceInline]
 void vkq_store_u8(uint* packed, uint idx, uint b) {  // idx in bytes
-    uint shift = 8u * (idx & 3u);
-    InterlockedAnd(packed[idx >> 2], ~(0xffu << shift));
-    InterlockedOr(packed[idx >> 2], (b & 0xffu) << shift);
+    u8_store(packed, idx, b);
 }
 
 // ---------------------------------------------------------------------------
@@ -319,9 +317,7 @@ float gradq_decode1<let BITS : int>(uint* packed, uint cell, float2 mm) {
         uint h = (w >> (16u * (cell & 1u))) & 0xffffu;
         s = (int(h) << 16) >> 16;  // sign-extend int16
     } else {
-        uint w = packed[cell >> 2];
-        uint b = (w >> (8u * (cell & 3u))) & 0xffu;
-        s = (int(b) << 24) >> 24;  // sign-extend int8
+        s = s8_load(packed, cell);
     }
     return float(s) * (gradq_amp(mm) * (1.0f / gradq_qmax<BITS>()));
 }

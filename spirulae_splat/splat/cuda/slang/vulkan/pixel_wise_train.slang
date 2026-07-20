@@ -8,6 +8,7 @@
 // workgroup like its forward.
 
 #define CudaDeviceExport ForceInline
+#include "int64_compat.slang"
 #include "pixel_wise.slang"
 #undef CudaDeviceExport
 
@@ -236,7 +237,7 @@ void d2n_bwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float dist[10];
     [ForceUnroll]
     for (int k = 0; k < 10; k++)
-        dist[k] = p.dist_coeffs == nullptr ? 0.0f
+        dist[k] = is_null(p.dist_coeffs) ? 0.0f
                                            : p.dist_coeffs[10 * bid + k];
 
     for (uint k = tid; k < uint((D2NB_TILE + 2) * (D2NB_TILE + 2)); k += 256) {
@@ -309,7 +310,7 @@ void lin_to_ray_depth(uint3 gtid: SV_DispatchThreadID,
     float dist[10];
     [ForceUnroll]
     for (int k = 0; k < 10; k++)
-        dist[k] = p.dist_coeffs == nullptr ? 0.0f
+        dist[k] = is_null(p.dist_coeffs) ? 0.0f
                                            : p.dist_coeffs[10 * bid + k];
 
     uint o = (bid * p.H + j) * p.W + i;

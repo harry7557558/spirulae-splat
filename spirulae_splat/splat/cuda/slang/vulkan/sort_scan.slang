@@ -13,6 +13,9 @@
 // 128) and never assumes a width; the host asserts subgroup size >= 8 so the
 // per-subgroup scratch bound (MAX_NSG) holds.
 
+#include "int64_compat.slang"
+#include "int8_compat.slang"
+
 // ---------------------------------------------------------------------------
 // shared configuration (host mirrors: backend/vulkan/SortScanVulkan.cpp)
 // ---------------------------------------------------------------------------
@@ -74,7 +77,7 @@ uint4 match_digit(uint digit, bool valid) {
 // ---------------------------------------------------------------------------
 
 struct HistParams {
-    uint64_t* keys;      // u32 or u64 elements depending on entry
+    uint32_t* keys;      // u32 or u64 elements depending on entry (cast)
     uint32_t* part_hist; // [RADIX][num_parts], digit-major
     uint32_t n;
     uint32_t shift;
@@ -100,7 +103,7 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
     for (uint e = 0; e < SORT_ELEMS; e++) {                                \
         uint idx = base + e * SORT_WG + tid;                               \
         if (idx < p.n) {                                                   \
-            uint d = uint(keys[idx] >> p.shift) & p.digit_mask;            \
+            uint d = u64key_digit(keys[idx], p.shift, p.digit_mask);       \
             InterlockedAdd(_hist_local[d], 1u);                            \
         }                                                                  \
     }                                                                      \
@@ -110,7 +113,7 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
 }
 
 DEF_HIST(sort_hist_u32, uint32_t)
-DEF_HIST(sort_hist_u64, uint64_t)
+DEF_HIST(sort_hist_u64, u64key_t)
 
 // ---------------------------------------------------------------------------
 // radix sort: spine
@@ -185,8 +188,8 @@ void sort_spine_global(uint tid: SV_GroupThreadID,
 // ---------------------------------------------------------------------------
 
 struct DownsweepParams {
-    uint64_t* keys_in;
-    uint64_t* keys_out;
+    uint32_t* keys_in;   // cast to the entry's key type
+    uint32_t* keys_out;
     uint32_t* vals_in;
     uint32_t* vals_out;
     uint32_t* part_offsets;  // [RADIX][num_parts] per-digit exclusive prefix
@@ -226,7 +229,7 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
         uint idx = base + e * SORT_WG + tid;                               \
         bool valid = idx < p.n;                                            \
         KTYPE key = valid ? keys_in[idx] : KTYPE(0);                       \
-        uint d = uint(key >> p.shift) & p.digit_mask;                      \
+        uint d = u64key_digit(key, p.shift, p.digit_mask);                     \
         uint4 match = match_digit(d, valid);                               \
         uint rank_sg = popcount4(match & lt);                              \
         bool leader = valid && (lsb4(match) == lane);                      \
@@ -258,7 +261,7 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
 }
 
 DEF_DOWNSWEEP(sort_downsweep_u32, uint32_t)
-DEF_DOWNSWEEP(sort_downsweep_u64, uint64_t)
+DEF_DOWNSWEEP(sort_downsweep_u64, u64key_t)
 
 // ---------------------------------------------------------------------------
 // two-level scans (inclusive_sum / exclusive_sum)
@@ -268,26 +271,51 @@ DEF_DOWNSWEEP(sort_downsweep_u64, uint64_t)
 [SpecializationConstant]
 const int kInclusive = 0;
 
+// int64 scan element. The emulated form is a (lo, hi) pair with explicit
+// carry; the memory image matches the native int64 buffer layout, so the
+// same entry names serve both blob variants.
+#ifndef SSPLAT_EMULATE_INT64
+typedef int64_t i64acc_t;
+#else
+struct i64acc_t {
+    uint lo;
+    uint hi;
+    __init(int v) {
+        lo = uint(v);
+        hi = v < 0 ? 0xffffffffu : 0u;
+    }
+};
+i64acc_t operator+(i64acc_t a, i64acc_t b) {
+    i64acc_t r = i64acc_t(0);
+    r.lo = a.lo + b.lo;
+    r.hi = a.hi + b.hi + (r.lo < a.lo ? 1u : 0u);
+    return r;
+}
+i64acc_t operator-(i64acc_t a, i64acc_t b) {
+    i64acc_t r = i64acc_t(0);
+    r.lo = a.lo - b.lo;
+    r.hi = a.hi - b.hi - (a.lo < b.lo ? 1u : 0u);
+    return r;
+}
+#endif
+
 struct ScanParams {
-    uint64_t* input;       // typed per entry
-    uint64_t* output;
-    uint64_t* block_sums;  // [num_blocks]
+    uint32_t* input;       // typed per entry (cast)
+    uint32_t* output;
+    uint32_t* block_sums;  // [num_blocks]
     uint32_t n;
     uint32_t blocks_per_row;
 };
 
-groupshared int64_t _scan_tmp_i64[SCAN_WG];
+groupshared i64acc_t _scan_tmp_i64[SCAN_WG];
 groupshared int _scan_tmp_i32[SCAN_WG];
 groupshared float _scan_tmp_f32[SCAN_WG];
 
-// uint8 flag arrays are read as packed 32-bit words (byte extraction):
-// 8-bit loads / 8-bit pointee types would drag in shaderInt8 +
-// 8-bit-storage capabilities the baseline deliberately avoids. Reading the
-// word containing byte n-1 may touch up to 3 bytes past n; device
-// allocations are 16-byte rounded (VulkanRuntime), so this stays in bounds.
+// uint8 flag arrays go through int8_compat.slang: packed-word extraction on
+// the baseline (allocations are 16-byte rounded, so the word covering byte
+// n-1 stays in bounds), native byte loads in the ".int8" variant.
 int load_flag_byte(uint32_t* words, uint idx) {
-    uint w = words[idx >> 2];
-    return int((w >> ((idx & 3u) * 8u)) & 0xffu);
+    return int(u8_load(words, idx));
 }
 
 // LOAD(idx) is an expression over `p` yielding T; blocked layout (each
@@ -307,7 +335,7 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
     [ForceUnroll]                                                          \
     for (uint e = 0; e < SCAN_ELEMS; e++) {                                \
         uint idx = base + e;                                               \
-        loaded[e] = idx < p.n ? T(LOAD(idx)) : T(0);                       \
+        loaded[e] = idx < p.n ? (LOAD(idx)) : T(0);                        \
         v[e] = loaded[e];                                                  \
     }                                                                      \
     T thread_total = T(0);                                                 \
@@ -315,7 +343,7 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
     for (uint e = 0; e < SCAN_ELEMS; e++) {                                \
         T x = v[e];                                                        \
         v[e] = thread_total; /* exclusive within thread */                 \
-        thread_total += x;                                                 \
+        thread_total = thread_total + x;                                   \
     }                                                                      \
     TMP[tid] = thread_total;                                               \
     GroupMemoryBarrierWithGroupSync();                                     \
@@ -323,7 +351,7 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
     for (uint off = 1; off < SCAN_WG; off <<= 1) {                         \
         T x = tid >= off ? TMP[tid - off] : T(0);                          \
         GroupMemoryBarrierWithGroupSync();                                 \
-        TMP[tid] += x;                                                     \
+        TMP[tid] = TMP[tid] + x;                                           \
         GroupMemoryBarrierWithGroupSync();                                 \
     }                                                                      \
     T thread_base = TMP[tid] - thread_total; /* exclusive across threads */\
@@ -340,12 +368,12 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
 }
 
 #define LOAD_I32(idx) (((int*)p.input)[idx])
-#define LOAD_I64(idx) (((int64_t*)p.input)[idx])
+#define LOAD_I64(idx) (((i64acc_t*)p.input)[idx])
 #define LOAD_F32(idx) (((float*)p.input)[idx])
 #define LOAD_FLAG(idx) (load_flag_byte((uint32_t*)p.input, idx) != 0 ? 1 : 0)
 
 DEF_SCAN_BLOCKS(scan_blocks_i32, int, _scan_tmp_i32, LOAD_I32)
-DEF_SCAN_BLOCKS(scan_blocks_i64, int64_t, _scan_tmp_i64, LOAD_I64)
+DEF_SCAN_BLOCKS(scan_blocks_i64, i64acc_t, _scan_tmp_i64, LOAD_I64)
 // float sums (densify MCMC sampling cumsum). The blocked layout makes the
 // summation order deterministic per n, but it is NOT the same association
 // as CUB's device scan — cross-backend float cumsums agree only to rounding.
@@ -354,7 +382,7 @@ DEF_SCAN_BLOCKS(scan_blocks_f32, float, _scan_tmp_f32, LOAD_F32)
 DEF_SCAN_BLOCKS(scan_blocks_flags, int, _scan_tmp_i32, LOAD_FLAG)
 
 struct ScanSpineParams {
-    uint64_t* block_sums;  // scanned exclusively in place
+    uint32_t* block_sums;  // scanned exclusively in place (cast)
     uint32_t num_blocks;
 };
 
@@ -373,23 +401,23 @@ void NAME(uint tid: SV_GroupThreadID, uniform ScanSpineParams p) {         \
         for (uint off = 1; off < SCAN_WG; off <<= 1) {                     \
             T x = tid >= off ? TMP[tid - off] : T(0);                      \
             GroupMemoryBarrierWithGroupSync();                             \
-            TMP[tid] += x;                                                 \
+            TMP[tid] = TMP[tid] + x;                                       \
             GroupMemoryBarrierWithGroupSync();                             \
         }                                                                  \
         if (idx < p.num_blocks) sums[idx] = running + TMP[tid] - v;        \
         T chunk_total = TMP[SCAN_WG - 1];                                  \
         GroupMemoryBarrierWithGroupSync();                                 \
-        running += chunk_total;                                            \
+        running = running + chunk_total;                                   \
     }                                                                      \
 }
 
 DEF_SCAN_SPINE(scan_spine_i32, int, _scan_tmp_i32)
-DEF_SCAN_SPINE(scan_spine_i64, int64_t, _scan_tmp_i64)
+DEF_SCAN_SPINE(scan_spine_i64, i64acc_t, _scan_tmp_i64)
 DEF_SCAN_SPINE(scan_spine_f32, float, _scan_tmp_f32)
 
 struct ScanAddParams {
-    uint64_t* output;
-    uint64_t* block_sums;  // exclusive block bases
+    uint32_t* output;
+    uint32_t* block_sums;  // exclusive block bases (cast)
     uint32_t n;
     uint32_t blocks_per_row;
 };
@@ -406,12 +434,12 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
     [ForceUnroll]                                                          \
     for (uint e = 0; e < SCAN_ELEMS; e++) {                                \
         uint idx = base + e;                                               \
-        if (idx < p.n) output[idx] += addend;                              \
+        if (idx < p.n) output[idx] = output[idx] + addend;                 \
     }                                                                      \
 }
 
 DEF_SCAN_ADD(scan_add_i32, int)
-DEF_SCAN_ADD(scan_add_i64, int64_t)
+DEF_SCAN_ADD(scan_add_i64, i64acc_t)
 DEF_SCAN_ADD(scan_add_f32, float)
 
 // ---------------------------------------------------------------------------

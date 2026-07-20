@@ -8,6 +8,9 @@
 // output pixel is a pure function of the input image regardless of tile size
 // -> per-pixel outputs land in the tight parity channel.
 
+#include "int64_compat.slang"
+#include "int8_compat.slang"
+
 static const int CB = 16;      // logical tile
 static const int CH = 4;       // input halo (blur 5x5 + canny 3x3 + NMS 1)
 static const int CH1 = 2;      // post-blur halo
@@ -99,7 +102,7 @@ void _cn_body(CannyParams p, uint3 wg, uint tid, int tx, int ty) {
     if (yid < p.H && xid < p.W) {
         uint pix = (uint(bid) * uint(p.H) + uint(yid)) * uint(p.W) + uint(xid);
         if (p.has_mask != 0 &&
-            ((p.mask_in[pix >> 2] >> ((pix & 3u) * 8u)) & 0xffu) == 0u)
+            u8_load(p.mask_in, pix) == 0u)
             mag = 0.0f;
         p.img_out[pix] = mag;
     }
@@ -118,8 +121,8 @@ void canny_rgb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         int x = t % (CB + 2 * CH);
         int yi = min(max(int(wg.y) * CB + y - CH, 0), p.H - 1);
         int xi = min(max(int(wg.x) * CB + x - CH, 0), p.W - 1);
-        int64_t pix =
-            ((int64_t)bid * p.H + yi) * (int64_t)p.W + xi;
+        gindex_t pix =
+            ((gindex_t)bid * p.H + yi) * (gindex_t)p.W + xi;
         float3 rgb = float3(p.img_in[3 * pix], p.img_in[3 * pix + 1],
                             p.img_in[3 * pix + 2]);
         PIX(y, x) = dot(rgb, float3(0.299f, 0.587f, 0.114f));
@@ -141,7 +144,7 @@ void canny_scalar(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         int x = t % (CB + 2 * CH);
         int yi = min(max(int(wg.y) * CB + y - CH, 0), p.H - 1);
         int xi = min(max(int(wg.x) * CB + x - CH, 0), p.W - 1);
-        PIX(y, x) = p.img_in[((int64_t)bid * p.H + yi) * (int64_t)p.W + xi];
+        PIX(y, x) = p.img_in[((gindex_t)bid * p.H + yi) * (gindex_t)p.W + xi];
     }
     GroupMemoryBarrierWithGroupSync();
     _cn_body(p, wg, tid, tx, ty);
@@ -168,7 +171,7 @@ void residual_luma(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     int yid = int(wg.y) * 16 + int(tid / 16u);
     int bid = int(wg.z);
     if (xid >= p.W || yid >= p.H || bid >= p.B) return;
-    int64_t idx = ((int64_t)bid * p.H + yid) * (int64_t)p.W + xid;
+    gindex_t idx = ((gindex_t)bid * p.H + yid) * (gindex_t)p.W + xid;
     float dx = p.render[3 * idx] - p.ref[3 * idx];
     float dy = p.render[3 * idx + 1] - p.ref[3 * idx + 1];
     float dz = p.render[3 * idx + 2] - p.ref[3 * idx + 2];

@@ -15,6 +15,8 @@
 // one float CAS-atomic per workgroup per index: accumulated sums are
 // order-dependent on both backends -> loose parity channel.
 
+#include "int64_compat.slang"
+#include "int8_compat.slang"
 #include "atomic_float.slang"
 
 #define CudaDeviceExport ForceInline
@@ -59,7 +61,7 @@ static const uint kOutVMedianDepth = 1u << 11;
 static const uint kOutVMedianNormal = 1u << 12;
 
 struct PplParams {
-    int64_t* camera_indices;
+    i64mem_t* camera_indices;
     float* render_rgb;
     float* ref_rgb;
     float* render_depth;
@@ -109,7 +111,7 @@ bool _ms_finite(float v) {
 
 [ForceInline]
 uint _ms_load_u8(uint* buf, uint idx) {
-    return (buf[idx >> 2] >> ((idx & 3u) * 8u)) & 0xffu;
+    return u8_load(buf, idx);
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +147,7 @@ float _ms_sample_f(float* src, int b, int x_dst, int y_dst, int W_dst,
     float w00, w01, w10, w11;
     _ms_taps(x_dst, y_dst, W_dst, H_dst, W_src, H_src, x0, y0, x1, y1, w00,
              w01, w10, w11);
-    int64_t plane = (int64_t)b * (int64_t)H_src * (int64_t)W_src;
+    gindex_t plane = (gindex_t)b * (gindex_t)H_src * (gindex_t)W_src;
     float v00 = src[plane + y0 * W_src + x0];
     float v10 = src[plane + y0 * W_src + x1];
     float v01 = src[plane + y1 * W_src + x0];
@@ -154,7 +156,7 @@ float _ms_sample_f(float* src, int b, int x_dst, int y_dst, int W_dst,
 }
 
 [ForceInline]
-float3 _ms_load_f3(float* src, int64_t i) {
+float3 _ms_load_f3(float* src, gindex_t i) {
     return float3(src[3 * i], src[3 * i + 1], src[3 * i + 2]);
 }
 
@@ -165,7 +167,7 @@ float3 _ms_sample_f3(float* src, int b, int x_dst, int y_dst, int W_dst,
     float w00, w01, w10, w11;
     _ms_taps(x_dst, y_dst, W_dst, H_dst, W_src, H_src, x0, y0, x1, y1, w00,
              w01, w10, w11);
-    int64_t plane = (int64_t)b * (int64_t)H_src * (int64_t)W_src;
+    gindex_t plane = (gindex_t)b * (gindex_t)H_src * (gindex_t)W_src;
     float3 v00 = _ms_load_f3(src, plane + y0 * W_src + x0);
     float3 v10 = _ms_load_f3(src, plane + y0 * W_src + x1);
     float3 v01 = _ms_load_f3(src, plane + y1 * W_src + x0);
@@ -191,7 +193,7 @@ void _ms_scatter_add_f(float* dst, int b, int x_dst, int y_dst, int W_dst,
     float w00, w01, w10, w11;
     _ms_taps(x_dst, y_dst, W_dst, H_dst, W_src, H_src, x0, y0, x1, y1, w00,
              w01, w10, w11);
-    int64_t plane = (int64_t)b * (int64_t)H_src * (int64_t)W_src;
+    gindex_t plane = (gindex_t)b * (gindex_t)H_src * (gindex_t)W_src;
     if (w00 != 0.0f) atomic_add_f32(dst + (plane + y0 * W_src + x0), w00 * dvalue);
     if (w10 != 0.0f) atomic_add_f32(dst + (plane + y0 * W_src + x1), w10 * dvalue);
     if (w01 != 0.0f) atomic_add_f32(dst + (plane + y1 * W_src + x0), w01 * dvalue);
@@ -205,7 +207,7 @@ void _ms_scatter_add_f3(float* dst, int b, int x_dst, int y_dst, int W_dst,
     float w00, w01, w10, w11;
     _ms_taps(x_dst, y_dst, W_dst, H_dst, W_src, H_src, x0, y0, x1, y1, w00,
              w01, w10, w11);
-    int64_t plane = (int64_t)b * (int64_t)H_src * (int64_t)W_src;
+    gindex_t plane = (gindex_t)b * (gindex_t)H_src * (gindex_t)W_src;
     if (w00 != 0.0f) {
         float* q = dst + 3 * (plane + y0 * W_src + x0);
         atomic_add_f32(q + 0, w00 * dvalue.x);
@@ -250,7 +252,7 @@ int _ms_add_which(int i) {
 // with the CUDA kernels' per-modality null defaults, GT modalities bilinear-
 // sampled at their own resolution.
 [ForceInline]
-void _ms_load_pixel(PplParams p, int batch_idx, int64_t idx, int x_dst,
+void _ms_load_pixel(PplParams p, int batch_idx, gindex_t idx, int x_dst,
                     int y_dst, out float3 render_rgb, out float3 ref_rgb,
                     out float render_depth, out float ref_depth_v,
                     out float3 render_normal, out float3 depth_normal,
@@ -296,7 +298,7 @@ void ppl_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint pixel_idx = (wg.z * p.wgs_per_row + wg.x) * 256 + tid;
     uint batch_idx = wg.y;
     if (batch_idx >= uint(p.B)) return;
-    int64_t idx = (int64_t)batch_idx * (int64_t)p.ppi + (int64_t)pixel_idx;
+    gindex_t idx = (gindex_t)batch_idx * (gindex_t)p.ppi + (gindex_t)pixel_idx;
 
     int x_dst = int(pixel_idx % uint(p.W_render));
     int y_dst = int(pixel_idx / uint(p.W_render));
@@ -343,7 +345,7 @@ void ppl_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
     uint row_b = batch_idx;
     if ((p.in_flags & kInCam) != 0)
-        row_b = uint(int(p.camera_indices[batch_idx]));
+        row_b = uint(int(i64mem_get(p.camera_indices[batch_idx])));
 
     for (int i = 0; i < kNRaw; i++) {
         float loss = inside ? losses[i] : 0.0f;
@@ -377,14 +379,14 @@ void ppl_bwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint pixel_idx = (wg.z * p.wgs_per_row + wg.x) * 256 + tid;
     uint batch_idx = wg.y;
     if (batch_idx >= uint(p.B) || pixel_idx >= p.ppi) return;
-    int64_t idx = (int64_t)batch_idx * (int64_t)p.ppi + (int64_t)pixel_idx;
+    gindex_t idx = (gindex_t)batch_idx * (gindex_t)p.ppi + (gindex_t)pixel_idx;
 
     int x_dst = int(pixel_idx % uint(p.W_render));
     int y_dst = int(pixel_idx / uint(p.W_render));
 
     uint row_b = batch_idx;
     if ((p.in_flags & kInCam) != 0)
-        row_b = uint(int(p.camera_indices[batch_idx]));
+        row_b = uint(int(i64mem_get(p.camera_indices[batch_idx])));
 
     float v_losses[kNRaw];
     for (int i = 0; i < kNRaw; i++) {
@@ -574,12 +576,12 @@ void ms_downsample_f(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint y0 = min(2 * yid, uint(p.hsH - 1)), y1 = min(2 * yid + 1, uint(p.hsH - 1));
     uint x0 = min(2 * xid, uint(p.hsW - 1)), x1 = min(2 * xid + 1, uint(p.hsW - 1));
     for (int c = 0; c < p.C; c++) {
-        int64_t base = ((int64_t)bid * p.hsH) * (int64_t)p.hsW;
+        gindex_t base = ((gindex_t)bid * p.hsH) * (gindex_t)p.hsW;
         float v = p.hs[((base + y0 * p.hsW + x0)) * p.C + c] +
                   p.hs[((base + y0 * p.hsW + x1)) * p.C + c] +
                   p.hs[((base + y1 * p.hsW + x0)) * p.C + c] +
                   p.hs[((base + y1 * p.hsW + x1)) * p.C + c];
-        int64_t obase = ((int64_t)bid * p.lsH + yid) * (int64_t)p.lsW + xid;
+        gindex_t obase = ((gindex_t)bid * p.lsH + yid) * (gindex_t)p.lsW + xid;
         p.ls[obase * p.C + c] = 0.25f * v;
     }
 }
@@ -593,13 +595,13 @@ void ms_upsample_f(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint bid = wg.z;
     if (yid >= uint(p.hsH) || xid >= uint(p.hsW)) return;
     for (int c = 0; c < p.C; c++) {
-        int64_t hidx = (((int64_t)bid * p.hsH + yid) * (int64_t)p.hsW + xid) *
+        gindex_t hidx = (((gindex_t)bid * p.hsH + yid) * (gindex_t)p.hsW + xid) *
                            p.C + c;
         float v = (p.a == 0.0f) ? 0.0f : p.a * p.hs[hidx];
         uint yl = yid / uint(p.scale), xl = xid / uint(p.scale);
         if (yl < uint(p.lsH) && xl < uint(p.lsW)) {
-            int64_t lidx =
-                (((int64_t)bid * p.lsH + yl) * (int64_t)p.lsW + xl) * p.C + c;
+            gindex_t lidx =
+                (((gindex_t)bid * p.lsH + yl) * (gindex_t)p.lsW + xl) * p.C + c;
             v += p.b * p.ls[lidx];
         }
         p.hs[hidx] = v;

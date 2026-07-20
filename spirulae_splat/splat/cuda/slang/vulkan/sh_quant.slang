@@ -3,23 +3,23 @@
 // Math is a verbatim mirror of harmonics.slang's _sh_load_q{8,16} +
 // sh_coeffs_to_color_q{8,16} (same operation order, so CUDA/Vulkan parity is
 // exact modulo compiler codegen). One deliberate difference: the packed
-// uint8/uint16 buffer is read as u32 WORDS (shift + mask) instead of native
-// byte/short loads — shaderInt8 / storageBuffer8BitAccess / 16-bit-storage
-// are NOT in the device baseline (README "no 8-bit types" rule), and the
-// word reads keep value-quant working everywhere with zero feature gating.
-// Device allocations are 16-byte rounded, so word reads past the last cell
-// stay in bounds.
+// uint8 buffer goes through int8_compat.slang (u32-word extraction on the
+// baseline, native byte loads in the ".int8" blob variant) and the uint16
+// buffer is always read as u32 WORDS — 16-bit storage is not in the device
+// baseline. Device allocations are 16-byte rounded, so word reads past the
+// last cell stay in bounds.
 //
+#include "int8_compat.slang"
+
 // Include AFTER harmonics.slang (uses mean_viewmat_to_unnormalized_viewdir).
 // BITS is 8 or 16, always a fold-time constant (spec-constant switch in the
 // caller), so _sh_fetch_qw's branch disappears at pipeline creation.
 
 // Raw quantized cell fetch: cell index -> integer code (0..2^BITS-1).
 [ForceInline]
-uint _sh_fetch_qw<let BITS : int>(uint* packed, int64_t cell) {
+uint _sh_fetch_qw<let BITS : int>(uint* packed, gindex_t cell) {
     if (BITS == 8) {
-        uint word = packed[cell >> 2];
-        return (word >> uint(8 * uint(cell & 3))) & 0xffu;
+        return u8_load(packed, cell);
     } else {
         uint word = packed[cell >> 1];
         return (word >> uint(16 * uint(cell & 1))) & 0xffffu;
@@ -28,9 +28,9 @@ uint _sh_fetch_qw<let BITS : int>(uint* packed, int64_t cell) {
 
 // Mirrors _sh_load_q{8,16}: decode one float3 SH coefficient (basis j).
 [ForceInline]
-float3 _sh_load_qw<let BITS : int>(uint* packed, float2* bounds, int64_t base,
-                                   int j, int64_t bounds_stride) {
-    int64_t cell0 = base + (int64_t)(3 * j);
+float3 _sh_load_qw<let BITS : int>(uint* packed, float2* bounds, gindex_t base,
+                                   int j, gindex_t bounds_stride) {
+    gindex_t cell0 = base + (gindex_t)(3 * j);
     // Bounds-block division runs in u32 — identical results while the packed
     // buffer stays under 2^32 cells (4G coefficients); Intel/ANV's compiler
     // effectively hangs lowering the slang-emitted 64-bit division.
@@ -56,8 +56,8 @@ float3 sh_coeffs_to_color_qw<let BITS : int>(
     float3 coeff_dc,
     uint* packed,
     float2* bounds,
-    int64_t base,
-    int64_t bounds_stride
+    gindex_t base,
+    gindex_t bounds_stride
 ) {
     #define _C(j) _sh_load_qw<BITS>(packed, bounds, base, j, bounds_stride)
     float3 colors = 0.2820947917738781f * coeff_dc;
@@ -159,7 +159,7 @@ float3 sh_to_color_qw<let BITS : int>(
     const int degree,
     const float3 mean, const float3x3 R, const float3 t,
     float3 coeff_dc,
-    uint* packed, float2* bounds, int64_t base, int64_t bounds_stride
+    uint* packed, float2* bounds, gindex_t base, gindex_t bounds_stride
 ) {
     float3 viewdir = mean_viewmat_to_unnormalized_viewdir(mean, R, t);
     float3 rgb = sh_coeffs_to_color_qw<BITS>(degree, viewdir, coeff_dc,

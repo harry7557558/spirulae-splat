@@ -22,6 +22,7 @@
 // known hardware (8..64; see README subgroup rules).
 
 #define CudaDeviceExport ForceInline
+#include "int64_compat.slang"
 #include "projection_utils.slang"
 #undef CudaDeviceExport
 
@@ -353,7 +354,7 @@ void rasterize_fwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float dist[10];
     [ForceUnroll]
     for (int k = 0; k < 10; k++)
-        dist[k] = p.dist_coeffs == nullptr ? 0.0f
+        dist[k] = is_null(p.dist_coeffs) ? 0.0f
                                            : p.dist_coeffs[10 * image_id + k];
 
     float3 ray_o = transform_ray_o(R, ct);

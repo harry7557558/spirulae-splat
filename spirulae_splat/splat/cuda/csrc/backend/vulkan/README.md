@@ -25,10 +25,13 @@ reproduced.
 
 ## Device baseline
 
-Vulkan 1.2 core with features: `bufferDeviceAddress`, `shaderInt64`,
-`timelineSemaphore` (all core-1.2 features; MoltenVK exposes all three on
-Apple silicon). Optional, probed per device and reflected as pipeline
-variants where needed:
+Vulkan 1.2 core with features: `bufferDeviceAddress`, `timelineSemaphore`
+(both core-1.2 features; MoltenVK exposes both on Apple silicon). Optional,
+probed per device and reflected as pipeline variants where needed
+(build_spirv.py compiles every subset of an entry's applicable variants, so
+any capability combination finds an exact blob; SSPLAT_VK_NATIVE_ATOMICS=0 /
+SSPLAT_VK_NATIVE_INT64=0 / SSPLAT_VK_NATIVE_INT8=0 force the fallback blobs
+for A/B testing):
 
 - `VK_EXT_shader_atomic_float` (`shaderBufferFloat32AtomicAdd`) — training
   backward passes (~1,069 float atomicAdd sites). Every entry that calls
@@ -37,6 +40,25 @@ variants where needed:
   `.atomicadd`-suffixed blob uses native `OpAtomicFAddEXT`; the pipeline
   layer picks per device at module load (no in-shader branch). Unlike
   VkSplat, both variants are always built.
+- `shaderInt64` — 64-bit sort keys, morton codes, large-buffer indexing.
+  Entries whose base blob declares `OpCapability Int64` additionally get a
+  `.noint64` variant compiled with `-DSSPLAT_EMULATE_INT64`
+  (`slang/vulkan/int64_compat.slang`): index arithmetic narrows to int32
+  (fine — devices without shaderInt64 cannot hold 2^31-element buffers,
+  which the host guards regardless), int64-layout tensors and push fields
+  are accessed as `uint2` word pairs, sort keys / morton codes use
+  bit-identical (lo, hi) pair emulation, and pointer null checks bitcast to
+  `uint2` instead of the Int64-dragging `ConvertPtrToU` slang emits for
+  `p == nullptr` (`is_null`). build_spirv.py fails the build if a
+  `.noint64` blob still declares Int64. Old Intel iGPUs (and some mobile
+  parts) lack shaderInt64.
+- `shaderInt8` + `storageBuffer8BitAccess` — byte-buffer access. The
+  baseline reads/writes uint8 buffers as packed u32 words
+  (`slang/vulkan/int8_compat.slang`: `u8_load`/`s8_load`/`u8_store`; word
+  reads past `n` stay in bounds because allocations are 16-byte rounded,
+  and byte stores are an InterlockedAnd+Or pair). Entries that call those
+  helpers get an `.int8` variant with native byte loads and plain byte
+  stores.
   Forward/render path does not need it (only float atomicMax on radii,
   which is integer-monotonic on non-negative floats → emulate with
   u32 atomicMax over the float bit pattern; exact, not a CAS loop).
@@ -218,12 +240,18 @@ Mesa ANV, llvmpipe — all tests + validation layers clean on all three):
   **X dimension** must be the multiple (VUID-02757 under
   REQUIRE_FULL_SUBGROUPS) — a 16x16 workgroup fails even though its total is
   256, so 2D kernels use flat 64/128/256-wide X layouts.
-- **No 8-bit types in shaders.** `uint8_t` loads / `uint8_t*` push-constant
-  members require shaderInt8 / 8-bit-storage features outside the baseline.
-  Byte arrays are read as packed u32 words (`load_flag_byte` pattern);
-  device allocations are 16-byte rounded so word reads past `n` stay in
-  bounds. Revisit only if SH value-quant kernels measurably need native
-  8-bit access (then feature-gate it).
+- **No unguarded 8-bit types in shaders.** `uint8_t` loads / `uint8_t*`
+  push-constant members require shaderInt8 / 8-bit-storage features outside
+  the baseline. Byte access goes through `int8_compat.slang` (packed-u32
+  words on the baseline, native bytes in the feature-gated `.int8` blob
+  variant); device allocations are 16-byte rounded so word reads past `n`
+  stay in bounds. build_spirv.py fails the build if a non-`.int8` blob
+  declares 8-bit capabilities.
+- **No unguarded 64-bit integers in shaders.** Applies to `int64_t` locals,
+  `uint64_t*` pointee types in param structs (even when only cast away),
+  and `p == nullptr` comparisons — all of them drag `OpCapability Int64`
+  into the blob. Use `int64_compat.slang` types (`gindex_t`, `i64mem_t`,
+  `u64key_t`, `is_null`) so the `.noint64` variant stays legal.
 - **Subgroup scratch sizing.** Ballot-ranking scratch is bounded by
   MAX_NSG = workgroup / 8 (llvmpipe's subgroup is 8); at workgroup 128 and
   RADIX 256 this is 17KB shared — inside every device's 32KB floor.

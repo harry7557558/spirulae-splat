@@ -20,6 +20,7 @@
 // every block reduce.
 
 #define CudaDeviceExport ForceInline
+#include "int64_compat.slang"
 #include "primitive_3dgs.slang"
 #include "harmonics.slang"
 #undef CudaDeviceExport
@@ -80,7 +81,7 @@ struct ProjectionQgradParams {
     // SH VALUE quant source (kShValueBits 8/16)
     uint* sh_value_packed;
     float2* sh_value_bounds;
-    int64_t sh_value_bounds_stride;
+    i64mem_t sh_value_bounds_stride;
     uint32_t sh_stride_src;
     uint32_t C;
     uint32_t N;  // num_splats (splat-parallel even when packed)
@@ -149,8 +150,8 @@ void projection_qgrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     if (inside) {
         PbSplat s = pb_load_splat(p.means, p.quats, p.scales, p.opacities,
                                   p.features_dc, gid);
-        int64_t qbase =
-            (int64_t)3 * (int64_t)p.num_sh_buffer * (int64_t)gid;
+        gindex_t qbase =
+            (gindex_t)3 * (gindex_t)p.num_sh_buffer * (gindex_t)gid;
         for (int cid_t = cid_0; cid_t < cid_1; ++cid_t) {
             int idx = (kPacked != 0) ? p.perm[cid_t]
                                      : cid_t * int(p.N) + int(gid);
@@ -169,7 +170,7 @@ void projection_qgrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 pb_vjp_3dgut(s, cam, p.width, p.height, v_ss, v_so, g);
                 pb_sh_vjp(s, cam, p.features_sh + gid * p.sh_stride_src,
                           p.sh_value_packed, p.sh_value_bounds, qbase,
-                          p.sh_value_bounds_stride, v_rgb, g);
+                          i64mem_get(p.sh_value_bounds_stride), v_rgb, g);
             } else {
                 float2 v_xy = float2(p.vs0[2 * idx], p.vs0[2 * idx + 1]);
                 float v_depth = p.vs1[idx];
@@ -182,7 +183,7 @@ void projection_qgrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                           v_opac, g);
                 pb_sh_vjp(s, cam, p.features_sh + gid * p.sh_stride_src,
                           p.sh_value_packed, p.sh_value_bounds, qbase,
-                          p.sh_value_bounds_stride, v_rgb, g);
+                          i64mem_get(p.sh_value_bounds_stride), v_rgb, g);
             }
         }
     }

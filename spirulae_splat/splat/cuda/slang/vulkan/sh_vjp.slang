@@ -18,9 +18,11 @@
 // sh_quant.slang (_sh_load_qw).
 
 // Source coefficient load: fp32 [3*K] layout or word-based q8/q16 codec.
+#include "int64_compat.slang"
+
 [ForceInline]
 float3 _shv_C<let QBITS : int>(float* coeffs, uint* qpacked, float2* qbounds,
-                               int64_t qbase, int64_t qstride, int j) {
+                               gindex_t qbase, gindex_t qstride, int j) {
     if (QBITS == 8 || QBITS == 16)
         return _sh_load_qw<QBITS>(qpacked, qbounds, qbase, j, qstride);
     return float3(coeffs[3 * j], coeffs[3 * j + 1], coeffs[3 * j + 2]);
@@ -349,7 +351,7 @@ void sh_color_vjp<let QBITS : int>(
     float3 coeff_dc,
     float* coeffs,                   // fp32 source [3*K] (QBITS == 0)
     uint* qpacked, float2* qbounds,  // q8/q16 source (QBITS 8/16)
-    int64_t qbase, int64_t qstride,
+    gindex_t qbase, gindex_t qstride,
     float3 v_colors,
     inout float3 v_coeff_dc,
     inout float3 v_coeffs[24],

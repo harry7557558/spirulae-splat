@@ -22,6 +22,7 @@
 // reaches (`inside` masks work, never control flow around a reduce).
 
 #define CudaDeviceExport ForceInline
+#include "int64_compat.slang"
 #include "primitive_3dgs.slang"
 #include "harmonics.slang"
 #include "per_splat_losses.slang"
@@ -193,13 +194,13 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                              p.vw_dc[3 * gid + 2]);
 
         // camera loop (register accumulation, no atomics)
-        int64_t qbase =
-            (int64_t)3 * (int64_t)p.num_sh_buffer * (int64_t)gid;
+        gindex_t qbase =
+            (gindex_t)3 * (gindex_t)p.num_sh_buffer * (gindex_t)gid;
         // kLevel 1: source SH reads go through the 16-bit value codec in
         // FPBO per-splat-block layout (one bound per 256 splats covering
         // all 3*K cells; the host passes kShValueBits = 16 and the FPBO
         // stride below).
-        int64_t vstride = (int64_t)256 * 3 * (int64_t)p.num_sh_buffer;
+        gindex_t vstride = (gindex_t)256 * 3 * (gindex_t)p.num_sh_buffer;
         for (int cid_t = cid_0; cid_t < cid_1; ++cid_t) {
             int idx = (kPacked != 0) ? p.perm[cid_t]
                                      : cid_t * int(p.N) + int(gid);

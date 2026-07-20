@@ -18,6 +18,8 @@
 // pointers on every path, so the branch is speculation-safe on llvmpipe).
 
 #define CudaDeviceExport ForceInline
+#include "int64_compat.slang"
+#include "int8_compat.slang"
 #include "projection_utils.slang"
 #undef CudaDeviceExport
 
@@ -30,11 +32,9 @@ static const float kWarpPi = 3.14159265358979323846f;
 
 // Load element `idx` of the raw input buffer as an un-normalized float.
 [ForceInline]
-float _wp_load(uint* buf, int64_t idx, int kind) {
-    if (kind == kElemU8) {
-        uint w = buf[idx >> 2];
-        return float((w >> ((uint(idx) & 3u) * 8u)) & 0xffu);
-    }
+float _wp_load(uint* buf, gindex_t idx, int kind) {
+    if (kind == kElemU8)
+        return float(u8_load(buf, idx));
     if (kind == kElemU16) {
         uint w = buf[idx >> 1];
         return float((w >> ((uint(idx) & 1u) * 16u)) & 0xffffu);
@@ -43,10 +43,10 @@ float _wp_load(uint* buf, int64_t idx, int kind) {
 }
 
 [ForceInline]
-float _wp_tap(uint* buf, int kind, int64_t plane, int H, int W, int C,
+float _wp_tap(uint* buf, int kind, gindex_t plane, int H, int W, int C,
               int cid, int x_, int y_, float norm_inv, float padding) {
     if (x_ < 0 || x_ >= W || y_ < 0 || y_ >= H) return padding;
-    int64_t idx = (plane + int64_t(y_) * W + x_) * C + cid;
+    gindex_t idx = (plane + gindex_t(y_) * W + x_) * C + cid;
     return _wp_load(buf, idx, kind) * norm_inv;
 }
 
@@ -65,7 +65,7 @@ int _wp_wrap_x(int v, int W) {
 // conversion of an unbounded projected uv is undefined, and the CUDA kernels
 // only avoid it by accident of the `valid` guard.
 [ForceInline]
-float _wp_bilinear(uint* buf, int kind, int64_t plane, int H, int W, int C,
+float _wp_bilinear(uint* buf, int kind, gindex_t plane, int H, int W, int C,
                    int cid, float x, float y, float norm_inv, float padding,
                    bool wrap_u) {
     if (!wrap_u) {
@@ -148,7 +148,7 @@ float _wp_face_ray_depth(float d, float3 raydir, bool input_is_ray_depth) {
 // and rotate it into the face frame; (-1,-1,-1) sentinel for "no data" /
 // degenerate samples.
 [ForceInline]
-float3 _wp_one_normal(uint* src, int kind, int64_t plane, int H, int W,
+float3 _wp_one_normal(uint* src, int kind, gindex_t plane, int H, int W,
                       float x, float y, float norm_inv, float decode_off,
                       bool wrap_u, float3 axis_x, float3 axis_y,
                       float3 axis_z) {
@@ -211,14 +211,14 @@ void warp_img_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
     if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
     float4 intrin = _wp_intrin(p.intrins, bid);
     float[10] dc = _wp_dist(p.dist_coeffs, bid);
-    int64_t plane = int64_t(bid) * p.Hin * p.Win;
+    gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
     for (int ki = 0; ki < p.K; ki++) {
         float3 ax, ay, az;
         _wp_axes(p.axes, ki, ax, ay, az);
         float3 raydir = az + tx * ax + ty * ay;
         float2 uv;
         bool valid = _wp_proj(p.camera_model, raydir, intrin, dc, uv);
-        int64_t base = (((int64_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i) * p.C;
+        gindex_t base = (((gindex_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i) * p.C;
         for (int c = 0; c < p.C; c++) {
             float v = 0.5f;
             if (valid)
@@ -236,13 +236,13 @@ void warp_img_equi(uniform WarpParams p, uint3 wg: SV_GroupID,
     int i, j, bid;
     float tx, ty;
     if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
-    int64_t plane = int64_t(bid) * p.Hin * p.Win;
+    gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
     for (int ki = 0; ki < p.K; ki++) {
         float3 ax, ay, az;
         _wp_axes(p.axes, ki, ax, ay, az);
         float3 raydir = az + tx * ax + ty * ay;
         float2 uv = _wp_equi_uv(raydir, p.Hin, p.Win);
-        int64_t base = (((int64_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i) * p.C;
+        gindex_t base = (((gindex_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i) * p.C;
         for (int c = 0; c < p.C; c++)
             p.dst[base + c] = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin,
                                            p.Win, p.C, c, uv.x, uv.y,
@@ -259,7 +259,7 @@ void warp_depth_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
     if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
     float4 intrin = _wp_intrin(p.intrins, bid);
     float[10] dc = _wp_dist(p.dist_coeffs, bid);
-    int64_t plane = int64_t(bid) * p.Hin * p.Win;
+    gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
     // Projected uv is in intrinsics-reference (RGB input) pixel space;
     // rescale to the GT depth map's own resolution.
     float sx = float(p.Win) / float(p.in_W), sy = float(p.Hin) / float(p.in_H);
@@ -276,7 +276,7 @@ void warp_depth_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
                                    false);
             outv = _wp_face_ray_depth(d, raydir, p.ray_depth != 0);
         }
-        p.dst[((int64_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i] = outv;
+        p.dst[((gindex_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i] = outv;
     }
 }
 
@@ -287,7 +287,7 @@ void warp_depth_equi(uniform WarpParams p, uint3 wg: SV_GroupID,
     int i, j, bid;
     float tx, ty;
     if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
-    int64_t plane = int64_t(bid) * p.Hin * p.Win;
+    gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
     for (int ki = 0; ki < p.K; ki++) {
         float3 ax, ay, az;
         _wp_axes(p.axes, ki, ax, ay, az);
@@ -295,7 +295,7 @@ void warp_depth_equi(uniform WarpParams p, uint3 wg: SV_GroupID,
         float2 uv = _wp_equi_uv(raydir, p.Hin, p.Win);
         float d = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, 1, 0,
                                uv.x, uv.y, p.norm_inv, 0.0f, true);
-        p.dst[((int64_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i] =
+        p.dst[((gindex_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i] =
             _wp_face_ray_depth(d, raydir, p.ray_depth != 0);
     }
 }
@@ -309,7 +309,7 @@ void warp_normal_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
     if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
     float4 intrin = _wp_intrin(p.intrins, bid);
     float[10] dc = _wp_dist(p.dist_coeffs, bid);
-    int64_t plane = int64_t(bid) * p.Hin * p.Win;
+    gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
     float sx = float(p.Win) / float(p.in_W), sy = float(p.Hin) / float(p.in_H);
     for (int ki = 0; ki < p.K; ki++) {
         float3 ax, ay, az;
@@ -322,7 +322,7 @@ void warp_normal_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
             nf = _wp_one_normal(p.src, p.elem_kind, plane, p.Hin, p.Win,
                                 uv.x * sx, uv.y * sy, p.norm_inv,
                                 p.decode_off, false, ax, ay, az);
-        int64_t base = (((int64_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i) * 3;
+        gindex_t base = (((gindex_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i) * 3;
         p.dst[base + 0] = nf.x;
         p.dst[base + 1] = nf.y;
         p.dst[base + 2] = nf.z;
@@ -336,7 +336,7 @@ void warp_normal_equi(uniform WarpParams p, uint3 wg: SV_GroupID,
     int i, j, bid;
     float tx, ty;
     if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
-    int64_t plane = int64_t(bid) * p.Hin * p.Win;
+    gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
     for (int ki = 0; ki < p.K; ki++) {
         float3 ax, ay, az;
         _wp_axes(p.axes, ki, ax, ay, az);
@@ -345,7 +345,7 @@ void warp_normal_equi(uniform WarpParams p, uint3 wg: SV_GroupID,
         float3 nf = _wp_one_normal(p.src, p.elem_kind, plane, p.Hin, p.Win,
                                    uv.x, uv.y, p.norm_inv, p.decode_off,
                                    true, ax, ay, az);
-        int64_t base = (((int64_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i) * 3;
+        gindex_t base = (((gindex_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i) * 3;
         p.dst[base + 0] = nf.x;
         p.dst[base + 1] = nf.y;
         p.dst[base + 2] = nf.z;
@@ -402,7 +402,7 @@ uint _wp_mask_byte(WarpMaskParams p, uint n, bool equi) {
         ys = int(floor(clamp(uv.y + 0.5f, -8.0f, float(p.Hin) + 8.0f)));
         if (xs < 0 || xs >= p.Win || ys < 0 || ys >= p.Hin) return 0u;
     }
-    int64_t idx = int64_t(bid) * p.Hin * p.Win + int64_t(ys) * p.Win + xs;
+    gindex_t idx = gindex_t(bid) * p.Hin * p.Win + gindex_t(ys) * p.Win + xs;
     return _wp_load(p.src, idx, kElemU8) != 0.0f ? 1u : 0u;
 }
 
@@ -454,5 +454,5 @@ void bytes_to_float(uniform BytesToFloatParams p, uint3 wg: SV_GroupID,
                     uint tid: SV_GroupIndex) {
     uint idx = (wg.y * p.wgs_per_row + wg.x) * 256u + tid;
     if (idx >= p.total) return;
-    p.dst[idx] = _wp_load(p.src, int64_t(idx), p.elem_kind) * p.scale + p.offset;
+    p.dst[idx] = _wp_load(p.src, gindex_t(idx), p.elem_kind) * p.scale + p.offset;
 }

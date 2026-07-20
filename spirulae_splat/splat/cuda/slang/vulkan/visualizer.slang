@@ -13,15 +13,21 @@
 //  - warp ballot/reduce in the blit's gray-plane fit becomes a groupshared
 //    serial reduction over the 32-thread workgroup (deterministic; the CUDA
 //    kernel assumes WARP_SIZE == 32 which Vulkan must not).
-//  - uint8 buffers (thumbnails RGBA, done mask, final RGB bytes) are read
-//    and written as u32 words; the [H,W,3] byte output is produced by a
-//    separate pack kernel from a per-pixel RGBA word scratch.
+//  - uint8 buffers (thumbnails RGBA, done mask, final RGB bytes) are
+//    accessed as RGBA words or through int8_compat.slang byte helpers; the
+//    [H,W,3] byte output is produced by a separate pack kernel from a
+//    per-pixel RGBA word scratch.
+//  - 64-bit morton keys / LBVH deltas go through int64_compat.slang
+//    (bit-identical (lo, hi) pair emulation in the ".noint64" variant).
 //  - 2D thread blocks (16x16 min/max, 8x4 blit) become flat wide-X layouts
 //    (VUID-02757: workgroup X must be a multiple of the subgroup size).
 
 #define CudaDeviceExport ForceInline
 #include "projection_utils.slang"
 #undef CudaDeviceExport
+
+#include "int64_compat.slang"
+#include "int8_compat.slang"
 
 static const int kNumFrustumSegments = 16;
 static const int kNumFrustumFaces = 8;
@@ -100,7 +106,7 @@ void vis_fill_frustum(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float dist[10];
     [ForceUnroll]
     for (int k = 0; k < 10; k++)
-        dist[k] = p.dist_coeffs == nullptr ? 0.0f
+        dist[k] = is_null(p.dist_coeffs) ? 0.0f
                                            : p.dist_coeffs[10 * bid + k];
     float2 corners[4] = {
         float2(-cx / fx, -cy / fy),
@@ -314,6 +320,8 @@ void vis_compute_aabb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
 static const uint kMortonBitsPerDim = 21;
 
+#ifndef SSPLAT_EMULATE_INT64
+
 [ForceInline]
 uint64_t insert_2_zeros_between_bits(uint64_t x) {
     x = (x | (x << 32)) & 0xFFFF00000000FFFFULL;
@@ -325,7 +333,7 @@ uint64_t insert_2_zeros_between_bits(uint64_t x) {
 }
 
 [ForceInline]
-uint64_t get_morton_key(float3 pos) {
+u64key_t get_morton_key(float3 pos) {
     const uint64_t mask_comp = (uint64_t(1) << uint64_t(kMortonBitsPerDim)) - 1;
     float scale = exp2(float(kMortonBitsPerDim));
     uint64_t x = uint64_t(pos.x * scale + 0.5f) & mask_comp;
@@ -339,9 +347,51 @@ uint64_t get_morton_key(float3 pos) {
     return (x * 2 + y) * 2 + z;
 }
 
+#else  // SSPLAT_EMULATE_INT64: same 63-bit codes in a (lo, hi) word pair
+
+// Classic 32-bit 3D spread: bits 0..9 -> bits 0, 3, ..., 27.
+[ForceInline]
+uint _vis_spread10(uint x) {
+    x = (x | (x << 16)) & 0x030000FFu;
+    x = (x | (x << 8)) & 0x0300F00Fu;
+    x = (x | (x << 4)) & 0x030C30C3u;
+    x = (x | (x << 2)) & 0x09249249u;
+    return x;
+}
+
+// 21-bit component -> bit 3*i of the 63-bit code. Bits 0..10 land in the lo
+// word (3*10 = 30), bits 11..20 in the hi word at 3*i - 32 = 1, 4, ..., 28.
+[ForceInline]
+uint2 _vis_spread21(uint x) {
+    uint lo = _vis_spread10(x & 0x3ffu) | (((x >> 10) & 1u) << 30);
+    uint hi = _vis_spread10((x >> 11) & 0x3ffu) << 1;
+    return uint2(lo, hi);
+}
+
+[ForceInline]
+uint2 _vis_shl(uint2 v, uint k) {  // k in 1..31
+    return uint2(v.x << k, (v.y << k) | (v.x >> (32u - k)));
+}
+
+// Bit-identical to the native path: x at bit 3i+2, y at 3i+1, z at 3i.
+[ForceInline]
+u64key_t get_morton_key(float3 pos) {
+    const uint mask_comp = (1u << kMortonBitsPerDim) - 1u;
+    float scale = exp2(float(kMortonBitsPerDim));
+    uint x = uint(pos.x * scale + 0.5f) & mask_comp;
+    uint y = uint(pos.y * scale + 0.5f) & mask_comp;
+    uint z = uint(pos.z * scale + 0.5f) & mask_comp;
+    uint2 mx = _vis_shl(_vis_spread21(x), 2u);
+    uint2 my = _vis_shl(_vis_spread21(y), 1u);
+    uint2 mz = _vis_spread21(z);
+    return uint2(mx.x | my.x | mz.x, mx.y | my.y | mz.y);
+}
+
+#endif  // SSPLAT_EMULATE_INT64
+
 struct VisMortonParams {  // 48 bytes: pushed directly
     float4* buffer;
-    uint64_t* splat_keys;
+    u64key_t* splat_keys;
     // root AABB as scalars (vector members would change the push layout)
     float rmin_x, rmin_y, rmin_z;
     float rmax_x, rmax_y, rmax_z;
@@ -388,14 +438,8 @@ int clz32(uint x) {
     return 31 - int(firstbithigh(x));
 }
 
-[ForceInline]
-int clz64(uint64_t x) {
-    uint hi = uint(x >> 32);
-    return hi != 0 ? clz32(hi) : 32 + clz32(uint(x));
-}
-
 struct VisLbvhNodesParams {  // 40 bytes: pushed directly
-    uint64_t* morton;      // [n] sorted
+    u64key_t* morton;      // [n] sorted
     int* element_indices;  // [n] argsort
     int2* internal_nodes;  // [n-1]
     int* parent_nodes;     // [n-1], -1 initialized
@@ -404,10 +448,11 @@ struct VisLbvhNodesParams {  // 40 bytes: pushed directly
 };
 
 [ForceInline]
-int lbvh_delta(uint64_t* morton, uint num_elements, int i, int j) {
+int lbvh_delta(u64key_t* morton, uint num_elements, int i, int j) {
     if (j < 0 || j >= int(num_elements)) return -1;
-    if (morton[i] == morton[j]) return 64 + clz32(uint(i) ^ uint(j));
-    return clz64(morton[i] ^ morton[j]);
+    if (u64key_eq(morton[i], morton[j]))
+        return 64 + clz32(uint(i) ^ uint(j));
+    return u64key_clz(u64key_xor(morton[i], morton[j]));
 }
 
 [shader("compute")]
@@ -861,7 +906,7 @@ void vis_blit(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float dist[10];
     [ForceUnroll]
     for (int k = 0; k < 10; k++)
-        dist[k] = p.view_dist == nullptr ? 0.0f : p.view_dist[k];
+        dist[k] = is_null(p.view_dist) ? 0.0f : p.view_dist[k];
 
     float alpha_final = 0.0f;
     float3 rgb_final = float3(0.0f);
@@ -1074,11 +1119,11 @@ float3 thumb_bilinear_sample_f3(float* src, int b, int x_dst, int y_dst,
     float w10 = fx * (1.0f - fy);
     float w01 = (1.0f - fx) * fy;
     float w11 = fx * fy;
-    int64_t plane = int64_t(b) * int64_t(H_src) * int64_t(W_src);
+    gindex_t plane = gindex_t(b) * gindex_t(H_src) * gindex_t(W_src);
     #define _LD(yy, xx) \
-        float3(src[3 * (plane + int64_t(yy) * W_src + (xx))], \
-               src[3 * (plane + int64_t(yy) * W_src + (xx)) + 1], \
-               src[3 * (plane + int64_t(yy) * W_src + (xx)) + 2])
+        float3(src[3 * (plane + gindex_t(yy) * W_src + (xx))], \
+               src[3 * (plane + gindex_t(yy) * W_src + (xx)) + 1], \
+               src[3 * (plane + gindex_t(yy) * W_src + (xx)) + 2])
     float3 v00 = _LD(y0, x0), v10 = _LD(y0, x1), v01 = _LD(y1, x0),
            v11 = _LD(y1, x1);
     #undef _LD
@@ -1094,10 +1139,9 @@ bool thumb_nearest_sample_b(uint* src_words, int b, int x_dst, int y_dst,
     float v = (float(y_dst) + 0.5f) * float(H_src) / float(H_dst) - 0.5f;
     int x = max(0, min(W_src - 1, int(floor(u + 0.5f))));
     int y = max(0, min(H_src - 1, int(floor(v + 0.5f))));
-    int64_t byte_idx = int64_t(b) * int64_t(H_src) * int64_t(W_src) +
-                       int64_t(y) * W_src + x;
-    uint word = src_words[byte_idx >> 2];
-    return ((word >> uint(8 * uint(byte_idx & 3))) & 0xffu) != 0;
+    gindex_t byte_idx = gindex_t(b) * gindex_t(H_src) * gindex_t(W_src) +
+                        gindex_t(y) * W_src + x;
+    return u8_load(src_words, byte_idx) != 0;
 }
 
 [shader("compute")]
@@ -1108,9 +1152,7 @@ void vis_update_thumbnails(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     if (b >= p.B_post) return;
     int post_idx = p.cam_indices[b];
     if (post_idx < 0 || post_idx >= p.N) return;
-    uint done_word = p.done_mask[uint(post_idx) >> 2];
-    uint done_shift = 8 * (uint(post_idx) & 3);
-    if (((done_word >> done_shift) & 0xffu) != 0) return;
+    if (u8_load(p.done_mask, post_idx) != 0) return;
 
     int S = p.S;
     int s_total = S * S;
@@ -1134,5 +1176,5 @@ void vis_update_thumbnails(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     }
     GroupMemoryBarrierWithGroupSync();
     if (tid == 0)
-        InterlockedOr(p.done_mask[uint(post_idx) >> 2], 0xffu << done_shift);
+        u8_store(p.done_mask, post_idx, 0xffu);
 }

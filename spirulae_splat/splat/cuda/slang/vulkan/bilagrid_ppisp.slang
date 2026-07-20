@@ -12,6 +12,7 @@
 // Spec constants (IDs by declaration order — dispatches must pass ALL):
 //   0: kValueQuant  1: kPatched  2: kCoordsGrad  3: kPacked
 
+#include "int64_compat.slang"
 #include "bilagrid_common.slang"
 
 #define CudaDeviceExport ForceInline
@@ -85,7 +86,7 @@ struct BpSampleParams {
     float* fp32;
     uint* q16;
     float2* vbounds;
-    int64_t* image_indices;  // kPacked: [nnz]
+    i64mem_t* image_indices;  // kPacked: [nnz]
     float* coords;           // [.,2]
     float* rgb;              // [.,3]
     float* out_or_vout;
@@ -107,7 +108,7 @@ void bilagrid_ppisp_sample_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     int g_off = int(idx);
     int ni;
     if (kPacked != 0) {
-        ni = int(p.image_indices[idx]);
+        ni = int(i64mem_get(p.image_indices[idx]));
     } else {
         int tmp = g_off;
         tmp /= p.w; tmp /= p.h; tmp /= p.m;
@@ -150,7 +151,7 @@ void bilagrid_ppisp_sample_bwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     int g_off = int(idx);
     int ni;
     if (kPacked != 0) {
-        ni = int(p.image_indices[idx]);
+        ni = int(i64mem_get(p.image_indices[idx]));
     } else {
         int tmp = g_off;
         tmp /= p.w; tmp /= p.h; tmp /= p.m;

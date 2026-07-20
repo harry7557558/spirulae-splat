@@ -13,6 +13,7 @@
 // (push constant = one device address).
 
 #define CudaDeviceExport ForceInline
+#include "int64_compat.slang"
 #include "primitive_3dgs.slang"
 #include "harmonics.slang"
 #undef CudaDeviceExport
@@ -35,9 +36,9 @@ const int kShValueBits = 0;
 float3 eval_splat_color(float3 mean, float3x3 R, float3 t, float3 dc,
                         float* features_sh, uint sh_stride, uint gid,
                         uint* sh_packed, float2* sh_bounds,
-                        uint num_sh_buffer, int64_t sh_bounds_stride) {
+                        uint num_sh_buffer, gindex_t sh_bounds_stride) {
     if (kShValueBits == 8 || kShValueBits == 16) {
-        int64_t base = (int64_t)3 * (int64_t)num_sh_buffer * (int64_t)gid;
+        gindex_t base = (gindex_t)3 * (gindex_t)num_sh_buffer * (gindex_t)gid;
         if (kShValueBits == 8)
             return sh_to_color_qw<8>(kShDegree, mean, R, t, dc, sh_packed,
                                      sh_bounds, base, sh_bounds_stride);
@@ -81,7 +82,7 @@ struct ProjectionFwdParams {
     // SH value-quant (kShValueBits 8/16); null / 0 in the fp32 path.
     uint* sh_packed;
     float2* sh_bounds;
-    int64_t sh_bounds_stride;  // cells per bound, resolved host-side
+    i64mem_t sh_bounds_stride;  // cells per bound, resolved host-side
     uint32_t sh_stride;   // floats per splat in features_sh
     uint32_t C;
     uint32_t N;
@@ -110,7 +111,7 @@ void run_projection<let cam: CameraModelType>(ProjectionFwdParams p,
     float dist[10];
     [ForceUnroll]
     for (int i = 0; i < 10; i++)
-        dist[i] = p.dist_coeffs == nullptr ? 0.0f
+        dist[i] = is_null(p.dist_coeffs) ? 0.0f
                                            : p.dist_coeffs[10 * cid + i];
 
     // splat
@@ -142,7 +143,7 @@ void run_projection<let cam: CameraModelType>(ProjectionFwdParams p,
     if (aabb.z > aabb.x && aabb.w > aabb.y)
         rgb = eval_splat_color(mean, R, t, dc, p.features_sh, p.sh_stride,
                                gid, p.sh_packed, p.sh_bounds,
-                               p.num_sh_buffer, p.sh_bounds_stride);
+                               p.num_sh_buffer, i64mem_get(p.sh_bounds_stride));
 
     // store (mirrors the kernel epilogue: clamp, degenerate cull, atomics)
     aabb.x = clamp(aabb.x, 0.0f, float(p.width) - 1.0f);
@@ -150,18 +151,18 @@ void run_projection<let cam: CameraModelType>(ProjectionFwdParams p,
     aabb.z = clamp(aabb.z, 0.0f, float(p.width) - 1.0f);
     aabb.w = clamp(aabb.w, 0.0f, float(p.height) - 1.0f);
     if (aabb.z - aabb.x > 1e-3f && aabb.w - aabb.y > 1e-3f) {
-        if (p.s_xy != nullptr) {
+        if (!is_null(p.s_xy)) {
             p.s_xy[2 * idx] = s_xy.x;
             p.s_xy[2 * idx + 1] = s_xy.y;
         }
-        if (p.s_depth != nullptr) p.s_depth[idx] = s_depth;
-        if (p.s_conic != nullptr) {
+        if (!is_null(p.s_depth)) p.s_depth[idx] = s_depth;
+        if (!is_null(p.s_conic)) {
             p.s_conic[3 * idx] = s_conic.x;
             p.s_conic[3 * idx + 1] = s_conic.y;
             p.s_conic[3 * idx + 2] = s_conic.z;
         }
-        if (p.s_opac != nullptr) p.s_opac[idx] = s_opac;
-        if (p.s_rgb != nullptr) {
+        if (!is_null(p.s_opac)) p.s_opac[idx] = s_opac;
+        if (!is_null(p.s_rgb)) {
             p.s_rgb[3 * idx] = rgb.x;
             p.s_rgb[3 * idx + 1] = rgb.y;
             p.s_rgb[3 * idx + 2] = rgb.z;
@@ -216,7 +217,7 @@ struct Projection3dgutParams {
     float* s_rgb;    // [C*N,3]
     uint* sh_packed;
     float2* sh_bounds;
-    int64_t sh_bounds_stride;
+    i64mem_t sh_bounds_stride;
     uint32_t sh_stride;
     uint32_t C;
     uint32_t N;
@@ -244,7 +245,7 @@ void run_projection_3dgut<let cam: CameraModelType>(Projection3dgutParams p,
     float dist[10];
     [ForceUnroll]
     for (int i = 0; i < 10; i++)
-        dist[i] = p.dist_coeffs == nullptr ? 0.0f
+        dist[i] = is_null(p.dist_coeffs) ? 0.0f
                                            : p.dist_coeffs[10 * cid + i];
 
     float3 mean = float3(p.means[3 * gid], p.means[3 * gid + 1],
@@ -274,20 +275,20 @@ void run_projection_3dgut<let cam: CameraModelType>(Projection3dgutParams p,
     if (aabb.z > aabb.x && aabb.w > aabb.y)
         rgb = eval_splat_color(mean, R, t, dc, p.features_sh, p.sh_stride,
                                gid, p.sh_packed, p.sh_bounds,
-                               p.num_sh_buffer, p.sh_bounds_stride);
+                               p.num_sh_buffer, i64mem_get(p.sh_bounds_stride));
 
     aabb.x = clamp(aabb.x, 0.0f, float(p.width) - 1.0f);
     aabb.y = clamp(aabb.y, 0.0f, float(p.height) - 1.0f);
     aabb.z = clamp(aabb.z, 0.0f, float(p.width) - 1.0f);
     aabb.w = clamp(aabb.w, 0.0f, float(p.height) - 1.0f);
     if (aabb.z - aabb.x > 1e-3f && aabb.w - aabb.y > 1e-3f) {
-        if (p.s_scale != nullptr) {
+        if (!is_null(p.s_scale)) {
             p.s_scale[3 * idx] = s_scale.x;
             p.s_scale[3 * idx + 1] = s_scale.y;
             p.s_scale[3 * idx + 2] = s_scale.z;
         }
-        if (p.s_opac != nullptr) p.s_opac[idx] = s_opac;
-        if (p.s_rgb != nullptr) {
+        if (!is_null(p.s_opac)) p.s_opac[idx] = s_opac;
+        if (!is_null(p.s_rgb)) {
             p.s_rgb[3 * idx] = rgb.x;
             p.s_rgb[3 * idx + 1] = rgb.y;
             p.s_rgb[3 * idx + 2] = rgb.z;
@@ -361,7 +362,7 @@ void run_packed_mask<let cam: CameraModelType, let eval3d: bool>(
     float dist[10];
     [ForceUnroll]
     for (int i = 0; i < 10; i++)
-        dist[i] = p.dist_coeffs == nullptr ? 0.0f
+        dist[i] = is_null(p.dist_coeffs) ? 0.0f
                                            : p.dist_coeffs[10 * cid + i];
 
     float3 mean = float3(p.means[3 * gid], p.means[3 * gid + 1],
@@ -441,7 +442,7 @@ struct PackedFwdParams {
     float* s4;
     uint* sh_packed;
     float2* sh_bounds;
-    int64_t sh_bounds_stride;
+    i64mem_t sh_bounds_stride;
     uint32_t sh_stride;
     uint32_t C;
     uint32_t N;
@@ -472,7 +473,7 @@ void run_packed_fwd<let cam: CameraModelType, let eval3d: bool>(
     float dist[10];
     [ForceUnroll]
     for (int i = 0; i < 10; i++)
-        dist[i] = p.dist_coeffs == nullptr ? 0.0f
+        dist[i] = is_null(p.dist_coeffs) ? 0.0f
                                            : p.dist_coeffs[10 * cid + i];
 
     float3 mean = float3(p.means[3 * gid], p.means[3 * gid + 1],
@@ -502,7 +503,7 @@ void run_packed_fwd<let cam: CameraModelType, let eval3d: bool>(
     if (aabb.z > aabb.x && aabb.w > aabb.y)
         rgb = eval_splat_color(mean, R, t, dc, p.features_sh, p.sh_stride,
                                gid, p.sh_packed, p.sh_bounds,
-                               p.num_sh_buffer, p.sh_bounds_stride);
+                               p.num_sh_buffer, i64mem_get(p.sh_bounds_stride));
 
     p.out_camera_ids[out_idx] = int(cid);
     p.out_gaussian_ids[out_idx] = int(gid);
@@ -513,30 +514,30 @@ void run_packed_fwd<let cam: CameraModelType, let eval3d: bool>(
     p.out_aabb[out_idx] = aabb;
     p.out_depths[out_idx] = sorting_depth;
     if (eval3d) {  // Screen = {scale, opacity, rgb}
-        if (p.s0 != nullptr) {
+        if (!is_null(p.s0)) {
             p.s0[3 * out_idx] = conic.x;
             p.s0[3 * out_idx + 1] = conic.y;
             p.s0[3 * out_idx + 2] = conic.z;
         }
-        if (p.s1 != nullptr) p.s1[out_idx] = opac;
-        if (p.s2 != nullptr) {
+        if (!is_null(p.s1)) p.s1[out_idx] = opac;
+        if (!is_null(p.s2)) {
             p.s2[3 * out_idx] = rgb.x;
             p.s2[3 * out_idx + 1] = rgb.y;
             p.s2[3 * out_idx + 2] = rgb.z;
         }
     } else {  // Screen = {xy, depth, conic, opac, rgb}
-        if (p.s0 != nullptr) {
+        if (!is_null(p.s0)) {
             p.s0[2 * out_idx] = xy.x;
             p.s0[2 * out_idx + 1] = xy.y;
         }
-        if (p.s1 != nullptr) p.s1[out_idx] = depth;
-        if (p.s2 != nullptr) {
+        if (!is_null(p.s1)) p.s1[out_idx] = depth;
+        if (!is_null(p.s2)) {
             p.s2[3 * out_idx] = conic.x;
             p.s2[3 * out_idx + 1] = conic.y;
             p.s2[3 * out_idx + 2] = conic.z;
         }
-        if (p.s3 != nullptr) p.s3[out_idx] = opac;
-        if (p.s4 != nullptr) {
+        if (!is_null(p.s3)) p.s3[out_idx] = opac;
+        if (!is_null(p.s4)) {
             p.s4[3 * out_idx] = rgb.x;
             p.s4[3 * out_idx + 1] = rgb.y;
             p.s4[3 * out_idx + 2] = rgb.z;

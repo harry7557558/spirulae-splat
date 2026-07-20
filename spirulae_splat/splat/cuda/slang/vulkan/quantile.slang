@@ -9,6 +9,8 @@
 //   0: kInvert -- 0: output the quantile value; 1: output its reciprocal
 //      (the CUDA template's invert_quantile parameter).
 
+#include "int64_compat.slang"
+
 [SpecializationConstant]
 const int kInvert = 0;
 
@@ -75,7 +77,7 @@ void qt_find_row_max(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         int tile_in_row = tile_id - row * p.tiles_per_row;
         int start = tile_in_row * kTileElems;
         int end = min(start + kTileElems, p.N);
-        int64_t base = (int64_t)row * (int64_t)p.N;
+        gindex_t base = (gindex_t)row * (gindex_t)p.N;
         for (int i = start + int(tid); i < end; i += 256) {
             uint u = asuint(abs(p.x[base + i]));
             if (_qt_pos_finite(u) && u > local_max) local_max = u;
@@ -105,7 +107,7 @@ void qt_hist_pass(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         int tile_in_row = tile_id - row * p.tiles_per_row;
         int start = tile_in_row * kTileElems;
         int end = min(start + kTileElems, p.N);
-        int64_t base = (int64_t)row * (int64_t)p.N;
+        gindex_t base = (gindex_t)row * (gindex_t)p.N;
         uint max_bits = p.row_max_bits[row];
 
         if (p.pass == 0) {
@@ -160,10 +162,10 @@ void qt_select_pass(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint hbase = uint(row) * 256u;
 
     if (p.pass == 0) {
-        uint64_t total = 0;
+        // Row population <= N <= 2^31, so u32 cannot overflow here.
+        uint total = 0;
         for (int b = 0; b < 256; b++) total += p.row_hist[hbase + b];
-        uint masked_count =
-            (total > uint64_t(max_count)) ? uint(total - max_count) : 0u;
+        uint masked_count = (total > max_count) ? total - max_count : 0u;
         if (masked_count == 0u) {
             p.out[row] = kInvert != 0 ? 2.0f / asfloat(max_bits)
                                       : asfloat(max_bits) * 0.5f;

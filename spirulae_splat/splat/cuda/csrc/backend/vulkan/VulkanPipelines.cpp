@@ -31,20 +31,52 @@ const SpirvBlob* find_blob(const char* name) {
     return nullptr;
 }
 
-// Entries that use atomic_add_f32 also embed a native-OpAtomicFAddEXT
-// variant under this suffix (see slang/build_spirv.py); devices with
-// shaderBufferFloat32AtomicAdd load it instead of the CAS-loop blob. The
-// choice is per-device-fixed, so caching modules under the base name stays
-// correct.
-constexpr const char* kNativeF32AtomicSuffix = ".atomicadd";
+// Entries whose source uses an adaptive feature embed variant blobs under
+// dotted suffixes (see slang/build_spirv.py): ".atomicadd" (native
+// OpAtomicFAddEXT instead of the CAS loop), ".int8" (native byte access
+// instead of u32-word packing), ".noint64" (no Int64 capability, for
+// devices WITHOUT shaderInt64). build_spirv.py compiles every subset of an
+// entry's applicable features, so the largest device-desired subset that
+// exists is exactly desired-intersect-applicable — probing subsets from
+// largest to smallest and taking the first hit is correct. The choice is
+// per-device-fixed, so caching modules under the base name stays correct.
+constexpr const char* kFeatureSuffixes[] = {".atomicadd", ".int8",
+                                            ".noint64"};
+constexpr uint32_t kNumFeatures = 3;
+
+const SpirvBlob* find_variant_blob(const std::string& name) {
+    const Capabilities& caps = Context::get().caps();
+    const bool desired[kNumFeatures] = {
+        caps.float32_atomic_add,  // .atomicadd
+        caps.shader_int8,         // .int8
+        !caps.shader_int64,       // .noint64
+    };
+    uint32_t desired_mask = 0;
+    for (uint32_t i = 0; i < kNumFeatures; i++)
+        if (desired[i]) desired_mask |= 1u << i;
+
+    auto bit_count = [](uint32_t v) {
+        int n = 0;
+        for (; v; v &= v - 1) n++;
+        return n;
+    };
+    for (int size = (int)kNumFeatures; size >= 0; size--) {
+        for (uint32_t sub = 0; sub < (1u << kNumFeatures); sub++) {
+            if ((sub & desired_mask) != sub) continue;
+            if (bit_count(sub) != size) continue;
+            std::string full = name;
+            for (uint32_t i = 0; i < kNumFeatures; i++)
+                if (sub & (1u << i)) full += kFeatureSuffixes[i];
+            if (const SpirvBlob* blob = find_blob(full.c_str())) return blob;
+        }
+    }
+    return nullptr;
+}
 
 VkShaderModule get_module(const std::string& name) {
     auto it = g_modules.find(name);
     if (it != g_modules.end()) return it->second;
-    const SpirvBlob* blob = nullptr;
-    if (Context::get().caps().float32_atomic_add)
-        blob = find_blob((name + kNativeF32AtomicSuffix).c_str());
-    if (!blob) blob = find_blob(name.c_str());
+    const SpirvBlob* blob = find_variant_blob(name);
     if (!blob) {
         set_error("no embedded SPIR-V blob with this entry name (rerun "
                   "slang/build_spirv.py?)", VK_SUCCESS);

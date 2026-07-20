@@ -15,10 +15,15 @@ namespace backend {
 namespace vk {
 
 // Optional capabilities probed per device. Required features (Vulkan 1.2,
-// bufferDeviceAddress, shaderInt64, timelineSemaphore) are preconditions of
-// ok() and have no flags here.
+// bufferDeviceAddress, timelineSemaphore) are preconditions of ok() and
+// have no flags here. The shader-facing flags below select between embedded
+// SPIR-V blob variants at pipeline creation (VulkanPipelines.cpp); each
+// kernel behaves identically on either path.
 struct Capabilities {
     bool float32_atomic_add = false;  // VK_EXT_shader_atomic_float
+    bool shader_int64 = false;        // shaderInt64 (else ".noint64" blobs)
+    bool shader_int8 = false;         // shaderInt8 + storageBuffer8BitAccess
+                                      // (picks the native ".int8" blobs)
     bool memory_budget = false;       // VK_EXT_memory_budget (usage reporting)
     bool timestamps = false;
     double timestamp_period_ns = 0.0;

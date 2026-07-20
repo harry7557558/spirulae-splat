@@ -12,6 +12,8 @@
 // Include AFTER primitive_3dgs.slang / harmonics.slang / sh_quant.slang /
 // sh_vjp.slang / atomic_float.slang.
 
+#include "int64_compat.slang"
+
 [SpecializationConstant]
 const int kCameraModel = 0;
 [SpecializationConstant]
@@ -66,7 +68,7 @@ PbCamera pb_load_camera(float* viewmats, float4* intrins, float* dist_coeffs,
     c.intrin = intrins[cid];
     [ForceUnroll]
     for (int i = 0; i < 10; i++)
-        c.dist[i] = dist_coeffs == nullptr ? 0.0f : dist_coeffs[10 * cid + i];
+        c.dist[i] = is_null(dist_coeffs) ? 0.0f : dist_coeffs[10 * cid + i];
     return c;
 }
 
@@ -190,7 +192,7 @@ void pb_vjp_3dgut(PbSplat s, PbCamera c, uint width, uint height,
 // `coeffs` is the splat's fp32 SH pointer (unused when kShValueBits != 0).
 [ForceInline]
 void pb_sh_vjp(PbSplat s, PbCamera c, float* coeffs, uint* qpacked,
-               float2* qbounds, int64_t qbase, int64_t qstride, float3 v_rgb,
+               float2* qbounds, gindex_t qbase, gindex_t qstride, float3 v_rgb,
                inout PbGrads g) {
     if (kShValueBits == 8)
         sh_color_vjp<8>(kShDegree, s.mean, c.R, c.t, s.dc, coeffs, qpacked,

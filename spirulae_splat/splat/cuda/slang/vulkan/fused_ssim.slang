@@ -16,6 +16,7 @@
 // scalar depends on the thread->accumulated-entries mapping and is NOT
 // cross-backend comparable. dL/dimg1 and the loss map stay deterministic.
 
+#include "int8_compat.slang"
 #include "atomic_float.slang"
 
 static const int BX = 16;
@@ -70,7 +71,7 @@ bool _fs_mask(SsimParams p, int b, int y, int x) {
         uint(y) >= uint(p.Hm))
         return true;
     uint idx = (uint(b) * uint(p.Hm) + uint(y)) * uint(p.Wm) + uint(x);
-    return ((p.masks[idx >> 2] >> ((idx & 3u) * 8u)) & 0xffu) != 0u;
+    return u8_load(p.masks, idx) != 0u;
 }
 
 // Shared buffers reused across stages exactly like the CUDA kernel's

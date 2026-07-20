@@ -16,6 +16,7 @@
 // small deterministic reduce pass that folds the slices into v_sh_coeffs.
 
 #define CudaDeviceExport ForceInline
+#include "int64_compat.slang"
 #include "projection_utils.slang"
 #include "harmonics.slang"
 #undef CudaDeviceExport
@@ -57,7 +58,7 @@ void background_sh_fwd(uint3 gtid: SV_DispatchThreadID,
     float dist[10];
     [ForceUnroll]
     for (int i = 0; i < 10; i++)
-        dist[i] = p.dist_coeffs == nullptr ? 0.0f
+        dist[i] = is_null(p.dist_coeffs) ? 0.0f
                                            : p.dist_coeffs[10 * bi + i];
 
     float2 uv = float2((float(px) + 0.5f - intrin.z) / intrin.x,
@@ -148,7 +149,7 @@ void background_sh_bwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float dist[10];
         [ForceUnroll]
         for (int k = 0; k < 10; k++)
-            dist[k] = p.dist_coeffs == nullptr ? 0.0f
+            dist[k] = is_null(p.dist_coeffs) ? 0.0f
                                                : p.dist_coeffs[10 * bi + k];
         float2 uv = float2((float(px) + 0.5f - intrin.z) / intrin.x,
                            (float(py) + 0.5f - intrin.w) / intrin.y);

@@ -16,6 +16,7 @@
 //                   shortcut with identical, order-nondeterministic sums)
 
 #define CudaDeviceExport ForceInline
+#include "int64_compat.slang"
 #include "primitive_3dgs.slang"
 #include "harmonics.slang"
 #undef CudaDeviceExport
@@ -64,7 +65,7 @@ struct ProjectionBwd3dgsParams {
     // SH value-quant source (kShValueBits 8/16)
     uint* sh_packed;
     float2* sh_bounds;
-    int64_t sh_bounds_stride;
+    i64mem_t sh_bounds_stride;
     uint32_t sh_stride_src;  // floats per splat in features_sh
     uint32_t sh_stride_v;    // floats per splat in vw_sh
     uint32_t C;
@@ -102,9 +103,9 @@ void _pb_run_3dgs(ProjectionBwd3dgsParams p, uint idx) {
 
     PbGrads g = pb_grads_zero();
     pb_vjp_2d(s, cam, p.width, p.height, v_xy, v_depth, v_conic, v_opac, g);
-    int64_t qbase = (int64_t)3 * (int64_t)p.num_sh_buffer * (int64_t)gid;
+    gindex_t qbase = (gindex_t)3 * (gindex_t)p.num_sh_buffer * (gindex_t)gid;
     pb_sh_vjp(s, cam, p.features_sh + gid * p.sh_stride_src, p.sh_packed,
-              p.sh_bounds, qbase, p.sh_bounds_stride, v_rgb, g);
+              p.sh_bounds, qbase, i64mem_get(p.sh_bounds_stride), v_rgb, g);
 
     pb_add3(p.vw_means + 3 * gid, g.v_mean);
     pb_add4(p.vw_quats + 4 * gid, g.v_quat);
@@ -159,7 +160,7 @@ struct ProjectionBwd3dgutParams {
     float* v_viewmats;
     uint* sh_packed;
     float2* sh_bounds;
-    int64_t sh_bounds_stride;
+    i64mem_t sh_bounds_stride;
     uint32_t sh_stride_src;
     uint32_t sh_stride_v;
     uint32_t C;
@@ -195,9 +196,9 @@ void _pb_run_3dgut(ProjectionBwd3dgutParams p, uint idx) {
 
     PbGrads g = pb_grads_zero();
     pb_vjp_3dgut(s, cam, p.width, p.height, v_sscale, v_sopac, g);
-    int64_t qbase = (int64_t)3 * (int64_t)p.num_sh_buffer * (int64_t)gid;
+    gindex_t qbase = (gindex_t)3 * (gindex_t)p.num_sh_buffer * (gindex_t)gid;
     pb_sh_vjp(s, cam, p.features_sh + gid * p.sh_stride_src, p.sh_packed,
-              p.sh_bounds, qbase, p.sh_bounds_stride, v_rgb, g);
+              p.sh_bounds, qbase, i64mem_get(p.sh_bounds_stride), v_rgb, g);
 
     pb_add3(p.vw_means + 3 * gid, g.v_mean);
     pb_add4(p.vw_quats + 4 * gid, g.v_quat);

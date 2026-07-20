@@ -11,6 +11,7 @@
 // multiple of the pinned subgroup size — 16x16 is not).
 
 #define CudaDeviceExport ForceInline
+#include "int64_compat.slang"
 #include "pixel_wise.slang"
 #undef CudaDeviceExport
 
@@ -191,7 +192,7 @@ void depth_to_normal_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float dist[10];
     [ForceUnroll]
     for (int k = 0; k < 10; k++)
-        dist[k] = p.dist_coeffs == nullptr ? 0.0f
+        dist[k] = is_null(p.dist_coeffs) ? 0.0f
                                            : p.dist_coeffs[10 * bid + k];
 
     // Shared apron of unprojected points (ray * depth), same layout as the

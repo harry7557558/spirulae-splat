@@ -83,6 +83,8 @@ uint32_t pick_compute_queue_family(VkPhysicalDevice pd) {
 struct DeviceProbe {
     bool required_ok = false;
     bool atomic_float = false;
+    bool shader_int64 = false;
+    bool shader_int8 = false;
     uint32_t queue_family = UINT32_MAX;
     VkPhysicalDeviceProperties props{};
     VkPhysicalDeviceSubgroupProperties subgroup{};
@@ -112,11 +114,15 @@ DeviceProbe probe_device(VkPhysicalDevice pd) {
     out.queue_family = pick_compute_queue_family(pd);
     out.required_ok =
         out.props.apiVersion >= VK_API_VERSION_1_2 &&
-        f2.features.shaderInt64 &&
         f12.bufferDeviceAddress &&
         f12.timelineSemaphore &&
         out.queue_family != UINT32_MAX;
     out.atomic_float = fatomic.shaderBufferFloat32AtomicAdd;
+    // Optional: without shaderInt64 the pipeline layer loads the ".noint64"
+    // blob variants (32-bit index emulation); with shaderInt8 (+ 8-bit
+    // storage, near-universally paired) it loads the native ".int8" ones.
+    out.shader_int64 = f2.features.shaderInt64;
+    out.shader_int8 = f12.shaderInt8 && f12.storageBuffer8BitAccess;
     return out;
 }
 
@@ -198,8 +204,8 @@ int resolve_device_index() {
             if (!list[i].usable) {
                 std::fprintf(stderr,
                     "[ssplat-vk] requested device '%s' lacks required "
-                    "features (Vulkan 1.2 + shaderInt64 + "
-                    "bufferDeviceAddress + timelineSemaphore)\n",
+                    "features (Vulkan 1.2 + bufferDeviceAddress + "
+                    "timelineSemaphore)\n",
                     list[i].name.c_str());
                 continue;
             }
@@ -260,7 +266,7 @@ void Context::init() {
 
     const int best = resolve_device_index();
     if (best < 0 || best >= (int)n) {
-        set_error("no viable Vulkan device (need Vulkan 1.2 + shaderInt64 + "
+        set_error("no viable Vulkan device (need Vulkan 1.2 + "
                   "bufferDeviceAddress + timelineSemaphore)", VK_SUCCESS);
         return;
     }
@@ -291,6 +297,8 @@ void Context::init() {
     _caps.max_shared_memory = probe.props.limits.maxComputeSharedMemorySize;
     _caps.non_coherent_atom_size = probe.props.limits.nonCoherentAtomSize;
     _caps.float32_atomic_add = probe.atomic_float;
+    _caps.shader_int64 = probe.shader_int64;
+    _caps.shader_int8 = probe.shader_int8;
 
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -302,8 +310,12 @@ void Context::init() {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     f12.bufferDeviceAddress = VK_TRUE;
     f12.timelineSemaphore = VK_TRUE;
-    // Optional but broadly available and useful for kernel ABIs.
-    f12.shaderInt8 = VK_FALSE;
+    // Optional: native byte access for the ".int8" blob variants (both
+    // features are core-optional in 1.2, no extension needed).
+    if (_caps.shader_int8) {
+        f12.shaderInt8 = VK_TRUE;
+        f12.storageBuffer8BitAccess = VK_TRUE;
+    }
 
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT fatomic{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
@@ -311,9 +323,18 @@ void Context::init() {
 
     // SSPLAT_VK_NATIVE_ATOMICS=0 forces the CAS-loop shader variants on a
     // native-capable device (A/B timing, exercising the fallback blobs).
+    // SSPLAT_VK_NATIVE_INT64=0 / SSPLAT_VK_NATIVE_INT8=0 likewise force the
+    // ".noint64" emulation / word-packed byte-access blobs; the device
+    // features stay enabled, only blob selection changes.
     if (const char* env = std::getenv("SSPLAT_VK_NATIVE_ATOMICS");
         env && env[0] == '0')
         _caps.float32_atomic_add = false;
+    if (const char* env = std::getenv("SSPLAT_VK_NATIVE_INT64");
+        env && env[0] == '0')
+        _caps.shader_int64 = false;
+    if (const char* env = std::getenv("SSPLAT_VK_NATIVE_INT8");
+        env && env[0] == '0')
+        _caps.shader_int8 = false;
 
     std::vector<const char*> extensions;
     // Shader blobs carry NonSemantic debug info (build_spirv.py -g2, for
@@ -379,7 +400,7 @@ void Context::init() {
     }
 
     VkPhysicalDeviceFeatures features{};
-    features.shaderInt64 = VK_TRUE;
+    features.shaderInt64 = probe.shader_int64 ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.pNext = &f12;
@@ -423,10 +444,12 @@ void Context::init() {
     if (std::getenv("SSPLAT_VK_VERBOSE")) {
         std::fprintf(stderr,
             "[ssplat-vk] using %s (%s), subgroup %u, push %uB, "
-            "float-atomic-add %s, timestamps %s\n",
+            "float-atomic-add %s, int64 %s, int8 %s, timestamps %s\n",
             _device_name.c_str(), device_type_name(probe.props.deviceType),
             _caps.subgroup_size, _caps.max_push_constants,
             _caps.float32_atomic_add ? "native" : "EMULATED",
+            _caps.shader_int64 ? "native" : "EMULATED",
+            _caps.shader_int8 ? "native" : "emulated",
             _caps.timestamps ? "yes" : "no");
     }
 }

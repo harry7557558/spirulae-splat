@@ -8,14 +8,28 @@ slangc (or downloads the pinned release) and passes it via --slangc.
 
 Entry points are discovered by scanning for [shader("compute")] markers and
 line-initial DEF_*(name, ...) macro instantiations. Each entry compiles to
-its own <stem>.<entry>.spv. Entries whose include closure calls
-atomic_add_f32 (see vulkan/atomic_float.slang) additionally compile a
-<stem>.<entry>.atomicadd.spv variant with -DSSPLAT_NATIVE_F32_ATOMIC_ADD
-(native OpAtomicFAddEXT instead of the CAS-loop emulation); the pipeline
-layer (VulkanPipelines.cpp) picks that blob on devices with
-shaderBufferFloat32AtomicAdd. A checksum cache (<out-dir>/checksums.json)
-keyed per entry over the source, its transitive #include closure, the
-compile arguments, and this script skips up-to-date blobs.
+its own <stem>.<entry>.spv, plus feature-variant blobs the pipeline layer
+(VulkanPipelines.cpp) picks by device capability:
+
+  .atomicadd  -DSSPLAT_NATIVE_F32_ATOMIC_ADD  native OpAtomicFAddEXT instead
+              of the CAS-loop emulation (devices with
+              shaderBufferFloat32AtomicAdd); compiled when the entry's
+              include closure calls atomic_add_f32 (vulkan/atomic_float.slang)
+  .int8       -DSSPLAT_NATIVE_INT8            native byte loads/stores
+              instead of u32-word packing (devices with shaderInt8);
+              compiled when the closure calls the vulkan/int8_compat.slang
+              helpers
+  .noint64    -DSSPLAT_EMULATE_INT64          no Int64 SPIR-V capability
+              (devices WITHOUT shaderInt64), via vulkan/int64_compat.slang;
+              compiled when the entry's BASE blob declares OpCapability
+              Int64, and verified to have dropped it — an unguarded int64
+              use fails the build here instead of at pipeline creation
+
+Every subset of an entry's applicable features is compiled (suffixes joined
+in the order above), so any device capability combination finds an exact
+blob. A checksum cache (<out-dir>/checksums.json) keyed per entry over the
+source, its transitive #include closure, the compile arguments, and this
+script skips up-to-date blobs.
 
 Usage: python3 slang/build_spirv.py --out-dir DIR [--force] [--slangc PATH]
 (run from the `cuda` folder)
@@ -23,10 +37,12 @@ Usage: python3 slang/build_spirv.py --out-dir DIR [--force] [--slangc PATH]
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -43,12 +59,19 @@ COMPILE_ARGS = [
     "-g2",
 ]
 
-# Native float-atomic variant (must match kNativeF32AtomicSuffix in
-# csrc/backend/vulkan/VulkanPipelines.cpp).
-ATOMIC_HEADER = os.path.normpath(os.path.join(SRC_DIR, "atomic_float.slang"))
+# Feature variants (suffix order is the canonical blob-name order and must
+# match kFeatureSuffixes in csrc/backend/vulkan/VulkanPipelines.cpp).
 ATOMIC_SUFFIX = ".atomicadd"
+INT8_SUFFIX = ".int8"
+NOINT64_SUFFIX = ".noint64"
 ATOMIC_DEFINE = "-DSSPLAT_NATIVE_F32_ATOMIC_ADD"
+INT8_DEFINE = "-DSSPLAT_NATIVE_INT8"
+NOINT64_DEFINE = "-DSSPLAT_EMULATE_INT64"
+
+ATOMIC_HEADER = os.path.normpath(os.path.join(SRC_DIR, "atomic_float.slang"))
+INT8_HEADER = os.path.normpath(os.path.join(SRC_DIR, "int8_compat.slang"))
 ATOMIC_CALL_RE = re.compile(r'\batomic_add_f32\s*\(')
+INT8_CALL_RE = re.compile(r'\b(?:u8_load|s8_load|u8_store)\s*\(')
 
 ENTRY_RE = re.compile(
     r'\[shader\("compute"\)\]\s*(?:(?:\[[^\]]*\]|//[^\n]*)\s*)*void\s+(\w+)\s*\(')
@@ -56,6 +79,32 @@ ENTRY_RE = re.compile(
 # where DEF_FOO is a local macro wrapping [shader("compute")].
 MACRO_ENTRY_RE = re.compile(r'^DEF_\w+\(\s*(\w+)\s*[,)]', re.MULTILINE)
 INCLUDE_RE = re.compile(r'^\s*#include\s+"([^"]+)"', re.MULTILINE)
+
+# SPIR-V capability operands (OpCapability = opcode 17).
+CAP_INT64 = 11
+CAP_INT8 = 39
+CAP_8BIT_STORAGE = 4437  # StorageBuffer8BitAccess
+
+
+def spirv_capabilities(path):
+    """Set of OpCapability operands declared by a SPIR-V module."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 24 or struct.unpack("<I", data[:4])[0] != 0x07230203:
+        return set()
+    caps = set()
+    i = 20
+    while i + 4 <= len(data):
+        word = struct.unpack("<I", data[i:i + 4])[0]
+        opcode, count = word & 0xffff, word >> 16
+        if count == 0:
+            break
+        if opcode == 17 and i + 8 <= len(data):
+            caps.add(struct.unpack("<I", data[i + 4:i + 8])[0])
+        elif opcode not in (17,):  # capabilities lead the module
+            break
+        i += count * 4
+    return caps
 
 
 def find_entries(path):
@@ -100,14 +149,26 @@ def entry_checksum(source, entry, args):
     return h.hexdigest()
 
 
-def uses_float_atomic_add(source):
-    """True when the entry's include closure calls atomic_add_f32 (the
-    definition in atomic_float.slang itself does not count)."""
+def closure_calls(source, header, call_re):
+    """True when the entry's include closure calls one of `header`'s helpers
+    (the definitions in the header itself do not count)."""
     closure = include_closure(source)
-    if ATOMIC_HEADER not in (os.path.normpath(p) for p in closure):
+    if header not in (os.path.normpath(p) for p in closure):
         return False
-    return any(ATOMIC_CALL_RE.search(open(dep).read())
-               for dep in closure if os.path.normpath(dep) != ATOMIC_HEADER)
+    return any(call_re.search(open(dep).read())
+               for dep in closure if os.path.normpath(dep) != header)
+
+
+def variant_subsets(features):
+    """All subsets of [(suffix, define), ...] preserving canonical order;
+    the empty subset (base blob) comes first."""
+    out = []
+    for r in range(len(features) + 1):
+        for combo in itertools.combinations(features, r):
+            suffix = "".join(f[0] for f in combo)
+            defines = [f[1] for f in combo]
+            out.append((suffix, defines))
+    return out
 
 
 def main():
@@ -141,29 +202,6 @@ def main():
         included.update(os.path.normpath(p) for p in include_closure(source)
                         if os.path.normpath(p) != os.path.normpath(source))
 
-    jobs = []
-    expected = set()  # every (stem, entry, variant) key live in the sources
-    for source in sources:
-        fname = os.path.basename(source)
-        stem = fname[:-len(".slang")]
-        entries = find_entries(source)
-        if not entries and os.path.normpath(source) not in included:
-            print(f"warning: no compute entry points in {source}")
-        variants = [("", [])]
-        if uses_float_atomic_add(source):
-            variants.append((ATOMIC_SUFFIX, [ATOMIC_DEFINE]))
-        for entry in entries:
-            for suffix, extra_args in variants:
-                key = f"{stem}.{entry}{suffix}"
-                expected.add(key)
-                out = os.path.join(out_dir, key + ".spv")
-                args = COMPILE_ARGS + extra_args
-                checksum = entry_checksum(source, entry, args)
-                if cache.get(key) == checksum and os.path.exists(out):
-                    print(f"  up-to-date: {out}")
-                    continue
-                jobs.append((source, entry, out, key, checksum, args))
-
     def compile_one(job):
         source, entry, out, key, checksum, args = job
         cmd = [slangc, source, "-entry", entry, "-o", out]
@@ -172,19 +210,95 @@ def main():
         proc = subprocess.run(cmd, capture_output=True, text=True)
         return key, checksum, out, proc
 
-    failed = False
-    with ThreadPoolExecutor() as pool:
-        for key, checksum, out, proc in pool.map(compile_one, jobs):
-            if proc.returncode != 0:
-                print(f"  FAILED: {out}\n{proc.stdout}{proc.stderr}",
-                      file=sys.stderr)
-                failed = True
-                cache.pop(key, None)
-            else:
-                if proc.stderr.strip():
-                    print(f"  (slangc warnings for {out})\n{proc.stderr}")
-                print(f"  built: {out}")
-                cache[key] = checksum
+    def run_jobs(jobs):
+        ok = True
+        with ThreadPoolExecutor() as pool:
+            for key, checksum, out, proc in pool.map(compile_one, jobs):
+                if proc.returncode != 0:
+                    print(f"  FAILED: {out}\n{proc.stdout}{proc.stderr}",
+                          file=sys.stderr)
+                    ok = False
+                    cache.pop(key, None)
+                else:
+                    if proc.stderr.strip():
+                        print(f"  (slangc warnings for {out})\n{proc.stderr}")
+                    print(f"  built: {out}")
+                    cache[key] = checksum
+        return ok
+
+    def make_job(source, entry, stem, suffix, defines):
+        key = f"{stem}.{entry}{suffix}"
+        out = os.path.join(out_dir, key + ".spv")
+        args = COMPILE_ARGS + defines
+        checksum = entry_checksum(source, entry, args)
+        if cache.get(key) == checksum and os.path.exists(out):
+            print(f"  up-to-date: {out}")
+            return key, None
+        return key, (source, entry, out, key, checksum, args)
+
+    # --- phase 1: base blobs plus atomicadd/int8 variant subsets ---
+    per_entry = []  # (source, entry, stem, phase1_features)
+    expected = set()
+    jobs = []
+    for source in sources:
+        fname = os.path.basename(source)
+        stem = fname[:-len(".slang")]
+        entries = find_entries(source)
+        if not entries and os.path.normpath(source) not in included:
+            print(f"warning: no compute entry points in {source}")
+        features = []
+        if closure_calls(source, ATOMIC_HEADER, ATOMIC_CALL_RE):
+            features.append((ATOMIC_SUFFIX, ATOMIC_DEFINE))
+        if closure_calls(source, INT8_HEADER, INT8_CALL_RE):
+            features.append((INT8_SUFFIX, INT8_DEFINE))
+        for entry in entries:
+            per_entry.append((source, entry, stem, features))
+            for suffix, defines in variant_subsets(features):
+                key, job = make_job(source, entry, stem, suffix, defines)
+                expected.add(key)
+                if job:
+                    jobs.append(job)
+    failed = not run_jobs(jobs)
+
+    # --- phase 2: .noint64 variants for entries whose base blob uses Int64 ---
+    jobs = []
+    noint64_keys = []
+    for source, entry, stem, features in per_entry:
+        base = os.path.join(out_dir, f"{stem}.{entry}.spv")
+        if not os.path.exists(base):
+            continue  # base failed; already reported
+        if CAP_INT64 not in spirv_capabilities(base):
+            continue
+        for suffix, defines in variant_subsets(features):
+            key, job = make_job(source, entry, stem,
+                                suffix + NOINT64_SUFFIX,
+                                defines + [NOINT64_DEFINE])
+            expected.add(key)
+            noint64_keys.append(key)
+            if job:
+                jobs.append(job)
+    failed = not run_jobs(jobs) or failed
+
+    # --- capability verification ---
+    # .noint64 blobs must have dropped Int64; blobs without .int8 must not
+    # smuggle in 8-bit capabilities (an unguarded uint8_t use would only
+    # fail at pipeline creation on baseline devices otherwise).
+    for key in sorted(expected):
+        out = os.path.join(out_dir, key + ".spv")
+        if not os.path.exists(out):
+            continue
+        caps = spirv_capabilities(out)
+        if key in noint64_keys and CAP_INT64 in caps:
+            print(f"  CAPABILITY LEAK: {out} still declares Int64 "
+                  "(unguarded 64-bit integer use; route it through "
+                  "vulkan/int64_compat.slang)", file=sys.stderr)
+            failed = True
+        if INT8_SUFFIX not in key and \
+                caps & {CAP_INT8, CAP_8BIT_STORAGE}:
+            print(f"  CAPABILITY LEAK: {out} declares 8-bit capabilities "
+                  "outside the .int8 variant (route byte access through "
+                  "vulkan/int8_compat.slang)", file=sys.stderr)
+            failed = True
 
     # Drop cache entries and blobs whose entry (or variant) no longer exists.
     cache = {k: v for k, v in cache.items() if k in expected}
