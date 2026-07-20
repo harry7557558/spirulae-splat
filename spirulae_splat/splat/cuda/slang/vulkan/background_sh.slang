@@ -181,15 +181,33 @@ struct BackgroundShBwdReduceParams {  // 20 bytes: pushed directly
     uint32_t k3;          // K * 3
 };
 
-// Single workgroup; thread t = slot*3 + ch folds all slices (deterministic).
+groupshared float _bgsh_red[256];
+
+// One workgroup PER output scalar (grid.x = k3); the block's 256 threads
+// grid-stride the kBgBwdSlices partials for that column, then a groupshared
+// tree folds them to one value. No atomics: each output column is owned by
+// exactly one workgroup, so the write is a plain accumulate and the result
+// is subgroup-size independent. Replaces the old single-workgroup kernel
+// that folded all 16384 slices in one 48-wide serial loop (~1/60 of the GPU,
+// 2.4 ms on RADV); this parallelizes across columns AND slices.
 [shader("compute")]
-[numthreads(128, 1, 1)]
-void background_sh_bwd_reduce(uint tid: SV_GroupThreadID,
+[numthreads(256, 1, 1)]
+void background_sh_bwd_reduce(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                               uniform BackgroundShBwdReduceParams p) {
-    if (tid >= p.k3) return;
+    uint col = wg.x;
+    if (col >= p.k3) return;  // whole workgroup shares col: uniform, no barrier split
     float* sf = (float*)p.scratch;
     float s = 0.0f;
-    for (uint i = 0; i < kBgBwdSlices; i++)
-        s += sf[i * p.k3 + tid];
-    p.v_sh_coeffs[tid] += s;
+    for (uint i = tid; i < kBgBwdSlices; i += 256)
+        s += sf[i * p.k3 + col];
+
+    GroupMemoryBarrierWithGroupSync();
+    _bgsh_red[tid] = s;
+    GroupMemoryBarrierWithGroupSync();
+    [ForceUnroll]
+    for (uint st = 128; st > 0; st >>= 1) {
+        if (tid < st) _bgsh_red[tid] += _bgsh_red[tid + st];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (tid == 0) p.v_sh_coeffs[col] += _bgsh_red[0];
 }

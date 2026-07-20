@@ -237,7 +237,9 @@ bool dispatch(Stream stream, const char* entry_name, const SpecList& spec,
                                push_size, padded);
         }
     }
+    int ts = gpu_ts_begin(cb, entry_name);  // GPU-timestamp timing (profile)
     vkCmdDispatch(cb, groups_x, groups_y, groups_z);
+    gpu_ts_end(cb, ts);
     stream_barrier(cb);
     return true;
 }

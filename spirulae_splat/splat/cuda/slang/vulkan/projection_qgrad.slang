@@ -121,10 +121,15 @@ void _qg_nonsh<let PRIMS : int>(bool active, uint* packed, float2* bounds,
     if (active && tid == 0 && blk_ok)
         bounds[block_id] = mm;
     if (active && inside) {
+        // Contiguous PRIMS-cell run: plain word stores except the run edges
+        // (see vkq_run_put_u16).
+        uint c0 = uint(PRIMS) * gid;
+        uint acc = 0u;
         [ForceUnroll]
         for (int i = 0; i < PRIMS; i++)
-            vkq_store_u16(packed, uint(PRIMS) * gid + uint(i),
-                          gradq_encode1<16>(vals[i], mm));
+            vkq_run_put_u16(packed, c0, c0 + uint(i),
+                            gradq_encode1<16>(vals[i], mm), acc);
+        vkq_run_flush_u16(packed, c0 + uint(PRIMS), acc);
     }
 }
 

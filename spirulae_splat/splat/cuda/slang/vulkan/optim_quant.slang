@@ -47,25 +47,25 @@ groupshared uint _oq_pack[256];
 groupshared float4 _oq_red4[256];
 
 // Block-wide (min, max, min, max) reduction over all 256 threads,
-// broadcast to every thread. Deterministic serial combine by thread 0 (no
-// subgroup-id assumptions; the quantized-optimizer kernels are
-// memory-bound). Pass sentinels (+1e30, -1e30, ...) for threads that must
-// not contribute.
+// broadcast to every thread. Groupshared tree combine (no subgroup-id
+// assumptions, and min/max is exactly associative so the result matches a
+// serial fold bit-for-bit). Pass sentinels (+1e30, -1e30, ...) for threads
+// that must not contribute.
 [ForceInline]
 float4 oq_block_reduce_mm4(float4 v, uint tid) {
     GroupMemoryBarrierWithGroupSync();
     _oq_red4[tid] = v;
     GroupMemoryBarrierWithGroupSync();
-    if (tid == 0) {
-        float4 m = _oq_red4[0];
-        for (uint i = 1; i < 256; i++) {
-            float4 t = _oq_red4[i];
-            m = float4(min(m.x, t.x), max(m.y, t.y),
-                       min(m.z, t.z), max(m.w, t.w));
+    [ForceUnroll]
+    for (uint st = 128; st > 0; st >>= 1) {
+        if (tid < st) {
+            float4 a = _oq_red4[tid];
+            float4 b = _oq_red4[tid + st];
+            _oq_red4[tid] = float4(min(a.x, b.x), max(a.y, b.y),
+                                   min(a.z, b.z), max(a.w, b.w));
         }
-        _oq_red4[0] = m;
+        GroupMemoryBarrierWithGroupSync();
     }
-    GroupMemoryBarrierWithGroupSync();
     return _oq_red4[0];
 }
 
@@ -295,6 +295,31 @@ void vkq_store_u16(uint* packed, uint idx, uint h) {  // idx in halfwords
 [ForceInline]
 void vkq_store_u8(uint* packed, uint idx, uint b) {  // idx in bytes
     u8_store(packed, idx, b);
+}
+
+// Streaming store of one thread's CONTIGUOUS ascending halfword-cell run
+// [c0, c1) (the grad-quant per-splat writebacks): present each cell in
+// order via vkq_run_put_u16, then call vkq_run_flush_u16 with the run end.
+// Fully-owned words are assembled in `acc` and written as plain u32 stores;
+// only the up-to-two boundary words shared with a neighboring owner fall
+// back to the masked And+Or atomics — two atomics per RUN edge instead of
+// two per CELL. (For large runs prefer the FPBO kernel's groupshared
+// staging: per-lane runs are lane-strided, so even plain per-thread word
+// stores defeat write coalescing.)
+[ForceInline]
+void vkq_run_put_u16(uint* packed, uint c0, uint c, uint h, inout uint acc) {
+    if ((c & 1u) == 0u)
+        acc = h & 0xffffu;            // lower half: hold for the word store
+    else if (c == c0)
+        vkq_store_u16(packed, c, h);  // head cell of a word we don't own
+    else
+        packed[c >> 1] = acc | ((h & 0xffffu) << 16);
+}
+
+[ForceInline]
+void vkq_run_flush_u16(uint* packed, uint c1, uint acc) {
+    if ((c1 & 1u) == 1u)
+        vkq_store_u16(packed, c1 - 1u, acc);  // tail cell of a shared word
 }
 
 // ---------------------------------------------------------------------------

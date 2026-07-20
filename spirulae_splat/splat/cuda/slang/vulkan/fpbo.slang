@@ -3,8 +3,7 @@
 // camera-loop register gradient accumulation (proj_bwd_common.slang), then
 // per-splat regularizers (per_splat_losses.slang), then the in-place Adam
 // update of every attribute, with optional quantized Adam state / SH value
-// codecs (optim_quant.slang; And+Or masked halfword stores since per-splat
-// cell runs need not be word-aligned).
+// codecs (optim_quant.slang).
 //
 // Spec constants 0..4 from proj_bwd_common.slang, plus:
 //   kEval3d        = 1: 3DGUT screen-grad layout + VJP
@@ -12,14 +11,17 @@
 //   kColorTrust    = color_trust_linear (sRGB Jacobian inversion +
 //                    trust-region clip on DC/SH deltas)
 //   kLevel         = 0: fp32 SH state/values; 1: 8-bit qadam state + 16-bit
-//                    value codec (the CUDA LEVEL axis)
+//                    value codec (the CUDA LEVEL axis), written back through
+//                    the groupshared staging rounds (coalesced whole-word
+//                    stores; per-splat cell runs need not be word-aligned)
 //   kNonShQuant    = non_sh.enabled (16-bit qadam for the five non-SH
 //                    attributes); only ever set with kLevel == 1
 //   kVwMask        = which v_splats_world tensors exist (1 means, 2 quats,
 //                    4 scales, 8 opac, 16 dc) -- folded loads
 //
-// Barriers only exist in the kLevel/kNonShQuant reduces, which every thread
-// reaches (`inside` masks work, never control flow around a reduce).
+// Barriers only exist in the kLevel/kNonShQuant reduces and the staged SH
+// writeback, which every thread reaches (`inside` masks work, never control
+// flow around a reduce or staging round).
 
 #define CudaDeviceExport ForceInline
 #include "int64_compat.slang"
@@ -51,6 +53,12 @@ static const float kFpboEps = 1e-15f;
 static const float kFpboBeta1 = 0.9f;
 static const float kFpboBeta2 = 0.999f;
 static const float kSh0 = 0.28209479177387814f;
+
+// Staging for the level-1 packed-SH writeback: one round's combined
+// (state | value<<16) cell codes, assembled here so the global stores are
+// whole words at lane-consecutive (coalesced) addresses. 16 KB.
+static const uint kFpboStageCells = 4096;
+groupshared uint _fpbo_stage[kFpboStageCells];
 
 struct FpboParams {
     // splat world (updated in place)
@@ -577,6 +585,13 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
     // kLevel == 1: 8-bit joint (u, sqrt_g2) Adam state + 16-bit value codec,
     // FPBO per-splat-block layouts (one bound per 256 splats).
+    // No active SH bands -> nothing to update, and the inactive cells need
+    // no zero-encode either: the buffers' zero-init state already decodes
+    // to 0 (codec fixed point). Mirrors the CUDA kernel, whose whole SH
+    // block is `else if constexpr (num_sh > 0)`. Spec-folded and uniform,
+    // so skipping past the staging barriers is safe.
+    if (num_sh == 0)
+        return;
     {
         const uint sh_base = 3u * p.num_sh_buffer * gid;
         float4 quant_bounds =
@@ -674,35 +689,57 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         if (tid == 0 && blk_ok)
             p.sh_value_bounds[block_id] = sh_value_new_mm;
 
-        if (!inside)
-            return;
-
-        for (int j = 0; j < num_sh; ++j) {
-            [ForceUnroll]
-            for (int ch = 0; ch < 3; ch++) {
-                float2 us = qadam_g1g2_to_us(g1_sh_vals[j][ch],
-                                             g2_sh_vals[j][ch]);
-                uint2 q = qadam_quantize_us<8>(us.x, us.y, mm);
-                vkq_store_u16(p.sh_packed, sh_base + uint(3 * j + ch),
-                              q.x | (q.y << 8));
-                vkq_store_u16(p.sh_value_packed, sh_base + uint(3 * j + ch),
-                              qtensor_quantize_v<16>(sh_updated_vals[j][ch],
-                                                     sh_value_new_mm));
-            }
-        }
-        // Warmup zero-encodes for inactive bands.
-        if (p.num_sh_buffer > uint(num_sh)) {
-            float2 us0 = qadam_g1g2_to_us(0.0f, 0.0f);
-            uint2 q0 = qadam_quantize_us<8>(us0.x, us0.y, mm);
-            uint v0 = qtensor_quantize_v<16>(0.0f, sh_value_new_mm);
-            for (uint j = uint(num_sh); j < p.num_sh_buffer; ++j) {
-                [ForceUnroll]
-                for (int ch = 0; ch < 3; ch++) {
-                    vkq_store_u16(p.sh_packed, sh_base + 3 * j + uint(ch),
-                                  q0.x | (q0.y << 8));
-                    vkq_store_u16(p.sh_value_packed,
-                                  sh_base + 3 * j + uint(ch), v0);
+        // Cooperative coalesced writeback. Each thread's cell run
+        // [R*gid, R*(gid+1)) is contiguous but lane-STRIDED, so direct
+        // per-thread stores make every wave store instruction touch ~32
+        // cache lines (~6x slower than CUDA's plain u16 stores on AMD).
+        // Instead each round stages kFpboStageCells cells' combined
+        // (state | value<<16) codes in groupshared, then all 256 threads
+        // store whole words at lane-consecutive addresses to both buffers.
+        // Cell values and byte layout are unchanged; the bytes past the
+        // last splat's cells inside the final word are written as zero
+        // (the documented tail convention). All threads reach the barriers:
+        // the round loop bounds are workgroup-uniform and `inside` only
+        // gates what gets staged.
+        const uint R = 3u * p.num_sh_buffer;   // cells per splat
+        const uint cb = R * 256u;              // block cells (even)
+        const uint blk_c0 = cb * block_id;     // block base (word-aligned)
+        const uint total_cells = p.N * R;
+        const uint total_words = (total_cells >> 1) + (total_cells & 1u);
+        float2 us0 = qadam_g1g2_to_us(0.0f, 0.0f);
+        uint2 q0 = qadam_quantize_us<8>(us0.x, us0.y, mm);
+        uint v0 = qtensor_quantize_v<16>(0.0f, sh_value_new_mm);
+        const uint warmup_code = (q0.x | (q0.y << 8)) | (v0 << 16);
+        for (uint win0 = 0; win0 < cb; win0 += kFpboStageCells) {
+            uint win1 = min(win0 + kFpboStageCells, cb);
+            GroupMemoryBarrierWithGroupSync();
+            uint cs = max(R * tid, win0), ce = min(R * tid + R, win1);
+            for (uint l = cs; l < ce; l++) {
+                // Inactive-band cells take the warmup zero-encode; cells of
+                // out-of-range splats stage 0 (only the final word's pad
+                // bytes can ever store them).
+                uint code = inside ? warmup_code : 0u;
+                uint local = l - R * tid;
+                int j = int(local) / 3;
+                if (inside && j < num_sh) {
+                    int ch = int(local) - 3 * j;
+                    float2 us = qadam_g1g2_to_us(g1_sh_vals[j][ch],
+                                                 g2_sh_vals[j][ch]);
+                    uint2 q = qadam_quantize_us<8>(us.x, us.y, mm);
+                    uint v = qtensor_quantize_v<16>(sh_updated_vals[j][ch],
+                                                    sh_value_new_mm);
+                    code = (q.x | (q.y << 8)) | (v << 16);
                 }
+                _fpbo_stage[l - win0] = code;
+            }
+            GroupMemoryBarrierWithGroupSync();
+            for (uint w = (win0 >> 1) + tid; w < (win1 >> 1); w += 256u) {
+                uint gw = (blk_c0 >> 1) + w;
+                if (gw >= total_words) break;
+                uint e = _fpbo_stage[2u * w - win0];
+                uint o = _fpbo_stage[2u * w + 1u - win0];
+                p.sh_packed[gw] = (e & 0xffffu) | (o << 16);
+                p.sh_value_packed[gw] = (e >> 16) | (o & 0xffff0000u);
             }
         }
     }

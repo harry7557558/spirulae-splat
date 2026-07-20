@@ -10,6 +10,8 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "../common/Profiler.h"
+
 namespace backend {
 
 // --- process VRAM accounting ---
@@ -151,22 +153,65 @@ inline void* host_malloc_pinned(size_t bytes) {
 inline void host_free_pinned(void* ptr) { cudaFreeHost(ptr); }
 
 inline void memcpy_sync(void* dst, const void* src, size_t bytes, MemcpyKind kind) {
+    if (prof::enabled() && bytes) {
+        prof::Cat c = prof::kind_cat(kind);
+        if (kind == MemcpyKind::Auto) {
+            bool dd = is_device_pointer(dst), sd = is_device_pointer(src);
+            c = dd && sd ? prof::D2D : dd ? prof::H2D : prof::D2H;
+        }
+        prof::drain_before_copy();  // pending GPU work -> DEVSYNC bucket
+        prof::Scope s(c, bytes);    // copy bucket then measures pure transfer
+        cudaMemcpy(dst, src, bytes, _to_cuda(kind));
+        return;
+    }
     cudaMemcpy(dst, src, bytes, _to_cuda(kind));
 }
 inline void memcpy_async(void* dst, const void* src, size_t bytes, MemcpyKind kind,
                          Stream stream) {
+    if (prof::enabled() && bytes) {
+        prof::Cat c = prof::kind_cat(kind);
+        if (kind == MemcpyKind::Auto) {
+            bool dd = is_device_pointer(dst), sd = is_device_pointer(src);
+            c = dd && sd ? prof::D2D : dd ? prof::H2D : prof::D2H;
+        }
+        prof::Scope s(c, bytes);  // enqueue cost; drain lands in a later sync
+        cudaMemcpyAsync(dst, src, bytes, _to_cuda(kind), _to_cuda(stream));
+        return;
+    }
     cudaMemcpyAsync(dst, src, bytes, _to_cuda(kind), _to_cuda(stream));
 }
 inline void memset_sync(void* dst, int value, size_t bytes) {
+    if (prof::enabled() && bytes) {
+        prof::Scope s(prof::MEMSET, bytes);
+        cudaMemset(dst, value, bytes);
+        return;
+    }
     cudaMemset(dst, value, bytes);
 }
 inline void memset_async(void* dst, int value, size_t bytes, Stream stream) {
+    if (prof::enabled() && bytes) {
+        prof::Scope s(prof::MEMSET, bytes);
+        cudaMemsetAsync(dst, value, bytes, _to_cuda(stream));
+        return;
+    }
     cudaMemsetAsync(dst, value, bytes, _to_cuda(stream));
 }
 
 // --- synchronization ---
-inline void device_synchronize() { cudaDeviceSynchronize(); }
+inline void device_synchronize() {
+    if (prof::enabled()) {
+        prof::Scope s(prof::DEVSYNC);
+        cudaDeviceSynchronize();
+        return;
+    }
+    cudaDeviceSynchronize();
+}
 inline void stream_synchronize(Stream stream) {
+    if (prof::enabled()) {
+        prof::Scope s(prof::DEVSYNC);
+        cudaStreamSynchronize(_to_cuda(stream));
+        return;
+    }
     cudaStreamSynchronize(_to_cuda(stream));
 }
 
@@ -181,6 +226,11 @@ inline void event_record(Event* event, Stream stream) {
     cudaEventRecord(reinterpret_cast<cudaEvent_t>(event), _to_cuda(stream));
 }
 inline void event_synchronize(Event* event) {
+    if (prof::enabled()) {
+        prof::Scope s(prof::DEVSYNC);
+        cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(event));
+        return;
+    }
     cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(event));
 }
 inline void event_destroy(Event* event) {

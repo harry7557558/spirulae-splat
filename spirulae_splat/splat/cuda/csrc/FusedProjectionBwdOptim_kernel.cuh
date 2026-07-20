@@ -901,6 +901,84 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
                 sh_value_bounds[blockIdx.x] = sh_value_new_mm;
         }
 
+        if constexpr (VALUE_BITS == 16) {
+            // ---- Staged coalesced writeback (state + value SH buffers) ----
+            // Each thread's cell run [R*gid, R*(gid+1)) is contiguous but
+            // lane-STRIDED, so the direct per-cell u16 encodes make every
+            // warp store instruction touch ~32 memory sectors (~520 us/step
+            // at SH degree 3, ~70% of the kernel). Instead stage rounds of
+            // combined (state | value<<16) cell codes in shared memory, then
+            // store whole u32 words at lane-consecutive addresses to both
+            // buffers. Cell values and byte layout are unchanged (identical
+            // codec rounding via the *_code helpers); an odd total cell
+            // count keeps its pad bytes untouched (tail-bytes convention).
+            // All threads reach the __syncthreads: the round bounds are
+            // block-uniform and `inside` only gates what gets staged --
+            // out-of-range splats' cells lie at/past total_cells and never
+            // store. This subsumes the SH-degree-warmup zero-encode: cells
+            // with j >= num_sh stage the (g1=0, g2=0) / v=0 codes against
+            // the 0-inclusive fresh bounds.
+            constexpr uint32_t STAGE_CELLS = 4096;  // 16 KB shared / round
+            __shared__ uint32_t stage[STAGE_CELLS];
+            const uint32_t R  = 3u * num_sh_buffer;
+            const uint32_t cb = R * (uint32_t)BLOCK_SIZE;  // block cells (even)
+            const uint64_t blk_c0 = (uint64_t)cb * blockIdx.x;
+            const uint64_t total_cells = (uint64_t)N * R;
+            const uint32_t warmup_code =
+                SHQState::encode_g1g2_code(0.0f, 0.0f, mm) |
+                (SHValReader16::encode_v_code(0.0f, sh_value_new_mm) << 16);
+            for (uint32_t win0 = 0; win0 < cb; win0 += STAGE_CELLS) {
+                const uint32_t win1 = min(win0 + STAGE_CELLS, cb);
+                __syncthreads();
+                const uint32_t cs = max(R * threadIdx.x, win0);
+                const uint32_t ce = min(R * threadIdx.x + R, win1);
+                for (uint32_t l = cs; l < ce; l++) {
+                    uint32_t code = inside ? warmup_code : 0u;
+                    const uint32_t local = l - R * threadIdx.x;
+                    const int j = (int)(local / 3u);
+                    if (inside && j < num_sh) {
+                        const int ch = (int)local - 3 * j;
+                        const float g1 = (ch == 0)   ? g1_sh_vals[j].x
+                                         : (ch == 1) ? g1_sh_vals[j].y
+                                                     : g1_sh_vals[j].z;
+                        const float g2 = (ch == 0)   ? g2_sh_vals[j].x
+                                         : (ch == 1) ? g2_sh_vals[j].y
+                                                     : g2_sh_vals[j].z;
+                        const float v = (ch == 0)   ? sh_updated_vals[j].x
+                                        : (ch == 1) ? sh_updated_vals[j].y
+                                                    : sh_updated_vals[j].z;
+                        code = SHQState::encode_g1g2_code(g1, g2, mm) |
+                               (SHValReader16::encode_v_code(
+                                    v, sh_value_new_mm) << 16);
+                    }
+                    stage[l - win0] = code;
+                }
+                __syncthreads();
+                for (uint32_t w = (win0 >> 1) + threadIdx.x; w < (win1 >> 1);
+                     w += (uint32_t)BLOCK_SIZE) {
+                    const uint64_t c_abs = blk_c0 + 2ull * w;  // even cell
+                    if (c_abs >= total_cells) break;
+                    const uint32_t e = stage[2u * w - win0];
+                    const uint32_t o = stage[2u * w + 1u - win0];
+                    if (c_abs + 1 < total_cells) {  // both cells valid
+                        reinterpret_cast<uint32_t*>(
+                            sh_packed_rw)[(blk_c0 >> 1) + w] =
+                            (e & 0xffffu) | ((o & 0xffffu) << 16);
+                        reinterpret_cast<uint32_t*>(
+                            sh_value_packed_rw)[(blk_c0 >> 1) + w] =
+                            (e >> 16) | (o & 0xffff0000u);
+                    } else {  // odd tail: last cell only, pad untouched
+                        reinterpret_cast<uint16_t*>(sh_packed_rw)[c_abs] =
+                            (uint16_t)(e & 0xffffu);
+                        reinterpret_cast<uint16_t*>(
+                            sh_value_packed_rw)[c_abs] =
+                            (uint16_t)(e >> 16);
+                    }
+                }
+            }
+        } else {
+        // VALUE_BITS != 16 (not instantiated by the LEVEL wrappers): the
+        // original direct per-cell encodes.
         if (!inside)
             return;
 
@@ -923,14 +1001,6 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
                 SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 0, v.x, sh_value_new_mm);
                 SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 1, v.y, sh_value_new_mm);
                 SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 2, v.z, sh_value_new_mm);
-            }
-        } else if constexpr (VALUE_BITS == 16) {
-            #pragma unroll
-            for (int j = 0; j < num_sh; ++j) {
-                float3 v = sh_updated_vals[j];
-                SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 0, v.x, sh_value_new_mm);
-                SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 1, v.y, sh_value_new_mm);
-                SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 2, v.z, sh_value_new_mm);
             }
         }
 
@@ -958,15 +1028,9 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
                     SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 1, 0.0f, sh_value_new_mm);
                     SHValReader8::encode_v(sh_value_packed_rw, sh_base + 3*j + 2, 0.0f, sh_value_new_mm);
                 }
-            } else if constexpr (VALUE_BITS == 16) {
-                #pragma unroll 1
-                for (int j = num_sh; j < (int)num_sh_buffer; ++j) {
-                    SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 0, 0.0f, sh_value_new_mm);
-                    SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 1, 0.0f, sh_value_new_mm);
-                    SHValReader16::encode_v(sh_value_packed_rw, sh_base + 3*j + 2, 0.0f, sh_value_new_mm);
-                }
             }
         }
+        }  // VALUE_BITS != 16
     }
 }
 

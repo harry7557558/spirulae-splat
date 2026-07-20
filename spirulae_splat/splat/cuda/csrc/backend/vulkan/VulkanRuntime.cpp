@@ -10,6 +10,8 @@
 
 #include "VulkanInternal.h"
 
+#include "../common/Profiler.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
@@ -17,6 +19,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -575,6 +578,18 @@ void memcpy_sync(void* dst, const void* src, size_t bytes, MemcpyKind kind) {
     if (src_dev && !range_ok(s, bytes, "memcpy_sync: src range overflow"))
         return;
 
+    // Profiling: attribute the pending-work drain to DEVSYNC so the copy
+    // scope below measures pure transfer (the wait() a few lines down is then
+    // a no-op). Same scheme as the CUDA backend for comparable numbers.
+    std::optional<prof::Scope> _psc;
+    if (prof::enabled()) {
+        prof::Cat c = (dst_dev && src_dev) ? prof::D2D
+                      : dst_dev            ? prof::H2D
+                                           : prof::D2H;
+        prof::drain_before_copy();
+        _psc.emplace(c, bytes);
+    }
+
     // cudaMemcpy is ordered after previously issued device work.
     vk::Context::get().wait(vk::flush_all_streams());
 
@@ -632,6 +647,16 @@ void memcpy_async(void* dst, const void* src, size_t bytes, MemcpyKind kind,
         stream_synchronize(stream);
         std::memcpy(dst, src, bytes);
         return;
+    }
+
+    // Profiling: async copies only record here (the transfer completes later);
+    // the drain lands in a subsequent sync/event bucket, as on CUDA.
+    std::optional<prof::Scope> _psc;
+    if (prof::enabled()) {
+        prof::Cat c = (dst_dev && src_dev) ? prof::D2D
+                      : dst_dev            ? prof::H2D
+                                           : prof::D2H;
+        _psc.emplace(c, bytes);
     }
 
     if (dst_dev && src_dev) {
@@ -735,6 +760,8 @@ void memset_sync(void* dst, int value, size_t bytes) {
     if (!fill_params(d, bytes, value, &fill, &word,
                      "memset_sync: unaligned or out-of-range fill"))
         return;
+    std::optional<prof::Scope> _pms;
+    if (prof::enabled()) _pms.emplace(prof::MEMSET, bytes);
     vk::Context::get().wait(vk::flush_all_streams());
     vk::record_and_wait([&](VkCommandBuffer cb) {
         vkCmdFillBuffer(cb, d.alloc.buffer, d.offset, fill, word);
@@ -754,6 +781,8 @@ void memset_async(void* dst, int value, size_t bytes, Stream stream) {
     if (!fill_params(d, bytes, value, &fill, &word,
                      "memset_async: unaligned or out-of-range fill"))
         return;
+    std::optional<prof::Scope> _pms;
+    if (prof::enabled()) _pms.emplace(prof::MEMSET, bytes);
     vk::StreamImpl* st = vk::stream_impl(stream);
     VkCommandBuffer cb = vk::stream_begin(st);
     if (cb == VK_NULL_HANDLE) return;
@@ -779,12 +808,22 @@ const char* last_error() {
 }
 
 void device_synchronize() {
+    if (prof::enabled()) {
+        {  // scope ends (records DEVSYNC) before we read timestamps
+            prof::Scope _p(prof::DEVSYNC);
+            vk::Context::get().wait(vk::flush_all_streams());
+        }
+        vk::gpu_ts_resolve();  // work is drained -> timestamps are ready
+        return;
+    }
     vk::Context::get().wait(vk::flush_all_streams());
 }
 
 void stream_synchronize(Stream stream) {
     vk::StreamImpl* st = vk::stream_impl(stream);
     if (!st) return;
+    std::optional<prof::Scope> _p;
+    if (prof::enabled()) _p.emplace(prof::DEVSYNC);
     vk::Context::get().wait(vk::stream_flush(st));
 }
 
@@ -833,6 +872,17 @@ void query_slot_release(int slot) {
     g_query_free.push_back(slot);
 }
 
+// GPU-timestamp kernel timing (SSPLAT_PROFILE): outstanding (start,end) query
+// slot pairs, one per timed dispatch, resolved after a device drain.
+struct TsPair { int qs, qe; const char* entry; };
+std::mutex g_ts_mutex;
+std::vector<TsPair> g_ts_pending;
+uint64_t g_ts_untimed = 0;  // dispatches skipped when the pool was exhausted
+bool g_ts_warned = false;
+// Per-entry-point GPU time accumulation: name -> {dispatch count, ns}.
+struct TsEntry { uint64_t count = 0, ns = 0; };
+std::map<std::string, TsEntry> g_ts_by_entry;
+
 }  // namespace
 
 Event* event_create(bool enable_timing) {
@@ -859,6 +909,8 @@ void event_record(Event* event, Stream stream) {
 
 void event_synchronize(Event* event) {
     if (!event) return;
+    std::optional<prof::Scope> _p;
+    if (prof::enabled()) _p.emplace(prof::DEVSYNC);
     vk::Context::get().wait(event->value);
 }
 
@@ -896,12 +948,113 @@ float event_elapsed_ms(Event* start, Event* end) {
 
 namespace vk {
 
+// --- GPU-timestamp kernel timing (see VulkanInternal.h) --------------------
+
+int gpu_ts_begin(VkCommandBuffer cb, const char* entry) {
+    if (!prof::enabled()) return -1;
+    Context& ctx = Context::get();
+    if (!ctx.ok() || !ctx.caps().timestamps) return -1;
+    std::lock_guard<std::mutex> lock(g_ts_mutex);
+    int qs = query_slot_acquire();
+    int qe = query_slot_acquire();
+    if (qs < 0 || qe < 0) {  // pool exhausted: dispatch runs untimed
+        query_slot_release(qs);
+        query_slot_release(qe);
+        g_ts_untimed++;
+        return -1;
+    }
+    vkCmdResetQueryPool(cb, g_query_pool, qs, 1);
+    // BOTTOM (not TOP): the start stamp must wait for prior work to drain, so
+    // that back-to-back dispatches (serialized by stream_barrier) produce
+    // non-overlapping [start,end] intervals. A TOP-of-pipe start fires early
+    // and makes consecutive intervals overlap -> the sum over-counts GPU time
+    // (can exceed the CPU wait, yielding a nonsensical negative latency).
+    vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_query_pool,
+                        qs);
+    g_ts_pending.push_back({qs, qe, entry ? entry : "?"});
+    return qe;  // handle == the end slot
+}
+
+void gpu_ts_end(VkCommandBuffer cb, int handle) {
+    if (handle < 0) return;
+    vkCmdResetQueryPool(cb, g_query_pool, handle, 1);
+    vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_query_pool,
+                        handle);
+}
+
+void gpu_ts_resolve() {
+    if (!prof::enabled()) return;
+    std::lock_guard<std::mutex> lock(g_ts_mutex);
+    if (g_ts_pending.empty()) {
+        if (g_ts_untimed && !g_ts_warned) {
+            g_ts_warned = true;
+            std::fprintf(stderr,
+                         "[ssplat-profile] note: %llu dispatch(es) untimed "
+                         "(timestamp pool exhausted)\n",
+                         (unsigned long long)g_ts_untimed);
+        }
+        return;
+    }
+    Context& ctx = Context::get();
+    double period = ctx.caps().timestamp_period_ns;
+    for (const TsPair& p : g_ts_pending) {
+        uint64_t t0 = 0, t1 = 0;
+        VkResult r0 = vkGetQueryPoolResults(
+            ctx.device(), g_query_pool, p.qs, 1, sizeof(uint64_t), &t0,
+            sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        VkResult r1 = vkGetQueryPoolResults(
+            ctx.device(), g_query_pool, p.qe, 1, sizeof(uint64_t), &t1,
+            sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        if (r0 == VK_SUCCESS && r1 == VK_SUCCESS && t1 >= t0) {
+            uint64_t dt = (uint64_t)((double)(t1 - t0) * period);
+            prof::add(prof::GPU, dt, 0);
+            TsEntry& e = g_ts_by_entry[p.entry];
+            e.count++;
+            e.ns += dt;
+        }
+        query_slot_release(p.qs);
+        query_slot_release(p.qe);
+    }
+    g_ts_pending.clear();
+    if (g_ts_untimed && !g_ts_warned) {
+        g_ts_warned = true;
+        std::fprintf(stderr,
+                     "[ssplat-profile] note: %llu dispatch(es) untimed "
+                     "(timestamp pool exhausted)\n",
+                     (unsigned long long)g_ts_untimed);
+    }
+}
+
+void gpu_ts_report_by_entry() {
+    if (!prof::enabled()) return;
+    std::lock_guard<std::mutex> lock(g_ts_mutex);
+    if (g_ts_by_entry.empty()) return;
+    // Sort entries by total GPU time, descending.
+    std::vector<std::pair<std::string, TsEntry>> rows(g_ts_by_entry.begin(),
+                                                      g_ts_by_entry.end());
+    std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
+        return a.second.ns > b.second.ns;
+    });
+    std::fprintf(stderr,
+                 "\n[ssplat-profile] ---- GPU time by kernel (entry) ----\n");
+    std::fprintf(stderr, "%-44s %7s %10s %9s\n", "entry", "count", "gpu_ms",
+                 "us/call");
+    for (const auto& r : rows) {
+        double ms = r.second.ns * 1e-6;
+        double us = r.second.count ? (r.second.ns * 1e-3) / r.second.count : 0;
+        std::fprintf(stderr, "%-44s %7llu %10.3f %9.2f\n", r.first.c_str(),
+                     (unsigned long long)r.second.count, ms, us);
+    }
+    std::fprintf(stderr, "[ssplat-profile] -----------------------------------\n");
+}
+
 void pipelines_shutdown();  // VulkanPipelines.cpp
 
 void runtime_shutdown() {
     Context& ctx = Context::get();  // called from within ~Context's body;
     VkDevice dev = ctx.device();    // the device is still alive here
 
+    gpu_ts_report_by_entry();  // per-kernel GPU breakdown (SSPLAT_PROFILE)
     pipelines_shutdown();
     {
         std::lock_guard<std::mutex> lock(g_stream_mutex);

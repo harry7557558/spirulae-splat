@@ -1,8 +1,10 @@
 .vscode/
+.claude/
 .fuse_hidden*
 .torch_extensions/*
 
 outputs/
+parity_refs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -152,7 +152,10 @@ void render_background_sh_backward(
     r.scratch = (uint64_t)scratch;
     r.v_sh_coeffs = std::get<0>(v_sh_coeffs);
     r.k3 = (uint32_t)(K * 3);
+    // One workgroup per output scalar (the kernel grid-strides + block-reduces
+    // the kBgBwdSlices partials for its column). Was a single workgroup that
+    // serially folded every slice.
     vkk::dispatch("background_sh.background_sh_bwd_reduce",
-                  backend::vk::SpecList{(uint32_t)sh_degree}, 1, 1, 1, &r,
-                  sizeof(r));
+                  backend::vk::SpecList{(uint32_t)sh_degree}, (uint32_t)(K * 3),
+                  1, 1, &r, sizeof(r));
 }

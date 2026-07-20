@@ -1086,6 +1086,21 @@ public:
         encode_us(packed_ptr, idx, prim.x, prim.y, mm);
     }
 
+    // BITS == 8 only: one cell's packed byte pair (u_q | s_q << 8) as a
+    // value, for callers that assemble whole words themselves (the FPBO
+    // kernel's staged coalesced writeback). Same rounding as encode_us.
+    __device__ static inline uint32_t encode_g1g2_code(
+        float g1, float g2, float4 mm
+    ) {
+        static_assert(BITS == 8, "cell-code encode is the 2-byte/cell AoS");
+        float2 prim = g1g2_to_us(g1, g2);
+        float u_range = fmaxf(mm.y - mm.x, kEps);
+        float s_range = fmaxf(mm.w - mm.z, kEps);
+        float u_qf = fminf(fmaxf(roundf(kQMax * (prim.x - mm.x) / u_range), 0.0f), kQMax);
+        float s_qf = fminf(fmaxf(roundf(kQMax * (prim.y - mm.z) / s_range), 0.0f), kQMax);
+        return (uint32_t)(uint8_t)u_qf | ((uint32_t)(uint8_t)s_qf << 8);
+    }
+
     // (g1, g2) -> linearly-quantized primitives (u, log_s). Block reduction
     // inside host kernels operates on these -- both halves are min/max-reduced
     // in their own (linear) domain to produce the per-block float4 bounds.
@@ -1346,6 +1361,17 @@ public:
             uint16_t* p16 = reinterpret_cast<uint16_t*>(packed_ptr);
             p16[idx] = (uint16_t)qf;
         }
+    }
+
+    // One cell's quantized code as a value (low BITS bits), for callers
+    // that assemble whole words themselves (the FPBO kernel's staged
+    // coalesced writeback). Same rounding as encode_v.
+    __device__ static inline uint32_t encode_v_code(float v, float2 mm) {
+        float range = fmaxf(mm.y - mm.x, 1e-30f);
+        float qf = roundf(kQMax * (v - mm.x) / range);
+        qf = fminf(fmaxf(qf, 0.0f), kQMax);
+        if constexpr (BITS == 8) return (uint32_t)(uint8_t)qf;
+        else                     return (uint32_t)(uint16_t)qf;
     }
 #endif // __CUDACC__
 };
