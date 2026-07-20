@@ -271,33 +271,33 @@ DEF_DOWNSWEEP(sort_downsweep_u64, u64key_t)
 [SpecializationConstant]
 const int kInclusive = 0;
 
-// int64 scan element. The emulated form is a (lo, hi) pair with explicit
-// carry; the memory image matches the native int64 buffer layout, so the
-// same entry names serve both blob variants.
+// int64 scan element. The emulated form is a (lo, hi) = (x, y) uint2 with
+// explicit carry; the memory image matches the native int64 buffer layout,
+// so the same entry names serve both blob variants. The scan macros add and
+// subtract through the acc_add/acc_sub overloads below rather than +/- so
+// the pair form can carry. A uint2 rather than a two-field struct: the
+// Intel Windows driver (igvk64.dll, observed on Gen9.5 UHD) segfaults in
+// vkCreateComputePipelines on this kernel's struct form (groupshared struct
+// array + struct loads through buffer pointers), while vector types are
+// exercised by every backend kernel and compile everywhere.
 #ifndef SSPLAT_EMULATE_INT64
 typedef int64_t i64acc_t;
+int64_t acc_add(int64_t a, int64_t b) { return a + b; }
+int64_t acc_sub(int64_t a, int64_t b) { return a - b; }
 #else
-struct i64acc_t {
-    uint lo;
-    uint hi;
-    __init(int v) {
-        lo = uint(v);
-        hi = v < 0 ? 0xffffffffu : 0u;
-    }
-};
-i64acc_t operator+(i64acc_t a, i64acc_t b) {
-    i64acc_t r = i64acc_t(0);
-    r.lo = a.lo + b.lo;
-    r.hi = a.hi + b.hi + (r.lo < a.lo ? 1u : 0u);
-    return r;
+typedef uint2 i64acc_t;
+uint2 acc_add(uint2 a, uint2 b) {
+    uint lo = a.x + b.x;
+    return uint2(lo, a.y + b.y + (lo < a.x ? 1u : 0u));
 }
-i64acc_t operator-(i64acc_t a, i64acc_t b) {
-    i64acc_t r = i64acc_t(0);
-    r.lo = a.lo - b.lo;
-    r.hi = a.hi - b.hi - (a.lo < b.lo ? 1u : 0u);
-    return r;
+uint2 acc_sub(uint2 a, uint2 b) {
+    return uint2(a.x - b.x, a.y - b.y - (a.x < b.x ? 1u : 0u));
 }
 #endif
+int acc_add(int a, int b) { return a + b; }
+int acc_sub(int a, int b) { return a - b; }
+float acc_add(float a, float b) { return a + b; }
+float acc_sub(float a, float b) { return a - b; }
 
 struct ScanParams {
     uint32_t* input;       // typed per entry (cast)
@@ -343,7 +343,7 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
     for (uint e = 0; e < SCAN_ELEMS; e++) {                                \
         T x = v[e];                                                        \
         v[e] = thread_total; /* exclusive within thread */                 \
-        thread_total = thread_total + x;                                   \
+        thread_total = acc_add(thread_total, x);                           \
     }                                                                      \
     TMP[tid] = thread_total;                                               \
     GroupMemoryBarrierWithGroupSync();                                     \
@@ -351,20 +351,21 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
     for (uint off = 1; off < SCAN_WG; off <<= 1) {                         \
         T x = tid >= off ? TMP[tid - off] : T(0);                          \
         GroupMemoryBarrierWithGroupSync();                                 \
-        TMP[tid] = TMP[tid] + x;                                           \
+        TMP[tid] = acc_add(TMP[tid], x);                                   \
         GroupMemoryBarrierWithGroupSync();                                 \
     }                                                                      \
-    T thread_base = TMP[tid] - thread_total; /* exclusive across threads */\
+    T thread_base = acc_sub(TMP[tid], thread_total); /* excl across thr */ \
     [ForceUnroll]                                                          \
     for (uint e = 0; e < SCAN_ELEMS; e++) {                                \
         uint idx = base + e;                                               \
         if (idx < p.n) {                                                   \
-            T excl = thread_base + v[e];                                   \
-            output[idx] = kInclusive != 0 ? excl + loaded[e] : excl;       \
+            T excl = acc_add(thread_base, v[e]);                           \
+            output[idx] = kInclusive != 0 ? acc_add(excl, loaded[e])       \
+                                          : excl;                          \
         }                                                                  \
     }                                                                      \
     if (tid == SCAN_WG - 1)                                                \
-        block_sums[block] = thread_base + thread_total;                    \
+        block_sums[block] = acc_add(thread_base, thread_total);            \
 }
 
 #define LOAD_I32(idx) (((int*)p.input)[idx])
@@ -401,13 +402,14 @@ void NAME(uint tid: SV_GroupThreadID, uniform ScanSpineParams p) {         \
         for (uint off = 1; off < SCAN_WG; off <<= 1) {                     \
             T x = tid >= off ? TMP[tid - off] : T(0);                      \
             GroupMemoryBarrierWithGroupSync();                             \
-            TMP[tid] = TMP[tid] + x;                                       \
+            TMP[tid] = acc_add(TMP[tid], x);                               \
             GroupMemoryBarrierWithGroupSync();                             \
         }                                                                  \
-        if (idx < p.num_blocks) sums[idx] = running + TMP[tid] - v;        \
+        if (idx < p.num_blocks)                                            \
+            sums[idx] = acc_add(running, acc_sub(TMP[tid], v));            \
         T chunk_total = TMP[SCAN_WG - 1];                                  \
         GroupMemoryBarrierWithGroupSync();                                 \
-        running = running + chunk_total;                                   \
+        running = acc_add(running, chunk_total);                           \
     }                                                                      \
 }
 
@@ -434,7 +436,7 @@ void NAME(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,                \
     [ForceUnroll]                                                          \
     for (uint e = 0; e < SCAN_ELEMS; e++) {                                \
         uint idx = base + e;                                               \
-        if (idx < p.n) output[idx] = output[idx] + addend;                 \
+        if (idx < p.n) output[idx] = acc_add(output[idx], addend);         \
     }                                                                      \
 }
 

@@ -51,7 +51,12 @@ for A/B testing):
   `uint2` instead of the Int64-dragging `ConvertPtrToU` slang emits for
   `p == nullptr` (`is_null`). build_spirv.py fails the build if a
   `.noint64` blob still declares Int64. Old Intel iGPUs (and some mobile
-  parts) lack shaderInt64.
+  parts) lack shaderInt64. The emulated i64 scan accumulator must stay a
+  `uint2`, not a two-field struct: the Intel Windows driver (igvk64.dll,
+  Gen9.5 UHD) segfaults in vkCreateComputePipelines on the struct form
+  (groupshared struct array + struct BDA loads), while other
+  struct-pointee kernels (densify) compile fine there — vectors are the
+  safe shape (`acc_add`/`acc_sub` in sort_scan.slang carry explicitly).
 - `shaderInt8` + `storageBuffer8BitAccess` — byte-buffer access. The
   baseline reads/writes uint8 buffers as packed u32 words
   (`slang/vulkan/int8_compat.slang`: `u8_load`/`s8_load`/`u8_store`; word

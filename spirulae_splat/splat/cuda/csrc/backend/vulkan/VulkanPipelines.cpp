@@ -1,5 +1,7 @@
 #include "VulkanPipelines.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -81,6 +83,12 @@ VkShaderModule get_module(const std::string& name) {
         set_error("no embedded SPIR-V blob with this entry name (rerun "
                   "slang/build_spirv.py?)", VK_SUCCESS);
         return VK_NULL_HANDLE;
+    }
+    // Driver shader compilers can crash outright on a blob they dislike;
+    // under SSPLAT_VK_VERBOSE the last line printed names the culprit.
+    if (std::getenv("SSPLAT_VK_VERBOSE")) {
+        std::fprintf(stderr, "[ssplat-vk] compiling %s\n", blob->name);
+        std::fflush(stderr);
     }
     VkShaderModuleCreateInfo sci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     sci.codeSize = blob->size_bytes;
@@ -171,6 +179,10 @@ VkPipeline get_pipeline(const std::string& blob_name, const SpecList& spec,
     if (spec.count) pci.stage.pSpecializationInfo = &spec_info;
     pci.layout = layout;
 
+    if (std::getenv("SSPLAT_VK_VERBOSE")) {
+        std::fprintf(stderr, "[ssplat-vk] pipeline %s\n", key.c_str());
+        std::fflush(stderr);
+    }
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkResult r = vkCreateComputePipelines(Context::get().device(),
                                           VK_NULL_HANDLE, 1, &pci, nullptr,
