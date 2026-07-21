@@ -134,6 +134,21 @@ static void test_elasticity() {
 // ---------------------------------------------------------------------------
 // Test D: env override pins the arm regardless of measurements.
 // ---------------------------------------------------------------------------
+
+#if defined(_WIN32) || defined(_WIN64)
+inline int setenv(const char *name, const char *value, int overwrite) {
+    if (!overwrite) {
+        if (getenv(name) != nullptr) {
+            return 0;
+        }
+    }
+    return _putenv_s(name, value);
+}
+inline int unsetenv(const char *name) {
+    return _putenv_s(name, "");
+}
+#endif
+
 static void test_override(const char* val, int expect, const char* label) {
     setenv("SSPLAT_BILAGRID_BWD", val, 1);
     BilagridBwdSelector sel;
