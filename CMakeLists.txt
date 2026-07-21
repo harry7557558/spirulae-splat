@@ -694,6 +694,9 @@ if(SSPLAT_BUILD_GUI)
         find_package(Python3 REQUIRED COMPONENTS Development.Embed)
         target_link_libraries(ssplat-gui PRIVATE Python3::Python)
     endif()
+    if (WIN32)
+        target_link_libraries(ssplat-gui PRIVATE ws2_32)
+    endif()
     target_compile_options(ssplat-gui PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>
     )
