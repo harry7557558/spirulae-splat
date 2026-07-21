@@ -131,7 +131,7 @@ struct VisBlitParams {
     int32_t view_camera_model, width, height, rgb_channels;
     int32_t num_cam_lss, show_cams, show_overlay, thumb_w, thumb_h;
     int32_t has_lss, has_tri;
-    int32_t _pad0;
+    int32_t alpha_stride;
 };
 static_assert(sizeof(VisBlitParams) == 16 * 8 + 12 * 4, "layout");
 
@@ -355,6 +355,9 @@ void run_blit(const TorchTensorView& render_rgbs,
     auto& rgb_shape = std::get<2>(render_rgbs);
     const int64_t h = rgb_shape[0], w = rgb_shape[1], c = rgb_shape[2];
 
+    auto& alpha_shape = std::get<2>(render_alphas);
+    const int64_t alpha_stride = alpha_shape.empty() ? 1 : alpha_shape.back();
+
     void* rgba = DevicePool::global().acquire_dynamic(
         VramCategory::Viewer, "viewer.blit_rgba", (size_t)h * w * 4);
 
@@ -386,6 +389,7 @@ void run_blit(const TorchTensorView& render_rgbs,
     p.thumb_h = thumb_h;
     p.has_lss = geom.lss_buffer ? 1 : 0;
     p.has_tri = geom.tri_buffer ? 1 : 0;
+    p.alpha_stride = (int32_t)alpha_stride;
 
     uint64_t params_addr = 0;
     void* params_mapped = nullptr;
