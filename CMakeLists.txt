@@ -16,6 +16,13 @@ option(SSPLAT_BUILD_CLI "Build the standalone ssplat-train CLI" OFF)
 option(SSPLAT_BUILD_GUI "Build the native GUI app ssplat-gui (fetches GLFW + Dear ImGui)" OFF)
 option(SSPLAT_NO_TORCH "Skip Torch/Python even if present; build only ssplat-train" OFF)
 
+# Debug symbols / line info are OFF by default: they bloat the binaries
+# massively (nvcc host -g, CUDA cubin lineinfo/source-in-ptx, and slangc -g2
+# in the embedded SPIR-V). Turn on for profiling/debugging builds. The pip
+# build (setup.py) is independent and unaffected (it has its own WITH_SYMBOLS
+# and LINE_INFO env gates).
+option(SSPLAT_DEBUG_SYMBOLS "Emit debug symbols / line info (host -g, CUDA cubin lineinfo, SPIR-V -g2)" OFF)
+
 # ---------------------------------------------------------------------------
 # Compute backend selection
 #
@@ -57,11 +64,10 @@ if(SSPLAT_BACKEND STREQUAL "vulkan")
         target_link_libraries(csrc_portable PUBLIC OpenMP::OpenMP_CXX)
     endif()
 
-    find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
     # ---- slangc: locate a matching compiler or fetch the pinned release ----
-    # SPIR-V blobs are never committed; they are compiled at build time
-    # (checksum-cached in the build tree) and embedded below.
+    # SPIR-V blobs are never committed; they are compiled at build time (one
+    # slangc edge per blob, see slang/SpirvShaders.cmake) and embedded below.
+    # No Python is required for the Vulkan build.
     set(SSPLAT_SLANG_VERSION "2026.12.0.1")
     set(SSPLAT_SLANGC "" CACHE FILEPATH
         "slangc to use (empty = find in PATH, fetch on miss/mismatch)")
@@ -142,24 +148,17 @@ if(SSPLAT_BACKEND STREQUAL "vulkan")
     endif()
     message(STATUS "Using slangc ${_slangc} (${_slangc_ver})")
 
-    # ---- compile Slang -> SPIR-V (build tree, checksum-cached) and embed ----
+    # ---- compile Slang -> SPIR-V (build tree) and embed ----
+    # Native (no Python): slang/spirv_tool.cpp is compiled by the module below,
+    # which enumerates one slangc custom command per blob (so -j bounds RAM) and
+    # embeds the result. SPIR-V debug info (slangc -g2) is opt-in via
+    # SSPLAT_DEBUG_SYMBOLS; it otherwise dominates the embedded blob size.
     set(SSPLAT_CUDA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda)
-    file(GLOB_RECURSE SSPLAT_SLANG_SOURCES CONFIGURE_DEPENDS
-        ${SSPLAT_CUDA_DIR}/slang/*.slang)
     set(SSPLAT_SPIRV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spirv)
     set(SSPLAT_SPIRV_EMBED ${CMAKE_CURRENT_BINARY_DIR}/vk_shaders_embedded.cpp)
-    add_custom_command(
-        OUTPUT ${SSPLAT_SPIRV_EMBED}
-        COMMAND ${Python3_EXECUTABLE} slang/build_spirv.py
-            --out-dir ${SSPLAT_SPIRV_DIR} --slangc ${_slangc}
-        COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/embed_spirv.py
-            ${SSPLAT_SPIRV_DIR} ${SSPLAT_SPIRV_EMBED}
-        WORKING_DIRECTORY ${SSPLAT_CUDA_DIR}
-        DEPENDS ${SSPLAT_SLANG_SOURCES}
-            ${SSPLAT_CUDA_DIR}/slang/build_spirv.py
-            ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/embed_spirv.py
-        COMMENT "Compiling Slang -> SPIR-V and embedding")
+    include(${SSPLAT_CUDA_DIR}/slang/SpirvShaders.cmake)
+    ssplat_setup_spirv(${SSPLAT_CUDA_DIR} ${_slangc} ${SSPLAT_SPIRV_DIR}
+        ${SSPLAT_SPIRV_EMBED} ${SSPLAT_DEBUG_SYMBOLS})
 
     # Vulkan backend runtime (device context, memory, streams, events) and
     # kernel launchers.
@@ -379,9 +378,14 @@ set(SPLAT_NVCC_FLAGS
     "-Xcudafe=--diag_suppress=20012"
     "-Xcudafe=--diag_suppress=550"
     "--threads" "0"
-    "-lineinfo" "--generate-line-info" "--source-in-ptx"
     "-Xptxas" "--warn-on-double-precision-use"
 )
+
+# cubin/PTX line info (adds embedded source; needed for profiling but bloats
+# the fatbin). Off unless SSPLAT_DEBUG_SYMBOLS.
+if(SSPLAT_DEBUG_SYMBOLS)
+    list(APPEND SPLAT_NVCC_FLAGS "-lineinfo" "--generate-line-info" "--source-in-ptx")
+endif()
 
 # Add gencode flags
 foreach(arch ${TORCH_CUDA_ARCH_LIST})
@@ -391,7 +395,10 @@ endforeach()
 # Host side optimizations
 if(NOT WIN32)
     # list(APPEND SPLAT_NVCC_FLAGS "-Xcompiler=-O3,-march=native")
-    list(APPEND SPLAT_NVCC_FLAGS "-Xcompiler=-g")
+    # Host debug symbols (nvcc -Xcompiler=-g). Off unless SSPLAT_DEBUG_SYMBOLS.
+    if(SSPLAT_DEBUG_SYMBOLS)
+        list(APPEND SPLAT_NVCC_FLAGS "-Xcompiler=-g")
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

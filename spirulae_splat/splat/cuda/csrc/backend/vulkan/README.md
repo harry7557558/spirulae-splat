@@ -28,28 +28,30 @@ reproduced.
 Vulkan 1.2 core with features: `bufferDeviceAddress`, `timelineSemaphore`
 (both core-1.2 features; MoltenVK exposes both on Apple silicon). Optional,
 probed per device and reflected as pipeline variants where needed
-(build_spirv.py compiles every subset of an entry's applicable variants, so
+(spirv_tool compiles every subset of an entry's applicable variants, so
 any capability combination finds an exact blob; SSPLAT_VK_NATIVE_ATOMICS=0 /
 SSPLAT_VK_NATIVE_INT64=0 / SSPLAT_VK_NATIVE_INT8=0 force the fallback blobs
 for A/B testing):
 
 - `VK_EXT_shader_atomic_float` (`shaderBufferFloat32AtomicAdd`) — training
   backward passes (~1,069 float atomicAdd sites). Every entry that calls
-  `atomic_add_f32` is compiled twice by `slang/build_spirv.py`: the base
+  `atomic_add_f32` is compiled twice by `slang/spirv_tool.cpp`: the base
   blob uses a CAS-loop emulation (MoltenVK, llvmpipe), and a
   `.atomicadd`-suffixed blob uses native `OpAtomicFAddEXT`; the pipeline
   layer picks per device at module load (no in-shader branch). Unlike
   VkSplat, both variants are always built.
 - `shaderInt64` — 64-bit sort keys, morton codes, large-buffer indexing.
-  Entries whose base blob declares `OpCapability Int64` additionally get a
-  `.noint64` variant compiled with `-DSSPLAT_EMULATE_INT64`
-  (`slang/vulkan/int64_compat.slang`): index arithmetic narrows to int32
+  Entries in an int64_compat-including source get a `.noint64` variant
+  compiled with `-DSSPLAT_EMULATE_INT64` (`slang/vulkan/int64_compat.slang`),
+  and the embed step keeps only those whose base blob actually declares
+  `OpCapability Int64` (the rest compile to a base-identical blob and are
+  dropped). With emulation: index arithmetic narrows to int32
   (fine — devices without shaderInt64 cannot hold 2^31-element buffers,
   which the host guards regardless), int64-layout tensors and push fields
   are accessed as `uint2` word pairs, sort keys / morton codes use
   bit-identical (lo, hi) pair emulation, and pointer null checks bitcast to
   `uint2` instead of the Int64-dragging `ConvertPtrToU` slang emits for
-  `p == nullptr` (`is_null`). build_spirv.py fails the build if a
+  `p == nullptr` (`is_null`). spirv_tool fails the build if a kept
   `.noint64` blob still declares Int64. Old Intel iGPUs (and some mobile
   parts) lack shaderInt64. The emulated i64 scan accumulator must stay a
   `uint2`, not a two-field struct: the Intel Windows driver (igvk64.dll,
@@ -163,12 +165,16 @@ Variant axes follow the CUDA instantiation structure
 Entry points live in `slang/vulkan/*.slang` and `#include` the existing
 `slang/*.slang` module files (same trick as the CUDA side's
 `#define CudaDeviceExport ForceInline` include). SPIR-V is NEVER committed
-(unlike VkSplat): CMake compiles it at build time via
-`slang/build_spirv.py` (parallel slangc `-target spirv`, per-entry checksum
-cache in the build tree keyed over the transitive #include closure) and
-embeds the blobs into one generated TU (byte arrays + name registry) via
-`spirulae_splat/embed_spirv.py`, so binaries and the Python module are
-self-contained. CMake locates slangc in PATH / `-DSSPLAT_SLANGC=`, checks
+(unlike VkSplat): CMake compiles it at build time. The build is fully native
+(no Python): `slang/spirv_tool.cpp` — a self-contained C++17 host tool
+compiled once via `try_compile`, driven by `slang/SpirvShaders.cmake` —
+`discover`s every blob (scanning entries + feature variants over the
+transitive #include closure), and CMake emits one slangc `-target spirv`
+custom command per blob so the build's `-j` bounds how many run at once
+(each blob is a normal Ninja edge, printed `[n/m] SPIR-V <name>`, and only
+stale blobs recompile). The same tool then `embed`s the blobs into one
+generated TU (byte arrays + name registry), so binaries are self-contained.
+CMake locates slangc in PATH / `-DSSPLAT_SLANGC=`, checks
 `slangc -v` against the pinned `SSPLAT_SLANG_VERSION`, and on miss or
 mismatch downloads + extracts the pinned GitHub release into the build tree
 (platform-detected archive; verified again after extraction).
@@ -250,7 +256,7 @@ Mesa ANV, llvmpipe — all tests + validation layers clean on all three):
   the baseline. Byte access goes through `int8_compat.slang` (packed-u32
   words on the baseline, native bytes in the feature-gated `.int8` blob
   variant); device allocations are 16-byte rounded so word reads past `n`
-  stay in bounds. build_spirv.py fails the build if a non-`.int8` blob
+  stay in bounds. spirv_tool fails the build if a non-`.int8` blob
   declares 8-bit capabilities.
 - **No unguarded 64-bit integers in shaders.** Applies to `int64_t` locals,
   `uint64_t*` pointee types in param structs (even when only cast away),
@@ -324,8 +330,8 @@ Vulkan.
   violations — near-tie depth keys sort differently when the projected
   depths differ in the last ulp across compilers, reordering the blend for
   a handful of pixels; the violation-fraction cap absorbs this.
-- build_spirv.py's entry scanner now tolerates `//` comments between the
-  [shader]/[numthreads] attributes and `void`.
+- the SPIR-V entry scanner (now `slang/spirv_tool.cpp`) tolerates `//`
+  comments between the [shader]/[numthreads] attributes and `void`.
 
 Phase-4 completion + engine-level end-to-end (2026-07): the REAL engine
 render path (`forward_3dgs` -> background blend -> color space ->
