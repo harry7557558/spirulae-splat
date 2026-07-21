@@ -92,7 +92,7 @@ private:
 
     // Camera model + per-model FOV memory (browser _fovMemory equivalent).
     int _cam_model = 0;              // index into kViewerCameraModels
-    float _fov_deg[4] = {90, 90, 90, 0};
+    float _fov_deg[4] = {90, 180, 180, 0};
 
     // Render options.
     int _buffer_idx = 0;

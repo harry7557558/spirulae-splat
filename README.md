@@ -1,17 +1,31 @@
-# spirulae-splat
+# Spirulae Splat
+
+[**Installation**](#installation) &#8226;
+[**Quick Start**](#quick-start) &#8226;
+[**Acknowledgement**](#acknowledgement) &#10073;
+[**SuperSplat**](https://superspl.at/user?id=harry7557558) &#10073;
+[**Online Viewer**](https://harry7557558.github.io/spirulae-splat/viewer/)
 
 This is my personal project that trains 3D Gaussian Splatting (3DGS) models.
 
-If you find spirulae-splat helpful for your research, please cite corresponding works (see "Acknowledgement" section below).
+<!-- If you find spirulae-splat helpful for your research, please cite corresponding works (see "Acknowledgement" section below).
 
 If you share 3DGS models trained with spirulae-splat, or incorporate any feature or idea into your code, product, or service, a mention of spirulae-splat with a link to this page is highly appreciated.
 
 Spirulae-splat has changed its license to GPLv3. If you wish to use part of its code in more permissively licensed open source software, reach out to me and we can figure it out.
 
-Some splats trained with spirulae-splat may be found on [my SuperSplat profile](https://superspl.at/user?id=harry7557558). I'm also considering adding a few visuals to this README. If you have cool splats made with spirulae-splat and are willing to share either the full splats or some renders publicly, please don't hesitate to reach out.
+Some splats trained with spirulae-splat may be found on [my SuperSplat profile](https://superspl.at/user?id=harry7557558). If you have cool splats made with spirulae-splat and are willing to share either the full splats or some renders publicly, please don't hesitate to reach out. -->
 
-### Features
-- Cross vendor support via Vulkan compute &ndash; Tested on **NVIDIA, AMD, Intel(R), and Apple** GPUs
+![spirulae-splat GUI screenshot, showing it training 10 million Gaussians with full SH degree on 4K images, on a laptop GPU with 8GB VRAM](screenshot.png)
+
+<div align="center">
+
+*Screenshot of spirulae-splat GUI, showing it training 10 million SH3 Gaussians on 4k images, on a laptop GPU with 8GB VRAM.*
+
+</div>
+
+## Features
+- Cross vendor support via Vulkan compute &ndash; Runs on **NVIDIA, AMD, Intel(R), and Apple** GPUs
 - Unified densification strategy combining elements from **MCMC** and **IGS/IGS+/MRNF**
 - Extreme **VRAM efficiency** with quantized training &ndash; Up to 10 million SH3 Gaussians in 8GB VRAM
 - **Bilateral grid** and **PPISP** for exposure/WB correction
