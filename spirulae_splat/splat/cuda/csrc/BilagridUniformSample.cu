@@ -169,7 +169,8 @@ void bilagrid_uniform_sample_backward_v2(
     float* v_rgb,
     int N, int L, int H, int W,
     int h, int w,
-    cudaStream_t stream
+    cudaStream_t stream,
+    const int* grid_indices
 ) {
     dim3 block = { 16, 16, 1 };
     dim3 bounds = {
@@ -180,7 +181,7 @@ void bilagrid_uniform_sample_backward_v2(
     bilagrid_uniform_sample_backward_v2_kernel<<<bounds, block, 0, stream>>>(
         bilagrid, rgb, v_output,
         v_bilagrid, v_rgb,
-        N, L, H, W, h, w
+        N, L, H, W, h, w, grid_indices
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

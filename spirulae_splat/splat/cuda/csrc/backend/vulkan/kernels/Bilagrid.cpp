@@ -92,11 +92,12 @@ struct BgV1RgbParams {
 static_assert(sizeof(BgV1RgbParams) == 8 * 8 + 12 * 4, "layout");
 
 struct BgV2Params {
-    uint64_t fp32, q16, vbounds, rgb, v_output, v_bilagrid, v_rgb, offsets;
-    int32_t N, L, H, W, m, h, w, h0, w0;
-    uint32_t total, wgs_per_row, _pad0;
+    uint64_t fp32, q16, vbounds, rgb, v_output, v_bilagrid, v_rgb, offsets,
+        grid_indices;
+    int32_t N, L, H, W, m, h, w, h0, w0, has_grid_indices;
+    uint32_t total, wgs_per_row;
 };
-static_assert(sizeof(BgV2Params) == 8 * 8 + 12 * 4, "layout");
+static_assert(sizeof(BgV2Params) == 9 * 8 + 12 * 4, "layout");
 
 struct BpSampleParams {
     uint64_t fp32, q16, vbounds, image_indices, coords, rgb, out_or_vout,
@@ -115,6 +116,41 @@ struct BpV1GridParams {
     int32_t mult_x, mult_y, m_batch_stride, has_grid_indices, _pad0;
 };
 static_assert(sizeof(BpV1GridParams) == 8 * 8 + 14 * 4, "layout");
+
+// PPISP backward v2 (fused scatter). Uniform only + grid_indices; image-grad
+// always on. Mirrors slang bilagrid_ppisp.BpV2Params.
+struct BpV2Params {
+    uint64_t fp32, q16, vbounds, rgb, v_output, v_bilagrid, v_rgb, grid_indices;
+    int32_t N, L, H, W, h, w, has_grid_indices;
+    uint32_t total, wgs_per_row, _pad0;
+};
+static_assert(sizeof(BpV2Params) == 8 * 8 + 10 * 4, "layout");
+
+// Depth (2-ch) / normal (3-ch) backward v2 (scatter, grid-grad only). Mirror
+// slang bilagrid_depth.BdV2Params / bilagrid_normal.BnV2Params.
+struct BdV2Params {
+    uint64_t fp32, q16, vbounds, depth, scalars, v_output, v_bilagrid,
+        grid_indices;
+    int32_t N, L, H, W, h, w, has_grid_indices;
+    uint32_t total, wgs_per_row, _pad0;
+};
+static_assert(sizeof(BdV2Params) == 8 * 8 + 10 * 4, "layout");
+
+struct BnV2Params {
+    uint64_t fp32, q16, vbounds, normal_in, v_output, v_bilagrid, grid_indices;
+    int32_t N, L, H, W, h, w, has_grid_indices;
+    uint32_t total, wgs_per_row, _pad0;
+};
+static_assert(sizeof(BnV2Params) == 7 * 8 + 10 * 4, "layout");
+
+// Log-linear backward v2 (fused scatter, image-grad on). Mirror slang
+// bilagrid_loglinear.BlV2Params (same field set as PPISP's BpV2Params).
+struct BlV2Params {
+    uint64_t fp32, q16, vbounds, rgb, v_output, v_bilagrid, v_rgb, grid_indices;
+    int32_t N, L, H, W, h, w, has_grid_indices;
+    uint32_t total, wgs_per_row, _pad0;
+};
+static_assert(sizeof(BlV2Params) == 8 * 8 + 10 * 4, "layout");
 
 struct BdUniformParams {
     uint64_t fp32, q16, vbounds, depth, scalars, output, offsets, grid_indices;
@@ -344,7 +380,8 @@ void launch_affine_bwd_v1(
 void launch_affine_bwd_v2(
     BilagridReader bilagrid, const float* rgb, const int* offsets,
     const float* v_output, float* v_bilagrid, float* v_rgb, int N, int L,
-    int H, int W, int m, int h, int w, int h0, int w0, bool patched
+    int H, int W, int m, int h, int w, int h0, int w0, bool patched,
+    const int* grid_indices
 ) {
     ReaderPtrs r = unpack_reader(bilagrid);
     int64_t total = patched ? (int64_t)N * m * h * w : (int64_t)N * h * w;
@@ -355,11 +392,13 @@ void launch_affine_bwd_v2(
     p.v_bilagrid = (uint64_t)v_bilagrid;
     p.v_rgb = (uint64_t)v_rgb;
     p.offsets = vkk::or_fallback(offsets);
+    p.grid_indices = vkk::or_fallback(grid_indices);
     p.N = N; p.L = L; p.H = H; p.W = W;
     p.m = patched ? m : 1;
     p.h = h; p.w = w;
     p.h0 = patched ? h0 : 1;
     p.w0 = patched ? w0 : 1;
+    p.has_grid_indices = (!patched && grid_indices != nullptr) ? 1 : 0;
     p.total = (uint32_t)total;
     vkk::dispatch_flat("bilagrid_affine.bilagrid_affine_bwd_v2",
                        backend::vk::SpecList{r.vq, patched ? 1u : 0u, 0u},
@@ -416,11 +455,11 @@ void bilagrid_patched_sample_backward_v1(
 void bilagrid_uniform_sample_backward_v2(
     BilagridReader bilagrid, const float* rgb, const float* v_output,
     float* v_bilagrid, float* v_rgb, int N, int L, int H, int W, int h, int w,
-    backend::Stream stream
+    backend::Stream stream, const int* grid_indices
 ) {
     (void)stream;
     launch_affine_bwd_v2(bilagrid, rgb, nullptr, v_output, v_bilagrid, v_rgb,
-                         N, L, H, W, 1, h, w, 1, 1, false);
+                         N, L, H, W, 1, h, w, 1, 1, false, grid_indices);
 }
 
 void bilagrid_patched_sample_backward_v2(
@@ -430,7 +469,7 @@ void bilagrid_patched_sample_backward_v2(
 ) {
     (void)stream;
     launch_affine_bwd_v2(bilagrid, rgb, offsets, v_output, v_bilagrid, v_rgb,
-                         N, L, H, W, m, h, w, h0, w0, true);
+                         N, L, H, W, m, h, w, h0, w0, true, nullptr);
 }
 
 /* ========================================================================
@@ -660,6 +699,29 @@ void bilagrid_ppisp_uniform_sample_backward_v1(
                          target_tile_size, 1, grid_indices, false);
 }
 
+void bilagrid_ppisp_uniform_sample_backward_v2(
+    BilagridReader bilagrid, const float* rgb, const float* v_output,
+    float* v_bilagrid, float* v_rgb, int N, int L, int H, int W, int h, int w,
+    backend::Stream stream, const int* grid_indices
+) {
+    (void)stream;
+    ReaderPtrs r = unpack_reader(bilagrid);
+    int64_t total = (int64_t)N * h * w;
+    BpV2Params p{};
+    p.fp32 = r.fp32; p.q16 = r.q16; p.vbounds = r.vbounds;
+    p.rgb = (uint64_t)rgb;
+    p.v_output = (uint64_t)v_output;
+    p.v_bilagrid = (uint64_t)v_bilagrid;
+    p.v_rgb = (uint64_t)v_rgb;
+    p.grid_indices = vkk::or_fallback(grid_indices);
+    p.N = N; p.L = L; p.H = H; p.W = W; p.h = h; p.w = w;
+    p.has_grid_indices = (grid_indices != nullptr) ? 1 : 0;
+    p.total = (uint32_t)total;
+    vkk::dispatch_flat("bilagrid_ppisp.bilagrid_ppisp_bwd_v2",
+                       backend::vk::SpecList{r.vq}, total, 256, &p, sizeof(p),
+                       &p.wgs_per_row);
+}
+
 void bilagrid_ppisp_patched_sample_backward_v1(
     BilagridReader bilagrid, const float* rgb, const int* offsets,
     const float* v_output, float* v_bilagrid, float* v_rgb, int N, int L,
@@ -707,6 +769,29 @@ void bilagrid_loglinear_uniform_sample_backward_v1(
     launch_family_bwd_v1(kLoglinearEntries, bilagrid, rgb, nullptr, v_output,
                          v_bilagrid, v_rgb, N, L, H, W, 1, h, w, 1, 1,
                          target_tile_size, 1, grid_indices, false);
+}
+
+void bilagrid_loglinear_uniform_sample_backward_v2(
+    BilagridReader bilagrid, const float* rgb, const float* v_output,
+    float* v_bilagrid, float* v_rgb, int N, int L, int H, int W, int h, int w,
+    backend::Stream stream, const int* grid_indices
+) {
+    (void)stream;
+    ReaderPtrs r = unpack_reader(bilagrid);
+    int64_t total = (int64_t)N * h * w;
+    BlV2Params p{};
+    p.fp32 = r.fp32; p.q16 = r.q16; p.vbounds = r.vbounds;
+    p.rgb = (uint64_t)rgb;
+    p.v_output = (uint64_t)v_output;
+    p.v_bilagrid = (uint64_t)v_bilagrid;
+    p.v_rgb = (uint64_t)v_rgb;
+    p.grid_indices = vkk::or_fallback(grid_indices);
+    p.N = N; p.L = L; p.H = H; p.W = W; p.h = h; p.w = w;
+    p.has_grid_indices = (grid_indices != nullptr) ? 1 : 0;
+    p.total = (uint32_t)total;
+    vkk::dispatch_flat("bilagrid_loglinear.bilagrid_loglinear_bwd_v2",
+                       backend::vk::SpecList{r.vq}, total, 256, &p, sizeof(p),
+                       &p.wgs_per_row);
 }
 
 void bilagrid_loglinear_patched_sample_backward_v1(
@@ -794,8 +879,14 @@ void launch_depth_bwd_v1(
         vkk::dispatch("bilagrid_depth.bilagrid_depth_bwd_v1_grid",
                       spec2(r.vq, patched), gx, gy, gz, &p, sizeof(p));
     }
-    // depth-grad kernel
-    {
+    // depth-grad (input-grad) kernel. null v_depth = skip: depth grids are
+    // GT-side, so the engine discards this gradient (v_depth = nullptr).
+    // Dispatching anyway writes N*h*w floats through a null device address ->
+    // device fault -> a semaphore wait that never returns. (The shared
+    // launch_family_bwd_v1 guards the same way for ppisp/loglinear/normal;
+    // this separate depth launcher was missing the guard -- latent until
+    // depth bilagrid first ran on Vulkan.)
+    if (v_depth != nullptr) {
         int64_t total = patched ? (int64_t)N * m * h * w : (int64_t)N * h * w;
         BdV1DepthParams p{};
         p.fp32 = r.fp32; p.q16 = r.q16; p.vbounds = r.vbounds;
@@ -865,6 +956,29 @@ void bilagrid_depth_patched_sample_backward_v1(
                         target_tile_size, mi_batch_size, nullptr, true);
 }
 
+void bilagrid_depth_uniform_sample_backward_v2(
+    BilagridReader bilagrid, const float* depth, const float* scalars,
+    const float* v_output, float* v_bilagrid, int N, int L, int H, int W,
+    int h, int w, backend::Stream stream, const int* grid_indices
+) {
+    (void)stream;
+    ReaderPtrs r = unpack_reader(bilagrid);
+    int64_t total = (int64_t)N * h * w;
+    BdV2Params p{};
+    p.fp32 = r.fp32; p.q16 = r.q16; p.vbounds = r.vbounds;
+    p.depth = (uint64_t)depth;
+    p.scalars = (uint64_t)scalars;
+    p.v_output = (uint64_t)v_output;
+    p.v_bilagrid = (uint64_t)v_bilagrid;
+    p.grid_indices = vkk::or_fallback(grid_indices);
+    p.N = N; p.L = L; p.H = H; p.W = W; p.h = h; p.w = w;
+    p.has_grid_indices = (grid_indices != nullptr) ? 1 : 0;
+    p.total = (uint32_t)total;
+    vkk::dispatch_flat("bilagrid_depth.bilagrid_depth_bwd_v2",
+                       backend::vk::SpecList{r.vq}, total, 256, &p, sizeof(p),
+                       &p.wgs_per_row);
+}
+
 /* ========================================================================
  * Normal (3-channel) family
  * ======================================================================== */
@@ -912,6 +1026,28 @@ void bilagrid_normal_patched_sample_backward_v1(
     launch_family_bwd_v1(kNormalEntries, bilagrid, rgb, offsets, v_output,
                          v_bilagrid, v_rgb, N, L, H, W, m, h, w, h0, w0,
                          target_tile_size, mi_batch_size, nullptr, true);
+}
+
+void bilagrid_normal_uniform_sample_backward_v2(
+    BilagridReader bilagrid, const float* rgb, const float* v_output,
+    float* v_bilagrid, int N, int L, int H, int W, int h, int w,
+    backend::Stream stream, const int* grid_indices
+) {
+    (void)stream;
+    ReaderPtrs r = unpack_reader(bilagrid);
+    int64_t total = (int64_t)N * h * w;
+    BnV2Params p{};
+    p.fp32 = r.fp32; p.q16 = r.q16; p.vbounds = r.vbounds;
+    p.normal_in = (uint64_t)rgb;
+    p.v_output = (uint64_t)v_output;
+    p.v_bilagrid = (uint64_t)v_bilagrid;
+    p.grid_indices = vkk::or_fallback(grid_indices);
+    p.N = N; p.L = L; p.H = H; p.W = W; p.h = h; p.w = w;
+    p.has_grid_indices = (grid_indices != nullptr) ? 1 : 0;
+    p.total = (uint32_t)total;
+    vkk::dispatch_flat("bilagrid_normal.bilagrid_normal_bwd_v2",
+                       backend::vk::SpecList{r.vq}, total, 256, &p, sizeof(p),
+                       &p.wgs_per_row);
 }
 
 /* ========================================================================

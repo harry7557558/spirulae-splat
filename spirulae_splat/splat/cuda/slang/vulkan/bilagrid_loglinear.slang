@@ -386,3 +386,103 @@ void bilagrid_loglinear_bwd_v1_rgb(uint3 wg: SV_GroupID,
     p.v_rgb[g_off3 + 1] = bg_finite(vg) ? vg : 0.0f;
     p.v_rgb[g_off3 + 2] = bg_finite(vb) ? vb : 0.0f;
 }
+
+// ---------------------------------------------------------------------------
+// backward v2: thread-per-pixel SCATTER (fused grid + image grad). 9 channels
+// = 3 out x 3 in (ci = 3*di + si); diagonal (si==di) passes through exp().
+// Reads grid values from the g_id slot, scatters grad into the per-batch ni
+// buffer. See BilagridBackwardSelection.md and
+// BilagridLoglinearSampleBwdV2_kernel.cuh.
+// ---------------------------------------------------------------------------
+
+struct BlV2Params {
+    float* fp32;
+    uint* q16;
+    float2* vbounds;
+    float* rgb;
+    float* v_output;
+    float* v_bilagrid;
+    float* v_rgb;
+    int* grid_indices;
+    int N, L, H, W, h, w;
+    int has_grid_indices;
+    uint total;
+    uint wgs_per_row;
+    uint _pad0;
+};
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void bilagrid_loglinear_bwd_v2(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                               uniform BlV2Params p) {
+    uint idx = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
+    if (idx >= p.total) return;
+    int tmp = int(idx);
+    int wi = tmp % p.w; tmp /= p.w;
+    int hi = tmp % p.h; tmp /= p.h;
+    int ni = tmp;
+    int g_id = p.has_grid_indices != 0 ? p.grid_indices[ni] : ni;
+    int g_off = ((ni * p.h + hi) * p.w + wi) * 3;
+    BgReader r = {p.fp32, p.q16, p.vbounds};
+
+    float sr = p.rgb[g_off + 0], sg = p.rgb[g_off + 1], sb = p.rgb[g_off + 2];
+    float dcol[3] = {p.v_output[g_off + 0], p.v_output[g_off + 1],
+                     p.v_output[g_off + 2]};
+    float coeff[3] = {sr, sg, sb};
+
+    float x = float(wi) / float(p.w - 1) * float(p.W - 1);
+    float y = float(hi) / float(p.h - 1) * float(p.H - 1);
+    float gz_raw = kC2G_r * sr + kC2G_g * sg + kC2G_b * sb;
+    float gz = min(max(gz_raw, 0.0f), 1.0f);
+    bool gz_in_range = (gz_raw >= 0.0f && gz_raw <= 1.0f);
+    float z = gz * float(p.L - 1);
+
+    int base = g_id * p.L * p.H * p.W * 9;
+    int out_base = ni * p.L * p.H * p.W * 9;
+    BgCells c = bg_cells_uniform(base, p.L, p.H, p.W, 9, x, y, z);
+    float w8[8];
+    bg_corner_weights(c, w8);
+
+    // interp (sum w8*v, matching v1 rgb), exp on diagonal, image grad + gradwt
+    float v[3] = {0.0f, 0.0f, 0.0f};
+    float post_exp[3];
+    float grad_weight[9];
+    [ForceUnroll]
+    for (int ci = 0; ci < 9; ci++) {
+        int si = ci % 3, di = ci / 3;
+        float val = 0.0f;
+        [ForceUnroll]
+        for (int corner = 0; corner < 8; corner++)
+            val += bg_read(kValueQuant != 0, r, c.o[corner] + ci) * w8[corner];
+        if (si == di) { val = exp(val); post_exp[si] = val; }
+        v[si] += val * dcol[di];
+        grad_weight[ci] = coeff[si] * dcol[di];
+        if (si == di) grad_weight[ci] *= post_exp[si];
+    }
+
+    float d8[8];
+    bg_dwdz(c, d8);
+    float gz_grad = 0.0f;
+    [ForceUnroll]
+    for (int corner = 0; corner < 8; corner++) {
+        int wbase = c.o[corner] - base + out_base;
+        float trilerp = 0.0f;
+        [ForceUnroll]
+        for (int ci = 0; ci < 9; ci++) {
+            float gw = grad_weight[ci];
+            trilerp += bg_read(kValueQuant != 0, r, c.o[corner] + ci) * gw;
+            float aa = w8[corner] * gw;
+            if (aa != 0.0f && bg_finite(aa))
+                atomic_add_f32(&p.v_bilagrid[wbase + ci], aa);
+        }
+        gz_grad += d8[corner] * float(p.L - 1) * trilerp;
+    }
+
+    if (!gz_in_range) gz_grad = 0.0f;
+    float vr = v[0] + kC2G_r * gz_grad;
+    float vg = v[1] + kC2G_g * gz_grad;
+    float vb = v[2] + kC2G_b * gz_grad;
+    p.v_rgb[g_off + 0] = bg_finite(vr) ? vr : 0.0f;
+    p.v_rgb[g_off + 1] = bg_finite(vg) ? vg : 0.0f;
+    p.v_rgb[g_off + 2] = bg_finite(vb) ? vb : 0.0f;
+}

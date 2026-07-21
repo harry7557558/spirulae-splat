@@ -373,3 +373,78 @@ void bilagrid_depth_bwd_v1_depth(uint3 wg: SV_GroupID,
     vr *= scalar;
     p.v_depth[g_off] = bg_finite(vr) ? vr : 0.0f;
 }
+
+// ---------------------------------------------------------------------------
+// backward v2: thread-per-pixel SCATTER (grid-grad only; depth is GT-side, so
+// needs_image_grad=false -> no v_depth, no gz chain). Read grid values from the
+// g_id slot, scatter grad into the per-batch ni buffer. See
+// BilagridBackwardSelection.md and BilagridDepthSampleBwdV2_kernel.cuh.
+// ---------------------------------------------------------------------------
+
+struct BdV2Params {
+    float* fp32;
+    uint* q16;
+    float2* vbounds;
+    float* depth;
+    float* scalars;
+    float* v_output;
+    float* v_bilagrid;
+    int* grid_indices;
+    int N, L, H, W, h, w;
+    int has_grid_indices;
+    uint total;
+    uint wgs_per_row;
+    uint _pad0;
+};
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void bilagrid_depth_bwd_v2(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                           uniform BdV2Params p) {
+    uint idx = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
+    if (idx >= p.total) return;
+    int tmp = int(idx);
+    int wi = tmp % p.w; tmp /= p.w;
+    int hi = tmp % p.h; tmp /= p.h;
+    int ni = tmp;
+    int g_id = p.has_grid_indices != 0 ? p.grid_indices[ni] : ni;
+    float scalar = p.scalars[g_id];
+    int g_off = (ni * p.h + hi) * p.w + wi;
+    BgReader r = {p.fp32, p.q16, p.vbounds};
+
+    float sr = p.depth[g_off] * scalar;
+    float dr = p.v_output[g_off];
+    float x = float(wi) / float(p.w - 1) * float(p.W - 1);
+    float y = float(hi) / float(p.h - 1) * float(p.H - 1);
+    float z = sr / (sr + 1.0f);
+    z = min(max(z, 0.0f), 1.0f) * float(p.L - 1);
+
+    int base = g_id * p.L * p.H * p.W * kBdChans;
+    int out_base = ni * p.L * p.H * p.W * kBdChans;
+    BgCells c = bg_cells_uniform(base, p.L, p.H, p.W, kBdChans, x, y, z);
+    float w8[8];
+    bg_corner_weights(c, w8);
+
+    float affine[kBdChans];
+    [ForceUnroll]
+    for (int ci = 0; ci < kBdChans; ci++) {
+        float v = bg_trilerp(kValueQuant != 0, r, c, ci);
+        affine[ci] = (ci == 0) ? exp(v) : v;
+    }
+    float log_sr = log(sr);
+    dr *= exp(affine[0] * log_sr + affine[1]);
+    float grad_weight[kBdChans];
+    grad_weight[0] = log_sr * dr * affine[0];
+    grad_weight[1] = dr;
+
+    [ForceUnroll]
+    for (int corner = 0; corner < 8; corner++) {
+        int wbase = c.o[corner] - base + out_base;
+        [ForceUnroll]
+        for (int ci = 0; ci < kBdChans; ci++) {
+            float aa = w8[corner] * grad_weight[ci];
+            if (aa != 0.0f && bg_finite(aa))
+                atomic_add_f32(&p.v_bilagrid[wbase + ci], aa);
+        }
+    }
+}

@@ -58,6 +58,8 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
 #ifdef PATCHED
     , int h0, int w0,
     const int* __restrict__ offsets  // [N,m,2]
+#else
+    , const int* __restrict__ grid_indices  // [N], or nullptr -> identity
 #endif
 ) {
 #ifdef PATCHED
@@ -87,6 +89,8 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
     bool inside = (wi < w && hi < h && idx < N);
     // if (!inside) return;
     int ni = idx;
+    // Reads use g_id (camera grid slot); writes use ni (per-batch grad buffer).
+    int g_id = (grid_indices != nullptr) ? grid_indices[ni] : ni;
 #endif
 
     // load RGB colors
@@ -151,26 +155,29 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
             ((corner & 2) ? fy : (1-fy)) * ((corner & 4) ? 1 : -1);
         float f = dfdz * ((corner & 4) ? fz : (fz-1));
 
-        // Channel-last: 12 channels of this corner are contiguous; `+ ci` is innermost.
-        int corner_base = (((ni*L + zi)*H + yi)*W + xi) * 12;
+        // Channel-last: 12 channels of this corner are contiguous; `+ ci` is
+        // innermost. READ grid values from the g_id slot, SCATTER grad into the
+        // per-batch buffer indexed by ni (see the ni/g_id split note above).
+        int cellidx = ((zi*H + yi)*W + xi);
+        int rbase = (g_id*(L*H*W) + cellidx) * 12;
+        int wbase = (ni *(L*H*W) + cellidx) * 12;
 
         float trilerp = 0.f;
         #pragma unroll
         for (int ci = 0; ci < 12; ++ci) {
-            int bidx = corner_base + ci;
             int si = ci % 4, di = ci / 4;
 
             float r_coeff = (si==0 ? sr : si==1 ? sg : si==2 ? sb : 1.f);
             float gout = (di==0 ? dr : di==1 ? dg : db);
 
-            float v = bilagrid[bidx];
+            float v = bilagrid[rbase + ci];
 
             if (si < 3)
                 (si == 0 ? vr : si == 1 ? vg : vb) += v * f * gout;
 
             float grad_weight = r_coeff * gout;
             trilerp += v * grad_weight;
-            atomicAdd(v_bilagrid+bidx, f * grad_weight);
+            atomicAdd(v_bilagrid + wbase + ci, f * grad_weight);
         }
         gz_grad += dfdz * (L-1) * trilerp;
     }

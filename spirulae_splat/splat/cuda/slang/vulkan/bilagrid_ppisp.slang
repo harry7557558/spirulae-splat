@@ -598,3 +598,105 @@ void bilagrid_ppisp_bwd_v1_rgb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     p.v_rgb[g_off3 + 1] = bg_finite(vg) ? vg : 0.0f;
     p.v_rgb[g_off3 + 2] = bg_finite(vb) ? vb : 0.0f;
 }
+
+// ---------------------------------------------------------------------------
+// backward v2: fused SCATTER (thread per pixel) -- alternative arm to the
+// v1 grid+rgb split. Reuses the v1 `_rgb` per-pixel transform-backward and
+// additionally scatters w_corner * grad_weight to the 8 corners (atomicAdd),
+// so it computes grid-grad and image-grad in one pass. Image-grad is always
+// on for RGB PPISP (mirrors the CUDA v2 <NEEDS_IMAGE_GRAD=true>). Uniform
+// only (the engine path); supports grid_indices. See
+// csrc/BilagridBackwardSelection.md and BilagridPpispUniformSampleBwdV2_kernel.cuh.
+// ---------------------------------------------------------------------------
+
+struct BpV2Params {
+    float* fp32;
+    uint* q16;
+    float2* vbounds;
+    float* rgb;
+    float* v_output;
+    float* v_bilagrid;
+    float* v_rgb;
+    int* grid_indices;
+    int N, L, H, W, h, w;
+    int has_grid_indices;
+    uint total;
+    uint wgs_per_row;
+    uint _pad0;
+};
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void bilagrid_ppisp_bwd_v2(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                           uniform BpV2Params p) {
+    uint idx = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
+    if (idx >= p.total) return;
+    int tmp = int(idx);
+    int wi = tmp % p.w; tmp /= p.w;
+    int hi = tmp % p.h; tmp /= p.h;
+    int ni = tmp;
+    int g_id = p.has_grid_indices != 0 ? p.grid_indices[ni] : ni;
+    int g_off3 = ((ni * p.h + hi) * p.w + wi) * 3;
+    BgReader r = {p.fp32, p.q16, p.vbounds};
+
+    float sr = p.rgb[g_off3 + 0];
+    float sg = p.rgb[g_off3 + 1];
+    float sb = p.rgb[g_off3 + 2];
+    float3 v_out = float3(p.v_output[g_off3 + 0], p.v_output[g_off3 + 1],
+                          p.v_output[g_off3 + 2]);
+
+    float x = float(wi) / float(p.w - 1) * float(p.W - 1);
+    float y = float(hi) / float(p.h - 1) * float(p.H - 1);
+    float gz_raw = kC2G_r * sr + kC2G_g * sg + kC2G_b * sb;
+    float gz = min(max(gz_raw, 0.0f), 1.0f);
+    bool gz_in_range = (gz_raw >= 0.0f && gz_raw <= 1.0f);
+    float z = gz * float(p.L - 1);
+
+    // Grid VALUES are read from the g_id slot (`base`); the grid GRADIENT is
+    // scattered into the per-batch buffer indexed by ni (`out_base`) -- matches
+    // v1's split (reads g_id, writes ni). With grid_indices these differ and
+    // the grad buffer is only [C_batch, ...], so scattering to g_id is OOB.
+    int base = g_id * p.L * p.H * p.W * 9;
+    int out_base = ni * p.L * p.H * p.W * 9;
+    BgCells c = bg_cells_uniform(base, p.L, p.H, p.W, 9, x, y, z);
+    float w8[8];
+    bg_corner_weights(c, w8);
+
+    float exposure = 0.0f;
+    ColorPPISPParams cp = {float2(0.0f, 0.0f), float2(0.0f, 0.0f), float2(0.0f, 0.0f), float2(0.0f, 0.0f)};
+    [ForceUnroll]
+    for (int ci = 0; ci < 9; ci++)
+        _bp_set_param(exposure, cp, ci, bg_trilerp(kValueQuant != 0, r, c, ci));
+
+    float3 v_rgb;
+    float v_e;
+    ColorPPISPParams v_cp;
+    _bp_transform_bwd(float3(sr, sg, sb), exposure, cp, v_out, v_rgb, v_e, v_cp);
+
+    // scatter param grad to the 8 corners + accumulate the gz (color->z) chain.
+    float d8[8];
+    bg_dwdz(c, d8);
+    float gz_grad = 0.0f;
+    [ForceUnroll]
+    for (int corner = 0; corner < 8; corner++) {
+        int wbase = c.o[corner] - base + out_base;  // per-batch scatter target
+        float trilerp = 0.0f;
+        [ForceUnroll]
+        for (int ci = 0; ci < 9; ci++) {
+            float gw = _bp_get_param(v_e, v_cp, ci);
+            trilerp += bg_read(kValueQuant != 0, r, c.o[corner] + ci) * gw;
+            float aa = w8[corner] * gw;
+            if (aa != 0.0f && bg_finite(aa))
+                atomic_add_f32(&p.v_bilagrid[wbase + ci], aa);
+        }
+        gz_grad += d8[corner] * float(p.L - 1) * trilerp;
+    }
+
+    if (!gz_in_range) gz_grad = 0.0f;
+    float vr = v_rgb.x + kC2G_r * gz_grad;
+    float vg = v_rgb.y + kC2G_g * gz_grad;
+    float vb = v_rgb.z + kC2G_b * gz_grad;
+    p.v_rgb[g_off3 + 0] = bg_finite(vr) ? vr : 0.0f;
+    p.v_rgb[g_off3 + 1] = bg_finite(vg) ? vg : 0.0f;
+    p.v_rgb[g_off3 + 2] = bg_finite(vb) ? vb : 0.0f;
+}

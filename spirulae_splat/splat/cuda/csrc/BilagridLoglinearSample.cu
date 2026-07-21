@@ -1,11 +1,10 @@
 #include "BilagridLoglinearSampleFwd_kernel.cuh"
 #include "BilagridLoglinearSampleBwdV1_kernel.cuh"
-// #include "BilagridUniformSampleBwdV2_kernel.cuh"
+#include "BilagridLoglinearSampleBwdV2_kernel.cuh"  // non-PATCHED scatter
 
 #define PATCHED
 #include "BilagridLoglinearSampleFwd_kernel.cuh"
 #include "BilagridLoglinearSampleBwdV1_kernel.cuh"
-// #include "uniform_sample_loglinear_backward_v2.cu"
 
 
 void bilagrid_loglinear_uniform_sample_forward(
@@ -161,7 +160,6 @@ void bilagrid_loglinear_patched_sample_backward_v1(
 }
 
 
-#if 0
 void bilagrid_loglinear_uniform_sample_backward_v2(
     BilagridReader bilagrid,
     const float* rgb,
@@ -169,48 +167,15 @@ void bilagrid_loglinear_uniform_sample_backward_v2(
     float* v_bilagrid,
     float* v_rgb,
     int N, int L, int H, int W,
-    int m, int h, int w,
-    cudaStream_t stream
+    int h, int w,
+    cudaStream_t stream,
+    const int* grid_indices
 ) {
-    dim3 block = { 16, 16, 1 };
-    dim3 bounds = {
-        (w +block.x-1)/block.x,
-        (h +block.y-1)/block.y,
-        (N*m +block.z-1)/block.z
-    };
-    bilagrid_loglinear_uniform_sample_backward_v2_kernel<<<bounds, block, 0, stream>>>(
-        bilagrid, rgb, v_output,
-        v_bilagrid, v_rgb,
-        N, L, H, W, m, h, w
-    );
+    int total = N * h * w;
+    int threads = kBilagridBwdV1RgbThreads;
+    int blocks = (total + threads - 1) / threads;
+    bilagrid_loglinear_uniform_sample_backward_v2_kernel<<<blocks, threads, 0, stream>>>(
+        bilagrid, rgb, v_output, v_bilagrid, v_rgb,
+        N, L, H, W, h, w, grid_indices);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
-
-
-void bilagrid_loglinear_patched_sample_backward_v2(
-    BilagridReader bilagrid,
-    const float* rgb,
-    const int* offsets,
-    const float* v_output,
-    float* v_bilagrid,
-    float* v_rgb,
-    int N, int L, int H, int W,
-    int m, int h, int w, int h0, int w0,
-    cudaStream_t stream
-) {
-    // dim3 block = { 16, 16, 1 };
-    // dim3 bounds = {
-    //     (w +block.x-1)/block.x,
-    //     (h +block.y-1)/block.y,
-    //     (N*m +block.z-1)/block.z
-    // };
-    unsigned block = 256;
-    unsigned bounds = (w*h*N*m +block-1)/block;
-    bilagrid_loglinear_patched_sample_backward_v2_kernel<<<bounds, block, 0, stream>>>(
-        bilagrid, rgb, v_output,
-        v_bilagrid, v_rgb,
-        N, L, H, W, m, h, w, h0, w0, offsets
-    );
-    CHECK_DEVICE_ERROR(cudaGetLastError());
-}
-#endif

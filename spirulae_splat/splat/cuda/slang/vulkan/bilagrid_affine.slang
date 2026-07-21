@@ -473,10 +473,11 @@ struct BgV2Params {
     float* v_bilagrid;
     float* v_rgb;
     int* offsets;
+    int* grid_indices;
     int N, L, H, W, m, h, w, h0, w0;
+    int has_grid_indices;
     uint total;
     uint wgs_per_row;
-    uint _pad0;
 };
 
 [shader("compute")]
@@ -491,6 +492,8 @@ void bilagrid_affine_bwd_v2(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     int mi = 0;
     if (kPatched != 0) { mi = tmp % p.m; tmp /= p.m; }
     int ni = tmp;
+    // Reads use g_id (camera grid slot); writes use ni (per-batch grad buffer).
+    int g_id = (kPatched == 0 && p.has_grid_indices != 0) ? p.grid_indices[ni] : ni;
     BgReader r = {p.fp32, p.q16, p.vbounds};
 
     int g_off;
@@ -546,31 +549,33 @@ void bilagrid_affine_bwd_v2(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                      ((corner & 4) != 0 ? 1.0f : -1.0f);
         float f = dfdz * ((corner & 4) != 0 ? fz : (fz - 1.0f));
 
-        int corner_base = (((ni * p.L + zi) * p.H + yi) * p.W + xi) * 12;
+        // READ grid values from the g_id slot; SCATTER grad into the per-batch
+        // buffer indexed by ni (g_id == ni for PATCHED).
+        int cellidx = ((zi * p.H + yi) * p.W + xi);
+        int rbase = (g_id * (p.L * p.H * p.W) + cellidx) * 12;
+        int wbase = (ni  * (p.L * p.H * p.W) + cellidx) * 12;
 
         if (kPatched != 0) {
             // PATCHED CUDA ordering: gz chain accumulated inline per channel.
             [ForceUnroll]
             for (int ci = 0; ci < 12; ci++) {
-                int bidx = corner_base + ci;
                 int si = ci % 4, di = ci / 4;
-                float gv = bg_read(kValueQuant != 0, r, bidx);
+                float gv = bg_read(kValueQuant != 0, r, rbase + ci);
                 if (si < 3) v[si] += gv * f * dcol[di];
                 float grad_weight = coeff[si] * dcol[di];
                 gz_grad += dfdz * float(p.L - 1) * gv * grad_weight;
-                atomic_add_f32(&p.v_bilagrid[bidx], f * grad_weight);
+                atomic_add_f32(&p.v_bilagrid[wbase + ci], f * grad_weight);
             }
         } else {
             float trilerp = 0.0f;
             [ForceUnroll]
             for (int ci = 0; ci < 12; ci++) {
-                int bidx = corner_base + ci;
                 int si = ci % 4, di = ci / 4;
-                float gv = bg_read(kValueQuant != 0, r, bidx);
+                float gv = bg_read(kValueQuant != 0, r, rbase + ci);
                 if (si < 3) v[si] += gv * f * dcol[di];
                 float grad_weight = coeff[si] * dcol[di];
                 trilerp += gv * grad_weight;
-                atomic_add_f32(&p.v_bilagrid[bidx], f * grad_weight);
+                atomic_add_f32(&p.v_bilagrid[wbase + ci], f * grad_weight);
             }
             gz_grad += dfdz * float(p.L - 1) * trilerp;
         }

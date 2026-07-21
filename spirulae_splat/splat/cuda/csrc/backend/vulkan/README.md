@@ -603,6 +603,22 @@ the engine level.
     scatter utils) and `ppisp_parity` (63K tight + 0.9K loose; 3 param
     types x cam_indices on/off + reg fwd/bwd with synthetic deterministic
     bwd inputs). All three devices pass; validation clean.
+  - **PLANNED — backward-implementation selection**: the grid-gradient
+    backward ships only as `*_bwd_v1_grid` (thread-per-cell *gather*), which
+    profiling flags as a consistent top cost on every device (NVIDIA, amdvlk,
+    RADV, Intel, llvmpipe). The plan is to add a thread-per-pixel *scatter*
+    `*_bwd_v2` alternative (the disabled `#if 0` CUDA
+    `BilagridUniformSampleBwdV2_kernel.cuh` revived + a new Slang port) and
+    pick between v1/v2 at runtime with a small **online contextual** selector
+    keyed on `(family, resolution, grid shape)` — reusing vksplat's
+    Gaussian-Thompson-sampling stats but making them per-key, so it needs no
+    offline calibration pass (unlike fused-bilagrid) and does not average over
+    resolutions (unlike vksplat's context-free bandit). Full design +
+    phasing: `csrc/BilagridBackwardSelection.md`. When porting v2, the
+    `needs_image_grad` axis is a Slang spec-constant (false for depth/normal,
+    which skip the image-grad scatter — the v2 analogue of the existing
+    `v_in == nullptr` skip), and the grid-fold tail rule + null-`v_in` guard
+    above apply unchanged.
 - **Multi-scale per-pixel loss stack (phase 5, seventh slice)**:
   `kernels/PerPixelLoss.cpp` mirrors `compute_multi_scale_per_pixel_losses`
   (PerPixelLoss.cu) end to end — pyramid construction, per-scale grad

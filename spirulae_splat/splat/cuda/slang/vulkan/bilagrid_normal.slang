@@ -459,3 +459,82 @@ void bilagrid_normal_bwd_v1_normal(uint3 wg: SV_GroupID,
     p.v_normal_in[g_off3 + 1] = bg_finite(grad_normal.y) ? grad_normal.y : 0.0f;
     p.v_normal_in[g_off3 + 2] = bg_finite(grad_normal.z) ? grad_normal.z : 0.0f;
 }
+
+// ---------------------------------------------------------------------------
+// backward v2: thread-per-pixel SCATTER (grid-grad only; normal is GT-side, so
+// needs_image_grad=false -> no v_normal_in, no gz chain). Read grid values from
+// the g_id slot, scatter grad into the per-batch ni buffer. Transform-backward
+// is the hand-written Rodrigues form (aa_rotate_bwd). See
+// BilagridBackwardSelection.md and BilagridNormalSampleBwdV2_kernel.cuh.
+// ---------------------------------------------------------------------------
+
+struct BnV2Params {
+    float* fp32;
+    uint* q16;
+    float2* vbounds;
+    float* normal_in;
+    float* v_output;
+    float* v_bilagrid;
+    int* grid_indices;
+    int N, L, H, W, h, w;
+    int has_grid_indices;
+    uint total;
+    uint wgs_per_row;
+    uint _pad0;
+};
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void bilagrid_normal_bwd_v2(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                            uniform BnV2Params p) {
+    uint idx = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
+    if (idx >= p.total) return;
+    int tmp = int(idx);
+    int wi = tmp % p.w; tmp /= p.w;
+    int hi = tmp % p.h; tmp /= p.h;
+    int ni = tmp;
+    int g_id = p.has_grid_indices != 0 ? p.grid_indices[ni] : ni;
+    int g_off = ((ni * p.h + hi) * p.w + wi) * 3;
+    BgReader r = {p.fp32, p.q16, p.vbounds};
+
+    float sr = p.normal_in[g_off + 0];
+    float sg = p.normal_in[g_off + 1];
+    float sb = p.normal_in[g_off + 2];
+    float inv_norm = 1.0f / sqrt(sr * sr + sg * sg + sb * sb + 1e-20f);
+    float x = float(wi) / float(p.w - 1) * float(p.W - 1);
+    float y = float(hi) / float(p.h - 1) * float(p.H - 1);
+    float z = 0.5f + 0.5f * sb * inv_norm;
+    z = min(max(z, 0.0f), 1.0f) * float(p.L - 1);
+
+    int base = g_id * p.L * p.H * p.W * kBnChans;
+    int out_base = ni * p.L * p.H * p.W * kBnChans;
+    BgCells c = bg_cells_uniform(base, p.L, p.H, p.W, kBnChans, x, y, z);
+    float w8[8];
+    bg_corner_weights(c, w8);
+
+    float3 axis_angle;
+    axis_angle.x = bg_trilerp(kValueQuant != 0, r, c, 0);
+    axis_angle.y = bg_trilerp(kValueQuant != 0, r, c, 1);
+    axis_angle.z = bg_trilerp(kValueQuant != 0, r, c, 2);
+
+    float3 grad_out = float3(p.v_output[g_off + 0], p.v_output[g_off + 1],
+                             p.v_output[g_off + 2]);
+    float3 normal = float3(sr * inv_norm, sg * inv_norm, sb * inv_norm);
+    float3 grad_axis_angle, grad_normal;
+    aa_rotate_bwd(axis_angle, normal, grad_out, grad_axis_angle, grad_normal);
+    float grad_weight[kBnChans];
+    grad_weight[0] = grad_axis_angle.x;
+    grad_weight[1] = grad_axis_angle.y;
+    grad_weight[2] = grad_axis_angle.z;
+
+    [ForceUnroll]
+    for (int corner = 0; corner < 8; corner++) {
+        int wbase = c.o[corner] - base + out_base;
+        [ForceUnroll]
+        for (int ci = 0; ci < kBnChans; ci++) {
+            float aa = w8[corner] * grad_weight[ci];
+            if (aa != 0.0f && bg_finite(aa))
+                atomic_add_f32(&p.v_bilagrid[wbase + ci], aa);
+        }
+    }
+}

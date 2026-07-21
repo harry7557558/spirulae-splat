@@ -93,7 +93,8 @@ void bilagrid_uniform_sample_backward_v2(
     float* v_rgb,
     int N, int L, int H, int W,
     int h, int w,
-    backend::Stream stream
+    backend::Stream stream,
+    const int* grid_indices = nullptr
 );
 
 void bilagrid_patched_sample_backward_v2(
@@ -189,6 +190,21 @@ void bilagrid_ppisp_uniform_sample_backward_v1(
     const int* grid_indices = nullptr
 );
 
+// v2 = thread-per-pixel SCATTER alternative to the v1 gather (see
+// BilagridBackwardSelection.md). Fuses grid- and image-gradient into one pass;
+// v_rgb == nullptr skips the image-gradient write (GT-side depth/normal use).
+void bilagrid_ppisp_uniform_sample_backward_v2(
+    BilagridReader bilagrid,
+    const float* rgb,
+    const float* v_output,
+    float* v_bilagrid,
+    float* v_rgb,
+    int N, int L, int H, int W,
+    int h, int w,
+    backend::Stream stream,
+    const int* grid_indices = nullptr
+);
+
 void bilagrid_ppisp_patched_sample_backward_v1(
     BilagridReader bilagrid,
     const float* rgb,
@@ -232,6 +248,20 @@ void bilagrid_loglinear_uniform_sample_backward_v1(
     int N, int L, int H, int W,
     int h, int w,
     const int target_tile_size,
+    backend::Stream stream,
+    const int* grid_indices = nullptr
+);
+
+// v2 = thread-per-pixel scatter (fused grid + image grad). See
+// BilagridBackwardSelection.md.
+void bilagrid_loglinear_uniform_sample_backward_v2(
+    BilagridReader bilagrid,
+    const float* rgb,
+    const float* v_output,
+    float* v_bilagrid,
+    float* v_rgb,
+    int N, int L, int H, int W,
+    int h, int w,
     backend::Stream stream,
     const int* grid_indices = nullptr
 );
@@ -301,6 +331,20 @@ void bilagrid_depth_patched_sample_backward_v1(
     backend::Stream stream
 );
 
+// v2 = thread-per-pixel scatter (grid-grad only; depth grids are GT-side so
+// there is no input gradient). See BilagridBackwardSelection.md.
+void bilagrid_depth_uniform_sample_backward_v2(
+    BilagridReader bilagrid,
+    const float* depth,
+    const float* scalars,
+    const float* v_output,
+    float* v_bilagrid,
+    int N, int L, int H, int W,
+    int h, int w,
+    backend::Stream stream,
+    const int* grid_indices = nullptr
+);
+
 void bilagrid_normal_uniform_sample_forward(
     BilagridReader bilagrid,
     const float* rgb,
@@ -346,6 +390,18 @@ void bilagrid_normal_patched_sample_backward_v1(
     const int target_tile_size,
     const int mi_batch_size,
     backend::Stream stream
+);
+
+// v2 = thread-per-pixel scatter (grid-grad only; normal grids are GT-side).
+void bilagrid_normal_uniform_sample_backward_v2(
+    BilagridReader bilagrid,
+    const float* rgb,
+    const float* v_output,
+    float* v_bilagrid,
+    int N, int L, int H, int W,
+    int h, int w,
+    backend::Stream stream,
+    const int* grid_indices = nullptr
 );
 
 void tv_loss_forward(
