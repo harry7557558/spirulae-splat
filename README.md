@@ -11,21 +11,20 @@ Spirulae-splat has changed its license to GPLv3. If you wish to use part of its 
 Some splats trained with spirulae-splat may be found on [my SuperSplat profile](https://superspl.at/user?id=harry7557558). I'm also considering adding a few visuals to this README. If you have cool splats made with spirulae-splat and are willing to share either the full splats or some renders publicly, please don't hesitate to reach out.
 
 ### Features
-- Unified densification strategy combining elements from MCMC and IGS/IGS+/MRNF
-- Extreme VRAM efficiency with quantized training &ndash; Up to 10 million SH3 Gaussians in 8GB VRAM
-- Bilateral grid and PPISP for exposure/WB correction
-- Generalization from small objects to city-scale scenes with minimum tuning
-- Camera models: perspective and equidistant fisheye (supports >180° fov), fully supports radial, tangential, and thin prism distortion coefficients
-- Training on images in linear and various wide-gamut color spaces
-- Depth and normal supervision using monocular geometry models
-- Mesh generation: Convert trained splats to vertex-color and/or textured mesh in multiple formats
-- Masking (sky mode and people/car mode)
-- 3DGS, anti-aliased 3DGS, and 3DGUT primitives, with improved cross-viewer compatibility
-- Skybox, with regularization to balance sky removal and discouraging transparency
-<!-- - Second order optimizer and tile batching mode to improve convergence
+- Cross vendor support via Vulkan compute &ndash; Tested on **NVIDIA, AMD, Intel(R), and Apple** GPUs
+- Unified densification strategy combining elements from **MCMC** and **IGS/IGS+/MRNF**
+- Extreme **VRAM efficiency** with quantized training &ndash; Up to 10 million SH3 Gaussians in 8GB VRAM
+- **Bilateral grid** and **PPISP** for exposure/WB correction
+- Camera models: perspective, **equidistant/equisolid fisheye** (supports >180° fov like in typical **360 cameras**), **equirectangular/spherical**; fully supports radial, tangential, and thin prism distortion coefficients
+- Generalization from small objects to **city-scale scenes** with minimum tuning
+- **Depth and normal** supervision using monocular geometry models
+- Training on images in linear and various wide-gamut color spaces (e.g. **ACEScg**)
+- **Mesh generation**: Convert trained splats to vertex-color and/or textured mesh in multiple formats
+- **Masking** (segment and ignore modes)
+- 3DGS, **anti-aliased** 3DGS, and **3DGUT** primitives, with improved cross-viewer compatibility
+- **Skybox**, with regularization to balance sky removal and discouraging transparency
 - 2DGS-like depth regularization to discourage floaters
-- Select a subset of images for validation, early stop training when validation loss starts to increase
-- And more (see "Quick start" below). -->
+- And more (see "Quick start" below).
 
 <!-- ### Scripts (see `scripts`)
 - Extract frames from video, auto skip blurry frames
@@ -34,39 +33,81 @@ Some splats trained with spirulae-splat may be found on [my SuperSplat profile](
 - Downscale/Undistort datasets
 - And more, etc. -->
 
-## Installation
+# Installation
 
-Make sure you have a recent version of CUDA installed. On Windows, you also need MSVC compiler compatible with your CUDA version.
+Spirulae-splat provides three installation options:
 
-Spirulae-splat provides two installation modes:
+- **Native CLI/GUI trainer with Vulkan backend:** The new cross-platform and cross-vendor option. Works on all major GPUs.
 
-- Native CLI/GUI trainer: A newly added standardalone module that does not depend on Python/PyTorch. Provides same functionality as legacy Python/PyTorch trainer.
+- **Native CLI/GUI trainer with CUDA backend:** Recommended option for CUDA-capable NVIDIA GPUs.
 
-- Legacy Python/PyTorch trainer: Use this if you want to use spirulae-splat as a Python module. This may be deprecated in the future.
+- **Legacy Python/PyTorch trainer:** Choose this if you want to use spirulae-splat as a Python module. This may be deprecated in the future.
 
-### Native CLI/GUI trainer
+All three options provide the same training functionality.
 
-Make sure you have CMake available. Clone the repository and run the commands:
+| Installation Option | GPU/Vendor Support | Platform Support | Dependencies |
+|--------|--------|--------|--------|
+| Native Vulkan CLI/GUI | NVIDIA, AMD, Intel(R), Apple Silicon | Windows, Linux, macOS | Vulkan/MoltenVulkan, CMake/Ninja |
+| Native CUDA CLI/GUI | CUDA-capable NVIDIA GPUs | Windows, Linux | CUDA, CMake/Ninja |
+| Legacy Python/PyTorch | CUDA-capable NVIDIA GPUs | Windows, Linux | CUDA, PyTorch, Python setup utilities |
 
-#### Linux:
+## Native CLI/GUI trainer with Vulkan backend
+
+Make sure you have Vulkan SDK installed. Clone the repository and run the commands:
+
+### Linux:
 
 ```bash
 cd spirulae-splat/
-bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON
+bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan
 ```
 
 If it builds successfully, you may find compiled binaries under `build/ssplat-train` (for CLI) and `build/ssplat-gui` (for GUI).
 
-#### Windows:
+### Windows with MSVC:
 
 ```bat
 cd spirulae-splat\
-bash build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON
+build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan
 ```
 
 If it builds successfully, you may find compiled programs under `build\ssplat-train.exe` (for CLI) and `build\ssplat-gui.exe` (for GUI).
 
-### Legacy Python/PyTorch trainer
+### Windows with GCC/Clang:
+
+```bat
+cd spirulae-splat\
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan -DCMAKE_MAKE_PROGRAM=Ninja
+cmake --build build -j
+```
+
+Pass `-DCMAKE_C_COMPILER` and `-DCMAKE_CXX_COMPILER` to the first `cmake` command if needed.
+
+If it builds successfully, you may find compiled programs under `build\ssplat-train.exe` (for CLI) and `build\ssplat-gui.exe` (for GUI).
+
+## Native CLI/GUI with CUDA backend
+
+Make sure you have a recent version of CUDA installed. On Windows, you also need MSVC compiler compatible with your CUDA version.
+
+### Linux:
+
+```bash
+cd spirulae-splat/
+bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=cuda
+```
+
+If it builds successfully, you may find compiled binaries under `build/ssplat-train` (for CLI) and `build/ssplat-gui` (for GUI).
+
+### Windows:
+
+```bat
+cd spirulae-splat\
+build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=cuda
+```
+
+If it builds successfully, you may find compiled programs under `build\ssplat-train.exe` (for CLI) and `build\ssplat-gui.exe` (for GUI).
+
+## Legacy Python/PyTorch trainer
 
 Make sure you have a recent version of PyTorch installed that's compatible with your CUDA version. Clone the repository and run the commands:
 
@@ -79,26 +120,23 @@ The `pip install` step may take a few minutes. If you are running out of system 
 
 If you installed spirulae-splat successfully, there should be command named `spirulae-train`.
 
-<!-- Use default (master) branch for a stable version. Use `dev` branch if you want to try some more recent features. -->
-
-## Quick start
+# Quick start
 
 For native GUI, open the program and follow the instructions. For native CLI, run `path/to/build/ssplat-train --help` for detailed usage. For Python CLI, run `spirulae-train --help`, or `spirulae-train <preset name> --help` for details.
 
 > Note: Below specification is for legacy Python CLI. For native CLI, replace `spirulae-train` with `ssplat-train` (add it to path or specify full path), and drop any `dataparser.`, `datamanager.`, `model.`, etc. (e.g. `--model.cap_max` becomes `--cap_max`). For native GUI, it should be as intuitive as most other 3DGS training programs.
 
-Presets
-- Spirulae-splat provides presets. Run `spirulae-train <preset name> --data [DATASET_PATH] <additional args>` to use a preset.
-- List of presets:
-    - `3dgs`: Generic method that works well for most datasets.
-    - `360-camera`: Preset for training on original distorted images captured by 360 cameras. Recommended if your dataset contains fisheye images with a circle visible.
-    - `in-the-wild`: Preset for in-the-wild datasets, like datasets consisting of internet images, or datasets with extreme lighting variation and/or un-masked outliers.
-    - `linear-color`: Preset for training splats in linear color spaces (e.g. ACEScg).
-    - `meshing`: Preset for meshing. After training. use `spirulae-meshing` (Python CLI) or `ssplat-mesh` (native CLI) to extract mesh.
-    - `synthetic`: Preset for training splats on synthetic datasets rendered with constant exposure.
-    - `academic-baseline`: Preset that replicates 3DGS MCMC as faithful as possible.
+### Presets
+Spirulae-splat provides presets. Run `spirulae-train <preset name> --data [DATASET_PATH] <additional args>` to use a preset. List of presets:
+- `3dgs`: Generic method that works well for most datasets.
+- `360-camera`: Preset for training on original distorted images captured by 360 cameras. Recommended if your dataset contains fisheye images with a circle visible.
+- `in-the-wild`: Preset for in-the-wild datasets, like datasets consisting of internet images, or datasets with extreme lighting variation and/or un-masked outliers.
+- `linear-color`: Preset for training splats in linear color spaces (e.g. ACEScg).
+- `meshing`: Preset for meshing. After training. use `spirulae-meshing` (Python CLI) or `ssplat-mesh` (native CLI) to extract mesh.
+- `synthetic`: Preset for training splats on synthetic datasets rendered with constant exposure.
+- `academic-baseline`: Preset that replicates 3DGS MCMC as faithful as possible.
 
-Datasets:
+### Datasets
 - Spirulae-splat supports COLMAP and Nerfstudio datasets, as well as masks, depth and normal maps, etc. Dataset format can be specified with `--dataparser.data_format`. If not specified, it will automatically detect.
 - A COLMAP dataset contains files named `cameras`, `images`, and `points3D` with extension `.bin` or `.txt`, typically in a sub-folder named `sparse/0` (can be specified with `--dataparser.colmap_recon_dir`).
 - For COLMAP dataset, it's assumed that there's a sub-folder containing images, and optionally subfolders containing masks, depth maps, and normal maps. Sub-folder names can be specified with `--dataparser.image_dir`, `--dataparser.mask_dir`, `--dataparser.depth_dir`, and `--dataparser.normal_dir` (default values are `images`, `masks`, `depths`, and `normals`).
@@ -106,46 +144,47 @@ Datasets:
 - An extended Nerfstudio dataset can be used for camera models not compatible with COLMAP format (e.g. camera models used by Agisoft Metashape and Reality Scan). The dataset typically contains a file named `transforms.json` as well as a sparse PLY point cloud containing 3D points and 8-bit colors, and can be generated by `scripts/process_data_(colmap|metashape).py`.
 - There's experimental support for parsing proprietary Agisoft Metashape dataset. To do so, export cameras as XML, and point clouds as PLY with 8-bit RGB colors, and store them in the same folder as dataset folder. Optionally, save Metashape `.psx` file in the same folder, which is required for resolving file name ambiguity.
 
-Viewer
-- Similar to Nerfstudio and GSplat, you can open the link `http://localhost:7007/` in a web browser to view training progress.
+### Viewer
+- A native viewer is included in the GUI.
+- For CLI, similar to Nerfstudio and GSplat, you can open the link `http://localhost:7007/` in a web browser to view training progress. The port may be forwarded if you are training headless on cloud GPUs.
 - To change the port from 7007 to some other value, use `--viewer_port <port number>`.
 - By default, viewer continues running after training. To make it exit when training finishes, use `--no_keep_viewer_alive`. Viewer can be disabled with `--disable_viewer`.
 
-Gaussian representation
+### Gaussian representation
 - Change number of Gaussians: `--model.cap_max 6000000` (default 1000000)
 - Change SH degree: `--model.sh_degree 1` (default 3)
 - Set primitive using `--model.primitive` (default `3dgut`, change to `3dgs` or `mip` for potentially better compatibility across viewers and faster training)
 
-Exposure/WB correction
+### Exposure/WB correction
 - Both bilateral grid and PPISP are enabled by default, disable using `--model.no_use_bilateral_grid` and `--model.no_use_ppisp`.
 - Change shape from default `(16, 16, 8)` to `(8, 8, 4)` using `--model.bilagrid_shape 8 8 4` (sometimes gives less color shift)
 - Bilateral grid types: `--model.bilagrid_type (affine|ppisp|loglinear)`. Affine is original bilateral grid, PPISP (default) gives less color shift, loglinear is similar to PPISP but is more stable to train.
 - PPISP types: `--model.ppisp_param_type (original|rqs|no_crf)`. Default is `no_crf` that gives more accurate colors.
 - Note: Unlike most training software, spirulae-splat uses AdaGrad instead of Adam optimizer for bilateral grid and PPISP (disable using `--model.no_use_adagrad_bilagrid_optim` and `--model.no_use_adagrad_ppisp_optim`). Order of application can be configured with `--model.apply_ppisp_before_bilagrid` and `--model.no_apply_ppisp_before_bilagrid`.
 
-Distorted/Fisheye/Spherical images
+### Distorted/Fisheye/Spherical images
 - Spirulae-splat supports directly training on distorted images. Pointing `spirulae-train` to an distorted dataset will simply work. Spirulae-splat also supports datasets with mixed pinhole, fisheye, and equirectangular images.
 - `3dgs` preset works well for general pinhole, fisheye, and equirectangular datasets. If your dataset contains very wide fisheye images (especially those with a circle visible), we recommend `360-camera` preset, which will internally undistort a fisheye image to 5 pinhole faces.
 - By default, spirulae-splat uses `3dgut` primitive. To fall back to a Fisheye-GS style method for potentially better compatibility with conventional viewers (and faster training), set `--model.primitive` to `3dgs` (not anti-aliased), or `mip` (anti-aliased).
 - `--model.max_screen_size 0.3` is enabled by default for compatibility conventional viewers. Increase it for potentially better quality in built-in viewer, decrease it for better compatibility with other viewers (e.g. SuperSplat viewer, especially if you notice spikes or large floaters)
 - Supported camera models: perspective, equidistant and equisolid fisheye (supports >180° fov); Supported distortion parameters: k1-k4, p1, p2, sx1, sy1, b1, b2.
 
-In-the-wild images
+### In-the-wild images
 - Spirulae-splat has an `in-the-wild` preset that's designed to handle images with strong lighting variation and/or large unmasked distractors, like those from web-scraped images of landmarks
 - By default, this presets uses 0.9 L1 + 0.1 SSIM loss (instead of 0.8/0.2), `--densify_score_mode median` (instead of `mean` in `3dgs` preset), and `--densify_loss_map_mode robust_edge_aware` (instead of `ssim_structure` in `3dgs` preset).
 - Set `--densify_robust_edge_aware_quantile` (default 0.75) to a lower number for large distractors, and higher number for low distractor datasets for potentially higher quality.
 
-Background control
+### Background control
 - By default, spirulae-splat trains a black background, consistent with most 3DGS training software.
 - To discourage transparency, use `--model.background_mode noise`.
 - To train a skybox, use `--model.background_mode sh`.
 - If mask is provided, use `--model.apply_loss_for_mask` to mask e.g. sky, background, and False to mask e.g. people and cars.
 
-Training large-scale scenes
+### Training large-scale scenes
 - Spirulae-splat works out of box for scenes with various scale and complexity with extreme VRAM efficiency. Unlike some training software, there is no need to tune position learning rate, opacity regularization, etc. in spirulae-splat.
 - For high-resolution images, setting `--model.num_loss_scales` (default 0) may help convergence. We recommend 1 for 1080p images, 2 for 4k images, and 3 for 8k images.
 
-Linear and wide-gamut color spaces
+### Linear and wide-gamut color spaces
 - Use `linear-color` preset for training splats in linear color spaces. This assumes gamma-corrected Rec.2020 input images, and trains splats in linear ACEScg color space.
 - To specify linear color space for splat and input images, use `--model.image_color_is_linear` and `--model.splat_color_is_linear True`. 16 bit PNG is recommended for linear input images.
 - To specify color gamut for splat and input images, use `--model.image_color_gamut` and `--model.splat_color_gamut`. (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`, `DCI-3`)
@@ -157,7 +196,7 @@ Linear and wide-gamut color spaces
     - Note: on Windows, you may need to wrap parentheses around method name with `^2`. For example, use `spirulae-train "3dgs^2-pos"` instead of `spirulae-train 3dgs^2-pos`.
 - 2DGS-like depth regularization to discourage floaters: `--model.depth_distortion_reg 0.01`. Similar regularization can also be applied to RGB by setting `--model.rgb_distortion_reg` to a positive value. -->
 
-Scripts
+### Scripts
 - Use `scripts/mask.py` to generate masks (Example usage: `python3 scripts/mask.py path/to/dataset --prompt "person; car; fisheye border" --negative-prompt "person in painting"`). By default, this runs on [lang-sam](https://github.com/luca-medeiros/lang-segment-anything) model. Use `--model sam3` to switch to [SAM 3](https://github.com/facebookresearch/sam3) model for often better results (may require applying for access and logging in to Huggingface).
 - Use `scripts/predict_geometry.py` to generate depth and normal maps using [Metric3D v2](https://github.com/YvanYin/Metric3D) model, and optionally sky segmentation maps with various model options.
 - Use `scripts/extract_frames.py` to extract frames from a video, while skipping blurry frames. Supports various video formats, including most `.mp4`, `.mov`, and `.insv` videos.
@@ -165,7 +204,7 @@ Scripts
 <!-- - Use `scripts/export_ply_3dgs.py` to export PLY
 - To process data, use `scripts/process_data_colmap.py` and `scripts/process_data_metashape.py`, will bypass `ns-process-data` limitations (e.g. `THIN_PRISM_FISHEYE`) -->
 
-## Acknowledgement
+# Acknowledgement
 
 Spirulae-splat begins as a fork of:
 - Nerfstudio: https://github.com/nerfstudio-project/nerfstudio/
@@ -206,6 +245,7 @@ Spirulae-splat mainly uses bilateral grid to handle changes in camera setting an
 
 ### Optimization
 To achieve high VRAM efficiency and acceptable training speed, spirulae-splat incorporates various optimizations, including kernel fusion throughout implementation, optimized rasterization backward implementation, improved Gaussian-tile association, etc. Previously, there were options to offload optimizer states to reduce VRAM usage at cost of slower training; current implementation addresses VRAM efficiency with quantization, with minimal impact on training speed and quality.
+- *VkSplat: High-Performance 3DGS Training in Vulkan Compute*, by Chen et al. &ndash; https://arxiv.org/abs/2605.00219
 - *Taming 3DGS: High-Quality Radiance Fields with Limited Resources*, by Mallick et al. &ndash; https://arxiv.org/abs/2406.15643
 - *StopThePop: Sorted Gaussian Splatting for View-Consistent Real-time Rendering*, by Radl et al. &ndash; https://arxiv.org/abs/2402.00525
 - *Faster-GS: Analyzing and Improving Gaussian Splatting Optimization*, by Hahlbohm et al. &ndash; https://arxiv.org/abs/2602.09999 (originally LichtFeld Studio bounty 001)
