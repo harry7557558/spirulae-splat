@@ -1,9 +1,9 @@
-// Densification kernels (Vulkan backend), mirroring csrc/Densify.cu:
+// Densification kernels (Vulkan backend), mirroring the csrc densify family (DensifySampling/Scoring/Relocation/Mcmc/SplitFilter):
 // densify_update_weight (per-step score accumulator), densify_clip_scale,
 // the long-axis-split relocate/add family, the MCMC relocate/add family,
 // and the MCMC/revised noise kernels. The split/noise math is the canonical
 // slang/densify.slang device code; the mcmc_relocation opacity/scale math
-// is Densify.cu-only C++ and is mirrored here.
+// is CPU-side C++ in the csrc densify family and is mirrored here.
 //
 // Score modes match DensifyScoreMode in csrc/Densify.cuh:
 //   0 = Mean, 1 = Max, 2 = Median, 3 = Geom.
@@ -70,7 +70,7 @@ void densify_update_weight(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     if (!(p.radii[idx] > 0.0f)) return;
 
     float weight = abs(p.accum_weight[idx]);
-    // Geometric blend: weight^(1-w) * |accum_weight2|^w (see Densify.cu).
+    // Geometric blend: weight^(1-w) * |accum_weight2|^w (see DensifyScoring.cu).
     if (p.use_w2 != 0) {
         weight = pow(weight, 1.0f - p.blend_w) *
                  pow(abs(p.accum_weight2[idx]), p.blend_w);
@@ -138,7 +138,7 @@ void densify_clip_scale(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
             p.log_scales[3 * idx] -= oversize_factor;
             p.log_scales[3 * idx + 1] -= oversize_factor;
             p.log_scales[3 * idx + 2] -= oversize_factor;
-            // encourages being relocated to (see Densify.cu)
+            // encourages being relocated to (see DensifyScoring.cu)
             if (p.has_opacs != 0) {
                 float lo = p.logit_opacs[idx];
                 p.logit_opacs[idx] =
@@ -241,7 +241,7 @@ const int kShOptimBits = 0;
 [SpecializationConstant]
 const int kShValueBits = 16;
 
-// Zero-encode codes against a [lo, hi] block bound (see Densify.cu
+// Zero-encode codes against a [lo, hi] block bound (see DensifyQuantCopy.cuh
 // _quant_encode_zero_byte / _quant_encode_zero_word16: saturating is
 // acceptable, the next optim pass recomputes bounds).
 [ForceInline]
@@ -307,7 +307,7 @@ void _dn_zero_nq_splat<let PRIMS : int>(uint* packed, float4* bounds,
         packed[uint(PRIMS) * splat + uint(i)] = w;
 }
 
-// mcmc_relocation opacity/scale math, mirroring Densify.cu (which mirrors
+// mcmc_relocation opacity/scale math, mirroring McmcRelocation.cu (which mirrors
 // the MCMC paper's relocation formula; log_factorial is the least-squares
 // fit valid to n = 50).
 [ForceInline]
@@ -599,7 +599,7 @@ void densify_relocate_las(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
 // ---------------------------------------------------------------------------
 // SH VALUE-codec copies (decode src cells, encode into dst against dst's
-// CURRENT bounds; clipping accepted — see Densify.cu).
+// CURRENT bounds; clipping accepted — see DensifyQuantCopy.cuh).
 // ---------------------------------------------------------------------------
 
 [ForceInline]

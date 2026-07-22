@@ -1,6 +1,6 @@
 // PixelWise render-path kernels (Vulkan backend): background blends, color
 // space conversion, depth->normal. Mirrors the corresponding kernels in
-// csrc/PixelWise.cu via the same pixel_wise.slang device functions
+// csrc/ImageColorOps.cu via the same pixel_wise.slang device functions
 // (blend_background, linear_rgb_to_srgb / rgb_to_srgb, generate_ray_d2n,
 // points_to_normal). Training backwards land with the training phase.
 //

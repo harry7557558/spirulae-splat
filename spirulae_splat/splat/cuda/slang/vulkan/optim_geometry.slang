@@ -1,5 +1,5 @@
 // Fused 3DGS geometry optimizer (Vulkan backend), mirroring
-// fused_optim_3dgs_geometry_kernel in csrc/Optimizer.cu: one thread per
+// fused_optim_3dgs_geometry_kernel in csrc/FusedGeometryOptim.cu: one thread per
 // splat (256/block), per-splat regularizer gradients, then in-place Adam on
 // scales / quats (Riemannian) / opacities / means (optionally
 // scale-agnostic), plus features_dc when non-SH Adam-state quantization is

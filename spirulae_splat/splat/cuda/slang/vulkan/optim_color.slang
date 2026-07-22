@@ -1,6 +1,6 @@
 // Trust-region Adam color kernels (Vulkan backend), mirroring the
 // fused_adamtr_rgb_optim / fused_adamtr_rgb_sh_optim kernels in
-// csrc/Optimizer.cu (the non-FPBO DC/SH update path when
+// csrc/ColorOptim.cu (the non-FPBO DC/SH update path when
 // use_color_trust_region is on and no quantization is active). The
 // is_linear (sRGB-Jacobian gradient conversion) and zero_grad template
 // axes become runtime flags — the kernels are branch-light and have no
@@ -77,7 +77,7 @@ void fused_adamtr_rgb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                    (m_val / denom);
 
     // Trust region: clip |delta| by the per-channel radius derived from the
-    // DC color and opacity (see Optimizer.cu for the derivation).
+    // DC color and opacity (see ColorOptim.cu for the derivation).
     float opac = _tr_sigmoid(p.opacities[idx]);
     float3 rgb = max(kTrSh0 * x + float3(0.5f),
                      float3((1.0f / 255.0f) * (1.0f / 255.0f)));

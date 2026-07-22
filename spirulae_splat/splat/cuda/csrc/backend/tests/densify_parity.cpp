@@ -247,7 +247,7 @@ int main(int argc, char** argv) {
             for (auto& v : g) v = uf(0.f, 4e-4f);
             m.g2_sh = upload(g);
         } else {
-            // state stride is 3 * num_sh cells per splat (see Densify.cu)
+            // state stride is 3 * num_sh cells per splat (see FusedAppearanceOptim.cu)
             int64_t cells = 3 * num_sh * CAP;
             m.sh_state_bytes = cells * (sh_optim_bits == 8 ? 2 : 1);
             std::vector<uint8_t> pk(m.sh_state_bytes);

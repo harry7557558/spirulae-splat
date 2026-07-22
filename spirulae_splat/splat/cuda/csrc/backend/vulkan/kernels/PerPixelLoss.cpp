@@ -1,7 +1,7 @@
 // Vulkan implementation of the multi-scale per-pixel training loss
 // (csrc/PerPixelLoss.cuh compute_multi_scale_per_pixel_losses), including its
 // internal fused-SSIM backward (csrc/FusedSSIM.cu inplace path) and the
-// edge-aware densification maps (csrc/Densify.cu canny / robust-residual
+// edge-aware densification maps (csrc/DensifySplitFilter.cu canny / robust-residual
 // path). Device work: slang/vulkan/{multi_scale_loss,fused_ssim,canny}.slang
 // plus the quantile radix-select in Quantile.cpp.
 //
@@ -361,7 +361,7 @@ float fused_ssim_inplace_async_vk(
 }
 
 // ---------------------------------------------------------------------------
-// Edge-aware loss maps (mirror Densify.cu's canny / robust-residual path)
+// Edge-aware loss maps (mirror DensifySplitFilter.cu's canny / robust-residual path)
 // ---------------------------------------------------------------------------
 
 void canny_edge_filter_vk(const TorchTensorView& rgb_in, uint64_t mask_ptr,

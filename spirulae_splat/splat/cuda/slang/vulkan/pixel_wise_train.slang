@@ -2,7 +2,7 @@
 // render-path kernels in pixel_wise_render.slang plus the small loss-side
 // pixel ops (overexposure regularizer, linear->ray depth remap, color-shift
 // regularizer from ColorShiftReg.cu). Mirrors the corresponding kernels in
-// csrc/PixelWise.cu / ColorShiftReg.cu via the same pixel_wise.slang device
+// csrc/ImageColorOps.cu / ColorShiftReg.cu via the same pixel_wise.slang device
 // functions. Element-wise kernels run flat over B*H*W with the wgs_per_row
 // fold; depth_to_normal_bwd keeps the 16x16 tile as a flat 256-thread
 // workgroup like its forward.

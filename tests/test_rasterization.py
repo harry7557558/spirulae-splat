@@ -364,7 +364,7 @@ def test_rasterization():
         # ax4.imshow(_depth[0])
         # ax4.imshow(_rgb[1])
         plt.show()
-        # plt.savefig("/mnt/d/plot.png")
+        # plt.savefig("plot.png")
         exit(0)
 
     weights = [torch.randn_like(x.detach()) for x in _outputs]

@@ -1,6 +1,6 @@
 // Canny edge filters + RobustNeRF-style residual preprocessing (Vulkan
 // backend), mirroring the edge-aware densification-map kernels in
-// csrc/Densify.cu (canny_edge_filter_kernel, canny_edge_filter_kernel_scalar,
+// csrc/DensifySplitFilter.cu (canny_edge_filter_kernel, canny_edge_filter_kernel_scalar,
 // _robust_residual_luma_kernel, _robust_tukey_inplace_kernel).
 //
 // CUDA runs 32x32 blocks; here 16x16 logical tiles run as flat 256-wide

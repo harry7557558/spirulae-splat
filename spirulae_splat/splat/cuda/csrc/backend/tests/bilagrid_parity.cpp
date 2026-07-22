@@ -687,8 +687,7 @@ void test_fused_optim(Rng& r) {
 // (KernelCommon.h fold_1d) and the second row ends in padding blocks. Those
 // blocks must not touch the per-block quant-bounds arrays past their end —
 // an out-of-bounds device write faults the device into a wait that never
-// returns (the vicon-dataset training hang: 966 cameras x 12 x 2048 cells).
-// Smallest crossing size, quantized state (the bounds-indexed path),
+// returns. Smallest crossing size, quantized state (the bounds-indexed path),
 // tv_weight 0 (see test_fused_optim). Values/codes are sliced (head + a
 // tail window spanning both fold rows' real blocks) to keep the ref small;
 // the bounds arrays — what the bug clobbered — read back in full.

@@ -3,7 +3,7 @@
 // GradQuant -- block-wise SIGNED SYMMETRIC quantization helpers for the
 // per-splat world GRADIENT accumulator (non-FPBO grad-quant path). Sibling of
 // the Adam-state helpers `_NonShQ` (FusedProjectionBwdOptim_kernel.cuh) and
-// `_OptimNonShQ` (Optimizer.cu), but with its own codec (NOT the min-max
+// `_OptimNonShQ` (FusedGeometryOptim.cu), but with its own codec (NOT the min-max
 // QuantizedTensor codec): int codes in [-QMax, QMax] scaled by the block
 // amplitude a = max(|min|,|max|), so code 0 decodes to EXACTLY 0.0f.
 //
@@ -24,7 +24,7 @@
 // (cell / cells_per_splat) / 256.
 //
 // The includer must provide Common.cuh (WARP_SIZE) and Tensor.h before this
-// header; both grad-quant TUs (ProjectionBwdQuantGrad_kernel.cuh, Optimizer.cu)
+// header; both grad-quant TUs (ProjectionBwdQuantGrad_kernel.cuh, FusedGeometryOptim.cu)
 // already do.
 
 #include <cstdint>

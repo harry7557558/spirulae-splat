@@ -271,7 +271,7 @@ uint32_t fill_g1g2(P& p, const DeviceVector<float3>& g1_means,
     return g1_means.data_ptr() ? 1u : 0u;
 }
 
-// Weighted sampling without replacement (Densify.cu
+// Weighted sampling without replacement (DensifySampling.cu
 // weighted_sample_without_replacement_internal): efraimidis-spirakis keys
 // (as order-preserving uint32 bits), stable radix sort of the identity
 // permutation, first num_sample sorted indices copied to the OutIdx slot.

@@ -28,7 +28,7 @@
 //   inclusive_sum / exclusive_sum  — int32 and int64 counters
 //   inclusive_sum<float>           — densify MCMC sampling cumsum (Vulkan
 //                                    backend only; the CUDA launcher calls
-//                                    CUB directly in Densify.cu)
+//                                    CUB directly in DensifySampling.cu)
 //   select_flagged                 — int32 ids
 // Callers pass begin_bit/end_bit exactly as with CUB to skip radix passes.
 

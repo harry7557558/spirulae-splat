@@ -50,13 +50,20 @@ def write_if_changed(path, new_text):
     return False
 
 
-def generate_header(filename):
+def generate_header(filename, sources):
     path = "spirulae_splat/splat/cuda/csrc/"
 
+    # `sources` is listed in a fixed order, so the emitted declaration order is
+    # stable across machines and the committed header does not churn.
     code = ""
-    for source_filename in os.listdir(path):
-        if source_filename.startswith(filename+"."):
-            code += open(path+source_filename).read()
+    for source_filename in sources:
+        full = path + source_filename
+        if not os.path.exists(full):
+            raise FileNotFoundError(
+                f"{filename}.cuh lists a missing source: {source_filename}. "
+                "Update HEADER_SOURCES in generate_headers.py."
+            )
+        code += open(full).read()
     decls = extract_function_declarations(strip_if_zero_blocks(code))
 
     splitter = "/* == AUTO HEADER GENERATOR - DO NOT EDIT THIS LINE OR ANYTHING BELOW THIS LINE == */\n"
@@ -71,38 +78,72 @@ def generate_header(filename):
     return False
 
 
+# <header stem> -> the .cu translation units whose /*[AutoHeaderGeneratorExport]*/
+# functions it declares, in emission order.
+#
+# A family may be spread over several TUs, each named after what it *does*
+# rather than after the header it feeds (splitting oversized files is
+# encouraged -- see docs/codegen.md). The mapping is explicit rather than
+# inferred from filenames so that a source file's name is free, and so a
+# typo'd or moved file fails loudly instead of silently dropping declarations.
+HEADER_SOURCES = {
+    'IntersectTile':                ['IntersectTile.cu'],
+    'BackgroundSphericalHarmonics': ['BackgroundSphericalHarmonics.cu'],
+    'PerSplatLoss':                 ['PerSplatLoss.cu'],
+    'PerPixelLoss':                 ['PerPixelLoss.cu'],
+    # Image-space per-pixel operations, split by function.
+    'PixelWise': [
+        'ImageConvert.cu',       # uint8/uint16 -> float; rendered -> expected depth
+        'ImageColorOps.cu',      # background blending, log map, overexposure reg
+        'DepthGeometry.cu',      # depth -> points/normal, depth-normal loss,
+                                 #   ray <-> linear depth
+        'ImageDistort.cu',       # distort / undistort
+        'ImageWarp.cu',          # wide <-> pinhole warps, incl. byte-fused
+        'GtDepthNormalWarp.cu',  # GT depth/normal wide -> pinhole warps
+        'Ppisp.cu',              # per-pixel image signal processing
+    ],
+    'Projection':                   [],   # types only; kernels live in the Fwd/Bwd headers
+    'ProjectionFwd':                ['ProjectionFwd.cu'],
+    'ProjectionBwd':                ['ProjectionBwd.cu'],
+    'ProjectionBwdQuantGrad':       ['ProjectionBwdQuantGrad.cu'],
+    'ProjectionPackedFwd':          ['ProjectionPackedFwd.cu'],
+    'RasterizationFwd':             ['RasterizationFwd.cu'],
+    'RasterizationBwd':             ['RasterizationBwd.cu'],
+    'RasterizationEval3DFwd':       ['RasterizationEval3DFwd.cu'],
+    'RasterizationEval3DBwd':       ['RasterizationEval3DBwd.cu'],
+    # Optimizer variants, split by function.
+    'Optimizer': [
+        'TensorSetZero.cu',           # set_zero_tensor
+        'AdamOptim.cu',               # Adam (incl. multi/stepped/8-bit/quat)
+        'NewtonOptim.cu',
+        'ScaleAgnosticMeanOptim.cu',
+        'FusedGeometryOptim.cu',
+        'FusedAppearanceOptim.cu',
+        'TrustRegion3DGS2Optim.cu',   # 3DGS^2-TR family
+        'ColorOptim.cu',              # linear-RGB / trust-region RGB + SH
+    ],
+    'FusedProjectionBwdOptim':      ['FusedProjectionBwdOptim.cu'],
+    # Densification, split by function.
+    'Densify': [
+        'DensifySampling.cu',    # quantile/median, indexing, scatter, sampling
+        'DensifyScoring.cu',     # covariance scale init, param update
+        'Relocation.cu',
+        'McmcRelocation.cu',     # MCMC relocation + noise
+        'DensifySplitFilter.cu', # long-axis split, image edge filters
+    ],
+    'BilagridUtils':                ['BilagridUtils.cu'],
+    'Visualizer':                   ['Visualizer.cu'],
+    'FusedSSIM':                    ['FusedSSIM.cu'],
+}
+
+
 def generate_headers():
     """Regenerate headers only if needed."""
-    cuda_dir = Path("spirulae_splat/splat/cuda/csrc")
-
-    header_names = [
-        'IntersectTile',
-        'BackgroundSphericalHarmonics',
-        'PerSplatLoss',
-        'PerPixelLoss',
-        'PixelWise',
-        'Projection',
-        'ProjectionFwd',
-        'ProjectionBwd',
-        'ProjectionBwdQuantGrad',
-        'ProjectionPackedFwd',
-        'RasterizationFwd',
-        'RasterizationBwd',
-        'RasterizationEval3DFwd',
-        'RasterizationEval3DBwd',
-        'Optimizer',
-        'FusedProjectionBwdOptim',
-        'Densify',
-        'BilagridUtils',
-        'Visualizer',
-        'FusedSSIM',
-    ]
-
     num_generated = 0
-    for name in header_names:
-        if generate_header(name):
+    for name, sources in HEADER_SOURCES.items():
+        if generate_header(name, sources):
             num_generated += 1
-    print(f"Generated {num_generated}/{len(header_names)} new headers")
+    print(f"Generated {num_generated}/{len(HEADER_SOURCES)} new headers")
 
 
 generate_headers()

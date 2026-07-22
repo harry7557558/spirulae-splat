@@ -69,7 +69,7 @@ def test_ppisp():
     # plt.plot(image[0, h//2, :, 0].cpu().numpy(), out1[0, h//2, :, 0].detach().cpu().numpy(), 'o', label='forward_ppisp')
     # plt.plot(image[0, h//2, :, 0].cpu().numpy(), out2[0, h//2, :, 0].detach().cpu().numpy(), 'x', label='my_forward_ppisp')
     # plt.legend()
-    # plt.savefig("/mnt/d/plot.png")
+    # plt.savefig("plot.png")
     # plt.close()
 
     print("Test backward")

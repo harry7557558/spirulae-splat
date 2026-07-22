@@ -157,7 +157,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
     // SH quant bounds (one float4 per block) -- needed by the densify kernels
     // to encode (g1=0, g2=0) into the dst splats' packed bytes against the
     // current bounds slot. FPBO mode uses a per-splat-block layout, regular
-    // Optimizer.cu uses a per-cell-block layout. Empty vector when SH quant
+    // FusedAppearanceOptim.cu uses a per-cell-block layout. Empty vector when SH quant
     // is disabled; the kernels treat data_ptr() == nullptr as a sentinel and
     // fall back to plain-zero writes (which don't apply to non-quant g1/g2
     // anyway).

@@ -502,7 +502,7 @@ the engine level.
   (densify_clip_scale, MCMC/revised noise, long-axis-split relocate/add,
   MCMC relocate/add) over `slang/vulkan/densify.slang`, which includes the
   canonical `slang/densify.slang` device code (long_axis_split_3dgs, the
-  randn3 noise kernels) and mirrors the Densify.cu-only mcmc_relocation
+  randn3 noise kernels) and mirrors the McmcRelocation.cu-only mcmc_relocation
   math; `kernels/Optimizer.cpp` gains the adamtr trust-region color
   variants (`slang/vulkan/optim_color.slang`) and the fused 3DGS geometry
   step (`slang/vulkan/optim_geometry.slang`, sharing the FPBO helpers
@@ -672,7 +672,7 @@ the engine level.
     atomic-order-dependent sums); validation clean.
 - **Dataset warp/conversion + end-to-end training (phase 5, eighth and
   final slice)**: `kernels/Warp.cpp` implements the 12 remaining launch
-  APIs — the fused byte->float GT warps of PixelWise.cu
+  APIs — the fused byte->float GT warps of GtDepthNormalWarp.cu
   (`launch_warp_{byte_to_float,mask,depth,normal}_{wide,equi}`) plus the
   raw converters (`uint8/16_{image,depth,normal}_to_float_raw` and the
   DeviceTensor3D wrappers). Device work in `warp.slang`:

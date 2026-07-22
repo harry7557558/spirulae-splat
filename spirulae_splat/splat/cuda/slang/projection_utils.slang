@@ -494,7 +494,7 @@ float2x3 equisolid_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float
 }
 
 // Equirectangular (spherical panorama) projection.
-// Convention matches warp_image_equirectangular_to_pinhole_kernel in PixelWise.cu:
+// Convention matches warp_image_equirectangular_to_pinhole_kernel in ImageWarp.cu:
 //   lon = atan2(x, z), lat = atan2(y, hypot(x, z)),
 //   u = fx*lon + cx, v = fy*lat + cy,  with fx = fy = width/(2*pi), cx = w/2, cy = h/2.
 // Assumes no lens distortion (dist_coeffs are ignored). Every viewing direction

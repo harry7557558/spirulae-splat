@@ -244,7 +244,7 @@ struct SplatOptim {
     bool   use_fused_proj_bwd_optim = false;
     // Mirrors use_fused_proj_bwd_optim at the time _ensure_optim_state last
     // ran. Drives reallocation when the fused flag flips between steps (the
-    // FPBO SH-quant layout differs from the regular Optimizer.cu layout).
+    // FPBO SH-quant layout differs from the regular FusedAppearanceOptim.cu layout).
     bool   fused_state_active       = false;
 
     // ---- sub-batched training state ----

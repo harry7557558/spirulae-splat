@@ -1,5 +1,5 @@
 // Dataset GT warp + byte->float conversion kernels (Vulkan backend),
-// mirroring the fused-warp section of csrc/PixelWise.cu (launch_warp_*) and
+// mirroring csrc/ImageWarp.cu + GtDepthNormalWarp.cu (launch_warp_*) and
 // the raw converters (uint8/16_*_to_float_raw). The wide warps project each
 // pinhole-face ray through the same canonical projection_utils.slang
 // *_proj_nav exports the CUDA kernels call, so per-pixel outputs differ only
@@ -120,7 +120,7 @@ bool _wp_proj(int camera_model, float3 raydir, float4 intrin,
     return persp_proj_nav(raydir, intrin, dist_coeffs, uv);
 }
 
-// Equirectangular sample position for a face ray (see PixelWise.cu; f is
+// Equirectangular sample position for a face ray (see ImageWarp.cu; f is
 // w * (0.5 / pi)).
 [ForceInline]
 float2 _wp_equi_uv(float3 raydir, int h, int w) {

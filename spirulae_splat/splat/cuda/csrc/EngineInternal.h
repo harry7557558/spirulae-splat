@@ -2,7 +2,7 @@
 
 // EngineInternal -- declarations for engine-private helpers that cross file
 // boundaries within the Engine.cpp split, plus extern declarations for raw
-// device functions defined in other translation units (PixelWise.cu,
+// device functions defined in other translation units (ImageConvert.cu,
 // BilagridFusedAdam.cu, PpispInit.cu, BilagridInit.cu).
 //
 // Anything declared here is intentionally not part of the public Engine.h API.
@@ -16,7 +16,7 @@
 #include <cstddef>
 
 
-// --- Raw-pointer image conversion helpers (PixelWise.cu). ---
+// --- Raw-pointer image conversion helpers (ImageConvert.cu). ---
 void uint8_image_to_float_raw (const uint8_t*  d_in, float* d_out,
                                int B, int H, int W, int C);
 void uint16_image_to_float_raw(const uint16_t* d_in, float* d_out,

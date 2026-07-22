@@ -1,7 +1,7 @@
 // Vulkan implementation of the dataset GT warp + byte->float conversion
 // launch APIs (the launch_warp_* section of csrc/PixelWise.cuh and the
 // uint8/16_*_to_float_raw converters of EngineInternal.h). Mirrors the
-// CUDA launchers in csrc/PixelWise.cu; the device work runs
+// CUDA launchers in csrc/ImageWarp.cu; the device work runs
 // slang/vulkan/warp.slang.
 //
 // All launchers take raw device pointers (the engine's DataManager path

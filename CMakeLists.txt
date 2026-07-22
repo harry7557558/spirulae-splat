@@ -52,7 +52,7 @@ if(SSPLAT_BACKEND STREQUAL "vulkan")
 
     # Portable engine layer (compile-checked; links against the Vulkan
     # runtime once kernel launchers exist for the symbols it needs).
-    file(GLOB SSPLAT_PORTABLE_SOURCES ${SSPLAT_CSRC}/*.cpp)
+    file(GLOB SSPLAT_PORTABLE_SOURCES CONFIGURE_DEPENDS ${SSPLAT_CSRC}/*.cpp)
     list(REMOVE_ITEM SSPLAT_PORTABLE_SOURCES ${SSPLAT_CSRC}/ext.cpp)
 
     add_library(csrc_portable OBJECT ${SSPLAT_PORTABLE_SOURCES})
@@ -253,7 +253,11 @@ find_package(CUDAToolkit REQUIRED)
 # ---------------------------------------------------------------------------
 # Find all sources
 # ---------------------------------------------------------------------------
-file(GLOB SPLAT_SOURCES
+# CONFIGURE_DEPENDS: kernel families are routinely split into several TUs
+# (Name.Part.cu -- see docs/codegen.md), and codegen adds/removes files under
+# ins/. Without it a new source is silently not compiled and only surfaces as
+# an undefined reference at link time.
+file(GLOB SPLAT_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/csrc/*.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/spirulae_splat/splat/cuda/ins/*.cu

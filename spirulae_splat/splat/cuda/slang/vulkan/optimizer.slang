@@ -1,4 +1,4 @@
-// Optimizer kernels (Vulkan backend), mirroring csrc/Optimizer.cu: fused
+// Optimizer kernels (Vulkan backend), mirroring the csrc optimizer family (AdamOptim/Newton/Fused*/TrustRegion*/ColorOptim): fused
 // Adam (fp32, quantized-state, doubly-quantized state+value), AdaGrad, and
 // the small utility kernels (float_add_into, increment_int32). The
 // quantized kernels keep CUDA's launch geometry — one 256-thread workgroup

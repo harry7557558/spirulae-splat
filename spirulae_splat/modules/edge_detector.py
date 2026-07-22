@@ -35,14 +35,16 @@ def detect_edge_ms(im: torch.Tensor):
 
 
 if __name__ == "__main__":
+    # Usage: python -m spirulae_splat.modules.edge_detector <image> [output.png]
+    import sys
     import cv2
     import numpy as np
-    path = "/mnt/d/gs/data/360_v2/bicycle_4/images/_DSC8783.JPG"
-    # path = "/mnt/d/gs/data/Atrium_Godiva/images/00006.jpg"
-    # path = "/mnt/d/gs/data/adr/20260221-queens_park/images/cam0/00030.jpg"
-    # path = "/mnt/d/gs/data/adr/20251109-elevator-insta360-resolution-test/8k/images/cam0/00048.jpg"
-    # path = "/mnt/d/gs/data/zipnerf/nyc/images/DSC02547.JPG"
+    if len(sys.argv) < 2:
+        print(__doc__ or "usage: edge_detector.py <image> [output.png]")
+        raise SystemExit(1)
+    path = sys.argv[1]
+    out_path = sys.argv[2] if len(sys.argv) > 2 else "edge_map.png"
     im = cv2.cvtColor(cv2.imread(path), cv2.COLOR_BGR2RGB)
     im = detect_edge(torch.from_numpy(im)[None])[0].cpu().numpy()
-    cv2.imwrite("/mnt/d/temp.png", (255 * im / np.amax(im)).astype(np.uint8))
+    cv2.imwrite(out_path, (255 * im / np.amax(im)).astype(np.uint8))
 

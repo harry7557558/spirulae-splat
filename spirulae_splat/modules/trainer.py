@@ -361,7 +361,7 @@ class Trainer:
                 if camera_models[i] == EQUIRECT_VAL:
                     # Direct equirectangular training. Force canonical panorama
                     # intrinsics matching warp_image_equirectangular_to_pinhole_kernel
-                    # (PixelWise.cu): fx = fy = W/(2*pi), cx = W/2, cy = H/2. Stored
+                    # (ImageWarp.cu): fx = fy = W/(2*pi), cx = W/2, cy = H/2. Stored
                     # dataparser intrinsics for spherical sensors are not in this
                     # convention, so they are intentionally ignored here.
                     f_i = widths[i] / (2.0 * math.pi)

@@ -153,7 +153,7 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
     engine().optim.accum_buffer.resize(PoolSlot::EngAccumBuffer, N);
 
     // Joint (u, sqrt(g2)) Adam state for SH features.
-    //   Non-fused path: Optimizer.cu's fused_adam_with_steps_8bit_kernel
+    //   Non-fused path: FusedAppearanceOptim.cu's fused_adam_with_steps_8bit_kernel
     //   launches one thread per cell (= per (splat, coef, channel)), grouped
     //   256 threads per CUDA block -- one float4 bounds slot per 256 cells.
     //   Fused path: FPBO launches one thread per SPLAT, grouped 256 splats

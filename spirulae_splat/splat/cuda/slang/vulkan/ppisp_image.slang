@@ -1,5 +1,5 @@
 // PPISP image transform + regularization losses (Vulkan backend), mirroring
-// the PPISP kernels in csrc/PixelWise.cu. All device math comes from the
+// the PPISP kernels in csrc/Ppisp.cu. All device math comes from the
 // canonical slang/ppisp.slang (same functions the CUDA build calls through
 // generated/ppisp.cuh), so forward values match up to fast-math rounding and
 // gradients are the same autodiff.
