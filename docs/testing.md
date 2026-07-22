@@ -65,7 +65,7 @@ display (`DISPLAY=:0`).
 If you script a Python training run that serves the viewer, pass
 **`--no-keep-viewer-alive`** or the process hangs at exit waiting on it.
 
-## 3. Python tests (`tests/`)
+## 3. Python tests (`tests/python/`)
 
 ```bash
 pytest tests/python/
@@ -82,6 +82,38 @@ remaining check on the `_torch_impl.py` reference math.
 
 There is also `tests/python/test_delaunay3d.py` and the standalone benchmark
 `tests/native/delaunay3d_bench.cpp` (not built by CMake; compile it directly).
+
+## 4. Dataparser parity gate
+
+`tests/python/test_dataparser_parity.py` runs COLMAP (text + binary),
+Nerfstudio and Metashape fixtures through **both** the native parsers and
+`modules/dataparser.py` and asserts the frame set, poses, intrinsics,
+distortion, seed cloud, train-frame scalars and validation split all agree.
+
+Fixtures are generated from a fixed seed (`tests/python/dataset_fixtures.py`),
+so the test depends on no dataset present on the machine. Point
+`SSPLAT_TEST_DATASET` at a real dataset directory to run the same comparison
+against it:
+
+```bash
+pytest tests/python/test_dataparser_parity.py -q
+SSPLAT_TEST_DATASET=/path/to/dataset pytest tests/python/test_dataparser_parity.py -q
+```
+
+Unlike the rest of `tests/python/`, **this one is maintained** and must stay
+green until `modules/dataparser.py` is deleted.
+
+## 5. Web-viewer binding smoke test
+
+`tests/python/test_webviewer.py` brings up the **native** viewer server from
+Python against a real engine (fixture -> `parse_dataset` -> `bake_post_split`
+-> `engine_setup_data_manager`), checks `/`, `/buffers`, `/progress` and
+`/pause-toggle`, exercises `engine_lock()`, and asserts `stop()` returns and
+releases the port. Needs a CUDA device.
+
+```bash
+pytest tests/python/test_webviewer.py -q
+```
 
 ## What to run before calling a change done
 

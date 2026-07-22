@@ -197,7 +197,8 @@ spirulae-splat/
 │   └── native/                # was csrc/backend/tests + backend/vulkan/tests
 │                              #   + csrc/tests/delaunay3d_bench.cpp
 ├── scripts/                   # unchanged (data preprocessing utilities)
-└── web/                       # was viewer/ (standalone WASM/WebGL2 viewer)
+└── viewer/                    # standalone WASM/WebGL2 viewer (name fixed by
+                               #   the published GitHub Pages URL)
 ```
 
 Two things this deliberately does **not** change: the `backend/{api,cuda,
@@ -384,7 +385,7 @@ server's route table.
 PLY → `set_data_3dgs` → `WebViewer`. Longer term it can simply exec the native
 binary.
 
-Renames to end the ambiguity: `viewer/` → `web/`;
+Renames to end the ambiguity (`viewer/` stays — see phase 6);
 `spirulae_splat/viewer/` deleted; `csrc/app/Viewer.cpp` → `app/webviewer/`;
 `app/gui/` stays as the desktop GUI. Delete the stale
 `spirulae_splat/viewer_legacy/`.
@@ -542,9 +543,9 @@ from drifting, and is the one I'd want a real regression run behind.
 
 - **Phase 0 — done.** Private paths scrubbed (`edge_detector.py` now takes
   argv, `batch_process_data.bash` reads `SSPLAT_VOCAB_TREE`, commented
-  `/mnt/d/plot.png` lines dropped); `scripts/check_private_paths.sh` added as
-  the regression guard; stale `.gitmodules` and `spirulae_splat/viewer_legacy/`
-  removed; `BilagridBackwardSelection.md` → `docs/notes/`.
+  `/mnt/d/plot.png` lines dropped); `check_private_paths.sh` added as
+  the regression guard (now `tools/check_private_paths.sh`); stale
+  `.gitmodules` and `spirulae_splat/viewer_legacy/` removed; `BilagridBackwardSelection.md` → `docs/notes/`.
 - **Phase 1 — done.** `AGENTS.md` + `CLAUDE.md` pointer; `docs/` with
   `architecture`, `build`, `backends`, `codegen`, `datasets`, `testing`,
   `README` index, `notes/`. Written against the *current* layout, so they are
@@ -607,12 +608,11 @@ from drifting, and is the one I'd want a real regression run behind.
   generators re-run with zero drift.
 
   **Deliberately deferred:** §2's reorganisation *inside* the Python package
-  (`spirulae_splat/{cli,config,training,data,metrics,utils}`) and the
-  `viewer/` → `web/` rename. The former changes public import paths
-  (`spirulae_splat.splat.cuda`, `spirulae_splat.modules.*`) that `scripts/` and
-  external users depend on, which per §7.1 should be paced; the latter belongs
-  with the viewer unification in phase 6. So `spirulae_splat/splat/` still
-  exists, holding only Python.
+  (`spirulae_splat/{cli,config,training,data,metrics,utils}`). It changes
+  public import paths (`spirulae_splat.splat.cuda`,
+  `spirulae_splat.modules.*`) that `scripts/` and external users depend on,
+  which per §7.1 should be paced. So `spirulae_splat/splat/` still exists,
+  holding only Python.
 
 - **Phase 4b — backend symmetry, partial (done).** Reviewed whether the CUDA
   and Vulkan halves should mirror each other. Conclusion: make each backend
@@ -649,3 +649,86 @@ from drifting, and is the one I'd want a real regression run behind.
   - `build_develop.bash` always exited 0: the trailing `libcsrc.so` move
     masked the build's status, so a failed build reported green. Now
     propagated.
+
+- **Phase 5 — done (binding + gate; deletion deferred).** §4.1 dataset parsing.
+  `src/bindings/bind_data.cpp` exposes `DatasetParserConfig`, `ParsedDataset`
+  and `parse_dataset` / `parse_{colmap,nerfstudio,metashape}_dataset` through
+  pybind (numpy arrays, GIL released during the parse).
+  `spirulae_splat/modules/native_dataparser.py` is the ~170-line Python client;
+  it imports neither torch nor nerfstudio.
+
+  The parsers and `external/miniz.c` moved from the three app targets'
+  source lists into the engine library (`cmake/sources.txt`), so `ssplat-train`,
+  `ssplat-mesh`, `ssplat-gui`, the Vulkan `csrc_portable` and the Python
+  extension now share one build of them instead of four.
+
+  **Gate:** `tests/python/test_dataparser_parity.py` — 4 formats (COLMAP text +
+  binary, Nerfstudio, Metashape) x 4 config variants, comparing frame set and
+  order, `camera_to_worlds`, intrinsics, distortion, width/height, camera
+  model, seed cloud, `train_frame_scale`, `train_to_normalized` and the
+  validation split against `modules/dataparser.py`. 18 passed. Fixtures are
+  synthesised from a fixed seed (`tests/python/dataset_fixtures.py`) so no
+  local dataset is referenced; `SSPLAT_TEST_DATASET` opts into running the
+  same comparison on a real one. A cross-format check asserts the four
+  fixtures describe the same scene, so the comparison cannot agree on garbage.
+
+  The gate found a **real bug in the native splitter**: `eval_mode="fraction"`
+  and `validation_fraction` used `llround` where numpy's
+  `np.linspace(0, n-1, k, dtype=int)` *truncates*, so the native trainer
+  silently trained on a different frame subset than the Python one for most
+  (n, k) pairs — e.g. n=7, k=5 gives [0,1,3,4,6] vs [0,2,3,4,6]. Fixed in
+  `DatasetCommon.cpp` (`linspace_indices`).
+
+  **Not done, deliberately:** deleting `dataparser.py` / `colmap_utils.py` /
+  `metashape_utils.py` and rewiring `trainer.py`. Per §7.1 that is a separate,
+  separately-announced commit; this one only makes it possible and proves it
+  safe. The nerfstudio dependency therefore also still stands.
+
+- **Phase 6 — done (binding + renames; deletion deferred).** §4.2 viewer
+  server.
+
+  `src/bindings/bind_viewer.cpp` exposes `WebViewer` (the real `ViewerServer`),
+  `ViewerRenderConfig`, `PostSplitCameras` and `bake_post_split`. Python drives
+  the same HTTP server, render worker and `viewer.html` the CLI and GUI use.
+
+  The render worker never calls into Python: its hooks read atomics plus a
+  mutex-guarded progress string that Python *pushes* (`set_step`,
+  `set_progress_json`), instead of invoking Python callbacks from a non-GIL
+  thread while holding the engine mutex — which would deadlock against a
+  training loop that holds the GIL and wants that mutex. The one shared lock is
+  reached through `viewer.engine_lock()`, a context manager that releases the
+  GIL while blocking.
+
+  `bake_post_split` also lands the cubemap split (fisheye/equisolid -> 5 faces,
+  equirect -> 6) that `trainer.py::_setup_cpp_data_manager` had reimplemented.
+
+  **viewer.html is now genuinely single-source**: moved to
+  `src/app/webviewer/viewer.html`, embedded into the engine library (so the
+  binding serves it too, not just the app binaries) and read from there by the
+  legacy Python server. The four meanings are now `viewer/` (standalone WASM),
+  `src/app/webviewer/` (the server + the one client), `src/app/gui/` (desktop
+  GUI) and the legacy `spirulae_splat/viewer/` — the ambiguity is resolved by
+  each one owning a distinct, descriptive path, not by renaming the root
+  `viewer/`.
+
+  **`viewer/` -> `web/` was tried and reverted.** The directory name is the
+  published GitHub Pages URL (`.../spirulae-splat/viewer/`, linked from the
+  README), so renaming it breaks external backlinks. A public URL outranks an
+  internal tidy-up; `viewer/` keeps its name.
+
+  **Fixed a hang this phase owns.** `ssplat-train` never exited when the viewer
+  was enabled and `--keep-viewer-alive 0`: `HttpServer::stop()` closed the
+  listening socket to break `accept()`, which POSIX leaves undefined and Linux
+  simply ignores — the accept never returned and the join blocked forever. The
+  accept loop now `select()`s with a 100 ms timeout and checks `_running`, and
+  `stop()` closes the socket after the join. Verified: 0.63 s clean exit,
+  endpoints unaffected.
+
+  **Gate:** `tests/python/test_webviewer.py` (4 tests) — engine setup through
+  the bindings, all four endpoints, `engine_lock()`, and a `stop()`-returns +
+  port-released assertion that would have hung before the fix.
+
+  **Not done, deliberately:** deleting `spirulae_splat/viewer/{server,
+  http_server,render_worker}.py`, porting `annotation.py`, and rewiring
+  `ss_viewer.py` / `trainer.py` onto `_C.WebViewer`. Same §7.1 pacing as
+  phase 5.

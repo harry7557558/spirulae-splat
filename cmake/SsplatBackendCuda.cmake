@@ -57,8 +57,9 @@ find_package(CUDAToolkit REQUIRED)
 ssplat_collect_sources(SPLAT_SOURCES)
 
 if(NOT SSPLAT_WITH_TORCH)
-    # bindings/ext.cpp (the pybind11 module) is the only Torch-dependent source.
-    list(REMOVE_ITEM SPLAT_SOURCES ${SSPLAT_SRC}/bindings/ext.cpp)
+    # src/bindings/ is the pybind11 surface -- the only Torch/Python-dependent
+    # part of the library.
+    list(FILTER SPLAT_SOURCES EXCLUDE REGEX "/bindings/")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -195,6 +196,7 @@ endif()
 
 target_include_directories(csrc PRIVATE
     ${SSPLAT_SRC}
+    ${CMAKE_BINARY_DIR}      # app_generated/viewer_html.h
     ${CUDAToolkit_INCLUDE_DIRS}
 )
 

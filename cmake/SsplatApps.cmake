@@ -4,27 +4,15 @@
 # in SSPLAT_APP_LIBS and set SSPLAT_WITH_TORCH. ssplat-mesh is the exception --
 # the Vulkan backend stubs the meshing kernels, so it is CUDA-only.
 
-include(SsplatEmbed)
-
 # ---------------------------------------------------------------------------
 # Source groups shared by several app targets
 # ---------------------------------------------------------------------------
-# Dataset parsing (COLMAP / Nerfstudio / Metashape) + miniz for the zipped
-# Metashape .psx payloads.
-set(SSPLAT_DATASET_SOURCES
-    ${SSPLAT_SRC}/data/parsers/ColmapParser.cpp
-    ${SSPLAT_SRC}/data/parsers/NerfstudioParser.cpp
-    ${SSPLAT_SRC}/data/parsers/MetashapeParser.cpp
-    ${SSPLAT_SRC}/data/parsers/DatasetCommon.cpp
-    ${SSPLAT_SRC}/external/miniz.c
-)
+# Dataset parsing (COLMAP / Nerfstudio / Metashape) and miniz now live in the
+# engine library (cmake/sources.txt), so every app target -- and the Python
+# extension -- shares one build of them. Nothing to list here.
 
-# The embedded web viewer: HTTP server + the render worker feeding it.
-set(SSPLAT_VIEWER_SOURCES
-    ${SSPLAT_SRC}/app/webviewer/HttpServer.cpp
-    ${SSPLAT_SRC}/app/webviewer/RenderWorker.cpp
-    ${SSPLAT_SRC}/app/webviewer/Viewer.cpp
-)
+# The embedded web viewer (HTTP server + render worker) also lives in the
+# engine library now -- the Python extension binds it. Nothing to list here.
 
 # ---------------------------------------------------------------------------
 # ssplat_configure_app(<target>)
@@ -71,18 +59,6 @@ function(ssplat_configure_app target)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Embedded web viewer client
-# ---------------------------------------------------------------------------
-if(SSPLAT_BUILD_CLI OR SSPLAT_BUILD_GUI)
-    # Embed the (unchanged) web viewer client into the binary so the exe is
-    # self-contained. Regenerated at configure time when viewer.html changes.
-    ssplat_embed_file(
-        ${SSPLAT_ROOT}/spirulae_splat/viewer/viewer.html
-        ${CMAKE_BINARY_DIR}/app_generated/viewer_html.h
-        ViewerHtml)
-endif()
-
-# ---------------------------------------------------------------------------
 # ssplat-train -- standalone CLI trainer, no Python at runtime. Off by default
 # (unless Torch is unavailable, or the backend is Vulkan, which force it on).
 # ---------------------------------------------------------------------------
@@ -90,22 +66,17 @@ if(SSPLAT_BUILD_CLI)
     add_executable(ssplat-train
         ${SSPLAT_SRC}/app/cli/main.cpp
         ${SSPLAT_SRC}/app/TrainerCore.cpp
-        ${SSPLAT_DATASET_SOURCES}
-        ${SSPLAT_VIEWER_SOURCES}
     )
     ssplat_configure_app(ssplat-train)
     if(WIN32)
         target_link_libraries(ssplat-train PRIVATE ws2_32)
     endif()
 
-    # ---- standalone mesh-extraction CLI (shares the dataset parsers) ----
+    # ---- standalone mesh-extraction CLI ----
     # CUDA-only: the Vulkan backend stubs the meshing kernels
     # (meshing::OccupancyEvaluator), so the tool would throw at startup.
     if(NOT SSPLAT_BACKEND STREQUAL "vulkan")
-        add_executable(ssplat-mesh
-            ${SSPLAT_SRC}/app/cli/mesh_main.cpp
-            ${SSPLAT_DATASET_SOURCES}
-        )
+        add_executable(ssplat-mesh ${SSPLAT_SRC}/app/cli/mesh_main.cpp)
         ssplat_configure_app(ssplat-mesh)
     endif()
 endif()
@@ -166,8 +137,6 @@ if(SSPLAT_BUILD_GUI)
     add_executable(ssplat-gui
         ${SSPLAT_GUI_SOURCES}
         ${SSPLAT_SRC}/app/TrainerCore.cpp
-        ${SSPLAT_DATASET_SOURCES}
-        ${SSPLAT_VIEWER_SOURCES}
     )
     ssplat_configure_app(ssplat-gui)
     target_link_libraries(ssplat-gui PRIVATE imgui_glfw OpenGL::GL)

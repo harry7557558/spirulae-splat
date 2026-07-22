@@ -26,6 +26,7 @@
   #include <arpa/inet.h>
   #include <netinet/in.h>
   #include <netinet/tcp.h>
+  #include <sys/select.h>
   #include <sys/socket.h>
   #include <unistd.h>
   typedef int socket_t;
@@ -167,20 +168,40 @@ void HttpServer::start(const std::string& host, int port) {
 
 void HttpServer::stop() {
     if (!_running.exchange(false)) return;
+    // Do NOT close the listening socket to break accept(): closing an fd that
+    // another thread is blocked in accept() on is undefined by POSIX, and on
+    // Linux the blocked accept() simply never returns -- which hung every
+    // ssplat-train run that had the viewer enabled and keep_viewer_alive off.
+    // serve_loop() select()s with a timeout instead, so clearing _running is
+    // enough; it exits within one poll interval and we close after the join.
+    if (_thread.joinable()) _thread.join();
     if (_listen_fd != -1) {
-        close_socket((socket_t)_listen_fd);   // unblocks accept()
+        close_socket((socket_t)_listen_fd);
         _listen_fd = -1;
     }
-    if (_thread.joinable()) _thread.join();
 }
 
 void HttpServer::serve_loop() {
+    // Poll interval: the worst-case delay between stop() and this thread
+    // noticing. Short enough to feel instant, long enough to be free.
+    static constexpr long kPollUs = 100000;   // 100 ms
+
     while (_running) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET((socket_t)_listen_fd, &readfds);
+        timeval tv{};
+        tv.tv_sec = 0;
+        tv.tv_usec = kPollUs;
+
+        int ready = select((int)_listen_fd + 1, &readfds, nullptr, nullptr, &tv);
+        if (ready <= 0) continue;   // timeout, or interrupted -- re-check _running
+
         socket_t client = accept((socket_t)_listen_fd, nullptr, nullptr);
         if (client == kInvalidSocket) {
             if (_running)
                 continue;    // transient accept error
-            break;           // stop() closed the listener
+            break;           // shutting down
         }
 
         std::string head;

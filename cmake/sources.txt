@@ -11,8 +11,10 @@
 # Any path containing "hip" is dropped by both readers (ROCm sources are not
 # part of either build).
 #
-# Not listed here, on purpose: src/app/** and src/backend/** (their targets own
-# their sources -- see SsplatApps.cmake / the backend modules).
+# Not listed here, on purpose: the rest of src/app/** (cli/, gui/) and
+# src/backend/** -- their targets own those. app/webviewer/ IS listed: the
+# Python extension binds it (src/bindings/bind_viewer.cpp), so it belongs to
+# the library rather than to each app.
 
 [cuda]
 # Everything the CUDA `csrc` library compiles.
@@ -33,14 +35,20 @@ src/mesh/*.cu
 src/mesh/*.cpp
 src/engine/*.cpp
 src/data/*.cpp
+src/data/parsers/*.cpp
+src/app/webviewer/*.cpp
 src/external/*.cpp
+src/external/*.c
 src/bindings/*.cpp
 
 [portable]
 # The torch-free subset: the same list minus the CUDA kernels and minus
-# bindings/ext.cpp (Torch-only). Compiled as csrc_portable by the Vulkan build.
+# src/bindings/ (Torch-only). Compiled as csrc_portable by the Vulkan build.
 src/kernels/bilagrid/*.cpp
 src/mesh/*.cpp
 src/engine/*.cpp
 src/data/*.cpp
+src/data/parsers/*.cpp
+src/app/webviewer/*.cpp
 src/external/*.cpp
+src/external/*.c

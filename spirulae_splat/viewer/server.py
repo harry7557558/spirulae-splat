@@ -90,7 +90,10 @@ class ViewerServer:
         self.stop()
 
     def _build_html(self) -> str:
-        template_path = pathlib.Path(__file__).parent / "viewer.html"
+        # Single source of truth: the C++ viewer embeds this exact file at
+        # build time (cmake/SsplatApps.cmake). Do not add a second copy here.
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        template_path = repo_root / "src" / "app" / "webviewer" / "viewer.html"
         html = template_path.read_text(encoding="utf-8")
 
         # Inject server-side config into the JS

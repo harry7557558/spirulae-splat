@@ -112,6 +112,25 @@ void invert_affine4x4(const double in[16], double out[16]) {
 // ---------------------------------------------------------------------------
 // eval_mode train subset (get_train_eval_split_*, dataparser.py:51-129)
 // ---------------------------------------------------------------------------
+// numpy's `np.linspace(0, n-1, count, dtype=int)` -- the index picker both
+// get_train_eval_split_fraction and the validation split use. numpy computes
+// (k * (n-1)) / (count-1) in that order, TRUNCATES toward zero (dtype=int is a
+// cast, not a round), and pins the last sample to n-1 exactly. Rounding
+// instead selects different frames for most (n, count) pairs, which silently
+// gave the native trainer a different train/val split than the Python one.
+static std::vector<int64_t> linspace_indices(int64_t n, int64_t count) {
+    std::vector<int64_t> out;
+    if (count <= 0 || n <= 0) return out;
+    out.reserve(count);
+    for (int64_t k = 0; k < count; k++) {
+        if (count == 1) { out.push_back(0); continue; }
+        if (k == count - 1) { out.push_back(n - 1); continue; }
+        out.push_back((int64_t)(((double)k * (double)(n - 1))
+                                / (double)(count - 1)));
+    }
+    return out;
+}
+
 std::vector<int64_t> train_subset(int64_t n, const std::vector<std::string>& names,
                                   const DatasetParserConfig& cfg) {
     std::vector<int64_t> keep;
@@ -121,9 +140,7 @@ std::vector<int64_t> train_subset(int64_t n, const std::vector<std::string>& nam
     } else if (cfg.eval_mode == "fraction") {
         int64_t num_train = (int64_t)std::ceil((double)n * cfg.train_split_fraction);
         std::vector<char> flag(n, 0);
-        for (int64_t k = 0; k < num_train; k++)
-            flag[(num_train == 1) ? 0 : (int64_t)std::llround(
-                (double)k * (double)(n - 1) / (double)(num_train - 1))] = 1;
+        for (int64_t idx : linspace_indices(n, num_train)) flag[idx] = 1;
         for (int64_t i = 0; i < n; i++) if (flag[i]) keep.push_back(i);
     } else if (cfg.eval_mode == "interval") {
         for (int64_t i = 0; i < n; i++)
@@ -153,11 +170,7 @@ void assign_val_split(ParsedDataset& ds, float validation_fraction) {
     if (validation_fraction > 0.0f && n > 1) {
         int64_t num_train = (int64_t)std::ceil((double)n * (1.0 - validation_fraction));
         std::vector<char> is_train(n, 0);
-        for (int64_t k = 0; k < num_train; k++) {
-            int64_t idx = (num_train == 1) ? 0
-                : (int64_t)std::llround((double)k * (double)(n - 1) / (double)(num_train - 1));
-            is_train[idx] = 1;
-        }
+        for (int64_t idx : linspace_indices(n, num_train)) is_train[idx] = 1;
         for (int64_t i = 0; i < n; i++) is_val[i] = !is_train[i];
     }
     ds.train_indices.clear();

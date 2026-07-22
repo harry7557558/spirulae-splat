@@ -37,13 +37,16 @@ tests/python/               Python tests (may be stale; see docs/testing.md)
 tests/native/               standalone native benchmarks
 scripts/                    dataset preprocessing CLI tools (Python, standalone)
 viewer/                     standalone WebGL2 + WASM viewer, independent of training
+                              (published as the online viewer -- the GitHub Pages
+                               URL depends on this directory name)
                               (build-time exception: compiles src/data/parsers/*.cpp
                                in place)
 spirulae_splat/             Python package — a *client* of the engine, on its way out
 ├── ss_{trainer,benchmark,viewer,meshing}.py   console-script entry points
 ├── modules/                config dataclasses, training driver, eval metrics, resume
-├── viewer/                 Python HTTP viewer server + viewer.html (html is shared
-│                             with the C++ viewer, which embeds it at build time)
+├── viewer/                 LEGACY Python HTTP viewer server -- superseded by
+│                             _C.WebViewer (src/bindings/bind_viewer.cpp); the
+│                             client lives at src/app/webviewer/viewer.html
 └── splat/cuda/*.py         the extension import + lazy function wrappers
 ```
 
@@ -80,7 +83,9 @@ src/
 ├── app/                    the native applications
 │   ├── cli/                main.cpp (ssplat-train), mesh_main.cpp (ssplat-mesh)
 │   ├── gui/                Dear ImGui desktop app (ssplat-gui)
-│   ├── webviewer/          HTTP server + render worker for the embedded viewer
+│   ├── webviewer/          HTTP server + render worker + viewer.html (the ONE
+│   │                         browser client: embedded in the native binaries,
+│   │                         served by Python, bound as _C.WebViewer)
 │   └── TrainerCore.{h,cpp} the CLI/GUI training loop
 ├── bindings/ext.cpp        the pybind11 module (144 m.def's)
 ├── generated/  app/generated/  instantiations/   GENERATED — do not hand-edit
@@ -217,4 +222,4 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
 Local dataset paths, private capture names, personal directory layouts
 (`/mnt/...`, `/home/<user>/...`, `C:\Users\...`). Standard academic dataset
 names (e.g. Mip-NeRF 360, ZipNeRF) are fine. Run
-`bash scripts/check_private_paths.sh` before pushing.
+`bash tools/check_private_paths.sh` before pushing.

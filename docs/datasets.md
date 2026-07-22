@@ -3,9 +3,25 @@
 ## Supported layouts
 
 Three formats, auto-detected in this order: **Nerfstudio**, then **COLMAP**,
-then **Metashape**. Both the native parsers (`src/data/parsers/*Parser.cpp`) and the
-Python parsers (`spirulae_splat/modules/dataparser.py`) probe in the same
-order.
+then **Metashape**.
+
+The native parsers (`src/data/parsers/*Parser.cpp`) are the implementation.
+They back the CLI trainer, the GUI, the WASM viewer **and** Python, via
+`spirulae_splat.modules.native_dataparser`:
+
+```python
+from spirulae_splat.modules.native_dataparser import parse_dataset, NativeParserConfig
+ds = parse_dataset("/path/to/dataset", NativeParserConfig(eval_mode="interval"))
+ds.c2w          # [N, 3, 4] float32, OpenGL convention, sorted by filename
+ds.intrins      # [N, 4] fx fy cx cy
+ds.points_xyz   # [P, 3] seed cloud
+```
+
+`spirulae_splat/modules/dataparser.py` is the **legacy** second
+implementation, kept until its users migrate. It probes in the same order and
+is held to the native behaviour by `tests/python/test_dataparser_parity.py` —
+see [restructure-proposal.md](restructure-proposal.md) §4.1. Do not add
+features to it; add them to the C++ parsers.
 
 | format | inputs | parser |
 |---|---|---|
@@ -84,4 +100,4 @@ state between them and silently degrades metrics.
 
 Dataset locations belong in arguments or environment variables. See the
 "Do not commit" section of [`../AGENTS.md`](../AGENTS.md) and
-`scripts/check_private_paths.sh`.
+`tools/check_private_paths.sh`.

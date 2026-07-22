@@ -6,7 +6,7 @@
 # (Mip-NeRF 360 / 360_v2, ZipNeRF, ...) are fine -- it is the *paths* that
 # leak a local layout.
 #
-# Usage:  bash scripts/check_private_paths.sh
+# Usage:  bash tools/check_private_paths.sh
 
 cd "$(dirname "$0")/.." || exit 1
 
@@ -15,11 +15,11 @@ PATTERN='/mnt/[a-z]/|/home/[a-z][a-z0-9_-]*/|[A-Za-z]:\\\\[Uu]sers|/media/[a-z][
 # Exclusions:
 #   viewer/js/ssv_wasm.js  - emscripten build output (single minified line)
 #   docs/                  - the restructure proposal quotes the offenders it fixed
-#   scripts/check_private_paths.sh - this file's own pattern
+#   tools/check_private_paths.sh   - this file's own pattern
 hits=$(git grep -nIE "$PATTERN" -- \
     ':!viewer/js/ssv_wasm.js' \
     ':!docs/' \
-    ':!scripts/check_private_paths.sh')
+    ':!tools/check_private_paths.sh')
 
 if [ -n "$hits" ]; then
     echo "Machine-local paths found in tracked files:"

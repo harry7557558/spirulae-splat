@@ -194,7 +194,15 @@ static bool generate_mesh_tensor(
         fdc.data_ptr<float>(), N, cam_ptr, C, cams, cfg, output_path);
 }
 
+// bind_data.cpp   -- native dataset parsers (data/DatasetParser.h).
+// bind_viewer.cpp -- native web-viewer server + post-split camera bake.
+void bind_data(pybind11::module_& m);
+void bind_viewer(pybind11::module_& m);
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+
+    bind_data(m);
+    bind_viewer(m);
 
     // Meshing.h
     m.def("generate_mesh", &generate_mesh_tensor,

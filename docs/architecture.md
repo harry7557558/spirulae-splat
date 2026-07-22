@@ -3,10 +3,10 @@
 ## Layers
 
 ```
-                 ┌──────────────────────────────────────────────────────────┐
-  front ends     │ ssplat-train (CLI)    ssplat-gui (ImGui)   Python package │
-                 │ src/app/cli/          src/app/gui/         spirulae_splat/│
-                 └───────────┬────────────────┬──────────────────┬──────────┘
+                ┌────────────────────────────────────────────────────────────┐
+  front ends    │ ssplat-train (CLI)    ssplat-gui (ImGui)   Python package  │
+                │ src/app/cli/          src/app/gui/         spirulae_splat/ │
+                └────────────┬────────────────┬──────────────────┬───────────┘
                              │                │                  │
                     ┌────────┴────────────────┴───┐              │ pybind11
                     │  TrainerCore (src/app/)     │              │ src/bindings/
@@ -14,19 +14,19 @@
                     │  → step loop                │              │
                     └──────────────┬──────────────┘              │
                                    │                             │
-                 ┌─────────────────┴─────────────────────────────┴──────────┐
+                 ┌─────────────────┴─────────────────────────────┴───────────┐
    engine        │  src/engine/*.cpp — torch-free, CUDA-free, process-global │
                  │  state in EngineState.h; src/data/ owns image I/O         │
-                 └──────────────────────────┬───────────────────────────────┘
+                 └──────────────────────────┬────────────────────────────────┘
                                             │  launch declarations
-                 ┌──────────────────────────┴───────────────────────────────┐
+                 ┌──────────────────────────┴────────────────────────────────┐
    backend seam  │  src/backend/api/*.h  +  BackendRuntime.h                 │
-                 └───────────┬──────────────────────────────┬───────────────┘
+                 └───────────┬──────────────────────────────┬────────────────┘
                              │                              │
-              ┌──────────────┴───────────┐     ┌────────────┴──────────────┐
-   backends   │ CUDA: src/kernels/**/*.cu│     │ Vulkan: src/backend/vulkan│
-              │  + src/instantiations/   │     │  launchers + shaders/     │
-              └──────────────┬───────────┘     └────────────┬──────────────┘
+              ┌──────────────┴────────────┐    ┌────────────┴───────────────┐
+   backends   │ CUDA: src/kernels/**/*.cu │    │ Vulkan: src/backend/vulkan │
+              │  + src/instantiations/    │    │  launchers + shaders/      │
+              └──────────────┬────────────┘    └────────────┬───────────────┘
                              └──────────┬───────────────────┘
                                         │
                     src/shaders/*.slang — shared device math
@@ -47,12 +47,15 @@ repo: read `src/backend/README.md`, then `src/backend/vulkan/README.md`.
 | training session orchestration | `src/app/TrainerCore.cpp` and `spirulae_splat/modules/trainer.py` — *duplicate; being retired* |
 | the actual training step | `Engine*.cpp`, entered via `engine_train_step_managed` |
 | kernels | `src/kernels/**/*.cu` (CUDA) + `src/backend/vulkan/shaders/*.slang` + `src/backend/vulkan/kernels/*.cpp` |
-| web viewer client | `spirulae_splat/viewer/viewer.html` — single source; the C++ viewer embeds it at build time |
-| web viewer server | `src/app/webviewer/{Viewer,HttpServer,RenderWorker}.cpp` and `spirulae_splat/viewer/*.py` — *duplicate; being retired* |
+| web viewer client | `src/app/webviewer/viewer.html` — single source; the C++ viewer embeds it at build time, the Python server reads it from there |
+| web viewer server | `src/app/webviewer/{Viewer,HttpServer,RenderWorker}.cpp` and `spirulae_splat/viewer/*.py` — *duplicate; bound as `_C.WebViewer`, Python copy being retired* |
 | standalone WASM viewer | `viewer/` — independent, but compiles the C++ parsers in place |
 
 Three subsystems are currently implemented twice, once in Python and once in
-C++. That is being collapsed onto the C++ side; see
+C++. Dataset parsing (§4.1) and the viewer server (§4.2) now have the C++
+side bound for Python — `spirulae_splat.modules.native_dataparser` and
+`_C.WebViewer` — so the Python copies are deletable, pending the
+separately-announced commit that removes them. That is being collapsed onto the C++ side; see
 [restructure-proposal.md](restructure-proposal.md) §4. **Do not add a fourth.**
 
 ## The engine

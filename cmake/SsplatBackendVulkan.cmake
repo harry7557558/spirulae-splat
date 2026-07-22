@@ -26,7 +26,7 @@ ssplat_collect_portable_sources(SSPLAT_PORTABLE_SOURCES)
 
 add_library(csrc_portable OBJECT ${SSPLAT_PORTABLE_SOURCES})
 target_compile_definitions(csrc_portable PUBLIC SSPLAT_BACKEND_VULKAN)
-target_include_directories(csrc_portable PUBLIC ${SSPLAT_SRC})
+target_include_directories(csrc_portable PUBLIC ${SSPLAT_SRC} ${CMAKE_BINARY_DIR})
 
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
