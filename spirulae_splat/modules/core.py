@@ -37,7 +37,16 @@ class Renderer:
         use_fused_proj_bwd_optim: bool = False,
         split_batch: bool = False,
         quantization_level: int = 0,
+        upload: bool = True,
     ):
+        """upload=False attaches to a world the engine already holds.
+
+        The native TrainerSession seeds the engine itself (TrainerCore's
+        seed_splats), so re-uploading host tensors here would overwrite it
+        with zeros. The host tensors are still allocated at the same shapes --
+        they are the destination for engine_copy_splats_to_host and the
+        layout `resume_adapt` targets -- they just start empty.
+        """
         for tensor in splats_world:
             assert tensor.is_contiguous(), "Tensor must be contiguous"
 
@@ -113,7 +122,7 @@ class Renderer:
         self.train_frame_scale = 1.0
 
         # Engine path: upload splats to device pool once at init (idempotent on C++ side).
-        if self.primitive in ['3dgs', 'mip', '3dgut'] and not self.use_bvh:
+        if upload and self.primitive in ['3dgs', 'mip', '3dgut'] and not self.use_bvh:
             _C.set_data_3dgs(
                 self.cur_num_splats,
                 *[self._tv(t) for t in self.splats_world]
@@ -277,83 +286,14 @@ class Renderer:
         )
         return loss_dict
 
-    def _build_optim_config(self, step, max_steps, model_config, optim_config):
-        """Build a C++ OptimConfig with all per-step LRs + regularization
-        weights already resolved (incl. train_frame_scale / alpha)."""
-        if optim_config.max_steps is not None:
-            max_steps = optim_config.max_steps
-        alpha = self.train_frame_scale
-        means_lr = optim_config.get_scheduled_lr("means", step, max_steps)
-        if not optim_config.use_scale_agnostic_mean:
-            means_lr *= alpha
-
-        c = _C.OptimConfig()
-        c.lr_means       = means_lr
-        c.lr_quats       = optim_config.get_scheduled_lr("quats",       step, max_steps)
-        c.lr_scales      = optim_config.get_scheduled_lr("scales",      step, max_steps)
-        c.lr_opacities   = optim_config.get_scheduled_lr("opacities",   step, max_steps)
-        c.lr_features_dc = optim_config.get_scheduled_lr("features_dc", step, max_steps)
-        c.lr_features_sh = optim_config.get_scheduled_lr("features_sh", step, max_steps)
-        c.max_gauss_ratio             = model_config.max_gauss_ratio
-        c.scale_regularization_weight = model_config.scale_regularization_weight
-        c.mcmc_opacity_reg_weight     = model_config.opacity_reg
-        c.mcmc_scale_reg_weight       = model_config.scale_reg / alpha
-        c.erank_reg_weight            = model_config.erank_reg
-        c.erank_reg_weight_s3         = model_config.erank_reg_s3
-        c.quat_norm_reg_weight        = model_config.quat_norm_reg
-        c.sh_reg_weight               = model_config.sh_reg
-        c.use_scale_agnostic_mean        = optim_config.use_scale_agnostic_mean
-        c.quantization_level          = self.quantization_level
-        c.sh_optim_bits                  = self.sh_optim_bits
-        c.sh_value_bits                  = self.sh_value_bits
-        c.non_sh_optim_bits              = self.non_sh_optim_bits
-        c.use_per_splat_bias_correction  = optim_config.use_per_splat_bias_correction
-        c.use_fused_proj_bwd_optim       = self.use_fused_proj_bwd_optim
-        c.write_densify_world_grad_score = (
-            float(getattr(model_config, "densify_score_blend_world_grad", 0.0)) > 0.0
-            and model_config.use_revised_densification)
-        c.split_batch     = self.split_batch
-        c.color_is_linear = model_config.splat_color_is_linear
-        c.use_color_trust_region = model_config.splat_color_is_linear
-        c.eps_tr = 1e-6 * 0.01 ** (step / max_steps)  # TODO: make this configurable
-        return c
-
-    def _build_densify_config(self, model_config):
-        alpha = self.train_frame_scale
-        noise_lr_scalar = 1.0 if model_config.use_revised_densification else alpha
-        c = _C.DensifyConfig()
-        c.refine_start_iter             = model_config.refine_start_iter
-        c.refine_stop_num_iter          = model_config.refine_stop_num_iter
-        c.refine_stop_iter              = int(getattr(model_config, "refine_stop_iter", 25000))
-        c.refine_every                  = model_config.refine_every
-        c.growth_factor                 = model_config.growth_factor
-        c.min_opacity                   = model_config.min_opacity
-        c.max_screen_size               = model_config.max_screen_size
-        c.max_screen_size_clip_hardness = model_config.max_screen_size_clip_hardness
-        c.max_world_size                = model_config.max_world_size * alpha
-        c.noise_lr                      = model_config.noise_lr * noise_lr_scalar
-        c.noise_lr_final                = model_config.noise_lr_final * noise_lr_scalar
-        c.use_revised_densification     = model_config.use_revised_densification
-        c.score_mode                    = {
-            "mean":   0,
-            "max":    1,
-            "median": 2,
-            "geom":   3,
-        }[str(getattr(model_config, "densify_score_mode", "mean"))]
-        c.score_blend_world_grad        = float(getattr(
-            model_config, "densify_score_blend_world_grad", 0.0))
-        k_init, k_final, k_warmup = model_config.long_axis_split_opacity_k
-        c.las_split_opacity_k_init      = float(k_init)
-        c.las_split_opacity_k_final     = float(k_final)
-        c.las_split_opacity_k_warmup    = int(k_warmup)
-        return c
-
-    def engine_optim_step(self, step, max_steps, model_config, optim_config):
-        """Run optimizer step via C++ Engine. All tensors managed by C++ pool."""
-        _C.engine_optim_step(
-            step,
-            self._build_optim_config(step, max_steps, model_config, optim_config),
-        )
+    # ---- Removed: the per-step config builders ---------------------------
+    # _build_optim_config / _build_densify_config / engine_optim_step /
+    # engine_densify_step / engine_train_step / engine_train_step_managed
+    # duplicated TrainerCore::build_step_config. Training goes through
+    # `_C.TrainerSession` now (docs/restructure-proposal.md §4.3). What is
+    # left in this class is the piecewise engine API -- forward, render,
+    # checkpoint, the per-subsystem init/optim calls -- which the eval and
+    # viewer paths use and which has no C++ front-end to duplicate.
 
     def engine_init_bilagrid(self, n_grids, rgb_type=None, rgb_LHW=None,
                               depth_LHW=None, normal_LHW=None,
@@ -543,171 +483,6 @@ class Renderer:
         onto ``self.cur_num_splats`` from the checkpoint's state.json. Requires a
         ``save_full_checkpoint=True`` dump."""
         return int(_C.engine_load_checkpoint(str(input_dir)))
-
-    def engine_train_step(self, step, max_steps,
-                          # Forward
-                          sh_degree_to_use,
-                          width, height, camera_model,
-                          viewmats, intrins, dist_coeffs,
-                          # GT data. Per-pixel masks are derived in the slang
-                          # kernel; gt_alpha drives the RGB mask + alpha-sup
-                          # target. apply_loss_for_mask folded into weights
-                          # on the model.py side.
-                          gt_rgb, gt_depth, gt_normal, gt_alpha,
-                          # Loss config
-                          loss_weights, w_ssim, num_loss_scales, compute_loss_map,
-                          loss_map_mode, robust_edge_aware_quantile,
-                          # Configs
-                          model_config, optim_config,
-                          # Bilagrid (pass cam_indices + lrs + tv weights;
-                          # ignored if engine_init_bilagrid_* was never called).
-                          # cam_indices: [C_batch] int32 tensor, or None.
-                          bilagrid_cam_indices=None,
-                          bilagrid_lr_rgb=0.0, bilagrid_lr_depth=0.0, bilagrid_lr_normal=0.0,
-                          bilagrid_tv_weight_rgb=0.0, bilagrid_tv_weight_depth=0.0,
-                          bilagrid_tv_weight_normal=0.0,
-                          # PPISP (ignored if engine_init_ppisp was never called).
-                          # Reuses bilagrid_cam_idx for the camera selector.
-                          ppisp_lr=0.0,
-                          ppisp_reg_exposure_mean=0.0, ppisp_reg_vig_center=0.0,
-                          ppisp_reg_vig_non_pos=0.0, ppisp_reg_vig_channel_var=0.0,
-                          ppisp_reg_color_mean=0.0, ppisp_reg_crf_channel_var=0.0,
-                          # When True, PPISP forward runs BEFORE bilagrid (and
-                          # PPISP bwd runs AFTER bilagrid bwd). Default False:
-                          # bilagrid -> PPISP. Ignored when only one is enabled.
-                          apply_ppisp_before_bilagrid=False,
-                          # Background (ignored if engine_init_background_* was
-                          # never called).
-                          bg_lr_dc=0.0, bg_lr_sh=0.0,
-                          bg_randomize_weight=0.0, bg_seed=0,
-                          # Image-space overexposure regularization (model.py
-                          # config field). Zero -> kernel not launched.
-                          overexposure_reg_weight=0.0,
-                          # Combined bilagrid + PPISP color-shift regularizer
-                          # (design 1). Active when at least one of bilagrid_rgb
-                          # / PPISP is enabled. 0 disables.
-                          color_shift_reg_weight=0.0,
-                          color_shift_reg_beta=0.0):
-        """Single fused training step (set_camera + set_gt + fwd + loss/bwd + optim + densify).
-        All input tensors are CPU; returns loss_dict for verbose."""
-        max_steps_lr = optim_config.max_steps if optim_config.max_steps is not None else max_steps
-
-        cfg = _C.EngineStepConfig()
-        cfg.loss.weights          = loss_weights
-        cfg.loss.w_ssim           = float(w_ssim)
-        cfg.loss.num_loss_scales  = int(num_loss_scales)
-        cfg.loss.loss_scale_min_pixels = int(getattr(model_config, "loss_scale_min_pixels", 0))
-        cfg.loss.compute_loss_map = bool(compute_loss_map)
-        cfg.loss.loss_map_mode = int(loss_map_mode)
-        cfg.loss.robust_edge_aware_quantile = float(robust_edge_aware_quantile)
-        cfg.loss.overexposure_reg_weight = float(overexposure_reg_weight)
-        cfg.loss.color_shift_reg_weight = float(color_shift_reg_weight)
-        cfg.loss.color_shift_reg_beta   = float(color_shift_reg_beta)
-        # When False, GT depth is linear (z) depth and is converted to ray
-        # depth in place on upload (set_training_data), to match the ray depth
-        # the rasterizer renders.
-        cfg.loss.input_depth_is_ray_depth = bool(model_config.input_depth_is_ray_depth)
-        cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
-        cfg.densify  = self._build_densify_config(model_config)
-        cfg.bilagrid = self._build_bilagrid_step_config(
-            bilagrid_lr_rgb, bilagrid_lr_depth, bilagrid_lr_normal,
-            bilagrid_tv_weight_rgb, bilagrid_tv_weight_depth, bilagrid_tv_weight_normal)
-        cfg.ppisp    = self._build_ppisp_step_config(
-            ppisp_lr, ppisp_reg_exposure_mean, ppisp_reg_vig_center,
-            ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,
-            ppisp_reg_color_mean, ppisp_reg_crf_channel_var,
-            run_before_bilagrid=apply_ppisp_before_bilagrid)
-        cfg.background = self._build_background_step_config(
-            bg_lr_dc, bg_lr_sh, bg_randomize_weight, bg_seed)
-
-        result = _C.engine_train_step(
-            step, max_steps,
-            self.primitive, sh_degree_to_use, self.packed,
-            width, height, camera_model.upper(),
-            self._tv(viewmats), self._tv(intrins), self._tv(dist_coeffs),
-            self._tv(gt_rgb), self._tv(gt_depth), self._tv(gt_normal), self._tv(gt_alpha),
-            self._tv(bilagrid_cam_indices),
-            cfg,
-        )
-        # Update Python-side cur_num_splats (densification happened in C++)
-        num_added = int(result.pop("num_added", 0))
-        result.pop("cur_num_splats", None)
-        result.pop("max_num_splats", None)
-        self.cur_num_splats += num_added
-        self.sh_degree_to_use = sh_degree_to_use
-        return result
-
-    def engine_train_step_managed(self, step, max_steps,
-                                  sh_degree_to_use,
-                                  loss_weights, w_ssim, num_loss_scales,
-                                  compute_loss_map, loss_map_mode,
-                                  robust_edge_aware_quantile,
-                                  model_config, optim_config,
-                                  bilagrid_lr_rgb=0.0, bilagrid_lr_depth=0.0,
-                                  bilagrid_lr_normal=0.0,
-                                  bilagrid_tv_weight_rgb=0.0,
-                                  bilagrid_tv_weight_depth=0.0,
-                                  bilagrid_tv_weight_normal=0.0,
-                                  ppisp_lr=0.0,
-                                  ppisp_reg_exposure_mean=0.0, ppisp_reg_vig_center=0.0,
-                                  ppisp_reg_vig_non_pos=0.0, ppisp_reg_vig_channel_var=0.0,
-                                  ppisp_reg_color_mean=0.0, ppisp_reg_crf_channel_var=0.0,
-                                  apply_ppisp_before_bilagrid=False,
-                                  bg_lr_dc=0.0, bg_lr_sh=0.0,
-                                  bg_randomize_weight=0.0, bg_seed=0,
-                                  overexposure_reg_weight=0.0,
-                                  color_shift_reg_weight=0.0,
-                                  color_shift_reg_beta=0.0):
-        """DataManager-driven fused training step.
-
-        Same EngineStepConfig as ``engine_train_step`` but no per-batch tensors —
-        the C++ engine pulls the next batch from its installed DataManager
-        (see ``_C.engine_setup_data_manager``) and dispatches the fused
-        forward + loss/bwd + optim + densify pipeline. Returns the same
-        loss_dict shape."""
-        max_steps_lr = optim_config.max_steps if optim_config.max_steps is not None else max_steps
-
-        cfg = _C.EngineStepConfig()
-        cfg.loss.weights          = loss_weights
-        cfg.loss.w_ssim           = float(w_ssim)
-        cfg.loss.num_loss_scales  = int(num_loss_scales)
-        cfg.loss.loss_scale_min_pixels = int(getattr(model_config, "loss_scale_min_pixels", 0))
-        cfg.loss.compute_loss_map = bool(compute_loss_map)
-        cfg.loss.loss_map_mode = int(loss_map_mode)
-        cfg.loss.robust_edge_aware_quantile = float(robust_edge_aware_quantile)
-        cfg.loss.overexposure_reg_weight = float(overexposure_reg_weight)
-        cfg.loss.color_shift_reg_weight = float(color_shift_reg_weight)
-        cfg.loss.color_shift_reg_beta   = float(color_shift_reg_beta)
-        cfg.optim    = self._build_optim_config(step, max_steps_lr, model_config, optim_config)
-        cfg.densify  = self._build_densify_config(model_config)
-        cfg.bilagrid = self._build_bilagrid_step_config(
-            bilagrid_lr_rgb, bilagrid_lr_depth, bilagrid_lr_normal,
-            bilagrid_tv_weight_rgb, bilagrid_tv_weight_depth, bilagrid_tv_weight_normal)
-        cfg.ppisp    = self._build_ppisp_step_config(
-            ppisp_lr, ppisp_reg_exposure_mean, ppisp_reg_vig_center,
-            ppisp_reg_vig_non_pos, ppisp_reg_vig_channel_var,
-            ppisp_reg_color_mean, ppisp_reg_crf_channel_var,
-            run_before_bilagrid=apply_ppisp_before_bilagrid)
-        cfg.background = self._build_background_step_config(
-            bg_lr_dc, bg_lr_sh, bg_randomize_weight, bg_seed)
-
-        result = _C.engine_train_step_managed(
-            step, max_steps,
-            self.primitive, sh_degree_to_use, self.packed,
-            cfg,
-        )
-        num_added = int(result.pop("num_added", 0))
-        result.pop("cur_num_splats", None)
-        result.pop("max_num_splats", None)
-        self.cur_num_splats += num_added
-        self.sh_degree_to_use = sh_degree_to_use
-        return result
-
-    def engine_densify_step(self, step, max_steps, model_config):
-        """Run densification step via C++ Engine. All tensors managed by C++ pool."""
-        num_added = _C.engine_densify_step(step, max_steps,
-                                           self._build_densify_config(model_config))
-        self.cur_num_splats += num_added
 
     def engine_sync_splats_to_host(self):
         """Copy device splat data back to CPU PyTorch parameters after optim+densify."""

@@ -2,14 +2,21 @@
 
 The C++ parsers are the ones the CLI trainer, the GUI and the WASM viewer
 already use. This module is the Python client for them, and is the intended
-replacement for `dataparser.py` + `colmap_utils.py` + `metashape_utils.py` and
-the parsing half of `camera_utils.py` / `dataset.py`.
+replacement for the parsing implementation that used to live in
+`dataparser.py` + `colmap_utils.py` + `metashape_utils.py` + `camera_utils.py`.
+What became of each: the config dataclass stayed in `dataparser.py`; the COLMAP
+and Metashape readers moved to `scripts/`, which still parses in Python for
+preprocessing; and `camera_utils.py` stayed put but is now on no code path --
+it is the reference implementation for the `orientation_method` /
+`center_method` options the native parser does not implement yet (see
+docs/notes/pose-normalization.md).
 
-Nothing here imports nerfstudio or torch.
+`parse_dataset()` imports neither nerfstudio nor torch. `to_dataparser_outputs()`
+does import torch, because the dict it builds is made of torch tensors -- it is
+the compatibility shim that keeps `dataset.py` / `datamanager.py` (the Python
+eval pass's image loading) and `model.py` working off a native parse.
 
-The deletion of the Python implementation is a separate, later commit; until
-then `tests/python/test_dataparser_parity.py` asserts the two agree. See
-docs/restructure-proposal.md §4.1.
+See docs/restructure-proposal.md §4.1.
 """
 
 from __future__ import annotations
@@ -44,6 +51,13 @@ class NativeParserConfig:
 
     data_format: Optional[Literal["colmap", "nerfstudio", "metashape"]] = None
     """None = auto-detect (nerfstudio, then COLMAP, then Metashape)."""
+
+    split: Literal["train", "eval"] = "train"
+    """Which side of the eval_mode split to return. Everything derived from
+        the camera set (train_frame_scale, train_to_normalized, the outlier
+        filter) is computed over ALL frames before the split, so the two
+        parses agree frame-for-frame. eval_mode="all" gives the full set on
+        both sides."""
 
     recon_dir: str = ""
     """COLMAP reconstruction dir relative to the dataset dir; "" = auto."""
@@ -85,7 +99,48 @@ class NativeParserConfig:
         cfg.rescale_camera_to_fit = float(self.rescale_camera_to_fit)
         cfg.downscale_rounding_mode = str(self.downscale_rounding_mode)
         cfg.metashape_component = int(self.metashape_component)
+        cfg.split = str(self.split)
         return cfg
+
+
+def to_native_parser_config(cfg, split: str = "train") -> NativeParserConfig:
+    """`SpirulaeSplatDataParserConfig` -> `NativeParserConfig`.
+
+    Field names match except `colmap_recon_dir` -> `recon_dir`.
+    Deliberately dropped, because the native parsers do not implement them and
+    `TrainerSession.check_config()` already rejects or warns about each:
+    scene_scale, orientation_method, center_method, auto_scale_poses,
+    train_frame (only "points"). depth_unit_scale_factor is a load-time
+    scaling applied by dataset.py, not a parse-time one.
+    """
+    return NativeParserConfig(
+        data_format=cfg.data_format,
+        recon_dir=cfg.colmap_recon_dir or "",
+        image_dir=cfg.image_dir,
+        mask_dir=cfg.mask_dir,
+        depth_dir=cfg.depth_dir,
+        normal_dir=cfg.normal_dir,
+        validation_fraction=cfg.validation_fraction,
+        eval_mode=cfg.eval_mode,
+        train_split_fraction=cfg.train_split_fraction,
+        eval_interval=cfg.eval_interval,
+        outlier_threshold=cfg.outlier_threshold,
+        rescale_camera_to_fit=_rescale_to_native(cfg.rescale_camera_to_fit),
+        downscale_rounding_mode=cfg.downscale_rounding_mode,
+        metashape_xml=cfg.metashape_xml or "",
+        metashape_ply=cfg.metashape_ply or "",
+        metashape_psx=cfg.metashape_psx or "",
+        split=split,
+    )
+
+
+def _rescale_to_native(v) -> float:
+    """Union[bool, int] -> the native float (0 = off, -1 = auto-detect)."""
+    if v is None or v is False:
+        return 0.0
+    if v is True:
+        return -1.0
+    return float(v)
 
 
 @dataclass
@@ -159,3 +214,74 @@ def parse_dataset(
     fmt = config.data_format or ""
     ds = _native().parse_dataset(str(dataset_dir), config.to_native(), fmt)
     return _from_native(ds)
+
+
+# ---------------------------------------------------------------------------
+# dataparser_outputs adapter
+# ---------------------------------------------------------------------------
+# The shape `modules/dataparser.py` used to return. Still needed because
+# `dataset.py` / `datamanager.py` load images for the Python eval pass, and
+# `model.py` takes cameras + a seed cloud. Training does NOT go through this:
+# it drives the native TrainerSession, which parses on its own.
+
+_MODEL_NAMES = ("PINHOLE", "FISHEYE", "EQUISOLID", "EQUIRECTANGULAR")
+
+
+def _model_id_to_name():
+    _C = _native()
+    return {int(_C.camera_model_from_name(n)): n for n in _MODEL_NAMES}
+
+
+def to_dataparser_outputs(ds: ParsedDataset, depth_unit_scale_factor: float = 0.001,
+                          train_frame: str = "points") -> dict:
+    """`ParsedDataset` -> the dict `SpirulaeSplatDataset` / the model consume."""
+    import torch
+    from spirulae_splat.modules.camera import Cameras
+
+    id_to_name = _model_id_to_name()
+    n = ds.num_cameras
+
+    intrins = torch.from_numpy(np.ascontiguousarray(ds.intrins)).float()
+    cameras = Cameras(
+        intrins=intrins,
+        distortion_params=torch.from_numpy(
+            np.ascontiguousarray(ds.dist_coeffs)).float(),
+        height=torch.from_numpy(np.ascontiguousarray(ds.heights)).to(torch.int32),
+        width=torch.from_numpy(np.ascontiguousarray(ds.widths)).to(torch.int32),
+        camera_to_worlds=torch.from_numpy(np.ascontiguousarray(ds.c2w)).float(),
+        camera_type=[id_to_name[int(m)] for m in ds.camera_models],
+        metadata={},
+    )
+
+    # dataparser_transforms.json compatibility. The native parser reports the
+    # train->normalized similarity as one 4x4; the legacy pair splits it into a
+    # unit-rotation transform plus a scalar. Only ever consumed by external
+    # tooling -- nothing in this repo reads the file back.
+    T = np.asarray(ds.train_to_normalized, dtype=np.float64).reshape(4, 4)
+    scale = float(np.linalg.norm(T[:3, 0])) or 1.0
+    transform = torch.from_numpy(T[:3, :] / scale).float()
+
+    def _or_none(seq):
+        seq = [str(s) for s in seq]
+        return seq if any(seq) else None
+
+    return dict(
+        cameras=cameras,
+        image_filenames=[str(s) for s in ds.image_filenames],
+        mask_filenames=_or_none(ds.mask_filenames),
+        dataparser_scale=scale,
+        dataparser_transform=transform,
+        train_frame=train_frame,
+        train_frame_scale=float(ds.train_frame_scale),
+        train_to_normalized_transform=torch.from_numpy(T).float(),
+        metadata={
+            "depth_filenames": _or_none(ds.depth_filenames),
+            "depth_unit_scale_factor": float(depth_unit_scale_factor),
+            "normal_filenames": _or_none(ds.normal_filenames),
+            "points3D_xyz": torch.from_numpy(
+                np.ascontiguousarray(ds.points_xyz)).float(),
+            "points3D_rgb": torch.from_numpy(
+                np.ascontiguousarray(ds.points_rgb)).to(torch.uint8),
+            "val_indices": [int(i) for i in ds.val_indices],
+        },
+    )

@@ -575,7 +575,11 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
         ds.points = read_points3D_text(recon_dir);
     else if (cfg.require_image_files)
         ds.points = read_points3D_binary(recon_dir);   // throws "cannot open"
-    dsparse::assign_val_split(ds, cfg.validation_fraction);
+    // validation_fraction holds out part of the TRAIN set; the eval split is
+    // already a held-out set, so it is all "train" from the DataManager's
+    // point of view.
+    dsparse::assign_val_split(
+        ds, cfg.split == "eval" ? 0.0f : cfg.validation_fraction);
     return ds;
 }
 

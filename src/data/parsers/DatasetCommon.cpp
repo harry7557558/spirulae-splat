@@ -25,7 +25,12 @@ namespace dsparse {
 //   R_align = rotation taking `up` to +Z (Rodrigues)
 //   center  = mean camera position
 //   scale_factor = 1 / max |R_align @ (pos - center)|
-// TODO: "pca" / "vertical" / "gsplat" / "focus" methods.
+// TODO: "pca" / "vertical" / "gsplat" orientation_method and "focus" /
+// "gsplat" center_method. This implements the up/poses pair only;
+// check_config() warns when the config asks for anything else. The reference
+// implementation for the rest is kept in Python, on no code path:
+// spirulae_splat/modules/camera_utils.py plus the call-site algebra in
+// docs/notes/pose-normalization.md.
 // ---------------------------------------------------------------------------
 double compute_normalized_transform(const std::vector<float>& c2w, int64_t n,
                                      double T_out[16]) {
@@ -160,6 +165,22 @@ std::vector<int64_t> train_subset(int64_t n, const std::vector<std::string>& nam
     }
     if (keep.empty())
         throw std::runtime_error("eval_mode split left no training images");
+
+    if (cfg.split == "eval") {
+        // eval_mode="all" means "all images for any split" (dataparser.py),
+        // so the eval side is the full set, not the empty complement.
+        if (cfg.eval_mode == "all") return keep;
+        std::vector<char> is_train(n, 0);
+        for (int64_t i : keep) is_train[i] = 1;
+        std::vector<int64_t> other;
+        for (int64_t i = 0; i < n; i++) if (!is_train[i]) other.push_back(i);
+        // Legal to be empty (e.g. train_split_fraction=1.0); the caller's cue
+        // to skip eval entirely.
+        return other;
+    }
+    if (cfg.split != "train")
+        throw std::runtime_error("unknown split '" + cfg.split +
+                                 "' (expected 'train' or 'eval')");
     return keep;
 }
 

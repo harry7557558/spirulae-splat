@@ -15,6 +15,15 @@ plain list of glob patterns relative to the repo root, read line-by-line by
 the pip build never needs CMake installed. Adding a source directory means
 editing that file once.
 
+Two files that belong to `src/app/` are in that list on purpose:
+`app/webviewer/*.cpp` and `app/TrainerCore.cpp`. The Python extension binds
+both (`bindings/bind_viewer.cpp`, `bindings/bind_trainer.cpp`), so they live
+in the engine library and every app target — plus the extension — shares one
+build of them, rather than each app compiling its own copy. The consequence
+for `setup.py`: it has to reproduce the `viewer.html` byte-array embed that
+CMake does (`embed_viewer_html()`), because `Viewer.cpp` includes the
+generated header.
+
 For development, always use CMake via the dev scripts.
 
 ## CMake layout

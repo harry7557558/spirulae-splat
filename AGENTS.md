@@ -15,11 +15,16 @@ keep working**, on every change.
 Direction of travel, so you don't push the wrong way:
 
 - New functionality goes in C++ first. Python gets a binding, not a port.
-- Duplicated Python/C++ subsystems are being collapsed onto the C++ side.
-  Don't add a second implementation of anything.
-- `nerfstudio` / `gsplat` are **not** runtime dependencies of the engine or
-  the native apps. A few Python modules and `scripts/` still import
-  nerfstudio; that is legacy surface, not something to extend.
+- Duplicated Python/C++ subsystems have been collapsed onto the C++ side.
+  Don't add a second implementation of anything. Dataset parsing, the viewer
+  server and the training driver each exist **once**, in C++, with a Python
+  binding: `native_dataparser.py`, `_C.WebViewer`, `_C.TrainerSession`. The
+  Python implementations were deleted once a parity gate proved each pair
+  agreed; those gates now hold golden values (see
+  [docs/testing.md](docs/testing.md) §4-6). Per-step training logic belongs in
+  `TrainerCore::build_step_config`, not in `model.py`.
+- `nerfstudio` / `gsplat` are **not** dependencies of anything here any more,
+  engine or Python. Don't reintroduce them.
 
 ## Repo map
 
@@ -43,10 +48,14 @@ viewer/                     standalone WebGL2 + WASM viewer, independent of trai
                                in place)
 spirulae_splat/             Python package — a *client* of the engine, on its way out
 ├── ss_{trainer,benchmark,viewer,meshing}.py   console-script entry points
-├── modules/                config dataclasses, training driver, eval metrics, resume
-├── viewer/                 LEGACY Python HTTP viewer server -- superseded by
-│                             _C.WebViewer (src/bindings/bind_viewer.cpp); the
-│                             client lives at src/app/webviewer/viewer.html
+├── modules/                what has no C++ counterpart: config dataclasses
+│                             (the config source of truth), checkpoint resume,
+│                             eval metrics (torch LPIPS/SSIM) + the image
+│                             loading eval needs. native_{dataparser,trainer}.py
+│                             are the adapters onto the C++ implementations.
+│                             camera_utils.py is on NO code path -- it is the
+│                             reference for the unported orientation_method /
+│                             center_method (docs/notes/pose-normalization.md)
 └── splat/cuda/*.py         the extension import + lazy function wrappers
 ```
 
@@ -84,10 +93,17 @@ src/
 │   ├── cli/                main.cpp (ssplat-train), mesh_main.cpp (ssplat-mesh)
 │   ├── gui/                Dear ImGui desktop app (ssplat-gui)
 │   ├── webviewer/          HTTP server + render worker + viewer.html (the ONE
-│   │                         browser client: embedded in the native binaries,
-│   │                         served by Python, bound as _C.WebViewer)
-│   └── TrainerCore.{h,cpp} the CLI/GUI training loop
-├── bindings/ext.cpp        the pybind11 module (144 m.def's)
+│   │                         browser client: embedded into the engine library,
+│   │                         so CLI, GUI and _C.WebViewer serve the same bytes)
+│   └── TrainerCore.{h,cpp} the ONE training driver: config -> dataset ->
+│                             seeding -> step loop. CLI, GUI and Python all
+│                             drive this; it lives in the engine library
+│                             (cmake/sources.txt), not in the app targets.
+├── bindings/               the pybind11 module
+│   ├── ext.cpp             the bulk of it (144 m.def's)
+│   ├── bind_data.cpp       native dataset parsers
+│   ├── bind_viewer.cpp     native web-viewer server + post-split bake
+│   └── bind_trainer.cpp    SsplatConfig + TrainerSession
 ├── generated/  app/generated/  instantiations/   GENERATED — do not hand-edit
 └── external/               vendored (miniz, stb, npy)
 ```

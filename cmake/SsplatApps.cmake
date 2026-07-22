@@ -65,7 +65,6 @@ endfunction()
 if(SSPLAT_BUILD_CLI)
     add_executable(ssplat-train
         ${SSPLAT_SRC}/app/cli/main.cpp
-        ${SSPLAT_SRC}/app/TrainerCore.cpp
     )
     ssplat_configure_app(ssplat-train)
     if(WIN32)
@@ -136,7 +135,6 @@ if(SSPLAT_BUILD_GUI)
     file(GLOB SSPLAT_GUI_SOURCES CONFIGURE_DEPENDS ${SSPLAT_SRC}/app/gui/*.cpp)
     add_executable(ssplat-gui
         ${SSPLAT_GUI_SOURCES}
-        ${SSPLAT_SRC}/app/TrainerCore.cpp
     )
     ssplat_configure_app(ssplat-gui)
     target_link_libraries(ssplat-gui PRIVATE imgui_glfw OpenGL::GL)

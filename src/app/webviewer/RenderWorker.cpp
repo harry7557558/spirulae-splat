@@ -521,6 +521,11 @@ float viewer_camera_size_heuristic(const PostSplitCameras& post) {
 }
 
 float viewer_upload_cameras(const PostSplitCameras& post) {
+    // No training cameras is a legitimate state: ss_viewer.py serves a bare
+    // PLY, which has none. Skip the upload rather than initializing an
+    // empty camera table -- the frustum overlay and the thumbnail cache
+    // simply have nothing to draw, and engine_viewer_init rejects N_post=0.
+    if (post.n_post <= 0) return 0.0f;
     float camera_size = viewer_camera_size_heuristic(post);
     engine_viewer_init(
         tvp(post.post_models.data(), 4, {post.n_post}),

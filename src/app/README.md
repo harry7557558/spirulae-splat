@@ -189,7 +189,17 @@ text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
   Verification scripts were session-scratch; the approach: flatten a tyro
   config, diff against the CLI's `config.json` dump.
 
-## Python → C++ port mapping (all in main.cpp unless noted)
+## Python → C++ port mapping (all in `TrainerCore.cpp` unless noted)
+
+As of phase 7 (docs/restructure-proposal.md §4.3) this table documents
+*history*, not a live duplication: `TrainerCore.cpp` is compiled into the
+engine library and bound to Python as `_C.TrainerSession`
+(`bindings/bind_trainer.cpp`), so the C++ column is the single
+implementation and the Python column is a client. The Python functions
+listed here still exist — users are on that path and breakage is paced, not
+rushed — and `tests/python/test_trainer_parity.py` asserts the two produce an
+identical `EngineStepConfig` for every step of every preset. Change one side
+without the other and that gate fails.
 
 | Python | C++ |
 |---|---|

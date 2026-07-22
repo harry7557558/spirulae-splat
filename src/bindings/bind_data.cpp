@@ -65,6 +65,7 @@ void bind_data(py::module_& m) {
         .def_readwrite("eval_mode", &DatasetParserConfig::eval_mode)
         .def_readwrite("train_split_fraction", &DatasetParserConfig::train_split_fraction)
         .def_readwrite("eval_interval", &DatasetParserConfig::eval_interval)
+        .def_readwrite("split", &DatasetParserConfig::split)
         .def_readwrite("outlier_threshold", &DatasetParserConfig::outlier_threshold)
         .def_readwrite("rescale_camera_to_fit", &DatasetParserConfig::rescale_camera_to_fit)
         .def_readwrite("downscale_rounding_mode", &DatasetParserConfig::downscale_rounding_mode)

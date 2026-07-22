@@ -17,6 +17,7 @@
 """Script to convert Metashape data into Nerfstudio format."""
 
 import json
+import sys
 from pathlib import Path
 from dataclasses import dataclass
 import tyro
@@ -31,7 +32,11 @@ except ImportError:
 
 from typing import Optional
 
-from spirulae_splat.modules.metashape_utils import *
+# Preprocessing-only helper, moved out of the package alongside the
+# dataparser deletion (docs/restructure-proposal.md §4.1): the engine and the
+# trainer no longer parse in Python, but these scripts still do.
+sys.path.insert(0, str(Path(__file__).parent))
+from metashape_utils import *
 
 
 @dataclass

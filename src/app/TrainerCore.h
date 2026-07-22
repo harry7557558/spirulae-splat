@@ -1,15 +1,24 @@
 #pragma once
 
 // TrainerCore -- the engine-side training session shared by the standalone
-// CLI (main.cpp) and the native GUI (gui/). Extracted from main.cpp; the
-// per-step plumbing remains a direct port of the Python managed-path trainer
-// (see the mapping table in app/README.md):
+// CLI (app/cli/main.cpp), the native GUI (app/gui/) and, via
+// bindings/bind_trainer.cpp, Python. This is the single training driver;
+// it started as a port of the Python managed path (the mapping table in
+// app/README.md), and the Python side is now a client of it rather than a
+// second implementation. The functions it superseded:
 //   model.py  _build_loss_weights / engine_train_step_managed
 //   core.py   _build_optim_config / _build_densify_config
 //   optimizer.py get_scheduled_lr
 //   model.py  populate_modules (seeding) / _maybe_init_bilagrid /
 //             background + color-space init
 //   trainer.py train() save cadence / _setup_cpp_data_manager (non-warp)
+//
+// Those still exist for now (users are on the Python path and breakage is
+// paced, not rushed -- docs/restructure-proposal.md §7.1), and
+// tests/python/test_trainer_parity.py asserts build_step_config() and the
+// Python path emit an identical EngineStepConfig for every step. Change one
+// side and that gate fails; the fix is to delete the Python side, not to
+// re-port.
 //
 // TrainerSession splits the run into phases so front-ends can interleave
 // their own UI between them:
@@ -145,6 +154,21 @@ public:
     // Human-readable progress/warning messages. Default (unset) = stdout.
     std::function<void(const std::string&)> log_fn;
 
+    // Set by a front-end that implements the feature itself, so check_config()
+    // stops rejecting it. The Python trainer does checkpoint resume (with its
+    // codec/adapt logic) and eval (LPIPS is a torch model); the standalone CLI
+    // does neither, and its guards must keep firing.
+    bool front_end_handles_resume = false;
+    bool front_end_handles_eval   = false;
+
+    // Output-dir / config.json conventions. A front-end that owns them sets
+    // out_dir_override before setup_engine() and clears write_config_json:
+    // the Python trainer dumps the *Python dataclass* config.json that
+    // ss_trainer.py --resume reads back, which is a different (and richer)
+    // shape than save_config_json()'s.
+    std::string out_dir_override;      // "" = derive from cfg
+    bool        write_config_json = true;
+
     // Filled by load_dataset().
     ParsedDataset ds;
     PostSplitCameras post;
@@ -181,6 +205,14 @@ public:
     // The training loop. Returns when all steps ran or stop_requested was
     // set (a final checkpoint is saved either way unless steps_per_save==0).
     void train(const TrainerCallbacks& cb = {});
+
+    // One step: build the EngineStepConfig for `step` and run it. This is the
+    // whole of train()'s per-step work, and the reason TrainerCore exists --
+    // build_step_config() is the ported logic that would otherwise drift.
+    // Front-ends that keep their own loop (the Python trainer, for resume /
+    // profiling / eval / debug dumps) call this instead of train(). The
+    // caller must hold engine_mutex.
+    std::map<std::string, float> train_step(int step);
 
     void save_checkpoint(int step);
 

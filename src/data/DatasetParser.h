@@ -100,8 +100,7 @@ struct DatasetParserConfig {
     // matching get_train_eval_split_fraction). 0 = no validation set.
     float validation_fraction = 0.0f;
 
-    // Train/eval split (dataparser.py eval_mode). The CLI has no eval pass
-    // yet, so eval images are simply excluded from the parsed dataset:
+    // Train/eval split (dataparser.py eval_mode):
     //   "all"      -> every image trains (default).
     //   "fraction" -> linspace-spread ceil(N * train_split_fraction) train.
     //   "interval" -> index % eval_interval == 0 is eval, rest train.
@@ -109,6 +108,17 @@ struct DatasetParserConfig {
     std::string eval_mode = "all";
     float       train_split_fraction = 0.9f;
     int         eval_interval = 8;
+
+    // Which side of that split to return. "train" is what training wants;
+    // "eval" returns the complement, for a front-end that runs an eval pass
+    // (the Python trainer does -- LPIPS is a torch model). Everything derived
+    // from the camera set -- train_frame_scale, train_to_normalized, the
+    // outlier filter -- is computed over ALL frames BEFORE the split, so the
+    // two parses agree frame-for-frame and with dataparser.py, which returns
+    // both splits from one call. "all" makes both sides the full set, again
+    // matching Python. An empty eval split is legal (and the caller's cue to
+    // skip eval); an empty train split is an error.
+    std::string split = "train";
 
     // Reject frames whose camera position is more than this many MADs from
     // the geometric median of all camera positions (dataparser.py:319-325).
@@ -271,8 +281,8 @@ double compute_normalized_transform(const std::vector<float>& c2w, int64_t n,
 // inv([A|b; 0 1]) for a general invertible 3x3 A (row-major 4x4 in/out).
 void invert_affine4x4(const double in[16], double out[16]);
 
-// eval_mode train subset over N sorted frames; identity for "all".
-// `names` are image filenames (used by eval_mode="filename").
+// eval_mode subset over N sorted frames, honouring cfg.split; identity for
+// "all". `names` are image filenames (used by eval_mode="filename").
 std::vector<int64_t> train_subset(int64_t n, const std::vector<std::string>& names,
                                   const DatasetParserConfig& cfg);
 

@@ -8,13 +8,13 @@
                 │ src/app/cli/          src/app/gui/         spirulae_splat/ │
                 └────────────┬────────────────┬──────────────────┬───────────┘
                              │                │                  │
-                    ┌────────┴────────────────┴───┐              │ pybind11
-                    │  TrainerCore (src/app/)     │              │ src/bindings/
-                    │  config → dataset → seeding │              │   ext.cpp
-                    │  → step loop                │              │
-                    └──────────────┬──────────────┘              │
-                                   │                             │
-                 ┌─────────────────┴─────────────────────────────┴───────────┐
+                    ┌────────┴────────────────┴──────────────────┴┐ pybind11
+                    │  TrainerCore (src/app/)                     │ src/bindings/
+                    │  config → dataset → seeding → step loop     │   ext.cpp
+                    │  Python enters here too: _C.TrainerSession  │   bind_data
+                    └───────────────────────┬─────────────────────┘   bind_viewer
+                                            │                         bind_trainer
+                 ┌──────────────────────────┴────────────────────────────────┐
    engine        │  src/engine/*.cpp — torch-free, CUDA-free, process-global │
                  │  state in EngineState.h; src/data/ owns image I/O         │
                  └──────────────────────────┬────────────────────────────────┘
@@ -42,21 +42,30 @@ repo: read `src/backend/README.md`, then `src/backend/vulkan/README.md`.
 |---|---|
 | training config (source of truth) | Python dataclasses in `spirulae_splat/modules/` → codegen → `src/app/generated/cli_config.h` |
 | dataset parsing (native) | `src/data/parsers/{Colmap,Nerfstudio,Metashape}Parser.cpp`, `DatasetCommon.cpp`, `DatasetParser.h` |
-| dataset parsing (Python) | `spirulae_splat/modules/{dataparser,colmap_utils,metashape_utils,camera_utils}.py` — *duplicate; being retired* |
+| dataset parsing (Python client) | `spirulae_splat/modules/native_dataparser.py` — an adapter, not a parser. The Python implementation is gone; `dataparser.py` is now just the config dataclass, `scripts/{colmap,metashape}_utils.py` keep a Python reader for preprocessing, and `camera_utils.py` is retained on no code path as the reference for the unported `orientation_method` / `center_method` (docs/notes/pose-normalization.md) |
 | image cache / prefetch / warp | `src/data/DataManager.cpp` |
-| training session orchestration | `src/app/TrainerCore.cpp` and `spirulae_splat/modules/trainer.py` — *duplicate; being retired* |
+| training session orchestration | `src/app/TrainerCore.cpp` — single implementation, bound as `_C.TrainerSession`; `spirulae_splat/modules/trainer.py` keeps config construction, resume, eval and profiling |
 | the actual training step | `Engine*.cpp`, entered via `engine_train_step_managed` |
 | kernels | `src/kernels/**/*.cu` (CUDA) + `src/backend/vulkan/shaders/*.slang` + `src/backend/vulkan/kernels/*.cpp` |
-| web viewer client | `src/app/webviewer/viewer.html` — single source; the C++ viewer embeds it at build time, the Python server reads it from there |
-| web viewer server | `src/app/webviewer/{Viewer,HttpServer,RenderWorker}.cpp` and `spirulae_splat/viewer/*.py` — *duplicate; bound as `_C.WebViewer`, Python copy being retired* |
+| web viewer client | `src/app/webviewer/viewer.html` — single source, embedded into the engine library at build time; every front end serves the same bytes |
+| web viewer server | `src/app/webviewer/{Viewer,HttpServer,RenderWorker}.cpp` — single implementation, bound as `_C.WebViewer`; `ss_trainer.py` and `ss_viewer.py` drive it |
 | standalone WASM viewer | `viewer/` — independent, but compiles the C++ parsers in place |
 
-Three subsystems are currently implemented twice, once in Python and once in
-C++. Dataset parsing (§4.1) and the viewer server (§4.2) now have the C++
-side bound for Python — `spirulae_splat.modules.native_dataparser` and
-`_C.WebViewer` — so the Python copies are deletable, pending the
-separately-announced commit that removes them. That is being collapsed onto the C++ side; see
-[restructure-proposal.md](restructure-proposal.md) §4. **Do not add a fourth.**
+Three subsystems used to be implemented twice, once in Python and once in
+C++. All three are now single implementations in C++, reached from Python
+through a binding: dataset parsing (§4.1) via
+`spirulae_splat.modules.native_dataparser`, the viewer server (§4.2) via
+`_C.WebViewer`, and the training driver (§4.3) via `_C.TrainerSession` /
+`spirulae_splat.modules.native_trainer`. The Python implementations were
+deleted after a parity gate proved each pair agreed; the gates survive as
+golden-value regression tests on the C++ side ([testing.md](testing.md)
+§4-6). **Do not add a fourth** — new functionality goes in C++ with a
+binding.
+
+What is left in Python is what has no C++ counterpart: the config
+dataclasses (the source of truth codegen reads), checkpoint resume and its
+layout adaptation, the eval metrics (LPIPS and the SSIM variants are torch
+models), and the image loading that eval needs.
 
 ## The engine
 

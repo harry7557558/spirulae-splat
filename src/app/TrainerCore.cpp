@@ -391,8 +391,10 @@ EngineStepConfig build_step_config(const SsplatConfig& c, const RunState& st, in
             c.ppisp_reg_vig_non_pos,   c.ppisp_reg_vig_channel_var,
             c.ppisp_reg_color_mean,    c.ppisp_reg_crf_channel_var,
         };
-        cfg.ppisp.run_before_bilagrid = c.apply_ppisp_before_bilagrid;
     }
+    // Outside the guard: it is an ordering flag, not a rate, so it reflects
+    // the config whether or not PPISP is live (matching the Python path).
+    cfg.ppisp.run_before_bilagrid = c.apply_ppisp_before_bilagrid;
 
     // ---- background (model.py:1963-1977) -----------------------------------
     if (c.background_mode == "noise") {
@@ -486,24 +488,25 @@ void TrainerSession::check_config() {
         throw std::runtime_error(what +
             " is not supported by the standalone trainer yet; use spirulae-train");
     };
-    if (!cfg.resume.empty())            not_impl("--resume");
+    if (!cfg.resume.empty() && !front_end_handles_resume) not_impl("--resume");
     if (cfg.use_bvh)                    not_impl("--use-bvh");
     if (cfg.use_camera_optimizer)       not_impl("--use-camera-optimizer");
     if (cfg.deblur_training_images)     not_impl("--deblur-training-images");
     if (!cfg.optimizer_offload.empty()) not_impl("--optimizer-offload");
-    if (cfg.save_eval_images)           not_impl("--save-eval-images");
+    if (cfg.save_eval_images && !front_end_handles_eval) not_impl("--save-eval-images");
     if (cfg.cache_images == "gpu")      not_impl("--cache-images gpu");
     if (cfg.rescale_camera_to_fit < 0)  not_impl("--rescale-camera-to-fit auto-detect");
     if (cfg.num_downscales > 0)
         log("warning: --num-downscales is a Python-data-path "
             "feature; ignored by the managed engine path");
-    if (cfg.validation_fraction > 0)
+    if (cfg.validation_fraction > 0 && !front_end_handles_eval)
         log("warning: validation images are held out but "
             "early stopping / eval is not ported yet");
     if (cfg.orientation_method != "up" || cfg.center_method != "poses")
         log("warning: orientation/center method '" + cfg.orientation_method +
             "'/'" + cfg.center_method + "' approximated as 'up'/'poses' "
-            "(affects only train_frame_scale)");
+            "(affects only train_frame_scale; see docs/notes/pose-normalization.md "
+            "for the unported reference implementation)");
     if (cfg.train_frame != "points")
         not_impl("--train-frame " + cfg.train_frame);
     if (cfg.primitive != "3dgs" && cfg.primitive != "mip" && cfg.primitive != "3dgut")
@@ -620,7 +623,9 @@ void TrainerSession::setup_engine() {
 #endif
 
     // ---- Output dir (trainer.py _setup_output_dir:524) ----------------------
-    if (!cfg.output_dir_name.empty()) {
+    if (!out_dir_override.empty()) {
+        out_dir = fs::path(out_dir_override);
+    } else if (!cfg.output_dir_name.empty()) {
         out_dir = fs::path(cfg.output_dir_prefix) / cfg.output_dir_name;
     } else {
         std::time_t t = std::time(nullptr);
@@ -630,7 +635,8 @@ void TrainerSession::setup_engine() {
                   (fs::path(cfg.data).stem().string() + "_" + stamp);
     }
     fs::create_directories(out_dir);
-    save_config_json(cfg, out_dir, preset);
+    if (write_config_json)
+        save_config_json(cfg, out_dir, preset);
     log("Output directory: " + fs::absolute(out_dir).string());
 
     // ---- Engine setup (Trainer.__init__ + SpirulaeSplatModel.__init__) ------
@@ -794,10 +800,19 @@ void TrainerSession::save_checkpoint(int step) {
     }
 }
 
+// One step. Split out of train() so a front-end that keeps its own loop
+// (the Python trainer, for resume / eval / profiling) shares the ported
+// per-step config rather than rebuilding it -- see bindings/bind_trainer.cpp.
+std::map<std::string, float> TrainerSession::train_step(int step) {
+    int sh_degree_to_use = step / std::max(cfg.sh_degree_warmup_every, 1);
+    EngineStepConfig sc = build_step_config(cfg, st, step);
+    return engine_train_step_managed(
+        step, cfg.num_iterations, cfg.primitive, sh_degree_to_use,
+        cfg.packed || cfg.use_bvh, sc);
+}
+
 // The training loop (trainer.py train:741).
 void TrainerSession::train(const TrainerCallbacks& cb) {
-    std::string primitive = cfg.primitive;
-    bool packed = cfg.packed || cfg.use_bvh;
     _start_time = std::chrono::steady_clock::now();
 
     int step = 0;
@@ -816,10 +831,7 @@ void TrainerSession::train(const TrainerCallbacks& cb) {
             std::lock_guard<std::mutex> lk(engine_mutex);
             if (step > 0 && cfg.steps_per_save > 0 && step % cfg.steps_per_save == 0)
                 save_checkpoint(step);
-            int sh_degree_to_use = step / std::max(cfg.sh_degree_warmup_every, 1);
-            EngineStepConfig sc = build_step_config(cfg, st, step);
-            losses = engine_train_step_managed(
-                step, cfg.num_iterations, primitive, sh_degree_to_use, packed, sc);
+            losses = train_step(step);
         }
         cur_step = step + 1;
         double latency = std::chrono::duration<double>(

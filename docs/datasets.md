@@ -52,6 +52,14 @@ it.
    split when `warp_to_pinhole` is enabled: **5 faces** for fisheye/equisolid,
    **6 faces** for equirectangular.
 
+That normalized-frame similarity is where `orientation_method` and
+`center_method` act — and only `up` / `poses` is implemented natively;
+anything else is approximated with a warning. Since `train_frame="points"`
+leaves splats in the raw frame, the choice moves `train_frame_scale` and the
+viewer's default camera, not the training coordinates. The unported methods
+(`pca`, `vertical`, `gsplat`, `focus`) still have a working Python reference:
+[notes/pose-normalization.md](notes/pose-normalization.md).
+
 ## Train/eval split
 
 `eval_mode` selects the strategy:

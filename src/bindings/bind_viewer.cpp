@@ -21,7 +21,9 @@
 
 #include "app/webviewer/Viewer.h"
 #include "app/webviewer/RenderWorker.h"
+#include "app/TrainerCore.h"
 #include "data/DatasetParser.h"
+#include "bindings/EngineLock.h"
 
 #include <atomic>
 #include <memory>
@@ -82,6 +84,18 @@ public:
         _started = true;
     }
 
+    // Serve a TrainerSession instead of Python-pushed state: the session owns
+    // the engine mutex, the step counter, the pause flag and the progress
+    // JSON, so its own hooks are the right ones and Python does not have to
+    // mirror any of it. This is the shape trainer.py uses.
+    void start_for_session(const std::string& host, int port,
+                           ssplat::TrainerSession& sess) {
+        if (_started) throw std::runtime_error("WebViewer already started");
+        _server.start(host, port, sess.make_viewer_config(),
+                      sess.make_viewer_hooks(), sess.post);
+        _started = true;
+    }
+
     void stop() {
         if (!_started) return;
         _server.stop();
@@ -117,30 +131,6 @@ private:
     std::string _progress_json = "{}";
 };
 
-// Context manager over WebViewer::engine_mutex. Releasing the GIL while
-// blocking is what keeps a render (worker thread, holds the mutex, no GIL)
-// from deadlocking against the training loop (holds the GIL, wants the mutex).
-class EngineLock {
-public:
-    explicit EngineLock(WebViewer& v) : _v(v) {}
-
-    void enter() {
-        py::gil_scoped_release release;
-        _v.engine_mutex().lock();
-        _held = true;
-    }
-
-    void exit(const py::object&, const py::object&, const py::object&) {
-        if (!_held) return;
-        _held = false;
-        _v.engine_mutex().unlock();
-    }
-
-private:
-    WebViewer& _v;
-    bool _held = false;
-};
-
 }  // namespace
 
 void bind_viewer(py::module_& m) {
@@ -151,6 +141,9 @@ void bind_viewer(py::module_& m) {
     // This is the C++ original that trainer.py::_setup_cpp_data_manager was
     // ported from; the arrays feed engine_setup_data_manager directly.
     py::class_<PostSplitCameras>(m, "PostSplitCameras")
+        // Default-constructible on purpose: serving a bare PLY (ss_viewer.py)
+        // means there are no training cameras to draw.
+        .def(py::init<>())
         .def_readonly("n_post", &PostSplitCameras::n_post)
         .def_readonly("any_warp", &PostSplitCameras::any_warp)
         .def_readonly("any_fisheye_warp", &PostSplitCameras::any_fisheye_warp)
@@ -220,9 +213,7 @@ void bind_viewer(py::module_& m) {
     // -----------------------------------------------------------------
     // WebViewer
     // -----------------------------------------------------------------
-    py::class_<EngineLock>(m, "_EngineLock")
-        .def("__enter__", &EngineLock::enter)
-        .def("__exit__", &EngineLock::exit);
+    ssplat_bindings::bind_engine_lock(m);
 
     py::class_<WebViewer>(m, "WebViewer", R"doc(
 The native web-viewer server (same HTTP endpoints and same viewer.html as
@@ -253,6 +244,16 @@ loop that does long uninterrupted work should yield on it.
              py::arg("host") = "0.0.0.0", py::arg("port") = 7007,
              py::arg("config") = ViewerRenderConfig(),
              py::arg("post") = PostSplitCameras())
+        .def("start_for_session",
+             [](WebViewer& v, ssplat::TrainerSession& s,
+                const std::string& host, int port) {
+                 py::gil_scoped_release release;
+                 v.start_for_session(host, port, s);
+             },
+             py::arg("session"), py::arg("host") = "0.0.0.0",
+             py::arg("port") = 7007, py::keep_alive<1, 2>(),
+             "Serve a TrainerSession: step counter, pause toggle, progress "
+             "JSON and engine mutex all come from the session.")
         .def("stop", [](WebViewer& v) {
                  py::gil_scoped_release release;
                  v.stop();
@@ -263,7 +264,10 @@ loop that does long uninterrupted work should yield on it.
         .def("set_progress_json", &WebViewer::set_progress_json, py::arg("json"))
         .def_property("paused", &WebViewer::paused, &WebViewer::set_paused)
         .def_property_readonly("render_pending", &WebViewer::render_pending)
-        .def("engine_lock", [](WebViewer& v) { return EngineLock(v); },
+        .def("engine_lock",
+             [](WebViewer& v) {
+                 return ssplat_bindings::EngineLock(&v.engine_mutex());
+             },
              py::keep_alive<0, 1>(),
              "Context manager over the engine mutex shared with the render "
              "worker. Releases the GIL while blocking.");

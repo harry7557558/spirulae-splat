@@ -566,6 +566,10 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
     dsparse::invert_affine4x4(T_n_from_train, T_remap);
     for (int k = 0; k < 16; k++) ds.train_to_normalized[k] = (float)T_remap[k];
 
-    dsparse::assign_val_split(ds, cfg.validation_fraction);
+    // validation_fraction holds out part of the TRAIN set; the eval split is
+    // already a held-out set, so it is all "train" from the DataManager's
+    // point of view.
+    dsparse::assign_val_split(
+        ds, cfg.split == "eval" ? 0.0f : cfg.validation_fraction);
     return ds;
 }

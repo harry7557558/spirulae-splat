@@ -1,6 +1,7 @@
 # Repository restructure proposal
 
-Status: phases 0-4 applied (see §8); §4 and phases 5-7 still proposal.
+Status: all phases (0-7) applied — see §8 for what each one did and §9 for
+what deliberately remains.
 
 Goal: make the tree navigable for humans and agents, remove duplicated
 Python/C++ subsystems, split oversized files, and land durable documentation
@@ -732,3 +733,192 @@ from drifting, and is the one I'd want a real regression run behind.
   http_server,render_worker}.py`, porting `annotation.py`, and rewiring
   `ss_viewer.py` / `trainer.py` onto `_C.WebViewer`. Same §7.1 pacing as
   phase 5.
+
+- **Phase 7 — done (binding + gate; deletion deferred).** §4.3 training
+  driver, the last of the three duplicated subsystems and the one the
+  proposal flagged as highest drift risk.
+
+  `TrainerCore.cpp` moved out of the app targets and into the engine library
+  (`cmake/sources.txt`), so the CLI, the GUI and the Python extension now
+  share one build of it instead of two. `src/bindings/bind_trainer.cpp`
+  exposes:
+
+  - `SsplatConfig`, bound *through the generated `SSPLAT_CONFIG_FIELDS`
+    X-macro* rather than a hand-listed field set — add a field to a Python
+    dataclass, re-run `generate_cli_config.py`, and it appears in the binding
+    with no edit to any binding file. The §4.3 sketch proposed extending the
+    generator to emit a pybind struct; using the X-macro that already exists
+    turned out to be strictly better, since it cannot go stale.
+  - `ssplat_config_fields()` — the same X-macro as *data*, so
+    `native_trainer.to_native_config()` can walk the Python dataclass tree
+    without a second hand-maintained name mapping. The flattening and the
+    RENAMES live once, in the generator.
+  - `build_step_config()` / `build_loss_weights()` / `scheduled_lr()` — the
+    ported per-step logic, callable directly, which is what the gate compares.
+  - `TrainerSession` with the phase split the proposal described
+    (`check_config` -> `load_dataset` -> `setup_engine` -> `train(on_step=)`),
+    plus `train_step(step)` for a front-end that keeps its own loop —
+    `trainer.py` needs that for resume, eval, profiling and debug dumps.
+    `engine_lock()` and `WebViewer.start_for_session()` wire it to the viewer.
+
+  Two `front_end_handles_{resume,eval}` flags relax the `check_config()`
+  guards that only apply to the standalone CLI: Python *does* implement
+  resume (with its codec/adapt logic) and eval (LPIPS is a torch model), so
+  rejecting those for every front-end would have been wrong.
+
+  **Gate:** `tests/python/test_trainer_parity.py` (16 tests). The load-bearing
+  layer compares the `EngineStepConfig` the Python path builds against
+  `build_step_config()` for 8 config variants x 4 run states x 20 steps chosen
+  to straddle every warmup and decay boundary — 640 full-config comparisons,
+  every field, exact. The per-step config is the *entire* difference between
+  the two drivers, so equality there is a stronger and sharper statement than
+  the loss-curve comparison §4.3 originally asked for: the two seed splats
+  from different RNGs (`std::mt19937` vs torch), so their curves cannot be
+  bit-identical. A 2000-step run on Mip-NeRF 360 `garden` put them within 0.4%
+  on final `rgb_loss` with an *identical* splat-count trajectory — but two
+  identical Python runs differ by the same ~1 dB PSNR, so that measurement
+  only bounds the drift at "below seeding noise". Both are recorded in
+  docs/testing.md §6.
+
+  The gate found **two real divergences**, both fixed:
+  - `core.py::engine_train_step_managed` never set
+    `loss.input_depth_is_ray_depth` (the non-managed `engine_train_step`
+    does), so the managed Python path silently left it at the C++ struct
+    default of `true` and skipped the linear->ray depth conversion for the
+    common case of z-depth GT maps. Pre-existing bug in the path users run;
+    fixed in `core.py`.
+  - `build_step_config()` set `ppisp.run_before_bilagrid` only when PPISP was
+    live. Harmless (no consumer when PPISP is off) but a real difference in
+    the emitted config; moved outside the guard.
+
+  It also **repaired the pip build**, broken since phase 6: moving
+  `app/webviewer/*.cpp` into the engine library made `setup.py` compile
+  `Viewer.cpp`, which includes the CMake-generated `viewer_html.h`.
+  `setup.py` now generates that header itself (`embed_viewer_html()`),
+  byte-identical to `ssplat_embed_file()`'s output.
+
+  Remaining known difference, deliberately *not* changed: Python's
+  `_maybe_init_bilagrid` gates the depth/normal grids on `bilagrid_depth_lr` /
+  `bilagrid_normal_lr` even when `use_adagrad_bilagrid_optim` is on, while
+  `setup_engine()` gates on the adagrad LR (which is what Python itself does
+  for PPISP). Unreachable with the default config, where all four LRs are
+  positive; the C++ behaviour is the intended one and the difference
+  disappears when the Python side is deleted.
+
+  **Not done, deliberately:** rewiring `trainer.py` onto `TrainerSession` and
+  deleting `model.py::engine_train_step_managed` +
+  `core.py::_build_{optim,densify}_config`. Same §7.1 pacing as phases 5 and
+  6 — the binding lands first and proves itself, the deletion is its own
+  announced commit.
+
+- **The three deletions — done.** §7.1's paced removal, all in one pass at the
+  user's request. What went, and what replaced it:
+
+  **§4.2 viewer.** `spirulae_splat/viewer/` (server, http_server,
+  render_worker, annotation) deleted. `ss_trainer.py` calls
+  `Trainer.start_viewer()` -> `_C.WebViewer.start_for_session(session)`;
+  `ss_viewer.py` uploads a PLY and serves it through the same native server.
+  `annotation.py` needed no port -- the camera-frusta overlay and the
+  `camera_size` kNN heuristic were already in `RenderWorker.cpp`.
+
+  **§4.1 dataparser.** `colmap_utils.py` and `metashape_utils.py` moved to
+  `scripts/` (which still parses in Python for preprocessing -- §7.2 allows
+  exactly that); `dataparser.py` reduced from 903 lines to the config
+  dataclass, which *stays* because `generate_cli_config.py` AST-parses it,
+  `ss_trainer.py` builds its tyro CLI from it, and `--resume` reads it back.
+  `nerfstudio` is now not imported anywhere in the repo.
+
+  **`camera_utils.py` was deleted and then put back, on purpose.** It is the
+  only implementation anywhere of `orientation_method` in {pca, vertical,
+  gsplat} and `center_method` in {focus, gsplat} -- the native parser does
+  `up`/`poses` and warns about the rest. Deleting an unported feature's
+  reference just because its caller went away is how a TODO becomes a
+  rewrite-from-scratch. It now carries a header saying it is on no code path
+  and why, and `docs/notes/pose-normalization.md` preserves the other half
+  (the call-site algebra that turns those functions into `transform_matrix` /
+  `scale_factor` / `train_frame_scale` / `train_to_normalized`), verbatim from
+  the pre-deletion `dataparser.py`, with the commit to `git show` for the rest.
+  `DatasetCommon.cpp`'s TODO and `check_config()`'s warning both point at it.
+
+  Deleting the Python parser required the native one to grow an **eval split**:
+  `DatasetParserConfig::split` = "train"|"eval" returns either side of the
+  eval_mode partition. Everything derived from the camera set
+  (train_frame_scale, train_to_normalized, the outlier filter) is still
+  computed over all frames *before* the split, so the two parses agree
+  frame-for-frame -- which is what `dataparser.py` did by returning both from
+  one call. The parity test was extended to cover both sides before deletion:
+  34 cases green.
+
+  **§4.3 trainer loop.** `model.py::engine_train_step_managed`,
+  `core.py::engine_train_step_managed`, `_build_optim_config`,
+  `_build_densify_config`, `engine_optim_step`, `engine_densify_step`,
+  `model.py::engine_train_step` / `_build_loss_weights` / `optim_step` and the
+  unreachable `_engine_get_loss_grad` / `get_loss_grad` -- ~700 lines. Also
+  `trainer.py::_setup_cpp_data_manager` (316 lines, the POST-split camera bake
+  reimplemented in Python) and `Trainer._render` / `render`.
+
+  `trainer.py` now builds a `TrainerSession`, hands it the output dir, and
+  runs `session.train_step(step)` in its own loop. It keeps exactly what has
+  no C++ counterpart: config construction, the output-dir/config.json
+  conventions, checkpoint resume + layout adaptation, the eval pass, and the
+  profiling / debug-dump probes. `SpirulaeSplatModel` gained an **attach
+  mode**: the session seeds the world, and the model allocates host parameters
+  at the same layout and syncs them down, instead of seeding a second time and
+  overwriting it. It survives only as the eval/metrics renderer.
+
+  **Turning the parity gates into regression gates.** Both gates existed to
+  compare two implementations; deleting one side would have left them
+  meaningless. So each was frozen first:
+  `tests/python/step_config_golden.json` (640 step configs) and
+  `dataparser_golden.json` (32 parses). Each was generated from the C++ side
+  and then *certified against the Python implementation immediately before
+  deleting it* -- 42,880 fields and 256 array comparisons respectively, zero
+  mismatches. The generators (`make_*_golden.py`) are committed with a warning
+  about regenerating without explanation.
+
+  **Bugs found and fixed on the way:**
+  - `_resume_from_checkpoint` derived its target bilagrid layout from the
+    config alone, ignoring whether the dataset actually *has* depth / normal
+    maps -- a condition both `_maybe_init_bilagrid` and `setup_engine()`
+    apply. On any dataset without normals (Mip-NeRF 360, say) the target
+    claimed a normal bilagrid the checkpoint never had, so **every** resume
+    took the full CPU adaptation path (unpack, resample, repack) to reconcile
+    a difference that did not exist. It now reads the session's `RunState`,
+    i.e. what the engine actually holds. Same-config resume is now a straight
+    load.
+  - `viewer_upload_cameras` rejected `n_post == 0`, so the native viewer could
+    not serve a bare PLY (which has no training cameras). It now skips the
+    upload; the frustum overlay and thumbnail cache simply have nothing to
+    draw. `PostSplitCameras` also gained a default constructor.
+  - Nearly shipped a real one: while rewiring `ss_meshing.py` I assumed the
+    native parser emitted distortion in the engine's column order and dropped
+    the remap. It does not -- it emits the same order the Python parser did
+    (`k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2`), and the engine wants
+    `k1 k2 p1 p2 k3 k4 k5 k6 sx1 sy1`. The remap stayed.
+
+  **Verification:** all four builds; 16/16 cross-backend parity; 3 Vulkan
+  smoke tests; `ssplat-train` on garden under all three native builds
+  (identical splat counts); full `spirulae-train` run on garden with the
+  native viewer serving and eval producing metrics.json (PSNR 21.10 vs 21.06
+  before the deletions); resume verified to restore step + splat count without
+  adaptation; `ss_viewer` and `ss_meshing` smoke-tested; 61 Python tests pass
+  (the 3 failures + 2 collection errors are the pre-existing stale ones).
+
+## 9. What is left
+
+All seven phases are applied. Outstanding, each its own commit:
+
+1. ~~**The three deletions**~~ — done, see §8.
+2. **The Python package reorg** deferred from phase 4
+   (`spirulae_splat/{cli,config,training,data,metrics,utils}`) — changes
+   public import paths, so it wants the deletions to land first.
+3. **The remaining §3 file splits**, skipped at phase 2:
+   `Visualizer.cu` (1806), `DataManager.cpp` (1957), `MeshingHost.cpp`
+   (1778), `Tensor.h`, `Common.cuh`, `ext.cpp`, `GuiApp.cpp`, `Bilagrid.cpp`,
+   `model.py`.
+4. **`tests/python/` triage.** `test_ppisp.py` and `test_ssim.py` fail to
+   import (`modules.training_losses` no longer exists) and three more tests
+   fail against renamed APIs — all pre-existing, none touched by phases 3-7.
+   The maintained ones are the three parity gates.
+5. The open questions in §7: history rewrite for the leaked local paths, and
+   `Delaunay3D.cpp` / `MeshUV.cpp` provenance.

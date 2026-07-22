@@ -136,6 +136,46 @@ def test_engine_lock_is_reentrant_across_calls(engine):
             pass
 
 
+def test_serves_a_trainer_session(dataset, tmp_path):
+    """WebViewer.start_for_session: the shape trainer.py uses.
+
+    The session owns the step counter, pause flag, progress JSON and engine
+    mutex, so Python pushes none of it -- which is the point of §4.3.
+    """
+    from spirulae_splat.modules.trainer import TrainerConfig
+    from spirulae_splat.modules.native_trainer import make_session
+
+    cfg = TrainerConfig(data=dataset)
+    cfg.output_dir_prefix = tmp_path
+    cfg.num_iterations = 3
+    cfg.steps_per_save = 0
+    sess = make_session(cfg)
+    sess.load_dataset()
+    sess.setup_engine()
+
+    port = _free_port()
+    viewer = _C.WebViewer()
+    viewer.start_for_session(sess, "127.0.0.1", port)
+    try:
+        status, body = _get(port, "/progress")
+        assert status == 200
+        progress = json.loads(body)
+        assert progress["total_steps"] == 3
+        assert progress["paused"] is False
+
+        # The viewer's pause endpoint drives the session's own atomic.
+        _get(port, "/pause-toggle")
+        assert sess.paused is True
+        _get(port, "/pause-toggle")
+        assert sess.paused is False
+
+        status, body = _get(port, "/buffers")
+        assert status == 200 and "rgb" in json.loads(body)
+    finally:
+        viewer.stop()
+        _C.engine_reset()
+
+
 def test_start_twice_is_an_error(engine):
     ds, post = engine
     viewer = _C.WebViewer()

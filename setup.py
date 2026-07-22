@@ -38,6 +38,37 @@ def get_ext():
     return CustomBuildExtention.with_options(no_python_abi_suffix=True, use_ninja=True)
 
 
+def embed_viewer_html():
+    """Generate app_generated/viewer_html.h, as cmake/SsplatEmbed.cmake does.
+
+    src/app/webviewer/Viewer.cpp serves the browser client from an embedded
+    byte array rather than reading it off disk, and that array is generated
+    from src/app/webviewer/viewer.html at build time. The CMake build does it
+    in CMakeLists.txt; this build has to do it too, since cmake/sources.txt
+    puts app/webviewer/ in the Python extension. Returns the include dir.
+    """
+    root = Path(__file__).parent
+    src = root / "src" / "app" / "webviewer" / "viewer.html"
+    out_dir = root / "build" / "setup_generated"
+    out = out_dir / "app_generated" / "viewer_html.h"
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    data = src.read_bytes()
+    body = ",".join(f"0x{b:02x}" for b in data)
+    text = (
+        "#pragma once\n"
+        "// AUTO-GENERATED from src/app/webviewer/viewer.html -- do not edit.\n"
+        "#include <cstddef>\n"
+        f"inline const unsigned char kViewerHtml[] = {{{body},}};\n"
+        "inline const size_t kViewerHtmlSize = sizeof(kViewerHtml);\n"
+    )
+    # Only rewrite when it changed, so ninja does not rebuild Viewer.cpp on
+    # every invocation.
+    if not out.exists() or out.read_text() != text:
+        out.write_text(text)
+    return str(out_dir.absolute())
+
+
 def get_sources():
     """Engine/kernel sources, from the list CMake also builds from.
 
@@ -165,7 +196,10 @@ def get_extensions():
         sources,
         # src/ is the include root: local includes are path-qualified
         # relative to it (e.g. #include "core/Common.cuh").
-        include_dirs=[str((Path(__file__).parent / "src").absolute())],
+        include_dirs=[
+            str((Path(__file__).parent / "src").absolute()),
+            embed_viewer_html(),
+        ],
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,

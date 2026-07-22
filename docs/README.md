@@ -10,8 +10,9 @@ the detail.
 | [backends.md](backends.md) | the CUDA/Vulkan seam, coverage, pointers to the authoritative backend docs |
 | [codegen.md](codegen.md) | the five generators, what they own, and the invariants |
 | [datasets.md](datasets.md) | supported dataset layouts and how they are parsed |
-| [testing.md](testing.md) | native parity tests, Python tests, the reference-dump workflow |
+| [testing.md](testing.md) | native parity tests, the three Python/C++ parity gates, the reference-dump workflow |
 | [restructure-proposal.md](restructure-proposal.md) | the in-progress plan for reorganizing the tree |
+| [notes/pose-normalization.md](notes/pose-normalization.md) | orientation/centering: what the native parser implements, and the kept Python reference for what it doesn't |
 | [notes/](notes/) | design notes for individual subsystems |
 
 Authoritative documents that live next to their code rather than here:
