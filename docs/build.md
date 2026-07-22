@@ -2,14 +2,37 @@
 
 There are **two independent build systems**, by design and by history:
 
-- `CMakeLists.txt` — every native artifact (engine, both backends, CLI, GUI,
-  meshing tool, parity tests, and optionally the Python extension).
+- `CMakeLists.txt` + `cmake/` — every native artifact (engine, both backends,
+  CLI, GUI, meshing tool, parity tests, and optionally the Python extension).
 - `setup.py` / `pyproject.toml` — the pip path, using torch's `CUDAExtension`.
-  It globs its own source list and carries its own flags. **It does not read
-  `CMakeLists.txt`**, so changes that touch compile flags or add source
-  directories must be applied to both.
+  It carries its own compile/link flags, deliberately: it targets a released
+  wheel (its own `WITH_SYMBOLS` / `LINE_INFO` env gates), CMake targets local
+  development. **Flag changes must be applied to both.**
+
+They share exactly one thing: the source list, `cmake/sources.txt`. It is a
+plain list of glob patterns relative to the repo root, read line-by-line by
+`cmake/SsplatSources.cmake` and by `setup.py`'s `get_sources()` — plain text so
+the pip build never needs CMake installed. Adding a source directory means
+editing that file once.
 
 For development, always use CMake via the dev scripts.
+
+## CMake layout
+
+`CMakeLists.txt` is just the running order; the logic lives in `cmake/`:
+
+| file | what it does |
+|---|---|
+| `SsplatOptions.cmake` | options (`SSPLAT_BUILD_CLI/GUI`, `SSPLAT_NO_TORCH`, `SSPLAT_DEBUG_SYMBOLS`, …), backend selection, tree paths (`SSPLAT_ROOT`, `SSPLAT_CSRC`, …) |
+| `SsplatSources.cmake` | `ssplat_collect_sources()` — expands `sources.txt` with `CONFIGURE_DEPENDS` |
+| `SsplatBackendCuda.cmake` | Torch probe, CUDA arch detection, flags, the `csrc` library, CUDA-side parity tools |
+| `SsplatBackendVulkan.cmake` | portable engine object lib, slangc + SPIR-V embed, `ssplat_backend_vulkan`, the Vulkan-side tests |
+| `SsplatSlang.cmake` | `ssplat_find_slangc()` — pinned version, PATH lookup, fetch on miss |
+| `SsplatEmbed.cmake` | `ssplat_embed_file()` — bake a file into a byte-array header |
+| `SsplatApps.cmake` | `ssplat-train`, `ssplat-mesh`, `ssplat-gui` (backend-agnostic) |
+
+Exactly one backend module runs. It leaves behind `SSPLAT_WITH_TORCH` and
+`SSPLAT_APP_LIBS`, which is the whole contract `SsplatApps.cmake` depends on.
 
 ## Dev builds
 
@@ -72,9 +95,9 @@ exist *only* because of libtorch and are skipped in no-torch builds.
 
 **Vulkan.** Needs the Vulkan SDK. No Python and no CUDA toolkit required.
 Slang is pinned to a specific version (`SSPLAT_SLANG_VERSION` in
-`CMakeLists.txt`); if the `slangc` on PATH doesn't match, CMake fetches the
+`cmake/SsplatSlang.cmake`); if the `slangc` on PATH doesn't match, CMake fetches the
 pinned release. SPIR-V blobs are **never committed** — they are compiled at
-build time (one `slangc` edge per blob, see `slang/SpirvShaders.cmake`) and
+build time (one `slangc` edge per blob, see `src/backend/vulkan/shaders/SpirvShaders.cmake`) and
 embedded into the binary. On an offline machine, transfer a matching `slangc`
 and point `-DSSPLAT_SLANGC=` at it.
 
@@ -89,7 +112,8 @@ suppress). Pass a trailing `-DSSPLAT_NO_TORCH=OFF` to try anyway.
 ## Build-time cost
 
 The long poles are the biggest `.cu` translation units and the CUDA template
-instantiation set in `cuda/ins/` (111 files). Splitting an oversized `.cu`
-using the `Name.Part.cu` convention (see [codegen.md](codegen.md)) both
-improves readability and parallelizes the build — no build-file edits needed,
-since CMake and `setup.py` both glob.
+instantiation set in `src/instantiations/` (111 files). Splitting an oversized `.cu`
+into function-named parts (see [codegen.md](codegen.md)) both improves
+readability and parallelizes the build — no build-file edits needed, since
+both builds glob `cmake/sources.txt`. Only `HEADER_SOURCES` in
+`generate_headers.py` has to learn the new file.

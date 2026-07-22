@@ -16,12 +16,12 @@ the detail.
 
 Authoritative documents that live next to their code rather than here:
 
-- `spirulae_splat/splat/cuda/csrc/backend/README.md` — the backend seam design.
-- `spirulae_splat/splat/cuda/csrc/backend/vulkan/README.md` — the Vulkan
+- `src/backend/README.md` — the backend seam design.
+- `src/backend/vulkan/README.md` — the Vulkan
   backend in depth: device baseline, capability variants, memory model,
   atomics, Slang notes, kernel coverage. **The single most detailed document
   in the repo**; read it before touching Vulkan code.
-- `spirulae_splat/splat/cuda/csrc/app/README.md` — working notes on the
+- `src/app/README.md` — working notes on the
   standalone CLI and the native GUI.
 - `viewer/README.md` — the standalone WebGL2/WASM viewer.
 - `scripts/README.md` — dataset preprocessing tools.

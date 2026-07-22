@@ -10,7 +10,7 @@ is WebGL2.
 The viewer's own runtime code is **independent** from the rest of
 `spirulae_splat` — nothing here imports from the training code at runtime. The
 one deliberate exception is at build time: the WASM module compiles the
-trainer's dataset parsers (`spirulae_splat/splat/cuda/csrc/app/*Parser.cpp`)
+trainer's dataset parsers (`src/data/parsers/*Parser.cpp`)
 **in place** — referenced by relative path, not copied — so COLMAP/Nerfstudio/
 Metashape parsing has exactly one implementation in the repo. Those files are
 plain C++17 with no CUDA dependency (see `csrc/CameraModel.h`).

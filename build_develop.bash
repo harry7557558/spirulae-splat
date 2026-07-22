@@ -7,14 +7,14 @@
 # Regenerate headers/config. Skipped when python3 is unavailable -- the
 # generated files are committed, so the build still works without it.
 if command -v python3 >/dev/null 2>&1; then
-    python3 spirulae_splat/generate_headers.py
-    python3 spirulae_splat/generate_kernel_instantiation.py
-    python3 spirulae_splat/generate_cli_config.py
+    python3 tools/codegen/generate_headers.py
+    python3 tools/codegen/generate_kernel_instantiation.py
+    python3 tools/codegen/generate_cli_config.py
 else
     echo "python3 not found -- skipping codegen (using committed generated files)"
 fi
 
-cmake -G Ninja -B build "$@"
+cmake -G Ninja -B build "$@" || exit $?
 
 echo ""
 
@@ -29,7 +29,13 @@ echo "Available RAM : ${AVAILABLE_MB} MB"
 echo "CPU cores     : ${CPU_CORES}"
 echo "Using jobs    : ${JOBS}"
 echo ""
-cmake --build build --verbose -j"${JOBS}"
+# Propagate the build's exit status: without this the script always exits 0
+# (the trailing libcsrc.so move succeeds regardless) and a failed build reads
+# as a green one.
+if ! cmake --build build --verbose -j"${JOBS}"; then
+    echo "BUILD FAILED" >&2
+    exit 1
+fi
 
 # Torch build only: expose the extension as spirulae_splat/csrc.so, with a
 # symlink back so ssplat-train's $ORIGIN lookup keeps working. A no-torch

@@ -5,11 +5,11 @@ Two interchangeable compute backends behind one seam. **Both must work.**
 The authoritative documents live next to the code and are more detailed than
 this page — this is the orientation, they are the reference:
 
-- **`spirulae_splat/splat/cuda/csrc/backend/README.md`** — the seam's design:
+- **`src/backend/README.md`** — the seam's design:
   what `api/` is, why the per-kernel `.cuh` headers are authoritative and the
   module headers are forwarders, and how `BackendRuntime.h` abstracts
   alloc/memcpy/memset/events.
-- **`spirulae_splat/splat/cuda/csrc/backend/vulkan/README.md`** — the Vulkan
+- **`src/backend/vulkan/README.md`** — the Vulkan
   backend in depth: verified premises, device baseline and per-capability
   pipeline variants, memory model, atomics strategy, sort/scan, Slang compiler
   notes, and **the kernel coverage table**. Read it before touching anything
@@ -22,8 +22,8 @@ Engine*.cpp  ──►  backend/api/*.h              (launch declarations)
                   backend/api/BackendRuntime.h (alloc / memcpy / memset / events)
                         │
         ┌───────────────┴───────────────┐
-  CUDA: csrc/*.cu                  Vulkan: backend/vulkan/
-  + cuda/ins/*.cu                  SPIR-V pipelines from slang/vulkan/
+  CUDA: src/kernels/**/*.cu       Vulkan: src/backend/vulkan/
+        + src/instantiations/           runtime + kernels/ + shaders/
         │                                │
         └────► backend/common/SortScan.h ◄────┘
                CUB (CUDA) / onesweep radix + prefix sum (Vulkan)
@@ -39,10 +39,10 @@ under `-DSSPLAT_BACKEND_VULKAN` with no CUDA toolkit installed.
 
 ## Shared device math
 
-`slang/*.slang` is compiled **twice**: to CUDA headers (`csrc/generated/*.cuh`)
+`src/shaders/*.slang` is compiled **twice**: to CUDA headers (`src/generated/*.cuh`)
 and to SPIR-V. The projection, SH, primitive and PPISP math therefore has one
-source. `slang/vulkan/*.slang` adds the Vulkan-only compute entry points and
-the compatibility layers (`int64_compat`, `int8_compat`, `atomic_float`).
+source. `src/backend/vulkan/shaders/*.slang` adds the Vulkan-only compute entry
+points and the compatibility layers (`int64_compat`, `int8_compat`, `atomic_float`).
 
 Don't fork device math per backend. If a backend needs different code, it
 belongs in a capability variant (below), not a copy.
@@ -74,12 +74,12 @@ two-field struct, because one Intel Windows driver segfaults in
 
 Three deliverables, always:
 
-1. **CUDA**: `csrc/<Kernel>.cu` (+ `_kernel.cuh` if the device body is shared
+1. **CUDA**: `src/kernels/<family>/<Kernel>.cu` (+ `_kernel.cuh` if the device body is shared
    between fwd/bwd or eval3d/non-eval3d), with
    `/*[AutoHeaderGeneratorExport]*/` on the launcher. Rerun
    `generate_headers.py`, and `generate_kernel_instantiation.py` if it is
    templated over primitive / camera model / SH degree.
-2. **Vulkan**: the Slang entry point in `slang/vulkan/*.slang` and its
+2. **Vulkan**: the Slang entry point in `backend/vulkan/shaders/*.slang` and its
    launcher in `backend/vulkan/kernels/*.cpp`.
 3. **Parity test**: a tool in `backend/tests/` that builds under both backends
    and does `dump` / `compare`. See [testing.md](testing.md).

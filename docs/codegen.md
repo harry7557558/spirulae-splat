@@ -8,19 +8,19 @@ available and fall back to the committed files when it isn't.
 Generated locations:
 
 ```
-spirulae_splat/splat/cuda/csrc/generated/       device-math headers from Slang
-spirulae_splat/splat/cuda/csrc/app/generated/   cli_config.h, viewer_html.h
-spirulae_splat/splat/cuda/csrc/backend/api/     backend module forwarders
-spirulae_splat/splat/cuda/ins/                  kernel instantiation TUs
+src/generated/       device-math headers from Slang
+src/app/generated/   cli_config.h, viewer_html.h
+src/backend/api/     backend module forwarders
+src/instantiations/  kernel instantiation TUs
 ```
 
 All generators run from the **repo root**:
 
 ```bash
-python3 spirulae_splat/generate_headers.py
-python3 spirulae_splat/generate_kernel_instantiation.py
-python3 spirulae_splat/generate_cli_config.py
-python3 spirulae_splat/generate_backend_api.py
+python3 tools/codegen/generate_headers.py
+python3 tools/codegen/generate_kernel_instantiation.py
+python3 tools/codegen/generate_cli_config.py
+python3 tools/codegen/generate_backend_api.py
 # generate_vulkan_stubs.py takes arguments; see below
 ```
 
@@ -28,14 +28,14 @@ python3 spirulae_splat/generate_backend_api.py
 
 ## `generate_headers.py` — `.cu` → `.cuh` declarations
 
-Scans `csrc/*.cu` for functions preceded by the marker
+Scans the `.cu` files listed in `HEADER_SOURCES` for functions preceded by the marker
 
 ```cpp
 /*[AutoHeaderGeneratorExport]*/
 void my_kernel_launcher(...) { ... }
 ```
 
-and rewrites the declaration section of `csrc/<Name>.cuh`.
+and rewrites the declaration section of the matching `<Name>.cuh`.
 
 **Invariants:**
 
@@ -69,12 +69,13 @@ Because of invariant 3, splitting is nearly free:
 # put the shared preamble in <Family>Common.cuh and shared device helpers in a
 # descriptively named header (BilinearSample.cuh), then:
 #   - add the new files to HEADER_SOURCES['PixelWise']
-python3 spirulae_splat/generate_headers.py   # PixelWise.cuh's contents are unchanged
+python3 tools/codegen/generate_headers.py   # PixelWise.cuh's contents are unchanged
 ```
 
-No build file changes: `CMakeLists.txt` globs `csrc/*.cu` with
-`CONFIGURE_DEPENDS`, and `setup.py` globs at build time. No caller changes:
-the header keeps its name and its declaration set.
+No build file changes: both build systems glob the kernel directories through
+`cmake/sources.txt` (CMake with `CONFIGURE_DEPENDS`, so a new file is picked up
+without a manual reconfigure). No caller changes: the header keeps its name and
+its declaration set.
 
 Naming rules when splitting:
 
@@ -90,8 +91,9 @@ Naming rules when splitting:
 
 ## `generate_kernel_instantiation.py` — explicit template instantiations
 
-Reads kernel declarations out of `csrc/*.cuh` and emits one small TU per
-(primitive × camera model × SH degree × …) combination into `cuda/ins/`
+Reads kernel declarations out of `src/kernels/**/*.cuh` and emits one small TU
+per (primitive × camera model × SH degree × …) combination into
+`src/instantiations/`
 (currently 111 files). This keeps each nvcc edge small and parallelizable
 rather than instantiating everything in one TU.
 
@@ -105,7 +107,7 @@ rather than instantiating everything in one TU.
 `OptimizerConfig`, plus the tyro preset subclasses.
 
 The script parses them with `ast` (no torch import — it runs on a fresh
-checkout before `csrc.so` exists) and emits `csrc/app/generated/cli_config.h`:
+checkout before `csrc.so` exists) and emits `src/app/generated/cli_config.h`:
 
 - `struct SsplatConfig` — every field, flattened, with the Python defaults
   baked in;
@@ -128,7 +130,7 @@ Docstrings on the dataclass fields become CLI help text and GUI tooltips.
 
 ## `generate_backend_api.py` — backend module headers
 
-Emits `csrc/backend/api/*.h` (`Projection.h`, `Rasterization.h`,
+Emits `src/backend/api/*.h` (`Projection.h`, `Rasterization.h`,
 `PixelWise.h`, …) as **forwarders** that `#include` the relevant per-kernel
 `.cuh` headers, grouped by subsystem.
 
@@ -141,7 +143,7 @@ and an individual `.cuh` without ODR violations.
 ## `generate_vulkan_stubs.py` — link-probe for unported kernels
 
 ```bash
-python3 spirulae_splat/generate_vulkan_stubs.py <build-vulkan-dir> <output.cpp>
+python3 tools/codegen/generate_vulkan_stubs.py <build-vulkan-dir> <output.cpp>
 ```
 
 Link-probes `csrc_portable`'s objects against `libssplat_backend_vulkan.a`,
@@ -166,6 +168,6 @@ Rerun it whenever the engine gains a new kernel call, **or when a port lands**
   Regenerated at configure time when the HTML changes. `Viewer.cpp` has a dev
   override so HTML edits don't require a rebuild.
 - Slang → SPIR-V blobs → `vk_shaders_embedded.cpp`
-  (`slang/SpirvShaders.cmake` + `slang/spirv_tool.cpp`). SPIR-V is **never
-  committed**; one `slangc` edge per blob, with capability variants
+  (`backend/vulkan/shaders/SpirvShaders.cmake` +
+  `backend/vulkan/shaders/spirv_tool.cpp`). SPIR-V is **never committed**; one `slangc` edge per blob, with capability variants
   (`.atomicadd`, `.noint64`, `.int8`) compiled per entry point.

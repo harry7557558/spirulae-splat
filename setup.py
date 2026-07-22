@@ -38,6 +38,40 @@ def get_ext():
     return CustomBuildExtention.with_options(no_python_abi_suffix=True, use_ninja=True)
 
 
+def get_sources():
+    """Engine/kernel sources, from the list CMake also builds from.
+
+    cmake/sources.txt is the single source of truth: [section] headers, then
+    one glob pattern per line relative to the repo root. This build wants the
+    [cuda] section (everything the csrc library compiles). Keeping it plain
+    text means the pip build does not need CMake installed. See
+    cmake/SsplatSources.cmake for the other consumer.
+    """
+    root = Path(__file__).parent
+    spec = root / "cmake" / "sources.txt"
+
+    sources = []
+    in_section = False
+    for line in spec.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_section = line == "[cuda]"
+            continue
+        if in_section:
+            sources += glob.glob(str(root / line))
+    if not sources:
+        raise RuntimeError(f"{spec} [cuda] matched no files")
+
+    # Relative to the repo root, as setuptools expects (it mirrors the source
+    # path into build/temp.*/).
+    sources = [os.path.relpath(s, root) for s in sources]
+
+    # Drop ROCm sources (neither build compiles them).
+    return [s for s in sources if "hip" not in s]
+
+
 def get_extensions():
     import torch
     from torch.utils.cpp_extension import CUDAExtension
@@ -50,13 +84,7 @@ def get_extensions():
     else:
         raise RuntimeError("CUDA is required for this extension.")
 
-    extensions_dir = Path("spirulae_splat/splat/cuda")
-    sources = (
-        glob.glob(str(extensions_dir / "ins" / "*.cu")) +
-        glob.glob(str(extensions_dir / "csrc" / "*.cu")) +
-        glob.glob(str(extensions_dir / "csrc" / "*.cpp"))
-    )
-    sources = [s for s in sources if "hip" not in s]
+    sources = get_sources()
 
     undef_macros = []
     define_macros = []
@@ -135,10 +163,9 @@ def get_extensions():
     extension = CUDAExtension(
         "spirulae_splat.csrc",
         sources,
-        include_dirs=[
-            str((extensions_dir / "csrc").absolute()),
-            str((extensions_dir / "csrc" / "glm").absolute()),
-        ],
+        # src/ is the include root: local includes are path-qualified
+        # relative to it (e.g. #include "core/Common.cuh").
+        include_dirs=[str((Path(__file__).parent / "src").absolute())],
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,

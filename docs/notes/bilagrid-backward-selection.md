@@ -166,14 +166,14 @@ and the transform-backward math. The v2 revival is the moment to collapse this:
 1. **Selector component** — `BilagridBwdSelector` (contextual Gaussian TS
    ported from vksplat) + `SSPLAT_BILAGRID_BWD` override + unit test with
    synthetic timings. No kernel changes. **DONE** — header-only
-   `csrc/BilagridBwdSelector.h`; host unit test
-   `csrc/backend/tests/bilagrid_selector_test.cpp` (auto-globbed; also builds
+   `kernels/bilagrid/BilagridBwdSelector.h`; host unit test
+   `src/backend/tests/bilagrid_selector_test.cpp` (auto-globbed; also builds
    standalone) verifies forced-init coverage, contextual separation (two
    resolutions → two optima), elasticity across a mid-run reward flip, and all
    override forms. ~97% tail exploitation on the synthetic model.
 2. **Async timing plumbing** — per-dispatch `backend::Event` timing, one-iter
    readback, `(key, arm)` attribution at the backward hook. **DONE** —
-   `csrc/BilagridBwdTiming.h` (`BwdTimingRing`) wired into
+   `kernels/bilagrid/BilagridBwdTiming.h` (`BwdTimingRing`) wired into
    `_engine_bilagrid_backward_hook` (harvest at hook entry; begin/end around the
    RGB/depth/normal dispatches). Gated by `SSPLAT_BILAGRID_PROFILE=1` (logs
    per-family GPU ms; zero overhead when unset). Validated on RTX 4080S / CUDA:
@@ -324,14 +324,14 @@ Two device-agnostic tunings support keeping v2 everywhere cheaply:
 
 ## 7. Files this touches
 
-- `csrc/BilagridUniformSampleBwdV2_kernel.cuh` (+ per-family v2 headers) —
+- `kernels/bilagrid/BilagridUniformSampleBwdV2_kernel.cuh` (+ per-family v2 headers) —
   revive/generalize.
-- `csrc/Bilagrid*UniformSample.cu`, `csrc/EngineBilagrid.cpp` (backward hook) —
+- `kernels/bilagrid/Bilagrid*UniformSample.cu`, `engine/EngineBilagrid.cpp` (backward hook) —
   launch + selection wiring.
-- `csrc/BilagridConfig.cuh` — shared block/atomic helpers.
-- `slang/vulkan/bilagrid_{common,affine,ppisp,loglinear,depth,normal}.slang` —
+- `kernels/bilagrid/BilagridConfig.cuh` — shared block/atomic helpers.
+- `backend/vulkan/shaders/bilagrid_{common,affine,ppisp,loglinear,depth,normal}.slang` —
   add v2 entries.
-- `csrc/backend/vulkan/kernels/Bilagrid.cpp` — v2 dispatch in `launch_family_*`.
-- `csrc/backend/tests/bilagrid_parity.cpp` — per-arm parity sweep.
-- **New:** `csrc/BilagridBwdSelector.h` (the selector).
+- `src/backend/vulkan/kernels/Bilagrid.cpp` — v2 dispatch in `launch_family_*`.
+- `src/backend/tests/bilagrid_parity.cpp` — per-arm parity sweep.
+- **New:** `kernels/bilagrid/BilagridBwdSelector.h` (the selector).
 ```

@@ -4,7 +4,7 @@ Three suites, in descending order of how much you should trust them.
 
 ## 1. Native cross-backend parity tests (the important ones)
 
-`csrc/backend/tests/*.cpp` — currently 17 tools covering projection (fwd, bwd,
+`src/backend/tests/*.cpp` — currently 17 tools covering projection (fwd, bwd,
 quant-grad), rasterization bwd, tile intersect, warp, FPBO, optimizer (general
 + geometry), densify, per-pixel train, PPISP, bilagrid, multi-scale loss, plus
 `backend/tests/engine/` which drives the *real* engine end to end
@@ -68,7 +68,7 @@ If you script a Python training run that serves the viewer, pass
 ## 3. Python tests (`tests/`)
 
 ```bash
-pytest tests/
+pytest tests/python/
 ```
 
 `test_per_pixel.py`, `test_ppisp.py`, `test_rasterization.py`,
@@ -80,8 +80,8 @@ have not been run recently. Treat a failure here as "needs investigation",
 not as a release blocker — but do investigate, since they are the only
 remaining check on the `_torch_impl.py` reference math.
 
-There is also `csrc/tests/test_delaunay3d.py` (a Python test living in the C++
-tree) and `csrc/tests/delaunay3d_bench.cpp`.
+There is also `tests/python/test_delaunay3d.py` and the standalone benchmark
+`tests/native/delaunay3d_bench.cpp` (not built by CMake; compile it directly).
 
 ## What to run before calling a change done
 

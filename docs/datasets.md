@@ -3,7 +3,7 @@
 ## Supported layouts
 
 Three formats, auto-detected in this order: **Nerfstudio**, then **COLMAP**,
-then **Metashape**. Both the native parsers (`csrc/app/*Parser.cpp`) and the
+then **Metashape**. Both the native parsers (`src/data/parsers/*Parser.cpp`) and the
 Python parsers (`spirulae_splat/modules/dataparser.py`) probe in the same
 order.
 
@@ -21,7 +21,7 @@ The COLMAP reconstruction directory is auto-detected over
 
 Perspective (with full radial / tangential / thin-prism distortion),
 equidistant and equisolid fisheye (including >180° FOV as produced by 360
-cameras), and equirectangular/spherical. See `csrc/CameraModel.h` — it is
+cameras), and equirectangular/spherical. See `src/core/CameraModel.h` — it is
 plain C++17 with no CUDA dependency, which is why the WASM viewer can reuse
 it.
 

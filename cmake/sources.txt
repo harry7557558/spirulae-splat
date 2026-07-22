@@ -1,0 +1,46 @@
+# Engine/kernel source globs, relative to the repository root.
+#
+# SINGLE SOURCE OF TRUTH. Consumed by:
+#   - cmake/SsplatSources.cmake  (the development build, both backends)
+#   - setup.py                   (the pip / torch.utils.cpp_extension build)
+# Keep it a plain list of glob patterns, one per line: both readers parse it
+# line-by-line, and setup.py must be able to do so without CMake installed.
+# Blank lines and '#' comments are ignored. Globs are NOT recursive -- list each
+# directory, so adding one is a deliberate act.
+#
+# Any path containing "hip" is dropped by both readers (ROCm sources are not
+# part of either build).
+#
+# Not listed here, on purpose: src/app/** and src/backend/** (their targets own
+# their sources -- see SsplatApps.cmake / the backend modules).
+
+[cuda]
+# Everything the CUDA `csrc` library compiles.
+src/instantiations/*.cu
+src/kernels/background/*.cu
+src/kernels/bilagrid/*.cu
+src/kernels/bilagrid/*.cpp
+src/kernels/densify/*.cu
+src/kernels/loss/*.cu
+src/kernels/optim/*.cu
+src/kernels/pixelwise/*.cu
+src/kernels/ppisp/*.cu
+src/kernels/projection/*.cu
+src/kernels/raster/*.cu
+src/kernels/tile/*.cu
+src/kernels/visualize/*.cu
+src/mesh/*.cu
+src/mesh/*.cpp
+src/engine/*.cpp
+src/data/*.cpp
+src/external/*.cpp
+src/bindings/*.cpp
+
+[portable]
+# The torch-free subset: the same list minus the CUDA kernels and minus
+# bindings/ext.cpp (Torch-only). Compiled as csrc_portable by the Vulkan build.
+src/kernels/bilagrid/*.cpp
+src/mesh/*.cpp
+src/engine/*.cpp
+src/data/*.cpp
+src/external/*.cpp

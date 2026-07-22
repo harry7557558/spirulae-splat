@@ -28,7 +28,7 @@
 // the viewer CMake adds that directory to the include path). musl's
 // strtod/strtof cost ~1.5us per call — tens of seconds over a 100+ MB OBJ
 // or ascii PLY.
-#include "FastFloat.h"
+#include "data/FastFloat.h"
 
 #define KEEP EMSCRIPTEN_KEEPALIVE extern "C"
 

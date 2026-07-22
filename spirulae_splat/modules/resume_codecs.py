@@ -1,5 +1,5 @@
 """NumPy host-side mirrors of the block quantization codecs in
-spirulae_splat/splat/cuda/csrc/Tensor.h, for adapting a checkpoint's quantized
+src/core/Tensor.h, for adapting a checkpoint's quantized
 buffers when resuming with a different layout (fewer Gaussians / different SH
 degree). Decode -> transform (gather / band-resample) -> re-encode with fresh
 per-block bounds. All host / CPU, vectorized (no per-element Python loops).

@@ -24,53 +24,67 @@ Direction of travel, so you don't push the wrong way:
 ## Repo map
 
 ```
-CMakeLists.txt              all native builds (723 lines, 4 modes — see docs/build.md)
-setup.py / pyproject.toml   the pip/torch-extension build (independent of CMake)
+CMakeLists.txt              running order only; the logic is in cmake/
+cmake/                      build modules (options, backends, apps) + sources.txt,
+                              the source list BOTH build systems read
+setup.py / pyproject.toml   the pip/torch-extension build (own flags; see docs/build.md)
 build_develop.bash/.bat     the dev build entry points — USE THESE, not pip install
 AGENTS.md  CLAUDE.md        this file (CLAUDE.md is a pointer to it)
 docs/                       architecture, build, backends, codegen, testing, notes
+src/                        ALL native code (see below)
+tools/codegen/              the five codegen tools (see "Codegen" below)
+tests/python/               Python tests (may be stale; see docs/testing.md)
+tests/native/               standalone native benchmarks
 scripts/                    dataset preprocessing CLI tools (Python, standalone)
-tests/                      Python tests (may be stale; see docs/testing.md)
 viewer/                     standalone WebGL2 + WASM viewer, independent of training
-                              (build-time exception: compiles csrc/app/*Parser.cpp in place)
-spirulae_splat/             Python package
+                              (build-time exception: compiles src/data/parsers/*.cpp
+                               in place)
+spirulae_splat/             Python package — a *client* of the engine, on its way out
 ├── ss_{trainer,benchmark,viewer,meshing}.py   console-script entry points
-├── generate_*.py           the five codegen tools (see "Codegen" below)
 ├── modules/                config dataclasses, training driver, eval metrics, resume
 ├── viewer/                 Python HTTP viewer server + viewer.html (html is shared
 │                             with the C++ viewer, which embeds it at build time)
-└── splat/cuda/
-    ├── _backend.py _wrapper*.py   the extension import + lazy function wrappers
-    ├── slang/              Slang device math, shared by CUDA and Vulkan
-    │   └── vulkan/         Vulkan-only compute entry points
-    ├── ins/                GENERATED kernel instantiations (111 files)
-    └── csrc/               ALL native code (see below)
+└── splat/cuda/*.py         the extension import + lazy function wrappers
 ```
 
-`spirulae_splat/splat/cuda/csrc/` is where nearly everything lives. The path
-is vestigial — `splat/` is a gsplat leftover, `cuda/` also holds the Slang
-shaders and the Vulkan backend, and `csrc/` holds the engine, the dataset
-parsers, the CLI, the GUI and the web viewer. Inside it:
+`src/` is the include root: every local include is path-qualified relative to
+it (`#include "core/Common.cuh"`, `#include "backend/api/BackendTypes.h"`), so
+a file's include lines tell you which subsystems it depends on.
 
 ```
-csrc/
-├── Engine*.cpp/.h          the torch-free training engine (process-global singleton)
-├── <Kernel>.cu             kernel launchers + __global__ kernels
-├── <Kernel>.cuh            GENERATED declaration section (see "Codegen")
-├── <Kernel>_kernel.cuh     the device-side kernel body, split out for reuse
-├── Bilagrid*               43 files — bilateral grid; see docs/notes/
-├── Primitive*.cuh          3DGS / Mip / 3DGUT primitive traits
-├── DataManager.{cpp,h}     image cache / prefetch / warp pipeline
-├── Tensor.h Camera.h Common.cuh   core types and device helpers
-├── Mesh*  Delaunay3D.*     meshing pipeline
-├── ext.cpp                 the pybind11 module (144 m.def's)
-├── app/                    ssplat-train CLI, dataset parsers, web viewer, gui/
+src/
+├── core/                   Tensor.h, Camera.h, Common.cuh, GradQuant.cuh, …
+│                             the types and device helpers everything uses
+├── primitives/             Primitive*.cuh — 3DGS / Mip / 3DGUT traits
+│                             (compile-time types, not runtime branches)
+├── kernels/                one directory per family; each holds the launchers
+│   │                         (<Name>.cu), the GENERATED declaration header
+│   │                         (<Name>.cuh) and the device body (<Name>_kernel.cuh)
+│   ├── projection/  raster/  tile/
+│   ├── pixelwise/  ppisp/  bilagrid/     (bilagrid is 42 files, see docs/notes/)
+│   ├── optim/  densify/  loss/  background/  visualize/
+├── engine/                 Engine*.cpp/.h — the torch-free training engine
+│                             (process-global singleton)
+├── data/                   DataManager (image cache / prefetch / warp) and
+│   └── parsers/              COLMAP / Nerfstudio / Metashape readers
+├── mesh/                   meshing pipeline, Delaunay3D, UV, export
 ├── backend/                the backend seam — READ backend/README.md
 │   ├── api/                backend-neutral launch declarations (GENERATED forwarders)
 │   ├── cuda/  common/      CUDA runtime shim, SortScan, Profiler
-│   └── vulkan/             Vulkan runtime + kernels/ — READ backend/vulkan/README.md
-├── generated/  external/   do not hand-edit / vendored
-└── tests/ backend/tests/   native parity tests
+│   ├── vulkan/             the whole Vulkan backend: runtime + kernels/ +
+│   │                         shaders/ (its own entry points and SPIR-V build)
+│   │                         — READ backend/vulkan/README.md
+│   └── tests/              native cross-backend parity tests
+├── shaders/                Slang device math SHARED by both backends — compiled
+│                             twice, to src/generated/*.cuh and to SPIR-V
+├── app/                    the native applications
+│   ├── cli/                main.cpp (ssplat-train), mesh_main.cpp (ssplat-mesh)
+│   ├── gui/                Dear ImGui desktop app (ssplat-gui)
+│   ├── webviewer/          HTTP server + render worker for the embedded viewer
+│   └── TrainerCore.{h,cpp} the CLI/GUI training loop
+├── bindings/ext.cpp        the pybind11 module (144 m.def's)
+├── generated/  app/generated/  instantiations/   GENERATED — do not hand-edit
+└── external/               vendored (miniz, stb, npy)
 ```
 
 ## Building
@@ -97,17 +111,17 @@ Full matrix and per-platform notes: `docs/build.md`.
 
 ## Codegen — the invariants that bite
 
-Generated trees are marked in `.gitattributes` (`csrc/generated/`,
-`csrc/app/generated/`, `cuda/ins/`) and are **committed**, so a fresh checkout
+Generated trees are marked in `.gitattributes` (`src/generated/`,
+`src/app/generated/`, `src/instantiations/`) and are **committed**, so a fresh checkout
 builds with no Python at all. Five generators, all run from the repo root:
 
 | generator | reads | writes |
 |---|---|---|
-| `generate_headers.py` | `/*[AutoHeaderGeneratorExport]*/` markers in `csrc/*.cu` | the declaration section of `csrc/<Name>.cuh` |
-| `generate_kernel_instantiation.py` | kernel decls in `csrc/*.cuh` | `cuda/ins/*.cu` |
-| `generate_cli_config.py` | the Python config dataclasses (`ast`-parsed, no torch import) | `csrc/app/generated/cli_config.h` |
-| `generate_backend_api.py` | per-kernel `.cuh` headers | `csrc/backend/api/*.h` forwarders |
-| `generate_vulkan_stubs.py` | link-probes the Vulkan build | throwing stubs for unported kernels |
+| `tools/codegen/generate_headers.py` | `/*[AutoHeaderGeneratorExport]*/` markers in `src/kernels/**/*.cu` | the declaration section of the matching `<Name>.cuh` |
+| `tools/codegen/generate_kernel_instantiation.py` | kernel decls in `src/kernels/**/*_kernel.cuh` | `src/instantiations/*.cu` |
+| `tools/codegen/generate_cli_config.py` | the Python config dataclasses (`ast`-parsed, no torch import) | `src/app/generated/cli_config.h` |
+| `tools/codegen/generate_backend_api.py` | per-kernel `.cuh` headers | `src/backend/api/*.h` forwarders |
+| `tools/codegen/generate_vulkan_stubs.py` | link-probes the Vulkan build | throwing stubs for unported kernels |
 
 Rules:
 
@@ -116,13 +130,13 @@ Rules:
    regenerated from the `.cu`.
 2. To export a launch function to the engine, put
    `/*[AutoHeaderGeneratorExport]*/` immediately above its definition and
-   rerun `generate_headers.py`.
+   rerun `tools/codegen/generate_headers.py`.
 3. **A header can be fed by several `.cu` files**, listed explicitly in
-   `HEADER_SOURCES` in `generate_headers.py`. This is the sanctioned way to
+   `HEADER_SOURCES` in `tools/codegen/generate_headers.py`. This is the sanctioned way to
    split a large `.cu`: name each part after **what it does**, not after the
    header it feeds (e.g. `ImageWarp.cu`, `DepthGeometry.cu` → `PixelWise.cuh`),
-   and add it to the list. Both CMake and `setup.py` glob `*.cu`, so no build
-   file changes are needed. A listed file that doesn't exist is a hard error,
+   and add it to the list. Both build systems glob via `cmake/sources.txt`, so
+   no build file changes are needed. A listed file that doesn't exist is a hard error,
    so a rename can't silently drop declarations.
 4. The Python config dataclasses are the **single source of truth** for the
    training config. Adding a field there makes it appear in the native CLI,
@@ -136,14 +150,14 @@ Rules:
 Every kernel-level change needs **three** things, or the Vulkan build breaks
 or silently diverges:
 
-1. the CUDA implementation (`csrc/<Kernel>.cu` + `_kernel.cuh`),
+1. the CUDA implementation (`src/kernels/<family>/<Kernel>.cu` + `_kernel.cuh`),
 2. the Slang implementation (`cuda/slang/vulkan/*.slang`) and its launcher
-   (`csrc/backend/vulkan/kernels/*.cpp`),
-3. a parity test in `csrc/backend/tests/` that runs both and compares.
+   (`src/backend/vulkan/kernels/*.cpp`),
+3. a parity test in `src/backend/tests/` that runs both and compares.
 
-If the Vulkan side isn't ready, `generate_vulkan_stubs.py` emits a throwing
+If the Vulkan side isn't ready, `tools/codegen/generate_vulkan_stubs.py` emits a throwing
 stub so the portable engine still links — that's a deliberate TODO marker, not
-a finished state. Coverage is tracked in `csrc/backend/vulkan/README.md`,
+a finished state. Coverage is tracked in `src/backend/vulkan/README.md`,
 which is the authoritative and unusually detailed document on the Vulkan
 design (device baseline, capability variants, memory model, atomics). Read it
 before touching anything under `backend/vulkan/`.
@@ -154,10 +168,10 @@ before touching anything under `backend/vulkan/`.
 # native parity tests (CUDA build)
 bash build_develop.bash -DSSPLAT_BUILD_BACKEND_TESTS=ON && ./build/<test_name>
 # the Vulkan build produces the same test binaries unconditionally
-pytest tests/                      # Python tests — currently unmaintained, may fail
+pytest tests/python/                      # Python tests — currently unmaintained, may fail
 ```
 
-Each `csrc/backend/tests/*.cpp` becomes an executable of the same name.
+Each `src/backend/tests/*.cpp` becomes an executable of the same name.
 `backend/tests/engine/*` drive the real engine end to end. Details and the
 CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
 
@@ -166,7 +180,7 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
 - Files are named after **what they do**, not after the file they were split
   out of, and not after the header they declare into.
 - `<Name>_kernel.cuh` is reserved: it means "the device body that
-  `generate_kernel_instantiation.py` instantiates". Don't use the `_kernel`
+  `tools/codegen/generate_kernel_instantiation.py` instantiates". Don't use the `_kernel`
   suffix for an ordinary shared-helper header — give it a descriptive name
   (e.g. `BilinearSample.cuh`).
 - A `<Family>Common.cuh` holds the shared preamble when a family spans several
@@ -179,7 +193,7 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   ```
   These are load-bearing for the split workflow — keep them meaningful.
 - Slang device math is shared by both backends; don't fork it per backend.
-- `csrc/*.cpp` (as opposed to `.cu`) means "portable, compiles for Vulkan
+- A `.cpp` (as opposed to `.cu`) under `src/` means "portable, compiles for Vulkan
   builds too". Keep the engine layer in `.cpp` and CUDA-free.
 
 ## Gotchas worth knowing before you hit them

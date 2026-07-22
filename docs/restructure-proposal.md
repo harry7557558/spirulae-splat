@@ -1,6 +1,6 @@
 # Repository restructure proposal
 
-Status: **proposal**, nothing here has been applied yet.
+Status: phases 0-4 applied (see §8); §4 and phases 5-7 still proposal.
 
 Goal: make the tree navigable for humans and agents, remove duplicated
 Python/C++ subsystems, split oversized files, and land durable documentation
@@ -549,4 +549,103 @@ from drifting, and is the one I'd want a real regression run behind.
   `architecture`, `build`, `backends`, `codegen`, `datasets`, `testing`,
   `README` index, `notes/`. Written against the *current* layout, so they are
   correct today and get path updates in phase 4.
-- **Phase 2 — in progress.** File splits inside existing directories.
+- **Phase 2 — done.** File splits inside existing directories: `PixelWise.cu`
+  (3668) → 7 function-named `.cu` + `PixelWiseCommon.cuh` + `BilinearSample.cuh`;
+  `Optimizer.cu` (2655) → 8 `.cu` + `OptimizerCommon.cuh`; `Densify.cu` (2471)
+  → 5 `.cu` + 3 `.cuh`. `generate_headers.py` grew an explicit `HEADER_SOURCES`
+  map so a source file's name is free of the header it feeds. Declaration sets
+  of `PixelWise.cuh` / `Optimizer.cuh` / `Densify.cuh` verified unchanged
+  (43 / 26 / 20).
+- **Phase 3 — done.** `CMakeLists.txt` (723 lines) → a 30-line running order
+  plus `cmake/`: `SsplatOptions`, `SsplatSources`, `SsplatBackendCuda`,
+  `SsplatBackendVulkan`, `SsplatSlang`, `SsplatEmbed`, `SsplatApps`. The
+  backend `if/else` is now `include(SsplatBackendCuda|Vulkan)`, each leaving
+  `SSPLAT_WITH_TORCH` + `SSPLAT_APP_LIBS` for the shared app targets; the
+  duplicated per-app boilerplate (libpython, `-static-libstdc++`, `BUILD_RPATH`,
+  include dirs) collapsed into `ssplat_configure_app()`, and the two
+  copy-pasted hex-embed blocks into `ssplat_embed_file()`.
+
+  Source lists are no longer duplicated: `cmake/sources.txt` holds the glob
+  patterns and is read by both `cmake/SsplatSources.cmake` and `setup.py`'s new
+  `get_sources()`. Plain text rather than CMake so the pip build needs no CMake
+  — full scikit-build-core delegation was rejected as too disruptive for users
+  still on the pip path (§7.1).
+
+  Verified by diffing the generated `build.ninja` old-vs-new for three configs
+  (torch CUDA / no-torch CUDA+GUI+tests / Vulkan): identical target sets,
+  **zero** flag, define, or link-library differences; the only deltas are
+  source ordering and one extra harmless `-I<builddir>` on `ssplat-mesh`.
+  Both backends rebuild clean and the parity suite is 17/17.
+
+- **Phase 4 — done (native half).** The directory move. All native code is now
+  under a root `src/`, subdivided per §2: `core/ primitives/ kernels/{projection,
+  raster,tile,pixelwise,ppisp,bilagrid,optim,densify,loss,background,visualize}/
+  engine/ data/{,parsers/} mesh/ backend/ shaders/ app/{cli,gui,webviewer}/
+  bindings/ generated/ instantiations/ external/`. `spirulae_splat/splat/cuda/`
+  no longer holds native code. Also moved: the five codegen tools →
+  `tools/codegen/`, `tests/*.py` + the stray `csrc/tests/test_delaunay3d.py` →
+  `tests/python/`, `csrc/tests/delaunay3d_bench.cpp` → `tests/native/`.
+
+  **`src/` is now the include root** and every local include is path-qualified
+  against it (`#include "core/Common.cuh"`) — 716 quoted plus 145 angle-bracket
+  directives rewritten mechanically, none left relative. A file's include list
+  now names the subsystems it depends on.
+
+  Build/codegen plumbing updated in the same pass: `cmake/sources.txt` gained
+  `[cuda]` / `[portable]` sections (the Vulkan build's old flat `csrc/*.cpp`
+  glob no longer expresses "the torch-free subset"), `SpirvShaders.cmake` is
+  parameterised on the shaders dir, all five generators emit and read
+  src-relative paths, `.gitattributes`, `viewer/CMakeLists.txt` (which compiles
+  the parsers in place) and `build_develop.{bash,bat}` follow.
+  `generate_kernel_instantiation.py` now slugs its output filenames from
+  include *basenames*, so path-qualifying did not rename all 111 generated TUs.
+
+  Verified: every moved file's content diff is include lines only (checked
+  blob-by-blob against HEAD, 52 residual lines, all include directives or the
+  one comment naming a header); CUDA build, Vulkan build and Torch-extension
+  build all green; parity 17/17 plus the three Vulkan smoke tests; all five
+  generators re-run with zero drift.
+
+  **Deliberately deferred:** §2's reorganisation *inside* the Python package
+  (`spirulae_splat/{cli,config,training,data,metrics,utils}`) and the
+  `viewer/` → `web/` rename. The former changes public import paths
+  (`spirulae_splat.splat.cuda`, `spirulae_splat.modules.*`) that `scripts/` and
+  external users depend on, which per §7.1 should be paced; the latter belongs
+  with the viewer unification in phase 6. So `spirulae_splat/splat/` still
+  exists, holding only Python.
+
+- **Phase 4b — backend symmetry, partial (done).** Reviewed whether the CUDA
+  and Vulkan halves should mirror each other. Conclusion: make each backend
+  *self-contained*, not make the two *look* like peers.
+
+  Done: `src/shaders/vulkan/` (39 files) → `src/backend/vulkan/shaders/`, and
+  `SpirvShaders.cmake` + `spirv_tool.cpp` with it. The Vulkan backend was the
+  only subsystem split across two top-level directories (host code under
+  `backend/`, device code under `shaders/`); it is now one directory —
+  runtime + kernels + shaders + its own SPIR-V build. `src/shaders/` now means
+  exactly what it says: the 8 Slang files compiled *twice*, to
+  `src/generated/*.cuh` and to SPIR-V. The Vulkan shaders reach the shared math
+  by src-relative path (`#include "shaders/densify.slang"`, with `-I<src>`),
+  matching the C++ convention and disambiguating `densify.slang`, which exists
+  in both directories.
+
+  Rejected: mirroring the CUDA corpus under `src/backend/cuda/kernels/`. The
+  `<Name>.cuh` declaration headers are the *backend-neutral contract* (Vulkan
+  TUs include them; they parse with no CUDA toolkit) and they are generated
+  from the `<Name>.cu` sitting next to them. A full mirror forces a choice
+  between putting the neutral contract inside `backend/cuda/` (so Vulkan
+  includes headers out of the CUDA backend — incoherent) and separating each
+  `.cuh` from the `.cu` it is generated from (breaking the repo's most
+  load-bearing codegen invariant). Symmetry is not worth either. The two sides
+  are also not peers in fact: CUDA is the reference implementation the contract
+  is *extracted from*, and a symmetric tree would assert a peerhood the codegen
+  does not have.
+
+  Two bugs surfaced and were fixed on the way:
+  - `backend/api/*.h` forwarders were emitting `#include "../../<Name>.cuh"`,
+    stale since the phase-4 move. Nothing includes them yet, so nothing caught
+    it. They are now src-relative and each one is compile-checked to parse
+    under `-DSSPLAT_BACKEND_VULKAN` with no CUDA toolkit.
+  - `build_develop.bash` always exited 0: the trailing `libcsrc.so` move
+    masked the build's status, so a failed build reported green. Now
+    propagated.

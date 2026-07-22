@@ -4,51 +4,51 @@
 
 ```
                  ┌──────────────────────────────────────────────────────────┐
-  front ends     │ ssplat-train (CLI)   ssplat-gui (ImGui)   spirulae-train │
-                 │ csrc/app/main.cpp    csrc/app/gui/        Python package │
+  front ends     │ ssplat-train (CLI)    ssplat-gui (ImGui)   Python package │
+                 │ src/app/cli/          src/app/gui/         spirulae_splat/│
                  └───────────┬────────────────┬──────────────────┬──────────┘
                              │                │                  │
                     ┌────────┴────────────────┴───┐              │ pybind11
-                    │  TrainerCore (csrc/app/)    │              │ (csrc/ext.cpp)
-                    │  config → dataset → seeding │              │
+                    │  TrainerCore (src/app/)     │              │ src/bindings/
+                    │  config → dataset → seeding │              │   ext.cpp
                     │  → step loop                │              │
                     └──────────────┬──────────────┘              │
                                    │                             │
                  ┌─────────────────┴─────────────────────────────┴──────────┐
-   engine        │  Engine*.cpp — torch-free, CUDA-free, process-global      │
-                 │  state in EngineState.h; DataManager owns image I/O       │
+   engine        │  src/engine/*.cpp — torch-free, CUDA-free, process-global │
+                 │  state in EngineState.h; src/data/ owns image I/O         │
                  └──────────────────────────┬───────────────────────────────┘
                                             │  launch declarations
                  ┌──────────────────────────┴───────────────────────────────┐
-   backend seam  │  csrc/backend/api/*.h  +  BackendRuntime.h               │
+   backend seam  │  src/backend/api/*.h  +  BackendRuntime.h                 │
                  └───────────┬──────────────────────────────┬───────────────┘
                              │                              │
-              ┌──────────────┴──────────┐      ┌────────────┴──────────────┐
-   backends   │ CUDA: csrc/*.cu         │      │ Vulkan: backend/vulkan/   │
-              │  + cuda/ins/*.cu        │      │  SPIR-V from slang/vulkan │
-              └──────────────┬──────────┘      └────────────┬──────────────┘
+              ┌──────────────┴───────────┐     ┌────────────┴──────────────┐
+   backends   │ CUDA: src/kernels/**/*.cu│     │ Vulkan: src/backend/vulkan│
+              │  + src/instantiations/   │     │  launchers + shaders/     │
+              └──────────────┬───────────┘     └────────────┬──────────────┘
                              └──────────┬───────────────────┘
                                         │
-                        slang/*.slang — shared device math
-                        backend/common/SortScan.h — CUB / onesweep radix
+                    src/shaders/*.slang — shared device math
+                    src/backend/common/SortScan.h — CUB / onesweep radix
 ```
 
 The seam is the important part, and it is the best-documented part of the
-repo: read `csrc/backend/README.md`, then `csrc/backend/vulkan/README.md`.
+repo: read `src/backend/README.md`, then `src/backend/vulkan/README.md`.
 
 ## Where responsibilities live
 
 | responsibility | code |
 |---|---|
-| training config (source of truth) | Python dataclasses in `spirulae_splat/modules/` → codegen → `app/generated/cli_config.h` |
-| dataset parsing (native) | `csrc/app/{Colmap,Nerfstudio,Metashape}Parser.cpp`, `DatasetCommon.cpp`, `DatasetParser.h` |
+| training config (source of truth) | Python dataclasses in `spirulae_splat/modules/` → codegen → `src/app/generated/cli_config.h` |
+| dataset parsing (native) | `src/data/parsers/{Colmap,Nerfstudio,Metashape}Parser.cpp`, `DatasetCommon.cpp`, `DatasetParser.h` |
 | dataset parsing (Python) | `spirulae_splat/modules/{dataparser,colmap_utils,metashape_utils,camera_utils}.py` — *duplicate; being retired* |
-| image cache / prefetch / warp | `csrc/DataManager.cpp` |
-| training session orchestration | `csrc/app/TrainerCore.cpp` and `spirulae_splat/modules/trainer.py` — *duplicate; being retired* |
+| image cache / prefetch / warp | `src/data/DataManager.cpp` |
+| training session orchestration | `src/app/TrainerCore.cpp` and `spirulae_splat/modules/trainer.py` — *duplicate; being retired* |
 | the actual training step | `Engine*.cpp`, entered via `engine_train_step_managed` |
-| kernels | `csrc/*.cu` (CUDA) + `slang/vulkan/*.slang` + `backend/vulkan/kernels/*.cpp` |
+| kernels | `src/kernels/**/*.cu` (CUDA) + `src/backend/vulkan/shaders/*.slang` + `src/backend/vulkan/kernels/*.cpp` |
 | web viewer client | `spirulae_splat/viewer/viewer.html` — single source; the C++ viewer embeds it at build time |
-| web viewer server | `csrc/app/{Viewer,HttpServer,RenderWorker}.cpp` and `spirulae_splat/viewer/*.py` — *duplicate; being retired* |
+| web viewer server | `src/app/webviewer/{Viewer,HttpServer,RenderWorker}.cpp` and `spirulae_splat/viewer/*.py` — *duplicate; being retired* |
 | standalone WASM viewer | `viewer/` — independent, but compiles the C++ parsers in place |
 
 Three subsystems are currently implemented twice, once in Python and once in
@@ -93,6 +93,6 @@ silently, so it is asserted only by parity tests.
 3DGS, Mip (anti-aliased 3DGS), and 3DGUT are compile-time *types*, not runtime
 branches: `Primitive.cuh`, `Primitive3DGS.cuh`, `Primitive3DGUT.cuh`,
 `PrimitiveBase3DGS.cuh`. Camera model, SH degree and distortion are value
-parameters. This is what makes `cuda/ins/` (111 generated instantiation TUs)
+parameters. This is what makes `src/instantiations/` (111 generated instantiation TUs)
 necessary on the CUDA side, and what maps to Slang specialization constants on
 the Vulkan side.
