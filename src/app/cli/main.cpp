@@ -112,7 +112,10 @@ void check_choices(const std::string& value, const std::string& key, const char*
     }
     bad_value(key, value, "expected one of: " + ch);
 }
-void check_choices(...) {}  // non-string fields
+// non-string fields (template rather than C-variadic: clang rejects passing
+// std::string through `...`)
+template <typename T>
+void check_choices(const T&, const std::string&, const char*) {}
 
 // Returns false if the key is unknown.
 bool set_config_field(SsplatConfig& c, const std::string& key,

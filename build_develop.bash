@@ -19,10 +19,18 @@ cmake -G Ninja -B build "$@" || exit $?
 echo ""
 
 JOB_RAM_MB=750   # 750MB per job
-AVAILABLE_KB=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
-AVAILABLE_MB=$(( AVAILABLE_KB / 1024 ))
+if [ "$(uname)" = "Darwin" ]; then
+    # macOS has no MemAvailable; approximate with free+inactive pages.
+    PAGE_SIZE=$(sysctl -n hw.pagesize)
+    FREE_PAGES=$(vm_stat | awk -F'[:.]' '/Pages (free|inactive)/ {gsub(/ /,"",$2); sum+=$2} END {print sum}')
+    AVAILABLE_MB=$(( FREE_PAGES * PAGE_SIZE / 1048576 ))
+    CPU_CORES=$(sysctl -n hw.ncpu)
+else
+    AVAILABLE_KB=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
+    AVAILABLE_MB=$(( AVAILABLE_KB / 1024 ))
+    CPU_CORES=$(nproc)
+fi
 MAX_JOBS_FROM_RAM=$(( AVAILABLE_MB / JOB_RAM_MB ))
-CPU_CORES=$(nproc)
 JOBS=$(( MAX_JOBS_FROM_RAM < CPU_CORES ? MAX_JOBS_FROM_RAM : CPU_CORES ))
 [ "$JOBS" -lt 1 ] && JOBS=1
 echo "Available RAM : ${AVAILABLE_MB} MB"
@@ -42,5 +50,5 @@ fi
 # build makes a static libcsrc.a and a self-contained exe -- nothing to move.
 if [ -f build/libcsrc.so ] && [ ! -L build/libcsrc.so ]; then
     mv build/libcsrc.so ./spirulae_splat/csrc.so
-    ln -sfr ./spirulae_splat/csrc.so build/libcsrc.so
+    ln -sf ../spirulae_splat/csrc.so build/libcsrc.so
 fi

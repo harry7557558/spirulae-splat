@@ -61,22 +61,13 @@ All three options provide the same training functionality.
 
 | Installation Option | GPU/Vendor Support | Platform Support | Dependencies |
 |--------|--------|--------|--------|
-| Native Vulkan CLI/GUI | NVIDIA, AMD, Intel(R), Apple Silicon | Windows, Linux, macOS | Vulkan/MoltenVulkan, CMake/Ninja |
+| Native Vulkan CLI/GUI | NVIDIA, AMD, Intel(R), Apple Silicon | Windows, Linux, macOS | Vulkan/MoltenVK, CMake/Ninja |
 | Native CUDA CLI/GUI | CUDA-capable NVIDIA GPUs | Windows, Linux | CUDA, CMake/Ninja |
 | Legacy Python/PyTorch | CUDA-capable NVIDIA GPUs | Windows, Linux | CUDA, PyTorch, Python setup utilities |
 
 ## Native CLI/GUI trainer with Vulkan backend
 
-Make sure you have Vulkan SDK installed. Clone the repository and run the commands:
-
-### Linux:
-
-```bash
-cd spirulae-splat/
-bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan
-```
-
-If it builds successfully, you may find compiled binaries under `build/ssplat-train` (for CLI) and `build/ssplat-gui` (for GUI).
+Make sure you have Vulkan SDK (or MoltenVK for macOS) installed. Clone the repository and run the commands:
 
 ### Windows with MSVC:
 
@@ -99,18 +90,18 @@ Pass `-DCMAKE_C_COMPILER` and `-DCMAKE_CXX_COMPILER` to the first `cmake` comman
 
 If it builds successfully, you may find compiled programs under `build\ssplat-train.exe` (for CLI) and `build\ssplat-gui.exe` (for GUI).
 
-## Native CLI/GUI with CUDA backend
-
-Make sure you have a recent version of CUDA installed. On Windows, you also need MSVC compiler compatible with your CUDA version.
-
-### Linux:
+### Linux / macOS:
 
 ```bash
 cd spirulae-splat/
-bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=cuda
+bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan
 ```
 
 If it builds successfully, you may find compiled binaries under `build/ssplat-train` (for CLI) and `build/ssplat-gui` (for GUI).
+
+## Native CLI/GUI trainer with CUDA backend
+
+Make sure you have a recent version of CUDA installed. On Windows, you also need MSVC compiler compatible with your CUDA version. Clone the repository and run the commands:
 
 ### Windows:
 
@@ -120,6 +111,15 @@ build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=c
 ```
 
 If it builds successfully, you may find compiled programs under `build\ssplat-train.exe` (for CLI) and `build\ssplat-gui.exe` (for GUI).
+
+### Linux:
+
+```bash
+cd spirulae-splat/
+bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=cuda
+```
+
+If it builds successfully, you may find compiled binaries under `build/ssplat-train` (for CLI) and `build/ssplat-gui` (for GUI).
 
 ## Legacy Python/PyTorch trainer
 
