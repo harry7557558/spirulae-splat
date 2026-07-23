@@ -9,8 +9,8 @@
 #   1. src/viewer.cpp — dependency-free, performance-critical PLY/OBJ parsing,
 #      depth sorting, and statistics (kept -ffast-math / -fno-exceptions).
 #   2. The trainer's dataset parsers (COLMAP / Nerfstudio / Metashape), reused
-#      IN-PLACE from spirulae_splat/splat/cuda/csrc/app (referenced by relative
-#      path, not copied) and driven from src/dataset_bridge.cpp over MEMFS.
+#      IN-PLACE from ../src/data (referenced by relative path, not copied)
+#      and driven from src/dataset_bridge.cpp over MEMFS.
 # GLTF/GLB are parsed in JavaScript.
 
 cmake_minimum_required(VERSION 3.16)
@@ -28,23 +28,23 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Reused trainer sources (in-place; carried in the same git repo).
-set(CSRC "${CMAKE_SOURCE_DIR}/../spirulae_splat/splat/cuda/csrc")
-set(APP  "${CSRC}/app")
+set(SSPLAT_SRC "${CMAKE_SOURCE_DIR}/../src")
 
 set(DATASET_SOURCES
   "${CMAKE_SOURCE_DIR}/src/dataset_bridge.cpp"
-  "${APP}/ColmapParser.cpp"
-  "${APP}/NerfstudioParser.cpp"
-  "${APP}/MetashapeParser.cpp"
-  "${APP}/DatasetCommon.cpp"
-  "${CSRC}/external/miniz.c"
+  "${SSPLAT_SRC}/data/parsers/ColmapParser.cpp"
+  "${SSPLAT_SRC}/data/parsers/NerfstudioParser.cpp"
+  "${SSPLAT_SRC}/data/parsers/MetashapeParser.cpp"
+  "${SSPLAT_SRC}/data/parsers/DatasetCommon.cpp"
+  "${SSPLAT_SRC}/external/miniz.c"
 )
 
 add_executable(ssv_wasm src/viewer.cpp ${DATASET_SOURCES})
 
-# dataset_bridge.cpp includes DatasetParser.h / Json.h / Xml.h (the parser
-# sources find their own headers via their in-tree relative includes).
-target_include_directories(ssv_wasm PRIVATE "${APP}")
+# src/ is the trainer tree's include root: dataset_bridge.cpp includes
+# data/DatasetParser.h, data/Json.h, data/Xml.h and the parser sources
+# path-qualify their own includes the same way.
+target_include_directories(ssv_wasm PRIVATE "${SSPLAT_SRC}")
 
 # Per-source flags: viewer.cpp stays fast/exception-free; the dataset parsers
 # need C++ exceptions (they throw on bad input) and must NOT use -ffast-math

@@ -78,6 +78,40 @@ bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BAC
 
 If it builds successfully, you may find compiled binaries under `build/ssplat-train` (for CLI) and `build/ssplat-gui` (for GUI).
 
+### macOS (Apple Silicon):
+
+Install dependencies with [Homebrew](https://brew.sh/), then run the same build script as on Linux:
+
+```bash
+brew install cmake ninja molten-vk vulkan-headers vulkan-loader
+cd spirulae-splat/
+bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan
+```
+
+If it builds successfully, you may find compiled binaries under `build/ssplat-train` (for CLI) and `build/ssplat-gui` (for GUI).
+
+Notes:
+- Only the Vulkan backend is supported on macOS (via MoltenVK); the CUDA backend and the legacy PyTorch trainer are not.
+- `slangc` is downloaded automatically during configure. The macOS build uses the nearest Slang release that publishes macOS binaries when the pinned version does not (see `cmake/SsplatSlang.cmake`).
+- If configure fails with system C++ headers not found (e.g. `'algorithm' file not found`), your Xcode Command Line Tools install is missing its libc++ headers. Reinstall with `xcode-select --install`, or work around it by appending `-DCMAKE_CXX_FLAGS="-nostdinc++ -isystem $(xcrun --show-sdk-path)/usr/include/c++/v1"` to the build command.
+- Known limitation: compute correctness through MoltenVK has not been validated yet (`build/vk_pipeline_smoke` currently reports failures on Apple silicon). The build, CLI, and GUI run, but training results on macOS should not be trusted until this is resolved.
+
+#### Optional: COLMAP (dataset preprocessing)
+
+The GUI's dataset preprocessing pipeline invokes COLMAP (version 4.x required, found on `PATH` or set under Tool Locations in the GUI). It is not needed for training datasets that are already processed. Install with:
+
+```bash
+brew install colmap
+```
+
+To uninstall it later and reclaim disk space (COLMAP pulls in roughly 2 GB of dependencies):
+
+```bash
+brew uninstall colmap
+brew autoremove          # removes dependencies nothing else uses
+brew cleanup --prune=all # deletes cached downloads
+```
+
 ### Windows with MSVC:
 
 ```bat

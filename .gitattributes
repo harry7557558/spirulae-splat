@@ -1,8 +1,8 @@
 # Third-party dependencies (miniz, stb, npy, ...)
-spirulae_splat/splat/cuda/csrc/external/** linguist-vendored
+src/external/** linguist-vendored
 
 # Auto-generated code (generate_headers.py, generate_kernel_instantiation.py,
 # generate_cli_config.py)
-spirulae_splat/splat/cuda/csrc/generated/** linguist-vendored linguist-generated
-spirulae_splat/splat/cuda/csrc/app/generated/** linguist-vendored linguist-generated
-spirulae_splat/splat/cuda/ins/** linguist-vendored linguist-generated
+src/generated/** linguist-vendored linguist-generated
+src/app/generated/** linguist-vendored linguist-generated
+src/instantiations/** linguist-vendored linguist-generated

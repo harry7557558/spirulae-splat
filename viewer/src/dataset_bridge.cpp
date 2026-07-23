@@ -1,7 +1,7 @@
 // Dataset bridge for the standalone viewer.
 //
 // Reuses the trainer's battle-tested dataset parsers (compiled from
-// spirulae_splat/splat/cuda/csrc/app/*.cpp, referenced in-place by the viewer's
+// src/data/parsers/*.cpp, referenced in-place by the viewer's
 // CMakeLists) to load COLMAP / Nerfstudio / Metashape reconstructions in the
 // browser. JS mounts the dropped files into Emscripten's in-memory filesystem
 // (MEMFS) under /data, then this C ABI enumerates components and parses the one
@@ -12,9 +12,9 @@
 // point wraps them and degrades gracefully so a partial drop (only sparse/, only
 // a transforms.json, only a pointcloud.ply, ...) still shows what is available.
 
-#include "DatasetParser.h"
-#include "Json.h"
-#include "Xml.h"
+#include "data/DatasetParser.h"
+#include "data/Json.h"
+#include "data/Xml.h"
 
 #include <emscripten.h>
 

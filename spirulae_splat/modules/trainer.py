@@ -14,11 +14,16 @@ from spirulae_splat.modules.camera import Cameras
 from spirulae_splat.modules.model import SpirulaeSplatModelConfig, SpirulaeSplatModel
 from spirulae_splat.modules.datamanager import SpirulaeSplatDataManagerConfig, SpirulaeSplatDataManager
 
-from spirulae_splat.modules.dataparser import SpirulaeSplatDataparser, SpirulaeSplatDataParserConfig
+from spirulae_splat.modules.dataparser import SpirulaeSplatDataParserConfig
 from spirulae_splat.modules.dataset import SpirulaeSplatDataset
 from spirulae_splat.modules.optimizer import OptimizerConfig
 
-from spirulae_splat.viewer.annotation import annotate_train_cameras
+from spirulae_splat.modules.native_dataparser import (
+    parse_dataset as parse_dataset_native,
+    to_dataparser_outputs,
+    to_native_parser_config,
+)
+from spirulae_splat.modules.native_trainer import make_session
 from spirulae_splat.modules._profile import PROFILE_TRAIN_STEP
 
 
@@ -88,6 +93,23 @@ class TrainerConfig:
 
 
 class Trainer:
+    """Drives a native TrainerSession and adds what stays in Python.
+
+    The session (src/app/TrainerCore.{h,cpp}, bound as `_C.TrainerSession`) owns
+    config -> dataset parse -> splat seeding -> engine + DataManager setup ->
+    the per-step config and the step itself. It is the same code `ssplat-train`
+    and `ssplat-gui` run, so there is no second implementation to drift.
+
+    What this class keeps, and why each has to stay here:
+      * the output-dir / config.json conventions -- `ss_trainer.py --resume`
+        reads the Python dataclass dump back;
+      * checkpoint resume, including layout adaptation (resume_adapt);
+      * the eval pass -- LPIPS and the SSIM variants are torch models;
+      * the training loop itself, because resume needs a non-zero start step
+        and the profiling / debug-dump probes hang off it;
+      * `SpirulaeSplatModel`, in attach mode, purely as the eval / metrics
+        renderer over the world the session seeded.
+    """
 
     def __init__(
         self,
@@ -102,424 +124,102 @@ class Trainer:
         engine_reset()
 
         self.config = config
-        self.dataparser = SpirulaeSplatDataparser(config.dataparser, config.data)
-        self.dataparser_outputs_train, self.dataparser_outputs_eval = self.dataparser.parse()
-        self.dataset_train = SpirulaeSplatDataset(self.dataparser_outputs_train)
-        self.dataset_eval = SpirulaeSplatDataset(self.dataparser_outputs_eval)
 
-        self._train_frame_scale = float(
-            self.dataparser_outputs_train.get('train_frame_scale', 1.0))
-        self._train_to_normalized_transform = self.dataparser_outputs_train.get(
-            'train_to_normalized_transform', torch.eye(4))
-
-        self.datamanager = SpirulaeSplatDataManager(self.config.datamanager, device="cuda")
-        self.datamanager.train_dataset = self.dataset_train
-
-        self.model = SpirulaeSplatModel(
-            self.config,
-            self.dataparser_outputs_train['metadata'],
-            self.dataparser_outputs_train['cameras']
-        )
-        # Push the frame scale into the engine wrapper so it can rescale
-        # means_lr / scale_reg / max_world_size / noise_lr per step.
-        self.model.core.train_frame_scale = self._train_frame_scale
-
-        # When the C++ DataManager is enabled, install it on the engine once
-        # here. Per-step training will then go through
-        # ``model.engine_train_step_managed`` and bypass the Python data path.
-        self._setup_cpp_data_manager()
-
-        # The engine skeleton (world seeded at max_num_splats + data manager) is
-        # now established -- exactly the precondition engine_load_checkpoint
-        # needs. Restore from a checkpoint if resuming; otherwise start at step 0.
-        self._start_step = 0
-        if self.config.resume is not None:
-            self._resume_from_checkpoint(self.config.resume)
-
+        # ---- the native session ------------------------------------------
+        # Python owns the output dir and config.json, so the session is told
+        # not to write its own (different, less complete) dump.
+        self.session = make_session(config)
+        self.session.write_config_json = False
         self.output_dir = self._setup_output_dir()
-        print(f"Output directory: {self.output_dir.absolute()}")
+        self.session.out_dir_override = str(self.output_dir)
+        # setup_engine() logs the output directory itself; don't print it twice.
+
+        self.session.load_dataset()
+
+        # A Python view of the SAME parse -- no second parse for train. Feeds
+        # the model (cameras + seed cloud) and dataparser_transforms.json.
+        self.dataparser_outputs_train = to_dataparser_outputs(
+            self.session.dataset,
+            depth_unit_scale_factor=config.dataparser.depth_unit_scale_factor,
+            train_frame=config.dataparser.train_frame,
+        )
+        self._train_frame_scale = float(self.session.dataset.train_frame_scale)
+        self._train_to_normalized_transform = \
+            self.dataparser_outputs_train['train_to_normalized_transform']
 
         # Don't overwrite the source run's config.json when resuming.
         if self.config.resume is None:
             self._save_config_json()
 
-        self.lock = threading.Lock()
-        # Lock-fairness signal: the render thread sets this before contending
-        # for `self.lock`. The training thread checks it at each iteration's
-        # acquire site and yields the OS scheduler enough times for the render
-        # thread to win the contended acquire. Without this, train_step's
-        # tight re-acquire after release would starve render for many
-        # iterations (observed: 7-30 s waits on a 200 ms/step run).
-        self._render_pending = threading.Event()
+        # Seeds the world, installs the DataManager, initializes background /
+        # color space / bilagrid / PPISP.
+        self.session.setup_engine()
 
-        # Progress tracking
-        self.current_step = 0
+        # ---- the Python-side model, attached to that world ----------------
+        self.model = SpirulaeSplatModel(
+            self.config,
+            self.dataparser_outputs_train['metadata'],
+            self.dataparser_outputs_train['cameras'],
+            attach_engine=True,
+            num_train_data=int(self.session.post.n_post),
+        )
+        self.model.core.train_frame_scale = self._train_frame_scale
+        # Mirror the session's setup decisions onto the model, so resume's
+        # eager-init logic and the eval renderer agree about what exists.
+        st = self.session.run_state
+        self.model._bilagrid_rgb_init    = st.bilagrid_rgb_init
+        self.model._bilagrid_depth_init  = st.bilagrid_depth_init
+        self.model._bilagrid_normal_init = st.bilagrid_normal_init
+        self.model._ppisp_init           = st.ppisp_init
+
+        # The engine skeleton is established -- exactly the precondition
+        # engine_load_checkpoint needs. Restore if resuming, else start at 0.
+        self._start_step = 0
+        if self.config.resume is not None:
+            self._resume_from_checkpoint(self.config.resume)
+
+        # Eval state, built on demand by eval().
+        self.dataset_eval = None
+        self.datamanager = None
+        self._viewer = None
+
+        # Progress tracking. The step counter, pause flag, latency window and
+        # /progress body all live on the session (shared with the viewer's
+        # render worker), so there is nothing to mirror here.
         self.start_time = None
-        self.last_step_time = None
-        self.step_latencies = []
-        
-        # Pause/resume control
-        self._paused = False
-        self._pause_lock = threading.Lock()
-        self._pause_event = threading.Event()
-        self._pause_event.set()  # Initially not paused (set = can proceed)
+        self._training_time = None
+
+    # ---- viewer ----------------------------------------------------------
+
+    def start_viewer(self, host: str = "0.0.0.0", port: Optional[int] = None):
+        """Serve the native web viewer for this session.
+
+        Same HTTP server, render worker and viewer.html the CLI and GUI use
+        (src/app/webviewer/). It reads the step counter, pause flag, progress
+        JSON and engine mutex straight off the session, so the training loop
+        below pushes nothing to it.
+        """
+        from spirulae_splat.splat.cuda import _C
+        if self._viewer is not None:
+            return self._viewer
+        port = self.config.viewer_port if port is None else port
+        self._viewer = _C.WebViewer()
+        self._viewer.start_for_session(self.session, host, port)
+        print(f"Viewer at http://{host}:{port}/")
+        return self._viewer
+
+    def stop_viewer(self):
+        if self._viewer is not None:
+            self._viewer.stop()
+            self._viewer = None
 
     def toggle_pause(self) -> bool:
-        """Toggle pause state. Returns True if now paused, False if resumed."""
-        with self._pause_lock:
-            self._paused = not self._paused
-            if self._paused:
-                self._pause_event.clear()  # Paused: block training
-            else:
-                self._pause_event.set()  # Resumed: allow training
-            return self._paused
-    
-    def _check_pause(self):
-        """Wait if training is paused. Called during training loop."""
-        self._pause_event.wait()
+        self.session.paused = not self.session.paused
+        return self.session.paused
 
     def get_progress(self):
-        if self.start_time is None:
-            return {
-                "step": 0,
-                "total_steps": self.config.num_iterations,
-                "elapsed_time": 0,
-                "eta": None,
-                "latency_ms": None,
-                "paused": False,
-            }
-        elapsed = time.time() - self.start_time
-        avg_latency = sum(self.step_latencies) / len(self.step_latencies) if self.step_latencies else None
-        if avg_latency and self.current_step > 0:
-            remaining_steps = self.config.num_iterations - self.current_step
-            eta = remaining_steps * avg_latency
-        else:
-            eta = None
-        return {
-            "step": self.current_step,
-            "total_steps": self.config.num_iterations,
-            "elapsed_time": elapsed,
-            "eta": eta,
-            "latency_ms": avg_latency * 1000 if avg_latency else None,
-            "paused": self._paused,
-        }
-
-    def _setup_cpp_data_manager(self):
-        """Install the C++ DataManager on the engine from the parsed dataset.
-
-        Bakes per-camera viewmats / intrins / dist_coeffs into the same flat
-        layout the engine consumes — same R/T inverse + Y/Z flip + relative
-        scale that ``model.engine_train_step`` would have applied per step,
-        but done ONCE here so the C++ side can hand them to the engine
-        directly each step.
-
-        The managed path is currently restricted to plain, no-frills setups:
-        no camera optimizer, no warp_to_pinhole, no equirectangular split,
-        no split_batch, no BVH primitive.
-        Anything else raises here so the user sees the limitation up front
-        rather than silently quality-regressing.
-        """
-        import spirulae_splat.csrc as _C
-
-        dm_cfg     = self.config.datamanager
-        model_cfg  = self.config.model
-        dpo        = self.dataparser_outputs_train
-
-        # ---- Feature-combination validation ------------------------------
-        # datamanager.split_batch (the Python data-path OOM workaround) is a
-        # no-op here: the C++ DataManager builds a deterministic once-per-epoch
-        # schedule and, on datasets with many small resolution groups, packs
-        # sub-B remainders across resolutions into a single optimizer step that
-        # the engine consumes via heterogeneous grad accumulation. Effective
-        # batch size (and hence FPBO vs. grad-accumulator VRAM) is derived from
-        # max_batch_per_epoch, so no extra flag is needed.
-        if self.model.core.primitive not in ('3dgs', 'mip', '3dgut') or self.model.core.use_bvh:
-            raise NotImplementedError("use_cpp_data_manager requires non-BVH 3dgs/mip/3dgut primitive")
-
-        cameras = dpo['cameras']
-        N = len(cameras)
-        if N == 0:
-            raise RuntimeError("use_cpp_data_manager: empty cameras")
-
-        # Per-camera model enum int. Mixed models OK -- the C++ DataManager
-        # partitions by (W, H, model).
-        cam_types = [str(t).upper() for t in cameras.camera_type]
-        camera_models = []
-        for s in cam_types:
-            e = _C.camera_model_from_name(s) if hasattr(_C, 'camera_model_from_name') \
-                else getattr(_C.CameraModelType, s)
-            camera_models.append(int(e))
-
-        # Per-camera input shape.
-        widths  = [int(w) for w in cameras.width.detach().cpu().flatten().tolist()]
-        heights = [int(h) for h in cameras.height.detach().cpu().flatten().tolist()]
-
-        # ---- Warp-to-pinhole split factor per camera --------------------
-        # FISHEYE / EQUISOLID -> K=5 when warp_to_pinhole is on.
-        # EQUIRECTANGULAR    -> K=6 when warp_spherical_to_pinhole is on (default);
-        #                       K=1 (pass-through, direct equirect training) when off.
-        # everything else    -> K=1 (pass-through).
-        from spirulae_splat.modules.camera import CameraType
-        PINHOLE_VAL  = int(_C.camera_model_from_name("PINHOLE"))
-        FISHEYE_VAL  = int(_C.camera_model_from_name("FISHEYE"))
-        EQUISOLID_VAL = int(_C.camera_model_from_name("EQUISOLID"))
-        EQUIRECT_VAL  = int(_C.camera_model_from_name("EQUIRECTANGULAR"))
-        K_per_camera = []
-        for cm in camera_models:
-            if cm == EQUIRECT_VAL:
-                K_per_camera.append(6 if dm_cfg.warp_spherical_to_pinhole else 1)
-            elif dm_cfg.warp_to_pinhole and cm in (FISHEYE_VAL, EQUISOLID_VAL):
-                K_per_camera.append(5)
-            else:
-                K_per_camera.append(1)
-        any_warp = any(k > 1 for k in K_per_camera)
-        # Equirectangular cameras that pass through un-split are rendered with a
-        # direct equirectangular projection (no cubemap faces).
-        direct_equirect = any(
-            cm == EQUIRECT_VAL and K_per_camera[idx] == 1
-            for idx, cm in enumerate(camera_models)
-        )
-        post_offsets = []
-        acc = 0
-        for k in K_per_camera:
-            post_offsets.append(acc); acc += k
-        n_post = acc
-
-        # Warp (fisheye/equirectangular -> pinhole split) supports depth /
-        # normal supervision: the engine warps the wide GT depth to per-face
-        # ray depth and rotates the wide GT normal into each face's camera
-        # frame (set_training_data_warped). PPISP is also supported on warp:
-        # it's render-side and runs on the POST-split pinhole sub-cameras, with
-        # one parameter slot per sub-camera (n_post total).
-        # TODO: depth / normal supervision for direct equirectangular training.
-        if direct_equirect:
-            if dm_cfg.load_depths and dpo['metadata'].get('depth_filenames', None):
-                raise NotImplementedError(
-                    "Direct equirectangular training (warp_spherical_to_pinhole=False) "
-                    "does not support depth supervision yet.")
-            if dm_cfg.load_normals and dpo['metadata'].get('normal_filenames', None):
-                raise NotImplementedError(
-                    "Direct equirectangular training (warp_spherical_to_pinhole=False) "
-                    "does not support normal supervision yet.")
-
-        # ---- Per-INPUT c2w / intrins / dist_coeffs (raw, host) ----------
-        c2w_all = cameras.camera_to_worlds.detach().cpu()
-        if c2w_all.dim() == 2:
-            c2w_all = c2w_all.unsqueeze(0)
-        c2w_all = c2w_all.float()  # [N, 3, 4]
-
-        input_intrins = cameras.intrins.detach().cpu().float()
-        if input_intrins.dim() == 1:
-            input_intrins = input_intrins.unsqueeze(0).repeat(N, 1)
-        if cameras.distortion_params is None:
-            input_dist_coeffs = torch.zeros(N, 10, dtype=torch.float32)
-        else:
-            input_dist_coeffs = cameras.distortion_params.detach().cpu().float()
-            if input_dist_coeffs.dim() == 1:
-                input_dist_coeffs = input_dist_coeffs.unsqueeze(0).repeat(N, 1)
-            if input_dist_coeffs.shape[1] < 10:
-                pad = torch.zeros(N, 10 - input_dist_coeffs.shape[1], dtype=torch.float32)
-                input_dist_coeffs = torch.cat([input_dist_coeffs, pad], dim=1)
-
-        # ---- Expand to POST-split c2w / intrins / dist_coeffs ------------
-        # Same algebra as modules/resample.py warp_*_to_pinhole, but on cameras
-        # only (no images): apply diag(1, -1, -1) flip on c2w R, rotate by the
-        # cubemap axis, flip back; copy T. Output intrins are canonical
-        # PINHOLE at fx=fy=cx=cy=out_shape/2; dist_coeffs are all zero.
-        import math
-        # 5- and 6-face cubemap axis tables (must match the C++ axes in
-        # DataManager.cpp's kAxesFisheye5 / kAxesEquirect6).
-        axes_5 = torch.tensor([
-            [[1,0,0],[0,1,0],[0,0,1]],
-            [[0,1,0],[0,0,1],[1,0,0]],
-            [[-1,0,0],[0,0,1],[0,1,0]],
-            [[0,-1,0],[0,0,1],[-1,0,0]],
-            [[1,0,0],[0,0,1],[0,-1,0]],
-        ], dtype=torch.float32)
-        axes_6 = torch.tensor([
-            [[1,0,0],[0,1,0],[0,0,1]],
-            [[0,0,-1],[0,1,0],[1,0,0]],
-            [[-1,0,0],[0,0,1],[0,1,0]],
-            [[0,-1,0],[0,0,1],[-1,0,0]],
-            [[1,0,0],[0,0,1],[0,-1,0]],
-            [[1,0,0],[0,-1,0],[0,0,-1]],
-        ], dtype=torch.float32)
-        D = torch.tensor([1.0, -1.0, -1.0])  # diag flip applied per face
-
-        post_c2w     = torch.zeros(n_post, 3, 4, dtype=torch.float32)
-        post_intrins = torch.zeros(n_post, 4, dtype=torch.float32)
-        post_dist    = torch.zeros(n_post, 10, dtype=torch.float32)
-        post_widths        = [0] * n_post
-        post_heights       = [0] * n_post
-        post_camera_models = [0] * n_post   # int enum; viewer uses these
-        for i in range(N):
-            k_i = K_per_camera[i]
-            off = post_offsets[i]
-            ci  = c2w_all[i]  # [3, 4]
-            if k_i == 1:
-                post_c2w[off]     = ci
-                if camera_models[i] == EQUIRECT_VAL:
-                    # Direct equirectangular training. Force canonical panorama
-                    # intrinsics matching warp_image_equirectangular_to_pinhole_kernel
-                    # (PixelWise.cu): fx = fy = W/(2*pi), cx = W/2, cy = H/2. Stored
-                    # dataparser intrinsics for spherical sensors are not in this
-                    # convention, so they are intentionally ignored here.
-                    f_i = widths[i] / (2.0 * math.pi)
-                    post_intrins[off] = torch.tensor(
-                        [f_i, f_i, widths[i] / 2.0, heights[i] / 2.0])
-                else:
-                    post_intrins[off] = input_intrins[i]
-                post_dist[off]    = input_dist_coeffs[i]
-                post_widths[off]        = widths[i]
-                post_heights[off]       = heights[i]
-                post_camera_models[off] = camera_models[i]
-                continue
-            # Pick the right axes table.
-            axes = axes_6 if k_i == 6 else axes_5
-            out_shape = int(math.ceil(math.sqrt(heights[i] * widths[i] / k_i)))
-            # Same algebra as modules/resample.py:
-            #   R' = R_orig * diag(1, -1, -1)             # OpenGL -> OpenCV flip
-            #   R_warp[k] = R' @ axes[k]^T                # cubemap rotation in OpenCV
-            #   R_post[k] = R_warp[k] * diag(1, -1, -1)   # OpenCV -> OpenGL flip
-            # The earlier `axes[k] @ R` form was wrong (left-multiply instead
-            # of right-multiply by axes^T); for face 0 it happened to give
-            # the right answer (axes[0] = I), so the bug only showed up for
-            # the non-identity faces -- exactly the symptom the user saw
-            # (a blurry / messy render after warp).
-            R = ci[:3, :3] * D[None, :]                  # [3, 3]
-            for k in range(k_i):
-                R_new = (R @ axes[k].T) * D[None, :]     # [3, 3]
-                post_c2w[off + k, :3, :3] = R_new
-                post_c2w[off + k, :3, 3]  = ci[:3, 3]
-                # Canonical pinhole intrins for the sub-image.
-                s = float(out_shape) / 2.0
-                post_intrins[off + k] = torch.tensor([s, s, s, s])
-                # Dist coeffs already zero.
-                post_widths[off + k]        = out_shape
-                post_heights[off + k]       = out_shape
-                # Each post-split face is rendered/displayed as PINHOLE.
-                post_camera_models[off + k] = PINHOLE_VAL
-
-        # ---- c2w -> viewmat (R/T inverse + Y/Z flip + relative_scale) ---
-        # Matches model.engine_train_step's per-step formula.
-        R_v = post_c2w[:, :3, :3].clone()
-        T_v = post_c2w[:, :3, 3:4].clone()
-        if model_cfg.relative_scale is not None:
-            T_v = T_v * float(model_cfg.relative_scale)
-        R_v = R_v * torch.tensor([[[1.0, -1.0, -1.0]]])
-        R_inv = R_v.transpose(-1, -2)
-        T_inv = -torch.bmm(R_inv, T_v)
-        viewmats = torch.eye(4).unsqueeze(0).repeat(n_post, 1, 1).float()
-        viewmats[:, :3, :3] = R_inv
-        viewmats[:, :3, 3:4] = T_inv
-
-        intrins     = post_intrins
-        dist_coeffs = post_dist
-
-        # ---- File-path lists --------------------------------------------
-        def _strs(seq):
-            return [str(p) for p in seq] if seq is not None else []
-
-        image_filenames  = _strs(dpo['image_filenames'])
-        mask_filenames   = _strs(dpo.get('mask_filenames', None))
-        depth_filenames  = _strs(dpo['metadata'].get('depth_filenames',  None)) if dm_cfg.load_depths  else []
-        normal_filenames = _strs(dpo['metadata'].get('normal_filenames', None)) if dm_cfg.load_normals else []
-
-        # ---- Train / val split -------------------------------------------
-        val_set = set(int(i) for i in self.dataset_train.val_indices)
-        train_indices = [i for i in range(N) if i not in val_set]
-        val_indices   = sorted(val_set)
-
-        # Effective batch sizes — reuse the Python datamanager's policy so
-        # behavior matches at iteration scale.
-        train_bs = max(1, self.datamanager.train_batch_size(stochastic=False))
-        val_bs   = max(1, self.datamanager.val_batch_size(stochastic=False)) if val_indices else 1
-
-        # ---- Build the DataManagerConfig --------------------------------
-        cmap = {
-            "cpu":          _C.DataManagerCacheMode.CPU,
-            "cpu-pageable": _C.DataManagerCacheMode.CPU,
-            "disk":         _C.DataManagerCacheMode.DISK,
-        }
-        cache_key = dm_cfg.cache_images
-        if cache_key not in cmap:
-            raise NotImplementedError(
-                f"use_cpp_data_manager: cache_images='{cache_key}' (only "
-                "'cpu', 'cpu-pageable', or 'disk' are supported)")
-
-        c_cfg = _C.DataManagerConfig()
-        c_cfg.cache_mode       = cmap[cache_key]
-        # Enable masks also when warp_to_pinhole is on AND the dataset has
-        # any fisheye/equisolid input -- the C++ DataManager synthesizes
-        # a 1x1 all-white placeholder per such image so the wide-warp mask
-        # kernel produces a proper post-split FOV mask (1 inside lens, 0
-        # outside). Without a mask the unseen regions of each cubemap
-        # face stay black and the training loss bakes gray splats there.
-        _needs_synth_mask = dm_cfg.warp_to_pinhole and any(
-            cm in (FISHEYE_VAL, EQUISOLID_VAL) for cm in camera_models
-        )
-        c_cfg.load_masks       = (len(mask_filenames) > 0) or _needs_synth_mask
-        c_cfg.load_depths      = (len(depth_filenames) > 0 and not direct_equirect)
-        c_cfg.load_normals     = (len(normal_filenames) > 0 and not direct_equirect)
-        c_cfg.train_batch_size = train_bs
-        c_cfg.val_batch_size   = val_bs
-        c_cfg.warp_to_pinhole  = bool(dm_cfg.warp_to_pinhole)
-        c_cfg.mask_boundary_offset = float(dm_cfg.mask_boundary_offset)
-
-        # Input intrins / dist_coeffs are needed by the wide warp kernel
-        # (fisheye / equisolid). Pass them even when only equirectangular
-        # warp is active -- the equirectangular kernel just ignores them.
-        input_intrins_list     = input_intrins.contiguous().flatten().tolist() if any_warp else []
-        input_dist_coeffs_list = input_dist_coeffs.contiguous().flatten().tolist() if any_warp else []
-
-        _C.engine_setup_data_manager(
-            c_cfg, camera_models,
-            image_filenames, mask_filenames, depth_filenames, normal_filenames,
-            widths, heights,
-            K_per_camera, post_offsets,
-            viewmats.contiguous().flatten().tolist(),
-            intrins.contiguous().flatten().tolist(),
-            dist_coeffs.contiguous().flatten().tolist(),
-            input_intrins_list, input_dist_coeffs_list,
-            train_indices, val_indices)
-
-        # The bilagrid (+ PPISP, + camera-optimizer) tables are sized off
-        # `self.model.num_train_data`. The model's pre-init uses a uniform
-        # K=6 upper bound for the C++ datamanager path since it has no
-        # per-camera K info at __init__ time; resolve it to the real
-        # post-split count now. For non-warp datasets (n_post == N), this
-        # shrinks the table back to N -- without this, bilagrid `n_grids`
-        # is 6x too large and the TV-loss normalization (~1/N_grids) makes
-        # the TV regularizer 6x weaker than intended.
-        self.model.num_train_data = int(n_post)
-
-        # Build a POST-split Cameras object for the viewer. For the warp
-        # path each input image is exposed as K=5 (fisheye/equisolid) or
-        # K=6 (equirectangular) PINHOLE sub-cameras at the cubemap face
-        # poses -- exactly matching what the engine renders + caches
-        # thumbnails for. For mixed datasets, the per-camera K table
-        # already handles the interleave (K=1 pass-through for native
-        # PINHOLE, K=5/6 split for the wide / equirect entries).
-        _INT_TO_NAME = {
-            PINHOLE_VAL:  "PINHOLE",
-            FISHEYE_VAL:  "FISHEYE",
-            EQUISOLID_VAL:"EQUISOLID",
-            EQUIRECT_VAL: "EQUIRECTANGULAR",
-        }
-        post_camera_type_names = [_INT_TO_NAME[m] for m in post_camera_models]
-        self._viewer_cameras = Cameras(
-            intrins           = post_intrins,
-            distortion_params = post_dist,
-            height            = torch.tensor(post_heights, dtype=torch.int32),
-            width             = torch.tensor(post_widths,  dtype=torch.int32),
-            camera_to_worlds  = post_c2w,
-            camera_type       = post_camera_type_names,
-        )
-
-        # Pass through to the model so engine_train_step_managed knows which
-        # bilagrid lazy-init branches are actually live this run.
-        self.model._dm_has_depths  = c_cfg.load_depths
-        self.model._dm_has_normals = c_cfg.load_normals
+        import json as _json
+        return _json.loads(self.session.progress_json())
 
     def _setup_output_dir(self):
         if self.config.output_dir_name is not None:
@@ -554,191 +254,138 @@ class Trainer:
         with open(self.output_dir / "dataparser_transforms.json", "w") as f:
             json.dump(dataparser_transform_dict, f, indent=4)
 
-    def _render(self, c2w, fx, fy, cx, cy, w, h, camera_model, buffer_key="rgb"):
-        if self._train_frame_scale != 1.0:
-            # Viewer client sends c2w in the legacy normalized frame; remap to
-            # the actual training frame before rendering so navigation feel
-            # (movement speed, axis-up) stays the same regardless of train_frame.
-            # T is a similarity (scale * R | t); apply the full similarity to
-            # the camera position but only the unit rotation to the c2w R block
-            # — otherwise the scale would be baked into the camera basis
-            # vectors and the camera would over-zoom by a factor of scale.
-            T = self._train_to_normalized_transform.detach().cpu().numpy().astype(c2w.dtype)
-            R_full = T[:3, :3]
-            t_full = T[:3, 3]
-            s = float(np.linalg.norm(R_full[:, 0]))
-            R_unit = R_full / s
-            R_in = c2w[:3, :3]
-            t_in = c2w[:3, 3]
-            c2w_new = np.empty((3, 4), dtype=c2w.dtype)
-            c2w_new[:3, :3] = R_unit @ R_in
-            c2w_new[:3, 3] = R_full @ t_in + t_full
-            c2w = c2w_new
-        camera = Cameras((fx, fy, cx, cy), [0.0]*10, h, w, torch.from_numpy(c2w), camera_model)
-        camera = camera.to("cuda")
-        # Pass want_keys=[buffer_key] so the model can skip the SH /
-        # refinement_score debug renders + the depth_normal kernel when
-        # the viewer didn't ask for them. Empty buffer_key ("") means
-        # "render everything" -- used by the viewer's buffer-enumeration
-        # path so the dropdown sees every supported key.
-        want = None if not buffer_key else [buffer_key]
-        outputs = self.model.get_outputs(camera, want_keys=want)
-
-        # Stuff `None` placeholders into the output dict for every buffer the
-        # viewer's dropdown should know about. This lets the buffer-enumeration
-        # endpoint (and `last_keys` cache populated by the first hot render)
-        # list every supported key even though `want_keys` only rendered the
-        # currently selected one. The hot path stays fast because the actual
-        # tensors are only produced for the requested key; when the user
-        # switches to a previously-`None` slot, the next request renders it.
-        # Distortion buffers are offered only when a distortion regularizer
-        # is configured: producing them costs full-resolution VRAM (the
-        # rasterizer's distortion channels), so zero reg weights = the
-        # buffers neither appear in the dropdown nor get rendered.
-        _dist_on = (getattr(self.model.config, 'rgb_distortion_reg', 0.0) != 0.0 or
-                    getattr(self.model.config, 'depth_distortion_reg', 0.0) != 0.0 or
-                    getattr(self.model.config, 'normal_distortion_reg', 0.0) != 0.0)
-        for _k in (["rgb", "depth", "alpha"] + ["normal"] * 0 + ["depth_normal",
-                   "depth_median", "normal_median"] +
-                   (["rgb_distortion", "depth_distortion"] if _dist_on else []) +
-                   ["sh", "refinement_score"]):
-            outputs.setdefault(_k, None)
-        # Use the post-split Cameras when available (CPP DataManager path).
-        # For the legacy Python DM path no warp split happens, so the
-        # per-input cameras are already the right thing for the viewer.
-        _viewer_cams = getattr(self, '_viewer_cameras', None)
-        if _viewer_cams is None:
-            _viewer_cams = self.dataset_train.cameras
-        outputs['_post_processor'] = lambda tensor, **kwargs: annotate_train_cameras(
-            buffer_key, tensor,
-            outputs.get('depth', None), outputs['alpha'],
-            camera, _viewer_cams,
-            **kwargs
-        )
-        return outputs
-
-    def render(self, c2w, fx, fy, cx, cy, w, h, camera_model,
-               buffer_key="rgb", *, show_training_cameras: bool = False,
-               show_grid: bool = False, grid_dist: float = 0.0,
-               grid_target=(0.0, 0.0, 0.0)):
-        # Invoking the post-processor + D->H copy inside this lock is what
-        # makes viewer requests respond quickly during training: it ensures
-        # the .cpu() Memcpy is queued on the default stream BEFORE the next
-        # train_step queues iter N+1's kernels. Otherwise the Memcpy has to
-        # wait for every queued training kernel, which can be ~1 s per iter
-        # on large scenes -- the source of the multi-second viewer lag.
-        # The "render desired" flag is driven by the RenderWorker's
-        # on_submit/on_idle hooks -- the HTTP submit() flips it before we
-        # ever get here, which is what lets train_step yield the lock at the
-        # very next iteration boundary instead of after several missed ones.
-        with self.lock:
-            self.model.eval()
-            outputs = self._render(c2w, fx, fy, cx, cy, w, h,
-                                   camera_model, buffer_key)
-            if buffer_key and outputs.get(buffer_key) is not None:
-                pp = outputs.pop('_post_processor', None)
-                if pp is not None:
-                    # Client (normalized-frame) grid inputs -> engine frame,
-                    # like the c2w remap: distance scales by the similarity,
-                    # the orbit target maps through it.
-                    gt = np.asarray(grid_target, dtype=np.float64)
-                    if self._train_frame_scale != 1.0:
-                        T = self._train_to_normalized_transform.detach().cpu().numpy()
-                        gt = T[:3, :3] @ gt + T[:3, 3]
-                    annotated = pp(outputs[buffer_key],
-                                   show_training_cameras=show_training_cameras,
-                                   show_grid=show_grid,
-                                   grid_dist=grid_dist * self._train_frame_scale,
-                                   grid_target=tuple(float(x) for x in gt))
-                    outputs[buffer_key] = annotated.cpu().numpy()
-            return outputs
+    # ---- training loop ---------------------------------------------------
 
     def _train_step(self, step: int):
-        # ---- profiling probes (gated by PROFILE_TRAIN_STEP) ----
+        """One step through the session, plus the Python-only probes.
+
+        The step config (loss weights, LR schedules, densify / bilagrid /
+        PPISP / background args) is built in C++ by
+        TrainerCore::build_step_config -- there is no Python copy to keep in
+        sync. tests/python/test_trainer_parity.py is the gate on that.
+        """
         if PROFILE_TRAIN_STEP:
             _prof = getattr(self, "_step_prof", None)
             if _prof is None:
                 self._step_prof = _prof = {
-                    "n": 0, "warmup": 10,
-                    "step_cb": 0, "next_train": 0, "engine": 0,
-                    "verbose": 0, "gpu_drain": 0,
-                }
+                    "n": 0, "warmup": 10, "engine": 0, "gpu_drain": 0, "verbose": 0}
             from time import perf_counter_ns as _t
             t0 = _t()
 
-        self.model.step_cb(step)
-        if PROFILE_TRAIN_STEP: t1 = _t()
+        self.model.step = step
+        with self.session.engine_lock():
+            losses = self.session.train_step(step)
 
-        # Managed path: engine pulls the next batch from its DataManager.
-        # Python doesn't touch GT / camera tensors per step.
-        if PROFILE_TRAIN_STEP: t2 = _t()
-        self.model.engine_train_step_managed(step)
-        # Optional: dump GT + render at specific steps for visual debugging.
-        # Enable with e.g. `SS_DEBUG_DUMP_STEPS=0,1,10,100 SS_DEBUG_DUMP_DIR=debug ss-train ...`
-        import os as _os
-        _dump_steps = _os.environ.get("SS_DEBUG_DUMP_STEPS", "")
-        if _dump_steps:
-            try:
-                _steps = {int(s) for s in _dump_steps.split(",") if s.strip()}
-            except ValueError:
-                _steps = set()
-            if step in _steps:
-                from spirulae_splat.modules import debug_image as _dbg
-                _dir = _os.environ.get("SS_DEBUG_DUMP_DIR", "debug")
-                prefix = f"{_dir}/step{step:06d}"
-                arrs = _dbg.dump_engine_step(prefix)
-                for k, a in arrs.items():
-                    print(f"[debug_image] {prefix}_{k}: {_dbg.buffer_stats(a)}", flush=True)
+        if PROFILE_TRAIN_STEP:
+            t1 = _t()
+            # GPU drain probe: how much GPU work is still queued after the
+            # engine call returns. With async D->H the host runs ahead, so
+            # iter N+1's host work overlaps iter N's GPU tail.
+            torch.cuda.synchronize()
+            t2 = _t()
+
+        self._record_metrics(step, losses)
+        self.model.verbose()
+
+        self._maybe_debug_dump(step)
 
         if PROFILE_TRAIN_STEP:
             t3 = _t()
-            # GPU drain probe: how much GPU work is still queued after the
-            # engine call returns. With option 3 (async D->H), the host gets
-            # ahead and this becomes significant — meaning iter N+1's host
-            # work overlaps with iter N's GPU tail.
-            torch.cuda.synchronize()
-            t3b = _t()
-
-        self.model.verbose()
-
-        if PROFILE_TRAIN_STEP:
-            t4 = _t()
             if _prof["warmup"] > 0:
                 _prof["warmup"] -= 1
             else:
                 _prof["n"] += 1
-                _prof["step_cb"]    += (t1 - t0)
-                _prof["next_train"] += (t2 - t1)
-                _prof["engine"]     += (t3 - t2)
-                _prof["gpu_drain"]  += (t3b - t3)
-                _prof["verbose"]    += (t4 - t3b)
+                _prof["engine"]    += (t1 - t0)
+                _prof["gpu_drain"] += (t2 - t1)
+                _prof["verbose"]   += (t3 - t2)
             if _prof["n"] >= 100:
                 n = _prof["n"]
-                print(
-                    f"\n[PROF n={n}] "
-                    f"step_cb={_prof['step_cb']/n/1e6:.3f}ms "
-                    f"next_train={_prof['next_train']/n/1e6:.3f}ms "
-                    f"engine={_prof['engine']/n/1e6:.3f}ms "
-                    f"gpu_drain={_prof['gpu_drain']/n/1e6:.3f}ms "
-                    f"verbose={_prof['verbose']/n/1e6:.3f}ms "
-                    f"sum={(t4-t0)/1e6:.3f}ms",
-                    flush=True,
-                )
-                for k in ("step_cb", "next_train", "engine", "gpu_drain", "verbose"):
+                print(f"\n[PROF n={n}] "
+                      f"engine={_prof['engine']/n/1e6:.3f}ms "
+                      f"gpu_drain={_prof['gpu_drain']/n/1e6:.3f}ms "
+                      f"verbose={_prof['verbose']/n/1e6:.3f}ms",
+                      flush=True)
+                for k in ("engine", "gpu_drain", "verbose"):
                     _prof[k] = 0
                 _prof["n"] = 0
 
-    def train_step(self, *args):
-        # Yield to a pending render before contending for self.lock. A short
-        # sleep is enough to let the render thread's blocked acquire win on
-        # Linux (pthread_mutex wakes the longest-waiting thread when the
-        # current owner has been idle); without it, the immediate re-acquire
-        # at the top of the next iter beats the render thread to the lock.
-        if self._render_pending.is_set():
-            time.sleep(0.001)
-        with self.lock:
-            self.model.train()
-            return self._train_step(*args)
+    def _record_metrics(self, step: int, losses: Dict[str, float]):
+        """Feed the session's loss dict to the verbose printer.
+
+        `cur_num_splats` is read back from the engine rather than accumulated
+        from `num_added`: the session's densify step is the only writer, and
+        the counter is a host-side field, so this is both cheaper and immune
+        to a missed update.
+        """
+        from spirulae_splat.splat.cuda import _C
+        losses = dict(losses)
+        for key in ("num_added", "cur_num_splats", "max_num_splats"):
+            losses.pop(key, None)
+        for key, value in losses.items():
+            self.model.training_verboser.add_metric(key, value)
+
+        self.model.core.cur_num_splats = int(_C.engine_get_cur_num_splats())
+        sh_degree_to_use = step // max(self.config.model.sh_degree_warmup_every, 1)
+        self.model.core.sh_degree_to_use = sh_degree_to_use
+        v = self.model.training_verboser
+        v.add_metric("num_splats",     self.model.core.cur_num_splats, last_only=True)
+        v.add_metric("max_num_splats", self.model.core.max_num_splats, last_only=True)
+        v.add_metric("num_sh",         min(sh_degree_to_use, self.config.model.sh_degree),
+                     last_only=True)
+        v.add_metric("max_num_sh",     self.config.model.sh_degree, last_only=True)
+
+    @staticmethod
+    def _maybe_debug_dump(step: int):
+        """Dump GT + render at specific steps, for visual debugging.
+
+        `SS_DEBUG_DUMP_STEPS=0,1,10,100 SS_DEBUG_DUMP_DIR=debug ss-train ...`
+        """
+        import os
+        spec = os.environ.get("SS_DEBUG_DUMP_STEPS", "")
+        if not spec:
+            return
+        try:
+            steps = {int(s) for s in spec.split(",") if s.strip()}
+        except ValueError:
+            return
+        if step not in steps:
+            return
+        from spirulae_splat.modules import debug_image as _dbg
+        prefix = f"{os.environ.get('SS_DEBUG_DUMP_DIR', 'debug')}/step{step:06d}"
+        for k, a in _dbg.dump_engine_step(prefix).items():
+            print(f"[debug_image] {prefix}_{k}: {_dbg.buffer_stats(a)}", flush=True)
+
+    # ---- eval ------------------------------------------------------------
+
+    def _setup_eval_data(self):
+        """Parse the eval split and build the Python loader for it.
+
+        Training never touches this path -- the engine's own DataManager feeds
+        the training loop. Eval stays in Python because the metrics (LPIPS,
+        the SSIM variants) are torch models.
+        """
+        if self.datamanager is not None:
+            return
+        ds = parse_dataset_native(
+            self.config.data,
+            to_native_parser_config(self.config.dataparser, split="eval"))
+        dpo = to_dataparser_outputs(
+            ds,
+            depth_unit_scale_factor=self.config.dataparser.depth_unit_scale_factor,
+            train_frame=self.config.dataparser.train_frame)
+        self.dataparser_outputs_eval = dpo
+        self.dataset_eval = SpirulaeSplatDataset(dpo)
+
+        config = deepcopy(self.config.datamanager)
+        config.max_batch_per_epoch = 9**9
+        config.load_depths = False
+        config.load_normals = False
+        config.split_batch = False
+        config.patch_batch_size = None
+        config.deblur_training_images = False
+        config.cache_images = "disk"
+        self.datamanager = SpirulaeSplatDataManager(config, device="cuda", eval=True)
+        self.datamanager.train_dataset = self.dataset_eval
 
     def _get_eval_metrics_dict(self):
         inputs = self.datamanager.next_train(0, None)  # type: List[Tuple[Cameras, Dict]]
@@ -752,7 +399,7 @@ class Trainer:
         return metrics_dict, img_dict
 
     def get_eval_metrics_dict(self, *args):
-        with self.lock:
+        with self.session.engine_lock():
             self.model.eval()
             return self._get_eval_metrics_dict(*args)
 
@@ -764,32 +411,33 @@ class Trainer:
         from spirulae_splat.splat.cuda import _C
         train_wall_start = time.perf_counter()
         self.start_time = time.time()
-        self.last_step_time = self.start_time
+
+        sess = self.session
         for step in range(self._start_step, self.config.num_iterations):
-            self._check_pause()  # Check if paused and wait if needed
-            if step > self._start_step and self.config.steps_per_save > 0 and step % self.config.steps_per_save == 0:
+            # Pause gate and render fairness, both driven by the session's
+            # atomics -- the viewer's render worker sets render_pending before
+            # it contends for the engine mutex, and yielding here is what stops
+            # the loop's immediate re-acquire from starving it.
+            while sess.paused and not sess.stop_requested:
+                time.sleep(0.05)
+            if sess.stop_requested:
+                break
+            while sess.render_pending:
+                time.sleep(0.0005)
+
+            if step > self._start_step and self.config.steps_per_save > 0 \
+                    and step % self.config.steps_per_save == 0:
                 self.save_checkpoint(step)
-            # if step % 100 == 50:
-            #     self.print_vram_breakdown()
-            #     exit(0)
-            step_start = time.time()
-            self.current_step = step + 1  # 1-based
-            self.train_step(step)
-            step_end = time.time()
-            latency = step_end - step_start
-            self.step_latencies.append(latency)
-            if len(self.step_latencies) > 100:  # keep last 100
-                self.step_latencies.pop(0)
-            # pbar.update(1)
-            avg_latency = sum(self.step_latencies) / len(self.step_latencies)
-            elapsed = time.time() - self.start_time
-            eta = (self.config.num_iterations - self.current_step) * avg_latency
+
+            self._train_step(step)
+            sess.cur_step = step + 1
+
         if self.config.steps_per_save != 0:
-            self.save_checkpoint(self.config.num_iterations)
+            self.save_checkpoint(sess.cur_step)
+            print(f"Checkpoint saved to: {self.output_dir.absolute()}")
         self._training_time = time.perf_counter() - train_wall_start
         pool_cap = sum(cap for _, _, cap in _C.engine_get_pool_breakdown())
         self._engine_vram_bytes = pool_cap + _C.engine_get_scratch_bytes()
-        print(f"Checkpoint saved to: {self.output_dir.absolute()}")
         print()
 
     def _train_with_profiling(self):
@@ -811,23 +459,16 @@ class Trainer:
             for step in range(self.config.num_iterations):
                 prof.step()
                 with torch.profiler.record_function(str(step)):
-                    self.train_step(step)
+                    self._train_step(step)
 
     @torch.no_grad()
     def eval(self):
-        if self.config.dataparser.eval_mode == "all" or len(self.dataset_eval.cameras) == 0:
+        # eval_mode="all" trains on every frame, so there is no held-out set.
+        if self.config.dataparser.eval_mode == "all":
             return
-
-        config = deepcopy(self.config.datamanager)
-        config.max_batch_per_epoch = 9**9
-        config.load_depths = False
-        config.load_normals = False
-        config.split_batch = False
-        config.patch_batch_size = None
-        config.deblur_training_images = False
-        config.cache_images = "disk"
-        self.datamanager = SpirulaeSplatDataManager(config, device="cuda", eval=True)
-        self.datamanager.train_dataset = self.dataset_eval
+        self._setup_eval_data()
+        if len(self.dataset_eval.cameras) == 0:
+            return
 
         metrics = {}
         images = {}
@@ -894,45 +535,29 @@ class Trainer:
         opt = self.config.optimizer
         n_img = model.num_train_data
 
-        # --- target layout from the (possibly changed) config ---------------
+        # --- target layout: what the engine ACTUALLY holds ------------------
+        # Taken from the session's RunState (mirrored onto the model in
+        # __init__), not re-derived from the config. Deriving it from config
+        # alone got this wrong: the depth / normal grids also require the
+        # dataset to *have* depth / normal maps, which setup_engine() checks
+        # and this did not. On any dataset without normals -- Mip-NeRF 360,
+        # say -- the target claimed a normal bilagrid the checkpoint never
+        # had, so every resume took the full CPU adaptation path (unpack,
+        # resample, repack) to "fix" a difference that did not exist.
         def _lhw(shape):                       # (grid_X, grid_Y, grid_W) -> (L,H,W)
             X, Y, W_g = shape
             return (W_g, Y, X)
-        geo = cfg.use_bilateral_grid_for_geometry
-        ppisp_lr = opt.ppisp_adagrad_lr if cfg.use_adagrad_ppisp_optim else opt.ppisp_lr
         target = {
             "max_num_splats": int(model.core.max_num_splats),
             "num_sh": int(model.gauss_params["features_sh"].shape[1]),
             "num_images": int(n_img),
             "bilagrid": {
-                "rgb":    _lhw(cfg.bilagrid_shape) if (cfg.use_bilateral_grid and opt.bilagrid_lr > 0) else None,
-                "depth":  _lhw(cfg.bilagrid_shape_geometry) if (geo and opt.bilagrid_depth_lr > 0 and cfg.depth_supervision_weight > 0) else None,
-                "normal": _lhw(cfg.bilagrid_shape_geometry) if (geo and opt.bilagrid_normal_lr > 0 and cfg.normal_supervision_weight > 0) else None,
+                "rgb":    _lhw(cfg.bilagrid_shape) if model._bilagrid_rgb_init else None,
+                "depth":  _lhw(cfg.bilagrid_shape_geometry) if model._bilagrid_depth_init else None,
+                "normal": _lhw(cfg.bilagrid_shape_geometry) if model._bilagrid_normal_init else None,
             },
-            "ppisp": bool(cfg.use_ppisp and ppisp_lr > 0),
+            "ppisp": bool(model._ppisp_init),
         }
-
-        # --- eager-init appearance the checkpoint has AND the config wants ---
-        def _ck_on(t):
-            return bool(state.get(f"bilagrid_{t}", {}).get("enabled"))
-        tbg = target["bilagrid"]
-        if tbg["rgb"] is not None and _ck_on("rgb") and not model._bilagrid_rgb_init:
-            model.core.engine_init_bilagrid(
-                n_img, rgb_type=cfg.bilagrid_type, rgb_LHW=tbg["rgb"],
-                use_adagrad=cfg.use_adagrad_bilagrid_optim)
-            model._bilagrid_rgb_init = True
-        if tbg["depth"] is not None and _ck_on("depth") and not model._bilagrid_depth_init:
-            model.core.engine_init_bilagrid(
-                n_img, depth_LHW=tbg["depth"], use_adagrad=cfg.use_adagrad_bilagrid_optim)
-            model._bilagrid_depth_init = True
-        if tbg["normal"] is not None and _ck_on("normal") and not model._bilagrid_normal_init:
-            model.core.engine_init_bilagrid(
-                n_img, normal_LHW=tbg["normal"], use_adagrad=cfg.use_adagrad_bilagrid_optim)
-            model._bilagrid_normal_init = True
-        if target["ppisp"] and bool(state.get("ppisp", {}).get("enabled")) and not model._ppisp_init:
-            model.core.engine_init_ppisp(
-                n_img, param_type=cfg.ppisp_param_type, use_adagrad=cfg.use_adagrad_ppisp_optim)
-            model._ppisp_init = True
 
         # --- adapt (CPU) if the layout differs, then load -------------------
         tmp = tempfile.mkdtemp(prefix="ss_resume_")

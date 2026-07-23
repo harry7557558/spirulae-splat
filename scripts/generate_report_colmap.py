@@ -2,13 +2,18 @@
 
 """Script to generate report for COLMAP dataset. (Distortion plot currently)"""
 
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional, Union
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-from spirulae_splat.modules.colmap_utils import *
+# Preprocessing-only helper, moved out of the package alongside the
+# dataparser deletion (docs/restructure-proposal.md §4.1): the engine and the
+# trainer no longer parse in Python, but these scripts still do.
+sys.path.insert(0, str(Path(__file__).parent))
+from colmap_utils import *
 
 def generate_report(
     recon_dir: Path,

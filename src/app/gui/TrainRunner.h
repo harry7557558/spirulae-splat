@@ -1,0 +1,95 @@
+#pragma once
+
+// TrainRunner -- runs a ssplat::TrainerSession on a worker thread for the
+// GUI: async dataset preview, the full train pipeline (check -> parse ->
+// engine setup -> step loop), pause/stop controls, metric history for the
+// plots, and an optional web-viewer server (so a GUI run can still be
+// monitored from a browser / another machine).
+//
+// Lifetime rules the GUI must follow:
+//  - session() stays valid until the next load_dataset()/start_training()
+//    call; anything holding hooks into it (the viewport's RenderWorker)
+//    must detach first (GuiApp does this).
+//  - engine_ready() flips true after engine setup; only then may a
+//    RenderWorker attach.
+
+#include "app/TrainerCore.h"
+#include "app/webviewer/Viewer.h"
+
+#include <atomic>
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace gui {
+
+class TrainRunner {
+public:
+    enum class Phase {
+        Idle,       // nothing loaded
+        Loading,    // dataset preview parse in flight
+        Ready,      // dataset parsed; can start training
+        LoadError,  // preview parse failed
+        Preparing,  // start_training: re-parse + engine setup
+        Training,   // step loop running
+        Done,       // finished or stopped (checkpoint saved); engine viewable
+        TrainError, // training pipeline failed
+    };
+
+    struct MetricPoint {
+        int step = 0;
+        float psnr = 0, ssim = 0, rgb_loss = 0;
+        float num_splats = 0;
+    };
+
+    ~TrainRunner() { shutdown(); }
+
+    // Async dataset preview (parse only; no GPU). Replaces the session.
+    void load_dataset(const SsplatConfig& cfg, const std::string& preset);
+
+    // Async full run with the final config (re-parses the dataset so any
+    // dataparser option changes apply). Replaces the session -- the caller
+    // must detach viewers from the previous one first.
+    void start_training(const SsplatConfig& cfg, const std::string& preset);
+
+    void set_paused(bool p);
+    bool paused() const;
+    void request_stop();          // graceful: finish step, save checkpoint
+    void shutdown();              // stop + join (app exit / new session)
+
+    Phase phase() const { return _phase.load(); }
+    bool engine_ready() const { return _engine_ready.load(); }
+    std::string error();
+
+    // Valid between load_dataset()/start_training() calls; see lifetime
+    // rules above.
+    ssplat::TrainerSession* session() { return _session.get(); }
+
+    // Latest per-step progress (copy).
+    ssplat::TrainerProgress latest_progress();
+    double eta_seconds();         // < 0 when unknown
+    void get_metrics(std::vector<MetricPoint>& out);
+    std::vector<std::string> drain_log();
+
+private:
+    void push_log(const std::string& s);
+    void join_worker();
+
+    std::unique_ptr<ssplat::TrainerSession> _session;
+    std::unique_ptr<ViewerServer> _web_viewer;
+    std::thread _worker;
+    std::atomic<Phase> _phase{Phase::Idle};
+    std::atomic<bool> _engine_ready{false};
+
+    mutable std::mutex _mu;       // guards everything below
+    std::string _error;
+    ssplat::TrainerProgress _latest;
+    std::deque<double> _latencies;
+    std::vector<MetricPoint> _metrics;
+    std::vector<std::string> _log;
+};
+
+}  // namespace gui

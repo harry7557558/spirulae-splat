@@ -12,8 +12,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Camera transformation helper code.
+"""Camera transformation helper code.
+
+REFERENCE IMPLEMENTATION -- nothing imports this module.
+
+It is kept, deliberately, because `orientation_method` and `center_method` are
+config options the native pipeline does NOT implement yet. `ssplat-train`
+accepts them and warns:
+
+    warning: orientation/center method '<x>'/'<y>' approximated as 'up'/'poses'
+             (affects only train_frame_scale)
+
+`src/data/parsers/DatasetCommon.cpp::compute_normalized_transform` is the C++
+side, and it hardcodes the up/poses behaviour. When someone ports the rest,
+this file is the specification:
+
+  * `auto_orient_and_center_poses()`  -- orientation_method in
+    {pca, up, vertical, none} x center_method in {poses, focus, none}, plus
+    the helpers it needs (`focus_of_attention`, `rotation_matrix_between`).
+  * `orient_and_center_poses_gsplat()` -- the "gsplat" value of both options,
+    plus `similarity_from_cameras`, `align_principal_axes`, `transform_points`,
+    `transform_cameras`, `normalize`. This one also returns a scene scale,
+    which is why the caller treats it separately.
+
+The *caller* matters as much as these functions: how their output becomes
+`transform_matrix` / `scale_factor` / `train_frame_scale` /
+`train_to_normalized_transform`, and how `auto_scale_poses` and `train_frame`
+interact with them, is written up with the original call-site code in
+`docs/notes/pose-normalization.md`.
+
+Everything above `normalize()` (quaternion helpers, `get_interpolated_poses*`,
+`get_ordered_poses_and_k`) is camera-path interpolation, unrelated to either
+option and already unused before this module left the code path. Left in place
+rather than trimmed, so the orientation/centering code stays byte-identical to
+the version that was verified against the native parser.
 """
 
 import math

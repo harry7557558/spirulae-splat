@@ -459,24 +459,36 @@ class SpirulaeSplatModel(torch.nn.Module):
         trainer_config: 'spirulae_splat.modules.trainer.TrainerConfig',
         seed_points: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         cameras: Optional[Cameras] = None,
+        attach_engine: bool = False,
+        num_train_data: Optional[int] = None,
     ):
+        """attach_engine=True binds to a world the engine already holds.
+
+        The native TrainerSession (src/app/TrainerCore.cpp) does the seeding,
+        the background / color-space init and the DataManager setup, so in
+        attach mode this class contributes only what stays in Python: host
+        parameter tensors at the right shapes (the destination for
+        engine_copy_splats_to_host, and the layout resume_adapt targets), the
+        resolved color config, and the eval / viewer render paths. Repeating
+        any of the init here would overwrite the session's work.
+        """
         super().__init__()
 
         self.trainer_config = trainer_config
         self.config = trainer_config.model  # type: SpirulaeSplatModelConfig
+        self._attach_engine = bool(attach_engine)
 
         self.seed_points = (seed_points['points3D_xyz'], seed_points['points3D_rgb'])
         self.cameras = cameras
 
-        self.num_train_data = len(self.cameras)
-
-        # Pre-init guess at the post-split camera count for the bilagrid table.
-        # When use_cpp_data_manager is on, Trainer._setup_cpp_data_manager
-        # overrides this with the exact per-camera-K sum, so mixed datasets
-        # work even when this guess is approximate.
-        if True:
-            # Worst-case upper bound: every camera split 6x. The trainer
-            # downscales to the real per-camera sum right after model init.
+        if num_train_data is not None:
+            # Exact POST-split camera count, from the session's camera bake.
+            # Sizes the bilagrid / PPISP tables.
+            self.num_train_data = int(num_train_data)
+        else:
+            self.num_train_data = len(self.cameras)
+            # Worst-case upper bound: every camera split 6x. Callers that know
+            # the real post-split count pass num_train_data instead.
             self.num_train_data *= 6
 
         self.info = {}
@@ -504,7 +516,18 @@ class SpirulaeSplatModel(torch.nn.Module):
             use_fused_proj_bwd_optim=self.config.use_fused_proj_bwd_optim,
             split_batch=self.config.split_batch,
             quantization_level=self.config.quantization_level,
+            upload=not self._attach_engine,
         )
+
+        if self._attach_engine:
+            # setup_engine() already ran seeding, background and color space.
+            # Pull the device world into the host parameters so gauss_params,
+            # checkpointing and resume see the real splats.
+            self._engine_bg_mode = self.config.background_mode \
+                if self.config.background_mode in ("noise", "sh") else "none"
+            self.core.cur_num_splats = int(_C.engine_get_cur_num_splats())
+            self.core.engine_sync_splats_to_host()
+            return
 
         # Engine-side background blending. populate_modules already created the
         # background_color / background_sh Parameters; mode is chosen from the
@@ -546,7 +569,85 @@ class SpirulaeSplatModel(torch.nn.Module):
             image_color_matrix=image_matrix,
         )
 
+    def _resolve_color_config(self):
+        """Resolve the Optional color-space fields to concrete values.
+
+        Port-mate of TrainerCore's resolve_color(): both read the same raw
+        config and must land on the same answer, so this runs in attach mode
+        too -- the engine side is already resolved, but the Python eval /
+        viewer paths read these fields.
+        """
+        if self.config.splat_color_gamut is None:
+            self.config.splat_color_gamut = self.config.image_color_gamut
+        elif self.config.convert_initial_point_cloud_color is None:
+            self.config.convert_initial_point_cloud_color = True
+        if self.config.splat_color_gamut == "Rec.709":
+            self.config.splat_color_gamut = None
+        if self.config.splat_color_is_linear is None:
+            self.config.splat_color_is_linear = self.config.image_color_is_linear
+        elif self.config.convert_initial_point_cloud_color is None:
+            self.config.convert_initial_point_cloud_color = True
+        if self.config.convert_initial_point_cloud_color is None:
+            self.config.convert_initial_point_cloud_color = False
+
+    def _seed_count(self):
+        """(num_points, capacity) without doing the seeding.
+
+        Mirrors the resolution in populate_modules below and in TrainerCore's
+        seed_splats(); attach mode needs the shapes, not the values.
+        """
+        min_init = max(int(min(self.config.min_init_fraction, 1.0) * self.config.cap_max), 1)
+        min_init = min(min_init, self.config.cap_max)
+        n_src = len(self.seed_points[0])
+        num_points = min(n_src, self.config.cap_max) if n_src >= min_init else min_init
+        capacity = num_points
+        if self.config.use_mcmc and self.config.preallocate_splat_tensors:
+            capacity = max(num_points, self.config.cap_max)
+        return num_points, capacity
+
+    def _populate_modules_attached(self):
+        """Allocate host parameters at the engine's layout, no seeding."""
+        self._resolve_color_config()
+        num_points, capacity = self._seed_count()
+        engine_n = int(_C.engine_get_cur_num_splats())
+        if engine_n != num_points:
+            raise RuntimeError(
+                f"attach_engine: the engine holds {engine_n} splats but this "
+                f"config resolves to {num_points}. The session and the model "
+                f"disagree about seeding -- they must be built from the same "
+                f"config and the same point cloud.")
+
+        dim_sh = (self.config.sh_degree + 1) ** 2
+        z = lambda *shape: torch.nn.Parameter(torch.zeros(*shape))
+        self.gauss_params = {
+            'means':       z(capacity, 3),
+            'quats':       z(capacity, 4),
+            'scales':      z(capacity, 3),
+            'opacities':   z(capacity, 1),
+            'features_dc': z(capacity, 3),
+            'features_sh': z(capacity, dim_sh - 1, 3),
+        }
+        optim_info = {'num_splats': num_points} \
+            if (self.config.use_mcmc and self.config.preallocate_splat_tensors) else {}
+        for value in self.gauss_params.values():
+            value.optim_info = {**optim_info}
+
+        self.xys_grad_norm = None
+        self.ch_grad_norm = None
+        self.max_2Dsize = None
+        # Set by the session's setup_engine(); the trainer copies its RunState
+        # over right after construction.
+        self._bilagrid_rgb_init = False
+        self._bilagrid_depth_init = False
+        self._bilagrid_normal_init = False
+        self._ppisp_init = False
+        self.training_verboser = TrainingVerbose()
+        self.step = 0
+        self._train_batch_size = 1
+
     def populate_modules(self):
+        if self._attach_engine:
+            return self._populate_modules_attached()
         if self.seed_points is not None:
             min_init = max(int(min(self.config.min_init_fraction, 1.0) * self.config.cap_max), 1)
             min_init = min(min_init, self.config.cap_max)
@@ -613,18 +714,7 @@ class SpirulaeSplatModel(torch.nn.Module):
         else:
             seed_color = torch.rand(num_points, 3)
 
-        if self.config.splat_color_gamut is None:
-            self.config.splat_color_gamut = self.config.image_color_gamut
-        elif self.config.convert_initial_point_cloud_color is None:
-            self.config.convert_initial_point_cloud_color = True
-        if self.config.splat_color_gamut == "Rec.709":
-            self.config.splat_color_gamut = None
-        if self.config.splat_color_is_linear is None:
-            self.config.splat_color_is_linear = self.config.image_color_is_linear
-        elif self.config.convert_initial_point_cloud_color is None:
-            self.config.convert_initial_point_cloud_color = True
-        if self.config.convert_initial_point_cloud_color is None:
-            self.config.convert_initial_point_cloud_color = False
+        self._resolve_color_config()
         if self.config.convert_initial_point_cloud_color:
             if self.config.splat_color_is_linear or self.config.splat_color_gamut is not None:
                 seed_color = torch.where(seed_color < 0.055, seed_color / 12.92, torch.relu((seed_color + 0.055) / 1.055) ** 2.4)
@@ -1386,17 +1476,16 @@ class SpirulaeSplatModel(torch.nn.Module):
             v_normal_distortion,
         )
 
-    def optim_step(self):
-        max_steps = self.trainer_config.num_iterations
-        optim_config = self.trainer_config.optimizer
-
-        # Engine path: optimizer + densification via core -> Engine.cpp
-        # Splats stay on device — no D→H copy between iterations.
-        if self.core.primitive in ['3dgs', 'mip', '3dgut'] and not self.core.use_bvh:
-            self.core.engine_optim_step(self.step, max_steps, self.config, optim_config)
-            self.core.engine_densify_step(self.step, max_steps, self.config)
-            return
-        raise NotImplementedError()
+    # ---- The training path that used to live here is gone ----------------
+    # engine_train_step / engine_train_step_managed / _build_loss_weights /
+    # optim_step (and the unreachable _engine_get_loss_grad / get_loss_grad
+    # that hung off them) were a second implementation of what
+    # src/app/TrainerCore.cpp does -- its own header comment described itself
+    # as a line-by-line port of them. `Trainer` now drives the C++ one through
+    # `_C.TrainerSession` (docs/restructure-proposal.md §4.3), and
+    # tests/python/step_config_golden.json freezes the values the two were
+    # proven to agree on. Per-step training logic belongs in
+    # TrainerCore::build_step_config; do not re-add it here.
 
     def verbose(self):
 
@@ -1483,565 +1572,6 @@ class SpirulaeSplatModel(torch.nn.Module):
             return (0, 4, [0])
         assert tensor.is_contiguous(), f"Tensor must be contiguous, got strides {tensor.stride()}"
         return (tensor.data_ptr(), tensor.element_size(), list(tensor.shape))
-
-    def _build_loss_weights(self, step):
-        """Build the per-pixel loss_weights array passed to the engine.
-
-        The "element-wise RGB" group {RGB-L1, RGB-L2, Y-L1, Y-L2, U-L2, V-L2}
-        is normalized so its total equals ``1 - ssim_lambda``, and the split
-        between the RGB-only sub-group and the YUV sub-group preserves the
-        user's raw config ratio. RGB-internal L1/L2 split (l2_lambda) and the
-        YUV-internal ratios are also preserved.
-
-        With all four YUV weights at 0 (default), this reduces exactly to the
-        old (1 - l2_lambda) * (1 - ssim_lambda), l2_lambda * (1 - ssim_lambda)
-        split.
-
-        Order must match per_pixel_losses.slang::LossWeightIndex.
-        """
-        cfg = self.config
-        dist_factor = min(step / max(cfg.distortion_reg_warmup, 1), 1.0)
-        reg_active = float(step >= cfg.reg_warmup_length)
-        sup_active = float(step > cfg.supervision_warmup)
-        # Single linear warmup shared by all four median-depth losses.
-        median_factor = min(step / max(cfg.median_warmup, 1), 1.0)
-        alpha_reg_factor = cfg.alpha_reg_weight * min(
-            step / max(cfg.alpha_reg_warmup, 1), 1.0)
-
-        # Raw element-wise RGB-group weights (relative). RGB-L1 fills the slot
-        # left by L2 inside the RGB sub-budget of 1.0; YUV weights are
-        # configured directly by the user.
-        w_rgb_l1_raw = max(0.0, cfg.l1_weight)
-        w_rgb_l2_raw = max(0.0, cfg.l2_weight)
-        w_y_l1_raw   = max(0.0, cfg.l1_weight_y)
-        w_y_l2_raw   = max(0.0, cfg.l2_weight_y)
-        w_u_l2_raw   = max(0.0, cfg.l2_weight_u)
-        w_v_l2_raw   = max(0.0, cfg.l2_weight_v)
-        total_raw = (w_rgb_l1_raw + w_rgb_l2_raw
-                     + w_y_l1_raw + w_y_l2_raw + w_u_l2_raw + w_v_l2_raw)
-        # When all weights are 0 (degenerate), keep zeros to avoid NaN.
-        scale = ((1.0 - cfg.ssim_lambda) / total_raw) if total_raw > 0.0 else 0.0
-
-        return [
-            w_rgb_l1_raw * scale,                              # RgbSupL1
-            w_rgb_l2_raw * scale,                              # RgbSupL2
-            w_y_l1_raw   * scale,                              # YSupL1
-            w_y_l2_raw   * scale,                              # YSupL2
-            w_u_l2_raw   * scale,                              # USupL2
-            w_v_l2_raw   * scale,                              # VSupL2
-            sup_active * cfg.depth_supervision_weight,         # DepthSup
-            sup_active * cfg.normal_supervision_weight,        # NormalSup
-            cfg.apply_loss_for_mask * cfg.alpha_loss_weight,   # AlphaSup
-            cfg.apply_loss_for_mask * cfg.alpha_loss_weight_under,  # AlphaSupUnder
-            reg_active * cfg.normal_reg_weight * dist_factor,  # NormalReg
-            reg_active * alpha_reg_factor,                     # AlphaReg
-            reg_active * cfg.rgb_distortion_reg * dist_factor,  # RgbDistReg
-            reg_active * cfg.depth_distortion_reg * dist_factor,  # DepthDistReg
-            reg_active * cfg.normal_distortion_reg * dist_factor,  # NormalDistReg
-            median_factor * cfg.mean_median_depth_weight,          # MeanMedianDepthSup
-            median_factor * cfg.median_depth_normal_reg_weight,    # MedianDepthNormalReg
-            median_factor * cfg.median_normal_supervision_weight,  # MedianNormalSup
-            median_factor * cfg.median_render_normal_reg_weight,   # MedianRenderNormalReg
-        ]
-
-    def _engine_get_loss_grad(self, outputs, batch, batch_size):
-        """Engine path: compute loss + backward entirely in C++."""
-
-        # --- Prepare ground truth (CPU, C++ does H→D) ---
-        gt_rgb = batch["image"].cpu()
-        if gt_rgb.dtype == torch.uint8:
-            gt_rgb = gt_rgb.float() / 255.0
-        elif gt_rgb.dtype == torch.uint16:
-            gt_rgb = gt_rgb.float() / 65535.0
-        elif gt_rgb.dtype == torch.float16:
-            gt_rgb = gt_rgb.float()
-        gt_rgb = gt_rgb[..., :3].contiguous()
-
-        gt_depth = batch.get('depth', None)
-        if gt_depth is not None:
-            gt_depth = gt_depth.cpu().float()
-            if len(gt_depth.shape) == 3:
-                gt_depth = gt_depth.unsqueeze(-1)
-            gt_depth = gt_depth.contiguous()
-
-        gt_normal = batch.get('normal', None)
-        if gt_normal is not None:
-            if gt_normal.dtype == torch.uint8:
-                gt_normal = gt_normal.float() / (255/2) - 1.0
-            gt_normal = gt_normal.cpu().float().contiguous()
-
-        # External mask -> gt_alpha. The slang kernel derives RGB / depth /
-        # normal / alpha-sup masks internally from this + the gt sentinels.
-        gt_alpha = batch.get('mask', None)
-        if gt_alpha is not None:
-            if gt_alpha.dtype != torch.bool:
-                gt_alpha = gt_alpha.cpu().float() > 0.5
-            gt_alpha = gt_alpha.contiguous()
-
-        self.core.engine_set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha)
-
-        # --- Loss weights ---
-        step = self.step
-        cfg = self.config
-
-        loss_weights = self._build_loss_weights(step)
-        w_ssim = cfg.ssim_lambda
-        num_loss_scales = cfg.num_loss_scales + 1
-        loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
-        # blend w >= 1: densification uses the world-grad score exclusively,
-        # and the per-pixel loss map's only consumer is the densify
-        # accum_weight -- skip computing it (and the raster-bwd accum_weight
-        # output it drives) entirely.
-        if cfg.densify_score_blend_world_grad >= 1.0:
-            loss_map_mode = 0
-        compute_loss_map = (loss_map_mode != 0)
-        robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
-
-        # --- Compute loss + backward via core (gradients managed by C++ pool) ---
-        loss_dict = self.core.engine_compute_loss_backward(
-            step, loss_weights, w_ssim, num_loss_scales, compute_loss_map,
-            loss_map_mode, robust_edge_aware_quantile,
-            overexposure_reg_weight=cfg.overexposure_reg,
-            loss_scale_min_pixels=cfg.loss_scale_min_pixels,
-        )
-
-        for key, value in loss_dict.items():
-            self.training_verboser.add_metric(key, value)
-        self.training_verboser.add_metric("num_splats", self.core.cur_num_splats, last_only=True)
-        self.training_verboser.add_metric("max_num_splats", self.core.max_num_splats, last_only=True)
-        self.training_verboser.add_metric("num_sh", min(self.core.sh_degree_to_use, self.config.sh_degree), last_only=True)
-        self.training_verboser.add_metric("max_num_sh", self.config.sh_degree, last_only=True)
-
-        self._engine_backward_done = True
-        return None
-
-    def engine_train_step(self, camera, batch):
-        """Fused training step. Tensors passed as-is (CPU or CUDA) — C++ side detects
-        device location and avoids redundant copies. Minimizes H↔D transfers."""
-        # ---- profiling probes (gated by PROFILE_TRAIN_STEP) ----
-        if PROFILE_TRAIN_STEP:
-            _prof = getattr(self, "_ets_prof", None)
-            if _prof is None:
-                self._ets_prof = _prof = {
-                    "n": 0, "warmup": 10,
-                    "cam_prep": 0, "gt_prep": 0, "weights_prep": 0,
-                    "presync": 0, "ccall": 0, "ccall_after_sync": 0, "post": 0,
-                }
-            from time import perf_counter_ns as _t
-            _t0 = _t()
-        # --- Camera params: keep on whatever device they came from ---
-        if self.config.use_camera_optimizer:
-            camera.metadata['cam_idx'] = camera.metadata['cam_idx'].flatten()
-            optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)
-        else:
-            optimized_camera_to_world = camera.camera_to_worlds
-
-        camera_downscale = self._get_downscale_factor()
-        if camera_downscale > 1:
-            camera.rescale(1 / camera_downscale)
-
-        W, H = int(camera.width[0].item()), int(camera.height[0].item())
-        camera_model = camera.camera_type[0].upper()
-
-        R = optimized_camera_to_world[:, :3, :3]
-        T = optimized_camera_to_world[:, :3, 3:4]
-        if self.config.relative_scale is not None:
-            T = T * self.config.relative_scale
-        R = R * torch.tensor([[[1.0, -1.0, -1.0]]]).to(R)
-        R_inv = R.transpose(-1, -2)
-        T_inv = -torch.bmm(R_inv, T)
-        viewmats = torch.eye(4, dtype=optimized_camera_to_world.dtype,
-                              device=optimized_camera_to_world.device)[None].repeat(len(camera), 1, 1)
-        viewmats[:, :3, :3] = R_inv
-        viewmats[:, :3, 3:4] = T_inv
-        viewmats = viewmats.contiguous()
-        intrins = camera.intrins.contiguous()
-
-        dist_coeffs = None
-        if camera.distortion_params is not None and camera.distortion_params.any():
-            dist_coeffs = camera.distortion_params.contiguous()
-        if dist_coeffs is None:
-            dist_coeffs = torch.zeros(len(camera), 10, dtype=torch.float32, device=viewmats.device)
-
-        if PROFILE_TRAIN_STEP: _t1 = _t()
-        # --- GT data: hand raw bytes to the C++ engine ---
-        # For uint8 / uint16 inputs, the C++ side does the float conversion on
-        # GPU (3-4x smaller H->D payload). The 4 per-pixel mask buffers
-        # (gt_rgb_mask, gt_depth_mask, gt_normal_mask, gt_alpha_mask) are gone:
-        # they're derived inside per_pixel_losses.slang from the gt_depth = 0
-        # sentinel, the gt_normal sum > -2.366 sentinel, and gt_alpha presence.
-        gt_rgb = batch["image"]
-        if gt_rgb.dtype == torch.float16:
-            gt_rgb = gt_rgb.float()
-        gt_rgb = gt_rgb[..., :3].contiguous()
-
-        gt_depth = batch.get('depth', None)
-        if gt_depth is not None:
-            # Keep original dtype (float32 / uint16). C++ casts on GPU.
-            if gt_depth.dtype == torch.float16:
-                gt_depth = gt_depth.float()
-            if len(gt_depth.shape) == 3:
-                gt_depth = gt_depth.unsqueeze(-1)
-            gt_depth = gt_depth.contiguous()
-
-        gt_normal = batch.get('normal', None)
-        if gt_normal is not None:
-            # Keep original dtype (float32 / uint8). C++ does the 2x/255 - 1
-            # scaling on GPU when uint8.
-            if gt_normal.dtype == torch.float16:
-                gt_normal = gt_normal.float()
-            gt_normal = gt_normal.contiguous()
-
-        # External mask -> gt_alpha (bool / uint8). Drives RGB mask AND alpha
-        # supervision target in the slang kernel.
-        gt_alpha = batch.get('mask', None)
-        if gt_alpha is not None:
-            # Coerce to bool so the C++ side hands a 1 byte/pixel buffer to the
-            # kernel; this is small enough to keep as-is rather than convert.
-            if gt_alpha.dtype != torch.bool:
-                gt_alpha = gt_alpha > 0.5
-            gt_alpha = gt_alpha.contiguous()
-
-        if PROFILE_TRAIN_STEP: _t2 = _t()
-        # --- Loss weights ---
-        step = self.step
-        cfg = self.config
-        loss_weights = self._build_loss_weights(step)
-        w_ssim = cfg.ssim_lambda
-        num_loss_scales = cfg.num_loss_scales + 1
-        loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
-        # blend w >= 1: densification uses the world-grad score exclusively,
-        # and the per-pixel loss map's only consumer is the densify
-        # accum_weight -- skip computing it (and the raster-bwd accum_weight
-        # output it drives) entirely.
-        if cfg.densify_score_blend_world_grad >= 1.0:
-            loss_map_mode = 0
-        compute_loss_map = (loss_map_mode != 0)
-        robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
-
-        sh_degree_to_use = step // max(cfg.sh_degree_warmup_every, 1)
-        max_steps = self.trainer_config.num_iterations
-
-        # --- Bilagrid: lazy per-type init on first iteration that needs it ---
-        self._maybe_init_bilagrid(batch)
-        optim_cfg = self.trainer_config.optimizer
-        max_steps_lr = optim_cfg.max_steps if optim_cfg.max_steps is not None else max_steps
-        # Pass the full per-image cam_idx tensor [C_batch] so the C++ kernels
-        # can handle batches with mixed camera indices via indirect grid/param
-        # lookup (no per-image gather, no per-image kernel launches).
-        needs_cam_indices = (
-            self._bilagrid_rgb_init or self._bilagrid_depth_init or
-            self._bilagrid_normal_init or self._ppisp_init)
-        if (needs_cam_indices and camera.metadata is not None
-                and 'cam_idx' in camera.metadata):
-            bilagrid_cam_indices = camera.metadata['cam_idx'].flatten().to(torch.int32).contiguous()
-        else:
-            bilagrid_cam_indices = None
-        # When AdaGrad is enabled for bilagrids, swap to the dedicated AdaGrad
-        # LR schedule names; the scheduler logic itself is unchanged.
-        _bg_lr_keys = (
-            ('bilagrid_adagrad',        'bilagrid_adagrad_depth',  'bilagrid_adagrad_normal')
-            if cfg.use_adagrad_bilagrid_optim else
-            ('bilagrid',                'bilagrid_depth',          'bilagrid_normal'))
-        if self._bilagrid_rgb_init:
-            bilagrid_lr_rgb = optim_cfg.get_scheduled_lr(_bg_lr_keys[0], step, max_steps_lr)
-            bilagrid_tv_weight_rgb = cfg.bilagrid_tv_loss_weight
-        else:
-            bilagrid_lr_rgb = 0.0
-            bilagrid_tv_weight_rgb = 0.0
-        # Color-shift regularizer activates when at least one of the two color
-        # transforms (bilagrid_rgb / PPISP) is enabled.
-        if self._bilagrid_rgb_init or self._ppisp_init:
-            color_shift_reg_weight = cfg.color_shift_reg_weight
-            _period = max(int(cfg.color_shift_reg_ema_period), 1)
-            color_shift_reg_beta = max(0.0, 1.0 - 1.0 / _period)
-        else:
-            color_shift_reg_weight = 0.0
-            color_shift_reg_beta = 0.0
-        if self._bilagrid_depth_init:
-            bilagrid_lr_depth = optim_cfg.get_scheduled_lr(_bg_lr_keys[1], step, max_steps_lr)
-            bilagrid_tv_weight_depth = cfg.bilagrid_tv_loss_weight_geometry
-        else:
-            bilagrid_lr_depth = 0.0
-            bilagrid_tv_weight_depth = 0.0
-        if self._bilagrid_normal_init:
-            bilagrid_lr_normal = optim_cfg.get_scheduled_lr(_bg_lr_keys[2], step, max_steps_lr)
-            bilagrid_tv_weight_normal = cfg.bilagrid_tv_loss_weight_geometry
-        else:
-            bilagrid_lr_normal = 0.0
-            bilagrid_tv_weight_normal = 0.0
-
-        # Background blending per-step args.
-        if cfg.background_mode == "noise":
-            rw = min(step / max(cfg.background_noise_warmup, 1), 1.0)
-            bg_randomize_weight = 1.0 - (1.0 - cfg.background_noise_pre_warmup) * (1.0 - rw)
-            bg_lr_dc = 0.0
-            bg_lr_sh = 0.0
-        elif cfg.background_mode == "sh":
-            bg_randomize_weight = 0.0
-            bg_lr_dc = optim_cfg.get_scheduled_lr('background_dc', step, max_steps_lr)
-            bg_lr_sh = optim_cfg.get_scheduled_lr('background_sh',    step, max_steps_lr)
-        else:
-            bg_randomize_weight = 0.0
-            bg_lr_dc = 0.0
-            bg_lr_sh = 0.0
-        bg_seed = int(step) & 0x7FFFFFFF
-
-        # PPISP: zero LR and reg weights when not yet initialized — C++ side
-        # treats this as a no-op.
-        if self._ppisp_init:
-            ppisp_lr = optim_cfg.get_scheduled_lr(
-                'ppisp_adagrad' if cfg.use_adagrad_ppisp_optim else 'ppisp',
-                step, max_steps_lr)
-            ppisp_reg_exposure_mean   = cfg.ppisp_reg_exposure_mean
-            ppisp_reg_vig_center      = cfg.ppisp_reg_vig_center
-            ppisp_reg_vig_non_pos     = cfg.ppisp_reg_vig_non_pos
-            ppisp_reg_vig_channel_var = cfg.ppisp_reg_vig_channel_var
-            ppisp_reg_color_mean      = cfg.ppisp_reg_color_mean
-            ppisp_reg_crf_channel_var = cfg.ppisp_reg_crf_channel_var
-        else:
-            ppisp_lr = 0.0
-            ppisp_reg_exposure_mean = 0.0
-            ppisp_reg_vig_center = 0.0
-            ppisp_reg_vig_non_pos = 0.0
-            ppisp_reg_vig_channel_var = 0.0
-            ppisp_reg_color_mean = 0.0
-            ppisp_reg_crf_channel_var = 0.0
-
-        if PROFILE_TRAIN_STEP:
-            _t3 = _t()
-            # Sync before the C++ call so we can attribute its time cleanly:
-            # presync = time waited for prior queued GPU work to finish;
-            # ccall   = pure C++ engine_train_step (kernel launches; after
-            #           option 3 the per-step D->H is async so this should be
-            #           sub-ms, with gpu_drain growing instead).
-            torch.cuda.synchronize()
-            _t3b = _t()
-        # --- Fused C++ training step ---
-        loss_dict = self.core.engine_train_step(
-            step, max_steps,
-            sh_degree_to_use,
-            W, H, camera_model,
-            viewmats, intrins, dist_coeffs,
-            gt_rgb, gt_depth, gt_normal, gt_alpha,
-            loss_weights, w_ssim, num_loss_scales, compute_loss_map,
-            loss_map_mode, robust_edge_aware_quantile,
-            self.config, self.trainer_config.optimizer,
-            bilagrid_cam_indices=bilagrid_cam_indices,
-            bilagrid_lr_rgb=bilagrid_lr_rgb,
-            bilagrid_lr_depth=bilagrid_lr_depth,
-            bilagrid_lr_normal=bilagrid_lr_normal,
-            bilagrid_tv_weight_rgb=bilagrid_tv_weight_rgb,
-            bilagrid_tv_weight_depth=bilagrid_tv_weight_depth,
-            bilagrid_tv_weight_normal=bilagrid_tv_weight_normal,
-            color_shift_reg_weight=color_shift_reg_weight,
-            color_shift_reg_beta=color_shift_reg_beta,
-            ppisp_lr=ppisp_lr,
-            ppisp_reg_exposure_mean=ppisp_reg_exposure_mean,
-            ppisp_reg_vig_center=ppisp_reg_vig_center,
-            ppisp_reg_vig_non_pos=ppisp_reg_vig_non_pos,
-            ppisp_reg_vig_channel_var=ppisp_reg_vig_channel_var,
-            ppisp_reg_color_mean=ppisp_reg_color_mean,
-            ppisp_reg_crf_channel_var=ppisp_reg_crf_channel_var,
-            apply_ppisp_before_bilagrid=cfg.apply_ppisp_before_bilagrid,
-            bg_lr_dc=bg_lr_dc,
-            bg_lr_sh=bg_lr_sh,
-            bg_randomize_weight=bg_randomize_weight,
-            bg_seed=bg_seed,
-            overexposure_reg_weight=cfg.overexposure_reg,
-        )
-
-        if PROFILE_TRAIN_STEP: _t4 = _t()
-        # --- Verbose metrics ---
-        for key, value in loss_dict.items():
-            self.training_verboser.add_metric(key, value)
-        self.training_verboser.add_metric("num_splats", self.core.cur_num_splats, last_only=True)
-        self.training_verboser.add_metric("max_num_splats", self.core.max_num_splats, last_only=True)
-        self.training_verboser.add_metric("num_sh", min(sh_degree_to_use, self.config.sh_degree), last_only=True)
-        self.training_verboser.add_metric("max_num_sh", self.config.sh_degree, last_only=True)
-
-        if PROFILE_TRAIN_STEP:
-            _t5 = _t()
-            if _prof["warmup"] > 0:
-                _prof["warmup"] -= 1
-            else:
-                _prof["n"] += 1
-                _prof["cam_prep"]        += (_t1 - _t0)
-                _prof["gt_prep"]         += (_t2 - _t1)
-                _prof["weights_prep"]    += (_t3 - _t2)
-                _prof["presync"]         += (_t3b - _t3)
-                _prof["ccall"]           += (_t4 - _t3b)
-                _prof["post"]            += (_t5 - _t4)
-            if _prof["n"] >= 100:
-                n = _prof["n"]
-                print(
-                    f"[PROF_ETS n={n}] "
-                    f"cam={_prof['cam_prep']/n/1e6:.3f}ms "
-                    f"gt={_prof['gt_prep']/n/1e6:.3f}ms "
-                    f"weights={_prof['weights_prep']/n/1e6:.3f}ms "
-                    f"presync={_prof['presync']/n/1e6:.3f}ms "
-                    f"ccall={_prof['ccall']/n/1e6:.3f}ms "
-                    f"post={_prof['post']/n/1e6:.3f}ms",
-                    flush=True,
-                )
-                for k in ("cam_prep", "gt_prep", "weights_prep", "presync", "ccall", "post"):
-                    _prof[k] = 0
-                _prof["n"] = 0
-
-    def engine_train_step_managed(self, step: int):
-        """DataManager-driven fused training step.
-
-        The engine pulls the next batch (camera params + RGB/mask/depth/normal)
-        from the C++ DataManager installed by Trainer; this method only computes
-        the per-step Python config (loss weights, LR schedule, bilagrid / PPISP /
-        background args) and dispatches to ``core.engine_train_step_managed``.
-
-        Required precondition: ``Trainer._setup_cpp_data_manager()`` has been
-        called, installing widths/heights/viewmats/intrins/dist_coeffs on the
-        engine side at training-frame scale. This entrypoint
-        therefore does NOT touch ``camera`` / ``batch`` — the on-engine state
-        already reflects all per-camera baking.
-        """
-        cfg = self.config
-
-        # Loss weights -- identical schedule to engine_train_step.
-        loss_weights = self._build_loss_weights(step)
-        w_ssim = cfg.ssim_lambda
-        num_loss_scales = cfg.num_loss_scales + 1
-        loss_map_mode = _DENSIFY_LOSS_MAP_MODE_TO_INT[cfg.densify_loss_map_mode]
-        # blend w >= 1: densification uses the world-grad score exclusively,
-        # and the per-pixel loss map's only consumer is the densify
-        # accum_weight -- skip computing it (and the raster-bwd accum_weight
-        # output it drives) entirely.
-        if cfg.densify_score_blend_world_grad >= 1.0:
-            loss_map_mode = 0
-        compute_loss_map = (loss_map_mode != 0)
-        robust_edge_aware_quantile = float(cfg.densify_robust_edge_aware_quantile)
-
-        sh_degree_to_use = step // max(cfg.sh_degree_warmup_every, 1)
-        max_steps = self.trainer_config.num_iterations
-        optim_cfg = self.trainer_config.optimizer
-        max_steps_lr = optim_cfg.max_steps if optim_cfg.max_steps is not None else max_steps
-
-        # Bilagrid lazy init — feed sentinel-bearing dict so _maybe_init_bilagrid
-        # picks up depth/normal availability without an actual batch tensor.
-        synthetic_batch = {}
-        if getattr(self, '_dm_has_depths', False):
-            synthetic_batch['depth'] = True
-        if getattr(self, '_dm_has_normals', False):
-            synthetic_batch['normal'] = True
-        self._maybe_init_bilagrid(synthetic_batch)
-
-        _bg_lr_keys = (
-            ('bilagrid_adagrad',        'bilagrid_adagrad_depth',  'bilagrid_adagrad_normal')
-            if cfg.use_adagrad_bilagrid_optim else
-            ('bilagrid',                'bilagrid_depth',          'bilagrid_normal'))
-        if self._bilagrid_rgb_init:
-            bilagrid_lr_rgb = optim_cfg.get_scheduled_lr(_bg_lr_keys[0], step, max_steps_lr)
-            bilagrid_tv_weight_rgb = cfg.bilagrid_tv_loss_weight
-        else:
-            bilagrid_lr_rgb = 0.0
-            bilagrid_tv_weight_rgb = 0.0
-        # Color-shift regularizer activates when at least one of the two color
-        # transforms (bilagrid_rgb / PPISP) is enabled.
-        if self._bilagrid_rgb_init or self._ppisp_init:
-            color_shift_reg_weight = cfg.color_shift_reg_weight
-            _period = max(int(cfg.color_shift_reg_ema_period), 1)
-            color_shift_reg_beta = max(0.0, 1.0 - 1.0 / _period)
-        else:
-            color_shift_reg_weight = 0.0
-            color_shift_reg_beta = 0.0
-        if self._bilagrid_depth_init:
-            bilagrid_lr_depth = optim_cfg.get_scheduled_lr(_bg_lr_keys[1], step, max_steps_lr)
-            bilagrid_tv_weight_depth = cfg.bilagrid_tv_loss_weight_geometry
-        else:
-            bilagrid_lr_depth = 0.0
-            bilagrid_tv_weight_depth = 0.0
-        if self._bilagrid_normal_init:
-            bilagrid_lr_normal = optim_cfg.get_scheduled_lr(_bg_lr_keys[2], step, max_steps_lr)
-            bilagrid_tv_weight_normal = cfg.bilagrid_tv_loss_weight_geometry
-        else:
-            bilagrid_lr_normal = 0.0
-            bilagrid_tv_weight_normal = 0.0
-
-        # Background per-step args.
-        if cfg.background_mode == "noise":
-            rw = min(step / max(cfg.background_noise_warmup, 1), 1.0)
-            bg_randomize_weight = 1.0 - (1.0 - cfg.background_noise_pre_warmup) * (1.0 - rw)
-            bg_lr_dc = 0.0
-            bg_lr_sh = 0.0
-        elif cfg.background_mode == "sh":
-            bg_randomize_weight = 0.0
-            bg_lr_dc = optim_cfg.get_scheduled_lr('background_dc', step, max_steps_lr)
-            bg_lr_sh = optim_cfg.get_scheduled_lr('background_sh',    step, max_steps_lr)
-        else:
-            bg_randomize_weight = 0.0
-            bg_lr_dc = 0.0
-            bg_lr_sh = 0.0
-        bg_seed = int(step) & 0x7FFFFFFF
-
-        # PPISP per-step args.
-        if self._ppisp_init:
-            ppisp_lr = optim_cfg.get_scheduled_lr(
-                'ppisp_adagrad' if cfg.use_adagrad_ppisp_optim else 'ppisp',
-                step, max_steps_lr)
-            ppisp_reg_exposure_mean   = cfg.ppisp_reg_exposure_mean
-            ppisp_reg_vig_center      = cfg.ppisp_reg_vig_center
-            ppisp_reg_vig_non_pos     = cfg.ppisp_reg_vig_non_pos
-            ppisp_reg_vig_channel_var = cfg.ppisp_reg_vig_channel_var
-            ppisp_reg_color_mean      = cfg.ppisp_reg_color_mean
-            ppisp_reg_crf_channel_var = cfg.ppisp_reg_crf_channel_var
-        else:
-            ppisp_lr = 0.0
-            ppisp_reg_exposure_mean = 0.0
-            ppisp_reg_vig_center = 0.0
-            ppisp_reg_vig_non_pos = 0.0
-            ppisp_reg_vig_channel_var = 0.0
-            ppisp_reg_color_mean = 0.0
-            ppisp_reg_crf_channel_var = 0.0
-
-        loss_dict = self.core.engine_train_step_managed(
-            step, max_steps,
-            sh_degree_to_use,
-            loss_weights, w_ssim, num_loss_scales,
-            compute_loss_map, loss_map_mode, robust_edge_aware_quantile,
-            self.config, self.trainer_config.optimizer,
-            bilagrid_lr_rgb=bilagrid_lr_rgb,
-            bilagrid_lr_depth=bilagrid_lr_depth,
-            bilagrid_lr_normal=bilagrid_lr_normal,
-            bilagrid_tv_weight_rgb=bilagrid_tv_weight_rgb,
-            bilagrid_tv_weight_depth=bilagrid_tv_weight_depth,
-            bilagrid_tv_weight_normal=bilagrid_tv_weight_normal,
-            color_shift_reg_weight=color_shift_reg_weight,
-            color_shift_reg_beta=color_shift_reg_beta,
-            ppisp_lr=ppisp_lr,
-            ppisp_reg_exposure_mean=ppisp_reg_exposure_mean,
-            ppisp_reg_vig_center=ppisp_reg_vig_center,
-            ppisp_reg_vig_non_pos=ppisp_reg_vig_non_pos,
-            ppisp_reg_vig_channel_var=ppisp_reg_vig_channel_var,
-            ppisp_reg_color_mean=ppisp_reg_color_mean,
-            ppisp_reg_crf_channel_var=ppisp_reg_crf_channel_var,
-            apply_ppisp_before_bilagrid=cfg.apply_ppisp_before_bilagrid,
-            bg_lr_dc=bg_lr_dc,
-            bg_lr_sh=bg_lr_sh,
-            bg_randomize_weight=bg_randomize_weight,
-            bg_seed=bg_seed,
-            overexposure_reg_weight=cfg.overexposure_reg,
-        )
-
-        for key, value in loss_dict.items():
-            self.training_verboser.add_metric(key, value)
-        self.training_verboser.add_metric("num_splats",     self.core.cur_num_splats, last_only=True)
-        self.training_verboser.add_metric("max_num_splats", self.core.max_num_splats, last_only=True)
-        self.training_verboser.add_metric("num_sh",         min(sh_degree_to_use, self.config.sh_degree), last_only=True)
-        self.training_verboser.add_metric("max_num_sh",     self.config.sh_degree, last_only=True)
-
-    def get_loss_grad(self, outputs, batch, batch_size: int) -> Dict[str, torch.Tensor]:
-        """Computes and returns the losses dict."""
-
-        # Engine path: set training data, compute loss + backward in C++
-        if self.core.primitive in ['3dgs', 'mip', '3dgut'] and not self.core.use_bvh:
-            return self._engine_get_loss_grad(outputs, batch, batch_size)
 
     def set_gradient_accumulation_steps(self, gradient_accumulation_step: int, _trainer=[]):
         if len(trainer) == 0:

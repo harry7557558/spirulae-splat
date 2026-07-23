@@ -60,7 +60,7 @@ def load_splats(ply_path: Path):
     )
 
 
-# Dataparser distortion columns (see dataparser.DISTORTION_KEYS) -> engine [10]
+# Parser distortion columns (native ParsedDataset.dist_coeffs) -> engine [10]
 # layout expected by the 3DGUT projection (Camera.h kCameraDistortionParams:
 # k1,k2,p1,p2,k3,k4,k5,k6,sx1,sy1). Source order is k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2.
 # k5,k6 have no source column (filled with zero); b1,b2 (metashape) are dropped.
@@ -143,10 +143,11 @@ def load_cameras(run_dir: Path, data_dir: Path):
       width,height (C,) int  per-camera render size
       camera_model str       engine model name
     """
-    from spirulae_splat.modules.dataparser import (
-        SpirulaeSplatDataparser,
-        SpirulaeSplatDataParserConfig,
-        DISTORTION_KEYS,
+    from spirulae_splat.modules.dataparser import SpirulaeSplatDataParserConfig
+    from spirulae_splat.modules.native_dataparser import (
+        parse_dataset as parse_dataset_native,
+        to_dataparser_outputs,
+        to_native_parser_config,
     )
 
     cfg_path = run_dir / "config.json"
@@ -174,8 +175,8 @@ def load_cameras(run_dir: Path, data_dir: Path):
     if isinstance(rcf, bool) or (isinstance(rcf, (int, float)) and rcf <= 0):
         cfg.rescale_camera_to_fit = False
 
-    parser = SpirulaeSplatDataparser(cfg, data_dir)
-    train_out, _eval_out = parser.parse()
+    train_out = to_dataparser_outputs(
+        parse_dataset_native(data_dir, to_native_parser_config(cfg)))
     cameras = train_out["cameras"]
 
     c2w = cameras.camera_to_worlds  # (C, 3, 4)
@@ -210,12 +211,13 @@ def load_cameras(run_dir: Path, data_dir: Path):
         intr = torch.stack([torch.as_tensor(x).reshape(C).float() for x in intr], dim=-1)
     intrins = torch.as_tensor(intr).reshape(C, 4).contiguous().float()
 
-    # distortion -> engine [C,10] layout
+    # distortion -> engine [C,10] layout. The native parser emits the same
+    # column order the Python one did (_DIST_SRC), so the remap stays.
     dist_coeffs = torch.zeros(C, 10, dtype=torch.float32)
     dp = getattr(cameras, "distortion_params", None)
     if dp is not None and torch.as_tensor(dp).numel() > 0:
         dp = torch.as_tensor(dp).reshape(C, -1).float()
-        src_idx = {k: i for i, k in enumerate(DISTORTION_KEYS)}
+        src_idx = {k: i for i, k in enumerate(_DIST_SRC)}
         for j, key in enumerate(_DIST_DST):
             if key in src_idx and src_idx[key] < dp.shape[1]:
                 dist_coeffs[:, j] = dp[:, src_idx[key]]

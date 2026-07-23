@@ -38,6 +38,71 @@ def get_ext():
     return CustomBuildExtention.with_options(no_python_abi_suffix=True, use_ninja=True)
 
 
+def embed_viewer_html():
+    """Generate app_generated/viewer_html.h, as cmake/SsplatEmbed.cmake does.
+
+    src/app/webviewer/Viewer.cpp serves the browser client from an embedded
+    byte array rather than reading it off disk, and that array is generated
+    from src/app/webviewer/viewer.html at build time. The CMake build does it
+    in CMakeLists.txt; this build has to do it too, since cmake/sources.txt
+    puts app/webviewer/ in the Python extension. Returns the include dir.
+    """
+    root = Path(__file__).parent
+    src = root / "src" / "app" / "webviewer" / "viewer.html"
+    out_dir = root / "build" / "setup_generated"
+    out = out_dir / "app_generated" / "viewer_html.h"
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    data = src.read_bytes()
+    body = ",".join(f"0x{b:02x}" for b in data)
+    text = (
+        "#pragma once\n"
+        "// AUTO-GENERATED from src/app/webviewer/viewer.html -- do not edit.\n"
+        "#include <cstddef>\n"
+        f"inline const unsigned char kViewerHtml[] = {{{body},}};\n"
+        "inline const size_t kViewerHtmlSize = sizeof(kViewerHtml);\n"
+    )
+    # Only rewrite when it changed, so ninja does not rebuild Viewer.cpp on
+    # every invocation.
+    if not out.exists() or out.read_text() != text:
+        out.write_text(text)
+    return str(out_dir.absolute())
+
+
+def get_sources():
+    """Engine/kernel sources, from the list CMake also builds from.
+
+    cmake/sources.txt is the single source of truth: [section] headers, then
+    one glob pattern per line relative to the repo root. This build wants the
+    [cuda] section (everything the csrc library compiles). Keeping it plain
+    text means the pip build does not need CMake installed. See
+    cmake/SsplatSources.cmake for the other consumer.
+    """
+    root = Path(__file__).parent
+    spec = root / "cmake" / "sources.txt"
+
+    sources = []
+    in_section = False
+    for line in spec.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_section = line == "[cuda]"
+            continue
+        if in_section:
+            sources += glob.glob(str(root / line))
+    if not sources:
+        raise RuntimeError(f"{spec} [cuda] matched no files")
+
+    # Relative to the repo root, as setuptools expects (it mirrors the source
+    # path into build/temp.*/).
+    sources = [os.path.relpath(s, root) for s in sources]
+
+    # Drop ROCm sources (neither build compiles them).
+    return [s for s in sources if "hip" not in s]
+
+
 def get_extensions():
     import torch
     from torch.utils.cpp_extension import CUDAExtension
@@ -50,13 +115,7 @@ def get_extensions():
     else:
         raise RuntimeError("CUDA is required for this extension.")
 
-    extensions_dir = Path("spirulae_splat/splat/cuda")
-    sources = (
-        glob.glob(str(extensions_dir / "ins" / "*.cu")) +
-        glob.glob(str(extensions_dir / "csrc" / "*.cu")) +
-        glob.glob(str(extensions_dir / "csrc" / "*.cpp"))
-    )
-    sources = [s for s in sources if "hip" not in s]
+    sources = get_sources()
 
     undef_macros = []
     define_macros = []
@@ -135,9 +194,11 @@ def get_extensions():
     extension = CUDAExtension(
         "spirulae_splat.csrc",
         sources,
+        # src/ is the include root: local includes are path-qualified
+        # relative to it (e.g. #include "core/Common.cuh").
         include_dirs=[
-            str((extensions_dir / "csrc").absolute()),
-            str((extensions_dir / "csrc" / "glm").absolute()),
+            str((Path(__file__).parent / "src").absolute()),
+            embed_viewer_html(),
         ],
         define_macros=define_macros,
         undef_macros=undef_macros,

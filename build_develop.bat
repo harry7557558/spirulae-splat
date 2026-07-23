@@ -16,9 +16,9 @@ rem ---------------------------------------------------------------------------
 rem Codegen (optional -- the generated files are committed)
 rem ---------------------------------------------------------------------------
 where python >nul 2>&1 || goto :skip_codegen
-python spirulae_splat\generate_headers.py || goto :codegen_warn
-python spirulae_splat\generate_kernel_instantiation.py || goto :codegen_warn
-python spirulae_splat\generate_cli_config.py || goto :codegen_warn
+python tools\codegen\generate_headers.py || goto :codegen_warn
+python tools\codegen\generate_kernel_instantiation.py || goto :codegen_warn
+python tools\codegen\generate_cli_config.py || goto :codegen_warn
 goto :msvc_env
 :codegen_warn
 echo codegen failed -- continuing with committed generated files

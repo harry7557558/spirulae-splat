@@ -1,5 +1,4 @@
 import threading
-import asyncio
 
 # import os
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -8,35 +7,6 @@ import asyncio
 
 from spirulae_splat.modules.trainer import *
 from typing import Union, Annotated
-
-from spirulae_splat.viewer.server import ViewerServer
-
-
-
-async def start_viewer_server(trainer: Trainer):
-
-    server = ViewerServer(
-        render_fn=trainer.render,
-        progress_fn=trainer.get_progress,
-        pause_toggle_fn=trainer.toggle_pause,
-        # Set the "render desired" flag from the HTTP handler's submit() call,
-        # not later from the worker thread's render_fn invocation. The earlier
-        # this flips, the more reliably the training loop's next-iteration
-        # boundary will see it and yield the lock to the viewer. The worker
-        # clears it once it has fully drained pending requests.
-        on_render_submit=trainer._render_pending.set,
-        on_render_idle=trainer._render_pending.clear,
-        http_host="0.0.0.0",
-        http_port=trainer.config.viewer_port,
-        open_browser=False,
-    )
-    print()
-
-    server.start()
-    server.wait()
-
-async def start_viewer(trainer: Trainer):
-    await asyncio.create_task(start_viewer_server(trainer))
 
 
 def _find_resume(argv):
@@ -105,12 +75,11 @@ def entrypoint():
 
     trainer = Trainer(config)
 
+    # The viewer is the native one (src/app/webviewer/): its HTTP server and
+    # render worker are C++ threads reading the session directly, so there is
+    # no Python thread to start and nothing to push to it.
     if not config.disable_viewer:
-        thread = threading.Thread(
-            target=lambda: asyncio.run(start_viewer(trainer)),
-            daemon=True
-        )
-        thread.start()
+        trainer.start_viewer(port=config.viewer_port)
 
     trainer.train()
     # trainer._train_with_profiling()
@@ -122,6 +91,7 @@ def entrypoint():
             threading.Event().wait()
         except KeyboardInterrupt:
             print("\nShutting down...")
+    trainer.stop_viewer()
 
 if __name__ == "__main__":
     entrypoint()

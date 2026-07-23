@@ -1,4 +1,4 @@
-import asyncio
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
@@ -9,7 +9,7 @@ import tyro
 from plyfile import PlyData
 
 from spirulae_splat.modules.core import Renderer
-from spirulae_splat.viewer.server import ViewerServer
+from spirulae_splat.splat.cuda import _C
 
 
 @dataclass
@@ -95,68 +95,38 @@ class PlyViewer:
 
         return splats_world, count
 
-    def _camera_to_viewmat(self, c2w: np.ndarray) -> torch.Tensor:
-        c2w = torch.from_numpy(c2w.astype(np.float32)).to(self.device)
-        if c2w.shape != (3, 4):
-            raise ValueError("Camera-to-world matrix must be 3x4.")
 
-        R = c2w[:3, :3]
-        T = c2w[:3, 3:4]
-        R = R * torch.tensor([1.0, -1.0, -1.0], dtype=torch.float32, device=self.device)[None, :]
-        R_inv = R.transpose(-1, -2)
-        T_inv = -torch.matmul(R_inv, T)
+def entrypoint_body(config: ViewerConfig) -> None:
+    """Serve a PLY through the native web viewer.
 
-        viewmat = torch.eye(4, dtype=torch.float32, device=self.device)
-        viewmat[:3, :3] = R_inv
-        viewmat[:3, 3:4] = T_inv
-        return viewmat.unsqueeze(0)
+    The Renderer here exists only to upload the PLY into the engine world; the
+    rendering, HTTP serving and the browser client are all the native path
+    (src/app/webviewer/), the same one ssplat-train and ssplat-gui use. An
+    empty PostSplitCameras means the viewer has no training cameras to draw --
+    a bare PLY has none.
+    """
+    viewer_obj = PlyViewer(config)   # uploads the splats via Renderer
 
-    def render(self, c2w, fx, fy, cx, cy, width, height, camera_model, *args, **kwargs):
-        camera_model = camera_model.upper()
-        viewmats = self._camera_to_viewmat(c2w)
-        intrins = torch.tensor([[fx, fy, cx, cy]], dtype=torch.float32, device=self.device)
+    cfg = _C.ViewerRenderConfig()
+    cfg.primitive = config.primitive
 
-        self.renderer.set_params(
-            viewmats=viewmats,
-            intrins=intrins,
-            width=int(width),
-            height=int(height),
-            camera_model=camera_model,
-        )
-        self.renderer.forward()
-
-        rgb = self.renderer.render_colors[0]
-        return {
-            "rgb": rgb[0],
-            "_post_processor": lambda tensor, **kwargs: (255*torch.clamp(tensor, 0.0, 1.0)).to(torch.uint8),
-        }
-
-
-async def start_viewer_server(viewer: PlyViewer) -> None:
-    server = ViewerServer(
-        render_fn=viewer.render,
-        progress_fn=None,
-        http_host="0.0.0.0",
-        http_port=viewer.config.viewer_port,
-        open_browser=viewer.config.open_browser,
-    )
-    server.start()
-    server.wait()
-
-
-async def start_viewer(viewer: PlyViewer) -> None:
-    await asyncio.create_task(start_viewer_server(viewer))
+    server = _C.WebViewer()
+    server.start("0.0.0.0", config.viewer_port, cfg, _C.PostSplitCameras())
+    url = f"http://0.0.0.0:{config.viewer_port}/"
+    print(f"Viewer at {url}")
+    if config.open_browser:
+        import webbrowser
+        threading.Timer(0.5, webbrowser.open, args=[url]).start()
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+    finally:
+        server.stop()
 
 
 def entrypoint() -> None:
-    config = tyro.cli(ViewerConfig)
-    viewer = PlyViewer(config)
-    thread = __import__("threading").Thread(
-        target=lambda: asyncio.run(start_viewer(viewer)),
-        daemon=False,
-    )
-    thread.start()
-    thread.join()
+    entrypoint_body(tyro.cli(ViewerConfig))
 
 
 if __name__ == "__main__":
