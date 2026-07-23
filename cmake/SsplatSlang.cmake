@@ -5,6 +5,11 @@
 # binary. No Python is required for the Vulkan build.
 
 set(SSPLAT_SLANG_VERSION "2026.12.0.1")
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    # 2026.12.0.1 ships no macOS release assets; use the nearest release
+    # that does (upstream publishes macos-aarch64/x86_64 for 2026.12.1).
+    set(SSPLAT_SLANG_VERSION "2026.12.1")
+endif()
 set(SSPLAT_SLANGC "" CACHE FILEPATH
     "slangc to use (empty = find in PATH, fetch on miss/mismatch)")
 
