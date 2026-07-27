@@ -381,9 +381,23 @@ static int64_t colmap_model_num_images(const fs::path& dir) {
     return -1;
 }
 
-ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
-                                   const DatasetParserConfig& cfg) {
-    // ---- Locate the reconstruction (dataparser.py:609-635) ---------------
+static std::string join_files(const std::vector<std::string>& v) {
+    std::string s;
+    for (size_t i = 0; i < v.size(); i++)
+        s += (i ? (i + 1 == v.size() ? " and " : ", ") : "") + v[i];
+    return s;
+}
+
+// Locate the reconstruction (dataparser.py:609-635). Returns "" when the
+// dataset dir holds no COLMAP model; `text_format` says which extension
+// matched. `verbose` gates the multi-model note, so the auto-detect probe in
+// parse_dataset can call this silently. On failure `near_miss` (when given)
+// describes the closest partial model found, so the error can say what is
+// missing instead of just "not a dataset".
+static std::string find_colmap_recon(const std::string& dataset_dir,
+                                     const DatasetParserConfig& cfg,
+                                     bool* text_format, bool verbose,
+                                     std::string* near_miss = nullptr) {
     std::vector<std::string> probe;
     if (!cfg.recon_dir.empty()) {
         probe = {cfg.recon_dir};
@@ -409,7 +423,7 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
         std::sort(models.begin(), models.end(), [](const Model& a, const Model& b) {
             return a.n != b.n ? a.n > b.n : a.rel < b.rel;
         });
-        if (models.size() > 1)
+        if (verbose && models.size() > 1)
             std::printf("Found %zu COLMAP models under %s; using %s "
                         "(%lld registered images)\n",
                         models.size(), dataset_dir.c_str(),
@@ -428,17 +442,47 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
                (fs::exists(d / (std::string("points3D.") + ext)) ||
                 !cfg.require_image_files);
     };
-    std::string recon_dir;
-    bool text_format = false;
+    *text_format = false;
     for (const auto& rel : probe) {
         fs::path d = fs::path(dataset_dir) / rel;
-        if (has_recon(d, "bin")) { recon_dir = d.string(); break; }
-        if (has_recon(d, "txt")) { recon_dir = d.string(); text_format = true; break; }
+        if (has_recon(d, "bin")) return d.string();
+        if (has_recon(d, "txt")) { *text_format = true; return d.string(); }
     }
+
+    // Nothing matched: report the first probed dir that holds *some* of the
+    // three files (a recon that lost points3D, say) rather than none.
+    if (near_miss) {
+        for (const auto& rel : probe) {
+            fs::path d = fs::path(dataset_dir) / rel;
+            for (const char* ext : {"bin", "txt"}) {
+                std::vector<std::string> present, missing;
+                for (const char* base : {"cameras", "images", "points3D"}) {
+                    std::string name = std::string(base) + "." + ext;
+                    (fs::exists(d / name) ? present : missing).push_back(name);
+                }
+                if (present.empty() || missing.empty()) continue;
+                *near_miss = (rel.empty() ? std::string("the dataset dir")
+                                          : "'" + rel + "'") +
+                             " has " + join_files(present) + " but no " +
+                             join_files(missing);
+                return {};
+            }
+        }
+    }
+    return {};
+}
+
+ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
+                                   const DatasetParserConfig& cfg) {
+    bool text_format = false;
+    std::string near_miss;
+    std::string recon_dir = find_colmap_recon(dataset_dir, cfg, &text_format,
+                                              /*verbose=*/true, &near_miss);
     if (recon_dir.empty())
         throw std::runtime_error(
             "ColmapParser: no COLMAP reconstruction (cameras/images/points3D"
-            " .bin or .txt) found under " + dataset_dir);
+            " .bin or .txt) found under " + dataset_dir +
+            (near_miss.empty() ? "" : " -- " + near_miss));
 
     auto cameras = text_format ? read_cameras_text(recon_dir)
                                : read_cameras_binary(recon_dir);
@@ -587,23 +631,95 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
 // ===========================================================================
 // Format dispatch / auto-detect (dataparser.py parse():246-269, same probe
 // order: nerfstudio first, then COLMAP, then Metashape).
+//
+// Auto-detect *identifies* the format from its marker files before parsing,
+// rather than trying each parser and reporting whichever failed last -- a
+// directory that is not a dataset at all used to surface as a Metashape
+// complaint, which told the user nothing about what was actually wrong.
 // ===========================================================================
+
+// A Metashape camera export is <document ...><chunk ...><sensors>...; sniff
+// the head of the file so an unrelated .xml that happens to sit in the
+// directory is not mistaken for one (a plain "*.xml is present" test makes
+// any random folder look like a Metashape dataset).
+static bool looks_like_metashape_xml(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return false;
+    char buf[8192];
+    f.read(buf, sizeof buf);
+    std::string head(buf, (size_t)f.gcount());
+    return head.find("<document") != std::string::npos &&
+           head.find("<chunk") != std::string::npos;
+}
+
+// Does the dataset dir hold a Metashape camera export? A .xml is the only
+// mandatory input (MetashapeParser.cpp resolve_input); an explicitly
+// configured one counts unconditionally -- the user named it, so any problem
+// with it belongs in the Metashape parser's own error message.
+static bool has_metashape_xml(const std::string& dataset_dir,
+                              const DatasetParserConfig& cfg) {
+    if (!cfg.metashape_xml.empty()) return true;
+    std::error_code ec;
+    for (fs::directory_iterator it(dataset_dir, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        std::string ext = it->path().extension().string();
+        for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+        if (ext == ".xml" && looks_like_metashape_xml(it->path())) return true;
+    }
+    return false;
+}
 
 ParsedDataset parse_dataset(const std::string& dataset_dir,
                             const DatasetParserConfig& cfg,
                             const std::string& format) {
+    std::error_code ec;
+    if (!fs::exists(fs::path(dataset_dir), ec))
+        throw std::runtime_error("dataset path does not exist: " + dataset_dir);
+    if (!fs::is_directory(fs::path(dataset_dir), ec))
+        throw std::runtime_error("dataset path is not a directory: " + dataset_dir +
+                                 " (--data must point at the dataset folder)");
+
     if (format == "colmap")     return parse_colmap_dataset(dataset_dir, cfg);
     if (format == "nerfstudio") return parse_nerfstudio_dataset(dataset_dir, cfg);
     if (format == "metashape")  return parse_metashape_dataset(dataset_dir, cfg);
     if (!format.empty())
-        throw std::runtime_error("unsupported data format: " + format);
+        throw std::runtime_error("unsupported data format: '" + format +
+                                 "' (expected colmap, nerfstudio or metashape)");
+
+    // ---- Auto-detect: probe for each format's marker files ----------------
     if (fs::exists(fs::path(dataset_dir) / "transforms.json"))
         return parse_nerfstudio_dataset(dataset_dir, cfg);
-    try {
-        return parse_colmap_dataset(dataset_dir, cfg);
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "Failed to parse COLMAP data: %s\n", e.what());
-        std::fprintf(stderr, "Attempting to parse Metashape data...\n");
+
+    bool text_format = false;
+    std::string colmap_near_miss;
+    bool has_colmap = !find_colmap_recon(dataset_dir, cfg, &text_format,
+                                         /*verbose=*/false,
+                                         &colmap_near_miss).empty();
+    bool has_metashape = has_metashape_xml(dataset_dir, cfg);
+
+    if (has_colmap) {
+        if (!has_metashape) return parse_colmap_dataset(dataset_dir, cfg);
+        // Both markers present: COLMAP still wins, but a failure there is
+        // worth retrying as Metashape rather than aborting the run.
+        try {
+            return parse_colmap_dataset(dataset_dir, cfg);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "Failed to parse COLMAP data: %s\n", e.what());
+            std::fprintf(stderr, "Attempting to parse Metashape data...\n");
+        }
     }
-    return parse_metashape_dataset(dataset_dir, cfg);
+    if (has_metashape) return parse_metashape_dataset(dataset_dir, cfg);
+
+    throw std::runtime_error(
+        dataset_dir + " does not look like a supported dataset.\n"
+        "Looked for:\n"
+        "  nerfstudio  transforms.json in the dataset dir\n"
+        "  COLMAP      cameras/images/points3D (.bin or .txt) under sparse/0,\n"
+        "              colmap/sparse/0, sparse, colmap or the dataset dir itself\n"
+        "  Metashape   a camera-export .xml in the dataset dir\n" +
+        (colmap_near_miss.empty() ? std::string()
+                                  : "Closest match: " + colmap_near_miss + ".\n") +
+        "Point --data at the dataset folder that contains one of these, or use\n"
+        "--data-format and the per-format path options to name the inputs.");
 }

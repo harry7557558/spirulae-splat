@@ -14,8 +14,11 @@
 //                             .psx project for filename disambiguation)
 //                             (MetashapeParser.cpp; XML via app/Xml.h, zips
 //                             via external/miniz)
-//   parse_dataset             auto-detect: nerfstudio, then COLMAP, then
-//                             Metashape (Python probes in the same order)
+//   parse_dataset             auto-detect: identifies the format from its
+//                             marker files (transforms.json, a COLMAP model,
+//                             a Metashape camera-export .xml), probed in that
+//                             order, then runs that one parser so its error
+//                             is the one the user sees
 //
 // Both produce a ParsedDataset of PER-INPUT cameras in the raw
 // train_frame="points" frame (poses/points as stored; the normalized-frame
