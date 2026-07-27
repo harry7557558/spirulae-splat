@@ -11,11 +11,13 @@ template<int C>
 __global__ void tv_loss_forward_kernel(
     BilagridReader bilagrid,  // [N,L,H,W,C] (channel-last)
     float* __restrict__ tv_loss,
-    int N, int L, int H, int W
+    int N, int L, int H, int W, int nl_per_row
 ) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int wi = blockIdx.y * blockDim.y + threadIdx.y;
-    int hi = blockIdx.z * blockDim.z + threadIdx.z;
+    int nl_block, w_block, h_block;
+    bilagrid_tv_block_ids(nl_per_row, W, nl_block, w_block, h_block);
+    int idx = nl_block * blockDim.x + threadIdx.x;
+    int wi = w_block * blockDim.y + threadIdx.y;
+    int hi = h_block * blockDim.z + threadIdx.z;
     // bool inside = (wi < W && hi < H && idx < (L*C*N));
     bool inside = (wi < W && hi < H && idx < (L*N));
     int li = idx % L; idx /= L;
@@ -31,11 +33,12 @@ __global__ void tv_loss_forward_kernel(
     float tv_sum = 0.0f;
 
     if (inside) {
-        const int cell_base = ni * sn + li * sl + hi * sh + wi * sw;
+        const int64_t cell_base =
+            (int64_t)ni * sn + li * sl + hi * sh + wi * sw;
         #pragma unroll
         for (int ci = 0; ci < C; ci++) {
 
-        int cell_idx = cell_base + ci;
+        int64_t cell_idx = cell_base + ci;
 
         float val = bilagrid[cell_idx];
 
@@ -96,31 +99,27 @@ void tv_loss_forward(
 ) {
     // TODO: optimize memory access pattern
     dim3 block = { 4, 4, 4 };
-    dim3 bounds = {
-        // (N*C*L +block.z-1)/block.z,
-        (N*L +block.z-1)/block.z,
-        (W +block.x-1)/block.x,
-        (H +block.y-1)/block.y,
-    };
+    BilagridTvGrid g = bilagrid_tv_grid(N, L, H, W);
+    dim3 bounds = { g.gx, g.gy, g.gz };
     if (C == 12)
         tv_loss_forward_kernel<12><<<bounds, block, 0, stream>>>(
             bilagrid, tv_loss,
-            N, L, H, W
+            N, L, H, W, g.nl_per_row
         );
     else if (C == 9)
         tv_loss_forward_kernel<9><<<bounds, block, 0, stream>>>(
             bilagrid, tv_loss,
-            N, L, H, W
+            N, L, H, W, g.nl_per_row
         );
     else if (C == 2)
         tv_loss_forward_kernel<2><<<bounds, block, 0, stream>>>(
             bilagrid, tv_loss,
-            N, L, H, W
+            N, L, H, W, g.nl_per_row
         );
     else if (C == 3)
         tv_loss_forward_kernel<3><<<bounds, block, 0, stream>>>(
             bilagrid, tv_loss,
-            N, L, H, W
+            N, L, H, W, g.nl_per_row
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -131,11 +130,13 @@ template<int C>
 __global__ void channel_mean_forward_kernel(
     BilagridReader bilagrid,  // [N,L,H,W,C] (channel-last)
     float* __restrict__ channel_mean,  // [C]
-    int N, int L, int H, int W
+    int N, int L, int H, int W, int nl_per_row
 ) {
-    int wi = blockIdx.x * blockDim.x + threadIdx.x;
-    int hi = blockIdx.y * blockDim.y + threadIdx.y;
-    int idx = blockIdx.z * blockDim.z + threadIdx.z;
+    int nl_block, w_block, h_block;
+    bilagrid_tv_block_ids(nl_per_row, W, nl_block, w_block, h_block);
+    int wi = w_block * blockDim.x + threadIdx.x;
+    int hi = h_block * blockDim.y + threadIdx.y;
+    int idx = nl_block * blockDim.z + threadIdx.z;
     // bool inside = (wi < W && hi < H && idx < (L*C*N));
     bool inside = (wi < W && hi < H && idx < (L*N));
     int li = idx % L; idx /= L;
@@ -146,7 +147,8 @@ __global__ void channel_mean_forward_kernel(
     __shared__ float sharedData[blockSize];
     int tid = (threadIdx.z * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x;
 
-    const int cell_base = ((((ni * L) + li) * H + hi) * W + wi) * C;
+    const int64_t cell_base =
+        ((((int64_t)ni * L + li) * H + hi) * W + wi) * C;
 
     #pragma unroll
     for (int ci = 0; ci < C; ci++) {
@@ -182,31 +184,27 @@ void channel_mean_forward(
 ) {
     // TODO: optimize memory access pattern
     dim3 block = { 4, 4, 4 };
-    dim3 bounds = {
-        (W +block.x-1)/block.x,
-        (H +block.y-1)/block.y,
-        // (N*C*L +block.z-1)/block.z
-        (N*L +block.z-1)/block.z
-    };
+    BilagridTvGrid g = bilagrid_tv_grid(N, L, H, W);
+    dim3 bounds = { g.gx, g.gy, g.gz };
     if (C == 12)
         channel_mean_forward_kernel<12><<<bounds, block, 0, stream>>>(
             bilagrid, channel_mean,
-            N, L, H, W
+            N, L, H, W, g.nl_per_row
         );
     else if (C == 9)
         channel_mean_forward_kernel<9><<<bounds, block, 0, stream>>>(
             bilagrid, channel_mean,
-            N, L, H, W
+            N, L, H, W, g.nl_per_row
         );
     else if (C == 2)
         channel_mean_forward_kernel<2><<<bounds, block, 0, stream>>>(
             bilagrid, channel_mean,
-            N, L, H, W
+            N, L, H, W, g.nl_per_row
         );
     else if (C == 3)
         channel_mean_forward_kernel<3><<<bounds, block, 0, stream>>>(
             bilagrid, channel_mean,
-            N, L, H, W
+            N, L, H, W, g.nl_per_row
         );
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

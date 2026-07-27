@@ -225,6 +225,13 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   else and Adam amplifies the pseudo-gradient into visible floaters.
 - **Python test/scripted runs need `--no-keep-viewer-alive`**, or training
   hangs at exit waiting on the viewer.
+- **A kernel with one slot per image must fold its grid.** CUDA caps
+  `gridDim.y/z` at 65535 and Vulkan caps *every* dispatch dimension at 65535,
+  so a per-image axis put on y/z dies somewhere between 8k and 40k images.
+  Fold it across two dimensions (`vkk::fold_1d`, or `bilagrid_tv_grid` in
+  `kernels/bilagrid/BilagridConfig.cuh` for the 3D case) and pass the fold
+  factor to the kernel. Related: the bilagrid samplers index cells with
+  int32, which `engine_init_bilagrid_*` enforces up front.
 - **`SSPLAT_PROFILE=1`** enables the per-stage backend timing breakdown
   (H2D / D2H / D2D / memset / device / host), header-only, both backends.
 - **The engine is a process-global singleton.** Call `engine_reset()` between

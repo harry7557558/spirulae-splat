@@ -11,6 +11,7 @@
 #include "kernels/bilagrid/BilagridReader.cuh"
 #include "kernels/bilagrid/BilagridBwdTiming.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -108,6 +109,27 @@ static void _validate_value_bits(const char* fn, int bits) {
     }
 }
 
+// The bilagrid sampler kernels address the [N, L, H, W, C] table with 32-bit
+// cell indices on both backends (BilagridReader in the CUDA kernels, BgReader
+// in bilagrid_tv.slang / bilagrid_common.slang), so a table with more than
+// INT_MAX float cells would silently wrap. Refuse it up front with a message
+// that names the knob to turn -- for the default 16x16x8 affine grid the
+// ceiling is ~87k images, and shrinking `bilagrid_shape` buys headroom.
+static void _validate_cell_count(const char* fn, int n_grids,
+                                 int L, int H, int W, int C) {
+    int64_t cells = (int64_t)n_grids * L * H * W * C;
+    if (cells > (int64_t)INT32_MAX) {
+        throw std::runtime_error(
+            std::string(fn) + ": bilagrid table too large -- " +
+            std::to_string(n_grids) + " grids x " + std::to_string(L) + "x" +
+            std::to_string(H) + "x" + std::to_string(W) + "x" +
+            std::to_string(C) + " = " + std::to_string(cells) +
+            " cells exceeds the 32-bit cell indexing limit (" +
+            std::to_string((int64_t)INT32_MAX) +
+            "). Reduce bilagrid_shape or the number of images.");
+    }
+}
+
 // Allocate the 16-bit packed grid + per-256-cell float2 bounds for a bilagrid
 // when value_bits == 16. The bound buffer is zeroed (mm = (0, 0) per block);
 // the first Adam step's value-bound block-reduce installs real bounds.
@@ -160,6 +182,7 @@ void engine_init_bilagrid_rgb(int n_grids, std::string type, int L, int H, int W
     else throw std::runtime_error("engine_init_bilagrid_rgb: unknown type " + type);
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_rgb: n_grids must be > 0");
+    _validate_cell_count("engine_init_bilagrid_rgb", n_grids, L, H, W, C);
 
     engine().bilagrid_rgb.type = type;
     engine().bilagrid_rgb.C = C;
@@ -195,6 +218,7 @@ void engine_init_bilagrid_depth(int n_grids, int L, int H, int W,
     _validate_value_bits("engine_init_bilagrid_depth", value_bits);
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_depth: n_grids must be > 0");
+    _validate_cell_count("engine_init_bilagrid_depth", n_grids, L, H, W, 2);
     engine().bilagrid_depth.optim_bits = optim_bits;
     engine().bilagrid_depth.value_bits = value_bits;
     engine().bilagrid_depth.use_adagrad = use_adagrad;
@@ -219,6 +243,7 @@ void engine_init_bilagrid_normal(int n_grids, int L, int H, int W,
     _validate_value_bits("engine_init_bilagrid_normal", value_bits);
     if (n_grids <= 0)
         throw std::runtime_error("engine_init_bilagrid_normal: n_grids must be > 0");
+    _validate_cell_count("engine_init_bilagrid_normal", n_grids, L, H, W, 3);
     engine().bilagrid_normal.optim_bits = optim_bits;
     engine().bilagrid_normal.value_bits = value_bits;
     engine().bilagrid_normal.use_adagrad = use_adagrad;

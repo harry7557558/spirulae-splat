@@ -12,9 +12,13 @@
 #include "kernels/bilagrid/BilagridConfig.cuh"
 
 
+// Flat over the N*L*H*W cells, one thread per cell. A 3D grid with N*L on
+// gridDim.z would cap the camera count at 65535/L (~8k images for L=8), so
+// the cell axis is 1D -- gridDim.x reaches 2^31-1. Matches the Vulkan
+// dispatch_flat geometry in backend/vulkan/kernels/Bilagrid.cpp.
 __global__ void bilagrid_affine_identity_init_kernel(
     float* __restrict__ grids,   // [N, L, H, W, 12]
-    int N, int L, int H, int W
+    int64_t total_cells          // N*L*H*W
 ) {
     // Identity values for the 12-channel affine bilagrid (row-major 3x4).
     static constexpr float kIdent[12] = {
@@ -23,15 +27,11 @@ __global__ void bilagrid_affine_identity_init_kernel(
         0.0f, 0.0f, 1.0f, 0.0f
     };
 
-    int wi = blockIdx.x * blockDim.x + threadIdx.x;
-    int hi = blockIdx.y * blockDim.y + threadIdx.y;
-    int li_n = blockIdx.z * blockDim.z + threadIdx.z;
-    if (wi >= W || hi >= H || li_n >= L * N) return;
-    int li = li_n % L;
-    int ni = li_n / L;
+    const int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_cells) return;
 
-    // Channel-last: cell base in floats is ((ni*L + li)*H + hi)*W + wi, * 12
-    int64_t cell = ((((int64_t)ni * L + li) * H + hi) * W + wi) * 12;
+    // Channel-last: cell base in floats is the cell index * 12.
+    const int64_t cell = idx * 12;
 
     #pragma unroll
     for (int ci = 0; ci < 12; ci++) {
@@ -44,9 +44,10 @@ void bilagrid_affine_identity_init(
     float* grids, int N, int L, int H, int W, cudaStream_t stream
 ) {
     if (N <= 0 || L <= 0 || H <= 0 || W <= 0) return;
-    dim3 block(16, 16, 1);
-    dim3 bounds((W + 15) / 16, (H + 15) / 16, (int)(((int64_t)L * N + 0) / 1));
-    bilagrid_affine_identity_init_kernel<<<bounds, block, 0, stream>>>(
-        grids, N, L, H, W);
+    constexpr int kThreads = 256;
+    const int64_t total_cells = (int64_t)N * L * H * W;
+    const int64_t blocks = (total_cells + kThreads - 1) / kThreads;
+    bilagrid_affine_identity_init_kernel<<<(unsigned)blocks, kThreads, 0, stream>>>(
+        grids, total_cells);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

@@ -13,10 +13,28 @@
 const int kValueQuant = 0;
 
 // ---------------------------------------------------------------------------
-// tv_loss_forward — 4x4x4 blocks; x-dim indexes (ni, li), y = wi, z = hi.
+// tv_loss_forward — 4x4x4 blocks; (ni, li) folded over x/y, z packs (wi, hi).
 // ---------------------------------------------------------------------------
 
 groupshared float _bt_red64[64];
+
+// Undo the (ni, li)-axis grid fold shared by the four whole-table kernels
+// below: their block count along the fused (ni, li) axis is N*L/4, which for
+// a 40k-image dataset at L=8 is 80000 -- past the 65535 per-dimension
+// dispatch cap. The launcher folds it across grid x/y (`nl_per_row` blocks
+// per row) and packs the two small spatial block counts into z. Mirrors
+// bilagrid_tv_block_ids() in kernels/bilagrid/BilagridConfig.cuh.
+struct BgTvBlocks { int nl, w, h; };
+
+[ForceInline]
+BgTvBlocks bg_tv_blocks(uint3 bid, int nl_per_row, int W) {
+    BgTvBlocks b;
+    b.nl = int(bid.y) * nl_per_row + int(bid.x);
+    int wb = (W + 3) / 4;
+    b.w = int(bid.z) % wb;
+    b.h = int(bid.z) / wb;
+    return b;
+}
 
 struct TvParams {
     float* fp32;
@@ -26,7 +44,7 @@ struct TvParams {
     int N, C, L, H, W;
     float v_tv_loss;   // bwd only
     int inplace;       // bwd only
-    int _pad0;
+    int nl_per_row;    // (ni, li) blocks per grid row -- see bg_tv_blocks
 };
 
 [shader("compute")]
@@ -36,9 +54,10 @@ struct TvParams {
 void bilagrid_tv_loss_fwd(uint3 bid: SV_GroupID, uint ftid: SV_GroupThreadID,
                           uniform TvParams p) {
     uint3 t = uint3(ftid % 4u, (ftid / 4u) % 4u, ftid / 16u);
-    int idx = int(bid.x * 4 + t.x);
-    int wi = int(bid.y * 4 + t.y);
-    int hi = int(bid.z * 4 + t.z);
+    BgTvBlocks b = bg_tv_blocks(bid, p.nl_per_row, p.W);
+    int idx = b.nl * 4 + int(t.x);
+    int wi = b.w * 4 + int(t.y);
+    int hi = b.h * 4 + int(t.z);
     bool inside = (wi < p.W && hi < p.H && idx < p.L * p.N);
     int li = idx % p.L; idx /= p.L;
     int ni = idx;
@@ -87,7 +106,7 @@ void bilagrid_tv_loss_fwd(uint3 bid: SV_GroupID, uint ftid: SV_GroupThreadID,
 }
 
 // ---------------------------------------------------------------------------
-// tv_loss_backward — 4x4x4 blocks; x = wi, y = hi, z = (ni, li).
+// tv_loss_backward — 4x4x4 blocks; (ni, li) folded over x/y, z packs (wi, hi).
 // ---------------------------------------------------------------------------
 
 [shader("compute")]
@@ -97,9 +116,10 @@ void bilagrid_tv_loss_fwd(uint3 bid: SV_GroupID, uint ftid: SV_GroupThreadID,
 void bilagrid_tv_loss_bwd(uint3 bid: SV_GroupID, uint ftid: SV_GroupThreadID,
                           uniform TvParams p) {
     uint3 t = uint3(ftid % 4u, (ftid / 4u) % 4u, ftid / 16u);
-    int wi = int(bid.x * 4 + t.x);
-    int hi = int(bid.y * 4 + t.y);
-    int idx = int(bid.z * 4 + t.z);
+    BgTvBlocks b = bg_tv_blocks(bid, p.nl_per_row, p.W);
+    int wi = b.w * 4 + int(t.x);
+    int hi = b.h * 4 + int(t.y);
+    int idx = b.nl * 4 + int(t.z);
     if (wi >= p.W || hi >= p.H || idx >= p.N * p.L) return;
     int li = idx % p.L; idx /= p.L;
     int ni = idx;
@@ -153,7 +173,8 @@ struct ChannelMeanParams {
     float* v_bilagrid;     // bwd only
     int N, C, L, H, W;
     int inplace;
-    int _pad0, _pad1;
+    int nl_per_row;    // (ni, li) blocks per grid row -- see bg_tv_blocks
+    int _pad0;
 };
 
 [shader("compute")]
@@ -163,9 +184,10 @@ struct ChannelMeanParams {
 void bilagrid_channel_mean_fwd(uint3 bid: SV_GroupID, uint ftid: SV_GroupThreadID,
                                uniform ChannelMeanParams p) {
     uint3 t = uint3(ftid % 4u, (ftid / 4u) % 4u, ftid / 16u);
-    int wi = int(bid.x * 4 + t.x);
-    int hi = int(bid.y * 4 + t.y);
-    int idx = int(bid.z * 4 + t.z);
+    BgTvBlocks b = bg_tv_blocks(bid, p.nl_per_row, p.W);
+    int wi = b.w * 4 + int(t.x);
+    int hi = b.h * 4 + int(t.y);
+    int idx = b.nl * 4 + int(t.z);
     bool inside = (wi < p.W && hi < p.H && idx < p.L * p.N);
     int li = idx % p.L; idx /= p.L;
     int ni = idx;
@@ -198,9 +220,10 @@ void bilagrid_channel_mean_fwd(uint3 bid: SV_GroupID, uint ftid: SV_GroupThreadI
 void bilagrid_channel_mean_bwd(uint3 bid: SV_GroupID, uint ftid: SV_GroupThreadID,
                                uniform ChannelMeanParams p) {
     uint3 t = uint3(ftid % 4u, (ftid / 4u) % 4u, ftid / 16u);
-    int wi = int(bid.x * 4 + t.x);
-    int hi = int(bid.y * 4 + t.y);
-    int idx = int(bid.z * 4 + t.z);
+    BgTvBlocks b = bg_tv_blocks(bid, p.nl_per_row, p.W);
+    int wi = b.w * 4 + int(t.x);
+    int hi = b.h * 4 + int(t.y);
+    int idx = b.nl * 4 + int(t.z);
     if (wi >= p.W || hi >= p.H || idx >= p.N * p.L) return;
     int li = idx % p.L; idx /= p.L;
     int ni = idx;

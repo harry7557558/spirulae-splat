@@ -179,13 +179,13 @@ struct TvParams {
     uint64_t fp32, q16, vbounds, out_buf;
     int32_t N, C, L, H, W;
     float v_tv_loss;
-    int32_t inplace, _pad0;
+    int32_t inplace, nl_per_row;
 };
 static_assert(sizeof(TvParams) == 4 * 8 + 8 * 4, "layout");
 
 struct ChannelMeanParams {
     uint64_t fp32, q16, vbounds, channel_mean, v_bilagrid;
-    int32_t N, C, L, H, W, inplace, _pad0, _pad1;
+    int32_t N, C, L, H, W, inplace, nl_per_row, _pad0;
 };
 static_assert(sizeof(ChannelMeanParams) == 5 * 8 + 8 * 4, "layout");
 
@@ -1063,13 +1063,25 @@ bool tv_c_supported(int C, bool fwd) {
     return C == 12 || C == 9 || C == 2 || (fwd && C == 3);
 }
 
+// Grid for the four whole-table kernels (TV loss + channel mean, fwd/bwd).
+// The fused (ni, li) axis has N*L/4 blocks -- 80000 for a 40k-image dataset
+// at L=8, past the 65535 per-dimension dispatch cap -- so it folds across
+// x/y at `nl_per_row` blocks per row, and the two small spatial block counts
+// pack into z. Identical decomposition to bilagrid_tv_grid() in
+// kernels/bilagrid/BilagridConfig.cuh; bg_tv_blocks() in bilagrid_tv.slang
+// undoes it.
 void tv_grid(int N, int L, int H, int W, uint32_t& gx, uint32_t& gy,
-             uint32_t& gz, bool nl_first) {
-    uint32_t nl = (uint32_t)((N * L + 3) / 4);
+             uint32_t& gz, int& nl_per_row) {
+    int64_t nl_blocks = ((int64_t)N * L + 3) / 4;
+    int64_t per_row = nl_blocks < 1 ? 1 : nl_blocks;
+    if (per_row > 65535) per_row = 65535;
+    int64_t rows = (nl_blocks + per_row - 1) / per_row;
     uint32_t wb = (uint32_t)((W + 3) / 4);
     uint32_t hb = (uint32_t)((H + 3) / 4);
-    if (nl_first) { gx = nl; gy = wb; gz = hb; }
-    else          { gx = wb; gy = hb; gz = nl; }
+    gx = (uint32_t)per_row;
+    gy = (uint32_t)rows;
+    gz = wb * hb;
+    nl_per_row = (int)per_row;
     check_grid_dims(gx, gy, gz, "tv/channel_mean");
 }
 
@@ -1087,7 +1099,7 @@ void tv_loss_forward(
     p.out_buf = (uint64_t)tv_loss;
     p.N = N; p.C = C; p.L = L; p.H = H; p.W = W;
     uint32_t gx, gy, gz;
-    tv_grid(N, L, H, W, gx, gy, gz, /*nl_first=*/true);
+    tv_grid(N, L, H, W, gx, gy, gz, p.nl_per_row);
     vkk::dispatch("bilagrid_tv.bilagrid_tv_loss_fwd",
                   backend::vk::SpecList{r.vq}, gx, gy, gz, &p, sizeof(p));
 }
@@ -1106,7 +1118,7 @@ void tv_loss_backward(
     p.v_tv_loss = v_tv_loss;
     p.inplace = inplace ? 1 : 0;
     uint32_t gx, gy, gz;
-    tv_grid(N, L, H, W, gx, gy, gz, /*nl_first=*/false);
+    tv_grid(N, L, H, W, gx, gy, gz, p.nl_per_row);
     vkk::dispatch("bilagrid_tv.bilagrid_tv_loss_bwd",
                   backend::vk::SpecList{r.vq}, gx, gy, gz, &p, sizeof(p));
 }
@@ -1124,7 +1136,7 @@ void channel_mean_forward(
     p.v_bilagrid = vkk::or_fallback(nullptr);
     p.N = N; p.C = C; p.L = L; p.H = H; p.W = W;
     uint32_t gx, gy, gz;
-    tv_grid(N, L, H, W, gx, gy, gz, /*nl_first=*/false);
+    tv_grid(N, L, H, W, gx, gy, gz, p.nl_per_row);
     vkk::dispatch("bilagrid_tv.bilagrid_channel_mean_fwd",
                   backend::vk::SpecList{r.vq}, gx, gy, gz, &p, sizeof(p));
 }
@@ -1143,7 +1155,7 @@ void channel_mean_backward(
     p.N = N; p.C = C; p.L = L; p.H = H; p.W = W;
     p.inplace = inplace ? 1 : 0;
     uint32_t gx, gy, gz;
-    tv_grid(N, L, H, W, gx, gy, gz, /*nl_first=*/false);
+    tv_grid(N, L, H, W, gx, gy, gz, p.nl_per_row);
     vkk::dispatch("bilagrid_tv.bilagrid_channel_mean_bwd",
                   backend::vk::SpecList{r.vq}, gx, gy, gz, &p, sizeof(p));
 }

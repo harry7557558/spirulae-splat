@@ -570,6 +570,48 @@ void test_tv(Rng& r) {
                               false, backend::kDefaultStream);
         readback_f(g_tight, v_grid, cells);
     }
+
+    // Many-grid case: the (ni, li) block count N*L/4 lands past the 65535
+    // per-dimension dispatch cap, so that axis has to fold across two grid
+    // dimensions. L/H/W/C are minimal to keep the table small -- N stands in
+    // for a >2^16-image dataset, which at the real 16x16x8 shape would not
+    // fit in memory here. Only the head and tail of each grad buffer go into
+    // the reference (a fold that drops or aliases blocks shows up at both
+    // ends); dumping 6M floats per call would bloat ref.bin for no gain.
+    {
+        const int N = 400000, L = 2, Hg = 2, Wg = 2, C = 2;
+        const int64_t kWindow = 2048;
+        // Own Rng: drawing from `r` would shift every later case's golden
+        // values, so adding a case here would rewrite the whole reference.
+        Rng rb(90210);
+        Grid g = make_grid(rb, N, C, L, Hg, Wg, -0.7f, 0.9f, false);
+        int64_t cells = g.cells;
+        auto ends = [&](const float* d) {
+            readback_f(g_tight, d, kWindow);
+            readback_f(g_tight, d + (cells - kWindow), kWindow);
+        };
+
+        float* tv = alloc_zero<float>(1);
+        tv_loss_forward(g.reader(false), tv, N, C, L, Hg, Wg,
+                        backend::kDefaultStream);
+        readback_f(g_loose, tv, 1);
+
+        float* v_grid = alloc_zero<float>(cells);
+        tv_loss_backward(g.reader(false), 1.7f, v_grid, N, C, L, Hg, Wg,
+                         false, backend::kDefaultStream);
+        ends(v_grid);
+
+        float* cm = alloc_zero<float>(C);
+        channel_mean_forward(g.reader(false), cm, N, C, L, Hg, Wg,
+                             backend::kDefaultStream);
+        readback_f(g_loose, cm, C);
+
+        float* v_cm = upload(rb.vec(C, -1.0f, 1.0f));
+        float* v_grid2 = alloc_zero<float>(cells);
+        channel_mean_backward(g.reader(false), v_cm, v_grid2, N, C, L, Hg, Wg,
+                              false, backend::kDefaultStream);
+        ends(v_grid2);
+    }
 }
 
 /* ========================================================================
@@ -761,6 +803,20 @@ void test_utils(Rng& r) {
         bilagrid_affine_identity_init(grids, N, L, Hg, Wg,
                                       backend::kDefaultStream);
         readback_f(g_tight, grids, n);
+    }
+    // affine identity init, many grids: N*L past the 65535 grid-dimension cap
+    // (the old 3D grid over (wi, hi, ni*li) capped this at ~8k images at
+    // L=8). Head + tail only, as in the many-grid TV case above.
+    {
+        const int N = 100000, L = 2, Hg = 2, Wg = 2;
+        const int64_t kWindow = 2048;
+        Rng ri2(24680);   // own Rng -- see the many-grid TV case in test_tv
+        int64_t n = (int64_t)N * L * Hg * Wg * 12;
+        float* grids = upload(ri2.vec(n, -9.0f, 9.0f));
+        bilagrid_affine_identity_init(grids, N, L, Hg, Wg,
+                                      backend::kDefaultStream);
+        readback_f(g_tight, grids, kWindow);
+        readback_f(g_tight, grids + (n - kWindow), kWindow);
     }
     // scatter floats
     {
