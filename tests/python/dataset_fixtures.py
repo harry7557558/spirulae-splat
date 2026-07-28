@@ -111,13 +111,33 @@ def make_scene(fy: float = None) -> Dict:
     )
 
 
-def _write_images(image_dir: Path, names: List[str]) -> None:
+def make_equirect_scene(width: int = 64, height: int = 32) -> Dict:
+    """The same scene shot with a COLMAP EQUIRECTANGULAR (model id 17) camera.
+
+    Only the COLMAP writers honour "colmap_camera"; Nerfstudio and Metashape
+    reach EQUIRECTANGULAR by their own routes (`camera_model` in
+    transforms.json, sensor type "spherical" in the .xml).
+
+    A spherical camera has no focal length and no distortion -- the params are
+    exactly (w, h), which restate the resolution. Default 2:1, since anything
+    else trips the parser's non-360x180 warning.
+    """
+    scene = make_scene()
+    scene["size"] = (width, height)
+    scene["colmap_camera"] = ("EQUIRECTANGULAR", 17,
+                              (float(width), float(height)))
+    return scene
+
+
+def _write_images(image_dir: Path, names: List[str],
+                  size: Tuple[int, int] = None) -> None:
     """Small real PNGs, so parsers that stat or open the image succeed."""
     from PIL import Image
+    w, h = size if size is not None else (WIDTH, HEIGHT)
     image_dir.mkdir(parents=True, exist_ok=True)
     rng = _rng()
     for name in names:
-        arr = rng.integers(0, 256, size=(HEIGHT, WIDTH, 3), dtype=np.uint8)
+        arr = rng.integers(0, 256, size=(h, w, 3), dtype=np.uint8)
         Image.fromarray(arr).save(image_dir / name)
 
 
@@ -125,18 +145,30 @@ def _write_images(image_dir: Path, names: List[str]) -> None:
 # COLMAP
 # ---------------------------------------------------------------------------
 
+def _colmap_camera(scene: Dict) -> Tuple[str, int, int, int, Tuple[float, ...]]:
+    """The cameras.{txt,bin} record: (model name, model id, w, h, params).
+
+    Defaults to the OPENCV camera every golden-matrix fixture uses;
+    `make_equirect_scene` overrides it via the "colmap_camera" key.
+    """
+    w, h = scene.get("size", (WIDTH, HEIGHT))
+    model, model_id, params = scene.get(
+        "colmap_camera",
+        ("OPENCV", 4, (*scene["intrinsics"], *scene["distortion"])))
+    return model, model_id, w, h, params
+
+
 def write_colmap_text(root: Path, scene: Dict) -> Path:
     root = Path(root)
     recon = root / "sparse" / "0"
     recon.mkdir(parents=True, exist_ok=True)
-    fx, fy, cx, cy = scene["intrinsics"]
-    k1, k2, p1, p2 = scene["distortion"]
+    model, _, w, h, params = _colmap_camera(scene)
 
     with open(recon / "cameras.txt", "w") as f:
         f.write("# Camera list with one line of data per camera:\n")
         f.write("#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
-        f.write(f"1 OPENCV {WIDTH} {HEIGHT} {fx} {fy} {cx} {cy} "
-                f"{k1} {k2} {p1} {p2}\n")
+        f.write(f"1 {model} {w} {h} "
+                + " ".join(str(p) for p in params) + "\n")
 
     with open(recon / "images.txt", "w") as f:
         f.write("# Image list with two lines of data per image:\n")
@@ -156,7 +188,7 @@ def write_colmap_text(root: Path, scene: Dict) -> Path:
             f.write(f"{i + 1} {p[0]!r} {p[1]!r} {p[2]!r} "
                     f"{int(c[0])} {int(c[1])} {int(c[2])} 0.5 1 0\n")
 
-    _write_images(root / "images", scene["names"])
+    _write_images(root / "images", scene["names"], scene.get("size"))
     return root
 
 
@@ -164,14 +196,13 @@ def write_colmap_binary(root: Path, scene: Dict) -> Path:
     root = Path(root)
     recon = root / "sparse" / "0"
     recon.mkdir(parents=True, exist_ok=True)
-    fx, fy, cx, cy = scene["intrinsics"]
-    k1, k2, p1, p2 = scene["distortion"]
+    _, model_id, w, h, params = _colmap_camera(scene)
 
-    # cameras.bin -- model id 4 == OPENCV, 8 params
+    # cameras.bin -- model id 4 == OPENCV (8 params) unless overridden
     with open(recon / "cameras.bin", "wb") as f:
         f.write(struct.pack("<Q", 1))
-        f.write(struct.pack("<iiQQ", 1, 4, WIDTH, HEIGHT))
-        f.write(struct.pack("<8d", fx, fy, cx, cy, k1, k2, p1, p2))
+        f.write(struct.pack("<iiQQ", 1, model_id, w, h))
+        f.write(struct.pack("<%dd" % len(params), *params))
 
     with open(recon / "images.bin", "wb") as f:
         f.write(struct.pack("<Q", len(scene["names"])))
@@ -195,7 +226,7 @@ def write_colmap_binary(root: Path, scene: Dict) -> Path:
             f.write(struct.pack("<Q", 1))         # track length
             f.write(struct.pack("<ii", 1, 0))     # (image_id, point2D_idx)
 
-    _write_images(root / "images", scene["names"])
+    _write_images(root / "images", scene["names"], scene.get("size"))
     return root
 
 

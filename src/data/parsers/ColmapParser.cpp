@@ -20,6 +20,8 @@
 
 namespace fs = std::filesystem;
 
+constexpr double kPi = 3.14159265358979323846;   // MSVC has no M_PI by default
+
 
 // ===========================================================================
 // Little-endian binary readers (colmap_utils.py read_next_bytes)
@@ -61,7 +63,8 @@ struct BinReader {
     }
 };
 
-// COLMAP model id -> (name, num_params). Matches colmap/src/base/camera_models.h.
+// COLMAP model id -> (name, num_params). Matches colmap/src/colmap/sensor/models.h
+// (CameraModelId + each model's params_info).
 struct ColmapModelInfo { const char* name; int num_params; };
 const std::map<int, ColmapModelInfo>& colmap_model_table() {
     static const std::map<int, ColmapModelInfo> t = {
@@ -76,6 +79,13 @@ const std::map<int, ColmapModelInfo>& colmap_model_table() {
         {8,  {"SIMPLE_RADIAL_FISHEYE", 4}},
         {9,  {"RADIAL_FISHEYE", 5}},
         {10, {"THIN_PRISM_FISHEYE", 12}},
+        {11, {"RAD_TAN_THIN_PRISM_FISHEYE", 16}},
+        {12, {"SIMPLE_DIVISION", 4}},
+        {13, {"DIVISION", 5}},
+        {14, {"SIMPLE_FISHEYE", 3}},
+        {15, {"FISHEYE", 4}},
+        {16, {"EUCM", 6}},
+        {17, {"EQUIRECTANGULAR", 2}},
     };
     return t;
 }
@@ -316,6 +326,16 @@ BakedIntrins bake_colmap_intrins(const ColmapCamera& cam) {
         o.dist[0] = P(3);                                             // k1
         if (cam.model == "RADIAL_FISHEYE") o.dist[1] = P(4);          // k2
         o.model_name = "OPENCV_FISHEYE";
+    } else if (cam.model == "SIMPLE_FISHEYE" || cam.model == "FISHEYE") {
+        if (cam.model == "SIMPLE_FISHEYE") { o.fx = o.fy = P(0); o.cx = P(1); o.cy = P(2); }
+        else                               { o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3); }
+        o.model_name = "OPENCV_FISHEYE";
+    } else if (cam.model == "EQUIRECTANGULAR") {
+        o.fx = (float)(p[0] / (2.0 * kPi));
+        o.fy = (float)(p[1] / kPi);
+        o.cx = (float)(p[0] / 2.0);
+        o.cy = (float)(p[1] / 2.0);
+        o.model_name = "EQUIRECTANGULAR";
     } else {
         throw std::runtime_error("ColmapParser: unsupported camera model " + cam.model);
     }
@@ -488,6 +508,35 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
                                : read_cameras_binary(recon_dir);
     auto images  = text_format ? read_images_text(recon_dir)
                                : read_images_binary(recon_dir);
+
+    // EQUIRECTANGULAR sanity, once per camera rather than once per frame.
+    for (const auto& [id, cam] : cameras) {
+        if (cam.model != "EQUIRECTANGULAR") continue;
+        if (cam.params.size() != 2)
+            throw std::runtime_error("ColmapParser: EQUIRECTANGULAR camera " +
+                                     std::to_string(id) + " has " +
+                                     std::to_string(cam.params.size()) +
+                                     " params, expected 2 (w, h)");
+        // COLMAP stores (w, h) as *metadata* params, so they are the camera's
+        // own dimensions by construction. A mismatch means a corrupt or
+        // hand-edited model, and the two would disagree about the projection.
+        if (cam.params[0] != (double)cam.width || cam.params[1] != (double)cam.height)
+            throw std::runtime_error(
+                "ColmapParser: EQUIRECTANGULAR camera " + std::to_string(id) +
+                " params (" + std::to_string((int64_t)cam.params[0]) + ", " +
+                std::to_string((int64_t)cam.params[1]) + ") disagree with its "
+                "resolution (" + std::to_string(cam.width) + ", " +
+                std::to_string(cam.height) + ")");
+        // The engine's canonical panorama intrinsics use fy = w/(2*pi), which
+        // equals COLMAP's h/pi only on a 2:1 panorama (see bake_post_split).
+        // Anything else is trained with the wrong vertical angular scale.
+        if (cam.height * 2 != cam.width)
+            std::printf("Warning: EQUIRECTANGULAR camera %d is %llux%llu, not 2:1; "
+                        "the engine assumes a full 360x180 panorama and will use "
+                        "the wrong vertical scale.\n",
+                        (int)id, (unsigned long long)cam.width,
+                        (unsigned long long)cam.height);
+    }
 
     // ---- Assemble frames sorted by image filename (dataparser.py:300-316) -
     std::vector<const ColmapImage*> frames;

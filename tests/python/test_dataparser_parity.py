@@ -148,6 +148,43 @@ def test_anisotropic_focal(tmp_path):
         np.testing.assert_allclose(fy_, 47.5, rtol=1e-4)
 
 
+def test_equirectangular_colmap(tmp_path):
+    """COLMAP EQUIRECTANGULAR (model id 17), text and binary.
+
+    The params are (w, h) rather than a calibration, so the checks are that
+    the model survives as EQUIRECTANGULAR and that the intrinsics are the
+    angular scales COLMAP's projection implies -- fx = w/2pi, fy = h/pi,
+    principal point at the image centre. bake_post_split later replaces these
+    with the engine's canonical panorama intrinsics; what is asserted here is
+    what a direct ParsedDataset consumer (the standalone viewer) sees.
+    """
+    scene = fixtures.make_equirect_scene()
+    w, h = scene["size"]
+    parsed = {}
+    for fmt in ("colmap_text", "colmap_binary"):
+        d = mk.FORMAT_WRITERS[fmt](tmp_path / fmt, scene)
+        ds = parse_dataset(d, NativeParserConfig())
+        parsed[fmt] = ds
+
+        # 3 == CameraModelType::EQUIRECTANGULAR (core/CameraModel.h).
+        assert list(np.asarray(ds.camera_models)) == [3] * ds.num_cameras, fmt
+        np.testing.assert_array_equal(np.asarray(ds.widths), w)
+        np.testing.assert_array_equal(np.asarray(ds.heights), h)
+        np.testing.assert_allclose(
+            np.asarray(ds.intrins),
+            np.tile([w / (2 * np.pi), h / np.pi, w / 2, h / 2],
+                    (ds.num_cameras, 1)),
+            rtol=1e-6, err_msg=f"{fmt} equirect intrins")
+        # A spherical camera has no lens to distort.
+        np.testing.assert_array_equal(np.asarray(ds.dist_coeffs), 0.0)
+
+    # The two readers take different code paths to the same camera.
+    np.testing.assert_allclose(parsed["colmap_binary"].intrins,
+                               parsed["colmap_text"].intrins, rtol=1e-6)
+    np.testing.assert_allclose(parsed["colmap_binary"].c2w,
+                               parsed["colmap_text"].c2w, atol=1e-6)
+
+
 def test_dataparser_outputs_adapter(datasets):
     """The dict the eval loader and the model still consume."""
     ds = parse_dataset(datasets["colmap_text"], NativeParserConfig())

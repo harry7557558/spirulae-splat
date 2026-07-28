@@ -41,6 +41,19 @@ cameras), and equirectangular/spherical. See `src/core/CameraModel.h` — it is
 plain C++17 with no CUDA dependency, which is why the WASM viewer can reuse
 it.
 
+COLMAP writes 18 camera models; `ColmapParser.cpp` knows every id (it has to,
+to advance the `cameras.bin` read cursor) but maps only the ones the engine can
+project. `EQUIRECTANGULAR` (id 17) is the spherical one: its params are `(w, h)`
+rather than a calibration, because the image *is* the calibration. It reaches
+the same `CameraModelType::EQUIRECTANGULAR` as a Metashape `spherical` sensor,
+with the same convention — +Z forward at the image centre, azimuth wrapping at
+the left/right edge — so the two formats describe an identical camera and
+`bake_post_split` treats them identically. Note the engine's canonical panorama
+intrinsics assume a 2:1 (360°×180°) image; the parser warns when one is not.
+`RAD_TAN_THIN_PRISM_FISHEYE`, `SIMPLE_DIVISION`, `DIVISION`, `EUCM` and `FOV`
+are recognised but rejected with a named error — there is no undistortion for
+them on the engine side.
+
 ## Two-stage parse
 
 1. **`parse_dataset`** → `ParsedDataset`: per-**input** cameras in the raw
