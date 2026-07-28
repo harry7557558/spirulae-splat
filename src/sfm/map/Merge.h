@@ -639,7 +639,7 @@ inline AlignmentResult alignReconstructions(const Reconstruction& src, const Rec
         return sum / (double)v.pts.size();
     };
 
-    FitFn<Sim3> fit = [&](const std::vector<int>& idx) {
+    auto fit = [&](const std::vector<int>& idx) {
         std::vector<Pose> s, d;
         s.reserve(idx.size());
         d.reserve(idx.size());
@@ -652,7 +652,7 @@ inline AlignmentResult alignReconstructions(const Reconstruction& src, const Rec
         if (estimateSim3FromPoses(s, d, T)) out.push_back(T);
         return out;
     };
-    ResidualFn<Sim3> res = [&](const Sim3& T, int i) {
+    auto res = [&](const Sim3& T, int i) {
         double e = viewError(T, views[i]);
         return e * e;
     };

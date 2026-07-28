@@ -105,7 +105,7 @@ struct SfmConfig {
     bool check = false;
 
     // Runtime.
-    int threads = 0;           // verification pool; 0 = hardware_concurrency
+    int threads = 0;           // host worker pools; 0 = hardware_concurrency
     int decode_threads = 0;    // image decode pool; 0 = hardware_concurrency
     int decode_budget_mb = 0;  // 0 = ImageLoadOptions default
     int device = -1;
@@ -332,9 +332,9 @@ struct SfmConfig {
       "With --resume: report how far each model agrees with the two-view geometries it was "        \
       "built from, then exit without writing anything")                                             \
     /* ---- runtime ---- */                                                                         \
-    F(threads, "threads", CMD_AUTO | CMD_MATCH, Tier::Advanced, "runtime", 0, 4096, "",             \
-      "Verification worker threads; 0 is every core, 1 is serial, and results do not depend on "    \
-      "the count")                                                                                  \
+    F(threads, "threads", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "runtime", 0, 4096, "",   \
+      "Host worker threads: two-view verification, and the mapper's per-point and per-image "       \
+      "passes; 0 is every core, 1 is serial, and results do not depend on the count")               \
     F(decode_threads, "decode-threads", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "runtime",          \
       0, 4096, "", "Image decode threads; 0 is every core, 1 decodes inline")                       \
     F(decode_budget_mb, "decode-budget", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "runtime",         \

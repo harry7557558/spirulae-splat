@@ -109,18 +109,9 @@ endforeach()
 # ---------------------------------------------------------------------------
 # Compiler flags
 #
-# These intentionally mirror, but do not share, setup.py's flags: the pip build
-# targets a released wheel (its own WITH_SYMBOLS / LINE_INFO env gates) while
-# this one targets local development. Only the *source list* is shared, via
-# cmake/sources.txt.
+# The base host flags are backend-neutral and set in SsplatOptions.cmake; this
+# only appends the CUDA/torch-specific parts.
 # ---------------------------------------------------------------------------
-if(MSVC)
-    set(SPLAT_CXX_FLAGS "/O2")
-else()
-    set(SPLAT_CXX_FLAGS "-O3")
-    list(APPEND SPLAT_CXX_FLAGS "-Wno-sign-compare")
-endif()
-
 if(MSVC)
     add_compile_options(
         $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>

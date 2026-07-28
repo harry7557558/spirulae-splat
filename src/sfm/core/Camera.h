@@ -137,7 +137,15 @@ struct Camera {
             double t2 = th * th;
             double f = th * (1.0 + t2 * (k1 + t2 * (k2 + t2 * (k3 + t2 * k4)))) - thd;
             double fp = 1.0 + t2 * (3 * k1 + t2 * (5 * k2 + t2 * (7 * k3 + t2 * 9 * k4)));
-            th -= f / fp;
+            double next = th - f / fp;
+            // Exact early-out, not a tolerance: once the update no longer moves
+            // th, every remaining iteration recomputes the same f and fp and
+            // lands on the same value, so stopping here returns the identical
+            // double the fixed ten iterations would have. Newton gets there in
+            // three or four, and this inversion runs once per observation per
+            // filtering pass on a fisheye capture.
+            if (next == th) return th;
+            th = next;
         }
         return th;
     }
@@ -248,8 +256,13 @@ struct Camera {
                 uf = theta * u2 / rd;
                 vf = theta * v2 / rd;
                 double rf2 = theta * theta;
-                dtx = 2.0 * p1 * uf * vf + p2 * (rf2 + 2.0 * uf * uf) + sx1 * rf2;
-                dty = p1 * (rf2 + 2.0 * vf * vf) + 2.0 * p2 * uf * vf + sy1 * rf2;
+                double ndtx = 2.0 * p1 * uf * vf + p2 * (rf2 + 2.0 * uf * uf) + sx1 * rf2;
+                double ndty = p1 * (rf2 + 2.0 * vf * vf) + 2.0 * p2 * uf * vf + sy1 * rf2;
+                // Same exact fixed-point argument as the inner Newton: an
+                // unchanged correction reproduces this iteration exactly.
+                if (ndtx == dtx && ndty == dty) break;
+                dtx = ndtx;
+                dty = ndty;
             }
             if (theta < 1e-12) return {0, 0, 1};
             double s = std::sin(theta) / theta;

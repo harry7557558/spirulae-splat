@@ -113,17 +113,17 @@ inline TwoViewGeometry estimateTwoViewBearing(const std::vector<Vec3>& b1,
     int n = (int)b1.size();
     if (n < opt.min_num_inliers) return g;
 
-    FitFn<Mat3> fFit = [&](const std::vector<int>& s) { return estimateEpipolar7Bearing(b1, b2, s); };
-    FitFn<Mat3> fRefit = [&](const std::vector<int>& s) { return estimateEpipolar8Bearing(b1, b2, s); };
-    ResidualFn<Mat3> fRes = [&](const Mat3& E, int i) { return sampsonSqBearing(E, b1[i], b2[i]); };
+    auto fFit = [&](const std::vector<int>& s) { return estimateEpipolar7Bearing(b1, b2, s); };
+    auto fRefit = [&](const std::vector<int>& s) { return estimateEpipolar8Bearing(b1, b2, s); };
+    auto fRes = [&](const Mat3& E, int i) { return sampsonSqBearing(E, b1[i], b2[i]); };
     RansacReport<Mat3> fRep = loransac<Mat3>(n, 7, fFit, fRefit, fRes, opt.ransac);
 
-    FitFn<detail::HModel> hFit = [&](const std::vector<int>& s) {
+    auto hFit = [&](const std::vector<int>& s) {
         std::vector<detail::HModel> out;
         for (const Mat3& H : estimateHomographyBearing(b1, b2, s)) out.push_back({H, inverse3(H)});
         return out;
     };
-    ResidualFn<detail::HModel> hRes = [&](const detail::HModel& m, int i) {
+    auto hRes = [&](const detail::HModel& m, int i) {
         return angularTransferSq(m.H, m.Hinv, b1[i], b2[i]);
     };
     RansacReport<detail::HModel> hRep = loransac<detail::HModel>(n, 4, hFit, hFit, hRes, opt.ransac);
@@ -151,18 +151,18 @@ inline TwoViewGeometry estimateTwoView(const std::vector<Vec2>& p1, const std::v
     if (n < opt.min_num_inliers) return g;
 
     // --- Fundamental ---
-    FitFn<Mat3> fFit = [&](const std::vector<int>& s) { return estimateFundamental7(p1, p2, s); };
-    FitFn<Mat3> fRefit = [&](const std::vector<int>& s) { return estimateFundamental8(p1, p2, s); };
-    ResidualFn<Mat3> fRes = [&](const Mat3& F, int i) { return sampsonSq(F, p1[i], p2[i]); };
+    auto fFit = [&](const std::vector<int>& s) { return estimateFundamental7(p1, p2, s); };
+    auto fRefit = [&](const std::vector<int>& s) { return estimateFundamental8(p1, p2, s); };
+    auto fRes = [&](const Mat3& F, int i) { return sampsonSq(F, p1[i], p2[i]); };
     RansacReport<Mat3> fRep = loransac<Mat3>(n, 7, fFit, fRefit, fRes, opt.ransac);
 
     // --- Homography ---
-    FitFn<detail::HModel> hFit = [&](const std::vector<int>& s) {
+    auto hFit = [&](const std::vector<int>& s) {
         std::vector<detail::HModel> out;
         for (const Mat3& H : estimateHomography(p1, p2, s)) out.push_back({H, inverse3(H)});
         return out;
     };
-    ResidualFn<detail::HModel> hRes = [&](const detail::HModel& m, int i) {
+    auto hRes = [&](const detail::HModel& m, int i) {
         return symmetricTransferSq(m.H, m.Hinv, p1[i], p2[i]);
     };
     RansacReport<detail::HModel> hRep = loransac<detail::HModel>(n, 4, hFit, hFit, hRes, opt.ransac);

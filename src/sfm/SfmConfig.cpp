@@ -333,6 +333,7 @@ std::string SfmConfig::finalize(uint32_t cmd) {
     mapper.max_reproj_error = max_error;
 
     sift.device = match.device = prefilter.device = mapper.device = device;
+    mapper.threads = threads;
     const bool v = !quiet;
     sift.verbose = mapper.verbose = manager.verbose = merge.verbose = v;
 

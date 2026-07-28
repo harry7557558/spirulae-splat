@@ -18,6 +18,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "sfm/core/Features.h"
@@ -91,6 +92,7 @@ private:
     void planPyramid(int w0, int h0) {
         W0_ = w0 * 2;  // first_octave = -1
         H0_ = h0 * 2;
+        planKey_ = {W0_, H0_};
         int O = 0;
         while (O < opt_.num_octaves && (W0_ >> O) >= 8 && (H0_ >> O) >= 8) O++;
         octaves_ = std::max(1, O);
@@ -166,6 +168,7 @@ private:
     }
 
     void allocate() {
+        plannedOnce_ = false;  // fresh buffers hold nothing; re-upload the tables
         bImg_ = ctx_.createBuffer((VkDeviceSize)(W0_ / 2) * (H0_ / 2) * 4);
         bGauss_ = ctx_.createBuffer((VkDeviceSize)gaussFloats_ * 4);
         bDog_ = ctx_.createBuffer((VkDeviceSize)dogFloats_ * 4);
@@ -207,8 +210,15 @@ private:
                 "orient",   "scale_hist", "select_topk", "descriptor"};
     }
 
+    // The image changes every call; the blur weights and the level tables only
+    // change when planPyramid() produces a different layout, which for a batch
+    // sorted largest-first is a handful of times over thousands of images.
+    // Each upload is its own fenced submit (VkContext::upload), so re-sending
+    // three unchanged buffers per image was three device round trips per image
+    // for nothing.
     void uploadInputs(const GrayImage& img) {
         ctx_.upload(bImg_, img.data.data(), img.data.size() * 4);
+        if (planKey_ == lastPlanKey_ && plannedOnce_) return;
         ctx_.upload(bWeights_, weights_.data(), weights_.size() * 4);
         std::vector<uint32_t> gt(gLevels_.size() * 4), dt(dLevels_.size() * 4);
         for (size_t i = 0; i < gLevels_.size(); i++) {
@@ -225,6 +235,8 @@ private:
         }
         ctx_.upload(bGlev_, gt.data(), gt.size() * 4);
         ctx_.upload(bDlev_, dt.data(), dt.size() * 4);
+        lastPlanKey_ = planKey_;
+        plannedOnce_ = true;
     }
 
     // ---- dispatch helpers ----
@@ -475,6 +487,9 @@ private:
     GpuBuffer bHist_, bFokp_, bSelCnt_;
 
     bool setup_ = false, pipelinesLoaded_ = false;
+    // Which pyramid layout the device-side weight/level tables currently hold.
+    std::pair<int, int> planKey_{0, 0}, lastPlanKey_{-1, -1};
+    bool plannedOnce_ = false;
     size_t capGauss_ = 0, capDog_ = 0, capImg_ = 0, capTmp_ = 0, capGlev_ = 0, capDlev_ = 0,
            capW_ = 0;
 };

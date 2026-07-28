@@ -35,6 +35,49 @@ static std::vector<uint8_t> downscaleRgb(const unsigned char* src, int w, int h,
     return out;
 }
 
+// Rec.601 luma, matching COLMAP's FreeImage grayscale conversion.
+static constexpr float kLumaR = 0.299f / 255.0f;
+static constexpr float kLumaG = 0.587f / 255.0f;
+static constexpr float kLumaB = 0.114f / 255.0f;
+
+static inline float lumaAt(const unsigned char* rgb, int w, int x, int y) {
+    const unsigned char* p = rgb + 3 * ((size_t)y * w + x);
+    return kLumaR * p[0] + kLumaG * p[1] + kLumaB * p[2];
+}
+
+// Bilinearly resample interleaved-RGB uint8 straight to a (dw,dh) gray float
+// image, converting to luma at the four taps. Arithmetically identical to
+// building the full-resolution gray image and running resizeGray() on it --
+// same expression, same order, same rounding -- but it never materializes the
+// full-resolution float buffer. That buffer was 4 of the 7 bytes per source
+// pixel the batch decoder budgets per concurrent decode (sfm/core/ImageLoader.h),
+// and on 20 MP inputs the budget was what capped the decode pool at 3 threads.
+static void resizeGrayFromRgb(const unsigned char* rgb, int w, int h, int dw, int dh,
+                              std::vector<float>& out) {
+    out.resize((size_t)dw * dh);
+    const float sx = w / (float)dw;
+    const float sy = h / (float)dh;
+    for (int y = 0; y < dh; y++) {
+        float fy = (y + 0.5f) * sy - 0.5f;
+        int y0 = (int)std::floor(fy);
+        float wy = fy - y0;
+        int y0c = std::max(0, std::min(h - 1, y0));
+        int y1c = std::max(0, std::min(h - 1, y0 + 1));
+        for (int x = 0; x < dw; x++) {
+            float fx = (x + 0.5f) * sx - 0.5f;
+            int x0 = (int)std::floor(fx);
+            float wx = fx - x0;
+            int x0c = std::max(0, std::min(w - 1, x0));
+            int x1c = std::max(0, std::min(w - 1, x0 + 1));
+            float a = lumaAt(rgb, w, x0c, y0c), b = lumaAt(rgb, w, x1c, y0c);
+            float c = lumaAt(rgb, w, x0c, y1c), d = lumaAt(rgb, w, x1c, y1c);
+            float top = a + (b - a) * wx;
+            float bot = c + (d - c) * wx;
+            out[(size_t)y * dw + x] = top + (bot - top) * wy;
+        }
+    }
+}
+
 GrayImage loadGrayImage(const std::string& path, int max_image_size, bool want_color,
                         const std::string& mask_path) {
     int w = 0, h = 0, chan = 0;
@@ -44,15 +87,8 @@ GrayImage loadGrayImage(const std::string& path, int max_image_size, bool want_c
         throw std::runtime_error("cannot decode image " + path + ": " + stbi_failure_reason());
 
     GrayImage img;
-    img.width = w;
-    img.height = h;
     img.orig_width = w;
     img.orig_height = h;
-    img.data.resize((size_t)w * h);
-    // Rec.601 luma, matching COLMAP's FreeImage grayscale conversion.
-    const float kR = 0.299f / 255.0f, kG = 0.587f / 255.0f, kB = 0.114f / 255.0f;
-    for (size_t i = 0; i < img.pixels(); i++)
-        img.data[i] = kR * rgb[3 * i] + kG * rgb[3 * i + 1] + kB * rgb[3 * i + 2];
 
     // Downscale so the long edge is at most max_image_size (COLMAP default 3200).
     int dw = w, dh = h;
@@ -62,20 +98,22 @@ GrayImage loadGrayImage(const std::string& path, int max_image_size, bool want_c
         dw = std::max(1, (int)std::lround(w * scale));
         dh = std::max(1, (int)std::lround(h * scale));
     }
+    img.width = dw;
+    img.height = dh;
     // Keep the color companion at the *gray* (post-downscale) resolution, so a
     // keypoint's coordinates index it directly.
     if (want_color) {
         img.rgb = (dw == w && dh == h) ? std::vector<uint8_t>(rgb, rgb + (size_t)w * h * 3)
                                        : downscaleRgb(rgb, w, h, dw, dh);
     }
-    stbi_image_free(rgb);
-    if (dw != w || dh != h) {
-        std::vector<uint8_t> keepRgb = std::move(img.rgb);
-        img = resizeGray(img, dw, dh);
-        img.rgb = std::move(keepRgb);
-        img.orig_width = w;   // resizeGray builds a fresh image; restore the source size
-        img.orig_height = h;
+    if (dw == w && dh == h) {
+        img.data.resize((size_t)w * h);
+        for (size_t i = 0; i < img.data.size(); i++)
+            img.data[i] = kLumaR * rgb[3 * i] + kLumaG * rgb[3 * i + 1] + kLumaB * rgb[3 * i + 2];
+    } else {
+        resizeGrayFromRgb(rgb, w, h, dw, dh, img.data);
     }
+    stbi_image_free(rgb);
     // Kept at the mask file's own resolution: applyMask() samples it in uv, so
     // resampling it to match `img` would only lose detail (D39).
     if (!mask_path.empty()) img.mask = loadMask(mask_path);

@@ -161,10 +161,14 @@ inline FeatureSet readFeatures(const std::string& path) {
     fs.dim = dim;
     fs.dtype = (DType)dtype;
     fs.keypoints.resize(count);
-    for (uint32_t i = 0; i < count; i++) {
-        float v[4];
-        f.read((char*)v, sizeof v);
-        fs.keypoints[i] = {v[0], v[1], v[2], v[3], 0.0f};
+    {   // one read, not one per keypoint: a 1200-image capture has ten million
+        // of them and the per-call stream overhead dominated the actual copy.
+        std::vector<float> raw((size_t)count * 4);
+        f.read((char*)raw.data(), (std::streamsize)(raw.size() * sizeof(float)));
+        for (uint32_t i = 0; i < count; i++) {
+            const float* v = &raw[(size_t)i * 4];
+            fs.keypoints[i] = {v[0], v[1], v[2], v[3], 0.0f};
+        }
     }
     fs.descriptors.resize((size_t)count * dim * dtypeSize(fs.dtype));
     f.read((char*)fs.descriptors.data(), (std::streamsize)fs.descriptors.size());

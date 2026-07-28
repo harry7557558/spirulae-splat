@@ -82,6 +82,28 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ---------------------------------------------------------------------------
+# Host compiler flags
+#
+# SPLAT_CXX_FLAGS is what every target compiled from this tree gets for C++:
+# the engine (csrc), the apps, and ssplat_sfm. It lives here, not in a backend
+# module, because it is backend-neutral -- when it was set in
+# SsplatBackendCuda.cmake the whole Vulkan build (engine *and* the SfM
+# pipeline, which is host-heavy: stb decode, RANSAC, the mapper) compiled at
+# -O0, since CMAKE_BUILD_TYPE is deliberately left empty.
+#
+# These intentionally mirror, but do not share, setup.py's flags: the pip build
+# targets a released wheel (its own WITH_SYMBOLS / LINE_INFO env gates) while
+# this one targets local development. Only the *source list* is shared, via
+# cmake/sources.txt. Backend modules may append (OpenMP, torch defines).
+# ---------------------------------------------------------------------------
+if(MSVC)
+    set(SPLAT_CXX_FLAGS "/O2")
+else()
+    set(SPLAT_CXX_FLAGS "-O3")
+    list(APPEND SPLAT_CXX_FLAGS "-Wno-sign-compare")
+endif()
+
 if(WIN32)
     add_compile_definitions(_USE_MATH_DEFINES NOMINMAX _CRT_SECURE_NO_WARNINGS)
 endif()

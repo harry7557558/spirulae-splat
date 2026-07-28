@@ -1,9 +1,11 @@
 // Geometric verification of a whole pair list (src/sfm/README.md).
 //
 // `estimateTwoView` verifies one pair; this drives it over every pair produced
-// by `sfm/feature/Pairing.h` and is where the parallelism lives, because verification is
-// the pipeline's dominant cost: measured at 83-85% of the `match` stage and
-// ~70% of end-to-end wall clock (src/sfm/README.md).
+// by `sfm/feature/Pairing.h` and is where the parallelism lives: host RANSAC on
+// every putative pair is the largest single cost in the `match` stage (it was
+// 83-85% of it, and ~70% of end-to-end wall clock, when this pool was written;
+// it is a third to two thirds of the stage now that the other stages have been
+// worked on, and still the reason the stage is CPU-bound).
 //
 // Shape: the GPU matcher owns one VkContext and one queue, so descriptor matching
 // stays on the calling thread; it acts as the producer and a pool of worker
@@ -61,17 +63,34 @@ struct BearingCache {
 // it through bearings would only perturb long-settled results.
 inline BearingCache precomputeBearings(const std::vector<FeatureSet>& feats,
                                        const std::vector<Camera>& cams,
-                                       bool wide_only = true) {
+                                       bool wide_only = true, int threads = 0) {
     BearingCache bc;
     bc.cameras = cams;
     bc.bearings.resize(feats.size());
-    for (size_t i = 0; i < feats.size() && i < cams.size(); i++) {
-        if (wide_only && !cams[i].wideFov()) continue;
-        std::vector<Vec3>& out = bc.bearings[i];
-        out.resize(feats[i].keypoints.size());
-        for (size_t k = 0; k < out.size(); k++)
-            out[k] = cams[i].bearing({feats[i].keypoints[k].x, feats[i].keypoints[k].y});
+    const size_t n = std::min(feats.size(), cams.size());
+    // Millions of independent Newton inversions, one per keypoint; images are
+    // written to disjoint slots, so this is a straight fan-out.
+    const unsigned hc = std::thread::hardware_concurrency();
+    int nt = threads > 0 ? threads : (hc > 0 ? (int)hc : 1);
+    nt = std::max(1, std::min<int>(nt, (int)std::max<size_t>(n, 1)));
+    std::atomic<size_t> next{0};
+    auto worker = [&] {
+        for (size_t i = next++; i < n; i = next++) {
+            if (wide_only && !cams[i].wideFov()) continue;
+            std::vector<Vec3>& out = bc.bearings[i];
+            out.resize(feats[i].keypoints.size());
+            for (size_t k = 0; k < out.size(); k++)
+                out[k] = cams[i].bearing({feats[i].keypoints[k].x, feats[i].keypoints[k].y});
+        }
+    };
+    if (nt == 1) {
+        worker();
+        return bc;
     }
+    std::vector<std::thread> pool;
+    pool.reserve(nt);
+    for (int t = 0; t < nt; t++) pool.emplace_back(worker);
+    for (std::thread& t : pool) t.join();
     return bc;
 }
 
@@ -130,13 +149,13 @@ inline FocalScore focalInliers(const std::vector<FeatureSet>& feats,
             ro.max_error = tvopt.ransac.max_error *
                            (0.5 * (feats[i].pixelScale() + feats[j].pixelScale())) / focal;
             ro.max_num_trials = std::min(ro.max_num_trials, 2000);
-            FitFn<Mat3> fit = [&](const std::vector<int>& s2) {
+            auto fit = [&](const std::vector<int>& s2) {
                 return estimateEpipolar7Bearing(b1, b2, s2);
             };
-            FitFn<Mat3> refit = [&](const std::vector<int>& s2) {
+            auto refit = [&](const std::vector<int>& s2) {
                 return estimateEpipolar8Bearing(b1, b2, s2);
             };
-            ResidualFn<Mat3> res = [&](const Mat3& E, int k) {
+            auto res = [&](const Mat3& E, int k) {
                 return sampsonSqBearing(E, b1[k], b2[k]);
             };
             RansacReport<Mat3> rep = loransac<Mat3>(n, 7, fit, refit, res, ro);

@@ -85,27 +85,36 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
         return dt;
     };
     // Index registered images and 3D points.
+    //
+    // Everything downstream addresses them by their dense BA index, so the
+    // id -> index maps are flat arrays rather than std::map: assembly walks a
+    // few million observations and a tree lookup per observation was the whole
+    // reason "BA build" showed up next to "BA solve" in the profile.
     std::vector<uint32_t> imgIds;
-    std::map<uint32_t, uint32_t> imgBA;
+    std::vector<Image*> imgOf;  // by BA index
+    uint32_t max_img_id = 0;
+    for (auto& kv : rec.images) max_img_id = std::max(max_img_id, kv.first);
+    std::vector<uint32_t> imgBA(max_img_id + 1, UINT32_MAX);
     for (auto& kv : rec.images)
         if (kv.second.registered) {
             imgBA[kv.first] = (uint32_t)imgIds.size();
             imgIds.push_back(kv.first);
+            imgOf.push_back(&kv.second);
         }
     std::vector<uint64_t> ptIds;
-    std::map<uint64_t, uint32_t> ptBA;
+    std::vector<Point3D*> ptOf;  // by BA index
     for (auto& kv : rec.points3D) {
         if (kv.second.track.size() < 2) continue;
-        ptBA[kv.first] = (uint32_t)ptIds.size();
         ptIds.push_back(kv.first);
+        ptOf.push_back(&kv.second);
     }
     if (imgIds.size() < 2 || ptIds.empty()) return 0;
 
     // Camera groups: one per distinct camera used (usually a single shared one).
     std::vector<uint32_t> camIds;
     std::map<uint32_t, uint32_t> camGroup;
-    for (uint32_t id : imgIds) {
-        uint32_t cid = rec.images[id].camera_id;
+    for (Image* im : imgOf) {
+        uint32_t cid = im->camera_id;
         if (!camGroup.count(cid)) {
             camGroup[cid] = (uint32_t)camIds.size();
             camIds.push_back(cid);
@@ -116,20 +125,26 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
     P.num_images = (uint32_t)imgIds.size();
     P.num_points = (uint32_t)ptIds.size();
 
-    // Observations.
+    // Observations, emitted point-major (which is the order the solver's tables
+    // want) so the only sorting left is by image *within* one point's track --
+    // a handful of elements each, instead of one global sort of millions.
     struct Obs { uint32_t img, pt; double x, y; };
     std::vector<Obs> obs;
-    for (uint64_t pid : ptIds) {
-        const Point3D& pt = rec.points3D[pid];
-        for (const TrackElement& e : pt.track) {
-            auto it = imgBA.find(e.image_id);
-            if (it == imgBA.end()) continue;
-            const Vec2& xy = rec.images[e.image_id].points2D[e.point2D_idx];
-            obs.push_back({it->second, ptBA[pid], xy.x, xy.y});
+    obs.reserve((size_t)P.num_points * 3);
+    P.obs_ranges.assign(P.num_points + 1, 0);
+    for (uint32_t p = 0; p < P.num_points; p++) {
+        const size_t start = obs.size();
+        for (const TrackElement& e : ptOf[p]->track) {
+            if (e.image_id > max_img_id) continue;
+            const uint32_t bi = imgBA[e.image_id];
+            if (bi == UINT32_MAX) continue;
+            const Vec2& xy = imgOf[bi]->points2D[e.point2D_idx];
+            obs.push_back({bi, p, xy.x, xy.y});
         }
+        std::sort(obs.begin() + start, obs.end(),
+                  [](const Obs& a, const Obs& b) { return a.img < b.img; });
+        P.obs_ranges[p + 1] = (uint32_t)obs.size();
     }
-    std::sort(obs.begin(), obs.end(),
-              [](const Obs& a, const Obs& b) { return a.pt == b.pt ? a.img < b.img : a.pt < b.pt; });
     P.num_obs = (uint32_t)obs.size();
     P.obs_image.resize(P.num_obs);
     P.obs_point.resize(P.num_obs);
@@ -140,14 +155,11 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
         P.obs_xy[2 * i] = obs[i].x;
         P.obs_xy[2 * i + 1] = obs[i].y;
     }
-    P.obs_ranges.assign(P.num_points + 1, 0);
-    for (const Obs& o : obs) P.obs_ranges[o.pt + 1]++;
-    for (uint32_t i = 0; i < P.num_points; i++) P.obs_ranges[i + 1] += P.obs_ranges[i];
 
     // Poses (angle-axis + t).
     P.poses.resize(6 * P.num_images);
     for (uint32_t i = 0; i < P.num_images; i++) {
-        const Image& im = rec.images[imgIds[i]];
+        const Image& im = *imgOf[i];
         Vec3 aa = rotationToAngleAxis(im.pose.R);
         P.poses[6 * i + 0] = aa.x; P.poses[6 * i + 1] = aa.y; P.poses[6 * i + 2] = aa.z;
         P.poses[6 * i + 3] = im.pose.t.x; P.poses[6 * i + 4] = im.pose.t.y;
@@ -167,7 +179,11 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
     // solver's intr_update walks the group table rather than assuming they
     // coincide.
     std::vector<size_t> group_images(camIds.size(), 0);
-    for (uint32_t id : imgIds) group_images[camGroup[rec.images[id].camera_id]]++;
+    std::vector<uint32_t> img_group(P.num_images);
+    for (uint32_t i = 0; i < P.num_images; i++) {
+        img_group[i] = camGroup[imgOf[i]->camera_id];
+        group_images[img_group[i]]++;
+    }
     P.groups.resize(camIds.size());
     P.intr.clear();
     for (size_t g = 0; g < camIds.size(); g++) {
@@ -182,14 +198,12 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
         P.groups[g] = {off, P.free_intr, nf, (uint32_t)camBaModel(c.model)};
         P.free_intr += nf;
     }
-    P.image_group.resize(P.num_images);
-    for (uint32_t i = 0; i < P.num_images; i++)
-        P.image_group[i] = camGroup[rec.images[imgIds[i]].camera_id];
+    P.image_group = std::move(img_group);
 
     // Points.
     P.points.resize(3 * P.num_points);
     for (uint32_t i = 0; i < P.num_points; i++) {
-        const Vec3& X = rec.points3D[ptIds[i]].xyz;
+        const Vec3& X = ptOf[i]->xyz;
         P.points[3 * i] = X.x; P.points[3 * i + 1] = X.y; P.points[3 * i + 2] = X.z;
     }
 
@@ -218,7 +232,7 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
 
     // Write results back.
     for (uint32_t i = 0; i < P.num_images; i++) {
-        Image& im = rec.images[imgIds[i]];
+        Image& im = *imgOf[i];
         im.pose.R = angleAxisToRotation({P.poses[6 * i], P.poses[6 * i + 1], P.poses[6 * i + 2]});
         im.pose.t = {P.poses[6 * i + 3], P.poses[6 * i + 4], P.poses[6 * i + 5]};
     }
@@ -227,7 +241,7 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
         unpackIntrinsics(c, &P.intr[P.groups[g].intr_offset]);
     }
     for (uint32_t i = 0; i < P.num_points; i++)
-        rec.points3D[ptIds[i]].xyz = {P.points[3 * i], P.points[3 * i + 1], P.points[3 * i + 2]};
+        ptOf[i]->xyz = {P.points[3 * i], P.points[3 * i + 1], P.points[3 * i + 2]};
 
     double t_write = prof_lap();
     g_map_prof.ba_build += t_build;

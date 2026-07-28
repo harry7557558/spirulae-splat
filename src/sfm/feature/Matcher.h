@@ -92,24 +92,106 @@ public:
     void matchBatch(const std::vector<FeatureSet>& feats,
                     const std::vector<std::pair<uint32_t, uint32_t>>& pairs, size_t begin,
                     size_t end, std::vector<std::vector<FeatureMatch>>& out) override {
+        matchBatch(asView(feats), pairs, begin, end, out);
+    }
+
+    // Pointer view of the feature sets, so a caller whose "images" are drawn
+    // from more than one array (pair selection: query subsets plus the full
+    // sets they were taken from) does not have to concatenate -- and copy --
+    // them into one vector. On a 1200-image capture that copy was a gigabyte
+    // of descriptors duplicated for the duration of the stage.
+    void matchBatch(const std::vector<const FeatureSet*>& feats,
+                    const std::vector<std::pair<uint32_t, uint32_t>>& pairs, size_t begin,
+                    size_t end, std::vector<std::vector<FeatureMatch>>& out) {
         out.assign(end - begin, {});
-        if (begin >= end) return;
-        for (size_t k = begin; k < end; k++) {
-            checkDescriptors(feats[pairs[k].first]);
-            checkDescriptors(feats[pairs[k].second]);
+        if (!prepare(feats, pairs, begin, end)) return;
+        for (size_t b = begin; b < end;) {
+            size_t e = chunkEnd(feats, pairs, b, end);
+            matchChunk(feats, pairs, b, e, &out, nullptr, begin);
+            b = e;
         }
-        ensureSetup(feats);
-        // The buffers are sized for batch_pairs; honour any range the caller
-        // asks for by splitting it, rather than making the two settings agree.
-        const size_t chunk = (size_t)std::max(1, opt_.batch_pairs);
-        for (size_t b = begin; b < end; b += chunk)
-            matchChunk(feats, pairs, b, std::min(b + chunk, end), out, begin);
+    }
+
+    // How many matches each pair *would* produce, without building the lists.
+    // Pair selection scores half a million pairs and reads nothing but the
+    // count; materializing a std::vector<FeatureMatch> per pair to then call
+    // .size() on it was the host half of that stage's cost.
+    void countBatch(const std::vector<const FeatureSet*>& feats,
+                    const std::vector<std::pair<uint32_t, uint32_t>>& pairs, size_t begin,
+                    size_t end, std::vector<uint32_t>& out) {
+        out.assign(end - begin, 0u);
+        if (!prepare(feats, pairs, begin, end)) return;
+        for (size_t b = begin; b < end;) {
+            size_t e = chunkEnd(feats, pairs, b, end);
+            matchChunk(feats, pairs, b, e, nullptr, &out, begin);
+            b = e;
+        }
     }
 
 private:
-    void matchChunk(const std::vector<FeatureSet>& feats,
+    // Wrap a contiguous array as the pointer view the core path takes. Rebuilt
+    // per call: O(n) pointer writes against a batch of GPU dispatches.
+    const std::vector<const FeatureSet*>& asView(const std::vector<FeatureSet>& feats) {
+        view_.resize(feats.size());
+        for (size_t i = 0; i < feats.size(); i++) view_[i] = &feats[i];
+        return view_;
+    }
+
+    // Shared entry checks + one-time sizing. False means "nothing to do".
+    bool prepare(const std::vector<const FeatureSet*>& feats,
+                 const std::vector<std::pair<uint32_t, uint32_t>>& pairs, size_t begin,
+                 size_t end) {
+        if (begin >= end) return false;
+        for (size_t k = begin; k < end; k++) {
+            checkDescriptors(*feats[pairs[k].first]);
+            checkDescriptors(*feats[pairs[k].second]);
+        }
+        ensureSetup(feats);
+        return true;
+    }
+
+    // How far a chunk can run from `b`: one device round trip costs a submit,
+    // a fence and a staging copy, so a chunk should be as large as the buffers
+    // allow. `batch_pairs` cannot express that -- a scoring pair (512 queries,
+    // no cross-check) produces ~32x less result data than a full match pair,
+    // so any fixed pair count either leaves the buffers empty on the small
+    // case or overruns them on the large one. Grow by *bytes* instead, bounded
+    // by the result buffer, the staging buffer and the resident descriptor
+    // block; always at least one pair, since all three are sized to hold the
+    // largest single pair. This is what turns half a million scoring pairs
+    // into dozens of submits instead of thousands.
+    size_t chunkEnd(const std::vector<const FeatureSet*>& feats,
+                    const std::vector<std::pair<uint32_t, uint32_t>>& pairs, size_t b,
+                    size_t end) {
+        const uint64_t resCap =
+            std::min<uint64_t>(resultCap_, VkContext::stagingCapacity() / 16);
+        const bool cc = opt_.cross_check;
+        if (stamp_.size() < feats.size()) stamp_.assign(feats.size(), 0);
+        ++epoch_;
+        uint64_t res = 0, desc = used_;
+        size_t e = b;
+        for (; e < end; e++) {
+            const uint32_t ia = pairs[e].first, ib = pairs[e].second;
+            const uint32_t na = feats[ia]->count(), nb = feats[ib]->count();
+            const uint64_t addRes = (na && nb) ? (uint64_t)na + (cc ? nb : 0) : 0;
+            uint64_t addDesc = 0;
+            for (uint32_t img : {ia, ib})
+                if (stamp_[img] != epoch_) {
+                    stamp_[img] = epoch_;
+                    if (!resident_.count(img)) addDesc += feats[img]->count();
+                }
+            if (e > b && (res + addRes > resCap || desc + addDesc > descCap_)) break;
+            res += addRes;
+            desc += addDesc;
+        }
+        return e;
+    }
+
+    // Exactly one of `out` / `counts` is non-null.
+    void matchChunk(const std::vector<const FeatureSet*>& feats,
                     const std::vector<std::pair<uint32_t, uint32_t>>& pairs, size_t begin,
-                    size_t end, std::vector<std::vector<FeatureMatch>>& out, size_t outBase) {
+                    size_t end, std::vector<std::vector<FeatureMatch>>* out,
+                    std::vector<uint32_t>* counts, size_t outBase) {
         ensureResident(feats, pairs, begin, end);
 
         // Lay out this batch's results: each dispatch writes nQuery uint4s, and
@@ -123,7 +205,7 @@ private:
         uint64_t outCount = 0;
         for (size_t k = begin; k < end; k++) {
             uint32_t ia = pairs[k].first, ib = pairs[k].second;
-            uint32_t na = feats[ia].count(), nb = feats[ib].count();
+            uint32_t na = feats[ia]->count(), nb = feats[ib]->count();
             Slot s{ia, ib, na, nb, (uint32_t)outCount, (uint32_t)(outCount + na)};
             if (na == 0 || nb == 0) s.na = s.nb = 0;  // nothing to dispatch
             else outCount += (uint64_t)na + (cc ? nb : 0);
@@ -148,6 +230,9 @@ private:
         // tiny next to the matrix.
         for (const Slot& s : slots) {
             if (s.na == 0 || s.nb == 0) continue;
+            // Workgroups for the cross-check path, which is 64 queries wide;
+            // the row-only kernel is kRowThreads wide and gets its own count
+            // below. u6 is read by reduce_cols, so it stays the 64-wide one.
             uint32_t numWG = (s.na + 63) / 64;
             Push p;
             p.u0 = resident_[s.a];
@@ -169,23 +254,48 @@ private:
                 // nothing another pair writes: the whole batch runs with no
                 // barriers, which is what keeps thousands of small scoring
                 // dispatches from serializing on pipeline drains.
-                ctx_.dispatch(cb, "match_rows", numWG, p);
+                ctx_.dispatch(cb, "match_rows", (s.na + kRowThreads - 1) / kRowThreads, p);
             }
+        }
+        // Readback in the same command buffer as the dispatches: one submit and
+        // one fence per chunk instead of two. Results are read straight out of
+        // the mapped staging buffer, so nothing is copied twice either. A chunk
+        // too large for the staging buffer falls back to the chunked download.
+        const VkDeviceSize bytes = (VkDeviceSize)outCount * 16;
+        const bool fused = bytes <= VkContext::stagingCapacity();
+        if (fused) {
+            ctx_.barrier(cb);
+            ctx_.recordDownload(cb, bResult_, bytes);
         }
         ctx_.submit(cb);
 
-        std::vector<uint32_t> res((size_t)outCount * 4);
-        ctx_.download(bResult_, res.data(), (VkDeviceSize)outCount * 16);
+        const uint32_t* res;
+        if (fused) {
+            res = (const uint32_t*)ctx_.stagingDownloadPtr();
+        } else {
+            res_.resize((size_t)outCount * 4);
+            ctx_.download(bResult_, res_.data(), bytes);
+            res = res_.data();
+        }
 
         for (size_t k = 0; k < slots.size(); k++) {
             const Slot& s = slots[k];
             if (s.na == 0 || s.nb == 0) continue;
-            out[begin - outBase + k] =
-                reduce(res.data() + (size_t)s.oa * 4, res.data() + (size_t)s.ob * 4, s.na, s.nb);
+            const uint32_t* rA = res + (size_t)s.oa * 4;
+            const uint32_t* rB = res + (size_t)s.ob * 4;
+            if (out) (*out)[begin - outBase + k] = reduce(rA, rB, s.na, s.nb);
+            else (*counts)[begin - outBase + k] = countMatches(rA, rB, s.na, s.nb);
         }
     }
 
     static constexpr int DW = 32;  // uint words per descriptor
+    // Workgroup width of the row-only kernel; MUST equal TQR in
+    // sfm/shaders/match/bruteforce.slang. Each workgroup streams the whole
+    // train set through groupshared once, so a pair's train traffic is
+    // ceil(nQuery / this) * nTrain -- dispatching the 64-wide count here would
+    // launch four times the workgroups, each redoing that streaming for
+    // queries that are not even in range.
+    static constexpr uint32_t kRowThreads = 256;
 
     static void checkDescriptors(const FeatureSet& f) {
         if (f.count() == 0) return;
@@ -217,15 +327,33 @@ private:
         return out;
     }
 
+    // The same acceptance test as reduce(), counted rather than collected. Kept
+    // adjacent so the two cannot drift apart.
+    uint32_t countMatches(const uint32_t* rA, const uint32_t* rB, uint32_t na,
+                          uint32_t nb) const {
+        uint32_t n = 0;
+        const float r2 = opt_.max_ratio * opt_.max_ratio;
+        for (uint32_t i = 0; i < na; i++) {
+            uint32_t j = rA[4 * i + 0];
+            uint32_t bestD2 = rA[4 * i + 1], secondD2 = rA[4 * i + 2];
+            if (j >= nb) continue;
+            if (secondD2 != 0xffffffffu && (float)bestD2 >= r2 * (float)secondD2) continue;
+            if (opt_.cross_check && rB[4 * j + 0] != i) continue;
+            n++;
+        }
+        if (opt_.max_num_matches > 0 && n > opt_.max_num_matches) n = opt_.max_num_matches;
+        return n;
+    }
+
     // All three buffers and the descriptor set must exist before the pipelines
     // load: createDescriptors is what builds the pipeline layout the compute
     // pipelines are created against. Everything is sized once, from the whole
     // feature set, so nothing is reallocated underneath a live pipeline.
-    void ensureSetup(const std::vector<FeatureSet>& feats) {
+    void ensureSetup(const std::vector<const FeatureSet*>& feats) {
         uint64_t total = 0, maxCount = 0;
-        for (const FeatureSet& f : feats) {
-            total += f.count();
-            maxCount = std::max<uint64_t>(maxCount, f.count());
+        for (const FeatureSet* f : feats) {
+            total += f->count();
+            maxCount = std::max<uint64_t>(maxCount, f->count());
         }
         if (setup_) {
             // Buffers are allocated once and VkContext frees only at destruction
@@ -273,7 +401,7 @@ private:
     // ones as one contiguous block. The allocator bumps; when a batch does not
     // fit it recycles the whole block (exhaustive order means the working set
     // is the whole dataset, so partial eviction would buy nothing).
-    void ensureResident(const std::vector<FeatureSet>& feats,
+    void ensureResident(const std::vector<const FeatureSet*>& feats,
                         const std::vector<std::pair<uint32_t, uint32_t>>& pairs, size_t begin,
                         size_t end) {
         const uint32_t capDesc = descCap_;
@@ -286,7 +414,7 @@ private:
         if (need.empty()) return;
 
         uint32_t want = 0;
-        for (uint32_t img : need) want += feats[img].count();
+        for (uint32_t img : need) want += feats[img]->count();
         if (used_ + want > capDesc) {  // recycle
             resident_.clear();
             used_ = 0;
@@ -297,7 +425,7 @@ private:
             std::sort(need.begin(), need.end());
             need.erase(std::unique(need.begin(), need.end()), need.end());
             want = 0;
-            for (uint32_t img : need) want += feats[img].count();
+            for (uint32_t img : need) want += feats[img]->count();
             if (want > capDesc)
                 throw std::runtime_error(  // batchFloor in ensureSetup rules this out
                     "descriptor budget too small for one batch of pairs");
@@ -307,18 +435,19 @@ private:
         // contiguous descriptor range, so this is a single upload and a single
         // norm dispatch instead of one of each per image.
         const uint32_t first = used_;
-        std::vector<uint8_t> blob((size_t)want * 128);
+        blob_.resize((size_t)want * 128);
+        uint8_t* blob = blob_.data();
         size_t off = 0;
         for (uint32_t img : need) {
-            const FeatureSet& f = feats[img];
+            const FeatureSet& f = *feats[img];
             resident_[img] = used_;
             used_ += f.count();
             if (f.count()) {
-                memcpy(blob.data() + off, f.descriptors.data(), (size_t)f.count() * 128);
+                memcpy(blob + off, f.descriptors.data(), (size_t)f.count() * 128);
                 off += (size_t)f.count() * 128;
             }
         }
-        ctx_.upload(bDesc_, blob.data(), (VkDeviceSize)want * 128, (VkDeviceSize)first * 128);
+        ctx_.upload(bDesc_, blob, (VkDeviceSize)want * 128, (VkDeviceSize)first * 128);
         normDirty_ = {first, used_};
     }
 
@@ -326,6 +455,11 @@ private:
     VkContext ctx_;
     GpuBuffer bDesc_, bNorm_, bResult_, bCol_;
     bool setup_ = false;
+    std::vector<const FeatureSet*> view_;      // scratch for the vector<FeatureSet> overload
+    std::vector<uint32_t> stamp_;             // chunkEnd's "seen in this chunk" marks
+    uint32_t epoch_ = 0;
+    std::vector<uint32_t> res_;               // download scratch, reused across chunks
+    std::vector<uint8_t> blob_;               // upload scratch, reused across chunks
     std::map<uint32_t, uint32_t> resident_;   // image index -> first descriptor index
     std::pair<uint32_t, uint32_t> normDirty_{0, 0};  // descriptor range awaiting ||d||^2
     uint32_t used_ = 0, descCap_ = 0, resultCap_ = 0;

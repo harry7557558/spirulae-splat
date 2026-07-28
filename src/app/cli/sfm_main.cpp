@@ -19,14 +19,17 @@
 // The self-checks are separate binaries (src/sfm/tests/, one per area).
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "sfm/SfmConfig.h"
@@ -1035,10 +1038,37 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
         return 1;
     }
 
+    // Read in parallel: this is a gigabyte of descriptors on a large capture,
+    // and it is pure per-file work with no shared state. Results land by index,
+    // so the image order is the sorted file order either way.
     feats.assign(files.size(), FeatureSet());
     db.images.resize(files.size());
+    {
+        const unsigned hc = std::thread::hardware_concurrency();
+        int nt = cfg.threads > 0 ? cfg.threads : (hc > 0 ? (int)hc : 1);
+        nt = std::max(1, std::min<int>(nt, (int)files.size()));
+        std::atomic<size_t> next{0};
+        std::mutex err_mtx;
+        std::string first_error;  // a bad file must still report itself, not terminate
+        std::vector<std::thread> pool;
+        for (int t = 0; t < nt; t++)
+            pool.emplace_back([&] {
+                for (size_t i = next++; i < files.size(); i = next++) {
+                    try {
+                        feats[i] = readFeatures(files[i].string());
+                    } catch (const std::exception& e) {
+                        std::lock_guard<std::mutex> lk(err_mtx);
+                        if (first_error.empty()) first_error = e.what();
+                    }
+                }
+            });
+        for (std::thread& t : pool) t.join();
+        if (!first_error.empty()) {
+            fprintf(stderr, "[match] %s\n", first_error.c_str());
+            return 1;
+        }
+    }
     for (size_t i = 0; i < files.size(); i++) {
-        feats[i] = readFeatures(files[i].string());
         fs::path rel = relativeTo(files[i], featdir);
         rel.replace_extension();
         db.images[i] = {rel.generic_string(), feats[i].count()};
@@ -1127,7 +1157,7 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
                 // those at all. A wholly rectilinear capture keeps the pixel
                 // path, where the pinhole assumption is exact and results are
                 // long settled.
-                bc = precomputeBearings(feats, percam, /*wide_only=*/!cs.mixed());
+                bc = precomputeBearings(feats, percam, /*wide_only=*/!cs.mixed(), cfg.threads);
                 vopt.bearings = &bc;
                 calib->used_bearings = true;
                 if (verbose) {

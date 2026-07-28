@@ -261,13 +261,13 @@ inline PnPResult ransacPnP(const std::vector<Vec3>& X, const std::vector<Vec3>& 
     // Minimal solver: P3P on the bearings directly (it already consumes unit
     // rays; robust to coplanar/elongated point sets). LO refit: DLT on the
     // inliers (only accepted if it improves).
-    FitFn<Pose> fit = [&](const std::vector<int>& s) {
+    auto fit = [&](const std::vector<int>& s) {
         std::array<Vec3, 3> br, Xs;
         for (int k = 0; k < 3; k++) { br[k] = b[s[k]]; Xs[k] = X[s[k]]; }
         return p3p(br, Xs);
     };
-    FitFn<Pose> refit = [&](const std::vector<int>& s) { return estimatePoseDLT(X, b, s); };
-    ResidualFn<Pose> res = [&](const Pose& p, int i) { return pnpResidualSq(p, X[i], b[i]); };
+    auto refit = [&](const std::vector<int>& s) { return estimatePoseDLT(X, b, s); };
+    auto res = [&](const Pose& p, int i) { return pnpResidualSq(p, X[i], b[i]); };
     RansacOptions ro;
     ro.max_error = max_error_px / focal;  // residual is in normalized units
     ro.seed = seed;

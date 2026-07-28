@@ -245,12 +245,23 @@ port. Ordered by what blocks the most.
     (model 17); `ColmapParser` stops at model 10 and the renderer has no
     spherical camera, so such a model cannot currently be trained on.
 12. **Faster decode.** A scaled JPEG decode straight to the working resolution
-    would cut both CPU time and the peak that sizes the decode pool.
+    would cut the CPU time. (The *peak* half of this is done: the decoder
+    resamples out of stb's RGB buffer instead of building a full-resolution
+    float image, so a concurrent decode costs 3 B per source pixel rather than
+    7, and the pool's byte budget now comes from the machine's RAM instead of a
+    fixed 1 GiB. Extraction is GPU-bound again on 21 MP inputs.)
 13. **Verification, fewer model fits.** A pair with no real geometry still runs
     every RANSAC trial for both F and H. Do *not* re-attempt SPRT for this: it
     was measured and rejected (residual evaluation is a few percent of RANSAC's
     cost). The win is in not proposing hopeless pairs.
-14. **Matcher register-blocking**, if it is still bandwidth-bound. Measure first.
+14. **Matcher register-blocking**, if it is still bandwidth-bound. Measured:
+    the win was in the workgroup *width*, not in registers. A pair's train
+    descriptors are streamed through groupshared once per workgroup, so the
+    traffic is `ceil(nQuery / TQ) * nTrain`; `match_rows` (the pair-selection
+    path, which has no column side to constrain its query packing) now runs
+    256 wide instead of 64 and reads a scoring pair's train set twice instead
+    of eight times. Register-blocking on top of that would halve the
+    groupshared reads again at roughly half the occupancy -- untested.
 
 **Unstarted**
 

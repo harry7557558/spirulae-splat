@@ -92,15 +92,22 @@ inline std::vector<std::pair<uint32_t, uint32_t>> prefilterPairs(
     const std::function<void(size_t, size_t)>& progress = nullptr) {
     const uint32_t n = (uint32_t)feats.size();
 
-    // One concatenated array drives the matcher: [0, n) are the query subsets,
-    // [n, 2n) the train sides, and every scoring pair is (query i, train j).
-    // The train side is the memory cost (the queries are ~32 KB each), so it
-    // gets the optional cap.
-    std::vector<FeatureSet> sets(2 * (size_t)n);
+    // One index space drives the matcher: [0, n) are the query subsets, [n, 2n)
+    // the train sides, and every scoring pair is (query i, train j). The train
+    // side is the memory cost (the queries are ~32 KB each), so it gets the
+    // optional cap -- and when it is uncapped the view points straight at the
+    // caller's feature sets instead of copying a gigabyte of descriptors.
+    std::vector<FeatureSet> owned(n + (opt.train_features == 0 ? 0 : (size_t)n));
+    std::vector<const FeatureSet*> sets(2 * (size_t)n);
     for (uint32_t i = 0; i < n; i++) {
-        sets[i] = topScaleSubset(feats[i], opt.num_features);
-        sets[(size_t)n + i] =
-            opt.train_features == 0 ? feats[i] : topScaleSubset(feats[i], opt.train_features);
+        owned[i] = topScaleSubset(feats[i], opt.num_features);
+        sets[i] = &owned[i];
+        if (opt.train_features == 0) {
+            sets[(size_t)n + i] = &feats[i];
+        } else {
+            owned[(size_t)n + i] = topScaleSubset(feats[i], opt.train_features);
+            sets[(size_t)n + i] = &owned[(size_t)n + i];
+        }
     }
 
     // Every ordered pair is scored -- (i queries, j trains) and the reverse --
@@ -128,15 +135,20 @@ inline std::vector<std::pair<uint32_t, uint32_t>> prefilterPairs(
     mo.cross_check = false;
     BruteForceMatcher matcher(mo);
 
-    // Score on the GPU, chunked so only one chunk's match lists are ever
-    // alive -- only the counts are kept.
+    // Score on the GPU, chunked. Only the counts are ever wanted, so the
+    // matcher counts on the spot rather than building (and immediately
+    // discarding) half a million match lists.
     std::vector<uint32_t> score(all.size(), 0);
-    const size_t chunk = (size_t)std::max(1, opt.batch_pairs) * 8;
-    std::vector<std::vector<FeatureMatch>> out;
+    // Only a bound on how often progress is reported and how much of `all` the
+    // matcher sees at once -- it splits the range into device-sized chunks
+    // itself, and a scoring pair's results are small enough that thousands fit
+    // in one submit.
+    const size_t chunk = (size_t)std::max(1, opt.batch_pairs) * 64;
+    std::vector<uint32_t> out;
     for (size_t b = 0; b < all.size(); b += chunk) {
         const size_t e = std::min(b + chunk, all.size());
-        matcher.matchBatch(sets, all, b, e, out);
-        for (size_t p = b; p < e; p++) score[p] = (uint32_t)out[p - b].size();
+        matcher.countBatch(sets, all, b, e, out);
+        for (size_t p = b; p < e; p++) score[p] = out[p - b];
         if (progress) progress(e, all.size());
     }
 

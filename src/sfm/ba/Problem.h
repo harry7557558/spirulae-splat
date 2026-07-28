@@ -148,24 +148,42 @@ inline void buildCamTables(BAProblem& P) {
 
 // Build per-model obs lists and A_cp offsets from obs/image/group tables.
 inline void finalizeTables(BAProblem& P) {
-    P.model_obs.clear();
-    P.model_ranges.clear();
-    P.model_obs.reserve(P.num_obs);
-    for (int m = 0; m < kNumModels; m++) {
-        uint32_t off = (uint32_t)P.model_obs.size();
-        for (uint32_t o = 0; o < P.num_obs; o++)
-            if (P.groups[P.image_group[P.obs_image[o]]].model == (uint32_t)m)
-                P.model_obs.push_back(o);
-        uint32_t cnt = (uint32_t)P.model_obs.size() - off;
-        if (cnt) P.model_ranges.push_back({(uint32_t)m, off, cnt});
+    // Per-image model and dof, so the two passes below index an array instead
+    // of chasing image -> group -> model for every one of a few million
+    // observations (and, for model_obs, doing it once per camera model).
+    std::vector<uint8_t> img_model(P.num_images);
+    std::vector<uint8_t> img_dof(P.num_images);
+    for (uint32_t i = 0; i < P.num_images; i++) {
+        const BAProblem::Group& g = P.groups[P.image_group[i]];
+        if (g.model >= (uint32_t)kNumModels)
+            throw std::runtime_error("camera model index outside the registry");
+        img_model[i] = (uint8_t)g.model;
+        uint32_t dof = 6 + g.n_intr;
+        if (dof > kMaxCamDof) throw std::runtime_error("camera dof exceeds kMaxCamDof");
+        img_dof[i] = (uint8_t)dof;
     }
+
+    // Bucket the observations by model in one counting pass. Same output as
+    // the old model-major rescan: indices ascending within each model, models
+    // in registry order, empty ones omitted.
+    uint32_t cnt[kNumModels] = {0};
+    for (uint32_t o = 0; o < P.num_obs; o++) cnt[img_model[P.obs_image[o]]]++;
+    uint32_t off[kNumModels] = {0};
+    P.model_ranges.clear();
+    uint32_t run = 0;
+    for (int m = 0; m < kNumModels; m++) {
+        off[m] = run;
+        if (cnt[m]) P.model_ranges.push_back({(uint32_t)m, run, cnt[m]});
+        run += cnt[m];
+    }
+    P.model_obs.resize(P.num_obs);
+    for (uint32_t o = 0; o < P.num_obs; o++) P.model_obs[off[img_model[P.obs_image[o]]]++] = o;
+
     P.acp_off.resize(P.num_obs);
     uint64_t acc = 0;
     for (uint32_t o = 0; o < P.num_obs; o++) {
         P.acp_off[o] = (uint32_t)acc;
-        uint32_t dof = 6 + P.groups[P.image_group[P.obs_image[o]]].n_intr;
-        if (dof > kMaxCamDof) throw std::runtime_error("camera dof exceeds kMaxCamDof");
-        acc += 3 * (size_t)dof;
+        acc += 3 * (size_t)img_dof[P.obs_image[o]];
     }
     P.acp_total = acc;
     if (acc > 0xFFFFFFFFull) throw std::runtime_error("Acp pool exceeds 32-bit indexing");

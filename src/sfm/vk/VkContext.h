@@ -92,6 +92,7 @@ public:
         if (setLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device_, setLayout_, nullptr);
         if (queryPool_ != VK_NULL_HANDLE) vkDestroyQueryPool(device_, queryPool_, nullptr);
         if (stagingPtr_) vkUnmapMemory(device_, staging_.mem);
+        if (stagingDlPtr_) vkUnmapMemory(device_, stagingDl_.mem);
         for (auto& a : allocations_) {
             vkDestroyBuffer(device_, a.first, nullptr);
             vkFreeMemory(device_, a.second, nullptr);
@@ -206,10 +207,23 @@ public:
         VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
         VK_CHECK(vkCreateFence(device_, &fci, nullptr, &fence_));
 
+        // Two staging buffers, because the two directions want opposite memory.
+        // The first HOST_VISIBLE|HOST_COHERENT type on a discrete GPU is
+        // write-combined: excellent to write through, and *uncached to read* --
+        // a memcpy out of it runs at a small fraction of RAM speed. Every
+        // readback in the pipeline goes through this path (match results, SIFT
+        // keypoints and descriptors, BA parameters), so downloads get their own
+        // buffer that asks for HOST_CACHED, and fall back to the shared type on
+        // a device that has no such heap.
         staging_ = createBufferRaw(kStagingSize,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         VK_CHECK(vkMapMemory(device_, staging_.mem, 0, kStagingSize, 0, &stagingPtr_));
+        stagingDl_ = createBufferRaw(kStagingSize,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        VK_CHECK(vkMapMemory(device_, stagingDl_.mem, 0, kStagingSize, 0, &stagingDlPtr_));
 
         if (opt.profile) {
             profiling_ = true;
@@ -268,11 +282,24 @@ public:
             VkDeviceSize chunk = std::min<VkDeviceSize>(kStagingSize, size - off);
             VkCommandBuffer cb = begin();
             VkBufferCopy c{srcOff + off, 0, chunk};
-            vkCmdCopyBuffer(cb, src.buf, staging_.buf, 1, &c);
+            vkCmdCopyBuffer(cb, src.buf, stagingDl_.buf, 1, &c);
             submit(cb);
-            memcpy(p + off, stagingPtr_, chunk);
+            memcpy(p + off, stagingDlPtr_, chunk);
         }
     }
+
+    // Fold a readback into a command buffer the caller is already recording:
+    // record the copy with recordDownload(), submit once, then take the bytes
+    // with stagingDownloadPtr(). Saves the extra submit-and-fence that a
+    // separate download() costs after every dispatch batch. `size` must not
+    // exceed stagingCapacity().
+    void recordDownload(VkCommandBuffer cb, const GpuBuffer& src, VkDeviceSize size,
+                        VkDeviceSize srcOff = 0) {
+        VkBufferCopy c{srcOff, 0, size};
+        vkCmdCopyBuffer(cb, src.buf, stagingDl_.buf, 1, &c);
+    }
+    const void* stagingDownloadPtr() const { return stagingDlPtr_; }
+    static constexpr VkDeviceSize stagingCapacity() { return kStagingSize; }
 
     // ---- descriptor set (one set of N storage buffers shared by all pipelines) ----
     // Idempotent: the first call builds layout/pool/set, later calls (same
@@ -477,8 +504,11 @@ public:
 private:
     static constexpr VkDeviceSize kStagingSize = 64ull << 20;
 
+    // `preferFlags` are tried on top of `memFlags` and dropped if no memory
+    // type offers both.
     GpuBuffer createBufferRaw(VkDeviceSize size, VkBufferUsageFlags usage,
-                              VkMemoryPropertyFlags memFlags) {
+                              VkMemoryPropertyFlags memFlags,
+                              VkMemoryPropertyFlags preferFlags = 0) {
         GpuBuffer b;
         b.size = size;
         VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -489,12 +519,15 @@ private:
         VkMemoryRequirements req;
         vkGetBufferMemoryRequirements(device_, b.buf, &req);
         uint32_t typeIdx = ~0u;
-        for (uint32_t i = 0; i < memProps_.memoryTypeCount; i++)
-            if ((req.memoryTypeBits & (1u << i)) &&
-                (memProps_.memoryTypes[i].propertyFlags & memFlags) == memFlags) {
-                typeIdx = i;
-                break;
-            }
+        for (int pass = preferFlags ? 0 : 1; pass < 2 && typeIdx == ~0u; pass++) {
+            const VkMemoryPropertyFlags want = pass == 0 ? (memFlags | preferFlags) : memFlags;
+            for (uint32_t i = 0; i < memProps_.memoryTypeCount; i++)
+                if ((req.memoryTypeBits & (1u << i)) &&
+                    (memProps_.memoryTypes[i].propertyFlags & want) == want) {
+                    typeIdx = i;
+                    break;
+                }
+        }
         if (typeIdx == ~0u) throw std::runtime_error("no suitable memory type");
         VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
         mai.allocationSize = req.size;
@@ -520,8 +553,9 @@ private:
     uint32_t descBindingCount_ = 0;
     VkShaderModule shaderModule_ = VK_NULL_HANDLE;
     std::map<std::string, VkPipeline> pipelines_;
-    GpuBuffer staging_;
+    GpuBuffer staging_, stagingDl_;
     void* stagingPtr_ = nullptr;
+    void* stagingDlPtr_ = nullptr;
     VkDeviceSize totalAllocated_ = 0;
     std::vector<std::pair<VkBuffer, VkDeviceMemory>> allocations_;  // freed in ~VkContext
 

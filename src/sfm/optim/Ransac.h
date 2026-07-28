@@ -45,9 +45,11 @@ template <class Model>
 using ResidualFn = std::function<double(const Model&, int)>;
 
 // Score a model over all points; fills inliers, returns MSAC score (lower
-// better) and inlier count.
-template <class Model>
-static double scoreModel(const Model& m, int n, double thr2, const ResidualFn<Model>& res,
+// better) and inlier count. `res` is a template parameter, not a
+// std::function: this runs `trials * n` times per estimate and an indirect
+// call per residual was pure overhead against a few flops of work.
+template <class Model, class Res>
+static double scoreModel(const Model& m, int n, double thr2, const Res& res,
                          std::vector<char>& inliers, int& count) {
     inliers.assign(n, 0);
     count = 0;
@@ -65,10 +67,12 @@ static double scoreModel(const Model& m, int n, double thr2, const ResidualFn<Mo
     return score;
 }
 
-template <class Model>
-RansacReport<Model> loransac(int n, int min_samples, const FitFn<Model>& fit,
-                             const FitFn<Model>& refit, const ResidualFn<Model>& res,
-                             const RansacOptions& opt) {
+// `fit` / `refit` / `res` are deduced, so callers pass lambdas and everything
+// inlines; the FitFn / ResidualFn aliases above still work for a caller that
+// wants a type-erased one. Model stays explicit at the call sites.
+template <class Model, class Fit, class Refit, class Res>
+RansacReport<Model> loransac(int n, int min_samples, const Fit& fit, const Refit& refit,
+                             const Res& res, const RansacOptions& opt) {
     RansacReport<Model> best;
     best.score = 1e300;
     if (n < min_samples) return best;
@@ -77,13 +81,16 @@ RansacReport<Model> loransac(int n, int min_samples, const FitFn<Model>& fit,
     std::mt19937 rng(opt.seed);
     std::uniform_int_distribution<int> uni(0, n - 1);
 
+    // Scratch reused across trials. `consider` ran thousands of times per
+    // estimate and allocated a fresh mask each time; now the winning mask is
+    // swapped into `best` and the loser's storage comes back as scratch.
+    std::vector<char> inl;
     auto consider = [&](const Model& m) {
-        std::vector<char> inl;
         int cnt = 0;
         double sc = scoreModel(m, n, thr2, res, inl, cnt);
         if (cnt > best.num_inliers || (cnt == best.num_inliers && sc < best.score)) {
             best.model = m;
-            best.inlier_mask = inl;
+            best.inlier_mask.swap(inl);
             best.num_inliers = cnt;
             best.score = sc;
             best.success = cnt >= min_samples;
@@ -92,10 +99,11 @@ RansacReport<Model> loransac(int n, int min_samples, const FitFn<Model>& fit,
 
     int max_trials = opt.max_num_trials;
     int trial = 0;
+    std::vector<int> sample;
+    sample.reserve(min_samples);
     for (; trial < max_trials; trial++) {
         // random distinct minimal sample
-        std::vector<int> sample;
-        sample.reserve(min_samples);
+        sample.clear();
         while ((int)sample.size() < min_samples) {
             int idx = uni(rng);
             if (std::find(sample.begin(), sample.end(), idx) == sample.end()) sample.push_back(idx);
@@ -115,8 +123,11 @@ RansacReport<Model> loransac(int n, int min_samples, const FitFn<Model>& fit,
         }
     }
 
-    // Local optimization: iteratively refit on the current inliers.
-    if (best.success && refit) {
+    // Local optimization: iteratively refit on the current inliers. (`refit` is
+    // now a deduced callable rather than a std::function, so there is no
+    // "empty" state to test for -- every caller passes a real one, and an
+    // estimator with no non-minimal solver passes its minimal one twice.)
+    if (best.success) {
         for (int it = 0; it < opt.lo_iters; it++) {
             std::vector<int> inl;
             for (int i = 0; i < n; i++)

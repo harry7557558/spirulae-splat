@@ -19,9 +19,18 @@
 //     largest image's dimensions, not fixed. Peak RSS is therefore roughly
 //     constant in the number of images.
 //
-// Peak accounting per concurrent decode is stb's 3-byte RGB buffer plus the
-// full-resolution float gray image (7 B/px); a decoded image waiting in the
-// window costs the downscaled float image (4 B/px).
+// Both halves of that second point are load-bearing and were both wrong once:
+// a fixed 1 GiB budget against a 7 B/source-pixel decode gave 3 threads on 21
+// MP JPEGs, and extraction ran at 0.18 s/image with neither the CPU nor the
+// GPU busy. The budget now comes from the machine (defaultDecodeBudget) and
+// the per-decode peak from what is actually held (see below), which on a
+// 32-core box is 32 threads and a GPU-bound stage.
+//
+// Peak accounting per concurrent decode is stb's 3-byte RGB buffer at the
+// *source* resolution plus the downscaled outputs it is resampled into; a
+// decoded image waiting in the window costs the downscaled float image
+// (4 B/px). loadGrayImage() resamples straight out of the RGB buffer
+// (sfm/core/Image.cpp), so no full-resolution float image is ever held.
 #pragma once
 
 #include <algorithm>
@@ -37,6 +46,12 @@
 #include <vector>
 
 #include "sfm/core/Image.h"
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace sfm {
 
@@ -55,12 +70,32 @@ struct ImageLoadOptions {
     // concurrent decodes, half to the ready window; both are then at least 1,
     // so a single image larger than the budget still loads (it just runs alone).
     //
-    // 1 GiB is where the returns stop: on 26 x 17 MP JPEGs the stage measured
-    // 8.0 s serial / 3.4 s at 512 MB / 2.34 s at 1 GiB / 2.29 s at 2 GiB /
-    // 2.31 s at 4 GiB, because past ~4 decode threads the GPU is the floor.
-    // Doubling the budget past this buys 2% and costs 540 MB of RSS.
-    size_t memory_budget_bytes = 1ull << 30;  // 1 GiB
+    // 0 = derive it from the machine (defaultDecodeBudget below). A fixed 1 GiB
+    // was the old default; it is the right answer on a 17 MP capture with four
+    // cores and badly wrong on a 21 MP one with thirty-two, where it held the
+    // pool to 3 decode threads while the GPU waited. The budget is what bounds
+    // peak RSS, so it belongs to the machine, not to the code.
+    size_t memory_budget_bytes = 0;
 };
+
+// A quarter of physical RAM, clamped to [1 GiB, 8 GiB]. The decoder's peak
+// in-flight set is bounded by this, so it is peak *anonymous* RSS for the
+// stage; a quarter leaves the page cache the room it needs to keep serving the
+// very files being decoded. Falls back to the historical 1 GiB when the
+// platform will not say how much memory it has.
+inline size_t defaultDecodeBudget() {
+    size_t total = 0;
+#if defined(_WIN32)
+    MEMORYSTATUSEX st{};
+    st.dwLength = sizeof(st);
+    if (GlobalMemoryStatusEx(&st)) total = (size_t)st.ullTotalPhys;
+#elif defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
+    long pages = sysconf(_SC_PHYS_PAGES), page = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && page > 0) total = (size_t)pages * (size_t)page;
+#endif
+    if (total == 0) return 1ull << 30;
+    return std::min<size_t>(std::max<size_t>(total / 4, 1ull << 30), 8ull << 30);
+}
 
 // What the pool decided, for logging.
 struct ImageLoadPlan {
@@ -98,21 +133,26 @@ inline ImageLoadPlan planImageLoad(const std::vector<std::pair<int, int>>& dims,
         detail::clampedSize(d.first, d.second, opt.max_image_size, dw, dh);
         maxOutPix = std::max(maxOutPix, (size_t)dw * (size_t)dh);
     }
-    // stb RGB (3 B) + full-res gray float (4 B); +3 B if we also keep a
-    // downscaled color buffer built before the RGB is freed. A mask, when one
-    // is requested, is charged 2 B/px of the *decoded* size: 1 B for stb's gray
-    // read plus 1 B for the binarized copy. Masks are not header-probed, so
-    // this is an estimate -- they are segmentation output at or below the image
-    // resolution in every convention we have seen, and 1 B/px against the
-    // image's 7 B/px leaves the budget dominated by the image either way.
+    // stb RGB at the source resolution (3 B/src px), plus the downscaled gray
+    // float (4 B/out px) it is resampled into and, with want_color, the
+    // downscaled color buffer built before the RGB is freed (3 B/out px). A
+    // mask, when one is requested, is charged 2 B/px of the *decoded* size: 1 B
+    // for stb's gray read plus 1 B for the binarized copy. Masks are not
+    // header-probed, so this is an estimate -- they are segmentation output at
+    // or below the image resolution in every convention we have seen, and
+    // 1 B/px against the image's 3 B/px leaves the budget dominated by the
+    // image either way.
     const size_t mask_bytes = opt.mask_paths.empty() ? 0 : maxOutPix * 2;
-    plan.decode_peak_bytes = maxPix * 7 + (opt.want_color ? maxOutPix * 3 : 0) + mask_bytes;
+    plan.decode_peak_bytes =
+        maxPix * 3 + maxOutPix * (opt.want_color ? 7 : 4) + mask_bytes;
     plan.held_bytes = maxOutPix * (opt.want_color ? 7 : 4)  // gray float (+ RGB u8)
                     + (opt.mask_paths.empty() ? 0 : maxOutPix);
 
     unsigned hc = std::thread::hardware_concurrency();
     int want = opt.num_threads > 0 ? opt.num_threads : (hc > 0 ? (int)hc : 1);
-    const size_t half = opt.memory_budget_bytes / 2;
+    const size_t budget =
+        opt.memory_budget_bytes ? opt.memory_budget_bytes : defaultDecodeBudget();
+    const size_t half = budget / 2;
 
     int by_mem = (int)std::max<size_t>(1, half / plan.decode_peak_bytes);
     plan.num_threads = std::max(1, std::min(want, by_mem));

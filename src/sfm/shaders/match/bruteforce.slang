@@ -49,9 +49,12 @@
 // 64 queries. Measured: the kernel was L2-bandwidth-bound, not ALU-bound, once
 // DP4A landed.
 
-static const int DW = 32;   // uint words per descriptor (128 uint8)
-static const uint TQ = 64;  // queries per workgroup == threads
-static const uint TT = 64;  // train descriptors per groupshared tile
+static const int DW = 32;    // uint words per descriptor (128 uint8)
+static const uint TQ = 64;   // queries per workgroup for match_pair (see the
+                             // column packing: 6 bits of local query index)
+static const uint TQR = 256; // ... and for match_rows, which has no column side
+                             // (BruteForceMatcher::kRowThreads must agree)
+static const uint TT = 64;   // train descriptors per groupshared tile
 
 [[vk::push_constant]] cbuffer PC {
     uint dQ;       // first descriptor index of image A
@@ -88,15 +91,24 @@ void descriptor_norms(uint3 tid : SV_DispatchThreadID) {
 groupshared uint sTrain[TT * uint(DW)];  // 8 KiB
 groupshared uint sCol[TT];               // packed (d2 << 6) | localQuery
 
+// Each train tile is read from VRAM once per *workgroup*, so a pair's train
+// traffic is ceil(nQuery / TQ) * nTrain -- widening the workgroup divides it.
+// match_pair cannot: its column packing gives the local query index 6 bits.
+// match_rows has no column side, so it runs 256 wide and reads a scoring
+// pair's train descriptors twice instead of eight times, which is what pair
+// selection (half a million tiny pairs, every one streaming a full train set)
+// is actually limited by. The row reduction is per query and scans trains in
+// increasing index order either way, so the result is bit-identical.
+
 // Row reduction shared by both match entry points; WITH_COLS also feeds the
 // column candidates for the cross-check. match_rows exists because dispatches
 // that skip the column side share no writable state (disjoint `result`
 // regions, read-only desc/norm), so a whole batch of them can run with *no*
 // inter-pair barriers -- that is what makes pair-selection scoring (thousands
 // of tiny dispatches per submit) GPU-bound instead of pipeline-drain-bound.
-void matchImpl<let WITH_COLS : bool>(uint3 gid, uint3 lid) {
+void matchImpl<let WITH_COLS : bool, let NQ : uint>(uint3 gid, uint3 lid) {
     const uint lq = lid.x;
-    const uint q = gid.x * TQ + lq;
+    const uint q = gid.x * NQ + lq;
     const bool active = q < nQuery;
 
     uint qd[DW];
@@ -114,10 +126,10 @@ void matchImpl<let WITH_COLS : bool>(uint3 gid, uint3 lid) {
         const uint cnt = min(TT, nTrain - t0);
 
         GroupMemoryBarrierWithGroupSync();  // previous tile fully consumed
-        for (uint e = lid.x; e < cnt * uint(DW); e += TQ)
+        for (uint e = lid.x; e < cnt * uint(DW); e += NQ)
             sTrain[e] = desc[(dT + t0 + e / uint(DW)) * uint(DW) + (e % uint(DW))];
         if (WITH_COLS)
-            for (uint c = lid.x; c < cnt; c += TQ) sCol[c] = 0xffffffffu;
+            for (uint c = lid.x; c < cnt; c += NQ) sCol[c] = 0xffffffffu;
         GroupMemoryBarrierWithGroupSync();  // tile visible to every thread
 
         for (uint c = 0; c < cnt; c++) {
@@ -141,7 +153,7 @@ void matchImpl<let WITH_COLS : bool>(uint3 gid, uint3 lid) {
 
         if (WITH_COLS) {
             GroupMemoryBarrierWithGroupSync();  // sCol complete before it is flushed
-            for (uint c = lid.x; c < cnt; c += TQ)
+            for (uint c = lid.x; c < cnt; c += NQ)
                 colPartial[gid.x * nTrain + t0 + c] = sCol[c];
         }
     }
@@ -151,14 +163,14 @@ void matchImpl<let WITH_COLS : bool>(uint3 gid, uint3 lid) {
 
 [shader("compute")] [numthreads(64, 1, 1)]
 void match_pair(uint3 gid : SV_GroupID, uint3 lid : SV_GroupThreadID) {
-    matchImpl<true>(gid, lid);
+    matchImpl<true, TQ>(gid, lid);
 }
 
 // Row side only: for callers that skip the cross-check (pair-selection
 // scoring). Writes nothing shared between pairs.
-[shader("compute")] [numthreads(64, 1, 1)]
+[shader("compute")] [numthreads(256, 1, 1)]
 void match_rows(uint3 gid : SV_GroupID, uint3 lid : SV_GroupThreadID) {
-    matchImpl<false>(gid, lid);
+    matchImpl<false, TQR>(gid, lid);
 }
 
 // Fold the per-workgroup column candidates into the B-side result. Only
