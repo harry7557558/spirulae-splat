@@ -11,7 +11,8 @@ project(spirulae_splat LANGUAGES C CXX)  # CUDA enabled by the cuda backend modu
 #   SsplatSources.cmake        the engine/kernel source list
 #   SsplatBackendCuda.cmake    CUDA kernels + optional Torch extension  } one
 #   SsplatBackendVulkan.cmake  portable engine + Vulkan compute runtime } of
-#   SsplatApps.cmake           ssplat-train / ssplat-mesh / ssplat-gui
+#   SsplatSfm.cmake            the SfM module (optional; Vulkan-only)
+#   SsplatApps.cmake           ssplat-train / ssplat-mesh / ssplat-sfm / ssplat-gui
 #
 # Each backend module leaves SSPLAT_WITH_TORCH and SSPLAT_APP_LIBS behind for
 # the shared app targets.
@@ -34,6 +35,11 @@ if(SSPLAT_BACKEND STREQUAL "vulkan")
     include(SsplatBackendVulkan)
 else()
     include(SsplatBackendCuda)
+endif()
+
+# Before SsplatApps: ssplat-sfm and ssplat-gui link the ssplat_sfm target.
+if(SSPLAT_BUILD_SFM)
+    include(SsplatSfm)
 endif()
 
 include(SsplatApps)

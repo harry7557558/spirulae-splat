@@ -1,0 +1,288 @@
+# Bundle adjustment solver (`src/sfm/ba/`)
+
+Levenberg-Marquardt with a Schur complement over the points. The reduced camera
+system is solved either by a from-scratch, fully in-place blocked dense
+Cholesky, or -- for large camera counts -- by a matrix-free implicit-Schur PCG
+that never forms the reduced matrix, keeping VRAM linear in the observation
+count. Selection is automatic by problem size and VRAM budget (`--solver` to
+force). All GPU code is [Slang](https://shader-slang.org/) compiled to SPIR-V;
+Jacobians come from Slang's autodiff.
+
+This is the last stage of the SfM pipeline and the one it was built around; the
+mapper drives it through `sfm/map/Bundle.h`. For the pipeline as a whole see
+[../README.md](../README.md).
+
+## Layout
+
+```
+sfm/shaders/
+  ba/ba.slang        kernels: cost, Jacobian+assembly, Schur, updates; bindings & push constants
+  ba/cholesky.slang  in-place packed dense Cholesky + triangular solves
+  ba/cg.slang        implicit-Schur block-Jacobi PCG (device-side loop, no host round-trips)
+  common/camera.slang  pose + ICameraModel interface + every camera model
+  common/loss.slang    ILoss: trivial / Huber / Cauchy (selected at shader compile, param at runtime)
+  common/real.slang    Real = float | double | DF, atomic accumulation API, rexp/rsin/rcos/rlog
+  common/df.slang      emulated double ("double-float" fp32 pair) with differentiable ops
+  common/dmath.slang   double-precision exp/log/sin/cos (GLSL.std.450 lacks them for fp64)
+  common/linalg.slang  RVec2/RVec3, 3x3 inverse
+sfm/ba/
+  Problem.h          model registry, camera groups, column layout, per-model obs lists,
+                       BAL problem loading
+  Solver.h           LM driver (records one command buffer per iteration)
+src/app/cli/sfm_ba.cpp   the `ssplat-sfm ba` subcommand: BAL problems + PLY dump
+```
+
+`spirv_tool nocontract` (src/backend/vulkan/shaders/) is the SPIR-V post-pass
+the `df` config requires -- see "Scalar configs" below. `tools/sfm/genpoly.py`
+regenerates the minimax transcendental coefficients in `df.slang` /
+`dmath.slang` (`--survey` for error tables).
+
+## Build & run
+
+```bash
+bash build_develop.bash -DSSPLAT_BACKEND=vulkan -DSSPLAT_BUILD_CLI=ON
+./build/ssplat-sfm ba /path/to/bal/problem-16-22106-pre.txt --real double
+./build/ssplat-sfm ba problem.txt --real df --loss huber --loss-param 1.0 --ply out
+./build/sfm_cholesky_test 500 --real df          # dense solver unit test
+```
+
+The shader variant matrix can be trimmed for faster iteration:
+`-DSSPLAT_SFM_REALS=df -DSSPLAT_SFM_LOSSES=trivial`. slangc is taken from PATH
+or downloaded into the build tree (`cmake/SsplatSlang.cmake`).
+
+Options: `--real float|double|df`, `--loss trivial|huber|cauchy`,
+`--loss-param X`, `--model snavely|snavely_f`, `--shared-intrinsics`,
+`--max-iters N`, `--damping X`, `--rtol X`, `--patience N`, `--ply prefix`,
+`--solver auto|dense|cg`, `--vram-budget MB`, `--cg-iters N`, `--cg-tol X`,
+`--cg-fallback auto|on|off`,
+`--device I`, `--validate`, `--quiet`, `--profile` (per-kernel GPU time
+breakdown from timestamp queries, printed after the solve),
+`--spv-path FILE` (load a hand-compiled module instead of the embedded one).
+
+## Design notes
+
+### Parameterization & camera groups
+
+Each image has a 6-DOF pose (angle-axis + translation). Intrinsics live in
+*groups*: any number of images can share one intrinsics block, and each group
+chooses its own camera model (models may have different parameter counts).
+The camera-side unknown vector is `[poses (6/image) | all group intrinsics]`;
+the Schur-reduced normal matrix over that vector is assembled directly into a
+packed dense lower triangle via per-observation global column maps
+(`sfm/ba/Problem.h` builds them). Only the cost/Jacobian kernels are specialized per
+model; Schur assembly, the dense solver, and all updates are model-agnostic
+(dynamic block widths, bounded by `kMaxCamDof`). `--shared-intrinsics` (all
+images in one group) exercises the pose/intrinsics cross-coupling path.
+
+### Schur assembly (pair-aggregated)
+
+The Schur products `S -= A_up (App+l)^-1 A_up^T` are accumulated per unordered
+*image pair*: when every image owns its intrinsics group, each element of S
+belongs to exactly one pair, so one workgroup (warp) per pair sums the
+contributions of all points seen by both cameras in registers and writes its
+`dof_i x dof_j` block back with plain read-modify-writes -- no atomics.
+`sfm/ba/Problem.h` builds the per-pair `(obs_i, obs_j)` entry lists host-side (a
+counting sort by pair key); pairs with more than 1024 entries are split into
+chunks that fall back to atomic accumulation, as does the whole kernel when
+groups are shared between images (`--shared-intrinsics`) or the entry list
+would be unreasonably large (`schur_obs`, one thread per observation).
+A prepass (`point_prep`/`acp_prep`) caches `W = (App+l)^-1` per point and
+`T = A_cp W` per observation, so the pair kernel is a pure dot-product sweep.
+This replaced a per-observation kernel issuing ~45 global atomics per obs
+pair and was worth 3-6x on the Schur stage alone.
+
+The Jacobian kernel's own `S += Jc^T Jc` / `g += Jc^T r` accumulation is also
+deferred to the pair kernel: a diagonal pair's entries are exactly the
+observations of that camera, so the Jacobian kernel just stores `Jc` and the
+weighted residual per observation and the diagonal-pair workgroup sums the
+blocks (folding in the `(1+lambda)` damping, so `damp_S` is skipped too).
+This matters enormously for the emulated `df` config, where atomics are CAS
+loops: ~63 per obs onto ~50 hot addresses per camera made the Jacobian kernel
+~9x slower than the same kernel with atomics removed (measured); float/double
+use native atomic-add hardware and barely noticed.
+
+Adding a camera model = a struct conforming to `ICameraModel` (project +
+static param count) + two one-line entry points in `ba.slang` + one registry
+line in `sfm/ba/Problem.h`. Different intrinsic counts need no other changes.
+
+### Scalar configs
+
+Everything is written against `Real`, selected per-module with a `-D` flag:
+
+- `float` — fp32 + native f32 buffer atomic add (`VK_EXT_shader_atomic_float`)
+- `double` — fp64 + native f64 atomic add. GLSL.std.450 does not define
+  exp/sin/cos/log for fp64 (slangc silently emits invalid SPIR-V), so
+  `dmath.slang` provides argument-reduction + polynomial versions with custom
+  autodiff derivatives.
+- `df` — emulated double: an fp32 (hi, lo) pair with ~49-bit significand
+  (QD-style error-free transforms), for GPUs with weak/absent fp64. All ops
+  carry custom backward derivatives, so the same autodiff camera code runs
+  unchanged. Atomic accumulation packs the pair into a `uint64` CAS loop.
+  Transcendentals use near-minimax (Chebyshev) fits on the reduced range
+  instead of Taylor series (exp: degree 10 vs 14, sin/cos: 6 vs 8 at the same
+  interval accuracy), with the high-order tail terms (contributing < ~6e-9)
+  evaluated in plain fp32; `rsincos` computes sin and cos together, forward
+  and backward. The double config's `dmath.slang` gets the same treatment.
+  **Important:** drivers may contract/simplify float expressions, which
+  silently destroys two_sum/two_prod (observed on NVIDIA: results collapse to
+  fp32 accuracy). `spirv_tool nocontract` decorates every float arithmetic op
+  with `NoContraction` in the df SPIR-V (a build step, applied only to the df
+  blobs); with it, the df Cholesky selftest hits ~1e-11 relative error at
+  n=500 vs ~4e-4 without it and ~7e-4 for fp32.
+
+Buffers that receive atomic accumulation are bound twice (Real view + atomic
+word view of the same `VkBuffer`), so the emulated config needs no separate
+code paths in the kernels.
+
+### Dense solver (from scratch, in place)
+
+The reduced system (dimension `n = 6*images + total intrinsics`) is stored as
+a packed lower triangle (`n(n+1)/2` scalars — half the memory of a square
+matrix) and factored in place with a blocked right-looking Cholesky
+(block 32): `chol_panel` (row-tile per workgroup trsm) → `chol_update`
+(32x32-thread tile SYRK/GEMM from shared memory; the workgroup owning the
+next diagonal tile also factors it in place, so the standalone `chol_diag`
+only runs for the first block). Shared-memory tiles are padded to a 33-wide
+pitch (bank-conflict-free; 2x on the fp32 update). The forward/backward
+substitutions are one fused dispatch per block: every workgroup redundantly
+solves the 32x32 diagonal system in shared memory (there is no cross-workgroup
+ordering inside a dispatch) and updates its slice of the RHS, ping-ponging
+between the gradient vector and a small scratch vector. The step ends up in
+the gradient vector in place. `sfm_cholesky_test N` validates factor+solve
+against a CPU reference on a random SPD system.
+
+At fp64 the trailing update runs at ~80% of the RTX 4080's (1/64-rate) fp64
+ALU peak, i.e. the factorization is compute-bound and further blocking would
+not help; at fp32 it is bandwidth-bound.
+
+On the dense path, peak VRAM is dominated by the packed S, the
+per-observation `A_cp` and `T` blocks (`3*dof` scalars/obs each), and the
+Schur pair-entry lists; e.g. problem-871 runs in ~2.3 GB at fp64 including
+all problem data.
+
+### Implicit-Schur PCG (large camera counts)
+
+The dense factor is cubic in the number of cameras (measured ~91% of total
+GPU time at 1936 cameras, fp64) and the packed S is quadratic in VRAM, so
+above `n_dim = 8192` (~900 cameras) the solver switches to a matrix-free
+preconditioned conjugate gradient on the same reduced system (`cg.slang`,
+`--solver` to override). S is never formed:
+
+    S x = B x - sum_p Acp_p W_p (Acp_p^T x)
+
+is applied with the per-observation `Acp` blocks and per-point `W` that the
+assembly already produces -- a per-point gather (`cg_gather`, one thread per
+point over its contiguous track) and a per-camera scatter (`cg_bmul` +
+`cg_scatter`, one warp per chunk of a camera's observation list with
+lane-per-element coalesced `Acp` loads and a handful of atomic adds per
+chunk). `B` (the damped block-diagonal camera Gram matrix) and the exact
+diagonal blocks `S_cc` come from `cg_cam_diag` -- the same per-camera
+accumulation as `schur_pair`'s diagonal pairs, chunked over an
+obs-grouped-by-image CSR built host-side. The `S_cc` blocks, factored per
+camera, form the block-Jacobi preconditioner. This path requires per-image
+intrinsics groups (the same exclusivity condition as the pair kernel);
+`--shared-intrinsics` forces dense.
+
+The entire CG loop is recorded in the iteration's command buffer: scalar
+state (rho, alpha, beta, tolerance) lives in a small device buffer, dot
+products are two-stage reductions, and every kernel no-ops once the
+convergence flag is set, so a fixed iteration cap is recorded (adapted each
+LM iteration from the previous count) and the LM loop keeps its single
+cost readback. Stopping rule: relative residual `--cg-tol` (default 0.1,
+inexact-Newton style -- LM's accept/reject guards the step quality) with a
+`--cg-iters` cap (default 100).
+
+The CG path allocates no packed S, no T, and no pair-entry lists, so VRAM
+stays linear in observations: problem-1936 drops from 6.4 GB (dense, fp64)
+to 2.2 GB. Preprocessing also skips the pair-table sort (3.6 s -> 1.2 s
+there). Solver selection and the dense fallback are VRAM-aware: the budget
+is `--vram-budget` (default 90% of the device-local heap); `auto` picks
+dense for small problems, CG when the dense estimate exceeds the budget or
+`n_dim > 8192`. With `--cg-fallback on` (or `auto`, which enables it only
+when dense+CG together fit in half the budget) the dense machinery is kept
+allocated; a truncated-CG step is kept if it still lowered the cost, and
+only a cost-raising capped solve is re-solved densely from the reused
+assembly (three consecutive stalls demote the run to dense for good).
+VRAM-constrained runs should use `--cg-fallback off`: LM's reject path
+(escalating lambda re-solves against the same assembly) recovers from
+inexact steps on its own, at zero extra memory.
+
+`SSPLAT_SFM_CMP_STEP=1` (env) solves one assembly with both paths and prints the
+step difference: with `--cg-tol 1e-8` the CG step matches the dense step to
+~1e-8 at fp64.
+
+### LM loop
+
+Multiplicative damping `diag *= (1+λ)` on both the camera and point blocks;
+stop after `patience` non-improving iterations. λ update: /3 on a real
+improvement (beyond `rtol`), held on a tie-zone accept, ×2 on the first
+reject and doubling on consecutive rejects (up to ×32). Two details earned
+their keep the hard way: shrinking λ on micro-improvements lets it collapse
+until the solver stalls in an ill-conditioned plateau, and a flat gentle
+reject multiplier recovers λ too slowly on ill-conditioned configs — hence
+hold-on-tie plus escalate-on-reject.
+
+Each iteration records one command buffer (assembly → Schur → factor+solve →
+point back-sub → parameter updates → cost) and reads back a single cost
+scalar for the accept/reject decision. Rejects restore parameters from
+device-side backups — and since the restored parameters still match that
+iteration's per-observation assembly (`Jc`/`res`/`Acp`/`App`, plus a `Bp`
+snapshot), the retry skips the Jacobian pass entirely and re-solves with the
+new λ. Rejected steps are therefore cheap, which is what makes the fine λ
+search affordable.
+
+## Results (RTX 4080 Super + i9 32 threads, 50 LM iterations cap)
+
+Trivial loss, Snavely (log-f) model, on BAL problems. The Ceres 2.2 reference
+these were measured against (`DENSE_SCHUR`,
+`dense_linear_algebra_library=CUDA`, 32 threads, autodiff) is not part of this
+repository -- it needs a CUDA-enabled Ceres build, and the numbers below are
+what it produced. The table itself was never committed; the notes are.
+
+Notes:
+
+- Final costs agree with Ceres to ~6 digits for `double` and `df` (and are
+  usually slightly lower at the 50-iteration cap); `float` matches on small
+  problems but stalls above ~1e-7 relative accuracy on larger ones (fp32
+  normal equations), which is exactly the gap the emulated `df` type closes
+  at fp32-class hardware cost.
+- Per-kernel GPU timing is available via `--profile`. After the
+  pair-aggregated Schur assembly, the deferred Jacobian accumulation and the
+  fused Cholesky dispatches, `df` runs at fp64-config speed or better on
+  every problem here (its Cholesky is cheaper than fp64's ALU-bound one, its
+  Jacobian ~1.5x the fp64 one), which is the point of the emulated type.
+- On problems with gross outlier observations (871's near-camera-plane
+  points produce huge cancelling gradient terms), df's effective gradient
+  noise is ~1e-2 on the affected components (identical before/after these
+  changes, verified by dumping S/g), so which local basin a 50-iteration run
+  lands in is trajectory luck at that precision; double is unaffected.
+- The 1936-camera problem (auto -> CG): fp64 solves in ~4.4 s / 6.4 GB with
+  the dense fallback allocated, or ~4.4 s / 2.2 GB with `--cg-fallback off`,
+  vs ~228 s / 6.4 GB dense -- a ~50x end-to-end speedup at the same final
+  cost (4.65037e6 vs 4.65035e6, both in the tie-zone plateau). df with
+  `--cg-fallback off` reaches the best final cost of any config there
+  (4.650363e6) in ~17 s / 2.2 GB; previously df could not run this problem
+  at all (host OOM building pair tables alongside Ceres).
+
+## Known limitations / next steps
+
+- Dense path: pair-entry lists grow as the sum of `track^2/2` (above a
+  400M-entry cap it falls back to the atomic per-observation Schur kernel),
+  and packed indexing is 32-bit: `n(n+1)/2 < 2^31` (n ≲ 65k camera DOF).
+  Neither limit applies to the CG path.
+- CG iteration counts are conditioning-dependent: on well-behaved covis
+  graphs (1936) ~9 iters/solve; on the outlier-heavy 871 ~56, which is why
+  auto keeps problems below `n_dim = 8192` on the dense path. A stronger
+  preconditioner (visibility clustering / power series) is the known next
+  step for ill-conditioned sets.
+- fp32 CG inherits the documented fp32 normal-equation stall (block-Jacobi
+  is nearly exact at high damping, so it still descends, but final cost is
+  looser than fp64/df -- same as fp32 dense, slightly amplified).
+- `cg_gather`'s per-camera `x` gathers are the remaining uncoalesced reads
+  (~2x off bandwidth-bound at 1936); chunking it like `cg_scatter` is the
+  obvious follow-up if the matvec ever dominates again.
+- The LM loop synchronizes on one cost readback per iteration (same as the
+  CUDA prototype).
+- The BAL loader covers the Snavely models only. Every other camera model
+  reaches the solver through `sfm/map/Bundle.h` instead, which is what the
+  mapper uses; `ssplat-sfm ba` is a solver benchmark, not a general front end.

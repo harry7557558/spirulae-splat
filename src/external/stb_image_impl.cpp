@@ -3,13 +3,13 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 
-// Compile-time slim-down: drop formats we don't need from the training data
-// path. PNG / JPEG / BMP / TGA cover everything the dataparser sees.
+// Compile-time slim-down: drop formats nothing here reads. PNG / JPEG / BMP /
+// TGA cover everything the dataparser sees; PNM is kept because the SfM module
+// accepts .ppm/.pgm inputs and masks (src/sfm/core/Image.h, Mask.h).
 #define STBI_NO_PSD
 #define STBI_NO_HDR
 #define STBI_NO_PIC
 #define STBI_NO_GIF
-#define STBI_NO_PNM
 
 // Silence two warnings stb_image is noisy about under -Wsign-compare /
 // -Wunused-but-set-variable on recent GCCs.

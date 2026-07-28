@@ -1,0 +1,208 @@
+// Keypoints + descriptors and the flat-file interchange format.
+//
+// The layout is deliberately dtype/dim-agnostic (docs/notes/sfm-design.md D1): SIFT is
+// 128-D uint8 today, a learned frontend later may be F32 and a different width,
+// and nothing downstream may assume otherwise. `features.bin` is our own format
+// (D4); a converter to/from COLMAP's SQLite database is a separate host tool.
+#pragma once
+
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace sfm {
+
+// Similarity-covariant keypoint in *original*-image pixel coordinates (top-left
+// origin, +x right, +y down), matching COLMAP's FeatureKeypoint(x,y,scale,orn).
+// "Original" is the source file's resolution, not the possibly-downscaled one
+// SIFT ran on: the extractor scales its output back (see scaleKeypoints), so a
+// camera built from a FeatureSet describes the images on disk (D46).
+struct Keypoint {
+    float x = 0, y = 0;         // subpixel location
+    float scale = 0;            // sigma in original-image pixels
+    float orientation = 0;      // radians, CCW from +x
+    float response = 0;         // |DoG| at the refined extremum (not persisted)
+};
+
+enum class DType : uint32_t { U8 = 0, F32 = 1 };
+
+inline uint32_t dtypeSize(DType t) { return t == DType::U8 ? 1u : 4u; }
+
+// One image's features. Descriptors are row-major: feature i occupies
+// data[i*dim .. i*dim+dim) as `dtype` elements.
+struct FeatureSet {
+    int width = 0, height = 0;          // source image size features refer to
+    // The size SIFT actually ran at, which is smaller than (width,height)
+    // whenever the loader downscaled to --max-image-size. 0 means "the same",
+    // which is what a file written before this field says. Keypoint coordinates
+    // are in the *source* frame (see scaleKeypoints), but their localization
+    // noise is a property of *this* frame, so it is what pixel thresholds are
+    // measured in (D47).
+    int extract_width = 0, extract_height = 0;
+    // The focal length EXIF claims for this image, in pixels of (width,height),
+    // and the camera identity EXIF gives it (sfm/core/Exif.h). 0 / empty when the
+    // file had no usable EXIF. Recorded at extraction because that is the last
+    // stage that sees the image file; matching and mapping only see features.
+    double exif_focal = 0;
+    std::string exif_camera;
+    uint32_t dim = 128;
+    DType dtype = DType::U8;
+    std::vector<Keypoint> keypoints;
+    std::vector<uint8_t> descriptors;   // count*dim*dtypeSize bytes
+    // Optional per-keypoint RGB sampled from the source image (count*3 bytes, or
+    // empty). Written by `ssplat-sfm extract`; the mapper averages them over each 3D
+    // point's track to color the point cloud for 3DGS init. Empty for a feature
+    // set produced without an image (e.g. selftest) or read from a v1 file.
+    std::vector<uint8_t> colors;
+
+    uint32_t count() const { return (uint32_t)keypoints.size(); }
+    bool hasColors() const { return colors.size() == (size_t)count() * 3; }
+    // How many source pixels one extraction pixel is worth: >= 1, and exactly 1
+    // when nothing was downscaled. The two axes agree up to the rounding in
+    // the size clamp, so their mean is the isotropic answer.
+    double pixelScale() const {
+        if (extract_width <= 0 || extract_height <= 0 || width <= 0 || height <= 0) return 1.0;
+        return 0.5 * ((double)width / extract_width + (double)height / extract_height);
+    }
+};
+
+// Scale keypoints from the coordinates of a (dw,dh) image to those of a (w,h)
+// one, and record the new size. The extractor runs SIFT on a downscaled copy
+// when the source is larger than --max-image-size; everything downstream --
+// cameras.bin above all -- should still be in the coordinates of the file the
+// user has (COLMAP's ScaleKeypoints does the same, feature/utils.cc).
+//
+// The mapping is the exact inverse of the bilinear resample in sfm/core/Image.h: a
+// destination pixel center (x+0.5) came from source (x+0.5)*sx. Sigma scales by
+// the geometric mean, the only isotropic choice when the two axes round
+// differently.
+inline void scaleKeypoints(FeatureSet& fs, int w, int h) {
+    if (w <= 0 || h <= 0 || fs.width <= 0 || fs.height <= 0) return;
+    fs.extract_width = fs.width;    // where the keypoints were actually measured
+    fs.extract_height = fs.height;
+    if (w == fs.width && h == fs.height) return;
+    const float sx = (float)w / fs.width, sy = (float)h / fs.height;
+    const float ss = std::sqrt(sx * sy);
+    for (Keypoint& k : fs.keypoints) {
+        k.x = (k.x + 0.5f) * sx - 0.5f;
+        k.y = (k.y + 0.5f) * sy - 0.5f;
+        k.scale *= ss;
+    }
+    fs.width = w;
+    fs.height = h;
+}
+
+// ---- features.bin -------------------------------------------------------
+// Header (little-endian):
+//   char[4] magic  = "VKFT"
+//   u32     version = 3
+//   i32     width, height
+//   u32     count, dim, dtype
+// Then `count` keypoints, each { f32 x, y, scale, orientation }, then the
+// descriptor blob (count*dim*dtypeSize bytes).
+//
+// v2 appends a color section after the descriptors: u8 has_colors, then (if 1)
+// count*3 bytes of per-keypoint RGB. v1 files have no such trailing bytes and
+// read back with empty colors; the reader accepts all three.
+//
+// v3 appends an EXIF section after the colors: f64 exif_focal, u32 name length,
+// then that many bytes of exif_camera. A v1/v2 file reads back with no EXIF,
+// i.e. exactly the behaviour that predates it.
+//
+// v4 appends i32 extract_width, extract_height after that. Older files read
+// back with 0, i.e. pixelScale() == 1, i.e. thresholds in source pixels --
+// which is what those files were produced under.
+
+inline void writeFeatures(const std::string& path, const FeatureSet& fs) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("cannot write " + path);
+    uint32_t version = 4, count = fs.count(), dtype = (uint32_t)fs.dtype;
+    f.write("VKFT", 4);
+    f.write((const char*)&version, 4);
+    f.write((const char*)&fs.width, 4);
+    f.write((const char*)&fs.height, 4);
+    f.write((const char*)&count, 4);
+    f.write((const char*)&fs.dim, 4);
+    f.write((const char*)&dtype, 4);
+    for (const Keypoint& k : fs.keypoints) {
+        float v[4] = {k.x, k.y, k.scale, k.orientation};
+        f.write((const char*)v, sizeof v);
+    }
+    f.write((const char*)fs.descriptors.data(), (std::streamsize)fs.descriptors.size());
+    uint8_t has_colors = fs.hasColors() ? 1 : 0;
+    f.write((const char*)&has_colors, 1);
+    if (has_colors) f.write((const char*)fs.colors.data(), (std::streamsize)fs.colors.size());
+    uint32_t cam_len = (uint32_t)fs.exif_camera.size();
+    f.write((const char*)&fs.exif_focal, 8);
+    f.write((const char*)&cam_len, 4);
+    f.write(fs.exif_camera.data(), (std::streamsize)cam_len);
+    f.write((const char*)&fs.extract_width, 4);
+    f.write((const char*)&fs.extract_height, 4);
+}
+
+inline FeatureSet readFeatures(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("cannot read " + path);
+    char magic[4];
+    f.read(magic, 4);
+    if (std::memcmp(magic, "VKFT", 4) != 0) throw std::runtime_error("bad magic in " + path);
+    uint32_t version, count, dim, dtype;
+    f.read((char*)&version, 4);
+    FeatureSet fs;
+    f.read((char*)&fs.width, 4);
+    f.read((char*)&fs.height, 4);
+    f.read((char*)&count, 4);
+    f.read((char*)&dim, 4);
+    f.read((char*)&dtype, 4);
+    fs.dim = dim;
+    fs.dtype = (DType)dtype;
+    fs.keypoints.resize(count);
+    for (uint32_t i = 0; i < count; i++) {
+        float v[4];
+        f.read((char*)v, sizeof v);
+        fs.keypoints[i] = {v[0], v[1], v[2], v[3], 0.0f};
+    }
+    fs.descriptors.resize((size_t)count * dim * dtypeSize(fs.dtype));
+    f.read((char*)fs.descriptors.data(), (std::streamsize)fs.descriptors.size());
+    if (version >= 2) {
+        uint8_t has_colors = 0;
+        f.read((char*)&has_colors, 1);
+        if (has_colors) {
+            fs.colors.resize((size_t)count * 3);
+            f.read((char*)fs.colors.data(), (std::streamsize)fs.colors.size());
+        }
+    }
+    if (version >= 3) {
+        // Read into locals and only publish a complete section: a file
+        // truncated mid-EXIF must read back as "no EXIF", not as a garbage
+        // focal length that would then be trusted as a prior.
+        double focal = 0;
+        uint32_t cam_len = 0;
+        f.read((char*)&focal, 8);
+        f.read((char*)&cam_len, 4);
+        if (f.gcount() == 4) {
+            fs.exif_focal = focal;
+            if (cam_len > 0 && cam_len < (1u << 16)) {
+                std::string cam(cam_len, '\0');
+                f.read(&cam[0], (std::streamsize)cam_len);
+                if (f.gcount() == (std::streamsize)cam_len) fs.exif_camera = std::move(cam);
+            }
+        }
+    }
+    if (version >= 4) {
+        int ew = 0, eh = 0;
+        f.read((char*)&ew, 4);
+        f.read((char*)&eh, 4);
+        if (f.gcount() == 4 && ew > 0 && eh > 0) {
+            fs.extract_width = ew;
+            fs.extract_height = eh;
+        }
+    }
+    return fs;
+}
+
+}  // namespace sfm

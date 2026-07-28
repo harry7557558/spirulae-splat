@@ -19,6 +19,20 @@
 //       (reproducing build_spirv.py's phase-2 gate), verify no capability leaks,
 //       and emit the C++ translation unit consumed by VulkanPipelines.cpp.
 //
+//   embed --sfm <out.cpp> --list <listfile>
+//       The same, for the SfM module (cmake/SsplatSfm.cmake). Its blobs are
+//       whole-module compiles with no feature variants, so the variant gate and
+//       the capability audit -- both statements about the engine's kernels --
+//       are skipped, and the emitted TU is the one sfm/vk/EmbeddedSpirv.h
+//       declares.
+//
+//   nocontract <in.spv> <out.spv>
+//       Decorate every float arithmetic result with NoContraction. slangc does
+//       not emit it and some drivers then contract or rearrange float
+//       expressions, which destroys the error-free transforms the SfM bundle
+//       adjuster's emulated double-float type is built on. Used only by the
+//       SfM `df` blobs; see src/sfm/ba/README.md.
+//
 // Blob naming, feature variants, and the capability audit mirror build_spirv.py
 // exactly; see that file's history and backend/vulkan/README.md for the why.
 
@@ -293,6 +307,114 @@ std::set<uint32_t> spirv_capabilities(const std::string& bytes) {
     return caps;
 }
 
+// ---- nocontract mode -----------------------------------------------------
+// SPIR-V opcodes and enums used only here (see the SPIR-V specification).
+enum : uint32_t {
+    OpExtInstImport = 11,
+    OpExtInst = 12,
+    OpDecorate = 71,
+    OpMemberDecorate = 72,
+    OpDecorationGroup = 73,
+    OpGroupDecorate = 74,
+    OpGroupMemberDecorate = 75,
+    OpFNegate = 127,
+    OpFAdd = 129,
+    OpFSub = 131,
+    OpFMul = 133,
+    OpFDiv = 136,
+    OpDecorateId = 332,
+    OpDecorateString = 5632,
+    OpMemberDecorateString = 5633,
+    OpTypeVoid = 19,
+    OpTypeForwardPointer = 39,
+    kDecorationNoContraction = 42,
+    kGlslStd450Fma = 50,
+};
+
+bool is_annotation(uint32_t op) {
+    return op == OpDecorate || op == OpMemberDecorate || op == OpDecorationGroup ||
+           op == OpGroupDecorate || op == OpGroupMemberDecorate || op == OpDecorateId ||
+           op == OpDecorateString || op == OpMemberDecorateString;
+}
+
+// Types, constants and global variables: everything the annotations section
+// must precede. Only used as a fallback when a module has no annotations.
+bool is_type_decl(uint32_t op) { return op >= OpTypeVoid && op <= OpTypeForwardPointer; }
+
+int run_nocontract(const std::string& in, const std::string& out) {
+    bool ok = false;
+    std::string bytes = read_file(in, &ok);
+    if (!ok || bytes.size() % 4) {
+        std::fprintf(stderr, "nocontract: cannot read %s as a word-aligned module\n",
+                     in.c_str());
+        return 1;
+    }
+    std::vector<uint32_t> w(bytes.size() / 4);
+    std::memcpy(w.data(), bytes.data(), bytes.size());
+    if (w.size() < 5 || w[0] != 0x07230203u) {
+        // A byte-swapped module would need swapping on read and write; slangc
+        // emits host order, so treat this as a corrupt input instead.
+        std::fprintf(stderr, "nocontract: %s is not a host-order SPIR-V module\n",
+                     in.c_str());
+        return 1;
+    }
+
+    // GLSL.std.450 import id, so OpExtInst Fma can be recognized. Modules
+    // importing several sets are handled: only this one's Fma is matched.
+    uint32_t glsl_set = 0;
+    std::vector<uint32_t> targets;
+    size_t annot_end = 0;    // one past the last annotation instruction
+    size_t types_begin = 0;  // first type declaration
+    bool have_types_begin = false;
+
+    for (size_t i = 5; i < w.size();) {
+        uint32_t len = w[i] >> 16, op = w[i] & 0xffffu;
+        if (len == 0 || i + len > w.size()) {
+            std::fprintf(stderr, "nocontract: malformed instruction in %s\n", in.c_str());
+            return 1;
+        }
+        if (op == OpExtInstImport && len >= 3) {
+            if (std::strcmp((const char*)&w[i + 2], "GLSL.std.450") == 0) glsl_set = w[i + 1];
+        } else if (op == OpFAdd || op == OpFSub || op == OpFMul || op == OpFDiv ||
+                   op == OpFNegate) {
+            targets.push_back(w[i + 2]);  // 1 = result type, 2 = result id
+        } else if (op == OpExtInst && len >= 5 && w[i + 3] == glsl_set &&
+                   w[i + 4] == kGlslStd450Fma) {
+            targets.push_back(w[i + 2]);
+        }
+        if (is_annotation(op)) annot_end = i + len;
+        if (!have_types_begin && is_type_decl(op)) {
+            types_begin = i;
+            have_types_begin = true;
+        }
+        i += len;
+    }
+
+    size_t pos = annot_end ? annot_end : types_begin;
+    if (!pos) {
+        std::fprintf(stderr, "nocontract: no annotation or type section in %s\n", in.c_str());
+        return 1;
+    }
+
+    std::vector<uint32_t> outw;
+    outw.reserve(w.size() + targets.size() * 3);
+    outw.insert(outw.end(), w.begin(), w.begin() + (long)pos);
+    for (uint32_t t : targets) {
+        outw.push_back((3u << 16) | OpDecorate);
+        outw.push_back(t);
+        outw.push_back(kDecorationNoContraction);
+    }
+    outw.insert(outw.end(), w.begin() + (long)pos, w.end());
+
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) {
+        std::fprintf(stderr, "nocontract: cannot write %s\n", out.c_str());
+        return 1;
+    }
+    f.write((const char*)outw.data(), (std::streamsize)outw.size() * 4);
+    return 0;
+}
+
 // ---- discover mode -------------------------------------------------------
 int run_discover(const std::vector<std::string>& args) {
     std::vector<std::string> incdirs, sources;
@@ -388,8 +510,10 @@ std::string strip_feature_suffixes(std::string name) {
 
 int run_embed(const std::vector<std::string>& args) {
     std::string out_cpp, listfile;
+    bool sfm = false;
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i] == "--list" && i + 1 < args.size()) listfile = args[++i];
+        else if (args[i] == "--sfm") sfm = true;
         else if (out_cpp.empty()) out_cpp = args[i];
     }
     if (out_cpp.empty() || listfile.empty()) {
@@ -425,10 +549,12 @@ int run_embed(const std::vector<std::string>& args) {
     }
 
     // Keep every base/feature blob; keep a .noint64 variant only when its base
-    // actually declares Int64 (build_spirv.py's phase-2 condition).
+    // actually declares Int64 (build_spirv.py's phase-2 condition). The SfM
+    // blobs have no feature variants, so the gate has nothing to say about them.
     std::vector<std::string> kept;
     for (auto& [name, bytes] : blob_bytes) {
         (void)bytes;
+        if (sfm) { kept.push_back(name); continue; }
         size_t n = std::strlen(NOINT64.suffix);
         bool is_noint64 = name.size() > n &&
             name.compare(name.size() - n, n, NOINT64.suffix) == 0;
@@ -447,9 +573,10 @@ int run_embed(const std::vector<std::string>& args) {
                   return a + ".spv" < b + ".spv";
               });
 
-    // Capability audit (mirrors build_spirv.py's final pass).
+    // Capability audit (mirrors build_spirv.py's final pass). It checks the
+    // engine's variant invariants, which the SfM blobs do not participate in.
     bool failed = false;
-    for (auto& name : kept) {
+    for (auto& name : sfm ? std::vector<std::string>{} : kept) {
         const auto& caps = blob_caps[name];
         size_t n = std::strlen(NOINT64.suffix);
         bool is_noint64 = name.size() > n &&
@@ -473,10 +600,13 @@ int run_embed(const std::vector<std::string>& args) {
     // Emit the translation unit (layout matches the former embed_spirv.py).
     std::ostringstream o;
     o << "// GENERATED by shaders/spirv_tool.cpp -- DO NOT EDIT.\n"
-         "#include <cstddef>\n#include <cstdint>\n\n"
-         "namespace backend {\nnamespace vk {\n\n"
-         "struct SpirvBlob { const char* name; const uint32_t* data;"
-         " size_t size_bytes; };\n\n";
+         "#include <cstddef>\n#include <cstdint>\n";
+    if (sfm)
+        o << "#include <cstring>\n\nnamespace sfm {\n\n";
+    else
+        o << "\nnamespace backend {\nnamespace vk {\n\n"
+             "struct SpirvBlob { const char* name; const uint32_t* data;"
+             " size_t size_bytes; };\n\n";
     for (size_t i = 0; i < kept.size(); i++) {
         const std::string& data = blob_bytes[kept[i]];
         o << "static const uint32_t _blob" << i << "[] = {\n";
@@ -496,16 +626,40 @@ int run_embed(const std::vector<std::string>& args) {
         }
         o << "};\n";
     }
-    o << "\nextern const SpirvBlob g_spirv_blobs[];\n"
-         "extern const size_t g_spirv_blob_count;\n"
-         "const SpirvBlob g_spirv_blobs[] = {\n";
-    for (size_t i = 0; i < kept.size(); i++)
-        o << "    {\"" << kept[i] << "\", _blob" << i << ", "
-          << blob_bytes[kept[i]].size() << "},\n";
-    if (kept.empty())
-        o << "    {nullptr, nullptr, 0},  // keep the array non-empty\n";
-    o << "};\nconst size_t g_spirv_blob_count = " << kept.size() << ";\n\n"
-         "}  // namespace vk\n}  // namespace backend\n";
+    if (sfm) {
+        o << "\nstruct SpirvBlob { const char* name; const uint32_t* code;"
+             " size_t words; };\n"
+             "static const SpirvBlob kBlobs[] = {\n";
+        for (size_t i = 0; i < kept.size(); i++)
+            o << "    {\"" << kept[i] << "\", _blob" << i << ", sizeof(_blob" << i
+              << ") / 4},\n";
+        if (kept.empty())
+            o << "    {nullptr, nullptr, 0},  // keep the array non-empty\n";
+        o << "};\n\n"
+             "const uint32_t* findSpirv(const char* name, size_t* words) {\n"
+             "    for (const SpirvBlob& b : kBlobs)\n"
+             "        if (b.name && std::strcmp(b.name, name) == 0) {\n"
+             "            if (words) *words = b.words;\n"
+             "            return b.code;\n"
+             "        }\n"
+             "    return nullptr;\n"
+             "}\n\n"
+             "const char* spirvBlobName(size_t i) {\n"
+             "    return i < " << kept.size() << " ? kBlobs[i].name : nullptr;\n"
+             "}\n\n"
+             "}  // namespace sfm\n";
+    } else {
+        o << "\nextern const SpirvBlob g_spirv_blobs[];\n"
+             "extern const size_t g_spirv_blob_count;\n"
+             "const SpirvBlob g_spirv_blobs[] = {\n";
+        for (size_t i = 0; i < kept.size(); i++)
+            o << "    {\"" << kept[i] << "\", _blob" << i << ", "
+              << blob_bytes[kept[i]].size() << "},\n";
+        if (kept.empty())
+            o << "    {nullptr, nullptr, 0},  // keep the array non-empty\n";
+        o << "};\nconst size_t g_spirv_blob_count = " << kept.size() << ";\n\n"
+             "}  // namespace vk\n}  // namespace backend\n";
+    }
 
     // Always (re)write: the embed edge only runs when a .spv changed, so the
     // fresh mtime is what keeps Ninja's output-newer-than-inputs check happy.
@@ -523,13 +677,20 @@ int run_embed(const std::vector<std::string>& args) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s discover|embed ...\n", argv[0]);
+        std::fprintf(stderr, "usage: %s discover|embed|nocontract ...\n", argv[0]);
         return 2;
     }
     std::vector<std::string> args(argv + 2, argv + argc);
     std::string mode = argv[1];
     if (mode == "discover") return run_discover(args);
     if (mode == "embed") return run_embed(args);
+    if (mode == "nocontract") {
+        if (args.size() < 2) {
+            std::fprintf(stderr, "nocontract: usage: nocontract <in.spv> <out.spv>\n");
+            return 2;
+        }
+        return run_nocontract(args[0], args[1]);
+    }
     std::fprintf(stderr, "unknown mode: %s\n", mode.c_str());
     return 2;
 }

@@ -98,3 +98,34 @@ function(ssplat_find_slangc out_var)
     message(STATUS "Using slangc ${_slangc} (${_slangc_ver})")
     set(${out_var} ${_slangc} PARENT_SCOPE)
 endfunction()
+
+# ssplat_build_spirv_tool(<out_var>)
+#
+# Compiles src/backend/vulkan/shaders/spirv_tool.cpp once with the project
+# toolchain (try_compile + COPY_FILE, so it is portable across Windows / Linux /
+# macOS and needs neither Python nor spirv-tools) and returns the executable.
+#
+# One tool for the whole repository: the Vulkan backend uses its `discover` and
+# `embed` modes, the SfM module its `nocontract` and `embed --sfm` modes. It
+# lives under backend/vulkan/shaders/ because that is its main consumer; it is a
+# pure host program and pulls in no Vulkan headers, so a CUDA build with
+# SSPLAT_BUILD_SFM=ON can compile it too.
+function(ssplat_build_spirv_tool out_var)
+    set(tool_src ${SSPLAT_SRC}/backend/vulkan/shaders/spirv_tool.cpp)
+    set(tool_exe ${CMAKE_BINARY_DIR}/spirv_tool${CMAKE_EXECUTABLE_SUFFIX})
+
+    # Rebuilt only when its source is newer than the copied executable.
+    if(NOT EXISTS ${tool_exe} OR ${tool_src} IS_NEWER_THAN ${tool_exe})
+        try_compile(_spirv_tool_ok ${CMAKE_BINARY_DIR}/spirv_tool_build
+            SOURCES ${tool_src}
+            COPY_FILE ${tool_exe}
+            CXX_STANDARD 17 CXX_STANDARD_REQUIRED TRUE
+            OUTPUT_VARIABLE _spirv_tool_log)
+        if(NOT _spirv_tool_ok)
+            message(FATAL_ERROR "Failed to build spirv_tool:\n${_spirv_tool_log}")
+        endif()
+        message(STATUS "Built SPIR-V build tool: ${tool_exe}")
+    endif()
+
+    set(${out_var} ${tool_exe} PARENT_SCOPE)
+endfunction()

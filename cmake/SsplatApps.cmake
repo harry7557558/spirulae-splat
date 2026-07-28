@@ -1,8 +1,10 @@
-# The native applications: ssplat-train (CLI), ssplat-mesh, ssplat-gui.
+# The native applications: ssplat-train (CLI), ssplat-mesh, ssplat-sfm,
+# ssplat-gui.
 #
 # Backend-agnostic: whichever backend module ran first left the engine to link
-# in SSPLAT_APP_LIBS and set SSPLAT_WITH_TORCH. ssplat-mesh is the exception --
-# the Vulkan backend stubs the meshing kernels, so it is CUDA-only.
+# in SSPLAT_APP_LIBS and set SSPLAT_WITH_TORCH. Two exceptions: ssplat-mesh is
+# CUDA-only (the Vulkan backend stubs the meshing kernels), and ssplat-sfm is
+# Vulkan-only and links the SfM library instead of the engine.
 
 # ---------------------------------------------------------------------------
 # Source groups shared by several app targets
@@ -77,6 +79,22 @@ if(SSPLAT_BUILD_CLI)
     if(NOT SSPLAT_BACKEND STREQUAL "vulkan")
         add_executable(ssplat-mesh ${SSPLAT_SRC}/app/cli/mesh_main.cpp)
         ssplat_configure_app(ssplat-mesh)
+    endif()
+
+    # ---- standalone Structure-from-Motion CLI ----
+    # Links only ssplat_sfm: the SfM module carries its own Vulkan context and
+    # SPIR-V, and shares nothing with the training engine. Deliberately NOT
+    # ssplat_configure_app -- that pulls in the engine (and, on a Torch build,
+    # libpython) for a tool that needs neither.
+    if(SSPLAT_BUILD_SFM)
+        add_executable(ssplat-sfm
+            ${SSPLAT_SRC}/app/cli/sfm_main.cpp
+            ${SSPLAT_SRC}/app/cli/sfm_ba.cpp
+        )
+        target_link_libraries(ssplat-sfm PRIVATE ssplat_sfm)
+        target_compile_options(ssplat-sfm PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
+        set_property(TARGET ssplat-sfm PROPERTY CXX_STANDARD 17)
     endif()
 endif()
 

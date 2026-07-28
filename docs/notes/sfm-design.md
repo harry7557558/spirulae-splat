@@ -1,0 +1,68 @@
+# SfM design notes
+
+The decision log the SfM module was built against. Each `D<n>` is referenced
+from the code by number; the code comment carries the reasoning, this table
+carries the index.
+
+**Distillation is unfinished.** The full text — context, alternatives measured,
+consequences — is being condensed from the source repository's ADR log into
+per-decision sections here (`docs/notes/sfm-port-plan.md` phase 7). Until that
+lands, a `D<n>` in a comment resolves to the row below and to the surrounding
+comment, which is where the load-bearing part of each decision was written down.
+
+Priority for the distillation, because these are the ones that would otherwise
+be re-derived or re-attempted: D25, D26, D27, D11, D16, D47, D50, D45, D46.
+
+| # | Decision |
+|---|---|
+| D1 | Feature frontend: hand-written GPU SIFT first, behind a pluggable interface |
+| D2 | Mapper: incremental (COLMAP-style) primary |
+| D3 | Scope: splatting-grade first, COLMAP parity as a stretch goal |
+| D4 | Interchange via COLMAP's on-disk formats |
+| D5 | Image decode: one small vendored decoder |
+| D6 | Build system: adopt CMake now |
+| D7 | GPU SIFT: VLFeat algorithm, storage-buffer scale space, host top-K |
+| D8 | Matching: GPU brute-force MVP behind a pluggable interface |
+| D9 | Geometry: own small linalg, F/H uncalibrated verification, E-from-F pose |
+| D10 | Incremental mapper MVP: P3P registration, GPU global BA, COLMAP output |
+| D11 | Slang constant tables use brace initializers, not helper calls |
+| D12 | Geometric verification runs on a worker pool fed by the GPU matcher |
+| D13 | Batch image decode: budget-derived pool, strict in-order delivery |
+| D14 | `sfm auto`: one command from images to a COLMAP model |
+| D15 | Registration retries: ranked candidates, not a one-strike blacklist |
+| D16 | Canonical feature order: the pipeline has to be reproducible |
+| D17 | Multiple cameras: per-image intrinsics, mixed resolutions, sub-folders |
+| D18 | Focal-length search when a camera group registers its first image |
+| D19 | Seed retry: discard a model that is too small and start over |
+| D20 | Internet photos get per-image intrinsics, not per-resolution |
+| D21 | Matcher distances via the hardware packed uint8x4 dot product |
+| D22 | Resident descriptors and batched submissions, not per-pair uploads |
+| D23 | One distance matrix per pair, reduced along both axes |
+| D24 | Jacobi rotations without transcendentals, and a relative convergence test |
+| D25 | svd3's rank test has to be relative, not absolute |
+| D26 | SPRT rejected: model *scoring* is ~4% of RANSAC, not the cost |
+| D27 | Minimal-sample null spaces by Householder QR, not an eigensolver |
+| D28 | Point colors sampled at extraction, stored per keypoint (features.bin v2) |
+| D29 | Camera-model expansion: OpenCV distortion + fisheye (incl. >180°), on bearings |
+| D30 | Camera models centralized; SIMPLE_PINHOLE/PINHOLE added; Schur kernels dof-tiered |
+| D31 | Geometry core on unit bearings (D29 phase B) |
+| D32 | Kannala-Brandt fisheye model (COLMAP OPENCV_FISHEYE); per-real atan by Newton |
+| D33 | Wide-FOV cheirality + physical fisheye focal init (D29 phase D) |
+| D34 | THIN_PRISM_FISHEYE + reduced FULL_OPENCV models |
+| D35 | GPU pair selection instead of exhaustive pairing (or a vocab tree) |
+| D36 | Mapper robustness: refined+gated registration, iterated refinement with retriangulation, and undo |
+| D37 | Mapper time: incremental next-image scoring + retuned BA cadence |
+| D38 | Mapper speed without the D37 quality regression: persistent solver, convergence-adaptive BA, seed memoization |
+| D39 | Keypoint masking at extraction, sampled in uv, with mask files found by convention |
+| D40 | One camera per folder by default, resolution always splits, OpenCV distortion by default |
+| D41 | Multiple models: every component is written, not just the best one |
+| D42 | Pair-selection breadth follows the quality preset; it is not the lever for weak graphs |
+| D43 | Model merging: shared *poses*, a transactional attempt, and a splice test that has teeth |
+| D44 | Mapping and merging are one loop, and an assembled model gets audited |
+| D45 | A fisheye is not a pinhole at verification time, one lens is one set of intrinsics, and a fold is detected from what is missing |
+| D46 | Intrinsics describe the images on disk, camera model and focal are per group, EXIF is a measurement, and a fold is judged by what cutting it costs |
+| D47 | The camera setup travels with the matches, and a pixel threshold means the same thing at every resolution |
+| D48 | A forward-motion capture is not a degenerate one, and a focal nobody measured has to be measured |
+| D49 | A spherical camera is not a wide fisheye: the image is the calibration, and every direction is in front |
+| D50 | The principal point is not a free parameter: it is a camera rotation wearing a different name |
+| D51 | Refining the principal point at the end: on, for a single camera group, and the gain is predictable |

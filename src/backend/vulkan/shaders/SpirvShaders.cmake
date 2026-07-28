@@ -16,22 +16,9 @@
 #   <shared_dir> = src/shaders            device math shared with the CUDA build
 #   <vk_dir>     = src/backend/vulkan/shaders   Vulkan-only compute entry points
 function(ssplat_setup_spirv shared_dir vk_dir slangc spirv_dir embed_cpp debug)
-    set(tool_src ${vk_dir}/spirv_tool.cpp)
-    set(tool_exe ${CMAKE_BINARY_DIR}/spirv_tool${CMAKE_EXECUTABLE_SUFFIX})
-
-    # Build the host tool with the project compiler (portable). Rebuilt only
-    # when its source is newer than the copied executable.
-    if(NOT EXISTS ${tool_exe} OR ${tool_src} IS_NEWER_THAN ${tool_exe})
-        try_compile(_spirv_tool_ok ${CMAKE_BINARY_DIR}/spirv_tool_build
-            SOURCES ${tool_src}
-            COPY_FILE ${tool_exe}
-            CXX_STANDARD 17 CXX_STANDARD_REQUIRED TRUE
-            OUTPUT_VARIABLE _spirv_tool_log)
-        if(NOT _spirv_tool_ok)
-            message(FATAL_ERROR "Failed to build spirv_tool:\n${_spirv_tool_log}")
-        endif()
-        message(STATUS "Built SPIR-V build tool: ${tool_exe}")
-    endif()
+    # The host tool is shared with the SfM module (cmake/SsplatSfm.cmake), so
+    # it is built by SsplatSlang.cmake rather than here.
+    ssplat_build_spirv_tool(tool_exe)
 
     # -I<src> lets a Vulkan shader reach the shared device math by its
     # src-relative path (`#include "shaders/densify.slang"`), matching the C++

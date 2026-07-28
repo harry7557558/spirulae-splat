@@ -51,6 +51,20 @@ if(NOT SSPLAT_BACKEND STREQUAL "cuda" AND NOT SSPLAT_BACKEND STREQUAL "vulkan")
 endif()
 
 # ---------------------------------------------------------------------------
+# Structure from Motion (src/sfm/)
+#
+# The native replacement for the COLMAP subprocess. It is Vulkan-only and needs
+# the Vulkan loader + headers, so it is on by default only for the Vulkan build;
+# a CUDA build can still opt in with -DSSPLAT_BUILD_SFM=ON if the Vulkan SDK is
+# present. See cmake/SsplatSfm.cmake and src/sfm/README.md.
+# ---------------------------------------------------------------------------
+if(SSPLAT_BACKEND STREQUAL "vulkan")
+    option(SSPLAT_BUILD_SFM "Build the SfM module (ssplat-sfm)" ON)
+else()
+    option(SSPLAT_BUILD_SFM "Build the SfM module (ssplat-sfm)" OFF)
+endif()
+
+# ---------------------------------------------------------------------------
 # Shared C++ settings
 # ---------------------------------------------------------------------------
 set(CMAKE_CXX_STANDARD 17)
