@@ -92,6 +92,7 @@ if(SSPLAT_BUILD_CLI)
             ${SSPLAT_SRC}/app/cli/sfm_ba.cpp
         )
         target_link_libraries(ssplat-sfm PRIVATE ssplat_sfm)
+        target_compile_definitions(ssplat-sfm PRIVATE SSPLAT_VERSION="${SSPLAT_VERSION}")
         target_compile_options(ssplat-sfm PRIVATE
             $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
         set_property(TARGET ssplat-sfm PROPERTY CXX_STANDARD 17)

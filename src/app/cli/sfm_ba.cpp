@@ -22,6 +22,54 @@ static void writePly(const char* path, const std::vector<double>& pts) {
 }
 
 
+// Printed by `ssplat-sfm ba --help` and by `ssplat-sfm help ba`. The solver's
+// options are not in the SfmConfig table: nothing else drives them, and the
+// pipeline's own bundle adjustment is configured through --ba-* on `map`.
+void printBaHelp(FILE* out) {
+    std::fprintf(out,
+        "ssplat-sfm ba -- bundle-adjust a BAL problem (solver benchmark)\n"
+        "\n"
+        "Usage:\n"
+        "  ssplat-sfm ba <BAL_PROBLEM.TXT> [options]\n"
+        "\n"
+        "Description:\n"
+        "  Runs the GPU bundle adjuster directly on a problem in Bundle Adjustment in the\n"
+        "  Large format, and reports cost, iterations, time and VRAM. This is how the\n"
+        "  solver is benchmarked and debugged against a published reference; the pipeline\n"
+        "  itself never reads BAL. See src/sfm/ba/README.md.\n"
+        "\n"
+        "Options:\n"
+        "  --real {float|double|df}            [double]  scalar the solver works in; df is an\n"
+        "                                      emulated double-float, for devices without fp64\n"
+        "  --loss {trivial|huber|cauchy}       [trivial] robust loss\n"
+        "  --loss-param X                      [1]       Huber delta / Cauchy c\n"
+        "  --model {snavely|snavely_f}         [snavely] BAL camera model\n"
+        "  --shared-intrinsics                 one intrinsics block for every camera\n"
+        "  --solver {auto|dense|cg}            [auto]    dense Cholesky or implicit-Schur PCG\n"
+        "  --max-iters N                       Levenberg-Marquardt iteration cap\n"
+        "  --damping X                         initial LM damping\n"
+        "  --rtol X                            relative cost improvement to stop below\n"
+        "  --patience N                        steps below --rtol before stopping\n"
+        "  --cg-iters N                        PCG iteration cap per LM step\n"
+        "  --cg-tol X                          PCG relative residual tolerance\n"
+        "  --cg-fallback {auto|on|off}         fall back to dense when PCG stalls\n"
+        "  --vram-budget MB                    device memory the solver may use\n"
+        "  --ply PREFIX                        write PREFIX_before.ply and PREFIX_after.ply\n"
+        "  --device N                          Vulkan device index\n"
+        "  --validate                          check the assembled system against a reference\n"
+        "  --profile                           per-kernel timings\n"
+        "  --quiet                             only the result lines\n"
+        "  --spv-path FILE                     load the solver kernels from this SPIR-V file\n"
+        "  -h, --help                          show this help and exit\n"
+        "\n"
+        "Examples:\n"
+        "  ssplat-sfm ba problem-49-7776-pre.txt --real df --loss huber\n"
+        "  ssplat-sfm ba problem-1778-993923-pre.txt --solver cg --vram-budget 4096\n"
+        "\n"
+        "A (--real, --loss) pair that was trimmed out of the build reports \"variant not\n"
+        "built into this binary\"; see SSPLAT_SFM_REALS / SSPLAT_SFM_LOSSES.\n");
+}
+
 int cmdBa(int argc, char** argv) {
     std::string file, ply_prefix, loss = "trivial", model = "snavely";
     SolverOptions opt;
@@ -30,7 +78,8 @@ int cmdBa(int argc, char** argv) {
     for (int i = 0; i < argc; i++) {
         std::string a = argv[i];
         auto next = [&]() { return std::string(argv[++i]); };
-        if (a == "--real") {
+        if (a == "--help" || a == "-h") { printBaHelp(stdout); return 0; }
+        else if (a == "--real") {
             std::string r = next();
             opt.real = r == "float" ? RealCfg::F32 : r == "df" ? RealCfg::DF64 : RealCfg::F64;
         } else if (a == "--loss") loss = next();
@@ -62,28 +111,29 @@ int cmdBa(int argc, char** argv) {
         else if (a == "--profile") opt.profile = true;
         else if (a == "--quiet") opt.verbose = false;
         else if (a[0] != '-') file = a;
-        else { fprintf(stderr, "unknown arg %s\n", a.c_str()); return 1; }
+        else {
+            fprintf(stderr, "ssplat-sfm ba: error: unknown option %s\n", a.c_str());
+            fprintf(stderr, "Try 'ssplat-sfm ba --help' for more information.\n");
+            return 1;
+        }
     }
 
     // The kernels are compiled into the binary; --spv-path overrides.
     opt.loss = loss;
 
     if (file.empty()) {
-        fprintf(stderr,
-            "usage: %s <bal_problem.txt> [--real float|double|df] [--loss trivial|huber|cauchy]\n"
-            "  [--loss-param X] [--model snavely|snavely_f] [--shared-intrinsics]\n"
-            "  [--max-iters N] [--damping X] [--rtol X] [--patience N] [--ply prefix]\n"
-            "  [--solver auto|dense|cg] [--vram-budget MB] [--cg-iters N] [--cg-tol X]\n"
-            "  [--cg-fallback auto|on|off]\n"
-            "  [--device I] [--validate] [--quiet]\n"
-            "  [--spv-path FILE]\n", "ssplat-sfm ba");
+        fprintf(stderr, "ssplat-sfm ba: error: a BAL problem file is required\n");
+        fprintf(stderr, "Try 'ssplat-sfm ba --help' for more information.\n");
         return 1;
     }
 
     int model_id = -1;
     for (int m = 0; m < kNumModels; m++)
         if (model == kModels[m].name) model_id = m;
-    if (model_id < 0) { fprintf(stderr, "unknown model %s\n", model.c_str()); return 1; }
+    if (model_id < 0) {
+        fprintf(stderr, "ssplat-sfm ba: error: unknown --model %s\n", model.c_str());
+        return 1;
+    }
 
     // both debug hooks pin the solver selection they need
     if (getenv("SSPLAT_SFM_DUMP_SG")) opt.solver = SolverSel::Dense;

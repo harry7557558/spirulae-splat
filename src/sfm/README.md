@@ -54,6 +54,8 @@ images/ ──► extract ──► features/ ─┐
 ## Layout
 
 ```
+SfmConfig.h  the one option surface: the aggregate of every stage's options
+  .cpp         plus the descriptor table the CLI, --help and the GUI all read
 vk/          VkContext.h   the Vulkan compute context every stage builds on
              EmbeddedSpirv.h  lookup for the SPIR-V compiled into the binary
 core/        types shared by every stage, no Vulkan:
@@ -118,15 +120,72 @@ ssplat-sfm merge   sparse/ -o merged/
 ssplat-sfm ba      problem.txt --real df       # solver benchmark on a BAL problem
 ```
 
-`--help` on any subcommand lists its flags. `--quality low|medium|high|extreme`
-sets the working resolution, the feature cap and the pair-selection breadth;
-`--data-type individual|video|internet` sets the pairing mode and how cameras
-are grouped. Everything else has a default that a beginner should not have to
-touch.
+`ssplat-sfm --help` lists the commands, `ssplat-sfm <command> --help` (or
+`ssplat-sfm help <command>`) prints that command's usage, its options with
+their defaults and worked examples, and `ssplat-sfm --version` prints the
+package version. A usage error names the flag, says what was wrong with it and
+points at `--help`; it always exits 1, because `auto` spends exit codes 2 and 3
+on *the reconstruction* being absent or partial.
 
 Environment: `SSPLAT_SFM_MAP_PROF=1` prints a mapper stage breakdown,
 `SSPLAT_SFM_DUMP_SG` / `SSPLAT_SFM_CMP_STEP` are BA solver debug hooks
 (`ba/README.md`).
+
+## Options
+
+`SfmConfig.h` holds the pipeline's whole option surface: the stage option
+structs unchanged (`SiftOptions`, `MatchOptions`, `PairSelectionOptions`,
+`TwoViewOptions`, `CameraSetupOptions`, `MapperOptions`, `ManagerOptions`,
+`MergeOptions`), the pipeline-level knobs that span stages, and
+`SFM_CONFIG_FIELDS` — a descriptor table with one row per flag:
+
+```c
+F(member, name, cmds, tier, group, lo, hi, choices, help)
+```
+
+The table is the single source of truth for the CLI parser, for `--help`, and
+(port plan phase 5) for the GUI's options editor; each is one macro expansion
+over it in `SfmConfig.cpp`, so a new knob is one row and never three edits.
+`cmds` is which subcommands accept the flag — a name may repeat across commands
+with disjoint masks, which is how `--max-error` is the verification tolerance
+for `auto`/`match`/`map` and the *alignment* tolerance for `merge`. `tier` is
+`Basic` (what the GUI shows unfolded: quality, data type, camera model, camera
+sharing, focal, masks, pair mode) or `Advanced`; `Alias` marks a second
+spelling. A `bool` row is a switch and gets both `--name` and `--no-name`, and
+`--help` prints whichever direction changes the default.
+
+Three things stay hand-parsed in `src/app/cli/sfm_main.cpp`, because they do
+not name one scalar field: `--camera-model PREFIX=MODEL` and `--focal PREFIX=F`
+(which also feed the per-group override list), `--no-manage` (four fields at
+once), and the flags that pick what a command *does* rather than how —
+`-o/--output`, `map --audit`, `auto --no-masks`. The CLI offers a token to the
+hand-parsed cases first, so those names always win.
+
+Pipeline knobs are fanned out into the stage structs by `SfmConfig::finalize()`
+and nowhere else, so the CLI and the GUI cannot disagree about what
+`--max-error` (one tolerance, two struct fields — D47), `--device`, `--quiet`
+or the camera settings mean.
+
+`--quality low|medium|high|extreme` sets the working resolution, the feature cap
+and the pair-selection breadth; `--data-type individual|video|internet` sets the
+pairing mode, the seed angle and how cameras are grouped. Both are applied
+*before* the table's overrides, so naming a flag explicitly always wins over the
+preset, and `auto` reports every field a preset moved:
+
+```
+  preset    : --max-image-size 3200 -> 1000
+  preset    : --max-features 8192 -> 2048
+```
+
+Everything else has a default that a beginner should not have to touch.
+
+Two things about the surface changed when it was unified, both deliberate:
+`auto --no-merge` now disables *merging* only, which is what it already meant on
+`map`; skipping the whole merge / grow / prune / reseed loop is `--no-manage`,
+which now exists on both commands. And `auto` accepts every advanced flag
+`extract`, `match` and `map` accept, since it runs those stages — a run can be
+tuned without decomposing it into three commands, and the GUI's editor has one
+command's worth of fields to show.
 
 ## Tests
 

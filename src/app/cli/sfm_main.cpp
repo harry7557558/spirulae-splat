@@ -9,8 +9,14 @@
 //   ssplat-sfm merge   <sparse/>   -o <merged/>
 //   ssplat-sfm ba      <bal_problem.txt>               solver benchmark
 //
-// `--help` on any subcommand prints its flags. The self-checks are separate
-// binaries (src/sfm/tests/, one per area).
+// This file is presentation and plumbing only: what a flag *means* lives in
+// sfm/SfmConfig.h's descriptor table, which is also what `--help` prints and
+// what the GUI will edit. Flags that do not name one scalar field are parsed
+// here, before the table is offered the token, so a hand-parsed name always
+// wins -- `map --audit` (run an audit pass) has to beat the table's `--audit`
+// / `--no-audit` switch for the manage loop's audit stage.
+//
+// The self-checks are separate binaries (src/sfm/tests/, one per area).
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -18,16 +24,12 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <functional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include <random>
-#include <atomic>
-#include <thread>
-
+#include "sfm/SfmConfig.h"
 #include "sfm/core/CameraSetup.h"
 #include "sfm/core/Features.h"
 #include "sfm/core/Image.h"
@@ -44,11 +46,273 @@
 #include "sfm/map/Mapper.h"
 #include "sfm/map/Merge.h"
 
-// `ssplat-sfm ba`, in sfm_ba.cpp.
+// `ssplat-sfm ba`, in sfm_ba.cpp. It prints its own help.
 int cmdBa(int argc, char** argv);
+void printBaHelp(FILE* out);
+
+// Set by the build (cmake/SsplatOptions.cmake reads it from pyproject.toml).
+#ifndef SSPLAT_VERSION
+#define SSPLAT_VERSION "dev"
+#endif
 
 namespace fs = std::filesystem;
 using namespace sfm;
+
+static const char* kProgram = "ssplat-sfm";
+
+// ---------------------------------------------------------------------------
+// Command help
+// ---------------------------------------------------------------------------
+// One record per subcommand: what the top-level list shows, the argument
+// syntax, the paragraph that says what the stage does, the flags this file
+// parses by hand (the table prints the rest), and worked examples. Kept
+// together so the six help screens stay in one shape.
+struct CommandInfo {
+    const char* name;
+    uint32_t mask;
+    const char* summary;      // one line, for `ssplat-sfm --help`
+    const char* usage;        // argument syntax after the command name
+    const char* description;  // pre-wrapped, two-space indented
+    void (*own_options)(FILE*);
+    const char* examples;     // pre-wrapped, two-space indented
+    const char* footer;       // exit status and the like, or nullptr
+};
+
+// One line of a command's own (hand-parsed) options, in the table's layout.
+static void helpLine(FILE* out, const char* flag, const char* value, const char* help) {
+    printOptionLine(out, flag, value, help);
+}
+
+static void ownOptionsAuto(FILE* out) {
+    helpLine(out, "-o, --output DIR", "required",
+        "Workspace to write: features/, matches.bin and sparse/0.. land in it.");
+    helpLine(out, "--no-masks", "",
+        "Ignore a masks directory even if one is sitting beside the images.");
+    helpLine(out, "--no-manage", "",
+        "Skip the whole merge / grow / prune / reseed loop, keeping the mapper's raw output.");
+    helpLine(out, "-h, --help", "", "Show this help and exit.");
+}
+static void ownOptionsExtract(FILE* out) {
+    helpLine(out, "-o, --output DIR|FILE", "features",
+        "Output directory for a directory of images, or the .bin file for a single image.");
+    helpLine(out, "-h, --help", "", "Show this help and exit.");
+}
+static void ownOptionsMatch(FILE* out) {
+    helpLine(out, "-o, --output FILE", "",
+        "Match database to write. Without it the run reports and writes nothing.");
+    helpLine(out, "-h, --help", "", "Show this help and exit.");
+}
+static void ownOptionsMap(FILE* out) {
+    helpLine(out, "-o, --output DIR", "",
+        "Directory to write the models into, as 0/, 1/, ... largest first.");
+    helpLine(out, "--audit", "",
+        "Audit every pose against the correspondence graph before anything else, and "
+        "re-register what the model cannot support. Use with --resume on models from elsewhere.");
+    helpLine(out, "--no-manage", "",
+        "Skip the whole merge / grow / prune / reseed loop.");
+    helpLine(out, "-h, --help", "", "Show this help and exit.");
+}
+static void ownOptionsMerge(FILE* out) {
+    helpLine(out, "-o, --output DIR", "",
+        "Directory to write the merged models into. Required unless --in-place.");
+    helpLine(out, "-h, --help", "", "Show this help and exit.");
+}
+
+static const CommandInfo kCommands[] = {
+    {"auto", CMD_AUTO,
+     "reconstruct a sparse model from a directory of images, in one command",
+     "[IMAGE_DIR|DATASET_DIR] -o WORKSPACE [options]",
+     "  Runs extract -> match -> map -> merge with COLMAP's automatic_reconstructor presets\n"
+     "  and writes WORKSPACE/{features,matches.bin,sparse/0}. A capture that is not one\n"
+     "  connected view graph also writes sparse/1, sparse/2, ... -- the remaining\n"
+     "  components, largest first.\n"
+     "\n"
+     "  The positional defaults to `images`; a dataset directory containing `images/` is\n"
+     "  accepted and that sub-directory used, so `auto DATASET` and `auto DATASET/images`\n"
+     "  behave the same. `masks` beside the image directory is picked up automatically.\n"
+     "\n"
+     "  Two knobs decide the rest: --quality and --data-type. Anything they set can be\n"
+     "  overridden by naming the flag explicitly, and the run reports what they moved.",
+     ownOptionsAuto,
+     "  ssplat-sfm auto images/ -o workspace/\n"
+     "  ssplat-sfm auto -o ws/                       # ./images and ./masks, all defaults\n"
+     "  ssplat-sfm auto DATASET/ -o ws/ --data-type video --quality medium\n"
+     "  ssplat-sfm auto images/ -o ws/ --camera-model opencv-fisheye --focal 520\n"
+     "  ssplat-sfm auto images/ -o ws/ --camera-model cam0=thin-prism-fisheye",
+     "Exit status:\n"
+     "  0  a reconstruction that looks sound\n"
+     "  1  usage or runtime error\n"
+     "  2  no reconstruction at all\n"
+     "  3  partial: under half the images registered, or over 2 px mean reprojection"},
+
+    {"extract", CMD_EXTRACT,
+     "detect SIFT features in an image or a directory of images",
+     "<IMAGE|DIR> [-o OUT] [options]",
+     "  GPU SIFT over one image or, recursively, a directory. A directory reuses one GPU\n"
+     "  context and processes largest-first, so device buffers are allocated once;\n"
+     "  decoding runs on a pool sized to fit --decode-budget, and peak memory does not\n"
+     "  grow with the number of images. Feature files mirror the image tree.\n"
+     "\n"
+     "  Keypoints are written in the *source* image's coordinates even when\n"
+     "  --max-image-size downscaled it, and each file records what EXIF said about the\n"
+     "  focal length and the camera, so `match` and `map` can build intrinsics for the\n"
+     "  images on disk without seeing them (D46).",
+     ownOptionsExtract,
+     "  ssplat-sfm extract images/ -o features/\n"
+     "  ssplat-sfm extract images/ -o features/ --masks masks/ --max-features 4096\n"
+     "  ssplat-sfm extract photo.jpg -o photo.bin",
+     nullptr},
+
+    {"match", CMD_MATCH,
+     "match and geometrically verify a directory of feature files",
+     "<FEATURE_DIR> -o MATCHES.BIN [options]",
+     "  Brute-force descriptor matching on the GPU, then two-view geometric verification\n"
+     "  (F/H RANSAC) on a worker pool fed by the matcher. Verification is where the time\n"
+     "  goes; --threads sizes it and results do not depend on the count.\n"
+     "\n"
+     "  A fisheye --camera-model switches verification to unit bearings, where the\n"
+     "  epipolar constraint holds at any field of view; the focal is searched per camera\n"
+     "  group on a sample of pairs unless --focal or EXIF gives one (D45/D46). The camera\n"
+     "  grouping and the focals this stage settles on travel in the match database, so\n"
+     "  `map` inherits them instead of re-deriving them (D47).",
+     ownOptionsMatch,
+     "  ssplat-sfm match features/ -o matches.bin\n"
+     "  ssplat-sfm match features/ -o matches.bin --pairs prefilter --threads 8\n"
+     "  ssplat-sfm match features/ -o matches.bin --camera-model opencv \\\n"
+     "                             --camera-model cam0=thin-prism-fisheye --focal cam0=520",
+     nullptr},
+
+    {"map", CMD_MAP,
+     "incremental reconstruction: matches to a COLMAP sparse model",
+     "<MATCHES.BIN> <FEATURE_DIR> -o SPARSE_DIR [options]",
+     "  Seed, register, triangulate, bundle-adjust, filter -- then the merge / grow /\n"
+     "  prune / reseed rounds. A capture that is not one connected view graph\n"
+     "  reconstructs as several models, written to <out>/0, <out>/1, ... largest first\n"
+     "  (COLMAP's layout); they are then merged where they share images and grown into\n"
+     "  whatever else they can register.\n"
+     "\n"
+     "  --camera-model and --focal take either a dataset-wide value or PREFIX=VALUE\n"
+     "  naming one camera group by image path, so a rig can mix models. Say nothing\n"
+     "  about cameras and the setup recorded by verification is used as it stands.",
+     ownOptionsMap,
+     "  ssplat-sfm map matches.bin features/ -o sparse/ --images images/\n"
+     "  ssplat-sfm map matches.bin features/ -o sparse/ --max-models 1\n"
+     "  ssplat-sfm map matches.bin features/ --resume sparse/ --check\n"
+     "  ssplat-sfm map matches.bin features/ -o sparse/ --resume sparse/ --audit",
+     nullptr},
+
+    {"merge", CMD_MERGE,
+     "fuse the models of a fragmented capture into fewer",
+     "<SPARSE_DIR|MODEL_DIR> [more...] -o DIR [options]",
+     "  Merges models on the images they share: those give the similarity transform\n"
+     "  between the two gauges (D43). A directory holding 0/, 1/, ... is expanded to all\n"
+     "  of them. Models built from different features cannot be merged.\n"
+     "\n"
+     "  A merged model is two independently optimized halves glued along a seam no\n"
+     "  bundle adjustment has ever seen, so one runs across it afterwards unless --no-ba.",
+     ownOptionsMerge,
+     "  ssplat-sfm merge sparse/ -o merged/\n"
+     "  ssplat-sfm merge sparse/ --in-place\n"
+     "  ssplat-sfm merge runA/sparse/0 runB/sparse/0 -o merged/ --min-common 5",
+     nullptr},
+};
+
+static const CommandInfo* findCommand(const std::string& name) {
+    for (const CommandInfo& c : kCommands)
+        if (name == c.name) return &c;
+    return nullptr;
+}
+
+static void printCommandHelp(const CommandInfo& c) {
+    FILE* out = stdout;
+    std::fprintf(out, "%s %s -- %s\n\n", kProgram, c.name, c.summary);
+    std::fprintf(out, "Usage:\n  %s %s %s\n\n", kProgram, c.name, c.usage);
+    std::fprintf(out, "Description:\n%s\n\n", c.description);
+    std::fprintf(out, "Options:\n");
+    c.own_options(out);
+    // Defaults are printed from a fresh config, which is exactly what the
+    // command starts from; `auto` says separately what its presets then move.
+    SfmConfig defaults;
+    printConfigOptions(out, c.mask, defaults);
+    std::fprintf(out, "\nExamples:\n%s\n", c.examples);
+    if (c.footer) std::fprintf(out, "\n%s\n", c.footer);
+}
+
+static void printTopHelp(FILE* out) {
+    std::fprintf(out, "%s %s -- Structure from Motion for spirulae-splat\n\n", kProgram,
+                 SSPLAT_VERSION);
+    std::fprintf(out, "Usage:\n  %s <command> [options]\n  %s <command> --help\n\n", kProgram,
+                 kProgram);
+    std::fprintf(out, "Commands:\n");
+    for (const CommandInfo& c : kCommands)
+        std::fprintf(out, "  %-9s %s\n", c.name, c.summary);
+    std::fprintf(out, "  %-9s %s\n", "ba", "bundle-adjust a BAL problem (solver benchmark)");
+    std::fprintf(out,
+                 "\nOptions:\n"
+                 "  -h, --help      show this help and exit\n"
+                 "  -V, --version   show the version and exit\n"
+                 "\n"
+                 "Every stage reads and writes COLMAP's formats, so any one of them can be\n"
+                 "replaced by COLMAP's equivalent to bisect a failure. `auto` runs all of them.\n"
+                 "\n"
+                 "Environment:\n"
+                 "  SSPLAT_SFM_MAP_PROF=1   print a per-stage breakdown of the mapper's time\n");
+}
+
+// A usage error, in the shape every command-line tool uses: what was wrong, and
+// where to look. Never exit code 2 or 3 -- `auto` spends those on the quality
+// of the reconstruction, and a batch script must be able to tell them apart.
+static int usageError(const char* cmd, const std::string& msg) {
+    std::fprintf(stderr, "%s %s: error: %s\n", kProgram, cmd, msg.c_str());
+    std::fprintf(stderr, "Try '%s %s --help' for more information.\n", kProgram, cmd);
+    return 1;
+}
+
+// Offer one token to the descriptor table. Returns 1 handled, 0 not a flag of
+// this command, -1 usage error (already reported).
+static int tableFlag(SfmConfig& cfg, uint32_t cmd, const char* cmdname, const std::string& a,
+                     int argc, char** argv, int& i, std::set<std::string>& seen) {
+    std::string err;
+    FieldResult r = setConfigField(cfg, cmd, a, argc, argv, i, seen, err);
+    if (r == FieldResult::Ok) return 1;
+    if (r == FieldResult::Error) { usageError(cmdname, err); return -1; }
+    return 0;
+}
+
+// --camera-model / --focal: a bare value sets the dataset-wide default (which
+// is a table field), PREFIX=VALUE names one camera group (which is not).
+static bool cameraOverride(SfmConfig& cfg, bool is_focal, const std::string& v,
+                           std::set<std::string>& seen, std::string& err) {
+    if (!parseCameraOverride(v, is_focal, cfg.camera.overrides)) {
+        err = std::string("bad --") + (is_focal ? "focal" : "camera-model") + " '" + v + "' (" +
+              (is_focal ? "F or PREFIX=F" : "MODEL or PREFIX=MODEL") + ")";
+        return false;
+    }
+    if (v.find('=') != std::string::npos) return true;  // per-group only
+    if (is_focal) {
+        cfg.focal = std::atof(v.c_str());
+        seen.insert("focal");
+    } else {
+        CamModel m;
+        if (!parseCamModelName(v, m)) {
+            err = "unknown --camera-model '" + v + "'";
+            return false;
+        }
+        cfg.camera_model = v;
+        seen.insert("camera-model");
+    }
+    return true;
+}
+
+// Did the command line say anything about cameras? If not, `map` keeps the
+// setup verification recorded in matches.bin rather than deriving its own (D47).
+static bool sawCameraFlags(const std::set<std::string>& seen) {
+    static const char* kCameraFlags[] = {"camera-mode", "camera-model", "focal", "exif-focal",
+                                         "exif-groups", "exif-focal-tol"};
+    for (const char* f : kCameraFlags)
+        if (seen.count(f)) return true;
+    return false;
+}
 
 static bool isImageExt(const std::string& e) {
     std::string s;
@@ -118,11 +382,6 @@ static void sampleFeatureColors(FeatureSet& fs, const GrayImage& img) {
         sampleColor(img, fs.keypoints[i].x, fs.keypoints[i].y, &fs.colors[(size_t)i * 3]);
 }
 
-// Write every reconstruction the mapper produced as <dir>/0, <dir>/1, ...
-// (D41). This is COLMAP's layout for a dataset that does not form one connected
-// view graph -- `sparse/0` is the model with the most 3D points, and the rest
-// are the components a later merge step can align onto it. A single-model
-// dataset therefore still writes exactly `sparse/0`, as before.
 // Put a freshly extracted set into the source image's frame and attach what
 // EXIF said about the camera. Called once per image, after anything that
 // indexes the *decoded* image (colors, masks) is done.
@@ -132,6 +391,11 @@ static void finishFeatures(FeatureSet& fs, const GrayImage& img) {
     fs.exif_camera = exifCameraKey(img.exif, fs.width, fs.height);
 }
 
+// Write every reconstruction the mapper produced as <dir>/0, <dir>/1, ...
+// (D41). This is COLMAP's layout for a dataset that does not form one connected
+// view graph -- `sparse/0` is the model with the most 3D points, and the rest
+// are the components a later merge step can align onto it. A single-model
+// dataset therefore still writes exactly `sparse/0`, as before.
 static void writeModels(const std::vector<Reconstruction>& models, const fs::path& dir,
                         bool verbose) {
     for (size_t i = 0; i < models.size(); i++) {
@@ -312,12 +576,6 @@ static bool readModels(const std::string& dir, std::vector<Reconstruction>& mode
     return true;
 }
 
-// Whether the final principal-point pass runs unless the CLI says otherwise.
-// Both switches exist either way (`--final-principal-point` /
-// `--no-final-principal-point`) so the default can move without the flags
-// changing meaning.
-static constexpr bool kFinalPrincipalPointDefault = true;
-
 // One last global bundle adjustment per model with the principal point
 // released (D51). COLMAP's documentation: hold it during reconstruction, where
 // it is ill-posed, then "try to refine the principal point in global bundle
@@ -359,6 +617,12 @@ static std::vector<Reconstruction> manageModels(Mapper& mapper,
     return out;
 }
 
+// Is there anything for the manage loop to do? `--no-manage` clears all five,
+// and clearing them individually has to mean the same thing.
+static bool manageEnabled(const ManagerOptions& m) {
+    return m.do_merge || m.do_grow || m.do_reseed || m.do_split || m.do_duplicate_split;
+}
+
 // Feature stems carry no extension; put the real filename (relative to the
 // image dir, so sub-folders survive) back into every model for COLMAP tooling.
 // The directory is walked once, not once per model -- a fragmented capture can
@@ -378,24 +642,6 @@ static void resolveImageNames(std::vector<Reconstruction>& models, const std::st
             auto it = stem2name.find(kv.second.name);
             if (it != stem2name.end()) kv.second.name = it->second;
         }
-}
-
-// How images are grouped into cameras (D17, D40). COLMAP's ImageReader keys its
-// default on the EXIF make/model, which we cannot read yet (D5).
-//
-// Every mode splits on image resolution first and is only then free to group:
-// two images of different sizes cannot share a principal point, so a camera
-// spanning both fits neither (D40). That collapses what used to be two modes --
-// `single` ("one camera for everything") and `auto` ("one per resolution") --
-// into one, since honouring the resolution split is exactly what `auto` did;
-// `auto` remains accepted as a spelling of `single`.
-// Camera grouping (--camera-mode), the distortion model and the starting focal
-// all live in sfm/core/CameraSetup.h, which the CLI drives; --camera-model and
-// --focal accept either a dataset-wide value or PREFIX=VALUE for one group
-// (D46). The accepted model names come from sfm/core/Camera.h's kCamModelInfo
-// table, the single source of truth.
-static bool parseCamModel(const std::string& v, CamModel& out) {
-    return parseCamModelName(v, out);
 }
 
 // Report the grouping decision, one line per camera. Worth printing in full:
@@ -495,9 +741,9 @@ static void warnIfMasksLookInverted(const ExtractStats& st) {
 }
 
 static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
-                            const SiftOptions& opt, int max_image_size, int decode_threads,
-                            int decode_budget_mb, const std::string& maskdir,
-                            ExtractStats& stats) {
+                            const SfmConfig& cfg, ExtractStats& stats) {
+    const SiftOptions& opt = cfg.sift;
+    const std::string& maskdir = cfg.mask_dir;
     // Recursive: datasets that carry per-folder intrinsics (ppisp) keep images
     // in images/<camera>/, and the folder is the grouping key (D17). Feature
     // files mirror the tree so stems from different folders cannot collide.
@@ -554,10 +800,11 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
     fs::create_directories(outdir);
 
     ImageLoadOptions lopt;
-    lopt.max_image_size = max_image_size;
-    lopt.num_threads = decode_threads;
+    lopt.max_image_size = cfg.max_image_size;
+    lopt.num_threads = cfg.decode_threads;
     lopt.want_color = true;  // sample per-keypoint colors while the image is hot
-    if (decode_budget_mb > 0) lopt.memory_budget_bytes = (size_t)decode_budget_mb << 20;
+    if (cfg.decode_budget_mb > 0)
+        lopt.memory_budget_bytes = (size_t)cfg.decode_budget_mb << 20;
 
     // Resolve each image's mask (D39) up front, in the same order as `paths`,
     // so the decode pool can pick them up. Doing it here rather than inside the
@@ -666,59 +913,35 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
 }
 
 static int cmdExtract(int argc, char** argv) {
-    std::string image, output, maskdir;
-    SiftOptions opt;
-    int max_image_size = 3200;
-    int decode_threads = 0;    // batch decode pool; 0 = hardware_concurrency
-    int decode_budget_mb = 0;  // 0 = ImageLoadOptions default
+    SfmConfig cfg;
+    std::set<std::string> seen;
+    std::string image, output;
     for (int i = 0; i < argc; i++) {
         std::string a = argv[i];
-        auto next = [&]() { return std::string(argv[++i]); };
-        if (a == "--output" || a == "-o") output = next();
-        else if (a == "--masks" || a == "--mask-dir") maskdir = next();
-        else if (a == "--max-features") opt.max_num_features = std::stoi(next());
-        else if (a == "--octaves") opt.num_octaves = std::stoi(next());
-        else if (a == "--peak-threshold") opt.peak_threshold = std::stod(next());
-        else if (a == "--edge-threshold") opt.edge_threshold = std::stod(next());
-        else if (a == "--max-orientations") opt.max_num_orientations = std::stoi(next());
-        else if (a == "--max-image-size") max_image_size = std::stoi(next());
-        else if (a == "--decode-threads") decode_threads = std::stoi(next());
-        else if (a == "--decode-budget") decode_budget_mb = std::stoi(next());
-        else if (a == "--device") opt.device = std::stoi(next());
-        else if (a == "--profile") opt.profile = true;
-        else if (a == "--quiet") opt.verbose = false;
-        else if (a == "--spv-path") opt.spv_path = next();
-        else if (a[0] != '-') image = a;
-        else { fprintf(stderr, "unknown arg %s\n", a.c_str()); return 1; }
+        if (a == "--help" || a == "-h") { printCommandHelp(*findCommand("extract")); return 0; }
+        if (a == "--output" || a == "-o") {
+            if (i + 1 >= argc) return usageError("extract", "--output: missing value");
+            output = argv[++i];
+            continue;
+        }
+        int r = tableFlag(cfg, CMD_EXTRACT, "extract", a, argc, argv, i, seen);
+        if (r < 0) return 1;
+        if (r > 0) continue;
+        if (a[0] == '-') return usageError("extract", "unknown option " + a);
+        if (!image.empty())
+            return usageError("extract", "unexpected argument '" + a + "'");
+        image = a;
     }
-    if (image.empty()) {
-        fprintf(stderr,
-                "usage: ssplat-sfm extract <image|dir> [--output FILE|DIR]\n"
-                "  [--masks DIR] [--max-features N] [--octaves N] [--peak-threshold X]\n"
-                "  [--edge-threshold X] [--max-orientations N] [--max-image-size N]\n"
-                "  [--decode-threads N] [--decode-budget MB]\n"
-                "  [--device I] [--profile] [--quiet] [--spv-path FILE]\n"
-                "A directory extracts every image in it to <output>/<name>.bin (default dir\n"
-                "'features'), reusing one GPU context and processing largest-first.\n"
-                "Decoding runs on a pool sized to fit --decode-budget (default 1024 MB);\n"
-                "--decode-threads 1 decodes inline. Peak memory does not grow with the\n"
-                "number of images.\n"
-                "--masks DIR drops keypoints on zero mask pixels; masks are matched by\n"
-                "name (<image>.png, <stem>.png, <stem>_mask.png, ...) and sampled in uv,\n"
-                "so a mask needs no particular resolution.\n"
-                "Keypoints are written in the *source* image's coordinates even when\n"
-                "--max-image-size downscaled it, and each file's EXIF focal length and\n"
-                "camera identity are recorded alongside them, so `match` and `map` can\n"
-                "build intrinsics for the images on disk without seeing them (D46).\n");
-        return 1;
-    }
+    if (std::string err = cfg.finalize(CMD_EXTRACT); !err.empty())
+        return usageError("extract", err);
+    if (image.empty())
+        return usageError("extract", "an image or a directory of images is required");
 
     // ---- directory (batch) ----
     if (fs::is_directory(image)) {
         fs::path outdir = output.empty() ? fs::path("features") : fs::path(output);
         ExtractStats st;
-        int rc = extractDirectory(image, outdir, opt, max_image_size, decode_threads,
-                                  decode_budget_mb, maskdir, st);
+        int rc = extractDirectory(image, outdir, cfg, st);
         if (rc) return rc;
         printf("done: %zu images, %llu features total", st.images,
                (unsigned long long)st.features);
@@ -736,27 +959,28 @@ static int cmdExtract(int argc, char** argv) {
     // One image has no relative path to key on, so the mask is looked up by
     // filename -- MaskIndex's basename fallback resolves it either way.
     std::string maskpath;
-    if (!maskdir.empty()) {
-        maskpath = MaskIndex(maskdir).find(fs::path(image).filename().generic_string());
+    if (!cfg.mask_dir.empty()) {
+        maskpath = MaskIndex(cfg.mask_dir).find(fs::path(image).filename().generic_string());
         if (maskpath.empty())
             fprintf(stderr, "[sfm] WARNING: no mask for %s in %s\n", image.c_str(),
-                    maskdir.c_str());
+                    cfg.mask_dir.c_str());
     }
-    GrayImage img = loadGrayImage(image, max_image_size, /*want_color=*/true, maskpath);
-    if (opt.verbose) fprintf(stderr, "[sfm] %s -> %dx%d gray\n", image.c_str(), img.width, img.height);
-    SiftExtractor ext(opt);
-    FeatureSet fs = ext.extract(img);
-    sampleFeatureColors(fs, img);
-    uint32_t masked_out = applyMask(fs, img.mask);
-    finishFeatures(fs, img);
-    printf("features: %u  dim: %u  image: %dx%d", fs.count(), fs.dim, fs.width, fs.height);
-    if (fs.exif_focal > 0) printf("  exif focal: %.1f px", fs.exif_focal);
+    GrayImage img = loadGrayImage(image, cfg.max_image_size, /*want_color=*/true, maskpath);
+    if (cfg.sift.verbose)
+        fprintf(stderr, "[sfm] %s -> %dx%d gray\n", image.c_str(), img.width, img.height);
+    SiftExtractor ext(cfg.sift);
+    FeatureSet fset = ext.extract(img);
+    sampleFeatureColors(fset, img);
+    uint32_t masked_out = applyMask(fset, img.mask);
+    finishFeatures(fset, img);
+    printf("features: %u  dim: %u  image: %dx%d", fset.count(), fset.dim, fset.width, fset.height);
+    if (fset.exif_focal > 0) printf("  exif focal: %.1f px", fset.exif_focal);
     if (!img.mask.empty())
         printf("  mask: %dx%d, %u masked out", img.mask.width, img.mask.height, masked_out);
     printf("\n");
     if (!output.empty()) {
-        writeFeatures(output, fs);
-        if (opt.verbose) fprintf(stderr, "[sfm] wrote %s\n", output.c_str());
+        writeFeatures(output, fset);
+        if (cfg.sift.verbose) fprintf(stderr, "[sfm] wrote %s\n", output.c_str());
     }
     return 0;
 }
@@ -791,11 +1015,13 @@ struct VerifyCalibration {
     bool used_bearings = false;
 };
 
-static int matchFeatureDir(const std::string& featdir, std::vector<FeatureSet>& feats,
-                           MatchesDatabase& db, const MatchOptions& opt, PairMode mode,
-                           int overlap, const PairSelectionOptions& popt, bool verify,
-                           const TwoViewOptions& tvopt, int threads, bool verbose,
+static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, PairMode mode,
+                           bool verify, std::vector<FeatureSet>& feats, MatchesDatabase& db,
                            MatchStats& stats, VerifyCalibration* calib = nullptr) {
+    const MatchOptions& opt = cfg.match;
+    const PairSelectionOptions& popt = cfg.prefilter;
+    const TwoViewOptions& tvopt = cfg.twoview;
+    const bool verbose = !cfg.quiet;
     // Load every features.bin under the directory (recursively -- the tree
     // mirrors the image tree), sorted by name for stable indices. The image
     // name is the relative path without ".bin", which is also COLMAP's
@@ -837,7 +1063,7 @@ static int matchFeatureDir(const std::string& featdir, std::vector<FeatureSet>& 
                     pairs.size(), stats.scored, popt.num_features, popt.num_neighbors,
                     stats.select_seconds);
     } else {
-        pairs = generatePairs((uint32_t)files.size(), mode, overlap);
+        pairs = generatePairs((uint32_t)files.size(), mode, cfg.overlap);
     }
     stats.pairs = pairs.size();
     if (verbose)
@@ -865,7 +1091,7 @@ static int matchFeatureDir(const std::string& featdir, std::vector<FeatureSet>& 
         // matcher -- it is the pipeline's dominant cost, see sfm/feature/Verification.h.
         VerificationOptions vopt;
         vopt.two_view = tvopt;
-        vopt.num_threads = threads;
+        vopt.num_threads = cfg.threads;
         vopt.match_batch_pairs = opt.batch_pairs;
 
         // Calibrated verification (D45), for fisheye captures only: see
@@ -892,7 +1118,7 @@ static int matchFeatureDir(const std::string& featdir, std::vector<FeatureSet>& 
                     for (size_t k = b; k < e; k++) sm.push_back(std::move(chunk[k - b]));
                 }
                 bootstrapGroupFocals(feats, cs.ids, sample, sm, cs.cameras, cs.focal_given, tvopt,
-                                     calib->sample_pairs, threads, verbose);
+                                     calib->sample_pairs, cfg.threads, verbose);
                 std::vector<Camera> percam(feats.size());
                 for (size_t i = 0; i < feats.size(); i++) percam[i] = cs.cameras.at(cs.ids[i]);
                 double t_b = now();
@@ -945,103 +1171,44 @@ static int matchFeatureDir(const std::string& featdir, std::vector<FeatureSet>& 
 }
 
 static int cmdMatch(int argc, char** argv) {
+    SfmConfig cfg;
+    std::set<std::string> seen;
     std::string featdir, output;
-    MatchOptions opt;
-    PairMode mode = PairMode::Exhaustive;
-    PairSelectionOptions popt;
-    int overlap = 10;
-    bool verbose = true, verify = true;
-    int threads = 0;  // 0 = hardware_concurrency
-    TwoViewOptions tvopt;
-    VerifyCalibration calib;
     for (int i = 0; i < argc; i++) {
         std::string a = argv[i];
-        auto next = [&]() { return std::string(argv[++i]); };
-        if (a == "--output" || a == "-o") output = next();
-        else if (a == "--ratio") opt.max_ratio = std::stof(next());
-        else if (a == "--no-cross-check") opt.cross_check = false;
-        else if (a == "--max-matches") opt.max_num_matches = (uint32_t)std::stoul(next());
-        else if (a == "--pairs") {
-            std::string m = next();
-            if (m == "sequential") mode = PairMode::Sequential;
-            else if (m == "prefilter") mode = PairMode::Prefilter;
-            else if (m == "exhaustive") mode = PairMode::Exhaustive;
-            else { fprintf(stderr, "unknown --pairs %s\n", m.c_str()); return 1; }
+        if (a == "--help" || a == "-h") { printCommandHelp(*findCommand("match")); return 0; }
+        if (a == "--output" || a == "-o") {
+            if (i + 1 >= argc) return usageError("match", "--output: missing value");
+            output = argv[++i];
+            continue;
         }
-        else if (a == "--overlap") overlap = std::stoi(next());
-        else if (a == "--prefilter-features") popt.num_features = (uint32_t)std::stoul(next());
-        else if (a == "--prefilter-train") popt.train_features = (uint32_t)std::stoul(next());
-        else if (a == "--prefilter-neighbors") popt.num_neighbors = (uint32_t)std::stoul(next());
-        else if (a == "--prefilter-min-score") popt.min_score = (uint32_t)std::stoul(next());
-        else if (a == "--prefilter-ratio") popt.ratio = std::stof(next());
-        else if (a == "--no-verify") verify = false;
-        else if (a == "--camera-model") {
-            std::string v = next();
-            if (!parseCameraOverride(v, /*is_focal=*/false, calib.setup.overrides)) {
-                fprintf(stderr, "bad --camera-model %s (MODEL or PREFIX=MODEL)\n", v.c_str());
-                return 1;
-            }
-            if (v.find('=') == std::string::npos) parseCamModel(v, calib.setup.model);
+        if (a == "--camera-model" || a == "--focal") {
+            if (i + 1 >= argc) return usageError("match", a + ": missing value");
+            std::string err;
+            if (!cameraOverride(cfg, a == "--focal", argv[++i], seen, err))
+                return usageError("match", err);
+            continue;
         }
-        else if (a == "--camera-mode") {
-            if (!parseCameraMode(next(), calib.setup.mode)) { fprintf(stderr, "bad --camera-mode\n"); return 1; }
-            calib.setup.mode_explicit = true;
-        }
-        else if (a == "--focal") {
-            std::string v = next();
-            if (!parseCameraOverride(v, /*is_focal=*/true, calib.setup.overrides)) {
-                fprintf(stderr, "bad --focal %s (F or PREFIX=F)\n", v.c_str());
-                return 1;
-            }
-            if (v.find('=') == std::string::npos) calib.setup.focal = std::stod(v);
-        }
-        else if (a == "--no-exif-focal") calib.setup.exif_focal = false;
-        else if (a == "--exif-groups") calib.setup.exif_groups = true;
-        else if (a == "--no-exif-groups") calib.setup.exif_groups = false;
-        else if (a == "--max-error") tvopt.ransac.max_error = std::stod(next());
-        else if (a == "--min-inliers") tvopt.min_num_inliers = std::stoi(next());
-        else if (a == "--threads") threads = std::stoi(next());
-        else if (a == "--device") opt.device = std::stoi(next());
-        else if (a == "--quiet") verbose = false;
-        else if (a[0] != '-') featdir = a;
-        else { fprintf(stderr, "unknown arg %s\n", a.c_str()); return 1; }
+        int r = tableFlag(cfg, CMD_MATCH, "match", a, argc, argv, i, seen);
+        if (r < 0) return 1;
+        if (r > 0) continue;
+        if (a[0] == '-') return usageError("match", "unknown option " + a);
+        if (!featdir.empty()) return usageError("match", "unexpected argument '" + a + "'");
+        featdir = a;
     }
-    if (featdir.empty()) {
-        fprintf(stderr, "usage: ssplat-sfm match <features_dir> --output matches.bin\n"
-                        "  [--pairs exhaustive|sequential|prefilter] [--overlap N] [--ratio X]\n"
-                        "  [--prefilter-features K] [--prefilter-neighbors N] [--prefilter-min-score S]\n"
-                        "  [--no-cross-check] [--max-matches N] [--no-verify]\n"
-                        "  [--max-error PX]  inlier radius in pixels of the image SIFT\n"
-                        "     ran on, not of the source file (default 3, D47)\n"
-                        "  [--min-inliers N] [--threads N]\n"
-                        "  [--camera-model M|PREFIX=M] [--camera-mode single|folder|image]\n"
-                        "  [--focal F|PREFIX=F] [--no-exif-focal] [--no-exif-groups]\n"
-                        "  [--device I] [--quiet]\n"
-                        "Geometric verification (F/H RANSAC) runs by default; --no-verify\n"
-                        "keeps raw putative matches. Verification is parallel over pairs\n"
-                        "(--threads 0 = all cores, 1 = serial); results do not depend on it.\n"
-                        "A fisheye --camera-model switches verification to unit bearings,\n"
-                        "where the epipolar constraint holds at any field of view; the focal\n"
-                        "is searched per camera group on a sample of pairs unless --focal or\n"
-                        "EXIF gives one (D45/D46). --camera-model and --focal take either a\n"
-                        "dataset-wide value or PREFIX=VALUE naming one group by path, so a\n"
-                        "rig can mix models: --camera-model opencv --camera-model\n"
-                        "cam0=thin-prism-fisheye --focal cam0=520\n"
-                        "--pairs prefilter scores every pair by mini-matching the K (256)\n"
-                        "largest-scale features and fully matches only each image's N (32)\n"
-                        "best-scoring partners -- the escape from exhaustive O(N^2) matching.\n");
-        return 1;
-    }
-    popt.device = opt.device;
-    popt.batch_pairs = std::max(popt.batch_pairs, opt.batch_pairs);
+    if (std::string err = cfg.finalize(CMD_MATCH); !err.empty())
+        return usageError("match", err);
+    if (featdir.empty()) return usageError("match", "a feature directory is required");
 
+    VerifyCalibration calib;
+    calib.setup = cfg.camera;
     std::vector<FeatureSet> feats;
     MatchesDatabase db;
     MatchStats stats;
-    if (int rc = matchFeatureDir(featdir, feats, db, opt, mode, overlap, popt, verify, tvopt,
-                                 threads, verbose, stats, &calib))
+    if (int rc = matchFeatureDir(featdir, cfg, cfg.pairMode(), cfg.verify, feats, db, stats,
+                                 &calib))
         return rc;
-    if (verify)
+    if (cfg.verify)
         printf("matched %zu/%zu pairs (>=1 inlier), %llu inlier / %llu putative matches\n",
                stats.kept, stats.pairs, (unsigned long long)stats.inliers,
                (unsigned long long)stats.putative);
@@ -1050,149 +1217,60 @@ static int cmdMatch(int argc, char** argv) {
                stats.pairs, (unsigned long long)stats.inliers);
     if (!output.empty()) {
         writeMatches(output, db);
-        if (verbose) fprintf(stderr, "[match] wrote %s\n", output.c_str());
+        if (!cfg.quiet) fprintf(stderr, "[match] wrote %s\n", output.c_str());
     }
     return 0;
 }
 
 // -----------------------------------------------------------------------
-// selftest
+// map
 // -----------------------------------------------------------------------
 
-// -----------------------------------------------------------------------
 static int cmdMap(int argc, char** argv) {
-    std::string matchesPath, featdir, output, imagedir, resume;
-    bool audit_first = false, check_only = false;
-    MapperOptions opt;
-    ManagerOptions mgopt;
-    // CLI defaults, which are deliberately not MapperOptions' library defaults:
-    // per-folder grouping and OpenCV distortion are what a real capture wants
-    // (D40), while the library keeps the minimal RADIAL model so the synthetic
-    // self-tests stay on the model they were written against.
-    CameraSetupOptions sopt;
-    sopt.model = opt.camera_model = CamModel::OpenCV;
-    // Did the user say anything about cameras? If not, the setup recorded by
-    // verification wins over anything this command would derive (D47).
-    bool cam_args = false;
-    bool final_pp = kFinalPrincipalPointDefault;   // one PP-free global BA at the end (D51)
+    SfmConfig cfg;
+    std::set<std::string> seen;
+    std::string matchesPath, output;
+    bool audit_first = false;
     for (int i = 0; i < argc; i++) {
         std::string a = argv[i];
-        auto next = [&]() { return std::string(argv[++i]); };
-        if (a == "--output" || a == "-o") output = next();
-        else if (a == "--camera-mode") {
-            if (!parseCameraMode(next(), sopt.mode)) { fprintf(stderr, "bad --camera-mode\n"); return 1; }
-            sopt.mode_explicit = true;
-            cam_args = true;
+        if (a == "--help" || a == "-h") { printCommandHelp(*findCommand("map")); return 0; }
+        if (a == "--output" || a == "-o") {
+            if (i + 1 >= argc) return usageError("map", "--output: missing value");
+            output = argv[++i];
+            continue;
         }
-        else if (a == "--camera-model") {
-            std::string v = next();
-            if (!parseCameraOverride(v, /*is_focal=*/false, sopt.overrides)) {
-                fprintf(stderr, "bad --camera-model %s (MODEL or PREFIX=MODEL)\n", v.c_str());
-                return 1;
-            }
-            if (v.find('=') == std::string::npos) parseCamModel(v, sopt.model);
-            cam_args = true;
+        // Before the table, which also owns "audit" -- as the *manage* loop's
+        // audit stage (--no-audit). Here the positive spelling is the one-shot
+        // pass over adopted models, which is what it has always meant.
+        if (a == "--audit") { audit_first = true; continue; }
+        if (a == "--no-manage") {
+            cfg.manager.do_merge = cfg.manager.do_grow = cfg.manager.do_reseed = false;
+            cfg.manager.do_audit = cfg.manager.do_split = cfg.manager.do_duplicate_split = false;
+            continue;
         }
-        else if (a == "--features") featdir = next();
-        else if (a == "--images") imagedir = next();
-        else if (a == "--focal") {
-            std::string v = next();
-            if (!parseCameraOverride(v, /*is_focal=*/true, sopt.overrides)) {
-                fprintf(stderr, "bad --focal %s (F or PREFIX=F)\n", v.c_str());
-                return 1;
-            }
-            if (v.find('=') == std::string::npos) sopt.focal = std::stod(v);
-            cam_args = true;
+        if (a == "--camera-model" || a == "--focal") {
+            if (i + 1 >= argc) return usageError("map", a + ": missing value");
+            std::string err;
+            if (!cameraOverride(cfg, a == "--focal", argv[++i], seen, err))
+                return usageError("map", err);
+            continue;
         }
-        else if (a == "--no-exif-focal") { sopt.exif_focal = false; cam_args = true; }
-        else if (a == "--exif-groups") { sopt.exif_groups = true; cam_args = true; }
-        else if (a == "--no-exif-groups") { sopt.exif_groups = false; cam_args = true; }
-        else if (a == "--max-error") opt.max_reproj_error = std::stod(next());
-        else if (a == "--focal-trials") opt.focal_trials = std::stoi(next());
-        else if (a == "--refine-principal-point") opt.refine_principal_point = true;
-        else if (a == "--no-final-principal-point") final_pp = false;
-        else if (a == "--final-principal-point") final_pp = true;
-        else if (a == "--pp-min-images") opt.pp_min_images = (size_t)std::stoul(next());
-        else if (a == "--min-tri-angle") opt.min_tri_angle_deg = std::stod(next());
-        else if (a == "--min-pnp-inliers") opt.min_num_pnp_inliers = std::stoi(next());
-        else if (a == "--min-pnp-ratio") opt.min_pnp_inlier_ratio = std::stod(next());
-        else if (a == "--min-image-points") opt.min_image_points = std::stoi(next());
-        else if (a == "--ba-loss") opt.ba_loss = next();
-        else if (a == "--ba-loss-param") opt.ba_loss_param = std::stod(next());
-        else if (a == "--retri-scale") opt.retri_scale = std::stod(next());
-        else if (a == "--ba-growth") opt.ba_growth_ratio = std::stod(next());
-        else if (a == "--ba-growth-rtol") opt.ba_growth_rtol = std::stod(next());
-        else if (a == "--ba-growth-patience") opt.ba_growth_patience = std::stoi(next());
-        else if (a == "--max-models") opt.max_num_models = std::stoi(next());
-        else if (a == "--model-overlap") opt.max_model_overlap = std::stoi(next());
-        else if (a == "--min-model-size") opt.min_model_size = std::stoi(next());
-        else if (a == "--resume") resume = next();
-        else if (a == "--audit") audit_first = true;
-        else if (a == "--audit-evidence") opt.audit_min_evidence = std::stoi(next());
-        else if (a == "--rounds") mgopt.max_rounds = std::stoi(next());
-        else if (a == "--check") check_only = true;
-        else if (a == "--no-manage") {
-            mgopt.do_merge = mgopt.do_grow = mgopt.do_reseed = mgopt.do_audit = false;
-        }
-        else if (a == "--no-merge") mgopt.do_merge = false;
-        else if (a == "--no-grow") mgopt.do_grow = false;
-        else if (a == "--no-reseed") mgopt.do_reseed = false;
-        else if (a == "--no-audit") mgopt.do_audit = false;
-        else if (a == "--no-split") mgopt.do_split = false;
-        else if (a == "--fold-split") mgopt.do_duplicate_split = true;
-        else if (a == "--no-fold-split") mgopt.do_duplicate_split = false;
-        else if (a == "--fold-max-cut") mgopt.duplicate.max_cut_fraction = std::stod(next());
-        else if (a == "--no-joint-ba") mgopt.do_joint_ba = false;
-        else if (a == "--device") opt.device = std::stoi(next());
-        else if (a == "--quiet") opt.verbose = false;
-        else if (a[0] != '-' && matchesPath.empty()) matchesPath = a;
-        else if (a[0] != '-' && featdir.empty()) featdir = a;
-        else { fprintf(stderr, "unknown arg %s\n", a.c_str()); return 1; }
+        int r = tableFlag(cfg, CMD_MAP, "map", a, argc, argv, i, seen);
+        if (r < 0) return 1;
+        if (r > 0) continue;
+        if (a[0] == '-') return usageError("map", "unknown option " + a);
+        if (matchesPath.empty()) matchesPath = a;
+        else if (cfg.feature_dir.empty()) cfg.feature_dir = a;
+        else return usageError("map", "unexpected argument '" + a + "'");
     }
-    if (matchesPath.empty() || featdir.empty()) {
-        fprintf(stderr, "usage: ssplat-sfm map <matches.bin> <features_dir> --output sparse/\n"
-                        "  [--camera-mode single|folder|image]  (default folder)\n"
-                        "  [--camera-model M|PREFIX=M]  (default opencv; one of\n"
-                        "     simple-pinhole|pinhole|radial|opencv|full-opencv|opencv-fisheye|\n"
-                        "     thin-prism-fisheye|equirectangular) [--focal F|PREFIX=F]\n"
-                        "     PREFIX names one camera group by image path, so a rig can mix\n"
-                        "  [--refine-principal-point]  (refine cx,cy throughout; off, as in\n"
-                        "     COLMAP: it is nearly the same parameter as a camera rotation, D50.\n"
-                        "  [--no-final-principal-point] [--pp-min-images N]  one PP-free global\n"
-                        "     BA on the finished model, when it has ONE camera group of >= N (20)\n"
-                        "     images. On: worth 8-24 AUC where the lens really is decentred,\n"
-                        "     ~1 where it is not, and skipped on rigs (D51)\n"
-                        "     models and known with unknown focals (D46)\n"
-                        "  [--no-exif-focal]  ignore the focal length EXIF recorded\n"
-                        "  [--no-exif-groups]  do not split camera groups by what EXIF says\n"
-                        "     the camera and its focal setting were\n"
-                        "  [--max-error PX]  inlier radius in pixels of the image SIFT\n"
-                        "     ran on, not of the source file (default 3, D47)\n"
-                        "  [--focal-trials N]  trial reconstructions used to pick the focal\n"
-                        "     when the motion cannot determine it (D48); 0 = off, default 5\n"
-                        "  [--min-tri-angle DEG]\n"
-                        "  [--ba-growth RATIO] [--ba-growth-rtol TOL (0 = solver default)]\n"
-                        "  [--max-models N] (default 50, 1 = single model)\n"
-                        "  [--model-overlap N] [--min-model-size N]\n"
-                        "  [--resume DIR]  adopt the models in DIR instead of mapping from\n"
-                        "     scratch, and run the merge/grow loop on them (D44)\n"
-                        "  [--rounds N] [--no-manage] [--no-merge] [--no-grow] [--no-reseed]\n"
-                        "  [--audit] [--no-audit] [--audit-evidence N]\n"
-                        "  [--no-split] [--no-joint-ba]\n"
-                        "  [--no-fold-split]  keep a model that has written two places on\n"
-                        "     top of each other; the split is on by default and is taken only\n"
-                        "     when it severs almost no co-visibility (D46), which is what\n"
-                        "     separates a fold from a dense capture. `--check` reports both\n"
-                        "  [--check]  with --resume: report how well each model agrees with\n"
-                        "     the verified two-view geometries it was built from, and what\n"
-                        "     splitting it would do; changes nothing and writes nothing\n"
-                        "  [--images DIR] [--device I] [--quiet]\n"
-                        "A capture that is not one connected view graph reconstructs as\n"
-                        "several models, written to <output>/0, <output>/1, ... largest\n"
-                        "first (COLMAP's layout). They are then merged where they share\n"
-                        "images and grown into whatever else they can register.\n");
-        return 1;
-    }
+    if (std::string err = cfg.finalize(CMD_MAP); !err.empty()) return usageError("map", err);
+    if (matchesPath.empty() || cfg.feature_dir.empty())
+        return usageError("map", "a match database and a feature directory are required");
+
+    MapperOptions& opt = cfg.mapper;
+    ManagerOptions& mgopt = cfg.manager;
+    const std::string& featdir = cfg.feature_dir;
+
     MatchesDatabase db = readMatches(matchesPath);
     std::vector<FeatureSet> feats(db.images.size());
     for (size_t i = 0; i < db.images.size(); i++)
@@ -1200,11 +1278,12 @@ static int cmdMap(int argc, char** argv) {
 
     // The camera setup, in order of authority: what the command line asked for,
     // else what verification recorded in matches.bin (D47), else derived here.
+    const bool cam_args = sawCameraFlags(seen) || !cfg.camera.overrides.empty();
     CameraSetup cs;
     const bool from_db = !cam_args && loadCameraSetup(db, cs);
-    if (!from_db) cs = buildCameras(db.images, feats, sopt);
+    if (!from_db) cs = buildCameras(db.images, feats, cfg.camera);
     if (opt.verbose) {
-        printCameraSetup("map", cs, sopt, db.images.size());
+        printCameraSetup("map", cs, cfg.camera, db.images.size());
         if (from_db)
             fprintf(stderr, "[map] camera setup taken from %s (as verified)\n",
                     matchesPath.c_str());
@@ -1238,13 +1317,13 @@ static int cmdMap(int argc, char** argv) {
 
     Mapper mapper(db, feats, opt, cs.ids);
     std::vector<Reconstruction> models;
-    if (resume.empty()) {
+    if (cfg.resume.empty()) {
         models = mapper.run();
     } else {
         // Adopt what a previous run wrote and work on it instead. The models
         // must come from this database (image ids are positions in it); adopt()
         // checks the names and says so if they do not.
-        if (!readModels(resume, models, opt.verbose)) return 1;
+        if (!readModels(cfg.resume, models, opt.verbose)) return 1;
         printf("resumed %zu model(s) covering %zu/%zu images\n", models.size(),
                distinctRegistered(models), db.images.size());
     }
@@ -1257,7 +1336,7 @@ static int cmdMap(int argc, char** argv) {
     // was built from? A model welded together at a wrong relative pose is
     // internally perfect and fails no other test, but the verified pairs that
     // span the weld do not hold, and the images fall into disconnected groups.
-    if (check_only) {
+    if (cfg.check) {
         for (size_t i = 0; i < models.size(); i++) {
             Mapper::SplitStats ss;
             std::vector<Reconstruction> parts = mapper.splitInconsistent(
@@ -1310,27 +1389,19 @@ static int cmdMap(int argc, char** argv) {
     if (audit_first) {
         for (size_t i = 0; i < models.size(); i++) {
             Mapper::AuditStats as;
-            const uint32_t before = models[i].numRegistered();
             models[i] = mapper.audit(models[i], &as);
             printf("audit model %zu: %u images checked, %u unsupported, %u re-registered, "
                    "%u dropped -> %u images\n",
                    i, as.checked, as.unsupported, as.reregistered, as.deregistered,
                    models[i].numRegistered());
-            (void)before;
         }
     }
 
     ManagerStats mst;
     double t_manage = 0;
-    mgopt.verbose = opt.verbose;
-    mgopt.merge.verbose = opt.verbose;
-    mgopt.merge.filter_reproj_error = opt.max_reproj_error;
-    mgopt.merge.min_tri_angle_deg = opt.min_tri_angle_deg;
-    mgopt.merge.min_image_points = opt.min_image_points;
-    if (mgopt.do_merge || mgopt.do_grow || mgopt.do_reseed || mgopt.do_split ||
-        mgopt.do_duplicate_split)
+    if (manageEnabled(mgopt))
         models = manageModels(mapper, std::move(models), mgopt, mst, t_manage);
-    if (final_pp) {
+    if (cfg.final_principal_point) {
         double t_pp = 0;
         models = polishModels(mapper, std::move(models), opt.verbose, t_pp);
     }
@@ -1341,7 +1412,7 @@ static int cmdMap(int argc, char** argv) {
                mst.rounds, mst.merges, mst.grown_images, mst.audited_repaired, mst.audited_out,
                models.size(), mst.covered_before, mst.covered_after, t_manage);
 
-    resolveImageNames(models, imagedir);
+    resolveImageNames(models, cfg.image_dir);
 
     const Reconstruction& rec = models.front();
     double mean = 0, median = 0;
@@ -1364,57 +1435,41 @@ static int cmdMap(int argc, char** argv) {
 // -----------------------------------------------------------------------
 
 static int cmdMerge(int argc, char** argv) {
+    SfmConfig cfg;
+    std::set<std::string> seen;
     std::vector<std::string> inputs;
     std::string output;
-    MergeOptions mo;
-    bool refine = true, in_place = false;
-    int device = -1;
     for (int i = 0; i < argc; i++) {
         std::string a = argv[i];
-        auto next = [&]() { return std::string(argv[++i]); };
-        if (a == "--output" || a == "-o") output = next();
-        else if (a == "--max-error") mo.max_reproj_error = std::stod(next());
-        else if (a == "--min-common") mo.min_common_images = std::stoi(next());
-        else if (a == "--min-inlier-ratio") mo.min_inlier_ratio = std::stod(next());
-        else if (a == "--filter-error") mo.filter_reproj_error = std::stod(next());
-        else if (a == "--min-tri-angle") mo.min_tri_angle_deg = std::stod(next());
-        else if (a == "--no-ba") refine = false;
-        else if (a == "--in-place") in_place = true;
-        else if (a == "--device") device = std::stoi(next());
-        else if (a == "--quiet") mo.verbose = false;
-        else if (a[0] != '-') inputs.push_back(a);
-        else { fprintf(stderr, "unknown arg %s\n", a.c_str()); return 1; }
+        if (a == "--help" || a == "-h") { printCommandHelp(*findCommand("merge")); return 0; }
+        if (a == "--output" || a == "-o") {
+            if (i + 1 >= argc) return usageError("merge", "--output: missing value");
+            output = argv[++i];
+            continue;
+        }
+        int r = tableFlag(cfg, CMD_MERGE, "merge", a, argc, argv, i, seen);
+        if (r < 0) return 1;
+        if (r > 0) continue;
+        if (a[0] == '-') return usageError("merge", "unknown option " + a);
+        inputs.push_back(a);
     }
-    if (inputs.empty() || (output.empty() && !in_place)) {
-        fprintf(stderr,
-                "usage: ssplat-sfm merge <sparse_dir | model_dir> [more...] --output DIR\n"
-                "  a directory holding 0/, 1/, ... is expanded to all of them\n"
-                "  [--max-error PX]       alignment inlier threshold (default 8)\n"
-                "  [--min-common N]       shared images an alignment needs (default 3)\n"
-                "  [--min-inlier-ratio R] of the shared images (default 0.3)\n"
-                "  [--filter-error PX] [--min-tri-angle DEG]  post-merge filtering\n"
-                "  [--no-ba]              skip the bundle adjustment across the seams\n"
-                "  [--in-place]           write back over the input directory\n"
-                "  [--device I] [--quiet]\n"
-                "Merges the models of a fragmented capture (D41) on the images they\n"
-                "share: those give the similarity transform between the two gauges.\n"
-                "Models built from different features cannot be merged.\n");
-        return 1;
-    }
+    if (std::string err = cfg.finalize(CMD_MERGE); !err.empty()) return usageError("merge", err);
+    if (inputs.empty()) return usageError("merge", "at least one model directory is required");
+    if (output.empty() && !cfg.in_place)
+        return usageError("merge", "--output is required (or --in-place)");
 
+    const MergeOptions& mo = cfg.merge;
     std::vector<fs::path> dirs;
     for (const std::string& in : inputs)
         if (!collectModelDirs(in, dirs)) return 1;
-    if (in_place) {
-        if (inputs.size() != 1) {
-            fprintf(stderr, "merge: --in-place takes exactly one input directory\n");
-            return 1;
-        }
+    if (cfg.in_place) {
+        if (inputs.size() != 1)
+            return usageError("merge", "--in-place takes exactly one input directory");
         if (output.empty()) output = inputs[0];
     }
     // Writing merged models over their own inputs is destructive (model 0 is
     // replaced and the absorbed ones are removed), so it has to be asked for.
-    if (!in_place)
+    if (!cfg.in_place)
         for (const fs::path& d : dirs)
             if (fs::exists(output) && fs::equivalent(fs::path(output), d.parent_path())) {
                 fprintf(stderr,
@@ -1442,7 +1497,7 @@ static int cmdMerge(int argc, char** argv) {
     const size_t covered_before = distinctRegistered(models);
 
     MergeSummary sum;
-    models = mergeModels(std::move(models), mo, refine, device, sum);
+    models = mergeModels(std::move(models), mo, cfg.merge_ba, cfg.device, sum);
 
     printf("merged %zu -> %zu model(s) in %.2f s (%zu merge(s), %zu refused",
            sum.before, sum.after, sum.seconds, sum.merges, sum.refused);
@@ -1463,7 +1518,7 @@ static int cmdMerge(int argc, char** argv) {
     writeModels(models, fs::path(output), mo.verbose);
     // In place, the models that were absorbed must not stay behind as stale
     // directories claiming to be reconstructions.
-    if (in_place)
+    if (cfg.in_place)
         for (const fs::path& d : dirs) {
             const std::string name = d.filename().string();
             if (d.parent_path() != fs::path(output) || name.empty() ||
@@ -1485,178 +1540,53 @@ static int cmdMerge(int argc, char** argv) {
 // The equivalent of COLMAP's `automatic_reconstructor`: pick sane settings from
 // two knobs (quality, data type), run extract -> match -> map in one process,
 // and lay the workspace out the way COLMAP does so existing tooling reads it.
-//
-// Presets mirror COLMAP's OptionManager::ModifyFor*Quality() as fractions of
-// the SIFT extractor's 3200 px default, and ModifyForVideoData()'s halved
-// initial triangulation angle. Above COLMAP's 200-image exhaustive cutoff --
-// where COLMAP switches to vocabulary-tree retrieval -- we switch to GPU pair
-// selection (sfm/feature/PairSelection.h, D35) unless --pairs was given explicitly.
-enum class Quality { Low, Medium, High, Extreme };
-enum class DataType { Individual, Video, Internet };
+// The presets themselves live in SfmConfig.cpp's applyPresets, next to the
+// table they move, and report what they moved.
 
 static int cmdAuto(int argc, char** argv) {
-    std::string imagedir, maskdir, workspace;
+    SfmConfig cfg;
+    std::set<std::string> seen;
+    std::string imagedir, workspace;
     bool maskdir_explicit = false;
-    Quality quality = Quality::High;  // COLMAP's default
-    DataType data_type = DataType::Individual;
-    CameraSetupOptions sopt_cam;
-    bool cmode_explicit = false;
-    int max_num_models = MapperOptions().max_num_models;
-    // Merging is on by default (D43): a fragmented capture's models are only
-    // separate because the mapper had no way to relate their gauges, and the
-    // images they share are exactly that relation. It is a no-op on a capture
-    // that reconstructs as one model.
-    bool merge = true;
-    MergeOptions mopt_merge;
-    ManagerOptions mgopt;
-    int overlap = 10, threads = 0, decode_threads = 0, decode_budget_mb = 0, device = -1;
-    // The one geometric tolerance, in extraction pixels (D47): the two-view
-    // verifier's inlier radius and the mapper's reprojection cap are the same
-    // quantity measured in the same frame, and moving them apart has never
-    // been what a caller wanted.
-    double max_error = 0;   // 0 = each stage's own default
-    int focal_trials = -1;  // -1 = the mapper's default
-    bool refine_pp = false;
-    bool final_pp = kFinalPrincipalPointDefault;   // one PP-free global BA at the end (D51)
-    size_t pp_min_images = MapperOptions().pp_min_images;
-    bool verbose = true;
-    PairMode pairs_override = PairMode::Exhaustive;
-    bool pairs_explicit = false;
     for (int i = 0; i < argc; i++) {
         std::string a = argv[i];
-        auto next = [&]() { return std::string(argv[++i]); };
-        if (a == "--output" || a == "-o") workspace = next();
-        else if (a == "--pairs") {
-            std::string m = next();
-            if (m == "sequential") pairs_override = PairMode::Sequential;
-            else if (m == "prefilter") pairs_override = PairMode::Prefilter;
-            else if (m == "exhaustive") pairs_override = PairMode::Exhaustive;
-            else { fprintf(stderr, "unknown --pairs %s\n", m.c_str()); return 1; }
-            pairs_explicit = true;
+        if (a == "--help" || a == "-h") { printCommandHelp(*findCommand("auto")); return 0; }
+        if (a == "--output" || a == "-o") {
+            if (i + 1 >= argc) return usageError("auto", "--output: missing value");
+            workspace = argv[++i];
+            continue;
         }
-        else if (a == "--quality") {
-            std::string q = next();
-            if (q == "low") quality = Quality::Low;
-            else if (q == "medium") quality = Quality::Medium;
-            else if (q == "high") quality = Quality::High;
-            else if (q == "extreme") quality = Quality::Extreme;
-            else { fprintf(stderr, "unknown --quality %s\n", q.c_str()); return 1; }
+        if (a == "--no-masks") { cfg.mask_dir.clear(); maskdir_explicit = true; continue; }
+        if (a == "--no-manage") {
+            cfg.manager.do_merge = cfg.manager.do_grow = cfg.manager.do_reseed = false;
+            cfg.manager.do_audit = cfg.manager.do_split = cfg.manager.do_duplicate_split = false;
+            continue;
         }
-        else if (a == "--data-type") {
-            std::string d = next();
-            if (d == "individual") data_type = DataType::Individual;
-            else if (d == "video") data_type = DataType::Video;
-            else if (d == "internet") data_type = DataType::Internet;
-            else { fprintf(stderr, "unknown --data-type %s\n", d.c_str()); return 1; }
+        if (a == "--camera-model" || a == "--focal") {
+            if (i + 1 >= argc) return usageError("auto", a + ": missing value");
+            std::string err;
+            if (!cameraOverride(cfg, a == "--focal", argv[++i], seen, err))
+                return usageError("auto", err);
+            continue;
         }
-        else if (a == "--camera-mode") {
-            if (!parseCameraMode(next(), sopt_cam.mode)) { fprintf(stderr, "bad --camera-mode\n"); return 1; }
-            sopt_cam.mode_explicit = true;
-            cmode_explicit = true;
-        }
-        else if (a == "--camera-model") {
-            std::string v = next();
-            if (!parseCameraOverride(v, /*is_focal=*/false, sopt_cam.overrides)) {
-                fprintf(stderr, "bad --camera-model %s (MODEL or PREFIX=MODEL)\n", v.c_str());
-                return 1;
-            }
-            if (v.find('=') == std::string::npos) parseCamModel(v, sopt_cam.model);
-        }
-        else if (a == "--focal") {
-            std::string v = next();
-            if (!parseCameraOverride(v, /*is_focal=*/true, sopt_cam.overrides)) {
-                fprintf(stderr, "bad --focal %s (F or PREFIX=F)\n", v.c_str());
-                return 1;
-            }
-            if (v.find('=') == std::string::npos) sopt_cam.focal = std::stod(v);
-        }
-        else if (a == "--no-exif-focal") sopt_cam.exif_focal = false;
-        else if (a == "--exif-groups") sopt_cam.exif_groups = true;
-        else if (a == "--no-exif-groups") sopt_cam.exif_groups = false;
-        else if (a == "--max-error") max_error = std::stod(next());
-        else if (a == "--focal-trials") focal_trials = std::stoi(next());
-        else if (a == "--refine-principal-point") refine_pp = true;
-        else if (a == "--no-final-principal-point") final_pp = false;
-        else if (a == "--final-principal-point") final_pp = true;
-        else if (a == "--pp-min-images") pp_min_images = (size_t)std::stoul(next());
-        else if (a == "--masks" || a == "--mask-dir") { maskdir = next(); maskdir_explicit = true; }
-        else if (a == "--no-masks") { maskdir.clear(); maskdir_explicit = true; }
-        else if (a == "--max-models") max_num_models = std::stoi(next());
-        else if (a == "--no-merge") merge = false;
-        else if (a == "--merge-max-error") mopt_merge.max_reproj_error = std::stod(next());
-        else if (a == "--merge-min-common") mopt_merge.min_common_images = std::stoi(next());
-        else if (a == "--rounds") mgopt.max_rounds = std::stoi(next());
-        else if (a == "--no-grow") mgopt.do_grow = false;
-        else if (a == "--no-reseed") mgopt.do_reseed = false;
-        else if (a == "--no-audit") mgopt.do_audit = false;
-        else if (a == "--no-split") mgopt.do_split = false;
-        else if (a == "--fold-split") mgopt.do_duplicate_split = true;
-        else if (a == "--no-fold-split") mgopt.do_duplicate_split = false;
-        else if (a == "--fold-max-cut") mgopt.duplicate.max_cut_fraction = std::stod(next());
-        else if (a == "--no-joint-ba") mgopt.do_joint_ba = false;
-        else if (a == "--overlap") overlap = std::stoi(next());
-        else if (a == "--threads") threads = std::stoi(next());
-        else if (a == "--decode-threads") decode_threads = std::stoi(next());
-        else if (a == "--decode-budget") decode_budget_mb = std::stoi(next());
-        else if (a == "--device") device = std::stoi(next());
-        else if (a == "--quiet") verbose = false;
-        else if (a[0] != '-' && imagedir.empty()) imagedir = a;
-        else { fprintf(stderr, "unknown arg %s\n", a.c_str()); return 1; }
+        int r = tableFlag(cfg, CMD_AUTO, "auto", a, argc, argv, i, seen);
+        if (r < 0) return 1;
+        if (r > 0) continue;
+        if (a[0] == '-') return usageError("auto", "unknown option " + a);
+        if (!imagedir.empty()) return usageError("auto", "unexpected argument '" + a + "'");
+        imagedir = a;
     }
-    if (workspace.empty()) {
-        fprintf(stderr,
-                "usage: ssplat-sfm auto [image_dir|dataset_dir] --output WORKSPACE\n"
-                "  the positional defaults to `images`; if it names a dataset directory\n"
-                "  containing `images/`, that sub-directory is used\n"
-                "  [--masks DIR]   (default: `masks` beside the image directory)\n"
-                "  [--no-masks]    ignore a masks directory even if one is there\n"
-                "  [--quality low|medium|high|extreme]   (default high)\n"
-                "  [--data-type individual|video|internet]  (default individual)\n"
-                "     internet defaults --camera-mode to `image`\n"
-                "  [--camera-mode single|folder|image]  (default folder)\n"
-                "     single = one camera per distinct image resolution\n"
-                "     folder = one camera per image sub-folder (and per resolution)\n"
-                "     image  = one camera per image\n"
-                "  [--camera-model M|PREFIX=M]  (default opencv; one of\n"
-                "     simple-pinhole|pinhole|radial|opencv|full-opencv|opencv-fisheye|\n"
-                "     thin-prism-fisheye|equirectangular) [--focal F|PREFIX=F]\n"
-                "     PREFIX names one camera group by image path, so a rig can mix\n"
-                "  [--refine-principal-point]  (refine cx,cy throughout; off, as in\n"
-                "     COLMAP: it is nearly the same parameter as a camera rotation, D50.\n"
-                "  [--no-final-principal-point] [--pp-min-images N]  one PP-free global\n"
-                "     BA on the finished model, when it has ONE camera group of >= N (20)\n"
-                "     images. On: worth 8-24 AUC where the lens really is decentred,\n"
-                "     ~1 where it is not, and skipped on rigs (D51)\n"
-                "     models and known with unknown focals (D46)\n"
-                "  [--no-exif-focal]  ignore the focal length EXIF recorded\n"
-                "  [--no-exif-groups]  do not split camera groups by what EXIF says\n"
-                "     the camera and its focal setting were\n"
-                "  [--max-error PX]  inlier radius for verification and mapping, in\n"
-                "     pixels of the image SIFT ran on (D47); default 3\n"
-                "  [--focal-trials N]  trial reconstructions used to pick the focal when\n"
-                "     the capture's motion cannot determine it (D48); 0 = off, default 5\n"
-                "  [--pairs exhaustive|sequential|prefilter]\n"
-                "     default: video -> sequential; otherwise exhaustive below 100 images\n"
-                "     and prefilter (GPU pair selection) at or above\n"
-                "  [--max-models N]  (default 50, 1 = one model only)\n"
-                "  [--no-merge]      keep the components separate instead of merging\n"
-                "     the ones that share images (see `ssplat-sfm merge`)\n"
-                "  [--merge-max-error PX] [--merge-min-common N]\n"
-                "  [--rounds N] [--no-grow] [--no-reseed] [--no-audit]\n"
-                "  [--no-split]     keep models the correspondence graph contradicts\n"
-                "  [--no-fold-split]  keep a model that has written two places on top\n"
-                "     of each other; cutting it is on by default (D46) and is taken only\n"
-                "     when it severs almost no co-visibility -- see `ssplat-sfm map --check`\n"
-                "  [--no-joint-ba]  refine each component separately instead of\n"
-                "     sharing one set of intrinsics per camera group (D45)\n"
-                "  [--overlap N] [--threads N] [--decode-threads N] [--decode-budget MB]\n"
-                "  [--device I] [--quiet]\n"
-                "Runs extract -> match -> map with COLMAP's automatic_reconstructor\n"
-                "presets and writes WORKSPACE/{features,matches.bin,sparse/0}. A capture\n"
-                "that is not one connected view graph also writes sparse/1, sparse/2, ...\n"
-                "-- the remaining components, largest first, for a later merge.\n");
-        return 1;
-    }
+    if (workspace.empty()) return usageError("auto", "--output WORKSPACE is required");
+    maskdir_explicit = maskdir_explicit || seen.count("masks") || seen.count("mask-dir");
+
+    // ---- presets, then the fan-out ----
+    // Presets first, overrides on top: applyPresets skips anything the command
+    // line already claimed, so an explicit flag always wins.
+    std::vector<PresetChange> moved;
+    if (std::string err = applyPresets(cfg, seen, moved); !err.empty())
+        return usageError("auto", err);
+    if (std::string err = cfg.finalize(CMD_AUTO); !err.empty()) return usageError("auto", err);
+    const bool verbose = !cfg.quiet;
 
     // ---- where the images and masks are (D39/D40) ----
     // The default layout is a dataset directory holding `images/` and `masks/`,
@@ -1665,7 +1595,7 @@ static int cmdAuto(int argc, char** argv) {
     // `ssplat-sfm auto DATASET/images` and `ssplat-sfm auto DATASET` behave the same.
     if (imagedir.empty()) imagedir = "images";
     if (!fs::is_directory(imagedir)) {
-        fprintf(stderr, "%s is not a directory\n", imagedir.c_str());
+        fprintf(stderr, "%s auto: error: %s is not a directory\n", kProgram, imagedir.c_str());
         return 1;
     }
     {
@@ -1680,62 +1610,7 @@ static int cmdAuto(int argc, char** argv) {
         fs::path p = fs::path(imagedir);
         if (!p.empty() && p.filename().empty()) p = p.parent_path();  // drop a trailing '/'
         fs::path sibling = p.parent_path() / "masks";
-        if (fs::is_directory(sibling)) maskdir = sibling.string();
-    }
-
-    // ---- presets ----
-    SiftOptions sopt;
-    sopt.device = device;
-    sopt.verbose = verbose;
-    int max_image_size = 3200;  // the extractor default the fractions apply to
-    // Pair-selection breadth also follows the quality knob (D42): `k` is how
-    // many partners each image keeps, and it is the one pair-selection
-    // parameter that trades match time against how much of the view graph is
-    // even offered to verification. `high` keeps sfm/feature/PairSelection.h's 32, so
-    // the default path -- and every benchmark, which runs at high -- is
-    // unchanged; `low`/`medium` buy back match time, `extreme` spends it.
-    uint32_t prefilter_neighbors = PairSelectionOptions().num_neighbors;  // 32
-    switch (quality) {
-        case Quality::Low:    max_image_size = 1000; sopt.max_num_features = 2048;
-                              prefilter_neighbors = 16; break;
-        case Quality::Medium: max_image_size = 1600; sopt.max_num_features = 4096;
-                              prefilter_neighbors = 24; break;
-        case Quality::High:   max_image_size = 2400; sopt.max_num_features = 8192; break;
-        case Quality::Extreme: max_image_size = 3200; sopt.max_num_features = 16384;
-                              prefilter_neighbors = 48; break;
-    }
-    MatchOptions mopt;
-    mopt.device = device;
-    TwoViewOptions tvopt;
-    MapperOptions mapopt;
-    if (max_error > 0) {
-        tvopt.ransac.max_error = max_error;
-        mapopt.max_reproj_error = max_error;
-    }
-    if (focal_trials >= 0) mapopt.focal_trials = focal_trials;
-    mapopt.refine_principal_point = refine_pp;
-    mapopt.pp_min_images = pp_min_images;
-    mapopt.device = device;
-    mapopt.verbose = verbose;
-    mapopt.camera_model = sopt_cam.model;
-    mapopt.max_num_models = max_num_models;
-    PairMode mode = PairMode::Exhaustive;
-    if (data_type == DataType::Video) {
-        mode = PairMode::Sequential;
-        mapopt.init_min_tri_angle_deg /= 2;  // COLMAP ModifyForVideoData
-    }
-    if (pairs_explicit) mode = pairs_override;
-    PairSelectionOptions popt;
-    popt.device = device;
-    popt.num_neighbors = prefilter_neighbors;
-    // Camera grouping follows the data type unless asked for explicitly.
-    // Internet photos are the case that matters: two Flickr uploads that happen
-    // to be 1024x768 are two different cameras that were each downscaled, so
-    // grouping them on resolution fuses unrelated intrinsics. Give every image
-    // its own (D20).
-    if (!cmode_explicit && data_type == DataType::Internet) {
-        sopt_cam.mode = CameraMode::Image;
-        sopt_cam.mode_explicit = true;   // asked for, just not by --camera-mode
+        if (fs::is_directory(sibling)) cfg.mask_dir = sibling.string();
     }
 
     fs::path ws(workspace);
@@ -1745,39 +1620,45 @@ static int cmdAuto(int argc, char** argv) {
     // COLMAP's layout: sparse/<i> per reconstruction, sparse/0 the largest.
     const fs::path sparsedir = ws / "sparse";
 
-    printf("== ssplat-sfm auto: %s -> %s ==\n", imagedir.c_str(), workspace.c_str());
-    printf("   quality %s (max image %d px, max %d features), data type %s\n",
-           quality == Quality::Low ? "low" : quality == Quality::Medium ? "medium"
-               : quality == Quality::High ? "high" : "extreme",
-           max_image_size, sopt.max_num_features,
-           data_type == DataType::Video      ? "video"
-           : data_type == DataType::Internet ? "internet"
-                                             : "individual");
-    printf("   camera model %s\n", camInfo(sopt_cam.model).cli_name);
+    printf("%s auto: %s -> %s\n", kProgram, imagedir.c_str(), workspace.c_str());
+    printf("  quality   : %s (max image %d px, max %d features)\n", cfg.quality.c_str(),
+           cfg.max_image_size, cfg.sift.max_num_features);
+    printf("  data type : %s\n", cfg.data_type.c_str());
+    printf("  cameras   : %s, mode %s\n", cfg.camera_model.c_str(), cfg.camera_mode.c_str());
+    if (!cfg.mask_dir.empty()) printf("  masks     : %s\n", cfg.mask_dir.c_str());
+    // What the two knobs moved, so a surprising run is explainable from its own
+    // output rather than from reading the preset table.
+    for (const PresetChange& p : moved)
+        printf("  preset    : --%s %s -> %s\n", p.flag.c_str(), p.from.c_str(), p.to.c_str());
 
     // ---- 1. extract ----
     double t0 = now();
     ExtractStats est;
-    if (int rc = extractDirectory(imagedir, featdir, sopt, max_image_size, decode_threads,
-                                  decode_budget_mb, maskdir, est))
-        return rc;
+    if (int rc = extractDirectory(imagedir, featdir, cfg, est)) return rc;
     double t_extract = now() - t0;
     if (est.images < 2) {
         fprintf(stderr, "auto: only %zu image(s) extracted; need at least 2\n", est.images);
         return 1;
     }
     warnIfMasksLookInverted(est);
+
+    // Pairing: what --pairs says, except that "auto" only knows the image count
+    // once extraction has run. Above COLMAP's exhaustive cutoff -- where COLMAP
+    // switches to vocabulary-tree retrieval -- we switch to GPU pair selection
+    // (sfm/feature/PairSelection.h, D35).
+    PairMode mode = cfg.pairMode();
     if (mode == PairMode::Exhaustive && est.images >= 100) {
-        if (pairs_explicit)
+        const size_t nquad = est.images * (est.images - 1) / 2;
+        if (seen.count("pairs"))
             fprintf(stderr,
                     "[auto] WARNING: %zu images with exhaustive pairing = %zu pairs; this is "
                     "quadratic. Drop --pairs exhaustive to get pair selection.\n",
-                    est.images, est.images * (est.images - 1) / 2);
+                    est.images, nquad);
         else {
             mode = PairMode::Prefilter;
             printf("   %zu images >= 100: switching to pair selection "
                    "(exhaustive would be %zu pairs; --pairs exhaustive forces it)\n",
-                   est.images, est.images * (est.images - 1) / 2);
+                   est.images, nquad);
         }
     }
 
@@ -1787,9 +1668,9 @@ static int cmdAuto(int argc, char** argv) {
     MatchesDatabase db;
     MatchStats mstats;
     VerifyCalibration calib;
-    calib.setup = sopt_cam;
-    if (int rc = matchFeatureDir(featdir.string(), feats, db, mopt, mode, overlap, popt, true,
-                                 tvopt, threads, verbose, mstats, &calib))
+    calib.setup = cfg.camera;
+    if (int rc = matchFeatureDir(featdir.string(), cfg, mode, /*verify=*/true, feats, db, mstats,
+                                 &calib))
         return rc;
     double t_match = now() - t0;
     writeMatches(matchpath.string(), db);
@@ -1800,6 +1681,7 @@ static int cmdAuto(int argc, char** argv) {
     // would otherwise start the group from, and every group starting from a
     // measurement is what stops small components inventing their own
     // intrinsics (D45/D46).
+    MapperOptions& mapopt = cfg.mapper;
     const CameraSetup& cs = calib.cameras;
     printf("   camera mode %s -> %u camera(s)\n", cameraModeName(cs.mode_used), cs.count());
     mapopt.initial_cameras = cs.cameras;
@@ -1814,17 +1696,10 @@ static int cmdAuto(int argc, char** argv) {
     // ---- 3b. merge, grow, prune, reseed until nothing changes (D43, D44) ----
     ManagerStats mst;
     double t_manage = 0;
-    if (merge) {
-        mgopt.verbose = verbose;
-        mgopt.merge = mopt_merge;
-        mgopt.merge.verbose = verbose;
-        mgopt.merge.filter_reproj_error = mapopt.max_reproj_error;
-        mgopt.merge.min_tri_angle_deg = mapopt.min_tri_angle_deg;
-        mgopt.merge.min_image_points = mapopt.min_image_points;
-        if (models.size() > 1 || distinctRegistered(models) < est.images)
-            models = manageModels(mapper, std::move(models), mgopt, mst, t_manage);
-    }
-    if (final_pp) {
+    if (manageEnabled(cfg.manager) &&
+        (models.size() > 1 || distinctRegistered(models) < est.images))
+        models = manageModels(mapper, std::move(models), cfg.manager, mst, t_manage);
+    if (cfg.final_principal_point) {
         double t_pp = 0;
         models = polishModels(mapper, std::move(models), verbose, t_pp);
         t_map += t_pp;
@@ -1896,14 +1771,7 @@ static int cmdAuto(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: ssplat-sfm <command> [args]\n"
-                        "  auto     image directory -> COLMAP sparse model, one command\n"
-                        "  extract  detect SIFT features from an image or directory\n"
-                        "  match    brute-force match a directory of feature files\n"
-                        "  map      incremental reconstruction -> COLMAP sparse model\n"
-                        "  merge    fuse the models of a fragmented capture into fewer\n"
-                        "  ba       bundle-adjust a BAL problem (solver benchmark)\n"
-                        "\n");
+        printTopHelp(stderr);
         return 1;
     }
     // Accept `--flag=value` as well as `--flag value`, everywhere. Only tokens
@@ -1931,12 +1799,28 @@ int main(int argc, char** argv) {
     argv = args.data();
 
     std::string cmd = argv[1];
+    if (cmd == "--help" || cmd == "-h" || cmd == "help") {
+        // `ssplat-sfm help <command>` is the same as `<command> --help`.
+        if (argc > 2) {
+            if (std::string(argv[2]) == "ba") { printBaHelp(stdout); return 0; }
+            if (const CommandInfo* c = findCommand(argv[2])) { printCommandHelp(*c); return 0; }
+            std::fprintf(stderr, "%s: error: unknown command '%s'\n", kProgram, argv[2]);
+            return 1;
+        }
+        printTopHelp(stdout);
+        return 0;
+    }
+    if (cmd == "--version" || cmd == "-V" || cmd == "version") {
+        std::printf("%s %s\n", kProgram, SSPLAT_VERSION);
+        return 0;
+    }
     if (cmd == "auto") return cmdAuto(argc - 2, argv + 2);
     if (cmd == "extract") return cmdExtract(argc - 2, argv + 2);
     if (cmd == "match") return cmdMatch(argc - 2, argv + 2);
     if (cmd == "map") return cmdMap(argc - 2, argv + 2);
     if (cmd == "merge") return cmdMerge(argc - 2, argv + 2);
     if (cmd == "ba") return cmdBa(argc - 2, argv + 2);
-    fprintf(stderr, "unknown command %s\n", cmd.c_str());
+    std::fprintf(stderr, "%s: error: unknown command '%s'\n", kProgram, cmd.c_str());
+    std::fprintf(stderr, "Try '%s --help' for the list of commands.\n", kProgram);
     return 1;
 }

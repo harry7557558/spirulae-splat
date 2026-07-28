@@ -14,6 +14,18 @@ set(SSPLAT_SRC     ${SSPLAT_ROOT}/src)
 set(SSPLAT_SHADERS ${SSPLAT_SRC}/shaders)                      # shared Slang device math
 set(SSPLAT_VK_SHADERS ${SSPLAT_SRC}/backend/vulkan/shaders)   # Vulkan-only entry points
 
+# The version the apps report with --version, read from the one place it is
+# declared (pyproject.toml) so a CMake build and a pip build never disagree.
+set(SSPLAT_VERSION "dev")
+if(EXISTS ${SSPLAT_ROOT}/pyproject.toml)
+    file(READ ${SSPLAT_ROOT}/pyproject.toml _ssplat_pyproject)
+    string(REGEX MATCH "\nversion[ \t]*=[ \t]*\"([^\"]+)\"" _ssplat_ver_match
+           "${_ssplat_pyproject}")
+    if(CMAKE_MATCH_1)
+        set(SSPLAT_VERSION "${CMAKE_MATCH_1}")
+    endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # Options
 #

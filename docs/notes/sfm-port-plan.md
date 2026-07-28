@@ -4,8 +4,9 @@ Plan for moving the Vulkan/Slang Structure-from-Motion pipeline (developed in a
 separate private tree) into `spirulae-splat`, making this its permanent home,
 and retiring the COLMAP subprocess for Vulkan builds.
 
-Status: **not started.** This document is the plan; delete the phase checklists
-as they land and fold the surviving content into `src/sfm/README.md`.
+Status: **phases 1-2 landed** (mechanical import; one configuration surface).
+Phase 3 is next. This document is the plan; delete the phase checklists as they
+land and fold the surviving content into `src/sfm/README.md`.
 
 ---
 
@@ -156,7 +157,7 @@ Do not start the next phase with the previous one's tests red.
 
 *Done when:* the substitution list exists and the shader compile is proven.
 
-### Phase 1 — mechanical import (1–2 days)
+### Phase 1 — mechanical import — **landed**
 
 Squash-import, no history: the source repo's commit messages carry private
 capture names, so a subtree merge would leak them. Record the source commit id
@@ -196,37 +197,32 @@ builds `ssplat-train` and `ssplat-sfm`, every `sfm_*_test` passes, and
 (Mip-NeRF 360 `garden`, 25-frame subset) with the same registered count and
 reprojection error as the source tree.
 
-### Phase 2 — one configuration surface (2–3 days)
+### Phase 2 — one configuration surface — **landed**
 
-Today the option surface is ~90 hand-parsed flags spread over eight option
-structs. The GUI needs the same surface, with grouping, help text and defaults,
-and the repo's precedent (`ConfigUI` over the generated `SSPLAT_CONFIG_FIELDS`
-X-macro) is a good one.
+`src/sfm/SfmConfig.{h,cpp}`: the aggregate of the eight stage option structs
+(unchanged) plus the pipeline-level knobs, and `SFM_CONFIG_FIELDS`, a
+descriptor table of `{member, name, cmds, tier, group, range, choices, help}`
+that the CLI parser, `--help` and (phase 5) the GUI editor each read as one
+macro expansion. `SfmConfig::finalize()` is the only place pipeline knobs fan
+out into the stage structs. Presets live beside the table and report every
+field they moved. Everything that does not name one scalar field is still
+hand-parsed in `src/app/cli/sfm_main.cpp`, which offers a token to those cases
+before the table. The surface is documented in `src/sfm/README.md` §Options;
+the CLI also gained generated per-command help, `--version`, and usage errors
+that stay off `auto`'s exit codes 2 and 3.
 
-1. `SfmConfig` aggregates the existing sub-option structs unchanged
-   (`SiftOptions`, `MatchOptions`, `PrefilterOptions`, `TwoViewOptions`,
-   `CameraSetupOptions`, `MapperOptions`, `MergeOptions`, `ManagerOptions`)
-   plus the pipeline-level knobs (`quality`, `data_type`, `pairs`, thread and
-   decode budgets, device index, mask directory).
-2. A descriptor table beside it — an X-macro or a static array of
-   `{id, label, group, member pointer, type, default, range, help, tier}` —
-   is the single source of truth for the CLI parser, `--help`, and the GUI
-   editor. `tier` is `basic` or `advanced`; the basic tier is what the GUI
-   shows unfolded, and it is short: quality, data type, camera model, camera
-   sharing, focal, masks, pair mode.
-3. The CLI keeps every flag name it has today (they appear in the source
-   tree's own docs and in muscle memory) and derives them from the table.
-   Flags that do not map to a single field — `--camera-model PREFIX=MODEL`,
-   `--focal PREFIX=F`, `--no-*` negations, `--resume`, `--check` — stay
-   hand-parsed; the table covers the scalar majority.
-4. Presets: `--quality low|medium|high|extreme` and
-   `--data-type individual|video|internet` stay exactly as they are, applied
-   before the table's overrides so an explicit flag always wins. Keep the
-   "which options a preset moved" reporting the CLI prints today; the GUI
-   reuses it to highlight modified fields.
+Verified: all 136 pre-port flags still parse; `auto`, `extract`, `match`, `map`
+and `merge` produce byte-identical logs before and after on a public dataset
+(Mip-NeRF 360 `garden`, 25 frames), at defaults and under a wide flag sweep.
+Note the pipeline is not bit-deterministic run to run — the GPU bundle
+adjustment is not — so "bit-identical model files" was replaced by "identical
+mapper/BA/registration output", which the pre-change binary does not meet
+against itself.
 
-*Done when:* `ssplat-sfm --help` is generated, every pre-port flag still parses
-to the same value, and the phase-1 reconstruction is bit-identical.
+Two deliberate behaviour changes, both in `src/sfm/README.md`: `auto
+--no-merge` now disables merging only (as it already did on `map`) with
+`--no-manage` added to `auto` for the old meaning, and `auto` accepts the
+advanced flags of the stages it runs.
 
 ### Phase 3 — library-ization (3–4 days)
 
