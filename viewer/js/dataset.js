@@ -164,12 +164,12 @@ function frustumTemplate(cam) {
 
   const lines = [], anchors = [];
   if (model === M_EQUIRECT) {
-    // Lat/long wire globe over the pixel grid (covers partial panoramas too:
-    // the i=0/4, j=0/4 lines *are* the image border). Center meridian + center
-    // parallel bright as the view-direction cue, the rest dim.
-    for (let i = 0; i <= 4; i++) {
-      const mer = sample(w*i/4, 0, w*i/4, h, 2*NSEG);
-      if (!degenerate(mer)) lines.push({ pts: mer, closed: false, dim: i !== 2 });
+    // Lat/long wire globe over the pixel grid
+    for (let i = 0; i < 8; i++) {
+      const mer = sample(w*i/8, 0, w*i/8, h, 2*NSEG);
+      if (!degenerate(mer)) lines.push({ pts: mer, closed: false, dim: i !== 0 });
+    }
+    for (let i = 1; i < 4; i++) {
       const par = sample(0, h*i/4, w, h*i/4, 2*NSEG);
       if (!degenerate(par)) lines.push({ pts: par, closed: false, dim: i !== 2 });
     }
@@ -190,14 +190,8 @@ function frustumTemplate(cam) {
         lines.push({ pts: sample(0, h*i/4, w, h*i/4, 2*NSEG), closed: false, dim: true });
       }
     }
-    // Anchors: apex->corner when the corners are in the front hemisphere
-    // (classic pyramid); for wider cameras they cross the dome interior and
-    // scribble, so use a single apex->view-direction anchor instead.
     const cornerPts = [border[0], border[NSEG], border[2*NSEG], border[3*NSEG]];
-    if (!wide || cornerPts.every(p => p[2] > 0))
-      anchors.push(...cornerPts);
-    else
-      anchors.push(place(ray((w/2-cx)/fx, (h/2-cy)/fy)));
+    anchors.push(...cornerPts);
   }
 
   let maxR = 0;
