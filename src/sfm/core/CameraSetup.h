@@ -142,6 +142,14 @@ struct CameraSetup {
     //                  group departs from a value measured over the first (D45).
     std::set<uint32_t> focal_given;
     std::set<uint32_t> focal_known;             // subset of focal_given
+    //   focal_measured -- the two-view stage measured it, on this group's own
+    //                  pairs (D53's epipolar vote, or the fisheye peripheral
+    //                  inlier search). Folded into focal_known, because a
+    //                  per-image registration sweep has nothing to add to a
+    //                  measurement over hundreds of pairs; deliberately *not*
+    //                  into focal_given, so the mapper still builds its probe
+    //                  model and lets bundle adjustment refine the value.
+    std::set<uint32_t> focal_measured;
     std::map<uint32_t, std::string> labels;     // id -> the key it grouped on
     size_t exif_focal_images = 0;               // images that carried an EXIF focal
     size_t exif_camera_images = 0;              // images that carried an EXIF identity
@@ -156,6 +164,13 @@ struct CameraSetup {
     bool anyWide() const {
         for (const auto& kv : cameras)
             if (kv.second.wideFov()) return true;
+        return false;
+    }
+    // A rectilinear group still on the geometric focal guess: the case the
+    // epipolar focal search exists for.
+    bool anyGuessedRectilinear() const {
+        for (const auto& kv : cameras)
+            if (!kv.second.wideFov() && !focal_given.count(kv.first)) return true;
         return false;
     }
     bool mixed() const {

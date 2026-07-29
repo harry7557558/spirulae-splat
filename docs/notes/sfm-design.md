@@ -66,3 +66,8 @@ be re-derived or re-attempted: D25, D26, D27, D11, D16, D47, D50, D45, D46.
 | D49 | A spherical camera is not a wide fisheye: the image is the calibration, and every direction is in front |
 | D50 | The principal point is not a free parameter: it is a camera rotation wearing a different name |
 | D51 | Refining the principal point at the end: on, for a single camera group, and the gain is predictable |
+| D52 | Next-image ranking is how the visible structure *spreads*, not how much of it there is |
+| D53 | A rectilinear focal is measured from the fundamental matrix, and a measured focal is refined rather than searched |
+| D54 | Track merging must leave a triangulation, or the filter undoes it and the pair churns |
+| D55 | The hierarchical mapper is a *schedule*: clusters are reconstructed by the same mapper and glued by the same merger |
+| D56 | Pair selection is two-stage: a cheap symmetric shortlist over every pair, the reliable asymmetric score on the shortlist |

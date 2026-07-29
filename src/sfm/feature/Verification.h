@@ -247,7 +247,8 @@ inline void bootstrapGroupFocals(const std::vector<FeatureSet>& feats,
                                  const std::vector<std::pair<uint32_t, uint32_t>>& pairs,
                                  const std::vector<std::vector<FeatureMatch>>& matches,
                                  std::map<uint32_t, Camera>& cams,
-                                 const std::set<uint32_t>& given, const TwoViewOptions& tvopt,
+                                 const std::set<uint32_t>& given, std::set<uint32_t>& measured,
+                                 const TwoViewOptions& tvopt,
                                  size_t max_sample, int threads, bool verbose) {
     std::map<uint32_t, std::vector<size_t>> by_group;
     for (size_t p = 0; p < pairs.size() && p < matches.size(); p++) {
@@ -287,8 +288,224 @@ inline void bootstrapGroupFocals(const std::vector<FeatureSet>& feats,
         double f = bootstrapFocal(feats, sp, sm, percam, tvopt, threads, verbose);
         if (f > 0) {
             kv.second.setFocal(f);
+            measured.insert(id);
             for (size_t i = 0; i < percam.size() && i < cam_ids.size(); i++)
                 if (cam_ids[i] == id) percam[i].setFocal(f);
+        }
+    }
+}
+
+// ---- focal from the fundamental matrix, for rectilinear groups (D53) ------
+//
+// A wrong focal leaves a *pinhole* pair's inlier count alone -- that is the
+// asymmetry bootstrapFocal above is built on, and the reason it only helps a
+// fisheye. It does not leave the pair's fundamental matrix alone. Two views
+// that share one K satisfy E = K^T F K, and an essential matrix has singular
+// values (s, s, 0): sweep f, watch the two leading singular values of K^T F K
+// converge, and the focal falls out of geometry the pipeline already computes.
+//
+// The criterion is sharp only when the motion says something. A pair whose
+// baseline points down the optical axis, or whose scene is a plane, is nearly
+// flat in f and its argmin is noise. So each pair votes with its own argmin,
+// votes are kept only when the minimum is a real dip, and the group takes the
+// median. Too few votes, or votes that disagree, and the geometric guess
+// stands -- an unmeasured focal is bad, a confidently wrong one is worse.
+//
+// This matters because the guess is 1.2x the long edge, i.e. a ~45 deg
+// diagonal field of view. A wide lens is off by 3x, and everything downstream
+// -- seed choice, PnP, the model's shape -- is built on it.
+//
+// Accuracy, measured against the focal a full reconstruction's bundle
+// adjustment settles on: within 1.5-6%, biased low, which is what a
+// centre-assumed principal point and near-degenerate motion do to any
+// estimator of this family. That is why the answer is a *starting point* the
+// mapper's probe still refines (MapperOptions::measured_focal_cameras) rather
+// than a prior, and why the search only claims a group whose votes agree.
+struct FocalVoteOptions {
+    double min_ratio = 0.25, max_ratio = 3.0;  // search window around the guess
+    int samples = 41;                          // log-spaced points in it
+    // A vote counts when the dip at the argmin is this much below the window's
+    // median asymmetry: a flat curve has nothing to say.
+    double min_contrast = 0.35;
+    int min_votes = 8;
+    // ... and the votes have to agree: median absolute deviation over median.
+    double max_spread = 0.25;
+};
+
+struct FocalVoteReport {
+    double focal = 0;     // 0 = no confident answer
+    int votes = 0, pairs = 0;
+    double spread = 1.0;  // MAD / median of the accepted votes
+};
+
+// |s1 - s2| / (s1 + s2) of K^T F K -- zero exactly when F is an essential
+// matrix for this K, and scale-free so it can be compared across focals.
+inline double essentialAsymmetry(const Mat3& F, double f, double cx, double cy) {
+    // K = [[f,0,cx],[0,f,cy],[0,0,1]]; K^T F K written out.
+    Mat3 K = {f, 0, cx, 0, f, cy, 0, 0, 1};
+    Svd3 s = svd3(mul(transpose(K), mul(F, K)));
+    const double d = s.s.x + s.s.y;
+    return d > 0 ? (s.s.x - s.s.y) / d : 1.0;
+}
+
+// The argmin of a sampled curve, refined by a parabola through the three
+// points around it, in the curve's own (log-focal) coordinate. Returns the
+// index offset; the caller converts. Without the parabola the answer is
+// quantized to the grid, which at 41 points over a factor of twelve is 6% --
+// the size of the error actually observed against bundle-adjusted focals.
+inline bool refineMinimum(const std::vector<double>& v, int& best_i, double& frac) {
+    best_i = -1;
+    double best = 1e30;
+    for (int i = 0; i < (int)v.size(); i++)
+        if (v[i] < best) { best = v[i]; best_i = i; }
+    // An argmin pinned to an end of the window is an extrapolation, not a dip.
+    if (best_i <= 0 || best_i + 1 >= (int)v.size()) return false;
+    const double y0 = v[best_i - 1], y1 = v[best_i], y2 = v[best_i + 1];
+    const double den = y0 - 2 * y1 + y2;
+    frac = 0.0;
+    if (den > 0) {
+        const double d = 0.5 * (y0 - y2) / den;
+        if (std::fabs(d) < 1.0) frac = d;
+    }
+    return true;
+}
+
+// One pair's vote as a (fractional) index into the log-focal window, or -1 when
+// its curve is too flat to have an opinion. `F` is the pixel fundamental matrix
+// of the pair, `guess` the focal the window is centred on.
+inline double focalVote(const Mat3& F, double guess, double cx, double cy,
+                        const FocalVoteOptions& o) {
+    const double lo = std::log(guess * o.min_ratio), hi = std::log(guess * o.max_ratio);
+    const double step = (hi - lo) / (o.samples - 1);
+    std::vector<double> vals;
+    vals.reserve(o.samples);
+    for (int i = 0; i < o.samples; i++)
+        vals.push_back(essentialAsymmetry(F, std::exp(lo + step * i), cx, cy));
+    int best_i = 0;
+    double frac = 0;
+    if (!refineMinimum(vals, best_i, frac)) return -1;
+    std::vector<double> sorted(vals);
+    std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+    const double med = sorted[sorted.size() / 2];
+    if (med <= 0 || vals[best_i] > (1.0 - o.min_contrast) * med) return -1;
+    return best_i + frac;
+}
+
+// Estimate one rectilinear group's focal from the pairs whose two images are
+// both in it. `pairs[i]` has `matches[i]`, as for bootstrapGroupFocals.
+inline FocalVoteReport focalFromEpipolar(const std::vector<FeatureSet>& feats,
+                                         const std::vector<std::pair<uint32_t, uint32_t>>& pairs,
+                                         const std::vector<std::vector<FeatureMatch>>& matches,
+                                         const Camera& cam, const TwoViewOptions& tvopt,
+                                         const FocalVoteOptions& fo, int threads) {
+    FocalVoteReport rep;
+    rep.pairs = (int)pairs.size();
+    std::mutex mtx;
+    std::vector<double> votes;
+    std::atomic<size_t> next{0};
+    auto worker = [&] {
+        std::vector<double> local;
+        for (;;) {
+            const size_t s = next++;
+            if (s >= pairs.size()) break;
+            const std::vector<FeatureMatch>& m = matches[s];
+            if ((int)m.size() < tvopt.min_num_inliers) continue;
+            const uint32_t i = pairs[s].first, j = pairs[s].second;
+            const int n = (int)m.size();
+            std::vector<Vec2> x1(n), x2(n);
+            for (int k = 0; k < n; k++) {
+                const Keypoint& a = feats[i].keypoints[m[k].idx1];
+                const Keypoint& b = feats[j].keypoints[m[k].idx2];
+                x1[k] = {a.x, a.y};
+                x2[k] = {b.x, b.y};
+            }
+            RansacOptions ro = tvopt.ransac;
+            ro.max_error = tvopt.ransac.max_error *
+                           0.5 * (feats[i].pixelScale() + feats[j].pixelScale());
+            ro.max_num_trials = std::min(ro.max_num_trials, 2000);
+            auto fit = [&](const std::vector<int>& s2) { return estimateFundamental7(x1, x2, s2); };
+            auto refit = [&](const std::vector<int>& s2) {
+                return estimateFundamental8(x1, x2, s2);
+            };
+            auto res = [&](const Mat3& F, int k) { return sampsonSq(F, x1[k], x2[k]); };
+            RansacReport<Mat3> r = loransac<Mat3>(n, 7, fit, refit, res, ro);
+            if (r.num_inliers < std::max(30, tvopt.min_num_inliers)) continue;
+            const double v = focalVote(r.model, cam.focal(), cam.cx, cam.cy, fo);
+            if (v >= 0) local.push_back(v);
+        }
+        std::lock_guard<std::mutex> lk(mtx);
+        votes.insert(votes.end(), local.begin(), local.end());
+    };
+    const int nt = threads > 0 ? threads : (int)std::max(1u, std::thread::hardware_concurrency());
+    std::vector<std::thread> pool;
+    for (int t = 0; t < std::max(1, nt); t++) pool.emplace_back(worker);
+    for (std::thread& t : pool) t.join();
+
+    rep.votes = (int)votes.size();
+    if (rep.votes < fo.min_votes) return rep;
+    // Median vote, and the median absolute deviation as the confidence. Both
+    // are computed on the grid index, which *is* the log focal, so the
+    // deviation is a relative spread with no further conversion.
+    std::nth_element(votes.begin(), votes.begin() + votes.size() / 2, votes.end());
+    const double med = votes[votes.size() / 2];
+    std::vector<double> dev;
+    dev.reserve(votes.size());
+    for (double v : votes) dev.push_back(std::fabs(v - med));
+    std::nth_element(dev.begin(), dev.begin() + dev.size() / 2, dev.end());
+    const double lo = std::log(cam.focal() * fo.min_ratio);
+    const double step = (std::log(cam.focal() * fo.max_ratio) - lo) / (fo.samples - 1);
+    rep.spread = std::exp(dev[dev.size() / 2] * step) - 1.0;
+    if (rep.spread > fo.max_spread) return rep;
+    rep.focal = std::exp(lo + step * med);
+    return rep;
+}
+
+// Run the above for every rectilinear group that has no focal prior, and
+// record the ones that answered confidently in `measured`.
+inline void bootstrapRectilinearFocals(const std::vector<FeatureSet>& feats,
+                                       const std::vector<uint32_t>& cam_ids,
+                                       const std::vector<std::pair<uint32_t, uint32_t>>& pairs,
+                                       const std::vector<std::vector<FeatureMatch>>& matches,
+                                       std::map<uint32_t, Camera>& cams,
+                                       const std::set<uint32_t>& given,
+                                       std::set<uint32_t>& measured,
+                                       const TwoViewOptions& tvopt, size_t max_sample,
+                                       int threads, bool verbose) {
+    std::map<uint32_t, std::vector<size_t>> by_group;
+    for (size_t p = 0; p < pairs.size() && p < matches.size(); p++) {
+        const uint32_t a = pairs[p].first, b = pairs[p].second;
+        if (a >= cam_ids.size() || b >= cam_ids.size() || cam_ids[a] != cam_ids[b]) continue;
+        by_group[cam_ids[a]].push_back(p);
+    }
+    const FocalVoteOptions fo;
+    for (auto& kv : cams) {
+        const uint32_t id = kv.first;
+        if (kv.second.isFisheye() || kv.second.isSpherical() || given.count(id)) continue;
+        auto g = by_group.find(id);
+        if (g == by_group.end() || (int)g->second.size() < fo.min_votes) continue;
+        std::vector<std::pair<uint32_t, uint32_t>> sp;
+        std::vector<std::vector<FeatureMatch>> sm;
+        const size_t stride =
+            std::max<size_t>(1, g->second.size() / std::max<size_t>(1, max_sample));
+        for (size_t k = 0; k < g->second.size() && sp.size() < max_sample; k += stride) {
+            sp.push_back(pairs[g->second[k]]);
+            sm.push_back(matches[g->second[k]]);
+        }
+        FocalVoteReport r =
+            focalFromEpipolar(feats, sp, sm, kv.second, tvopt, fo, threads);
+        if (r.focal > 0) {
+            if (verbose)
+                fprintf(stderr,
+                        "[focal] camera %u: %.0f -> %.0f px from %d/%d epipolar vote(s), "
+                        "spread %.0f%%\n",
+                        id, kv.second.focal(), r.focal, r.votes, r.pairs, 100.0 * r.spread);
+            kv.second.setFocal(r.focal);
+            measured.insert(id);
+        } else if (verbose) {
+            fprintf(stderr,
+                    "[focal] camera %u: %d/%d epipolar vote(s)%s; keeping the f=%.0f guess\n",
+                    id, r.votes, r.pairs,
+                    r.votes >= fo.min_votes ? " disagree" : " -- too few", kv.second.focal());
         }
     }
 }

@@ -17,6 +17,7 @@ struct MapProf {
     double reg = 0;         // registerImage(): PnP RANSAC + refine + recount
     double tri = 0;         // triangulateForImage() during growth
     double retri = 0;       // completeAndRetriangulate()
+    double merge = 0;       // mergeTracks(), inside the above
     double filter = 0;      // sanitizeCameras + filterPoints + filterImages
     double snapshot = 0;    // checkedRefine() reconstruction copy
     // global BA, split (sfm/map/Bundle.h)
@@ -25,6 +26,7 @@ struct MapProf {
     double ba_solve = 0;    // solver.solve()
     double ba_write = 0;    // download + writeback
     long n_ba = 0, n_ba_iters = 0, n_choose = 0, n_reg_try = 0, n_reg_ok = 0;
+    long n_merged = 0;      // observations absorbed by track merging
 
     static bool enabled() {
         static bool e = std::getenv("SSPLAT_SFM_MAP_PROF") != nullptr;
@@ -41,14 +43,15 @@ struct MapProf {
                 "[prof]   choose-next   %8.2f s  (%ld calls)\n"
                 "[prof]   register      %8.2f s  (%ld tries, %ld ok)\n"
                 "[prof]   triangulate   %8.2f s\n"
-                "[prof]   retriangulate %8.2f s\n"
+                "[prof]   retriangulate %8.2f s  (of which merge %.2f s, %ld obs absorbed)\n"
                 "[prof]   filter        %8.2f s\n"
                 "[prof]   snapshot      %8.2f s\n"
                 "[prof]   BA            %8.2f s  (%ld calls, %ld LM iters): "
                 "build %.2f + init %.2f + solve %.2f + write %.2f\n",
                 total_s, accounted, total_s > 0 ? 100.0 * accounted / total_s : 0.0,
-                init_seed, choose, n_choose, reg, n_reg_try, n_reg_ok, tri, retri, filter,
-                snapshot, ba, n_ba, n_ba_iters, ba_build, ba_init, ba_solve, ba_write);
+                init_seed, choose, n_choose, reg, n_reg_try, n_reg_ok, tri, retri, merge,
+                n_merged, filter, snapshot, ba, n_ba, n_ba_iters, ba_build, ba_init, ba_solve,
+                ba_write);
     }
 };
 

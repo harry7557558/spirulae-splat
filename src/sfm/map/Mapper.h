@@ -28,6 +28,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include "sfm/core/Features.h"
@@ -64,6 +65,10 @@ struct MapperOptions {
     int min_num_pnp_inliers = 15;
     double min_pnp_inlier_ratio = 0.25;
     int max_reg_trials = 3;            // per image, COLMAP's default
+    // Rank the next image by how well its supported features are spread over
+    // the frame (Mapper::pyramidSet) rather than by their raw count. Off is
+    // the pre-existing count ranking.
+    bool rank_by_visibility = true;
     // Focal search when a camera group registers its first image and its focal
     // is still the 1.2*max_dim guess (D18). COLMAP solves this with a P4Pf
     // minimal solver; a log-spaced sweep of P3P hypotheses is the cheaper
@@ -139,6 +144,13 @@ struct MapperOptions {
     // fraction of max_reproj_error (the churn hysteresis); 0 disables the
     // retriangulation pass entirely.
     double retri_scale = 0.75;
+    // Fuse two 3D points a correspondence says are the same feature
+    // (Mapper::mergeTracks). Off is the pre-existing behaviour: creation-only
+    // tracks, which fragment wherever a point was triangulated twice before the
+    // pose joining the two halves existed. Measured worth 13 images and 2.4
+    // AUC@5 on a 1146-image capture, at the cost of the solver time longer
+    // tracks bring -- which kMergeMaxTrack is what bounds.
+    bool merge_tracks = true;
     // Auditing an assembled model (D44). An image is put back only when the
     // structure it did *not* bring supports a competing pose: one that clears
     // the registration gates, explains `audit_alternative_factor` times as
@@ -173,7 +185,16 @@ struct MapperOptions {
     // The focal bootstrap only searches cameras outside it: a supplied focal may
     // be worth refining, but it is never worth replacing with a guess (D48).
     std::set<uint32_t> given_focal_cameras;
+    // Cameras whose focal the two-view stage *measured* (D53's epipolar vote,
+    // or the fisheye peripheral-inlier search). Not a prior in the sense above:
+    // the bootstrap still builds its probe model, because the probe's bundle
+    // adjustment refines the value and a refined measurement beats a raw one.
+    // What it does skip is the halving ladder, which exists to escape a guess
+    // that is wrong by a factor and has nothing to offer a measurement.
+    std::set<uint32_t> measured_focal_cameras;
     std::string ba_loss = "huber";     // robust loss for mapping-time BA (D36)
+    // Linear solver for the reduced camera system; see BundleOptions::solver.
+    std::string ba_solver = "auto";
     double ba_loss_param = 2.0;        // Huber delta / Cauchy c, in extraction px
     // Let BA move each camera's principal point off the image centre. Off, as
     // in COLMAP: it is nearly the same parameter as a camera rotation, so on a
@@ -247,7 +268,7 @@ public:
             uint32_t reg = rec_.numRegistered();
             if (reg) attempts.push_back(snapshotModel());
             uint32_t enough = (uint32_t)std::max(
-                (double)opt_.min_model_size, opt_.min_model_fraction * db_.images.size());
+                (double)opt_.min_model_size, opt_.min_model_fraction * allowedCount());
             if (reg >= enough) break;
             if (opt_.verbose)
                 fprintf(stderr, "[map] model too small (%u < %u), retrying from another seed\n",
@@ -308,19 +329,26 @@ public:
         bool refined = false;      // whether a final refinement ran
     };
 
-    // Adopt `m` and keep registering into it until nothing else fits. Claims
-    // are cleared for the pass: an image another model holds is a legitimate
-    // target here, and the overlap it creates is what lets the two models
-    // merge afterwards (D43).
+    // Adopt `m` and keep registering into it until nothing else fits. An image
+    // another model holds is a legitimate target here -- the overlap it creates
+    // is what lets the two models merge afterwards (D43) -- but only up to
+    // `max_model_overlap` of them, which is all a Sim(3) alignment needs. Pass
+    // the other models in `others` to get that bound; with `others` empty the
+    // pass is unbounded, and on a fragmented capture that means every model
+    // re-registers the whole dataset before the redundant ones are dropped
+    // again, which is several full reconstructions' worth of work for nothing.
     //
     // A pass that registers nothing returns `m` untouched -- not a re-refined
     // copy of it. That is what makes the manager's grow round free on a
     // dataset it cannot help: no BA runs, no numbers move.
-    Reconstruction continueFrom(const Reconstruction& m, GrowStats* out = nullptr) {
+    Reconstruction continueFrom(const Reconstruction& m, GrowStats* out = nullptr,
+                                const std::vector<const Reconstruction*>& others = {}) {
         ensureSetup();
         resetModel();
         adopt(m);
         model_count_.clear();
+        for (const Reconstruction* o : others)
+            if (o != &m) claimImages(*o);
         rebuildScores();
         GrowStats st;
         st.before = rec_.numRegistered();
@@ -784,6 +812,7 @@ public:
         bo.loss_param = (float)(opt_.ba_loss_param * medianPixelScale());
         bo.refine_principal_point = opt_.refine_principal_point || pp_free_;
         bo.pp_min_images = opt_.pp_min_images;
+        bo.solver = opt_.ba_solver;
         bo.shared_ctx = &ba_ctx_;
         runJointBA(models, bo);
         // Deliberately no per-model refine afterwards: that would re-fit each
@@ -954,6 +983,33 @@ public:
         return std::max(1e-12, std::sqrt(s / (double)n));
     }
 
+    // Restrict every seed and every registration to a subset of the database
+    // (empty = the whole thing). This is what lets one Mapper reconstruct a
+    // *cluster* without copying the graph, the features or the match database:
+    // a hierarchical run partitions the images and reconstructs each part with
+    // the same object and the same memoized two-view geometry.
+    void restrictTo(const std::vector<uint32_t>& images) {
+        ensureSetup();
+        // A new subset is a new problem: the seed ladder and the used-seed set
+        // belong to the last one and would otherwise carry over, starting the
+        // next cluster at whatever relaxation the previous one had to reach.
+        used_seeds_.clear();
+        init_relax_ = 0;
+        seed_pair_ = nullptr;
+        if (images.empty()) {
+            allow_.clear();
+            allow_count_ = db_.images.size();
+            return;
+        }
+        allow_.assign(db_.images.size(), 0);
+        for (uint32_t i : images)
+            if (i < allow_.size()) allow_[i] = 1;
+        allow_count_ = images.size();
+    }
+    bool allowed(uint32_t img) const { return allow_.empty() || allow_[img]; }
+    // Images the mapper may touch: the restriction, or the whole database.
+    size_t allowedCount() const { return allow_.empty() ? db_.images.size() : allow_count_; }
+
     size_t unclaimed() const { return unclaimedImages(); }
     size_t numImages() const { return db_.images.size(); }
     const MapperOptions& options() const { return opt_; }
@@ -1044,6 +1100,16 @@ private:
             for (size_t i = 0; i < models.size(); i++)
                 fprintf(stderr, "[map]   model %zu: %u images, %zu points\n", i,
                         models[i].numRegistered(), models[i].points3D.size());
+            // Why the rest did not come in. The four counts call for different
+            // fixes -- too few 2D-3D candidates is a matching or coverage
+            // problem, a low inlier *ratio* is usually the image being
+            // genuinely somewhere else -- so they are worth separating.
+            if (covered.size() < db_.images.size())
+                fprintf(stderr,
+                        "[map] registration attempts that failed: %u too few candidates, "
+                        "%u too few PnP inliers, %u inlier ratio below %.2f, %u lost on refit\n",
+                        reg_fail_.few_corr, reg_fail_.few_inliers, reg_fail_.low_ratio,
+                        opt_.min_pnp_inlier_ratio, reg_fail_.refined_out);
         }
         g_map_prof.report(std::chrono::duration<double>(
                               std::chrono::steady_clock::now() - prof_start).count());
@@ -1087,7 +1153,7 @@ private:
 
     size_t unclaimedImages() const {
         size_t n = 0;
-        for (uint32_t c : model_count_) n += (c == 0);
+        for (uint32_t i = 0; i < model_count_.size(); i++) n += (model_count_[i] == 0 && allowed(i));
         return n;
     }
 
@@ -1181,9 +1247,14 @@ private:
         double next_ba = 3;
         recent_regs_.clear();
         rebuildScores();
+        // The overlap budget is spent by *this* pass. A continuation of a model
+        // that already shares images with another (a merge just gave it some)
+        // would otherwise be over budget before it registered anything.
+        const size_t shared_at_entry = sharedRegistered();
         while (true) {
             if (max_reg && rec_.numRegistered() >= max_reg) break;
-            if (sharedRegistered() >= (size_t)std::max(1, opt_.max_model_overlap)) {
+            if (sharedRegistered() >=
+                shared_at_entry + (size_t)std::max(1, opt_.max_model_overlap)) {
                 if (opt_.verbose)
                     fprintf(stderr, "[map] sub-model reached %d images shared with an earlier "
                             "model; stopping its growth\n", opt_.max_model_overlap);
@@ -1687,6 +1758,17 @@ private:
         FocalTrial best = base;
         bool moved = false;
         int used = 0;
+        // A measured focal has already been placed in the right basin; the
+        // probe's own refinement above is the improvement, and the ladder below
+        // would only be trading it for whichever trial happened to register
+        // more images.
+        if (opt_.measured_focal_cameras.count(cams[0])) {
+            if (opt_.verbose)
+                fprintf(stderr, "[map] focal %.0f -> %.0f (probe refinement of a measured "
+                        "focal)\n", f0, best.focal);
+            restoreAfterBootstrap(best.focal, cams, f0);
+            return;
+        }
         // Descend. The direction is not symmetric: a too-short focal splays the
         // bearings, which leaves a model BA can walk back up (every KITTI start
         // from 0.36x to 1.0x of the truth converged on it), while a too-long one
@@ -1813,7 +1895,7 @@ private:
         std::vector<const TwoViewMatches*> cand;
         for (const TwoViewMatches& p : db_.pairs)
             if (p.config == (int)TwoViewConfig::Uncalibrated &&
-                (int)p.matches.size() >= min_inliers)
+                (int)p.matches.size() >= min_inliers && allowed(p.image1) && allowed(p.image2))
                 cand.push_back(&p);
         std::sort(cand.begin(), cand.end(),
                   [](auto* a, auto* b) { return a->matches.size() > b->matches.size(); });
@@ -2058,9 +2140,13 @@ private:
             for (size_t i = 0; i < db_.images.size(); i++)
                 support_[i].assign(feats_[i].count(), 0);
             score_cache_.assign(db_.images.size(), 0);
+            pyramid_.assign(db_.images.size(), std::vector<uint16_t>(kPyrCells, 0));
+            pyramid_score_.assign(db_.images.size(), 0);
         } else {
             for (auto& s : support_) std::fill(s.begin(), s.end(), 0);
             std::fill(score_cache_.begin(), score_cache_.end(), 0);
+            for (auto& p : pyramid_) std::fill(p.begin(), p.end(), 0);
+            std::fill(pyramid_score_.begin(), pyramid_score_.end(), 0);
         }
         for (const auto& kv : rec_.images) {
             const Image& im = kv.second;
@@ -2074,25 +2160,78 @@ private:
     // correspondence of (img, f) gains one unit of support.
     void attachObservation(uint32_t img, uint32_t f) {
         for (const Correspondence& c : graph_.at(img, f))
-            if (++support_[c.image_id][c.feature_idx] == 1) score_cache_[c.image_id]++;
+            if (++support_[c.image_id][c.feature_idx] == 1) {
+                score_cache_[c.image_id]++;
+                pyramidSet(c.image_id, c.feature_idx);
+            }
+    }
+
+    // ---- visibility pyramid (D52) -----------------------------------------
+    //
+    // A candidate image's rank is not how *many* of its features see
+    // triangulated structure but how well those features are spread over the
+    // frame: a hundred correspondences in one corner condition a pose far worse
+    // than fifty across the whole image, and a pose that starts badly
+    // conditioned is what later turns into a misplacement. COLMAP ranks by the
+    // same quantity (its default MIN_UNCERTAINTY /
+    // ObservationManager::Point3DVisibilityScore) over the same pyramid.
+    //
+    // Levels are 2x2 .. 32x32; a cell becoming occupied adds that level's cell
+    // count to the score, so a coarse cell is worth as much as the whole finer
+    // level under it and spread beats density at every scale. The counts are
+    // maintained incrementally beside support_, from the same 0 -> 1 event.
+    static constexpr int kPyrLevels = 5;
+    static constexpr int kPyrDim = 1 << kPyrLevels;             // finest grid
+    static constexpr int kPyrCells = (4 * ((1 << (2 * kPyrLevels)) - 1)) / 3;  // 4+16+..+1024
+
+    void pyramidSet(uint32_t img, uint32_t f) {
+        const FeatureSet& fs = feats_[img];
+        if (fs.width <= 0 || fs.height <= 0) return;
+        const Keypoint& k = fs.keypoints[f];
+        int cx = (int)(kPyrDim * (double)k.x / fs.width);
+        int cy = (int)(kPyrDim * (double)k.y / fs.height);
+        cx = std::min(std::max(cx, 0), kPyrDim - 1);
+        cy = std::min(std::max(cy, 0), kPyrDim - 1);
+        uint16_t* level = pyramid_[img].data() + kPyrCells;  // walk levels finest first
+        uint32_t score = 0;
+        for (int i = kPyrLevels - 1; i >= 0; i--) {
+            const int dim = 2 << i;
+            level -= (size_t)dim * dim;
+            if (++level[(size_t)cy * dim + cx] == 1) score += (uint32_t)dim * dim;
+            cx >>= 1;
+            cy >>= 1;
+        }
+        pyramid_score_[img] += score;
     }
 
     // Candidates for the next registration, best first: unregistered, still
     // within their trial budget, and seeing at least min_num_pnp_inliers
-    // triangulated points.
+    // triangulated points. The gate is the correspondence count; the *order* is
+    // the visibility-pyramid score, which prefers structure spread across the
+    // frame over structure piled in one corner. Images that already failed once
+    // sort behind every untried one, as in COLMAP: a retry is worth having but
+    // not worth delaying a fresh candidate for.
     std::vector<uint32_t> chooseNextImages() const {
         static const bool score_check = std::getenv("SSPLAT_SFM_SCORE_CHECK") != nullptr;
-        std::vector<std::pair<int, uint32_t>> ranked;
+        std::vector<std::pair<uint64_t, uint32_t>> ranked;
         for (uint32_t i = 0; i < db_.images.size(); i++) {
             if (rec_.images.at(i).registered) continue;
-            if (reg_trials_[i] >= opt_.max_reg_trials) continue;
+            if (reg_trials_[i] >= opt_.max_reg_trials || !allowed(i)) continue;
             int s = score_cache_[i];
             if (score_check && s != score(i)) {
                 fprintf(stderr, "[map] SCORE MISMATCH image %u: cache %d, reference %d\n",
                         i, s, score(i));
                 abort();
             }
-            if (s >= opt_.min_num_pnp_inliers) ranked.emplace_back(s, i);
+            if (s < opt_.min_num_pnp_inliers) continue;
+            // Off: the raw correspondence count, every candidate in one bucket.
+            // On: COLMAP's policy -- spread-based rank, and an image that has
+            // already failed once sorts behind every untried one.
+            const uint64_t rank =
+                opt_.rank_by_visibility
+                    ? ((reg_trials_[i] ? 0ull : 1ull) << 32) | pyramid_score_[i]
+                    : (uint64_t)s;
+            ranked.emplace_back(rank, i);
         }
         std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) {
             if (a.first != b.first) return a.first > b.first;
@@ -2125,7 +2264,7 @@ private:
             feat.push_back(f);
             pid.push_back(chosen);
         }
-        if ((int)X.size() < opt_.min_num_pnp_inliers) return false;
+        if ((int)X.size() < opt_.min_num_pnp_inliers) { reg_fail_.few_corr++; return false; }
 
         const uint32_t cid = rec_.images[img].camera_id;
         PnPResult r;
@@ -2164,8 +2303,14 @@ private:
         // offered correspondences agreeing. An image whose hundreds of 2D-3D
         // candidates yield a bare-minimum consensus is a misregistration
         // waiting to bend the model (D36).
-        if (!r.success || r.num_inliers < opt_.min_num_pnp_inliers) return false;
-        if ((double)r.num_inliers < opt_.min_pnp_inlier_ratio * (double)X.size()) return false;
+        if (!r.success || r.num_inliers < opt_.min_num_pnp_inliers) {
+            reg_fail_.few_inliers++;
+            return false;
+        }
+        if ((double)r.num_inliers < opt_.min_pnp_inlier_ratio * (double)X.size()) {
+            reg_fail_.low_ratio++;
+            return false;
+        }
 
         // Commit the searched focal only after the gates pass, then refine the
         // pose on the inlier set (COLMAP refines every accepted PnP pose; the
@@ -2201,8 +2346,11 @@ private:
             r.inlier_mask[k] = pnpResidualSq(r.pose, X[k], br[k]) < thr;
             r.num_inliers += r.inlier_mask[k] ? 1 : 0;
         }
-        if (r.num_inliers < opt_.min_num_pnp_inliers) return false;
-        if ((double)r.num_inliers < opt_.min_pnp_inlier_ratio * (double)X.size()) return false;
+        if (r.num_inliers < opt_.min_num_pnp_inliers) { reg_fail_.refined_out++; return false; }
+        if ((double)r.num_inliers < opt_.min_pnp_inlier_ratio * (double)X.size()) {
+            reg_fail_.refined_out++;
+            return false;
+        }
         focal_known_.insert(cid);
 
         rec_.images[img].pose = r.pose;
@@ -2368,7 +2516,8 @@ private:
                 bo.rtol = opt_.ba_growth_rtol;
                 bo.patience = opt_.ba_growth_patience;
             }
-            bo.shared_ctx = &ba_ctx_;
+            bo.solver = opt_.ba_solver;
+        bo.shared_ctx = &ba_ctx_;
             double cost = runGlobalBA(rec_, bo);
             ProfTimer pt(g_map_prof.filter);
             sanitizeCameras();
@@ -2390,10 +2539,152 @@ private:
                     "%u remain\n", dropped, rec_.numRegistered());
     }
 
+    // Fuse two 3D points that a correspondence says are the same feature
+    // (COLMAP's IncrementalTriangulator::MergeTracks). Track *creation* only
+    // ever gathers features that are still free, so a point triangulated from
+    // images A,B and one triangulated from C,D stay separate for good once the
+    // pose that connects them arrives -- every later pass sees both features
+    // already assigned and leaves them alone. Fusing them is what turns a
+    // revisit into a loop closure: one long track constrains the two ends of
+    // the loop against each other, two short ones constrain nothing.
+    //
+    // A merge is accepted only if *every* element of the union reprojects
+    // within `err` of the track-length-weighted average position -- the same
+    // all-inliers rule COLMAP uses -- if the union keeps at most one
+    // observation per image, the invariant the rest of the mapper relies on,
+    // and if it still subtends the minimum triangulation angle (D54).
+    size_t mergeTracks(const ModelIndex& mi, double err_scale) {
+        const double err = err_scale * opt_.max_reproj_error;
+        size_t merged = 0;
+        std::vector<uint64_t> ids;
+        ids.reserve(rec_.points3D.size());
+        for (const auto& kv : rec_.points3D) ids.push_back(kv.first);
+        // Pairs already judged, so a pair reached from both of its ends costs
+        // one test rather than two. Keyed by the two ids packed into one word:
+        // this set takes a lookup per (observation, correspondence) over the
+        // whole model, which is millions per pass, and a tree node each was
+        // most of the cost. Point ids are handed out one per triangulation, so
+        // the 32-bit halves are not a practical limit.
+        std::unordered_set<uint64_t> tried;
+        tried.reserve(4 * rec_.points3D.size());
+        std::vector<uint8_t> on_track(db_.images.size(), 0);
+        std::vector<Vec3> centers(db_.images.size());
+        for (uint32_t i = 0; i < db_.images.size(); i++)
+            if (mi.img[i] && mi.img[i]->registered) centers[i] = cameraCenter(mi.img[i]->pose);
+        for (uint64_t pid : ids) {
+            // The loop below may absorb a point into another and erase it, so
+            // the id is re-checked and the walk restarted from the survivor.
+            for (int hop = 0; hop < 8; hop++) {
+                auto pit = rec_.points3D.find(pid);
+                if (pit == rec_.points3D.end()) break;
+                uint64_t absorbed = mergeOne(mi, pit->first, err, tried, on_track, centers);
+                if (!absorbed) break;
+                merged += absorbed;
+            }
+        }
+        return merged;
+    }
+
+    // One merge attempt over every correspondence of `pid`'s track; returns the
+    // number of observations absorbed (0 if nothing merged).
+    // Observations a merged track may reach; see the note in mergeOne.
+    static constexpr size_t kMergeMaxTrack = 20;
+
+    size_t mergeOne(const ModelIndex& mi, uint64_t pid, double err,
+                    std::unordered_set<uint64_t>& tried, std::vector<uint8_t>& on_track,
+                    const std::vector<Vec3>& centers) {
+        Point3D& pt = rec_.points3D.at(pid);
+        for (size_t ti = 0; ti < pt.track.size(); ti++) {
+            const TrackElement e = pt.track[ti];
+            for (const Correspondence& c : graph_.at(e.image_id, e.point2D_idx)) {
+                const Image* oi = mi.img[c.image_id];
+                if (!oi || !oi->registered) continue;
+                const uint64_t qid = oi->point3D_ids[c.feature_idx];
+                if (qid == kInvalidPoint3D || qid == pid) continue;
+                const uint64_t lo = std::min(pid, qid), hi = std::max(pid, qid);
+                if (!tried.insert((lo << 32) ^ hi).second) continue;
+                auto qit = rec_.points3D.find(qid);
+                if (qit == rec_.points3D.end()) continue;
+                Point3D& q = qit->second;
+
+                // The reduced camera system the solver builds has an entry per
+                // image *pair* on a track, so a track of length t costs
+                // t(t+1)/2 -- fusing two length-10 tracks into one costs three
+                // times what the two cost apart, for a twentieth observation
+                // that constrains a point nineteen views already pin down. On a
+                // 1194-image fisheye capture, unbounded fusion took the mean
+                // track from 3.5 to 7.2 observations and the bundle adjustment
+                // from 0.03 to 0.36 seconds per iteration.
+                if (pt.track.size() + q.track.size() > kMergeMaxTrack) continue;
+                // One observation per image, or the union is not a track.
+                bool clash = false;
+                for (const TrackElement& a : pt.track) on_track[a.image_id] = 1;
+                for (const TrackElement& b : q.track)
+                    if (on_track[b.image_id]) { clash = true; break; }
+                for (const TrackElement& a : pt.track) on_track[a.image_id] = 0;
+                if (clash) continue;
+
+                const double wa = (double)pt.track.size(), wb = (double)q.track.size();
+                const Vec3 x = (pt.xyz * wa + q.xyz * wb) * (1.0 / (wa + wb));
+                bool ok = true;
+                for (const std::vector<TrackElement>* tr : {&pt.track, &q.track}) {
+                    for (const TrackElement& el : *tr)
+                        if (reprojErrAt(mi, el.image_id, el.point2D_idx, x) >
+                            err * mi.pixel_scale[el.image_id]) { ok = false; break; }
+                    if (!ok) break;
+                }
+                if (!ok) continue;
+                // The union must still be a triangulation. Without this a merge
+                // can produce a point whose views all sit on one line -- every
+                // observation reprojects, so the test above passes -- and the
+                // very next filterPoints kills it for lost parallax. The two
+                // halves are then retriangulated and merged again on the next
+                // round: churn that costs a bundle adjustment each time and
+                // ends where it started.
+                if (!wellTriangulated(pt.track, q.track, x, centers)) continue;
+
+                const size_t absorbed = q.track.size();
+                pt.xyz = x;
+                for (const TrackElement& el : q.track) {
+                    mi.img[el.image_id]->point3D_ids[el.point2D_idx] = pid;
+                    pt.track.push_back(el);
+                }
+                rec_.points3D.erase(qit);
+                return absorbed;
+            }
+        }
+        return 0;
+    }
+
+    // Does some pair of views of `a` + `b` see `x` from far enough apart to fix
+    // its depth? Same criterion filterPoints applies, so a merge this accepts
+    // is one the filter will keep.
+    bool wellTriangulated(const std::vector<TrackElement>& a, const std::vector<TrackElement>& b,
+                          const Vec3& x, const std::vector<Vec3>& centers) const {
+        const double min_ang = opt_.min_tri_angle_deg * M_PI / 180.0;
+        // A long track is the case where the pairwise scan would be quadratic
+        // and where it is also least needed, so it is sampled with a stride
+        // rather than truncated -- the widest baseline of a dolly capture is
+        // between its two ends, and a prefix would never see it.
+        constexpr size_t kMaxScan = 12;
+        std::vector<uint32_t> imgs;
+        imgs.reserve(2 * kMaxScan);
+        for (const std::vector<TrackElement>* t : {&a, &b}) {
+            const size_t stride = std::max<size_t>(1, t->size() / kMaxScan);
+            for (size_t i = 0; i < t->size(); i += stride) imgs.push_back((*t)[i].image_id);
+        }
+        for (size_t i = 0; i + 1 < imgs.size(); i++)
+            for (size_t j = i + 1; j < imgs.size(); j++)
+                if (triangulationAngle(x, centers[imgs[i]], centers[imgs[j]]) >= min_ang)
+                    return true;
+        return false;
+    }
+
     // Extend existing tracks to unassigned features that reproject well
     // (transitively: added elements are sources for further completion), then
     // re-run triangulation for every registered image so features whose
-    // earlier points were filtered can rebuild them from the refined poses.
+    // earlier points were filtered can rebuild them from the refined poses, and
+    // finally fuse the tracks that turn out to be the same point.
     //
     // Everything re-added must clear a *stricter* bar (0.75x) than the filter
     // kills at: without the hysteresis, junk in the borderline band churns --
@@ -2429,6 +2720,10 @@ private:
         }
         for (auto& kv : rec_.images)
             if (kv.second.registered) triangulateForImageAt(mi, kv.first, opt_.retri_scale);
+        if (opt_.merge_tracks) {
+            ProfTimer pt(g_map_prof.merge);
+            g_map_prof.n_merged += mergeTracks(mi, opt_.retri_scale);
+        }
     }
 
     size_t countObservations() const {
@@ -2643,10 +2938,18 @@ private:
     CorrespondenceGraph graph_;
     std::vector<std::vector<uint16_t>> support_;  // per (image, feature), see rebuildScores
     std::vector<int> score_cache_;                // == score(i) for every image
+    std::vector<std::vector<uint16_t>> pyramid_;  // per image, kPyrCells occupancy counts
+    std::vector<uint32_t> pyramid_score_;         // per image, see pyramidSet
     std::vector<int> reg_trials_;
     // Per image, how many *kept* models registered it (D41). Empty until the
     // first model is kept, which is what makes the whole multi-model path inert
     // while the primary model is being built.
+    // Why registerImage() turned an attempt down, summed over the run.
+    struct RegFail {
+        uint32_t few_corr = 0, few_inliers = 0, low_ratio = 0, refined_out = 0;
+    } reg_fail_;
+    std::vector<uint8_t> allow_;      // restrictTo(); empty = every image
+    size_t allow_count_ = 0;          // ... and how many are set
     std::vector<uint32_t> model_count_;
     // Persistent BA context (D38): device + pipelines survive across the
     // mapper's many global BAs; each solve only creates/frees its own

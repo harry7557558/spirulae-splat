@@ -51,6 +51,19 @@ images/ ──► extract ──► features/ ─┐
 
 `ssplat-sfm auto` runs all of it from two knobs, `--quality` and `--data-type`.
 
+The `map` box is one incremental reconstruction of the whole capture by default.
+`--mapper hierarchical` replaces it with a bottom-up schedule: the verified view
+graph is cut by normalized cut into overlapping clusters (`map/Partition.h`),
+each is reconstructed by the same `Mapper` restricted to it, and the leaves go
+straight into the same Sim(3) merger the manage rounds use
+(`map/Hierarchical.h`). It is a *schedule*, not a different algorithm — every
+model is still built by `Mapper::run`'s own rules — which is what makes a
+regression in it impossible to confuse with a regression in the geometry. Reach
+for it when the flat schedule is *struggling* rather than when the capture is
+merely large: measured on three ~1100-image sets it was 24% faster, 20 images
+fuller and 3.7 AUC better on the one the flat mapper found hard, and 15% slower
+for nothing on the two it did not. `Hierarchical.h` carries the numbers.
+
 ## Layout
 
 ```
@@ -73,7 +86,9 @@ geometry/    Essential, Fundamental, Homography, P3P, AbsolutePose,
 optim/       Ransac   LO-RANSAC with MSAC scoring
 ba/          Problem (model registry + problem layout), Solver (LM, dense
                Cholesky / implicit-Schur PCG), README.md
-map/         Mapper, Bundle, CorrespondenceGraph, Merge, Manager, Profile
+map/         Mapper, Bundle, CorrespondenceGraph, Merge, Manager, Profile,
+               Partition (view-graph normalized cut), Hierarchical (cluster
+               reconstruction + merge)
 shaders/     common/ (Real, df, dmath, linalg, camera, loss), ba/, sift/, match/
 tests/       one executable per file
 ```
@@ -179,6 +194,11 @@ preset, and `auto` reports every field a preset moved:
 
 Everything else has a default that a beginner should not have to touch.
 
+`--mapper flat|hierarchical|auto` picks the schedule (see the stage graph);
+`--hier-cluster-size` and `--hier-overlap` size the clusters and the overlap the
+merge aligns on. `--merge-tracks` and `--rank-by-visibility` are on by default
+and exist to be turned off when attributing a change.
+
 Two things about the surface changed when it was unified, both deliberate:
 `auto --no-merge` now disables *merging* only, which is what it already meant on
 `map`; skipping the whole merge / grow / prune / reseed loop is `--no-manage`,
@@ -202,8 +222,21 @@ PASS/FAIL and returns 0/1 — the same convention as `src/backend/tests/`.
 | `sfm_mask_test` | mask uv sampling, decode, file discovery | no |
 
 End to end, the check that matters is a reconstruction on a public dataset
-scored against the COLMAP ground truth that ships with it
-(`tools/sfm/eval_poses.py`, once the tooling lands in phase 7).
+scored against the reference that ships with it: `tools/sfm/eval_poses.py` reads
+a COLMAP model (binary or text), a Nerfstudio `transforms.json` or a Metashape
+`.xml` (`tools/sfm/metashape_ref.py`) and reports registration rate, an
+alignment-free relative-pose AUC and Sim(3)-aligned absolute errors.
+
+Two things about that metric are worth knowing before reading a number:
+
+- **A pair touching an unregistered image counts as a 180 degree failure**, so
+  the AUC is capped by `(registered / total)^2`. On a model whose registered
+  poses are all good, AUC *is* the registration rate; do not read it as
+  accuracy until coverage is accounted for.
+- **The references mostly held the principal point at the image centre**, so a
+  model that refines it (D51) is scored against one that absorbed the offset
+  into its rotations. That shows up as a uniform relative-rotation error of
+  about `dx / f` radians and it is not necessarily the model being worse.
 
 ## Not done yet
 
@@ -214,7 +247,13 @@ port. Ordered by what blocks the most.
 
 1. **Local BA.** Only global BA runs today. The measurement that decides its
    shape — host dense LM versus a persistent-kernel GPU BA on a 10-30 camera
-   problem — was never taken. Take it first.
+   problem — was never taken. Take it first. Note what a 1000-image profile
+   actually says before assuming this is the win: the mapper's bundle
+   adjustments are *mostly small already*, because the model grows from two
+   images, and its cost sits in the last few full-size ones. Those are the ones
+   local BA does not replace. What made the difference at that size was the
+   linear solver's dense/CG crossover (`--ba-solver`) and bounding track length
+   (`kMergeMaxTrack`), both of which act on exactly those passes.
 2. **Shared GPU primitives**: radix sort, prefix scan, segmented reduction, a
    descriptor-set cache, record-once/replay command buffers. The solver
    re-records a command buffer per LM iteration, which is fine at global-BA
@@ -222,16 +261,34 @@ port. Ordered by what blocks the most.
    extractor leaking buffers when they grow between images.
 3. **Gauge fixing and constant-parameter masks**, per-observation weights, and
    mid-solve outlier down-weighting. LM damping regularizes the gauge today.
-4. **Vocabulary tree / global-descriptor index** past ~3k images.
+4. **Vocabulary tree / global-descriptor index** past ~3k images. Less urgent
+   than it was: pair selection is now two-stage (a symmetric mini-vs-mini
+   shortlist over every pair, then the reliable asymmetric score on the
+   shortlist), which cut the quadratic term 5-6x — 59 s to 10 s on 1194 images —
+   while keeping 98-99.5% of the same pair set. The term is still quadratic.
 
 **Quality**
 
-5. **Visibility-pyramid next-image scoring** — a raw correspondence count today.
-6. **Track merging** in the triangulator. Continuation, creation and completion
-   exist; fusing two 3D points bridged by a correspondence does not.
+5. ~~Visibility-pyramid next-image scoring~~ — done (`--rank-by-visibility`,
+   on by default): the next image is ranked by how its visible structure
+   *spreads* over the frame, COLMAP's MIN_UNCERTAINTY default, and an image
+   that already failed sorts behind every untried one.
+6. ~~Track merging~~ — done (`--merge-tracks`, on by default):
+   `Mapper::mergeTracks` fuses two 3D points a correspondence says are the same
+   feature, subject to an all-inliers reprojection test, one observation per
+   image, the union still subtending the minimum triangulation angle, and a cap
+   on the merged track's length — the reduced camera system has an entry per
+   image *pair* on a track, so unbounded fusion buys a twentieth observation of
+   an already-pinned point and pays for it in the solver.
 7. **Misregistration on large unordered sets** — images placed in the wrong part
-   of the scene. Diagnosed, then parked in favour of throughput work; re-examine
-   with item 5.
+   of the scene. Diagnosed, then parked in favour of throughput work; the
+   visibility ranking of item 5 helped and did not close it.
+7b. **The fold split's veto is calibrated on two points.** A real fold's cut
+   severs 0.00% of the model's co-visibility (`sfm_merge_test`); the one sound
+   model in an 80-dataset corpus that the conflicts talked into a cut severed
+   1.30%, and taking it cost 568 images and 65 points of AUC. The veto is now
+   0.5%, between them but nearer the fold. It fires on one dataset in eighty,
+   so a third data point is worth having before trusting the number.
 8. **Nister 5-point** (calibrated init) and **EPnP**.
 9. **Automatic camera-model detection.** A fisheye capture run with the default
    rectilinear model reconstructs badly and nothing detects it. The focal
@@ -253,7 +310,12 @@ port. Ordered by what blocks the most.
 13. **Verification, fewer model fits.** A pair with no real geometry still runs
     every RANSAC trial for both F and H. Do *not* re-attempt SPRT for this: it
     was measured and rejected (residual evaluation is a few percent of RANSAC's
-    cost). The win is in not proposing hopeless pairs.
+    cost). The win is in not proposing hopeless pairs. Three cheaper things
+    landed since: an exact early bail in the scoring loop (a model that cannot
+    reach the incumbent's inlier count stops being scored), local optimization
+    *inside* the trial loop rather than only after it (a better incumbent means
+    fewer trials for the same confidence), and a homography residual with no
+    transcendental or square root at all.
 14. **Matcher register-blocking**, if it is still bandwidth-bound. Measured:
     the win was in the workgroup *width*, not in registers. A pair's train
     descriptors are streamed through groupshared once per workgroup, so the
@@ -267,7 +329,10 @@ port. Ordered by what blocks the most.
 
 15. Learned frontend (ALIKED / SuperPoint + LightGlue) behind the existing
     extractor and matcher interfaces.
-16. Global (GLOMAP-style) and hierarchical mappers.
+16. A **global** (GLOMAP-style) mapper. The **hierarchical** one exists
+    (`--mapper hierarchical`, `map/Partition.h` + `map/Hierarchical.h`); what it
+    has not got is parallel cluster reconstruction, which needs a second
+    `rec_` per worker and one shared `VkContext`.
 17. Parity benchmarking on ETH3D / IMC.
 
 **Deliberately out of scope**, so they are not silently skipped: rig

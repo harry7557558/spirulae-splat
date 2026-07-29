@@ -7,8 +7,12 @@
 // residual^2 < max_error^2, and the trial count adapts to the best inlier ratio
 // (COLMAP's defaults: confidence 0.999, 100..10000 trials).
 //
-// SPRT early termination (roadmap) is not implemented; the adaptive stopping
-// rule below is the MVP.
+// SPRT was measured and rejected (D26): residual evaluation is a few percent of
+// RANSAC's cost, so a statistical test that stops scoring early buys almost
+// nothing. What does buy something, and is exact rather than statistical, is
+// the bail in `scoreModel` -- a model that cannot reach the incumbent's inlier
+// count stops being scored -- and running the local optimization *inside* the
+// trial loop, which raises the inlier ratio the stopping rule reads.
 #pragma once
 
 #include <algorithm>
@@ -48,9 +52,17 @@ using ResidualFn = std::function<double(const Model&, int)>;
 // better) and inlier count. `res` is a template parameter, not a
 // std::function: this runs `trials * n` times per estimate and an indirect
 // call per residual was pure overhead against a few flops of work.
+//
+// `need` is the inlier count a model must be able to reach to be worth
+// finishing: once the points left cannot lift `count` to it, the model can
+// neither beat nor tie the incumbent, so scoring stops and `count` is returned
+// as -1. Most trials of a RANSAC are such models, and each of them was
+// previously scored against every correspondence. The saving is exact -- a
+// model that would have won is never cut, because the bail needs
+// count + remaining < need, not <=.
 template <class Model, class Res>
 static double scoreModel(const Model& m, int n, double thr2, const Res& res,
-                         std::vector<char>& inliers, int& count) {
+                         std::vector<char>& inliers, int& count, int need = 0) {
     inliers.assign(n, 0);
     count = 0;
     double score = 0;
@@ -62,6 +74,7 @@ static double scoreModel(const Model& m, int n, double thr2, const Res& res,
             score += r2;
         } else {
             score += thr2;
+            if (count + (n - 1 - i) < need) { count = -1; return score; }
         }
     }
     return score;
@@ -87,13 +100,31 @@ RansacReport<Model> loransac(int n, int min_samples, const Fit& fit, const Refit
     std::vector<char> inl;
     auto consider = [&](const Model& m) {
         int cnt = 0;
-        double sc = scoreModel(m, n, thr2, res, inl, cnt);
+        double sc = scoreModel(m, n, thr2, res, inl, cnt, best.num_inliers);
+        if (cnt < 0) return;  // bailed: cannot reach the incumbent's inlier count
         if (cnt > best.num_inliers || (cnt == best.num_inliers && sc < best.score)) {
             best.model = m;
             best.inlier_mask.swap(inl);
             best.num_inliers = cnt;
             best.score = sc;
             best.success = cnt >= min_samples;
+        }
+    };
+
+    // Local optimization on the current inliers, `rounds` times or until it
+    // stops helping. Used both inside the trial loop (where a better model
+    // raises the inlier ratio and so lowers the trial count the stopping rule
+    // demands) and once more at the end.
+    std::vector<int> lo_idx;
+    auto localOptimize = [&](int rounds) {
+        for (int it = 0; it < rounds; it++) {
+            lo_idx.clear();
+            for (int i = 0; i < n; i++)
+                if (best.inlier_mask[i]) lo_idx.push_back(i);
+            if ((int)lo_idx.size() < min_samples) break;
+            const int before = best.num_inliers;
+            for (const Model& m : refit(lo_idx)) consider(m);
+            if (best.num_inliers <= before) break;  // converged
         }
     };
 
@@ -108,7 +139,15 @@ RansacReport<Model> loransac(int n, int min_samples, const Fit& fit, const Refit
             int idx = uni(rng);
             if (std::find(sample.begin(), sample.end(), idx) == sample.end()) sample.push_back(idx);
         }
+        const int before = best.num_inliers;
         for (const Model& m : fit(sample)) consider(m);
+        // Textbook LO-RANSAC: optimize as soon as the incumbent improves, not
+        // only at the end. The refit model explains more of the data, which
+        // both raises the inlier ratio the stopping rule reads (fewer trials
+        // for the same confidence) and tightens the early-bail threshold
+        // (cheaper trials). One round is enough here -- the full ladder runs
+        // after the loop.
+        if (opt.lo_iters > 0 && best.num_inliers > before && best.success) localOptimize(1);
 
         // adaptive stopping from the best inlier ratio so far
         if (best.num_inliers > 0) {
@@ -123,21 +162,11 @@ RansacReport<Model> loransac(int n, int min_samples, const Fit& fit, const Refit
         }
     }
 
-    // Local optimization: iteratively refit on the current inliers. (`refit` is
-    // now a deduced callable rather than a std::function, so there is no
-    // "empty" state to test for -- every caller passes a real one, and an
-    // estimator with no non-minimal solver passes its minimal one twice.)
-    if (best.success) {
-        for (int it = 0; it < opt.lo_iters; it++) {
-            std::vector<int> inl;
-            for (int i = 0; i < n; i++)
-                if (best.inlier_mask[i]) inl.push_back(i);
-            if ((int)inl.size() < min_samples) break;
-            int before = best.num_inliers;
-            for (const Model& m : refit(inl)) consider(m);
-            if (best.num_inliers <= before) break;  // converged
-        }
-    }
+    // Final local optimization. (`refit` is a deduced callable rather than a
+    // std::function, so there is no "empty" state to test for -- every caller
+    // passes a real one, and an estimator with no non-minimal solver passes its
+    // minimal one twice.)
+    if (best.success) localOptimize(opt.lo_iters);
     best.trials = trial;
     if (opt.min_inlier_ratio > 0 && (double)best.num_inliers / n < opt.min_inlier_ratio)
         best.success = false;

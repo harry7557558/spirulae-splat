@@ -103,7 +103,15 @@ struct DuplicateOptions {
     // have to force a cut before there is anything to measure, which is what
     // stops it from lopping the end off a linear capture (a cheap cut, but no
     // co-located pair to demand it).
-    double max_cut_fraction = 0.02;
+    //
+    // "Almost no" has to be taken literally. A real fold's cut severs *zero*
+    // co-visibility -- that is what the synthetic case in sfm_merge_test
+    // measures, and it is what the argument above predicts. The one sound model
+    // in this corpus that the conflicts talked into a cut severed 1.30%, and
+    // splitting it cost 568 of its 1243 images and 65 points of AUC. So the
+    // veto sits where the two are separated by two orders of magnitude, not by
+    // a factor of 1.5.
+    double max_cut_fraction = 0.005;
 };
 
 struct DuplicateReport {

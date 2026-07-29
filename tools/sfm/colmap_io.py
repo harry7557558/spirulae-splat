@@ -107,12 +107,54 @@ def _finish(m):
     return m
 
 
+def _text_lines(path):
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                yield line.split()
+
+
+def read_cameras_text(path):
+    cams = {}
+    for t in _text_lines(path):
+        cams[int(t[0])] = dict(id=int(t[0]), model=t[1], width=int(t[2]),
+                               height=int(t[3]),
+                               params=np.array([float(x) for x in t[4:]]))
+    return cams
+
+
+def read_images_text(path, with_points=True):
+    """images.txt alternates a pose line and a 2D-point line per image."""
+    imgs, pose = {}, None
+    for t in _text_lines(path):
+        if pose is None:
+            pose = t
+            continue
+        iid = int(pose[0])
+        q = np.array([float(x) for x in pose[1:5]])
+        xy, p3D = None, None
+        if with_points and len(t) >= 3:
+            a = np.array([float(x) for x in t]).reshape(-1, 3)
+            xy, p3D = a[:, :2], a[:, 2].astype(np.int64)
+        imgs[iid] = dict(id=iid, qvec=q,
+                         tvec=np.array([float(x) for x in pose[5:8]]),
+                         camera_id=int(pose[8]), name=pose[9], xys=xy, p3D=p3D)
+        pose = None
+    return imgs
+
+
 def read_model(d, with_points=True):
+    """A COLMAP model directory in either the binary or the text format."""
     d = Path(d)
-    m = dict(cameras=read_cameras(d / "cameras.bin"),
-             images=read_images(d / "images.bin", with_points))
-    if with_points and (d / "points3D.bin").exists():
-        m["points3D"] = read_points3D(d / "points3D.bin")
+    if (d / "cameras.bin").exists():
+        m = dict(cameras=read_cameras(d / "cameras.bin"),
+                 images=read_images(d / "images.bin", with_points))
+        if with_points and (d / "points3D.bin").exists():
+            m["points3D"] = read_points3D(d / "points3D.bin")
+        return _finish(m)
+    m = dict(cameras=read_cameras_text(d / "cameras.txt"),
+             images=read_images_text(d / "images.txt", with_points))
     return _finish(m)
 
 
@@ -194,10 +236,18 @@ def read_metashape(path, largest_component_only=True):
     if largest_component_only and ref.comps:
         keys = next(iter(ref.comps.values()))
 
+    # Metashape sensor type -> the COLMAP model whose focal means the same
+    # thing. A spherical sensor has no focal at all, and the intrinsics
+    # comparison has to know that rather than compare a placeholder.
+    sensor_model = {"frame": "OPENCV", "fisheye": "OPENCV_FISHEYE",
+                    "equidistant_fisheye": "OPENCV_FISHEYE",
+                    "equisolid_fisheye": "OPENCV_FISHEYE",
+                    "spherical": "EQUIRECTANGULAR"}
     cams, imgs = {}, {}
     for sid, s in ref.sensors.items():
-        cams[len(cams) + 1] = dict(id=len(cams) + 1, model="OPENCV", width=s["width"],
-                                   height=s["height"],
+        cams[len(cams) + 1] = dict(id=len(cams) + 1,
+                                   model=sensor_model.get(s.get("type"), "OPENCV"),
+                                   width=s["width"], height=s["height"],
                                    params=np.array([s["f"], s["f"], s["cx"], s["cy"],
                                                     *s["k"][:2], *s["p"]]))
     sensor_cam = {sid: i + 1 for i, sid in enumerate(ref.sensors)}
@@ -217,7 +267,7 @@ def read_model_any(path, with_points=True):
         return read_transforms(p)
     if p.suffix == ".xml":
         return read_metashape(p)
-    if (p / "cameras.bin").exists():
+    if (p / "cameras.bin").exists() or (p / "cameras.txt").exists():
         return read_model(p, with_points)
     if (p / "transforms.json").exists():
         return read_transforms(p / "transforms.json")

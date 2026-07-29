@@ -309,9 +309,10 @@ private:
                 fprintf(stderr,
                         "[mgr] a %u-image model has %zu of %zu co-located image pairs with no "
                         "structure in common and no match either (%zu more share nothing but "
-                        "were matched): two places written on top of each other. Splitting "
-                        "into", m.numRegistered(), dr.conflicts, dr.colocated,
-                        dr.unmatched_but_seen);
+                        "were matched) and a cut that severs %.2f%% of its co-visibility: two "
+                        "places written on top of each other. Splitting into",
+                        m.numRegistered(), dr.conflicts, dr.colocated, dr.unmatched_but_seen,
+                        100.0 * cut.fraction());
                 for (const Reconstruction& p : parts) fprintf(stderr, " %u", p.numRegistered());
                 if (dropped) fprintf(stderr, " (%zu images dropped)", dropped);
                 fprintf(stderr, "\n");
@@ -405,7 +406,10 @@ private:
             const Signature sig = signature(models[i]);
             if (barren_.count(sig)) continue;
             Mapper::GrowStats gs;
-            Reconstruction grown = mapper_.continueFrom(models[i], &gs);
+            std::vector<const Reconstruction*> others;
+            for (size_t j = 0; j < models.size(); j++)
+                if (j != i) others.push_back(&models[j]);
+            Reconstruction grown = mapper_.continueFrom(models[i], &gs, others);
             if (!gs.registered) {
                 barren_.insert(sig);
                 continue;
@@ -487,6 +491,7 @@ private:
     void fixOutlierCameras(std::vector<Reconstruction>& models) {
         if (models.size() < 3) return;  // no population to take a consensus from
         std::map<uint32_t, std::vector<std::pair<double, uint32_t>>> focals;  // id -> (f, weight)
+        std::map<uint32_t, uint32_t> widest;  // id -> most images any model gives it
         for (const Reconstruction& m : models) {
             std::map<uint32_t, uint32_t> used;
             for (const auto& kv : m.images)
@@ -495,10 +500,19 @@ private:
                 auto u = used.find(kv.first);
                 if (u == used.end()) continue;
                 focals[kv.first].push_back({kv.second.focal(), u->second});
+                widest[kv.first] = std::max(widest[kv.first], u->second);
             }
         }
         std::map<uint32_t, double> consensus;
         for (const auto& kv : focals) {
+            // A camera group of one image has no population to be an outlier
+            // of: its focal is fitted from that image alone in every model that
+            // holds it, so another model's value is not better evidence, and
+            // "refitting" costs a full bundle adjustment of the whole model to
+            // swap one guess for another. On an internet collection, where
+            // every image is its own camera (D20), that fired on hundreds of
+            // cameras and made the manage loop the longest stage of the run.
+            if (widest[kv.first] < 2 || kv.second.size() < 3) continue;
             // Weighted median: the model with the most images decides ties,
             // and a couple of runaway small models cannot move it.
             std::vector<std::pair<double, uint32_t>> v = kv.second;

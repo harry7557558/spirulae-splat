@@ -67,6 +67,12 @@ struct BundleOptions {
     // point is exactly a rotation of that one camera, with nothing to
     // contradict it. 0 refines every group.
     size_t pp_min_images = 20;
+    // Which linear solver the reduced camera system gets: "auto" is the
+    // solver's own n_dim threshold, "dense" its Cholesky, "cg" the
+    // implicit-Schur conjugate gradient. The threshold was measured on one GPU
+    // and the crossover moves with the hardware, so it is worth being able to
+    // name (`--ba-solver`).
+    std::string solver = "auto";
     // Persistent context (D38): device, pipelines and descriptor machinery
     // outlive one solve. The caller owns it and must keep (real, loss) fixed
     // across calls on the same context. Null = scoped context per call.
@@ -222,6 +228,8 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
     sopt.loss_param = bopt.loss_param;
     if (bopt.rtol > 0) sopt.rtol = bopt.rtol;
     if (bopt.patience > 0) sopt.patience = bopt.patience;
+    if (bopt.solver == "dense") sopt.solver = SolverSel::Dense;
+    else if (bopt.solver == "cg") sopt.solver = SolverSel::CG;
     double t_build = prof_lap();
     BundleSolver solver(P, sopt, bopt.shared_ctx);
     solver.init();

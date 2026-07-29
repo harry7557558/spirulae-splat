@@ -78,19 +78,25 @@ inline std::vector<Mat3> estimateHomographyBearing(const std::vector<Vec3>& p1,
     return {H};
 }
 
-// Symmetric angular transfer error on the sphere, in squared radians. A ray
-// transferred to the opposite hemisphere lands past 90 deg and is rejected,
-// which is the point of the sign convention above.
+// Symmetric angular transfer error on the sphere. A ray transferred to the
+// opposite hemisphere lands past 90 deg and is rejected, which is the point of
+// the sign convention above.
+//
+// The value is tan^2 of each transfer angle, not the angle squared. The two
+// agree to seven digits over the thresholds this is ever compared against (a
+// few milliradians -- `--max-error` pixels over a focal length), they are
+// monotone in each other everywhere short of 90 deg, and MSAC clamps everything
+// past the threshold anyway, so the inlier sets and the scores are the same.
+// What it buys is the arithmetic: |u x v|^2 / (u.v)^2 is scale-invariant in
+// both arguments, so this runs with no transcendental and no square root at
+// all, where the angle form needed two atan2 and four sqrt. It is evaluated
+// hundreds of times per RANSAC trial on every pair of a capture.
 inline double angularTransferSq(const Mat3& H, const Mat3& Hinv, const Vec3& a, const Vec3& b) {
-    auto ang2 = [](const Vec3& u, const Vec3& v) {
-        Vec3 c = u.cross(v);
-        double th = std::atan2(c.norm(), u.dot(v));
-        return th * th;
-    };
-    Vec3 hb = mul(H, a), ha = mul(Hinv, b);
-    double n1 = hb.norm(), n2 = ha.norm();
-    if (n1 < 1e-30 || n2 < 1e-30) return 1e30;
-    return ang2(hb * (1.0 / n1), b) + ang2(ha * (1.0 / n2), a);
+    const Vec3 hb = mul(H, a), ha = mul(Hinv, b);
+    const double d1 = hb.dot(b), d2 = ha.dot(a);
+    if (d1 <= 0 || d2 <= 0) return 1e30;  // transferred to the far hemisphere
+    const Vec3 c1 = hb.cross(b), c2 = ha.cross(a);
+    return c1.dot(c1) / (d1 * d1) + c2.dot(c2) / (d2 * d2);
 }
 
 inline Vec2 applyH(const Mat3& H, const Vec2& p) {

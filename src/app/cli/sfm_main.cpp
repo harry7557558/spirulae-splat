@@ -580,6 +580,21 @@ static bool readModels(const std::string& dir, std::vector<Reconstruction>& mode
 }
 
 // One last global bundle adjustment per model with the principal point
+// Flat or hierarchical, per --mapper. `auto` goes hierarchical once the capture
+// is large enough for the flat mapper's whole-model passes to dominate; below
+// that the flat schedule is both faster and better, because nothing is ever cut
+// and nothing has to be glued back.
+static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDatabase& db,
+                                             const SfmConfig& cfg) {
+    const bool hier = cfg.mapper_mode == "hierarchical" ||
+                      (cfg.mapper_mode == "auto" && db.images.size() >= cfg.hier.min_images);
+    if (!hier) return mapper.run();
+    HierarchicalStats hs;
+    HierarchicalOptions ho = cfg.hier;
+    ho.verbose = !cfg.quiet;
+    return hierarchicalReconstruct(mapper, db, ho, cfg.merge, hs);
+}
+
 // released (D51). COLMAP's documentation: hold it during reconstruction, where
 // it is ill-posed, then "try to refine the principal point in global bundle
 // adjustment" once every image is in and the problem is constrained --
@@ -1132,23 +1147,39 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
             CameraSetup& cs = calib->cameras;
             cs = buildCameras(db.images, feats, calib->setup);
             if (verbose) printCameraSetup("match", cs, calib->setup, feats.size());
-            if (cs.anyWide()) {
-                // Sample pairs evenly across the list -- taking a prefix would
-                // sample one part of the capture, and pair lists are ordered.
-                // The sample is per group, so it is scaled by the group count.
+            // Both focal searches want the same thing: putative matches for a
+            // sample of pairs, spread over the list (a prefix would sample one
+            // part of the capture, since pair lists are ordered). The fisheye
+            // one has to run before verification because the focal decides the
+            // bearings it verifies on; the rectilinear one could run after, but
+            // sharing this sample costs nothing and keeps one code path.
+            const bool want_rect = cs.anyGuessedRectilinear();
+            std::vector<std::pair<uint32_t, uint32_t>> sample;
+            std::vector<std::vector<FeatureMatch>> sm;
+            if (cs.anyWide() || want_rect) {
                 const size_t want = calib->sample_pairs * std::max<size_t>(1, cs.count());
-                std::vector<std::pair<uint32_t, uint32_t>> sample;
                 size_t stride = std::max<size_t>(1, pairs.size() / std::max<size_t>(1, want));
                 for (size_t p = 0; p < pairs.size() && sample.size() < want; p += stride)
                     sample.push_back(pairs[p]);
-                std::vector<std::vector<FeatureMatch>> sm, chunk;
+                std::vector<std::vector<FeatureMatch>> chunk;
                 for (size_t b = 0; b < sample.size(); b += 16) {
                     size_t e = std::min(b + 16, sample.size());
                     matcher.matchBatch(feats, sample, b, e, chunk);
                     for (size_t k = b; k < e; k++) sm.push_back(std::move(chunk[k - b]));
                 }
-                bootstrapGroupFocals(feats, cs.ids, sample, sm, cs.cameras, cs.focal_given, tvopt,
-                                     calib->sample_pairs, cfg.threads, verbose);
+            }
+            if (want_rect) {
+                double t_f = now();
+                bootstrapRectilinearFocals(feats, cs.ids, sample, sm, cs.cameras, cs.focal_given,
+                                           cs.focal_measured, tvopt, calib->sample_pairs,
+                                           cfg.threads, verbose);
+                if (verbose && !cs.focal_measured.empty())
+                    fprintf(stderr, "[focal] epipolar focal search %.1f s\n", now() - t_f);
+            }
+            if (cs.anyWide()) {
+                bootstrapGroupFocals(feats, cs.ids, sample, sm, cs.cameras, cs.focal_given,
+                                     cs.focal_measured, tvopt, calib->sample_pairs, cfg.threads,
+                                     verbose);
                 std::vector<Camera> percam(feats.size());
                 for (size_t i = 0; i < feats.size(); i++) percam[i] = cs.cameras.at(cs.ids[i]);
                 double t_b = now();
@@ -1169,6 +1200,17 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
                 }
             }
         }
+        // A focal either search measured was measured *on that group's own
+        // pairs*, which is what focal_known means: the mapper's per-image sweep
+        // has nothing to add to it and every reason to leave it alone. On a
+        // dual-fisheye rig the sweep was seen taking a group from the 552 px
+        // the two-view stage measured to 397 px on one image's 80 inliers, with
+        // the joint refinement then dragging it back to 517. It is deliberately
+        // *not* focal_given: the mapper's probe reconstruction still runs and
+        // bundle-adjusts the value, which measured better than the raw vote.
+        if (calib)
+            for (uint32_t id : calib->cameras.focal_measured)
+                calib->cameras.focal_known.insert(id);
         // Hand the setup on through the database (D47), so `ssplat-sfm map` inherits
         // the grouping and the focals this stage measured instead of
         // re-deriving them from the inliers it is about to produce.
@@ -1339,16 +1381,18 @@ static int cmdMap(int argc, char** argv) {
             sm.push_back(db.pairs[p].matches);
         }
         bootstrapGroupFocals(feats, cs.ids, sample, sm, cs.cameras, cs.focal_given,
-                             TwoViewOptions{}, 200, 0, opt.verbose);
+                             cs.focal_measured, TwoViewOptions{}, 200, 0, opt.verbose);
+        for (uint32_t id : cs.focal_measured) cs.focal_known.insert(id);
     }
     opt.initial_cameras = cs.cameras;
     opt.known_focal_cameras = cs.focal_known;
     opt.given_focal_cameras = cs.focal_given;
+    opt.measured_focal_cameras = cs.focal_measured;
 
     Mapper mapper(db, feats, opt, cs.ids);
     std::vector<Reconstruction> models;
     if (cfg.resume.empty()) {
-        models = mapper.run();
+        models = runMapper(mapper, db, cfg);
     } else {
         // Adopt what a previous run wrote and work on it instead. The models
         // must come from this database (image ids are positions in it); adopt()
@@ -1704,6 +1748,14 @@ static int cmdAuto(int argc, char** argv) {
         return rc;
     double t_match = now() - t0;
     writeMatches(matchpath.string(), db);
+    // Nothing past this point reads a descriptor -- the mapper works on
+    // keypoints, the correspondence graph and the per-keypoint colors -- and on
+    // a large capture they are the biggest thing in the process: 8k features
+    // per image at 128 bytes is a gigabyte per thousand images, held for the
+    // whole of mapping for nothing.
+    for (FeatureSet& fs : feats) {
+        std::vector<uint8_t>().swap(fs.descriptors);
+    }
 
     // ---- 3. incremental mapping ----
     // The grouping and the focals the two-view stage settled on carry straight
@@ -1717,10 +1769,11 @@ static int cmdAuto(int argc, char** argv) {
     mapopt.initial_cameras = cs.cameras;
     mapopt.known_focal_cameras = cs.focal_known;
     mapopt.given_focal_cameras = cs.focal_given;
+    mapopt.measured_focal_cameras = cs.focal_measured;
 
     t0 = now();
     Mapper mapper(db, feats, mapopt, cs.ids);
-    std::vector<Reconstruction> models = mapper.run();
+    std::vector<Reconstruction> models = runMapper(mapper, db, cfg);
     double t_map = now() - t0;
 
     // ---- 3b. merge, grow, prune, reseed until nothing changes (D43, D44) ----

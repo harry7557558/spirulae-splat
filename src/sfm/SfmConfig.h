@@ -35,6 +35,7 @@
 #include "sfm/feature/PairSelection.h"
 #include "sfm/feature/Sift.h"
 #include "sfm/geometry/TwoView.h"
+#include "sfm/map/Hierarchical.h"
 #include "sfm/map/Manager.h"
 #include "sfm/map/Mapper.h"
 #include "sfm/map/Merge.h"
@@ -120,6 +121,13 @@ struct SfmConfig {
     MapperOptions mapper;
     ManagerOptions manager;
     MergeOptions merge;
+    HierarchicalOptions hier;
+    // How the mapper is scheduled: "flat" is one incremental reconstruction of
+    // the whole capture, "hierarchical" cuts the view graph into clusters and
+    // merges them, "auto" picks hierarchical above hier.min_images. Flat is the
+    // default until the hierarchical schedule has been measured on enough
+    // captures to be the one a beginner gets.
+    std::string mapper_mode = "flat";
 
     // Fan the pipeline knobs out into the structs above and validate what the
     // table's ranges cannot. Returns an empty string, or the error to print.
@@ -262,8 +270,28 @@ struct SfmConfig {
       "trivial|huber|cauchy", "Robust loss used by mapping-time bundle adjustment")                 \
     F(mapper.ba_loss_param, "ba-loss-param", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",          \
       0, 1000, "", "Huber delta / Cauchy c, in extraction pixels")                                  \
+    F(mapper.ba_solver, "ba-solver", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,            \
+      "auto|dense|cg",                                                                              \
+      "Linear solver for the reduced camera system; auto switches to CG above the size where "      \
+      "the dense factorization stops paying")                                                       \
     F(mapper.retri_scale, "retri-scale", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 10, "",   \
       "Retriangulation tolerance as a fraction of --max-error, 0 to skip the pass")                 \
+    F(mapper.merge_tracks, "merge-tracks", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,      \
+      "", "Fuse two 3D points a correspondence says are the same feature")                          \
+    F(mapper.rank_by_visibility, "rank-by-visibility", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
+      "mapper", 0, 0, "",                                                                           \
+      "Rank the next image by how its visible structure spreads over the frame, not by count")      \
+    F(mapper_mode, "mapper", CMD_AUTO | CMD_MAP, Tier::Basic, "mapper", 0, 0,                       \
+      "auto|flat|hierarchical",                                                                     \
+      "One incremental reconstruction of the whole capture, or clusters of the view graph "         \
+      "reconstructed separately and merged; auto picks the latter for a large capture")             \
+    F(hier.min_images, "hier-min-images", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",             \
+      2, 1000000, "", "Images at or above which --mapper auto goes hierarchical")                   \
+    F(hier.partition.leaf_max_images, "hier-cluster-size", CMD_AUTO | CMD_MAP, Tier::Advanced,      \
+      "mapper", 20, 100000, "", "Images a view-graph cluster is split until it is under")           \
+    F(hier.partition.overlap, "hier-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",         \
+      0, 100000, "", "Images each cluster borrows from its sibling, which is what a merge aligns "  \
+      "on")                                                                                         \
     F(mapper.ba_growth_ratio, "ba-growth", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1, 100,    \
       "", "Model growth that triggers the next global bundle adjustment")                           \
     F(mapper.ba_growth_rtol, "ba-growth-rtol", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",        \
