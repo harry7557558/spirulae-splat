@@ -43,8 +43,15 @@ regenerates the minimax transcendental coefficients in `df.slang` /
 bash build_develop.bash -DSSPLAT_BACKEND=vulkan -DSSPLAT_BUILD_CLI=ON
 ./build/ssplat-sfm ba /path/to/bal/problem-16-22106-pre.txt --real double
 ./build/ssplat-sfm ba problem.txt --real df --loss huber --loss-param 1.0 --ply out
+./build/ssplat-sfm ba /path/to/sparse/0 -o refined/       # a COLMAP model
 ./build/sfm_cholesky_test 500 --real df          # dense solver unit test
 ```
+
+Given a *directory* rather than a BAL file, `ba` reads a COLMAP sparse model and
+runs exactly the global BA the mapper runs on it (`sfm/map/Bundle.h`, Huber 2 px
+unless `--loss` says otherwise). That is how the solver is profiled and
+regression-tested on real captures instead of on BAL, which has neither shared
+intrinsics groups nor any camera model but Snavely's.
 
 The shader variant matrix can be trimmed for faster iteration:
 `-DSSPLAT_SFM_REALS=df -DSSPLAT_SFM_LOSSES=trivial`. slangc is taken from PATH
@@ -74,6 +81,30 @@ model; Schur assembly, the dense solver, and all updates are model-agnostic
 (dynamic block widths, bounded by `kMaxCamDof`). `--shared-intrinsics` (all
 images in one group) exercises the pose/intrinsics cross-coupling path.
 
+### What the Jacobian pass stores (and what it does not)
+
+Everything downstream of the Jacobian evaluation wants the camera-point block
+`A_cp = Jc^T Jp` (`dof x 3` per observation). It is never materialized. The
+pass stores what it evaluated -- `Jc` (2 x dof), `Jp` (2 x 3) and the weighted
+residual -- and every consumer factors its product through the 2-vector
+residual dimension instead of the 3-vector point dimension:
+
+    A_cp^T x       = Jp^T (Jc x)                      (cg_gather, dp_accum)
+    A_cp v         = Jc^T (Jp v)                      (cg_scatter)
+    A_cp W A_cp'^T = Jc^T (Jp W Jp'^T) Jc'            (every Schur kernel)
+
+Since `dof > 3` this is smaller *and* cheaper: `3*dof` scalars per observation
+become 6, the prepass product `T = A_cp W` (another `3*dof`) becomes the 6
+scalars of `Y = (Jp W)^T`, and the inner product of a Schur block element drops
+from three terms to two. At `dof = 16` it is 2.7x less per-observation memory
+on the dense path and 2x on CG. The 2x2 middle matrix `Jp W Jp'^T` is formed
+once per contributing pair of observations, in shared memory, and contracted
+with `Jc` before the element loop touches it (`Z = Q^T Jc_i`).
+
+The pass also does *no* `S`/`g` accumulation on any path -- the Schur kernels
+own it (below), which is what lets a rejected step re-run the whole assembly
+from the stored Jacobians instead of restoring a snapshot of `S`.
+
 ### Schur assembly (pair-aggregated)
 
 The Schur products `S -= A_up (App+l)^-1 A_up^T` are accumulated per unordered
@@ -84,22 +115,35 @@ contributions of all points seen by both cameras in registers and writes its
 `sfm/ba/Problem.h` builds the per-pair `(obs_i, obs_j)` entry lists host-side (a
 counting sort by pair key); pairs with more than 1024 entries are split into
 chunks that fall back to atomic accumulation, as does the whole kernel when
-groups are shared between images (`--shared-intrinsics`) or the entry list
-would be unreasonably large (`schur_obs`, one thread per observation).
-A prepass (`point_prep`/`acp_prep`) caches `W = (App+l)^-1` per point and
-`T = A_cp W` per observation, so the pair kernel is a pure dot-product sweep.
-This replaced a per-observation kernel issuing ~45 global atomics per obs
-pair and was worth 3-6x on the Schur stage alone.
+groups are shared between images (`--shared-intrinsics`), when the entry list
+would be unreasonably large, or when it would not fit the VRAM budget
+(`schur_obs`, one thread per observation -- the entry lists and `Y` are the
+only memory the pair path costs, so it degrades to the atomic kernel rather
+than to CG). A prepass (`point_prep`/`y_prep`) caches `W = (App+l)^-1` per
+point and `Y` per observation, so the pair kernel is a dot-product sweep over
+its staged blocks. This replaced a per-observation kernel issuing ~45 global
+atomics per obs pair and was worth 3-6x on the Schur stage alone.
 
-The Jacobian kernel's own `S += Jc^T Jc` / `g += Jc^T r` accumulation is also
-deferred to the pair kernel: a diagonal pair's entries are exactly the
-observations of that camera, so the Jacobian kernel just stores `Jc` and the
-weighted residual per observation and the diagonal-pair workgroup sums the
-blocks (folding in the `(1+lambda)` damping, so `damp_S` is skipped too).
-This matters enormously for the emulated `df` config, where atomics are CAS
-loops: ~63 per obs onto ~50 hot addresses per camera made the Jacobian kernel
-~9x slower than the same kernel with atomics removed (measured); float/double
-use native atomic-add hardware and barely noticed.
+The `S += Jc^T Jc` / `g += Jc^T r` accumulation is folded into the same
+kernels: a diagonal pair's entries are exactly the observations of that camera,
+so the diagonal-pair workgroup sums the blocks from the stored `Jc` and
+residual (folding in the `(1+lambda)` damping, so no separate `damp_S` pass
+exists), and `schur_obs` does the same per observation. Keeping it out of the
+Jacobian kernel matters enormously for the emulated `df` config, where atomics
+are CAS loops: ~63 per obs onto ~50 hot addresses per camera made the Jacobian
+kernel ~9x slower than the same kernel with atomics removed (measured);
+float/double use native atomic-add hardware and barely noticed.
+
+### Groupshared budget
+
+The module has three groupshared pools -- the Cholesky tiles, `schur_pair`'s
+staging, and a small one everything else reduces through -- and not one, even
+though their sum is what counts against `maxComputeSharedMemorySize`. A driver
+gives a pipeline the shared memory its entry point *reaches*, and the Cholesky
+pool is 16.9 kB at fp64: a 32-thread workgroup carrying it fits about five to
+an SM. That costs nothing for a kernel that never touches shared memory, and
+2.2x for `schur_pair`, which lives on it. The three together are ~26 kB at
+fp64, inside every device's 32 kB floor.
 
 Adding a camera model = a struct conforming to `ICameraModel` (project +
 static param count) + two one-line entry points in `ba.slang` + one registry
@@ -156,9 +200,8 @@ ALU peak, i.e. the factorization is compute-bound and further blocking would
 not help; at fp32 it is bandwidth-bound.
 
 On the dense path, peak VRAM is dominated by the packed S, the
-per-observation `A_cp` and `T` blocks (`3*dof` scalars/obs each), and the
-Schur pair-entry lists; e.g. problem-871 runs in ~2.3 GB at fp64 including
-all problem data.
+per-observation Jacobians (`2*dof + 8` scalars/obs) and, when the pair
+assembly is on, `Y` (6 more) and the Schur pair-entry lists.
 
 ### Implicit-Schur PCG (large camera counts)
 
@@ -170,18 +213,33 @@ preconditioned conjugate gradient on the same reduced system (`cg.slang`,
 
     S x = B x - sum_p Acp_p W_p (Acp_p^T x)
 
-is applied with the per-observation `Acp` blocks and per-point `W` that the
-assembly already produces -- a per-point gather (`cg_gather`, one thread per
-point over its contiguous track) and a per-camera scatter (`cg_bmul` +
-`cg_scatter`, one warp per chunk of a camera's observation list with
-lane-per-element coalesced `Acp` loads and a handful of atomic adds per
-chunk). `B` (the damped block-diagonal camera Gram matrix) and the exact
-diagonal blocks `S_cc` come from `cg_cam_diag` -- the same per-camera
-accumulation as `schur_pair`'s diagonal pairs, chunked over an
-obs-grouped-by-image CSR built host-side. The `S_cc` blocks, factored per
-camera, form the block-Jacobi preconditioner. This path requires per-image
-intrinsics groups (the same exclusivity condition as the pair kernel);
-`--shared-intrinsics` forces dense.
+is applied through the per-observation `Jc`/`Jp` and per-point `W` that the
+assembly already produces (`A_cp` is implicit -- see above) -- a per-point
+gather (`cg_gather`, one thread per point over its contiguous track) and a
+per-camera scatter (`cg_bmul` + `cg_scatter`, one warp per chunk of a camera's
+observation list with lane-per-element coalesced `Jc` loads and a handful of
+atomic adds per chunk). `B` (the block-diagonal-per-image camera Gram matrix,
+which is exact: no observation couples two images' poses) and the diagonal
+blocks of `S` come from `cg_cam_diag` -- the same per-camera accumulation as
+`schur_pair`'s diagonal pairs, chunked over an obs-grouped-by-image CSR built
+host-side.
+
+The preconditioner is block Jacobi over a *partition* of the camera columns,
+which is where sharing shows up. With per-image intrinsics groups the partition
+is one block per image over `[pose | intrinsics]`, and the blocks are the exact
+diagonal blocks of `S`. When a group is shared -- which is every ordinary
+capture, one camera behind thousands of images -- those blocks would overlap on
+the shared columns, so the partition splits at the seam: a 6x6 block per image
+pose plus one block per group, with the pose/intrinsics coupling dropped and
+the group block's cross-observation terms approximated. It stays symmetric
+positive definite, which is all a preconditioner owes anyone, and it costs a
+few CG iterations. The operator itself is unaffected: `cg_cam_diag` and
+`cg_bmul` accumulate the shared columns atomically instead of storing them.
+
+Before this, sharing forced the dense path, and with it a cubic factorization
+of an `n_dim` that a real capture drives into the tens of thousands: a
+4194-image reconstruction (`n_dim = 25184`) took 94 s and 8.4 GB per global BA
+against 2.6 s and 3.2 GB on CG, at the same final cost.
 
 The entire CG loop is recorded in the iteration's command buffer: scalar
 state (rho, alpha, beta, tolerance) lives in a small device buffer, dot
@@ -192,9 +250,8 @@ cost readback. Stopping rule: relative residual `--cg-tol` (default 0.1,
 inexact-Newton style -- LM's accept/reject guards the step quality) with a
 `--cg-iters` cap (default 100).
 
-The CG path allocates no packed S, no T, and no pair-entry lists, so VRAM
-stays linear in observations: problem-1936 drops from 6.4 GB (dense, fp64)
-to 2.2 GB. Preprocessing also skips the pair-table sort (3.6 s -> 1.2 s
+The CG path allocates no packed S, no Y, and no pair-entry lists, so VRAM
+stays linear in observations. Preprocessing also skips the pair-table sort (3.6 s -> 1.2 s
 there). Solver selection and the dense fallback are VRAM-aware: the budget
 is `--vram-budget` (default 90% of the device-local heap); `auto` picks
 dense for small problems, CG when the dense estimate exceeds the budget or
@@ -226,9 +283,11 @@ Each iteration records one command buffer (assembly → Schur → factor+solve �
 point back-sub → parameter updates → cost) and reads back a single cost
 scalar for the accept/reject decision. Rejects restore parameters from
 device-side backups — and since the restored parameters still match that
-iteration's per-observation assembly (`Jc`/`res`/`Acp`/`App`, plus a `Bp`
+iteration's per-observation Jacobians (`Jc`/`Jp`/`res`/`App`, plus a `Bp`
 snapshot), the retry skips the Jacobian pass entirely and re-solves with the
-new λ. Rejected steps are therefore cheap, which is what makes the fine λ
+new λ -- and since the Schur kernels rebuild `S` and `g` from those on every
+path, nothing else has to be snapshotted (the packed `S` snapshot the atomic
+path used to keep was the single largest buffer on that path). Rejected steps are therefore cheap, which is what makes the fine λ
 search affordable.
 
 ## Results (RTX 4080 Super + i9 32 threads, 50 LM iterations cap)
@@ -263,6 +322,34 @@ Notes:
   `--cg-fallback off` reaches the best final cost of any config there
   (4.650363e6) in ~17 s / 2.2 GB; previously df could not run this problem
   at all (host OOM building pair tables alongside Ceres).
+- **The VRAM figures above predate the implicit `A_cp`**, which cut
+  per-observation memory ~2x on CG and ~2.7x on the dense path; the times are
+  unchanged to within noise. Measured after, on a synthetic 300-camera /
+  1.39M-observation problem: dense 1119 -> 675 MB, CG 553 -> 331 MB, final
+  costs identical to seven digits.
+
+### On real captures
+
+One global BA (`ssplat-sfm ba <sparse dir>`, Huber 2 px, fp64), same machine.
+The interesting axis is camera *sharing*: all of these have one camera group
+behind every image, which is what used to force the dense path.
+
+| capture | images / obs | before | after |
+|---|---|---|---|
+| 529 img | 0.52 M | dense, 0.80 s, 308 MB | dense, 0.75 s, 242 MB |
+| 998 img | 3.43 M | dense, 2.83 s, 1531 MB | dense, 2.79 s, 1288 MB |
+| 4194 img | 7.87 M | dense, 93.6 s, 8392 MB | **cg, 2.6 s, 3157 MB** |
+| 6281 img | 12.48 M | **out of device memory** (needs 15.4 GB) | cg, 4356 MB |
+
+Final costs are identical to seven digits on the first three. On the 4194-image
+one, refining with each path and comparing the two models pose by pose gives
+median rotation and translation errors of 0.0000 deg -- the CG step is the dense
+step, to the precision the poses are written at.
+
+The 6281-image capture is the one this work was aimed at: it is a 6446-image set
+whose global BA could not run at all on a 16 GB card, because sharing forced the
+dense path onto an `n_dim` of 37692. It now reconstructs end to end in a 6.0 GB
+peak (the largest single BA being 6372 images / 12.7 M observations).
 
 ## Known limitations / next steps
 
@@ -274,7 +361,10 @@ Notes:
   graphs (1936) ~9 iters/solve; on the outlier-heavy 871 ~56, which is why
   auto keeps problems below `n_dim = 8192` on the dense path. A stronger
   preconditioner (visibility clustering / power series) is the known next
-  step for ill-conditioned sets.
+  step for ill-conditioned sets -- and the more so now that sharing is
+  allowed, since a shared group costs the preconditioner its pose/intrinsics
+  coupling: the 4194-image capture above converges in 10 iterations/solve, but
+  the 6281-image one sits at the 100 cap for its final refinement pass.
 - fp32 CG inherits the documented fp32 normal-equation stall (block-Jacobi
   is nearly exact at high damping, so it still descends, but final cost is
   looser than fp64/df -- same as fp32 dense, slightly amplified).

@@ -73,9 +73,10 @@ struct BAProblem {
     std::vector<uint32_t> model_obs;
     std::vector<ModelRange> model_ranges;
 
-    // A_cp block pool offsets (element index; block is dof x 3)
-    std::vector<uint32_t> acp_off;
-    uint64_t acp_total = 0;
+    // Jc block pool offsets (element index; block is 2 x dof). Jp, Y and the
+    // residual are fixed-stride per observation and need no table.
+    std::vector<uint32_t> jc_off;
+    uint64_t jc_total = 0;
 
     // pair-aggregated Schur tables: for each unordered image pair {a,b} seen
     // together by at least one point, the list of (obs_a, obs_b) index pairs
@@ -98,19 +99,73 @@ struct BAProblem {
     std::vector<uint32_t> cam_chunks;      // 3 per chunk: image, start, count
     uint32_t num_cam_chunks = 0;
 
+    // Block-Jacobi preconditioner blocks for the CG path: a partition of the
+    // n_dim camera columns, 4 uints per block (col0, len0, col1, len1) -- at
+    // most two contiguous ranges, which is all a camera block ever needs (its
+    // pose columns and its group's intrinsics columns). Built by
+    // buildPrecBlocks; see there for why the partition depends on sharing.
+    std::vector<uint32_t> prec_blocks;
+    uint32_t num_prec_blocks = 0;
+    bool prec_exclusive = true;
+
     uint32_t pose_dim = 0;   // 6 * num_images
     uint32_t total_intr = 0;  // intr.size(): parameters stored (free ones first)
     uint32_t free_intr = 0;   // of those, the ones with columns; n_dim - pose_dim
     uint32_t n_dim = 0;      // camera-side system dimension
 };
 
-// true if every intrinsics group is referenced by at most one image (required
-// by both the pair-Schur and CG paths for exclusive column ownership)
+// True if no *column* of the reduced system is owned by more than one image:
+// every intrinsics group that owns columns at all is referenced by at most one
+// image. The pair-Schur kernel needs this (each element of S must belong to
+// exactly one image pair); the CG path only prefers it (its preconditioner
+// blocks get coarser without it -- see buildPrecBlocks).
+//
+// A group with no free parameters is not shared in any sense that matters: it
+// contributes no columns, so any number of images may point at it. That is the
+// whole of an EQUIRECTANGULAR problem and of every run with the intrinsics
+// held fixed, which is why the test is on n_intr and not on the group alone.
 inline bool exclusiveGroups(const BAProblem& P) {
     std::vector<uint32_t> guse(P.groups.size(), 0);
     for (uint32_t g : P.image_group)
-        if (++guse[g] > 1) return false;
+        if (++guse[g] > 1 && P.groups[g].n_intr) return false;
     return true;
+}
+
+// Partition the camera columns into preconditioner blocks (see
+// BAProblem::prec_blocks).
+//
+// With exclusive groups each image owns its intrinsics outright, so one block
+// per image over [pose | intrinsics] is a genuine partition and keeps the
+// pose/intrinsics coupling -- which is strong (focal against forward
+// translation) and worth preconditioning away.
+//
+// When a group is shared, that block structure is not a partition any more: the
+// same intrinsics columns would sit in every sharing image's block. The
+// partition then splits at the seam -- one 6x6 block per image pose, one block
+// per group -- and the pose/intrinsics coupling is simply dropped from the
+// preconditioner. That costs some CG iterations and nothing else: a
+// preconditioner only has to be symmetric positive definite, and each block is
+// still a genuine (approximate, for the shared groups) diagonal block of S.
+inline void buildPrecBlocks(BAProblem& P, bool exclusive) {
+    P.prec_exclusive = exclusive;
+    P.prec_blocks.clear();
+    P.prec_blocks.reserve(4 * (P.num_images + (exclusive ? 0 : P.groups.size())));
+    auto push = [&](uint32_t c0, uint32_t l0, uint32_t c1, uint32_t l1) {
+        P.prec_blocks.push_back(c0);
+        P.prec_blocks.push_back(l0);
+        P.prec_blocks.push_back(c1);
+        P.prec_blocks.push_back(l1);
+    };
+    for (uint32_t i = 0; i < P.num_images; i++) {
+        const BAProblem::Group& g = P.groups[P.image_group[i]];
+        if (exclusive) push(6 * i, 6, g.intr_col, g.n_intr);
+        else push(6 * i, 6, 0, 0);
+    }
+    // Group blocks keep their group's index (so a kernel can go from an image
+    // straight to its block without another table), including the empty ones.
+    if (!exclusive)
+        for (const BAProblem::Group& g : P.groups) push(g.intr_col, g.n_intr, 0, 0);
+    P.num_prec_blocks = (uint32_t)(P.prec_blocks.size() / 4);
 }
 
 // pair-Schur entry count = sum over points of t(t+1)/2 (cheap; used for VRAM
@@ -179,14 +234,14 @@ inline void finalizeTables(BAProblem& P) {
     P.model_obs.resize(P.num_obs);
     for (uint32_t o = 0; o < P.num_obs; o++) P.model_obs[off[img_model[P.obs_image[o]]]++] = o;
 
-    P.acp_off.resize(P.num_obs);
+    P.jc_off.resize(P.num_obs);
     uint64_t acc = 0;
     for (uint32_t o = 0; o < P.num_obs; o++) {
-        P.acp_off[o] = (uint32_t)acc;
-        acc += 3 * (size_t)img_dof[P.obs_image[o]];
+        P.jc_off[o] = (uint32_t)acc;
+        acc += 2 * (size_t)img_dof[P.obs_image[o]];
     }
-    P.acp_total = acc;
-    if (acc > 0xFFFFFFFFull) throw std::runtime_error("Acp pool exceeds 32-bit indexing");
+    P.jc_total = acc;
+    if (acc > 0xFFFFFFFFull) throw std::runtime_error("Jc pool exceeds 32-bit indexing");
     // note: the packed-triangle 32-bit limit (n_dim <~ 65k) applies only to
     // the dense solver and is checked when that path is selected
 }

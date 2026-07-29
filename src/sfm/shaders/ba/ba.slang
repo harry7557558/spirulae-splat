@@ -9,6 +9,20 @@
 // is assembled directly into a packed lower-triangular dense matrix u_S and
 // solved in place by the blocked Cholesky in cholesky.slang.
 //
+// The Jacobian pass stores only what it evaluated: Jc (2 x dof), Jp (2 x 3) and
+// the weighted residual, per observation. Every consumer of the camera-point
+// block A_cp = Jc^T Jp forms it implicitly instead of reading a materialized
+// dof x 3 block -- the products all factor through the 2-vector residual
+// dimension rather than the 3-vector point dimension:
+//
+//   A_cp^T x       = Jp^T (Jc x)                      (cg_gather, dp_accum)
+//   A_cp v         = Jc^T (Jp v)                      (cg_scatter)
+//   A_cp W A_cp'^T = Jc^T (Jp W Jp'^T) Jc'            (every Schur kernel)
+//
+// which is both smaller (3*dof scalars per observation replaced by 6, and the
+// same again for the prepass product T = A_cp W) and cheaper, since dof > 3.
+// `u_Y` holds (Jp W)^T, the one piece the pair kernel wants precomputed.
+//
 // Push constant slots (meaning per kernel, see host sfm/ba/Solver.h):
 //   u0..u3  - counts / offsets / block index
 //   f0..f3  - damping and loss parameters
@@ -53,10 +67,10 @@ static const int kMaxCamDof = kDofWide;
 [[vk::binding(7)]]  RWStructuredBuffer<Real> u_points;     // (3 per point)
 [[vk::binding(8)]]  StructuredBuffer<uint> u_obs_ranges;   // (num_points+1) obs sorted by point
 [[vk::binding(9)]]  StructuredBuffer<uint> u_model_obs;    // per-model obs index lists, concatenated
-[[vk::binding(10)]] StructuredBuffer<uint> u_acp_off;      // (per obs) element offset into u_acp
+[[vk::binding(10)]] StructuredBuffer<uint> u_jc_off;       // (per obs) element offset into u_Jc
 
 // ---- work buffers (double-bound: Real view + atomic-word view) ----
-[[vk::binding(11)]] RWStructuredBuffer<Real> u_acp;        // A_cp blocks, dof x 3 per obs
+[[vk::binding(11)]] RWStructuredBuffer<Real> u_Jp;         // point Jacobian, [6*o + 2*j + row]
 [[vk::binding(12)]] RWStructuredBuffer<Real> u_S;          // packed lower triangle, n_dim*(n_dim+1)/2
 [[vk::binding(13)]] RWStructuredBuffer<AWord> u_S_a;
 [[vk::binding(14)]] RWStructuredBuffer<Real> u_g;          // gradient -> in-place solution dU
@@ -72,10 +86,10 @@ static const int kMaxCamDof = kDofWide;
 [[vk::binding(22)]] StructuredBuffer<uint2> u_pair_entries; // (obs_i, obs_j) per entry
 [[vk::binding(23)]] StructuredBuffer<uint2> u_pair_chunks;  // (offset, count|atomic_flag)
 [[vk::binding(24)]] RWStructuredBuffer<Real> u_W;           // (9 per point) (App+l)^-1
-[[vk::binding(25)]] RWStructuredBuffer<Real> u_T;           // T = Acp W per obs (Acp layout)
+[[vk::binding(25)]] RWStructuredBuffer<Real> u_Y;           // (Jp W)^T per obs, [6*o + 2*j + row]
 [[vk::binding(26)]] RWStructuredBuffer<Real> u_y;           // (n_dim) triangular-solve scratch
 [[vk::binding(27)]] RWStructuredBuffer<Real> u_Jc;          // camera Jacobian rows per obs,
-                                                            // [2*a+row], offset acp_off*2/3
+                                                            // [2*a+row], offset u_jc_off
 [[vk::binding(28)]] RWStructuredBuffer<Real> u_res;         // weighted residual (2 per obs)
 
 // packed lower-triangular index, row >= col
@@ -87,13 +101,25 @@ uint pidx(uint r, uint c) { return r * (r + 1) / 2 + c; }
 
 static const uint kCostWg = 256;
 
-// One groupshared pool reused by every kernel (the sum of all Workgroup
-// variables in a module counts against maxComputeSharedMemorySize on every
-// pipeline, so distinct arrays per kernel would blow the limit). The second
-// Cholesky tile lives at kSh2 with row pitch 33 to avoid bank conflicts.
+// Three groupshared pools, sized to what actually uses them. The *sum* of a
+// module's Workgroup variables counts against maxComputeSharedMemorySize, so
+// they cannot be handed out per kernel freely -- but they must not be one pool
+// either: a driver allocates each pipeline the shared memory its entry point
+// reaches, and a 32-thread workgroup carrying the Cholesky pool's 16.9 kB
+// (double) fits about five to an SM. That costs nothing for a kernel that
+// never touches shared memory, and 2.2x for schur_pair, which lives on it
+// (measured, RTX 4080 Super). The three together are ~26 kB at fp64, inside
+// every device's 32 kB floor.
+//
+// g_chol - the Cholesky tiles: two 32x32 blocks, the second at kSh2 with row
+//          pitch 33 to avoid bank conflicts, plus a vector for the solves
+// g_pair - schur_pair's per-entry staging (see kPr* below)
+// g_sh   - everything small: block reductions, and the CG kernels' per-obs and
+//          per-chunk staging
 static const uint kSh2 = 32 * 32;
 static const uint kShPool = 32 * 32 + 32 * 33 + 32;
-groupshared Real g_sh[kShPool];
+groupshared Real g_chol[kShPool];
+groupshared Real g_sh[512];
 
 // u0 = obs count for this model, u1 = offset into u_model_obs, f0 = loss param
 void cost_impl<M : ICameraModel>(uint tid, uint lid) {
@@ -128,13 +154,17 @@ void cost_impl<M : ICameraModel>(uint tid, uint lid) {
 }
 
 // =====================================================================
-// residual/jacobian evaluation + assembly of S, g, App, Bp, Acp
+// residual/jacobian evaluation: Jc, Jp, weighted residual, App, Bp
 // =====================================================================
 
-// u0 = obs count for this model, u1 = offset into u_model_obs, f0 = loss param,
-// u2 = 1 to defer the S/g accumulation to schur_pair (store Jc and the
-// residual per obs instead of issuing heavily contended atomics; for the df
-// config the CAS-loop contention dominates the whole kernel)
+// The S/g accumulation is *not* done here on any path -- the Schur kernels own
+// it, since a workgroup that already holds a camera's whole observation list
+// can sum the J^T J block in registers instead of issuing ~dof^2 heavily
+// contended atomics per observation (for the df config the CAS-loop contention
+// dominated this kernel). It also makes the pass idempotent in the parameters:
+// a rejected step restores them and every downstream kernel can simply re-run,
+// which is why no path snapshots S.
+// u0 = obs count for this model, u1 = offset into u_model_obs, f0 = loss param
 void jac_impl<M : ICameraModel>(uint tid) {
     if (tid >= u0) return;
     uint o = u_model_obs[u1 + tid];
@@ -182,49 +212,19 @@ void jac_impl<M : ICameraModel>(uint tid) {
     r.x = r.x * sw;
     r.y = r.y * sw;
 
-    // global column indices of this observation's camera-side parameters
-    // (strictly increasing: pose columns < intrinsics columns)
-    uint cols[DOF];
-    for (int i = 0; i < 6; i++) cols[i] = 6 * img + i;
-    [ForceUnroll]
-    for (int i = 0; i < M.kNumIntr; i++)
-        if (uint(i) < gi.z) cols[6 + i] = gi.y + i;
-
-    // A_cp = Jc^T Jp
-    uint base = u_acp_off[o];
+    uint jb = u_jc_off[o];
     [ForceUnroll]
     for (int a = 0; a < DOF; a++)
-        if (uint(a) < dofw)
-            for (int j = 0; j < 3; j++)
-                u_acp[base + 3 * a + j] = Jc[0][a] * Jp[0][j] + Jc[1][a] * Jp[1][j];
-
-    if (u2 != 0) {
-        // deferred: schur_pair's diagonal-pair workgroups own the S diagonal
-        // blocks and gradient columns exclusively and sum these instead
-        uint jb = base / 3 * 2;
-        [ForceUnroll]
-        for (int a = 0; a < DOF; a++)
-            if (uint(a) < dofw) {
-                u_Jc[jb + 2 * a] = Jc[0][a];
-                u_Jc[jb + 2 * a + 1] = Jc[1][a];
-            }
-        u_res[2 * o] = r.x;
-        u_res[2 * o + 1] = r.y;
-    } else {
-        // S += Jc^T Jc (lower triangle), g += Jc^T r
-        [ForceUnroll]
-        for (int a = 0; a < DOF; a++) {
-            if (uint(a) >= dofw) continue;
-            for (int b = 0; b <= a; b++) {
-                Real v = Jc[0][a] * Jc[0][b] + Jc[1][a] * Jc[1][b];
-                if (isfinite(v))
-                    atomicAccum(u_S_a, pidx(cols[a], cols[b]), v);
-            }
-            Real gv = Jc[0][a] * r.x + Jc[1][a] * r.y;
-            if (isfinite(gv))
-                atomicAccum(u_g_a, cols[a], gv);
+        if (uint(a) < dofw) {
+            u_Jc[jb + 2 * a] = Jc[0][a];
+            u_Jc[jb + 2 * a + 1] = Jc[1][a];
         }
+    for (int j = 0; j < 3; j++) {
+        u_Jp[6 * o + 2 * j] = Jp[0][j];
+        u_Jp[6 * o + 2 * j + 1] = Jp[1][j];
     }
+    u_res[2 * o] = r.x;
+    u_res[2 * o + 1] = r.y;
 
     // App += Jp^T Jp (full 3x3), Bp += Jp^T r
     for (int i = 0; i < 3; i++) {
@@ -243,80 +243,88 @@ void jac_impl<M : ICameraModel>(uint tid) {
 // Schur complement (model-agnostic; uses per-obs tables only)
 // =====================================================================
 
-// multiply diagonal of packed S by (1 + lambda_cam);  u0 = n_dim, f0 = lambda
-[shader("compute")] [numthreads(256, 1, 1)]
-void damp_S(uint3 t : SV_DispatchThreadID) {
-    uint i = t.x;
-    if (i >= u0) return;
-    uint idx = pidx(i, i);
-    u_S[idx] = u_S[idx] * (Real(1.0) + Real(f0));
-}
-
 void obsCamCols<let MD : int>(uint o, out uint dof, out uint base, out uint cols[MD]) {
     uint img = u_obs_image[o];
     uint4 gi = u_group_info[u_image_group[img]];
     dof = 6 + gi.z;
-    base = u_acp_off[o];
+    base = u_jc_off[o];
     for (int i = 0; i < 6; i++) cols[i] = 6 * img + i;
     for (uint i = 0; i < gi.z; i++) cols[6 + i] = gi.y + i;
 }
 
 // One thread per observation ("row" i of its point's pair block):
-//   S -= A_up (App+l)^-1 A_up^T,  g -= A_up (App+l)^-1 Bp
+//   S += Jc^T Jc,  g += Jc^T r,  S -= A_up (App+l)^-1 A_up^T,  g -= A_up W Bp
 // Work per thread is linear in the point's track length (one thread per point
 // would be quadratic and can exceed the GPU watchdog on long tracks).
+//
+// The atomic fallback for the Schur assembly: the pair kernel below aggregates
+// the same sums per image pair and needs no atomics, but it requires exclusive
+// column ownership. The (1+lambda) damping of the J^T J diagonal is folded in
+// here exactly as it is there.
 // u0 = num_obs, f0 = lambda_point
 void schurObsImpl<let MD : int>(uint ti) {
     if (ti >= u0) return;
     uint p = u_obs_point[ti];
 
-    Real A[9];
-    for (int i = 0; i < 9; i++) A[i] = u_App[9 * p + i];
-    A[0] = A[0] * (Real(1.0) + Real(f0));
-    A[4] = A[4] * (Real(1.0) + Real(f0));
-    A[8] = A[8] * (Real(1.0) + Real(f0));
-    Real Ai[9];
-    inverse3(A, Ai);
+    // W = (App + lambda)^-1, already inverted per point by point_prep
+    Real W[9];
+    for (int i = 0; i < 9; i++) W[i] = u_W[9 * p + i];
 
-    uint dof_i, base_i;
+    uint dof_i, jb_i;
     uint cols_i[MD];
-    obsCamCols<MD>(ti, dof_i, base_i, cols_i);
+    obsCamCols<MD>(ti, dof_i, jb_i, cols_i);
+    Real Jci[2 * MD];
+    for (uint a = 0; a < 2 * dof_i; a++) Jci[a] = u_Jc[jb_i + a];
 
-    // Mi = Acp_i (App+l)^-1,  dof_i x 3
-    Real Mi[3 * MD];
-    for (uint a = 0; a < dof_i; a++)
-        for (int j = 0; j < 3; j++) {
-            Real v = Real(0.0);
-            for (int k = 0; k < 3; k++)
-                v = v + u_acp[base_i + 3 * a + k] * Ai[3 * k + j];
-            Mi[3 * a + j] = v;
-        }
+    // Y = (Jp_i W)^T, 2x3 stored column-major like u_Jp
+    Real Y[6];
+    for (int j = 0; j < 3; j++)
+        for (int row = 0; row < 2; row++)
+            Y[2 * j + row] = u_Jp[6 * ti + row] * W[j]
+                           + u_Jp[6 * ti + 2 + row] * W[3 + j]
+                           + u_Jp[6 * ti + 4 + row] * W[6 + j];
 
-    // g -= Mi Bp
+    // S += Jc^T Jc (damped diagonal), g += Jc^T r - Jc^T (Y Bp)
+    Real yb0 = Y[0] * u_Bp[3 * p] + Y[2] * u_Bp[3 * p + 1] + Y[4] * u_Bp[3 * p + 2];
+    Real yb1 = Y[1] * u_Bp[3 * p] + Y[3] * u_Bp[3 * p + 1] + Y[5] * u_Bp[3 * p + 2];
+    Real r0 = u_res[2 * ti], r1 = u_res[2 * ti + 1];
     for (uint a = 0; a < dof_i; a++) {
-        Real v = Mi[3 * a] * u_Bp[3 * p] + Mi[3 * a + 1] * u_Bp[3 * p + 1]
-               + Mi[3 * a + 2] * u_Bp[3 * p + 2];
-        if (isfinite(v))
-            atomicAccum(u_g_a, cols_i[a], -v);
+        for (uint b = 0; b <= a; b++) {
+            Real v = Jci[2 * a] * Jci[2 * b] + Jci[2 * a + 1] * Jci[2 * b + 1];
+            if (a == b) v = v * (Real(1.0) + Real(f0));
+            if (isfinite(v))
+                atomicAccum(u_S_a, pidx(cols_i[a], cols_i[b]), v);
+        }
+        Real gv = Jci[2 * a] * (r0 - yb0) + Jci[2 * a + 1] * (r1 - yb1);
+        if (isfinite(gv))
+            atomicAccum(u_g_a, cols_i[a], gv);
     }
 
-    // S -= Mi Acp_j^T over all observations j of the same point (ordered
-    // pairs across threads); only write row >= col
+    // S -= Jc_i^T (Jp_i W Jp_j^T) Jc_j over all observations j of the same
+    // point (ordered pairs across threads); only write row >= col
     uint t0 = u_obs_ranges[p];
     uint t1 = u_obs_ranges[p + 1];
     for (uint tj = t0; tj < t1; tj++) {
-        uint dof_j, base_j;
+        uint dof_j, jb_j;
         uint cols_j[MD];
-        obsCamCols<MD>(tj, dof_j, base_j, cols_j);
-        for (uint c = 0; c < dof_j; c++) {
-            uint col = cols_j[c];
-            Real b0 = u_acp[base_j + 3 * c];
-            Real b1 = u_acp[base_j + 3 * c + 1];
-            Real b2 = u_acp[base_j + 3 * c + 2];
-            for (uint a = 0; a < dof_i; a++) {
-                uint row = cols_i[a];
+        obsCamCols<MD>(tj, dof_j, jb_j, cols_j);
+        // Q = Y Jp_j^T, 2x2
+        Real q00 = Real(0.0), q01 = Real(0.0), q10 = Real(0.0), q11 = Real(0.0);
+        for (int j = 0; j < 3; j++) {
+            Real b0 = u_Jp[6 * tj + 2 * j], b1 = u_Jp[6 * tj + 2 * j + 1];
+            q00 = q00 + Y[2 * j] * b0;
+            q01 = q01 + Y[2 * j] * b1;
+            q10 = q10 + Y[2 * j + 1] * b0;
+            q11 = q11 + Y[2 * j + 1] * b1;
+        }
+        for (uint a = 0; a < dof_i; a++) {
+            uint row = cols_i[a];
+            Real z0 = Jci[2 * a] * q00 + Jci[2 * a + 1] * q10;
+            Real z1 = Jci[2 * a] * q01 + Jci[2 * a + 1] * q11;
+            for (uint c = 0; c < dof_j; c++) {
+                uint col = cols_j[c];
                 if (row < col) continue;
-                Real v = Mi[3 * a] * b0 + Mi[3 * a + 1] * b1 + Mi[3 * a + 2] * b2;
+                Real v = z0 * u_Jc[jb_j + 2 * c] + z1 * u_Jc[jb_j + 2 * c + 1];
                 if (isfinite(v))
                     atomicAccum(u_S_a, pidx(row, col), -v);
             }
@@ -340,24 +348,22 @@ void point_prep(uint3 t : SV_DispatchThreadID) {
     for (int i = 0; i < 9; i++) u_W[9 * p + i] = Ai[i];
 }
 
-// Precompute T = Acp W per observation (T depends only on the obs since its
-// point is fixed), so the pair-Schur kernel is a plain dot product per entry.
+// Precompute Y = (Jp W)^T per observation (W depends only on the obs's point),
+// so the pair-Schur kernel's per-entry 2x2 middle matrix is one small product.
 // u0 = num_obs
 [shader("compute")] [numthreads(256, 1, 1)]
-void acp_prep(uint3 t : SV_DispatchThreadID) {
+void y_prep(uint3 t : SV_DispatchThreadID) {
     uint o = t.x;
     if (o >= u0) return;
     uint p = u_obs_point[o];
-    uint dof = 6 + u_group_info[u_image_group[u_obs_image[o]]].z;
-    uint base = u_acp_off[o];
     Real W[9];
     for (int i = 0; i < 9; i++) W[i] = u_W[9 * p + i];
-    for (uint r = 0; r < dof; r++) {
-        Real a0 = u_acp[base + 3 * r], a1 = u_acp[base + 3 * r + 1], a2 = u_acp[base + 3 * r + 2];
-        u_T[base + 3 * r]     = a0 * W[0] + a1 * W[3] + a2 * W[6];
-        u_T[base + 3 * r + 1] = a0 * W[1] + a1 * W[4] + a2 * W[7];
-        u_T[base + 3 * r + 2] = a0 * W[2] + a1 * W[5] + a2 * W[8];
-    }
+    Real Jp[6];
+    for (int i = 0; i < 6; i++) Jp[i] = u_Jp[6 * o + i];
+    for (int j = 0; j < 3; j++)
+        for (int row = 0; row < 2; row++)
+            u_Y[6 * o + 2 * j + row] =
+                Jp[row] * W[j] + Jp[2 + row] * W[3 + j] + Jp[4 + row] * W[6 + j];
 }
 
 // Pair-aggregated Schur complement: one workgroup (warp) per chunk of one
@@ -373,6 +379,21 @@ void acp_prep(uint3 t : SV_DispatchThreadID) {
 static const uint kPairWg = 32;
 // Wide-tier element count, used by the (untiered) CG pair kernel in cg.slang.
 static const uint kPairEl = (kMaxCamDof * kMaxCamDof + kPairWg - 1) / kPairWg;
+
+// Groupshared staging for the per-entry 2x2 middle matrix Q = Y_i Jp_j^T (plus
+// the 2-vector Y_i Bp the diagonal pairs' gradient wants) and the
+// half-contracted Z = Q^T Jc_i, so each element of the block costs one 2-term
+// dot product (see the A_cp note at the top of the file).
+//
+// Staged kPrB entries at a time: the cooperative steps need a barrier each, and
+// at one entry per barrier the synchronization cost buried the arithmetic
+// (measured 2.3x slower than the materialized-A_cp kernel it replaced, which
+// had none). Batching amortizes them away while the per-element work stays at
+// two multiplies instead of three.
+static const uint kPrB = 8;         // entries staged per barrier round
+static const uint kPrQ = 0;         // 6 per entry: Q (4) then Y_i Bp (2)
+static const uint kPrZ = 6 * kPrB;  // 2*MD per entry, then Jc_j the same again
+groupshared Real g_pair[6 * kPrB + 4 * kPrB * kMaxCamDof];
 
 void schurPairImpl<let MD : int>(uint wgx, uint gi) {
     const uint kEl = (MD * MD + kPairWg - 1) / kPairWg;
@@ -404,31 +425,67 @@ void schurPairImpl<let MD : int>(uint wgx, uint gi) {
     }
     Real gacc = Real(0.0);
 
-    for (uint t = 0; t < count; t++) {
-        uint2 e = u_pair_entries[off + t];
-        uint bi = u_acp_off[e.x];
-        uint bj = u_acp_off[e.y];
-        uint jb = bi / 3 * 2;
-        [ForceUnroll]
-        for (uint k = 0; k < kEl; k++) {
-            uint el = gi + kPairWg * k;
-            if (el >= nel) continue;
-            uint r = elr[k], c = elc[k];
-            if (diag && r < c) continue;  // symmetric block: lower triangle only
-            acc[k] = acc[k] + u_T[bi + 3 * r] * u_acp[bj + 3 * c]
-                            + u_T[bi + 3 * r + 1] * u_acp[bj + 3 * c + 1]
-                            + u_T[bi + 3 * r + 2] * u_acp[bj + 3 * c + 2];
-            if (diag)
-                acc2[k] = acc2[k] + u_Jc[jb + 2 * r] * u_Jc[jb + 2 * c]
-                                  + u_Jc[jb + 2 * r + 1] * u_Jc[jb + 2 * c + 1];
+    const uint kZs = 2 * MD;              // per-entry stride of the staged blocks
+    const uint kPrJ = kPrZ + kPrB * kZs;  // staged Jc_j
+    for (uint t0 = 0; t0 < count; t0 += kPrB) {
+        uint nb = min(kPrB, count - t0);
+        GroupMemoryBarrierWithGroupSync();  // previous batch done being read
+        for (uint i = gi; i < nb * 6; i += kPairWg) {
+            uint b = i / 6, m = i - 6 * b;
+            uint2 e = u_pair_entries[off + t0 + b];
+            Real v;
+            if (m < 4) {  // Q[qr][qs] = sum_j Y_i[j][qr] Jp_j[j][qs]
+                uint qr = m >> 1, qs = m & 1;
+                v = u_Y[6 * e.x + qr] * u_Jp[6 * e.y + qs]
+                  + u_Y[6 * e.x + 2 + qr] * u_Jp[6 * e.y + 2 + qs]
+                  + u_Y[6 * e.x + 4 + qr] * u_Jp[6 * e.y + 4 + qs];
+            } else if (diag) {  // (Y_i Bp)[row], only the gradient wants it
+                uint row = m - 4;
+                uint p = u_obs_point[e.x];
+                v = u_Y[6 * e.x + row] * u_Bp[3 * p] + u_Y[6 * e.x + 2 + row] * u_Bp[3 * p + 1]
+                  + u_Y[6 * e.x + 4 + row] * u_Bp[3 * p + 2];
+            } else {
+                continue;
+            }
+            g_pair[kPrQ + 6 * b + m] = v;
         }
-        if (diag && gi < dof_i) {
-            uint p = u_obs_point[e.x];
-            gacc = gacc + u_T[bi + 3 * gi] * u_Bp[3 * p]
-                        + u_T[bi + 3 * gi + 1] * u_Bp[3 * p + 1]
-                        + u_T[bi + 3 * gi + 2] * u_Bp[3 * p + 2]
-                        - u_Jc[jb + 2 * gi] * u_res[2 * e.x]
-                        - u_Jc[jb + 2 * gi + 1] * u_res[2 * e.x + 1];
+        for (uint i = gi; i < nb * 2 * dof_j; i += kPairWg) {
+            uint b = i / (2 * dof_j), m = i - b * 2 * dof_j;
+            g_pair[kPrJ + kZs * b + m] = u_Jc[u_jc_off[u_pair_entries[off + t0 + b].y] + m];
+        }
+        GroupMemoryBarrierWithGroupSync();
+        for (uint i = gi; i < nb * 2 * dof_i; i += kPairWg) {
+            uint b = i / (2 * dof_i), m = i - b * 2 * dof_i;
+            uint a = m >> 1, s = m & 1;
+            uint bi = u_jc_off[u_pair_entries[off + t0 + b].x];
+            g_pair[kPrZ + kZs * b + m] = u_Jc[bi + 2 * a] * g_pair[kPrQ + 6 * b + s]
+                                       + u_Jc[bi + 2 * a + 1] * g_pair[kPrQ + 6 * b + 2 + s];
+        }
+        GroupMemoryBarrierWithGroupSync();
+        for (uint b = 0; b < nb; b++) {
+            uint zb = kPrZ + kZs * b, jb = kPrJ + kZs * b;
+            // Jc_i stays in global for the deferred J^T J block: a diagonal
+            // pair has Jc_i == Jc_j staged right there, but taking it from
+            // shared as well costs 45% -- two shared operands per product is
+            // one too many, and these reads all hit L1 anyway.
+            uint bi = u_jc_off[u_pair_entries[off + t0 + b].x];
+            [ForceUnroll]
+            for (uint k = 0; k < kEl; k++) {
+                uint el = gi + kPairWg * k;
+                if (el >= nel) continue;
+                uint r = elr[k], c = elc[k];
+                if (diag && r < c) continue;  // symmetric block: lower triangle only
+                acc[k] = acc[k] + g_pair[zb + 2 * r] * g_pair[jb + 2 * c]
+                                + g_pair[zb + 2 * r + 1] * g_pair[jb + 2 * c + 1];
+                if (diag)
+                    acc2[k] = acc2[k] + u_Jc[bi + 2 * r] * u_Jc[bi + 2 * c]
+                                      + u_Jc[bi + 2 * r + 1] * u_Jc[bi + 2 * c + 1];
+            }
+            if (diag && gi < dof_i) {
+                uint ox = u_pair_entries[off + t0 + b].x;
+                gacc = gacc + u_Jc[bi + 2 * gi] * (g_pair[kPrQ + 6 * b + 4] - u_res[2 * ox])
+                            + u_Jc[bi + 2 * gi + 1] * (g_pair[kPrQ + 6 * b + 5] - u_res[2 * ox + 1]);
+            }
         }
     }
 
@@ -466,17 +523,21 @@ void schurPairImpl<let MD : int>(uint wgx, uint gi) {
 // parameter updates (after cholesky solve leaves dU in u_g)
 // =====================================================================
 
-// Bp -= Acp^T dU, one thread per observation; u0 = num_obs
+// Bp -= Acp^T dU = Jp^T (Jc dU), one thread per observation; u0 = num_obs
 void dpAccumImpl<let MD : int>(uint o) {
     if (o >= u0) return;
     uint dof, base;
     uint cols[MD];
     obsCamCols<MD>(o, dof, base, cols);
     uint pt = u_obs_point[o];
+    Real d0 = Real(0.0), d1 = Real(0.0);
+    for (uint a = 0; a < dof; a++) {
+        Real x = u_g[cols[a]];
+        d0 = d0 + u_Jc[base + 2 * a] * x;
+        d1 = d1 + u_Jc[base + 2 * a + 1] * x;
+    }
     for (int j = 0; j < 3; j++) {
-        Real v = Real(0.0);
-        for (uint a = 0; a < dof; a++)
-            v = v + u_acp[base + 3 * a + j] * u_g[cols[a]];
+        Real v = u_Jp[6 * o + 2 * j] * d0 + u_Jp[6 * o + 2 * j + 1] * d1;
         if (isfinite(v))
             atomicAccum(u_Bp_a, 3 * pt + j, -v);
     }

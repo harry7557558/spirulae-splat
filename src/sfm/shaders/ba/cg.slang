@@ -2,9 +2,13 @@
 // to the dense Cholesky for large camera counts. The reduced system S dU = g
 // is never formed; S x = B x - sum_p Acp_p W_p (Acp_p^T x) is applied through
 // the per-observation A_cp blocks and per-point W, with B the block-diagonal
-// damped camera Gram matrix. Requires per-image intrinsics groups (same
-// exclusivity condition as the pair-Schur kernel; checked host-side).
-// Preconditioner: block Jacobi with the exact diagonal blocks S_cc.
+// damped camera Gram matrix -- "block diagonal" per *image*, which is exact:
+// no observation couples two images' poses, and an image's intrinsics columns
+// are inside its own block. When a group is shared the per-image blocks overlap
+// on those columns, so their contributions are summed atomically instead of
+// stored; u1 carries the exclusive/shared choice into the kernels that differ.
+// Preconditioner: block Jacobi over u_prec_blocks (sfm/ba/Problem.h), the
+// diagonal blocks of S under that partition.
 //
 // The whole CG loop is recorded into the command buffer: scalar state (rho,
 // alpha, beta, tolerance, convergence flag) lives in u_cg_scal on the device
@@ -29,6 +33,7 @@
 [[vk::binding(41)]] RWStructuredBuffer<AWord> u_cg_B_a;
 [[vk::binding(42)]] RWStructuredBuffer<AWord> u_cg_M_a;
 [[vk::binding(43)]] StructuredBuffer<uint> u_cam_chunks;  // 3 per chunk: image, start, count
+[[vk::binding(44)]] StructuredBuffer<uint4> u_prec_blocks;  // (col0, len0, col1, len1) per block
 
 static const uint kCgRho = 0;    // r^T z
 static const uint kCgPAp = 1;    // p^T S p
@@ -44,12 +49,20 @@ static const uint kCamBlk = kMaxCamDof * (kMaxCamDof + 1) / 2;
 
 bool cgDone() { return u_cg_scal[kCgConv] > Real(0.5); }
 
-// global columns of camera `img` (pose then intrinsics; exclusive groups)
+// global columns of camera `img` (pose then intrinsics)
 void camCols(uint img, out uint dof, out uint cols[kMaxCamDof]) {
     uint4 gi = u_group_info[u_image_group[img]];
     dof = 6 + gi.z;
     for (int i = 0; i < 6; i++) cols[i] = 6 * img + i;
     for (uint i = 0; i < gi.z; i++) cols[6 + i] = gi.y + i;
+}
+
+// global columns of preconditioner block `b` (two contiguous ranges)
+void precCols(uint b, out uint dof, out uint cols[kMaxCamDof]) {
+    uint4 blk = u_prec_blocks[b];
+    dof = blk.y + blk.w;
+    for (uint i = 0; i < blk.y; i++) cols[i] = blk.x + i;
+    for (uint i = 0; i < blk.w; i++) cols[blk.y + i] = blk.z + i;
 }
 
 // ---------------------------------------------------------------------
@@ -63,15 +76,23 @@ void camCols(uint img, out uint dof, out uint cols[kMaxCamDof]) {
 //   g_c = Jc^T r - sum_obs Acp W Bp                        (u_g)
 // accumulated atomically into the zero-filled outputs (multiplicative damping
 // is linear in the sum, so each chunk damps its own partial). This is exactly
-// the diagonal-pair part of schur_pair, with T = Acp W recomputed in shared
-// memory per observation (the CG path stores no T).
-// u0 = num chunks, f0 = lambda
-static const uint kShcA = 0;                    // Acp   3 x dof
-static const uint kShcT = 3 * kMaxCamDof;       // T     3 x dof
-static const uint kShcW = 6 * kMaxCamDof;       // W     9
-static const uint kShcJ = 6 * kMaxCamDof + 9;   // Jc    2 x dof
-static const uint kShcR = 8 * kMaxCamDof + 9;   // res   2
-static const uint kShcB = 8 * kMaxCamDof + 11;  // Bp    3
+// the diagonal-pair part of schur_pair, with the 2x2 middle matrix
+// Q = Jp W Jp^T and its contraction Z = Q^T Jc built in shared memory per
+// observation (the CG path stores no Y).
+//
+// M lands in the preconditioner block(s) covering these columns. With exclusive
+// groups that is one block per image and the whole dof x dof block goes there;
+// with a shared group the pose half goes to the image's block, the intrinsics
+// half to the group's, and the cross terms are dropped (they belong to no block
+// of the partition).
+// u0 = num chunks, u1 = exclusive groups, u2 = group-block base, f0 = lambda
+static const uint kShcJ = 0;                    // Jc    2 x dof
+static const uint kShcZ = 2 * kMaxCamDof;       // Z = Q^T Jc   2 x dof
+static const uint kShcQ = 4 * kMaxCamDof;       // Q = Jp W Jp^T   2 x 2
+static const uint kShcY = 4 * kMaxCamDof + 4;   // Y = (Jp W)^T    2 x 3
+static const uint kShcR = 4 * kMaxCamDof + 10;  // res   2
+static const uint kShcB = 4 * kMaxCamDof + 12;  // Bp    3
+static const uint kShcP = 4 * kMaxCamDof + 15;  // Jp    2 x 3
 
 [shader("compute")] [numthreads(kPairWg, 1, 1)]
 void cg_cam_diag(uint3 wg : SV_GroupID, uint gi : SV_GroupIndex) {
@@ -99,20 +120,32 @@ void cg_cam_diag(uint3 wg : SV_GroupID, uint gi : SV_GroupIndex) {
     for (uint t = t0; t < t1; t++) {
         uint o = u_cam_obs[t];
         uint pt = u_obs_point[o];
-        uint base = u_acp_off[o];
-        uint jb = base / 3 * 2;
+        uint jb = u_jc_off[o];
         GroupMemoryBarrierWithGroupSync();  // previous obs done being read
-        for (uint i = gi; i < 3 * dof; i += kPairWg) g_sh[kShcA + i] = u_acp[base + i];
-        if (gi < 9) g_sh[kShcW + gi] = u_W[9 * pt + gi];
         for (uint i = gi; i < 2 * dof; i += kPairWg) g_sh[kShcJ + i] = u_Jc[jb + i];
+        if (gi < 6) g_sh[kShcP + gi] = u_Jp[6 * o + gi];
         if (gi < 2) g_sh[kShcR + gi] = u_res[2 * o + gi];
         if (gi < 3) g_sh[kShcB + gi] = u_Bp[3 * pt + gi];
+        // Y = (Jp W)^T, then Q = Jp W Jp^T -- one 2x2 middle matrix instead of
+        // the dof x 3 block T = Acp W the materialized layout carried per obs
+        if (gi < 6) {
+            uint j = gi >> 1, row = gi & 1;
+            g_sh[kShcY + gi] = u_Jp[6 * o + row] * u_W[9 * pt + j]
+                             + u_Jp[6 * o + 2 + row] * u_W[9 * pt + 3 + j]
+                             + u_Jp[6 * o + 4 + row] * u_W[9 * pt + 6 + j];
+        }
         GroupMemoryBarrierWithGroupSync();
-        for (uint i = gi; i < 3 * dof; i += kPairWg) {
-            uint r = i / 3, k = i - 3 * r;
-            g_sh[kShcT + i] = g_sh[kShcA + 3 * r] * g_sh[kShcW + k]
-                            + g_sh[kShcA + 3 * r + 1] * g_sh[kShcW + 3 + k]
-                            + g_sh[kShcA + 3 * r + 2] * g_sh[kShcW + 6 + k];
+        if (gi < 4) {
+            uint qr = gi >> 1, qs = gi & 1;
+            g_sh[kShcQ + gi] = g_sh[kShcY + qr] * g_sh[kShcP + qs]
+                             + g_sh[kShcY + 2 + qr] * g_sh[kShcP + 2 + qs]
+                             + g_sh[kShcY + 4 + qr] * g_sh[kShcP + 4 + qs];
+        }
+        GroupMemoryBarrierWithGroupSync();
+        for (uint i = gi; i < 2 * dof; i += kPairWg) {
+            uint a = i >> 1, s = i & 1;
+            g_sh[kShcZ + i] = g_sh[kShcJ + 2 * a] * g_sh[kShcQ + s]
+                            + g_sh[kShcJ + 2 * a + 1] * g_sh[kShcQ + 2 + s];
         }
         GroupMemoryBarrierWithGroupSync();
         [ForceUnroll]
@@ -121,22 +154,23 @@ void cg_cam_diag(uint3 wg : SV_GroupID, uint gi : SV_GroupIndex) {
             if (el >= nel) continue;
             uint r = elr[k], c = elc[k];
             if (r < c) continue;  // symmetric block: lower triangle only
-            accM[k] = accM[k] + g_sh[kShcT + 3 * r] * g_sh[kShcA + 3 * c]
-                              + g_sh[kShcT + 3 * r + 1] * g_sh[kShcA + 3 * c + 1]
-                              + g_sh[kShcT + 3 * r + 2] * g_sh[kShcA + 3 * c + 2];
+            accM[k] = accM[k] + g_sh[kShcZ + 2 * r] * g_sh[kShcJ + 2 * c]
+                              + g_sh[kShcZ + 2 * r + 1] * g_sh[kShcJ + 2 * c + 1];
             accB[k] = accB[k] + g_sh[kShcJ + 2 * r] * g_sh[kShcJ + 2 * c]
                               + g_sh[kShcJ + 2 * r + 1] * g_sh[kShcJ + 2 * c + 1];
         }
         if (gi < dof) {
-            gacc = gacc + g_sh[kShcT + 3 * gi] * g_sh[kShcB]
-                        + g_sh[kShcT + 3 * gi + 1] * g_sh[kShcB + 1]
-                        + g_sh[kShcT + 3 * gi + 2] * g_sh[kShcB + 2]
-                        - g_sh[kShcJ + 2 * gi] * g_sh[kShcR]
-                        - g_sh[kShcJ + 2 * gi + 1] * g_sh[kShcR + 1];
+            Real yb0 = g_sh[kShcY] * g_sh[kShcB] + g_sh[kShcY + 2] * g_sh[kShcB + 1]
+                     + g_sh[kShcY + 4] * g_sh[kShcB + 2];
+            Real yb1 = g_sh[kShcY + 1] * g_sh[kShcB] + g_sh[kShcY + 3] * g_sh[kShcB + 1]
+                     + g_sh[kShcY + 5] * g_sh[kShcB + 2];
+            gacc = gacc + g_sh[kShcJ + 2 * gi] * (yb0 - g_sh[kShcR])
+                        + g_sh[kShcJ + 2 * gi + 1] * (yb1 - g_sh[kShcR + 1]);
         }
     }
 
     uint cb = kCamBlk * img;
+    uint gb = kCamBlk * (u2 + u_image_group[img]);
     [ForceUnroll]
     for (uint k = 0; k < kPairEl; k++) {
         uint el = gi + kPairWg * k;
@@ -147,20 +181,25 @@ void cg_cam_diag(uint3 wg : SV_GroupID, uint gi : SV_GroupIndex) {
         if (r == c) jj = jj * (Real(1.0) + Real(f0));  // multiplicative damping
         Real m = jj - accM[k];
         if (isfinite(jj)) atomicAccum(u_cg_B_a, cb + pidx(r, c), jj);
-        if (isfinite(m)) atomicAccum(u_cg_M_a, cb + pidx(r, c), m);
+        if (!isfinite(m)) continue;
+        if (u1 != 0) atomicAccum(u_cg_M_a, cb + pidx(r, c), m);
+        else if (r < 6) atomicAccum(u_cg_M_a, cb + pidx(r, c), m);
+        else if (c >= 6) atomicAccum(u_cg_M_a, gb + pidx(r - 6, c - 6), m);
     }
     if (gi < dof && isfinite(gacc))
         atomicAccum(u_g_a, cols[gi], -gacc);
 }
 
-// Factor each M_c in place (packed lower Cholesky, guarded like chol_diag).
-// One thread per camera; blocks are at most kMaxCamDof wide. u0 = num_images
+// Factor each block in place (packed lower Cholesky, guarded like chol_diag).
+// One thread per block; blocks are at most kMaxCamDof wide. u0 = num blocks
 [shader("compute")] [numthreads(256, 1, 1)]
 void cg_prec_fact(uint3 t : SV_DispatchThreadID) {
-    uint img = t.x;
-    if (img >= u0) return;
-    uint dof = 6 + u_group_info[u_image_group[img]].z;
-    uint cb = kCamBlk * img;
+    uint b = t.x;
+    if (b >= u0) return;
+    uint4 blk = u_prec_blocks[b];
+    uint dof = blk.y + blk.w;
+    if (dof == 0) return;
+    uint cb = kCamBlk * b;
     Real L[kCamBlk];
     for (uint i = 0; i < dof * (dof + 1) / 2; i++) L[i] = u_cg_M[cb + i];
     for (uint j = 0; j < dof; j++) {
@@ -174,17 +213,18 @@ void cg_prec_fact(uint3 t : SV_DispatchThreadID) {
     for (uint i = 0; i < dof * (dof + 1) / 2; i++) u_cg_M[cb + i] = L[i];
 }
 
-// z = M^-1 r, one thread per camera (fwd + bwd solve of the small factor).
-// u0 = num_images, u1 = 1 to respect the convergence flag
+// z = M^-1 r, one thread per block (fwd + bwd solve of the small factor).
+// u0 = num blocks, u1 = 1 to respect the convergence flag
 [shader("compute")] [numthreads(256, 1, 1)]
 void cg_prec_apply(uint3 t : SV_DispatchThreadID) {
     if (u1 != 0 && cgDone()) return;
-    uint img = t.x;
-    if (img >= u0) return;
+    uint b = t.x;
+    if (b >= u0) return;
     uint dof;
     uint cols[kMaxCamDof];
-    camCols(img, dof, cols);
-    uint cb = kCamBlk * img;
+    precCols(b, dof, cols);
+    if (dof == 0) return;
+    uint cb = kCamBlk * b;
     Real y[kMaxCamDof];
     for (uint i = 0; i < dof; i++) {
         Real v = u_cg_r[cols[i]];
@@ -236,12 +276,17 @@ void cg_gather(uint3 t : SV_DispatchThreadID) {
         uint dof, base;
         uint cols[kMaxCamDof];
         obsCamCols(oi, dof, base, cols);
+        // Acp^T p = Jp^T (Jc p): the contraction runs over the 2-vector
+        // residual, so only two accumulators cross the dof loop
+        Real d0 = Real(0.0), d1 = Real(0.0);
         for (uint a = 0; a < dof; a++) {
             Real xa = u_cg_p[cols[a]];
-            u0v = u0v + u_acp[base + 3 * a] * xa;
-            u1v = u1v + u_acp[base + 3 * a + 1] * xa;
-            u2v = u2v + u_acp[base + 3 * a + 2] * xa;
+            d0 = d0 + u_Jc[base + 2 * a] * xa;
+            d1 = d1 + u_Jc[base + 2 * a + 1] * xa;
         }
+        u0v = u0v + u_Jp[6 * oi] * d0 + u_Jp[6 * oi + 1] * d1;
+        u1v = u1v + u_Jp[6 * oi + 2] * d0 + u_Jp[6 * oi + 3] * d1;
+        u2v = u2v + u_Jp[6 * oi + 4] * d0 + u_Jp[6 * oi + 5] * d1;
     }
     for (int i = 0; i < 3; i++)
         u_cg_v[3 * p + i] = u_W[9 * p + 3 * i] * u0v + u_W[9 * p + 3 * i + 1] * u1v
@@ -250,7 +295,10 @@ void cg_gather(uint3 t : SV_DispatchThreadID) {
 
 // Sp_c = B_c p_c: one warp per camera initializes u_cg_sp with the small
 // symmetric block multiply; cg_scatter then subtracts the cross term
-// atomically. u0 = num_images
+// atomically. The pose rows belong to this camera alone and are stored; the
+// intrinsics rows may be shared with other images, in which case the host has
+// pre-zeroed that slice of u_cg_sp and every image adds into it.
+// u0 = num_images, u1 = exclusive groups
 [shader("compute")] [numthreads(kPairWg, 1, 1)]
 void cg_bmul(uint3 wg : SV_GroupID, uint gi : SV_GroupIndex) {
     if (cgDone()) return;
@@ -266,13 +314,15 @@ void cg_bmul(uint3 wg : SV_GroupID, uint gi : SV_GroupIndex) {
         uint idx = gi >= b ? pidx(gi, b) : pidx(b, gi);
         acc = acc + u_cg_B[cb + idx] * u_cg_p[cols[b]];
     }
-    storeAccum(u_cg_sp_a, cols[gi], acc);
+    if (u1 != 0 || gi < 6) storeAccum(u_cg_sp_a, cols[gi], acc);
+    else if (isfinite(acc)) atomicAccum(u_cg_sp_a, cols[gi], acc);
 }
 
-// Sp_c -= sum_{obs of c} Acp v_{pt(obs)}: one warp per chunk; lane i owns Acp
-// element i = 3a+k of every observation in turn, so the block loads are fully
-// coalesced, and the per-lane partials reduce as triples into dof atomic adds
-// per chunk. u0 = num chunks
+// Sp_c -= sum_{obs of c} Acp v_{pt(obs)} = sum Jc^T (Jp v): one warp per chunk;
+// lane i owns Jc element i = 2a+row of every observation in turn, so the block
+// loads are fully coalesced, and the per-lane partials reduce as pairs into dof
+// atomic adds per chunk. The 2-vector Jp v is small enough that every lane
+// recomputes it rather than paying a barrier for it. u0 = num chunks
 [shader("compute")] [numthreads(kPairWg, 1, 1)]
 void cg_scatter(uint3 wg : SV_GroupID, uint gi : SV_GroupIndex) {
     if (cgDone()) return;
@@ -284,26 +334,29 @@ void cg_scatter(uint3 wg : SV_GroupID, uint gi : SV_GroupIndex) {
     uint cols[kMaxCamDof];
     camCols(img, dof, cols);
 
-    // 3*dof can reach 36 (> kPairWg), so each lane owns two elements
+    // 2*dof can reach 36 (> kPairWg), so each lane owns two elements
     uint gi2 = gi + kPairWg;
-    uint k3 = gi - 3 * (gi / 3);
-    uint k3b = gi2 - 3 * (gi2 / 3);
+    uint row = gi & 1, row2 = gi2 & 1;
     Real pacc = Real(0.0), pacc2 = Real(0.0);
-    bool live = gi < 3 * dof, live2 = gi2 < 3 * dof;
+    bool live = gi < 2 * dof, live2 = gi2 < 2 * dof;
     for (uint t = t0; t < t1; t++) {
         uint o = u_cam_obs[t];
         uint pt = u_obs_point[o];
-        uint base = u_acp_off[o];
+        uint base = u_jc_off[o];
+        Real d0 = u_Jp[6 * o] * u_cg_v[3 * pt] + u_Jp[6 * o + 2] * u_cg_v[3 * pt + 1]
+                + u_Jp[6 * o + 4] * u_cg_v[3 * pt + 2];
+        Real d1 = u_Jp[6 * o + 1] * u_cg_v[3 * pt] + u_Jp[6 * o + 3] * u_cg_v[3 * pt + 1]
+                + u_Jp[6 * o + 5] * u_cg_v[3 * pt + 2];
         if (live)
-            pacc = pacc + u_acp[base + gi] * u_cg_v[3 * pt + k3];
+            pacc = pacc + u_Jc[base + gi] * (row == 0 ? d0 : d1);
         if (live2)
-            pacc2 = pacc2 + u_acp[base + gi2] * u_cg_v[3 * pt + k3b];
+            pacc2 = pacc2 + u_Jc[base + gi2] * (row2 == 0 ? d0 : d1);
     }
     g_sh[gi] = pacc;
     g_sh[gi2] = pacc2;
     GroupMemoryBarrierWithGroupSync();
     if (gi < dof) {
-        Real v = g_sh[3 * gi] + g_sh[3 * gi + 1] + g_sh[3 * gi + 2];
+        Real v = g_sh[2 * gi] + g_sh[2 * gi + 1];
         if (isfinite(v))
             atomicAccum(u_cg_sp_a, cols[gi], -v);
     }

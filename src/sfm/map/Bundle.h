@@ -79,25 +79,29 @@ struct BundleOptions {
     VkContext* shared_ctx = nullptr;
 };
 
-// Global BA over all registered images and all 3D points. Overwrites poses,
-// point positions, and intrinsics in `rec`. Returns the final RMS reprojection
-// cost reported by the solver (0 if nothing to optimize).
-inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
-    auto prof_t0 = std::chrono::steady_clock::now();
-    auto prof_lap = [&prof_t0] {
-        auto t1 = std::chrono::steady_clock::now();
-        double dt = std::chrono::duration<double>(t1 - prof_t0).count();
-        prof_t0 = t1;
-        return dt;
-    };
+// The problem built from a reconstruction, plus what writing the solution back
+// needs: which reconstruction entity each BA index belongs to. Kept apart from
+// `runGlobalBA` so a caller that wants to drive the solver itself (the `ba`
+// subcommand, on a model directory) does not have to rebuild any of this.
+struct BundleLayout {
+    BAProblem P;
+    std::vector<Image*> imgOf;      // by BA image index
+    std::vector<Point3D*> ptOf;     // by BA point index
+    std::vector<uint32_t> camIds;   // by group
+};
+
+// Pack `rec` into a BAProblem. Empty layout (num_images < 2) if there is
+// nothing to optimize.
+inline BundleLayout buildBundle(Reconstruction& rec, const BundleOptions& bopt) {
     // Index registered images and 3D points.
     //
     // Everything downstream addresses them by their dense BA index, so the
     // id -> index maps are flat arrays rather than std::map: assembly walks a
     // few million observations and a tree lookup per observation was the whole
     // reason "BA build" showed up next to "BA solve" in the profile.
+    BundleLayout L;
     std::vector<uint32_t> imgIds;
-    std::vector<Image*> imgOf;  // by BA index
+    std::vector<Image*>& imgOf = L.imgOf;  // by BA index
     uint32_t max_img_id = 0;
     for (auto& kv : rec.images) max_img_id = std::max(max_img_id, kv.first);
     std::vector<uint32_t> imgBA(max_img_id + 1, UINT32_MAX);
@@ -108,16 +112,16 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
             imgOf.push_back(&kv.second);
         }
     std::vector<uint64_t> ptIds;
-    std::vector<Point3D*> ptOf;  // by BA index
+    std::vector<Point3D*>& ptOf = L.ptOf;  // by BA index
     for (auto& kv : rec.points3D) {
         if (kv.second.track.size() < 2) continue;
         ptIds.push_back(kv.first);
         ptOf.push_back(&kv.second);
     }
-    if (imgIds.size() < 2 || ptIds.empty()) return 0;
+    if (imgIds.size() < 2 || ptIds.empty()) return BundleLayout{};
 
     // Camera groups: one per distinct camera used (usually a single shared one).
-    std::vector<uint32_t> camIds;
+    std::vector<uint32_t>& camIds = L.camIds;
     std::map<uint32_t, uint32_t> camGroup;
     for (Image* im : imgOf) {
         uint32_t cid = im->camera_id;
@@ -127,7 +131,7 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
         }
     }
 
-    BAProblem P;
+    BAProblem& P = L.P;
     P.num_images = (uint32_t)imgIds.size();
     P.num_points = (uint32_t)ptIds.size();
 
@@ -218,7 +222,11 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
     P.n_dim = P.pose_dim + P.free_intr;
     for (auto& g : P.groups) g.intr_col += P.pose_dim;
     finalizeTables(P);
+    return L;
+}
 
+// Solver options for a mapper-driven bundle adjustment.
+inline SolverOptions bundleSolverOptions(const BundleOptions& bopt) {
     SolverOptions sopt;
     sopt.real = bopt.real;
     sopt.max_iters = bopt.max_iters;
@@ -230,6 +238,42 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
     if (bopt.patience > 0) sopt.patience = bopt.patience;
     if (bopt.solver == "dense") sopt.solver = SolverSel::Dense;
     else if (bopt.solver == "cg") sopt.solver = SolverSel::CG;
+    return sopt;
+}
+
+// Copy a solved problem's parameters back into the reconstruction it came from.
+// `P` is the layout's own problem unless the caller moved it out to hand to a
+// solver, which `ssplat-sfm ba` does.
+inline void writeBundle(Reconstruction& rec, const BundleLayout& L, const BAProblem& P) {
+    for (uint32_t i = 0; i < P.num_images; i++) {
+        Image& im = *L.imgOf[i];
+        im.pose.R = angleAxisToRotation({P.poses[6 * i], P.poses[6 * i + 1], P.poses[6 * i + 2]});
+        im.pose.t = {P.poses[6 * i + 3], P.poses[6 * i + 4], P.poses[6 * i + 5]};
+    }
+    for (size_t g = 0; g < L.camIds.size(); g++) {
+        Camera& c = rec.cameras[L.camIds[g]];
+        unpackIntrinsics(c, &P.intr[P.groups[g].intr_offset]);
+    }
+    for (uint32_t i = 0; i < P.num_points; i++)
+        L.ptOf[i]->xyz = {P.points[3 * i], P.points[3 * i + 1], P.points[3 * i + 2]};
+}
+
+// Global BA over all registered images and all 3D points. Overwrites poses,
+// point positions, and intrinsics in `rec`. Returns the final RMS reprojection
+// cost reported by the solver (0 if nothing to optimize).
+inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
+    auto prof_t0 = std::chrono::steady_clock::now();
+    auto prof_lap = [&prof_t0] {
+        auto t1 = std::chrono::steady_clock::now();
+        double dt = std::chrono::duration<double>(t1 - prof_t0).count();
+        prof_t0 = t1;
+        return dt;
+    };
+    BundleLayout L = buildBundle(rec, bopt);
+    BAProblem& P = L.P;
+    if (P.num_images < 2) return 0;
+
+    SolverOptions sopt = bundleSolverOptions(bopt);
     double t_build = prof_lap();
     BundleSolver solver(P, sopt, bopt.shared_ctx);
     solver.init();
@@ -237,19 +281,7 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
     solver.solve();
     double t_solve = prof_lap();
     solver.downloadParams();
-
-    // Write results back.
-    for (uint32_t i = 0; i < P.num_images; i++) {
-        Image& im = *imgOf[i];
-        im.pose.R = angleAxisToRotation({P.poses[6 * i], P.poses[6 * i + 1], P.poses[6 * i + 2]});
-        im.pose.t = {P.poses[6 * i + 3], P.poses[6 * i + 4], P.poses[6 * i + 5]};
-    }
-    for (size_t g = 0; g < camIds.size(); g++) {
-        Camera& c = rec.cameras[camIds[g]];
-        unpackIntrinsics(c, &P.intr[P.groups[g].intr_offset]);
-    }
-    for (uint32_t i = 0; i < P.num_points; i++)
-        ptOf[i]->xyz = {P.points[3 * i], P.points[3 * i + 1], P.points[3 * i + 2]};
+    writeBundle(rec, L, P);
 
     double t_write = prof_lap();
     g_map_prof.ba_build += t_build;

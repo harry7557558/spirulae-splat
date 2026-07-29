@@ -6,7 +6,7 @@
 //   dense - packed in-place blocked Cholesky (cholesky.slang), with S built
 //           by the pair-aggregated (or atomic fallback) Schur kernels
 //   cg    - implicit-Schur block-Jacobi PCG (cg.slang); S is never formed,
-//           so the packed S, T and pair-entry buffers are not allocated and
+//           so the packed S, Y and pair-entry buffers are not allocated and
 //           peak VRAM stays linear in the observation count
 // Selection is automatic by problem size and a VRAM budget (see decidePaths),
 // or forced with SolverOptions::solver. Optionally the dense machinery is
@@ -148,7 +148,6 @@ public:
         const size_t rs = realSize(opt_.real);
         const uint64_t packed = (uint64_t)P_.n_dim * (P_.n_dim + 1) / 2;
         const bool needS = !useCG_ || haveFallback_;
-        const bool deferredJc = P_.use_pair_schur || cgAllocated_;
         const uint32_t npart = (P_.n_dim + 255) / 256;
 
         auto mkReal = [&](uint64_t n) { return ctx_.createBuffer(std::max<uint64_t>(n, 1) * rs); };
@@ -164,8 +163,8 @@ public:
         bPoints_ = mkReal(3 * (uint64_t)P_.num_points);
         bObsRanges_ = mkUint(P_.num_points + 1);
         bModelObs_ = mkUint(P_.model_obs.size());
-        bAcpOff_ = mkUint(P_.num_obs);
-        bAcp_ = mkReal(P_.acp_total);
+        bJcOff_ = mkUint(P_.num_obs);
+        bJp_ = mkReal(6 * (uint64_t)P_.num_obs);
         bS_ = mkReal(needS ? packed : 1);
         bG_ = mkReal(P_.n_dim);
         bApp_ = mkReal(9 * (uint64_t)P_.num_points);
@@ -176,16 +175,14 @@ public:
         bPointsBak_ = mkReal(3 * (uint64_t)P_.num_points);
         bPairEntries_ = mkUint(std::max<size_t>(P_.pair_entries.size(), 2));
         bPairChunks_ = mkUint(std::max<size_t>(P_.pair_chunks.size(), 2));
-        // on the pair-Schur and CG paths S/g are fully rebuilt from per-obs
-        // buffers every solve, so only Bp needs a reject-reuse snapshot
-        const bool snapS = needS && !P_.use_pair_schur;
-        bS0_ = mkReal(snapS ? packed : 1);
-        bG0_ = mkReal(snapS ? P_.n_dim : 1);
+        // S/g are rebuilt from the per-observation Jacobians on every path, so
+        // a rejected step needs no snapshot of them -- only Bp, which the
+        // point back-substitution overwrites in place.
         bBp0_ = mkReal(3 * (uint64_t)P_.num_points);
-        bJc_ = mkReal(deferredJc ? P_.acp_total / 3 * 2 : 1);
-        bRes_ = mkReal(deferredJc ? 2 * (uint64_t)P_.num_obs : 1);
+        bJc_ = mkReal(P_.jc_total);
+        bRes_ = mkReal(2 * (uint64_t)P_.num_obs);
         bW_ = mkReal(9 * (uint64_t)P_.num_points);
-        bT_ = mkReal(needS && P_.use_pair_schur ? P_.acp_total : 1);
+        bYp_ = mkReal(needS && P_.use_pair_schur ? 6 * (uint64_t)P_.num_obs : 1);
         bY_ = mkReal(P_.n_dim);
         // CG path buffers (1-element dummies when unused)
         bCamRanges_ = mkUint(cgAllocated_ ? P_.num_images + 1 : 1);
@@ -197,32 +194,33 @@ public:
         bCgSp_ = mkReal(cgAllocated_ ? P_.n_dim : 1);
         bCgV_ = mkReal(cgAllocated_ ? 3 * (uint64_t)P_.num_points : 1);
         bCgB_ = mkReal(cgAllocated_ ? (uint64_t)kCamBlk * P_.num_images : 1);
-        bCgM_ = mkReal(cgAllocated_ ? (uint64_t)kCamBlk * P_.num_images : 1);
+        bCgM_ = mkReal(cgAllocated_ ? (uint64_t)kCamBlk * P_.num_prec_blocks : 1);
         bCgScal_ = mkReal(8);
         bCgPart_ = mkReal(cgAllocated_ ? 2 * (uint64_t)npart : 1);
+        bPrecBlocks_ = mkUint(cgAllocated_ ? P_.prec_blocks.size() : 4);
 
         // binding order must match sfm/shaders/ba/ba.slang + cg.slang; atomic views
         // alias the same VkBuffer at the odd bindings
         std::vector<VkBuffer> binds = {
             bObs_.buf, bObsImage_.buf, bObsPoint_.buf, bImageGroup_.buf, bGroupInfo_.buf,
-            bPoses_.buf, bIntr_.buf, bPoints_.buf, bObsRanges_.buf, bModelObs_.buf, bAcpOff_.buf,
-            bAcp_.buf,
+            bPoses_.buf, bIntr_.buf, bPoints_.buf, bObsRanges_.buf, bModelObs_.buf, bJcOff_.buf,
+            bJp_.buf,
             bS_.buf, bS_.buf, bG_.buf, bG_.buf, bApp_.buf, bApp_.buf, bBp_.buf, bBp_.buf,
             bCost_.buf, bCost_.buf,
-            bPairEntries_.buf, bPairChunks_.buf, bW_.buf, bT_.buf, bY_.buf,
+            bPairEntries_.buf, bPairChunks_.buf, bW_.buf, bYp_.buf, bY_.buf,
             bJc_.buf, bRes_.buf,
             bCamRanges_.buf, bCamObs_.buf, bCgR_.buf, bCgZ_.buf, bCgP_.buf, bCgSp_.buf,
             bCgV_.buf, bCgB_.buf, bCgM_.buf, bCgScal_.buf, bCgPart_.buf,
-            bCgSp_.buf, bCgB_.buf, bCgM_.buf, bCamChunks_.buf,
+            bCgSp_.buf, bCgB_.buf, bCgM_.buf, bCamChunks_.buf, bPrecBlocks_.buf,
         };
         ownBufs_ = {&bObs_, &bObsImage_, &bObsPoint_, &bImageGroup_, &bGroupInfo_,
-                    &bPoses_, &bIntr_, &bPoints_, &bObsRanges_, &bModelObs_, &bAcpOff_,
-                    &bAcp_, &bS_, &bG_, &bApp_, &bBp_, &bCost_,
+                    &bPoses_, &bIntr_, &bPoints_, &bObsRanges_, &bModelObs_, &bJcOff_,
+                    &bJp_, &bS_, &bG_, &bApp_, &bBp_, &bCost_,
                     &bPosesBak_, &bIntrBak_, &bPointsBak_,
-                    &bS0_, &bG0_, &bBp0_, &bJc_, &bRes_,
-                    &bPairEntries_, &bPairChunks_, &bW_, &bT_, &bY_,
+                    &bBp0_, &bJc_, &bRes_,
+                    &bPairEntries_, &bPairChunks_, &bW_, &bYp_, &bY_,
                     &bCamRanges_, &bCamObs_, &bCamChunks_, &bCgR_, &bCgZ_, &bCgP_, &bCgSp_,
-                    &bCgV_, &bCgB_, &bCgM_, &bCgScal_, &bCgPart_};
+                    &bCgV_, &bCgB_, &bCgM_, &bCgScal_, &bCgPart_, &bPrecBlocks_};
         double t_buf = prof_lap();
         ctx_.createDescriptors(binds);
         // Fresh-from-the-driver allocations happen to arrive zeroed; memory
@@ -247,25 +245,40 @@ public:
         for (const BAProblem::Group& g : P_.groups) maxDof = std::max(maxDof, 6 + g.n_intr);
         schurSuffix_ = maxDof <= 12 ? "_c" : maxDof <= 14 ? "_m" : "_w";
 
+        // Only the entry points this problem dispatches: a cold driver cache
+        // spends ~90 ms compiling each, and the module has thirty-odd, most of
+        // them camera models the problem does not use and dof tiers it does not
+        // need. loadPipelines skips what a shared context already built, so the
+        // mapper's later solves add at most the kernels a new path wants.
         std::vector<std::string> entries = {
-            "damp_S", "point_prep", "acp_prep", "point_update", "cam_update", "intr_update",
-            "schur_obs_c", "schur_obs_m", "schur_obs_w",
-            "schur_pair_c", "schur_pair_m", "schur_pair_w",
-            "dp_accum_c", "dp_accum_m", "dp_accum_w",
-            "chol_diag", "chol_panel", "chol_update", "tri_fwd", "tri_bwd",
-            "cg_cam_diag", "cg_prec_fact", "cg_prec_apply", "cg_init", "cg_copy",
-            "cg_gather", "cg_bmul", "cg_scatter", "cg_red2", "cg_fin", "cg_axpy", "cg_updp",
+            "point_prep", "point_update", "cam_update", "intr_update",
+            std::string("dp_accum") + schurSuffix_,
         };
-        for (int m = 0; m < kNumModels; m++) {
-            entries.push_back(kModels[m].cost_entry);
-            entries.push_back(kModels[m].jac_entry);
+        if (useCG_) {
+            const char* cg[] = {"cg_cam_diag", "cg_prec_fact", "cg_prec_apply", "cg_init",
+                                "cg_copy", "cg_gather", "cg_bmul", "cg_scatter", "cg_red2",
+                                "cg_fin", "cg_axpy", "cg_updp"};
+            entries.insert(entries.end(), std::begin(cg), std::end(cg));
         }
-        // A shared context keeps its pipelines across solver instances. Every
-        // BA blob exposes the same entry names, so a probe on one suffices;
-        // the caller owning the context must keep (real, loss) fixed
-        // (runGlobalBA's cache does -- the mapper never varies them mid-run).
-        if (ctx_.hasPipeline("damp_S")) {
-        } else if (!opt_.spv_path.empty()) {
+        if (!useCG_ || haveFallback_) {
+            const char* ch[] = {"chol_diag", "chol_panel", "chol_update", "tri_fwd", "tri_bwd"};
+            entries.insert(entries.end(), std::begin(ch), std::end(ch));
+            if (P_.use_pair_schur) {
+                entries.push_back("y_prep");
+                entries.push_back(std::string("schur_pair") + schurSuffix_);
+            } else {
+                entries.push_back(std::string("schur_obs") + schurSuffix_);
+            }
+        }
+        for (const BAProblem::ModelRange& mr : P_.model_ranges) {
+            entries.push_back(kModels[mr.model].cost_entry);
+            entries.push_back(kModels[mr.model].jac_entry);
+        }
+        // A shared context keeps its pipelines across solver instances; the
+        // caller owning it must keep (real, loss) fixed, since the module is
+        // compiled per pair (runGlobalBA's cache does -- the mapper never
+        // varies them mid-run).
+        if (!opt_.spv_path.empty()) {
             ctx_.loadPipelines(opt_.spv_path, entries);
         } else {
             std::string blob =
@@ -304,7 +317,7 @@ public:
         }
         ctx_.upload(bObsRanges_, P_.obs_ranges.data(), P_.obs_ranges.size() * 4);
         ctx_.upload(bModelObs_, P_.model_obs.data(), P_.model_obs.size() * 4);
-        ctx_.upload(bAcpOff_, P_.acp_off.data(), P_.acp_off.size() * 4);
+        ctx_.upload(bJcOff_, P_.jc_off.data(), P_.jc_off.size() * 4);
         if (P_.use_pair_schur) {
             ctx_.upload(bPairEntries_, P_.pair_entries.data(), P_.pair_entries.size() * 4);
             ctx_.upload(bPairChunks_, P_.pair_chunks.data(), P_.pair_chunks.size() * 4);
@@ -313,6 +326,7 @@ public:
             ctx_.upload(bCamRanges_, P_.cam_obs_ranges.data(), P_.cam_obs_ranges.size() * 4);
             ctx_.upload(bCamObs_, P_.cam_obs.data(), P_.cam_obs.size() * 4);
             ctx_.upload(bCamChunks_, P_.cam_chunks.data(), P_.cam_chunks.size() * 4);
+            ctx_.upload(bPrecBlocks_, P_.prec_blocks.data(), P_.prec_blocks.size() * 4);
         }
         uploadParams();
 
@@ -545,11 +559,19 @@ private:
         const uint64_t packed = (uint64_t)P_.n_dim * (P_.n_dim + 1) / 2;
         const bool denseOk = packed <= 0x7FFFFFFFull;  // 32-bit packed indexing
         const uint64_t pairEntries = pairEntryCount(P_);
-        const bool pairOk = exclusive && P_.num_obs > 0 && pairEntries <= kMaxPairEntries;
-        const bool cgOk = exclusive && P_.num_obs > 0;
+        const bool cgOk = P_.num_obs > 0;
         const double budget = opt_.vram_budget_mb > 0 ? opt_.vram_budget_mb
                                                       : 0.9 * ctx_.deviceLocalHeapMB();
-        const double denseMB = estimateMB(true, false, pairOk, pairEntries);
+        // The pair-aggregated Schur assembly is the faster of the two dense
+        // assemblies but the only one that costs memory (the entry lists and
+        // the per-observation Y). Treat it as what it is -- an optional
+        // accelerator -- so a dense problem that no longer fits with it
+        // degrades to the atomic kernel instead of jumping to CG.
+        const double denseObsMB = estimateMB(true, false, false, 0);
+        const double densePairMB = estimateMB(true, false, true, pairEntries);
+        const bool pairOk = exclusive && P_.num_obs > 0 && pairEntries <= kMaxPairEntries &&
+                            densePairMB <= budget;
+        const double denseMB = pairOk ? densePairMB : denseObsMB;
         const double cgMB = estimateMB(false, true, false, 0);
         const double bothMB = estimateMB(true, true, pairOk, pairEntries);
 
@@ -567,24 +589,18 @@ private:
                     throw std::runtime_error(
                         "reduced system too large for the dense solver (n_dim*(n_dim+1)/2 "
                         "exceeds 32-bit packed indexing); use --solver cg");
-                if (denseMB > budget)
-                    fprintf(stderr, "[vk] warning: dense solver needs ~%.0f MB, budget %.0f MB\n",
-                            denseMB, budget);
                 break;
             case SolverSel::CG:
                 useCG_ = cgOk;
                 if (!cgOk) {
-                    fprintf(stderr, "[vk] warning: CG needs exclusive per-image intrinsics "
-                                    "groups, falling back to the dense solver\n");
+                    fprintf(stderr, "[vk] warning: no observations, falling back to dense\n");
                     if (!denseOk) throw std::runtime_error("no usable solver path");
                 }
                 break;
             case SolverSel::Auto:
                 useCG_ = cgOk && (P_.n_dim > kDenseMaxDim || !denseOk || denseMB > budget);
                 if (!useCG_ && !denseOk)
-                    throw std::runtime_error(
-                        "reduced system too large for the dense solver and the CG path "
-                        "requires per-image intrinsics groups");
+                    throw std::runtime_error("reduced system too large for the dense solver");
                 break;
         }
 
@@ -600,14 +616,27 @@ private:
 
         if (opt_.verbose)
             fprintf(stderr,
-                    "[vk] VRAM estimates: dense %.0f MB, cg %.0f MB (budget %.0f MB)\n",
-                    denseMB, cgMB, budget);
+                    "[vk] VRAM estimates: dense %.0f MB (%s Schur), cg %.0f MB (budget %.0f MB)\n",
+                    denseMB, pairOk ? "pair" : "per-obs", cgMB, budget);
+        // Say so before the driver does. There is nothing below CG to fall back
+        // to -- its footprint is the problem data plus a few vectors -- so this
+        // is the point at which the answer is a smaller problem or more memory.
+        const double needMB = (useCG_ ? cgMB : denseMB) + (haveFallback_ ? denseMB : 0);
+        if (needMB > budget)
+            fprintf(stderr,
+                    "[vk] warning: the %s solver needs ~%.0f MB and the budget is %.0f MB; "
+                    "this may run out of device memory\n",
+                    useCG_ ? "cg" : "dense", needMB, budget);
 
         // host tables for the chosen paths
-        if (!useCG_ || haveFallback_) buildPairTables(P_);
+        P_.use_pair_schur = false;
+        if ((!useCG_ || haveFallback_) && pairOk) buildPairTables(P_);
         densePath_ = P_.use_pair_schur ? LinSolve::DensePair : LinSolve::DenseObs;
         cgAllocated_ = useCG_;
-        if (cgAllocated_) buildCamTables(P_);
+        if (cgAllocated_) {
+            buildCamTables(P_);
+            buildPrecBlocks(P_, exclusive);
+        }
         cgMaxit_ = (uint32_t)opt_.cg_max_iters;
     }
 
@@ -622,21 +651,18 @@ private:
         b += 2 * (6 * ni + P_.total_intr) * rs;                    // poses/intr + backups
         b += 3 * np * rs * 3;                                      // points, backup, Bp0
         b += 4 * (np + 1);
-        b += (double)P_.acp_total * rs;                            // Acp
+        b += ((double)P_.jc_total + 8 * no) * rs;                  // Jc, Jp, res
         b += (9 + 3 + 9) * np * rs;                                // App, Bp, W
         b += 2 * n * rs;                                           // g, y
-        if (pairTables || withCG)                                  // Jc, res (deferred jac)
-            b += ((double)P_.acp_total / 3 * 2 + 2 * no) * rs;
         if (withDense) {
             b += packed * rs;
             if (pairTables)
-                b += 8.0 * pairEntries * 1.01 + (double)P_.acp_total * rs;  // entries + T
-            else
-                b += (packed + n) * rs;                            // S0/g0 snapshot
+                b += 8.0 * pairEntries * 1.01 + 6 * no * rs;       // pair entries + Y
         }
         if (withCG)
-            b += (4 * n + 3 * np + 2.0 * kCamBlk * ni) * rs + 4 * (ni + 1) + 4 * no +
-                 12 * (no / 1024 + ni);  // chunk table
+            b += (4 * n + 3 * np + (2.0 * ni + (double)P_.groups.size()) * kCamBlk) * rs +
+                 4 * (ni + 1) + 4 * no + 12 * (no / 1024 + ni) +
+                 16 * (ni + (double)P_.groups.size());  // chunk + prec-block tables
         return b / (1024.0 * 1024.0);
     }
 
@@ -654,22 +680,17 @@ private:
     }
 
     void recordAssembly(VkCommandBuffer cb, float damping, bool reuse, LinSolve path) {
-        // pair and CG paths defer the S/g accumulation out of the Jacobian
-        // kernel (Jc + weighted residual stored per obs instead)
-        const bool deferred = path != LinSolve::DenseObs;
         const bool dense = path != LinSolve::CG;
         if (reuse) {
-            // params were restored after a reject; the per-obs assembly
-            // (Jc/res/Acp/App) still matches them, so skip the Jacobian pass.
-            // S/g are rebuilt from scratch by schur_pair / cg_cam_diag; the
-            // atomic fallback path restores them from the snapshot.
+            // Params were restored after a reject; the per-observation
+            // Jacobians (Jc/Jp/res/App) still match them, so skip the Jacobian
+            // pass. S and g are rebuilt from those by the Schur kernels -- on
+            // every path, which is why none of them is snapshotted. Bp is the
+            // one thing the back-substitution overwrote, so it is.
             ctx_.copy(cb, bBp0_, bBp_, bBp_.size);
-            if (path == LinSolve::DensePair) {
+            if (dense) {
                 ctx_.fillZero(cb, bS_);
                 ctx_.fillZero(cb, bG_);
-            } else if (path == LinSolve::DenseObs) {
-                ctx_.copy(cb, bS0_, bS_, bS_.size);
-                ctx_.copy(cb, bG0_, bG_, bG_.size);
             }
             ctx_.barrier(cb);
         } else {
@@ -686,32 +707,20 @@ private:
             ctx_.fillZero(cb, bBp_);
             ctx_.barrier(cb);
 
-            // residuals/Jacobians + assembly (S/g deferred except on DenseObs)
             for (auto& mr : P_.model_ranges) {
                 Push p;
                 p.u0 = mr.count;
                 p.u1 = mr.offset;
-                p.u2 = deferred ? 1 : 0;
                 p.f0 = opt_.loss_param;
                 ctx_.dispatch(cb, kModels[mr.model].jac_entry, (mr.count + 127) / 128, p);
             }
             ctx_.barrier(cb);
 
-            // snapshot the assembly for cheap re-solves after a reject
             ctx_.copy(cb, bBp_, bBp0_, bBp_.size);
-            if (path == LinSolve::DenseObs) {
-                ctx_.copy(cb, bS_, bS0_, bS_.size);
-                ctx_.copy(cb, bG_, bG0_, bG_.size);
-            }
             ctx_.barrier(cb);
         }
 
         {
-            Push p;
-            p.u0 = P_.n_dim;
-            p.f0 = damping;
-            if (path == LinSolve::DenseObs)  // otherwise damping is folded in
-                ctx_.dispatch(cb, "damp_S", (P_.n_dim + 255) / 256, p);
             Push q;
             q.u0 = P_.num_points;
             q.f0 = damping;
@@ -729,7 +738,7 @@ private:
             p.f0 = damping;
             if (path == LinSolve::DensePair) {
                 p.u0 = P_.num_obs;
-                ctx_.dispatch(cb, "acp_prep", (P_.num_obs + 255) / 256, p);
+                ctx_.dispatch(cb, "y_prep", (P_.num_obs + 255) / 256, p);
                 ctx_.barrier(cb);
                 p.u0 = P_.num_pair_chunks;
                 ctx_.dispatch(cb, std::string("schur_pair") + schurSuffix_, P_.num_pair_chunks, p);
@@ -738,10 +747,12 @@ private:
                 ctx_.dispatch(cb, std::string("schur_obs") + schurSuffix_, (P_.num_obs + 127) / 128, p);
             } else {
                 p.u0 = P_.num_cam_chunks;
+                p.u1 = P_.prec_exclusive ? 1 : 0;
+                p.u2 = P_.num_images;  // group blocks follow the per-image ones
                 ctx_.dispatch(cb, "cg_cam_diag", P_.num_cam_chunks, p);
                 ctx_.barrier(cb);
-                p.u0 = P_.num_images;
-                ctx_.dispatch(cb, "cg_prec_fact", (P_.num_images + 255) / 256, p);
+                p.u0 = P_.num_prec_blocks;
+                ctx_.dispatch(cb, "cg_prec_fact", (P_.num_prec_blocks + 255) / 256, p);
             }
         }
         ctx_.barrier(cb);
@@ -753,15 +764,20 @@ private:
         const uint32_t n = P_.n_dim;
         const uint32_t ng = (n + 255) / 256;
         const uint32_t npart = ng;
-        const uint32_t nig = (P_.num_images + 255) / 256;
+        const uint32_t nib = (P_.num_prec_blocks + 255) / 256;
+        // shared intrinsics groups: cg_bmul accumulates into the intrinsics
+        // slice of Sp instead of storing it, so that slice must start at zero
+        const VkDeviceSize intrOff = (VkDeviceSize)P_.pose_dim * realSize(opt_.real);
+        const VkDeviceSize intrSize = (VkDeviceSize)(n - P_.pose_dim) * realSize(opt_.real);
+        const bool zeroIntr = !P_.prec_exclusive && intrSize > 0;
         Push pn;
         pn.u0 = n;
         ctx_.dispatch(cb, "cg_init", ng, pn);
         ctx_.barrier(cb);
         Push pc;
-        pc.u0 = P_.num_images;
+        pc.u0 = P_.num_prec_blocks;
         pc.u1 = 0;  // flag was just cleared
-        ctx_.dispatch(cb, "cg_prec_apply", nig, pc);
+        ctx_.dispatch(cb, "cg_prec_apply", nib, pc);
         ctx_.barrier(cb);
         Push pr;
         pr.u0 = n;
@@ -788,6 +804,11 @@ private:
             ctx_.barrier(cb);
             Push ps;
             ps.u0 = P_.num_images;
+            ps.u1 = P_.prec_exclusive ? 1 : 0;
+            if (zeroIntr) {
+                ctx_.fillZero(cb, bCgSp_, intrOff, intrSize);
+                ctx_.barrier(cb);
+            }
             ctx_.dispatch(cb, "cg_bmul", P_.num_images, ps);
             ctx_.barrier(cb);
             ps.u0 = P_.num_cam_chunks;
@@ -801,7 +822,7 @@ private:
             ctx_.barrier(cb);
             ctx_.dispatch(cb, "cg_axpy", ng, pn);
             ctx_.barrier(cb);
-            ctx_.dispatch(cb, "cg_prec_apply", nig, pc);
+            ctx_.dispatch(cb, "cg_prec_apply", nib, pc);
             ctx_.barrier(cb);
             pr.u1 = 1;
             ctx_.dispatch(cb, "cg_red2", ng, pr);
@@ -889,11 +910,11 @@ private:
     uint32_t cgMaxit_ = 100;
 
     GpuBuffer bObs_, bObsImage_, bObsPoint_, bImageGroup_, bGroupInfo_;
-    GpuBuffer bPoses_, bIntr_, bPoints_, bObsRanges_, bModelObs_, bAcpOff_;
-    GpuBuffer bAcp_, bS_, bG_, bApp_, bBp_, bCost_;
+    GpuBuffer bPoses_, bIntr_, bPoints_, bObsRanges_, bModelObs_, bJcOff_;
+    GpuBuffer bJp_, bS_, bG_, bApp_, bBp_, bCost_;
     GpuBuffer bPosesBak_, bIntrBak_, bPointsBak_;
-    GpuBuffer bS0_, bG0_, bBp0_, bJc_, bRes_;
-    GpuBuffer bPairEntries_, bPairChunks_, bW_, bT_, bY_;
+    GpuBuffer bBp0_, bJc_, bRes_;
+    GpuBuffer bPairEntries_, bPairChunks_, bW_, bYp_, bY_;
     GpuBuffer bCamRanges_, bCamObs_, bCamChunks_, bCgR_, bCgZ_, bCgP_, bCgSp_;
-    GpuBuffer bCgV_, bCgB_, bCgM_, bCgScal_, bCgPart_;
+    GpuBuffer bCgV_, bCgB_, bCgM_, bCgScal_, bCgPart_, bPrecBlocks_;
 };

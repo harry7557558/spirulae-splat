@@ -2517,10 +2517,10 @@ private:
                 bo.patience = opt_.ba_growth_patience;
             }
             bo.solver = opt_.ba_solver;
-        bo.shared_ctx = &ba_ctx_;
+            bo.shared_ctx = &ba_ctx_;
             double cost = runGlobalBA(rec_, bo);
             ProfTimer pt(g_map_prof.filter);
-            sanitizeCameras();
+            // sanitizeCameras();  // TODO: breaks internet image collection
             int removedObs = 0, removedPts = 0;
             filterPoints(removedObs, removedPts);
             if (opt_.verbose)

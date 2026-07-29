@@ -3,6 +3,7 @@
 // pipelines from one SPIR-V module, and command recording helpers.
 #pragma once
 
+#include <chrono>
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
@@ -373,15 +374,28 @@ public:
     }
 
     // One module holding every entry point (slangc -fvk-use-entrypoint-name),
-    // either read from disk above or taken from the embedded blobs.
+    // either read from disk above or taken from the embedded blobs. Entry
+    // points already created are skipped, so a caller may come back for more
+    // as it discovers it needs them -- which is the point: compiling one is
+    // ~90 ms on a cold driver cache, and the bundle-adjustment module has
+    // thirty-odd, most of them camera models a given problem never uses.
     void loadPipelines(const uint32_t* code, size_t codeBytes,
                        const std::vector<std::string>& entries) {
-        VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        smi.codeSize = codeBytes;
-        smi.pCode = code;
-        VK_CHECK(vkCreateShaderModule(device_, &smi, nullptr, &shaderModule_));
+        if (shaderModule_ == VK_NULL_HANDLE) {
+            VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            smi.codeSize = codeBytes;
+            smi.pCode = code;
+            VK_CHECK(vkCreateShaderModule(device_, &smi, nullptr, &shaderModule_));
+        }
 
+        // Compiling the BA module is seconds of wall clock on a cold driver
+        // cache, and it is not evenly spread: SSPLAT_SFM_MAP_PROF names the
+        // entry points that cost more than 100 ms, which is how you find out
+        // that one kernel is carrying the whole bill.
+        const bool prof = std::getenv("SSPLAT_SFM_MAP_PROF") != nullptr;
         for (const auto& e : entries) {
+            if (pipelines_.count(e)) continue;
+            auto t0 = std::chrono::steady_clock::now();
             VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
             cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
             cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -391,6 +405,12 @@ public:
             VkPipeline p;
             VK_CHECK(vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &cpi, nullptr, &p));
             pipelines_[e] = p;
+            if (prof) {
+                double dt = std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - t0).count();
+                if (dt > 0.1)
+                    fprintf(stderr, "[prof]   pipeline %s: %.2f s\n", e.c_str(), dt);
+            }
         }
     }
 
@@ -446,6 +466,11 @@ public:
 
     void fillZero(VkCommandBuffer cb, const GpuBuffer& b) {
         vkCmdFillBuffer(cb, b.buf, 0, VK_WHOLE_SIZE, 0);
+    }
+
+    // offset and size must be 4-byte multiples (vkCmdFillBuffer's rule)
+    void fillZero(VkCommandBuffer cb, const GpuBuffer& b, VkDeviceSize offset, VkDeviceSize size) {
+        vkCmdFillBuffer(cb, b.buf, offset, size, 0);
     }
 
     void copy(VkCommandBuffer cb, const GpuBuffer& src, const GpuBuffer& dst, VkDeviceSize size) {

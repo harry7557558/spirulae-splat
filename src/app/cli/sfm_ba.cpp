@@ -4,11 +4,14 @@
 // subcommands but the solver. See src/sfm/ba/README.md.
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <random>
+#include <sys/stat.h>
 
 #include "sfm/ba/Problem.h"
 #include "sfm/ba/Solver.h"
+#include "sfm/map/Bundle.h"
 
 static void writePly(const char* path, const std::vector<double>& pts) {
     std::ofstream f(path, std::ios::binary);
@@ -30,13 +33,17 @@ void printBaHelp(FILE* out) {
         "ssplat-sfm ba -- bundle-adjust a BAL problem (solver benchmark)\n"
         "\n"
         "Usage:\n"
-        "  ssplat-sfm ba <BAL_PROBLEM.TXT> [options]\n"
+        "  ssplat-sfm ba <BAL_PROBLEM.TXT|SPARSE_MODEL_DIR> [options]\n"
         "\n"
         "Description:\n"
         "  Runs the GPU bundle adjuster directly on a problem in Bundle Adjustment in the\n"
         "  Large format, and reports cost, iterations, time and VRAM. This is how the\n"
         "  solver is benchmarked and debugged against a published reference; the pipeline\n"
         "  itself never reads BAL. See src/sfm/ba/README.md.\n"
+        "\n"
+        "  Given a directory instead, it reads a COLMAP sparse model and runs exactly the\n"
+        "  global BA the mapper runs on it (Huber 2 px unless --loss says otherwise), which\n"
+        "  is how the solver is profiled on real captures. -o writes the refined model.\n"
         "\n"
         "Options:\n"
         "  --real {float|double|df}            [double]  scalar the solver works in; df is an\n"
@@ -55,6 +62,7 @@ void printBaHelp(FILE* out) {
         "  --cg-fallback {auto|on|off}         fall back to dense when PCG stalls\n"
         "  --vram-budget MB                    device memory the solver may use\n"
         "  --ply PREFIX                        write PREFIX_before.ply and PREFIX_after.ply\n"
+        "  -o, --output DIR                    write the refined sparse model (model input only)\n"
         "  --device N                          Vulkan device index\n"
         "  --validate                          check the assembled system against a reference\n"
         "  --profile                           per-kernel timings\n"
@@ -71,9 +79,9 @@ void printBaHelp(FILE* out) {
 }
 
 int cmdBa(int argc, char** argv) {
-    std::string file, ply_prefix, loss = "trivial", model = "snavely";
+    std::string file, ply_prefix, out_dir, loss = "trivial", model = "snavely";
     SolverOptions opt;
-    bool shared_intr = false;
+    bool shared_intr = false, loss_given = false;
 
     for (int i = 0; i < argc; i++) {
         std::string a = argv[i];
@@ -82,9 +90,10 @@ int cmdBa(int argc, char** argv) {
         else if (a == "--real") {
             std::string r = next();
             opt.real = r == "float" ? RealCfg::F32 : r == "df" ? RealCfg::DF64 : RealCfg::F64;
-        } else if (a == "--loss") loss = next();
+        } else if (a == "--loss") { loss = next(); loss_given = true; }
         else if (a == "--spv-path") opt.spv_path = next();
-        else if (a == "--loss-param") opt.loss_param = std::stof(next());
+        else if (a == "--loss-param") { opt.loss_param = std::stof(next()); loss_given = true; }
+        else if (a == "-o" || a == "--output") out_dir = next();
         else if (a == "--model") model = next();
         else if (a == "--shared-intrinsics") shared_intr = true;
         else if (a == "--max-iters") opt.max_iters = std::stoi(next());
@@ -118,11 +127,9 @@ int cmdBa(int argc, char** argv) {
         }
     }
 
-    // The kernels are compiled into the binary; --spv-path overrides.
-    opt.loss = loss;
-
     if (file.empty()) {
-        fprintf(stderr, "ssplat-sfm ba: error: a BAL problem file is required\n");
+        fprintf(stderr, "ssplat-sfm ba: error: a BAL problem file or sparse model "
+                        "directory is required\n");
         fprintf(stderr, "Try 'ssplat-sfm ba --help' for more information.\n");
         return 1;
     }
@@ -143,8 +150,33 @@ int cmdBa(int argc, char** argv) {
         opt.cg_fallback = CgFallback::On;
     }
 
+    // A directory is a COLMAP sparse model: build the same problem the mapper's
+    // global BA builds and drive the solver on it. This is how the solver is
+    // profiled on real captures rather than on BAL. The mapper's loss defaults
+    // come along with it, since matching what the pipeline runs is the point.
+    struct stat st_dir;
+    const bool is_model = stat(file.c_str(), &st_dir) == 0 && S_ISDIR(st_dir.st_mode);
+
     auto t0 = std::chrono::high_resolution_clock::now();
-    BAProblem P = loadBAL(file, model_id, shared_intr);
+    sfm::Reconstruction rec;
+    sfm::BundleLayout layout;
+    if (is_model) {
+        sfm::BundleOptions bopt;
+        if (!loss_given) { loss = bopt.loss; opt.loss_param = bopt.loss_param; }
+        rec = sfm::Reconstruction::readBinary(file);
+        bopt.real = opt.real;
+        bopt.verbose = opt.verbose;
+        bopt.device = opt.device;
+        layout = sfm::buildBundle(rec, bopt);
+        if (layout.P.num_images < 2) {
+            fprintf(stderr, "ssplat-sfm ba: error: %s holds no registered model\n", file.c_str());
+            return 1;
+        }
+        fprintf(stderr, "[model] %u images, %u points, %u observations\n", layout.P.num_images,
+                layout.P.num_points, layout.P.num_obs);
+    }
+    opt.loss = loss;
+    BAProblem P = is_model ? std::move(layout.P) : loadBAL(file, model_id, shared_intr);
     BundleSolver solver(P, opt);
     solver.init();
     auto t1 = std::chrono::high_resolution_clock::now();
@@ -180,6 +212,11 @@ int cmdBa(int argc, char** argv) {
     solver.downloadParams();
 
     if (!ply_prefix.empty()) writePly((ply_prefix + "_after.ply").c_str(), P.points);
+    if (is_model && !out_dir.empty()) {
+        sfm::writeBundle(rec, layout, P);
+        std::filesystem::create_directories(out_dir);
+        rec.writeBinary(out_dir);
+    }
 
     const SolverStats& st = solver.stats();
     printf("real=%s loss=%s model=%s solver=%s%s\n", realCfgName(opt.real), loss.c_str(),

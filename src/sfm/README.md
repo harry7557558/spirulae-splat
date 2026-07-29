@@ -253,7 +253,9 @@ port. Ordered by what blocks the most.
    images, and its cost sits in the last few full-size ones. Those are the ones
    local BA does not replace. What made the difference at that size was the
    linear solver's dense/CG crossover (`--ba-solver`) and bounding track length
-   (`kMergeMaxTrack`), both of which act on exactly those passes.
+   (`kMergeMaxTrack`), both of which act on exactly those passes — and, once
+   the CG path stopped requiring per-image intrinsics groups, the crossover
+   started applying to ordinary captures at all (`ba/README.md`).
 2. **Shared GPU primitives**: radix sort, prefix scan, segmented reduction, a
    descriptor-set cache, record-once/replay command buffers. The solver
    re-records a command buffer per LM iteration, which is fine at global-BA
