@@ -241,7 +241,14 @@ inline std::vector<std::vector<uint32_t>> bisect(const ViewGraph& g,
     // connection across the cut. That is what a later Sim(3) merge aligns on,
     // and it is also what lets a cluster triangulate the structure at its own
     // boundary instead of ending in a fringe of one-view features.
+    //
+    // Bounded so that a part is always strictly smaller than what it was cut
+    // from. Without that bound a lopsided cut plus the borrow makes a part
+    // *bigger* than its parent -- min_part on one side, m - min_part + overlap
+    // on the other -- and the recursion below never terminates, because the
+    // leaf test is on size and the size keeps growing.
     for (int s = 0; s < 2; s++) {
+        const size_t room = m - 1 - std::min(m - 1, parts[s].size());
         std::vector<std::pair<double, uint32_t>> cross;
         for (size_t i = 0; i < m; i++) {
             if (side[i] == s) continue;
@@ -257,7 +264,7 @@ inline std::vector<std::vector<uint32_t>> bisect(const ViewGraph& g,
             if (a.first != b.first) return a.first > b.first;
             return a.second < b.second;
         });
-        for (size_t k = 0; k < cross.size() && k < opt.overlap; k++)
+        for (size_t k = 0; k < cross.size() && k < std::min(opt.overlap, room); k++)
             parts[s].push_back(cross[k].second);
         std::sort(parts[s].begin(), parts[s].end());
     }
@@ -283,7 +290,11 @@ inline std::vector<std::vector<uint32_t>> partitionViewGraph(const ViewGraph& g,
             continue;
         }
         std::vector<std::vector<uint32_t>> halves = bisect(g, part, opt);
-        if (halves.size() != 2) {
+        // A half that did not get smaller would be cut again for ever. bisect
+        // bounds the borrow so this cannot happen; the check stays because the
+        // cost of being wrong about that is a hang, not a bad partition.
+        if (halves.size() != 2 || halves[0].size() >= part.size() ||
+            halves[1].size() >= part.size()) {
             leaves.push_back(std::move(part));
             continue;
         }

@@ -69,6 +69,12 @@ struct MapperOptions {
     // the frame (Mapper::pyramidSet) rather than by their raw count. Off is
     // the pre-existing count ranking.
     bool rank_by_visibility = true;
+    // A seed retry starts somewhere no earlier attempt reached (D58). Off is
+    // the pre-D58 behaviour, where retries could re-seed inside what the last
+    // attempt registered and rebuild it. Exists to be turned off when
+    // attributing a change: it decides which seed every model is built on, so
+    // it moves results that have nothing to do with the retry loop.
+    bool seed_blocking = true;
     // Focal search when a camera group registers its first image and its focal
     // is still the 1.2*max_dim guess (D18). COLMAP solves this with a P4Pf
     // minimal solver; a log-spaced sweep of P3P hypotheses is the cheaper
@@ -252,6 +258,7 @@ public:
 
         std::vector<Reconstruction> attempts;
         size_t seed_from = 0;
+        seeded_.clear();  // seed blocking is a device of this loop alone (D58)
         for (int attempt = 0; attempt < std::max(1, opt_.max_init_trials); attempt++) {
             resetModel();
             bool seeded;
@@ -266,14 +273,18 @@ public:
             globalRefine(false);  // COLMAP's two-view BA before any growth
             grow();
             uint32_t reg = rec_.numRegistered();
-            if (reg) attempts.push_back(snapshotModel());
-            uint32_t enough = (uint32_t)std::max(
+            if (reg) {
+                attempts.push_back(snapshotModel());
+                if (opt_.seed_blocking) blockSeeds(attempts.back());
+            }
+            const uint32_t enough = (uint32_t)std::max(
                 (double)opt_.min_model_size, opt_.min_model_fraction * allowedCount());
             if (reg >= enough) break;
             if (opt_.verbose)
-                fprintf(stderr, "[map] model too small (%u < %u), retrying from another seed\n",
-                        reg, enough);
+                fprintf(stderr, "[map] model too small (%u < %u, %zu covered by all attempts so "
+                        "far), retrying from another seed\n", reg, enough, seededImages());
         }
+        seeded_.clear();
         if (attempts.empty()) {
             // Nothing seeded at all. Hand back one empty reconstruction so the
             // caller has a model to report on, as before D41.
@@ -341,8 +352,15 @@ public:
     // A pass that registers nothing returns `m` untouched -- not a re-refined
     // copy of it. That is what makes the manager's grow round free on a
     // dataset it cannot help: no BA runs, no numbers move.
+    // `max_reg` caps the size the model may reach (0 = grow until nothing
+    // registers). The overlap bound above only limits images *another model*
+    // holds; images nothing covers are unbounded, so a model beside a large
+    // uncovered region grows into all of it. That is a full reconstruction, and
+    // a caller that wanted a bridge rather than a reconstruction needs to say
+    // so.
     Reconstruction continueFrom(const Reconstruction& m, GrowStats* out = nullptr,
-                                const std::vector<const Reconstruction*>& others = {}) {
+                                const std::vector<const Reconstruction*>& others = {},
+                                uint32_t max_reg = 0) {
         ensureSetup();
         resetModel();
         adopt(m);
@@ -352,7 +370,7 @@ public:
         rebuildScores();
         GrowStats st;
         st.before = rec_.numRegistered();
-        st.registered = growLoop();
+        st.registered = growLoop(max_reg);
         st.after = rec_.numRegistered();
         if (out) *out = st;
         if (!st.registered) return m;
@@ -363,6 +381,63 @@ public:
             out->after = rec_.numRegistered();
         }
         return snapshotModel();
+    }
+
+    // Register what this model can still take, by PnP alone (D57).
+    //
+    // No bundle adjustment, no refinement, and it stops as soon as one would be
+    // due. The caller is expected to follow a whole round of these with one
+    // joint refinement over every model (jointRefine), and that is the point: a
+    // level that grows twenty models pays for one solve instead of twenty.
+    // Bundle adjustments on small components were most of what a bottom-up run
+    // spent -- growing 37 models through `continueFrom` cost 8000 solves,
+    // because each refines on its own growth schedule and then audits, and the
+    // audit refines again.
+    //
+    // Only what this pass registered is checked, and a contradicted image is
+    // de-registered rather than repaired: the rest of the model was audited
+    // when it was built or merged, and moving a pose needs exactly the
+    // refinement this call exists to avoid. Dropping an image costs nothing --
+    // a later pass can register it again.
+    Reconstruction growByPnP(const Reconstruction& m, GrowStats* out,
+                             const std::vector<const Reconstruction*>& others, uint32_t max_reg,
+                             uint32_t* rejected = nullptr) {
+        ensureSetup();
+        resetModel();
+        adopt(m);
+        model_count_.clear();
+        for (const Reconstruction* o : others)
+            if (o != &m) claimImages(*o);
+        rebuildScores();
+        GrowStats st;
+        st.before = rec_.numRegistered();
+        st.registered = growLoop(max_reg, /*stop_at_ba=*/true);
+        if (st.registered) {
+            modelScale();  // warm the lazy cache poseContradicted reads
+            const std::vector<uint32_t> fresh = recent_regs_;
+            uint32_t bad = 0;
+            for (uint32_t img : fresh) {
+                Pose alt;
+                if (!rec_.images.at(img).registered || !poseContradicted(img, alt)) continue;
+                deregisterImage(img);
+                bad++;
+            }
+            if (rejected) *rejected = bad;
+            st.registered -= std::min(st.registered, bad);
+        }
+        st.after = rec_.numRegistered();
+        if (out) *out = st;
+        if (!st.registered) return m;  // unchanged: hand back the original
+        return snapshotModel();
+    }
+
+    // Choose the starting intrinsics before any model is built (D48). Part of
+    // run(); public so a bottom-up schedule can do it once over the whole
+    // database, instead of leaving the choice to whichever small piece of the
+    // capture it happens to reconstruct first.
+    void bootstrapCameras() {
+        ensureSetup();
+        bootstrapFocalLength();
     }
 
     // Adopt and bundle-adjust, with the mapper's own filtering and
@@ -582,6 +657,26 @@ public:
     void claimAll(const std::vector<Reconstruction>& models) {
         model_count_.assign(db_.images.size(), 0);
         for (const Reconstruction& m : models) claimImages(m);
+    }
+
+    // Images some seed attempt has already reached (D58). Distinct from the
+    // claimed set on purpose: a claim also bounds *growth*, and a retry has to
+    // keep growing without a bound -- the whole point of retrying is that a
+    // better seed can reach further than the last one did, through the same
+    // images. What must not repeat is starting in the same place, because the
+    // reconstruction that follows is then the one already built.
+    void blockSeeds(const Reconstruction& m) {
+        if (seeded_.size() != db_.images.size()) seeded_.assign(db_.images.size(), 0);
+        for (const auto& kv : m.images)
+            if (kv.second.registered && kv.first < seeded_.size()) seeded_[kv.first] = 1;
+    }
+    bool seedBlocked(uint32_t img) const {
+        return img < seeded_.size() && seeded_[img];
+    }
+    size_t seededImages() const {
+        size_t n = 0;
+        for (uint32_t i = 0; i < seeded_.size(); i++) n += (seeded_[i] && allowed(i));
+        return n;
     }
 
     // ---- does a model agree with the two-view geometries it was built from? --
@@ -996,6 +1091,8 @@ public:
         used_seeds_.clear();
         init_relax_ = 0;
         seed_pair_ = nullptr;
+        seeded_.clear();
+        seed_cand_valid_ = false;  // it is filtered by `allowed`
         if (images.empty()) {
             allow_.clear();
             allow_count_ = db_.images.size();
@@ -1242,9 +1339,19 @@ private:
     // both wasted time and a silent perturbation of a finished result.
     // `max_reg` caps the model's size (0 = grow until nothing registers); the
     // focal bootstrap uses it to build a model just big enough to score.
-    uint32_t growLoop(uint32_t max_reg = 0) {
+    // `stop_at_ba` returns instead of refining when the model has grown enough
+    // to trigger one. The caller is then responsible for the optimization --
+    // see growByPnP, where a whole level's worth of growth is paid for by a
+    // single joint bundle adjustment rather than one per model.
+    uint32_t growLoop(uint32_t max_reg = 0, bool stop_at_ba = false) {
         uint32_t registered_here = 0;
-        double next_ba = 3;
+        // Relative to what the model already holds, not absolute. 3 is right
+        // for a two-image seed and wrong for every continuation: an adopted
+        // 200-image model satisfies `>= 3` on its first registration, so it
+        // refined after every single image -- and with stop_at_ba it stopped
+        // after one, which is why a growth pass over 33 models registered 23
+        // images between them.
+        double next_ba = std::max(3.0, std::ceil(rec_.numRegistered() * opt_.ba_growth_ratio));
         recent_regs_.clear();
         rebuildScores();
         // The overlap budget is spent by *this* pass. A continuation of a model
@@ -1292,6 +1399,7 @@ private:
             }
             if (!registered) break;  // nothing in the ranking can be registered
             if (rec_.numRegistered() >= next_ba) {
+                if (stop_at_ba) break;
                 checkedRefine(false);
                 // Refinement mutates observations wholesale (filtering,
                 // retriangulation, de-registration, possibly a snapshot
@@ -1312,14 +1420,57 @@ private:
     // last refinement -- the suspects -- instead of keeping the wreckage. This
     // is the mapper "going back": the registrations are undone, the images
     // keep their remaining trials, and growth continues from known-good state.
+    // Undo state for a transactional refine. Copying the whole Reconstruction
+    // is O(database), not O(model): `rec_` carries an entry for every image the
+    // database has (resetModel builds them all), each with a point3D_ids vector
+    // as long as that image's feature list, and refinement can only touch the
+    // registered ones. Unregistered images are all-invalid by invariant --
+    // deregisterImage clears them -- so they restore without being copied. On a
+    // 40-image cluster of a 5400-image capture that is 135x less per refine.
+    struct Snapshot {
+        std::map<uint32_t, Camera> cameras;
+        std::map<uint64_t, Point3D> points3D;
+        uint64_t next_point3D_id = 1;
+        std::vector<std::pair<uint32_t, Image>> images;  // registered only
+        std::set<uint32_t> focal_known;
+    };
+
+    Snapshot takeSnapshot() const {
+        Snapshot s;
+        s.cameras = rec_.cameras;
+        s.points3D = rec_.points3D;
+        s.next_point3D_id = rec_.next_point3D_id;
+        s.focal_known = focal_known_;
+        for (const auto& kv : rec_.images)
+            if (kv.second.registered) s.images.emplace_back(kv.first, kv.second);
+        return s;
+    }
+
+    void restoreSnapshot(Snapshot& s) {
+        rec_.cameras = std::move(s.cameras);
+        rec_.points3D = std::move(s.points3D);
+        rec_.next_point3D_id = s.next_point3D_id;
+        focal_known_ = std::move(s.focal_known);
+        std::set<uint32_t> was;
+        for (const auto& kv : s.images) was.insert(kv.first);
+        // Refinement only ever de-registers, so this loop is normally empty;
+        // it is here so the restore does not depend on that staying true.
+        for (auto& kv : rec_.images) {
+            if (!kv.second.registered || was.count(kv.first)) continue;
+            kv.second.registered = false;
+            kv.second.pose = {mat3Identity(), {0, 0, 0}};
+            std::fill(kv.second.point3D_ids.begin(), kv.second.point3D_ids.end(),
+                      kInvalidPoint3D);
+        }
+        for (auto& kv : s.images) rec_.images[kv.first] = std::move(kv.second);
+    }
+
     void checkedRefine(bool final_pass) {
         uint32_t reg_before = rec_.numRegistered();
-        Reconstruction snap;
-        std::set<uint32_t> fk;
+        Snapshot snap;
         {
             ProfTimer pt(g_map_prof.snapshot);
-            snap = rec_;
-            fk = focal_known_;
+            snap = takeSnapshot();
         }
         globalRefine(final_pass);
         // Collapse = losing half the registered images. Observation loss alone
@@ -1333,8 +1484,7 @@ private:
                         "[map] refinement collapsed the model (%u -> %u images); undoing %zu "
                         "recent registration(s)\n", reg_before, rec_.numRegistered(),
                         recent_regs_.size());
-            rec_ = std::move(snap);
-            focal_known_ = std::move(fk);
+            restoreSnapshot(snap);
             for (uint32_t img : recent_regs_) deregisterImage(img);
             resetOrphanCameras();
         }
@@ -1891,14 +2041,26 @@ private:
 
     bool initializeAttempt(size_t& from, double min_ang_deg, int min_inliers,
                            bool allow_forward) {
-        // Candidate pairs: verified, non-planar, most inliers first.
-        std::vector<const TwoViewMatches*> cand;
-        for (const TwoViewMatches& p : db_.pairs)
-            if (p.config == (int)TwoViewConfig::Uncalibrated &&
-                (int)p.matches.size() >= min_inliers && allowed(p.image1) && allowed(p.image2))
-                cand.push_back(&p);
-        std::sort(cand.begin(), cand.end(),
-                  [](auto* a, auto* b) { return a->matches.size() > b->matches.size(); });
+        // Candidate pairs: verified, non-planar, most inliers first. Built once
+        // per restriction and reused: the relaxation ladder only ever *lowers*
+        // min_inliers, so every level's candidate set is a prefix of this one
+        // ordering, and rebuilding it per level per attempt meant scanning and
+        // sorting the whole pair list (74k of them on a 5400-image capture)
+        // once per cluster -- a quarter of a bottom-up run's mapper time.
+        if (!seed_cand_valid_) {
+            seed_cand_.clear();
+            for (const TwoViewMatches& p : db_.pairs)
+                if (p.config == (int)TwoViewConfig::Uncalibrated && allowed(p.image1) &&
+                    allowed(p.image2))
+                    seed_cand_.push_back(&p);
+            std::sort(seed_cand_.begin(), seed_cand_.end(), [](auto* a, auto* b) {
+                if (a->matches.size() != b->matches.size())
+                    return a->matches.size() > b->matches.size();
+                return a->image1 != b->image1 ? a->image1 < b->image1 : a->image2 < b->image2;
+            });
+            seed_cand_valid_ = true;
+        }
+        const std::vector<const TwoViewMatches*>& cand = seed_cand_;
 
         // The scan is serial by construction -- the first candidate that clears
         // the level's thresholds wins, and each trial mutates rec_ -- but the
@@ -1909,13 +2071,22 @@ private:
         // same order; a rejected candidate's RANSAC just no longer costs wall
         // clock. On a capture where the seed search rejects hundreds of pairs
         // this is the difference between minutes and seconds of dead GPU.
+        // The block doubles rather than starting at full width. Speculating a
+        // core's worth of RANSACs ahead is free only when the search is going
+        // to reject that many candidates; on a small restricted graph -- a
+        // bottom-up atom -- the first candidate usually seeds, and every other
+        // pair in the block was computed for nothing, once per atom.
         const unsigned hc = std::thread::hardware_concurrency();
-        const size_t block =
+        const size_t max_block =
             std::max<size_t>(1, opt_.threads > 0 ? (size_t)opt_.threads : (hc ? hc : 1));
+        size_t block = 1;
         size_t prefetched = from;
 
         for (size_t ci = from; ci < cand.size(); ci++) {
             const TwoViewMatches* p = cand[ci];
+            // Sorted by inlier count, so the first pair under this level's
+            // threshold ends the level.
+            if ((int)p->matches.size() < min_inliers) break;
             uint32_t a = p->image1, b = p->image2;
             // Relaxation levels re-scan the (re-sorted) candidate list, so the
             // cursor alone cannot prevent rebuilding a seed a previous attempt
@@ -1924,11 +2095,15 @@ private:
             // A further model must start somewhere no kept model reached, or it
             // would just rebuild the model that is already written (COLMAP
             // FindFirstInitialImage's `num_registrations == 0` rule, D41).
-            // Inert while the primary model is being built.
-            if (claimed(a) || claimed(b)) continue;
+            // Inert while the primary model is being built -- but the same
+            // argument applies between that model's own seed attempts, where
+            // nothing is claimed yet: a retry that starts inside what the last
+            // attempt registered rebuilds it (D58).
+            if (claimed(a) || claimed(b) || seedBlocked(a) || seedBlocked(b)) continue;
             if (ci >= prefetched) {
                 prefetched = std::min(cand.size(), ci + block);
                 prefetchSeedGeometry(cand, ci, prefetched);
+                block = std::min(max_block, block * 2);
             }
             if (!trySeedPair(*p, min_ang_deg, min_inliers, allow_forward, true)) continue;
             used_seeds_.insert({a, b});
@@ -2520,7 +2695,15 @@ private:
             bo.shared_ctx = &ba_ctx_;
             double cost = runGlobalBA(rec_, bo);
             ProfTimer pt(g_map_prof.filter);
-            // sanitizeCameras();  // TODO: breaks internet image collection
+            // Runs after every mapping BA, and it is load-bearing: without it
+            // a capture whose distortion terms drift lands in a self-consistent
+            // pancake it cannot climb out of. Measured on an 811-image object
+            // capture, disabling it took AUC@10 from 84.3 to 0.0 and the focal
+            // to 25219 from a 2813 default. It was once disabled as breaking
+            // internet image collections; on the only such collection here
+            // (1363 images, one camera each) it is the other way round --
+            // AUC@10 83.2 with, 68.7 without.
+            sanitizeCameras();
             int removedObs = 0, removedPts = 0;
             filterPoints(removedObs, removedPts);
             if (opt_.verbose)
@@ -2951,6 +3134,10 @@ private:
     std::vector<uint8_t> allow_;      // restrictTo(); empty = every image
     size_t allow_count_ = 0;          // ... and how many are set
     std::vector<uint32_t> model_count_;
+    std::vector<uint8_t> seeded_;     // blockSeeds(); images an attempt reached
+    // Seed candidates for the current restriction, most inliers first.
+    std::vector<const TwoViewMatches*> seed_cand_;
+    bool seed_cand_valid_ = false;
     // Persistent BA context (D38): device + pipelines survive across the
     // mapper's many global BAs; each solve only creates/frees its own
     // problem-sized buffers. Uninitialized until the first BA initializes it.

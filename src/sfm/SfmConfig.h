@@ -35,7 +35,7 @@
 #include "sfm/feature/PairSelection.h"
 #include "sfm/feature/Sift.h"
 #include "sfm/geometry/TwoView.h"
-#include "sfm/map/Hierarchical.h"
+#include "sfm/map/Bottomup.h"
 #include "sfm/map/Manager.h"
 #include "sfm/map/Mapper.h"
 #include "sfm/map/Merge.h"
@@ -121,12 +121,13 @@ struct SfmConfig {
     MapperOptions mapper;
     ManagerOptions manager;
     MergeOptions merge;
-    HierarchicalOptions hier;
+    BottomUpOptions bup;
     // How the mapper is scheduled: "flat" is one incremental reconstruction of
-    // the whole capture, "hierarchical" cuts the view graph into clusters and
-    // merges them, "auto" picks hierarchical above hier.min_images. Flat is the
-    // default until the hierarchical schedule has been measured on enough
-    // captures to be the one a beginner gets.
+    // the whole capture, "bottom-up" reconstructs small atoms of the view graph
+    // and merges them upwards (D57), and "auto" picks bottom-up at or above
+    // bup.min_images, where the flat schedule's whole-model passes start to
+    // dominate. "hierarchical" is accepted as the old name for "bottom-up".
+    // Flat until the bottom-up schedule has been measured on enough captures.
     std::string mapper_mode = "flat";
 
     // Fan the pipeline knobs out into the structs above and validate what the
@@ -281,17 +282,26 @@ struct SfmConfig {
     F(mapper.rank_by_visibility, "rank-by-visibility", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
       "mapper", 0, 0, "",                                                                           \
       "Rank the next image by how its visible structure spreads over the frame, not by count")      \
+    F(mapper.seed_blocking, "seed-blocking", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,    \
+      "", "A seed retry starts somewhere no earlier attempt reached, instead of rebuilding it")     \
     F(mapper_mode, "mapper", CMD_AUTO | CMD_MAP, Tier::Basic, "mapper", 0, 0,                       \
-      "auto|flat|hierarchical",                                                                     \
-      "One incremental reconstruction of the whole capture, or clusters of the view graph "         \
-      "reconstructed separately and merged; auto picks the latter for a large capture")             \
-    F(hier.min_images, "hier-min-images", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",             \
-      2, 1000000, "", "Images at or above which --mapper auto goes hierarchical")                   \
-    F(hier.partition.leaf_max_images, "hier-cluster-size", CMD_AUTO | CMD_MAP, Tier::Advanced,      \
-      "mapper", 20, 100000, "", "Images a view-graph cluster is split until it is under")           \
-    F(hier.partition.overlap, "hier-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",         \
-      0, 100000, "", "Images each cluster borrows from its sibling, which is what a merge aligns "  \
-      "on")                                                                                         \
+      "auto|flat|bottom-up",                                                                        \
+      "One incremental reconstruction of the whole capture, or small atoms of the view graph "      \
+      "reconstructed separately and merged upwards; auto picks the latter for a large capture")     \
+    F(bup.min_images, "bup-min-images", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",               \
+      2, 1000000, "", "Images at or above which --mapper auto goes bottom-up")                      \
+    F(bup.partition.leaf_max_images, "bup-atom-size", CMD_AUTO | CMD_MAP, Tier::Advanced,           \
+      "mapper", 8, 100000, "", "Images a view-graph atom is split until it is under")               \
+    F(bup.partition.overlap, "bup-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",           \
+      0, 100000, "", "Images each atom borrows from its sibling, which is what a merge aligns on")  \
+    F(bup.max_rounds, "bup-rounds", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1, 100, "",       \
+      "Levels of the merge tree before the leftovers are handed to the manage loop")                     \
+    F(bup.joint_intrinsics, "bup-joint-intrinsics", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",   \
+      0, 0, "", "Bundle-adjust every model in one problem with the intrinsics shared per camera")   \
+    F(bup.grow_every, "bup-grow-every", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 100,      \
+      "", "Levels between growth passes over the models that did not merge; 0 disables")            \
+    F(bup.grow_budget_frac, "bup-grow-budget", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,     \
+      1000, "", "Images one growth pass may add to a model, as a fraction of what it holds")        \
     F(mapper.ba_growth_ratio, "ba-growth", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1, 100,    \
       "", "Model growth that triggers the next global bundle adjustment")                           \
     F(mapper.ba_growth_rtol, "ba-growth-rtol", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",        \

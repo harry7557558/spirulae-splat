@@ -33,12 +33,15 @@ struct MapProf {
         return e;
     }
 
-    void report(double total_s) const {
+    // Counters are cumulative, so a caller may report more than once: the
+    // mapper reports its own stage, the CLI reports again once the manage loop
+    // has finished adding to them. `what` says which.
+    void report(double total_s, const char* what = "mapper") const {
         if (!enabled()) return;
         double ba = ba_build + ba_init + ba_solve + ba_write;
         double accounted = init_seed + choose + reg + tri + retri + filter + snapshot + ba;
         fprintf(stderr,
-                "[prof] mapper total %.2f s, accounted %.2f s (%.0f%%)\n"
+                "[prof] %s total %.2f s, accounted %.2f s (%.0f%%)\n"
                 "[prof]   seed search   %8.2f s\n"
                 "[prof]   choose-next   %8.2f s  (%ld calls)\n"
                 "[prof]   register      %8.2f s  (%ld tries, %ld ok)\n"
@@ -48,7 +51,7 @@ struct MapProf {
                 "[prof]   snapshot      %8.2f s\n"
                 "[prof]   BA            %8.2f s  (%ld calls, %ld LM iters): "
                 "build %.2f + init %.2f + solve %.2f + write %.2f\n",
-                total_s, accounted, total_s > 0 ? 100.0 * accounted / total_s : 0.0,
+                what, total_s, accounted, total_s > 0 ? 100.0 * accounted / total_s : 0.0,
                 init_seed, choose, n_choose, reg, n_reg_try, n_reg_ok, tri, retri, merge,
                 n_merged, filter, snapshot, ba, n_ba, n_ba_iters, ba_build, ba_init, ba_solve,
                 ba_write);

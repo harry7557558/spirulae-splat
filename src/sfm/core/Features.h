@@ -144,7 +144,12 @@ inline void writeFeatures(const std::string& path, const FeatureSet& fs) {
     f.write((const char*)&fs.extract_height, 4);
 }
 
-inline FeatureSet readFeatures(const std::string& path) {
+// `with_descriptors == false` seeks past the descriptor block instead of
+// reading it. Everything downstream of matching -- the mapper, and so the
+// whole `map` subcommand -- wants only keypoints and colors, and the
+// descriptors are the file: a gigabyte per thousand images, read and then
+// never touched.
+inline FeatureSet readFeatures(const std::string& path, bool with_descriptors = true) {
     std::ifstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("cannot read " + path);
     char magic[4];
@@ -170,8 +175,14 @@ inline FeatureSet readFeatures(const std::string& path) {
             fs.keypoints[i] = {v[0], v[1], v[2], v[3], 0.0f};
         }
     }
-    fs.descriptors.resize((size_t)count * dim * dtypeSize(fs.dtype));
-    f.read((char*)fs.descriptors.data(), (std::streamsize)fs.descriptors.size());
+    const std::streamsize desc_bytes = (std::streamsize)((size_t)count * dim *
+                                                         dtypeSize(fs.dtype));
+    if (with_descriptors) {
+        fs.descriptors.resize((size_t)desc_bytes);
+        f.read((char*)fs.descriptors.data(), desc_bytes);
+    } else {
+        f.seekg(desc_bytes, std::ios::cur);
+    }
     if (version >= 2) {
         uint8_t has_colors = 0;
         f.read((char*)&has_colors, 1);

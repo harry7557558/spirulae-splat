@@ -52,17 +52,18 @@ images/ ──► extract ──► features/ ─┐
 `ssplat-sfm auto` runs all of it from two knobs, `--quality` and `--data-type`.
 
 The `map` box is one incremental reconstruction of the whole capture by default.
-`--mapper hierarchical` replaces it with a bottom-up schedule: the verified view
-graph is cut by normalized cut into overlapping clusters (`map/Partition.h`),
-each is reconstructed by the same `Mapper` restricted to it, and the leaves go
-straight into the same Sim(3) merger the manage rounds use
-(`map/Hierarchical.h`). It is a *schedule*, not a different algorithm — every
-model is still built by `Mapper::run`'s own rules — which is what makes a
-regression in it impossible to confuse with a regression in the geometry. Reach
-for it when the flat schedule is *struggling* rather than when the capture is
-merely large: measured on three ~1100-image sets it was 24% faster, 20 images
-fuller and 3.7 AUC better on the one the flat mapper found hard, and 15% slower
-for nothing on the two it did not. `Hierarchical.h` carries the numbers.
+`--mapper bottom-up` replaces it with the opposite schedule (`map/Bottomup.h`,
+D57): the verified view graph is cut by normalized cut into *atoms* of a few
+dozen images (`map/Partition.h`), each is reconstructed by the same `Mapper`
+restricted to it, and the atoms are then merged upwards a level at a time —
+every model absorbing at most one other per level, with one bundle adjustment
+across all of them, intrinsics shared per camera group, between levels. It is a
+*schedule*, not a different algorithm: every model is still built by
+`Mapper::run`'s own rules and joined by the same Sim(3) merger the manage rounds
+use, which is what makes a regression in it impossible to confuse with a
+regression in the geometry. What it changes is where the cost and the risk sit —
+an atom is too small to get its own focal wrong, and too small for a whole-model
+pass to be expensive. `Bottomup.h` carries the numbers.
 
 ## Layout
 
@@ -87,7 +88,7 @@ optim/       Ransac   LO-RANSAC with MSAC scoring
 ba/          Problem (model registry + problem layout), Solver (LM, dense
                Cholesky / implicit-Schur PCG), README.md
 map/         Mapper, Bundle, CorrespondenceGraph, Merge, Manager, Profile,
-               Partition (view-graph normalized cut), Hierarchical (cluster
+               Partition (view-graph normalized cut), Bottomup (atom
                reconstruction + merge)
 shaders/     common/ (Real, df, dmath, linalg, camera, loss), ba/, sift/, match/
 tests/       one executable per file
@@ -194,8 +195,8 @@ preset, and `auto` reports every field a preset moved:
 
 Everything else has a default that a beginner should not have to touch.
 
-`--mapper flat|hierarchical|auto` picks the schedule (see the stage graph);
-`--hier-cluster-size` and `--hier-overlap` size the clusters and the overlap the
+`--mapper flat|bottom-up|auto` picks the schedule (see the stage graph);
+`--bup-atom-size` and `--bup-overlap` size the atoms and the overlap the
 merge aligns on. `--merge-tracks` and `--rank-by-visibility` are on by default
 and exist to be turned off when attributing a change.
 
@@ -331,10 +332,10 @@ port. Ordered by what blocks the most.
 
 15. Learned frontend (ALIKED / SuperPoint + LightGlue) behind the existing
     extractor and matcher interfaces.
-16. A **global** (GLOMAP-style) mapper. The **hierarchical** one exists
-    (`--mapper hierarchical`, `map/Partition.h` + `map/Hierarchical.h`); what it
-    has not got is parallel cluster reconstruction, which needs a second
-    `rec_` per worker and one shared `VkContext`.
+16. A **global** (GLOMAP-style) mapper. The **bottom-up** one exists
+    (`--mapper bottom-up`, `map/Partition.h` + `map/Bottomup.h`); what it has
+    not got is parallel atom reconstruction, which needs a second `rec_` per
+    worker and one shared `VkContext`.
 17. Parity benchmarking on ETH3D / IMC.
 
 **Deliberately out of scope**, so they are not silently skipped: rig

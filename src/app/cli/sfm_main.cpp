@@ -580,19 +580,35 @@ static bool readModels(const std::string& dir, std::vector<Reconstruction>& mode
 }
 
 // One last global bundle adjustment per model with the principal point
-// Flat or hierarchical, per --mapper. `auto` goes hierarchical once the capture
-// is large enough for the flat mapper's whole-model passes to dominate; below
-// that the flat schedule is both faster and better, because nothing is ever cut
-// and nothing has to be glued back.
+// Flat or bottom-up, per --mapper. `auto` goes bottom-up once the capture is
+// large enough for the flat mapper's whole-model passes to dominate; below that
+// the flat schedule is both faster and better, because nothing is ever cut and
+// nothing has to be glued back.
 static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDatabase& db,
-                                             const SfmConfig& cfg) {
-    const bool hier = cfg.mapper_mode == "hierarchical" ||
-                      (cfg.mapper_mode == "auto" && db.images.size() >= cfg.hier.min_images);
-    if (!hier) return mapper.run();
-    HierarchicalStats hs;
-    HierarchicalOptions ho = cfg.hier;
-    ho.verbose = !cfg.quiet;
-    return hierarchicalReconstruct(mapper, db, ho, cfg.merge, hs);
+                                             SfmConfig& cfg) {
+    const bool bup = cfg.mapper_mode == "bottom-up" || cfg.mapper_mode == "hierarchical" ||
+                     (cfg.mapper_mode == "auto" && db.images.size() >= cfg.bup.min_images);
+    if (!bup) return mapper.run();
+    // The manage loop's growth and reseeding are what the bottom-up schedule
+    // already did, level by level, and did more cheaply: its growth registers
+    // by PnP and pays for one joint solve per level, where a manage round
+    // refines and audits each component on its own. Measured on a 5402-image
+    // capture, a manage round after the tree spent ~600 s to cover 26 more
+    // images. What is left on is the cleanup the tree has no equivalent for --
+    // merging what it could not, splitting a model its own correspondences
+    // contradict, dropping copies, and cutting a fold.
+    cfg.manager.do_grow = false;
+    cfg.manager.do_reseed = false;
+    BottomUpStats bs;
+    BottomUpOptions bo = cfg.bup;
+    bo.verbose = !cfg.quiet;
+    // The tree performs hundreds of merges, and the only test that catches
+    // repeated structure is the one the merger cannot run by itself (D45).
+    // Without it a capture with two similar rooms merges one onto the other and
+    // every internal test agrees, because a fold agrees with itself.
+    MergeOptions mo = cfg.merge;
+    mo.validate = seamValidator(mapper, cfg.manager);
+    return bottomUpReconstruct(mapper, db, bo, mo, bs);
 }
 
 // released (D51). COLMAP's documentation: hold it during reconstruction, where
@@ -773,7 +789,7 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
     std::error_code skip_ec;
     const bool skip_masks = !maskdir.empty() && fs::is_directory(maskdir, skip_ec);
     std::vector<fs::path> found;
-    for (auto it = fs::recursive_directory_iterator(imagedir);
+    for (auto it = fs::recursive_directory_iterator(imagedir, fs::directory_options::follow_directory_symlink);
          it != fs::recursive_directory_iterator(); ++it) {
         if (skip_masks && it->is_directory() && fs::equivalent(it->path(), maskdir, skip_ec)) {
             it.disable_recursion_pending();
@@ -1345,8 +1361,34 @@ static int cmdMap(int argc, char** argv) {
 
     MatchesDatabase db = readMatches(matchesPath);
     std::vector<FeatureSet> feats(db.images.size());
-    for (size_t i = 0; i < db.images.size(); i++)
-        feats[i] = readFeatures(featdir + "/" + db.images[i].name + ".bin");
+    {
+        // Descriptors are skipped: matching is over, and on a 5000-image
+        // capture they are several gigabytes of file that nothing downstream
+        // reads. Parallel because it is pure per-file work landing by index.
+        const unsigned hc = std::thread::hardware_concurrency();
+        int nt = cfg.threads > 0 ? cfg.threads : (hc > 0 ? (int)hc : 1);
+        nt = std::max(1, std::min<int>(nt, (int)db.images.size()));
+        std::atomic<size_t> next{0};
+        std::mutex err_mtx;
+        std::string first_error;  // a bad file must report itself, not terminate
+        std::vector<std::thread> pool;
+        for (int t = 0; t < nt; t++)
+            pool.emplace_back([&] {
+                for (size_t i = next++; i < db.images.size(); i = next++) {
+                    try {
+                        feats[i] = readFeatures(featdir + "/" + db.images[i].name + ".bin", false);
+                    } catch (const std::exception& e) {
+                        std::lock_guard<std::mutex> lk(err_mtx);
+                        if (first_error.empty()) first_error = e.what();
+                    }
+                }
+            });
+        for (std::thread& th : pool) th.join();
+        if (!first_error.empty()) {
+            fprintf(stderr, "map: %s\n", first_error.c_str());
+            return 1;
+        }
+    }
 
     // The camera setup, in order of authority: what the command line asked for,
     // else what verification recorded in matches.bin (D47), else derived here.
@@ -1487,6 +1529,9 @@ static int cmdMap(int argc, char** argv) {
                models.size(), mst.covered_before, mst.covered_after, t_manage);
 
     resolveImageNames(models, cfg.image_dir);
+    // The mapper reported its own stage when run() returned; the manage loop
+    // adds to the same counters and would otherwise go unreported.
+    g_map_prof.report(0, "map+manage");
 
     const Reconstruction& rec = models.front();
     double mean = 0, median = 0;
@@ -1790,6 +1835,10 @@ static int cmdAuto(int argc, char** argv) {
 
     resolveImageNames(models, imagedir);
     writeModels(models, sparsedir, verbose);
+
+    // The mapper reports its own breakdown when `run()` returns; the manage
+    // loop's passes accumulate into the same counters and would go unreported.
+    g_map_prof.report(t_map + t_manage, "map+manage");
 
     // ---- report ----
     const Reconstruction& rec = models.front();

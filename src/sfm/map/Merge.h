@@ -38,6 +38,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -875,23 +876,41 @@ public:
     // most likely to be caught), then the largest anchor: the bigger model
     // keeps its gauge and its intrinsics, and the smaller one moves.
     std::vector<MergeCandidate> candidates() const {
-        std::vector<MergeCandidate> out;
+        // Counted through an image -> models index rather than by intersecting
+        // every pair of models. A bottom-up run holds hundreds of models and
+        // recomputes this after every merge; the quadratic form spends all of
+        // it on pairs that share nothing.
+        std::unordered_map<uint32_t, std::vector<uint32_t>> holders;
         for (size_t i = 0; i < models_.size(); i++) {
             if (!alive_[i]) continue;
-            for (size_t j = i + 1; j < models_.size(); j++) {
-                if (!alive_[j]) continue;
-                size_t n = sharedImages(models_[i], models_[j]).size();
-                if ((int)n < std::max(3, opt_.min_common_images)) continue;
-                MergeCandidate c;
-                // Anchor = more registered images; ties keep the earlier index,
-                // which is the one with more 3D points (models arrive sorted).
-                const bool i_first = models_[i].numRegistered() >= models_[j].numRegistered();
-                c.dst = i_first ? i : j;
-                c.src = i_first ? j : i;
-                c.common_images = n;
-                out.push_back(c);
-            }
+            for (const auto& kv : models_[i].images)
+                if (kv.second.registered) holders[kv.first].push_back((uint32_t)i);
         }
+        std::unordered_map<uint64_t, size_t> shared;  // (lo << 32 | hi) -> images
+        for (const auto& kv : holders) {
+            const std::vector<uint32_t>& v = kv.second;  // ascending by construction
+            for (size_t a = 0; a + 1 < v.size(); a++)
+                for (size_t b = a + 1; b < v.size(); b++)
+                    shared[((uint64_t)v[a] << 32) | v[b]]++;
+        }
+        std::vector<MergeCandidate> out;
+        for (const auto& kv : shared) {
+            if ((int)kv.second < std::max(3, opt_.min_common_images)) continue;
+            const size_t i = (size_t)(kv.first >> 32), j = (size_t)(kv.first & 0xffffffffu);
+            MergeCandidate c;
+            // Anchor = more registered images; ties keep the earlier index,
+            // which is the one with more 3D points (models arrive sorted).
+            const bool i_first = models_[i].numRegistered() >= models_[j].numRegistered();
+            c.dst = i_first ? i : j;
+            c.src = i_first ? j : i;
+            c.common_images = kv.second;
+            out.push_back(c);
+        }
+        // The hash map's order is unspecified; sort to a total order so the
+        // pass is reproducible, then by the ranking below.
+        std::sort(out.begin(), out.end(), [](const MergeCandidate& a, const MergeCandidate& b) {
+            return a.dst != b.dst ? a.dst < b.dst : a.src < b.src;
+        });
         std::stable_sort(out.begin(), out.end(),
                          [&](const MergeCandidate& a, const MergeCandidate& b) {
                              if (a.common_images != b.common_images)

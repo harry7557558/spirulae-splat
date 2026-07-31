@@ -106,6 +106,46 @@ struct ManagerStats {
     size_t covered_before = 0, covered_after = 0;
 };
 
+// The cross-seam agreement test, as a merge validator (D45).
+//
+// Every test MergeSession can run by itself is computed from the evidence the
+// alignment already used, and repeated structure satisfies all of it -- a fold
+// agrees with itself. This one asks the correspondence graph instead: do the
+// verified two-view geometries that cross the seam still hold in the merged
+// model? It is the only test that separates "these two places look the same"
+// from "these two places are the same".
+//
+// A free function because the bottom-up merge tree needs it as much as the
+// manage loop does. Its levels perform hundreds of merges, and without this
+// they run with nothing watching for repeated structure at all.
+inline std::function<std::string(const Reconstruction&, const Reconstruction&, const Sim3&)>
+seamValidator(Mapper& mapper, const ManagerOptions& opt, ManagerStats* st = nullptr) {
+    if (opt.seam_min_agreement <= 0) return {};
+    Mapper* mp = &mapper;
+    const double max_err = opt.merge.max_reproj_error;
+    const double pair_frac = opt.seam_min_pair_fraction;
+    const double min_agree = opt.seam_min_agreement;
+    const size_t min_pairs = (size_t)std::max(0, opt.seam_min_pairs);
+    return [mp, max_err, pair_frac, min_agree, min_pairs, st](
+               const Reconstruction& merged, const Reconstruction& src, const Sim3&) -> std::string {
+        std::set<uint32_t> src_side;
+        for (const auto& kv : src.images)
+            if (kv.second.registered) src_side.insert(kv.first);
+        Mapper::SeamCheck sc = mp->checkSeam(merged, src_side, max_err, pair_frac);
+        if (sc.tested < min_pairs) return "";  // nothing to judge on
+        const double agree = (double)sc.agree / (double)sc.tested;
+        if (st) st->seam_checked++;
+        if (agree >= min_agree) return "";
+        if (st) st->seam_refused++;
+        char buf[224];
+        snprintf(buf, sizeof buf,
+                 "only %zu of the %zu verified pairs that cross the seam still hold "
+                 "(median %.0f%% of their matches explained)",
+                 sc.agree, sc.tested, 100.0 * sc.median_frac);
+        return std::string(buf);
+    };
+}
+
 // Distinct images any model registers.
 inline std::set<uint32_t> coveredImages(const std::vector<Reconstruction>& models) {
     std::set<uint32_t> ids;
@@ -130,6 +170,12 @@ public:
         // spend a bundle adjustment to confirm what it already knows. They
         // become auditable the moment a merge or a growth pass changes them,
         // which changes their shape and so their signature.
+        // Before anything expensive touches them. The mapper's seed retries and
+        // its sub-model search can both hand over a model that a bigger one
+        // already contains (D19, D41), and until this ran only after a growth
+        // pass, the first round bundle-adjusted, split, merged, audited and
+        // grew every one of those copies first.
+        models = dropRedundant(std::move(models));
         for (const Reconstruction& m : models) audited_.insert(signature(m));
         if (models.size() < 2 && !opt_.do_grow && !opt_.do_reseed) {
             st_.models_after = models.size();
@@ -159,6 +205,9 @@ public:
         // Growth registers against the model as it stood, so the last round's
         // registrations have never been checked against the finished one.
         models = auditPass(models);
+        // ... and the reseed at the end of the last round, plus that audit,
+        // both change what the models cover after the loop's own prune ran.
+        models = dropRedundant(models);
         // Folds are cut *last*, once, and never inside the loop.
         if (opt_.do_duplicate_split) {
             models = duplicatePass(std::move(models));
@@ -186,35 +235,7 @@ private:
     std::vector<Reconstruction> mergePass(std::vector<Reconstruction> models) {
         MergeOptions mo = opt_.merge;
         mo.duplicate = opt_.duplicate;
-        // The merger's own tests all look at what the alignment already used.
-        // This one does not: it asks the correspondence graph whether the
-        // verified pairs that cross the seam still hold in the merged model
-        // (Mapper::checkSeam). Repeated structure is what defeats the internal
-        // tests, and it is exactly what the cross-seam pairs disagree about.
-        if (opt_.seam_min_agreement > 0) {
-            Mapper* mp = &mapper_;
-            const ManagerOptions* o = &opt_;
-            ManagerStats* st = &st_;
-            mo.validate = [mp, o, st](const Reconstruction& merged, const Reconstruction& src,
-                                      const Sim3&) -> std::string {
-                std::set<uint32_t> src_side;
-                for (const auto& kv : src.images)
-                    if (kv.second.registered) src_side.insert(kv.first);
-                Mapper::SeamCheck sc = mp->checkSeam(merged, src_side, o->merge.max_reproj_error,
-                                                     o->seam_min_pair_fraction);
-                if (sc.tested < (size_t)o->seam_min_pairs) return "";  // nothing to judge on
-                double agree = (double)sc.agree / (double)sc.tested;
-                st->seam_checked++;
-                if (agree >= o->seam_min_agreement) return "";
-                st->seam_refused++;
-                char buf[224];
-                snprintf(buf, sizeof buf,
-                         "only %zu of the %zu verified pairs that cross the seam still hold "
-                         "(median %.0f%% of their matches explained)",
-                         sc.agree, sc.tested, 100.0 * sc.median_frac);
-                return buf;
-            };
-        }
+        mo.validate = seamValidator(mapper_, opt_, &st_);
         MergeSession s(std::move(models), mo);
         const size_t merges = s.runAuto();
         st_.merges += merges;
@@ -331,30 +352,67 @@ private:
     // fails merge tests it should pass.
     void jointRefinePass(std::vector<Reconstruction>& models) {
         std::map<uint32_t, std::pair<double, double>> before;  // id -> (min f, max f)
+        std::map<uint32_t, double> radius;                     // ... and its frame corner
         for (const Reconstruction& m : models)
             for (const auto& kv : m.cameras) {
                 auto it = before.find(kv.first);
-                if (it == before.end()) before[kv.first] = {kv.second.focal(), kv.second.focal()};
-                else {
+                if (it == before.end()) {
+                    before[kv.first] = {kv.second.focal(), kv.second.focal()};
+                    radius[kv.first] = std::hypot(kv.second.cx, kv.second.cy);
+                } else {
                     it->second.first = std::min(it->second.first, kv.second.focal());
                     it->second.second = std::max(it->second.second, kv.second.focal());
                 }
             }
+        // What this pass is for is a component that fitted its own focal, and
+        // the disagreement between the components is how much of that there is
+        // to fix. When they already agree to within a pixel at the frame
+        // corner, it is a bundle adjustment over the whole capture that ends
+        // where it started -- and the manage loop runs it every round.
+        double spread_px = 0;
+        for (const auto& kv : before) {
+            const double f = 0.5 * (kv.second.first + kv.second.second);
+            if (f > 0) spread_px = std::max(spread_px,
+                                            (kv.second.second - kv.second.first) / f *
+                                                radius[kv.first]);
+        }
+        if (spread_px <= kJointBaMovedPx) {
+            if (opt_.verbose)
+                fprintf(stderr, "[mgr] joint BA skipped: the components' focals already agree to "
+                        "%.2f px at the frame corner\n", spread_px);
+            return;
+        }
         mapper_.jointRefine(models);
         st_.joint_ba_rounds++;
-        if (opt_.verbose)
-            for (const auto& kv : before) {
-                double f = 0;
-                for (const Reconstruction& m : models) {
-                    auto it = m.cameras.find(kv.first);
-                    if (it != m.cameras.end()) { f = it->second.focal(); break; }
-                }
+        // How far the pass moved a feature at the corner of the frame, in
+        // pixels: that is the unit every decision the memos hold was made in.
+        double moved_px = 0;
+        for (const auto& kv : before) {
+            double f = 0;
+            for (const Reconstruction& m : models) {
+                auto it = m.cameras.find(kv.first);
+                if (it == m.cameras.end()) continue;
+                f = it->second.focal();
+                break;
+            }
+            const double span = std::max(kv.second.second - f, f - kv.second.first);
+            if (f > 0) moved_px = std::max(moved_px, span / f * radius[kv.first]);
+            if (opt_.verbose)
                 fprintf(stderr, "[mgr] joint BA: camera %u focal %.0f..%.0f -> %.0f (shared)\n",
                         kv.first, kv.second.first, kv.second.second, f);
-            }
-        // Every model's shape is unchanged but its geometry is not, so the
-        // memos have to forget them: this is exactly the situation where a
-        // model that could not grow before may grow now.
+        }
+        // Every model's shape is unchanged but its geometry may not be, and a
+        // model that could not grow before may grow now -- so the memos have to
+        // forget them. Only when the pass actually moved something, though: the
+        // memos are keyed by shape, so a model a merge or a split changed is
+        // already outside them, and the pass that has to be repeated is the one
+        // whose *inputs* changed while its shape did not. Round one pulls the
+        // components' focals together and genuinely changes them; round two
+        // onward starts from the solution round one converged to, and
+        // re-growing and re-auditing every model because a focal moved by less
+        // than a pixel at the frame corner is most of what the manage loop
+        // spends on a large fragmented capture.
+        if (moved_px <= kJointBaMovedPx) return;
         barren_.clear();
         audited_.clear();
         for (const Reconstruction& m : models) audited_.insert(signature(m));
@@ -423,26 +481,35 @@ private:
         return models;
     }
 
-    // Models that growth has turned into copies of a bigger one.
+    // Models that growth has turned into copies of what is already kept.
+    //
+    // Against the *union* of the models kept before it, not against one of them
+    // at a time. Testing one at a time misses the case that actually occurs: on
+    // a 5356-image capture the run ended with models of 5249, 5168, 3770 and
+    // 1389 images where each of the last three was 98-100% inside the union of
+    // the others and none was 90% inside any single one, because their images
+    // were split between two bigger models. Largest first, so what a model is
+    // measured against is only ever models that outrank it.
     std::vector<Reconstruction> dropRedundant(std::vector<Reconstruction> models) {
         sortModels(models);
         std::vector<char> keep(models.size(), 1);
+        std::set<uint32_t> covered;
         for (size_t i = 0; i < models.size(); i++) {
-            if (!keep[i]) continue;
-            for (size_t j = i + 1; j < models.size(); j++) {
-                if (!keep[j]) continue;
-                if (models[j].numRegistered() > models[i].numRegistered()) continue;
-                size_t shared = sharedImages(models[j], models[i]).size();
-                const uint32_t n = models[j].numRegistered();
-                if (n && (double)shared >= opt_.redundant_ratio * (double)n) {
-                    keep[j] = 0;
-                    st_.dropped_redundant++;
-                    if (opt_.verbose)
-                        fprintf(stderr,
-                                "[mgr] dropped a %u-image model: %zu of its images are in a "
-                                "larger one\n", n, shared);
-                }
+            const uint32_t n = models[i].numRegistered();
+            size_t shared = 0;
+            for (const auto& kv : models[i].images)
+                if (kv.second.registered && covered.count(kv.first)) shared++;
+            if (i && n && (double)shared >= opt_.redundant_ratio * (double)n) {
+                keep[i] = 0;
+                st_.dropped_redundant++;
+                if (opt_.verbose)
+                    fprintf(stderr,
+                            "[mgr] dropped a %u-image model: %zu of its images are already in "
+                            "larger ones\n", n, shared);
+                continue;
             }
+            for (const auto& kv : models[i].images)
+                if (kv.second.registered) covered.insert(kv.first);
         }
         std::vector<Reconstruction> out;
         for (size_t i = 0; i < models.size(); i++)
@@ -462,6 +529,11 @@ private:
         st_.reseeded_models += models.size() - before;
         return models;
     }
+
+    // Movement at the frame corner, in pixels, below which a joint refinement
+    // is taken to have changed nothing anyone downstream can act on -- well
+    // under the registration and filtering tolerances, which are a few pixels.
+    static constexpr double kJointBaMovedPx = 1.0;
 
     using Signature = std::pair<uint32_t, size_t>;  // registered images, 3D points
     static Signature signature(const Reconstruction& m) {
