@@ -32,128 +32,9 @@
 #include "sfm/core/Model.h"
 #include "sfm/map/Mapper.h"
 #include "sfm/map/Merge.h"
+#include "sfm/map/ModelOps.h"
 
 namespace sfm {
-
-struct ManagerOptions {
-    MergeOptions merge;
-    int max_rounds = 4;
-    bool do_merge = true;
-    bool do_grow = true;      // register unregistered images into existing models
-    bool do_reseed = true;    // look for models among images still uncovered
-    // Audit a merged model's poses against the correspondence graph and
-    // re-register what it cannot support (Mapper::audit). Off means a merged
-    // model is only bundle-adjusted, which cannot undo a gross misplacement.
-    bool do_audit = true;
-    // A model this fraction of whose images another (larger) model also holds
-    // carries nothing of its own: growth has made it a duplicate. It is
-    // dropped rather than written as a reconstruction in its own right.
-    double redundant_ratio = 0.9;
-    // Cameras whose focal deviates from the population consensus by more than
-    // this factor are refit before merging (see fixOutlierCameras). A model
-    // built on a runaway focal cannot align with anything, and on a rig every
-    // model is looking at the same physical cameras.
-    double focal_consensus_tol = 0.15;  // 0 disables
-    // Bundle-adjust every component in one problem with intrinsics shared per
-    // camera group (Mapper::jointRefine, D45). This is what stops a small
-    // component from fitting its own focal to its own noise; the outlier refit
-    // above still runs first, because a camera that has already run away needs
-    // replacing, not averaging.
-    bool do_joint_ba = true;
-    // Cross-seam agreement required of a merge (Mapper::checkSeam). A verified
-    // pair whose two images end up on opposite sides of the seam is evidence
-    // the alignment never saw; the merged model has to reproduce most of them.
-    // 0 disables the check.
-    double seam_min_agreement = 0.6;   // fraction of tested cross-seam pairs
-    double seam_min_pair_fraction = 0.5;  // ... of a pair's matches, to call it holding
-    int seam_min_pairs = 10;           // below this there is nothing to judge on
-    // Break a model whose own verified pairs do not agree with it
-    // (Mapper::splitInconsistent). Only pairs with at least
-    // `split_min_matches` are trusted to vote, and a resulting group smaller
-    // than `split_min_group` is de-registered rather than written out.
-    bool do_split = true;
-    int split_min_matches = 30;
-    size_t split_min_group = 10;
-    // Folded models: two similar-looking parts of the capture written on top of
-    // each other (findDuplicateStructure). Detected from missing structure, not
-    // from disagreement, because a fold agrees with itself.
-    //
-    // On by default since D46, when the verdict stopped being the conflict
-    // *rate* -- which does not separate a fold from a dense capture -- and
-    // became what the implied split would cost. Measured with the same options
-    // on real-world datasets, the rate is *higher* on the sound model; the cut
-    // differs by a hundredfold, because two places written on top of each other
-    // never shared structure to  begin with, while cutting a sound model always
-    // runs through structure it genuinely shares.
-    // See DuplicateOptions::max_cut_fraction.
-    bool do_duplicate_split = true;
-    DuplicateOptions duplicate;
-    bool verbose = true;
-};
-
-struct ManagerStats {
-    size_t rounds = 0;
-    size_t merges = 0, merges_refused = 0;
-    size_t grown_images = 0;       // images registered by growth passes
-    size_t reseeded_models = 0;
-    size_t dropped_redundant = 0;
-    size_t audited_out = 0, audited_repaired = 0;
-    size_t cameras_refit = 0;
-    size_t joint_ba_rounds = 0;
-    size_t seam_checked = 0, seam_refused = 0;
-    size_t splits = 0, duplicate_splits = 0, split_dropped = 0;
-    size_t models_before = 0, models_after = 0;
-    size_t covered_before = 0, covered_after = 0;
-};
-
-// The cross-seam agreement test, as a merge validator (D45).
-//
-// Every test MergeSession can run by itself is computed from the evidence the
-// alignment already used, and repeated structure satisfies all of it -- a fold
-// agrees with itself. This one asks the correspondence graph instead: do the
-// verified two-view geometries that cross the seam still hold in the merged
-// model? It is the only test that separates "these two places look the same"
-// from "these two places are the same".
-//
-// A free function because the bottom-up merge tree needs it as much as the
-// manage loop does. Its levels perform hundreds of merges, and without this
-// they run with nothing watching for repeated structure at all.
-inline std::function<std::string(const Reconstruction&, const Reconstruction&, const Sim3&)>
-seamValidator(Mapper& mapper, const ManagerOptions& opt, ManagerStats* st = nullptr) {
-    if (opt.seam_min_agreement <= 0) return {};
-    Mapper* mp = &mapper;
-    const double max_err = opt.merge.max_reproj_error;
-    const double pair_frac = opt.seam_min_pair_fraction;
-    const double min_agree = opt.seam_min_agreement;
-    const size_t min_pairs = (size_t)std::max(0, opt.seam_min_pairs);
-    return [mp, max_err, pair_frac, min_agree, min_pairs, st](
-               const Reconstruction& merged, const Reconstruction& src, const Sim3&) -> std::string {
-        std::set<uint32_t> src_side;
-        for (const auto& kv : src.images)
-            if (kv.second.registered) src_side.insert(kv.first);
-        Mapper::SeamCheck sc = mp->checkSeam(merged, src_side, max_err, pair_frac);
-        if (sc.tested < min_pairs) return "";  // nothing to judge on
-        const double agree = (double)sc.agree / (double)sc.tested;
-        if (st) st->seam_checked++;
-        if (agree >= min_agree) return "";
-        if (st) st->seam_refused++;
-        char buf[224];
-        snprintf(buf, sizeof buf,
-                 "only %zu of the %zu verified pairs that cross the seam still hold "
-                 "(median %.0f%% of their matches explained)",
-                 sc.agree, sc.tested, 100.0 * sc.median_frac);
-        return std::string(buf);
-    };
-}
-
-// Distinct images any model registers.
-inline std::set<uint32_t> coveredImages(const std::vector<Reconstruction>& models) {
-    std::set<uint32_t> ids;
-    for (const Reconstruction& m : models)
-        for (const auto& kv : m.images)
-            if (kv.second.registered) ids.insert(kv.first);
-    return ids;
-}
 
 class ModelManager {
 public:
@@ -176,7 +57,7 @@ public:
         // pass, the first round bundle-adjusted, split, merged, audited and
         // grew every one of those copies first.
         models = dropRedundant(std::move(models));
-        for (const Reconstruction& m : models) audited_.insert(signature(m));
+        for (const Reconstruction& m : models) memo_.audited.insert(ModelMemo::of(m));
         if (models.size() < 2 && !opt_.do_grow && !opt_.do_reseed) {
             st_.models_after = models.size();
             st_.covered_after = st_.covered_before;
@@ -213,7 +94,7 @@ public:
             models = duplicatePass(std::move(models));
             for (Reconstruction& m : models) {
                 if (m.numRegistered() < 2) continue;
-                if (audited_.insert(signature(m)).second) m = mapper_.refine(m);
+                if (memo_.audited.insert(ModelMemo::of(m)).second) m = mapper_.refine(m);
             }
         }
         sortModels(models);
@@ -223,13 +104,6 @@ public:
     }
 
 private:
-    static void sortModels(std::vector<Reconstruction>& models) {
-        std::stable_sort(models.begin(), models.end(),
-                         [](const Reconstruction& a, const Reconstruction& b) {
-                             return a.points3D.size() > b.points3D.size();
-                         });
-    }
-
     // ---- rounds ----------------------------------------------------------
 
     std::vector<Reconstruction> mergePass(std::vector<Reconstruction> models) {
@@ -244,106 +118,12 @@ private:
         return s.take();
     }
 
-    // Break models the correspondence graph says are not one thing.
-    //
-    // The merge pass refuses a bad merge before it commits, but models arrive
-    // here that were never merged and are wrong anyway -- a chain of
-    // registrations through repeated structure does the same damage, and D41's
-    // own output has models like that. Splitting them is what makes the rest of
-    // the loop work: each piece is a sound reconstruction, and the merge pass
-    // gets to try again with the seam test watching.
-    //
-    // Only models that changed since they were last split are re-examined, so
-    // a split and a merge cannot chase each other round after round.
     std::vector<Reconstruction> splitPass(std::vector<Reconstruction> models) {
-        std::vector<Reconstruction> out;
-        for (Reconstruction& m : models) {
-            const Signature sig = signature(m);
-            if (m.numRegistered() < 2 * opt_.split_min_group || !split_.insert(sig).second) {
-                out.push_back(std::move(m));
-                continue;
-            }
-            Mapper::SplitStats ss;
-            std::vector<Reconstruction> parts = mapper_.splitInconsistent(
-                m, opt_.merge.max_reproj_error, opt_.seam_min_pair_fraction,
-                opt_.split_min_matches, opt_.split_min_group, &ss);
-            if (parts.size() <= 1) {
-                out.push_back(std::move(m));
-                continue;
-            }
-            st_.splits++;
-            st_.split_dropped += ss.dropped_images;
-            if (opt_.verbose)
-                fprintf(stderr,
-                        "[mgr] split a %u-image model into %zu (%zu of %zu inner pairs hold; "
-                        "largest group %zu, %zu images dropped)\n",
-                        m.numRegistered(), parts.size(), ss.pairs_agree, ss.pairs_tested,
-                        ss.largest, ss.dropped_images);
-            for (Reconstruction& p : parts) {
-                split_.insert(signature(p));
-                out.push_back(std::move(p));
-            }
-        }
-        return out;
+        return splitInconsistentModels(mapper_, std::move(models), opt_, memo_, st_);
     }
 
-    // Break a model that has written two places on top of each other. This is
-    // the failure the agreement split above cannot see -- a fold agrees with
-    // itself -- and it is detected from what the model is *missing*: images it
-    // places in the same spot looking the same way, with no structure in
-    // common (findDuplicateStructure).
     std::vector<Reconstruction> duplicatePass(std::vector<Reconstruction> models) {
-        std::vector<Reconstruction> out;
-        MatchedFn matched = mapper_.matchedPredicate();
-        for (Reconstruction& m : models) {
-            if (m.numRegistered() < 2 * opt_.split_min_group) {
-                out.push_back(std::move(m));
-                continue;
-            }
-            DuplicateReport dr = findDuplicateStructure(m, opt_.duplicate, matched);
-            if (!dr.duplicated(opt_.duplicate)) {
-                out.push_back(std::move(m));
-                continue;
-            }
-            size_t dropped = 0;
-            DuplicateCut cut;
-            std::vector<Reconstruction> parts =
-                splitDuplicateStructure(m, dr, opt_.split_min_group, &dropped, &cut);
-            // The conflicts say a fold is possible; the cut says whether the
-            // split is cheap. Only a genuine fold is both (D46) -- cutting a
-            // sound model always runs through structure it really does share,
-            // and that is what saves drjohnson here.
-            if (parts.size() <= 1 || !foldSplitAccepted(dr, cut, opt_.duplicate)) {
-                if (opt_.verbose && parts.size() > 1)
-                    fprintf(stderr,
-                            "[mgr] a %u-image model has %zu of %zu co-located pairs with nothing "
-                            "in common, but splitting it would sever %.1f%% of its co-visibility "
-                            "(>%.1f%%): keeping it whole\n",
-                            m.numRegistered(), dr.conflicts, dr.colocated, 100.0 * cut.fraction(),
-                            100.0 * opt_.duplicate.max_cut_fraction);
-                out.push_back(std::move(m));
-                continue;
-            }
-            st_.duplicate_splits++;
-            st_.split_dropped += dropped;
-            if (opt_.verbose) {
-                fprintf(stderr,
-                        "[mgr] a %u-image model has %zu of %zu co-located image pairs with no "
-                        "structure in common and no match either (%zu more share nothing but "
-                        "were matched) and a cut that severs %.2f%% of its co-visibility: two "
-                        "places written on top of each other. Splitting into",
-                        m.numRegistered(), dr.conflicts, dr.colocated, dr.unmatched_but_seen,
-                        100.0 * cut.fraction());
-                for (const Reconstruction& p : parts) fprintf(stderr, " %u", p.numRegistered());
-                if (dropped) fprintf(stderr, " (%zu images dropped)", dropped);
-                fprintf(stderr, "\n");
-            }
-            for (Reconstruction& p : parts) {
-                split_.insert(signature(p));
-                out.push_back(std::move(p));
-            }
-        }
-        return out;
+        return splitFoldedModels(mapper_, std::move(models), opt_, memo_, st_);
     }
 
     // One bundle adjustment over every component, intrinsics shared per camera
@@ -369,13 +149,7 @@ private:
         // to fix. When they already agree to within a pixel at the frame
         // corner, it is a bundle adjustment over the whole capture that ends
         // where it started -- and the manage loop runs it every round.
-        double spread_px = 0;
-        for (const auto& kv : before) {
-            const double f = 0.5 * (kv.second.first + kv.second.second);
-            if (f > 0) spread_px = std::max(spread_px,
-                                            (kv.second.second - kv.second.first) / f *
-                                                radius[kv.first]);
-        }
+        const double spread_px = focalSpreadPx(models);
         if (spread_px <= kJointBaMovedPx) {
             if (opt_.verbose)
                 fprintf(stderr, "[mgr] joint BA skipped: the components' focals already agree to "
@@ -413,40 +187,13 @@ private:
         // than a pixel at the frame corner is most of what the manage loop
         // spends on a large fragmented capture.
         if (moved_px <= kJointBaMovedPx) return;
-        barren_.clear();
-        audited_.clear();
-        for (const Reconstruction& m : models) audited_.insert(signature(m));
+        memo_.barren.clear();
+        memo_.audited.clear();
+        for (const Reconstruction& m : models) memo_.audited.insert(ModelMemo::of(m));
     }
 
-    // Check every model that has changed, and refine it.
-    //
-    // A merged model is two halves glued along a seam that has never been
-    // optimized as one, and a single similarity cannot place both halves of a
-    // drifted model correctly -- it fits the overlap and misplaces what is far
-    // from it. Bundle adjustment cannot walk a misplacement back, so the
-    // mapper first asks the correspondence graph whether every image belongs
-    // where the model puts it (Mapper::audit) and re-registers the ones that
-    // do not. Models nothing has touched keep their exact shape and are
-    // skipped, so this costs nothing on a dataset with nothing to fix.
     std::vector<Reconstruction> auditPass(std::vector<Reconstruction> models) {
-        for (Reconstruction& m : models) {
-            const Signature sig = signature(m);
-            if (!audited_.insert(sig).second) continue;
-            const size_t pts = m.points3D.size();
-            const uint32_t imgs = m.numRegistered();
-            Mapper::AuditStats as;
-            m = opt_.do_audit ? mapper_.audit(m, &as) : mapper_.refine(m);
-            st_.audited_out += as.deregistered;
-            st_.audited_repaired += as.reregistered;
-            audited_.insert(signature(m));
-            if (opt_.verbose && (as.unsupported || m.numRegistered() != imgs))
-                fprintf(stderr,
-                        "[mgr] audited a model: %u -> %u images, %zu -> %zu points "
-                        "(%u unsupported, %u re-registered, %u dropped)\n",
-                        imgs, m.numRegistered(), pts, m.points3D.size(), as.unsupported,
-                        as.reregistered, as.deregistered);
-        }
-        return models;
+        return auditModels(mapper_, std::move(models), opt_, memo_, st_);
     }
 
     // Grow every model into whatever it can still register. Largest first, so
@@ -461,15 +208,15 @@ private:
             // moved and re-indexed by every pass, so they are remembered by
             // shape rather than by index; a collision only costs one skipped
             // attempt that was overwhelmingly likely to fail anyway.
-            const Signature sig = signature(models[i]);
-            if (barren_.count(sig)) continue;
+            const ModelMemo::Signature sig = ModelMemo::of(models[i]);
+            if (memo_.barren.count(sig)) continue;
             Mapper::GrowStats gs;
             std::vector<const Reconstruction*> others;
             for (size_t j = 0; j < models.size(); j++)
                 if (j != i) others.push_back(&models[j]);
             Reconstruction grown = mapper_.continueFrom(models[i], &gs, others);
             if (!gs.registered) {
-                barren_.insert(sig);
+                memo_.barren.insert(sig);
                 continue;
             }
             st_.grown_images += gs.registered;
@@ -481,40 +228,8 @@ private:
         return models;
     }
 
-    // Models that growth has turned into copies of what is already kept.
-    //
-    // Against the *union* of the models kept before it, not against one of them
-    // at a time. Testing one at a time misses the case that actually occurs: on
-    // a 5356-image capture the run ended with models of 5249, 5168, 3770 and
-    // 1389 images where each of the last three was 98-100% inside the union of
-    // the others and none was 90% inside any single one, because their images
-    // were split between two bigger models. Largest first, so what a model is
-    // measured against is only ever models that outrank it.
     std::vector<Reconstruction> dropRedundant(std::vector<Reconstruction> models) {
-        sortModels(models);
-        std::vector<char> keep(models.size(), 1);
-        std::set<uint32_t> covered;
-        for (size_t i = 0; i < models.size(); i++) {
-            const uint32_t n = models[i].numRegistered();
-            size_t shared = 0;
-            for (const auto& kv : models[i].images)
-                if (kv.second.registered && covered.count(kv.first)) shared++;
-            if (i && n && (double)shared >= opt_.redundant_ratio * (double)n) {
-                keep[i] = 0;
-                st_.dropped_redundant++;
-                if (opt_.verbose)
-                    fprintf(stderr,
-                            "[mgr] dropped a %u-image model: %zu of its images are already in "
-                            "larger ones\n", n, shared);
-                continue;
-            }
-            for (const auto& kv : models[i].images)
-                if (kv.second.registered) covered.insert(kv.first);
-        }
-        std::vector<Reconstruction> out;
-        for (size_t i = 0; i < models.size(); i++)
-            if (keep[i]) out.push_back(std::move(models[i]));
-        return out;
+        return dropRedundantModels(std::move(models), opt_, st_);
     }
 
     // Look for models among the images nothing covers. After a growth round
@@ -530,22 +245,10 @@ private:
         return models;
     }
 
-    // Movement at the frame corner, in pixels, below which a joint refinement
-    // is taken to have changed nothing anyone downstream can act on -- well
-    // under the registration and filtering tolerances, which are a few pixels.
-    static constexpr double kJointBaMovedPx = 1.0;
-
-    using Signature = std::pair<uint32_t, size_t>;  // registered images, 3D points
-    static Signature signature(const Reconstruction& m) {
-        return {m.numRegistered(), m.points3D.size()};
-    }
-
     Mapper& mapper_;
     ManagerOptions opt_;
     ManagerStats st_;
-    std::set<Signature> barren_;   // models a growth pass could not extend
-    std::set<Signature> audited_;  // models already checked in this shape
-    std::set<Signature> split_;    // models already examined for a bad seam
+    ModelMemo memo_;
 
     // ---- camera consensus ------------------------------------------------
     //

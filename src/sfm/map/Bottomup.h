@@ -8,13 +8,14 @@
 // expensive whole-model passes (global BA, retriangulation, filtering) all run
 // at full size, and every repair runs at full size too.
 //
-// This turns the schedule around. The view graph is cut into *atoms* of a few
-// dozen images (sfm/map/Partition.h), each reconstructed by the ordinary
-// incremental mapper -- at that size its passes are trivial and its failure
-// modes are local. The atoms are then merged into each other, largest overlap
-// first, until one model is left or nothing else will merge.
+// This turns the schedule around. The view graph is cut into *atoms* of around
+// a hundred images (sfm/map/Partition.h), each reconstructed by the ordinary
+// incremental mapper and all of them concurrently (sfm/map/Atoms.h) -- at that
+// size its passes are trivial, its failure modes are local, and the atoms are
+// independent. They are then merged into each other, largest overlap first,
+// until one model is left or nothing else will merge.
 //
-// Two things make the merging work where a single pass over the mapper's own
+// Three things make the merging work where a single pass over the mapper's own
 // output does not:
 //
 //   * **Shared intrinsics throughout.** Every model in flight is bundle-
@@ -25,22 +26,20 @@
 //     gauges, and the pixel-space tests it uses to accept a merge are exactly
 //     what that breaks. There is nothing to average at merge time because
 //     nothing ever diverged.
-//   * **A bundle adjustment between rounds.** Merging chains: A absorbs B,
+//   * **A bundle adjustment between levels.** Merging chains: A absorbs B,
 //     then AB absorbs C across a seam that has never been optimized. Errors
 //     accumulate along the chain until an acceptance test refuses, which is
-//     what "no two models can be merged" usually means. So a round that
-//     merged anything is followed by one joint refinement, and the next round
-//     gets to try the refused pairs again on a model that has been made
-//     consistent.
-//
-// The third piece is the hybrid, and it is what stops the tree ending in a pile
-// of fragments: **every level grows the models that did not merge, before the
-// joint refinement** (detail::growModels). Merging is good at joining models
-// that overlap and cannot invent overlap that is not there, so a model that
-// failed to merge is short of images, not short of a better merge test --
-// registration is the one operation that creates the shared set the next Sim(3)
-// aligns on, and images another model already holds are the target rather than
-// a side effect.
+//     what "no two models can be merged" usually means. So a level that merged
+//     anything is followed by one joint refinement, and the next level gets to
+//     try the refused pairs again on a model that has been made consistent.
+//   * **Growth every level, by PnP only.** A model that failed to merge is
+//     short of images, not short of a better merge test: merging cannot invent
+//     overlap that is not there, and registration is the one operation that
+//     creates the shared set the next Sim(3) aligns on. So every level grows
+//     the models that did not merge, and does it without a bundle adjustment of
+//     its own (Mapper::growByPnP) -- the level's joint solve pays for all of
+//     them at once. Measured, that is 3.5x cheaper per image than growing each
+//     model with the mapper's own schedule, and it collapsed the refusals.
 //
 // Growing every level rather than only once the tree has stalled completely is
 // what makes it cheap: a stall is reached one refused pair at a time, so
@@ -49,10 +48,13 @@
 // there is little to grow, and by the time a few large models are left it is
 // nearly all of them.
 //
-// Growth is audited (Mapper::audit), and that is not optional: unaudited it
-// does not merely add bad poses, it makes the cross-seam test agree with the
-// merges built on them. Whatever the tree still cannot reach is left to the
-// manage loop, which does the same two things without the level structure.
+// **This is the whole mapper.** It does not hand its output to the manage loop
+// afterwards: the two were doing the same work, and doing it twice is what made
+// a large capture spend more time managing than mapping. What the tree cannot
+// do by construction -- break a model its own correspondences contradict, seed
+// among images no atom reached, drop copies, cut a fold -- it does once at the
+// end, with the manage loop's own passes (sfm/map/ModelOps.h), not with a
+// second rounds loop.
 #pragma once
 
 #include <algorithm>
@@ -64,69 +66,110 @@
 #include <set>
 #include <vector>
 
+#include "sfm/core/Features.h"
 #include "sfm/core/Model.h"
+#include "sfm/map/Atoms.h"
 #include "sfm/map/Mapper.h"
 #include "sfm/map/Merge.h"
+#include "sfm/map/ModelOps.h"
 #include "sfm/map/Partition.h"
 
 namespace sfm {
 
 struct BottomUpOptions {
-    // Atom size, and how many images neighbouring atoms share. The overlap is
-    // what a Sim(3) merge aligns on, so it is not optional: two atoms with
-    // nothing in common can only be joined by growth, which is the slow path.
-    // Overlap below min_part on purpose: it is what keeps a cut part strictly
-    // smaller than what it was cut from (see bisect).
+    // Atom size, and how many images neighbouring atoms share.
+    //
+    // The overlap is what a Sim(3) merge aligns on, so it is not optional: two
+    // atoms with nothing in common can only be joined by growth, which is the
+    // slow path. It is also not the knob to economize on -- measured, cutting
+    // it from 12 to 8 saves a fifth of the time and loses as many images as
+    // doubling the atom size does. Overlap below min_part on purpose: it is
+    // what keeps a cut part strictly smaller than what it was cut from (see
+    // bisect).
+    //
+    // 48 is small, and deliberately so. A model pays a fixed number of bundle
+    // adjustments as it grows, so a small atom is *less* efficient per image,
+    // not more: at 48 the partition asks for 2.1-2.4x as many image-slots as
+    // the capture has, and 96 brings that to ~1.4x and the whole run 1.2-2.1x
+    // faster. That was tried and reverted. On a 798-image capture, 96 put half
+    // the reconstruction half a scene-extent from where it belonged -- with
+    // *more* images registered and a better median rotation error than the flat
+    // mapper, which is the signature of a fold. On a 1322-image one it left six
+    // fragments where 48 left one large model.
+    //
+    // What makes that worth 40 % of the run time is that nothing else fixed it,
+    // and the failure is silent. A stricter merge threshold did not (12 shared
+    // images instead of 3: unchanged). Tightening the tree's bundle adjustments
+    // did not. Splitting the atoms first did not -- neither by their own
+    // contradicted pairs nor by the fold detector, both of which found *nothing*
+    // in any atom. And the cross-seam test ran on all fifteen merges and refused
+    // one, so the weld went through a test built to catch exactly this.
+    //
+    // Which leaves the size itself as the only thing that separates a good run
+    // from a bad one here, and no test downstream that will notice when it goes
+    // wrong. `--bup-atom-size` exists for anyone who wants the time back on a
+    // capture they can verify.
     PartitionOptions partition{48, 12, 16};
+    // How the atoms themselves are built, and on how many threads.
+    AtomOptions atom;
     // Below this many images the flat mapper is both faster and better: the
     // whole-model passes this exists to shrink are already small, and cutting a
     // capture that reconstructs in one piece only creates seams to repair.
     size_t min_images = 300;
     // Levels of the merge tree. Each halves the model count, so the ceiling is
     // log2(atoms) plus the extra levels a refused pair earns after a
-    // refinement; hitting it leaves the rest to the manage loop.
+    // refinement.
     int max_rounds = 16;
     // One bundle adjustment across every live model with intrinsics shared per
-    // camera group, after the atoms and after every level that merged.
+    // camera group, after the atoms and after every level that changed
+    // anything.
     bool joint_intrinsics = true;
-    // Bundle-adjustment cadence while an atom is being built. Far looser than
-    // the mapper's global default, because a forty-image solve does not fill
-    // the hardware: at 1.1 the atom phase ran ~5500 of them and spent half its
-    // time there, and what they were protecting against is a bad registration
-    // in a model small enough for the joint refinement after the atom phase --
-    // one solve over every atom at once, with the intrinsics shared -- to
-    // absorb. The per-call overhead is most of a small solve's cost, so the
-    // saving is close to the ratio.
-    double atom_ba_growth = 2.0;
     // One joint bundle adjustment over every atom, with intrinsics shared per
-    // camera group, before any merging. This is the solve the per-atom ones
-    // above are traded for: the same work as hundreds of small problems, in one
-    // that saturates the device, and it is where the atoms stop each having
-    // their own opinion about the focal.
+    // camera group, before any merging. This is the solve the loose per-atom
+    // cadence is traded for: the same work as hundreds of small problems, in
+    // one that saturates the device, and it is where the atoms stop each having
+    // their own opinion about the focal. Only worth it with enough atoms to be
+    // that trade -- with a dozen it is one extra full solve buying back a
+    // handful of tiny ones, measured at 19 % on a 480-image capture. The same
+    // threshold decides whether the tree is big enough to be trusted with the
+    // schedule at all.
     bool joint_after_atoms = true;
     size_t joint_min_models = 32;
-    // Seed attempts an atom may spend looking for further components inside
-    // itself. An atom that fragments is usually dust, and the images it leaves
-    // behind are picked up by growth later.
-    int atom_model_trials = 4;
+    // Run the tree's joint solves to the growth-phase tolerance rather than the
+    // solver's full one (Mapper::jointRefine). A level's solve is followed by
+    // more merges and another solve, so converging it tightly is work the next
+    // level discards -- but the merge tests that run in between are measured in
+    // pixels of reprojection error, so a half-converged model is also a model
+    // the cross-seam test judges more harshly.
+    bool coarse_joint_ba = true;
     // Levels between growth passes over the models that did not merge; 0
-    // disables in-tree growth and hands every stall to the manage loop, which
-    // does the same thing with the same audit. `max_grow_passes` bounds the
-    // total so a large tree cannot spend all its time registering.
-    //
-    // Growth *must* be followed by the audit growModels runs: unaudited, it
-    // does not merely add bad poses, it makes the cross-seam test agree with
-    // the merges built on them (measured: 21 points of AUC@5, and the same
-    // whole-session displacement the flat mapper produces).
+    // disables in-tree growth. `max_grow_passes` bounds the total so a large
+    // tree cannot spend all its time registering.
     int grow_every = 1;
     int max_grow_passes = 8;
     // What one growth pass may add to a model, as a fraction of what it already
     // holds and never fewer than `grow_budget_min`. The pass is asked for a
     // bridge to its neighbour, not for a reconstruction: the overlap bound in
-    // continueFrom limits only images another model holds, so without this a
-    // model beside a large uncovered region grows into all of it.
+    // growByPnP limits only images another model holds, so without this a model
+    // beside a large uncovered region grows into all of it.
     double grow_budget_frac = 0.25;
     size_t grow_budget_min = 25;
+    // The finishing passes, once, over the tree's output. Seeding among images
+    // no atom reached is the one that can still find whole components; the
+    // others are cleanup the tree has no equivalent for.
+    // One growth pass over the finished models, into whatever nothing covers.
+    bool do_grow_tail = true;
+    bool do_reseed = true;
+    // Seed attempts the reseed pass may spend. Far below the mapper's own
+    // budget: what is left after a tree is the tail of the view graph, and
+    // failing three times there means there is nothing to find.
+    int reseed_trials = 3;
+    bool do_split = true;
+    bool do_fold_split = true;
+    // Cap on what the audit's repair may grow a model to, as a fraction of what
+    // it held. Uncapped, that repair is a full incremental growth pass at the
+    // repair's cadence rather than the tree's (see Mapper::audit).
+    double audit_growth_frac = 0.25;
     bool verbose = true;
 };
 
@@ -134,12 +177,21 @@ struct BottomUpStats {
     size_t atoms = 0;
     size_t atom_images = 0;        // summed over atoms, so overlap counts twice
     size_t models_from_atoms = 0;
+    int atom_threads = 1;
     size_t rounds = 0;
     size_t merges = 0, merges_refused = 0;
     size_t joint_ba = 0;
     size_t grown_images = 0;       // registered by a growth pass
     size_t grown_rejected = 0;     // ... and dropped again by the pose check
+    ManagerStats finish;           // what the finishing passes did
     double t_atoms = 0, t_merge = 0, t_ba = 0, t_grow = 0;
+    // The finishing passes, one by one: they answer different failures and
+    // cost wildly different amounts, and a single total hides which one is
+    // worth its price on a given capture.
+    double t_audit = 0, t_split = 0, t_grow_tail = 0, t_reseed = 0, t_final_merge = 0, t_fold = 0;
+    double finishSecs() const {
+        return t_audit + t_split + t_grow_tail + t_reseed + t_final_merge + t_fold;
+    }
 };
 
 namespace detail {
@@ -156,11 +208,13 @@ namespace detail {
 // optimized, and the ones at the end of the chain are asked to align across
 // all of them at once.
 //
-// Carries a per-model "has absorbed something" flag through the reindexing, so
-// the caller can refine only what changed.
+// Every `carry` array is reindexed with the surviving models, and `stalled` is
+// filled with which of them got through the level without merging -- so the
+// caller can tell "changed" from "has a new seam", which are different
+// questions and want different treatment afterwards.
 inline size_t mergeLevel(std::vector<Reconstruction>& models, const MergeOptions& opt,
-                         std::vector<char>& dirty, std::vector<char>& stalled, size_t& refused,
-                         std::map<std::string, size_t>* why = nullptr) {
+                         std::vector<std::vector<char>*> carry, std::vector<char>& stalled,
+                         size_t& refused, std::map<std::string, size_t>* why = nullptr) {
     MergeSession s(std::move(models), opt);
     std::vector<MergeCandidate> cands = s.candidates();
     std::stable_sort(cands.begin(), cands.end(),
@@ -194,21 +248,22 @@ inline size_t mergeLevel(std::vector<Reconstruction>& models, const MergeOptions
             }
         }
     }
-    const std::set<size_t> touched = s.changed();
-    const std::vector<char> was = dirty;
+    std::vector<std::vector<char>> was;
+    for (const std::vector<char>* c : carry) was.push_back(*c);
     models.clear();
-    dirty.clear();
     stalled.clear();
+    for (std::vector<char>* c : carry) c->clear();
     for (size_t i = 0; i < s.numModels(); i++) {
         if (!s.alive(i)) continue;
         stalled.push_back(busy[i] ? 0 : 1);  // survived the level without merging
         models.push_back(std::move(s.modelMut(i)));
-        dirty.push_back((i < was.size() && was[i]) || touched.count(i) ? 1 : 0);
+        for (size_t k = 0; k < carry.size(); k++)
+            carry[k]->push_back(i < was[k].size() ? was[k][i] : 0);
     }
     return merges;
 }
 
-// Register whatever each model can still take, largest first.
+// Register whatever each model can still take, largest first, by PnP alone.
 //
 // This is the incremental half of the hybrid, and it is what a stalled level
 // needs. A level stops for one of two reasons and growth answers both: either
@@ -220,9 +275,13 @@ inline size_t mergeLevel(std::vector<Reconstruction>& models, const MergeOptions
 // wrong one is refused with more confidence.
 //
 // An image another model already holds is a legitimate target, and in fact the
-// point: that overlap *is* what the next Sim(3) aligns on. `continueFrom`
-// bounds it to max_model_overlap of them, which is enough to determine a
-// transform without letting one model quietly absorb its neighbour.
+// point: that overlap *is* what the next Sim(3) aligns on. `growByPnP` bounds
+// it to max_model_overlap of them, which is enough to determine a transform
+// without letting one model quietly absorb its neighbour, and it checks every
+// image it registered against the rest of the model before returning -- which
+// is not optional. Unaudited, growth does not merely add bad poses, it makes
+// the cross-seam test agree with the merges built on them (measured: 21 points
+// of AUC@5, and the same whole-session displacement the flat mapper produces).
 inline size_t growModels(Mapper& mapper, std::vector<Reconstruction>& models,
                          std::vector<char>& dirty, const std::vector<char>& which,
                          double budget_frac, size_t budget_min, size_t& rejected) {
@@ -262,13 +321,25 @@ inline size_t growModels(Mapper& mapper, std::vector<Reconstruction>& models,
 }  // namespace detail
 
 // Reconstruct bottom-up. `mapper` must already be set up for the whole
-// database; it is restricted per atom and released before returning.
+// database; it builds no atoms itself (each of those gets its own, over its own
+// sub-database) but performs every merge-level operation. `mopt` supplies the
+// merge and cleanup thresholds, which are the manage loop's -- there is one set
+// of them and this is the same set.
 inline std::vector<Reconstruction> bottomUpReconstruct(Mapper& mapper, const MatchesDatabase& db,
+                                                       const std::vector<FeatureSet>& feats,
                                                        const BottomUpOptions& opt,
-                                                       const MergeOptions& merge_opt,
+                                                       const ManagerOptions& mopt,
                                                        BottomUpStats& st) {
     auto clk = [] { return std::chrono::steady_clock::now(); };
     auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
+
+    // The tree performs hundreds of merges, and the only test that catches
+    // repeated structure is the one the merger cannot run by itself (D45).
+    // Without it a capture with two similar rooms merges one onto the other and
+    // every internal test agrees, because a fold agrees with itself.
+    MergeOptions merge_opt = mopt.merge;
+    merge_opt.duplicate = mopt.duplicate;
+    merge_opt.validate = seamValidator(mapper, mopt, &st.finish);
 
     // The starting intrinsics are chosen once, over the whole database, and
     // every atom inherits them. Left to the atoms, the first one built would
@@ -298,46 +369,34 @@ inline std::vector<Reconstruction> bottomUpReconstruct(Mapper& mapper, const Mat
     }
 
     // ---- the atoms -------------------------------------------------------
-    MapperOptions saved = mapper.options();
-    mapper.options().ba_growth_ratio = std::max(1.0 + 1e-9, opt.atom_ba_growth);
-    mapper.options().max_model_trials = opt.atom_model_trials;
-    mapper.options().verbose = false;
-    std::vector<Reconstruction> models;
-    auto t0 = clk();
-    for (size_t i = 0; i < atoms.size(); i++) {
-        mapper.restrictTo(atoms[i]);
-        mapper.claimAll({});
-        uint32_t reg = 0;
-        size_t kept = 0;
-        for (Reconstruction& m : mapper.run()) {
-            if (m.numRegistered() < 2) continue;
-            reg += m.numRegistered();
-            kept++;
-            models.push_back(std::move(m));
-        }
-        if (opt.verbose)
-            fprintf(stderr, "[bup] atom %zu/%zu: %zu images -> %zu model(s), %u registered\n",
-                    i + 1, atoms.size(), atoms[i].size(), kept, reg);
-    }
-    mapper.restrictTo({});
-    mapper.claimAll({});
-    mapper.options() = saved;
-    st.t_atoms = secs(t0, clk());
+    AtomStats as;
+    AtomOptions ao = opt.atom;
+    ao.verbose = opt.verbose;
+    std::vector<Reconstruction> models =
+        reconstructAtoms(db, feats, mapper.options(), mapper.cameraIds(),
+                         mapper.startingCameras(), atoms, ao, as);
+    st.t_atoms = as.secs;
     st.models_from_atoms = models.size();
+    st.atom_threads = as.threads;
+    if (opt.verbose)
+        fprintf(stderr, "[bup] %zu atom(s) on %d thread(s) -> %zu model(s), %zu registrations, "
+                "%zu empty: %.1f s\n", as.atoms, as.threads, as.models, as.registered, as.empty,
+                as.secs);
+    mapper.claimAll(models);
     // Every atom failed. The flat mapper will fail the same way and fail fast,
     // and it is what gives the caller a model to report the failure on.
     if (models.empty()) return mapper.run();
 
+    ManagerOptions fopt = mopt;
+    fopt.audit_growth_frac = opt.audit_growth_frac;
+    ModelMemo memo;
+
     // The solve the cheap per-atom cadence is traded for: every atom in one
     // problem, intrinsics shared per camera group. Hundreds of forty-image
-    // solves do not fill the device; this is the same work in one that does,
-    // and it is where the atoms stop each having their own focal.
-    // Only when there are enough atoms for it to be the trade it is meant to
-    // be. With a dozen atoms it is one extra full solve buying back a handful
-    // of tiny ones -- measured, that cost 19 % on a 480-image capture.
+    // solves do not fill the device; this is the same work in one that does.
     if (opt.joint_after_atoms && models.size() >= opt.joint_min_models) {
-        t0 = clk();
-        mapper.jointRefine(models);
+        auto t0 = clk();
+        mapper.jointRefine(models, opt.coarse_joint_ba);
         st.joint_ba++;
         st.t_ba += secs(t0, clk());
         if (opt.verbose)
@@ -346,16 +405,19 @@ inline std::vector<Reconstruction> bottomUpReconstruct(Mapper& mapper, const Mat
     }
 
     // ---- upwards ---------------------------------------------------------
-    std::vector<char> dirty(models.size(), 0);    // models that absorbed another
-    std::vector<char> stalled(models.size(), 1);  // ... and those that did not
+    std::vector<char> dirty(models.size(), 0);    // changed by a merge or a growth pass
+    std::vector<char> seamed(models.size(), 0);   // ... specifically by absorbing another
+    std::vector<char> stalled(models.size(), 1);  // got through a level without merging
     int grow_passes = 0;
     for (int round = 0; round < std::max(1, opt.max_rounds); round++) {
         st.rounds = (size_t)round + 1;
         size_t refused = 0;
         std::map<std::string, size_t> why;
-        t0 = clk();
+        auto t0 = clk();
         const size_t merges =
-            detail::mergeLevel(models, merge_opt, dirty, stalled, refused, &why);
+            detail::mergeLevel(models, merge_opt, {&dirty, &seamed}, stalled, refused, &why);
+        for (size_t i = 0; i < models.size(); i++)
+            if (!stalled[i]) dirty[i] = seamed[i] = 1;
         st.t_merge += secs(t0, clk());
         st.merges += merges;
         st.merges_refused += refused;
@@ -372,17 +434,8 @@ inline std::vector<Reconstruction> bottomUpReconstruct(Mapper& mapper, const Mat
         if (models.size() <= 1) break;
 
         // Grow the models that did *not* merge, before the joint refinement.
-        //
-        // A model that failed to merge is short of overlap, and registration is
-        // the only thing that creates overlap. Waiting for a level to stall
-        // completely before growing spends a level per refused pair discovering
-        // that one at a time; growing every level lets the next one merge
-        // instead. Models that just merged are left alone -- they have a fresh
-        // seam to settle and already have work at the next level.
-        //
-        // This ramps by itself: at the first levels almost everything merges so
-        // there is little to grow, and by the time the tree is down to a few
-        // large models it is nearly all of them.
+        // Models that just merged are left alone -- they have a fresh seam to
+        // settle and already have work at the next level.
         size_t reg = 0;
         if (opt.grow_every > 0 && grow_passes < opt.max_grow_passes &&
             (round % opt.grow_every) == 0) {
@@ -403,13 +456,30 @@ inline std::vector<Reconstruction> bottomUpReconstruct(Mapper& mapper, const Mat
                             models.size(), st.grown_rejected);
             }
         }
-        // Nothing merged and nothing grew: the tree is finished, and what is
-        // left is for the manage loop.
+        // Nothing merged and nothing grew: the tree is finished.
         if (merges == 0 && reg == 0) break;
 
+        // Growth aims models at images their neighbours hold, so it is growth,
+        // not merging, that turns a small model into a copy of a bigger one.
+        // Dropping those here rather than at the end keeps them out of the next
+        // level's candidate list and out of the next joint solve.
+        models = dropRedundantModels(std::move(models), mopt, st.finish,
+                                     {&dirty, &seamed, &stalled});
+
+        // One solve over every live model, intrinsics shared per camera group.
+        //
+        // Unconditionally, even once the models agree about the intrinsics and
+        // the manage loop's skip rule (focalSpreadPx) would fire. That rule is
+        // right for the manage loop, whose alternative is doing nothing;
+        // here the alternative is one refine per changed model, and measured on
+        // four captures that was consistently *slower* than the single joint
+        // solve it replaced -- 19 s of per-model refines against 32 s, on a
+        // 439-image capture. A bundle adjustment's cost on this device is
+        // dominated by submits rather than by arithmetic, so N small solves
+        // beat one large one at no size that occurs here.
         t0 = clk();
         if (opt.joint_intrinsics && models.size() > 1) {
-            mapper.jointRefine(models);
+            mapper.jointRefine(models, opt.coarse_joint_ba);
             st.joint_ba++;
         } else {
             for (size_t i = 0; i < models.size(); i++)
@@ -419,26 +489,175 @@ inline std::vector<Reconstruction> bottomUpReconstruct(Mapper& mapper, const Mat
         st.t_ba += secs(t0, clk());
     }
 
-    // The joint pass optimizes but does not filter: it is one bundle
-    // adjustment, with none of the mapper's retriangulation, track completion
-    // or de-registration. Every model that absorbed another gets that treatment
-    // once, here, before the manage loop builds anything else on it. An atom
-    // that never merged already had it, from the run that built it.
-    t0 = clk();
-    for (size_t i = 0; i < models.size(); i++)
-        if (dirty[i] && models[i].numRegistered() >= 2) models[i] = mapper.refine(models[i]);
-    st.t_ba += secs(t0, clk());
-
-    std::stable_sort(models.begin(), models.end(),
-                     [](const Reconstruction& a, const Reconstruction& b) {
-                         return a.points3D.size() > b.points3D.size();
-                     });
     if (opt.verbose)
         fprintf(stderr,
                 "[bup] %zu atom model(s) -> %zu after %zu level(s): %zu merged, %zu refused, "
-                "%zu grown (atoms %.1f s, merge %.1f s, grow %.1f s, BA %.1f s)\n",
+                "%zu grown; the seam test judged %zu merge(s) and refused %zu, and had too "
+                "little to judge on for %zu (atoms %.1f s, merge %.1f s, grow %.1f s, "
+                "BA %.1f s)\n",
                 st.models_from_atoms, models.size(), st.rounds, st.merges, st.merges_refused,
-                st.grown_images, st.t_atoms, st.t_merge, st.t_grow, st.t_ba);
+                st.grown_images, st.finish.seam_checked, st.finish.seam_refused,
+                st.finish.seam_skipped, st.t_atoms, st.t_merge, st.t_grow, st.t_ba);
+
+    // ---- what the tree cannot do by construction -------------------------
+    //
+    // Once, in this order, and never in a loop. Each answers a failure the
+    // levels above have no move against, and each is the manage loop's own pass
+    // with the manage loop's own thresholds (sfm/map/ModelOps.h).
+    // The joint pass optimizes but does not filter: it is one bundle
+    // adjustment, with none of the mapper's retriangulation, track completion
+    // or de-registration, and a single similarity cannot place both halves of a
+    // drifted model correctly. So every model the tree changed is audited
+    // against the correspondence graph and then refined -- which is what the
+    // audit ends with anyway, so this replaces the refine rather than adding to
+    // it. An atom that never merged and never grew already had that treatment,
+    // from the run that built it.
+    // Only the models that absorbed another. A model that merely grew was
+    // checked image by image as it grew (growByPnP rejects a registration the
+    // rest of the model contradicts), and one that did neither was refined by
+    // the run that built it -- so what is left for the audit is the seam, which
+    // is what it is for. Those two still want the refine the audit ends with.
+    for (size_t i = 0; i < models.size(); i++) {
+        if (seamed[i]) continue;
+        if (dirty[i] && models[i].numRegistered() >= 2) models[i] = mapper.refine(models[i]);
+        memo.audited.insert(ModelMemo::of(models[i]));
+    }
+    auto t0f = clk();
+    models = auditModels(mapper, std::move(models), fopt, memo, st.finish);
+    st.t_audit = secs(t0f, clk());
+
+    // A model whose own verified pairs contradict it. The tree refuses a bad
+    // merge before it commits, but an atom can be wrong on its own -- a chain
+    // of registrations through repeated structure does the same damage -- and
+    // growth builds on whatever it was given.
+    size_t changed = 0;
+    if (opt.do_split) {
+        t0f = clk();
+        const size_t before = models.size();
+        models = splitInconsistentModels(mapper, std::move(models), fopt, memo, st.finish);
+        changed += models.size() - std::min(models.size(), before);
+        st.t_split = secs(t0f, clk());
+    }
+
+    // Images no model holds, offered to the models that might take them.
+    //
+    // The tree's own growth only runs on models that failed to *merge*, and it
+    // stops entirely once one model is left -- so a capture that comes back in
+    // one piece never gets a growth pass at all, and whatever the atoms left at
+    // their boundaries stays out. That tail is worth more than it looks: on a
+    // 550-image capture the difference between a 2.4x-cover partition and a
+    // 1.5x one was eight images, and eight images is 2.6 points of AUC@10
+    // because every pair involving them counts as a failure. Their *poses* were
+    // never the problem -- median position error is 0.05 % of scene extent
+    // either way.
+    //
+    // With the mapper's own schedule, not growByPnP: this is the last pass that
+    // will register anything, there is no joint solve after it to pay for the
+    // geometry, and by here there are a handful of images to find rather than a
+    // bridge to build. Bounded by what is actually missing, so it cannot become
+    // the incremental mapper again.
+    if (opt.do_grow_tail) {
+        t0f = clk();
+        mapper.claimAll(models);
+        const size_t missing = mapper.unclaimed();
+        if (missing) {
+            size_t reg = 0;
+            for (size_t i = 0; i < models.size(); i++) {
+                if (models[i].numRegistered() < 2) continue;
+                std::vector<const Reconstruction*> others;
+                for (size_t j = 0; j < models.size(); j++)
+                    if (j != i) others.push_back(&models[j]);
+                Mapper::GrowStats gs;
+                Reconstruction grown = mapper.continueFrom(
+                    models[i], &gs, others,
+                    (uint32_t)(models[i].numRegistered() + missing));
+                if (!gs.registered) continue;
+                reg += gs.registered;
+                models[i] = std::move(grown);
+                mapper.claimAll(models);
+            }
+            st.grown_images += reg;
+            if (opt.verbose)
+                fprintf(stderr, "[bup] tail growth: %zu of %zu uncovered image(s) registered\n",
+                        reg, missing);
+        }
+        st.t_grow_tail = secs(t0f, clk());
+    }
+
+    // Images no atom reached: a component the partition cut too thin to seed,
+    // or one the whole capture only connects to weakly. This is the one
+    // finishing pass that can still find a model rather than repair one.
+    // Bounded twice, because unbounded it is the manage loop's reseed pass with
+    // none of the manage loop's reasons: the partition covered the whole view
+    // graph, so an image no atom reached is one the *graph* barely connects,
+    // and a handful of them cannot make a model worth keeping. Measured on a
+    // 1146-image capture, an unbounded pass spent 21.6 s to find nothing.
+    if (opt.do_reseed) {
+        t0f = clk();
+        mapper.claimAll(models);
+        if (mapper.unclaimed() >= (size_t)std::max(2, mapper.options().min_model_size)) {
+            const size_t before = models.size();
+            const int saved_trials = mapper.options().max_model_trials;
+            mapper.options().max_model_trials = opt.reseed_trials;
+            mapper.seedFurtherModels(models, true);
+            mapper.options().max_model_trials = saved_trials;
+            st.finish.reseeded_models += models.size() - before;
+            changed += models.size() - before;
+            if (opt.verbose && models.size() != before)
+                fprintf(stderr, "[bup] reseeded %zu model(s) among the images no atom reached\n",
+                        models.size() - before);
+        }
+        st.t_reseed = secs(t0f, clk());
+    }
+
+    // Anything the last two passes produced has never been offered a merge.
+    if (changed && models.size() > 1) {
+        t0f = clk();
+        std::vector<char> s2(models.size(), 1);
+        size_t refused = 0;
+        const size_t merges = detail::mergeLevel(models, merge_opt, {}, s2, refused);
+        st.merges += merges;
+        st.merges_refused += refused;
+        if (opt.verbose)
+            fprintf(stderr, "[bup] final level: %zu merge(s), %zu refused, %zu model(s) left\n",
+                    merges, refused, models.size());
+        if (merges)
+            for (size_t i = 0; i < models.size(); i++)
+                if (!s2[i] && models[i].numRegistered() >= 2)
+                    models[i] = mapper.refine(models[i]);
+        st.t_final_merge = secs(t0f, clk());
+    }
+
+    models = dropRedundantModels(std::move(models), mopt, st.finish);
+
+    // Folds are cut last, once. Two similar-looking parts of the capture
+    // written on top of each other is the failure every agreement test misses,
+    // because a fold agrees with itself; it is detected from what the model is
+    // *missing* (D46).
+    if (opt.do_fold_split) {
+        t0f = clk();
+        const size_t before = models.size();
+        models = splitFoldedModels(mapper, std::move(models), fopt, memo, st.finish);
+        if (models.size() != before)
+            for (Reconstruction& m : models)
+                if (m.numRegistered() >= 2 && memo.audited.insert(ModelMemo::of(m)).second)
+                    m = mapper.refine(m);
+        st.t_fold = secs(t0f, clk());
+    }
+
+    sortModels(models);
+    st.finish.models_after = models.size();
+    st.finish.covered_after = coveredImages(models).size();
+    if (opt.verbose)
+        fprintf(stderr,
+                "[bup] finishing passes: %zu split, %zu folded, %zu reseeded, %zu dropped, "
+                "%zu image(s) repaired / %zu dropped by the audit "
+                "(audit %.1f s, split %.1f s, grow %.1f s, reseed %.1f s, merge %.1f s, "
+                "fold %.1f s), %.1f s\n",
+                st.finish.splits, st.finish.duplicate_splits, st.finish.reseeded_models,
+                st.finish.dropped_redundant, st.finish.audited_repaired, st.finish.audited_out,
+                st.t_audit, st.t_split, st.t_grow_tail, st.t_reseed, st.t_final_merge,
+                st.t_fold, st.finishSecs());
     mapper.claimAll(models);
     return models;
 }

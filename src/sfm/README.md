@@ -54,16 +54,23 @@ images/ ──► extract ──► features/ ─┐
 The `map` box is one incremental reconstruction of the whole capture by default.
 `--mapper bottom-up` replaces it with the opposite schedule (`map/Bottomup.h`,
 D57): the verified view graph is cut by normalized cut into *atoms* of a few
-dozen images (`map/Partition.h`), each is reconstructed by the same `Mapper`
-restricted to it, and the atoms are then merged upwards a level at a time —
-every model absorbing at most one other per level, with one bundle adjustment
-across all of them, intrinsics shared per camera group, between levels. It is a
-*schedule*, not a different algorithm: every model is still built by
-`Mapper::run`'s own rules and joined by the same Sim(3) merger the manage rounds
-use, which is what makes a regression in it impossible to confuse with a
-regression in the geometry. What it changes is where the cost and the risk sit —
-an atom is too small to get its own focal wrong, and too small for a whole-model
-pass to be expensive. `Bottomup.h` carries the numbers.
+dozen images (`map/Partition.h`), each is reconstructed by its own `Mapper` over
+its own sub-database and all of them concurrently (`map/Atoms.h`, D59), and the
+atoms are then merged upwards a level at a time — every model absorbing at most
+one other per level, growing the ones that did not merge by PnP alone, with one
+bundle adjustment across all of them, intrinsics shared per camera group,
+between levels. It is a *schedule*, not a different algorithm: every model is
+still built by `Mapper::run`'s own rules and joined by the same Sim(3) merger the
+manage rounds use, which is what makes a regression in it impossible to confuse
+with a regression in the geometry. What it changes is where the cost and the risk
+sit — an atom is too small to get its own focal wrong, and too small for a
+whole-model pass to be expensive. `Bottomup.h` carries the numbers.
+
+It is also the *whole* mapper: nothing runs the manage loop after it (D60). The
+two were doing the same work — merge, grow, prune, repeat — and doing it twice
+cost more than the mapping stage it followed. What the tree cannot do by
+construction it does once at the end, with the manage loop's own passes, which
+live in `map/ModelOps.h` so that neither owns them.
 
 ## Layout
 
@@ -87,9 +94,13 @@ geometry/    Essential, Fundamental, Homography, P3P, AbsolutePose,
 optim/       Ransac   LO-RANSAC with MSAC scoring
 ba/          Problem (model registry + problem layout), Solver (LM, dense
                Cholesky / implicit-Schur PCG), README.md
-map/         Mapper, Bundle, CorrespondenceGraph, Merge, Manager, Profile,
-               Partition (view-graph normalized cut), Bottomup (atom
-               reconstruction + merge)
+map/         Mapper, Bundle, CorrespondenceGraph, Merge, Profile,
+               ModelOps (the passes over a *set* of models: merge validator,
+                 audit, split, fold cut, prune -- shared, owned by neither)
+               Manager (the flat mapper's merge/grow/prune rounds)
+               Partition (view-graph normalized cut)
+               Atoms (atoms reconstructed concurrently, one context per worker)
+               Bottomup (the merge tree, and the schedule around it)
 shaders/     common/ (Real, df, dmath, linalg, camera, loss), ba/, sift/, match/
 tests/       one executable per file
 ```

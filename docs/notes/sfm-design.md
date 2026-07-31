@@ -73,3 +73,5 @@ be re-derived or re-attempted: D25, D26, D27, D11, D16, D47, D50, D45, D46.
 | D56 | Pair selection is two-stage: a cheap symmetric shortlist over every pair, the reliable asymmetric score on the shortlist |
 | D57 | Bottom-up merges a level at a time with intrinsics shared across every model in flight, so nothing is averaged at merge time |
 | D58 | A seed retry claims what it registered, so the retry looks where the last one stopped instead of rebuilding it |
+| D59 | Atoms are reconstructed concurrently, each by its own mapper over its own sub-database, one Vulkan context per worker |
+| D60 | The bottom-up mapper is the whole mapper: it finishes with the manage loop's own passes instead of handing over to it |

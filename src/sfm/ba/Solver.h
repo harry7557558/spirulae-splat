@@ -298,37 +298,45 @@ public:
         }
         double t_pipe = prof_lap();
 
-        // upload static data + initial parameters
-        std::vector<uint8_t> tmp;
-        packReals(tmp, P_.obs_xy.data(), P_.obs_xy.size(), opt_.real);
-        ctx_.upload(bObs_, tmp.data(), tmp.size());
-        ctx_.upload(bObsImage_, P_.obs_image.data(), P_.obs_image.size() * 4);
-        ctx_.upload(bObsPoint_, P_.obs_point.data(), P_.obs_point.size() * 4);
-        ctx_.upload(bImageGroup_, P_.image_group.data(), P_.image_group.size() * 4);
-        {
-            std::vector<uint32_t> gi;
-            for (auto& g : P_.groups) {
-                gi.push_back(g.intr_offset);
-                gi.push_back(g.intr_col);
-                gi.push_back(g.n_intr);
-                gi.push_back(g.model);
-            }
-            ctx_.upload(bGroupInfo_, gi.data(), gi.size() * 4);
+        // Upload static data + initial parameters, in one submit. Seventeen
+        // fenced copies were most of a small solve's cost once several solvers
+        // share a device (see VkContext::uploadMany).
+        std::vector<uint8_t> obs, poses, intr, points;
+        packReals(obs, P_.obs_xy.data(), P_.obs_xy.size(), opt_.real);
+        packReals(poses, P_.poses.data(), P_.poses.size(), opt_.real);
+        packReals(intr, P_.intr.data(), P_.intr.size(), opt_.real);
+        packReals(points, P_.points.data(), P_.points.size(), opt_.real);
+        std::vector<uint32_t> gi;
+        for (auto& g : P_.groups) {
+            gi.push_back(g.intr_offset);
+            gi.push_back(g.intr_col);
+            gi.push_back(g.n_intr);
+            gi.push_back(g.model);
         }
-        ctx_.upload(bObsRanges_, P_.obs_ranges.data(), P_.obs_ranges.size() * 4);
-        ctx_.upload(bModelObs_, P_.model_obs.data(), P_.model_obs.size() * 4);
-        ctx_.upload(bJcOff_, P_.jc_off.data(), P_.jc_off.size() * 4);
+        std::vector<VkContext::UploadItem> up = {
+            {&bObs_, obs.data(), obs.size()},
+            {&bObsImage_, P_.obs_image.data(), P_.obs_image.size() * 4},
+            {&bObsPoint_, P_.obs_point.data(), P_.obs_point.size() * 4},
+            {&bImageGroup_, P_.image_group.data(), P_.image_group.size() * 4},
+            {&bGroupInfo_, gi.data(), gi.size() * 4},
+            {&bObsRanges_, P_.obs_ranges.data(), P_.obs_ranges.size() * 4},
+            {&bModelObs_, P_.model_obs.data(), P_.model_obs.size() * 4},
+            {&bJcOff_, P_.jc_off.data(), P_.jc_off.size() * 4},
+            {&bPoses_, poses.data(), poses.size()},
+            {&bIntr_, intr.data(), intr.size()},
+            {&bPoints_, points.data(), points.size()},
+        };
         if (P_.use_pair_schur) {
-            ctx_.upload(bPairEntries_, P_.pair_entries.data(), P_.pair_entries.size() * 4);
-            ctx_.upload(bPairChunks_, P_.pair_chunks.data(), P_.pair_chunks.size() * 4);
+            up.push_back({&bPairEntries_, P_.pair_entries.data(), P_.pair_entries.size() * 4});
+            up.push_back({&bPairChunks_, P_.pair_chunks.data(), P_.pair_chunks.size() * 4});
         }
         if (cgAllocated_) {
-            ctx_.upload(bCamRanges_, P_.cam_obs_ranges.data(), P_.cam_obs_ranges.size() * 4);
-            ctx_.upload(bCamObs_, P_.cam_obs.data(), P_.cam_obs.size() * 4);
-            ctx_.upload(bCamChunks_, P_.cam_chunks.data(), P_.cam_chunks.size() * 4);
-            ctx_.upload(bPrecBlocks_, P_.prec_blocks.data(), P_.prec_blocks.size() * 4);
+            up.push_back({&bCamRanges_, P_.cam_obs_ranges.data(), P_.cam_obs_ranges.size() * 4});
+            up.push_back({&bCamObs_, P_.cam_obs.data(), P_.cam_obs.size() * 4});
+            up.push_back({&bCamChunks_, P_.cam_chunks.data(), P_.cam_chunks.size() * 4});
+            up.push_back({&bPrecBlocks_, P_.prec_blocks.data(), P_.prec_blocks.size() * 4});
         }
-        uploadParams();
+        ctx_.uploadMany(up.data(), up.size());
 
         double t_upload = prof_lap();
         if (std::getenv("SSPLAT_SFM_MAP_PROF"))
@@ -342,13 +350,16 @@ public:
     }
 
     void uploadParams() {
-        std::vector<uint8_t> tmp;
-        packReals(tmp, P_.poses.data(), P_.poses.size(), opt_.real);
-        ctx_.upload(bPoses_, tmp.data(), tmp.size());
-        packReals(tmp, P_.intr.data(), P_.intr.size(), opt_.real);
-        ctx_.upload(bIntr_, tmp.data(), tmp.size());
-        packReals(tmp, P_.points.data(), P_.points.size(), opt_.real);
-        ctx_.upload(bPoints_, tmp.data(), tmp.size());
+        std::vector<uint8_t> poses, intr, points;
+        packReals(poses, P_.poses.data(), P_.poses.size(), opt_.real);
+        packReals(intr, P_.intr.data(), P_.intr.size(), opt_.real);
+        packReals(points, P_.points.data(), P_.points.size(), opt_.real);
+        const VkContext::UploadItem up[] = {
+            {&bPoses_, poses.data(), poses.size()},
+            {&bIntr_, intr.data(), intr.size()},
+            {&bPoints_, points.data(), points.size()},
+        };
+        ctx_.uploadMany(up, 3);
     }
 
     void downloadParams() {
@@ -364,6 +375,8 @@ public:
     double computeCost() {
         VkCommandBuffer cb = ctx_.begin();
         recordCost(cb);
+        ctx_.barrier(cb);
+        ctx_.recordDownload(cb, bCost_, realSize(opt_.real), 0, kDlCost);
         ctx_.submit(cb);
         return readCost();
     }
@@ -495,6 +508,8 @@ public:
         VkCommandBuffer cb = ctx_.begin();
         recordAssembly(cb, damping, false, LinSolve::CG);
         recordPCG(cb, (uint32_t)opt_.cg_max_iters);
+        ctx_.barrier(cb);
+        ctx_.recordDownload(cb, bCgScal_, 8 * realSize(opt_.real), 0, kDlCgScal);
         ctx_.submit(cb);
         std::vector<double> xcg = downloadG();
         bool conv;
@@ -866,21 +881,30 @@ private:
         ctx_.barrier(cb);
 
         recordCost(cb);
+        // Fold the two readbacks the LM loop needs into this command buffer.
+        // A separate download() is its own fenced submit, so taking them here
+        // halves the submits per iteration -- and a submit's latency, not its
+        // arithmetic, is what a forty-image solve costs. The atom phase of a
+        // bottom-up run spends five thousand iterations on problems that size,
+        // with several solvers sharing the device.
+        ctx_.barrier(cb);
+        ctx_.recordDownload(cb, bCost_, realSize(opt_.real), 0, kDlCost);
+        if (path == LinSolve::CG)
+            ctx_.recordDownload(cb, bCgScal_, 8 * realSize(opt_.real), 0, kDlCgScal);
     }
 
+    // Offsets into the download staging buffer for the folded readbacks above.
+    static constexpr VkDeviceSize kDlCost = 0, kDlCgScal = 64;
+
     double readCost() {
-        uint8_t raw[8] = {};
-        ctx_.download(bCost_, raw, realSize(opt_.real));
         std::vector<double> v;
-        unpackReals(v, raw, 1, opt_.real);
+        unpackReals(v, (const uint8_t*)ctx_.stagingDownloadPtr() + kDlCost, 1, opt_.real);
         return v[0];
     }
 
     void readCgStatus(bool& converged, double& iters) {
-        uint8_t raw[64];
-        ctx_.download(bCgScal_, raw, 8 * realSize(opt_.real));
         std::vector<double> v;
-        unpackReals(v, raw, 8, opt_.real);
+        unpackReals(v, (const uint8_t*)ctx_.stagingDownloadPtr() + kDlCgScal, 8, opt_.real);
         // flag set AND tolerance met (flag alone can also mean breakdown;
         // flag unset means the recorded iteration cap was hit)
         converged = v[6] > 0.5 && v[4] <= v[5];

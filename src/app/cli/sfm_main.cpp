@@ -584,31 +584,28 @@ static bool readModels(const std::string& dir, std::vector<Reconstruction>& mode
 // large enough for the flat mapper's whole-model passes to dominate; below that
 // the flat schedule is both faster and better, because nothing is ever cut and
 // nothing has to be glued back.
+//
+// Sets `managed` when the mapper has already done the manage loop's work. The
+// bottom-up tree has: merging, growing and pruning are its levels, and it
+// finishes with the same cleanup passes over its own output (D57). Running the
+// loop after it repeats all of that at full model size, which on a 5402-image
+// capture cost more than the mapping stage it followed.
 static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDatabase& db,
-                                             SfmConfig& cfg) {
+                                             const std::vector<FeatureSet>& feats, SfmConfig& cfg,
+                                             bool& managed) {
+    managed = false;
     const bool bup = cfg.mapper_mode == "bottom-up" || cfg.mapper_mode == "hierarchical" ||
                      (cfg.mapper_mode == "auto" && db.images.size() >= cfg.bup.min_images);
     if (!bup) return mapper.run();
-    // The manage loop's growth and reseeding are what the bottom-up schedule
-    // already did, level by level, and did more cheaply: its growth registers
-    // by PnP and pays for one joint solve per level, where a manage round
-    // refines and audits each component on its own. Measured on a 5402-image
-    // capture, a manage round after the tree spent ~600 s to cover 26 more
-    // images. What is left on is the cleanup the tree has no equivalent for --
-    // merging what it could not, splitting a model its own correspondences
-    // contradict, dropping copies, and cutting a fold.
-    cfg.manager.do_grow = false;
-    cfg.manager.do_reseed = false;
     BottomUpStats bs;
     BottomUpOptions bo = cfg.bup;
     bo.verbose = !cfg.quiet;
-    // The tree performs hundreds of merges, and the only test that catches
-    // repeated structure is the one the merger cannot run by itself (D45).
-    // Without it a capture with two similar rooms merges one onto the other and
-    // every internal test agrees, because a fold agrees with itself.
-    MergeOptions mo = cfg.merge;
-    mo.validate = seamValidator(mapper, cfg.manager);
-    return bottomUpReconstruct(mapper, db, bo, mo, bs);
+    std::vector<Reconstruction> models =
+        bottomUpReconstruct(mapper, db, feats, bo, cfg.manager, bs);
+    // Unless the capture was too small to be cut into a tree at all, in which
+    // case what ran was the flat mapper and the loop is exactly what it needs.
+    managed = bs.atoms >= 2;
+    return models;
 }
 
 // released (D51). COLMAP's documentation: hold it during reconstruction, where
@@ -1433,8 +1430,9 @@ static int cmdMap(int argc, char** argv) {
 
     Mapper mapper(db, feats, opt, cs.ids);
     std::vector<Reconstruction> models;
+    bool managed = false;  // the bottom-up mapper does the manage loop's work itself
     if (cfg.resume.empty()) {
-        models = runMapper(mapper, db, cfg);
+        models = runMapper(mapper, db, feats, cfg, managed);
     } else {
         // Adopt what a previous run wrote and work on it instead. The models
         // must come from this database (image ids are positions in it); adopt()
@@ -1515,7 +1513,7 @@ static int cmdMap(int argc, char** argv) {
 
     ManagerStats mst;
     double t_manage = 0;
-    if (manageEnabled(mgopt))
+    if (!managed && manageEnabled(mgopt))
         models = manageModels(mapper, std::move(models), mgopt, mst, t_manage);
     if (cfg.final_principal_point) {
         double t_pp = 0;
@@ -1818,13 +1816,14 @@ static int cmdAuto(int argc, char** argv) {
 
     t0 = now();
     Mapper mapper(db, feats, mapopt, cs.ids);
-    std::vector<Reconstruction> models = runMapper(mapper, db, cfg);
+    bool managed = false;  // the bottom-up mapper does the manage loop's work itself
+    std::vector<Reconstruction> models = runMapper(mapper, db, feats, cfg, managed);
     double t_map = now() - t0;
 
     // ---- 3b. merge, grow, prune, reseed until nothing changes (D43, D44) ----
     ManagerStats mst;
     double t_manage = 0;
-    if (manageEnabled(cfg.manager) &&
+    if (!managed && manageEnabled(cfg.manager) &&
         (models.size() > 1 || distinctRegistered(models) < est.images))
         models = manageModels(mapper, std::move(models), cfg.manager, mst, t_manage);
     if (cfg.final_principal_point) {

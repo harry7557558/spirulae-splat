@@ -295,7 +295,17 @@ struct SfmConfig {
     F(bup.partition.overlap, "bup-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",           \
       0, 100000, "", "Images each atom borrows from its sibling, which is what a merge aligns on")  \
     F(bup.max_rounds, "bup-rounds", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1, 100, "",       \
-      "Levels of the merge tree before the leftovers are handed to the manage loop")                     \
+      "Levels of the merge tree")                                                                   \
+    F(bup.atom.threads, "bup-atom-threads", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,        \
+      1024, "", "Atoms reconstructed at once, each on its own Vulkan context; 0 for the default")   \
+    F(bup.atom.ba_growth, "bup-atom-ba-growth", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1,    \
+      1000000, "", "Model growth that triggers a bundle adjustment inside an atom")                 \
+    F(bup.coarse_joint_ba, "bup-coarse-ba", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,     \
+      "", "Run the merge tree's intermediate joint solves to the loose growth-phase tolerance")     \
+    F(bup.atom.init_trials, "bup-atom-init-trials", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",   \
+      1, 1000, "", "Seed attempts for an atom's primary model")                                     \
+    F(bup.atom.min_model_fraction, "bup-atom-min-fraction", CMD_AUTO | CMD_MAP, Tier::Advanced,     \
+      "mapper", 0, 1, "", "Fraction of an atom its primary model must cover to be kept")            \
     F(bup.joint_intrinsics, "bup-joint-intrinsics", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",   \
       0, 0, "", "Bundle-adjust every model in one problem with the intrinsics shared per camera")   \
     F(bup.grow_every, "bup-grow-every", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 100,      \
@@ -339,6 +349,11 @@ struct SfmConfig {
       "manage", 0, 1, "", "Co-visibility that cut may sever, as a fraction of the model's total")   \
     F(manager.do_joint_ba, "joint-ba", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",      \
       "Refine every component in one problem with intrinsics shared per camera group (D45)")        \
+    F(manager.seam_min_agreement, "seam-min-agreement", CMD_AUTO | CMD_MAP, Tier::Advanced,         \
+      "manage", 0, 1, "",                                                                           \
+      "Verified pairs crossing a merge seam that must still hold in the merged model; 0 disables")  \
+    F(manager.seam_min_pairs, "seam-min-pairs", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",       \
+      1, 100000, "", "Cross-seam pairs below which the seam test has nothing to judge on")          \
     /* ---- merging ---- */                                                                         \
     F(merge.max_reproj_error, "max-error", CMD_MERGE, Tier::Advanced, "merge", 0.1, 1000, "",       \
       "Alignment inlier threshold in pixels; looser than the mapper's, as the two models were "     \

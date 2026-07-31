@@ -3,6 +3,8 @@
 // pipelines from one SPIR-V module, and command recording helpers.
 #pragma once
 
+#include <atomic>
+
 #include <chrono>
 #include <vulkan/vulkan.h>
 
@@ -136,7 +138,12 @@ public:
         phys_ = devs[pick];
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(phys_, &props);
-        fprintf(stderr, "[vk] using device: %s\n", props.deviceName);
+        // Once per process. The atom workers of a bottom-up run create a
+        // context each, and eight identical banner lines in the middle of a
+        // reconstruction say nothing the first one did not.
+        static std::atomic<bool> announced{false};
+        if (!announced.exchange(true))
+            fprintf(stderr, "[vk] using device: %s\n", props.deviceName);
 
         // ---- queue family ----
         uint32_t qn = 0;
@@ -277,6 +284,56 @@ public:
         }
     }
 
+    // Several host->device copies in one submit.
+    //
+    // `upload` fences per call, and a bundle-adjustment problem uploads
+    // seventeen buffers. Uncontended that is a few milliseconds; with a solver
+    // per thread on one device -- the atom phase of a bottom-up run -- the
+    // fences serialize against each other and it becomes most of a small
+    // solve's cost (measured: 3 ms of upload per solve at one thread, 69 ms at
+    // eight). Everything that fits in the staging buffer goes in one command
+    // buffer; the rest flushes and starts a new one, so an item larger than
+    // the staging buffer still works, by the chunked path.
+    struct UploadItem {
+        const GpuBuffer* dst;
+        const void* src;
+        VkDeviceSize size;
+    };
+    void uploadMany(const UploadItem* items, size_t n) {
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        VkDeviceSize used = 0;
+        std::vector<VkBufferCopy> copies;
+        std::vector<VkBuffer> dsts;
+        auto flush = [&] {
+            if (cb == VK_NULL_HANDLE) return;
+            for (size_t i = 0; i < copies.size(); i++)
+                vkCmdCopyBuffer(cb, staging_.buf, dsts[i], 1, &copies[i]);
+            submit(cb);
+            cb = VK_NULL_HANDLE;
+            used = 0;
+            copies.clear();
+            dsts.clear();
+        };
+        for (size_t i = 0; i < n; i++) {
+            const UploadItem& it = items[i];
+            if (!it.dst || !it.size) continue;
+            if (it.size > kStagingSize) {  // does not fit whole: the chunked path
+                flush();
+                upload(*it.dst, it.src, it.size);
+                continue;
+            }
+            if (used + it.size > kStagingSize) flush();
+            if (cb == VK_NULL_HANDLE) cb = begin();
+            memcpy((uint8_t*)stagingPtr_ + used, it.src, it.size);
+            copies.push_back(VkBufferCopy{used, 0, it.size});
+            dsts.push_back(it.dst->buf);
+            // Keep every source offset 16-byte aligned: cheap, and it stops a
+            // driver from taking a slow path on an unaligned copy.
+            used = (used + it.size + 15) & ~(VkDeviceSize)15;
+        }
+        flush();
+    }
+
     void download(const GpuBuffer& src, void* dst, VkDeviceSize size, VkDeviceSize srcOff = 0) {
         uint8_t* p = (uint8_t*)dst;
         for (VkDeviceSize off = 0; off < size; off += kStagingSize) {
@@ -295,8 +352,8 @@ public:
     // separate download() costs after every dispatch batch. `size` must not
     // exceed stagingCapacity().
     void recordDownload(VkCommandBuffer cb, const GpuBuffer& src, VkDeviceSize size,
-                        VkDeviceSize srcOff = 0) {
-        VkBufferCopy c{srcOff, 0, size};
+                        VkDeviceSize srcOff = 0, VkDeviceSize dstOff = 0) {
+        VkBufferCopy c{srcOff, dstOff, size};
         vkCmdCopyBuffer(cb, src.buf, stagingDl_.buf, 1, &c);
     }
     const void* stagingDownloadPtr() const { return stagingDlPtr_; }

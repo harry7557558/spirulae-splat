@@ -294,7 +294,7 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
         fprintf(stderr,
                 "[prof] BA #%ld: %u img %u pt %u obs | build %.3f init %.3f solve %.3f "
                 "write %.3f s | %d LM iters\n",
-                g_map_prof.n_ba, P.num_images, P.num_points, P.num_obs, t_build, t_init,
+                (long)g_map_prof.n_ba, P.num_images, P.num_points, P.num_obs, t_build, t_init,
                 t_solve, t_write, solver.stats().iterations);
     return solver.stats().final_cost;
 }

@@ -526,7 +526,14 @@ public:
     // Measured on the same dataset: without this, merging models that have
     // each drifted along a long walk left ~7% of the rig frames (which share a
     // pose by construction, tools/rig_check.py) tens of degrees apart.
-    Reconstruction audit(const Reconstruction& m, AuditStats* out = nullptr) {
+    // `max_reg` caps the size the repair may grow the model to (0 = uncapped).
+    // The repair re-registers the images it moved, and images that could not
+    // register before may be able to now -- but with nothing bounding it that
+    // bonus is a full incremental growth pass hiding inside a repair, at the
+    // repair's cadence rather than the caller's. Measured, one took a model
+    // from 1752 to 3933 images.
+    Reconstruction audit(const Reconstruction& m, AuditStats* out = nullptr,
+                         uint32_t max_reg = 0) {
         ensureSetup();
         resetModel();
         adopt(m);
@@ -596,7 +603,7 @@ public:
             // because the model changed and because their trial budget is
             // reset; that is a bonus, not a side effect to design around.
             reg_trials_.assign(db_.images.size(), 0);
-            growLoop();
+            growLoop(max_reg);
         }
         checkedRefine(true);
         for (const auto& r : repairs)
@@ -893,7 +900,12 @@ public:
     // intrinsics are constrained by the big component's evidence. Each model is
     // then filtered and re-refined through the ordinary path, so the same
     // observation and image gates apply as after any other BA.
-    void jointRefine(std::vector<Reconstruction>& models) {
+    // `coarse` runs the solve to the growth-phase tolerance instead of the
+    // solver's full one. A merge tree's intermediate levels are each followed
+    // by more merges, more growth and another joint solve, so converging one
+    // tightly is work the next level throws away; the passes that make
+    // kill-or-keep decisions (audit, refine) are tight, and they run last.
+    void jointRefine(std::vector<Reconstruction>& models, bool coarse = false) {
         ensureSetup();
         size_t live = 0;
         for (const Reconstruction& m : models)
@@ -908,7 +920,11 @@ public:
         bo.refine_principal_point = opt_.refine_principal_point || pp_free_;
         bo.pp_min_images = opt_.pp_min_images;
         bo.solver = opt_.ba_solver;
-        bo.shared_ctx = &ba_ctx_;
+        if (coarse && opt_.ba_growth_rtol > 0) {
+            bo.rtol = opt_.ba_growth_rtol;
+            bo.patience = opt_.ba_growth_patience;
+        }
+        bo.shared_ctx = &baContext();
         runJointBA(models, bo);
         // Deliberately no per-model refine afterwards: that would re-fit each
         // component's intrinsics to its own observations and undo the sharing
@@ -1106,6 +1122,26 @@ public:
     bool allowed(uint32_t img) const { return allow_.empty() || allow_[img]; }
     // Images the mapper may touch: the restriction, or the whole database.
     size_t allowedCount() const { return allow_.empty() ? db_.images.size() : allow_count_; }
+
+    // Bundle-adjust on a context this mapper does not own. Creating a Vulkan
+    // device costs far more than reconstructing one atom, so the atom workers
+    // (sfm/map/Atoms.h) create a short-lived Mapper per atom over a per-atom
+    // sub-database and hand every one of them the worker's own context. Must
+    // be set before the first bundle adjustment; a context is not shareable
+    // across threads, so one per worker, never one for all of them.
+    void useBaContext(VkContext* ctx) { ext_ba_ctx_ = ctx; }
+
+    // The per-group starting intrinsics, after any focal bootstrap. A forty-
+    // image atom cannot determine its own focal and must not search for one
+    // (D48), so the atom workers are handed these and told the focal is
+    // measured -- which is what the shared mapper's cam_consensus_ did for
+    // every atom after the first, only now it holds for the first one too.
+    const std::map<uint32_t, Camera>& startingCameras() const { return default_cams_; }
+
+    // Per image, the camera group it belongs to. Filled by setup(), so it is
+    // the resolved answer rather than the constructor argument, which may be
+    // empty for "one camera for everything".
+    const std::vector<uint32_t>& cameraIds() const { return cam_ids_; }
 
     size_t unclaimed() const { return unclaimedImages(); }
     size_t numImages() const { return db_.images.size(); }
@@ -2692,7 +2728,7 @@ private:
                 bo.patience = opt_.ba_growth_patience;
             }
             bo.solver = opt_.ba_solver;
-            bo.shared_ctx = &ba_ctx_;
+            bo.shared_ctx = &baContext();
             double cost = runGlobalBA(rec_, bo);
             ProfTimer pt(g_map_prof.filter);
             // Runs after every mapping BA, and it is load-bearing: without it
@@ -3142,6 +3178,8 @@ private:
     // mapper's many global BAs; each solve only creates/frees its own
     // problem-sized buffers. Uninitialized until the first BA initializes it.
     VkContext ba_ctx_;
+    VkContext* ext_ba_ctx_ = nullptr;  // useBaContext(); null = ba_ctx_ above
+    VkContext& baContext() { return ext_ba_ctx_ ? *ext_ba_ctx_ : ba_ctx_; }
     std::vector<uint32_t> recent_regs_;  // registered since the last refinement
 };
 

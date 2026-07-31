@@ -4,29 +4,49 @@
 // produce identical output.
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 
 namespace sfm {
 
+// An accumulator several threads may add to. The atom phase reconstructs
+// clusters concurrently (sfm/map/Atoms.h) and every one of them runs the same
+// instrumented code, so a plain `double +=` here is a data race in every
+// bottom-up run. std::atomic<double>::fetch_add is C++20; the compare-exchange
+// loop is what C++17 offers, and it is uncontended in practice -- one add per
+// phase per call, against work measured in milliseconds.
+class ProfAcc {
+public:
+    ProfAcc& operator+=(double v) {
+        double cur = v_.load(std::memory_order_relaxed);
+        while (!v_.compare_exchange_weak(cur, cur + v, std::memory_order_relaxed)) {}
+        return *this;
+    }
+    double get() const { return v_.load(std::memory_order_relaxed); }
+
+private:
+    std::atomic<double> v_{0};
+};
+
 struct MapProf {
     // mapper host phases
-    double init_seed = 0;   // initialize(): seed search incl. two-view RANSAC
-    double choose = 0;      // chooseNextImages(): ranking candidates
-    double reg = 0;         // registerImage(): PnP RANSAC + refine + recount
-    double tri = 0;         // triangulateForImage() during growth
-    double retri = 0;       // completeAndRetriangulate()
-    double merge = 0;       // mergeTracks(), inside the above
-    double filter = 0;      // sanitizeCameras + filterPoints + filterImages
-    double snapshot = 0;    // checkedRefine() reconstruction copy
+    ProfAcc init_seed;   // initialize(): seed search incl. two-view RANSAC
+    ProfAcc choose;      // chooseNextImages(): ranking candidates
+    ProfAcc reg;         // registerImage(): PnP RANSAC + refine + recount
+    ProfAcc tri;         // triangulateForImage() during growth
+    ProfAcc retri;       // completeAndRetriangulate()
+    ProfAcc merge;       // mergeTracks(), inside the above
+    ProfAcc filter;      // sanitizeCameras + filterPoints + filterImages
+    ProfAcc snapshot;    // checkedRefine() reconstruction copy
     // global BA, split (sfm/map/Bundle.h)
-    double ba_build = 0;    // BAProblem assembly from the Reconstruction
-    double ba_init = 0;     // BundleSolver ctor + init (device + pipelines + upload)
-    double ba_solve = 0;    // solver.solve()
-    double ba_write = 0;    // download + writeback
-    long n_ba = 0, n_ba_iters = 0, n_choose = 0, n_reg_try = 0, n_reg_ok = 0;
-    long n_merged = 0;      // observations absorbed by track merging
+    ProfAcc ba_build;    // BAProblem assembly from the Reconstruction
+    ProfAcc ba_init;     // BundleSolver ctor + init (device + pipelines + upload)
+    ProfAcc ba_solve;    // solver.solve()
+    ProfAcc ba_write;    // download + writeback
+    std::atomic<long> n_ba{0}, n_ba_iters{0}, n_choose{0}, n_reg_try{0}, n_reg_ok{0};
+    std::atomic<long> n_merged{0};  // observations absorbed by track merging
 
     static bool enabled() {
         static bool e = std::getenv("SSPLAT_SFM_MAP_PROF") != nullptr;
@@ -38,6 +58,15 @@ struct MapProf {
     // has finished adding to them. `what` says which.
     void report(double total_s, const char* what = "mapper") const {
         if (!enabled()) return;
+        const double init_seed = this->init_seed.get(), choose = this->choose.get();
+        const double reg = this->reg.get(), tri = this->tri.get(), retri = this->retri.get();
+        const double merge = this->merge.get(), filter = this->filter.get();
+        const double snapshot = this->snapshot.get(), ba_build = this->ba_build.get();
+        const double ba_init = this->ba_init.get(), ba_solve = this->ba_solve.get();
+        const double ba_write = this->ba_write.get();
+        const long n_ba = this->n_ba, n_ba_iters = this->n_ba_iters, n_choose = this->n_choose;
+        const long n_reg_try = this->n_reg_try, n_reg_ok = this->n_reg_ok;
+        const long n_merged = this->n_merged;
         double ba = ba_build + ba_init + ba_solve + ba_write;
         double accounted = init_seed + choose + reg + tri + retri + filter + snapshot + ba;
         fprintf(stderr,
@@ -63,14 +92,14 @@ inline MapProf g_map_prof;
 // RAII accumulator: adds elapsed seconds to `acc` at scope exit.
 class ProfTimer {
 public:
-    explicit ProfTimer(double& acc)
+    explicit ProfTimer(ProfAcc& acc)
         : acc_(acc), t0_(std::chrono::steady_clock::now()) {}
     ~ProfTimer() {
         acc_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
     }
 
 private:
-    double& acc_;
+    ProfAcc& acc_;
     std::chrono::steady_clock::time_point t0_;
 };
 
