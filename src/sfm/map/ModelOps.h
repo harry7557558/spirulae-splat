@@ -3,14 +3,13 @@
 // A capture that does not come back as one model needs the same five things
 // whatever produced the pieces: merge what belongs together, break what does
 // not, register the images nobody claimed, drop the copies, and cut a model
-// that has written two places on top of each other. The manage loop (D44) drives
-// them in rounds over the flat mapper's output; the bottom-up tree (D57) drives
-// them level by level over its own. Both need the identical passes with the
-// identical thresholds, so they live here and neither owns them.
+// that has written two places on top of each other. Both mappers need them with
+// the identical thresholds, so they live here and neither owns them; the
+// schedule that drives them is sfm/map/Assemble.h.
 //
 // Everything here is a free function over `Mapper`'s public operations. The
 // memo is the one piece of state: passes are skipped for models they have
-// already seen in this shape, which is what keeps a loop that runs them
+// already seen in this shape, which is what keeps a schedule that runs them
 // repeatedly from paying for them repeatedly.
 #pragma once
 
@@ -31,9 +30,12 @@
 
 namespace sfm {
 
+// The thresholds every pass here is judged by, shared by both mappers. Named
+// for the manage loop that used to drive them (D44), and kept as one struct
+// because they are one policy: what may be merged, what may be broken, and what
+// counts as evidence for either.
 struct ManagerOptions {
     MergeOptions merge;
-    int max_rounds = 4;
     bool do_merge = true;
     bool do_grow = true;      // register unregistered images into existing models
     bool do_reseed = true;    // look for models among images still uncovered
@@ -41,26 +43,20 @@ struct ManagerOptions {
     // re-register what it cannot support (Mapper::audit). Off means a merged
     // model is only bundle-adjusted, which cannot undo a gross misplacement.
     bool do_audit = true;
-    // What an audit's repair pass may grow a model to, as a fraction of what
-    // it already held (see Mapper::audit). 0 leaves it uncapped, which is what
-    // the manage loop wants -- it has no growth schedule of its own to defer
-    // to. The bottom-up tree does, and caps it there.
+    // What an audit's repair pass may grow a model to, as a fraction of what it
+    // already held (see Mapper::audit). 0 leaves it uncapped, which is a full
+    // incremental growth pass hiding inside a repair; the assembler has a growth
+    // schedule of its own and overrides this with it.
     double audit_growth_frac = 0;
     // A model this fraction of whose images another (larger) model also holds
     // carries nothing of its own: growth has made it a duplicate. It is
     // dropped rather than written as a reconstruction in its own right.
     double redundant_ratio = 0.9;
     // Cameras whose focal deviates from the population consensus by more than
-    // this factor are refit before merging (see fixOutlierCameras). A model
+    // this factor are refit before merging (see refitOutlierCameras). A model
     // built on a runaway focal cannot align with anything, and on a rig every
     // model is looking at the same physical cameras.
     double focal_consensus_tol = 0.15;  // 0 disables
-    // Bundle-adjust every component in one problem with intrinsics shared per
-    // camera group (Mapper::jointRefine, D45). This is what stops a small
-    // component from fitting its own focal to its own noise; the outlier refit
-    // above still runs first, because a camera that has already run away needs
-    // replacing, not averaging.
-    bool do_joint_ba = true;
     // Cross-seam agreement required of a merge (Mapper::checkSeam). A verified
     // pair whose two images end up on opposite sides of the seam is evidence
     // the alignment never saw; the merged model has to reproduce most of them.
@@ -68,6 +64,27 @@ struct ManagerOptions {
     double seam_min_agreement = 0.6;   // fraction of tested cross-seam pairs
     double seam_min_pair_fraction = 0.5;  // ... of a pair's matches, to call it holding
     int seam_min_pairs = 10;           // below this there is nothing to judge on
+    // A merge that fails the test above is not necessarily wrong -- it may
+    // merely be out of true (D64). The test measures pixels on a model no
+    // bundle adjustment has seen: the incoming half arrives under one
+    // similarity, so two components that are each sound but drifted differently
+    // sit a fraction of a degree apart across the seam, and at 8 px on an
+    // 800 px focal that is the whole tolerance. Every cross-seam pair then
+    // fails, and a merge of two large correct components is refused.
+    //
+    // What separates that from a wrong merge is not how many pairs hold, but
+    // how much of a pair the model explains when it does not: a seam that is
+    // out of true still explains a fifth of a typical pair's matches, two
+    // different places explain none. So a refusal whose median pair is above
+    // `seam_rescue_frac` earns one coarse refinement of the merged model and a
+    // second verdict; the refinement is kept when it passes.
+    // Only *failed* rescues are charged against the budget. A refinement that
+    // bought a merge is not overhead -- the model is kept in its refined form,
+    // so it is work the next pass does not repeat. What has to be bounded is a
+    // capture where the rescue never works, and eight wasted refinements is
+    // enough to establish that.
+    double seam_rescue_frac = 0.2;     // 0 disables the rescue
+    int seam_max_rescues = 8;          // refinements it may waste before giving up
     // Break a model whose own verified pairs do not agree with it
     // (Mapper::splitInconsistent). Only pairs with at least
     // `split_min_matches` are trusted to vote, and a resulting group smaller
@@ -100,8 +117,17 @@ struct ManagerStats {
     size_t dropped_redundant = 0;
     size_t audited_out = 0, audited_repaired = 0;
     size_t cameras_refit = 0;
-    size_t joint_ba_rounds = 0;
     size_t seam_checked = 0, seam_refused = 0, seam_skipped = 0;
+    size_t seam_rescued = 0, seam_rescue_failed = 0;
+    // What the merges looked like on both sides of the verdict: the median
+    // cross-seam pair's explained fraction and how many pairs there were to
+    // judge on, summed so the report can average them. The accepted ones are
+    // the reference the refused ones have to be read against -- a threshold is
+    // only defensible if the two populations are actually separated.
+    // `rescue_gain` is how much the rescue's refinement moved that median when
+    // it did not work, which says whether the seam is out of true or wrong.
+    double seam_refused_median = 0, seam_passed_median = 0, seam_rescue_gain = 0;
+    size_t seam_refused_pairs = 0, seam_passed = 0;
     size_t splits = 0, duplicate_splits = 0, split_dropped = 0;
     size_t models_before = 0, models_after = 0;
     size_t covered_before = 0, covered_after = 0;
@@ -137,8 +163,7 @@ inline constexpr double kJointBaMovedPx = 1.0;
 // This is the quantity a joint refinement exists to close (D45): a component
 // that fitted its own focal to its own noise. When the components already agree
 // to under a pixel there, the solve is a bundle adjustment over the whole
-// capture that ends where it started -- and both the manage loop and the
-// bottom-up tree would otherwise run one every round.
+// capture that ends where it started.
 inline double focalSpreadPx(const std::vector<Reconstruction>& models) {
     std::map<uint32_t, std::pair<double, double>> range;  // id -> (min f, max f)
     std::map<uint32_t, double> radius;                    // ... and its frame corner
@@ -174,7 +199,11 @@ inline double focalSpreadPx(const std::vector<Reconstruction>& models) {
 // The bottom-up tree needs it as much as the manage loop does. Its levels
 // perform hundreds of merges, and without this they run with nothing watching
 // for repeated structure at all.
-inline std::function<std::string(const Reconstruction&, const Reconstruction&, const Sim3&)>
+// The rescue (see ManagerOptions::seam_rescue_frac) makes this a judge that can
+// repair what it judges: a marginal verdict is re-taken on a refined model, and
+// the refinement is what gets committed when the second verdict passes.
+inline std::function<std::string(Reconstruction&, const Reconstruction&, const Sim3&,
+                                 const MergeCounts&)>
 seamValidator(Mapper& mapper, const ManagerOptions& opt, ManagerStats* st = nullptr) {
     if (opt.seam_min_agreement <= 0) return {};
     Mapper* mp = &mapper;
@@ -182,11 +211,30 @@ seamValidator(Mapper& mapper, const ManagerOptions& opt, ManagerStats* st = null
     const double pair_frac = opt.seam_min_pair_fraction;
     const double min_agree = opt.seam_min_agreement;
     const size_t min_pairs = (size_t)std::max(0, opt.seam_min_pairs);
-    return [mp, max_err, pair_frac, min_agree, min_pairs, st](
-               const Reconstruction& merged, const Reconstruction& src, const Sim3&) -> std::string {
+    const double rescue_frac = opt.seam_rescue_frac;
+    // Shared by every merge this validator is handed to, so the budget bounds
+    // the pass rather than each attempt in it.
+    auto budget = std::make_shared<int>(std::max(0, opt.seam_max_rescues));
+    const double max_splice = opt.merge.max_splice_conflict_ratio;
+    return [mp, max_err, pair_frac, min_agree, min_pairs, rescue_frac, max_splice, budget, st](
+               Reconstruction& merged, const Reconstruction& src, const Sim3&,
+               const MergeCounts& counts) -> std::string {
         std::set<uint32_t> src_side;
         for (const auto& kv : src.images)
             if (kv.second.registered) src_side.insert(kv.first);
+        // A merge the splice test would have refused, sent here because its
+        // alignment is too well determined for "these are different places" to
+        // be the explanation (D64). Judging it as it stands measures the same
+        // unreconciled shapes a second time, so it is refined first, always.
+        const bool contested =
+            counts.points_spliced &&
+            counts.splice_conflicts > max_splice * (double)counts.points_spliced;
+        // A model too large to bundle-adjust on this device still gets judged,
+        // on the geometry it arrived with. That is a harsher test than the
+        // arbitration intends, but it is evidence, and refusing a merge because
+        // the machine is small is not.
+        if (contested && !mp->refineIfItFits(merged, /*coarse=*/true))
+            if (st) st->seam_rescue_failed++;
         Mapper::SeamCheck sc = mp->checkSeam(merged, src_side, max_err, pair_frac);
         // Nothing to judge on. Counted, because "the test passed" and "the test
         // could not run" are different facts and a merge tree that accumulates
@@ -195,10 +243,47 @@ seamValidator(Mapper& mapper, const ManagerOptions& opt, ManagerStats* st = null
             if (st) st->seam_skipped++;
             return "";
         }
-        const double agree = (double)sc.agree / (double)sc.tested;
         if (st) st->seam_checked++;
-        if (agree >= min_agree) return "";
-        if (st) st->seam_refused++;
+        if ((double)sc.agree / (double)sc.tested >= min_agree) {
+            if (st) {
+                st->seam_passed++;
+                st->seam_passed_median += sc.median_frac;
+                // A merge the splice test would have refused, carried by the
+                // cross-seam evidence once its two halves were reconciled: the
+                // case the arbitration exists for.
+                if (contested) st->seam_rescued++;
+            }
+            return "";
+        }
+
+        // Close, but not converged: optimize the seam and ask again. The
+        // refinement is coarse on purpose -- the question is whether the two
+        // halves can be reconciled at all, and whatever keeps this model will
+        // solve it properly. A model that comes back passing is kept in its
+        // refined form, so the work is not repeated downstream either. A
+        // contested merge has already had exactly this and does not get it twice.
+        if (!contested && rescue_frac > 0 && sc.median_frac >= rescue_frac && *budget > 0) {
+            Reconstruction fixed = merged;
+            Mapper::SeamCheck s2;
+            if (mp->refineIfItFits(fixed, /*coarse=*/true))
+                s2 = mp->checkSeam(fixed, src_side, max_err, pair_frac);
+            if (s2.tested >= min_pairs && (double)s2.agree / (double)s2.tested >= min_agree) {
+                if (st) st->seam_rescued++;
+                merged = std::move(fixed);
+                return "";
+            }
+            --*budget;  // only the wasted ones are charged
+            if (st) {
+                st->seam_rescue_failed++;
+                if (s2.tested) st->seam_rescue_gain += s2.median_frac - sc.median_frac;
+            }
+            if (s2.tested) sc = s2;
+        }
+        if (st) {
+            st->seam_refused++;
+            st->seam_refused_median += sc.median_frac;
+            st->seam_refused_pairs += sc.tested;
+        }
         char buf[224];
         snprintf(buf, sizeof buf,
                  "only %zu of the %zu verified pairs that cross the seam still hold "
@@ -388,6 +473,100 @@ inline std::vector<Reconstruction> splitFoldedModels(Mapper& mapper,
         }
     }
     return out;
+}
+
+// ---- camera consensus ----------------------------------------------------
+//
+// Every model of one capture is looking at the same physical cameras, so a
+// camera id that one model puts at a wildly different focal from the rest is
+// that model's mistake -- the focal search landing in a bad basin, kept by a BA
+// that had too few images to contradict it.
+//
+// The fix is to give them the consensus intrinsics and re-run the mapper's
+// refinement, which re-fits the poses and structure to them. If that was the
+// only thing wrong, the model comes back consistent with everything else; if it
+// was not, refinement filters it down and the merge tests still refuse it.
+// Weighted by image count, so the consensus comes from the models with the
+// evidence.
+inline void refitOutlierCameras(Mapper& mapper, std::vector<Reconstruction>& models,
+                                const ManagerOptions& opt, ManagerStats& st) {
+    if (models.size() < 3) return;  // no population to take a consensus from
+    std::map<uint32_t, std::vector<std::pair<double, uint32_t>>> focals;  // id -> (f, weight)
+    std::map<uint32_t, uint32_t> widest;  // id -> most images any model gives it
+    for (const Reconstruction& m : models) {
+        std::map<uint32_t, uint32_t> used;
+        for (const auto& kv : m.images)
+            if (kv.second.registered) used[kv.second.camera_id]++;
+        for (const auto& kv : m.cameras) {
+            auto u = used.find(kv.first);
+            if (u == used.end()) continue;
+            focals[kv.first].push_back({kv.second.focal(), u->second});
+            widest[kv.first] = std::max(widest[kv.first], u->second);
+        }
+    }
+    std::map<uint32_t, double> consensus;
+    for (const auto& kv : focals) {
+        // A camera group of one image has no population to be an outlier of:
+        // its focal is fitted from that image alone in every model that holds
+        // it, so another model's value is not better evidence, and "refitting"
+        // costs a full bundle adjustment of the whole model to swap one guess
+        // for another. On an internet collection, where every image is its own
+        // camera (D20), that fired on hundreds of cameras and made the pass the
+        // longest stage of the run.
+        if (widest[kv.first] < 2 || kv.second.size() < 3) continue;
+        // Weighted median: the model with the most images decides ties, and a
+        // couple of runaway small models cannot move it.
+        std::vector<std::pair<double, uint32_t>> v = kv.second;
+        std::sort(v.begin(), v.end());
+        uint64_t total = 0;
+        for (const auto& p : v) total += p.second;
+        uint64_t acc = 0;
+        double med = v.empty() ? 0 : v.front().first;
+        for (const auto& p : v) {
+            acc += p.second;
+            med = p.first;
+            if (acc * 2 >= total) break;
+        }
+        consensus[kv.first] = med;
+    }
+    for (Reconstruction& m : models) {
+        std::vector<uint32_t> bad;
+        for (const auto& kv : m.cameras) {
+            auto c = consensus.find(kv.first);
+            if (c == consensus.end()) continue;
+            const double f = kv.second.focal(), ref = c->second;
+            if (ref > 0 && std::fabs(f - ref) > opt.focal_consensus_tol * ref)
+                bad.push_back(kv.first);
+        }
+        if (bad.empty()) continue;
+        // Take the whole camera from the model that owns the consensus focal,
+        // not just its focal: the distortion terms of a camera that ran away are
+        // fitted to the same mistake.
+        for (uint32_t id : bad) {
+            const Camera* donor = nullptr;
+            for (const Reconstruction& other : models) {
+                auto it = other.cameras.find(id);
+                if (it == other.cameras.end()) continue;
+                if (std::fabs(it->second.focal() - consensus[id]) < 1e-6 * consensus[id]) {
+                    donor = &it->second;
+                    break;
+                }
+            }
+            if (!donor) continue;
+            if (opt.verbose)
+                fprintf(stderr,
+                        "[mgr] camera %u of a %u-image model: focal %.0f vs the %.0f the other "
+                        "models agree on; refitting\n", id, m.numRegistered(),
+                        m.cameras[id].focal(), donor->focal());
+            m.cameras[id] = *donor;
+            st.cameras_refit++;
+        }
+        const uint32_t before = m.numRegistered();
+        m = mapper.refine(m);
+        if (opt.verbose)
+            fprintf(stderr, "[mgr] refit model: %u -> %u images, %zu points\n", before,
+                    m.numRegistered(), m.points3D.size());
+    }
 }
 
 // Check every model that has changed, and refine it.

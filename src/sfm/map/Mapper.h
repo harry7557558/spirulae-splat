@@ -80,6 +80,18 @@ struct MapperOptions {
     // minimal solver; a log-spaced sweep of P3P hypotheses is the cheaper
     // equivalent, and the ratio bounds are COLMAP's.
     int min_model_size = 10;           // COLMAP's default; smaller -> retry the seed
+    // Re-decide planar-or-panoramic on a seed candidate's own inliers, rather
+    // than taking verification's verdict (`config`) as it stands.
+    //
+    // It looks redundant -- only pairs verification labelled `Uncalibrated`
+    // are ever offered as seeds (initializeAttempt filters on it) -- and it is
+    // ~90% of the seed search, which was a third of the atom phase. It is not
+    // redundant. Verification judges the *putative* matches; this judges the
+    // inliers that survived, and the two disagree often enough to matter: over
+    // five captures, turning it off cost 2.2 mean AUC@10 and saved nothing
+    // overall (a 1322-image capture fell 9.3 points, an 896-image one 2.3,
+    // while the atom-phase time it saved came back downstream).
+    bool seed_homography = true;
     // Stop retrying seeds once a model is both >= min_model_size and covers
     // this fraction of the images. Below that the model is "a" reconstruction
     // but not "the" reconstruction, and another seed is usually worth the time.
@@ -146,6 +158,12 @@ struct MapperOptions {
     // Final passes keep the solver's tight defaults. 0 = solver default.
     double ba_growth_rtol = 1e-4;
     int ba_growth_patience = 5;
+    // Whether the *final* refinement is one of those tight passes. It is for a
+    // mapper that owns the answer. It is not for a bottom-up atom: the model it
+    // finishes is re-solved jointly the moment the atom phase ends, and again at
+    // every merge level above it, so converging a forty-image model to the
+    // solver's full tolerance is work thrown away three times over.
+    bool ba_final_tight = true;
     // Reprojection acceptance for retriangulation/track completion, as a
     // fraction of max_reproj_error (the churn hysteresis); 0 disables the
     // retriangulation pass entirely.
@@ -212,7 +230,26 @@ struct MapperOptions {
     // from refining it *during* reconstruction (D51). `Mapper::polish` is what
     // runs it; the CLI drives that, not the mapper's own loop.
     size_t pp_min_images = 20;   // ... for groups with at least this many images
-    RealCfg ba_real = RealCfg::F64;
+    // Scalar the solver computes in (sfm/ba/README.md "Scalar configs"). "df"
+    // is an fp32 pair with a ~49-bit significand, which on hardware whose fp64
+    // rate is a small fraction of its fp32 rate -- every consumer card -- can be
+    // the faster way to the same answer.
+    std::string ba_real = "double";
+    // ... and the scalar for solves whose answer is provisional: a growth-phase
+    // refinement, or a merge-tree level that another level will re-solve. Those
+    // only need a step good enough to register and filter against, and fp32
+    // halves the bytes every kernel moves -- worth 25-35% of the mapping stage.
+    //
+    // It is nonetheless **double by default**, because fp32 there costs both
+    // accuracy and reproducibility. The Schur and Jacobian kernels accumulate
+    // with floating-point atomics, whose execution order is arbitrary; at fp64
+    // the resulting perturbation (~1e-16) never crosses a decision threshold
+    // and the whole pipeline is reproducible run to run, while at fp32 (~1e-7)
+    // it crosses them constantly. Measured over three identical runs each: a
+    // 379-image capture scored 96.1 AUC@10 every time in fp64 and 96.5 / 92.3 /
+    // 91.5 in fp32; an 896-image one 88.3 / 87.7 / 88.0 against 85.2 / 87.5 /
+    // 87.1. Not just noisier -- worse on average, by 2.7 and 1.4 points.
+    std::string ba_real_coarse = "double";
     int device = -1;
     // Host worker threads for the passes that fan out over points
     // (filterPoints). 0 = hardware_concurrency.
@@ -253,6 +290,7 @@ public:
         // can actually determine? (D48; a no-op unless it cannot.)
         {
             ProfTimer pt(g_map_prof.init_seed);
+            ProfTimer pb(g_map_prof.bootstrap);
             bootstrapFocalLength();
         }
 
@@ -326,7 +364,7 @@ public:
 
     // ---- the engine, driven from outside (D44) ----------------------------
     //
-    // run() is one policy over these; ModelManager (sfm/map/Manager.h) is
+    // run() is one policy over these; the assembler (sfm/map/Assemble.h) is
     // another, and a bottom-up hierarchical mapper would be a third. They all
     // need the same three operations on an *existing* model, which is why they
     // are public: keep growing it, refine it, or look for more models beside
@@ -443,13 +481,42 @@ public:
     // Adopt and bundle-adjust, with the mapper's own filtering and
     // de-registration rules. This is what a merged model needs: two halves
     // glued along a seam that has never been optimized as one.
-    Reconstruction refine(const Reconstruction& m) {
+    //
+    // `coarse` runs the growth-phase schedule instead of the final one -- two
+    // refinement rounds at the loose tolerance rather than five at the tight
+    // one. For a caller asking a yes/no question about the result (can this
+    // seam be reconciled at all?) the last digits of convergence decide
+    // nothing, and something else optimizes the model properly afterwards.
+    Reconstruction refine(const Reconstruction& m, bool coarse = false) {
         ensureSetup();
         resetModel();
         adopt(m);
         rebuildScores();
+        const bool tight = opt_.ba_final_tight;
+        opt_.ba_final_tight = tight && !coarse;
         globalRefine(true);
+        opt_.ba_final_tight = tight;
         return snapshotModel();
+    }
+
+    // The same, in place, for a caller that is asking a question rather than
+    // producing an answer: false means the solve did not fit the device and
+    // `m` is untouched. A single model's bundle adjustment cannot be split the
+    // way a joint one can (D65) -- its points are shared across all of it --
+    // so "it does not fit" is a real verdict and the caller has to have one.
+    bool refineIfItFits(Reconstruction& m, bool coarse = false) {
+        ba_over_budget_throws_ = true;
+        try {
+            m = refine(m, coarse);
+        } catch (const BAOverBudget& e) {
+            ba_over_budget_throws_ = false;
+            if (opt_.verbose)
+                fprintf(stderr, "[map] a %u-image refinement needs %.0f MB against a %.0f MB "
+                        "budget; declining it\n", m.numRegistered(), e.need_mb, e.budget_mb);
+            return false;
+        }
+        ba_over_budget_throws_ = false;
+        return true;
     }
 
     // The same, with the principal point released -- for use once, on a model
@@ -622,7 +689,17 @@ public:
         ensureSetup();
         if (restart_relaxation) init_relax_ = 0;
         int trials = 0;
-        while ((int)models.size() < std::max(1, opt_.max_num_models) && unclaimedImages() > 0) {
+        // Not `unclaimedImages() > 0`: admitModel keeps a sub-model only if at
+        // least min_model_size of its images are ones no kept model covers, and
+        // an unclaimed image is exactly that -- so with fewer than that many
+        // left, every attempt is *guaranteed* to be discarded. Each of them is a
+        // seed plus an unbounded grow plus the refinements along the way, i.e. a
+        // reconstruction of the neighbourhood, thrown away. A bottom-up atom
+        // ends with a handful of images its primary model missed, so it paid
+        // this several times over per atom.
+        const size_t need = (size_t)std::max(1, opt_.min_model_size);
+        while ((int)models.size() < std::max(1, opt_.max_num_models) &&
+               unclaimedImages() >= need) {
             if (++trials > std::max(1, opt_.max_model_trials)) {
                 if (opt_.verbose)
                     fprintf(stderr, "[map] sub-model search hit its %d-attempt budget with %zu "
@@ -912,7 +989,7 @@ public:
             if (m.numRegistered() >= 2) live++;
         if (live < 2) return;
         BundleOptions bo;
-        bo.real = opt_.ba_real;
+        bo.real = baReal(coarse);
         bo.device = opt_.device;
         bo.verbose = false;
         bo.loss = opt_.ba_loss;
@@ -924,8 +1001,35 @@ public:
             bo.rtol = opt_.ba_growth_rtol;
             bo.patience = opt_.ba_growth_patience;
         }
-        bo.shared_ctx = &baContext();
-        runJointBA(models, bo);
+        bo.shared_ctx = &baContext(coarse);
+        bo.over_budget_throws = true;
+        // One problem if it fits, and the device decides whether it does. A
+        // capture cut into hundreds of atoms puts every atom's images in the
+        // solve at once -- 5356 images arrive as 11564 image-instances at 2.2x
+        // cover -- and on an 8 GB card that is over the budget before the tree
+        // has merged anything. There is nothing below CG to fall back to, so
+        // the answer has to be a smaller problem (D65).
+        //
+        // Splitting is sound because the models are coupled only through the
+        // intrinsics: no 3D point is shared between two of them. So a batch is
+        // a self-contained bundle adjustment, and the only thing that must not
+        // vary between batches is what they conclude about the cameras -- see
+        // below.
+        for (int batches = 1;; ) {
+            try {
+                jointRefineBatched(models, bo, batches);
+                break;
+            } catch (const BAOverBudget& e) {
+                const int want =
+                    std::max(batches + 1, (int)std::ceil(e.need_mb / e.budget_mb * batches));
+                if (want > 64) throw;
+                if (opt_.verbose)
+                    fprintf(stderr,
+                            "[map] the joint solve needs %.0f MB against a %.0f MB budget: "
+                            "splitting it %d ways\n", e.need_mb, e.budget_mb, want);
+                batches = want;
+            }
+        }
         // Deliberately no per-model refine afterwards: that would re-fit each
         // component's intrinsics to its own observations and undo the sharing
         // this pass exists for. Observations the shared solution no longer
@@ -934,6 +1038,58 @@ public:
         clearCameraConsensus();
         for (const Reconstruction& m : models) recordCameras(m);
     }
+
+private:
+    // `batches` solves over disjoint groups of models, dealt round-robin from
+    // largest to smallest so every group is a representative sample of the
+    // capture -- each one has to determine the intrinsics on its own evidence,
+    // and a group of only the small models could not.
+    //
+    // The first group's cameras are then the answer for all of them. Letting
+    // each group keep its own would reintroduce exactly what the joint solve
+    // exists to prevent: components in different gauges, judged by merge tests
+    // measured in pixels. The first group holds the largest models, so it has
+    // the most to say; the later groups optimize their poses and points against
+    // intrinsics seeded from it and differ from it by far less than the
+    // tolerances downstream.
+    void jointRefineBatched(std::vector<Reconstruction>& models, const BundleOptions& bo,
+                            int batches) {
+        if (batches <= 1) {
+            runJointBA(models, bo);
+            return;
+        }
+        std::vector<size_t> order(models.size());
+        std::iota(order.begin(), order.end(), (size_t)0);
+        std::stable_sort(order.begin(), order.end(), [&models](size_t a, size_t b) {
+            return models[a].numRegistered() > models[b].numRegistered();
+        });
+        std::vector<std::vector<Reconstruction*>> group((size_t)batches);
+        for (size_t k = 0; k < order.size(); k++)
+            group[k % (size_t)batches].push_back(&models[order[k]]);
+        std::map<uint32_t, Camera> shared;
+        for (size_t b = 0; b < group.size(); b++) {
+            if (group[b].size() < 2) continue;
+            // Seed this group with what the first one settled on, so it starts
+            // where the others are rather than where its own atoms left it.
+            if (b)
+                for (Reconstruction* m : group[b])
+                    for (auto& kv : m->cameras) {
+                        auto it = shared.find(kv.first);
+                        if (it != shared.end()) kv.second = it->second;
+                    }
+            runJointBA(group[b], bo);
+            if (!b)
+                for (const Reconstruction* m : group[b])
+                    for (const auto& kv : m->cameras) shared.emplace(kv.first, kv.second);
+        }
+        for (Reconstruction& m : models)
+            for (auto& kv : m.cameras) {
+                auto it = shared.find(kv.first);
+                if (it != shared.end()) kv.second = it->second;
+            }
+    }
+
+public:
 
     // ---- camera consensus across sub-models (D45) -------------------------
     //
@@ -2112,11 +2268,18 @@ private:
         // to reject that many candidates; on a small restricted graph -- a
         // bottom-up atom -- the first candidate usually seeds, and every other
         // pair in the block was computed for nothing, once per atom.
+        //
+        // With one thread it is not speculation at all, only extra work: the
+        // block would be computed on this very thread, in order, and the loop
+        // below computes exactly what it needs on demand (trySeedPair fills the
+        // same cache). That is the atom case -- the parallelism there is over
+        // atoms, so each mapper runs single-threaded -- and leaving the
+        // prefetch on cost 2578 two-view RANSACs where 34 atoms needed 84.
         const unsigned hc = std::thread::hardware_concurrency();
         const size_t max_block =
             std::max<size_t>(1, opt_.threads > 0 ? (size_t)opt_.threads : (hc ? hc : 1));
         size_t block = 1;
-        size_t prefetched = from;
+        size_t prefetched = max_block > 1 ? from : cand.size();
 
         for (size_t ci = from; ci < cand.size(); ci++) {
             const TwoViewMatches* p = cand[ci];
@@ -2153,9 +2316,19 @@ private:
     // cameras and the features, and touches no reconstruction state -- which is
     // what lets it be memoized (D38) and precomputed off-thread.
     TwoViewGeometry seedGeometry(const TwoViewMatches& pm) const {
+        ProfTimer pt(g_map_prof.seed_geom);
+        g_map_prof.n_seed_geom++;
         const uint32_t a = pm.image1, b = pm.image2;
         TwoViewOptions tvo;
         tvo.recover_pose = true;
+        // Whether to re-derive planar-or-panoramic here. `pm.matches` are
+        // verification's surviving inliers and `pm.config` is its verdict on
+        // the pair; only Uncalibrated ones reach here (initializeAttempt filters
+        // on it). Re-deriving it costs a homography RANSAC, which is ~90% of the
+        // seed search on a 550-image capture -- H's inlier ratio on a
+        // non-planar pair is low, so its trial count adapts into the hundreds
+        // where F, fed its own inliers, converges in a handful.
+        tvo.estimate_homography = opt_.seed_homography;
         const Camera& ca = camOf(a);
         const Camera& cb = camOf(b);
         if (ca.wideFov() || cb.wideFov()) {
@@ -2692,7 +2865,8 @@ private:
     // staying and bending everything around it (D36).
     void globalRefine(bool final_pass) {
         if (rec_.numRegistered() < 2 || rec_.points3D.size() < 10) return;
-        int rounds = final_pass ? opt_.ba_max_refinements : 2;
+        const bool tight = final_pass && opt_.ba_final_tight;
+        int rounds = tight ? opt_.ba_max_refinements : 2;
         for (int i = 0; i < rounds; i++) {
             // Observations shredded by the previous round's filtering (or
             // never triangulated because the poses were still rough) get a
@@ -2706,7 +2880,7 @@ private:
             }
             size_t before = countObservations();
             BundleOptions bo;
-            bo.real = opt_.ba_real;
+            bo.real = realCfgFromName(opt_.ba_real);
             bo.device = opt_.device;
             bo.verbose = false;
             bo.loss = opt_.ba_loss;
@@ -2723,12 +2897,23 @@ private:
             // kill/keep decisions against this geometry, and judging them
             // against a half-converged model is what cost a dataset
             // its tail under D37's fixed cap. Final passes are always tight.
-            if (!final_pass && i == 0 && opt_.ba_growth_rtol > 0) {
+            //
+            // The scalar follows the *tolerance*, not the pass: fp32 belongs
+            // exactly where the stopping threshold is one it can reach. A round
+            // past the first runs to the solver's full tolerance even in a
+            // growth refine, and asking fp32 for that means the LM loop spends
+            // its whole iteration budget on a threshold below its noise floor.
+            // Measured on a 1194-image capture, getting this pairing wrong took
+            // the finishing passes from 48 s to 260 s.
+            const bool loose = !tight && i == 0 && opt_.ba_growth_rtol > 0;
+            if (loose) {
                 bo.rtol = opt_.ba_growth_rtol;
                 bo.patience = opt_.ba_growth_patience;
             }
             bo.solver = opt_.ba_solver;
-            bo.shared_ctx = &baContext();
+            bo.real = baReal(loose);
+            bo.shared_ctx = &baContext(loose);
+            bo.over_budget_throws = ba_over_budget_throws_;
             double cost = runGlobalBA(rec_, bo);
             ProfTimer pt(g_map_prof.filter);
             // Runs after every mapping BA, and it is load-bearing: without it
@@ -3177,9 +3362,22 @@ private:
     // Persistent BA context (D38): device + pipelines survive across the
     // mapper's many global BAs; each solve only creates/frees its own
     // problem-sized buffers. Uninitialized until the first BA initializes it.
-    VkContext ba_ctx_;
+    // One per scalar configuration in use: a context holds the shader module it
+    // was built from, and that module is compiled for one Real. So a coarse
+    // solve in float and a tight one in double cannot share a context -- ba_ctx_[1]
+    // exists only when the two differ, and a caller-supplied context serves
+    // every solve when they do not (which is the atom workers' case).
+    VkContext ba_ctx_[2];
     VkContext* ext_ba_ctx_ = nullptr;  // useBaContext(); null = ba_ctx_ above
-    VkContext& baContext() { return ext_ba_ctx_ ? *ext_ba_ctx_ : ba_ctx_; }
+    bool ba_over_budget_throws_ = false;  // refineIfItFits() only
+    RealCfg baReal(bool coarse) const {
+        return realCfgFromName(coarse ? opt_.ba_real_coarse : opt_.ba_real);
+    }
+    VkContext& baContext(bool coarse) {
+        const bool second = coarse && baReal(true) != baReal(false);
+        if (ext_ba_ctx_ && !second) return *ext_ba_ctx_;
+        return ba_ctx_[second];
+    }
     std::vector<uint32_t> recent_regs_;  // registered since the last refinement
 };
 

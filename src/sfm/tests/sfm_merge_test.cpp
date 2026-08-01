@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "sfm/core/Model.h"
-#include "sfm/map/Manager.h"
+#include "sfm/map/Assemble.h"
 #include "sfm/map/Merge.h"
 
 namespace fs = std::filesystem;

@@ -62,6 +62,9 @@ struct BundleOptions {
     // sharing intrinsic parameters between multiple images". Hence the
     // qualifier below -- sharing is what makes it observable (D51).
     bool refine_principal_point = false;
+    // Refuse a solve that does not fit the device rather than attempting it --
+    // for a caller that can split the problem and retry (Mapper::jointRefine).
+    bool over_budget_throws = false;
     // ... and only for camera groups with at least this many images behind
     // them. A group of one image has no sharing at all: moving its principal
     // point is exactly a rotation of that one camera, with nothing to
@@ -238,6 +241,7 @@ inline SolverOptions bundleSolverOptions(const BundleOptions& bopt) {
     if (bopt.patience > 0) sopt.patience = bopt.patience;
     if (bopt.solver == "dense") sopt.solver = SolverSel::Dense;
     else if (bopt.solver == "cg") sopt.solver = SolverSel::CG;
+    sopt.over_budget_throws = bopt.over_budget_throws;
     return sopt;
 }
 
@@ -317,33 +321,33 @@ inline double runGlobalBA(Reconstruction& rec, const BundleOptions& bopt) {
 // Intrinsics start from the best-constrained component's values -- averaging
 // distortion coefficients across models that disagree is not meaningful, and
 // the largest model's are the ones with evidence behind them.
-inline double runJointBA(std::vector<Reconstruction>& models, const BundleOptions& bopt) {
+inline double runJointBA(std::vector<Reconstruction*> models, const BundleOptions& bopt) {
     if (models.empty()) return 0;
     size_t live = 0;
-    for (const Reconstruction& m : models)
-        if (m.numRegistered() >= 2) live++;
+    for (const Reconstruction* m : models)
+        if (m->numRegistered() >= 2) live++;
     if (live == 0) return 0;
-    if (live == 1 && models.size() == 1) return runGlobalBA(models[0], bopt);
+    if (live == 1 && models.size() == 1) return runGlobalBA(*models[0], bopt);
 
     // Id strides, so a merged view can be split apart again unambiguously.
     uint32_t img_stride = 0;
     uint64_t pt_stride = 0;
-    for (const Reconstruction& m : models) {
-        for (const auto& kv : m.images) img_stride = std::max(img_stride, kv.first + 1);
-        for (const auto& kv : m.points3D) pt_stride = std::max(pt_stride, kv.first + 1);
+    for (const Reconstruction* m : models) {
+        for (const auto& kv : m->images) img_stride = std::max(img_stride, kv.first + 1);
+        for (const auto& kv : m->points3D) pt_stride = std::max(pt_stride, kv.first + 1);
     }
     if (img_stride == 0 || pt_stride == 0) return 0;
 
     Reconstruction all;
     // Cameras: shared by id, taken from the component with the most images.
     std::map<uint32_t, double> cam_weight;
-    for (const Reconstruction& m : models) {
+    for (const Reconstruction* m : models) {
         std::map<uint32_t, double> w;
-        for (const auto& kv : m.images)
+        for (const auto& kv : m->images)
             if (kv.second.registered) w[kv.second.camera_id] += 1.0;
         for (const auto& kv : w) {
-            auto it = m.cameras.find(kv.first);
-            if (it == m.cameras.end()) continue;
+            auto it = m->cameras.find(kv.first);
+            if (it == m->cameras.end()) continue;
             if (!cam_weight.count(kv.first) || kv.second > cam_weight[kv.first]) {
                 cam_weight[kv.first] = kv.second;
                 all.cameras[kv.first] = it->second;
@@ -351,7 +355,7 @@ inline double runJointBA(std::vector<Reconstruction>& models, const BundleOption
         }
     }
     for (size_t mi = 0; mi < models.size(); mi++) {
-        const Reconstruction& m = models[mi];
+        const Reconstruction& m = *models[mi];
         if (m.numRegistered() < 2) continue;
         const uint32_t io = (uint32_t)mi * img_stride;
         const uint64_t po = (uint64_t)mi * pt_stride;
@@ -375,7 +379,7 @@ inline double runJointBA(std::vector<Reconstruction>& models, const BundleOption
 
     // Scatter back. Intrinsics land in every component, which is the point.
     for (size_t mi = 0; mi < models.size(); mi++) {
-        Reconstruction& m = models[mi];
+        Reconstruction& m = *models[mi];
         if (m.numRegistered() < 2) {
             for (auto& kv : m.cameras) {
                 auto it = all.cameras.find(kv.first);
@@ -400,6 +404,13 @@ inline double runJointBA(std::vector<Reconstruction>& models, const BundleOption
         }
     }
     return cost;
+}
+
+inline double runJointBA(std::vector<Reconstruction>& models, const BundleOptions& bopt) {
+    std::vector<Reconstruction*> p;
+    p.reserve(models.size());
+    for (Reconstruction& m : models) p.push_back(&m);
+    return runJointBA(std::move(p), bopt);
 }
 
 }  // namespace sfm

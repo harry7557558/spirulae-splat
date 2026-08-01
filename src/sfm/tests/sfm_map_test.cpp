@@ -13,7 +13,7 @@
 
 #include "sfm/core/Model.h"
 #include "sfm/map/Bundle.h"
-#include "sfm/map/Manager.h"
+#include "sfm/map/Assemble.h"
 #include "sfm/map/Mapper.h"
 
 namespace fs = std::filesystem;
@@ -204,21 +204,23 @@ int cmdMapSelftest(int argc, char** argv) {
         if (!whole) { printf("  FAIL: a model straddles the two components\n"); fails++; }
         if (!sorted) { printf("  FAIL: models not ordered by point count\n"); fails++; }
 
-        // The manager must leave two genuinely separate components alone: they
+        // Assembly must leave two genuinely separate components alone: they
         // share no image, so there is nothing to align on and nothing to grow
         // across, and anything it did here would be an invention (D44).
         {
             ManagerOptions mo;
             mo.verbose = false;
-            mo.max_rounds = 2;
-            ModelManager mgr(mapper2, mo);
-            std::vector<Reconstruction> managed = mgr.run(ms);
+            AssembleOptions ao;
+            ao.verbose = false;
+            ao.max_rounds = 2;
+            AssembleStats ast;
+            std::vector<Reconstruction> done = assembleModels(mapper2, ms, mo, ao, ast);
             uint32_t tot = 0;
-            for (const Reconstruction& m : managed) tot += m.numRegistered();
-            printf("  manager on two separate components: %zu model(s), %u images, %zu merge(s)\n",
-                   managed.size(), tot, mgr.stats().merges);
-            if (managed.size() != 2 || tot != (uint32_t)(2 * M) || mgr.stats().merges != 0) {
-                printf("  FAIL: the manager should have left two separate components alone\n");
+            for (const Reconstruction& m : done) tot += m.numRegistered();
+            printf("  assembly of two separate components: %zu model(s), %u images, %zu merge(s)\n",
+                   done.size(), tot, ast.merges);
+            if (done.size() != 2 || tot != (uint32_t)(2 * M) || ast.merges != 0) {
+                printf("  FAIL: assembly should have left two separate components alone\n");
                 fails++;
             }
         }

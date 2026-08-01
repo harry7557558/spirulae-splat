@@ -33,6 +33,8 @@ private:
 struct MapProf {
     // mapper host phases
     ProfAcc init_seed;   // initialize(): seed search incl. two-view RANSAC
+    ProfAcc seed_geom;   // of which seedGeometry(): the two-view RANSAC itself
+    ProfAcc bootstrap;   // bootstrapFocalLength(), counted inside init_seed
     ProfAcc choose;      // chooseNextImages(): ranking candidates
     ProfAcc reg;         // registerImage(): PnP RANSAC + refine + recount
     ProfAcc tri;         // triangulateForImage() during growth
@@ -46,6 +48,7 @@ struct MapProf {
     ProfAcc ba_solve;    // solver.solve()
     ProfAcc ba_write;    // download + writeback
     std::atomic<long> n_ba{0}, n_ba_iters{0}, n_choose{0}, n_reg_try{0}, n_reg_ok{0};
+    std::atomic<long> n_seed_geom{0};  // two-view RANSACs run (cache misses)
     std::atomic<long> n_merged{0};  // observations absorbed by track merging
 
     static bool enabled() {
@@ -54,11 +57,13 @@ struct MapProf {
     }
 
     // Counters are cumulative, so a caller may report more than once: the
-    // mapper reports its own stage, the CLI reports again once the manage loop
-    // has finished adding to them. `what` says which.
+    // mapper reports its own stage, the CLI reports again once the passes that
+    // assemble its models have finished adding to them. `what` says which.
     void report(double total_s, const char* what = "mapper") const {
         if (!enabled()) return;
         const double init_seed = this->init_seed.get(), choose = this->choose.get();
+        const double seed_geom = this->seed_geom.get(), bootstrap = this->bootstrap.get();
+        const long n_seed_geom = this->n_seed_geom;
         const double reg = this->reg.get(), tri = this->tri.get(), retri = this->retri.get();
         const double merge = this->merge.get(), filter = this->filter.get();
         const double snapshot = this->snapshot.get(), ba_build = this->ba_build.get();
@@ -71,7 +76,8 @@ struct MapProf {
         double accounted = init_seed + choose + reg + tri + retri + filter + snapshot + ba;
         fprintf(stderr,
                 "[prof] %s total %.2f s, accounted %.2f s (%.0f%%)\n"
-                "[prof]   seed search   %8.2f s\n"
+                "[prof]   seed search   %8.2f s  (two-view %.2f s over %ld pair(s), "
+                "focal bootstrap %.2f s)\n"
                 "[prof]   choose-next   %8.2f s  (%ld calls)\n"
                 "[prof]   register      %8.2f s  (%ld tries, %ld ok)\n"
                 "[prof]   triangulate   %8.2f s\n"
@@ -81,7 +87,8 @@ struct MapProf {
                 "[prof]   BA            %8.2f s  (%ld calls, %ld LM iters): "
                 "build %.2f + init %.2f + solve %.2f + write %.2f\n",
                 what, total_s, accounted, total_s > 0 ? 100.0 * accounted / total_s : 0.0,
-                init_seed, choose, n_choose, reg, n_reg_try, n_reg_ok, tri, retri, merge,
+                init_seed, seed_geom, n_seed_geom, bootstrap, choose, n_choose, reg, n_reg_try,
+                n_reg_ok, tri, retri, merge,
                 n_merged, filter, snapshot, ba, n_ba, n_ba_iters, ba_build, ba_init, ba_solve,
                 ba_write);
     }

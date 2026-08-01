@@ -306,6 +306,9 @@ inline std::vector<Reconstruction> splitDuplicateStructure(const Reconstruction&
     return parts;
 }
 
+// Declared here for MergeOptions::validate; defined with mergeInto below.
+struct MergeCounts;
+
 struct MergeOptions {
     // Alignment. `max_reproj_error` is the RANSAC inlier threshold in pixels
     // (COLMAP's model_merger default is 8 px -- looser than the mapper's 4,
@@ -332,6 +335,23 @@ struct MergeOptions {
     double max_hollow_ratio = 0.34;    // of the images the merge added
     double max_anchor_obs_loss = 0.2;  // of the anchor's observations
     double max_splice_conflict_ratio = 0.5;  // of the points the two models share
+    // ... unless the alignment itself is this well determined, in which case
+    // the disagreement is arbitrated rather than fatal (D64).
+    //
+    // A shared image is a pose correspondence: both models place *that* image,
+    // and the transform has to satisfy all of them at once. When dozens of them
+    // agree, the two models are looking at the same place from the same spots --
+    // whatever else is wrong, it is not that one of them is somewhere else. What
+    // the spliced points then disagree about is the *shape*: two long walks that
+    // each drifted their own way cannot both be right, and one similarity cannot
+    // straighten either. That is a bundle adjustment's job, so the verdict is
+    // handed to `validate`, which can refine the result and judge it on evidence
+    // the alignment never used. Measured on a 5356-image capture: two components
+    // of 3459 and 2974 images sharing 1291 of them, refused here for disagreeing
+    // about 578129 of the 900671 points they both triangulated.
+    //
+    // 0 restores the unconditional refusal.
+    int splice_arbitrate_inliers = 20;
     // Folded results (findDuplicateStructure). A merge that puts two parts of
     // the capture on top of each other passes every test above -- the fold is
     // self-consistent -- but leaves pairs of images the merged model places in
@@ -356,8 +376,15 @@ struct MergeOptions {
     // against the verified two-view geometries that cross the seam. Returns an
     // empty string to accept, or the reason to refuse. Also the natural place
     // for a GUI to hang "ask the user" on.
-    std::function<std::string(const Reconstruction& merged, const Reconstruction& src,
-                              const Sim3& transform)> validate;
+    //
+    // `merged` is mutable, and a validator that replaces it commits what it
+    // left behind. A judge that can repair what it judges is worth more than
+    // one that can only refuse: the cross-seam test is a pixel measurement on a
+    // model no bundle adjustment has seen, so its way of confirming a doubt is
+    // to optimize the seam and look again -- and then the optimized model is
+    // the one that should be kept (D64).
+    std::function<std::string(Reconstruction& merged, const Reconstruction& src,
+                              const Sim3& transform, const MergeCounts& counts)> validate;
     bool verbose = true;
 };
 
@@ -965,8 +992,11 @@ public:
         // the transform. A model that arrives with its own self-consistent
         // tracks passes every other test even when it is placed completely
         // wrongly -- this is the test that does not.
-        if (c.points_spliced &&
-            c.splice_conflicts > opt_.max_splice_conflict_ratio * (double)c.points_spliced) {
+        const bool contested =
+            c.points_spliced &&
+            c.splice_conflicts > opt_.max_splice_conflict_ratio * (double)c.points_spliced;
+        if (contested && !(opt_.validate && opt_.splice_arbitrate_inliers > 0 &&
+                           (int)a.alignment.inliers >= opt_.splice_arbitrate_inliers)) {
             snprintf(buf, sizeof buf,
                      "the models disagree about %zu of the %zu points they both triangulated",
                      c.splice_conflicts, c.points_spliced);
@@ -1009,7 +1039,7 @@ public:
             }
         }
         if (opt_.validate) {
-            std::string why = opt_.validate(merged, models_[src], a.alignment.transform);
+            std::string why = opt_.validate(merged, models_[src], a.alignment.transform, c);
             if (!why.empty()) {
                 a.reason = why;
                 log_.push_back(a);

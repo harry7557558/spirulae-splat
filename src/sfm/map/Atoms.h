@@ -58,6 +58,15 @@ struct AtomOptions {
     // and what it protects against is a bad registration in a model small
     // enough for the joint refinement afterwards to absorb.
     double ba_growth = 2.0;
+    // Whether the atom's closing refinement is a tight one. See
+    // MapperOptions::ba_final_tight: everything an atom converges is re-solved
+    // jointly above it, three times over.
+    //
+    // Loosening the *growth* tolerance was tried alongside and is not the same
+    // trade: rtol 1e-3 with patience 2 took a 379-image capture's median
+    // relative rotation from 0.286 to 0.672 deg and its AUC@10 from 96.1 to
+    // 92.5, to save two seconds. Iteration count is not where an atom's time is.
+    bool tight_final_ba = false;
     // Seed attempts an atom may spend looking for further components inside
     // itself. An atom that fragments is usually dust, and what it leaves
     // behind is picked up by the tree's growth passes.
@@ -199,6 +208,11 @@ inline std::vector<Reconstruction> reconstructAtoms(
     mo.verbose = false;
     mo.threads = 1;  // the parallelism is over atoms; nesting only oversubscribes
     mo.ba_growth_ratio = std::max(1.0 + 1e-9, opt.ba_growth);
+    mo.ba_final_tight = opt.tight_final_ba;
+    // Every solve an atom runs is a coarse one (nothing here is the final
+    // answer), so one scalar configuration covers the worker, and one context
+    // with it -- which is what makes the per-worker context in the first place.
+    if (!opt.tight_final_ba) mo.ba_real = mo.ba_real_coarse;
     mo.max_model_trials = opt.model_trials;
     // The focal was settled over the whole database before this ran. An atom
     // that searched again would be answering from a few dozen images the

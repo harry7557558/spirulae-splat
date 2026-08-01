@@ -40,10 +40,10 @@ images/ ──► extract ──► features/ ─┐
             (pairing: exhaustive / │             (two-view          │
              sequential / GPU      │              verification)     │
              pre-selection) ───────┘                                ▼
-                                                    merge / manage rounds:
-                                                    merge on shared poses (Sim3)
-                                                    ► audit ► grow ► prune
-                                                    ► reseed ► split a fold
+                                                    assemble (D63):
+                                                    merge levels on shared
+                                                    poses (Sim3) ► grow ► solve
+                                                    ► audit ► split ► reseed
                                                                     │
                                                                     ▼
                                                             sparse/0 ► training
@@ -61,16 +61,53 @@ one other per level, growing the ones that did not merge by PnP alone, with one
 bundle adjustment across all of them, intrinsics shared per camera group,
 between levels. It is a *schedule*, not a different algorithm: every model is
 still built by `Mapper::run`'s own rules and joined by the same Sim(3) merger the
-manage rounds use, which is what makes a regression in it impossible to confuse
-with a regression in the geometry. What it changes is where the cost and the risk
+flat mapper's models are, which is what makes a regression in it impossible to
+confuse with a regression in the geometry. What it changes is where the cost and the risk
 sit — an atom is too small to get its own focal wrong, and too small for a
 whole-model pass to be expensive. `Bottomup.h` carries the numbers.
 
-It is also the *whole* mapper: nothing runs the manage loop after it (D60). The
-two were doing the same work — merge, grow, prune, repeat — and doing it twice
-cost more than the mapping stage it followed. What the tree cannot do by
-construction it does once at the end, with the manage loop's own passes, which
-live in `map/ModelOps.h` so that neither owns them.
+**Neither mapper has a stage after it.** What each produces is a set of models,
+and from there they need the identical thing: merge what belongs together, grow
+what did not merge (merging cannot invent overlap that is not there), optimize
+what changed, repeat — then, once, the passes no amount of merging can stand in
+for: audit a new seam, break a model its own correspondences contradict,
+register the tail, seed among what nothing reached, cut a fold. That is
+`map/Assemble.h`, over passes that live in `map/ModelOps.h` so neither mapper
+owns them (D63).
+
+It replaced a separate manage loop (D44) that drove the same operations in
+rounds. The loop re-ran the expensive ones over models nothing had touched, and
+its audit repaired a model by growing it without a bound: on a 5356-image
+capture it spent 65 minutes to merge three models and recover 119 images, and
+ended with three near-copies of one reconstruction. `--no-manage` still names
+the switch that turns those passes off.
+
+Either schedule spends most of its time in bundle adjustment, and **most of
+those solves are provisional** — a growth-phase refinement is followed by more
+growth, a merge-tree level by another level. Those could run in fp32, which is
+worth 25–35% of the mapping stage: on solves large enough to be
+arithmetic-bound, halving the bytes every kernel moves is worth ~2×, and below
+a few dozen images the scalar makes no difference at all because those solves
+are bounded by dispatch count instead (`sfm_cholesky_test --bench` measures
+both).
+
+It is fp64 anyway (D61). The Schur and Jacobian kernels accumulate with
+floating-point atomics, whose execution order is arbitrary, so no two solves
+agree in their last bits. At fp64 that perturbation is ~1e-16 and never crosses
+a decision threshold — the whole pipeline is reproducible run to run. At fp32
+it is ~1e-7 and crosses them constantly, and LM's accept/reject plus the
+mapper's filters turn a last-bit difference into a different reconstruction:
+over three identical runs a 379-image capture scored 96.1 AUC@10 every time in
+fp64, and 96.5 / 92.3 / 91.5 in fp32 — noisier *and* 2.7 points worse on
+average. `--ba-real-coarse float` is there for anyone who wants the speed and
+can live with that; the two scalars keep separate persistent contexts, because
+a context caches the module it was compiled from.
+
+Where the scalar does change is with the *tolerance*, not with the pass: a
+growth refinement's first round stops at a loose threshold, every round after
+it at the solver's full one. Asking fp32 for the latter means spending the
+whole iteration budget on a threshold below its noise floor — on a 1194-image
+capture that took the finishing passes from 48 s to 260 s.
 
 ## Layout
 
@@ -97,7 +134,8 @@ ba/          Problem (model registry + problem layout), Solver (LM, dense
 map/         Mapper, Bundle, CorrespondenceGraph, Merge, Profile,
                ModelOps (the passes over a *set* of models: merge validator,
                  audit, split, fold cut, prune -- shared, owned by neither)
-               Manager (the flat mapper's merge/grow/prune rounds)
+               Assemble (the schedule both mappers run once they have models:
+                 merge levels with growth and a joint solve, then the finish)
                Partition (view-graph normalized cut)
                Atoms (atoms reconstructed concurrently, one context per worker)
                Bottomup (the merge tree, and the schedule around it)
@@ -213,7 +251,8 @@ and exist to be turned off when attributing a change.
 
 Two things about the surface changed when it was unified, both deliberate:
 `auto --no-merge` now disables *merging* only, which is what it already meant on
-`map`; skipping the whole merge / grow / prune / reseed loop is `--no-manage`,
+`map`; skipping the merge / grow / reseed / split passes entirely is
+`--no-manage`,
 which now exists on both commands. And `auto` accepts every advanced flag
 `extract`, `match` and `map` accept, since it runs those stages — a run can be
 tuned without decomposing it into three commands, and the GUI's editor has one
@@ -227,7 +266,7 @@ PASS/FAIL and returns 0/1 — the same convention as `src/backend/tests/`.
 | binary | covers | needs a GPU |
 |---|---|---|
 | `sfm_sift_test` | GPU SIFT, matcher, batch decode, camera-model and format round trips | yes |
-| `sfm_map_test` | synthetic reconstruction end to end, incl. manage/audit/split | yes |
+| `sfm_map_test` | synthetic reconstruction end to end, incl. assembly/audit/split | yes |
 | `sfm_cholesky_test` | dense GPU Cholesky vs a CPU reference | yes |
 | `sfm_geometry_test` | F, H, E, P3P, triangulation, RANSAC, SVD/eigen kernels | no |
 | `sfm_merge_test` | Sim(3) algebra, model alignment, track splicing, fold detection | no |

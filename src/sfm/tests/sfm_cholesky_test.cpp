@@ -4,7 +4,13 @@
 //   sfm_cholesky_test [N] [--real float|double|df] [--device I]
 //
 // Prints PASS/FAIL and returns 0/1. See docs/testing.md.
+//
+//   sfm_cholesky_test --bench [--real ...]
+//
+// instead measures submit and dispatch overhead against problem size -- what a
+// solve costs before any arithmetic happens.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -89,14 +95,65 @@ int selftestChol(uint32_t n, SolverOptions opt) {
     return maxRel < tol ? 0 : 1;
 }
 
+// What a solve costs *besides* arithmetic: one queue submit and its fence, and
+// each dispatch-plus-barrier inside it. The mapper's bundle adjustments are
+// mostly tiny -- a forty-image atom's reduced system is a couple of hundred
+// wide -- and at that size the answer decides where the time goes and what is
+// worth optimizing. The blocked Cholesky costs 1 + 2(nb-1) + 2nb dispatches for
+// nb = ceil(n/32) blocks, so subtracting the empty submit and dividing gives
+// the per-dispatch figure directly.
+//
+// S is uploaded as the identity, which factors to itself: every repetition
+// does the same arithmetic on the same finite values, however many times it
+// runs.
+int benchDispatch(SolverOptions opt) {
+    printf("real=%s\n%6s %5s %11s %11s %11s %11s\n", realCfgName(opt.real), "n", "disp",
+           "empty ms", "chol ms", "per-disp us", "solves/s");
+    for (uint32_t n : {12u, 24u, 48u, 96u, 150u, 204u, 300u, 500u, 1000u}) {
+        const uint32_t nb = (n + 31) / 32;
+        const uint32_t ndisp = 1 + 2 * (nb - 1) + 2 * nb;
+        double t[2];  // empty submit, submit + the whole factor and solve
+        for (int mode = 0; mode < 2; mode++) {
+            BAProblem P;
+            P.n_dim = n;
+            BundleSolver solver(P, opt);
+            solver.init();
+
+            std::vector<double> packed((size_t)n * (n + 1) / 2, 0.0);
+            for (uint32_t i = 0; i < n; i++) packed[(size_t)i * (i + 1) / 2 + i] = 1.0;
+            std::vector<uint8_t> tmp;
+            packReals(tmp, packed.data(), packed.size(), opt.real);
+            solver.ctx().upload(solver.bufS(), tmp.data(), tmp.size());
+
+            const int reps = mode ? 100 : 500;
+            auto t0 = std::chrono::steady_clock::now();
+            for (int r = -5; r < reps; r++) {
+                if (r == 0) t0 = std::chrono::steady_clock::now();
+                VkCommandBuffer cb = solver.ctx().begin();
+                if (mode) solver.recordCholesky(cb);
+                solver.ctx().submit(cb);
+            }
+            t[mode] = 1e3 *
+                      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() /
+                      reps;
+        }
+        printf("%6u %5u %11.3f %11.3f %11.1f %11.0f\n", n, ndisp, t[0], t[1],
+               1e3 * (t[1] - t[0]) / ndisp, 1e3 / t[1]);
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
     uint32_t n = 500;
+    bool bench = false;
     SolverOptions opt;
     opt.verbose = false;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto next = [&]() { return std::string(argv[++i]); };
-        if (a == "--real") {
+        if (a == "--bench") {
+            bench = true;
+        } else if (a == "--real") {
             std::string s = next();
             opt.real = s == "float" ? RealCfg::F32 : s == "double" ? RealCfg::F64 : RealCfg::DF64;
         } else if (a == "--device") {
@@ -108,5 +165,5 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    return selftestChol(n, opt);
+    return bench ? benchDispatch(opt) : selftestChol(n, opt);
 }

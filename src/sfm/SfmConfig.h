@@ -36,7 +36,6 @@
 #include "sfm/feature/Sift.h"
 #include "sfm/geometry/TwoView.h"
 #include "sfm/map/Bottomup.h"
-#include "sfm/map/Manager.h"
 #include "sfm/map/Mapper.h"
 #include "sfm/map/Merge.h"
 
@@ -122,6 +121,11 @@ struct SfmConfig {
     ManagerOptions manager;
     MergeOptions merge;
     BottomUpOptions bup;
+    // The schedule both mappers run once they have models: merge levels with
+    // growth and a joint solve between them, then the finishing passes
+    // (sfm/map/Assemble.h). Its flags are spelled --bup-* for history; they are
+    // not the bottom-up mapper's alone.
+    AssembleOptions assemble;
     // How the mapper is scheduled: "flat" is one incremental reconstruction of
     // the whole capture, "bottom-up" reconstructs small atoms of the view graph
     // and merges them upwards (D57), and "auto" picks bottom-up at or above
@@ -271,6 +275,17 @@ struct SfmConfig {
       "trivial|huber|cauchy", "Robust loss used by mapping-time bundle adjustment")                 \
     F(mapper.ba_loss_param, "ba-loss-param", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",          \
       0, 1000, "", "Huber delta / Cauchy c, in extraction pixels")                                  \
+    F(mapper.seed_homography, "seed-homography", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",      \
+      0, 0, "", "Re-test a seed candidate for a planar or panoramic configuration on its own "      \
+      "inliers, rather than trusting verification's verdict")                                       \
+    F(mapper.ba_real, "ba-real", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,                \
+      "float|double|df",                                                                            \
+      "Scalar bundle adjustment computes in; df emulates double with a pair of floats, which "      \
+      "wins where fp64 throughput is a fraction of fp32")                                           \
+    F(mapper.ba_real_coarse, "ba-real-coarse", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,  \
+      "float|double|df",                                                                            \
+      "Scalar for solves another solve will redo -- growth refinements and merge-tree levels; "     \
+      "set equal to --ba-real to compute everything the same way")                                  \
     F(mapper.ba_solver, "ba-solver", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,            \
       "auto|dense|cg",                                                                              \
       "Linear solver for the reduced camera system; auto switches to CG above the size where "      \
@@ -294,24 +309,31 @@ struct SfmConfig {
       "mapper", 8, 100000, "", "Images a view-graph atom is split until it is under")               \
     F(bup.partition.overlap, "bup-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",           \
       0, 100000, "", "Images each atom borrows from its sibling, which is what a merge aligns on")  \
-    F(bup.max_rounds, "bup-rounds", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1, 100, "",       \
-      "Levels of the merge tree")                                                                   \
+    F(assemble.max_rounds, "bup-rounds", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1,           \
+      100, "", "Levels of the merge tree")                                                          \
     F(bup.atom.threads, "bup-atom-threads", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,        \
       1024, "", "Atoms reconstructed at once, each on its own Vulkan context; 0 for the default")   \
     F(bup.atom.ba_growth, "bup-atom-ba-growth", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1,    \
       1000000, "", "Model growth that triggers a bundle adjustment inside an atom")                 \
-    F(bup.coarse_joint_ba, "bup-coarse-ba", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,     \
-      "", "Run the merge tree's intermediate joint solves to the loose growth-phase tolerance")     \
+    F(assemble.joint_every, "bup-joint-every", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",        \
+      1, 100, "", "Merge-tree levels between joint solves over every model")                        \
+    F(bup.atom.tight_final_ba, "bup-atom-tight-final", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
+      "mapper", 0, 0, "", "Converge each atom fully before the merge tree re-solves it anyway")     \
+    F(assemble.coarse_joint_ba, "bup-coarse-ba", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",      \
+      0, 0, "",                                                                                     \
+      "Run the merge tree's intermediate joint solves to the loose growth-phase tolerance")         \
     F(bup.atom.init_trials, "bup-atom-init-trials", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",   \
       1, 1000, "", "Seed attempts for an atom's primary model")                                     \
     F(bup.atom.min_model_fraction, "bup-atom-min-fraction", CMD_AUTO | CMD_MAP, Tier::Advanced,     \
       "mapper", 0, 1, "", "Fraction of an atom its primary model must cover to be kept")            \
-    F(bup.joint_intrinsics, "bup-joint-intrinsics", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",   \
-      0, 0, "", "Bundle-adjust every model in one problem with the intrinsics shared per camera")   \
-    F(bup.grow_every, "bup-grow-every", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 100,      \
-      "", "Levels between growth passes over the models that did not merge; 0 disables")            \
-    F(bup.grow_budget_frac, "bup-grow-budget", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,     \
-      1000, "", "Images one growth pass may add to a model, as a fraction of what it holds")        \
+    F(assemble.joint_intrinsics, "bup-joint-intrinsics", CMD_AUTO | CMD_MAP, Tier::Advanced,        \
+      "mapper", 0, 0, "",                                                                           \
+      "Bundle-adjust every model in one problem with the intrinsics shared per camera")             \
+    F(assemble.grow_every, "bup-grow-every", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,       \
+      100, "", "Levels between growth passes over the models that did not merge; 0 disables")       \
+    F(assemble.grow_budget_frac, "bup-grow-budget", CMD_AUTO | CMD_MAP, Tier::Advanced,             \
+      "mapper", 0, 1000, "",                                                                        \
+      "Images one growth pass may add to a model, as a fraction of what it holds")                  \
     F(mapper.ba_growth_ratio, "ba-growth", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1, 100,    \
       "", "Model growth that triggers the next global bundle adjustment")                           \
     F(mapper.ba_growth_rtol, "ba-growth-rtol", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",        \
@@ -327,9 +349,9 @@ struct SfmConfig {
       2, 1000000, "", "Images a model must reach to be kept at all")                                \
     F(mapper.audit_min_evidence, "audit-evidence", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",    \
       0, 1000000, "", "Correspondences an image needs before the audit will judge its pose")        \
-    /* ---- manage rounds ---- */                                                                   \
-    F(manager.max_rounds, "rounds", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 1000, "",      \
-      "Merge / grow / prune / reseed rounds run until nothing changes")                             \
+    /* ---- assembling the models ---- */                                                           \
+    F(assemble.max_rounds, "rounds", CMD_AUTO | CMD_MAP, Tier::Alias, "manage", 1, 1000, "",        \
+      "Merge levels, run until one changes nothing")                                                \
     F(manager.do_merge, "merge", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",            \
       "Merge models that share images, on the Sim(3) those shared poses give (D43)")                \
     F(manager.do_grow, "grow", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",              \
@@ -347,13 +369,19 @@ struct SfmConfig {
       "no co-visibility (D46)")                                                                     \
     F(manager.duplicate.max_cut_fraction, "fold-max-cut", CMD_AUTO | CMD_MAP, Tier::Advanced,       \
       "manage", 0, 1, "", "Co-visibility that cut may sever, as a fraction of the model's total")   \
-    F(manager.do_joint_ba, "joint-ba", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",      \
+    F(assemble.joint_intrinsics, "joint-ba", CMD_AUTO | CMD_MAP, Tier::Alias, "manage", 0, 0, "",   \
       "Refine every component in one problem with intrinsics shared per camera group (D45)")        \
     F(manager.seam_min_agreement, "seam-min-agreement", CMD_AUTO | CMD_MAP, Tier::Advanced,         \
       "manage", 0, 1, "",                                                                           \
       "Verified pairs crossing a merge seam that must still hold in the merged model; 0 disables")  \
     F(manager.seam_min_pairs, "seam-min-pairs", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",       \
       1, 100000, "", "Cross-seam pairs below which the seam test has nothing to judge on")          \
+    F(manager.seam_rescue_frac, "seam-rescue", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",        \
+      0, 1, "",                                                                                     \
+      "Median cross-seam pair a refused merge must still explain to earn one refinement and a "     \
+      "second verdict; 0 refuses outright")                                                         \
+    F(manager.seam_max_rescues, "seam-max-rescues", CMD_AUTO | CMD_MAP, Tier::Advanced,             \
+      "manage", 0, 100000, "", "Refinements the seam rescue may spend in one merge pass")           \
     /* ---- merging ---- */                                                                         \
     F(merge.max_reproj_error, "max-error", CMD_MERGE, Tier::Advanced, "merge", 0.1, 1000, "",       \
       "Alignment inlier threshold in pixels; looser than the mapper's, as the two models were "     \
@@ -364,6 +392,11 @@ struct SfmConfig {
       "Shared images an alignment needs; two determine a Sim(3), three give it a vote")             \
     F(merge.min_common_images, "merge-min-common", CMD_AUTO | CMD_MAP, Tier::Advanced, "merge",     \
       2, 1000000, "", "Shared images an alignment needs in the merge step")                         \
+    F(merge.splice_arbitrate_inliers, "merge-arbitrate", CMD_AUTO | CMD_MAP | CMD_MERGE,            \
+      Tier::Advanced, "merge", 0, 1000000, "",                                                      \
+      "Shared images whose poses agree, past which a disagreement about the shape of what two "     \
+      "models share is arbitrated by the cross-seam test instead of refusing the merge; "           \
+      "0 always refuses")                                                                           \
     F(merge.min_inlier_ratio, "min-inlier-ratio", CMD_MERGE, Tier::Advanced, "merge", 0, 1, "",     \
       "Fraction of the shared images an alignment must explain")                                    \
     F(merge.filter_reproj_error, "filter-error", CMD_MERGE, Tier::Advanced, "merge", 0, 1000, "",   \

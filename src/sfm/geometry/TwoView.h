@@ -43,6 +43,15 @@ struct TwoViewOptions {
     RansacOptions ransac;
     int min_num_inliers = 15;
     double max_H_inlier_ratio = 0.8;
+    // Fit the homography too, or take the caller's word that this pair is not
+    // planar or panoramic. Verification itself always fits it -- this is the
+    // test. A caller re-running the estimate on a pair verification already
+    // labelled, over the inliers verification kept, is asking a settled
+    // question from less data, and paying for the more expensive of the two
+    // RANSACs to do it: on a non-planar pair H's inlier ratio is low, so its
+    // trial count adapts into the hundreds while F, fed its own inliers,
+    // converges in a handful. That caller is the mapper's seed search.
+    bool estimate_homography = true;
     // Optional calibrated pose recovery from the F inliers.
     bool recover_pose = false;
     Mat3 K1 = mat3Identity(), K2 = mat3Identity();
@@ -82,7 +91,9 @@ inline void selectTwoViewModel(TwoViewGeometry& g, const RansacReport<Mat3>& fRe
     }
     // A high H-inlier ratio means a planar scene or pure rotation, where the
     // epipolar geometry is degenerate (COLMAP max_H_inlier_ratio = 0.8).
-    double hRatio = (double)hRep.num_inliers / std::max(1, fRep.num_inliers);
+    double hRatio = opt.estimate_homography
+                        ? (double)hRep.num_inliers / std::max(1, fRep.num_inliers)
+                        : 0.0;
     if (hRatio > opt.max_H_inlier_ratio) {
         g.config = TwoViewConfig::PlanarOrPanoramic;
         g.inlier_mask = hRep.inlier_mask;
@@ -118,15 +129,19 @@ inline TwoViewGeometry estimateTwoViewBearing(const std::vector<Vec3>& b1,
     auto fRes = [&](const Mat3& E, int i) { return sampsonSqBearing(E, b1[i], b2[i]); };
     RansacReport<Mat3> fRep = loransac<Mat3>(n, 7, fFit, fRefit, fRes, opt.ransac);
 
-    auto hFit = [&](const std::vector<int>& s) {
-        std::vector<detail::HModel> out;
-        for (const Mat3& H : estimateHomographyBearing(b1, b2, s)) out.push_back({H, inverse3(H)});
-        return out;
-    };
-    auto hRes = [&](const detail::HModel& m, int i) {
-        return angularTransferSq(m.H, m.Hinv, b1[i], b2[i]);
-    };
-    RansacReport<detail::HModel> hRep = loransac<detail::HModel>(n, 4, hFit, hFit, hRes, opt.ransac);
+    RansacReport<detail::HModel> hRep;
+    if (opt.estimate_homography) {
+        auto hFit = [&](const std::vector<int>& s) {
+            std::vector<detail::HModel> out;
+            for (const Mat3& H : estimateHomographyBearing(b1, b2, s))
+                out.push_back({H, inverse3(H)});
+            return out;
+        };
+        auto hRes = [&](const detail::HModel& m, int i) {
+            return angularTransferSq(m.H, m.Hinv, b1[i], b2[i]);
+        };
+        hRep = loransac<detail::HModel>(n, 4, hFit, hFit, hRes, opt.ransac);
+    }
 
     detail::selectTwoViewModel(g, fRep, hRep, opt);
     if (g.config == TwoViewConfig::Degenerate || g.config == TwoViewConfig::Undefined) return g;
@@ -157,15 +172,18 @@ inline TwoViewGeometry estimateTwoView(const std::vector<Vec2>& p1, const std::v
     RansacReport<Mat3> fRep = loransac<Mat3>(n, 7, fFit, fRefit, fRes, opt.ransac);
 
     // --- Homography ---
-    auto hFit = [&](const std::vector<int>& s) {
-        std::vector<detail::HModel> out;
-        for (const Mat3& H : estimateHomography(p1, p2, s)) out.push_back({H, inverse3(H)});
-        return out;
-    };
-    auto hRes = [&](const detail::HModel& m, int i) {
-        return symmetricTransferSq(m.H, m.Hinv, p1[i], p2[i]);
-    };
-    RansacReport<detail::HModel> hRep = loransac<detail::HModel>(n, 4, hFit, hFit, hRes, opt.ransac);
+    RansacReport<detail::HModel> hRep;
+    if (opt.estimate_homography) {
+        auto hFit = [&](const std::vector<int>& s) {
+            std::vector<detail::HModel> out;
+            for (const Mat3& H : estimateHomography(p1, p2, s)) out.push_back({H, inverse3(H)});
+            return out;
+        };
+        auto hRes = [&](const detail::HModel& m, int i) {
+            return symmetricTransferSq(m.H, m.Hinv, p1[i], p2[i]);
+        };
+        hRep = loransac<detail::HModel>(n, 4, hFit, hFit, hRes, opt.ransac);
+    }
 
     detail::selectTwoViewModel(g, fRep, hRep, opt);
     if (g.config == TwoViewConfig::Degenerate || g.config == TwoViewConfig::Undefined) return g;

@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <memory>
 #include <vector>
@@ -26,6 +27,10 @@
 #include "sfm/vk/VkContext.h"
 
 enum class RealCfg { F32, F64, DF64 };
+
+inline RealCfg realCfgFromName(const std::string& s) {
+    return s == "float" ? RealCfg::F32 : s == "df" ? RealCfg::DF64 : RealCfg::F64;
+}
 
 inline const char* realCfgName(RealCfg c) {
     switch (c) {
@@ -69,6 +74,19 @@ inline void unpackReals(std::vector<double>& out, const uint8_t* v, size_t n, Re
 enum class SolverSel { Auto, Dense, CG };
 enum class CgFallback { Auto, On, Off };
 
+// Raised, before anything is allocated, when the chosen path does not fit the
+// VRAM budget and the caller asked to be told rather than to find out from the
+// driver. There is nothing below CG to fall back to -- its footprint is the
+// problem data plus a few vectors -- so the only answer is a smaller problem,
+// and only the caller knows how to make one (Mapper::jointRefine splits its
+// models into batches).
+struct BAOverBudget : std::runtime_error {
+    BAOverBudget(double need, double budget)
+        : std::runtime_error("bundle adjustment needs more device memory than the budget allows"),
+          need_mb(need), budget_mb(budget) {}
+    double need_mb, budget_mb;
+};
+
 struct SolverOptions {
     RealCfg real = RealCfg::F64;
     float loss_param = 1.0f;      // Huber delta / Cauchy c (unused by trivial loss)
@@ -78,6 +96,10 @@ struct SolverOptions {
     int patience = 10;
     SolverSel solver = SolverSel::Auto;
     double vram_budget_mb = 0;    // 0 = 90% of the device-local heap
+    // Throw BAOverBudget instead of warning and trying anyway. For a caller
+    // that can split the problem; the default keeps the old behaviour, since a
+    // caller that cannot split is better served by an attempt than by a refusal.
+    bool over_budget_throws = false;
     int cg_max_iters = 100;       // CG iteration cap per LM step
     double cg_tol = 0.1;          // relative residual tolerance eta
     CgFallback cg_fallback = CgFallback::Auto;
@@ -429,11 +451,7 @@ public:
                         if (opt_.verbose)
                             fprintf(stderr, "iter %3d: CG hit %u-iteration cap, dense fallback\n",
                                     it, usedCap);
-                        VkCommandBuffer rb = ctx_.begin();
-                        ctx_.copy(rb, bPosesBak_, bPoses_, bPoses_.size);
-                        ctx_.copy(rb, bIntrBak_, bIntr_, bIntr_.size);
-                        ctx_.copy(rb, bPointsBak_, bPoints_, bPoints_.size);
-                        ctx_.submit(rb);
+                        restore_pending_ = true;
                         cb = ctx_.begin();
                         recordIteration(cb, (float)damping, true, densePath_);
                         ctx_.submit(cb);
@@ -466,11 +484,7 @@ public:
                 reject_mult = 2.0;
             } else {
                 // reject: restore parameters; the assembly snapshot stays valid
-                VkCommandBuffer rb = ctx_.begin();
-                ctx_.copy(rb, bPosesBak_, bPoses_, bPoses_.size);
-                ctx_.copy(rb, bIntrBak_, bIntr_, bIntr_.size);
-                ctx_.copy(rb, bPointsBak_, bPoints_, bPoints_.size);
-                ctx_.submit(rb);
+                restore_pending_ = true;
                 if (!std::isfinite(newCost)) {
                     if (++noimprov >= opt_.patience) break;
                 } else
@@ -482,6 +496,9 @@ public:
                 reuse = true;
             }
         }
+        // The last iteration may have been rejected; what the caller downloads
+        // must be the last *accepted* parameters.
+        flushRestore();
         stats_.final_cost = cost;
         auto t1 = std::chrono::high_resolution_clock::now();
         stats_.solve_seconds = std::chrono::duration<double>(t1 - t0).count();
@@ -637,11 +654,13 @@ private:
         // to -- its footprint is the problem data plus a few vectors -- so this
         // is the point at which the answer is a smaller problem or more memory.
         const double needMB = (useCG_ ? cgMB : denseMB) + (haveFallback_ ? denseMB : 0);
-        if (needMB > budget)
+        if (needMB > budget) {
+            if (opt_.over_budget_throws) throw BAOverBudget(needMB, budget);
             fprintf(stderr,
                     "[vk] warning: the %s solver needs ~%.0f MB and the budget is %.0f MB; "
                     "this may run out of device memory\n",
                     useCG_ ? "cg" : "dense", needMB, budget);
+        }
 
         // host tables for the chosen paths
         P_.use_pair_schur = false;
@@ -850,7 +869,35 @@ private:
         }
     }
 
+    // Put the parameters back where the last accepted step left them. A reject
+    // (and the CG fallback, which is a reject that retries) needs this before
+    // anything else touches them -- but it is three buffer copies, and a submit
+    // of its own costs a fence round trip on a device several solvers are
+    // sharing. So the reject only *marks* it, and the next command buffer to be
+    // recorded carries it. Nothing runs in between: the LM loop either records
+    // another iteration or leaves, and leaving flushes it (see solve()).
+    void recordRestore(VkCommandBuffer cb) {
+        ctx_.copy(cb, bPosesBak_, bPoses_, bPoses_.size);
+        ctx_.copy(cb, bIntrBak_, bIntr_, bIntr_.size);
+        ctx_.copy(cb, bPointsBak_, bPoints_, bPoints_.size);
+        ctx_.barrier(cb);
+    }
+
+    // Emit a marked restore on its own, for the one caller that cannot defer:
+    // the loop is over and the parameters are about to be read back.
+    void flushRestore() {
+        if (!restore_pending_) return;
+        restore_pending_ = false;
+        VkCommandBuffer cb = ctx_.begin();
+        recordRestore(cb);
+        ctx_.submit(cb);
+    }
+
     void recordIteration(VkCommandBuffer cb, float damping, bool reuse, LinSolve path) {
+        if (restore_pending_) {
+            restore_pending_ = false;
+            recordRestore(cb);
+        }
         recordAssembly(cb, damping, reuse, path);
 
         if (path == LinSolve::CG)
@@ -937,6 +984,7 @@ private:
     GpuBuffer bPoses_, bIntr_, bPoints_, bObsRanges_, bModelObs_, bJcOff_;
     GpuBuffer bJp_, bS_, bG_, bApp_, bBp_, bCost_;
     GpuBuffer bPosesBak_, bIntrBak_, bPointsBak_;
+    bool restore_pending_ = false;  // a rejected step's parameters are still live
     GpuBuffer bBp0_, bJc_, bRes_;
     GpuBuffer bPairEntries_, bPairChunks_, bW_, bYp_, bY_;
     GpuBuffer bCamRanges_, bCamObs_, bCamChunks_, bCgR_, bCgZ_, bCgP_, bCgSp_;

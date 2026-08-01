@@ -75,3 +75,8 @@ be re-derived or re-attempted: D25, D26, D27, D11, D16, D47, D50, D45, D46.
 | D58 | A seed retry claims what it registered, so the retry looks where the last one stopped instead of rebuilding it |
 | D59 | Atoms are reconstructed concurrently, each by its own mapper over its own sub-database, one Vulkan context per worker |
 | D60 | The bottom-up mapper is the whole mapper: it finishes with the manage loop's own passes instead of handing over to it |
+| D61 | Bundle adjustment stays in fp64: floating-point atomics make fp32 a lottery, and the losing tickets are worse reconstructions, not just different ones |
+| D62 | The seed search re-tests planar/panoramic on the inliers, because verification judged the putative matches and the two disagree |
+| D63 | Both mappers share one assembler: merge levels with growth and a joint solve, then the finishing passes once -- there is no manage loop |
+| D64 | A merge with a well-determined alignment is not refused for disagreeing about shape: it is refined and re-judged on evidence the alignment never used |
+| D65 | A joint solve that does not fit the device is split into batches, because the models it spans are coupled only through the intrinsics |

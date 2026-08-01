@@ -14,7 +14,7 @@
 // what the GUI will edit. Flags that do not name one scalar field are parsed
 // here, before the table is offered the token, so a hand-parsed name always
 // wins -- `map --audit` (run an audit pass) has to beat the table's `--audit`
-// / `--no-audit` switch for the manage loop's audit stage.
+// / `--no-audit` switch for the audit pass.
 //
 // The self-checks are separate binaries (src/sfm/tests/, one per area).
 #include <algorithm>
@@ -45,7 +45,7 @@
 #include "sfm/feature/Sift.h"
 #include "sfm/feature/Verification.h"
 #include "sfm/geometry/TwoView.h"
-#include "sfm/map/Manager.h"
+#include "sfm/map/Assemble.h"
 #include "sfm/map/Mapper.h"
 #include "sfm/map/Merge.h"
 
@@ -92,7 +92,7 @@ static void ownOptionsAuto(FILE* out) {
     helpLine(out, "--no-masks", "",
         "Ignore a masks directory even if one is sitting beside the images.");
     helpLine(out, "--no-manage", "",
-        "Skip the whole merge / grow / prune / reseed loop, keeping the mapper's raw output.");
+        "Skip merging, growing, reseeding and splitting, keeping the mapper's raw models.");
     helpLine(out, "-h, --help", "", "Show this help and exit.");
 }
 static void ownOptionsExtract(FILE* out) {
@@ -112,7 +112,7 @@ static void ownOptionsMap(FILE* out) {
         "Audit every pose against the correspondence graph before anything else, and "
         "re-register what the model cannot support. Use with --resume on models from elsewhere.");
     helpLine(out, "--no-manage", "",
-        "Skip the whole merge / grow / prune / reseed loop.");
+        "Skip merging, growing, reseeding and splitting.");
     helpLine(out, "-h, --help", "", "Show this help and exit.");
 }
 static void ownOptionsMerge(FILE* out) {
@@ -188,8 +188,8 @@ static const CommandInfo kCommands[] = {
     {"map", CMD_MAP,
      "incremental reconstruction: matches to a COLMAP sparse model",
      "<MATCHES.BIN> <FEATURE_DIR> -o SPARSE_DIR [options]",
-     "  Seed, register, triangulate, bundle-adjust, filter -- then the merge / grow /\n"
-     "  prune / reseed rounds. A capture that is not one connected view graph\n"
+     "  Seed, register, triangulate, bundle-adjust, filter -- then the merge levels and\n"
+     "  the finishing passes. A capture that is not one connected view graph\n"
      "  reconstructs as several models, written to <out>/0, <out>/1, ... largest first\n"
      "  (COLMAP's layout); they are then merged where they share images and grown into\n"
      "  whatever else they can register.\n"
@@ -585,26 +585,43 @@ static bool readModels(const std::string& dir, std::vector<Reconstruction>& mode
 // the flat schedule is both faster and better, because nothing is ever cut and
 // nothing has to be glued back.
 //
-// Sets `managed` when the mapper has already done the manage loop's work. The
-// bottom-up tree has: merging, growing and pruning are its levels, and it
-// finishes with the same cleanup passes over its own output (D57). Running the
-// loop after it repeats all of that at full model size, which on a 5402-image
-// capture cost more than the mapping stage it followed.
+// Either way the models are then assembled by the same schedule (D63,
+// sfm/map/Assemble.h): merge levels with growth and a joint solve between them,
+// then the finishing passes. There is no separate manage stage -- it drove the
+// same operations in rounds, over models nothing had touched, and on a
+// 5356-image capture cost more than the mapping it followed.
+// What became of the mapper's models: one line, because a capture that comes
+// back in several pieces is the case a user has to be able to reason about, and
+// the counts say whether that was the view graph's doing or a refused merge.
+static void printAssembly(const AssembleStats& ast, size_t models, const char* lead = "assemble: ") {
+    if (!ast.models_in) return;
+    const ManagerStats& f = ast.finish;
+    printf("%s%6.2f s  %zu -> %zu model(s) over %zu level(s), %zu merged, %zu refused "
+           "(%zu rescued by a refinement), %zu grown, %zu repaired / %zu dropped by the audit, "
+           "%zu -> %zu images covered\n",
+           lead, ast.t_merge + ast.t_ba + ast.t_grow + ast.finishSecs(), ast.models_in, models,
+           ast.rounds, ast.merges, ast.merges_refused, f.seam_rescued, ast.grown_images,
+           f.audited_repaired, f.audited_out, f.covered_before, f.covered_after);
+}
+
 static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDatabase& db,
                                              const std::vector<FeatureSet>& feats, SfmConfig& cfg,
-                                             bool& managed) {
-    managed = false;
+                                             AssembleStats& ast) {
     const bool bup = cfg.mapper_mode == "bottom-up" || cfg.mapper_mode == "hierarchical" ||
                      (cfg.mapper_mode == "auto" && db.images.size() >= cfg.bup.min_images);
-    if (!bup) return mapper.run();
+    AssembleOptions ao = cfg.assemble;
+    ao.verbose = !cfg.quiet;
+    if (!bup) {
+        ao.tag = "map";
+        return assembleModels(mapper, mapper.run(), cfg.manager, ao, ast);
+    }
+    ao.tag = "bup";
     BottomUpStats bs;
     BottomUpOptions bo = cfg.bup;
     bo.verbose = !cfg.quiet;
     std::vector<Reconstruction> models =
-        bottomUpReconstruct(mapper, db, feats, bo, cfg.manager, bs);
-    // Unless the capture was too small to be cut into a tree at all, in which
-    // case what ran was the flat mapper and the loop is exactly what it needs.
-    managed = bs.atoms >= 2;
+        bottomUpReconstruct(mapper, db, feats, bo, cfg.manager, ao, bs);
+    ast = bs.assemble;
     return models;
 }
 
@@ -614,7 +631,7 @@ static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDataba
 // "especially when sharing intrinsic parameters between multiple images",
 // which is why a camera group needs `pp_min_images` behind it to qualify.
 //
-// Runs after the manager, on models nothing else will touch, so a group whose
+// Runs after assembly, on models nothing else will touch, so a group whose
 // principal point turns out to be badly conditioned can only spoil its own
 // intrinsics -- there is no growth pass left to build on the result. Mapper::
 // polish skips models with more than one camera group; measured, the gain
@@ -631,27 +648,6 @@ static std::vector<Reconstruction> polishModels(Mapper& mapper,
         fprintf(stderr, "[map] final principal-point refinement over %zu model(s), %.1f s\n",
                 models.size(), secs);
     return models;
-}
-
-// The post-mapping loop (D44): merge, grow, prune, reseed until a round changes
-// nothing. Shared by `auto` and `map`; needs the mapper because growing and
-// refining are the mapper's own operations over the same feature database.
-static std::vector<Reconstruction> manageModels(Mapper& mapper,
-                                                std::vector<Reconstruction> models,
-                                                const ManagerOptions& mgopt, ManagerStats& st,
-                                                double& secs) {
-    const double t0 = now();
-    ModelManager mgr(mapper, mgopt);
-    std::vector<Reconstruction> out = mgr.run(std::move(models));
-    st = mgr.stats();
-    secs = now() - t0;
-    return out;
-}
-
-// Is there anything for the manage loop to do? `--no-manage` clears all five,
-// and clearing them individually has to mean the same thing.
-static bool manageEnabled(const ManagerOptions& m) {
-    return m.do_merge || m.do_grow || m.do_reseed || m.do_split || m.do_duplicate_split;
 }
 
 // Feature stems carry no extension; put the real filename (relative to the
@@ -1324,7 +1320,7 @@ static int cmdMap(int argc, char** argv) {
             output = argv[++i];
             continue;
         }
-        // Before the table, which also owns "audit" -- as the *manage* loop's
+        // Before the table, which also owns "audit" -- as the assembler's
         // audit stage (--no-audit). Here the positive spelling is the one-shot
         // pass over adopted models, which is what it has always meant.
         if (a == "--audit") { audit_first = true; continue; }
@@ -1430,9 +1426,9 @@ static int cmdMap(int argc, char** argv) {
 
     Mapper mapper(db, feats, opt, cs.ids);
     std::vector<Reconstruction> models;
-    bool managed = false;  // the bottom-up mapper does the manage loop's work itself
+    AssembleStats ast;
     if (cfg.resume.empty()) {
-        models = runMapper(mapper, db, feats, cfg, managed);
+        models = runMapper(mapper, db, feats, cfg, ast);
     } else {
         // Adopt what a previous run wrote and work on it instead. The models
         // must come from this database (image ids are positions in it); adopt()
@@ -1511,25 +1507,16 @@ static int cmdMap(int argc, char** argv) {
         }
     }
 
-    ManagerStats mst;
-    double t_manage = 0;
-    if (!managed && manageEnabled(mgopt))
-        models = manageModels(mapper, std::move(models), mgopt, mst, t_manage);
     if (cfg.final_principal_point) {
         double t_pp = 0;
         models = polishModels(mapper, std::move(models), opt.verbose, t_pp);
     }
-    if (mst.rounds)
-        printf("manage: %zu round(s), %zu merge(s), %zu image(s) registered by growth, "
-               "%zu repaired / %zu dropped by the audit, %zu model(s) covering %zu -> %zu "
-               "images, %.1f s\n",
-               mst.rounds, mst.merges, mst.grown_images, mst.audited_repaired, mst.audited_out,
-               models.size(), mst.covered_before, mst.covered_after, t_manage);
+    printAssembly(ast, models.size());
 
     resolveImageNames(models, cfg.image_dir);
-    // The mapper reported its own stage when run() returned; the manage loop
-    // adds to the same counters and would otherwise go unreported.
-    g_map_prof.report(0, "map+manage");
+    // The mapper reported its own stage when run() returned; the passes that
+    // assemble its models add to the same counters.
+    g_map_prof.report(0, "map");
 
     const Reconstruction& rec = models.front();
     double mean = 0, median = 0;
@@ -1816,16 +1803,10 @@ static int cmdAuto(int argc, char** argv) {
 
     t0 = now();
     Mapper mapper(db, feats, mapopt, cs.ids);
-    bool managed = false;  // the bottom-up mapper does the manage loop's work itself
-    std::vector<Reconstruction> models = runMapper(mapper, db, feats, cfg, managed);
+    AssembleStats ast;
+    std::vector<Reconstruction> models = runMapper(mapper, db, feats, cfg, ast);
     double t_map = now() - t0;
 
-    // ---- 3b. merge, grow, prune, reseed until nothing changes (D43, D44) ----
-    ManagerStats mst;
-    double t_manage = 0;
-    if (!managed && manageEnabled(cfg.manager) &&
-        (models.size() > 1 || distinctRegistered(models) < est.images))
-        models = manageModels(mapper, std::move(models), cfg.manager, mst, t_manage);
     if (cfg.final_principal_point) {
         double t_pp = 0;
         models = polishModels(mapper, std::move(models), verbose, t_pp);
@@ -1835,9 +1816,9 @@ static int cmdAuto(int argc, char** argv) {
     resolveImageNames(models, imagedir);
     writeModels(models, sparsedir, verbose);
 
-    // The mapper reports its own breakdown when `run()` returns; the manage
-    // loop's passes accumulate into the same counters and would go unreported.
-    g_map_prof.report(t_map + t_manage, "map+manage");
+    // The mapper reports its own breakdown when `run()` returns; the passes
+    // that assemble its models accumulate into the same counters.
+    g_map_prof.report(t_map, "map");
 
     // ---- report ----
     const Reconstruction& rec = models.front();
@@ -1863,13 +1844,8 @@ static int cmdAuto(int argc, char** argv) {
            (unsigned long long)mstats.putative);
     printf("  map     : %6.2f s  %u/%zu images registered, %zu points, %u camera(s)\n", t_map,
            reg, est.images, rec.points3D.size(), (uint32_t)rec.cameras.size());
-    if (mst.rounds)
-        printf("  manage  : %6.2f s  %zu -> %zu models, %zu merged, %zu refused, %zu grown, "
-               "%zu repaired, %zu dropped, %zu -> %zu covered\n",
-               t_manage, mst.models_before, mst.models_after, mst.merges, mst.merges_refused,
-               mst.grown_images, mst.audited_repaired, mst.audited_out, mst.covered_before,
-               mst.covered_after);
-    printf("  total   : %6.2f s\n", t_extract + t_match + t_map + t_manage);
+    printAssembly(ast, models.size(), "  assemble: ");
+    printf("  total   : %6.2f s\n", t_extract + t_match + t_map);
     printf("  model   : %.3f px mean reprojection (%.3f median) over %zu observations\n", mean,
            median, nobs);
     if (models.size() > 1) {
