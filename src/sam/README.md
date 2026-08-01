@@ -87,6 +87,26 @@ Not ported: EdgeTAM, which sam3.cpp also carries. The backbone seam is one
 function (`model::encode_image`), so adding it is bounded work; the loader
 rejects unknown files by magic rather than mis-reading them.
 
+## VRAM lifetime
+
+The pool under `src/nn/` is **process-wide and grow-only**, so a destroyed
+`Session` frees nothing by itself: a released checkpoint would sit in VRAM
+until the process exited. `Session::unload()` releases the weights, the derived
+tables and the current frame's features, and the destructor calls it. That
+matters because everything that segments in this repository goes on to do
+something else on the same GPU -- a reconstruction, a training run -- and 2 GB
+is most of a laptop card.
+
+A `Tracker`'s memory bank is its own: slot keys carry the tracker's id in their
+high 16 bits, because one masking prompt of `"people; cars"` builds one tracker
+per phrase and the pool is shared. `~Tracker` frees its own slots and only its
+own.
+
+The GUI takes this one step further and calls `nn::shutdown()` when a dataset
+job ends (`DatasetPrep::run`), which destroys the device outright; the mask
+preview only unloads the model, since reopening the panel is common and
+rebuilding pipelines for the ~50 MB the device holds is a bad trade.
+
 ## The mask policy
 
 `Masking.h` is the semantic layer, and it is deliberately the *only* copy: the
@@ -108,11 +128,11 @@ way is the same dataset.
 ## Using it
 
 ```bash
-ssplat-sam devices
-ssplat-sam segment --model sam3-q4_0.ggml --image street.jpg --text "school bus" --out out/
-ssplat-sam segment --model sam3-q4_0.ggml --image cat.jpg --point 315,250 --out out/
-ssplat-sam track   --model sam3-q4_0.ggml --frames frames/ --out masks/ --text "person; car"
-ssplat-sam extract clip.mp4 --skip 30 --model sam3-q4_0.ggml --text "person"
+ssplat sam devices
+ssplat sam segment --model sam3-q4_0.ggml --image street.jpg --text "school bus" --out out/
+ssplat sam segment --model sam3-q4_0.ggml --image cat.jpg --point 315,250 --out out/
+ssplat sam track   --model sam3-q4_0.ggml --frames frames/ --out masks/ --text "person; car"
+ssplat sam extract clip.mp4 --skip 30 --model sam3-q4_0.ggml --text "person"
 ```
 
 ```cpp
@@ -134,7 +154,7 @@ published model work unchanged. Quantized files (`q4_0`, `q4_1`, `q8_0`) are
 dequantized to fp16 during upload: they shrink the *file*, not VRAM.
 
 Measured on the released SAM 3 checkpoint at its native 1008×1008
-(`ssplat-sam ... --vram` prints it):
+(`ssplat sam ... --vram` prints it):
 
 ```
   weights            weights        1658.5 MiB   (7 chunks)
@@ -173,6 +193,34 @@ deep, which is 480 GFLOP per frame once the bank is full. `--memory-frames N`
 is linear in it; fp16 with cooperative matrix would be the real fix and is
 outside the Vulkan 1.2 core baseline this module keeps.
 
+**Masking a capture costs one backbone pass per frame, and there is no way
+around it.** On an RTX 5070 Laptop, over the same 1920×1080 frames with SAM 3
+q4_0:
+
+| | ms/frame |
+|---|---|
+| `track` (frames already on disk) | 1520 |
+| `extract --mask-mode video` (decode + select + mask + write) | 1542 |
+| `extract --mask-mode image` (no memory bank) | 1240 |
+
+Decoding the video is 1% of that, so the in-process decode path is neither
+faster nor slower than masking frames that are already on disk — the report
+that it was is not reproducible. GPU time is ~1.4 s of the 1.55, 91% of it in
+`gemm_nt_big` and `flash_attn`.
+
+The levers a user actually has are the checkpoint (SAM 2.1 Tiny is ~3× faster,
+at the cost of text prompts), the number of frames, and `--mask-mode image`,
+which drops the tracker head and memory attention for 20%. That last one is
+**not** the default: the memory bank is what carries an instance through a
+frame the detector misses, and losing an object for one frame of a
+reconstruction costs more than 20% of the time saved. `--img-size` would be the
+obvious other lever and is not available for SAM 3 — its rotary tables ship
+sized for a 72×72 token grid and the loader refuses anything else.
+
+Which is why the GUI reports a rate and an estimate per frame rather than a
+bare counter — at a minute per forty frames, "how long" is the only question a
+progress line can usefully answer.
+
 Where the kernel time went, and what did *not* work, is
 [`src/nn/README.md`](../nn/README.md#what-the-kernels-are-actually-bound-by).
 
@@ -209,7 +257,7 @@ is sound, the memory bank and association logic run. It does not prove
 numerical fidelity, since the weights are noise; that is `nn_ops_test`'s job.
 
 Neither substitutes for running a released checkpoint, which is how the
-remaining shape and grid-size assumptions were shaken out. `ssplat-sam segment`
+remaining shape and grid-size assumptions were shaken out. `ssplat sam segment`
 on a real model, and the GUI's mask preview, are part of the manual checklist
 before a change lands.
 

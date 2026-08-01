@@ -101,7 +101,7 @@ def entrypoint_body(config: ViewerConfig) -> None:
 
     The Renderer here exists only to upload the PLY into the engine world; the
     rendering, HTTP serving and the browser client are all the native path
-    (src/app/webviewer/), the same one ssplat-train and ssplat-gui use. An
+    (src/app/webviewer/), the same one `ssplat train` and the GUI use. An
     empty PostSplitCameras means the viewer has no training cameras to draw --
     a bare PLY has none.
     """

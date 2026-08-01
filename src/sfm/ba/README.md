@@ -29,7 +29,7 @@ sfm/ba/
   Problem.h          model registry, camera groups, column layout, per-model obs lists,
                        BAL problem loading
   Solver.h           LM driver (records one command buffer per iteration)
-src/app/cli/sfm_ba.cpp   the `ssplat-sfm ba` subcommand: BAL problems + PLY dump
+src/app/cli/sfm_ba.cpp   the `ssplat sfm ba` subcommand: BAL problems + PLY dump
 ```
 
 `spirv_tool nocontract` (src/backend/vulkan/shaders/) is the SPIR-V post-pass
@@ -41,9 +41,9 @@ regenerates the minimax transcendental coefficients in `df.slang` /
 
 ```bash
 bash build_develop.bash -DSSPLAT_BACKEND=vulkan -DSSPLAT_BUILD_CLI=ON
-./build/ssplat-sfm ba /path/to/bal/problem-16-22106-pre.txt --real double
-./build/ssplat-sfm ba problem.txt --real df --loss huber --loss-param 1.0 --ply out
-./build/ssplat-sfm ba /path/to/sparse/0 -o refined/       # a COLMAP model
+./build/ssplat sfm ba /path/to/bal/problem-16-22106-pre.txt --real double
+./build/ssplat sfm ba problem.txt --real df --loss huber --loss-param 1.0 --ply out
+./build/ssplat sfm ba /path/to/sparse/0 -o refined/       # a COLMAP model
 ./build/sfm_cholesky_test 500 --real df          # dense solver unit test
 ```
 
@@ -330,7 +330,7 @@ Notes:
 
 ### On real captures
 
-One global BA (`ssplat-sfm ba <sparse dir>`, Huber 2 px, fp64), same machine.
+One global BA (`ssplat sfm ba <sparse dir>`, Huber 2 px, fp64), same machine.
 The interesting axis is camera *sharing*: all of these have one camera group
 behind every image, which is what used to force the dense path.
 
@@ -375,4 +375,4 @@ peak (the largest single BA being 6372 images / 12.7 M observations).
   CUDA prototype).
 - The BAL loader covers the Snavely models only. Every other camera model
   reaches the solver through `sfm/map/Bundle.h` instead, which is what the
-  mapper uses; `ssplat-sfm ba` is a solver benchmark, not a general front end.
+  mapper uses; `ssplat sfm ba` is a solver benchmark, not a general front end.

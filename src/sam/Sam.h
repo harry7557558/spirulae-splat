@@ -141,6 +141,15 @@ public:
     bool loadModel(const ModelParams& params);
     bool isLoaded() const;
 
+    // Frees the weights, the derived tables and the current frame's features,
+    // and returns the session to "no model loaded". Called by the destructor,
+    // so this is only needed to hand a couple of gigabytes back early -- an
+    // application that segments and then does something else on the same GPU
+    // (a reconstruction, a training run) wants it before that starts.
+    //
+    // Every Tracker built from this session must already be destroyed.
+    void unload();
+
     // True when the checkpoint carries the text encoder and detector; a
     // visual-only checkpoint supports segmentVisual() and propagation only.
     bool supportsTextPrompts() const;

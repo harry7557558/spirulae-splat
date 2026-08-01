@@ -217,6 +217,12 @@ public:
     void reset() { head_ = 0; }
     void reserve(VkDeviceSize bytes);
 
+    // Hands the backing buffer back to the allocator. The next alloc() builds
+    // a new one, so this is legal exactly where growth is -- at a rewind point,
+    // with no live pointers. reset() only moves the head; this is what actually
+    // returns the memory.
+    void release();
+
     VkDeviceSize capacity()  const { return cap_; }
     VkDeviceSize highWater() const { return high_water_; }
 

@@ -17,7 +17,7 @@
 REFERENCE IMPLEMENTATION -- nothing imports this module.
 
 It is kept, deliberately, because `orientation_method` and `center_method` are
-config options the native pipeline does NOT implement yet. `ssplat-train`
+config options the native pipeline does NOT implement yet. `ssplat train`
 accepts them and warns:
 
     warning: orientation/center method '<x>'/'<y>' approximated as 'up'/'poses'

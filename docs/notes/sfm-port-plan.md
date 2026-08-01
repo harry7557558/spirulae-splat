@@ -81,10 +81,10 @@ Resulting targets:
 
 ```
 SSPLAT_BUILD_SFM=ON                 ssplat_sfm            (static lib)
-  + SSPLAT_BUILD_CLI=ON             ssplat-sfm            (CLI, alongside
-                                                           ssplat-train and,
-                                                           on CUDA, ssplat-mesh)
-  + SSPLAT_BUILD_GUI=ON             ssplat-gui gains the built-in SfM path
+  + SSPLAT_BUILD_CLI=ON             ssplat sfm            (CLI, alongside
+                                                           ssplat train and,
+                                                           on CUDA, ssplat mesh)
+  + SSPLAT_BUILD_GUI=ON             the GUI gains the built-in SfM path
   (always, Vulkan build)            src/sfm/tests/* test executables
 ```
 
@@ -120,7 +120,7 @@ src/sfm/                       the SfM subsystem — Vulkan-only, self-contained
 │                                ba/ sift/ match/
 └── tests/                     one .cpp per test executable
 
-src/app/cli/sfm_main.cpp       the ssplat-sfm CLI (next to main.cpp, mesh_main.cpp)
+src/app/cli/sfm_main.cpp       the ssplat sfm CLI (next to main.cpp, mesh_main.cpp)
 src/app/gui/DatasetPrep.{h,cpp}  video/insv/mask preparation, shared by both runners
 src/app/gui/SfmRunner.{h,cpp}    in-process SfM job driver (ColmapRunner's shape)
 cmake/SsplatSfm.cmake          library + shader targets
@@ -184,18 +184,18 @@ in the import commit message and in `src/sfm/README.md`.
    which the engine's discover/embed flow does not model — keep the SfM
    enumeration in its own CMake function, sharing only the tool and the slangc
    lookup.
-5. `src/app/cli/sfm_main.cpp` and the `ssplat-sfm` target in
+5. `src/app/cli/sfm_main.cpp` and the `ssplat sfm` target in
    `SsplatApps.cmake`. Fold the BA CLI's two useful entry points (BAL problem
-   benchmarking, `--selftest-chol`) in as `ssplat-sfm ba-bench` and
-   `ssplat-sfm selftest-chol` rather than shipping a second executable.
+   benchmarking, `--selftest-chol`) in as `ssplat sfm ba-bench` and
+   `ssplat sfm selftest-chol` rather than shipping a second executable.
 6. `src/sfm/tests/`: split the 2.5k-line self-test TU into one executable per
    area — `sfm_sift_test`, `sfm_geometry_test`, `sfm_map_test`,
    `sfm_mask_test`, `sfm_merge_test`, `sfm_cholesky_test` — built the way
    `src/backend/tests/*.cpp` are (glob → one exe per file, same name).
 
 *Done when:* `bash build_develop.bash -DSSPLAT_BACKEND=vulkan -DSSPLAT_BUILD_CLI=ON`
-builds `ssplat-train` and `ssplat-sfm`, every `sfm_*_test` passes, and
-`ssplat-sfm auto` reproduces a known-good reconstruction on a public dataset
+builds `ssplat train` and `ssplat sfm`, every `sfm_*_test` passes, and
+`ssplat sfm auto` reproduces a known-good reconstruction on a public dataset
 (Mip-NeRF 360 `garden`, 25-frame subset) with the same registered count and
 reprojection error as the source tree.
 
@@ -254,7 +254,7 @@ stopped. To live inside the GUI it needs three things it does not have.
    helpers stay in headers. Add `src/sfm/*.cpp` globs to `SsplatSfm.cmake`
    (not to `cmake/sources.txt` — that file is the engine/pip source list).
 
-*Done when:* the reconstruction is unchanged, `ssplat-sfm` output is unchanged,
+*Done when:* the reconstruction is unchanged, `ssplat sfm` output is unchanged,
 a `SIGINT` mid-run exits cleanly, and a from-scratch build of `ssplat_sfm` is
 measurably faster than the header-only one.
 
@@ -284,7 +284,7 @@ It landed while the segmentation stack was being merged
 (`docs/notes/segmentation-port.md`), and it landed **without phase 3** — which
 changes one thing from the plan below and nothing else.
 
-`SfmRunner` drives `ssplat-sfm` as a **child process** rather than calling the
+`SfmRunner` drives `ssplat sfm` as a **child process** rather than calling the
 library in-process (item 2 below). That is deliberate for now:
 
 - phase 3 has not happened, so the library still prints to stdout and cannot be
@@ -306,7 +306,7 @@ panel with its auto-detection (item 4), and the settings persistence (item 6).
 
 Item 5 — the "All SfM options" editor over the phase-2 descriptor table — was
 **not** built. The panel surfaces the dozen knobs a beginner or intermediate
-user needs, plus a free-form "extra ssplat-sfm flags" field that reaches the
+user needs, plus a free-form "extra ssplat sfm flags" field that reaches the
 other ~120. That is a deliberate trade for now: mirroring the table into ImGui
 widgets is real work, and the flag field costs nothing and cannot go stale.
 Revisit if users actually reach for it.
@@ -392,7 +392,7 @@ device in both subsystems, and `SSPLAT_VK_DEVICE` moves both.
    `tools/sfm/collections.json` and reads anything else from a
    user-supplied `--collections-file`.
 2. **Tests** documented in `docs/testing.md`: what each `sfm_*_test` covers,
-   and the end-to-end check (`ssplat-sfm auto` on a small public dataset,
+   and the end-to-end check (`ssplat sfm auto` on a small public dataset,
    scored with `tools/sfm/eval_poses.py` against the COLMAP ground truth that
    ships with it).
 3. **Docs**:
@@ -423,7 +423,7 @@ device in both subsystems, and `SSPLAT_VK_DEVICE` moves both.
 - `scripts/process_data_colmap.py`, `scripts/run_colmap.bash`,
   `scripts/colmap_utils.py` — standalone Python preprocessing tools with their
   own users. They are not on the GUI path and are out of scope here; revisit
-  once `ssplat-sfm` has run on enough datasets to be the obvious default.
+  once `ssplat sfm` has run on enough datasets to be the obvious default.
 - `ColmapRunner` — kept and working. It is the CUDA GUI's dataset path and the
   fallback everywhere else.
 

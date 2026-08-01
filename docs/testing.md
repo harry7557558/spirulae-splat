@@ -190,7 +190,7 @@ proof that no longer has a second implementation to re-derive it from. So:
 |---|---|
 | any kernel | CUDA build + Vulkan build + the relevant parity test on both |
 | engine logic | both builds + `engine_render_parity` + `engine_train_step`-level check |
-| config field | rerun `generate_cli_config.py`; check `ssplat-train --help`; `test_trainer_parity.py` |
+| config field | rerun `generate_cli_config.py`; check `ssplat train --help`; `test_trainer_parity.py` |
 | training-loop logic | change `TrainerCore.cpp`, not the Python mirror; `test_trainer_parity.py` |
 | build system | all four modes in [build.md](build.md) |
 | Python-facing | a short `spirulae-train` run with `--no-keep-viewer-alive` |

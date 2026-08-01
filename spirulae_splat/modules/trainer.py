@@ -97,8 +97,8 @@ class Trainer:
 
     The session (src/app/TrainerCore.{h,cpp}, bound as `_C.TrainerSession`) owns
     config -> dataset parse -> splat seeding -> engine + DataManager setup ->
-    the per-step config and the step itself. It is the same code `ssplat-train`
-    and `ssplat-gui` run, so there is no second implementation to drift.
+    the per-step config and the step itself. It is the same code `ssplat train`
+    and the GUI run, so there is no second implementation to drift.
 
     What this class keeps, and why each has to stay here:
       * the output-dir / config.json conventions -- `ss_trainer.py --resume`

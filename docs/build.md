@@ -38,7 +38,7 @@ For development, always use CMake via the dev scripts.
 | `SsplatBackendVulkan.cmake` | portable engine object lib, slangc + SPIR-V embed, `ssplat_backend_vulkan`, the Vulkan-side tests |
 | `SsplatSlang.cmake` | `ssplat_find_slangc()` — pinned version, PATH lookup, fetch on miss |
 | `SsplatEmbed.cmake` | `ssplat_embed_file()` — bake a file into a byte-array header |
-| `SsplatApps.cmake` | `ssplat-train`, `ssplat-mesh`, `ssplat-gui` (backend-agnostic) |
+| `SsplatApps.cmake` | the `ssplat` executable — every tool the build has, in one binary (backend-agnostic) |
 
 Exactly one backend module runs. It leaves behind `SSPLAT_WITH_TORCH` and
 `SSPLAT_APP_LIBS`, which is the whole contract `SsplatApps.cmake` depends on.
@@ -56,7 +56,7 @@ Both run codegen first (skipped gracefully if `python3` is missing — the
 generated files are committed) and then configure + build into `build/`.
 `build_develop.bash` additionally caps the job count by available RAM
 (~750 MB/job) and, for Torch builds, moves `build/libcsrc.so` to
-`spirulae_splat/csrc.so` leaving a symlink behind so `ssplat-train`'s
+`spirulae_splat/csrc.so` leaving a symlink behind so `ssplat`'s
 `$ORIGIN` lookup keeps resolving.
 
 > Do not use `pip install -e .` for Linux development builds.
@@ -80,14 +80,15 @@ without reconfiguring, e.g. `-B build_cuda` and `-B build`.
 | option | default | effect |
 |---|---|---|
 | `SSPLAT_BACKEND` | `cuda` | `cuda` \| `vulkan`. `vulkan` builds the portable engine layer + `backend/vulkan/` **without the CUDA toolkit**, and forces `SSPLAT_BUILD_CLI=ON`. |
-| `SSPLAT_BUILD_CLI` | `OFF` | `ssplat-train` |
-| `SSPLAT_BUILD_GUI` | `OFF` | `ssplat-gui`; FetchContent's GLFW 3.4 + Dear ImGui v1.92.8 (needs network once) |
+| `SSPLAT_BUILD_CLI` | `OFF` | the command-line tools (`ssplat train`, `ssplat mesh`) |
+| `SSPLAT_BUILD_GUI` | `OFF` | the graphical application (`ssplat` with no arguments); FetchContent's GLFW 3.4 + Dear ImGui v1.92.8 (needs network once) |
+| `SSPLAT_SEPARATE_TOOLS` | `OFF` | *also* build `ssplat-sfm` and `ssplat-sam` standalone — same code, but neither links the engine or libtorch (24 MB vs the combined 61 MB) |
 | `SSPLAT_NO_TORCH` | `OFF` | skip Torch/Python even if present; `csrc` becomes a STATIC lib and the exe is self-contained |
 | `SSPLAT_BUILD_BACKEND_TESTS` | `OFF` | build `backend/tests/*` (CUDA branch; Vulkan always builds them) |
 | `SSPLAT_DEBUG_SYMBOLS` | `OFF` | host `-g`, CUDA cubin lineinfo, `slangc -g2`. Bloats binaries substantially — profiling/debugging only. |
 | `SSPLAT_SLANGC` | *(empty)* | path to a `slangc` to use; empty means find on PATH and fetch the pinned release on miss/mismatch |
-| `SSPLAT_BUILD_SFM` | `ON` for `vulkan`, `OFF` for `cuda` | `ssplat_sfm` + `ssplat-sfm` + `sfm_*_test`. Vulkan-only; a CUDA build can opt in if the Vulkan SDK is present. |
-| `SSPLAT_BUILD_SAM` | `ON` for `vulkan`, `OFF` for `cuda` | `ssplat_nn` + `ssplat_sam` + `ssplat-sam` + `nn_ops_test` / `sam_pipeline_test`, and the GUI's in-process masking. Same rule as SfM. |
+| `SSPLAT_BUILD_SFM` | `ON` for `vulkan`, `OFF` for `cuda` | `ssplat_sfm` + `ssplat sfm` + `sfm_*_test`. Vulkan-only; a CUDA build can opt in if the Vulkan SDK is present. |
+| `SSPLAT_BUILD_SAM` | `ON` for `vulkan`, `OFF` for `cuda` | `ssplat_nn` + `ssplat_sam` + `ssplat sam` + `nn_ops_test` / `sam_pipeline_test`, and the GUI's in-process masking. Same rule as SfM. |
 | `SSPLAT_ENABLE_PATENTED` | `OFF` | `ssplat_video` — container demux + `VK_KHR_video_decode_*`. **Read the note below before turning it on.** |
 | `SSPLAT_SFM_REALS` / `SSPLAT_SFM_LOSSES` | all | trim the bundle-adjustment shader variant matrix while iterating (`src/sfm/README.md`) |
 
@@ -98,7 +99,7 @@ the H.264 / H.265 / AV1 bitstream parsers and the Vulkan Video driver — is the
 one part of it carrying third-party patent exposure (H.264/H.265 via MPEG LA
 and Access Advance, AV1 via the claims asserted against AOMedia). With it off,
 that directory is neither compiled nor linked, and everything that wanted it
-falls back to an external **ffmpeg**: `ssplat-sam extract` and `ssplat-sam
+falls back to an external **ffmpeg**: `ssplat sam extract` and `ssplat sam
 video` say so and exit, and the GUI extracts frames with ffmpeg and tells the
 user why.
 
@@ -112,18 +113,31 @@ shipping one built with it on.
 
 ## Targets
 
-`ssplat-train` (CLI trainer), `ssplat-gui` (native GUI), `ssplat-mesh`
-(meshing), `ssplat-sfm` (structure from motion), `ssplat-sam` (segmentation,
-tracking and frame extraction), `csrc` (engine; SHARED with Torch, STATIC
-without), `csrc_portable` (Vulkan branch's torch-free engine objects),
-`ssplat_backend_vulkan`, `ssplat_sfm`, `ssplat_nn`, `ssplat_sam`,
-`ssplat_video`, plus one executable per file in `backend/tests/`,
-`backend/tests/engine/`, `backend/vulkan/tests/`, `sfm/tests/`, `nn/tests/`
-and `sam/tests/`.
+`ssplat` — one executable holding every tool this build has, dispatching on
+its first argument (`src/app/Tools.h`):
 
-`ssplat-gui` looks for `ssplat-sfm` **next to itself** (not on PATH), so a
-release has to ship them in one directory. That is also the only thing the GUI
-runs out of process; masking, decoding and training are all in-process.
+| | |
+|---|---|
+| `ssplat` | the graphical application |
+| `ssplat <file-or-folder>` | the same, opening what was named |
+| `ssplat train` | the CLI trainer |
+| `ssplat sfm` | structure from motion |
+| `ssplat sam` | segmentation, tracking and frame extraction |
+| `ssplat mesh` | meshing (CUDA backend only) |
+
+A copy or symlink named `ssplat-sfm` runs that tool directly, so scripts
+written against the separate executables keep working; `SSPLAT_SEPARATE_TOOLS`
+builds those executables for real.
+
+Libraries: `csrc` (engine; SHARED with Torch, STATIC without), `csrc_portable`
+(Vulkan branch's torch-free engine objects), `ssplat_backend_vulkan`,
+`ssplat_sfm`, `ssplat_nn`, `ssplat_sam`, `ssplat_video`, plus one executable
+per file in `backend/tests/`, `backend/tests/engine/`, `backend/vulkan/tests/`,
+`sfm/tests/`, `nn/tests/` and `sam/tests/`.
+
+The GUI runs reconstruction by re-running **itself** (`ssplat sfm auto ...`) as
+a child process -- see `src/app/gui/SfmRunner.h` for why that stage and only
+that stage is out of process. Masking, decoding and training are in-process.
 
 ### Known: `SSPLAT_SFM_REALS=df` does not compile on Windows
 
@@ -137,7 +151,7 @@ the workaround costs nothing on that platform:
 build_develop.bat "-DSSPLAT_SFM_REALS=float;double"
 ```
 
-`ssplat-sfm` then reports "variant not built into this binary" if something
+`ssplat sfm` then reports "variant not built into this binary" if something
 asks for `df`. Not yet reduced to a minimal repro or filed upstream.
 
 ### Known: `sfm_mask_test` fails on Windows

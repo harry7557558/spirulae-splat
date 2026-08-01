@@ -10,6 +10,7 @@
 #include "external/stb_image.h"      // stbi_info (image size probe)
 
 #ifdef SSPLAT_BUILD_SAM
+#include "nn/Device.h"
 #include "nn/io/Image.h"
 #include "sam/Masking.h"
 #endif
@@ -24,6 +25,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -66,6 +68,73 @@ std::string lower_ext(const std::string& path) {
     for (auto& c : e) c = (char)std::tolower((unsigned char)c);
     return e;
 }
+
+std::string human_duration(double seconds) {
+    if (seconds < 1.0) return "a moment";
+    char b[64];
+    if (seconds < 90.0) std::snprintf(b, sizeof b, "%.0f s", seconds);
+    else if (seconds < 5400.0) std::snprintf(b, sizeof b, "%.0f min", seconds / 60.0);
+    else std::snprintf(b, sizeof b, "%.1f h", seconds / 3600.0);
+    return b;
+}
+
+// Progress that answers "how long is this going to take", which is the only
+// question a user has during a twenty-minute masking pass, and the one a
+// counter that ticks every tenth frame does not answer.
+//
+// Rate-limited by wall clock rather than by a frame count: the same call site
+// serves a decode running at a thousand frames a second and a segmentation
+// running at one every two seconds.
+class RateLimitedProgress {
+public:
+    using Clock = std::chrono::steady_clock;
+
+    RateLimitedProgress(std::function<void(const std::string&)> log,
+                        std::string noun, int64_t total)
+        : _log(std::move(log)), _noun(std::move(noun)), _total(total),
+          _start(Clock::now()), _last(_start) {}
+
+    void update(int64_t done, bool force = false) {
+        const auto now = Clock::now();
+        const double since =
+            std::chrono::duration<double>(now - _last).count();
+        if (!force && (done == _reported || since < 2.0)) return;
+        _reported = done;
+        _last = now;
+        // The rate is measured from the first item, not from the start: the
+        // several seconds a checkpoint takes to reach the GPU would otherwise
+        // be spread over every frame and put the first estimate out by 3x.
+        if (_anchor_done < 0) {
+            _anchor_done = done;
+            _start = now;
+        }
+        const double elapsed = std::chrono::duration<double>(now - _start).count();
+        const int64_t measured = done - _anchor_done;
+        std::string line = "  " + std::to_string(done);
+        if (_total > 0) line += " / " + std::to_string(_total);
+        line += " " + _noun;
+        if (measured > 0 && elapsed > 0.5) {
+            const double per = elapsed / (double)measured;
+            char rate[64];
+            if (per >= 0.5) std::snprintf(rate, sizeof rate, "%.1f s each", per);
+            else            std::snprintf(rate, sizeof rate, "%.0f/s", 1.0 / per);
+            line += std::string("  (") + rate;
+            if (_total > done)
+                line += ", about " + human_duration(per * (double)(_total - done)) +
+                        " left";
+            line += ")";
+        }
+        _log(line);
+    }
+
+private:
+    std::function<void(const std::string&)> _log;
+    std::string _noun;
+    int64_t     _total = 0;
+    int64_t     _reported = -1;
+    int64_t     _anchor_done = -1;   // count at the first report; see update()
+    Clock::time_point _start, _last;
+};
 
 }  // namespace
 
@@ -132,6 +201,19 @@ int DatasetPrep::exec(const std::vector<std::string>& argv) {
 // ---------------------------------------------------------------------------
 
 bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
+#ifdef SSPLAT_BUILD_SAM
+    // Hand the GPU back on the way out, by whichever of the dozen exits is
+    // taken. A SAM 3 checkpoint is about 2 GB of VRAM and the inference layer's
+    // pool is process-wide and grow-only, so without this it stays resident
+    // for the life of the GUI -- through the reconstruction and the training
+    // run that follow, which are exactly what wants the memory back.
+    //
+    // Safe because the mask preview owns the only other Session, and the
+    // dataset screen closes it before starting a job.
+    struct ReleaseDevice {
+        ~ReleaseDevice() { nn::shutdown(); }
+    } release_device;
+#endif
     const fs::path ws = job.workspace;
     std::error_code ec;
     fs::create_directories(ws, ec);
@@ -233,13 +315,23 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, PrepResult& out,
     out.multi_track = tracks > 1;
 
     double src_fps = 30.0;
+    int64_t src_frames = 0;
     {
         video::VideoReader r;
-        if (r.open(job.input_path) && r.info().fps > 1.0) src_fps = r.info().fps;
+        if (r.open(job.input_path)) {
+            if (r.info().fps > 1.0) src_fps = r.info().fps;
+            src_frames = r.info().frame_count;
+        }
     }
     const int window = std::max(job.sharp_window, 1);
     int skip = (int)std::lround(src_fps / std::max(job.video_fps, 0.01f));
     skip = std::max(skip, 1);
+
+    // What the container claims, for the estimate; the loop stops on the real
+    // end of stream either way.
+    int64_t expect = src_frames > 0 ? (src_frames / skip) * (int64_t)tracks : 0;
+    if (job.max_frames > 0 && (expect == 0 || expect > (int64_t)job.max_frames * tracks))
+        expect = (int64_t)job.max_frames * tracks;
 
     app::FrameExtractJob fx;
     fx.input = job.input_path;
@@ -265,13 +357,12 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, PrepResult& out,
     app::FrameExtractSinks sinks;
     sinks.log = _log;
     sinks.cancel = &_cancel;
-    int64_t last_reported = -1;
+    RateLimitedProgress progress(
+        _log, fx.mask.model.empty() ? "frames written" : "frames written and masked",
+        expect);
     sinks.progress = [&](int64_t written, int64_t decoded) {
-        if (written == last_reported) return;
-        last_reported = written;
-        if (written % 10 == 0)
-            _log("  " + std::to_string(written) + " frames written (" +
-                 std::to_string(decoded) + " decoded)");
+        (void)decoded;
+        progress.update(written);
     };
 
     app::FrameExtractStats stats;
@@ -416,6 +507,7 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job,
     const fs::path image_root(images);
 
     int done = 0;
+    RateLimitedProgress progress(_log, "images masked", (int64_t)files.size());
     for (const fs::path& f : files) {
         if (_cancel.load()) { error = "cancelled"; return false; }
         // Masks mirror the image tree, so cam0/ and cam1/ keep their names.
@@ -438,9 +530,7 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job,
             return false;
         }
         sam::save_mask_png(mask, dst.string());
-        if (++done % 10 == 0 || done == (int)files.size())
-            _log("  masked " + std::to_string(done) + " / " +
-                 std::to_string(files.size()));
+        progress.update(++done, done == (int)files.size());
     }
     return true;
 #endif
@@ -481,6 +571,10 @@ bool DatasetPrep::generate_masks_python(const PrepJob& job,
         argv.push_back("--negative_prompt");
         argv.push_back(job.mask_negative_prompt);
     }
+    // Without this the external path silently ignores the polarity and always
+    // removes what the prompt named -- the exact opposite of what an object
+    // capture asked for.
+    if (job.mask_keep_subject) argv.push_back("--keep_prompted");
     std::string install_hint;
     std::string cmd;
     for (const auto& a : argv) cmd += (cmd.empty() ? "$ " : " ") + a;

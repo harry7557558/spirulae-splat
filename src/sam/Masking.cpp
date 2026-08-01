@@ -1,5 +1,7 @@
 #include "sam/Masking.h"
 
+#include "nn/core/Parallel.h"
+
 #include <algorithm>
 #include <cstring>
 
@@ -37,7 +39,11 @@ nn::Image downscale_to_fit(const nn::Image& src, int max_size) {
 
     const double sx = (double)src.width / out.width;
     const double sy = (double)src.height / out.height;
-    for (int y = 0; y < out.height; ++y) {
+    // Row-parallel: at 4K in, this is tens of milliseconds of the per-frame
+    // budget on one thread and a rounding error on many, and every caller runs
+    // it once per frame with the GPU idle behind it.
+    nn::parallel_for(out.height, [&](int64_t y_lo, int64_t y_hi) {
+    for (int y = (int)y_lo; y < (int)y_hi; ++y) {
         double fy = (y + 0.5) * sy - 0.5;
         if (fy < 0.0) fy = 0.0;
         const int y0 = (int)fy;
@@ -61,6 +67,7 @@ nn::Image downscale_to_fit(const nn::Image& src, int max_size) {
             }
         }
     }
+    }, /*min_chunk=*/16);
     return out;
 }
 
@@ -72,13 +79,15 @@ namespace {
 void upscale_nearest(const std::vector<uint8_t>& src, int sw, int sh,
                      std::vector<uint8_t>& dst, int dw, int dh) {
     dst.resize((size_t)dw * dh);
-    for (int y = 0; y < dh; ++y) {
-        const int sy = std::min(sh - 1, (int)((int64_t)y * sh / dh));
-        for (int x = 0; x < dw; ++x) {
-            const int sx = std::min(sw - 1, (int)((int64_t)x * sw / dw));
-            dst[(size_t)y * dw + x] = src[(size_t)sy * sw + sx];
+    nn::parallel_for(dh, [&](int64_t y_lo, int64_t y_hi) {
+        for (int y = (int)y_lo; y < (int)y_hi; ++y) {
+            const int sy = std::min(sh - 1, (int)((int64_t)y * sh / dh));
+            for (int x = 0; x < dw; ++x) {
+                const int sx = std::min(sw - 1, (int)((int64_t)x * sw / dw));
+                dst[(size_t)y * dw + x] = src[(size_t)sy * sw + sx];
+            }
         }
-    }
+    }, /*min_chunk=*/64);
 }
 
 }  // namespace

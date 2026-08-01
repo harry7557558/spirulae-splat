@@ -13,6 +13,8 @@
 // the same C++ parsers the CLI trainer uses, and calls meshing::generate_mesh
 // (Meshing.h) for the heavy lifting.
 
+#include "app/Tools.h"
+
 #include "mesh/Meshing.h"
 #include "core/Camera.h"
 #include "data/DatasetParser.h"
@@ -377,7 +379,7 @@ Options parse_args(int argc, char** argv) {
 }  // namespace
 
 
-int main(int argc, char** argv) {
+int ssplat_mesh_main(int argc, char** argv) {
     try {
         Options o = parse_args(argc, argv);
 

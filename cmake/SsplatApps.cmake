@@ -1,10 +1,21 @@
-# The native applications: ssplat-train (CLI), ssplat-mesh, ssplat-sfm,
-# ssplat-gui.
+# The native application: one `ssplat` executable holding every tool this
+# build has (see src/app/Tools.h), dispatching on its first argument.
+#
+# One file instead of five is easier to install and to put on a PATH, and it is
+# what lets the GUI run a reconstruction as a child process without a sibling
+# binary having to be found next to it -- it re-runs itself. Nothing is shared
+# between the tools at run time: each entry point is what used to be its own
+# `main`, and a build with the GUI off produces a command-line binary that
+# needs neither a display nor GL.
+#
+# SSPLAT_SEPARATE_TOOLS additionally builds the old one-executable-per-tool
+# layout. Worth having for ssplat-sfm in particular: on its own it links
+# neither the engine nor libtorch, so it stays a small, portable binary.
 #
 # Backend-agnostic: whichever backend module ran first left the engine to link
-# in SSPLAT_APP_LIBS and set SSPLAT_WITH_TORCH. Two exceptions: ssplat-mesh is
-# CUDA-only (the Vulkan backend stubs the meshing kernels), and ssplat-sfm is
-# Vulkan-only and links the SfM library instead of the engine.
+# in SSPLAT_APP_LIBS and set SSPLAT_WITH_TORCH. Two exceptions: the mesh tool is
+# CUDA-only (the Vulkan backend stubs the meshing kernels), and the SfM tool is
+# Vulkan-only.
 
 # ---------------------------------------------------------------------------
 # Source groups shared by several app targets
@@ -61,63 +72,52 @@ function(ssplat_configure_app target)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# ssplat-train -- standalone CLI trainer, no Python at runtime. Off by default
-# (unless Torch is unavailable, or the backend is Vulkan, which force it on).
+# Which tools this build has
+#
+# Each block appends the tool's sources, the macro that declares its entry
+# point (src/app/Tools.h), and whatever it links. The lists are then used twice:
+# once for the combined `ssplat`, and once per tool if SSPLAT_SEPARATE_TOOLS is
+# on.
 # ---------------------------------------------------------------------------
-if(SSPLAT_BUILD_CLI)
-    add_executable(ssplat-train
-        ${SSPLAT_SRC}/app/cli/main.cpp
-    )
-    ssplat_configure_app(ssplat-train)
-    if(WIN32)
-        target_link_libraries(ssplat-train PRIVATE ws2_32)
-    endif()
+set(SSPLAT_TOOL_SOURCES "")
+set(SSPLAT_TOOL_DEFS "")
+set(SSPLAT_TOOL_LIBS "")
 
-    # ---- standalone mesh-extraction CLI ----
+if(SSPLAT_BUILD_CLI)
+    # ---- trainer: no Python at runtime ----
+    list(APPEND SSPLAT_TOOL_SOURCES ${SSPLAT_SRC}/app/cli/main.cpp)
+    list(APPEND SSPLAT_TOOL_DEFS SSPLAT_TOOL_TRAIN=1)
+
+    # ---- mesh extraction ----
     # CUDA-only: the Vulkan backend stubs the meshing kernels
     # (meshing::OccupancyEvaluator), so the tool would throw at startup.
     if(NOT SSPLAT_BACKEND STREQUAL "vulkan")
-        add_executable(ssplat-mesh ${SSPLAT_SRC}/app/cli/mesh_main.cpp)
-        ssplat_configure_app(ssplat-mesh)
+        list(APPEND SSPLAT_TOOL_SOURCES ${SSPLAT_SRC}/app/cli/mesh_main.cpp)
+        list(APPEND SSPLAT_TOOL_DEFS SSPLAT_TOOL_MESH=1)
     endif()
+endif()
 
-    # ---- standalone Structure-from-Motion CLI ----
-    # Links only ssplat_sfm: the SfM module carries its own Vulkan context and
-    # SPIR-V, and shares nothing with the training engine. Deliberately NOT
-    # ssplat_configure_app -- that pulls in the engine (and, on a Torch build,
-    # libpython) for a tool that needs neither.
-    if(SSPLAT_BUILD_SFM)
-        add_executable(ssplat-sfm
-            ${SSPLAT_SRC}/app/cli/sfm_main.cpp
-            ${SSPLAT_SRC}/app/cli/sfm_ba.cpp
-        )
-        target_link_libraries(ssplat-sfm PRIVATE ssplat_sfm)
-        target_compile_definitions(ssplat-sfm PRIVATE SSPLAT_VERSION="${SSPLAT_VERSION}")
-        target_compile_options(ssplat-sfm PRIVATE
-            $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
-        set_property(TARGET ssplat-sfm PROPERTY CXX_STANDARD 17)
-    endif()
+if((SSPLAT_BUILD_CLI OR SSPLAT_BUILD_GUI) AND SSPLAT_BUILD_SFM)
+    # ---- structure from motion ----
+    # The SfM module carries its own Vulkan context and SPIR-V and shares
+    # nothing with the training engine.
+    list(APPEND SSPLAT_TOOL_SOURCES
+         ${SSPLAT_SRC}/app/cli/sfm_main.cpp
+         ${SSPLAT_SRC}/app/cli/sfm_ba.cpp)
+    list(APPEND SSPLAT_TOOL_DEFS SSPLAT_TOOL_SFM=1)
+    list(APPEND SSPLAT_TOOL_LIBS ssplat_sfm)
+endif()
 
-    # ---- standalone segmentation / frame-extraction CLI ----
-    # Links ssplat_sam (and ssplat_video when patented modules are enabled) for
-    # the same reason ssplat-sfm links only ssplat_sfm: it needs the inference
-    # layer, not the training engine.
-    if(SSPLAT_BUILD_SAM)
-        set(SSPLAT_SAM_CLI_SOURCES ${SSPLAT_SRC}/app/cli/sam_main.cpp)
-        if(SSPLAT_ENABLE_PATENTED)
-            list(APPEND SSPLAT_SAM_CLI_SOURCES
-                 ${SSPLAT_SRC}/app/cli/sam_extract.cpp
-                 ${SSPLAT_SRC}/app/FrameExtract.cpp)
-        endif()
-        add_executable(ssplat-sam ${SSPLAT_SAM_CLI_SOURCES})
-        target_link_libraries(ssplat-sam PRIVATE ssplat_sam)
-        if(SSPLAT_ENABLE_PATENTED)
-            target_link_libraries(ssplat-sam PRIVATE ssplat_video)
-        endif()
-        target_compile_definitions(ssplat-sam PRIVATE SSPLAT_VERSION="${SSPLAT_VERSION}")
-        target_compile_options(ssplat-sam PRIVATE
-            $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
-        set_property(TARGET ssplat-sam PROPERTY CXX_STANDARD 17)
+if((SSPLAT_BUILD_CLI OR SSPLAT_BUILD_GUI) AND SSPLAT_BUILD_SAM)
+    # ---- segmentation / frame extraction ----
+    list(APPEND SSPLAT_TOOL_SOURCES ${SSPLAT_SRC}/app/cli/sam_main.cpp)
+    list(APPEND SSPLAT_TOOL_DEFS SSPLAT_TOOL_SAM=1)
+    list(APPEND SSPLAT_TOOL_LIBS ssplat_sam)
+    if(SSPLAT_ENABLE_PATENTED)
+        list(APPEND SSPLAT_TOOL_SOURCES
+             ${SSPLAT_SRC}/app/cli/sam_extract.cpp
+             ${SSPLAT_SRC}/app/FrameExtract.cpp)
+        list(APPEND SSPLAT_TOOL_LIBS ssplat_video)
     endif()
 endif()
 
@@ -174,14 +174,9 @@ if(SSPLAT_BUILD_GUI)
         MaskPy)
 
     file(GLOB SSPLAT_GUI_SOURCES CONFIGURE_DEPENDS ${SSPLAT_SRC}/app/gui/*.cpp)
-    if(SSPLAT_ENABLE_PATENTED)
-        list(APPEND SSPLAT_GUI_SOURCES ${SSPLAT_SRC}/app/FrameExtract.cpp)
-    endif()
-    add_executable(ssplat-gui
-        ${SSPLAT_GUI_SOURCES}
-    )
-    ssplat_configure_app(ssplat-gui)
-    target_link_libraries(ssplat-gui PRIVATE imgui_glfw OpenGL::GL)
+    list(APPEND SSPLAT_TOOL_SOURCES ${SSPLAT_GUI_SOURCES})
+    list(APPEND SSPLAT_TOOL_DEFS SSPLAT_TOOL_GUI=1)
+    list(APPEND SSPLAT_TOOL_LIBS imgui_glfw OpenGL::GL)
 
     # In-process segmentation (interactive preview + dataset masking) and, when
     # patented modules are enabled, in-process video decoding. Both are
@@ -189,14 +184,69 @@ if(SSPLAT_BUILD_GUI)
     # ffmpeg, and the GUI hides what this build cannot do rather than failing
     # at run time.
     if(SSPLAT_BUILD_SAM)
-        target_link_libraries(ssplat-gui PRIVATE ssplat_sam)
-        target_compile_definitions(ssplat-gui PRIVATE SSPLAT_BUILD_SAM=1)
+        list(APPEND SSPLAT_TOOL_DEFS SSPLAT_BUILD_SAM=1)
         if(SSPLAT_ENABLE_PATENTED)
-            target_link_libraries(ssplat-gui PRIVATE ssplat_video)
+            list(APPEND SSPLAT_TOOL_SOURCES ${SSPLAT_SRC}/app/FrameExtract.cpp)
         endif()
     endif()
+endif()
 
+# ---------------------------------------------------------------------------
+# ssplat -- the executable
+# ---------------------------------------------------------------------------
+if(SSPLAT_BUILD_CLI OR SSPLAT_BUILD_GUI)
+    # FrameExtract is claimed by both the segmentation tool and the GUI.
+    list(REMOVE_DUPLICATES SSPLAT_TOOL_SOURCES)
+    list(REMOVE_DUPLICATES SSPLAT_TOOL_LIBS)
+
+    add_executable(ssplat ${SSPLAT_SRC}/app/Main.cpp ${SSPLAT_TOOL_SOURCES})
+    ssplat_configure_app(ssplat)
+    target_link_libraries(ssplat PRIVATE ${SSPLAT_TOOL_LIBS})
+    target_compile_definitions(ssplat PRIVATE
+        ${SSPLAT_TOOL_DEFS} SSPLAT_VERSION="${SSPLAT_VERSION}")
     if(WIN32)
-        target_link_libraries(ssplat-gui PRIVATE ws2_32)
+        target_link_libraries(ssplat PRIVATE ws2_32)
+    endif()
+
+    # ---- the standalone CLI tools, on request ----
+    # Same dispatcher, one tool compiled into each: src/app/Main.cpp reads its
+    # own argv[0], so `ssplat-sfm auto ...` reaches the SfM tool with its
+    # arguments untouched, --help and all.
+    #
+    # Only these two, and deliberately: built alone they skip
+    # ssplat_configure_app(), so neither drags in the training engine or (on a
+    # Torch build) libpython, which is the entire reason to want them separate
+    # -- ssplat-sfm is 24 MB against the combined binary's 61 MB. A separate
+    # ssplat-train or ssplat-mesh would be byte-for-byte the work `ssplat` does
+    # anyway, and a separate ssplat-gui would be worse than the combined one:
+    # it could not run reconstruction, since that is this binary re-running
+    # itself. Symlink `ssplat` if you want those names.
+    if(SSPLAT_SEPARATE_TOOLS)
+        function(ssplat_tool_exe name sources defs libs)
+            add_executable(${name} ${SSPLAT_SRC}/app/Main.cpp ${sources})
+            target_include_directories(${name} PRIVATE ${SSPLAT_SRC} ${CMAKE_BINARY_DIR})
+            target_link_libraries(${name} PRIVATE ${libs})
+            target_compile_definitions(${name} PRIVATE
+                ${defs} SSPLAT_VERSION="${SSPLAT_VERSION}")
+            target_compile_options(${name} PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
+            set_property(TARGET ${name} PROPERTY CXX_STANDARD 17)
+        endfunction()
+
+        if(SSPLAT_BUILD_SFM)
+            ssplat_tool_exe(ssplat-sfm
+                "${SSPLAT_SRC}/app/cli/sfm_main.cpp;${SSPLAT_SRC}/app/cli/sfm_ba.cpp"
+                "SSPLAT_TOOL_SFM=1" "ssplat_sfm")
+        endif()
+        if(SSPLAT_BUILD_SAM)
+            set(_sam_src ${SSPLAT_SRC}/app/cli/sam_main.cpp)
+            set(_sam_lib ssplat_sam)
+            if(SSPLAT_ENABLE_PATENTED)
+                list(APPEND _sam_src ${SSPLAT_SRC}/app/cli/sam_extract.cpp
+                                     ${SSPLAT_SRC}/app/FrameExtract.cpp)
+                list(APPEND _sam_lib ssplat_video)
+            endif()
+            ssplat_tool_exe(ssplat-sam "${_sam_src}" "SSPLAT_TOOL_SAM=1" "${_sam_lib}")
+        endif()
     endif()
 endif()

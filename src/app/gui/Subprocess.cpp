@@ -157,6 +157,25 @@ bool command_exists(const std::string& exe) {
     return SearchPathA(nullptr, exe.c_str(), ".exe", MAX_PATH, found, nullptr) > 0;
 }
 
+bool open_url(const std::string& url) {
+    // Not ShellExecute: it lives in shell32, and this is the only call in the
+    // program that would need it. `cmd /c start` reaches the same handler.
+    // The empty "" is start's window-title argument -- without it, a quoted
+    // URL becomes the title and nothing opens.
+    std::string cmd = "cmd /c start \"\" \"" + url + "\"";
+    STARTUPINFOA si{};
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        return false;
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return true;
+}
+
 #else
 
 // ---------------------------------------------------------------------------
@@ -234,6 +253,46 @@ bool command_exists(const std::string& exe) {
             return true;
         if (colon == std::string::npos) break;
         pos = colon + 1;
+    }
+    return false;
+}
+
+bool open_url(const std::string& url) {
+#ifdef __APPLE__
+    const char* openers[] = {"open"};
+#else
+    // xdg-open covers every desktop that follows the freedesktop spec; the
+    // other two are for the sessions that ship one but not it.
+    const char* openers[] = {"xdg-open", "gio", "x-www-browser"};
+#endif
+    for (const char* opener : openers) {
+        if (!command_exists(opener)) continue;
+        const pid_t pid = fork();
+        if (pid < 0) return false;
+        if (pid == 0) {
+            // Double fork so the browser is reparented to init and this
+            // process never has to reap it -- the GUI has no SIGCHLD handler
+            // and would otherwise accumulate zombies.
+            if (fork() == 0) {
+                setsid();
+                // Nothing here should write over the GUI's own stdout.
+                int devnull = open("/dev/null", O_RDWR);
+                if (devnull >= 0) {
+                    dup2(devnull, STDIN_FILENO);
+                    dup2(devnull, STDOUT_FILENO);
+                    dup2(devnull, STDERR_FILENO);
+                    if (devnull > STDERR_FILENO) close(devnull);
+                }
+                if (std::strcmp(opener, "gio") == 0)
+                    execlp(opener, opener, "open", url.c_str(), (char*)nullptr);
+                else
+                    execlp(opener, opener, url.c_str(), (char*)nullptr);
+            }
+            _exit(0);
+        }
+        int status = 0;
+        waitpid(pid, &status, 0);
+        return true;
     }
     return false;
 }

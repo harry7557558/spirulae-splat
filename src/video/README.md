@@ -8,7 +8,7 @@ itself — containers, bitstream parsing, reference picture management — is he
 The H.264 / H.265 / AV1 bitstream parsers are the one piece of this repository
 carrying third-party patent exposure, and this is a GPLv3 tree. With the option
 off, `src/video/` is neither compiled nor linked and every consumer falls back
-to an external ffmpeg: the GUI says why in the dataset panel, and `ssplat-sam
+to an external ffmpeg: the GUI says why in the dataset panel, and `ssplat sam
 video` / `extract` say so and exit. See `cmake/SsplatOptions.cmake` and
 `docs/build.md`.
 

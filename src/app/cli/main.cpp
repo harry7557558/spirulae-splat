@@ -15,6 +15,7 @@
 // adds only CLI parsing, --help, stdout progress printing, and the web
 // viewer wiring.
 
+#include "app/Tools.h"
 #include "app/TrainerCore.h"
 #include "app/webviewer/Viewer.h"
 
@@ -281,7 +282,7 @@ void dump_cameras_json(const char* path, const ParsedDataset& ds,
 // main
 // ===========================================================================
 
-int main(int argc, char** argv) {
+int ssplat_train_main(int argc, char** argv) {
     try {
         // ---- Preset + flags ------------------------------------------------
         std::string preset = "3dgs";

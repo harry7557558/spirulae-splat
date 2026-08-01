@@ -17,6 +17,8 @@
 // / `--no-audit` switch for the audit pass.
 //
 // The self-checks are separate binaries (src/sfm/tests/, one per area).
+#include "app/Tools.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -61,7 +63,13 @@ void printBaHelp(FILE* out);
 namespace fs = std::filesystem;
 using namespace sfm;
 
-static const char* kProgram = "ssplat-sfm";
+// How this tool was invoked ("ssplat sfm" as dispatched); see app/Tools.h.
+// The examples in the command tables below are written against the historical
+// name and rewritten at print time.
+static const char* kProgram = "ssplat sfm";
+static std::string with_program_name(const char* text) {
+    return app::help_text(text, "ssplat-sfm");
+}
 
 // ---------------------------------------------------------------------------
 // Command help
@@ -237,8 +245,9 @@ static void printCommandHelp(const CommandInfo& c) {
     // command starts from; `auto` says separately what its presets then move.
     SfmConfig defaults;
     printConfigOptions(out, c.mask, defaults);
-    std::fprintf(out, "\nExamples:\n%s\n", c.examples);
-    if (c.footer) std::fprintf(out, "\n%s\n", c.footer);
+    std::fprintf(out, "\nExamples:\n%s\n", with_program_name(c.examples).c_str());
+    if (c.footer)
+        std::fprintf(out, "\n%s\n", with_program_name(c.footer).c_str());
 }
 
 static void printTopHelp(FILE* out) {
@@ -1878,7 +1887,9 @@ static int cmdAuto(int argc, char** argv) {
     return 0;
 }
 
-int main(int argc, char** argv) {
+int ssplat_sfm_main(int argc, char** argv) {
+    app::set_program_name(argc > 0 ? argv[0] : nullptr, "ssplat sfm");
+    kProgram = app::program_name().c_str();
     if (argc < 2) {
         printTopHelp(stderr);
         return 1;

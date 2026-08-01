@@ -452,6 +452,15 @@ void Arena::reserve(VkDeviceSize bytes) {
     if (bytes > cap_) grow(bytes);
 }
 
+void Arena::release() {
+    NN_CHECK(head_ == 0, "Arena::release must be called at an empty arena");
+    if (base_) Allocator::get().free(base_);
+    base_ = 0;
+    cap_ = 0;
+    // high_water_ deliberately survives: it is a measurement of this arena's
+    // peak, and a VRAM report after a release should still show what it took.
+}
+
 DevicePtr Arena::alloc(VkDeviceSize bytes) {
     if (bytes == 0) return null_fallback();
     constexpr VkDeviceSize kAlign = 256;

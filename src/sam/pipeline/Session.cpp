@@ -55,7 +55,43 @@ uint64_t arena_reserve_for(const SamModel& m) {
 // ================
 
 Session::Session() : impl_(new Impl()) {}
-Session::~Session() = default;
+Session::~Session() { unload(); }
+
+void Session::unload() {
+    const bool was_loaded = impl_->loaded;
+    impl_->loaded = false;
+    impl_->text_cache_valid = false;
+    impl_->text_cache_ids.clear();
+    // Nothing to give back, or the device is already gone (nn::shutdown() ran
+    // first, which frees all of this wholesale).
+    if (!was_loaded || !vk::Context::initialized()) return;
+    // The pool is grow-only and process-wide, so nothing here is freed by the
+    // members going out of scope: a destroyed Session would otherwise leave
+    // its ~2 GB of weights resident until the process exits, which is exactly
+    // when an interactive application wants them gone.
+    //
+    // Everything a model or a frame owns, which is every slot except the
+    // memory bank (a Tracker's, released with it) and the Stream's own staging
+    // and parameter rings.
+    static constexpr vk::PoolSlot kOwned[] = {
+        vk::PoolSlot::Weights,     vk::PoolSlot::RopeTable,
+        vk::PoolSlot::PosEncTable, vk::PoolSlot::PromptEncCache,
+        vk::PoolSlot::BackboneFeat, vk::PoolSlot::NeckDet,
+        vk::PoolSlot::NeckTrk,     vk::PoolSlot::NeckPe,
+        vk::PoolSlot::TextFeat,    vk::PoolSlot::PromptFeat,
+        vk::PoolSlot::FusionFeat,  vk::PoolSlot::MaskLogits,
+    };
+    try {
+        vk::Stream::get().sync();
+        impl_->feats = model::ImageFeatures{};
+        impl_->model = SamModel{};
+        for (vk::PoolSlot s : kOwned) vk::VramPool::get().releaseSlot(s);
+        impl_->arena.reset();
+        impl_->arena.release();
+    } catch (const std::exception& e) {
+        NN_LOG_ERROR("unload: %s\n", e.what());
+    }
+}
 
 bool Session::isLoaded() const { return impl_->loaded; }
 bool Session::supportsTextPrompts() const {

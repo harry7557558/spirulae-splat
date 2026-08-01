@@ -2,7 +2,7 @@
 
 A standalone SfM pipeline — images in, a COLMAP `sparse/` model out — with a
 GPU compute backend (Vulkan + Slang) and no heavy dependencies. It exists to
-replace the `colmap` subprocess: `ssplat-sfm` is the CLI, and the native GUI
+replace the `colmap` subprocess: `ssplat sfm` is the CLI, and the native GUI
 will drive the same library in-process instead of shelling out
 (`docs/notes/sfm-port-plan.md` phase 5).
 
@@ -49,7 +49,7 @@ images/ ──► extract ──► features/ ─┐
                                                             sparse/0 ► training
 ```
 
-`ssplat-sfm auto` runs all of it from two knobs, `--quality` and `--data-type`.
+`ssplat sfm auto` runs all of it from two knobs, `--quality` and `--data-type`.
 
 The `map` box is one incremental reconstruction of the whole capture by default.
 `--mapper bottom-up` replaces it with the opposite schedule (`map/Bottomup.h`,
@@ -172,22 +172,22 @@ a variant that was trimmed out is a clear runtime error, not a crash.
 ## Running
 
 ```bash
-ssplat-sfm auto IMAGES/ -o WORKSPACE/          # images -> sparse model
-ssplat-sfm auto -o ws/                         # ./images + ./masks, all defaults
-ssplat-sfm auto IMAGES/ -o ws/ --data-type video --quality medium
-ssplat-sfm auto IMAGES/ -o ws/ --masks MASKS/  # drop keypoints on masked pixels
-ssplat-sfm auto IMAGES/ -o ws/ --camera-model opencv-fisheye
+ssplat sfm auto IMAGES/ -o WORKSPACE/          # images -> sparse model
+ssplat sfm auto -o ws/                         # ./images + ./masks, all defaults
+ssplat sfm auto IMAGES/ -o ws/ --data-type video --quality medium
+ssplat sfm auto IMAGES/ -o ws/ --masks MASKS/  # drop keypoints on masked pixels
+ssplat sfm auto IMAGES/ -o ws/ --camera-model opencv-fisheye
 
-ssplat-sfm extract IMAGES/ -o feats/
-ssplat-sfm match   feats/ -o matches.bin
-ssplat-sfm map     matches.bin feats/ -o sparse/ --images IMAGES/
-ssplat-sfm merge   sparse/ -o merged/
-ssplat-sfm ba      problem.txt --real df       # solver benchmark on a BAL problem
+ssplat sfm extract IMAGES/ -o feats/
+ssplat sfm match   feats/ -o matches.bin
+ssplat sfm map     matches.bin feats/ -o sparse/ --images IMAGES/
+ssplat sfm merge   sparse/ -o merged/
+ssplat sfm ba      problem.txt --real df       # solver benchmark on a BAL problem
 ```
 
-`ssplat-sfm --help` lists the commands, `ssplat-sfm <command> --help` (or
-`ssplat-sfm help <command>`) prints that command's usage, its options with
-their defaults and worked examples, and `ssplat-sfm --version` prints the
+`ssplat sfm --help` lists the commands, `ssplat sfm <command> --help` (or
+`ssplat sfm help <command>`) prints that command's usage, its options with
+their defaults and worked examples, and `ssplat sfm --version` prints the
 package version. A usage error names the flag, says what was wrong with it and
 points at `--help`; it always exits 1, because `auto` spends exit codes 2 and 3
 on *the reconstruction* being absent or partial.

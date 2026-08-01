@@ -14,6 +14,7 @@
 #include "nn/vk/Stream.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -28,25 +29,44 @@ float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 // Device buffers for memory-bank slots are keyed by a small integer that is
 // recycled as instances come and go, so the VRAM report stays readable and the
 // allocation count stays bounded by (live instances x num_maskmem).
+//
+// The high half of the key is the tracker's own id, because VramPool is
+// process-wide while this allocator is not: a masking prompt of "people; cars"
+// builds one Tracker per phrase, and without the split both would number their
+// slots from zero and write their memory banks over each other.
 class SlotAllocator {
 public:
+    SlotAllocator() {
+        static std::atomic<uint32_t> next_tracker{0};
+        base_ = (next_tracker++ & 0xffffu) << 16;
+    }
+
     uint32_t acquire() {
         if (!free_.empty()) {
             uint32_t s = free_.back();
             free_.pop_back();
             return s;
         }
-        return next_++;
+        NN_CHECK(next_ < 0xffffu, "memory-bank slots exhausted for one tracker");
+        return base_ | next_++;
     }
     void release(uint32_t s) { free_.push_back(s); }
-    void clear() {
+
+    // Frees the device memory behind every slot this tracker has ever used --
+    // its own only, which is why the pool cannot simply be told to drop the
+    // whole MemBankFeat slot.
+    void freeAll() {
+        if (vk::Context::initialized())
+            for (uint32_t i = 0; i < next_; ++i)
+                vk::VramPool::get().release(vk::PoolSlot::MemBankFeat, base_ | i);
         free_.clear();
         next_ = 0;
     }
 
 private:
     std::vector<uint32_t> free_;
-    uint32_t next_ = 0;
+    uint32_t base_ = 0;    // this tracker's key range, in the high 16 bits
+    uint32_t next_ = 0;    // next unused index within it
 };
 
 struct MemorySlot {
@@ -478,17 +498,16 @@ int64_t Tracker::Impl::decodePrompt(const VisualPrompt& prompt,
 
 Tracker::Tracker(Session& session, const VideoParams& params)
     : impl_(new Impl(*session.impl_, params)) {}
-Tracker::~Tracker() = default;
+Tracker::~Tracker() { reset(); }
 
 int Tracker::frameIndex() const { return impl_->frame_index; }
 
 void Tracker::reset() {
     for (Masklet& ml : impl_->active) impl_->evict(ml);
     for (Masklet& ml : impl_->pending) impl_->evict(ml);
-    vk::VramPool::get().releaseSlot(vk::PoolSlot::MemBankFeat);
     impl_->active.clear();
     impl_->pending.clear();
-    impl_->slots.clear();
+    impl_->slots.freeAll();
     impl_->frame_index = 0;
     impl_->next_id = 1;
 }

@@ -401,12 +401,15 @@ void GuiApp::handle_dialog_result(const std::string& path) {
             // fisheye model fits them, and the known Insta360 focal length
             // (fx = fy ~ 0.269 * width on every X5 dataset measured) makes
             // fisheye initialization reliable.
-            // Exhaustive matching, not sequential: the two lens tracks are
-            // concatenated rather than temporally interleaved, so sequential
-            // neighbours miss the cross-lens pairs -- on a real X5 capture
-            // exhaustive + model merge registered 116/118 frames where
-            // sequential + loop detection topped out at 68 (frame counts at
-            // 0.5-2 fps stay well within exhaustive range).
+            // Matching stays on "Automatic", which is NOT sequential here: the
+            // two lens tracks are concatenated rather than temporally
+            // interleaved, so temporal neighbours miss every cross-lens pair
+            // (on a real X5 capture that topped out at 68/118 registered
+            // frames). Automatic gives every pair below a hundred images --
+            // which is what beat it, at 116/118 -- and GPU pair selection above
+            // that, which is content-based and so keeps the cross-lens pairs
+            // without the quadratic cost. Forcing exhaustive here made a long
+            // capture unusably slow, and it also suppresses that switch.
             std::string ext = p.extension().string();
             for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
             if (ext == ".insv") {
@@ -417,7 +420,7 @@ void GuiApp::handle_dialog_result(const std::string& path) {
                 _colmap_job.seq_loop_closure = true;   // if switched to sequential
                 _sfm_job.camera_model = "thin-prism-fisheye";
                 _sfm_job.camera_mode = 1;
-                _sfm_job.pairs = 1;       // exhaustive
+                _sfm_job.pairs = 0;       // automatic
                 // ssplat-sfm takes the focal length in pixels, not as a
                 // fraction of the width, so it is resolved once the frames
                 // exist -- see start_dataset_job.
@@ -975,27 +978,41 @@ void GuiApp::draw_masking_options() {
         help_tooltip_on_hover(backends().masking_reason.c_str());
     }
 
-    ImGui::SetNextItemWidth(320);
-    ImGui::InputTextWithHint("What to remove", "people; cars; my shadow",
-                             &_mask.prompt);
-    help_tooltip_on_hover(
-        "Plain words, separated by semicolons. Everything matching them is "
-        "cut out of the reconstruction.");
-    ImGui::SetNextItemWidth(320);
-    ImGui::InputTextWithHint("...but keep", "person in a painting",
-                             &_mask.negative_prompt);
-    help_tooltip_on_hover(
-        "Exceptions that stay even though they match the line above. "
-        "Optional.");
-
+    // Polarity above the two prompts, which are labelled by it -- the same
+    // box means "take this out" or "this is the subject" depending on the
+    // radio. Same order and same wording as the preview panel.
     int polarity = _mask.keep_subject ? 1 : 0;
-    if (ImGui::RadioButton("Remove what I named", polarity == 0)) polarity = 0;
+    if (ImGui::RadioButton("Remove what I name", polarity == 0)) polarity = 0;
     ImGui::SameLine();
-    if (ImGui::RadioButton("Keep only what I named", polarity == 1)) polarity = 1;
+    if (ImGui::RadioButton("Keep only what I name", polarity == 1)) polarity = 1;
     _mask.keep_subject = polarity == 1;
     help_tooltip_on_hover(
         "\"Remove\" is for distractors. \"Keep only\" is for capturing a "
         "single object, where everything around it should be ignored.");
+    const bool keep_subject = _mask.keep_subject;
+
+    ImGui::SetNextItemWidth(320);
+    ImGui::InputTextWithHint(
+        keep_subject ? "What to keep" : "What to remove",
+        keep_subject ? "the statue; its pedestal" : "people; cars; my shadow",
+        &_mask.prompt);
+    help_tooltip_on_hover(
+        keep_subject
+            ? "Plain words, separated by semicolons. Everything NOT matching "
+              "them is cut out of the reconstruction."
+            : "Plain words, separated by semicolons. Everything matching them "
+              "is cut out of the reconstruction.");
+    ImGui::SetNextItemWidth(320);
+    ImGui::InputTextWithHint(
+        keep_subject ? "...but remove" : "...but keep",
+        keep_subject ? "the hand holding it" : "person in a painting",
+        &_mask.negative_prompt);
+    help_tooltip_on_hover(
+        keep_subject
+            ? "Exceptions that go even though they match the line above. "
+              "Optional."
+            : "Exceptions that stay even though they match the line above. "
+              "Optional.");
 
     ImGui::Unindent();
 }
@@ -1459,9 +1476,27 @@ void GuiApp::draw_license_modal() {
     ImGui::TextUnformatted(li.summary);
     ImGui::PopTextWrapPos();
     ImGui::Spacing();
-    ImGui::TextDisabled("Full terms: %s", li.url);
-    if (ImGui::IsItemClicked()) ImGui::SetClipboardText(li.url);
-    help_tooltip_on_hover("Click to copy the link.");
+
+    // The link is a button, not decoration: the tick below says the user has
+    // read the terms, so getting to them has to be one obvious click. Copying
+    // the address is the fallback for a session with no browser to launch.
+    if (ImGui::Button("Read the licence", ImVec2(180, 0))) {
+        if (!open_url(li.url)) {
+            ImGui::SetClipboardText(li.url);
+            log(std::string("Could not open a browser. The licence is at ") +
+                li.url + " (copied to the clipboard).");
+        }
+    }
+    help_tooltip_on_hover(li.url);
+    ImGui::SameLine();
+    if (ImGui::Button("Copy link", ImVec2(110, 0))) ImGui::SetClipboardText(li.url);
+    ImGui::Spacing();
+    ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+    ImGui::TextDisabled("%s", li.url);
+    ImGui::PopTextWrapPos();
+    if (const ModelEntry* e = find_model(_model_id))
+        ImGui::TextDisabled("Download: about %.0f MB, kept for next time.",
+                            e->bytes / 1048576.0);
     ImGui::Spacing();
 
     if (li.needs_tick)

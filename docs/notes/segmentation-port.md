@@ -61,7 +61,7 @@ not already know from the directory.
   one-device convergence needs.
 - The vendored `stb_image` was dropped for `src/external/`'s (same version),
   and image I/O stopped instantiating it — the repository has one impl TU.
-- The two apps became `ssplat-sam` subcommands (`segment`, `track`, `video`,
+- The two apps became `ssplat sam` subcommands (`segment`, `track`, `video`,
   `extract`, `devices`).
 - `ssam`'s `tools/spirv_embed.cpp` was dropped for `spirv_tool`'s new
   `embed --nn <tag>` mode, so the repository still has one host tool for SPIR-V.
@@ -101,14 +101,15 @@ how frames are chosen cannot differ between them.
   is *not* open source and not GPLv3-compatible, so it gets a tick box. The
   wording is three sentences on purpose — a wall of legal text is read by
   nobody, which is the outcome the requirement exists to avoid.
-- **Advanced** — an "extra flags" field passed to `ssplat-sfm auto` verbatim,
+- **Advanced** — an "extra flags" field passed to `ssplat sfm auto` verbatim,
   and explicit "use ffmpeg" / "use the Python script" overrides, so an expert
   is never boxed in by what the panel chose to surface.
 
 ### Why SfM runs as a child process
 
-`SfmRunner` spawns the sibling `ssplat-sfm` binary rather than calling the
-library. This is a deliberate current state, not leftover COLMAP shape:
+`SfmRunner` re-runs **this executable** as `ssplat sfm auto ...` rather than
+calling the library. This is a deliberate current state, not leftover COLMAP
+shape:
 
 1. `src/sfm/` is still a CLI at heart — ~270 `printf` sites and no cancellation
    token (`sfm-port-plan.md` phase 3). In-process it could neither be stopped
@@ -119,8 +120,10 @@ library. This is a deliberate current state, not leftover COLMAP shape:
 3. It keeps **one** Vulkan device live in the GUI process instead of two — the
    port plan's own §10 risk.
 
-The user still installs nothing; it is our binary, shipped alongside. When
-phase 3 lands, only `SfmRunner::run`'s body changes.
+The user still installs nothing, and since the merge to a single executable
+there is nothing to find either: the child is the same file, invoked with a
+different first argument (`src/app/Tools.h`). When phase 3 lands, only
+`SfmRunner::run`'s body changes.
 
 The cost is that progress has to be read out of the child's stdout
 (`SfmRunner::note_progress`), which is grubby and will break if those lines
@@ -132,16 +135,53 @@ known, contained bet.
 On this machine (RTX 5070 Laptop, Intel RPL-S, llvmpipe), Vulkan build:
 
 - `nn_ops_test` (30 checks) and `sam_pipeline_test` pass on all three devices.
-- `ssplat-sam segment` with a text prompt and with a click, on a real SAM 3 and
+- `ssplat sam segment` with a text prompt and with a click, on a real SAM 3 and
   a real SAM 2.1 checkpoint.
-- `ssplat-sam extract` end to end, with and without masking.
+- `ssplat sam extract` end to end, with and without masking.
 - GUI: photos → built-in SfM → dataset → trainer (25/25 images registered,
   26.4k points, opens and previews).
 - GUI: video → GPU decode → masked frames → dataset.
 - GUI on Intel: the video panel reports why GPU decoding is unavailable and
   extracts with ffmpeg instead; the run completes.
 
-## 5. Not done yet
+## 5. Follow-up, 2026-08-01
+
+Five things came back from using it.
+
+**The preview panel could deadlock.** Its worker cleared `_busy` at the end of
+the function while every failure left through `return set_error(...)`, so the
+first early exit stranded the flag at true and `start_job()` refused to run
+again — a panel that never showed anything, whatever you typed. An empty prompt
+was enough to trigger it, which is the state the panel *opens* in. Now an RAII
+guard clears it, and the frame is published as soon as it is decoded, before
+the model is consulted: you see the picture first, and can click on it, which
+is the only prompt a SAM 2 checkpoint takes.
+
+**The polarity now labels the prompts.** "Keep only what I name" turns "What to
+remove" into "What to keep" and "...but keep" into "...but remove", in both the
+dataset screen and the preview, with the radio moved above them since it
+decides what they mean. `scripts/mask.py` grew the matching `--keep_prompted`:
+the external path had been silently ignoring the polarity and always removing
+what the prompt named.
+
+**VRAM was never given back** — see `src/sam/README.md`, "VRAM lifetime". A
+closed preview panel left 2.4 GB resident for the life of the GUI; measured at
+2418 MiB before and 11 MiB after.
+
+**Two trackers shared one memory bank.** `SlotAllocator` was per-tracker while
+`VramPool` is process-wide, so `"people; cars"` — one tracker per phrase — had
+both numbering their slots from zero and writing over each other. Keys now
+carry the tracker id.
+
+**Masking is not slower in the GUI than in the CLI**, which was the report.
+Measured, `extract`-with-masking and `track` over the same frames come out
+within 3% of each other; the cost is one SAM 3 backbone pass per frame and
+decode is 1% of it. What was missing was a way to know that: the log said
+"20 frames written" every tenth frame and nothing about the rate. It now
+reports a rate and an estimate, anchored at the first frame so the checkpoint
+upload does not skew it.
+
+## 6. Not done yet
 
 1. **One Vulkan device.** Three contexts can exist in one process. The GUI
    sequences them; that is a schedule, not a guarantee. Same work as
@@ -159,5 +199,5 @@ On this machine (RTX 5070 Laptop, Intel RPL-S, llvmpipe), Vulkan build:
    file; it does not catch a corrupted one.
 6. **`scripts/mask.py` and `scripts/extract_frames.py`** are still the
    standalone Python tools with their own users, now duplicated in kind by
-   `ssplat-sam`. Revisit once the native path has run on enough captures to be
+   `ssplat sam`. Revisit once the native path has run on enough captures to be
    the obvious default.

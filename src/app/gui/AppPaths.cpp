@@ -61,39 +61,32 @@ std::string cache_dir() {
     return ensure(dir / "spirulae-splat").string();
 }
 
-std::string exe_dir() {
+std::string exe_path() {
     static const std::string cached = [] {
         std::error_code ec;
 #ifdef _WIN32
         wchar_t buf[32768];
         DWORD n = GetModuleFileNameW(nullptr, buf, (DWORD)std::size(buf));
         if (n == 0 || n >= std::size(buf)) return std::string();
-        return fs::path(std::wstring(buf, n)).parent_path().string();
+        return fs::path(std::wstring(buf, n)).string();
 #elif defined(__APPLE__)
         uint32_t n = 0;
         _NSGetExecutablePath(nullptr, &n);
         std::string buf(n, '\0');
         if (_NSGetExecutablePath(buf.data(), &n) != 0) return std::string();
         fs::path p = fs::weakly_canonical(fs::path(buf.c_str()), ec);
-        return ec ? std::string() : p.parent_path().string();
+        return ec ? std::string() : p.string();
 #else
         fs::path p = fs::read_symlink("/proc/self/exe", ec);
-        return ec ? std::string() : p.parent_path().string();
+        return ec ? std::string() : p.string();
 #endif
     }();
     return cached;
 }
 
-std::string sibling_tool(const std::string& name) {
-    const std::string dir = exe_dir();
-    if (dir.empty()) return "";
-#ifdef _WIN32
-    fs::path p = fs::path(dir) / (name + ".exe");
-#else
-    fs::path p = fs::path(dir) / name;
-#endif
-    std::error_code ec;
-    return fs::is_regular_file(p, ec) ? p.string() : std::string();
+std::string exe_dir() {
+    const std::string p = exe_path();
+    return p.empty() ? p : fs::path(p).parent_path().string();
 }
 
 }  // namespace gui

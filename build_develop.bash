@@ -2,7 +2,7 @@
 
 # Development build for Linux. Extra arguments are passed to CMake, e.g.
 #   ./build_develop.bash -DSSPLAT_NO_TORCH=ON
-# builds only the standalone ssplat-train (no Torch/Python needed).
+# builds only the standalone `ssplat` executable (no Torch/Python needed).
 
 # Regenerate headers/config. Skipped when python3 is unavailable -- the
 # generated files are committed, so the build still works without it.
@@ -46,7 +46,7 @@ if ! cmake --build build --verbose -j"${JOBS}"; then
 fi
 
 # Torch build only: expose the extension as spirulae_splat/csrc.so, with a
-# symlink back so ssplat-train's $ORIGIN lookup keeps working. A no-torch
+# symlink back so ssplat's $ORIGIN lookup keeps working. A no-torch
 # build makes a static libcsrc.a and a self-contained exe -- nothing to move.
 if [ -f build/libcsrc.so ] && [ ! -L build/libcsrc.so ]; then
     mv build/libcsrc.so ./spirulae_splat/csrc.so

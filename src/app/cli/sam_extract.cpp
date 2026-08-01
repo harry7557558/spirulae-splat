@@ -22,6 +22,7 @@
 //                      --neg-text "cooked food" --mask-keep subject
 
 #include "app/FrameExtract.h"
+#include "app/Tools.h"
 #include "nn/core/Log.h"
 #include "sam/Masking.h"
 
@@ -48,7 +49,7 @@ void set_env(const char* key, const char* value) {
 // ---------------------------------------------------------------------------
 
 void usage() {
-    std::fprintf(stderr,
+    static const char* kUsage =
         "ssplat-sam extract <video> [options]\n"
         "\n"
         "Frame selection\n"
@@ -84,7 +85,8 @@ void usage() {
         "      --nms <f>          NMS IoU threshold (default 0.1)\n"
         "      --overlay          also write a colour overlay next to each mask\n"
         "\n"
-        "Common: --device <index|name>  --profile  --validate\n");
+        "Common: --device <index|name>  --profile  --validate\n";
+    std::fprintf(stderr, "%s", app::help_text(kUsage, "ssplat-sam").c_str());
 }
 
 struct Options {

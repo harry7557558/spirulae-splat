@@ -101,12 +101,14 @@ src/
 │   └── tests/              native cross-backend parity tests
 ├── shaders/                Slang device math SHARED by both backends — compiled
 │                             twice, to src/generated/*.cuh and to SPIR-V
-├── app/                    the native applications
-│   ├── cli/                main.cpp (ssplat-train), mesh_main.cpp (ssplat-mesh),
-│   │                         sfm_main.cpp (ssplat-sfm), sam_main.cpp (ssplat-sam)
+├── app/                    the ONE application, `ssplat` -- every tool below in
+│   │                         one executable, dispatched on argv[1]
+│   ├── Tools.h  Main.cpp   the subcommand table and the only main()
+│   ├── cli/                main.cpp (`ssplat train`), mesh_main.cpp (mesh),
+│   │                         sfm_main.cpp (sfm), sam_main.cpp (sam)
 │   ├── FrameExtract.{h,cpp}  video -> sharp (optionally masked) frames, shared
-│   │                         by ssplat-sam and the GUI
-│   ├── gui/                Dear ImGui desktop app (ssplat-gui)
+│   │                         by `ssplat sam` and the GUI
+│   ├── gui/                Dear ImGui desktop app (`ssplat` with no arguments)
 │   ├── webviewer/          HTTP server + render worker + viewer.html (the ONE
 │   │                         browser client: embedded into the engine library,
 │   │                         so CLI, GUI and _C.WebViewer serve the same bytes)
@@ -137,13 +139,21 @@ build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BACKEND=vulkan
 
 **Do not use `pip install -e .` for development builds on Linux** — use
 `build_develop.bash`. It produces `spirulae_splat/csrc.so` and the symlink
-`ssplat-train`'s `$ORIGIN` lookup expects.
+`ssplat`'s `$ORIGIN` lookup expects.
+
+Everything builds into **one executable**, `build/ssplat`: no arguments opens
+the GUI, `ssplat sfm|train|sam|mesh` are the command-line tools, and a symlink
+named `ssplat-sfm` runs that tool directly (`src/app/Tools.h`). The GUI runs
+reconstruction by re-running itself as a child process, so there is no sibling
+binary to keep next to it. `-DSSPLAT_SEPARATE_TOOLS=ON` also builds the old
+per-tool executables.
 
 Backends build into different trees; keep them separate (`-B build_cuda`,
 `-B build`) so you can test both without reconfiguring. Options:
 `SSPLAT_BACKEND` (`cuda`|`vulkan`), `SSPLAT_BUILD_CLI`, `SSPLAT_BUILD_GUI`,
 `SSPLAT_NO_TORCH`, `SSPLAT_BUILD_BACKEND_TESTS`, `SSPLAT_DEBUG_SYMBOLS`,
-`SSPLAT_BUILD_SFM`, `SSPLAT_BUILD_SAM`, `SSPLAT_ENABLE_PATENTED`.
+`SSPLAT_BUILD_SFM`, `SSPLAT_BUILD_SAM`, `SSPLAT_ENABLE_PATENTED`,
+`SSPLAT_SEPARATE_TOOLS`.
 Full matrix and per-platform notes: `docs/build.md`.
 
 **`SSPLAT_ENABLE_PATENTED` is OFF by default and should stay that way in
@@ -299,6 +309,15 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   under Meta's licences, and SAM 3's is not GPLv3-compatible. They are fetched
   at run time after the user has seen the terms -- `src/app/gui/ModelCache.cpp`
   is where that policy lives, and it is the only place that should grow one.
+- **The inference layer's VRAM pool is process-wide and grow-only**, so
+  destroying a `sam::Session` frees nothing by itself and a 2 GB checkpoint
+  stays resident until the process exits. `Session::unload()` (called by the
+  destructor) releases it; anything that keys a pool slot per instance must
+  namespace the key per owner, as `Tracker`'s memory bank does -- two trackers
+  numbering slots from zero write over each other.
+- **A GUI worker that clears a `busy` flag at the end of its function will
+  strand it.** Every early `return set_error(...)` skips the line, and the next
+  request is refused forever. Use a scope guard (`SegmentPanel::start_job`).
 
 ## Do not commit
 

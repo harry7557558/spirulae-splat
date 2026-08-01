@@ -27,4 +27,10 @@ int run_process(const std::vector<std::string>& argv,
 // True when `exe` resolves to an executable (PATH search like the shell).
 bool command_exists(const std::string& exe);
 
+// Hands a URL to the desktop's default browser and returns immediately. False
+// when nothing could be launched (a headless session, no xdg-open), which is
+// the caller's cue to fall back to showing the address. Never blocks and never
+// waits for the browser to exit.
+bool open_url(const std::string& url);
+
 }  // namespace gui

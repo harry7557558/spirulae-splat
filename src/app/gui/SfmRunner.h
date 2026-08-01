@@ -9,7 +9,7 @@
 //
 // Pipeline:
 //   DatasetPrep  (frames, sharpest-frame selection, .insv track split, masks)
-//   ssplat-sfm auto  ->  <workspace>/sparse/0/{cameras,images,points3D}.bin
+//   ssplat sfm auto  ->  <workspace>/sparse/0/{cameras,images,points3D}.bin
 //
 // The reconstruction runs as a child process rather than in this one. That is
 // a deliberate choice for now, not a shortcut left over from the COLMAP days:
@@ -23,9 +23,10 @@
 //   * it keeps one Vulkan device live in the GUI process instead of two
 //     (the port plan's own §10 risk).
 //
-// It is our binary, shipped next to the GUI (AppPaths::sibling_tool), so the
-// user still installs nothing. When phase 3 lands, only the run() body here
-// changes.
+// The child is this same executable run again (AppPaths::exe_path), so there
+// is nothing to install and nothing to find: `ssplat sfm` is one of the
+// subcommands the binary already answers to. When phase 3 lands, only the
+// run() body here changes.
 
 #include "app/gui/DatasetPrep.h"
 

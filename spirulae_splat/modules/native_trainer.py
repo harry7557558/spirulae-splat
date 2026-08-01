@@ -1,6 +1,6 @@
 """Adapter over the native training session (src/app/TrainerCore.h).
 
-`TrainerCore` is the training driver the standalone CLI (`ssplat-train`) and
+`TrainerCore` is the training driver the standalone CLI (`ssplat train`) and
 the native GUI already run, and its header comment describes itself as a
 line-by-line port of the Python managed path -- a comment doing the job a
 shared implementation should do. This module is the Python client for it, and

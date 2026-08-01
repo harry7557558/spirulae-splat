@@ -31,12 +31,24 @@ endif()
 #
 # Torch + Python are only needed for the Python extension module (ext.cpp).
 # When either is missing -- or SSPLAT_NO_TORCH=ON -- the extension is skipped
-# and only the standalone ssplat-train CLI is built (engine is torch-free).
+# and only the standalone `ssplat` CLI is built (engine is torch-free).
+#
+# Everything the build has goes into ONE executable, `ssplat`, which dispatches
+# on its first argument (`ssplat sfm auto ...`); see src/app/Tools.h. These two
+# options decide what is in it: the command-line tools, the window, or both.
 # ---------------------------------------------------------------------------
-option(SSPLAT_BUILD_CLI "Build the standalone ssplat-train CLI" OFF)
-option(SSPLAT_BUILD_GUI "Build the native GUI app ssplat-gui (fetches GLFW + Dear ImGui)" OFF)
-option(SSPLAT_NO_TORCH "Skip Torch/Python even if present; build only ssplat-train" OFF)
+option(SSPLAT_BUILD_CLI "Build the command-line tools into ssplat" OFF)
+option(SSPLAT_BUILD_GUI "Build the graphical application into ssplat (fetches GLFW + Dear ImGui)" OFF)
+option(SSPLAT_NO_TORCH "Skip Torch/Python even if present; build only ssplat" OFF)
 option(SSPLAT_BUILD_BACKEND_TESTS "Build backend parity test tools" OFF)
+
+# Also build ssplat-sfm and ssplat-sam as standalone executables. Same code and
+# the same dispatcher (src/app/Main.cpp reads argv[0]), but built alone neither
+# links the training engine or libtorch, which is the point: ssplat-sfm is
+# 24 MB against the combined binary's 61 MB. The other tools are not offered
+# separately -- they would be identical to `ssplat`, and a separate GUI could
+# not run reconstruction, which is this binary re-running itself.
+option(SSPLAT_SEPARATE_TOOLS "Also build ssplat-sfm / ssplat-sam standalone" OFF)
 
 # Debug symbols / line info are OFF by default: they bloat the binaries
 # massively (nvcc host -g, CUDA cubin lineinfo/source-in-ptx, and slangc -g2
@@ -52,8 +64,9 @@ option(SSPLAT_DEBUG_SYMBOLS "Emit debug symbols / line info (host -g, CUDA cubin
 # and the app targets.
 # vulkan: the portable engine layer (Engine*.cpp + host support) against the
 # Vulkan compute runtime (src/backend/vulkan/, see its README.md), built
-# WITHOUT the CUDA toolkit. Produces the backend tests, the ssplat-train CLI
-# (always) and ssplat-gui (with SSPLAT_BUILD_GUI=ON); no Python extension.
+# WITHOUT the CUDA toolkit. Produces the backend tests and `ssplat` -- with the
+# command-line tools always, and the GUI with SSPLAT_BUILD_GUI=ON; no Python
+# extension.
 # ---------------------------------------------------------------------------
 set(SSPLAT_BACKEND "cuda" CACHE STRING "Compute backend: cuda | vulkan")
 set_property(CACHE SSPLAT_BACKEND PROPERTY STRINGS cuda vulkan)
@@ -71,9 +84,9 @@ endif()
 # present. See cmake/SsplatSfm.cmake and src/sfm/README.md.
 # ---------------------------------------------------------------------------
 if(SSPLAT_BACKEND STREQUAL "vulkan")
-    option(SSPLAT_BUILD_SFM "Build the SfM module (ssplat-sfm)" ON)
+    option(SSPLAT_BUILD_SFM "Build the SfM module (`ssplat sfm`)" ON)
 else()
-    option(SSPLAT_BUILD_SFM "Build the SfM module (ssplat-sfm)" OFF)
+    option(SSPLAT_BUILD_SFM "Build the SfM module (`ssplat sfm`)" OFF)
 endif()
 
 # ---------------------------------------------------------------------------

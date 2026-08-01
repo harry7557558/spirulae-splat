@@ -69,10 +69,15 @@ bool has_model(const fs::path& sparse) {
 }  // namespace
 
 std::string SfmRunner::availability() {
-    if (sibling_tool("ssplat-sfm").empty())
-        return "ssplat-sfm was not found next to this program. It is part of "
-               "the same release; reinstall, or use COLMAP instead.";
+#ifndef SSPLAT_TOOL_SFM
+    return "this build has no structure-from-motion module "
+           "(-DSSPLAT_BUILD_SFM=OFF); use COLMAP instead.";
+#else
+    if (exe_path().empty())
+        return "this program could not work out its own path, so it cannot "
+               "run the reconstruction step.";
     return "";
+#endif
 }
 
 SfmRunner::~SfmRunner() {
@@ -222,7 +227,7 @@ void SfmRunner::run(SfmJob job) {
         } else {
             set_stage("Reconstructing (finding features)");
             std::vector<std::string> argv = {
-                sibling_tool("ssplat-sfm"), "auto", prep.image_dir,
+                exe_path(), "sfm", "auto", prep.image_dir,
                 "-o", ws.string(),
                 "--quality", pick(kQuality, job.quality, 2),
                 "--data-type", pick(kDataType, job.data_type),
@@ -272,7 +277,7 @@ void SfmRunner::run(SfmJob job) {
             }, _cancel);
             if (rc == kCancelled) return fail("cancelled");
             if (rc == kSpawnFailed)
-                return fail("could not start ssplat-sfm (" + argv[0] + ")");
+                return fail("could not start the reconstruction (" + argv[0] + ")");
             // `auto` spends exit code 2 on "nothing reconstructed" and 3 on
             // "reconstructed, but under half the images registered or the
             // reprojection error is high" (src/sfm/README.md). 3 is a warning

@@ -2,7 +2,7 @@
 setlocal
 rem Development build for Windows. Extra arguments are passed to CMake, e.g.
 rem   build_develop.bat -DTORCH_CUDA_ARCH_LIST=8.6
-rem Builds the standalone ssplat-train.exe. Torch is skipped explicitly: the
+rem Builds the standalone ssplat.exe. Torch is skipped explicitly: the
 rem torch/Python extension build is not supported on Windows, and a broken
 rem torch install would otherwise abort configure from inside TorchConfig.cmake
 rem (pass a trailing -DSSPLAT_NO_TORCH=OFF to try anyway).
@@ -92,6 +92,6 @@ cmake --build build -j %JOBS%
 if errorlevel 1 exit /b 1
 
 rem No csrc rename here: a Windows torch/extension build is not supported yet
-rem (no-torch builds link csrc statically into ssplat-train.exe).
+rem (no-torch builds link csrc statically into ssplat.exe).
 echo.
-echo Build complete: build\ssplat-train.exe
+echo Build complete: build\ssplat.exe

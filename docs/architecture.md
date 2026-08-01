@@ -4,7 +4,7 @@
 
 ```
                 ┌────────────────────────────────────────────────────────────┐
-  front ends    │ ssplat-train (CLI)    ssplat-gui (ImGui)   Python package  │
+  front ends    │ ssplat train (CLI)    ssplat (ImGui GUI)   Python package  │
                 │ src/app/cli/          src/app/gui/         spirulae_splat/ │
                 └────────────┬────────────────┬──────────────────┬───────────┘
                              │                │                  │

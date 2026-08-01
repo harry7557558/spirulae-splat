@@ -77,7 +77,12 @@ void SegmentPanel::close() {
     _cancel = true;
     if (_worker.joinable()) _worker.join();
     _cancel = false;
-    // Drop the model: the reconstruction that usually follows wants the VRAM.
+    // Drop the model: the reconstruction that usually follows wants the VRAM,
+    // and ~Masker -> Session::unload() hands the weights back for real rather
+    // than leaving them in the inference layer's process-wide pool. The device
+    // itself stays up -- reopening the panel is common, and rebuilding it
+    // would cost a pipeline rebuild for the ~50 MB it holds. A dataset run
+    // takes the device down at the end (DatasetPrep::run).
     _job.reset();
     _open = false;
 }
@@ -154,10 +159,31 @@ void SegmentPanel::start_job(const MaskSettings& s) {
 
     _worker = std::thread([this, settings, model, frame_path, input, is_video,
                            idx, clicks, frame_dirty] {
+        // Every failure below leaves through `return set_error(...)`, so the
+        // flag cannot be cleared at the end of the function: one early exit
+        // would strand it at true, and start_job() refuses to run while it is
+        // -- a panel that never shows anything again, whatever you type.
+        struct BusyGuard {
+            std::atomic<bool>& flag;
+            ~BusyGuard() { flag = false; }
+        } busy_guard{_busy};
+
         auto set_error = [&](const std::string& e) {
             std::lock_guard<std::mutex> lk(_mu);
             _error = e;
             _status.clear();
+        };
+        // The frame on its own, before any mask exists. Called as soon as it
+        // is decoded so the panel shows a picture while the checkpoint uploads
+        // -- and so that a user with a SAM 2 checkpoint, whose only prompt is
+        // a click, has something to click on.
+        auto show_frame = [&](const nn::Image& img) {
+            std::lock_guard<std::mutex> lk(_mu);
+            _preview = img.data;
+            _preview_w = img.width;
+            _preview_h = img.height;
+            _preview_dirty = true;
+            _kept_fraction = -1.0f;
         };
         try {
             if (!_job) _job = std::make_unique<Job>();
@@ -201,8 +227,21 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                         return set_error("could not read " + frame_path);
                 }
                 j.frame_key = key;
+                show_frame(j.frame);
             }
             if (_cancel.load()) return;
+
+            // Nothing to segment yet. The frame is up, which is the whole
+            // point of getting here: with a SAM 2 checkpoint a click is the
+            // only prompt there is, and it cannot be made on a blank panel.
+            if (settings.prompt.empty() && clicks.empty()) {
+                show_frame(j.frame);
+                std::lock_guard<std::mutex> lk(_mu);
+                _status = "Say what to look for above, or click the object in "
+                          "the picture.";
+                _error.clear();
+                return;
+            }
 
             // ---- the model ----
             // Every field below changes what the masker computes, so the
@@ -283,7 +322,6 @@ void SegmentPanel::start_job(const MaskSettings& s) {
         } catch (const std::exception& e) {
             set_error(e.what());
         }
-        _busy = false;
     });
 #endif
 }
@@ -385,29 +423,15 @@ void SegmentPanel::draw(MaskSettings& settings) {
     const float panel_w = 360.0f;
     ImGui::BeginChild("##segctl", ImVec2(panel_w, 0), ImGuiChildFlags_Borders);
 
-    ImGui::TextUnformatted("What should be removed?");
-    ImGui::SetNextItemWidth(-1);
-    bool edited = ImGui::InputTextWithHint("##prompt", "people; cars; my shadow",
-                                           &settings.prompt);
-    help_tooltip_on_hover(
-        "Plain words for the things to take out of the reconstruction, "
-        "separated by semicolons. Anything that moved, reflected, or was not "
-        "part of the scene is a good candidate.");
+    bool edited = false;
 
-    ImGui::Spacing();
-    ImGui::TextUnformatted("...but keep these");
-    ImGui::SetNextItemWidth(-1);
-    edited |= ImGui::InputTextWithHint("##negprompt", "person in a painting",
-                                       &settings.negative_prompt);
-    help_tooltip_on_hover(
-        "Exceptions: things that match the prompt above but should stay. "
-        "Optional.");
-
-    ImGui::Spacing();
+    // Polarity first, and the two fields below it are labelled by it: the same
+    // box means "take this out" or "this is the subject" depending on the
+    // radio, and a label that does not follow the switch reads as a bug.
     // Stacked, not side by side: at this panel width the second label clips.
     int polarity = settings.keep_subject ? 1 : 0;
-    if (ImGui::RadioButton("Remove what I named", polarity == 0)) polarity = 0;
-    if (ImGui::RadioButton("Keep only what I named", polarity == 1)) polarity = 1;
+    if (ImGui::RadioButton("Remove what I name", polarity == 0)) polarity = 0;
+    if (ImGui::RadioButton("Keep only what I name", polarity == 1)) polarity = 1;
     if ((polarity == 1) != settings.keep_subject) {
         settings.keep_subject = polarity == 1;
         edited = true;
@@ -416,6 +440,33 @@ void SegmentPanel::draw(MaskSettings& settings) {
         "\"Remove\" is for distractors -- people, cars, the photographer's "
         "shadow. \"Keep only\" is for object captures, where everything but "
         "the subject should be ignored.");
+    const bool keep = settings.keep_subject;
+
+    ImGui::Spacing();
+    ImGui::TextUnformatted(keep ? "What should be kept?"
+                                : "What should be removed?");
+    ImGui::SetNextItemWidth(-1);
+    edited |= ImGui::InputTextWithHint(
+        "##prompt", keep ? "the statue; its pedestal" : "people; cars; my shadow",
+        &settings.prompt);
+    help_tooltip_on_hover(
+        keep ? "Plain words for the subject of the capture, separated by "
+               "semicolons. Everything else is cut out of the reconstruction."
+             : "Plain words for the things to take out of the reconstruction, "
+               "separated by semicolons. Anything that moved, reflected, or "
+               "was not part of the scene is a good candidate.");
+
+    ImGui::Spacing();
+    ImGui::TextUnformatted(keep ? "...but remove these" : "...but keep these");
+    ImGui::SetNextItemWidth(-1);
+    edited |= ImGui::InputTextWithHint(
+        "##negprompt", keep ? "the hand holding it" : "person in a painting",
+        &settings.negative_prompt);
+    help_tooltip_on_hover(
+        keep ? "Exceptions: things that match the line above but should still "
+               "go. Optional."
+             : "Exceptions: things that match the line above but should stay. "
+               "Optional.");
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -473,10 +524,15 @@ void SegmentPanel::draw(MaskSettings& settings) {
     }
     if (_kept_fraction >= 0.0f) {
         ImGui::Text("%.0f%% of the frame is kept", 100.0f * _kept_fraction);
-        if (_kept_fraction < 0.05f)
+        if (_kept_fraction < 0.05f) {
+            ImGui::PushTextWrapPos();
             ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.30f, 1.0f),
-                               "Almost everything is masked out -- did you mean "
-                               "\"Keep only what I named\"?");
+                               keep ? "Almost nothing is left -- the prompt "
+                                      "matched very little of the frame."
+                                    : "Almost everything is masked out -- did "
+                                      "you mean \"Keep only what I name\"?");
+            ImGui::PopTextWrapPos();
+        }
     }
 
     ImGui::EndChild();

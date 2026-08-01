@@ -118,7 +118,7 @@ checkout before `csrc.so` exists) and emits `src/app/generated/cli_config.h`:
   fields that preset overrides.
 
 Consequences: add a field to the Python dataclass and it appears in
-`ssplat-train --help`, in the GUI, and in the preset machinery after codegen.
+`ssplat train --help`, in the GUI, and in the preset machinery after codegen.
 Names are flattened (`--model.sh-degree` → `--sh-degree`); a collision across
 groups must be resolved in the script's `RENAMES` table, and the script
 **errors on any unlisted collision** so a new Python field cannot silently
@@ -164,7 +164,7 @@ Rerun it whenever the engine gains a new kernel call, **or when a port lands**
 ## Non-script generation done by CMake
 
 - `viewer.html` → `app_generated/viewer_html.h` (byte array), so
-  `ssplat-train`/`ssplat-gui` serve the viewer from a self-contained binary.
+  `ssplat train` and the GUI serve the viewer from a self-contained binary.
   Regenerated at configure time when the HTML changes. `Viewer.cpp` has a dev
   override so HTML edits don't require a rebuild.
 - Slang → SPIR-V blobs → `vk_shaders_embedded.cpp`

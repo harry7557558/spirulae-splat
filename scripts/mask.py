@@ -49,7 +49,8 @@ def union_masks(outputs) -> Optional[np.ndarray]:
     return result
 
 
-def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str):
+def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str,
+            keep_prompted: bool = False):
 
     image_dir = Path(dataset_dir) / image_dir
     mask_dir = Path(dataset_dir) / mask_dir
@@ -72,14 +73,19 @@ def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str):
             pos_outputs, neg_outputs = predictor(image)
         pos_union = union_masks(pos_outputs)
         if pos_union is None:
-            result_mask = np.ones((1, 1), dtype=np.bool_)
+            # Nothing matched: keep the whole image, or -- when the prompt
+            # names the subject rather than a distractor -- none of it.
+            result_mask = np.full((1, 1), not keep_prompted, dtype=np.bool_)
         else:
             neg_union = union_masks(neg_outputs)
             if neg_union is not None:
                 # regions matching a negative prompt are kept even if they
                 # also match a positive prompt
                 pos_union &= ~neg_union
-            result_mask = ~pos_union
+            # The mask says what to KEEP: by default that is everything the
+            # prompt did NOT match. --keep_prompted flips it, for a capture
+            # where the prompt names the subject.
+            result_mask = pos_union if keep_prompted else ~pos_union
 
         # resize mask to match original image resolution (model may run at reduced size)
         if result_mask.shape != (image.size[1], image.size[0]):
@@ -117,6 +123,9 @@ if __name__ == "__main__":
     parser.add_argument("--images", default="images", help="Subfolder containing images. Default: images")
     parser.add_argument("--masks", default="masks", help="Subfolder to save masks. Default: masks")
     parser.add_argument("--max_image_size", type=int, default=1600, help="Maximum image size. Default: 1600")
+    parser.add_argument("--keep_prompted", "--keep-prompted", action="store_true",
+                        help="The prompt names what to KEEP, not what to remove: "
+                             "everything else is masked out. For object captures.")
     parser.add_argument("--model", default="sam2.1_hiera_large", help="SAM model to use.")
     parser.add_argument("--box_threshold", type=float, default=0.4, help="Box threshold for lang-sam model.")
     parser.add_argument("--text_threshold", type=float, default=0.25, help="Text threshold for lang-sam model.")
@@ -189,4 +198,5 @@ if __name__ == "__main__":
         args.input_dir[0],
         args.images,
         args.masks,
+        args.keep_prompted,
     )

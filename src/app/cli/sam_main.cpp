@@ -18,6 +18,7 @@
 // Diagnostics go to stderr, the result table to stdout, so a run pipes cleanly:
 //   ssplat-sam segment ... 2>/dev/null > detections.tsv
 
+#include "app/Tools.h"
 #include "nn/core/Log.h"
 #include "nn/Device.h"
 #include "nn/io/Image.h"
@@ -40,7 +41,9 @@ namespace fs = std::filesystem;
 namespace {
 
 void usage() {
-    std::fprintf(stderr,
+    // Written against the historical name; app::help_text swaps in how this
+    // tool was actually invoked ("ssplat sam", normally).
+    static const char* kUsage =
         "ssplat-sam -- SAM 2 / SAM 3 segmentation and tracking on Vulkan\n"
         "\n"
         "  ssplat-sam devices\n"
@@ -84,7 +87,8 @@ void usage() {
         "Common: --device <index|name>  --vram  --profile  --validate  --img-size <n>\n"
         "        --max-size <n>         downscale inputs to fit (default 1600, 0 = off)\n"
         "Environment: SSPLAT_NN_LOG=0..3  SSPLAT_VK_DEVICE  SSPLAT_PROFILE=1\n"
-        "             SSPLAT_VK_VALIDATION=1  SSPLAT_NN_DEBUG_SYNC=1\n");
+        "             SSPLAT_VK_VALIDATION=1  SSPLAT_NN_DEBUG_SYNC=1\n";
+    std::fprintf(stderr, "%s", app::help_text(kUsage, "ssplat-sam").c_str());
 }
 
 bool parse_floats(const char* s, float* out, int n) {
@@ -432,7 +436,8 @@ int cmd_video(const Options& o) {
 int sam_cli_extract(int argc, char** argv);
 #endif
 
-int main(int argc, char** argv) {
+int ssplat_sam_main(int argc, char** argv) {
+    app::set_program_name(argc > 0 ? argv[0] : nullptr, "ssplat sam");
     if (argc >= 2 && std::strcmp(argv[1], "extract") == 0) {
 #ifdef SSPLAT_HAVE_VIDEO
         int rc = sam_cli_extract(argc - 1, argv + 1);
@@ -443,7 +448,8 @@ int main(int argc, char** argv) {
                      "`extract` needs the in-process video decoder, which is "
                      "compiled only with -DSSPLAT_ENABLE_PATENTED=ON (see "
                      "cmake/SsplatOptions.cmake). Extract frames with ffmpeg "
-                     "and mask them with `ssplat-sam track` instead.\n");
+                     "and mask them with `%s track` instead.\n",
+                     app::program_name().c_str());
         return 1;
 #endif
     }

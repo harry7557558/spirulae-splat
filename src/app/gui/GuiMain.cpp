@@ -2,6 +2,7 @@
 // core context (lowest version that also satisfies macOS) + Dear ImGui
 // bootstrap, then hands every frame to gui::GuiApp.
 
+#include "app/Tools.h"
 #include "app/gui/GuiApp.h"
 
 #include "imgui.h"
@@ -48,7 +49,7 @@ void apply_style(float scale) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int ssplat_gui_main(int argc, char** argv) {
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
         std::fprintf(stderr, "error: failed to initialize GLFW (is a display "

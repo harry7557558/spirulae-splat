@@ -37,17 +37,20 @@ const std::vector<ModelEntry>& model_catalog() {
     // upload, so the accuracy difference is small and the download is not.
     static const std::vector<ModelEntry> kCatalog = {
         {"sam3-q4_0", "sam3-q4_0.ggml", "SAM 3 (recommended)",
-         "Understands text prompts -- type what to mask out. 707 MB, ~2 GB VRAM.",
+         "Understands text prompts -- type what to mask out. 707 MB, ~2 GB "
+         "VRAM, roughly 1.5 s per frame on a laptop GPU.",
          "sam3", 707ull << 20, true},
         {"sam3-f16", "sam3-f16.ggml", "SAM 3, full precision",
          "The same model without file quantization. Slightly better masks, "
-         "much bigger download.",
+         "much bigger download, same speed.",
          "sam3", 1884ull << 20, true},
         {"sam2.1-large", "sam2.1_hiera_large_f16.ggml", "SAM 2.1 Large",
-         "Click or draw a box to select an object; no text prompts. Apache-2.0.",
+         "Click or draw a box to select an object; no text prompts. About "
+         "twice as fast as SAM 3. Apache-2.0.",
          "sam2", 451ull << 20, false},
         {"sam2.1-tiny", "sam2.1_hiera_tiny_f16.ggml", "SAM 2.1 Tiny (fastest)",
-         "Clicks and boxes only, ~2x faster than Large, 79 MB. Apache-2.0.",
+         "Clicks and boxes only, ~3x faster than SAM 3, 79 MB. Best when the "
+         "capture is long and the subject is easy to point at. Apache-2.0.",
          "sam2", 79ull << 20, false},
     };
     return kCatalog;
@@ -69,14 +72,15 @@ const LicenseInfo& license_for(const std::string& family) {
         "its own licence -- which is not an open-source one. It is free to "
         "use, including commercially, but only on Meta's terms, so we cannot "
         "ship it with the app or accept them for you.\n\n"
-        "The download is about 707 MB and is kept for next time.",
-        "https://huggingface.co/facebook/sam3", true};
+        "Please read it before continuing -- it is short, and it is the actual "
+        "agreement, not this summary of it.",
+        "https://github.com/facebookresearch/sam3/blob/main/LICENSE", true};
     static const LicenseInfo kSam2{
         "sam2", "SAM 2.1 License (Meta, Apache-2.0)",
         "SAM 2.1 is Meta's model, released under the Apache 2.0 licence. "
         "Nothing unusual to agree to; it is downloaded rather than bundled "
         "only to keep the app small.",
-        "https://huggingface.co/facebook/sam2.1-hiera-large", false};
+        "https://github.com/facebookresearch/sam2/blob/main/LICENSE", false};
     return family == "sam2" ? kSam2 : kSam3;
 }
 

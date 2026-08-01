@@ -4,9 +4,9 @@
 //
 // Three questions with platform-specific answers that several GUI modules ask,
 // answered once: the settings directory, the cache directory (model
-// checkpoints, the COLMAP vocabulary tree), and the directory this executable
-// lives in -- which is how ssplat-gui locates ssplat-sfm and ssplat-sam
-// without depending on PATH.
+// checkpoints, the COLMAP vocabulary tree), and where this executable is --
+// which is how the GUI runs a reconstruction, since that is `ssplat sfm`, i.e.
+// this same binary again.
 
 #include <string>
 
@@ -19,14 +19,13 @@ std::string config_dir();
 // Large downloads live here, so it is deliberately not the config directory.
 std::string cache_dir();
 
-// The directory holding the running executable, or "" if it cannot be
-// determined. Resolved once.
+// The running executable, and the directory holding it. Both "" if they cannot
+// be determined. Resolved once.
+//
+// exe_path() is what the GUI spawns to run a tool -- `<exe_path> sfm auto ...`
+// -- rather than looking one up by name. Nothing to find, nothing to install,
+// and no chance of reaching a different build that happens to be on PATH.
+std::string exe_path();
 std::string exe_dir();
-
-// Full path to a tool shipped alongside this executable ("ssplat-sfm" ->
-// "<exe_dir>/ssplat-sfm[.exe]"), or "" when it is not there. Falls back to
-// nothing rather than to PATH: a stale copy of ssplat-sfm found on PATH would
-// be far more confusing than a clear "not found".
-std::string sibling_tool(const std::string& name);
 
 }  // namespace gui
