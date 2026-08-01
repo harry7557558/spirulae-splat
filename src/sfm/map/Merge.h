@@ -113,6 +113,20 @@ struct DuplicateOptions {
     // veto sits where the two are separated by two orders of magnitude, not by
     // a factor of 1.5.
     double max_cut_fraction = 0.005;
+    // A group the cut produced is a fold only if it is written *on top of*
+    // something: this fraction of its images must sit where an image outside it
+    // also sits (the same co-location test as above). A group that fails this
+    // is not a duplicate of anywhere -- it is a part of the capture the
+    // conflicts happened to sever -- and it is put back rather than written out
+    // as its own model (D67).
+    //
+    // The two tests above are both about the *cut*, and neither asks whether
+    // the pieces coincide. On a 6112-image capture six conflicting pairs out of
+    // 557 tore 358 images off a settled 5500-image model through a cut costing
+    // 0.08% of its co-visibility -- passing both -- and those 358 images were
+    // the difference between 90% and 84% coverage. Six pairs can only put six
+    // images on top of anything.
+    double min_fold_overlap = 0.5;
 };
 
 struct DuplicateReport {
@@ -120,6 +134,12 @@ struct DuplicateReport {
     size_t conflicts = 0;   // ... that share (almost) no structure and never matched
     size_t unmatched_but_seen = 0;  // ... that share none but *were* matched
     std::vector<std::pair<uint32_t, uint32_t>> pairs;  // the conflicting ones
+    // Every co-located pair, conflicting or not. This is what says whether a
+    // group the cut produced sits on top of anything (min_fold_overlap); the
+    // conflicts alone cannot, since the cut is derived from them and they
+    // straddle it by construction. Small in practice -- the radius and
+    // orientation tests are tight, and a 5441-image model yielded 789.
+    std::vector<std::pair<uint32_t, uint32_t>> colocated_pairs;
     double ratio() const { return colocated ? (double)conflicts / (double)colocated : 0.0; }
     bool duplicated(const DuplicateOptions& o) const {
         return (int)conflicts >= o.min_conflicts && ratio() >= o.min_conflict_ratio;
@@ -166,6 +186,7 @@ inline DuplicateReport findDuplicateStructure(const Reconstruction& m,
             if (d.dot(d) > r2) continue;
             if (fwd[i].dot(fwd[j]) < opt.min_view_cos) continue;
             rep.colocated++;
+            rep.colocated_pairs.push_back({ids[i], ids[j]});
             size_t sh = sharedPoints(pts[i], pts[j]);
             double frac = (double)sh / (double)std::min(pts[i].size(), pts[j].size());
             if (frac >= opt.max_shared_frac) continue;
@@ -205,6 +226,11 @@ struct DuplicateCut {
         const uint64_t t = severed + kept;
         return t ? (double)severed / (double)t : 0.0;
     }
+    // Of the groups the cut proposed, how many were put back for sitting on top
+    // of nothing, and the weakest overlap among those that survived
+    // (min_fold_overlap). 1.0 with nothing to report.
+    size_t reattached = 0;
+    double min_overlap = 1.0;
 };
 
 // The verdict: this model is folded and the split it implies is worth making.
@@ -219,7 +245,8 @@ inline std::vector<Reconstruction> splitDuplicateStructure(const Reconstruction&
                                                            const DuplicateReport& rep,
                                                            size_t min_group,
                                                            size_t* dropped_out = nullptr,
-                                                           DuplicateCut* cut_out = nullptr) {
+                                                           DuplicateCut* cut_out = nullptr,
+                                                           double min_fold_overlap = 0.0) {
     if (rep.pairs.empty()) return {m};
     std::vector<uint32_t> ids;
     std::map<uint32_t, size_t> pos;
@@ -271,21 +298,6 @@ inline std::vector<Reconstruction> splitDuplicateStructure(const Reconstruction&
         parent[ra] = rb;
     }
 
-    // What the cut costs. Every co-visibility edge is either inside a component
-    // or across the cut; a genuine fold severs almost nothing, because the two
-    // copies never shared structure in the first place.
-    if (cut_out) {
-        DuplicateCut c;
-        for (const auto& kv : covis) {
-            if (find(kv.first.first) == find(kv.first.second)) c.kept += kv.second;
-            else c.severed += kv.second;
-        }
-        std::set<size_t> roots;
-        for (size_t i = 0; i < ids.size(); i++) roots.insert(find(i));
-        c.groups = roots.size();
-        *cut_out = c;
-    }
-
     std::map<size_t, std::vector<uint32_t>> groups;
     for (size_t i = 0; i < ids.size(); i++) groups[find(i)].push_back(ids[i]);
     std::vector<std::vector<uint32_t>> gs;
@@ -295,6 +307,60 @@ inline std::vector<Reconstruction> splitDuplicateStructure(const Reconstruction&
                   return a.size() > b.size();
               });
     if (gs.size() <= 1) return {m};
+
+    // Is each group written on top of something? A fold's two copies occupy the
+    // same space, so nearly every image of the smaller copy stands where an
+    // image of the other one stands. A group that does not -- a stretch of the
+    // capture the conflicts happened to sever -- goes back into the largest
+    // group instead of becoming a model of its own (D67).
+    if (min_fold_overlap > 0.0 && !rep.colocated_pairs.empty()) {
+        std::map<uint32_t, size_t> group_of;
+        for (size_t g = 0; g < gs.size(); g++)
+            for (uint32_t id : gs[g]) group_of[id] = g;
+        std::vector<std::set<uint32_t>> covered(gs.size());
+        for (const auto& p : rep.colocated_pairs) {
+            auto a = group_of.find(p.first), b = group_of.find(p.second);
+            if (a == group_of.end() || b == group_of.end() || a->second == b->second) continue;
+            covered[a->second].insert(p.first);
+            covered[b->second].insert(p.second);
+        }
+        std::vector<std::vector<uint32_t>> keep;
+        keep.push_back(std::move(gs[0]));  // the largest is what the rest fall back into
+        for (size_t g = 1; g < gs.size(); g++) {
+            const double ov = (double)covered[g].size() / (double)gs[g].size();
+            if (ov >= min_fold_overlap) {
+                if (cut_out) cut_out->min_overlap = std::min(cut_out->min_overlap, ov);
+                keep.push_back(std::move(gs[g]));
+            } else {
+                if (cut_out) cut_out->reattached++;
+                keep[0].insert(keep[0].end(), gs[g].begin(), gs[g].end());
+            }
+        }
+        gs = std::move(keep);
+        std::sort(gs.begin(), gs.end(),
+                  [](const std::vector<uint32_t>& a, const std::vector<uint32_t>& b) {
+                      return a.size() > b.size();
+                  });
+        if (gs.size() <= 1) return {m};
+    }
+
+    // What the cut costs, measured on the split as it now stands rather than on
+    // the one Kruskal proposed -- an edge into a re-attached group is not
+    // severed any more, and the caller's veto (max_cut_fraction) has to see the
+    // split it is actually vetoing. Every co-visibility edge is either inside a
+    // group or across the cut; a genuine fold severs almost nothing, because
+    // the two copies never shared structure in the first place.
+    if (cut_out) {
+        std::vector<size_t> gid(ids.size(), (size_t)-1);
+        for (size_t g = 0; g < gs.size(); g++)
+            for (uint32_t id : gs[g]) gid[pos.at(id)] = g;
+        for (const auto& kv : covis) {
+            if (gid[kv.first.first] == gid[kv.first.second]) cut_out->kept += kv.second;
+            else cut_out->severed += kv.second;
+        }
+        cut_out->groups = gs.size();
+    }
+
     std::vector<Reconstruction> parts;
     size_t dropped = 0;
     for (const std::vector<uint32_t>& g : gs) {
@@ -569,6 +635,12 @@ struct AlignmentResult {
     double mean_error = 0;         // px, over the inliers
     bool success = false;
     std::string reason;
+    // Set when the transform came from structure the two models triangulated
+    // in common rather than from images they both registered (D70), with the
+    // number of 3D-3D correspondences it was fitted to. Two models can be
+    // aligned this way while sharing no camera at all.
+    size_t structure_pairs = 0;
+    bool from_structure = false;
 };
 
 // Images both models registered, in `src`-id order. Ids are the identity here:
@@ -954,7 +1026,22 @@ public:
     // hold up. `alignment` non-null skips estimation and uses the caller's
     // transform (the GUI path: a user-placed or externally computed one); the
     // acceptance checks still apply.
+    // With an alignment computed elsewhere -- a user's placement, or one fitted
+    // to the structure the two models share rather than to shared images
+    // (Mapper::alignByStructure, D70). Everything after the transform is
+    // identical, so such a merge faces every acceptance test the ordinary path
+    // does, and the inlier count it carries is what the splice arbitration
+    // reads.
+    MergeAttempt tryMerge(size_t dst, size_t src, const AlignmentResult& alignment) {
+        return tryMergeImpl(dst, src, &alignment, nullptr);
+    }
     MergeAttempt tryMerge(size_t dst, size_t src, const Sim3* alignment = nullptr) {
+        return tryMergeImpl(dst, src, nullptr, alignment);
+    }
+
+private:
+    MergeAttempt tryMergeImpl(size_t dst, size_t src, const AlignmentResult* full,
+                              const Sim3* alignment) {
         MergeAttempt a;
         a.dst = dst;
         a.src = src;
@@ -963,7 +1050,9 @@ public:
             log_.push_back(a);
             return log_.back();
         }
-        if (alignment) {
+        if (full) {
+            a.alignment = *full;
+        } else if (alignment) {
             a.alignment.transform = *alignment;
             a.alignment.common_images = sharedImages(models_[src], models_[dst]).size();
             a.alignment.success = true;
@@ -1053,16 +1142,20 @@ public:
         a.merged = true;
         if (opt_.verbose)
             fprintf(stderr,
-                    "[merge] model %zu <- model %zu: %zu shared images (%zu inliers, %.2f px), "
+                    "[merge] model %zu <- model %zu: %zu %s (%zu inliers, %.2f px), "
                     "+%zu images, %u -> %u, +%zu points, %zu spliced (%zu disagreed)\n",
-                    dst, src, a.alignment.common_images, a.alignment.inliers,
-                    a.alignment.mean_error, c.images_added, anchor_imgs,
+                    dst, src,
+                    a.alignment.from_structure ? a.alignment.structure_pairs
+                                               : a.alignment.common_images,
+                    a.alignment.from_structure ? "shared points" : "shared images",
+                    a.alignment.inliers, a.alignment.mean_error, c.images_added, anchor_imgs,
                     models_[dst].numRegistered(), c.points_added, c.points_spliced,
                     c.splice_conflicts);
         log_.push_back(a);
         return log_.back();
     }
 
+public:
     // Merge until nothing else can be. Failed pairs are remembered so they are
     // not retried on identical inputs, and forgotten again for any model that a
     // later merge changed -- the same "undo and come back to it" shape as the

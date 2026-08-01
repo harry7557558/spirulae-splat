@@ -42,7 +42,24 @@ struct ManagerOptions {
     // Audit a merged model's poses against the correspondence graph and
     // re-register what it cannot support (Mapper::audit). Off means a merged
     // model is only bundle-adjusted, which cannot undo a gross misplacement.
-    bool do_audit = true;
+    //
+    // **Off**, on measurement (D71). The repair moves an image to a pose chosen
+    // by a RANSAC over correspondences the image does not own, and that pose is
+    // -- in the audit's own words -- supported by evidence "weaker than
+    // registration demands". At a handful of images that is a good trade. At
+    // scale it is not: on a 5356-image capture the audit repaired 77 images and
+    // took AUC@10 from **93.5 to 65.0**, and on a 7620-image one it repaired 558
+    // and cost 7 points. It is also the most expensive pass in the pipeline --
+    // 421 s of a 2076 s run there, 242 s of a 2005 s run here -- so it was
+    // buying that with the largest bill of any finishing pass.
+    //
+    // The refinement it used to end with still happens either way (auditModels
+    // falls back to Mapper::refine), so what is switched off is the repair
+    // alone. D44's case for it -- rig frames left tens of degrees apart by a
+    // merge of two drifted halves -- is real and predates the seam validator
+    // (D45) and the splice test, which refuse that merge outright now. If it
+    // recurs, it wants a repair that de-registers rather than guesses.
+    bool do_audit = false;
     // What an audit's repair pass may grow a model to, as a fraction of what it
     // already held (see Mapper::audit). 0 leaves it uncapped, which is a full
     // incremental growth pass hiding inside a repair; the assembler has a growth
@@ -64,6 +81,20 @@ struct ManagerOptions {
     double seam_min_agreement = 0.6;   // fraction of tested cross-seam pairs
     double seam_min_pair_fraction = 0.5;  // ... of a pair's matches, to call it holding
     int seam_min_pairs = 10;           // below this there is nothing to judge on
+    // ... and that pair fraction is a *ceiling*, not the bar. The bar is what
+    // the model's own non-crossing pairs achieve, times this (D68). A verified
+    // pair is not ground truth: on a repetitive interior some of them join two
+    // places that merely look alike, and there the same measurement over pairs
+    // nobody doubts comes back far below 0.5 -- so a fixed bar asks a correct
+    // merge to beat evidence the capture does not contain, and refuses it.
+    //
+    // Measured on a 7620-image capture that is half building interior: the
+    // assembler refused 41 of 43 merges, and merging the models it wrote
+    // afterwards with no seam test at all recovered 268 images and 3 points of
+    // AUC@10. It only ever loosens -- min() with the fraction above -- so a
+    // capture whose pairs are trustworthy is judged exactly as before.
+    double seam_relative_bar = 0.6;    // 0 uses seam_min_pair_fraction flat
+    int seam_reference_pairs = 400;    // non-crossing pairs sampled for it
     // A merge that fails the test above is not necessarily wrong -- it may
     // merely be out of true (D64). The test measures pixels on a model no
     // bundle adjustment has seen: the incoming half arrives under one
@@ -127,6 +158,10 @@ struct ManagerStats {
     // `rescue_gain` is how much the rescue's refinement moved that median when
     // it did not work, which says whether the seam is out of true or wrong.
     double seam_refused_median = 0, seam_passed_median = 0, seam_rescue_gain = 0;
+    // Summed over judged merges: the bar each was held to, and what the model's
+    // own non-crossing pairs explained. Both are needed to read the two medians
+    // above -- a low refused median is only damning against a high bar (D68).
+    double seam_bar_sum = 0, seam_reference_sum = 0;
     size_t seam_refused_pairs = 0, seam_passed = 0;
     size_t splits = 0, duplicate_splits = 0, split_dropped = 0;
     size_t models_before = 0, models_after = 0;
@@ -212,13 +247,21 @@ seamValidator(Mapper& mapper, const ManagerOptions& opt, ManagerStats* st = null
     const double min_agree = opt.seam_min_agreement;
     const size_t min_pairs = (size_t)std::max(0, opt.seam_min_pairs);
     const double rescue_frac = opt.seam_rescue_frac;
+    const double rel_bar = opt.seam_relative_bar;
+    const size_t ref_pairs = (size_t)std::max(0, opt.seam_reference_pairs);
     // Shared by every merge this validator is handed to, so the budget bounds
     // the pass rather than each attempt in it.
     auto budget = std::make_shared<int>(std::max(0, opt.seam_max_rescues));
+    // The reference is a property of the capture's matches, not of one seam, so
+    // it is measured once and reused -- but only once there were enough pairs
+    // to measure it on, since the first merge of a run may join two models too
+    // small to say anything. -1 = not yet established.
+    auto reference = std::make_shared<double>(-1.0);
     const double max_splice = opt.merge.max_splice_conflict_ratio;
-    return [mp, max_err, pair_frac, min_agree, min_pairs, rescue_frac, max_splice, budget, st](
-               Reconstruction& merged, const Reconstruction& src, const Sim3&,
-               const MergeCounts& counts) -> std::string {
+    return [mp, max_err, pair_frac, min_agree, min_pairs, rescue_frac, rel_bar, ref_pairs,
+            max_splice, budget, reference, st](Reconstruction& merged, const Reconstruction& src,
+                                               const Sim3&,
+                                               const MergeCounts& counts) -> std::string {
         std::set<uint32_t> src_side;
         for (const auto& kv : src.images)
             if (kv.second.registered) src_side.insert(kv.first);
@@ -235,7 +278,23 @@ seamValidator(Mapper& mapper, const ManagerOptions& opt, ManagerStats* st = null
         // the machine is small is not.
         if (contested && !mp->refineIfItFits(merged, /*coarse=*/true))
             if (st) st->seam_rescue_failed++;
-        Mapper::SeamCheck sc = mp->checkSeam(merged, src_side, max_err, pair_frac);
+        // What this capture's own pairs achieve inside the merged model, which
+        // is the reference the seam is judged against (D68). Measured on the
+        // merged model rather than once per capture: it is the same pairs and
+        // the same code, and a model that has just absorbed another is the
+        // thing whose seam is in question.
+        double bar = pair_frac;
+        if (rel_bar > 0 && ref_pairs) {
+            if (*reference < 0) {
+                Mapper::SeamCheck ref = mp->checkSeam(merged, src_side, max_err, pair_frac,
+                                                      ref_pairs, /*crossing=*/false);
+                if (ref.tested >= ref_pairs / 2) *reference = ref.median_frac;
+                else if (ref.tested >= min_pairs) bar = std::min(bar, rel_bar * ref.median_frac);
+            }
+            if (*reference >= 0) bar = std::min(bar, rel_bar * *reference);
+            if (st) st->seam_reference_sum += *reference >= 0 ? *reference : bar / rel_bar;
+        }
+        Mapper::SeamCheck sc = mp->checkSeam(merged, src_side, max_err, bar);
         // Nothing to judge on. Counted, because "the test passed" and "the test
         // could not run" are different facts and a merge tree that accumulates
         // the second one is merging unwatched.
@@ -243,7 +302,7 @@ seamValidator(Mapper& mapper, const ManagerOptions& opt, ManagerStats* st = null
             if (st) st->seam_skipped++;
             return "";
         }
-        if (st) st->seam_checked++;
+        if (st) { st->seam_checked++; st->seam_bar_sum += bar; }
         if ((double)sc.agree / (double)sc.tested >= min_agree) {
             if (st) {
                 st->seam_passed++;
@@ -266,7 +325,7 @@ seamValidator(Mapper& mapper, const ManagerOptions& opt, ManagerStats* st = null
             Reconstruction fixed = merged;
             Mapper::SeamCheck s2;
             if (mp->refineIfItFits(fixed, /*coarse=*/true))
-                s2 = mp->checkSeam(fixed, src_side, max_err, pair_frac);
+                s2 = mp->checkSeam(fixed, src_side, max_err, bar);
             if (s2.tested >= min_pairs && (double)s2.agree / (double)s2.tested >= min_agree) {
                 if (st) st->seam_rescued++;
                 merged = std::move(fixed);
@@ -287,8 +346,8 @@ seamValidator(Mapper& mapper, const ManagerOptions& opt, ManagerStats* st = null
         char buf[224];
         snprintf(buf, sizeof buf,
                  "only %zu of the %zu verified pairs that cross the seam still hold "
-                 "(median %.0f%% of their matches explained)",
-                 sc.agree, sc.tested, 100.0 * sc.median_frac);
+                 "(median %.0f%% of their matches explained, against a %.0f%% bar)",
+                 sc.agree, sc.tested, 100.0 * sc.median_frac, 100.0 * bar);
         return std::string(buf);
     };
 }
@@ -438,7 +497,8 @@ inline std::vector<Reconstruction> splitFoldedModels(Mapper& mapper,
         size_t dropped = 0;
         DuplicateCut cut;
         std::vector<Reconstruction> parts =
-            splitDuplicateStructure(m, dr, opt.split_min_group, &dropped, &cut);
+            splitDuplicateStructure(m, dr, opt.split_min_group, &dropped, &cut,
+                                    opt.duplicate.min_fold_overlap);
         // The conflicts say a fold is possible; the cut says whether the split
         // is cheap. Only a genuine fold is both (D46) -- cutting a sound model
         // always runs through structure it really does share.
@@ -450,6 +510,13 @@ inline std::vector<Reconstruction> splitFoldedModels(Mapper& mapper,
                         "(>%.1f%%): keeping it whole\n",
                         m.numRegistered(), dr.conflicts, dr.colocated, 100.0 * cut.fraction(),
                         100.0 * opt.duplicate.max_cut_fraction);
+            else if (opt.verbose && cut.reattached)
+                fprintf(stderr,
+                        "[mgr] a %u-image model has %zu of %zu co-located pairs with nothing "
+                        "in common, but the %zu piece(s) they would cut off stand where nothing "
+                        "else does (<%.0f%%): keeping it whole\n",
+                        m.numRegistered(), dr.conflicts, dr.colocated, cut.reattached,
+                        100.0 * opt.duplicate.min_fold_overlap);
             out.push_back(std::move(m));
             continue;
         }
@@ -459,10 +526,11 @@ inline std::vector<Reconstruction> splitFoldedModels(Mapper& mapper,
             fprintf(stderr,
                     "[mgr] a %u-image model has %zu of %zu co-located image pairs with no "
                     "structure in common and no match either (%zu more share nothing but were "
-                    "matched) and a cut that severs %.2f%% of its co-visibility: two places "
-                    "written on top of each other. Splitting into",
+                    "matched), a cut that severs %.2f%% of its co-visibility, and every piece "
+                    "standing where another one does (%.0f%% at worst): two places written on "
+                    "top of each other. Splitting into",
                     m.numRegistered(), dr.conflicts, dr.colocated, dr.unmatched_but_seen,
-                    100.0 * cut.fraction());
+                    100.0 * cut.fraction(), 100.0 * cut.min_overlap);
             for (const Reconstruction& p : parts) fprintf(stderr, " %u", p.numRegistered());
             if (dropped) fprintf(stderr, " (%zu images dropped)", dropped);
             fprintf(stderr, "\n");

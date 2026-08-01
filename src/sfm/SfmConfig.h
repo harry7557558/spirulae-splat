@@ -345,13 +345,28 @@ struct SfmConfig {
     F(mapper.max_model_overlap, "model-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",      \
       0, 1000000, "", "Images a further model may take from one already kept -- what a merge "      \
       "later aligns on")                                                                            \
+    F(mapper.model_overlap_ratio, "model-overlap-ratio", CMD_AUTO | CMD_MAP, Tier::Advanced,        \
+      "mapper", 0, 1000, "", "Further images it earns per image it finds that nothing holds, on "   \
+      "top of --model-overlap; 0 for COLMAP's flat cap (D66)")                                      \
     F(mapper.min_model_size, "min-model-size", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",        \
       2, 1000000, "", "Images a model must reach to be kept at all")                                \
+    F(mapper.pnp_ratio_visible_only, "pnp-ratio-visible", CMD_AUTO | CMD_MAP, Tier::Advanced,    \
+      "mapper", 0, 0, "", "Measure the PnP inlier ratio over the correspondences the pose could "   \
+      "see, not every one offered (D69)")                                                           \
+    F(mapper.strong_pnp_inliers, "strong-pnp-inliers", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
+      "mapper", 0, 1000000, "", "Agreeing correspondences past which a registration is admitted "   \
+      "whatever its inlier ratio, since the ratio reads a pool the scene decides (D69); 0 off")     \
+    F(mapper.strong_pnp_max_rival, "strong-pnp-max-rival", CMD_AUTO | CMD_MAP, Tier::Advanced,      \
+      "mapper", 0, 1, "", "... but only if no second pose explains this share of the winner's "     \
+      "count among the correspondences it rejected -- two plausible places is not evidence")        \
     F(mapper.audit_min_evidence, "audit-evidence", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",    \
       0, 1000000, "", "Correspondences an image needs before the audit will judge its pose")        \
     /* ---- assembling the models ---- */                                                           \
     F(assemble.max_rounds, "rounds", CMD_AUTO | CMD_MAP, Tier::Alias, "manage", 1, 1000, "",        \
       "Merge levels, run until one changes nothing")                                                \
+    F(assemble.max_bridges, "max-bridges", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",            \
+      0, 1000, "", "Merges a stalled level may attempt on shared structure instead of shared "      \
+      "images (D70); off, because the seam test then judges the evidence that made them")           \
     F(manager.do_merge, "merge", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",            \
       "Merge models that share images, on the Sim(3) those shared poses give (D43)")                \
     F(manager.do_grow, "grow", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",              \
@@ -369,11 +384,18 @@ struct SfmConfig {
       "no co-visibility (D46)")                                                                     \
     F(manager.duplicate.max_cut_fraction, "fold-max-cut", CMD_AUTO | CMD_MAP, Tier::Advanced,       \
       "manage", 0, 1, "", "Co-visibility that cut may sever, as a fraction of the model's total")   \
+    F(manager.duplicate.min_fold_overlap, "fold-min-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced,   \
+      "manage", 0, 1, "", "Images of a cut-off piece that must stand where an image outside it "    \
+      "stands, or it is put back rather than called a duplicate (D67); 0 disables")                 \
     F(assemble.joint_intrinsics, "joint-ba", CMD_AUTO | CMD_MAP, Tier::Alias, "manage", 0, 0, "",   \
       "Refine every component in one problem with intrinsics shared per camera group (D45)")        \
     F(manager.seam_min_agreement, "seam-min-agreement", CMD_AUTO | CMD_MAP, Tier::Advanced,         \
       "manage", 0, 1, "",                                                                           \
       "Verified pairs crossing a merge seam that must still hold in the merged model; 0 disables")  \
+    F(manager.seam_relative_bar, "seam-relative-bar", CMD_AUTO | CMD_MAP, Tier::Advanced,           \
+      "manage", 0, 10, "",                                                                          \
+      "Judge a seam against what the model's own non-crossing pairs explain, times this; it "       \
+      "only ever loosens --seam-min-pair-fraction (D68). 0 uses that flat")                         \
     F(manager.seam_min_pairs, "seam-min-pairs", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",       \
       1, 100000, "", "Cross-seam pairs below which the seam test has nothing to judge on")          \
     F(manager.seam_rescue_frac, "seam-rescue", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",        \

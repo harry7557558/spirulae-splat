@@ -42,6 +42,8 @@ struct MapProf {
     ProfAcc merge;       // mergeTracks(), inside the above
     ProfAcc filter;      // sanitizeCameras + filterPoints + filterImages
     ProfAcc snapshot;    // checkedRefine() reconstruction copy
+    ProfAcc audit_check;  // audit(): poseContradicted over every registered image
+    ProfAcc audit_fix;    // ... and everything after it, incl. the refinement
     // global BA, split (sfm/map/Bundle.h)
     ProfAcc ba_build;    // BAProblem assembly from the Reconstruction
     ProfAcc ba_init;     // BundleSolver ctor + init (device + pipelines + upload)
@@ -67,6 +69,7 @@ struct MapProf {
         const double reg = this->reg.get(), tri = this->tri.get(), retri = this->retri.get();
         const double merge = this->merge.get(), filter = this->filter.get();
         const double snapshot = this->snapshot.get(), ba_build = this->ba_build.get();
+        const double audit_check = this->audit_check.get(), audit_fix = this->audit_fix.get();
         const double ba_init = this->ba_init.get(), ba_solve = this->ba_solve.get();
         const double ba_write = this->ba_write.get();
         const long n_ba = this->n_ba, n_ba_iters = this->n_ba_iters, n_choose = this->n_choose;
@@ -84,13 +87,14 @@ struct MapProf {
                 "[prof]   retriangulate %8.2f s  (of which merge %.2f s, %ld obs absorbed)\n"
                 "[prof]   filter        %8.2f s\n"
                 "[prof]   snapshot      %8.2f s\n"
+                "[prof]   audit         %8.2f s  (check %.2f + repair and refine %.2f)\n"
                 "[prof]   BA            %8.2f s  (%ld calls, %ld LM iters): "
                 "build %.2f + init %.2f + solve %.2f + write %.2f\n",
                 what, total_s, accounted, total_s > 0 ? 100.0 * accounted / total_s : 0.0,
                 init_seed, seed_geom, n_seed_geom, bootstrap, choose, n_choose, reg, n_reg_try,
                 n_reg_ok, tri, retri, merge,
-                n_merged, filter, snapshot, ba, n_ba, n_ba_iters, ba_build, ba_init, ba_solve,
-                ba_write);
+                n_merged, filter, snapshot, audit_check + audit_fix, audit_check, audit_fix,
+                ba, n_ba, n_ba_iters, ba_build, ba_init, ba_solve, ba_write);
     }
 };
 

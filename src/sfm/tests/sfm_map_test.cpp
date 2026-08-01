@@ -146,6 +146,69 @@ int cmdMapSelftest(int argc, char** argv) {
     printf("  COLMAP model round-trip: %s\n", rt ? "ok" : "BAD");
     if (!rt) fails++;
 
+    // ---- aligning two models that share no image (D70) ----
+    //
+    // Two halves of one scene, reconstructed separately and in different
+    // gauges, with not one image in common: alignReconstructions has nothing to
+    // fit and the pair is never a merge candidate. What they do have is points
+    // both triangulated, which the correspondence graph pairs up -- and that
+    // determines the similarity. This is a building walked room by room, where
+    // the two rooms see the same doorway from two passes.
+    {
+        auto half = [&](int first, int last) {
+            Reconstruction r;
+            r.cameras[1] = K;
+            for (int c = first; c <= last; c++) {
+                Image im;
+                im.id = (uint32_t)c;
+                im.camera_id = 1;
+                im.name = "cam" + std::to_string(c);
+                im.registered = true;
+                im.pose = gt[c];
+                im.points2D.resize(N);
+                for (int p = 0; p < N; p++)
+                    im.points2D[p] = {feats[c].keypoints[p].x, feats[c].keypoints[p].y};
+                im.point3D_ids.assign(N, kInvalidPoint3D);
+                r.images[(uint32_t)c] = std::move(im);
+            }
+            for (int p = 0; p < N; p++) {
+                std::vector<TrackElement> tr;
+                for (int c = first; c <= last; c++)
+                    if (vis[c][p]) tr.push_back({(uint32_t)c, (uint32_t)p});
+                if (tr.size() >= 2) r.addPoint3D(pts[p], tr);
+            }
+            return r;
+        };
+        Reconstruction A = half(0, M / 2 - 1), B = half(M / 2, M - 1);
+        // Put B in a gauge of its own: 1.7x, a 25-degree yaw, and an offset.
+        Sim3 S;
+        S.scale = 1.7;
+        const double a = 25.0 * M_PI / 180.0;
+        S.R = {std::cos(a), 0, std::sin(a), 0, 1, 0, -std::sin(a), 0, std::cos(a)};
+        S.t = {3.0, -1.5, 0.5};
+        for (auto& kv : B.images) kv.second.pose = transformPose(S, kv.second.pose);
+        for (auto& kv : B.points3D) kv.second.xyz = transformPoint(S, kv.second.xyz);
+
+        MergeOptions mopt;
+        AlignmentResult al = mapper.alignByStructure(A, B, mopt);
+        // Recovered transform applied to B's centres must land on A's gauge,
+        // which is `gt`. Measured on the cameras, none of which took part in
+        // the fit -- it only ever saw points.
+        double worst = 0;
+        for (const auto& kv : B.images) {
+            const Vec3 got = transformPoint(al.transform, cameraCenter(kv.second.pose));
+            const Vec3 want = cameraCenter(gt[kv.first]);
+            worst = std::max(worst, (got - want).norm());
+        }
+        printf("  align on shared structure: %zu shared image(s), %zu point pair(s), "
+               "%zu inlier(s), %.2f px, camera centres off by %.4f\n",
+               al.common_images, al.structure_pairs, al.inliers, al.mean_error, worst);
+        if (!al.success || al.common_images != 0 || worst > 0.05) {
+            printf("  FAIL: the similarity was not recovered from shared structure alone\n");
+            fails++;
+        }
+    }
+
     // ---- two disconnected components -> two models (D41) ----
     // The same scene twice, with no verified pair joining the halves: exactly
     // the "loose components" case, where the pre-D41 mapper built both, threw

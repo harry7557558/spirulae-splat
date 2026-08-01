@@ -84,6 +84,24 @@ struct AssembleOptions {
     // beside a large uncovered region grows into all of it.
     double grow_budget_frac = 0.25;
     size_t grow_budget_min = 25;
+    // Merges on shared *structure* when a level runs out of shared images
+    // (D70), per level. Each is a RANSAC over thousands of point
+    // correspondences, so only the model pairs the correspondence graph joins
+    // most strongly are worth trying, and only a few of them.
+    //
+    // **Off**, and the reason is not the alignment -- that works, and recovers
+    // pairs no shared image could ever align. It is that turning it on breaks
+    // the independence the acceptance tests rely on. An ordinary merge is
+    // aligned on shared *poses* and then judged on *matches* that the alignment
+    // never saw, which is what catches two places that merely look alike; a
+    // merge aligned on matches is judged on the same evidence that produced it,
+    // so a wrong one sails through. Measured on a 7620-image capture that is
+    // half building interior, over seven runs: every run with this on scored
+    // 17.0 to 25.7 AUC@10, every run without it 44.7 to 46.3, and the merges it
+    // made added nine and sixty-five images. It needs an independent test
+    // before it can be a default.
+    int max_bridges = 0;
+    size_t bridge_min_matches = 500;  // matched features joining two models
     // Seed attempts the finishing reseed pass may spend. Far below the mapper's
     // own budget: what is left after the levels is the tail of the view graph,
     // and failing three times there means there is nothing to find.
@@ -102,6 +120,7 @@ struct AssembleStats {
     size_t models_in = 0;
     size_t rounds = 0;
     size_t merges = 0, merges_refused = 0;
+    size_t bridges = 0;            // ... of which came from shared structure alone
     size_t joint_ba = 0;
     size_t grown_images = 0;       // registered by a level's growth pass
     size_t grown_rejected = 0;     // ... and dropped again by the pose check
@@ -198,8 +217,9 @@ inline size_t mergeLevel(std::vector<Reconstruction>& models, const MergeOptions
 //
 // An image another model already holds is a legitimate target, and in fact the
 // point: that overlap *is* what the next Sim(3) aligns on. `growByPnP` bounds
-// it to max_model_overlap of them, which is enough to determine a transform
-// without letting one model quietly absorb its neighbour, and it checks every
+// it by Mapper::overlapBudget -- enough to determine a transform, and more than
+// that while the pass is still finding ground of its own -- with the size cap
+// below stopping it well short of absorbing a neighbour, and it checks every
 // image it registered against the rest of the model before returning -- which
 // is not optional. Unaudited, growth does not merely add bad poses, it makes
 // the cross-seam test agree with the merges built on them (measured: 21 points
@@ -238,6 +258,80 @@ inline size_t growModels(Mapper& mapper, std::vector<Reconstruction>& models,
         dirty[i] = 1;
     }
     return registered;
+}
+
+// Merge models the correspondence graph joins but no shared image does (D70).
+//
+// This is what a level cannot reach. `mergeLevel` only ever proposes pairs with
+// `min_common_images` in common, so two models that see the same place from two
+// passes -- and register none of the same frames -- are never candidates, and no
+// amount of growth changes that when registration between them is what failed in
+// the first place.
+//
+// Run only when a level merged nothing, and bounded to `max_bridges` attempts:
+// each one is a RANSAC over thousands of point correspondences, and the pairs
+// worth trying are the few with the most evidence. Everything after the
+// transform is the ordinary merge, so the splice test, the fold test and the
+// seam validator all still have their say.
+inline size_t bridgeModels(Mapper& mapper, std::vector<Reconstruction>& models,
+                           const MergeOptions& opt, size_t min_matches, int max_bridges,
+                           std::vector<std::vector<char>*> carry, size_t& refused,
+                           std::map<std::string, size_t>* why = nullptr) {
+    if (max_bridges <= 0 || models.size() < 2) return 0;
+    std::vector<Mapper::StructureLink> links = mapper.structureLinks(models, min_matches);
+    if (links.empty()) return 0;
+    if (opt.verbose)
+        fprintf(stderr, "[merge] %zu model pair(s) the correspondence graph joins, strongest "
+                "%zu matched features\n", links.size(), links.front().matches);
+
+    MergeSession s(std::move(models), opt);
+    std::vector<char> busy(s.numModels(), 0);
+    size_t merges = 0;
+    int tried = 0;
+    for (const Mapper::StructureLink& l : links) {
+        if (tried >= max_bridges) break;
+        if (busy[l.a] || busy[l.b]) continue;
+        // The bigger model keeps its gauge and its intrinsics, as everywhere.
+        const bool a_first = s.model(l.a).numRegistered() >= s.model(l.b).numRegistered();
+        const size_t dst = a_first ? l.a : l.b, src = a_first ? l.b : l.a;
+        tried++;
+        AlignmentResult al = mapper.alignByStructure(s.model(dst), s.model(src), opt);
+        // Printed in full, not grouped: there are at most `max_bridges` of
+        // these a level, and each one is the answer to "why are those two
+        // models still apart".
+        if (opt.verbose)
+            fprintf(stderr, "[merge] structure link %zu <- %zu (%zu matched features): %s\n", dst,
+                    src, l.matches, al.success ? "aligned" : al.reason.c_str());
+        if (!al.success) {
+            refused++;
+            if (why) (*why)["shared structure: " + al.reason.substr(0, al.reason.find_first_of(
+                                                       "0123456789"))]++;
+            continue;
+        }
+        const MergeAttempt a = s.tryMerge(dst, src, al);
+        if (a.merged) {
+            merges++;
+            busy[dst] = busy[src] = 1;
+        } else {
+            refused++;
+            if (why) {
+                std::string k = a.reason.substr(0, a.reason.find_first_of("0123456789"));
+                while (!k.empty() && (k.back() == ' ' || k.back() == '(')) k.pop_back();
+                (*why)["shared structure: " + (k.empty() ? a.reason : k)]++;
+            }
+        }
+    }
+    std::vector<std::vector<char>> was;
+    for (const std::vector<char>* c : carry) was.push_back(*c);
+    models.clear();
+    for (std::vector<char>* c : carry) c->clear();
+    for (size_t i = 0; i < s.numModels(); i++) {
+        if (!s.alive(i)) continue;
+        models.push_back(std::move(s.modelMut(i)));
+        for (size_t k = 0; k < carry.size(); k++)
+            carry[k]->push_back(i < was[k].size() ? (busy[i] ? 1 : was[k][i]) : 0);
+    }
+    return merges;
 }
 
 }  // namespace detail
@@ -309,8 +403,36 @@ inline void mergeUpwards(Mapper& mapper, std::vector<Reconstruction>& models,
                             models.size(), st.grown_rejected);
             }
         }
-        // Nothing merged and nothing grew: there is no level after this one.
-        if (merges == 0 && reg == 0) break;
+        // A level that merged nothing has exhausted what shared images can do.
+        // What the correspondence graph can still say is a different question,
+        // and one growth cannot answer: two models that see the same place from
+        // two passes share no frame, so no amount of registering brings them
+        // within `min_common_images` of each other (D70).
+        size_t bridged = 0;
+        if (merges == 0 && mopt.do_merge && opt.max_bridges > 0) {
+            t0 = clk();
+            std::map<std::string, size_t> bwhy;
+            bridged = detail::bridgeModels(mapper, models, merge_opt, opt.bridge_min_matches,
+                                           opt.max_bridges, {&dirty, &seamed, &stalled}, refused,
+                                           &bwhy);
+            st.t_merge += secs(t0, clk());
+            st.merges += bridged;
+            st.bridges += bridged;
+            if (opt.verbose && (bridged || !bwhy.empty())) {
+                fprintf(stderr, "[%s]   %zu merge(s) on shared structure alone\n", opt.tag,
+                        bridged);
+                for (const auto& kv : bwhy)
+                    fprintf(stderr, "[%s]   %4zu x %s\n", opt.tag, kv.second, kv.first.c_str());
+            }
+        }
+
+        // Nothing merged, and what grew cannot change that. A level costs a
+        // joint solve over the whole capture, and it is only worth paying when
+        // the growth before it plausibly gave some pair enough new overlap to
+        // align on -- one model's minimum budget is the least that could.
+        // Measured on a 7620-image capture: levels 5 to 9 merged nothing while
+        // growth trickled 13, 5, 7 and 0 images, and each still solved.
+        if (merges == 0 && bridged == 0 && reg < opt.grow_budget_min) break;
 
         // Growth aims models at images their neighbours hold, so it is growth,
         // not merging, that turns a small model into a copy of a bigger one.
@@ -362,12 +484,13 @@ inline void mergeUpwards(Mapper& mapper, std::vector<Reconstruction>& models,
     if (opt.verbose) {
         const ManagerStats& f = st.finish;
         fprintf(stderr,
-                "[%s] %zu model(s) -> %zu after %zu level(s): %zu merged, %zu refused, %zu grown; "
+                "[%s] %zu model(s) -> %zu after %zu level(s): %zu merged (%zu on shared "
+                "structure alone), %zu refused, %zu grown; "
                 "the seam test judged %zu merge(s), rescued %zu by refining them and refused %zu "
                 "(%zu could not be rescued), and had too little to judge on for %zu "
                 "(merge %.1f s, grow %.1f s, BA %.1f s)\n",
-                opt.tag, st.models_in, models.size(), st.rounds, st.merges, st.merges_refused,
-                st.grown_images, f.seam_checked, f.seam_rescued, f.seam_refused,
+                opt.tag, st.models_in, models.size(), st.rounds, st.merges, st.bridges,
+                st.merges_refused, st.grown_images, f.seam_checked, f.seam_rescued, f.seam_refused,
                 f.seam_rescue_failed, f.seam_skipped, st.t_merge, st.t_grow, st.t_ba);
         // A refusal over a handful of cross-seam pairs is a seam with nothing
         // on it, and no refinement can rescue that -- only more overlap can.
@@ -376,11 +499,14 @@ inline void mergeUpwards(Mapper& mapper, std::vector<Reconstruction>& models,
         // has to separate them.
         if (f.seam_refused)
             fprintf(stderr, "[%s]   a refused merge explained a median %.0f%% of its cross-seam "
-                    "matches over %zu pair(s), an accepted one %.0f%%; the rescue's refinement "
+                    "matches over %zu pair(s), an accepted one %.0f%%, against a %.0f%% bar "
+                    "(the same pairs inside the model: %.0f%%); the rescue's refinement "
                     "moved a refusal by %+.0f points\n", opt.tag,
                     100.0 * f.seam_refused_median / (double)f.seam_refused,
                     f.seam_refused_pairs / f.seam_refused,
                     f.seam_passed ? 100.0 * f.seam_passed_median / (double)f.seam_passed : 0.0,
+                    f.seam_checked ? 100.0 * f.seam_bar_sum / (double)f.seam_checked : 0.0,
+                    f.seam_checked ? 100.0 * f.seam_reference_sum / (double)f.seam_checked : 0.0,
                     f.seam_rescue_failed
                         ? 100.0 * f.seam_rescue_gain / (double)f.seam_rescue_failed : 0.0);
     }

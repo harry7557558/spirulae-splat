@@ -80,3 +80,9 @@ be re-derived or re-attempted: D25, D26, D27, D11, D16, D47, D50, D45, D46.
 | D63 | Both mappers share one assembler: merge levels with growth and a joint solve, then the finishing passes once -- there is no manage loop |
 | D64 | A merge with a well-determined alignment is not refused for disagreeing about shape: it is refined and re-judged on evidence the alignment never used |
 | D65 | A joint solve that does not fit the device is split into batches, because the models it spans are coupled only through the intrinsics |
+| D66 | Overlap between models is evidence, not waste: a model is never discarded for it, and growth into a neighbour continues while the pass is still finding ground of its own |
+| D67 | A piece the fold detector wants to cut off is a duplicate only if it stands where something else stands; otherwise it goes back |
+| D68 | A seam is judged against what the capture's own non-crossing pairs explain, not an absolute fraction: a verified pair is evidence, not ground truth |
+| D69 | The PnP inlier ratio is measured over the correspondences the pose could see, not every one offered: a point behind the camera is not evidence against it |
+| D70 | Aligning two models on the structure they both triangulated reaches pairs sharing no image -- but is off, because it is then judged on the evidence that produced it |
+| D71 | The audit's repair is off: guessing a pose from evidence weaker than registration demands cost a 5356-image capture 28 points of AUC and the largest bill of any finishing pass |

@@ -395,6 +395,42 @@ int cmdMergeSelftest(int, char**) {
                foldSplitAccepted(bogus, bcut, dopt) ? "folded" : "kept whole");
         check(bcut.groups > 1 && !foldSplitAccepted(bogus, bcut, dopt),
               "a split through a sound model's own co-visibility was accepted");
+
+        // The other false positive, which the cut cost cannot reject either:
+        // the piece the conflicts cut off has to stand *on top of* something,
+        // or it is not a duplicate of anywhere (D67). The same fold with all
+        // but three of the second copy's images moved a hundred units away --
+        // the conflicts still fire, the cut still costs no co-visibility, and
+        // three images out of twelve standing where copy 1 stands is not a
+        // fold. This is what tore 358 images off a settled 5500-image model.
+        {
+            Reconstruction partial = folded;
+            for (int c = 3; c <= 11; c++) {
+                Pose& p = partial.images.at((uint32_t)c + off).pose;
+                p.t = p.t - mul(p.R, Vec3{100, 0, 0});  // centre += (100,0,0)
+            }
+            DuplicateReport prep = findDuplicateStructure(partial, dopt);
+            size_t pdropped = 0;
+            DuplicateCut pcut;
+            std::vector<Reconstruction> pparts = splitDuplicateStructure(
+                partial, prep, 4, &pdropped, &pcut, dopt.min_fold_overlap);
+            printf("  ... only 3 of 12 images of the second copy left on top of the first: "
+                   "%zu conflicts, %zu part(s), %zu re-attached\n",
+                   prep.conflicts, pparts.size(), pcut.reattached);
+            check(prep.duplicated(dopt), "the moved copy stopped conflicting at all");
+            check(pparts.size() == 1 && pcut.reattached == 1,
+                  "a piece standing on top of nothing was written out as a duplicate");
+
+            // ... while the fold itself still splits with the same bar on.
+            DuplicateCut fcut;
+            size_t fdropped = 0;
+            std::vector<Reconstruction> fparts = splitDuplicateStructure(
+                folded, rep, 4, &fdropped, &fcut, dopt.min_fold_overlap);
+            printf("  ... the real fold under the same bar: %zu part(s), overlap %.0f%%\n",
+                   fparts.size(), 100.0 * fcut.min_overlap);
+            check(fparts.size() == 2 && fcut.reattached == 0,
+                  "the overlap bar rejected a genuine fold");
+        }
     }
 
     printf("%s\n", fails == 0 ? "PASS" : "FAIL");

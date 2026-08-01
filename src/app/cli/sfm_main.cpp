@@ -596,12 +596,13 @@ static bool readModels(const std::string& dir, std::vector<Reconstruction>& mode
 static void printAssembly(const AssembleStats& ast, size_t models, const char* lead = "assemble: ") {
     if (!ast.models_in) return;
     const ManagerStats& f = ast.finish;
-    printf("%s%6.2f s  %zu -> %zu model(s) over %zu level(s), %zu merged, %zu refused "
-           "(%zu rescued by a refinement), %zu grown, %zu repaired / %zu dropped by the audit, "
-           "%zu -> %zu images covered\n",
+    printf("%s%6.2f s  %zu -> %zu model(s) over %zu level(s), %zu merged (%zu on shared "
+           "structure), %zu refused (%zu rescued by a refinement), %zu grown, "
+           "%zu repaired / %zu dropped by the audit, %zu -> %zu images covered\n",
            lead, ast.t_merge + ast.t_ba + ast.t_grow + ast.finishSecs(), ast.models_in, models,
-           ast.rounds, ast.merges, ast.merges_refused, f.seam_rescued, ast.grown_images,
-           f.audited_repaired, f.audited_out, f.covered_before, f.covered_after);
+           ast.rounds, ast.merges, ast.bridges, ast.merges_refused, f.seam_rescued,
+           ast.grown_images, f.audited_repaired, f.audited_out, f.covered_before,
+           f.covered_after);
 }
 
 static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDatabase& db,
@@ -1477,7 +1478,8 @@ static int cmdMap(int argc, char** argv) {
                 size_t dropped = 0;
                 DuplicateCut cut;
                 std::vector<Reconstruction> dp = splitDuplicateStructure(
-                    models[i], dr, mgopt.split_min_group, &dropped, &cut);
+                    models[i], dr, mgopt.split_min_group, &dropped, &cut,
+                    mgopt.duplicate.min_fold_overlap);
                 printf("    cut: %zu group(s), severs %.2f%% of co-visibility (%llu of %llu)%s",
                        cut.groups, 100.0 * cut.fraction(), (unsigned long long)cut.severed,
                        (unsigned long long)(cut.severed + cut.kept),

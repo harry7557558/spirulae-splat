@@ -38,6 +38,10 @@
 #include "sfm/geometry/TwoView.h"
 #include "sfm/map/Bundle.h"
 #include "sfm/map/CorrespondenceGraph.h"
+// For alignByStructure: the similarity two models' shared points determine, and
+// the pixel scoring it is judged by, are the merger's (D70). Merge.h does not
+// include this header, so there is no cycle.
+#include "sfm/map/Merge.h"
 #include "sfm/map/Profile.h"
 
 namespace sfm {
@@ -64,6 +68,52 @@ struct MapperOptions {
     // refinement now catches the ones that turn out toxic (D36).
     int min_num_pnp_inliers = 15;
     double min_pnp_inlier_ratio = 0.25;
+    // ... measured over the correspondences the pose could *possibly* explain,
+    // not over every one offered (D69). A correspondence whose 3D point falls
+    // behind the camera or outside the frame is not evidence against the pose;
+    // it is evidence the pool contains points this view does not see, which a
+    // dense capture of one room produces in bulk -- images looking at the far
+    // wall match images looking back, and their points sit behind. Counting
+    // those in the denominator is what makes an entirely sound registration
+    // fail COLMAP's 0.25.
+    //
+    // It is deliberately *not* a licence to ignore competing places: a wrong
+    // pose in a similar-looking room projects its rival's points in front of
+    // the camera and inside the frame, so they stay in the denominator and the
+    // gate still refuses. That is the distinction the raw inlier count could
+    // not make -- admitting on absolute support alone recovered 48 images and 8
+    // points of AUC on a 1146-image room capture and cost 20 points on a
+    // 7620-image capture that is half building interior.
+    bool pnp_ratio_visible_only = true;
+    // Off, and measured: absolute support as a *substitute* for the ratio --
+    // admit any consensus of this many correspondences however small a share of
+    // the pool it is -- cannot tell the two reasons a pool is large apart. It
+    // recovered 48 images and 8 points of AUC@10 on a 1146-image room capture
+    // and cost 20 points on a 7620-image capture that is half building
+    // interior, where it walked one incremental model from 2816 to 5379 images
+    // straight through the interior and came back warped (median absolute
+    // rotation error 4.1 deg against 0.6). The rival test below was added to
+    // separate them and did not: it fired 91 times there and the capture got
+    // worse still. What does separate them is the denominator, above.
+    int strong_pnp_inliers = 0;
+    // ... and that support has to be *unambiguous*, which is the other half of
+    // the same observation. A pool is large for two opposite reasons. A dense
+    // capture of one room offers the same place from twenty views, so the pool
+    // is redundant and the ratio gate is mis-reading it. A building of similar
+    // rooms offers places the image is not, so the pool is ambiguous and the
+    // ratio gate is doing exactly its job. Absolute support cannot tell those
+    // apart, and admitting the second is how a room ends up somewhere else:
+    // measured, a 7620-image capture whose primary model grew from 2816 to 5379
+    // images in one pass and came back with a median absolute rotation error of
+    // 4.1 deg against 0.6, and 20 points less AUC@10.
+    //
+    // What tells them apart is whether a *second* pose explains the
+    // correspondences the winner rejected. In a redundant pool those are noise
+    // and nothing fits them; in an ambiguous one they are the other room. A
+    // rival this large relative to the winner means the image has two plausible
+    // places, and two plausible places is not evidence -- so the ratio gate
+    // stands. 0 skips the test.
+    double strong_pnp_max_rival = 0.5;
     int max_reg_trials = 3;            // per image, COLMAP's default
     // Rank the next image by how well its supported features are spread over
     // the frame (Mapper::pyramidSet) rather than by their raw count. Off is
@@ -108,13 +158,28 @@ struct MapperOptions {
     //     exactly as before;
     //   * afterwards, seeds are searched among images no kept model registered
     //     (COLMAP FindFirstInitialImage's num_registrations == 0 rule) and each
-    //     resulting model is kept if it reaches min_model_size;
+    //     resulting model is kept if it brings min_model_size images no kept
+    //     model reached;
     //   * a sub-model may re-register images an earlier model already holds --
-    //     that overlap is what a later merge aligns on -- but stops growing
-    //     once it has taken max_model_overlap of them (COLMAP's rule).
+    //     that overlap is what a later merge aligns on -- for as long as it is
+    //     still finding images nothing holds (max_model_overlap and
+    //     model_overlap_ratio below).
     // max_num_models 1 restores single-model output.
     int max_num_models = 50;           // COLMAP's default
+    // What a growth pass may take from models already kept. COLMAP stops at an
+    // absolute count because it never merges two models, so everything a second
+    // model re-registers is waste. Here it is the opposite: overlap is the only
+    // evidence a merge has, and a component cut off from its neighbour the
+    // moment it touches it can neither cover its own territory nor align with
+    // anything (D66). So the count is a floor -- what a Sim(3) needs -- and past
+    // it a pass earns one shared image for every `model_overlap_ratio` images
+    // it finds that nothing else holds. Ratio 0 restores COLMAP's rule.
+    //
+    // Measured on a 7620-image capture, where this rule fired 17 times and the
+    // sub-models it stopped averaged 100 images against a region several
+    // hundred wide.
     int max_model_overlap = 20;        // COLMAP's default
+    double model_overlap_ratio = 1.0;
     // Total seed attempts the further-models search may spend, counting the
     // ones discarded for being under min_model_size (COLMAP's init_num_trials,
     // same role and same default). Without it a dataset whose leftovers are
@@ -332,11 +397,12 @@ public:
         }
 
         // Largest attempt first, so the primary model is the one D19 would have
-        // returned; each further attempt is admitted only if it is genuinely a
-        // *different* component. Seeds land in the same component all the time,
+        // returned; each further attempt is admitted only if it brings images the
+        // ones before it did not. Seeds land in the same component all the time,
         // and writing three views of one component as three models would be worse
-        // than useless -- max_model_overlap is the same bound COLMAP uses to
-        // decide when a sub-model has drifted into an existing one.
+        // than useless -- but an attempt that *overlaps* one already kept and
+        // still covers new ground is the other half of a capture, not a copy of
+        // this one, and admitModel keeps it (D66).
         std::stable_sort(attempts.begin(), attempts.end(),
                          [](const Reconstruction& a, const Reconstruction& b) {
                              return a.numRegistered() > b.numRegistered();
@@ -380,12 +446,13 @@ public:
 
     // Adopt `m` and keep registering into it until nothing else fits. An image
     // another model holds is a legitimate target here -- the overlap it creates
-    // is what lets the two models merge afterwards (D43) -- but only up to
-    // `max_model_overlap` of them, which is all a Sim(3) alignment needs. Pass
-    // the other models in `others` to get that bound; with `others` empty the
-    // pass is unbounded, and on a fragmented capture that means every model
-    // re-registers the whole dataset before the redundant ones are dropped
-    // again, which is several full reconstructions' worth of work for nothing.
+    // is what lets the two models merge afterwards (D43) -- bounded by
+    // `overlapBudget`, so the pass may keep taking them while it is still
+    // finding images of its own. Pass the other models in `others` to get that
+    // bound; with `others` empty the pass is unbounded, and on a fragmented
+    // capture that means every model re-registers the whole dataset before the
+    // redundant ones are dropped again, which is several full reconstructions'
+    // worth of work for nothing.
     //
     // A pass that registers nothing returns `m` untouched -- not a re-refined
     // copy of it. That is what makes the manager's grow round free on a
@@ -419,6 +486,169 @@ public:
             out->after = rec_.numRegistered();
         }
         return snapshotModel();
+    }
+
+    // ---- aligning two models that share no image (D70) --------------------
+    //
+    // A building walked room by room reconstructs as a model per room, and two
+    // of them can see the same doorway without either registering a single
+    // image the other did: alignReconstructions has nothing to fit, and the
+    // pair is never even proposed as a merge candidate. Measured on a
+    // 7620-image capture half of which is a building interior, the two largest
+    // models -- 5474 and 474 images -- shared fewer than three.
+    //
+    // The correspondence graph knows better. Two images matched and were
+    // verified long before any model existed; if one model triangulated the
+    // matched feature on one side and the other model triangulated it on the
+    // other, that is one 3D point expressed in two gauges. Enough of them
+    // determine the similarity between the gauges, and the merge that follows
+    // is the ordinary one, judged by every ordinary test.
+
+    // Model pairs the correspondence graph joins, most evidence first, counted
+    // in matched features rather than pairs: what the alignment consumes is
+    // correspondences, and two images with 400 matches are worth more than ten
+    // with twenty.
+    struct StructureLink {
+        size_t a = 0, b = 0;
+        size_t matches = 0;
+    };
+    std::vector<StructureLink> structureLinks(const std::vector<Reconstruction>& models,
+                                              size_t min_matches) const {
+        std::unordered_map<uint32_t, std::vector<uint32_t>> in_model;
+        for (size_t i = 0; i < models.size(); i++)
+            for (const auto& kv : models[i].images)
+                if (kv.second.registered) in_model[kv.first].push_back((uint32_t)i);
+        std::unordered_map<uint64_t, size_t> w;
+        for (const TwoViewMatches& p : db_.pairs) {
+            auto ia = in_model.find(p.image1), ib = in_model.find(p.image2);
+            if (ia == in_model.end() || ib == in_model.end()) continue;
+            for (uint32_t x : ia->second)
+                for (uint32_t y : ib->second) {
+                    if (x == y) continue;
+                    const uint32_t lo = std::min(x, y), hi = std::max(x, y);
+                    w[((uint64_t)lo << 32) | hi] += p.matches.size();
+                }
+        }
+        std::vector<StructureLink> out;
+        for (const auto& kv : w) {
+            if (kv.second < min_matches) continue;
+            out.push_back({(size_t)(kv.first >> 32), (size_t)(kv.first & 0xffffffffu), kv.second});
+        }
+        // Deterministic: the hash order is unspecified, so a total order first.
+        std::sort(out.begin(), out.end(), [](const StructureLink& x, const StructureLink& y) {
+            return x.a != y.a ? x.a < y.a : x.b < y.b;
+        });
+        std::stable_sort(out.begin(), out.end(),
+                         [](const StructureLink& x, const StructureLink& y) {
+                             return x.matches > y.matches;
+                         });
+        return out;
+    }
+
+    // The similarity taking `src`'s world onto `dst`'s, fitted to points both
+    // triangulated. Scored in pixels like every other alignment here: the src
+    // point is carried into dst's gauge and has to reproject where dst's own
+    // image saw its partner, which is a test the fit itself never used.
+    AlignmentResult alignByStructure(const Reconstruction& dst, const Reconstruction& src,
+                                     const MergeOptions& opt, size_t max_corr = 6000) const {
+        AlignmentResult r;
+        struct Corr {
+            Vec3 d, s;             // the point in each model's gauge
+            uint32_t img, feat;    // the dst observation that scores it
+        };
+        std::vector<Corr> corr;
+        std::set<std::pair<uint64_t, uint64_t>> seen;  // one vote per point pair
+        for (const TwoViewMatches& p : db_.pairs) {
+            for (int flip = 0; flip < 2; flip++) {
+                const uint32_t ia = flip ? p.image2 : p.image1;
+                const uint32_t ib = flip ? p.image1 : p.image2;
+                auto da = dst.images.find(ia);
+                auto sb = src.images.find(ib);
+                if (da == dst.images.end() || sb == src.images.end()) continue;
+                if (!da->second.registered || !sb->second.registered) continue;
+                for (const FeatureMatch& fm : p.matches) {
+                    const uint32_t fa = flip ? fm.idx2 : fm.idx1;
+                    const uint32_t fb = flip ? fm.idx1 : fm.idx2;
+                    if (fa >= da->second.point3D_ids.size() ||
+                        fb >= sb->second.point3D_ids.size())
+                        continue;
+                    const uint64_t pd = da->second.point3D_ids[fa];
+                    const uint64_t ps = sb->second.point3D_ids[fb];
+                    if (pd == kInvalidPoint3D || ps == kInvalidPoint3D) continue;
+                    auto itd = dst.points3D.find(pd);
+                    auto its = src.points3D.find(ps);
+                    if (itd == dst.points3D.end() || its == src.points3D.end()) continue;
+                    if (!seen.insert({pd, ps}).second) continue;
+                    corr.push_back({itd->second.xyz, its->second.xyz, ia, fa});
+                }
+            }
+        }
+        r.structure_pairs = corr.size();
+        r.from_structure = true;
+        const size_t need = (size_t)std::max(3, opt.min_common_images);
+        if (corr.size() < need) {
+            r.reason = "only " + std::to_string(corr.size()) +
+                       " point(s) triangulated by both models";
+            return r;
+        }
+        // A long walk can produce hundreds of thousands of these, and RANSAC
+        // scores every one of them on every trial. Thinning keeps the spread --
+        // the sample is strided, not truncated, so it is not one end of the
+        // seam.
+        if (corr.size() > max_corr) {
+            std::vector<Corr> thin;
+            thin.reserve(max_corr);
+            const double step = (double)corr.size() / (double)max_corr;
+            for (size_t k = 0; k < max_corr; k++) thin.push_back(corr[(size_t)(k * step)]);
+            corr.swap(thin);
+        }
+
+        const int n = (int)corr.size();
+        auto fit = [&](const std::vector<int>& idx) {
+            std::vector<Sim3> out;
+            std::vector<Vec3> a, b;
+            for (int i : idx) { a.push_back(corr[i].s); b.push_back(corr[i].d); }
+            Sim3 t;
+            if (estimateSim3(a, b, t)) out.push_back(t);
+            return out;
+        };
+        auto res = [&](const Sim3& t, int i) {
+            const Corr& c = corr[i];
+            const Image& im = dst.images.at(c.img);
+            auto cam = dst.cameras.find(im.camera_id);
+            if (cam == dst.cameras.end()) return 1e30;
+            const double e = reprojErrorAt(cam->second, im.pose, kp(c.img, c.feat),
+                                           transformPoint(t, c.s));
+            return e * e;
+        };
+        RansacOptions ro;
+        ro.max_error = opt.max_reproj_error;
+        ro.seed = opt.seed;
+        ro.max_num_trials = opt.ransac_max_trials;
+        RansacReport<Sim3> rep = loransac<Sim3>(n, 3, fit, fit, res, ro);
+        if (!rep.success || rep.num_inliers < (int)need) {
+            r.reason = "alignment on shared structure found only " +
+                       std::to_string(rep.success ? rep.num_inliers : 0) + "/" +
+                       std::to_string(n) + " consistent point(s)";
+            return r;
+        }
+        // The same inlier-ratio bar the pose alignment applies, on the same
+        // reasoning: a handful of agreeing points out of thousands is a
+        // coincidence between two similar places, not a transform.
+        if ((double)rep.num_inliers < opt.min_inlier_ratio * (double)n) {
+            r.reason = "only " + std::to_string(rep.num_inliers) + "/" + std::to_string(n) +
+                       " shared points agree";
+            return r;
+        }
+        double sum = 0;
+        for (int i = 0; i < n; i++)
+            if (rep.inlier_mask[i]) sum += std::sqrt(res(rep.model, i));
+        r.transform = rep.model;
+        r.inliers = (size_t)rep.num_inliers;
+        r.mean_error = sum / (double)rep.num_inliers;
+        r.common_images = sharedImages(src, dst).size();
+        r.success = true;
+        return r;
     }
 
     // Register what this model can still take, by PnP alone (D57).
@@ -621,6 +851,7 @@ public:
         for (const auto& kv : rec_.images)
             if (kv.second.registered) ids.push_back(kv.first);
         st.checked = (uint32_t)ids.size();
+        auto audit_t0 = std::chrono::steady_clock::now();
         modelScale();  // warm the lazy cache before any worker reads it
         std::vector<char> hit(ids.size(), 0);
         std::vector<Pose> alts(ids.size());
@@ -644,6 +875,9 @@ public:
         for (size_t i = 0; i < ids.size(); i++)
             if (hit[i]) repairs.emplace_back(ids[i], alts[i]);
         st.unsupported = (uint32_t)repairs.size();
+        auto audit_t1 = std::chrono::steady_clock::now();
+        g_map_prof.audit_check += std::chrono::duration<double>(audit_t1 - audit_t0).count();
+        ProfTimer audit_pt(g_map_prof.audit_fix);
         if (!repairs.empty()) {
             if (opt_.verbose)
                 fprintf(stderr, "[map] audit: %u/%u image(s) sit where the rest of the model "
@@ -826,9 +1060,17 @@ public:
         double median_frac = 0;    // median per-pair fraction of matches explained
     };
 
+    // `crossing` false asks the same question of the pairs that do *not* cross
+    // the seam: how well does this capture's own two-view geometry agree with a
+    // reconstruction it is already part of? That is the reference the seam has
+    // to be read against. It is not a constant -- a well-textured outdoor
+    // capture answers 0.95 and a repetitive interior far less, because there
+    // some verified pairs are themselves wrong (two corridors that look alike),
+    // and a fixed bar then refuses correct merges for failing a test its
+    // evidence could never pass (D68).
     SeamCheck checkSeam(const Reconstruction& m, const std::set<uint32_t>& src_side,
                         double max_error_px = 8.0, double min_pair_frac = 0.5,
-                        size_t max_pairs = 600) const {
+                        size_t max_pairs = 600, bool crossing = true) const {
         SeamCheck sc;
         std::vector<const TwoViewMatches*> cross;
         for (const TwoViewMatches& p : db_.pairs) {
@@ -836,7 +1078,7 @@ public:
             auto ib = m.images.find(p.image2);
             if (ia == m.images.end() || ib == m.images.end()) continue;
             if (!ia->second.registered || !ib->second.registered) continue;
-            if (src_side.count(p.image1) == src_side.count(p.image2)) continue;  // same side
+            if ((src_side.count(p.image1) == src_side.count(p.image2)) == crossing) continue;
             cross.push_back(&p);
         }
         sc.cross_pairs = cross.size();
@@ -1176,6 +1418,22 @@ public:
         int cur = 0;
         for (int k = 0; k < n; k++) cur += pnpResidualSq(im.pose, X[k], br[k]) < thr2 ? 1 : 0;
 
+        // The RANSAC below can return at most `n` inliers, so once the pose in
+        // place explains enough of the pool that no alternative could clear the
+        // dominance bar, there is nothing to find and the search is skipped.
+        // Exact, not a heuristic -- the verdict is identical either way -- and
+        // it is most of the pass: an image that sits where it belongs explains
+        // its own correspondences, so on a settled model almost every image
+        // takes this exit. Measured on a 7620-image capture, where the audit
+        // ran a RANSAC over 5107 images to move 6 of them, and was the single
+        // largest line in the finishing bill on every large capture.
+        if (n <= (int)(opt_.audit_alternative_factor * cur) || n < opt_.audit_min_alternative) {
+            if (audit_dump_)
+                fprintf(stderr, "[audit] %s: pool %d, current %d -> ok (no alternative can win)\n",
+                        db_.images[img].name.c_str(), n, cur);
+            return false;
+        }
+
         PnPResult r = ransacPnP(X, br, camOf(img).focal(), errPx(img), 0,
                                 opt_.audit_ransac_trials);
         bool contradicted = false;
@@ -1396,9 +1654,13 @@ private:
             if (covered.size() < db_.images.size())
                 fprintf(stderr,
                         "[map] registration attempts that failed: %u too few candidates, "
-                        "%u too few PnP inliers, %u inlier ratio below %.2f, %u lost on refit\n",
+                        "%u too few PnP inliers, %u inlier ratio below %.2f, %u lost on refit "
+                        "(%u came in on absolute support with the ratio failed, %u more were "
+                        "refused for a rival pose fitting the leftovers; %u correspondence(s) "
+                        "were left out of the ratio as unseeable)\n",
                         reg_fail_.few_corr, reg_fail_.few_inliers, reg_fail_.low_ratio,
-                        opt_.min_pnp_inlier_ratio, reg_fail_.refined_out);
+                        opt_.min_pnp_inlier_ratio, reg_fail_.refined_out, reg_fail_.strong,
+                        reg_fail_.ambiguous, reg_fail_.occluded);
         }
         g_map_prof.report(std::chrono::duration<double>(
                               std::chrono::steady_clock::now() - prof_start).count());
@@ -1432,8 +1694,8 @@ private:
     }
 
     // Record the images a kept model registered. They stop being seed
-    // candidates; a later model may still re-register them, up to
-    // max_model_overlap of them, which is the overlap a merge step aligns on.
+    // candidates; a later model may still re-register them, within
+    // overlapBudget, which is the overlap a merge step aligns on.
     void claimImages(const Reconstruction& m) {
         if (model_count_.size() != db_.images.size()) model_count_.assign(db_.images.size(), 0);
         for (const auto& kv : m.images)
@@ -1450,6 +1712,16 @@ private:
         return img < model_count_.size() && model_count_[img] > 0;
     }
 
+    // Images another model already holds that one growth pass may take, given
+    // how many it has found that nothing holds. See max_model_overlap: the
+    // count is the floor and the ratio is what the pass earns on top of it, so
+    // a pass still discovering territory is never cut off, and one that has run
+    // out of its own stops as soon as it has a Sim(3)'s worth of overlap.
+    size_t overlapBudget(size_t fresh) const {
+        const double floor_v = (double)std::max(1, opt_.max_model_overlap);
+        return (size_t)std::max(floor_v, opt_.model_overlap_ratio * (double)fresh);
+    }
+
     // How many of `m`'s images some already-kept model also holds.
     size_t overlapWithKept(const Reconstruction& m) const {
         if (model_count_.empty()) return 0;
@@ -1459,22 +1731,22 @@ private:
         return n;
     }
 
-    // Is `m` worth a directory of its own, given what is already kept? Two
-    // ways it can fail to be, and both were observed on real-world datasets.
-    // So: bounded overlap *and* at least a model's worth of genuinely new
-    // images. `why` gets a reason for the log when the answer is no.
+    // Is `m` worth a directory of its own, given what is already kept? One
+    // question, and it is about what `m` *adds*: enough images no kept model
+    // reached. What it re-registers is not held against it, however much of it
+    // there is -- that overlap is what a merge aligns on, and a model refused
+    // for having it is a model whose images have to be found again from a worse
+    // seed (D66).
+    //
+    // It used to be refused, on COLMAP's max_model_overlap, and on a 7620-image
+    // capture that discarded two attempts of 2751 and 1751 images for sharing
+    // 212 and 27 with the one already kept -- 4502 images of finished
+    // reconstruction, of which the search that followed recovered 1188.
     bool admitModel(const Reconstruction& m, std::string& why) const {
         const uint32_t reg = m.numRegistered();
-        const size_t ov = overlapWithKept(m);
-        const size_t fresh = reg - ov;
-        char buf[160];
-        if (ov > (size_t)std::max(0, opt_.max_model_overlap)) {
-            snprintf(buf, sizeof buf, "%u images, %zu of them already in a kept model",
-                     reg, ov);
-            why = buf;
-            return false;
-        }
+        const size_t fresh = reg - overlapWithKept(m);
         if (fresh < (size_t)opt_.min_model_size) {
+            char buf[160];
             snprintf(buf, sizeof buf, "%u images but only %zu not already covered", reg, fresh);
             why = buf;
             return false;
@@ -1516,10 +1788,9 @@ private:
     }
 
     // Grow the current model until nothing else registers, or until it has
-    // absorbed max_model_overlap images that a previously-kept model already
-    // holds (D41; COLMAP's max_model_overlap break). During the primary model
-    // nothing is claimed yet, so the overlap test is inert and this is the
-    // pre-D41 loop exactly.
+    // spent its overlapBudget on images a previously-kept model already holds
+    // (D41, D66). During the primary model nothing is claimed yet, so the
+    // overlap test is inert and this is the pre-D41 loop exactly.
     void grow() {
         growLoop();
         checkedRefine(true);
@@ -1552,11 +1823,15 @@ private:
         const size_t shared_at_entry = sharedRegistered();
         while (true) {
             if (max_reg && rec_.numRegistered() >= max_reg) break;
-            if (sharedRegistered() >=
-                shared_at_entry + (size_t)std::max(1, opt_.max_model_overlap)) {
+            // Both counts are of *this* pass, and both can be nudged by a
+            // de-registration mid-pass, so neither subtraction may wrap.
+            const size_t shared_now = sharedRegistered();
+            const size_t shared_here = shared_now > shared_at_entry ? shared_now - shared_at_entry : 0;
+            const size_t fresh_here = registered_here > shared_here ? registered_here - shared_here : 0;
+            if (shared_here > overlapBudget(fresh_here)) {
                 if (opt_.verbose)
-                    fprintf(stderr, "[map] sub-model reached %d images shared with an earlier "
-                            "model; stopping its growth\n", opt_.max_model_overlap);
+                    fprintf(stderr, "[map] growth took %zu image(s) an earlier model holds "
+                            "against %zu of its own; stopping it\n", shared_here, fresh_here);
                 break;
             }
             // COLMAP's shape: rank all candidates, try them in order until one
@@ -2691,7 +2966,8 @@ private:
             reg_fail_.few_inliers++;
             return false;
         }
-        if ((double)r.num_inliers < opt_.min_pnp_inlier_ratio * (double)X.size()) {
+        if (!ratioOk(r.num_inliers, visiblePool(img, X, br, r.pose)) &&
+            !strongUnambiguous(img, X, br, r)) {
             reg_fail_.low_ratio++;
             return false;
         }
@@ -2731,10 +3007,14 @@ private:
             r.num_inliers += r.inlier_mask[k] ? 1 : 0;
         }
         if (r.num_inliers < opt_.min_num_pnp_inliers) { reg_fail_.refined_out++; return false; }
-        if ((double)r.num_inliers < opt_.min_pnp_inlier_ratio * (double)X.size()) {
+        const size_t pool = visiblePool(img, X, br, r.pose);
+        if (!ratioOk(r.num_inliers, pool)) {
             reg_fail_.refined_out++;
             return false;
         }
+        if ((double)r.num_inliers < opt_.min_pnp_inlier_ratio * (double)pool)
+            reg_fail_.strong++;
+        if (pool < X.size()) reg_fail_.occluded += (uint32_t)(X.size() - pool);
         focal_known_.insert(cid);
 
         rec_.images[img].pose = r.pose;
@@ -3349,8 +3629,89 @@ private:
     // first model is kept, which is what makes the whole multi-model path inert
     // while the primary model is being built.
     // Why registerImage() turned an attempt down, summed over the run.
+    // Does this consensus clear the ratio gate, or stand on its own without it?
+    // See strong_pnp_inliers. Used for the *second* look, after the pose has
+    // been refined: the ambiguity test below has already run on the same image.
+    bool ratioOk(int inliers, size_t pool) const {
+        if ((double)inliers >= opt_.min_pnp_inlier_ratio * (double)pool) return true;
+        return opt_.strong_pnp_inliers > 0 && inliers >= opt_.strong_pnp_inliers;
+    }
+
+    // How many of the offered correspondences this pose could explain at all:
+    // the point in front of the camera and projecting inside the frame. See
+    // pnp_ratio_visible_only -- this is the ratio's denominator.
+    size_t visiblePool(uint32_t img, const std::vector<Vec3>& X,
+                       const std::vector<Vec3>& br, const Pose& pose) const {
+        if (!opt_.pnp_ratio_visible_only) return X.size();
+        const Camera& cam = camOf(img);
+        const double w = cam.width > 0 ? (double)cam.width : 1e9;
+        const double h = cam.height > 0 ? (double)cam.height : 1e9;
+        // A margin, because a point just outside the frame would have been seen
+        // by a pose a pixel away and the gate must not turn on that.
+        const double mx = 0.05 * w, my = 0.05 * h;
+        size_t n = 0;
+        for (size_t k = 0; k < X.size(); k++) {
+            const Vec3 pc = mul(pose.R, X[k]) + pose.t;
+            // Cheirality as the rest of the mapper does it (D33): a pinhole
+            // tests z, a camera that sees past 90 deg tests the sign along the
+            // ray the keypoint was measured on.
+            if (cam.wideFov()) {
+                if (k < br.size() && pc.dot(br[k]) <= 0) continue;
+            } else if (pc.z < 1e-8) {
+                continue;
+            }
+            const Vec2 px = cam.project(pc);
+            if (!std::isfinite(px.x) || !std::isfinite(px.y)) continue;
+            if (px.x < -mx || px.y < -my || px.x > w + mx || px.y > h + my) continue;
+            n++;
+        }
+        return n;
+    }
+
+    // Is a consensus that failed the ratio gate both large enough to stand
+    // without it and the only one on offer? See strong_pnp_max_rival: the rival
+    // is searched for among the correspondences this pose rejected, which is
+    // where the other place's would be.
+    bool strongUnambiguous(uint32_t img, const std::vector<Vec3>& X,
+                           const std::vector<Vec3>& br, const PnPResult& r) {
+        if (opt_.strong_pnp_inliers <= 0 || r.num_inliers < opt_.strong_pnp_inliers) return false;
+        if (opt_.strong_pnp_max_rival <= 0) return true;
+        std::vector<Vec3> X2, b2;
+        X2.reserve(X.size());
+        b2.reserve(X.size());
+        for (size_t k = 0; k < X.size(); k++)
+            if (!r.inlier_mask[k]) { X2.push_back(X[k]); b2.push_back(br[k]); }
+        const int need = (int)std::ceil(opt_.strong_pnp_max_rival * (double)r.num_inliers);
+        if ((int)X2.size() < need) return true;  // not enough left to host a rival
+        PnPResult alt = ransacPnP(X2, b2, camOf(img).focal(), errPx(img), 0,
+                                  opt_.audit_ransac_trials);
+        if (!alt.success || alt.num_inliers < need) return true;
+        // A rival that is the *same* pose is the inlier threshold speaking, not
+        // a second place. Scale-free: the centres are compared against how far
+        // the winning pose stands from what it sees.
+        Mat3 D = mul(alt.pose.R, transpose(r.pose.R));
+        const double tr = std::max(-1.0, std::min(1.0, (D[0] + D[4] + D[8] - 1) * 0.5));
+        if (std::acos(tr) * 180.0 / M_PI > opt_.audit_min_rotation_deg) {
+            reg_fail_.ambiguous++;
+            return false;
+        }
+        const Vec3 c = cameraCenter(r.pose);
+        double depth = 0;
+        size_t nd = 0;
+        for (size_t k = 0; k < X.size(); k++)
+            if (r.inlier_mask[k]) { depth += (X[k] - c).norm(); nd++; }
+        if (nd && (cameraCenter(alt.pose) - c).norm() > 0.1 * depth / (double)nd) {
+            reg_fail_.ambiguous++;
+            return false;
+        }
+        return true;
+    }
+
     struct RegFail {
         uint32_t few_corr = 0, few_inliers = 0, low_ratio = 0, refined_out = 0;
+        uint32_t strong = 0;     // admitted on absolute support with the ratio failed (D69)
+        uint32_t ambiguous = 0;  // ... refused instead because a rival pose fit the leftovers
+        uint32_t occluded = 0;   // correspondences the accepted pose could not see at all
     } reg_fail_;
     std::vector<uint8_t> allow_;      // restrictTo(); empty = every image
     size_t allow_count_ = 0;          // ... and how many are set
