@@ -70,6 +70,7 @@ generated files are committed) and then configure + build into `build/`.
 | CUDA, no Python/Torch | `bash build_develop.bash -DSSPLAT_NO_TORCH=ON` |
 | Python extension (pip) | `pip install -e . --no-build-isolation` |
 | parity tests | add `-DSSPLAT_BUILD_BACKEND_TESTS=ON` (Vulkan builds them unconditionally) |
+| Vulkan GUI, everything on | `bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan -DSSPLAT_ENABLE_PATENTED=ON` |
 
 Keep the two backends in **separate build directories** so you can test both
 without reconfiguring, e.g. `-B build_cuda` and `-B build`.
@@ -85,14 +86,68 @@ without reconfiguring, e.g. `-B build_cuda` and `-B build`.
 | `SSPLAT_BUILD_BACKEND_TESTS` | `OFF` | build `backend/tests/*` (CUDA branch; Vulkan always builds them) |
 | `SSPLAT_DEBUG_SYMBOLS` | `OFF` | host `-g`, CUDA cubin lineinfo, `slangc -g2`. Bloats binaries substantially — profiling/debugging only. |
 | `SSPLAT_SLANGC` | *(empty)* | path to a `slangc` to use; empty means find on PATH and fetch the pinned release on miss/mismatch |
+| `SSPLAT_BUILD_SFM` | `ON` for `vulkan`, `OFF` for `cuda` | `ssplat_sfm` + `ssplat-sfm` + `sfm_*_test`. Vulkan-only; a CUDA build can opt in if the Vulkan SDK is present. |
+| `SSPLAT_BUILD_SAM` | `ON` for `vulkan`, `OFF` for `cuda` | `ssplat_nn` + `ssplat_sam` + `ssplat-sam` + `nn_ops_test` / `sam_pipeline_test`, and the GUI's in-process masking. Same rule as SfM. |
+| `SSPLAT_ENABLE_PATENTED` | `OFF` | `ssplat_video` — container demux + `VK_KHR_video_decode_*`. **Read the note below before turning it on.** |
+| `SSPLAT_SFM_REALS` / `SSPLAT_SFM_LOSSES` | all | trim the bundle-adjustment shader variant matrix while iterating (`src/sfm/README.md`) |
+
+### `SSPLAT_ENABLE_PATENTED`
+
+Off by default, and deliberately. This repository is GPLv3, and `src/video/` —
+the H.264 / H.265 / AV1 bitstream parsers and the Vulkan Video driver — is the
+one part of it carrying third-party patent exposure (H.264/H.265 via MPEG LA
+and Access Advance, AV1 via the claims asserted against AOMedia). With it off,
+that directory is neither compiled nor linked, and everything that wanted it
+falls back to an external **ffmpeg**: `ssplat-sam extract` and `ssplat-sam
+video` say so and exit, and the GUI extracts frames with ffmpeg and tells the
+user why.
+
+Turning it on buys in-process GPU decoding: roughly 15× faster frame
+extraction (a 127-second 1080p30 clip in ten seconds rather than minutes),
+masking that rides along on the same device pass, and no ffmpeg to install.
+Nothing else in the build changes.
+
+If you distribute binaries, decide for your jurisdiction and your users before
+shipping one built with it on.
 
 ## Targets
 
 `ssplat-train` (CLI trainer), `ssplat-gui` (native GUI), `ssplat-mesh`
-(meshing), `csrc` (engine; SHARED with Torch, STATIC without),
-`csrc_portable` (Vulkan branch's torch-free engine objects),
-`ssplat_backend_vulkan`, plus one executable per file in
-`backend/tests/`, `backend/tests/engine/`, and `backend/vulkan/tests/`.
+(meshing), `ssplat-sfm` (structure from motion), `ssplat-sam` (segmentation,
+tracking and frame extraction), `csrc` (engine; SHARED with Torch, STATIC
+without), `csrc_portable` (Vulkan branch's torch-free engine objects),
+`ssplat_backend_vulkan`, `ssplat_sfm`, `ssplat_nn`, `ssplat_sam`,
+`ssplat_video`, plus one executable per file in `backend/tests/`,
+`backend/tests/engine/`, `backend/vulkan/tests/`, `sfm/tests/`, `nn/tests/`
+and `sam/tests/`.
+
+`ssplat-gui` looks for `ssplat-sfm` **next to itself** (not on PATH), so a
+release has to ship them in one directory. That is also the only thing the GUI
+runs out of process; masking, decoding and training are all in-process.
+
+### Known: `SSPLAT_SFM_REALS=df` does not compile on Windows
+
+slangc 2026.12.0.1 hits an internal error on all three `ba_df_*` variants under
+Windows (`error[E99998]: Slang compilation aborted due to internal error`),
+deterministically; `float` and `double` are fine, and all three build on Linux.
+The double-float real is not the default (`--ba-real` defaults to `double`), so
+the workaround costs nothing on that platform:
+
+```bat
+build_develop.bat "-DSSPLAT_SFM_REALS=float;double"
+```
+
+`ssplat-sfm` then reports "variant not built into this binary" if something
+asks for `df`. Not yet reduced to a minimal repro or filed upstream.
+
+### Known: `sfm_mask_test` fails on Windows
+
+Its mask-discovery case writes both `e.jpg.jpeg` and `e.jpg.JPEG` and asserts
+which one is resolved. On a case-insensitive filesystem those are the same
+file, so the assertion cannot hold — and a real Windows dataset cannot contain
+both spellings either, so this is the test's assumption failing, not the
+lookup. Every other `sfm_*_test`, `nn_ops_test` and `sam_pipeline_test` passes
+on Windows.
 
 ## Backend specifics
 

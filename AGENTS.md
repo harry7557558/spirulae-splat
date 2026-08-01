@@ -80,6 +80,18 @@ src/
 ├── data/                   DataManager (image cache / prefetch / warp) and
 │   └── parsers/              COLMAP / Nerfstudio / Metashape readers
 ├── mesh/                   meshing pipeline, Delaunay3D, UV, export
+├── sfm/                    structure from motion -- Vulkan-only, self-contained
+│                             (images in, a COLMAP sparse/ model out)
+│                             -- READ src/sfm/README.md
+├── nn/                     the reusable GPU inference layer: its own Vulkan
+│                             runtime (nn/vk/), tensor + ops + Slang kernels,
+│                             host image I/O. Knows nothing about any model.
+│                             -- READ src/nn/README.md
+├── sam/                    SAM 2 / SAM 3 segmentation, on top of nn/
+│                             -- READ src/sam/README.md
+├── video/                  container demux + VK_KHR_video_decode_*, on top of
+│                             nn/. PATENT-GATED: compiled only with
+│                             SSPLAT_ENABLE_PATENTED=ON -- READ src/video/README.md
 ├── backend/                the backend seam — READ backend/README.md
 │   ├── api/                backend-neutral launch declarations (GENERATED forwarders)
 │   ├── cuda/  common/      CUDA runtime shim, SortScan, Profiler
@@ -90,7 +102,10 @@ src/
 ├── shaders/                Slang device math SHARED by both backends — compiled
 │                             twice, to src/generated/*.cuh and to SPIR-V
 ├── app/                    the native applications
-│   ├── cli/                main.cpp (ssplat-train), mesh_main.cpp (ssplat-mesh)
+│   ├── cli/                main.cpp (ssplat-train), mesh_main.cpp (ssplat-mesh),
+│   │                         sfm_main.cpp (ssplat-sfm), sam_main.cpp (ssplat-sam)
+│   ├── FrameExtract.{h,cpp}  video -> sharp (optionally masked) frames, shared
+│   │                         by ssplat-sam and the GUI
 │   ├── gui/                Dear ImGui desktop app (ssplat-gui)
 │   ├── webviewer/          HTTP server + render worker + viewer.html (the ONE
 │   │                         browser client: embedded into the engine library,
@@ -127,8 +142,16 @@ build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BACKEND=vulkan
 Backends build into different trees; keep them separate (`-B build_cuda`,
 `-B build`) so you can test both without reconfiguring. Options:
 `SSPLAT_BACKEND` (`cuda`|`vulkan`), `SSPLAT_BUILD_CLI`, `SSPLAT_BUILD_GUI`,
-`SSPLAT_NO_TORCH`, `SSPLAT_BUILD_BACKEND_TESTS`, `SSPLAT_DEBUG_SYMBOLS`.
+`SSPLAT_NO_TORCH`, `SSPLAT_BUILD_BACKEND_TESTS`, `SSPLAT_DEBUG_SYMBOLS`,
+`SSPLAT_BUILD_SFM`, `SSPLAT_BUILD_SAM`, `SSPLAT_ENABLE_PATENTED`.
 Full matrix and per-platform notes: `docs/build.md`.
+
+**`SSPLAT_ENABLE_PATENTED` is OFF by default and should stay that way in
+anything you commit.** It gates `src/video/` -- the H.264 / H.265 / AV1
+bitstream parsers and the VK_KHR_video_decode_* driver -- which is the only
+patent-encumbered code in the tree. With it off, everything that wanted it
+shells out to ffmpeg instead; no feature disappears, a subprocess appears. See
+the comment on the option in `cmake/SsplatOptions.cmake` before changing it.
 
 ## Codegen — the invariants that bite
 
@@ -165,6 +188,28 @@ Rules:
    A new field that collides across groups must be listed in `RENAMES`.
 5. `.cuh` declaration sections must stay CUDA-include-free — they have to
    parse under `-DSSPLAT_BACKEND_VULKAN` without the CUDA toolkit.
+
+## The Vulkan-only subsystems
+
+`src/sfm/`, `src/nn/`, `src/sam/` and `src/video/` are **not** part of the
+two-backend rule below. They are Vulkan + Slang only, carry their own Vulkan
+context, share nothing with the training engine, and are absent from a CUDA
+build by default (`SSPLAT_BUILD_SFM` / `SSPLAT_BUILD_SAM` default OFF there).
+Nothing in them goes through `cmake/sources.txt`, `setup.py` or the pybind
+module; the pip build never sees them.
+
+The layering runs one way and must keep doing so:
+
+```
+app/gui, app/cli ──► sam ──► nn ──► nn/vk
+                 └──► video ──┘
+                 └──► sfm  (its own vk/, independent of nn/)
+```
+
+`nn/` is the piece meant to be reused. A learned feature detector for SfM, or a
+depth/geometry model, goes on top of it unchanged -- so model-specific
+constants, weights formats and pipeline policy stay in `sam/` (or the next
+`src/<model>/`), never in `nn/`.
 
 ## The two-backend rule
 
@@ -239,6 +284,21 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   table, optimizer moments and color-space matrices.
 - **`build/_deps` on WSL drvfs** may need `git config safe.directory` entries
   for the FetchContent'd GLFW/imgui.
+- **A static library whose only content is a static initializer is not
+  linked.** The generated SPIR-V blob tables are archive members that nothing
+  references, so registration is an explicit call at each library's entry point
+  (`NN_ENSURE_EMBEDDED_MODULES`, `src/nn/vk/EmbeddedSpirv.h`), not a
+  namespace-scope constructor. A new shader directory needs its own
+  declare/ensure pair or the kernels come back "no shader module".
+- **Three Vulkan devices can be live in one process** -- the engine's, the SfM
+  module's and the inference layer's. The GUI sequences them (mask preview,
+  then reconstruction as a *child process*, then training) so no two overlap;
+  do not casually make two of them concurrent. Converging is
+  `docs/notes/sfm-port-plan.md` phase 6.
+- **Segmentation weights are never committed or bundled.** They are Meta's,
+  under Meta's licences, and SAM 3's is not GPLv3-compatible. They are fetched
+  at run time after the user has seen the terms -- `src/app/gui/ModelCache.cpp`
+  is where that policy lives, and it is the only place that should grow one.
 
 ## Do not commit
 

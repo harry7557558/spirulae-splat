@@ -361,7 +361,7 @@ int cmdSelftest(int argc, char** argv) {
                 }
                 return v;
             };
-            std::vector<std::pair<int, int>> capture, jittered, collection, small;
+            std::vector<std::pair<int, int>> capture, jittered, collection, tiny;
             for (int i = 0; i < 60; i++) {
                 capture.push_back({4032, 3024});
                 // +-1% per image: one physical camera, sizes touched by a
@@ -373,12 +373,12 @@ int cmdSelftest(int argc, char** argv) {
                 collection.push_back({(int)(700 * std::pow(1.05, i)),
                                       (int)(500 * std::pow(1.05, i))});
             }
-            for (int i = 0; i < 8; i++) small.push_back({1000 + i * 300, 800 + i * 200});
+            for (int i = 0; i < 8; i++) tiny.push_back({1000 + i * 300, 800 + i * 200});
             size_t nb = 0;
             gok = gok && !looksLikePhotoCollection(make(capture), &nb) && nb == 1;
             gok = gok && !looksLikePhotoCollection(make(jittered), &nb) && nb == 1;
             gok = gok && looksLikePhotoCollection(make(collection), &nb) && nb == 60;
-            gok = gok && !looksLikePhotoCollection(make(small), &nb);  // too few images
+            gok = gok && !looksLikePhotoCollection(make(tiny), &nb);  // too few images
             std::vector<ImageEntry> ci(60, {"x", 0});
             for (int i = 0; i < 60; i++) ci[i].name = "img" + std::to_string(i);
             CameraSetupOptions co;

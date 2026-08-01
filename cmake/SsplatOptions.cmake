@@ -77,6 +77,46 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# GPU inference (src/nn/) and segmentation (src/sam/)
+#
+# The native replacement for the scripts/mask.py subprocess: SAM 2 / SAM 3 on
+# the same Vulkan + Slang stack as the SfM module, over a reusable inference
+# layer. Same rule as SfM -- Vulkan-only, on by default only for the Vulkan
+# build, opt-in for CUDA if the Vulkan SDK is present. See cmake/SsplatNn.cmake
+# and src/nn/README.md.
+# ---------------------------------------------------------------------------
+if(SSPLAT_BACKEND STREQUAL "vulkan")
+    option(SSPLAT_BUILD_SAM "Build the inference layer + SAM segmentation" ON)
+else()
+    option(SSPLAT_BUILD_SAM "Build the inference layer + SAM segmentation" OFF)
+endif()
+
+# ---------------------------------------------------------------------------
+# Patent-encumbered modules
+#
+# OFF by default, and deliberately so: this repository is GPLv3, and the video
+# codecs are the one piece of it that carries third-party patent exposure
+# (H.264 / H.265 via MPEG LA / Access Advance, AV1 via the claims asserted
+# against AOMedia). With it OFF, src/video/ -- the container demuxers, the
+# H.264 / H.265 / AV1 bitstream parsers and the VK_KHR_video_decode_* driver --
+# is neither compiled nor linked, and everything that wanted it shells out to
+# an external ffmpeg instead. That costs a subprocess and a temporary folder of
+# JPEGs; no feature disappears from the GUI.
+#
+# Turn it ON to decode video in-process on the GPU (roughly 15x faster frame
+# extraction, and no ffmpeg to install). Distributors should check what their
+# jurisdiction and their users require before shipping a binary built with it.
+# ---------------------------------------------------------------------------
+option(SSPLAT_ENABLE_PATENTED
+    "Compile patent-encumbered modules (in-process H.264/H.265/AV1 video decode)"
+    OFF)
+if(SSPLAT_ENABLE_PATENTED AND NOT SSPLAT_BUILD_SAM)
+    message(FATAL_ERROR
+        "SSPLAT_ENABLE_PATENTED=ON needs SSPLAT_BUILD_SAM=ON: the video "
+        "decoder is built on the inference layer's Vulkan runtime (src/nn/vk).")
+endif()
+
+# ---------------------------------------------------------------------------
 # Shared C++ settings
 # ---------------------------------------------------------------------------
 set(CMAKE_CXX_STANDARD 17)

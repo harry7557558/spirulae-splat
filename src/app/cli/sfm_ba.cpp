@@ -7,11 +7,16 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
-#include <sys/stat.h>
 
 #include "sfm/ba/Problem.h"
 #include "sfm/ba/Solver.h"
 #include "sfm/map/Bundle.h"
+
+// getenv with a default. (`getenv(x) ?: "d"` is a GNU extension MSVC lacks.)
+static const char* env_or(const char* name, const char* fallback) {
+    const char* v = getenv(name);
+    return v ? v : fallback;
+}
 
 static void writePly(const char* path, const std::vector<double>& pts) {
     std::ofstream f(path, std::ios::binary);
@@ -154,8 +159,8 @@ int cmdBa(int argc, char** argv) {
     // global BA builds and drive the solver on it. This is how the solver is
     // profiled on real captures rather than on BAL. The mapper's loss defaults
     // come along with it, since matching what the pipeline runs is the point.
-    struct stat st_dir;
-    const bool is_model = stat(file.c_str(), &st_dir) == 0 && S_ISDIR(st_dir.st_mode);
+    std::error_code dir_ec;
+    const bool is_model = std::filesystem::is_directory(file, dir_ec);
 
     auto t0 = std::chrono::high_resolution_clock::now();
     sfm::Reconstruction rec;
@@ -185,7 +190,7 @@ int cmdBa(int argc, char** argv) {
     if (!ply_prefix.empty()) writePly((ply_prefix + "_before.ply").c_str(), P.points);
 
     if (getenv("SSPLAT_SFM_DUMP_SG")) {
-        solver.debugAssemble(atof(getenv("SSPLAT_SFM_DUMP_SG_LAMBDA") ?: "0.01"));
+        solver.debugAssemble(atof(env_or("SSPLAT_SFM_DUMP_SG_LAMBDA", "0.01")));
         std::vector<uint8_t> raw(solver.bufS().size);
         std::vector<double> v;
         solver.ctx().download(solver.bufS(), raw.data(), solver.bufS().size);
@@ -203,7 +208,7 @@ int cmdBa(int argc, char** argv) {
     // SSPLAT_SFM_CMP_STEP: solve one assembly with both CG and dense, print the
     // step difference (use --cg-tol / --cg-iters to control CG accuracy)
     if (cmp_step) {
-        double lam = atof(getenv("SSPLAT_SFM_CMP_STEP_LAMBDA") ?: "0.01");
+        double lam = atof(env_or("SSPLAT_SFM_CMP_STEP_LAMBDA", "0.01"));
         solver.debugCompareStep((float)lam);
         return 0;
     }

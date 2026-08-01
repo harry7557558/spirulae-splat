@@ -48,7 +48,7 @@ void apply_style(float scale) {
 
 }  // namespace
 
-int main(int, char**) {
+int main(int argc, char** argv) {
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
         std::fprintf(stderr, "error: failed to initialize GLFW (is a display "
@@ -98,6 +98,9 @@ int main(int, char**) {
             auto* a = (gui::GuiApp*)glfwGetWindowUserPointer(w);
             if (a && count > 0 && paths && paths[0]) a->handle_drop(paths[0]);
         });
+        // `ssplat-gui <path>` -- the same auto-detection as a drop, so a
+        // desktop "Open with" or a shell alias lands on the right screen.
+        if (argc > 1 && argv[1] && argv[1][0]) app.handle_drop(argv[1]);
         while (!app.wants_exit()) {
             glfwPollEvents();
             if (glfwWindowShouldClose(window)) {

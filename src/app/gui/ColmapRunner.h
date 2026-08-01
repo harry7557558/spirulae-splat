@@ -2,15 +2,17 @@
 
 // ColmapRunner -- turns raw images or a video into a trainable COLMAP
 // dataset by driving the external `colmap` (>= 4.x; the CLI flags follow
-// scripts/run_colmap.bash) and, for video, `ffmpeg`, on a worker thread with
-// live log streaming and cancellation.
+// scripts/run_colmap.bash) on a worker thread with live log streaming and
+// cancellation.
+//
+// It is the CUDA build's dataset path and the fallback everywhere else; the
+// Vulkan build defaults to SfmRunner, which needs nothing installed. The two
+// share their first half through DatasetPrep -- frames, sharpest-frame
+// selection, .insv track splitting and masking -- so only what is actually
+// COLMAP-specific lives here.
 //
 // Pipeline:
-//   [video] ffmpeg frame extraction (oversampled) -> sharpest-frame
-//           selection (FrameSelect, extract_frames.py port); multi-track
-//           .insv files split into images/cam<N>/ with one camera per folder
-//   [optional] AI masking via the embedded scripts/mask.py (external Python
-//           with lang-segment-anything; masks feed COLMAP and the trainer)
+//   DatasetPrep (frames + masks; see DatasetPrep.h)
 //   feature_extractor (SIFT or ALIKED; optional initial camera params) ->
 //           exhaustive / sequential (+ optional vocab-tree loop closure) /
 //           vocab-tree matcher (the tree is auto-found or downloaded;
@@ -61,6 +63,8 @@ struct ColmapJob {
     std::string colmap_exe = "colmap";
     std::string ffmpeg_exe = "ffmpeg";
     std::string python_exe = "python3";  // for the masking script
+    bool force_external_decode = false;  // ffmpeg even when we could decode
+    bool force_external_masking = false; // scripts/mask.py even when we could not
 
     // Cameras
     std::string camera_model = "OPENCV"; // ImageReader.camera_model
@@ -126,10 +130,14 @@ struct ColmapJob {
     bool final_bundle_adjust = true;     // bundle_adjuster refinement pass
     std::string vocab_tree_path;         // "" = auto find / download
 
-    // AI masking (embedded scripts/mask.py; needs Python + lang-sam)
+    // AI masking. The built-in path wants a checkpoint file
+    // (mask_model_path, from ModelCache); the scripts/mask.py fallback wants
+    // a model name it understands (mask_model).
     bool mask_enable = false;
     std::string mask_prompt;             // "people; cars; ..."
     std::string mask_negative_prompt;
+    bool mask_keep_subject = false;      // prompt names what to KEEP
+    std::string mask_model_path;
     std::string mask_model = "sam2.1_hiera_large";
     int mask_max_image_size = 1600;
 };
@@ -157,8 +165,6 @@ private:
     void set_stage(const std::string& s);
     bool check_colmap_version(const ColmapJob& job, std::string& err);
     std::string resolve_vocab_tree(const ColmapJob& job);
-    bool run_masking(const ColmapJob& job, const std::string& images,
-                     std::string& err);
     // Mean reprojection error of a model (colmap model_analyzer); a large
     // sentinel when it cannot be determined.
     double model_reproj_error(const ColmapJob& job, const std::string& model);

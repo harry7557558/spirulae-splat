@@ -19,6 +19,13 @@
 //       (reproducing build_spirv.py's phase-2 gate), verify no capability leaks,
 //       and emit the C++ translation unit consumed by VulkanPipelines.cpp.
 //
+//   embed --nn <tag> <out.cpp> --list <listfile>
+//       The same, for a library of the inference layer (cmake/SsplatNn.cmake).
+//       Emits a blob table named after <tag>, which the owning library hands
+//       to the process registry nn/vk/EmbeddedSpirv.h declares -- so src/nn/,
+//       src/sam/ and src/video/ can each contribute shaders to one pipeline
+//       cache, and <tag> keeps their symbols distinct.
+//
 //   embed --sfm <out.cpp> --list <listfile>
 //       The same, for the SfM module (cmake/SsplatSfm.cmake). Its blobs are
 //       whole-module compiles with no feature variants, so the variant gate and
@@ -509,17 +516,23 @@ std::string strip_feature_suffixes(std::string name) {
 }
 
 int run_embed(const std::vector<std::string>& args) {
-    std::string out_cpp, listfile;
-    bool sfm = false;
+    std::string out_cpp, listfile, nn_tag;
+    bool sfm = false, nn = false;
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i] == "--list" && i + 1 < args.size()) listfile = args[++i];
         else if (args[i] == "--sfm") sfm = true;
-        else if (out_cpp.empty()) out_cpp = args[i];
+        else if (args[i] == "--nn" && i + 1 < args.size()) {
+            nn = true;
+            nn_tag = args[++i];
+        } else if (out_cpp.empty()) out_cpp = args[i];
     }
     if (out_cpp.empty() || listfile.empty()) {
         std::fprintf(stderr, "embed: usage: embed <out.cpp> --list <file>\n");
         return 2;
     }
+    // The two module-registry flavours skip the engine's variant gate and
+    // capability audit -- both are statements about the engine's kernels.
+    const bool plain = sfm || nn;
 
     std::vector<std::string> paths;
     {
@@ -554,7 +567,7 @@ int run_embed(const std::vector<std::string>& args) {
     std::vector<std::string> kept;
     for (auto& [name, bytes] : blob_bytes) {
         (void)bytes;
-        if (sfm) { kept.push_back(name); continue; }
+        if (plain) { kept.push_back(name); continue; }
         size_t n = std::strlen(NOINT64.suffix);
         bool is_noint64 = name.size() > n &&
             name.compare(name.size() - n, n, NOINT64.suffix) == 0;
@@ -576,7 +589,7 @@ int run_embed(const std::vector<std::string>& args) {
     // Capability audit (mirrors build_spirv.py's final pass). It checks the
     // engine's variant invariants, which the SfM blobs do not participate in.
     bool failed = false;
-    for (auto& name : sfm ? std::vector<std::string>{} : kept) {
+    for (auto& name : plain ? std::vector<std::string>{} : kept) {
         const auto& caps = blob_caps[name];
         size_t n = std::strlen(NOINT64.suffix);
         bool is_noint64 = name.size() > n &&
@@ -603,6 +616,9 @@ int run_embed(const std::vector<std::string>& args) {
          "#include <cstddef>\n#include <cstdint>\n";
     if (sfm)
         o << "#include <cstring>\n\nnamespace sfm {\n\n";
+    else if (nn)
+        o << "#include \"nn/vk/EmbeddedSpirv.h\"\n\n"
+             "namespace nn {\nnamespace vk {\n\n";
     else
         o << "\nnamespace backend {\nnamespace vk {\n\n"
              "struct SpirvBlob { const char* name; const uint32_t* data;"
@@ -648,6 +664,22 @@ int run_embed(const std::vector<std::string>& args) {
              "    return i < " << kept.size() << " ? kBlobs[i].name : nullptr;\n"
              "}\n\n"
              "}  // namespace sfm\n";
+    } else if (nn) {
+        // One table per library; the library registers it itself, so the names
+        // have external linkage and the tag keeps two generated TUs in the
+        // same binary apart. See nn/vk/EmbeddedSpirv.h.
+        o << "\nextern const EmbeddedModule kEmbeddedModules_" << nn_tag << "[];\n"
+             "const EmbeddedModule kEmbeddedModules_" << nn_tag << "[] = {\n";
+        for (size_t i = 0; i < kept.size(); i++)
+            o << "    {\"" << kept[i] << "\", _blob" << i << ", sizeof(_blob" << i
+              << ") / 4},\n";
+        if (kept.empty())
+            o << "    {nullptr, nullptr, 0},  // keep the array non-empty\n";
+        o << "};\n"
+             "extern const size_t kEmbeddedModuleCount_" << nn_tag << ";\n"
+             "const size_t kEmbeddedModuleCount_" << nn_tag << " = "
+          << kept.size() << ";\n\n"
+             "}  // namespace vk\n}  // namespace nn\n";
     } else {
         o << "\nextern const SpirvBlob g_spirv_blobs[];\n"
              "extern const size_t g_spirv_blob_count;\n"

@@ -4,9 +4,11 @@ Plan for moving the Vulkan/Slang Structure-from-Motion pipeline (developed in a
 separate private tree) into `spirulae-splat`, making this its permanent home,
 and retiring the COLMAP subprocess for Vulkan builds.
 
-Status: **phases 1-2 landed** (mechanical import; one configuration surface).
-Phase 3 is next. This document is the plan; delete the phase checklists as they
-land and fold the surviving content into `src/sfm/README.md`.
+Status: **phases 1-2 landed** (mechanical import; one configuration surface),
+**phase 5 landed in a different shape than planned** (2026-08-01, see below).
+Phase 3 is what unblocks the rest. This document is the plan; delete the phase
+checklists as they land and fold the surviving content into
+`src/sfm/README.md`.
 
 ---
 
@@ -275,6 +277,46 @@ The mapper can emit camera models this repo cannot consume.
 
 *Done when:* every camera model the mapper can produce either trains or is
 refused with an actionable message.
+
+### Phase 5 — GUI integration — **landed 2026-08-01, out of order**
+
+It landed while the segmentation stack was being merged
+(`docs/notes/segmentation-port.md`), and it landed **without phase 3** — which
+changes one thing from the plan below and nothing else.
+
+`SfmRunner` drives `ssplat-sfm` as a **child process** rather than calling the
+library in-process (item 2 below). That is deliberate for now:
+
+- phase 3 has not happened, so the library still prints to stdout and cannot be
+  cancelled; in-process it could be neither stopped nor reported on;
+- global BA on a large model and a live trainer must not share a VRAM budget,
+  and a child process gives that separation for free;
+- it keeps one Vulkan device live in the GUI process instead of two — §10's own
+  first risk.
+
+The user still installs nothing: it is our binary, shipped next to the GUI and
+found via `AppPaths::sibling_tool`, not via PATH. The cost is that progress is
+read out of the child's stdout (`SfmRunner::note_progress`), which phase 3
+removes. **When phase 3 lands, only `SfmRunner::run`'s body changes.**
+
+Everything else landed as written: `DatasetPrep` (item 1, and it grew built-in
+video decoding and masking with the ffmpeg/Python subprocesses kept as
+fallbacks), `Screen::NewDataset` and the engine selector (item 3), the beginner
+panel with its auto-detection (item 4), and the settings persistence (item 6).
+
+Item 5 — the "All SfM options" editor over the phase-2 descriptor table — was
+**not** built. The panel surfaces the dozen knobs a beginner or intermediate
+user needs, plus a free-form "extra ssplat-sfm flags" field that reaches the
+other ~120. That is a deliberate trade for now: mirroring the table into ImGui
+widgets is real work, and the flag field costs nothing and cannot go stale.
+Revisit if users actually reach for it.
+
+Phase 4 (dataset-parser and format checks) is still **not done**. What the GUI
+does instead is not offer `equirectangular` in the camera-model list at all
+(`kSfmCameraModels`), so the combination the parser cannot read is unreachable
+from the GUI — the CLI can still produce it and still should refuse it.
+
+The original plan, for reference:
 
 ### Phase 5 — GUI integration (3–4 days)
 

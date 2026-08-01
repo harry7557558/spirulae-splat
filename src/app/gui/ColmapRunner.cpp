@@ -2,12 +2,9 @@
 // scripts/run_colmap.bash (COLMAP >= 4.x; use_gpu-style flags are gone).
 
 #include "app/gui/ColmapRunner.h"
-#include "app/gui/FrameSelect.h"
+#include "app/gui/AppPaths.h"
+#include "app/gui/DatasetPrep.h"
 #include "app/gui/Subprocess.h"
-
-#include "app_generated/mask_py.h"   // kMaskPy[] (CMake-embedded scripts/mask.py)
-
-#include "external/stb_image.h"   // stbi_info (image size probe)
 
 #ifndef _WIN32
 #include <ftw.h>
@@ -17,7 +14,6 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 
@@ -45,42 +41,6 @@ const char* kVocabTreeName = "vocab_tree_faiss_flickr100K_words256K.bin";
 const char* kVocabTreeUrl =
     "https://github.com/colmap/colmap/releases/download/3.11.1/"
     "vocab_tree_faiss_flickr100K_words256K.bin";
-
-bool is_image_file(const fs::path& p) {
-    std::string e = p.extension().string();
-    for (auto& c : e) c = (char)std::tolower((unsigned char)c);
-    return e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".webp" ||
-           e == ".tif" || e == ".tiff" || e == ".bmp";
-}
-
-// Recursive: COLMAP's feature_extractor indexes image_path recursively, so
-// the sanity count must match.
-int count_images(const std::string& dir) {
-    int n = 0;
-    std::error_code ec;
-    for (fs::recursive_directory_iterator it(
-             dir, fs::directory_options::skip_permission_denied, ec), end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_regular_file(ec) && is_image_file(it->path())) n++;
-    return n;
-}
-
-bool is_fisheye_model(const std::string& m) {
-    return m.find("FISHEYE") != std::string::npos;
-}
-
-// First image found under dir (recursive), for probing dimensions.
-bool first_image_dims(const std::string& dir, int& W, int& H) {
-    std::error_code ec;
-    for (fs::recursive_directory_iterator it(
-             dir, fs::directory_options::skip_permission_denied, ec), end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_regular_file(ec) && is_image_file(it->path())) {
-            int c = 0;
-            return stbi_info(it->path().string().c_str(), &W, &H, &c) != 0;
-        }
-    return false;
-}
 
 // Initial ImageReader.camera_params for a model: given focal length and a
 // centered principal point, all distortion coefficients zero. Order follows
@@ -111,6 +71,10 @@ std::string compose_camera_params(const std::string& model, double f,
     return "";
 }
 
+bool is_fisheye_model(const std::string& m) {
+    return m.find("FISHEYE") != std::string::npos;
+}
+
 // Registered-image count of a COLMAP model dir (uint64 head of images.bin;
 // same trick as ColmapParser's largest-model pick).
 int64_t model_num_images(const fs::path& dir) {
@@ -120,23 +84,6 @@ int64_t model_num_images(const fs::path& dir) {
     size_t got = std::fread(&n, sizeof n, 1, f);
     std::fclose(f);
     return got == 1 ? (int64_t)n : 0;
-}
-
-fs::path cache_dir() {
-#ifdef _WIN32
-    const char* base = std::getenv("LOCALAPPDATA");
-    fs::path dir = base ? fs::path(base) : fs::path(".");
-    dir /= "spirulae-splat";
-#else
-    fs::path dir;
-    if (const char* x = std::getenv("XDG_CACHE_HOME")) dir = x;
-    else if (const char* h = std::getenv("HOME")) dir = fs::path(h) / ".cache";
-    else dir = ".";
-    dir /= "spirulae-splat";
-#endif
-    std::error_code ec;
-    fs::create_directories(dir, ec);
-    return dir;
 }
 
 }  // namespace
@@ -246,7 +193,7 @@ std::string ColmapRunner::resolve_vocab_tree(const ColmapJob& job) {
         return "";
     }
     fs::path ws = job.workspace;
-    for (const fs::path& dir : {ws, ws.parent_path(), cache_dir()}) {
+    for (const fs::path& dir : {ws, ws.parent_path(), fs::path(cache_dir())}) {
         if (!fs::is_directory(dir, ec)) continue;
         for (fs::directory_iterator it(dir, ec), end; !ec && it != end;
              it.increment(ec)) {
@@ -259,7 +206,7 @@ std::string ColmapRunner::resolve_vocab_tree(const ColmapJob& job) {
         }
     }
     // Download into the cache.
-    fs::path dst = cache_dir() / kVocabTreeName;
+    fs::path dst = fs::path(cache_dir()) / kVocabTreeName;
     set_stage("Downloading vocabulary tree (one-time, ~150 MB)");
     if (!command_exists("curl")) {
         log("curl not found -- download it manually:");
@@ -277,68 +224,6 @@ std::string ColmapRunner::resolve_vocab_tree(const ColmapJob& job) {
     }
     fs::rename(tmp, dst, ec);
     return ec ? "" : dst.string();
-}
-
-// AI masking via the embedded scripts/mask.py. The script prints an install
-// hint and exits 0 when lang-sam / SAM-3 is missing, so detect that from
-// its output rather than the exit code.
-bool ColmapRunner::run_masking(const ColmapJob& job, const std::string& images,
-                               std::string& err) {
-    set_stage("Generating masks (AI segmentation)");
-    if (!command_exists(job.python_exe)) {
-        err = "Python not found ('" + job.python_exe + "'); masking needs "
-              "Python with the lang-segment-anything package. Set the Python "
-              "path under Tool Locations, or disable masking.";
-        return false;
-    }
-    fs::path ws = job.workspace;
-    fs::path script = ws / ".ssplat_mask.py";
-    {
-        FILE* f = std::fopen(script.string().c_str(), "wb");
-        if (!f) { err = "cannot write " + script.string(); return false; }
-        std::fwrite(kMaskPy, 1, kMaskPySize, f);
-        std::fclose(f);
-    }
-    std::vector<std::string> argv = {
-        job.python_exe, script.string(), ws.string(),
-        "--prompt", job.mask_prompt,
-        "--images", images,
-        "--masks", "masks",
-        "--max_image_size", std::to_string(job.mask_max_image_size),
-        "--model", job.mask_model,
-    };
-    if (!job.mask_negative_prompt.empty()) {
-        argv.push_back("--negative_prompt");
-        argv.push_back(job.mask_negative_prompt);
-    }
-    std::string install_hint;
-    std::string cmd;
-    for (const auto& a : argv) cmd += (cmd.empty() ? "$ " : " ") + a;
-    log(cmd);
-    int rc = run_process(argv, "", [&](const std::string& l) {
-        log(l);
-        if (l.find("not found or not installed properly") != std::string::npos ||
-            l.find("ModuleNotFoundError") != std::string::npos)
-            install_hint = l;
-    }, _cancel);
-    if (rc == kCancelled) { err = "cancelled"; return false; }
-    std::error_code ec;
-    bool have_masks = fs::is_directory(ws / "masks", ec) &&
-                      !fs::is_empty(ws / "masks", ec);
-    if (!install_hint.empty() || rc != 0 || !have_masks) {
-        err = "Mask generation failed";
-        if (!install_hint.empty())
-            err += " -- missing Python packages. Install lang-segment-anything "
-                   "(pip install git+https://github.com/luca-medeiros/"
-                   "lang-segment-anything, needs CUDA PyTorch)"
-                   + std::string(job.mask_model == "sam3"
-                       ? ", or for SAM-3: https://github.com/facebookresearch/sam3"
-                       : "");
-        else
-            err += " (see log)";
-        return false;
-    }
-    return true;
 }
 
 double ColmapRunner::model_reproj_error(const ColmapJob& job,
@@ -388,122 +273,41 @@ void ColmapRunner::run(ColmapJob job) {
         std::string err;
         if (!check_colmap_version(job, err)) return fail(err);
 
-        // ---- 1. resolve the image directory --------------------------------
-        std::string images;
-        std::string image_dir_cfg;   // what the trainer's image_dir should be
-        if (job.is_video) {
-            if (!command_exists(job.ffmpeg_exe))
-                return fail("ffmpeg not found ('" + job.ffmpeg_exe +
-                            "'); install it or set its path under Tool Locations");
+        // ---- 1. frames and masks (shared with the built-in SfM path) -------
+        PrepResult prep;
+        {
+            PrepJob pj;
+            pj.input_path = job.input_path;
+            pj.is_video = job.is_video;
+            pj.workspace = job.workspace;
+            pj.resume = job.resume;
+            pj.video_fps = job.video_fps;
+            pj.sharp_window = job.sharp_window;
+            pj.max_frames = job.max_frames;
+            pj.ffmpeg_exe = job.ffmpeg_exe;
+            pj.force_external_decode = job.force_external_decode;
+            pj.mask_enable = job.mask_enable;
+            pj.mask_prompt = job.mask_prompt;
+            pj.mask_negative_prompt = job.mask_negative_prompt;
+            pj.mask_keep_subject = job.mask_keep_subject;
+            pj.mask_max_image_size = job.mask_max_image_size;
+            pj.mask_model_path = job.mask_model_path;
+            pj.mask_model_name = job.mask_model;
+            pj.force_external_masking = job.force_external_masking;
+            pj.python_exe = job.python_exe;
 
-            // Multi-track videos (Insta360 .insv): one folder per track,
-            // one COLMAP camera per folder (extract_frames.py behavior).
-            std::vector<int> streams = {0};
-            {
-                std::string ext = fs::path(job.input_path).extension().string();
-                for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
-                if (ext == ".insv") {
-                    std::vector<int> found;
-                    run_process({"ffprobe", "-v", "error", "-select_streams", "v",
-                                 "-show_entries", "stream=index", "-of", "csv=p=0",
-                                 job.input_path}, "",
-                                [&](const std::string& l) {
-                                    try { found.push_back(std::stoi(l)); } catch (...) {}
-                                }, _cancel);
-                    if (found.size() > 1) streams = found;
-                }
-            }
-            if (streams.size() > 1 && job.camera_mode == 0) {
-                log("Multi-track video: switching to one camera per folder");
-                job.camera_mode = 1;
-            }
-
-            int window = std::max(job.sharp_window, 1);
-            for (size_t tr = 0; tr < streams.size(); tr++) {
-                std::string track_path = job.input_path;
-                fs::path out_dir = streams.size() > 1
-                    ? ws / "images" / ("cam" + std::to_string(tr))
-                    : ws / "images";
-                // Resume: a non-empty output folder means this track's
-                // extraction completed (frames are moved in one batch after
-                // selection, and a cancelled selection leaves it empty).
-                if (job.resume) {
-                    int have = count_images(out_dir.string());
-                    if (have > 0) {
-                        log("Resume: keeping " + std::to_string(have) +
-                            " extracted frames in " + out_dir.string() +
-                            " (delete the folder to re-extract)");
-                        continue;
-                    }
-                }
-                if (streams.size() > 1) {
-                    set_stage("Splitting video track " + std::to_string(tr));
-                    int rc = exec({job.ffmpeg_exe, "-nostdin", "-y",
-                                   "-i", job.input_path,
-                                   "-map", "0:v:" + std::to_string(tr),
-                                   "-c", "copy",
-                                   (ws / ("track_cam" + std::to_string(tr) + ".mp4")).string()});
-                    if (rc == kCancelled) return fail("cancelled");
-                    if (rc != 0) return fail("ffmpeg track split failed (see log)");
-                    track_path = (ws / ("track_cam" + std::to_string(tr) + ".mp4")).string();
-                }
-
-                set_stage(window > 1
-                    ? "Extracting candidate frames (ffmpeg)"
-                    : "Extracting frames (ffmpeg)");
-                fs::path cand = ws / "frames_tmp";
-                remove_tree(cand);
-                fs::create_directories(cand);
-                char vf[64];
-                std::snprintf(vf, sizeof vf, "fps=%g",
-                              (double)job.video_fps * window);
-                int rc = exec({job.ffmpeg_exe, "-nostdin", "-y", "-i", track_path,
-                               "-vf", vf, "-qscale:v", "2",
-                               (cand / "c_%06d.jpg").string()});
-                if (rc == kCancelled) return fail("cancelled");
-                if (rc != 0) return fail("ffmpeg frame extraction failed (see log)");
-
-                if (window > 1)
-                    set_stage("Selecting sharpest frames (multithreaded)");
-                fs::create_directories(out_dir);
-                int kept = select_sharpest_frames(
-                    cand.string(), out_dir.string(), "",
-                    window, job.max_frames,
-                    [this](const std::string& l) { log(l); }, _cancel);
-                remove_tree(cand);
-                if (streams.size() > 1) {
-                    std::error_code ec;
-                    fs::remove(track_path, ec);
-                }
-                if (kept < 0)
-                    return fail(_cancel.load() ? "cancelled"
-                                               : "frame selection failed");
-                log("Kept " + std::to_string(kept) + " frames -> " +
-                    out_dir.string());
-            }
-            images = (ws / "images").string();
-            image_dir_cfg = "images";
-        } else {
-            images = job.input_path;
-            // Reference the source images in place (no copy); the parsers
-            // accept an absolute image_dir.
-            image_dir_cfg = fs::absolute(job.input_path).string();
+            DatasetPrep dp([this](const std::string& l) { log(l); },
+                           [this](const std::string& s) { set_stage(s); },
+                           _cancel);
+            if (!dp.run(pj, prep, err)) return fail(err);
         }
-        int n_images = count_images(images);
-        log("Found " + std::to_string(n_images) + " images in " + images);
-        if (n_images < 3)
-            return fail("need at least 3 images (found " +
-                        std::to_string(n_images) + ")");
-
-        // ---- 2. optional AI masking ----------------------------------------
-        bool have_masks = false;
-        if (job.mask_enable) {
-            if (job.mask_prompt.empty())
-                return fail("masking is enabled but the prompt is empty "
-                            "(e.g. \"people; cars\")");
-            if (!run_masking(job, job.is_video ? "images" : image_dir_cfg, err))
-                return fail(err);
-            have_masks = true;
+        const std::string images = prep.image_dir;
+        const std::string image_dir_cfg = prep.image_dir_cfg;
+        const int n_images = prep.n_images;
+        const bool have_masks = !prep.mask_dir.empty();
+        if (prep.multi_track && job.camera_mode == 0) {
+            log("Multi-track video: switching to one camera per folder");
+            job.camera_mode = 1;
         }
 
         // Quality knobs (per run_colmap.bash: fewer features = much faster
@@ -525,7 +329,7 @@ void ColmapRunner::run(ColmapJob job) {
         std::string cam_params = job.camera_params;
         if (cam_params.empty() && job.init_focal_factor > 0) {
             int W = 0, H = 0;
-            if (first_image_dims(images, W, H)) {
+            if (DatasetPrep::first_image_dims(images, W, H)) {
                 cam_params = compose_camera_params(
                     job.camera_model, (double)job.init_focal_factor * W,
                     0.5 * W, 0.5 * H);
@@ -581,7 +385,7 @@ void ColmapRunner::run(ColmapJob job) {
         }
         if (have_masks) {
             fe.push_back("--ImageReader.mask_path");
-            fe.push_back((ws / "masks").string());
+            fe.push_back(prep.mask_dir);
         }
         int rc = exec(fe);
         if (rc == kCancelled) return fail("cancelled");

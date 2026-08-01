@@ -1,0 +1,124 @@
+#pragma once
+
+// SfmRunner -- turns raw images or a video into a trainable dataset using this
+// repository's own structure-from-motion, with nothing else installed.
+//
+// Same public shape as ColmapRunner (start / cancel / state / stage / error /
+// dataset_dir / image_dir / drain_log) plus a progress fraction, so GuiApp
+// drives either one through the same code.
+//
+// Pipeline:
+//   DatasetPrep  (frames, sharpest-frame selection, .insv track split, masks)
+//   ssplat-sfm auto  ->  <workspace>/sparse/0/{cameras,images,points3D}.bin
+//
+// The reconstruction runs as a child process rather than in this one. That is
+// a deliberate choice for now, not a shortcut left over from the COLMAP days:
+//
+//   * the SfM module is still a CLI at heart -- it prints to stdout and has no
+//     cancellation token (docs/notes/sfm-port-plan.md phase 3), so in-process
+//     it could neither be stopped nor reported on;
+//   * global bundle adjustment on a large model and a live trainer must not
+//     share a VRAM budget, and a child process gives that separation for free
+//     -- every byte it held is gone when it exits;
+//   * it keeps one Vulkan device live in the GUI process instead of two
+//     (the port plan's own §10 risk).
+//
+// It is our binary, shipped next to the GUI (AppPaths::sibling_tool), so the
+// user still installs nothing. When phase 3 lands, only the run() body here
+// changes.
+
+#include "app/gui/DatasetPrep.h"
+
+#include <atomic>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace gui {
+
+// The camera models `ssplat-sfm --camera-model` accepts that the dataset
+// parser and renderer can also consume. EQUIRECTANGULAR is deliberately absent:
+// the mapper can write it, the parser cannot read it
+// (docs/notes/sfm-port-plan.md phase 4).
+inline const char* kSfmCameraModels[] = {
+    "opencv", "pinhole", "simple-pinhole", "radial",
+    "full-opencv", "opencv-fisheye", "thin-prism-fisheye",
+};
+inline constexpr int kNumSfmCameraModels = 7;
+
+// What the combo boxes show for each of the above, in the same order.
+inline const char* kSfmCameraModelLabels[] = {
+    "OpenCV (most cameras)", "Pinhole (no distortion)", "Simple pinhole",
+    "Radial", "Full OpenCV", "Fisheye (Kannala-Brandt)", "Fisheye (thin prism)",
+};
+
+struct SfmJob {
+    // ---- shared with ColmapRunner's path ----
+    PrepJob prep;
+
+    // ---- reconstruction ----
+    int quality = 2;                  // 0 low, 1 medium, 2 high, 3 extreme
+    int data_type = 0;                // 0 individual photos, 1 video, 2 internet
+    std::string camera_model = "opencv";
+    int camera_mode = 1;              // 0 single, 1 per folder, 2 per image
+    int pairs = 0;                    // 0 auto, 1 exhaustive, 2 sequential, 3 prefilter
+    int overlap = 10;                 // sequential neighbours
+    float init_focal_px = 0.0f;       // 0 = guess from EXIF / image size
+    int max_features = 0;             // 0 = the quality preset's
+    int max_image_size = 0;           // 0 = the quality preset's
+    int mapper = 0;                   // 0 auto, 1 flat, 2 bottom-up
+    bool keep_intermediate = false;   // keep features/ and matches.bin
+
+    // Extra flags typed by the user, appended verbatim. The escape hatch for
+    // everything the panel does not surface -- `ssplat-sfm auto --help` lists
+    // the lot, and this is how an expert reaches it without us mirroring 130
+    // flags into the GUI.
+    std::string extra_args;
+};
+
+class SfmRunner {
+public:
+    enum class State { Idle, Running, Done, Failed, Cancelled };
+
+    ~SfmRunner();
+
+    // "" when ssplat-sfm is available, otherwise why it is not.
+    static std::string availability();
+
+    void start(const SfmJob& job);
+    void cancel();
+
+    State state() const { return _state.load(); }
+    std::string stage();
+    std::string error();
+    std::string dataset_dir();
+    std::string image_dir();
+    // 0..1 within the current stage, or -1 when it cannot be estimated.
+    float progress() const { return _progress.load(); }
+    // Done, but under half the images registered (or a high reprojection
+    // error). The dataset is usable; the user should know it has gaps.
+    bool partial() const { return _partial.load(); }
+    std::vector<std::string> drain_log();
+
+private:
+    void run(SfmJob job);
+    void log(const std::string& line);
+    void set_stage(const std::string& s);
+    // Stage changes driven by the child's output, which repeats a
+    // stage's lines many times over.
+    void set_stage_if_new(const char* s);
+    // Reads one ssplat-sfm output line for a progress fraction.
+    void note_progress(const std::string& line);
+
+    std::thread _worker;
+    std::atomic<State> _state{State::Idle};
+    std::atomic<bool> _cancel{false};
+    std::atomic<float> _progress{-1.0f};
+    std::atomic<bool> _partial{false};
+    std::mutex _mu;
+    std::string _stage, _error, _dataset_dir, _image_dir;
+    std::vector<std::string> _log;
+};
+
+}  // namespace gui

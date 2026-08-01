@@ -9,6 +9,9 @@
 #include "app/gui/ColmapRunner.h"
 #include "app/gui/ConfigUI.h"
 #include "app/gui/FileDialog.h"
+#include "app/gui/ModelCache.h"
+#include "app/gui/SegmentPanel.h"
+#include "app/gui/SfmRunner.h"
 #include "app/gui/TrainRunner.h"
 #include "app/gui/ViewportPanel.h"
 
@@ -36,11 +39,13 @@ public:
     void shutdown();
 
 private:
-    enum class Screen { Home, Colmap, Train };
+    enum class Screen { Home, NewDataset, Train };
     enum class PickAction {
-        None, OpenDataset, ColmapImages, ColmapVideo, ColmapWorkspace,
-        OutputPrefix, VocabTree
+        None, OpenDataset, SourceImages, SourceVideo, Workspace,
+        OutputPrefix, VocabTree, MaskModelFile
     };
+    // Which reconstruction back end the New Dataset screen runs.
+    enum class Engine { BuiltIn, Colmap };
     // Session-destroying actions deferred behind the "stop training?"
     // confirmation (and executed once the stop has completed).
     enum class Pending { None, GoHome, OpenDataset, Quit };
@@ -71,11 +76,31 @@ private:
     void start_training();
     bool training_busy() const;   // Preparing or Training
 
+    // ---- dataset creation ----
+    // Which engines this build and this machine can actually offer.
+    bool builtin_sfm_available() const;
+    bool colmap_available() const;
+    Engine effective_engine() const;
+    bool dataset_busy() const;
+    void start_dataset_job();
+    void cancel_dataset_job();
+    // Copies the panel-level state into whichever job struct will run.
+    void sync_dataset_jobs();
+    // Path of the selected checkpoint, or "" when it is not downloaded yet.
+    std::string selected_model_path() const;
+    bool license_accepted(const std::string& family) const;
+
     // ---- screens ----
     void draw_menu_bar();
     void draw_home();
-    void draw_colmap();
+    void draw_new_dataset();
+    void draw_dataset_source();       // input / output / resume
+    void draw_dataset_basics();       // the four or five knobs a beginner needs
+    void draw_masking_options();
+    void draw_sfm_advanced();
     void draw_colmap_options();
+    void draw_tool_locations();
+    void draw_license_modal();
     void draw_train();
     void draw_train_settings();      // left panel
     void draw_basic_options();
@@ -111,8 +136,29 @@ private:
     TrainRunner _runner;
     ViewportPanel _viewport;
 
+    // Dataset creation. Both runners exist; only one runs, chosen by _engine
+    // (and forced when only one is available).
+    Engine _engine = Engine::BuiltIn;
     ColmapRunner _colmap;
     ColmapJob _colmap_job;
+    SfmRunner _sfm;
+    SfmJob _sfm_job;
+    // Panel-level state, copied into whichever job runs.
+    std::string _source_path;
+    bool _source_is_video = false;
+    std::string _workspace;
+    bool _resume = true;
+    bool _mask_enable = false;
+    MaskSettings _mask;
+    SegmentPanel _segment;
+
+    // Segmentation checkpoints.
+    std::string _model_id = "sam3-q4_0";
+    ModelDownload _download;
+    // Families whose licence the user has accepted, persisted in the settings.
+    std::vector<std::string> _accepted_licenses;
+    std::string _license_prompt;      // family whose modal is open
+    bool _license_tick = false;
 
     FileDialog _dialog;
     PickAction _pick = PickAction::None;

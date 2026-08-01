@@ -97,6 +97,28 @@ if(SSPLAT_BUILD_CLI)
             $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
         set_property(TARGET ssplat-sfm PROPERTY CXX_STANDARD 17)
     endif()
+
+    # ---- standalone segmentation / frame-extraction CLI ----
+    # Links ssplat_sam (and ssplat_video when patented modules are enabled) for
+    # the same reason ssplat-sfm links only ssplat_sfm: it needs the inference
+    # layer, not the training engine.
+    if(SSPLAT_BUILD_SAM)
+        set(SSPLAT_SAM_CLI_SOURCES ${SSPLAT_SRC}/app/cli/sam_main.cpp)
+        if(SSPLAT_ENABLE_PATENTED)
+            list(APPEND SSPLAT_SAM_CLI_SOURCES
+                 ${SSPLAT_SRC}/app/cli/sam_extract.cpp
+                 ${SSPLAT_SRC}/app/FrameExtract.cpp)
+        endif()
+        add_executable(ssplat-sam ${SSPLAT_SAM_CLI_SOURCES})
+        target_link_libraries(ssplat-sam PRIVATE ssplat_sam)
+        if(SSPLAT_ENABLE_PATENTED)
+            target_link_libraries(ssplat-sam PRIVATE ssplat_video)
+        endif()
+        target_compile_definitions(ssplat-sam PRIVATE SSPLAT_VERSION="${SSPLAT_VERSION}")
+        target_compile_options(ssplat-sam PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
+        set_property(TARGET ssplat-sam PROPERTY CXX_STANDARD 17)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -152,11 +174,28 @@ if(SSPLAT_BUILD_GUI)
         MaskPy)
 
     file(GLOB SSPLAT_GUI_SOURCES CONFIGURE_DEPENDS ${SSPLAT_SRC}/app/gui/*.cpp)
+    if(SSPLAT_ENABLE_PATENTED)
+        list(APPEND SSPLAT_GUI_SOURCES ${SSPLAT_SRC}/app/FrameExtract.cpp)
+    endif()
     add_executable(ssplat-gui
         ${SSPLAT_GUI_SOURCES}
     )
     ssplat_configure_app(ssplat-gui)
     target_link_libraries(ssplat-gui PRIVATE imgui_glfw OpenGL::GL)
+
+    # In-process segmentation (interactive preview + dataset masking) and, when
+    # patented modules are enabled, in-process video decoding. Both are
+    # optional: DatasetPrep falls back to python + scripts/mask.py and to
+    # ffmpeg, and the GUI hides what this build cannot do rather than failing
+    # at run time.
+    if(SSPLAT_BUILD_SAM)
+        target_link_libraries(ssplat-gui PRIVATE ssplat_sam)
+        target_compile_definitions(ssplat-gui PRIVATE SSPLAT_BUILD_SAM=1)
+        if(SSPLAT_ENABLE_PATENTED)
+            target_link_libraries(ssplat-gui PRIVATE ssplat_video)
+        endif()
+    endif()
+
     if(WIN32)
         target_link_libraries(ssplat-gui PRIVATE ws2_32)
     endif()
