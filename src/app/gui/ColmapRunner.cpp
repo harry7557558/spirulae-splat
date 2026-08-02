@@ -291,6 +291,7 @@ void ColmapRunner::run(ColmapJob job) {
             pj.mask_negative_prompt = job.mask_negative_prompt;
             pj.mask_keep_subject = job.mask_keep_subject;
             pj.mask_max_image_size = job.mask_max_image_size;
+            pj.mask_clicks = job.mask_clicks;
             pj.mask_model_path = job.mask_model_path;
             pj.mask_model_name = job.mask_model;
             pj.force_external_masking = job.force_external_masking;

@@ -120,10 +120,42 @@ user sees in the preview is what gets written.
   black and everything else white. `keep_prompted` flips it, for a capture
   where the prompt names the subject rather than a distractor;
 - a longest-side cap on what the model sees, with the mask returned at the
-  source resolution.
+  source resolution;
+- **clicked objects** (`MaskOptions::seeds`), described below.
 
-This matches `scripts/mask.py`, defaults included, so a dataset masked either
-way is the same dataset.
+The text half matches `scripts/mask.py`, defaults included, so a dataset masked
+either way is the same dataset. Clicks have no counterpart there —
+lang-segment-anything takes words and nothing else — and the GUI says so rather
+than dropping them.
+
+### Clicked objects
+
+A `SeedPrompt` is one object's clicks on one frame, and both halves of that are
+load-bearing.
+
+**Objects are separate.** SAM segments a single thing per prompt: one instance
+given a click on the dog and a click on the bicycle returns a mask that fits
+neither. Each object id becomes its own tracked instance with its own memory
+bank, and the masks are unioned at the end — with `resolve_overlaps` deciding
+the boundary where two of them claim the same pixel.
+
+**A click belongs to the frame it was drawn on.** Pointing at (900, 500) says
+nothing about frame 400 of a moving capture. The first seed for an object
+starts the track (`Tracker::addInstance`), and a later seed for the same object
+is a correction at the frame where it drifted (`refineInstance`, which replaces
+the conditioning memory so the fix sticks). That is SAM 2's conditioning-frame
+model, and it is what the reference GUIs expose.
+
+Two details that are easy to get wrong:
+
+- The mask for the seeding frame comes back from `addInstance`/`refineInstance`
+  themselves, through their `mask_out` argument. The propagation pass for that
+  frame ran *before* the instance existed, so it is not in that `Result`, and
+  running the pass again to collect it would advance the frame counter twice
+  and write a second memory slot for one frame.
+- A seed lands on the first frame at or after the one it names, not on that
+  frame exactly. The frame it was drawn on may be one the run never sees: the
+  extractor keeps the sharpest frame of each window and drops the rest.
 
 ## Using it
 
@@ -133,6 +165,12 @@ ssplat sam segment --model sam3-q4_0.ggml --image street.jpg --text "school bus"
 ssplat sam segment --model sam3-q4_0.ggml --image cat.jpg --point 315,250 --out out/
 ssplat sam track   --model sam3-q4_0.ggml --frames frames/ --out masks/ --text "person; car"
 ssplat sam extract clip.mp4 --skip 30 --model sam3-q4_0.ggml --text "person"
+
+# Two clicked objects, the first corrected at frame 90. Works on a SAM 2
+# checkpoint, which has no text tower and no other way to be prompted.
+ssplat sam track --model sam2.1_hiera_tiny_f16.ggml --frames frames/ --out masks/ \
+    --point 640,360 --at-frame 90 --point 700,300 \
+    --object --point 120,500
 ```
 
 ```cpp
@@ -177,45 +215,78 @@ says so.
 
 ## Speed
 
-Frame time on an RTX 3070 Laptop, tracking one instance through a 79-frame clip:
+End-to-end `ssplat sam track` on an RTX 5070 Laptop, one instance through
+1920×1080 frames on disk — decode, model and mask PNG included:
 
-| | ms/frame | |
+| | ms/frame | model only |
 |---|---|---|
-| SAM 3, q4_0, text prompt | 1977 | ViT backbone ~1380, detector ~110 per phrase, tracker head ~300 |
-| SAM 2.1 Hiera-L, f16 | 895 | |
-| SAM 2.1 Hiera-T, f16 | 461 | |
-| SAM 2.1 Hiera-T, `--memory-frames 3` | 333 | |
+| SAM 3, q4_0, text prompt | 1471 | 1444 |
+| SAM 2.1 Hiera-L, f16 | 604 | 602 |
+| SAM 2.1 Hiera-T, f16 | 279 | 273 |
+| SAM 2.1 Hiera-T, `--memory-frames 4` | 225 | 223 |
+| SAM 2.1 Hiera-T, `--memory-frames 1` | 190 | 188 |
 
-SAM 3 is backbone-bound (32 blocks over 5184 tokens at width 1024 is ~90% of
-the FLOPs). SAM 2 is memory-attention-bound: 4096 queries against
-`num_maskmem × 4096` memory tokens over a **single** 256-wide head, four layers
-deep, which is 480 GFLOP per frame once the bank is full. `--memory-frames N`
-is linear in it; fp16 with cooperative matrix would be the real fix and is
-outside the Vulkan 1.2 core baseline this module keeps.
+Everything outside "model only" — reading the JPEG, encoding the mask PNG — is
+overlapped with the GPU (`app/WriterPool.h` and a one-frame read-ahead). It was
+worth doing: those two are ~105 ms a frame of pure CPU, a third of a Hiera-T
+frame, and the loop used to sit through them with the device idle.
 
-**Masking a capture costs one backbone pass per frame, and there is no way
-around it.** On an RTX 5070 Laptop, over the same 1920×1080 frames with SAM 3
-q4_0:
+### Where the model time goes, and why it is what it is
 
-| | ms/frame |
-|---|---|
-| `track` (frames already on disk) | 1520 |
-| `extract --mask-mode video` (decode + select + mask + write) | 1542 |
-| `extract --mask-mode image` (no memory bank) | 1240 |
+`--profile` with `SSPLAT_NN_LOG=2` breaks it down by kernel. For Hiera-T, 72%
+of the GPU time is `flash_attn` and 15% is `gemm_nt_big`; for SAM 3 it is the
+other way round, 59% GEMM and 34% attention.
 
-Decoding the video is 1% of that, so the in-process decode path is neither
-faster nor slower than masking frames that are already on disk — the report
-that it was is not reproducible. GPU time is ~1.4 s of the 1.55, 91% of it in
-`gemm_nt_big` and `flash_attn`.
+**SAM 2 is memory-attention-bound.** 4096 queries against `num_maskmem × 4096`
+memory tokens over a **single** 256-wide head, four layers deep: 480 GFLOP per
+frame once the bank is full, about half of the whole frame. `--memory-frames N`
+is linear in it, which is why the table above moves the way it does.
 
-The levers a user actually has are the checkpoint (SAM 2.1 Tiny is ~3× faster,
-at the cost of text prompts), the number of frames, and `--mask-mode image`,
-which drops the tracker head and memory attention for 20%. That last one is
-**not** the default: the memory bank is what carries an instance through a
-frame the detector misses, and losing an object for one frame of a
-reconstruction costs more than 20% of the time saved. `--img-size` would be the
-obvious other lever and is not available for SAM 3 — its rotary tables ship
-sized for a 72×72 token grid and the loader refuses anything else.
+**SAM 3 is backbone-bound.** 32 blocks over 5184 tokens at width 1024 is ~90%
+of its FLOPs — 830 ms/frame in `gemm_nt_big` alone.
+
+Both are running at the rate those kernels measure at in isolation: ~5 TFLOP/s
+for the GEMM, ~3 for the attention, against ~21 TFLOP/s of fp32 peak on this
+part. PyTorch's SAM 2 video predictor does ~10 fps with Hiera-L on comparable
+hardware (`scripts/SAM2-GUI`) where this does 1.7. **That gap is bf16 tensor
+cores, and nothing else.** Confirming that, and what it costs to close:
+
+- Raising the flash-decoding split target from 512 to 1024 and 2048 workgroups
+  measured 275 and 279 ms against 279 (that is, flat), so the attention kernel
+  is not short of parallelism at this shape. `src/nn/README.md` predicted this;
+  it is now measured on a second architecture.
+- Nothing algorithmic is missing. The memory bank is there, it stays in VRAM
+  across frames, and the K/V projections it feeds are 0.2% of the frame — there
+  is no per-frame recomputation left to remove.
+- `VK_KHR_cooperative_matrix` is present on this device and Slang emits it, so
+  an fp16 tensor-core path for `gemm_nt_big` and `flash_attn` is available and
+  is the 3–5× that is left. It is a real project: two kernels, a capability
+  query, a fallback for the devices without it (llvmpipe has none), and
+  numerical validation against `nn_ops_test`. It has not been attempted.
+
+The levers a user has today are the checkpoint (**SAM 2.1 Tiny is 5× faster
+than SAM 3** and is the right default for tracking a clicked object through a
+video), `--memory-frames`, the number of frames, and `--mask-mode image`, which
+drops the tracker head for 20%. That last one is **not** the default: the
+memory bank is what carries an instance through a frame the detector misses,
+and losing an object for one frame of a reconstruction costs more than the 20%.
+`--img-size` is the biggest lever of all on SAM 2 — 512 instead of 1024 takes
+Hiera-T to 64 ms of model time, since memory attention is quadratic in the
+token grid — and is not available for SAM 3, whose rotary tables ship sized for
+a 72×72 grid.
+
+Two things that are **not** true, both checked because they were reported:
+
+- Masking during extraction is not slower than masking frames already on disk.
+  Over the same frames with SAM 3 q4_0: `track` 1520 ms, `extract --mask-mode
+  video` 1542, `extract --mask-mode image` 1240. Decoding the video is 1% of a
+  frame.
+- Tracking a video is not slower than segmenting the frames as stills *because*
+  of the tracking. It is slower by the cost of the tracker head, and it buys
+  temporal consistency; the memory bank is a fidelity feature here, not a
+  speed one. What makes video segmentation fast in the reference
+  implementations is that they can skip the detector between frames
+  (`--detect-every`), which this does too.
 
 Which is why the GUI reports a rate and an estimate per frame rather than a
 bare counter — at a minute per forty frames, "how long" is the only question a

@@ -129,6 +129,10 @@ struct Tracker::Impl {
 
     // ---- per-instance model work ----
     Propagated propagate(const Masklet& ml);
+    // Decoder logits [S, S] -> a binary mask at the source resolution. The
+    // threshold, the resize and the byte packing are one kernel, so the host
+    // never sees a float mask.
+    Mask maskFromLogits(const nn::Tensor& logits);
     // Runs the SAM decoder from an interactive prompt against the current
     // frame, unconditioned by memory, and returns the mask slot to use.
     int64_t decodePrompt(const VisualPrompt& prompt, model::SamDecoderOutputs& dec,
@@ -236,6 +240,23 @@ void Tracker::Impl::evict(Masklet& ml) {
 // Propagation
 // ---------------------------------------------------------------------------
 
+Mask Tracker::Impl::maskFromLogits(const nn::Tensor& logits) {
+    const int64_t S = (int64_t)s.model.grid() * 4;
+    const int W = s.feats.orig_width, H = s.feats.orig_height;
+    const int64_t bytes = (int64_t)W * H;
+
+    vk::ArenaScope scope(s.arena);
+    nn::Tensor out_u8 = nn::arena_tensor(s.arena, nn::DType::U8, (bytes + 3) / 4 * 4);
+    nn::resize_binarize(out_u8, logits.view(S, S), H, W, 0.0f);
+
+    Mask mask;
+    mask.width = W;
+    mask.height = H;
+    mask.data.resize((size_t)bytes);
+    vk::Stream::get().download(mask.data.data(), out_u8.ptr, (uint64_t)bytes);
+    return mask;
+}
+
 Propagated Tracker::Impl::propagate(const Masklet& ml) {
     Propagated out;
     if (ml.memory.empty()) return out;
@@ -246,7 +267,6 @@ Propagated Tracker::Impl::propagate(const Masklet& ml) {
     const int64_t D = h.neck_dim;
     const int64_t MD = h.mem_out_dim;
     const int64_t S = (int64_t)G * 4;
-    const int W = s.feats.orig_width, H = s.feats.orig_height;
 
     vk::ArenaScope scope(s.arena);
 
@@ -371,16 +391,7 @@ Propagated Tracker::Impl::propagate(const Masklet& ml) {
     out.mask_logits.resize((size_t)(S * S));
     nn::tensor_to_host(dec.masks.slice0(best, 1), out.mask_logits.data(), S * S);
 
-    // Binary mask at the original resolution, on device, then read back bytes.
-    {
-        const int64_t bytes = (int64_t)W * H;
-        nn::Tensor out_u8 = nn::arena_tensor(s.arena, nn::DType::U8, (bytes + 3) / 4 * 4);
-        nn::resize_binarize(out_u8, dec.masks.slice0(best, 1).view(S, S), H, W, 0.0f);
-        out.mask.width = W;
-        out.mask.height = H;
-        out.mask.data.resize((size_t)bytes);
-        vk::Stream::get().download(out.mask.data.data(), out_u8.ptr, (uint64_t)bytes);
-    }
+    out.mask = maskFromLogits(dec.masks.slice0(best, 1));
     size_t fg = 0;
     for (uint8_t v : out.mask.data) fg += (v > 127) ? 1 : 0;
     out.coverage = (float)fg / (float)std::max<size_t>(out.mask.data.size(), 1);
@@ -707,7 +718,7 @@ Result Tracker::trackEncoded() {
     }
 }
 
-int Tracker::addInstance(const VisualPrompt& prompt) {
+int Tracker::addInstance(const VisualPrompt& prompt, Mask* mask_out) {
     Session::Impl& s = impl_->s;
     if (!s.loaded || !s.feats.valid()) {
         s.error = "addInstance: encode a frame first";
@@ -735,6 +746,11 @@ int Tracker::addInstance(const VisualPrompt& prompt) {
         impl_->storeMemory(ml, dec.masks.slice0(slot, 1).view(S, S), S, S,
                            /*conditioning=*/true, obj, ml.first_frame);
         impl_->storeObjectPointer(ml, token, obj, ml.first_frame);
+        if (mask_out) {
+            *mask_out = impl_->maskFromLogits(dec.masks.slice0(slot, 1));
+            mask_out->instance_id = ml.id;
+            mask_out->iou_score = ml.last_score;
+        }
         impl_->active.push_back(std::move(ml));
 
         s.error.clear();
@@ -749,7 +765,7 @@ int Tracker::addInstance(const VisualPrompt& prompt) {
 }
 
 bool Tracker::refineInstance(int instance_id, const std::vector<Point>& pos_points,
-                             const std::vector<Point>& neg_points) {
+                             const std::vector<Point>& neg_points, Mask* mask_out) {
     Session::Impl& s = impl_->s;
     Masklet* target = nullptr;
     for (Masklet& ml : impl_->active)
@@ -785,6 +801,11 @@ bool Tracker::refineInstance(int instance_id, const std::vector<Point>& pos_poin
         impl_->storeMemory(*target, dec.masks.slice0(slot, 1).view(S, S), S, S,
                            /*conditioning=*/true, obj, target->last_seen);
         impl_->storeObjectPointer(*target, token, obj, target->last_seen);
+        if (mask_out) {
+            *mask_out = impl_->maskFromLogits(dec.masks.slice0(slot, 1));
+            mask_out->instance_id = target->id;
+            mask_out->iou_score = target->last_score;
+        }
         s.error.clear();
         return true;
     } catch (const std::exception& e) {

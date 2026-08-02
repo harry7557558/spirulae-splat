@@ -33,6 +33,18 @@ bool is_image_file(const fs::path& p) {
            e == ".tif" || e == ".tiff" || e == ".bmp";
 }
 
+// One colour per object, so a dot on the image and a row in the list are
+// obviously the same thing. Red is reserved for negative clicks.
+ImU32 object_color(int object) {
+    static const ImU32 kColors[] = {
+        IM_COL32(80, 220, 110, 255),  IM_COL32(90, 170, 245, 255),
+        IM_COL32(245, 200, 70, 255),  IM_COL32(200, 130, 245, 255),
+        IM_COL32(80, 225, 220, 255),  IM_COL32(245, 150, 90, 255),
+    };
+    const int n = (int)(sizeof(kColors) / sizeof(kColors[0]));
+    return kColors[((object % n) + n) % n];
+}
+
 }  // namespace
 
 // The GPU-side state, kept alive across runs so a prompt edit costs one
@@ -60,7 +72,6 @@ void SegmentPanel::open(const std::string& input, bool is_video,
     _is_video = is_video;
     _model_path = model_path;
     _frame_idx = 0;
-    _clicks.clear();
     _frame_dirty = true;
     _needs_run = true;
     _kept_fraction = -1.0f;
@@ -100,23 +111,42 @@ void SegmentPanel::collect_frames(const std::string& input, bool is_video) {
     if (is_video) {
         // Frames are decoded on demand; the list is just how many offers the
         // slider makes. Seeking is not supported by the decoder, so "frame N"
-        // means "the Nth frame we sample while reading forward".
-        for (int i = 0; i < 8; i++) _frames.push_back("");
+        // means "the Nth frame we sample while reading forward", and the
+        // decoded index each offer lands on is filled in below.
+        constexpr int kOffers = 8;
+        long long total = kOffers;
+#ifdef SSPLAT_HAVE_VIDEO
+        {
+            video::VideoReader r;
+            if (r.open(input)) total = std::max(r.info().frame_count, kOffers);
+        }
+#endif
+        for (int i = 0; i < kOffers; i++) {
+            Frame f;
+            f.index = std::min(total - 1, (long long)i * (total / kOffers));
+            f.position = (float)((double)f.index / (double)std::max(1LL, total - 1));
+            _frames.push_back(f);
+        }
         return;
     }
+    std::vector<std::string> all;
     for (fs::recursive_directory_iterator it(
              input, fs::directory_options::skip_permission_denied, ec), end;
          !ec && it != end; it.increment(ec))
         if (it->is_regular_file(ec) && is_image_file(it->path()))
-            _frames.push_back(it->path().string());
-    std::sort(_frames.begin(), _frames.end());
+            all.push_back(it->path().string());
+    std::sort(all.begin(), all.end());
     // A dozen spread through the capture is enough to judge a prompt, and
-    // keeps the slider meaningful on a 3000-photo folder.
-    if (_frames.size() > 12) {
-        std::vector<std::string> picked;
-        for (int i = 0; i < 12; i++)
-            picked.push_back(_frames[(size_t)i * (_frames.size() - 1) / 11]);
-        _frames.swap(picked);
+    // keeps the slider meaningful on a 3000-photo folder. The index kept is
+    // the one in the FULL list, because that is what the masking run counts.
+    const size_t n = all.size();
+    const size_t offers = std::min<size_t>(n, 12);
+    for (size_t i = 0; i < offers; i++) {
+        Frame f;
+        f.index = offers > 1 ? (long long)(i * (n - 1) / (offers - 1)) : 0;
+        f.path = all[(size_t)f.index];
+        f.position = n > 1 ? (float)((double)f.index / (double)(n - 1)) : 0.0f;
+        _frames.push_back(f);
     }
 }
 
@@ -140,12 +170,18 @@ void SegmentPanel::start_job(const MaskSettings& s) {
     }
 
     const int idx = _frame_idx;
-    const std::string frame_path =
-        (idx >= 0 && idx < (int)_frames.size()) ? _frames[idx] : std::string();
+    const Frame frame = (idx >= 0 && idx < (int)_frames.size()) ? _frames[idx]
+                                                                : Frame{};
+    const std::string frame_path = frame.path;
     const std::string input = _input;
     const bool is_video = _is_video;
     const std::string model = _model_path;
-    const std::vector<Click> clicks = _clicks;
+    // Only what was drawn on THIS frame: the preview segments one still, with
+    // no memory bank, so a click made on another frame has nothing to say
+    // about this one. The run is where they all come together.
+    std::vector<MaskClick> clicks;
+    for (const MaskClick& c : s.clicks)
+        if (c.frame == frame.index) clicks.push_back(c);
     const MaskSettings settings = s;
     const bool frame_dirty = _frame_dirty;
     _frame_dirty = false;
@@ -157,7 +193,7 @@ void SegmentPanel::start_job(const MaskSettings& s) {
         _status = "working...";
     }
 
-    _worker = std::thread([this, settings, model, frame_path, input, is_video,
+    _worker = std::thread([this, settings, model, frame, frame_path, input, is_video,
                            idx, clicks, frame_dirty] {
         // Every failure below leaves through `return set_error(...)`, so the
         // flag cannot be cleared at the end of the function: one early exit
@@ -199,13 +235,12 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                 }
                 if (is_video) {
 #ifdef SSPLAT_HAVE_VIDEO
-                    // No seek: read forward and keep every (total/8)th frame.
+                    // No seek: read forward to the frame this offer names.
                     video::VideoReader r;
                     if (!r.open(input)) return set_error(r.lastError());
-                    const int total = std::max(r.info().frame_count, 8);
-                    const int want = std::min(total - 1, idx * (total / 8));
+                    const long long want = frame.index;
                     nn::Image img;
-                    for (int i = 0; i <= want; i++) {
+                    for (long long i = 0; i <= want; i++) {
                         if (_cancel.load()) return;
                         img = r.readFrame();
                         if (img.empty()) break;
@@ -247,12 +282,13 @@ void SegmentPanel::start_job(const MaskSettings& s) {
             // Every field below changes what the masker computes, so the
             // signature is what decides whether it can be reused. The weights
             // are the expensive part and only the model path moves them.
-            char sig[512];
-            std::snprintf(sig, sizeof sig, "%s|%s|%d|%d|%.4f|%zu",
-                          settings.prompt.c_str(),
-                          settings.negative_prompt.c_str(),
-                          (int)settings.keep_subject, settings.max_image_size,
-                          settings.threshold, clicks.size());
+            std::string sig = settings.prompt + "|" + settings.negative_prompt + "|" +
+                              std::to_string((int)settings.keep_subject) + "|" +
+                              std::to_string(settings.max_image_size) + "|" +
+                              std::to_string(settings.threshold);
+            for (const MaskClick& c : clicks)
+                sig += "|" + std::to_string(c.object) + ":" + std::to_string(c.x) +
+                       "," + std::to_string(c.y) + (c.positive ? "+" : "-");
             if (j.loaded_model != model || j.loaded_signature != sig) {
                 {
                     std::lock_guard<std::mutex> lk(_mu);
@@ -268,12 +304,17 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                 mo.max_size = settings.max_image_size;
                 mo.threshold = settings.threshold;
                 mo.video = false;      // one still frame, no memory bank
-                for (const Click& c : clicks) {
-                    if (c.positive) mo.seed.pos_points.push_back({c.x, c.y});
-                    else            mo.seed.neg_points.push_back({c.x, c.y});
+                for (const MaskClick& c : clicks) {
+                    sam::SeedPrompt seed;
+                    seed.object = c.object;
+                    seed.frame = frame.index;
+                    if (c.positive) seed.prompt.pos_points.push_back({c.x, c.y});
+                    else            seed.prompt.neg_points.push_back({c.x, c.y});
+                    mo.seeds.push_back(seed);
                 }
-                mo.has_seed = !mo.seed.pos_points.empty();
                 std::string err;
+                // Re-initializing is cheap when only the prompt moved: the
+                // session keeps the weights it already uploaded.
                 if (!j.masker.init(mo, err)) {
                     j.loaded_model.clear();
                     return set_error(err);
@@ -290,7 +331,7 @@ void SegmentPanel::start_job(const MaskSettings& s) {
             }
             sam::Mask mask;
             sam::Result detections;
-            if (!j.masker.run(j.frame, mask, &detections))
+            if (!j.masker.run(j.frame, mask, &detections, frame.index))
                 return set_error(j.masker.lastError());
 
             // ---- composite ----
@@ -318,6 +359,8 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                 if (detections.detections.empty() && !settings.prompt.empty() &&
                     clicks.empty())
                     _error = "nothing matched this prompt on this frame";
+                else if (detections.detections.empty() && !clicks.empty())
+                    _error = "the clicks on this frame did not select anything";
             }
         } catch (const std::exception& e) {
             set_error(e.what());
@@ -371,30 +414,106 @@ void SegmentPanel::draw_image(MaskSettings& settings) {
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     ImGui::Image((ImTextureID)(intptr_t)_tex, size);
 
+    const Frame frame = _frames.empty() ? Frame{} : _frames[(size_t)_frame_idx];
+
     // Clicks land in source-image pixels, which is what the model wants.
     const bool hovered = ImGui::IsItemHovered();
     if (hovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
                     ImGui::IsMouseClicked(ImGuiMouseButton_Right))) {
         const ImVec2 m = ImGui::GetMousePos();
-        Click c;
+        MaskClick c;
         c.x = (m.x - origin.x) / size.x * (float)_tex_w;
         c.y = (m.y - origin.y) / size.y * (float)_tex_h;
         c.positive = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-        _clicks.push_back(c);
+        c.object = settings.current_object;
+        c.frame = frame.index;
+        c.position = frame.position;
+        settings.clicks.push_back(c);
         start_job(settings);
     }
     if (hovered)
-        ImGui::SetTooltip("Left-click: this is the object.  "
-                          "Right-click: not this.");
+        ImGui::SetTooltip("Left-click: this is object %d.  Right-click: not this.",
+                          settings.current_object + 1);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    for (const Click& c : _clicks) {
+    for (const MaskClick& c : settings.clicks) {
+        if (c.frame != frame.index) continue;
         const ImVec2 p(origin.x + c.x / (float)_tex_w * size.x,
                        origin.y + c.y / (float)_tex_h * size.y);
-        const ImU32 col = c.positive ? IM_COL32(80, 220, 110, 255)
+        const ImU32 col = c.positive ? object_color(c.object)
                                      : IM_COL32(240, 90, 90, 255);
-        dl->AddCircleFilled(p, 5.0f, col);
-        dl->AddCircle(p, 5.0f, IM_COL32(20, 20, 20, 200), 0, 1.5f);
+        dl->AddCircleFilled(p, 6.0f, col);
+        dl->AddCircle(p, 6.0f, IM_COL32(20, 20, 20, 200), 0, 1.5f);
+        // A negative click is a cross, so the two are told apart without
+        // relying on colour alone.
+        if (!c.positive) {
+            dl->AddLine(ImVec2(p.x - 3, p.y - 3), ImVec2(p.x + 3, p.y + 3),
+                        IM_COL32(255, 255, 255, 255), 1.5f);
+            dl->AddLine(ImVec2(p.x - 3, p.y + 3), ImVec2(p.x + 3, p.y - 3),
+                        IM_COL32(255, 255, 255, 255), 1.5f);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The object list
+// ---------------------------------------------------------------------------
+
+void SegmentPanel::draw_objects(MaskSettings& settings, bool& edited) {
+    ImGui::TextUnformatted("Objects to click on");
+    help_tooltip_on_hover(
+        "One object per thing you want. SAM finds a single object per prompt, "
+        "so clicking a person and then a car with the same object selected "
+        "gives one mask that fits neither -- open a second object instead. "
+        "Clicks belong to the frame you made them on: scrub to a later frame "
+        "and click again to correct an object that has drifted.");
+
+    for (int o = 0; o < settings.object_count; ++o) {
+        ImGui::PushID(o);
+        int here = 0, elsewhere = 0;
+        const long long cur = _frames.empty() ? 0 : _frames[(size_t)_frame_idx].index;
+        for (const MaskClick& c : settings.clicks)
+            if (c.object == o) (c.frame == cur ? here : elsewhere)++;
+
+        const ImU32 col = object_color(o);
+        ImGui::ColorButton("##col", ImGui::ColorConvertU32ToFloat4(col),
+                           ImGuiColorEditFlags_NoTooltip |
+                               ImGuiColorEditFlags_NoDragDrop,
+                           ImVec2(12, 12));
+        ImGui::SameLine();
+        char label[96];
+        if (here || elsewhere)
+            std::snprintf(label, sizeof label, "Object %d (%d here, %d elsewhere)",
+                          o + 1, here, elsewhere);
+        else
+            std::snprintf(label, sizeof label, "Object %d (no clicks yet)", o + 1);
+        if (ImGui::RadioButton(label, settings.current_object == o))
+            settings.current_object = o;
+        if (here || elsewhere) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear")) {
+                auto& v = settings.clicks;
+                v.erase(std::remove_if(v.begin(), v.end(),
+                                       [o](const MaskClick& c) { return c.object == o; }),
+                        v.end());
+                edited = true;
+            }
+        }
+        ImGui::PopID();
+    }
+
+    if (ImGui::SmallButton("Another object")) {
+        settings.current_object = settings.object_count++;
+    }
+    help_tooltip_on_hover("Adds an object for the next thing you click on.");
+    if (settings.object_count > 1) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear all")) {
+            settings.clicks.clear();
+            settings.object_count = 1;
+            settings.current_object = 0;
+            edited = true;
+        }
     }
 }
 
@@ -470,31 +589,25 @@ void SegmentPanel::draw(MaskSettings& settings) {
 
     ImGui::Spacing();
     ImGui::Separator();
-    if (!_clicks.empty()) {
-        ImGui::Text("%d click%s on the image", (int)_clicks.size(),
-                    _clicks.size() == 1 ? "" : "s");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Clear")) {
-            _clicks.clear();
-            edited = true;
-        }
-    } else {
-        ImGui::TextDisabled("Click the image to point at an object.");
-    }
+    draw_objects(settings, edited);
 
     // ---- frame chooser ----
     if (_frames.size() > 1) {
         ImGui::Spacing();
         ImGui::SetNextItemWidth(-1);
         int idx = _frame_idx;
-        if (ImGui::SliderInt("##frame", &idx, 0, (int)_frames.size() - 1,
-                             "frame %d")) {
+        char fmt[48];
+        std::snprintf(fmt, sizeof fmt, "frame %lld",
+                      (long long)_frames[(size_t)_frame_idx].index);
+        if (ImGui::SliderInt("##frame", &idx, 0, (int)_frames.size() - 1, fmt)) {
             _frame_idx = idx;
             _frame_dirty = true;
             _needs_run = true;
         }
-        help_tooltip_on_hover("A few frames from across the capture. Check a "
-                              "prompt on more than one before running.");
+        help_tooltip_on_hover(
+            "A few frames from across the capture. Check a prompt on more than "
+            "one before running -- and, for a video, click here to correct an "
+            "object part way through: what you draw is used from this frame on.");
     }
 
     ImGui::Spacing();

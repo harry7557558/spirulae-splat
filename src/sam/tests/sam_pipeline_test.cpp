@@ -21,8 +21,10 @@
 #include "nn/core/Half.h"
 #include "nn/core/Log.h"
 #include "nn/Device.h"
+#include "sam/Masking.h"
 #include "sam/Sam.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -872,6 +874,64 @@ int main() {
                 if (!finite_result(pr)) ok = false;
             }
             check(ok, "SAM 2 propagation over 3 frames");
+        }
+
+        // ---- the masking policy's seeds ------------------------------------
+        // Objects arrive on the frame they were clicked on and not before, a
+        // second seed for an object refines it rather than making a third
+        // track, and the seeding frame's own mask already contains the new
+        // object -- the propagation pass for it ran before it existed.
+        {
+            std::printf("\nClicked objects (sam::Masker)\n");
+            sam::MaskOptions mo;
+            mo.model = p2;
+            mo.video = true;
+            mo.max_size = 0;
+            sam::SeedPrompt a;                      // object 0, frame 0
+            a.prompt.pos_points.push_back({80.0f, 60.0f});
+            sam::SeedPrompt b;                      // object 1, frame 2
+            b.object = 1;
+            b.frame = 2;
+            b.prompt.pos_points.push_back({40.0f, 30.0f});
+            sam::SeedPrompt refine;                 // object 0 again, frame 3
+            refine.frame = 3;
+            refine.prompt.pos_points.push_back({85.0f, 65.0f});
+            mo.seeds = {b, a, refine};              // deliberately out of order
+
+            sam::Masker masker;
+            std::string err;
+            if (!masker.init(mo, err)) {
+                std::printf("  FAIL masker init: %s\n", err.c_str());
+                ++g_failures;
+            } else {
+                int ids[4] = {0, 0, 0, 0};
+                bool ran = true;
+                for (int f = 0; f < 4 && ran; ++f) {
+                    sam::Mask m;
+                    sam::Result r;
+                    ran = masker.run(make_image(160, 120), m, &r, f);
+                    if (!ran) {
+                        std::printf("  FAIL frame %d: %s\n", f,
+                                    masker.lastError().c_str());
+                        ++g_failures;
+                        break;
+                    }
+                    std::vector<int> seen;
+                    for (const auto& d : r.detections)
+                        if (std::find(seen.begin(), seen.end(), d.instance_id) ==
+                            seen.end())
+                            seen.push_back(d.instance_id);
+                    ids[f] = (int)seen.size();
+                    check(m.width == 160 && m.height == 120,
+                          "mask comes back at the source resolution");
+                }
+                if (ran) {
+                    check(ids[0] == 1, "the first object is in its own frame");
+                    check(ids[1] == 1, "and only it, before the second is clicked");
+                    check(ids[2] == 2, "the second object appears on frame 2");
+                    check(ids[3] == 2, "refining object 0 does not make a third");
+                }
+            }
         }
         std::remove(p2.c_str());
     }

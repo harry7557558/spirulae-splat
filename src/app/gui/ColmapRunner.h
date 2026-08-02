@@ -33,6 +33,8 @@
 // such a dataset later, set data.image_dir in the dataparser options (video
 // datasets need nothing: images/ is the default).
 
+#include "app/gui/DatasetPrep.h"   // MaskClick
+
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -140,6 +142,7 @@ struct ColmapJob {
     std::string mask_model_path;
     std::string mask_model = "sam2.1_hiera_large";
     int mask_max_image_size = 1600;
+    std::vector<MaskClick> mask_clicks;  // clicked objects, see DatasetPrep.h
 };
 
 class ColmapRunner {

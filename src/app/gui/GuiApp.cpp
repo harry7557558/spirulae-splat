@@ -681,6 +681,7 @@ void GuiApp::sync_dataset_jobs() {
     prep.mask_negative_prompt = _mask.negative_prompt;
     prep.mask_keep_subject = _mask.keep_subject;
     prep.mask_max_image_size = _mask.max_image_size;
+    prep.mask_clicks = _mask.clicks;
     prep.mask_model_path = selected_model_path();
     prep.force_external_masking = _sfm_job.prep.force_external_masking;
     if (const ModelEntry* e = find_model(_model_id))
@@ -705,6 +706,7 @@ void GuiApp::sync_dataset_jobs() {
     _colmap_job.mask_negative_prompt = prep.mask_negative_prompt;
     _colmap_job.mask_keep_subject = prep.mask_keep_subject;
     _colmap_job.mask_max_image_size = prep.mask_max_image_size;
+    _colmap_job.mask_clicks = prep.mask_clicks;
     _colmap_job.mask_model_path = prep.mask_model_path;
     _colmap_job.mask_model = prep.mask_model_name;
 }
@@ -967,10 +969,27 @@ void GuiApp::draw_masking_options() {
             ImGui::TextColored(kErr, "%s", _download.status().c_str());
             ImGui::PopTextWrapPos();
         }
-        if (entry && !entry->text_prompts)
+        if (entry && !entry->text_prompts && _mask.clicks.empty())
             ImGui::TextColored(kWarn,
                                "This model has no text understanding -- use "
                                "\"Try the mask\" and click the object instead.");
+        if (!_mask.clicks.empty()) {
+            int objects = 0;
+            for (const MaskClick& c : _mask.clicks)
+                objects = std::max(objects, c.object + 1);
+            ImGui::Text("%d clicked object%s will be tracked through the capture.",
+                        objects, objects == 1 ? "" : "s");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Forget them")) {
+                _mask.clicks.clear();
+                _mask.object_count = 1;
+                _mask.current_object = 0;
+            }
+            help_tooltip_on_hover(
+                "Objects you pointed at in \"Try the mask\". Each is followed "
+                "from the frame you clicked it on, using the model's video "
+                "memory, so you do not have to click every frame.");
+        }
     } else {
         ImGui::PushTextWrapPos();
         ImGui::TextDisabled("%s", backends().masking_note.c_str());

@@ -13,12 +13,15 @@
 //
 // Clicks are supported too, which is the only way to prompt a SAM 2 checkpoint
 // (it has no text tower): left-click marks the subject, right-click marks
-// something to exclude.
+// something to exclude. They belong to an object and to the frame they were
+// drawn on -- see MaskClick -- and they are kept in the settings rather than
+// in the panel, because they are prompts for the run and not a preview toy.
 //
 // The model lives on the GPU for as long as the panel is open and is dropped
 // when it closes -- a reconstruction that follows should not be sharing VRAM
 // with a 2 GB backbone that nobody is looking at.
 
+#include "app/gui/DatasetPrep.h"   // MaskClick
 #include "app/gui/GlLoader.h"
 
 #include <atomic>
@@ -38,6 +41,10 @@ struct MaskSettings {
     bool keep_subject = false;       // prompt names what to KEEP
     int  max_image_size = 1600;
     float threshold = 0.5f;
+    // Clicked objects, across every frame the user visited.
+    std::vector<MaskClick> clicks;
+    int object_count = 1;            // how many the user has opened
+    int current_object = 0;          // which one a new click joins
 };
 
 class SegmentPanel {
@@ -67,20 +74,26 @@ private:
     void collect_frames(const std::string& input, bool is_video);
     void upload_preview();
     void draw_image(MaskSettings& settings);
+    void draw_objects(MaskSettings& settings, bool& edited);
 
     bool _open = false;
     std::string _model_path;
     std::string _input;
     bool _is_video = false;
 
-    std::vector<std::string> _frames;   // image paths, or "" for video frames
+    // One offer on the frame slider. `index` is what the masking run will call
+    // this frame and `position` is where it falls in the capture; a click
+    // records both, because which of the two survives depends on which
+    // extraction path runs (see MaskClick).
+    struct Frame {
+        std::string path;       // empty for a video: decoded on demand
+        long long   index = 0;
+        float       position = 0.0f;
+    };
+    std::vector<Frame> _frames;
     int  _frame_idx = 0;
     bool _frame_dirty = true;           // the chosen frame changed
     bool _needs_run = false;            // prompt edited; rerun on release
-
-    // Clicks, in pixels of the source frame.
-    struct Click { float x, y; bool positive; };
-    std::vector<Click> _clicks;
 
     // The composited RGB preview handed to GL, guarded by _mu.
     std::mutex _mu;

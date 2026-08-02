@@ -6,6 +6,7 @@
 
 #include "app/FrameExtract.h"
 
+#include "app/WriterPool.h"
 #include "nn/core/Log.h"
 #include "nn/io/Image.h"
 #include "sam/Sam.h"
@@ -35,79 +36,10 @@ void log_line(const FrameExtractSinks& sinks, const std::string& s) {
     else NN_LOG_ERROR("%s\n", s.c_str());
 }
 
-// ---------------------------------------------------------------------------
-// Encoder thread pool
-// ---------------------------------------------------------------------------
-//
-// A 4K JPEG is ~25 ms of pure CPU. Decoding, the sharpness metric and SAM all
-// run on the GPU, so without this the writer alone would set the frame rate.
-
-struct WriteJob {
-    nn::Image image;      // RGB, or empty for a mask job
-    sam::Mask  mask;
-    std::string path;
-    int         quality = 95;
-};
-
-class WriterPool {
-public:
-    explicit WriterPool(int threads) : limit_((size_t)std::max(threads, 1) * 3) {
-        for (int i = 0; i < std::max(threads, 1); ++i)
-            workers_.emplace_back([this] { run(); });
-    }
-    ~WriterPool() { finish(); }
-
-    void submit(WriteJob&& job) {
-        std::unique_lock<std::mutex> lk(mu_);
-        space_.wait(lk, [this] { return queue_.size() < limit_; });
-        queue_.push_back(std::move(job));
-        work_.notify_one();
-    }
-    void finish() {
-        {
-            std::lock_guard<std::mutex> lk(mu_);
-            if (done_) return;
-            done_ = true;
-        }
-        work_.notify_all();
-        for (auto& t : workers_) t.join();
-        workers_.clear();
-    }
-    double busyMs() const { return busy_ms_.load(); }
-    int    failures() const { return failures_.load(); }
-
-private:
-    void run() {
-        while (true) {
-            WriteJob job;
-            {
-                std::unique_lock<std::mutex> lk(mu_);
-                work_.wait(lk, [this] { return !queue_.empty() || done_; });
-                if (queue_.empty()) return;
-                job = std::move(queue_.front());
-                queue_.pop_front();
-                space_.notify_one();
-            }
-            const double t0 = nn::now_ms();
-            const bool ok = job.image.empty() ? sam::save_mask_png(job.mask, job.path)
-                                              : nn::save_image(job.image, job.path,
-                                                                 job.quality);
-            if (!ok) ++failures_;
-            double expected = busy_ms_.load();
-            const double add = nn::now_ms() - t0;
-            while (!busy_ms_.compare_exchange_weak(expected, expected + add)) {}
-        }
-    }
-
-    std::vector<std::thread> workers_;
-    std::deque<WriteJob>     queue_;
-    std::mutex               mu_;
-    std::condition_variable  work_, space_;
-    size_t                   limit_;
-    bool                     done_ = false;
-    std::atomic<double>      busy_ms_{0.0};
-    std::atomic<int>         failures_{0};
-};
+// The encoder thread pool this depends on is app/WriterPool.h: masking and
+// plain extraction both need it, so it does not live here.
+using app::WriteJob;
+using app::WriterPool;
 
 // ---------------------------------------------------------------------------
 // Extraction
@@ -176,7 +108,11 @@ bool extract_track(const FrameExtractJob& o, const FrameExtractSinks& sinks,
                     t0 = nn::now_ms();
                     sam::Mask mask;
                     sam::Result overlay;
-                    if (masker->run(image, mask, o.write_overlay ? &overlay : nullptr)) {
+                    // The decoded index, not the written one: a click was drawn
+                    // on a frame of the video, and only one frame per sharpness
+                    // window survives to be written.
+                    if (masker->run(image, mask, o.write_overlay ? &overlay : nullptr,
+                                    chosen.index)) {
                         t.mask += nn::now_ms() - t0;
                         WriteJob mj;
                         mj.mask = std::move(mask);

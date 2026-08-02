@@ -93,8 +93,10 @@ how frames are chosen cannot differ between them.
 - **Mask preview** (`SegmentPanel`) — the prompt run on one real frame of the
   real input, through the same `sam::Masker` the dataset run uses, with red
   marking what would be dropped. Clicks work too, which is the only prompt a
-  SAM 2 checkpoint understands. The model is dropped when the panel closes, so
-  a 2 GB backbone is not sitting in VRAM during reconstruction.
+  SAM 2 checkpoint understands: one object per thing, scrub to another frame to
+  correct one, and the clicks are carried into the run rather than being a
+  preview toy. The model is dropped when the panel closes, so a 2 GB backbone
+  is not sitting in VRAM during reconstruction.
 - **Model cache** (`ModelCache`) — checkpoints are fetched at run time into the
   cache directory, never bundled, after a one-time per-family consent dialog.
   SAM 2.1 is Apache-2.0 and says so; SAM 3 is under Meta's own licence, which
@@ -181,23 +183,64 @@ decode is 1% of it. What was missing was a way to know that: the log said
 reports a rate and an estimate, anchored at the first frame so the checkpoint
 upload does not skew it.
 
-## 6. Not done yet
+## 6. Second follow-up, 2026-08-01: clicked objects, and where the time is
+
+**Clicks are prompts for the run now, not just for the preview.** They were
+collected by `SegmentPanel` and thrown away when it closed; `PrepJob` carried
+only text, so a SAM 2 checkpoint — which has no text tower — could be selected
+in the GUI and then failed the whole dataset run with "this checkpoint has no
+text encoder". A click now survives to `MaskOptions::seeds`, through both the
+extraction path and the folder-masking path.
+
+**One prompt was holding every click.** Every point went into a single
+`VisualPrompt`, so pointing at two things asked SAM for one object covering
+both and got a mask fitting neither. Clicks now carry an object id and a frame;
+`src/sam/README.md` has the model. The CLI spells them `--object` and
+`--at-frame`, and `sam_pipeline_test` covers arrival-on-the-right-frame,
+refine-does-not-duplicate, and the seeding frame's own mask.
+
+**Re-prompting reloaded the checkpoint.** `Masker::init` is how the preview
+changes a prompt, and it called `Session::loadModel` every time, which re-read
+and re-uploaded the file — seconds of stall per click on a 700 MB checkpoint.
+`loadModel` now returns immediately when the request names the model already
+resident.
+
+**A third of a masked frame was CPU with the GPU idle**: ~75 ms to encode a
+1080p mask PNG through stb's deflate and ~27 ms to decode the next JPEG,
+against ~275 ms of model. Both are off the critical path now
+(`src/app/WriterPool.h`, plus a one-frame read-ahead in the CLI); end-to-end
+went 384 → 279 ms/frame on Hiera-T.
+
+**The remaining gap to PyTorch is arithmetic throughput, not algorithm.** The
+report was that `scripts/SAM2-GUI` tracks at ~10 fps because SAM's memory makes
+video cheap, and that this treats frames as independent images. The memory bank
+is there and has been since the port; what is missing is bf16 tensor cores.
+Measured, profiled and written up in `src/sam/README.md` under "Speed",
+including a negative result on the one cheap hypothesis (more flash-decoding
+splits: flat). `VK_KHR_cooperative_matrix` is the 3–5× that is left, it is
+available on the hardware and in the toolchain, and it is a project of its own.
+
+## 7. Not done yet
 
 1. **One Vulkan device.** Three contexts can exist in one process. The GUI
    sequences them; that is a schedule, not a guarantee. Same work as
    `sfm-port-plan.md` phase 6, and it should be done once for both.
 2. **In-process SfM** — phase 3 of the SfM port plan, which is what removes the
    stdout parsing above.
-3. **Interactive refinement in the preview.** `Tracker::refineInstance` exists;
-   the panel re-runs from scratch on every click instead of adding conditioning
-   memory.
-4. **Masking a photo folder is per-image, not tracked.** Consecutive photos may
-   be anywhere in the scene, so a memory bank does not apply — but for a folder
-   that *is* an ordered walk-around, tracking would be both faster and steadier.
-   Nothing detects which one it has.
-5. **Checksums for downloaded checkpoints.** The size floor catches a truncated
+3. **fp16 cooperative matrix** for `gemm_nt_big` and `flash_attn`, with a
+   fallback for devices that lack the extension. The largest single speedup
+   available anywhere in this subsystem; see `src/sam/README.md`, "Speed".
+4. **The preview segments a still; the run tracks.** A click shows what it
+   selects on the frame it was made on, which is honest but is not what the run
+   will produce three hundred frames later. Propagating a few frames in the
+   panel would close that, at a few seconds per attempt.
+5. **A photo folder with clicks is tracked, without asking.** Clicks force
+   video mode because a click means nothing on another frame without a memory
+   bank to carry it — right for an ordered walk-around, wrong for an unordered
+   collection. Nothing detects which one it has.
+6. **Checksums for downloaded checkpoints.** The size floor catches a truncated
    file; it does not catch a corrupted one.
-6. **`scripts/mask.py` and `scripts/extract_frames.py`** are still the
+7. **`scripts/mask.py` and `scripts/extract_frames.py`** are still the
    standalone Python tools with their own users, now duplicated in kind by
    `ssplat sam`. Revisit once the native path has run on enough captures to be
    the obvious default.

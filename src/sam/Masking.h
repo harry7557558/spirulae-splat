@@ -13,8 +13,8 @@
 //   * a longest-side cap on what the model sees, with the mask returned at the
 //     source resolution.
 //
-// It also covers the visual path, where there is no text at all and one
-// instance is seeded from clicks on the first frame.
+// It also covers the visual path, where there is no text at all and instances
+// are seeded from clicks -- see SeedPrompt.
 
 #include "sam/Sam.h"
 
@@ -24,13 +24,31 @@
 
 namespace sam {
 
+// One object's clicks, drawn on one frame.
+//
+// Two things follow from SAM's design and both are load-bearing here. Objects
+// are SEPARATE: a model prompted with a click on the dog and a click on the
+// bicycle returns one mask that fits neither, so each object gets its own id
+// and its own tracked instance, and the masks are unioned afterwards. And a
+// click belongs to the FRAME it was drawn on: pointing at (900, 500) says
+// nothing about frame 400 of a moving capture, which is why this carries a
+// frame rather than being applied to all of them.
+//
+// Several seeds sharing an `object` refine one instance as the capture goes
+// on: the first is what starts the track, the rest are corrections at the
+// frames where it drifted. That is exactly the SAM 2 conditioning-frame model.
+struct SeedPrompt {
+    sam::VisualPrompt prompt;
+    int     object = 0;
+    int64_t frame  = 0;
+};
+
 struct MaskOptions {
     std::string model, device;
     std::string text, neg_text;
-    // Clicks/box seeding one instance on the first frame. Used when there is no
-    // text prompt, which is the only option for a SAM 2 checkpoint.
-    sam::VisualPrompt seed;
-    bool  has_seed = false;
+    // Clicks seeding tracked instances. The only way to prompt a SAM 2
+    // checkpoint, and usable alongside text on a SAM 3 one.
+    std::vector<SeedPrompt> seeds;
 
     bool  video = true;           // track across frames vs. segment each alone
     bool  keep_prompted = false;  // white = the prompted objects
@@ -61,7 +79,16 @@ public:
 
     // Writes a mask the size of `image`: 255 where the pixel should be KEPT.
     // `overlay_out`, when given, receives the raw detections for diagnostics.
-    bool run(const nn::Image& image, sam::Mask& out, sam::Result* overlay_out);
+    //
+    // `frame_id` says which frame of the source this is, and is what
+    // SeedPrompt::frame is matched against. Callers that hand over every frame
+    // in order can leave it at -1 and get a plain 0, 1, 2 counter; the video
+    // extractor passes the decoded index instead, because it writes only the
+    // sharpest frame of each window and the two do not line up. A seed lands on
+    // the first frame at or after the one it was drawn on, so it is never lost
+    // to a frame that was skipped.
+    bool run(const nn::Image& image, sam::Mask& out, sam::Result* overlay_out,
+             int64_t frame_id = -1);
 
     const std::string& lastError() const;
     sam::Session& session();

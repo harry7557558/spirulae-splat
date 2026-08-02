@@ -204,11 +204,17 @@ public:
 
     // Start tracking a new instance from clicks/a box on the CURRENT frame
     // (the one most recently encoded). Returns its id, or -1.
-    int addInstance(const VisualPrompt& prompt);
+    //
+    // `mask_out` receives this frame's mask for the new instance. It is worth
+    // asking for: the propagation pass for this frame ran before the instance
+    // existed, so its mask is not in that Result, and running the pass again to
+    // get it would advance the frame counter a second time.
+    int addInstance(const VisualPrompt& prompt, Mask* mask_out = nullptr);
 
     // Correct an existing instance with extra clicks on the current frame.
     bool refineInstance(int instance_id, const std::vector<Point>& pos_points,
-                        const std::vector<Point>& neg_points);
+                        const std::vector<Point>& neg_points,
+                        Mask* mask_out = nullptr);
 
     int  frameIndex() const;
     void reset();

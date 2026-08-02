@@ -31,6 +31,28 @@
 
 namespace gui {
 
+// A click made in the mask preview, kept because it is a prompt for the whole
+// run and not just for the frame it was drawn on.
+//
+// Objects are separate on purpose: SAM segments ONE thing per prompt, and a
+// single instance given a click on the dog and a click on the bicycle returns
+// a mask that fits neither. Each object is tracked on its own and the masks
+// are unioned at the end.
+//
+// The frame is recorded twice because the two masking paths number frames
+// differently. `frame` is exact where it can be -- the decoded index for the
+// path that reads the video itself, the position in the sorted list for a
+// folder of photos -- while `position`, the same point as a fraction of the
+// capture, is what the ffmpeg path has to fall back on, since it resamples the
+// video to a frame rate the preview never saw.
+struct MaskClick {
+    float x = 0.0f, y = 0.0f;   // pixels of the source frame
+    bool  positive = true;      // "this is it" vs "not this"
+    int   object = 0;
+    long long frame = 0;
+    float position = 0.0f;      // 0..1 through the capture
+};
+
 struct PrepJob {
     std::string input_path;          // photo folder, or a video file
     bool is_video = false;
@@ -50,6 +72,9 @@ struct PrepJob {
     std::string mask_negative_prompt;
     bool mask_keep_subject = false;  // prompt names what to KEEP, not remove
     int  mask_max_image_size = 1600;
+    // Clicked objects. The only way to prompt a SAM 2 checkpoint, and usable
+    // alongside a text prompt on a SAM 3 one.
+    std::vector<MaskClick> mask_clicks;
 
     // Built-in: a checkpoint file (ModelCache resolves it). External: the
     // model name scripts/mask.py understands.

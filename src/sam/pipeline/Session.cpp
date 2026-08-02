@@ -48,6 +48,14 @@ uint64_t arena_reserve_for(const SamModel& m) {
     return std::max(kArenaReserve, need);
 }
 
+// Whether a load request would produce the model already on the device. Every
+// field that changes what gets uploaded is here; `validation` is not one of
+// them (it is a Context property, and the context outlives the model).
+bool same_model(const ModelParams& a, const ModelParams& b) {
+    return a.model_path == b.model_path && a.device_index == b.device_index &&
+           a.device_match == b.device_match && a.img_size == b.img_size;
+}
+
 }  // namespace
 
 // ================
@@ -102,6 +110,10 @@ const std::string& Session::lastError() const { return impl_->error; }
 
 bool Session::loadModel(const ModelParams& params) {
     NN_ENSURE_EMBEDDED_MODULES(sam);
+    if (impl_->loaded && same_model(impl_->loaded_params, params)) {
+        impl_->error.clear();
+        return true;
+    }
     try {
         vk::ContextOptions opts;
         opts.device_index = params.device_index;
@@ -113,6 +125,7 @@ bool Session::loadModel(const ModelParams& params) {
         impl_->arena.reserve(arena_reserve_for(impl_->model));
         impl_->text_cache_valid = false;
         impl_->loaded = true;
+        impl_->loaded_params = params;
         impl_->error.clear();
         return true;
     } catch (const std::exception& e) {

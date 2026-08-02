@@ -22,6 +22,11 @@ struct Session::Impl {
     model::ImageFeatures feats;
     bool                 loaded = false;
     std::string          error;
+    // What loadModel last uploaded, so asking for the same thing again is free.
+    // The mask preview re-initializes its Masker on every edit -- a click, a
+    // word typed -- and re-reading a 700 MB checkpoint for each of those is a
+    // three-second stall in a panel whose whole point is to be immediate.
+    ModelParams          loaded_params;
 
     // Text + exemplar tokens, the padding bias every prompt-facing attention
     // applies, and the pooling weights DotProductScoring needs. Returns the

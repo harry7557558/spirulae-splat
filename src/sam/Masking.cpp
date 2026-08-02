@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 
 namespace sam {
 
@@ -94,21 +95,66 @@ void upscale_nearest(const std::vector<uint8_t>& src, int sw, int sh,
 
 struct Masker::Impl {
     sam::Session session;
+    // One tracker per positive phrase, plus -- when there are clicks -- one
+    // more that only ever propagates what was seeded into it by hand.
     std::vector<std::unique_ptr<sam::Tracker>> trackers;
+    std::unique_ptr<sam::Tracker> visual;
     std::vector<std::string> pos, neg;
     MaskOptions opts;
-    int frame = 0;
+    int64_t frame = 0;
+    // Seeds not yet applied, in frame order, and the instance each object was
+    // given when its first seed landed.
+    std::vector<SeedPrompt> pending;
+    std::map<int, int> instance_of;
 
+    // Row-parallel like the resamplers above: at 1080p each of these passes is
+    // a couple of milliseconds on one thread and the GPU is idle behind them,
+    // and a masking prompt runs several per frame (one per phrase, plus the
+    // negatives, plus the composition).
     void accumulate(const sam::Result& r, std::vector<uint8_t>& hit, size_t n) {
         for (const auto& d : r.detections) {
             if (d.mask.data.size() != n) continue;
-            for (size_t i = 0; i < n; ++i)
-                if (d.mask.data[i] > 127) hit[i] = 1;
+            const uint8_t* src = d.mask.data.data();
+            uint8_t* dst = hit.data();
+            nn::parallel_for((int64_t)n, [src, dst](int64_t lo, int64_t hi) {
+                for (int64_t i = lo; i < hi; ++i)
+                    if (src[i] > 127) dst[i] = 1;
+            }, /*min_chunk=*/65536);
         }
     }
     static void append(sam::Result& all, const sam::Result& r) {
         all.detections.insert(all.detections.end(), r.detections.begin(),
                               r.detections.end());
+    }
+
+    // Clicks arrive in pixels of the caller's image; the model sees the
+    // downscaled one.
+    static sam::VisualPrompt scaled_prompt(const sam::VisualPrompt& in, double fx,
+                                           double fy) {
+        sam::VisualPrompt vp = in;
+        for (auto& p : vp.pos_points) { p.x = (float)(p.x * fx); p.y = (float)(p.y * fy); }
+        for (auto& p : vp.neg_points) { p.x = (float)(p.x * fx); p.y = (float)(p.y * fy); }
+        vp.box.x0 = (float)(vp.box.x0 * fx);
+        vp.box.x1 = (float)(vp.box.x1 * fx);
+        vp.box.y0 = (float)(vp.box.y0 * fy);
+        vp.box.y1 = (float)(vp.box.y1 * fy);
+        return vp;
+    }
+
+    // Only the overlay uses this; the pipeline's own mask_bounding_box lives
+    // behind sam/pipeline/, which this file is deliberately not part of.
+    static sam::Box bounding_box(const sam::Mask& m) {
+        int x0 = m.width, y0 = m.height, x1 = -1, y1 = -1;
+        for (int y = 0; y < m.height; ++y)
+            for (int x = 0; x < m.width; ++x)
+                if (m.data[(size_t)y * m.width + x] > 127) {
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+        if (x1 < 0) return {};
+        return {(float)x0, (float)y0, (float)x1, (float)y1};
     }
 };
 
@@ -119,12 +165,26 @@ const std::string& Masker::lastError() const { return impl_->session.lastError()
 sam::Session& Masker::session() { return impl_->session; }
 
 bool Masker::init(const MaskOptions& o, std::string& error) {
+    // init() is also how a policy is *changed* -- the mask preview calls it on
+    // every edit -- so everything a previous run accumulated goes first. The
+    // trackers hold a reference to the session and must not outlive its model.
+    impl_->trackers.clear();
+    impl_->visual.reset();
+    impl_->instance_of.clear();
+    impl_->frame = 0;
     impl_->opts = o;
     impl_->pos = split_phrases(o.text);
     impl_->neg = split_phrases(o.neg_text);
-    if (impl_->pos.empty() && !o.has_seed) {
-        error = "nothing to segment: give --text, or --point/--prompt-box to seed an "
-                "instance on the first frame";
+    impl_->pending = o.seeds;
+    // Applied in frame order regardless of the order they were given in, so a
+    // correction drawn on frame 200 cannot land before the click on frame 3
+    // that created the object it corrects.
+    std::stable_sort(impl_->pending.begin(), impl_->pending.end(),
+                     [](const SeedPrompt& a, const SeedPrompt& b) {
+                         return a.frame < b.frame;
+                     });
+    if (impl_->pos.empty() && impl_->pending.empty()) {
+        error = "nothing to segment: give --text, or --point to click on an object";
         return false;
     }
 
@@ -145,7 +205,6 @@ bool Masker::init(const MaskOptions& o, std::string& error) {
 
     if (o.video) {
         // One tracker per positive phrase, all reading the same backbone pass.
-        // A seed with no text gets one tracker that only ever propagates.
         auto make = [&](const std::string& phrase) {
             sam::VideoParams vp;
             vp.text_prompt = phrase;
@@ -153,19 +212,24 @@ bool Masker::init(const MaskOptions& o, std::string& error) {
             vp.nms_threshold = o.nms;
             vp.detect_every = o.detect_every;
             vp.max_memory_frames = o.memory_frames;
-            impl_->trackers.push_back(
-                std::make_unique<sam::Tracker>(impl_->session, vp));
+            return std::make_unique<sam::Tracker>(impl_->session, vp);
         };
-        if (impl_->pos.empty()) make("");
-        else for (const std::string& p : impl_->pos) make(p);
+        for (const std::string& p : impl_->pos) impl_->trackers.push_back(make(p));
+        // Clicked objects get their own tracker with no text, so the detector
+        // never invents a second instance of something the user pointed at.
+        if (!impl_->pending.empty()) impl_->visual = make("");
     }
     return true;
 }
 
-bool Masker::run(const nn::Image& image, sam::Mask& out, sam::Result* overlay_out) {
+bool Masker::run(const nn::Image& image, sam::Mask& out, sam::Result* overlay_out,
+                 int64_t frame_id) {
     Impl& s = *impl_;
+    if (frame_id < 0) frame_id = s.frame;
     const nn::Image scaled = downscale_to_fit(image, s.opts.max_size);
     const size_t n = (size_t)scaled.width * scaled.height;
+    const double fx = (double)scaled.width / std::max(1, image.width);
+    const double fy = (double)scaled.height / std::max(1, image.height);
     std::vector<uint8_t> hit(n, 0);
     sam::Result all;
 
@@ -177,19 +241,44 @@ bool Masker::run(const nn::Image& image, sam::Mask& out, sam::Result* overlay_ou
             s.accumulate(r, hit, n);
             Impl::append(all, r);
         }
-        // The seed lands after the first frame's propagation, which is a no-op
-        // on an empty tracker -- the instance is then carried from frame 1 on.
-        if (s.frame == 0 && s.opts.has_seed && !s.trackers.empty()) {
-            sam::VisualPrompt vp = s.opts.seed;
-            const double fx = (double)scaled.width / std::max(1, image.width);
-            const double fy = (double)scaled.height / std::max(1, image.height);
-            for (auto& p : vp.pos_points) { p.x = (float)(p.x * fx); p.y = (float)(p.y * fy); }
-            for (auto& p : vp.neg_points) { p.x = (float)(p.x * fx); p.y = (float)(p.y * fy); }
-            vp.box.x0 = (float)(vp.box.x0 * fx);
-            vp.box.x1 = (float)(vp.box.x1 * fx);
-            vp.box.y0 = (float)(vp.box.y0 * fy);
-            vp.box.y1 = (float)(vp.box.y1 * fy);
-            if (s.trackers.front()->addInstance(vp) < 0) return false;
+        if (s.visual) {
+            // Propagate first: addInstance below attributes the instance to the
+            // frame the tracker has just finished, and on an empty tracker this
+            // is a no-op anyway.
+            sam::Result r = s.visual->trackEncoded();
+            s.accumulate(r, hit, n);
+            Impl::append(all, r);
+
+            // Everything drawn at or before this frame that has not been used
+            // yet. "At or before" and not "on", because the frame a click was
+            // drawn on may be one this run never sees -- the extractor keeps
+            // the sharpest frame of each window and drops the rest.
+            while (!s.pending.empty() && s.pending.front().frame <= frame_id) {
+                const SeedPrompt seed = s.pending.front();
+                s.pending.erase(s.pending.begin());
+                const sam::VisualPrompt vp =
+                    Impl::scaled_prompt(seed.prompt, fx, fy);
+                // The propagation above ran before this instance existed, so
+                // its mask for THIS frame comes back from the seeding call
+                // itself rather than from that Result.
+                sam::Result seeded;
+                seeded.detections.emplace_back();
+                sam::Mask& m = seeded.detections.back().mask;
+                auto it = s.instance_of.find(seed.object);
+                if (it == s.instance_of.end()) {
+                    const int id = s.visual->addInstance(vp, &m);
+                    if (id < 0) return false;
+                    s.instance_of[seed.object] = id;
+                } else if (!s.visual->refineInstance(it->second, vp.pos_points,
+                                                     vp.neg_points, &m)) {
+                    return false;
+                }
+                seeded.detections.back().instance_id = m.instance_id;
+                seeded.detections.back().score = m.iou_score;
+                seeded.detections.back().box = Impl::bounding_box(m);
+                s.accumulate(seeded, hit, n);
+                Impl::append(all, seeded);
+            }
         }
     } else {
         for (const std::string& phrase : s.pos) {
@@ -201,8 +290,22 @@ bool Masker::run(const nn::Image& image, sam::Mask& out, sam::Result* overlay_ou
             s.accumulate(r, hit, n);
             Impl::append(all, r);
         }
-        if (s.opts.has_seed) {
-            sam::Result r = s.session.segmentVisual(s.opts.seed);
+        // Without a memory bank a click means nothing on any frame but its own,
+        // so only the seeds drawn on this one are used -- one segmentation per
+        // object, unioned, never one prompt holding everybody's clicks.
+        std::map<int, sam::VisualPrompt> per_object;
+        for (const SeedPrompt& seed : s.opts.seeds) {
+            if (seed.frame != frame_id) continue;
+            sam::VisualPrompt& vp = per_object[seed.object];
+            const sam::VisualPrompt sc = Impl::scaled_prompt(seed.prompt, fx, fy);
+            vp.pos_points.insert(vp.pos_points.end(), sc.pos_points.begin(),
+                                 sc.pos_points.end());
+            vp.neg_points.insert(vp.neg_points.end(), sc.neg_points.begin(),
+                                 sc.neg_points.end());
+            if (sc.use_box) { vp.box = sc.box; vp.use_box = true; }
+        }
+        for (const auto& kv : per_object) {
+            sam::Result r = s.session.segmentVisual(kv.second);
             s.accumulate(r, hit, n);
             Impl::append(all, r);
         }
@@ -218,14 +321,25 @@ bool Masker::run(const nn::Image& image, sam::Mask& out, sam::Result* overlay_ou
         sam::Result r = s.session.segmentConcept(cp);
         for (const auto& d : r.detections) {
             if (d.mask.data.size() != n) continue;
-            for (size_t i = 0; i < n; ++i)
-                if (d.mask.data[i] > 127) hit[i] = 0;
+            const uint8_t* src = d.mask.data.data();
+            uint8_t* dst = hit.data();
+            nn::parallel_for((int64_t)n, [src, dst](int64_t lo, int64_t hi) {
+                for (int64_t i = lo; i < hi; ++i)
+                    if (src[i] > 127) dst[i] = 0;
+            }, /*min_chunk=*/65536);
         }
     }
 
     std::vector<uint8_t> mask(n);
-    for (size_t i = 0; i < n; ++i)
-        mask[i] = (uint8_t)(((hit[i] != 0) == s.opts.keep_prompted) ? 255 : 0);
+    {
+        const uint8_t* src = hit.data();
+        uint8_t* dst = mask.data();
+        const bool keep = s.opts.keep_prompted;
+        nn::parallel_for((int64_t)n, [src, dst, keep](int64_t lo, int64_t hi) {
+            for (int64_t i = lo; i < hi; ++i)
+                dst[i] = (uint8_t)(((src[i] != 0) == keep) ? 255 : 0);
+        }, /*min_chunk=*/65536);
+    }
 
     out.width = image.width;
     out.height = image.height;
@@ -257,7 +371,7 @@ bool Masker::run(const nn::Image& image, sam::Mask& out, sam::Result* overlay_ou
         }
         *overlay_out = std::move(all);
     }
-    ++s.frame;
+    s.frame = frame_id + 1;
     return true;
 }
 

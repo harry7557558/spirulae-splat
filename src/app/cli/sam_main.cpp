@@ -19,6 +19,7 @@
 //   ssplat-sam segment ... 2>/dev/null > detections.tsv
 
 #include "app/Tools.h"
+#include "app/WriterPool.h"
 #include "nn/core/Log.h"
 #include "nn/Device.h"
 #include "nn/io/Image.h"
@@ -33,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -65,7 +67,19 @@ void usage() {
         "        --text <phrase>        detect and track matching instances;\n"
         "                               semicolon-separated for several concepts\n"
         "        --neg-text <phrase>    concepts to KEEP even where --text matches\n"
-        "        --point x,y            seed one instance on the first frame\n"
+        "        --point x,y            click on an object to track; repeatable\n"
+        "        --neg-point x,y        click on something that is NOT it\n"
+        "        --object               end this object, start the next one --\n"
+        "                               two things need two objects, since one\n"
+        "                               instance prompted with both fits neither\n"
+        "        --at-frame <n>         put the clicks that follow on frame n\n"
+        "                               instead of the first, and use them to\n"
+        "                               correct the object there. Frames are\n"
+        "                               numbered as this command reads them:\n"
+        "                                 --point 640,360 --at-frame 90 --point 700,300\n"
+        "                                 --object --point 120,500\n"
+        "                               is one object clicked once and corrected\n"
+        "                               at frame 90, and a second object.\n"
         "        --detect-every <n>     run the detector every n frames (default 1);\n"
         "                               the memory bank carries tracks in between\n"
         "        --memory-frames <n>    cap spatial memory frames per instance\n"
@@ -114,6 +128,11 @@ struct Options {
     std::vector<sam::Point> pos_points, neg_points;
     sam::Box prompt_box{};
     bool use_prompt_box = false;
+    // Clicks for `track`, grouped into objects and frames as they are parsed.
+    // `segment` works on one still image and reads the flat vectors above.
+    std::vector<sam::SeedPrompt> seeds;
+    int     cur_object = 0;
+    int64_t cur_frame = 0;
     bool multimask = false, show_vram = false, profile = false, validate = false;
     bool overlay = false, keep_prompted = false;
     float threshold = 0.5f, nms = 0.1f;
@@ -121,6 +140,19 @@ struct Options {
     int img_size = 0;
     int detect_every = 1, memory_frames = 0, max_size = 1600;
 };
+
+// The seed the next click goes into: one per (object, frame), created on
+// demand so `--point a --point b` is two clicks on one object and not two
+// objects, which is the distinction that matters to the model.
+sam::SeedPrompt& current_seed(Options& o) {
+    for (sam::SeedPrompt& s : o.seeds)
+        if (s.object == o.cur_object && s.frame == o.cur_frame) return s;
+    sam::SeedPrompt s;
+    s.object = o.cur_object;
+    s.frame = o.cur_frame;
+    o.seeds.push_back(s);
+    return o.seeds.back();
+}
 
 bool parse_args(int argc, char** argv, Options& o) {
     if (argc < 2) return false;
@@ -160,14 +192,25 @@ bool parse_args(int argc, char** argv, Options& o) {
             o.pos_boxes.push_back({v[0], v[1], v[2], v[3]});
         else if (a == "--neg-box" && parse_floats(next("--neg-box"), v, 4))
             o.neg_boxes.push_back({v[0], v[1], v[2], v[3]});
+        else if (a == "--object") {
+            // Objects are numbered from 0, so the first --object opens the
+            // SECOND one and a command line that never says it still works.
+            ++o.cur_object;
+            o.cur_frame = 0;
+        } else if (a == "--at-frame") o.cur_frame = std::atoll(next("--at-frame"));
         else if (a == "--prompt-box" && parse_floats(next("--prompt-box"), v, 4)) {
             o.prompt_box = {v[0], v[1], v[2], v[3]};
             o.use_prompt_box = true;
-        } else if (a == "--point" && parse_floats(next("--point"), v, 2))
+            sam::SeedPrompt& s = current_seed(o);
+            s.prompt.box = o.prompt_box;
+            s.prompt.use_box = true;
+        } else if (a == "--point" && parse_floats(next("--point"), v, 2)) {
             o.pos_points.push_back({v[0], v[1]});
-        else if (a == "--neg-point" && parse_floats(next("--neg-point"), v, 2))
+            current_seed(o).prompt.pos_points.push_back({v[0], v[1]});
+        } else if (a == "--neg-point" && parse_floats(next("--neg-point"), v, 2)) {
             o.neg_points.push_back({v[0], v[1]});
-        else {
+            current_seed(o).prompt.neg_points.push_back({v[0], v[1]});
+        } else {
             std::fprintf(stderr, "unknown or malformed option: %s\n", a.c_str());
             return false;
         }
@@ -317,11 +360,7 @@ int cmd_track(const Options& o) {
     mo.max_size = o.max_size;
     mo.img_size = o.img_size;
     mo.validate = o.validate;
-    mo.seed.pos_points = o.pos_points;
-    mo.seed.neg_points = o.neg_points;
-    mo.seed.box = o.prompt_box;
-    mo.seed.use_box = o.use_prompt_box;
-    mo.has_seed = !o.pos_points.empty() || o.use_prompt_box;
+    mo.seeds = o.seeds;
 
     sam::Masker masker;
     std::string error;
@@ -330,18 +369,29 @@ int cmd_track(const Options& o) {
         return 1;
     }
 
+    // Neither reading the next frame nor writing the last mask needs the GPU,
+    // and together they are about a third of a frame -- see app/WriterPool.h.
+    app::WriterPool writers;
+    std::future<nn::Image> ahead;
+    auto load_at = [&](size_t i) {
+        return std::async(std::launch::async,
+                          [p = files[i]] { return nn::load_image(p); });
+    };
+    if (!files.empty()) ahead = load_at(0);
+
     double t_load = 0, t_track = 0, t_write = 0;
     const double t_all = nn::now_ms();
     for (size_t f = 0; f < files.size(); ++f) {
         double t0 = nn::now_ms();
-        nn::Image frame = nn::load_image(files[f]);
+        nn::Image frame = ahead.get();
+        if (f + 1 < files.size()) ahead = load_at(f + 1);
         t_load += nn::now_ms() - t0;
         if (frame.empty()) continue;
 
         t0 = nn::now_ms();
         sam::Mask mask;
         sam::Result r;
-        if (!masker.run(frame, mask, o.overlay ? &r : nullptr)) {
+        if (!masker.run(frame, mask, o.overlay ? &r : nullptr, (int64_t)f)) {
             std::fprintf(stderr, "error: %s\n", masker.lastError().c_str());
             return 1;
         }
@@ -358,11 +408,18 @@ int cmd_track(const Options& o) {
             fs::create_directories(o.out_dir, dec);
             char path[512];
             std::snprintf(path, sizeof path, "%s/frame_%05zu.png", o.out_dir.c_str(), f);
-            if (o.overlay) sam::save_overlay_png(frame, r, path);
-            else           sam::save_mask_png(mask, path);
+            if (o.overlay) {
+                sam::save_overlay_png(frame, r, path);
+            } else {
+                app::WriteJob wj;
+                wj.mask = std::move(mask);
+                wj.path = path;
+                writers.submit(std::move(wj));
+            }
         }
         t_write += nn::now_ms() - t0;
     }
+    writers.finish();
     const double total = nn::now_ms() - t_all;
     const double n = (double)files.size();
     std::fprintf(stderr,

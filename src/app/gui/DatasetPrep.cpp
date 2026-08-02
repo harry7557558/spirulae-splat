@@ -10,6 +10,7 @@
 #include "external/stb_image.h"      // stbi_info (image size probe)
 
 #ifdef SSPLAT_BUILD_SAM
+#include "app/WriterPool.h"
 #include "nn/Device.h"
 #include "nn/io/Image.h"
 #include "sam/Masking.h"
@@ -62,6 +63,39 @@ bool is_image_file(const fs::path& p) {
     return e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".webp" ||
            e == ".tif" || e == ".tiff" || e == ".bmp";
 }
+
+#ifdef SSPLAT_BUILD_SAM
+// Preview clicks -> the seeds the masker takes. Clicks of one object made on
+// one frame become ONE prompt (several positive points describe one thing);
+// clicks of the same object on another frame become a second prompt, which the
+// masker applies as a correction when it gets there.
+//
+// `total_frames` is how many frames the run will see, and is only needed when
+// the click's own frame numbering does not survive to it -- see MaskClick.
+// Pass 0 to keep the recorded index.
+std::vector<sam::SeedPrompt> seeds_from_clicks(const std::vector<MaskClick>& clicks,
+                                               int64_t total_frames) {
+    std::vector<sam::SeedPrompt> seeds;
+    for (const MaskClick& c : clicks) {
+        const int64_t frame =
+            total_frames > 1
+                ? (int64_t)std::llround((double)c.position * (double)(total_frames - 1))
+                : (total_frames == 1 ? 0 : c.frame);
+        sam::SeedPrompt* seed = nullptr;
+        for (sam::SeedPrompt& s : seeds)
+            if (s.object == c.object && s.frame == frame) seed = &s;
+        if (!seed) {
+            seeds.push_back({});
+            seed = &seeds.back();
+            seed->object = c.object;
+            seed->frame = frame;
+        }
+        if (c.positive) seed->prompt.pos_points.push_back({c.x, c.y});
+        else            seed->prompt.neg_points.push_back({c.x, c.y});
+    }
+    return seeds;
+}
+#endif
 
 std::string lower_ext(const std::string& path) {
     std::string e = fs::path(path).extension().string();
@@ -237,8 +271,10 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
     }
 
     if (job.mask_enable) {
-        if (job.mask_prompt.empty()) {
-            error = "masking is on but the prompt is empty (e.g. \"people; cars\")";
+        if (job.mask_prompt.empty() && job.mask_clicks.empty()) {
+            error = "masking is on but nothing says what to mask: type a prompt "
+                    "(e.g. \"people; cars\"), or open \"Try the mask\" and click "
+                    "the object";
             return false;
         }
         // A built-in video run already produced masks in the same pass.
@@ -352,6 +388,9 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, PrepResult& out,
         fx.mask.keep_prompted = job.mask_keep_subject;
         fx.mask.max_size = job.mask_max_image_size;
         fx.mask.video = true;
+        // This path reads the video itself, so a click's decoded index means
+        // the same thing here as it did in the preview.
+        fx.mask.seeds = seeds_from_clicks(job.mask_clicks, 0);
     }
 
     app::FrameExtractSinks sinks;
@@ -464,6 +503,15 @@ bool DatasetPrep::generate_masks(const PrepJob& job, const std::string& images,
                               backends().builtin_masking &&
                               !job.mask_model_path.empty();
     if (want_builtin) return generate_masks_builtin(job, images, error);
+    if (!job.mask_clicks.empty()) {
+        // The Python fallback is lang-segment-anything: text in, masks out. It
+        // has no way to take a click, so saying so beats writing masks that
+        // quietly ignore half of what the user asked for.
+        error = "clicked objects need the built-in segmentation; the external "
+                "Python masker only understands text prompts. Turn off "
+                "\"external masking\", or describe the object in words.";
+        return false;
+    }
     return generate_masks_python(job, images_rel, error);
 }
 
@@ -495,9 +543,19 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job,
     mo.max_size = job.mask_max_image_size;
     // A folder of photos is not a video: consecutive files may be anywhere in
     // the scene, so tracking across them would carry a memory bank that does
-    // not apply. Frames extracted from a video are the ordered case, and they
-    // are masked during extraction instead.
-    mo.video = false;
+    // not apply. Clicks are the exception and force it on -- a click says
+    // nothing about any frame but its own, so without a memory bank to carry
+    // the object forward there is nothing to propagate, and the input in that
+    // case is an ordered capture (this path also masks frames that ffmpeg
+    // extracted, which is where a clicked object usually arrives).
+    mo.video = !job.mask_clicks.empty();
+    // For a folder of photos the preview counted the same files in the same
+    // order, so a click's frame index is exact. For frames ffmpeg extracted it
+    // is not -- the preview measured against the video and ffmpeg resampled it
+    // to a different rate -- and the fraction through the capture is the part
+    // that survives, so the index is recomputed from it here.
+    mo.seeds = seeds_from_clicks(job.mask_clicks,
+                                 job.is_video ? (int64_t)files.size() : 0);
 
     sam::Masker masker;
     if (!masker.init(mo, error)) return false;
@@ -506,9 +564,14 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job,
     fs::create_directories(mask_root, ec);
     const fs::path image_root(images);
 
+    // Encoding a 1080p mask costs about a third of what the model costs to
+    // produce it, and none of it needs the GPU.
+    app::WriterPool writers;
     int done = 0;
+    int64_t index = -1;
     RateLimitedProgress progress(_log, "images masked", (int64_t)files.size());
     for (const fs::path& f : files) {
+        ++index;
         if (_cancel.load()) { error = "cancelled"; return false; }
         // Masks mirror the image tree, so cam0/ and cam1/ keep their names.
         fs::path rel = fs::relative(f, image_root, ec);
@@ -524,13 +587,24 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job,
             continue;
         }
         sam::Mask mask;
-        if (!masker.run(img, mask, nullptr)) {
+        if (!masker.run(img, mask, nullptr, index)) {
             error = "masking failed on " + f.filename().string() + ": " +
                     masker.lastError();
             return false;
         }
-        sam::save_mask_png(mask, dst.string());
+        app::WriteJob wj;
+        wj.mask = std::move(mask);
+        wj.path = dst.string();
+        writers.submit(std::move(wj));
         progress.update(++done, done == (int)files.size());
+    }
+    // The last few masks are still in the queue; the caller goes straight on to
+    // structure from motion, which will look for them.
+    writers.finish();
+    if (writers.failures() > 0) {
+        error = std::to_string(writers.failures()) + " mask(s) could not be "
+                "written to " + mask_root.string();
+        return false;
     }
     return true;
 #endif
