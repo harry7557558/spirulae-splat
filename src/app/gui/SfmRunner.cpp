@@ -22,7 +22,7 @@ const char* kQuality[] = {"low", "medium", "high", "extreme"};
 const char* kDataType[] = {"individual", "video", "internet"};
 const char* kCameraMode[] = {"single", "folder", "image"};
 const char* kPairs[] = {"auto", "exhaustive", "sequential", "prefilter"};
-const char* kMapper[] = {"auto", "flat", "bottom-up"};
+const char* kMapper[] = {"flat", "bottom-up"};
 const char* kFeatures[] = {"sift", "aliked-n16rot", "aliked-n32"};
 const char* kMatcher[] = {"bruteforce", "lightglue"};
 
@@ -179,6 +179,50 @@ void SfmRunner::note_progress(const std::string& l) {
     }
 }
 
+// A capture shot as several inputs is several cameras, and the lens is a
+// property of the input rather than of the dataset. `ssplat sfm` says that with
+// PREFIX=VALUE, where the prefix matches an image name by path prefix -- which
+// is exactly the sub-folder each input's frames went into. A dual-lens video's
+// cam0/ and cam1/ both sit under that folder, so one prefix covers both, and
+// they still group as two cameras because grouping is per folder.
+//
+// The focal length is carried as a fraction of the image width rather than in
+// pixels, because the width is not known until the frames exist (an Insta360
+// X5 is fx = fy ~ 0.269 * width whatever it was shot at). A lone input has no
+// prefix, so its value IS the dataset-wide one -- and an explicit focal typed
+// into the panel wins over a preset-derived one.
+void SfmRunner::append_camera_overrides(const SfmJob& job, const PrepResult& prep,
+                                        std::vector<std::string>& argv) {
+    for (const PrepInput& in : job.prep.inputs) {
+        const std::string prefix = in.subdir.empty() ? "" : in.subdir + "=";
+        // For a lone input the panel's own "Camera / lens" is the single source
+        // of truth and has already been passed; only a named group adds one.
+        if (!in.subdir.empty() && !in.camera_model.empty()) {
+            argv.push_back("--camera-model");
+            argv.push_back(prefix + in.camera_model);
+        }
+        if (!(in.focal_factor > 0)) continue;
+        if (in.subdir.empty() && job.init_focal_px > 0) continue;
+        const std::string dir =
+            (in.subdir.empty() ? fs::path(prep.image_dir)
+                               : fs::path(prep.image_dir) / in.subdir).string();
+        int W = 0, H = 0;
+        if (!DatasetPrep::first_image_dims(dir, W, H)) {
+            log("warning: could not read an image in " + dir +
+                "; leaving its focal length to be guessed");
+            continue;
+        }
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%g", (double)in.focal_factor * W);
+        argv.push_back("--focal");
+        argv.push_back(prefix + buf);
+        log("Initial focal length for " +
+            (in.subdir.empty() ? std::string("the capture") : in.subdir) + ": " +
+            buf + " px (" + std::to_string(in.focal_factor) + " x " +
+            std::to_string(W) + " px wide)");
+    }
+}
+
 void SfmRunner::run(SfmJob job) {
     auto fail = [&](const std::string& why) {
         std::lock_guard<std::mutex> lk(_mu);
@@ -216,8 +260,9 @@ void SfmRunner::run(SfmJob job) {
             std::string err;
             if (!dp.run(job.prep, prep, err)) return fail(err);
         }
-        if (prep.multi_track && job.camera_mode == 0) {
-            log("Multi-track video: switching to one camera per folder");
+        if (prep.per_folder_cameras && job.camera_mode == 0) {
+            log("images/ holds one folder per camera: switching to one camera "
+                "per folder");
             job.camera_mode = 1;
         }
 
@@ -250,12 +295,17 @@ void SfmRunner::run(SfmJob job) {
                     argv.push_back(std::to_string(job.overlap));
                 }
             }
+            // Sequential is what `auto` resolves to for video, so this has to
+            // be passed whenever sequential is reachable, not only when it was
+            // named. It is a no-op under the other pair modes.
+            if (!job.loop_closure) argv.push_back("--no-loop-closure");
             if (job.init_focal_px > 0) {
                 char buf[32];
                 std::snprintf(buf, sizeof buf, "%g", job.init_focal_px);
                 argv.push_back("--focal");
                 argv.push_back(buf);
             }
+            append_camera_overrides(job, prep, argv);
             if (job.max_features > 0) {
                 // Each frontend has its own count flag, because their budgets
                 // are not comparable -- a learned detector emits a few
@@ -327,7 +377,7 @@ void SfmRunner::run(SfmJob job) {
             }
         }
 
-        if (!job.prep.is_video)
+        if (reads_photos_in_place(job.prep.inputs))
             log("Note: the photos are referenced where they are. If you reopen "
                 "this dataset later, set image_dir to " + prep.image_dir_cfg +
                 " under the dataset options.");

@@ -52,8 +52,12 @@ inline const char* kColmapCameraModels[] = {
 inline constexpr int kNumColmapCameraModels = 10;
 
 struct ColmapJob {
-    std::string input_path;              // images folder, or a video file
-    bool is_video = false;
+    // What the user picked, in order (see PrepInput). Frame extraction and
+    // masking are shared with the built-in path, so several inputs land in one
+    // images/ tree here too -- but COLMAP's feature_extractor takes ONE camera
+    // model for the run, so the per-input models a PrepInput can carry are only
+    // honoured by the built-in reconstruction.
+    std::vector<PrepInput> inputs;
     std::string workspace;               // output dataset dir (created)
     bool resume = true;                  // reuse artifacts an interrupted
                                          // run left in the workspace:

@@ -5,6 +5,10 @@
 // Exhaustive (all i<j) and sequential (a sliding window over a video) are
 // generated here; Prefilter (GPU pair selection by mini-matching top-scale
 // subsets) needs the features and lives in sfm/feature/PairSelection.h.
+//
+// Sequential is a chain and nothing more: it has no link between two passes
+// over the same place, which is what `--loop-closure` (on by default) adds by
+// unioning the Prefilter shortlist into the window -- see matchFeatureDir.
 #pragma once
 
 #include <cstdint>

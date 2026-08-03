@@ -32,6 +32,10 @@
 static const int kNumFrustumSegments = 16;
 static const int kNumFrustumFaces = 8;
 
+// Triangle-AABB inflation, relative to the box's coordinate magnitude. See the
+// CUDA source (triangle_aabb) for why a frustum face needs it.
+static const float kTriAabbPad = 1e-5f;
+
 // ---------------------------------------------------------------------------
 // Order-preserving float <-> u32 mapping (monotonic for ALL floats).
 // ---------------------------------------------------------------------------
@@ -273,6 +277,14 @@ void elem_aabb_of(float4* buffer, uint idx, out float3 bmin,
         unpack_triangle(buffer, idx, v0, v1, v2, uv0, uv1, uv2, ci);
         bmin = min(min(v0, v1), v2);
         bmax = max(max(v0, v1), v2);
+        // A frustum face is planar, so an axis-aligned one gives a
+        // zero-thickness box that the slab test can never report a hit for --
+        // see the CUDA source. Pad it out of degeneracy.
+        float m = max(max(max(abs(bmin.x), abs(bmin.y)), abs(bmin.z)),
+                      max(max(abs(bmax.x), abs(bmax.y)), abs(bmax.z)));
+        float pad = kTriAabbPad * max(m, 1e-20f);
+        bmin -= pad;
+        bmax += pad;
     }
 }
 
@@ -779,8 +791,13 @@ float3 get_thumbnail_bilinear(uint* thumb_words, uint TW, uint TH, uint bid,
               _CH(c11, 24) * w11)) *
         (1.0f / (255.0f * 256.0f * 256.0f));
     #undef _CH
-    return float3(rgba.x * rgba.w, rgba.y * rgba.w,
-                  rgba.z * rgba.w + (1.0f - rgba.w));
+    // Uncaptured thumbnail (alpha 0) -> magenta
+    if (rgba.w < 0.5f) {
+        int c = int(floor(uv.x * 4.0f)) + int(floor(uv.y * 4.0f));
+        return (c & 1) != 0 ? float3(0.85f, 0.05f, 0.85f)
+                            : float3(0.15f, 0.0f, 0.15f);
+    }
+    return float3(rgba.x * rgba.w, rgba.y * rgba.w, rgba.z * rgba.w);
 }
 
 // ---------------------------------------------------------------------------

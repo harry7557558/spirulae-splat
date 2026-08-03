@@ -45,6 +45,11 @@ struct MaskSettings {
     std::vector<MaskClick> clicks;
     int object_count = 1;            // how many the user has opened
     int current_object = 0;          // which one a new click joins
+    // The input they were drawn on. A click is a point on a frame of ONE
+    // capture, so a dataset built from several videos has to know which of them
+    // these describe -- the others are masked from the text prompt alone
+    // (PrepJob::mask_clicks_source).
+    std::string clicks_source;
 };
 
 class SegmentPanel {

@@ -38,7 +38,8 @@ of this file and in the port plan.
 images/ ──► extract ──► features/ ─┐
                                    ├─► match ──► matches.bin ──► map ──► sparse/0..N
             (pairing: exhaustive / │             (two-view          │
-             sequential / GPU      │              verification)     │
+             sequential [+ loop    │              verification)     │
+             closure] / GPU        │                                │
              pre-selection) ───────┘                                ▼
                                                     assemble (D63):
                                                     merge levels on shared
@@ -242,9 +243,29 @@ preset, and `auto` reports every field a preset moved:
   preset    : --max-features 8192 -> 2048
 ```
 
+Sequential pairing — what `--data-type video` asks for — is a chain: image `i`
+against the next `--overlap`, and nothing else. A capture that walks around a
+subject and comes back has no pair crossing the seam, so any one weak step in
+the sequence cuts the view graph and the mapper reports models where there
+should be one. On a 262-frame walk around a plaza that was four models
+(144 / 74 / 19 / 12 images) against one with 254 for the same frames matched by
+pair selection. Two things fix it, and `auto` uses both:
+
+- **At 100 images or more, `auto` retires the video preset for pair selection**,
+  the same cutoff and for the same reason as exhaustive: a capture that long
+  revisits places, and content-based selection is a fraction of the cost of
+  matching. `--pairs sequential` explicitly still means sequential.
+- **`--loop-closure` (on by default) covers the case below the cutoff**: it
+  unions the `prefilter` shortlist into the temporal window, which is what
+  COLMAP's `SequentialMatching.loop_detection` does with a vocabulary tree.
+  Forced on that same capture it also produced one model (249 images), for 1.6 s
+  of selection and 2.5x the pairs to match. `--no-loop-closure` is the old
+  behaviour.
+
 Everything else has a default that a beginner should not have to touch.
 
-`--mapper flat|bottom-up|auto` picks the schedule (see the stage graph);
+`--mapper flat|bottom-up` picks the schedule (see the stage graph; flat is the
+default for every capture, and there is no size-based switch);
 `--bup-atom-size` and `--bup-overlap` size the atoms and the overlap the
 merge aligns on. `--merge-tracks` and `--rank-by-visibility` are on by default
 and exist to be turned off when attributing a change.

@@ -289,76 +289,83 @@ static bool is_image_ext(const fs::path& p) {
            e == ".tif" || e == ".tiff" || e == ".bmp";
 }
 
-void GuiApp::handle_drop(const std::string& path) {
+// Is this folder an already-processed dataset rather than raw input? Checked
+// first, because a processed dataset usually also holds an images folder, and
+// opening it wins over reconstructing it again.
+static bool looks_like_dataset(const fs::path& p) {
     std::error_code ec;
-    fs::path p(path);
-    if (fs::is_directory(p, ec)) {
-        // SfM dataset markers first (a processed dataset usually also
-        // contains an images folder -- opening wins over re-running COLMAP).
-        bool dataset = fs::exists(p / "transforms.json", ec) ||
-                       fs::is_directory(p / "sparse", ec) ||
-                       fs::is_directory(p / "colmap", ec);
-        if (!dataset) {
-            // Metashape export: a camera .xml next to a point-cloud .ply
-            // (what MetashapeParser probes for).
-            bool has_xml = false, has_ply = false;
-            for (fs::directory_iterator it(p, ec), end; !ec && it != end;
-                 it.increment(ec)) {
-                if (!it->is_regular_file(ec)) continue;
-                std::string e = it->path().extension().string();
-                for (auto& c : e) c = (char)std::tolower((unsigned char)c);
-                has_xml = has_xml || e == ".xml";
-                has_ply = has_ply || e == ".ply";
-            }
-            dataset = has_xml && has_ply;
-        }
-        if (dataset) {
-            request_open_dataset(path);
-            return;
-        }
-        bool has_image = false;
-        for (fs::recursive_directory_iterator it(
-                 p, fs::directory_options::skip_permission_denied, ec), end;
-             !ec && it != end; it.increment(ec))
-            if (it->is_regular_file(ec) && is_image_ext(it->path())) {
-                has_image = true;
-                break;
-            }
-        if (has_image) {
-            if (training_busy()) {
-                log("Dropped photo folder ignored: stop training first");
-                return;
-            }
-            _pick = PickAction::SourceImages;
-            handle_dialog_result(path);
-            return;
-        }
-        log("Dropped folder contains no dataset or images: " + path);
+    if (fs::exists(p / "transforms.json", ec) ||
+        fs::is_directory(p / "sparse", ec) || fs::is_directory(p / "colmap", ec))
+        return true;
+    // Metashape export: a camera .xml next to a point-cloud .ply (what
+    // MetashapeParser probes for).
+    bool has_xml = false, has_ply = false;
+    for (fs::directory_iterator it(p, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        std::string e = it->path().extension().string();
+        for (auto& c : e) c = (char)std::tolower((unsigned char)c);
+        has_xml = has_xml || e == ".xml";
+        has_ply = has_ply || e == ".ply";
+    }
+    return has_xml && has_ply;
+}
+
+static bool folder_has_images(const fs::path& p) {
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(
+             p, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec))
+        if (it->is_regular_file(ec) && is_image_ext(it->path())) return true;
+    return false;
+}
+
+void GuiApp::handle_drop(const std::vector<std::string>& paths) {
+    std::error_code ec;
+    // A dataset is opened, not added to a list, so it only makes sense alone --
+    // and dropping one alongside videos is far more likely a mis-drag than a
+    // request to do both.
+    if (paths.size() == 1 && fs::is_directory(paths[0], ec) &&
+        looks_like_dataset(paths[0])) {
+        request_open_dataset(paths[0]);
         return;
     }
-    if (fs::is_regular_file(p, ec)) {
-        std::string ext = p.extension().string();
-        for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
-        for (const char* v : kVideoExtensions)
-            if (ext == v) {
-                if (training_busy()) {
-                    log("Dropped video ignored: stop training first");
-                    return;
-                }
-                _pick = PickAction::SourceVideo;
-                handle_dialog_result(path);
-                return;
-            }
+    if (paths.size() == 1 && fs::is_regular_file(paths[0], ec) &&
+        !is_video_path(paths[0])) {
         // A file from inside a dataset (transforms.json, database.db, a
         // COLMAP .bin/.txt, a Metashape camera .xml) opens the dataset it
         // belongs to.
+        const fs::path p(paths[0]);
+        std::string ext = p.extension().string();
+        for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
         if (p.filename() == "transforms.json" || ext == ".db" ||
             ext == ".bin" || ext == ".txt" || ext == ".xml") {
             request_open_dataset(p.parent_path().string());
             return;
         }
-        log("Unsupported dropped file: " + path);
     }
+
+    // Everything else is raw input: videos, and folders of photos.
+    std::vector<std::string> sources;
+    for (const std::string& path : paths) {
+        const fs::path p(path);
+        if (fs::is_directory(p, ec)) {
+            if (folder_has_images(p)) sources.push_back(path);
+            else log("Dropped folder contains no dataset or images: " + path);
+        } else if (fs::is_regular_file(p, ec)) {
+            if (is_video_path(path)) sources.push_back(path);
+            else log("Unsupported dropped file: " + path);
+        }
+    }
+    if (sources.empty()) return;
+    if (training_busy()) {
+        log("Dropped input ignored: stop training first");
+        return;
+    }
+    // Dropping onto the dataset screen adds to what is already listed there;
+    // dropping from anywhere else starts a new dataset.
+    add_sources(sources, /*replace=*/_screen != Screen::NewDataset);
+    _screen = Screen::NewDataset;
 }
 
 // Default COLMAP workspace: never point at an existing non-empty directory
@@ -373,62 +380,168 @@ static std::string fresh_workspace(const std::string& base) {
     return base;
 }
 
-void GuiApp::handle_dialog_result(const std::string& path) {
+// The Insta360 X5 focal length: fx = fy ~ 0.269 * image width on every X5
+// dataset measured. A known focal makes fisheye initialization reliable, and a
+// fisheye started from the generic guess often does not initialize at all.
+static constexpr float kInsta360FocalFactor = 0.269f;
+
+// A file or folder name that can be a directory of its own: what a path
+// separator, a colon or a space would do to `--camera-model DIR=MODEL` is not
+// worth finding out.
+static std::string sanitize_name(std::string s) {
+    for (char& c : s) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+        if (!ok) c = '_';
+    }
+    while (!s.empty() && s.front() == '.') s.erase(s.begin());
+    return s.empty() ? std::string("input") : s;
+}
+
+void GuiApp::refresh_sources() {
+    // One input keeps the layout a one-video dataset has always had: frames
+    // straight into images/ (and cam0/, cam1/ under it for a dual-lens file).
+    // Several need a folder each, which is also what makes them separate
+    // cameras -- named after the file so the log and the camera list read like
+    // what the user picked.
+    std::vector<std::string> taken;
+    for (size_t i = 0; i < _sources.size(); i++) {
+        PrepInput& s = _sources[i];
+        if (_sources.size() < 2) {
+            s.subdir.clear();
+            continue;
+        }
+        const fs::path p(s.path);
+        std::string base = sanitize_name(
+            s.is_video ? p.stem().string()
+                       : (p.filename().empty() ? p.parent_path().filename().string()
+                                               : p.filename().string()));
+        std::string name = base;
+        for (int n = 2; std::find(taken.begin(), taken.end(), name) != taken.end();
+             n++)
+            name = base + "_" + std::to_string(n);
+        taken.push_back(name);
+        s.subdir = name;
+    }
+
+    if (_mask_preview_input >= (int)_sources.size()) _mask_preview_input = 0;
+
+    // Clicked objects belong to one input's frames. If that input is no longer
+    // in the list there is nothing for them to describe, so they go.
+    if (!_mask.clicks.empty()) {
+        bool still_here = false;
+        for (const PrepInput& s : _sources)
+            still_here = still_here || s.path == _mask.clicks_source;
+        if (!still_here) {
+            log("Clicked objects dropped: " + _mask.clicks_source +
+                ", the input they were drawn on, is no longer in the list.");
+            _mask.clicks.clear();
+            _mask.clicks_source.clear();
+            _mask.object_count = 1;
+            _mask.current_object = 0;
+        }
+    }
+
+    // The output folder follows the input until the user takes it over.
+    if (_workspace.empty() || _workspace == _workspace_auto) {
+        std::string base;
+        if (_sources.empty()) {
+            base.clear();
+        } else if (_sources.size() == 1) {
+            const fs::path p(_sources[0].path);
+            base = _sources[0].is_video
+                       ? (p.parent_path() / (p.stem().string() + "_dataset")).string()
+                       : _sources[0].path + "_dataset";
+        } else {
+            // Several inputs have no single name; the folder they came from is
+            // the closest thing to one.
+            const fs::path p(_sources[0].path);
+            const fs::path dir = p.parent_path();
+            base = (dir / (dir.filename().string() + "_dataset")).string();
+        }
+        _workspace = base.empty() ? "" : fresh_workspace(base);
+        _workspace_auto = _workspace;
+    }
+}
+
+// One picked path -> the input it describes, with the defaults its kind wants.
+static PrepInput make_source(const std::string& path) {
+    std::error_code ec;
+    PrepInput s;
+    s.path = path;
+    s.is_video = !fs::is_directory(path, ec) && is_video_path(path);
+    // Every input carries a concrete lens, so a list holding a 360 camera and a
+    // phone cannot end up applying one of them to the other.
+    //
+    // 360-camera preset for Insta360 .insv files: the two fisheye tracks land
+    // in one folder per lens (one camera each), the thin-prism fisheye model
+    // fits them, and the known focal length above starts them off.
+    s.camera_model = "opencv";
+    if (is_dual_fisheye_path(path)) {
+        s.camera_model = "thin-prism-fisheye";
+        s.focal_factor = kInsta360FocalFactor;
+    }
+    return s;
+}
+
+void GuiApp::add_sources(const std::vector<std::string>& paths, bool replace) {
+    if (replace) {
+        _sources.clear();
+        _mask_preview_input = 0;
+    }
+    for (const std::string& path : paths) _sources.push_back(make_source(path));
+    if (_sources.empty()) return;
+
+    // The engine-wide settings follow whatever the list is now. A video is a
+    // capture in order; a folder of photos is not.
+    const bool video = _sources[0].is_video;
+    const bool fisheye = is_dual_fisheye_path(_sources[0].path);
+    _sfm_job.data_type = video ? 1 : 0;
+    _sfm_job.pairs = 0;               // automatic
+    // Matching stays on "Automatic", which is NOT sequential for a dual-lens
+    // video: the two lens tracks are concatenated rather than temporally
+    // interleaved, so temporal neighbours miss every cross-lens pair (on a real
+    // X5 capture that topped out at 68/118 registered frames). Automatic gives
+    // every pair below a hundred images -- which is what beat it, at 116/118 --
+    // and GPU pair selection above that, which is content-based and so keeps
+    // the cross-lens pairs without the quadratic cost. Forcing exhaustive made
+    // a long capture unusably slow, and it also suppresses that switch.
+    _colmap_job.matcher = (video && !fisheye) ? 2 : 1;
+    _colmap_job.seq_loop_closure = true;   // if switched to sequential
+    if (fisheye) {
+        _colmap_job.camera_model = "THIN_PRISM_FISHEYE";
+        _colmap_job.init_focal_factor = kInsta360FocalFactor;
+    }
+    // Several inputs are several cameras, and so is one dual-lens file.
+    if (_sources.size() > 1 || fisheye) {
+        _sfm_job.camera_mode = 1;
+        _colmap_job.camera_mode = 1;
+    }
+    if (_mask_preview_input >= (int)_sources.size()) _mask_preview_input = 0;
+    refresh_sources();
+}
+
+void GuiApp::handle_dialog_result(const std::vector<std::string>& paths) {
+    const std::string path = paths.empty() ? std::string() : paths[0];
     switch (_pick) {
         case PickAction::OpenDataset:
             request_open_dataset(path);
             break;
         case PickAction::SourceImages:
-            _source_path = path;
-            _source_is_video = false;
-            _workspace = fresh_workspace(path + "_dataset");
-            _colmap_job.matcher = 1;      // photos default to exhaustive
-            _sfm_job.data_type = 0;       // individual photos
-            _sfm_job.pairs = 0;           // let it choose
+        case PickAction::SourceVideo:
+            // Picking from Home starts a dataset; the panel's own Add buttons
+            // extend the one on screen.
+            add_sources(paths, /*replace=*/_screen != Screen::NewDataset);
             _screen = Screen::NewDataset;
             break;
-        case PickAction::SourceVideo: {
-            _source_path = path;
-            _source_is_video = true;
-            fs::path p(path);
-            _workspace = fresh_workspace(
-                (p.parent_path() / (p.stem().string() + "_dataset")).string());
-            _colmap_job.matcher = 2;      // frames are ordered: sequential
-            _sfm_job.data_type = 1;       // video frames
-            _sfm_job.pairs = 0;
-            // 360-camera preset for Insta360 .insv files: dual-fisheye tracks
-            // land in one folder per lens (one camera each), the thin-prism
-            // fisheye model fits them, and the known Insta360 focal length
-            // (fx = fy ~ 0.269 * width on every X5 dataset measured) makes
-            // fisheye initialization reliable.
-            // Matching stays on "Automatic", which is NOT sequential here: the
-            // two lens tracks are concatenated rather than temporally
-            // interleaved, so temporal neighbours miss every cross-lens pair
-            // (on a real X5 capture that topped out at 68/118 registered
-            // frames). Automatic gives every pair below a hundred images --
-            // which is what beat it, at 116/118 -- and GPU pair selection above
-            // that, which is content-based and so keeps the cross-lens pairs
-            // without the quadratic cost. Forcing exhaustive here made a long
-            // capture unusably slow, and it also suppresses that switch.
-            std::string ext = p.extension().string();
-            for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
-            if (ext == ".insv") {
-                _colmap_job.camera_model = "THIN_PRISM_FISHEYE";
-                _colmap_job.camera_mode = 1;
-                _colmap_job.init_focal_factor = 0.269f;
-                _colmap_job.matcher = 1;
-                _colmap_job.seq_loop_closure = true;   // if switched to sequential
-                _sfm_job.camera_model = "thin-prism-fisheye";
-                _sfm_job.camera_mode = 1;
-                _sfm_job.pairs = 0;       // automatic
-                // ssplat-sfm takes the focal length in pixels, not as a
-                // fraction of the width, so it is resolved once the frames
-                // exist -- see start_dataset_job.
-                _sfm_job.init_focal_px = 0.0f;
+        case PickAction::SourceReplace:
+            if (!path.empty() && _pick_source >= 0 &&
+                _pick_source < (int)_sources.size()) {
+                _sources[_pick_source] = make_source(path);
+                refresh_sources();
             }
-            _screen = Screen::NewDataset;
+            _pick_source = -1;
             break;
-        }
         case PickAction::Workspace:
             _workspace = path;
             break;
@@ -495,7 +608,7 @@ void GuiApp::frame() {
         case Screen::Train:  draw_train();  break;
     }
 
-    if (_dialog.draw()) handle_dialog_result(_dialog.result());
+    if (_dialog.draw()) handle_dialog_result(_dialog.results());
     draw_confirm_modal();
 
     ImGui::End();
@@ -514,8 +627,8 @@ void GuiApp::draw_menu_bar() {
         }
         if (ImGui::MenuItem("New Dataset from Video...")) {
             _pick = PickAction::SourceVideo;
-            _dialog.open("Select Video File", FileDialog::Mode::File,
-                         video_dialog_filters());
+            _dialog.open("Select Videos", FileDialog::Mode::File,
+                         video_dialog_filters(), "", /*multi_select=*/true);
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Quit")) request_close();
@@ -582,16 +695,17 @@ void GuiApp::draw_home() {
 
     if (ImGui::Button("Create Dataset from Video...", ImVec2(-1, 42))) {
         _pick = PickAction::SourceVideo;
-        _dialog.open("Select Video File", FileDialog::Mode::File,
-                     video_dialog_filters());
+        _dialog.open("Select Videos", FileDialog::Mode::File,
+                     video_dialog_filters(), "", /*multi_select=*/true);
     }
     help_tooltip_on_hover(
         "Pick a video walking around a scene or object. The least blurry "
         "frames are pulled out of it, then the camera positions are worked "
-        "out from those.");
+        "out from those. Several clips of one scene can be picked at once -- "
+        "they reconstruct together, one camera each.");
     ImGui::Spacing();
-    ImGui::TextDisabled("...or drop a dataset folder, photo folder, or "
-                        "video file anywhere in this window");
+    ImGui::TextDisabled("...or drop a dataset folder, photo folders, or "
+                        "video files anywhere in this window");
 
     if (!_recents.empty()) {
         ImGui::Dummy(ImVec2(0, 18));
@@ -666,8 +780,7 @@ std::string GuiApp::selected_model_path() const {
 // copied across, so a field cannot be set on the screen and silently not run.
 void GuiApp::sync_dataset_jobs() {
     PrepJob prep;
-    prep.input_path = _source_path;
-    prep.is_video = _source_is_video;
+    prep.inputs = _sources;
     prep.workspace = _workspace;
     prep.resume = _resume;
     prep.video_fps = _sfm_job.prep.video_fps;
@@ -682,14 +795,17 @@ void GuiApp::sync_dataset_jobs() {
     prep.mask_keep_subject = _mask.keep_subject;
     prep.mask_max_image_size = _mask.max_image_size;
     prep.mask_clicks = _mask.clicks;
+    prep.mask_clicks_source = _mask.clicks_source;
     prep.mask_model_path = selected_model_path();
     prep.force_external_masking = _sfm_job.prep.force_external_masking;
     if (const ModelEntry* e = find_model(_model_id))
         prep.mask_model_name = e->legacy_name;
     _sfm_job.prep = prep;
+    // The dataset-wide lens is the lone input's; with several, each input names
+    // its own and this is only what an image no override covers would get.
+    if (!_sources.empty()) _sfm_job.camera_model = _sources[0].camera_model;
 
-    _colmap_job.input_path = prep.input_path;
-    _colmap_job.is_video = prep.is_video;
+    _colmap_job.inputs = prep.inputs;
     _colmap_job.workspace = prep.workspace;
     _colmap_job.resume = prep.resume;
     _colmap_job.video_fps = prep.video_fps;
@@ -724,21 +840,70 @@ void GuiApp::start_dataset_job() {
 // ---------------------------------------------------------------------------
 
 void GuiApp::draw_dataset_source() {
-    ImGui::SetNextItemWidth(-220);
-    ImGui::InputText("##in", &_source_path);
-    ImGui::SameLine();
-    if (ImGui::Button("Browse...##in")) {
-        if (_source_is_video) {
-            _pick = PickAction::SourceVideo;
-            _dialog.open("Select Video File", FileDialog::Mode::File,
-                         video_dialog_filters());
-        } else {
-            _pick = PickAction::SourceImages;
-            _dialog.open("Select Photo Folder", FileDialog::Mode::Folder);
+    // One row per input. Several videos reconstruct as one scene -- each gets
+    // its own folder of frames under images/, and so its own camera.
+    int remove = -1;
+    bool edited = false;
+    for (size_t i = 0; i < _sources.size(); i++) {
+        PrepInput& s = _sources[i];
+        ImGui::PushID((int)i);
+        // Room for Browse + Remove + where the frames go, which is longer than
+        // any other row on the screen.
+        ImGui::SetNextItemWidth(-380);
+        if (ImGui::InputText("##in", &s.path)) {
+            std::error_code ec;
+            s.is_video = !fs::is_directory(s.path, ec) && is_video_path(s.path);
+            edited = true;
         }
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...")) {
+            _pick = PickAction::SourceReplace;
+            _pick_source = (int)i;
+            if (s.is_video)
+                _dialog.open("Select Video File", FileDialog::Mode::File,
+                             video_dialog_filters());
+            else
+                _dialog.open("Select Photo Folder", FileDialog::Mode::Folder);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Remove")) remove = (int)i;
+        ImGui::SameLine();
+        if (_sources.size() > 1)
+            ImGui::TextDisabled("%s -> images/%s",
+                                s.is_video ? "video" : "photos", s.subdir.c_str());
+        else
+            ImGui::TextUnformatted(s.is_video ? "video file" : "photo folder");
+        ImGui::PopID();
     }
+    if (remove >= 0) {
+        _sources.erase(_sources.begin() + remove);
+        edited = true;
+    }
+    if (edited) refresh_sources();
+
+    if (ImGui::Button("Add video...")) {
+        _pick = PickAction::SourceVideo;
+        _dialog.open("Select Video File", FileDialog::Mode::File,
+                     video_dialog_filters(), "", /*multi_select=*/true);
+    }
+    help_tooltip_on_hover(
+        "Add another clip to this dataset. Several videos reconstruct together "
+        "as one scene: each gets its own folder of frames, and its own camera, "
+        "so they may come from different lenses. Click several files in the "
+        "dialog to take them all, or drop them onto this window.");
     ImGui::SameLine();
-    ImGui::TextUnformatted(_source_is_video ? "video file" : "photo folder");
+    if (ImGui::Button("Add photos...")) {
+        _pick = PickAction::SourceImages;
+        _dialog.open("Select Photo Folder", FileDialog::Mode::Folder);
+    }
+    help_tooltip_on_hover(
+        "Add a folder of photos. On its own it is read where it is; alongside "
+        "another input its images are linked into the dataset, because the "
+        "reconstruction reads one folder tree.");
+    if (_sources.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("no input picked yet");
+    }
 
     ImGui::SetNextItemWidth(-220);
     ImGui::InputText("##ws", &_workspace);
@@ -801,28 +966,49 @@ void GuiApp::draw_dataset_basics() {
 
     // Lens model. The two engines spell the models differently; the labels
     // are the same either way, which is what the user is choosing between.
-    ImGui::SetNextItemWidth(220);
-    if (builtin) {
-        int idx = 0;
-        for (int i = 0; i < kNumSfmCameraModels; i++)
-            if (_sfm_job.camera_model == kSfmCameraModels[i]) idx = i;
-        if (ImGui::Combo("Camera / lens", &idx, kSfmCameraModelLabels,
-                         kNumSfmCameraModels))
-            _sfm_job.camera_model = kSfmCameraModels[idx];
+    //
+    // With several inputs the built-in engine gets one lens per input instead
+    // (draw_source_cameras) -- a rig that carries a 360 camera and a phone is
+    // one capture with two lens models in it, and forcing one on both makes
+    // half of it unusable. COLMAP's feature_extractor takes a single model for
+    // the run, so that path keeps one control and says so.
+    const bool per_input_lens = builtin && _sources.size() > 1;
+    if (!per_input_lens) {
+        ImGui::SetNextItemWidth(220);
+        if (builtin) {
+            std::string& model =
+                _sources.empty() ? _sfm_job.camera_model : _sources[0].camera_model;
+            int idx = 0;
+            for (int i = 0; i < kNumSfmCameraModels; i++)
+                if (model == kSfmCameraModels[i]) idx = i;
+            if (ImGui::Combo("Camera / lens", &idx, kSfmCameraModelLabels,
+                             kNumSfmCameraModels))
+                model = kSfmCameraModels[idx];
+        } else {
+            int idx = 0;
+            for (int i = 0; i < kNumColmapCameraModels; i++)
+                if (_colmap_job.camera_model == kColmapCameraModels[i]) idx = i;
+            if (ImGui::Combo("Camera / lens", &idx, kColmapCameraModels,
+                             kNumColmapCameraModels))
+                _colmap_job.camera_model = kColmapCameraModels[idx];
+        }
+        help_tooltip_on_hover(
+            "The lens distortion the reconstruction fits. OpenCV suits nearly "
+            "every phone and camera. Pick a fisheye model for an action camera "
+            "or a 360 rig -- a fisheye reconstructed as a normal lens comes out "
+            "badly, and nothing detects that for you. Pinhole is only for "
+            "images that are already undistorted.");
+        if (!builtin && _sources.size() > 1) {
+            ImGui::PushTextWrapPos();
+            ImGui::TextColored(kWarn,
+                               "COLMAP fits this one lens model to every input. "
+                               "Switch to the built-in reconstruction to give "
+                               "each input its own.");
+            ImGui::PopTextWrapPos();
+        }
     } else {
-        int idx = 0;
-        for (int i = 0; i < kNumColmapCameraModels; i++)
-            if (_colmap_job.camera_model == kColmapCameraModels[i]) idx = i;
-        if (ImGui::Combo("Camera / lens", &idx, kColmapCameraModels,
-                         kNumColmapCameraModels))
-            _colmap_job.camera_model = kColmapCameraModels[idx];
+        draw_source_cameras();
     }
-    help_tooltip_on_hover(
-        "The lens distortion the reconstruction fits. OpenCV suits nearly "
-        "every phone and camera. Pick a fisheye model for an action camera or "
-        "a 360 rig -- a fisheye reconstructed as a normal lens comes out "
-        "badly, and nothing detects that for you. Pinhole is only for images "
-        "that are already undistorted.");
 
     const char* cam_modes[] = {"one shared camera", "one camera per folder",
                                "one camera per image"};
@@ -850,7 +1036,7 @@ void GuiApp::draw_dataset_basics() {
         const char* matchers[] = {"Exhaustive", "Sequential", "Vocabulary tree"};
         int matcher_idx = _colmap_job.matcher - 1;
         if (matcher_idx < 0 || matcher_idx > 2)
-            matcher_idx = _colmap_job.is_video ? 1 : 0;
+            matcher_idx = (!_sources.empty() && _sources[0].is_video) ? 1 : 0;
         ImGui::SetNextItemWidth(220);
         ImGui::Combo("Image matching", &matcher_idx, matchers, 3);
         _colmap_job.matcher = matcher_idx + 1;
@@ -870,12 +1056,15 @@ void GuiApp::draw_dataset_basics() {
         }
     }
 
-    if (_source_is_video) {
+    bool any_video = false;
+    for (const PrepInput& s : _sources) any_video = any_video || s.is_video;
+    if (any_video) {
         ImGui::SetNextItemWidth(220);
         ImGui::InputFloat("Frames per second", &_sfm_job.prep.video_fps, 0, 0, "%.2g");
         help_tooltip_on_hover(
             "How many frames to keep per second of video. 1-3 is right for a "
-            "slow walkthrough; more only helps if the camera moved fast.");
+            "slow walkthrough; more only helps if the camera moved fast. "
+            "Applies to every video in the list.");
         ImGui::SetNextItemWidth(220);
         ImGui::SliderInt("Sharpness window", &_sfm_job.prep.sharp_window, 1, 8);
         help_tooltip_on_hover(
@@ -888,6 +1077,47 @@ void GuiApp::draw_dataset_basics() {
             help_tooltip_on_hover(backends().video_reason.c_str());
         }
     }
+}
+
+// One lens per input, in place of the single "Camera / lens" control, once
+// there is more than one input to tell apart. The reconstruction takes these as
+// per-folder overrides (SfmRunner::append_camera_overrides), which is what lets
+// a 360 clip and a phone clip reconstruct as one scene without either being
+// fitted with the other's model.
+void GuiApp::draw_source_cameras() {
+    ImGui::TextUnformatted("Camera / lens per input");
+    help_tooltip_on_hover(
+        "Each input's images go into their own folder and get their own "
+        "camera, so each can have its own lens model and starting focal "
+        "length. A 360 file's two lens tracks share the row -- they are the "
+        "same lens twice -- but are still solved as two cameras.");
+    ImGui::Indent();
+    for (size_t i = 0; i < _sources.size(); i++) {
+        PrepInput& s = _sources[i];
+        ImGui::PushID((int)i);
+        ImGui::TextUnformatted(s.subdir.c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", s.path.c_str());
+        ImGui::SameLine(200);
+        ImGui::SetNextItemWidth(220);
+        int idx = 0;
+        for (int m = 0; m < kNumSfmCameraModels; m++)
+            if (s.camera_model == kSfmCameraModels[m]) idx = m;
+        if (ImGui::Combo("##lens", &idx, kSfmCameraModelLabels, kNumSfmCameraModels))
+            s.camera_model = kSfmCameraModels[idx];
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90);
+        ImGui::InputFloat("x width", &s.focal_factor, 0, 0, "%.4g");
+        help_tooltip_on_hover(
+            "Starting focal length for this input, as a fraction of its image "
+            "width (fx = fy = factor x width) -- the width is only known once "
+            "the frames exist, which is why it is not in pixels here. 0 reads "
+            "EXIF and falls back to a guess from the image size. Worth setting "
+            "for a fisheye, where a bad guess can stop the reconstruction from "
+            "starting at all; an Insta360 X5 is ~0.269, which .insv files are "
+            "filled in with.");
+        ImGui::PopID();
+    }
+    ImGui::Unindent();
 }
 
 // ---------------------------------------------------------------------------
@@ -953,15 +1183,47 @@ void GuiApp::draw_masking_options() {
             ImGui::TextColored(kOk, "Model ready.");
             ImGui::SameLine();
             if (ImGui::Button("Try the mask...")) {
-                if (_source_path.empty())
+                if (_sources.empty()) {
                     log("Pick the photos or video first.");
-                else
-                    _segment.open(_source_path, _source_is_video,
-                                  selected_model_path());
+                } else {
+                    const PrepInput& s = _sources[(size_t)_mask_preview_input];
+                    // The clicks made from here are prompts for THIS input;
+                    // record which one so the run does not carry them into a
+                    // different capture (PrepJob::mask_clicks_source).
+                    _mask.clicks_source = s.path;
+                    _segment.open(s.path, s.is_video, selected_model_path());
+                }
             }
             help_tooltip_on_hover(
                 "Run the prompt on one real frame and see exactly what would "
                 "be cut out, before committing to the whole capture.");
+            // Which input it opens, once there is a choice. Clicks belong to
+            // the frames of one capture, so this also decides which input they
+            // prompt -- and switching after clicking would silently reattribute
+            // them, so they are dropped instead, loudly.
+            if (_sources.size() > 1) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(220);
+                std::vector<const char*> names;
+                for (const PrepInput& s : _sources) names.push_back(s.subdir.c_str());
+                int pick = _mask_preview_input;
+                if (ImGui::Combo("on input", &pick, names.data(), (int)names.size()) &&
+                    pick != _mask_preview_input) {
+                    if (!_mask.clicks.empty() &&
+                        _mask.clicks_source != _sources[(size_t)pick].path) {
+                        log("Clicked objects dropped: they were drawn on " +
+                            _mask.clicks_source +
+                            ", which is not the input being previewed now.");
+                        _mask.clicks.clear();
+                        _mask.object_count = 1;
+                        _mask.current_object = 0;
+                    }
+                    _mask_preview_input = pick;
+                }
+                help_tooltip_on_hover(
+                    "Which input \"Try the mask\" runs on. The text prompt "
+                    "applies to every input; clicked objects only to this one.");
+            }
         }
         if (_download.state() == ModelDownload::State::Failed) {
             ImGui::PushTextWrapPos();
@@ -988,6 +1250,15 @@ void GuiApp::draw_masking_options() {
                 "Objects you pointed at in \"Try the mask\". Each is followed "
                 "from the frame you clicked it on, using the model's video "
                 "memory, so you do not have to click every frame.");
+            if (_sources.size() > 1 && _mask.prompt.empty()) {
+                ImGui::PushTextWrapPos();
+                ImGui::TextColored(kWarn,
+                                   "They describe one frame of %s, so only that "
+                                   "input is masked. Add a text prompt to cover "
+                                   "the others.",
+                                   _mask.clicks_source.c_str());
+                ImGui::PopTextWrapPos();
+            }
         }
     } else {
         ImGui::PushTextWrapPos();
@@ -1083,21 +1354,36 @@ void GuiApp::draw_sfm_advanced() {
                   "frontend above to enable it.");
     }
 
-    const char* mappers[] = {"Automatic", "Flat (one reconstruction)",
+    const char* mappers[] = {"Flat (one reconstruction)",
                              "Bottom-up (atoms, merged upwards)"};
     ImGui::SetNextItemWidth(260);
-    ImGui::Combo("Mapper schedule", &_sfm_job.mapper, mappers, 3);
+    ImGui::Combo("Mapper schedule", &_sfm_job.mapper, mappers, 2);
     help_tooltip_on_hover(
         "How the scene is built. Flat grows one reconstruction image by "
-        "image. Bottom-up cuts the view graph into small groups, reconstructs "
-        "them independently and merges upwards -- much better on large "
-        "captures. Automatic picks bottom-up past a few hundred images.");
+        "image, and is the default for any capture. Bottom-up cuts the view "
+        "graph into small groups, reconstructs them independently and merges "
+        "upwards -- worth trying on a large capture, where the flat "
+        "schedule's whole-model passes start to dominate.");
 
     if (_sfm_job.pairs == 2) {
         ImGui::SetNextItemWidth(260);
         ImGui::InputInt("Sequential overlap", &_sfm_job.overlap, 0, 0);
         help_tooltip_on_hover("How many neighbouring frames each frame is "
                               "matched against.");
+    }
+    // "Automatic" resolves to sequential for a short video, so offer this
+    // whenever sequential can be what runs, not only when it was named.
+    if (_sfm_job.pairs == 2 || (_sfm_job.pairs == 0 && _sfm_job.data_type == 1)) {
+        ImGui::Checkbox("Loop closure detection", &_sfm_job.loop_closure);
+        help_tooltip_on_hover(
+            "Sequential matching only pairs each frame with its temporal "
+            "neighbours, so a capture that walks around a subject and returns "
+            "has nothing joining the two ends -- one weak step then splits the "
+            "reconstruction into pieces. This also matches frames that look "
+            "alike wherever they fall in the video, which closes the loop. "
+            "Costs a pair-selection pass and roughly twice the matching time; "
+            "enabled by default. Under \"Automatic\" it only applies below 100 "
+            "frames -- above that, matching is content-based already.");
     }
 
     ImGui::SetNextItemWidth(260);
@@ -1378,8 +1664,9 @@ void GuiApp::draw_new_dataset() {
     if (ImGui::Button("< Home")) _screen = Screen::Home;
     ImGui::SameLine();
     ImGui::SetWindowFontScale(1.2f);
-    ImGui::TextUnformatted(_source_is_video ? "Create Dataset from Video"
-                                            : "Create Dataset from Photos");
+    const bool from_video = !_sources.empty() && _sources[0].is_video;
+    ImGui::TextUnformatted(from_video ? "Create Dataset from Video"
+                                      : "Create Dataset from Photos");
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Spacing();
 
@@ -1427,7 +1714,8 @@ void GuiApp::draw_new_dataset() {
     // ---- run / status ----
     ImGui::Spacing();
     if (!running) {
-        const bool ready = !_source_path.empty() && !_workspace.empty();
+        bool ready = !_sources.empty() && !_workspace.empty();
+        for (const PrepInput& s : _sources) ready = ready && !s.path.empty();
         ImGui::BeginDisabled(!ready);
         if (ImGui::Button("Create Dataset", ImVec2(200, 34))) start_dataset_job();
         ImGui::EndDisabled();

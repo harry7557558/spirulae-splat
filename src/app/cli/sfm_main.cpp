@@ -588,11 +588,9 @@ static bool readModels(const std::string& dir, std::vector<Reconstruction>& mode
     return true;
 }
 
-// One last global bundle adjustment per model with the principal point
-// Flat or bottom-up, per --mapper. `auto` goes bottom-up once the capture is
-// large enough for the flat mapper's whole-model passes to dominate; below that
-// the flat schedule is both faster and better, because nothing is ever cut and
-// nothing has to be glued back.
+// Flat or bottom-up, per --mapper. Flat is the default for every capture: it is
+// what the measurements are on, and nothing is ever cut, so nothing has to be
+// glued back. Bottom-up is asked for by name.
 //
 // Either way the models are then assembled by the same schedule (D63,
 // sfm/map/Assemble.h): merge levels with growth and a joint solve between them,
@@ -617,8 +615,7 @@ static void printAssembly(const AssembleStats& ast, size_t models, const char* l
 static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDatabase& db,
                                              const std::vector<FeatureSet>& feats, SfmConfig& cfg,
                                              AssembleStats& ast) {
-    const bool bup = cfg.mapper_mode == "bottom-up" || cfg.mapper_mode == "hierarchical" ||
-                     (cfg.mapper_mode == "auto" && db.images.size() >= cfg.bup.min_images);
+    const bool bup = cfg.mapper_mode == "bottom-up" || cfg.mapper_mode == "hierarchical";
     AssembleOptions ao = cfg.assemble;
     ao.verbose = !cfg.quiet;
     if (!bup) {
@@ -635,6 +632,7 @@ static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDataba
     return models;
 }
 
+// One last global bundle adjustment per model with the principal point
 // released (D51). COLMAP's documentation: hold it during reconstruction, where
 // it is ill-posed, then "try to refine the principal point in global bundle
 // adjustment" once every image is in and the problem is constrained --
@@ -1113,13 +1111,13 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
     stats.images = files.size();
 
     std::vector<std::pair<uint32_t, uint32_t>> pairs;
+    std::function<void(size_t, size_t)> sp;
+    if (verbose)
+        sp = [&](size_t done, size_t total) {
+            fprintf(stderr, "\r[match] %zu/%zu pairs scored", done, total);
+        };
     if (mode == PairMode::Prefilter) {
         stats.scored = files.size() * (files.size() - 1) / 2;
-        std::function<void(size_t, size_t)> sp;
-        if (verbose)
-            sp = [&](size_t done, size_t total) {
-                fprintf(stderr, "\r[match] %zu/%zu pairs scored", done, total);
-            };
         double t0 = now();
         pairs = prefilterPairs(feats, popt, sp);
         stats.select_seconds = now() - t0;
@@ -1131,13 +1129,34 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
                     stats.select_seconds);
     } else {
         pairs = generatePairs((uint32_t)files.size(), mode, cfg.overlap);
+        // Loop closure. A sequential chain has no link between the start and
+        // end of a walk that comes back on itself, so one weak step splits the
+        // reconstruction; the pair-selection shortlist supplies the missing
+        // links from image content, the way COLMAP's loop_detection does from a
+        // vocabulary tree. Exhaustive already has every pair.
+        if (mode == PairMode::Sequential && cfg.loop_closure && files.size() > 2) {
+            const size_t seq = pairs.size();
+            stats.scored = files.size() * (files.size() - 1) / 2;
+            double t0 = now();
+            std::vector<std::pair<uint32_t, uint32_t>> extra = prefilterPairs(feats, popt, sp);
+            stats.select_seconds = now() - t0;
+            pairs.insert(pairs.end(), extra.begin(), extra.end());
+            std::sort(pairs.begin(), pairs.end());
+            pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+            if (verbose)
+                fprintf(stderr,
+                        "\n[match] loop closure added %zu pairs to %zu sequential ones "
+                        "(%zu selected, %.1f s; --no-loop-closure turns this off)\n",
+                        pairs.size() - seq, seq, extra.size(), stats.select_seconds);
+        }
     }
     stats.pairs = pairs.size();
     if (verbose)
         fprintf(stderr, "[match] %zu images, %zu pairs (%s)\n", files.size(), pairs.size(),
-                mode == PairMode::Exhaustive  ? "exhaustive"
-                : mode == PairMode::Sequential ? "sequential"
-                                               : "prefilter");
+                mode == PairMode::Exhaustive ? "exhaustive"
+                : mode == PairMode::Sequential
+                    ? (cfg.loop_closure ? "sequential + loop closure" : "sequential")
+                    : "prefilter");
     if (verbose && mode == PairMode::Prefilter)
         fprintf(stderr, "[match] pair selection: top-%u features, %u neighbors\n",
                 popt.num_features, popt.num_neighbors);
@@ -1767,20 +1786,27 @@ static int cmdAuto(int argc, char** argv) {
     // once extraction has run. Above COLMAP's exhaustive cutoff -- where COLMAP
     // switches to vocabulary-tree retrieval -- we switch to GPU pair selection
     // (sfm/feature/PairSelection.h, D35).
+    //
+    // The same cutoff retires the video preset's sequential pairing. A temporal
+    // window is a chain, and a capture long enough to be worth this many frames
+    // is long enough to come back on itself; pair selection finds those links
+    // from content, at a cost that is a fraction of matching. Measured on a
+    // 262-frame walk: sequential gave four models (144 / 74 / 19 / 12 images),
+    // pair selection one with 254. Below the cutoff the temporal prior is still
+    // the cheaper way to get the same pairs, and --loop-closure covers its blind
+    // spot. `--pairs sequential` explicitly still means sequential.
     PairMode mode = cfg.pairMode();
-    if (mode == PairMode::Exhaustive && est.images >= 100) {
-        const size_t nquad = est.images * (est.images - 1) / 2;
-        if (seen.count("pairs"))
-            fprintf(stderr,
-                    "[auto] WARNING: %zu images with exhaustive pairing = %zu pairs; this is "
-                    "quadratic. Drop --pairs exhaustive to get pair selection.\n",
-                    est.images, nquad);
-        else {
-            mode = PairMode::Prefilter;
-            printf("   %zu images >= 100: switching to pair selection "
-                   "(exhaustive would be %zu pairs; --pairs exhaustive forces it)\n",
-                   est.images, nquad);
-        }
+    if ((mode == PairMode::Exhaustive || mode == PairMode::Sequential) &&
+        est.images >= 100 && !seen.count("pairs")) {
+        const char* was = mode == PairMode::Exhaustive ? "exhaustive" : "sequential";
+        mode = PairMode::Prefilter;
+        printf("   %zu images >= 100: switching from %s to pair selection "
+               "(--pairs %s forces it)\n", est.images, was, was);
+    } else if (mode == PairMode::Exhaustive && est.images >= 100) {
+        fprintf(stderr,
+                "[auto] WARNING: %zu images with exhaustive pairing = %zu pairs; this is "
+                "quadratic. Drop --pairs exhaustive to get pair selection.\n",
+                est.images, est.images * (est.images - 1) / 2);
     }
 
     // ---- 2. match + geometric verification ----

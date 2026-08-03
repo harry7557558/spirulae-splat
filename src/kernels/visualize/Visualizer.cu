@@ -295,6 +295,23 @@ inline __device__ void unpack_triangle(
     cam_idx = __float_as_uint(e3.w);
 }
 
+// Inflation applied to every triangle box, relative to its coordinate
+// magnitude. A frustum face is a plane, so a camera whose image plane is
+// perpendicular to a world axis produces triangles -- and BVH nodes over them
+// -- with zero extent along that axis. ray_aabb_intersection is a slab test,
+// and a slab of half-extent 0 contributes the same value to both ends, so the
+// node's tmin and tmax come out equal and `tmin < tmax` rejects it: the node is
+// never entered and that camera's whole face silently disappears. Its wireframe
+// stays, because a swept sphere's box is inflated by the capsule radius, which
+// is why this reads as "one camera frustum with no image in it".
+//
+// Not a corner case: a COLMAP model has exactly one image at identity -- the
+// mapper's seed, which is what defines the world frame -- so every COLMAP
+// dataset has exactly one such camera. Relative to the coordinates rather than
+// to the box, so the pad stays above the float resolution of the ray
+// arithmetic wherever the box sits.
+inline constexpr float kTriAabbPad = 1e-5f;
+
 inline __device__ void triangle_aabb(
     const float4* __restrict__ tri_buffer,
     uint32_t idx,
@@ -306,6 +323,12 @@ inline __device__ void triangle_aabb(
     unpack_triangle(tri_buffer, idx, verts, uvs, cam_idx);
     bmin = fmin(fmin(verts[0], verts[1]), verts[2]);
     bmax = fmax(fmax(verts[0], verts[1]), verts[2]);
+    const float m = fmaxf(
+        fmaxf(fmaxf(fabsf(bmin.x), fabsf(bmin.y)), fabsf(bmin.z)),
+        fmaxf(fmaxf(fabsf(bmax.x), fabsf(bmax.y)), fabsf(bmax.z)));
+    const float pad = kTriAabbPad * fmaxf(m, 1e-20f);
+    bmin = bmin - make_float3(pad);
+    bmax = bmax + make_float3(pad);
 }
 
 inline constexpr uint kMortonBitsPerDim = 21;
@@ -788,10 +811,15 @@ inline __device__ float3 get_thumbnail_bilinear(
         (float)(c00.z * (wx0 * wy0) + c10.z * (wx1 * wy0) + c01.z * (wx0 * wy1) + c11.z * (wx1 * wy1)),
         (float)(c00.w * (wx0 * wy0) + c10.w * (wx1 * wy0) + c01.w * (wx0 * wy1) + c11.w * (wx1 * wy1)),
     } * (1.0f / (255.0f*256.0f*256.0f));
+    // Uncaptured thumbnail (alpha 0) -> magenta
+    if (rgba.w < 0.5f) {
+        int c = (int)floorf(uv.x * 4.0f) + (int)floorf(uv.y * 4.0f);
+        return (c & 1) ? float3{0.85f, 0.05f, 0.85f} : float3{0.15f, 0.0f, 0.15f};
+    }
     return float3{
         rgba.x * rgba.w,
         rgba.y * rgba.w,
-        rgba.z * rgba.w + (1.0f - rgba.w)
+        rgba.z * rgba.w
     };
 }
 

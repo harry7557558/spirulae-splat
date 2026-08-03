@@ -41,7 +41,7 @@ public:
 private:
     enum class Screen { Home, NewDataset, Train };
     enum class PickAction {
-        None, OpenDataset, SourceImages, SourceVideo, Workspace,
+        None, OpenDataset, SourceImages, SourceVideo, SourceReplace, Workspace,
         OutputPrefix, VocabTree, MaskModelFile
     };
     // Which reconstruction back end the New Dataset screen runs.
@@ -66,9 +66,10 @@ private:
 
 public:
     // Drag-and-drop entry (GLFW drop callback, main thread): auto-detects
-    // whether the path is an SfM dataset folder, a folder of photos, or a
-    // video file, and routes it like the corresponding Home-screen action.
-    void handle_drop(const std::string& path);
+    // whether each path is an SfM dataset folder, a folder of photos, or a
+    // video file, and routes them like the corresponding Home-screen action.
+    // Several videos dropped together become several inputs of one dataset.
+    void handle_drop(const std::vector<std::string>& paths);
 
 private:
     void request_go_home();
@@ -94,8 +95,9 @@ private:
     void draw_menu_bar();
     void draw_home();
     void draw_new_dataset();
-    void draw_dataset_source();       // input / output / resume
+    void draw_dataset_source();       // input list / output / resume
     void draw_dataset_basics();       // the four or five knobs a beginner needs
+    void draw_source_cameras();       // one lens per input, when there are several
     void draw_masking_options();
     void draw_sfm_advanced();
     void draw_colmap_options();
@@ -112,7 +114,15 @@ private:
     void draw_vram_readout(float x0, float avail);
     void draw_log_panel(float height);
     void draw_confirm_modal();
-    void handle_dialog_result(const std::string& path);
+    void handle_dialog_result(const std::vector<std::string>& paths);
+    // Take paths onto the input list, `replace` clearing what was there (a
+    // fresh pick from Home) rather than adding to it (the panel's Add buttons).
+    // Sets the per-input defaults and, unless the user has edited it, the
+    // output folder.
+    void add_sources(const std::vector<std::string>& paths, bool replace);
+    // Re-derive what is a function of the list: the sub-folder each input's
+    // images go into, and the default workspace.
+    void refresh_sources();
     void run_pending_if_stopped();
     void append_logs();
     void log(const std::string& s);
@@ -143,14 +153,22 @@ private:
     ColmapJob _colmap_job;
     SfmRunner _sfm;
     SfmJob _sfm_job;
-    // Panel-level state, copied into whichever job runs.
-    std::string _source_path;
-    bool _source_is_video = false;
+    // Panel-level state, copied into whichever job runs. The inputs are kept as
+    // the struct both runners take (PrepInput), so the panel edits the thing
+    // that runs instead of a parallel copy of it: a video file or photo folder
+    // each, plus the sub-folder and the lens that belong to it.
+    std::vector<PrepInput> _sources;
     std::string _workspace;
+    // The output folder this screen derived from the inputs. Kept so a folder
+    // the user typed is never overwritten when the input list changes.
+    std::string _workspace_auto;
     bool _resume = true;
     bool _mask_enable = false;
     MaskSettings _mask;
     SegmentPanel _segment;
+    // Which input "Try the mask" runs on, and so which input the clicked
+    // objects are prompts for (MaskSettings::clicks_source).
+    int _mask_preview_input = 0;
 
     // Segmentation checkpoints.
     std::string _model_id = "sam3-q4_0";
@@ -162,6 +180,7 @@ private:
 
     FileDialog _dialog;
     PickAction _pick = PickAction::None;
+    int _pick_source = -1;            // which input PickAction::SourceReplace edits
 
     // Settings (persisted).
     std::vector<std::string> _recents;

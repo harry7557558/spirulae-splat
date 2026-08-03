@@ -103,6 +103,19 @@ std::string lower_ext(const std::string& path) {
     return e;
 }
 
+// base / sub, where an empty `sub` means base itself (and not "base/").
+fs::path under(const std::string& base, const std::string& sub) {
+    return sub.empty() ? fs::path(base) : fs::path(base) / sub;
+}
+
+// Are the job's clicked objects prompts for THIS input? See
+// PrepJob::mask_clicks_source: an unnamed source means the clicks were drawn
+// before there was anything to distinguish, which is the single-input case.
+bool clicks_apply_to(const PrepJob& job, const PrepInput& in) {
+    return job.mask_clicks.empty() || job.mask_clicks_source.empty() ||
+           job.mask_clicks_source == in.path;
+}
+
 std::string human_duration(double seconds) {
     if (seconds < 1.0) return "a moment";
     char b[64];
@@ -171,6 +184,17 @@ private:
 };
 
 }  // namespace
+
+bool is_video_path(const std::string& path) {
+    const std::string e = lower_ext(path);
+    for (const char* v : kVideoExtensions)
+        if (e == v) return true;
+    return false;
+}
+
+bool is_dual_fisheye_path(const std::string& path) {
+    return lower_ext(path) == ".insv";
+}
 
 const Backends& backends() {
     static const Backends probed = [] {
@@ -251,15 +275,49 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
     const fs::path ws = job.workspace;
     std::error_code ec;
     fs::create_directories(ws, ec);
+    if (job.inputs.empty()) {
+        error = "nothing to prepare: no video or photo folder was picked";
+        return false;
+    }
 
-    if (job.is_video) {
-        if (!extract_video(job, out, error)) return false;
-    } else {
-        out.image_dir = fs::absolute(job.input_path).string();
+    // Where each input's images and masks ended up, so the masking pass below
+    // can run per input (see generate_masks) instead of over one flat tree.
+    struct Prepared {
+        std::string images, masks;      // absolute
+        std::string images_rel, masks_rel;  // relative to the workspace
+        bool masked = false;            // ... on the way out of the decoder
+    };
+    std::vector<Prepared> per(job.inputs.size());
+
+    if (reads_photos_in_place(job.inputs)) {
         // Photos are referenced where they are, not copied: a 40 GB folder of
         // raw captures does not want a second copy, and the parsers accept an
         // absolute image_dir.
+        out.image_dir = fs::absolute(job.inputs[0].path).string();
         out.image_dir_cfg = out.image_dir;
+        per[0].images = per[0].images_rel = out.image_dir;
+        per[0].masks = (ws / "masks").string();
+        per[0].masks_rel = "masks";
+    } else {
+        out.image_dir = (ws / "images").string();
+        out.image_dir_cfg = "images";
+        for (size_t i = 0; i < job.inputs.size(); i++) {
+            const PrepInput& in = job.inputs[i];
+            Prepared& p = per[i];
+            p.images = under(out.image_dir, in.subdir).string();
+            p.masks = under((ws / "masks").string(), in.subdir).string();
+            p.images_rel = under("images", in.subdir).generic_string();
+            p.masks_rel = under("masks", in.subdir).generic_string();
+            // Several inputs share one image tree only by living in their own
+            // folders, and a folder is what makes them separate cameras.
+            if (!in.subdir.empty()) out.per_folder_cameras = true;
+            if (in.is_video) {
+                if (!extract_video(job, in, p.images, p.masks, out, p.masked, error))
+                    return false;
+            } else if (!gather_photos(job, in, p.images, error)) {
+                return false;
+            }
+        }
     }
 
     out.n_images = count_images(out.image_dir);
@@ -277,12 +335,17 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
                     "the object";
             return false;
         }
-        // A built-in video run already produced masks in the same pass.
-        if (out.mask_dir.empty()) {
-            const std::string rel = job.is_video ? "images" : out.image_dir_cfg;
-            if (!generate_masks(job, out.image_dir, rel, error)) return false;
-            out.mask_dir = (ws / "masks").string();
+        for (size_t i = 0; i < job.inputs.size(); i++) {
+            // A built-in video run already masked these frames in the same pass.
+            if (per[i].masked) continue;
+            if (!generate_masks(job, job.inputs[i], per[i].images,
+                                per[i].images_rel, per[i].masks, per[i].masks_rel,
+                                error))
+                return false;
         }
+        std::error_code mec;
+        if (fs::is_directory(ws / "masks", mec) && !fs::is_empty(ws / "masks", mec))
+            out.mask_dir = (ws / "masks").string();
     }
     return true;
 }
@@ -291,28 +354,26 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
 // Video -> frames
 // ---------------------------------------------------------------------------
 
-bool DatasetPrep::extract_video(const PrepJob& job, PrepResult& out,
-                                std::string& error) {
-    const fs::path ws = job.workspace;
-    out.image_dir = (ws / "images").string();
-    out.image_dir_cfg = "images";
-
+bool DatasetPrep::extract_video(const PrepJob& job, const PrepInput& in,
+                                const std::string& images,
+                                const std::string& masks, PrepResult& out,
+                                bool& masked, std::string& error) {
     // Resume: frames are moved into place in one batch after selection, so a
-    // non-empty images/ means a previous extraction finished.
+    // non-empty folder means a previous extraction of THIS input finished.
     if (job.resume) {
-        const int have = count_images(out.image_dir);
+        const int have = count_images(images);
         if (have > 0) {
             _log("Resume: keeping " + std::to_string(have) +
-                 " extracted frames in " + out.image_dir +
+                 " extracted frames in " + images +
                  " (delete the folder to re-extract)");
             std::error_code ec;
-            out.multi_track = fs::is_directory(fs::path(out.image_dir) / "cam1", ec);
+            if (fs::is_directory(fs::path(images) / "cam1", ec))
+                out.per_folder_cameras = true;
             if (job.mask_enable) {
-                const fs::path masks = ws / "masks";
                 std::error_code mec;
                 if (fs::is_directory(masks, mec) && !fs::is_empty(masks, mec)) {
-                    _log("Resume: keeping the masks in " + masks.string());
-                    out.mask_dir = masks.string();
+                    _log("Resume: keeping the masks in " + masks);
+                    masked = true;
                 }
             }
             return true;
@@ -321,40 +382,44 @@ bool DatasetPrep::extract_video(const PrepJob& job, PrepResult& out,
 
     const bool want_builtin = !job.force_external_decode && backends().builtin_video;
     if (want_builtin) {
-        if (extract_video_builtin(job, out, error)) return true;
+        if (extract_video_builtin(job, in, images, masks, out, masked, error))
+            return true;
         if (_cancel.load()) return false;
         // A container or profile the driver cannot decode is exactly what the
         // fallback is for, and the user should not have to know which is which.
         _log("Built-in decoding could not handle this file (" + error +
              "); falling back to ffmpeg");
     }
-    return extract_video_ffmpeg(job, out, error);
+    return extract_video_ffmpeg(job, in, images, out, error);
 }
 
-bool DatasetPrep::extract_video_builtin(const PrepJob& job, PrepResult& out,
-                                        std::string& error) {
+bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
+                                        const std::string& images,
+                                        const std::string& masks, PrepResult& out,
+                                        bool& masked, std::string& error) {
 #ifndef SSPLAT_HAVE_VIDEO
-    (void)job; (void)out;
+    (void)job; (void)in; (void)images; (void)masks; (void)out; (void)masked;
     error = backends().video_reason;
     return false;
 #else
     _stage("Extracting frames (GPU decode)");
+    _log("Video: " + in.path);
 
     // fps -> "one frame every N source frames". The source rate is what the
     // container states; a variable-rate file is close enough for this.
     std::string probe_err;
-    const int tracks = app::video_track_count(job.input_path, probe_err);
+    const int tracks = app::video_track_count(in.path, probe_err);
     if (tracks <= 0) {
         error = probe_err.empty() ? "no video track" : probe_err;
         return false;
     }
-    out.multi_track = tracks > 1;
+    if (tracks > 1) out.per_folder_cameras = true;
 
     double src_fps = 30.0;
     int64_t src_frames = 0;
     {
         video::VideoReader r;
-        if (r.open(job.input_path)) {
+        if (r.open(in.path)) {
             if (r.info().fps > 1.0) src_fps = r.info().fps;
             src_frames = r.info().frame_count;
         }
@@ -370,15 +435,17 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, PrepResult& out,
         expect = (int64_t)job.max_frames * tracks;
 
     app::FrameExtractJob fx;
-    fx.input = job.input_path;
-    fx.image_dir = out.image_dir;
-    fx.mask_dir = (fs::path(job.workspace) / "masks").string();
+    fx.input = in.path;
+    fx.image_dir = images;
+    fx.mask_dir = masks;
     fx.skip = skip;
     fx.keep = window > 1 ? window : 0;
     fx.max_frames = job.max_frames;
     fx.quality = 95;
+    const bool clicks_here = clicks_apply_to(job, in);
     if (job.mask_enable && !job.force_external_masking &&
-        !job.mask_model_path.empty()) {
+        !job.mask_model_path.empty() &&
+        (!job.mask_prompt.empty() || clicks_here)) {
         // Masking rides along on the decode: the frame is already on the
         // device, so this is far cheaper than a second pass over the JPEGs.
         _stage("Extracting frames and masking (GPU)");
@@ -390,7 +457,7 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, PrepResult& out,
         fx.mask.video = true;
         // This path reads the video itself, so a click's decoded index means
         // the same thing here as it did in the preview.
-        fx.mask.seeds = seeds_from_clicks(job.mask_clicks, 0);
+        if (clicks_here) fx.mask.seeds = seeds_from_clicks(job.mask_clicks, 0);
     }
 
     app::FrameExtractSinks sinks;
@@ -406,18 +473,19 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, PrepResult& out,
 
     app::FrameExtractStats stats;
     if (!app::extract_frames(fx, sinks, stats, error)) return false;
-    _log(app::format_extract_stats(stats, out.image_dir, !fx.mask.model.empty()));
+    _log(app::format_extract_stats(stats, images, !fx.mask.model.empty()));
     if (stats.written == 0) {
         error = "no frames were extracted";
         return false;
     }
-    if (!fx.mask.model.empty()) out.mask_dir = fx.mask_dir;
+    if (!fx.mask.model.empty()) masked = true;
     return true;
 #endif
 }
 
-bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, PrepResult& out,
-                                       std::string& error) {
+bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
+                                       const std::string& images,
+                                       PrepResult& out, std::string& error) {
     const fs::path ws = job.workspace;
     if (!command_exists(job.ffmpeg_exe)) {
         error = "ffmpeg not found ('" + job.ffmpeg_exe +
@@ -425,28 +493,29 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, PrepResult& out,
                 "with -DSSPLAT_ENABLE_PATENTED=ON for in-process decoding.";
         return false;
     }
+    _log("Video: " + in.path);
 
     // Multi-track videos (Insta360 .insv): one folder per track, one camera
     // per folder, as in scripts/extract_frames.py.
     std::vector<int> streams = {0};
-    if (lower_ext(job.input_path) == ".insv") {
+    if (is_dual_fisheye_path(in.path)) {
         std::vector<int> found;
         run_process({"ffprobe", "-v", "error", "-select_streams", "v",
                      "-show_entries", "stream=index", "-of", "csv=p=0",
-                     job.input_path}, "",
+                     in.path}, "",
                     [&](const std::string& l) {
                         try { found.push_back(std::stoi(l)); } catch (...) {}
                     }, _cancel);
         if (found.size() > 1) streams = found;
     }
-    out.multi_track = streams.size() > 1;
+    if (streams.size() > 1) out.per_folder_cameras = true;
 
     const int window = std::max(job.sharp_window, 1);
     for (size_t tr = 0; tr < streams.size(); tr++) {
-        std::string track_path = job.input_path;
+        std::string track_path = in.path;
         const fs::path out_dir = streams.size() > 1
-            ? ws / "images" / ("cam" + std::to_string(tr))
-            : ws / "images";
+            ? fs::path(images) / ("cam" + std::to_string(tr))
+            : fs::path(images);
         if (job.resume && count_images(out_dir.string()) > 0) {
             _log("Resume: keeping the frames already in " + out_dir.string());
             continue;
@@ -455,7 +524,7 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, PrepResult& out,
             _stage("Splitting video track " + std::to_string(tr));
             const fs::path tmp_track =
                 ws / ("track_cam" + std::to_string(tr) + ".mp4");
-            int rc = exec({job.ffmpeg_exe, "-nostdin", "-y", "-i", job.input_path,
+            int rc = exec({job.ffmpeg_exe, "-nostdin", "-y", "-i", in.path,
                            "-map", "0:v:" + std::to_string(tr), "-c", "copy",
                            tmp_track.string()});
             if (rc == kCancelled) { error = "cancelled"; return false; }
@@ -493,16 +562,95 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, PrepResult& out,
 }
 
 // ---------------------------------------------------------------------------
+// Photos -> the dataset's own images/
+// ---------------------------------------------------------------------------
+
+// Only when the photos cannot be read where they are: a job with more than one
+// input reconstructs from ONE image tree, and the folders under it are what
+// make its inputs separate cameras.
+//
+// Hard links where the filesystem gives one, a copy otherwise. A link costs a
+// directory entry, which matters when the alternative is a second copy of a
+// folder of raw captures; falling back is what makes it work across devices
+// (and on a filesystem that has no links at all).
+bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
+                                const std::string& images, std::string& error) {
+    std::error_code ec;
+    const fs::path src = fs::absolute(in.path, ec);
+    const fs::path dst(images);
+    if (!fs::is_directory(src, ec)) {
+        error = "not a folder: " + in.path;
+        return false;
+    }
+    _stage("Collecting photos");
+    _log("Photos: " + src.string() + " -> " + dst.string());
+
+    std::vector<fs::path> files;
+    for (fs::recursive_directory_iterator it(
+             src, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec))
+        if (it->is_regular_file(ec) && is_image_file(it->path()))
+            files.push_back(it->path());
+    std::sort(files.begin(), files.end());
+    if (files.empty()) {
+        error = "no images in " + in.path;
+        return false;
+    }
+
+    int linked = 0, copied = 0, kept = 0;
+    RateLimitedProgress progress(_log, "photos collected", (int64_t)files.size());
+    for (const fs::path& f : files) {
+        if (_cancel.load()) { error = "cancelled"; return false; }
+        fs::path rel = f.lexically_relative(src);
+        if (rel.empty() || *rel.begin() == "..") rel = f.filename();
+        const fs::path out_path = dst / rel;
+        if (fs::exists(out_path, ec)) { kept++; continue; }
+        fs::create_directories(out_path.parent_path(), ec);
+        std::error_code link_ec;
+        fs::create_hard_link(f, out_path, link_ec);
+        if (!link_ec) {
+            linked++;
+        } else {
+            std::error_code copy_ec;
+            fs::copy_file(f, out_path, copy_ec);
+            if (copy_ec) {
+                error = "could not put " + f.string() + " into " + dst.string() +
+                        " (" + copy_ec.message() + ")";
+                return false;
+            }
+            copied++;
+        }
+        progress.update(linked + copied + kept);
+    }
+    _log("  " + std::to_string(linked) + " linked, " + std::to_string(copied) +
+         " copied, " + std::to_string(kept) + " already there");
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Masks
 // ---------------------------------------------------------------------------
 
-bool DatasetPrep::generate_masks(const PrepJob& job, const std::string& images,
+bool DatasetPrep::generate_masks(const PrepJob& job, const PrepInput& in,
+                                 const std::string& images,
                                  const std::string& images_rel,
+                                 const std::string& masks,
+                                 const std::string& masks_rel,
                                  std::string& error) {
+    // A click describes one frame of one capture (see PrepJob::mask_clicks_
+    // source), so an input it does not belong to has only the text prompt --
+    // and if there is none, nothing at all to mask by. Saying so beats writing
+    // masks from a prompt the user never gave for these images.
+    if (!clicks_apply_to(job, in) && job.mask_prompt.empty()) {
+        _log("Note: " + in.path + " is not the input the clicked objects were "
+             "drawn on and there is no text prompt, so its frames are left "
+             "unmasked. Add a prompt, or click the object on this input too.");
+        return true;
+    }
     const bool want_builtin = !job.force_external_masking &&
                               backends().builtin_masking &&
                               !job.mask_model_path.empty();
-    if (want_builtin) return generate_masks_builtin(job, images, error);
+    if (want_builtin) return generate_masks_builtin(job, in, images, masks, error);
     if (!job.mask_clicks.empty()) {
         // The Python fallback is lang-segment-anything: text in, masks out. It
         // has no way to take a click, so saying so beats writing masks that
@@ -512,14 +660,15 @@ bool DatasetPrep::generate_masks(const PrepJob& job, const std::string& images,
                 "\"external masking\", or describe the object in words.";
         return false;
     }
-    return generate_masks_python(job, images_rel, error);
+    return generate_masks_python(job, images_rel, masks_rel, error);
 }
 
-bool DatasetPrep::generate_masks_builtin(const PrepJob& job,
+bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in,
                                          const std::string& images,
+                                         const std::string& masks,
                                          std::string& error) {
 #ifndef SSPLAT_BUILD_SAM
-    (void)job; (void)images;
+    (void)job; (void)in; (void)images; (void)masks;
     error = backends().masking_reason;
     return false;
 #else
@@ -548,19 +697,21 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job,
     // the object forward there is nothing to propagate, and the input in that
     // case is an ordered capture (this path also masks frames that ffmpeg
     // extracted, which is where a clicked object usually arrives).
-    mo.video = !job.mask_clicks.empty();
+    const bool clicks_here = clicks_apply_to(job, in);
+    mo.video = clicks_here && !job.mask_clicks.empty();
     // For a folder of photos the preview counted the same files in the same
     // order, so a click's frame index is exact. For frames ffmpeg extracted it
     // is not -- the preview measured against the video and ffmpeg resampled it
     // to a different rate -- and the fraction through the capture is the part
     // that survives, so the index is recomputed from it here.
-    mo.seeds = seeds_from_clicks(job.mask_clicks,
-                                 job.is_video ? (int64_t)files.size() : 0);
+    if (clicks_here)
+        mo.seeds = seeds_from_clicks(job.mask_clicks,
+                                     in.is_video ? (int64_t)files.size() : 0);
 
     sam::Masker masker;
     if (!masker.init(mo, error)) return false;
 
-    const fs::path mask_root = fs::path(job.workspace) / "masks";
+    const fs::path mask_root(masks);
     fs::create_directories(mask_root, ec);
     const fs::path image_root(images);
 
@@ -616,6 +767,7 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job,
 // than its exit code.
 bool DatasetPrep::generate_masks_python(const PrepJob& job,
                                         const std::string& images_rel,
+                                        const std::string& masks_rel,
                                         std::string& error) {
     _stage("Generating masks (external Python)");
     if (!command_exists(job.python_exe)) {
@@ -637,7 +789,7 @@ bool DatasetPrep::generate_masks_python(const PrepJob& job,
         job.python_exe, script.string(), ws.string(),
         "--prompt", job.mask_prompt,
         "--images", images_rel,
-        "--masks", "masks",
+        "--masks", masks_rel,
         "--max_image_size", std::to_string(job.mask_max_image_size),
         "--model", job.mask_model_name,
     };
@@ -662,8 +814,8 @@ bool DatasetPrep::generate_masks_python(const PrepJob& job,
     if (rc == kCancelled) { error = "cancelled"; return false; }
 
     std::error_code ec;
-    const bool have_masks = fs::is_directory(ws / "masks", ec) &&
-                            !fs::is_empty(ws / "masks", ec);
+    const bool have_masks = fs::is_directory(ws / masks_rel, ec) &&
+                            !fs::is_empty(ws / masks_rel, ec);
     if (!install_hint.empty() || rc != 0 || !have_masks) {
         error = "Mask generation failed";
         if (!install_hint.empty())

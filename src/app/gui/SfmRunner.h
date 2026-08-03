@@ -65,10 +65,16 @@ struct SfmJob {
     int camera_mode = 1;              // 0 single, 1 per folder, 2 per image
     int pairs = 0;                    // 0 auto, 1 exhaustive, 2 sequential, 3 prefilter
     int overlap = 10;                 // sequential neighbours
+    // Sequential pairing only: also match the pairs GPU pair selection finds,
+    // so a capture that comes back on itself links across the seam instead of
+    // breaking into one model per unbroken run of frames.
+    bool loop_closure = true;
     float init_focal_px = 0.0f;       // 0 = guess from EXIF / image size
     int max_features = 0;             // 0 = the quality preset's
     int max_image_size = 0;           // 0 = the quality preset's
-    int mapper = 0;                   // 0 auto, 1 flat, 2 bottom-up
+    // 0 flat, 1 bottom-up. Flat for every capture, whatever its size: there is
+    // no automatic switch, here or in `ssplat sfm`.
+    int mapper = 0;
     // 0 SIFT, 1 ALIKED-n16rot, 2 ALIKED-n32. The learned ones fetch a
     // checkpoint on first use and run on their own resolution ladder, so the
     // quality preset means something different for each -- which is why this
@@ -120,6 +126,10 @@ private:
     void set_stage_if_new(const char* s);
     // Reads one ssplat-sfm output line for a progress fraction.
     void note_progress(const std::string& line);
+    // Per-input `--camera-model DIR=MODEL` / `--focal DIR=PX`, resolved against
+    // the frames that now exist.
+    void append_camera_overrides(const SfmJob& job, const PrepResult& prep,
+                                 std::vector<std::string>& argv);
 
     std::thread _worker;
     std::atomic<State> _state{State::Idle};

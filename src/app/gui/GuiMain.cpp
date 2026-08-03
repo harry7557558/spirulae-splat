@@ -12,6 +12,8 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -93,15 +95,26 @@ int ssplat_gui_main(int argc, char** argv) {
         gui::GuiApp app;
         // Drag-and-drop onto the window: auto-detect dataset folder / photo
         // folder / video file (fires on the main thread via glfwPollEvents).
+        // The whole drop is handed over at once -- several videos dropped
+        // together are the inputs of one dataset, not four separate answers.
         glfwSetWindowUserPointer(window, &app);
         glfwSetDropCallback(window, [](GLFWwindow* w, int count,
                                        const char** paths) {
             auto* a = (gui::GuiApp*)glfwGetWindowUserPointer(w);
-            if (a && count > 0 && paths && paths[0]) a->handle_drop(paths[0]);
+            if (!a || !paths) return;
+            std::vector<std::string> dropped;
+            for (int i = 0; i < count; i++)
+                if (paths[i] && paths[i][0]) dropped.push_back(paths[i]);
+            if (!dropped.empty()) a->handle_drop(dropped);
         });
-        // `ssplat-gui <path>` -- the same auto-detection as a drop, so a
+        // `ssplat-gui <path>...` -- the same auto-detection as a drop, so a
         // desktop "Open with" or a shell alias lands on the right screen.
-        if (argc > 1 && argv[1] && argv[1][0]) app.handle_drop(argv[1]);
+        {
+            std::vector<std::string> args;
+            for (int i = 1; i < argc; i++)
+                if (argv[i] && argv[i][0]) args.push_back(argv[i]);
+            if (!args.empty()) app.handle_drop(args);
+        }
         while (!app.wants_exit()) {
             glfwPollEvents();
             if (glfwWindowShouldClose(window)) {

@@ -277,8 +277,7 @@ void ColmapRunner::run(ColmapJob job) {
         PrepResult prep;
         {
             PrepJob pj;
-            pj.input_path = job.input_path;
-            pj.is_video = job.is_video;
+            pj.inputs = job.inputs;
             pj.workspace = job.workspace;
             pj.resume = job.resume;
             pj.video_fps = job.video_fps;
@@ -306,8 +305,9 @@ void ColmapRunner::run(ColmapJob job) {
         const std::string image_dir_cfg = prep.image_dir_cfg;
         const int n_images = prep.n_images;
         const bool have_masks = !prep.mask_dir.empty();
-        if (prep.multi_track && job.camera_mode == 0) {
-            log("Multi-track video: switching to one camera per folder");
+        if (prep.per_folder_cameras && job.camera_mode == 0) {
+            log("images/ holds one folder per camera: switching to one camera "
+                "per folder");
             job.camera_mode = 1;
         }
 
@@ -397,9 +397,11 @@ void ColmapRunner::run(ColmapJob job) {
         // video / exhaustive for photos; stale configs fall back the same
         // way). The vocabulary tree (matcher + sequential loop detection)
         // indexes SIFT descriptors only.
+        bool any_video = false;
+        for (const PrepInput& in : job.inputs) any_video = any_video || in.is_video;
         int matcher = job.matcher;
         if (matcher < 1 || matcher > 3)
-            matcher = job.is_video ? 2 : (n_images <= 400 ? 1 : 3);
+            matcher = any_video ? 2 : (n_images <= 400 ? 1 : 3);
         std::string match_type;   // FeatureMatching.type ("" = COLMAP default)
         if (aliked)
             match_type = job.lightglue ? "ALIKED_LIGHTGLUE" : "ALIKED_BRUTEFORCE";
@@ -669,7 +671,7 @@ void ColmapRunner::run(ColmapJob job) {
         // in-memory for the immediate open; on later re-opens the parser
         // default applies (video datasets use images/ anyway) and photo-in-
         // place datasets need data.image_dir set in the dataparser options.
-        if (!job.is_video)
+        if (reads_photos_in_place(job.inputs))
             log("Note: images are referenced in place; when re-opening this "
                 "dataset later, set image_dir to " + image_dir_cfg +
                 " under the dataset-parsing options");

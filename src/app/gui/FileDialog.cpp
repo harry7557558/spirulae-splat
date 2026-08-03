@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 
@@ -35,9 +36,10 @@ std::string lower(std::string s) {
 
 void FileDialog::open(const std::string& title, Mode mode,
                       const std::vector<std::string>& extensions,
-                      const std::string& start_dir) {
+                      const std::string& start_dir, bool multi_select) {
     _title = title;
     _mode = mode;
+    _multi = multi_select && mode == Mode::File;
     _extensions = extensions;
     std::error_code ec;
     if (!start_dir.empty() && fs::is_directory(start_dir, ec))
@@ -46,8 +48,25 @@ void FileDialog::open(const std::string& title, Mode mode,
         _cwd = home_dir();
     _selected.clear();
     _result.clear();
+    _results.clear();
     _want_open = true;
     refresh();
+}
+
+bool FileDialog::is_selected(const std::string& name) const {
+    return std::find(_selected.begin(), _selected.end(), name) != _selected.end();
+}
+
+// Multi-select toggles, because a modifier key is not discoverable and the
+// listing is the only place the selection is visible. Single-select replaces.
+void FileDialog::toggle(const std::string& name) {
+    if (!_multi) {
+        _selected.assign(1, name);
+        return;
+    }
+    auto it = std::find(_selected.begin(), _selected.end(), name);
+    if (it == _selected.end()) _selected.push_back(name);
+    else _selected.erase(it);
 }
 
 void FileDialog::refresh() {
@@ -128,7 +147,7 @@ bool FileDialog::draw() {
                 _selected.clear();
                 refresh();
             } else if (_mode == Mode::File && fs::is_regular_file(_path_edit, ec)) {
-                _result = fs::absolute(_path_edit, ec).string();
+                _results.assign(1, fs::absolute(_path_edit, ec).string());
                 confirmed = true;
             }
         }
@@ -137,11 +156,13 @@ bool FileDialog::draw() {
         float footer = ImGui::GetFrameHeightWithSpacing() + 8;
         if (ImGui::BeginChild("##list", ImVec2(0, -footer), ImGuiChildFlags_Borders)) {
             for (const auto& e : _entries) {
-                std::string label = (e.is_dir ? "[+] " : "     ") + e.name;
-                bool sel = (_selected == e.name);
+                const bool sel = is_selected(e.name);
+                std::string label = e.is_dir ? "[+] " : (_multi && sel ? "[x] " : "     ");
+                label += e.name;
                 if (ImGui::Selectable(label.c_str(), sel,
                                       ImGuiSelectableFlags_AllowDoubleClick)) {
-                    _selected = e.name;
+                    if (e.is_dir) _selected.assign(1, e.name);
+                    else toggle(e.name);
                     if (ImGui::IsMouseDoubleClicked(0)) {
                         fs::path full = fs::path(_cwd) / e.name;
                         if (e.is_dir) {
@@ -151,7 +172,7 @@ bool FileDialog::draw() {
                             break;   // _entries invalidated
                         }
                         if (_mode == Mode::File) {
-                            _result = full.string();
+                            _results.assign(1, full.string());
                             confirmed = true;
                         }
                     }
@@ -165,27 +186,40 @@ bool FileDialog::draw() {
         if (_mode == Mode::Folder) {
             if (have_sel) {
                 if (ImGui::Button("Select Highlighted Folder")) {
-                    _result = (fs::path(_cwd) / _selected).string();
+                    _results.assign(1, (fs::path(_cwd) / _selected[0]).string());
                     confirmed = true;
                 }
                 ImGui::SameLine();
             }
             if (ImGui::Button("Use This Folder")) {
-                _result = _cwd;
+                _results.assign(1, _cwd);
                 confirmed = true;
             }
         } else {
+            char label[64] = "Select File";
+            if (_multi && _selected.size() > 1)
+                std::snprintf(label, sizeof label, "Select %d Files",
+                              (int)_selected.size());
             ImGui::BeginDisabled(!have_sel);
-            if (ImGui::Button("Select File") && have_sel) {
-                _result = (fs::path(_cwd) / _selected).string();
+            if (ImGui::Button(label) && have_sel) {
+                _results.clear();
+                for (const std::string& name : _selected)
+                    _results.push_back((fs::path(_cwd) / name).string());
                 confirmed = true;
             }
             ImGui::EndDisabled();
+            if (_multi) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(click several to add them all)");
+            }
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) _is_open = false;
 
-        if (confirmed) _is_open = false;
+        if (confirmed) {
+            _result = _results.empty() ? "" : _results[0];
+            _is_open = false;
+        }
         if (!_is_open) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }

@@ -88,10 +88,6 @@ struct BottomUpOptions {
     PartitionOptions partition{48, 12, 16};
     // How the atoms themselves are built, and on how many threads.
     AtomOptions atom;
-    // Below this many images the flat mapper is both faster and better: the
-    // whole-model passes this exists to shrink are already small, and cutting a
-    // capture that reconstructs in one piece only creates seams to repair.
-    size_t min_images = 300;
     // One joint bundle adjustment over every atom, with intrinsics shared per
     // camera group, before any merging. This is the solve the loose per-atom
     // cadence is traded for: the same work as hundreds of small problems, in

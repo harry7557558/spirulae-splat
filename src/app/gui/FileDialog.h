@@ -16,29 +16,39 @@ public:
     // Arm the dialog; it opens on the next draw() call. `extensions` filters
     // File mode (lowercase, with dot, e.g. {".mp4", ".mov"}); empty = all
     // files. `start_dir` = initial directory ("" = last used / home).
+    // `multi_select` (File mode only) lets several files come back at once --
+    // a dataset can be built from several video clips.
     void open(const std::string& title, Mode mode,
               const std::vector<std::string>& extensions = {},
-              const std::string& start_dir = "");
+              const std::string& start_dir = "", bool multi_select = false);
 
     // Draw the modal if open. Returns true exactly once when the user
-    // confirmed a selection; the picked path is in result().
+    // confirmed a selection; the picked paths are in results(), the first of
+    // them in result().
     bool draw();
 
     const std::string& result() const { return _result; }
+    const std::vector<std::string>& results() const { return _results; }
 
 private:
     void refresh();
+    bool is_selected(const std::string& name) const;
+    void toggle(const std::string& name);
 
     struct Entry { std::string name; bool is_dir = false; };
 
     std::string _title = "Select";
     Mode _mode = Mode::Folder;
+    bool _multi = false;
     std::vector<std::string> _extensions;
     std::string _cwd;
     std::string _path_edit;          // editable path bar
     std::vector<Entry> _entries;
-    std::string _selected;           // basename of the selected entry
-    std::string _result;
+    // Basenames of the highlighted entries, in the order they were clicked.
+    // Single-select keeps at most one.
+    std::vector<std::string> _selected;
+    std::string _result;             // _results[0], or "" -- the common case
+    std::vector<std::string> _results;
     bool _want_open = false;
     bool _is_open = false;
 };

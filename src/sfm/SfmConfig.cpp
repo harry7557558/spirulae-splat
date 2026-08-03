@@ -353,6 +353,9 @@ std::string applyPresets(SfmConfig& cfg, const std::set<std::string>& seen,
     if (cfg.data_type == "individual") {
         // Nothing: the defaults are written for a set of individual photos.
     } else if (cfg.data_type == "video") {
+        // Only binding below `auto`'s 100-image cutoff: cmdAuto retires it for
+        // pair selection above that, because a capture that long revisits
+        // places a temporal window cannot pair (see the comment there).
         presetSet(seen, moved, "pairs", cfg.pairs, std::string("sequential"));
         // COLMAP ModifyForVideoData: consecutive frames subtend far less angle,
         // so the seed pair cannot be held to the photo-collection threshold.

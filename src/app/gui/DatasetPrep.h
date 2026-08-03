@@ -53,9 +53,30 @@ struct MaskClick {
     float position = 0.0f;      // 0..1 through the capture
 };
 
-struct PrepJob {
-    std::string input_path;          // photo folder, or a video file
+// One thing the user picked: a video file, or a folder of photos. A job holds
+// a list of them, because a capture is often shot as several clips, or on a rig
+// whose lenses each write their own file -- and those only reconstruct together
+// if they end up in one image tree.
+struct PrepInput {
+    std::string path;                // video file, or a folder of photos
     bool is_video = false;
+    // Where this input's images land, relative to the dataset's images/. Empty
+    // means images/ itself, which is what a lone input gets so a one-video
+    // dataset keeps the layout it has always had. A multi-track video (an
+    // Insta360 .insv carries two fisheye streams) adds cam0/, cam1/ ... below.
+    std::string subdir;
+    // The lens these images were shot with, and where its focal length starts.
+    // Preparation reads neither -- they are here because this list is the one
+    // place the inputs are enumerated, and the reconstruction has to be told
+    // which folder each setting describes (SfmRunner turns them into
+    // `--camera-model DIR=MODEL` / `--focal DIR=PX`). An empty model means the
+    // job's dataset-wide one; a factor of 0 means no focal prior.
+    std::string camera_model;
+    float focal_factor = 0.0f;       // fx = fy = factor * image width
+};
+
+struct PrepJob {
+    std::vector<PrepInput> inputs;   // in the order the user added them
     std::string workspace;           // output dataset dir (created)
     bool resume = true;              // reuse what a previous run completed
 
@@ -75,6 +96,12 @@ struct PrepJob {
     // Clicked objects. The only way to prompt a SAM 2 checkpoint, and usable
     // alongside a text prompt on a SAM 3 one.
     std::vector<MaskClick> mask_clicks;
+    // Which input they were drawn on ("" = the only one). A click is a point on
+    // a frame of one capture; carrying it into a second video would prompt the
+    // model with whatever happens to be at those coordinates there, which is
+    // the bug that looks like a working feature. Inputs it does not name are
+    // masked from the text prompt alone, or skipped when there is none.
+    std::string mask_clicks_source;
 
     // Built-in: a checkpoint file (ModelCache resolves it). External: the
     // model name scripts/mask.py understands.
@@ -84,12 +111,20 @@ struct PrepJob {
     std::string python_exe = "python3";
 };
 
+// The one case where images are read where they are instead of being gathered
+// into the dataset's own images/ (see DatasetPrep::run): one folder of photos.
+inline bool reads_photos_in_place(const std::vector<PrepInput>& inputs) {
+    return inputs.size() == 1 && !inputs[0].is_video;
+}
+
 struct PrepResult {
     std::string image_dir;           // absolute; what SfM should index
     std::string image_dir_cfg;       // what the trainer's image_dir should be
     std::string mask_dir;            // "" when there are no masks
     int  n_images = 0;
-    bool multi_track = false;        // one camera per folder is required
+    // images/ came out holding one sub-folder per camera -- several inputs, or
+    // a multi-track video -- so intrinsics must not be shared across them.
+    bool per_folder_cameras = false;
 };
 
 // What this build, on this machine, can do without an external tool.
@@ -115,6 +150,12 @@ const Backends& backends();
 inline constexpr int kNumVideoExtensions = 12;
 extern const char* const kVideoExtensions[kNumVideoExtensions];
 
+// Does this path name one of them? (Extension only; the file need not exist.)
+bool is_video_path(const std::string& path);
+// A dual-fisheye Insta360 file: two video tracks, one per lens, and a lens the
+// default camera model does not fit.
+bool is_dual_fisheye_path(const std::string& path);
+
 class DatasetPrep {
 public:
     using LogFn   = std::function<void(const std::string&)>;
@@ -132,17 +173,35 @@ public:
     static bool first_image_dims(const std::string& dir, int& w, int& h);
 
 private:
-    bool extract_video(const PrepJob& job, PrepResult& out, std::string& error);
-    bool extract_video_builtin(const PrepJob& job, PrepResult& out,
-                               std::string& error);
-    bool extract_video_ffmpeg(const PrepJob& job, PrepResult& out,
+    // One input's frames. `images` / `masks` are that input's own folders
+    // (images/<subdir>, masks/<subdir>); `masked` comes back true when the
+    // frames were masked on the way out of the decoder, which is the pass that
+    // never has to read them back.
+    bool extract_video(const PrepJob& job, const PrepInput& in,
+                       const std::string& images, const std::string& masks,
+                       PrepResult& out, bool& masked, std::string& error);
+    bool extract_video_builtin(const PrepJob& job, const PrepInput& in,
+                               const std::string& images, const std::string& masks,
+                               PrepResult& out, bool& masked, std::string& error);
+    bool extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
+                              const std::string& images, PrepResult& out,
                               std::string& error);
-    bool generate_masks(const PrepJob& job, const std::string& images,
-                        const std::string& images_rel, std::string& error);
-    bool generate_masks_builtin(const PrepJob& job, const std::string& images,
+    // Photos into the dataset's own images/<subdir>, when they cannot simply be
+    // read where they are (see run()).
+    bool gather_photos(const PrepJob& job, const PrepInput& in,
+                       const std::string& images, std::string& error);
+    // Masks for ONE input's images. Run per input rather than over the whole
+    // tree so the tracker's memory bank never crosses from one capture into the
+    // next, and so clicks reach only the input they were drawn on.
+    bool generate_masks(const PrepJob& job, const PrepInput& in,
+                        const std::string& images, const std::string& images_rel,
+                        const std::string& masks, const std::string& masks_rel,
+                        std::string& error);
+    bool generate_masks_builtin(const PrepJob& job, const PrepInput& in,
+                                const std::string& images, const std::string& masks,
                                 std::string& error);
     bool generate_masks_python(const PrepJob& job, const std::string& images_rel,
-                               std::string& error);
+                               const std::string& masks_rel, std::string& error);
     int exec(const std::vector<std::string>& argv);
 
     LogFn _log;

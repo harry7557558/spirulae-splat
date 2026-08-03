@@ -69,10 +69,20 @@ struct SfmConfig {
     // flag always wins; see applyPresets().
     std::string quality = "high";
     std::string data_type = "individual";
-    // "auto" resolves at run time: sequential for video, exhaustive below 100
-    // images, prefilter at or above. `match` reads it as exhaustive.
+    // "auto" resolves at run time: prefilter at 100 images or more, sequential
+    // for video below that, exhaustive otherwise. `match` reads it as
+    // exhaustive (it has not counted the images).
     std::string pairs = "auto";
     int overlap = 10;
+    // Sequential pairing is a chain: image i with the next `overlap`. A capture
+    // that walks around a subject and comes back has no link across the seam,
+    // so one weak step anywhere breaks the reconstruction into pieces (a
+    // 262-frame walk around a plaza came out as four models). This adds the
+    // pair-selection shortlist -- the same content-based scoring `--pairs
+    // prefilter` uses -- on top of the temporal window, which is what COLMAP's
+    // SequentialMatching.loop_detection does with a vocabulary tree.
+    // Sequential only; the other modes already consider every pair.
+    bool loop_closure = true;
 
     // The one geometric tolerance, in extraction pixels (D47): the two-view
     // verifier's inlier radius and the mapper's reprojection cap are the same
@@ -145,10 +155,13 @@ struct SfmConfig {
     AssembleOptions assemble;
     // How the mapper is scheduled: "flat" is one incremental reconstruction of
     // the whole capture, "bottom-up" reconstructs small atoms of the view graph
-    // and merges them upwards (D57), and "auto" picks bottom-up at or above
-    // bup.min_images, where the flat schedule's whole-model passes start to
-    // dominate. "hierarchical" is accepted as the old name for "bottom-up".
-    // Flat until the bottom-up schedule has been measured on enough captures.
+    // and merges them upwards (D57). "hierarchical" is accepted as the old name
+    // for "bottom-up".
+    //
+    // Flat whatever the capture is, and there is deliberately no size-based
+    // switch: bottom-up has not been measured on enough captures to pick it for
+    // a user, and a schedule that changes under you at some image count makes
+    // every comparison between two runs a question about which one ran.
     std::string mapper_mode = "flat";
 
     // Fan the pipeline knobs out into the structs above and validate what the
@@ -191,10 +204,13 @@ struct SfmConfig {
       "What the capture is: individual photos, video frames, or an unordered internet collection")  \
     F(pairs, "pairs", CMD_AUTO | CMD_MATCH, Tier::Basic, "pipeline", 0, 0,                          \
       "auto|exhaustive|sequential|prefilter",                                                       \
-      "Which image pairs are matched; auto is sequential for video, exhaustive below 100 images "   \
-      "and GPU pair selection at or above")                                                         \
+      "Which image pairs are matched; auto is GPU pair selection at 100 images or more, "           \
+      "sequential (plus loop closure) for video below that, and exhaustive otherwise")              \
     F(overlap, "overlap", CMD_AUTO | CMD_MATCH, Tier::Advanced, "pipeline", 1, 1000000, "",         \
       "Neighbours each image is paired with under --pairs sequential")                              \
+    F(loop_closure, "loop-closure", CMD_AUTO | CMD_MATCH, Tier::Advanced, "pipeline", 0, 0, "",     \
+      "Under --pairs sequential, also match the content-similar pairs GPU pair selection finds, "   \
+      "so a capture that revisits a place links back to it")                                        \
     F(max_error, "max-error", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "pipeline",           \
       0.1, 100, "",                                                                                 \
       "Inlier radius for verification and mapping, in pixels of the image SIFT ran on rather "      \
@@ -341,11 +357,9 @@ struct SfmConfig {
     F(mapper.seed_blocking, "seed-blocking", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,    \
       "", "A seed retry starts somewhere no earlier attempt reached, instead of rebuilding it")     \
     F(mapper_mode, "mapper", CMD_AUTO | CMD_MAP, Tier::Basic, "mapper", 0, 0,                       \
-      "auto|flat|bottom-up",                                                                        \
+      "flat|bottom-up",                                                                             \
       "One incremental reconstruction of the whole capture, or small atoms of the view graph "      \
-      "reconstructed separately and merged upwards; auto picks the latter for a large capture")     \
-    F(bup.min_images, "bup-min-images", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",               \
-      2, 1000000, "", "Images at or above which --mapper auto goes bottom-up")                      \
+      "reconstructed separately and merged upwards")                                                \
     F(bup.partition.leaf_max_images, "bup-atom-size", CMD_AUTO | CMD_MAP, Tier::Advanced,           \
       "mapper", 8, 100000, "", "Images a view-graph atom is split until it is under")               \
     F(bup.partition.overlap, "bup-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",           \
