@@ -60,6 +60,8 @@ struct MaskOptions {
     int   max_size = 1600;
     int   img_size = 0;
     bool  validate = false;
+    // Per-kernel GPU timestamps; see sam::ModelParams::profile.
+    bool  profile = false;
 };
 
 // "person; car;  bicycle" -> {"person", "car", "bicycle"}. Blank entries drop.

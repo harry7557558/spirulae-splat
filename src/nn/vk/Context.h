@@ -15,8 +15,13 @@
 //                                  breaks any `tid / WaveGetLaneCount()`
 //                                  indexing)
 //   VK_KHR_video_decode_queue      video/ decoder; absent -> descriptive error
-//   shaderFloat16 / 16-bit storage NOT required: fp16 weights are read as
-//                                  packed uint words (see AGENTS.md).
+//   VK_KHR_cooperative_matrix      tensor cores for the fp16 GEMM; absent ->
+//                                  the fp32 kernels run unchanged
+//   shaderFloat16 / 16-bit storage NOT required by the fp32 kernels: fp16
+//                                  weights are read as packed uint words (see
+//                                  AGENTS.md). The cooperative-matrix path does
+//                                  need them, and is enabled only when it can
+//                                  have all of them at once.
 
 #include <vulkan/vulkan.h>
 
@@ -59,6 +64,14 @@ public:
     // Releases the device. Every buffer, pipeline and pool must already be
     // gone; call only at shutdown.
     static void     shutdown();
+    // 0 before the first get(), then bumped on every context creation.
+    // shutdown() is not the end of the process -- the GUI hands the GPU back
+    // between jobs and creates a second context later -- so anything that
+    // caches device-derived state for the life of the process (an extension
+    // entry-point table, above all) must compare against this and re-resolve
+    // when it changes. A table resolved from the previous device points at
+    // loader trampolines that are gone; calling one segfaults.
+    static uint64_t generation();
 
     VkInstance         instance()      const { return instance_; }
     VkPhysicalDevice   physical()      const { return physical_; }
@@ -76,6 +89,17 @@ public:
     uint32_t maxPushConstantsSize()   const { return limits_.maxPushConstantsSize; }
     bool     profiling()              const { return profiling_; }
     float    timestampPeriod()        const { return limits_.timestampPeriod; }
+
+    // Cooperative matrix (tensor cores), resolved at device creation. Exactly
+    // one configuration is ever used -- 16x16x16, fp16 operands, fp32
+    // accumulate, subgroup scope -- so this is a flag and not a table: a kernel
+    // written against a shape the device does not advertise would fail to
+    // compile in the driver, not degrade. `coopMatReason()` says why it is off,
+    // which is the first thing to look at when a machine is unexpectedly slow.
+    //
+    // $SSPLAT_NN_COOPMAT=0 forces it off, for bisecting a numerical difference.
+    bool               hasCoopMat()    const { return coopmat_; }
+    const std::string& coopMatReason() const { return coopmat_reason_; }
 
     // Video decode support, resolved at device creation. `videoQueueFamily()`
     // is UINT32_MAX when unavailable; `videoUnavailableReason()` then explains
@@ -122,6 +146,9 @@ private:
     bool     subgroup_size_control_ = false;
     uint32_t preferred_subgroup_ = 32;
     bool     profiling_ = false;
+
+    bool        coopmat_ = false;
+    std::string coopmat_reason_ = "not probed";
 };
 
 }  // namespace vk

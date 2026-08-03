@@ -4,6 +4,7 @@
 #include "nn/core/Log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -204,6 +205,42 @@ bool envFlag(const char* name) {
     return v && v[0] && std::strcmp(v, "0") != 0;
 }
 
+// Same, for a knob that is on unless explicitly switched off.
+bool envFlagDefaultOn(const char* name) {
+    const char* v = std::getenv(name);
+    return !v || !v[0] || std::strcmp(v, "0") != 0;
+}
+
+#ifdef VK_KHR_cooperative_matrix
+// Does the device advertise the one cooperative-matrix shape the fp16 GEMM is
+// written against? 16x16x16 with fp16 operands and an fp32 accumulator, at
+// subgroup scope. fp16 accumulate is deliberately not accepted as a substitute:
+// it would change the numerics of every Linear in the model to buy a few
+// registers, and the accumulator is not where the arithmetic is.
+bool hasCoopMatShape(VkInstance inst, VkPhysicalDevice pd) {
+    auto fn = (PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR)
+        vkGetInstanceProcAddr(inst, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR");
+    if (!fn) return false;
+    uint32_t n = 0;
+    if (fn(pd, &n, nullptr) != VK_SUCCESS || n == 0) return false;
+    std::vector<VkCooperativeMatrixPropertiesKHR> props(n);
+    for (auto& p : props) p = {VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR};
+    if (fn(pd, &n, props.data()) != VK_SUCCESS) return false;
+    for (uint32_t i = 0; i < n; ++i) {
+        const auto& p = props[i];
+        if (p.MSize == 16 && p.NSize == 16 && p.KSize == 16 &&
+            p.AType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+            p.BType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+            p.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
+            p.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
+            p.saturatingAccumulation == VK_FALSE &&
+            p.scope == VK_SCOPE_SUBGROUP_KHR)
+            return true;
+    }
+    return false;
+}
+#endif
+
 std::string lower(std::string s) {
     for (auto& c : s) c = (char)std::tolower((unsigned char)c);
     return s;
@@ -233,15 +270,21 @@ std::vector<DeviceInfo> enumerate_devices() {
 // ================
 
 namespace {
-Context*   g_ctx = nullptr;
-std::mutex g_ctx_mu;
+Context*              g_ctx = nullptr;
+std::mutex            g_ctx_mu;
+std::atomic<uint64_t> g_generation{0};
 }  // namespace
 
 bool Context::initialized() { return g_ctx != nullptr; }
 
+uint64_t Context::generation() { return g_generation.load(std::memory_order_acquire); }
+
 Context& Context::get(const ContextOptions& opts) {
     std::lock_guard<std::mutex> lock(g_ctx_mu);
     if (!g_ctx) {
+        // Bumped before init() so that anything resolving entry points from
+        // inside device creation caches them against the right generation.
+        g_generation.fetch_add(1, std::memory_order_release);
         g_ctx = new Context();
         g_ctx->init(opts);
     }
@@ -385,8 +428,78 @@ void Context::createDevice(const ContextOptions& opts) {
 
     std::vector<const char*> exts;
     subgroup_size_control_ = has(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
-    if (subgroup_size_control_)
+    if (subgroup_size_control_) {
         exts.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+        VkPhysicalDeviceSubgroupSizeControlPropertiesEXT sp{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES_EXT};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        p2.pNext = &sp;
+        vkGetPhysicalDeviceProperties2(physical_, &p2);
+        // Pin the widest size the device offers that our 64-wide-X kernels can
+        // still fill; Intel/ANV's varying width is the failure this avoids.
+        preferred_subgroup_ = std::min<uint32_t>(sp.maxSubgroupSize, 64u);
+        preferred_subgroup_ = std::max<uint32_t>(preferred_subgroup_, sp.minSubgroupSize);
+        NN_LOG_DEBUG("[vk] subgroup size pinned to %u (range %u..%u)\n",
+                     preferred_subgroup_, sp.minSubgroupSize, sp.maxSubgroupSize);
+    }
+
+    // ---- cooperative matrix ---------------------------------------------
+    // Everything the fp16 GEMM's tensor-core path needs, resolved to one flag.
+    // The kernels that use it live in their own SPIR-V module: a module
+    // declaring CooperativeMatrixKHR must never be handed to a device without
+    // it, and Pipelines only creates a VkShaderModule when an entry from that
+    // module is first acquired -- so leaving the flag false is enough to keep
+    // the capability off the device entirely.
+#ifdef VK_KHR_cooperative_matrix
+    if (!envFlagDefaultOn("SSPLAT_NN_COOPMAT")) {
+        coopmat_reason_ = "disabled by SSPLAT_NN_COOPMAT=0";
+    } else if (!has(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME)) {
+        coopmat_reason_ = "driver does not expose VK_KHR_cooperative_matrix";
+    } else {
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR pcm{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+        VkPhysicalDeviceVulkan12Features p12{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        pcm.pNext = &p12;
+        VkPhysicalDeviceFeatures2 pf2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        pf2.pNext = &pcm;
+        vkGetPhysicalDeviceFeatures2(physical_, &pf2);
+
+        VkPhysicalDeviceCooperativeMatrixPropertiesKHR pcmp{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_PROPERTIES_KHR};
+        VkPhysicalDeviceProperties2 pp2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        pp2.pNext = &pcmp;
+        vkGetPhysicalDeviceProperties2(physical_, &pp2);
+
+        // Reported in the order the shader would trip over them.
+        if (!pcm.cooperativeMatrix)
+            coopmat_reason_ = "cooperativeMatrix feature not supported";
+        else if (!(pcmp.cooperativeMatrixSupportedStages & VK_SHADER_STAGE_COMPUTE_BIT))
+            coopmat_reason_ = "cooperative matrix is not supported in compute shaders";
+        else if (!p12.shaderFloat16)
+            coopmat_reason_ = "no shaderFloat16";
+        else if (!p12.vulkanMemoryModel || !p12.vulkanMemoryModelDeviceScope)
+            coopmat_reason_ = "no vulkanMemoryModel (device scope)";
+        else if (!subgroup_size_control_)
+            coopmat_reason_ = "no VK_EXT_subgroup_size_control, so the subgroup "
+                              "width the kernel tiles against cannot be pinned";
+        else if (preferred_subgroup_ != 32 && preferred_subgroup_ != 64)
+            coopmat_reason_ = "subgroup width is neither 32 nor 64";
+        else if (!hasCoopMatShape(instance_, physical_))
+            coopmat_reason_ = "no 16x16x16 fp16 shape with an fp32 accumulator";
+        else
+            coopmat_ = true;
+
+        if (coopmat_) {
+            coopmat_reason_.clear();
+            exts.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        }
+    }
+#else
+    coopmat_reason_ = "built against Vulkan headers without VK_KHR_cooperative_matrix";
+#endif
+    NN_LOG_DEBUG("[vk] cooperative matrix: %s\n",
+                 coopmat_ ? "16x16x16 fp16/fp32" : coopmat_reason_.c_str());
 
     // ---- video decode ---------------------------------------------------
     bool want_video = opts.want_video;
@@ -465,6 +578,30 @@ void Context::createDevice(const ContextOptions& opts) {
     VkPhysicalDeviceVulkan11Features f11{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
     f11.pNext = &f12;
+
+#ifdef VK_KHR_cooperative_matrix
+    // Exactly the capability list `spirv-dis gemm_coop.spv` prints:
+    // CooperativeMatrixKHR, Float16, VulkanMemoryModel and its device scope.
+    // Requested together or not at all -- the probe above has already
+    // established the device has all of them.
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR fcm{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+    if (coopmat_) {
+        fcm.cooperativeMatrix = VK_TRUE;
+        f12.shaderFloat16 = VK_TRUE;
+        f12.vulkanMemoryModel = VK_TRUE;
+        f12.vulkanMemoryModelDeviceScope = VK_TRUE;
+    }
+#endif
+
+    // f11 -> f12 is fixed; the optional structs prepend to it.
+    void* chain = &f11;
+#ifdef VK_KHR_cooperative_matrix
+    if (coopmat_) {
+        fcm.pNext = chain;
+        chain = &fcm;
+    }
+#endif
     // Decoded pictures are multi-planar YCbCr images. We never sample them --
     // the planes are copied to buffers and unpacked in a shader -- but creating
     // an image in one of those formats is gated on this feature.
@@ -475,11 +612,12 @@ void Context::createDevice(const ContextOptions& opts) {
     if (subgroup_size_control_) {
         fsg.subgroupSizeControl = VK_TRUE;
         fsg.computeFullSubgroups = VK_TRUE;
-        fsg.pNext = &f11;
+        fsg.pNext = chain;
+        chain = &fsg;
     }
 
     VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-    f2.pNext = subgroup_size_control_ ? (void*)&fsg : (void*)&f11;
+    f2.pNext = chain;
 
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.pNext = &f2;
@@ -494,19 +632,6 @@ void Context::createDevice(const ContextOptions& opts) {
         vkGetDeviceQueue(device_, video_queue_family_,
                          video_queue_family_ == queue_family_ ? 0 : 0, &video_queue_);
 
-    if (subgroup_size_control_) {
-        VkPhysicalDeviceSubgroupSizeControlPropertiesEXT sp{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES_EXT};
-        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-        p2.pNext = &sp;
-        vkGetPhysicalDeviceProperties2(physical_, &p2);
-        // Pin the widest size the device offers that our 64-wide-X kernels can
-        // still fill; Intel/ANV's varying width is the failure this avoids.
-        preferred_subgroup_ = std::min<uint32_t>(sp.maxSubgroupSize, 64u);
-        preferred_subgroup_ = std::max<uint32_t>(preferred_subgroup_, sp.minSubgroupSize);
-        NN_LOG_DEBUG("[vk] subgroup size pinned to %u (range %u..%u)\n",
-                       preferred_subgroup_, sp.minSubgroupSize, sp.maxSubgroupSize);
-    }
 }
 
 bool Context::hasVideoCodec(VkVideoCodecOperationFlagBitsKHR op) const {

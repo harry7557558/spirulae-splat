@@ -12,7 +12,7 @@ the pybind module. It carries its own device; converging the repository's three
 Vulkan contexts onto one is `docs/notes/sfm-port-plan.md` phase 6.
 
 Runtime knobs: `SSPLAT_NN_LOG=0..3`, `SSPLAT_VK_DEVICE`, `SSPLAT_PROFILE=1`,
-`SSPLAT_VK_VALIDATION=1`, `SSPLAT_NN_DEBUG_SYNC=1`.
+`SSPLAT_VK_VALIDATION=1`, `SSPLAT_NN_DEBUG_SYNC=1`, `SSPLAT_NN_COOPMAT=0`.
 
 ## The op layer
 
@@ -49,10 +49,11 @@ more than the arithmetic.
 
 ## Kernel selection notes
 
-- **GEMM** has three kernels, picked in `OpGemm.cpp`:
+- **GEMM** has four kernels, picked in `OpGemm.cpp`:
 
   | when | kernel | tile |
   |---|---|---|
+  | cooperative matrix, fp16 weight, `M,N ≥ 128`, `N,K` ≡ 0 mod 16 | `gemm_nt_coop` | 128×128, tensor cores, fp16 operands / fp32 accumulate |
   | `M ≤ 4` | `gemm_nt_thin` | one workgroup per output element, reduce over K in registers |
   | `M ≥ 128`, `N ≥ 128`, fp16 weight | `gemm_nt_big` | 128×128, `BK`=16, 8×8 accumulators per thread |
   | otherwise | `gemm_nt` | 64×64, `BK`=16, 4×4 accumulators |
@@ -63,7 +64,16 @@ more than the arithmetic.
   checkpoint already holds, which is why it needs an fp16 weight and why an
   fp32 second operand (a matmul against another activation) falls back.
 
-- **Attention** is one 64-query × 32-key tile whatever the head dim: Q and K are
+- **Attention** has a cooperative-matrix variant too (`flash_attn_coop`),
+  selected whenever the device offers tensor cores and `head_dim` is a multiple
+  of 16 — Hiera's 96 qualifies, its 72 does not. Only `Q @ K^T` moves: the
+  second matmul rescales its accumulator by a per-query factor on every key
+  tile, and the KHR extension does not say which element of a fragment a lane
+  holds, so that rescale is not expressible. The score matrix has no such
+  problem because the softmax already reads it by (row, column) out of shared
+  memory. Everything below applies to both.
+
+  The scalar kernel is one 64-query × 32-key tile whatever the head dim: Q and K are
   staged in 16-dim chunks, so shared memory no longer scales with `head_dim`
   and the per-thread work is a 4×2 register tile of scores plus
   `4 × ceil(head_dim/16)` output accumulators. Any head dim up to 256 works; one
@@ -78,9 +88,11 @@ more than the arithmetic.
 
 ## What the kernels are actually bound by
 
-Measured on an RTX 3070 Laptop with `test_ops --bench`, which runs both kernels
-at the shapes SAM 3 uses. Worth reading before tuning either of them, because
-the two are bound by different things and the obvious lever only works on one.
+Measured with `nn_ops_test --bench`, which runs both kernels at the shapes SAM 3
+uses. The fp32 analysis below is from an RTX 3070 Laptop; the cooperative-matrix
+numbers are from an RTX 5070 Laptop, where the fp32 kernels land at 7.2–8.4
+TFLOP/s. Worth reading before tuning either of them, because the two are bound
+by different things and the obvious lever only works on one.
 
 An Ampere SM retires 128 fp32 FMAs and reads 128 bytes of shared per clock, so
 a kernel gets **one shared byte per FMA** and no more. `gemm_nt_big` is exactly
@@ -119,6 +131,52 @@ why `AttnOpts` carries an `arena` at all.
 Register prefetching and an L2-friendlier grid order were both tried on the
 GEMM and both measured flat; they are still in `gemm_nt_big` because they cost
 nothing, but do not expect them to buy anything either.
+
+### Cooperative matrix
+
+`VK_KHR_cooperative_matrix` was what both of the above ran out of road against,
+and it is now implemented in `gemm_coop.slang` and `attention_coop.slang`. What
+the measurements said, in the order they were taken, because two of the four
+steps went the wrong way:
+
+| | fp32 | coop |
+|---|---|---|
+| the multiplies alone, operands already in shared | — | **45 TFLOP/s** |
+| first working GEMM: both operands staged through shared | 8.3 | 7.7 |
+| ... with the next K block prefetched into registers | 8.3 | 8.3 |
+| ... reading W straight out of the weight matrix | 8.3 | **17.0** |
+| a 128×256 tile (16 accumulator fragments per subgroup) | 8.3 | 9.5 |
+| the same tile over 512 threads instead | 8.3 | 13.4 |
+
+The lesson is in rows two and four. Tensor cores are ~5× the fp32 pipe here, so
+a staging path that was free next to slow arithmetic is the entire cost next to
+fast arithmetic — the first version did the multiplies 5× quicker and finished
+no sooner. What removed it was noticing that the weight is *already* the operand
+the hardware wants: `W[N, K]` read column-major with stride K is exactly the
+`K × N` fragment, in exactly the fp16 the checkpoint holds, so W never touches
+shared memory at all. Only `x` needs a round trip, and only because it is fp32.
+
+Rows five and six are the usual answer to a memory-bound tile (make it bigger)
+failing: 16 accumulator fragments is 128 registers a thread before anything else
+is live, and it spills.
+
+The attention kernel takes the same treatment for `Q @ K^T` only, and gains
+less — 2.6 → 4.4 TFLOP/s on the ViT window shape, 3.1 → 3.3 on SAM 2's memory
+cross-attention with split-K. The other matmul cannot move; the module comment
+in `attention_coop.slang` says why.
+
+End to end on that laptop: SAM 3 image segmentation 168 → 123 ms, SAM 2.1 Large
+tracking 647 → 470 ms/frame, SAM 2.1 Tiny 299 → 246. On an RTX 3070 Laptop
+(Ampere) the same kernels gain less — the GEMM 5.5–7.2 → 6.2–9.8 TFLOP/s and
+attention 1.7–3.3 → 2.0–4.2 — and Tiny tracking goes 418 → 358 ms/frame. Two
+generations, 1.17x and 1.22x on the same workload, so treat the Blackwell GEMM
+row as the ceiling rather than the expectation.
+
+Masks are effectively unchanged — 3 pixels in 13 M for a twelve-frame SAM 2.1
+Tiny track, 38 in 17 M for a SAM 3 image, all on boundaries. Both kernels take
+fp16 operands with an fp32 accumulator, which is the arithmetic PyTorch runs
+these models in; `nn_ops_test` checks each path against a reference rounded the
+same way, so the tolerances stay tight rather than being widened to absorb it.
 - **Convolution** is chunked im2col + GEMM, not a bespoke kernel. A full im2col
   of the seg head's 288×288×256 3×3 conv would be 764 MiB, so the output
   positions are chunked to keep the column buffer near 32 MiB. Depthwise is
@@ -132,7 +190,9 @@ These are load-bearing; see `src/vk/README.md` for the device baseline.
 
 1. Workgroup **X** must be a multiple of every plausible subgroup size. 2-D
    kernels use flat 64/128/256-wide X and decode `(x, y)` in-shader.
-2. Shared memory budget is **16 KiB**, the Vulkan floor.
+2. Shared memory budget is **16 KiB**, the Vulkan floor. This applies to the
+   cooperative-matrix kernels too — they are 14.0 and 15.3 KiB — even though no
+   device that advertises tensor cores has less than 64.
 3. Never leave a params pointer field null if a shader may load through it —
    CPU Vulkan implementations speculate loads across branches. Use
    `vk::or_fallback()`.

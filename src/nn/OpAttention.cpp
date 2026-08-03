@@ -112,8 +112,18 @@ void attention(const Tensor& out, const Tensor& q, const Tensor& k, const Tensor
                       (uint32_t)(q.dtype == DType::F16),
                       (uint32_t)(k.dtype == DType::F16), splits > 1 ? 1u : 0u};
 
+    // Tensor cores carry Q @ K^T when the head dim is a multiple of the
+    // fragment's K. Hiera runs 96 (yes) and 72 (no); everything else in both
+    // models is 16, 32, 64 or 256. attention_coop.slang says why P @ V stays on
+    // the scalar path.
+    const vk::Context& ctx = vk::Context::get();
+    const bool coop = coop_matrix_enabled() && o.head_dim % 16 == 0;
+    const char* entry = coop ? "attention_coop.flash_attn_coop" : "attention.flash_attn";
+    vk::SpecList espec = spec;
+    if (coop) espec.values[espec.count++] = 256u / ctx.preferredSubgroupSize();
+
     if (splits <= 1) {
-        vk::Stream::get().dispatch("attention.flash_attn", spec, gx, (uint32_t)o.n_heads,
+        vk::Stream::get().dispatch(entry, espec, gx, (uint32_t)o.n_heads,
                                    (uint32_t)o.batch, &p, sizeof(p));
         return;
     }
@@ -129,8 +139,8 @@ void attention(const Tensor& out, const Tensor& q, const Tensor& k, const Tensor
     p.out = part.ptr;
     p.out_stride = dim;
     p.part_ml = part_ml.ptr;
-    vk::Stream::get().dispatch("attention.flash_attn", spec, gx, (uint32_t)o.n_heads,
-                               splits, &p, sizeof(p));
+    vk::Stream::get().dispatch(entry, espec, gx, (uint32_t)o.n_heads, splits, &p,
+                               sizeof(p));
 
     CombineParams cp{};
     cp.out = out.ptr;

@@ -220,27 +220,63 @@ including a negative result on the one cheap hypothesis (more flash-decoding
 splits: flat). `VK_KHR_cooperative_matrix` is the 3–5× that is left, it is
 available on the hardware and in the toolchain, and it is a project of its own.
 
-## 7. Not done yet
+## 7. Third follow-up, 2026-08-01: tensor cores
+
+`VK_KHR_cooperative_matrix`, which the section above called the 3–5x that was
+left. It is in, behind a probe, and it is worth ~1.4x end to end rather than
+3–5x. The measurements and the two wrong turns are in `src/nn/README.md` under
+"Cooperative matrix"; the short version is that tensor cores are ~5x the fp32
+pipe here, so the staging path that was free next to slow arithmetic became the
+whole cost next to fast arithmetic, and the first two tilings measured *slower*
+than the fp32 kernel they replace. What fixed the GEMM was not tiling at all:
+the weight matrix read column-major with stride K already *is* the fragment the
+hardware wants, in the fp16 the checkpoint holds, so it never goes through
+shared memory.
+
+Attention took only half. `O = O * corr + P @ V` rescales its accumulator by a
+per-query factor on every key tile, and the KHR extension does not expose which
+element of a fragment a lane holds, so that rescale cannot be written. `Q @ K^T`
+has no such problem — the softmax already reads the scores out of shared memory
+by (row, column) — so that half moved and the rest did not.
+
+Safety: the kernels live in their own SPIR-V modules, because capabilities are
+per module and `vkCreateShaderModule` may reject a whole blob; `Pipelines`
+creates the module lazily, so a device without the extension never sees those
+words. `SSPLAT_NN_COOPMAT=0` forces the fp32 path, and `nn_ops_test` checks
+*both* paths in one process against references rounded the way each path rounds,
+so the tolerances did not have to be widened. Masks moved by 3 pixels in 13 M.
+
+Also here: SAM 2.1 Base+ and Small joined the catalog. Four sizes across ~2x in
+speed is a choice a user can actually make, and two of them are the ones most
+captures want.
+
+## 8. Not done yet
 
 1. **One Vulkan device.** Three contexts can exist in one process. The GUI
    sequences them; that is a schedule, not a guarantee. Same work as
    `sfm-port-plan.md` phase 6, and it should be done once for both.
 2. **In-process SfM** — phase 3 of the SfM port plan, which is what removes the
    stdout parsing above.
-3. **fp16 cooperative matrix** for `gemm_nt_big` and `flash_attn`, with a
-   fallback for devices that lack the extension. The largest single speedup
-   available anywhere in this subsystem; see `src/sam/README.md`, "Speed".
-4. **The preview segments a still; the run tracks.** A click shows what it
+3. **The other half of attention.** `P @ V` is still scalar, for the reason in
+   section 7. `VK_NV_cooperative_matrix2` exposes the per-element mapping and
+   would close it; a portable alternative is a two-pass softmax that finds the
+   row maximum before accumulating, at 1.5x the arithmetic. Neither has been
+   costed against the ~35% of a Hiera-T frame it would touch.
+4. **Cooperative matrix on a 64-wide subgroup is untested.** The kernels are
+   written for it and the launcher passes the subgroup count, but there is no
+   AMD or Intel Arc part here to run it on. A wrong answer would show up in
+   `nn_ops_test` immediately; a slow one would not show up at all.
+5. **The preview segments a still; the run tracks.** A click shows what it
    selects on the frame it was made on, which is honest but is not what the run
    will produce three hundred frames later. Propagating a few frames in the
    panel would close that, at a few seconds per attempt.
-5. **A photo folder with clicks is tracked, without asking.** Clicks force
+6. **A photo folder with clicks is tracked, without asking.** Clicks force
    video mode because a click means nothing on another frame without a memory
    bank to carry it — right for an ordered walk-around, wrong for an unordered
    collection. Nothing detects which one it has.
-6. **Checksums for downloaded checkpoints.** The size floor catches a truncated
+7. **Checksums for downloaded checkpoints.** The size floor catches a truncated
    file; it does not catch a corrupted one.
-7. **`scripts/mask.py` and `scripts/extract_frames.py`** are still the
+8. **`scripts/mask.py` and `scripts/extract_frames.py`** are still the
    standalone Python tools with their own users, now duplicated in kind by
    `ssplat sam`. Revisit once the native path has run on enough captures to be
    the obvious default.

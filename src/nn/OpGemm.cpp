@@ -34,6 +34,16 @@ constexpr int64_t kThinRowLimit = 4;
 // shapes. Below it the wasted quarter-tiles cost more than the ratio buys.
 constexpr int64_t kBigTileLimit = 128;
 
+// gemm_coop.slang's fixed geometry: 128 output columns per workgroup, and rows
+// = 32 * (subgroups per workgroup / 2), which is 128 at a 32-wide subgroup and
+// 64 at 64-wide.
+constexpr int64_t kCoopTileN = 128;
+
+int64_t coop_tile_m(uint32_t subgroup) { return (int64_t)(256u / subgroup / 2u) * 32; }
+
+// -1 = follow the device probe; 0/1 = forced by set_coop_matrix_enabled().
+int g_coop_override = -1;
+
 void dispatch_gemm(const Tensor& out, const Tensor& x_in, const Tensor& w_in,
                    const Tensor& bias, const Tensor& residual, Act act, float alpha,
                    int64_t x_row_stride) {
@@ -80,6 +90,38 @@ void dispatch_gemm(const Tensor& out, const Tensor& x_in, const Tensor& w_in,
                       (uint32_t)(bias.valid() ? 1 : 0),
                       (uint32_t)(residual.valid() ? 1 : 0)};
 
+    // Tensor cores, when the device has them and the shape is big enough to
+    // amortize a 128-wide column tile. Everything below this is the fp32 path,
+    // unchanged and still the only path on a device without the extension.
+    const vk::Context& ctx = vk::Context::get();
+    // N and K multiples of 16: the weight's fragments are read straight out of
+    // the matrix, and a cooperative-matrix load does no bounds checking, so a
+    // 16x16 block must lie either wholly inside W or wholly outside it.
+    //
+    // The alignment test is not paranoia about a case that happens -- every
+    // weight and every arena tensor is 256-byte aligned -- but the fragment
+    // load carries an Aligned 16 decoration, and a buffer that ever stopped
+    // being aligned would be undefined behaviour rather than a wrong answer.
+    // Falling back is always correct, so it costs nothing to check.
+    if (coop_matrix_enabled() && w.dtype == DType::F16 && N % 16 == 0 && K % 16 == 0 &&
+        M >= kBigTileLimit && N >= kBigTileLimit && w.ptr % 16 == 0) {
+        const int64_t tile_m = coop_tile_m(ctx.preferredSubgroupSize());
+        const uint32_t tm = (uint32_t)((M + tile_m - 1) / tile_m);
+        const uint32_t tn = (uint32_t)((N + kCoopTileN - 1) / kCoopTileN);
+        if (tm <= 65535 && tn <= 65535) {
+            // NOTE: a different constant list from gemm.slang's -- no
+            // kWeightF16 (always fp16 here), plus the subgroup-row count.
+            vk::SpecList cspec{(uint32_t)(x.dtype == DType::F16),
+                               (uint32_t)act,
+                               (uint32_t)(bias.valid() ? 1 : 0),
+                               (uint32_t)(residual.valid() ? 1 : 0),
+                               (uint32_t)(tile_m / 32)};
+            vk::Stream::get().dispatch("gemm_coop.gemm_nt_coop", cspec, tn, tm, 1, &p,
+                                       sizeof(p));
+            return;
+        }
+    }
+
     if (M <= kThinRowLimit) {
         // One workgroup per output element, so N alone can exceed the 65535
         // grid cap; fold it across x and y and give the row to z.
@@ -107,6 +149,17 @@ void dispatch_gemm(const Tensor& out, const Tensor& x_in, const Tensor& w_in,
 }
 
 }  // namespace
+
+bool coop_matrix_enabled() {
+    if (g_coop_override >= 0) return g_coop_override != 0;
+    return vk::Context::get().hasCoopMat();
+}
+
+void set_coop_matrix_enabled(bool on) {
+    // Asking for it where the device cannot do it would trip the driver on the
+    // module's capabilities, not degrade -- so this only ever narrows.
+    g_coop_override = (on && vk::Context::get().hasCoopMat()) ? 1 : 0;
+}
 
 void linear(const Tensor& out, const Tensor& x, const Tensor& w, const LinearOpts& o) {
     dispatch_gemm(out, x, w, o.bias, o.residual, o.act, o.alpha, o.x_row_stride);

@@ -37,6 +37,11 @@ struct ModelEntry {
     const char* family;      // "sam3" | "sam2" -- the licence unit
     uint64_t    bytes;       // expected download size, for the prompt
     bool        text_prompts;// false = clicks/boxes only (SAM 2 has no text tower)
+    // What `scripts/mask.py` calls this checkpoint. Only the Python fallback
+    // path uses it -- the built-in masker is handed a file -- but it has to name
+    // the SAME model the user picked, or a run that falls back quietly changes
+    // which network produced the masks.
+    const char* legacy_name;
 };
 
 // Ordered best-default-first; index 0 is what a fresh install preselects.

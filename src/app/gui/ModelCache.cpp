@@ -35,23 +35,41 @@ const std::vector<ModelEntry>& model_catalog() {
     // the people", it is a third the size of the f16 weights, and the
     // quantization is of the *file* -- everything is dequantized to fp16 on
     // upload, so the accuracy difference is small and the download is not.
+    //
+    // The four SAM 2.1 sizes are all here because the choice is a real one and
+    // nobody can make it from a name: they differ by ~2.5x in speed and the two
+    // in the middle are where most captures want to be. The blurbs quote the
+    // same measurement for each (one instance, 1080p frames, laptop GPU) so
+    // they can actually be compared -- see src/sam/README.md for the table.
     static const std::vector<ModelEntry> kCatalog = {
         {"sam3-q4_0", "sam3-q4_0.ggml", "SAM 3 (recommended)",
          "Understands text prompts -- type what to mask out. 707 MB, ~2 GB "
-         "VRAM, roughly 1.5 s per frame on a laptop GPU.",
-         "sam3", 707ull << 20, true},
+         "VRAM, about 1 s per frame on a laptop GPU -- 3x slower than any "
+         "SAM 2.1 below.",
+         "sam3", 707ull << 20, true, "sam3"},
         {"sam3-f16", "sam3-f16.ggml", "SAM 3, full precision",
          "The same model without file quantization. Slightly better masks, "
          "much bigger download, same speed.",
-         "sam3", 1884ull << 20, true},
+         "sam3", 1884ull << 20, true, "sam3"},
         {"sam2.1-large", "sam2.1_hiera_large_f16.ggml", "SAM 2.1 Large",
-         "Click or draw a box to select an object; no text prompts. About "
-         "twice as fast as SAM 3. Apache-2.0.",
-         "sam2", 451ull << 20, false},
+         "Click or draw a box to select an object; no text prompts. The most "
+         "accurate of the four and the one to pick for thin structure -- "
+         "hair, railings, foliage. ~470 ms per frame. Apache-2.0.",
+         "sam2", 430ull << 20, false, "sam2.1_hiera_large"},
+        {"sam2.1-base-plus", "sam2.1_hiera_base_plus_f16.ggml", "SAM 2.1 Base+",
+         "Clicks and boxes only. Close to Large on most subjects at two "
+         "thirds the time, ~320 ms per frame. Apache-2.0.",
+         "sam2", 156ull << 20, false, "sam2.1_hiera_base_plus"},
+        {"sam2.1-small", "sam2.1_hiera_small_f16.ggml", "SAM 2.1 Small",
+         "Clicks and boxes only, ~255 ms per frame. The best speed-for-quality "
+         "of the four: below Large the frame is mostly tracking, which does "
+         "not care how big the backbone is. Apache-2.0.",
+         "sam2", 89ull << 20, false, "sam2.1_hiera_small"},
         {"sam2.1-tiny", "sam2.1_hiera_tiny_f16.ggml", "SAM 2.1 Tiny (fastest)",
-         "Clicks and boxes only, ~3x faster than SAM 3, 79 MB. Best when the "
-         "capture is long and the subject is easy to point at. Apache-2.0.",
-         "sam2", 79ull << 20, false},
+         "Clicks and boxes only, 76 MB. Only 4% quicker than Small at ~245 ms "
+         "per frame, and it loses thin structure first -- take it for the "
+         "download size, not the speed. Apache-2.0.",
+         "sam2", 76ull << 20, false, "sam2.1_hiera_tiny"},
     };
     return kCatalog;
 }

@@ -93,6 +93,22 @@ Two things bear repeating:
    use them, with `VK_PIPELINE_STAGE_ALL_COMMANDS_BIT` on both sides. A video
    queue supports very few pipeline stages; ALL_COMMANDS is always legal.
 
+## The entry-point table lives one device, not one process
+
+`video_api()` resolves `VK_KHR_video_*` through `vkGetDeviceProcAddr`, and the
+table it hands out is valid **only for the device it was resolved from**.
+`nn::shutdown()` is not a process-exit hook — the GUI calls it after every
+dataset job to hand the 2 GB of segmentation weights back — so a second video
+open runs on a second device, and a table cached for the life of the process
+then points at loader trampolines that were unmapped with the first one. The
+symptom is a segfault in an unnamed frame under `createSession`, one open too
+late to look like a lifetime bug.
+
+So the table is keyed on `vk::Context::generation()` and re-resolved when that
+changes. Anything else that caches device-derived state across a `shutdown()`
+owes the same check; `vk::Stream` and `vk::Pipelines` instead drop their whole
+`Impl` and re-initialise lazily, which is the other valid answer.
+
 ## Why frames are handles
 
 `VideoPipeline::next()` returns a `FrameHandle`, not an image. Decoding and

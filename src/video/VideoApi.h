@@ -2,8 +2,11 @@
 // Entry points for VK_KHR_video_queue / VK_KHR_video_decode_*.
 //
 // The Vulkan loader does not export extension entry points, so they are
-// resolved once from the device and passed around as a table. One instance,
-// filled by VulkanVideo.cpp when the decoder is first created.
+// resolved from the device and passed around as a table. One instance, filled
+// by VideoPipeline.cpp on first use -- and re-filled whenever the process
+// creates a new device, because the pointers belong to the device they came
+// from (see "The entry-point table lives one device, not one process" in
+// README.md).
 
 #include <vulkan/vulkan.h>
 
@@ -32,7 +35,8 @@ struct VideoApi {
     }
 };
 
-// Resolved on first use; `complete()` is false when the extensions are absent.
+// Resolved on first use per device; `complete()` is false when the extensions
+// are absent (or when no device exists yet).
 const VideoApi& video_api();
 
 }  // namespace video

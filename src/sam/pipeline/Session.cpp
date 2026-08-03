@@ -119,6 +119,7 @@ bool Session::loadModel(const ModelParams& params) {
         opts.device_index = params.device_index;
         opts.device_match = params.device_match;
         opts.validation = params.validation;
+        opts.profile = params.profile;
         vk::Context::get(opts);
 
         impl_->model.load(params.model_path, params.img_size);

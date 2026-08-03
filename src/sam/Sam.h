@@ -75,6 +75,10 @@ struct ModelParams {
     std::string device_match;        // or a case-insensitive name substring
     int         img_size = 0;        // 0 = the checkpoint's native resolution
     bool        validation = false;  // enable the Vulkan validation layers
+    // Collect per-kernel GPU timestamps, for Session::printProfile(). Has to be
+    // set before the device is created, which is why it lives here rather than
+    // being a flag on the print call.
+    bool        profile = false;
 };
 
 // Promptable Concept Segmentation: a noun phrase and/or exemplar boxes, and

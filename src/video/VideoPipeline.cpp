@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 
 NN_DECLARE_EMBEDDED_MODULES(video)
 
@@ -20,8 +21,22 @@ namespace video {
 // Extension entry points
 // ---------------------------------------------------------------------------
 
+// Resolved per context generation, not once per process. The GUI calls
+// nn::shutdown() after every dataset job to hand the GPU back, so a second
+// video open runs on a second device -- and a table resolved from the first
+// one points at loader trampolines that were unmapped with it, which is a
+// segfault inside an unnamed frame the moment the first entry point is called.
 const VideoApi& video_api() {
-    static VideoApi api = [] {
+    static std::mutex mu;
+    static VideoApi   api{};
+    static uint64_t   resolved_gen = 0;  // generations start at 1
+
+    std::lock_guard<std::mutex> lock(mu);
+    const uint64_t gen = vk::Context::initialized() ? vk::Context::generation() : 0;
+    if (gen == resolved_gen) return api;
+    resolved_gen = gen;
+
+    api = [] {
         VideoApi a{};
         if (!vk::Context::initialized()) return a;
         vk::Context& ctx = vk::Context::get();

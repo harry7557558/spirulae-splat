@@ -60,6 +60,15 @@ void linear(const Tensor& out, const Tensor& x, const Tensor& w,
 void matmul_nt(const Tensor& out, const Tensor& a, const Tensor& b, float alpha = 1.0f,
                Act act = Act::None);
 
+// Tensor cores (VK_KHR_cooperative_matrix), used by the fp16-weight GEMM and
+// by attention's Q @ K^T. On wherever the device supports them;
+// $SSPLAT_NN_COOPMAT=0 turns them off for the process. This pair does the same
+// at runtime, so a test can measure both paths without starting a second
+// process -- the operands become fp16 there, so the two do not agree to fp32
+// precision and a numerical difference is worth being able to bisect.
+bool coop_matrix_enabled();
+void set_coop_matrix_enabled(bool on);
+
 // ================
 // Normalization
 // ================

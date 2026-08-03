@@ -685,8 +685,7 @@ void GuiApp::sync_dataset_jobs() {
     prep.mask_model_path = selected_model_path();
     prep.force_external_masking = _sfm_job.prep.force_external_masking;
     if (const ModelEntry* e = find_model(_model_id))
-        prep.mask_model_name = std::string(e->family) == "sam3"
-                                   ? "sam3" : "sam2.1_hiera_large";
+        prep.mask_model_name = e->legacy_name;
     _sfm_job.prep = prep;
 
     _colmap_job.input_path = prep.input_path;

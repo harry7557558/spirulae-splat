@@ -89,6 +89,23 @@ std::vector<float> readback(const Tensor& t) {
     return v;
 }
 
+// Rounded the way the tensor-core kernels round: their operands are fp16, so
+// the reference has to be, or the check measures fp16's dynamic range instead
+// of the kernel. Same convention as the GEMM's coop case.
+std::vector<float> round_f16(const std::vector<float>& v) {
+    std::vector<float> out(v.size());
+    for (size_t i = 0; i < v.size(); ++i) out[i] = half_to_float(float_to_half(v[i]));
+    return out;
+}
+
+// Every attention case is checked on both paths where the device offers both:
+// the scalar kernel against an exact reference, the cooperative-matrix one --
+// which only takes head dims that are a multiple of 16 -- against the rounded
+// one. Running both in one process is what `set_coop_matrix_enabled` is for.
+bool coop_attn(int head_dim) {
+    return vk::Context::get().hasCoopMat() && head_dim % 16 == 0;
+}
+
 float act_ref(float x, Act a) {
     switch (a) {
         case Act::Relu: return std::fmax(x, 0.0f);
@@ -200,6 +217,66 @@ void test_gemm(vk::Arena& arena) {
                 want[(size_t)m * N + n] = act_ref((float)s + b[n], Act::Relu);
             }
         check("gemm 300x201x141 wide tile", readback(to), want, 2e-4f);
+    }
+
+    // Cooperative matrix. N and K are multiples of 16 (the shape the tensor-core
+    // path requires) while M is not, so the row tail is still exercised; the
+    // ragged case above deliberately is not a multiple of 16 and therefore
+    // measures the fallback.
+    //
+    // Both paths run against a double-precision reference, each with the
+    // activations rounded the way that path rounds them: fp32 for the fallback,
+    // fp16 for the tensor cores, whose A operand is fp16. Same convention as
+    // "gemm fp16 weights" above -- what is under test is the kernel, not fp16's
+    // dynamic range, and a loose tolerance would hide a real staging bug behind
+    // rounding that is expected and quantified. Whether fp16 activations are
+    // acceptable *for the model* is a different question, answered by comparing
+    // masks end to end, not here.
+    {
+        vk::ArenaScope scope(arena);
+        const int M = 300, N = 208, K = 144;
+        auto x = randn((size_t)M * K);
+        auto w = randn((size_t)N * K, 0.1f);
+        for (auto& v : w) v = half_to_float(float_to_half(v));
+        auto b = randn((size_t)N);
+        auto r = randn((size_t)M * N);
+
+        Tensor tx = upload_f32(arena, x, M, K);
+        Tensor tw = upload_f16(arena, w, N, K);
+        Tensor to = arena_tensor(arena, DType::F32, M, N);
+        LinearOpts o;
+        o.bias = upload_f32(arena, b, N);
+        o.residual = upload_f32(arena, r, M, N);
+        o.act = Act::Relu;
+
+        auto reference = [&](bool x_f16) {
+            std::vector<float> want((size_t)M * N);
+            for (int m = 0; m < M; ++m)
+                for (int n = 0; n < N; ++n) {
+                    double s = 0;
+                    for (int k = 0; k < K; ++k) {
+                        float xv = x[(size_t)m * K + k];
+                        if (x_f16) xv = half_to_float(float_to_half(xv));
+                        s += (double)xv * w[(size_t)n * K + k];
+                    }
+                    want[(size_t)m * N + n] =
+                        act_ref((float)s + b[n] + r[(size_t)m * N + n], Act::Relu);
+                }
+            return want;
+        };
+
+        set_coop_matrix_enabled(false);
+        linear(to, tx, tw, o);
+        check("gemm 300x208x144 fp32 path", readback(to), reference(false), 2e-4f);
+        if (vk::Context::get().hasCoopMat()) {
+            set_coop_matrix_enabled(true);
+            linear(to, tx, tw, o);
+            check("gemm 300x208x144 coop matrix", readback(to), reference(true), 2e-4f);
+        } else {
+            std::printf("  --   cooperative matrix unavailable: %s\n",
+                        vk::Context::get().coopMatReason().c_str());
+        }
+        set_coop_matrix_enabled(true);
     }
 }
 
@@ -354,12 +431,25 @@ void test_attention(vk::Arena& arena) {
         o.scale = 1.0f / std::sqrt((float)c.HD);
         o.bias_mode = c.mode;
         o.bias = tbias;
-        attention(to, upload_f32(arena, q, c.nq, dim), upload_f32(arena, k, c.nk, dim),
-                  upload_f32(arena, v, c.nk, dim), c.nq, c.nk, o);
+        Tensor tq = upload_f32(arena, q, c.nq, dim);
+        Tensor tk = upload_f32(arena, k, c.nk, dim);
+        Tensor tv = upload_f32(arena, v, c.nk, dim);
 
+        set_coop_matrix_enabled(false);
+        attention(to, tq, tk, tv, c.nq, c.nk, o);
         std::vector<float> want;
         attn_reference(q, k, v, c.nq, c.nk, c.H, c.HD, o.scale, &bias, c.mode, want);
         check(c.name, readback(to), want, 3e-4f);
+
+        if (coop_attn(c.HD)) {
+            set_coop_matrix_enabled(true);
+            attention(to, tq, tk, tv, c.nq, c.nk, o);
+            std::vector<float> want16;
+            attn_reference(round_f16(q), round_f16(k), v, c.nq, c.nk, c.H, c.HD, o.scale,
+                           &bias, c.mode, want16);
+            check((std::string(c.name) + " [coop]").c_str(), readback(to), want16, 3e-4f);
+        }
+        set_coop_matrix_enabled(true);
     }
 
     // Batched: the ViT's window attention runs 9 independent 576-token problems.
@@ -374,8 +464,11 @@ void test_attention(vk::Arena& arena) {
         o.n_heads = H;
         o.head_dim = HD;
         o.batch = B;
-        attention(to, upload_f32(arena, q, B, nq, dim), upload_f32(arena, k, B, nq, dim),
-                  upload_f32(arena, v, B, nq, dim), nq, nq, o);
+        Tensor tq = upload_f32(arena, q, B, nq, dim);
+        Tensor tk = upload_f32(arena, k, B, nq, dim);
+        Tensor tv = upload_f32(arena, v, B, nq, dim);
+        set_coop_matrix_enabled(false);
+        attention(to, tq, tk, tv, nq, nq, o);
         std::vector<float> want((size_t)B * nq * dim);
         for (int b = 0; b < B; ++b) {
             std::vector<float> qb(q.begin() + (size_t)b * nq * dim,
@@ -390,6 +483,27 @@ void test_attention(vk::Arena& arena) {
             std::copy(ob.begin(), ob.end(), want.begin() + (size_t)b * nq * dim);
         }
         check("attn batched (ViT windows)", readback(to), want, 3e-4f);
+        set_coop_matrix_enabled(true);
+        if (coop_attn(HD)) {
+            attention(to, tq, tk, tv, nq, nq, o);
+            // Same reference loop, on operands rounded the way the fragments
+            // hold them.
+            const auto q16 = round_f16(q), k16 = round_f16(k);
+            std::vector<float> want16((size_t)B * nq * dim);
+            for (int b = 0; b < B; ++b) {
+                std::vector<float> qb(q16.begin() + (size_t)b * nq * dim,
+                                      q16.begin() + (size_t)(b + 1) * nq * dim);
+                std::vector<float> kb(k16.begin() + (size_t)b * nq * dim,
+                                      k16.begin() + (size_t)(b + 1) * nq * dim);
+                std::vector<float> vb(v.begin() + (size_t)b * nq * dim,
+                                      v.begin() + (size_t)(b + 1) * nq * dim);
+                std::vector<float> ob;
+                attn_reference(qb, kb, vb, nq, nq, H, HD, 1.0f / std::sqrt((float)HD),
+                               nullptr, AttnBias::None, ob);
+                std::copy(ob.begin(), ob.end(), want16.begin() + (size_t)b * nq * dim);
+            }
+            check("attn batched (ViT windows) [coop]", readback(to), want16, 3e-4f);
+        }
     }
 
     // Strided q/k/v: pointing straight into a fused [N, 3*E] projection.
@@ -403,6 +517,7 @@ void test_attention(vk::Arena& arena) {
         o.n_heads = H;
         o.head_dim = HD;
         o.q_stride = o.k_stride = o.v_stride = dim * 3;
+        set_coop_matrix_enabled(false);
         attention(to, tqkv, tqkv.offsetElems(dim), tqkv.offsetElems(2 * dim), nq, nq, o);
 
         std::vector<float> q(nq * dim), k(nq * dim), v(nq * dim);
@@ -416,6 +531,15 @@ void test_attention(vk::Arena& arena) {
         attn_reference(q, k, v, nq, nq, H, HD, 1.0f / std::sqrt((float)HD), nullptr,
                        AttnBias::None, want);
         check("attn fused-qkv strides", readback(to), want, 3e-4f);
+        set_coop_matrix_enabled(true);
+        if (coop_attn(HD)) {
+            attention(to, tqkv, tqkv.offsetElems(dim), tqkv.offsetElems(2 * dim), nq, nq,
+                      o);
+            std::vector<float> want16;
+            attn_reference(round_f16(q), round_f16(k), v, nq, nq, H, HD,
+                           1.0f / std::sqrt((float)HD), nullptr, AttnBias::None, want16);
+            check("attn fused-qkv strides [coop]", readback(to), want16, 3e-4f);
+        }
     }
 
     // Flash-decoding: passing an arena lets the launcher split the key range
@@ -442,13 +566,25 @@ void test_attention(vk::Arena& arena) {
         o.bias_mode = AttnBias::PerKey;
         o.bias = upload_f32(arena, bias, nk);
         o.arena = &arena;
-        attention(to, upload_f32(arena, q, nq, dim), upload_f32(arena, k, nk, dim),
-                  upload_f32(arena, v, nk, dim), nq, nk, o);
+        Tensor tq = upload_f32(arena, q, nq, dim);
+        Tensor tk = upload_f32(arena, k, nk, dim);
+        Tensor tv = upload_f32(arena, v, nk, dim);
+        set_coop_matrix_enabled(false);
+        attention(to, tq, tk, tv, nq, nk, o);
 
         std::vector<float> want;
         attn_reference(q, k, v, nq, nk, H, HD, 1.0f / std::sqrt((float)HD), &bias,
                        AttnBias::PerKey, want);
         check("attn split-k (memory attn)", readback(to), want, 3e-4f);
+
+        set_coop_matrix_enabled(true);
+        if (coop_attn(HD)) {
+            attention(to, tq, tk, tv, nq, nk, o);
+            std::vector<float> want16;
+            attn_reference(round_f16(q), round_f16(k), v, nq, nk, H, HD,
+                           1.0f / std::sqrt((float)HD), &bias, AttnBias::PerKey, want16);
+            check("attn split-k (memory attn) [coop]", readback(to), want16, 3e-4f);
+        }
     }
 }
 
@@ -747,8 +883,14 @@ double timed(int iters, F&& body) {
 }
 
 void bench(vk::Arena& arena) {
+    const bool coop = vk::Context::get().hasCoopMat();
     std::printf("\nGEMM  (fp16 weights, fp32 activations)\n");
-    std::printf("  %-22s %10s %10s\n", "shape", "ms", "TFLOP/s");
+    if (coop)
+        std::printf("  %-22s %10s %10s %10s %10s\n", "shape", "fp32 ms", "TFLOP/s",
+                    "coop ms", "TFLOP/s");
+    else
+        std::printf("  %-22s %10s %10s   (no cooperative matrix: %s)\n", "shape", "ms",
+                    "TFLOP/s", vk::Context::get().coopMatReason().c_str());
     struct G { int64_t M, N, K; const char* name; };
     const G gemms[] = {
         {5184, 3072, 1024, "vit qkv"},
@@ -765,16 +907,29 @@ void bench(vk::Arena& arena) {
         Tensor o = arena_tensor(arena, DType::F32, g.M, g.N);
         vk::Stream::get().fill(x.ptr, 0x3f000000u, (uint64_t)g.M * g.K * 4);
         vk::Stream::get().fill(w.ptr, 0x38003800u, (uint64_t)g.N * g.K * 2);
+        const double flop = 2.0 * (double)g.M * g.N * g.K;
+        set_coop_matrix_enabled(false);
         const double ms = timed(5, [&] { matmul_nt(o, x, w, 1.0f, Act::None); });
-        std::printf("  %-22s %10.2f %10.2f\n", g.name, ms,
-                    2.0 * (double)g.M * g.N * g.K / (ms * 1e9));
+        if (!coop) {
+            std::printf("  %-22s %10.2f %10.2f\n", g.name, ms, flop / (ms * 1e9));
+            continue;
+        }
+        set_coop_matrix_enabled(true);
+        const double cms = timed(5, [&] { matmul_nt(o, x, w, 1.0f, Act::None); });
+        std::printf("  %-22s %10.2f %10.2f %10.2f %10.2f\n", g.name, ms,
+                    flop / (ms * 1e9), cms, flop / (cms * 1e9));
     }
+    set_coop_matrix_enabled(true);
 
     // `split` mirrors what the model gets: passing an arena lets the launcher
     // slice the key range when the shape does not produce enough workgroups.
     // The paired rows are the point of the table.
     std::printf("\nAttention\n");
-    std::printf("  %-26s %10s %10s\n", "shape", "ms", "TFLOP/s");
+    if (coop)
+        std::printf("  %-26s %10s %10s %10s %10s\n", "shape", "fp32 ms", "TFLOP/s",
+                    "coop ms", "TFLOP/s");
+    else
+        std::printf("  %-26s %10s %10s\n", "shape", "ms", "TFLOP/s");
     struct A { int B, nq, nk, H, HD; bool split; const char* name; };
     const A attns[] = {
         {9, 576,  576, 16,  64, false, "vit window"},
@@ -802,9 +957,17 @@ void bench(vk::Arena& arena) {
         ao.head_dim = a.HD;
         ao.batch = a.B;
         if (a.split) ao.arena = &arena;
-        const double ms = timed(5, [&] { attention(o, q, k, v, a.nq, a.nk, ao); });
         const double flop = 4.0 * a.B * a.H * (double)a.nq * a.nk * a.HD;
-        std::printf("  %-26s %10.2f %10.2f\n", a.name, ms, flop / (ms * 1e9));
+        set_coop_matrix_enabled(false);
+        const double ms = timed(5, [&] { attention(o, q, k, v, a.nq, a.nk, ao); });
+        if (!coop) {
+            std::printf("  %-26s %10.2f %10.2f\n", a.name, ms, flop / (ms * 1e9));
+            continue;
+        }
+        set_coop_matrix_enabled(true);
+        const double cms = timed(5, [&] { attention(o, q, k, v, a.nq, a.nk, ao); });
+        std::printf("  %-26s %10.2f %10.2f %10.2f %10.2f\n", a.name, ms,
+                    flop / (ms * 1e9), cms, flop / (cms * 1e9));
     }
 }
 

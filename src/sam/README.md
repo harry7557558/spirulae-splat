@@ -215,27 +215,35 @@ says so.
 
 ## Speed
 
-End-to-end `ssplat sam track` on an RTX 5070 Laptop, one instance through
-1920×1080 frames on disk — decode, model and mask PNG included:
+End-to-end `ssplat sam track` on an RTX 5070 Laptop, one instance through 32
+1920×1080 frames on disk — decode, model and mask PNG included. The second
+column is with `VK_KHR_cooperative_matrix`, which is on by default wherever the
+device has it; `SSPLAT_NN_COOPMAT=0` gives the first.
 
-| | ms/frame | model only |
+| ms/frame | fp32 | tensor cores |
 |---|---|---|
-| SAM 3, q4_0, text prompt | 1471 | 1444 |
-| SAM 2.1 Hiera-L, f16 | 604 | 602 |
-| SAM 2.1 Hiera-T, f16 | 279 | 273 |
-| SAM 2.1 Hiera-T, `--memory-frames 4` | 225 | 223 |
-| SAM 2.1 Hiera-T, `--memory-frames 1` | 190 | 188 |
+| SAM 3, q4_0, text prompt | 1646 | 1016 |
+| SAM 2.1 Hiera-L, f16 | 647 | 470 |
+| SAM 2.1 Hiera-B+, f16 | 389 | 320 |
+| SAM 2.1 Hiera-S, f16 | 314 | 256 |
+| SAM 2.1 Hiera-T, f16 | 299 | 246 |
+| SAM 2.1 Hiera-T, `--memory-frames 4` | | 203 |
+| SAM 2.1 Hiera-T, `--memory-frames 1` | | 138 |
 
-Everything outside "model only" — reading the JPEG, encoding the mask PNG — is
-overlapped with the GPU (`app/WriterPool.h` and a one-frame read-ahead). It was
-worth doing: those two are ~105 ms a frame of pure CPU, a third of a Hiera-T
-frame, and the loop used to sit through them with the device idle.
+Reading the JPEG and encoding the mask PNG are overlapped with the GPU
+(`app/WriterPool.h` and a one-frame read-ahead), so they cost ~1 ms of the
+above rather than the ~105 ms of CPU they actually are — a third of a Hiera-T
+frame, which the loop used to sit through with the device idle.
+
+Note how little separates Tiny, Small and Base+: below Large, the frame is
+mostly memory attention, and that does not depend on the backbone's size.
+Picking Tiny over Small buys 4%, and costs thin structure in the mask.
 
 ### Where the model time goes, and why it is what it is
 
-`--profile` with `SSPLAT_NN_LOG=2` breaks it down by kernel. For Hiera-T, 72%
-of the GPU time is `flash_attn` and 15% is `gemm_nt_big`; for SAM 3 it is the
-other way round, 59% GEMM and 34% attention.
+`--profile` with `SSPLAT_NN_LOG=2` breaks it down by kernel. On the fp32 path,
+72% of Hiera-T's GPU time is `flash_attn` and 15% is `gemm_nt_big`; for SAM 3 it
+is the other way round, 59% GEMM and 34% attention.
 
 **SAM 2 is memory-attention-bound.** 4096 queries against `num_maskmem × 4096`
 memory tokens over a **single** 256-wide head, four layers deep: 480 GFLOP per
@@ -243,30 +251,38 @@ frame once the bank is full, about half of the whole frame. `--memory-frames N`
 is linear in it, which is why the table above moves the way it does.
 
 **SAM 3 is backbone-bound.** 32 blocks over 5184 tokens at width 1024 is ~90%
-of its FLOPs — 830 ms/frame in `gemm_nt_big` alone.
+of its FLOPs.
 
-Both are running at the rate those kernels measure at in isolation: ~5 TFLOP/s
-for the GEMM, ~3 for the attention, against ~21 TFLOP/s of fp32 peak on this
-part. PyTorch's SAM 2 video predictor does ~10 fps with Hiera-L on comparable
-hardware (`scripts/SAM2-GUI`) where this does 1.7. **That gap is bf16 tensor
-cores, and nothing else.** Confirming that, and what it costs to close:
+Nothing algorithmic is missing, and it is worth being explicit about that
+because the opposite is the natural guess. The memory bank is there, it stays
+in VRAM across frames, and the K/V projections it feeds are 0.2% of the frame —
+there is no per-frame recomputation left to remove. Two cheap hypotheses were
+tested and both came back negative: raising the flash-decoding split target from
+512 to 1024 and 2048 workgroups measured flat, and cutting the attention
+kernel's shared traffic per FMA by 1.7× measured flat.
 
-- Raising the flash-decoding split target from 512 to 1024 and 2048 workgroups
-  measured 275 and 279 ms against 279 (that is, flat), so the attention kernel
-  is not short of parallelism at this shape. `src/nn/README.md` predicted this;
-  it is now measured on a second architecture.
-- Nothing algorithmic is missing. The memory bank is there, it stays in VRAM
-  across frames, and the K/V projections it feeds are 0.2% of the frame — there
-  is no per-frame recomputation left to remove.
-- `VK_KHR_cooperative_matrix` is present on this device and Slang emits it, so
-  an fp16 tensor-core path for `gemm_nt_big` and `flash_attn` is available and
-  is the 3–5× that is left. It is a real project: two kernels, a capability
-  query, a fallback for the devices without it (llvmpipe has none), and
-  numerical validation against `nn_ops_test`. It has not been attempted.
+What was left was arithmetic throughput, and that is what the second column is.
+`gemm_coop.slang` and `attention_coop.slang` run fp16 operands with an fp32
+accumulator on `VK_KHR_cooperative_matrix`, ~2× on the GEMM and ~1.3× on the
+half of attention that can use it. `src/nn/README.md` has the measurements,
+including two tilings that came out *slower* than the fp32 kernels they replace.
+Masks are unchanged to within a handful of boundary pixels in 13 M.
 
-The levers a user has today are the checkpoint (**SAM 2.1 Tiny is 5× faster
-than SAM 3** and is the right default for tracking a clicked object through a
-video), `--memory-frames`, the number of frames, and `--mask-mode image`, which
+The gain is architecture-dependent, and the table above is the best case: on an
+RTX 3070 Laptop the same Hiera-T run goes 418 → 358 ms/frame (1.17x) rather than
+299 → 246 (1.22x), and its GEMM gains 1.2x where the 5070's gains 2x.
+
+PyTorch's SAM 2 video predictor still does ~10 fps with Hiera-L on comparable
+hardware (`scripts/SAM2-GUI`) where this does 2.1. The rest of that gap is the
+second attention matmul, which cannot use a cooperative matrix without a
+per-element mapping the KHR extension does not expose — see
+`docs/notes/segmentation-port.md` §8.
+
+The levers a user has today are the checkpoint (**SAM 2.1 is 3–4× faster than
+SAM 3**, and one of its four sizes is the right default for tracking a clicked
+object through a video — Small unless the mask needs thin structure, where
+Large earns its 1.8×), `--memory-frames`, the number of frames, and
+`--mask-mode image`, which
 drops the tracker head for 20%. That last one is **not** the default: the
 memory bank is what carries an instance through a frame the detector misses,
 and losing an object for one frame of a reconstruction costs more than the 20%.

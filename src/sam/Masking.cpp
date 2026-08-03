@@ -192,6 +192,7 @@ bool Masker::init(const MaskOptions& o, std::string& error) {
     mp.model_path = o.model;
     mp.device_match = o.device;
     mp.validation = o.validate;
+    mp.profile = o.profile;
     mp.img_size = o.img_size;
     if (!impl_->session.loadModel(mp)) {
         error = impl_->session.lastError();

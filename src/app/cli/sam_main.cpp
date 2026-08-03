@@ -264,6 +264,7 @@ bool load_session(const Options& o, sam::Session& session) {
     sam::ModelParams mp;
     mp.model_path = o.model;
     mp.validation = o.validate;
+    mp.profile = o.profile;
     mp.img_size = o.img_size;
     if (!o.device.empty()) {
         char* end = nullptr;
@@ -360,6 +361,7 @@ int cmd_track(const Options& o) {
     mo.max_size = o.max_size;
     mo.img_size = o.img_size;
     mo.validate = o.validate;
+    mo.profile = o.profile;
     mo.seeds = o.seeds;
 
     sam::Masker masker;
