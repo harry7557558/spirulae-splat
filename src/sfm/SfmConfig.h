@@ -32,6 +32,8 @@
 
 #include "sfm/core/CameraSetup.h"
 #include "sfm/feature/Matcher.h"
+#include "sfm/feature/Extractor.h"
+#include "sfm/feature/LearnedMatcher.h"
 #include "sfm/feature/PairSelection.h"
 #include "sfm/feature/Sift.h"
 #include "sfm/geometry/TwoView.h"
@@ -76,7 +78,12 @@ struct SfmConfig {
     // verifier's inlier radius and the mapper's reprojection cap are the same
     // quantity in the same frame. finalize() writes both.
     double max_error = 3.0;
-    int max_image_size = 3200;
+    // 0 means "whatever the selected frontend wants" -- 3200 for SIFT, 1600
+    // for a learned one, mirroring COLMAP's EffMaxImageSize(). Resolved in
+    // finalize(), so a command that applies no presets (extract, match) still
+    // gets the right one instead of running ALIKED at SIFT's resolution and
+    // spending four times the VRAM on it.
+    int max_image_size = 0;
     std::string mask_dir;
 
     // Camera setup. The string forms are what the table and the GUI see; the
@@ -111,8 +118,18 @@ struct SfmConfig {
     int device = -1;
     bool quiet = false;
 
+    // Which frontend runs. "sift" is the GPU SIFT that has always been here;
+    // the aliked-* values are the learned one (src/aliked/), which needs the
+    // inference layer compiled in. The pair is deliberately two flags and not
+    // one: ALIKED descriptors can be matched brute-force, and LightGlue is a
+    // matcher for them rather than a different extractor.
+    std::string features = "sift";
+    std::string matcher = "bruteforce";
+
     // ---- the stage option structs, unchanged ----
     SiftOptions sift;
+    AlikedOptions aliked;
+    LightGlueOptions lightglue;
     MatchOptions match;
     PairSelectionOptions prefilter;
     TwoViewOptions twoview;
@@ -183,9 +200,10 @@ struct SfmConfig {
       "Inlier radius for verification and mapping, in pixels of the image SIFT ran on rather "      \
       "than of the source file (D47)")                                                              \
     F(max_image_size, "max-image-size", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "pipeline",         \
-      64, 20000, "",                                                                                \
-      "Longest edge SIFT runs on; larger images are downscaled first, and keypoints are still "     \
-      "reported in the source image's pixels")                                                      \
+      0, 20000, "",                                                                                 \
+      "Longest edge the extractor runs on; larger images are downscaled first, and keypoints are "  \
+      "still reported in the source image's pixels. 0 picks the frontend's own default (3200 for "  \
+      "sift, 1600 for aliked)")                                                                     \
     F(mask_dir, "masks", CMD_AUTO | CMD_EXTRACT, Tier::Basic, "pipeline", 0, 0, "",                 \
       "Directory of masks; keypoints on zero (black) pixels are dropped. auto defaults it to "      \
       "`masks` beside the image directory")                                                         \
@@ -211,9 +229,20 @@ struct SfmConfig {
       "camera", 0.001, 1.0, "",                                                                     \
       "Relative tolerance clustering EXIF focals into one group; must exceed EXIF's 1 mm "          \
       "quantization and stay under a real zoom step")                                               \
-    /* ---- features (SIFT) ---- */                                                                 \
+    /* ---- features ---- */                                                                       \
+    F(features, "features", CMD_AUTO | CMD_EXTRACT, Tier::Basic, "features", 0, 0,                  \
+      "sift|aliked-n16rot|aliked-n32",                                                              \
+      "Which detector and descriptor; the aliked ones are learned and fetch a checkpoint on "       \
+      "first use")                                                                                  \
     F(sift.max_num_features, "max-features", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features",    \
-      128, 1000000, "", "Keypoints kept per image, the largest scales first")                       \
+      128, 1000000, "", "Keypoints kept per image with --features sift, the largest scales first")  \
+    F(aliked.max_num_features, "aliked-max-features", CMD_AUTO | CMD_EXTRACT, Tier::Advanced,       \
+      "features", 128, 1000000, "",                                                                 \
+      "Keypoints kept per image with a learned frontend, the highest scores first")                 \
+    F(aliked.min_score, "aliked-min-score", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features",     \
+      0, 1, "", "Detection score a learned keypoint must reach")                                    \
+    F(aliked.model, "aliked-model", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features", 0, 0, "",   \
+      "Path to an ALIKED .onnx checkpoint, overriding the one --features names")                    \
     F(sift.num_octaves, "octaves", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features", 1, 8, "",    \
       "Scale-space octaves")                                                                        \
     F(sift.peak_threshold, "peak-threshold", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features",    \
@@ -227,8 +256,20 @@ struct SfmConfig {
     F(sift.spv_path, "spv-path", CMD_EXTRACT, Tier::Advanced, "features", 0, 0, "",                 \
       "Load the SIFT kernels from this SPIR-V file instead of the embedded blob")                   \
     /* ---- matching ---- */                                                                        \
+    F(matcher, "matcher", CMD_AUTO | CMD_MATCH, Tier::Basic, "matching", 0, 0,                      \
+      "bruteforce|lightglue",                                                                       \
+      "How descriptors are matched. lightglue is a learned matcher for --features aliked-*; it is " \
+      "an order of magnitude slower per pair, so it only makes sense behind pair selection")        \
+    F(lightglue.min_score, "lightglue-min-score", CMD_AUTO | CMD_MATCH, Tier::Advanced,             \
+      "matching", 0, 1, "", "Assignment confidence a LightGlue match must reach")                   \
+    F(lightglue.model, "lightglue-model", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching",         \
+      0, 0, "", "Path to a LightGlue .onnx checkpoint, overriding the fetched one")                 \
     F(match.max_ratio, "ratio", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0, 1, "",         \
       "Lowe ratio: a match is kept when the best distance is below this times the second best")     \
+    F(match.min_similarity, "min-similarity", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching",     \
+      0, 1, "",                                                                                     \
+      "Cosine similarity a match must reach, for float descriptors; 0 disables it. Learned "        \
+      "descriptors are filtered on this rather than on the ratio")                                  \
     F(match.cross_check, "cross-check", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0, 0,     \
       "", "Keep only mutual nearest neighbours")                                                    \
     F(match.max_num_matches, "max-matches", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching",       \

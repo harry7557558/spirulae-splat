@@ -25,7 +25,11 @@ struct Keypoint {
     float x = 0, y = 0;         // subpixel location
     float scale = 0;            // sigma in original-image pixels
     float orientation = 0;      // radians, CCW from +x
-    float response = 0;         // |DoG| at the refined extremum (not persisted)
+    // SIFT: |DoG| at the refined extremum. A learned detector: its detection
+    // score. Persisted from v5 -- ALIKED has neither scale nor orientation, so
+    // this is the only ranking signal its keypoints carry, and anything that
+    // used to rank by scale has to fall back to it (Pairing / PairSelection).
+    float response = 0;
 };
 
 enum class DType : uint32_t { U8 = 0, F32 = 1 };
@@ -61,6 +65,20 @@ struct FeatureSet {
 
     uint32_t count() const { return (uint32_t)keypoints.size(); }
     bool hasColors() const { return colors.size() == (size_t)count() * 3; }
+    // Whether any keypoint carries a detection score worth persisting. SIFT
+    // leaves response at 0; a learned detector fills it in.
+    bool hasScores() const {
+        for (const Keypoint& k : keypoints)
+            if (k.response != 0) return true;
+        return false;
+    }
+    // What a subset selection should rank by. Scale for SIFT (D16: the largest
+    // scales are the most repeatable), the detection score for a detector that
+    // has no scale. Never both -- an extractor fills in one of them.
+    float rank(uint32_t i) const {
+        const Keypoint& k = keypoints[i];
+        return k.scale > 0 ? k.scale : k.response;
+    }
     // How many source pixels one extraction pixel is worth: >= 1, and exactly 1
     // when nothing was downscaled. The two axes agree up to the rounding in
     // the size clamp, so their mean is the isotropic answer.
@@ -116,11 +134,15 @@ inline void scaleKeypoints(FeatureSet& fs, int w, int h) {
 // v4 appends i32 extract_width, extract_height after that. Older files read
 // back with 0, i.e. pixelScale() == 1, i.e. thresholds in source pixels --
 // which is what those files were produced under.
+//
+// v5 appends u8 has_scores, then (if 1) count f32 detection scores. A v1-v4
+// file reads back with every response 0, which is what those files carried:
+// SIFT never persisted it and nothing read it.
 
 inline void writeFeatures(const std::string& path, const FeatureSet& fs) {
     std::ofstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("cannot write " + path);
-    uint32_t version = 4, count = fs.count(), dtype = (uint32_t)fs.dtype;
+    uint32_t version = 5, count = fs.count(), dtype = (uint32_t)fs.dtype;
     f.write("VKFT", 4);
     f.write((const char*)&version, 4);
     f.write((const char*)&fs.width, 4);
@@ -142,6 +164,10 @@ inline void writeFeatures(const std::string& path, const FeatureSet& fs) {
     f.write(fs.exif_camera.data(), (std::streamsize)cam_len);
     f.write((const char*)&fs.extract_width, 4);
     f.write((const char*)&fs.extract_height, 4);
+    uint8_t has_scores = fs.hasScores() ? 1 : 0;
+    f.write((const char*)&has_scores, 1);
+    if (has_scores)
+        for (const Keypoint& k : fs.keypoints) f.write((const char*)&k.response, 4);
 }
 
 // `with_descriptors == false` seeks past the descriptor block instead of
@@ -215,6 +241,15 @@ inline FeatureSet readFeatures(const std::string& path, bool with_descriptors = 
         if (f.gcount() == 4 && ew > 0 && eh > 0) {
             fs.extract_width = ew;
             fs.extract_height = eh;
+        }
+    }
+    if (version >= 5) {
+        uint8_t has_scores = 0;
+        f.read((char*)&has_scores, 1);
+        if (f.gcount() == 1 && has_scores) {
+            std::vector<float> raw(count);
+            f.read((char*)raw.data(), (std::streamsize)(raw.size() * sizeof(float)));
+            for (uint32_t i = 0; i < count; i++) fs.keypoints[i].response = raw[i];
         }
     }
     return fs;

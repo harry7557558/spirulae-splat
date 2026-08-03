@@ -1050,6 +1050,39 @@ void GuiApp::draw_sfm_advanced() {
         "What the input is, which sets the pairing strategy and how forgiving "
         "the mapper is. Set from the input type when you picked it.");
 
+    const char* frontends[] = {"SIFT (classic)", "ALIKED N16-rot (learned)",
+                               "ALIKED N32 (learned, wider)"};
+    ImGui::SetNextItemWidth(260);
+    ImGui::Combo("Features", &_sfm_job.features, frontends, 3);
+    help_tooltip_on_hover(
+        "Which detector and descriptor. SIFT is the classic one and needs "
+        "nothing downloaded. The ALIKED options are a learned frontend: they "
+        "fetch a small checkpoint (3-4 MB) on first use, find fewer but "
+        "better-localized keypoints, and match markedly more image pairs on "
+        "hard captures. N32 samples more positions per descriptor -- slower, "
+        "slightly stronger.");
+
+    {
+        // Brute force is the only option for SIFT, so say so by disabling the
+        // combo rather than by letting the run fail.
+        const bool learned = _sfm_job.features != 0;
+        const char* matchers[] = {"Brute force", "LightGlue (learned)"};
+        ImGui::BeginDisabled(!learned);
+        ImGui::SetNextItemWidth(260);
+        int shown = learned ? _sfm_job.matcher : 0;
+        if (ImGui::Combo("Matcher", &shown, matchers, 2) && learned)
+            _sfm_job.matcher = shown;
+        ImGui::EndDisabled();
+        help_tooltip_on_hover(
+            learned
+                ? "How descriptors are matched. LightGlue is a learned matcher: "
+                  "it finds far more correct correspondences on hard pairs, and "
+                  "costs tens of milliseconds per pair instead of a few, so it "
+                  "runs behind pair selection."
+                : "LightGlue needs the learned descriptors -- pick an ALIKED "
+                  "frontend above to enable it.");
+    }
+
     const char* mappers[] = {"Automatic", "Flat (one reconstruction)",
                              "Bottom-up (atoms, merged upwards)"};
     ImGui::SetNextItemWidth(260);
@@ -1079,8 +1112,11 @@ void GuiApp::draw_sfm_advanced() {
     ImGui::SetNextItemWidth(260);
     ImGui::InputInt("Max features per image (0 = auto)",
                     &_sfm_job.max_features, 0, 0);
-    help_tooltip_on_hover("Keypoints kept per image, largest scales first. "
-                          "Overrides the quality preset when non-zero.");
+    help_tooltip_on_hover("Keypoints kept per image -- largest scales first "
+                          "for SIFT, highest detection scores for a learned "
+                          "frontend. Overrides the quality preset when "
+                          "non-zero. The two are not comparable: SIFT wants "
+                          "tens of thousands, ALIKED a few thousand.");
     ImGui::SetNextItemWidth(260);
     ImGui::InputInt("Max image size (0 = auto)", &_sfm_job.max_image_size, 0, 0);
     help_tooltip_on_hover(

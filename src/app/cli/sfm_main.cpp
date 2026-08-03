@@ -157,7 +157,7 @@ static const CommandInfo kCommands[] = {
      "  3  partial: under half the images registered, or over 2 px mean reprojection"},
 
     {"extract", CMD_EXTRACT,
-     "detect SIFT features in an image or a directory of images",
+     "detect features in an image or a directory of images",
      "<IMAGE|DIR> [-o OUT] [options]",
      "  GPU SIFT over one image or, recursively, a directory. A directory reuses one GPU\n"
      "  context and processes largest-first, so device buffers are allocated once;\n"
@@ -821,7 +821,7 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
     }
     if (imgs.empty()) { fprintf(stderr, "no decodable images in %s\n", imagedir.c_str()); return 1; }
 
-    // Largest-first so SiftExtractor allocates device buffers exactly once.
+    // Largest-first so the extractor allocates device buffers exactly once.
     std::vector<size_t> order(imgs.size());
     for (size_t i = 0; i < order.size(); i++) order[i] = i;
     std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
@@ -888,11 +888,13 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
                 ((size_t)plan.num_threads * plan.decode_peak_bytes +
                  (size_t)plan.window * plan.held_bytes) >> 20);
 
-    SiftExtractor ext(opt);
+    std::unique_ptr<IFeatureExtractor> ext =
+        createFeatureExtractor(cfg.features, opt, cfg.aliked);
+    if (opt.verbose) fprintf(stderr, "[extract] frontend: %s\n", ext->name());
     loadImagesInOrder(
         paths, plan, lopt,
         [&](size_t k, GrayImage& img) {
-            FeatureSet f = ext.extract(img);
+            FeatureSet f = ext->extract(img);
             sampleFeatureColors(f, img);
             uint32_t dropped = 0;
             if (!lopt.mask_paths.empty() && !lopt.mask_paths[k].empty()) {
@@ -1005,8 +1007,9 @@ static int cmdExtract(int argc, char** argv) {
     GrayImage img = loadGrayImage(image, cfg.max_image_size, /*want_color=*/true, maskpath);
     if (cfg.sift.verbose)
         fprintf(stderr, "[sfm] %s -> %dx%d gray\n", image.c_str(), img.width, img.height);
-    SiftExtractor ext(cfg.sift);
-    FeatureSet fset = ext.extract(img);
+    std::unique_ptr<IFeatureExtractor> ext =
+        createFeatureExtractor(cfg.features, cfg.sift, cfg.aliked);
+    FeatureSet fset = ext->extract(img);
     sampleFeatureColors(fset, img);
     uint32_t masked_out = applyMask(fset, img.mask);
     finishFeatures(fset, img);
@@ -1139,9 +1142,12 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
         fprintf(stderr, "[match] pair selection: top-%u features, %u neighbors\n",
                 popt.num_features, popt.num_neighbors);
 
-    BruteForceMatcher matcher(opt);
+    std::unique_ptr<IFeatureMatcher> matcher =
+        createFeatureMatcher(cfg.matcher, opt, cfg.lightglue);
+    if (verbose && cfg.matcher != "bruteforce")
+        fprintf(stderr, "[match] matcher: %s\n", matcher->name());
     auto matchFn = [&](size_t b, size_t e, std::vector<std::vector<FeatureMatch>>& mout) {
-        matcher.matchBatch(feats, pairs, b, e, mout);
+        matcher->matchBatch(feats, pairs, b, e, mout);
     };
     std::function<void(size_t, size_t)> progress;
     if (verbose)
@@ -1183,7 +1189,7 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
                 std::vector<std::vector<FeatureMatch>> chunk;
                 for (size_t b = 0; b < sample.size(); b += 16) {
                     size_t e = std::min(b + 16, sample.size());
-                    matcher.matchBatch(feats, sample, b, e, chunk);
+                    matcher->matchBatch(feats, sample, b, e, chunk);
                     for (size_t k = b; k < e; k++) sm.push_back(std::move(chunk[k - b]));
                 }
             }
@@ -1934,12 +1940,21 @@ int ssplat_sfm_main(int argc, char** argv) {
         std::printf("%s %s\n", kProgram, SSPLAT_VERSION);
         return 0;
     }
-    if (cmd == "auto") return cmdAuto(argc - 2, argv + 2);
-    if (cmd == "extract") return cmdExtract(argc - 2, argv + 2);
-    if (cmd == "match") return cmdMatch(argc - 2, argv + 2);
-    if (cmd == "map") return cmdMap(argc - 2, argv + 2);
-    if (cmd == "merge") return cmdMerge(argc - 2, argv + 2);
-    if (cmd == "ba") return cmdBa(argc - 2, argv + 2);
+    // One catch for every subcommand. Setup failures throw rather than return
+    // -- a checkpoint that will not download, a matcher handed the wrong kind
+    // of descriptor -- and those messages are written to be read by the person
+    // who typed the command, not by a terminate handler.
+    try {
+        if (cmd == "auto") return cmdAuto(argc - 2, argv + 2);
+        if (cmd == "extract") return cmdExtract(argc - 2, argv + 2);
+        if (cmd == "match") return cmdMatch(argc - 2, argv + 2);
+        if (cmd == "map") return cmdMap(argc - 2, argv + 2);
+        if (cmd == "merge") return cmdMerge(argc - 2, argv + 2);
+        if (cmd == "ba") return cmdBa(argc - 2, argv + 2);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "%s %s: error: %s\n", kProgram, cmd.c_str(), e.what());
+        return 1;
+    }
     std::fprintf(stderr, "%s: error: unknown command '%s'\n", kProgram, cmd.c_str());
     std::fprintf(stderr, "Try '%s --help' for the list of commands.\n", kProgram);
     return 1;

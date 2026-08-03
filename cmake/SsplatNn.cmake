@@ -142,6 +142,29 @@ target_compile_options(ssplat_sam PRIVATE
 set_property(TARGET ssplat_sam PROPERTY CXX_STANDARD 17)
 
 # ---------------------------------------------------------------------------
+# ssplat_aliked -- the ALIKED / LightGlue learned SfM frontend
+#
+# Its checkpoints are ONNX files fetched from COLMAP's releases and parsed in
+# process (docs/notes/aliked-port-plan.md), so this needs no protobuf, no
+# onnxruntime and no converter -- src/aliked/model/Onnx.cpp is a varint walk.
+#
+# The ops it needs that nn/ did not have -- deformable convolution, point-wise
+# grid sample, average pooling, row L2 normalization -- are general and went
+# into nn/shaders. What is here is only what could not be general: the
+# detector's suppression rule and soft-argmax, and its coordinate conversions.
+# ---------------------------------------------------------------------------
+ssplat_nn_shaders(aliked ${SSPLAT_SRC}/aliked/shaders SSPLAT_ALIKED_EMBED)
+
+file(GLOB_RECURSE SSPLAT_ALIKED_SOURCES CONFIGURE_DEPENDS ${SSPLAT_SRC}/aliked/*.cpp)
+list(FILTER SSPLAT_ALIKED_SOURCES EXCLUDE REGEX "/tests/")
+
+add_library(ssplat_aliked STATIC ${SSPLAT_ALIKED_SOURCES} ${SSPLAT_ALIKED_EMBED})
+target_link_libraries(ssplat_aliked PUBLIC ssplat_nn)
+target_compile_options(ssplat_aliked PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
+set_property(TARGET ssplat_aliked PROPERTY CXX_STANDARD 17)
+
+# ---------------------------------------------------------------------------
 # ssplat_video -- container demux + VK_KHR_video_decode_*
 #
 # Gated on SSPLAT_ENABLE_PATENTED: H.264 / H.265 / AV1 bitstream parsing is the
@@ -165,11 +188,14 @@ endif()
 # Tests -- one executable per file, as in src/backend/tests/
 # ---------------------------------------------------------------------------
 file(GLOB SSPLAT_NN_TESTS CONFIGURE_DEPENDS
-     ${SSPLAT_SRC}/nn/tests/*.cpp ${SSPLAT_SRC}/sam/tests/*.cpp)
+     ${SSPLAT_SRC}/nn/tests/*.cpp ${SSPLAT_SRC}/sam/tests/*.cpp
+     ${SSPLAT_SRC}/aliked/tests/*.cpp)
 foreach(test_src ${SSPLAT_NN_TESTS})
     get_filename_component(test_name ${test_src} NAME_WE)
     add_executable(${test_name} ${test_src})
-    target_link_libraries(${test_name} PRIVATE ssplat_sam)
+    # Every test links every library above it: the three are small, and one
+    # rule here beats a per-directory list that drifts.
+    target_link_libraries(${test_name} PRIVATE ssplat_sam ssplat_aliked)
     set_property(TARGET ${test_name} PROPERTY CXX_STANDARD 17)
     target_compile_options(${test_name} PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)

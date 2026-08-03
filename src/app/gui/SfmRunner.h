@@ -69,6 +69,15 @@ struct SfmJob {
     int max_features = 0;             // 0 = the quality preset's
     int max_image_size = 0;           // 0 = the quality preset's
     int mapper = 0;                   // 0 auto, 1 flat, 2 bottom-up
+    // 0 SIFT, 1 ALIKED-n16rot, 2 ALIKED-n32. The learned ones fetch a
+    // checkpoint on first use and run on their own resolution ladder, so the
+    // quality preset means something different for each -- which is why this
+    // is a frontend choice and not a quality level.
+    int features = 0;
+    // 0 brute force, 1 LightGlue. Only meaningful with a learned frontend, and
+    // an order of magnitude slower per pair -- the panel greys it out for SIFT
+    // and the CLI refuses the combination outright.
+    int matcher = 0;
     bool keep_intermediate = false;   // keep features/ and matches.bin
 
     // Extra flags typed by the user, appended verbatim. The escape hatch for

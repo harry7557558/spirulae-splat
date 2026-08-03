@@ -151,6 +151,18 @@ add_library(ssplat_sfm STATIC
 )
 target_include_directories(ssplat_sfm PUBLIC ${SSPLAT_SRC})
 target_link_libraries(ssplat_sfm PUBLIC Vulkan::Vulkan Threads::Threads)
+
+# The learned frontend (src/aliked/) is optional: it sits on the inference
+# layer, which is SSPLAT_BUILD_SAM. Without it `--features aliked-*` is a
+# usage error that says so, and nothing else changes -- SfM keeps building on
+# a machine that only wants SIFT. PUBLIC because sfm/feature/Extractor.h's
+# factory is compiled into whatever links this.
+if(SSPLAT_BUILD_SAM)
+    target_link_libraries(ssplat_sfm PUBLIC ssplat_aliked)
+    target_compile_definitions(ssplat_sfm PUBLIC SSPLAT_HAVE_ALIKED=1)
+else()
+    target_compile_definitions(ssplat_sfm PUBLIC SSPLAT_HAVE_ALIKED=0)
+endif()
 target_compile_options(ssplat_sfm PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
 set_property(TARGET ssplat_sfm PROPERTY CXX_STANDARD 17)

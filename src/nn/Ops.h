@@ -26,6 +26,8 @@ enum class Act : uint32_t {
     GeluErf = 2,   // nn.GELU() -- SAM 3's ViT/neck/decoder use this exact form
     GeluTanh = 3,
     Sigmoid = 4,
+    Selu = 5,      // nn.SELU() -- ALIKED's gate, in every block and both heads
+    LogSigmoid = 6,// F.logsigmoid -- LightGlue's matchability term
 };
 
 enum class AttnBias : uint32_t {
@@ -155,6 +157,25 @@ void conv2d(vk::Arena& arena, const Tensor& out, const Tensor& in, const Tensor&
 void conv2d_depthwise(const Tensor& out, const Tensor& in, const Tensor& w, int kh,
                       int kw, const ConvOpts& opts = {});
 
+// torchvision's deform_conv2d with mask = None, groups = 1.
+//
+// `offset` is [Ho, Wo, 2*kh*kw] -- channel-last, (dy, dx) per tap in kernel
+// order, which is what a plain conv2d producing 2*kh*kw channels lands in with
+// no permute. `max_offset > 0` clamps each component to +-max_offset before
+// sampling (ALIKED clamps to max(H, W) / 4); pass 0 for no clamp.
+//
+// Runs as chunked deform-im2col + the same GEMM and the same weight layout as
+// conv2d, so a deformable conv costs one address computation more per tap than
+// a normal one.
+void deform_conv2d(vk::Arena& arena, const Tensor& out, const Tensor& in,
+                   const Tensor& offset, const Tensor& w, int kh, int kw,
+                   float max_offset = 0.0f, const ConvOpts& opts = {});
+
+// out[N, C*k*k] = the k x k patch of `in` centred on each of N integer
+// (x, y) centres, in the column order conv2d's weight expects. Out-of-range
+// taps read zero. `centers` is an I32 [N, 2] tensor.
+void patch_gather(const Tensor& out, const Tensor& in, const Tensor& centers, int k);
+
 // ConvTranspose2d(kernel=2, stride=2). `w_packed` is the checkpoint weight
 // repacked to [Cout*4, Cin] at load time (see model/Weights.cpp); the four
 // kernel taps become four output-channel groups, so the tuned GEMM does the
@@ -166,9 +187,25 @@ void conv_transpose2x2(vk::Arena& arena, const Tensor& out, const Tensor& in,
 // out[(H/p)*(W/p), p*p*C] with column order c*p*p + ky*p + kx.
 void patchify(const Tensor& out, const Tensor& in, int patch);
 
-void resize_bilinear(const Tensor& out, const Tensor& in);
+// `align_corners` picks between torch's two mappings and is NOT cosmetic:
+// false (the default here, and what mask upsampling depends on) maps
+// src = (dst + 0.5) * scale - 0.5; true maps src = dst * (Hi-1)/(Ho-1).
+void resize_bilinear(const Tensor& out, const Tensor& in, bool align_corners = false);
 void upsample_nearest2x(const Tensor& out, const Tensor& in);
 void maxpool2x2(const Tensor& out, const Tensor& in);
+
+// nn.AvgPool2d(kernel, stride), no padding, ceil_mode = False. `out` must be
+// sized [(Hi-kernel)/stride + 1, ...]; stride 0 means "same as kernel".
+void avgpool(const Tensor& out, const Tensor& in, int kernel, int stride = 0);
+
+// out[N, C] = bilinear sample of in[H, W, C] at `pos`, an f32 [N, 2] tensor of
+// normalized (x, y) in [-1, 1]. Reads zero outside, i.e. torch's
+// padding_mode='zeros'. See the shader for why align_corners matters.
+void grid_sample_points(const Tensor& out, const Tensor& in, const Tensor& pos,
+                        bool align_corners = true);
+
+// F.normalize(x, p=2, dim=-1). `out` may alias `x`.
+void l2_normalize_rows(const Tensor& out, const Tensor& x, float eps = 1e-12f);
 
 // Resize a single-channel logit map to [Ho, Wo], threshold, and write packed
 // 0/255 bytes. `out` is a U8 tensor; the buffer must be 4-byte rounded (every

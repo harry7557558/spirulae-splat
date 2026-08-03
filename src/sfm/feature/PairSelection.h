@@ -71,17 +71,22 @@ struct PairSelectionOptions {
     int device = -1;
 };
 
-// Gather f's K largest-scale features (K = 0 or >= count keeps everything,
-// but still gathered in scale order). The canonical feature order is by
-// position, deliberately not scale (D16), so this is an explicit host-side
-// gather; scale ties break by index.
+// Gather f's K best-ranked features (K = 0 or >= count keeps everything, but
+// still gathered in rank order). The canonical feature order is by position,
+// deliberately not by rank (D16), so this is an explicit host-side gather;
+// ties break by index.
+//
+// "Rank" is scale for SIFT and the detection score for a detector that has no
+// scale -- FeatureSet::rank picks. Reading `scale` unconditionally, as this
+// did, silently selected an arbitrary 512 keypoints out of an ALIKED set,
+// because every one of them has scale 0. That is the failure mode this whole
+// stage is least able to show: the shortlist still looks populated.
 inline FeatureSet topScaleSubset(const FeatureSet& f, uint32_t K) {
     if (K == 0 || K > f.count()) K = f.count();
     std::vector<uint32_t> idx(f.count());
     for (uint32_t j = 0; j < f.count(); j++) idx[j] = j;
     std::partial_sort(idx.begin(), idx.begin() + K, idx.end(), [&](uint32_t a, uint32_t b) {
-        if (f.keypoints[a].scale != f.keypoints[b].scale)
-            return f.keypoints[a].scale > f.keypoints[b].scale;
+        if (f.rank(a) != f.rank(b)) return f.rank(a) > f.rank(b);
         return a < b;
     });
     FeatureSet m;

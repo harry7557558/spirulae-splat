@@ -66,6 +66,23 @@ struct MaskExportParams {
     uint32_t groups_per_row;
 };
 
+struct PoolParams {
+    uint64_t out, x;
+    uint32_t Ho, Wo, Hi, Wi, C, kh, kw, stride_y, stride_x, groups_per_row;
+};
+
+struct GridSampleParams {
+    uint64_t out, x, pos;
+    uint32_t H, W, C, N, groups_per_row;
+};
+
+struct NormalizeParams {
+    uint64_t out, x;
+    uint32_t rows, cols;
+    float    eps;
+    uint32_t groups_per_row;
+};
+
 }  // namespace
 
 // ================
@@ -250,7 +267,8 @@ void roi_align(const Tensor& out, const Tensor& feat, const Tensor& boxes, int H
 // Resample
 // ================
 
-static void resize_op(const char* entry, const Tensor& out, const Tensor& in) {
+static void resize_op(const char* entry, const Tensor& out, const Tensor& in,
+                      bool align_corners = false) {
     NN_CHECK(out.ndim == 3 && in.ndim == 3,
                "%s expects [H, W, C] tensors (got %dD and %dD)", entry, out.ndim,
                in.ndim);
@@ -264,19 +282,93 @@ static void resize_op(const char* entry, const Tensor& out, const Tensor& in) {
     p.Hi = (uint32_t)in.shape[0];
     p.Wi = (uint32_t)in.shape[1];
     p.C = (uint32_t)out.shape[2];
-    vk::SpecList spec{(uint32_t)(in.dtype == DType::F16), 0u};
+    vk::SpecList spec{(uint32_t)(in.dtype == DType::F16), 0u, (uint32_t)align_corners};
     vk::Stream::get().dispatchFlat(entry, spec, out.numel(), 256, &p, sizeof(p),
                                    &p.groups_per_row);
 }
 
-void resize_bilinear(const Tensor& out, const Tensor& in) {
-    resize_op("resample.resize_bilinear", out, in);
+void resize_bilinear(const Tensor& out, const Tensor& in, bool align_corners) {
+    resize_op("resample.resize_bilinear", out, in, align_corners);
 }
 void upsample_nearest2x(const Tensor& out, const Tensor& in) {
     resize_op("resample.upsample_nearest2x", out, in);
 }
 void maxpool2x2(const Tensor& out, const Tensor& in) {
     resize_op("resample.maxpool2x2", out, in);
+}
+
+void avgpool(const Tensor& out, const Tensor& in, int kernel, int stride) {
+    NN_CHECK(out.ndim == 3 && in.ndim == 3, "avgpool expects [H, W, C] tensors");
+    NN_CHECK(out.shape[2] == in.shape[2], "avgpool: channel counts differ");
+    NN_CHECK(kernel > 0, "avgpool: kernel must be positive");
+    if (stride <= 0) stride = kernel;
+    // torch with ceil_mode=False; say so here rather than let a mis-sized
+    // output silently read past the last complete window.
+    const int64_t want_h = (in.shape[0] - kernel) / stride + 1;
+    const int64_t want_w = (in.shape[1] - kernel) / stride + 1;
+    NN_CHECK(out.shape[0] == want_h && out.shape[1] == want_w,
+             "avgpool(%d, %d) of %lldx%lld is %lldx%lld, but out is %lldx%lld", kernel,
+             stride, (long long)in.shape[0], (long long)in.shape[1], (long long)want_h,
+             (long long)want_w, (long long)out.shape[0], (long long)out.shape[1]);
+
+    PoolParams p{};
+    p.out = out.ptr;
+    p.x = in.ptr;
+    p.Ho = (uint32_t)out.shape[0];
+    p.Wo = (uint32_t)out.shape[1];
+    p.Hi = (uint32_t)in.shape[0];
+    p.Wi = (uint32_t)in.shape[1];
+    p.C = (uint32_t)out.shape[2];
+    p.kh = p.kw = (uint32_t)kernel;
+    p.stride_y = p.stride_x = (uint32_t)stride;
+    vk::SpecList spec{(uint32_t)(in.dtype == DType::F16), 0u, 0u};
+    vk::Stream::get().dispatchFlat("resample.avgpool", spec, out.numel(), 256, &p,
+                                   sizeof(p), &p.groups_per_row);
+}
+
+void grid_sample_points(const Tensor& out, const Tensor& in, const Tensor& pos,
+                        bool align_corners) {
+    NN_CHECK(in.ndim == 3, "grid_sample_points expects an [H, W, C] map");
+    NN_CHECK(pos.dtype == DType::F32 && pos.cols() == 2,
+             "grid_sample_points: pos must be an f32 [N, 2] tensor");
+    const int64_t N = pos.rows(), C = in.shape[2];
+    NN_CHECK(out.rows() == N && out.cols() == C,
+             "grid_sample_points: out is [%lld, %lld], expected [%lld, %lld]",
+             (long long)out.rows(), (long long)out.cols(), (long long)N, (long long)C);
+    if (N == 0) return;
+
+    GridSampleParams p{};
+    p.out = out.ptr;
+    p.x = in.ptr;
+    p.pos = pos.ptr;
+    p.H = (uint32_t)in.shape[0];
+    p.W = (uint32_t)in.shape[1];
+    p.C = (uint32_t)C;
+    p.N = (uint32_t)N;
+    vk::SpecList spec{(uint32_t)(in.dtype == DType::F16), 0u, (uint32_t)align_corners};
+    vk::Stream::get().dispatchFlat("misc.grid_sample_points", spec, N * C, 256, &p,
+                                   sizeof(p), &p.groups_per_row);
+}
+
+void l2_normalize_rows(const Tensor& out, const Tensor& x, float eps) {
+    NN_CHECK(out.rows() == x.rows() && out.cols() == x.cols(),
+             "l2_normalize_rows: shapes differ");
+    const int64_t rows = x.rows();
+    if (rows == 0) return;
+
+    NormalizeParams p{};
+    p.out = out.ptr;
+    p.x = x.ptr;
+    p.rows = (uint32_t)rows;
+    p.cols = (uint32_t)x.cols();
+    p.eps = eps;
+    // One workgroup per row, not one thread per element: the grid folds over
+    // rows, and the shader reconstructs the row from (gid.y, gid.x).
+    const vk::Stream::Fold fold = vk::Stream::fold1D(rows, 1);
+    p.groups_per_row = fold.per_row;
+    vk::SpecList spec{(uint32_t)(x.dtype == DType::F16), 0u, 0u};
+    vk::Stream::get().dispatch("misc.l2_normalize_rows", spec, fold.per_row, fold.rows, 1,
+                               &p, sizeof(p));
 }
 
 void resize_binarize(const Tensor& out_u8, const Tensor& logits, int64_t Ho, int64_t Wo,

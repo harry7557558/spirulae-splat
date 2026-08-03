@@ -29,6 +29,12 @@ namespace sfm {
 
 struct MatchOptions {
     float max_ratio = 0.8f;     // Lowe ratio (best_dist < ratio * second_dist)
+    // Absolute cosine similarity a match must reach, for L2-normalized float
+    // descriptors only; 0 disables it. COLMAP's ALIKED defaults are
+    // min_cossim = 0.85 with max_ratio = 1.0 -- i.e. the ratio test off and
+    // this the only filter -- which is a different shape of test from SIFT's
+    // and needs both knobs to exist to be expressible.
+    float min_similarity = 0.0f;
     bool cross_check = true;    // keep only mutual nearest neighbours
     uint32_t max_num_matches = 32768;  // cap per pair (0 = unlimited)
     int device = -1;
@@ -288,6 +294,35 @@ private:
         }
     }
 
+    // Float descriptors reach the GPU as uint8.
+    //
+    // The matching kernel is built around the hardware packed uint8x4 dot
+    // product and a 128-byte descriptor; a float path would quadruple its
+    // groupshared tile and retune it. It does not have to: for a UNIFORM
+    // affine quantization the squared distances all scale by one constant, so
+    // the ordering, the Lowe ratio (a ratio of two of them) and the
+    // max_num_matches sort are preserved exactly. Only an absolute threshold
+    // has to be converted, which is what similarityFromD2 does.
+    //
+    // kQuantHalfRange is the half-range mapped onto the byte. Measured on real
+    // ALIKED descriptors: components are ~N(0, 0.088) with a maximum of 0.392
+    // over an image, so 0.4 clips essentially nothing and spends the byte on
+    // the range that is actually occupied. The residual is ~1% of a unit
+    // descriptor's norm, well under the ratio test's margin.
+    static constexpr float kQuantHalfRange = 0.4f;
+    static constexpr float kQuantSteps = 127.0f;
+
+    static uint8_t quantize(float v) {
+        const float q = v * (kQuantSteps / kQuantHalfRange) + 128.0f;
+        return (uint8_t)std::lround(std::min(255.0f, std::max(0.0f, q)));
+    }
+    // Cosine similarity of two unit descriptors from their quantized squared
+    // distance: ||a-b||^2 = 2 - 2 cos, and d2 is that scaled by (steps/range)^2.
+    static float similarityFromD2(uint32_t d2) {
+        const float k = kQuantHalfRange / kQuantSteps;
+        return 1.0f - 0.5f * (float)d2 * k * k;
+    }
+
     static constexpr int DW = 32;  // uint words per descriptor
     // Workgroup width of the row-only kernel; MUST equal TQR in
     // sfm/shaders/match/bruteforce.slang. Each workgroup streams the whole
@@ -297,10 +332,15 @@ private:
     // queries that are not even in range.
     static constexpr uint32_t kRowThreads = 256;
 
+    // 128 bytes per descriptor either way: uint8 as SIFT writes them, or f32
+    // quantized on upload (see kQuantHalfRange).
     static void checkDescriptors(const FeatureSet& f) {
         if (f.count() == 0) return;
-        if (f.dtype != DType::U8 || f.dim != 128)
-            throw std::runtime_error("brute-force matcher expects 128-D uint8 descriptors");
+        if (f.dim != 128)
+            throw std::runtime_error("brute-force matcher expects 128-D descriptors, got " +
+                                     std::to_string(f.dim));
+        if (f.dtype != DType::U8 && f.dtype != DType::F32)
+            throw std::runtime_error("brute-force matcher expects uint8 or f32 descriptors");
     }
 
     // Lowe ratio + cross-check, exactly as before -- the GPU only changed how
@@ -314,6 +354,8 @@ private:
             uint32_t bestD2 = rA[4 * i + 1], secondD2 = rA[4 * i + 2];
             if (j >= nb) continue;
             if (secondD2 != 0xffffffffu && (float)bestD2 >= r2 * (float)secondD2) continue;
+            if (opt_.min_similarity > 0 && similarityFromD2(bestD2) < opt_.min_similarity)
+                continue;
             if (opt_.cross_check && rB[4 * j + 0] != i) continue;
             out.push_back({i, j, std::sqrt((float)bestD2)});
         }
@@ -338,6 +380,8 @@ private:
             uint32_t bestD2 = rA[4 * i + 1], secondD2 = rA[4 * i + 2];
             if (j >= nb) continue;
             if (secondD2 != 0xffffffffu && (float)bestD2 >= r2 * (float)secondD2) continue;
+            if (opt_.min_similarity > 0 && similarityFromD2(bestD2) < opt_.min_similarity)
+                continue;
             if (opt_.cross_check && rB[4 * j + 0] != i) continue;
             n++;
         }
@@ -442,10 +486,15 @@ private:
             const FeatureSet& f = *feats[img];
             resident_[img] = used_;
             used_ += f.count();
-            if (f.count()) {
-                memcpy(blob + off, f.descriptors.data(), (size_t)f.count() * 128);
-                off += (size_t)f.count() * 128;
+            if (!f.count()) continue;
+            const size_t bytes = (size_t)f.count() * 128;
+            if (f.dtype == DType::U8) {
+                memcpy(blob + off, f.descriptors.data(), bytes);
+            } else {
+                const float* src = reinterpret_cast<const float*>(f.descriptors.data());
+                for (size_t i = 0; i < bytes; i++) blob[off + i] = quantize(src[i]);
             }
+            off += bytes;
         }
         ctx_.upload(bDesc_, blob, (VkDeviceSize)want * 128, (VkDeviceSize)first * 128);
         normDirty_ = {first, used_};

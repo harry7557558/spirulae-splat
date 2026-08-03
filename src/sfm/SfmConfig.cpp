@@ -157,8 +157,15 @@ constexpr size_t kInlineChoices = 26;
 
 std::string metavarFor(bool, const char*, const char*) { return ""; }
 std::string metavarFor(const std::string&, const char* name, const char* choices) {
-    if (choices && *choices && std::string(choices).size() <= kInlineChoices)
-        return "{" + std::string(choices) + "}";
+    if (choices && *choices) {
+        // A field WITH choices never takes a path, whatever it is called --
+        // `--features` is a directory on `map` and a frontend name on
+        // `extract`, and only the latter has choices. Long lists do not fit
+        // the flag column and are printed in the help text instead.
+        return std::string(choices).size() <= kInlineChoices
+                   ? "{" + std::string(choices) + "}"
+                   : "VALUE";
+    }
     // No metavar column in the table: the flag name says what it takes, and
     // "DIR" reads better than "VALUE" on the handful that take a path.
     std::string n = name;
@@ -274,23 +281,73 @@ std::string applyPresets(SfmConfig& cfg, const std::set<std::string>& seen,
     // of the extractor's 3200 px default. Pair-selection breadth follows it too
     // (D42): `prefilter-neighbors` is the one selection parameter that trades
     // match time against how much of the view graph verification even sees.
+    // The learned frontend runs on its own resolution ladder, roughly two
+    // thirds of SIFT's -- COLMAP does the same (1600 against 3200 at the
+    // default), and for the same reason: ALIKED aggregates 128 channels at
+    // FULL resolution, so working size is what its memory is spent on. Its
+    // feature counts are lower too, which is the detector's design rather
+    // than a budget: it emits fewer, better-localized points.
+    const bool learned = isAlikedType(cfg.features);
     if (cfg.quality == "low") {
-        presetSet(seen, moved, "max-image-size", cfg.max_image_size, 1000);
+        presetSet(seen, moved, "max-image-size", cfg.max_image_size, learned ? 800 : 1000);
         presetSet(seen, moved, "max-features", cfg.sift.max_num_features, 2048);
+        presetSet(seen, moved, "aliked-max-features", cfg.aliked.max_num_features, 1024);
         presetSet(seen, moved, "prefilter-neighbors", cfg.prefilter.num_neighbors, 16);
     } else if (cfg.quality == "medium") {
-        presetSet(seen, moved, "max-image-size", cfg.max_image_size, 1600);
+        presetSet(seen, moved, "max-image-size", cfg.max_image_size, learned ? 1200 : 1600);
         presetSet(seen, moved, "max-features", cfg.sift.max_num_features, 4096);
+        presetSet(seen, moved, "aliked-max-features", cfg.aliked.max_num_features, 2048);
         presetSet(seen, moved, "prefilter-neighbors", cfg.prefilter.num_neighbors, 24);
     } else if (cfg.quality == "high") {
-        presetSet(seen, moved, "max-image-size", cfg.max_image_size, 2400);
+        presetSet(seen, moved, "max-image-size", cfg.max_image_size, learned ? 1600 : 2400);
         presetSet(seen, moved, "max-features", cfg.sift.max_num_features, 8192);
+        presetSet(seen, moved, "aliked-max-features", cfg.aliked.max_num_features, 4096);
     } else if (cfg.quality == "extreme") {
-        presetSet(seen, moved, "max-image-size", cfg.max_image_size, 3200);
+        presetSet(seen, moved, "max-image-size", cfg.max_image_size, learned ? 2400 : 3200);
         presetSet(seen, moved, "max-features", cfg.sift.max_num_features, 16384);
+        presetSet(seen, moved, "aliked-max-features", cfg.aliked.max_num_features, 8192);
         presetSet(seen, moved, "prefilter-neighbors", cfg.prefilter.num_neighbors, 48);
     } else {
         return "unknown --quality '" + cfg.quality + "' (low, medium, high or extreme)";
+    }
+
+    // A learned descriptor needs a looser ratio than SIFT's 0.8, because its
+    // second-best distance sits much closer to its best: measured on a
+    // 20-image capture, the median mutual-nearest match has a distance ratio
+    // of 0.826, i.e. just the wrong side of SIFT's threshold. The whole point
+    // of the ratio test -- that a true match stands out from the runner-up --
+    // is weaker for descriptors trained to be smooth, which is also why
+    // LightGlue exists.
+    //
+    // 0.92 is where the measurement put it, on 190 exhaustive pairs:
+    //
+    //   ratio   0.80   0.85   0.90   0.92   0.95
+    //   pairs   65/190 79     111    172    190
+    //   inliers 6331   8426   11487  13633  16249
+    //   inlier% 90     79     54     44     29
+    //
+    // Past 0.92 the pair count is bought with junk. For reference, GPU SIFT on
+    // the same images at 4x the feature budget managed 68/190 and 7703
+    // inliers, so this is not a concession -- it is where the learned frontend
+    // wins.
+    //
+    // COLMAP's own ALIKED defaults (ratio off, min_cossim 0.85) were tried
+    // first and are NOT used: on this data an absolute 0.85 cosine rejects
+    // ~70% of mutual-nearest matches (their median cosine is 0.726) and left
+    // 24/190 pairs. --min-similarity still exists for anyone who wants that
+    // shape of test.
+    if (learned && !isLearnedMatcher(cfg.matcher))
+        presetSet(seen, moved, "ratio", cfg.match.max_ratio, 0.92f);
+
+    // LightGlue decides on its own assignment, so the ratio test and the
+    // cross-check are not merely unnecessary -- they are a second filter on a
+    // quantity it does not produce. Its own confidence is the only threshold.
+    if (isLearnedMatcher(cfg.matcher)) {
+        presetSet(seen, moved, "ratio", cfg.match.max_ratio, 1.0f);
+        presetSet(seen, moved, "min-similarity", cfg.match.min_similarity, 0.0f);
+        // Exhaustive matching with it is hours on a capture where pair
+        // selection is minutes, and the shortlist is what it was built for.
+        presetSet(seen, moved, "pairs", cfg.pairs, std::string("prefilter"));
     }
 
     if (cfg.data_type == "individual") {
@@ -332,10 +389,29 @@ std::string SfmConfig::finalize(uint32_t cmd) {
     twoview.ransac.max_error = max_error;
     mapper.max_reproj_error = max_error;
 
+    if (features != "sift" && !isAlikedType(features))
+        return "unknown --features '" + features +
+               "' (sift, aliked-n16rot or aliked-n32)";
+    if (matcher != "bruteforce" && !isLearnedMatcher(matcher))
+        return "unknown --matcher '" + matcher + "' (bruteforce or lightglue)";
+    // LightGlue is trained on one frontend's descriptors, and matching SIFT
+    // with it would run and return nonsense. Only `auto` can check that here:
+    // `match` reads features off disk and has no --features to compare
+    // against, so its guard is on the descriptors themselves, in
+    // LearnedMatcher.cpp, which is the more honest place for it anyway.
+    if ((cmd & (CMD_AUTO | CMD_EXTRACT)) && isLearnedMatcher(matcher) &&
+        !isAlikedType(features))
+        return "--matcher " + matcher + " needs learned descriptors; add "
+               "--features aliked-n16rot";
+    lightglue.device = device;
+    if (max_image_size <= 0) max_image_size = defaultMaxImageSize(features);
+
     sift.device = match.device = prefilter.device = mapper.device = device;
+    aliked.device = device;
     mapper.threads = threads;
     const bool v = !quiet;
-    sift.verbose = mapper.verbose = manager.verbose = merge.verbose = v;
+    sift.verbose = mapper.verbose = manager.verbose = merge.verbose = aliked.verbose = v;
+    lightglue.verbose = v;
 
     // Scoring problems are ~1/32 the size of full matching, so the selection
     // pass batches at least as many pairs per submit as the matcher does.

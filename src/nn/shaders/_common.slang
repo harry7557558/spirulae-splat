@@ -65,6 +65,13 @@ static const int ACT_RELU      = 1;
 static const int ACT_GELU_ERF  = 2;  // nn.GELU()          -- the PyTorch default
 static const int ACT_GELU_TANH = 3;  // nn.GELU('tanh')
 static const int ACT_SIGMOID   = 4;
+static const int ACT_SELU      = 5;  // nn.SELU()          -- ALIKED's gate
+static const int ACT_LOGSIGMOID = 6; // F.logsigmoid       -- LightGlue
+
+// nn.SELU's constants, which are fixed by the paper (Klambauer et al. 2017)
+// and are what torch hard-codes -- not tunable, and not the same as ELU's.
+static const float SELU_ALPHA = 1.6732632423543772848170429916717f;
+static const float SELU_SCALE = 1.0507009873554804934193349852946f;
 
 // erf-exact GELU: 0.5x(1 + erf(x/sqrt2)).
 //
@@ -95,6 +102,10 @@ float apply_act(float x, int kind) {
         case ACT_GELU_ERF:  return gelu_erf(x);
         case ACT_GELU_TANH: return gelu_tanh(x);
         case ACT_SIGMOID:   return 1.0f / (1.0f + exp(-x));
+        case ACT_SELU:      return SELU_SCALE * ((x > 0.0f) ? x : SELU_ALPHA * (exp(x) - 1.0f));
+        // log(sigmoid(x)), in the form that does not overflow either tail:
+        // min(x,0) - log(1 + exp(-|x|)).
+        case ACT_LOGSIGMOID: return min(x, 0.0f) - log(1.0f + exp(-abs(x)));
         default:            return x;
     }
 }
@@ -138,6 +149,35 @@ float sample_bilinear(uint* src, bool src_f16, int H, int W, int C, int c, float
     float v11 = load_elem(src, uint(y1) * stride_y + uint(x1) * uint(C) + uint(c), src_f16);
     return (1.0f - fy) * ((1.0f - fx) * v00 + fx * v01) +
            fy * ((1.0f - fx) * v10 + fx * v11);
+}
+
+// Bilinear fetch that reads ZERO outside the map instead of clamping to the
+// edge -- torchvision's rule for deformable convolution and torch's
+// `grid_sample(padding_mode='zeros')`.
+//
+// The corner-by-corner guards matter and are not the same as an early
+// bounds test on (y, x): at y = H - 0.5 the upper row is out of range but
+// contributes weight 0.5, and torchvision takes that contribution as zero
+// rather than repeating row H-1. Getting this wrong is invisible in the
+// interior and shifts every response near the border.
+float sample_bilinear_zero(uint* src, bool src_f16, int H, int W, int C, int c, float y,
+                           float x) {
+    if (y <= -1.0f || float(H) <= y || x <= -1.0f || float(W) <= x) return 0.0f;
+    int y0 = int(floor(y));
+    int x0 = int(floor(x));
+    int y1 = y0 + 1;
+    int x1 = x0 + 1;
+    float ly = y - float(y0);
+    float lx = x - float(x0);
+    float hy = 1.0f - ly;
+    float hx = 1.0f - lx;
+    uint stride_y = uint(W) * uint(C);
+    float v00 = 0.0f, v01 = 0.0f, v10 = 0.0f, v11 = 0.0f;
+    if (y0 >= 0 && x0 >= 0)     v00 = load_elem(src, uint(y0) * stride_y + uint(x0) * uint(C) + uint(c), src_f16);
+    if (y0 >= 0 && x1 <= W - 1) v01 = load_elem(src, uint(y0) * stride_y + uint(x1) * uint(C) + uint(c), src_f16);
+    if (y1 <= H - 1 && x0 >= 0) v10 = load_elem(src, uint(y1) * stride_y + uint(x0) * uint(C) + uint(c), src_f16);
+    if (y1 <= H - 1 && x1 <= W - 1) v11 = load_elem(src, uint(y1) * stride_y + uint(x1) * uint(C) + uint(c), src_f16);
+    return hy * (hx * v00 + lx * v01) + ly * (hx * v10 + lx * v11);
 }
 
 #endif  // NN_COMMON_INCLUDED

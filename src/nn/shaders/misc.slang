@@ -5,9 +5,10 @@
 
 #include "_common.slang"
 
-// Spec ids 0..1 (module-wide).
+// Spec ids 0..2 (module-wide).
 [SpecializationConstant] const int kInputF16 = 0;
 [SpecializationConstant] const int kAct      = 0;
+[SpecializationConstant] const int kAlignCorners = 0;
 
 static const int WG = 256;
 
@@ -307,4 +308,104 @@ void roi_align(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
         }
     }
     p.out[i] = sum / float(ny * nx);
+}
+
+// ---------------------------------------------------------------------------
+// Point-wise grid sample
+// ---------------------------------------------------------------------------
+
+struct GridSampleParams {
+    float* out;   // [N, C]
+    uint*  x;     // [H, W, C]
+    uint*  pos;   // [N, 2] f32, normalized (gx, gy) in [-1, 1]
+    uint   H;
+    uint   W;
+    uint   C;
+    uint   N;
+    uint   groups_per_row;
+};
+
+// torch's `grid_sample(mode='bilinear', padding_mode='zeros')` at N arbitrary
+// points, with align_corners taken from the module's spec constant.
+//
+// A whole-map resample (resample.slang) is the wrong shape for this: ALIKED's
+// descriptor head samples M positions around each of a few thousand keypoints,
+// i.e. a list, not a grid. roi_align is the closest existing op and is not a
+// substitute -- it averages over a box, this reads one point.
+//
+// The two align_corners conventions differ in what -1 and +1 mean: the corner
+// *pixel centres* when true, the outer *edges* of the corner pixels when
+// false. ALIKED normalizes its keypoints as x / (W - 1) * 2 - 1, which is the
+// true convention, and mixing them costs half a pixel at the border.
+[shader("compute")]
+[numthreads(WG, 1, 1)]
+void grid_sample_points(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
+                        uniform GridSampleParams p) {
+    uint i = fold_index(gid, tid, p.groups_per_row, uint(WG));
+    if (i >= p.N * p.C) return;
+    uint c = i % p.C;
+    uint n = i / p.C;
+
+    float gx = asfloat(p.pos[2u * n]);
+    float gy = asfloat(p.pos[2u * n + 1u]);
+    float sx, sy;
+    if (kAlignCorners != 0) {
+        sx = (gx + 1.0f) * 0.5f * (float(p.W) - 1.0f);
+        sy = (gy + 1.0f) * 0.5f * (float(p.H) - 1.0f);
+    } else {
+        sx = ((gx + 1.0f) * float(p.W) - 1.0f) * 0.5f;
+        sy = ((gy + 1.0f) * float(p.H) - 1.0f) * 0.5f;
+    }
+    p.out[i] = sample_bilinear_zero(p.x, kInputF16 != 0, int(p.H), int(p.W), int(p.C),
+                                    int(c), sy, sx);
+}
+
+// ---------------------------------------------------------------------------
+// Row-wise L2 normalization
+// ---------------------------------------------------------------------------
+
+struct NormalizeParams {
+    float* out;   // [rows, cols]
+    uint*  x;
+    uint   rows;
+    uint   cols;
+    float  eps;
+    uint   groups_per_row;
+};
+
+// out[r] = x[r] / max(||x[r]||, eps) -- torch's F.normalize(p=2, dim=-1).
+//
+// One workgroup per row with a groupshared tree reduction, deliberately not
+// wave intrinsics: a descriptor that differs in its last bits between a wave32
+// and a wave64 device would make match indices device-dependent, and the whole
+// reconstruction with them.
+groupshared float g_norm_partial[WG];
+
+[shader("compute")]
+[numthreads(WG, 1, 1)]
+void l2_normalize_rows(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
+                       uniform NormalizeParams p) {
+    uint row = gid.y * p.groups_per_row + gid.x;
+    uint t = tid.x;
+
+    // Out-of-range rows must still reach every barrier below.
+    float acc = 0.0f;
+    if (row < p.rows)
+        for (uint c = t; c < p.cols; c += uint(WG)) {
+            float v = load_elem(p.x, row * p.cols + c, kInputF16 != 0);
+            acc += v * v;
+        }
+    g_norm_partial[t] = acc;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint s = uint(WG) / 2u; s > 0u; s >>= 1) {
+        if (t < s) g_norm_partial[t] += g_norm_partial[t + s];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (row >= p.rows) return;
+
+    float inv = 1.0f / max(sqrt(g_norm_partial[0]), p.eps);
+    for (uint c = t; c < p.cols; c += uint(WG)) {
+        float v = load_elem(p.x, row * p.cols + c, kInputF16 != 0);
+        p.out[row * p.cols + c] = v * inv;
+    }
 }

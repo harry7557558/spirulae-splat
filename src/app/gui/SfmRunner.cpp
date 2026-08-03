@@ -23,6 +23,8 @@ const char* kDataType[] = {"individual", "video", "internet"};
 const char* kCameraMode[] = {"single", "folder", "image"};
 const char* kPairs[] = {"auto", "exhaustive", "sequential", "prefilter"};
 const char* kMapper[] = {"auto", "flat", "bottom-up"};
+const char* kFeatures[] = {"sift", "aliked-n16rot", "aliked-n32"};
+const char* kMatcher[] = {"bruteforce", "lightglue"};
 
 template <int N>
 const char* pick(const char* const (&table)[N], int i, int fallback = 0) {
@@ -234,6 +236,11 @@ void SfmRunner::run(SfmJob job) {
                 "--camera-model", job.camera_model,
                 "--camera-mode", pick(kCameraMode, job.camera_mode, 1),
                 "--mapper", pick(kMapper, job.mapper),
+                "--features", pick(kFeatures, job.features),
+                // LightGlue only exists for the learned descriptors; asking
+                // for it with SIFT selected is a usage error, so do not.
+                "--matcher",
+                pick(kMatcher, job.features == 0 ? 0 : job.matcher),
             };
             if (job.pairs > 0) {
                 argv.push_back("--pairs");
@@ -250,7 +257,12 @@ void SfmRunner::run(SfmJob job) {
                 argv.push_back(buf);
             }
             if (job.max_features > 0) {
-                argv.push_back("--max-features");
+                // Each frontend has its own count flag, because their budgets
+                // are not comparable -- a learned detector emits a few
+                // thousand better-localized points where SIFT wants tens of
+                // thousands. One spinner, routed to whichever is running.
+                argv.push_back(job.features == 0 ? "--max-features"
+                                                 : "--aliked-max-features");
                 argv.push_back(std::to_string(job.max_features));
             }
             if (job.max_image_size > 0) {

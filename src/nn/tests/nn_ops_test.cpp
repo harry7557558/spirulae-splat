@@ -861,6 +861,204 @@ void test_spatial(vk::Arena& arena) {
 }
 
 // ================
+// The learned-frontend ops (src/aliked/)
+// ================
+
+// torchvision's bilinear_interpolate, corner-by-corner: zero outside, and a
+// corner that falls outside contributes nothing even when the sample point is
+// inside. This is the reference the deformable convolution has to match, and
+// the reason it is spelled out rather than reusing the clamped sampler above.
+float sample_zero(const std::vector<float>& src, int H, int W, int C, int c, float y,
+                  float x) {
+    if (y <= -1.0f || (float)H <= y || x <= -1.0f || (float)W <= x) return 0.0f;
+    const int y0 = (int)std::floor(y), x0 = (int)std::floor(x);
+    const int y1 = y0 + 1, x1 = x0 + 1;
+    const float ly = y - y0, lx = x - x0, hy = 1 - ly, hx = 1 - lx;
+    auto at = [&](int yy, int xx) -> float {
+        if (yy < 0 || yy > H - 1 || xx < 0 || xx > W - 1) return 0.0f;
+        return src[((size_t)yy * W + xx) * C + c];
+    };
+    return hy * (hx * at(y0, x0) + lx * at(y0, x1)) +
+           ly * (hx * at(y1, x0) + lx * at(y1, x1));
+}
+
+void test_learned_frontend(vk::Arena& arena) {
+    {   // SELU -- ALIKED's gate, in every block and both heads.
+        vk::ArenaScope scope(arena);
+        const int N = 4096;
+        auto x = randn(N, 2.0f);
+        Tensor to = arena_tensor(arena, DType::F32, N);
+        unary(to, upload_f32(arena, x, N), Act::Selu);
+        const float a = 1.6732632423543772848170429916717f;
+        const float s = 1.0507009873554804934193349852946f;
+        std::vector<float> want(x.size());
+        for (size_t i = 0; i < x.size(); ++i)
+            want[i] = s * (x[i] > 0 ? x[i] : a * (std::exp(x[i]) - 1.0f));
+        check("selu", readback(to), want, 1e-5f);
+    }
+    {   // AvgPool2d(2,2) and (4,4) -- the encoder feeds blocks 3 and 4 from
+        // pooled copies of the input.
+        vk::ArenaScope scope(arena);
+        const int Hi = 16, Wi = 12, C = 5;
+        auto x = randn((size_t)Hi * Wi * C);
+        Tensor tx = upload_f32(arena, x, Hi, Wi, C);
+        for (int k : {2, 4}) {
+            const int Ho = Hi / k, Wo = Wi / k;
+            Tensor to = arena_tensor(arena, DType::F32, Ho, Wo, C);
+            avgpool(to, tx, k);
+            std::vector<float> want((size_t)Ho * Wo * C, 0.0f);
+            for (int y = 0; y < Ho; ++y)
+                for (int xx = 0; xx < Wo; ++xx)
+                    for (int c = 0; c < C; ++c) {
+                        double s = 0;
+                        for (int dy = 0; dy < k; ++dy)
+                            for (int dx = 0; dx < k; ++dx)
+                                s += x[((size_t)(y * k + dy) * Wi + (xx * k + dx)) * C + c];
+                        want[((size_t)y * Wo + xx) * C + c] = (float)(s / (k * k));
+                    }
+            check(k == 2 ? "avgpool 2x2" : "avgpool 4x4", readback(to), want, 1e-5f);
+        }
+    }
+    {   // resize_bilinear(align_corners=True): the OTHER coordinate mapping.
+        vk::ArenaScope scope(arena);
+        const int Hi = 5, Wi = 7, C = 3, Ho = 17, Wo = 11;
+        auto x = randn((size_t)Hi * Wi * C);
+        Tensor to = arena_tensor(arena, DType::F32, Ho, Wo, C);
+        resize_bilinear(to, upload_f32(arena, x, Hi, Wi, C), /*align_corners=*/true);
+        std::vector<float> want((size_t)Ho * Wo * C);
+        for (int y = 0; y < Ho; ++y)
+            for (int xx = 0; xx < Wo; ++xx) {
+                const float sy = (float)y * (Hi - 1.0f) / (Ho - 1.0f);
+                const float sx = (float)xx * (Wi - 1.0f) / (Wo - 1.0f);
+                int y0 = (int)std::floor(sy), x0 = (int)std::floor(sx);
+                const float fy = sy - y0, fx = sx - x0;
+                const int y1 = std::min(y0 + 1, Hi - 1), x1 = std::min(x0 + 1, Wi - 1);
+                y0 = std::min(y0, Hi - 1);
+                x0 = std::min(x0, Wi - 1);
+                for (int c = 0; c < C; ++c)
+                    want[((size_t)y * Wo + xx) * C + c] =
+                        (1 - fy) * ((1 - fx) * x[((size_t)y0 * Wi + x0) * C + c] +
+                                    fx * x[((size_t)y0 * Wi + x1) * C + c]) +
+                        fy * ((1 - fx) * x[((size_t)y1 * Wi + x0) * C + c] +
+                              fx * x[((size_t)y1 * Wi + x1) * C + c]);
+            }
+        check("resize_bilinear align_corners", readback(to), want, 1e-4f);
+    }
+    {   // deform_conv2d vs torchvision's definition. The offsets are large on
+        // purpose -- +-3 px on a 9x11 map -- so a good fraction of the taps
+        // land outside and the zero-fill rule is actually exercised.
+        vk::ArenaScope scope(arena);
+        const int Hi = 9, Wi = 11, Ci = 6, Co = 7, k = 3, pad = 1;
+        const int Ho = Hi, Wo = Wi;
+        const float max_offset = 2.5f;
+        auto x = randn((size_t)Hi * Wi * Ci);
+        auto w = randn((size_t)Co * Ci * k * k, 0.3f);
+        auto bias = randn(Co);
+        auto off = randn((size_t)Ho * Wo * 2 * k * k, 3.0f);
+
+        Tensor tx = upload_f32(arena, x, Hi, Wi, Ci);
+        Tensor tw = upload_f32(arena, w, Co, Ci * k * k);
+        Tensor tb = upload_f32(arena, bias, Co);
+        Tensor toff = upload_f32(arena, off, Ho, Wo, 2 * k * k);
+        Tensor to = arena_tensor(arena, DType::F32, Ho, Wo, Co);
+        ConvOpts o;
+        o.pad_y = o.pad_x = pad;
+        o.bias = tb;
+        deform_conv2d(arena, to, tx, toff, tw, k, k, max_offset, o);
+
+        std::vector<float> want((size_t)Ho * Wo * Co);
+        for (int yo = 0; yo < Ho; ++yo)
+            for (int xo = 0; xo < Wo; ++xo)
+                for (int co = 0; co < Co; ++co) {
+                    double s = bias[(size_t)co];
+                    for (int ci = 0; ci < Ci; ++ci)
+                        for (int ky = 0; ky < k; ++ky)
+                            for (int kx = 0; kx < k; ++kx) {
+                                const int tap = ky * k + kx;
+                                const size_t ob =
+                                    ((size_t)yo * Wo + xo) * 2 * k * k + 2 * tap;
+                                const float dy = std::fmax(
+                                    -max_offset, std::fmin(max_offset, off[ob]));
+                                const float dx = std::fmax(
+                                    -max_offset, std::fmin(max_offset, off[ob + 1]));
+                                const float sy = (float)(yo + ky - pad) + dy;
+                                const float sx = (float)(xo + kx - pad) + dx;
+                                s += (double)w[((size_t)co * Ci + ci) * k * k + tap] *
+                                     sample_zero(x, Hi, Wi, Ci, ci, sy, sx);
+                            }
+                    want[((size_t)yo * Wo + xo) * Co + co] = (float)s;
+                }
+        check("deform_conv2d", readback(to), want, 2e-4f);
+    }
+    {   // patch_gather: a k x k patch per centre, in conv-weight column order,
+        // with centres deliberately on and past the border.
+        vk::ArenaScope scope(arena);
+        const int Hi = 7, Wi = 9, C = 4, k = 3, N = 5;
+        auto x = randn((size_t)Hi * Wi * C);
+        const int32_t centers[N * 2] = {3, 3, 0, 0, 8, 6, 4, 0, 0, 6};
+        Tensor tc = arena_tensor(arena, DType::I32, N, 2);
+        vk::Stream::get().upload(tc.ptr, centers, sizeof centers);
+        Tensor to = arena_tensor(arena, DType::F32, N, C * k * k);
+        patch_gather(to, upload_f32(arena, x, Hi, Wi, C), tc, k);
+
+        std::vector<float> want((size_t)N * C * k * k, 0.0f);
+        for (int n = 0; n < N; ++n)
+            for (int c = 0; c < C; ++c)
+                for (int ky = 0; ky < k; ++ky)
+                    for (int kx = 0; kx < k; ++kx) {
+                        const int y = centers[2 * n + 1] - k / 2 + ky;
+                        const int xx = centers[2 * n] - k / 2 + kx;
+                        if (y < 0 || y >= Hi || xx < 0 || xx >= Wi) continue;
+                        want[(size_t)n * C * k * k + (size_t)c * k * k + ky * k + kx] =
+                            x[((size_t)y * Wi + xx) * C + c];
+                    }
+        check("patch_gather", readback(to), want, 1e-6f);
+    }
+    {   // grid_sample_points, both conventions, with points outside the map so
+        // the zero padding is covered too.
+        vk::ArenaScope scope(arena);
+        const int H = 8, W = 6, C = 3, N = 64;
+        auto x = randn((size_t)H * W * C);
+        auto pos = randn((size_t)N * 2, 0.8f);
+        Tensor tx = upload_f32(arena, x, H, W, C);
+        Tensor tp = upload_f32(arena, pos, N, 2);
+        for (bool ac : {true, false}) {
+            Tensor to = arena_tensor(arena, DType::F32, N, C);
+            grid_sample_points(to, tx, tp, ac);
+            std::vector<float> want((size_t)N * C);
+            for (int n = 0; n < N; ++n) {
+                const float gx = pos[(size_t)n * 2], gy = pos[(size_t)n * 2 + 1];
+                const float sx = ac ? (gx + 1) * 0.5f * (W - 1) : ((gx + 1) * W - 1) * 0.5f;
+                const float sy = ac ? (gy + 1) * 0.5f * (H - 1) : ((gy + 1) * H - 1) * 0.5f;
+                for (int c = 0; c < C; ++c)
+                    want[(size_t)n * C + c] = sample_zero(x, H, W, C, c, sy, sx);
+            }
+            check(ac ? "grid_sample_points align" : "grid_sample_points noalign",
+                  readback(to), want, 1e-5f);
+        }
+    }
+    {   // l2_normalize_rows, including a row of exact zeros (a keypoint whose
+        // descriptor cancelled) -- eps must keep that finite, not NaN.
+        vk::ArenaScope scope(arena);
+        const int rows = 300, cols = 128;
+        auto x = randn((size_t)rows * cols);
+        for (int c = 0; c < cols; ++c) x[(size_t)7 * cols + c] = 0.0f;
+        Tensor to = arena_tensor(arena, DType::F32, rows, cols);
+        l2_normalize_rows(to, upload_f32(arena, x, rows, cols));
+        std::vector<float> want((size_t)rows * cols);
+        for (int r = 0; r < rows; ++r) {
+            double sq = 0;
+            for (int c = 0; c < cols; ++c) sq += (double)x[(size_t)r * cols + c] *
+                                                 x[(size_t)r * cols + c];
+            const float inv = 1.0f / std::fmax((float)std::sqrt(sq), 1e-12f);
+            for (int c = 0; c < cols; ++c)
+                want[(size_t)r * cols + c] = x[(size_t)r * cols + c] * inv;
+        }
+        check("l2_normalize_rows", readback(to), want, 1e-5f);
+    }
+}
+
+// ================
 // Benchmark (test_ops --bench)
 // ================
 //
@@ -1002,6 +1200,7 @@ int main(int argc, char** argv) {
         std::printf("RoPE\n");           test_rope(arena);
         std::printf("Convolution\n");    test_conv(arena);
         std::printf("Spatial / gather\n"); test_spatial(arena);
+        std::printf("Learned frontend\n"); test_learned_frontend(arena);
 
         std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     } catch (const std::exception& e) {
