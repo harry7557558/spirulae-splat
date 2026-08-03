@@ -87,7 +87,7 @@ const LicenseInfo& license_for(const std::string& family) {
     static const LicenseInfo kSam3{
         "sam3", "SAM 3 License (Meta)",
         "SAM 3 is Meta's model, not part of Spirulae Splat, and it comes with "
-        "its own licence -- which is not an open-source one. It is free to "
+        "its own licence -- which is not a standard one. It is free to "
         "use, including commercially, but only on Meta's terms, so we cannot "
         "ship it with the app or accept them for you.\n\n"
         "Please read it before continuing -- it is short, and it is the actual "

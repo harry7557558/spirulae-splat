@@ -108,6 +108,8 @@ src/
 │   │                         sfm_main.cpp (sfm), sam_main.cpp (sam)
 │   ├── FrameExtract.{h,cpp}  video -> sharp (optionally masked) frames, shared
 │   │                         by `ssplat sam` and the GUI
+│   ├── WriterPool.h        threads that encode/write images while the GPU runs
+│   │                         the next frame; every masking loop uses it
 │   ├── gui/                Dear ImGui desktop app (`ssplat` with no arguments)
 │   ├── webviewer/          HTTP server + render worker + viewer.html (the ONE
 │   │                         browser client: embedded into the engine library,
@@ -318,6 +320,29 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
 - **A GUI worker that clears a `busy` flag at the end of its function will
   strand it.** Every early `return set_error(...)` skips the line, and the next
   request is refused forever. Use a scope guard (`SegmentPanel::start_job`).
+- **One SAM prompt selects one object.** Points are hints about a single thing:
+  a prompt holding a click on the dog and a click on the bicycle returns a mask
+  that fits neither. Several objects means several instances
+  (`sam::SeedPrompt::object`), unioned afterwards. And a click belongs to the
+  frame it was drawn on -- reusing one across a moving capture is the bug that
+  looks like a working feature.
+- **Masking's remaining headroom is in staging, not arithmetic.** The memory
+  bank was always there, and tensor cores now are: `gemm_coop.slang` and
+  `attention_coop.slang` run on `VK_KHR_cooperative_matrix` where the device has
+  it, worth ~1.4x end to end. Read `src/nn/README.md`'s "Cooperative matrix"
+  before touching either -- the multiplies measure 45 TFLOP/s in isolation
+  against 8.3 for the fp32 GEMM, so what decides the kernel is how its operands
+  reach it, and two plausible tilings measured *slower* than the fp32 kernel
+  they replace. The other thing worth taking was the host side -- PNG encoding
+  and JPEG decoding are a third of a frame, and belong on `app/WriterPool.h`,
+  not on the thread feeding the GPU.
+- **A shader that declares a device capability needs its own module.** SPIR-V
+  capabilities are per module and `vkCreateShaderModule` may reject the whole
+  blob, so a cooperative-matrix kernel cannot live next to a portable one --
+  `Pipelines` creates a `VkShaderModule` lazily, on first acquire of an entry
+  from it, which is what keeps `CooperativeMatrixKHR` off a device that lacks
+  it. Probe in `nn::vk::Context`, gate the dispatch, and leave the fp32 kernel
+  as the only path everywhere else.
 
 ## Do not commit
 

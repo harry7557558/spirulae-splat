@@ -1,4 +1,4 @@
-# Spirulae Splat
+# Spirula Studio
 
 [**Installation**](#installation) &#8226;
 [**Quick Start**](#quick-start) &#8226;
@@ -6,15 +6,7 @@
 [**SuperSplat**](https://superspl.at/user?id=harry7557558) &#10073;
 [**Online Viewer**](https://harry7557558.github.io/spirulae-splat/viewer/)
 
-This is my personal project that trains 3D Gaussian Splatting (3DGS) models.
-
-<!-- If you find spirulae-splat helpful for your research, please cite corresponding works (see "Acknowledgement" section below).
-
-If you share 3DGS models trained with spirulae-splat, or incorporate any feature or idea into your code, product, or service, a mention of spirulae-splat with a link to this page is highly appreciated.
-
-Spirulae-splat has changed its license to GPLv3. If you wish to use part of its code in more permissively licensed open source software, reach out to me and we can figure it out.
-
-Some splats trained with spirulae-splat may be found on [my SuperSplat profile](https://superspl.at/user?id=harry7557558). If you have cool splats made with spirulae-splat and are willing to share either the full splats or some renders publicly, please don't hesitate to reach out. -->
+This is my personal project that trains 3D Gaussian Splatting (3DGS) models. Formerly Spirulae-Splat.
 
 ![spirulae-splat GUI screenshot, showing it training 10 million Gaussians with full SH degree on 4K images, on a laptop GPU with 8GB VRAM](screenshot.png)
 
@@ -57,13 +49,13 @@ Spirulae-splat provides three installation options:
 
 - **Legacy Python/PyTorch trainer:** Choose this if you want to use spirulae-splat as a Python module. This may be deprecated in the future.
 
-All three options provide the same training functionality.
+All three options provide the same training functionality. Some options provide additional non-training functionality.
 
-| Installation Option | GPU/Vendor Support | Platform Support | Dependencies |
-|--------|--------|--------|--------|
-| Native Vulkan CLI/GUI | NVIDIA, AMD, Intel(R), Apple Silicon | Windows, Linux, macOS | Vulkan/MoltenVK, CMake/Ninja |
-| Native CUDA CLI/GUI | CUDA-capable NVIDIA GPUs | Windows, Linux | CUDA, CMake/Ninja |
-| Legacy Python/PyTorch | CUDA-capable NVIDIA GPUs | Windows, Linux | CUDA, PyTorch, Python setup utilities |
+| Installation Option | GPU/Vendor Support | Platform Support | Dependencies | Additional Features |
+|--------|--------|--------|--------|--------|
+| Native Vulkan CLI/GUI | NVIDIA, AMD, Intel(R), Apple Silicon | Windows, Linux, macOS | Vulkan/MoltenVK, CMake/Ninja | Native support for SfM, frame extraction from videos, and AI masking |
+| Native CUDA CLI/GUI | CUDA-capable NVIDIA GPUs | Windows, Linux | CUDA, CMake/Ninja | Meshing |
+| Legacy Python/PyTorch | CUDA-capable NVIDIA GPUs | Windows, Linux | CUDA, PyTorch, Python setup utilities | Use as a Python package |
 
 ## Native CLI/GUI trainer with Vulkan backend
 
@@ -73,31 +65,37 @@ Make sure you have Vulkan SDK (or MoltenVK for macOS) installed. Clone the repos
 
 ```bat
 cd spirulae-splat\
-build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan
+build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan -DSSPLAT_ENABLE_PATENTED=ON
 ```
 
-If it builds successfully, you may find compiled programs under `build\ssplat-train.exe` (for CLI) and `build\ssplat-gui.exe` (for GUI).
+If it builds successfully, you get `build\ssplat.exe`. Run it with no arguments for the GUI, or `ssplat train --help` / `ssplat sfm --help` / `ssplat sam --help` for the command-line tools.
 
 ### Windows with GCC/Clang:
 
 ```bat
 cd spirulae-splat\
-cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan -DCMAKE_MAKE_PROGRAM=Ninja
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan -DSSPLAT_ENABLE_PATENTED=ON -DCMAKE_MAKE_PROGRAM=Ninja
 cmake --build build -j
 ```
 
 Pass `-DCMAKE_C_COMPILER` and `-DCMAKE_CXX_COMPILER` to the first `cmake` command if needed.
 
-If it builds successfully, you may find compiled programs under `build\ssplat-train.exe` (for CLI) and `build\ssplat-gui.exe` (for GUI).
+If it builds successfully, you get `build\ssplat.exe`. Run it with no arguments for the GUI, or `ssplat train --help` / `ssplat sfm --help` / `ssplat sam --help` for the command-line tools.
 
 ### Linux / macOS:
 
 ```bash
 cd spirulae-splat/
-bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan
+bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan -DSSPLAT_ENABLE_PATENTED=ON
 ```
 
-If it builds successfully, you may find compiled binaries under `build/ssplat-train` (for CLI) and `build/ssplat-gui` (for GUI).
+If it builds successfully, you get `build/ssplat` binary. Run it with no arguments for the GUI, or as `ssplat sfm`, `ssplat train` and `ssplat sam` for the command-line tools (`--help` on any of them).
+
+### Notes regarding third-party licensing
+
+`-DSSPLAT_ENABLE_PATENTED=ON` enables decoding video on the GPU instead of shelling out to ffmpeg (about 15x faster frame extraction, and without need to install ffmpeg). However, AVC/HEVC bitstream parsers carry third-party patent exposure. If you turn this on, you are responsible for ensuring compliance with local patent laws regarding AVC/HEVC playback.
+
+Masking needs a SAM checkpoint, which the GUI downloads on first use and caches. The checkpoints are Meta's models under Meta's licenses &ndash; SAM 2.1 is Apache-2.0, SAM 3 is under Meta's own, non-standard license. They are never bundled, and the GUI shows the terms before fetching anything. On the command line, point `--model` at a file you downloaded yourself.
 
 ## Native CLI/GUI trainer with CUDA backend
 
@@ -110,7 +108,7 @@ cd spirulae-splat\
 build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=cuda
 ```
 
-If it builds successfully, you may find compiled programs under `build\ssplat-train.exe` (for CLI) and `build\ssplat-gui.exe` (for GUI).
+If it builds successfully, you get `build\ssplat.exe`. Run it with no arguments for the GUI, or `ssplat train --help` / `ssplat mesh --help` for the command-line tools.
 
 ### Linux:
 
@@ -119,7 +117,7 @@ cd spirulae-splat/
 bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=cuda
 ```
 
-If it builds successfully, you may find compiled binaries under `build/ssplat-train` (for CLI) and `build/ssplat-gui` (for GUI).
+If it builds successfully, you get `build/ssplat` binary. Run it with no arguments for the GUI, or as `ssplat train` and `ssplat mesh` for the command-line tools.
 
 ## Legacy Python/PyTorch trainer
 
@@ -136,9 +134,9 @@ If you installed spirulae-splat successfully, there should be command named `spi
 
 # Quick start
 
-For native GUI, open the program and follow the instructions. For native CLI, run `path/to/build/ssplat-train --help` for detailed usage. For Python CLI, run `spirulae-train --help`, or `spirulae-train <preset name> --help` for details.
+For native GUI, open the program and follow the instructions. For native CLI, run `path/to/build/ssplat train --help` for detailed usage. For Python CLI, run `spirulae-train --help`, or `spirulae-train <preset name> --help` for details.
 
-> Note: Below specification is for legacy Python CLI. For native CLI, replace `spirulae-train` with `ssplat-train` (add it to path or specify full path), and drop any `dataparser.`, `datamanager.`, `model.`, etc. (e.g. `--model.cap_max` becomes `--cap_max`). For native GUI, it should be as intuitive as most other 3DGS training programs.
+> Note: Below specification is for legacy Python CLI. For native CLI, replace `spirulae-train` with `ssplat train` (add `ssplat` to path or specify full path), and drop any `dataparser.`, `datamanager.`, `model.`, etc. (e.g. `--model.cap_max` becomes `--cap_max`). For native GUI, it should be as intuitive as most other 3DGS training programs.
 
 ### Presets
 Spirulae-splat provides presets. Run `spirulae-train <preset name> --data [DATASET_PATH] <additional args>` to use a preset. List of presets:
@@ -146,7 +144,7 @@ Spirulae-splat provides presets. Run `spirulae-train <preset name> --data [DATAS
 - `360-camera`: Preset for training on original distorted images captured by 360 cameras. Recommended if your dataset contains fisheye images with a circle visible.
 - `in-the-wild`: Preset for in-the-wild datasets, like datasets consisting of internet images, or datasets with extreme lighting variation and/or un-masked outliers.
 - `linear-color`: Preset for training splats in linear color spaces (e.g. ACEScg).
-- `meshing`: Preset for meshing. After training. use `spirulae-meshing` (Python CLI) or `ssplat-mesh` (native CLI) to extract mesh.
+- `meshing`: Preset for meshing. After training. use `spirulae-meshing` (Python CLI) or `ssplat mesh` (native CLI) to extract mesh.
 - `synthetic`: Preset for training splats on synthetic datasets rendered with constant exposure.
 - `academic-baseline`: Preset that replicates 3DGS MCMC as faithful as possible.
 
@@ -223,6 +221,8 @@ Spirulae-splat provides presets. Run `spirulae-train <preset name> --data [DATAS
 Spirulae-splat begins as a fork of:
 - Nerfstudio: https://github.com/nerfstudio-project/nerfstudio/
 - GSplat: https://github.com/nerfstudio-project/gsplat
+
+The SfM module in spirulae-splat is heavily inspired by [COLMAP](https://github.com/colmap/colmap/), and the masking module is heavily inspired by [sam3.cpp](https://github.com/PABannier/sam3.cpp).
 
 Spirulae-splat uses Slang shading language https://shader-slang.org/ to implement GPU kernels, which provides autodiff capability that effectively accelerates development, and reserves flexibility to support additional backends (e.g. Vulkan, WebGPU) in the future.
 

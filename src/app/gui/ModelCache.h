@@ -6,7 +6,7 @@
 // Why consent is a first-class thing here and not a download progress bar with
 // a licence link under it: the SAM checkpoints are not ours and are not under
 // this repository's licence. SAM 2 / 2.1 are Apache-2.0, which is easy. SAM 3
-// is under Meta's own SAM 3 licence, which is not an open-source licence and
+// is under Meta's own SAM 3 licence, which is not a standard licence and
 // is not compatible with GPLv3 -- so we cannot ship it, cannot relicense it,
 // and must not fetch it on a user's behalf without them having seen the terms.
 // The weights are downloaded at runtime into a cache directory, never bundled,
