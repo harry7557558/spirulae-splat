@@ -2192,6 +2192,22 @@ void GuiApp::draw_basic_options() {
         "much faster and saves VRAM; use it for 4K+ footage or quick "
         "previews.");
 
+    {
+        static const char* mask_modes[] = {"ignore", "segment"};
+        int mi = _cfg.apply_loss_for_mask ? 1 : 0;
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::Combo("Mask mode", &mi, mask_modes, 2))
+            _cfg.apply_loss_for_mask = mi == 1;
+        help_tooltip_on_hover(
+            "What a mask means, where one is used. ignore: masked-out pixels "
+            "are left out of the loss -- for distractors (people, cars, the "
+            "photographer's shadow, the area outside a fisheye circle, blown-"
+            "out sky). segment: masked-out pixels are trained as empty, so "
+            "the background is cut away and only the masked subject is "
+            "reconstructed -- for object captures. Has no effect on a dataset "
+            "without masks.");
+    }
+
     ImGui::SetNextItemWidth(w);
     ImGui::SliderInt("Color detail (SH)", &_cfg.sh_degree, 0, 4);
     help_tooltip_on_hover(
