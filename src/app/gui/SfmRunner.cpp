@@ -98,6 +98,7 @@ void SfmRunner::start(const SfmJob& job) {
         _error.clear();
         _dataset_dir.clear();
         _image_dir.clear();
+        _mask_dir.clear();
     }
     _state = State::Running;
     _worker = std::thread([this, job] { run(job); });
@@ -120,6 +121,10 @@ std::string SfmRunner::dataset_dir() {
 std::string SfmRunner::image_dir() {
     std::lock_guard<std::mutex> lk(_mu);
     return _image_dir;
+}
+std::string SfmRunner::mask_dir() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _mask_dir;
 }
 std::vector<std::string> SfmRunner::drain_log() {
     std::lock_guard<std::mutex> lk(_mu);
@@ -237,19 +242,20 @@ void SfmRunner::run(SfmJob job) {
 
         if (std::string why = availability(); !why.empty()) return fail(why);
 
-        {
-            const bool prior = fs::is_directory(ws / "sparse", ec) ||
-                               fs::is_directory(ws / "features", ec) ||
-                               (fs::is_directory(ws / "images", ec) &&
-                                !fs::is_empty(ws / "images", ec));
-            if (prior && !job.prep.resume)
-                return fail("the output folder already holds a previous run "
-                            "(images / features / sparse); tick \"Resume "
-                            "previous run\" to reuse it, or pick an empty "
-                            "folder");
-            if (prior)
-                log("Resuming the previous run in " + ws.string());
-        }
+        // What was there before this run touched anything. Not a reason to
+        // refuse: an existing sparse/ (see WorkspaceState::model), nor the
+        // input's own images -- writing the dataset next to the images it was
+        // built from is the layout every parser expects.
+        const WorkspaceState prior = probe_workspace(ws.string(), job.prep.inputs);
+        if (prior.resumable() && !job.prep.resume)
+            return fail("the output folder already holds an unfinished run "
+                        "(extracted frames / features / masks); tick \"Resume "
+                        "previous run\" to reuse it, or pick another folder");
+        if (prior.resumable())
+            log("Resuming the previous run in " + ws.string());
+        if (prior.model)
+            log("Note: " + (ws / "sparse").string() +
+                " already holds a reconstruction; this run writes over it.");
 
         // ---- 1. frames and masks ------------------------------------------
         PrepResult prep;
@@ -267,8 +273,11 @@ void SfmRunner::run(SfmJob job) {
         }
 
         // ---- 2. reconstruction --------------------------------------------
-        // Resume: a completed model means the mapper already ran.
-        if (job.prep.resume && has_model(ws / "sparse")) {
+        // Resume: a completed model means the mapper already ran -- but only
+        // when this run's own leftovers are there to say the model is ours. A
+        // sparse/ on its own is somebody else's dataset (or a finished one),
+        // and skipping the mapper for it would "reconstruct" by doing nothing.
+        if (job.prep.resume && prior.features && has_model(ws / "sparse")) {
             log("Resume: a reconstruction already exists under sparse/; "
                 "skipping (delete it to reconstruct again)");
         } else {
@@ -388,6 +397,7 @@ void SfmRunner::run(SfmJob job) {
             std::lock_guard<std::mutex> lk(_mu);
             _dataset_dir = ws.string();
             _image_dir = prep.image_dir_cfg;
+            _mask_dir = prep.mask_dir_cfg;
         }
         _state = State::Done;
     } catch (const std::exception& e) {

@@ -102,6 +102,7 @@ void ColmapRunner::start(const ColmapJob& job) {
         _error.clear();
         _dataset_dir.clear();
         _image_dir.clear();
+        _mask_dir.clear();
     }
     _state = State::Running;
     _worker = std::thread([this, job] { run(job); });
@@ -124,6 +125,10 @@ std::string ColmapRunner::dataset_dir() {
 std::string ColmapRunner::image_dir() {
     std::lock_guard<std::mutex> lk(_mu);
     return _image_dir;
+}
+std::string ColmapRunner::mask_dir() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _mask_dir;
 }
 std::vector<std::string> ColmapRunner::drain_log() {
     std::lock_guard<std::mutex> lk(_mu);
@@ -255,19 +260,20 @@ void ColmapRunner::run(ColmapJob job) {
         // previous run completed) or insist on a clean folder -- never
         // silently mix a fresh run into stale artifacts.
         {
-            std::error_code ec;
-            bool prior = fs::exists(ws / "database.db", ec) ||
-                         (fs::is_directory(ws / "images", ec) &&
-                          !fs::is_empty(ws / "images", ec)) ||
-                         fs::is_directory(ws / "sparse", ec);
-            if (prior && !job.resume)
-                return fail("the workspace already contains a previous run "
-                            "(database.db / images / sparse); enable "
+            // See SfmRunner: an existing sparse/ is not a resumable run, and
+            // the input's own images are not leftovers.
+            const WorkspaceState prior = probe_workspace(ws.string(), job.inputs);
+            if (prior.resumable() && !job.resume)
+                return fail("the workspace already contains an unfinished run "
+                            "(database.db / extracted frames / masks); enable "
                             "\"Resume previous run\" to reuse it, or choose "
-                            "an empty folder");
-            if (prior)
+                            "another folder");
+            if (prior.resumable())
                 log("Resuming previous run in " + ws.string() +
                     " (completed stages are reused)");
+            if (prior.model)
+                log("Note: " + (ws / "sparse").string() +
+                    " already holds a reconstruction; this run writes over it.");
         }
 
         std::string err;
@@ -305,6 +311,7 @@ void ColmapRunner::run(ColmapJob job) {
         const std::string image_dir_cfg = prep.image_dir_cfg;
         const int n_images = prep.n_images;
         const bool have_masks = !prep.mask_dir.empty();
+        const std::string mask_dir_cfg = prep.mask_dir_cfg;
         if (prep.per_folder_cameras && job.camera_mode == 0) {
             log("images/ holds one folder per camera: switching to one camera "
                 "per folder");
@@ -681,6 +688,7 @@ void ColmapRunner::run(ColmapJob job) {
             std::lock_guard<std::mutex> lk(_mu);
             _dataset_dir = ws.string();
             _image_dir = image_dir_cfg;
+            _mask_dir = mask_dir_cfg;
         }
         _state = State::Done;
     } catch (const std::exception& e) {

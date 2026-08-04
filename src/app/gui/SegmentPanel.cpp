@@ -130,8 +130,12 @@ void SegmentPanel::collect_frames(const std::string& input, bool is_video) {
         return;
     }
     std::vector<std::string> all;
+    // follow_directory_symlink for the same reason DatasetPrep walks that way:
+    // a prepared capture's images/ is often a link into the raw one, and the
+    // default iterator quietly returns nothing for it.
     for (fs::recursive_directory_iterator it(
-             input, fs::directory_options::skip_permission_denied, ec), end;
+             input, fs::directory_options::skip_permission_denied |
+                        fs::directory_options::follow_directory_symlink, ec), end;
          !ec && it != end; it.increment(ec))
         if (it->is_regular_file(ec) && is_image_file(it->path()))
             all.push_back(it->path().string());

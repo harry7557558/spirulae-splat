@@ -60,7 +60,8 @@ private:
     // ---- actions ----
     // By value: callers pass elements of _recents, which open_dataset
     // mutates via add_recent (a const& here would dangle).
-    void open_dataset(std::string dir, std::string image_dir = "");
+    void open_dataset(std::string dir, std::string image_dir = "",
+                      std::string mask_dir = "");
     // Route for user-initiated opens: confirms first when training.
     void request_open_dataset(std::string dir);
 

@@ -204,13 +204,16 @@ void GuiApp::apply_preset(const std::string& preset) {
     }
 }
 
-void GuiApp::open_dataset(std::string dir, std::string image_dir) {
+void GuiApp::open_dataset(std::string dir, std::string image_dir,
+                          std::string mask_dir) {
     if (dir.empty()) return;
     _cfg.data = dir;
-    // image_dir: the COLMAP runner hands its (possibly external) image dir
-    // over in-memory right after a run; otherwise the dataparser default
-    // applies and the user can set data.image_dir under Advanced.
+    // image_dir / mask_dir: the runner hands its (possibly external) folders
+    // over in-memory right after a run -- photos indexed where they are keep
+    // their masks there too. Otherwise the dataparser defaults apply and the
+    // user can set data.image_dir / data.mask_dir under Advanced.
     _cfg.image_dir = !image_dir.empty() ? image_dir : _defaults.image_dir;
+    _cfg.mask_dir = !mask_dir.empty() ? mask_dir : _defaults.mask_dir;
     // Default the output next to the dataset -- much easier to find than a
     // CWD-relative "outputs" for someone who launched from a desktop icon.
     // Follows the dataset unless the user customized it (i.e. it still
@@ -221,6 +224,7 @@ void GuiApp::open_dataset(std::string dir, std::string image_dir) {
         _cfg.output_dir_prefix = (fs::path(dir) / "outputs").string();
     _defaults.data = _cfg.data;
     _defaults.image_dir = _cfg.image_dir;
+    _defaults.mask_dir = _cfg.mask_dir;
     _defaults.output_dir_prefix = _cfg.output_dir_prefix;
     add_recent(dir);
     save_settings();
@@ -311,15 +315,6 @@ static bool looks_like_dataset(const fs::path& p) {
     return has_xml && has_ply;
 }
 
-static bool folder_has_images(const fs::path& p) {
-    std::error_code ec;
-    for (fs::recursive_directory_iterator it(
-             p, fs::directory_options::skip_permission_denied, ec), end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_regular_file(ec) && is_image_ext(it->path())) return true;
-    return false;
-}
-
 void GuiApp::handle_drop(const std::vector<std::string>& paths) {
     std::error_code ec;
     // A dataset is opened, not added to a list, so it only makes sense alone --
@@ -350,7 +345,7 @@ void GuiApp::handle_drop(const std::vector<std::string>& paths) {
     for (const std::string& path : paths) {
         const fs::path p(path);
         if (fs::is_directory(p, ec)) {
-            if (folder_has_images(p)) sources.push_back(path);
+            if (folder_has_images(path)) sources.push_back(path);
             else log("Dropped folder contains no dataset or images: " + path);
         } else if (fs::is_regular_file(p, ec)) {
             if (is_video_path(path)) sources.push_back(path);
@@ -384,6 +379,15 @@ static std::string fresh_workspace(const std::string& base) {
 // dataset measured. A known focal makes fisheye initialization reliable, and a
 // fisheye started from the generic guess often does not initialize at all.
 static constexpr float kInsta360FocalFactor = 0.269f;
+
+// Is this folder the `images/` of a dataset folder, rather than a folder of
+// photos that happens to hold them? (resolve_photo_folder is what put us here.)
+static bool named_images(const fs::path& p) {
+    std::string n = p.filename().empty() ? p.parent_path().filename().string()
+                                         : p.filename().string();
+    for (char& c : n) c = (char)std::tolower((unsigned char)c);
+    return n == "images";
+}
 
 // A file or folder name that can be a directory of its own: what a path
 // separator, a colon or a space would do to `--camera-model DIR=MODEL` is not
@@ -445,13 +449,26 @@ void GuiApp::refresh_sources() {
     // The output folder follows the input until the user takes it over.
     if (_workspace.empty() || _workspace == _workspace_auto) {
         std::string base;
+        // ... and normally lands on a folder of its own, suffixed _2, _3, ...
+        // rather than pointing at something that already has content in it.
+        bool exact = false;
         if (_sources.empty()) {
             base.clear();
         } else if (_sources.size() == 1) {
             const fs::path p(_sources[0].path);
-            base = _sources[0].is_video
-                       ? (p.parent_path() / (p.stem().string() + "_dataset")).string()
-                       : _sources[0].path + "_dataset";
+            if (_sources[0].is_video) {
+                base = (p.parent_path() / (p.stem().string() + "_dataset")).string();
+            } else if (named_images(p)) {
+                // A dataset folder: images/ (and masks/) are already where every
+                // parser looks for them, so the reconstruction belongs beside
+                // them as sparse/ -- in that folder, not in a copy of it with a
+                // suffix. Whatever it would replace is warned about instead
+                // (draw_dataset_source).
+                base = p.parent_path().string();
+                exact = true;
+            } else {
+                base = _sources[0].path + "_dataset";
+            }
         } else {
             // Several inputs have no single name; the folder they came from is
             // the closest thing to one.
@@ -459,7 +476,7 @@ void GuiApp::refresh_sources() {
             const fs::path dir = p.parent_path();
             base = (dir / (dir.filename().string() + "_dataset")).string();
         }
-        _workspace = base.empty() ? "" : fresh_workspace(base);
+        _workspace = base.empty() ? "" : (exact ? base : fresh_workspace(base));
         _workspace_auto = _workspace;
     }
 }
@@ -470,6 +487,11 @@ static PrepInput make_source(const std::string& path) {
     PrepInput s;
     s.path = path;
     s.is_video = !fs::is_directory(path, ec) && is_video_path(path);
+    // What a folder of photos means: the images/ under it when there is one,
+    // and the masks/ that belongs to them. Resolved here, on the path the user
+    // picked, so the row shows the folder that will actually be indexed rather
+    // than one that merely contains it.
+    if (!s.is_video) resolve_photo_folder(path, s.path, s.mask_dir);
     // Every input carries a concrete lens, so a list holding a 360 camera and a
     // phone cannot end up applying one of them to the other.
     //
@@ -484,12 +506,52 @@ static PrepInput make_source(const std::string& path) {
     return s;
 }
 
+// Attach a picked `masks/` folder to the input whose images it describes --
+// the one it sits beside (`<root>/images` + `<root>/masks`) or the one it sits
+// under (photos at `<root>` with `<root>/masks`). Returns false when no input
+// on the list owns it, which is the only case worth a message.
+static bool attach_mask_folder(std::vector<PrepInput>& sources,
+                               const std::string& masks) {
+    std::error_code ec;
+    const fs::path parent = fs::absolute(masks, ec).parent_path();
+    for (PrepInput& s : sources) {
+        if (s.is_video) continue;
+        const fs::path images = fs::absolute(s.path, ec);
+        if (fs::equivalent(images.parent_path(), parent, ec) ||
+            fs::equivalent(images, parent, ec)) {
+            s.mask_dir = fs::absolute(masks, ec).string();
+            return true;
+        }
+    }
+    return false;
+}
+
 void GuiApp::add_sources(const std::vector<std::string>& paths, bool replace) {
-    if (replace) {
+    // A folder of masks is not an input of its own: it belongs to one, and the
+    // images half may be in the same pick, in either order. Split before
+    // anything else so that picking masks alone cannot clear the list.
+    std::vector<std::string> inputs, mask_folders;
+    for (const std::string& path : paths) {
+        std::error_code ec;
+        if (fs::is_directory(path, ec) && is_mask_folder(path))
+            mask_folders.push_back(path);
+        else
+            inputs.push_back(path);
+    }
+    if (replace && !inputs.empty()) {
         _sources.clear();
         _mask_preview_input = 0;
     }
-    for (const std::string& path : paths) _sources.push_back(make_source(path));
+    for (const std::string& path : inputs) _sources.push_back(make_source(path));
+    for (const std::string& masks : mask_folders) {
+        if (attach_mask_folder(_sources, masks))
+            log("Using " + masks + " as the masks for the images beside it.");
+        else
+            log("Ignored " + masks +
+                ": that is a folder of masks, and the images they belong to "
+                "were not picked. Add the images folder -- its masks are found "
+                "on their own.");
+    }
     if (_sources.empty()) return;
 
     // The engine-wide settings follow whatever the list is now. A video is a
@@ -855,6 +917,12 @@ void GuiApp::draw_dataset_source() {
             s.is_video = !fs::is_directory(s.path, ec) && is_video_path(s.path);
             edited = true;
         }
+        // A typed path is only worth resolving once it is finished -- rewriting
+        // `<folder>` to `<folder>/images` under the cursor is not helpful.
+        if (ImGui::IsItemDeactivatedAfterEdit() && !s.is_video) {
+            resolve_photo_folder(s.path, s.path, s.mask_dir);
+            edited = true;
+        }
         ImGui::SameLine();
         if (ImGui::Button("Browse...")) {
             _pick = PickAction::SourceReplace;
@@ -868,11 +936,19 @@ void GuiApp::draw_dataset_source() {
         ImGui::SameLine();
         if (ImGui::Button("Remove")) remove = (int)i;
         ImGui::SameLine();
+        // What this input is, and -- the part worth seeing before pressing the
+        // button -- whether masks were found for it.
+        const char* kind = s.is_video ? "video" : "photos";
+        const char* with = s.mask_dir.empty() ? "" : " + masks";
         if (_sources.size() > 1)
-            ImGui::TextDisabled("%s -> images/%s",
-                                s.is_video ? "video" : "photos", s.subdir.c_str());
+            ImGui::TextDisabled("%s%s -> images/%s", kind, with, s.subdir.c_str());
         else
-            ImGui::TextUnformatted(s.is_video ? "video file" : "photo folder");
+            ImGui::Text("%s%s", s.is_video ? "video file" : "photo folder", with);
+        if (!s.mask_dir.empty() && ImGui::IsItemHovered())
+            ImGui::SetTooltip("Masks already made for these images:\n%s\n\n"
+                              "They are used as they are -- nothing is "
+                              "segmented for this input.",
+                              s.mask_dir.c_str());
         ImGui::PopID();
     }
     if (remove >= 0) {
@@ -915,25 +991,30 @@ void GuiApp::draw_dataset_source() {
     ImGui::SameLine();
     ImGui::TextUnformatted("output dataset folder");
 
-    // Resume only means something when there is something to resume.
-    std::error_code ec;
-    const fs::path ws(_workspace);
-    const bool prior = !_workspace.empty() &&
-                       (fs::exists(ws / "database.db", ec) ||
-                        fs::is_directory(ws / "sparse", ec) ||
-                        fs::is_directory(ws / "features", ec) ||
-                        (fs::is_directory(ws / "images", ec) &&
-                         !fs::is_empty(ws / "images", ec)));
-    if (prior) {
+    // What is in there already, split into what a run can pick up and what it
+    // would write over. The output folder is often the input folder -- that is
+    // the point of the images/ + masks/ layout -- so the input's own images do
+    // not count as either (probe_workspace).
+    const WorkspaceState prior = probe_workspace(_workspace, _sources);
+    if (prior.resumable()) {
         ImGui::Checkbox("Resume previous run", &_resume);
         help_tooltip_on_hover(
             "This folder holds a previous (possibly interrupted) run. Checked, "
-            "the finished parts are reused -- extracted frames, masks, "
-            "features and matches, and any completed reconstruction -- and "
-            "only what is missing runs. Unchecked, an empty folder is "
-            "required; nothing is ever deleted automatically.");
+            "the finished parts are reused -- extracted frames, masks, features "
+            "and matches -- and only what is missing runs. Unchecked, a folder "
+            "with none of that is required; nothing is ever deleted "
+            "automatically.");
         ImGui::SameLine();
-        ImGui::TextDisabled("(previous run detected in this folder)");
+        ImGui::TextDisabled("(unfinished run detected in this folder)");
+    }
+    if (prior.model) {
+        ImGui::PushTextWrapPos();
+        ImGui::TextColored(kWarn,
+                           "This folder already holds a reconstruction "
+                           "(sparse/). Creating the dataset writes a new one "
+                           "over it -- point the output somewhere else to keep "
+                           "the old one.");
+        ImGui::PopTextWrapPos();
     }
 }
 
@@ -1125,12 +1206,33 @@ void GuiApp::draw_source_cameras() {
 // ---------------------------------------------------------------------------
 
 void GuiApp::draw_masking_options() {
+    // Masks that came with an input need no checkbox and no model: they are
+    // already the answer. Say so where the question is asked, because the
+    // alternative is a user turning masking on to "make sure" and waiting
+    // twenty minutes for masks they already had.
+    int with_masks = 0;
+    for (const PrepInput& s : _sources)
+        if (!s.mask_dir.empty()) with_masks++;
+    if (with_masks > 0) {
+        ImGui::PushTextWrapPos();
+        if (with_masks == (int)_sources.size())
+            ImGui::TextColored(kOk, "Masks were found beside the images; they "
+                                    "are used as they are.");
+        else
+            ImGui::TextColored(kOk,
+                               "%d of the %d inputs came with masks; those are "
+                               "used as they are.",
+                               with_masks, (int)_sources.size());
+        ImGui::PopTextWrapPos();
+    }
+
     ImGui::Checkbox("Remove moving or unwanted objects", &_mask_enable);
     help_tooltip_on_hover(
         "Describe what should not be part of the scene -- people walking "
         "through, parked cars, your own shadow -- and it is cut out of both "
         "the camera solve and the training. This is the single biggest "
-        "quality win on a capture with anything moving in it.");
+        "quality win on a capture with anything moving in it. Inputs that "
+        "arrived with masks of their own keep them; this is for the rest.");
     if (!_mask_enable) return;
 
     ImGui::Indent();
@@ -1737,13 +1839,17 @@ void GuiApp::draw_new_dataset() {
     }
 
     // Both runners report through the same three states.
-    struct { bool done, failed, cancelled; std::string dir, image_dir, err; } st{};
+    struct {
+        bool done, failed, cancelled;
+        std::string dir, image_dir, mask_dir, err;
+    } st{};
     if (effective_engine() == Engine::BuiltIn) {
         st.done = _sfm.state() == SfmRunner::State::Done;
         st.failed = _sfm.state() == SfmRunner::State::Failed;
         st.cancelled = _sfm.state() == SfmRunner::State::Cancelled;
         st.dir = _sfm.dataset_dir();
         st.image_dir = _sfm.image_dir();
+        st.mask_dir = _sfm.mask_dir();
         st.err = _sfm.error();
     } else {
         st.done = _colmap.state() == ColmapRunner::State::Done;
@@ -1751,6 +1857,7 @@ void GuiApp::draw_new_dataset() {
         st.cancelled = _colmap.state() == ColmapRunner::State::Cancelled;
         st.dir = _colmap.dataset_dir();
         st.image_dir = _colmap.image_dir();
+        st.mask_dir = _colmap.mask_dir();
         st.err = _colmap.error();
     }
     if (st.done) {
@@ -1771,7 +1878,7 @@ void GuiApp::draw_new_dataset() {
                 _pending_path = st.dir;
                 _open_confirm = true;
             } else {
-                open_dataset(st.dir, st.image_dir);
+                open_dataset(st.dir, st.image_dir, st.mask_dir);
             }
         }
     } else if (st.failed) {

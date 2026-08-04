@@ -110,6 +110,10 @@ public:
     std::string error();
     std::string dataset_dir();
     std::string image_dir();
+    // What the trainer's mask_dir should be, or "" when the dataset has no
+    // masks. Usually "masks" (the parser default); an absolute path when the
+    // masks were only read, which is what photos used where they are do.
+    std::string mask_dir();
     // 0..1 within the current stage, or -1 when it cannot be estimated.
     float progress() const { return _progress.load(); }
     // Done, but under half the images registered (or a high reprojection
@@ -137,7 +141,7 @@ private:
     std::atomic<float> _progress{-1.0f};
     std::atomic<bool> _partial{false};
     std::mutex _mu;
-    std::string _stage, _error, _dataset_dir, _image_dir;
+    std::string _stage, _error, _dataset_dir, _image_dir, _mask_dir;
     std::vector<std::string> _log;
 };
 

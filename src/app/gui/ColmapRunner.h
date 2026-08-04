@@ -163,6 +163,7 @@ public:
     std::string error();                 // set when Failed
     std::string dataset_dir();           // valid when Done
     std::string image_dir();             // image_dir to train with ("" = default)
+    std::string mask_dir();              // mask_dir to train with ("" = none)
     std::vector<std::string> drain_log();
 
 private:
@@ -180,7 +181,7 @@ private:
     std::atomic<State> _state{State::Idle};
     std::atomic<bool> _cancel{false};
     std::mutex _mu;                      // guards strings + log below
-    std::string _stage, _error, _dataset_dir, _image_dir;
+    std::string _stage, _error, _dataset_dir, _image_dir, _mask_dir;
     std::vector<std::string> _log;
 };
 

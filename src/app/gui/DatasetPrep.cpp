@@ -64,6 +64,33 @@ bool is_image_file(const fs::path& p) {
            e == ".tif" || e == ".tiff" || e == ".bmp";
 }
 
+// Every walk over an image tree follows directory symlinks. A prepared capture
+// whose images/ and masks/ are links into the raw one is an ordinary layout,
+// and the default iterator returns nothing at all for it -- which reads as "no
+// images here" rather than as "not looked".
+constexpr fs::directory_options kWalk =
+    fs::directory_options::skip_permission_denied |
+    fs::directory_options::follow_directory_symlink;
+
+// Images under `dir`, sorted, never descending into `skip` (see count_images).
+std::vector<fs::path> walk_images(const fs::path& dir, const fs::path& skip = {}) {
+    std::vector<fs::path> out;
+    std::error_code ec;
+    const bool guard = !skip.empty() && fs::is_directory(skip, ec);
+    for (fs::recursive_directory_iterator it(dir, kWalk, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (guard && it->is_directory(ec) &&
+            fs::equivalent(it->path(), skip, ec)) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        if (it->is_regular_file(ec) && is_image_file(it->path()))
+            out.push_back(it->path());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 #ifdef SSPLAT_BUILD_SAM
 // Preview clicks -> the seeds the masker takes. Clicks of one object made on
 // one frame become ONE prompt (several positive points describe one thing);
@@ -196,6 +223,91 @@ bool is_dual_fisheye_path(const std::string& path) {
     return lower_ext(path) == ".insv";
 }
 
+namespace {
+
+// The last component, without a trailing separator ("a/b/" -> "b").
+std::string leaf_name(const fs::path& p) {
+    return p.filename().empty() ? p.parent_path().filename().string()
+                                : p.filename().string();
+}
+
+bool named(const fs::path& p, const char* what) {
+    std::string n = leaf_name(p);
+    for (auto& c : n) c = (char)std::tolower((unsigned char)c);
+    return n == what;
+}
+
+// A folder that exists and has at least one image in it, at any depth. Stops at
+// the first one: this runs on the UI thread, and the tree can hold thousands.
+bool any_image(const fs::path& p) {
+    std::error_code ec;
+    if (!fs::is_directory(p, ec)) return false;
+    for (fs::recursive_directory_iterator it(p, kWalk, ec), end; !ec && it != end;
+         it.increment(ec))
+        if (it->is_regular_file(ec) && is_image_file(it->path())) return true;
+    return false;
+}
+
+}  // namespace
+
+bool folder_has_images(const std::string& dir) { return any_image(dir); }
+
+WorkspaceState probe_workspace(const std::string& workspace,
+                               const std::vector<PrepInput>& inputs) {
+    WorkspaceState st;
+    std::error_code ec;
+    const fs::path ws(workspace);
+    if (workspace.empty() || !fs::is_directory(ws, ec)) return st;
+
+    // A folder is the run's leftover only if the run would write it. When
+    // images/ or masks/ under the output IS an input, it is the capture.
+    auto is_input = [&](const fs::path& dir, bool masks) {
+        for (const PrepInput& in : inputs) {
+            const std::string& p = masks ? in.mask_dir : in.path;
+            if (!p.empty() && fs::equivalent(dir, p, ec)) return true;
+        }
+        return false;
+    };
+    auto has_content = [&](const fs::path& p) {
+        return fs::is_directory(p, ec) && !fs::is_empty(p, ec);
+    };
+
+    st.frames = has_content(ws / "images") && !is_input(ws / "images", false);
+    st.masks = has_content(ws / "masks") && !is_input(ws / "masks", true);
+    st.features = has_content(ws / "features") || fs::exists(ws / "matches.bin", ec) ||
+                  fs::exists(ws / "database.db", ec);
+    st.model = has_content(ws / "sparse");
+    return st;
+}
+
+bool is_mask_folder(const std::string& path) {
+    return named(fs::path(path), "masks");
+}
+
+void resolve_photo_folder(const std::string& picked, std::string& images,
+                          std::string& masks) {
+    std::error_code ec;
+    const fs::path p = fs::absolute(picked, ec);
+    images = p.string();
+    masks.clear();
+    // A dataset folder: index images/, not the folder holding it (which also
+    // holds the masks, the point cloud, and whatever else was left there).
+    // This is the same probe `ssplat sfm auto` prints as "<dir> contains
+    // images/, using <dir>/images as the image directory".
+    if (any_image(p / "images")) images = (p / "images").string();
+    // The masks belong beside the images: under the folder that holds them, or
+    // -- when the folder IS the images/ of a dataset -- next to it.
+    std::vector<fs::path> candidates{fs::path(images) / "masks"};
+    if (named(images, "images"))
+        candidates.push_back(fs::path(images).parent_path() / "masks");
+    for (const fs::path& cand : candidates) {
+        if (fs::is_directory(cand, ec) && any_image(cand)) {
+            masks = cand.string();
+            break;
+        }
+    }
+}
+
 const Backends& backends() {
     static const Backends probed = [] {
         Backends b;
@@ -225,25 +337,15 @@ const Backends& backends() {
     return probed;
 }
 
-int DatasetPrep::count_images(const std::string& dir) {
-    int n = 0;
-    std::error_code ec;
-    for (fs::recursive_directory_iterator it(
-             dir, fs::directory_options::skip_permission_denied, ec), end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_regular_file(ec) && is_image_file(it->path())) n++;
-    return n;
+int DatasetPrep::count_images(const std::string& dir, const std::string& skip) {
+    return (int)walk_images(dir, skip).size();
 }
 
 bool DatasetPrep::first_image_dims(const std::string& dir, int& W, int& H) {
-    std::error_code ec;
-    for (fs::recursive_directory_iterator it(
-             dir, fs::directory_options::skip_permission_denied, ec), end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_regular_file(ec) && is_image_file(it->path())) {
-            int c = 0;
-            return stbi_info(it->path().string().c_str(), &W, &H, &c) != 0;
-        }
+    for (const fs::path& f : walk_images(dir)) {
+        int c = 0;
+        if (stbi_info(f.string().c_str(), &W, &H, &c) != 0) return true;
+    }
     return false;
 }
 
@@ -285,19 +387,41 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
     struct Prepared {
         std::string images, masks;      // absolute
         std::string images_rel, masks_rel;  // relative to the workspace
-        bool masked = false;            // ... on the way out of the decoder
+        // This input's masks already exist: written on the way out of the
+        // decoder, brought along by the input, or kept by a resumed run.
+        bool have_masks = false;
     };
     std::vector<Prepared> per(job.inputs.size());
+    // A masks/ nested under the images is not a folder of views (see
+    // count_images); only the in-place case can have one, since everything else
+    // writes into the dataset's own images/.
+    std::string skip_dir;
+    // Is the dataset's own masks/ this run's, rather than an earlier one's? A
+    // stale masks/ from a previous run with masking on must not be picked up by
+    // a run that turned it off -- that is what --no-masks exists to say.
+    bool want_masks = job.mask_enable;
 
     if (reads_photos_in_place(job.inputs)) {
         // Photos are referenced where they are, not copied: a 40 GB folder of
         // raw captures does not want a second copy, and the parsers accept an
         // absolute image_dir.
-        out.image_dir = fs::absolute(job.inputs[0].path).string();
+        const PrepInput& in = job.inputs[0];
+        out.image_dir = fs::absolute(in.path).string();
         out.image_dir_cfg = out.image_dir;
         per[0].images = per[0].images_rel = out.image_dir;
-        per[0].masks = (ws / "masks").string();
-        per[0].masks_rel = "masks";
+        if (in.mask_dir.empty()) {
+            // Nothing came with them, so anything generated goes in the
+            // dataset, next to the reconstruction rather than next to the
+            // photos -- a folder we were only asked to read.
+            per[0].masks = (ws / "masks").string();
+            per[0].masks_rel = "masks";
+        } else {
+            per[0].masks = per[0].masks_rel = fs::absolute(in.mask_dir, ec).string();
+            per[0].have_masks = true;
+            out.mask_dir = out.mask_dir_cfg = per[0].masks;
+            skip_dir = per[0].masks;
+            _log("Using the masks that came with the photos: " + out.mask_dir);
+        }
     } else {
         out.image_dir = (ws / "images").string();
         out.image_dir_cfg = "images";
@@ -312,15 +436,20 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
             // folders, and a folder is what makes them separate cameras.
             if (!in.subdir.empty()) out.per_folder_cameras = true;
             if (in.is_video) {
-                if (!extract_video(job, in, p.images, p.masks, out, p.masked, error))
+                if (!extract_video(job, in, p.images, p.masks, out, p.have_masks,
+                                   error))
                     return false;
-            } else if (!gather_photos(job, in, p.images, error)) {
+            } else if (!gather_photos(job, in, p.images, p.masks, p.have_masks,
+                                      error)) {
                 return false;
             }
+            // Masks an input brought with it are in the dataset now, so they
+            // count even when nothing asked for masking.
+            if (p.have_masks && !in.mask_dir.empty()) want_masks = true;
         }
     }
 
-    out.n_images = count_images(out.image_dir);
+    out.n_images = count_images(out.image_dir, skip_dir);
     _log("Found " + std::to_string(out.n_images) + " images in " + out.image_dir);
     if (out.n_images < 3) {
         error = "need at least 3 images (found " + std::to_string(out.n_images) +
@@ -336,16 +465,24 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
             return false;
         }
         for (size_t i = 0; i < job.inputs.size(); i++) {
-            // A built-in video run already masked these frames in the same pass.
-            if (per[i].masked) continue;
+            // Already masked: by the decoder in the same pass, or by whoever
+            // made the masks this input arrived with. Segmenting over those
+            // would replace an answer the user already has.
+            if (per[i].have_masks) continue;
             if (!generate_masks(job, job.inputs[i], per[i].images,
                                 per[i].images_rel, per[i].masks, per[i].masks_rel,
                                 error))
                 return false;
         }
-        std::error_code mec;
-        if (fs::is_directory(ws / "masks", mec) && !fs::is_empty(ws / "masks", mec))
-            out.mask_dir = (ws / "masks").string();
+    }
+    // Masks are whatever ended up in the dataset's own masks/ -- generated
+    // here, written by the decoder, or linked in beside gathered photos. The
+    // in-place case has already named the folder it reads them from.
+    std::error_code mec;
+    if (out.mask_dir.empty() && want_masks && fs::is_directory(ws / "masks", mec) &&
+        !fs::is_empty(ws / "masks", mec)) {
+        out.mask_dir = (ws / "masks").string();
+        out.mask_dir_cfg = "masks";
     }
     return true;
 }
@@ -574,56 +711,63 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
 // folder of raw captures; falling back is what makes it work across devices
 // (and on a filesystem that has no links at all).
 bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
-                                const std::string& images, std::string& error) {
+                                const std::string& images,
+                                const std::string& masks, bool& have_masks,
+                                std::string& error) {
     std::error_code ec;
     const fs::path src = fs::absolute(in.path, ec);
-    const fs::path dst(images);
     if (!fs::is_directory(src, ec)) {
         error = "not a folder: " + in.path;
         return false;
     }
     _stage("Collecting photos");
-    _log("Photos: " + src.string() + " -> " + dst.string());
 
-    std::vector<fs::path> files;
-    for (fs::recursive_directory_iterator it(
-             src, fs::directory_options::skip_permission_denied, ec), end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_regular_file(ec) && is_image_file(it->path()))
-            files.push_back(it->path());
-    std::sort(files.begin(), files.end());
-    if (files.empty()) {
-        error = "no images in " + in.path;
-        return false;
-    }
+    // The masks come across too, into the folder that mirrors the images -- a
+    // mask is found by its image's relative name, so the two trees have to move
+    // together or every mask stops matching.
+    const bool with_masks = !in.mask_dir.empty();
+    struct Tree { fs::path from, to; const char* noun; };
+    std::vector<Tree> trees{{src, fs::path(images), "photos"}};
+    if (with_masks)
+        trees.push_back({fs::absolute(in.mask_dir, ec), fs::path(masks), "masks"});
 
-    int linked = 0, copied = 0, kept = 0;
-    RateLimitedProgress progress(_log, "photos collected", (int64_t)files.size());
-    for (const fs::path& f : files) {
-        if (_cancel.load()) { error = "cancelled"; return false; }
-        fs::path rel = f.lexically_relative(src);
-        if (rel.empty() || *rel.begin() == "..") rel = f.filename();
-        const fs::path out_path = dst / rel;
-        if (fs::exists(out_path, ec)) { kept++; continue; }
-        fs::create_directories(out_path.parent_path(), ec);
-        std::error_code link_ec;
-        fs::create_hard_link(f, out_path, link_ec);
-        if (!link_ec) {
-            linked++;
-        } else {
-            std::error_code copy_ec;
-            fs::copy_file(f, out_path, copy_ec);
-            if (copy_ec) {
-                error = "could not put " + f.string() + " into " + dst.string() +
-                        " (" + copy_ec.message() + ")";
-                return false;
-            }
-            copied++;
+    for (const Tree& t : trees) {
+        _log(std::string(t.noun) + ": " + t.from.string() + " -> " + t.to.string());
+        const std::vector<fs::path> files = walk_images(t.from);
+        if (files.empty()) {
+            error = std::string("no ") + t.noun + " in " + t.from.string();
+            return false;
         }
-        progress.update(linked + copied + kept);
+        int linked = 0, copied = 0, kept = 0;
+        RateLimitedProgress progress(_log, std::string(t.noun) + " collected",
+                                     (int64_t)files.size());
+        for (const fs::path& f : files) {
+            if (_cancel.load()) { error = "cancelled"; return false; }
+            fs::path rel = f.lexically_relative(t.from);
+            if (rel.empty() || *rel.begin() == "..") rel = f.filename();
+            const fs::path out_path = t.to / rel;
+            if (fs::exists(out_path, ec)) { kept++; continue; }
+            fs::create_directories(out_path.parent_path(), ec);
+            std::error_code link_ec;
+            fs::create_hard_link(f, out_path, link_ec);
+            if (!link_ec) {
+                linked++;
+            } else {
+                std::error_code copy_ec;
+                fs::copy_file(f, out_path, copy_ec);
+                if (copy_ec) {
+                    error = "could not put " + f.string() + " into " +
+                            t.to.string() + " (" + copy_ec.message() + ")";
+                    return false;
+                }
+                copied++;
+            }
+            progress.update(linked + copied + kept);
+        }
+        _log("  " + std::to_string(linked) + " linked, " + std::to_string(copied) +
+             " copied, " + std::to_string(kept) + " already there");
     }
-    _log("  " + std::to_string(linked) + " linked, " + std::to_string(copied) +
-         " copied, " + std::to_string(kept) + " already there");
+    if (with_masks) have_masks = true;
     return true;
 }
 
@@ -674,14 +818,11 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
 #else
     _stage("Generating masks (segmentation)");
 
-    std::vector<fs::path> files;
     std::error_code ec;
-    for (fs::recursive_directory_iterator it(
-             images, fs::directory_options::skip_permission_denied, ec), end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_regular_file(ec) && is_image_file(it->path()))
-            files.push_back(it->path());
-    std::sort(files.begin(), files.end());
+    // Never the masks themselves: a nested masks/ is only possible for photos
+    // read where they are, and those already have masks -- but the guard costs
+    // nothing and the alternative is masking a folder of masks.
+    const std::vector<fs::path> files = walk_images(images, masks);
     if (files.empty()) { error = "no images to mask"; return false; }
 
     sam::MaskOptions mo;

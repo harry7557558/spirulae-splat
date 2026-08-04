@@ -65,6 +65,12 @@ struct PrepInput {
     // dataset keeps the layout it has always had. A multi-track video (an
     // Insta360 .insv carries two fisheye streams) adds cam0/, cam1/ ... below.
     std::string subdir;
+    // Masks that came WITH this input -- the `masks/` beside its photos, whose
+    // tree mirrors the image tree (see resolve_photo_folder). Empty when it
+    // brought none. An input that has its own masks is never AI-masked: the
+    // files on disk are the answer, and generating over them would mean
+    // writing into a folder the user only asked us to read.
+    std::string mask_dir;
     // The lens these images were shot with, and where its focal length starts.
     // Preparation reads neither -- they are here because this list is the one
     // place the inputs are enumerated, and the reconstruction has to be told
@@ -121,6 +127,10 @@ struct PrepResult {
     std::string image_dir;           // absolute; what SfM should index
     std::string image_dir_cfg;       // what the trainer's image_dir should be
     std::string mask_dir;            // "" when there are no masks
+    // ... and what the trainer's mask_dir should be: "masks" for masks the run
+    // put in the dataset, an absolute path for masks it only read (photos used
+    // where they are bring theirs with them).
+    std::string mask_dir_cfg;
     int  n_images = 0;
     // images/ came out holding one sub-folder per camera -- several inputs, or
     // a multi-track video -- so intrinsics must not be shared across them.
@@ -156,6 +166,55 @@ bool is_video_path(const std::string& path);
 // default camera model does not fit.
 bool is_dual_fisheye_path(const std::string& path);
 
+// What a picked folder of photos actually means, by the layout conventions the
+// rest of the project already uses -- `ssplat sfm auto`'s own probing and the
+// dataparsers' `mask_dir = "masks"`:
+//
+//   <picked>/images + <picked>/masks   a dataset folder: index images/, and the
+//                                      masks beside it are already made
+//   <picked> + <picked>/masks          photos at the top with their masks under
+//                                      them (the masks folder is NOT indexed)
+//   <picked> + <picked>/../masks       ... or the images folder was picked
+//                                      directly and its sibling holds the masks
+//
+// `images` comes back as the folder to index and `masks` as the mask tree, or
+// empty when there is none. Either half may be a symlink into the raw capture,
+// which is why every walk in here follows directory symlinks.
+void resolve_photo_folder(const std::string& picked, std::string& images,
+                          std::string& masks);
+
+// Does this folder hold any image at all, at any depth? Follows directory
+// symlinks (a prepared capture's images/ is often a link into the raw one) and
+// stops at the first hit, so it is cheap enough for the UI thread.
+bool folder_has_images(const std::string& dir);
+
+// What the output folder already holds, so the screen can say what a run would
+// reuse and what it would replace.
+//
+// `inputs` is part of the question: the natural output folder for a capture
+// whose images/ is already on disk is that folder itself, and its own images
+// and masks are the input -- not leftovers from a previous run.
+struct WorkspaceState {
+    bool frames = false;    // images/ this run would extract into
+    bool features = false;  // features/, matches.bin, database.db -- reusable
+    bool masks = false;     // masks/ this run would generate into
+    // sparse/: a reconstruction, which a new run replaces rather than resumes.
+    // Deliberately NOT evidence of a resumable run: a folder holding one opens
+    // in the trainer when it is dropped, so anything that gets this far with a
+    // sparse/ in it is someone else's dataset or a finished one, and the honest
+    // thing to do is warn that it is about to be written over.
+    bool model = false;
+    // Something a resumed run can pick up instead of redoing.
+    bool resumable() const { return frames || features || masks; }
+};
+WorkspaceState probe_workspace(const std::string& workspace,
+                               const std::vector<PrepInput>& inputs);
+
+// Is this the mask half of one of those layouts, rather than an input of its
+// own? By name, which is what makes it a convention: `--mask-dir masks` is the
+// SfM default and `mask_dir = "masks"` the dataparsers'.
+bool is_mask_folder(const std::string& path);
+
 class DatasetPrep {
 public:
     using LogFn   = std::function<void(const std::string&)>;
@@ -167,8 +226,11 @@ public:
     // False with `error` set on failure ("cancelled" when the token was set).
     bool run(const PrepJob& job, PrepResult& out, std::string& error);
 
-    // Recursive, matching what COLMAP's feature_extractor indexes.
-    static int count_images(const std::string& dir);
+    // Recursive, matching what COLMAP's feature_extractor indexes. `skip` is a
+    // sub-folder not to descend into: a masks/ nested under the images is full
+    // of PNGs that are not views, and counting them doubles the dataset with
+    // garbage (the guard `ssplat sfm auto` has for the same layout).
+    static int count_images(const std::string& dir, const std::string& skip = "");
     // Dimensions of the first image found, for the focal-length prior.
     static bool first_image_dims(const std::string& dir, int& w, int& h);
 
@@ -187,9 +249,11 @@ private:
                               const std::string& images, PrepResult& out,
                               std::string& error);
     // Photos into the dataset's own images/<subdir>, when they cannot simply be
-    // read where they are (see run()).
+    // read where they are (see run()) -- and the masks they came with into the
+    // matching masks/<subdir>, so the two trees still mirror each other.
     bool gather_photos(const PrepJob& job, const PrepInput& in,
-                       const std::string& images, std::string& error);
+                       const std::string& images, const std::string& masks,
+                       bool& have_masks, std::string& error);
     // Masks for ONE input's images. Run per input rather than over the whole
     // tree so the tracker's memory bank never crosses from one capture into the
     // next, and so clicks reach only the input they were drawn on.
