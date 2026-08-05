@@ -17,6 +17,7 @@
 #include "sfm/feature/Verification.h"
 #include "sfm/geometry/AbsolutePose.h"
 #include "sfm/geometry/TwoView.h"
+#include "sfm/tests/TestMain.h"
 
 namespace fs = std::filesystem;
 using namespace sfm;
@@ -487,4 +488,4 @@ int cmdGeomSelftest(int, char**) {
     return fails == 0 ? 0 : 1;
 }
 
-int main() { return cmdGeomSelftest(0, nullptr); }
+int main() { return sfmTestMain(0, nullptr, cmdGeomSelftest); }

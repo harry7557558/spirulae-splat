@@ -33,6 +33,7 @@ struct Stream::Impl {
     uint64_t        cb_value[kRing] = {};  // timeline value each ring slot waits on
     int             cur = 0;
     bool            recording = false;
+    uint32_t        recorded = 0;  // dispatches in the command buffer being built
 
     VkSemaphore timeline = VK_NULL_HANDLE;
     uint64_t    submitted = 0;
@@ -212,6 +213,7 @@ void Stream::flush() {
     s.cb_value[s.cur] = signal;
     s.cur = (s.cur + 1) % Impl::kRing;
     s.recording = false;
+    s.recorded = 0;
 }
 
 void Stream::sync() {
@@ -312,7 +314,31 @@ void Stream::dispatch(const char* entry, const SpecList& spec, uint32_t gx, uint
     if (debug_sync_enabled()) {
         sync();
         NN_LOG_ERROR("[ssam-sync] %s: ok\n", entry);
+        return;
     }
+
+    // Cap how much goes into one command buffer. A SAM 3 image encode records
+    // thousands of dispatches, and left unbounded that is a single batch on
+    // Intel/ANV whose results come out wrong AND differ run to run -- the
+    // per-dispatch barriers above stop being honoured somewhere inside it.
+    // Splitting at a submission boundary fixes it exactly (verified against the
+    // NVIDIA result, bit for bit), and there is no reason to want an unbounded
+    // batch anyway: submitting sooner lets the GPU start while the host is
+    // still recording, and the four-deep ring keeps the host from running away.
+    if (++s.recorded >= max_dispatches_per_batch()) flush();
+}
+
+// Dispatches per command buffer. 64 is comfortably below where ANV starts
+// misbehaving (thousands) and high enough that the per-submit cost is noise;
+// SS_NN_BATCH_DISPATCHES overrides it, 0 = unbounded (the old behaviour).
+uint32_t Stream::max_dispatches_per_batch() {
+    static const uint32_t v = [] {
+        const char* e = spirula::env("NN_BATCH_DISPATCHES");
+        if (!e || !e[0]) return 64u;
+        long n = std::strtol(e, nullptr, 10);
+        return n > 0 ? (uint32_t)n : UINT32_MAX;
+    }();
+    return v;
 }
 
 void Stream::dispatchBig(const char* entry, const SpecList& spec, uint32_t gx,

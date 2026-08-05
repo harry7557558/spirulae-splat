@@ -13,8 +13,21 @@
 
 #include "sfm/core/Features.h"
 #include "sfm/core/Mask.h"
+#include "sfm/tests/TestMain.h"
 
 namespace fs = std::filesystem;
+
+// Do two paths name the same file? Not a string comparison: MaskIndex::find
+// returns a path it composed, and on Windows that legitimately differs from the
+// one the test wrote -- `dir / "x/dup.png"` keeps the embedded '/' next to the
+// native '\', and a case-insensitive filesystem answers `exists()` for
+// "e.jpg.jpeg" when what is on disk is "e.jpg.JPEG". Both open the intended
+// file, which is what the resolver promises.
+bool samePath(const std::string& a, const std::string& b) {
+    if (a == b) return true;
+    std::error_code ec;
+    return !a.empty() && !b.empty() && fs::equivalent(a, b, ec);
+}
 using namespace sfm;
 
 // -----------------------------------------------------------------------
@@ -188,7 +201,7 @@ int cmdMaskSelftest(int, char**) {
         for (const Case& c : cases) {
             std::string got = idx.find(c.image);
             std::string want = (md / c.mask).string();
-            if (got != want) {
+            if (!samePath(got, want)) {
                 printf("  FAIL: %s -> \"%s\", expected \"%s\"\n", c.image, got.c_str(), want.c_str());
                 fails++;
             }
@@ -210,7 +223,7 @@ int cmdMaskSelftest(int, char**) {
             printf("  FAIL: ambiguous basename resolved anyway\n");
             fails++;
         }
-        if (idx2.find("x/dup.jpg") != (md / "x" / "dup.png").string()) {
+        if (!samePath(idx2.find("x/dup.jpg"), (md / "x" / "dup.png").string())) {
             printf("  FAIL: unambiguous nested name did not resolve\n");
             fails++;
         }
@@ -226,4 +239,4 @@ int cmdMaskSelftest(int, char**) {
     return fails == 0 ? 0 : 1;
 }
 
-int main() { return cmdMaskSelftest(0, nullptr); }
+int main() { return sfmTestMain(0, nullptr, cmdMaskSelftest); }

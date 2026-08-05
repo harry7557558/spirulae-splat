@@ -55,7 +55,10 @@ rem ---------------------------------------------------------------------------
 rem CUDA toolkit: newest installed version. An ambient CUDA_PATH is NOT
 rem trusted by default (it may pin a toolkit older than the MSVC in use);
 rem pass a trailing -DCMAKE_CUDA_COMPILER=... to pick a specific one.
+rem A Vulkan build never enables the CUDA language, so passing the compiler
+rem there only earns a "manually-specified variables were not used" warning.
 rem ---------------------------------------------------------------------------
+echo %* | findstr /i /c:"BACKEND=vulkan" >nul && goto :no_cuda
 set "_CUDA_ROOT="
 for /d %%d in ("%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v*") do set "_CUDA_ROOT=%%d"
 if not defined _CUDA_ROOT set "_CUDA_ROOT=%CUDA_PATH%"
@@ -65,6 +68,10 @@ if defined _CUDA_ROOT (
     set "PATH=%_CUDA_ROOT%\bin;%PATH%"
     set CUDAARG=-DCMAKE_CUDA_COMPILER="%_CUDA_ROOT%\bin\nvcc.exe"
 )
+goto :have_cuda
+:no_cuda
+set "CUDAARG="
+:have_cuda
 
 rem ---------------------------------------------------------------------------
 rem Configure + build (RAM-aware job count, mirrors build_develop.bash)

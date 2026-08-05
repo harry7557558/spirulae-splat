@@ -14,6 +14,7 @@
 #include "sfm/core/Model.h"
 #include "sfm/map/Assemble.h"
 #include "sfm/map/Merge.h"
+#include "sfm/tests/TestMain.h"
 
 namespace fs = std::filesystem;
 using namespace sfm;
@@ -437,4 +438,4 @@ int cmdMergeSelftest(int, char**) {
     return fails == 0 ? 0 : 1;
 }
 
-int main() { return cmdMergeSelftest(0, nullptr); }
+int main() { return sfmTestMain(0, nullptr, cmdMergeSelftest); }

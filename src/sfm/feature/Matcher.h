@@ -76,9 +76,17 @@ struct IFeatureMatcher {
 class BruteForceMatcher : public IFeatureMatcher {
 public:
     explicit BruteForceMatcher(const MatchOptions& opt = {}) : opt_(opt) {
+        // DP4A where the device has it, the unpacked equivalent where it does
+        // not (Intel Gen11/Gen12 integrated). Same integer result either way --
+        // see bruteforce.slang -- so this only costs matching throughput.
+        dot4_ = VkContext::probeCaps(opt.device).intDotProduct;
+        // SS_SFM_NO_DOT4=1 forces the fallback on a device that has DP4A,
+        // which is how "same integer result" gets checked without the hardware
+        // that lacks it.
+        if (spirula::env_on("SFM_NO_DOT4")) dot4_ = false;
         VkContextOptions vo;
         vo.deviceIndex = opt.device;
-        vo.needIntDotProduct = true;
+        vo.needIntDotProduct = dot4_;
         ctx_.init(vo);
     }
 
@@ -434,8 +442,11 @@ private:
         ctx_.createDescriptors({bDesc_.buf, bNorm_.buf, bResult_.buf, bCol_.buf});
 
         size_t words = 0;
-        const uint32_t* code = findSpirv("match", &words);
-        if (!code) throw std::runtime_error("match shader not built into this binary");
+        const char* blob = dot4_ ? "match" : "match_nodot";
+        const uint32_t* code = findSpirv(blob, &words);
+        if (!code)
+            throw std::runtime_error(std::string(blob) +
+                                     " shader not built into this binary");
         ctx_.loadPipelines(code, words * 4,
                            {"match_pair", "match_rows", "reduce_cols", "descriptor_norms"});
         setup_ = true;
@@ -501,6 +512,7 @@ private:
     }
 
     MatchOptions opt_;
+    bool dot4_ = true;  // device has VK_KHR_shader_integer_dot_product
     VkContext ctx_;
     GpuBuffer bDesc_, bNorm_, bResult_, bCol_;
     bool setup_ = false;

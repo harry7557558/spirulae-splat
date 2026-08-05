@@ -225,7 +225,10 @@ void cg_prec_apply(uint3 t : SV_DispatchThreadID) {
     precCols(b, dof, cols);
     if (dof == 0) return;
     uint cb = kCamBlk * b;
+    // Entries below i are always written before they are read; zeroed so
+    // slangc can see it.
     Real y[kMaxCamDof];
+    for (uint i = 0; i < kMaxCamDof; i++) y[i] = Real(0);
     for (uint i = 0; i < dof; i++) {
         Real v = u_cg_r[cols[i]];
         for (uint j = 0; j < i; j++) v = v - u_cg_M[cb + pidx(i, j)] * y[j];

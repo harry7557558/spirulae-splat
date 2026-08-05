@@ -188,8 +188,10 @@ void gemm_nt_big(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
     // At 8x8 accumulators only two or three workgroups fit on an SM, so there is
     // not much of a second block to cover the load latency -- the kernel has to
     // cover it itself.
-    float ra[8];
-    uint  rb[4];
+    // Zero-initialized only to keep slangc from warning: the priming pass
+    // (k0 == 0) fills them before the k0 > 0 pass reads them back.
+    float ra[8] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+    uint  rb[4] = {0u, 0u, 0u, 0u};
     for (uint k0 = 0; k0 < p.K + WK; k0 += WK) {
         // Stage what the previous pass fetched, except on the priming pass.
         if (k0 > 0) {

@@ -101,17 +101,26 @@ foreach(real ${SS_SFM_REALS})
     endforeach()
 endforeach()
 
-# Single-blob stages: <name> is the blob name the host looks up.
-foreach(stage sift:sift/sift.slang match:match/bruteforce.slang)
+# Single-blob stages: <name> is the blob name the host looks up. The trailing
+# field is the shader directory the dependency glob watches (match_nodot is a
+# second build of the matcher, for devices without integer dot product).
+foreach(stage sift:sift/sift.slang:sift:none
+              match:match/bruteforce.slang:match:none
+              match_nodot:match/bruteforce.slang:match:-DNO_DOT4)
     string(REPLACE ":" ";" _parts ${stage})
     list(GET _parts 0 _name)
     list(GET _parts 1 _rel)
+    list(GET _parts 2 _dir)
+    list(GET _parts 3 _def)
+    if(_def STREQUAL "none")
+        set(_def "")
+    endif()
     file(GLOB _deps CONFIGURE_DEPENDS
-        ${SS_SFM_SHADERS}/${_name}/*.slang ${SS_SFM_SHADERS}/common/*.slang)
+        ${SS_SFM_SHADERS}/${_dir}/*.slang ${SS_SFM_SHADERS}/common/*.slang)
     set(_out ${_sfm_spirv_dir}/${_name}.spv)
     add_custom_command(OUTPUT ${_out}
         COMMAND ${SS_SFM_SLANGC} ${SS_SFM_SHADERS}/${_rel}
-                -o ${_out} ${_sfm_slang_args}
+                -o ${_out} ${_sfm_slang_args} ${_def}
         DEPENDS ${_deps}
         COMMENT "SPIR-V ${_name}"
         VERBATIM)

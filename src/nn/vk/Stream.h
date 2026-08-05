@@ -64,6 +64,9 @@ public:
     // --- synchronization --------------------------------------------------
     void flush();  // submit what is recorded (does not wait)
     void sync();   // flush + wait for the queue to drain
+    // Dispatches recorded before flush() happens on its own. See the definition
+    // for why an unbounded command buffer is not an option.
+    static uint32_t max_dispatches_per_batch();
 
     // Makes the NEXT submission wait on an external timeline. Used by the video
     // decoder, whose work runs on a different queue family: the decode signals

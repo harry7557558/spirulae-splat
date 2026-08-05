@@ -49,6 +49,23 @@
 // 64 queries. Measured: the kernel was L2-bandwidth-bound, not ALU-bound, once
 // DP4A landed.
 
+// dot4add_u8packed lowers to OpUDot with PackedVectorFormat4x8Bit, which needs
+// VK_KHR_shader_integer_dot_product. Gen11/Gen12 Intel integrated parts do not
+// expose it, so the shader is compiled a second time with -DNO_DOT4 and the
+// same arithmetic spelled out: four byte extracts and four multiply-adds. It is
+// the identical integer result, just without the DP4A instruction, and it is
+// what `match_nodot` is. Everything below calls udot4add and never the
+// intrinsic directly.
+#ifdef NO_DOT4
+uint udot4add(uint a, uint b, uint acc) {
+    [unroll] for (uint s = 0; s < 32u; s += 8u)
+        acc += ((a >> s) & 0xffu) * ((b >> s) & 0xffu);
+    return acc;
+}
+#else
+uint udot4add(uint a, uint b, uint acc) { return dot4add_u8packed(a, b, acc); }
+#endif
+
 static const int DW = 32;    // uint words per descriptor (128 uint8)
 static const uint TQ = 64;   // queries per workgroup for match_pair (see the
                              // column packing: 6 bits of local query index)
@@ -83,7 +100,7 @@ void descriptor_norms(uint3 tid : SV_DispatchThreadID) {
     uint s = 0;
     [unroll] for (int k = 0; k < DW; k++) {
         uint w = desc[base + uint(k)];
-        s = dot4add_u8packed(w, w, s);
+        s = udot4add(w, w, s);
     }
     norm[idx] = s;
 }
@@ -137,7 +154,7 @@ void matchImpl<let WITH_COLS : bool, let NQ : uint>(uint3 gid, uint3 lid) {
             if (active) {
                 uint dot = 0;
                 [unroll] for (int k = 0; k < DW; k++)
-                    dot = dot4add_u8packed(qd[k], sTrain[c * uint(DW) + uint(k)], dot);
+                    dot = udot4add(qd[k], sTrain[c * uint(DW) + uint(k)], dot);
                 uint d2 = uint(nq + int(norm[dT + t0 + c]) - 2 * int(dot));
                 uint j = t0 + c;
                 if (d2 < best) { second = best; best = d2; bestIdx = j; }

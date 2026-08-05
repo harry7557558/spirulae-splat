@@ -288,27 +288,33 @@ void run_matching(const std::string& model, const std::string& a_path,
         std::FILE* f = std::fopen(p.c_str(), "rb");
         check(f != nullptr, "cannot read %s", p.c_str());
         if (!f) return d;
+        bool ok = true;
+        auto rd = [&](void* dst, size_t sz, size_t n) {
+            ok = ok && std::fread(dst, sz, n, f) == n;
+        };
         char magic[8];
         uint32_t version = 0, count = 0, dim = 0;
-        (void)std::fread(magic, 1, 8, f);
-        (void)std::fread(&version, 4, 1, f);
-        (void)std::fread(&d.w, 4, 1, f);
-        (void)std::fread(&d.h, 4, 1, f);
-        (void)std::fread(&count, 4, 1, f);
-        (void)std::fread(&dim, 4, 1, f);
+        rd(magic, 1, 8);
+        rd(&version, 4, 1);
+        rd(&d.w, 4, 1);
+        rd(&d.h, 4, 1);
+        rd(&count, 4, 1);
+        rd(&dim, 4, 1);
         d.dim = (int)dim;
         d.xy.resize((size_t)count * 2);
         d.score.resize(count);
-        for (uint32_t i = 0; i < count; i++) {
+        for (uint32_t i = 0; i < count && ok; i++) {
             float v[3];
-            (void)std::fread(v, 4, 3, f);
+            rd(v, 4, 3);
             d.xy[(size_t)i * 2] = v[0];
             d.xy[(size_t)i * 2 + 1] = v[1];
             d.score[i] = v[2];
         }
         d.desc.resize((size_t)count * dim);
-        (void)std::fread(d.desc.data(), 4, d.desc.size(), f);
+        if (!d.desc.empty()) rd(d.desc.data(), 4, d.desc.size());
         std::fclose(f);
+        check(ok, "truncated dump %s", p.c_str());
+        if (!ok) return Dump{};
         return d;
     };
 

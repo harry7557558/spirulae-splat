@@ -239,6 +239,43 @@ Note how little separates Tiny, Small and Base+: below Large, the frame is
 mostly memory attention, and that does not depend on the backbone's size.
 Picking Tiny over Small buys 4%, and costs thin structure in the mask.
 
+### Integrated GPUs and the driver's watchdog
+
+A discrete GPU is not a recommendation here, it is close to a requirement, and
+the failure mode when it is missing is nasty. On an Intel UHD (RPL-S, Mesa
+25.0 / i915) SAM 3 produces **silently wrong** masks — a different answer on
+every run, a detector presence of 0.55 where the same image scores 0.85
+elsewhere — while `dmesg` fills with
+
+```
+Fence expiration time out i915-0000:00:02.0:spirula[...]
+```
+
+The kernel's fence watchdog is cancelling submissions the iGPU takes too long
+over, and nothing in the Vulkan API reports that back: the wait returns, the
+buffers hold whatever survived. `SS_NN_DEBUG_SYNC=1` shrinks each
+submission to one dispatch and the result comes back matching the discrete-GPU
+answer, which is how this was pinned down — it is not an arithmetic
+difference. The engine's own training backend runs correctly on the same
+device (slowly), so this is about how long *this model's* kernels take, not
+about the device being wrong.
+
+Two things follow. Submissions are capped at `Stream::max_dispatches_per_batch()`
+dispatches (64, `SS_NN_BATCH_DISPATCHES` to override) — an unbounded batch
+was also enough to make `vkEndCommandBuffer` fail outright with
+`VK_ERROR_UNKNOWN` on amdvlk's integrated device, and bounding it measured
+slightly *faster* on an RTX 4080 besides. And if masks come back varying run to
+run on an integrated part, check `dmesg` before suspecting the arithmetic.
+
+It is not a Mesa quirk. On Windows the same shape shows up on an Intel UHD 750
+(Gen12, desktop): `nn_ops_test` reported `attn h8 d96 (hiera tiny)` off by a
+factor of 244 on one run — immediately after sixteen parity tests had loaded
+the GPU — and then passed five consecutive re-runs, at the default cap, at
+`SS_NN_BATCH_DISPATCHES=1`, under `SS_NN_DEBUG_SYNC=1` and with the cap
+removed. Intermittent, load-dependent, silently wrong: the Windows TDR reset
+behaving like i915's watchdog. An integrated Intel part is not a device to
+trust a result from without repeating it.
+
 ### Where the model time goes, and why it is what it is
 
 `--profile` with `SS_NN_LOG=2` breaks it down by kernel. On the fp32 path,

@@ -856,7 +856,13 @@ void test_spatial(vk::Arena& arena) {
         copy(tb, th);
         std::vector<float> want(x.size());
         for (size_t i = 0; i < x.size(); ++i) want[i] = half_to_float(float_to_half(x[i]));
-        check("convert f32<->f16", readback(tb), want, 1e-6f);
+        // One fp16 ULP, not exactness. `float_to_half` on the host rounds to
+        // nearest-even; SPIR-V's OpFConvert only rounds that way if the module
+        // asks for it through VK_KHR_shader_float_controls, and AMD's default
+        // is not RTE -- one value in a thousand comes back on the other side of
+        // the tie (4.011719 where the host says 4.015625, adjacent fp16s). A
+        // broken convert misses by far more than a ULP, so this still bites.
+        check("convert f32<->f16", readback(tb), want, 1.1e-3f);
     }
 }
 
@@ -1033,8 +1039,16 @@ void test_learned_frontend(vk::Arena& arena) {
                 for (int c = 0; c < C; ++c)
                     want[(size_t)n * C + c] = sample_zero(x, H, W, C, c, sy, sx);
             }
+            // Same 1e-4 as resize_bilinear above, and for the same reason: the
+            // host and the shader reach the sample coordinate by different
+            // orderings of `(g + 1) * 0.5 * (W - 1)`, and a coordinate one ulp
+            // apart across a texel boundary shifts the bilinear weights by far
+            // more than the coordinate moved. Every device here lands at 4e-7
+            // except Intel's UHD 750, which reproducibly hits 1.1e-5 on one of
+            // the 192 samples -- inside a texel, not a broken op, which misses
+            // by orders of magnitude.
             check(ac ? "grid_sample_points align" : "grid_sample_points noalign",
-                  readback(to), want, 1e-5f);
+                  readback(to), want, 1e-4f);
         }
     }
     {   // l2_normalize_rows, including a row of exact zeros (a keypoint whose

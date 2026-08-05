@@ -110,6 +110,44 @@ it at the solver's full one. Asking fp32 for the latter means spending the
 whole iteration budget on a threshold below its noise floor — on a 1194-image
 capture that took the finishing passes from 48 s to 260 s.
 
+### Which scalar a device can actually run
+
+Not the one you asked for, necessarily, and the gap does not follow "bigger
+GPU, more features". Each configuration needs something different, and
+`VkContext::probeCaps` asks before `vkCreateDevice` can turn a missing feature
+into an unattributable `VK_ERROR_FEATURE_NOT_PRESENT`:
+
+| scalar | needs | seen on |
+|---|---|---|
+| `double` | fp64 arithmetic + fp64 and fp32 buffer atomic add | NVIDIA |
+| `df` | `shaderInt64` + int64 buffer atomics | AMD (both ICDs), Intel Xe/RPL-S, llvmpipe |
+| `float` | fp32 buffer atomic add | NVIDIA, AMD |
+
+`BundleSolver::init` steps down to the most accurate configuration the device
+can run and says so once; ask the solver what it settled on with
+`solver.real()` rather than reading `SolverOptions::real` back, because packing
+`double` into buffers a `df` kernel reads is silent garbage, not an error. Note
+that no AMD part here has an fp64 buffer atomic add, so `double` falls back to
+`df` on all of them — accurate to ~48 bits, which is enough for every real
+capture (0.01 px of reprojection against fp64) but not for the two deliberately
+ill-conditioned convergence checks in `sfm_map_test`, which report rather than
+assert when fp64 is missing.
+
+Two devices deserve naming:
+
+- **Intel UHD 750 (Gen12, RPL-S desktop)** has *none* of the three: no fp64, no
+  int64 atomics, no fp32 atomic add. It extracts and matches perfectly well and
+  then cannot solve, so `sfm auto` refuses up front rather than a minute in.
+  It also lacks `VK_KHR_shader_integer_dot_product`, which is what the second
+  build of the matcher (`match_nodot`, same integer result without DP4A) is
+  for; `SS_SFM_NO_DOT4=1` forces that path on a device that has DP4A.
+- **llvmpipe** runs `df`, but its fp32 `fma` is not single-rounded — `fma(a, b,
+  -a*b)` returns exactly 0 where every real device returns the residual — so
+  `df_two_prod` loses the low half of every product and `df` multiplication
+  degrades to fp32 precision. `sfm_cholesky_test` fails there for that reason
+  (7e-5 relative, against 1e-11 on hardware). The mapper's own checks still
+  pass; treat llvmpipe as a way to run the pipeline, not to trust its last bits.
+
 ## Layout
 
 ```

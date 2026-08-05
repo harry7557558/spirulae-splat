@@ -17,6 +17,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <map>
+#include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <memory>
@@ -41,6 +44,47 @@ inline const char* realCfgName(RealCfg c) {
     }
 }
 inline size_t realSize(RealCfg c) { return c == RealCfg::F32 ? 4 : 8; }
+
+// Can this device run the kernels compiled for `c`?
+//   double - fp64 arithmetic, and an fp64 atomic add for the reductions
+//   float  - an fp32 atomic add
+//   df     - neither; the emulated double-float pair reduces through int64
+//            atomics, which is why it is the fallback and not a last resort
+inline bool realSupportedByDevice(RealCfg c, const VkDeviceCaps& caps) {
+    switch (c) {
+        case RealCfg::F64:
+            return caps.float64 && caps.float32AtomicAdd && caps.float64AtomicAdd;
+        case RealCfg::F32:
+            return caps.float32AtomicAdd;
+        case RealCfg::DF64:
+            return caps.int64Atomics;
+    }
+    return false;
+}
+
+// The closest thing to `want` the device can actually run, most accurate
+// first. Returns `want` unchanged when nothing fits, so device creation can
+// report the missing feature by name rather than this silently picking a
+// configuration that fails the same way.
+inline RealCfg pickRealForDevice(RealCfg want, const VkDeviceCaps& caps) {
+    if (realSupportedByDevice(want, caps)) return want;
+    for (RealCfg c : {RealCfg::F64, RealCfg::DF64, RealCfg::F32})
+        if (realSupportedByDevice(c, caps)) return c;
+    return want;
+}
+
+// Probing means an instance + an enumeration, and the mapper's scoped solves
+// would pay it per BA. Device features do not change under us, so probe once
+// per device index.
+inline const VkDeviceCaps& cachedDeviceCaps(int deviceIndex) {
+    static std::mutex m;
+    static std::map<int, VkDeviceCaps> cache;  // node-based: references stay valid
+    std::lock_guard<std::mutex> g(m);
+    auto it = cache.find(deviceIndex);
+    if (it == cache.end())
+        it = cache.emplace(deviceIndex, VkContext::probeCaps(deviceIndex)).first;
+    return it->second;
+}
 
 inline void packReals(std::vector<uint8_t>& out, const double* v, size_t n, RealCfg cfg) {
     out.resize(n * realSize(cfg));
@@ -156,6 +200,36 @@ public:
             prof_t0 = t1;
             return dt;
         };
+        // Not every device runs every scalar type, and the gap does not follow
+        // "bigger GPU, more features": Intel's Xe iGPU has int64 buffer atomics
+        // but no fp64 and no fp32 atomic add, so `df` is the only configuration
+        // it can run. Fall back rather than fail -- an unsupported request used
+        // to surface as VK_ERROR_FEATURE_NOT_PRESENT from vkCreateDevice, which
+        // killed the run at its first bundle adjustment.
+        {
+            const VkDeviceCaps& caps = ctx_.initialized()
+                                           ? ctx_.caps()
+                                           : cachedDeviceCaps(opt_.device);
+            RealCfg real = pickRealForDevice(opt_.real, caps);
+            if (real != opt_.real) {
+                // Once per (asked, got) pair: the mapper builds a solver per
+                // global BA, and a hundred identical lines say nothing the
+                // first one did not.
+                static std::mutex said_mu;
+                static std::set<std::pair<int, int>> said;
+                bool first;
+                {
+                    std::lock_guard<std::mutex> g(said_mu);
+                    first = said.emplace((int)opt_.real, (int)real).second;
+                }
+                if (first)
+                    fprintf(stderr,
+                            "[ba] device does not support '%s' arithmetic; "
+                            "falling back to '%s'\n",
+                            realCfgName(opt_.real), realCfgName(real));
+                opt_.real = real;
+            }
+        }
         VkContextOptions vopt;
         vopt.needFloat64 = opt_.real == RealCfg::F64;
         vopt.needFloatAtomics = opt_.real != RealCfg::DF64;
@@ -507,6 +581,11 @@ public:
     }
 
     const SolverStats& stats() const { return stats_; }
+    // The scalar type actually in use, which init() may have stepped down from
+    // what SolverOptions asked for (see pickRealForDevice). Anything that packs
+    // or unpacks solver buffers from outside has to ask -- packing `double`
+    // into buffers a `df` kernel reads gives silent garbage, not an error.
+    RealCfg real() const { return opt_.real; }
     VkContext& ctx() { return ctx_; }
     GpuBuffer& bufS() { return bS_; }
     GpuBuffer& bufG() { return bG_; }

@@ -445,7 +445,6 @@ void bilagrid_loglinear_bwd_v2(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
     // interp (sum w8*v, matching v1 rgb), exp on diagonal, image grad + gradwt
     float v[3] = {0.0f, 0.0f, 0.0f};
-    float post_exp[3];
     float grad_weight[9];
     [ForceUnroll]
     for (int ci = 0; ci < 9; ci++) {
@@ -454,10 +453,12 @@ void bilagrid_loglinear_bwd_v2(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         [ForceUnroll]
         for (int corner = 0; corner < 8; corner++)
             val += bg_read(kValueQuant != 0, r, c.o[corner] + ci) * w8[corner];
-        if (si == di) { val = exp(val); post_exp[si] = val; }
+        // On the diagonal the stored value is a log; exp() it once and reuse
+        // the same `val` for both the image gradient and the weight gradient.
+        if (si == di) val = exp(val);
         v[si] += val * dcol[di];
         grad_weight[ci] = coeff[si] * dcol[di];
-        if (si == di) grad_weight[ci] *= post_exp[si];
+        if (si == di) grad_weight[ci] *= val;
     }
 
     float d8[8];

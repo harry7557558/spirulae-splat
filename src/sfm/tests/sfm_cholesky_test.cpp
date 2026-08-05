@@ -20,6 +20,7 @@
 
 #include "sfm/ba/Problem.h"
 #include "sfm/ba/Solver.h"
+#include "sfm/tests/TestMain.h"
 
 // Validate the from-scratch GPU Cholesky against a CPU reference on a random
 // SPD system of dimension n.
@@ -28,6 +29,9 @@ int selftestChol(uint32_t n, SolverOptions opt) {
     P.n_dim = n;
     BundleSolver solver(P, opt);
     solver.init();
+    // init() may have stepped the scalar type down to what the device supports;
+    // everything below packs and unpacks against what the kernels actually use.
+    const RealCfg real = solver.real();
 
     std::mt19937 rng(12345);
     std::normal_distribution<double> gauss;
@@ -49,19 +53,19 @@ int selftestChol(uint32_t n, SolverOptions opt) {
         for (uint32_t j = 0; j <= i; j++)
             packed[(size_t)i * (i + 1) / 2 + j] = A[(size_t)i * n + j];
     std::vector<uint8_t> tmp;
-    packReals(tmp, packed.data(), packed.size(), opt.real);
+    packReals(tmp, packed.data(), packed.size(), real);
     solver.ctx().upload(solver.bufS(), tmp.data(), tmp.size());
-    packReals(tmp, b.data(), n, opt.real);
+    packReals(tmp, b.data(), n, real);
     solver.ctx().upload(solver.bufG(), tmp.data(), tmp.size());
 
     VkCommandBuffer cb = solver.ctx().begin();
     solver.recordCholesky(cb);
     solver.ctx().submit(cb);
 
-    std::vector<uint8_t> raw(n * realSize(opt.real));
+    std::vector<uint8_t> raw(n * realSize(real));
     solver.ctx().download(solver.bufG(), raw.data(), raw.size());
     std::vector<double> x;
-    unpackReals(x, raw.data(), n, opt.real);
+    unpackReals(x, raw.data(), n, real);
 
     // CPU reference solve (LLT via simple Cholesky)
     std::vector<double> L = A;
@@ -89,8 +93,8 @@ int selftestChol(uint32_t n, SolverOptions opt) {
         maxRel = std::max(maxRel, e / std::max(1e-30, std::fabs(y[i])));
     }
     printf("selftest-chol n=%u real=%s: max abs err %.3e, max rel err %.3e\n", n,
-           realCfgName(opt.real), maxAbs, maxRel);
-    double tol = opt.real == RealCfg::F32 ? 1e-2 : 1e-7;
+           realCfgName(real), maxAbs, maxRel);
+    double tol = real == RealCfg::F32 ? 1e-2 : 1e-7;
     printf("%s\n", maxRel < tol ? "PASS" : "FAIL");
     return maxRel < tol ? 0 : 1;
 }
@@ -122,7 +126,7 @@ int benchDispatch(SolverOptions opt) {
             std::vector<double> packed((size_t)n * (n + 1) / 2, 0.0);
             for (uint32_t i = 0; i < n; i++) packed[(size_t)i * (i + 1) / 2 + i] = 1.0;
             std::vector<uint8_t> tmp;
-            packReals(tmp, packed.data(), packed.size(), opt.real);
+            packReals(tmp, packed.data(), packed.size(), solver.real());
             solver.ctx().upload(solver.bufS(), tmp.data(), tmp.size());
 
             const int reps = mode ? 100 : 500;
@@ -143,7 +147,7 @@ int benchDispatch(SolverOptions opt) {
     return 0;
 }
 
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
     uint32_t n = 500;
     bool bench = false;
     SolverOptions opt;
@@ -167,3 +171,5 @@ int main(int argc, char** argv) {
     }
     return bench ? benchDispatch(opt) : selftestChol(n, opt);
 }
+
+int main(int argc, char** argv) { return sfmTestMain(argc, argv, run); }

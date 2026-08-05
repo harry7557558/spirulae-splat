@@ -25,6 +25,7 @@
 #include "sfm/feature/Sift.h"
 #include "sfm/feature/Verification.h"
 #include "sfm/geometry/TwoView.h"
+#include "sfm/tests/TestMain.h"
 
 namespace fs = std::filesystem;
 using namespace sfm;
@@ -815,5 +816,5 @@ int cmdSelftest(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-    return cmdSelftest(argc - 1, argv + 1);
+    return sfmTestMain(argc - 1, argv + 1, cmdSelftest);
 }

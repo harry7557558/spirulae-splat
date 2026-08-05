@@ -69,6 +69,21 @@ struct VkContextOptions {
     bool profile = false;            // per-dispatch GPU timestamps, aggregated by pipeline name
 };
 
+// What a device can actually do, as far as this module cares. Integrated parts
+// are not a subset of discrete ones: Intel's Xe iGPU has int64 buffer atomics
+// but neither fp64 nor a float32 atomic add, which is the exact opposite of
+// what a "smaller GPU has fewer features" reading would predict. So the BA
+// scalar type has to be chosen from a probe (see pickRealForDevice), not assumed
+// -- vkCreateDevice returns VK_ERROR_FEATURE_NOT_PRESENT for anything asked
+// for and missing, and that used to abort a reconstruction at the first solve.
+struct VkDeviceCaps {
+    bool float64 = false;           // shaderFloat64
+    bool float32AtomicAdd = false;  // VK_EXT_shader_atomic_float, buffer f32 add
+    bool float64AtomicAdd = false;  // ... and its f64 counterpart
+    bool int64Atomics = false;      // shaderInt64 + shaderBufferInt64Atomics
+    bool intDotProduct = false;     // VK_KHR_shader_integer_dot_product
+};
+
 class VkContext {
 public:
     VkContext() = default;
@@ -107,6 +122,27 @@ public:
         vkDestroyInstance(instance_, nullptr);
     }
 
+    // The device this context runs on, as probed at init(). Zeroed before then.
+    const VkDeviceCaps& caps() const { return caps_; }
+
+    // Same features, without owning a context: creates a throwaway instance,
+    // picks the device `deviceIndex` would pick and asks it what it has. For
+    // callers that must choose a code path (a BA scalar type, say) before any
+    // context exists. Returns all-false if there is no usable device.
+    static VkDeviceCaps probeCaps(int deviceIndex) {
+        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+        app.pApplicationName = "vk_ba_probe";
+        app.apiVersion = VK_API_VERSION_1_2;
+        VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+        ici.pApplicationInfo = &app;
+        VkInstance inst = VK_NULL_HANDLE;
+        if (vkCreateInstance(&ici, nullptr, &inst) != VK_SUCCESS) return {};
+        VkPhysicalDevice phys = choosePhysical(inst, deviceIndex);
+        VkDeviceCaps c = phys == VK_NULL_HANDLE ? VkDeviceCaps{} : queryCaps(phys);
+        vkDestroyInstance(inst, nullptr);
+        return c;
+    }
+
     void init(const VkContextOptions& opt) {
         // ---- instance ----
         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -122,21 +158,9 @@ public:
         VK_CHECK(vkCreateInstance(&ici, nullptr, &instance_));
 
         // ---- physical device ----
-        uint32_t n = 0;
-        vkEnumeratePhysicalDevices(instance_, &n, nullptr);
-        if (n == 0) throw std::runtime_error("no Vulkan devices");
-        std::vector<VkPhysicalDevice> devs(n);
-        vkEnumeratePhysicalDevices(instance_, &n, devs.data());
-        int pick = opt.deviceIndex;
-        if (pick < 0) {
-            pick = 0;
-            for (uint32_t i = 0; i < n; i++) {
-                VkPhysicalDeviceProperties p;
-                vkGetPhysicalDeviceProperties(devs[i], &p);
-                if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) { pick = (int)i; break; }
-            }
-        }
-        phys_ = devs[pick];
+        phys_ = choosePhysical(instance_, opt.deviceIndex);
+        if (phys_ == VK_NULL_HANDLE) throw std::runtime_error("no Vulkan devices");
+        caps_ = queryCaps(phys_);
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(phys_, &props);
         // Once per process. The atom workers of a bottom-up run create a
@@ -157,6 +181,29 @@ public:
         if (queueFamily_ == ~0u) throw std::runtime_error("no compute queue");
 
         // ---- device ----
+        // Everything asked for below has to be there: vkCreateDevice fails the
+        // whole call with VK_ERROR_FEATURE_NOT_PRESENT otherwise. So report a
+        // missing feature as a missing feature, by name, instead of letting the
+        // driver turn it into an unattributable error code.
+        auto require = [&](bool want, bool have, const char* what) {
+            if (want && !have)
+                throw std::runtime_error(
+                    std::string("device '") + props.deviceName +
+                    "' does not support " + what +
+                    ", which this stage needs (pick another device with "
+                    "--device, or see `spirula sfm auto --help` for the "
+                    "scalar-type flags)");
+        };
+        require(opt.needFloat64, caps_.float64, "fp64 shader arithmetic");
+        require(opt.needFloatAtomics, caps_.float32AtomicAdd,
+                "buffer float32 atomic add");
+        require(opt.needFloatAtomics && opt.needFloat64, caps_.float64AtomicAdd,
+                "buffer float64 atomic add");
+        require(opt.needInt64Atomics, caps_.int64Atomics,
+                "buffer int64 atomics");
+        require(opt.needIntDotProduct, caps_.intDotProduct,
+                "integer dot product");
+
         float prio = 1.0f;
         VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
         qci.queueFamilyIndex = queueFamily_;
@@ -587,6 +634,68 @@ public:
 private:
     static constexpr VkDeviceSize kStagingSize = 64ull << 20;
 
+    // `deviceIndex` < 0 prefers the first discrete GPU, else device 0.
+    static VkPhysicalDevice choosePhysical(VkInstance inst, int deviceIndex) {
+        uint32_t n = 0;
+        vkEnumeratePhysicalDevices(inst, &n, nullptr);
+        if (n == 0) return VK_NULL_HANDLE;
+        std::vector<VkPhysicalDevice> devs(n);
+        vkEnumeratePhysicalDevices(inst, &n, devs.data());
+        int pick = deviceIndex;
+        if (pick < 0) {
+            pick = 0;
+            for (uint32_t i = 0; i < n; i++) {
+                VkPhysicalDeviceProperties p;
+                vkGetPhysicalDeviceProperties(devs[i], &p);
+                if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) { pick = (int)i; break; }
+            }
+        }
+        if (pick >= (int)n) return VK_NULL_HANDLE;
+        return devs[pick];
+    }
+
+    static VkDeviceCaps queryCaps(VkPhysicalDevice phys) {
+        // The atomic-float features live behind an extension, so ask only if
+        // the device advertises it -- chaining an unsupported feature struct
+        // into vkGetPhysicalDeviceFeatures2 is undefined behaviour, not a
+        // false answer.
+        uint32_t en = 0;
+        vkEnumerateDeviceExtensionProperties(phys, nullptr, &en, nullptr);
+        std::vector<VkExtensionProperties> exts(en);
+        vkEnumerateDeviceExtensionProperties(phys, nullptr, &en, exts.data());
+        auto has_ext = [&](const char* name) {
+            for (const auto& e : exts)
+                if (std::strcmp(e.extensionName, name) == 0) return true;
+            return false;
+        };
+
+        VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        f2.pNext = &f12;
+        VkPhysicalDeviceShaderAtomicFloatFeaturesEXT fAtom{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
+        const bool atomic_float_ext = has_ext(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+        if (atomic_float_ext) { fAtom.pNext = f2.pNext; f2.pNext = &fAtom; }
+        VkPhysicalDeviceShaderIntegerDotProductFeatures fDot{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES};
+        const bool dot_ext = has_ext(VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME);
+        if (dot_ext) { fDot.pNext = f2.pNext; f2.pNext = &fDot; }
+        vkGetPhysicalDeviceFeatures2(phys, &f2);
+
+        VkDeviceCaps c;
+        c.float64 = f2.features.shaderFloat64 == VK_TRUE;
+        c.float32AtomicAdd = atomic_float_ext &&
+                             fAtom.shaderBufferFloat32Atomics == VK_TRUE &&
+                             fAtom.shaderBufferFloat32AtomicAdd == VK_TRUE;
+        c.float64AtomicAdd = atomic_float_ext &&
+                             fAtom.shaderBufferFloat64Atomics == VK_TRUE &&
+                             fAtom.shaderBufferFloat64AtomicAdd == VK_TRUE;
+        c.int64Atomics = f2.features.shaderInt64 == VK_TRUE &&
+                         f12.shaderBufferInt64Atomics == VK_TRUE;
+        c.intDotProduct = dot_ext && fDot.shaderIntegerDotProduct == VK_TRUE;
+        return c;
+    }
+
     // `preferFlags` are tried on top of `memFlags` and dropped if no memory
     // type offers both.
     GpuBuffer createBufferRaw(VkDeviceSize size, VkBufferUsageFlags usage,
@@ -623,6 +732,7 @@ private:
 
     VkInstance instance_ = VK_NULL_HANDLE;
     VkPhysicalDevice phys_ = VK_NULL_HANDLE;
+    VkDeviceCaps caps_{};
     VkDevice device_ = VK_NULL_HANDLE;
     VkQueue queue_ = VK_NULL_HANDLE;
     uint32_t queueFamily_ = 0;

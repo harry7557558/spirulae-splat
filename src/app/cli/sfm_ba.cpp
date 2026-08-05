@@ -196,12 +196,12 @@ int cmdBa(int argc, char** argv) {
         std::vector<uint8_t> raw(solver.bufS().size);
         std::vector<double> v;
         solver.ctx().download(solver.bufS(), raw.data(), solver.bufS().size);
-        unpackReals(v, raw.data(), (uint64_t)P.n_dim * (P.n_dim + 1) / 2, opt.real);
+        unpackReals(v, raw.data(), (uint64_t)P.n_dim * (P.n_dim + 1) / 2, solver.real());
         std::string base = spirula::env("SFM_DUMP_SG");
         std::ofstream fs(base + "_S.bin", std::ios::binary);
         fs.write((const char*)v.data(), v.size() * 8);
         solver.ctx().download(solver.bufG(), raw.data(), solver.bufG().size);
-        unpackReals(v, raw.data(), P.n_dim, opt.real);
+        unpackReals(v, raw.data(), P.n_dim, solver.real());
         std::ofstream fg(base + "_g.bin", std::ios::binary);
         fg.write((const char*)v.data(), v.size() * 8);
         return 0;
@@ -226,7 +226,7 @@ int cmdBa(int argc, char** argv) {
     }
 
     const SolverStats& st = solver.stats();
-    printf("real=%s loss=%s model=%s solver=%s%s\n", realCfgName(opt.real), loss.c_str(),
+    printf("real=%s loss=%s model=%s solver=%s%s\n", realCfgName(solver.real()), loss.c_str(),
            model.c_str(), st.solver, shared_intr ? " shared-intrinsics" : "");
     printf("initial cost: %.6e\n", st.initial_cost);
     printf("final cost:   %.6e\n", st.final_cost);

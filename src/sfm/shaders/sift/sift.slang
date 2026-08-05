@@ -319,7 +319,10 @@ void orient(uint3 t : SV_DispatchThreadID) {
     float thresh = 0.8 * maxh;
 
     // Collect peaks (parabolic interpolation), keep the strongest p1.
-    float bestVal[4]; float bestAng[4]; int nbest = 0;
+    // Only the first nbest entries are ever read; zeroed to keep slangc quiet.
+    float bestVal[4] = {0.0, 0.0, 0.0, 0.0};
+    float bestAng[4] = {0.0, 0.0, 0.0, 0.0};
+    int nbest = 0;
     int cap = int(min(p1, 4u));
     for (int i = 0; i < NORI; i++) {
         float h0 = hist[(i + NORI - 1) % NORI], h1 = hist[i], h2 = hist[(i + 1) % NORI];
