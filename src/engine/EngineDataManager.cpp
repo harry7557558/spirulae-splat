@@ -220,3 +220,51 @@ std::map<std::string, float> engine_train_step_managed(
         std::move(primitive), sh_degree, packed,
         hsubs, cfg);
 }
+
+
+// ---------------------------------------------------------------------------
+// Eval: pull a batch, install it, forward only. See Engine.h.
+// ---------------------------------------------------------------------------
+static TorchTensorView _tv_null() { return {0, 0, {}}; }
+
+int engine_eval_forward(std::string primitive, int sh_degree, bool packed) {
+    if (!engine().dm)
+        throw std::runtime_error(
+            "engine_eval_forward: DataManager not configured — call "
+            "engine_setup_data_manager(...) with the eval split first.");
+
+    const TrainStep& stp = engine().dm->next_train_step();
+    if (stp.subs.empty()) return 0;
+    if (stp.subs.size() != 1)
+        throw std::runtime_error(
+            "engine_eval_forward: expected one sub-batch per eval step "
+            "(set train_batch_size = 1)");
+
+    const DecodedBatch& b = *stp.subs[0];
+
+    if (b.K <= 1) {
+        set_camera_params((int)b.width, (int)b.height,
+                          camera_model_to_string(b.model),
+                          b.viewmats_view, b.intrins_view, b.dist_coeffs_view);
+        // No depth/normal: eval compares RGB only, and skipping them avoids
+        // the linear->ray depth conversion pass.
+        set_training_data(b.rgb_view, _tv_null(), _tv_null(),
+                          b.mask_view, true);
+    } else {
+        set_camera_params((int)b.width, (int)b.height, "PINHOLE",
+                          b.viewmats_view, b.intrins_view, b.dist_coeffs_view);
+        set_training_data_warped(
+            camera_model_to_string(b.input_model),
+            b.input_num, (int)b.input_height, (int)b.input_width,
+            b.K, (int)b.height, (int)b.width,
+            b.rgb_view, b.mask_view, (int)b.mask_height, (int)b.mask_width,
+            _tv_null(), 0, 0,
+            _tv_null(), 0, 0,
+            true,
+            b.input_intrins_view, b.input_dist_coeffs_view,
+            (uint64_t)b.axes_dev);
+    }
+
+    forward_3dgs(std::move(primitive), sh_degree, packed);
+    return (int)b.num;
+}

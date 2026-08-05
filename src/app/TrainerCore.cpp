@@ -1,18 +1,23 @@
-// TrainerCore.cpp -- see TrainerCore.h. Extracted from main.cpp; the code
-// below is a direct port of the Python managed-path trainer (mapping table
-// in app/README.md) and is numerically verified against it -- keep edits
-// in sync with the Python side.
+// TrainerCore.cpp -- see TrainerCore.h. Function-level comments still cite the
+// Python trainer this began as (model.py, trainer.py, ...); those files are
+// gone, and the citations are kept only as provenance for the numerics.
 
 #include "app/TrainerCore.h"
+#include "app/EvalMetrics.h"
+#include "checkpoint/Adapt.h"
+#include "checkpoint/Resume.h"
 #include "data/Knn.h"
 
 #ifndef _WIN32
 #include <ftw.h>
 #endif
 
+#include "external/stb_image_write.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <cstring>
 #include <ctime>
 #include <numeric>
@@ -27,6 +32,20 @@
 namespace fs = std::filesystem;
 
 namespace ssplat {
+
+// Recursive delete. Was nftw rather than std::filesystem::remove_all because
+// libtorch interposed its own std::filesystem symbols; torch is gone, so this
+// can become remove_all whenever someone wants to.
+static void remove_tree(const std::filesystem::path& p) {
+#ifndef _WIN32
+    nftw(p.string().c_str(),
+         [](const char* f, const struct stat*, int, struct FTW*) {
+             return ::remove(f);
+         }, 16, FTW_DEPTH | FTW_PHYS);
+#else
+    std::filesystem::remove_all(p);
+#endif
+}
 
 // ===========================================================================
 // Color-space handling
@@ -491,18 +510,16 @@ void TrainerSession::check_config() {
         throw std::runtime_error(what +
             " is not supported by the standalone trainer yet; use spirulae-train");
     };
-    if (!cfg.resume.empty() && !front_end_handles_resume) not_impl("--resume");
     if (cfg.use_bvh)                    not_impl("--use-bvh");
     if (cfg.use_camera_optimizer)       not_impl("--use-camera-optimizer");
     if (cfg.deblur_training_images)     not_impl("--deblur-training-images");
     if (!cfg.optimizer_offload.empty()) not_impl("--optimizer-offload");
-    if (cfg.save_eval_images && !front_end_handles_eval) not_impl("--save-eval-images");
     if (cfg.cache_images == "gpu")      not_impl("--cache-images gpu");
     if (cfg.rescale_camera_to_fit < 0)  not_impl("--rescale-camera-to-fit auto-detect");
     if (cfg.num_downscales > 0)
         log("warning: --num-downscales is a Python-data-path "
             "feature; ignored by the managed engine path");
-    if (cfg.validation_fraction > 0 && !front_end_handles_eval)
+    if (cfg.validation_fraction > 0)
         log("warning: validation images are held out but "
             "early stopping / eval is not ported yet");
     if (cfg.orientation_method != "up" || cfg.center_method != "poses")
@@ -768,24 +785,66 @@ void TrainerSession::setup_engine() {
         engine_init_ppisp(n_grids, cfg.ppisp_param_type, cfg.use_adagrad_ppisp_optim);
         st.ppisp_init = true;
     }
+
+    // ---- Resume (resume.py + trainer.py _resume_from_checkpoint:510) --------
+    // Last, because engine_load_checkpoint() overwrites the skeleton just
+    // built: the world must already be allocated at max_num_splats and every
+    // appearance channel the checkpoint carries must already exist as a
+    // restore target, which is what everything above establishes.
+    if (!cfg.resume.empty()) restore_checkpoint();
+}
+
+// Restore engine state from cfg.resume, adapting the checkpoint's buffers on
+// the host first when its layout differs from the one just built (fewer
+// splats, different SH degree, bilagrid/PPISP added or dropped).
+void TrainerSession::restore_checkpoint() {
+    ckpt::ResolvedCheckpoint r = ckpt::resolve_checkpoint(cfg.resume);
+    ckpt::check_resumable(r.ckpt_dir);
+
+    // The target is what the engine ACTUALLY holds, not what the config asks
+    // for: a depth/normal grid also needs the dataset to carry those maps,
+    // which setup_engine() resolved into `st`.
+    ckpt::TargetLayout target;
+    target.max_num_splats = engine_get_max_num_splats();
+    target.num_sh         = (cfg.sh_degree + 1) * (cfg.sh_degree + 1);
+    target.num_images     = (int)post.n_post;
+    auto lhw = [](const std::array<int, 3>& xyw) {
+        return std::array<int, 3>{xyw[2], xyw[1], xyw[0]};   // (X,Y,W)->(L,H,W)
+    };
+    if (st.bilagrid_rgb_init)    target.bilagrid_rgb    = lhw(cfg.bilagrid_shape);
+    if (st.bilagrid_depth_init)  target.bilagrid_depth  = lhw(cfg.bilagrid_shape_geometry);
+    if (st.bilagrid_normal_init) target.bilagrid_normal = lhw(cfg.bilagrid_shape_geometry);
+    target.ppisp = st.ppisp_init;
+
+    fs::path load_from = r.ckpt_dir;
+    fs::path tmp;
+    bool adapted = false;
+    {
+        JsonValue state = ckpt::read_state_json(r.ckpt_dir);
+        if (ckpt::needs_adapt(state, target)) {
+            tmp = out_dir / ".resume_adapt";
+            log("Checkpoint layout differs from this run's; adapting on the "
+                "host (no extra VRAM)...");
+            adapted = ckpt::adapt_checkpoint(r.ckpt_dir, target, tmp);
+            if (adapted) load_from = tmp;
+        }
+    }
+
+    try {
+        start_step = engine_load_checkpoint(load_from.string());
+    } catch (const std::exception& e) {
+        if (adapted) remove_tree(tmp);
+        throw std::runtime_error(
+            std::string("cannot resume from ") + r.ckpt_dir.string() + ": " +
+            e.what());
+    }
+    if (adapted) remove_tree(tmp);
+    log("Resumed from " + r.ckpt_dir.string() + " at step " +
+        std::to_string(start_step));
 }
 
 // Checkpoint save (trainer.py save_checkpoint:939).
 void TrainerSession::save_checkpoint(int step) {
-    // Recursive delete via POSIX nftw, NOT std::filesystem::remove_all:
-    // libtorch.so (linked via csrc on the torch build) exports its own
-    // std::filesystem symbols and the dynamic linker binds remove_all to
-    // that ABI-incompatible copy, which crashes. Goes away with no-torch.
-    auto remove_tree = [](const fs::path& p) {
-#ifndef _WIN32
-        nftw(p.string().c_str(),
-             [](const char* f, const struct stat*, int, struct FTW*) {
-                 return ::remove(f);
-             }, 16, FTW_DEPTH | FTW_PHYS);
-#else
-        std::filesystem::remove_all(p);
-#endif
-    };
     char name[32];
     std::snprintf(name, sizeof name, "step-%09d.ckpt", step);
     fs::path ckpt = out_dir / name;
@@ -818,7 +877,7 @@ std::map<std::string, float> TrainerSession::train_step(int step) {
 void TrainerSession::train(const TrainerCallbacks& cb) {
     _start_time = std::chrono::steady_clock::now();
 
-    int step = 0;
+    int step = start_step;
     for (; step < cfg.num_iterations; step++) {
         // Pause gate + render-fairness yield: give viewer render workers an
         // uncontended window to take the engine mutex.
@@ -854,6 +913,16 @@ void TrainerSession::train(const TrainerCallbacks& cb) {
             p.losses = std::move(losses);
             cb.on_step(p);
         }
+    }
+
+    training_time_s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - _start_time).count();
+    // Pool capacities are a monotonic high-water mark, so reading them after
+    // the loop gives the training-time peak.
+    {
+        size_t cap = 0;
+        for (const auto& e : engine_get_pool_breakdown()) cap += std::get<2>(e);
+        engine_vram_mb = (double)(cap + engine_get_scratch_bytes()) / (1024.0 * 1024.0);
     }
 
     if (cfg.steps_per_save != 0) {
@@ -924,6 +993,191 @@ ViewerHooks TrainerSession::make_viewer_hooks() {
     };
     hooks.progress_json = [this] { return progress_json(); };
     return hooks;
+}
+
+
+
+// ===========================================================================
+// Eval (trainer.py eval:465 + model.py get_image_metrics_and_images:1597)
+// ===========================================================================
+
+namespace {
+
+// Clip to [0,1] and quantize to 8-bit, which is what the saved PNGs hold and
+// therefore what the Python LPIPS tool sees.
+std::vector<uint8_t> to_png_bytes(const std::vector<float>& rgb) {
+    std::vector<uint8_t> out(rgb.size());
+    for (size_t i = 0; i < rgb.size(); i++) {
+        float v = std::min(std::max(rgb[i], 0.0f), 1.0f);
+        out[i] = (uint8_t)std::lround(v * 255.0f);
+    }
+    return out;
+}
+
+}  // namespace
+
+void TrainerSession::eval() {
+    // eval_mode "all" trains on every frame, so nothing is held out.
+    if (cfg.eval_mode == "all") return;
+
+    // Re-parse for the eval side of the split. The parser computes the split
+    // over all frames, so this is the exact complement of what training saw.
+    DatasetParserConfig pcfg;
+    pcfg.recon_dir            = cfg.colmap_recon_dir;
+    pcfg.image_dir            = cfg.image_dir;
+    pcfg.mask_dir             = cfg.mask_dir;
+    pcfg.depth_dir            = cfg.depth_dir;
+    pcfg.normal_dir           = cfg.normal_dir;
+    pcfg.validation_fraction  = 0.0f;      // no early-stop holdout inside eval
+    pcfg.eval_mode            = cfg.eval_mode;
+    pcfg.eval_interval        = cfg.eval_interval;
+    pcfg.train_split_fraction = cfg.train_split_fraction;
+    pcfg.outlier_threshold    = cfg.outlier_threshold;
+    pcfg.rescale_camera_to_fit   = cfg.rescale_camera_to_fit;
+    pcfg.downscale_rounding_mode = cfg.downscale_rounding_mode;
+    pcfg.metashape_xml           = cfg.metashape_xml;
+    pcfg.metashape_ply           = cfg.metashape_ply;
+    pcfg.metashape_psx           = cfg.metashape_psx;
+    pcfg.split                   = "eval";
+
+    ParsedDataset eds = parse_dataset(cfg.data, pcfg, cfg.data_format);
+    if (eds.num_cameras == 0) {
+        log("Eval: the eval split is empty; nothing to score.");
+        return;
+    }
+    // Same world scaling training applied, so the cameras line up with the
+    // trained splats.
+    if (cfg.relative_scale.has_value()) {
+        float rs = *cfg.relative_scale;
+        for (int64_t i = 0; i < eds.num_cameras; i++)
+            for (int r = 0; r < 3; r++) eds.c2w[i*12 + r*4 + 3] *= rs;
+    }
+    PostSplitCameras epost = bake_post_split(
+        eds, cfg.warp_to_pinhole, cfg.warp_spherical_to_pinhole);
+
+    // One image per step: metrics are per-image, and the batch scheduler would
+    // otherwise pack several resolutions into one step.
+    DataManagerConfig dm;
+    dm.cache_mode  = (cfg.cache_images == "disk") ? CacheMode::DISK : CacheMode::CPU;
+    dm.load_masks  = !eds.mask_filenames.empty() || epost.any_fisheye_warp;
+    dm.load_depths = false;
+    dm.load_normals = false;
+    dm.train_batch_size = 1;
+    dm.val_batch_size   = 1;
+    dm.mask_boundary_offset = cfg.mask_boundary_offset;
+    dm.warp_to_pinhole  = cfg.warp_to_pinhole;
+    std::vector<int32_t> all_idx((size_t)eds.num_cameras);
+    std::iota(all_idx.begin(), all_idx.end(), 0);
+
+    {
+        std::lock_guard<std::mutex> lk(engine_mutex);
+        engine_setup_data_manager(
+            dm, eds.camera_models,
+            eds.image_filenames, eds.mask_filenames, {}, {},
+            eds.widths, eds.heights,
+            epost.any_warp ? epost.K_per_camera : std::vector<int32_t>{},
+            epost.any_warp ? epost.post_offsets : std::vector<int32_t>{},
+            epost.viewmats, epost.intrins, epost.dist_coeffs,
+            epost.input_intrins, epost.input_dist_coeffs,
+            all_idx, {});
+    }
+
+    log("Eval: " + std::to_string(epost.n_post) + " view(s)");
+
+    std::map<std::string, std::vector<float>> per_image;
+    const int sh_deg = cfg.sh_degree;
+    int saved = 0;
+
+    for (int64_t i = 0; i < eds.num_cameras; i++) {
+        int64_t H = 0, W = 0, B = 0, Cc = 0;
+        std::vector<float> gt, render;
+        {
+            std::lock_guard<std::mutex> lk(engine_mutex);
+            int n_view = engine_eval_forward(cfg.primitive, sh_deg, cfg.packed);
+            if (n_view == 0) break;
+            auto shape = engine_get_render_rgb_shape();
+            B = std::get<0>(shape); H = std::get<1>(shape);
+            W = std::get<2>(shape); Cc = std::get<3>(shape);
+            const int64_t npx = B * H * W * Cc;
+            render.resize((size_t)npx);
+            gt.resize((size_t)npx);
+            engine_copy_render_to_host(
+                TorchTensorView{(uint64_t)(uintptr_t)render.data(), 4, {B, H, W, Cc}},
+                TorchTensorView{0, 0, {}}, TorchTensorView{0, 0, {}},
+                TorchTensorView{0, 0, {}}, TorchTensorView{0, 0, {}});
+            engine_copy_gt_rgb_to_host(
+                TorchTensorView{(uint64_t)(uintptr_t)gt.data(), 4, {B, H, W, Cc}});
+        }
+
+        // Per POST-split view inside the batch (K faces of one input image).
+        const int64_t view_px = H * W * Cc;
+        for (int64_t v = 0; v < B; v++) {
+            const float* g = gt.data() + v * view_px;
+            std::vector<float> pred(render.begin() + (size_t)(v * view_px),
+                                    render.begin() + (size_t)((v + 1) * view_px));
+            for (float& x : pred) x = std::min(std::max(x, 0.0f), 1.0f);
+            std::vector<float> cc = color_correct(pred.data(), g, H * W, (int)Cc);
+
+            per_image["l1"].push_back(image_l1(g, pred.data(), view_px));
+            per_image["psnr"].push_back(image_psnr(g, pred.data(), view_px));
+            per_image["ssim"].push_back(image_ssim(g, pred.data(), (int)H, (int)W, (int)Cc));
+            per_image["cc_l1"].push_back(image_l1(g, cc.data(), view_px));
+            per_image["cc_psnr"].push_back(image_psnr(g, cc.data(), view_px));
+            per_image["cc_ssim"].push_back(image_ssim(g, cc.data(), (int)H, (int)W, (int)Cc));
+
+            if (cfg.save_eval_images) {
+                char nm[64];
+                auto png = [&](const char* kind, const std::vector<float>& img) {
+                    std::snprintf(nm, sizeof nm, "eval-%s-%05d.png", kind, saved);
+                    std::vector<uint8_t> bytes = to_png_bytes(img);
+                    stbi_write_png((out_dir / nm).string().c_str(), (int)W, (int)H,
+                                   (int)Cc, bytes.data(), (int)(W * Cc));
+                };
+                // Both sides, because the LPIPS tool needs the pair -- and the
+                // 8-bit clip here is what it will score, so its numbers are
+                // reproducible from the files alone.
+                png("gt", std::vector<float>(g, g + view_px));
+                png("render", pred);
+                saved++;
+            }
+        }
+    }
+
+    if (per_image.empty()) {
+        log("Eval: no views were rendered.");
+        return;
+    }
+
+    std::map<std::string, float> avg;
+    for (const auto& [k, v] : per_image) {
+        double s = 0.0;
+        for (float x : v) s += x;
+        avg[k] = (float)(s / (double)v.size());
+        log("  " + k + ": " + std::to_string(avg[k]));
+    }
+
+    // metrics.json: per-image lists plus avg_* scalars, the shape
+    // ss_benchmark.py reads back.
+    std::ofstream mf((out_dir / "metrics.json").string());
+    if (!mf) throw std::runtime_error("cannot write metrics.json");
+    mf << "{\n";
+    bool first = true;
+    for (const auto& [k, v] : per_image) {
+        mf << (first ? "" : ",\n") << "    \"" << k << "\": [";
+        for (size_t i = 0; i < v.size(); i++)
+            mf << (i ? ", " : "") << v[i];
+        mf << "]";
+        first = false;
+    }
+    for (const auto& [k, v] : avg)
+        mf << ",\n    \"avg_" << k << "\": " << v;
+    mf << ",\n    \"num_eval_images\": " << per_image.begin()->second.size();
+    // Per-run training stats: a benchmark launches each scene as its own
+    // process, so metrics.json is the only place it can read these.
+    mf << ",\n    \"training_time\": " << training_time_s;
+    mf << ",\n    \"engine_vram\": " << engine_vram_mb;
+    mf << "\n}\n";
+    log("Eval metrics written to " + (out_dir / "metrics.json").string());
 }
 
 }  // namespace ssplat

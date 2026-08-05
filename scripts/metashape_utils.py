@@ -28,7 +28,18 @@ import numpy as np
 
 from pathlib import Path
 
-from spirulae_splat.modules.camera import CameraType
+from enum import Enum
+
+
+# Inlined from the retired Python package: this is the only thing that was
+# needed from it, and process_data_metashape.py has to keep working without it.
+class CameraType(Enum):
+    ORTHOGRAPHIC = None
+    PERSPECTIVE = "PINHOLE"
+    EQUIDISTANT = "FISHEYE"
+    EQUISOLID = "EQUISOLID"
+    EQUIRECTANGULAR = "EQUIRECTANGULAR"
+    CYLINDRICAL = None
 
 
 class StringMatcher:

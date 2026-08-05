@@ -302,10 +302,63 @@ without the other and that gate fails.
    atomic builtin in `MeshingHost.cpp`). Remaining: `cudart_static`, CI,
    installer (Phase 3).
 
+## Resume
+
+`--resume <run_dir|step-*.ckpt>` is native (`src/checkpoint/Resume.h`). The
+checkpoint's `config.json` is the base config — it carries the architecture
+the saved state was built for, so `--data` is not needed on a resume — with
+the resume path, an output dir defaulting back to the checkpoint's own run
+folder, a preset named on the command line, and every explicitly-passed flag
+layered on in that order. The restore itself runs at the end of
+`setup_engine()`, after the world is seeded at `max_num_splats` and the
+appearance channels exist as restore targets.
+
+A checkpoint saved without `--save-full-checkpoint` holds no world/optimizer
+state and is refused up front, before any loading.
+
+Resuming into a **different layout** — smaller `cap_max`, a different
+`sh_degree`, bilagrid/PPISP added, dropped or resized — is handled by
+`src/checkpoint/Adapt.h`, which rewrites the checkpoint's buffers to the
+target layout on the host and hands the engine an ordinary `state.tar`. It
+runs buffer-at-a-time and allocates no VRAM, because the motivating case is
+resuming a run that just ran out of it. Splat reduction drops the tail by up
+to the checkpoint's unsaturated slack, then the lowest-opacity remainder.
+Quantized buffers are decoded and re-encoded through the engine's own codecs
+in `core/Tensor.h` — those are `__device__` functions, but `__device__` is an
+empty macro in host translation units, so the host path calls the same code
+the kernels do rather than a copy of it.
+
+## Eval
+
+Runs after training when `eval_mode != "all"` and the eval split is non-empty.
+The dataset is re-parsed with `split = "eval"` (the parser computes the split
+over all frames, so this is the exact complement of what training saw) and the
+engine's DataManager is replaced with one over it — which is why eval is last
+and nothing may train afterwards. Each view goes through `engine_eval_forward`:
+the same decode, mask and fisheye/equirect warp path training uses, then a
+forward with no loss or backward. Eval GT is therefore the warped GT, not a
+host-side reconstruction of it.
+
+`src/app/EvalMetrics.{h,cpp}` scores each view: `l1`, `psnr`, `ssim`, and the
+`cc_` variants on the colour-corrected render. Results go to `metrics.json` as
+per-image lists plus `avg_*` scalars. Verified against torchmetrics on 13 real
+eval pairs: l1 and psnr agree to 1e-7, ssim to 1e-5. `color_correct` is closer
+to a float64 reference than the torch implementation it replaces (3e-8 vs
+1.4e-3 relative) — torch accumulates the normal equations in float32.
+
+Two things worth knowing about the SSIM: torchmetrics reflect-pads and
+averages over the **full** H×W, cropping the border back off only on its
+`return_contrast_sensitivity` path. A valid-interior SSIM is ~0.5% different,
+which is enough to change a benchmark comparison.
+
+LPIPS is not native. `--save-eval-images 1` writes `eval-gt-NNNNN.png` and
+`eval-render-NNNNN.png` per view; `reference/python/eval_lpips.py` reads those
+and merges `lpips_*` into `metrics.json`.
+
 ## Unsupported-by-design (guarded with clear errors)
 
-`--resume`, `--use-bvh`, `--use-camera-optimizer`,
-`--deblur-training-images`, `--optimizer-offload`, `--save-eval-images`,
+`--use-bvh`, `--use-camera-optimizer`,
+`--deblur-training-images`, `--optimizer-offload`,
 `--cache-images gpu`,
 `--train-frame` ≠ points, `--rescale-camera-to-fit` auto mode,
 direct-equirect (`--warp-spherical-to-pinhole 0`) with depth/normal

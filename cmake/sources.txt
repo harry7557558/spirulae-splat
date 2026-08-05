@@ -2,20 +2,16 @@
 #
 # SINGLE SOURCE OF TRUTH. Consumed by:
 #   - cmake/SsplatSources.cmake  (the development build, both backends)
-#   - setup.py                   (the pip / torch.utils.cpp_extension build)
-# Keep it a plain list of glob patterns, one per line: both readers parse it
-# line-by-line, and setup.py must be able to do so without CMake installed.
+# Keep it a plain list of glob patterns, one per line.
 # Blank lines and '#' comments are ignored. Globs are NOT recursive -- list each
 # directory, so adding one is a deliberate act.
 #
-# Any path containing "hip" is dropped by both readers (ROCm sources are not
-# part of either build).
+# Any path containing "hip" is dropped (ROCm sources are not part of the build).
 #
 # Not listed here, on purpose: src/app/{cli,gui}/ and src/backend/** -- their
-# targets own those. app/webviewer/ and app/TrainerCore.cpp ARE listed: the
-# Python extension binds both (src/bindings/bind_viewer.cpp,
-# src/bindings/bind_trainer.cpp), so they belong to the library rather than
-# being compiled once per app target.
+# targets own those. app/webviewer/, app/TrainerCore.cpp and app/EvalMetrics.cpp
+# ARE listed: they are shared by the CLI and the GUI, so they belong to the
+# library rather than being compiled once per app target.
 
 [cuda]
 # Everything the CUDA `csrc` library compiles.
@@ -35,23 +31,26 @@ src/kernels/visualize/*.cu
 src/mesh/*.cu
 src/mesh/*.cpp
 src/engine/*.cpp
+src/checkpoint/*.cpp
 src/data/*.cpp
 src/data/parsers/*.cpp
 src/app/webviewer/*.cpp
 src/app/TrainerCore.cpp
+src/app/EvalMetrics.cpp
 src/external/*.cpp
 src/external/*.c
-src/bindings/*.cpp
 
 [portable]
-# The torch-free subset: the same list minus the CUDA kernels and minus
-# src/bindings/ (Torch-only). Compiled as csrc_portable by the Vulkan build.
+# The same list minus the CUDA kernels. Compiled as csrc_portable by the
+# Vulkan build.
 src/kernels/bilagrid/*.cpp
 src/mesh/*.cpp
 src/engine/*.cpp
+src/checkpoint/*.cpp
 src/data/*.cpp
 src/data/parsers/*.cpp
 src/app/webviewer/*.cpp
 src/app/TrainerCore.cpp
+src/app/EvalMetrics.cpp
 src/external/*.cpp
 src/external/*.c

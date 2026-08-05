@@ -13,7 +13,7 @@
 # neither the engine nor libtorch, so it stays a small, portable binary.
 #
 # Backend-agnostic: whichever backend module ran first left the engine to link
-# in SSPLAT_APP_LIBS and set SSPLAT_WITH_TORCH. Two exceptions: the mesh tool is
+# in SSPLAT_APP_LIBS. Two exceptions: the mesh tool is
 # CUDA-only (the Vulkan backend stubs the meshing kernels), and the SfM tool is
 # Vulkan-only.
 
@@ -31,7 +31,7 @@
 # ssplat_configure_app(<target>)
 #
 # The settings every app target needs: include paths, the engine libraries,
-# host flags, and the two link-time workarounds a Torch-enabled build requires.
+# host flags.
 # ---------------------------------------------------------------------------
 function(ssplat_configure_app target)
     target_include_directories(${target} PRIVATE
@@ -45,30 +45,7 @@ function(ssplat_configure_app target)
     )
     set_property(TARGET ${target} PROPERTY CXX_STANDARD 17)
 
-    if(SSPLAT_WITH_TORCH)
-        # libpython is only needed because csrc's pybind/libtorch_python layer
-        # leaves CPython symbols undefined (a Python process normally provides
-        # them at import time). Drops out with the no-torch build.
-        find_package(Python3 REQUIRED COMPONENTS Development.Embed)
-        target_link_libraries(${target} PRIVATE Python3::Python)
-
-        # Statically link libstdc++ into the exe so its C++ runtime calls bind
-        # at link time. Without this, libtorch.so (pulled in via csrc)
-        # interposes its own bundled std::filesystem symbols at load time, and
-        # e.g. remove_all resolves to an ABI-incompatible copy that jumps to
-        # null.
-        if(NOT WIN32)
-            target_link_options(${target} PRIVATE -static-libgcc -static-libstdc++)
-        endif()
-
-        # libcsrc.so is renamed to spirulae_splat/csrc.so by
-        # build_develop.bash; keep the exe's lookup pointing at the build tree
-        # copy (and at libtorch).
-        set_property(TARGET ${target} PROPERTY BUILD_RPATH
-            "$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
-    else()
-        set_property(TARGET ${target} PROPERTY BUILD_RPATH "$ORIGIN")
-    endif()
+    set_property(TARGET ${target} PROPERTY BUILD_RPATH "$ORIGIN")
 endfunction()
 
 # ---------------------------------------------------------------------------
@@ -214,9 +191,9 @@ if(SSPLAT_BUILD_CLI OR SSPLAT_BUILD_GUI)
     # arguments untouched, --help and all.
     #
     # Only these two, and deliberately: built alone they skip
-    # ssplat_configure_app(), so neither drags in the training engine or (on a
-    # Torch build) libpython, which is the entire reason to want them separate
-    # -- ssplat-sfm is 24 MB against the combined binary's 61 MB. A separate
+    # ssplat_configure_app(), so neither drags in the training engine, which
+    # is the entire reason to want them separate -- ssplat-sfm is 24 MB
+    # against the combined binary's 61 MB. A separate
     # ssplat-train or ssplat-mesh would be byte-for-byte the work `ssplat` does
     # anyway, and a separate ssplat-gui would be worse than the combined one:
     # it could not run reconstruction, since that is this binary re-running

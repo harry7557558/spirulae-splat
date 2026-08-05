@@ -26,7 +26,7 @@ side. It implements the `up`/`poses` path only.
 
 ## Reference implementation
 
-- `spirulae_splat/modules/camera_utils.py` — the algorithms
+- `reference/python/camera_utils.py` — the algorithms
   (`auto_orient_and_center_poses` for pca/up/vertical/none x poses/focus/none,
   `orient_and_center_poses_gsplat` for the `gsplat` value of both). That module
   is on no code path; it exists for this.

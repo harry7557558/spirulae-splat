@@ -1,4 +1,4 @@
-// mesh_main.cpp -- standalone mesh-extraction CLI (no Python).
+// mesh_main.cpp -- standalone mesh-extraction CLI.
 //
 //     ssplat-mesh <checkpoint> [--data <dir>] [--format ply,glb]
 //                 [--color none|vertex|texture] [--flag value ...]
@@ -8,7 +8,7 @@
 // (for camera-based occupancy + colors) defaults to config.json's `data`;
 // pass --no-data to mesh from Gaussian densities only.
 //
-// This is the C++ twin of spirulae_splat/ss_meshing.py: it loads the raw
+// It loads the raw
 // (un-activated) Gaussians from the checkpoint PLY, parses the dataset with
 // the same C++ parsers the CLI trainer uses, and calls meshing::generate_mesh
 // (Meshing.h) for the heavy lifting.
@@ -39,7 +39,7 @@ namespace {
 
 // ===========================================================================
 // splat.ply loader (raw, un-activated Gaussians; float32 binary LE as written
-// by both the Python trainer and EngineCheckpoint.cpp)
+// by EngineCheckpoint.cpp)
 // ===========================================================================
 
 struct SplatPly {
@@ -189,7 +189,7 @@ MeshCameras load_cameras(const JsonValue& run_cfg, const std::string& data_dir,
     pcfg.downscale_rounding_mode = dp_str("downscale_rounding_mode", "floor");
     if (dp) {
         const JsonValue* v = dp->find("rescale_camera_to_fit");
-        // bool auto-detect is a Python-path feature; a number divides intrinsics
+        // bool auto-detect is unported; a number divides intrinsics
         if (v && v->type == JsonValue::Type::Number)
             pcfg.rescale_camera_to_fit = (float)v->as_double(0.0);
         const JsonValue* fmt = dp->find("data_format");

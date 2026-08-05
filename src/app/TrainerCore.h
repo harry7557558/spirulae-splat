@@ -1,24 +1,10 @@
 #pragma once
 
 // TrainerCore -- the engine-side training session shared by the standalone
-// CLI (app/cli/main.cpp), the native GUI (app/gui/) and, via
-// bindings/bind_trainer.cpp, Python. This is the single training driver;
-// it started as a port of the Python managed path (the mapping table in
-// app/README.md), and the Python side is now a client of it rather than a
-// second implementation. The functions it superseded:
-//   model.py  _build_loss_weights / engine_train_step_managed
-//   core.py   _build_optim_config / _build_densify_config
-//   optimizer.py get_scheduled_lr
-//   model.py  populate_modules (seeding) / _maybe_init_bilagrid /
-//             background + color-space init
-//   trainer.py train() save cadence / _setup_cpp_data_manager (non-warp)
-//
-// Those still exist for now (users are on the Python path and breakage is
-// paced, not rushed -- docs/restructure-proposal.md §7.1), and
-// tests/python/test_trainer_parity.py asserts build_step_config() and the
-// Python path emit an identical EngineStepConfig for every step. Change one
-// side and that gate fails; the fix is to delete the Python side, not to
-// re-port.
+// CLI (app/cli/main.cpp) and the native GUI (app/gui/). This is the single
+// training driver. It began as a port of a Python trainer that no longer
+// exists; the per-step logic lives in build_step_config() and nowhere else,
+// so there is nothing left to keep in sync.
 //
 // TrainerSession splits the run into phases so front-ends can interleave
 // their own UI between them:
@@ -154,18 +140,7 @@ public:
     // Human-readable progress/warning messages. Default (unset) = stdout.
     std::function<void(const std::string&)> log_fn;
 
-    // Set by a front-end that implements the feature itself, so check_config()
-    // stops rejecting it. The Python trainer does checkpoint resume (with its
-    // codec/adapt logic) and eval (LPIPS is a torch model); the standalone CLI
-    // does neither, and its guards must keep firing.
-    bool front_end_handles_resume = false;
-    bool front_end_handles_eval   = false;
-
-    // Output-dir / config.json conventions. A front-end that owns them sets
-    // out_dir_override before setup_engine() and clears write_config_json:
-    // the Python trainer dumps the *Python dataclass* config.json that
-    // ss_trainer.py --resume reads back, which is a different (and richer)
-    // shape than save_config_json()'s.
+    // Output-dir / config.json overrides, for a front-end that owns them.
     std::string out_dir_override;      // "" = derive from cfg
     bool        write_config_json = true;
 
@@ -178,13 +153,21 @@ public:
     // Filled by setup_engine().
     std::filesystem::path out_dir;
     RunState st;
+    // Step the restored checkpoint stopped at; train() starts here. 0 unless
+    // setup_engine() resumed.
+    int start_step = 0;
+
+    // Filled by train(), reported in metrics.json: benchmark runs are separate
+    // processes, so this is the only way they see the in-process totals.
+    double training_time_s = 0.0;   // wall clock of the step loop
+    double engine_vram_mb  = 0.0;   // pool high-water mark + scratch
     // Set by the front-end from viewer_upload_cameras()'s return value;
     // copied into ViewerRenderConfig::base_camera_size for the live
     // frustum-size control.
     float viewer_base_camera_size = 0.0f;
 
     // Coordination between the train loop, viewer render workers, and
-    // front-end controls (same dance as trainer.py:146-179).
+    // front-end controls.
     std::mutex engine_mutex;
     std::atomic<bool> paused{false};
     std::atomic<bool> stop_requested{false};
@@ -215,6 +198,20 @@ public:
     std::map<std::string, float> train_step(int step);
 
     void save_checkpoint(int step);
+
+    // Held-out eval: render every frame of the eval split, score it, and write
+    // metrics.json. No-op when eval_mode is "all" (nothing is held out) or the
+    // eval split is empty. Replaces the engine's DataManager with one over the
+    // eval split, so it must run AFTER training.
+    //
+    // Reports l1/psnr/ssim and the cc_ variants of each (computed on the
+    // colour-corrected render). LPIPS is not computed here -- pass
+    // --save-eval-images and run reference/python/eval_lpips.py over the PNGs.
+    void eval();
+
+    // Restore engine state from cfg.resume; sets start_step. Called by
+    // setup_engine().
+    void restore_checkpoint();
 
     // Trainer.get_progress port (trainer.py:181-205); the /progress body.
     std::string progress_json();

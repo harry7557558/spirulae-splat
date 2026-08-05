@@ -62,10 +62,13 @@ golden-value regression tests on the C++ side ([testing.md](testing.md)
 §4-6). **Do not add a fourth** — new functionality goes in C++ with a
 binding.
 
-What is left in Python is what has no C++ counterpart: the config
-dataclasses (the source of truth codegen reads), checkpoint resume and its
-layout adaptation, the eval metrics (LPIPS and the SSIM variants are torch
-models), and the image loading that eval needs.
+Nothing structural is left in Python. Checkpoint resume and its layout
+adaptation are native (`src/checkpoint/`), and so is the eval pass
+(`src/app/EvalMetrics.{h,cpp}`) except LPIPS, which needs AlexNet + VGG16 and
+is a hand-run tool over the saved eval PNGs (`reference/python/eval_lpips.py`).
+The config dataclasses are no longer the source of truth
+(`src/config/TrainConfig.h` is) and survive only as the downstream copy the
+Python client still reads, until it is deleted.
 
 ## The engine
 

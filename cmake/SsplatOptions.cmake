@@ -29,17 +29,12 @@ endif()
 # ---------------------------------------------------------------------------
 # Options
 #
-# Torch + Python are only needed for the Python extension module (ext.cpp).
-# When either is missing -- or SSPLAT_NO_TORCH=ON -- the extension is skipped
-# and only the standalone `ssplat` CLI is built (engine is torch-free).
-#
 # Everything the build has goes into ONE executable, `ssplat`, which dispatches
 # on its first argument (`ssplat sfm auto ...`); see src/app/Tools.h. These two
 # options decide what is in it: the command-line tools, the window, or both.
 # ---------------------------------------------------------------------------
 option(SSPLAT_BUILD_CLI "Build the command-line tools into ssplat" OFF)
 option(SSPLAT_BUILD_GUI "Build the graphical application into ssplat (fetches GLFW + Dear ImGui)" OFF)
-option(SSPLAT_NO_TORCH "Skip Torch/Python even if present; build only ssplat" OFF)
 option(SSPLAT_BUILD_BACKEND_TESTS "Build backend parity test tools" OFF)
 
 # Also build ssplat-sfm and ssplat-sam as standalone executables. Same code and
@@ -60,7 +55,7 @@ option(SSPLAT_DEBUG_SYMBOLS "Emit debug symbols / line info (host -g, CUDA cubin
 # ---------------------------------------------------------------------------
 # Compute backend selection
 #
-# cuda (default): the full build -- CUDA kernels, optional Torch extension,
+# cuda (default): the full build -- CUDA kernels,
 # and the app targets.
 # vulkan: the portable engine layer (Engine*.cpp + host support) against the
 # Vulkan compute runtime (src/backend/vulkan/, see its README.md), built

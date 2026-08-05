@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 #include "backend/api/BackendTypes.h"
@@ -999,8 +1000,11 @@ public:
     int64_t bounds_bytes() const { return n_bounds * (int64_t)sizeof(float4); }
     int64_t total_bytes()  const { return packed_bytes() + bounds_bytes(); }
 
-    // ---- Device: codec primitives ------------------------------------------
-#ifdef __CUDACC__
+    // ---- Codec primitives ---------------------------------------------------
+    // Host-callable too: `__device__` is an empty macro in host translation
+    // units, and this is pure <cmath> math. Host-side checkpoint adaptation
+    // (checkpoint/Adapt.cpp) decodes and re-encodes through these very
+    // functions, so there is no second implementation to drift.
     // Forward / inverse map for the sqrt_g2 half:
     //   forward:  sqrt_g2 -> log1pf(sqrt_g2 / eps)
     //   inverse:  log_s   -> eps * expm1f(log_s)
@@ -1109,7 +1113,6 @@ public:
         float u       = g1 / (sqrt_g2 + kEps);
         return float2{u, forward_sqrt_g2(sqrt_g2)};
     }
-#endif // __CUDACC__
 };
 
 
@@ -1187,8 +1190,11 @@ public:
     int64_t bounds_bytes() const { return n_bounds * (int64_t)sizeof(float2); }
     int64_t total_bytes()  const { return packed_bytes() + bounds_bytes(); }
 
-    // ---- Device: codec primitives ------------------------------------------
-#ifdef __CUDACC__
+    // ---- Codec primitives ---------------------------------------------------
+    // Host-callable too: `__device__` is an empty macro in host translation
+    // units, and this is pure <cmath> math. Host-side checkpoint adaptation
+    // (checkpoint/Adapt.cpp) decodes and re-encodes through these very
+    // functions, so there is no second implementation to drift.
     // Forward / inverse log map. 0 <-> 0 fixed point.
     __device__ static inline float forward_v(float v) {
         return log1pf(fmaxf(v, 0.0f) * (1.0f / kEps));
@@ -1255,7 +1261,6 @@ public:
     ) {
         encode_log(packed_ptr, idx, forward_v(v), mm);
     }
-#endif // __CUDACC__
 };
 
 
@@ -1330,8 +1335,11 @@ public:
     int64_t bounds_bytes() const { return n_bounds * (int64_t)sizeof(float2); }
     int64_t total_bytes()  const { return packed_bytes() + bounds_bytes(); }
 
-    // ---- Device: codec primitives ------------------------------------------
-#ifdef __CUDACC__
+    // ---- Codec primitives ---------------------------------------------------
+    // Host-callable too: `__device__` is an empty macro in host translation
+    // units, and this is pure <cmath> math. Host-side checkpoint adaptation
+    // (checkpoint/Adapt.cpp) decodes and re-encodes through these very
+    // functions, so there is no second implementation to drift.
     // Decode the linearly-quantized value at cell `idx` directly (no log).
     __device__ static inline float decode_v(
         const uint8_t* __restrict__ packed_ptr, int64_t idx, float2 mm
@@ -1373,5 +1381,4 @@ public:
         if constexpr (BITS == 8) return (uint32_t)(uint8_t)qf;
         else                     return (uint32_t)(uint16_t)qf;
     }
-#endif // __CUDACC__
 };

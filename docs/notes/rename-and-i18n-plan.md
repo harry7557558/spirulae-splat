@@ -116,15 +116,63 @@ Follow-ups this surfaced, deliberately left alone to keep the gate clean:
 
 ---
 
-## 4. Phase 1 — retiring the Python client
+## 4. Phase 1 — retiring the Python client — **IN PROGRESS**
+
+Resume and its layout adaptation landed 2026-08-04 (`src/checkpoint/`, 991
+lines). Two findings changed the shape of the work from what §4 assumed:
+
+- **Most of `resume.py` was already native.** The heavy lift —
+  `engine_load_checkpoint` — has been C++ all along; resume.py was config
+  reconstruction, path resolution and a state.json read. The C++ version reuses
+  `data/Json.h` (which already handles Python's `Infinity` extension) and
+  `core/CheckpointIO.h`'s tar/npy readers, so it is 189 lines, not 218.
+- **`resume_codecs.py` did not need porting at all.** Its 170 lines mirrored
+  the block quantization codecs in `core/Tensor.h`, which were `__device__`-only
+  behind an `#ifdef __CUDACC__`. The bodies are pure `<cmath>` math with no CUDA
+  intrinsics, so the guard was widened instead and the host adaptation now calls
+  the engine's own codec. A mirror that cannot drift beats a mirror with a
+  parity test.
+
+Verified against the Python implementation it replaces, on a real checkpoint
+with quantized SH (16-bit values / 8-bit Adam), FPBO, a quantized bilagrid and
+PPISP: cap_max shrink, SH degree shrink and grow, appearance-module drop,
+no-op detection, and bilagrid resolution changes both up and down. Every
+member agrees; the float grid resample is **bit-identical** to
+`scipy.ndimage.zoom(order=1, mode="nearest")`, and the only nonzero residuals
+are quantized buffers differing by at most ~1.5 levels because the C++ encoder
+rounds in float32 where NumPy rounded in float64 — the C++ side is the more
+faithful one, since float32 is what the device kernels use.
+
+The **eval pass** landed the same day (`src/app/EvalMetrics.{h,cpp}` +
+`TrainerSession::eval`). Scope was cut deliberately: l1/psnr/ssim and the
+colour-corrected `cc_` variants are native; LPIPS is the one metric with a
+model behind it and stays a hand-run tool
+(`reference/python/eval_lpips.py`) over the PNGs `--save-eval-images` writes.
+Scoring from 8-bit PNGs makes the numbers reproducible from a run directory
+alone.
+
+Verified against torchmetrics on 13 real eval pairs: l1/psnr to 1e-7, ssim to
+1e-5. Two findings worth keeping:
+
+- **torchmetrics' SSIM reflect-pads and averages over the full HxW.** It crops
+  the border back off only on its `return_contrast_sensitivity` path. A
+  valid-interior SSIM reads ~0.5% different — enough to invalidate a benchmark
+  comparison, and the first version of this port had exactly that bug.
+- **The C++ colour correction is more accurate than the Python it replaces.**
+  Against a full float64 reference it is off by 3e-8; `fused_bilagrid`'s is off
+  by 1.4e-3, because torch accumulates the normal equations in float32. That
+  also removes `fused_bilagrid` — an undeclared external dependency — from the
+  eval path.
+
+Still open: the deletions (§4 items 3-5).
 
 The 9.9k lines of `spirulae_splat/` are mostly the torch client path, which
 `TrainerCore` already replaced. What genuinely has no C++ counterpart:
 
 | Python | LOC | disposition |
 |---|---|---|
-| `resume.py` + `resume_codecs.py` + `resume_adapt.py` | 728 | **port** → `src/checkpoint/`. Serialization and slot adaptation; needs no torch. |
-| `lpips.py` | 530 | **port** → `src/lpips/`, on top of `src/nn/`. Model-specific weights and constants stay out of `nn/` per the layering rule in AGENTS.md. |
+| ~~`resume.py` + `resume_codecs.py` + `resume_adapt.py`~~ | ~~728~~ | **done** → `src/checkpoint/` (2026-08-04). |
+| ~~`lpips.py`~~ | ~~530~~ | **deleted** — it was a vendored torchmetrics copy that nothing imported (`model.py` used torchmetrics directly). LPIPS is now `reference/python/eval_lpips.py`; the rest of eval is native. |
 | `camera_utils.py` | 680 | **keep as reference** — already on no code path; the `orientation_method` / `center_method` reference (`docs/notes/pose-normalization.md`). |
 | `enhancer.py`, `resample.py`, `edge_detector.py`, `debug_image.py` | ~700 | audit individually; most are thin wrappers over `_C` and die with the binding. |
 | `model.py`, `trainer.py`, `core.py`, `dataset.py`, `datamanager.py`, `dataparser.py`, `splat/` | ~4,700 | **delete** once Phase 0 + the two ports land. |
@@ -593,10 +641,12 @@ strings are localized.
 
 - [x] **0.** `TrainConfig.h` hand-written; `generate_cli_config.py` deleted;
       `--help` diffed byte-for-byte across all 7 presets. *(2026-08-04)*
-- [ ] **1.** Resume ported → `src/checkpoint/`. LPIPS ported → `src/lpips/`
-      with a parity gate. Survivors moved to `reference/python/`.
-      `spirulae_splat/`, `setup.py`, `src/bindings/`, `tests/python/` deleted.
-      AGENTS.md updated.
+- [x] **1.** Resume + layout adaptation → `src/checkpoint/`; eval →
+      `src/app/EvalMetrics.{h,cpp}`; LPIPS + the benchmark driver →
+      `reference/python/` (hand-run, on no code path). `spirulae_splat/`,
+      `setup.py`, `src/bindings/`, `tests/python/` and the whole Torch half of
+      the build deleted — 40.8k lines out, 2.3k in. The binary links neither
+      libtorch nor libpython. AGENTS.md rewritten. *(2026-08-04)*
 - [ ] **2.** `tools/ss_reserved_names.txt` + `check_ss_prefix.sh`.
       `SSPLAT_` → `SS_` in sources, generated trees regenerated in the same
       commit. `spirula::env()` replaces 23 `getenv` sites. CMake alias loop.

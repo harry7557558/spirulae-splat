@@ -32,7 +32,7 @@ For development, always use CMake via the dev scripts.
 
 | file | what it does |
 |---|---|
-| `SsplatOptions.cmake` | options (`SSPLAT_BUILD_CLI/GUI`, `SSPLAT_NO_TORCH`, `SSPLAT_DEBUG_SYMBOLS`, …), backend selection, tree paths (`SSPLAT_ROOT`, `SSPLAT_CSRC`, …) |
+| `SsplatOptions.cmake` | options (`SSPLAT_BUILD_CLI/GUI`, `SSPLAT_DEBUG_SYMBOLS`, …), backend selection, tree paths (`SSPLAT_ROOT`, `SSPLAT_CSRC`, …) |
 | `SsplatSources.cmake` | `ssplat_collect_sources()` — expands `sources.txt` with `CONFIGURE_DEPENDS` |
 | `SsplatBackendCuda.cmake` | Torch probe, CUDA arch detection, flags, the `csrc` library, CUDA-side parity tools |
 | `SsplatBackendVulkan.cmake` | portable engine object lib, slangc + SPIR-V embed, `ssplat_backend_vulkan`, the Vulkan-side tests |
@@ -67,7 +67,6 @@ generated files are committed) and then configure + build into `build/`.
 |---|---|
 | CUDA CLI + GUI | `bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=cuda` |
 | Vulkan CLI + GUI | `bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan` |
-| CUDA, no Python/Torch | `bash build_develop.bash -DSSPLAT_NO_TORCH=ON` |
 | Python extension (pip) | `pip install -e . --no-build-isolation` |
 | parity tests | add `-DSSPLAT_BUILD_BACKEND_TESTS=ON` (Vulkan builds them unconditionally) |
 | Vulkan GUI, everything on | `bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=vulkan -DSSPLAT_ENABLE_PATENTED=ON` |
@@ -83,7 +82,6 @@ without reconfiguring, e.g. `-B build_cuda` and `-B build`.
 | `SSPLAT_BUILD_CLI` | `OFF` | the command-line tools (`ssplat train`, `ssplat mesh`) |
 | `SSPLAT_BUILD_GUI` | `OFF` | the graphical application (`ssplat` with no arguments); FetchContent's GLFW 3.4 + Dear ImGui v1.92.8 (needs network once) |
 | `SSPLAT_SEPARATE_TOOLS` | `OFF` | *also* build `ssplat-sfm` and `ssplat-sam` standalone — same code, but neither links the engine or libtorch (24 MB vs the combined 61 MB) |
-| `SSPLAT_NO_TORCH` | `OFF` | skip Torch/Python even if present; `csrc` becomes a STATIC lib and the exe is self-contained |
 | `SSPLAT_BUILD_BACKEND_TESTS` | `OFF` | build `backend/tests/*` (CUDA branch; Vulkan always builds them) |
 | `SSPLAT_DEBUG_SYMBOLS` | `OFF` | host `-g`, CUDA cubin lineinfo, `slangc -g2`. Bloats binaries substantially — profiling/debugging only. |
 | `SSPLAT_SLANGC` | *(empty)* | path to a `slangc` to use; empty means find on PATH and fetch the pinned release on miss/mismatch |
@@ -166,7 +164,7 @@ on Windows.
 ## Backend specifics
 
 **CUDA.** Needs a recent CUDA toolkit (+ a compatible MSVC on Windows). With
-`SSPLAT_NO_TORCH=ON`, architectures come from
+architectures come from
 `nvidia-smi --query-gpu=compute_cap`; override with `-DTORCH_CUDA_ARCH_LIST`.
 The libpython link and the static-libstdc++ / `nftw` interposition workarounds
 exist *only* because of libtorch and are skipped in no-torch builds.
@@ -182,10 +180,10 @@ and point `-DSSPLAT_SLANGC=` at it.
 **Windows.** `build_develop.bat` always calls `vcvars64` even when `cl` is
 already on PATH (an ambient `cl`/`INCLUDE` may reference an uninstalled SDK),
 picks the newest installed CUDA toolkit unless `CUDA_PATH` is set, falls back
-to the VS-bundled CMake/Ninja, and configures with `-DSSPLAT_NO_TORCH=ON` —
+to the VS-bundled CMake/Ninja —
 the torch extension build is not supported on Windows, and a broken torch
 install aborts configure from inside `TorchConfig.cmake` (which `QUIET` cannot
-suppress). Pass a trailing `-DSSPLAT_NO_TORCH=OFF` to try anyway.
+suppress).
 
 ## Build-time cost
 

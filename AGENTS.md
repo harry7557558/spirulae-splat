@@ -5,26 +5,26 @@ Read this first. Detail lives in `docs/`; this file is the map and the rules.
 ## What this project is
 
 A 3D Gaussian Splatting trainer. It began as a Nerfstudio/gsplat fork and is
-being steered toward a **standalone C++ codebase**. The compute engine is
-torch-free C++ with two interchangeable backends (CUDA and Vulkan compute via
-Slang). PyTorch is no longer on the compute path — the Python package is a
-*client* of the engine, kept working for existing users while the dependency
-is phased out. **Both backends must keep working, and the Python path must
-keep working**, on every change.
+now a **standalone C++ codebase**: one executable, `ssplat`, with two
+interchangeable compute backends (CUDA and Vulkan via Slang). There is no
+Python package, no pybind module and no PyTorch anywhere — the trainer, the
+dataset parsers, the viewer, resume, meshing and eval are all native.
+**Both backends must keep working** on every change.
 
 Direction of travel, so you don't push the wrong way:
 
-- New functionality goes in C++ first. Python gets a binding, not a port.
-- Duplicated Python/C++ subsystems have been collapsed onto the C++ side.
-  Don't add a second implementation of anything. Dataset parsing, the viewer
-  server and the training driver each exist **once**, in C++, with a Python
-  binding: `native_dataparser.py`, `_C.WebViewer`, `_C.TrainerSession`. The
-  Python implementations were deleted once a parity gate proved each pair
-  agreed; those gates now hold golden values (see
-  [docs/testing.md](docs/testing.md) §4-6). Per-step training logic belongs in
-  `TrainerCore::build_step_config`, not in `model.py`.
-- `nerfstudio` / `gsplat` are **not** dependencies of anything here any more,
-  engine or Python. Don't reintroduce them.
+- Everything goes in C++. Don't add a Python package, a binding layer, or a
+  build-time dependency on Python. The codegen tools under `tools/codegen/`
+  are Python, but they are dev-time only and their output is committed, so a
+  fresh checkout builds without a Python interpreter.
+- Don't add a second implementation of anything. Dataset parsing, the viewer
+  server, the training driver, checkpoint resume and the eval metrics each
+  exist exactly once.
+- `nerfstudio` / `gsplat` / `torch` are **not** dependencies and must not be
+  reintroduced.
+- `reference/python/` holds hand-run tools that are on no code path (LPIPS
+  scoring, the benchmark driver, the pose-normalization reference). Nothing
+  there may be imported by anything, and nothing in the build may need it.
 
 ## Repo map
 
@@ -32,31 +32,23 @@ Direction of travel, so you don't push the wrong way:
 CMakeLists.txt              running order only; the logic is in cmake/
 cmake/                      build modules (options, backends, apps) + sources.txt,
                               the source list BOTH build systems read
-setup.py / pyproject.toml   the pip/torch-extension build (own flags; see docs/build.md)
-build_develop.bash/.bat     the dev build entry points — USE THESE, not pip install
+build_develop.bash/.bat     the dev build entry points — USE THESE
 AGENTS.md  CLAUDE.md        this file (CLAUDE.md is a pointer to it)
 docs/                       architecture, build, backends, codegen, testing, notes
 src/                        ALL native code (see below)
-tools/codegen/              the five codegen tools (see "Codegen" below)
-tests/python/               Python tests (may be stale; see docs/testing.md)
+tools/codegen/              the four codegen tools (see "Codegen" below)
 tests/native/               standalone native benchmarks
-scripts/                    dataset preprocessing CLI tools (Python, standalone)
+scripts/                    dataset preprocessing CLI tools (Python, standalone;
+                              mask.py is embedded into the GUI binary)
+reference/python/           hand-run tools on NO code path: eval_lpips.py,
+                              benchmark.py, camera_utils.py (the unported
+                              orientation_method / center_method reference,
+                              docs/notes/pose-normalization.md)
 viewer/                     standalone WebGL2 + WASM viewer, independent of training
                               (published as the online viewer -- the GitHub Pages
                                URL depends on this directory name)
                               (build-time exception: compiles src/data/parsers/*.cpp
                                in place)
-spirulae_splat/             Python package — a *client* of the engine, on its way out
-├── ss_{trainer,benchmark,viewer,meshing}.py   console-script entry points
-├── modules/                what has no C++ counterpart: config dataclasses
-│                             (the config source of truth), checkpoint resume,
-│                             eval metrics (torch LPIPS/SSIM) + the image
-│                             loading eval needs. native_{dataparser,trainer}.py
-│                             are the adapters onto the C++ implementations.
-│                             camera_utils.py is on NO code path -- it is the
-│                             reference for the unported orientation_method /
-│                             center_method (docs/notes/pose-normalization.md)
-└── splat/cuda/*.py         the extension import + lazy function wrappers
 ```
 
 `src/` is the include root: every local include is path-qualified relative to
@@ -75,7 +67,7 @@ src/
 │   ├── projection/  raster/  tile/
 │   ├── pixelwise/  ppisp/  bilagrid/     (bilagrid is 42 files, see docs/notes/)
 │   ├── optim/  densify/  loss/  background/  visualize/
-├── engine/                 Engine*.cpp/.h — the torch-free training engine
+├── engine/                 Engine*.cpp/.h — the training engine
 │                             (process-global singleton)
 ├── data/                   DataManager (image cache / prefetch / warp) and
 │   └── parsers/              COLMAP / Nerfstudio / Metashape readers
@@ -112,19 +104,21 @@ src/
 │   │                         the next frame; every masking loop uses it
 │   ├── gui/                Dear ImGui desktop app (`ssplat` with no arguments)
 │   ├── webviewer/          HTTP server + render worker + viewer.html (the ONE
-│   │                         browser client: embedded into the engine library,
-│   │                         so CLI, GUI and _C.WebViewer serve the same bytes)
+│   │                         browser client, embedded into the engine library
+│   │                         so the CLI and the GUI serve the same bytes)
 │   └── TrainerCore.{h,cpp} the ONE training driver: config -> dataset ->
-│                             seeding -> step loop. CLI, GUI and Python all
-│                             drive this; it lives in the engine library
-│                             (cmake/sources.txt), not in the app targets.
-├── bindings/               the pybind11 module
-│   ├── ext.cpp             the bulk of it (144 m.def's)
-│   ├── bind_data.cpp       native dataset parsers
-│   ├── bind_viewer.cpp     native web-viewer server + post-split bake
-│   └── bind_trainer.cpp    SsplatConfig + TrainerSession
+│                             seeding -> step loop -> eval. Both the CLI and
+│                             the GUI drive this; it lives in the engine
+│                             library (cmake/sources.txt), not the app targets.
 ├── config/                 TrainConfig.h — the training config's single source
 │                             of truth: one X-macro row per flag, hand-written
+├── app/EvalMetrics.{h,cpp} l1 / psnr / ssim (torchmetrics-compatible) and the
+│                             colour correction the cc_ metrics use. LPIPS is
+│                             NOT here — reference/python/eval_lpips.py
+├── checkpoint/             Resume.{h,cpp} — config.json -> SsplatConfig,
+│                             checkpoint resolution, resumability checks;
+│                             Adapt.{h,cpp} — host-side layout adaptation
+│                             (the state restore itself is EngineCheckpoint.cpp)
 ├── generated/  instantiations/    GENERATED — do not hand-edit
 └── external/               vendored (miniz, stb, npy)
 ```
@@ -141,9 +135,8 @@ bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BACKEND=vulkan   # separa
 build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BACKEND=vulkan
 ```
 
-**Do not use `pip install -e .` for development builds on Linux** — use
-`build_develop.bash`. It produces `spirulae_splat/csrc.so` and the symlink
-`ssplat`'s `$ORIGIN` lookup expects.
+Use
+`build_develop.bash`; it runs codegen first and picks a RAM-aware job count.
 
 Everything builds into **one executable**, `build/ssplat`: no arguments opens
 the GUI, `ssplat sfm|train|sam|mesh` are the command-line tools, and a symlink
@@ -155,7 +148,7 @@ per-tool executables.
 Backends build into different trees; keep them separate (`-B build_cuda`,
 `-B build`) so you can test both without reconfiguring. Options:
 `SSPLAT_BACKEND` (`cuda`|`vulkan`), `SSPLAT_BUILD_CLI`, `SSPLAT_BUILD_GUI`,
-`SSPLAT_NO_TORCH`, `SSPLAT_BUILD_BACKEND_TESTS`, `SSPLAT_DEBUG_SYMBOLS`,
+`SSPLAT_BUILD_BACKEND_TESTS`, `SSPLAT_DEBUG_SYMBOLS`,
 `SSPLAT_BUILD_SFM`, `SSPLAT_BUILD_SAM`, `SSPLAT_ENABLE_PATENTED`,
 `SSPLAT_SEPARATE_TOOLS`.
 Full matrix and per-platform notes: `docs/build.md`.
@@ -201,9 +194,7 @@ Rules:
    training config, and it is hand-written, not generated. Adding a row to
    `SSPLAT_CONFIG_FIELDS` makes the field appear in the native CLI, `--help`,
    the GUI's "All Options" editor, the run's `config.json` and `TrainerCore` —
-   the struct is expanded from the same table, so the two cannot drift. The
-   Python dataclasses are now downstream copies on their way out; a field
-   added here must be mirrored there until they go.
+   the struct is expanded from the same table, so the two cannot drift.
 5. `.cuh` declaration sections must stay CUDA-include-free — they have to
    parse under `-DSSPLAT_BACKEND_VULKAN` without the CUDA toolkit.
 
@@ -213,8 +204,7 @@ Rules:
 two-backend rule below. They are Vulkan + Slang only, carry their own Vulkan
 context, share nothing with the training engine, and are absent from a CUDA
 build by default (`SSPLAT_BUILD_SFM` / `SSPLAT_BUILD_SAM` default OFF there).
-Nothing in them goes through `cmake/sources.txt`, `setup.py` or the pybind
-module; the pip build never sees them.
+Nothing in them goes through `cmake/sources.txt`.
 
 The layering runs one way and must keep doing so:
 
@@ -252,7 +242,6 @@ before touching anything under `backend/vulkan/`.
 # native parity tests (CUDA build)
 bash build_develop.bash -DSSPLAT_BUILD_BACKEND_TESTS=ON && ./build/<test_name>
 # the Vulkan build produces the same test binaries unconditionally
-pytest tests/python/                      # Python tests — currently unmaintained, may fail
 ```
 
 Each `src/backend/tests/*.cpp` becomes an executable of the same name.
@@ -282,12 +271,16 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
 
 ## Gotchas worth knowing before you hit them
 
-- **`fs::remove_all` in a torch-linked executable** — never. libtorch's `nftw`
-  interposition makes it misbehave; use an explicit recursive delete.
+- **The quantized codecs in `core/Tensor.h` are host-callable.** They carry
+  `__device__`, but that is an empty macro in host translation units on both
+  backends, and their bodies are plain `<cmath>` math. Host-side checkpoint
+  adaptation (`checkpoint/Adapt.cpp`) decodes and re-encodes through those very
+  functions, so there is no host mirror to drift. If you add a codec, keep it
+  free of CUDA intrinsics for the same reason.
 - **Quantized gradient codecs must decode code 0 to exactly `0.0`.** Anything
   else and Adam amplifies the pseudo-gradient into visible floaters.
-- **Python test/scripted runs need `--no-keep-viewer-alive`**, or training
-  hangs at exit waiting on the viewer.
+- **Scripted runs need `--keep-viewer-alive 0`**, or training hangs at exit
+  waiting on the viewer.
 - **A kernel with one slot per image must fold its grid.** CUDA caps
   `gridDim.y/z` at 65535 and Vulkan caps *every* dispatch dimension at 65535,
   so a per-image axis put on y/z dies somewhere between 8k and 40k images.

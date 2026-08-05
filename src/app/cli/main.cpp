@@ -17,6 +17,7 @@
 #include "app/Tools.h"
 #include "app/TrainerCore.h"
 #include "app/webviewer/Viewer.h"
+#include "checkpoint/Resume.h"
 
 #include <algorithm>
 #include <chrono>
@@ -26,6 +27,7 @@
 #include <cstring>
 #include <filesystem>
 #include <stdexcept>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -117,13 +119,17 @@ void check_choices(const std::string& value, const std::string& key, const char*
 template <typename T>
 void check_choices(const T&, const std::string&, const char*) {}
 
-// Returns false if the key is unknown.
+// Returns false if the key is unknown. Records the key in `seen`, which
+// --resume needs: a flag the user actually passed wins over the checkpoint's
+// config, including when its value happens to equal the default.
 bool set_config_field(SsplatConfig& c, const std::string& key,
-                      int argc, char** argv, int& i) {
+                      int argc, char** argv, int& i,
+                      std::set<std::string>& seen) {
 #define SSPLAT_TRY_SET(type, member, default_, group, choices, help)           \
     if (key == #member) {                                                      \
         consume(c.member, key, argc, argv, i);                                 \
         check_choices(c.member, key, choices);                                 \
+        seen.insert(#member);                                                  \
         return true;                                                           \
     }
     SSPLAT_CONFIG_FIELDS(SSPLAT_TRY_SET)
@@ -285,10 +291,12 @@ int ssplat_train_main(int argc, char** argv) {
     try {
         // ---- Preset + flags ------------------------------------------------
         std::string preset = "3dgs";
+        std::string preset_arg;        // "" unless the user named one
         int argi = 1;
-        if (argi < argc && argv[argi][0] != '-') preset = argv[argi++];
+        if (argi < argc && argv[argi][0] != '-') preset = preset_arg = argv[argi++];
 
         SsplatConfig cfg;
+        std::set<std::string> seen;
         if (!ssplat_apply_preset(cfg, preset)) {
             std::string names;
             for (const auto& p : kSsplatPresets) names += std::string(" ") + p.name;
@@ -318,13 +326,22 @@ int ssplat_train_main(int argc, char** argv) {
                 key = key.substr(0, eq);
                 char* mini[2] = {const_cast<char*>(""), keep.back().data()};
                 int mi = 0;
-                if (!set_config_field(cfg, normalize_key(key), 2, mini, mi))
+                if (!set_config_field(cfg, normalize_key(key), 2, mini, mi, seen))
                     throw std::runtime_error("unknown flag: " + key);
                 continue;
             }
-            if (!set_config_field(cfg, normalize_key(key), argc, argv, i))
+            if (!set_config_field(cfg, normalize_key(key), argc, argv, i, seen))
                 throw std::runtime_error("unknown flag: " + key +
                                          " (see --help for the full list)");
+        }
+
+        // ---- Resume --------------------------------------------------------
+        // The checkpoint's config.json becomes the base: it carries the
+        // architecture and data config the saved engine state was built for.
+        // Everything the user named on this command line is layered back on.
+        if (!cfg.resume.empty()) {
+            cfg = ckpt::build_resume_config(cfg, preset_arg, seen);
+            std::printf("[resume] %s\n", cfg.resume.c_str());
         }
 
 #define SSPLAT_CHECK_REQUIRED(member)                                          \
@@ -384,7 +401,10 @@ int ssplat_train_main(int argc, char** argv) {
             }
         };
         session.train(cb);
-        // TODO: eval pass over val_indices (PSNR/SSIM), early stopping.
+        // Held-out eval. Replaces the engine's DataManager, so nothing may
+        // train afterwards -- and the viewer, which only reads splats, is
+        // unaffected. TODO: early stopping on the validation split.
+        session.eval();
 
         if (viewer_on && cfg.keep_viewer_alive) {
             std::printf("Training complete. Viewer still running -- press "

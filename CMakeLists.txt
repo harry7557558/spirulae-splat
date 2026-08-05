@@ -9,13 +9,13 @@ project(spirulae_splat LANGUAGES C CXX)  # CUDA enabled by the cuda backend modu
 #
 #   SsplatOptions.cmake        options, backend selection, tree paths
 #   SsplatSources.cmake        the engine/kernel source list
-#   SsplatBackendCuda.cmake    CUDA kernels + optional Torch extension  } one
+#   SsplatBackendCuda.cmake    CUDA kernels + the engine library         } one
 #   SsplatBackendVulkan.cmake  portable engine + Vulkan compute runtime } of
 #   SsplatSfm.cmake            the SfM module (optional; Vulkan-only)
 #   SsplatNn.cmake             inference layer + SAM + video (optional; Vulkan-only)
 #   SsplatApps.cmake           the `ssplat` executable (every tool in one)
 #
-# Each backend module leaves SSPLAT_WITH_TORCH and SSPLAT_APP_LIBS behind for
+# Each backend module leaves SSPLAT_APP_LIBS behind for
 # the shared app targets.
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)

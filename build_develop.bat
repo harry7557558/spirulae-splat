@@ -2,10 +2,7 @@
 setlocal
 rem Development build for Windows. Extra arguments are passed to CMake, e.g.
 rem   build_develop.bat -DTORCH_CUDA_ARCH_LIST=8.6
-rem Builds the standalone ssplat.exe. Torch is skipped explicitly: the
-rem torch/Python extension build is not supported on Windows, and a broken
-rem torch install would otherwise abort configure from inside TorchConfig.cmake
-rem (pass a trailing -DSSPLAT_NO_TORCH=OFF to try anyway).
+rem Builds the standalone ssplat.exe.
 rem Works from a plain cmd prompt: locates VS via vswhere and calls vcvars64,
 rem uses the VS-bundled CMake/Ninja when none are on PATH, and picks the
 rem newest installed CUDA toolkit unless CUDA_PATH is already set.
@@ -72,7 +69,7 @@ if defined SSPLAT_CUDA (
 rem ---------------------------------------------------------------------------
 rem Configure + build (RAM-aware job count, mirrors build_develop.bash)
 rem ---------------------------------------------------------------------------
-cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSSPLAT_NO_TORCH=ON %CUDAARG% %*
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release %CUDAARG% %*
 if errorlevel 1 exit /b 1
 
 echo.
@@ -90,7 +87,5 @@ echo.
 cmake --build build -j %JOBS%
 if errorlevel 1 exit /b 1
 
-rem No csrc rename here: a Windows torch/extension build is not supported yet
-rem (no-torch builds link csrc statically into ssplat.exe).
 echo.
 echo Build complete: build\ssplat.exe

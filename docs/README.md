@@ -8,12 +8,12 @@ the detail.
 | [architecture.md](architecture.md) | layers, data flow, engine state, where each responsibility lives |
 | [build.md](build.md) | the build matrix, every option, per-platform notes |
 | [backends.md](backends.md) | the CUDA/Vulkan seam, coverage, pointers to the authoritative backend docs |
-| [codegen.md](codegen.md) | the five generators, what they own, and the invariants |
+| [codegen.md](codegen.md) | the four generators, what they own, and the invariants |
 | [datasets.md](datasets.md) | supported dataset layouts and how they are parsed |
-| [testing.md](testing.md) | native parity tests, the three Python/C++ parity gates, the reference-dump workflow |
+| [testing.md](testing.md) | native parity tests and the CUDA-vs-Vulkan reference-dump workflow |
 | [restructure-proposal.md](restructure-proposal.md) | the in-progress plan for reorganizing the tree |
 | [notes/rename-and-i18n-plan.md](notes/rename-and-i18n-plan.md) | the Spirula Studio rename, 13-locale localization, and retiring the Python client |
-| [notes/pose-normalization.md](notes/pose-normalization.md) | orientation/centering: what the native parser implements, and the kept Python reference for what it doesn't |
+| [notes/pose-normalization.md](notes/pose-normalization.md) | orientation/centering: what the native parser implements, and the kept reference for what it doesn't |
 | [notes/](notes/) | design notes for individual subsystems |
 
 Authoritative documents that live next to their code rather than here:

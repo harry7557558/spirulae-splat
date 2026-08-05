@@ -1,20 +1,7 @@
-[build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "spirulae-splat"
-version = "2026.8.1"
-dynamic = ["description", "dependencies"]
-
-[project.scripts]
-spirulae-train = "spirulae_splat.ss_trainer:entrypoint"
-spirulae-benchmark = "spirulae_splat.ss_benchmark:entrypoint"
-spirulae-viewer = "spirulae_splat.ss_viewer:entrypoint"
-spirulae-meshing = "spirulae_splat.ss_meshing:entrypoint"
-
-[tool.poetry.scripts]
-spirulae-train = "spirulae_splat.ss_trainer:entrypoint"
-spirulae-benchmark = "spirulae_splat.ss_benchmark:entrypoint"
-spirulae-viewer = "spirulae_splat.ss_viewer:entrypoint"
-spirulae-meshing = "spirulae_splat.ss_meshing:entrypoint"
+# The Python package is gone: `ssplat` is a standalone executable built with
+# CMake (see build_develop.bash / docs/build.md). What is left under
+# reference/python/ and scripts/ are hand-run tools, not a package -- run them
+# with `python3 <path>`, and see reference/python/README.md for what they need.
+#
+# This file is kept only so tooling that probes the repo root finds a clear
+# answer rather than an installable-looking project.

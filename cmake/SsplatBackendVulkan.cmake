@@ -3,7 +3,6 @@
 # src/backend/vulkan/README.md.
 #
 # Defines, for the shared app targets in SsplatApps.cmake:
-#   SSPLAT_WITH_TORCH = OFF   (the Python extension is CUDA-only)
 #   SSPLAT_APP_LIBS           (portable engine + Vulkan runtime + threads)
 
 message(STATUS "SSPLAT_BACKEND=vulkan: portable engine layer + "
@@ -95,7 +94,6 @@ foreach(test_src ${SSPLAT_ENGINE_TESTS})
         ssplat_backend_vulkan Threads::Threads)
 endforeach()
 
-# Torch/Python extension is CUDA-only; the app targets build against the
+# The app targets build against the
 # portable engine + Vulkan backend instead.
-set(SSPLAT_WITH_TORCH OFF)
 set(SSPLAT_APP_LIBS csrc_portable ssplat_backend_vulkan Threads::Threads)
