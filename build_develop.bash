@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Development build for Linux. Extra arguments are passed to CMake, e.g.
-#   ./build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON
+#   ./build_develop.bash -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON
 
 # Regenerate headers. Skipped when python3 is unavailable -- the generated
 # files are committed, so the build still works without it.
@@ -11,6 +11,9 @@ if command -v python3 >/dev/null 2>&1; then
 else
     echo "python3 not found -- skipping codegen (using committed generated files)"
 fi
+
+# SS_ is a short prefix; refuse to define a name <signal.h> or winuser.h owns.
+bash tools/check_ss_prefix.sh >/dev/null || exit 1
 
 cmake -G Ninja -B build "$@" || exit $?
 

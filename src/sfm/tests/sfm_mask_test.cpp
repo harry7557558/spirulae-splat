@@ -47,7 +47,7 @@ static std::vector<uint8_t> leftHalfMask(int w, int h, double keep_frac) {
 
 int cmdMaskSelftest(int, char**) {
     int fails = 0;
-    const fs::path tmp = fs::temp_directory_path() / "ssplat_sfm_mask_selftest";
+    const fs::path tmp = fs::temp_directory_path() / "spirula_sfm_mask_selftest";
     std::error_code ec;
     fs::remove_all(tmp, ec);
 
@@ -175,7 +175,7 @@ int cmdMaskSelftest(int, char**) {
         std::vector<uint8_t> px = leftHalfMask(8, 8, 0.5);
         struct Case { const char* image; const char* mask; };
         const Case cases[] = {
-            {"cam0/a.jpg", "cam0/a.jpg.png"},      // COLMAP / spirulae-splat / SAM
+            {"cam0/a.jpg", "cam0/a.jpg.png"},      // COLMAP / Spirula Studio / SAM
             {"cam0/b.jpg", "cam0/b.png"},          // COLMAP's alternate, nerfstudio
             {"cam0/c.jpg", "cam0/c_mask.png"},     // suffix form
             {"cam0/d.jpg", "cam0/d.jpg"},          // same name, same extension

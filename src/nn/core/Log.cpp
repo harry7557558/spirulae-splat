@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include "core/Env.h"
 
 namespace nn {
 
@@ -12,7 +13,7 @@ static int g_level = -1;
 
 int log_level() {
     if (g_level < 0) {
-        const char* env = std::getenv("SSPLAT_NN_LOG");
+        const char* env = spirula::env("NN_LOG");
         g_level = env ? std::atoi(env) : 2;
     }
     return g_level;

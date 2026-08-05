@@ -24,7 +24,7 @@ struct Image {
 Image load_image(const std::string& path);
 
 // Writes RGB. `quality` in 0..100 selects JPEG, anything else lossless PNG --
-// the same convention as spirulae-splat's scripts/extract_frames.py.
+// the same convention as scripts/extract_frames.py.
 bool save_image(const Image& image, const std::string& path, int quality);
 
 // Writes a single-channel 8-bit PNG (masks, sharpness maps).

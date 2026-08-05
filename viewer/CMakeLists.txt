@@ -28,15 +28,15 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Reused trainer sources (in-place; carried in the same git repo).
-set(SSPLAT_SRC "${CMAKE_SOURCE_DIR}/../src")
+set(SS_SRC "${CMAKE_SOURCE_DIR}/../src")
 
 set(DATASET_SOURCES
   "${CMAKE_SOURCE_DIR}/src/dataset_bridge.cpp"
-  "${SSPLAT_SRC}/data/parsers/ColmapParser.cpp"
-  "${SSPLAT_SRC}/data/parsers/NerfstudioParser.cpp"
-  "${SSPLAT_SRC}/data/parsers/MetashapeParser.cpp"
-  "${SSPLAT_SRC}/data/parsers/DatasetCommon.cpp"
-  "${SSPLAT_SRC}/external/miniz.c"
+  "${SS_SRC}/data/parsers/ColmapParser.cpp"
+  "${SS_SRC}/data/parsers/NerfstudioParser.cpp"
+  "${SS_SRC}/data/parsers/MetashapeParser.cpp"
+  "${SS_SRC}/data/parsers/DatasetCommon.cpp"
+  "${SS_SRC}/external/miniz.c"
 )
 
 add_executable(ssv_wasm src/viewer.cpp ${DATASET_SOURCES})
@@ -44,7 +44,7 @@ add_executable(ssv_wasm src/viewer.cpp ${DATASET_SOURCES})
 # src/ is the trainer tree's include root: dataset_bridge.cpp includes
 # data/DatasetParser.h, data/Json.h, data/Xml.h and the parser sources
 # path-qualify their own includes the same way.
-target_include_directories(ssv_wasm PRIVATE "${SSPLAT_SRC}")
+target_include_directories(ssv_wasm PRIVATE "${SS_SRC}")
 
 # Per-source flags: viewer.cpp stays fast/exception-free; the dataset parsers
 # need C++ exceptions (they throw on bad input) and must NOT use -ffast-math

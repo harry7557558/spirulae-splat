@@ -31,6 +31,18 @@ fs::path ensure(fs::path dir) {
     return dir;
 }
 
+// <base>/spirula-studio, except that an existing spirulae-splat/ from before
+// the rename is adopted where it is: nothing is moved, so recents and cached
+// models survive the upgrade untouched. Drop the fallback with the other
+// compatibility shims (cmake/SsOptions.cmake, src/core/Env.h).
+fs::path app_dir(const fs::path& base) {
+    std::error_code ec;
+    const fs::path current = base / "spirula-studio";
+    if (!fs::exists(current, ec) && fs::is_directory(base / "spirulae-splat", ec))
+        return base / "spirulae-splat";
+    return ensure(current);
+}
+
 }  // namespace
 
 std::string config_dir() {
@@ -44,7 +56,7 @@ std::string config_dir() {
     }
 #endif
     if (dir.empty()) dir = ".";
-    return ensure(dir / "spirulae-splat").string();
+    return app_dir(dir).string();
 }
 
 std::string cache_dir() {
@@ -58,7 +70,7 @@ std::string cache_dir() {
     }
 #endif
     if (dir.empty()) dir = ".";
-    return ensure(dir / "spirulae-splat").string();
+    return app_dir(dir).string();
 }
 
 std::string exe_path() {

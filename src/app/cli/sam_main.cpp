@@ -1,22 +1,22 @@
-// ssplat-sam -- segmentation, tracking and frame extraction from a shell.
+// spirula-sam -- segmentation, tracking and frame extraction from a shell.
 //
-//   ssplat-sam devices
-//   ssplat-sam segment --model m.ggml --image cat.jpg --text "cat" --out out/
-//   ssplat-sam segment --model m.ggml --image cat.jpg --point 315,250 --out out/
-//   ssplat-sam track   --model m.ggml --frames frames/ --text "person" --out out/
-//   ssplat-sam video   --info clip.mp4
-//   ssplat-sam extract clip.mp4 --skip 30 --model m.ggml --text "person"
+//   spirula-sam devices
+//   spirula-sam segment --model m.ggml --image cat.jpg --text "cat" --out out/
+//   spirula-sam segment --model m.ggml --image cat.jpg --point 315,250 --out out/
+//   spirula-sam track   --model m.ggml --frames frames/ --text "person" --out out/
+//   spirula-sam video   --info clip.mp4
+//   spirula-sam extract clip.mp4 --skip 30 --model m.ggml --text "person"
 //
 // The GUI drives the same library in-process (src/app/gui/DatasetPrep.cpp);
 // this is the scriptable face of it, and how a masking or extraction problem
 // gets reproduced without the GUI in the way.
 //
 // `video` and `extract` need the in-process decoder, which is only built with
-// -DSSPLAT_ENABLE_PATENTED=ON (src/app/cli/sam_extract.cpp); without it they
+// -DSS_ENABLE_PATENTED=ON (src/app/cli/sam_extract.cpp); without it they
 // say so and point at ffmpeg.
 //
 // Diagnostics go to stderr, the result table to stdout, so a run pipes cleanly:
-//   ssplat-sam segment ... 2>/dev/null > detections.tsv
+//   spirula-sam segment ... 2>/dev/null > detections.tsv
 
 #include "app/Tools.h"
 #include "app/WriterPool.h"
@@ -25,7 +25,7 @@
 #include "nn/io/Image.h"
 #include "sam/Masking.h"
 #include "sam/Sam.h"
-#ifdef SSPLAT_HAVE_VIDEO
+#ifdef SS_HAVE_VIDEO
 #include "video/Video.h"
 #endif
 
@@ -44,14 +44,14 @@ namespace {
 
 void usage() {
     // Written against the historical name; app::help_text swaps in how this
-    // tool was actually invoked ("ssplat sam", normally).
+    // tool was actually invoked ("spirula sam", normally).
     static const char* kUsage =
-        "ssplat-sam -- SAM 2 / SAM 3 segmentation and tracking on Vulkan\n"
+        "spirula-sam -- SAM 2 / SAM 3 segmentation and tracking on Vulkan\n"
         "\n"
-        "  ssplat-sam devices\n"
+        "  spirula-sam devices\n"
         "        List Vulkan devices and whether each meets the baseline.\n"
         "\n"
-        "  ssplat-sam segment --model <file> --image <file> [options]\n"
+        "  spirula-sam segment --model <file> --image <file> [options]\n"
         "        --text <phrase>        concept prompt (all matching instances)\n"
         "        --box x0,y0,x1,y1      exemplar box; repeatable\n"
         "        --neg-box x0,y0,x1,y1  negative exemplar box; repeatable\n"
@@ -63,7 +63,7 @@ void usage() {
         "        --nms <f>              NMS IoU threshold (default 0.1)\n"
         "        --out <dir>            write mask PNGs and an overlay\n"
         "\n"
-        "  ssplat-sam track --model <file> --frames <dir> [options]\n"
+        "  spirula-sam track --model <file> --frames <dir> [options]\n"
         "        --text <phrase>        detect and track matching instances;\n"
         "                               semicolon-separated for several concepts\n"
         "        --neg-text <phrase>    concepts to KEEP even where --text matches\n"
@@ -91,18 +91,18 @@ void usage() {
         "                               pipeline wants from \"mask out the people\"\n"
         "        --overlay              write a colour overlay instead\n"
         "\n"
-        "  ssplat-sam video --info <file>\n"
+        "  spirula-sam video --info <file>\n"
         "        Probe a video file and report codec, geometry and decode support.\n"
         "\n"
-        "  ssplat-sam extract <video> [options]\n"
+        "  spirula-sam extract <video> [options]\n"
         "        Write the sharpest frames of a video, optionally masked.\n"
-        "        `ssplat-sam extract --help` lists its own options.\n"
+        "        `spirula-sam extract --help` lists its own options.\n"
         "\n"
         "Common: --device <index|name>  --vram  --profile  --validate  --img-size <n>\n"
         "        --max-size <n>         downscale inputs to fit (default 1600, 0 = off)\n"
-        "Environment: SSPLAT_NN_LOG=0..3  SSPLAT_VK_DEVICE  SSPLAT_PROFILE=1\n"
-        "             SSPLAT_VK_VALIDATION=1  SSPLAT_NN_DEBUG_SYNC=1\n";
-    std::fprintf(stderr, "%s", app::help_text(kUsage, "ssplat-sam").c_str());
+        "Environment: SS_NN_LOG=0..3  SS_VK_DEVICE  SS_PROFILE=1\n"
+        "             SS_VK_VALIDATION=1  SS_NN_DEBUG_SYNC=1\n";
+    std::fprintf(stderr, "%s", app::help_text(kUsage, "spirula-sam").c_str());
 }
 
 bool parse_floats(const char* s, float* out, int n) {
@@ -436,12 +436,12 @@ int cmd_track(const Options& o) {
 }
 
 int cmd_video(const Options& o) {
-#ifndef SSPLAT_HAVE_VIDEO
+#ifndef SS_HAVE_VIDEO
     (void)o;
     std::fprintf(stderr,
                  "this build has no in-process video decoder: it is compiled "
-                 "only with -DSSPLAT_ENABLE_PATENTED=ON (see "
-                 "cmake/SsplatOptions.cmake). Use ffmpeg to inspect a file or "
+                 "only with -DSS_ENABLE_PATENTED=ON (see "
+                 "cmake/SsOptions.cmake). Use ffmpeg to inspect a file or "
                  "extract frames instead.\n");
     return 1;
 #else
@@ -491,22 +491,22 @@ int cmd_video(const Options& o) {
 
 // Defined in src/app/cli/sam_extract.cpp; it has its own option set, so it
 // parses its own argv rather than sharing Options above.
-#ifdef SSPLAT_HAVE_VIDEO
+#ifdef SS_HAVE_VIDEO
 int sam_cli_extract(int argc, char** argv);
 #endif
 
-int ssplat_sam_main(int argc, char** argv) {
-    app::set_program_name(argc > 0 ? argv[0] : nullptr, "ssplat sam");
+int spirula_sam_main(int argc, char** argv) {
+    app::set_program_name(argc > 0 ? argv[0] : nullptr, "spirula sam");
     if (argc >= 2 && std::strcmp(argv[1], "extract") == 0) {
-#ifdef SSPLAT_HAVE_VIDEO
+#ifdef SS_HAVE_VIDEO
         int rc = sam_cli_extract(argc - 1, argv + 1);
         nn::shutdown();
         return rc;
 #else
         std::fprintf(stderr,
                      "`extract` needs the in-process video decoder, which is "
-                     "compiled only with -DSSPLAT_ENABLE_PATENTED=ON (see "
-                     "cmake/SsplatOptions.cmake). Extract frames with ffmpeg "
+                     "compiled only with -DSS_ENABLE_PATENTED=ON (see "
+                     "cmake/SsOptions.cmake). Extract frames with ffmpeg "
                      "and mask them with `%s track` instead.\n",
                      app::program_name().c_str());
         return 1;

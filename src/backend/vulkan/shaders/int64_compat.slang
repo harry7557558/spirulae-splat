@@ -1,7 +1,7 @@
 // Adaptive 64-bit integer layer for the Vulkan compute entries. By default
 // every type below is the native 64-bit integer (int64-capable devices
 // compile identical code to before this header existed). Under
-// -DSSPLAT_EMULATE_INT64 (the ".noint64" blob variants, picked by
+// -DSS_EMULATE_INT64 (the ".noint64" blob variants, picked by
 // VulkanPipelines.cpp on devices without shaderInt64) the SPIR-V must not
 // declare the Int64 capability, so:
 //
@@ -22,10 +22,10 @@
 // build_spirv.py verifies each .noint64 blob really dropped OpCapability
 // Int64, so an unguarded int64 use fails the build instead of the device.
 
-#ifndef SSPLAT_INT64_COMPAT
-#define SSPLAT_INT64_COMPAT
+#ifndef SS_INT64_COMPAT
+#define SS_INT64_COMPAT
 
-#ifndef SSPLAT_EMULATE_INT64
+#ifndef SS_EMULATE_INT64
 
 typedef int64_t gindex_t;
 typedef int64_t i64mem_t;
@@ -53,7 +53,7 @@ typedef uint64_t u64key_t;
 
 [ForceInline] bool is_null<T>(T* p) { return p == nullptr; }
 
-#else  // SSPLAT_EMULATE_INT64
+#else  // SS_EMULATE_INT64
 
 typedef int32_t gindex_t;
 typedef uint2 i64mem_t;
@@ -88,11 +88,11 @@ typedef uint2 u64key_t;
     return (w.x | w.y) == 0u;
 }
 
-#endif  // SSPLAT_EMULATE_INT64
+#endif  // SS_EMULATE_INT64
 
 // 32-bit overload so the radix sort macros work for both key widths.
 [ForceInline] uint u64key_digit(uint k, uint shift, uint mask) {
     return (k >> shift) & mask;
 }
 
-#endif  // SSPLAT_INT64_COMPAT
+#endif  // SS_INT64_COMPAT

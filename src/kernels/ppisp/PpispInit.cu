@@ -2,8 +2,8 @@
 //
 // "rqs"      -> all 39 zeros (the loglinear-style parameterization's identity).
 // "original" -> 24 zeros, then 3x (a, a, b, 0) with a = 0.013658988289535046,
-//              b = 0.37816452980041504 — matches DEFAULT_PPISP_PARAMS in
-//              spirulae_splat/modules/training_losses.py.
+//              b = 0.37816452980041504 (the reference implementation's
+//              DEFAULT_PPISP_PARAMS).
 
 #include <cuda_runtime.h>
 #include <cstdint>

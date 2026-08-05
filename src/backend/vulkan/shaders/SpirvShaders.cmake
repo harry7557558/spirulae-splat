@@ -1,5 +1,5 @@
-# Native Slang -> SPIR-V build, replacing the former Python scripts
-# (slang/build_spirv.py + spirulae_splat/embed_spirv.py). No Python required.
+# Native Slang -> SPIR-V build, replacing the former Python scripts.
+# No Python required.
 #
 # spirv_tool.cpp (next to this file) is compiled once (via try_compile, using the project
 # toolchain, so it is portable across Windows/Linux/macOS) and used to:
@@ -11,19 +11,19 @@
 # same way source compiles are -- and Ninja prints "[n/m] SPIR-V <name>" as each
 # finishes.
 #
-# ssplat_setup_spirv(<shared_dir> <vk_dir> <slangc> <spirv_dir> <embed_cpp> <debug>)
+# ss_setup_spirv(<shared_dir> <vk_dir> <slangc> <spirv_dir> <embed_cpp> <debug>)
 # defines the custom commands producing <embed_cpp>.
 #   <shared_dir> = src/shaders            device math shared with the CUDA build
 #   <vk_dir>     = src/backend/vulkan/shaders   Vulkan-only compute entry points
-function(ssplat_setup_spirv shared_dir vk_dir slangc spirv_dir embed_cpp debug)
-    # The host tool is shared with the SfM module (cmake/SsplatSfm.cmake), so
-    # it is built by SsplatSlang.cmake rather than here.
-    ssplat_build_spirv_tool(tool_exe)
+function(ss_setup_spirv shared_dir vk_dir slangc spirv_dir embed_cpp debug)
+    # The host tool is shared with the SfM module (cmake/SsSfm.cmake), so
+    # it is built by SsSlang.cmake rather than here.
+    ss_build_spirv_tool(tool_exe)
 
     # -I<src> lets a Vulkan shader reach the shared device math by its
     # src-relative path (`#include "shaders/densify.slang"`), matching the C++
     # convention and disambiguating the names that exist in both directories.
-    set(incdirs -I${SSPLAT_SRC} -I${shared_dir} -I${vk_dir})
+    set(incdirs -I${SS_SRC} -I${shared_dir} -I${vk_dir})
 
     # Common slangc arguments. Debug info (-g2) is opt-in; the release path
     # strips line directives and slang's capability diagnostics (the embed

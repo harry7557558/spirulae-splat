@@ -1,6 +1,6 @@
 #pragma once
 
-// GuiApp -- top-level UI for Spirulae Splat: screens, layout, state wiring
+// GuiApp -- top-level UI: screens, layout, state wiring
 // between the config editor, COLMAP runner, train runner, and the native
 // viewport.
 
@@ -139,8 +139,8 @@ private:
     bool _device_locked = false;     // backend initialized -> device fixed
 
     // Config being edited + the preset baseline it diffs against.
-    SsplatConfig _cfg;
-    SsplatConfig _defaults;
+    TrainConfig _cfg;
+    TrainConfig _defaults;
     std::string _preset = "3dgs";
     ConfigUIState _cfg_ui;
 

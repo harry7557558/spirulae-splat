@@ -1,0 +1,49 @@
+# Names this project must not define, because a system header on one of our
+# platforms already defines them. Checked by tools/check_ss_prefix.sh.
+#
+# The SS_ prefix is short, and two headers we include (transitively) own names
+# in it. Regenerate the Windows half against the SDK you ship with:
+#
+#   grep -hoE '^\s*#\s*define\s+SS_[A-Z0-9_]+' <sdk>/winuser.h \
+#     | awk '{print $NF}' | sort -u
+#
+# Blank lines and #-comments are ignored.
+
+# --- <signal.h> (glibc, musl, macOS): sigaltstack ss_flags values ---
+SS_ONSTACK
+SS_DISABLE
+
+# --- winuser.h (Windows SDK): static-control styles. Reached transitively
+# --- through GLFW in the GUI and through winsock2.h in the web viewer.
+SS_LEFT
+SS_CENTER
+SS_RIGHT
+SS_ICON
+SS_BLACKRECT
+SS_GRAYRECT
+SS_WHITERECT
+SS_BLACKFRAME
+SS_GRAYFRAME
+SS_WHITEFRAME
+SS_USERITEM
+SS_SIMPLE
+SS_LEFTNOWORDWRAP
+SS_OWNERDRAW
+SS_BITMAP
+SS_ENHMETAFILE
+SS_ETCHEDHORZ
+SS_ETCHEDVERT
+SS_ETCHEDFRAME
+SS_TYPEMASK
+SS_REALSIZECONTROL
+SS_NOPREFIX
+SS_NOTIFY
+SS_CENTERIMAGE
+SS_RIGHTJUST
+SS_REALSIZEIMAGE
+SS_SUNKEN
+SS_EDITCONTROL
+SS_ENDELLIPSIS
+SS_PATHELLIPSIS
+SS_WORDELLIPSIS
+SS_ELLIPSISMASK

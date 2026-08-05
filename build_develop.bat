@@ -1,8 +1,8 @@
 @echo off
 setlocal
 rem Development build for Windows. Extra arguments are passed to CMake, e.g.
-rem   build_develop.bat -DTORCH_CUDA_ARCH_LIST=8.6
-rem Builds the standalone ssplat.exe.
+rem   build_develop.bat -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON
+rem Builds the standalone spirula.exe.
 rem Works from a plain cmd prompt: locates VS via vswhere and calls vcvars64,
 rem uses the VS-bundled CMake/Ninja when none are on PATH, and picks the
 rem newest installed CUDA toolkit unless CUDA_PATH is already set.
@@ -56,14 +56,14 @@ rem CUDA toolkit: newest installed version. An ambient CUDA_PATH is NOT
 rem trusted by default (it may pin a toolkit older than the MSVC in use);
 rem pass a trailing -DCMAKE_CUDA_COMPILER=... to pick a specific one.
 rem ---------------------------------------------------------------------------
-set "SSPLAT_CUDA="
-for /d %%d in ("%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v*") do set "SSPLAT_CUDA=%%d"
-if not defined SSPLAT_CUDA set "SSPLAT_CUDA=%CUDA_PATH%"
+set "_CUDA_ROOT="
+for /d %%d in ("%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v*") do set "_CUDA_ROOT=%%d"
+if not defined _CUDA_ROOT set "_CUDA_ROOT=%CUDA_PATH%"
 set "CUDAARG="
-if defined SSPLAT_CUDA (
-    set "CUDA_PATH=%SSPLAT_CUDA%"
-    set "PATH=%SSPLAT_CUDA%\bin;%PATH%"
-    set CUDAARG=-DCMAKE_CUDA_COMPILER="%SSPLAT_CUDA%\bin\nvcc.exe"
+if defined _CUDA_ROOT (
+    set "CUDA_PATH=%_CUDA_ROOT%"
+    set "PATH=%_CUDA_ROOT%\bin;%PATH%"
+    set CUDAARG=-DCMAKE_CUDA_COMPILER="%_CUDA_ROOT%\bin\nvcc.exe"
 )
 
 rem ---------------------------------------------------------------------------
@@ -88,4 +88,4 @@ cmake --build build -j %JOBS%
 if errorlevel 1 exit /b 1
 
 echo.
-echo Build complete: build\ssplat.exe
+echo Build complete: build\spirula.exe

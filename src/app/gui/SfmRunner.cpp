@@ -71,9 +71,9 @@ bool has_model(const fs::path& sparse) {
 }  // namespace
 
 std::string SfmRunner::availability() {
-#ifndef SSPLAT_TOOL_SFM
+#ifndef SS_TOOL_SFM
     return "this build has no structure-from-motion module "
-           "(-DSSPLAT_BUILD_SFM=OFF); use COLMAP instead.";
+           "(-DSS_BUILD_SFM=OFF); use COLMAP instead.";
 #else
     if (exe_path().empty())
         return "this program could not work out its own path, so it cannot "
@@ -156,7 +156,7 @@ void SfmRunner::set_stage(const std::string& s) {
     log("==== " + s + " ====");
 }
 
-// ssplat-sfm's own progress lines. Reading them is a little grubby, but it is
+// spirula-sfm's own progress lines. Reading them is a little grubby, but it is
 // the one thing a child process cannot hand over structurally, and the formats
 // below are the ones its stages print on every run.
 void SfmRunner::note_progress(const std::string& l) {
@@ -185,7 +185,7 @@ void SfmRunner::note_progress(const std::string& l) {
 }
 
 // A capture shot as several inputs is several cameras, and the lens is a
-// property of the input rather than of the dataset. `ssplat sfm` says that with
+// property of the input rather than of the dataset. `spirula sfm` says that with
 // PREFIX=VALUE, where the prefix matches an image name by path prefix -- which
 // is exactly the sub-folder each input's frames went into. A dual-lens video's
 // cam0/ and cam1/ both sit under that folder, so one prefix covers both, and

@@ -35,7 +35,7 @@
 #include <string>
 #include <vector>
 
-namespace ssplat {
+namespace spirula {
 
 // ===========================================================================
 // Color-space handling (port of _wrapper_per_pixel.get_color_transform_matrix
@@ -55,7 +55,7 @@ struct ColorResolution {
     bool convert_seed  = false;  // convert_initial_point_cloud_color resolved
 };
 
-ColorResolution resolve_color(const SsplatConfig& c);
+ColorResolution resolve_color(const TrainConfig& c);
 
 
 // ===========================================================================
@@ -81,7 +81,7 @@ struct SeedSplats {
     std::vector<float> features_sh;  // [cap, dim_sh-1, 3]  (zeros)
 };
 
-SeedSplats seed_splats(const ColmapPoints3D& pts, const SsplatConfig& cfg,
+SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
                        const ColorResolution& color);
 
 
@@ -101,13 +101,13 @@ struct RunState {
 };
 
 std::array<float, (int)LossWeightIndex::length>
-build_loss_weights(const SsplatConfig& c, int step);
+build_loss_weights(const TrainConfig& c, int step);
 
-EngineStepConfig build_step_config(const SsplatConfig& c, const RunState& st,
+EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st,
                                    int step);
 
-// Nested-by-group config.json dump, keyed by ssplat_json_key(flag).
-void save_config_json(const SsplatConfig& c, const std::filesystem::path& out_dir,
+// Nested-by-group config.json dump, keyed by train_json_key(flag).
+void save_config_json(const TrainConfig& c, const std::filesystem::path& out_dir,
                       const std::string& preset);
 
 
@@ -135,7 +135,7 @@ public:
     TrainerSession& operator=(const TrainerSession&) = delete;
 
     // Inputs. Set before check_config().
-    SsplatConfig cfg;
+    TrainConfig cfg;
     std::string preset = "3dgs";
     // Human-readable progress/warning messages. Default (unset) = stdout.
     std::function<void(const std::string&)> log_fn;
@@ -228,4 +228,4 @@ private:
     std::deque<double> _step_latencies;    // last 100, seconds
 };
 
-}  // namespace ssplat
+}  // namespace spirula

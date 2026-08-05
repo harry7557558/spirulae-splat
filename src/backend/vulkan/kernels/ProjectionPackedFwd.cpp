@@ -184,7 +184,7 @@ launch_projection_packed_vk(
 
 /* API definitions matching kernels/projection/ProjectionPackedFwd.cuh */
 
-#define _SSPLAT_DEF_PACKED(name, eval3d, antialiased)                        \
+#define _SS_DEF_PACKED(name, eval3d, antialiased)                        \
 std::tuple<                                                                  \
     DeviceVector<int32_t>, DeviceVector<int32_t>, DeviceVector<float4>,      \
     DeviceVector<float>, std::vector<DeviceTensorFloatND>                    \
@@ -212,8 +212,8 @@ std::tuple<                                                                  \
         num_sh_buffer, sh_value_bits, sh_bounds_stride);                     \
 }
 
-_SSPLAT_DEF_PACKED(projection_3dgs_packed_forward, false, false)
-_SSPLAT_DEF_PACKED(projection_mip_packed_forward, false, true)
-_SSPLAT_DEF_PACKED(projection_3dgut_packed_forward, true, false)
+_SS_DEF_PACKED(projection_3dgs_packed_forward, false, false)
+_SS_DEF_PACKED(projection_mip_packed_forward, false, true)
+_SS_DEF_PACKED(projection_3dgut_packed_forward, true, false)
 
-#undef _SSPLAT_DEF_PACKED
+#undef _SS_DEF_PACKED

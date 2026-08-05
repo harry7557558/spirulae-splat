@@ -78,7 +78,7 @@ static EngineStepConfig _resolve_split_vs_fpbo(const EngineStepConfig& cfg,
         out.optim.split_batch = false;
         if (!warned) {
             fprintf(stderr,
-                "[spirulae_splat] WARNING: both `split_batch` and "
+                "[spirula] WARNING: both `split_batch` and "
                 "`use_fused_proj_bwd_optim` are enabled, but the dataset's max "
                 "post-split batch size is 1; split_batch would be a no-op. "
                 "Disabling split_batch and keeping FPBO.\n");
@@ -88,7 +88,7 @@ static EngineStepConfig _resolve_split_vs_fpbo(const EngineStepConfig& cfg,
         out.optim.use_fused_proj_bwd_optim = false;
         if (!warned) {
             fprintf(stderr,
-                "[spirulae_splat] WARNING: both `split_batch` and "
+                "[spirula] WARNING: both `split_batch` and "
                 "`use_fused_proj_bwd_optim` are enabled, but the post-split "
                 "batch size can exceed 1 (max=%lld); FPBO is incompatible with "
                 "sub-batched gradient accumulation. Disabling FPBO and keeping "

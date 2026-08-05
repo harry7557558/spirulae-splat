@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <vector>
+#include "core/Env.h"
 
 
 namespace {
@@ -44,7 +45,7 @@ struct ViewerServer::Impl {
 
     HttpResponse handle_index() {
         // Dev override so viewer.html edits don't need a rebuild.
-        if (const char* p = std::getenv("SSPLAT_VIEWER_HTML")) {
+        if (const char* p = spirula::env("VIEWER_HTML")) {
             std::ifstream f(p, std::ios::binary);
             if (f) {
                 HttpResponse r;
@@ -52,7 +53,7 @@ struct ViewerServer::Impl {
                 r.body.assign(std::istreambuf_iterator<char>(f), {});
                 return r;
             }
-            std::fprintf(stderr, "[viewer] SSPLAT_VIEWER_HTML=%s not readable; "
+            std::fprintf(stderr, "[viewer] SS_VIEWER_HTML=%s not readable; "
                          "serving embedded copy\n", p);
         }
         HttpResponse r;

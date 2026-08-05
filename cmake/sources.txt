@@ -1,7 +1,7 @@
 # Engine/kernel source globs, relative to the repository root.
 #
 # SINGLE SOURCE OF TRUTH. Consumed by:
-#   - cmake/SsplatSources.cmake  (the development build, both backends)
+#   - cmake/SsSources.cmake  (the development build, both backends)
 # Keep it a plain list of glob patterns, one per line.
 # Blank lines and '#' comments are ignored. Globs are NOT recursive -- list each
 # directory, so adding one is a deliberate act.

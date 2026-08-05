@@ -36,9 +36,9 @@ of guessing.
 
 ```bash
 # CUDA branch: opt-in
-bash build_develop.bash -B build_cuda -DSSPLAT_BACKEND=cuda -DSSPLAT_BUILD_BACKEND_TESTS=ON
+bash build_develop.bash -B build_cuda -DSS_BACKEND=cuda -DSS_BUILD_BACKEND_TESTS=ON
 # Vulkan branch: built unconditionally
-bash build_develop.bash -DSSPLAT_BACKEND=vulkan
+bash build_develop.bash -DSS_BACKEND=vulkan
 ```
 
 Each `.cpp` becomes an executable of the same base name in the build dir.
@@ -48,7 +48,7 @@ Each `.cpp` becomes an executable of the same base name in the build dir.
 The comparison target is often a different machine (e.g. an AMD GPU box), and
 often offline. The pattern that works:
 
-1. Transfer a matching `slangc` to the target and point `-DSSPLAT_SLANGC=` at
+1. Transfer a matching `slangc` to the target and point `-DSS_SLANGC=` at
    it — SPIR-V is compiled at build time and never committed, so the target
    needs a compiler, and the version is pinned.
 2. Dump references on the CUDA host.
@@ -133,7 +133,7 @@ viewer read its step counter / pause flag / progress JSON straight off a
 `tests/python/test_trainer_parity.py` is the §4.3 gate. Three parts:
 
 1. **Config conversion** — `to_native_config(PresetClass())` must equal
-   `SsplatConfig()` + `ssplat_apply_preset(name)` for all seven presets. These
+   `TrainConfig()` + `train_apply_preset(name)` for all seven presets. These
    are *two live representations*: `src/config/TrainConfig.h` is the source of
    truth and the Python dataclasses are the downstream copy, so this test is
    what catches the copy drifting until the dataclasses are deleted.
@@ -151,16 +151,16 @@ viewer read its step counter / pause flag / progress JSON straight off a
    session's `RunState` is what the model reports) and that it serves the
    native viewer.
 
-Plus an opt-in end-to-end run (`SSPLAT_TEST_DATASET`, with
-`SSPLAT_TEST_IMAGE_DIR` / `SSPLAT_TEST_DOWNSCALE` for pre-downscaled academic
+Plus an opt-in end-to-end run (`SS_TEST_DATASET`, with
+`SS_TEST_IMAGE_DIR` / `SS_TEST_DOWNSCALE` for pre-downscaled academic
 sets) that trains through `TrainerSession` with the refine window pulled
 inside the run — `refine_stop_num_iter` counts back from the *end*, so a short
 run with the defaults never densifies.
 
 ```bash
 pytest tests/python/test_trainer_parity.py -q
-SSPLAT_TEST_DATASET=/path/to/mipnerf360/garden \
-  SSPLAT_TEST_IMAGE_DIR=images_4 SSPLAT_TEST_DOWNSCALE=4 \
+SS_TEST_DATASET=/path/to/mipnerf360/garden \
+  SS_TEST_IMAGE_DIR=images_4 SS_TEST_DOWNSCALE=4 \
   pytest tests/python/test_trainer_parity.py -q
 ```
 
@@ -190,15 +190,14 @@ proof that no longer has a second implementation to re-derive it from. So:
 |---|---|
 | any kernel | CUDA build + Vulkan build + the relevant parity test on both |
 | engine logic | both builds + `engine_render_parity` + `engine_train_step`-level check |
-| config field | add the row in `src/config/TrainConfig.h`, mirror it on the Python dataclass; check `ssplat train --help`; `test_trainer_parity.py` |
-| training-loop logic | change `TrainerCore.cpp`, not the Python mirror; `test_trainer_parity.py` |
-| build system | all four modes in [build.md](build.md) |
-| Python-facing | a short `spirulae-train` run with `--no-keep-viewer-alive` |
+| config field | add the row in `src/config/TrainConfig.h`; check `spirula train --help` and the GUI's All Options editor |
+| training-loop logic | `TrainerCore.cpp` — `build_step_config()` is the only place it lives |
+| build system | every mode in [build.md](build.md) |
 | anything | one short training run per backend on a public scene |
 
 ## Profiling
 
-`SSPLAT_PROFILE=1` enables the env-gated per-stage timing breakdown
+`SS_PROFILE=1` enables the env-gated per-stage timing breakdown
 (H2D / D2H / D2D / memset / device / host). Header-only, works on both
 backends — the right first tool when a backend is unexpectedly slow rather
 than wrong.

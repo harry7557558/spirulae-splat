@@ -137,7 +137,7 @@ int cmdMapSelftest(int argc, char** argv) {
     if (nobs > 0 && meanReproj > 1.5) { printf("  FAIL: reprojection error\n"); fails++; }
 
     // COLMAP model round-trip.
-    std::string dir = "/tmp/ssplat_sfm_map_selftest";
+    std::string dir = "/tmp/spirula_sfm_map_selftest";
     fs::create_directories(dir);
     rec.writeBinary(dir);
     Reconstruction rd = Reconstruction::readBinary(dir);

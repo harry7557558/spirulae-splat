@@ -5,7 +5,7 @@ The AUTHORITATIVE declarations (and the types they use) live in the per-kernel
 .cuh headers, whose declaration sections are generated from
 /*[AutoHeaderGeneratorExport]*/ markers by generate_headers.py. Those headers
 are CUDA-include-free (they use backend/api/BackendTypes.h), so this whole
-surface parses without the CUDA toolkit under -DSSPLAT_BACKEND_VULKAN.
+surface parses without the CUDA toolkit under -DSS_BACKEND_VULKAN.
 
 Forwarding (rather than copying declarations) keeps one definition of every
 preamble type: a TU may include both a module header and an individual .cuh

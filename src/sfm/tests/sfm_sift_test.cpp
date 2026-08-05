@@ -150,7 +150,7 @@ int cmdSelftest(int argc, char** argv) {
     ac.exif_camera = "Canon-EOS 5D-24.000000-5616x3744";
     ac.extract_width = ac.width / 2;            // the v4 section (D47)
     ac.extract_height = ac.height / 2;
-    std::string tmp = "/tmp/ssplat_sfm_selftest_features.bin";
+    std::string tmp = "/tmp/spirula_sfm_selftest_features.bin";
     writeFeatures(tmp, ac);
     FeatureSet r = readFeatures(tmp);
     bool rt = r.count() == ac.count() && r.dim == ac.dim && r.width == ac.width &&
@@ -516,7 +516,7 @@ int cmdSelftest(int argc, char** argv) {
         Camera eqc = Camera::defaultFor(8, 5760, 2880, 0, CamModel::Equirect);
         rc.cameras[1] = sp; rc.cameras[2] = ph; rc.cameras[3] = rad; rc.cameras[4] = cam;
         rc.cameras[5] = fe; rc.cameras[6] = fo; rc.cameras[7] = tp; rc.cameras[8] = eqc;
-        std::string cdir = "/tmp/ssplat_sfm_selftest_model";
+        std::string cdir = "/tmp/spirula_sfm_selftest_model";
         fs::create_directories(cdir);
         rc.writeBinary(cdir);
         Reconstruction rr = Reconstruction::readBinary(cdir);
@@ -579,7 +579,7 @@ int cmdSelftest(int argc, char** argv) {
         }
 
         // FULL_OPENCV must be emitted as COLMAP model 6 with 12 params, the
-        // rational k4,k5,k6 tail zeroed (spirulae-splat compatibility, D34).
+        // rational k4,k5,k6 tail zeroed (dataset-parser compatibility, D34).
         {
             std::ifstream cf(cdir + "/cameras.bin", std::ios::binary);
             bool full_ok = false, eq_ok = false;
@@ -637,7 +637,7 @@ int cmdSelftest(int argc, char** argv) {
         db.cameras = {vc};
         db.camera_ids = {1, 1};
         db.focal_prior = {1};
-        std::string mtmp = "/tmp/ssplat_sfm_selftest_matches.bin";
+        std::string mtmp = "/tmp/spirula_sfm_selftest_matches.bin";
         writeMatches(mtmp, db);
         MatchesDatabase rd = readMatches(mtmp);
         bool mrt = rd.images.size() == 2 && rd.pairs.size() == 1 &&
@@ -753,7 +753,7 @@ int cmdSelftest(int argc, char** argv) {
     {
         // Tiny PGMs (stb reads P5) whose single row encodes the image index, so
         // delivery order and content are both checkable without a PNG writer.
-        fs::path dir = fs::temp_directory_path() / "ssplat_sfm_selftest_imgs";
+        fs::path dir = fs::temp_directory_path() / "spirula_sfm_selftest_imgs";
         fs::remove_all(dir);
         fs::create_directories(dir);
         const int N = 24;

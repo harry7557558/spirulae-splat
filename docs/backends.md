@@ -35,7 +35,7 @@ markers. The `api/` directory makes that implicit boundary explicit.
 
 `backend/api/BackendTypes.h` provides portable CUDA-layout vector types and
 empty `__device__`/`__host__` macros, so the whole declaration surface parses
-under `-DSSPLAT_BACKEND_VULKAN` with no CUDA toolkit installed.
+under `-DSS_BACKEND_VULKAN` with no CUDA toolkit installed.
 
 ## Shared device math
 
@@ -61,8 +61,8 @@ no in-shader branching:
 
 Baseline is Vulkan 1.2 core with `bufferDeviceAddress` + `timelineSemaphore`.
 Subgroup size is **never** assumed to be 32 — AMD wave64 and Intel
-variable-width are first-class. `SSPLAT_VK_NATIVE_ATOMICS=0`,
-`SSPLAT_VK_NATIVE_INT64=0`, `SSPLAT_VK_NATIVE_INT8=0` force the fallback blobs
+variable-width are first-class. `SS_VK_NATIVE_ATOMICS=0`,
+`SS_VK_NATIVE_INT64=0`, `SS_VK_NATIVE_INT8=0` force the fallback blobs
 for A/B testing.
 
 The Vulkan README documents hard-won specifics that are easy to regress —
@@ -103,4 +103,4 @@ change design decisions:
 - Vulkan driver choice matters (`amdvlk` vs RADV differ by an order of
   magnitude on some kernels). When comparing, state the driver.
 
-Use `SSPLAT_PROFILE=1` for the per-stage breakdown before optimizing anything.
+Use `SS_PROFILE=1` for the per-stage breakdown before optimizing anything.

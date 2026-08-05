@@ -3,19 +3,18 @@
 ## Layers
 
 ```
-                ┌────────────────────────────────────────────────────────────┐
-  front ends    │ ssplat train (CLI)    ssplat (ImGui GUI)   Python package  │
-                │ src/app/cli/          src/app/gui/         spirulae_splat/ │
-                └────────────┬────────────────┬──────────────────┬───────────┘
-                             │                │                  │
-                    ┌────────┴────────────────┴──────────────────┴┐ pybind11
-                    │  TrainerCore (src/app/)                     │ src/bindings/
-                    │  config → dataset → seeding → step loop     │   ext.cpp
-                    │  Python enters here too: _C.TrainerSession  │   bind_data
-                    └───────────────────────┬─────────────────────┘   bind_viewer
-                                            │                         bind_trainer
+                ┌───────────────────────────────────────────────┐
+  front ends    │ spirula train (CLI)      spirula (ImGui GUI)  │
+                │ src/app/cli/            src/app/gui/          │
+                └────────────┬──────────────────┬───────────────┘
+                             │                  │
+                    ┌────────┴──────────────────┴─────────────────┐
+                    │  TrainerCore (src/app/)                     │
+                    │  config → dataset → seeding → step loop     │
+                    └───────────────────────┬─────────────────────┘
+                                            │
                  ┌──────────────────────────┴────────────────────────────────┐
-   engine        │  src/engine/*.cpp — torch-free, CUDA-free, process-global │
+   engine        │  src/engine/*.cpp — CUDA-free, process-global             │
                  │  state in EngineState.h; src/data/ owns image I/O         │
                  └──────────────────────────┬────────────────────────────────┘
                                             │  launch declarations
@@ -40,35 +39,26 @@ repo: read `src/backend/README.md`, then `src/backend/vulkan/README.md`.
 
 | responsibility | code |
 |---|---|
-| training config (source of truth) | `src/config/TrainConfig.h` — hand-written, one X-macro row per flag. The Python dataclasses in `spirulae_splat/modules/` are downstream copies until they are deleted. |
+| training config (source of truth) | `src/config/TrainConfig.h` — hand-written, one X-macro row per flag. The struct, the CLI parser, `--help`, the GUI editor and `config.json` all expand from it. |
 | dataset parsing (native) | `src/data/parsers/{Colmap,Nerfstudio,Metashape}Parser.cpp`, `DatasetCommon.cpp`, `DatasetParser.h` |
-| dataset parsing (Python client) | `spirulae_splat/modules/native_dataparser.py` — an adapter, not a parser. The Python implementation is gone; `dataparser.py` is now just the config dataclass, `scripts/{colmap,metashape}_utils.py` keep a Python reader for preprocessing, and `camera_utils.py` is retained on no code path as the reference for the unported `orientation_method` / `center_method` (docs/notes/pose-normalization.md) |
 | image cache / prefetch / warp | `src/data/DataManager.cpp` |
-| training session orchestration | `src/app/TrainerCore.cpp` — single implementation, bound as `_C.TrainerSession`; `spirulae_splat/modules/trainer.py` keeps config construction, resume, eval and profiling |
+| training session orchestration | `src/app/TrainerCore.cpp` — the single training driver, shared by the CLI and the GUI |
 | the actual training step | `Engine*.cpp`, entered via `engine_train_step_managed` |
 | kernels | `src/kernels/**/*.cu` (CUDA) + `src/backend/vulkan/shaders/*.slang` + `src/backend/vulkan/kernels/*.cpp` |
 | web viewer client | `src/app/webviewer/viewer.html` — single source, embedded into the engine library at build time; every front end serves the same bytes |
-| web viewer server | `src/app/webviewer/{Viewer,HttpServer,RenderWorker}.cpp` — single implementation, bound as `_C.WebViewer`; `ss_trainer.py` and `ss_viewer.py` drive it |
+| web viewer server | `src/app/webviewer/{Viewer,HttpServer,RenderWorker}.cpp` |
 | standalone WASM viewer | `viewer/` — independent, but compiles the C++ parsers in place |
 
-Three subsystems used to be implemented twice, once in Python and once in
-C++. All three are now single implementations in C++, reached from Python
-through a binding: dataset parsing (§4.1) via
-`spirulae_splat.modules.native_dataparser`, the viewer server (§4.2) via
-`_C.WebViewer`, and the training driver (§4.3) via `_C.TrainerSession` /
-`spirulae_splat.modules.native_trainer`. The Python implementations were
-deleted after a parity gate proved each pair agreed; the gates survive as
-golden-value regression tests on the C++ side ([testing.md](testing.md)
-§4-6). **Do not add a fourth** — new functionality goes in C++ with a
-binding.
+Dataset parsing, the viewer server and the training driver were each once
+implemented twice, in Python and in C++. Each is now one C++ implementation:
+the Python halves were deleted after a parity gate proved the pairs agreed,
+and the gates survive as golden-value regression tests
+([testing.md](testing.md) §4-6).
 
-Nothing structural is left in Python. Checkpoint resume and its layout
-adaptation are native (`src/checkpoint/`), and so is the eval pass
+Nothing is left in Python. Checkpoint resume and its layout adaptation are
+native (`src/checkpoint/`), and so is the eval pass
 (`src/app/EvalMetrics.{h,cpp}`) except LPIPS, which needs AlexNet + VGG16 and
 is a hand-run tool over the saved eval PNGs (`reference/python/eval_lpips.py`).
-The config dataclasses are no longer the source of truth
-(`src/config/TrainConfig.h` is) and survive only as the downstream copy the
-Python client still reads, until it is deleted.
 
 ## The engine
 
@@ -86,7 +76,7 @@ Two properties to keep in mind:
   / PPISP / background / color-space state and the viewer state. Call
   `engine_reset()` between runs that swap datasets — `ss_benchmark`'s
   per-scene subprocess isolation exists for exactly this reason.
-- **It is torch-free and CUDA-free.** `Engine*.cpp` are `.cpp`, not `.cu`;
+- **It is CUDA-free.** `Engine*.cpp` are `.cpp`, not `.cu`;
   they reach the device only through the generated launch declarations and
   `backend/api/BackendRuntime.h`. Keep it that way — it is what lets the same
   engine drive the Vulkan backend.

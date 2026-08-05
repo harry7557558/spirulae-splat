@@ -1,6 +1,6 @@
 // mesh_main.cpp -- standalone mesh-extraction CLI.
 //
-//     ssplat-mesh <checkpoint> [--data <dir>] [--format ply,glb]
+//     spirula-mesh <checkpoint> [--data <dir>] [--format ply,glb]
 //                 [--color none|vertex|texture] [--flag value ...]
 //
 // <checkpoint> is a run directory (containing config.json and a step-*.ckpt/
@@ -379,7 +379,7 @@ Options parse_args(int argc, char** argv) {
 }  // namespace
 
 
-int ssplat_mesh_main(int argc, char** argv) {
+int spirula_mesh_main(int argc, char** argv) {
     try {
         Options o = parse_args(argc, argv);
 

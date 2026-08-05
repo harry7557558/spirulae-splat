@@ -2,7 +2,7 @@
 
 A standalone SfM pipeline — images in, a COLMAP `sparse/` model out — with a
 GPU compute backend (Vulkan + Slang) and no heavy dependencies. It exists to
-replace the `colmap` subprocess: `ssplat sfm` is the CLI, and the native GUI
+replace the `colmap` subprocess: `spirula sfm` is the CLI, and the native GUI
 will drive the same library in-process instead of shelling out
 (`docs/notes/sfm-port-plan.md` phase 5).
 
@@ -15,7 +15,7 @@ of this file and in the port plan.
 - **Vulkan only.** There is no CUDA path here and there will not be one. The
   module carries its own Vulkan context (`vk/VkContext.h`) and its own embedded
   SPIR-V, and shares nothing with the training engine — including, for now, the
-  device. Built by default only for `SSPLAT_BACKEND=vulkan`.
+  device. Built by default only for `SS_BACKEND=vulkan`.
 - **No heavy dependencies.** Vulkan, Slang, C++17, and the repository's
   vendored `stb_image`. No Ceres, no Eigen on the hot path, no OpenCV, no
   SQLite, no PyTorch.
@@ -50,7 +50,7 @@ images/ ──► extract ──► features/ ─┐
                                                             sparse/0 ► training
 ```
 
-`ssplat sfm auto` runs all of it from two knobs, `--quality` and `--data-type`.
+`spirula sfm auto` runs all of it from two knobs, `--quality` and `--data-type`.
 
 The `map` box is one incremental reconstruction of the whole capture by default.
 `--mapper bottom-up` replaces it with the opposite schedule (`map/Bottomup.h`,
@@ -152,10 +152,10 @@ apart.
 ## Building
 
 ```bash
-bash build_develop.bash -DSSPLAT_BACKEND=vulkan -DSSPLAT_BUILD_CLI=ON
+bash build_develop.bash -DSS_BACKEND=vulkan -DSS_BUILD_CLI=ON
 ```
 
-`SSPLAT_BUILD_SFM` defaults ON for the Vulkan backend and OFF for CUDA (where
+`SS_BUILD_SFM` defaults ON for the Vulkan backend and OFF for CUDA (where
 it can still be turned on if the Vulkan SDK is present). Shaders compile at
 build time and are embedded, so nothing needs to sit next to the binary.
 
@@ -163,38 +163,38 @@ The bundle-adjustment kernels are compiled once per (Real, Loss) pair — nine
 blobs at the default. Trim the matrix while iterating:
 
 ```bash
-cmake -B build -DSSPLAT_SFM_REALS=df -DSSPLAT_SFM_LOSSES=trivial
+cmake -B build -DSS_SFM_REALS=df -DSS_SFM_LOSSES=trivial
 ```
 
 Both are cached, so a trimmed value sticks until the full list is passed again
-(`-DSSPLAT_SFM_REALS='float;double;df'`) or the build tree is wiped. Asking for
+(`-DSS_SFM_REALS='float;double;df'`) or the build tree is wiped. Asking for
 a variant that was trimmed out is a clear runtime error, not a crash.
 
 ## Running
 
 ```bash
-ssplat sfm auto IMAGES/ -o WORKSPACE/          # images -> sparse model
-ssplat sfm auto -o ws/                         # ./images + ./masks, all defaults
-ssplat sfm auto IMAGES/ -o ws/ --data-type video --quality medium
-ssplat sfm auto IMAGES/ -o ws/ --masks MASKS/  # drop keypoints on masked pixels
-ssplat sfm auto IMAGES/ -o ws/ --camera-model opencv-fisheye
+spirula sfm auto IMAGES/ -o WORKSPACE/          # images -> sparse model
+spirula sfm auto -o ws/                         # ./images + ./masks, all defaults
+spirula sfm auto IMAGES/ -o ws/ --data-type video --quality medium
+spirula sfm auto IMAGES/ -o ws/ --masks MASKS/  # drop keypoints on masked pixels
+spirula sfm auto IMAGES/ -o ws/ --camera-model opencv-fisheye
 
-ssplat sfm extract IMAGES/ -o feats/
-ssplat sfm match   feats/ -o matches.bin
-ssplat sfm map     matches.bin feats/ -o sparse/ --images IMAGES/
-ssplat sfm merge   sparse/ -o merged/
-ssplat sfm ba      problem.txt --real df       # solver benchmark on a BAL problem
+spirula sfm extract IMAGES/ -o feats/
+spirula sfm match   feats/ -o matches.bin
+spirula sfm map     matches.bin feats/ -o sparse/ --images IMAGES/
+spirula sfm merge   sparse/ -o merged/
+spirula sfm ba      problem.txt --real df       # solver benchmark on a BAL problem
 ```
 
-`ssplat sfm --help` lists the commands, `ssplat sfm <command> --help` (or
-`ssplat sfm help <command>`) prints that command's usage, its options with
-their defaults and worked examples, and `ssplat sfm --version` prints the
+`spirula sfm --help` lists the commands, `spirula sfm <command> --help` (or
+`spirula sfm help <command>`) prints that command's usage, its options with
+their defaults and worked examples, and `spirula sfm --version` prints the
 package version. A usage error names the flag, says what was wrong with it and
 points at `--help`; it always exits 1, because `auto` spends exit codes 2 and 3
 on *the reconstruction* being absent or partial.
 
-Environment: `SSPLAT_SFM_MAP_PROF=1` prints a mapper stage breakdown,
-`SSPLAT_SFM_DUMP_SG` / `SSPLAT_SFM_CMP_STEP` are BA solver debug hooks
+Environment: `SS_SFM_MAP_PROF=1` prints a mapper stage breakdown,
+`SS_SFM_DUMP_SG` / `SS_SFM_CMP_STEP` are BA solver debug hooks
 (`ba/README.md`).
 
 ## Options

@@ -35,6 +35,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include "core/Env.h"
 
 namespace fs = std::filesystem;
 using namespace aliked;
@@ -367,10 +368,10 @@ void run_matching(const std::string& model, const std::string& a_path,
 }  // namespace
 
 int main(int argc, char** argv) {
-    // Stage timings by default, but let $SSPLAT_NN_LOG win -- the tensor dumps
+    // Stage timings by default, but let $SS_NN_LOG win -- the tensor dumps
     // in the model layer are how a mismatch against the reference is bisected,
     // and forcing the level here would hide them.
-    if (!std::getenv("SSPLAT_NN_LOG")) nn::set_log_level(2);
+    if (!spirula::env("NN_LOG")) nn::set_log_level(2);
 
     bool fetch = false;
     std::string image_path, out_path, model = "aliked-n16rot";

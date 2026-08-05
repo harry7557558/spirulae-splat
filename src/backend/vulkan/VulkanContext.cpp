@@ -9,6 +9,7 @@
 #include <cstring>
 #include <thread>
 #include <vector>
+#include "core/Env.h"
 
 namespace backend {
 namespace vk {
@@ -158,7 +159,7 @@ const std::vector<EnumeratedDevice>& enumerate_devices() {
     static const std::vector<EnumeratedDevice> list = [] {
         std::vector<EnumeratedDevice> out;
         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-        app.pApplicationName = "spirulae-splat";
+        app.pApplicationName = "Spirula Studio";
         app.apiVersion = VK_API_VERSION_1_2;
         VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         ici.pApplicationInfo = &app;
@@ -183,7 +184,7 @@ const std::vector<EnumeratedDevice>& enumerate_devices() {
     return list;
 }
 
-// Selection precedence: backend::device_select > SSPLAT_VK_DEVICE env
+// Selection precedence: backend::device_select > SS_VK_DEVICE env
 // (index or name substring) > auto-score (discrete > integrated > others,
 // VRAM tie-break). -1 if nothing usable matches.
 int resolve_device_index() {
@@ -191,7 +192,7 @@ int resolve_device_index() {
     int req = g_requested_device.load();
     if (req >= 0)
         return (req < (int)list.size() && list[req].usable) ? req : -1;
-    if (const char* want = std::getenv("SSPLAT_VK_DEVICE");
+    if (const char* want = spirula::env("VK_DEVICE");
         want && want[0]) {
         char* end = nullptr;
         long idx = std::strtol(want, &end, 10);
@@ -203,7 +204,7 @@ int resolve_device_index() {
             if (!matches) continue;
             if (!list[i].usable) {
                 std::fprintf(stderr,
-                    "[ssplat-vk] requested device '%s' lacks required "
+                    "[spirula-vk] requested device '%s' lacks required "
                     "features (Vulkan 1.2 + bufferDeviceAddress + "
                     "timelineSemaphore)\n",
                     list[i].name.c_str());
@@ -238,13 +239,13 @@ Context::Context() { init(); }
 
 void Context::init() {
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    app.pApplicationName = "spirulae-splat";
+    app.pApplicationName = "Spirula Studio";
     app.apiVersion = VK_API_VERSION_1_2;
 
     VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ici.pApplicationInfo = &app;
     const char* validation = "VK_LAYER_KHRONOS_validation";
-    if (const char* env = std::getenv("SSPLAT_VK_VALIDATION");
+    if (const char* env = spirula::env("VK_VALIDATION");
         env && env[0] == '1') {
         ici.enabledLayerCount = 1;
         ici.ppEnabledLayerNames = &validation;
@@ -321,18 +322,18 @@ void Context::init() {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
     fatomic.shaderBufferFloat32AtomicAdd = VK_TRUE;
 
-    // SSPLAT_VK_NATIVE_ATOMICS=0 forces the CAS-loop shader variants on a
+    // SS_VK_NATIVE_ATOMICS=0 forces the CAS-loop shader variants on a
     // native-capable device (A/B timing, exercising the fallback blobs).
-    // SSPLAT_VK_NATIVE_INT64=0 / SSPLAT_VK_NATIVE_INT8=0 likewise force the
+    // SS_VK_NATIVE_INT64=0 / SS_VK_NATIVE_INT8=0 likewise force the
     // ".noint64" emulation / word-packed byte-access blobs; the device
     // features stay enabled, only blob selection changes.
-    if (const char* env = std::getenv("SSPLAT_VK_NATIVE_ATOMICS");
+    if (const char* env = spirula::env("VK_NATIVE_ATOMICS");
         env && env[0] == '0')
         _caps.float32_atomic_add = false;
-    if (const char* env = std::getenv("SSPLAT_VK_NATIVE_INT64");
+    if (const char* env = spirula::env("VK_NATIVE_INT64");
         env && env[0] == '0')
         _caps.shader_int64 = false;
-    if (const char* env = std::getenv("SSPLAT_VK_NATIVE_INT8");
+    if (const char* env = spirula::env("VK_NATIVE_INT8");
         env && env[0] == '0')
         _caps.shader_int8 = false;
 
@@ -431,19 +432,19 @@ void Context::init() {
         return;
     }
 
-    // Poll-based waits by default on real GPUs; SSPLAT_VK_POLL_WAIT=0/1
+    // Poll-based waits by default on real GPUs; SS_VK_POLL_WAIT=0/1
     // forces either mode (mainly for A/B timing).
     _poll_waits =
         probe.props.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU;
-    if (const char* env = std::getenv("SSPLAT_VK_POLL_WAIT"); env && env[0])
+    if (const char* env = spirula::env("VK_POLL_WAIT"); env && env[0])
         _poll_waits = env[0] != '0';
 
     g_context_device.store(best);
     g_context_created.store(true);
 
-    if (std::getenv("SSPLAT_VK_VERBOSE")) {
+    if (spirula::env("VK_VERBOSE")) {
         std::fprintf(stderr,
-            "[ssplat-vk] using %s (%s), subgroup %u, push %uB, "
+            "[spirula-vk] using %s (%s), subgroup %u, push %uB, "
             "float-atomic-add %s, int64 %s, int8 %s, timestamps %s\n",
             _device_name.c_str(), device_type_name(probe.props.deviceType),
             _caps.subgroup_size, _caps.max_push_constants,

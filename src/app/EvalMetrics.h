@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace ssplat {
+namespace spirula {
 
 // Mean absolute error.
 float image_l1(const float* a, const float* b, int64_t n);
@@ -34,4 +34,11 @@ std::vector<float> color_correct(const float* img, const float* ref,
                                  int64_t num_pixels, int C,
                                  int num_iters = 5, float eps = 0.5f / 255.0f);
 
-}  // namespace ssplat
+// Same, writing into a caller-owned buffer. Scoring a 4K view otherwise spends
+// more time faulting in fresh scratch than doing the arithmetic, so the eval
+// pass reuses one buffer per worker across views.
+void color_correct_into(const float* img, const float* ref,
+                        int64_t num_pixels, int C, std::vector<float>& out,
+                        int num_iters = 5, float eps = 0.5f / 255.0f);
+
+}  // namespace spirula

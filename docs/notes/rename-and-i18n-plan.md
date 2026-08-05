@@ -10,9 +10,10 @@ Plan for three changes that look independent but share one keystone file:
    becomes hand-written C++; a named subset of Python survives as reference
    for features that are not ported yet.
 
-Status: **not started.** This document is the plan; delete phase checklists as
-they land and fold the surviving content into `docs/i18n.md` and
-`src/i18n/README.md`.
+Status: **phases 0-2 landed; 3-5 are still plan.** Sections that landed are
+marked and record what actually happened, which is not always what was
+planned. Fold the surviving content into `docs/i18n.md` and
+`src/i18n/README.md` when Phase 5 comes.
 
 ---
 
@@ -111,12 +112,12 @@ Follow-ups this surfaced, deliberately left alone to keep the gate clean:
 - The 33 `optimizer`-group fields have **empty help strings** — `OptimizerConfig`
   never had docstrings. They are the worst entries in `--help` and should be
   written before Phase 4 translates anything.
-- The `meshing` preset's help says "Use `spirulae-meshing`", a binary that no
-  longer exists; it is `ssplat mesh`.
+- The `meshing` preset's help said "Use `spirulae-meshing`", a binary that no
+  longer exists. *(Fixed in Phase 2: `spirula mesh`.)*
 
 ---
 
-## 4. Phase 1 — retiring the Python client — **IN PROGRESS**
+## 4. Phase 1 — retiring the Python client — **LANDED 2026-08-04**
 
 Resume and its layout adaptation landed 2026-08-04 (`src/checkpoint/`, 991
 lines). Two findings changed the shape of the work from what §4 assumed:
@@ -200,14 +201,42 @@ work spent on a corpse.
 
 ---
 
-## 5. Phase 2 — the rename
+## 5. Phase 2 — the rename — **LANDED 2026-08-04**
+
+What landed differs from §5.1 in one deliberate way: **the repository keeps
+its name.** Renaming it moves the GitHub Pages URL that `viewer/` is published
+under, and GitHub does not reliably redirect Pages project paths. The README
+already carries the transition ("Formerly Spirulae-Splat"), so the cost was
+all downside. Every other row of the table below landed as written.
+
+Three findings worth keeping:
+
+- **`SS_` did not collide with anything.** All 114 `SSPLAT_` names map onto
+  free `SS_` names — the lint (`tools/check_ss_prefix.sh`, 47 declarations
+  checked) exists to stop the *next* one, not to clean up this one.
+- **The `getenv` consolidation was worth doing on its own.** 24 scattered
+  reads became `spirula::env("SUFFIX")`, which is where the `SSPLAT_` fallback
+  now lives — one function, one deletion when the shim expires. Two ad-hoc
+  helpers (`nn/vk/Context.cpp`'s `envFlag`, `sfm_ba.cpp`'s `env_or`) collapsed
+  into it.
+- **Two on-disk directories were user data, not identifiers.** `~/.config/…`
+  and the ALIKED model cache moved to `spirula-studio/`, but an existing
+  `spirulae-splat/` is adopted where it is rather than migrated: no move, no
+  data loss, and a repeat 100 MB+ checkpoint download avoided.
+
+Verified: both backends build clean; `spirula train --help` byte-identical
+across all 7 presets and `spirula mesh --help` byte-identical, modulo the
+mechanical `ssplat`→`spirula` substitution; a stale `SSPLAT_*` CMake cache
+reconfigures with deprecation warnings and the right values; `SS_X` wins over
+`SSPLAT_X` and `SSPLAT_X` alone warns once; train → eval → resume on a real
+scene.
 
 ### 5.1 Names
 
 | thing | from | to |
 |---|---|---|
 | product | spirulae-splat | **Spirula Studio** |
-| repository | `spirulae-splat` | `spirula-studio` |
+| repository | `spirulae-splat` | *(unchanged — see above)* |
 | executable | `ssplat` | `spirula` (`spirula train\|sfm\|sam\|mesh`; symlink `spirula-sfm`) |
 | macro / option / env prefix | `SSPLAT_` | `SS_` |
 | CMake modules | `cmake/Ssplat*.cmake` | `cmake/Ss*.cmake` |
@@ -215,9 +244,8 @@ work spent on a corpse.
 | C++ namespace | `ssplat` (6 files) | `spirula` |
 
 Leave `viewer/` alone — the GitHub Pages URL depends on the directory name.
-Renaming the repository **will** change that URL; GitHub redirects git remotes
-and web UI paths on rename but does not reliably redirect Pages project paths.
-Verify before flipping, and consider keeping a redirect stub at the old repo.
+This is why the repository was not renamed: GitHub redirects git remotes and
+web UI paths on rename but does not reliably redirect Pages project paths.
 
 ### 5.2 `SS_` and the avoid list
 
@@ -647,12 +675,18 @@ strings are localized.
       `setup.py`, `src/bindings/`, `tests/python/` and the whole Torch half of
       the build deleted — 40.8k lines out, 2.3k in. The binary links neither
       libtorch nor libpython. AGENTS.md rewritten. *(2026-08-04)*
-- [ ] **2.** `tools/ss_reserved_names.txt` + `check_ss_prefix.sh`.
-      `SSPLAT_` → `SS_` in sources, generated trees regenerated in the same
-      commit. `spirula::env()` replaces 23 `getenv` sites. CMake alias loop.
-      `SsplatConfig` → `TrainConfig` (a separate rename, not the prefix sed),
-      and the `SsplatVec3*` / `ssplat_v3*` / `ssplat_json_key` helpers with it.
-      Executable and repository renamed; Pages URL verified.
+- [x] **2.** `SSPLAT_` → `SS_` (114 names), `ssplat` → `spirula` (executable,
+      namespace, entry points), `Ssplat*.cmake` → `Ss*.cmake`, CMake helpers
+      and targets to `ss_*`, `SsplatConfig` → `TrainConfig` with the
+      `TrainVec3*` / `train_v3*` / `train_json_key` / `kTrainPresets` helpers,
+      `SPIRULAE_` guards → `SPIRULA_`. Three shims: the CMake alias loop,
+      `spirula::env()`, and the `ssplat-` argv[0] prefix.
+      `tools/{ss_reserved_names.txt,check_ss_prefix.sh}` wired into
+      `build_develop.bash`. Config and model-cache directories move to
+      `spirula-studio/`, adopting an existing `spirulae-splat/` in place.
+      **The repository was deliberately not renamed** — the Pages URL under
+      `viewer/` depends on the directory name, and the README's "Formerly
+      Spirulae-Splat" line carries the transition instead. *(2026-08-04)*
 - [ ] **3.** `src/i18n/` (`Languages.h`, `Message.h`, `Begin/EndCatalog.h`),
       `gui/Ui.h`, `check_i18n.sh`, font loading + `SS_FONT_CJK` +
       `SS_DEFAULT_LANG`, locale detection. All catalogs `SS_MSG_EN` at first.

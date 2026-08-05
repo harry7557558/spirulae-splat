@@ -296,7 +296,7 @@ struct CamModelInfo {
 //   9 equirect
 // ba_params == colmap_params for every model except FullOpenCV, which BA fits as
 // a reduced rational model (k1,k2,k3 + p1,p2) but emits as COLMAP FULL_OPENCV
-// with k4,k5,k6 = 0 (compatible with spirulae-splat's parser).
+// with k4,k5,k6 = 0 (compatible with our parser).
 //
 // ba_pp is how many *trailing* BA parameters are the principal point, and
 // ba_refinable says whether BA may touch this model's parameters at all. The BA
@@ -422,7 +422,7 @@ inline void unpackIntrinsics(Camera& c, const double* d) {  // c.model set by ca
 // Camera fields -> the *COLMAP* cameras.bin layout (camColmapParams slots):
 // focal length(s), cx, cy, then the extra parameters. FULL_OPENCV's reduced BA
 // params are its first 9, with the rational k4,k5,k6 emitted as 0
-// (spirulae-splat compatibility, D34).
+// (dataset-parser compatibility, D34).
 inline void packColmap(const Camera& c, double* d) {
     switch (c.model) {
         case CamModel::SimplePinhole: d[0] = c.focal(); d[1] = c.cx; d[2] = c.cy; break;

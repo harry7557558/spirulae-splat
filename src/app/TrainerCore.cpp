@@ -16,22 +16,28 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <fstream>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <numeric>
 #include <random>
 #include <stdexcept>
 #include <thread>
 
-#ifndef SSPLAT_BACKEND_VULKAN
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+#ifndef SS_BACKEND_VULKAN
 #include <cuda_runtime.h>  // check_cuda_runtime() driver/runtime preflight
 #endif
 
 namespace fs = std::filesystem;
 
-namespace ssplat {
+namespace spirula {
 
 // Recursive delete. Was nftw rather than std::filesystem::remove_all because
 // libtorch interposed its own std::filesystem symbols; torch is gone, so this
@@ -90,7 +96,7 @@ Mat3f invert3x3(const Mat3f& m) {
 
 // model.py populate_modules:612-623, applied to the config in place there;
 // pure-function port here.
-ColorResolution resolve_color(const SsplatConfig& c) {
+ColorResolution resolve_color(const TrainConfig& c) {
     ColorResolution r;
     r.image_gamut  = c.image_color_gamut;
     r.image_linear = c.image_color_is_linear;
@@ -136,7 +142,7 @@ float scheduled_lr(int step, int max_steps, float lr,
 // Splat seeding -- port of model.py populate_modules:546-651 (3dgs branch)
 // ===========================================================================
 
-SeedSplats seed_splats(const ColmapPoints3D& pts, const SsplatConfig& cfg,
+SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
                        const ColorResolution& color) {
     std::mt19937 rng(42);
     std::normal_distribution<float> gauss(0.f, 1.f);
@@ -256,7 +262,7 @@ int densify_loss_map_mode_int(const std::string& mode) {
 
 // model.py:1483 _build_loss_weights.
 std::array<float, (int)LossWeightIndex::length>
-build_loss_weights(const SsplatConfig& c, int step) {
+build_loss_weights(const TrainConfig& c, int step) {
     float dist_factor = std::min((float)step / std::max(c.distortion_reg_warmup, 1), 1.0f);
     float reg_active  = step >= c.reg_warmup_length ? 1.0f : 0.0f;
     float sup_active  = step > c.supervision_warmup ? 1.0f : 0.0f;
@@ -297,7 +303,7 @@ build_loss_weights(const SsplatConfig& c, int step) {
     return w;
 }
 
-EngineStepConfig build_step_config(const SsplatConfig& c, const RunState& st, int step) {
+EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int step) {
     int max_steps_lr = c.max_steps.value_or(c.num_iterations);
     float alpha = st.train_frame_scale;
     EngineStepConfig cfg;
@@ -461,18 +467,18 @@ template <typename T, size_t N> std::string json_str(const std::array<T, N>& v) 
 
 }  // namespace
 
-// Nested-by-group dump. Keys are ssplat_json_key(flag) -- see the note on it
-// in config/TrainConfig.h; this is a read-back format (`ssplat mesh` and
+// Nested-by-group dump. Keys are train_json_key(flag) -- see the note on it
+// in config/TrainConfig.h; this is a read-back format (`spirula mesh` and
 // --resume parse it), so the key set is not free to change.
-void save_config_json(const SsplatConfig& c, const fs::path& out_dir,
+void save_config_json(const TrainConfig& c, const fs::path& out_dir,
                       const std::string& preset) {
     FILE* f = std::fopen((out_dir / "config.json").string().c_str(), "w");
     if (!f) throw std::runtime_error("cannot write config.json");
     std::fprintf(f, "{\n    \"preset\": \"%s\"", preset.c_str());
     const char* open_group = "";
-#define SSPLAT_DUMP(type, member, default_, group, choices, help)              \
+#define SS_DUMP(type, member, default_, group, choices, help)                  \
     {                                                                          \
-    const char* key = ssplat_json_key(#member);                                \
+    const char* key = train_json_key(#member);                                \
     if (std::strcmp(group, "trainer") == 0) {                                  \
         std::fprintf(f, ",\n    \"%s\": %s", key, json_str(c.member).c_str()); \
     } else {                                                                   \
@@ -486,8 +492,8 @@ void save_config_json(const SsplatConfig& c, const fs::path& out_dir,
         }                                                                      \
     }                                                                          \
     }
-    SSPLAT_CONFIG_FIELDS(SSPLAT_DUMP)
-#undef SSPLAT_DUMP
+    SS_CONFIG_FIELDS(SS_DUMP)
+#undef SS_DUMP
     if (*open_group) std::fprintf(f, "\n    }");
     std::fprintf(f, "\n}\n");
     std::fclose(f);
@@ -504,11 +510,11 @@ void TrainerSession::log(const std::string& msg) {
     std::fflush(stdout);
 }
 
-// Unported-feature guards (fail early, like the Python trainer).
+// Unported-feature guards: fail early rather than ignore a flag.
 void TrainerSession::check_config() {
     auto not_impl = [](const std::string& what) {
         throw std::runtime_error(what +
-            " is not supported by the standalone trainer yet; use spirulae-train");
+            " is not supported yet");
     };
     if (cfg.use_bvh)                    not_impl("--use-bvh");
     if (cfg.use_camera_optimizer)       not_impl("--use-camera-optimizer");
@@ -595,7 +601,7 @@ void TrainerSession::load_dataset() {
 // report it with the numbers and the fix, instead of dying deep in a kernel.
 // CUDA-backend-specific diagnostics by design; the Vulkan backend replaces
 // this with instance/physical-device enumeration at the same call site.
-#ifndef SSPLAT_BACKEND_VULKAN
+#ifndef SS_BACKEND_VULKAN
 static void check_cuda_runtime() {
     auto fmt = [](int v) {
         return std::to_string(v / 1000) + "." + std::to_string((v % 1000) / 10);
@@ -635,10 +641,10 @@ static void check_cuda_runtime() {
     if (dev_count == 0)
         throw std::runtime_error("No CUDA-capable GPU detected.");
 }
-#endif  // SSPLAT_BACKEND_VULKAN
+#endif  // SS_BACKEND_VULKAN
 
 void TrainerSession::setup_engine() {
-#ifndef SSPLAT_BACKEND_VULKAN
+#ifndef SS_BACKEND_VULKAN
     check_cuda_runtime();
 #endif
 
@@ -659,7 +665,7 @@ void TrainerSession::setup_engine() {
         save_config_json(cfg, out_dir, preset);
     log("Output directory: " + fs::absolute(out_dir).string());
 
-    // ---- Engine setup (Trainer.__init__ + SpirulaeSplatModel.__init__) ------
+    // ---- Engine setup -------------------------------------------------
     engine_reset();
 
     ColorResolution color = resolve_color(cfg);
@@ -1084,9 +1090,108 @@ void TrainerSession::eval() {
 
     log("Eval: " + std::to_string(epost.n_post) + " view(s)");
 
-    std::map<std::string, std::vector<float>> per_image;
+    // Rendering is serial (one process-global engine), but scoring a view --
+    // colour correction, the metrics, and the PNG encode -- is pure host work
+    // that depends on nothing else, so it runs on a pool while the GPU gets on
+    // with the next view. Results are written into a slot indexed by view, so
+    // the per-image lists in metrics.json do not depend on who finished first.
+    struct ViewJob {
+        int64_t index = 0;
+        int H = 0, W = 0, C = 0;
+        std::vector<float> gt, pred;
+    };
+    struct ViewScore {
+        bool  filled = false;
+        float l1 = 0, psnr = 0, ssim = 0, cc_l1 = 0, cc_psnr = 0, cc_ssim = 0;
+    };
+
+    // Per worker: a GT + a render + the colour-corrected copy (3 x H*W*C
+    // floats) plus SSIM's eleven H*W double buffers. ~725 MB at 4K, so the
+    // pool is capped by a memory budget as well as by cores -- an eval run
+    // must not be the thing that OOMs the machine.
+    const int64_t view_pixels = eds.widths.empty()
+        ? (int64_t)1 << 20
+        : (int64_t)eds.widths[0] * eds.heights[0];
+    const int64_t bytes_per_view = view_pixels * (3 * 3 * 4 + 11 * 8);
+    const int64_t kBudget = (int64_t)4 << 30;
+    int n_workers = (int)std::max(1u, std::thread::hardware_concurrency() / 4u);
+    n_workers = (int)std::min<int64_t>(n_workers,
+                                       std::max<int64_t>(1, kBudget / std::max<int64_t>(bytes_per_view, 1)));
+    n_workers = std::min<int>(n_workers, 8);
+
+    std::deque<ViewJob> queue;
+    std::vector<ViewScore> scores;
+    std::mutex qmu, smu;
+    std::condition_variable qcv, spacecv;
+    bool producing = true;
+    std::exception_ptr worker_error;
+
+    auto score_view = [&](ViewJob& j) {
+        const int64_t view_px = (int64_t)j.H * j.W * j.C;
+        const float* g = j.gt.data();
+        thread_local std::vector<float> cc;   // reused across this worker's views
+        color_correct_into(j.pred.data(), g, (int64_t)j.H * j.W, j.C, cc);
+        ViewScore s;
+        s.filled  = true;
+        s.l1      = image_l1(g, j.pred.data(), view_px);
+        s.psnr    = image_psnr(g, j.pred.data(), view_px);
+        s.ssim    = image_ssim(g, j.pred.data(), j.H, j.W, j.C);
+        s.cc_l1   = image_l1(g, cc.data(), view_px);
+        s.cc_psnr = image_psnr(g, cc.data(), view_px);
+        s.cc_ssim = image_ssim(g, cc.data(), j.H, j.W, j.C);
+        {
+            std::lock_guard<std::mutex> lk(smu);
+            if ((size_t)j.index >= scores.size()) scores.resize((size_t)j.index + 1);
+            scores[(size_t)j.index] = s;
+        }
+        if (cfg.save_eval_images) {
+            char nm[64];
+            auto png = [&](const char* kind, const std::vector<float>& img) {
+                std::snprintf(nm, sizeof nm, "eval-%s-%05d.png", kind,
+                              (int)j.index);
+                std::vector<uint8_t> bytes = to_png_bytes(img);
+                stbi_write_png((out_dir / nm).string().c_str(), j.W, j.H, j.C,
+                               bytes.data(), j.W * j.C);
+            };
+            // Both sides, because the LPIPS tool needs the pair -- and the
+            // 8-bit clip here is what it will score, so its numbers are
+            // reproducible from the files alone.
+            png("gt", j.gt);
+            png("render", j.pred);
+        }
+    };
+
+    std::vector<std::thread> workers;
+    for (int t = 0; t < n_workers; t++) {
+        workers.emplace_back([&] {
+            // Threads inside the metrics would oversubscribe against the pool;
+            // the per-view work is already the coarser and cheaper split.
+#ifdef _OPENMP
+            omp_set_num_threads(std::max(1, (int)std::thread::hardware_concurrency() / n_workers));
+#endif
+            for (;;) {
+                ViewJob job;
+                {
+                    std::unique_lock<std::mutex> lk(qmu);
+                    qcv.wait(lk, [&] { return !queue.empty() || !producing; });
+                    if (queue.empty()) return;
+                    job = std::move(queue.front());
+                    queue.pop_front();
+                }
+                spacecv.notify_one();
+                try {
+                    score_view(job);
+                } catch (...) {
+                    std::lock_guard<std::mutex> lk(smu);
+                    if (!worker_error) worker_error = std::current_exception();
+                    return;
+                }
+            }
+        });
+    }
+
     const int sh_deg = cfg.sh_degree;
-    int saved = 0;
+    int64_t next_slot = 0;
 
     for (int64_t i = 0; i < eds.num_cameras; i++) {
         int64_t H = 0, W = 0, B = 0, Cc = 0;
@@ -1112,35 +1217,40 @@ void TrainerSession::eval() {
         // Per POST-split view inside the batch (K faces of one input image).
         const int64_t view_px = H * W * Cc;
         for (int64_t v = 0; v < B; v++) {
-            const float* g = gt.data() + v * view_px;
-            std::vector<float> pred(render.begin() + (size_t)(v * view_px),
-                                    render.begin() + (size_t)((v + 1) * view_px));
-            for (float& x : pred) x = std::min(std::max(x, 0.0f), 1.0f);
-            std::vector<float> cc = color_correct(pred.data(), g, H * W, (int)Cc);
-
-            per_image["l1"].push_back(image_l1(g, pred.data(), view_px));
-            per_image["psnr"].push_back(image_psnr(g, pred.data(), view_px));
-            per_image["ssim"].push_back(image_ssim(g, pred.data(), (int)H, (int)W, (int)Cc));
-            per_image["cc_l1"].push_back(image_l1(g, cc.data(), view_px));
-            per_image["cc_psnr"].push_back(image_psnr(g, cc.data(), view_px));
-            per_image["cc_ssim"].push_back(image_ssim(g, cc.data(), (int)H, (int)W, (int)Cc));
-
-            if (cfg.save_eval_images) {
-                char nm[64];
-                auto png = [&](const char* kind, const std::vector<float>& img) {
-                    std::snprintf(nm, sizeof nm, "eval-%s-%05d.png", kind, saved);
-                    std::vector<uint8_t> bytes = to_png_bytes(img);
-                    stbi_write_png((out_dir / nm).string().c_str(), (int)W, (int)H,
-                                   (int)Cc, bytes.data(), (int)(W * Cc));
-                };
-                // Both sides, because the LPIPS tool needs the pair -- and the
-                // 8-bit clip here is what it will score, so its numbers are
-                // reproducible from the files alone.
-                png("gt", std::vector<float>(g, g + view_px));
-                png("render", pred);
-                saved++;
+            ViewJob job;
+            job.index = next_slot++;
+            job.H = (int)H; job.W = (int)W; job.C = (int)Cc;
+            job.gt.assign(gt.begin() + (size_t)(v * view_px),
+                          gt.begin() + (size_t)((v + 1) * view_px));
+            job.pred.assign(render.begin() + (size_t)(v * view_px),
+                            render.begin() + (size_t)((v + 1) * view_px));
+            for (float& x : job.pred) x = std::min(std::max(x, 0.0f), 1.0f);
+            {
+                std::unique_lock<std::mutex> lk(qmu);
+                spacecv.wait(lk, [&] { return (int)queue.size() < n_workers; });
+                queue.push_back(std::move(job));
             }
+            qcv.notify_one();
         }
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(qmu);
+        producing = false;
+    }
+    qcv.notify_all();
+    for (auto& t : workers) t.join();
+    if (worker_error) std::rethrow_exception(worker_error);
+
+    std::map<std::string, std::vector<float>> per_image;
+    for (const ViewScore& s : scores) {
+        if (!s.filled) continue;
+        per_image["l1"].push_back(s.l1);
+        per_image["psnr"].push_back(s.psnr);
+        per_image["ssim"].push_back(s.ssim);
+        per_image["cc_l1"].push_back(s.cc_l1);
+        per_image["cc_psnr"].push_back(s.cc_psnr);
+        per_image["cc_ssim"].push_back(s.cc_ssim);
     }
 
     if (per_image.empty()) {
@@ -1180,4 +1290,4 @@ void TrainerSession::eval() {
     log("Eval metrics written to " + (out_dir / "metrics.json").string());
 }
 
-}  // namespace ssplat
+}  // namespace spirula

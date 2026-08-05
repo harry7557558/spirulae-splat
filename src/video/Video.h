@@ -7,9 +7,9 @@
 // what is missing, and the caller falls back to an external ffmpeg (that is
 // what src/app/gui/DatasetPrep.cpp does).
 //
-// The whole subsystem is compiled only when SSPLAT_ENABLE_PATENTED is ON --
+// The whole subsystem is compiled only when SS_ENABLE_PATENTED is ON --
 // H.264 / H.265 / AV1 bitstream parsing is the patent-encumbered part of this
-// repository, and a default build leaves it out. See cmake/SsplatOptions.cmake.
+// repository, and a default build leaves it out. See cmake/SsOptions.cmake.
 
 #include "nn/io/Image.h"
 

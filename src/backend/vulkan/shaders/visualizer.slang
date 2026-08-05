@@ -332,7 +332,7 @@ void vis_compute_aabb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
 static const uint kMortonBitsPerDim = 21;
 
-#ifndef SSPLAT_EMULATE_INT64
+#ifndef SS_EMULATE_INT64
 
 [ForceInline]
 uint64_t insert_2_zeros_between_bits(uint64_t x) {
@@ -359,7 +359,7 @@ u64key_t get_morton_key(float3 pos) {
     return (x * 2 + y) * 2 + z;
 }
 
-#else  // SSPLAT_EMULATE_INT64: same 63-bit codes in a (lo, hi) word pair
+#else  // SS_EMULATE_INT64: same 63-bit codes in a (lo, hi) word pair
 
 // Classic 32-bit 3D spread: bits 0..9 -> bits 0, 3, ..., 27.
 [ForceInline]
@@ -399,7 +399,7 @@ u64key_t get_morton_key(float3 pos) {
     return uint2(mx.x | my.x | mz.x, mx.y | my.y | mz.y);
 }
 
-#endif  // SSPLAT_EMULATE_INT64
+#endif  // SS_EMULATE_INT64
 
 struct VisMortonParams {  // 48 bytes: pushed directly
     float4* buffer;

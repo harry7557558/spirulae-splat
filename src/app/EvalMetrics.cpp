@@ -1,27 +1,83 @@
 // EvalMetrics.cpp -- see EvalMetrics.h.
+//
+// Everything here accumulates in double and is parallelized with OpenMP over
+// pixels or rows. At 4K this is the difference between 4.7 s and 1.1 s per
+// eval view, which is most of what the eval pass costs.
+//
+// Reductions sum fixed per-thread partials rather than using `omp reduction`,
+// so the combine order is at least stable within a thread count. The reported
+// metrics are floats, and reordering a double sum of a few million terms moves
+// the result by ~1e-11 relative -- far below float precision, so every metric
+// this file returns is bit-identical to the serial version and independent of
+// OMP_NUM_THREADS. The one place that was NOT true is documented on
+// solve_spd().
 
 #include "app/EvalMetrics.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
-namespace ssplat {
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+namespace spirula {
+
+namespace {
+
+int max_threads() {
+#ifdef _OPENMP
+    return std::max(1, omp_get_max_threads());
+#else
+    return 1;
+#endif
+}
+
+int this_thread() {
+#ifdef _OPENMP
+    return omp_get_thread_num();
+#else
+    return 0;
+#endif
+}
+
+// Sum in thread order, so the result does not depend on who finished first.
+double combine(const std::vector<double>& partials) {
+    double s = 0.0;
+    for (double v : partials) s += v;
+    return s;
+}
+
+}  // namespace
 
 float image_l1(const float* a, const float* b, int64_t n) {
-    double s = 0.0;
-    for (int64_t i = 0; i < n; i++) s += std::abs((double)a[i] - (double)b[i]);
-    return (float)(s / (double)std::max<int64_t>(n, 1));
+    std::vector<double> part((size_t)max_threads(), 0.0);
+#pragma omp parallel
+    {
+        double s = 0.0;
+#pragma omp for schedule(static) nowait
+        for (int64_t i = 0; i < n; i++) s += std::abs((double)a[i] - (double)b[i]);
+        part[(size_t)this_thread()] = s;
+    }
+    return (float)(combine(part) / (double)std::max<int64_t>(n, 1));
 }
 
 float image_psnr(const float* a, const float* b, int64_t n) {
-    double s = 0.0;
-    for (int64_t i = 0; i < n; i++) {
-        double d = (double)a[i] - (double)b[i];
-        s += d * d;
+    std::vector<double> part((size_t)max_threads(), 0.0);
+#pragma omp parallel
+    {
+        double s = 0.0;
+#pragma omp for schedule(static) nowait
+        for (int64_t i = 0; i < n; i++) {
+            double d = (double)a[i] - (double)b[i];
+            s += d * d;
+        }
+        part[(size_t)this_thread()] = s;
     }
-    double mse = s / (double)std::max<int64_t>(n, 1);
+    double mse = combine(part) / (double)std::max<int64_t>(n, 1);
     if (mse <= 0.0) return std::numeric_limits<float>::infinity();
     return (float)(10.0 * std::log10(1.0 / mse));   // data_range = 1
 }
@@ -57,26 +113,53 @@ int reflect(int i, int n) {
 }
 
 // Separable gaussian blur of one channel with reflect padding: [H, W] -> [H, W].
-void conv_reflect(const std::vector<double>& src, int H, int W,
-                  const std::vector<double>& g, std::vector<double>& dst,
-                  std::vector<double>& tmp) {
+// Each pass splits the reflecting border off the interior so the hot loop is a
+// straight dot product. `dst` and `tmp` must already be H*W long.
+void conv_reflect(const double* src, int H, int W, const double* g,
+                  double* dst, double* tmp) {
     const int p = kWin / 2;
-    tmp.assign((size_t)H * W, 0.0);
-    for (int y = 0; y < H; y++)
-        for (int x = 0; x < W; x++) {
-            double s = 0.0;
-            for (int k = 0; k < kWin; k++)
-                s += src[(size_t)y * W + reflect(x + k - p, W)] * g[k];
-            tmp[(size_t)y * W + x] = s;
+
+#pragma omp parallel for schedule(static)
+    for (int y = 0; y < H; y++) {
+        const double* s = src + (size_t)y * W;
+        double* d = tmp + (size_t)y * W;
+        const int lo = std::min(p, W), hi = std::max(p, W - p);
+        for (int x = 0; x < lo; x++) {
+            double acc = 0.0;
+            for (int k = 0; k < kWin; k++) acc += s[reflect(x + k - p, W)] * g[k];
+            d[x] = acc;
         }
-    dst.assign((size_t)H * W, 0.0);
-    for (int y = 0; y < H; y++)
-        for (int x = 0; x < W; x++) {
-            double s = 0.0;
-            for (int k = 0; k < kWin; k++)
-                s += tmp[(size_t)reflect(y + k - p, H) * W + x] * g[k];
-            dst[(size_t)y * W + x] = s;
+        for (int x = lo; x < hi; x++) {       // interior: no reflection
+            double acc = 0.0;
+            for (int k = 0; k < kWin; k++) acc += s[x + k - p] * g[k];
+            d[x] = acc;
         }
+        for (int x = hi; x < W; x++) {
+            double acc = 0.0;
+            for (int k = 0; k < kWin; k++) acc += s[reflect(x + k - p, W)] * g[k];
+            d[x] = acc;
+        }
+    }
+
+#pragma omp parallel for schedule(static)
+    for (int y = 0; y < H; y++) {
+        double* d = dst + (size_t)y * W;
+        if (y >= p && y < H - p) {            // interior row: no reflection
+            for (int x = 0; x < W; x++) {
+                double acc = 0.0;
+                for (int k = 0; k < kWin; k++)
+                    acc += tmp[(size_t)(y + k - p) * W + x] * g[k];
+                d[x] = acc;
+            }
+        } else {
+            for (int x = 0; x < W; x++) {
+                double acc = 0.0;
+                for (int k = 0; k < kWin; k++)
+                    acc += tmp[(size_t)reflect(y + k - p, H) * W + x] * g[k];
+                d[x] = acc;
+            }
+        }
+    }
 }
 
 }  // namespace
@@ -84,22 +167,46 @@ void conv_reflect(const std::vector<double>& src, int H, int W,
 float image_ssim(const float* a, const float* b, int H, int W, int C) {
     if (H < kWin || W < kWin)
         throw std::runtime_error("image_ssim: image smaller than the 11x11 window");
-    const std::vector<double> g = gaussian_window();
+    const std::vector<double> gw = gaussian_window();
+    const double* g = gw.data();
     const double C1 = (kK1 * 1.0) * (kK1 * 1.0);
     const double C2 = (kK2 * 1.0) * (kK2 * 1.0);
+    const size_t np = (size_t)H * W;
 
-    std::vector<double> x((size_t)H * W), y((size_t)H * W),
-                        xx((size_t)H * W), yy((size_t)H * W), xy((size_t)H * W);
-    std::vector<double> mx, my, mxx, myy, mxy, tmp;
+    // Eleven H*W double buffers -- 52 MB each at 4K. One thread_local slab,
+    // grown and never freed: allocating them per call means ~1.1 GB of mmap +
+    // kernel page-zeroing per view, and the mmap lock is per PROCESS, so with
+    // several eval views in flight the faulting serializes and costs more than
+    // the arithmetic does.
+    //
+    // The slab is thread_local but the pointers below are ordinary locals, so
+    // the OpenMP regions all address the SAME memory. Naming the vectors
+    // directly inside a parallel region would instead resolve to each team
+    // thread's own (empty) copy -- which is exactly as bad as it sounds.
+    thread_local std::vector<double> slab;
+    if (slab.size() < 11 * np) slab.resize(11 * np);
+    double* x   = slab.data();
+    double* y   = x + np;
+    double* xx  = y + np;
+    double* yy  = xx + np;
+    double* xy  = yy + np;
+    double* mx  = xy + np;
+    double* my  = mx + np;
+    double* mxx = my + np;
+    double* myy = mxx + np;
+    double* mxy = myy + np;
+    double* tmp = mxy + np;
+    std::vector<double> part((size_t)max_threads());
 
     double total = 0.0;
     for (int c = 0; c < C; c++) {
-        for (int64_t p = 0; p < (int64_t)H * W; p++) {
+#pragma omp parallel for schedule(static)
+        for (int64_t p = 0; p < (int64_t)np; p++) {
             double va = a[p * C + c], vb = b[p * C + c];
-            x[(size_t)p] = va;  y[(size_t)p] = vb;
-            xx[(size_t)p] = va * va;
-            yy[(size_t)p] = vb * vb;
-            xy[(size_t)p] = va * vb;
+            x[p] = va;  y[p] = vb;
+            xx[p] = va * va;
+            yy[p] = vb * vb;
+            xy[p] = va * vb;
         }
         conv_reflect(x,  H, W, g, mx,  tmp);
         conv_reflect(y,  H, W, g, my,  tmp);
@@ -107,17 +214,23 @@ float image_ssim(const float* a, const float* b, int H, int W, int C) {
         conv_reflect(yy, H, W, g, myy, tmp);
         conv_reflect(xy, H, W, g, mxy, tmp);
 
-        double acc = 0.0;
-        for (size_t i = 0; i < mx.size(); i++) {
-            double ux = mx[i], uy = my[i];
-            double sxx = mxx[i] - ux * ux;
-            double syy = myy[i] - uy * uy;
-            double sxy = mxy[i] - ux * uy;
-            double num = (2.0 * ux * uy + C1) * (2.0 * sxy + C2);
-            double den = (ux * ux + uy * uy + C1) * (sxx + syy + C2);
-            acc += num / den;
+        std::fill(part.begin(), part.end(), 0.0);
+#pragma omp parallel
+        {
+            double acc = 0.0;
+#pragma omp for schedule(static) nowait
+            for (int64_t i = 0; i < (int64_t)np; i++) {
+                double ux = mx[i], uy = my[i];
+                double sxx = mxx[i] - ux * ux;
+                double syy = myy[i] - uy * uy;
+                double sxy = mxy[i] - ux * uy;
+                double num = (2.0 * ux * uy + C1) * (2.0 * sxy + C2);
+                double den = (ux * ux + uy * uy + C1) * (sxx + syy + C2);
+                acc += num / den;
+            }
+            part[(size_t)this_thread()] = acc;
         }
-        total += acc / (double)((size_t)H * W);
+        total += combine(part) / (double)np;
     }
     return (float)(total / (double)C);
 }
@@ -130,6 +243,10 @@ float image_ssim(const float* a, const float* b, int H, int W, int C) {
 //   then r, g, b, then 1.
 // For C=3 that is 10 columns, so each channel solve is a 10x10 normal-equation
 // system -- small enough for a plain Cholesky in double.
+//
+// All C channels are accumulated in ONE pass over the pixels: the design row
+// depends only on the pixel, so building it per channel (as the first version
+// did) repeated two thirds of the work.
 
 namespace {
 
@@ -144,16 +261,26 @@ void build_row(const float* px, int C, double* row) {
 }
 
 // Solve (A^T A) w = A^T b for a symmetric positive-(semi)definite normal
-// matrix. Falls back to a tiny ridge if the system is singular, which happens
-// when a channel's mask leaves too few unsaturated pixels.
+// matrix. Returns false if the system is singular, which happens when a
+// channel's mask leaves too few unsaturated pixels.
+//
+// Degeneracy is judged RELATIVE to the original diagonal. An absolute
+// `pivot <= 0` test is a hair-trigger: on a rank-deficient system the pivot
+// lands within an ulp of zero, so which side it falls on depends on the
+// summation order -- i.e. on the thread count, which is how this surfaced. A
+// relative cut decides the same way every time, and a pivot that small
+// carries no information to lose.
 bool solve_spd(std::vector<double>& M, std::vector<double>& v, int n) {
+    std::vector<double> tol((size_t)n);
+    for (int i = 0; i < n; i++) tol[(size_t)i] = 1e-12 * M[(size_t)i * n + i];
+
     for (int i = 0; i < n; i++) {
         for (int j = 0; j <= i; j++) {
             double s = M[(size_t)i * n + j];
             for (int k = 0; k < j; k++)
                 s -= M[(size_t)i * n + k] * M[(size_t)j * n + k];
             if (i == j) {
-                if (s <= 0.0) return false;
+                if (!(s > tol[(size_t)i])) return false;   // also catches NaN
                 M[(size_t)i * n + j] = std::sqrt(s);
             } else {
                 M[(size_t)i * n + j] = s / M[(size_t)j * n + j];
@@ -178,38 +305,92 @@ bool solve_spd(std::vector<double>& M, std::vector<double>& v, int n) {
 std::vector<float> color_correct(const float* img, const float* ref,
                                  int64_t num_pixels, int C,
                                  int num_iters, float eps) {
+    std::vector<float> out;
+    color_correct_into(img, ref, num_pixels, C, out, num_iters, eps);
+    return out;
+}
+
+void color_correct_into(const float* img, const float* ref,
+                        int64_t num_pixels, int C, std::vector<float>& out,
+                        int num_iters, float eps) {
     const int n = design_cols(C);
+    const size_t nv = (size_t)num_pixels * C;
     const double lo = (double)eps, hi = 1.0 - (double)eps;
     auto unclipped = [&](double z) { return z >= lo && z <= hi; };
 
-    std::vector<float> cur(img, img + (size_t)num_pixels * C);
+    // Grown, never shrunk, and thread_local for the same reason as SSIM's
+    // slab: at 4K this is ~175 MB of scratch that would otherwise be mmapped
+    // and faulted in once per view.
+    out.resize(nv);
+    thread_local std::vector<float> scratch;
+    thread_local std::vector<uint8_t> mask0;
+    if (scratch.size() < nv) scratch.resize(nv);
+    if (mask0.size() < nv) mask0.resize(nv);
+
+    float* cur  = out.data();
+    float* next = scratch.data();
+    std::memcpy(cur, img, nv * sizeof(float));
 
     // Saturation of the ORIGINAL input, fixed across iterations (mask0).
-    std::vector<uint8_t> mask0((size_t)num_pixels * C);
+    uint8_t* mask = mask0.data();
+#pragma omp parallel for schedule(static)
     for (int64_t i = 0; i < num_pixels * C; i++)
-        mask0[(size_t)i] = unclipped((double)img[i]) ? 1 : 0;
+        mask[(size_t)i] = unclipped((double)img[i]) ? 1 : 0;
 
-    std::vector<double> row((size_t)n);
+    const int T = max_threads();
+    const size_t per_thread = (size_t)C * ((size_t)n * n + n);
+    std::vector<double> acc((size_t)T * per_thread);
+
     std::vector<double> warp((size_t)n * C);
     std::vector<double> M((size_t)n * n), v((size_t)n);
 
     for (int it = 0; it < num_iters; it++) {
+        std::fill(acc.begin(), acc.end(), 0.0);
+
+        // One pass over the pixels fills every channel's normal equations.
+#pragma omp parallel
+        {
+            double* mine = acc.data() + (size_t)this_thread() * per_thread;
+            std::vector<double> row((size_t)n);
+#pragma omp for schedule(static) nowait
+            for (int64_t p = 0; p < num_pixels; p++) {
+                const float* px = &cur[(size_t)p * C];
+                // Rows saturated in the input, in the current estimate, or in
+                // the reference contribute nothing.
+                unsigned live = 0;
+                for (int c = 0; c < C; c++)
+                    if (mask[(size_t)p * C + c] && unclipped((double)px[c]) &&
+                        unclipped((double)ref[(size_t)p * C + c]))
+                        live |= 1u << c;
+                if (!live) continue;
+
+                build_row(px, C, row.data());
+                const double* r = row.data();
+                for (int c = 0; c < C; c++) {
+                    if (!(live & (1u << c))) continue;
+                    double* Mc = mine + (size_t)c * ((size_t)n * n + n);
+                    double* vc = Mc + (size_t)n * n;
+                    const double b = (double)ref[(size_t)p * C + c];
+                    for (int i = 0; i < n; i++) {
+                        const double ri = r[i];
+                        double* Mi = Mc + (size_t)i * n;
+                        for (int j = 0; j <= i; j++) Mi[j] += ri * r[j];
+                        vc[i] += ri * b;
+                    }
+                }
+            }
+        }
+
         for (int c = 0; c < C; c++) {
             std::fill(M.begin(), M.end(), 0.0);
             std::fill(v.begin(), v.end(), 0.0);
-            for (int64_t p = 0; p < num_pixels; p++) {
-                const float* px = &cur[(size_t)p * C];
-                double b = (double)ref[(size_t)p * C + c];
-                // Rows saturated in the input, in the current estimate, or in
-                // the reference contribute nothing.
-                if (!mask0[(size_t)p * C + c] || !unclipped((double)px[c]) ||
-                    !unclipped(b))
-                    continue;
-                build_row(px, C, row.data());
+            for (int t = 0; t < T; t++) {          // thread order: reproducible
+                const double* Mc = acc.data() + (size_t)t * per_thread
+                                 + (size_t)c * ((size_t)n * n + n);
+                const double* vc = Mc + (size_t)n * n;
                 for (int i = 0; i < n; i++) {
-                    for (int j = 0; j <= i; j++)
-                        M[(size_t)i * n + j] += row[i] * row[j];
-                    v[i] += row[i] * b;
+                    for (int j = 0; j <= i; j++) M[(size_t)i * n + j] += Mc[(size_t)i * n + j];
+                    v[i] += vc[i];
                 }
             }
             for (int i = 0; i < n; i++)                 // mirror to full
@@ -222,19 +403,25 @@ std::vector<float> color_correct(const float* img, const float* ref,
             }
             for (int i = 0; i < n; i++) warp[(size_t)i * C + c] = v[i];
         }
+
         // Apply the warp to update the running estimate.
-        std::vector<float> next((size_t)num_pixels * C);
-        for (int64_t p = 0; p < num_pixels; p++) {
-            build_row(&cur[(size_t)p * C], C, row.data());
-            for (int c = 0; c < C; c++) {
-                double s = 0.0;
-                for (int i = 0; i < n; i++) s += row[i] * warp[(size_t)i * C + c];
-                next[(size_t)p * C + c] = (float)std::min(std::max(s, 0.0), 1.0);
+#pragma omp parallel
+        {
+            std::vector<double> row((size_t)n);
+#pragma omp for schedule(static)
+            for (int64_t p = 0; p < num_pixels; p++) {
+                build_row(&cur[(size_t)p * C], C, row.data());
+                for (int c = 0; c < C; c++) {
+                    double s = 0.0;
+                    for (int i = 0; i < n; i++) s += row[(size_t)i] * warp[(size_t)i * C + c];
+                    next[(size_t)p * C + c] = (float)std::min(std::max(s, 0.0), 1.0);
+                }
             }
         }
-        cur.swap(next);
+        std::swap(cur, next);
     }
-    return cur;
+    // An odd iteration count leaves the answer in the scratch half.
+    if (cur != out.data()) std::memcpy(out.data(), cur, nv * sizeof(float));
 }
 
-}  // namespace ssplat
+}  // namespace spirula

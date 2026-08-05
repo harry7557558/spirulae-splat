@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <vector>
 
-#if SSPLAT_HAVE_ALIKED
+#if SS_HAVE_ALIKED
 #include "aliked/Aliked.h"
 #endif
 
@@ -22,7 +22,7 @@ private:
     SiftExtractor ext_;
 };
 
-#if SSPLAT_HAVE_ALIKED
+#if SS_HAVE_ALIKED
 
 // ALIKED behind the same contract.
 //
@@ -96,7 +96,7 @@ private:
     aliked::ExtractOptions  aopts_;
 };
 
-#endif  // SSPLAT_HAVE_ALIKED
+#endif  // SS_HAVE_ALIKED
 
 }  // namespace
 
@@ -109,7 +109,7 @@ std::unique_ptr<IFeatureExtractor> createFeatureExtractor(const std::string& typ
                                                           const AlikedOptions& aliked) {
     if (type == "sift") return std::make_unique<SiftFrontend>(sift);
     if (isAlikedType(type)) {
-#if SSPLAT_HAVE_ALIKED
+#if SS_HAVE_ALIKED
         AlikedOptions opt = aliked;
         // --features names the checkpoint, so an explicit --aliked-model is
         // only needed to point at a file on disk.
@@ -118,7 +118,7 @@ std::unique_ptr<IFeatureExtractor> createFeatureExtractor(const std::string& typ
 #else
         throw std::runtime_error(
             "this build has no learned frontend: '" + type +
-            "' needs the inference layer, which is SSPLAT_BUILD_SAM=ON");
+            "' needs the inference layer, which is SS_BUILD_SAM=ON");
 #endif
     }
     throw std::runtime_error("unknown feature type '" + type +

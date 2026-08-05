@@ -10,7 +10,7 @@
 // Both models are permissively licensed -- ALIKED is BSD-3-Clause, LightGlue
 // Apache-2.0 -- so unlike the segmentation checkpoints
 // (src/app/gui/ModelCache.cpp) this needs no consent gate. It still never
-// downloads behind the user's back: `ssplat sfm` prints what it is fetching
+// downloads behind the user's back: `spirula sfm` prints what it is fetching
 // and from where, and --aliked-model points at a file instead.
 
 #include <cstdint>
@@ -32,7 +32,7 @@ struct ModelSource {
 // Null when `id` is not one of ours.
 const ModelSource* find_model_source(const std::string& id);
 
-// Where a cached checkpoint lives: <cache>/spirulae-splat/models/<file>.
+// Where a cached checkpoint lives: <cache>/spirula-studio/models/<file>.
 // Mirrors src/app/gui/AppPaths.cpp's cache_dir(); duplicated rather than
 // shared because src/aliked/ sits below src/app/ in the layering and may not
 // include it.

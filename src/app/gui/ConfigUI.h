@@ -1,7 +1,7 @@
 #pragma once
 
 // ConfigUI -- the "Advanced options" editor. All widgets are expanded from
-// the SSPLAT_CONFIG_FIELDS X-macro (config/TrainConfig.h), so every one of
+// the SS_CONFIG_FIELDS X-macro (config/TrainConfig.h), so every one of
 // the training config fields is editable, with:
 //   - grouping by config group (Run / Dataset / Data loading / Model /
 //     Optimizer), collapsed by default so novices are not overwhelmed
@@ -25,7 +25,7 @@ struct ConfigUIState {
 // Draw the full generated editor. `defaults` is the preset-applied baseline
 // used for modified-highlighting and reset. Returns true when any field
 // changed this frame.
-bool draw_config_editor(SsplatConfig& cfg, const SsplatConfig& defaults,
+bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
                         ConfigUIState& st);
 
 // Shared helper: hoverable "(?)"-style tooltip with wrapped text.

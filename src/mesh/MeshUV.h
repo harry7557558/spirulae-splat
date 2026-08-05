@@ -23,8 +23,8 @@
  *      gutter dilation + background fill so bilinear/mip sampling never
  *      reads garbage.
  */
-#ifndef SPIRULAE_MESH_UV_H
-#define SPIRULAE_MESH_UV_H
+#ifndef SPIRULA_MESH_UV_H
+#define SPIRULA_MESH_UV_H
 
 #include <functional>
 #include <vector>

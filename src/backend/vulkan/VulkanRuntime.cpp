@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "core/Env.h"
 
 namespace backend {
 namespace vk {
@@ -220,7 +221,7 @@ std::deque<StagingReservation> g_staging_reservations;
 VkDeviceSize staging_capacity() {
     static VkDeviceSize cap = [] {
         long mb = 64;
-        if (const char* env = std::getenv("SSPLAT_VK_STAGING_MB"))
+        if (const char* env = spirula::env("VK_STAGING_MB"))
             mb = std::max(1L, std::strtol(env, nullptr, 10));
         return (VkDeviceSize)mb << 20;
     }();
@@ -872,7 +873,7 @@ void query_slot_release(int slot) {
     g_query_free.push_back(slot);
 }
 
-// GPU-timestamp kernel timing (SSPLAT_PROFILE): outstanding (start,end) query
+// GPU-timestamp kernel timing (SS_PROFILE): outstanding (start,end) query
 // slot pairs, one per timed dispatch, resolved after a device drain.
 struct TsPair { int qs, qe; const char* entry; };
 std::mutex g_ts_mutex;
@@ -989,7 +990,7 @@ void gpu_ts_resolve() {
         if (g_ts_untimed && !g_ts_warned) {
             g_ts_warned = true;
             std::fprintf(stderr,
-                         "[ssplat-profile] note: %llu dispatch(es) untimed "
+                         "[spirula-profile] note: %llu dispatch(es) untimed "
                          "(timestamp pool exhausted)\n",
                          (unsigned long long)g_ts_untimed);
         }
@@ -1019,7 +1020,7 @@ void gpu_ts_resolve() {
     if (g_ts_untimed && !g_ts_warned) {
         g_ts_warned = true;
         std::fprintf(stderr,
-                     "[ssplat-profile] note: %llu dispatch(es) untimed "
+                     "[spirula-profile] note: %llu dispatch(es) untimed "
                      "(timestamp pool exhausted)\n",
                      (unsigned long long)g_ts_untimed);
     }
@@ -1036,7 +1037,7 @@ void gpu_ts_report_by_entry() {
         return a.second.ns > b.second.ns;
     });
     std::fprintf(stderr,
-                 "\n[ssplat-profile] ---- GPU time by kernel (entry) ----\n");
+                 "\n[spirula-profile] ---- GPU time by kernel (entry) ----\n");
     std::fprintf(stderr, "%-44s %7s %10s %9s\n", "entry", "count", "gpu_ms",
                  "us/call");
     for (const auto& r : rows) {
@@ -1045,7 +1046,7 @@ void gpu_ts_report_by_entry() {
         std::fprintf(stderr, "%-44s %7llu %10.3f %9.2f\n", r.first.c_str(),
                      (unsigned long long)r.second.count, ms, us);
     }
-    std::fprintf(stderr, "[ssplat-profile] -----------------------------------\n");
+    std::fprintf(stderr, "[spirula-profile] -----------------------------------\n");
 }
 
 void pipelines_shutdown();  // VulkanPipelines.cpp
@@ -1054,7 +1055,7 @@ void runtime_shutdown() {
     Context& ctx = Context::get();  // called from within ~Context's body;
     VkDevice dev = ctx.device();    // the device is still alive here
 
-    gpu_ts_report_by_entry();  // per-kernel GPU breakdown (SSPLAT_PROFILE)
+    gpu_ts_report_by_entry();  // per-kernel GPU breakdown (SS_PROFILE)
     pipelines_shutdown();
     {
         std::lock_guard<std::mutex> lock(g_stream_mutex);

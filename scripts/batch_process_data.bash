@@ -10,7 +10,7 @@ max_num_features=8192
 # Path to a COLMAP vocabulary tree (e.g. vocab_tree_flickr100K_words32K.bin,
 # downloadable from https://demuc.de/colmap/). Override with the environment
 # variable, or edit the default below to point at your local copy.
-vocab_tree_path="${SSPLAT_VOCAB_TREE:?set SSPLAT_VOCAB_TREE to your COLMAP vocab tree .bin}"
+vocab_tree_path="${SS_VOCAB_TREE:?set SS_VOCAB_TREE to your COLMAP vocab tree .bin}"
 
 extension="*.mov"
 

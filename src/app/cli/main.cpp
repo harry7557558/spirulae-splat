@@ -1,10 +1,10 @@
-// main.cpp -- standalone CLI trainer (no Python, no tyro).
+// main.cpp -- the trainer, `spirula train`.
 //
-// Command shape mirrors spirulae-train:
-//     ssplat-train [<preset>] --data <dir> [--flag value ...]
-// where <preset> is one of the tyro subcommands (3dgs = default,
-// 360-camera, in-the-wild, linear-color, synthetic, meshing,
-// academic-baseline). Flags are the FLATTENED training config fields
+//     spirula train [<preset>] --data <dir> [--flag value ...]
+//
+// where <preset> is one of 3dgs (the default), 360-camera, in-the-wild,
+// linear-color, synthetic, meshing, academic-baseline. Flags are the
+// FLATTENED training config fields
 // (--sh-degree, not --model.sh-degree); '-' and '_' are interchangeable;
 // booleans take a value (--warp-to-pinhole 1). The config struct, flag
 // table, and preset appliers all come from config/TrainConfig.h.
@@ -31,14 +31,15 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "core/Env.h"
 
 namespace fs = std::filesystem;
 
-using namespace ssplat;
+using namespace spirula;
 
 
 // ===========================================================================
-// Generic flag parsing over the generated SSPLAT_CONFIG_FIELDS table
+// Generic flag parsing over the generated SS_CONFIG_FIELDS table
 // ===========================================================================
 
 namespace {
@@ -122,18 +123,18 @@ void check_choices(const T&, const std::string&, const char*) {}
 // Returns false if the key is unknown. Records the key in `seen`, which
 // --resume needs: a flag the user actually passed wins over the checkpoint's
 // config, including when its value happens to equal the default.
-bool set_config_field(SsplatConfig& c, const std::string& key,
+bool set_config_field(TrainConfig& c, const std::string& key,
                       int argc, char** argv, int& i,
                       std::set<std::string>& seen) {
-#define SSPLAT_TRY_SET(type, member, default_, group, choices, help)           \
+#define SS_TRY_SET(type, member, default_, group, choices, help)               \
     if (key == #member) {                                                      \
         consume(c.member, key, argc, argv, i);                                 \
         check_choices(c.member, key, choices);                                 \
         seen.insert(#member);                                                  \
         return true;                                                           \
     }
-    SSPLAT_CONFIG_FIELDS(SSPLAT_TRY_SET)
-#undef SSPLAT_TRY_SET
+    SS_CONFIG_FIELDS(SS_TRY_SET)
+#undef SS_TRY_SET
     return false;
 }
 
@@ -199,10 +200,10 @@ void select_and_print_devices(const std::string& requested) {
     std::fflush(stdout);
 }
 
-void print_help(const char* argv0, const SsplatConfig& c) {
+void print_help(const char* argv0, const TrainConfig& c) {
     std::printf("usage: %s [<preset>] --data <dataset_dir> [--flag value ...]\n\n", argv0);
     std::printf("presets (tyro subcommands; default: 3dgs):\n");
-    for (const auto& p : kSsplatPresets)
+    for (const auto& p : kTrainPresets)
         std::printf("  %-18s %s\n", p.name, p.help);
     std::printf("\napp flags:\n");
     std::printf("  --device <index|name substring>\n"
@@ -211,7 +212,7 @@ void print_help(const char* argv0, const SsplatConfig& c) {
     std::printf("\nflags ('-' and '_' interchangeable; bools take 0/1; 'none' clears "
                 "optional values;\n defaults shown for the selected preset):\n");
     const char* cur_group = "";
-#define SSPLAT_PRINT_HELP(type, member, default_, group, choices, help)        \
+#define SS_PRINT_HELP(type, member, default_, group, choices, help)            \
     if (std::strcmp(cur_group, group) != 0) {                                  \
         cur_group = group;                                                     \
         std::printf("\n  [%s]\n", group);                                      \
@@ -229,13 +230,13 @@ void print_help(const char* argv0, const SsplatConfig& c) {
                     (ch.empty() || ch == "none") ? "" : (" {" + ch + "}").c_str(), \
                     "", h.c_str());                                            \
     }
-    SSPLAT_CONFIG_FIELDS(SSPLAT_PRINT_HELP)
-#undef SSPLAT_PRINT_HELP
+    SS_CONFIG_FIELDS(SS_PRINT_HELP)
+#undef SS_PRINT_HELP
 }
 
 
 // Debug dump for numeric verification against the Python dataparser /
-// trainer camera algebra (SSPLAT_DUMP_CAMERAS=<path> env). Full precision.
+// trainer camera algebra (SS_DUMP_CAMERAS=<path> env). Full precision.
 void dump_cameras_json(const char* path, const ParsedDataset& ds,
                        const PostSplitCameras& post) {
     FILE* f = std::fopen(path, "w");
@@ -287,7 +288,7 @@ void dump_cameras_json(const char* path, const ParsedDataset& ds,
 // main
 // ===========================================================================
 
-int ssplat_train_main(int argc, char** argv) {
+int spirula_train_main(int argc, char** argv) {
     try {
         // ---- Preset + flags ------------------------------------------------
         std::string preset = "3dgs";
@@ -295,11 +296,11 @@ int ssplat_train_main(int argc, char** argv) {
         int argi = 1;
         if (argi < argc && argv[argi][0] != '-') preset = preset_arg = argv[argi++];
 
-        SsplatConfig cfg;
+        TrainConfig cfg;
         std::set<std::string> seen;
-        if (!ssplat_apply_preset(cfg, preset)) {
+        if (!train_apply_preset(cfg, preset)) {
             std::string names;
-            for (const auto& p : kSsplatPresets) names += std::string(" ") + p.name;
+            for (const auto& p : kTrainPresets) names += std::string(" ") + p.name;
             throw std::runtime_error("unknown preset '" + preset + "'; expected one of:" + names);
         }
 
@@ -344,11 +345,11 @@ int ssplat_train_main(int argc, char** argv) {
             std::printf("[resume] %s\n", cfg.resume.c_str());
         }
 
-#define SSPLAT_CHECK_REQUIRED(member)                                          \
+#define SS_CHECK_REQUIRED(member)                                          \
         if (cfg.member.empty())                                                \
             throw std::runtime_error("--" #member " is required");
-        SSPLAT_CONFIG_REQUIRED_FIELDS(SSPLAT_CHECK_REQUIRED)
-#undef SSPLAT_CHECK_REQUIRED
+        SS_CONFIG_REQUIRED_FIELDS(SS_CHECK_REQUIRED)
+#undef SS_CHECK_REQUIRED
 
         select_and_print_devices(device_flag);
 
@@ -363,7 +364,7 @@ int ssplat_train_main(int argc, char** argv) {
         // Hidden debug flag (set via env to avoid polluting the config):
         // dump parsed + post-split arrays as JSON and exit, for numeric
         // verification against the Python dataparser/trainer algebra.
-        if (const char* dump = std::getenv("SSPLAT_DUMP_CAMERAS")) {
+        if (const char* dump = spirula::env("DUMP_CAMERAS")) {
             dump_cameras_json(dump, session.ds, session.post);
             std::printf("Dumped cameras to %s\n", dump);
             return 0;

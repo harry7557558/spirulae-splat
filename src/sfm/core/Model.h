@@ -2,7 +2,7 @@
 //
 // Cameras, images (poses + 2D points), and 3D points with tracks, written to
 // and read from COLMAP's cameras.bin / images.bin / points3D.bin so the output
-// drops into spirulae-splat and can be diffed against COLMAP. Little-endian
+// drops into the dataset parser and can be diffed against COLMAP. Little-endian
 // host assumed (as the rest of this repo does).
 #pragma once
 

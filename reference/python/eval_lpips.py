@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Add LPIPS to a run's metrics.json.
 
-`ssplat train --save-eval-images 1` writes one `eval-gt-NNNNN.png` /
+`spirula train --save-eval-images 1` writes one `eval-gt-NNNNN.png` /
 `eval-render-NNNNN.png` pair per held-out view and a metrics.json holding
 l1 / psnr / ssim and their colour-corrected `cc_` variants. Everything except
 LPIPS is computed natively; LPIPS needs AlexNet and VGG16, so it stays here.

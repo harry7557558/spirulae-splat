@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-using namespace ssplat::bilagrid;
+using namespace spirula::bilagrid;
 
 static int g_fail = 0;
 #define CHECK(cond, msg)                                                       \
@@ -150,9 +150,9 @@ inline int unsetenv(const char *name) {
 #endif
 
 static void test_override(const char* val, int expect, const char* label) {
-    setenv("SSPLAT_BILAGRID_BWD", val, 1);
+    setenv("SS_BILAGRID_BWD", val, 1);
     BilagridBwdSelector sel;
-    unsetenv("SSPLAT_BILAGRID_BWD");  // selector already parsed it in ctor
+    unsetenv("SS_BILAGRID_BWD");  // selector already parsed it in ctor
     ContextKey k{2, 100, 100, 8, 16, 16};
     Sim sim;
     std::vector<double> base = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7};  // arm 0 fastest
@@ -171,10 +171,10 @@ int main() {
     test_contextual_separation();
     test_elasticity();
     std::fprintf(stderr, "[override]\n");
-    test_override("v2", 6, "SSPLAT_BILAGRID_BWD=v2 pins scatter (arm 6)");
-    test_override("v1", 0, "SSPLAT_BILAGRID_BWD=v1 pins first v1 (arm 0)");
-    test_override("v1:8", 5, "SSPLAT_BILAGRID_BWD=v1:8 pins tile=8 (arm 5)");
-    test_override("#3", 3, "SSPLAT_BILAGRID_BWD=#3 pins raw index 3");
+    test_override("v2", 6, "SS_BILAGRID_BWD=v2 pins scatter (arm 6)");
+    test_override("v1", 0, "SS_BILAGRID_BWD=v1 pins first v1 (arm 0)");
+    test_override("v1:8", 5, "SS_BILAGRID_BWD=v1:8 pins tile=8 (arm 5)");
+    test_override("#3", 3, "SS_BILAGRID_BWD=#3 pins raw index 3");
 
     if (g_fail) {
         std::fprintf(stderr, "\n== %d CHECK(s) FAILED ==\n", g_fail);

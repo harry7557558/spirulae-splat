@@ -33,6 +33,8 @@
 #include <chrono>
 #include <stdexcept>
 
+#include "core/Env.h"
+
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -1439,7 +1441,7 @@ bool generate_mesh(
 
     // ---- debug: dump one camera's occupancy moments and bail out ----
     // SS_MESH_DEBUG_RENDER=<cam_idx> -> /tmp/ss_moments.f32 (float32 [H,W,3]).
-    if (const char* dbg = std::getenv("SS_MESH_DEBUG_RENDER")) {
+    if (const char* dbg = spirula::env("MESH_DEBUG_RENDER")) {
         int cam = std::atoi(dbg);
         std::vector<float> mom; int W = 0, H = 0;
         if (!ev.debug_render_moments(cam, mom, W, H)) {

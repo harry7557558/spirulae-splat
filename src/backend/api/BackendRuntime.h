@@ -5,7 +5,7 @@
 // cudaDeviceSynchronize, streams). Engine .cpp files call these instead of
 // cuda* directly; the ~54 existing call sites migrate mechanically.
 //
-// CUDA backend (the default; anything except -DSSPLAT_BACKEND_VULKAN):
+// CUDA backend (the default; anything except -DSS_BACKEND_VULKAN):
 // inline wrappers over cudart (zero-cost), included at the bottom of this
 // header. Vulkan backend: suballocating pool + staging-buffer copies + fence
 // waits (VkSplat model, see backend/README.md).
@@ -38,7 +38,7 @@ enum class MemcpyKind {
 // using backend::Stream and .cu definitions using cudaStream_t are the same
 // type — no casts anywhere. Vulkan: command-batch handle (single compute
 // queue; batches delimit submission like VkSplat's DEVICE_GUARD scopes).
-#ifndef SSPLAT_BACKEND_VULKAN
+#ifndef SS_BACKEND_VULKAN
 using Stream = struct CUstream_st*;  // == cudaStream_t
 #else
 using Stream = void*;
@@ -169,6 +169,6 @@ float  event_elapsed_ms(Event* start, Event* end);  // requires enable_timing
 
 }  // namespace backend
 
-#ifndef SSPLAT_BACKEND_VULKAN
+#ifndef SS_BACKEND_VULKAN
 #include "backend/cuda/BackendRuntimeCuda.h"
 #endif

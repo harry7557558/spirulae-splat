@@ -25,6 +25,7 @@
 #include "sfm/ba/Problem.h"
 #include "sfm/vk/EmbeddedSpirv.h"
 #include "sfm/vk/VkContext.h"
+#include "core/Env.h"
 
 enum class RealCfg { F32, F64, DF64 };
 
@@ -313,8 +314,8 @@ public:
                     have += (i ? ", " : "") + std::string(n);
                 throw std::runtime_error("shader variant '" + blob +
                                          "' is not built into this binary "
-                                         "(configured with SSPLAT_SFM_REALS / "
-                                         "SSPLAT_SFM_LOSSES); available: " + have);
+                                         "(configured with SS_SFM_REALS / "
+                                         "SS_SFM_LOSSES); available: " + have);
             }
             ctx_.loadPipelines(code, words * 4, entries);
         }
@@ -361,7 +362,7 @@ public:
         ctx_.uploadMany(up.data(), up.size());
 
         double t_upload = prof_lap();
-        if (std::getenv("SSPLAT_SFM_MAP_PROF"))
+        if (spirula::env("SFM_MAP_PROF"))
             fprintf(stderr, "[prof]   solver init: ctx %.3f buf %.3f pipe %.3f upload %.3f s\n",
                     t_ctx, t_buf, t_pipe, t_upload);
         stats_.vram_mb = ctx_.totalAllocatedMB();

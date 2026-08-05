@@ -1,9 +1,9 @@
 // Lookup for the SPIR-V blobs compiled into the binary.
 //
-// The definitions live in the generated TU that cmake/SsplatSfm.cmake produces
-// (sfm_shaders_embedded.cpp) and the `ssplat_sfm` library target compiles;
+// The definitions live in the generated TU that cmake/SsSfm.cmake produces
+// (sfm_shaders_embedded.cpp) and the `ss_sfm` library target compiles;
 // blob names are the .spv file stems, e.g. "ba_double_huber". Which variants
-// exist depends on SSPLAT_SFM_REALS / SSPLAT_SFM_LOSSES at configure time.
+// exist depends on SS_SFM_REALS / SS_SFM_LOSSES at configure time.
 #pragma once
 
 #include <cstddef>

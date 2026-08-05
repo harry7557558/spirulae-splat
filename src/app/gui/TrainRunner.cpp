@@ -6,7 +6,7 @@
 
 namespace gui {
 
-using ssplat::TrainerSession;
+using spirula::TrainerSession;
 
 void TrainRunner::push_log(const std::string& s) {
     std::lock_guard<std::mutex> lk(_mu);
@@ -26,7 +26,7 @@ std::string TrainRunner::error() {
     return _error;
 }
 
-ssplat::TrainerProgress TrainRunner::latest_progress() {
+spirula::TrainerProgress TrainRunner::latest_progress() {
     std::lock_guard<std::mutex> lk(_mu);
     return _latest;
 }
@@ -67,7 +67,7 @@ void TrainRunner::shutdown() {
     if (_web_viewer) { _web_viewer->stop(); _web_viewer.reset(); }
 }
 
-void TrainRunner::load_dataset(const SsplatConfig& cfg, const std::string& preset) {
+void TrainRunner::load_dataset(const TrainConfig& cfg, const std::string& preset) {
     shutdown();
     _engine_ready = false;
     {
@@ -93,7 +93,7 @@ void TrainRunner::load_dataset(const SsplatConfig& cfg, const std::string& prese
     });
 }
 
-void TrainRunner::start_training(const SsplatConfig& cfg, const std::string& preset) {
+void TrainRunner::start_training(const TrainConfig& cfg, const std::string& preset) {
     shutdown();
     _engine_ready = false;
     {
@@ -129,8 +129,8 @@ void TrainRunner::start_training(const SsplatConfig& cfg, const std::string& pre
             }
 
             _phase = Phase::Training;
-            ssplat::TrainerCallbacks cb;
-            cb.on_step = [this](const ssplat::TrainerProgress& p) {
+            spirula::TrainerCallbacks cb;
+            cb.on_step = [this](const spirula::TrainerProgress& p) {
                 std::lock_guard<std::mutex> lk(_mu);
                 _latest = p;
                 _latencies.push_back(p.step_latency);

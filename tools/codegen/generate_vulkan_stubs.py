@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Generate throwing stubs for kernel-launch functions the Vulkan backend has
 not implemented yet, so the portable engine layer links against
-ssplat_backend_vulkan today and loses stubs one module at a time as ports
+ss_backend_vulkan today and loses stubs one module at a time as ports
 land.
 
 Usage:
     python3 generate_vulkan_stubs.py <build-vulkan-dir> <output.cpp>
 
 The script link-probes csrc_portable's objects against
-libssplat_backend_vulkan.a, collects the undefined C++ symbols, locates each
+libss_backend_vulkan.a, collects the undefined C++ symbols, locates each
 function's declaration in the per-kernel src/kernels/**/*.cuh headers, and emits one
 throwing definition per function. Functions with no header declaration (class
 methods, templates) are listed in the generated file's header comment for
@@ -35,9 +35,9 @@ SKIP_PREFIXES = ("GOMP_", "omp_", "__kmpc")
 def probe_undefined(build_dir: Path) -> list[str]:
     objs = sorted(
         (build_dir / "CMakeFiles" / "csrc_portable.dir").rglob("*.o"))
-    lib = build_dir / "libssplat_backend_vulkan.a"
+    lib = build_dir / "libss_backend_vulkan.a"
     if not objs or not lib.exists():
-        sys.exit("build csrc_portable and ssplat_backend_vulkan first")
+        sys.exit("build csrc_portable and ss_backend_vulkan first")
     probe = build_dir / "_stub_probe.cpp"
     probe.write_text("int main(){return 0;}\n")
     r = subprocess.run(

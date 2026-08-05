@@ -44,7 +44,7 @@ class Context {
 public:
     // Lazily creates the context on first call. Selection: required features
     // filtered, then discrete > integrated > others, VRAM as tie-break.
-    // Override with SSPLAT_VK_DEVICE=<index|name substring>.
+    // Override with SS_VK_DEVICE=<index|name substring>.
     static Context& get();
 
     bool ok() const { return _device != VK_NULL_HANDLE; }

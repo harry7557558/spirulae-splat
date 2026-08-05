@@ -280,7 +280,7 @@ const int kInclusive = 0;
 // vkCreateComputePipelines on this kernel's struct form (groupshared struct
 // array + struct loads through buffer pointers), while vector types are
 // exercised by every backend kernel and compile everywhere.
-#ifndef SSPLAT_EMULATE_INT64
+#ifndef SS_EMULATE_INT64
 typedef int64_t i64acc_t;
 int64_t acc_add(int64_t a, int64_t b) { return a + b; }
 int64_t acc_sub(int64_t a, int64_t b) { return a - b; }

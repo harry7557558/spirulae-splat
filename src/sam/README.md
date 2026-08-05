@@ -31,8 +31,8 @@ way in; that tree is now read-only and this is upstream.
 ## Rules
 
 - **Vulkan only**, like `src/sfm/`. There is no CUDA path here and there will
-  not be one; the module is built by default only for `SSPLAT_BACKEND=vulkan`
-  (`SSPLAT_BUILD_SAM`), and a CUDA build keeps the `scripts/mask.py`
+  not be one; the module is built by default only for `SS_BACKEND=vulkan`
+  (`SS_BUILD_SAM`), and a CUDA build keeps the `scripts/mask.py`
   subprocess.
 - **Nothing model-agnostic belongs here.** Tensors, ops, the Vulkan runtime and
   host image I/O are `src/nn/`'s. If you find yourself adding a general kernel
@@ -160,15 +160,15 @@ Two details that are easy to get wrong:
 ## Using it
 
 ```bash
-ssplat sam devices
-ssplat sam segment --model sam3-q4_0.ggml --image street.jpg --text "school bus" --out out/
-ssplat sam segment --model sam3-q4_0.ggml --image cat.jpg --point 315,250 --out out/
-ssplat sam track   --model sam3-q4_0.ggml --frames frames/ --out masks/ --text "person; car"
-ssplat sam extract clip.mp4 --skip 30 --model sam3-q4_0.ggml --text "person"
+spirula sam devices
+spirula sam segment --model sam3-q4_0.ggml --image street.jpg --text "school bus" --out out/
+spirula sam segment --model sam3-q4_0.ggml --image cat.jpg --point 315,250 --out out/
+spirula sam track   --model sam3-q4_0.ggml --frames frames/ --out masks/ --text "person; car"
+spirula sam extract clip.mp4 --skip 30 --model sam3-q4_0.ggml --text "person"
 
 # Two clicked objects, the first corrected at frame 90. Works on a SAM 2
 # checkpoint, which has no text tower and no other way to be prompted.
-ssplat sam track --model sam2.1_hiera_tiny_f16.ggml --frames frames/ --out masks/ \
+spirula sam track --model sam2.1_hiera_tiny_f16.ggml --frames frames/ --out masks/ \
     --point 640,360 --at-frame 90 --point 700,300 \
     --object --point 120,500
 ```
@@ -182,8 +182,8 @@ session.encodeImage(nn::load_image("street.jpg"));   // once per frame
 sam::Result r = session.segmentConcept({.text = "yellow school bus"});
 ```
 
-Runtime knobs: `SSPLAT_NN_LOG=0..3`, `SSPLAT_VK_DEVICE=<index|name>`,
-`SSPLAT_PROFILE=1`, `SSPLAT_VK_VALIDATION=1`, `SSPLAT_NN_DEBUG_SYNC=1`.
+Runtime knobs: `SS_NN_LOG=0..3`, `SS_VK_DEVICE=<index|name>`,
+`SS_PROFILE=1`, `SS_VK_VALIDATION=1`, `SS_NN_DEBUG_SYNC=1`.
 
 ## Checkpoints
 
@@ -192,7 +192,7 @@ published model work unchanged. Quantized files (`q4_0`, `q4_1`, `q8_0`) are
 dequantized to fp16 during upload: they shrink the *file*, not VRAM.
 
 Measured on the released SAM 3 checkpoint at its native 1008×1008
-(`ssplat sam ... --vram` prints it):
+(`spirula sam ... --vram` prints it):
 
 ```
   weights            weights        1658.5 MiB   (7 chunks)
@@ -215,10 +215,10 @@ says so.
 
 ## Speed
 
-End-to-end `ssplat sam track` on an RTX 5070 Laptop, one instance through 32
+End-to-end `spirula sam track` on an RTX 5070 Laptop, one instance through 32
 1920×1080 frames on disk — decode, model and mask PNG included. The second
 column is with `VK_KHR_cooperative_matrix`, which is on by default wherever the
-device has it; `SSPLAT_NN_COOPMAT=0` gives the first.
+device has it; `SS_NN_COOPMAT=0` gives the first.
 
 | ms/frame | fp32 | tensor cores |
 |---|---|---|
@@ -241,7 +241,7 @@ Picking Tiny over Small buys 4%, and costs thin structure in the mask.
 
 ### Where the model time goes, and why it is what it is
 
-`--profile` with `SSPLAT_NN_LOG=2` breaks it down by kernel. On the fp32 path,
+`--profile` with `SS_NN_LOG=2` breaks it down by kernel. On the fp32 path,
 72% of Hiera-T's GPU time is `flash_attn` and 15% is `gemm_nt_big`; for SAM 3 it
 is the other way round, 59% GEMM and 34% attention.
 
@@ -344,7 +344,7 @@ is sound, the memory bank and association logic run. It does not prove
 numerical fidelity, since the weights are noise; that is `nn_ops_test`'s job.
 
 Neither substitutes for running a released checkpoint, which is how the
-remaining shape and grid-size assumptions were shaken out. `ssplat sam segment`
+remaining shape and grid-size assumptions were shaken out. `spirula sam segment`
 on a real model, and the GUI's mask preview, are part of the manual checklist
 before a change lands.
 

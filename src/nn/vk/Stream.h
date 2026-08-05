@@ -88,7 +88,7 @@ public:
     void paramsAlloc(uint32_t bytes, DevicePtr* addr_out, void** mapped_out);
 
     // --- profiling --------------------------------------------------------
-    // SSPLAT_PROFILE=1: per-entry GPU time, printed by report().
+    // SS_PROFILE=1: per-entry GPU time, printed by report().
     void report();
 
 private:
@@ -102,7 +102,7 @@ private:
     void            barrier(VkCommandBuffer cb);
 };
 
-// SSPLAT_NN_DEBUG_SYNC=1: sync + report after every dispatch, printing the entry
+// SS_NN_DEBUG_SYNC=1: sync + report after every dispatch, printing the entry
 // name and grid BEFORE the dispatch, so a hang bisects to the exact kernel
 // even when the sync never returns.
 bool debug_sync_enabled();

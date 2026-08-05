@@ -6,11 +6,12 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include "core/Env.h"
 
 namespace backend {
 namespace vk {
 
-// Defined by the generated embed TU (spirulae_splat/embed_spirv.py).
+// Defined by the generated embed TU (see shaders/spirv_tool.cpp).
 struct SpirvBlob {
     const char* name;
     const uint32_t* data;
@@ -85,9 +86,9 @@ VkShaderModule get_module(const std::string& name) {
         return VK_NULL_HANDLE;
     }
     // Driver shader compilers can crash outright on a blob they dislike;
-    // under SSPLAT_VK_VERBOSE the last line printed names the culprit.
-    if (std::getenv("SSPLAT_VK_VERBOSE")) {
-        std::fprintf(stderr, "[ssplat-vk] compiling %s\n", blob->name);
+    // under SS_VK_VERBOSE the last line printed names the culprit.
+    if (spirula::env("VK_VERBOSE")) {
+        std::fprintf(stderr, "[spirula-vk] compiling %s\n", blob->name);
         std::fflush(stderr);
     }
     VkShaderModuleCreateInfo sci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -179,8 +180,8 @@ VkPipeline get_pipeline(const std::string& blob_name, const SpecList& spec,
     if (spec.count) pci.stage.pSpecializationInfo = &spec_info;
     pci.layout = layout;
 
-    if (std::getenv("SSPLAT_VK_VERBOSE")) {
-        std::fprintf(stderr, "[ssplat-vk] pipeline %s\n", key.c_str());
+    if (spirula::env("VK_VERBOSE")) {
+        std::fprintf(stderr, "[spirula-vk] pipeline %s\n", key.c_str());
         std::fflush(stderr);
     }
     VkPipeline pipeline = VK_NULL_HANDLE;

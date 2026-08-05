@@ -5,14 +5,14 @@
 #include <stdexcept>
 #include <vector>
 
-#if SSPLAT_HAVE_ALIKED
+#if SS_HAVE_ALIKED
 #include "aliked/model/LightGlue.h"
 #endif
 
 namespace sfm {
 namespace {
 
-#if SSPLAT_HAVE_ALIKED
+#if SS_HAVE_ALIKED
 
 class LightGlueMatcher : public IFeatureMatcher {
 public:
@@ -89,7 +89,7 @@ private:
     aliked::MatchOptions   mopt_;
 };
 
-#endif  // SSPLAT_HAVE_ALIKED
+#endif  // SS_HAVE_ALIKED
 
 }  // namespace
 
@@ -100,12 +100,12 @@ std::unique_ptr<IFeatureMatcher> createFeatureMatcher(const std::string& type,
                                                       const LightGlueOptions& lightglue) {
     if (type == "bruteforce") return std::make_unique<BruteForceMatcher>(match);
     if (type == "lightglue") {
-#if SSPLAT_HAVE_ALIKED
+#if SS_HAVE_ALIKED
         return std::make_unique<LightGlueMatcher>(match, lightglue);
 #else
         throw std::runtime_error(
             "this build has no learned matcher: --matcher lightglue needs the "
-            "inference layer, which is SSPLAT_BUILD_SAM=ON");
+            "inference layer, which is SS_BUILD_SAM=ON");
 #endif
     }
     throw std::runtime_error("unknown matcher '" + type + "' (expected bruteforce or "

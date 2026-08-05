@@ -4,13 +4,13 @@ The learned SfM frontend: ALIKED keypoints and 128-D float descriptors, on the
 inference layer (`src/nn/`), with no onnxruntime, no PyTorch and no converter.
 
 Status: **done and wired in.** The extractor and LightGlue both match COLMAP's
-ONNX implementations, and `ssplat sfm --features aliked-n16rot --matcher
+ONNX implementations, and `spirula sfm --features aliked-n16rot --matcher
 lightglue` runs the whole pipeline.
 
 ## Rules
 
 - **Vulkan only**, like `src/sfm/` and `src/sam/`. Built with
-  `SSPLAT_BUILD_SAM` (which is what builds `ssplat_nn`).
+  `SS_BUILD_SAM` (which is what builds `ss_nn`).
 - **Model-specific things live here, never in `nn/`.** The general ops this
   needed — deformable convolution, point-wise grid sample, average pooling, row
   L2 normalization, SELU — went into `nn/` and are tested there. What is left

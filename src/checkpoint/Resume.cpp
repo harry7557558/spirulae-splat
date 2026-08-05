@@ -131,25 +131,25 @@ void check_resumable(const fs::path& ckpt_dir) {
 }
 
 
-SsplatConfig config_from_json(const fs::path& config_json) {
+TrainConfig config_from_json(const fs::path& config_json) {
     JsonValue root = json_parse_file(config_json.string());
-    SsplatConfig c;
+    TrainConfig c;
 
-#define SSPLAT_LOAD_FIELD(type, member, default_, group, choices, help)       \
+#define SS_LOAD_FIELD(type, member, default_, group, choices, help)            \
     {                                                                          \
         const JsonValue* g = std::strcmp(group, "trainer") == 0                \
                                  ? &root : root.find(group);                   \
-        const JsonValue* v = g ? g->find(ssplat_json_key(#member)) : nullptr;   \
+        const JsonValue* v = g ? g->find(train_json_key(#member)) : nullptr;   \
         if (v) assign(c.member, *v);                                           \
     }
-    SSPLAT_CONFIG_FIELDS(SSPLAT_LOAD_FIELD)
-#undef SSPLAT_LOAD_FIELD
+    SS_CONFIG_FIELDS(SS_LOAD_FIELD)
+#undef SS_LOAD_FIELD
 
     return c;
 }
 
 
-SsplatConfig build_resume_config(const SsplatConfig& cli,
+TrainConfig build_resume_config(const TrainConfig& cli,
                                  const std::string& preset,
                                  const std::set<std::string>& explicit_flags) {
     ResolvedCheckpoint r = resolve_checkpoint(cli.resume);
@@ -161,7 +161,7 @@ SsplatConfig build_resume_config(const SsplatConfig& cli,
         throw std::runtime_error("no config.json in " + run_dir.string() +
                                  " (needed to reconstruct the run's config)");
 
-    SsplatConfig base = config_from_json(cfg_path);
+    TrainConfig base = config_from_json(cfg_path);
     base.resume = cli.resume;
 
     // Continue writing into the checkpoint's own run folder, so new
@@ -174,14 +174,14 @@ SsplatConfig build_resume_config(const SsplatConfig& cli,
     // top of the checkpoint (e.g. resuming a 3dgs run as `synthetic` turns
     // bilagrid/PPISP off). Applying nothing for a same-preset resume is
     // automatic: the preset assigns exactly the fields it overrides.
-    if (!preset.empty() && !ssplat_apply_preset(base, preset))
+    if (!preset.empty() && !train_apply_preset(base, preset))
         throw std::runtime_error("unknown preset: " + preset);
 
     // Explicit flags win over both.
-#define SSPLAT_APPLY_EXPLICIT(type, member, default_, group, choices, help)   \
+#define SS_APPLY_EXPLICIT(type, member, default_, group, choices, help)        \
     if (explicit_flags.count(#member)) base.member = cli.member;
-    SSPLAT_CONFIG_FIELDS(SSPLAT_APPLY_EXPLICIT)
-#undef SSPLAT_APPLY_EXPLICIT
+    SS_CONFIG_FIELDS(SS_APPLY_EXPLICIT)
+#undef SS_APPLY_EXPLICIT
 
     return base;
 }

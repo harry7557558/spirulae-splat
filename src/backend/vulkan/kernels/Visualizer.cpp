@@ -16,7 +16,7 @@
 //
 // This TU references engine() (EngineState), so it only links into targets
 // that also link the portable engine objects; the kernel-level parity tools
-// that link ssplat_backend_vulkan alone never pull this object in.
+// that link ss_backend_vulkan alone never pull this object in.
 
 #include <kernels/visualize/Visualizer.cuh>
 

@@ -37,7 +37,7 @@
 #include <vector>
 
 // This library's SPIR-V blobs. Registered by an explicit call from load(),
-// not by a static initializer: ssplat_aliked is a static archive, and an
+// not by a static initializer: ss_aliked is a static archive, and an
 // object nothing references is not linked -- the kernels would come back "no
 // shader module". See nn/vk/EmbeddedSpirv.h.
 NN_DECLARE_EMBEDDED_MODULES(aliked)

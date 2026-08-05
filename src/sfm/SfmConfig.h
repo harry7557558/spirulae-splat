@@ -7,7 +7,7 @@
 // (port plan phase 5) the GUI's options editor. Written by hand that is three
 // lists that drift; here the table is the source of truth and each consumer is
 // one macro expansion over it -- the same shape as the trainer's generated
-// SSPLAT_CONFIG_FIELDS / ConfigUI pair.
+// SS_CONFIG_FIELDS / ConfigUI pair.
 //
 // What is NOT in the table: flags that do not name one scalar field.
 // `--camera-model PREFIX=MODEL` and `--focal PREFIX=F` also feed a per-group

@@ -58,7 +58,7 @@ struct FeatureSet {
     std::vector<Keypoint> keypoints;
     std::vector<uint8_t> descriptors;   // count*dim*dtypeSize bytes
     // Optional per-keypoint RGB sampled from the source image (count*3 bytes, or
-    // empty). Written by `ssplat-sfm extract`; the mapper averages them over each 3D
+    // empty). Written by `spirula-sfm extract`; the mapper averages them over each 3D
     // point's track to color the point cloud for 3DGS init. Empty for a feature
     // set produced without an image (e.g. selftest) or read from a v1 file.
     std::vector<uint8_t> colors;

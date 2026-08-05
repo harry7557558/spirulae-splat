@@ -1,4 +1,4 @@
-// `ssplat-sam extract` -- pull the sharpest frames out of a video, and
+// `spirula-sam extract` -- pull the sharpest frames out of a video, and
 // optionally mask them.
 //
 // The native replacement for scripts/extract_frames.py, with the
@@ -13,12 +13,12 @@
 // which is also what lets the GUI fall back to ffmpeg + FrameSelect without
 // the output changing.
 //
-// This file is compiled only with -DSSPLAT_ENABLE_PATENTED=ON; the dispatcher
+// This file is compiled only with -DSS_ENABLE_PATENTED=ON; the dispatcher
 // in sam_main.cpp explains the fallback when it is not.
 //
-//   ssplat-sam extract clip.mp4 --skip 10
-//   ssplat-sam extract clip.mp4 --skip 10 --model sam3-f16.ggml --text "person; car"
-//   ssplat-sam extract dish.mov --model sam3-f16.ggml --text food \
+//   spirula-sam extract clip.mp4 --skip 10
+//   spirula-sam extract clip.mp4 --skip 10 --model sam3-f16.ggml --text "person; car"
+//   spirula-sam extract dish.mov --model sam3-f16.ggml --text food \
 //                      --neg-text "cooked food" --mask-keep subject
 
 #include "app/FrameExtract.h"
@@ -50,7 +50,7 @@ void set_env(const char* key, const char* value) {
 
 void usage() {
     static const char* kUsage =
-        "ssplat-sam extract <video> [options]\n"
+        "spirula-sam extract <video> [options]\n"
         "\n"
         "Frame selection\n"
         "  -o, --out <dir>        output directory (default: <video-without-ext>/images)\n"
@@ -86,7 +86,7 @@ void usage() {
         "      --overlay          also write a colour overlay next to each mask\n"
         "\n"
         "Common: --device <index|name>  --profile  --validate\n";
-    std::fprintf(stderr, "%s", app::help_text(kUsage, "ssplat-sam").c_str());
+    std::fprintf(stderr, "%s", app::help_text(kUsage, "spirula-sam").c_str());
 }
 
 struct Options {
@@ -176,9 +176,9 @@ int sam_cli_extract(int argc, char** argv) {
     // The decoder and the masker each reach vk::Context::get() on their own,
     // so the device and the diagnostic switches are handed over the way the
     // context reads them rather than plumbed through two option structs.
-    if (o.validate) set_env("SSPLAT_VK_VALIDATION", "1");
-    if (o.profile) set_env("SSPLAT_PROFILE", "1");
-    if (!o.device.empty()) set_env("SSPLAT_VK_DEVICE", o.device.c_str());
+    if (o.validate) set_env("SS_VK_VALIDATION", "1");
+    if (o.profile) set_env("SS_PROFILE", "1");
+    if (!o.device.empty()) set_env("SS_VK_DEVICE", o.device.c_str());
 
     const fs::path input(o.input);
     const fs::path base = o.out_dir.empty()

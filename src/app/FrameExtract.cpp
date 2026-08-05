@@ -1,6 +1,6 @@
 // FrameExtract.cpp -- see app/FrameExtract.h.
 //
-// Lifted out of the `ssplat-sam extract` CLI when the GUI grew the same need:
+// Lifted out of the `spirula-sam extract` CLI when the GUI grew the same need:
 // the decode/select/mask/write loop is the part worth having exactly once, and
 // the two front ends differ only in how they report progress.
 

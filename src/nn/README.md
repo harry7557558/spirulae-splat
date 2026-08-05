@@ -6,13 +6,13 @@ about any model** — `src/sam/` is the first thing built on it, and if a featur
 detector, a matcher or a depth model is added later it builds on this
 unchanged. Do not put model-specific constants here.
 
-Vulkan-only, like `src/sfm/`: built by default for `SSPLAT_BACKEND=vulkan`
-(`SSPLAT_BUILD_SAM`), absent from a CUDA build, and invisible to `setup.py` and
+Vulkan-only, like `src/sfm/`: built by default for `SS_BACKEND=vulkan`
+(`SS_BUILD_SAM`), absent from a CUDA build, and invisible to `setup.py` and
 the pybind module. It carries its own device; converging the repository's three
 Vulkan contexts onto one is `docs/notes/sfm-port-plan.md` phase 6.
 
-Runtime knobs: `SSPLAT_NN_LOG=0..3`, `SSPLAT_VK_DEVICE`, `SSPLAT_PROFILE=1`,
-`SSPLAT_VK_VALIDATION=1`, `SSPLAT_NN_DEBUG_SYNC=1`, `SSPLAT_NN_COOPMAT=0`.
+Runtime knobs: `SS_NN_LOG=0..3`, `SS_VK_DEVICE`, `SS_PROFILE=1`,
+`SS_VK_VALIDATION=1`, `SS_NN_DEBUG_SYNC=1`, `SS_NN_COOPMAT=0`.
 
 ## The op layer
 

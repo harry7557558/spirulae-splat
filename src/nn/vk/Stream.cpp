@@ -7,13 +7,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include "core/Env.h"
 
 namespace nn {
 namespace vk {
 
 bool debug_sync_enabled() {
     static const bool v = [] {
-        const char* e = std::getenv("SSPLAT_NN_DEBUG_SYNC");
+        const char* e = spirula::env("NN_DEBUG_SYNC");
         return e && e[0] && std::strcmp(e, "0") != 0;
     }();
     return v;

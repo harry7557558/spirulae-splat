@@ -511,7 +511,7 @@ void PreviewRenderer::ensure_grid(float scene_radius, float view_dist,
     _grid_center[1] = cy;
 }
 
-bool PreviewRenderer::build(const ssplat::TrainerSession& session) {
+bool PreviewRenderer::build(const spirula::TrainerSession& session) {
     destroy_gl();
     if (!ensure_program()) return false;
     const auto& ds = session.ds;

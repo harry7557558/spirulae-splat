@@ -432,8 +432,8 @@ int64_t engine_get_max_num_splats();
 // caller can pass null. When the engine has a color space, `out_rgb` is the
 // sRGB post-conversion render and `out_rgb_raw` is the working-space version.
 // Debug introspection: shape + D->H copy for engine().gt.rgb / gt.alpha and
-// fwd.renders.rgb. Used by spirulae_splat.modules.debug_image to visualize
-// what the engine actually sees per step, especially on the warp path.
+// fwd.renders.rgb -- what the engine actually sees per step, which is worth
+// looking at on the warp path.
 std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_gt_rgb_shape();
 std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_gt_alpha_shape();
 std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_render_rgb_shape();

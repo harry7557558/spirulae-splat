@@ -29,7 +29,7 @@ except ImportError:
     sys.exit(1)
 
 import torch
-from spirulae_splat.splat.cuda import undistort_image as ssplat_undistort_image
+from spirulae_splat.splat.cuda import undistort_image as spirula_undistort_image
 
 
 def validate_args(args):
@@ -84,7 +84,7 @@ def undistort_image(input_path: str, output_path: str, intrins: dict,
     )
     dtype = img.dtype
     img = torch.from_numpy(img).unsqueeze(0).float().cuda()  # [1, H, W, C]
-    img = ssplat_undistort_image(img, *intrins)
+    img = spirula_undistort_image(img, *intrins)
     img = img.squeeze(0).cpu().numpy().astype(dtype)  # [H, W, C]
 
     # Determine output format and quality

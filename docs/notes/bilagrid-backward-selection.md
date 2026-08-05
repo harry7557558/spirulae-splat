@@ -103,7 +103,7 @@ void   update(key, arm, gpu_seconds);      // exponential forgetting + warmup-no
   degrades gracefully to greedy. (Optional later: seed a new key's priors from
   the nearest already-measured resolution to skip its warmup entirely.)
 - **Overrides for reproducibility / parity / debugging:**
-  `SSPLAT_BILAGRID_BWD = auto | v1 | v2 | v1:<tile> | #<arm-index>` pins the
+  `SS_BILAGRID_BWD = auto | v1 | v2 | v1:<tile> | #<arm-index>` pins the
   arm (`v1` = first v1 arm, `v1:8` = the tile-8 v1 arm, `#3` = raw index); a
   fixed RNG seed (as vksplat's `seed=42`) makes `auto` deterministic given
   identical timings. Reward unit is GPU **milliseconds**
@@ -137,7 +137,7 @@ per key, so sparse sampling is fine) rather than every step.
   tolerance-based). Gradients feed Adam, which is robust to ULP noise.
   Switching arms mid-run injects only that noise; slow forgetting
   (`adapt_tau ~ 1000`) prevents oscillation.
-- `bilagrid_parity` must test **each arm pinned** (`SSPLAT_BILAGRID_BWD`), so
+- `bilagrid_parity` must test **each arm pinned** (`SS_BILAGRID_BWD`), so
   both strategies stay bit-parity-checked against their CUDA references.
 - The grid-fold tail rule and null-`v_in` skip (see the Vulkan README slice 6)
   apply to the v2 kernels too.
@@ -164,7 +164,7 @@ and the transform-backward math. The v2 revival is the moment to collapse this:
 ## 6. Implementation phases (each independently landable + parity-tested)
 
 1. **Selector component** — `BilagridBwdSelector` (contextual Gaussian TS
-   ported from vksplat) + `SSPLAT_BILAGRID_BWD` override + unit test with
+   ported from vksplat) + `SS_BILAGRID_BWD` override + unit test with
    synthetic timings. No kernel changes. **DONE** — header-only
    `kernels/bilagrid/BilagridBwdSelector.h`; host unit test
    `src/backend/tests/bilagrid_selector_test.cpp` (auto-globbed; also builds
@@ -175,7 +175,7 @@ and the transform-backward math. The v2 revival is the moment to collapse this:
    readback, `(key, arm)` attribution at the backward hook. **DONE** —
    `kernels/bilagrid/BilagridBwdTiming.h` (`BwdTimingRing`) wired into
    `_engine_bilagrid_backward_hook` (harvest at hook entry; begin/end around the
-   RGB/depth/normal dispatches). Gated by `SSPLAT_BILAGRID_PROFILE=1` (logs
+   RGB/depth/normal dispatches). Gated by `SS_BILAGRID_PROFILE=1` (logs
    per-family GPU ms; zero overhead when unset). Validated on RTX 4080S / CUDA:
    20-step garden run reports PPISP RGB backward steady at ~0.94 ms (grid+rgb),
    matching the nsys profile; one-iteration-behind harvest, no hot-path stall.
@@ -203,7 +203,7 @@ and the transform-backward math. The v2 revival is the moment to collapse this:
    `sample(key)` -> dispatch chosen arm -> record timing -> `update`. **DONE**
    for PPISP RGB (affine/loglinear keep fixed v1 until their v2 lands);
    file-static selector + `BgSelectorDumper` (prints the per-arm table at exit
-   under SSPLAT_BILAGRID_PROFILE). `off` restores the fixed-v1 baseline.
+   under SS_BILAGRID_PROFILE). `off` restores the fixed-v1 baseline.
 
 ## Benchmark results (garden, 2026-07, PPISP RGB backward, per-arm GPU ms)
 
@@ -315,7 +315,7 @@ Two device-agnostic tunings support keeping v2 everywhere cheaply:
      `launch_family_bwd_v1` guards this for ppisp/loglinear/normal; the depth
      launcher was missing it, latent because depth bilagrid had never run on
      Vulkan.) Fixed with an `if (v_depth != nullptr)` guard. Localized via
-     `SSPLAT_VK_DEBUG_SYNC=1` (the last un-`ok`'d dispatch named the kernel).
+     `SS_VK_DEBUG_SYNC=1` (the last un-`ok`'d dispatch named the kernel).
    - **Arm-set tuning validated**: the added tile=4 wins for affine@1296x840 and
      depth on AMD; tile=6 wins for ppisp@1296x840 on AMD -- both previously
      unreachable optima.

@@ -2,7 +2,7 @@
 // fused-bilagrid/fused_bilagrid/bindings.h. Replaces the original torch::Tensor
 // wrappers with TorchTensorView; outputs are caller-allocated.
 //
-// Quantile-based depth-scalar computation reuses spirulae_splat's existing
+// Quantile-based depth-scalar computation reuses the engine's existing
 // batch_quantile_masked_radix_select from Quantile.cu (declared inline below).
 
 #include "kernels/bilagrid/BilagridBindings.h"

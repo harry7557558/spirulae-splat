@@ -1,6 +1,6 @@
 #pragma once
 
-// TrainRunner -- runs a ssplat::TrainerSession on a worker thread for the
+// TrainRunner -- runs a spirula::TrainerSession on a worker thread for the
 // GUI: async dataset preview, the full train pipeline (check -> parse ->
 // engine setup -> step loop), pause/stop controls, metric history for the
 // plots, and an optional web-viewer server (so a GUI run can still be
@@ -48,12 +48,12 @@ public:
     ~TrainRunner() { shutdown(); }
 
     // Async dataset preview (parse only; no GPU). Replaces the session.
-    void load_dataset(const SsplatConfig& cfg, const std::string& preset);
+    void load_dataset(const TrainConfig& cfg, const std::string& preset);
 
     // Async full run with the final config (re-parses the dataset so any
     // dataparser option changes apply). Replaces the session -- the caller
     // must detach viewers from the previous one first.
-    void start_training(const SsplatConfig& cfg, const std::string& preset);
+    void start_training(const TrainConfig& cfg, const std::string& preset);
 
     void set_paused(bool p);
     bool paused() const;
@@ -66,10 +66,10 @@ public:
 
     // Valid between load_dataset()/start_training() calls; see lifetime
     // rules above.
-    ssplat::TrainerSession* session() { return _session.get(); }
+    spirula::TrainerSession* session() { return _session.get(); }
 
     // Latest per-step progress (copy).
-    ssplat::TrainerProgress latest_progress();
+    spirula::TrainerProgress latest_progress();
     double eta_seconds();         // < 0 when unknown
     void get_metrics(std::vector<MetricPoint>& out);
     std::vector<std::string> drain_log();
@@ -78,7 +78,7 @@ private:
     void push_log(const std::string& s);
     void join_worker();
 
-    std::unique_ptr<ssplat::TrainerSession> _session;
+    std::unique_ptr<spirula::TrainerSession> _session;
     std::unique_ptr<ViewerServer> _web_viewer;
     std::thread _worker;
     std::atomic<Phase> _phase{Phase::Idle};
@@ -86,7 +86,7 @@ private:
 
     mutable std::mutex _mu;       // guards everything below
     std::string _error;
-    ssplat::TrainerProgress _latest;
+    spirula::TrainerProgress _latest;
     std::deque<double> _latencies;
     std::vector<MetricPoint> _metrics;
     std::vector<std::string> _log;

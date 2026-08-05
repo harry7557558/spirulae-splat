@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "core/Env.h"
 
 // The result codes worth naming: the ones a user can act on. Everything else
 // prints its number. Out-of-memory in particular used to surface as a bare
@@ -446,10 +447,10 @@ public:
         }
 
         // Compiling the BA module is seconds of wall clock on a cold driver
-        // cache, and it is not evenly spread: SSPLAT_SFM_MAP_PROF names the
+        // cache, and it is not evenly spread: SS_SFM_MAP_PROF names the
         // entry points that cost more than 100 ms, which is how you find out
         // that one kernel is carrying the whole bill.
-        const bool prof = std::getenv("SSPLAT_SFM_MAP_PROF") != nullptr;
+        const bool prof = spirula::env("SFM_MAP_PROF") != nullptr;
         for (const auto& e : entries) {
             if (pipelines_.count(e)) continue;
             auto t0 = std::chrono::steady_clock::now();

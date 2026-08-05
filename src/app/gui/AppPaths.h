@@ -5,7 +5,7 @@
 // Three questions with platform-specific answers that several GUI modules ask,
 // answered once: the settings directory, the cache directory (model
 // checkpoints, the COLMAP vocabulary tree), and where this executable is --
-// which is how the GUI runs a reconstruction, since that is `ssplat sfm`, i.e.
+// which is how the GUI runs a reconstruction, since that is `spirula sfm`, i.e.
 // this same binary again.
 
 #include <string>

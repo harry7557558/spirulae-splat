@@ -121,11 +121,11 @@ src/sfm/feature/LearnedMatcher.{h,cpp}   # LightGlue behind IFeatureMatcher + fa
 (As built. Neither sfm header includes an `aliked/` one, so `src/sfm/` still
 compiles without the inference layer; the factories say so at run time.)
 
-`ssplat_aliked` goes in `cmake/SsplatNn.cmake` next to `ssplat_sam`, with its
-own `ssplat_nn_shaders(aliked …)` edge and its own declare/ensure pair — *a
+`ss_aliked` goes in `cmake/SsNn.cmake` next to `ss_sam`, with its
+own `ss_nn_shaders(aliked …)` edge and its own declare/ensure pair — *a
 static library whose only content is a static initializer is not linked*, so a
-new shader directory that skips this comes back "no shader module". `SsplatSfm`
-links it when `SSPLAT_BUILD_SAM AND SSPLAT_BUILD_SFM`.
+new shader directory that skips this comes back "no shader module". `SsSfm`
+links it when `SS_BUILD_SAM AND SS_BUILD_SFM`.
 
 Model-specific constants stay here, never in `nn/`.
 
@@ -215,7 +215,7 @@ table lives in `src/aliked/README.md`.
 
 ### What P4-P5 measured
 
-`ssplat sfm auto` on a 20-image wide-baseline capture, exhaustive matching, one
+`spirula sfm auto` on a 20-image wide-baseline capture, exhaustive matching, one
 camera group. Registration and point count, not just match volume:
 
 | frontend + matcher | features/img | pairs kept | inliers | registered | points |

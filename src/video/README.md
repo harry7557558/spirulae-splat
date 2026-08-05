@@ -4,12 +4,12 @@ Video decoding without ffmpeg, on top of `src/nn/`'s Vulkan runtime: the pixels
 come out of `VK_KHR_video_decode_*` and everything the driver will not do for
 itself — containers, bitstream parsing, reference picture management — is here.
 
-**Compiled only with `-DSSPLAT_ENABLE_PATENTED=ON`, which is OFF by default.**
+**Compiled only with `-DSS_ENABLE_PATENTED=ON`, which is OFF by default.**
 The H.264 / H.265 / AV1 bitstream parsers are the one piece of this repository
 carrying third-party patent exposure, and this is a GPLv3 tree. With the option
 off, `src/video/` is neither compiled nor linked and every consumer falls back
-to an external ffmpeg: the GUI says why in the dataset panel, and `ssplat sam
-video` / `extract` say so and exit. See `cmake/SsplatOptions.cmake` and
+to an external ffmpeg: the GUI says why in the dataset panel, and `spirula sam
+video` / `extract` say so and exit. See `cmake/SsOptions.cmake` and
 `docs/build.md`.
 
 Turning it on buys roughly 15x faster frame extraction (a 127-second 1080p30

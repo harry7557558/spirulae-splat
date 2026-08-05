@@ -170,7 +170,7 @@ public:
 
     // Human-readable VRAM breakdown, for diagnostics.
     std::string vramReport() const;
-    // Per-kernel GPU timing, when SSPLAT_PROFILE=1 is set.
+    // Per-kernel GPU timing, when SS_PROFILE=1 is set.
     void printProfile();
 
 private:

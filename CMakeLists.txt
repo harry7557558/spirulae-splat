@@ -1,53 +1,50 @@
 cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
-project(spirulae_splat LANGUAGES C CXX)  # CUDA enabled by the cuda backend module
+project(spirula_studio LANGUAGES C CXX)  # CUDA enabled by the cuda backend module
 
-# Development build (see build_develop.bash / build_develop.bat and
-# docs/build.md). The pip build is separate -- setup.py -- and shares only the
-# source list, cmake/sources.txt.
+# The build (see build_develop.bash / build_develop.bat and docs/build.md).
 #
 # The logic lives in cmake/; this file is just the running order:
 #
-#   SsplatOptions.cmake        options, backend selection, tree paths
-#   SsplatSources.cmake        the engine/kernel source list
-#   SsplatBackendCuda.cmake    CUDA kernels + the engine library         } one
-#   SsplatBackendVulkan.cmake  portable engine + Vulkan compute runtime } of
-#   SsplatSfm.cmake            the SfM module (optional; Vulkan-only)
-#   SsplatNn.cmake             inference layer + SAM + video (optional; Vulkan-only)
-#   SsplatApps.cmake           the `ssplat` executable (every tool in one)
+#   SsOptions.cmake        options, backend selection, tree paths
+#   SsSources.cmake        the engine/kernel source list
+#   SsBackendCuda.cmake    CUDA kernels + the engine library         } one
+#   SsBackendVulkan.cmake  portable engine + Vulkan compute runtime } of
+#   SsSfm.cmake            the SfM module (optional; Vulkan-only)
+#   SsNn.cmake             inference layer + SAM + video (optional; Vulkan-only)
+#   SsApps.cmake           the `spirula` executable (every tool in one)
 #
-# Each backend module leaves SSPLAT_APP_LIBS behind for
-# the shared app targets.
+# Each backend module leaves SS_APP_LIBS behind for the shared app targets.
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
-include(SsplatOptions)
-include(SsplatSources)
+include(SsOptions)
+include(SsSources)
 
 # The web viewer's browser client is compiled into the engine library
 # (app/webviewer/Viewer.cpp), so it must be embedded before either backend
 # module defines its targets -- not alongside the app targets.
-include(SsplatEmbed)
-ssplat_embed_file(
-    ${SSPLAT_SRC}/app/webviewer/viewer.html
+include(SsEmbed)
+ss_embed_file(
+    ${SS_SRC}/app/webviewer/viewer.html
     ${CMAKE_BINARY_DIR}/app_generated/viewer_html.h
     ViewerHtml)
 
-if(SSPLAT_BACKEND STREQUAL "vulkan")
-    include(SsplatBackendVulkan)
+if(SS_BACKEND STREQUAL "vulkan")
+    include(SsBackendVulkan)
 else()
-    include(SsplatBackendCuda)
+    include(SsBackendCuda)
 endif()
 
-# Before SsplatApps: the app links the ssplat_sfm target.
-if(SSPLAT_BUILD_SFM)
-    include(SsplatSfm)
+# Before SsApps: the app links the ss_sfm target.
+if(SS_BUILD_SFM)
+    include(SsSfm)
 endif()
 
-# Likewise for `ssplat sam` and the GUI's built-in masking.
-if(SSPLAT_BUILD_SAM)
-    include(SsplatNn)
+# Likewise for `spirula sam` and the GUI's built-in masking.
+if(SS_BUILD_SAM)
+    include(SsNn)
 endif()
 
-include(SsplatApps)
+include(SsApps)
 
-message(STATUS "spirulae_splat configured (backend: ${SSPLAT_BACKEND}).")
+message(STATUS "spirula_studio configured (backend: ${SS_BACKEND}).")

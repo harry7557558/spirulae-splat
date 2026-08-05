@@ -86,7 +86,7 @@ const LicenseInfo& license_for(const std::string& family) {
     // beyond the ordinary, and (c) where the actual text is.
     static const LicenseInfo kSam3{
         "sam3", "SAM 3 License (Meta)",
-        "SAM 3 is Meta's model, not part of Spirulae Splat, and it comes with "
+        "SAM 3 is Meta's model, not part of Spirula Studio, and it comes with "
         "its own licence -- which is not a standard one. It is free to "
         "use, including commercially, but only on Meta's terms, so we cannot "
         "ship it with the app or accept them for you.\n\n"

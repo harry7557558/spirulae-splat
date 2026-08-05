@@ -13,9 +13,9 @@
 //
 // Each stage has a built-in implementation and an external fallback:
 //
-//   frames   in-process VK_KHR_video_decode_* (SSPLAT_ENABLE_PATENTED)
+//   frames   in-process VK_KHR_video_decode_* (SS_ENABLE_PATENTED)
 //            -> ffmpeg subprocess
-//   masks    in-process SAM 2 / SAM 3          (SSPLAT_BUILD_SAM)
+//   masks    in-process SAM 2 / SAM 3          (SS_BUILD_SAM)
 //            -> python + scripts/mask.py
 //
 // The built-in path is the default when it is compiled in and the device
@@ -167,7 +167,7 @@ bool is_video_path(const std::string& path);
 bool is_dual_fisheye_path(const std::string& path);
 
 // What a picked folder of photos actually means, by the layout conventions the
-// rest of the project already uses -- `ssplat sfm auto`'s own probing and the
+// rest of the project already uses -- `spirula sfm auto`'s own probing and the
 // dataparsers' `mask_dir = "masks"`:
 //
 //   <picked>/images + <picked>/masks   a dataset folder: index images/, and the
@@ -229,7 +229,7 @@ public:
     // Recursive, matching what COLMAP's feature_extractor indexes. `skip` is a
     // sub-folder not to descend into: a masks/ nested under the images is full
     // of PNGs that are not views, and counting them doubles the dataset with
-    // garbage (the guard `ssplat sfm auto` has for the same layout).
+    // garbage (the guard `spirula sfm auto` has for the same layout).
     static int count_images(const std::string& dir, const std::string& skip = "");
     // Dimensions of the first image found, for the focal-length prior.
     static bool first_image_dims(const std::string& dir, int& w, int& h);

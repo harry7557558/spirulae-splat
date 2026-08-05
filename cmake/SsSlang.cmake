@@ -4,16 +4,16 @@
 # edge per blob, see src/backend/vulkan/shaders/SpirvShaders.cmake) and embedded into the
 # binary. No Python is required for the Vulkan build.
 
-set(SSPLAT_SLANG_VERSION "2026.12.0.1")
+set(SS_SLANG_VERSION "2026.12.0.1")
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
     # 2026.12.0.1 ships no macOS release assets; use the nearest release
     # that does (upstream publishes macos-aarch64/x86_64 for 2026.12.1).
-    set(SSPLAT_SLANG_VERSION "2026.12.1")
+    set(SS_SLANG_VERSION "2026.12.1")
 endif()
-set(SSPLAT_SLANGC "" CACHE FILEPATH
+set(SS_SLANGC "" CACHE FILEPATH
     "slangc to use (empty = find in PATH, fetch on miss/mismatch)")
 
-function(_ssplat_slangc_version exe out_var)
+function(_ss_slangc_version exe out_var)
     set(${out_var} "" PARENT_SCOPE)
     if(NOT exe OR NOT EXISTS ${exe})
         return()
@@ -28,28 +28,28 @@ function(_ssplat_slangc_version exe out_var)
     endif()
 endfunction()
 
-# ssplat_find_slangc(<out_var>)
+# ss_find_slangc(<out_var>)
 #
-# Returns a slangc executable matching SSPLAT_SLANG_VERSION: the one named by
-# -DSSPLAT_SLANGC, else one in PATH, else the pinned upstream release
+# Returns a slangc executable matching SS_SLANG_VERSION: the one named by
+# -DSS_SLANGC, else one in PATH, else the pinned upstream release
 # downloaded into the build tree.
-function(ssplat_find_slangc out_var)
-    set(_slangc "${SSPLAT_SLANGC}")
+function(ss_find_slangc out_var)
+    set(_slangc "${SS_SLANGC}")
     if(NOT _slangc)
         find_program(_slangc_in_path slangc)
         if(_slangc_in_path)
             set(_slangc ${_slangc_in_path})
         endif()
     endif()
-    _ssplat_slangc_version("${_slangc}" _slangc_ver)
+    _ss_slangc_version("${_slangc}" _slangc_ver)
 
-    if(NOT _slangc_ver STREQUAL SSPLAT_SLANG_VERSION)
+    if(NOT _slangc_ver STREQUAL SS_SLANG_VERSION)
         if(_slangc)
             message(STATUS "slangc at ${_slangc} is version '${_slangc_ver}' "
-                "(need ${SSPLAT_SLANG_VERSION}); fetching the pinned release")
+                "(need ${SS_SLANG_VERSION}); fetching the pinned release")
         else()
             message(STATUS "slangc not found; fetching the pinned release "
-                "${SSPLAT_SLANG_VERSION}")
+                "${SS_SLANG_VERSION}")
         endif()
         if(WIN32)
             set(_slang_plat "windows-x86_64")
@@ -69,11 +69,11 @@ function(ssplat_find_slangc out_var)
             set(_slang_ext "tar.gz")
             set(_slang_exe "bin/slangc")
         endif()
-        set(_slang_name "slang-${SSPLAT_SLANG_VERSION}-${_slang_plat}")
+        set(_slang_name "slang-${SS_SLANG_VERSION}-${_slang_plat}")
         set(_slang_dir ${CMAKE_CURRENT_BINARY_DIR}/${_slang_name})
         set(_slangc ${_slang_dir}/${_slang_exe})
         if(NOT EXISTS ${_slangc})
-            set(_slang_url "https://github.com/shader-slang/slang/releases/download/v${SSPLAT_SLANG_VERSION}/${_slang_name}.${_slang_ext}")
+            set(_slang_url "https://github.com/shader-slang/slang/releases/download/v${SS_SLANG_VERSION}/${_slang_name}.${_slang_ext}")
             set(_slang_archive ${CMAKE_CURRENT_BINARY_DIR}/${_slang_name}.${_slang_ext})
             message(STATUS "Downloading ${_slang_url}")
             file(DOWNLOAD ${_slang_url} ${_slang_archive}
@@ -81,17 +81,17 @@ function(ssplat_find_slangc out_var)
             list(GET _dl_status 0 _dl_code)
             if(NOT _dl_code EQUAL 0)
                 message(FATAL_ERROR "Failed to download slang release: "
-                    "${_dl_status}. Install slang-${SSPLAT_SLANG_VERSION} "
-                    "and pass -DSSPLAT_SLANGC=/path/to/slangc.")
+                    "${_dl_status}. Install slang-${SS_SLANG_VERSION} "
+                    "and pass -DSS_SLANGC=/path/to/slangc.")
             endif()
             file(ARCHIVE_EXTRACT INPUT ${_slang_archive}
                 DESTINATION ${_slang_dir})
             file(REMOVE ${_slang_archive})
         endif()
-        _ssplat_slangc_version("${_slangc}" _slangc_ver)
-        if(NOT _slangc_ver STREQUAL SSPLAT_SLANG_VERSION)
+        _ss_slangc_version("${_slangc}" _slangc_ver)
+        if(NOT _slangc_ver STREQUAL SS_SLANG_VERSION)
             message(FATAL_ERROR "Fetched slangc reports version "
-                "'${_slangc_ver}', expected ${SSPLAT_SLANG_VERSION}")
+                "'${_slangc_ver}', expected ${SS_SLANG_VERSION}")
         endif()
     endif()
 
@@ -99,7 +99,7 @@ function(ssplat_find_slangc out_var)
     set(${out_var} ${_slangc} PARENT_SCOPE)
 endfunction()
 
-# ssplat_build_spirv_tool(<out_var>)
+# ss_build_spirv_tool(<out_var>)
 #
 # Compiles src/backend/vulkan/shaders/spirv_tool.cpp once with the project
 # toolchain (try_compile + COPY_FILE, so it is portable across Windows / Linux /
@@ -109,9 +109,9 @@ endfunction()
 # `embed` modes, the SfM module its `nocontract` and `embed --sfm` modes. It
 # lives under backend/vulkan/shaders/ because that is its main consumer; it is a
 # pure host program and pulls in no Vulkan headers, so a CUDA build with
-# SSPLAT_BUILD_SFM=ON can compile it too.
-function(ssplat_build_spirv_tool out_var)
-    set(tool_src ${SSPLAT_SRC}/backend/vulkan/shaders/spirv_tool.cpp)
+# SS_BUILD_SFM=ON can compile it too.
+function(ss_build_spirv_tool out_var)
+    set(tool_src ${SS_SRC}/backend/vulkan/shaders/spirv_tool.cpp)
     set(tool_exe ${CMAKE_BINARY_DIR}/spirv_tool${CMAKE_EXECUTABLE_SUFFIX})
 
     # Rebuilt only when its source is newer than the copied executable.

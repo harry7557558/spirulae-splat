@@ -2,13 +2,13 @@
 // Portable replacements for the CUDA vector types and function-scope macros
 // that appear in backend API signatures and header-level host code.
 //
-// CUDA is the default backend: unless SSPLAT_BACKEND_VULKAN is defined, the
+// CUDA is the default backend: unless SS_BACKEND_VULKAN is defined, the
 // CUDA definitions are authoritative and this header defers to them. The
 // stand-alone definitions below MUST match the CUDA layouts and alignments
 // exactly — they are ABI, shared with Slang-generated SPIR-V structured
 // buffers.
 
-#ifndef SSPLAT_BACKEND_VULKAN
+#ifndef SS_BACKEND_VULKAN
 
 #include <cuda_runtime.h>
 

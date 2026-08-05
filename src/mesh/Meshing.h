@@ -17,8 +17,8 @@
  * OccupancyEvaluator owns the device-side Gaussian buffers + spatial grid and
  * is reused for both vertex evaluation and edge bisection.
  */
-#ifndef SPIRULAE_MESHING_H
-#define SPIRULAE_MESHING_H
+#ifndef SPIRULA_MESHING_H
+#define SPIRULA_MESHING_H
 
 #include <cstdint>
 #include <string>

@@ -1,4 +1,4 @@
-// GuiMain.cpp -- Spirulae Splat entry point: GLFW window + OpenGL 3.2
+// GuiMain.cpp -- the GUI entry point: GLFW window + OpenGL 3.2
 // core context (lowest version that also satisfies macOS) + Dear ImGui
 // bootstrap, then hands every frame to gui::GuiApp.
 
@@ -51,7 +51,7 @@ void apply_style(float scale) {
 
 }  // namespace
 
-int ssplat_gui_main(int argc, char** argv) {
+int spirula_gui_main(int argc, char** argv) {
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
         std::fprintf(stderr, "error: failed to initialize GLFW (is a display "
@@ -68,7 +68,7 @@ int ssplat_gui_main(int argc, char** argv) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(1600, 950, "Spirulae Splat",
+    GLFWwindow* window = glfwCreateWindow(1600, 950, "Spirula Studio",
                                           nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "error: failed to create window / GL context\n");
@@ -107,7 +107,7 @@ int ssplat_gui_main(int argc, char** argv) {
                 if (paths[i] && paths[i][0]) dropped.push_back(paths[i]);
             if (!dropped.empty()) a->handle_drop(dropped);
         });
-        // `ssplat-gui <path>...` -- the same auto-detection as a drop, so a
+        // `spirula-gui <path>...` -- the same auto-detection as a drop, so a
         // desktop "Open with" or a shell alias lands on the right screen.
         {
             std::vector<std::string> args;

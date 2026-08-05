@@ -4,7 +4,7 @@
 // One device per process, picked lazily on first use. Enumeration is
 // side-effect free (it spins up a throwaway VkInstance) so an application can
 // list devices and choose before any allocation happens -- the same contract
-// spirulae-splat's backend::device_* calls provide, so the two converge when
+// the engine's backend::device_* calls provide, so the two converge when
 // merged.
 //
 // Baseline: **Vulkan 1.2 core** with `bufferDeviceAddress` and
@@ -46,12 +46,12 @@ std::vector<DeviceInfo> enumerate_devices();
 
 struct ContextOptions {
     // -1 = auto (discrete > integrated > cpu, VRAM tie-break). Overridden by
-    // $SSPLAT_VK_DEVICE, which accepts an index or a case-insensitive substring of
+    // $SS_VK_DEVICE, which accepts an index or a case-insensitive substring of
     // the device name.
     int         device_index = -1;
     std::string device_match;
-    bool        validation = false;   // or $SSPLAT_VK_VALIDATION=1
-    bool        profile = false;      // or $SSPLAT_PROFILE=1
+    bool        validation = false;   // or $SS_VK_VALIDATION=1
+    bool        profile = false;      // or $SS_PROFILE=1
     bool        want_video = false;   // request the video-decode queue family
 };
 
@@ -97,7 +97,7 @@ public:
     // compile in the driver, not degrade. `coopMatReason()` says why it is off,
     // which is the first thing to look at when a machine is unexpectedly slow.
     //
-    // $SSPLAT_NN_COOPMAT=0 forces it off, for bisecting a numerical difference.
+    // $SS_NN_COOPMAT=0 forces it off, for bisecting a numerical difference.
     bool               hasCoopMat()    const { return coopmat_; }
     const std::string& coopMatReason() const { return coopmat_reason_; }
 

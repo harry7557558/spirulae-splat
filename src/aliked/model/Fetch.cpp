@@ -138,7 +138,13 @@ fs::path cache_root() {
     }
 #endif
     if (dir.empty()) dir = ".";
-    return dir / "spirulae-splat";
+    // An existing spirulae-splat/ from before the rename is adopted where it
+    // is -- the checkpoints in it are a big download to repeat.
+    std::error_code ec;
+    if (!fs::exists(dir / "spirula-studio", ec) &&
+        fs::is_directory(dir / "spirulae-splat", ec))
+        return dir / "spirulae-splat";
+    return dir / "spirula-studio";
 }
 
 bool have_curl() {

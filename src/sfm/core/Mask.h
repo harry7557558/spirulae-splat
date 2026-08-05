@@ -2,7 +2,7 @@
 //
 // A mask is a single-channel image; a pixel is *keep* where it is nonzero and
 // *ignore* where it is zero -- COLMAP's ImageReader.mask_path convention and
-// spirulae-splat's. Masking happens once, at extraction: keypoints under a zero
+// the trainer's. Masking happens once, at extraction: keypoints under a zero
 // pixel are dropped before `features.bin` is written, so every stage downstream
 // (matching, verification, mapping, BA) is masked for free and no stage has to
 // carry mask state.
@@ -159,9 +159,9 @@ inline std::string baseName(const std::string& s) {
 // Resolution is two-tier. First the explicit conventions are probed by
 // filename, cheapest and least surprising first:
 //
-//   masks/<name>.png        "00023.jpg.png"   COLMAP, spirulae-splat, SAM tools
+//   masks/<name>.png        "00023.jpg.png"   COLMAP, Spirula Studio, SAM tools
 //   masks/<stem>.png        "00023.png"       COLMAP's alternate, nerfstudio
-//   masks/<stem>_mask.png   "00023_mask.png"  spirulae-splat's suffix form
+//   masks/<stem>_mask.png   "00023_mask.png"  Spirula Studio's suffix form
 //
 // each over {.png,.jpg,.jpeg} in either case, which also covers a mask sharing
 // the image's exact filename. If none exists, a lazily-built index of the mask

@@ -1,8 +1,8 @@
 // The decode path declared in sfm/core/Image.h.
 //
 // stb_image is instantiated once for the whole repository, in
-// src/external/stb_image_impl.cpp, which cmake/SsplatSfm.cmake adds to this
-// library. Do NOT define STB_IMAGE_IMPLEMENTATION here: ssplat-gui links both
+// src/external/stb_image_impl.cpp, which cmake/SsSfm.cmake adds to this
+// library. Do NOT define STB_IMAGE_IMPLEMENTATION here: spirula-gui links both
 // this library and the engine, which carries that TU too.
 #include "sfm/core/Image.h"
 

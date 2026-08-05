@@ -29,8 +29,8 @@ Vulkan 1.2 core with features: `bufferDeviceAddress`, `timelineSemaphore`
 (both core-1.2 features; MoltenVK exposes both on Apple silicon). Optional,
 probed per device and reflected as pipeline variants where needed
 (spirv_tool compiles every subset of an entry's applicable variants, so
-any capability combination finds an exact blob; SSPLAT_VK_NATIVE_ATOMICS=0 /
-SSPLAT_VK_NATIVE_INT64=0 / SSPLAT_VK_NATIVE_INT8=0 force the fallback blobs
+any capability combination finds an exact blob; SS_VK_NATIVE_ATOMICS=0 /
+SS_VK_NATIVE_INT64=0 / SS_VK_NATIVE_INT8=0 force the fallback blobs
 for A/B testing):
 
 - `VK_EXT_shader_atomic_float` (`shaderBufferFloat32AtomicAdd`) — training
@@ -42,7 +42,7 @@ for A/B testing):
   VkSplat, both variants are always built.
 - `shaderInt64` — 64-bit sort keys, morton codes, large-buffer indexing.
   Entries in an int64_compat-including source get a `.noint64` variant
-  compiled with `-DSSPLAT_EMULATE_INT64` (`backend/vulkan/shaders/int64_compat.slang`),
+  compiled with `-DSS_EMULATE_INT64` (`backend/vulkan/shaders/int64_compat.slang`),
   and the embed step keeps only those whose base blob actually declares
   `OpCapability Int64` (the rest compile to a base-identical blob and are
   dropped). With emulation: index arithmetic narrows to int32
@@ -125,7 +125,7 @@ dropped for now and noted as a limitation).
   fall back to blocking `vkWaitSemaphores`) — the blocking path measures
   slower on desktop drivers, the same way `vkGetFenceStatus` polling beats
   `vkWaitForFences`. CPU devices (llvmpipe) always block
-  (`SSPLAT_VK_POLL_WAIT=0/1` overrides).
+  (`SS_VK_POLL_WAIT=0/1` overrides).
 - Barriers: a conservative global `COMPUTE|TRANSFER → COMPUTE|TRANSFER`
   memory barrier after every dispatch/copy inside a batch reproduces CUDA
   stream ordering exactly. Per-resource narrowing is a later optimization,
@@ -174,14 +174,14 @@ custom command per blob so the build's `-j` bounds how many run at once
 (each blob is a normal Ninja edge, printed `[n/m] SPIR-V <name>`, and only
 stale blobs recompile). The same tool then `embed`s the blobs into one
 generated TU (byte arrays + name registry), so binaries are self-contained.
-CMake locates slangc in PATH / `-DSSPLAT_SLANGC=`, checks
-`slangc -v` against the pinned `SSPLAT_SLANG_VERSION`, and on miss or
+CMake locates slangc in PATH / `-DSS_SLANGC=`, checks
+`slangc -v` against the pinned `SS_SLANG_VERSION`, and on miss or
 mismatch downloads + extracts the pinned GitHub release into the build tree
 (platform-detected archive; verified again after extraction).
 
 ## Slang compiler notes (2026-07: pinned 2026.12.0.1 for SPIR-V)
 
-The Vulkan backend pins `SSPLAT_SLANG_VERSION = 2026.12.0.1` (root
+The Vulkan backend pins `SS_SLANG_VERSION = 2026.12.0.1` (root
 CMakeLists); the CUDA emission flow stays on 2026.2.1. The upgrade was
 needed because 2026.2.1 could not compile the projection-backward autodiff
 (bwd_diff of the full projection chain). Slang autodiff has a history of
@@ -281,7 +281,7 @@ mask kernel fits and is pushed directly. Float `atomicMax` on radii is
 Packed projection substitutes an int32 0/1 mask (bool would need 8-bit
 stores) scanned by `backend::inclusive_sum<int32>` with a 4-byte nnz
 readback. Parity: `backend/tests/projection_parity.cpp` builds under BOTH
-backends (CUDA `-DSSPLAT_BUILD_BACKEND_TESTS=ON` dumps, Vulkan compares);
+backends (CUDA `-DSS_BUILD_BACKEND_TESTS=ON` dumps, Vulkan compares);
 30 fused + 6 packed fp32 configs plus 12 fused + 2 packed value-quant
 configs, ~7.2M floats, zero tolerance violations on all three local devices
 (packed nnz and compaction order match exactly).
@@ -356,8 +356,8 @@ the engine level.
   pack kernel writing the [H,W,3] byte image in whole words (tail lands in
   the allocation's 4-byte rounding). Viewer work runs on the default stream
   (the high-priority viewer stream nuance is dropped; single-queue
-  submission order already serializes). `SSPLAT_VK_DEBUG_SYNC=1` (legacy alias
-  `SSPLAT_VIS_DEBUG_SYNC`) syncs + reports after EVERY kernel dispatch —
+  submission order already serializes). `SS_VK_DEBUG_SYNC=1` (legacy alias
+  `SS_VIS_DEBUG_SYNC`) syncs + reports after EVERY kernel dispatch —
   the standard way to bisect device-lost/segfault failures to a kernel.
 - **UB-loop portability rule**: Visualizer.cu's Karras split search
   (`for (tf = 2; (t = (l+tf-1)/tf) >= 1; tf <<= 1)`) terminates only through
@@ -712,16 +712,16 @@ the engine level.
     "densify disabled" configs must keep refine_every nonzero (a zero
     default SIGFPEs) — disable via a large refine_start_iter.
 - **Real-dataset training via CLI/GUI (phase 5 wrap-up)**: the
-  `SSPLAT_BACKEND=vulkan` CMake branch now builds `ssplat train` (always —
+  `SS_BACKEND=vulkan` CMake branch now builds `spirula train` (always —
   it is this build's primary artifact, as in the CUDA no-torch build) and
-  the GUI (with `SSPLAT_BUILD_GUI=ON`), linking `csrc_portable` +
-  `ssplat_backend_vulkan` through the shared app-target section
-  (`SSPLAT_APP_LIBS` selects the per-backend libraries; `ssplat mesh`
+  the GUI (with `SS_BUILD_GUI=ON`), linking `csrc_portable` +
+  `ss_backend_vulkan` through the shared app-target section
+  (`SS_APP_LIBS` selects the per-backend libraries; `spirula mesh`
   stays CUDA-only while meshing kernels are stubbed). The app layer
   (TrainerCore, parsers, RenderWorker, GUI) needed no changes — it was
   already CUDA-free apart from the guarded driver preflight.
   Verified end-to-end on 360_v2 garden_4 (185 cameras, 1296x840,
-  nerfstudio format with depth/normal GT): `ssplat train 3dgs
+  nerfstudio format with depth/normal GT): `spirula train 3dgs
   --num-iterations 3000` with stock preset defaults (bilagrid-PPISP RGB +
   depth/normal bilagrids, PPISP, quantization level 1, FPBO) trains
   cleanly on NVIDIA Vulkan — 138.8k -> 447.5k splats through MCMC
@@ -735,7 +735,7 @@ the engine level.
     device into a semaphore wait that never returns (GPU idle, host in
     poll: the signature of a lost submission). Fixed with the same skip;
     `bilagrid_parity` now covers the null-input-grad call.
-  - Debugging aid added: `SSPLAT_VK_DEBUG_SYNC=1` now prints each entry
+  - Debugging aid added: `SS_VK_DEBUG_SYNC=1` now prints each entry
     name + grid dims BEFORE dispatching (plus the existing post-sync
     "ok"), so a hang bisects to the exact dispatch even when the sync
     never returns.
@@ -762,11 +762,11 @@ the engine level.
   device_select / device_current` in BackendRuntime.h): enumeration uses a
   throwaway VkInstance (never initializes the Context singleton), so apps
   can list devices before committing. Selection precedence inside
-  `Context::init`: `device_select()` > `SSPLAT_VK_DEVICE` env (index or
+  `Context::init`: `device_select()` > `SS_VK_DEVICE` env (index or
   name substring) > auto-score (discrete > integrated, VRAM tie-break).
   One device per process: after the context exists, `device_select` only
   succeeds for the device already in use. The CUDA backend implements the
-  same four calls inline over cudart. `ssplat train` prints the device
+  same four calls inline over cudart. `spirula train` prints the device
   table at startup (`*` marks the device in use, VkSplat-style) and takes
   `--device <index|name substring>`; the GUI has a Device combo in
   the train panel that locks once training starts.
@@ -775,13 +775,13 @@ the engine level.
   csrc_portable vs the backend lib) + `TrainingStubsManual.cpp`
   (meshing::OccupancyEvaluator methods) provide throwing
   definitions for every still-CUDA-only launch function, so the FULL
-  portable engine links against ssplat_backend_vulkan today. Regenerate
+  portable engine links against ss_backend_vulkan today. Regenerate
   after porting a module (a ported symbol must lose its stub). The
   kernel-level parity tools never pull these objects (static-lib
   granularity), so they stay engine-free.
 - Parity: `backend/tests/engine/engine_render_parity.cpp` links the whole
   portable engine (CMake `backend/tests/engine/` group; CUDA branch builds
-  it against csrc under SSPLAT_BUILD_BACKEND_TESTS). It drives
+  it against csrc under SS_BUILD_BACKEND_TESTS). It drives
   set_data_3dgs / set_camera_params / engine_init_background_{sh,noise} /
   engine_init_color_space / forward_3dgs (4 primitive-camera configs +
   noise-mode config) / depth_to_normal / engine_viewer_init + set_grid +

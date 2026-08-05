@@ -247,7 +247,7 @@ inline SolverOptions bundleSolverOptions(const BundleOptions& bopt) {
 
 // Copy a solved problem's parameters back into the reconstruction it came from.
 // `P` is the layout's own problem unless the caller moved it out to hand to a
-// solver, which `ssplat-sfm ba` does.
+// solver, which `spirula-sfm ba` does.
 inline void writeBundle(Reconstruction& rec, const BundleLayout& L, const BAProblem& P) {
     for (uint32_t i = 0; i < P.num_images; i++) {
         Image& im = *L.imgOf[i];

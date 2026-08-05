@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include "core/Env.h"
 
 namespace nn {
 namespace vk {
@@ -30,7 +31,7 @@ const char* Context::resultName(VkResult r) {
         case VK_ERROR_INITIALIZATION_FAILED:    return "VK_ERROR_INITIALIZATION_FAILED";
         case VK_ERROR_DEVICE_LOST:
             return "VK_ERROR_DEVICE_LOST (a kernel faulted or hung; rerun with "
-                   "SSPLAT_NN_DEBUG_SYNC=1 to bisect it to one dispatch)";
+                   "SS_NN_DEBUG_SYNC=1 to bisect it to one dispatch)";
         case VK_ERROR_MEMORY_MAP_FAILED:        return "VK_ERROR_MEMORY_MAP_FAILED";
         case VK_ERROR_LAYER_NOT_PRESENT:        return "VK_ERROR_LAYER_NOT_PRESENT";
         case VK_ERROR_EXTENSION_NOT_PRESENT:    return "VK_ERROR_EXTENSION_NOT_PRESENT";
@@ -200,14 +201,10 @@ VkInstance createInstance(bool validation, VkDebugUtilsMessengerEXT* messenger) 
     return inst;
 }
 
-bool envFlag(const char* name) {
-    const char* v = std::getenv(name);
-    return v && v[0] && std::strcmp(v, "0") != 0;
-}
-
-// Same, for a knob that is on unless explicitly switched off.
-bool envFlagDefaultOn(const char* name) {
-    const char* v = std::getenv(name);
+// A knob that is on unless explicitly switched off. (The other direction is
+// spirula::env_on.)
+bool envFlagDefaultOn(const char* suffix) {
+    const char* v = spirula::env(suffix);
     return !v || !v[0] || std::strcmp(v, "0") != 0;
 }
 
@@ -311,8 +308,8 @@ Context::~Context() {
 }
 
 void Context::init(const ContextOptions& opts) {
-    const bool validation = opts.validation || envFlag("SSPLAT_VK_VALIDATION");
-    profiling_ = opts.profile || envFlag("SSPLAT_PROFILE");
+    const bool validation = opts.validation || spirula::env_on("VK_VALIDATION");
+    profiling_ = opts.profile || spirula::env_on("PROFILE");
 
     instance_ = createInstance(validation, &debug_messenger_);
     pickPhysicalDevice(opts);
@@ -335,18 +332,18 @@ void Context::pickPhysicalDevice(const ContextOptions& opts) {
         probeBaseline(devs[i], infos[i]);
     }
 
-    // Explicit selection: option, then $SSPLAT_VK_DEVICE (index or name substring).
+    // Explicit selection: option, then $SS_VK_DEVICE (index or name substring).
     int chosen = -1;
     std::string match = opts.device_match;
     int want_index = opts.device_index;
-    if (const char* env = std::getenv("SSPLAT_VK_DEVICE")) {
+    if (const char* env = spirula::env("VK_DEVICE")) {
         char* end = nullptr;
         long v = std::strtol(env, &end, 10);
         if (end && *end == '\0') want_index = (int)v;
         else match = env;
     }
     if (want_index >= 0) {
-        NN_CHECK(want_index < (int)n, "SSPLAT_VK_DEVICE index %d out of range (%u devices)",
+        NN_CHECK(want_index < (int)n, "SS_VK_DEVICE index %d out of range (%u devices)",
                    want_index, n);
         chosen = want_index;
     } else if (!match.empty()) {
@@ -451,8 +448,8 @@ void Context::createDevice(const ContextOptions& opts) {
     // module is first acquired -- so leaving the flag false is enough to keep
     // the capability off the device entirely.
 #ifdef VK_KHR_cooperative_matrix
-    if (!envFlagDefaultOn("SSPLAT_NN_COOPMAT")) {
-        coopmat_reason_ = "disabled by SSPLAT_NN_COOPMAT=0";
+    if (!envFlagDefaultOn("NN_COOPMAT")) {
+        coopmat_reason_ = "disabled by SS_NN_COOPMAT=0";
     } else if (!has(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME)) {
         coopmat_reason_ = "driver does not expose VK_KHR_cooperative_matrix";
     } else {
@@ -503,7 +500,7 @@ void Context::createDevice(const ContextOptions& opts) {
 
     // ---- video decode ---------------------------------------------------
     bool want_video = opts.want_video;
-#ifdef SSPLAT_HAVE_VIDEO
+#ifdef SS_HAVE_VIDEO
     want_video = true;  // always probe; the decoder is created lazily
 #endif
     if (want_video) {

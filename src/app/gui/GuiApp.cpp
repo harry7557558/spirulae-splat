@@ -52,19 +52,19 @@ std::string format_count(double n) {
 }
 
 const char* preset_help(const std::string& name) {
-    for (const auto& p : kSsplatPresets)
+    for (const auto& p : kTrainPresets)
         if (name == p.name) return p.help;
     return "";
 }
 
 // True when two configs parse to the same dataset: every dataparser-group
 // field plus the non-dataparser fields load_dataset() consumes.
-bool parse_settings_equal(const SsplatConfig& a, const SsplatConfig& b) {
+bool parse_settings_equal(const TrainConfig& a, const TrainConfig& b) {
     bool eq = true;
-#define SSPLAT_CMP(type, member, default_, group, choices, help)               \
+#define SS_CMP(type, member, default_, group, choices, help)                   \
     if (!std::strcmp(group, "dataparser")) eq = eq && (a.member == b.member);
-    SSPLAT_CONFIG_FIELDS(SSPLAT_CMP)
-#undef SSPLAT_CMP
+    SS_CONFIG_FIELDS(SS_CMP)
+#undef SS_CMP
     return eq && a.data == b.data &&
            a.warp_to_pinhole == b.warp_to_pinhole &&
            a.warp_spherical_to_pinhole == b.warp_spherical_to_pinhole &&
@@ -185,8 +185,8 @@ bool GuiApp::training_busy() const {
 }
 
 void GuiApp::apply_preset(const std::string& preset) {
-    SsplatConfig fresh;
-    ssplat_apply_preset(fresh, preset);
+    TrainConfig fresh;
+    train_apply_preset(fresh, preset);
     // Keep GUI-managed context across preset switches.
     fresh.data = _cfg.data;
     fresh.image_dir = _cfg.image_dir;
@@ -702,8 +702,8 @@ void GuiApp::draw_menu_bar() {
     }
     if (ImGui::BeginMenu("Help")) {
         if (ImGui::BeginMenu("About")) {
-            ImGui::TextUnformatted("Spirulae Splat");
-            ImGui::TextDisabled("Native trainer GUI for spirulae-splat.");
+            ImGui::TextUnformatted("Spirula Studio");
+            ImGui::TextDisabled("Trains 3D Gaussian Splatting models.");
             ImGui::TextDisabled("github.com/harry7557558/spirulae-splat");
             ImGui::EndMenu();
         }
@@ -724,7 +724,7 @@ void GuiApp::draw_home() {
     ImGui::Dummy(ImVec2(0, 40));
 
     ImGui::SetWindowFontScale(1.7f);
-    ImGui::TextUnformatted("Spirulae Splat");
+    ImGui::TextUnformatted("Spirula Studio");
     ImGui::SetWindowFontScale(1.0f);
     ImGui::TextDisabled("Reconstruct 3D scenes from photos with Gaussian splatting.");
     ImGui::Dummy(ImVec2(0, 24));
@@ -1516,15 +1516,15 @@ void GuiApp::draw_sfm_advanced() {
     help_tooltip_on_hover(
         "Keep features/ and matches.bin in the output folder after a "
         "successful run. They are large, and only useful for re-running the "
-        "mapper by hand with ssplat-sfm.");
+        "mapper by hand with spirula-sfm.");
 
     ImGui::SetNextItemWidth(-1);
     ImGui::InputTextWithHint("##sfmextra",
-                             "extra ssplat-sfm flags, e.g. --max-error 2",
+                             "extra spirula-sfm flags, e.g. --max-error 2",
                              &_sfm_job.extra_args);
     help_tooltip_on_hover(
-        "Passed to `ssplat-sfm auto` verbatim. Everything this panel does not "
-        "show is reachable here; run `ssplat-sfm auto --help` for the list.");
+        "Passed to `spirula-sfm auto` verbatim. Everything this panel does not "
+        "show is reachable here; run `spirula-sfm auto --help` for the list.");
 
     ImGui::SeparatorText("Fallbacks");
     ImGui::BeginDisabled(!backends().builtin_video);
@@ -2080,12 +2080,12 @@ void GuiApp::draw_train_settings() {
     // ---- preset + options ----
     // Snapshot: any change to a dataset-parsing option below triggers an
     // automatic reload (deferred until the edited widget loses focus).
-    SsplatConfig parse_before = _cfg;
+    TrainConfig parse_before = _cfg;
     ImGui::BeginDisabled(busy);
     ImGui::SeparatorText("Preset");
     ImGui::SetNextItemWidth(-8);
     if (ImGui::BeginCombo("##preset", _preset.c_str())) {
-        for (const auto& p : kSsplatPresets) {
+        for (const auto& p : kTrainPresets) {
             bool sel = _preset == p.name;
             if (ImGui::Selectable(p.name, sel)) apply_preset(p.name);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) &&
@@ -2318,7 +2318,7 @@ void GuiApp::draw_status_strip() {
     const float avail = ImGui::GetContentRegionAvail().x;
 
     TrainRunner::Phase ph = _runner.phase();
-    ssplat::TrainerProgress p = _runner.latest_progress();
+    spirula::TrainerProgress p = _runner.latest_progress();
     if (ph == TrainRunner::Phase::Training && p.total_steps > 0) {
         float frac = (float)(p.step + 1) / (float)p.total_steps;
         char label[64];

@@ -50,7 +50,7 @@ Commands are recorded into an open command buffer and submitted lazily. A
 buffer still holding commands that reference the buffer about to be destroyed.
 The next submit then fails with `VK_ERROR_DEVICE_LOST`, thousands of dispatches
 away from the free that caused it, and it only reproduces when batching is on —
-`SSPLAT_NN_DEBUG_SYNC=1` submits every dispatch separately and makes the bug vanish.
+`SS_NN_DEBUG_SYNC=1` submits every dispatch separately and makes the bug vanish.
 
 `set_drain_hook` installs `Stream::sync` for this. The corollary for callers:
 **freeing a pool slot on a per-frame path stalls the pipeline**, so the tracker
@@ -100,8 +100,8 @@ That is why the launchers always pass a module's full `SpecList`.
 
 | | |
 |---|---|
-| `SSPLAT_VK_VALIDATION=1` | Khronos validation layers |
-| `SSPLAT_NN_DEBUG_SYNC=1` | print entry + grid before each dispatch, sync and report after — bisects a device-lost failure to one kernel |
-| `SSPLAT_PROFILE=1` | timestamp queries; `Session::printProfile()` prints per-entry GPU time. Note it adds a query pair per dispatch, which at SAM 3's dispatch counts inflates wall time by ~35% — use it for *relative* attribution, and `ssam-cli track`'s own ms/frame line for absolute numbers |
+| `SS_VK_VALIDATION=1` | Khronos validation layers |
+| `SS_NN_DEBUG_SYNC=1` | print entry + grid before each dispatch, sync and report after — bisects a device-lost failure to one kernel |
+| `SS_PROFILE=1` | timestamp queries; `Session::printProfile()` prints per-entry GPU time. Note it adds a query pair per dispatch, which at SAM 3's dispatch counts inflates wall time by ~35% — use it for *relative* attribution, and `ssam-cli track`'s own ms/frame line for absolute numbers |
 | `test_ops --bench` | GEMM and attention at the exact shapes SAM 3 runs them at, in TFLOP/s — the loop for tuning a kernel without a 30-second end-to-end run |
-| `SSPLAT_VK_DEVICE=<i\|name>` | device selection |
+| `SS_VK_DEVICE=<i\|name>` | device selection |

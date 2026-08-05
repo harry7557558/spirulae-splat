@@ -31,7 +31,7 @@ float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 // stage: the neck's 4x transposed convolution holds a 288x288x256 output, its
 // GEMM staging buffer and the im2col columns at once. Measured against the
 // released SAM 3 checkpoint at its native 1008x1008, concept segmentation and
-// video tracking both peak at 317 MiB (`ssplat-sam --vram` prints it), so
+// video tracking both peak at 317 MiB (`spirula-sam --vram` prints it), so
 // this is roughly 1.6x headroom. Overflowing it is a descriptive error, not a
 // corruption: nn::Arena refuses to grow while pointers are live.
 constexpr uint64_t kArenaReserve = 512ull << 20;

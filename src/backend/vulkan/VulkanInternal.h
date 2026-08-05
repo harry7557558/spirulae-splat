@@ -97,7 +97,7 @@ VkDeviceSize staging_max_chunk();
 // failure (sticky error set).
 bool params_alloc(uint32_t bytes, uint64_t* device_addr, void** mapped);
 
-// --- GPU-timestamp kernel timing (SSPLAT_PROFILE only) ---------------------
+// --- GPU-timestamp kernel timing (SS_PROFILE only) ---------------------
 // Bracket a dispatch to measure its true on-device execution time via
 // timestamp queries. gpu_ts_begin() writes a TOP-of-pipe timestamp into a
 // freshly acquired query slot and returns a handle (>= 0), or -1 when
@@ -105,12 +105,12 @@ bool params_alloc(uint32_t bytes, uint64_t* device_addr, void** mapped);
 // exhausted. gpu_ts_end() writes the matching BOTTOM-of-pipe timestamp.
 // gpu_ts_resolve() -- called after a full device drain, so results are ready
 // -- reads every completed pair, accumulates GPU time into the profiler's GPU
-// bucket, and recycles the slots. All no-ops unless SSPLAT_PROFILE is set.
+// bucket, and recycles the slots. All no-ops unless SS_PROFILE is set.
 int  gpu_ts_begin(VkCommandBuffer cb, const char* entry);
 void gpu_ts_end(VkCommandBuffer cb, int handle);
 void gpu_ts_resolve();
 // Prints the per-entry-point GPU-time breakdown (called at shutdown when
-// SSPLAT_PROFILE is set); reveals which kernel dominates device time.
+// SS_PROFILE is set); reveals which kernel dominates device time.
 void gpu_ts_report_by_entry();
 
 }  // namespace vk

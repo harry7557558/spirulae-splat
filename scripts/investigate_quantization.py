@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Investigate optimizer-state quantization for a spirulae-splat checkpoint.
+"""Investigate optimizer-state quantization for a Spirula Studio checkpoint.
 
 Loads g1_*/g2_*/bilagrid_*/ppisp_* tensors from <ckpt>/full/ (the layout
 written by engine_save_checkpoint(full_dump=True)), mirrors the current

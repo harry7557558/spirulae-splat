@@ -29,7 +29,7 @@ namespace dsparse {
 // "gsplat" center_method. This implements the up/poses pair only;
 // check_config() warns when the config asks for anything else. The reference
 // implementation for the rest is kept in Python, on no code path:
-// spirulae_splat/modules/camera_utils.py plus the call-site algebra in
+// reference/python/camera_utils.py plus the call-site algebra in
 // docs/notes/pose-normalization.md.
 // ---------------------------------------------------------------------------
 double compute_normalized_transform(const std::vector<float>& c2w, int64_t n,

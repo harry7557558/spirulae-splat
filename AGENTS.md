@@ -4,12 +4,15 @@ Read this first. Detail lives in `docs/`; this file is the map and the rules.
 
 ## What this project is
 
-A 3D Gaussian Splatting trainer. It began as a Nerfstudio/gsplat fork and is
-now a **standalone C++ codebase**: one executable, `ssplat`, with two
-interchangeable compute backends (CUDA and Vulkan via Slang). There is no
-Python package, no pybind module and no PyTorch anywhere — the trainer, the
-dataset parsers, the viewer, resume, meshing and eval are all native.
-**Both backends must keep working** on every change.
+**Spirula Studio**, a 3D Gaussian Splatting trainer, formerly spirulae-splat.
+It began as a Nerfstudio/gsplat fork and is now a **standalone C++ codebase**:
+one executable, `spirula`, with two interchangeable compute backends (CUDA and
+Vulkan via Slang). There is no Python package, no pybind module and no PyTorch
+anywhere — the trainer, the dataset parsers, the viewer, resume, meshing and
+eval are all native. **Both backends must keep working** on every change.
+
+The repository directory keeps the old name (the GitHub Pages URL under
+`viewer/` depends on it); nothing else does.
 
 Direction of travel, so you don't push the wrong way:
 
@@ -83,7 +86,7 @@ src/
 │                             -- READ src/sam/README.md
 ├── video/                  container demux + VK_KHR_video_decode_*, on top of
 │                             nn/. PATENT-GATED: compiled only with
-│                             SSPLAT_ENABLE_PATENTED=ON -- READ src/video/README.md
+│                             SS_ENABLE_PATENTED=ON -- READ src/video/README.md
 ├── backend/                the backend seam — READ backend/README.md
 │   ├── api/                backend-neutral launch declarations (GENERATED forwarders)
 │   ├── cuda/  common/      CUDA runtime shim, SortScan, Profiler
@@ -93,16 +96,16 @@ src/
 │   └── tests/              native cross-backend parity tests
 ├── shaders/                Slang device math SHARED by both backends — compiled
 │                             twice, to src/generated/*.cuh and to SPIR-V
-├── app/                    the ONE application, `ssplat` -- every tool below in
+├── app/                    the ONE application, `spirula` -- every tool below in
 │   │                         one executable, dispatched on argv[1]
 │   ├── Tools.h  Main.cpp   the subcommand table and the only main()
-│   ├── cli/                main.cpp (`ssplat train`), mesh_main.cpp (mesh),
+│   ├── cli/                main.cpp (`spirula train`), mesh_main.cpp (mesh),
 │   │                         sfm_main.cpp (sfm), sam_main.cpp (sam)
 │   ├── FrameExtract.{h,cpp}  video -> sharp (optionally masked) frames, shared
-│   │                         by `ssplat sam` and the GUI
+│   │                         by `spirula sam` and the GUI
 │   ├── WriterPool.h        threads that encode/write images while the GPU runs
 │   │                         the next frame; every masking loop uses it
-│   ├── gui/                Dear ImGui desktop app (`ssplat` with no arguments)
+│   ├── gui/                Dear ImGui desktop app (`spirula` with no arguments)
 │   ├── webviewer/          HTTP server + render worker + viewer.html (the ONE
 │   │                         browser client, embedded into the engine library
 │   │                         so the CLI and the GUI serve the same bytes)
@@ -115,7 +118,7 @@ src/
 ├── app/EvalMetrics.{h,cpp} l1 / psnr / ssim (torchmetrics-compatible) and the
 │                             colour correction the cc_ metrics use. LPIPS is
 │                             NOT here — reference/python/eval_lpips.py
-├── checkpoint/             Resume.{h,cpp} — config.json -> SsplatConfig,
+├── checkpoint/             Resume.{h,cpp} — config.json -> TrainConfig,
 │                             checkpoint resolution, resumability checks;
 │                             Adapt.{h,cpp} — host-side layout adaptation
 │                             (the state restore itself is EngineCheckpoint.cpp)
@@ -129,36 +132,36 @@ Always use the dev scripts; they run codegen first and pick a sane job count.
 
 ```bash
 # Linux
-bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BUILD_GUI=ON -DSSPLAT_BACKEND=cuda
-bash build_develop.bash -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BACKEND=vulkan   # separate build dir advised
+bash build_develop.bash -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=cuda
+bash build_develop.bash -DSS_BUILD_CLI=ON -DSS_BACKEND=vulkan   # separate build dir advised
 # Windows (cmd)
-build_develop.bat -DSSPLAT_BUILD_CLI=ON -DSSPLAT_BACKEND=vulkan
+build_develop.bat -DSS_BUILD_CLI=ON -DSS_BACKEND=vulkan
 ```
 
 Use
 `build_develop.bash`; it runs codegen first and picks a RAM-aware job count.
 
-Everything builds into **one executable**, `build/ssplat`: no arguments opens
-the GUI, `ssplat sfm|train|sam|mesh` are the command-line tools, and a symlink
-named `ssplat-sfm` runs that tool directly (`src/app/Tools.h`). The GUI runs
+Everything builds into **one executable**, `build/spirula`: no arguments opens
+the GUI, `spirula sfm|train|sam|mesh` are the command-line tools, and a symlink
+named `spirula-sfm` runs that tool directly (`src/app/Tools.h`). The GUI runs
 reconstruction by re-running itself as a child process, so there is no sibling
-binary to keep next to it. `-DSSPLAT_SEPARATE_TOOLS=ON` also builds the old
+binary to keep next to it. `-DSS_SEPARATE_TOOLS=ON` also builds the old
 per-tool executables.
 
 Backends build into different trees; keep them separate (`-B build_cuda`,
 `-B build`) so you can test both without reconfiguring. Options:
-`SSPLAT_BACKEND` (`cuda`|`vulkan`), `SSPLAT_BUILD_CLI`, `SSPLAT_BUILD_GUI`,
-`SSPLAT_BUILD_BACKEND_TESTS`, `SSPLAT_DEBUG_SYMBOLS`,
-`SSPLAT_BUILD_SFM`, `SSPLAT_BUILD_SAM`, `SSPLAT_ENABLE_PATENTED`,
-`SSPLAT_SEPARATE_TOOLS`.
+`SS_BACKEND` (`cuda`|`vulkan`), `SS_BUILD_CLI`, `SS_BUILD_GUI`,
+`SS_BUILD_BACKEND_TESTS`, `SS_DEBUG_SYMBOLS`,
+`SS_BUILD_SFM`, `SS_BUILD_SAM`, `SS_ENABLE_PATENTED`,
+`SS_SEPARATE_TOOLS`.
 Full matrix and per-platform notes: `docs/build.md`.
 
-**`SSPLAT_ENABLE_PATENTED` is OFF by default and should stay that way in
+**`SS_ENABLE_PATENTED` is OFF by default and should stay that way in
 anything you commit.** It gates `src/video/` -- the H.264 / H.265 / AV1
 bitstream parsers and the VK_KHR_video_decode_* driver -- which is the only
 patent-encumbered code in the tree. With it off, everything that wanted it
 shells out to ffmpeg instead; no feature disappears, a subprocess appears. See
-the comment on the option in `cmake/SsplatOptions.cmake` before changing it.
+the comment on the option in `cmake/SsOptions.cmake` before changing it.
 
 ## Codegen — the invariants that bite
 
@@ -192,18 +195,18 @@ Rules:
    so a rename can't silently drop declarations.
 4. `src/config/TrainConfig.h` is the **single source of truth** for the
    training config, and it is hand-written, not generated. Adding a row to
-   `SSPLAT_CONFIG_FIELDS` makes the field appear in the native CLI, `--help`,
+   `SS_CONFIG_FIELDS` makes the field appear in the native CLI, `--help`,
    the GUI's "All Options" editor, the run's `config.json` and `TrainerCore` —
    the struct is expanded from the same table, so the two cannot drift.
 5. `.cuh` declaration sections must stay CUDA-include-free — they have to
-   parse under `-DSSPLAT_BACKEND_VULKAN` without the CUDA toolkit.
+   parse under `-DSS_BACKEND_VULKAN` without the CUDA toolkit.
 
 ## The Vulkan-only subsystems
 
 `src/sfm/`, `src/nn/`, `src/sam/` and `src/video/` are **not** part of the
 two-backend rule below. They are Vulkan + Slang only, carry their own Vulkan
 context, share nothing with the training engine, and are absent from a CUDA
-build by default (`SSPLAT_BUILD_SFM` / `SSPLAT_BUILD_SAM` default OFF there).
+build by default (`SS_BUILD_SFM` / `SS_BUILD_SAM` default OFF there).
 Nothing in them goes through `cmake/sources.txt`.
 
 The layering runs one way and must keep doing so:
@@ -240,7 +243,7 @@ before touching anything under `backend/vulkan/`.
 
 ```bash
 # native parity tests (CUDA build)
-bash build_develop.bash -DSSPLAT_BUILD_BACKEND_TESTS=ON && ./build/<test_name>
+bash build_develop.bash -DSS_BUILD_BACKEND_TESTS=ON && ./build/<test_name>
 # the Vulkan build produces the same test binaries unconditionally
 ```
 
@@ -268,6 +271,13 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
 - Slang device math is shared by both backends; don't fork it per backend.
 - A `.cpp` (as opposed to `.cu`) under `src/` means "portable, compiles for Vulkan
   builds too". Keep the engine layer in `.cpp` and CUDA-free.
+- **Macros, CMake options and environment variables are `SS_`-prefixed.** The
+  prefix is short enough to collide with `<signal.h>` and `winuser.h`, so
+  `tools/check_ss_prefix.sh` (run by `build_develop.bash`) refuses any name in
+  `tools/ss_reserved_names.txt`. Read environment variables through
+  `spirula::env("SUFFIX")` (`src/core/Env.h`), never `getenv` directly — the
+  deprecated `SSPLAT_` spelling is honoured in exactly that one function.
+- C++ code lives in `namespace spirula` where it is namespaced at all.
 
 ## Gotchas worth knowing before you hit them
 
@@ -279,6 +289,15 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   free of CUDA intrinsics for the same reason.
 - **Quantized gradient codecs must decode code 0 to exactly `0.0`.** Anything
   else and Adam amplifies the pseudo-gradient into visible floaters.
+- **Never name a `thread_local` inside an `omp parallel` region.** The team
+  threads are different threads, so each one resolves it to its *own* copy —
+  which the calling thread never sized. Keep the storage `thread_local` if you
+  want it reused, but take a raw pointer outside the region and use that
+  inside; `EvalMetrics.cpp`'s SSIM slab is the worked example.
+- **Big per-call scratch is a scaling bug, not just an allocation.** Anything
+  over glibc's mmap threshold is faulted in and zeroed by the kernel on every
+  call, and `mmap_lock` is per *process* — so several worker threads each
+  allocating tens of MB serialize against each other. Reuse the buffer.
 - **Scripted runs need `--keep-viewer-alive 0`**, or training hangs at exit
   waiting on the viewer.
 - **A kernel with one slot per image must fold its grid.** CUDA caps
@@ -288,7 +307,7 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   `kernels/bilagrid/BilagridConfig.cuh` for the 3D case) and pass the fold
   factor to the kernel. Related: the bilagrid samplers index cells with
   int32, which `engine_init_bilagrid_*` enforces up front.
-- **`SSPLAT_PROFILE=1`** enables the per-stage backend timing breakdown
+- **`SS_PROFILE=1`** enables the per-stage backend timing breakdown
   (H2D / D2H / D2D / memset / device / host), header-only, both backends.
 - **The engine is a process-global singleton.** Call `engine_reset()` between
   runs that swap datasets, or the new run inherits the old splats, camera

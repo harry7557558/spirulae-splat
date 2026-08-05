@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace ssplat { class TrainerSession; }
+namespace spirula { class TrainerSession; }
 
 namespace gui {
 
@@ -27,7 +27,7 @@ public:
     // Build GL buffers from the parsed dataset. Requires a current GL
     // context (GUI thread) and the session's load_dataset() to have
     // completed. Returns false when GL init fails (missing functions).
-    bool build(const ssplat::TrainerSession& session);
+    bool build(const spirula::TrainerSession& session);
     bool built() const { return _built; }
 
     // Render into the internal FBO; returns the color texture (0 on error).

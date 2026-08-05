@@ -1,7 +1,7 @@
 # Porting the segmentation stack into this repo
 
 Record of moving the standalone `ssam` tree (a Vulkan + Slang port of SAM 2 /
-SAM 3) into `spirulae-splat`, and of what the GUI now does with it.
+SAM 3) into Spirula Studio, and of what the GUI now does with it.
 
 Landed 2026-08-01. What is left is at the bottom and in
 [`src/sam/README.md`](../../src/sam/README.md).
@@ -26,7 +26,7 @@ Neither is a requirement any more; both are still reachable, on purpose:
 | stage | built in | fallback | why keep the fallback |
 |---|---|---|---|
 | frames | `VK_KHR_video_decode_*` (`src/video/`) | ffmpeg | patent gate (off by default); codecs and profiles a driver will not decode; Intel/llvmpipe expose no video queue at all |
-| masks | SAM 2 / SAM 3 (`src/sam/`) | `python scripts/mask.py` | CUDA builds, where `SSPLAT_BUILD_SAM` is off; a user who already has lang-sam tuned |
+| masks | SAM 2 / SAM 3 (`src/sam/`) | `python scripts/mask.py` | CUDA builds, where `SS_BUILD_SAM` is off; a user who already has lang-sam tuned |
 
 ## 2. The three-way split
 
@@ -54,14 +54,14 @@ not already know from the directory.
 - `ssam::` → `nn::` / `sam::` / `video::`; `SSAM_LOG_*` → `NN_LOG_*`;
   `SSAM_CHECK` → `NN_CHECK`.
 - Runtime knobs joined the repository's namespace: `SSAM_LOG` →
-  `SSPLAT_NN_LOG`, `SSAM_DEBUG_SYNC` → `SSPLAT_NN_DEBUG_SYNC`. Device selection
+  `SS_NN_LOG`, `SSAM_DEBUG_SYNC` → `SS_NN_DEBUG_SYNC`. Device selection
   and validation deliberately took the *engine's* existing names —
-  `SSPLAT_VK_DEVICE`, `SSPLAT_VK_VALIDATION`, `SSPLAT_PROFILE` — so one knob
+  `SS_VK_DEVICE`, `SS_VK_VALIDATION`, `SS_PROFILE` — so one knob
   moves both subsystems, which is what a user expects and what the eventual
   one-device convergence needs.
 - The vendored `stb_image` was dropped for `src/external/`'s (same version),
   and image I/O stopped instantiating it — the repository has one impl TU.
-- The two apps became `ssplat sam` subcommands (`segment`, `track`, `video`,
+- The two apps became `spirula sam` subcommands (`segment`, `track`, `video`,
   `extract`, `devices`).
 - `ssam`'s `tools/spirv_embed.cpp` was dropped for `spirv_tool`'s new
   `embed --nn <tag>` mode, so the repository still has one host tool for SPIR-V.
@@ -103,13 +103,13 @@ how frames are chosen cannot differ between them.
   is *not* open source and not GPLv3-compatible, so it gets a tick box. The
   wording is three sentences on purpose — a wall of legal text is read by
   nobody, which is the outcome the requirement exists to avoid.
-- **Advanced** — an "extra flags" field passed to `ssplat sfm auto` verbatim,
+- **Advanced** — an "extra flags" field passed to `spirula sfm auto` verbatim,
   and explicit "use ffmpeg" / "use the Python script" overrides, so an expert
   is never boxed in by what the panel chose to surface.
 
 ### Why SfM runs as a child process
 
-`SfmRunner` re-runs **this executable** as `ssplat sfm auto ...` rather than
+`SfmRunner` re-runs **this executable** as `spirula sfm auto ...` rather than
 calling the library. This is a deliberate current state, not leftover COLMAP
 shape:
 
@@ -137,9 +137,9 @@ known, contained bet.
 On this machine (RTX 5070 Laptop, Intel RPL-S, llvmpipe), Vulkan build:
 
 - `nn_ops_test` (30 checks) and `sam_pipeline_test` pass on all three devices.
-- `ssplat sam segment` with a text prompt and with a click, on a real SAM 3 and
+- `spirula sam segment` with a text prompt and with a click, on a real SAM 3 and
   a real SAM 2.1 checkpoint.
-- `ssplat sam extract` end to end, with and without masking.
+- `spirula sam extract` end to end, with and without masking.
 - GUI: photos → built-in SfM → dataset → trainer (25/25 images registered,
   26.4k points, opens and previews).
 - GUI: video → GPU decode → masked frames → dataset.
@@ -242,7 +242,7 @@ by (row, column) — so that half moved and the rest did not.
 Safety: the kernels live in their own SPIR-V modules, because capabilities are
 per module and `vkCreateShaderModule` may reject a whole blob; `Pipelines`
 creates the module lazily, so a device without the extension never sees those
-words. `SSPLAT_NN_COOPMAT=0` forces the fp32 path, and `nn_ops_test` checks
+words. `SS_NN_COOPMAT=0` forces the fp32 path, and `nn_ops_test` checks
 *both* paths in one process against references rounded the way each path rounds,
 so the tolerances did not have to be widened. Masks moved by 3 pixels in 13 M.
 
@@ -278,5 +278,5 @@ captures want.
    file; it does not catch a corrupted one.
 8. **`scripts/mask.py` and `scripts/extract_frames.py`** are still the
    standalone Python tools with their own users, now duplicated in kind by
-   `ssplat sam`. Revisit once the native path has run on enough captures to be
+   `spirula sam`. Revisit once the native path has run on enough captures to be
    the obvious default.

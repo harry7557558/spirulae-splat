@@ -1,22 +1,22 @@
 #pragma once
 
-// The training config: every flag `ssplat train` accepts, in one table.
+// The training config: every flag `spirula train` accepts, in one table.
 //
 // This file is the single source of truth. Adding a row to
-// SSPLAT_CONFIG_FIELDS makes the field appear in the CLI parser, in `--help`,
+// SS_CONFIG_FIELDS makes the field appear in the CLI parser, in `--help`,
 // in the GUI's "All Options" editor, in the run's config.json and in
 // TrainerCore -- with no other edit. The struct is expanded from the same
 // table, so a field cannot exist in one and not the other.
 //
 // Row: X(type, member, default, group, choices, help)
 //
-//   type     one of the scalar types below, or SsplatVec3i / SsplatVec3f.
+//   type     one of the scalar types below, or TrainVec3i / TrainVec3f.
 //            std::array<T, N> cannot appear here: its comma would split the
 //            macro argument.
 //   member   the struct member AND, stringified, the CLI flag. The parser
 //            treats '-' and '_' alike, so --sh-degree sets sh_degree.
-//   default  a constant expression. Vector defaults go through ssplat_v3i() /
-//            ssplat_v3f() for the same comma reason.
+//   default  a constant expression. Vector defaults go through train_v3i() /
+//            train_v3f() for the same comma reason.
 //   group    the section the flag is listed and nested under. Rows must stay
 //            contiguous per group: --help and the GUI stream group headers as
 //            they walk the table rather than sorting first.
@@ -32,19 +32,19 @@
 #include <string_view>
 
 // Vector field types and their makers, so the table stays comma-free.
-using SsplatVec3i = std::array<int, 3>;
-using SsplatVec3f = std::array<float, 3>;
-constexpr SsplatVec3i ssplat_v3i(int a, int b, int c) { return {a, b, c}; }
-constexpr SsplatVec3f ssplat_v3f(float a, float b, float c) { return {a, b, c}; }
+using TrainVec3i = std::array<int, 3>;
+using TrainVec3f = std::array<float, 3>;
+constexpr TrainVec3i train_v3i(int a, int b, int c) { return {a, b, c}; }
+constexpr TrainVec3f train_v3f(float a, float b, float c) { return {a, b, c}; }
 
-inline constexpr float kSsplatInf = std::numeric_limits<float>::infinity();
+inline constexpr float kTrainInf = std::numeric_limits<float>::infinity();
 
 // The run's config.json keys the fields by flag name, with one exception:
 // datamanager's split_batch would collide with model.split_batch, so its flag
 // is dm_split_batch while the on-disk key stays split_batch. config.json is a
-// read-back format (`ssplat mesh` and --resume parse it), so this mapping is
+// read-back format (`spirula mesh` and --resume parse it), so this mapping is
 // compatibility, not policy -- a new field never needs an entry here.
-constexpr const char* ssplat_json_key(const char* flag) {
+constexpr const char* train_json_key(const char* flag) {
     return std::string_view(flag) == "dm_split_batch" ? "split_batch" : flag;
 }
 
@@ -53,7 +53,7 @@ constexpr const char* ssplat_json_key(const char* flag) {
 // The field table
 // ===========================================================================
 
-#define SSPLAT_CONFIG_FIELDS(X) \
+#define SS_CONFIG_FIELDS(X) \
                                                                               \
     /* ==== trainer -- run control: output, checkpoints, viewer ==== */       \
     X(std::string, data, {}, "trainer", "",                                   \
@@ -112,7 +112,7 @@ constexpr const char* ssplat_json_key(const char* flag) {
       "The method to use to center the poses.")                               \
     X(bool, auto_scale_poses, true, "dataparser", "",                         \
       "Whether to automatically scale the poses to fit in +/- 1 bounding box.") \
-    X(float, outlier_threshold, kSsplatInf, "dataparser", "",                 \
+    X(float, outlier_threshold, kTrainInf, "dataparser", "",                 \
       "Threshold to reject outlier camera poses.")                            \
     X(std::string, train_frame, "points", "dataparser", "normalized|camera|points", \
       "Coordinate frame in which splats are trained.")                        \
@@ -236,27 +236,27 @@ constexpr const char* ssplat_json_key(const char* flag) {
       "Per-image quantile of the luma residual used as the Tukey biweight cutoff in `robust_edge_aware` mode. Pixels whose residual exceeds this quantile get zero densification weight. Lower values are more aggressive outlier rejection (good for distractor-heavy datasets); higher are more permissive (good for clean datasets where real edges may produce large residuals). Ignored unless `densify_loss_map_mode == \"robust_edge_aware\"`.") \
     X(bool, use_long_axis_split, true, "model", "",                           \
       "whether to use long-axis split described in https://arxiv.org/abs/2508.12313 for relocation and sample add. When combined with use_revised_densification, this can give less blurry background details for unbounded outdoor scenes.") \
-    X(SsplatVec3f, long_axis_split_opacity_k, ssplat_v3f(0.6f, 0.6f, 4500.0f), "model", "", \
+    X(TrainVec3f, long_axis_split_opacity_k, train_v3f(0.6f, 0.6f, 4500.0f), "model", "", \
       "opacity split factor `k` for long-axis split, as (initial, final, warmup_steps). Each split child keeps opacity `logit^-1(k / (1 + exp(-logit_opacity) - k))`; `k` is linearly scheduled from `initial` to `final` over the first `warmup_steps` training steps, then held at `final`. Larger `k` preserves more opacity per child (denser, sharper); smaller `k` fades children faster.") \
-    X(float, relocate_screen_size, kSsplatInf, "model", "",                   \
+    X(float, relocate_screen_size, kTrainInf, "model", "",                   \
       "if a gaussian is more than this fraction of screen space, relocate it Useful for fisheye with 3DGUT, may drop PSNR for conventional cameras For likely better quality, use max_screen_size instead") \
     X(float, max_screen_size, 0.3f, "model", "",                              \
       "if a gaussian is more than this fraction of screen space, clip scale and increase opacity Intended to be an MCMC-friendly alternative of relocate_screen_size") \
     X(float, max_screen_size_clip_hardness, 1.5f, "model", "",                \
       "clip hardness for Gaussians with large screen space size, between 1 and infinity, larger is harder") \
-    X(float, max_world_size, kSsplatInf, "model", "",                         \
+    X(float, max_world_size, kTrainInf, "model", "",                         \
       "if a gaussian is more than this of world space, clip scale Useful if you see huge floaters at a distance in large indoor space") \
     X(int, reset_alpha_every, 30, "model", "",                                \
       "Every this many refinement steps, reset the alpha. Only applies for opaque triangle splatting.") \
     X(bool, use_bilateral_grid, true, "model", "",                            \
       "If True, use bilateral grid to handle the ISP changes in the image space. This technique was introduced in the paper 'Bilateral Guided Radiance Field Processing' (https://bilarfpro.github.io/).") \
-    X(SsplatVec3i, bilagrid_shape, ssplat_v3i(16, 16, 8), "model", "",        \
+    X(TrainVec3i, bilagrid_shape, train_v3i(16, 16, 8), "model", "",        \
       "Shape of the bilateral grid, typically `16 16 8`, or `8 8 4` for scenes with low-texture surfaces.") \
     X(std::string, bilagrid_type, "ppisp", "model", "affine|ppisp|loglinear", \
       "What the bilateral grid predicts. affine: 4x3 matrix per original bilateral grid. ppisp: PPISP exposure and color parameters, generally gives less color shift but can be less numerically stable. loglinear: 3x3 linear transformation matrix with log-encoded diagonals, balances color shift and numerical stability.") \
     X(bool, use_bilateral_grid_for_geometry, true, "model", "",               \
       "If True, use bilateral grid for depth and normal (e.g. AI generated biased ones)") \
-    X(SsplatVec3i, bilagrid_shape_geometry, ssplat_v3i(8, 8, 4), "model", "", \
+    X(TrainVec3i, bilagrid_shape_geometry, train_v3i(8, 8, 4), "model", "", \
       "Shape of the bilateral grid for depth and normal (X, Y, W)")           \
     X(bool, use_adagrad_bilagrid_optim, true, "model", "",                    \
       "Use AdaGrad (lr_decay=0, weight_decay=0, initial_accumulator_value=0, eps=1e-15) instead of Adam for all bilateral-grid parameters (RGB + depth + normal). When True, the bilagrid LR fields read from OptimizerConfig switch to ``bilagrid_adagrad_*_lr``. Bilagrid bit depths are coupled to `quantization_level`: level 0 = fp32; level 1 = 16-bit value + 8x2-bit optimizer state across all three bilagrid types.") \
@@ -451,38 +451,38 @@ constexpr const char* ssplat_json_key(const char* flag) {
 // The config struct, expanded from the table above
 // ===========================================================================
 
-struct SsplatConfig {
-#define SSPLAT_DECLARE_FIELD(type, member, default_, group, choices, help) \
+struct TrainConfig {
+#define SS_DECLARE_FIELD(type, member, default_, group, choices, help)         \
     type member = default_;
-    SSPLAT_CONFIG_FIELDS(SSPLAT_DECLARE_FIELD)
-#undef SSPLAT_DECLARE_FIELD
+    SS_CONFIG_FIELDS(SS_DECLARE_FIELD)
+#undef SS_DECLARE_FIELD
 };
 
 // Fields whose default ({}) is not a usable value. Checked after flag
 // parsing, so --help still works without them.
-#define SSPLAT_CONFIG_REQUIRED_FIELDS(X) \
+#define SS_CONFIG_REQUIRED_FIELDS(X) \
     X(data) \
     /* end */
 
 
 // ===========================================================================
 // Presets -- named bundles of default overrides, selected as
-// `ssplat train <preset>`. "3dgs" is the base config and applies nothing.
+// `spirula train <preset>`. "3dgs" is the base config and applies nothing.
 // ===========================================================================
 
-struct SsplatPresetInfo { const char* name; const char* help; };
-inline constexpr SsplatPresetInfo kSsplatPresets[] = {
+struct TrainPresetInfo { const char* name; const char* help; };
+inline constexpr TrainPresetInfo kTrainPresets[] = {
     {"3dgs", "Generic method that works well for most datasets."},
     {"360-camera", "Preset for training on original distorted images captured by 360 cameras (e.g. Insta360, DJI Osmo). Recommended if your dataset contains fisheye images with a circle visible."},
     {"in-the-wild", "Preset for datasets consisting of internet images, with extreme lighting variation, with un-masked outliers, and/or shot with long focal lengths."},
     {"linear-color", "Preset for training splats in linear color spaces (e.g. ACEScg)."},
     {"synthetic", "Preset for training splats on synthetic datasets rendered with constant exposure."},
-    {"meshing", "Preset for training splats for meshing. Use `spirulae-meshing` to convert trained splats to mesh."},
+    {"meshing", "Preset for training splats for meshing. Use `spirula mesh` to convert trained splats to mesh."},
     {"academic-baseline", "Preset that replicates 3DGS MCMC as faithful as possible."},
 };
 
 // Returns false for an unknown preset name.
-inline bool ssplat_apply_preset(SsplatConfig& c, const std::string& name) {
+inline bool train_apply_preset(TrainConfig& c, const std::string& name) {
     if (name == "3dgs") {
         return true;
     }
@@ -566,8 +566,8 @@ inline bool ssplat_apply_preset(SsplatConfig& c, const std::string& name) {
         c.use_long_axis_split = false;
         c.use_fused_proj_bwd_optim = false;
         c.quantization_level = 0;
-        c.max_screen_size = kSsplatInf;
-        c.max_world_size = kSsplatInf;
+        c.max_screen_size = kTrainInf;
+        c.max_world_size = kTrainInf;
         c.suppress_initial_scales = false;
         c.scale_init = 0.1f;
         c.opacity_init = 0.5f;

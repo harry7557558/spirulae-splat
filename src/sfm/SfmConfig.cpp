@@ -109,7 +109,7 @@ bool parseValue(std::string& out, const std::string& s, double, double, const ch
 }
 
 // A bool field is a switch, never a value: `--name` / `--no-name`. Keeping it
-// valueless is what lets `ssplat-sfm map --no-manage matches.bin feats/` parse
+// valueless is what lets `spirula-sfm map --no-manage matches.bin feats/` parse
 // -- a positional right after a switch must stay a positional.
 FieldResult trySetField(bool& out, const std::string& key, const char* name, int, char**, int&,
                         double, double, const char*, std::set<std::string>& seen, std::string&) {

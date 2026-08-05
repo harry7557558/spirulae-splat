@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-namespace ssplat {
+namespace spirula {
 namespace bilagrid {
 
 struct BwdMeasurement {
@@ -114,4 +114,4 @@ private:
 };
 
 }  // namespace bilagrid
-}  // namespace ssplat
+}  // namespace spirula

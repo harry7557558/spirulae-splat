@@ -1,4 +1,4 @@
-// `ssplat-sfm ba` -- the bundle adjuster driven directly on a BAL problem
+// `spirula-sfm ba` -- the bundle adjuster driven directly on a BAL problem
 // (Bundle Adjustment in the Large), for benchmarking and solver debugging.
 // Its own translation unit because it shares nothing with the pipeline
 // subcommands but the solver. See src/sfm/ba/README.md.
@@ -11,10 +11,12 @@
 #include "sfm/ba/Problem.h"
 #include "sfm/ba/Solver.h"
 #include "sfm/map/Bundle.h"
+#include "core/Env.h"
 
-// getenv with a default. (`getenv(x) ?: "d"` is a GNU extension MSVC lacks.)
-static const char* env_or(const char* name, const char* fallback) {
-    const char* v = getenv(name);
+// spirula::env with a default. (`getenv(x) ?: "d"` is a GNU extension MSVC
+// lacks.)
+static const char* env_or(const char* suffix, const char* fallback) {
+    const char* v = spirula::env(suffix);
     return v ? v : fallback;
 }
 
@@ -30,15 +32,15 @@ static void writePly(const char* path, const std::vector<double>& pts) {
 }
 
 
-// Printed by `ssplat-sfm ba --help` and by `ssplat-sfm help ba`. The solver's
+// Printed by `spirula-sfm ba --help` and by `spirula-sfm help ba`. The solver's
 // options are not in the SfmConfig table: nothing else drives them, and the
 // pipeline's own bundle adjustment is configured through --ba-* on `map`.
 void printBaHelp(FILE* out) {
     std::fprintf(out,
-        "ssplat-sfm ba -- bundle-adjust a BAL problem (solver benchmark)\n"
+        "spirula-sfm ba -- bundle-adjust a BAL problem (solver benchmark)\n"
         "\n"
         "Usage:\n"
-        "  ssplat-sfm ba <BAL_PROBLEM.TXT|SPARSE_MODEL_DIR> [options]\n"
+        "  spirula-sfm ba <BAL_PROBLEM.TXT|SPARSE_MODEL_DIR> [options]\n"
         "\n"
         "Description:\n"
         "  Runs the GPU bundle adjuster directly on a problem in Bundle Adjustment in the\n"
@@ -76,11 +78,11 @@ void printBaHelp(FILE* out) {
         "  -h, --help                          show this help and exit\n"
         "\n"
         "Examples:\n"
-        "  ssplat-sfm ba problem-49-7776-pre.txt --real df --loss huber\n"
-        "  ssplat-sfm ba problem-1778-993923-pre.txt --solver cg --vram-budget 4096\n"
+        "  spirula-sfm ba problem-49-7776-pre.txt --real df --loss huber\n"
+        "  spirula-sfm ba problem-1778-993923-pre.txt --solver cg --vram-budget 4096\n"
         "\n"
         "A (--real, --loss) pair that was trimmed out of the build reports \"variant not\n"
-        "built into this binary\"; see SSPLAT_SFM_REALS / SSPLAT_SFM_LOSSES.\n");
+        "built into this binary\"; see SS_SFM_REALS / SS_SFM_LOSSES.\n");
 }
 
 int cmdBa(int argc, char** argv) {
@@ -126,16 +128,16 @@ int cmdBa(int argc, char** argv) {
         else if (a == "--quiet") opt.verbose = false;
         else if (a[0] != '-') file = a;
         else {
-            fprintf(stderr, "ssplat-sfm ba: error: unknown option %s\n", a.c_str());
-            fprintf(stderr, "Try 'ssplat-sfm ba --help' for more information.\n");
+            fprintf(stderr, "spirula-sfm ba: error: unknown option %s\n", a.c_str());
+            fprintf(stderr, "Try 'spirula-sfm ba --help' for more information.\n");
             return 1;
         }
     }
 
     if (file.empty()) {
-        fprintf(stderr, "ssplat-sfm ba: error: a BAL problem file or sparse model "
+        fprintf(stderr, "spirula-sfm ba: error: a BAL problem file or sparse model "
                         "directory is required\n");
-        fprintf(stderr, "Try 'ssplat-sfm ba --help' for more information.\n");
+        fprintf(stderr, "Try 'spirula-sfm ba --help' for more information.\n");
         return 1;
     }
 
@@ -143,13 +145,13 @@ int cmdBa(int argc, char** argv) {
     for (int m = 0; m < kNumModels; m++)
         if (model == kModels[m].name) model_id = m;
     if (model_id < 0) {
-        fprintf(stderr, "ssplat-sfm ba: error: unknown --model %s\n", model.c_str());
+        fprintf(stderr, "spirula-sfm ba: error: unknown --model %s\n", model.c_str());
         return 1;
     }
 
     // both debug hooks pin the solver selection they need
-    if (getenv("SSPLAT_SFM_DUMP_SG")) opt.solver = SolverSel::Dense;
-    const bool cmp_step = getenv("SSPLAT_SFM_CMP_STEP") != nullptr;
+    if (spirula::env("SFM_DUMP_SG")) opt.solver = SolverSel::Dense;
+    const bool cmp_step = spirula::env("SFM_CMP_STEP") != nullptr;
     if (cmp_step) {
         opt.solver = SolverSel::CG;
         opt.cg_fallback = CgFallback::On;
@@ -174,7 +176,7 @@ int cmdBa(int argc, char** argv) {
         bopt.device = opt.device;
         layout = sfm::buildBundle(rec, bopt);
         if (layout.P.num_images < 2) {
-            fprintf(stderr, "ssplat-sfm ba: error: %s holds no registered model\n", file.c_str());
+            fprintf(stderr, "spirula-sfm ba: error: %s holds no registered model\n", file.c_str());
             return 1;
         }
         fprintf(stderr, "[model] %u images, %u points, %u observations\n", layout.P.num_images,
@@ -189,13 +191,13 @@ int cmdBa(int argc, char** argv) {
 
     if (!ply_prefix.empty()) writePly((ply_prefix + "_before.ply").c_str(), P.points);
 
-    if (getenv("SSPLAT_SFM_DUMP_SG")) {
-        solver.debugAssemble(atof(env_or("SSPLAT_SFM_DUMP_SG_LAMBDA", "0.01")));
+    if (spirula::env("SFM_DUMP_SG")) {
+        solver.debugAssemble(atof(env_or("SFM_DUMP_SG_LAMBDA", "0.01")));
         std::vector<uint8_t> raw(solver.bufS().size);
         std::vector<double> v;
         solver.ctx().download(solver.bufS(), raw.data(), solver.bufS().size);
         unpackReals(v, raw.data(), (uint64_t)P.n_dim * (P.n_dim + 1) / 2, opt.real);
-        std::string base = getenv("SSPLAT_SFM_DUMP_SG");
+        std::string base = spirula::env("SFM_DUMP_SG");
         std::ofstream fs(base + "_S.bin", std::ios::binary);
         fs.write((const char*)v.data(), v.size() * 8);
         solver.ctx().download(solver.bufG(), raw.data(), solver.bufG().size);
@@ -205,10 +207,10 @@ int cmdBa(int argc, char** argv) {
         return 0;
     }
 
-    // SSPLAT_SFM_CMP_STEP: solve one assembly with both CG and dense, print the
+    // SS_SFM_CMP_STEP: solve one assembly with both CG and dense, print the
     // step difference (use --cg-tol / --cg-iters to control CG accuracy)
     if (cmp_step) {
-        double lam = atof(env_or("SSPLAT_SFM_CMP_STEP_LAMBDA", "0.01"));
+        double lam = atof(env_or("SFM_CMP_STEP_LAMBDA", "0.01"));
         solver.debugCompareStep((float)lam);
         return 0;
     }

@@ -29,7 +29,7 @@ sfm/ba/
   Problem.h          model registry, camera groups, column layout, per-model obs lists,
                        BAL problem loading
   Solver.h           LM driver (records one command buffer per iteration)
-src/app/cli/sfm_ba.cpp   the `ssplat sfm ba` subcommand: BAL problems + PLY dump
+src/app/cli/sfm_ba.cpp   the `spirula sfm ba` subcommand: BAL problems + PLY dump
 ```
 
 `spirv_tool nocontract` (src/backend/vulkan/shaders/) is the SPIR-V post-pass
@@ -40,10 +40,10 @@ regenerates the minimax transcendental coefficients in `df.slang` /
 ## Build & run
 
 ```bash
-bash build_develop.bash -DSSPLAT_BACKEND=vulkan -DSSPLAT_BUILD_CLI=ON
-./build/ssplat sfm ba /path/to/bal/problem-16-22106-pre.txt --real double
-./build/ssplat sfm ba problem.txt --real df --loss huber --loss-param 1.0 --ply out
-./build/ssplat sfm ba /path/to/sparse/0 -o refined/       # a COLMAP model
+bash build_develop.bash -DSS_BACKEND=vulkan -DSS_BUILD_CLI=ON
+./build/spirula sfm ba /path/to/bal/problem-16-22106-pre.txt --real double
+./build/spirula sfm ba problem.txt --real df --loss huber --loss-param 1.0 --ply out
+./build/spirula sfm ba /path/to/sparse/0 -o refined/       # a COLMAP model
 ./build/sfm_cholesky_test 500 --real df          # dense solver unit test
 ```
 
@@ -54,8 +54,8 @@ regression-tested on real captures instead of on BAL, which has neither shared
 intrinsics groups nor any camera model but Snavely's.
 
 The shader variant matrix can be trimmed for faster iteration:
-`-DSSPLAT_SFM_REALS=df -DSSPLAT_SFM_LOSSES=trivial`. slangc is taken from PATH
-or downloaded into the build tree (`cmake/SsplatSlang.cmake`).
+`-DSS_SFM_REALS=df -DSS_SFM_LOSSES=trivial`. slangc is taken from PATH
+or downloaded into the build tree (`cmake/SsSlang.cmake`).
 
 Options: `--real float|double|df`, `--loss trivial|huber|cauchy`,
 `--loss-param X`, `--model snavely|snavely_f`, `--shared-intrinsics`,
@@ -264,7 +264,7 @@ VRAM-constrained runs should use `--cg-fallback off`: LM's reject path
 (escalating lambda re-solves against the same assembly) recovers from
 inexact steps on its own, at zero extra memory.
 
-`SSPLAT_SFM_CMP_STEP=1` (env) solves one assembly with both paths and prints the
+`SS_SFM_CMP_STEP=1` (env) solves one assembly with both paths and prints the
 step difference: with `--cg-tol 1e-8` the CG step matches the dense step to
 ~1e-8 at fp64.
 
@@ -330,7 +330,7 @@ Notes:
 
 ### On real captures
 
-One global BA (`ssplat sfm ba <sparse dir>`, Huber 2 px, fp64), same machine.
+One global BA (`spirula sfm ba <sparse dir>`, Huber 2 px, fp64), same machine.
 The interesting axis is camera *sharing*: all of these have one camera group
 behind every image, which is what used to force the dense path.
 
@@ -375,4 +375,4 @@ peak (the largest single BA being 6372 images / 12.7 M observations).
   CUDA prototype).
 - The BAL loader covers the Snavely models only. Every other camera model
   reaches the solver through `sfm/map/Bundle.h` instead, which is what the
-  mapper uses; `ssplat sfm ba` is a solver benchmark, not a general front end.
+  mapper uses; `spirula sfm ba` is a solver benchmark, not a general front end.

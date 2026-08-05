@@ -1,4 +1,4 @@
-// Camera + navigation controller. Ported/adapted from the spirulae training
+// Camera + navigation controller. Ported/adapted from the training
 // viewer (viewer.html): quaternion pose, orbit/pan/dolly/roll, and four modes
 // (turntable / trackball / fps / fly). Renderer-agnostic — it just maintains a
 // world-space pose that the renderer reads.

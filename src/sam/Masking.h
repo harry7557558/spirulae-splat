@@ -1,7 +1,7 @@
 #pragma once
 // Prompt-to-mask policy, shared by ssam-cli and ssam-extract.
 //
-// This is the semantic layer spirulae-splat/scripts/mask.py implements in
+// This is the semantic layer scripts/mask.py implements in
 // Python, kept in one place so the two tools cannot drift:
 //
 //   * several positive phrases, semicolon separated, unioned;

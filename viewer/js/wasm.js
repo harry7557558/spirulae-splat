@@ -177,7 +177,7 @@ function registerMesh(m) {
 }
 
 // ---------------------------------------------------------------------------
-// GLTF / GLB (pure JS). Only the attributes spirulae emits are needed but the
+// GLTF / GLB (pure JS). Only the attributes the mesh exporter emits are needed but the
 // reader is written generally for robustness.
 // ---------------------------------------------------------------------------
 const COMP = { 5120:Int8Array, 5121:Uint8Array, 5122:Int16Array, 5123:Uint16Array, 5125:Uint32Array, 5126:Float32Array };

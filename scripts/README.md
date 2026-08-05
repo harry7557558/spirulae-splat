@@ -1,6 +1,6 @@
 # Dataset Preparation Scripts
 
-Scripts I use to prepare datasets for spirulae-splat as well as other nerfstudio methods.
+Scripts I use to prepare datasets for Spirula Studio as well as other nerfstudio methods.
 
 Mostly tested on Ubuntu 20.04 and 22.04.
 

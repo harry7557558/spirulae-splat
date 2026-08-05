@@ -17,31 +17,32 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "core/Env.h"
 
 
 static constexpr backend::Stream kBilagridStream = (backend::Stream)0;
 
 // --- Bilagrid backward timing (Phase 2 of the backward-selection plan) -------
 // Async per-dispatch GPU timer, harvested one iteration behind. In Phase 2 the
-// harvested times are only logged (SSPLAT_BILAGRID_PROFILE=1); Phase 5 feeds
+// harvested times are only logged (SS_BILAGRID_PROFILE=1); Phase 5 feeds
 // them to the BilagridBwdSelector. Gated off by default -> zero overhead.
-static ssplat::bilagrid::BwdTimingRing g_bg_bwd_timer;
-static std::vector<ssplat::bilagrid::BwdMeasurement> g_bg_bwd_meas;
+static spirula::bilagrid::BwdTimingRing g_bg_bwd_timer;
+static std::vector<spirula::bilagrid::BwdMeasurement> g_bg_bwd_meas;
 // Per-type selectors (different arm sets: PPISP is tile-only; affine adds v2).
-static ssplat::bilagrid::BilagridBwdSelector
-    g_bg_sel_affine(ssplat::bilagrid::affine_arms());
-static ssplat::bilagrid::BilagridBwdSelector
-    g_bg_sel_ppisp(ssplat::bilagrid::ppisp_arms());
-static ssplat::bilagrid::BilagridBwdSelector
-    g_bg_sel_loglinear(ssplat::bilagrid::loglinear_arms());
-static ssplat::bilagrid::BilagridBwdSelector
-    g_bg_sel_depth(ssplat::bilagrid::depth_arms());
-static ssplat::bilagrid::BilagridBwdSelector
-    g_bg_sel_normal(ssplat::bilagrid::normal_arms());
+static spirula::bilagrid::BilagridBwdSelector
+    g_bg_sel_affine(spirula::bilagrid::affine_arms());
+static spirula::bilagrid::BilagridBwdSelector
+    g_bg_sel_ppisp(spirula::bilagrid::ppisp_arms());
+static spirula::bilagrid::BilagridBwdSelector
+    g_bg_sel_loglinear(spirula::bilagrid::loglinear_arms());
+static spirula::bilagrid::BilagridBwdSelector
+    g_bg_sel_depth(spirula::bilagrid::depth_arms());
+static spirula::bilagrid::BilagridBwdSelector
+    g_bg_sel_normal(spirula::bilagrid::normal_arms());
 
 // Selector for a bilagrid family id (0 affine, 1 ppisp, 2 loglinear, 3 depth,
 // 4 normal), or nullptr if not selector-driven.
-static ssplat::bilagrid::BilagridBwdSelector* _bg_selector_for(int family) {
+static spirula::bilagrid::BilagridBwdSelector* _bg_selector_for(int family) {
     switch (family) {
         case 0: return &g_bg_sel_affine;
         case 1: return &g_bg_sel_ppisp;
@@ -53,16 +54,16 @@ static ssplat::bilagrid::BilagridBwdSelector* _bg_selector_for(int family) {
 }
 
 static bool _bg_bwd_profile() {
-    static const bool on = std::getenv("SSPLAT_BILAGRID_PROFILE") != nullptr;
+    static const bool on = spirula::env("BILAGRID_PROFILE") != nullptr;
     return on;
 }
 
 // The selector drives the PPISP RGB backward arm choice (v1@tile / v2). On by
-// default; SSPLAT_BILAGRID_BWD=off restores the fixed-v1 baseline (no selector,
+// default; SS_BILAGRID_BWD=off restores the fixed-v1 baseline (no selector,
 // timing only under the profile flag).
 static bool _bg_selector_on() {
     static const bool on = []() {
-        const char* e = std::getenv("SSPLAT_BILAGRID_BWD");
+        const char* e = spirula::env("BILAGRID_BWD");
         return !(e && std::string(e) == "off");
     }();
     return on;
@@ -462,7 +463,7 @@ void _engine_bilagrid_backward_hook(
     // those events are >= 1 iteration old). Phase 2 only logs them.
     const bool bg_timing = _bg_bwd_timing_on();
     if (bg_timing) {
-        using namespace ssplat::bilagrid;
+        using namespace spirula::bilagrid;
         g_bg_bwd_meas.clear();
         g_bg_bwd_timer.harvest(g_bg_bwd_meas);
         for (const BwdMeasurement& m : g_bg_bwd_meas) {
@@ -500,23 +501,23 @@ void _engine_bilagrid_backward_hook(
         const float* rgb_pre_ptr = (const float*)engine().bilagrid_rgb.fwd_pre.data_ptr();
 
         const std::string& bg_type = engine().bilagrid_rgb.type;
-        ssplat::bilagrid::ContextKey bg_key_rgb{
-            ssplat::bilagrid::family_id(bg_type), H, W, L, gH, gW};
+        spirula::bilagrid::ContextKey bg_key_rgb{
+            spirula::bilagrid::family_id(bg_type), H, W, L, gH, gW};
 
         // PPISP (tile arms) and affine (tile arms + v2) are selector-driven;
         // loglinear keeps the fixed v1 default until its arms land.
-        int bg_fam = ssplat::bilagrid::family_id(bg_type);
-        ssplat::bilagrid::BilagridBwdSelector* bg_sel =
+        int bg_fam = spirula::bilagrid::family_id(bg_type);
+        spirula::bilagrid::BilagridBwdSelector* bg_sel =
             _bg_selector_on() ? _bg_selector_for(bg_fam) : nullptr;
         int bg_arm = bg_sel ? bg_sel->sample(bg_key_rgb) : -1;
 
         if (bg_timing)
-            g_bg_bwd_timer.begin(ssplat::bilagrid::BWD_RGB, bg_key_rgb, bg_arm,
+            g_bg_bwd_timer.begin(spirula::bilagrid::BWD_RGB, bg_key_rgb, bg_arm,
                                  kBilagridStream);
 
         if (bg_arm >= 0) {
-            const ssplat::bilagrid::BwdArm& a = bg_sel->arms()[bg_arm];
-            bool use_v2 = a.impl == ssplat::bilagrid::BwdImpl::V2Scatter;
+            const spirula::bilagrid::BwdArm& a = bg_sel->arms()[bg_arm];
+            bool use_v2 = a.impl == spirula::bilagrid::BwdImpl::V2Scatter;
             if (bg_type == "ppisp") {
                 if (use_v2)
                     bilagrid_ppisp_uniform_sample_backward_v2(
@@ -572,7 +573,7 @@ void _engine_bilagrid_backward_hook(
                 5, kBilagridStream, cam_idx_dev);
         }
         if (bg_timing)
-            g_bg_bwd_timer.end(ssplat::bilagrid::BWD_RGB, kBilagridStream);
+            g_bg_bwd_timer.end(spirula::bilagrid::BWD_RGB, kBilagridStream);
     }
 
     // --- Depth backward (accumulate into bilagrid grad; discard input grad) ---
@@ -601,16 +602,16 @@ void _engine_bilagrid_backward_hook(
         const float* depth_pre =
             (const float*)engine().bilagrid_depth.fwd_pre.data_ptr();
         const float* v_depth_out = (const float*)std::get<0>(v_ref_depth);
-        ssplat::bilagrid::ContextKey bg_key_depth{
-            ssplat::bilagrid::family_id("depth"), H_d, W_d, L, gH, gW};
-        ssplat::bilagrid::BilagridBwdSelector* dsel =
+        spirula::bilagrid::ContextKey bg_key_depth{
+            spirula::bilagrid::family_id("depth"), H_d, W_d, L, gH, gW};
+        spirula::bilagrid::BilagridBwdSelector* dsel =
             _bg_selector_on() ? _bg_selector_for(3) : nullptr;
         int d_arm = dsel ? dsel->sample(bg_key_depth) : -1;
         if (bg_timing)
-            g_bg_bwd_timer.begin(ssplat::bilagrid::BWD_DEPTH, bg_key_depth,
+            g_bg_bwd_timer.begin(spirula::bilagrid::BWD_DEPTH, bg_key_depth,
                                  d_arm, kBilagridStream);
         if (d_arm >= 0 &&
-            dsel->arms()[d_arm].impl == ssplat::bilagrid::BwdImpl::V2Scatter) {
+            dsel->arms()[d_arm].impl == spirula::bilagrid::BwdImpl::V2Scatter) {
             bilagrid_depth_uniform_sample_backward_v2(
                 grid_ptr, depth_pre, scalars, v_depth_out, grad_grid_ptr,
                 C_batch, L, gH, gW, H_d, W_d, kBilagridStream, cam_idx_dev);
@@ -623,7 +624,7 @@ void _engine_bilagrid_backward_hook(
                 tile, kBilagridStream, cam_idx_dev);
         }
         if (bg_timing)
-            g_bg_bwd_timer.end(ssplat::bilagrid::BWD_DEPTH, kBilagridStream);
+            g_bg_bwd_timer.end(spirula::bilagrid::BWD_DEPTH, kBilagridStream);
     }
 
     // --- Normal backward (accumulate; discard input grad) ---
@@ -645,16 +646,16 @@ void _engine_bilagrid_backward_hook(
         const float* normal_pre =
             (const float*)engine().bilagrid_normal.fwd_pre.data_ptr();
         const float* v_normal_out = (const float*)std::get<0>(v_ref_normal);
-        ssplat::bilagrid::ContextKey bg_key_normal{
-            ssplat::bilagrid::family_id("normal"), H_n, W_n, L, gH, gW};
-        ssplat::bilagrid::BilagridBwdSelector* nsel =
+        spirula::bilagrid::ContextKey bg_key_normal{
+            spirula::bilagrid::family_id("normal"), H_n, W_n, L, gH, gW};
+        spirula::bilagrid::BilagridBwdSelector* nsel =
             _bg_selector_on() ? _bg_selector_for(4) : nullptr;
         int n_arm = nsel ? nsel->sample(bg_key_normal) : -1;
         if (bg_timing)
-            g_bg_bwd_timer.begin(ssplat::bilagrid::BWD_NORMAL, bg_key_normal,
+            g_bg_bwd_timer.begin(spirula::bilagrid::BWD_NORMAL, bg_key_normal,
                                  n_arm, kBilagridStream);
         if (n_arm >= 0 &&
-            nsel->arms()[n_arm].impl == ssplat::bilagrid::BwdImpl::V2Scatter) {
+            nsel->arms()[n_arm].impl == spirula::bilagrid::BwdImpl::V2Scatter) {
             bilagrid_normal_uniform_sample_backward_v2(
                 grid_ptr, normal_pre, v_normal_out, grad_grid_ptr,
                 C_batch, L, gH, gW, H_n, W_n, kBilagridStream, cam_idx_dev);
@@ -667,7 +668,7 @@ void _engine_bilagrid_backward_hook(
                 tile, kBilagridStream, cam_idx_dev);
         }
         if (bg_timing)
-            g_bg_bwd_timer.end(ssplat::bilagrid::BWD_NORMAL, kBilagridStream);
+            g_bg_bwd_timer.end(spirula::bilagrid::BWD_NORMAL, kBilagridStream);
     }
 }
 

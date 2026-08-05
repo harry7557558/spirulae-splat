@@ -26,8 +26,9 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#include "core/Env.h"
 
-namespace ssplat {
+namespace spirula {
 namespace bilagrid {
 
 // ---------------------------------------------------------------------------
@@ -162,7 +163,7 @@ public:
     const std::vector<BwdArm>& arms() const { return arms_; }
     int num_arms() const { return (int)arms_.size(); }
 
-    // Pick an arm index for `key`. Honors the SSPLAT_BILAGRID_BWD override.
+    // Pick an arm index for `key`. Honors the SS_BILAGRID_BWD override.
     int sample(const ContextKey& key) {
         Bucket& bk = bucket(key);
         if (forced_arm_ >= 0) return forced_arm_;
@@ -313,7 +314,7 @@ public:
     size_t num_keys() const { return table_.size(); }
 
     // Human-readable dump of every context key's per-arm mean cost (ms), best
-    // arm marked. For SSPLAT_BILAGRID_PROFILE benchmarking.
+    // arm marked. For SS_BILAGRID_PROFILE benchmarking.
     void dump(std::FILE* f) const {
         for (const auto& kv : table_) {
             const ContextKey& key = kv.first;
@@ -353,10 +354,10 @@ private:
         return table_.emplace(key, std::move(bk)).first->second;
     }
 
-    // SSPLAT_BILAGRID_BWD = auto (default) | v1 | v2 | v1:<tile> | #<arm-index>
+    // SS_BILAGRID_BWD = auto (default) | v1 | v2 | v1:<tile> | #<arm-index>
     void parse_override() {
         forced_arm_ = -1;
-        const char* e = std::getenv("SSPLAT_BILAGRID_BWD");
+        const char* e = spirula::env("BILAGRID_BWD");
         if (!e || !*e) return;
         std::string s(e);
         if (s == "auto") return;
@@ -399,4 +400,4 @@ private:
 };
 
 }  // namespace bilagrid
-}  // namespace ssplat
+}  // namespace spirula

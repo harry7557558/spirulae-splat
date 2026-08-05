@@ -1,21 +1,17 @@
-# SSPLAT_BACKEND=cuda (default): the CUDA kernels and the engine library.
+# SS_BACKEND=cuda (default): the CUDA kernels and the engine library.
 #
-# Defines, for the shared app targets in SsplatApps.cmake:
-#   SSPLAT_APP_LIBS     the engine library the apps link
+# Defines, for the shared app targets in SsApps.cmake:
+#   SS_APP_LIBS     the engine library the apps link
 #   SPLAT_CXX_FLAGS     host flags the app targets reuse
 
 enable_language(CUDA)
-
-# The Python extension is gone: src/bindings/ was deleted with the Python
-# client, so this build produces the standalone `ssplat` executable only and
-# never looks for Torch.
 
 find_package(CUDAToolkit REQUIRED)
 
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
-ssplat_collect_sources(SPLAT_SOURCES)
+ss_collect_sources(SPLAT_SOURCES)
 
 # ---------------------------------------------------------------------------
 # Detect CUDA architectures
@@ -25,13 +21,13 @@ if(NOT DEFINED TORCH_CUDA_ARCH_LIST)
         # Ask the driver which architectures to build for.
         execute_process(
             COMMAND nvidia-smi --query-gpu=compute_cap --format=csv,noheader
-            OUTPUT_VARIABLE SSPLAT_SMI_CAPS
-            RESULT_VARIABLE SSPLAT_SMI_RESULT
+            OUTPUT_VARIABLE SS_SMI_CAPS
+            RESULT_VARIABLE SS_SMI_RESULT
             ERROR_QUIET
             OUTPUT_STRIP_TRAILING_WHITESPACE)
-        if(SSPLAT_SMI_RESULT EQUAL 0)
-            string(REPLACE "\r" "" SSPLAT_SMI_CAPS "${SSPLAT_SMI_CAPS}")
-            string(REPLACE "\n" " " TORCH_CUDA_ARCH_LIST "${SSPLAT_SMI_CAPS}")
+        if(SS_SMI_RESULT EQUAL 0)
+            string(REPLACE "\r" "" SS_SMI_CAPS "${SS_SMI_CAPS}")
+            string(REPLACE "\n" " " TORCH_CUDA_ARCH_LIST "${SS_SMI_CAPS}")
         endif()
     endif()
 
@@ -56,7 +52,7 @@ endforeach()
 # ---------------------------------------------------------------------------
 # Compiler flags
 #
-# The base host flags are backend-neutral and set in SsplatOptions.cmake; this
+# The base host flags are backend-neutral and set in SsOptions.cmake; this
 # only appends the CUDA-specific parts.
 # ---------------------------------------------------------------------------
 if(MSVC)
@@ -93,8 +89,8 @@ set(SPLAT_NVCC_FLAGS
 )
 
 # cubin/PTX line info (adds embedded source; needed for profiling but bloats
-# the fatbin). Off unless SSPLAT_DEBUG_SYMBOLS.
-if(SSPLAT_DEBUG_SYMBOLS)
+# the fatbin). Off unless SS_DEBUG_SYMBOLS.
+if(SS_DEBUG_SYMBOLS)
     list(APPEND SPLAT_NVCC_FLAGS "-lineinfo" "--generate-line-info" "--source-in-ptx")
 endif()
 
@@ -106,8 +102,8 @@ endforeach()
 # Host side optimizations
 if(NOT WIN32)
     # list(APPEND SPLAT_NVCC_FLAGS "-Xcompiler=-O3,-march=native")
-    # Host debug symbols (nvcc -Xcompiler=-g). Off unless SSPLAT_DEBUG_SYMBOLS.
-    if(SSPLAT_DEBUG_SYMBOLS)
+    # Host debug symbols (nvcc -Xcompiler=-g). Off unless SS_DEBUG_SYMBOLS.
+    if(SS_DEBUG_SYMBOLS)
         list(APPEND SPLAT_NVCC_FLAGS "-Xcompiler=-g")
     endif()
 endif()
@@ -117,18 +113,14 @@ endif()
 # ---------------------------------------------------------------------------
 # Static: the engine API has no dllexport annotations (a Linux .so exports
 # everything by default), so a static lib sidesteps that on Windows and makes
-# `ssplat` a self-contained executable.
+# `spirula` a self-contained executable.
 add_library(csrc STATIC ${SPLAT_SOURCES})
 
 target_include_directories(csrc PRIVATE
-    ${SSPLAT_SRC}
+    ${SS_SRC}
     ${CMAKE_BINARY_DIR}      # app_generated/viewer_html.h
     ${CUDAToolkit_INCLUDE_DIRS}
 )
-
-if(WIN32)
-    target_compile_definitions(csrc PRIVATE spirulae_splat_EXPORTS)
-endif()
 
 find_package(Threads REQUIRED)
 target_link_libraries(csrc CUDA::cudart Threads::Threads)
@@ -145,22 +137,22 @@ target_compile_options(csrc PRIVATE
 set_property(TARGET csrc PROPERTY CXX_STANDARD 17)
 set_property(TARGET csrc PROPERTY CUDA_STANDARD 17)
 
-set(SSPLAT_APP_LIBS csrc CUDA::cudart)
+set(SS_APP_LIBS csrc CUDA::cudart)
 
 # ---------------------------------------------------------------------------
 # Cross-backend parity tools -- CUDA side (dump reference outputs; the Vulkan
 # build's twin executables compare against them). See backend/vulkan/README.md.
 # The Vulkan branch builds its comparing twins unconditionally.
 # ---------------------------------------------------------------------------
-if(SSPLAT_BUILD_BACKEND_TESTS)
-    file(GLOB SSPLAT_PARITY_TESTS CONFIGURE_DEPENDS
-        ${SSPLAT_SRC}/backend/tests/*.cpp
-        ${SSPLAT_SRC}/backend/tests/engine/*.cpp)
-    foreach(test_src ${SSPLAT_PARITY_TESTS})
+if(SS_BUILD_BACKEND_TESTS)
+    file(GLOB SS_PARITY_TESTS CONFIGURE_DEPENDS
+        ${SS_SRC}/backend/tests/*.cpp
+        ${SS_SRC}/backend/tests/engine/*.cpp)
+    foreach(test_src ${SS_PARITY_TESTS})
         get_filename_component(test_name ${test_src} NAME_WE)
         add_executable(${test_name} ${test_src})
         target_include_directories(${test_name} PRIVATE
-            ${SSPLAT_SRC}
+            ${SS_SRC}
             ${CUDAToolkit_INCLUDE_DIRS})
         target_link_libraries(${test_name} PRIVATE csrc CUDA::cudart)
     endforeach()

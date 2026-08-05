@@ -26,7 +26,7 @@ namespace sfm {
 // `rgb` is an *optional* companion buffer at the same (post-downscale) width and
 // height, 3 interleaved uint8 per pixel. It is empty unless the image was
 // decoded with color requested (loadGrayImage(..., want_color=true)); SIFT never
-// touches it -- it exists so `ssplat-sfm extract` can sample a color at each keypoint
+// touches it -- it exists so `spirula-sfm extract` can sample a color at each keypoint
 // for the reconstruction's point cloud (src/sfm/README.md "Point colors").
 struct GrayImage {
     int width = 0;

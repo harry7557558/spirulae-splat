@@ -2,7 +2,7 @@
 // Exercises every API the engine layer uses: malloc/free, pinned host
 // memory, all memcpy kinds (sync + async, pinned and pageable), memset,
 // pointer classification, streams, events (incl. timing), and the sticky
-// error channel. Run on each available device via SSPLAT_VK_DEVICE.
+// error channel. Run on each available device via SS_VK_DEVICE.
 
 #include "backend/api/BackendRuntime.h"
 

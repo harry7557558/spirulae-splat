@@ -15,8 +15,8 @@
  * copyright notice in Delaunay3D.cpp.
  */
 
-#ifndef SPIRULAE_DELAUNAY_3D_H
-#define SPIRULAE_DELAUNAY_3D_H
+#ifndef SPIRULA_DELAUNAY_3D_H
+#define SPIRULA_DELAUNAY_3D_H
 
 #include <cstdint>
 #include <vector>

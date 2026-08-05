@@ -1,7 +1,7 @@
-// Native replacement for shaders/build_spirv.py + spirulae_splat/embed_spirv.py.
+// Compiles the Slang shaders and embeds the SPIR-V, natively.
 //
 // A single self-contained C++17 host tool (no dependencies beyond the standard
-// library) so the Vulkan (SSPLAT_BACKEND=vulkan) build no longer needs Python.
+// library) so the Vulkan (SS_BACKEND=vulkan) build no longer needs Python.
 // CMake compiles this once at configure time (try_compile + COPY_FILE) and uses
 // it in two modes:
 //
@@ -20,14 +20,14 @@
 //       and emit the C++ translation unit consumed by VulkanPipelines.cpp.
 //
 //   embed --nn <tag> <out.cpp> --list <listfile>
-//       The same, for a library of the inference layer (cmake/SsplatNn.cmake).
+//       The same, for a library of the inference layer (cmake/SsNn.cmake).
 //       Emits a blob table named after <tag>, which the owning library hands
 //       to the process registry nn/vk/EmbeddedSpirv.h declares -- so src/nn/,
 //       src/sam/ and src/video/ can each contribute shaders to one pipeline
 //       cache, and <tag> keeps their symbols distinct.
 //
 //   embed --sfm <out.cpp> --list <listfile>
-//       The same, for the SfM module (cmake/SsplatSfm.cmake). Its blobs are
+//       The same, for the SfM module (cmake/SsSfm.cmake). Its blobs are
 //       whole-module compiles with no feature variants, so the variant gate and
 //       the capability audit -- both statements about the engine's kernels --
 //       are skipped, and the emitted TU is the one sfm/vk/EmbeddedSpirv.h
@@ -59,9 +59,9 @@ namespace {
 // ---- feature variants (canonical suffix order must match kFeatureSuffixes in
 // src/backend/vulkan/VulkanPipelines.cpp) --------------------------------
 struct Feature { const char* suffix; const char* define; };
-const Feature ATOMIC{".atomicadd", "-DSSPLAT_NATIVE_F32_ATOMIC_ADD"};
-const Feature INT8{".int8", "-DSSPLAT_NATIVE_INT8"};
-const Feature NOINT64{".noint64", "-DSSPLAT_EMULATE_INT64"};
+const Feature ATOMIC{".atomicadd", "-DSS_NATIVE_F32_ATOMIC_ADD"};
+const Feature INT8{".int8", "-DSS_NATIVE_INT8"};
+const Feature NOINT64{".noint64", "-DSS_EMULATE_INT64"};
 
 // SPIR-V capability operands (OpCapability = opcode 17).
 constexpr uint32_t CAP_INT64 = 11;

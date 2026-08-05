@@ -12,11 +12,11 @@
 #include <cstdio>
 #include <filesystem>
 
-#ifdef SSPLAT_BUILD_SAM
+#ifdef SS_BUILD_SAM
 #include "nn/io/Image.h"
 #include "sam/Masking.h"
 #endif
-#ifdef SSPLAT_HAVE_VIDEO
+#ifdef SS_HAVE_VIDEO
 #include "video/Video.h"
 #endif
 
@@ -50,7 +50,7 @@ ImU32 object_color(int object) {
 // The GPU-side state, kept alive across runs so a prompt edit costs one
 // forward pass rather than a 3-second weight upload.
 struct SegmentPanel::Job {
-#ifdef SSPLAT_BUILD_SAM
+#ifdef SS_BUILD_SAM
     sam::Masker masker;
     std::string loaded_model;       // what masker was initialized with
     std::string loaded_signature;   // and with which prompt settings
@@ -115,7 +115,7 @@ void SegmentPanel::collect_frames(const std::string& input, bool is_video) {
         // decoded index each offer lands on is filled in below.
         constexpr int kOffers = 8;
         long long total = kOffers;
-#ifdef SSPLAT_HAVE_VIDEO
+#ifdef SS_HAVE_VIDEO
         {
             video::VideoReader r;
             if (r.open(input)) total = std::max(r.info().frame_count, kOffers);
@@ -159,11 +159,11 @@ void SegmentPanel::collect_frames(const std::string& input, bool is_video) {
 // ---------------------------------------------------------------------------
 
 void SegmentPanel::start_job(const MaskSettings& s) {
-#ifndef SSPLAT_BUILD_SAM
+#ifndef SS_BUILD_SAM
     (void)s;
     std::lock_guard<std::mutex> lk(_mu);
     _error = "this build has no built-in segmentation "
-             "(-DSSPLAT_BUILD_SAM=OFF)";
+             "(-DSS_BUILD_SAM=OFF)";
 #else
     if (_busy.load()) return;
     if (_worker.joinable()) _worker.join();
@@ -238,7 +238,7 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                     _status = "loading the frame...";
                 }
                 if (is_video) {
-#ifdef SSPLAT_HAVE_VIDEO
+#ifdef SS_HAVE_VIDEO
                     // No seek: read forward to the frame this offer names.
                     video::VideoReader r;
                     if (!r.open(input)) return set_error(r.lastError());
@@ -255,7 +255,7 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                     j.frame = std::move(img);
 #else
                     return set_error("this build cannot decode video "
-                                     "(-DSSPLAT_ENABLE_PATENTED=OFF); pick a "
+                                     "(-DSS_ENABLE_PATENTED=OFF); pick a "
                                      "folder of photos to preview, or run the "
                                      "job and check the masks it writes");
 #endif

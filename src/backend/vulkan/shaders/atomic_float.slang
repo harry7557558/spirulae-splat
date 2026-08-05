@@ -5,7 +5,7 @@
 // tolerance-based wherever this is used. The loop's exit is a successful
 // CAS (well-defined; not a UB-terminated loop — see README loop rules).
 //
-// Under -DSSPLAT_NATIVE_F32_ATOMIC_ADD the emulation is replaced by the
+// Under -DSS_NATIVE_F32_ATOMIC_ADD the emulation is replaced by the
 // native OpAtomicFAddEXT (SPV_EXT_shader_atomic_float_add): build_spirv.py
 // compiles every entry whose include closure reaches this file a second
 // time with the define, and the pipeline layer picks the native blob when
@@ -26,7 +26,7 @@ void atomic_max_f32(float* addr, float v) {
     }
 }
 
-#ifdef SSPLAT_NATIVE_F32_ATOMIC_ADD
+#ifdef SS_NATIVE_F32_ATOMIC_ADD
 
 [ForceInline]
 void atomic_add_f32(float* addr, float v) {

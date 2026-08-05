@@ -6,7 +6,7 @@
 // (VulkanRuntime). Byte writes must not clobber the neighboring bytes of the
 // word, so the baseline store is an InterlockedAnd+InterlockedOr pair.
 //
-// Under -DSSPLAT_NATIVE_INT8 (the ".int8" blob variants, picked by
+// Under -DSS_NATIVE_INT8 (the ".int8" blob variants, picked by
 // VulkanPipelines.cpp on devices with shaderInt8 + storageBuffer8BitAccess)
 // these lower to native byte loads/stores — notably turning the two-atomic
 // store into a plain store.
@@ -14,8 +14,8 @@
 // Buffers are passed as uint* (the word view) on BOTH paths so kernel
 // signatures and push layouts never change between variants.
 
-#ifndef SSPLAT_INT8_COMPAT
-#define SSPLAT_INT8_COMPAT
+#ifndef SS_INT8_COMPAT
+#define SS_INT8_COMPAT
 
 #include "int64_compat.slang"
 
@@ -24,7 +24,7 @@
 // promote them to int64 and drag OpCapability Int64 into base blobs that
 // never had it.
 
-#ifdef SSPLAT_NATIVE_INT8
+#ifdef SS_NATIVE_INT8
 
 // Unsigned byte load (0..255).
 [ForceInline] uint u8_load(uint* buf, uint idx) {
@@ -47,7 +47,7 @@
     ((uint8_t*)buf)[idx] = uint8_t(v);
 }
 
-#else  // !SSPLAT_NATIVE_INT8
+#else  // !SS_NATIVE_INT8
 
 [ForceInline] uint u8_load(uint* buf, uint idx) {
     uint w = buf[idx >> 2];
@@ -74,6 +74,6 @@
     InterlockedOr(buf[idx >> 2], (v & 0xffu) << shift);
 }
 
-#endif  // SSPLAT_NATIVE_INT8
+#endif  // SS_NATIVE_INT8
 
-#endif  // SSPLAT_INT8_COMPAT
+#endif  // SS_INT8_COMPAT

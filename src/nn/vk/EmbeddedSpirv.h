@@ -1,6 +1,6 @@
 #pragma once
 // The SPIR-V blob registry, produced at build time by spirv_tool's `embed
-// --nn` mode (cmake/SsplatNn.cmake).
+// --nn` mode (cmake/SsNn.cmake).
 //
 // One entry per .slang module; `name` is the file stem, which is the prefix of
 // every kernel key the pipeline cache resolves ("<stem>.<entry>").

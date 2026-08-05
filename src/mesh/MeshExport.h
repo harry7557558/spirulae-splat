@@ -16,8 +16,8 @@
  * PNG encoding uses the vendored stb_image_write (already an image dependency
  * of the engine); everything else is emitted by hand.
  */
-#ifndef SPIRULAE_MESH_EXPORT_H
-#define SPIRULAE_MESH_EXPORT_H
+#ifndef SPIRULA_MESH_EXPORT_H
+#define SPIRULA_MESH_EXPORT_H
 
 #include <array>
 #include <cstdint>

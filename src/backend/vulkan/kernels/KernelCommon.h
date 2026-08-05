@@ -21,6 +21,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include "core/Env.h"
 
 namespace vkk {
 
@@ -38,12 +39,12 @@ inline Fold fold_1d(int64_t threads, uint32_t block) {
     return {per_row, (wgs + per_row - 1) / per_row};
 }
 
-// SSPLAT_VK_DEBUG_SYNC=1: device-sync + report after every dispatch, to
-// bisect device-lost errors to a kernel. SSPLAT_VIS_DEBUG_SYNC is honored
+// SS_VK_DEBUG_SYNC=1: device-sync + report after every dispatch, to
+// bisect device-lost errors to a kernel. SS_VIS_DEBUG_SYNC is honored
 // as a legacy alias.
 inline bool debug_sync_enabled() {
-    static const bool v = std::getenv("SSPLAT_VK_DEBUG_SYNC") != nullptr ||
-                          std::getenv("SSPLAT_VIS_DEBUG_SYNC") != nullptr;
+    static const bool v = spirula::env("VK_DEBUG_SYNC") != nullptr ||
+                          spirula::env("VIS_DEBUG_SYNC") != nullptr;
     return v;
 }
 

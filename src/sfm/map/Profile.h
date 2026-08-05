@@ -1,6 +1,6 @@
 // Lightweight wall-clock accumulators for mapper profiling (host-time work,
 // src/sfm/README.md "The mapper is the stage that is left"). Zero-dependency,
-// always compiled; reporting is opt-in via SSPLAT_SFM_MAP_PROF=1 so normal runs
+// always compiled; reporting is opt-in via SS_SFM_MAP_PROF=1 so normal runs
 // produce identical output.
 #pragma once
 
@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include "core/Env.h"
 
 namespace sfm {
 
@@ -54,7 +55,7 @@ struct MapProf {
     std::atomic<long> n_merged{0};  // observations absorbed by track merging
 
     static bool enabled() {
-        static bool e = std::getenv("SSPLAT_SFM_MAP_PROF") != nullptr;
+        static bool e = spirula::env("SFM_MAP_PROF") != nullptr;
         return e;
     }
 

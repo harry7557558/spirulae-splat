@@ -137,7 +137,7 @@ spirulae-splat/
 │   ├── BackendCuda.cmake
 │   ├── BackendVulkan.cmake
 │   ├── TorchExtension.cmake
-│   ├── Apps.cmake             # ssplat-train / ssplat-gui / ssplat-mesh
+│   ├── Apps.cmake             # spirula-train / spirula-gui / spirula-mesh
 │   └── Tests.cmake
 ├── docs/
 │   ├── architecture.md        # layer diagram + data flow + engine state model
@@ -336,11 +336,11 @@ Expose the existing parsers through pybind:
 
 ```cpp
 // src/bindings/bind_data.cpp
-py::class_<ssplat::DatasetSpec>(m, "DatasetSpec")   // cameras, image paths,
+py::class_<spirula::DatasetSpec>(m, "DatasetSpec")   // cameras, image paths,
     .def_readonly("cameras", ...)                    // intrinsics, distortion,
     .def_readonly("points", ...)                     // c2w, train/eval split,
     ...;                                             // seed point cloud
-m.def("parse_dataset", &ssplat::parse_dataset,
+m.def("parse_dataset", &spirula::parse_dataset,
       py::arg("path"), py::arg("config"));           // auto-detects layout
 ```
 
@@ -417,7 +417,7 @@ that generator to also emit the pybind `TrainerConfig` struct so the three
 representations can't diverge.
 
 > **Superseded twice.** The binding was done through the existing
-> `SSPLAT_CONFIG_FIELDS` X-macro instead (see §7.2 below), and on 2026-08-04
+> `SS_CONFIG_FIELDS` X-macro instead (see §7.2 below), and on 2026-08-04
 > the direction reversed entirely: `generate_cli_config.py` is gone and the
 > hand-written `src/config/TrainConfig.h` is the source of truth, with the
 > dataclasses as the downstream copy. See `docs/notes/rename-and-i18n-plan.md`.
@@ -456,7 +456,7 @@ One screen of orientation plus links. Target contents:
   - quantized gradient codecs must decode code 0 to exactly `0.0`;
   - `refine_stop_num_iter` counts back from the end, so short runs never densify;
   - pass `--no-keep-viewer-alive` in scripted Python runs or training stalls at exit;
-  - `SSPLAT_PROFILE=1` enables the backend timing breakdown.
+  - `SS_PROFILE=1` enables the backend timing breakdown.
 
 Keep it under ~200 lines; push detail into `docs/`.
 
@@ -487,7 +487,7 @@ diagram, explains *why* the seam exists.
 - `spirulae_splat/modules/edge_detector.py:47` — `/mnt/d/temp.png` output →
   argument or `./`.
 - `scripts/batch_process_data.bash:10` — `vocab_tree_path` → env var with a
-  documented default, e.g. `${SSPLAT_VOCAB_TREE:?set to your vocab tree .bin}`.
+  documented default, e.g. `${SS_VOCAB_TREE:?set to your vocab tree .bin}`.
 - `tests/test_ppisp.py:72`, `tests/test_rasterization.py:367` — drop the
   commented `/mnt/d/plot.png` lines.
 - Add a CI/pre-commit grep for `/mnt/`, `/home/<user>`, `C:\Users` so it
@@ -549,7 +549,7 @@ from drifting, and is the one I'd want a real regression run behind.
 ## 8. Progress
 
 - **Phase 0 — done.** Private paths scrubbed (`edge_detector.py` now takes
-  argv, `batch_process_data.bash` reads `SSPLAT_VOCAB_TREE`, commented
+  argv, `batch_process_data.bash` reads `SS_VOCAB_TREE`, commented
   `/mnt/d/plot.png` lines dropped); `check_private_paths.sh` added as
   the regression guard (now `tools/check_private_paths.sh`); stale
   `.gitmodules` and `spirulae_splat/viewer_legacy/` removed; `BilagridBackwardSelection.md` → `docs/notes/`.
@@ -565,16 +565,16 @@ from drifting, and is the one I'd want a real regression run behind.
   of `PixelWise.cuh` / `Optimizer.cuh` / `Densify.cuh` verified unchanged
   (43 / 26 / 20).
 - **Phase 3 — done.** `CMakeLists.txt` (723 lines) → a 30-line running order
-  plus `cmake/`: `SsplatOptions`, `SsplatSources`, `SsplatBackendCuda`,
-  `SsplatBackendVulkan`, `SsplatSlang`, `SsplatEmbed`, `SsplatApps`. The
-  backend `if/else` is now `include(SsplatBackendCuda|Vulkan)`, each leaving
-  `SSPLAT_WITH_TORCH` + `SSPLAT_APP_LIBS` for the shared app targets; the
+  plus `cmake/`: `SsOptions`, `SsSources`, `SsBackendCuda`,
+  `SsBackendVulkan`, `SsSlang`, `SsEmbed`, `SsApps`. The
+  backend `if/else` is now `include(SsBackendCuda|Vulkan)`, each leaving
+  `SS_WITH_TORCH` + `SS_APP_LIBS` for the shared app targets; the
   duplicated per-app boilerplate (libpython, `-static-libstdc++`, `BUILD_RPATH`,
-  include dirs) collapsed into `ssplat_configure_app()`, and the two
-  copy-pasted hex-embed blocks into `ssplat_embed_file()`.
+  include dirs) collapsed into `ss_configure_app()`, and the two
+  copy-pasted hex-embed blocks into `ss_embed_file()`.
 
   Source lists are no longer duplicated: `cmake/sources.txt` holds the glob
-  patterns and is read by both `cmake/SsplatSources.cmake` and `setup.py`'s new
+  patterns and is read by both `cmake/SsSources.cmake` and `setup.py`'s new
   `get_sources()`. Plain text rather than CMake so the pip build needs no CMake
   — full scikit-build-core delegation was rejected as too disruptive for users
   still on the pip path (§7.1).
@@ -582,7 +582,7 @@ from drifting, and is the one I'd want a real regression run behind.
   Verified by diffing the generated `build.ninja` old-vs-new for three configs
   (torch CUDA / no-torch CUDA+GUI+tests / Vulkan): identical target sets,
   **zero** flag, define, or link-library differences; the only deltas are
-  source ordering and one extra harmless `-I<builddir>` on `ssplat-mesh`.
+  source ordering and one extra harmless `-I<builddir>` on `spirula-mesh`.
   Both backends rebuild clean and the parity suite is 17/17.
 
 - **Phase 4 — done (native half).** The directory move. All native code is now
@@ -652,7 +652,7 @@ from drifting, and is the one I'd want a real regression run behind.
   - `backend/api/*.h` forwarders were emitting `#include "../../<Name>.cuh"`,
     stale since the phase-4 move. Nothing includes them yet, so nothing caught
     it. They are now src-relative and each one is compile-checked to parse
-    under `-DSSPLAT_BACKEND_VULKAN` with no CUDA toolkit.
+    under `-DSS_BACKEND_VULKAN` with no CUDA toolkit.
   - `build_develop.bash` always exited 0: the trailing `libcsrc.so` move
     masked the build's status, so a failed build reported green. Now
     propagated.
@@ -665,8 +665,8 @@ from drifting, and is the one I'd want a real regression run behind.
   it imports neither torch nor nerfstudio.
 
   The parsers and `external/miniz.c` moved from the three app targets'
-  source lists into the engine library (`cmake/sources.txt`), so `ssplat-train`,
-  `ssplat-mesh`, `ssplat-gui`, the Vulkan `csrc_portable` and the Python
+  source lists into the engine library (`cmake/sources.txt`), so `spirula-train`,
+  `spirula-mesh`, `spirula-gui`, the Vulkan `csrc_portable` and the Python
   extension now share one build of them instead of four.
 
   **Gate:** `tests/python/test_dataparser_parity.py` — 4 formats (COLMAP text +
@@ -675,7 +675,7 @@ from drifting, and is the one I'd want a real regression run behind.
   model, seed cloud, `train_frame_scale`, `train_to_normalized` and the
   validation split against `modules/dataparser.py`. 18 passed. Fixtures are
   synthesised from a fixed seed (`tests/python/dataset_fixtures.py`) so no
-  local dataset is referenced; `SSPLAT_TEST_DATASET` opts into running the
+  local dataset is referenced; `SS_TEST_DATASET` opts into running the
   same comparison on a real one. A cross-format check asserts the four
   fixtures describe the same scene, so the comparison cannot agree on garbage.
 
@@ -723,7 +723,7 @@ from drifting, and is the one I'd want a real regression run behind.
   README), so renaming it breaks external backlinks. A public URL outranks an
   internal tidy-up; `viewer/` keeps its name.
 
-  **Fixed a hang this phase owns.** `ssplat-train` never exited when the viewer
+  **Fixed a hang this phase owns.** `spirula-train` never exited when the viewer
   was enabled and `--keep-viewer-alive 0`: `HttpServer::stop()` closed the
   listening socket to break `accept()`, which POSIX leaves undefined and Linux
   simply ignores — the accept never returned and the join blocked forever. The
@@ -749,13 +749,13 @@ from drifting, and is the one I'd want a real regression run behind.
   share one build of it instead of two. `src/bindings/bind_trainer.cpp`
   exposes:
 
-  - `SsplatConfig`, bound *through the generated `SSPLAT_CONFIG_FIELDS`
+  - `TrainConfig`, bound *through the generated `SS_CONFIG_FIELDS`
     X-macro* rather than a hand-listed field set — add a field to a Python
     dataclass, re-run `generate_cli_config.py`, and it appears in the binding
     with no edit to any binding file. The §4.3 sketch proposed extending the
     generator to emit a pybind struct; using the X-macro that already exists
     turned out to be strictly better, since it cannot go stale.
-  - `ssplat_config_fields()` — the same X-macro as *data*, so
+  - `spirula_config_fields()` — the same X-macro as *data*, so
     `native_trainer.to_native_config()` can walk the Python dataclass tree
     without a second hand-maintained name mapping. The flattening and the
     RENAMES live once, in the generator.
@@ -801,7 +801,7 @@ from drifting, and is the one I'd want a real regression run behind.
   `app/webviewer/*.cpp` into the engine library made `setup.py` compile
   `Viewer.cpp`, which includes the CMake-generated `viewer_html.h`.
   `setup.py` now generates that header itself (`embed_viewer_html()`),
-  byte-identical to `ssplat_embed_file()`'s output.
+  byte-identical to `ss_embed_file()`'s output.
 
   Remaining known difference, deliberately *not* changed: Python's
   `_maybe_init_bilagrid` gates the depth/normal grids on `bilagrid_depth_lr` /
@@ -903,7 +903,7 @@ from drifting, and is the one I'd want a real regression run behind.
     `k1 k2 p1 p2 k3 k4 k5 k6 sx1 sy1`. The remap stayed.
 
   **Verification:** all four builds; 16/16 cross-backend parity; 3 Vulkan
-  smoke tests; `ssplat-train` on garden under all three native builds
+  smoke tests; `spirula-train` on garden under all three native builds
   (identical splat counts); full `spirulae-train` run on garden with the
   native viewer serving and eval producing metrics.json (PSNR 21.10 vs 21.06
   before the deletions); resume verified to restore step + splat count without

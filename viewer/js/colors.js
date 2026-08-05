@@ -1,5 +1,5 @@
 // Color-gamut matrices (source gamut -> Rec.709 / sRGB primaries), matching
-// spirulae's get_color_transform_matrix (_wrapper_per_pixel.py). Stored
+// the trainer's get_color_transform_matrix. Stored
 // row-major here; toColMajor() produces the column-major layout GLSL expects
 // for `uGamut * rgb`.
 

@@ -2,7 +2,7 @@
 // Diagnostics. Everything goes to stderr so a CLI run can pipe results to
 // stdout cleanly (`ssam-cli ... 2>/dev/null > out.json`).
 //
-// The level is a runtime knob (SSPLAT_NN_LOG=0..3) with a compile-time ceiling
+// The level is a runtime knob (SS_NN_LOG=0..3) with a compile-time ceiling
 // (NN_LOG_MAX_LEVEL) so release builds can drop the calls entirely.
 //
 //   0 silent   1 warnings/errors   2 stage timing (default)   3 verbose
@@ -16,7 +16,7 @@
 
 namespace nn {
 
-int  log_level();            // cached read of $SSPLAT_NN_LOG, default 2
+int  log_level();            // cached read of $SS_NN_LOG, default 2
 void set_log_level(int lvl);
 void log_write(int level, const char* fmt, ...);
 

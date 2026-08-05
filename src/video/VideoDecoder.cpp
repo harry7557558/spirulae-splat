@@ -3,7 +3,7 @@
 // Everything interesting -- the demuxers, the bitstream parsers, the Vulkan
 // decode loop -- lives below this file. What is here is the simplification the
 // public API promises: open a file, pull frames in presentation order, get
-// host-side RGB. Callers that care about throughput (ssplat-sam extract) drive
+// host-side RGB. Callers that care about throughput (spirula-sam extract) drive
 // VideoPipeline directly, so they can skip converting frames they will discard.
 
 #include "nn/core/Log.h"

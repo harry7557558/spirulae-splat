@@ -5,23 +5,8 @@
 Three formats, auto-detected in this order: **Nerfstudio**, then **COLMAP**,
 then **Metashape**.
 
-The native parsers (`src/data/parsers/*Parser.cpp`) are the implementation.
-They back the CLI trainer, the GUI, the WASM viewer **and** Python, via
-`spirulae_splat.modules.native_dataparser`:
-
-```python
-from spirulae_splat.modules.native_dataparser import parse_dataset, NativeParserConfig
-ds = parse_dataset("/path/to/dataset", NativeParserConfig(eval_mode="interval"))
-ds.c2w          # [N, 3, 4] float32, OpenGL convention, sorted by filename
-ds.intrins      # [N, 4] fx fy cx cy
-ds.points_xyz   # [P, 3] seed cloud
-```
-
-`spirulae_splat/modules/dataparser.py` is the **legacy** second
-implementation, kept until its users migrate. It probes in the same order and
-is held to the native behaviour by `tests/python/test_dataparser_parity.py` —
-see [restructure-proposal.md](restructure-proposal.md) §4.1. Do not add
-features to it; add them to the C++ parsers.
+The native parsers (`src/data/parsers/*Parser.cpp`) are the one
+implementation, shared by the CLI trainer, the GUI and the WASM viewer.
 
 | format | inputs | parser |
 |---|---|---|
@@ -107,13 +92,13 @@ monocular depth/normal prediction, and raw conversion. See
 data path, and stay on the Python side.
 
 `scripts/batch_process_data.bash` needs a COLMAP vocabulary tree; set
-`SSPLAT_VOCAB_TREE` to its path.
+`SS_VOCAB_TREE` to its path.
 
 ## Benchmarking
 
-`spirulae-benchmark` drives multi-scene runs over standard academic sets
-(Mip-NeRF 360 `360_v2`, ZipNeRF). Dataset roots are passed as arguments — no
-paths are hardcoded. **Each scene runs in its own subprocess**: the engine is
+`reference/python/benchmark.py` drives multi-scene runs over standard
+academic sets (Mip-NeRF 360 `360_v2`, ZipNeRF) by calling `spirula train`.
+Dataset roots are passed as arguments — no paths are hardcoded. **Each scene runs in its own subprocess**: the engine is
 a process-global singleton, and running several scenes in one process leaks
 state between them and silently degrades metrics.
 

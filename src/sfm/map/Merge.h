@@ -8,7 +8,7 @@
 // spliced, tracks that do not become new points.
 //
 // Three pieces, deliberately separable because a GUI will drive them
-// individually (spirulae-splat's model viewer, where a user says "merge this
+// individually (the model viewer, where a user says "merge this
 // one into that one" or supplies the transform themselves):
 //
 //   alignReconstructions()  shared images -> Sim3, by RANSAC over image

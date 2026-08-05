@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include "core/Env.h"
 
 namespace gui {
 
@@ -53,7 +54,7 @@ void fov_to_intrinsics(float fov_deg, int w, int h, const char* model,
 // Framing + camera math
 // ---------------------------------------------------------------------------
 
-void ViewportPanel::compute_framing(const ssplat::TrainerSession& session) {
+void ViewportPanel::compute_framing(const spirula::TrainerSession& session) {
     // Match the web viewer's cam.reset() exactly: target = client-frame
     // origin (the normalized frame is centered on the CAMERA POSES via
     // center_method="poses", i.e. the captured object for object-centric
@@ -86,7 +87,7 @@ void ViewportPanel::compute_framing(const ssplat::TrainerSession& session) {
     _dirty = true;
 }
 
-void ViewportPanel::maybe_frame(const ssplat::TrainerSession& session) {
+void ViewportPanel::maybe_frame(const spirula::TrainerSession& session) {
     std::string key = session.cfg.data + ":" +
         std::to_string(session.ds.num_cameras) + ":" +
         std::to_string(session.ds.points.num());
@@ -182,7 +183,7 @@ void ViewportPanel::view_matrix(float out[16]) const {
 // Attach / detach
 // ---------------------------------------------------------------------------
 
-void ViewportPanel::attach_preview(ssplat::TrainerSession& session) {
+void ViewportPanel::attach_preview(spirula::TrainerSession& session) {
     detach();
     if (!_preview.build(session)) {
         _last_error = "preview renderer unavailable (OpenGL 3.2 required)";
@@ -193,7 +194,7 @@ void ViewportPanel::attach_preview(ssplat::TrainerSession& session) {
     _mode = Mode::Preview;
 }
 
-void ViewportPanel::attach(ssplat::TrainerSession& session) {
+void ViewportPanel::attach(spirula::TrainerSession& session) {
     detach();
     _worker.start(session.make_viewer_config(), session.make_viewer_hooks());
     _buffer_keys = _worker.buffer_keys();
@@ -270,7 +271,7 @@ void ViewportPanel::handle_input(float /*item_h*/) {
                 bool is_pan = _drag_button == ImGuiMouseButton_Right ||
                               _drag_button == ImGuiMouseButton_Middle ||
                               io.KeyShift;
-                if (std::getenv("SSPLAT_NAV_DEBUG"))
+                if (spirula::env("NAV_DEBUG"))
                     std::fprintf(stderr,
                         "[nav] btn=%d pan=%d shift=%d d=(%.0f,%.0f) tgt=(%.3f,%.3f,%.3f) pos=(%.3f,%.3f,%.3f)\n",
                         _drag_button, (int)is_pan, (int)io.KeyShift, dx, dy,

@@ -1,4 +1,4 @@
-# The Python package is gone: `ssplat` is a standalone executable built with
+# The Python package is gone: `spirula` is a standalone executable built with
 # CMake (see build_develop.bash / docs/build.md). What is left under
 # reference/python/ and scripts/ are hand-run tools, not a package -- run them
 # with `python3 <path>`, and see reference/python/README.md for what they need.

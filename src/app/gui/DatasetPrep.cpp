@@ -9,13 +9,13 @@
 
 #include "external/stb_image.h"      // stbi_info (image size probe)
 
-#ifdef SSPLAT_BUILD_SAM
+#ifdef SS_BUILD_SAM
 #include "app/WriterPool.h"
 #include "nn/Device.h"
 #include "nn/io/Image.h"
 #include "sam/Masking.h"
 #endif
-#ifdef SSPLAT_HAVE_VIDEO
+#ifdef SS_HAVE_VIDEO
 #include "app/FrameExtract.h"
 #include "video/Video.h"
 #endif
@@ -91,7 +91,7 @@ std::vector<fs::path> walk_images(const fs::path& dir, const fs::path& skip = {}
     return out;
 }
 
-#ifdef SSPLAT_BUILD_SAM
+#ifdef SS_BUILD_SAM
 // Preview clicks -> the seeds the masker takes. Clicks of one object made on
 // one frame become ONE prompt (several positive points describe one thing);
 // clicks of the same object on another frame become a second prompt, which the
@@ -292,7 +292,7 @@ void resolve_photo_folder(const std::string& picked, std::string& images,
     masks.clear();
     // A dataset folder: index images/, not the folder holding it (which also
     // holds the masks, the point cloud, and whatever else was left there).
-    // This is the same probe `ssplat sfm auto` prints as "<dir> contains
+    // This is the same probe `spirula sfm auto` prints as "<dir> contains
     // images/, using <dir>/images as the image directory".
     if (any_image(p / "images")) images = (p / "images").string();
     // The masks belong beside the images: under the folder that holds them, or
@@ -311,7 +311,7 @@ void resolve_photo_folder(const std::string& picked, std::string& images,
 const Backends& backends() {
     static const Backends probed = [] {
         Backends b;
-#ifdef SSPLAT_HAVE_VIDEO
+#ifdef SS_HAVE_VIDEO
         b.video_reason = app::video_decode_availability();
         b.builtin_video = b.video_reason.empty();
         if (!b.builtin_video)
@@ -319,14 +319,14 @@ const Backends& backends() {
                            "frames are extracted with ffmpeg";
 #else
         b.video_reason = "built without the video decoder "
-                         "(-DSSPLAT_ENABLE_PATENTED=OFF)";
+                         "(-DSS_ENABLE_PATENTED=OFF)";
         b.video_note = "frames are extracted with ffmpeg";
 #endif
-#ifdef SSPLAT_BUILD_SAM
+#ifdef SS_BUILD_SAM
         b.builtin_masking = true;
 #else
         b.masking_reason = "built without the segmentation module "
-                           "(-DSSPLAT_BUILD_SAM=OFF)";
+                           "(-DSS_BUILD_SAM=OFF)";
         b.masking_note =
             "Masks are made by an external Python script (scripts/mask.py with "
             "lang-segment-anything, which needs a CUDA PyTorch). Set the Python "
@@ -361,7 +361,7 @@ int DatasetPrep::exec(const std::vector<std::string>& argv) {
 // ---------------------------------------------------------------------------
 
 bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
-#ifdef SSPLAT_BUILD_SAM
+#ifdef SS_BUILD_SAM
     // Hand the GPU back on the way out, by whichever of the dozen exits is
     // taken. A SAM 3 checkpoint is about 2 GB of VRAM and the inference layer's
     // pool is process-wide and grow-only, so without this it stays resident
@@ -534,7 +534,7 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
                                         const std::string& images,
                                         const std::string& masks, PrepResult& out,
                                         bool& masked, std::string& error) {
-#ifndef SSPLAT_HAVE_VIDEO
+#ifndef SS_HAVE_VIDEO
     (void)job; (void)in; (void)images; (void)masks; (void)out; (void)masked;
     error = backends().video_reason;
     return false;
@@ -627,7 +627,7 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
     if (!command_exists(job.ffmpeg_exe)) {
         error = "ffmpeg not found ('" + job.ffmpeg_exe +
                 "'). Install it, set its path under Tool locations, or build "
-                "with -DSSPLAT_ENABLE_PATENTED=ON for in-process decoding.";
+                "with -DSS_ENABLE_PATENTED=ON for in-process decoding.";
         return false;
     }
     _log("Video: " + in.path);
@@ -811,7 +811,7 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
                                          const std::string& images,
                                          const std::string& masks,
                                          std::string& error) {
-#ifndef SSPLAT_BUILD_SAM
+#ifndef SS_BUILD_SAM
     (void)job; (void)in; (void)images; (void)masks;
     error = backends().masking_reason;
     return false;
@@ -919,7 +919,7 @@ bool DatasetPrep::generate_masks_python(const PrepJob& job,
         return false;
     }
     const fs::path ws = job.workspace;
-    const fs::path script = ws / ".ssplat_mask.py";
+    const fs::path script = ws / ".spirula_mask.py";
     {
         FILE* f = std::fopen(script.string().c_str(), "wb");
         if (!f) { error = "cannot write " + script.string(); return false; }

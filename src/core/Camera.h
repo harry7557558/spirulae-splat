@@ -2,12 +2,11 @@
 
 // Cameras — device-resident table of N cameras.
 //
-// C++ port of `spirulae_splat/modules/camera.py`. Storage is pool-backed and
-// non-owning: all DeviceVector / DeviceTensor* members reference memory owned
+// Storage is pool-backed and non-owning: all DeviceVector / DeviceTensor* members reference memory owned
 // by DevicePool (when constructed from host data) or by an external owner
 // (when shallow-copied from existing device tensors).
 //
-// Design choices that differ from camera.py:
+// Design choices worth knowing:
 //
 //   - Model type is a strong enum (CameraModelType, defined in Common.cuh)
 //     instead of a string. A static `model_from_colmap_name(...)` mirrors the

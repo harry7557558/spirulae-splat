@@ -3,7 +3,7 @@
 // FrameExtract -- video in, a folder of sharp (optionally masked) frames out.
 //
 // The composition of src/video/ (decode + a sharpness shader) and src/sam/
-// (masking), driven identically by `ssplat-sam extract` and by the GUI's
+// (masking), driven identically by `spirula-sam extract` and by the GUI's
 // dataset preparation, so the two cannot drift. It sits in src/app/ for the
 // same reason TrainerCore does: it belongs to neither subsystem, and every
 // front end wants exactly one copy of it.
@@ -13,7 +13,7 @@
 // frames get the same file names whichever path produced them. That is what
 // lets the GUI fall back to ffmpeg + FrameSelect without the dataset changing.
 //
-// Only compiled when SSPLAT_ENABLE_PATENTED is ON; every caller has an ffmpeg
+// Only compiled when SS_ENABLE_PATENTED is ON; every caller has an ffmpeg
 // fallback for when it is not.
 
 #include "sam/Masking.h"
@@ -76,7 +76,7 @@ int video_track_count(const std::string& path, std::string& error);
 bool extract_frames(const FrameExtractJob& job, const FrameExtractSinks& sinks,
                     FrameExtractStats& stats, std::string& error);
 
-// The timing table `ssplat-sam extract` prints, so the CLI and the GUI log
+// The timing table `spirula-sam extract` prints, so the CLI and the GUI log
 // agree on what the numbers mean.
 std::string format_extract_stats(const FrameExtractStats& s,
                                  const std::string& out_dir, bool masked);

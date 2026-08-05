@@ -1,7 +1,7 @@
 // Memory-bounded parallel image decode for batch stages.
 //
 // `loadGrayImage` (stb_image, single-threaded) is the largest single cost in
-// `ssplat-sfm extract` on real captures -- ~66% of the stage on 17 MP JPEGs against
+// `spirula-sfm extract` on real captures -- ~66% of the stage on 17 MP JPEGs against
 // 47 ms of GPU SIFT per image (src/sfm/README.md). The GPU side owns
 // one VkContext and must stay on one thread, so decode is the part that gets a
 // pool: workers decode ahead while the caller drives the GPU.

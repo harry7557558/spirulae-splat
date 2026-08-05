@@ -122,7 +122,7 @@ Tensor pool_tensor(vk::PoolSlot slot, uint32_t sub, DType t, int64_t d0, int64_t
                    int64_t d2 = 1, int64_t d3 = 1, int ndim = -1);
 
 // Debug helpers: download a tensor to host floats (converting from f16), and
-// print a few statistics. Only used by tests and SSPLAT_NN_LOG=3 paths -- a forward
+// print a few statistics. Only used by tests and SS_NN_LOG=3 paths -- a forward
 // pass must never round-trip through the host.
 void tensor_to_host(const Tensor& t, float* dst, int64_t count);
 void tensor_from_host(const Tensor& t, const float* src, int64_t count);

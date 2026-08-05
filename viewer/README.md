@@ -1,4 +1,4 @@
-# Spirulae Standalone Viewer
+# Spirula Studio Standalone Viewer
 
 A dependency-free, client-side **WebGL2** viewer for 3D Gaussian Splats,
 meshes, and **MVS datasets** (COLMAP / Nerfstudio / Metashape). It runs
@@ -8,7 +8,7 @@ in **C++ compiled to WebAssembly** (built with CMake + Emscripten); rendering
 is WebGL2.
 
 The viewer's own runtime code is **independent** from the rest of
-`spirulae_splat` — nothing here imports from the training code at runtime. The
+the trainer — nothing here imports from the training code at runtime. The
 one deliberate exception is at build time: the WASM module compiles the
 trainer's dataset parsers (`src/data/parsers/*Parser.cpp`)
 **in place** — referenced by relative path, not copied — so COLMAP/Nerfstudio/
@@ -17,7 +17,7 @@ plain C++17 with no CUDA dependency (see `csrc/CameraModel.h`).
 
 ## Features
 
-- **3D Gaussian Splatting** (`.ply`, INRIA/spirulae layout, including very
+- **3D Gaussian Splatting** (`.ply`, INRIA and Spirula Studio layouts, including very
   large files — binary PLY is parsed **streaming** through a small chunk
   buffer, non-position attributes are stored as half floats, rest SH
   coefficients are **8-bit quantized** (Gaussian-wise scale, `RGB8_SNORM`
@@ -164,7 +164,7 @@ js/
 src/viewer.cpp       parsers (PLY/OBJ), depth sort, histograms
 src/dataset_bridge.cpp  dataset C ABI over MEMFS (drives the trainer's parsers)
 test/                end-to-end harness (headless Chrome) + data generators
-CMakeLists.txt       Emscripten build (also compiles ../spirulae_splat/.../app parsers)
+CMakeLists.txt       Emscripten build (also compiles ../src/data/ parsers)
 ```
 
 Frustum lines use the same seam handling as meshes: fragments whose

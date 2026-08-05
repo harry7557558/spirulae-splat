@@ -1,13 +1,13 @@
-// ssplat-sfm: the SfM pipeline CLI. Subcommands are the stage graph
+// spirula-sfm: the SfM pipeline CLI. Subcommands are the stage graph
 // (src/sfm/README.md), each reading and writing files on disk so any one of
 // them can be replaced by COLMAP's equivalent to bisect a failure:
 //
-//   ssplat-sfm auto    <image_dir> -o <workspace>      all of the below
-//   ssplat-sfm extract <image|dir> -o <features>
-//   ssplat-sfm match   <features>  -o <matches.bin>
-//   ssplat-sfm map     <matches.bin> <features> -o <sparse/>
-//   ssplat-sfm merge   <sparse/>   -o <merged/>
-//   ssplat-sfm ba      <bal_problem.txt>               solver benchmark
+//   spirula-sfm auto    <image_dir> -o <workspace>      all of the below
+//   spirula-sfm extract <image|dir> -o <features>
+//   spirula-sfm match   <features>  -o <matches.bin>
+//   spirula-sfm map     <matches.bin> <features> -o <sparse/>
+//   spirula-sfm merge   <sparse/>   -o <merged/>
+//   spirula-sfm ba      <bal_problem.txt>               solver benchmark
 //
 // This file is presentation and plumbing only: what a flag *means* lives in
 // sfm/SfmConfig.h's descriptor table, which is also what `--help` prints and
@@ -51,24 +51,24 @@
 #include "sfm/map/Mapper.h"
 #include "sfm/map/Merge.h"
 
-// `ssplat-sfm ba`, in sfm_ba.cpp. It prints its own help.
+// `spirula-sfm ba`, in sfm_ba.cpp. It prints its own help.
 int cmdBa(int argc, char** argv);
 void printBaHelp(FILE* out);
 
-// Set by the build (cmake/SsplatOptions.cmake reads it from pyproject.toml).
-#ifndef SSPLAT_VERSION
-#define SSPLAT_VERSION "dev"
+// Set by the build (cmake/SsOptions.cmake reads it from pyproject.toml).
+#ifndef SS_VERSION
+#define SS_VERSION "dev"
 #endif
 
 namespace fs = std::filesystem;
 using namespace sfm;
 
-// How this tool was invoked ("ssplat sfm" as dispatched); see app/Tools.h.
+// How this tool was invoked ("spirula sfm" as dispatched); see app/Tools.h.
 // The examples in the command tables below are written against the historical
 // name and rewritten at print time.
-static const char* kProgram = "ssplat sfm";
+static const char* kProgram = "spirula sfm";
 static std::string with_program_name(const char* text) {
-    return app::help_text(text, "ssplat-sfm");
+    return app::help_text(text, "spirula-sfm");
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ static std::string with_program_name(const char* text) {
 struct CommandInfo {
     const char* name;
     uint32_t mask;
-    const char* summary;      // one line, for `ssplat-sfm --help`
+    const char* summary;      // one line, for `spirula-sfm --help`
     const char* usage;        // argument syntax after the command name
     const char* description;  // pre-wrapped, two-space indented
     void (*own_options)(FILE*);
@@ -145,11 +145,11 @@ static const CommandInfo kCommands[] = {
      "  Two knobs decide the rest: --quality and --data-type. Anything they set can be\n"
      "  overridden by naming the flag explicitly, and the run reports what they moved.",
      ownOptionsAuto,
-     "  ssplat-sfm auto images/ -o workspace/\n"
-     "  ssplat-sfm auto -o ws/                       # ./images and ./masks, all defaults\n"
-     "  ssplat-sfm auto DATASET/ -o ws/ --data-type video --quality medium\n"
-     "  ssplat-sfm auto images/ -o ws/ --camera-model opencv-fisheye --focal 520\n"
-     "  ssplat-sfm auto images/ -o ws/ --camera-model cam0=thin-prism-fisheye",
+     "  spirula-sfm auto images/ -o workspace/\n"
+     "  spirula-sfm auto -o ws/                       # ./images and ./masks, all defaults\n"
+     "  spirula-sfm auto DATASET/ -o ws/ --data-type video --quality medium\n"
+     "  spirula-sfm auto images/ -o ws/ --camera-model opencv-fisheye --focal 520\n"
+     "  spirula-sfm auto images/ -o ws/ --camera-model cam0=thin-prism-fisheye",
      "Exit status:\n"
      "  0  a reconstruction that looks sound\n"
      "  1  usage or runtime error\n"
@@ -169,9 +169,9 @@ static const CommandInfo kCommands[] = {
      "  focal length and the camera, so `match` and `map` can build intrinsics for the\n"
      "  images on disk without seeing them (D46).",
      ownOptionsExtract,
-     "  ssplat-sfm extract images/ -o features/\n"
-     "  ssplat-sfm extract images/ -o features/ --masks masks/ --max-features 4096\n"
-     "  ssplat-sfm extract photo.jpg -o photo.bin",
+     "  spirula-sfm extract images/ -o features/\n"
+     "  spirula-sfm extract images/ -o features/ --masks masks/ --max-features 4096\n"
+     "  spirula-sfm extract photo.jpg -o photo.bin",
      nullptr},
 
     {"match", CMD_MATCH,
@@ -187,9 +187,9 @@ static const CommandInfo kCommands[] = {
      "  grouping and the focals this stage settles on travel in the match database, so\n"
      "  `map` inherits them instead of re-deriving them (D47).",
      ownOptionsMatch,
-     "  ssplat-sfm match features/ -o matches.bin\n"
-     "  ssplat-sfm match features/ -o matches.bin --pairs prefilter --threads 8\n"
-     "  ssplat-sfm match features/ -o matches.bin --camera-model opencv \\\n"
+     "  spirula-sfm match features/ -o matches.bin\n"
+     "  spirula-sfm match features/ -o matches.bin --pairs prefilter --threads 8\n"
+     "  spirula-sfm match features/ -o matches.bin --camera-model opencv \\\n"
      "                             --camera-model cam0=thin-prism-fisheye --focal cam0=520",
      nullptr},
 
@@ -206,10 +206,10 @@ static const CommandInfo kCommands[] = {
      "  naming one camera group by image path, so a rig can mix models. Say nothing\n"
      "  about cameras and the setup recorded by verification is used as it stands.",
      ownOptionsMap,
-     "  ssplat-sfm map matches.bin features/ -o sparse/ --images images/\n"
-     "  ssplat-sfm map matches.bin features/ -o sparse/ --max-models 1\n"
-     "  ssplat-sfm map matches.bin features/ --resume sparse/ --check\n"
-     "  ssplat-sfm map matches.bin features/ -o sparse/ --resume sparse/ --audit",
+     "  spirula-sfm map matches.bin features/ -o sparse/ --images images/\n"
+     "  spirula-sfm map matches.bin features/ -o sparse/ --max-models 1\n"
+     "  spirula-sfm map matches.bin features/ --resume sparse/ --check\n"
+     "  spirula-sfm map matches.bin features/ -o sparse/ --resume sparse/ --audit",
      nullptr},
 
     {"merge", CMD_MERGE,
@@ -222,9 +222,9 @@ static const CommandInfo kCommands[] = {
      "  A merged model is two independently optimized halves glued along a seam no\n"
      "  bundle adjustment has ever seen, so one runs across it afterwards unless --no-ba.",
      ownOptionsMerge,
-     "  ssplat-sfm merge sparse/ -o merged/\n"
-     "  ssplat-sfm merge sparse/ --in-place\n"
-     "  ssplat-sfm merge runA/sparse/0 runB/sparse/0 -o merged/ --min-common 5",
+     "  spirula-sfm merge sparse/ -o merged/\n"
+     "  spirula-sfm merge sparse/ --in-place\n"
+     "  spirula-sfm merge runA/sparse/0 runB/sparse/0 -o merged/ --min-common 5",
      nullptr},
 };
 
@@ -251,8 +251,8 @@ static void printCommandHelp(const CommandInfo& c) {
 }
 
 static void printTopHelp(FILE* out) {
-    std::fprintf(out, "%s %s -- Structure from Motion for spirulae-splat\n\n", kProgram,
-                 SSPLAT_VERSION);
+    std::fprintf(out, "%s %s -- Structure from Motion for Spirula Studio\n\n", kProgram,
+                 SS_VERSION);
     std::fprintf(out, "Usage:\n  %s <command> [options]\n  %s <command> --help\n\n", kProgram,
                  kProgram);
     std::fprintf(out, "Commands:\n");
@@ -268,7 +268,7 @@ static void printTopHelp(FILE* out) {
                  "replaced by COLMAP's equivalent to bisect a failure. `auto` runs all of them.\n"
                  "\n"
                  "Environment:\n"
-                 "  SSPLAT_SFM_MAP_PROF=1   print a per-stage breakdown of the mapper's time\n");
+                 "  SS_SFM_MAP_PROF=1   print a per-stage breakdown of the mapper's time\n");
 }
 
 // A usage error, in the shape every command-line tool uses: what was wrong, and
@@ -720,7 +720,7 @@ static void printCameraSetup(const char* tag, const CameraSetup& cs,
 // -----------------------------------------------------------------------
 
 // Batch-extract every image in `imagedir` to `outdir`/<stem>.bin. Shared by
-// `ssplat-sfm extract DIR` and `ssplat-sfm auto`.
+// `spirula-sfm extract DIR` and `spirula-sfm auto`.
 struct ExtractStats {
     size_t images = 0, failed = 0, unreadable = 0;
     uint64_t features = 0;
@@ -785,7 +785,7 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
     //
     // A mask directory nested inside the image directory is skipped: masks are
     // themselves PNGs, and extracting features from them would silently double
-    // the image count with garbage views (`ssplat-sfm auto DATASET` with the images
+    // the image count with garbage views (`spirula-sfm auto DATASET` with the images
     // one level up is exactly the layout that trips this).
     std::error_code skip_ec;
     const bool skip_masks = !maskdir.empty() && fs::is_directory(maskdir, skip_ec);
@@ -1028,7 +1028,7 @@ static int cmdExtract(int argc, char** argv) {
 // -----------------------------------------------------------------------
 
 // Match + verify a feature directory into a MatchesDatabase. Shared by
-// `ssplat-sfm match` and `ssplat-sfm auto`.
+// `spirula-sfm match` and `spirula-sfm auto`.
 struct MatchStats {
     size_t images = 0, pairs = 0, kept = 0, scored = 0;
     uint64_t inliers = 0, putative = 0;
@@ -1255,7 +1255,7 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
         if (calib)
             for (uint32_t id : calib->cameras.focal_measured)
                 calib->cameras.focal_known.insert(id);
-        // Hand the setup on through the database (D47), so `ssplat-sfm map` inherits
+        // Hand the setup on through the database (D47), so `spirula-sfm map` inherits
         // the grouping and the focals this stage measured instead of
         // re-deriving them from the inliers it is about to produce.
         if (calib) storeCameraSetup(db, calib->cameras);
@@ -1435,7 +1435,7 @@ static int cmdMap(int argc, char** argv) {
     }
 
     // A fisheye group with no focal prior and none recorded (D45/D46/D47).
-    // `ssplat-sfm auto` and `ssplat-sfm match` measure this before verifying, on raw putative
+    // `spirula-sfm auto` and `spirula-sfm match` measure this before verifying, on raw putative
     // matches, and it now travels in the match database; this is the fallback
     // for a matches.bin that predates that or arrived from elsewhere. The
     // sample here is verified *inliers*, so if the verification was itself
@@ -1730,9 +1730,9 @@ static int cmdAuto(int argc, char** argv) {
 
     // ---- where the images and masks are (D39/D40) ----
     // The default layout is a dataset directory holding `images/` and `masks/`,
-    // which is spirulae-splat's and nerfstudio's. Pointing straight at an image
+    // which is Spirula Studio's and nerfstudio's. Pointing straight at an image
     // directory still works: `masks` is then looked for as its sibling, so
-    // `ssplat-sfm auto DATASET/images` and `ssplat-sfm auto DATASET` behave the same.
+    // `spirula-sfm auto DATASET/images` and `spirula-sfm auto DATASET` behave the same.
     if (imagedir.empty()) imagedir = "images";
     if (!fs::is_directory(imagedir)) {
         fprintf(stderr, "%s auto: error: %s is not a directory\n", kProgram, imagedir.c_str());
@@ -1919,8 +1919,8 @@ static int cmdAuto(int argc, char** argv) {
     return 0;
 }
 
-int ssplat_sfm_main(int argc, char** argv) {
-    app::set_program_name(argc > 0 ? argv[0] : nullptr, "ssplat sfm");
+int spirula_sfm_main(int argc, char** argv) {
+    app::set_program_name(argc > 0 ? argv[0] : nullptr, "spirula sfm");
     kProgram = app::program_name().c_str();
     if (argc < 2) {
         printTopHelp(stderr);
@@ -1952,7 +1952,7 @@ int ssplat_sfm_main(int argc, char** argv) {
 
     std::string cmd = argv[1];
     if (cmd == "--help" || cmd == "-h" || cmd == "help") {
-        // `ssplat-sfm help <command>` is the same as `<command> --help`.
+        // `spirula-sfm help <command>` is the same as `<command> --help`.
         if (argc > 2) {
             if (std::string(argv[2]) == "ba") { printBaHelp(stdout); return 0; }
             if (const CommandInfo* c = findCommand(argv[2])) { printCommandHelp(*c); return 0; }
@@ -1963,7 +1963,7 @@ int ssplat_sfm_main(int argc, char** argv) {
         return 0;
     }
     if (cmd == "--version" || cmd == "-V" || cmd == "version") {
-        std::printf("%s %s\n", kProgram, SSPLAT_VERSION);
+        std::printf("%s %s\n", kProgram, SS_VERSION);
         return 0;
     }
     // One catch for every subcommand. Setup failures throw rather than return

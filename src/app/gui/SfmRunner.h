@@ -9,7 +9,7 @@
 //
 // Pipeline:
 //   DatasetPrep  (frames, sharpest-frame selection, .insv track split, masks)
-//   ssplat sfm auto  ->  <workspace>/sparse/0/{cameras,images,points3D}.bin
+//   spirula sfm auto  ->  <workspace>/sparse/0/{cameras,images,points3D}.bin
 //
 // The reconstruction runs as a child process rather than in this one. That is
 // a deliberate choice for now, not a shortcut left over from the COLMAP days:
@@ -24,7 +24,7 @@
 //     (the port plan's own §10 risk).
 //
 // The child is this same executable run again (AppPaths::exe_path), so there
-// is nothing to install and nothing to find: `ssplat sfm` is one of the
+// is nothing to install and nothing to find: `spirula sfm` is one of the
 // subcommands the binary already answers to. When phase 3 lands, only the
 // run() body here changes.
 
@@ -38,7 +38,7 @@
 
 namespace gui {
 
-// The camera models `ssplat-sfm --camera-model` accepts that the dataset
+// The camera models `spirula-sfm --camera-model` accepts that the dataset
 // parser and renderer can also consume. EQUIRECTANGULAR is deliberately absent:
 // the mapper can write it, the parser cannot read it
 // (docs/notes/sfm-port-plan.md phase 4).
@@ -73,7 +73,7 @@ struct SfmJob {
     int max_features = 0;             // 0 = the quality preset's
     int max_image_size = 0;           // 0 = the quality preset's
     // 0 flat, 1 bottom-up. Flat for every capture, whatever its size: there is
-    // no automatic switch, here or in `ssplat sfm`.
+    // no automatic switch, here or in `spirula sfm`.
     int mapper = 0;
     // 0 SIFT, 1 ALIKED-n16rot, 2 ALIKED-n32. The learned ones fetch a
     // checkpoint on first use and run on their own resolution ladder, so the
@@ -87,7 +87,7 @@ struct SfmJob {
     bool keep_intermediate = false;   // keep features/ and matches.bin
 
     // Extra flags typed by the user, appended verbatim. The escape hatch for
-    // everything the panel does not surface -- `ssplat-sfm auto --help` lists
+    // everything the panel does not surface -- `spirula-sfm auto --help` lists
     // the lot, and this is how an expert reaches it without us mirroring 130
     // flags into the GUI.
     std::string extra_args;
@@ -99,7 +99,7 @@ public:
 
     ~SfmRunner();
 
-    // "" when ssplat-sfm is available, otherwise why it is not.
+    // "" when spirula-sfm is available, otherwise why it is not.
     static std::string availability();
 
     void start(const SfmJob& job);
@@ -128,7 +128,7 @@ private:
     // Stage changes driven by the child's output, which repeats a
     // stage's lines many times over.
     void set_stage_if_new(const char* s);
-    // Reads one ssplat-sfm output line for a progress fraction.
+    // Reads one spirula-sfm output line for a progress fraction.
     void note_progress(const std::string& line);
     // Per-input `--camera-model DIR=MODEL` / `--focal DIR=PX`, resolved against
     // the frames that now exist.

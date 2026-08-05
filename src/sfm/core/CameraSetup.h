@@ -426,7 +426,7 @@ inline CameraSetup buildCameras(const std::vector<ImageEntry>& images,
 //
 // The two-view stage is where a fisheye focal is actually measured, on raw
 // putative matches. Handing that measurement to the mapper through the match
-// database means `ssplat-sfm map` never has to guess it back: its only alternative is
+// database means `spirula-sfm map` never has to guess it back: its only alternative is
 // to re-run the search on the *verified inliers*, which were selected by
 // whatever focal did the verifying, so the answer is pulled towards it.
 

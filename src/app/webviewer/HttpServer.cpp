@@ -171,7 +171,7 @@ void HttpServer::stop() {
     // Do NOT close the listening socket to break accept(): closing an fd that
     // another thread is blocked in accept() on is undefined by POSIX, and on
     // Linux the blocked accept() simply never returns -- which hung every
-    // ssplat-train run that had the viewer enabled and keep_viewer_alive off.
+    // spirula-train run that had the viewer enabled and keep_viewer_alive off.
     // serve_loop() select()s with a timeout instead, so clearing _running is
     // enough; it exits within one poll interval and we close after the join.
     if (_thread.joinable()) _thread.join();

@@ -9,7 +9,7 @@
 //
 //   VramPool   persistent, key-addressed, grow-only (high-water mark). Weights,
 //              cached PE tables, backbone features, memory-bank slots. Mirrors
-//              spirulae-splat's DevicePool semantics, including the categorized
+//              the engine's DevicePool semantics, including the categorized
 //              report, so the two can be merged.
 //
 //   Arena      transient bump allocator for activations. Every module forward

@@ -43,6 +43,7 @@
 // include this header, so there is no cycle.
 #include "sfm/map/Merge.h"
 #include "sfm/map/Profile.h"
+#include "core/Env.h"
 
 namespace sfm {
 
@@ -2769,7 +2770,7 @@ private:
     // ---- registration ----
     // Count 2D-3D correspondences an unregistered image has to the model.
     // Reference implementation: score_cache_ maintains exactly this value
-    // incrementally (SSPLAT_SFM_SCORE_CHECK=1 cross-checks them on every ranking).
+    // incrementally (SS_SFM_SCORE_CHECK=1 cross-checks them on every ranking).
     int score(uint32_t img) const {
         if (rec_.images.at(img).registered) return -1;
         int n = 0;
@@ -2871,7 +2872,7 @@ private:
     // sort behind every untried one, as in COLMAP: a retry is worth having but
     // not worth delaying a fresh candidate for.
     std::vector<uint32_t> chooseNextImages() const {
-        static const bool score_check = std::getenv("SSPLAT_SFM_SCORE_CHECK") != nullptr;
+        static const bool score_check = spirula::env("SFM_SCORE_CHECK") != nullptr;
         std::vector<std::pair<uint64_t, uint32_t>> ranked;
         for (uint32_t i = 0; i < db_.images.size(); i++) {
             if (rec_.images.at(i).registered) continue;
@@ -3608,9 +3609,9 @@ private:
     // with the number of images that constrained them (D45; recordCameras).
     std::map<uint32_t, std::pair<Camera, double>> cam_consensus_;
     bool setup_done_ = false;
-    // SSPLAT_SFM_AUDIT_DUMP=1 prints the support ratio of every audited image, which
+    // SS_SFM_AUDIT_DUMP=1 prints the support ratio of every audited image, which
     // is how the threshold above was chosen against tools/rig_check.py.
-    const bool audit_dump_ = std::getenv("SSPLAT_SFM_AUDIT_DUMP") != nullptr;
+    const bool audit_dump_ = spirula::env("SFM_AUDIT_DUMP") != nullptr;
     mutable double scale_cache_ = 0;  // modelScale(), reset by resetModel()
     int init_relax_ = 0;              // reached seed-threshold relaxation level
     InitTally init_tally_;            // why the last initialize() found nothing

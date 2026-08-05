@@ -23,16 +23,16 @@
 #include <vector>
 
 struct ImVec2;
-namespace ssplat { class TrainerSession; }
+namespace spirula { class TrainerSession; }
 
 namespace gui {
 
 class ViewportPanel {
 public:
     // Dataset preview (needs load_dataset() done; no GPU engine).
-    void attach_preview(ssplat::TrainerSession& session);
+    void attach_preview(spirula::TrainerSession& session);
     // Engine renderer (needs engine_ready).
-    void attach(ssplat::TrainerSession& session);
+    void attach(spirula::TrainerSession& session);
     void detach();
     bool attached() const { return _mode == Mode::Engine; }
     bool preview_active() const { return _mode == Mode::Preview; }
@@ -48,11 +48,11 @@ public:
 private:
     enum class Mode { None, Preview, Engine };
 
-    void compute_framing(const ssplat::TrainerSession& session);
+    void compute_framing(const spirula::TrainerSession& session);
     // Frame the scene only when a different dataset arrives; a preview ->
     // engine transition on the same dataset keeps the navigated pose and
     // intrinsics (no jump when training starts).
-    void maybe_frame(const ssplat::TrainerSession& session);
+    void maybe_frame(const spirula::TrainerSession& session);
     void reset_view();
     // Double-click centering (webgl viewer's recenterAt): pan laterally so
     // p (normalized frame) sits on the optical axis and make it the orbit

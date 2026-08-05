@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Multi-scene benchmark driver.
 
-Each scene runs as its own `ssplat train` process, so the engine (world splats,
+Each scene runs as its own `spirula train` process, so the engine (world splats,
 bilagrid/PPISP/background, optimizer moments, colour-space matrices, device
 pool) starts clean. Several scenes in one process leak state between them and
 silently degrade the later ones.
@@ -16,7 +16,7 @@ script needs nothing beyond the standard library.
     python3 reference/python/benchmark.py zipnerf --data /path/to/zipnerf \\
         --preset academic-baseline --lpips
 
-Extra arguments after `--` are appended to every `ssplat train` command:
+Extra arguments after `--` are appended to every `spirula train` command:
 
     python3 reference/python/benchmark.py 360_v2 --data ... -- --cap-max 3000000
 """
@@ -54,13 +54,13 @@ BENCHMARKS: dict[str, dict] = {
 
 
 def find_trainer() -> str:
-    exe = shutil.which("ssplat")
+    exe = shutil.which("spirula")
     if exe:
         return exe
-    local = Path(__file__).resolve().parents[2] / "build" / "ssplat"
+    local = Path(__file__).resolve().parents[2] / "build" / "spirula"
     if local.is_file():
         return str(local)
-    raise SystemExit("`ssplat` not found on PATH or in ./build -- build it first")
+    raise SystemExit("`spirula` not found on PATH or in ./build -- build it first")
 
 
 def run_scene(trainer: str, preset: str, data_dir: Path, out_prefix: Path,
@@ -145,12 +145,12 @@ def main() -> None:
     ap.add_argument("--data", type=Path, required=True,
                     help="folder holding the benchmark's scenes")
     ap.add_argument("--preset", default="academic-baseline",
-                    help="ssplat train preset (default: academic-baseline)")
+                    help="spirula train preset (default: academic-baseline)")
     ap.add_argument("--output-dir-prefix", type=Path, default=Path("outputs"))
     ap.add_argument("--lpips", action="store_true",
                     help="also run eval_lpips.py per scene (needs torchmetrics)")
     ap.add_argument("rest", nargs="*",
-                    help="after `--`, extra flags for every ssplat train call")
+                    help="after `--`, extra flags for every spirula train call")
     args = ap.parse_args()
 
     spec = BENCHMARKS[args.benchmark]

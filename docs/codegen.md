@@ -56,7 +56,7 @@ and rewrites the declaration section of the matching `<Name>.cuh`.
    `FileNotFoundError`, so a rename cannot silently drop declarations.
 4. **A new kernel family needs an entry in `HEADER_SOURCES`.**
 5. Declaration sections must stay CUDA-include-free — they must parse under
-   `-DSSPLAT_BACKEND_VULKAN` with no CUDA toolkit present. Use
+   `-DSS_BACKEND_VULKAN` with no CUDA toolkit present. Use
    `backend/api/BackendTypes.h` for vector types.
 
 ### Splitting a large `.cu` (the sanctioned workflow)
@@ -106,21 +106,21 @@ rather than instantiating everything in one TU.
 `src/config/TrainConfig.h` is hand-written and is the training config's single
 source of truth. It holds:
 
-- `SSPLAT_CONFIG_FIELDS(X)` — one X-macro row per flag,
+- `SS_CONFIG_FIELDS(X)` — one X-macro row per flag,
   `(type, member, default, group, choices, help)`;
-- `struct SsplatConfig` — **expanded from that same table**, so a field cannot
+- `struct TrainConfig` — **expanded from that same table**, so a field cannot
   exist in one and not the other;
-- `kSsplatPresets` + `ssplat_apply_preset()` — one branch per preset.
+- `kTrainPresets` + `train_apply_preset()` — one branch per preset.
 
 The table is expanded by the CLI's generic parser and `--help` printer, the
-GUI's "All Options" editor, `TrainerCore`'s `config.json` dump and the pybind
-module. Add a row and the flag appears in all of them.
+GUI's "All Options" editor, `TrainerCore`'s `config.json` dump and the resume
+path's `config.json` reader. Add a row and the flag appears in all of them.
 
 The CLI flag is `member` stringified (`--sh-degree` sets `sh_degree`; `-` and
 `_` are interchangeable), so a flag name cannot drift from its member. The
-`config.json` key is `ssplat_json_key(flag)`, which is the identity for
+`config.json` key is `train_json_key(flag)`, which is the identity for
 everything except `dm_split_batch` → `split_batch`; that shim exists because
-`config.json` is read back by `ssplat mesh` and `--resume`, and the
+`config.json` is read back by `spirula mesh` and `--resume`, and the
 datamanager field would otherwise collide with `model.split_batch`.
 
 This used to be generated from the Python dataclasses by
@@ -147,7 +147,7 @@ and an individual `.cuh` without ODR violations.
 python3 tools/codegen/generate_vulkan_stubs.py <build-vulkan-dir> <output.cpp>
 ```
 
-Link-probes `csrc_portable`'s objects against `libssplat_backend_vulkan.a`,
+Link-probes `csrc_portable`'s objects against `libss_backend_vulkan.a`,
 collects undefined C++ symbols, finds each function's declaration in the
 per-kernel `.cuh` headers, and emits one **throwing** definition per function
 (`backend/vulkan/kernels/TrainingStubs.gen.cpp`). This lets the portable
@@ -165,7 +165,7 @@ Rerun it whenever the engine gains a new kernel call, **or when a port lands**
 ## Non-script generation done by CMake
 
 - `viewer.html` → `app_generated/viewer_html.h` (byte array), so
-  `ssplat train` and the GUI serve the viewer from a self-contained binary.
+  `spirula train` and the GUI serve the viewer from a self-contained binary.
   Regenerated at configure time when the HTML changes. `Viewer.cpp` has a dev
   override so HTML edits don't require a rebuild.
 - Slang → SPIR-V blobs → `vk_shaders_embedded.cpp`

@@ -1,5 +1,5 @@
 #pragma once
-// Optional, env-gated (SSPLAT_PROFILE=1) timing profiler shared by BOTH
+// Optional, env-gated (SS_PROFILE=1) timing profiler shared by BOTH
 // backends. It instruments the handful of functions that exist identically
 // on the CUDA and Vulkan runtimes -- memcpy/memset and the synchronization
 // points -- so the same methodology attributes wall-clock time on both
@@ -19,7 +19,7 @@
 //
 // host time = (wall since process start) - transfer - memset - devsync.
 //
-// Zero overhead and zero behavior change when SSPLAT_PROFILE is unset.
+// Zero overhead and zero behavior change when SS_PROFILE is unset.
 
 #include "backend/api/BackendRuntime.h"
 
@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include "core/Env.h"
 
 namespace backend {
 namespace prof {
@@ -49,7 +50,7 @@ struct State {
     bool on;
     State()
         : t0(std::chrono::steady_clock::now()),
-          on(std::getenv("SSPLAT_PROFILE") != nullptr) {}
+          on(spirula::env("PROFILE") != nullptr) {}
     ~State();  // prints the report at process exit
 };
 
@@ -119,7 +120,7 @@ inline State::~State() {
     }
     double host = wall_ms - transfer - devsync - memset;
     std::fprintf(stderr,
-                 "\n[ssplat-profile] ---- timing breakdown ----\n");
+                 "\n[spirula-profile] ---- timing breakdown ----\n");
     std::fprintf(stderr, "%-20s %8s %12s %11s %9s\n", "category", "count",
                  "bytes", "wall_ms", "GB/s");
     for (int c = 0; c < NCAT; c++) {
@@ -152,7 +153,7 @@ inline State::~State() {
     std::fprintf(stderr, "%-20s %8s %12s %11.3f\n", "  wall (total)", "", "",
                  wall_ms);
     std::fprintf(stderr,
-                 "[ssplat-profile] --------------------------\n");
+                 "[spirula-profile] --------------------------\n");
 }
 
 // Issue a device drain and attribute its wall to DEVSYNC. Called before a

@@ -34,9 +34,9 @@ JsonValue read_state_json(const std::filesystem::path& ckpt_dir);
 // save_full_checkpoint -- and so cannot restore training.
 void check_resumable(const std::filesystem::path& ckpt_dir);
 
-// A run's config.json -> SsplatConfig. Keys absent from the file keep the
+// A run's config.json -> TrainConfig. Keys absent from the file keep the
 // field's default, so a config.json written by an older build still loads.
-SsplatConfig config_from_json(const std::filesystem::path& config_json);
+TrainConfig config_from_json(const std::filesystem::path& config_json);
 
 // The effective config for a resumed run:
 //   checkpoint's config.json
@@ -49,7 +49,7 @@ SsplatConfig config_from_json(const std::filesystem::path& config_json);
 // parser records them. Comparing against defaults instead -- what the Python
 // implementation had to do, because tyro does not report which flags were
 // seen -- silently ignores a flag whose value happens to equal the default.
-SsplatConfig build_resume_config(const SsplatConfig& cli,
+TrainConfig build_resume_config(const TrainConfig& cli,
                                  const std::string& preset,
                                  const std::set<std::string>& explicit_flags);
 
