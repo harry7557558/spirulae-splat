@@ -10,7 +10,7 @@
 // What is bound, and why each piece:
 //
 //   SsplatConfig          the flattened training config. Generated from the
-//                         Python dataclasses by tools/codegen/generate_cli_config.py,
+//                         the hand-written table in src/config/TrainConfig.h,
 //                         so this binding is written against the generated
 //                         X-macro rather than a hand-listed field set -- add a
 //                         field to a Python dataclass, re-run the generator,
@@ -46,15 +46,14 @@ void bind_trainer(py::module_& m) {
     // SsplatConfig -- generated field set, bound mechanically
     // -----------------------------------------------------------------
     py::class_<SsplatConfig> cfg_cls(m, "SsplatConfig", R"doc(
-The flattened native training config (src/app/generated/cli_config.h).
+The flattened native training config (src/config/TrainConfig.h).
 
-Field names are the CLI keys with '_' separators; defaults are the Python
-dataclass defaults, baked in by the generator. Build one from a Python
+Field names are the CLI keys with '_' separators. Build one from a Python
 TrainerConfig with spirulae_splat.modules.native_trainer.to_native_config().
 )doc");
     cfg_cls.def(py::init<>());
-#define X(member, key, pyname, group, choices, help) \
-    cfg_cls.def_readwrite(key, &SsplatConfig::member, help);
+#define X(type, member, default_, group, choices, help) \
+    cfg_cls.def_readwrite(#member, &SsplatConfig::member, help);
     SSPLAT_CONFIG_FIELDS(X)
 #undef X
 
@@ -69,13 +68,14 @@ TrainerConfig with spirulae_splat.modules.native_trainer.to_native_config().
           "in-the-wild, linear-color, synthetic, meshing, academic-baseline).");
 
     // (cli_key, pyname, group, choices, help) per field, straight off the
-    // generated X-macro. Python uses (group, pyname) to find the value on its
-    // own dataclass tree and cli_key to set it here -- so the name mapping
-    // exists once, in the generator, instead of once more in Python.
+    // field table. Python uses (group, pyname) to find the value on its own
+    // dataclass tree and cli_key to set it here. pyname is the config.json
+    // key, which is also what the Python dataclasses call the field.
     m.def("ssplat_config_fields", []() {
         py::list out;
-#define X(member, key, pyname, group, choices, help) \
-        out.append(py::make_tuple(key, pyname, group, choices, help));
+#define X(type, member, default_, group, choices, help) \
+        out.append(py::make_tuple(#member, ssplat_json_key(#member), group, \
+                                  choices, help));
         SSPLAT_CONFIG_FIELDS(X)
 #undef X
         return out;

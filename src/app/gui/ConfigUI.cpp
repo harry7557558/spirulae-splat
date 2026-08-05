@@ -1,7 +1,7 @@
 // ConfigUI.cpp -- see ConfigUI.h. Every widget below is expanded from the
-// generated SSPLAT_CONFIG_FIELDS X-macro; keep this file free of per-field
-// special cases (the point is that new Python config fields show up here
-// with zero GUI work).
+// SSPLAT_CONFIG_FIELDS X-macro; keep this file free of per-field special
+// cases (the point is that a new row in the field table shows up here with
+// zero GUI work).
 
 #include "app/gui/ConfigUI.h"
 
@@ -248,10 +248,10 @@ bool draw_config_editor(SsplatConfig& cfg, const SsplatConfig& defaults,
     };
 
     // Pass 1: per-group visible-field counts (groups are contiguous in the
-    // generated table, so pass 2 can stream group headers).
+    // field table, so pass 2 can stream group headers).
     int vis[5] = {0, 0, 0, 0, 0};
-#define SSPLAT_COUNT(member, cli_key, pyname, group, choices, help)            \
-    if (passes(cli_key, help, !(cfg.member == defaults.member)))               \
+#define SSPLAT_COUNT(type, member, default_, group, choices, help)             \
+    if (passes(#member, help, !(cfg.member == defaults.member)))               \
         vis[group_index(group)]++;
     SSPLAT_CONFIG_FIELDS(SSPLAT_COUNT)
 #undef SSPLAT_COUNT
@@ -260,7 +260,7 @@ bool draw_config_editor(SsplatConfig& cfg, const SsplatConfig& defaults,
     bool any_changed = false;
     const char* cur_group = "";
     bool group_open = false;
-#define SSPLAT_DRAW(member, cli_key, pyname, group, choices, help)             \
+#define SSPLAT_DRAW(type, member, default_, group, choices, help)              \
     if (std::strcmp(cur_group, group) != 0) {                                  \
         cur_group = group;                                                     \
         if (vis[group_index(group)] == 0) {                                    \
@@ -270,8 +270,8 @@ bool draw_config_editor(SsplatConfig& cfg, const SsplatConfig& defaults,
             group_open = ImGui::CollapsingHeader(group_label(group));          \
         }                                                                      \
     }                                                                          \
-    if (group_open && passes(cli_key, help, !(cfg.member == defaults.member))) \
-        any_changed |= field_row(cli_key, cfg.member, defaults.member, choices, help);
+    if (group_open && passes(#member, help, !(cfg.member == defaults.member))) \
+        any_changed |= field_row(#member, cfg.member, defaults.member, choices, help);
     SSPLAT_CONFIG_FIELDS(SSPLAT_DRAW)
 #undef SSPLAT_DRAW
 

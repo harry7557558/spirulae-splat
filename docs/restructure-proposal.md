@@ -416,6 +416,12 @@ The config dataclasses stay the single source of truth
 that generator to also emit the pybind `TrainerConfig` struct so the three
 representations can't diverge.
 
+> **Superseded twice.** The binding was done through the existing
+> `SSPLAT_CONFIG_FIELDS` X-macro instead (see §7.2 below), and on 2026-08-04
+> the direction reversed entirely: `generate_cli_config.py` is gone and the
+> hand-written `src/config/TrainConfig.h` is the source of truth, with the
+> dataclasses as the downstream copy. See `docs/notes/rename-and-i18n-plan.md`.
+
 **Verification gate:** train a short run on a public scene through both paths
 before/after and compare per-step loss to within float noise; the existing
 `backend/tests/engine/engine_train_parity.cpp` is the model for this.
@@ -435,7 +441,7 @@ One screen of orientation plus links. Target contents:
   install`*, for development.
 - **Codegen invariants** — what `generate_headers.py` (the
   `/*[AutoHeaderGeneratorExport]*/` marker and the `Name.*.cu` collection
-  rule), `generate_kernel_instantiation.py`, `generate_cli_config.py`,
+  rule), `generate_kernel_instantiation.py`,
   `generate_backend_api.py`, `generate_vulkan_stubs.py` each own; never
   hand-edit below the `AUTO HEADER GENERATOR` splitter line; `.gitattributes`
   marks generated/vendored trees.

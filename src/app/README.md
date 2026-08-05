@@ -37,7 +37,7 @@ system libs), `SSPLAT_BUILD_CLI` is forced ON, CUDA archs come from
 `nvidia-smi --query-gpu=compute_cap` (override with `-DTORCH_CUDA_ARCH_LIST`),
 and the libpython link + static-libstdc++/nftw interposition workarounds are
 skipped (they exist only because of libtorch). Generated headers
-(`src/generated/`, `app/generated/`, `src/instantiations/`) are committed, so a fresh
+(`src/generated/`, `src/instantiations/`) are committed, so a fresh
 checkout builds with no Python at all. With Torch present the extension build
 is unchanged (shared `libcsrc`, same flags as before).
 
@@ -128,8 +128,7 @@ extraction (see below).
 | `WriterPool.h` | Bounded-queue worker threads that JPEG/PNG-encode and write frames and masks off the calling thread. Used by `FrameExtract`, `ssplat sam track` and the GUI's folder-masking loop. Encoding a 1080p mask through stb's deflate is ~75 ms — a third of a SAM 2.1 Tiny frame — and none of it needs the GPU, so a caller that writes inline sets the frame rate with zlib. The queue bound is what keeps a slow disk applying back-pressure instead of growing until memory runs out. |
 | `HttpServer.h/.cpp` | Minimal HTTP/1.0 GET server (POSIX sockets; winsock shim compiles but untested). Serial request handling — parity with Python's non-threading `HTTPServer`. |
 | `Viewer.h/.cpp` | Web-viewer server port (viewer/server.py + http_server.py + render_worker.py + annotation.py): latest-wins render worker, `get_outputs` viewer subset, `engine_blit_view` GPU annotation/colormap, stb JPEG encode. Serves the **unchanged** `viewer.html` (embedded at configure time via CMake hex; `SSPLAT_VIEWER_HTML=<path>` env overrides for dev). `/pick?px=&py=&<camera params>` returns the 3D point under a pixel as JSON for viewer.html's double-click centering (the Python server has no /pick; the client treats non-OK responses as a no-op). |
-| `generated/cli_config.h` | AUTO-GENERATED — do not edit. `SsplatConfig` struct (all 189 config fields, defaults baked), `SSPLAT_CONFIG_FIELDS(X)` X-macro flag table, `ssplat_apply_preset()`. |
-| `../../../../generate_cli_config.py` | The generator. AST-parses the Python config dataclasses (no torch import → works on fresh checkout). Run by `build_develop.bash`. |
+| `../config/TrainConfig.h` | Hand-written, the training config's single source of truth: the `SSPLAT_CONFIG_FIELDS(X)` X-macro flag table (190 rows), `struct SsplatConfig` expanded from it, `kSsplatPresets` and `ssplat_apply_preset()`. |
 | `../external/` | All vendored third-party code (marked `linguist-vendored` in `.gitattributes` along with the generated dirs): `stb_image.h`/`stb_image_write.h` (images), `npy.hpp` (checkpoints), `miniz.c/.h` (zip reading for the Metashape `.psx` camera table; compiled into `ssplat` only). |
 
 Debug: `SSPLAT_DUMP_CAMERAS=<path> ssplat train ...` dumps parsed + post-split
@@ -167,30 +166,33 @@ HTTP/viewer.
 - `splat.ply` reader expects float32 binary-little-endian properties (what
   both the Python trainer and `EngineCheckpoint.cpp` write).
 
-## Config codegen (source of truth = Python dataclasses)
+## The config table (source of truth = `src/config/TrainConfig.h`)
 
-`tools/codegen/generate_cli_config.py` parses `TrainerConfig` (+ preset
-subclasses) in `modules/trainer.py` and the nested
-`SpirulaeSplatDataParserConfig` / `SpirulaeSplatDataManagerConfig` /
-`SpirulaeSplatModelConfig` / `OptimizerConfig`. Field docstrings become help
-text; preset `default_factory` lambdas become `ssplat_apply_preset` branches.
+Hand-written, one `SSPLAT_CONFIG_FIELDS` row per flag:
+`X(type, member, default, group, choices, help)`. `struct SsplatConfig` is
+expanded from the same table, so the declaration and the metadata cannot
+drift. Add a row and the flag appears in the CLI parser, `--help`, the GUI's
+"All Options" editor, `config.json` and the pybind module.
 
-- **Collisions**: flattening drops group prefixes; the generator hard-errors
-  on un-listed collisions. Resolve in its `RENAMES` dict. Currently only
-  `datamanager.split_batch` → `--dm-split-batch` (the model one keeps the
-  plain name; datamanager's is the legacy Python-path OOM workaround, no-op
-  on the managed path).
-- **Type mapping**: `Optional[int/float]` → `std::optional`;
-  `Optional[str/Path]` → `std::string` with `""` = None; `Literal[str...]` →
-  string + validated choices; `Literal[True,False,None]` → `optional<bool>`;
-  `Tuple[...]` → `std::array`; `Union[bool,int]`
-  (`rescale_camera_to_fit`) via `TYPE_OVERRIDES` → float (0=off, -1=auto,
-  >0=factor).
-- **Verified** (2026-07-10): all 189 defaults + all 7 presets match
-  instantiated Python configs; a full `in-the-wild` command line with mixed
-  flag styles resolves identically to `tyro.cli` (189/189 fields).
-  Verification scripts were session-scratch; the approach: flatten a tyro
-  config, diff against the CLI's `config.json` dump.
+- **Flag names**: `member` stringified. `-` and `_` are interchangeable, so
+  `--sh-degree` sets `sh_degree`. A flag cannot drift from its member.
+- **`config.json` keys**: `ssplat_json_key(flag)`, the identity except
+  `dm_split_batch` → `split_batch`. `config.json` is read back by
+  `ssplat mesh` and `--resume`, and the datamanager field would otherwise
+  collide with `model.split_batch` (datamanager's is the legacy Python-path
+  OOM workaround, a no-op on the managed path). New fields never need an
+  entry — the shim is compatibility, not a mechanism.
+- **Commas**: macro arguments split on them, so `std::array<T, N>` fields use
+  the `SsplatVec3i` / `SsplatVec3f` aliases and the `ssplat_v3i()` /
+  `ssplat_v3f()` makers.
+- **Grouping**: rows must stay contiguous per group — `--help` and the GUI
+  stream group headers as they walk the table rather than sorting first.
+
+This was generated from the Python dataclasses by `generate_cli_config.py`
+until 2026-08-04. The migration was verified by diffing `train --help` for
+all 7 presets and a run's `config.json` against the last generated build:
+byte-identical, so all 190 defaults, preset overrides, choices, help strings
+and JSON keys carried over unchanged.
 
 ## Python → C++ port mapping (all in `TrainerCore.cpp` unless noted)
 

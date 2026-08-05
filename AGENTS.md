@@ -123,7 +123,9 @@ src/
 │   ├── bind_data.cpp       native dataset parsers
 │   ├── bind_viewer.cpp     native web-viewer server + post-split bake
 │   └── bind_trainer.cpp    SsplatConfig + TrainerSession
-├── generated/  app/generated/  instantiations/   GENERATED — do not hand-edit
+├── config/                 TrainConfig.h — the training config's single source
+│                             of truth: one X-macro row per flag, hand-written
+├── generated/  instantiations/    GENERATED — do not hand-edit
 └── external/               vendored (miniz, stb, npy)
 ```
 
@@ -168,14 +170,15 @@ the comment on the option in `cmake/SsplatOptions.cmake` before changing it.
 ## Codegen — the invariants that bite
 
 Generated trees are marked in `.gitattributes` (`src/generated/`,
-`src/app/generated/`, `src/instantiations/`) and are **committed**, so a fresh checkout
-builds with no Python at all. Five generators, all run from the repo root:
+`src/instantiations/`) and are **committed**, so a fresh checkout
+builds with no Python at all. Four generators, all run from the repo root.
+Every one of them reads C++/CUDA sources — **no generator reads Python**, and
+none should be added:
 
 | generator | reads | writes |
 |---|---|---|
 | `tools/codegen/generate_headers.py` | `/*[AutoHeaderGeneratorExport]*/` markers in `src/kernels/**/*.cu` | the declaration section of the matching `<Name>.cuh` |
 | `tools/codegen/generate_kernel_instantiation.py` | kernel decls in `src/kernels/**/*_kernel.cuh` | `src/instantiations/*.cu` |
-| `tools/codegen/generate_cli_config.py` | the Python config dataclasses (`ast`-parsed, no torch import) | `src/app/generated/cli_config.h` |
 | `tools/codegen/generate_backend_api.py` | per-kernel `.cuh` headers | `src/backend/api/*.h` forwarders |
 | `tools/codegen/generate_vulkan_stubs.py` | link-probes the Vulkan build | throwing stubs for unported kernels |
 
@@ -194,10 +197,13 @@ Rules:
    and add it to the list. Both build systems glob via `cmake/sources.txt`, so
    no build file changes are needed. A listed file that doesn't exist is a hard error,
    so a rename can't silently drop declarations.
-4. The Python config dataclasses are the **single source of truth** for the
-   training config. Adding a field there makes it appear in the native CLI,
-   the GUI's "All Options" editor, and `--help` automatically after codegen.
-   A new field that collides across groups must be listed in `RENAMES`.
+4. `src/config/TrainConfig.h` is the **single source of truth** for the
+   training config, and it is hand-written, not generated. Adding a row to
+   `SSPLAT_CONFIG_FIELDS` makes the field appear in the native CLI, `--help`,
+   the GUI's "All Options" editor, the run's `config.json` and `TrainerCore` —
+   the struct is expanded from the same table, so the two cannot drift. The
+   Python dataclasses are now downstream copies on their way out; a field
+   added here must be mirrored there until they go.
 5. `.cuh` declaration sections must stay CUDA-include-free — they have to
    parse under `-DSSPLAT_BACKEND_VULKAN` without the CUDA toolkit.
 

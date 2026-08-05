@@ -15,13 +15,13 @@ step. See docs/restructure-proposal.md §4.3.
 
 Config conversion
 -----------------
-`SsplatConfig` is generated from the Python dataclasses by
-`tools/codegen/generate_cli_config.py`, and that generator also emits the
-field table this module walks (`_C.ssplat_config_fields()` -> (cli_key,
-pyname, group, choices, help)). So the flattening -- which Python sub-config a
-field lives in, and what it is called after the rename pass -- exists exactly
-once, in the generator. Adding a field to a dataclass and re-running the
-generator is enough; nothing here needs editing.
+`SsplatConfig` and the field table this module walks
+(`_C.ssplat_config_fields()` -> (cli_key, pyname, group, choices, help)) both
+come from the hand-written `src/config/TrainConfig.h`. That header is the
+source of truth as of 2026-08-04; the dataclasses below it are a downstream
+copy, kept only until the Python client is deleted. So the direction of the
+check has flipped: a field present natively and missing on the dataclass is
+the error, and that is what to_native_config() raises on.
 """
 
 from __future__ import annotations
@@ -43,8 +43,8 @@ PRESET_BY_CLASS_NAME = {
     "TrainerConfigAcademicBaseline": "academic-baseline",
 }
 
-# Fields whose Python type the generator overrode (TYPE_OVERRIDES in
-# generate_cli_config.py), so a straight copy is wrong.
+# Fields whose Python type differs from the native one, so a straight copy is
+# wrong.
 #   rescale_camera_to_fit: Union[bool, int] on the Python side.
 #     True  -> probe the image resolution        -> -1 natively
 #     False -> off                               ->  0
@@ -82,9 +82,9 @@ def to_native_config(config):
             value = getattr(holder, pyname)
         except AttributeError as e:
             raise AttributeError(
-                f"{type(config).__name__}.{group}.{pyname} is missing; "
-                f"cli_config.h is stale -- re-run "
-                f"tools/codegen/generate_cli_config.py") from e
+                f"{type(config).__name__}.{group}.{pyname} is missing; the "
+                f"dataclass has drifted from src/config/TrainConfig.h -- add "
+                f"the field here to match the native table") from e
 
         override = _VALUE_OVERRIDES.get(cli_key)
         if override is not None:

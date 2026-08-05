@@ -58,10 +58,10 @@ const char* preset_help(const std::string& name) {
 }
 
 // True when two configs parse to the same dataset: every dataparser-group
-// field (generated) plus the non-dataparser fields load_dataset() consumes.
+// field plus the non-dataparser fields load_dataset() consumes.
 bool parse_settings_equal(const SsplatConfig& a, const SsplatConfig& b) {
     bool eq = true;
-#define SSPLAT_CMP(member, cli_key, pyname, group, choices, help)              \
+#define SSPLAT_CMP(type, member, default_, group, choices, help)               \
     if (!std::strcmp(group, "dataparser")) eq = eq && (a.member == b.member);
     SSPLAT_CONFIG_FIELDS(SSPLAT_CMP)
 #undef SSPLAT_CMP

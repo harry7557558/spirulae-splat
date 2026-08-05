@@ -5,7 +5,7 @@
 // viewport.
 
 #include "backend/api/BackendRuntime.h"
-#include "app/generated/cli_config.h"
+#include "config/TrainConfig.h"
 #include "app/gui/ColmapRunner.h"
 #include "app/gui/ConfigUI.h"
 #include "app/gui/FileDialog.h"

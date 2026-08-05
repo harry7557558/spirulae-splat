@@ -5,16 +5,14 @@ and `metashape_utils.py`) is gone: COLMAP / Nerfstudio / Metashape are parsed
 by `src/data/parsers/` and reached from Python through
 `modules/native_dataparser.py`. See docs/restructure-proposal.md §4.1.
 
-The config dataclass stays, and stays HERE, because it is the source of truth
-for two generated artifacts and one CLI:
-  * `tools/codegen/generate_cli_config.py` AST-parses this file to emit
-    `src/app/generated/cli_config.h` (and so the native CLI's flags);
+The config dataclass stays, and stays HERE, because:
   * `ss_trainer.py` builds its tyro CLI from it, and `--resume` reads it back
     out of a run's config.json;
   * `native_dataparser.to_native_parser_config()` maps it onto the native
     `DatasetParserConfig`.
-Editing a field here therefore changes the native trainer too -- re-run the
-generator.
+It is no longer the source of truth: `src/config/TrainConfig.h` is, and this
+is a downstream copy that has to be kept in step until the Python client is
+deleted. `tests/python/test_trainer_parity.py` is what catches the drift.
 
 Fields with no native counterpart (scene_scale, orientation_method,
 center_method, auto_scale_poses, train_frame != "points") are kept so old

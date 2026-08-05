@@ -5,11 +5,14 @@ Generated trees are marked `linguist-generated` / `linguist-vendored` in
 no Python at all — the dev build scripts run codegen when `python3` is
 available and fall back to the committed files when it isn't.
 
+Every generator reads C++/CUDA sources. **None reads Python**, and none should
+be added: the training config used to be generated from the Python dataclasses
+and is now hand-written in `src/config/TrainConfig.h`.
+
 Generated locations:
 
 ```
 src/generated/       device-math headers from Slang
-src/app/generated/   cli_config.h, viewer_html.h
 src/backend/api/     backend module forwarders
 src/instantiations/  kernel instantiation TUs
 ```
@@ -19,7 +22,6 @@ All generators run from the **repo root**:
 ```bash
 python3 tools/codegen/generate_headers.py
 python3 tools/codegen/generate_kernel_instantiation.py
-python3 tools/codegen/generate_cli_config.py
 python3 tools/codegen/generate_backend_api.py
 # generate_vulkan_stubs.py takes arguments; see below
 ```
@@ -99,32 +101,31 @@ rather than instantiating everything in one TU.
 
 ---
 
-## `generate_cli_config.py` — Python dataclasses → native config
+## The training config — *not* generated
 
-**The training config's single source of truth is the Python dataclasses** —
-`TrainerConfig` and the nested `SpirulaeSplatDataParserConfig` /
-`SpirulaeSplatDataManagerConfig` / `SpirulaeSplatModelConfig` /
-`OptimizerConfig`, plus the tyro preset subclasses.
+`src/config/TrainConfig.h` is hand-written and is the training config's single
+source of truth. It holds:
 
-The script parses them with `ast` (no torch import — it runs on a fresh
-checkout before `csrc.so` exists) and emits `src/app/generated/cli_config.h`:
+- `SSPLAT_CONFIG_FIELDS(X)` — one X-macro row per flag,
+  `(type, member, default, group, choices, help)`;
+- `struct SsplatConfig` — **expanded from that same table**, so a field cannot
+  exist in one and not the other;
+- `kSsplatPresets` + `ssplat_apply_preset()` — one branch per preset.
 
-- `struct SsplatConfig` — every field, flattened, with the Python defaults
-  baked in;
-- `SSPLAT_CONFIG_FIELDS(X)` — an X-macro over
-  `(member, cli_key, group, choices, help)`, expanded by the CLI's generic
-  parser and `--help` printer **and** by the GUI's "All Options" editor;
-- `ssplat_apply_preset()` — one branch per preset, assigning exactly the
-  fields that preset overrides.
+The table is expanded by the CLI's generic parser and `--help` printer, the
+GUI's "All Options" editor, `TrainerCore`'s `config.json` dump and the pybind
+module. Add a row and the flag appears in all of them.
 
-Consequences: add a field to the Python dataclass and it appears in
-`ssplat train --help`, in the GUI, and in the preset machinery after codegen.
-Names are flattened (`--model.sh-degree` → `--sh-degree`); a collision across
-groups must be resolved in the script's `RENAMES` table, and the script
-**errors on any unlisted collision** so a new Python field cannot silently
-shadow an existing flag.
+The CLI flag is `member` stringified (`--sh-degree` sets `sh_degree`; `-` and
+`_` are interchangeable), so a flag name cannot drift from its member. The
+`config.json` key is `ssplat_json_key(flag)`, which is the identity for
+everything except `dm_split_batch` → `split_batch`; that shim exists because
+`config.json` is read back by `ssplat mesh` and `--resume`, and the
+datamanager field would otherwise collide with `model.split_batch`.
 
-Docstrings on the dataclass fields become CLI help text and GUI tooltips.
+This used to be generated from the Python dataclasses by
+`generate_cli_config.py`. It isn't any more — the Python dataclasses are
+downstream copies until they are deleted.
 
 ---
 

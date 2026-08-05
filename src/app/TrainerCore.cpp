@@ -442,27 +442,30 @@ template <typename T, size_t N> std::string json_str(const std::array<T, N>& v) 
 
 }  // namespace
 
-// Nested-by-group dump, using the original Python field names. Close to the
-// trainer's config.json (enough for humans / tooling; the Python --resume
-// path needs a tyro round-trip and is not supported by the CLI yet).
+// Nested-by-group dump. Keys are ssplat_json_key(flag) -- see the note on it
+// in config/TrainConfig.h; this is a read-back format (`ssplat mesh` and
+// --resume parse it), so the key set is not free to change.
 void save_config_json(const SsplatConfig& c, const fs::path& out_dir,
                       const std::string& preset) {
     FILE* f = std::fopen((out_dir / "config.json").string().c_str(), "w");
     if (!f) throw std::runtime_error("cannot write config.json");
     std::fprintf(f, "{\n    \"preset\": \"%s\"", preset.c_str());
     const char* open_group = "";
-#define SSPLAT_DUMP(member, cli_key, pyname, group, choices, help)             \
+#define SSPLAT_DUMP(type, member, default_, group, choices, help)              \
+    {                                                                          \
+    const char* key = ssplat_json_key(#member);                                \
     if (std::strcmp(group, "trainer") == 0) {                                  \
-        std::fprintf(f, ",\n    \"%s\": %s", pyname, json_str(c.member).c_str()); \
+        std::fprintf(f, ",\n    \"%s\": %s", key, json_str(c.member).c_str()); \
     } else {                                                                   \
         if (std::strcmp(open_group, group) != 0) {                             \
             if (*open_group) std::fprintf(f, "\n    }");                       \
             std::fprintf(f, ",\n    \"%s\": {", group);                        \
             open_group = group;                                                \
-            std::fprintf(f, "\n        \"%s\": %s", pyname, json_str(c.member).c_str()); \
+            std::fprintf(f, "\n        \"%s\": %s", key, json_str(c.member).c_str()); \
         } else {                                                               \
-            std::fprintf(f, ",\n        \"%s\": %s", pyname, json_str(c.member).c_str()); \
+            std::fprintf(f, ",\n        \"%s\": %s", key, json_str(c.member).c_str()); \
         }                                                                      \
+    }                                                                          \
     }
     SSPLAT_CONFIG_FIELDS(SSPLAT_DUMP)
 #undef SSPLAT_DUMP

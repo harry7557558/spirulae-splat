@@ -7,8 +7,7 @@
 // academic-baseline). Flags are the FLATTENED training config fields
 // (--sh-degree, not --model.sh-degree); '-' and '_' are interchangeable;
 // booleans take a value (--warp-to-pinhole 1). The config struct, flag
-// table, and preset appliers are code-generated from the Python config
-// dataclasses -- see generated/cli_config.h and generate_cli_config.py.
+// table, and preset appliers all come from config/TrainConfig.h.
 //
 // The engine plumbing (dataset -> seeding -> per-step configs -> train loop)
 // lives in TrainerCore.{h,cpp}, shared with the native GUI (gui/). This file
@@ -121,8 +120,8 @@ void check_choices(const T&, const std::string&, const char*) {}
 // Returns false if the key is unknown.
 bool set_config_field(SsplatConfig& c, const std::string& key,
                       int argc, char** argv, int& i) {
-#define SSPLAT_TRY_SET(member, cli_key, pyname, group, choices, help)          \
-    if (key == cli_key) {                                                      \
+#define SSPLAT_TRY_SET(type, member, default_, group, choices, help)           \
+    if (key == #member) {                                                      \
         consume(c.member, key, argc, argv, i);                                 \
         check_choices(c.member, key, choices);                                 \
         return true;                                                           \
@@ -206,7 +205,7 @@ void print_help(const char* argv0, const SsplatConfig& c) {
     std::printf("\nflags ('-' and '_' interchangeable; bools take 0/1; 'none' clears "
                 "optional values;\n defaults shown for the selected preset):\n");
     const char* cur_group = "";
-#define SSPLAT_PRINT_HELP(member, cli_key, pyname, group, choices, help)       \
+#define SSPLAT_PRINT_HELP(type, member, default_, group, choices, help)        \
     if (std::strcmp(cur_group, group) != 0) {                                  \
         cur_group = group;                                                     \
         std::printf("\n  [%s]\n", group);                                      \
@@ -217,7 +216,7 @@ void print_help(const char* argv0, const SsplatConfig& c) {
         if (dot != std::string::npos) h = h.substr(0, dot + 1);                \
         if (h.size() > 110) h = h.substr(0, 107) + "...";                      \
         std::string ch = choices;                                              \
-        std::string key_disp = cli_key;                                        \
+        std::string key_disp = #member;                                        \
         for (auto& ck : key_disp) if (ck == '_') ck = '-';                     \
         std::printf("  --%-38s [%s]%s%s\n      %s\n", key_disp.c_str(),        \
                     value_str(c.member).c_str(),                               \

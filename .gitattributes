@@ -1,8 +1,6 @@
 # Third-party dependencies (miniz, stb, npy, ...)
 src/external/** linguist-vendored
 
-# Auto-generated code (generate_headers.py, generate_kernel_instantiation.py,
-# generate_cli_config.py)
+# Auto-generated code (generate_headers.py, generate_kernel_instantiation.py)
 src/generated/** linguist-vendored linguist-generated
-src/app/generated/** linguist-vendored linguist-generated
 src/instantiations/** linguist-vendored linguist-generated

@@ -139,11 +139,11 @@ def _eq(a, b) -> bool:
 def test_native_config_matches_dataclass_defaults(class_name, preset):
     """to_native_config(PresetClass()) == SsplatConfig() + apply_preset(name).
 
-    Both sides claim to encode the same defaults: the generator bakes them
-    into cli_config.h at codegen time, the adapter reads them off the live
-    dataclasses. If they disagree, either the generator is stale or a preset
-    branch is wrong -- and every native run would silently use a different
-    config than the CLI flags describe.
+    Both sides claim to encode the same defaults: src/config/TrainConfig.h is
+    the source of truth, the adapter reads them off the live dataclasses. If
+    they disagree, the dataclass copy has drifted or a preset branch is wrong
+    -- and every native run would silently use a different config than the CLI
+    flags describe.
     """
     cls = getattr(trainer_mod, class_name)
     assert preset_name(cls(data=Path("/nonexistent"))) == preset

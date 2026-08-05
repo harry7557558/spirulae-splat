@@ -40,7 +40,7 @@ repo: read `src/backend/README.md`, then `src/backend/vulkan/README.md`.
 
 | responsibility | code |
 |---|---|
-| training config (source of truth) | Python dataclasses in `spirulae_splat/modules/` → codegen → `src/app/generated/cli_config.h` |
+| training config (source of truth) | `src/config/TrainConfig.h` — hand-written, one X-macro row per flag. The Python dataclasses in `spirulae_splat/modules/` are downstream copies until they are deleted. |
 | dataset parsing (native) | `src/data/parsers/{Colmap,Nerfstudio,Metashape}Parser.cpp`, `DatasetCommon.cpp`, `DatasetParser.h` |
 | dataset parsing (Python client) | `spirulae_splat/modules/native_dataparser.py` — an adapter, not a parser. The Python implementation is gone; `dataparser.py` is now just the config dataclass, `scripts/{colmap,metashape}_utils.py` keep a Python reader for preprocessing, and `camera_utils.py` is retained on no code path as the reference for the unported `orientation_method` / `center_method` (docs/notes/pose-normalization.md) |
 | image cache / prefetch / warp | `src/data/DataManager.cpp` |

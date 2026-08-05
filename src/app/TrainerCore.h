@@ -35,7 +35,7 @@
 #include "engine/Engine.h"
 #include "data/DatasetParser.h"
 #include "app/webviewer/RenderWorker.h"
-#include "app/generated/cli_config.h"
+#include "config/TrainConfig.h"
 
 #include <array>
 #include <atomic>
@@ -120,7 +120,7 @@ build_loss_weights(const SsplatConfig& c, int step);
 EngineStepConfig build_step_config(const SsplatConfig& c, const RunState& st,
                                    int step);
 
-// Nested-by-group config.json dump using the original Python field names.
+// Nested-by-group config.json dump, keyed by ssplat_json_key(flag).
 void save_config_json(const SsplatConfig& c, const std::filesystem::path& out_dir,
                       const std::string& preset);
 

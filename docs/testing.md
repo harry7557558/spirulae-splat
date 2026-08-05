@@ -134,9 +134,9 @@ viewer read its step counter / pause flag / progress JSON straight off a
 
 1. **Config conversion** — `to_native_config(PresetClass())` must equal
    `SsplatConfig()` + `ssplat_apply_preset(name)` for all seven presets. These
-   are still *two live representations*: one side reads the dataclasses, the
-   other is baked into `cli_config.h` at codegen time. Still a true parity
-   test; it fails the moment the generated header goes stale.
+   are *two live representations*: `src/config/TrainConfig.h` is the source of
+   truth and the Python dataclasses are the downstream copy, so this test is
+   what catches the copy drifting until the dataclasses are deleted.
 2. **Per-step `EngineStepConfig`** — 8 config variants × 4 run states × 20
    steps chosen to straddle every warmup/decay boundary, checked against
    `step_config_golden.json`. Those 640 configs are the frozen result of the
@@ -190,7 +190,7 @@ proof that no longer has a second implementation to re-derive it from. So:
 |---|---|
 | any kernel | CUDA build + Vulkan build + the relevant parity test on both |
 | engine logic | both builds + `engine_render_parity` + `engine_train_step`-level check |
-| config field | rerun `generate_cli_config.py`; check `ssplat train --help`; `test_trainer_parity.py` |
+| config field | add the row in `src/config/TrainConfig.h`, mirror it on the Python dataclass; check `ssplat train --help`; `test_trainer_parity.py` |
 | training-loop logic | change `TrainerCore.cpp`, not the Python mirror; `test_trainer_parity.py` |
 | build system | all four modes in [build.md](build.md) |
 | Python-facing | a short `spirulae-train` run with `--no-keep-viewer-alive` |

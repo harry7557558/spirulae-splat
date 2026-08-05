@@ -4,12 +4,11 @@
 #   ./build_develop.bash -DSSPLAT_NO_TORCH=ON
 # builds only the standalone `ssplat` executable (no Torch/Python needed).
 
-# Regenerate headers/config. Skipped when python3 is unavailable -- the
-# generated files are committed, so the build still works without it.
+# Regenerate headers. Skipped when python3 is unavailable -- the generated
+# files are committed, so the build still works without it.
 if command -v python3 >/dev/null 2>&1; then
     python3 tools/codegen/generate_headers.py
     python3 tools/codegen/generate_kernel_instantiation.py
-    python3 tools/codegen/generate_cli_config.py
 else
     echo "python3 not found -- skipping codegen (using committed generated files)"
 fi
