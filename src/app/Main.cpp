@@ -13,6 +13,7 @@
 // is the only thing such a build can do.
 
 #include "app/Tools.h"
+#include "i18n/Locale.h"
 
 #include <cctype>
 #include <cstdio>
@@ -87,11 +88,21 @@ void print_usage() {
     for (const Tool& t : tools())
         std::printf("  %-8s %s\n", t.name, t.summary);
     std::printf("\n`spirula <command> --help` describes one of them.\n");
+    std::printf("\nEvery command also takes --lang <code>, which sets the "
+                "interface language\n(or SS_LANG in the environment):\n\n%s",
+                spirula::i18n::language_list().c_str());
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+    // --lang is handled here and removed from argv, so no tool's own parser
+    // has to know about it. The chain that decides the language is in
+    // src/i18n/Locale.h; the GUI re-runs it once it has read its settings
+    // file, which is a step below --lang and the environment.
+    const char* lang = spirula::i18n::take_lang_arg(&argc, argv);
+    spirula::i18n::init(lang, nullptr);
+
     // An explicit subcommand wins over the argv[0] hint, so a binary that was
     // renamed or symlinked still answers to every tool it holds. No subcommand
     // name collides with an argument any of them takes, so `spirula-sfm auto`

@@ -15,6 +15,10 @@ fi
 # SS_ is a short prefix; refuse to define a name <signal.h> or winuser.h owns.
 bash tools/check_ss_prefix.sh >/dev/null || exit 1
 
+# The GUI must not hand ImGui a string that never became a translatable
+# message. Prints the remaining SS_MSG_EN count, which is the Phase 4 TODO.
+bash tools/check_i18n.sh || exit 1
+
 cmake -G Ninja -B build "$@" || exit $?
 
 echo ""

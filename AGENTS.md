@@ -39,6 +39,8 @@ build_develop.bash/.bat     the dev build entry points — USE THESE
 AGENTS.md  CLAUDE.md        this file (CLAUDE.md is a pointer to it)
 docs/                       architecture, build, backends, codegen, testing, notes
 src/                        ALL native code (see below)
+assets/fonts/               the embedded UI font + the CJK face table
+                              (assets/fonts/README.md)
 tools/codegen/              the four codegen tools (see "Codegen" below)
 tests/native/               standalone native benchmarks
 scripts/                    dataset preprocessing CLI tools (Python, standalone;
@@ -115,6 +117,10 @@ src/
 │                             library (cmake/sources.txt), not the app targets.
 ├── config/                 TrainConfig.h — the training config's single source
 │                             of truth: one X-macro row per flag, hand-written
+├── i18n/                   the interface in 13 languages. A translation is a
+│                             TYPE, so a missing one is a compile error, not a
+│                             runtime fallback. Languages.h is the one place the
+│                             language set is written -- READ src/i18n/README.md
 ├── app/EvalMetrics.{h,cpp} l1 / psnr / ssim (torchmetrics-compatible) and the
 │                             colour correction the cc_ metrics use. LPIPS is
 │                             NOT here — reference/python/eval_lpips.py
@@ -278,6 +284,16 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   `spirula::env("SUFFIX")` (`src/core/Env.h`), never `getenv` directly — the
   deprecated `SSPLAT_` spelling is honoured in exactly that one function.
 - C++ code lives in `namespace spirula` where it is namespaced at all.
+- **The GUI never hands ImGui a string literal.** Every text-bearing call goes
+  through `ui::` (`src/app/gui/Ui.h`): `ui::Button(msg)` for interface copy,
+  `ui::ButtonRaw(...)` for a path, a number or an engine log line. The `Raw` in
+  the name is the point — it makes "deliberately not translated" visible in the
+  diff. `tools/check_i18n.sh` (run by `build_develop.bash`) enforces it.
+- **Interface copy is a `Msg`, not a literal** (`src/i18n/`, and read
+  `src/i18n/README.md` before adding one). Two rules there are expensive to
+  retrofit and are already followed everywhere: never build a sentence from
+  fragments — use `{0}` placeholders and `i18n::format()` — and never write a
+  plural-sensitive sentence ("Objects: 3", not "3 objects").
 
 ## Gotchas worth knowing before you hit them
 
@@ -294,6 +310,19 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   which the calling thread never sized. Keep the storage `thread_local` if you
   want it reused, but take a raw pointer outside the region and use that
   inside; `EvalMetrics.cpp`'s SSIM slab is the worked example.
+- **A `Msg` is 13 strings, and the compiler checks all 13.** Adding a language
+  to `src/i18n/Languages.h` breaks the build on every incomplete message, by
+  name -- that is the feature, not an accident. Add the tag macro to
+  `BeginCatalog.h` in the same commit or the canary there fails first.
+- **ImGui derives a widget's ID from its label**, so a translated label would
+  change the ID and collapse every open header on a language switch. Every
+  `ui::` wrapper renders `"text###<message name>"` to pin it. Two call sites
+  sharing one message share an ID -- `ImGui::PushID()` around one of them,
+  exactly as for two identical literals.
+- **Swapping a font face invalidates every `ImFont*`.** `FontSet::ensure()` is
+  called from `GuiMain.cpp` between frames, before `NewFrame()`, and uses
+  `ImFontAtlas::ClearFonts()` (which keeps the texture) rather than `Clear()`
+  (which does not, and is documented as not callable there).
 - **Big per-call scratch is a scaling bug, not just an allocation.** Anything
   over glibc's mmap threshold is faulted in and zeroed by the kernel on every
   call, and `mmap_lock` is per *process* — so several worker threads each

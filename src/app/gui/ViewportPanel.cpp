@@ -3,7 +3,9 @@
 #include "app/gui/ViewportPanel.h"
 
 #include "app/TrainerCore.h"
-#include "app/gui/ConfigUI.h"   // help_tooltip_on_hover
+#include "app/gui/Ui.h"
+
+#include "i18n/catalog/Gui.h"
 #include "app/gui/GlLoader.h"   // GL types + 1.1 entry points
 
 #include "imgui.h"
@@ -14,6 +16,8 @@
 #include <cstdlib>
 #include <cstring>
 #include "core/Env.h"
+
+namespace msg = spirula::i18n::msg::gui;
 
 namespace gui {
 
@@ -348,77 +352,68 @@ void ViewportPanel::draw_controls(bool engine) {
     // ---- display group ----
     if (engine && !_buffer_keys.empty()) {
         ImGui::SetNextItemWidth(130);
-        if (ImGui::BeginCombo("##buffer", _buffer_keys[_buffer_idx].c_str())) {
+        // Buffer names ("color", "depth") come from the engine.
+        if (ui::BeginComboRaw("##buffer", _buffer_keys[_buffer_idx].c_str())) {
             for (int i = 0; i < (int)_buffer_keys.size(); i++)
-                if (ImGui::Selectable(_buffer_keys[i].c_str(), i == _buffer_idx)) {
+                if (ui::SelectableRaw(_buffer_keys[i], i == _buffer_idx)) {
                     _buffer_idx = i;
                     _dirty = true;
                 }
             ImGui::EndCombo();
         }
-        help_tooltip_on_hover("Which render buffer to display (color, depth, "
-                              "alpha, normals from depth, ...).");
+        ui::help_on_hover(msg::viewport_buffer_help);
         ImGui::SameLine();
     }
     if (!engine) {
-        ImGui::TextDisabled("dataset preview");
-        help_tooltip_on_hover("Sparse SfM point cloud and camera poses of the "
-                              "loaded dataset. Training replaces this with "
-                              "the live splat render.");
+        ui::TextDisabled(msg::viewport_dataset_preview);
+        ui::help_on_hover(msg::viewport_dataset_preview_help);
         ImGui::SameLine();
     }
-    if (ImGui::Checkbox("cameras", &_show_cams)) _dirty = true;
+    if (ui::Checkbox(msg::viewport_cameras, &_show_cams)) _dirty = true;
     if (_show_cams) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110);
-        if (ImGui::SliderFloat("##fsize", &_frustum_scale, 0.1f, 10.0f,
+        if (ui::SliderFloatRaw("##fsize", &_frustum_scale, 0.1f, 10.0f,
                                "size x%.2f", ImGuiSliderFlags_Logarithmic))
             _dirty = true;
-        help_tooltip_on_hover("Camera frustum display size.");
+        ui::help_on_hover(msg::viewport_frustum_size_help);
     }
     ImGui::SameLine();
-    if (ImGui::Checkbox("grid", &_show_grid)) _dirty = true;
-    help_tooltip_on_hover("Overlay the training camera frusta (during "
-                          "training, with image thumbnails once visited).");
+    if (ui::Checkbox(msg::viewport_grid, &_show_grid)) _dirty = true;
+    ui::help_on_hover(msg::viewport_cameras_help);
     if (engine) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(66);
         const char* scales[] = {"50%", "75%", "100%"};
-        if (ImGui::Combo("##scale", &_scale_idx, scales, 3)) _dirty = true;
-        help_tooltip_on_hover("Render resolution relative to the viewport "
-                              "size. Lower is faster and steals less time "
-                              "from training.");
+        if (ui::ComboRaw("##scale", &_scale_idx, scales, 3)) _dirty = true;
+        ui::help_on_hover(msg::viewport_scale_help);
         ImGui::SameLine();
-        ImGui::Checkbox("live", &_auto_refresh);
-        help_tooltip_on_hover("Continuously re-render while training so the "
-                              "viewport follows the optimization.");
+        ui::Checkbox(msg::viewport_live, &_auto_refresh);
+        ui::help_on_hover(msg::viewport_live_help);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Reset view")) reset_view();
+    if (ui::Button(msg::viewport_reset_view)) reset_view();
 
     // ---- navigation + camera group ----
+    // The navigation modes and camera models are named exactly as the web
+    // viewer names them, and the tooltip below says so; renaming them per
+    // language would break that correspondence.
     if (one_row) ImGui::SameLine();
     const char* nav_modes[] = {"Turntable", "Trackball", "First Person", "Free Fly"};
     int nav = (int)_cam.mode;
     ImGui::SetNextItemWidth(110);
-    if (ImGui::Combo("##navmode", &nav, nav_modes, 4))
+    if (ui::ComboRaw("##navmode", &nav, nav_modes, 4))
         _cam.mode = (NavCamera::Mode)nav;
-    help_tooltip_on_hover(
-        "Navigation mode (identical to the web viewer):\n"
-        "Turntable / Trackball -- LMB orbit, RMB/MMB/Shift pan, wheel zoom\n"
-        "First Person / Free Fly -- LMB look, WASD/arrows move, E/Q up-down "
-        "(Free Fly: E/Q roll)\nGamepad: left stick move, right stick look, "
-        "triggers up-down/roll.");
+    ui::help_on_hover(msg::viewport_nav_help);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100);
-    ImGui::SliderFloat("##speed", &_cam.speed_exp, -2.0f, 2.0f, "spd 10^%.1f");
-    help_tooltip_on_hover("Move speed for pan / keyboard / gamepad "
-                          "(log scale; the web viewer's Move Speed slider).");
+    ui::SliderFloatRaw("##speed", &_cam.speed_exp, -2.0f, 2.0f, "spd 10^%.1f");
+    ui::help_on_hover(msg::viewport_speed_help);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160);
-    if (ImGui::BeginCombo("##cammodel", kViewerCameraModels[_cam_model].label)) {
+    if (ui::BeginComboRaw("##cammodel", kViewerCameraModels[_cam_model].label)) {
         for (int i = 0; i < 4; i++)
-            if (ImGui::Selectable(kViewerCameraModels[i].label, i == _cam_model)) {
+            if (ui::SelectableRaw(kViewerCameraModels[i].label, i == _cam_model)) {
                 _cam_model = i;
                 // Clamp the remembered FOV into the new model's range
                 // (viewer.html _syncCameraModelUI).
@@ -428,17 +423,15 @@ void ViewportPanel::draw_controls(bool engine) {
             }
         ImGui::EndCombo();
     }
-    help_tooltip_on_hover("Projection used for the viewport (preview and "
-                          "training render) -- same options as the web "
-                          "viewer.");
+    ui::help_on_hover(msg::viewport_projection_help);
     ImGui::SameLine();
     if (fov_max() > 0) {
         ImGui::SetNextItemWidth(120);
-        if (ImGui::SliderFloat("##fov", &_fov_deg[_cam_model],
+        if (ui::SliderFloatRaw("##fov", &_fov_deg[_cam_model],
                                fov_min(), fov_max(), "fov %.0f\xc2\xb0"))
             _dirty = true;
     } else {
-        ImGui::TextDisabled("360\xc2\xb0 x 180\xc2\xb0");
+        ui::TextDisabledRaw("360\xc2\xb0 x 180\xc2\xb0");
     }
 }
 
@@ -451,11 +444,11 @@ void ViewportPanel::draw(bool training) {
 
     if (_mode == Mode::None) {
         ImGui::Dummy(ImVec2(avail.x, avail.y * 0.4f));
-        const char* msg = _last_error.empty()
-            ? "Open a dataset to see it here" : _last_error.c_str();
-        float tw = ImGui::CalcTextSize(msg).x;
+        const char* line = _last_error.empty()
+            ? msg::viewport_open_a_dataset.get() : _last_error.c_str();
+        float tw = ImGui::CalcTextSize(line).x;
         ImGui::SetCursorPosX(std::max(0.0f, (ImGui::GetWindowWidth() - tw) * 0.5f));
-        ImGui::TextDisabled("%s", msg);
+        ui::TextDisabledRaw(line);
         return;
     }
 
@@ -477,7 +470,7 @@ void ViewportPanel::draw_preview(const ImVec2& avail) {
                                    _home_dist, nav_dist(), _cam.target,
                                    _show_cams, _frustum_scale, _show_grid);
     if (!tex) {
-        ImGui::TextDisabled("preview render failed");
+        ui::TextDisabled(msg::viewport_render_failed);
         return;
     }
     // FBO textures are bottom-up; flip V.
@@ -563,14 +556,15 @@ void ViewportPanel::draw_engine(bool training, const ImVec2& avail) {
         handle_input(size.y);
     } else {
         ImGui::Dummy(ImVec2(avail.x, avail.y * 0.4f));
-        const char* msg = _last_error.empty() ? "Rendering..." : _last_error.c_str();
-        float tw = ImGui::CalcTextSize(msg).x;
+        const char* line = _last_error.empty() ? msg::viewport_rendering.get()
+                                               : _last_error.c_str();
+        float tw = ImGui::CalcTextSize(line).x;
         ImGui::SetCursorPosX(std::max(0.0f, (ImGui::GetWindowWidth() - tw) * 0.5f));
-        ImGui::TextDisabled("%s", msg);
+        ui::TextDisabledRaw(line);
     }
     if (!_last_error.empty() && _tex)
-        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "render error: %s",
-                           _last_error.c_str());
+        ui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), msg::viewport_render_error,
+                        {_last_error});
 }
 
 }  // namespace gui

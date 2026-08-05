@@ -8,7 +8,7 @@
 
 This is my personal project that trains 3D Gaussian Splatting (3DGS) models. Formerly Spirulae-Splat.
 
-![Spirula Studio GUI screenshot, showing it training 10 million Gaussians with full SH degree on 4K images, on a laptop GPU with 8GB VRAM](screenshot.png)
+![Spirula Studio GUI screenshot, showing it training 10 million Gaussians with full SH degree on 4K images, on a laptop GPU with 8GB VRAM](assets/screenshot.png)
 
 <div align="center">
 

@@ -20,6 +20,8 @@
 // every Linux/macOS ship it), resumable, into "<file>.part" so an interrupted
 // fetch never looks like a complete model.
 
+#include "i18n/Message.h"
+
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -32,8 +34,11 @@ namespace gui {
 struct ModelEntry {
     const char* id;          // stable key used in the settings file
     const char* file;        // basename in the cache directory
-    const char* label;       // what the combo box shows
-    const char* blurb;       // one line under the combo box
+    // What the user reads. Messages rather than literals: this is the screen
+    // where somebody decides which of six models to spend a 700 MB download
+    // on, so it is exactly the copy that has to be in their language.
+    const ::spirula::i18n::Msg* label;   // what the combo box shows
+    const ::spirula::i18n::Msg* blurb;   // one line under the combo box
     const char* family;      // "sam3" | "sam2" -- the licence unit
     uint64_t    bytes;       // expected download size, for the prompt
     bool        text_prompts;// false = clicks/boxes only (SAM 2 has no text tower)
@@ -51,8 +56,8 @@ const ModelEntry* find_model(const std::string& id);
 // Licence terms for a family, for the consent dialog.
 struct LicenseInfo {
     const char* family;
-    const char* title;       // "SAM 3 licence (Meta)"
-    const char* summary;     // 2-3 short lines, plain language
+    const ::spirula::i18n::Msg* title;    // "SAM 3 License (Meta)"
+    const ::spirula::i18n::Msg* summary;  // 2-3 short lines, plain language
     const char* url;
     bool        needs_tick;  // Apache-2.0 does not; the SAM 3 licence does
 };
@@ -64,12 +69,20 @@ bool model_is_cached(const ModelEntry& e);
 
 // A single background download. One at a time is enough for the GUI, so this
 // is a plain object the screen owns rather than a queue.
-class ModelDownload {
+//
+// Nothing here is model-specific -- the CJK font fetch (src/app/gui/Fonts.h)
+// is the same job with a different URL -- so the generic form is what the
+// class takes and start(const ModelEntry&) is the convenience overload.
+class FileDownload {
 public:
     enum class State { Idle, Running, Done, Failed, Cancelled };
 
-    ~ModelDownload();
+    ~FileDownload();
 
+    // `expected_bytes` is only used for the progress readout; curl reports the
+    // real length. 0 means unknown.
+    void start(const std::string& url, const std::string& dest,
+               uint64_t expected_bytes);
     void start(const ModelEntry& e);
     void cancel();
 
@@ -81,7 +94,7 @@ public:
     std::vector<std::string> drain_log();
 
 private:
-    void run(ModelEntry e);
+    void run(std::string url, std::string dest, uint64_t expected_bytes);
     void log(const std::string& line);
 
     std::thread _worker;
@@ -92,5 +105,12 @@ private:
     std::string _status, _path;
     std::vector<std::string> _log;
 };
+
+// The name this used to have, kept because the download it manages is still
+// almost always a model.
+using ModelDownload = FileDownload;
+
+// Human-readable size, for a prompt: "707 MB", "1.8 GB".
+std::string human_bytes(uint64_t b);
 
 }  // namespace gui

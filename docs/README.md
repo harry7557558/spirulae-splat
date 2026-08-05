@@ -10,6 +10,7 @@ the detail.
 | [backends.md](backends.md) | the CUDA/Vulkan seam, coverage, pointers to the authoritative backend docs |
 | [codegen.md](codegen.md) | the four generators, what they own, and the invariants |
 | [datasets.md](datasets.md) | supported dataset layouts and how they are parsed |
+| [i18n.md](i18n.md) | shipping a localized build: `SS_DEFAULT_LANG`, `SS_FONT_CJK`, what is translated |
 | [testing.md](testing.md) | native parity tests and the CUDA-vs-Vulkan reference-dump workflow |
 | [restructure-proposal.md](restructure-proposal.md) | the in-progress plan for reorganizing the tree |
 | [notes/rename-and-i18n-plan.md](notes/rename-and-i18n-plan.md) | the Spirula Studio rename, 13-locale localization, and retiring the Python client |
@@ -25,5 +26,9 @@ Authoritative documents that live next to their code rather than here:
   in the repo**; read it before touching Vulkan code.
 - `src/app/README.md` — working notes on the
   standalone CLI and the native GUI.
+- `src/i18n/README.md` — how a translation is a type, the `ui::` wrapper rule,
+  and how to add a language. **Read before adding interface copy.**
+- `assets/fonts/README.md` — the embedded UI font, why it is renamed, and the
+  CJK faces.
 - `viewer/README.md` — the standalone WebGL2/WASM viewer.
 - `scripts/README.md` — dataset preprocessing tools.

@@ -7,6 +7,7 @@
 #include "backend/api/BackendRuntime.h"
 #include "config/TrainConfig.h"
 #include "app/gui/ColmapRunner.h"
+#include "app/gui/Fonts.h"
 #include "app/gui/ConfigUI.h"
 #include "app/gui/FileDialog.h"
 #include "app/gui/ModelCache.h"
@@ -37,6 +38,10 @@ public:
     // Stop worker threads + free GL resources; call while the GL context is
     // still current.
     void shutdown();
+
+    // The font atlas. GuiMain calls ensure() between frames -- swapping a face
+    // invalidates every ImFont pointer, so it cannot happen mid-frame.
+    FontSet& fonts() { return _fonts; }
 
 private:
     enum class Screen { Home, NewDataset, Train };
@@ -104,6 +109,7 @@ private:
     void draw_colmap_options();
     void draw_tool_locations();
     void draw_license_modal();
+    void draw_language_menu();       // the picker, and the CJK font prompt
     void draw_train();
     void draw_train_settings();      // left panel
     void draw_basic_options();
@@ -174,6 +180,13 @@ private:
     // Segmentation checkpoints.
     std::string _model_id = "sam3-q4_0";
     ModelDownload _download;
+
+    // Interface language and the glyphs to draw it with. The font download is
+    // separate from _download so that fetching a face cannot cancel a
+    // half-finished 700 MB checkpoint.
+    FontSet _fonts;
+    FileDownload _font_download;
+    const CjkFace* _font_fetching = nullptr;
     // Families whose licence the user has accepted, persisted in the settings.
     std::vector<std::string> _accepted_licenses;
     std::string _license_prompt;      // family whose modal is open

@@ -10,10 +10,11 @@ Plan for three changes that look independent but share one keystone file:
    becomes hand-written C++; a named subset of Python survives as reference
    for features that are not ported yet.
 
-Status: **phases 0-2 landed; 3-5 are still plan.** Sections that landed are
+Status: **phases 0-4 landed; 5 is still plan.** Sections that landed are
 marked and record what actually happened, which is not always what was
-planned. Fold the surviving content into `docs/i18n.md` and
-`src/i18n/README.md` when Phase 5 comes.
+planned. The mechanism and the operations manual now live in
+`src/i18n/README.md` and `docs/i18n.md`; what remains here is the history and
+the reasoning behind the choices.
 
 ---
 
@@ -329,7 +330,71 @@ Do this on a quiet tree, in one commit, with no other change riding along.
 
 ---
 
-## 6. Phase 3 — the localization mechanism
+## 6. Phase 3 — the localization mechanism — **LANDED 2026-08-05**
+
+Landed close to the design below. Read `src/i18n/README.md` for the mechanism
+as built; this section keeps the reasoning and records the five places reality
+differed.
+
+**1. `Msg` carries its own name, and that name is the ImGui widget ID.**
+Not in the plan, and it turned out to be load-bearing. ImGui derives a widget's
+ID from its label, so a translated label is a *different widget*: switching to
+Japanese would collapse every open header and reset every scroll position. The
+`SS_MSG` macro stringifies `#name` into the object, and every `ui::` wrapper
+renders `"text###<name>"`. Costs nothing and there is no other place the
+information could have come from.
+
+**2. The `EN`/`JA`/… tags cannot be generated, so they are guarded instead.**
+A macro cannot define macros, so `BeginCatalog.h` lists the thirteen tags by
+hand — a mirror of `Languages.h` that can drift. A canary message at the bottom
+of that file, built from all thirteen tags and `static_assert`ed complete,
+turns the drift into an error that names `BeginCatalog.h` rather than into a
+baffling failure on whichever catalog entry compiled first.
+
+**3. `SS_DEFAULT_LANG` is an identifier, not a string.** `Locale.h` writes
+`Lang::SS_DEFAULT_LANG`, so `-DSS_DEFAULT_LANG=jp` (a typo for `ja`) is a
+compile error naming the bad value instead of a binary that silently comes up
+English. CMake reads the valid set out of `Languages.h` and checks it too, so
+the failure usually arrives at configure time with the list printed.
+
+**4. `C` and `POSIX` deliberately do not match.** They mean "the user expressed
+no preference", which is *not* "the user wants English" — `parse_lang()`
+returns false for them and the chain falls through to `SS_DEFAULT_LANG`. A
+regional build in a bare container gets its own language, which is the case the
+whole compile-time-default design exists for.
+
+**5. The CJK faces are bundled, not embedded.** §8.2 costed
+`SS_FONT_CJK=sc|tc|jp|kr|all` as an embed. It is not viable: `ss_embed_file()`
+turns one byte into five characters of C source, so `all` would be a 130 MB
+array literal. A regional build ships `fonts/` beside the executable instead —
+the same offline behaviour, without putting a compiler through that. The
+default build is still one self-contained file, because the *Latin* face is
+small enough to embed and that is the half that matters: at 59 KB it is what
+makes German, French, Turkish and Russian render at all.
+
+Three further notes on the font work, which was indeed where the surprises
+were (§11 predicted this correctly):
+
+- **The per-language SubsetOTF builds, not the 16 MB regional OTFs.** Each
+  carries its own language's coverage *and* its own regional glyph forms —
+  which is the half that matters for Han unification — at a third of the
+  download (4-8 MB).
+- **Source Sans 3 reserves the font name "Source".** The 59 KB subset is a
+  Modified Version under the OFL and every name-table record carrying it had to
+  be rewritten, not just the filename. `tools/make_ui_font.py` does that, is
+  byte-reproducible, and has a `--check` mode; the rename is a licence
+  obligation, not a branding decision.
+- **A face on disk is loaded whatever the UI language is.** An English UI still
+  has to draw `C:\写真\` without turning it into boxes. Only the *fetch
+  prompt* is tied to picking a CJK language.
+
+Two pieces of housekeeping fell out of the work and were done rather than
+worked around: `ModelDownload` became a generic `FileDownload` (the font fetch
+is the same job with a different URL), and the SHA-256 that was private to
+`src/aliked/model/Fetch.cpp` moved to `src/core/Sha256.h`, which removed a
+duplicate rather than adding one.
+
+### 6.0 The original design
 
 Design goals, in priority order: **a missing translation must fail the build**;
 no new dependency; catalogs modular, one per module.
@@ -525,6 +590,36 @@ fall to `SS_DEFAULT_LANG`, never to a hard-coded `en`.
 
 ---
 
+---
+
+## 6b. Phase 4 — the translations — **LANDED 2026-08-05**
+
+**354 of 405 messages carry all thirteen languages.** The remaining 51 are the
+external-COLMAP *Advanced* panel, left English on purpose: every entry names a
+COLMAP parameter and is read next to COLMAP's own English-only documentation,
+so a translated sentence wrapped around an untranslatable identifier helps less
+there than anywhere else in the app.
+
+The tiering in §6.6 held up, but the boundary moved: what shipped is tiers 1
+and 2 complete (the whole GUI), and tier 3 — the 190 config field helps —
+untouched, because those are still literals in `src/config/TrainConfig.h`
+shared with `spirula train --help`. Turning them into messages is a separate
+change, and the 33 `optimizer`-group fields should get their missing help text
+written first (§3).
+
+`SS_MSG_EN` earned its place: it let the whole GUI be converted and verified in
+English before a single translation existed, and `tools/check_i18n.sh` counting
+it down from 405 to 51 was the progress bar.
+
+**Review status is recorded in `docs/i18n.md` and it matters.** These are one
+author's translations, not native speakers': a solid first draft. §6.6's rule
+that ja/zh/ko/de and every irreversible-action message need human review before
+shipping stands, and the catalog marks the legal block with a comment saying
+so. A licence summary that softens somebody else's terms is worse than no
+translation at all.
+
+---
+
 ## 7. Product names per locale
 
 `Brand.h` holds the product name as an ordinary `SS_MSG`, so the policy is data
@@ -687,14 +782,23 @@ strings are localized.
       **The repository was deliberately not renamed** — the Pages URL under
       `viewer/` depends on the directory name, and the README's "Formerly
       Spirulae-Splat" line carries the transition instead. *(2026-08-04)*
-- [ ] **3.** `src/i18n/` (`Languages.h`, `Message.h`, `Begin/EndCatalog.h`),
-      `gui/Ui.h`, `check_i18n.sh`, font loading + `SS_FONT_CJK` +
-      `SS_DEFAULT_LANG`, locale detection. All catalogs `SS_MSG_EN` at first.
-- [ ] **4.** Translate tier 1 → 2 → 3; each catalog flips from `SS_MSG_EN` to
-      `SS_MSG` as it completes. Human review for ja/zh/ko/de and for every
-      irreversible-action message.
-- [ ] **5.** Fold this document into `docs/i18n.md` + `src/i18n/README.md`;
-      drop the `SSPLAT_` aliases one release later.
+- [x] **3.** `src/i18n/` (`Languages.h`, `Message.h`, `Begin/EndCatalog.h`,
+      `Locale.{h,cpp}`), `gui/Ui.h` (55 wrappers), `tools/check_i18n.sh` wired
+      into `build_develop.bash`, `SS_FONT_CJK` + `SS_DEFAULT_LANG` + the
+      configure-time consistency check, the 59 KB embedded Latin/Cyrillic face
+      and `tools/make_ui_font.py` that reproduces it, hash-verified CJK fetch,
+      the language picker, and locale detection on all three platforms. Every
+      text-bearing ImGui call in `src/app/gui/` (253 of them) now goes through
+      `ui::`. *(2026-08-05)*
+- [x] **4.** 354 of 405 messages translated into all thirteen languages; the 51
+      left are the external-COLMAP advanced panel, deliberately. Tier 3 (the
+      190 config field helps) is not started — those are still literals shared
+      with `--help`. Human review for ja/zh/ko/de and the legal block is
+      **outstanding** and recorded in `docs/i18n.md`. *(2026-08-05)*
+- [ ] **5.** Drop the `SSPLAT_` aliases one release later: the CMake alias loop
+      in `cmake/SsOptions.cmake`, the fallback in `src/core/Env.h`, the legacy
+      directory adoption in `AppPaths.cpp` and `aliked/model/Fetch.cpp`, and
+      the `ssplat-` argv[0] prefix in `src/app/Main.cpp`.
 
 ## 11. Recommendation
 

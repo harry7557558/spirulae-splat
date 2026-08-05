@@ -28,7 +28,4 @@ struct ConfigUIState {
 bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
                         ConfigUIState& st);
 
-// Shared helper: hoverable "(?)"-style tooltip with wrapped text.
-void help_tooltip_on_hover(const char* text);
-
 }  // namespace gui

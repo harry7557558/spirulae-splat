@@ -53,6 +53,15 @@ set(SS_TOOL_SOURCES "")
 set(SS_TOOL_DEFS "")
 set(SS_TOOL_LIBS "")
 
+# Localization settings every app target gets. SS_DEFAULT_LANG is an
+# identifier, not a string: src/i18n/Locale.h spells it `Lang::SS_DEFAULT_LANG`,
+# so a value that is not a language fails to compile instead of quietly
+# falling back to English.
+set(SS_I18N_DEFS SS_DEFAULT_LANG=${SS_DEFAULT_LANG})
+if(SS_FONT_CJK STREQUAL "none")
+    list(APPEND SS_I18N_DEFS SS_FONT_CJK_NONE=1)
+endif()
+
 if(SS_BUILD_CLI)
     # ---- trainer: no Python at runtime ----
     list(APPEND SS_TOOL_SOURCES ${SS_SRC}/app/cli/main.cpp)
@@ -143,6 +152,18 @@ if(SS_BUILD_GUI)
         ${CMAKE_BINARY_DIR}/app_generated/mask_py.h
         MaskPy)
 
+    # ---- fonts (src/app/gui/Fonts.h, docs/i18n.md) ----
+    #
+    # The Latin/Cyrillic face IS embedded: at 59 KB it costs nothing, and
+    # without it the built-in ImGui font renders German, French, Turkish and
+    # Russian as boxes -- which was true of this GUI before localization was
+    # ever on the table. Rebuild it with tools/make_ui_font.py.
+    ss_embed_file(
+        ${SS_ROOT}/assets/fonts/SpirulaUI-Regular.ttf
+        ${CMAKE_BINARY_DIR}/app_generated/ui_font.h
+        UiFont)
+    ss_cjk_faces()
+
     file(GLOB SS_GUI_SOURCES CONFIGURE_DEPENDS ${SS_SRC}/app/gui/*.cpp)
     list(APPEND SS_TOOL_SOURCES ${SS_GUI_SOURCES})
     list(APPEND SS_TOOL_DEFS SS_TOOL_GUI=1)
@@ -173,9 +194,24 @@ if(SS_BUILD_CLI OR SS_BUILD_GUI)
     ss_configure_app(spirula)
     target_link_libraries(spirula PRIVATE ${SS_TOOL_LIBS})
     target_compile_definitions(spirula PRIVATE
-        ${SS_TOOL_DEFS} SS_VERSION="${SS_VERSION}")
+        ${SS_TOOL_DEFS} SS_VERSION="${SS_VERSION}" ${SS_I18N_DEFS})
     if(WIN32)
         target_link_libraries(spirula PRIVATE ws2_32)
+    endif()
+    if(APPLE)
+        # i18n/Locale.cpp asks CoreFoundation for the user's locale: POSIX env
+        # vars are usually absent for an app launched from Finder.
+        target_link_libraries(spirula PRIVATE "-framework CoreFoundation")
+    endif()
+
+    # A regional build ships its face beside the executable; Fonts.cpp looks
+    # in <exe dir>/fonts before the cache directory.
+    if(SS_BUILD_GUI AND NOT SS_FONT_CJK MATCHES "^(fetch|none)$")
+        add_custom_command(TARGET spirula POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    ${CMAKE_BINARY_DIR}/fonts
+                    $<TARGET_FILE_DIR:spirula>/fonts
+            COMMENT "Bundling CJK font(s) for SS_FONT_CJK=${SS_FONT_CJK}")
     endif()
 
     # ---- the standalone CLI tools, on request ----
@@ -193,14 +229,21 @@ if(SS_BUILD_CLI OR SS_BUILD_GUI)
     # itself. Symlink `spirula` if you want those names.
     if(SS_SEPARATE_TOOLS)
         function(ss_tool_exe name sources defs libs)
-            add_executable(${name} ${SS_SRC}/app/Main.cpp ${sources})
+            # i18n/Locale.cpp is compiled in rather than linked: these targets
+            # deliberately do not link the engine library it otherwise lives
+            # in, and Main.cpp's `--lang` handling needs it.
+            add_executable(${name} ${SS_SRC}/app/Main.cpp
+                                   ${SS_SRC}/i18n/Locale.cpp ${sources})
             target_include_directories(${name} PRIVATE ${SS_SRC} ${CMAKE_BINARY_DIR})
             target_link_libraries(${name} PRIVATE ${libs})
             target_compile_definitions(${name} PRIVATE
-                ${defs} SS_VERSION="${SS_VERSION}")
+                ${defs} SS_VERSION="${SS_VERSION}" ${SS_I18N_DEFS})
             target_compile_options(${name} PRIVATE
                 $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
             set_property(TARGET ${name} PROPERTY CXX_STANDARD 17)
+            if(APPLE)
+                target_link_libraries(${name} PRIVATE "-framework CoreFoundation")
+            endif()
         endfunction()
 
         if(SS_BUILD_SFM)

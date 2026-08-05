@@ -5,6 +5,10 @@
 
 #include "app/gui/ConfigUI.h"
 
+#include "app/gui/Ui.h"
+
+#include "i18n/catalog/Gui.h"
+
 #include "imgui.h"
 #include "imgui_stdlib.h"
 
@@ -16,17 +20,10 @@
 #include <string>
 #include <vector>
 
-namespace gui {
+namespace msg = spirula::i18n::msg::gui;
+using spirula::i18n::Msg;
 
-void help_tooltip_on_hover(const char* text) {
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) &&
-        ImGui::BeginTooltip()) {
-        ImGui::PushTextWrapPos(420.0f);
-        ImGui::TextUnformatted(text);
-        ImGui::PopTextWrapPos();
-        ImGui::EndTooltip();
-    }
-}
+namespace gui {
 
 namespace {
 
@@ -81,34 +78,36 @@ std::vector<std::string> split_choices(const char* choices) {
 }
 
 bool draw_value(bool& v, const char*) {
-    return ImGui::Checkbox("##v", &v);
+    return ui::CheckboxRaw("##v", &v);
 }
 
 bool draw_value(int& v, const char*) {
     ImGui::SetNextItemWidth(kFieldWidth);
-    return ImGui::InputInt("##v", &v, 0, 0);
+    return ui::InputIntRaw("##v", &v);
 }
 
 bool draw_value(float& v, const char*) {
     ImGui::SetNextItemWidth(kFieldWidth);
-    return ImGui::InputFloat("##v", &v, 0.0f, 0.0f, "%g");
+    return ui::InputFloatRaw("##v", &v, "%g");
 }
 
 bool draw_value(std::string& v, const char* choices) {
     std::string ch = choices;
     if (ch.empty() || ch == "none") {
         ImGui::SetNextItemWidth(kFieldWidth);
-        return ImGui::InputText("##v", &v);
+        return ui::InputTextRaw("##v", &v);
     }
     // Literal[...] -> dropdown; the "none" token maps to the empty string.
     std::vector<std::string> opts = split_choices(choices);
     std::string cur = v.empty() ? "none" : v;
     bool changed = false;
     ImGui::SetNextItemWidth(kFieldWidth);
-    if (ImGui::BeginCombo("##v", cur.c_str())) {
+    // The choices are the literal values `--<flag>` accepts and config.json
+    // stores; they are not translated.
+    if (ui::BeginComboRaw("##v", cur.c_str())) {
         for (const auto& o : opts) {
             bool sel = (o == cur);
-            if (ImGui::Selectable(o.c_str(), sel)) {
+            if (ui::SelectableRaw(o, sel)) {
                 v = (o == "none") ? "" : o;
                 changed = true;
             }
@@ -124,10 +123,10 @@ bool draw_value(std::optional<bool>& v, const char*) {
     const char* cur = !v.has_value() ? "auto" : (*v ? "true" : "false");
     bool changed = false;
     ImGui::SetNextItemWidth(kFieldWidth);
-    if (ImGui::BeginCombo("##v", cur)) {
-        if (ImGui::Selectable("auto",  !v.has_value())) { v = std::nullopt; changed = true; }
-        if (ImGui::Selectable("true",  v.has_value() && *v))  { v = true;  changed = true; }
-        if (ImGui::Selectable("false", v.has_value() && !*v)) { v = false; changed = true; }
+    if (ui::BeginComboRaw("##v", cur)) {
+        if (ui::SelectableRaw("auto",  !v.has_value())) { v = std::nullopt; changed = true; }
+        if (ui::SelectableRaw("true",  v.has_value() && *v))  { v = true;  changed = true; }
+        if (ui::SelectableRaw("false", v.has_value() && !*v)) { v = false; changed = true; }
         ImGui::EndCombo();
     }
     return changed;
@@ -137,18 +136,18 @@ template <typename T>
 bool draw_value(std::optional<T>& v, const char* choices) {
     bool has = v.has_value();
     bool changed = false;
-    if (ImGui::Checkbox("##has", &has)) {
+    if (ui::CheckboxRaw("##has", &has)) {
         v = has ? std::optional<T>(T{}) : std::nullopt;
         changed = true;
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("unchecked = auto");
+        ui::SetTooltip(msg::cfg_unchecked_is_auto);
     ImGui::SameLine();
     if (v.has_value()) {
         T tmp = *v;
         if (draw_value(tmp, choices)) { v = tmp; changed = true; }
     } else {
-        ImGui::TextDisabled("(auto)");
+        ui::TextDisabled(msg::cfg_auto);
     }
     return changed;
 }
@@ -178,24 +177,29 @@ bool field_row(const char* cli_key, T& v, const T& def,
                                         ImGuiHoveredFlags_AllowWhenDisabled);
     ImGui::OpenPopupOnItemClick("ctx", ImGuiPopupFlags_MouseButtonRight);
     ImGui::SameLine();
-    if (modified) ImGui::TextColored(kModifiedColor, "%s *", cli_key);
-    else          ImGui::TextUnformatted(cli_key);
+    // The flag name is the flag name in every language: this row is a direct
+    // view of `spirula train --<key>`.
+    if (modified) ui::TextColoredRaw(kModifiedColor, std::string(cli_key) + " *");
+    else          ui::TextRaw(cli_key);
     hovered |= ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
                                     ImGuiHoveredFlags_AllowWhenDisabled);
     ImGui::OpenPopupOnItemClick("ctx", ImGuiPopupFlags_MouseButtonRight);
 
     if (hovered && ImGui::BeginTooltip()) {
         ImGui::PushTextWrapPos(420.0f);
-        ImGui::TextColored(kModifiedColor, "--%s", cli_key);
-        ImGui::TextUnformatted(*help ? help : "(no description)");
+        ui::TextColoredRaw(kModifiedColor, "--" + std::string(cli_key));
+        // The field help is shared with `spirula train --help` and is still
+        // English everywhere; translating the 190 of them is the last tier.
+        if (*help) ui::TextRaw(help);
+        else       ui::Text(msg::cfg_no_description);
         ImGui::Separator();
-        ImGui::Text("preset default: %s", value_str(def).c_str());
+        ui::Text(msg::cfg_preset_default, {value_str(def)});
         ImGui::PopTextWrapPos();
         ImGui::EndTooltip();
     }
     if (ImGui::BeginPopup("ctx")) {
-        std::string lbl = "Reset to " + value_str(def);
-        if (ImGui::MenuItem(lbl.c_str())) { v = def; changed = true; }
+        if (ui::MenuItem(msg::cfg_reset_to, {value_str(def)}))
+            { v = def; changed = true; }
         ImGui::EndPopup();
     }
     ImGui::PopID();
@@ -210,13 +214,13 @@ int group_index(const char* g) {
     return 4;  // optimizer
 }
 
-const char* group_label(const char* g) {
+const Msg& group_label(const char* g) {
     switch (group_index(g)) {
-        case 0: return "Run & Output";
-        case 1: return "Dataset Parsing";
-        case 2: return "Data Loading";
-        case 3: return "Model & Losses";
-        default: return "Optimizer & Learning Rates";
+        case 0: return msg::cfg_group_run;
+        case 1: return msg::cfg_group_dataparser;
+        case 2: return msg::cfg_group_datamanager;
+        case 3: return msg::cfg_group_model;
+        default: return msg::cfg_group_optimizer;
     }
 }
 
@@ -231,11 +235,11 @@ bool gui_managed(const char* cli_key) {
 bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
                         ConfigUIState& st) {
     ImGui::SetNextItemWidth(-115);
-    ImGui::InputTextWithHint("##cfgsearch", "search options (name or description)",
-                             st.search, sizeof st.search);
+    ui::InputTextHintBufRaw("##cfgsearch", msg::cfg_search_hint,
+                            st.search, sizeof st.search);
     ImGui::SameLine();
-    ImGui::Checkbox("edited", &st.modified_only);
-    help_tooltip_on_hover("Show only options changed from the preset default.");
+    ui::Checkbox(msg::cfg_edited_only, &st.modified_only);
+    ui::help_on_hover(msg::cfg_edited_only_help);
 
     const bool searching = st.search[0] != 0 || st.modified_only;
 
@@ -267,7 +271,7 @@ bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
             group_open = false;                                                \
         } else {                                                               \
             if (searching) ImGui::SetNextItemOpen(true);                       \
-            group_open = ImGui::CollapsingHeader(group_label(group));          \
+            group_open = ui::CollapsingHeader(group_label(group));             \
         }                                                                      \
     }                                                                          \
     if (group_open && passes(#member, help, !(cfg.member == defaults.member))) \

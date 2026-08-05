@@ -114,6 +114,71 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# Localization (src/i18n/, docs/i18n.md)
+#
+# The language set is declared once, in src/i18n/Languages.h, and read back out
+# of it here rather than repeated -- adding a locale must be a one-file change.
+# ---------------------------------------------------------------------------
+file(READ ${SS_SRC}/i18n/Languages.h _ss_langs_h)
+string(REGEX MATCHALL "X\\(([a-z_]+),[ \t]+\"" _ss_lang_hits "${_ss_langs_h}")
+set(SS_LANGUAGES "")
+foreach(hit ${_ss_lang_hits})
+    string(REGEX REPLACE "X\\(([a-z_]+),.*" "\\1" lang "${hit}")
+    list(APPEND SS_LANGUAGES ${lang})
+endforeach()
+if(NOT SS_LANGUAGES)
+    message(FATAL_ERROR "Could not read SS_LANGUAGES out of src/i18n/Languages.h")
+endif()
+set_property(DIRECTORY ${SS_ROOT} APPEND
+    PROPERTY CMAKE_CONFIGURE_DEPENDS ${SS_SRC}/i18n/Languages.h)
+
+# The language used when none is detected: headless runs, containers with no
+# LANG, stripped Windows environments. NOT the same as "English" -- a build
+# shipped as -DSS_DEFAULT_LANG=ja has to come up Japanese in those cases.
+set(SS_DEFAULT_LANG "en" CACHE STRING "Locale used when none is detected")
+set_property(CACHE SS_DEFAULT_LANG PROPERTY STRINGS ${SS_LANGUAGES})
+if(NOT SS_DEFAULT_LANG IN_LIST SS_LANGUAGES)
+    string(REPLACE ";" " " _ss_langs_pretty "${SS_LANGUAGES}")
+    message(FATAL_ERROR
+        "SS_DEFAULT_LANG='${SS_DEFAULT_LANG}' is not a language this build has.\n"
+        "  Choose one of: ${_ss_langs_pretty}")
+endif()
+
+# Japanese, Korean and both Chinese scripts need a font the Latin face does not
+# have. Each regional face is 4-8 MB and they are NOT interchangeable: Han
+# unification means the shared codepoints have different default glyph forms
+# per region, so a Japanese reader shown the Simplified Chinese face gets kanji
+# in Chinese forms -- legible, and visibly wrong.
+#
+#   fetch  (default)  downloaded on first use of a CJK language, into the cache
+#                     directory. The executable stays self-contained.
+#   none              Latin/Cyrillic only. CJK languages render tofu and the
+#                     picker says so. For a build that must not touch the
+#                     network.
+#   sc|tc|jp|kr|all   ship the face(s) beside the executable, for an offline
+#                     regional build. Note this is a BUNDLE, not an embed: a
+#                     16 MB byte array is not something to put a compiler
+#                     through, and `all` would be four of them.
+set(SS_FONT_CJK "fetch" CACHE STRING "CJK font: fetch | none | sc | tc | jp | kr | all")
+set_property(CACHE SS_FONT_CJK PROPERTY STRINGS fetch none sc tc jp kr all)
+if(NOT SS_FONT_CJK MATCHES "^(fetch|none|sc|tc|jp|kr|all)$")
+    message(FATAL_ERROR "SS_FONT_CJK must be fetch|none|sc|tc|jp|kr|all, got '${SS_FONT_CJK}'")
+endif()
+
+# An inconsistent regional build should fail here rather than ship tofu.
+string(REGEX MATCHALL "X\\(([a-z_]+)\\)" _ss_cjk_hits "${_ss_langs_h}")
+set(SS_LANGUAGES_CJK "")
+foreach(hit ${_ss_cjk_hits})
+    string(REGEX REPLACE "X\\(([a-z_]+)\\)" "\\1" lang "${hit}")
+    list(APPEND SS_LANGUAGES_CJK ${lang})
+endforeach()
+if(SS_DEFAULT_LANG IN_LIST SS_LANGUAGES_CJK AND SS_FONT_CJK STREQUAL "none")
+    message(FATAL_ERROR
+        "SS_DEFAULT_LANG=${SS_DEFAULT_LANG} needs a CJK font, but SS_FONT_CJK=none.\n"
+        "  Set SS_FONT_CJK to fetch, or to the matching regional face.")
+endif()
+
+# ---------------------------------------------------------------------------
 # Patent-encumbered modules
 #
 # OFF by default, and deliberately so: this repository is GPLv3, and the video
@@ -157,7 +222,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Backend modules may append to it (OpenMP, for one).
 # ---------------------------------------------------------------------------
 if(MSVC)
-    set(SPLAT_CXX_FLAGS "/O2")
+    # /utf-8: the i18n catalogs are UTF-8 source. Without it MSVC reads them in
+    # the machine's ANSI codepage and every non-ASCII string is silently
+    # mojibake -- on the developer's machine as well as the user's.
+    set(SPLAT_CXX_FLAGS "/O2" "/utf-8")
 else()
     set(SPLAT_CXX_FLAGS "-O3")
     list(APPEND SPLAT_CXX_FLAGS "-Wno-sign-compare")

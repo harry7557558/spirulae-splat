@@ -1,0 +1,34 @@
+# The CJK font faces the UI can use, one per line:
+#
+#   id | file | url | sha256 | bytes | label
+#
+# SINGLE SOURCE OF TRUTH. Consumed by:
+#   - cmake/SsApps.cmake, which generates app_generated/cjk_faces.h from it and
+#     downloads the named face for a regional build (SS_FONT_CJK=sc|tc|jp|kr|all)
+#   - src/app/gui/Fonts.cpp, through that header
+#
+# `id` is also the SS_FONT_CJK value that bundles the face. Blank lines and
+# '#' comments are ignored; the separator is " | " and no field may contain it.
+#
+# Why four faces and not one: Han unification gives the shared codepoints
+# different default glyph forms per region (直, 骨, 雪, 戸 and many more). A
+# Japanese reader shown the Simplified Chinese face gets kanji in Chinese
+# forms -- legible, and visibly wrong -- so the face follows the language.
+#
+# These are Noto Sans CJK, which is Source Han Sans under its other name: the
+# same design as the embedded Latin face (assets/fonts/SpirulaUI-Regular.ttf,
+# subset from Source Sans 3), so a mixed Latin/CJK line does not visibly step.
+# The per-language SubsetOTF builds are used rather than the 16 MB regional
+# OTFs -- each carries its own language's coverage AND its own glyph forms,
+# which is the half that matters, at a third of the download.
+#
+# Pinned to the commit tagged Sans2.004 rather than to a branch, so the hashes
+# cannot go stale under us. To add or update a face: fetch it, `sha256sum`,
+# `stat -c %s`, and edit the line. Licence: SIL OFL 1.1, no reserved font name
+# (assets/fonts/OFL-Noto.txt) -- so unlike the Latin face this is shipped
+# unmodified and under its own name.
+
+sc | NotoSansSC-Regular.otf | https://raw.githubusercontent.com/notofonts/noto-cjk/523d033d6cb47f4a80c58a35753646f5c3608a78/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf | faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9 | 8331336 | Simplified Chinese
+tc | NotoSansTC-Regular.otf | https://raw.githubusercontent.com/notofonts/noto-cjk/523d033d6cb47f4a80c58a35753646f5c3608a78/Sans/SubsetOTF/TC/NotoSansTC-Regular.otf | 5bab0cb3c1cf89dde07c4a95a4054b195afbcfe784d69d75c340780712237537 | 5683368 | Traditional Chinese
+jp | NotoSansJP-Regular.otf | https://raw.githubusercontent.com/notofonts/noto-cjk/523d033d6cb47f4a80c58a35753646f5c3608a78/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf | dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073 | 4533028 | Japanese
+kr | NotoSansKR-Regular.otf | https://raw.githubusercontent.com/notofonts/noto-cjk/523d033d6cb47f4a80c58a35753646f5c3608a78/Sans/SubsetOTF/KR/NotoSansKR-Regular.otf | 69975a0ac8472717870aefeab0a4d52739308d90856b9955313b2ad5e0148d68 | 4644748 | Korean

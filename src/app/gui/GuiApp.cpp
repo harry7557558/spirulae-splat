@@ -6,6 +6,12 @@
 #include "app/gui/AppPaths.h"
 #include "app/gui/DatasetPrep.h"
 #include "app/gui/Subprocess.h"
+#include "app/gui/Ui.h"
+
+#include "i18n/Locale.h"
+#include "i18n/catalog/Brand.h"
+#include "i18n/catalog/Dataset.h"
+#include "i18n/catalog/Gui.h"
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -18,6 +24,10 @@
 #include <filesystem>
 
 namespace fs = std::filesystem;
+namespace i18n = spirula::i18n;
+namespace msg = spirula::i18n::msg::gui;
+namespace dmsg = spirula::i18n::msg::dataset;
+using spirula::i18n::Msg;
 
 namespace gui {
 
@@ -106,6 +116,7 @@ void GuiApp::shutdown() {
     _colmap.cancel();
     _sfm.cancel();
     _download.cancel();
+    _font_download.cancel();
     _runner.shutdown();
 }
 
@@ -114,8 +125,12 @@ std::string GuiApp::settings_path() {
 }
 
 void GuiApp::load_settings() {
+    std::string saved_lang;
     FILE* f = std::fopen(settings_path().c_str(), "r");
-    if (!f) return;
+    if (!f) {
+        spirula::i18n::init(spirula::i18n::lang_arg(), nullptr);
+        return;
+    }
     char line[1024];
     while (std::fgets(line, sizeof line, f)) {
         std::string s = line;
@@ -134,8 +149,15 @@ void GuiApp::load_settings() {
         else if (k == "mask_model" && !v.empty()) _model_id = v;
         else if (k == "accepted_license" && !v.empty() && !license_accepted(v))
             _accepted_licenses.push_back(v);
+        else if (k == "lang" && !v.empty()) saved_lang = v;
     }
     std::fclose(f);
+
+    // The settings file is the third step of the chain and loses to both
+    // --lang and SS_LANG, so the whole chain is re-run rather than the stored
+    // value simply applied. Passing lang_arg() back in is what keeps --lang
+    // winning even though it was parsed in main() long before this ran.
+    spirula::i18n::init(spirula::i18n::lang_arg(), saved_lang.c_str());
 }
 
 void GuiApp::save_settings() {
@@ -149,6 +171,7 @@ void GuiApp::save_settings() {
     std::fprintf(f, "sfm_engine=%s\n",
                  _engine == Engine::Colmap ? "colmap" : "builtin");
     std::fprintf(f, "mask_model=%s\n", _model_id.c_str());
+    std::fprintf(f, "lang=%s\n", spirula::i18n::code(spirula::i18n::current()));
     for (const auto& l : _accepted_licenses)
         std::fprintf(f, "accepted_license=%s\n", l.c_str());
     std::fclose(f);
@@ -171,6 +194,15 @@ void GuiApp::append_logs() {
     for (auto& s : _colmap.drain_log()) log(s);
     for (auto& s : _sfm.drain_log()) log(s);
     for (auto& s : _download.drain_log()) log(s);
+    for (auto& s : _font_download.drain_log()) log(s);
+    // A finished font download is the one thing besides a language switch
+    // that changes what the atlas should hold; GuiMain rebuilds it between
+    // frames.
+    if (_font_fetching &&
+        _font_download.state() == FileDownload::State::Done) {
+        _font_fetching = nullptr;
+        _fonts.invalidate();
+    }
 }
 
 
@@ -346,15 +378,15 @@ void GuiApp::handle_drop(const std::vector<std::string>& paths) {
         const fs::path p(path);
         if (fs::is_directory(p, ec)) {
             if (folder_has_images(path)) sources.push_back(path);
-            else log("Dropped folder contains no dataset or images: " + path);
+            else log(i18n::format(dmsg::log_drop_no_images, {path}));
         } else if (fs::is_regular_file(p, ec)) {
             if (is_video_path(path)) sources.push_back(path);
-            else log("Unsupported dropped file: " + path);
+            else log(i18n::format(dmsg::log_drop_unsupported, {path}));
         }
     }
     if (sources.empty()) return;
     if (training_busy()) {
-        log("Dropped input ignored: stop training first");
+        log(dmsg::log_drop_while_training.get());
         return;
     }
     // Dropping onto the dataset screen adds to what is already listed there;
@@ -437,8 +469,8 @@ void GuiApp::refresh_sources() {
         for (const PrepInput& s : _sources)
             still_here = still_here || s.path == _mask.clicks_source;
         if (!still_here) {
-            log("Clicked objects dropped: " + _mask.clicks_source +
-                ", the input they were drawn on, is no longer in the list.");
+            log(i18n::format(dmsg::log_clicks_dropped_input_gone,
+                             {_mask.clicks_source}));
             _mask.clicks.clear();
             _mask.clicks_source.clear();
             _mask.object_count = 1;
@@ -545,12 +577,9 @@ void GuiApp::add_sources(const std::vector<std::string>& paths, bool replace) {
     for (const std::string& path : inputs) _sources.push_back(make_source(path));
     for (const std::string& masks : mask_folders) {
         if (attach_mask_folder(_sources, masks))
-            log("Using " + masks + " as the masks for the images beside it.");
+            log(i18n::format(dmsg::log_masks_attached, {masks}));
         else
-            log("Ignored " + masks +
-                ": that is a folder of masks, and the images they belong to "
-                "were not picked. Add the images folder -- its masks are found "
-                "on their own.");
+            log(i18n::format(dmsg::log_masks_orphaned, {masks}));
     }
     if (_sources.empty()) return;
 
@@ -636,7 +665,7 @@ void GuiApp::frame() {
         !ImGui::IsAnyItemActive()) {
         _parse_dirty = false;
         if (!_cfg.data.empty()) {
-            log("Dataset settings changed; reloading dataset");
+            log(dmsg::log_dataset_settings_changed.get());
             _viewport.detach();
             _runner.load_dataset(_cfg, _preset);
         }
@@ -678,38 +707,81 @@ void GuiApp::frame() {
 
 void GuiApp::draw_menu_bar() {
     if (!ImGui::BeginMenuBar()) return;
-    if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("Open Dataset Folder...")) {
+    if (ui::BeginMenu(msg::menu_file)) {
+        if (ui::MenuItem(msg::menu_open_dataset)) {
             _pick = PickAction::OpenDataset;
-            _dialog.open("Open Dataset Folder", FileDialog::Mode::Folder);
+            _dialog.open(msg::menu_open_dataset.get(), FileDialog::Mode::Folder);
         }
-        if (ImGui::MenuItem("New Dataset from Photos...")) {
+        if (ui::MenuItem(msg::menu_new_from_photos)) {
             _pick = PickAction::SourceImages;
-            _dialog.open("Select Photo Folder", FileDialog::Mode::Folder);
+            _dialog.open(msg::pick_photo_folder.get(), FileDialog::Mode::Folder);
         }
-        if (ImGui::MenuItem("New Dataset from Video...")) {
+        if (ui::MenuItem(msg::menu_new_from_video)) {
             _pick = PickAction::SourceVideo;
-            _dialog.open("Select Videos", FileDialog::Mode::File,
+            _dialog.open(msg::pick_videos.get(), FileDialog::Mode::File,
                          video_dialog_filters(), "", /*multi_select=*/true);
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Quit")) request_close();
+        if (ui::MenuItem(msg::menu_quit)) request_close();
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("View")) {
-        ImGui::MenuItem("Show Log Panel", nullptr, &_show_log);
+    if (ui::BeginMenu(msg::menu_view)) {
+        ui::MenuItem(msg::menu_show_log, nullptr, &_show_log);
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Help")) {
-        if (ImGui::BeginMenu("About")) {
-            ImGui::TextUnformatted("Spirula Studio");
-            ImGui::TextDisabled("Trains 3D Gaussian Splatting models.");
-            ImGui::TextDisabled("github.com/harry7557558/spirulae-splat");
+    draw_language_menu();
+    if (ui::BeginMenu(msg::menu_help)) {
+        if (ui::BeginMenu(msg::menu_about)) {
+            ui::Text(spirula::i18n::msg::brand::product);
+            ui::TextDisabled(spirula::i18n::msg::brand::about_line);
+            ui::TextDisabledRaw("github.com/harry7557558/spirulae-splat");
             ImGui::EndMenu();
         }
         ImGui::EndMenu();
     }
     ImGui::EndMenuBar();
+}
+
+// The picker, plus the one thing that can go wrong with it: a language whose
+// script this installation has no font for. Offering the download here, at the
+// moment the user picks the language, is the only place it makes sense -- and
+// the alternative is a menu that silently turns the whole UI into boxes.
+void GuiApp::draw_language_menu() {
+    if (!ui::BeginMenu(msg::menu_language)) return;
+
+    const i18n::Lang before = i18n::current();
+    for (unsigned i = 0; i < i18n::kLangCount; i++) {
+        const i18n::Lang l = i18n::Lang(i);
+        // Native names are never translated -- a user looking for their own
+        // language is looking for the word they call it by.
+        if (ui::SelectableRaw(i18n::native_name(l), l == before) && l != before) {
+            i18n::set_current(l);
+            save_settings();
+        }
+    }
+
+    if (const CjkFace* f = _fonts.missing_face()) {
+        ImGui::Separator();
+        ImGui::PushTextWrapPos(360.0f);
+        ui::TextColoredWrapped(kWarn, msg::font_needed,
+                               {f->label, human_bytes(f->bytes)});
+        ImGui::PopTextWrapPos();
+        if (!FontSet::fetch_enabled()) {
+            ui::TextDisabled(msg::font_no_fetch);
+        } else if (_font_download.state() == FileDownload::State::Running) {
+            ui::ProgressBar(std::max(_font_download.progress(), 0.0f),
+                            ImVec2(340, 0), msg::font_downloading);
+        } else {
+            if (ui::Button(msg::font_download, ImVec2(340, 0))) {
+                _font_fetching = f;
+                _font_download.start(f->url, cjk_face_download_path(*f), f->bytes);
+            }
+            if (_font_download.state() == FileDownload::State::Failed)
+                ui::TextColoredWrapped(kErr, msg::font_failed,
+                                       {_font_download.status()});
+        }
+    }
+    ImGui::EndMenu();
 }
 
 
@@ -724,57 +796,48 @@ void GuiApp::draw_home() {
     ImGui::Dummy(ImVec2(0, 40));
 
     ImGui::SetWindowFontScale(1.7f);
-    ImGui::TextUnformatted("Spirula Studio");
+    ui::Text(spirula::i18n::msg::brand::product);
     ImGui::SetWindowFontScale(1.0f);
-    ImGui::TextDisabled("Reconstruct 3D scenes from photos with Gaussian splatting.");
+    ui::TextDisabled(spirula::i18n::msg::brand::tagline);
     ImGui::Dummy(ImVec2(0, 24));
 
     // A session (possibly still training) exists -- offer the way back.
     if (_runner.phase() != TrainRunner::Phase::Idle) {
-        if (ImGui::Button(training_busy() ? "Back to Training"
-                                          : "Back to Trainer", ImVec2(-1, 42)))
+        if (ui::Button(training_busy() ? msg::home_back_to_training
+                                       : msg::home_back_to_trainer,
+                       ImVec2(-1, 42)))
             _screen = Screen::Train;
         ImGui::Dummy(ImVec2(0, 10));
     }
 
-    if (ImGui::Button("Open a Dataset...", ImVec2(-1, 42))) {
+    if (ui::Button(msg::home_open_dataset, ImVec2(-1, 42))) {
         _pick = PickAction::OpenDataset;
-        _dialog.open("Open Dataset Folder", FileDialog::Mode::Folder);
+        _dialog.open(msg::menu_open_dataset.get(), FileDialog::Mode::Folder);
     }
-    help_tooltip_on_hover(
-        "A folder containing an already-processed dataset: COLMAP "
-        "(sparse/0), Nerfstudio (transforms.json), or Metashape exports. "
-        "The format is detected automatically.");
+    ui::help_on_hover(msg::home_open_dataset_help);
 
-    if (ImGui::Button("Create Dataset from Photos...", ImVec2(-1, 42))) {
+    if (ui::Button(msg::home_from_photos, ImVec2(-1, 42))) {
         _pick = PickAction::SourceImages;
-        _dialog.open("Select Photo Folder", FileDialog::Mode::Folder);
+        _dialog.open(msg::pick_photo_folder.get(), FileDialog::Mode::Folder);
     }
-    help_tooltip_on_hover(
-        "Pick a folder of overlapping photos of a scene or object "
-        "(subfolders are included). The camera positions are worked out for "
-        "you and the result opens straight in the trainer.");
+    ui::help_on_hover(msg::home_from_photos_help);
 
-    if (ImGui::Button("Create Dataset from Video...", ImVec2(-1, 42))) {
+    if (ui::Button(msg::home_from_video, ImVec2(-1, 42))) {
         _pick = PickAction::SourceVideo;
-        _dialog.open("Select Videos", FileDialog::Mode::File,
+        _dialog.open(msg::pick_videos.get(), FileDialog::Mode::File,
                      video_dialog_filters(), "", /*multi_select=*/true);
     }
-    help_tooltip_on_hover(
-        "Pick a video walking around a scene or object. The least blurry "
-        "frames are pulled out of it, then the camera positions are worked "
-        "out from those. Several clips of one scene can be picked at once -- "
-        "they reconstruct together, one camera each.");
+    ui::help_on_hover(msg::home_from_video_help);
     ImGui::Spacing();
-    ImGui::TextDisabled("...or drop a dataset folder, photo folders, or "
-                        "video files anywhere in this window");
+    ui::TextDisabled(msg::home_drop_hint);
 
     if (!_recents.empty()) {
         ImGui::Dummy(ImVec2(0, 18));
-        ImGui::SeparatorText("Recent");
+        ui::SeparatorText(msg::home_recent);
         for (size_t i = 0; i < _recents.size(); i++) {
             ImGui::PushID((int)i);
-            if (ImGui::Selectable(_recents[i].c_str()))
+            // A path is a path in every language.
+            if (ui::SelectableRaw(_recents[i]))
                 request_open_dataset(_recents[i]);
             ImGui::PopID();
         }
@@ -783,10 +846,7 @@ void GuiApp::draw_home() {
     ImGui::Dummy(ImVec2(0, 18));
     // Only worth saying when there is genuinely nothing that can do the job.
     if (!builtin_sfm_available() && !colmap_available())
-        ImGui::TextColored(kDim,
-                           "note: neither the built-in reconstruction nor "
-                           "COLMAP was found, so datasets cannot be created "
-                           "here (training an existing one still works).");
+        ui::TextColored(kDim, msg::home_no_engine);
 
     ImGui::EndChild();
 }
@@ -912,7 +972,7 @@ void GuiApp::draw_dataset_source() {
         // Room for Browse + Remove + where the frames go, which is longer than
         // any other row on the screen.
         ImGui::SetNextItemWidth(-380);
-        if (ImGui::InputText("##in", &s.path)) {
+        if (ui::InputTextRaw("##in", &s.path)) {
             std::error_code ec;
             s.is_video = !fs::is_directory(s.path, ec) && is_video_path(s.path);
             edited = true;
@@ -924,31 +984,37 @@ void GuiApp::draw_dataset_source() {
             edited = true;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Browse...")) {
+        if (ui::Button(dmsg::browse)) {
             _pick = PickAction::SourceReplace;
             _pick_source = (int)i;
             if (s.is_video)
-                _dialog.open("Select Video File", FileDialog::Mode::File,
+                _dialog.open(msg::pick_video_file.get(), FileDialog::Mode::File,
                              video_dialog_filters());
             else
-                _dialog.open("Select Photo Folder", FileDialog::Mode::Folder);
+                _dialog.open(msg::pick_photo_folder.get(), FileDialog::Mode::Folder);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Remove")) remove = (int)i;
+        if (ui::Button(dmsg::remove)) remove = (int)i;
         ImGui::SameLine();
         // What this input is, and -- the part worth seeing before pressing the
-        // button -- whether masks were found for it.
-        const char* kind = s.is_video ? "video" : "photos";
-        const char* with = s.mask_dir.empty() ? "" : " + masks";
-        if (_sources.size() > 1)
-            ImGui::TextDisabled("%s%s -> images/%s", kind, with, s.subdir.c_str());
-        else
-            ImGui::Text("%s%s", s.is_video ? "video file" : "photo folder", with);
-        if (!s.mask_dir.empty() && ImGui::IsItemHovered())
-            ImGui::SetTooltip("Masks already made for these images:\n%s\n\n"
-                              "They are used as they are -- nothing is "
-                              "segmented for this input.",
-                              s.mask_dir.c_str());
+        // button -- whether masks were found for it. Four whole messages
+        // rather than a kind + a "+ masks" tail: the two do not compose in
+        // that order in every language.
+        const bool masked = !s.mask_dir.empty();
+        if (_sources.size() > 1) {
+            const Msg& row = s.is_video
+                ? (masked ? dmsg::row_video_masks_to : dmsg::row_video_to)
+                : (masked ? dmsg::row_photos_masks_to : dmsg::row_photos_to);
+            ui::TextDisabled(row, {s.subdir});
+        } else {
+            ui::Text(s.is_video
+                         ? (masked ? dmsg::kind_video_file_masks
+                                   : dmsg::kind_video_file)
+                         : (masked ? dmsg::kind_photo_folder_masks
+                                   : dmsg::kind_photo_folder));
+        }
+        if (masked && ImGui::IsItemHovered())
+            ui::SetTooltip(dmsg::existing_masks_tooltip, {s.mask_dir});
         ImGui::PopID();
     }
     if (remove >= 0) {
@@ -957,39 +1023,36 @@ void GuiApp::draw_dataset_source() {
     }
     if (edited) refresh_sources();
 
-    if (ImGui::Button("Add video...")) {
+    if (ui::Button(dmsg::add_video)) {
         _pick = PickAction::SourceVideo;
-        _dialog.open("Select Video File", FileDialog::Mode::File,
+        _dialog.open(msg::pick_video_file.get(), FileDialog::Mode::File,
                      video_dialog_filters(), "", /*multi_select=*/true);
     }
-    help_tooltip_on_hover(
-        "Add another clip to this dataset. Several videos reconstruct together "
-        "as one scene: each gets its own folder of frames, and its own camera, "
-        "so they may come from different lenses. Click several files in the "
-        "dialog to take them all, or drop them onto this window.");
+    ui::help_on_hover(dmsg::add_video_help);
     ImGui::SameLine();
-    if (ImGui::Button("Add photos...")) {
+    if (ui::Button(dmsg::add_photos)) {
         _pick = PickAction::SourceImages;
-        _dialog.open("Select Photo Folder", FileDialog::Mode::Folder);
+        _dialog.open(msg::pick_photo_folder.get(), FileDialog::Mode::Folder);
     }
-    help_tooltip_on_hover(
-        "Add a folder of photos. On its own it is read where it is; alongside "
-        "another input its images are linked into the dataset, because the "
-        "reconstruction reads one folder tree.");
+    ui::help_on_hover(dmsg::add_photos_help);
     if (_sources.empty()) {
         ImGui::SameLine();
-        ImGui::TextDisabled("no input picked yet");
+        ui::TextDisabled(dmsg::no_input_yet);
     }
 
     ImGui::SetNextItemWidth(-220);
-    ImGui::InputText("##ws", &_workspace);
+    ui::InputTextRaw("##ws", &_workspace);
     ImGui::SameLine();
-    if (ImGui::Button("Browse...##ws")) {
+    // Two "Browse..." buttons in one scope: the message supplies the ID, so
+    // they need distinguishing exactly as two identical literals would.
+    ImGui::PushID("ws");
+    if (ui::Button(dmsg::browse)) {
         _pick = PickAction::Workspace;
-        _dialog.open("Select Output Folder", FileDialog::Mode::Folder);
+        _dialog.open(msg::pick_output_folder.get(), FileDialog::Mode::Folder);
     }
+    ImGui::PopID();
     ImGui::SameLine();
-    ImGui::TextUnformatted("output dataset folder");
+    ui::Text(dmsg::output_folder);
 
     // What is in there already, split into what a run can pick up and what it
     // would write over. The output folder is often the input folder -- that is
@@ -997,25 +1060,13 @@ void GuiApp::draw_dataset_source() {
     // not count as either (probe_workspace).
     const WorkspaceState prior = probe_workspace(_workspace, _sources);
     if (prior.resumable()) {
-        ImGui::Checkbox("Resume previous run", &_resume);
-        help_tooltip_on_hover(
-            "This folder holds a previous (possibly interrupted) run. Checked, "
-            "the finished parts are reused -- extracted frames, masks, features "
-            "and matches -- and only what is missing runs. Unchecked, a folder "
-            "with none of that is required; nothing is ever deleted "
-            "automatically.");
+        ui::Checkbox(dmsg::resume_previous, &_resume);
+        ui::help_on_hover(dmsg::resume_previous_help);
         ImGui::SameLine();
-        ImGui::TextDisabled("(unfinished run detected in this folder)");
+        ui::TextDisabled(dmsg::unfinished_run_detected);
     }
-    if (prior.model) {
-        ImGui::PushTextWrapPos();
-        ImGui::TextColored(kWarn,
-                           "This folder already holds a reconstruction "
-                           "(sparse/). Creating the dataset writes a new one "
-                           "over it -- point the output somewhere else to keep "
-                           "the old one.");
-        ImGui::PopTextWrapPos();
-    }
+    if (prior.model)
+        ui::TextColoredWrapped(kWarn, dmsg::would_overwrite_model);
 }
 
 // ---------------------------------------------------------------------------
@@ -1027,22 +1078,17 @@ void GuiApp::draw_dataset_basics() {
 
     // Quality means the same thing to both engines even though it moves
     // different knobs, so it is one control.
-    const char* qualities_sfm[] = {"Fast", "Balanced", "High (recommended)",
-                                   "Maximum"};
-    const char* qualities_colmap[] = {"Fast", "Balanced", "High quality"};
     ImGui::SetNextItemWidth(220);
     if (builtin) {
-        ImGui::Combo("Quality", &_sfm_job.quality, qualities_sfm, 4);
-        help_tooltip_on_hover(
-            "Working resolution, how many features are found per image, and "
-            "how many image pairs are compared. Higher finds more cameras in "
-            "difficult scenes and takes longer -- roughly quadratically.");
+        ui::Combo(dmsg::quality, &_sfm_job.quality,
+                  {&dmsg::quality_fast, &dmsg::quality_balanced,
+                   &dmsg::quality_high_recommended, &dmsg::quality_maximum});
+        ui::help_on_hover(dmsg::quality_help_builtin);
     } else {
-        ImGui::Combo("Quality", &_colmap_job.quality, qualities_colmap, 3);
-        help_tooltip_on_hover(
-            "Feature count used for matching (4k / 8k / 16k). Higher finds "
-            "more cameras in difficult scenes but matching is O(n^2) in "
-            "feature count.");
+        ui::Combo(dmsg::quality, &_colmap_job.quality,
+                  {&dmsg::quality_fast, &dmsg::quality_balanced,
+                   &dmsg::quality_high});
+        ui::help_on_hover(dmsg::quality_help_colmap);
     }
 
     // Lens model. The two engines spell the models differently; the labels
@@ -1062,77 +1108,53 @@ void GuiApp::draw_dataset_basics() {
             int idx = 0;
             for (int i = 0; i < kNumSfmCameraModels; i++)
                 if (model == kSfmCameraModels[i]) idx = i;
-            if (ImGui::Combo("Camera / lens", &idx, kSfmCameraModelLabels,
-                             kNumSfmCameraModels))
+            // Lens model names ("OPENCV_FISHEYE") are the reconstruction's own
+            // vocabulary and are not translated.
+            if (ui::ComboRaw(ui::detail::label(dmsg::camera_lens), &idx,
+                             kSfmCameraModelLabels, kNumSfmCameraModels))
                 model = kSfmCameraModels[idx];
         } else {
             int idx = 0;
             for (int i = 0; i < kNumColmapCameraModels; i++)
                 if (_colmap_job.camera_model == kColmapCameraModels[i]) idx = i;
-            if (ImGui::Combo("Camera / lens", &idx, kColmapCameraModels,
-                             kNumColmapCameraModels))
+            if (ui::ComboRaw(ui::detail::label(dmsg::camera_lens), &idx,
+                             kColmapCameraModels, kNumColmapCameraModels))
                 _colmap_job.camera_model = kColmapCameraModels[idx];
         }
-        help_tooltip_on_hover(
-            "The lens distortion the reconstruction fits. OpenCV suits nearly "
-            "every phone and camera. Pick a fisheye model for an action camera "
-            "or a 360 rig -- a fisheye reconstructed as a normal lens comes out "
-            "badly, and nothing detects that for you. Pinhole is only for "
-            "images that are already undistorted.");
-        if (!builtin && _sources.size() > 1) {
-            ImGui::PushTextWrapPos();
-            ImGui::TextColored(kWarn,
-                               "COLMAP fits this one lens model to every input. "
-                               "Switch to the built-in reconstruction to give "
-                               "each input its own.");
-            ImGui::PopTextWrapPos();
-        }
+        ui::help_on_hover(dmsg::camera_lens_help);
+        if (!builtin && _sources.size() > 1)
+            ui::TextColoredWrapped(kWarn, dmsg::colmap_one_lens_warning);
     } else {
         draw_source_cameras();
     }
 
-    const char* cam_modes[] = {"one shared camera", "one camera per folder",
-                               "one camera per image"};
     ImGui::SetNextItemWidth(220);
-    if (builtin) ImGui::Combo("Camera sharing", &_sfm_job.camera_mode, cam_modes, 3);
-    else         ImGui::Combo("Camera sharing", &_colmap_job.camera_mode, cam_modes, 3);
-    help_tooltip_on_hover(
-        "How lens parameters are shared. \"Shared\" when everything was shot "
-        "with one camera at one zoom. \"Per folder\" for a multi-camera rig "
-        "organized one subfolder per camera -- a multi-track 360 video "
-        "switches to this on its own. \"Per image\" when zoom or focus "
-        "changed between shots.");
+    ui::Combo(dmsg::camera_sharing,
+              builtin ? &_sfm_job.camera_mode : &_colmap_job.camera_mode,
+              {&dmsg::camera_sharing_one, &dmsg::camera_sharing_folder,
+               &dmsg::camera_sharing_image});
+    ui::help_on_hover(dmsg::camera_sharing_help);
 
     if (builtin) {
-        const char* pairs[] = {"Automatic", "Every pair (best, slowest)",
-                               "Neighbouring frames (video)",
-                               "GPU pre-selection (large captures)"};
         ImGui::SetNextItemWidth(220);
-        ImGui::Combo("Image matching", &_sfm_job.pairs, pairs, 4);
-        help_tooltip_on_hover(
-            "Which pairs of images are compared. Automatic is right almost "
-            "always: neighbouring frames for video, every pair below a hundred "
-            "images, GPU pre-selection above that.");
+        ui::Combo(dmsg::image_matching, &_sfm_job.pairs,
+                  {&dmsg::matching_automatic, &dmsg::matching_every_pair,
+                   &dmsg::matching_neighbours, &dmsg::matching_gpu_preselect});
+        ui::help_on_hover(dmsg::matching_help_builtin);
     } else {
-        const char* matchers[] = {"Exhaustive", "Sequential", "Vocabulary tree"};
         int matcher_idx = _colmap_job.matcher - 1;
         if (matcher_idx < 0 || matcher_idx > 2)
             matcher_idx = (!_sources.empty() && _sources[0].is_video) ? 1 : 0;
         ImGui::SetNextItemWidth(220);
-        ImGui::Combo("Image matching", &matcher_idx, matchers, 3);
+        ui::Combo(dmsg::image_matching, &matcher_idx,
+                  {&dmsg::matching_exhaustive, &dmsg::matching_sequential,
+                   &dmsg::matching_vocab_tree});
         _colmap_job.matcher = matcher_idx + 1;
-        help_tooltip_on_hover(
-            "How image pairs are matched. Exhaustive tries every pair (best "
-            "quality, fine up to a few hundred images). Sequential matches "
-            "temporal neighbors (video). Vocabulary tree scales to thousands "
-            "of unordered photos.");
+        ui::help_on_hover(dmsg::matching_help_colmap);
         if (_colmap_job.matcher == 2) {
             ImGui::Indent();
-            ImGui::Checkbox("Loop closure detection", &_colmap_job.seq_loop_closure);
-            help_tooltip_on_hover(
-                "Retrieve visually similar non-neighbour frames through the "
-                "vocabulary tree and match them, closing loops when the camera "
-                "revisits a spot. SIFT features only.");
+            ui::Checkbox(dmsg::loop_closure, &_colmap_job.seq_loop_closure);
+            ui::help_on_hover(dmsg::loop_closure_help_colmap);
             ImGui::Unindent();
         }
     }
@@ -1141,21 +1163,19 @@ void GuiApp::draw_dataset_basics() {
     for (const PrepInput& s : _sources) any_video = any_video || s.is_video;
     if (any_video) {
         ImGui::SetNextItemWidth(220);
-        ImGui::InputFloat("Frames per second", &_sfm_job.prep.video_fps, 0, 0, "%.2g");
-        help_tooltip_on_hover(
-            "How many frames to keep per second of video. 1-3 is right for a "
-            "slow walkthrough; more only helps if the camera moved fast. "
-            "Applies to every video in the list.");
+        ui::InputFloat(dmsg::frames_per_second, &_sfm_job.prep.video_fps,
+                       0, 0, "%.2g");
+        ui::help_on_hover(dmsg::frames_per_second_help);
         ImGui::SetNextItemWidth(220);
-        ImGui::SliderInt("Sharpness window", &_sfm_job.prep.sharp_window, 1, 8);
-        help_tooltip_on_hover(
-            "Look at this many candidate frames for each one kept and keep the "
-            "least motion-blurred. 1 turns the selection off.");
+        ui::SliderInt(dmsg::sharpness_window, &_sfm_job.prep.sharp_window, 1, 8);
+        ui::help_on_hover(dmsg::sharpness_window_help);
         if (!backends().builtin_video) {
+            // What the note says is a build-configuration diagnostic and
+            // stays English; the sentence around it does not.
             ImGui::PushTextWrapPos();
-            ImGui::TextDisabled("Note: %s.", backends().video_note.c_str());
+            ui::TextDisabled(dmsg::build_note, {backends().video_note});
             ImGui::PopTextWrapPos();
-            help_tooltip_on_hover(backends().video_reason.c_str());
+            ui::help_on_hover_raw(backends().video_reason.c_str());
         }
     }
 }
@@ -1166,36 +1186,25 @@ void GuiApp::draw_dataset_basics() {
 // a 360 clip and a phone clip reconstruct as one scene without either being
 // fitted with the other's model.
 void GuiApp::draw_source_cameras() {
-    ImGui::TextUnformatted("Camera / lens per input");
-    help_tooltip_on_hover(
-        "Each input's images go into their own folder and get their own "
-        "camera, so each can have its own lens model and starting focal "
-        "length. A 360 file's two lens tracks share the row -- they are the "
-        "same lens twice -- but are still solved as two cameras.");
+    ui::Text(dmsg::camera_lens_per_input);
+    ui::help_on_hover(dmsg::camera_lens_per_input_help);
     ImGui::Indent();
     for (size_t i = 0; i < _sources.size(); i++) {
         PrepInput& s = _sources[i];
         ImGui::PushID((int)i);
-        ImGui::TextUnformatted(s.subdir.c_str());
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", s.path.c_str());
+        ui::TextRaw(s.subdir);
+        if (ImGui::IsItemHovered()) ui::SetTooltipRaw(s.path);
         ImGui::SameLine(200);
         ImGui::SetNextItemWidth(220);
         int idx = 0;
         for (int m = 0; m < kNumSfmCameraModels; m++)
             if (s.camera_model == kSfmCameraModels[m]) idx = m;
-        if (ImGui::Combo("##lens", &idx, kSfmCameraModelLabels, kNumSfmCameraModels))
+        if (ui::ComboRaw("##lens", &idx, kSfmCameraModelLabels, kNumSfmCameraModels))
             s.camera_model = kSfmCameraModels[idx];
         ImGui::SameLine();
         ImGui::SetNextItemWidth(90);
-        ImGui::InputFloat("x width", &s.focal_factor, 0, 0, "%.4g");
-        help_tooltip_on_hover(
-            "Starting focal length for this input, as a fraction of its image "
-            "width (fx = fy = factor x width) -- the width is only known once "
-            "the frames exist, which is why it is not in pixels here. 0 reads "
-            "EXIF and falls back to a guess from the image size. Worth setting "
-            "for a fisheye, where a bad guess can stop the reconstruction from "
-            "starting at all; an Insta360 X5 is ~0.269, which .insv files are "
-            "filled in with.");
+        ui::InputFloat(dmsg::focal_x_width, &s.focal_factor, 0, 0, "%.4g");
+        ui::help_on_hover(dmsg::focal_x_width_help);
         ImGui::PopID();
     }
     ImGui::Unindent();
@@ -1214,25 +1223,15 @@ void GuiApp::draw_masking_options() {
     for (const PrepInput& s : _sources)
         if (!s.mask_dir.empty()) with_masks++;
     if (with_masks > 0) {
-        ImGui::PushTextWrapPos();
         if (with_masks == (int)_sources.size())
-            ImGui::TextColored(kOk, "Masks were found beside the images; they "
-                                    "are used as they are.");
+            ui::TextColoredWrapped(kOk, dmsg::masks_found_all);
         else
-            ImGui::TextColored(kOk,
-                               "%d of the %d inputs came with masks; those are "
-                               "used as they are.",
-                               with_masks, (int)_sources.size());
-        ImGui::PopTextWrapPos();
+            ui::TextColoredWrapped(kOk, dmsg::masks_found_some,
+                                   {with_masks, (int)_sources.size()});
     }
 
-    ImGui::Checkbox("Remove moving or unwanted objects", &_mask_enable);
-    help_tooltip_on_hover(
-        "Describe what should not be part of the scene -- people walking "
-        "through, parked cars, your own shadow -- and it is cut out of both "
-        "the camera solve and the training. This is the single biggest "
-        "quality win on a capture with anything moving in it. Inputs that "
-        "arrived with masks of their own keep them; this is for the rest.");
+    ui::Checkbox(dmsg::mask_enable, &_mask_enable);
+    ui::help_on_hover(dmsg::mask_enable_help);
     if (!_mask_enable) return;
 
     ImGui::Indent();
@@ -1247,26 +1246,27 @@ void GuiApp::draw_masking_options() {
         for (size_t i = 0; i < catalog.size(); i++)
             if (_model_id == catalog[i].id) model_idx = (int)i;
         ImGui::SetNextItemWidth(260);
-        if (ImGui::BeginCombo("Model", catalog[model_idx].label)) {
+        if (ui::BeginCombo(dmsg::mask_model, catalog[model_idx].label->get())) {
             for (size_t i = 0; i < catalog.size(); i++) {
                 const bool cached = model_is_cached(catalog[i]);
-                std::string label = catalog[i].label;
-                if (!cached) label += "  (download)";
-                if (ImGui::Selectable(label.c_str(), (int)i == model_idx)) {
+                const std::string label =
+                    cached ? std::string(catalog[i].label->get())
+                           : i18n::format(dmsg::mask_model_needs_download,
+                                          {catalog[i].label->get()});
+                if (ui::SelectableRaw(label, (int)i == model_idx)) {
                     _model_id = catalog[i].id;
                     save_settings();
                 }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", catalog[i].blurb);
+                if (ImGui::IsItemHovered()) ui::SetTooltip(*catalog[i].blurb);
             }
             ImGui::EndCombo();
         }
         entry = find_model(_model_id);
-        if (entry) ImGui::TextDisabled("%s", entry->blurb);
+        if (entry) ui::TextDisabled(*entry->blurb);
 
         const bool downloading = _download.state() == ModelDownload::State::Running;
         if (entry && !model_is_cached(*entry) && !downloading) {
-            if (ImGui::Button("Get the model")) {
+            if (ui::Button(dmsg::mask_get_model)) {
                 // Consent first, every time the family has not been agreed to.
                 if (license_accepted(entry->family)) _download.start(*entry);
                 else {
@@ -1275,18 +1275,19 @@ void GuiApp::draw_masking_options() {
                 }
             }
             ImGui::SameLine();
-            ImGui::TextDisabled("one-time download, kept for next time");
+            ui::TextDisabled(dmsg::mask_one_time_download);
         } else if (downloading) {
-            ImGui::ProgressBar(std::max(_download.progress(), 0.0f),
+            // The overlay is a byte count from curl, not a sentence.
+            ui::ProgressBarRaw(std::max(_download.progress(), 0.0f),
                                ImVec2(260, 0), _download.status().c_str());
             ImGui::SameLine();
-            if (ImGui::Button("Stop")) _download.cancel();
+            if (ui::Button(dmsg::stop)) _download.cancel();
         } else if (entry) {
-            ImGui::TextColored(kOk, "Model ready.");
+            ui::TextColored(kOk, dmsg::mask_model_ready);
             ImGui::SameLine();
-            if (ImGui::Button("Try the mask...")) {
+            if (ui::Button(dmsg::mask_try)) {
                 if (_sources.empty()) {
-                    log("Pick the photos or video first.");
+                    log(dmsg::mask_pick_input_first.get());
                 } else {
                     const PrepInput& s = _sources[(size_t)_mask_preview_input];
                     // The clicks made from here are prompts for THIS input;
@@ -1296,9 +1297,7 @@ void GuiApp::draw_masking_options() {
                     _segment.open(s.path, s.is_video, selected_model_path());
                 }
             }
-            help_tooltip_on_hover(
-                "Run the prompt on one real frame and see exactly what would "
-                "be cut out, before committing to the whole capture.");
+            ui::help_on_hover(dmsg::mask_try_help);
             // Which input it opens, once there is a choice. Clicks belong to
             // the frames of one capture, so this also decides which input they
             // prompt -- and switching after clicking would silently reattribute
@@ -1309,101 +1308,72 @@ void GuiApp::draw_masking_options() {
                 std::vector<const char*> names;
                 for (const PrepInput& s : _sources) names.push_back(s.subdir.c_str());
                 int pick = _mask_preview_input;
-                if (ImGui::Combo("on input", &pick, names.data(), (int)names.size()) &&
+                if (ui::ComboRaw(ui::detail::label(dmsg::mask_on_input), &pick,
+                                 names.data(), (int)names.size()) &&
                     pick != _mask_preview_input) {
                     if (!_mask.clicks.empty() &&
                         _mask.clicks_source != _sources[(size_t)pick].path) {
-                        log("Clicked objects dropped: they were drawn on " +
-                            _mask.clicks_source +
-                            ", which is not the input being previewed now.");
+                        log(i18n::format(dmsg::log_clicks_dropped_switched,
+                                         {_mask.clicks_source}));
                         _mask.clicks.clear();
                         _mask.object_count = 1;
                         _mask.current_object = 0;
                     }
                     _mask_preview_input = pick;
                 }
-                help_tooltip_on_hover(
-                    "Which input \"Try the mask\" runs on. The text prompt "
-                    "applies to every input; clicked objects only to this one.");
+                ui::help_on_hover(dmsg::mask_on_input_help);
             }
         }
-        if (_download.state() == ModelDownload::State::Failed) {
-            ImGui::PushTextWrapPos();
-            ImGui::TextColored(kErr, "%s", _download.status().c_str());
-            ImGui::PopTextWrapPos();
-        }
+        if (_download.state() == ModelDownload::State::Failed)
+            ui::TextColoredWrappedRaw(kErr, _download.status());
         if (entry && !entry->text_prompts && _mask.clicks.empty())
-            ImGui::TextColored(kWarn,
-                               "This model has no text understanding -- use "
-                               "\"Try the mask\" and click the object instead.");
+            ui::TextColored(kWarn, dmsg::mask_no_text_prompts);
         if (!_mask.clicks.empty()) {
             int objects = 0;
             for (const MaskClick& c : _mask.clicks)
                 objects = std::max(objects, c.object + 1);
-            ImGui::Text("%d clicked object%s will be tracked through the capture.",
-                        objects, objects == 1 ? "" : "s");
+            ui::Text(dmsg::mask_clicked_objects, {objects});
             ImGui::SameLine();
-            if (ImGui::SmallButton("Forget them")) {
+            if (ui::SmallButton(dmsg::mask_forget_clicks)) {
                 _mask.clicks.clear();
                 _mask.object_count = 1;
                 _mask.current_object = 0;
             }
-            help_tooltip_on_hover(
-                "Objects you pointed at in \"Try the mask\". Each is followed "
-                "from the frame you clicked it on, using the model's video "
-                "memory, so you do not have to click every frame.");
-            if (_sources.size() > 1 && _mask.prompt.empty()) {
-                ImGui::PushTextWrapPos();
-                ImGui::TextColored(kWarn,
-                                   "They describe one frame of %s, so only that "
-                                   "input is masked. Add a text prompt to cover "
-                                   "the others.",
-                                   _mask.clicks_source.c_str());
-                ImGui::PopTextWrapPos();
-            }
+            ui::help_on_hover(dmsg::mask_forget_clicks_help);
+            if (_sources.size() > 1 && _mask.prompt.empty())
+                ui::TextColoredWrapped(kWarn, dmsg::mask_clicks_one_input_only,
+                                       {_mask.clicks_source});
         }
     } else {
-        ImGui::PushTextWrapPos();
-        ImGui::TextDisabled("%s", backends().masking_note.c_str());
-        ImGui::PopTextWrapPos();
-        help_tooltip_on_hover(backends().masking_reason.c_str());
+        ui::TextWrappedRaw(backends().masking_note);
+        ui::help_on_hover_raw(backends().masking_reason.c_str());
     }
 
     // Polarity above the two prompts, which are labelled by it -- the same
     // box means "take this out" or "this is the subject" depending on the
     // radio. Same order and same wording as the preview panel.
     int polarity = _mask.keep_subject ? 1 : 0;
-    if (ImGui::RadioButton("Remove what I name", polarity == 0)) polarity = 0;
+    if (ui::RadioButton(dmsg::mask_remove_named, polarity == 0)) polarity = 0;
     ImGui::SameLine();
-    if (ImGui::RadioButton("Keep only what I name", polarity == 1)) polarity = 1;
+    if (ui::RadioButton(dmsg::mask_keep_named, polarity == 1)) polarity = 1;
     _mask.keep_subject = polarity == 1;
-    help_tooltip_on_hover(
-        "\"Remove\" is for distractors. \"Keep only\" is for capturing a "
-        "single object, where everything around it should be ignored.");
+    ui::help_on_hover(dmsg::mask_polarity_help);
     const bool keep_subject = _mask.keep_subject;
 
     ImGui::SetNextItemWidth(320);
-    ImGui::InputTextWithHint(
-        keep_subject ? "What to keep" : "What to remove",
-        keep_subject ? "the statue; its pedestal" : "people; cars; my shadow",
+    ui::InputTextWithHint(
+        keep_subject ? dmsg::mask_what_to_keep : dmsg::mask_what_to_remove,
+        keep_subject ? dmsg::mask_hint_keep : dmsg::mask_hint_remove,
         &_mask.prompt);
-    help_tooltip_on_hover(
-        keep_subject
-            ? "Plain words, separated by semicolons. Everything NOT matching "
-              "them is cut out of the reconstruction."
-            : "Plain words, separated by semicolons. Everything matching them "
-              "is cut out of the reconstruction.");
+    ui::help_on_hover(keep_subject ? dmsg::mask_prompt_help_keep
+                                   : dmsg::mask_prompt_help_remove);
     ImGui::SetNextItemWidth(320);
-    ImGui::InputTextWithHint(
-        keep_subject ? "...but remove" : "...but keep",
-        keep_subject ? "the hand holding it" : "person in a painting",
+    ui::InputTextWithHint(
+        keep_subject ? dmsg::mask_but_remove : dmsg::mask_but_keep,
+        keep_subject ? dmsg::mask_hint_but_remove : dmsg::mask_hint_but_keep,
         &_mask.negative_prompt);
-    help_tooltip_on_hover(
-        keep_subject
-            ? "Exceptions that go even though they match the line above. "
-              "Optional."
-            : "Exceptions that stay even though they match the line above. "
-              "Optional.");
+    ui::help_on_hover(keep_subject ? dmsg::mask_negative_help_keep
+                                   : dmsg::mask_negative_help_remove);
 
     ImGui::Unindent();
 }
@@ -1413,135 +1383,82 @@ void GuiApp::draw_masking_options() {
 // ---------------------------------------------------------------------------
 
 void GuiApp::draw_sfm_advanced() {
-    if (!ImGui::CollapsingHeader("Advanced")) return;
+    if (!ui::CollapsingHeader(dmsg::section_advanced)) return;
 
-    const char* data_types[] = {"Individual photos", "Video frames",
-                                "Unordered internet collection"};
     ImGui::SetNextItemWidth(260);
-    ImGui::Combo("Capture type", &_sfm_job.data_type, data_types, 3);
-    help_tooltip_on_hover(
-        "What the input is, which sets the pairing strategy and how forgiving "
-        "the mapper is. Set from the input type when you picked it.");
+    ui::Combo(dmsg::capture_type, &_sfm_job.data_type,
+              {&dmsg::capture_photos, &dmsg::capture_video,
+               &dmsg::capture_internet});
+    ui::help_on_hover(dmsg::capture_type_help);
 
-    const char* frontends[] = {"SIFT (classic)", "ALIKED N16-rot (learned)",
-                               "ALIKED N32 (learned, wider)"};
     ImGui::SetNextItemWidth(260);
-    ImGui::Combo("Features", &_sfm_job.features, frontends, 3);
-    help_tooltip_on_hover(
-        "Which detector and descriptor. SIFT is the classic one and needs "
-        "nothing downloaded. The ALIKED options are a learned frontend: they "
-        "fetch a small checkpoint (3-4 MB) on first use, find fewer but "
-        "better-localized keypoints, and match markedly more image pairs on "
-        "hard captures. N32 samples more positions per descriptor -- slower, "
-        "slightly stronger.");
+    ui::Combo(dmsg::features, &_sfm_job.features,
+              {&dmsg::features_sift, &dmsg::features_aliked_n16,
+               &dmsg::features_aliked_n32});
+    ui::help_on_hover(dmsg::features_help);
 
     {
         // Brute force is the only option for SIFT, so say so by disabling the
         // combo rather than by letting the run fail.
         const bool learned = _sfm_job.features != 0;
-        const char* matchers[] = {"Brute force", "LightGlue (learned)"};
         ImGui::BeginDisabled(!learned);
         ImGui::SetNextItemWidth(260);
         int shown = learned ? _sfm_job.matcher : 0;
-        if (ImGui::Combo("Matcher", &shown, matchers, 2) && learned)
+        if (ui::Combo(dmsg::matcher, &shown,
+                      {&dmsg::matcher_brute_force, &dmsg::matcher_lightglue}) &&
+            learned)
             _sfm_job.matcher = shown;
         ImGui::EndDisabled();
-        help_tooltip_on_hover(
-            learned
-                ? "How descriptors are matched. LightGlue is a learned matcher: "
-                  "it finds far more correct correspondences on hard pairs, and "
-                  "costs tens of milliseconds per pair instead of a few, so it "
-                  "runs behind pair selection."
-                : "LightGlue needs the learned descriptors -- pick an ALIKED "
-                  "frontend above to enable it.");
+        ui::help_on_hover(learned ? dmsg::matcher_help
+                                  : dmsg::matcher_needs_learned);
     }
 
-    const char* mappers[] = {"Flat (one reconstruction)",
-                             "Bottom-up (atoms, merged upwards)"};
     ImGui::SetNextItemWidth(260);
-    ImGui::Combo("Mapper schedule", &_sfm_job.mapper, mappers, 2);
-    help_tooltip_on_hover(
-        "How the scene is built. Flat grows one reconstruction image by "
-        "image, and is the default for any capture. Bottom-up cuts the view "
-        "graph into small groups, reconstructs them independently and merges "
-        "upwards -- worth trying on a large capture, where the flat "
-        "schedule's whole-model passes start to dominate.");
+    ui::Combo(dmsg::mapper_schedule, &_sfm_job.mapper,
+              {&dmsg::mapper_flat, &dmsg::mapper_bottom_up});
+    ui::help_on_hover(dmsg::mapper_schedule_help);
 
     if (_sfm_job.pairs == 2) {
         ImGui::SetNextItemWidth(260);
-        ImGui::InputInt("Sequential overlap", &_sfm_job.overlap, 0, 0);
-        help_tooltip_on_hover("How many neighbouring frames each frame is "
-                              "matched against.");
+        ui::InputInt(dmsg::sequential_overlap, &_sfm_job.overlap);
+        ui::help_on_hover(dmsg::sequential_overlap_help);
     }
     // "Automatic" resolves to sequential for a short video, so offer this
     // whenever sequential can be what runs, not only when it was named.
     if (_sfm_job.pairs == 2 || (_sfm_job.pairs == 0 && _sfm_job.data_type == 1)) {
-        ImGui::Checkbox("Loop closure detection", &_sfm_job.loop_closure);
-        help_tooltip_on_hover(
-            "Sequential matching only pairs each frame with its temporal "
-            "neighbours, so a capture that walks around a subject and returns "
-            "has nothing joining the two ends -- one weak step then splits the "
-            "reconstruction into pieces. This also matches frames that look "
-            "alike wherever they fall in the video, which closes the loop. "
-            "Costs a pair-selection pass and roughly twice the matching time; "
-            "enabled by default. Under \"Automatic\" it only applies below 100 "
-            "frames -- above that, matching is content-based already.");
+        ui::Checkbox(dmsg::loop_closure, &_sfm_job.loop_closure);
+        ui::help_on_hover(dmsg::loop_closure_help_builtin);
     }
 
     ImGui::SetNextItemWidth(260);
-    ImGui::InputFloat("Initial focal length (px, 0 = auto)",
-                      &_sfm_job.init_focal_px, 0, 0, "%.4g");
-    help_tooltip_on_hover(
-        "Starting guess for the focal length, in pixels of the source image. "
-        "0 reads EXIF and falls back to a guess from the image size. Worth "
-        "setting for a fisheye, where a bad initial guess can stop the "
-        "reconstruction from starting at all.");
+    ui::InputFloat(dmsg::initial_focal_px, &_sfm_job.init_focal_px, 0, 0, "%.4g");
+    ui::help_on_hover(dmsg::initial_focal_px_help);
 
     ImGui::SetNextItemWidth(260);
-    ImGui::InputInt("Max features per image (0 = auto)",
-                    &_sfm_job.max_features, 0, 0);
-    help_tooltip_on_hover("Keypoints kept per image -- largest scales first "
-                          "for SIFT, highest detection scores for a learned "
-                          "frontend. Overrides the quality preset when "
-                          "non-zero. The two are not comparable: SIFT wants "
-                          "tens of thousands, ALIKED a few thousand.");
+    ui::InputInt(dmsg::max_features_auto, &_sfm_job.max_features);
+    ui::help_on_hover(dmsg::max_features_auto_help);
     ImGui::SetNextItemWidth(260);
-    ImGui::InputInt("Max image size (0 = auto)", &_sfm_job.max_image_size, 0, 0);
-    help_tooltip_on_hover(
-        "Longest edge the feature extractor runs on; bigger images are "
-        "downscaled first. Keypoints are still reported in the source "
-        "image's pixels.");
+    ui::InputInt(dmsg::max_image_size_auto, &_sfm_job.max_image_size);
+    ui::help_on_hover(dmsg::max_image_size_auto_help);
 
-    ImGui::Checkbox("Keep intermediate files", &_sfm_job.keep_intermediate);
-    help_tooltip_on_hover(
-        "Keep features/ and matches.bin in the output folder after a "
-        "successful run. They are large, and only useful for re-running the "
-        "mapper by hand with spirula-sfm.");
+    ui::Checkbox(dmsg::keep_intermediate, &_sfm_job.keep_intermediate);
+    ui::help_on_hover(dmsg::keep_intermediate_help);
 
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##sfmextra",
-                             "extra spirula-sfm flags, e.g. --max-error 2",
+    ui::InputTextWithHintRaw("##sfmextra", dmsg::extra_sfm_flags_hint,
                              &_sfm_job.extra_args);
-    help_tooltip_on_hover(
-        "Passed to `spirula-sfm auto` verbatim. Everything this panel does not "
-        "show is reachable here; run `spirula-sfm auto --help` for the list.");
+    ui::help_on_hover(dmsg::extra_sfm_flags_help);
 
-    ImGui::SeparatorText("Fallbacks");
+    ui::SeparatorText(dmsg::section_fallbacks);
     ImGui::BeginDisabled(!backends().builtin_video);
-    ImGui::Checkbox("Extract frames with ffmpeg", &_sfm_job.prep.force_external_decode);
+    ui::Checkbox(dmsg::use_ffmpeg, &_sfm_job.prep.force_external_decode);
     ImGui::EndDisabled();
-    help_tooltip_on_hover(
-        backends().builtin_video
-            ? "Use an external ffmpeg instead of decoding on the GPU. Worth "
-              "trying for a codec or colour transfer the driver mishandles."
-            : "This build always uses ffmpeg for video.");
+    ui::help_on_hover(backends().builtin_video ? dmsg::use_ffmpeg_help
+                                               : dmsg::use_ffmpeg_always);
     ImGui::BeginDisabled(!backends().builtin_masking);
-    ImGui::Checkbox("Mask with the external Python script",
-                    &_sfm_job.prep.force_external_masking);
+    ui::Checkbox(dmsg::use_python_masking, &_sfm_job.prep.force_external_masking);
     ImGui::EndDisabled();
-    help_tooltip_on_hover(
-        "Use scripts/mask.py through an external Python with "
-        "lang-segment-anything, instead of the built-in segmentation.");
+    ui::help_on_hover(dmsg::use_python_masking_help);
 }
 
 // ---------------------------------------------------------------------------
@@ -1549,91 +1466,60 @@ void GuiApp::draw_sfm_advanced() {
 // ---------------------------------------------------------------------------
 
 void GuiApp::draw_colmap_options() {
-    if (ImGui::CollapsingHeader("Advanced")) {
+    if (ui::CollapsingHeader(dmsg::section_advanced)) {
         bool fisheye = _colmap_job.camera_model.find("FISHEYE") != std::string::npos;
         ImGui::SetNextItemWidth(180);
-        ImGui::InputFloat("Initial focal length (x width, 0 = unknown)",
-                          &_colmap_job.init_focal_factor, 0, 0, "%.4g");
-        help_tooltip_on_hover(
-            "Seed COLMAP with fx = fy = factor * image width (principal "
-            "point centered, zero distortion) instead of its generic guess. "
-            "A known focal length stabilizes mapper initialization a lot, "
-            "especially for fisheye lenses. Insta360 X5: ~0.269 (set "
-            "automatically for .insv input).");
+        ui::InputFloat(dmsg::colmap_initial_focal,
+                       &_colmap_job.init_focal_factor, 0, 0, "%.4g");
+        ui::help_on_hover(dmsg::colmap_initial_focal_help);
         ImGui::SetNextItemWidth(280);
-        ImGui::InputTextWithHint("Initial camera params",
-                                 "fx,fy,cx,cy,... (overrides focal length)",
-                                 &_colmap_job.camera_params);
-        help_tooltip_on_hover(
-            "Raw ImageReader.camera_params for the selected camera model "
-            "(full calibration prior). Leave empty to use the focal-length "
-            "factor above, or both empty for COLMAP's default "
-            "initialization.");
+        ui::InputTextWithHint(dmsg::colmap_camera_params,
+                              dmsg::colmap_camera_params_hint,
+                              &_colmap_job.camera_params);
+        ui::help_on_hover(dmsg::colmap_camera_params_help);
         ImGui::SetNextItemWidth(180);
-        ImGui::InputInt("Max features (0 = auto)", &_colmap_job.max_num_features, 0, 0);
-        help_tooltip_on_hover("SiftExtraction / AlikedExtraction "
-                              ".max_num_features; overrides the Quality "
-                              "preset when non-zero.");
+        ui::InputInt(dmsg::colmap_max_features, &_colmap_job.max_num_features);
+        ui::help_on_hover(dmsg::colmap_max_features_help);
         ImGui::SetNextItemWidth(180);
-        ImGui::InputInt("Max image size (0 = off)", &_colmap_job.max_image_size, 0, 0);
-        help_tooltip_on_hover("FeatureExtraction.max_image_size: downscale "
-                              "images beyond this for feature extraction.");
+        ui::InputInt(dmsg::colmap_max_image_size, &_colmap_job.max_image_size);
+        ui::help_on_hover(dmsg::colmap_max_image_size_help);
         ImGui::SetNextItemWidth(180);
-        ImGui::InputInt("Sequential overlap", &_colmap_job.seq_overlap, 0, 0);
-        help_tooltip_on_hover("How many neighboring frames each frame is "
-                              "matched against (sequential matcher).");
-        ImGui::Checkbox("Quadratic overlap", &_colmap_job.seq_quadratic_overlap);
-        help_tooltip_on_hover("Additionally match frame i against frames "
-                              "i +- 2^k (sequential matcher). Helps close "
-                              "loops in longer captures; enabled by default.");
-        ImGui::Checkbox("LightGlue matching", &_colmap_job.lightglue);
-        help_tooltip_on_hover("Neural feature matcher (FeatureMatching.type "
-                              "*_LIGHTGLUE): more matches on hard pairs than "
-                              "brute-force descriptor distance. Default for "
-                              "ALIKED features; also works with SIFT.");
+        ui::InputInt(dmsg::sequential_overlap, &_colmap_job.seq_overlap);
+        ui::help_on_hover(dmsg::colmap_seq_overlap_help);
+        ui::Checkbox(dmsg::colmap_quadratic_overlap,
+                     &_colmap_job.seq_quadratic_overlap);
+        ui::help_on_hover(dmsg::colmap_quadratic_overlap_help);
+        ui::Checkbox(dmsg::colmap_lightglue, &_colmap_job.lightglue);
+        ui::help_on_hover(dmsg::colmap_lightglue_help);
         if (_colmap_job.feature_type == 0) {
-            ImGui::Checkbox("Affine SIFT + guided matching",
-                            &_colmap_job.estimate_affine_shape);
-            help_tooltip_on_hover("SiftExtraction.estimate_affine_shape + "
-                                  "FeatureMatching.guided_matching: slower but "
-                                  "more robust matching.");
+            ui::Checkbox(dmsg::colmap_affine_sift,
+                         &_colmap_job.estimate_affine_shape);
+            ui::help_on_hover(dmsg::colmap_affine_sift_help);
         }
-        const char* extra_modes[] = {"Auto", "During mapping", "Final pass only"};
         ImGui::SetNextItemWidth(180);
-        ImGui::Combo("Distortion refinement", &_colmap_job.mapper_extra_params,
-                     extra_modes, 3);
-        help_tooltip_on_hover(
-            "When distortion coefficients are optimized. \"Final pass "
-            "only\" holds them fixed during mapping "
-            "(Mapper.ba_refine_extra_params 0) -- more stable for "
-            "low-distortion perspective lenses -- and recovers them in the "
-            "final refinement pass. Auto: final-pass-only for perspective "
-            "models, during mapping for fisheye.");
+        ui::Combo(dmsg::colmap_distortion_refinement,
+                  &_colmap_job.mapper_extra_params,
+                  {&dmsg::colmap_extra_auto, &dmsg::colmap_extra_during,
+                   &dmsg::colmap_extra_final});
+        ui::help_on_hover(dmsg::colmap_distortion_refinement_help);
         ImGui::SetNextItemWidth(180);
-        ImGui::InputInt("Min matches per pair (0 = default)",
-                        &_colmap_job.min_num_matches, 0, 0);
-        help_tooltip_on_hover("Mapper.min_num_matches (default 15): image "
-                              "pairs with fewer inlier matches are ignored "
-                              "by the mapper. Raise to suppress spurious "
-                              "registrations, lower for sparse overlap.");
-        ImGui::SeparatorText("Repetitive scenes");
-        help_tooltip_on_hover(
-            "Large scenes with repeating structure (several similar rooms, "
-            "tiled facades) often weld physically different but "
-            "similar-looking parts together. These make matching and "
-            "registration stricter to suppress that; 0 = COLMAP default.");
+        ui::InputInt(dmsg::colmap_min_matches, &_colmap_job.min_num_matches);
+        ui::help_on_hover(dmsg::colmap_min_matches_help);
+
+        ui::SeparatorText(dmsg::colmap_repetitive);
+        ui::help_on_hover(dmsg::colmap_repetitive_help);
         // Preset levels filling the five fields below (editing any field
         // afterwards shows "Custom"). Stricter = fewer wrong welds but
         // fewer registered images on genuinely weak overlap.
         struct RepLevel {
-            const char* name;
+            const Msg* name;
             float ratio; int pair_in; int reg_in; float reg_ratio; float err;
         };
         static const RepLevel kRepLevels[] = {
-            {"Off (COLMAP defaults)", 0.0f,    0,   0, 0.0f,  0.0f},
-            {"Low",                   0.75f,  30,  40, 0.30f, 10.0f},
-            {"Medium",                0.70f,  60,  60, 0.40f,  8.0f},
-            {"High",                  0.62f, 100, 100, 0.50f,  6.0f},
+            {&dmsg::colmap_rep_off,    0.0f,    0,   0, 0.0f,  0.0f},
+            {&dmsg::colmap_rep_low,    0.75f,  30,  40, 0.30f, 10.0f},
+            {&dmsg::colmap_rep_medium, 0.70f,  60,  60, 0.40f,  8.0f},
+            {&dmsg::colmap_rep_high,   0.62f, 100, 100, 0.50f,  6.0f},
         };
         int rep_idx = -1;
         for (int i = 0; i < 4; i++)
@@ -1646,10 +1532,11 @@ void GuiApp::draw_colmap_options() {
                 break;
             }
         ImGui::SetNextItemWidth(180);
-        if (ImGui::BeginCombo("Repetitive level",
-                              rep_idx < 0 ? "Custom" : kRepLevels[rep_idx].name)) {
+        if (ui::BeginCombo(dmsg::colmap_repetitive_level,
+                           rep_idx < 0 ? dmsg::colmap_rep_custom.get()
+                                       : kRepLevels[rep_idx].name->get())) {
             for (int i = 0; i < 4; i++)
-                if (ImGui::Selectable(kRepLevels[i].name, rep_idx == i)) {
+                if (ui::Selectable(*kRepLevels[i].name, rep_idx == i)) {
                     _colmap_job.match_max_ratio = kRepLevels[i].ratio;
                     _colmap_job.min_inliers_per_pair = kRepLevels[i].pair_in;
                     _colmap_job.abs_pose_min_num_inliers = kRepLevels[i].reg_in;
@@ -1658,100 +1545,68 @@ void GuiApp::draw_colmap_options() {
                 }
             ImGui::EndCombo();
         }
-        help_tooltip_on_hover(
-            "How aggressively wrong matches are suppressed; fills the "
-            "fields below. Low: mild tightening, keeps registration rate. "
-            "Medium: good first attempt for multi-room indoor captures. "
-            "High: for heavy repetition (identical rooms/facades) -- "
-            "expect fewer registered images if overlap is thin.");
+        ui::help_on_hover(dmsg::colmap_repetitive_level_help);
         ImGui::SetNextItemWidth(180);
-        ImGui::InputFloat("Match ratio test (0 = default 0.8)",
-                          &_colmap_job.match_max_ratio, 0, 0, "%.3g");
-        help_tooltip_on_hover(
-            "SiftMatching.max_ratio, the Lowe ratio test: a feature match "
-            "is kept only when its best match is this much better than the "
-            "second best. LOWER is stricter -- try 0.6-0.7 when repetitive "
-            "texture creates false matches. SIFT only.");
+        ui::InputFloat(dmsg::colmap_match_ratio, &_colmap_job.match_max_ratio,
+                       0, 0, "%.3g");
+        ui::help_on_hover(dmsg::colmap_match_ratio_help);
         ImGui::SetNextItemWidth(180);
-        ImGui::InputInt("Min inliers per pair (0 = default 15)",
-                        &_colmap_job.min_inliers_per_pair, 0, 0);
-        help_tooltip_on_hover(
-            "TwoViewGeometry.min_num_inliers: image pairs whose geometric "
-            "verification finds fewer inliers are discarded outright. "
-            "Raise to 50-100 so weakly-supported (usually false) links "
-            "between similar-looking areas never enter the database.");
+        ui::InputInt(dmsg::colmap_min_inliers_pair,
+                     &_colmap_job.min_inliers_per_pair);
+        ui::help_on_hover(dmsg::colmap_min_inliers_pair_help);
         ImGui::SetNextItemWidth(180);
-        ImGui::InputInt("Min inliers to register (0 = default 30)",
-                        &_colmap_job.abs_pose_min_num_inliers, 0, 0);
-        help_tooltip_on_hover(
-            "Mapper.abs_pose_min_num_inliers: minimum absolute-pose inliers "
-            "to register an image into the model. Raise to 50-100 to stop "
-            "images from registering onto the wrong (similar-looking) part "
-            "of the scene.");
+        ui::InputInt(dmsg::colmap_min_inliers_reg,
+                     &_colmap_job.abs_pose_min_num_inliers);
+        ui::help_on_hover(dmsg::colmap_min_inliers_reg_help);
         ImGui::SetNextItemWidth(180);
-        ImGui::InputFloat("Min inlier ratio to register (0 = default 0.25)",
-                          &_colmap_job.abs_pose_min_inlier_ratio, 0, 0, "%.3g");
-        help_tooltip_on_hover(
-            "Mapper.abs_pose_min_inlier_ratio: minimum fraction of 2D-3D "
-            "correspondences that must be pose inliers. Try 0.35-0.5 for "
-            "stricter registration.");
+        ui::InputFloat(dmsg::colmap_min_inlier_ratio,
+                       &_colmap_job.abs_pose_min_inlier_ratio, 0, 0, "%.3g");
+        ui::help_on_hover(dmsg::colmap_min_inlier_ratio_help);
         ImGui::SetNextItemWidth(180);
-        ImGui::InputFloat("Max registration error px (0 = default 12)",
-                          &_colmap_job.abs_pose_max_error, 0, 0, "%.3g");
-        help_tooltip_on_hover(
-            "Mapper.abs_pose_max_error: reprojection error threshold (px) "
-            "for absolute-pose RANSAC when registering images. Lower "
-            "(6-8) = stricter; combine with the inlier thresholds above.");
+        ui::InputFloat(dmsg::colmap_max_reg_error,
+                       &_colmap_job.abs_pose_max_error, 0, 0, "%.3g");
+        ui::help_on_hover(dmsg::colmap_max_reg_error_help);
         ImGui::Separator();
         if (fisheye) ImGui::BeginDisabled();
-        ImGui::Checkbox("GPU bundle adjustment", &_colmap_job.ba_use_gpu);
+        ui::Checkbox(dmsg::colmap_gpu_ba, &_colmap_job.ba_use_gpu);
         if (fisheye) ImGui::EndDisabled();
-        help_tooltip_on_hover(fisheye
-            ? "Mapper.ba_use_gpu -- unavailable: COLMAP's GPU bundle "
-              "adjustment does not support fisheye camera models yet."
-            : "Mapper.ba_use_gpu.");
-        ImGui::Checkbox("Merge partial models", &_colmap_job.merge_models);
-        help_tooltip_on_hover(
-            "When the mapper splits the scene into several partial models, "
-            "try colmap model_merger to fuse them (kept only when the "
-            "merged model registers more images). The trainer otherwise "
-            "auto-picks the largest partial model.");
-        ImGui::Checkbox("Final refinement pass", &_colmap_job.final_bundle_adjust);
-        help_tooltip_on_hover("Run bundle_adjuster after mapping on the "
-                              "largest (or merged) model, refining focal "
-                              "length, principal point, and distortion "
-                              "(as in scripts/run_colmap.bash).");
+        ui::help_on_hover(fisheye ? dmsg::colmap_gpu_ba_fisheye
+                                  : dmsg::colmap_gpu_ba_help);
+        ui::Checkbox(dmsg::colmap_merge_models, &_colmap_job.merge_models);
+        ui::help_on_hover(dmsg::colmap_merge_models_help);
+        ui::Checkbox(dmsg::colmap_final_ba, &_colmap_job.final_bundle_adjust);
+        ui::help_on_hover(dmsg::colmap_final_ba_help);
         ImGui::SetNextItemWidth(-160);
-        ImGui::InputTextWithHint("##vocab", "vocabulary tree (auto find/download)",
+        ui::InputTextWithHintRaw("##vocab", dmsg::colmap_vocab_tree_hint,
                                  &_colmap_job.vocab_tree_path);
         ImGui::SameLine();
-        if (ImGui::Button("Browse...##vt")) {
+        ImGui::PushID("vt");
+        if (ui::Button(dmsg::browse)) {
             _pick = PickAction::VocabTree;
-            _dialog.open("Select Vocabulary Tree (.bin)", FileDialog::Mode::File,
+            _dialog.open(msg::pick_vocab_tree.get(), FileDialog::Mode::File,
                          {".bin"});
         }
+        ImGui::PopID();
         ImGui::SameLine();
-        ImGui::TextUnformatted("vocab tree");
+        ui::Text(dmsg::colmap_vocab_tree);
     }
-
 }
 
 void GuiApp::draw_tool_locations() {
-    if (ImGui::CollapsingHeader("Tool locations")) {
+    if (ui::CollapsingHeader(dmsg::section_tool_locations)) {
         bool ch = false;
         if (effective_engine() == Engine::Colmap) {
             ImGui::SetNextItemWidth(300);
-            ch |= ImGui::InputText("colmap executable", &_colmap_exe);
+            ch |= ui::InputText(dmsg::colmap_executable, &_colmap_exe);
         }
         ImGui::SetNextItemWidth(300);
-        ch |= ImGui::InputText("ffmpeg executable", &_ffmpeg_exe);
-        help_tooltip_on_hover(
-            backends().builtin_video
-                ? "Only used when frame extraction falls back to ffmpeg."
-                : "Used to extract frames from video.");
+        ch |= ui::InputText(dmsg::ffmpeg_executable, &_ffmpeg_exe);
+        ui::help_on_hover(backends().builtin_video
+                              ? dmsg::ffmpeg_executable_help_fallback
+                              : dmsg::ffmpeg_executable_help_always);
         ImGui::SetNextItemWidth(300);
-        ch |= ImGui::InputText("python executable", &_python_exe);
-        help_tooltip_on_hover("Only used by the external masking script.");
+        ch |= ui::InputText(dmsg::python_executable, &_python_exe);
+        ui::help_on_hover(dmsg::python_executable_help);
         if (ch) save_settings();
     }
 }
@@ -1763,12 +1618,11 @@ void GuiApp::draw_tool_locations() {
 void GuiApp::draw_new_dataset() {
     const bool running = dataset_busy();
 
-    if (ImGui::Button("< Home")) _screen = Screen::Home;
+    if (ui::Button(msg::back_home)) _screen = Screen::Home;
     ImGui::SameLine();
     ImGui::SetWindowFontScale(1.2f);
     const bool from_video = !_sources.empty() && _sources[0].is_video;
-    ImGui::TextUnformatted(from_video ? "Create Dataset from Video"
-                                      : "Create Dataset from Photos");
+    ui::Text(from_video ? dmsg::title_from_video : dmsg::title_from_photos);
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Spacing();
 
@@ -1782,18 +1636,13 @@ void GuiApp::draw_new_dataset() {
     if (builtin_sfm_available() && colmap_available()) {
         ImGui::Spacing();
         int eng = _engine == Engine::BuiltIn ? 0 : 1;
-        ImGui::TextUnformatted("Reconstruction:");
+        ui::Text(dmsg::reconstruction);
         ImGui::SameLine();
-        if (ImGui::RadioButton("Built-in (GPU)", eng == 0)) eng = 0;
-        help_tooltip_on_hover(
-            "This program's own structure-from-motion. Nothing to install, "
-            "runs on the GPU.");
+        if (ui::RadioButton(dmsg::engine_builtin, eng == 0)) eng = 0;
+        ui::help_on_hover(dmsg::engine_builtin_help);
         ImGui::SameLine();
-        if (ImGui::RadioButton("COLMAP (installed separately)", eng == 1)) eng = 1;
-        help_tooltip_on_hover(
-            "Drive an external COLMAP instead. Worth having for comparison, "
-            "and for the features it has that the built-in engine does not "
-            "yet -- neural features and matching, in particular.");
+        if (ui::RadioButton(dmsg::engine_colmap, eng == 1)) eng = 1;
+        ui::help_on_hover(dmsg::engine_colmap_help);
         if ((eng == 1) != (_engine == Engine::Colmap)) {
             _engine = eng == 1 ? Engine::Colmap : Engine::BuiltIn;
             save_settings();
@@ -1801,7 +1650,7 @@ void GuiApp::draw_new_dataset() {
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Settings");
+    ui::SeparatorText(dmsg::section_settings);
     draw_dataset_basics();
     ImGui::Spacing();
     draw_masking_options();
@@ -1819,23 +1668,23 @@ void GuiApp::draw_new_dataset() {
         bool ready = !_sources.empty() && !_workspace.empty();
         for (const PrepInput& s : _sources) ready = ready && !s.path.empty();
         ImGui::BeginDisabled(!ready);
-        if (ImGui::Button("Create Dataset", ImVec2(200, 34))) start_dataset_job();
+        if (ui::Button(dmsg::create_dataset, ImVec2(200, 34))) start_dataset_job();
         ImGui::EndDisabled();
         if (!ready) {
             ImGui::SameLine();
-            ImGui::TextDisabled("pick the input and the output folder first");
+            ui::TextDisabled(dmsg::pick_input_first);
         }
     } else {
-        if (ImGui::Button("Cancel", ImVec2(200, 34))) cancel_dataset_job();
+        if (ui::Button(dmsg::cancel, ImVec2(200, 34))) cancel_dataset_job();
         ImGui::SameLine();
         const bool builtin = _sfm.state() == SfmRunner::State::Running;
+        // The stage name comes from the runner and is a diagnostic, not copy.
         const std::string stage = builtin ? _sfm.stage() : _colmap.stage();
         const float frac = builtin ? _sfm.progress() : -1.0f;
-        if (frac >= 0.0f) {
-            ImGui::ProgressBar(frac, ImVec2(-1, 0), stage.c_str());
-        } else {
-            ImGui::Text("%s ...", stage.c_str());
-        }
+        if (frac >= 0.0f)
+            ui::ProgressBarRaw(frac, ImVec2(-1, 0), stage.c_str());
+        else
+            ui::Text(dmsg::stage_running, {stage});
     }
 
     // Both runners report through the same three states.
@@ -1861,18 +1710,11 @@ void GuiApp::draw_new_dataset() {
         st.err = _colmap.error();
     }
     if (st.done) {
-        if (effective_engine() == Engine::BuiltIn && _sfm.partial()) {
-            ImGui::PushTextWrapPos();
-            ImGui::TextColored(kWarn,
-                               "Only part of the capture reconstructed -- it "
-                               "will train, but expect gaps. More overlap "
-                               "between shots, or a higher quality setting, "
-                               "usually fixes it.");
-            ImGui::PopTextWrapPos();
-        }
-        ImGui::TextColored(kOk, "Done: %s", st.dir.c_str());
+        if (effective_engine() == Engine::BuiltIn && _sfm.partial())
+            ui::TextColoredWrapped(kWarn, dmsg::partial_reconstruction);
+        ui::TextColored(kOk, dmsg::done_at, {st.dir});
         ImGui::SameLine();
-        if (ImGui::Button("Open in Trainer")) {
+        if (ui::Button(dmsg::open_in_trainer)) {
             if (training_busy()) {
                 _pending = Pending::OpenDataset;
                 _pending_path = st.dir;
@@ -1882,11 +1724,9 @@ void GuiApp::draw_new_dataset() {
             }
         }
     } else if (st.failed) {
-        ImGui::PushTextWrapPos();
-        ImGui::TextColored(kErr, "Failed: %s", st.err.c_str());
-        ImGui::PopTextWrapPos();
+        ui::TextColoredWrapped(kErr, dmsg::failed, {st.err});
     } else if (st.cancelled) {
-        ImGui::TextColored(kDim, "Cancelled.");
+        ui::TextColored(kDim, dmsg::cancelled);
     }
 
     ImGui::Spacing();
@@ -1909,51 +1749,50 @@ void GuiApp::draw_license_modal() {
     if (_license_prompt.empty()) return;
     const LicenseInfo& li = license_for(_license_prompt);
 
-    ImGui::OpenPopup("Model licence##lic");
+    ui::OpenPopup(dmsg::license_modal_title);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(540, 0), ImGuiCond_Always);
-    if (!ImGui::BeginPopupModal("Model licence##lic", nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize))
+    if (!ui::BeginPopupModal(dmsg::license_modal_title, nullptr,
+                             ImGuiWindowFlags_AlwaysAutoResize))
         return;
 
     ImGui::SetWindowFontScale(1.15f);
-    ImGui::TextUnformatted(li.title);
+    ui::Text(*li.title);
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Spacing();
     ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
-    ImGui::TextUnformatted(li.summary);
+    ui::Text(*li.summary);
     ImGui::PopTextWrapPos();
     ImGui::Spacing();
 
     // The link is a button, not decoration: the tick below says the user has
     // read the terms, so getting to them has to be one obvious click. Copying
     // the address is the fallback for a session with no browser to launch.
-    if (ImGui::Button("Read the licence", ImVec2(180, 0))) {
+    if (ui::Button(dmsg::license_read, ImVec2(180, 0))) {
         if (!open_url(li.url)) {
             ImGui::SetClipboardText(li.url);
-            log(std::string("Could not open a browser. The licence is at ") +
-                li.url + " (copied to the clipboard).");
+            log(i18n::format(dmsg::license_no_browser, {li.url}));
         }
     }
-    help_tooltip_on_hover(li.url);
+    ui::help_on_hover_raw(li.url);
     ImGui::SameLine();
-    if (ImGui::Button("Copy link", ImVec2(110, 0))) ImGui::SetClipboardText(li.url);
+    if (ui::Button(dmsg::license_copy_link, ImVec2(110, 0)))
+        ImGui::SetClipboardText(li.url);
     ImGui::Spacing();
     ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
-    ImGui::TextDisabled("%s", li.url);
+    ui::TextDisabledRaw(li.url);
     ImGui::PopTextWrapPos();
     if (const ModelEntry* e = find_model(_model_id))
-        ImGui::TextDisabled("Download: about %.0f MB, kept for next time.",
-                            e->bytes / 1048576.0);
+        ui::TextDisabled(dmsg::license_download_size, {human_bytes(e->bytes)});
     ImGui::Spacing();
 
     if (li.needs_tick)
-        ImGui::Checkbox("I have read and accept these terms", &_license_tick);
+        ui::Checkbox(dmsg::license_accept_tick, &_license_tick);
     ImGui::Spacing();
 
     ImGui::BeginDisabled(li.needs_tick && !_license_tick);
-    if (ImGui::Button("Download", ImVec2(150, 0))) {
+    if (ui::Button(dmsg::license_download, ImVec2(150, 0))) {
         _accepted_licenses.push_back(_license_prompt);
         save_settings();
         if (const ModelEntry* e = find_model(_model_id)) _download.start(*e);
@@ -1962,7 +1801,7 @@ void GuiApp::draw_license_modal() {
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+    if (ui::Button(dmsg::cancel, ImVec2(120, 0))) {
         _license_prompt.clear();
         ImGui::CloseCurrentPopup();
     }
@@ -1977,13 +1816,11 @@ void GuiApp::draw_license_modal() {
 void GuiApp::draw_train() {
     bool preparing = _runner.phase() == TrainRunner::Phase::Preparing;
     ImGui::BeginDisabled(preparing);   // no clean interruption point
-    if (ImGui::Button("< Home")) request_go_home();
+    if (ui::Button(msg::back_home)) request_go_home();
     ImGui::EndDisabled();
-    if (training_busy())
-        help_tooltip_on_hover("Training is in progress -- leaving stops it "
-                              "(a checkpoint is saved first).");
+    if (training_busy()) ui::help_on_hover(msg::leaving_stops_training);
     ImGui::SameLine();
-    ImGui::TextDisabled("%s", _cfg.data.c_str());
+    ui::TextDisabledRaw(_cfg.data);
 
     ImGui::BeginChild("##settings", ImVec2(420, 0), ImGuiChildFlags_Borders);
     draw_train_settings();
@@ -2011,70 +1848,68 @@ void GuiApp::draw_train_settings() {
                 ph == TrainRunner::Phase::Training;
 
     // ---- dataset ----
-    ImGui::SeparatorText("Dataset");
+    ui::SeparatorText(msg::section_dataset);
     switch (ph) {
         case TrainRunner::Phase::Loading:
-            ImGui::TextColored(kDim, "Parsing dataset ...");
+            ui::TextColored(kDim, msg::parsing_dataset);
             break;
         case TrainRunner::Phase::LoadError:
-            ImGui::PushTextWrapPos();
-            ImGui::TextColored(kErr, "%s", _runner.error().c_str());
-            ImGui::PopTextWrapPos();
+            // Parser errors name files and formats; they stay English so that
+            // searching for one finds the same text everyone else saw.
+            ui::TextColoredWrappedRaw(kErr, _runner.error());
             break;
         default:
             if (auto* s = _runner.session()) {
                 if (ph == TrainRunner::Phase::Ready ||
                     ph == TrainRunner::Phase::Training ||
                     ph == TrainRunner::Phase::Done) {
-                    ImGui::Text("%lld cameras (%lld views) - %s points",
-                                (long long)s->ds.num_cameras,
-                                (long long)s->post.n_post,
-                                format_count((double)s->ds.points.num()).c_str());
+                    ui::Text(msg::dataset_summary,
+                             {(long long)s->ds.num_cameras,
+                              (long long)s->post.n_post,
+                              format_count((double)s->ds.points.num())});
                 }
             } else {
-                ImGui::TextColored(kDim, "no dataset loaded");
+                ui::TextColored(kDim, msg::no_dataset_loaded);
             }
             break;
     }
     ImGui::BeginDisabled(busy && ph != TrainRunner::Phase::Loading);
-    if (ImGui::Button("Change...")) {
+    if (ui::Button(msg::change_dataset)) {
         _pick = PickAction::OpenDataset;
-        _dialog.open("Open Dataset Folder", FileDialog::Mode::Folder);
+        _dialog.open(msg::menu_open_dataset.get(), FileDialog::Mode::Folder);
     }
     ImGui::EndDisabled();
 
     // ---- device ----
-    ImGui::SeparatorText("Device");
+    ui::SeparatorText(msg::section_device);
     {
         int n_dev = backend::device_count();
         int cur = backend::device_current();
         backend::DeviceInfo curd = backend::device_info(cur);
         ImGui::BeginDisabled(_device_locked || busy || n_dev == 0);
         ImGui::SetNextItemWidth(-8);
-        if (ImGui::BeginCombo("##device",
-                              cur >= 0 ? curd.name : "(no device found)")) {
+        // Device names come from the driver; only the "none found" and
+        // "unsupported" notes are ours.
+        if (ui::BeginComboRaw("##device",
+                              cur >= 0 ? curd.name : msg::no_device_found.get())) {
             for (int i = 0; i < n_dev; i++) {
                 backend::DeviceInfo d = backend::device_info(i);
                 char label[324];
                 std::snprintf(label, sizeof(label), "%s (%s, %llu MB)%s##d%d",
                               d.name, d.type,
                               (unsigned long long)(d.vram_bytes >> 20),
-                              d.usable ? "" : " [unsupported]", i);
+                              d.usable ? "" : msg::device_unsupported.get(), i);
                 ImGui::BeginDisabled(!d.usable);
                 bool sel = i == cur;
-                if (ImGui::Selectable(label, sel)) backend::device_select(i);
+                if (ui::SelectableRaw(label, sel)) backend::device_select(i);
                 if (sel) ImGui::SetItemDefaultFocus();
                 ImGui::EndDisabled();
             }
             ImGui::EndCombo();
         }
         ImGui::EndDisabled();
-        if (_device_locked) {
-            ImGui::PushTextWrapPos();
-            ImGui::TextColored(kDim, "Device is fixed once training starts; "
-                                     "restart the app to change it.");
-            ImGui::PopTextWrapPos();
-        }
+        if (_device_locked)
+            ui::TextColoredWrapped(kDim, msg::device_locked);
     }
 
     // ---- preset + options ----
@@ -2082,16 +1917,19 @@ void GuiApp::draw_train_settings() {
     // automatic reload (deferred until the edited widget loses focus).
     TrainConfig parse_before = _cfg;
     ImGui::BeginDisabled(busy);
-    ImGui::SeparatorText("Preset");
+    ui::SeparatorText(msg::section_preset);
     ImGui::SetNextItemWidth(-8);
-    if (ImGui::BeginCombo("##preset", _preset.c_str())) {
+    // Preset names and their help are the CLI's own vocabulary
+    // (config/TrainConfig.h) and are shared with `spirula train --help`;
+    // translating them is tier 3, tracked in docs/i18n.md.
+    if (ui::BeginComboRaw("##preset", _preset.c_str())) {
         for (const auto& p : kTrainPresets) {
             bool sel = _preset == p.name;
-            if (ImGui::Selectable(p.name, sel)) apply_preset(p.name);
+            if (ui::SelectableRaw(p.name, sel)) apply_preset(p.name);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) &&
                 ImGui::BeginTooltip()) {
                 ImGui::PushTextWrapPos(360);
-                ImGui::TextUnformatted(p.help);
+                ui::TextRaw(p.help);
                 ImGui::PopTextWrapPos();
                 ImGui::EndTooltip();
             }
@@ -2099,22 +1937,20 @@ void GuiApp::draw_train_settings() {
         }
         ImGui::EndCombo();
     }
-    ImGui::PushTextWrapPos();
-    ImGui::TextColored(kDim, "%s", preset_help(_preset));
-    ImGui::PopTextWrapPos();
+    ui::TextColoredWrappedRaw(kDim, preset_help(_preset));
 
-    ImGui::SeparatorText("Basic Options");
+    ui::SeparatorText(msg::section_basic_options);
     draw_basic_options();
 
     ImGui::Spacing();
-    if (ImGui::CollapsingHeader("All Options (Advanced)"))
+    if (ui::CollapsingHeader(msg::section_all_options))
         draw_config_editor(_cfg, _defaults, _cfg_ui);
     ImGui::EndDisabled();
 
     if (!parse_settings_equal(parse_before, _cfg)) _parse_dirty = true;
 
     // ---- controls + metrics ----
-    ImGui::SeparatorText("Training");
+    ui::SeparatorText(msg::section_training);
     draw_train_controls();
     draw_metrics();
 }
@@ -2124,106 +1960,80 @@ void GuiApp::draw_basic_options() {
 
     // Output location first -- the thing every new user looks for.
     ImGui::SetNextItemWidth(w);
-    ImGui::InputText("##outdir", &_cfg.output_dir_prefix);
+    ui::InputTextRaw("##outdir", &_cfg.output_dir_prefix);
     ImGui::SameLine();
-    if (ImGui::Button("...##outdir")) {
+    if (ui::ButtonRaw("...##outdir")) {
         _pick = PickAction::OutputPrefix;
-        _dialog.open("Select Output Folder", FileDialog::Mode::Folder,
+        _dialog.open(msg::pick_output_folder.get(), FileDialog::Mode::Folder,
                      {}, _cfg.output_dir_prefix);
     }
     ImGui::SameLine();
-    ImGui::TextUnformatted("Output folder");
-    help_tooltip_on_hover("Where run outputs (checkpoints, splat.ply, "
-                          "config.json) are written. Each run gets its own "
-                          "subfolder.");
+    ui::Text(msg::opt_output_folder);
+    ui::help_on_hover(msg::opt_output_folder_help);
     ImGui::SetNextItemWidth(w);
-    ImGui::InputTextWithHint("Run name", "auto: <dataset>_<time>",
-                             &_cfg.output_dir_name);
-    help_tooltip_on_hover("Subfolder name for this run. Leave empty for "
-                          "<dataset>_<timestamp>.");
+    ui::InputTextWithHint(msg::opt_run_name, msg::opt_run_name_hint,
+                          &_cfg.output_dir_name);
+    ui::help_on_hover(msg::opt_run_name_help);
     {
         std::string run = _cfg.output_dir_name.empty()
             ? fs::path(_cfg.data).stem().string() + "_<time>"
             : _cfg.output_dir_name;
-        ImGui::PushTextWrapPos();
-        ImGui::TextColored(kDim, "-> %s",
-            (fs::path(_cfg.output_dir_prefix) / run).string().c_str());
-        ImGui::PopTextWrapPos();
+        ui::TextColoredWrappedRaw(
+            kDim, "-> " + (fs::path(_cfg.output_dir_prefix) / run).string());
     }
     ImGui::Spacing();
 
     ImGui::SetNextItemWidth(w);
-    ImGui::InputInt("Training steps", &_cfg.num_iterations, 0, 0);
-    help_tooltip_on_hover(
-        "How long to optimize. 30000 is a solid default; small scenes can "
-        "look good at 10000-15000, and quality saturates beyond ~30000.");
+    ui::InputInt(msg::opt_steps, &_cfg.num_iterations);
+    ui::help_on_hover(msg::opt_steps_help);
 
     ImGui::SetNextItemWidth(w);
-    ImGui::InputInt("Max splats", &_cfg.cap_max, 0, 0);
-    help_tooltip_on_hover(
-        "Upper bound on the number of Gaussians. More captures more detail "
-        "but uses more VRAM and renders slower. ~1M suits most scenes; "
-        "large outdoor scenes may want 2-4M.");
+    ui::InputInt(msg::opt_max_splats, &_cfg.cap_max);
+    ui::help_on_hover(msg::opt_max_splats_help);
 
     {
+        // Primitive names are the config's own values, written into
+        // config.json and accepted by `--primitive`; they are not translated.
         static const char* prims[] = {"3dgs", "mip", "3dgut"};
         int pi = _cfg.primitive == "mip" ? 1 : _cfg.primitive == "3dgut" ? 2 : 0;
         ImGui::SetNextItemWidth(w);
-        if (ImGui::Combo("Primitive", &pi, prims, 3))
+        if (ui::ComboRaw(ui::detail::label(msg::opt_primitive), &pi, prims, 3))
             _cfg.primitive = prims[pi];
-        help_tooltip_on_hover(
-            "Splat primitive. 3dgs: standard 3D Gaussian splatting. mip: "
-            "anti-aliased Mip-Splatting, reduces shimmering when zooming "
-            "out. 3dgut: Unscented-Transform projection, exact for "
-            "distorted (fisheye/equirectangular) cameras.");
+        ui::help_on_hover(msg::opt_primitive_help);
     }
 
     int ds_idx = _cfg.rescale_camera_to_fit == 2.0f ? 1
                : _cfg.rescale_camera_to_fit == 4.0f ? 2
                : _cfg.rescale_camera_to_fit == 8.0f ? 3 : 0;
-    const char* ds_items[] = {"native", "1/2", "1/4", "1/8"};
-    ImGui::SetNextItemWidth(w);
-    if (ImGui::Combo("Image resolution", &ds_idx, ds_items, 4)) {
-        const float vals[] = {0.0f, 2.0f, 4.0f, 8.0f};
-        _cfg.rescale_camera_to_fit = vals[ds_idx];
+    {
+        // "1/2" is a fraction, not a word; only "native" is translated.
+        const char* items[] = {msg::opt_resolution_native.get(), "1/2", "1/4", "1/8"};
+        ImGui::SetNextItemWidth(w);
+        if (ui::ComboRaw(ui::detail::label(msg::opt_resolution), &ds_idx, items, 4)) {
+            const float vals[] = {0.0f, 2.0f, 4.0f, 8.0f};
+            _cfg.rescale_camera_to_fit = vals[ds_idx];
+        }
     }
-    help_tooltip_on_hover(
-        "Train at a fraction of the input resolution. Downscaling trains "
-        "much faster and saves VRAM; use it for 4K+ footage or quick "
-        "previews.");
+    ui::help_on_hover(msg::opt_resolution_help);
 
     {
-        static const char* mask_modes[] = {"ignore", "segment"};
         int mi = _cfg.apply_loss_for_mask ? 1 : 0;
         ImGui::SetNextItemWidth(w);
-        if (ImGui::Combo("Mask mode", &mi, mask_modes, 2))
+        if (ui::Combo(msg::opt_mask_mode, &mi,
+                      {&msg::opt_mask_mode_ignore, &msg::opt_mask_mode_segment}))
             _cfg.apply_loss_for_mask = mi == 1;
-        help_tooltip_on_hover(
-            "What a mask means, where one is used. ignore: masked-out pixels "
-            "are left out of the loss -- for distractors (people, cars, the "
-            "photographer's shadow, the area outside a fisheye circle, blown-"
-            "out sky). segment: masked-out pixels are trained as empty, so "
-            "the background is cut away and only the masked subject is "
-            "reconstructed -- for object captures. Has no effect on a dataset "
-            "without masks.");
+        ui::help_on_hover(msg::opt_mask_mode_help);
     }
 
     ImGui::SetNextItemWidth(w);
-    ImGui::SliderInt("Color detail (SH)", &_cfg.sh_degree, 0, 4);
-    help_tooltip_on_hover(
-        "Spherical-harmonics degree for view-dependent color (reflections, "
-        "highlights). 3 is standard; 0 gives flat colors and the smallest "
-        "model; 4 may have limited compatibility with mainstream viewers.");
+    ui::SliderInt(msg::opt_sh_degree, &_cfg.sh_degree, 0, 4);
+    ui::help_on_hover(msg::opt_sh_degree_help);
 
-    ImGui::Checkbox("Bilateral Grid color correction", &_cfg.use_bilateral_grid);
-    help_tooltip_on_hover(
-        "Use bilateral grid to correct color variation across images. Suitable for environment lighting change. "
-        "Uncheck for faster and more memory efficient training.");
+    ui::Checkbox(msg::opt_bilateral_grid, &_cfg.use_bilateral_grid);
+    ui::help_on_hover(msg::opt_bilateral_grid_help);
 
-    ImGui::Checkbox("PPISP color correction", &_cfg.use_ppisp);
-    help_tooltip_on_hover(
-        "Use PPISP to correcting color variation across images. Suitable for camera vignetting and exposure/WB change. "
-        "Uncheck for faster training.");
+    ui::Checkbox(msg::opt_ppisp, &_cfg.use_ppisp);
+    ui::help_on_hover(msg::opt_ppisp_help);
 }
 
 void GuiApp::draw_train_controls() {
@@ -2234,17 +2044,13 @@ void GuiApp::draw_train_controls() {
         case TrainRunner::Phase::LoadError:
         case TrainRunner::Phase::Done:
         case TrainRunner::Phase::TrainError: {
-            if (ph == TrainRunner::Phase::TrainError) {
-                ImGui::PushTextWrapPos();
-                ImGui::TextColored(kErr, "%s", _runner.error().c_str());
-                ImGui::PopTextWrapPos();
-            }
+            if (ph == TrainRunner::Phase::TrainError)
+                ui::TextColoredWrappedRaw(kErr, _runner.error());
             if (ph == TrainRunner::Phase::Done) {
-                ImGui::TextColored(kOk, "Training complete.");
+                ui::TextColored(kOk, msg::training_complete);
                 if (auto* s = _runner.session()) {
-                    std::string out = s->out_dir.string();
                     ImGui::PushTextWrapPos();
-                    ImGui::TextDisabled("Saved to %s", out.c_str());
+                    ui::TextDisabled(msg::saved_to, {s->out_dir.string()});
                     ImGui::PopTextWrapPos();
                 }
             }
@@ -2252,36 +2058,33 @@ void GuiApp::draw_train_controls() {
                              ph == TrainRunner::Phase::Done ||
                              ph == TrainRunner::Phase::TrainError;
             ImGui::BeginDisabled(!can_start);
-            if (ImGui::Button(ph == TrainRunner::Phase::Done ? "Train Again"
-                                                             : "Start Training",
-                              ImVec2(-8, 36)))
+            if (ui::Button(ph == TrainRunner::Phase::Done ? msg::train_again
+                                                          : msg::start_training,
+                           ImVec2(-8, 36)))
                 start_training();
             ImGui::EndDisabled();
             break;
         }
         case TrainRunner::Phase::Loading:
-            ImGui::TextColored(kDim, "Parsing dataset ...");
+            ui::TextColored(kDim, msg::parsing_dataset);
             break;
         case TrainRunner::Phase::Preparing:
-            ImGui::TextColored(kDim, "Preparing engine (seeding splats, "
-                                     "caching images) ...");
+            ui::TextColored(kDim, msg::preparing_engine);
             break;
         case TrainRunner::Phase::Training: {
             bool paused = _runner.paused();
             float half = (ImGui::GetContentRegionAvail().x - 12) * 0.5f;
-            if (ImGui::Button(paused ? "Resume" : "Pause", ImVec2(half, 32)))
+            if (ui::Button(paused ? msg::resume : msg::pause, ImVec2(half, 32)))
                 _runner.set_paused(!paused);
             ImGui::SameLine();
             bool stopping = _runner.session() &&
                             _runner.session()->stop_requested.load();
             ImGui::BeginDisabled(stopping);
-            if (ImGui::Button(stopping ? "Stopping..." : "Stop && Save",
-                              ImVec2(half, 32)))
+            if (ui::Button(stopping ? msg::stopping : msg::stop_and_save,
+                           ImVec2(half, 32)))
                 _runner.request_stop();
             ImGui::EndDisabled();
-            help_tooltip_on_hover("Finish the current step, save a "
-                                  "checkpoint, and keep the result loaded "
-                                  "for viewing.");
+            ui::help_on_hover(msg::stop_and_save_help);
             break;
         }
     }
@@ -2292,7 +2095,7 @@ void GuiApp::draw_metrics() {
     _runner.get_metrics(pts);
     if (pts.empty()) return;
 
-    ImGui::SeparatorText("Metrics");
+    ui::SeparatorText(msg::section_metrics);
     // Downsample to <= 240 plot points.
     int stride = std::max<size_t>(1, pts.size() / 240);
     static std::vector<float> psnr, splats;
@@ -2303,12 +2106,18 @@ void GuiApp::draw_metrics() {
         splats.push_back(pts[i].num_splats);
     }
     const auto& last = pts.back();
+    // PSNR / SSIM / loss are the metric names the literature and the logs use;
+    // they are not translated, only the numbers change.
     char overlay[64];
     std::snprintf(overlay, sizeof overlay, "\n\n\nPSNR %.2f", last.psnr);
-    ImGui::PlotLines("##psnr", psnr.data(), (int)psnr.size(), 0, overlay,
-                     FLT_MAX, FLT_MAX, ImVec2(-8, 64));
-    ImGui::Text("splats: %s   ssim: %.3f   loss: %.4f",
-                format_count(last.num_splats).c_str(), last.ssim, last.rgb_loss);
+    ui::PlotLinesRaw("##psnr", psnr.data(), (int)psnr.size(), overlay,
+                     ImVec2(-8, 64));
+    char line[96];
+    std::snprintf(line, sizeof line, "%.3f", last.ssim);
+    char loss[96];
+    std::snprintf(loss, sizeof loss, "%.4f", last.rgb_loss);
+    ui::Text(msg::status_metrics,
+             {format_count(last.num_splats), line, loss});
 }
 
 void GuiApp::draw_status_strip() {
@@ -2321,29 +2130,26 @@ void GuiApp::draw_status_strip() {
     spirula::TrainerProgress p = _runner.latest_progress();
     if (ph == TrainRunner::Phase::Training && p.total_steps > 0) {
         float frac = (float)(p.step + 1) / (float)p.total_steps;
-        char label[64];
-        std::snprintf(label, sizeof label, "step %d / %d", p.step + 1, p.total_steps);
-        ImGui::ProgressBar(frac, ImVec2(-8, 0), label);
-        bool paused = _runner.paused();
-        ImGui::Text("%s%.0f ms/step   ETA %s   %s splats",
-                    paused ? "[paused]  " : "",
-                    p.step_latency * 1000.0,
-                    format_eta(_runner.eta_seconds()).c_str(),
-                    format_count((double)p.num_splats).c_str());
+        ui::ProgressBar(frac, ImVec2(-8, 0), msg::status_step,
+                        {p.step + 1, p.total_steps});
+        char ms[32];
+        std::snprintf(ms, sizeof ms, "%.0f", p.step_latency * 1000.0);
+        ui::Text(_runner.paused() ? msg::status_rate_paused : msg::status_rate,
+                 {ms, format_eta(_runner.eta_seconds()),
+                  format_count((double)p.num_splats)});
     } else if (ph == TrainRunner::Phase::Done && p.total_steps > 0) {
-        char label[64];
-        std::snprintf(label, sizeof label, "done (%d steps)", p.step + 1);
-        ImGui::ProgressBar(1.0f, ImVec2(-8, 0), label);
-        ImGui::TextDisabled("explore the result in the viewport above");
+        ui::ProgressBar(1.0f, ImVec2(-8, 0), msg::status_done_steps, {p.step + 1});
+        ui::TextDisabled(msg::status_explore);
     } else if (ph == TrainRunner::Phase::Preparing) {
-        ImGui::ProgressBar(-(float)ImGui::GetTime(), ImVec2(-8, 0), "preparing");
-        ImGui::TextDisabled(" ");
+        ui::ProgressBar(-(float)ImGui::GetTime(), ImVec2(-8, 0),
+                        msg::status_preparing);
+        ui::TextDisabledRaw(" ");
     } else if (ph == TrainRunner::Phase::Ready) {
-        ImGui::ProgressBar(0.0f, ImVec2(-8, 0), "ready");
-        ImGui::TextDisabled("dataset preview -- press Start Training when ready");
+        ui::ProgressBar(0.0f, ImVec2(-8, 0), msg::status_ready);
+        ui::TextDisabled(msg::status_ready_hint);
     } else {
-        ImGui::ProgressBar(0.0f, ImVec2(-8, 0), "idle");
-        ImGui::TextDisabled(" ");
+        ui::ProgressBar(0.0f, ImVec2(-8, 0), msg::status_idle);
+        ui::TextDisabledRaw(" ");
     }
 
     draw_vram_readout(x0, avail);
@@ -2383,15 +2189,14 @@ void GuiApp::draw_vram_readout(float x0, float avail) {
     float target = x0 + avail - tw - 8.0f;  // 8 px right pad, matches the bar
     ImGui::SameLine();
     if (target > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(target);
-    ImGui::TextColored(color, "%s", text.c_str());
-    help_tooltip_on_hover(
-        "GPU memory (GiB): used by this process / total in use system-wide / "
-        "device capacity. '?' means the backend could not query that value.");
+    ui::TextColoredRaw(color, text);
+    ui::help_on_hover(msg::vram_help);
 }
 
 void GuiApp::draw_log_panel(float height) {
     ImGui::BeginChild("##log", ImVec2(0, height), ImGuiChildFlags_Borders);
-    for (const auto& s : _log) ImGui::TextUnformatted(s.c_str());
+    // Log lines arrive already formatted, from here and from the engine.
+    for (const auto& s : _log) ui::TextRaw(s);
     if (_log_autoscroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4)
         ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
@@ -2399,20 +2204,22 @@ void GuiApp::draw_log_panel(float height) {
 
 void GuiApp::draw_confirm_modal() {
     if (_open_confirm) {
-        ImGui::OpenPopup("Stop training?");
+        ui::OpenPopup(msg::confirm_title);
         _open_confirm = false;
         _confirm_shown = true;
         _stop_confirmed = false;
     }
-    if (ImGui::BeginPopupModal("Stop training?", nullptr,
-                               ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Training is in progress.");
-        const char* what = _pending == Pending::Quit ? "exit"
-                         : _pending == Pending::GoHome ? "go to the home screen"
-                         : "open the new dataset";
-        ImGui::Text("Stop training (a final checkpoint is saved) and %s?", what);
+    if (ui::BeginPopupModal(msg::confirm_title, nullptr,
+                            ImGuiWindowFlags_AlwaysAutoResize)) {
+        ui::Text(msg::confirm_intro);
+        // Three whole questions rather than one with a swappable tail: the
+        // clause order differs by language, and Japanese, Korean and Turkish
+        // put the verb last, so "... and {0}?" cannot be translated at all.
+        ui::Text(_pending == Pending::Quit   ? msg::confirm_quit
+               : _pending == Pending::GoHome ? msg::confirm_home
+                                             : msg::confirm_open);
         ImGui::Spacing();
-        if (ImGui::Button("Stop && Save", ImVec2(150, 0))) {
+        if (ui::Button(msg::stop_and_save, ImVec2(150, 0))) {
             _runner.request_stop();
             _stop_confirmed = true;
             _confirm_shown = false;
@@ -2421,7 +2228,7 @@ void GuiApp::draw_confirm_modal() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Keep Training", ImVec2(150, 0))) {
+        if (ui::Button(msg::keep_training, ImVec2(150, 0))) {
             _pending = Pending::None;
             _pending_path.clear();
             _confirm_shown = false;

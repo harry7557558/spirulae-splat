@@ -37,6 +37,7 @@ src/data/parsers/*.cpp
 src/app/webviewer/*.cpp
 src/app/TrainerCore.cpp
 src/app/EvalMetrics.cpp
+src/i18n/*.cpp
 src/external/*.cpp
 src/external/*.c
 
@@ -52,5 +53,6 @@ src/data/parsers/*.cpp
 src/app/webviewer/*.cpp
 src/app/TrainerCore.cpp
 src/app/EvalMetrics.cpp
+src/i18n/*.cpp
 src/external/*.cpp
 src/external/*.c

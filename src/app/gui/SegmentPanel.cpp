@@ -2,7 +2,9 @@
 
 #include "app/gui/SegmentPanel.h"
 
-#include "app/gui/ConfigUI.h"   // help_tooltip_on_hover
+#include "app/gui/Ui.h"
+
+#include "i18n/catalog/Dataset.h"
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -21,6 +23,8 @@
 #endif
 
 namespace fs = std::filesystem;
+
+namespace dmsg = spirula::i18n::msg::dataset;
 
 namespace gui {
 
@@ -436,8 +440,7 @@ void SegmentPanel::draw_image(MaskSettings& settings) {
         start_job(settings);
     }
     if (hovered)
-        ImGui::SetTooltip("Left-click: this is object %d.  Right-click: not this.",
-                          settings.current_object + 1);
+        ui::SetTooltip(dmsg::click_tooltip, {settings.current_object + 1});
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     for (const MaskClick& c : settings.clicks) {
@@ -464,13 +467,8 @@ void SegmentPanel::draw_image(MaskSettings& settings) {
 // ---------------------------------------------------------------------------
 
 void SegmentPanel::draw_objects(MaskSettings& settings, bool& edited) {
-    ImGui::TextUnformatted("Objects to click on");
-    help_tooltip_on_hover(
-        "One object per thing you want. SAM finds a single object per prompt, "
-        "so clicking a person and then a car with the same object selected "
-        "gives one mask that fits neither -- open a second object instead. "
-        "Clicks belong to the frame you made them on: scrub to a later frame "
-        "and click again to correct an object that has drifted.");
+    ui::Text(dmsg::objects_to_click);
+    ui::help_on_hover(dmsg::objects_to_click_help);
 
     for (int o = 0; o < settings.object_count; ++o) {
         ImGui::PushID(o);
@@ -485,17 +483,18 @@ void SegmentPanel::draw_objects(MaskSettings& settings, bool& edited) {
                                ImGuiColorEditFlags_NoDragDrop,
                            ImVec2(12, 12));
         ImGui::SameLine();
-        char label[96];
-        if (here || elsewhere)
-            std::snprintf(label, sizeof label, "Object %d (%d here, %d elsewhere)",
-                          o + 1, here, elsewhere);
-        else
-            std::snprintf(label, sizeof label, "Object %d (no clicks yet)", o + 1);
-        if (ImGui::RadioButton(label, settings.current_object == o))
+        const std::string label =
+            (here || elsewhere)
+                ? spirula::i18n::format(dmsg::object_with_clicks,
+                                        {o + 1, here, elsewhere})
+                : spirula::i18n::format(dmsg::object_no_clicks, {o + 1});
+        // PushID(o) above already separates the rows, so the label carries no
+        // ID of its own.
+        if (ui::RadioButtonRaw(label.c_str(), settings.current_object == o))
             settings.current_object = o;
         if (here || elsewhere) {
             ImGui::SameLine();
-            if (ImGui::SmallButton("Clear")) {
+            if (ui::SmallButton(dmsg::object_clear)) {
                 auto& v = settings.clicks;
                 v.erase(std::remove_if(v.begin(), v.end(),
                                        [o](const MaskClick& c) { return c.object == o; }),
@@ -506,13 +505,13 @@ void SegmentPanel::draw_objects(MaskSettings& settings, bool& edited) {
         ImGui::PopID();
     }
 
-    if (ImGui::SmallButton("Another object")) {
+    if (ui::SmallButton(dmsg::object_another)) {
         settings.current_object = settings.object_count++;
     }
-    help_tooltip_on_hover("Adds an object for the next thing you click on.");
+    ui::help_on_hover(dmsg::object_another_help);
     if (settings.object_count > 1) {
         ImGui::SameLine();
-        if (ImGui::SmallButton("Clear all")) {
+        if (ui::SmallButton(dmsg::object_clear_all)) {
             settings.clicks.clear();
             settings.object_count = 1;
             settings.current_object = 0;
@@ -531,15 +530,14 @@ void SegmentPanel::draw(MaskSettings& settings) {
                              ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     bool open = true;
-    if (!ImGui::Begin("Try the mask", &open, ImGuiWindowFlags_NoCollapse)) {
+    if (!ImGui::Begin(ui::detail::label(dmsg::preview_title), &open,
+                      ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         if (!open) close();
         return;
     }
 
-    ImGui::TextDisabled(
-        "Red = removed from the reconstruction. Adjust the prompt until only "
-        "what you want gone is red.");
+    ui::TextDisabled(dmsg::preview_legend);
     ImGui::Separator();
 
     // ---- controls ----
@@ -553,43 +551,34 @@ void SegmentPanel::draw(MaskSettings& settings) {
     // radio, and a label that does not follow the switch reads as a bug.
     // Stacked, not side by side: at this panel width the second label clips.
     int polarity = settings.keep_subject ? 1 : 0;
-    if (ImGui::RadioButton("Remove what I name", polarity == 0)) polarity = 0;
-    if (ImGui::RadioButton("Keep only what I name", polarity == 1)) polarity = 1;
+    if (ui::RadioButton(dmsg::mask_remove_named, polarity == 0)) polarity = 0;
+    if (ui::RadioButton(dmsg::mask_keep_named, polarity == 1)) polarity = 1;
     if ((polarity == 1) != settings.keep_subject) {
         settings.keep_subject = polarity == 1;
         edited = true;
     }
-    help_tooltip_on_hover(
-        "\"Remove\" is for distractors -- people, cars, the photographer's "
-        "shadow. \"Keep only\" is for object captures, where everything but "
-        "the subject should be ignored.");
+    ui::help_on_hover(dmsg::preview_polarity_help);
     const bool keep = settings.keep_subject;
 
     ImGui::Spacing();
-    ImGui::TextUnformatted(keep ? "What should be kept?"
-                                : "What should be removed?");
+    ui::Text(keep ? dmsg::preview_what_kept : dmsg::preview_what_removed);
     ImGui::SetNextItemWidth(-1);
-    edited |= ImGui::InputTextWithHint(
-        "##prompt", keep ? "the statue; its pedestal" : "people; cars; my shadow",
+    edited |= ui::InputTextWithHintRaw(
+        "##prompt", keep ? dmsg::mask_hint_keep : dmsg::mask_hint_remove,
         &settings.prompt);
-    help_tooltip_on_hover(
-        keep ? "Plain words for the subject of the capture, separated by "
-               "semicolons. Everything else is cut out of the reconstruction."
-             : "Plain words for the things to take out of the reconstruction, "
-               "separated by semicolons. Anything that moved, reflected, or "
-               "was not part of the scene is a good candidate.");
+    ui::help_on_hover(keep ? dmsg::preview_prompt_help_keep
+                           : dmsg::preview_prompt_help_remove);
 
     ImGui::Spacing();
-    ImGui::TextUnformatted(keep ? "...but remove these" : "...but keep these");
+    ui::Text(keep ? dmsg::preview_but_remove_these
+                  : dmsg::preview_but_keep_these);
     ImGui::SetNextItemWidth(-1);
-    edited |= ImGui::InputTextWithHint(
-        "##negprompt", keep ? "the hand holding it" : "person in a painting",
+    edited |= ui::InputTextWithHintRaw(
+        "##negprompt",
+        keep ? dmsg::mask_hint_but_remove : dmsg::mask_hint_but_keep,
         &settings.negative_prompt);
-    help_tooltip_on_hover(
-        keep ? "Exceptions: things that match the line above but should still "
-               "go. Optional."
-             : "Exceptions: things that match the line above but should stay. "
-               "Optional.");
+    ui::help_on_hover(keep ? dmsg::preview_negative_help_keep
+                           : dmsg::preview_negative_help_remove);
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -600,23 +589,22 @@ void SegmentPanel::draw(MaskSettings& settings) {
         ImGui::Spacing();
         ImGui::SetNextItemWidth(-1);
         int idx = _frame_idx;
-        char fmt[48];
-        std::snprintf(fmt, sizeof fmt, "frame %lld",
-                      (long long)_frames[(size_t)_frame_idx].index);
-        if (ImGui::SliderInt("##frame", &idx, 0, (int)_frames.size() - 1, fmt)) {
+        // The slider's own overlay format string: the index is substituted by
+        // ImGui, so this is not a place a placeholder can be used.
+        const std::string fmt = spirula::i18n::format(
+            dmsg::preview_frame, {(long long)_frames[(size_t)_frame_idx].index});
+        if (ui::SliderIntRaw("##frame", &idx, 0, (int)_frames.size() - 1,
+                             fmt.c_str())) {
             _frame_idx = idx;
             _frame_dirty = true;
             _needs_run = true;
         }
-        help_tooltip_on_hover(
-            "A few frames from across the capture. Check a prompt on more than "
-            "one before running -- and, for a video, click here to correct an "
-            "object part way through: what you draw is used from this frame on.");
+        ui::help_on_hover(dmsg::preview_frame_help);
     }
 
     ImGui::Spacing();
     ImGui::BeginDisabled(_busy.load());
-    if (ImGui::Button("Try it", ImVec2(-1, 30))) _needs_run = true;
+    if (ui::Button(dmsg::preview_try_it, ImVec2(-1, 30))) _needs_run = true;
     ImGui::EndDisabled();
 
     // Rerun once the user stops typing, so every keystroke does not queue a
@@ -630,26 +618,20 @@ void SegmentPanel::draw(MaskSettings& settings) {
     ImGui::Spacing();
     {
         std::lock_guard<std::mutex> lk(_mu);
-        if (!_error.empty()) {
-            ImGui::PushTextWrapPos();
-            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s",
-                               _error.c_str());
-            ImGui::PopTextWrapPos();
-        } else if (!_status.empty()) {
-            ImGui::TextDisabled("%s", _status.c_str());
-        }
+        // Segmentation errors and progress come from the inference layer.
+        if (!_error.empty())
+            ui::TextColoredWrappedRaw(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), _error);
+        else if (!_status.empty())
+            ui::TextDisabledRaw(_status);
     }
     if (_kept_fraction >= 0.0f) {
-        ImGui::Text("%.0f%% of the frame is kept", 100.0f * _kept_fraction);
-        if (_kept_fraction < 0.05f) {
-            ImGui::PushTextWrapPos();
-            ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.30f, 1.0f),
-                               keep ? "Almost nothing is left -- the prompt "
-                                      "matched very little of the frame."
-                                    : "Almost everything is masked out -- did "
-                                      "you mean \"Keep only what I name\"?");
-            ImGui::PopTextWrapPos();
-        }
+        char pct[16];
+        std::snprintf(pct, sizeof pct, "%.0f", 100.0f * _kept_fraction);
+        ui::Text(dmsg::preview_kept_fraction, {pct});
+        if (_kept_fraction < 0.05f)
+            ui::TextColoredWrapped(ImVec4(0.95f, 0.75f, 0.30f, 1.0f),
+                                   keep ? dmsg::preview_almost_nothing_kept
+                                        : dmsg::preview_almost_all_masked);
     }
 
     ImGui::EndChild();

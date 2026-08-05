@@ -3,6 +3,7 @@
 // bootstrap, then hands every frame to gui::GuiApp.
 
 #include "app/Tools.h"
+#include "app/gui/Fonts.h"
 #include "app/gui/GuiApp.h"
 
 #include "imgui.h"
@@ -93,6 +94,9 @@ int spirula_gui_main(int argc, char** argv) {
 
     {
         gui::GuiApp app;
+        // The atlas has to exist before the first frame, and the language it
+        // depends on is only settled once GuiApp has read its settings file.
+        app.fonts().ensure();
         // Drag-and-drop onto the window: auto-detect dataset folder / photo
         // folder / video file (fires on the main thread via glfwPollEvents).
         // The whole drop is handed over at once -- several videos dropped
@@ -121,6 +125,12 @@ int spirula_gui_main(int argc, char** argv) {
                 glfwSetWindowShouldClose(window, GLFW_FALSE);
                 app.request_close();
             }
+
+            // Between frames, and before NewFrame: swapping a font face
+            // invalidates every ImFont pointer, and this is the only point in
+            // the loop where none is live. Returns immediately unless the
+            // language changed or a font download finished.
+            app.fonts().ensure();
 
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();

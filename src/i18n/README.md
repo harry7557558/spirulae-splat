@@ -1,0 +1,126 @@
+# `src/i18n/` — how the interface gets translated
+
+The whole design turns on one idea: **make a translation a type, not a lookup
+key.** Then "somebody added a language and forgot a string" is a compile error
+instead of a runtime fallback that nobody notices for a year.
+
+```
+Languages.h        the language set. ONE file. Everything derives from it.
+Message.h          Lang, Msg, SS_MSG / SS_MSG_EN, format()
+BeginCatalog.h     the short tag macros: EN(...) JA(...) ZH_HANS(...) ...
+EndCatalog.h       #undefs them again, so EN/TR never leak into ordinary code
+Locale.cpp/.h      which language the UI is in, and how that is decided
+catalog/           the messages themselves, one header per screen
+```
+
+## Writing a message
+
+```cpp
+#include "i18n/BeginCatalog.h"
+namespace spirula { namespace i18n { namespace msg { namespace gui {
+
+SS_MSG(start_training,
+    EN("Start Training"), JA("学習を開始"), ZH_HANS("开始训练"), ...);
+
+}}}}
+#include "i18n/EndCatalog.h"
+```
+
+Each tag carries its own slot, so **the order does not matter**, a duplicated
+tag necessarily leaves a hole and is caught, and a wrong count has its own
+assert. Three failure modes, three compile errors:
+
+| mistake | what you get |
+|---|---|
+| a language missing | `static_assert`: `'start_training' is missing a translation` |
+| a language twice | the same assert (the duplicate leaves a hole) |
+| too many tags | `wrong number of translations` |
+| a language added to `Languages.h` but not `BeginCatalog.h` | the canary in `BeginCatalog.h` fails first, naming that file |
+
+`SS_MSG_EN(name, "…")` is the escape hatch for a message that has not been
+translated yet: every slot gets the English text, so it works, and
+`bash tools/check_i18n.sh` counts what is left.
+
+## Two rules that are expensive to retrofit
+
+**Never build a sentence from fragments.** Every language here reorders clauses
+relative to English, and Japanese, Korean and Turkish are verb-final, so
+`"Stop training and " + what + "?"` cannot be translated at all. Write the
+whole sentence, with `{0}` / `{1}` placeholders:
+
+```cpp
+ui::Text(msg::dataset_summary, {cameras, views, points});
+```
+
+The trainer's stop-confirmation is the worked example: it is three complete
+questions, not one with a swappable tail.
+
+**No plural-sensitive sentences.** Write `Objects: 3`, not `3 objects`.
+Otherwise Russian needs a three-form CLDR plural rule and every message that
+counts anything triples. Every counting message in the catalogs is labelled
+rather than inflected, on purpose.
+
+## The other half: strings that never became messages
+
+`Msg` cannot see `ImGui::Button("Start")` — that compiles perfectly well and is
+simply never translated. `src/app/gui/Ui.h` closes that from the other side:
+every wrapper takes a `const Msg&`, so a bare literal does not compile, and
+`tools/check_i18n.sh` fails the build if any text-bearing ImGui function is
+called in `src/app/gui/` outside `Ui.h`.
+
+The `ui::*Raw` overloads are the deliberate exception, named so that using one
+is a visible decision in the diff. They are for text that must **not** be
+translated: paths, filenames, device names, engine log lines, backend error
+strings, and text `i18n::format()` already produced.
+
+Between the two, "forgot to translate" has no way in:
+
+    the type system  ->  a message with a missing language
+    the lint         ->  a string that never became a message
+
+## Widget identity
+
+Every `ui::` wrapper with an ID renders `"text###<message name>"`. ImGui derives
+a widget's ID from its label, so without this, switching to Japanese would
+collapse every open header and reset every scroll position. Two call sites
+sharing one message therefore share an ID too — wrap one in `ImGui::PushID()`
+exactly as you would for two identical literals.
+
+## Which language
+
+First hit wins:
+
+1. `--lang <code>` (consumed in `src/app/Main.cpp`, removed from `argv`, so no
+   tool's own parser has to know about it)
+2. the `SS_LANG` environment variable
+3. the settings file — the GUI's language picker writes it there
+4. the OS locale (`GetUserDefaultLocaleName`, `CFLocale`, `LC_ALL`/`LANG`)
+5. `SS_DEFAULT_LANG`, the compile-time default
+
+Step 5 is a *language*, not "English": a build shipped as
+`-DSS_DEFAULT_LANG=ja` has to come up Japanese in a container with no `LANG`
+set, which is exactly what a hard-coded English fallback gets wrong. It is a
+CMake option that becomes an identifier, so a typo fails to compile.
+
+`C` and `POSIX` deliberately do **not** match: they mean "no preference", not
+"English", and must fall through to the next step.
+
+Chinese needs care and gets it in `resolve_chinese()`: `zh_CN`/`zh_SG`/`zh-Hans-*`
+→ Simplified; `zh_TW`/`zh_HK`/`zh_MO`/`zh-Hant-*`/`zh-CHT` → Traditional; a bare
+`zh` follows `SS_DEFAULT_LANG` if that is Chinese, else Simplified.
+
+## Adding a language
+
+1. Add the row to `SS_LANGUAGES` in `Languages.h`.
+2. Add the tag macro to `BeginCatalog.h` and the `#undef` to `EndCatalog.h`.
+   (Forget this and the canary tells you, by name.)
+3. Build. Every message that now has a hole is a compile error with the
+   message's own name in it. That list is your work.
+4. If the language needs a script the embedded font does not cover, add it to
+   `SS_LANGUAGES_CJK` and give it a face in `assets/fonts/cjk_faces.txt`.
+
+## Fonts
+
+See `assets/fonts/README.md` and `docs/i18n.md`. Short version: a 59 KB
+Latin/Cyrillic subset is embedded and always loaded; the four CJK faces are
+4–8 MB each and are fetched on demand, verified against a pinned SHA-256.

@@ -2,6 +2,10 @@
 
 #include "app/gui/FileDialog.h"
 
+#include "app/gui/Ui.h"
+
+#include "i18n/catalog/Gui.h"
+
 #include "imgui.h"
 #include "imgui_stdlib.h"
 
@@ -12,6 +16,8 @@
 #include <filesystem>
 
 namespace fs = std::filesystem;
+
+namespace msg = spirula::i18n::msg::gui;
 
 namespace gui {
 
@@ -105,11 +111,11 @@ bool FileDialog::draw() {
 
     bool confirmed = false;
     ImGui::SetNextWindowSize(ImVec2(680, 480), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal(_title.c_str(), &_is_open)) {
+    if (ui::BeginPopupModalRaw(_title.c_str(), &_is_open)) {
         std::error_code ec;
 
         // ---- top bar: up / home / drives / editable path ----
-        if (ImGui::Button("Up")) {
+        if (ui::Button(msg::fd_up)) {
             fs::path p(_cwd);
             if (p.has_parent_path() && p.parent_path() != p) {
                 _cwd = p.parent_path().string();
@@ -118,7 +124,7 @@ bool FileDialog::draw() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Home")) {
+        if (ui::Button(msg::fd_home)) {
             _cwd = home_dir();
             _selected.clear();
             refresh();
@@ -126,10 +132,10 @@ bool FileDialog::draw() {
 #ifdef _WIN32
         ImGui::SameLine();
         ImGui::SetNextItemWidth(70);
-        if (ImGui::BeginCombo("##drives", "Drive")) {
+        if (ui::BeginComboRaw("##drives", msg::fd_drive.get())) {
             for (char d = 'A'; d <= 'Z'; d++) {
                 std::string root = std::string(1, d) + ":\\";
-                if (fs::exists(root, ec) && ImGui::Selectable(root.c_str())) {
+                if (fs::exists(root, ec) && ui::SelectableRaw(root)) {
                     _cwd = root;
                     _selected.clear();
                     refresh();
@@ -140,7 +146,7 @@ bool FileDialog::draw() {
 #endif
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputText("##path", &_path_edit,
+        if (ui::InputTextRaw("##path", &_path_edit,
                              ImGuiInputTextFlags_EnterReturnsTrue)) {
             if (fs::is_directory(_path_edit, ec)) {
                 _cwd = fs::absolute(_path_edit, ec).string();
@@ -159,7 +165,8 @@ bool FileDialog::draw() {
                 const bool sel = is_selected(e.name);
                 std::string label = e.is_dir ? "[+] " : (_multi && sel ? "[x] " : "     ");
                 label += e.name;
-                if (ImGui::Selectable(label.c_str(), sel,
+                // File and folder names, exactly as they are on disk.
+                if (ui::SelectableRaw(label.c_str(), sel,
                                       ImGuiSelectableFlags_AllowDoubleClick)) {
                     if (e.is_dir) _selected.assign(1, e.name);
                     else toggle(e.name);
@@ -185,23 +192,23 @@ bool FileDialog::draw() {
         bool have_sel = !_selected.empty();
         if (_mode == Mode::Folder) {
             if (have_sel) {
-                if (ImGui::Button("Select Highlighted Folder")) {
+                if (ui::Button(msg::fd_select_highlighted)) {
                     _results.assign(1, (fs::path(_cwd) / _selected[0]).string());
                     confirmed = true;
                 }
                 ImGui::SameLine();
             }
-            if (ImGui::Button("Use This Folder")) {
+            if (ui::Button(msg::fd_use_this_folder)) {
                 _results.assign(1, _cwd);
                 confirmed = true;
             }
         } else {
-            char label[64] = "Select File";
-            if (_multi && _selected.size() > 1)
-                std::snprintf(label, sizeof label, "Select %d Files",
-                              (int)_selected.size());
+            const bool many = _multi && _selected.size() > 1;
             ImGui::BeginDisabled(!have_sel);
-            if (ImGui::Button(label) && have_sel) {
+            const bool go = many
+                ? ui::Button(msg::fd_select_files, {(int)_selected.size()})
+                : ui::Button(msg::fd_select_file);
+            if (go && have_sel) {
                 _results.clear();
                 for (const std::string& name : _selected)
                     _results.push_back((fs::path(_cwd) / name).string());
@@ -210,11 +217,11 @@ bool FileDialog::draw() {
             ImGui::EndDisabled();
             if (_multi) {
                 ImGui::SameLine();
-                ImGui::TextDisabled("(click several to add them all)");
+                ui::TextDisabled(msg::fd_multi_hint);
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) _is_open = false;
+        if (ui::Button(msg::cancel)) _is_open = false;
 
         if (confirmed) {
             _result = _results.empty() ? "" : _results[0];
