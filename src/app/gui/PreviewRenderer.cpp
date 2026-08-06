@@ -512,9 +512,12 @@ void PreviewRenderer::ensure_grid(float scene_radius, float view_dist,
 }
 
 bool PreviewRenderer::build(const spirula::TrainerSession& session) {
+    return build(session.ds, session.post);
+}
+
+bool PreviewRenderer::build(const ParsedDataset& ds, const PostSplitCameras& post) {
     destroy_gl();
     if (!ensure_program()) return false;
-    const auto& ds = session.ds;
 
     // train -> normalized frame similarity (identity when scale == 1),
     // matching how the viewport frames the scene.
@@ -642,7 +645,7 @@ bool PreviewRenderer::build(const spirula::TrainerSession& session) {
 
     // Base frustum size: the engine's kNN heuristic (train frame) mapped to
     // normalized units.
-    _base_cam_size = viewer_camera_size_heuristic(session.post) * (float)sA;
+    _base_cam_size = viewer_camera_size_heuristic(post) * (float)sA;
 
     auto make_vao = [&](unsigned& vao, unsigned& vbo, const void* data,
                         size_t bytes, size_t stride, bool with_delta) {

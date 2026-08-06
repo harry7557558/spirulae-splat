@@ -1,0 +1,291 @@
+// SplatViewer.cpp -- see SplatViewer.h.
+
+#include "app/gui/SplatViewer.h"
+
+#include "checkpoint/Resume.h"
+#include "checkpoint/SplatPly.h"
+#include "config/TrainConfig.h"
+#include "data/DatasetParser.h"
+#include "engine/Engine.h"
+#include "i18n/catalog/Gui.h"
+
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+
+namespace fs = std::filesystem;
+namespace msg = spirula::i18n::msg::gui;
+using spirula::i18n::format;
+
+namespace gui {
+
+namespace {
+
+TorchTensorView tv(std::vector<float>& v, std::vector<int64_t> shape) {
+    return {(uint64_t)(uintptr_t)v.data(), (uint32_t)sizeof(float), std::move(shape)};
+}
+
+// Where the model is and how big it is, robustly -- a port of the standalone
+// web viewer's ssv_fit_sphere + fitModel (viewer/src/viewer.cpp,
+// viewer/js/main.js), so a file framed here and the same file framed there
+// open on the same view.
+//
+// A trained scene has floaters: a handful of splats parked far outside
+// anything a camera saw. A bounding box is therefore useless -- it puts the
+// viewer a kilometre away looking at a dot -- and the median is what is left.
+// `radius` comes back as the web viewer's model radius, twice the MEDIAN
+// distance from the centre.
+void scene_extent(const std::vector<float>& xyz, int64_t n,
+                  float center[3], float& radius) {
+    center[0] = center[1] = center[2] = 0.0f;
+    radius = 1.0f;
+    if (n <= 0) return;
+    // Subsampled above a million points, as the web viewer does: a median does
+    // not get more accurate for being taken over more of the same cloud.
+    const int64_t step = std::max<int64_t>(1, n / (1 << 20));
+    std::vector<float> tmp;
+    tmp.reserve((size_t)(n / step + 1));
+    for (int d = 0; d < 3; d++) {
+        tmp.clear();
+        for (int64_t i = 0; i < n; i += step) tmp.push_back(xyz[(size_t)i * 3 + d]);
+        std::nth_element(tmp.begin(), tmp.begin() + tmp.size() / 2, tmp.end());
+        center[d] = tmp[tmp.size() / 2];
+    }
+    tmp.clear();
+    for (int64_t i = 0; i < n; i += step) {
+        const float dx = xyz[(size_t)i * 3 + 0] - center[0];
+        const float dy = xyz[(size_t)i * 3 + 1] - center[1];
+        const float dz = xyz[(size_t)i * 3 + 2] - center[2];
+        tmp.push_back(dx * dx + dy * dy + dz * dz);
+    }
+    std::nth_element(tmp.begin(), tmp.begin() + tmp.size() / 2, tmp.end());
+    radius = 2.0f * std::sqrt(std::max(tmp[tmp.size() / 2], 1e-24f));
+    radius = std::max(radius, 1e-6f);
+}
+
+// One client unit, in model units: the distance the web viewer's fitSphere
+// puts the camera at for that radius (r / tan(fov/2) * 1.25, at the 90-degree
+// field of view this viewport opens with). The client navigates at distance 1
+// from the origin, exactly as it does over a dataset's normalized frame, so
+// this scalar IS the framing.
+float view_distance_for(float radius) { return 1.25f * radius; }
+
+}  // namespace
+
+
+SplatViewer::~SplatViewer() {
+    if (_worker.joinable()) _worker.join();
+    close();
+}
+
+void SplatViewer::open(const std::string& path) {
+    if (_worker.joinable()) _worker.join();
+    {
+        std::lock_guard<std::mutex> lk(_mu);
+        _error.clear();
+        _path = path;
+        _file.clear();
+    }
+    _num_splats = 0;
+    _sh_degree = 0;
+    _state = State::Loading;
+    _worker = std::thread([this, path] { run(path); });
+}
+
+void SplatViewer::close() {
+    if (_worker.joinable()) _worker.join();
+    if (_owns_engine.exchange(false)) {
+        std::lock_guard<std::mutex> lk(_engine_mutex);
+        engine_reset();
+    }
+    _state = State::Idle;
+    _num_splats = 0;
+    std::lock_guard<std::mutex> lk(_mu);
+    _path.clear();
+    _file.clear();
+}
+
+std::string SplatViewer::error() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _error;
+}
+std::string SplatViewer::path() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _path;
+}
+std::string SplatViewer::file() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _file;
+}
+ViewerRenderConfig SplatViewer::render_config() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _cfg;
+}
+std::string SplatViewer::scene_key() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _file + ":" + std::to_string(_num_splats.load());
+}
+
+ViewerHooks SplatViewer::make_hooks() {
+    ViewerHooks hooks;
+    hooks.engine_mutex = &_engine_mutex;
+    // No training step to warm the SH degree up against: every band the file
+    // carries is drawn from the first frame.
+    hooks.current_step = [] { return 1 << 20; };
+    hooks.set_render_pending = [](bool) {};
+    return hooks;
+}
+
+void SplatViewer::log(const std::string& s) {
+    std::lock_guard<std::mutex> lk(_mu);
+    _log.push_back(s);
+    if (_log.size() > 2000) _log.erase(_log.begin(), _log.begin() + 500);
+}
+
+std::vector<std::string> SplatViewer::drain_log() {
+    std::lock_guard<std::mutex> lk(_mu);
+    std::vector<std::string> out;
+    out.swap(_log);
+    return out;
+}
+
+void SplatViewer::run(std::string path) {
+    auto fail = [&](const std::string& why) {
+        std::lock_guard<std::mutex> lk(_mu);
+        _error = why;
+        _state = State::Failed;
+    };
+    try {
+        auto [ply, run_dir] = spirula::find_splat_ply(path);
+        {
+            std::lock_guard<std::mutex> lk(_mu);
+            _file = ply;
+        }
+        // A .ply holding points rather than Gaussians -- an SfM cloud, a
+        // Metashape export -- is a thing a user reasonably drops here, and
+        // the GL preview already draws exactly that.
+        if (!spirula::is_splat_ply(ply)) {
+            log(format(msg::viewer_reading, {ply}));
+            ColmapPoints3D pts = read_ply_points(ply);
+            if (pts.num() <= 0) return fail(format(msg::viewer_not_a_splat_file, {ply}));
+            float center[3], radius;
+            scene_extent(pts.xyz, pts.num(), center, radius);
+            const float unit = view_distance_for(radius);
+            ParsedDataset ds;
+            ds.points = std::move(pts);
+            ds.num_cameras = 0;
+            ds.train_frame_scale = unit;
+            ds.train_to_normalized = {unit, 0, 0, center[0],
+                                      0, unit, 0, center[1],
+                                      0, 0, unit, center[2],
+                                      0, 0, 0, 1};
+            const int64_t n = ds.points.num();
+            {
+                std::lock_guard<std::mutex> lk(_mu);
+                _points = std::move(ds);
+                _post = PostSplitCameras();
+            }
+            _kind = Kind::Points;
+            _num_splats = n;
+            _sh_degree = 0;
+            log(format(msg::viewer_loaded_points, {(long long)n}));
+            _state = State::Ready;
+            return;
+        }
+        _kind = Kind::Splats;
+        log(format(msg::viewer_reading, {ply}));
+        spirula::SplatCloud c = spirula::read_splat_ply(ply);
+        if (c.num <= 0) return fail(msg::viewer_no_splats.get());
+
+        // The run this file came out of, when it is still next to it: what
+        // primitive its splats are, and how they are rasterized. A PLY says
+        // nothing about either, and rendering a Mip or 3DGUT model as vanilla
+        // 3DGS is wrong in a way that looks like a bad reconstruction.
+        TrainConfig cfg;
+        const fs::path cfg_path = fs::path(run_dir) / "config.json";
+        std::error_code ec;
+        if (fs::is_regular_file(cfg_path, ec)) {
+            try {
+                cfg = ckpt::config_from_json(cfg_path);
+                log(format(msg::viewer_using_run_config, {cfg_path.string()}));
+            } catch (const std::exception& e) {
+                log(format(msg::viewer_run_config_unreadable, {e.what()}));
+            }
+        }
+
+        float center[3], radius;
+        scene_extent(c.means, c.num, center, radius);
+        const float unit = view_distance_for(radius);
+
+        ViewerRenderConfig vc;
+        vc.primitive = cfg.primitive;
+        vc.packed = cfg.packed || cfg.use_bvh;
+        vc.sh_degree_warmup_every = 1;
+        // Median and distortion buffers are training diagnostics computed from
+        // regularizers this file has none of, so the viewer does not offer
+        // them. rgb / depth / alpha / normals all come from the same render.
+        vc.output_median = false;
+        vc.distortion_reg_on = false;
+        // The client navigates a normalized frame centred on the model, at
+        // one unit; train_to_normalized maps that frame back onto the file's
+        // own coordinates, which is precisely what it does for a dataset.
+        vc.train_frame_scale = unit;
+        vc.train_to_normalized = {unit, 0, 0, center[0],
+                                  0, unit, 0, center[1],
+                                  0, 0, unit, center[2],
+                                  0, 0, 0, 1};
+        vc.base_camera_size = 0.0f;   // no cameras to draw
+
+        {
+            std::lock_guard<std::mutex> lk(_engine_mutex);
+            // Takes the engine over, which is why open() is a session-
+            // destroying action for GuiApp.
+            engine_reset();
+            _owns_engine = true;
+            const int64_t K = c.dim_sh() - 1;
+            set_data_3dgs(c.num,
+                          tv(c.means,       {c.num, 3}),
+                          tv(c.quats,       {c.num, 4}),
+                          tv(c.scales,      {c.num, 3}),
+                          tv(c.opacities,   {c.num, 1}),
+                          tv(c.features_dc, {c.num, 3}),
+                          tv(c.features_sh, {c.num, K, 3}));
+            // engine_blit_view refuses to run before engine_viewer_init, and
+            // that wants at least one camera -- so a file with none gets one
+            // placeholder, parked at the scene centre and sized to nothing.
+            // Nothing draws it: the viewer screen has no "show cameras"
+            // control, because there are none to show. What the call is
+            // really for is the state the axes/grid overlay lives in.
+            std::vector<float> intrins{32, 32, 32, 32};
+            std::vector<float> dist((size_t)10, 0.0f);
+            std::vector<float> c2w{1, 0, 0, center[0],
+                                   0, 1, 0, center[1],
+                                   0, 0, 1, center[2]};
+            std::vector<int32_t> models_i{0}, w_i{64}, h_i{64};   // 0 = PINHOLE
+            auto tvi = [](std::vector<int32_t>& v, std::vector<int64_t> shape) {
+                return TorchTensorView{(uint64_t)(uintptr_t)v.data(),
+                                       (uint32_t)sizeof(int32_t), std::move(shape)};
+            };
+            engine_viewer_init(tvi(models_i, {1}), tv(intrins, {1, 4}),
+                               tv(dist, {1, 10}), tv(c2w, {1, 3, 4}),
+                               tvi(w_i, {1}), tvi(h_i, {1}),
+                               /*camera_size=*/radius * 1e-3f);
+            // A file has no grid extent of its own; the model's does, and it
+            // is the frame the overlay is drawn in.
+            engine_viewer_set_grid(radius, unit);
+        }
+
+        _num_splats = c.num;
+        _sh_degree = c.sh_degree;
+        {
+            std::lock_guard<std::mutex> lk(_mu);
+            _cfg = vc;
+        }
+        log(format(msg::viewer_loaded, {(long long)c.num, (long long)c.sh_degree}));
+        _state = State::Ready;
+    } catch (const std::exception& e) {
+        fail(e.what());
+    }
+}
+
+}  // namespace gui

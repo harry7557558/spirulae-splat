@@ -532,30 +532,30 @@ SS_MSG(home_from_video_help,
        "olur."));
 
 SS_MSG(home_drop_hint,
-    EN("...or drop a dataset folder, photo folders, or video files anywhere "
-       "in this window"),
-    JA("…または、データセットフォルダ・写真フォルダ・動画ファイルを"
+    EN("...or drop a dataset folder, photo folders, video files or a .ply model "
+       "anywhere in this window"),
+    JA("…または、データセットフォルダ・写真フォルダ・動画ファイル・PLYモデルを"
        "このウィンドウのどこかにドロップしてください"),
-    ZH_HANS("…或者把数据集文件夹、照片文件夹或视频文件拖到这个窗口的任意位置"),
-    ZH_HANT("…或者把資料集資料夾、相片資料夾或影片檔拖到這個視窗的任意位置"),
-    KO("…또는 데이터셋 폴더, 사진 폴더, 동영상 파일을 이 창 아무 곳에나 "
+    ZH_HANS("…或者把数据集文件夹、照片文件夹、视频文件或 .ply 模型拖到这个窗口的任意位置"),
+    ZH_HANT("…或者把資料集資料夾、相片資料夾、影片檔或 .ply 模型拖到這個視窗的任意位置"),
+    KO("…또는 데이터셋 폴더, 사진 폴더, 동영상 파일, .ply 모델을 이 창 아무 곳에나 "
        "끌어다 놓으세요"),
-    DE("… oder ziehen Sie einen Datensatzordner, Fotoordner oder Videodateien "
-       "irgendwo in dieses Fenster"),
-    FR("… ou déposez un dossier de jeu de données, des dossiers de photos ou "
-       "des fichiers vidéo n'importe où dans cette fenêtre"),
-    ES("… o arrastre una carpeta de conjunto de datos, carpetas de fotos o "
-       "archivos de vídeo a cualquier punto de esta ventana"),
-    PT("… ou arraste uma pasta de conjunto de dados, pastas de fotos ou "
-       "arquivos de vídeo para qualquer ponto desta janela"),
-    IT("… oppure trascini una cartella di set di dati, cartelle di fotografie "
-       "o file video in un punto qualsiasi di questa finestra"),
-    NL("… of sleep een datasetmap, fotomappen of videobestanden ergens in dit "
-       "venster"),
-    RU("… либо перетащите папку набора данных, папки с фотографиями или "
-       "видеофайлы в любое место этого окна"),
-    TR("… ya da bir veri kümesi klasörünü, fotoğraf klasörlerini veya video "
-       "dosyalarını bu pencerenin herhangi bir yerine bırakın"));
+    DE("… oder ziehen Sie einen Datensatzordner, Fotoordner, Videodateien oder ein "
+       ".ply-Modell irgendwo in dieses Fenster"),
+    FR("… ou déposez un dossier de jeu de données, des dossiers de photos, des "
+       "fichiers vidéo ou un modèle .ply n'importe où dans cette fenêtre"),
+    ES("… o arrastre una carpeta de conjunto de datos, carpetas de fotos, archivos "
+       "de vídeo o un modelo .ply a cualquier punto de esta ventana"),
+    PT("… ou arraste uma pasta de conjunto de dados, pastas de fotos, arquivos de "
+       "vídeo ou um modelo .ply para qualquer ponto desta janela"),
+    IT("… oppure trascini una cartella di set di dati, cartelle di foto, file video "
+       "o un modello .ply in un punto qualsiasi di questa finestra"),
+    NL("… of sleep een datasetmap, fotomappen, videobestanden of een .ply-model "
+       "ergens in dit venster"),
+    RU("… или перетащите папку набора данных, папки с фотографиями, видеофайлы или "
+       "модель .ply в любое место этого окна"),
+    TR("… ya da bir veri kümesi klasörünü, fotoğraf klasörlerini, video dosyalarını "
+       "veya bir .ply modelini bu pencerenin herhangi bir yerine bırakın"));
 
 SS_MSG(home_recent,
     EN("Recent"),        JA("最近使った項目"), ZH_HANS("最近"),   ZH_HANT("最近"),
@@ -2420,6 +2420,318 @@ SS_MSG(cancel,
     KO("취소"),           DE("Abbrechen"),    FR("Annuler"),      ES("Cancelar"),
     PT("Cancelar"),      IT("Annulla"),      NL("Annuleren"),    RU("Отмена"),
     TR("İptal"));
+
+// ===========================================================================
+// Viewer screen -- a finished model, open for looking at
+// ===========================================================================
+
+SS_MSG(menu_open_splat,
+    EN("Open a Splat File..."),
+    JA("スプラットファイルを開く…"),
+    ZH_HANS("打开泼溅文件…"),
+    ZH_HANT("開啟潑濺檔案…"),
+    KO("스플랫 파일 열기…"),
+    DE("Splat-Datei öffnen …"),
+    FR("Ouvrir un fichier de splats…"),
+    ES("Abrir un archivo de splats…"),
+    PT("Abrir um arquivo de splats…"),
+    IT("Apri un file di splat…"),
+    NL("Splatbestand openen…"),
+    RU("Открыть файл сплатов…"),
+    TR("Splat dosyası aç…"));
+
+SS_MSG(home_open_splat,
+    EN("View a Trained Model"),
+    JA("学習済みモデルを見る"),
+    ZH_HANS("查看已训练的模型"),
+    ZH_HANT("檢視已訓練的模型"),
+    KO("학습된 모델 보기"),
+    DE("Trainiertes Modell ansehen"),
+    FR("Voir un modèle entraîné"),
+    ES("Ver un modelo entrenado"),
+    PT("Ver um modelo treinado"),
+    IT("Guarda un modello addestrato"),
+    NL("Een getraind model bekijken"),
+    RU("Посмотреть обученную модель"),
+    TR("Eğitilmiş bir modeli görüntüle"));
+
+SS_MSG(home_open_splat_help,
+    EN("Open a .ply file, a checkpoint or a run folder and look around it. "
+       "Models from other Gaussian splatting tools open too, and so does a "
+       "plain point cloud."),
+    JA("PLYファイル・チェックポイント・実行フォルダを開いて自由に見て回れます。"
+       "他のガウススプラッティングツールのモデルや、ただの点群も開けます。"),
+    ZH_HANS("打开 .ply 文件、检查点或运行文件夹，随意观察。也可以打开其他高斯泼溅"
+            "工具的模型，以及普通点云。"),
+    ZH_HANT("開啟 .ply 檔案、檢查點或執行資料夾，隨意觀察。也可以開啟其他高斯潑濺"
+            "工具的模型，以及一般點雲。"),
+    KO(".ply 파일, 체크포인트, 실행 폴더를 열어 자유롭게 둘러봅니다. 다른 가우시안 "
+       "스플래팅 도구의 모델이나 단순한 점군도 열립니다."),
+    DE("Eine .ply-Datei, einen Prüfpunkt oder einen Laufordner öffnen und sich "
+       "darin umsehen. Modelle aus anderen Gaussian-Splatting-Werkzeugen lassen "
+       "sich ebenso öffnen wie eine reine Punktwolke."),
+    FR("Ouvrez un fichier .ply, un point de sauvegarde ou un dossier "
+       "d'exécution et promenez-vous dedans. Les modèles d'autres outils de "
+       "Gaussian splatting s'ouvrent aussi, tout comme un simple nuage de points."),
+    ES("Abra un archivo .ply, un punto de control o una carpeta de ejecución y "
+       "recórralo. También se abren modelos de otras herramientas de Gaussian "
+       "splatting y una simple nube de puntos."),
+    PT("Abra um arquivo .ply, um ponto de verificação ou uma pasta de execução "
+       "e percorra-o. Modelos de outras ferramentas de Gaussian splatting "
+       "também abrem, assim como uma simples nuvem de pontos."),
+    IT("Apra un file .ply, un punto di controllo o una cartella di esecuzione e "
+       "ci si muova dentro. Si aprono anche i modelli di altri strumenti di "
+       "Gaussian splatting e una semplice nuvola di punti."),
+    NL("Open een .ply-bestand, een checkpoint of een uitvoermap en kijk erin "
+       "rond. Modellen uit andere Gaussian-splattingprogramma's openen ook, "
+       "net als een gewone puntenwolk."),
+    RU("Откройте файл .ply, контрольную точку или папку запуска и осмотритесь. "
+       "Модели из других инструментов гауссова сплаттинга тоже открываются, как "
+       "и обычное облако точек."),
+    TR("Bir .ply dosyasını, bir kontrol noktasını veya bir çalışma klasörünü "
+       "açıp içinde gezinin. Başka Gaussian splatting araçlarının modelleri de, "
+       "sıradan bir nokta bulutu da açılır."));
+
+SS_MSG(viewer_pick_file,
+    EN("Choose a splat file, checkpoint or run folder"),
+    JA("スプラットファイル・チェックポイント・実行フォルダを選択"),
+    ZH_HANS("选择泼溅文件、检查点或运行文件夹"),
+    ZH_HANT("選擇潑濺檔案、檢查點或執行資料夾"),
+    KO("스플랫 파일, 체크포인트 또는 실행 폴더 선택"),
+    DE("Splat-Datei, Prüfpunkt oder Laufordner wählen"),
+    FR("Choisir un fichier de splats, un point de sauvegarde ou un dossier d'exécution"),
+    ES("Elija un archivo de splats, un punto de control o una carpeta de ejecución"),
+    PT("Escolha um arquivo de splats, um ponto de verificação ou uma pasta de execução"),
+    IT("Scelga un file di splat, un punto di controllo o una cartella di esecuzione"),
+    NL("Kies een splatbestand, checkpoint of uitvoermap"),
+    RU("Выберите файл сплатов, контрольную точку или папку запуска"),
+    TR("Bir splat dosyası, kontrol noktası veya çalışma klasörü seçin"));
+
+SS_MSG(viewer_open_another,
+    EN("Open another"),
+    JA("別のものを開く"),
+    ZH_HANS("打开另一个"),
+    ZH_HANT("開啟另一個"),
+    KO("다른 것 열기"),
+    DE("Weitere öffnen"),
+    FR("En ouvrir un autre"),
+    ES("Abrir otro"),
+    PT("Abrir outro"),
+    IT("Aprine un altro"),
+    NL("Een andere openen"),
+    RU("Открыть другую"),
+    TR("Başka bir tane aç"));
+
+SS_MSG(viewer_splat_count,
+    EN("Splats: {0}   SH degree: {1}"),
+    JA("スプラット数: {0}   SH次数: {1}"),
+    ZH_HANS("泼溅数: {0}   球谐阶数: {1}"),
+    ZH_HANT("潑濺數: {0}   球諧階數: {1}"),
+    KO("스플랫 수: {0}   SH 차수: {1}"),
+    DE("Splats: {0}   SH-Grad: {1}"),
+    FR("Splats : {0}   Degré SH : {1}"),
+    ES("Splats: {0}   Grado SH: {1}"),
+    PT("Splats: {0}   Grau SH: {1}"),
+    IT("Splat: {0}   Grado SH: {1}"),
+    NL("Splats: {0}   SH-graad: {1}"),
+    RU("Сплатов: {0}   Порядок SH: {1}"),
+    TR("Splat: {0}   SH derecesi: {1}"));
+
+SS_MSG(viewer_point_count,
+    EN("Points: {0}"),
+    JA("点の数: {0}"),
+    ZH_HANS("点数: {0}"),
+    ZH_HANT("點數: {0}"),
+    KO("점 수: {0}"),
+    DE("Punkte: {0}"),
+    FR("Points : {0}"),
+    ES("Puntos: {0}"),
+    PT("Pontos: {0}"),
+    IT("Punti: {0}"),
+    NL("Punten: {0}"),
+    RU("Точек: {0}"),
+    TR("Nokta: {0}"));
+
+SS_MSG(viewer_loading,
+    EN("Loading the model..."),
+    JA("モデルを読み込んでいます…"),
+    ZH_HANS("正在载入模型…"),
+    ZH_HANT("正在載入模型…"),
+    KO("모델을 불러오는 중…"),
+    DE("Modell wird geladen …"),
+    FR("Chargement du modèle…"),
+    ES("Cargando el modelo…"),
+    PT("Carregando o modelo…"),
+    IT("Caricamento del modello…"),
+    NL("Model laden…"),
+    RU("Загрузка модели…"),
+    TR("Model yükleniyor…"));
+
+SS_MSG(viewer_failed,
+    EN("That file could not be opened."),
+    JA("そのファイルは開けませんでした。"),
+    ZH_HANS("无法打开该文件。"),
+    ZH_HANT("無法開啟該檔案。"),
+    KO("그 파일을 열 수 없었습니다."),
+    DE("Diese Datei konnte nicht geöffnet werden."),
+    FR("Ce fichier n'a pas pu être ouvert."),
+    ES("No se pudo abrir ese archivo."),
+    PT("Não foi possível abrir esse arquivo."),
+    IT("Non è stato possibile aprire quel file."),
+    NL("Dat bestand kon niet worden geopend."),
+    RU("Не удалось открыть этот файл."),
+    TR("Bu dosya açılamadı."));
+
+SS_MSG(viewer_nothing_open,
+    EN("Open a .ply file to see it here"),
+    JA("PLYファイルを開くとここに表示されます"),
+    ZH_HANS("打开一个 .ply 文件就会显示在这里"),
+    ZH_HANT("開啟一個 .ply 檔案就會顯示在這裡"),
+    KO(".ply 파일을 열면 여기에 표시됩니다"),
+    DE("Eine .ply-Datei öffnen, um sie hier zu sehen"),
+    FR("Ouvrez un fichier .ply pour le voir ici"),
+    ES("Abra un archivo .ply para verlo aquí"),
+    PT("Abra um arquivo .ply para vê-lo aqui"),
+    IT("Apra un file .ply per vederlo qui"),
+    NL("Open een .ply-bestand om het hier te zien"),
+    RU("Откройте файл .ply, чтобы увидеть его здесь"),
+    TR("Burada görmek için bir .ply dosyası açın"));
+
+SS_MSG(viewer_reading,
+    EN("Reading {0}"),
+    JA("{0} を読み込んでいます"),
+    ZH_HANS("正在读取 {0}"),
+    ZH_HANT("正在讀取 {0}"),
+    KO("{0} 읽는 중"),
+    DE("{0} wird gelesen"),
+    FR("Lecture de {0}"),
+    ES("Leyendo {0}"),
+    PT("Lendo {0}"),
+    IT("Lettura di {0}"),
+    NL("{0} lezen"),
+    RU("Чтение {0}"),
+    TR("{0} okunuyor"));
+
+SS_MSG(viewer_loaded,
+    EN("Loaded. Splats: {0}   SH degree: {1}"),
+    JA("読み込みました。スプラット数: {0}   SH次数: {1}"),
+    ZH_HANS("已载入。泼溅数: {0}   球谐阶数: {1}"),
+    ZH_HANT("已載入。潑濺數: {0}   球諧階數: {1}"),
+    KO("불러왔습니다. 스플랫 수: {0}   SH 차수: {1}"),
+    DE("Geladen. Splats: {0}   SH-Grad: {1}"),
+    FR("Chargé. Splats : {0}   Degré SH : {1}"),
+    ES("Cargado. Splats: {0}   Grado SH: {1}"),
+    PT("Carregado. Splats: {0}   Grau SH: {1}"),
+    IT("Caricato. Splat: {0}   Grado SH: {1}"),
+    NL("Geladen. Splats: {0}   SH-graad: {1}"),
+    RU("Загружено. Сплатов: {0}   Порядок SH: {1}"),
+    TR("Yüklendi. Splat: {0}   SH derecesi: {1}"));
+
+SS_MSG(viewer_loaded_points,
+    EN("That file holds a point cloud, not Gaussians. Points: {0}"),
+    JA("このファイルはガウシアンではなく点群です。点の数: {0}"),
+    ZH_HANS("这个文件里是点云，不是高斯。点数: {0}"),
+    ZH_HANT("這個檔案裡是點雲，不是高斯。點數: {0}"),
+    KO("이 파일에는 가우시안이 아니라 점군이 들어 있습니다. 점 수: {0}"),
+    DE("Diese Datei enthält eine Punktwolke, keine Gauß-Verteilungen. Punkte: {0}"),
+    FR("Ce fichier contient un nuage de points, pas des gaussiennes. Points : {0}"),
+    ES("Ese archivo contiene una nube de puntos, no gaussianas. Puntos: {0}"),
+    PT("Esse arquivo contém uma nuvem de pontos, não gaussianas. Pontos: {0}"),
+    IT("Quel file contiene una nuvola di punti, non gaussiane. Punti: {0}"),
+    NL("Dat bestand bevat een puntenwolk, geen Gaussianen. Punten: {0}"),
+    RU("В этом файле облако точек, а не гауссианы. Точек: {0}"),
+    TR("Bu dosyada gauss'lar değil, bir nokta bulutu var. Nokta: {0}"));
+
+SS_MSG(viewer_not_a_splat_file,
+    EN("{0} is a PLY file, but it holds neither Gaussians nor points."),
+    JA("{0} はPLYファイルですが、ガウシアンも点も入っていません。"),
+    ZH_HANS("{0} 是 PLY 文件，但里面既没有高斯也没有点。"),
+    ZH_HANT("{0} 是 PLY 檔案，但裡面既沒有高斯也沒有點。"),
+    KO("{0} 은(는) PLY 파일이지만 가우시안도 점도 들어 있지 않습니다."),
+    DE("{0} ist eine PLY-Datei, enthält aber weder Gauß-Verteilungen noch Punkte."),
+    FR("{0} est un fichier PLY, mais il ne contient ni gaussiennes ni points."),
+    ES("{0} es un archivo PLY, pero no contiene ni gaussianas ni puntos."),
+    PT("{0} é um arquivo PLY, mas não contém gaussianas nem pontos."),
+    IT("{0} è un file PLY, ma non contiene né gaussiane né punti."),
+    NL("{0} is een PLY-bestand, maar bevat Gaussianen noch punten."),
+    RU("{0} — файл PLY, но в нём нет ни гауссиан, ни точек."),
+    TR("{0} bir PLY dosyası, ama içinde ne gauss ne de nokta var."));
+
+SS_MSG(viewer_no_splats,
+    EN("That file has no Gaussians in it."),
+    JA("このファイルにはガウシアンが入っていません。"),
+    ZH_HANS("这个文件里没有高斯。"),
+    ZH_HANT("這個檔案裡沒有高斯。"),
+    KO("이 파일에는 가우시안이 없습니다."),
+    DE("Diese Datei enthält keine Gauß-Verteilungen."),
+    FR("Ce fichier ne contient aucune gaussienne."),
+    ES("Ese archivo no contiene ninguna gaussiana."),
+    PT("Esse arquivo não contém nenhuma gaussiana."),
+    IT("Quel file non contiene alcuna gaussiana."),
+    NL("Dat bestand bevat geen Gaussianen."),
+    RU("В этом файле нет гауссиан."),
+    TR("Bu dosyada hiç gauss yok."));
+
+SS_MSG(viewer_using_run_config,
+    EN("Using the run's own settings from {0}"),
+    JA("実行時の設定を {0} から読み込みました"),
+    ZH_HANS("使用来自 {0} 的该次运行的设置"),
+    ZH_HANT("使用來自 {0} 的該次執行的設定"),
+    KO("{0} 에 있는 해당 실행의 설정을 사용합니다"),
+    DE("Die Einstellungen des Laufs aus {0} werden verwendet"),
+    FR("Utilisation des réglages de l'exécution issus de {0}"),
+    ES("Se usan los ajustes de la ejecución tomados de {0}"),
+    PT("Usando as configurações da execução vindas de {0}"),
+    IT("Si usano le impostazioni dell'esecuzione da {0}"),
+    NL("De instellingen van de run uit {0} worden gebruikt"),
+    RU("Используются настройки запуска из {0}"),
+    TR("Çalışmanın {0} içindeki kendi ayarları kullanılıyor"));
+
+SS_MSG(viewer_run_config_unreadable,
+    EN("The run's settings could not be read ({0}); using the defaults."),
+    JA("実行時の設定を読み取れませんでした（{0}）。既定値を使います。"),
+    ZH_HANS("无法读取该次运行的设置（{0}），改用默认值。"),
+    ZH_HANT("無法讀取該次執行的設定（{0}），改用預設值。"),
+    KO("실행 설정을 읽지 못했습니다({0}). 기본값을 사용합니다."),
+    DE("Die Einstellungen des Laufs konnten nicht gelesen werden ({0}); es "
+       "gelten die Standardwerte."),
+    FR("Les réglages de l'exécution n'ont pas pu être lus ({0}) ; les valeurs "
+       "par défaut sont utilisées."),
+    ES("No se pudieron leer los ajustes de la ejecución ({0}); se usan los "
+       "valores predeterminados."),
+    PT("Não foi possível ler as configurações da execução ({0}); usando os "
+       "valores padrão."),
+    IT("Non è stato possibile leggere le impostazioni dell'esecuzione ({0}); "
+       "si usano i valori predefiniti."),
+    NL("De instellingen van de run konden niet worden gelezen ({0}); de "
+       "standaardwaarden worden gebruikt."),
+    RU("Не удалось прочитать настройки запуска ({0}); используются значения по "
+       "умолчанию."),
+    TR("Çalışmanın ayarları okunamadı ({0}); varsayılanlar kullanılıyor."));
+
+SS_MSG(confirm_open_splat,
+    EN("Stop training, save a final checkpoint, and open the model file?"),
+    JA("学習を停止して最後のチェックポイントを保存し、モデルファイルを"
+       "開きますか？"),
+    ZH_HANS("停止训练、保存最后一个检查点并打开该模型文件吗？"),
+    ZH_HANT("停止訓練、儲存最後一個檢查點並開啟該模型檔案嗎？"),
+    KO("학습을 멈추고 마지막 체크포인트를 저장한 뒤 모델 파일을 열까요?"),
+    DE("Training anhalten, einen letzten Prüfpunkt speichern und die "
+       "Modelldatei öffnen?"),
+    FR("Arrêter l'entraînement, enregistrer un dernier point de sauvegarde et "
+       "ouvrir le fichier de modèle ?"),
+    ES("¿Detener el entrenamiento, guardar un último punto de control y abrir "
+       "el archivo de modelo?"),
+    PT("Parar o treinamento, salvar um último ponto de verificação e abrir o "
+       "arquivo de modelo?"),
+    IT("Fermare l'addestramento, salvare un ultimo punto di controllo e aprire "
+       "il file del modello?"),
+    NL("Training stoppen, een laatste checkpoint opslaan en het modelbestand "
+       "openen?"),
+    RU("Остановить обучение, сохранить последнюю контрольную точку и открыть "
+       "файл модели?"),
+    TR("Eğitimi durdurup son bir kontrol noktası kaydedelim ve model dosyasını "
+       "açalım mı?"));
 
 }  // namespace gui
 }  // namespace msg

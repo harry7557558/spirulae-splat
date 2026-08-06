@@ -58,7 +58,7 @@ void fov_to_intrinsics(float fov_deg, int w, int h, const char* model,
 // Framing + camera math
 // ---------------------------------------------------------------------------
 
-void ViewportPanel::compute_framing(const spirula::TrainerSession& session) {
+void ViewportPanel::reset_pose(float radius) {
     // Match the web viewer's cam.reset() exactly: target = client-frame
     // origin (the normalized frame is centered on the CAMERA POSES via
     // center_method="poses", i.e. the captured object for object-centric
@@ -69,6 +69,12 @@ void ViewportPanel::compute_framing(const spirula::TrainerSession& session) {
     _cam.target[0] = _cam.target[1] = _cam.target[2] = 0;
     _cam.orbit(0, -250);
     _home = _cam;
+    _home_dist = radius;
+    _dirty = true;
+}
+
+void ViewportPanel::compute_framing(const spirula::TrainerSession& session) {
+    reset_pose(1.0f);
 
     // Scene radius (drives only the preview depth range): spread of the
     // camera positions in the client frame.
@@ -189,6 +195,7 @@ void ViewportPanel::view_matrix(float out[16]) const {
 
 void ViewportPanel::attach_preview(spirula::TrainerSession& session) {
     detach();
+    _has_cameras = true;
     if (!_preview.build(session)) {
         _last_error = "preview renderer unavailable (OpenGL 3.2 required)";
         return;
@@ -198,12 +205,49 @@ void ViewportPanel::attach_preview(spirula::TrainerSession& session) {
     _mode = Mode::Preview;
 }
 
+void ViewportPanel::attach_preview_data(const ParsedDataset& ds,
+                                       const PostSplitCameras& post,
+                                       const std::string& key, float radius) {
+    detach();
+    _has_cameras = false;
+    _show_cams = false;
+    if (!_preview.build(ds, post)) {
+        _last_error = "preview renderer unavailable (OpenGL 3.2 required)";
+        return;
+    }
+    if (key != _framed_key) {
+        _framed_key = key;
+        reset_pose(radius);
+    }
+    _last_error.clear();
+    _mode = Mode::Preview;
+}
+
 void ViewportPanel::attach(spirula::TrainerSession& session) {
     detach();
     _worker.start(session.make_viewer_config(), session.make_viewer_hooks());
     _buffer_keys = _worker.buffer_keys();
     _buffer_idx = std::min<int>(_buffer_idx, (int)_buffer_keys.size() - 1);
+    _has_cameras = session.ds.num_cameras > 0;
     maybe_frame(session);
+    _pending = 0;
+    _last_error.clear();
+    _mode = Mode::Engine;
+}
+
+void ViewportPanel::attach_scene(const ViewerRenderConfig& cfg,
+                                 const ViewerHooks& hooks,
+                                 const std::string& key, float radius) {
+    detach();
+    _worker.start(cfg, hooks);
+    _buffer_keys = _worker.buffer_keys();
+    _buffer_idx = std::min<int>(_buffer_idx, (int)_buffer_keys.size() - 1);
+    _has_cameras = false;
+    _show_cams = false;
+    if (key != _framed_key) {
+        _framed_key = key;
+        reset_pose(radius);
+    }
     _pending = 0;
     _last_error.clear();
     _mode = Mode::Engine;
@@ -369,16 +413,19 @@ void ViewportPanel::draw_controls(bool engine) {
         ui::help_on_hover(msg::viewport_dataset_preview_help);
         ImGui::SameLine();
     }
-    if (ui::Checkbox(msg::viewport_cameras, &_show_cams)) _dirty = true;
-    if (_show_cams) {
+    // No dataset behind a splat file, so nothing to draw a frustum for.
+    if (_has_cameras) {
+        if (ui::Checkbox(msg::viewport_cameras, &_show_cams)) _dirty = true;
+        if (_show_cams) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(110);
+            if (ui::SliderFloatRaw("##fsize", &_frustum_scale, 0.1f, 10.0f,
+                                   "size x%.2f", ImGuiSliderFlags_Logarithmic))
+                _dirty = true;
+            ui::help_on_hover(msg::viewport_frustum_size_help);
+        }
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(110);
-        if (ui::SliderFloatRaw("##fsize", &_frustum_scale, 0.1f, 10.0f,
-                               "size x%.2f", ImGuiSliderFlags_Logarithmic))
-            _dirty = true;
-        ui::help_on_hover(msg::viewport_frustum_size_help);
     }
-    ImGui::SameLine();
     if (ui::Checkbox(msg::viewport_grid, &_show_grid)) _dirty = true;
     ui::help_on_hover(msg::viewport_cameras_help);
     if (engine) {
@@ -390,9 +437,12 @@ void ViewportPanel::draw_controls(bool engine) {
                                 "50%", "75%", "100%"};
         if (ui::ComboRaw("##scale", &_scale_idx, scales, 4)) _dirty = true;
         ui::help_on_hover(msg::viewport_scale_help);
-        ImGui::SameLine();
-        ui::Checkbox(msg::viewport_live, &_auto_refresh);
-        ui::help_on_hover(msg::viewport_live_help);
+        // "Live" is about keeping up with training; a file does not move.
+        if (_has_cameras) {
+            ImGui::SameLine();
+            ui::Checkbox(msg::viewport_live, &_auto_refresh);
+            ui::help_on_hover(msg::viewport_live_help);
+        }
     }
     ImGui::SameLine();
     if (ui::Button(msg::viewport_reset_view)) reset_view();
@@ -447,8 +497,23 @@ void ViewportPanel::draw_controls(bool engine) {
     }
 }
 
-void ViewportPanel::draw(bool training) {
+void ViewportPanel::draw(bool training, int step) {
     draw_controls(_mode == Mode::Engine);
+
+    const double now = ImGui::GetTime();
+    note_motion(now);
+    // Seconds per training step, from the steps the caller reports. Measured
+    // here rather than taken from the trainer's own timing because what the
+    // refresh has to be paced against is how fast the number it displays is
+    // moving, which is the same thing the user sees.
+    if (step >= 0 && step != _last_seen_step) {
+        if (_last_seen_step >= 0 && step > _last_seen_step && _last_step_time > 0) {
+            double per = (now - _last_step_time) / (step - _last_seen_step);
+            _step_secs = _step_secs > 0 ? 0.8 * _step_secs + 0.2 * per : per;
+        }
+        _last_seen_step = step;
+        _last_step_time = now;
+    }
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
     avail.x = std::max(avail.x, 64.0f);
@@ -465,7 +530,7 @@ void ViewportPanel::draw(bool training) {
     }
 
     if (_mode == Mode::Preview) draw_preview(avail);
-    else                        draw_engine(training, avail);
+    else                        draw_engine(training, avail, step);
 }
 
 void ViewportPanel::draw_preview(const ImVec2& avail) {
@@ -526,11 +591,11 @@ void ViewportPanel::draw_preview(const ImVec2& avail) {
 //
 // Motion is detected by comparing the pose to last frame's rather than by
 // hooking the six places that move it (mouse, wheel, keyboard, gamepad, view
-// reset, double-click recentre) -- one probe cannot miss one of them.
-float ViewportPanel::render_scale(double now) {
-    if (_scale_idx != 0)
-        return _scale_idx == 1 ? 0.5f : _scale_idx == 2 ? 0.75f : 1.0f;
-
+// reset, double-click recentre) -- one probe cannot miss one of them. It runs
+// in every scale mode, not only `Auto`: the same signal now also decides how
+// often a render is submitted, and a camera being dragged at a fixed 100%
+// must not look idle.
+void ViewportPanel::note_motion(double now) {
     constexpr double kSettle = 0.25;   // seconds of stillness before full res
     float pose[10];
     for (int i = 0; i < 3; i++) pose[i] = _cam.pos[i];
@@ -548,10 +613,60 @@ float ViewportPanel::render_scale(double now) {
         _moving = moving;
         _dirty = true;
     }
-    return moving ? 0.5f : 1.0f;
 }
 
-void ViewportPanel::draw_engine(bool training, const ImVec2& avail) {
+float ViewportPanel::render_scale() {
+    if (_scale_idx != 0)
+        return _scale_idx == 1 ? 0.5f : _scale_idx == 2 ? 0.75f : 1.0f;
+    return _moving ? 0.5f : 1.0f;
+}
+
+// Render resolution, ASPECT PRESERVED.
+//
+// Clamping width and height independently is what put black bars down the
+// sides of a wide window: a 2560x1350 viewport at 100% became a 1920x1350
+// render, which the aspect-fit blit below then drew only 1920 wide -- while
+// `Auto`'s half-resolution path, being under the cap, filled the width. The
+// image changed size every time the camera stopped moving, which is the
+// hiccup. One factor for both axes cannot do that.
+void ViewportPanel::render_size(const ImVec2& avail, int& W, int& H) const {
+    // A budget rather than a per-axis cap: what has to be bounded is the
+    // render's cost -- pixels, and the trainer time they take. 4K's worth is
+    // enough that "100%" means 100% on any ordinary display.
+    constexpr double kMaxPixels = 3840.0 * 2160.0;
+    constexpr double kMaxDim = 4096.0;   // texture-size safety
+    const float scale = _scale_idx != 0
+        ? (_scale_idx == 1 ? 0.5f : _scale_idx == 2 ? 0.75f : 1.0f)
+        : (_moving ? 0.5f : 1.0f);
+    double w = std::max(1.0, (double)avail.x * scale);
+    double h = std::max(1.0, (double)avail.y * scale);
+    double k = 1.0;
+    if (w * h > kMaxPixels) k = std::sqrt(kMaxPixels / (w * h));
+    if (w * k > kMaxDim) k = kMaxDim / w;
+    if (h * k > kMaxDim) k = kMaxDim / h;
+    // The floor is per-axis on purpose: a viewport dragged down to a sliver is
+    // not worth preserving the aspect of, and the engine wants real pixels.
+    W = (int)std::max(64L, std::lround(w * k));
+    H = (int)std::max(64L, std::lround(h * k));
+}
+
+// How many training iterations pass between refreshes while the camera is
+// still.
+//
+// Iterations rather than seconds, because a fixed interval in seconds spends a
+// large share of a cheap dataset's training and a rounding error of a large
+// one's. The count is sized from the ratio of the two measurements: a render
+// that costs 8% of the steps it displaces is a viewport nobody notices, and
+// the same 8% is a different number of steps on a 20 ms step than on a 200 ms
+// one. Until both averages exist, the floor applies.
+int ViewportPanel::idle_step_interval() const {
+    constexpr double kBudget = 0.08;   // share of training time the viewport may take
+    if (_render_secs <= 0.0 || _step_secs <= 0.0) return 20;
+    return (int)std::clamp(std::ceil(_render_secs / (kBudget * _step_secs)),
+                           15.0, 600.0);
+}
+
+void ViewportPanel::draw_engine(bool training, const ImVec2& avail, int step) {
     const double now = ImGui::GetTime();
 
     // Poll the in-flight render.
@@ -559,6 +674,13 @@ void ViewportPanel::draw_engine(bool training, const ImVec2& avail) {
         ViewResult res;
         if (_worker.try_get_result(_pending, res)) {
             _pending = 0;
+            // What that render cost, for idle_step_interval(). Includes the
+            // wait for the training loop to yield the engine mutex, which is
+            // the honest number: that wait is time the trainer is not
+            // stepping either.
+            double took = now - _last_submit;
+            if (took > 0) _render_secs = _render_secs > 0
+                ? 0.8 * _render_secs + 0.2 * took : took;
             if (res.error.empty()) {
                 upload(res);
                 _last_error.clear();
@@ -571,10 +693,26 @@ void ViewportPanel::draw_engine(bool training, const ImVec2& avail) {
     }
 
     // Submit a fresh render when needed.
-    const float scale = render_scale(now);
-    int W = (int)std::clamp(avail.x * scale, 64.0f, 1920.0f);
-    int H = (int)std::clamp(avail.y * scale, 64.0f, 1920.0f);
-    bool want = _dirty || (training && _auto_refresh && now - _last_submit > 0.15);
+    //
+    // Three cases: something changed (_dirty), the user is steering (refresh
+    // as fast as the worker will take it, since a stale frame is what makes
+    // navigation feel broken), or the picture is simply keeping up with
+    // training -- and that last one is paced in ITERATIONS, so a run whose
+    // steps take 10 ms and one whose steps take a second both give the
+    // viewport about the same slice of themselves.
+    int W = 0, H = 0;
+    render_size(avail, W, H);
+    bool live = false;
+    if (training && _auto_refresh) {
+        if (_moving)
+            live = true;
+        else if (step >= 0)
+            live = _last_render_step < 0 ||
+                   step - _last_render_step >= idle_step_interval();
+        else
+            live = now - _last_submit > 1.0;   // no step to count: 1 Hz
+    }
+    bool want = _dirty || live;
     if (!_pending && want) {
         ViewRequest q;
         build_request(q, W, H);
@@ -587,6 +725,7 @@ void ViewportPanel::draw_engine(bool training, const ImVec2& avail) {
         }
         _pending = _worker.submit(q);
         _last_submit = now;
+        _last_render_step = step;
         _dirty = false;
     }
 

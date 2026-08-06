@@ -21,6 +21,8 @@
 #include <utility>
 #include <vector>
 
+#include "sfm/core/Log.h"
+#include "i18n/catalog/Sfm.h"
 #include "sfm/core/Features.h"
 #include "sfm/core/Image.h"
 #include "sfm/vk/EmbeddedSpirv.h"
@@ -318,11 +320,13 @@ private:
         ctx_.download(bKpCnt_, &n, 4);
         if (n > opt_.max_raw_keypoints) {
             if (opt_.verbose)
-                fprintf(stderr, "[sift] raw keypoint list saturated (%u > %u); increase "
-                                "max_raw_keypoints\n", n, opt_.max_raw_keypoints);
+                slog::warn(slog::Tag::Extract, spirula::i18n::msg::sfm::sift_saturated_raw,
+                           {(long long)n, (long long)opt_.max_raw_keypoints});
             n = opt_.max_raw_keypoints;
         }
-        if (opt_.verbose) fprintf(stderr, "[sift] %d octaves, %u raw keypoints\n", octaves_, n);
+        if (opt_.verbose)
+            slog::err(slog::Tag::Extract, spirula::i18n::msg::sfm::sift_raw,
+                      {(long long)octaves_, (long long)n});
         return n;
     }
 
@@ -338,8 +342,8 @@ private:
         ctx_.download(bOkpCnt_, &n, 4);
         if (n > opt_.max_oriented_keypoints) {
             if (opt_.verbose)
-                fprintf(stderr, "[sift] oriented keypoint list saturated (%u > %u)\n", n,
-                        opt_.max_oriented_keypoints);
+                slog::warn(slog::Tag::Extract, spirula::i18n::msg::sfm::sift_saturated_oriented,
+                           {(long long)n, (long long)opt_.max_oriented_keypoints});
             n = opt_.max_oriented_keypoints;
         }
         return n;
@@ -393,8 +397,8 @@ private:
         ctx_.download(bSelCnt_, &nsel, 4);
         nsel = std::min(nsel, opt_.max_oriented_keypoints);
         if (opt_.verbose)
-            fprintf(stderr, "[sift] %u oriented -> %u selected (scale >= %.3f)\n", nokp, nsel,
-                    threshold);
+            slog::err(slog::Tag::Extract, spirula::i18n::msg::sfm::sift_selected,
+                      {(long long)nokp, (long long)nsel, slog::num(threshold, 3)});
         return nsel;
     }
 
@@ -470,7 +474,9 @@ private:
             fs.keypoints[i] = kps[idx[i]];
             std::memcpy(&fs.descriptors[(size_t)i * 128], &desc[(size_t)idx[i] * 128], 128);
         }
-        if (opt_.verbose) fprintf(stderr, "[sift] %u features\n", keep);
+        if (opt_.verbose)
+            slog::err(slog::Tag::Extract, spirula::i18n::msg::sfm::sift_features,
+                      {(long long)keep});
         return fs;
     }
 

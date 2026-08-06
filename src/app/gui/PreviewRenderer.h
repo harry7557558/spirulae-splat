@@ -9,6 +9,8 @@
 // (pinhole / fisheye-equidistant / fisheye-equisolid / equirectangular), so
 // the hand-off to the engine render at training start is seamless.
 
+#include "data/DatasetParser.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -28,6 +30,10 @@ public:
     // context (GUI thread) and the session's load_dataset() to have
     // completed. Returns false when GL init fails (missing functions).
     bool build(const spirula::TrainerSession& session);
+    // The same, from the parsed data alone. A point cloud opened in the
+    // viewer has no session behind it and no cameras at all (`post` empty,
+    // ds.num_cameras == 0), which this handles: it simply draws no frusta.
+    bool build(const ParsedDataset& ds, const PostSplitCameras& post);
     bool built() const { return _built; }
 
     // Render into the internal FBO; returns the color texture (0 on error).

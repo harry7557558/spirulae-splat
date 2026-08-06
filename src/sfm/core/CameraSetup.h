@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include "i18n/catalog/Sfm.h"
 #include "sfm/core/Camera.h"
 #include "sfm/core/Features.h"
 #include "sfm/core/Matches.h"
@@ -32,11 +33,14 @@ namespace sfm {
 
 enum class CameraMode { Single, Folder, Image };
 
+// The flag value plus what it means, the second half translated (the value is
+// a flag spelling and is not).
 inline const char* cameraModeName(CameraMode m) {
+    namespace msg = spirula::i18n::msg::sfm;
     switch (m) {
-        case CameraMode::Folder: return "folder (one camera per sub-folder, split by resolution)";
-        case CameraMode::Image:  return "image (one camera per image)";
-        default:                 return "single (one camera per distinct resolution, 2% tolerance)";
+        case CameraMode::Folder: return msg::camera_mode_folder.get();
+        case CameraMode::Image:  return msg::camera_mode_image.get();
+        default:                 return msg::camera_mode_single.get();
     }
 }
 

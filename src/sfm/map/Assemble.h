@@ -40,7 +40,9 @@
 #include "sfm/core/Model.h"
 #include "sfm/map/Mapper.h"
 #include "sfm/map/Merge.h"
+#include "sfm/core/Log.h"
 #include "sfm/map/ModelOps.h"
+#include "i18n/catalog/Sfm.h"
 
 namespace sfm {
 
@@ -483,15 +485,14 @@ inline void mergeUpwards(Mapper& mapper, std::vector<Reconstruction>& models,
 
     if (opt.verbose) {
         const ManagerStats& f = st.finish;
-        fprintf(stderr,
-                "[%s] %zu model(s) -> %zu after %zu level(s): %zu merged (%zu on shared "
-                "structure alone), %zu refused, %zu grown; "
-                "the seam test judged %zu merge(s), rescued %zu by refining them and refused %zu "
-                "(%zu could not be rescued), and had too little to judge on for %zu "
-                "(merge %.1f s, grow %.1f s, BA %.1f s)\n",
-                opt.tag, st.models_in, models.size(), st.rounds, st.merges, st.bridges,
-                st.merges_refused, st.grown_images, f.seam_checked, f.seam_rescued, f.seam_refused,
-                f.seam_rescue_failed, f.seam_skipped, st.t_merge, st.t_grow, st.t_ba);
+        slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_assembled,
+                 {slog::num(st.t_merge + st.t_grow + st.t_ba, 2), (long long)st.models_in,
+                  (long long)models.size(), (long long)st.rounds, (long long)st.merges,
+                  (long long)st.merges_refused, (long long)st.grown_images,
+                  (long long)f.covered_before, (long long)coveredImages(models).size()});
+        // The seam test's own numbers stay English: they are a diagnostic for
+        // whoever is calibrating the merge validator, not for the person
+        // waiting on a reconstruction (sfm/core/Log.h).
         // A refusal over a handful of cross-seam pairs is a seam with nothing
         // on it, and no refinement can rescue that -- only more overlap can.
         // One over hundreds that still explains a third of them is a seam that
@@ -679,15 +680,13 @@ inline std::vector<Reconstruction> finishModels(Mapper& mapper,
     st.finish.models_after = models.size();
     st.finish.covered_after = coveredImages(models).size();
     if (opt.verbose)
-        fprintf(stderr,
-                "[%s] finishing passes: %zu split, %zu folded, %zu reseeded, %zu dropped, "
-                "%zu image(s) repaired / %zu dropped by the audit "
-                "(audit %.1f s, split %.1f s, grow %.1f s, reseed %.1f s, merge %.1f s, "
-                "fold %.1f s), %.1f s\n",
-                opt.tag, st.finish.splits, st.finish.duplicate_splits, st.finish.reseeded_models,
-                st.finish.dropped_redundant, st.finish.audited_repaired, st.finish.audited_out,
-                st.t_audit, st.t_split, st.t_grow_tail, st.t_reseed, st.t_final_merge, st.t_fold,
-                st.finishSecs());
+        slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_finishing,
+                 {slog::num(st.finishSecs(), 1), (long long)st.finish.splits,
+                  (long long)st.finish.duplicate_splits,
+                  (long long)st.finish.reseeded_models,
+                  (long long)st.finish.dropped_redundant,
+                  (long long)st.finish.audited_repaired,
+                  (long long)st.finish.audited_out});
     mapper.claimAll(models);
     return models;
 }

@@ -28,6 +28,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <set>
 #include <string>
@@ -36,6 +37,7 @@
 
 #include "sfm/SfmConfig.h"
 #include "sfm/core/CameraSetup.h"
+#include "sfm/core/Log.h"
 #include "sfm/core/Features.h"
 #include "sfm/core/Image.h"
 #include "sfm/core/ImageLoader.h"
@@ -49,7 +51,10 @@
 #include "sfm/geometry/TwoView.h"
 #include "sfm/map/Assemble.h"
 #include "sfm/map/Mapper.h"
+#include "sfm/map/Orient.h"
 #include "sfm/map/Merge.h"
+
+#include "i18n/catalog/Sfm.h"
 
 // `spirula-sfm ba`, in sfm_ba.cpp. It prints its own help.
 int cmdBa(int argc, char** argv);
@@ -62,6 +67,12 @@ void printBaHelp(FILE* out);
 
 namespace fs = std::filesystem;
 using namespace sfm;
+
+// Every line this tool prints goes out tagged and translated; see
+// sfm/core/Log.h for the mechanism and for what stays English.
+namespace L = sfm::slog;
+namespace M = spirula::i18n::msg::sfm;
+using sfm::slog::Tag;
 
 // How this tool was invoked ("spirula sfm" as dispatched); see app/Tools.h.
 // The examples in the command tables below are written against the historical
@@ -333,6 +344,33 @@ static bool isImageExt(const std::string& e) {
            s == ".ppm" || s == ".pgm";
 }
 
+// Does `root` hold any image outside `nested`? This is what decides whether
+// `auto DATASET` may quietly reinterpret itself as `auto DATASET/images`.
+//
+// The convenience is real -- a dataset directory and its image directory
+// should behave the same -- but taken unconditionally it silently DISCARDS
+// input: a capture assembled from two folders, one of which happened to be
+// called `images`, produces `<ws>/images/{images,images_2}`, and descending
+// into the first reconstructs half the capture under names that no longer
+// resolve against the dataset (the models' names become `camera1/x.png`
+// rather than `images/camera1/x.png`, so the trainer cannot find one file).
+// Descending is therefore only allowed when it cannot lose anything: every
+// image under `root` is already under `root/images`.
+static bool holdsImagesOutside(const fs::path& root, const fs::path& nested) {
+    std::error_code walk, ec;
+    for (auto it = fs::recursive_directory_iterator(
+             root, fs::directory_options::follow_directory_symlink, walk);
+         !walk && it != fs::recursive_directory_iterator(); it.increment(walk)) {
+        if (it->is_directory(ec)) {
+            if (fs::equivalent(it->path(), nested, ec)) it.disable_recursion_pending();
+            continue;
+        }
+        if (it->is_regular_file(ec) && isImageExt(it->path().extension().string()))
+            return true;
+    }
+    return false;
+}
+
 // Path of `p` relative to the directory it was enumerated from.
 //
 // NOT fs::relative(): that canonicalizes both operands, which resolves
@@ -403,6 +441,18 @@ static void finishFeatures(FeatureSet& fs, const GrayImage& img) {
     fs.exif_camera = exifCameraKey(img.exif, fs.width, fs.height);
 }
 
+// Put every finished model in the upright, centred, unit-sized frame before it
+// is written (sfm/map/Orient.h explains why here rather than downstream).
+// Each model is its own gauge, so each gets its own transform.
+static void orientModels(std::vector<Reconstruction>& models, bool enabled, bool verbose) {
+    if (!enabled) return;
+    for (size_t i = 0; i < models.size(); i++) {
+        const Sim3 T = orientModel(models[i]);
+        if (verbose)
+            L::err(Tag::Orient, M::orient_done, {(long long)i, L::num(T.scale, 4)});
+    }
+}
+
 // Write every reconstruction the mapper produced as <dir>/0, <dir>/1, ...
 // (D41). This is COLMAP's layout for a dataset that does not form one connected
 // view graph -- `sparse/0` is the model with the most 3D points, and the rest
@@ -415,8 +465,9 @@ static void writeModels(const std::vector<Reconstruction>& models, const fs::pat
         fs::create_directories(p);
         models[i].writeBinary(p.string());
         if (verbose)
-            fprintf(stderr, "[map] wrote model %zu (%u images, %zu points) to %s\n", i,
-                    models[i].numRegistered(), models[i].points3D.size(), p.string().c_str());
+            L::err(Tag::Map, M::map_wrote_model,
+                   {(long long)i, (long long)models[i].numRegistered(),
+                    (long long)models[i].points3D.size(), p.string()});
     }
     // A re-run that produces fewer models than the last one left numbered
     // directories behind, and `--resume` would read them back as if they were
@@ -432,8 +483,7 @@ static void writeModels(const std::vector<Reconstruction>& models, const fs::pat
         std::error_code ec;
         fs::remove_all(e.path(), ec);
         if (verbose && !ec)
-            fprintf(stderr, "[map] removed stale model directory %s from an earlier run\n",
-                    e.path().string().c_str());
+            L::err(Tag::Map, M::map_removed_stale, {e.path().string()});
     }
 }
 
@@ -451,14 +501,45 @@ static size_t distinctRegistered(const std::vector<Reconstruction>& models) {
 // One line per model beyond the first, so a fragmented capture is visible in
 // the summary rather than only in the directory listing.
 static void printExtraModels(const std::vector<Reconstruction>& models,
-                             const std::vector<FeatureSet>& feats, const char* indent) {
+                             const std::vector<FeatureSet>& feats) {
     for (size_t i = 1; i < models.size(); i++) {
         double mn = 0, md = 0;
         size_t nobs = 0;
         reprojStats(models[i], feats, mn, md, nobs);
-        printf("%smodel %zu: %u images, %zu points, %.3f px mean\n", indent, i,
-               models[i].numRegistered(), models[i].points3D.size(), mn);
+        L::out(Tag::Run, M::map_model_line_error,
+               {(long long)i, (long long)models[i].numRegistered(),
+                (long long)models[i].points3D.size(), L::num(mn, 3)});
     }
+}
+
+// Registration per top-level image sub-folder.
+//
+// A capture assembled from several inputs has one folder per input, and the
+// number that matters to whoever assembled it is not the total but whether
+// every input got in: an input that contributed nothing is a dataset that
+// silently describes half of what was handed over. Printed only when there is
+// more than one folder, since otherwise it is the summary's own count again.
+static void printFolderCoverage(const std::vector<Reconstruction>& models,
+                                const MatchesDatabase& db) {
+    auto group_of = [](const std::string& name) {
+        size_t slash = name.find('/');
+        return slash == std::string::npos ? std::string(".") : name.substr(0, slash);
+    };
+    std::map<std::string, std::pair<size_t, size_t>> per;  // folder -> {registered, total}
+    for (const auto& im : db.images) per[group_of(im.name)].second++;
+    if (per.size() < 2) return;
+    std::set<uint32_t> ids;
+    for (const Reconstruction& m : models)
+        for (const auto& kv : m.images)
+            if (kv.second.registered) ids.insert(kv.first);
+    for (uint32_t id : ids)
+        if (id < db.images.size()) per[group_of(db.images[id].name)].first++;
+    L::out(Tag::Run, M::sum_per_folder);
+    for (const auto& kv : per)
+        L::out(Tag::Run, M::sum_folder_line,
+               {kv.first, (long long)kv.second.first, (long long)kv.second.second});
+    for (const auto& kv : per)
+        if (kv.second.first == 0) L::warn(Tag::Run, M::sum_folder_empty, {kv.first});
 }
 
 // Mean/median reprojection error straight from a model, with no FeatureSets in
@@ -600,16 +681,19 @@ static bool readModels(const std::string& dir, std::vector<Reconstruction>& mode
 // What became of the mapper's models: one line, because a capture that comes
 // back in several pieces is the case a user has to be able to reason about, and
 // the counts say whether that was the view graph's doing or a refused merge.
-static void printAssembly(const AssembleStats& ast, size_t models, const char* lead = "assemble: ") {
+static void printAssembly(const AssembleStats& ast, size_t models, Tag tag = Tag::Map) {
     if (!ast.models_in) return;
     const ManagerStats& f = ast.finish;
-    printf("%s%6.2f s  %zu -> %zu model(s) over %zu level(s), %zu merged (%zu on shared "
-           "structure), %zu refused (%zu rescued by a refinement), %zu grown, "
-           "%zu repaired / %zu dropped by the audit, %zu -> %zu images covered\n",
-           lead, ast.t_merge + ast.t_ba + ast.t_grow + ast.finishSecs(), ast.models_in, models,
-           ast.rounds, ast.merges, ast.bridges, ast.merges_refused, f.seam_rescued,
-           ast.grown_images, f.audited_repaired, f.audited_out, f.covered_before,
-           f.covered_after);
+    L::out(tag, M::map_assembled,
+           {L::num(ast.t_merge + ast.t_ba + ast.t_grow + ast.finishSecs(), 2),
+            (long long)ast.models_in,
+            (long long)models, (long long)ast.rounds, (long long)ast.merges,
+            (long long)ast.merges_refused, (long long)ast.grown_images,
+            (long long)f.covered_before, (long long)f.covered_after});
+    L::out(tag, M::map_finishing,
+           {L::num(ast.finishSecs(), 1), (long long)f.splits, (long long)f.duplicate_splits,
+            (long long)f.reseeded_models, (long long)f.dropped_redundant,
+            (long long)f.audited_repaired, (long long)f.audited_out});
 }
 
 static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDatabase& db,
@@ -653,8 +737,8 @@ static std::vector<Reconstruction> polishModels(Mapper& mapper,
         if (m.numRegistered() >= 2) m = mapper.polish(m);
     secs = now() - t0;
     if (verbose)
-        fprintf(stderr, "[map] final principal-point refinement over %zu model(s), %.1f s\n",
-                models.size(), secs);
+        L::err(Tag::Map, M::map_pp_done,
+               {(long long)models.size(), L::num(secs, 1)});
     return models;
 }
 
@@ -682,36 +766,34 @@ static void resolveImageNames(std::vector<Reconstruction>& models, const std::st
 // Report the grouping decision, one line per camera. Worth printing in full:
 // a wrong --camera-mode is otherwise invisible until the intrinsics come out
 // strange, and a mixed-model capture is exactly where it goes wrong.
-static void printCameraSetup(const char* tag, const CameraSetup& cs,
+static void printCameraSetup(Tag tag, const CameraSetup& cs,
                              const CameraSetupOptions& sopt, size_t nimages) {
     std::map<uint32_t, size_t> counts;
     for (uint32_t id : cs.ids) counts[id]++;
-    fprintf(stderr, "[%s] camera mode %s -> %u camera(s) over %zu images\n", tag,
-            cameraModeName(cs.mode_used), cs.count(), nimages);
+    L::err(tag, M::match_camera_mode,
+           {cameraModeName(cs.mode_used), (long long)cs.count(), (long long)nimages});
     if (cs.mode_switched)
-        fprintf(stderr, "[%s]   (%zu distinct frame sizes over %zu images: this is a photo "
-                "collection, not one camera's capture -- --camera-mode folder overrides)\n",
-                tag, cs.dim_buckets, nimages);
+        L::err(tag, M::match_camera_mode_switched,
+               {(long long)cs.dim_buckets, (long long)nimages});
     if (cs.exif_focal_images)
-        fprintf(stderr, "[%s] EXIF: %zu/%zu images carry a focal length%s\n", tag,
-                cs.exif_focal_images, nimages,
-                sopt.exif_focal ? "" : " (ignored, --no-exif-focal)");
+        L::err(tag, sopt.exif_focal ? M::match_exif_focals : M::match_exif_focals_ignored,
+               {(long long)cs.exif_focal_images, (long long)nimages});
     // Capped: --camera-mode image on an internet collection makes one camera
     // per image, and a thousand lines of stderr helps nobody.
     const size_t kMaxLines = 8;
     size_t shown = 0;
     for (const auto& kv : cs.cameras) {
         if (shown++ >= kMaxLines) {
-            fprintf(stderr, "[%s]   ... and %zu more camera(s)\n", tag,
-                    cs.cameras.size() - kMaxLines);
+            L::err(tag, M::match_more_cameras, {(long long)(cs.cameras.size() - kMaxLines)});
             break;
         }
         const Camera& c = kv.second;
-        fprintf(stderr, "[%s]   camera %u: %zu image(s), %dx%d, %s, f=%.1f%s\n", tag, kv.first,
-                counts[kv.first], c.width, c.height, camInfo(c.model).cli_name, c.focal(),
-                cs.focal_known.count(kv.first)   ? " (prior)"
-                : cs.focal_given.count(kv.first) ? " (given)"
-                                                 : " (guess)");
+        L::err(tag, M::match_camera_line,
+               {(long long)kv.first, (long long)counts[kv.first], (long long)c.width,
+                (long long)c.height, camInfo(c.model).cli_name, c.focal(),
+                (cs.focal_known.count(kv.first)   ? M::focal_prior
+                 : cs.focal_given.count(kv.first) ? M::focal_given
+                                                  : M::focal_guessed).get()});
     }
 }
 
@@ -746,11 +828,9 @@ static void checkMaskShape(const std::string& mask_path, const Mask& m,
     const double ai = (double)img_dims.first / img_dims.second;
     if (std::fabs(am - ai) <= 0.01 * ai) return;
     if (!warned.insert({m.width, m.height, img_dims.first, img_dims.second}).second) return;
-    fprintf(stderr,
-            "[extract] WARNING: mask %s is %dx%d (aspect %.3f) but the image is %dx%d "
-            "(aspect %.3f); it will be stretched to fit. Suppressing further warnings for "
-            "this size pair.\n",
-            mask_path.c_str(), m.width, m.height, am, img_dims.first, img_dims.second, ai);
+    L::warn(Tag::Extract, M::extract_mask_aspect,
+            {mask_path, (long long)m.width, (long long)m.height,
+             (long long)img_dims.first, (long long)img_dims.second});
 }
 
 // A mask that drops nearly every keypoint in the dataset is far more often
@@ -768,11 +848,7 @@ static void warnIfMasksLookInverted(const ExtractStats& st) {
     if (!st.masked_images || before == 0) return;
     const double dropped = (double)st.masked_out / (double)before;
     if (dropped < 0.7) return;
-    fprintf(stderr,
-            "[extract] WARNING: masks dropped %.0f%% of all keypoints. If this capture is not "
-            "object-centric, the masks are probably inverted -- this pipeline keeps what is "
-            "*white*, as COLMAP does. Re-run with --no-masks to check.\n",
-            100.0 * dropped);
+    L::warn(Tag::Extract, M::extract_masks_look_inverted, {(long long)(100.0 * dropped)});
 }
 
 static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
@@ -799,7 +875,10 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
         if (it->is_regular_file() && isImageExt(it->path().extension().string()))
             found.push_back(it->path());
     }
-    if (found.empty()) { fprintf(stderr, "no images in %s\n", imagedir.c_str()); return 1; }
+    if (found.empty()) {
+        L::fail(Tag::Extract, M::extract_no_images, {imagedir});
+        return 1;
+    }
     std::sort(found.begin(), found.end());
 
     // Probe every header once (the old comparator re-probed O(n log n) times),
@@ -809,15 +888,18 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
     for (const fs::path& p : found) {
         int w = 0, h = 0;
         if (!imageSize(p.string(), w, h) || w <= 0 || h <= 0) {
-            fprintf(stderr, "[extract] skipping %s: not a decodable image\n",
-                    p.filename().string().c_str());
+            L::warn(Tag::Extract, M::extract_skipping_file,
+                    {p.filename().string()});
             stats.unreadable++;
             continue;
         }
         imgs.push_back(p);
         dims.emplace_back(w, h);
     }
-    if (imgs.empty()) { fprintf(stderr, "no decodable images in %s\n", imagedir.c_str()); return 1; }
+    if (imgs.empty()) {
+        L::fail(Tag::Extract, M::extract_no_decodable, {imagedir});
+        return 1;
+    }
 
     // Largest-first so the extractor allocates device buffers exactly once.
     std::vector<size_t> order(imgs.size());
@@ -847,8 +929,7 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
     // before the GPU stage burns an hour on unmasked features.
     MaskIndex masks(maskdir);
     if (!maskdir.empty() && !masks.valid())
-        fprintf(stderr, "[extract] WARNING: mask directory %s does not exist; "
-                        "extracting without masks\n", maskdir.c_str());
+        L::warn(Tag::Extract, M::extract_mask_dir_missing, {maskdir});
     if (masks.valid()) {
         lopt.mask_paths.assign(paths.size(), std::string());
         for (size_t k = 0; k < paths.size(); k++) {
@@ -861,34 +942,28 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
                 stats.masked_images++;
             }
         }
-        printf("   masks: %zu/%zu images matched in %s\n", stats.masked_images, paths.size(),
-               maskdir.c_str());
+        L::out(Tag::Extract, M::extract_masks_matched,
+               {(long long)stats.masked_images, (long long)paths.size(), maskdir});
         if (stats.masked_images == 0) {
-            fprintf(stderr,
-                    "[extract] ERROR: no mask in %s matches any image (tried e.g. \"%s.png\" "
-                    "and \"<stem>.png\"). Fix --masks or drop it; continuing unmasked would "
-                    "quietly produce a different reconstruction.\n",
-                    maskdir.c_str(), stats.first_unmasked.c_str());
+            L::fail(Tag::Extract, M::extract_no_mask_matches,
+                    {maskdir, stats.first_unmasked});
             return 1;
         }
         if (stats.unmasked_images)
-            fprintf(stderr,
-                    "[extract] WARNING: %zu image(s) have no mask (e.g. %s); their features "
-                    "are kept in full\n",
-                    stats.unmasked_images, stats.first_unmasked.c_str());
+            L::warn(Tag::Extract, M::extract_some_unmasked,
+                    {(long long)stats.unmasked_images, stats.first_unmasked});
     }
     ImageLoadPlan plan = planImageLoad(sorted_dims, lopt);
     if (opt.verbose)
-        fprintf(stderr,
-                "[extract] %zu images, decoding on %d thread(s), window %d "
-                "(~%zu MB peak in-flight)\n",
-                paths.size(), plan.num_threads, plan.window,
-                ((size_t)plan.num_threads * plan.decode_peak_bytes +
-                 (size_t)plan.window * plan.held_bytes) >> 20);
+        L::err(Tag::Extract, M::extract_plan,
+               {(long long)paths.size(), (long long)plan.num_threads,
+                (long long)plan.window,
+                (long long)(((size_t)plan.num_threads * plan.decode_peak_bytes +
+                             (size_t)plan.window * plan.held_bytes) >> 20)});
 
     std::unique_ptr<IFeatureExtractor> ext =
         createFeatureExtractor(cfg.features, opt, cfg.aliked);
-    if (opt.verbose) fprintf(stderr, "[extract] frontend: %s\n", ext->name());
+    if (opt.verbose) L::err(Tag::Extract, M::extract_frontend, {ext->name()});
     loadImagesInOrder(
         paths, plan, lopt,
         [&](size_t k, GrayImage& img) {
@@ -898,9 +973,9 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
             if (!lopt.mask_paths.empty() && !lopt.mask_paths[k].empty()) {
                 if (img.mask.empty()) {
                     stats.mask_unreadable++;
-                    fprintf(stderr, "[extract] WARNING: cannot decode mask %s; %s kept unmasked\n",
-                            lopt.mask_paths[k].c_str(),
-                            fs::path(paths[k]).filename().string().c_str());
+                    L::warn(Tag::Extract, M::extract_mask_undecodable,
+                            {lopt.mask_paths[k],
+                             fs::path(paths[k]).filename().string()});
                 } else {
                     checkMaskShape(lopt.mask_paths[k], img.mask, sorted_dims[k]);
                     const uint32_t before = f.count();
@@ -912,12 +987,9 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
                     // images. Warn once; the run still continues.
                     if (before && dropped == before && !stats.warned_empty) {
                         stats.warned_empty = true;
-                        fprintf(stderr,
-                                "[extract] WARNING: mask %s left no keypoints at all in %s. "
-                                "Masks keep nonzero pixels and ignore zero ones -- an inverted "
-                                "mask masks out the whole image.\n",
-                                lopt.mask_paths[k].c_str(),
-                                fs::path(paths[k]).filename().string().c_str());
+                        L::warn(Tag::Extract, M::extract_mask_empty,
+                                {lopt.mask_paths[k],
+                                 fs::path(paths[k]).filename().string()});
                     }
                 }
             }
@@ -935,15 +1007,20 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
             stats.features += f.count();
             stats.images++;
             if (opt.verbose) {
-                printf("[%zu/%zu] %s: %u features", stats.images, paths.size(),
-                       fs::path(paths[k]).filename().string().c_str(), f.count());
-                if (dropped) printf(" (%u masked out)", dropped);
-                printf(" -> %s\n", out.string().c_str());
+                const std::string name = fs::path(paths[k]).filename().string();
+                if (dropped)
+                    L::out(Tag::Extract, M::extract_progress_masked,
+                           {(long long)stats.images, (long long)paths.size(), name,
+                            (long long)f.count(), (long long)dropped});
+                else
+                    L::out(Tag::Extract, M::extract_progress,
+                           {(long long)stats.images, (long long)paths.size(), name,
+                            (long long)f.count()});
             }
         },
         [&](size_t k, const std::string& err) {
-            fprintf(stderr, "[extract] FAILED %s: %s\n",
-                    fs::path(paths[k]).filename().string().c_str(), err.c_str());
+            L::fail(Tag::Extract, M::extract_failed_file,
+                    {fs::path(paths[k]).filename().string(), err});
             stats.failed++;
         });
     return 0;
@@ -1069,7 +1146,7 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
         if (e.is_regular_file() && e.path().extension() == ".bin") files.push_back(e.path());
     std::sort(files.begin(), files.end());
     if (files.size() < 2) {
-        fprintf(stderr, "need >=2 feature files in %s\n", featdir.c_str());
+        L::fail(Tag::Match, M::match_need_two, {featdir});
         return 1;
     }
 
@@ -1152,11 +1229,12 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
     }
     stats.pairs = pairs.size();
     if (verbose)
-        fprintf(stderr, "[match] %zu images, %zu pairs (%s)\n", files.size(), pairs.size(),
+        L::err(Tag::Match, M::match_plan,
+               {(long long)files.size(), (long long)pairs.size(),
                 mode == PairMode::Exhaustive ? "exhaustive"
                 : mode == PairMode::Sequential
                     ? (cfg.loop_closure ? "sequential + loop closure" : "sequential")
-                    : "prefilter");
+                    : "prefilter"});
     if (verbose && mode == PairMode::Prefilter)
         fprintf(stderr, "[match] pair selection: top-%u features, %u neighbors\n",
                 popt.num_features, popt.num_neighbors);
@@ -1172,7 +1250,8 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
     if (verbose)
         progress = [&](size_t done, size_t total_pairs) {
             if (done % 200 == 0 || done == total_pairs)
-                fprintf(stderr, "\r[match] %zu/%zu pairs matched", done, total_pairs);
+                L::err(Tag::Match, M::match_progress,
+                       {(long long)done, (long long)total_pairs});
         };
 
     if (verify) {
@@ -1190,7 +1269,7 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
         if (calib) {
             CameraSetup& cs = calib->cameras;
             cs = buildCameras(db.images, feats, calib->setup);
-            if (verbose) printCameraSetup("match", cs, calib->setup, feats.size());
+            if (verbose) printCameraSetup(Tag::Match, cs, calib->setup, feats.size());
             // Both focal searches want the same thing: putative matches for a
             // sample of pairs, spread over the list (a prefix would sample one
             // part of the capture, since pair lists are ordered). The fisheye
@@ -1260,7 +1339,7 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
         // re-deriving them from the inliers it is about to produce.
         if (calib) storeCameraSetup(db, calib->cameras);
         if (verbose)
-            fprintf(stderr, "[match] verifying on %d thread(s)\n", verificationThreadCount(vopt));
+            L::err(Tag::Match, M::match_verifying, {(long long)verificationThreadCount(vopt)});
         db.pairs = verifyPairs(feats, pairs, matchFn, vopt, &stats.putative, progress);
         for (const TwoViewMatches& tvm : db.pairs) stats.inliers += tvm.matches.size();
     } else {
@@ -1282,7 +1361,6 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
         }
     }
     stats.kept = db.pairs.size();
-    if (verbose) fprintf(stderr, "\n");
     return 0;
 }
 
@@ -1425,7 +1503,7 @@ static int cmdMap(int argc, char** argv) {
     const bool from_db = !cam_args && loadCameraSetup(db, cs);
     if (!from_db) cs = buildCameras(db.images, feats, cfg.camera);
     if (opt.verbose) {
-        printCameraSetup("map", cs, cfg.camera, db.images.size());
+        printCameraSetup(Tag::Map, cs, cfg.camera, db.images.size());
         if (from_db)
             fprintf(stderr, "[map] camera setup taken from %s (as verified)\n",
                     matchesPath.c_str());
@@ -1564,8 +1642,9 @@ static int cmdMap(int argc, char** argv) {
     if (models.size() > 1) {
         printf("  %zu models covering %zu/%zu distinct images:\n", models.size(),
                distinctRegistered(models), db.images.size());
-        printExtraModels(models, feats, "  ");
+        printExtraModels(models, feats);
     }
+    orientModels(models, cfg.orient, opt.verbose);
     if (!output.empty()) writeModels(models, output, opt.verbose);
     return 0;
 }
@@ -1655,6 +1734,7 @@ static int cmdMerge(int argc, char** argv) {
         printf("  NOTE: %zu/%zu distinct images survived the merge\n", covered_after,
                covered_before);
 
+    orientModels(models, cfg.orient, mo.verbose);
     writeModels(models, fs::path(output), mo.verbose);
     // In place, the models that were absorbed must not stay behind as stale
     // directories claiming to be reconstructions.
@@ -1735,14 +1815,13 @@ static int cmdAuto(int argc, char** argv) {
     // `spirula-sfm auto DATASET/images` and `spirula-sfm auto DATASET` behave the same.
     if (imagedir.empty()) imagedir = "images";
     if (!fs::is_directory(imagedir)) {
-        fprintf(stderr, "%s auto: error: %s is not a directory\n", kProgram, imagedir.c_str());
+        L::fail(Tag::Run, M::run_not_a_directory, {imagedir});
         return 1;
     }
     {
         fs::path nested = fs::path(imagedir) / "images";
-        if (fs::is_directory(nested)) {
-            printf("   %s contains images/, using %s as the image directory\n", imagedir.c_str(),
-                   nested.string().c_str());
+        if (fs::is_directory(nested) && !holdsImagesOutside(imagedir, nested)) {
+            L::out(Tag::Run, M::run_nested_images, {imagedir, nested.string()});
             imagedir = nested.string();
         }
     }
@@ -1764,12 +1843,7 @@ static int cmdAuto(int argc, char** argv) {
         if (!realSupportedByDevice(RealCfg::F64, caps) &&
             !realSupportedByDevice(RealCfg::DF64, caps) &&
             !realSupportedByDevice(RealCfg::F32, caps)) {
-            fprintf(stderr,
-                    "%s auto: error: the selected device supports none of the "
-                    "bundle-adjustment scalar types -- it has no fp64, no buffer "
-                    "int64 atomics and no buffer float32 atomic add. Pick another "
-                    "device with --device (`spirula sam devices` lists them).\n",
-                    kProgram);
+            L::fail(Tag::Run, M::run_device_cannot_solve);
             return 1;
         }
     }
@@ -1781,16 +1855,17 @@ static int cmdAuto(int argc, char** argv) {
     // COLMAP's layout: sparse/<i> per reconstruction, sparse/0 the largest.
     const fs::path sparsedir = ws / "sparse";
 
-    printf("%s auto: %s -> %s\n", kProgram, imagedir.c_str(), workspace.c_str());
-    printf("  quality   : %s (max image %d px, max %d features)\n", cfg.quality.c_str(),
-           cfg.max_image_size, cfg.sift.max_num_features);
-    printf("  data type : %s\n", cfg.data_type.c_str());
-    printf("  cameras   : %s, mode %s\n", cfg.camera_model.c_str(), cfg.camera_mode.c_str());
-    if (!cfg.mask_dir.empty()) printf("  masks     : %s\n", cfg.mask_dir.c_str());
+    L::out(Tag::Run, M::run_header, {imagedir, workspace});
+    L::out(Tag::Run, M::run_quality,
+           {cfg.quality, (long long)cfg.max_image_size,
+            (long long)cfg.sift.max_num_features});
+    L::out(Tag::Run, M::run_data_type, {cfg.data_type});
+    L::out(Tag::Run, M::run_cameras, {cfg.camera_model, cfg.camera_mode});
+    if (!cfg.mask_dir.empty()) L::out(Tag::Run, M::run_masks, {cfg.mask_dir});
     // What the two knobs moved, so a surprising run is explainable from its own
     // output rather than from reading the preset table.
     for (const PresetChange& p : moved)
-        printf("  preset    : --%s %s -> %s\n", p.flag.c_str(), p.from.c_str(), p.to.c_str());
+        L::out(Tag::Run, M::run_preset_moved, {"--" + p.flag, p.to, p.from});
 
     // ---- 1. extract ----
     double t0 = now();
@@ -1798,7 +1873,7 @@ static int cmdAuto(int argc, char** argv) {
     if (int rc = extractDirectory(imagedir, featdir, cfg, est)) return rc;
     double t_extract = now() - t0;
     if (est.images < 2) {
-        fprintf(stderr, "auto: only %zu image(s) extracted; need at least 2\n", est.images);
+        L::fail(Tag::Run, M::run_too_few_images, {(long long)est.images});
         return 1;
     }
     warnIfMasksLookInverted(est);
@@ -1821,13 +1896,10 @@ static int cmdAuto(int argc, char** argv) {
         est.images >= 100 && !seen.count("pairs")) {
         const char* was = mode == PairMode::Exhaustive ? "exhaustive" : "sequential";
         mode = PairMode::Prefilter;
-        printf("   %zu images >= 100: switching from %s to pair selection "
-               "(--pairs %s forces it)\n", est.images, was, was);
+        L::out(Tag::Match, M::match_switch_to_selection, {(long long)est.images, was});
     } else if (mode == PairMode::Exhaustive && est.images >= 100) {
-        fprintf(stderr,
-                "[auto] WARNING: %zu images with exhaustive pairing = %zu pairs; this is "
-                "quadratic. Drop --pairs exhaustive to get pair selection.\n",
-                est.images, est.images * (est.images - 1) / 2);
+        L::warn(Tag::Match, M::match_exhaustive_quadratic,
+                {(long long)est.images, (long long)(est.images * (est.images - 1) / 2)});
     }
 
     // ---- 2. match + geometric verification ----
@@ -1859,7 +1931,6 @@ static int cmdAuto(int argc, char** argv) {
     // intrinsics (D45/D46).
     MapperOptions& mapopt = cfg.mapper;
     const CameraSetup& cs = calib.cameras;
-    printf("   camera mode %s -> %u camera(s)\n", cameraModeName(cs.mode_used), cs.count());
     mapopt.initial_cameras = cs.cameras;
     mapopt.known_focal_cameras = cs.focal_known;
     mapopt.given_focal_cameras = cs.focal_given;
@@ -1878,6 +1949,7 @@ static int cmdAuto(int argc, char** argv) {
     }
 
     resolveImageNames(models, imagedir);
+    orientModels(models, cfg.orient, verbose);
     writeModels(models, sparsedir, verbose);
 
     // The mapper reports its own breakdown when `run()` returns; the passes
@@ -1890,53 +1962,53 @@ static int cmdAuto(int argc, char** argv) {
     size_t nobs = 0;
     reprojStats(rec, feats, mean, median, nobs);
     const uint32_t reg = rec.numRegistered();
-    printf("\n== summary ==\n");
-    printf("  extract : %6.2f s  %zu images, %llu features\n", t_extract, est.images,
-           (unsigned long long)est.features);
+    L::out(Tag::Run, M::sum_header);
+    L::out(Tag::Run, M::sum_extract,
+           {L::num(t_extract, 2), (long long)est.images, (long long)est.features});
     if (est.masked_images) {
         const uint64_t before = est.features + est.masked_out;
-        printf("  masks   :          %zu/%zu images masked, %llu keypoints dropped (%.1f%%)",
-               est.masked_images, est.images, (unsigned long long)est.masked_out,
-               before ? 100.0 * est.masked_out / before : 0.0);
-        if (est.unmasked_images || est.mask_unreadable)
-            printf(", %zu without a mask, %zu undecodable", est.unmasked_images,
-                   est.mask_unreadable);
-        printf("\n");
+        L::out(Tag::Run, M::sum_masks,
+               {(long long)est.masked_images, (long long)est.images,
+                (long long)est.masked_out,
+                L::num(before ? 100.0 * est.masked_out / before : 0.0, 1)});
     }
-    printf("  match   : %6.2f s  %zu/%zu pairs kept, %llu inlier / %llu putative\n", t_match,
-           mstats.kept, mstats.pairs, (unsigned long long)mstats.inliers,
-           (unsigned long long)mstats.putative);
-    printf("  map     : %6.2f s  %u/%zu images registered, %zu points, %u camera(s)\n", t_map,
-           reg, est.images, rec.points3D.size(), (uint32_t)rec.cameras.size());
-    printAssembly(ast, models.size(), "  assemble: ");
-    printf("  total   : %6.2f s\n", t_extract + t_match + t_map);
-    printf("  model   : %.3f px mean reprojection (%.3f median) over %zu observations\n", mean,
-           median, nobs);
+    L::out(Tag::Run, M::sum_match,
+           {L::num(t_match, 2), (long long)mstats.kept, (long long)mstats.pairs,
+            (long long)mstats.inliers, (long long)mstats.putative});
+    L::out(Tag::Run, M::sum_map,
+           {L::num(t_map, 2), (long long)reg, (long long)est.images,
+            (long long)rec.points3D.size(), (long long)rec.cameras.size()});
+    printAssembly(ast, models.size(), Tag::Run);
+    printFolderCoverage(models, db);
+    L::out(Tag::Run, M::sum_total, {L::num(t_extract + t_match + t_map, 2)});
+    L::out(Tag::Run, M::sum_model_error,
+           {L::num(mean, 3), L::num(median, 3), (long long)nobs});
     if (models.size() > 1) {
         // A fragmented capture: sparse/0 is the largest component, the rest are
         // separate reconstructions with no known transform between them (D41).
-        printf("  models  : %zu components covering %zu/%zu distinct images\n", models.size(),
-               distinctRegistered(models), est.images);
-        printExtraModels(models, feats, "          ");
+        L::out(Tag::Run, M::sum_components,
+               {(long long)models.size(), (long long)distinctRegistered(models),
+                (long long)est.images});
+        printExtraModels(models, feats);
     }
-    if (models.size() > 1)
-        printf("  written : %s/{0..%zu}\n", sparsedir.string().c_str(), models.size() - 1);
-    else
-        printf("  written : %s\n", (sparsedir / "0").string().c_str());
+    L::out(Tag::Run, M::sum_written,
+           {models.size() > 1
+                ? sparsedir.string() + "/{0.." + std::to_string(models.size() - 1) + "}"
+                : (sparsedir / "0").string()});
 
     // Verdict, so a batch run can be scanned without reading every number.
     // Thresholds are deliberately loose -- this flags "obviously broken", not
     // "not as good as COLMAP".
     const double frac = est.images ? (double)reg / est.images : 0.0;
     if (reg < 2 || rec.points3D.empty()) {
-        printf("  RESULT  : FAILED (no reconstruction)\n");
+        L::out(Tag::Run, M::result_failed);
         return 2;
     }
     if (frac < 0.5 || mean > 2.0) {
-        printf("  RESULT  : PARTIAL (%.0f%% of images registered, %.2f px)\n", 100 * frac, mean);
+        L::out(Tag::Run, M::result_partial, {L::num(100 * frac, 0), L::num(mean, 2)});
         return 3;
     }
-    printf("  RESULT  : OK (%.0f%% of images registered, %.2f px)\n", 100 * frac, mean);
+    L::out(Tag::Run, M::result_ok, {L::num(100 * frac, 0), L::num(mean, 2)});
     return 0;
 }
 

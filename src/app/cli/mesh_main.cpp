@@ -15,6 +15,7 @@
 
 #include "app/Tools.h"
 
+#include "checkpoint/SplatPly.h"
 #include "mesh/Meshing.h"
 #include "core/Camera.h"
 #include "data/DatasetParser.h"
@@ -36,125 +37,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-
-// ===========================================================================
-// splat.ply loader (raw, un-activated Gaussians; float32 binary LE as written
-// by EngineCheckpoint.cpp)
-// ===========================================================================
-
-struct SplatPly {
-    int64_t n = 0;
-    std::vector<float> means;        // [n*3]
-    std::vector<float> quats;        // [n*4] (w,x,y,z as stored in rot_0..3)
-    std::vector<float> scales;       // [n*3] log
-    std::vector<float> opacities;    // [n]   logit
-    std::vector<float> features_dc;  // [n*3]
-};
-
-SplatPly load_splat_ply(const fs::path& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) throw std::runtime_error("cannot open " + path.string());
-
-    std::string line;
-    if (!std::getline(f, line) || line.rfind("ply", 0) != 0)
-        throw std::runtime_error(path.string() + ": not a PLY file");
-
-    int64_t n_vertex = -1;
-    std::vector<std::string> props;   // property names, in file order
-    bool in_vertex = false, binary_le = false;
-    while (std::getline(f, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        std::istringstream ss(line);
-        std::string tok;
-        ss >> tok;
-        if (tok == "format") {
-            ss >> tok;
-            binary_le = tok == "binary_little_endian";
-        } else if (tok == "element") {
-            std::string name;
-            int64_t cnt;
-            ss >> name >> cnt;
-            in_vertex = name == "vertex";
-            if (in_vertex) n_vertex = cnt;
-        } else if (tok == "property" && in_vertex) {
-            std::string type, name;
-            ss >> type >> name;
-            if (type != "float" && type != "float32")
-                throw std::runtime_error(path.string() + ": vertex property '" +
-                                         name + "' is " + type + ", expected float");
-            props.push_back(name);
-        } else if (tok == "end_header") break;
-    }
-    if (!binary_le)
-        throw std::runtime_error(path.string() + ": expected binary_little_endian");
-    if (n_vertex < 0 || props.empty())
-        throw std::runtime_error(path.string() + ": no vertex element");
-
-    auto col = [&](const std::string& name) -> int {
-        for (size_t i = 0; i < props.size(); ++i)
-            if (props[i] == name) return (int)i;
-        throw std::runtime_error(path.string() + ": missing property " + name);
-    };
-    const int cx = col("x"), cy = col("y"), cz = col("z");
-    const int cr[4] = {col("rot_0"), col("rot_1"), col("rot_2"), col("rot_3")};
-    const int cs[3] = {col("scale_0"), col("scale_1"), col("scale_2")};
-    const int co = col("opacity");
-    const int cd[3] = {col("f_dc_0"), col("f_dc_1"), col("f_dc_2")};
-
-    SplatPly out;
-    out.n = n_vertex;
-    out.means.resize(n_vertex * 3);
-    out.quats.resize(n_vertex * 4);
-    out.scales.resize(n_vertex * 3);
-    out.opacities.resize(n_vertex);
-    out.features_dc.resize(n_vertex * 3);
-
-    const size_t stride = props.size();
-    const int64_t kRows = 1 << 16;
-    std::vector<float> buf(stride * kRows);
-    for (int64_t row = 0; row < n_vertex; row += kRows) {
-        int64_t nr = std::min(kRows, n_vertex - row);
-        f.read(reinterpret_cast<char*>(buf.data()),
-               (std::streamsize)(nr * stride * sizeof(float)));
-        if (!f) throw std::runtime_error(path.string() + ": truncated vertex data");
-        for (int64_t i = 0; i < nr; ++i) {
-            const float* r = buf.data() + i * stride;
-            int64_t o = row + i;
-            out.means[o*3+0] = r[cx]; out.means[o*3+1] = r[cy]; out.means[o*3+2] = r[cz];
-            for (int k = 0; k < 4; ++k) out.quats[o*4+k] = r[cr[k]];
-            for (int k = 0; k < 3; ++k) out.scales[o*3+k] = r[cs[k]];
-            out.opacities[o] = r[co];
-            for (int k = 0; k < 3; ++k) out.features_dc[o*3+k] = r[cd[k]];
-        }
-    }
-    return out;
-}
-
-// ===========================================================================
-// Checkpoint discovery (mirror of ss_meshing._find_ckpt + raw .ply support)
-// ===========================================================================
-
-// Returns (splat_ply_path, run_dir). run_dir is where config.json is searched.
-std::pair<fs::path, fs::path> find_ckpt(const fs::path& checkpoint) {
-    if (fs::is_regular_file(checkpoint) && checkpoint.extension() == ".ply")
-        return {checkpoint, checkpoint.parent_path().parent_path()};
-    if (fs::is_regular_file(checkpoint / "splat.ply"))
-        return {checkpoint / "splat.ply", checkpoint.parent_path()};
-    if (fs::is_directory(checkpoint)) {
-        std::vector<fs::path> ckpts;
-        for (const auto& e : fs::directory_iterator(checkpoint)) {
-            std::string b = e.path().filename().string();
-            if (e.is_directory() &&
-                (b.rfind("step-", 0) == 0 || b.find(".ckpt") != std::string::npos))
-                ckpts.push_back(e.path());
-        }
-        std::sort(ckpts.begin(), ckpts.end());
-        for (auto it = ckpts.rbegin(); it != ckpts.rend(); ++it)
-            if (fs::is_regular_file(*it / "splat.ply"))
-                return {*it / "splat.ply", checkpoint};
-    }
-    throw std::runtime_error("no splat.ply found under " + checkpoint.string());
-}
 
 // ===========================================================================
 // Camera loading via the CLI trainer's dataset parsers
@@ -403,10 +285,14 @@ int spirula_mesh_main(int argc, char** argv) {
         }
 
         // ---- checkpoint ----
-        auto [splat_ply, run_dir] = find_ckpt(o.checkpoint);
+        auto [splat_ply_s, run_dir_s] = spirula::find_splat_ply(o.checkpoint);
+        const fs::path splat_ply(splat_ply_s), run_dir(run_dir_s);
         std::printf("[meshing] loading %s\n", splat_ply.string().c_str());
-        SplatPly splats = load_splat_ply(splat_ply);
-        std::printf("[meshing] %lld Gaussians\n", (long long)splats.n);
+        // Meshing reads geometry and DC colour only; skipping f_rest
+        // skips most of the file.
+        spirula::SplatCloud splats =
+            spirula::read_splat_ply(splat_ply.string(), /*want_sh=*/false);
+        std::printf("[meshing] %lld Gaussians\n", (long long)splats.num);
 
         JsonValue run_cfg;
         fs::path cfg_path = run_dir / "config.json";
@@ -457,7 +343,7 @@ int spirula_mesh_main(int argc, char** argv) {
         }
         bool ok = meshing::generate_mesh(
             splats.means.data(), splats.quats.data(), splats.scales.data(),
-            splats.opacities.data(), splats.features_dc.data(), (int)splats.n,
+            splats.opacities.data(), splats.features_dc.data(), (int)splats.num,
             using_cameras ? cams.positions.data() : nullptr, (int)cams.num(),
             cp, o.m, out_base);
         if (!ok) return 1;

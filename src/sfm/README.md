@@ -231,6 +231,16 @@ package version. A usage error names the flag, says what was wrong with it and
 points at `--help`; it always exits 1, because `auto` spends exit codes 2 and 3
 on *the reconstruction* being absent or partial.
 
+Every line a default run prints is **localized**, in the language `--lang`,
+`SS_LANG` or the OS says, and carries a translated stage tag padded to a common
+width: `[extract] 12/512   frame_0012.png   Features: 4096`. The mechanism is
+`core/Log.h`; the strings are `src/i18n/catalog/Sfm.h`. What stays English is
+what is addressed to whoever is debugging the pipeline rather than to the
+person waiting on it -- `--help`, `SS_SFM_MAP_PROF`, the seam-test and
+focal-curve diagnostics, and the self-test binaries. The GUI reads its progress
+bar out of those same tags rather than out of English text, so a run in
+Japanese still moves the bar (`app/gui/SfmRunner.cpp`).
+
 Environment: `SS_SFM_MAP_PROF=1` prints a mapper stage breakdown,
 `SS_SFM_DUMP_SG` / `SS_SFM_CMP_STEP` are BA solver debug hooks
 (`ba/README.md`).
@@ -301,6 +311,18 @@ pair selection. Two things fix it, and `auto` uses both:
   behaviour.
 
 Everything else has a default that a beginner should not have to touch.
+
+`--orient` (on by default) writes the finished model **upright, centred and
+unit-scaled** instead of in the arbitrary gauge the seed pair left it in: the
+mean camera up axis becomes +Z, the mean camera position becomes the origin,
+and the furthest camera coordinate becomes 1. It is the identical similarity
+the trainer computes from the poses it loads (`orientation_method="up"`,
+`center_method="poses"`, `auto_scale_poses`), applied once at the point the
+model is written, so the trainer's own normalization comes out as the identity
+(`train_frame_scale=1`) and everything that carries no cameras — an exported
+`splat.ply`, a mesh, a bare model in a viewer — is upright too rather than
+tilted with no way left to recover the transform. `map/Orient.h` has the
+algebra and the caveats; `--no-orient` keeps the mapper's raw gauge.
 
 `--mapper flat|bottom-up` picks the schedule (see the stage graph; flat is the
 default for every capture, and there is no size-based switch);

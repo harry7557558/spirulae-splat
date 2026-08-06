@@ -9,12 +9,16 @@
 //   translated, and the stage names doubly so: the same string is the caption
 //   above the progress bar.
 //
-//   THE CHILD PROCESS'S -- every line COLMAP, ffmpeg or `spirula sfm` prints.
-//   Passed through verbatim. They are English, they are what a bug report is
-//   pasted from, and they are not ours to rewrite.
+//   THE CHILD PROCESS'S -- every line COLMAP or ffmpeg prints. Passed through
+//   verbatim. They are English, they are what a bug report is pasted from, and
+//   they are not ours to rewrite.
 //
 // So a log in Japanese is Japanese around English, which is honest: the
 // English parts are the ones that came from somewhere else.
+//
+// `spirula sfm` is the exception that proves the rule -- it is a child process
+// but it is OURS, so it translates itself, out of i18n/catalog/Sfm.h and
+// through src/sfm/core/Log.h.
 
 #include "i18n/BeginCatalog.h"
 

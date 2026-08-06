@@ -112,6 +112,9 @@ struct SfmConfig {
     // Stage switches that are not a field of any stage's options.
     bool verify = true;                 // match: geometric verification
     bool final_principal_point = true;  // one PP-free global BA at the end (D51)
+    // Write the finished model in an upright, centred, unit-sized frame rather
+    // than in whatever gauge the seed pair left it in (map/Orient.h).
+    bool orient = true;
     bool merge_ba = true;               // merge: bundle-adjust across the seams
     bool in_place = false;              // merge: write back over the input
 
@@ -317,6 +320,9 @@ struct SfmConfig {
       "One principal-point-free global BA on the finished model, for a single camera group (D51)")  \
     F(mapper.pp_min_images, "pp-min-images", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",          \
       2, 1000000, "", "Images a group needs before that final pass runs on it")                     \
+    F(orient, "orient", CMD_AUTO | CMD_MAP | CMD_MERGE, Tier::Advanced, "mapper", 0, 0, "",         \
+      "Write the model upright, centred and unit-scaled from the camera poses, "                    \
+      "instead of in the seed pair's arbitrary gauge")                                              \
     F(mapper.min_tri_angle_deg, "min-tri-angle", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",      \
       0, 90, "", "Triangulation angle a 3D point must subtend to be kept")                          \
     F(mapper.init_min_tri_angle_deg, "init-min-tri-angle", CMD_AUTO | CMD_MAP, Tier::Advanced,      \

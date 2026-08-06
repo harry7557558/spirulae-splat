@@ -7,6 +7,11 @@
 
 #include "app/gui/AppPaths.h"
 #include "app/gui/Subprocess.h"
+#ifdef SS_TOOL_SFM
+// For the stage tags the child prints; a build without the module has no child
+// to read (see availability()).
+#include "sfm/core/Log.h"
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -169,31 +174,52 @@ void SfmRunner::set_stage(const std::string& s) {
 }
 
 // spirula-sfm's own progress lines. Reading them is a little grubby, but it is
-// the one thing a child process cannot hand over structurally, and the formats
-// below are the ones its stages print on every run.
+// the one thing a child process cannot hand over structurally.
+//
+// What it keys on is the stage TAG, and the tag is translated -- so this asks
+// the same catalog the child printed from (sfm/core/Log.h), rather than
+// matching English text that a `--lang ja` run will never emit. The numbers
+// are the first "a/b" on the line, which every progress message puts there and
+// no other message on those stages has.
 void SfmRunner::note_progress(const std::string& l) {
-    auto frac = [&](size_t a, size_t b) {
-        if (b > 0) _progress = (float)((double)a / (double)b);
+#ifdef SS_TOOL_SFM
+    using sfm::slog::Tag;
+    auto tagged = [&l](Tag t) {
+        const std::string p = sfm::slog::prefix(t);
+        return l.compare(0, p.size(), p) == 0;
+    };
+    // First "<digits>/<digits>" anywhere in the line.
+    auto fraction = [&l](unsigned long& a, unsigned long& b) {
+        for (size_t i = 0; i + 2 < l.size(); i++) {
+            if (!std::isdigit((unsigned char)l[i])) continue;
+            if (i && std::isdigit((unsigned char)l[i - 1])) continue;
+            if (std::sscanf(l.c_str() + i, "%lu/%lu", &a, &b) == 2 && b > 0) return true;
+            while (i + 1 < l.size() && std::isdigit((unsigned char)l[i + 1])) i++;
+        }
+        return false;
     };
     unsigned long a = 0, b = 0;
-    if (l.size() > 1 && l[0] == '[' && std::isdigit((unsigned char)l[1]) &&
-        std::sscanf(l.c_str(), "[%lu/%lu]", &a, &b) == 2) {
+    if (tagged(Tag::Extract)) {
+        if (!fraction(a, b)) return;
         set_stage_if_new(lmsg::stage_finding_features.get());
-        frac(a, b);
+        _progress = (float)((double)a / (double)b);
         return;
     }
-    if (l.rfind("[match]", 0) == 0 &&
-        std::sscanf(l.c_str(), "[match] %lu/%lu pairs", &a, &b) == 2) {
+    if (tagged(Tag::Match)) {
+        if (!fraction(a, b)) return;
         set_stage_if_new(lmsg::stage_matching_images.get());
-        frac(a, b);
+        _progress = (float)((double)a / (double)b);
         return;
     }
-    if (l.rfind("[map]", 0) == 0) {
+    if (tagged(Tag::Map)) {
+        // The mapper counts registrations rather than working towards a
+        // total, so this is a stage change and a spinner, not a fraction.
         set_stage_if_new(lmsg::stage_reconstructing.get());
-        // "[map] registered image 42 (118/193 PnP inliers), 57 total"
-        const char* p = std::strstr(l.c_str(), " total");
-        if (p) _progress = -1.0f;   // count, not a fraction: show a spinner
+        _progress = -1.0f;
     }
+#else
+    (void)l;
+#endif
 }
 
 // A capture shot as several inputs is several cameras, and the lens is a

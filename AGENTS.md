@@ -299,9 +299,13 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   English, so the field, its placeholder and the palette's inserted words stay
   English in every language; `ui::InputTextEnglish()` is the wrapper that says
   so, and `src/app/gui/MaskPrompt.h` is how a non-English speaker still writes
-  a good prompt. The same reasoning keeps child-process output (COLMAP,
-  ffmpeg, `spirula sfm`) untranslated — our stage names around it are
-  `i18n/catalog/Log.h`, its own lines are not ours to rewrite.
+  a good prompt. The same reasoning keeps THIRD-PARTY child-process output
+  (COLMAP, ffmpeg) untranslated — our stage names around it are
+  `i18n/catalog/Log.h`, its own lines are not ours to rewrite. `spirula sfm`
+  is ours, so it *is* translated: every line a default run prints goes through
+  `src/sfm/core/Log.h`, which puts a localized, equal-width `[tag]` in front
+  of a localized message (`i18n/catalog/Sfm.h`). Its deep diagnostics and
+  `--help` stay English.
 
 ## Gotchas worth knowing before you hit them
 

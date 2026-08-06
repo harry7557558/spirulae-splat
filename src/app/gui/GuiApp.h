@@ -13,6 +13,7 @@
 #include "app/gui/ModelCache.h"
 #include "app/gui/SegmentPanel.h"
 #include "app/gui/SfmRunner.h"
+#include "app/gui/SplatViewer.h"
 #include "app/gui/TrainRunner.h"
 #include "app/gui/ViewportPanel.h"
 
@@ -44,16 +45,16 @@ public:
     FontSet& fonts() { return _fonts; }
 
 private:
-    enum class Screen { Home, NewDataset, Train };
+    enum class Screen { Home, NewDataset, Train, Viewer };
     enum class PickAction {
         None, OpenDataset, SourceImages, SourceVideo, SourceReplace, Workspace,
-        OutputPrefix, VocabTree, MaskModelFile
+        OutputPrefix, VocabTree, MaskModelFile, SplatFile
     };
     // Which reconstruction back end the New Dataset screen runs.
     enum class Engine { BuiltIn, Colmap };
     // Session-destroying actions deferred behind the "stop training?"
     // confirmation (and executed once the stop has completed).
-    enum class Pending { None, GoHome, OpenDataset, Quit };
+    enum class Pending { None, GoHome, OpenDataset, OpenSplat, Quit };
 
     // ---- persistence (recents + tool paths) ----
     static std::string settings_path();
@@ -72,6 +73,15 @@ private:
                       std::string mask_dir = "", bool keep_log = false);
     // Route for user-initiated opens: confirms first when training.
     void request_open_dataset(std::string dir);
+
+    // The viewer screen: a splat file (or a checkpoint / run directory) opened
+    // for looking at. Takes the engine over, so it goes through the same
+    // confirmation as any other session-destroying action.
+    void open_splat(std::string path);
+    void request_open_splat(std::string path);
+    // Give the engine back and leave the screen. Called before anything that
+    // needs the engine for itself.
+    void close_splat();
 
 public:
     // Drag-and-drop entry (GLFW drop callback, main thread): auto-detects
@@ -114,6 +124,7 @@ private:
     void draw_license_modal();
     void draw_language_menu();       // the picker, and the CJK font prompt
     void draw_train();
+    void draw_viewer();
     void draw_train_settings();      // left panel
     void draw_basic_options();
     void draw_train_controls();
@@ -156,6 +167,9 @@ private:
 
     TrainRunner _runner;
     ViewportPanel _viewport;
+    SplatViewer _splat;
+    // The viewport is showing _splat rather than _runner's session.
+    bool _viewing_splat = false;
 
     // Dataset creation. Both runners exist; only one runs, chosen by _engine
     // (and forced when only one is available).

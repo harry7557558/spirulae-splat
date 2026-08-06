@@ -121,6 +121,10 @@ void GuiApp::shutdown() {
     save_settings();
     _viewport.detach();
     _viewport.destroy_gl();
+    // Before ~SplatViewer, which hands the engine back: the viewport's render
+    // worker must have stopped reading from it first.
+    _splat.close();
+    _viewing_splat = false;
     _segment.close();
     _segment.destroy_gl();
     _colmap.cancel();
@@ -203,6 +207,7 @@ void GuiApp::append_logs() {
     for (auto& s : _runner.drain_log()) log(s);
     for (auto& s : _colmap.drain_log()) log(s);
     for (auto& s : _sfm.drain_log()) log(s);
+    for (auto& s : _splat.drain_log()) log(s);
     for (auto& s : _download.drain_log()) log(s);
     for (auto& s : _font_download.drain_log()) log(s);
     // A finished font download is the one thing besides a language switch
@@ -249,6 +254,7 @@ void GuiApp::apply_preset(const std::string& preset) {
 void GuiApp::open_dataset(std::string dir, std::string image_dir,
                           std::string mask_dir, bool keep_log) {
     if (dir.empty()) return;
+    close_splat();
     // A different dataset means the log so far is about something else --
     // another capture's reconstruction, another run's warnings -- and keeping
     // it makes the panel read as if this dataset had already been worked on.
@@ -300,11 +306,47 @@ void GuiApp::request_go_home() {
         _open_confirm = true;
         return;
     }
+    close_splat();
     _screen = Screen::Home;
+}
+
+// A splat file, a step-*.ckpt directory, or a run directory. Loading is
+// asynchronous (a large model is a few hundred MB), so this only starts it;
+// frame() attaches the viewport once the splats are on the device.
+void GuiApp::open_splat(std::string path) {
+    if (path.empty()) return;
+    _log.clear();
+    _viewport.detach();
+    _viewing_splat = false;
+    _splat.open(path);
+    _screen = Screen::Viewer;
+}
+
+void GuiApp::request_open_splat(std::string path) {
+    if (training_busy()) {
+        _pending = Pending::OpenSplat;
+        _pending_path = std::move(path);
+        _open_confirm = true;
+        return;
+    }
+    open_splat(std::move(path));
+}
+
+// The engine is a process-global singleton and the viewer is holding it, so
+// this has to run before a training session can be set up -- and the viewport
+// has to stop rendering from it first.
+void GuiApp::close_splat() {
+    if (_splat.state() == SplatViewer::State::Idle) return;
+    if (_viewing_splat) {
+        _viewport.detach();
+        _viewing_splat = false;
+    }
+    _splat.close();
 }
 
 void GuiApp::start_training() {
     if (_cfg.data.empty()) return;
+    close_splat();      // the engine is one object; the viewer has to let go
     _viewport.detach();
     // Engine setup initializes the backend on the selected device; from
     // here on the device combo is display-only (one device per process).
@@ -332,6 +374,7 @@ void GuiApp::run_pending_if_stopped() {
     switch (p) {
         case Pending::GoHome:     _screen = Screen::Home; break;
         case Pending::OpenDataset: open_dataset(_pending_path); break;
+        case Pending::OpenSplat:  open_splat(_pending_path); break;
         case Pending::Quit:       _quit = true; break;
         default: break;
     }
@@ -342,6 +385,21 @@ static bool is_image_ext(const fs::path& p) {
     for (auto& c : e) c = (char)std::tolower((unsigned char)c);
     return e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".webp" ||
            e == ".tif" || e == ".tiff" || e == ".bmp";
+}
+
+// Is this folder a finished model rather than a dataset -- a run directory, or
+// one of its checkpoints? Then it belongs in the viewer.
+static bool looks_like_model(const fs::path& p) {
+    std::error_code ec;
+    if (fs::is_regular_file(p / "splat.ply", ec)) return true;
+    for (fs::directory_iterator it(p, ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string b = it->path().filename().string();
+        if (it->is_directory(ec) &&
+            (b.rfind("step-", 0) == 0 || b.find(".ckpt") != std::string::npos) &&
+            fs::is_regular_file(it->path() / "splat.ply", ec))
+            return true;
+    }
+    return false;
 }
 
 // Is this folder an already-processed dataset rather than raw input? Checked
@@ -372,6 +430,13 @@ void GuiApp::handle_drop(const std::vector<std::string>& paths) {
     // and dropping one alongside videos is far more likely a mis-drag than a
     // request to do both.
     if (paths.size() == 1 && fs::is_directory(paths[0], ec) &&
+        looks_like_model(paths[0])) {
+        // Checked before the dataset test: a run directory sits INSIDE the
+        // dataset it was trained from often enough that both would match.
+        request_open_splat(paths[0]);
+        return;
+    }
+    if (paths.size() == 1 && fs::is_directory(paths[0], ec) &&
         looks_like_dataset(paths[0])) {
         request_open_dataset(paths[0]);
         return;
@@ -384,6 +449,13 @@ void GuiApp::handle_drop(const std::vector<std::string>& paths) {
         const fs::path p(paths[0]);
         std::string ext = p.extension().string();
         for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+        // A .ply is a model to look at -- Gaussians or a point cloud, which
+        // the viewer works out for itself. (A Metashape dataset FOLDER is
+        // caught above, before this, so dropping one still opens the dataset.)
+        if (ext == ".ply") {
+            request_open_splat(p.string());
+            return;
+        }
         if (p.filename() == "transforms.json" || ext == ".db" ||
             ext == ".bin" || ext == ".txt" || ext == ".xml") {
             request_open_dataset(p.parent_path().string());
@@ -453,6 +525,48 @@ static std::string sanitize_name(std::string s) {
     return s.empty() ? std::string("input") : s;
 }
 
+// Folder names that say what is inside rather than which capture it is.
+// `/lab/images` and `/lab/omni/images` are two different inputs whose own
+// names are both "images", so the folder ABOVE is what tells them apart.
+static bool is_generic_folder_name(std::string n) {
+    for (char& c : n) c = (char)std::tolower((unsigned char)c);
+    return n == "images" || n == "image" || n == "img" || n == "imgs" ||
+           n == "photos" || n == "pictures" || n == "pics" || n == "frames" ||
+           n == "input" || n == "inputs" || n == "data";
+}
+
+// Names that mean something else inside a dataset: a per-input folder called
+// `images` produces `<ws>/images/images`, which is the layout `sfm auto`'s
+// nested-images shorthand exists for -- and taking that shorthand there drops
+// every other input from the reconstruction. Cheaper to never write the name.
+static bool is_reserved_dataset_name(std::string n) {
+    for (char& c : n) c = (char)std::tolower((unsigned char)c);
+    return n == "images" || n == "masks" || n == "sparse" || n == "features" ||
+           n == "depths" || n == "normals" || n == "colmap" || n == "outputs";
+}
+
+// The sub-folder one input's frames go into, before de-duplication: the
+// video's own name, or the photo folder's -- climbing past a folder whose name
+// only describes its contents, so two captures picked as `X/images` and
+// `Y/images` come out as `X` and `Y` rather than `images` and `images_2`.
+static std::string source_folder_base(const PrepInput& s) {
+    fs::path p(s.path);
+    if (s.is_video) return sanitize_name(p.stem().string());
+    if (!p.empty() && p.filename().empty()) p = p.parent_path();  // trailing '/'
+    for (int up = 0; up < 2 && !p.empty(); up++) {
+        std::string n = p.filename().string();
+        if (n.empty()) break;
+        if (!is_generic_folder_name(n)) return sanitize_name(n);
+        p = p.parent_path();
+    }
+    // Nothing but generic names all the way up: keep the leaf, but never as a
+    // name the dataset layout already uses.
+    fs::path leaf(s.path);
+    if (!leaf.empty() && leaf.filename().empty()) leaf = leaf.parent_path();
+    std::string n = sanitize_name(leaf.filename().string());
+    return is_reserved_dataset_name(n) ? n + "_input" : n;
+}
+
 void GuiApp::refresh_sources() {
     // One input keeps the layout a one-video dataset has always had: frames
     // straight into images/ (and cam0/, cam1/ under it for a dual-lens file).
@@ -466,11 +580,8 @@ void GuiApp::refresh_sources() {
             s.subdir.clear();
             continue;
         }
-        const fs::path p(s.path);
-        std::string base = sanitize_name(
-            s.is_video ? p.stem().string()
-                       : (p.filename().empty() ? p.parent_path().filename().string()
-                                               : p.filename().string()));
+        std::string base = source_folder_base(s);
+        if (is_reserved_dataset_name(base)) base += "_input";
         std::string name = base;
         for (int n = 2; std::find(taken.begin(), taken.end(), name) != taken.end();
              n++)
@@ -681,6 +792,9 @@ void GuiApp::handle_dialog_result(const std::vector<std::string>& paths) {
         case PickAction::VocabTree:
             _colmap_job.vocab_tree_path = path;
             break;
+        case PickAction::SplatFile:
+            request_open_splat(path);
+            break;
         default:
             break;
     }
@@ -710,9 +824,21 @@ void GuiApp::frame() {
         }
     }
 
-    // Viewport backend transitions: GL dataset preview once parsed, engine
-    // renderer once training set the engine up.
-    if (_runner.engine_ready()) {
+    // Viewport backend transitions: a splat file once it is on the device, the
+    // GL dataset preview once a dataset is parsed, the engine renderer once
+    // training has set the engine up. The file case is exclusive with the
+    // other two -- it owns the engine while it is open.
+    if (_viewing_splat || _splat.ready()) {
+        if (_splat.ready() && !_viewing_splat) {
+            if (_splat.kind() == SplatViewer::Kind::Points)
+                _viewport.attach_preview_data(_splat.points(), _splat.post(),
+                                              _splat.scene_key());
+            else
+                _viewport.attach_scene(_splat.render_config(), _splat.make_hooks(),
+                                       _splat.scene_key());
+            _viewing_splat = true;
+        }
+    } else if (_runner.engine_ready()) {
         if (!_viewport.attached() && _runner.session())
             _viewport.attach(*_runner.session());
     } else if (_runner.phase() == TrainRunner::Phase::Ready) {
@@ -736,6 +862,7 @@ void GuiApp::frame() {
         case Screen::Home:   draw_home();   break;
         case Screen::NewDataset: draw_new_dataset(); break;
         case Screen::Train:  draw_train();  break;
+        case Screen::Viewer: draw_viewer(); break;
     }
 
     if (_dialog.draw()) handle_dialog_result(_dialog.results());
@@ -759,6 +886,11 @@ void GuiApp::draw_menu_bar() {
             _pick = PickAction::SourceVideo;
             _dialog.open(msg::pick_videos.get(), FileDialog::Mode::File,
                          video_dialog_filters(), "", /*multi_select=*/true);
+        }
+        if (ui::MenuItem(msg::menu_open_splat)) {
+            _pick = PickAction::SplatFile;
+            _dialog.open(msg::viewer_pick_file.get(), FileDialog::Mode::File,
+                         {".ply"});
         }
         ImGui::Separator();
         if (ui::MenuItem(msg::menu_quit)) request_close();
@@ -880,6 +1012,14 @@ void GuiApp::draw_home() {
                      video_dialog_filters(), "", /*multi_select=*/true);
     }
     ui::help_on_hover(msg::home_from_video_help);
+
+    if (ui::Button(msg::home_open_splat, ImVec2(-1, 42))) {
+        _pick = PickAction::SplatFile;
+        _dialog.open(msg::viewer_pick_file.get(), FileDialog::Mode::File,
+                     {".ply"});
+    }
+    ui::help_on_hover(msg::home_open_splat_help);
+
     ImGui::Spacing();
     ui::TextDisabled(msg::home_drop_hint);
 
@@ -1916,12 +2056,76 @@ void GuiApp::draw_train() {
     float spacing = ImGui::GetStyle().ItemSpacing.y;
     float vp_h = -(log_h + (log_h > 0 ? spacing : 0) + status_h + spacing);
     ImGui::BeginChild("##viewport", ImVec2(0, vp_h), ImGuiChildFlags_Borders);
-    _viewport.draw(_runner.phase() == TrainRunner::Phase::Training);
+    const bool stepping = _runner.phase() == TrainRunner::Phase::Training;
+    // The step the viewport paces its refresh by while nobody is steering it.
+    _viewport.draw(stepping, stepping ? _runner.latest_progress().step : -1);
     ImGui::EndChild();
     draw_status_strip();
     if (_show_log) draw_log_panel(log_h);
     ImGui::EndGroup();
 }
+
+
+// ===========================================================================
+// Viewer screen
+//
+// A finished model, with nothing being trained: the same viewport, the same
+// navigation and the same camera models as during a run, over splats read
+// from a file instead of ones an optimizer is still moving. What it is for is
+// the thing a trainer cannot do -- open somebody else's result, or your own
+// from last week, and look at it.
+// ===========================================================================
+
+void GuiApp::draw_viewer() {
+    if (ui::Button(msg::back_home)) request_go_home();
+    ImGui::SameLine();
+    if (ui::Button(msg::viewer_open_another)) {
+        _pick = PickAction::SplatFile;
+        _dialog.open(msg::viewer_pick_file.get(), FileDialog::Mode::File,
+                     {".ply"});
+    }
+    ImGui::SameLine();
+    // The file's own path, which is what identifies it.
+    ui::TextDisabledRaw(_splat.file().empty() ? _splat.path() : _splat.file());
+    if (_splat.ready()) {
+        ImGui::SameLine();
+        if (_splat.kind() == SplatViewer::Kind::Points)
+            ui::TextDisabled(msg::viewer_point_count,
+                             {(long long)_splat.num_splats()});
+        else
+            ui::TextDisabled(msg::viewer_splat_count,
+                             {(long long)_splat.num_splats(),
+                              (long long)_splat.sh_degree()});
+    }
+
+    float log_h = _show_log ? 120.0f : 0.0f;
+    float spacing = ImGui::GetStyle().ItemSpacing.y;
+    ImGui::BeginChild("##viewer", ImVec2(0, -(log_h + (log_h > 0 ? spacing : 0))),
+                      ImGuiChildFlags_Borders);
+    switch (_splat.state()) {
+        case SplatViewer::State::Loading:
+            ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.4f));
+            ui::TextDisabled(msg::viewer_loading);
+            break;
+        case SplatViewer::State::Failed:
+            ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.4f));
+            ui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), msg::viewer_failed);
+            ui::TextDisabledRaw(_splat.error());
+            break;
+        case SplatViewer::State::Ready:
+            // Nothing is training, so nothing changes between frames unless
+            // the camera does: the viewport renders on demand.
+            _viewport.draw(/*training=*/false);
+            break;
+        default:
+            ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.4f));
+            ui::TextDisabled(msg::viewer_nothing_open);
+            break;
+    }
+    ImGui::EndChild();
+    if (_show_log) draw_log_panel(log_h);
+}
+
 
 void GuiApp::draw_train_settings() {
     TrainRunner::Phase ph = _runner.phase();
@@ -2300,12 +2504,13 @@ void GuiApp::draw_confirm_modal() {
     if (ui::BeginPopupModal(msg::confirm_title, nullptr,
                             ImGuiWindowFlags_AlwaysAutoResize)) {
         ui::Text(msg::confirm_intro);
-        // Three whole questions rather than one with a swappable tail: the
-        // clause order differs by language, and Japanese, Korean and Turkish
-        // put the verb last, so "... and {0}?" cannot be translated at all.
-        ui::Text(_pending == Pending::Quit   ? msg::confirm_quit
-               : _pending == Pending::GoHome ? msg::confirm_home
-                                             : msg::confirm_open);
+        // Whole questions rather than one with a swappable tail: the clause
+        // order differs by language, and Japanese, Korean and Turkish put the
+        // verb last, so "... and {0}?" cannot be translated at all.
+        ui::Text(_pending == Pending::Quit      ? msg::confirm_quit
+               : _pending == Pending::GoHome    ? msg::confirm_home
+               : _pending == Pending::OpenSplat ? msg::confirm_open_splat
+                                                : msg::confirm_open);
         ImGui::Spacing();
         if (ui::Button(msg::stop_and_save, ImVec2(150, 0))) {
             _runner.request_stop();

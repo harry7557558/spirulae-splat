@@ -14,6 +14,15 @@ is, so the port does not have to be reverse-engineered from a diff.
 | `auto_scale_poses` | effectively always on — the scale is folded into `train_frame_scale` |
 | `train_frame` | only `points`; `normalized` / `camera` are rejected by `check_config()` |
 
+**Where the frame now comes from.** `spirula sfm` applies this same
+similarity to the model before writing it (`src/sfm/map/Orient.h`,
+`--no-orient` to decline), so for a dataset this repository reconstructed, the
+"raw SfM frame" below already *is* the normalized frame: `train_frame_scale`
+comes out 1 and `train_to_normalized` the identity. Everything in this note
+still describes what the trainer does — it is simply being handed a scene that
+has nothing left to normalize. Datasets from COLMAP, Metashape or nerfstudio
+are unchanged and still arrive in whatever gauge their producer chose.
+
 Because `train_frame="points"` keeps splats in the raw SfM frame, the
 orientation/centering choice does **not** move the training coordinates. It
 only changes `train_frame_scale` (and hence the LR / regularizer rescaling

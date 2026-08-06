@@ -36,6 +36,31 @@ SS_MSG(product,
     NL("Spirula Studio"),      RU("Spirula Studio"),
     TR("Spirula Studio"));
 
+// The window decoration.
+//
+// Not `product` on its own: the languages that pin a local name keep the Latin
+// wordmark beside it here, because the title bar is where someone matches the
+// window to the thing they downloaded and to the process in a task manager.
+// The languages that do not translate the name at all just repeat it.
+//
+// Written out per language rather than assembled from `product` and a
+// separator -- a title is copy like any other, and one that reads
+// "<name> - Spirula Studio" is a choice each language gets to make.
+SS_MSG(window_title,
+    EN("Spirula Studio"),
+    JA("スピルラ・スタジオ — Spirula Studio"),
+    ZH_HANS("旋影工坊 — Spirula Studio"),
+    ZH_HANT("旋影工坊 — Spirula Studio"),
+    KO("스피룰라 스튜디오 — Spirula Studio"),
+    DE("Spirula Studio"),
+    FR("Spirula Studio"),
+    ES("Spirula Studio"),
+    PT("Spirula Studio"),
+    IT("Spirula Studio"),
+    NL("Spirula Studio"),
+    RU("Spirula Studio"),
+    TR("Spirula Studio"));
+
 // One line, under the wordmark on the home screen and in About.
 SS_MSG(tagline,
     EN("Reconstruct 3D scenes from photos with Gaussian splatting."),

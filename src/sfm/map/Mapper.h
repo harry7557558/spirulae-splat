@@ -36,7 +36,9 @@
 #include "sfm/geometry/AbsolutePose.h"
 #include "sfm/geometry/Triangulation.h"
 #include "sfm/geometry/TwoView.h"
+#include "sfm/core/Log.h"
 #include "sfm/map/Bundle.h"
+#include "i18n/catalog/Sfm.h"
 #include "sfm/map/CorrespondenceGraph.h"
 // For alignByStructure: the similarity two models' shared points determine, and
 // the pixel scoring it is judged by, are the merger's (D70). Merge.h does not
@@ -385,8 +387,8 @@ public:
                 (double)opt_.min_model_size, opt_.min_model_fraction * allowedCount());
             if (reg >= enough) break;
             if (opt_.verbose)
-                fprintf(stderr, "[map] model too small (%u < %u, %zu covered by all attempts so "
-                        "far), retrying from another seed\n", reg, enough, seededImages());
+                slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_model_too_small,
+                         {(long long)reg, (long long)enough, (long long)seededImages()});
         }
         seeded_.clear();
         if (attempts.empty()) {
@@ -769,9 +771,8 @@ public:
             if (kv.second.registered) groups.insert(kv.second.camera_id);
         if (groups.size() != 1) {
             if (opt_.verbose)
-                fprintf(stderr,
-                        "[map] %zu camera groups: skipping the final principal-point pass "
-                        "(it would move them apart, D51)\n", groups.size());
+                slog::err(slog::Tag::Map, spirula::i18n::msg::sfm::map_pp_skipped,
+                          {(long long)groups.size()});
             return m;
         }
         ensureSetup();
@@ -1643,11 +1644,13 @@ private:
             for (const Reconstruction& m : models)
                 for (const auto& kv : m.images)
                     if (kv.second.registered) covered.insert(kv.first);
-            fprintf(stderr, "[map] done: %zu model(s) covering %zu/%zu distinct images\n",
-                    models.size(), covered.size(), db_.images.size());
+            slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_done,
+                     {(long long)models.size(), (long long)covered.size(),
+                      (long long)db_.images.size()});
             for (size_t i = 0; i < models.size(); i++)
-                fprintf(stderr, "[map]   model %zu: %u images, %zu points\n", i,
-                        models[i].numRegistered(), models[i].points3D.size());
+                slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_model_line,
+                         {(long long)i, (long long)models[i].numRegistered(),
+                          (long long)models[i].points3D.size()});
             // Why the rest did not come in. The four counts call for different
             // fixes -- too few 2D-3D candidates is a matching or coverage
             // problem, a low inlier *ratio* is usually the image being
@@ -2499,9 +2502,10 @@ private:
         for (; init_relax_ < levels; init_relax_++, from = 0) {
             const InitLevel l = initLevel(init_relax_);
             if (init_relax_ && from == 0 && opt_.verbose)
-                fprintf(stderr, "[map] no seed at stricter thresholds; relaxing to "
-                        "%d inliers / %.0f deg%s\n", l.inliers, l.angle,
-                        l.allow_forward ? " / forward motion allowed" : "");
+                slog::out(slog::Tag::Map,
+                         l.allow_forward ? spirula::i18n::msg::sfm::map_seed_relax_forward
+                                         : spirula::i18n::msg::sfm::map_seed_relax,
+                         {(long long)l.inliers, slog::num(l.angle, 0)});
             if (initializeAttempt(from, l.angle, l.inliers, l.allow_forward)) return true;
         }
         return false;
@@ -2749,8 +2753,10 @@ private:
             seed_pair_ = &pm;
             seed_forward_ = fwd;
             if (opt_.verbose)
-                fprintf(stderr, "[map] init pair (%u,%u): %d points, median angle %.1f deg, "
-                        "baseline %.2f forward\n", a, b, created, medAng, fwd);
+                slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_init_pair,
+                         {(long long)a, (long long)b, (long long)created, slog::num(medAng, 1),
+                          (fwd > 0.5 ? spirula::i18n::msg::sfm::baseline_forward
+                                     : spirula::i18n::msg::sfm::baseline_sideways).get()});
             return true;
         }
         // Roll back and let the caller try the next candidate.
@@ -2993,8 +2999,10 @@ private:
                 for (size_t k = 0; k < feat.size(); k++) br[k] = bearing(img, feat[k]);
             }
             if (opt_.verbose && std::fabs(camOf(img).focal() - f0) > 1e-6)
-                fprintf(stderr, "[map] camera %u focal %.0f -> %.0f (search+refine, %d inliers)\n",
-                        cid, f0, camOf(img).focal(), r.num_inliers);
+                slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_camera_focal,
+                         {(long long)cid, slog::num(f0, 0),
+                          slog::num(camOf(img).focal(), 0),
+                          (long long)r.num_inliers});
         } else {
             refinePose(X, br, r.inlier_mask, r.pose);
         }
@@ -3033,8 +3041,9 @@ private:
             attachObservation(img, f);
         }
         if (opt_.verbose)
-            fprintf(stderr, "[map] registered image %u (%d/%zu PnP inliers), %u total\n", img,
-                    r.num_inliers, X.size(), rec_.numRegistered());
+            slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_registered,
+                     {(long long)img, (long long)r.num_inliers, (long long)X.size(),
+                      (long long)rec_.numRegistered()});
         return true;
     }
 
@@ -3208,10 +3217,13 @@ private:
             sanitizeCameras();
             int removedObs = 0, removedPts = 0;
             filterPoints(removedObs, removedPts);
-            if (opt_.verbose)
-                fprintf(stderr,
-                        "[map] global BA (cost %.3e), filtered %d obs / %d points, %zu remain\n",
-                        cost, removedObs, removedPts, rec_.points3D.size());
+            if (opt_.verbose) {
+                char cost_s[32];
+                std::snprintf(cost_s, sizeof cost_s, "%.3e", cost);
+                slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_global_ba,
+                         {cost_s, (long long)removedObs, (long long)removedPts,
+                          (long long)rec_.points3D.size()});
+            }
             if (!before || (double)removedObs / (double)before <= opt_.ba_refine_change) break;
         }
         int dropped;
@@ -3560,8 +3572,8 @@ private:
             if (std::fabs(c.cx - d.cx) > 0.2 * c.width) { c.cx = d.cx; fixed++; }
             if (std::fabs(c.cy - d.cy) > 0.2 * c.height) { c.cy = d.cy; fixed++; }
             if (fixed && opt_.verbose)
-                fprintf(stderr, "[map] camera %u: reset %d runaway parameter(s)\n",
-                        kv.first, fixed);
+                slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_runaway_params,
+                         {(long long)kv.first, (long long)fixed});
         }
     }
 

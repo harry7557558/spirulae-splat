@@ -31,15 +31,29 @@ class ViewportPanel {
 public:
     // Dataset preview (needs load_dataset() done; no GPU engine).
     void attach_preview(spirula::TrainerSession& session);
+    // The same GL preview over a bare point cloud -- a .ply that turned out to
+    // hold points rather than Gaussians. No cameras, so no frusta.
+    void attach_preview_data(const ParsedDataset& ds, const PostSplitCameras& post,
+                             const std::string& key, float radius = 1.0f);
     // Engine renderer (needs engine_ready).
     void attach(spirula::TrainerSession& session);
+    // Engine renderer over something that is not a training session -- a splat
+    // file opened in the viewer (SplatViewer). `key` identifies the scene, so
+    // reopening the same file keeps the pose; `radius` is the scene radius in
+    // the client's normalized frame, which is 1 for anything normalized.
+    // There are no training cameras behind this, so the frustum controls are
+    // not offered.
+    void attach_scene(const ViewerRenderConfig& cfg, const ViewerHooks& hooks,
+                      const std::string& key, float radius = 1.0f);
     void detach();
     bool attached() const { return _mode == Mode::Engine; }
     bool preview_active() const { return _mode == Mode::Preview; }
 
     // Draw the viewport (controls rows + image) into the current ImGui
-    // window/child. `training` enables continuous refresh.
-    void draw(bool training);
+    // window/child. `training` enables continuous refresh; `step` is the
+    // training iteration that has just finished (< 0 when unknown), which is
+    // what paces the refresh while nobody is steering the camera.
+    void draw(bool training, int step = -1);
 
     // Free GL resources. Call while the GL context is still current
     // (before ImGui/GLFW shutdown).
@@ -49,12 +63,23 @@ private:
     enum class Mode { None, Preview, Engine };
 
     void compute_framing(const spirula::TrainerSession& session);
+    // The client-frame default pose (web viewer cam.reset() + orbit(0,-250)).
+    void reset_pose(float radius);
     // Frame the scene only when a different dataset arrives; a preview ->
     // engine transition on the same dataset keeps the navigated pose and
     // intrinsics (no jump when training starts).
     void maybe_frame(const spirula::TrainerSession& session);
     void reset_view();
-    float render_scale(double now);
+    // Update _moving / _last_move from the camera pose. Runs every frame in
+    // every scale mode: what it feeds is no longer only the adaptive scale.
+    void note_motion(double now);
+    float render_scale();
+    // Training iterations between refreshes while the camera is still, sized
+    // from the measured render and step costs so the viewport keeps costing
+    // about the same slice of the run whatever the dataset.
+    int idle_step_interval() const;
+    // Render resolution for `avail` at the current scale, aspect PRESERVED.
+    void render_size(const ImVec2& avail, int& W, int& H) const;
     // Double-click centering (webgl viewer's recenterAt): pan laterally so
     // p (normalized frame) sits on the optical axis and make it the orbit
     // pivot; if p is behind the camera plane (>180-degree models), rotate
@@ -72,7 +97,7 @@ private:
     void upload(const ViewResult& res);
     void draw_controls(bool engine);
     void handle_input(float item_h);         // mouse/keys/gamepad on last item
-    void draw_engine(bool training, const ImVec2& avail);
+    void draw_engine(bool training, const ImVec2& avail, int step);
     void draw_preview(const ImVec2& avail);
 
     Mode _mode = Mode::None;
@@ -95,6 +120,11 @@ private:
     int _cam_model = 0;              // index into kViewerCameraModels
     float _fov_deg[4] = {90, 180, 180, 0};
 
+    // Whether there are training cameras behind what is being rendered. A
+    // splat file has none, so the frustum controls are hidden rather than
+    // shown doing nothing.
+    bool _has_cameras = true;
+
     // Render options.
     int _buffer_idx = 0;
     std::vector<std::string> _buffer_keys;
@@ -107,6 +137,15 @@ private:
     double _last_move = -1e9;
     bool _moving = false;
     bool _auto_refresh = true;
+
+    // Refresh pacing while training (see idle_step_interval): the step the
+    // last render was submitted at, and exponential averages of what a render
+    // and a training step each cost.
+    int _last_render_step = -1;
+    int _last_seen_step = -1;
+    double _last_step_time = -1.0;
+    double _render_secs = 0.0;
+    double _step_secs = 0.0;
 
     // In-flight request / result texture (engine mode).
     uint64_t _pending = 0;

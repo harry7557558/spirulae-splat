@@ -145,10 +145,19 @@ Not everything a user sees is addressed to them:
   whatever the interface language is — see `src/app/gui/MaskPrompt.h`, which
   is also how a user who does not write English still builds a good prompt.
   `ui::InputTextEnglish()` is the wrapper that says so at the call site.
-- **Child-process output** (COLMAP, ffmpeg, `spirula sfm`) is passed through
+- **Third-party child-process output** (COLMAP, ffmpeg) is passed through
   verbatim. It is English, it is what a bug report is pasted from, and it is
   not ours to rewrite. Our own stage names and notes around it *are*
   translated — see `i18n/catalog/Log.h`.
+
+  `spirula sfm` is **not** in that category, and this is the distinction worth
+  keeping straight: it is a subcommand of this program, re-run as a child
+  process, so its output is ours. Every line a default run prints comes out as
+  a localized, equal-width `[tag]` followed by a localized message
+  (`src/sfm/core/Log.h`, `i18n/catalog/Sfm.h`). What stays English there is
+  what is addressed to whoever is debugging the pipeline rather than to the
+  person waiting on it: `--help`, `SS_SFM_MAP_PROF`, the seam-test and
+  focal-curve diagnostics, and the self-test binaries.
 - **Identifiers**: preset names, camera and lens model names, config field
   names. The picker shows a translated label next to the name rather than
   instead of it, so a user who read the README still recognises the row.

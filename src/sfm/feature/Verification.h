@@ -33,7 +33,9 @@
 #include "sfm/core/Camera.h"
 #include "sfm/core/Features.h"
 #include "sfm/core/Matches.h"
+#include "sfm/core/Log.h"
 #include "sfm/geometry/TwoView.h"
+#include "i18n/catalog/Sfm.h"
 
 namespace sfm {
 
@@ -219,12 +221,15 @@ inline double bootstrapFocal(const std::vector<FeatureSet>& feats,
         break;
     }
     if (verbose) {
-        fprintf(stderr, "[focal] search over %zu pairs (f:peripheral/total):",
-                sample.size());
+        slog::out(slog::Tag::Match, spirula::i18n::msg::sfm::focal_search,
+                 {(long long)sample.size(), slog::num(best_f, 1),
+                  (long long)((0.5 * diag / best_f) * 180.0 / M_PI)});
+        // The search curve itself is a debug histogram -- whoever reads it is
+        // calibrating the focal search, not waiting on a reconstruction.
+        fprintf(stderr, "[focal] curve (f:peripheral/total):");
         for (size_t i = 0; i < curve.size(); i++)
             fprintf(stderr, " %.0f:%d/%d", curve[i].first, curve[i].second, totals[i]);
-        fprintf(stderr, "\n[focal] %.1f px (half-diagonal FOV %.0f deg)\n", best_f,
-                (0.5 * diag / best_f) * 180.0 / M_PI);
+        fprintf(stderr, "\n");
     }
     return best_f;
 }

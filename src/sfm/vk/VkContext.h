@@ -19,6 +19,9 @@
 #include <vector>
 #include "core/Env.h"
 
+#include "sfm/core/Log.h"
+#include "i18n/catalog/Sfm.h"
+
 // The result codes worth naming: the ones a user can act on. Everything else
 // prints its number. Out-of-memory in particular used to surface as a bare
 // "Vulkan error -2" from a buffer allocation, which says nothing about the
@@ -168,7 +171,8 @@ public:
         // reconstruction say nothing the first one did not.
         static std::atomic<bool> announced{false};
         if (!announced.exchange(true))
-            fprintf(stderr, "[vk] using device: %s\n", props.deviceName);
+            sfm::slog::out(sfm::slog::Tag::Device,
+                           spirula::i18n::msg::sfm::device_using, {props.deviceName});
 
         // ---- queue family ----
         uint32_t qn = 0;

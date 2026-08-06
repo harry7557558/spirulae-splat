@@ -5,6 +5,7 @@
 #include "app/Tools.h"
 #include "app/gui/Fonts.h"
 #include "app/gui/GuiApp.h"
+#include "i18n/catalog/Brand.h"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -69,6 +70,8 @@ int spirula_gui_main(int argc, char** argv) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
 
+    // The title is set from the catalog below, once GuiApp has settled the
+    // language; this is only what the window is born with.
     GLFWwindow* window = glfwCreateWindow(1600, 950, "Spirula Studio",
                                           nullptr, nullptr);
     if (!window) {
@@ -119,6 +122,20 @@ int spirula_gui_main(int argc, char** argv) {
                 if (argv[i] && argv[i][0]) args.push_back(argv[i]);
             if (!args.empty()) app.handle_drop(args);
         }
+        // The title bar is interface copy too, and the language it is in is
+        // only settled after GuiApp has read its settings -- and changes again
+        // whenever the picker does. Comparing the string is enough of a
+        // change test: it is immortal .rodata that the current language
+        // selects, so this is one pointer-deep compare per frame.
+        std::string title;
+        auto sync_title = [&] {
+            const char* want = spirula::i18n::msg::brand::window_title.get();
+            if (title == want) return;
+            title = want;
+            glfwSetWindowTitle(window, title.c_str());
+        };
+        sync_title();
+
         while (!app.wants_exit()) {
             glfwPollEvents();
             if (glfwWindowShouldClose(window)) {
@@ -131,6 +148,7 @@ int spirula_gui_main(int argc, char** argv) {
             // the loop where none is live. Returns immediately unless the
             // language changed or a font download finished.
             app.fonts().ensure();
+            sync_title();
 
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();

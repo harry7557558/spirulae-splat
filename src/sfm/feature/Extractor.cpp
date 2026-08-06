@@ -1,3 +1,5 @@
+#include "sfm/core/Log.h"
+#include "i18n/catalog/Sfm.h"
 #include "sfm/feature/Extractor.h"
 
 #include <algorithm>
@@ -86,7 +88,9 @@ public:
             std::memcpy(dst + i * fs.dim, &f.descriptors[(size_t)idx[i] * fs.dim],
                         fs.dim * sizeof(float));
         }
-        if (opt_.verbose) fprintf(stderr, "[aliked] %zu features\n", n);
+        if (opt_.verbose)
+            slog::err(slog::Tag::Extract, spirula::i18n::msg::sfm::sift_features,
+                      {(long long)n});
         return fs;
     }
 
