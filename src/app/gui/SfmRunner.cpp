@@ -2,6 +2,9 @@
 
 #include "app/gui/SfmRunner.h"
 
+#include "i18n/Locale.h"
+#include "i18n/catalog/Log.h"
+
 #include "app/gui/AppPaths.h"
 #include "app/gui/Subprocess.h"
 
@@ -13,6 +16,15 @@
 #include <sstream>
 
 namespace fs = std::filesystem;
+namespace lmsg = spirula::i18n::msg::log;
+using spirula::i18n::format;
+
+// Shorthand: every log line that carries a path or a count is a format()
+// call, and there are enough of them here to be worth a short name.
+inline std::string fmt(const spirula::i18n::Msg& m,
+                       std::initializer_list<spirula::i18n::Arg> a) {
+    return format(m, a);
+}
 
 namespace gui {
 
@@ -166,18 +178,18 @@ void SfmRunner::note_progress(const std::string& l) {
     unsigned long a = 0, b = 0;
     if (l.size() > 1 && l[0] == '[' && std::isdigit((unsigned char)l[1]) &&
         std::sscanf(l.c_str(), "[%lu/%lu]", &a, &b) == 2) {
-        set_stage_if_new("Finding features");
+        set_stage_if_new(lmsg::stage_finding_features.get());
         frac(a, b);
         return;
     }
     if (l.rfind("[match]", 0) == 0 &&
         std::sscanf(l.c_str(), "[match] %lu/%lu pairs", &a, &b) == 2) {
-        set_stage_if_new("Matching images");
+        set_stage_if_new(lmsg::stage_matching_images.get());
         frac(a, b);
         return;
     }
     if (l.rfind("[map]", 0) == 0) {
-        set_stage_if_new("Reconstructing cameras (the slow part)");
+        set_stage_if_new(lmsg::stage_reconstructing.get());
         // "[map] registered image 42 (118/193 PnP inliers), 57 total"
         const char* p = std::strstr(l.c_str(), " total");
         if (p) _progress = -1.0f;   // count, not a fraction: show a spinner
@@ -213,18 +225,16 @@ void SfmRunner::append_camera_overrides(const SfmJob& job, const PrepResult& pre
                                : fs::path(prep.image_dir) / in.subdir).string();
         int W = 0, H = 0;
         if (!DatasetPrep::first_image_dims(dir, W, H)) {
-            log("warning: could not read an image in " + dir +
-                "; leaving its focal length to be guessed");
+            log(fmt(lmsg::sfm_focal_unreadable, {dir}));
             continue;
         }
         char buf[32];
         std::snprintf(buf, sizeof buf, "%g", (double)in.focal_factor * W);
         argv.push_back("--focal");
         argv.push_back(prefix + buf);
-        log("Initial focal length for " +
-            (in.subdir.empty() ? std::string("the capture") : in.subdir) + ": " +
-            buf + " px (" + std::to_string(in.focal_factor) + " x " +
-            std::to_string(W) + " px wide)");
+        log(fmt(lmsg::sfm_initial_focal,
+                {in.subdir.empty() ? lmsg::sfm_the_capture.get() : in.subdir.c_str(),
+                 buf, in.focal_factor, (long long)W}));
     }
 }
 
@@ -248,14 +258,11 @@ void SfmRunner::run(SfmJob job) {
         // built from is the layout every parser expects.
         const WorkspaceState prior = probe_workspace(ws.string(), job.prep.inputs);
         if (prior.resumable() && !job.prep.resume)
-            return fail("the output folder already holds an unfinished run "
-                        "(extracted frames / features / masks); tick \"Resume "
-                        "previous run\" to reuse it, or pick another folder");
+            return fail(lmsg::err_unfinished_run.get());
         if (prior.resumable())
-            log("Resuming the previous run in " + ws.string());
+            log(fmt(lmsg::sfm_resuming, {ws.string()}));
         if (prior.model)
-            log("Note: " + (ws / "sparse").string() +
-                " already holds a reconstruction; this run writes over it.");
+            log(fmt(lmsg::sfm_will_overwrite, {(ws / "sparse").string()}));
 
         // ---- 1. frames and masks ------------------------------------------
         PrepResult prep;
@@ -267,8 +274,7 @@ void SfmRunner::run(SfmJob job) {
             if (!dp.run(job.prep, prep, err)) return fail(err);
         }
         if (prep.per_folder_cameras && job.camera_mode == 0) {
-            log("images/ holds one folder per camera: switching to one camera "
-                "per folder");
+            log(lmsg::one_camera_per_folder.get());
             job.camera_mode = 1;
         }
 
@@ -278,12 +284,15 @@ void SfmRunner::run(SfmJob job) {
         // sparse/ on its own is somebody else's dataset (or a finished one),
         // and skipping the mapper for it would "reconstruct" by doing nothing.
         if (job.prep.resume && prior.features && has_model(ws / "sparse")) {
-            log("Resume: a reconstruction already exists under sparse/; "
-                "skipping (delete it to reconstruct again)");
+            log(lmsg::sfm_resume_skip_recon.get());
         } else {
-            set_stage("Reconstructing (finding features)");
+            set_stage(lmsg::stage_reconstructing_features.get());
             std::vector<std::string> argv = {
-                exe_path(), "sfm", "auto", prep.image_dir,
+                // The child is this same executable, so it has the same
+                // thirteen languages -- tell it which one, or its output
+                // lands in the log in whatever the machine's locale is.
+                exe_path(), "--lang", spirula::i18n::code(spirula::i18n::current()),
+                "sfm", "auto", prep.image_dir,
                 "-o", ws.string(),
                 "--quality", pick(kQuality, job.quality, 2),
                 "--data-type", pick(kDataType, job.data_type),
@@ -346,9 +355,9 @@ void SfmRunner::run(SfmJob job) {
                 log(l);
                 note_progress(l);
             }, _cancel);
-            if (rc == kCancelled) return fail("cancelled");
+            if (rc == kCancelled) return fail(lmsg::err_cancelled.get());
             if (rc == kSpawnFailed)
-                return fail("could not start the reconstruction (" + argv[0] + ")");
+                return fail(fmt(lmsg::err_spawn_recon, {argv[0]}));
             // `auto` spends exit code 2 on "nothing reconstructed" and 3 on
             // "reconstructed, but under half the images registered or the
             // reprojection error is high" (src/sfm/README.md). 3 is a warning
@@ -356,24 +365,18 @@ void SfmRunner::run(SfmJob job) {
             // it away over a threshold would be worse than saying so.
             if (rc == 3) {
                 _partial = true;
-                log("Note: only part of the capture reconstructed. It will "
-                    "still train, but expect gaps.");
+                log(lmsg::sfm_partial.get());
             } else if (rc != 0) {
-                return fail("reconstruction failed (see the log). Common "
-                            "causes: too few overlapping images, not enough "
-                            "overlap between them, or the wrong camera model "
-                            "for the lens.");
+                return fail(lmsg::err_recon_failed.get());
             }
         }
 
         if (!has_model(ws / "sparse"))
-            return fail("no reconstruction was produced -- the images may not "
-                        "overlap enough. Try more photos around the subject, "
-                        "or a higher quality setting.");
+            return fail(lmsg::err_no_reconstruction.get());
 
         // ---- 3. tidy up ----------------------------------------------------
         if (!job.keep_intermediate) {
-            set_stage("Cleaning up");
+            set_stage(lmsg::stage_cleaning_up.get());
             for (const char* name : {"features", "matches.bin"}) {
                 const fs::path p = ws / name;
                 if (!fs::exists(p, ec)) continue;
@@ -387,11 +390,9 @@ void SfmRunner::run(SfmJob job) {
         }
 
         if (reads_photos_in_place(job.prep.inputs))
-            log("Note: the photos are referenced where they are. If you reopen "
-                "this dataset later, set image_dir to " + prep.image_dir_cfg +
-                " under the dataset options.");
+            log(fmt(lmsg::photos_referenced_in_place, {prep.image_dir_cfg}));
 
-        set_stage("Done");
+        set_stage(lmsg::stage_done.get());
         _progress = 1.0f;
         {
             std::lock_guard<std::mutex> lk(_mu);

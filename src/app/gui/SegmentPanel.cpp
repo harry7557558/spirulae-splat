@@ -2,6 +2,8 @@
 
 #include "app/gui/SegmentPanel.h"
 
+#include "app/gui/MaskPrompt.h"
+#include "app/gui/Subprocess.h"
 #include "app/gui/Ui.h"
 
 #include "i18n/catalog/Dataset.h"
@@ -11,6 +13,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 
@@ -71,10 +74,13 @@ SegmentPanel::~SegmentPanel() {
 }
 
 void SegmentPanel::open(const std::string& input, bool is_video,
-                        const std::string& model_path) {
+                        const std::string& model_path,
+                        const std::string& ffmpeg_exe, bool force_ffmpeg) {
     _input = input;
     _is_video = is_video;
     _model_path = model_path;
+    _ffmpeg_exe = ffmpeg_exe.empty() ? "ffmpeg" : ffmpeg_exe;
+    _force_ffmpeg = force_ffmpeg;
     _frame_idx = 0;
     _frame_dirty = true;
     _needs_run = true;
@@ -109,8 +115,13 @@ void SegmentPanel::destroy_gl() {
     }
 }
 
+bool SegmentPanel::builtin_decode() const {
+    return !_force_ffmpeg && backends().builtin_video;
+}
+
 void SegmentPanel::collect_frames(const std::string& input, bool is_video) {
     _frames.clear();
+    _video_seconds = 0.0;
     std::error_code ec;
     if (is_video) {
         // Frames are decoded on demand; the list is just how many offers the
@@ -118,13 +129,32 @@ void SegmentPanel::collect_frames(const std::string& input, bool is_video) {
         // means "the Nth frame we sample while reading forward", and the
         // decoded index each offer lands on is filled in below.
         constexpr int kOffers = 8;
-        long long total = kOffers;
+        long long total = 0;
 #ifdef SS_HAVE_VIDEO
-        {
+        if (builtin_decode()) {
             video::VideoReader r;
-            if (r.open(input)) total = std::max(r.info().frame_count, kOffers);
+            if (r.open(input)) {
+                total = r.info().frame_count;
+                // Free here, and the only thing a later fallback would be
+                // missing: ffmpeg seeks by time, not by frame.
+                if (r.info().fps > 0.0)
+                    _video_seconds = (double)total / r.info().fps;
+            }
         }
 #endif
+        if (total <= 0) {
+            // No in-process decoding on this machine, or it could not open the
+            // file: ffmpeg is what will read this video, in the preview and in
+            // the run, so ffmpeg is who to ask how long it is. The duration is
+            // what the frame worker seeks by -- it has no reader to count
+            // frames with.
+            VideoFacts facts;
+            if (ffmpeg_probe_video(_ffmpeg_exe, input, facts, _cancel)) {
+                _video_seconds = facts.duration;
+                total = facts.frames;
+            }
+        }
+        total = std::max(total, (long long)kOffers);
         for (int i = 0; i < kOffers; i++) {
             Frame f;
             f.index = std::min(total - 1, (long long)i * (total / kOffers));
@@ -184,6 +214,9 @@ void SegmentPanel::start_job(const MaskSettings& s) {
     const std::string input = _input;
     const bool is_video = _is_video;
     const std::string model = _model_path;
+    const std::string ffmpeg_exe = _ffmpeg_exe;
+    const bool builtin = builtin_decode();
+    const double video_seconds = _video_seconds;
     // Only what was drawn on THIS frame: the preview segments one still, with
     // no memory bank, so a click made on another frame has nothing to say
     // about this one. The run is where they all come together.
@@ -202,7 +235,8 @@ void SegmentPanel::start_job(const MaskSettings& s) {
     }
 
     _worker = std::thread([this, settings, model, frame, frame_path, input, is_video,
-                           idx, clicks, frame_dirty] {
+                           idx, clicks, frame_dirty, ffmpeg_exe, builtin,
+                           video_seconds] {
         // Every failure below leaves through `return set_error(...)`, so the
         // flag cannot be cleared at the end of the function: one early exit
         // would strand it at true, and start_job() refuses to run while it is
@@ -242,27 +276,57 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                     _status = "loading the frame...";
                 }
                 if (is_video) {
-#ifdef SS_HAVE_VIDEO
-                    // No seek: read forward to the frame this offer names.
-                    video::VideoReader r;
-                    if (!r.open(input)) return set_error(r.lastError());
-                    const long long want = frame.index;
                     nn::Image img;
-                    for (long long i = 0; i <= want; i++) {
+#ifdef SS_HAVE_VIDEO
+                    if (builtin) {
+                        // No seek: read forward to the frame this offer names.
+                        video::VideoReader r;
+                        if (r.open(input)) {
+                            for (long long i = 0; i <= frame.index; i++) {
+                                if (_cancel.load()) return;
+                                img = r.readFrame();
+                                if (img.empty()) break;
+                            }
+                        }
+                    }
+#else
+                    (void)builtin;
+#endif
+                    // The same fallback the dataset run takes when the driver
+                    // cannot decode (DatasetPrep::extract_video): shell out to
+                    // ffmpeg. It is a whole subprocess for one still, which is
+                    // why it is not the first choice -- but it is the only
+                    // thing between "no hardware decoding" and a panel that
+                    // shows nothing at all, and the run will read this video
+                    // the same way.
+                    if (img.empty()) {
+                        if (!command_exists(ffmpeg_exe))
+                            return set_error(spirula::i18n::format(
+                                dmsg::preview_needs_ffmpeg, {ffmpeg_exe}));
+                        // ffmpeg seeks by time, and the very end of a file is
+                        // past the last frame often enough to be worth backing
+                        // away from.
+                        const double at = std::min(
+                            (double)frame.position * video_seconds,
+                            std::max(0.0, video_seconds - 0.1));
+                        const fs::path tmp =
+                            fs::temp_directory_path() /
+                            ("spirula-mask-preview-" +
+                             std::to_string(
+                                 std::chrono::steady_clock::now()
+                                     .time_since_epoch()
+                                     .count()) +
+                             ".jpg");
+                        const bool ok = ffmpeg_extract_frame(
+                            ffmpeg_exe, input, at, tmp.string(), _cancel);
                         if (_cancel.load()) return;
-                        img = r.readFrame();
-                        if (img.empty()) break;
+                        if (ok) img = nn::load_image(tmp.string());
+                        std::error_code rm;
+                        fs::remove(tmp, rm);
                     }
                     if (img.empty())
-                        return set_error("could not decode a frame from this "
-                                         "video; try the ffmpeg path");
+                        return set_error(dmsg::preview_frame_unreadable.get());
                     j.frame = std::move(img);
-#else
-                    return set_error("this build cannot decode video "
-                                     "(-DSS_ENABLE_PATENTED=OFF); pick a "
-                                     "folder of photos to preview, or run the "
-                                     "job and check the masks it writes");
-#endif
                 } else {
                     if (frame_path.empty()) return set_error("no frame to show");
                     j.frame = nn::load_image(frame_path);
@@ -560,11 +624,13 @@ void SegmentPanel::draw(MaskSettings& settings) {
     ui::help_on_hover(dmsg::preview_polarity_help);
     const bool keep = settings.keep_subject;
 
+    // English, whatever the interface language is -- see MaskPrompt.h.
     ImGui::Spacing();
     ui::Text(keep ? dmsg::preview_what_kept : dmsg::preview_what_removed);
     ImGui::SetNextItemWidth(-1);
-    edited |= ui::InputTextWithHintRaw(
-        "##prompt", keep ? dmsg::mask_hint_keep : dmsg::mask_hint_remove,
+    edited |= ui::InputTextEnglishRaw(
+        "##prompt",
+        keep ? "the statue; its pedestal" : "people; cars; my shadow",
         &settings.prompt);
     ui::help_on_hover(keep ? dmsg::preview_prompt_help_keep
                            : dmsg::preview_prompt_help_remove);
@@ -573,12 +639,19 @@ void SegmentPanel::draw(MaskSettings& settings) {
     ui::Text(keep ? dmsg::preview_but_remove_these
                   : dmsg::preview_but_keep_these);
     ImGui::SetNextItemWidth(-1);
-    edited |= ui::InputTextWithHintRaw(
+    edited |= ui::InputTextEnglishRaw(
         "##negprompt",
-        keep ? dmsg::mask_hint_but_remove : dmsg::mask_hint_but_keep,
+        keep ? "the hand holding it" : "person in a painting",
         &settings.negative_prompt);
     ui::help_on_hover(keep ? dmsg::preview_negative_help_keep
                            : dmsg::preview_negative_help_remove);
+
+    // The palette matters more here than on the dataset screen: this panel is
+    // where a prompt is actually iterated on, one try at a time.
+    if (spirula::i18n::current() != spirula::i18n::Lang::en)
+        ui::TextDisabled(dmsg::mask_english_only);
+    edited |= draw_subject_palette(settings.prompt, settings.negative_prompt,
+                                   keep);
 
     ImGui::Spacing();
     ImGui::Separator();

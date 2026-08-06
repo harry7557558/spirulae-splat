@@ -21,22 +21,32 @@ endfunction()
 
 # ss_cjk_faces()
 #
-# Generates app_generated/cjk_faces.h from assets/fonts/cjk_faces.txt, and --
-# for a regional build (SS_FONT_CJK=sc|tc|jp|kr|all) -- downloads the named
-# faces so the executable ships with them beside it.
+# Generates two headers from assets/fonts/cjk_faces.txt:
 #
-# The faces are BUNDLED, not embedded, and deliberately: they are 4-8 MB each,
-# and ss_embed_file() turns a byte into five characters of C source. `all`
+#   app_generated/cjk_faces.h    the table of downloadable FULL faces
+#   app_generated/cjk_subsets.h  the four SUBSETS, embedded as byte arrays
+#
+# and -- for a regional build (SS_FONT_CJK=sc|tc|jp|kr|all) -- downloads the
+# named full faces so the executable ships with them beside it.
+#
+# The subsets are embedded and the full faces are not, which is the whole
+# design in one line. A subset is ~110 KB because it holds only the characters
+# this program's own translations use, so all four fit in the executable and
+# every language renders with nothing to download. A full face is 4-8 MB, and
+# ss_embed_file() turns one byte into five characters of C source, so `all`
 # would be a 130 MB array literal. A regional build therefore installs
 # <exe dir>/fonts/, which is the first place Fonts.cpp looks.
 function(ss_cjk_faces)
     set(spec ${SS_ROOT}/assets/fonts/cjk_faces.txt)
     set(header ${CMAKE_BINARY_DIR}/app_generated/cjk_faces.h)
+    set(sub_header ${CMAKE_BINARY_DIR}/app_generated/cjk_subsets.h)
     # ENCODING UTF-8, or file(STRINGS) drops the non-ASCII bytes in the
     # comments and hands back the fragments around them as extra "lines".
     file(STRINGS ${spec} lines ENCODING UTF-8)
 
     set(body "")
+    set(sub_arrays "")
+    set(sub_table "")
     set(wanted "")
     if(SS_FONT_CJK STREQUAL "all")
         set(wanted sc tc jp kr)
@@ -63,6 +73,26 @@ function(ss_cjk_faces)
         string(APPEND body
             "    {\"${id}\", \"${file}\", \"${url}\",\n"
             "     \"${sha}\", ${bytes}ull, \"${label}\"},\n")
+
+        # The committed subset that goes into the executable. Generated from
+        # the catalogs by tools/make_ui_font.py; tools/check_font_coverage.py
+        # fails the build when a translation outgrows it.
+        string(TOUPPER ${id} ID)
+        set(sub ${SS_ROOT}/assets/fonts/SpirulaCJK-${ID}.otf)
+        if(NOT EXISTS ${sub})
+            message(FATAL_ERROR
+                "${sub} is missing.\n"
+                "  It is a committed build artifact; regenerate the fonts with\n"
+                "  python3 tools/make_ui_font.py")
+        endif()
+        file(READ ${sub} _sub_hex HEX)
+        string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _sub_bytes ${_sub_hex})
+        string(APPEND sub_arrays
+            "inline const unsigned char kCjkSubset${ID}[] = {${_sub_bytes}};\n")
+        string(APPEND sub_table
+            "    {\"${id}\", kCjkSubset${ID}, sizeof(kCjkSubset${ID})},\n")
+        set_property(DIRECTORY ${SS_ROOT} APPEND
+            PROPERTY CMAKE_CONFIGURE_DEPENDS ${sub})
 
         if(id IN_LIST wanted)
             set(dst ${CMAKE_BINARY_DIR}/fonts/${file})
@@ -99,6 +129,19 @@ function(ss_cjk_faces)
         "namespace gui {\n"
         "inline constexpr CjkFace kCjkFaces[] = {\n"
         "${body}"
+        "};\n"
+        "}  // namespace gui\n")
+
+    file(WRITE ${sub_header}
+        "#pragma once\n"
+        "// AUTO-GENERATED from assets/fonts/SpirulaCJK-*.otf -- do not edit.\n"
+        "// Those files are themselves generated: tools/make_ui_font.py.\n"
+        "#include \"app/gui/Fonts.h\"\n"
+        "\n"
+        "namespace gui {\n"
+        "${sub_arrays}"
+        "inline const CjkSubset kCjkSubsets[] = {\n"
+        "${sub_table}"
         "};\n"
         "}  // namespace gui\n")
 

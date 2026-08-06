@@ -206,48 +206,61 @@ SS_MSG(pick_vocab_tree,
 // Language picker
 // ===========================================================================
 
-// Shown under the language list when the chosen language needs a font this
-// installation does not have yet. {0} is the script ("Japanese"), {1} the
-// download size.
+// Shown under the language list when the FULL face for the chosen language is
+// not installed. Deliberately not a warning: the interface itself renders
+// fine from the embedded subsets (src/app/gui/Fonts.h). What is missing is
+// coverage for text this program did not write -- file names, folder names,
+// anything typed into a box. {0} is the script ("Japanese"), {1} the size.
 SS_MSG(font_needed,
-    EN("{0} needs a font that is not installed yet ({1}). Without it the "
-       "interface shows empty boxes."),
-    JA("{0}の表示にはフォントが必要です（{1}）。無いと文字が四角に置き換わります。"),
-    ZH_HANS("显示{0}需要一种尚未安装的字体（{1}）。缺少它时界面会显示空白方块。"),
-    ZH_HANT("顯示{0}需要一種尚未安裝的字型（{1}）。缺少它時介面會顯示空白方塊。"),
-    KO("{0}을(를) 표시하려면 아직 설치되지 않은 글꼴이 필요합니다({1}). 없으면 "
-       "인터페이스에 빈 네모가 나타납니다."),
-    DE("Für {0} fehlt noch eine Schriftart ({1}). Ohne sie zeigt die "
-       "Oberfläche nur leere Kästchen."),
-    FR("{0} nécessite une police qui n'est pas encore installée ({1}). Sans "
-       "elle, l'interface n'affiche que des carrés vides."),
-    ES("{0} necesita una fuente que aún no está instalada ({1}). Sin ella la "
-       "interfaz muestra recuadros vacíos."),
-    PT("{0} precisa de uma fonte que ainda não está instalada ({1}). Sem ela "
-       "a interface mostra apenas quadrados vazios."),
-    IT("{0} richiede un carattere non ancora installato ({1}). Senza, "
-       "l'interfaccia mostra soltanto rettangoli vuoti."),
-    NL("{0} heeft een lettertype nodig dat nog niet is geïnstalleerd ({1}). "
-       "Zonder dat toont de interface lege blokjes."),
-    RU("Для языка «{0}» нужен шрифт, которого пока нет ({1}). Без него "
-       "интерфейс покажет пустые прямоугольники."),
-    TR("{0} için henüz kurulu olmayan bir yazı tipi gerekiyor ({1}). Onsuz "
-       "arayüzde boş kutular görünür."));
+    EN("Text outside this program -- file and folder names, what you type -- "
+       "may show as boxes in {0} until the full font is installed ({1})."),
+    JA("ファイル名やフォルダー名、入力した文字など、このアプリ以外の{0}は、"
+       "完全なフォント（{1}）を入れるまで四角で表示されることがあります。"),
+    ZH_HANS("文件名、文件夹名和你输入的内容等本程序以外的{0}，在安装完整字体"
+            "（{1}）之前可能显示为方块。"),
+    ZH_HANT("檔案名稱、資料夾名稱和你輸入的內容等本程式以外的{0}，在安裝完整"
+            "字型（{1}）之前可能顯示為方塊。"),
+    KO("파일 이름과 폴더 이름, 직접 입력한 글자처럼 이 프로그램 밖의 {0}은(는) "
+       "전체 글꼴({1})을 설치하기 전까지 네모로 보일 수 있습니다."),
+    DE("Text außerhalb dieses Programms -- Datei- und Ordnernamen, Eingaben -- "
+       "kann auf {0} als Kästchen erscheinen, bis die vollständige Schriftart "
+       "installiert ist ({1})."),
+    FR("Le texte extérieur à ce programme -- noms de fichiers et de dossiers, "
+       "ce que vous saisissez -- peut s'afficher en carrés en {0} tant que la "
+       "police complète n'est pas installée ({1})."),
+    ES("El texto ajeno a este programa -- nombres de archivos y carpetas, lo "
+       "que escriba -- puede aparecer como recuadros en {0} hasta que instale "
+       "la fuente completa ({1})."),
+    PT("O texto fora deste programa -- nomes de arquivos e pastas, o que você "
+       "digitar -- pode aparecer como quadrados em {0} até instalar a fonte "
+       "completa ({1})."),
+    IT("Il testo esterno a questo programma -- nomi di file e cartelle, ciò "
+       "che digita -- può apparire come rettangoli in {0} finché non installa "
+       "il carattere completo ({1})."),
+    NL("Tekst buiten dit programma -- bestands- en mapnamen, wat u typt -- kan "
+       "in het {0} als blokjes verschijnen tot het volledige lettertype is "
+       "geïnstalleerd ({1})."),
+    RU("Текст вне этой программы -- имена файлов и папок, то, что вы вводите, "
+       "-- может отображаться прямоугольниками на языке «{0}», пока не "
+       "установлен полный шрифт ({1})."),
+    TR("Bu programın dışındaki metinler -- dosya ve klasör adları, yazdıklarınız "
+       "-- tam yazı tipi kurulana kadar {0} dilinde kutu olarak görünebilir "
+       "({1})."));
 
 SS_MSG(font_download,
-    EN("Download the font"),
-    JA("フォントをダウンロード"),
-    ZH_HANS("下载字体"),
-    ZH_HANT("下載字型"),
-    KO("글꼴 내려받기"),
-    DE("Schriftart herunterladen"),
-    FR("Télécharger la police"),
-    ES("Descargar la fuente"),
-    PT("Baixar a fonte"),
-    IT("Scarica il carattere"),
-    NL("Lettertype downloaden"),
-    RU("Загрузить шрифт"),
-    TR("Yazı tipini indir"));
+    EN("Install the full font"),
+    JA("完全なフォントを入れる"),
+    ZH_HANS("安装完整字体"),
+    ZH_HANT("安裝完整字型"),
+    KO("전체 글꼴 설치"),
+    DE("Vollständige Schriftart installieren"),
+    FR("Installer la police complète"),
+    ES("Instalar la fuente completa"),
+    PT("Instalar a fonte completa"),
+    IT("Installa il carattere completo"),
+    NL("Volledig lettertype installeren"),
+    RU("Установить полный шрифт"),
+    TR("Tam yazı tipini kur"));
 
 SS_MSG(font_downloading,
     EN("Downloading the font..."),
@@ -1797,31 +1810,84 @@ SS_MSG(viewport_grid,
     PT("grade"),         IT("griglia"),      NL("raster"),       RU("сетка"),
     TR("ızgara"));
 
+SS_MSG(viewport_scale_auto,
+    EN("Auto"),         JA("自動"),          ZH_HANS("自动"),    ZH_HANT("自動"),
+    KO("자동"),          DE("Auto"),          FR("Auto"),        ES("Auto"),
+    PT("Auto"),         IT("Auto"),          NL("Auto"),        RU("Авто"),
+    TR("Oto"));
+
+SS_MSG(viewport_fov_help,
+    EN("Field of view, in degrees: how much of the scene the viewport takes "
+       "in. This is the preview camera only -- it changes nothing about the "
+       "dataset or the training."),
+    JA("視野角（度）です。ビューポートにどれだけ広く写すかを決めます。"
+       "プレビュー用のカメラだけの設定で、データセットや学習には影響しません。"),
+    ZH_HANS("视场角（度）：视口能看进多大范围。这只是预览相机的设置，"
+            "不会影响数据集或训练。"),
+    ZH_HANT("視角（度）：檢視區能看進多大範圍。這只是預覽相機的設定，"
+            "不會影響資料集或訓練。"),
+    KO("시야각(도): 뷰포트가 장면을 얼마나 넓게 담을지 정합니다. 미리보기 "
+       "카메라에만 적용되며 데이터셋이나 학습에는 영향이 없습니다."),
+    DE("Blickfeld in Grad: wie viel von der Szene das Fenster erfasst. Nur die "
+       "Vorschaukamera -- am Datensatz und am Training ändert das nichts."),
+    FR("Champ de vision, en degrés : quelle part de la scène la vue embrasse. "
+       "Caméra d'aperçu seulement -- cela ne change rien au jeu de données ni "
+       "à l'entraînement."),
+    ES("Campo de visión, en grados: cuánto de la escena abarca la vista. Solo "
+       "afecta a la cámara de vista previa; no cambia nada del conjunto de "
+       "datos ni del entrenamiento."),
+    PT("Campo de visão, em graus: quanto da cena a vista abrange. Apenas a "
+       "câmera de prévia -- não muda nada no conjunto de dados nem no "
+       "treinamento."),
+    IT("Campo visivo, in gradi: quanta scena entra nella vista. Riguarda solo "
+       "la fotocamera di anteprima -- non cambia nulla del set di dati né "
+       "dell'addestramento."),
+    NL("Beeldhoek in graden: hoeveel van de scène het venster vangt. Alleen de "
+       "voorbeeldcamera -- aan de dataset en de training verandert dit niets."),
+    RU("Поле зрения в градусах: сколько сцены попадает в окно. Только камера "
+       "предпросмотра — на набор данных и обучение это не влияет."),
+    TR("Görüş alanı, derece: görünümün sahneden ne kadarını aldığı. Yalnızca "
+       "önizleme kamerası -- veri kümesini de eğitimi de değiştirmez."));
+
 SS_MSG(viewport_scale_help,
     EN("Render resolution relative to the viewport size. Lower is faster and "
-       "steals less time from training."),
+       "steals less time from training. Auto drops to half while you move the "
+       "camera and goes back to full once it settles."),
     JA("ビューポートの大きさに対する描画解像度です。下げるほど速くなり、"
-       "学習から奪う時間も減ります。"),
-    ZH_HANS("相对于视口尺寸的渲染分辨率。调低更快，也少占用训练时间。"),
-    ZH_HANT("相對於檢視區尺寸的算繪解析度。調低更快，也少佔用訓練時間。"),
+       "学習から奪う時間も減ります。「自動」はカメラを動かしている間は半分に"
+       "落とし、止まると元に戻します。"),
+    ZH_HANS("相对于视口尺寸的渲染分辨率。调低更快，也少占用训练时间。"
+            "“自动”会在你移动相机时降到一半，停下后恢复。"),
+    ZH_HANT("相對於檢視區尺寸的算繪解析度。調低更快，也少佔用訓練時間。"
+            "「自動」會在你移動相機時降到一半，停下後恢復。"),
     KO("뷰포트 크기에 대한 렌더 해상도입니다. 낮출수록 빠르고 학습 시간을 덜 "
-       "가져갑니다."),
+       "가져갑니다. \"자동\"은 카메라를 움직이는 동안 절반으로 낮췄다가 멈추면 "
+       "원래대로 돌아갑니다."),
     DE("Renderauflösung relativ zur Fenstergröße. Niedriger ist schneller und "
-       "nimmt dem Training weniger Zeit weg."),
+       "nimmt dem Training weniger Zeit weg. Auto halbiert sie, solange Sie "
+       "die Kamera bewegen, und geht zurück auf voll, sobald sie steht."),
     FR("Résolution de rendu par rapport à la taille de la vue. Plus bas est "
-       "plus rapide et vole moins de temps à l'entraînement."),
+       "plus rapide et vole moins de temps à l'entraînement. Auto descend à la "
+       "moitié pendant que vous déplacez la caméra et remonte quand elle "
+       "s'arrête."),
     ES("Resolución de render respecto al tamaño de la vista. Más baja es más "
-       "rápida y quita menos tiempo al entrenamiento."),
+       "rápida y quita menos tiempo al entrenamiento. Auto baja a la mitad "
+       "mientras mueve la cámara y vuelve a plena cuando se detiene."),
     PT("Resolução de renderização em relação ao tamanho da vista. Mais baixa "
-       "é mais rápida e rouba menos tempo do treinamento."),
+       "é mais rápida e rouba menos tempo do treinamento. Auto cai para "
+       "metade enquanto você move a câmera e volta ao cheio quando ela para."),
     IT("Risoluzione di rendering rispetto alla dimensione della vista. Più "
-       "bassa è più rapida e ruba meno tempo all'addestramento."),
+       "bassa è più rapida e ruba meno tempo all'addestramento. Auto scende a "
+       "metà mentre muove la fotocamera e torna piena quando si ferma."),
     NL("Renderresolutie ten opzichte van de venstergrootte. Lager is sneller "
-       "en kost de training minder tijd."),
+       "en kost de training minder tijd. Auto halveert zolang u de camera "
+       "beweegt en gaat terug naar vol zodra die stilstaat."),
     RU("Разрешение отрисовки относительно размера окна. Ниже — быстрее и "
-       "меньше отнимает времени у обучения."),
+       "меньше отнимает времени у обучения. «Авто» снижает его вдвое, пока вы "
+       "двигаете камеру, и возвращает полное, когда она замирает."),
     TR("Görünüm boyutuna göre işleme çözünürlüğü. Düşük olan daha hızlıdır ve "
-       "eğitimden daha az zaman çalar."));
+       "eğitimden daha az zaman çalar. \"Oto\", kamerayı hareket ettirdiğiniz "
+       "sürece yarıya iner ve durunca tama döner."));
 
 SS_MSG(viewport_live,
     EN("live"),          JA("ライブ"),        ZH_HANS("实时"),     ZH_HANT("即時"),
@@ -1860,89 +1926,170 @@ SS_MSG(viewport_reset_view,
     IT("Reimposta la vista"), NL("Weergave herstellen"), RU("Сбросить вид"),
     TR("Görünümü sıfırla"));
 
+// The four navigation modes and the four projections, as the viewport's two
+// combo boxes name them. Translated, even though the web viewer's own UI is
+// English: a reader of the interface should not have to know English to tell
+// an orbit from a flythrough. viewport_nav_help names them by substitution
+// ({0}..{3}) so the tooltip and the combo cannot drift apart.
+
+SS_MSG(nav_turntable,
+    EN("Turntable"),    JA("ターンテーブル"),  ZH_HANS("转台"),    ZH_HANT("轉台"),
+    KO("턴테이블"),      DE("Drehteller"),    FR("Table tournante"),
+    ES("Plato giratorio"), PT("Mesa giratória"), IT("Piatto rotante"),
+    NL("Draaitafel"),   RU("Поворотный стол"), TR("Döner tabla"));
+
+SS_MSG(nav_trackball,
+    EN("Trackball"),    JA("トラックボール"),  ZH_HANS("轨迹球"),  ZH_HANT("軌跡球"),
+    KO("트랙볼"),        DE("Trackball"),     FR("Trackball"),   ES("Trackball"),
+    PT("Trackball"),    IT("Trackball"),     NL("Trackball"),   RU("Трекбол"),
+    TR("Trackball"));
+
+SS_MSG(nav_first_person,
+    EN("First person"), JA("一人称視点"),     ZH_HANS("第一人称"), ZH_HANT("第一人稱"),
+    KO("1인칭"),         DE("Ego-Perspektive"), FR("Première personne"),
+    ES("Primera persona"), PT("Primeira pessoa"), IT("Prima persona"),
+    NL("Eerste persoon"), RU("От первого лица"), TR("Birinci şahıs"));
+
+SS_MSG(nav_free_fly,
+    EN("Free fly"),     JA("フリーフライト"),  ZH_HANS("自由飞行"), ZH_HANT("自由飛行"),
+    KO("자유 비행"),     DE("Freiflug"),      FR("Vol libre"),   ES("Vuelo libre"),
+    PT("Voo livre"),    IT("Volo libero"),   NL("Vrij vliegen"), RU("Свободный полёт"),
+    TR("Serbest uçuş"));
+
+SS_MSG(cam_perspective,
+    EN("Perspective"),  JA("透視投影"),       ZH_HANS("透视"),    ZH_HANT("透視"),
+    KO("원근"),          DE("Perspektivisch"), FR("Perspective"), ES("Perspectiva"),
+    PT("Perspectiva"),  IT("Prospettica"),   NL("Perspectief"), RU("Перспектива"),
+    TR("Perspektif"));
+
+SS_MSG(cam_fisheye_equidistant,
+    EN("Fisheye (equidistant)"),
+    JA("魚眼（等距離射影）"),
+    ZH_HANS("鱼眼（等距）"),
+    ZH_HANT("魚眼（等距）"),
+    KO("어안(등거리)"),
+    DE("Fisheye (äquidistant)"),
+    FR("Fisheye (équidistant)"),
+    ES("Ojo de pez (equidistante)"),
+    PT("Olho de peixe (equidistante)"),
+    IT("Fisheye (equidistante)"),
+    NL("Fisheye (equidistant)"),
+    RU("Фишай (эквидистантный)"),
+    TR("Balıkgözü (eşit uzaklık)"));
+
+SS_MSG(cam_fisheye_equisolid,
+    EN("Fisheye (equisolid)"),
+    JA("魚眼（等立体角射影）"),
+    ZH_HANS("鱼眼（等立体角）"),
+    ZH_HANT("魚眼（等立體角）"),
+    KO("어안(등입체각)"),
+    DE("Fisheye (flächentreu)"),
+    FR("Fisheye (équisolide)"),
+    ES("Ojo de pez (equisólido)"),
+    PT("Olho de peixe (equissólido)"),
+    IT("Fisheye (equisolido)"),
+    NL("Fisheye (equisolide)"),
+    RU("Фишай (равновеликий)"),
+    TR("Balıkgözü (eşit alan)"));
+
+SS_MSG(cam_equirectangular,
+    EN("Equirectangular (360°)"),
+    JA("正距円筒（360度）"),
+    ZH_HANS("等距柱状（360 度）"),
+    ZH_HANT("等距柱狀（360 度）"),
+    KO("정거원통(360도)"),
+    DE("Äquirektangulär (360°)"),
+    FR("Équirectangulaire (360°)"),
+    ES("Equirrectangular (360°)"),
+    PT("Equirretangular (360°)"),
+    IT("Equirettangolare (360°)"),
+    NL("Equirectangulair (360°)"),
+    RU("Эквиректангулярная (360°)"),
+    TR("Eş dikdörtgen (360°)"));
+
 SS_MSG(viewport_nav_help,
     EN("Navigation mode (identical to the web viewer):\n"
-       "Turntable / Trackball -- LMB orbit, RMB/MMB/Shift pan, wheel zoom\n"
-       "First Person / Free Fly -- LMB look, WASD/arrows move, E/Q up-down "
-       "(Free Fly: E/Q roll)\nGamepad: left stick move, right stick look, "
+       "{0} / {1} -- LMB orbit, RMB/MMB/Shift pan, wheel zoom\n"
+       "{2} / {3} -- LMB look, WASD/arrows move, E/Q up-down "
+       "({3}: E/Q roll)\nGamepad: left stick move, right stick look, "
        "triggers up-down/roll."),
     JA("操作モードです（ウェブビューアと同じ）:\n"
-       "Turntable / Trackball -- 左ドラッグで回転、右・中ドラッグや Shift で"
+       "{0} / {1} -- 左ドラッグで回転、右・中ドラッグや Shift で"
        "平行移動、ホイールでズーム\n"
-       "First Person / Free Fly -- 左ドラッグで視線、WASD／矢印で移動、E/Q で"
-       "上下（Free Fly では E/Q はロール）\n"
+       "{2} / {3} -- 左ドラッグで視線、WASD／矢印で移動、E/Q で"
+       "上下（{3}では E/Q はロール）\n"
        "ゲームパッド: 左スティックで移動、右スティックで視線、トリガーで"
        "上下・ロール。"),
     ZH_HANS("导航模式（与网页查看器一致）：\n"
-            "Turntable / Trackball —— 左键环绕，右键／中键／Shift 平移，滚轮缩放\n"
-            "First Person / Free Fly —— 左键转视角，WASD／方向键移动，E/Q 升降"
-            "（Free Fly 下 E/Q 为滚转）\n"
+            "{0} / {1} —— 左键环绕，右键／中键／Shift 平移，滚轮缩放\n"
+            "{2} / {3} —— 左键转视角，WASD／方向键移动，E/Q 升降"
+            "（{3}下 E/Q 为滚转）\n"
             "手柄：左摇杆移动，右摇杆转视角，扳机升降／滚转。"),
     ZH_HANT("導覽模式（與網頁檢視器一致）：\n"
-            "Turntable / Trackball —— 左鍵環繞，右鍵／中鍵／Shift 平移，滾輪縮放\n"
-            "First Person / Free Fly —— 左鍵轉視角，WASD／方向鍵移動，E/Q 升降"
-            "（Free Fly 下 E/Q 為滾轉）\n"
+            "{0} / {1} —— 左鍵環繞，右鍵／中鍵／Shift 平移，滾輪縮放\n"
+            "{2} / {3} —— 左鍵轉視角，WASD／方向鍵移動，E/Q 升降"
+            "（{3}下 E/Q 為滾轉）\n"
             "手把：左搖桿移動，右搖桿轉視角，扳機升降／滾轉。"),
     KO("이동 방식입니다(웹 뷰어와 동일):\n"
-       "Turntable / Trackball -- 왼쪽 드래그로 궤도 회전, 오른쪽·가운데·Shift로 "
+       "{0} / {1} -- 왼쪽 드래그로 궤도 회전, 오른쪽·가운데·Shift로 "
        "이동, 휠로 확대·축소\n"
-       "First Person / Free Fly -- 왼쪽 드래그로 시선, WASD·화살표로 이동, "
-       "E/Q로 상하(Free Fly에서는 E/Q가 롤)\n"
+       "{2} / {3} -- 왼쪽 드래그로 시선, WASD·화살표로 이동, "
+       "E/Q로 상하({3}에서는 E/Q가 롤)\n"
        "게임패드: 왼쪽 스틱 이동, 오른쪽 스틱 시선, 트리거 상하·롤."),
     DE("Navigationsmodus (wie im Web-Betrachter):\n"
-       "Turntable / Trackball -- linke Maustaste umkreisen, rechte/mittlere "
+       "{0} / {1} -- linke Maustaste umkreisen, rechte/mittlere "
        "Taste oder Umschalt schwenken, Rad zoomen\n"
-       "First Person / Free Fly -- linke Maustaste umsehen, WASD/Pfeile "
-       "bewegen, E/Q hoch-runter (Free Fly: E/Q rollen)\n"
+       "{2} / {3} -- linke Maustaste umsehen, WASD/Pfeile "
+       "bewegen, E/Q hoch-runter ({3}: E/Q rollen)\n"
        "Gamepad: linker Stick bewegen, rechter Stick umsehen, Trigger "
        "hoch-runter/rollen."),
     FR("Mode de navigation (identique à la visionneuse web) :\n"
-       "Turntable / Trackball -- clic gauche pour orbiter, clic droit/milieu "
+       "{0} / {1} -- clic gauche pour orbiter, clic droit/milieu "
        "ou Maj pour translater, molette pour zoomer\n"
-       "First Person / Free Fly -- clic gauche pour regarder, WASD/flèches "
-       "pour se déplacer, E/Q pour monter-descendre (Free Fly : E/Q roulis)\n"
+       "{2} / {3} -- clic gauche pour regarder, WASD/flèches "
+       "pour se déplacer, E/Q pour monter-descendre ({3} : E/Q roulis)\n"
        "Manette : stick gauche déplacement, stick droit regard, gâchettes "
        "montée-descente/roulis."),
     ES("Modo de navegación (igual que en el visor web):\n"
-       "Turntable / Trackball: botón izquierdo para orbitar, derecho/central "
+       "{0} / {1}: botón izquierdo para orbitar, derecho/central "
        "o Mayús para desplazar, rueda para acercar\n"
-       "First Person / Free Fly: botón izquierdo para mirar, WASD/flechas "
-       "para moverse, E/Q para subir y bajar (en Free Fly, E/Q alabean)\n"
+       "{2} / {3}: botón izquierdo para mirar, WASD/flechas "
+       "para moverse, E/Q para subir y bajar (en {3}, E/Q alabean)\n"
        "Mando: stick izquierdo mover, stick derecho mirar, gatillos "
        "subir-bajar/alabear."),
     PT("Modo de navegação (igual ao visualizador web):\n"
-       "Turntable / Trackball -- botão esquerdo orbita, direito/meio ou Shift "
+       "{0} / {1} -- botão esquerdo orbita, direito/meio ou Shift "
        "desloca, roda aproxima\n"
-       "First Person / Free Fly -- botão esquerdo olha, WASD/setas movem, E/Q "
-       "sobem e descem (em Free Fly, E/Q rolam)\n"
+       "{2} / {3} -- botão esquerdo olha, WASD/setas movem, E/Q "
+       "sobem e descem (em {3}, E/Q rolam)\n"
        "Controle: analógico esquerdo move, direito olha, gatilhos "
        "sobem-descem/rolam."),
     IT("Modalità di navigazione (uguale al visualizzatore web):\n"
-       "Turntable / Trackball -- tasto sinistro per orbitare, destro/centrale "
+       "{0} / {1} -- tasto sinistro per orbitare, destro/centrale "
        "o Maiusc per traslare, rotellina per lo zoom\n"
-       "First Person / Free Fly -- tasto sinistro per guardare, WASD/frecce "
-       "per muoversi, E/Q su-giù (in Free Fly E/Q rollano)\n"
+       "{2} / {3} -- tasto sinistro per guardare, WASD/frecce "
+       "per muoversi, E/Q su-giù (in {3} E/Q rollano)\n"
        "Gamepad: levetta sinistra movimento, destra sguardo, grilletti "
        "su-giù/rollio."),
     NL("Navigatiemodus (gelijk aan de webviewer):\n"
-       "Turntable / Trackball -- linkermuisknop draaien, rechter/midden of "
+       "{0} / {1} -- linkermuisknop draaien, rechter/midden of "
        "Shift verschuiven, wiel zoomen\n"
-       "First Person / Free Fly -- linkermuisknop kijken, WASD/pijlen "
-       "bewegen, E/Q omhoog-omlaag (Free Fly: E/Q rollen)\n"
+       "{2} / {3} -- linkermuisknop kijken, WASD/pijlen "
+       "bewegen, E/Q omhoog-omlaag ({3}: E/Q rollen)\n"
        "Gamepad: linkerstick bewegen, rechterstick kijken, triggers "
        "omhoog-omlaag/rollen."),
     RU("Режим навигации (как в веб-просмотрщике):\n"
-       "Turntable / Trackball — левая кнопка вращает, правая/средняя или Shift "
+       "{0} / {1} — левая кнопка вращает, правая/средняя или Shift "
        "сдвигают, колесо приближает\n"
-       "First Person / Free Fly — левая кнопка поворачивает взгляд, WASD и "
-       "стрелки перемещают, E/Q вверх-вниз (в Free Fly E/Q — крен)\n"
+       "{2} / {3} — левая кнопка поворачивает взгляд, WASD и "
+       "стрелки перемещают, E/Q вверх-вниз (в режиме «{3}» E/Q — крен)\n"
        "Геймпад: левый стик — движение, правый — взгляд, триггеры — "
        "вверх-вниз и крен."),
     TR("Gezinme kipi (web görüntüleyicisiyle aynı):\n"
-       "Turntable / Trackball -- sol tuş yörünge, sağ/orta tuş veya Shift "
+       "{0} / {1} -- sol tuş yörünge, sağ/orta tuş veya Shift "
        "kaydırma, tekerlek yakınlaştırma\n"
-       "First Person / Free Fly -- sol tuş bakış, WASD/oklar hareket, E/Q "
-       "yukarı-aşağı (Free Fly'da E/Q yalpalama)\n"
+       "{2} / {3} -- sol tuş bakış, WASD/oklar hareket, E/Q "
+       "yukarı-aşağı ({3} kipinde E/Q yalpalama)\n"
        "Oyun kolu: sol çubuk hareket, sağ çubuk bakış, tetikler "
        "yukarı-aşağı/yalpalama."));
 

@@ -223,6 +223,12 @@ inline bool RadioButtonRaw(const char* s, bool active) {
 inline bool BeginMenu(const Msg& m, bool enabled = true) {
     return ImGui::BeginMenu(detail::label(m), enabled);
 }
+// For the language menu, whose label is an icon plus a language's own name --
+// neither of which is translated, and both of which would be wrong to
+// translate. Pass detail::label(text, msg) so it still keeps a stable ID.
+inline bool BeginMenuRaw(const char* s, bool enabled = true) {
+    return ImGui::BeginMenu(s, enabled);
+}
 inline bool MenuItem(const Msg& m, const char* shortcut = nullptr,
                      bool selected = false, bool enabled = true) {
     return ImGui::MenuItem(detail::label(m), shortcut, selected, enabled);
@@ -237,6 +243,7 @@ inline bool MenuItem(const Msg& m, std::initializer_list<Arg> a) {
 inline bool CollapsingHeader(const Msg& m, ImGuiTreeNodeFlags flags = 0) {
     return ImGui::CollapsingHeader(detail::label(m), flags);
 }
+inline bool TreeNode(const Msg& m) { return ImGui::TreeNode(detail::label(m)); }
 inline void SeparatorText(const Msg& m) {
     ImGui::SeparatorText(detail::label(m));
 }
@@ -265,6 +272,19 @@ inline bool Combo(const Msg& m, int* cur, std::initializer_list<const Msg*> its)
 inline bool ComboRaw(const char* id, int* cur, const char* const items[],
                      int count) {
     return ImGui::Combo(id, cur, items, count);
+}
+// Unlabelled combo, translated items: the viewport's toolbar is a single row
+// of controls with no room for labels, but what they offer is still words.
+inline bool ComboRaw(const char* id, int* cur,
+                     std::initializer_list<const Msg*> its) {
+    const auto& v = detail::items(its);
+    return ImGui::Combo(id, cur, v.data(), (int)v.size());
+}
+inline bool ComboRaw(const char* id, int* cur, const std::vector<const Msg*>& its) {
+    static thread_local std::vector<const char*> v;
+    v.clear();
+    for (const Msg* m : its) v.push_back(m->get());
+    return ImGui::Combo(id, cur, v.data(), (int)v.size());
 }
 inline bool BeginCombo(const Msg& m, const char* preview) {
     return ImGui::BeginCombo(detail::label(m), preview);
@@ -308,6 +328,22 @@ inline bool InputText(const Msg& m, std::string* v,
 inline bool InputTextWithHint(const Msg& m, const Msg& hint, std::string* v,
                               ImGuiInputTextFlags flags = 0) {
     return ImGui::InputTextWithHint(detail::label(m), hint.get(), v, flags);
+}
+
+// A field whose CONTENT is English whatever the interface language is,
+// because it is not read by a person: a mask prompt goes to a text encoder
+// trained on English (src/app/gui/MaskPrompt.h). The label IS translated --
+// it tells the user what the field is for -- but `example` is not, because it
+// is an example of what to type into an English box, and translating it would
+// be advice to type something that works worse.
+inline bool InputTextEnglish(const Msg& m, const char* example, std::string* v,
+                             ImGuiInputTextFlags flags = 0) {
+    return ImGui::InputTextWithHint(detail::label(m), example, v, flags);
+}
+inline bool InputTextEnglishRaw(const char* id, const char* example,
+                                std::string* v,
+                                ImGuiInputTextFlags flags = 0) {
+    return ImGui::InputTextWithHint(id, example, v, flags);
 }
 
 // Unlabelled fields ("##outdir"): no text to translate, but they still go

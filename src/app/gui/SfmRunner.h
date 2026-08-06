@@ -29,6 +29,7 @@
 // run() body here changes.
 
 #include "app/gui/DatasetPrep.h"
+#include "i18n/catalog/Dataset.h"
 
 #include <atomic>
 #include <mutex>
@@ -39,20 +40,26 @@
 namespace gui {
 
 // The camera models `spirula-sfm --camera-model` accepts that the dataset
-// parser and renderer can also consume. EQUIRECTANGULAR is deliberately absent:
-// the mapper can write it, the parser cannot read it
-// (docs/notes/sfm-port-plan.md phase 4).
+// parser and renderer can also consume -- which now includes EQUIRECTANGULAR:
+// the mapper could always write it, and ColmapParser reads model 17 (it also
+// checks the 2:1 aspect a full sphere has to have).
+//
+// A capture can mix them. `--camera-model PREFIX=MODEL` sets one input's
+// model, which is what lets a rig of a 360 camera and a phone reconstruct as
+// one scene -- see append_camera_overrides().
 inline const char* kSfmCameraModels[] = {
     "opencv", "pinhole", "simple-pinhole", "radial",
-    "full-opencv", "opencv-fisheye", "thin-prism-fisheye",
+    "full-opencv", "opencv-fisheye", "thin-prism-fisheye", "equirectangular",
 };
-inline constexpr int kNumSfmCameraModels = 7;
+inline constexpr int kNumSfmCameraModels = 8;
 
 // What the combo boxes show for each of the above, in the same order.
-inline const char* kSfmCameraModelLabels[] = {
-    "OpenCV (most cameras)", "Pinhole (no distortion)", "Simple pinhole",
-    "Radial", "Full OpenCV", "Fisheye (Kannala-Brandt)", "Fisheye (thin prism)",
-};
+inline std::vector<const spirula::i18n::Msg*> sfm_camera_model_labels() {
+    namespace m = spirula::i18n::msg::dataset;
+    return {&m::lens_opencv, &m::lens_pinhole, &m::lens_simple_pinhole,
+            &m::lens_radial, &m::lens_full_opencv, &m::lens_fisheye_kb,
+            &m::lens_fisheye_thin_prism, &m::lens_equirectangular};
+}
 
 struct SfmJob {
     // ---- shared with ColmapRunner's path ----

@@ -5,12 +5,15 @@
 #include "app/gui/AppPaths.h"
 #include "core/Env.h"
 #include "core/Sha256.h"
+#include "i18n/Locale.h"
 
-#include "app_generated/ui_font.h"    // kUiFont / kUiFontSize
-#include "app_generated/cjk_faces.h"  // kCjkFaces, from assets/fonts/cjk_faces.txt
+#include "app_generated/ui_font.h"      // kUiFont / kUiFontSize
+#include "app_generated/cjk_faces.h"    // kCjkFaces, from assets/fonts/cjk_faces.txt
+#include "app_generated/cjk_subsets.h"  // kCjkSubsets, from assets/fonts/SpirulaCJK-*.otf
 
 #include "imgui.h"
 
+#include <cassert>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -50,13 +53,20 @@ bool verify(const fs::path& p, const CjkFace& f) {
 
 const CjkFace* cjk_face_for(spirula::i18n::Lang l) {
     using spirula::i18n::Lang;
+    const CjkFace* f = nullptr;
     switch (l) {
-        case Lang::zh_hans: return find_cjk_face("sc");
-        case Lang::zh_hant: return find_cjk_face("tc");
-        case Lang::ja:      return find_cjk_face("jp");
-        case Lang::ko:      return find_cjk_face("kr");
-        default:            return nullptr;
+        case Lang::zh_hans: f = find_cjk_face("sc"); break;
+        case Lang::zh_hant: f = find_cjk_face("tc"); break;
+        case Lang::ja:      f = find_cjk_face("jp"); break;
+        case Lang::ko:      f = find_cjk_face("kr"); break;
+        default:            break;
     }
+    // Two lists that have to agree: SS_LANGUAGES_CJK (Languages.h) says WHICH
+    // languages are written in a CJK script, this switch says which face each
+    // one wants. A language added to one and not the other would silently get
+    // no face, so it is checked rather than trusted.
+    assert(!!f == spirula::i18n::needs_cjk_font(l));
+    return f;
 }
 
 const CjkFace* find_cjk_face(const std::string& id) {
@@ -105,17 +115,25 @@ void FontSet::ensure() {
     if (want) chosen = cjk_face_path(*want);
     if (!chosen.empty()) {
         chosen_id = want->id;
-        _missing = nullptr;
+        _optional = nullptr;
     } else {
-        _missing = want;                  // null unless the language needs one
+        _optional = want;                 // null unless the language needs one
         for (const CjkFace& f : kCjkFaces) {
             chosen = cjk_face_path(f);
             if (!chosen.empty()) { chosen_id = f.id; break; }
         }
     }
 
-    if (_built && chosen_id == _loaded_cjk) return;
+    // The region whose glyph forms win the merge. It changes with the
+    // language even when no full face is installed, because the embedded
+    // subsets are ordered by it -- so this has to be part of what decides
+    // whether the atlas is still valid, or ja -> zh-Hans would keep drawing
+    // Chinese with Japanese kanji forms.
+    const std::string lead_id = want ? want->id : std::string();
+
+    if (_built && chosen_id == _loaded_cjk && lead_id == _lead_cjk) return;
     _loaded_cjk = chosen_id;
+    _lead_cjk = lead_id;
 
     _cjk_data.clear();
     if (!chosen.empty()) {
@@ -152,6 +170,10 @@ void FontSet::rebuild() {
     atlas->AddFontFromMemoryTTF(const_cast<unsigned char*>(kUiFont),
                                 (int)kUiFontSize, kBaseSize, &base);
 
+    // The full face for the current language, when one has been fetched. It
+    // goes ahead of the subsets because it is the same design with far more
+    // coverage: file names, typed prompts, anything the UI's own vocabulary
+    // does not contain.
     if (!_cjk_data.empty()) {
         ImFontConfig cjk;
         cjk.MergeMode = true;
@@ -161,6 +183,28 @@ void FontSet::rebuild() {
         atlas->AddFontFromMemoryTTF(_cjk_data.data(), (int)_cjk_data.size(),
                                     kBaseSize, &cjk);
     }
+
+    // Then all four embedded subsets, the current language's region FIRST.
+    //
+    // Order is the whole point. Merged sources are searched in order and the
+    // first with the glyph wins, so leading with this language's region is
+    // what gives it its own Han forms; the other three are there so that
+    // every language's name in the picker renders whatever the current
+    // language is -- hangul exists only in the KR face, and the simplified
+    // 简 of 简体中文 only in SC, so no single face can draw that menu.
+    auto add_subset = [&](const CjkSubset& s) {
+        if (s.id == _loaded_cjk) return;   // the full face already covers it
+        ImFontConfig cfg;
+        cfg.MergeMode = true;
+        cfg.FontDataOwnedByAtlas = false;  // static storage, outlives the atlas
+        std::snprintf(cfg.Name, sizeof cfg.Name, "SpirulaCJK-%s", s.id);
+        atlas->AddFontFromMemoryTTF(const_cast<unsigned char*>(s.data),
+                                    (int)s.size, kBaseSize, &cfg);
+    };
+    for (const CjkSubset& s : kCjkSubsets)
+        if (s.id == _lead_cjk) add_subset(s);
+    for (const CjkSubset& s : kCjkSubsets)
+        if (s.id != _lead_cjk) add_subset(s);
 }
 
 }  // namespace gui

@@ -27,15 +27,15 @@ namespace {
 // per-model FOV ranges (viewer.html FOV_RANGE; EQUIRECTANGULAR is a fixed
 // full-sphere view with no FOV).
 struct ViewerCamModel {
-    const char* name;      // engine camera_model string
-    const char* label;
+    const char* name;      // engine camera_model string -- never translated
+    const spirula::i18n::Msg* label;
     float fov_min, fov_max;
 };
 const ViewerCamModel kViewerCameraModels[] = {
-    {"PINHOLE",         "Pinhole",                 10, 150},
-    {"FISHEYE",         "Fisheye (Equidistant)",   10, 360},
-    {"EQUISOLID",       "Fisheye (Equisolid)",     10, 360},
-    {"EQUIRECTANGULAR", "Equirectangular (360\xc2\xb0)", 0, 0},
+    {"PINHOLE",         &msg::cam_perspective,          10, 150},
+    {"FISHEYE",         &msg::cam_fisheye_equidistant,  10, 360},
+    {"EQUISOLID",       &msg::cam_fisheye_equisolid,    10, 360},
+    {"EQUIRECTANGULAR", &msg::cam_equirectangular,       0, 0},
 };
 
 // fovToIntrinsics port: inverting the actual projection (not the pinhole tan
@@ -384,8 +384,11 @@ void ViewportPanel::draw_controls(bool engine) {
     if (engine) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(66);
-        const char* scales[] = {"50%", "75%", "100%"};
-        if (ui::ComboRaw("##scale", &_scale_idx, scales, 3)) _dirty = true;
+        // Only the first entry is a word; the rest are numbers, and a
+        // percentage is a percentage in every language.
+        const char* scales[] = {msg::viewport_scale_auto.get(),
+                                "50%", "75%", "100%"};
+        if (ui::ComboRaw("##scale", &_scale_idx, scales, 4)) _dirty = true;
         ui::help_on_hover(msg::viewport_scale_help);
         ImGui::SameLine();
         ui::Checkbox(msg::viewport_live, &_auto_refresh);
@@ -395,25 +398,30 @@ void ViewportPanel::draw_controls(bool engine) {
     if (ui::Button(msg::viewport_reset_view)) reset_view();
 
     // ---- navigation + camera group ----
-    // The navigation modes and camera models are named exactly as the web
-    // viewer names them, and the tooltip below says so; renaming them per
-    // language would break that correspondence.
+    // The four modes behave exactly as the web viewer's do; only the words
+    // are localized. The tooltip names them by substitution so it always uses
+    // the same words the combo just showed.
     if (one_row) ImGui::SameLine();
-    const char* nav_modes[] = {"Turntable", "Trackball", "First Person", "Free Fly"};
+    static const spirula::i18n::Msg* kNavModes[] = {
+        &msg::nav_turntable, &msg::nav_trackball,
+        &msg::nav_first_person, &msg::nav_free_fly};
     int nav = (int)_cam.mode;
-    ImGui::SetNextItemWidth(110);
-    if (ui::ComboRaw("##navmode", &nav, nav_modes, 4))
+    ImGui::SetNextItemWidth(150);
+    if (ui::ComboRaw("##navmode", &nav,
+                     {kNavModes[0], kNavModes[1], kNavModes[2], kNavModes[3]}))
         _cam.mode = (NavCamera::Mode)nav;
-    ui::help_on_hover(msg::viewport_nav_help);
+    ui::help_on_hover(msg::viewport_nav_help,
+                      {kNavModes[0]->get(), kNavModes[1]->get(),
+                       kNavModes[2]->get(), kNavModes[3]->get()});
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100);
     ui::SliderFloatRaw("##speed", &_cam.speed_exp, -2.0f, 2.0f, "spd 10^%.1f");
     ui::help_on_hover(msg::viewport_speed_help);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160);
-    if (ui::BeginComboRaw("##cammodel", kViewerCameraModels[_cam_model].label)) {
+    if (ui::BeginComboRaw("##cammodel", kViewerCameraModels[_cam_model].label->get())) {
         for (int i = 0; i < 4; i++)
-            if (ui::SelectableRaw(kViewerCameraModels[i].label, i == _cam_model)) {
+            if (ui::Selectable(*kViewerCameraModels[i].label, i == _cam_model)) {
                 _cam_model = i;
                 // Clamp the remembered FOV into the new model's range
                 // (viewer.html _syncCameraModelUI).
@@ -430,8 +438,12 @@ void ViewportPanel::draw_controls(bool engine) {
         if (ui::SliderFloatRaw("##fov", &_fov_deg[_cam_model],
                                fov_min(), fov_max(), "fov %.0f\xc2\xb0"))
             _dirty = true;
+        ui::help_on_hover(msg::viewport_fov_help);
     } else {
+        // Equirectangular has no field of view to set: the image IS the whole
+        // sphere.
         ui::TextDisabledRaw("360\xc2\xb0 x 180\xc2\xb0");
+        ui::help_on_hover(msg::viewport_fov_help);
     }
 }
 
@@ -504,7 +516,44 @@ void ViewportPanel::draw_preview(const ImVec2& avail) {
                                         IM_COL32(200, 200, 200, 180), info);
 }
 
+// Adaptive render scale (`Auto`, the default).
+//
+// A trained scene at full viewport resolution costs enough per frame that
+// dragging the camera feels like dragging a slideshow -- and during training
+// it is also time taken from the trainer. Half resolution while the camera
+// moves and full resolution once it settles gets both: the frame you are
+// steering by is cheap, and the frame you stop to look at is sharp.
+//
+// Motion is detected by comparing the pose to last frame's rather than by
+// hooking the six places that move it (mouse, wheel, keyboard, gamepad, view
+// reset, double-click recentre) -- one probe cannot miss one of them.
+float ViewportPanel::render_scale(double now) {
+    if (_scale_idx != 0)
+        return _scale_idx == 1 ? 0.5f : _scale_idx == 2 ? 0.75f : 1.0f;
+
+    constexpr double kSettle = 0.25;   // seconds of stillness before full res
+    float pose[10];
+    for (int i = 0; i < 3; i++) pose[i] = _cam.pos[i];
+    for (int i = 0; i < 4; i++) pose[3 + i] = _cam.rot[i];
+    for (int i = 0; i < 3; i++) pose[7 + i] = _cam.target[i];
+    if (std::memcmp(pose, _last_pose, sizeof pose) != 0) {
+        std::memcpy(_last_pose, pose, sizeof pose);
+        _last_move = now;
+    }
+
+    const bool moving = (now - _last_move) < kSettle;
+    // Crossing back into stillness has to force one more render, or the
+    // preview would sit at half resolution until something else dirtied it.
+    if (moving != _moving) {
+        _moving = moving;
+        _dirty = true;
+    }
+    return moving ? 0.5f : 1.0f;
+}
+
 void ViewportPanel::draw_engine(bool training, const ImVec2& avail) {
+    const double now = ImGui::GetTime();
+
     // Poll the in-flight render.
     if (_pending) {
         ViewResult res;
@@ -522,10 +571,9 @@ void ViewportPanel::draw_engine(bool training, const ImVec2& avail) {
     }
 
     // Submit a fresh render when needed.
-    float scale = _scale_idx == 0 ? 0.5f : _scale_idx == 1 ? 0.75f : 1.0f;
+    const float scale = render_scale(now);
     int W = (int)std::clamp(avail.x * scale, 64.0f, 1920.0f);
     int H = (int)std::clamp(avail.y * scale, 64.0f, 1920.0f);
-    double now = ImGui::GetTime();
     bool want = _dirty || (training && _auto_refresh && now - _last_submit > 0.15);
     if (!_pending && want) {
         ViewRequest q;

@@ -6,6 +6,7 @@
 #include "app/EvalMetrics.h"
 #include "checkpoint/Adapt.h"
 #include "checkpoint/Resume.h"
+#include "i18n/catalog/Log.h"
 #include "data/Knn.h"
 
 #ifndef _WIN32
@@ -36,6 +37,14 @@
 #endif
 
 namespace fs = std::filesystem;
+namespace lmsg = spirula::i18n::msg::log;
+
+// Progress lines carrying a path or a count. See i18n/Message.h: whole
+// sentences with {0} placeholders, never concatenated fragments.
+static std::string lfmt(const spirula::i18n::Msg& m,
+                        std::initializer_list<spirula::i18n::Arg> a) {
+    return spirula::i18n::format(m, a);
+}
 
 namespace spirula {
 
@@ -585,13 +594,11 @@ void TrainerSession::load_dataset() {
             "Direct equirectangular training (warp_spherical_to_pinhole=0) "
             "does not support depth/normal supervision yet.");
 
-    char buf[256];
-    std::snprintf(buf, sizeof buf,
-                  "Parsed %lld cameras (%lld post-split), %lld seed points "
-                  "(train_frame_scale=%.4g)",
-                  (long long)ds.num_cameras, (long long)post.n_post,
-                  (long long)ds.points.num(), ds.train_frame_scale);
-    log(buf);
+    char scale[32];
+    std::snprintf(scale, sizeof scale, "%.4g", ds.train_frame_scale);
+    log(lfmt(lmsg::parsed_dataset,
+             {(long long)ds.num_cameras, (long long)post.n_post,
+              (long long)ds.points.num(), scale}));
 }
 
 // Pre-flight GPU check. A binary compiled by a newer CUDA toolkit than the
@@ -663,7 +670,7 @@ void TrainerSession::setup_engine() {
     fs::create_directories(out_dir);
     if (write_config_json)
         save_config_json(cfg, out_dir, preset);
-    log("Output directory: " + fs::absolute(out_dir).string());
+    log(lfmt(lmsg::output_directory, {fs::absolute(out_dir).string()}));
 
     // ---- Engine setup -------------------------------------------------
     engine_reset();
@@ -829,8 +836,7 @@ void TrainerSession::restore_checkpoint() {
         JsonValue state = ckpt::read_state_json(r.ckpt_dir);
         if (ckpt::needs_adapt(state, target)) {
             tmp = out_dir / ".resume_adapt";
-            log("Checkpoint layout differs from this run's; adapting on the "
-                "host (no extra VRAM)...");
+            log(lmsg::ckpt_adapting.get());
             adapted = ckpt::adapt_checkpoint(r.ckpt_dir, target, tmp);
             if (adapted) load_from = tmp;
         }
@@ -845,8 +851,7 @@ void TrainerSession::restore_checkpoint() {
             e.what());
     }
     if (adapted) remove_tree(tmp);
-    log("Resumed from " + r.ckpt_dir.string() + " at step " +
-        std::to_string(start_step));
+    log(lfmt(lmsg::resumed_from, {r.ckpt_dir.string(), (long long)start_step}));
 }
 
 // Checkpoint save (trainer.py save_checkpoint:939).
@@ -934,7 +939,7 @@ void TrainerSession::train(const TrainerCallbacks& cb) {
     if (cfg.steps_per_save != 0) {
         std::lock_guard<std::mutex> lk(engine_mutex);
         save_checkpoint(step);
-        log("Checkpoint saved to: " + fs::absolute(out_dir).string());
+        log(lfmt(lmsg::checkpoint_saved, {fs::absolute(out_dir).string()}));
     }
 }
 
@@ -1048,7 +1053,7 @@ void TrainerSession::eval() {
 
     ParsedDataset eds = parse_dataset(cfg.data, pcfg, cfg.data_format);
     if (eds.num_cameras == 0) {
-        log("Eval: the eval split is empty; nothing to score.");
+        log(lmsg::eval_split_empty.get());
         return;
     }
     // Same world scaling training applied, so the cameras line up with the
@@ -1088,7 +1093,7 @@ void TrainerSession::eval() {
             all_idx, {});
     }
 
-    log("Eval: " + std::to_string(epost.n_post) + " view(s)");
+    log(lfmt(lmsg::eval_views, {(long long)epost.n_post}));
 
     // Rendering is serial (one process-global engine), but scoring a view --
     // colour correction, the metrics, and the PNG encode -- is pure host work
@@ -1254,7 +1259,7 @@ void TrainerSession::eval() {
     }
 
     if (per_image.empty()) {
-        log("Eval: no views were rendered.");
+        log(lmsg::eval_no_views.get());
         return;
     }
 
@@ -1287,7 +1292,7 @@ void TrainerSession::eval() {
     mf << ",\n    \"training_time\": " << training_time_s;
     mf << ",\n    \"engine_vram\": " << engine_vram_mb;
     mf << "\n}\n";
-    log("Eval metrics written to " + (out_dir / "metrics.json").string());
+    log(lfmt(lmsg::eval_metrics_written, {(out_dir / "metrics.json").string()}));
 }
 
 }  // namespace spirula

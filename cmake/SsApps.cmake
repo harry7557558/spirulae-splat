@@ -157,7 +157,9 @@ if(SS_BUILD_GUI)
     # The Latin/Cyrillic face IS embedded: at 59 KB it costs nothing, and
     # without it the built-in ImGui font renders German, French, Turkish and
     # Russian as boxes -- which was true of this GUI before localization was
-    # ever on the table. Rebuild it with tools/make_ui_font.py.
+    # ever on the table. ss_cjk_faces() below embeds the four CJK subsets on
+    # the same reasoning, at 422 KB for all of them. Rebuild all five with
+    # tools/make_ui_font.py.
     ss_embed_file(
         ${SS_ROOT}/assets/fonts/SpirulaUI-Regular.ttf
         ${CMAKE_BINARY_DIR}/app_generated/ui_font.h

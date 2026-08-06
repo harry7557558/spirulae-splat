@@ -144,38 +144,31 @@ if(NOT SS_DEFAULT_LANG IN_LIST SS_LANGUAGES)
         "  Choose one of: ${_ss_langs_pretty}")
 endif()
 
-# Japanese, Korean and both Chinese scripts need a font the Latin face does not
-# have. Each regional face is 4-8 MB and they are NOT interchangeable: Han
-# unification means the shared codepoints have different default glyph forms
-# per region, so a Japanese reader shown the Simplified Chinese face gets kanji
-# in Chinese forms -- legible, and visibly wrong.
+# This does NOT decide whether the UI renders in Japanese, Korean or Chinese.
+# It always does: the four subset faces in assets/fonts/ are embedded
+# unconditionally (422 KB, this program's own vocabulary in each region's own
+# glyph forms), so there is no build of this GUI whose language picker cannot
+# be read. See src/app/gui/Fonts.h.
+#
+# What this decides is the FULL faces, which cover the rest of Unicode -- the
+# CJK that turns up in dataset paths, file names and typed mask prompts, none
+# of which a subset of our own strings can anticipate. Each is 4-8 MB and they
+# are NOT interchangeable: Han unification means the shared codepoints have
+# different default glyph forms per region.
 #
 #   fetch  (default)  downloaded on first use of a CJK language, into the cache
 #                     directory. The executable stays self-contained.
-#   none              Latin/Cyrillic only. CJK languages render tofu and the
-#                     picker says so. For a build that must not touch the
+#   none              no download offered. The UI is unaffected; CJK file names
+#                     may show boxes. For a build that must not touch the
 #                     network.
-#   sc|tc|jp|kr|all   ship the face(s) beside the executable, for an offline
-#                     regional build. Note this is a BUNDLE, not an embed: a
-#                     16 MB byte array is not something to put a compiler
-#                     through, and `all` would be four of them.
-set(SS_FONT_CJK "fetch" CACHE STRING "CJK font: fetch | none | sc | tc | jp | kr | all")
+#   sc|tc|jp|kr|all   ship the full face(s) beside the executable, for an
+#                     offline regional build. Note this is a BUNDLE, not an
+#                     embed: a 16 MB byte array is not something to put a
+#                     compiler through, and `all` would be four of them.
+set(SS_FONT_CJK "fetch" CACHE STRING "Full CJK font: fetch | none | sc | tc | jp | kr | all")
 set_property(CACHE SS_FONT_CJK PROPERTY STRINGS fetch none sc tc jp kr all)
 if(NOT SS_FONT_CJK MATCHES "^(fetch|none|sc|tc|jp|kr|all)$")
     message(FATAL_ERROR "SS_FONT_CJK must be fetch|none|sc|tc|jp|kr|all, got '${SS_FONT_CJK}'")
-endif()
-
-# An inconsistent regional build should fail here rather than ship tofu.
-string(REGEX MATCHALL "X\\(([a-z_]+)\\)" _ss_cjk_hits "${_ss_langs_h}")
-set(SS_LANGUAGES_CJK "")
-foreach(hit ${_ss_cjk_hits})
-    string(REGEX REPLACE "X\\(([a-z_]+)\\)" "\\1" lang "${hit}")
-    list(APPEND SS_LANGUAGES_CJK ${lang})
-endforeach()
-if(SS_DEFAULT_LANG IN_LIST SS_LANGUAGES_CJK AND SS_FONT_CJK STREQUAL "none")
-    message(FATAL_ERROR
-        "SS_DEFAULT_LANG=${SS_DEFAULT_LANG} needs a CJK font, but SS_FONT_CJK=none.\n"
-        "  Set SS_FONT_CJK to fetch, or to the matching regional face.")
 endif()
 
 # ---------------------------------------------------------------------------

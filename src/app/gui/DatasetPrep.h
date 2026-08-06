@@ -166,6 +166,31 @@ bool is_video_path(const std::string& path);
 // default camera model does not fit.
 bool is_dual_fisheye_path(const std::string& path);
 
+// ---- the ffmpeg fallback, for callers that are not a preparation run -------
+//
+// Everything the GUI does to a video without the built-in decoder goes through
+// an external ffmpeg, and the mask preview needs the same two answers a
+// preparation run does -- how long the capture is, and what one frame of it
+// looks like -- without running one. Only `ffmpeg_exe` is needed (ffprobe is
+// not assumed to be installed beside it): `ffmpeg -i` prints the stream table
+// on its way to complaining that no output file was named.
+
+// What an external ffmpeg says about a video. A zero means it did not say.
+struct VideoFacts {
+    double duration = 0.0;    // seconds
+    double fps = 0.0;
+    long long frames = 0;     // duration * fps; the container's own count is
+                              // not printed by `ffmpeg -i`
+};
+bool ffmpeg_probe_video(const std::string& ffmpeg_exe, const std::string& path,
+                        VideoFacts& out, const std::atomic<bool>& cancel);
+
+// One frame, `seconds` into the file, written to `out_path` as a JPEG.
+// False when ffmpeg is missing, was cancelled, or wrote nothing.
+bool ffmpeg_extract_frame(const std::string& ffmpeg_exe, const std::string& video,
+                          double seconds, const std::string& out_path,
+                          const std::atomic<bool>& cancel);
+
 // What a picked folder of photos actually means, by the layout conventions the
 // rest of the project already uses -- `spirula sfm auto`'s own probing and the
 // dataparsers' `mask_dir = "masks"`:

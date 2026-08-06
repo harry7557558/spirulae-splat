@@ -116,11 +116,39 @@ Chinese needs care and gets it in `resolve_chinese()`: `zh_CN`/`zh_SG`/`zh-Hans-
    (Forget this and the canary tells you, by name.)
 3. Build. Every message that now has a hole is a compile error with the
    message's own name in it. That list is your work.
-4. If the language needs a script the embedded font does not cover, add it to
-   `SS_LANGUAGES_CJK` and give it a face in `assets/fonts/cjk_faces.txt`.
+4. If the language needs a script the embedded fonts do not cover, add it to
+   `SS_LANGUAGES_CJK`, give it a face in `assets/fonts/cjk_faces.txt`, and
+   regenerate the subsets (below).
+5. Rebuild the fonts: `python3 tools/make_ui_font.py`. Even for a
+   Latin-script language — the subsets carry every language's native name, so
+   the picker can draw the new row.
 
 ## Fonts
 
-See `assets/fonts/README.md` and `docs/i18n.md`. Short version: a 59 KB
-Latin/Cyrillic subset is embedded and always loaded; the four CJK faces are
-4–8 MB each and are fetched on demand, verified against a pinned SHA-256.
+See `assets/fonts/README.md` and `docs/i18n.md`. Short version: five subset
+faces are embedded and always available (58 KB Latin/Cyrillic + four ~110 KB
+regional CJK cuts), so every language renders with nothing to download. The
+full 4–8 MB CJK faces are still fetched on demand, verified against a pinned
+SHA-256, for CJK in *user data* — file names, paths, typed prompts.
+
+**The CJK subsets are generated from the catalogs.** Add a character no
+translation used before and they are stale;
+`python3 tools/check_font_coverage.py` runs on every build and says so.
+Regenerate with `python3 tools/make_ui_font.py`.
+
+## Text that stays English on purpose
+
+Not everything a user sees is addressed to them:
+
+- **Mask prompts** go to SAM 3, whose text encoder reads English. The field,
+  its placeholder example and the words the palette inserts are all English
+  whatever the interface language is — see `src/app/gui/MaskPrompt.h`, which
+  is also how a user who does not write English still builds a good prompt.
+  `ui::InputTextEnglish()` is the wrapper that says so at the call site.
+- **Child-process output** (COLMAP, ffmpeg, `spirula sfm`) is passed through
+  verbatim. It is English, it is what a bug report is pasted from, and it is
+  not ours to rewrite. Our own stage names and notes around it *are*
+  translated — see `i18n/catalog/Log.h`.
+- **Identifiers**: preset names, camera and lens model names, config field
+  names. The picker shows a translated label next to the name rather than
+  instead of it, so a user who read the README still recognises the row.

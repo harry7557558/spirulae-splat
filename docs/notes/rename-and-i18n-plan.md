@@ -611,6 +611,42 @@ written first (§3).
 English before a single translation existed, and `tools/check_i18n.sh` counting
 it down from 405 to 51 was the progress bar.
 
+### 6b.1 Follow-up pass — **LANDED 2026-08-05**
+
+Four things the first pass got wrong or left out, all found by looking at the
+running program rather than at the code:
+
+1. **The language menu was labelled with the word "Language", translated.** A
+   user who cannot read the current interface language cannot read that menu
+   either. It is now `SS_LANG_MENU_ICON` (文A, the widely used mark for this)
+   followed by the current language's own name, so the menu is findable and
+   also reports its state. The icon lives in `Languages.h` because
+   `tools/make_ui_font.py` reads it from there — changing it regenerates the
+   fonts instead of silently producing a box.
+
+2. **The picker rendered `???` for the CJK names** with no font downloaded,
+   which is the same failure one level down. Fixed by embedding four regional
+   CJK faces subset to the ~600 characters per region the catalogs use: 449 KB
+   for all four, against 23 MB for the full faces. See §8, rewritten.
+
+3. **Mask prompts were being translated, and should not be.** SAM 3's text
+   encoder reads English; the placeholder examples were translated, which was
+   active advice to type something that works worse. The field is now
+   `ui::InputTextEnglish()` (English content, translated label), a line under
+   it says why in the interface language, and `src/app/gui/MaskPrompt.h` adds a
+   palette of 17 common subjects — labelled in the interface language,
+   inserting English — so a user who writes no English still builds a good
+   prompt.
+
+4. **Tier 2 was not as complete as it looked.** Still English were: the seven
+   training presets (moved out of `TrainConfig.h` into
+   `i18n/catalog/Train.h`, so the GUI and `spirula train --help` share one
+   copy and `--help` is localized too), the four navigation modes, the four
+   projection models, the seven lens models, and every stage name and note
+   this program writes to the log (`i18n/catalog/Log.h`). Child-process output
+   stays English deliberately — it is not ours to rewrite, and it is what a
+   bug report is pasted from.
+
 **Review status is recorded in `docs/i18n.md` and it matters.** These are one
 author's translations, not native speakers': a solid first draft. §6.6's rule
 that ja/zh/ko/de and every irreversible-action message need human review before
@@ -641,7 +677,44 @@ local names, which is the failure mode this whole section exists to prevent.
 
 ---
 
-## 8. Fonts
+## 8. Fonts — **SUPERSEDED 2026-08-05, see below**
+
+The design in §8.1–8.3 was written before anything was measured, and its
+central assumption turned out to be wrong. It assumed the choice was between
+embedding a 4–8 MB regional CJK face and fetching one at runtime. It is not:
+this program writes about 600 distinct characters per region, all of them in
+its own catalogs, and a face subset to exactly those is ~110 KB. All four fit.
+
+**What shipped:** five faces embedded in every build, 507 KB together — the
+58 KB Latin/Cyrillic subset of Source Sans 3 as planned, plus
+`SpirulaCJK-{JP,SC,TC,KR}.otf` cut from Noto Sans CJK. Every language renders
+in the right regional glyph forms with nothing to download. The full faces are
+still fetched or bundled by `SS_FONT_CJK`, but for a different and much smaller
+job: CJK in *user data* — file names, paths, typed prompts — which no subset of
+our own strings can anticipate.
+
+Two consequences worth recording:
+
+- **The configure-time `SS_DEFAULT_LANG=ja` + `SS_FONT_CJK=none` check is
+  gone.** It existed to stop a build shipping tofu; with the subsets embedded
+  that combination renders Japanese perfectly, so the check was now asserting
+  something false. `SS_FONT_CJK=none` means "no download offered", not "no
+  CJK".
+- **The subsets are derived from the catalogs**, so a translation edit can
+  outgrow them and the symptom is one hollow box mid-sentence.
+  `tools/check_font_coverage.py` guards it on every build — no network, no
+  fontTools, it parses `cmap` by hand.
+
+Alternatives measured before settling on four faces: one pan-CJK subset is
+287 KB but renders 262 shared characters in Simplified Chinese forms for three
+of the four languages; a shared base plus three deltas is 358 KB, because of
+the characters used by more than one region only 267 have identical outlines
+while 262 genuinely differ. 135 KB on a 61 MB binary is not worth either.
+
+The sections below are kept as written, for the reasoning about Han
+unification (which held up completely) and about `SS_DEFAULT_LANG` (unchanged).
+
+
 
 **This is the unbudgeted part.** `GuiMain.cpp` contains no font code at all, so
 the GUI runs on ImGui's built-in ProggyClean — a 13px ASCII-only bitmap font.
@@ -790,11 +863,18 @@ strings are localized.
       the language picker, and locale detection on all three platforms. Every
       text-bearing ImGui call in `src/app/gui/` (253 of them) now goes through
       `ui::`. *(2026-08-05)*
-- [x] **4.** 354 of 405 messages translated into all thirteen languages; the 51
+- [x] **4.** 458 of 509 messages translated into all thirteen languages; the 51
       left are the external-COLMAP advanced panel, deliberately. Tier 3 (the
       190 config field helps) is not started — those are still literals shared
-      with `--help`. Human review for ja/zh/ko/de and the legal block is
-      **outstanding** and recorded in `docs/i18n.md`. *(2026-08-05)*
+      with `--help`, and the group structure is due a rethink first. Human
+      review for ja/zh/ko/de and the legal block is **outstanding** and
+      recorded in `docs/i18n.md`. *(2026-08-05)*
+- [x] **4b.** Follow-up pass (§6b.1): the 文A language-menu icon, four embedded
+      CJK subsets so no language renders as boxes without a download
+      (507 KB total, `tools/check_font_coverage.py` keeps them in sync), the
+      English-only mask prompt plus its translated common-subject palette, and
+      the presets / navigation modes / projections / lens models / log lines
+      that tier 2 had missed. *(2026-08-05)*
 - [ ] **5.** Drop the `SSPLAT_` aliases one release later: the CMake alias loop
       in `cmake/SsOptions.cmake`, the fallback in `src/core/Env.h`, the legacy
       directory adoption in `AppPaths.cpp` and `aliked/model/Fetch.cpp`, and

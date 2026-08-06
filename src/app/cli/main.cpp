@@ -18,6 +18,7 @@
 #include "app/TrainerCore.h"
 #include "app/webviewer/Viewer.h"
 #include "checkpoint/Resume.h"
+#include "i18n/catalog/Train.h"
 
 #include <algorithm>
 #include <chrono>
@@ -203,8 +204,14 @@ void select_and_print_devices(const std::string& requested) {
 void print_help(const char* argv0, const TrainConfig& c) {
     std::printf("usage: %s [<preset>] --data <dataset_dir> [--flag value ...]\n\n", argv0);
     std::printf("presets (tyro subcommands; default: 3dgs):\n");
-    for (const auto& p : kTrainPresets)
-        std::printf("  %-18s %s\n", p.name, p.help);
+    static_assert(sizeof(kTrainPresets) / sizeof(kTrainPresets[0]) ==
+                      spirula::i18n::msg::train::kNumPresetText,
+                  "config/TrainConfig.h and i18n/catalog/Train.h disagree "
+                  "about how many presets there are");
+    for (const auto& p : kTrainPresets) {
+        const auto* t = spirula::i18n::msg::train::preset_text(p.name);
+        std::printf("  %-18s %s\n", p.name, t ? t->help->get() : "");
+    }
     std::printf("\napp flags:\n");
     std::printf("  --device <index|name substring>\n"
                 "      Compute device to train on (default: auto). The device"

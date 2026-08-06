@@ -3,42 +3,58 @@
 // The glyphs. Which font the UI draws with, and how the CJK faces get onto
 // disk.
 //
-// Two facts shape everything here:
+// Three facts shape everything here:
 //
 //   * ImGui's built-in font is ASCII-only. German umlauts, French accents,
 //     Turkish dotless i and Cyrillic were all broken before this file existed,
 //     never mind Japanese -- so a Latin/Cyrillic face is EMBEDDED and always
-//     loaded. That is assets/fonts/SpirulaUI-Regular.ttf, 59 KB, and it is
-//     what makes a default build render twelve of the thirteen languages.
+//     loaded. That is assets/fonts/SpirulaUI-Regular.ttf, 59 KB.
 //
-//   * A CJK face is 4-8 MB and there are four of them, because Han
+//   * A full CJK face is 4-8 MB and there are four of them, because Han
 //     unification means the shared codepoints render with different default
 //     glyph forms per region. A Japanese reader shown the Simplified Chinese
-//     face gets kanji in Chinese forms -- legible, and visibly wrong. So the
-//     face is per-region, and per-region times 4 is too much to embed. It is
-//     downloaded on demand instead (SS_FONT_CJK=fetch, the default) or shipped
-//     beside the executable by a regional build (SS_FONT_CJK=sc|tc|jp|kr|all).
+//     face gets kanji in Chinese forms -- legible, and visibly wrong. Four
+//     times 4-8 MB is too much to embed.
 //
-// A face that is already on disk is loaded whatever the UI language is, not
-// only for CJK locales: an English UI still has to draw a dataset path like
-// C:\写真\ without turning it into boxes.
+//   * But this program only ever writes ~600 characters per region: its own
+//     translations. Subset to those and a regional face is ~110 KB, so all
+//     FOUR are embedded (assets/fonts/SpirulaCJK-*.otf, 422 KB together).
+//     That is what makes a default build render all thirteen languages, in
+//     the right regional forms, with nothing to download -- which matters
+//     most in the language picker, the one screen a user who cannot read the
+//     current UI language has to be able to read.
+//
+// The full faces are still fetched on demand, but for a much smaller job than
+// they used to do: dataset paths, file names and mask prompts are user data
+// and can hold any character at all, and no subset can cover that. Until one
+// is fetched, a folder called C:\写真\ may render as boxes; the UI itself
+// never does.
 
 #include "i18n/Message.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace gui {
 
-// One regional CJK face.
+// One regional CJK face, downloadable in full.
 struct CjkFace {
-    const char* id;       // "sc" -- also the SS_FONT_CJK value that embeds it
+    const char* id;       // "sc" -- also the SS_FONT_CJK value that bundles it
     const char* file;     // basename on disk
     const char* url;
     const char* sha256;   // verified after download and on every load
     uint64_t    bytes;
     const char* label;    // "Simplified Chinese", for the download prompt
+};
+
+// The embedded counterpart: the same region, cut down to this program's own
+// vocabulary. Generated into app_generated/cjk_subsets.h at configure time.
+struct CjkSubset {
+    const char* id;
+    const unsigned char* data;
+    size_t size;
 };
 
 // The face a language needs, or null for the Latin-script languages.
@@ -65,10 +81,10 @@ public:
     // finishes; nothing else changes the answer.
     void invalidate() { _dirty = true; }
 
-    // The face the current language needs and does not have -- i.e. the UI is
-    // about to render tofu. Null when all is well. The language picker uses
-    // this to offer the download.
-    const CjkFace* missing_face() const { return _missing; }
+    // The full face for the current language, when it is not installed. NOT
+    // an error state: the UI reads fine without it. It is what the language
+    // menu offers so that CJK file names and typed prompts render too.
+    const CjkFace* optional_face() const { return _optional; }
 
     // A build with SS_FONT_CJK=none has no fetch path, and should say so
     // rather than offer a download that will not happen.
@@ -77,8 +93,9 @@ public:
 private:
     void rebuild();
 
-    std::string _loaded_cjk;              // face id currently in the atlas
-    const CjkFace* _missing = nullptr;
+    std::string _loaded_cjk;              // full face id currently in the atlas
+    std::string _lead_cjk;                // region whose subset is merged first
+    const CjkFace* _optional = nullptr;
     std::vector<char> _cjk_data;          // must outlive the atlas
     spirula::i18n::Lang _lang = spirula::i18n::Lang::en;
     bool _built = false;

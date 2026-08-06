@@ -2,6 +2,8 @@
 
 #include "app/gui/TrainRunner.h"
 
+#include "i18n/catalog/Log.h"
+
 #include <algorithm>
 
 namespace gui {
@@ -124,8 +126,9 @@ void TrainRunner::start_training(const TrainConfig& cfg, const std::string& pres
                 _web_viewer->start("0.0.0.0", s->cfg.viewer_port,
                                    s->make_viewer_config(),
                                    s->make_viewer_hooks(), s->post);
-                push_log("Web viewer at http://localhost:" +
-                         std::to_string(s->cfg.viewer_port) + "/");
+                push_log(spirula::i18n::format(
+                    spirula::i18n::msg::log::web_viewer_at,
+                    {(long long)s->cfg.viewer_port}));
             }
 
             _phase = Phase::Training;

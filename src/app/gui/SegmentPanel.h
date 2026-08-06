@@ -59,9 +59,15 @@ public:
     ~SegmentPanel();
 
     // `input` is a folder of images or a video file. Cheap: the frame list is
-    // gathered here, nothing is decoded or loaded until the panel draws.
+    // gathered here, nothing is decoded or loaded until the panel draws (a
+    // video is asked how long it is, which is one probe either way).
+    //
+    // `ffmpeg_exe` and `force_ffmpeg` are the same two settings the dataset run
+    // takes: a machine whose driver cannot decode video reads the preview frame
+    // with an external ffmpeg, exactly as preparation would.
     void open(const std::string& input, bool is_video,
-              const std::string& model_path);
+              const std::string& model_path, const std::string& ffmpeg_exe,
+              bool force_ffmpeg);
     bool is_open() const { return _open; }
     void close();
 
@@ -81,10 +87,21 @@ private:
     void draw_image(MaskSettings& settings);
     void draw_objects(MaskSettings& settings, bool& edited);
 
+    // Is the built-in decoder both compiled in and usable on this device, and
+    // not switched off by the job's "always use ffmpeg"? False means every
+    // frame this panel shows comes from ffmpeg.
+    bool builtin_decode() const;
+
     bool _open = false;
     std::string _model_path;
     std::string _input;
     bool _is_video = false;
+    std::string _ffmpeg_exe = "ffmpeg";
+    bool _force_ffmpeg = false;
+    // How long the video is, in seconds, when ffmpeg had to be asked. Zero for
+    // a folder of photos, and for a video the built-in decoder can seek by
+    // frame -- the ffmpeg path is the only one that needs a timestamp.
+    double _video_seconds = 0.0;
 
     // One offer on the frame slider. `index` is what the masking run will call
     // this frame and `position` is where it falls in the capture; a click

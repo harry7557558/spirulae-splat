@@ -35,6 +35,20 @@
     X(ru,      "ru",      "Русский",     "Russian")                           \
     X(tr,      "tr",      "Türkçe",      "Turkish")
 
+// What the language menu is labelled with in the menu bar.
+//
+// An icon rather than the word "Language", because of who needs that menu:
+// someone looking at a UI in a language they cannot read, who therefore
+// cannot read the menu that fixes it either. 文A is the widely used mark for
+// this -- one Han character next to one Latin letter, which reads as "scripts"
+// without belonging to either script. The menu draws it followed by the
+// current language's own name, so the menu also says what is selected.
+//
+// Both characters have to be in the embedded fonts, which is why this lives
+// here: tools/make_ui_font.py reads it from this file, so changing it
+// regenerates the subsets rather than silently producing a box.
+#define SS_LANG_MENU_ICON "文A"
+
 // Which languages need a CJK font to render at all. Used by the font loader
 // to decide whether to fetch a face, and by the CMake consistency check that
 // refuses SS_DEFAULT_LANG=ja with SS_FONT_CJK=none.

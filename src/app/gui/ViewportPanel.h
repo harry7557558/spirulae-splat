@@ -54,6 +54,7 @@ private:
     // intrinsics (no jump when training starts).
     void maybe_frame(const spirula::TrainerSession& session);
     void reset_view();
+    float render_scale(double now);
     // Double-click centering (webgl viewer's recenterAt): pan laterally so
     // p (normalized frame) sits on the optical axis and make it the orbit
     // pivot; if p is behind the camera plane (>180-degree models), rotate
@@ -100,7 +101,11 @@ private:
     bool _show_cams = false;
     bool _show_grid = false;         // axes + ground-plane grid overlay
     float _frustum_scale = 1.0f;     // camera-frustum size multiplier
-    int _scale_idx = 1;              // 0 = 50%, 1 = 75%, 2 = 100%
+    // 0 = auto (see render_scale), 1 = 50%, 2 = 75%, 3 = 100%
+    int _scale_idx = 0;
+    float _last_pose[10] = {};       // pos + rot + target, to spot motion
+    double _last_move = -1e9;
+    bool _moving = false;
     bool _auto_refresh = true;
 
     // In-flight request / result texture (engine mode).

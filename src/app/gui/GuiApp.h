@@ -65,8 +65,11 @@ private:
     // ---- actions ----
     // By value: callers pass elements of _recents, which open_dataset
     // mutates via add_recent (a const& here would dangle).
+    // Clears the log panel unless `keep_log`: what is in it belongs to
+    // whatever was open before. The reconstruction handoff passes true,
+    // because there the log is this dataset's own build log.
     void open_dataset(std::string dir, std::string image_dir = "",
-                      std::string mask_dir = "");
+                      std::string mask_dir = "", bool keep_log = false);
     // Route for user-initiated opens: confirms first when training.
     void request_open_dataset(std::string dir);
 
@@ -130,6 +133,7 @@ private:
     // Re-derive what is a function of the list: the sub-folder each input's
     // images go into, and the default workspace.
     void refresh_sources();
+    void rescan_found_masks();
     void run_pending_if_stopped();
     void append_logs();
     void log(const std::string& s);
@@ -210,6 +214,9 @@ private:
     std::deque<std::string> _log;
     bool _log_autoscroll = true;
     bool _show_log = true;
+    // Masks sitting beside the photos are adopted automatically; this is the
+    // way out for a folder whose masks/ describes something else.
+    bool _use_found_masks = true;
 
     // VRAM readout on the status strip, polled from the backend at ~2 Hz.
     backend::MemoryUsage _vram;

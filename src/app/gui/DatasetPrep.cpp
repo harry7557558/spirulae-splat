@@ -2,6 +2,8 @@
 
 #include "app/gui/DatasetPrep.h"
 
+#include "i18n/catalog/Log.h"
+
 #include "app/gui/FrameSelect.h"
 #include "app/gui/Subprocess.h"
 
@@ -33,6 +35,15 @@
 #include <filesystem>
 
 namespace fs = std::filesystem;
+namespace lmsg = spirula::i18n::msg::log;
+
+// Shorthand: most log lines here carry a path or a count, so they are
+// format() calls. See i18n/Message.h on why they are whole sentences with
+// {0} placeholders rather than concatenated pieces.
+inline std::string fmt(const spirula::i18n::Msg& m,
+                       std::initializer_list<spirula::i18n::Arg> a) {
+    return spirula::i18n::format(m, a);
+}
 
 namespace gui {
 
@@ -221,6 +232,72 @@ bool is_video_path(const std::string& path) {
 
 bool is_dual_fisheye_path(const std::string& path) {
     return lower_ext(path) == ".insv";
+}
+
+// ---------------------------------------------------------------------------
+// The ffmpeg fallback, on its own
+// ---------------------------------------------------------------------------
+
+bool ffmpeg_probe_video(const std::string& ffmpeg_exe, const std::string& path,
+                        VideoFacts& out, const std::atomic<bool>& cancel) {
+    out = VideoFacts{};
+    if (!command_exists(ffmpeg_exe)) return false;
+    // No output file, so ffmpeg prints the container and stream table and then
+    // exits non-zero saying it was given nothing to write -- which is why the
+    // return code is not the answer here, the two lines below are. ffprobe
+    // would be tidier and is not assumed to be installed: only the ffmpeg path
+    // is a setting (Tool locations), and a user who set one did not promise
+    // the other is beside it.
+    run_process({ffmpeg_exe, "-nostdin", "-hide_banner", "-i", path}, "",
+                [&](const std::string& line) {
+                    const size_t d = line.find("Duration:");
+                    if (d != std::string::npos) {
+                        int hh = 0, mm = 0;
+                        double ss = 0.0;
+                        if (std::sscanf(line.c_str() + d, "Duration: %d:%d:%lf",
+                                        &hh, &mm, &ss) == 3)
+                            out.duration = hh * 3600.0 + mm * 60.0 + ss;
+                    }
+                    // "... 1920x1080, 19938 kb/s, 30.01 fps, 30 tbr, ..."
+                    const size_t f = line.find(" fps");
+                    if (f == std::string::npos ||
+                        line.find("Video:") == std::string::npos)
+                        return;
+                    size_t b = f;
+                    while (b > 0 && (std::isdigit((unsigned char)line[b - 1]) ||
+                                     line[b - 1] == '.'))
+                        b--;
+                    if (b < f) {
+                        try {
+                            out.fps = std::stod(line.substr(b, f - b));
+                        } catch (...) {}
+                    }
+                },
+                cancel);
+    if (out.duration > 0.0 && out.fps > 0.0)
+        out.frames = (long long)(out.duration * out.fps);
+    return out.duration > 0.0;
+}
+
+bool ffmpeg_extract_frame(const std::string& ffmpeg_exe, const std::string& video,
+                          double seconds, const std::string& out_path,
+                          const std::atomic<bool>& cancel) {
+    if (!command_exists(ffmpeg_exe)) return false;
+    std::error_code ec;
+    fs::remove(out_path, ec);
+    char ts[32];
+    std::snprintf(ts, sizeof ts, "%.3f", seconds > 0.0 ? seconds : 0.0);
+    // -ss before -i: seek first, decode one frame, stop. The other order
+    // decodes the whole file up to that point, which on a ten-minute capture
+    // is the difference between a preview and a coffee break.
+    const int rc = run_process({ffmpeg_exe, "-nostdin", "-y", "-ss", ts, "-i",
+                                video, "-frames:v", "1", "-q:v", "2", out_path},
+                               "", [](const std::string&) {}, cancel);
+    if (rc != 0) {
+        fs::remove(out_path, ec);
+        return false;
+    }
+    return fs::exists(out_path, ec) && fs::file_size(out_path, ec) > 0;
 }
 
 namespace {
@@ -420,7 +497,7 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
             per[0].have_masks = true;
             out.mask_dir = out.mask_dir_cfg = per[0].masks;
             skip_dir = per[0].masks;
-            _log("Using the masks that came with the photos: " + out.mask_dir);
+            _log(fmt(lmsg::using_bundled_masks, {out.mask_dir}));
         }
     } else {
         out.image_dir = (ws / "images").string();
@@ -450,7 +527,7 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
     }
 
     out.n_images = count_images(out.image_dir, skip_dir);
-    _log("Found " + std::to_string(out.n_images) + " images in " + out.image_dir);
+    _log(fmt(lmsg::found_images, {(long long)out.n_images, out.image_dir}));
     if (out.n_images < 3) {
         error = "need at least 3 images (found " + std::to_string(out.n_images) +
                 ")";
@@ -500,16 +577,14 @@ bool DatasetPrep::extract_video(const PrepJob& job, const PrepInput& in,
     if (job.resume) {
         const int have = count_images(images);
         if (have > 0) {
-            _log("Resume: keeping " + std::to_string(have) +
-                 " extracted frames in " + images +
-                 " (delete the folder to re-extract)");
+            _log(fmt(lmsg::resume_keep_frames, {(long long)have, images}));
             std::error_code ec;
             if (fs::is_directory(fs::path(images) / "cam1", ec))
                 out.per_folder_cameras = true;
             if (job.mask_enable) {
                 std::error_code mec;
                 if (fs::is_directory(masks, mec) && !fs::is_empty(masks, mec)) {
-                    _log("Resume: keeping the masks in " + masks);
+                    _log(fmt(lmsg::resume_keep_masks, {masks}));
                     masked = true;
                 }
             }
@@ -524,8 +599,7 @@ bool DatasetPrep::extract_video(const PrepJob& job, const PrepInput& in,
         if (_cancel.load()) return false;
         // A container or profile the driver cannot decode is exactly what the
         // fallback is for, and the user should not have to know which is which.
-        _log("Built-in decoding could not handle this file (" + error +
-             "); falling back to ffmpeg");
+        _log(fmt(lmsg::decode_fallback_ffmpeg, {error}));
     }
     return extract_video_ffmpeg(job, in, images, out, error);
 }
@@ -539,8 +613,8 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
     error = backends().video_reason;
     return false;
 #else
-    _stage("Extracting frames (GPU decode)");
-    _log("Video: " + in.path);
+    _stage(lmsg::stage_extract_gpu.get());
+    _log(fmt(lmsg::video_input, {in.path}));
 
     // fps -> "one frame every N source frames". The source rate is what the
     // container states; a variable-rate file is close enough for this.
@@ -585,7 +659,7 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
         (!job.mask_prompt.empty() || clicks_here)) {
         // Masking rides along on the decode: the frame is already on the
         // device, so this is far cheaper than a second pass over the JPEGs.
-        _stage("Extracting frames and masking (GPU)");
+        _stage(lmsg::stage_extract_mask_gpu.get());
         fx.mask.model = job.mask_model_path;
         fx.mask.text = job.mask_prompt;
         fx.mask.neg_text = job.mask_negative_prompt;
@@ -630,7 +704,7 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
                 "with -DSS_ENABLE_PATENTED=ON for in-process decoding.";
         return false;
     }
-    _log("Video: " + in.path);
+    _log(fmt(lmsg::video_input, {in.path}));
 
     // Multi-track videos (Insta360 .insv): one folder per track, one camera
     // per folder, as in scripts/extract_frames.py.
@@ -654,11 +728,11 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
             ? fs::path(images) / ("cam" + std::to_string(tr))
             : fs::path(images);
         if (job.resume && count_images(out_dir.string()) > 0) {
-            _log("Resume: keeping the frames already in " + out_dir.string());
+            _log(fmt(lmsg::resume_keep_frames_dir, {out_dir.string()}));
             continue;
         }
         if (streams.size() > 1) {
-            _stage("Splitting video track " + std::to_string(tr));
+            _stage(fmt(lmsg::stage_split_track, {(long long)tr}));
             const fs::path tmp_track =
                 ws / ("track_cam" + std::to_string(tr) + ".mp4");
             int rc = exec({job.ffmpeg_exe, "-nostdin", "-y", "-i", in.path,
@@ -669,8 +743,8 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
             track_path = tmp_track.string();
         }
 
-        _stage(window > 1 ? "Extracting candidate frames (ffmpeg)"
-                          : "Extracting frames (ffmpeg)");
+        _stage(window > 1 ? lmsg::stage_extract_candidates.get()
+                          : lmsg::stage_extract_ffmpeg.get());
         const fs::path cand = ws / "frames_tmp";
         remove_tree(cand);
         std::error_code ec;
@@ -683,7 +757,7 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
         if (rc == kCancelled) { error = "cancelled"; return false; }
         if (rc != 0) { error = "ffmpeg frame extraction failed (see log)"; return false; }
 
-        if (window > 1) _stage("Selecting sharpest frames (multithreaded)");
+        if (window > 1) _stage(lmsg::stage_select_sharpest.get());
         fs::create_directories(out_dir, ec);
         const int kept = select_sharpest_frames(cand.string(), out_dir.string(), "",
                                                 window, job.max_frames, _log, _cancel);
@@ -693,7 +767,7 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
             error = _cancel.load() ? "cancelled" : "frame selection failed";
             return false;
         }
-        _log("Kept " + std::to_string(kept) + " frames -> " + out_dir.string());
+        _log(fmt(lmsg::kept_frames, {(long long)kept, out_dir.string()}));
     }
     return true;
 }
@@ -720,7 +794,7 @@ bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
         error = "not a folder: " + in.path;
         return false;
     }
-    _stage("Collecting photos");
+    _stage(lmsg::stage_collecting_photos.get());
 
     // The masks come across too, into the folder that mirrors the images -- a
     // mask is found by its image's relative name, so the two trees have to move
@@ -764,8 +838,8 @@ bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
             }
             progress.update(linked + copied + kept);
         }
-        _log("  " + std::to_string(linked) + " linked, " + std::to_string(copied) +
-             " copied, " + std::to_string(kept) + " already there");
+        _log(fmt(lmsg::linked_copied_kept,
+                 {(long long)linked, (long long)copied, (long long)kept}));
     }
     if (with_masks) have_masks = true;
     return true;
@@ -786,9 +860,7 @@ bool DatasetPrep::generate_masks(const PrepJob& job, const PrepInput& in,
     // and if there is none, nothing at all to mask by. Saying so beats writing
     // masks from a prompt the user never gave for these images.
     if (!clicks_apply_to(job, in) && job.mask_prompt.empty()) {
-        _log("Note: " + in.path + " is not the input the clicked objects were "
-             "drawn on and there is no text prompt, so its frames are left "
-             "unmasked. Add a prompt, or click the object on this input too.");
+        _log(fmt(lmsg::clicks_other_input_unmasked, {in.path}));
         return true;
     }
     const bool want_builtin = !job.force_external_masking &&
@@ -816,7 +888,7 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
     error = backends().masking_reason;
     return false;
 #else
-    _stage("Generating masks (segmentation)");
+    _stage(lmsg::stage_masks_builtin.get());
 
     std::error_code ec;
     // Never the masks themselves: a nested masks/ is only possible for photos
@@ -875,7 +947,7 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
 
         nn::Image img = nn::load_image(f.string());
         if (img.empty()) {
-            _log("warning: could not read " + f.string() + "; skipped");
+            _log(fmt(lmsg::warn_unreadable_skipped, {f.string()}));
             continue;
         }
         sam::Mask mask;
@@ -910,7 +982,7 @@ bool DatasetPrep::generate_masks_python(const PrepJob& job,
                                         const std::string& images_rel,
                                         const std::string& masks_rel,
                                         std::string& error) {
-    _stage("Generating masks (external Python)");
+    _stage(lmsg::stage_masks_python.get());
     if (!command_exists(job.python_exe)) {
         error = "Python not found ('" + job.python_exe +
                 "'); external masking needs Python with the "

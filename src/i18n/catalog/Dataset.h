@@ -2018,36 +2018,6 @@ SS_MSG(mask_what_to_remove,
     ES("Qué quitar"),    PT("O que remover"), IT("Che cosa rimuovere"),
     NL("Wat te verwijderen"), RU("Что убрать"), TR("Ne kaldırılacak"));
 
-SS_MSG(mask_hint_keep,
-    EN("the statue; its pedestal"),
-    JA("像; 台座"),
-    ZH_HANS("雕像；底座"),
-    ZH_HANT("雕像；底座"),
-    KO("조각상; 받침대"),
-    DE("die Statue; ihr Sockel"),
-    FR("la statue ; son socle"),
-    ES("la estatua; su pedestal"),
-    PT("a estátua; o pedestal"),
-    IT("la statua; il piedistallo"),
-    NL("het standbeeld; de sokkel"),
-    RU("статуя; постамент"),
-    TR("heykel; kaidesi"));
-
-SS_MSG(mask_hint_remove,
-    EN("people; cars; my shadow"),
-    JA("人; 車; 自分の影"),
-    ZH_HANS("行人；汽车；我的影子"),
-    ZH_HANT("行人；汽車；我的影子"),
-    KO("사람; 자동차; 내 그림자"),
-    DE("Personen; Autos; mein Schatten"),
-    FR("personnes ; voitures ; mon ombre"),
-    ES("personas; coches; mi sombra"),
-    PT("pessoas; carros; minha sombra"),
-    IT("persone; automobili; la mia ombra"),
-    NL("mensen; auto's; mijn schaduw"),
-    RU("люди; машины; моя тень"),
-    TR("insanlar; arabalar; gölgem"));
-
 SS_MSG(mask_prompt_help_keep,
     EN("Plain words, separated by semicolons. Everything NOT matching them is "
        "cut out of the reconstruction."),
@@ -2112,36 +2082,6 @@ SS_MSG(mask_but_keep,
     ES("… pero conservar"), PT("… mas manter"), IT("… ma tenere"),
     NL("… maar houden"), RU("…но оставить"), TR("…ama tut"));
 
-SS_MSG(mask_hint_but_remove,
-    EN("the hand holding it"),
-    JA("それを持っている手"),
-    ZH_HANS("拿着它的手"),
-    ZH_HANT("拿著它的手"),
-    KO("그것을 든 손"),
-    DE("die Hand, die es hält"),
-    FR("la main qui le tient"),
-    ES("la mano que lo sostiene"),
-    PT("a mão que o segura"),
-    IT("la mano che lo tiene"),
-    NL("de hand die het vasthoudt"),
-    RU("рука, которая его держит"),
-    TR("onu tutan el"));
-
-SS_MSG(mask_hint_but_keep,
-    EN("person in a painting"),
-    JA("絵の中の人物"),
-    ZH_HANS("画里的人"),
-    ZH_HANT("畫裡的人"),
-    KO("그림 속 인물"),
-    DE("Person auf einem Gemälde"),
-    FR("personnage dans un tableau"),
-    ES("persona en un cuadro"),
-    PT("pessoa num quadro"),
-    IT("persona in un dipinto"),
-    NL("persoon op een schilderij"),
-    RU("человек на картине"),
-    TR("bir tablodaki insan"));
-
 SS_MSG(mask_negative_help_keep,
     EN("Exceptions that go even though they match the line above. Optional."),
     JA("上の行に当てはまっても取り除きたい例外です。省略できます。"),
@@ -2184,6 +2124,445 @@ SS_MSG(mask_negative_help_remove,
     RU("Исключения, которые остаются, хотя и подходят под строку выше. "
        "Необязательно."),
     TR("Yukarıdaki satıra uysa bile kalacak istisnalar. İsteğe bağlı."));
+
+SS_MSG(use_found_masks,
+    EN("Use the masks found next to the photos"),
+    JA("写真のとなりで見つかったマスクを使う"),
+    ZH_HANS("使用照片旁边找到的蒙版"),
+    ZH_HANT("使用照片旁邊找到的遮罩"),
+    KO("사진 옆에서 찾은 마스크 사용"),
+    DE("Neben den Fotos gefundene Masken verwenden"),
+    FR("Utiliser les masques trouvés à côté des photos"),
+    ES("Usar las máscaras encontradas junto a las fotos"),
+    PT("Usar as máscaras encontradas ao lado das fotos"),
+    IT("Usare le maschere trovate accanto alle foto"),
+    NL("De maskers gebruiken die naast de foto's staan"),
+    RU("Использовать маски, найденные рядом с фотографиями"),
+    TR("Fotoğrafların yanında bulunan maskeleri kullan"));
+
+SS_MSG(use_found_masks_help,
+    EN("A `masks` folder beside or under the photos is picked up on its own, "
+       "because that is where a prepared capture keeps them. Turn this off "
+       "for a dataset whose `masks` folder belongs to something else -- a "
+       "different set of views, or an experiment you are not reproducing."),
+    JA("写真のとなりや下にある `masks` フォルダーは自動で拾います。用意済みの"
+       "データセットはそこに置くからです。その `masks` が別のもの――別の視点の"
+       "集まりや、いま再現しようとしていない実験――に属している場合は、"
+       "これを外してください。"),
+    ZH_HANS("照片旁边或下面的 `masks` 文件夹会被自动采用，因为准备好的数据集"
+            "就放在那里。如果那个 `masks` 属于别的东西——另一组视角，或者你"
+            "并不打算复现的实验——请关掉这一项。"),
+    ZH_HANT("照片旁邊或下面的 `masks` 資料夾會被自動採用，因為準備好的資料集"
+            "就放在那裡。如果那個 `masks` 屬於別的東西——另一組視角，或者你"
+            "並不打算重現的實驗——請關掉這一項。"),
+    KO("사진 옆이나 아래의 `masks` 폴더는 자동으로 사용됩니다. 준비된 촬영본이 "
+       "마스크를 두는 자리이기 때문입니다. 그 `masks`가 다른 것에 속한다면"
+       "(다른 시점 묶음이거나, 지금 재현하려는 것이 아닌 실험이라면) 이 "
+       "항목을 끄세요."),
+    DE("Ein `masks`-Ordner neben oder unter den Fotos wird von selbst "
+       "übernommen -- dort legt eine vorbereitete Aufnahme sie ab. Schalten "
+       "Sie das aus, wenn dieser Ordner zu etwas anderem gehört: zu einem "
+       "anderen Satz Ansichten oder zu einem Versuch, den Sie nicht "
+       "nachstellen."),
+    FR("Un dossier `masks` à côté ou sous les photos est repris tout seul, "
+       "car c'est là qu'une prise de vue préparée les garde. Décochez pour un "
+       "jeu de données dont le dossier `masks` appartient à autre chose : un "
+       "autre ensemble de vues, ou une expérience que vous ne reproduisez "
+       "pas."),
+    ES("Una carpeta `masks` junto a las fotos o debajo de ellas se toma sola, "
+       "porque ahí es donde las guarda una captura preparada. Desactívelo si "
+       "esa carpeta pertenece a otra cosa: a otro conjunto de vistas, o a un "
+       "experimento que no está reproduciendo."),
+    PT("Uma pasta `masks` ao lado das fotos ou abaixo delas é adotada "
+       "sozinha, porque é ali que uma captura preparada as guarda. Desligue "
+       "isto se essa pasta pertencer a outra coisa: a outro conjunto de "
+       "vistas, ou a um experimento que você não está reproduzindo."),
+    IT("Una cartella `masks` accanto alle foto o sotto di esse viene presa da "
+       "sola, perché è lì che una ripresa preparata le tiene. Lo disattivi se "
+       "quella cartella appartiene ad altro: a un altro insieme di viste, o a "
+       "un esperimento che non sta riproducendo."),
+    NL("Een map `masks` naast of onder de foto's wordt vanzelf overgenomen -- "
+       "daar bewaart een voorbereide opname ze. Zet dit uit voor een dataset "
+       "waarvan die map bij iets anders hoort: een andere reeks aanzichten, "
+       "of een proef die u niet nabootst."),
+    RU("Папка `masks` рядом с фотографиями или под ними подхватывается сама — "
+       "именно там подготовленная съёмка их держит. Снимите галочку, если эта "
+       "папка относится к чему-то другому: к другому набору видов или к "
+       "опыту, который вы не повторяете."),
+    TR("Fotoğrafların yanındaki ya da altındaki bir `masks` klasörü kendinden "
+       "alınır; hazırlanmış bir çekim maskeleri orada tutar. O klasör başka "
+       "bir şeye aitse -- başka bir görünüm kümesine ya da yeniden "
+       "üretmediğiniz bir denemeye -- bunu kapatın."));
+
+// ---------------------------------------------------------------------------
+// Lens models offered by the built-in reconstruction (SfmRunner.h).
+//
+// The model NAMES -- OpenCV, Kannala-Brandt, thin prism -- are the names of
+// the distortion models themselves and stay put; what is translated is the
+// parenthetical that says which one to pick.
+// ---------------------------------------------------------------------------
+
+SS_MSG(lens_opencv,
+    EN("OpenCV (most cameras)"),
+    JA("OpenCV（ほとんどのカメラ）"),
+    ZH_HANS("OpenCV（多数相机）"),
+    ZH_HANT("OpenCV（多數相機）"),
+    KO("OpenCV(대부분의 카메라)"),
+    DE("OpenCV (die meisten Kameras)"),
+    FR("OpenCV (la plupart des appareils)"),
+    ES("OpenCV (la mayoría de cámaras)"),
+    PT("OpenCV (a maioria das câmeras)"),
+    IT("OpenCV (quasi tutte le fotocamere)"),
+    NL("OpenCV (de meeste camera's)"),
+    RU("OpenCV (большинство камер)"),
+    TR("OpenCV (çoğu kamera)"));
+
+SS_MSG(lens_pinhole,
+    EN("Pinhole (no distortion)"),
+    JA("ピンホール（歪みなし）"),
+    ZH_HANS("针孔（无畸变）"),
+    ZH_HANT("針孔（無變形）"),
+    KO("핀홀(왜곡 없음)"),
+    DE("Lochkamera (ohne Verzeichnung)"),
+    FR("Sténopé (sans distorsion)"),
+    ES("Estenopeica (sin distorsión)"),
+    PT("Estenopeica (sem distorção)"),
+    IT("Stenopeica (senza distorsione)"),
+    NL("Gaatjescamera (zonder vervorming)"),
+    RU("Точечная камера (без дисторсии)"),
+    TR("İğne deliği (bozulmasız)"));
+
+SS_MSG(lens_simple_pinhole,
+    EN("Simple pinhole"),
+    JA("簡易ピンホール"),
+    ZH_HANS("简化针孔"),
+    ZH_HANT("簡化針孔"),
+    KO("간단 핀홀"),
+    DE("Einfache Lochkamera"),
+    FR("Sténopé simple"),
+    ES("Estenopeica simple"),
+    PT("Estenopeica simples"),
+    IT("Stenopeica semplice"),
+    NL("Eenvoudige gaatjescamera"),
+    RU("Простая точечная камера"),
+    TR("Basit iğne deliği"));
+
+SS_MSG(lens_radial,
+    EN("Radial"),
+    JA("放射方向のみ"),
+    ZH_HANS("仅径向畸变"),
+    ZH_HANT("僅徑向變形"),
+    KO("방사 왜곡만"),
+    DE("Radial"),
+    FR("Radiale"),
+    ES("Radial"),
+    PT("Radial"),
+    IT("Radiale"),
+    NL("Radiaal"),
+    RU("Радиальная"),
+    TR("Işınsal"));
+
+SS_MSG(lens_full_opencv,
+    EN("Full OpenCV"),
+    JA("OpenCV（全パラメータ）"),
+    ZH_HANS("OpenCV（完整参数）"),
+    ZH_HANT("OpenCV（完整參數）"),
+    KO("OpenCV(전체 계수)"),
+    DE("OpenCV (vollständig)"),
+    FR("OpenCV complet"),
+    ES("OpenCV completo"),
+    PT("OpenCV completo"),
+    IT("OpenCV completo"),
+    NL("Volledige OpenCV"),
+    RU("OpenCV (полная модель)"),
+    TR("Tam OpenCV"));
+
+SS_MSG(lens_fisheye_kb,
+    EN("Fisheye (Kannala-Brandt)"),
+    JA("魚眼（Kannala-Brandt）"),
+    ZH_HANS("鱼眼（Kannala-Brandt）"),
+    ZH_HANT("魚眼（Kannala-Brandt）"),
+    KO("어안(Kannala-Brandt)"),
+    DE("Fisheye (Kannala-Brandt)"),
+    FR("Fisheye (Kannala-Brandt)"),
+    ES("Ojo de pez (Kannala-Brandt)"),
+    PT("Olho de peixe (Kannala-Brandt)"),
+    IT("Fisheye (Kannala-Brandt)"),
+    NL("Fisheye (Kannala-Brandt)"),
+    RU("Фишай (Каннала — Брандт)"),
+    TR("Balıkgözü (Kannala-Brandt)"));
+
+SS_MSG(lens_fisheye_thin_prism,
+    EN("Fisheye (thin prism)"),
+    JA("魚眼（薄プリズム）"),
+    ZH_HANS("鱼眼（薄棱镜）"),
+    ZH_HANT("魚眼（薄稜鏡）"),
+    KO("어안(얇은 프리즘)"),
+    DE("Fisheye (dünnes Prisma)"),
+    FR("Fisheye (prisme mince)"),
+    ES("Ojo de pez (prisma delgado)"),
+    PT("Olho de peixe (prisma fino)"),
+    IT("Fisheye (prisma sottile)"),
+    NL("Fisheye (dun prisma)"),
+    RU("Фишай (тонкая призма)"),
+    TR("Balıkgözü (ince prizma)"));
+
+SS_MSG(lens_equirectangular,
+    EN("Equirectangular (360\xc2\xb0 panorama)"),
+    JA("正距円筒（360度パノラマ）"),
+    ZH_HANS("等距柱状（360 度全景）"),
+    ZH_HANT("等距柱狀（360 度全景）"),
+    KO("정거원통(360도 파노라마)"),
+    DE("Äquirektangulär (360\xc2\xb0-Panorama)"),
+    FR("Équirectangulaire (panorama 360\xc2\xb0)"),
+    ES("Equirrectangular (panorama 360\xc2\xb0)"),
+    PT("Equirretangular (panorama 360\xc2\xb0)"),
+    IT("Equirettangolare (panorama 360\xc2\xb0)"),
+    NL("Equirectangulair (360\xc2\xb0-panorama)"),
+    RU("Эквиректангулярная (панорама 360\xc2\xb0)"),
+    TR("Eş dikdörtgen (360\xc2\xb0 panorama)"));
+
+// ---------------------------------------------------------------------------
+// The common-subject palette (src/app/gui/MaskPrompt.h)
+//
+// The chip LABELS below are translated; the words they put in the box are
+// not, and must not be. SAM 3's text encoder is trained on English, and a
+// prompt in anything else finds noticeably less of what it names -- so the
+// box stays English however the interface is set, and this palette is how a
+// user who does not write English still gets a good prompt.
+//
+// These are label translations, not dictionary entries: each one should be
+// what a speaker would call the thing IN A PHOTOGRAPH, not the closest
+// dictionary word to the English.
+// ---------------------------------------------------------------------------
+
+SS_MSG(mask_english_only,
+    EN("The model reads English only, so this box stays English whatever the "
+       "interface language is. Pick from the list below, or type English "
+       "words."),
+    JA("モデルは英語しか読み取れないため、この欄は表示言語に関わらず英語のまま"
+       "です。下の一覧から選ぶか、英語で入力してください。"),
+    ZH_HANS("模型只能读英文，所以无论界面用哪种语言，这个输入框都保持英文。"
+            "可以从下面的列表里选，或者直接输入英文词。"),
+    ZH_HANT("模型只能讀英文，所以無論介面用哪種語言，這個輸入框都維持英文。"
+            "可以從下面的清單挑選，或直接輸入英文詞。"),
+    KO("모델은 영어만 읽으므로 인터페이스 언어와 관계없이 이 칸은 영어로 "
+       "유지됩니다. 아래 목록에서 고르거나 영어 낱말을 입력하세요."),
+    DE("Das Modell liest nur Englisch, deshalb bleibt dieses Feld englisch, "
+       "unabhängig von der Sprache der Oberfläche. Wählen Sie aus der Liste "
+       "unten, oder tippen Sie englische Wörter."),
+    FR("Le modèle ne lit que l'anglais : ce champ reste donc en anglais quelle "
+       "que soit la langue de l'interface. Choisissez dans la liste ci-dessous, "
+       "ou tapez des mots anglais."),
+    ES("El modelo solo lee inglés, así que este campo sigue en inglés sea cual "
+       "sea el idioma de la interfaz. Elija de la lista de abajo, o escriba "
+       "palabras en inglés."),
+    PT("O modelo só lê inglês, por isso este campo continua em inglês seja qual "
+       "for o idioma da interface. Escolha na lista abaixo, ou digite palavras "
+       "em inglês."),
+    IT("Il modello legge solo l'inglese, quindi questo campo resta in inglese "
+       "qualunque sia la lingua dell'interfaccia. Scelga dall'elenco qui sotto, "
+       "oppure scriva parole inglesi."),
+    NL("Het model leest alleen Engels, dus dit veld blijft Engels ongeacht de "
+       "taal van de interface. Kies uit de lijst hieronder, of typ Engelse "
+       "woorden."),
+    RU("Модель читает только по-английски, поэтому это поле остаётся "
+       "английским при любом языке интерфейса. Выберите из списка ниже или "
+       "введите английские слова."),
+    TR("Model yalnızca İngilizce okur, bu yüzden arayüz dili ne olursa olsun "
+       "bu kutu İngilizce kalır. Aşağıdaki listeden seçin veya İngilizce "
+       "sözcük yazın."));
+
+SS_MSG(mask_subjects,
+    EN("Common subjects"),
+    JA("よく使う対象"),
+    ZH_HANS("常见对象"),
+    ZH_HANT("常見對象"),
+    KO("자주 쓰는 대상"),
+    DE("Häufige Motive"),
+    FR("Sujets courants"),
+    ES("Sujetos habituales"),
+    PT("Assuntos comuns"),
+    IT("Soggetti comuni"),
+    NL("Veelgebruikte onderwerpen"),
+    RU("Частые объекты"),
+    TR("Sık kullanılan konular"));
+
+SS_MSG(mask_subjects_help,
+    EN("Click to put the English word in the box above; click again to take it "
+       "out. A highlighted chip is already in the box."),
+    JA("押すと上の欄に英語の語が入り、もう一度押すと外れます。色が付いている"
+       "ものは既に入っています。"),
+    ZH_HANS("点一下把这个英文词放进上面的框，再点一下取出。高亮的表示已经在框里。"),
+    ZH_HANT("按一下把這個英文詞放進上面的框，再按一下取出。標亮的表示已經在框裡。"),
+    KO("누르면 위 칸에 영어 낱말이 들어가고, 다시 누르면 빠집니다. 강조된 것은 "
+       "이미 들어 있는 것입니다."),
+    DE("Klicken setzt das englische Wort in das Feld oben, nochmals klicken "
+       "nimmt es wieder heraus. Hervorgehobene stehen bereits darin."),
+    FR("Cliquez pour mettre le mot anglais dans le champ ci-dessus ; cliquez à "
+       "nouveau pour l'enlever. Les éléments en surbrillance y sont déjà."),
+    ES("Pulse para poner la palabra inglesa en el campo de arriba; púlsela otra "
+       "vez para quitarla. Las resaltadas ya están dentro."),
+    PT("Clique para pôr a palavra em inglês no campo acima; clique de novo para "
+       "tirá-la. As destacadas já estão lá."),
+    IT("Clicchi per mettere la parola inglese nel campo qui sopra; clicchi di "
+       "nuovo per toglierla. Quelle evidenziate ci sono già."),
+    NL("Klik om het Engelse woord in het veld hierboven te zetten; klik "
+       "nogmaals om het eruit te halen. Gemarkeerde staan er al in."),
+    RU("Нажмите, чтобы поставить английское слово в поле выше; нажмите ещё "
+       "раз, чтобы убрать. Выделенные уже стоят в поле."),
+    TR("Tıklayınca İngilizce sözcük yukarıdaki kutuya girer, yeniden "
+       "tıklayınca çıkar. Vurgulu olanlar zaten kutudadır."));
+
+SS_MSG(subj_person,
+    EN("Person"),       JA("人物"),        ZH_HANS("人"),      ZH_HANT("人"),
+    KO("사람"),          DE("Person"),     FR("Personne"),    ES("Persona"),
+    PT("Pessoa"),       IT("Persona"),    NL("Persoon"),     RU("Человек"),
+    TR("İnsan"));
+
+SS_MSG(subj_hand,
+    EN("Hand"),         JA("手"),          ZH_HANS("手"),      ZH_HANT("手"),
+    KO("손"),            DE("Hand"),       FR("Main"),        ES("Mano"),
+    PT("Mão"),          IT("Mano"),       NL("Hand"),        RU("Рука"),
+    TR("El"));
+
+SS_MSG(subj_dog,
+    EN("Dog"),          JA("犬"),          ZH_HANS("狗"),      ZH_HANT("狗"),
+    KO("개"),            DE("Hund"),       FR("Chien"),       ES("Perro"),
+    PT("Cachorro"),     IT("Cane"),       NL("Hond"),        RU("Собака"),
+    TR("Köpek"));
+
+SS_MSG(subj_animal,
+    EN("Animal"),       JA("動物"),        ZH_HANS("动物"),     ZH_HANT("動物"),
+    KO("동물"),          DE("Tier"),       FR("Animal"),      ES("Animal"),
+    PT("Animal"),       IT("Animale"),    NL("Dier"),        RU("Животное"),
+    TR("Hayvan"));
+
+SS_MSG(subj_car,
+    EN("Car"),          JA("車"),          ZH_HANS("汽车"),     ZH_HANT("汽車"),
+    KO("자동차"),        DE("Auto"),       FR("Voiture"),     ES("Coche"),
+    PT("Carro"),        IT("Automobile"), NL("Auto"),        RU("Машина"),
+    TR("Araba"));
+
+SS_MSG(subj_bicycle,
+    EN("Bicycle"),      JA("自転車"),      ZH_HANS("自行车"),   ZH_HANT("腳踏車"),
+    KO("자전거"),        DE("Fahrrad"),    FR("Vélo"),        ES("Bicicleta"),
+    PT("Bicicleta"),    IT("Bicicletta"), NL("Fiets"),       RU("Велосипед"),
+    TR("Bisiklet"));
+
+SS_MSG(subj_vehicle,
+    EN("Vehicle"),      JA("乗り物"),      ZH_HANS("车辆"),     ZH_HANT("車輛"),
+    KO("차량"),          DE("Fahrzeug"),   FR("Véhicule"),    ES("Vehículo"),
+    PT("Veículo"),      IT("Veicolo"),    NL("Voertuig"),    RU("Транспорт"),
+    TR("Araç"));
+
+SS_MSG(subj_sky,
+    EN("Sky"),          JA("空"),          ZH_HANS("天空"),     ZH_HANT("天空"),
+    KO("하늘"),          DE("Himmel"),     FR("Ciel"),        ES("Cielo"),
+    PT("Céu"),          IT("Cielo"),      NL("Lucht"),       RU("Небо"),
+    TR("Gökyüzü"));
+
+SS_MSG(subj_shadow,
+    EN("Shadow"),       JA("影"),          ZH_HANS("影子"),     ZH_HANT("影子"),
+    KO("그림자"),        DE("Schatten"),   FR("Ombre"),       ES("Sombra"),
+    PT("Sombra"),       IT("Ombra"),      NL("Schaduw"),     RU("Тень"),
+    TR("Gölge"));
+
+SS_MSG(subj_water,
+    EN("Water"),        JA("水面"),        ZH_HANS("水面"),     ZH_HANT("水面"),
+    KO("물"),            DE("Wasser"),     FR("Eau"),         ES("Agua"),
+    PT("Água"),         IT("Acqua"),      NL("Water"),       RU("Вода"),
+    TR("Su"));
+
+SS_MSG(subj_reflection,
+    EN("Reflection"),   JA("映り込み"),    ZH_HANS("倒影"),     ZH_HANT("倒影"),
+    KO("반사"),          DE("Spiegelung"), FR("Reflet"),      ES("Reflejo"),
+    PT("Reflexo"),      IT("Riflesso"),   NL("Weerspiegeling"), RU("Отражение"),
+    TR("Yansıma"));
+
+SS_MSG(subj_tripod,
+    EN("Tripod"),       JA("三脚"),        ZH_HANS("三脚架"),   ZH_HANT("三腳架"),
+    KO("삼각대"),        DE("Stativ"),     FR("Trépied"),     ES("Trípode"),
+    PT("Tripé"),        IT("Treppiede"),  NL("Statief"),     RU("Штатив"),
+    TR("Tripod"));
+
+// The black area outside the image circle of a 360 / fisheye camera. Worth a
+// chip of its own: it is the one thing on this list that is not part of the
+// scene at all, and every Insta360 or fisheye capture has it.
+SS_MSG(subj_fisheye_border,
+    EN("Fisheye border"),
+    JA("魚眼の黒枠"),
+    ZH_HANS("鱼眼黑边"),
+    ZH_HANT("魚眼黑邊"),
+    KO("어안 검은 테두리"),
+    DE("Fisheye-Rand"),
+    FR("Bord du fisheye"),
+    ES("Borde de ojo de pez"),
+    PT("Borda olho-de-peixe"),
+    IT("Bordo fisheye"),
+    NL("Fisheye-rand"),
+    RU("Чёрный край фишая"),
+    TR("Balıkgözü kenarı"));
+
+SS_MSG(subj_watermark,
+    EN("Watermark or timestamp"),
+    JA("透かし・日時表示"),
+    ZH_HANS("水印或时间戳"),
+    ZH_HANT("浮水印或時間戳"),
+    KO("워터마크나 날짜 표시"),
+    DE("Wasserzeichen oder Zeitstempel"),
+    FR("Filigrane ou horodatage"),
+    ES("Marca de agua o fecha"),
+    PT("Marca d'água ou data"),
+    IT("Filigrana o data"),
+    NL("Watermerk of tijdstempel"),
+    RU("Водяной знак или дата"),
+    TR("Filigran veya zaman damgası"));
+
+SS_MSG(subj_person_painting,
+    EN("Person in a painting"),
+    JA("絵の中の人物"),
+    ZH_HANS("画里的人"),
+    ZH_HANT("畫裡的人"),
+    KO("그림 속 인물"),
+    DE("Person auf einem Gemälde"),
+    FR("Personnage dans un tableau"),
+    ES("Persona en un cuadro"),
+    PT("Pessoa num quadro"),
+    IT("Persona in un dipinto"),
+    NL("Persoon op een schilderij"),
+    RU("Человек на картине"),
+    TR("Tablodaki insan"));
+
+SS_MSG(subj_statue,
+    EN("Statue of a person"),
+    JA("人物の彫像"),
+    ZH_HANS("人像雕塑"),
+    ZH_HANT("人像雕塑"),
+    KO("인물 조각상"),
+    DE("Statue eines Menschen"),
+    FR("Statue de personne"),
+    ES("Estatua de una persona"),
+    PT("Estátua de pessoa"),
+    IT("Statua di persona"),
+    NL("Standbeeld van een persoon"),
+    RU("Статуя человека"),
+    TR("İnsan heykeli"));
+
+SS_MSG(subj_mannequin,
+    EN("Mannequin"),
+    JA("マネキン"),
+    ZH_HANS("人体模特"),
+    ZH_HANT("人體模特"),
+    KO("마네킹"),
+    DE("Schaufensterpuppe"),
+    FR("Mannequin"),
+    ES("Maniquí"),
+    PT("Manequim"),
+    IT("Manichino"),
+    NL("Etalagepop"),
+    RU("Манекен"),
+    TR("Manken"));
 
 // ===========================================================================
 // Mask preview window
@@ -2659,6 +3038,62 @@ SS_MSG(preview_try_it,
     KO("해 보기"),        DE("Ausprobieren"), FR("Essayer"),      ES("Probar"),
     PT("Testar"),        IT("Prova"),        NL("Uitproberen"),  RU("Проверить"),
     TR("Dene"));
+
+// Shown in the preview when this machine has no in-process video decoding, so
+// the frame has to come from ffmpeg, and ffmpeg is not there either.
+// {0} the command that was looked for.
+SS_MSG(preview_needs_ffmpeg,
+    EN("This video can only be read here with ffmpeg, which was not found "
+       "('{0}'). Install it, or set its path under Tool locations."),
+    JA("この動画をここで読むには ffmpeg が必要ですが、見つかりませんでした"
+       "（{0}）。ffmpeg を入れるか、「外部ツールの場所」でパスを指定して"
+       "ください。"),
+    ZH_HANS("这里只能用 ffmpeg 读取该视频，但没有找到它（{0}）。"
+            "请安装 ffmpeg，或在“工具位置”中指定它的路径。"),
+    ZH_HANT("這裡只能用 ffmpeg 讀取該影片，但沒有找到它（{0}）。"
+            "請安裝 ffmpeg，或在「工具位置」中指定它的路徑。"),
+    KO("이 동영상은 여기서 ffmpeg으로만 읽을 수 있는데 ffmpeg을 찾지 "
+       "못했습니다({0}). ffmpeg을 설치하거나 '도구 위치'에서 경로를 "
+       "지정하세요."),
+    DE("Dieses Video lässt sich hier nur mit ffmpeg lesen, und ffmpeg wurde "
+       "nicht gefunden ('{0}'). Installieren Sie es, oder tragen Sie seinen "
+       "Pfad unter \"Speicherorte der Werkzeuge\" ein."),
+    FR("Cette vidéo ne peut être lue ici qu'avec ffmpeg, qui est introuvable "
+       "(« {0} »). Installez-le, ou indiquez son chemin sous « Emplacement des "
+       "outils »."),
+    ES("Aquí este vídeo solo se puede leer con ffmpeg, que no se ha encontrado "
+       "(«{0}»). Instálelo, o indique su ruta en «Ubicación de las "
+       "herramientas»."),
+    PT("Aqui este vídeo só pode ser lido com o ffmpeg, que não foi encontrado "
+       "(\"{0}\"). Instale-o, ou informe o caminho dele em \"Local das "
+       "ferramentas\"."),
+    IT("Qui questo video si può leggere solo con ffmpeg, che non è stato "
+       "trovato (\"{0}\"). Lo installi, oppure indichi il suo percorso in "
+       "\"Percorsi degli strumenti\"."),
+    NL("Deze video kan hier alleen met ffmpeg worden gelezen, en ffmpeg is "
+       "niet gevonden ('{0}'). Installeer het, of geef het pad op onder "
+       "\"Locatie van hulpprogramma's\"."),
+    RU("Здесь это видео читается только через ffmpeg, а он не найден "
+       "(«{0}»). Установите его или укажите путь в разделе «Расположение "
+       "инструментов»."),
+    TR("Bu video burada yalnızca ffmpeg ile okunabilir, ffmpeg ise bulunamadı "
+       "('{0}'). Kurun ya da yolunu \"Araç konumları\" altında belirtin."));
+
+// Neither the built-in decoder nor ffmpeg produced a picture.
+SS_MSG(preview_frame_unreadable,
+    EN("No frame could be read from this video."),
+    JA("この動画からフレームを読み取れませんでした。"),
+    ZH_HANS("无法从这个视频中读取任何一帧。"),
+    ZH_HANT("無法從這個影片中讀取任何一格。"),
+    KO("이 동영상에서 프레임을 읽지 못했습니다."),
+    DE("Aus diesem Video ließ sich kein Bild lesen."),
+    FR("Aucune image n'a pu être lue dans cette vidéo."),
+    ES("No se ha podido leer ningún fotograma de este vídeo."),
+    PT("Não foi possível ler nenhum quadro deste vídeo."),
+    IT("Non è stato possibile leggere alcun fotogramma da questo video."),
+    NL("Er kon geen beeld uit deze video worden gelezen."),
+    RU("Из этого видео не удалось прочитать ни одного кадра."),
+    TR("Bu videodan hiçbir kare okunamadı."));
 
 SS_MSG(preview_kept_fraction,
     EN("{0}% of the frame is kept"),

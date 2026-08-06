@@ -19,6 +19,12 @@ bash tools/check_ss_prefix.sh >/dev/null || exit 1
 # message. Prints the remaining SS_MSG_EN count, which is the Phase 4 TODO.
 bash tools/check_i18n.sh || exit 1
 
+# The embedded fonts are subset to the characters the catalogs use, so editing
+# a translation can outgrow them. Cheap: no network, no fontTools.
+if command -v python3 >/dev/null 2>&1; then
+    python3 tools/check_font_coverage.py || exit 1
+fi
+
 cmake -G Ninja -B build "$@" || exit $?
 
 echo ""

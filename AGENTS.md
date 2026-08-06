@@ -39,8 +39,9 @@ build_develop.bash/.bat     the dev build entry points — USE THESE
 AGENTS.md  CLAUDE.md        this file (CLAUDE.md is a pointer to it)
 docs/                       architecture, build, backends, codegen, testing, notes
 src/                        ALL native code (see below)
-assets/fonts/               the embedded UI font + the CJK face table
-                              (assets/fonts/README.md)
+assets/fonts/               the five embedded UI faces + the full-CJK face
+                              table (assets/fonts/README.md). The CJK subsets
+                              are GENERATED from the catalogs -- see below
 tools/codegen/              the four codegen tools (see "Codegen" below)
 tests/native/               standalone native benchmarks
 scripts/                    dataset preprocessing CLI tools (Python, standalone;
@@ -294,6 +295,13 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   retrofit and are already followed everywhere: never build a sentence from
   fragments — use `{0}` placeholders and `i18n::format()` — and never write a
   plural-sensitive sentence ("Objects: 3", not "3 objects").
+- **A mask prompt is English, not interface copy.** SAM 3's text encoder reads
+  English, so the field, its placeholder and the palette's inserted words stay
+  English in every language; `ui::InputTextEnglish()` is the wrapper that says
+  so, and `src/app/gui/MaskPrompt.h` is how a non-English speaker still writes
+  a good prompt. The same reasoning keeps child-process output (COLMAP,
+  ffmpeg, `spirula sfm`) untranslated — our stage names around it are
+  `i18n/catalog/Log.h`, its own lines are not ours to rewrite.
 
 ## Gotchas worth knowing before you hit them
 
@@ -323,6 +331,15 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   called from `GuiMain.cpp` between frames, before `NewFrame()`, and uses
   `ImFontAtlas::ClearFonts()` (which keeps the texture) rather than `Clear()`
   (which does not, and is documented as not callable there).
+- **The embedded CJK fonts are subset to the characters the catalogs use.**
+  Write a translation containing a character no translation used before and
+  they are stale, and the symptom is one hollow box mid-sentence.
+  `tools/check_font_coverage.py` runs on every `build_develop.bash` and fails
+  with the codepoint; `python3 tools/make_ui_font.py` regenerates all five
+  faces. All four regional subsets are merged into the atlas with the current
+  language's region FIRST -- first source wins per codepoint, which is what
+  gives each language its own Han forms while the others still supply hangul
+  and the simplified-only characters no single face has.
 - **Big per-call scratch is a scaling bug, not just an allocation.** Anything
   over glibc's mmap threshold is faulted in and zeroed by the kernel on every
   call, and `mmap_lock` is per *process* — so several worker threads each

@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Fail if a translation uses a character no committed font can draw.
+
+The fonts in assets/fonts/ are subset to the characters the catalogs used at
+the time they were generated (tools/make_ui_font.py). Edit a translation --
+add a word, fix a typo, write a full-width comma -- and the subset is stale.
+The symptom is one hollow box in the middle of an otherwise fine sentence,
+which nobody notices until a user who reads that language does.
+
+So this runs on every build. It has to be cheap and dependency-free to be
+allowed there, which is why it parses `cmap` by hand instead of importing
+fontTools, and why it checks coverage rather than rebuilding: rebuilding means
+downloading 23 MB of upstream fonts.
+
+    python3 tools/check_font_coverage.py
+
+The fix, when it fails, is `python3 tools/make_ui_font.py` (needs fonttools
+and a network) and committing the four regenerated .otf files.
+"""
+
+import pathlib
+import struct
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from make_ui_font import FONT_DIR, ROOT, scan_all   # noqa: E402
+
+
+def _cmap_codepoints(blob: bytes) -> set:
+    """Every codepoint an sfnt file maps, from its `cmap` table.
+
+    Formats 4 and 12 only -- between them they cover every subtable fontTools
+    emits for a Unicode font.
+    """
+    if blob[:4] not in (b"\x00\x01\x00\x00", b"OTTO", b"true"):
+        raise SystemExit("not an sfnt font file")
+    (num_tables,) = struct.unpack(">H", blob[4:6])
+    cmap_off = 0
+    for i in range(num_tables):
+        tag, _, off, _ = struct.unpack(">4sIII", blob[12 + 16 * i:28 + 16 * i])
+        if tag == b"cmap":
+            cmap_off = off
+    if not cmap_off:
+        raise SystemExit("font has no cmap table")
+
+    (_, n_sub) = struct.unpack(">HH", blob[cmap_off:cmap_off + 4])
+    best = {}
+    for i in range(n_sub):
+        plat, enc, off = struct.unpack(
+            ">HHI", blob[cmap_off + 4 + 8 * i:cmap_off + 12 + 8 * i])
+        # (3,10) and (3,1) are the Windows Unicode subtables; (0,*) is the
+        # platform-independent one. Any of them is authoritative for us.
+        if (plat, enc) in ((3, 10), (3, 1)) or plat == 0:
+            best[(plat, enc)] = cmap_off + off
+
+    codes = set()
+    for off in best.values():
+        (fmt,) = struct.unpack(">H", blob[off:off + 2])
+        if fmt == 4:
+            (seg_x2,) = struct.unpack(">H", blob[off + 6:off + 8])
+            n = seg_x2 // 2
+            ends = struct.unpack(">%dH" % n, blob[off + 14:off + 14 + seg_x2])
+            starts_at = off + 16 + seg_x2
+            starts = struct.unpack(">%dH" % n, blob[starts_at:starts_at + seg_x2])
+            for s, e in zip(starts, ends):
+                if s == 0xFFFF:
+                    continue
+                codes.update(range(s, min(e, 0xFFFE) + 1))
+        elif fmt == 12:
+            (n_groups,) = struct.unpack(">I", blob[off + 12:off + 16])
+            for g in range(n_groups):
+                s, e, _ = struct.unpack(
+                    ">III", blob[off + 16 + 12 * g:off + 28 + 12 * g])
+                codes.update(range(s, e + 1))
+    return codes
+
+
+def main() -> None:
+    fonts = sorted(FONT_DIR.glob("Spirula*.ttf")) + \
+            sorted(FONT_DIR.glob("Spirula*.otf"))
+    if not fonts:
+        raise SystemExit(f"no fonts in {FONT_DIR}")
+
+    covered = set()
+    for f in fonts:
+        covered |= _cmap_codepoints(f.read_bytes())
+
+    wanted = scan_all()
+    missing = sorted(c for c in wanted if ord(c) > 0x1F and ord(c) not in covered)
+    if missing:
+        print("error: the catalogs use characters no committed font can draw:")
+        for c in missing[:40]:
+            print(f"    U+{ord(c):04X}  {c}")
+        if len(missing) > 40:
+            print(f"    ... and {len(missing) - 40} more")
+        print("\n  The subsets in assets/fonts/ are generated from the "
+              "catalogs and are now stale.")
+        print("  Fix: python3 tools/make_ui_font.py   (needs fonttools + network)")
+        raise SystemExit(1)
+
+    print(f"check_font_coverage: {len(wanted)} characters across "
+          f"{len(fonts)} font(s), none missing")
+
+
+if __name__ == "__main__":
+    main()

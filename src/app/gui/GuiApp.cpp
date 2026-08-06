@@ -5,6 +5,7 @@
 #include "data/Json.h"
 #include "app/gui/AppPaths.h"
 #include "app/gui/DatasetPrep.h"
+#include "app/gui/MaskPrompt.h"
 #include "app/gui/Subprocess.h"
 #include "app/gui/Ui.h"
 
@@ -12,6 +13,7 @@
 #include "i18n/catalog/Brand.h"
 #include "i18n/catalog/Dataset.h"
 #include "i18n/catalog/Gui.h"
+#include "i18n/catalog/Train.h"
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -61,10 +63,18 @@ std::string format_count(double n) {
     return buf;
 }
 
-const char* preset_help(const std::string& name) {
-    for (const auto& p : kTrainPresets)
-        if (name == p.name) return p.help;
-    return "";
+// "General purpose (3dgs)" -- the translated label plus the name the command
+// line and the documentation use, which is the only thing tying a row here to
+// `spirula train <preset>`.
+std::string preset_label(const std::string& name) {
+    const auto* t = spirula::i18n::msg::train::preset_text(name.c_str());
+    if (!t) return name;
+    return std::string(t->label->get()) + " (" + name + ")";
+}
+
+std::string preset_help(const std::string& name) {
+    const auto* t = spirula::i18n::msg::train::preset_text(name.c_str());
+    return t ? t->help->get() : "";
 }
 
 // True when two configs parse to the same dataset: every dataparser-group
@@ -237,8 +247,17 @@ void GuiApp::apply_preset(const std::string& preset) {
 }
 
 void GuiApp::open_dataset(std::string dir, std::string image_dir,
-                          std::string mask_dir) {
+                          std::string mask_dir, bool keep_log) {
     if (dir.empty()) return;
+    // A different dataset means the log so far is about something else --
+    // another capture's reconstruction, another run's warnings -- and keeping
+    // it makes the panel read as if this dataset had already been worked on.
+    //
+    // Two exceptions, both "the log IS about this dataset": reopening the same
+    // one (a reload, not a new job), and the handoff straight out of a
+    // reconstruction, where the log is that reconstruction's and is the first
+    // thing anyone would look at if the result seems wrong.
+    if (dir != _cfg.data && !keep_log) _log.clear();
     _cfg.data = dir;
     // image_dir / mask_dir: the runner hands its (possibly external) folders
     // over in-memory right after a run -- photos indexed where they are keep
@@ -514,7 +533,8 @@ void GuiApp::refresh_sources() {
 }
 
 // One picked path -> the input it describes, with the defaults its kind wants.
-static PrepInput make_source(const std::string& path) {
+static PrepInput make_source(const std::string& path,
+                             bool use_found_masks) {
     std::error_code ec;
     PrepInput s;
     s.path = path;
@@ -523,7 +543,10 @@ static PrepInput make_source(const std::string& path) {
     // and the masks/ that belongs to them. Resolved here, on the path the user
     // picked, so the row shows the folder that will actually be indexed rather
     // than one that merely contains it.
-    if (!s.is_video) resolve_photo_folder(path, s.path, s.mask_dir);
+    if (!s.is_video) {
+        resolve_photo_folder(path, s.path, s.mask_dir);
+        if (!use_found_masks) s.mask_dir.clear();
+    }
     // Every input carries a concrete lens, so a list holding a 360 camera and a
     // phone cannot end up applying one of them to the other.
     //
@@ -558,6 +581,22 @@ static bool attach_mask_folder(std::vector<PrepInput>& sources,
     return false;
 }
 
+// Re-answer "are there masks beside these photos?" after the switch moves.
+// Turning it off forgets them; turning it back on has to look again, because
+// the answer was thrown away rather than remembered.
+void GuiApp::rescan_found_masks() {
+    for (PrepInput& s : _sources) {
+        if (s.is_video) continue;
+        if (!_use_found_masks) {
+            s.mask_dir.clear();
+        } else {
+            std::string images = s.path;
+            resolve_photo_folder(s.path, images, s.mask_dir);
+        }
+    }
+    refresh_sources();
+}
+
 void GuiApp::add_sources(const std::vector<std::string>& paths, bool replace) {
     // A folder of masks is not an input of its own: it belongs to one, and the
     // images half may be in the same pick, in either order. Split before
@@ -574,7 +613,7 @@ void GuiApp::add_sources(const std::vector<std::string>& paths, bool replace) {
         _sources.clear();
         _mask_preview_input = 0;
     }
-    for (const std::string& path : inputs) _sources.push_back(make_source(path));
+    for (const std::string& path : inputs) _sources.push_back(make_source(path, _use_found_masks));
     for (const std::string& masks : mask_folders) {
         if (attach_mask_folder(_sources, masks))
             log(i18n::format(dmsg::log_masks_attached, {masks}));
@@ -628,7 +667,7 @@ void GuiApp::handle_dialog_result(const std::vector<std::string>& paths) {
         case PickAction::SourceReplace:
             if (!path.empty() && _pick_source >= 0 &&
                 _pick_source < (int)_sources.size()) {
-                _sources[_pick_source] = make_source(path);
+                _sources[_pick_source] = make_source(path, _use_found_masks);
                 refresh_sources();
             }
             _pick_source = -1;
@@ -742,29 +781,42 @@ void GuiApp::draw_menu_bar() {
     ImGui::EndMenuBar();
 }
 
-// The picker, plus the one thing that can go wrong with it: a language whose
-// script this installation has no font for. Offering the download here, at the
-// moment the user picks the language, is the only place it makes sense -- and
-// the alternative is a menu that silently turns the whole UI into boxes.
+// The picker. Everything about it is designed for a user who cannot read the
+// language currently on screen, because that is who needs it:
+//
+//   - the menu bar entry is SS_LANG_MENU_ICON (文A) rather than the word
+//     "Language" translated into the language they cannot read, followed by
+//     the current language's own name so the menu also reports its state
+//   - the entries are the native names, never translated: someone looking for
+//     their own language is looking for the word they call it by
+//   - all thirteen render without a download, which is what the embedded
+//     subsets in assets/fonts/ are for (src/app/gui/Fonts.h)
+//
+// Below the list, when the full face for this language is not installed, the
+// offer to fetch it. Not a warning: the UI reads fine without it, and what it
+// adds is coverage for text this program did not write.
 void GuiApp::draw_language_menu() {
-    if (!ui::BeginMenu(msg::menu_language)) return;
-
     const i18n::Lang before = i18n::current();
+    const std::string title =
+        std::string(SS_LANG_MENU_ICON " ") + i18n::native_name(before);
+    if (!ui::BeginMenuRaw(ui::detail::label(title, msg::menu_language))) return;
+
     for (unsigned i = 0; i < i18n::kLangCount; i++) {
         const i18n::Lang l = i18n::Lang(i);
-        // Native names are never translated -- a user looking for their own
-        // language is looking for the word they call it by.
         if (ui::SelectableRaw(i18n::native_name(l), l == before) && l != before) {
             i18n::set_current(l);
             save_settings();
         }
     }
 
-    if (const CjkFace* f = _fonts.missing_face()) {
+    if (const CjkFace* f = _fonts.optional_face()) {
         ImGui::Separator();
         ImGui::PushTextWrapPos(360.0f);
-        ui::TextColoredWrapped(kWarn, msg::font_needed,
-                               {f->label, human_bytes(f->bytes)});
+        // The language's own name, not CjkFace::label -- that one is English
+        // ("Korean"), which is the one word in this sentence a reader of a
+        // Korean UI did not ask for.
+        ui::TextDisabled(msg::font_needed,
+                         {i18n::native_name(before), human_bytes(f->bytes)});
         ImGui::PopTextWrapPos();
         if (!FontSet::fetch_enabled()) {
             ui::TextDisabled(msg::font_no_fetch);
@@ -981,6 +1033,7 @@ void GuiApp::draw_dataset_source() {
         // `<folder>` to `<folder>/images` under the cursor is not helpful.
         if (ImGui::IsItemDeactivatedAfterEdit() && !s.is_video) {
             resolve_photo_folder(s.path, s.path, s.mask_dir);
+            if (!_use_found_masks) s.mask_dir.clear();
             edited = true;
         }
         ImGui::SameLine();
@@ -1038,6 +1091,18 @@ void GuiApp::draw_dataset_source() {
     if (_sources.empty()) {
         ImGui::SameLine();
         ui::TextDisabled(dmsg::no_input_yet);
+    }
+
+    // Masks that came WITH the photos are adopted automatically, which is
+    // right for a prepared capture and wrong for a folder whose masks/ happens
+    // to describe something else. Only offered when there are photo inputs to
+    // find masks for -- a video has none by definition.
+    bool any_photos = false;
+    for (const PrepInput& s : _sources) any_photos = any_photos || !s.is_video;
+    if (any_photos) {
+        if (ui::Checkbox(dmsg::use_found_masks, &_use_found_masks))
+            rescan_found_masks();
+        ui::help_on_hover(dmsg::use_found_masks_help);
     }
 
     ImGui::SetNextItemWidth(-220);
@@ -1108,10 +1173,10 @@ void GuiApp::draw_dataset_basics() {
             int idx = 0;
             for (int i = 0; i < kNumSfmCameraModels; i++)
                 if (model == kSfmCameraModels[i]) idx = i;
-            // Lens model names ("OPENCV_FISHEYE") are the reconstruction's own
-            // vocabulary and are not translated.
+            // The distortion models' own names stay put; the parenthetical
+            // that says which to pick is translated (i18n/catalog/Dataset.h).
             if (ui::ComboRaw(ui::detail::label(dmsg::camera_lens), &idx,
-                             kSfmCameraModelLabels, kNumSfmCameraModels))
+                             sfm_camera_model_labels()))
                 model = kSfmCameraModels[idx];
         } else {
             int idx = 0;
@@ -1199,7 +1264,7 @@ void GuiApp::draw_source_cameras() {
         int idx = 0;
         for (int m = 0; m < kNumSfmCameraModels; m++)
             if (s.camera_model == kSfmCameraModels[m]) idx = m;
-        if (ui::ComboRaw("##lens", &idx, kSfmCameraModelLabels, kNumSfmCameraModels))
+        if (ui::ComboRaw("##lens", &idx, sfm_camera_model_labels()))
             s.camera_model = kSfmCameraModels[idx];
         ImGui::SameLine();
         ImGui::SetNextItemWidth(90);
@@ -1294,7 +1359,12 @@ void GuiApp::draw_masking_options() {
                     // record which one so the run does not carry them into a
                     // different capture (PrepJob::mask_clicks_source).
                     _mask.clicks_source = s.path;
-                    _segment.open(s.path, s.is_video, selected_model_path());
+                    // The preview reads the video the same way preparation
+                    // will: in process where the driver can, ffmpeg where it
+                    // cannot or where the job said to.
+                    _segment.open(s.path, s.is_video, selected_model_path(),
+                                  _ffmpeg_exe,
+                                  _sfm_job.prep.force_external_decode);
                 }
             }
             ui::help_on_hover(dmsg::mask_try_help);
@@ -1360,20 +1430,31 @@ void GuiApp::draw_masking_options() {
     ui::help_on_hover(dmsg::mask_polarity_help);
     const bool keep_subject = _mask.keep_subject;
 
+    // English, whatever the interface language is -- see MaskPrompt.h. The
+    // placeholder examples are English for the same reason.
     ImGui::SetNextItemWidth(320);
-    ui::InputTextWithHint(
+    ui::InputTextEnglish(
         keep_subject ? dmsg::mask_what_to_keep : dmsg::mask_what_to_remove,
-        keep_subject ? dmsg::mask_hint_keep : dmsg::mask_hint_remove,
+        keep_subject ? "the statue; its pedestal" : "people; cars; my shadow",
         &_mask.prompt);
     ui::help_on_hover(keep_subject ? dmsg::mask_prompt_help_keep
                                    : dmsg::mask_prompt_help_remove);
     ImGui::SetNextItemWidth(320);
-    ui::InputTextWithHint(
+    ui::InputTextEnglish(
         keep_subject ? dmsg::mask_but_remove : dmsg::mask_but_keep,
-        keep_subject ? dmsg::mask_hint_but_remove : dmsg::mask_hint_but_keep,
+        keep_subject ? "the hand holding it" : "person in a painting",
         &_mask.negative_prompt);
     ui::help_on_hover(keep_subject ? dmsg::mask_negative_help_keep
                                    : dmsg::mask_negative_help_remove);
+
+    // Only worth saying when the interface is not already English: for an
+    // English user the box being English is not news.
+    if (i18n::current() != i18n::Lang::en) {
+        ImGui::PushTextWrapPos(560.0f);
+        ui::TextDisabled(dmsg::mask_english_only);
+        ImGui::PopTextWrapPos();
+    }
+    draw_subject_palette(_mask.prompt, _mask.negative_prompt, keep_subject);
 
     ImGui::Unindent();
 }
@@ -1720,7 +1801,8 @@ void GuiApp::draw_new_dataset() {
                 _pending_path = st.dir;
                 _open_confirm = true;
             } else {
-                open_dataset(st.dir, st.image_dir, st.mask_dir);
+                open_dataset(st.dir, st.image_dir, st.mask_dir,
+                             /*keep_log=*/true);
             }
         }
     } else if (st.failed) {
@@ -1919,17 +2001,23 @@ void GuiApp::draw_train_settings() {
     ImGui::BeginDisabled(busy);
     ui::SeparatorText(msg::section_preset);
     ImGui::SetNextItemWidth(-8);
-    // Preset names and their help are the CLI's own vocabulary
-    // (config/TrainConfig.h) and are shared with `spirula train --help`;
-    // translating them is tier 3, tracked in docs/i18n.md.
-    if (ui::BeginComboRaw("##preset", _preset.c_str())) {
+    // The preset's NAME is the command line's word for it and is not
+    // translated; what the picker shows is the label from
+    // i18n/catalog/Train.h, with the name kept alongside so that a user who
+    // has read the README still recognises the row they want.
+    static_assert(sizeof(kTrainPresets) / sizeof(kTrainPresets[0]) ==
+                      i18n::msg::train::kNumPresetText,
+                  "config/TrainConfig.h and i18n/catalog/Train.h disagree "
+                  "about how many presets there are");
+    if (ui::BeginComboRaw("##preset", preset_label(_preset).c_str())) {
         for (const auto& p : kTrainPresets) {
             bool sel = _preset == p.name;
-            if (ui::SelectableRaw(p.name, sel)) apply_preset(p.name);
+            if (ui::SelectableRaw(preset_label(p.name), sel))
+                apply_preset(p.name);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) &&
                 ImGui::BeginTooltip()) {
                 ImGui::PushTextWrapPos(360);
-                ui::TextRaw(p.help);
+                ui::TextRaw(preset_help(p.name));
                 ImGui::PopTextWrapPos();
                 ImGui::EndTooltip();
             }

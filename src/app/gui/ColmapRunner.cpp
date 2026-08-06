@@ -2,6 +2,8 @@
 // scripts/run_colmap.bash (COLMAP >= 4.x; use_gpu-style flags are gone).
 
 #include "app/gui/ColmapRunner.h"
+
+#include "i18n/catalog/Log.h"
 #include "app/gui/AppPaths.h"
 #include "app/gui/DatasetPrep.h"
 #include "app/gui/Subprocess.h"
@@ -18,6 +20,7 @@
 #include <filesystem>
 
 namespace fs = std::filesystem;
+namespace lmsg = spirula::i18n::msg::log;
 
 namespace gui {
 
@@ -212,7 +215,7 @@ std::string ColmapRunner::resolve_vocab_tree(const ColmapJob& job) {
     }
     // Download into the cache.
     fs::path dst = fs::path(cache_dir()) / kVocabTreeName;
-    set_stage("Downloading vocabulary tree (one-time, ~150 MB)");
+    set_stage(lmsg::stage_vocab_download.get());
     if (!command_exists("curl")) {
         log("curl not found -- download it manually:");
         log(std::string("  ") + kVocabTreeUrl + " -> " + dst.string());
@@ -313,8 +316,7 @@ void ColmapRunner::run(ColmapJob job) {
         const bool have_masks = !prep.mask_dir.empty();
         const std::string mask_dir_cfg = prep.mask_dir_cfg;
         if (prep.per_folder_cameras && job.camera_mode == 0) {
-            log("images/ holds one folder per camera: switching to one camera "
-                "per folder");
+            log(lmsg::one_camera_per_folder.get());
             job.camera_mode = 1;
         }
 
@@ -355,8 +357,8 @@ void ColmapRunner::run(ColmapJob job) {
         }
 
         // ---- 3. feature extraction -----------------------------------------
-        set_stage(aliked ? "Extracting features (colmap, ALIKED)"
-                         : "Extracting features (colmap)");
+        set_stage(aliked ? lmsg::stage_colmap_features_aliked.get()
+                         : lmsg::stage_colmap_features.get());
         std::vector<std::string> fe = {job.colmap_exe, "feature_extractor",
             "--database_path", db,
             "--image_path", images,
@@ -423,7 +425,7 @@ void ColmapRunner::run(ColmapJob job) {
             std::string vt = resolve_vocab_tree(job);
             if (vt.empty())
                 return fail("no vocabulary tree available (see log)");
-            set_stage("Matching features (vocabulary tree)");
+            set_stage(lmsg::stage_match_vocab.get());
             ma = {job.colmap_exe, "vocab_tree_matcher",
                   "--database_path", db,
                   "--VocabTreeMatching.vocab_tree_path", vt};
@@ -438,7 +440,7 @@ void ColmapRunner::run(ColmapJob job) {
                 else if ((vt = resolve_vocab_tree(job)).empty())
                     log("warning: no vocabulary tree; loop detection disabled");
             }
-            set_stage("Matching features (sequential)");
+            set_stage(lmsg::stage_match_sequential.get());
             ma = {job.colmap_exe, "sequential_matcher",
                   "--database_path", db,
                   "--SequentialMatching.overlap", std::to_string(job.seq_overlap),
@@ -451,7 +453,7 @@ void ColmapRunner::run(ColmapJob job) {
                 ma.push_back(vt);
             }
         } else if (matcher == 1) {
-            set_stage("Matching features (exhaustive)");
+            set_stage(lmsg::stage_match_exhaustive.get());
             ma = {job.colmap_exe, "exhaustive_matcher", "--database_path", db};
         }
         if (!match_type.empty()) {
@@ -478,7 +480,7 @@ void ColmapRunner::run(ColmapJob job) {
         if (rc != 0) return fail("colmap matcher failed (see log)");
 
         // ---- 5. sparse reconstruction ----------------------------------------
-        set_stage("Reconstructing cameras (mapper; this is the slow part)");
+        set_stage(lmsg::stage_colmap_mapper.get());
         fs::create_directories(ws / "sparse");
         bool fisheye = is_fisheye_model(job.camera_model);
         bool ba_gpu = job.ba_use_gpu;
@@ -579,7 +581,7 @@ void ColmapRunner::run(ColmapJob job) {
         // the few seconds. A merge is kept only when the merged model
         // registers more images than the base.
         if (models.size() > 1 && job.merge_models) {
-            set_stage("Merging partial models");
+            set_stage(lmsg::stage_merge_models.get());
             fs::path cur = best;
             int64_t cur_n = -models[0].first;
             fs::path acc = ws / "sparse" / ".merge_acc";
@@ -637,7 +639,7 @@ void ColmapRunner::run(ColmapJob job) {
         // against the input (mean reprojection error via model_analyzer)
         // and REVERTED when it got worse or non-finite.
         if (job.final_bundle_adjust) {
-            set_stage("Refining cameras (bundle adjustment)");
+            set_stage(lmsg::stage_bundle_adjust.get());
             fs::path tmp = ws / "sparse" / ".ba_tmp";
             remove_tree(tmp);
             fs::create_directories(tmp);
@@ -683,7 +685,7 @@ void ColmapRunner::run(ColmapJob job) {
                 "dataset later, set image_dir to " + image_dir_cfg +
                 " under the dataset-parsing options");
 
-        set_stage("Done");
+        set_stage(lmsg::stage_done.get());
         {
             std::lock_guard<std::mutex> lk(_mu);
             _dataset_dir = ws.string();

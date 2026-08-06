@@ -470,15 +470,21 @@ struct TrainConfig {
 // `spirula train <preset>`. "3dgs" is the base config and applies nothing.
 // ===========================================================================
 
-struct TrainPresetInfo { const char* name; const char* help; };
+// Just the names, which are what the command line and the checkpoints spell.
+// The label and the sentence explaining each one are in
+// i18n/catalog/Train.h: this header is included nearly everywhere and has no
+// business dragging a translation catalog behind it. Both consumers
+// (app/cli/main.cpp, app/gui/GuiApp.cpp) static_assert that the two lists are
+// the same length.
+struct TrainPresetInfo { const char* name; };
 inline constexpr TrainPresetInfo kTrainPresets[] = {
-    {"3dgs", "Generic method that works well for most datasets."},
-    {"360-camera", "Preset for training on original distorted images captured by 360 cameras (e.g. Insta360, DJI Osmo). Recommended if your dataset contains fisheye images with a circle visible."},
-    {"in-the-wild", "Preset for datasets consisting of internet images, with extreme lighting variation, with un-masked outliers, and/or shot with long focal lengths."},
-    {"linear-color", "Preset for training splats in linear color spaces (e.g. ACEScg)."},
-    {"synthetic", "Preset for training splats on synthetic datasets rendered with constant exposure."},
-    {"meshing", "Preset for training splats for meshing. Use `spirula mesh` to convert trained splats to mesh."},
-    {"academic-baseline", "Preset that replicates 3DGS MCMC as faithful as possible."},
+    {"3dgs"},
+    {"360-camera"},
+    {"in-the-wild"},
+    {"linear-color"},
+    {"synthetic"},
+    {"meshing"},
+    {"academic-baseline"},
 };
 
 // Returns false for an unknown preset name.
