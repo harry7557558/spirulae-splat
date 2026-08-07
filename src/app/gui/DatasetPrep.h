@@ -213,6 +213,17 @@ void resolve_photo_folder(const std::string& picked, std::string& images,
 // stops at the first hit, so it is cheap enough for the UI thread.
 bool folder_has_images(const std::string& dir);
 
+// Is this folder an already-reconstructed dataset -- something the trainer's
+// dataparsers can read -- rather than raw input? True for a Nerfstudio
+// transforms.json, a COLMAP sparse/ or colmap/, or a Metashape camera .xml
+// next to a point-cloud .ply, which is what the parsers themselves probe for.
+//
+// Cheap and deliberately shallow: it decides where a dropped folder is routed
+// and whether a batch row is worth starting, not whether the parse will
+// succeed. It says nothing about raw photos -- a folder of JPEGs is not a
+// dataset until something has reconstructed it.
+bool folder_looks_like_dataset(const std::string& dir);
+
 // What the output folder already holds, so the screen can say what a run would
 // reuse and what it would replace.
 //

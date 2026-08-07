@@ -79,6 +79,26 @@ std::string preset_help(const std::string& name) {
     return t ? t->help->get() : "";
 }
 
+// The hover help behind a preset row, wherever one is drawn: what it is for,
+// and -- dimmed under it -- the file it came from. The path is what tells two
+// presets with the same name apart, which nothing else on screen does; a
+// built-in has none and shows only the sentence.
+void preset_hover(const std::string& description, const std::string& path) {
+    if (description.empty() && path.empty()) return;
+    if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) ||
+        !ImGui::BeginTooltip())
+        return;
+    ImGui::PushTextWrapPos(360);
+    if (!description.empty()) ui::TextRaw(description);
+    // A path is a path in every language, and it is not a sentence about the
+    // one above it -- so it is its own line, not appended to it.
+    if (!path.empty()) ui::TextDisabledRaw(path);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+}
+
+void preset_hover(const TrainPreset& p) { preset_hover(p.description, p.path); }
+
 // True when two configs parse to the same dataset -- every field
 // load_dataset() consumes, listed as SS_DATASET_PARSE_FIELDS.
 bool parse_settings_equal(const TrainConfig& a, const TrainConfig& b) {
@@ -104,6 +124,7 @@ std::vector<std::string> video_dialog_filters() {
 
 GuiApp::GuiApp() {
     load_settings();
+    _batch = load_batch_list();
     apply_preset("3dgs");
     // Built-in when it is there, COLMAP when it is not; effective_engine()
     // overrides this anyway if the stored choice is unavailable.
@@ -114,6 +135,8 @@ GuiApp::~GuiApp() = default;
 
 void GuiApp::shutdown() {
     save_settings();
+    save_batch_list(_batch);
+    _batch_active = false;
     _viewport.detach();
     _viewport.destroy_gl();
     // Before ~SplatViewer, which hands the engine back: the viewport's render
@@ -238,6 +261,10 @@ void GuiApp::apply_preset(const std::string& preset) {
     // re-enabled in Basic Options for remote monitoring.
     fresh.disable_viewer = true;
     _preset = preset;
+    _preset_file.clear();
+    _preset_display.clear();
+    _preset_desc.clear();
+    _preset_msg.clear();   // whatever it reported was about the last preset
     _cfg = fresh;
     _defaults = fresh;
     _cfg_ui.touched.clear();
@@ -245,6 +272,73 @@ void GuiApp::apply_preset(const std::string& preset) {
         _viewport.detach();
         _runner.load_dataset(_cfg, _preset);
     }
+}
+
+// A saved preset carries the whole config, so this replaces more than a
+// built-in preset does -- but the same four fields stay out of its reach
+// (SS_PRESET_CONTEXT_FIELDS), because a preset is "how", not "where".
+void GuiApp::apply_user_preset(const TrainPreset& p) {
+    const TrainConfig stock;
+    TrainConfig fresh = p.cfg;
+    fresh.data = _cfg.data;
+    fresh.resume = _cfg.resume;
+    fresh.output_dir_prefix = _cfg.output_dir_prefix;
+    fresh.output_dir_name = _cfg.output_dir_name;
+    // The image and mask folders are ordinary dataset options and travel with
+    // a preset, but a preset that never moved them must not move them here:
+    // the handoff out of a reconstruction points them at folders that only
+    // this dataset has.
+    if (fresh.image_dir == stock.image_dir) fresh.image_dir = _cfg.image_dir;
+    if (fresh.mask_dir == stock.mask_dir) fresh.mask_dir = _cfg.mask_dir;
+    fresh.disable_viewer = true;   // as apply_preset: the native viewport
+
+    _preset = p.base;
+    _preset_file = p.path;
+    _preset_display = p.name;
+    _preset_desc = p.description;
+    _preset_msg.clear();   // whatever it reported was about the last preset
+    _cfg = fresh;
+    _defaults = fresh;
+    // What the preset spelled out is off limits to the macro options, exactly
+    // as if the user had just typed it (train_resolve_macros).
+    _cfg_ui.touched = p.touched;
+    if (!_cfg.data.empty()) {
+        _viewport.detach();
+        _runner.load_dataset(_cfg, _preset);
+    }
+}
+
+void GuiApp::load_preset_file(const std::string& path) {
+    if (path.empty()) return;
+    // Applying a preset re-parses the dataset, which takes the live session
+    // down with it. Refuse rather than kill a run somebody is watching.
+    if (training_busy() || _batch_active) {
+        _preset_msg = dmsg::log_drop_while_training.get();
+        _preset_msg_err = true;
+        log(_preset_msg);
+        return;
+    }
+    try {
+        TrainPreset p = load_preset(path);
+        apply_user_preset(p);
+        _preset_msg = i18n::format(msg::preset_loaded, {p.name});
+        _preset_msg_err = false;
+    } catch (const std::exception& e) {
+        _preset_msg = i18n::format(msg::preset_failed, {e.what()});
+        _preset_msg_err = true;
+    }
+    log(_preset_msg);
+    refresh_presets();
+}
+
+void GuiApp::refresh_presets() {
+    // The picker rescans while its dropdown is open, so rate-limit: a scan is
+    // a directory listing plus a small JSON parse per file, which is cheap
+    // twice a second and silly at 120 Hz.
+    double now = ImGui::GetTime();
+    if (_presets_scanned_at >= 0.0 && now - _presets_scanned_at < 2.0) return;
+    _presets_scanned_at = now;
+    _presets = list_presets();
 }
 
 void GuiApp::open_dataset(std::string dir, std::string image_dir,
@@ -340,14 +434,18 @@ void GuiApp::close_splat() {
     _splat.close();
 }
 
-void GuiApp::start_training() {
-    if (_cfg.data.empty()) return;
+void GuiApp::launch_training(const TrainConfig& cfg, const std::string& preset) {
+    if (cfg.data.empty()) return;
     close_splat();      // the engine is one object; the viewer has to let go
     _viewport.detach();
     // Engine setup initializes the backend on the selected device; from
     // here on the device combo is display-only (one device per process).
     _device_locked = true;
-    _runner.start_training(_cfg, _preset);
+    _runner.start_training(cfg, preset);
+}
+
+void GuiApp::start_training() {
+    launch_training(_cfg, _preset);
 }
 
 void GuiApp::request_close() {
@@ -372,8 +470,186 @@ void GuiApp::run_pending_if_stopped() {
         case Pending::OpenDataset: open_dataset(_pending_path); break;
         case Pending::OpenSplat:  open_splat(_pending_path); break;
         case Pending::Quit:       _quit = true; break;
+        case Pending::StartBatch: start_batch(_pending_batch_skip); break;
         default: break;
     }
+}
+
+
+// ===========================================================================
+// Batch training
+//
+// The queue itself is BatchTrain.h; what lives here is the three lines of
+// state machine that turn it into runs. Everything a row needs -- parse,
+// engine setup, the step loop, the checkpoint -- is one TrainRunner session,
+// the same one the Start button makes, which is why a batch shows up on the
+// trainer screen with a live viewport and plots rather than as a progress bar
+// over a black box.
+// ===========================================================================
+
+// Append a row for `dataset`, seeded with whatever preset the trainer screen
+// is on -- a queue is usually built right after tuning the settings it should
+// run with. Shared by the picker, the recents menu and drag-and-drop.
+void GuiApp::add_batch_row(const std::string& dataset) {
+    if (dataset.empty()) return;
+    BatchJob j;
+    j.dataset = dataset;
+    j.preset_path = _preset_file;
+    j.preset_name = _preset_file.empty() ? _preset : _preset_display;
+    _batch.push_back(std::move(j));
+    _batch_dirty = true;
+    _batch_checked = false;
+}
+
+void GuiApp::check_batch() {
+    for (int i = 0; i < (int)_batch.size(); i++)
+        _batch[i].issues = batch_check(_batch[i], _batch, i);
+    _batch_checked = true;
+    _batch_msg.clear();
+    _batch_msg_err = false;
+    bool any = false;
+    for (const BatchJob& j : _batch) any = any || !j.issues.empty();
+    if (!any && !_batch.empty()) _batch_msg = msg::batch_checked_ok.get();
+}
+
+void GuiApp::request_start_batch(bool skip_invalid) {
+    if (training_busy()) {
+        _pending = Pending::StartBatch;
+        _pending_batch_skip = skip_invalid;
+        _open_confirm = true;
+        return;
+    }
+    start_batch(skip_invalid);
+}
+
+void GuiApp::start_batch(bool skip_invalid) {
+    check_batch();
+
+    int bad = 0, runnable = 0;
+    for (const BatchJob& j : _batch) (batch_has_error(j) ? bad : runnable)++;
+    if (bad > 0 && !skip_invalid) {
+        _batch_msg = i18n::format(msg::batch_blocked, {(long long)bad});
+        _batch_msg_err = true;
+        return;
+    }
+    if (runnable == 0) {
+        _batch_msg = msg::batch_no_runnable.get();
+        _batch_msg_err = true;
+        return;
+    }
+
+    for (BatchJob& j : _batch) {
+        j.status = batch_has_error(j) ? BatchJob::Status::Skipped
+                                      : BatchJob::Status::Pending;
+        j.message.clear();
+        j.out_dir.clear();
+        j.steps = 0;
+    }
+    _batch_dirty = false;
+    save_batch_list(_batch);
+
+    _batch_active = true;
+    _batch_launched = false;
+    _batch_current = -1;
+    _batch_stop_after = false;
+    _batch_stop_now = false;
+    _batch_msg = i18n::format(msg::batch_log_started, {(long long)runnable});
+    _batch_msg_err = false;
+    log(_batch_msg);
+    // The run is worth watching even when nobody has to: same viewport, same
+    // metrics, same log as a hand-started one.
+    _screen = Screen::Train;
+}
+
+void GuiApp::advance_batch() {
+    if (!_batch_active) return;
+
+    if (_batch_launched) {
+        const TrainRunner::Phase ph = _runner.phase();
+        if (ph == TrainRunner::Phase::Preparing ||
+            ph == TrainRunner::Phase::Training)
+            return;   // still going
+        if (_batch_current < 0 || _batch_current >= (int)_batch.size()) {
+            finish_batch();   // the list moved under us; nothing to record
+            return;
+        }
+
+        BatchJob& j = _batch[_batch_current];
+        const long long n = _batch_current + 1;
+        if (ph == TrainRunner::Phase::Done && !_batch_stop_now) {
+            j.status = BatchJob::Status::Done;
+            j.steps = _runner.latest_progress().step + 1;
+            if (auto* s = _runner.session()) j.out_dir = s->out_dir.string();
+            log(i18n::format(msg::batch_log_job_done, {n, j.out_dir}));
+        } else if (ph == TrainRunner::Phase::Done) {
+            j.status = BatchJob::Status::Stopped;
+            log(i18n::format(msg::batch_log_job_stopped, {n}));
+        } else {
+            // Anything the pipeline threw: an unreadable dataset, an OOM, a
+            // driver fault. Recorded on the row and left behind -- the point
+            // of a queue is that the next dataset still gets its turn.
+            j.status = BatchJob::Status::Failed;
+            j.message = _runner.error();
+            log(i18n::format(msg::batch_log_job_failed, {n, j.message}));
+        }
+        _batch_launched = false;
+        _batch_current = -1;
+        if (_batch_stop_after) { finish_batch(); return; }
+    }
+
+    int next = -1;
+    for (int i = 0; i < (int)_batch.size(); i++)
+        if (_batch[i].status == BatchJob::Status::Pending) { next = i; break; }
+    if (next < 0) { finish_batch(); return; }
+
+    BatchJob& j = _batch[next];
+    TrainConfig cfg;
+    std::string base, error;
+    if (!batch_build_config(j, cfg, base, error)) {
+        // The preset went missing between the pre-flight and now. Same
+        // treatment as any other failure; the loop picks up the next row on
+        // the following frame.
+        j.status = BatchJob::Status::Failed;
+        j.message = error;
+        log(i18n::format(msg::batch_log_job_failed,
+                         {(long long)(next + 1), error}));
+        return;
+    }
+
+    j.status = BatchJob::Status::Running;
+    _batch_current = next;
+    _batch_launched = true;
+    log(i18n::format(msg::batch_log_job_start,
+                     {(long long)(next + 1), j.dataset}));
+    launch_training(cfg, base);
+}
+
+void GuiApp::finish_batch() {
+    int done = 0, failed = 0, other = 0;
+    for (const BatchJob& j : _batch) {
+        if (j.status == BatchJob::Status::Done) done++;
+        else if (j.status == BatchJob::Status::Failed) failed++;
+        else other++;
+    }
+    _batch_active = false;
+    _batch_launched = false;
+    _batch_current = -1;
+    _batch_stop_after = false;
+    _batch_stop_now = false;
+    _batch_msg = i18n::format(msg::batch_log_summary,
+                              {(long long)done, (long long)failed,
+                               (long long)other});
+    _batch_msg_err = failed > 0;
+    log(_batch_msg);
+}
+
+void GuiApp::cancel_batch() {
+    if (!_batch_active) return;
+    if (_batch_current >= 0 && _batch_current < (int)_batch.size())
+        _batch[_batch_current].status = BatchJob::Status::Stopped;
+    _batch_launched = false;
+    _batch_current = -1;
+    finish_batch();
 }
 
 static bool is_image_ext(const fs::path& p) {
@@ -398,30 +674,29 @@ static bool looks_like_model(const fs::path& p) {
     return false;
 }
 
-// Is this folder an already-processed dataset rather than raw input? Checked
-// first, because a processed dataset usually also holds an images folder, and
-// opening it wins over reconstructing it again.
-static bool looks_like_dataset(const fs::path& p) {
-    std::error_code ec;
-    if (fs::exists(p / "transforms.json", ec) ||
-        fs::is_directory(p / "sparse", ec) || fs::is_directory(p / "colmap", ec))
-        return true;
-    // Metashape export: a camera .xml next to a point-cloud .ply (what
-    // MetashapeParser probes for).
-    bool has_xml = false, has_ply = false;
-    for (fs::directory_iterator it(p, ec), end; !ec && it != end;
-         it.increment(ec)) {
-        if (!it->is_regular_file(ec)) continue;
-        std::string e = it->path().extension().string();
-        for (auto& c : e) c = (char)std::tolower((unsigned char)c);
-        has_xml = has_xml || e == ".xml";
-        has_ply = has_ply || e == ".ply";
-    }
-    return has_xml && has_ply;
-}
-
 void GuiApp::handle_drop(const std::vector<std::string>& paths) {
     std::error_code ec;
+    // A preset, or the config.json of a run that came out well. Checked first
+    // and by content rather than by name: it is a file that changes settings,
+    // never a dataset or a model, so there is nothing else it could be.
+    if (paths.size() == 1 && fs::is_regular_file(paths[0], ec) &&
+        is_preset_file(paths[0])) {
+        load_preset_file(paths[0]);
+        if (!_preset_msg_err && !_cfg.data.empty()) _screen = Screen::Train;
+        return;
+    }
+    // Dropping dataset folders onto the batch screen extends the queue, which
+    // is how a five-dataset run gets set up without typing five paths.
+    if (_screen == Screen::Batch && !_batch_active) {
+        std::vector<std::string> datasets;
+        for (const std::string& p : paths)
+            if (fs::is_directory(p, ec) && folder_looks_like_dataset(p))
+                datasets.push_back(p);
+        if (datasets.size() == paths.size() && !datasets.empty()) {
+            for (const std::string& d : datasets) add_batch_row(d);
+            return;
+        }
+    }
     // A dataset is opened, not added to a list, so it only makes sense alone --
     // and dropping one alongside videos is far more likely a mis-drag than a
     // request to do both.
@@ -433,7 +708,7 @@ void GuiApp::handle_drop(const std::vector<std::string>& paths) {
         return;
     }
     if (paths.size() == 1 && fs::is_directory(paths[0], ec) &&
-        looks_like_dataset(paths[0])) {
+        folder_looks_like_dataset(paths[0])) {
         request_open_dataset(paths[0]);
         return;
     }
@@ -791,6 +1066,55 @@ void GuiApp::handle_dialog_result(const std::vector<std::string>& paths) {
         case PickAction::SplatFile:
             request_open_splat(path);
             break;
+        case PickAction::PresetFile:
+            load_preset_file(path);
+            break;
+        case PickAction::PresetSaveFolder:
+            // Only the folder is picked; the file name stays whatever the
+            // name field derived, so the two halves of the path keep their
+            // separate owners.
+            if (!path.empty())
+                _preset_save_path =
+                    (fs::path(path) / fs::path(_preset_save_path).filename())
+                        .string();
+            break;
+        case PickAction::BatchDataset:
+            if (!path.empty()) {
+                if (_pick_row >= 0 && _pick_row < (int)_batch.size()) {
+                    _batch[_pick_row].dataset = path;
+                    _batch_dirty = true;
+                    _batch_checked = false;
+                } else {
+                    // Several folders picked at once become several rows.
+                    for (const std::string& p : paths) add_batch_row(p);
+                }
+            }
+            _pick_row = -1;
+            break;
+        case PickAction::BatchOutput:
+            if (_pick_row >= 0 && _pick_row < (int)_batch.size()) {
+                _batch[_pick_row].output_dir = path;
+                _batch_dirty = true;
+                _batch_checked = false;
+            }
+            _pick_row = -1;
+            break;
+        case PickAction::BatchPresetFile:
+            if (!path.empty() && _pick_row >= 0 &&
+                _pick_row < (int)_batch.size()) {
+                try {
+                    TrainPreset p = load_preset(path);
+                    _batch[_pick_row].preset_path = p.path;
+                    _batch[_pick_row].preset_name = p.name;
+                    _batch_dirty = true;
+                    _batch_checked = false;
+                } catch (const std::exception& e) {
+                    _batch_msg = i18n::format(msg::preset_failed, {e.what()});
+                    _batch_msg_err = true;
+                }
+            }
+            _pick_row = -1;
+            break;
         default:
             break;
     }
@@ -805,11 +1129,22 @@ void GuiApp::handle_dialog_result(const std::vector<std::string>& paths) {
 void GuiApp::frame() {
     append_logs();
     run_pending_if_stopped();
+    // Before the reload check below: between two batch rows the runner is
+    // briefly idle, and a stale _parse_dirty would start a dataset parse right
+    // where the next row wants the engine.
+    advance_batch();
+
+    // The queue survives a restart, so it is written back once the widget
+    // being edited is idle -- the same deferral the dataset options use.
+    if (_batch_dirty && !ImGui::IsAnyItemActive()) {
+        _batch_dirty = false;
+        save_batch_list(_batch);
+    }
 
     // Dataset-parsing option changed: re-parse once the user finishes
     // editing (no active widget), so the preview / camera counts stay in
     // sync with the config. Never fires while training (options are locked).
-    if (_parse_dirty && !training_busy() &&
+    if (_parse_dirty && !training_busy() && !_batch_active &&
         _runner.phase() != TrainRunner::Phase::Loading &&
         !ImGui::IsAnyItemActive()) {
         _parse_dirty = false;
@@ -859,9 +1194,18 @@ void GuiApp::frame() {
         case Screen::NewDataset: draw_new_dataset(); break;
         case Screen::Train:  draw_train();  break;
         case Screen::Viewer: draw_viewer(); break;
+        case Screen::Batch:  draw_batch();  break;
     }
 
     if (_dialog.draw()) handle_dialog_result(_dialog.results());
+    // The save dialog steps aside while the folder picker is up; bring it
+    // back once the picker is gone, confirmed or cancelled either way.
+    if (_preset_save_reopen && !_dialog.is_open()) {
+        _preset_save_reopen = false;
+        _preset_save_open = true;
+    }
+    draw_preset_save_modal();
+    draw_preset_delete_modal();
     draw_confirm_modal();
 
     ImGui::End();
@@ -888,6 +1232,8 @@ void GuiApp::draw_menu_bar() {
             _dialog.open(msg::viewer_pick_file.get(), FileDialog::Mode::File,
                          {".ply"});
         }
+        ImGui::Separator();
+        if (ui::MenuItem(msg::menu_batch)) _screen = Screen::Batch;
         ImGui::Separator();
         if (ui::MenuItem(msg::menu_quit)) request_close();
         ImGui::EndMenu();
@@ -1015,6 +1361,9 @@ void GuiApp::draw_home() {
                      {".ply"});
     }
     ui::help_on_hover(msg::home_open_splat_help);
+
+    if (ui::Button(msg::home_batch, ImVec2(-1, 42))) _screen = Screen::Batch;
+    ui::help_on_hover(msg::home_batch_help);
 
     ImGui::Spacing();
     ui::TextDisabled(msg::home_drop_hint);
@@ -2038,7 +2387,14 @@ void GuiApp::draw_train() {
     ImGui::EndDisabled();
     if (training_busy()) ui::help_on_hover(msg::leaving_stops_training);
     ImGui::SameLine();
-    ui::TextDisabledRaw(_cfg.data);
+    if (_batch_active) {
+        if (ui::Button(msg::batch_show_list)) _screen = Screen::Batch;
+        ImGui::SameLine();
+        ui::TextDisabledRaw(_batch_current >= 0 ? _batch[_batch_current].dataset
+                                                : std::string());
+    } else {
+        ui::TextDisabledRaw(_cfg.data);
+    }
 
     ImGui::BeginChild("##settings", ImVec2(420, 0), ImGuiChildFlags_Borders);
     draw_train_settings();
@@ -2123,6 +2479,304 @@ void GuiApp::draw_viewer() {
 }
 
 
+// ===========================================================================
+// Batch screen
+//
+// The list, and the two things that can be done to it: check it, and run it.
+// It stays editable and readable while a batch is in flight -- the rows report
+// what became of them -- which is what makes an unattended run something you
+// can come back to rather than something you have to watch.
+// ===========================================================================
+
+void GuiApp::draw_batch() {
+    // Keeps the saved presets warm for the rows' pickers and their tooltips
+    // (rate-limited inside, so this is a no-op most frames).
+    refresh_presets();
+
+    if (ui::Button(msg::back_home)) request_go_home();
+    if (_batch_active) {
+        ImGui::SameLine();
+        if (ui::Button(msg::batch_show_training)) _screen = Screen::Train;
+    }
+    ImGui::SameLine();
+    ui::Text(msg::batch_title);
+
+    ImGui::PushTextWrapPos();
+    ui::TextDisabled(msg::batch_intro);
+    ImGui::PopTextWrapPos();
+
+    const float log_h = _show_log ? 150.0f : 0.0f;
+    const float spacing = ImGui::GetStyle().ItemSpacing.y;
+    ImGui::BeginChild("##batchlist",
+                      ImVec2(0, -(log_h + (log_h > 0 ? spacing : 0))));
+
+    draw_batch_table();
+
+    ImGui::Spacing();
+    ImGui::BeginDisabled(_batch_active);
+    if (ui::Button(msg::batch_add_row)) {
+        _pick = PickAction::BatchDataset;
+        _pick_row = -1;   // append
+        _dialog.open(msg::batch_pick_dataset.get(), FileDialog::Mode::Folder);
+    }
+    ImGui::SameLine();
+    // The datasets already opened in the trainer, which is where a queue is
+    // usually assembled from -- they are the ones already known to parse.
+    if (ui::Button(msg::batch_add_recent)) ImGui::OpenPopup("##batchrecent");
+    if (ImGui::BeginPopup("##batchrecent")) {
+        if (_recents.empty()) {
+            ui::TextDisabled(msg::batch_no_recent);
+        } else {
+            for (size_t i = 0; i < _recents.size(); i++) {
+                ImGui::PushID((int)i);
+                // A path is a path in every language.
+                if (ui::SelectableRaw(_recents[i])) add_batch_row(_recents[i]);
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(_batch.empty());
+    if (ui::Button(msg::batch_clear)) {
+        _batch.clear();
+        _batch_dirty = true;
+        _batch_checked = false;
+        _batch_msg.clear();
+    }
+    ImGui::SameLine();
+    if (ui::Button(msg::batch_check)) check_batch();
+    ui::help_on_hover(msg::batch_check_help);
+
+    ImGui::SameLine();
+    if (ui::Button(msg::batch_start, ImVec2(160, 0)))
+        request_start_batch(/*skip_invalid=*/false);
+    // The way past a row that cannot be fixed right now. Only offered once a
+    // check has actually found one, so it is never the first thing tried.
+    int bad = 0;
+    if (_batch_checked)
+        for (const BatchJob& j : _batch) bad += batch_has_error(j) ? 1 : 0;
+    if (bad > 0 && bad < (int)_batch.size()) {
+        ImGui::SameLine();
+        if (ui::Button(msg::batch_start_skip))
+            request_start_batch(/*skip_invalid=*/true);
+    }
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+
+    if (!_batch_msg.empty())
+        ui::TextColoredWrappedRaw(_batch_msg_err ? kErr : kOk, _batch_msg);
+
+    draw_batch_issues();
+    ImGui::EndChild();
+
+    if (_show_log) draw_log_panel(log_h);
+}
+
+void GuiApp::draw_batch_table() {
+    if (_batch.empty()) {
+        ui::TextDisabled(msg::batch_empty);
+        ui::TextDisabled(msg::batch_drop_hint);
+        return;
+    }
+
+    const ImGuiTableFlags flags = ImGuiTableFlags_Borders |
+                                  ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_SizingStretchProp;
+    if (!ImGui::BeginTable("##batch", 8, flags)) return;
+
+    // "#" is a numeral column, not a word.
+    ui::TableSetupColumnRaw("#", ImGuiTableColumnFlags_WidthFixed, 26.0f);
+    ui::TableSetupColumn(msg::batch_col_dataset,
+                         ImGuiTableColumnFlags_WidthStretch, 3.0f);
+    ui::TableSetupColumn(msg::batch_col_preset,
+                         ImGuiTableColumnFlags_WidthStretch, 2.0f);
+    ui::TableSetupColumn(msg::batch_col_splats,
+                         ImGuiTableColumnFlags_WidthFixed, 86.0f);
+    ui::TableSetupColumn(msg::batch_col_sh,
+                         ImGuiTableColumnFlags_WidthFixed, 74.0f);
+    ui::TableSetupColumn(msg::batch_col_steps,
+                         ImGuiTableColumnFlags_WidthFixed, 74.0f);
+    ui::TableSetupColumn(msg::batch_col_output,
+                         ImGuiTableColumnFlags_WidthStretch, 3.0f);
+    ui::TableSetupColumn(msg::batch_col_status,
+                         ImGuiTableColumnFlags_WidthFixed, 190.0f);
+    ImGui::TableHeadersRow();
+
+    const float bw = ImGui::GetFrameHeight() + 6.0f;
+    int remove = -1;
+    for (int i = 0; i < (int)_batch.size(); i++) {
+        BatchJob& j = _batch[i];
+        ImGui::PushID(i);
+        ImGui::TableNextRow();
+
+        ImGui::TableNextColumn();
+        ui::TextDisabledRaw(std::to_string(i + 1));
+
+        // A row is frozen while the batch runs: its config has already been
+        // taken, and editing it would describe a run that is not happening.
+        ImGui::BeginDisabled(_batch_active);
+
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-bw);
+        if (ui::InputTextWithHintRaw("##ds", msg::batch_dataset_hint,
+                                     &j.dataset)) {
+            _batch_dirty = true;
+            _batch_checked = false;
+        }
+        ImGui::SameLine(0, 2);
+        if (ui::ButtonRaw("...##ds")) {
+            _pick = PickAction::BatchDataset;
+            _pick_row = i;
+            _dialog.open(msg::batch_pick_dataset.get(),
+                         FileDialog::Mode::Folder, {}, j.dataset);
+        }
+
+        ImGui::TableNextColumn();
+        draw_batch_preset_combo(j, i);
+
+        // The three numbers worth changing without making a preset for each
+        // combination. Empty means "whatever the preset says", which is why
+        // these are text boxes and not integer spinners -- 0 is a legal SH
+        // degree, so a spinner has no way to spell "unset".
+        const char* ids[] = {"##cap", "##sh", "##iters"};
+        std::string* fields[] = {&j.cap_max_override, &j.sh_degree_override,
+                                 &j.iterations_override};
+        for (int k = 0; k < 3; k++) {
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ui::InputTextWithHintRaw(ids[k], msg::batch_override_hint,
+                                         fields[k],
+                                         ImGuiInputTextFlags_CharsDecimal)) {
+                _batch_dirty = true;
+                _batch_checked = false;
+            }
+            ui::help_on_hover(msg::batch_override_help);
+        }
+
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-bw);
+        if (ui::InputTextWithHintRaw("##out", msg::batch_output_hint,
+                                     &j.output_dir)) {
+            _batch_dirty = true;
+            _batch_checked = false;
+        }
+        ui::help_on_hover(msg::batch_output_help);
+        ImGui::SameLine(0, 2);
+        if (ui::ButtonRaw("...##out")) {
+            _pick = PickAction::BatchOutput;
+            _pick_row = i;
+            _dialog.open(msg::batch_pick_output.get(), FileDialog::Mode::Folder,
+                         {}, j.output_dir);
+        }
+        ImGui::EndDisabled();
+
+        ImGui::TableNextColumn();
+        switch (j.status) {
+            case BatchJob::Status::Running:
+                ui::TextColored(kWarn, msg::batch_status_running); break;
+            case BatchJob::Status::Done:
+                ui::TextColored(kOk, msg::batch_status_done); break;
+            case BatchJob::Status::Failed:
+                ui::TextColored(kErr, msg::batch_status_failed); break;
+            case BatchJob::Status::Skipped:
+                ui::TextColored(kDim, msg::batch_status_skipped); break;
+            case BatchJob::Status::Stopped:
+                ui::TextColored(kDim, msg::batch_status_stopped); break;
+            default:
+                ui::TextColored(kDim, msg::batch_status_pending); break;
+        }
+        // Where it went, or why it did not: engine text and paths, both raw.
+        const std::string& detail = j.message.empty() ? j.out_dir : j.message;
+        if (!detail.empty()) ui::help_on_hover_raw(detail.c_str());
+        ImGui::SameLine();
+        ImGui::BeginDisabled(_batch_active);
+        // The same word the dataset screen's input list uses for the same job.
+        if (ui::Button(dmsg::remove)) remove = i;
+        ImGui::EndDisabled();
+
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
+
+    if (remove >= 0) {
+        _batch.erase(_batch.begin() + remove);
+        _batch_dirty = true;
+        _batch_checked = false;
+    }
+}
+
+void GuiApp::draw_batch_preset_combo(BatchJob& job, int row) {
+    const std::string preview = job.preset_path.empty()
+                                    ? preset_label(job.preset_name)
+                                    : job.preset_name;
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    const bool open = ui::BeginComboRaw("##preset", preview.c_str());
+    // On the closed combo too: a row shows only a name, and two saved presets
+    // can share one -- the path in the tooltip is what tells them apart.
+    // draw_batch() keeps _presets warm, so the description is there as well.
+    std::string desc;
+    if (job.preset_path.empty()) {
+        desc = preset_help(job.preset_name);
+    } else {
+        for (const TrainPreset& p : _presets)
+            if (p.path == job.preset_path) { desc = p.description; break; }
+    }
+    preset_hover(desc, job.preset_path);
+    if (!open) return;
+    refresh_presets();
+
+    ui::SeparatorText(msg::preset_builtin_group);
+    for (const auto& p : kTrainPresets) {
+        bool sel = job.preset_path.empty() && job.preset_name == p.name;
+        if (ui::SelectableRaw(preset_label(p.name), sel)) {
+            job.preset_path.clear();
+            job.preset_name = p.name;
+            _batch_dirty = true;
+            _batch_checked = false;
+        }
+        preset_hover(preset_help(p.name), {});
+        if (sel) ImGui::SetItemDefaultFocus();
+    }
+
+    ui::SeparatorText(msg::preset_user_group);
+    if (_presets.empty()) ui::TextDisabled(msg::preset_none_saved);
+    for (const auto& p : _presets) {
+        ImGui::PushID(p.path.c_str());
+        bool sel = job.preset_path == p.path;
+        if (ui::SelectableRaw(p.name, sel)) {
+            job.preset_path = p.path;
+            job.preset_name = p.name;
+            _batch_dirty = true;
+            _batch_checked = false;
+        }
+        preset_hover(p);
+        if (sel) ImGui::SetItemDefaultFocus();
+        ImGui::PopID();
+    }
+
+    ImGui::Separator();
+    if (ui::Selectable(msg::batch_preset_from_file)) {
+        _pick = PickAction::BatchPresetFile;
+        _pick_row = row;
+        _dialog.open(msg::preset_pick_file.get(), FileDialog::Mode::File,
+                     {".json"}, preset_dir());
+    }
+    ImGui::EndCombo();
+}
+
+void GuiApp::draw_batch_issues() {
+    for (int i = 0; i < (int)_batch.size(); i++) {
+        for (const BatchIssue& issue : _batch[i].issues) {
+            ui::TextColoredWrappedRaw(
+                issue.fatal ? kErr : kWarn,
+                i18n::format(msg::batch_issue_row,
+                             {(long long)(i + 1), batch_issue_line(issue)}));
+        }
+    }
+}
+
+
 void GuiApp::draw_train_settings() {
     TrainRunner::Phase ph = _runner.phase();
     bool busy = ph == TrainRunner::Phase::Loading ||
@@ -2195,59 +2849,308 @@ void GuiApp::draw_train_settings() {
     }
 
     // ---- preset + options ----
-    // Snapshot: any change to a dataset-parsing option below triggers an
-    // automatic reload (deferred until the edited widget loses focus).
-    TrainConfig parse_before = _cfg;
-    ImGui::BeginDisabled(busy);
-    ui::SeparatorText(msg::section_preset);
-    ImGui::SetNextItemWidth(-8);
-    // The preset's NAME is the command line's word for it and is not
-    // translated; what the picker shows is the label from
-    // i18n/catalog/Train.h, with the name kept alongside so that a user who
-    // has read the README still recognises the row they want.
-    static_assert(sizeof(kTrainPresets) / sizeof(kTrainPresets[0]) ==
-                      i18n::msg::train::kNumPresetText,
-                  "config/TrainConfig.h and i18n/catalog/Train.h disagree "
-                  "about how many presets there are");
-    if (ui::BeginComboRaw("##preset", preset_label(_preset).c_str())) {
-        for (const auto& p : kTrainPresets) {
-            bool sel = _preset == p.name;
-            if (ui::SelectableRaw(preset_label(p.name), sel))
-                apply_preset(p.name);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) &&
-                ImGui::BeginTooltip()) {
-                ImGui::PushTextWrapPos(360);
-                ui::TextRaw(preset_help(p.name));
-                ImGui::PopTextWrapPos();
-                ImGui::EndTooltip();
-            }
-            if (sel) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
+    // A batch owns the config while it runs -- each row's comes from its own
+    // preset -- so the editor would be showing something that is not what is
+    // training. What the row IS training goes here instead.
+    if (_batch_active) {
+        draw_batch_progress();
+    } else {
+        // Snapshot: any change to a dataset-parsing option below triggers an
+        // automatic reload (deferred until the edited widget loses focus).
+        TrainConfig parse_before = _cfg;
+        ImGui::BeginDisabled(busy);
+        ui::SeparatorText(msg::section_preset);
+        draw_preset_picker();
+
+        ui::SeparatorText(msg::section_basic_options);
+        draw_basic_options();
+
+        ImGui::Spacing();
+        if (ui::CollapsingHeader(msg::section_all_options))
+            draw_config_editor(_cfg, _defaults, _cfg_ui);
+        ImGui::EndDisabled();
+
+        // The macro options (quality, floater_suppression, ...) fill in the
+        // flags they stand for, skipping any the user has edited by hand -- so
+        // the two panels above always show the values the run will actually
+        // use. None of what they write is a dataset-parsing field, so this
+        // cannot make the snapshot below think the dataset went stale.
+        train_resolve_macros(_cfg, _cfg_ui.touched);
+
+        if (!parse_settings_equal(parse_before, _cfg)) _parse_dirty = true;
     }
-    ui::TextColoredWrappedRaw(kDim, preset_help(_preset));
-
-    ui::SeparatorText(msg::section_basic_options);
-    draw_basic_options();
-
-    ImGui::Spacing();
-    if (ui::CollapsingHeader(msg::section_all_options))
-        draw_config_editor(_cfg, _defaults, _cfg_ui);
-    ImGui::EndDisabled();
-
-    // The macro options (quality, floater_suppression, ...) fill in the flags
-    // they stand for, skipping any the user has edited by hand -- so the two
-    // panels above always show the values the run will actually use. None of
-    // what they write is a dataset-parsing field, so this cannot make the
-    // snapshot below think the dataset went stale.
-    train_resolve_macros(_cfg, _cfg_ui.touched);
-
-    if (!parse_settings_equal(parse_before, _cfg)) _parse_dirty = true;
 
     // ---- controls + metrics ----
     ui::SeparatorText(msg::section_training);
     draw_train_controls();
     draw_metrics();
+}
+
+// The preset picker: the built-in presets and the user's saved ones in one
+// dropdown, plus the two buttons that move settings between the screen and a
+// file. The built-in NAME is the command line's word for it and is not
+// translated -- what the picker shows is the label from i18n/catalog/Train.h
+// with the name kept alongside, so a user who has read the README still
+// recognises the row they want. A saved preset shows the name its author gave
+// it, which is the only name it has.
+void GuiApp::draw_preset_picker() {
+    static_assert(sizeof(kTrainPresets) / sizeof(kTrainPresets[0]) ==
+                      i18n::msg::train::kNumPresetText,
+                  "config/TrainConfig.h and i18n/catalog/Train.h disagree "
+                  "about how many presets there are");
+
+    const std::string preview =
+        _preset_file.empty() ? preset_label(_preset) : _preset_display;
+    ImGui::SetNextItemWidth(-8);
+    const bool combo_open = ui::BeginComboRaw("##preset", preview.c_str());
+    // On the closed combo too: two saved presets can share a name, and this
+    // is where the one in use says which file it is.
+    preset_hover(_preset_file.empty() ? preset_help(_preset) : _preset_desc,
+                 _preset_file);
+    if (combo_open) {
+        refresh_presets();
+        ui::SeparatorText(msg::preset_builtin_group);
+        for (const auto& p : kTrainPresets) {
+            bool sel = _preset_file.empty() && _preset == p.name;
+            if (ui::SelectableRaw(preset_label(p.name), sel))
+                apply_preset(p.name);
+            preset_hover(preset_help(p.name), {});
+            if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ui::SeparatorText(msg::preset_user_group);
+        if (_presets.empty()) ui::TextDisabled(msg::preset_none_saved);
+        for (const auto& p : _presets) {
+            ImGui::PushID(p.path.c_str());
+            bool sel = _preset_file == p.path;
+            if (ui::SelectableRaw(p.name, sel)) apply_user_preset(p);
+            preset_hover(p);
+            if (sel) ImGui::SetItemDefaultFocus();
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ui::TextColoredWrappedRaw(
+        kDim, _preset_file.empty() ? preset_help(_preset) : _preset_desc);
+
+    if (ui::Button(msg::preset_save)) {
+        // Seed the dialog from what is on screen: a saved preset being
+        // adjusted usually wants to be saved back over itself.
+        _preset_save_name = _preset_display;
+        _preset_save_desc = _preset_desc;
+        _preset_save_path = _preset_file;
+        _preset_path_edited = !_preset_file.empty();
+        _preset_save_open = true;
+    }
+    ui::help_on_hover(msg::preset_save_help);
+    ImGui::SameLine();
+    if (ui::Button(msg::preset_load)) {
+        _pick = PickAction::PresetFile;
+        _dialog.open(msg::preset_pick_file.get(), FileDialog::Mode::File,
+                     {".json"}, preset_dir());
+    }
+    ui::help_on_hover(msg::preset_load_help);
+
+    // Only for a saved preset: there is nothing to delete for a built-in one.
+    if (!_preset_file.empty()) {
+        ImGui::SameLine();
+        if (ui::Button(msg::preset_delete)) _preset_delete_open = true;
+        ui::help_on_hover(msg::preset_delete_help);
+    }
+
+    if (!_preset_msg.empty())
+        ui::TextColoredWrappedRaw(_preset_msg_err ? kErr : kOk, _preset_msg);
+    else
+        ui::TextColoredWrapped(kDim, msg::preset_drop_hint);
+}
+
+// Deleting removes a file, so it asks first -- and names both the preset and
+// the path, because two presets can share a name and only the path says which
+// one is about to go.
+void GuiApp::draw_preset_delete_modal() {
+    if (_preset_delete_open) {
+        ui::OpenPopup(msg::preset_delete_title);
+        _preset_delete_open = false;
+        _preset_delete_shown = true;
+    }
+    if (!_preset_delete_shown) return;
+
+    if (!ui::BeginPopupModal(msg::preset_delete_title, nullptr,
+                             ImGuiWindowFlags_AlwaysAutoResize)) {
+        _preset_delete_shown = false;
+        return;
+    }
+    ImGui::PushTextWrapPos(460);
+    ui::Text(msg::preset_delete_confirm, {_preset_display});
+    ui::TextDisabledRaw(_preset_file);
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+
+    if (ui::Button(msg::preset_delete_button, ImVec2(150, 0))) {
+        const std::string path = _preset_file, name = _preset_display;
+        try {
+            delete_preset(path);
+            // The options on screen stay exactly as they are -- what went is
+            // the saved copy, not the work. The picker falls back to naming
+            // the built-in this config descends from, the same thing it shows
+            // once any field has been edited by hand.
+            _preset_file.clear();
+            _preset_display.clear();
+            _preset_desc.clear();
+            _preset_msg = i18n::format(msg::preset_deleted, {name});
+            _preset_msg_err = false;
+            _presets_scanned_at = -1.0;
+            refresh_presets();
+            // Rows pointing at the file that just went would fail at launch;
+            // the next check says so instead.
+            _batch_checked = false;
+        } catch (const std::exception& e) {
+            _preset_msg = i18n::format(msg::preset_delete_failed, {e.what()});
+            _preset_msg_err = true;
+        }
+        log(_preset_msg);
+        _preset_delete_shown = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ui::Button(msg::cancel, ImVec2(150, 0))) {
+        _preset_delete_shown = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void GuiApp::draw_preset_save_modal() {
+    if (_preset_save_open) {
+        ui::OpenPopup(msg::preset_save_title);
+        _preset_save_open = false;
+        _preset_save_shown = true;
+    }
+    if (!_preset_save_shown) return;
+
+    ImGui::SetNextWindowSize(ImVec2(540, 0), ImGuiCond_Appearing);
+    if (!ui::BeginPopupModal(msg::preset_save_title, nullptr,
+                             ImGuiWindowFlags_AlwaysAutoResize)) {
+        _preset_save_shown = false;   // dismissed with Esc / a click away
+        return;
+    }
+
+    const float fw = 360.0f;
+    ImGui::SetNextItemWidth(fw);
+    // A preset name is the user's own words in the user's own language, so it
+    // is not interface copy and not translated -- only the label is.
+    ui::InputTextWithHint(msg::preset_name, msg::preset_name_hint,
+                          &_preset_save_name);
+    ImGui::SetNextItemWidth(fw);
+    ui::InputTextWithHint(msg::preset_desc, msg::preset_desc_hint,
+                          &_preset_save_desc);
+
+    // The path follows the name until the user takes it over.
+    if (!_preset_path_edited)
+        _preset_save_path =
+            (fs::path(preset_dir()) / preset_file_name(_preset_save_name))
+                .string();
+
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(fw);
+    // A path is a path in every language.
+    if (ui::InputTextRaw("##preset_path", &_preset_save_path))
+        _preset_path_edited = true;
+    ImGui::SameLine();
+    if (ui::ButtonRaw("...##preset_dir")) {
+        _pick = PickAction::PresetSaveFolder;
+        _preset_path_edited = true;
+        _dialog.open(msg::preset_pick_folder.get(), FileDialog::Mode::Folder,
+                     {}, fs::path(_preset_save_path).parent_path().string());
+        // ImGui shows one modal at a time and the dialog is one too, so this
+        // one steps aside and is re-armed when the pick comes back. Nothing is
+        // lost: the name, the description and the path are all state here.
+        _preset_save_shown = false;
+        _preset_save_reopen = true;
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    ImGui::SameLine();
+    ui::Text(msg::preset_path_label);
+    ui::help_on_hover(msg::preset_path_help);
+    if (_preset_path_edited && ui::Button(msg::preset_use_default_folder))
+        _preset_path_edited = false;
+
+    std::error_code ec;
+    const bool named = !_preset_save_name.empty();
+    const bool exists = fs::is_regular_file(_preset_save_path, ec);
+    if (!named) ui::TextColored(kWarn, msg::preset_name_required);
+    else if (exists) ui::TextColored(kWarn, msg::preset_overwrite_warn);
+
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!named);
+    if (ui::Button(exists ? msg::preset_overwrite_button
+                          : msg::preset_save_button,
+                   ImVec2(150, 0))) {
+        TrainPreset p;
+        p.name = _preset_save_name;
+        p.description = _preset_save_desc;
+        p.base = _preset;
+        p.cfg = _cfg;
+        p.touched = _cfg_ui.touched;
+        try {
+            save_preset(p, _preset_save_path);
+            p.path = _preset_save_path;
+            // Saving is also selecting: the screen now shows this preset.
+            _preset_file = p.path;
+            _preset_display = p.name;
+            _preset_desc = p.description;
+            _defaults = _cfg;
+            _preset_msg = i18n::format(msg::preset_saved, {_preset_save_path});
+            _preset_msg_err = false;
+            _presets_scanned_at = -1.0;   // the new file must show up at once
+            refresh_presets();
+        } catch (const std::exception& e) {
+            _preset_msg = i18n::format(msg::preset_failed, {e.what()});
+            _preset_msg_err = true;
+        }
+        log(_preset_msg);
+        _preset_save_shown = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ui::Button(msg::cancel, ImVec2(150, 0))) {
+        _preset_save_shown = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+// What the trainer screen's left panel says while a batch owns it: which row
+// is running, out of how many, and the two ways to stop.
+void GuiApp::draw_batch_progress() {
+    ui::SeparatorText(msg::batch_title);
+    const long long total = (long long)_batch.size();
+    ui::Text(msg::batch_running_banner,
+             {(long long)(_batch_current + 1), total});
+    if (_batch_current >= 0 && _batch_current < (int)_batch.size()) {
+        const BatchJob& j = _batch[_batch_current];
+        ImGui::PushTextWrapPos();
+        ui::TextDisabled(msg::batch_running_dataset, {j.dataset});
+        ui::TextDisabled(msg::batch_running_preset, {j.preset_name});
+        ImGui::PopTextWrapPos();
+    }
+    if (_batch_stop_after) ui::TextColored(kWarn, msg::batch_stopping);
+
+    if (ui::Button(msg::batch_show_list, ImVec2(-8, 0)))
+        _screen = Screen::Batch;
+    ImGui::BeginDisabled(_batch_stop_after);
+    if (ui::Button(msg::batch_stop_after, ImVec2(-8, 0)))
+        _batch_stop_after = true;
+    ui::help_on_hover(msg::batch_stop_after_help);
+    ImGui::EndDisabled();
+    if (ui::Button(msg::batch_stop_now, ImVec2(-8, 0))) {
+        _batch_stop_after = true;
+        _batch_stop_now = true;
+        _runner.request_stop();
+    }
+    ui::help_on_hover(msg::batch_stop_now_help);
 }
 
 // Every edit here records itself in _cfg_ui.touched, the same way the
@@ -2421,9 +3324,15 @@ void GuiApp::draw_train_controls() {
             break;
         case TrainRunner::Phase::Training: {
             bool paused = _runner.paused();
-            float half = (ImGui::GetContentRegionAvail().x - 12) * 0.5f;
+            // While a batch runs, stopping is the batch panel's business --
+            // "stop and save" here would end one job and silently start the
+            // next, which is not what anybody pressing it means.
+            float half = _batch_active
+                             ? -8.0f
+                             : (ImGui::GetContentRegionAvail().x - 12) * 0.5f;
             if (ui::Button(paused ? msg::resume : msg::pause, ImVec2(half, 32)))
                 _runner.set_paused(!paused);
+            if (_batch_active) break;
             ImGui::SameLine();
             bool stopping = _runner.session() &&
                             _runner.session()->stop_requested.load();
@@ -2563,12 +3472,17 @@ void GuiApp::draw_confirm_modal() {
         // Whole questions rather than one with a swappable tail: the clause
         // order differs by language, and Japanese, Korean and Turkish put the
         // verb last, so "... and {0}?" cannot be translated at all.
-        ui::Text(_pending == Pending::Quit      ? msg::confirm_quit
-               : _pending == Pending::GoHome    ? msg::confirm_home
-               : _pending == Pending::OpenSplat ? msg::confirm_open_splat
-                                                : msg::confirm_open);
+        ui::Text(_pending == Pending::Quit       ? msg::confirm_quit
+               : _pending == Pending::GoHome     ? msg::confirm_home
+               : _pending == Pending::OpenSplat  ? msg::confirm_open_splat
+               : _pending == Pending::StartBatch ? msg::confirm_batch
+                                                 : msg::confirm_open);
         ImGui::Spacing();
         if (ui::Button(msg::stop_and_save, ImVec2(150, 0))) {
+            // A batch is a training session too, and this is the user saying
+            // they want the engine back. Give up the queue with it -- except
+            // when the queue is what they are starting.
+            if (_pending != Pending::StartBatch) cancel_batch();
             _runner.request_stop();
             _stop_confirmed = true;
             _confirm_shown = false;

@@ -366,6 +366,22 @@ inline bool InputTextHintBufRaw(const char* id, const Msg& hint, char* buf,
 }
 
 // ---------------------------------------------------------------------------
+// Tables
+// ---------------------------------------------------------------------------
+// Only the column headers carry text; BeginTable / TableNextRow /
+// TableNextColumn / TableHeadersRow do not, and are called directly.
+
+inline void TableSetupColumn(const Msg& m, ImGuiTableColumnFlags flags = 0,
+                             float width = 0.0f) {
+    ImGui::TableSetupColumn(detail::label(m), flags, width);
+}
+// A column whose heading is a glyph or a number ("#"), not a word.
+inline void TableSetupColumnRaw(const char* s, ImGuiTableColumnFlags flags = 0,
+                                float width = 0.0f) {
+    ImGui::TableSetupColumn(s, flags, width);
+}
+
+// ---------------------------------------------------------------------------
 // Progress
 // ---------------------------------------------------------------------------
 

@@ -329,6 +329,26 @@ bool any_image(const fs::path& p) {
 
 bool folder_has_images(const std::string& dir) { return any_image(dir); }
 
+bool folder_looks_like_dataset(const std::string& dir) {
+    std::error_code ec;
+    const fs::path p(dir);
+    if (fs::exists(p / "transforms.json", ec) ||
+        fs::is_directory(p / "sparse", ec) || fs::is_directory(p / "colmap", ec))
+        return true;
+    // Metashape export: a camera .xml next to a point-cloud .ply (what
+    // MetashapeParser probes for).
+    bool has_xml = false, has_ply = false;
+    for (fs::directory_iterator it(p, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        std::string e = it->path().extension().string();
+        for (auto& c : e) c = (char)std::tolower((unsigned char)c);
+        has_xml = has_xml || e == ".xml";
+        has_ply = has_ply || e == ".ply";
+    }
+    return has_xml && has_ply;
+}
+
 WorkspaceState probe_workspace(const std::string& workspace,
                                const std::vector<PrepInput>& inputs) {
     WorkspaceState st;

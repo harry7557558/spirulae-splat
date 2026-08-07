@@ -27,6 +27,11 @@ public:
     // them in result().
     bool draw();
 
+    // Armed or on screen. ImGui shows one modal at a time, so a caller that is
+    // itself a modal has to step aside for this one and needs to know when it
+    // is gone -- whether the user confirmed or cancelled.
+    bool is_open() const { return _is_open || _want_open; }
+
     const std::string& result() const { return _result; }
     const std::vector<std::string>& results() const { return _results; }
 

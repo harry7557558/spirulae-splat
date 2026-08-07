@@ -106,9 +106,15 @@ build_loss_weights(const TrainConfig& c, int step);
 EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st,
                                    int step);
 
-// Nested-by-group config.json dump, keyed by train_json_key(flag).
+// Flat config.json dump, one key per flag (config/TrainConfigJson.h).
 void save_config_json(const TrainConfig& c, const std::filesystem::path& out_dir,
                       const std::string& preset);
+
+// "" when this config is runnable, else the sentence naming the flag that is
+// not implemented -- exactly what TrainerSession::check_config() throws. A
+// front-end that wants to report the problem instead of catching it (the
+// GUI's batch pre-flight) asks this first.
+std::string train_config_unsupported(const TrainConfig& c);
 
 
 // ===========================================================================

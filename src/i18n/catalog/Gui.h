@@ -2735,6 +2735,176 @@ SS_MSG(confirm_open_splat,
     TR("Eğitimi durdurup son bir kontrol noktası kaydedelim ve model dosyasını "
        "açalım mı?"));
 
+
+// ===========================================================================
+// Saved presets
+//
+// The built-in presets are code and their labels are translated in
+// i18n/catalog/Train.h. These are the words around the ones the user saves:
+// the save dialog, the picker's two groups, and what comes back afterwards.
+// ===========================================================================
+
+SS_MSG_EN(preset_builtin_group, "Built-in");
+SS_MSG_EN(preset_user_group, "Saved");
+SS_MSG_EN(preset_none_saved, "Nothing saved yet");
+SS_MSG_EN(preset_save, "Save as preset...");
+SS_MSG_EN(preset_save_help,
+    "Write every option on this screen to a preset file, so the same settings "
+    "can be loaded onto another dataset or pointed at from a batch run. The "
+    "dataset and the output folder are not part of a preset.");
+SS_MSG_EN(preset_load, "Load preset...");
+SS_MSG_EN(preset_load_help,
+    "Read a preset file, or the config.json of a run that came out well. "
+    "Options the file does not mention come up at their defaults, and options "
+    "it names that this build does not have are ignored.");
+SS_MSG_EN(preset_drop_hint,
+    "Tip: a preset (or a run's config.json) can be dropped onto this window.");
+
+SS_MSG_EN(preset_save_title, "Save Training Preset");
+SS_MSG_EN(preset_name, "Name");
+SS_MSG_EN(preset_name_hint, "e.g. Indoor handheld, high detail");
+SS_MSG_EN(preset_desc, "Description");
+SS_MSG_EN(preset_desc_hint, "What this preset is for (optional)");
+SS_MSG_EN(preset_path_label, "File");
+SS_MSG_EN(preset_path_help,
+    "Where the preset is written. Presets in the default folder are offered in "
+    "the picker above; one saved anywhere else is loaded by path.");
+SS_MSG_EN(preset_use_default_folder, "Default folder");
+SS_MSG_EN(preset_name_required, "Give the preset a name first.");
+SS_MSG_EN(preset_overwrite_warn, "A file already exists here and will be replaced.");
+SS_MSG_EN(preset_save_button, "Save");
+SS_MSG_EN(preset_overwrite_button, "Replace");
+SS_MSG_EN(preset_saved, "Preset saved: {0}");
+SS_MSG_EN(preset_loaded, "Preset loaded: {0}");
+SS_MSG_EN(preset_failed, "The preset could not be read: {0}");
+SS_MSG_EN(preset_pick_file, "Choose a preset file");
+SS_MSG_EN(preset_pick_folder, "Choose where to save the preset");
+
+SS_MSG_EN(preset_delete, "Delete this preset...");
+SS_MSG_EN(preset_delete_help,
+    "Remove the selected preset's file. The options on screen are left as "
+    "they are -- this deletes the saved copy, not what you are working on.");
+SS_MSG_EN(preset_delete_title, "Delete Preset");
+SS_MSG_EN(preset_delete_confirm, "Delete the preset \"{0}\"?");
+SS_MSG_EN(preset_delete_button, "Delete");
+SS_MSG_EN(preset_deleted, "Preset deleted: {0}");
+SS_MSG_EN(preset_delete_failed, "The preset could not be deleted: {0}");
+
+
+// ===========================================================================
+// Batch training
+// ===========================================================================
+
+SS_MSG_EN(home_batch, "Batch Training");
+SS_MSG_EN(home_batch_help,
+    "Queue several datasets, each with its own preset, and train them one "
+    "after another without supervision.");
+SS_MSG_EN(menu_batch, "Batch Training...");
+SS_MSG_EN(batch_title, "Batch Training");
+SS_MSG_EN(batch_intro,
+    "Each row trains one dataset with one preset, top to bottom. A row that "
+    "fails is recorded and the next one starts anyway.");
+SS_MSG_EN(batch_drop_hint, "Drop dataset folders here to add them.");
+SS_MSG_EN(batch_empty, "The list is empty. Add a dataset to get started.");
+SS_MSG_EN(batch_add_row, "Add dataset...");
+SS_MSG_EN(batch_add_recent, "Add a recent one");
+SS_MSG_EN(batch_no_recent, "No datasets have been opened yet.");
+SS_MSG_EN(batch_clear, "Clear list");
+SS_MSG_EN(batch_check, "Check setups");
+SS_MSG_EN(batch_check_help,
+    "Look for the reasons a row is going to fail -- a folder with no "
+    "reconstruction in it, a preset that has gone missing, an option the "
+    "trainer does not implement -- without starting anything.");
+SS_MSG_EN(batch_start, "Start batch");
+SS_MSG_EN(batch_start_skip, "Skip the bad rows and start");
+SS_MSG_EN(batch_blocked, "Rows with a problem: {0}. Fix them, or start without them.");
+SS_MSG_EN(batch_checked_ok, "Every row looks runnable.");
+SS_MSG_EN(batch_no_runnable, "Nothing to run.");
+SS_MSG_EN(batch_col_dataset, "Dataset");
+SS_MSG_EN(batch_col_preset, "Preset");
+SS_MSG_EN(batch_col_splats, "Max splats");
+SS_MSG_EN(batch_col_sh, "SH degree");
+SS_MSG_EN(batch_col_steps, "Steps");
+SS_MSG_EN(batch_col_output, "Output folder");
+SS_MSG_EN(batch_col_status, "Status");
+SS_MSG_EN(batch_dataset_hint, "path to a reconstructed dataset");
+// The three columns that save making a near-identical preset for every
+// combination of the numbers people actually change.
+SS_MSG_EN(batch_override_hint, "preset");
+SS_MSG_EN(batch_override_help,
+    "Overrides what the preset says, for this row alone. Leave it empty to "
+    "train with the preset's own value.");
+SS_MSG_EN(batch_output_hint, "default: <dataset>/outputs");
+SS_MSG_EN(batch_output_help,
+    "Runs go into this folder, each in its own timestamped subfolder. Leave it "
+    "empty to write beside the dataset, which is what the trainer screen does.");
+SS_MSG_EN(batch_preset_from_file, "From a file...");
+SS_MSG_EN(batch_pick_dataset, "Choose a dataset folder");
+SS_MSG_EN(batch_pick_output, "Choose an output folder");
+
+SS_MSG_EN(batch_status_pending, "Waiting");
+SS_MSG_EN(batch_status_running, "Training");
+SS_MSG_EN(batch_status_done, "Done");
+SS_MSG_EN(batch_status_failed, "Failed");
+SS_MSG_EN(batch_status_skipped, "Skipped");
+SS_MSG_EN(batch_status_stopped, "Stopped");
+
+SS_MSG_EN(batch_issue_row, "Job {0}: {1}");
+SS_MSG_EN(batch_running_banner, "Batch job {0} of {1}");
+SS_MSG_EN(batch_running_dataset, "Training: {0}");
+SS_MSG_EN(batch_running_preset, "Preset: {0}");
+SS_MSG_EN(confirm_batch,
+    "Stop training, save a last checkpoint and start the batch?");
+SS_MSG_EN(batch_show_list, "Batch list");
+SS_MSG_EN(batch_show_training, "Show training");
+SS_MSG_EN(batch_stop_after, "Stop after this job");
+SS_MSG_EN(batch_stop_after_help,
+    "Let the job that is running finish and save, then stop instead of "
+    "starting the next one.");
+SS_MSG_EN(batch_stop_now, "Stop now");
+SS_MSG_EN(batch_stop_now_help,
+    "Cut the running job short -- it still saves a checkpoint -- and stop the "
+    "batch.");
+SS_MSG_EN(batch_stopping, "Stopping after this job.");
+
+SS_MSG_EN(batch_log_started, "Batch started. Jobs: {0}");
+SS_MSG_EN(batch_log_job_start, "Batch job {0}: training {1}");
+SS_MSG_EN(batch_log_job_done, "Batch job {0} finished, written to {1}");
+SS_MSG_EN(batch_log_job_failed, "Batch job {0} failed: {1}");
+SS_MSG_EN(batch_log_job_stopped, "Batch job {0} was stopped.");
+// "Not finished" rather than "not run": a row stopped part-way is in there
+// too, and it did run -- it just has no result to report.
+SS_MSG_EN(batch_log_summary,
+    "Batch finished. Done: {0}   Failed: {1}   Not finished: {2}");
+
+// ---- what a pre-flight can find ----
+SS_MSG_EN(chk_dataset_empty, "No dataset folder is set.");
+SS_MSG_EN(chk_dataset_missing, "The dataset folder does not exist: {0}");
+SS_MSG_EN(chk_dataset_not_a_dir, "This is a file, not a dataset folder: {0}");
+SS_MSG_EN(chk_dataset_unreadable,
+    "This folder holds no reconstruction the trainer can read -- no "
+    "transforms.json, no sparse/ or colmap/, no Metashape .xml beside a .ply: {0}");
+// Two rows on one dataset are ordinary -- comparing presets, or sweeping the
+// splat budget, is what a batch is for. Only rows that would do exactly the
+// same work are worth saying anything about.
+SS_MSG_EN(chk_dataset_duplicate,
+    "Another row trains this dataset with the same settings: {0}");
+SS_MSG_EN(chk_bad_max_splats,
+    "Max splats must be a whole number of 1 or more: {0}");
+SS_MSG_EN(chk_bad_sh_degree, "SH degree must be a whole number from 0 to 4: {0}");
+SS_MSG_EN(chk_bad_steps, "Steps must be a whole number of 1 or more: {0}");
+SS_MSG_EN(chk_images_missing,
+    "There is no '{0}' folder in the dataset. The parser may still find the "
+    "photos where the reconstruction says they are.");
+SS_MSG_EN(chk_preset_missing, "The preset file is gone: {0}");
+SS_MSG_EN(chk_preset_unreadable, "The preset file could not be read: {0}");
+SS_MSG_EN(chk_preset_unknown, "There is no built-in preset by this name: {0}");
+SS_MSG_EN(chk_output_unusable,
+    "The output folder cannot be created -- no part of this path exists: {0}");
+SS_MSG_EN(chk_output_is_file, "The output path is a file: {0}");
+SS_MSG_EN(chk_unsupported, "This preset asks for something the trainer does not do: {0}");
+SS_MSG_EN(chk_no_device, "No usable GPU was found; nothing can train.");
+
 }  // namespace gui
 }  // namespace msg
 }  // namespace i18n

@@ -117,7 +117,10 @@ src/
 │                             the GUI drive this; it lives in the engine
 │                             library (cmake/sources.txt), not the app targets.
 ├── config/                 TrainConfig.h — the training config's single source
-│                             of truth: one X-macro row per flag, hand-written
+│                             of truth: one X-macro row per flag, hand-written.
+│                             TrainConfigJson.h is the one flat-JSON encoding
+│                             of it, shared by config.json, --resume and the
+│                             GUI's saved presets
 ├── i18n/                   the interface in 13 languages. A translation is a
 │                             TYPE, so a missing one is a compile error, not a
 │                             runtime fallback. Languages.h is the one place the
@@ -203,7 +206,8 @@ Rules:
 4. `src/config/TrainConfig.h` is the **single source of truth** for the
    training config, and it is hand-written, not generated. Adding a row to
    `SS_CONFIG_FIELDS` makes the field appear in the native CLI, `--help`,
-   the GUI's "All Options" editor, the run's `config.json` and `TrainerCore` —
+   the GUI's "All Options" editor, the run's `config.json`, the GUI's saved
+   presets and `TrainerCore` —
    the struct is expanded from the same table, so the two cannot drift. A row
    also carries a `section` (which heading it is listed under) and a `tier`
    (`basic` / `advanced` / `expert` / `stub`, which decides whether `--help`

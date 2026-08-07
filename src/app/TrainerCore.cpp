@@ -6,6 +6,7 @@
 #include "app/EvalMetrics.h"
 #include "checkpoint/Adapt.h"
 #include "checkpoint/Resume.h"
+#include "config/TrainConfigJson.h"
 #include "i18n/catalog/Log.h"
 #include "data/Knn.h"
 
@@ -449,33 +450,6 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
 // config.json dump
 // ===========================================================================
 
-namespace {
-
-// JSON value emitters (Python-json compatible: float('inf') serializes as
-// Infinity, None as null).
-std::string json_str(bool v)               { return v ? "true" : "false"; }
-std::string json_str(int v)                { return std::to_string(v); }
-std::string json_str(float v) {
-    if (std::isinf(v)) return v > 0 ? "Infinity" : "-Infinity";
-    char buf[32]; std::snprintf(buf, sizeof buf, "%g", v); return buf;
-}
-std::string json_str(const std::string& v) {
-    if (v.empty()) return "null";
-    std::string s = "\"";
-    for (char ch : v) { if (ch == '"' || ch == '\\') s += '\\'; s += ch; }
-    return s + "\"";
-}
-template <typename T> std::string json_str(const std::optional<T>& v) {
-    return v ? json_str(*v) : "null";
-}
-template <typename T, size_t N> std::string json_str(const std::array<T, N>& v) {
-    std::string s = "[";
-    for (size_t i = 0; i < N; i++) s += (i ? ", " : "") + json_str(v[i]);
-    return s + "]";
-}
-
-}  // namespace
-
 // Flat dump: one key per flag, spelled exactly as the flag is. It used to be
 // nested under the field table's group column, which quietly made a
 // presentational choice part of an on-disk format -- moving a flag to another
@@ -485,15 +459,16 @@ template <typename T, size_t N> std::string json_str(const std::array<T, N>& v) 
 //
 // Macro flags (--quality and friends) are written alongside the values they
 // resolved to, so a reader takes the values and never re-resolves them.
+//
+// The encoding itself is config/TrainConfigJson.h, shared with --resume's
+// reader and the GUI's saved presets so the three cannot disagree.
 void save_config_json(const TrainConfig& c, const fs::path& out_dir,
                       const std::string& preset) {
     FILE* f = std::fopen((out_dir / "config.json").string().c_str(), "w");
     if (!f) throw std::runtime_error("cannot write config.json");
     std::fprintf(f, "{\n    \"preset\": \"%s\"", preset.c_str());
-#define SS_DUMP(type, member, default_, section, tier, choices)               \
-    std::fprintf(f, ",\n    \"%s\": %s", #member, json_str(c.member).c_str());
-    SS_CONFIG_FIELDS(SS_DUMP)
-#undef SS_DUMP
+    for (const auto& [key, value] : train_config_json_pairs(c))
+        std::fprintf(f, ",\n    \"%s\": %s", key, value.c_str());
     std::fprintf(f, "\n}\n");
     std::fclose(f);
 }
@@ -509,18 +484,32 @@ void TrainerSession::log(const std::string& msg) {
     std::fflush(stdout);
 }
 
+// The unported-feature guards, as a pure check. Split out of check_config()
+// so a front-end can ask the question without the answer arriving as an
+// exception: the GUI's batch pre-flight reports every row's problems at once,
+// before anything starts, which is the whole point of a pre-flight.
+std::string train_config_unsupported(const TrainConfig& c) {
+    auto not_impl = [](const std::string& what) {
+        return what + " is not supported yet";
+    };
+    if (c.use_bvh)                    return not_impl("--use-bvh");
+    if (c.use_camera_optimizer)       return not_impl("--use-camera-optimizer");
+    if (c.deblur_training_images)     return not_impl("--deblur-training-images");
+    if (!c.optimizer_offload.empty()) return not_impl("--optimizer-offload");
+    if (c.cache_images == "gpu")      return not_impl("--cache-images gpu");
+    if (c.rescale_camera_to_fit < 0)  return not_impl("--rescale-camera-to-fit auto-detect");
+    if (c.train_frame != "points")    return not_impl("--train-frame " + c.train_frame);
+    if (c.primitive != "3dgs" && c.primitive != "mip" && c.primitive != "3dgut")
+        return not_impl("--primitive " + c.primitive);
+    if (c.quantization_level != 0 && c.quantization_level != 1)
+        return "quantization_level must be 0 or 1";
+    return {};
+}
+
 // Unported-feature guards: fail early rather than ignore a flag.
 void TrainerSession::check_config() {
-    auto not_impl = [](const std::string& what) {
-        throw std::runtime_error(what +
-            " is not supported yet");
-    };
-    if (cfg.use_bvh)                    not_impl("--use-bvh");
-    if (cfg.use_camera_optimizer)       not_impl("--use-camera-optimizer");
-    if (cfg.deblur_training_images)     not_impl("--deblur-training-images");
-    if (!cfg.optimizer_offload.empty()) not_impl("--optimizer-offload");
-    if (cfg.cache_images == "gpu")      not_impl("--cache-images gpu");
-    if (cfg.rescale_camera_to_fit < 0)  not_impl("--rescale-camera-to-fit auto-detect");
+    if (std::string what = train_config_unsupported(cfg); !what.empty())
+        throw std::runtime_error(what);
     if (cfg.validation_fraction > 0)
         log("warning: validation images are held out but "
             "early stopping / eval is not ported yet");
@@ -529,12 +518,6 @@ void TrainerSession::check_config() {
             "'/'" + cfg.center_method + "' approximated as 'up'/'poses' "
             "(affects only train_frame_scale; see docs/notes/pose-normalization.md "
             "for the unported reference implementation)");
-    if (cfg.train_frame != "points")
-        not_impl("--train-frame " + cfg.train_frame);
-    if (cfg.primitive != "3dgs" && cfg.primitive != "mip" && cfg.primitive != "3dgut")
-        not_impl("--primitive " + cfg.primitive);
-    if (cfg.quantization_level != 0 && cfg.quantization_level != 1)
-        throw std::runtime_error("quantization_level must be 0 or 1");
 }
 
 void TrainerSession::load_dataset() {

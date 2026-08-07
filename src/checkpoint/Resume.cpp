@@ -2,13 +2,13 @@
 
 #include "checkpoint/Resume.h"
 
+#include "config/TrainConfigJson.h"
 #include "core/CheckpointIO.h"
 
 #include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
-#include <type_traits>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -39,40 +39,6 @@ std::string read_member(TarView& v, const std::string& name) {
     for (const auto& m : v.members)
         if (m.name == name) return tar_read_member(v.in, m);
     return {};
-}
-
-// ---- config.json -> field ---------------------------------------------------
-// One overload per field type in the table. A missing or null value leaves the
-// field at its default, except where null is the encoding of "unset": an empty
-// std::string, or a disengaged std::optional.
-
-void assign(int& out, const JsonValue& v)    { if (!v.is_null()) out = (int)v.as_int(); }
-void assign(float& out, const JsonValue& v)  { if (!v.is_null()) out = (float)v.as_double(); }
-void assign(bool& out, const JsonValue& v)   { if (!v.is_null()) out = v.as_bool(); }
-
-void assign(std::string& out, const JsonValue& v) {
-    out = v.is_null() ? std::string() : v.as_string();
-}
-
-void assign(std::optional<int>& out, const JsonValue& v) {
-    if (v.is_null()) out = std::nullopt; else out = (int)v.as_int();
-}
-void assign(std::optional<float>& out, const JsonValue& v) {
-    if (v.is_null()) out = std::nullopt; else out = (float)v.as_double();
-}
-void assign(std::optional<bool>& out, const JsonValue& v) {
-    if (v.is_null()) out = std::nullopt; else out = v.as_bool();
-}
-
-template <typename T, size_t N>
-void assign(std::array<T, N>& out, const JsonValue& v) {
-    if (v.is_null()) return;
-    if (!v.is_array() || v.arr.size() != N)
-        throw std::runtime_error("config.json: expected an array of " +
-                                 std::to_string(N) + " numbers");
-    for (size_t i = 0; i < N; i++)
-        out[i] = (T)(std::is_integral<T>::value ? (double)v.arr[i].as_int()
-                                                : v.arr[i].as_double());
 }
 
 }  // namespace
@@ -132,14 +98,8 @@ void check_resumable(const fs::path& ckpt_dir) {
 
 
 TrainConfig config_from_json(const fs::path& config_json) {
-    JsonValue root = json_parse_file(config_json.string());
     TrainConfig c;
-
-#define SS_LOAD_FIELD(type, member, default_, section, tier, choices)         \
-    if (const JsonValue* v = root.find(#member)) assign(c.member, *v);
-    SS_CONFIG_FIELDS(SS_LOAD_FIELD)
-#undef SS_LOAD_FIELD
-
+    train_config_from_json(json_parse_file(config_json.string()), c);
     return c;
 }
 

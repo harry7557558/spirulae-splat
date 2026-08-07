@@ -6,6 +6,7 @@
 
 #include "backend/api/BackendRuntime.h"
 #include "config/TrainConfig.h"
+#include "app/gui/BatchTrain.h"
 #include "app/gui/ColmapRunner.h"
 #include "app/gui/Fonts.h"
 #include "app/gui/ConfigUI.h"
@@ -14,6 +15,7 @@
 #include "app/gui/SegmentPanel.h"
 #include "app/gui/SfmRunner.h"
 #include "app/gui/SplatViewer.h"
+#include "app/gui/TrainPreset.h"
 #include "app/gui/TrainRunner.h"
 #include "app/gui/ViewportPanel.h"
 
@@ -45,16 +47,17 @@ public:
     FontSet& fonts() { return _fonts; }
 
 private:
-    enum class Screen { Home, NewDataset, Train, Viewer };
+    enum class Screen { Home, NewDataset, Train, Viewer, Batch };
     enum class PickAction {
         None, OpenDataset, SourceImages, SourceVideo, SourceReplace, Workspace,
-        OutputPrefix, VocabTree, MaskModelFile, SplatFile
+        OutputPrefix, VocabTree, MaskModelFile, SplatFile,
+        PresetFile, PresetSaveFolder, BatchDataset, BatchOutput, BatchPresetFile
     };
     // Which reconstruction back end the New Dataset screen runs.
     enum class Engine { BuiltIn, Colmap };
     // Session-destroying actions deferred behind the "stop training?"
     // confirmation (and executed once the stop has completed).
-    enum class Pending { None, GoHome, OpenDataset, OpenSplat, Quit };
+    enum class Pending { None, GoHome, OpenDataset, OpenSplat, Quit, StartBatch };
 
     // ---- persistence (recents + tool paths) ----
     static std::string settings_path();
@@ -93,8 +96,39 @@ public:
 private:
     void request_go_home();
     void apply_preset(const std::string& preset);
+    // A preset the user saved (or a run's config.json). Replaces the whole
+    // config the way a built-in preset does, but keeps the GUI-owned context
+    // -- which dataset is open, where its runs go.
+    void apply_user_preset(const TrainPreset& p);
+    // Read `path` and apply it. Reports the outcome in the preset panel and
+    // the log rather than throwing; refuses while training, because applying
+    // one re-parses the dataset and would take the running session down.
+    void load_preset_file(const std::string& path);
+    // Re-scan preset_dir(), rate-limited: this runs while a dropdown is open.
+    void refresh_presets();
     void start_training();
+    // Hand a config to the runner. Everything a new session invalidates --
+    // the splat viewer holding the engine, the viewport's render worker --
+    // is released here, so both the Start button and the batch queue go
+    // through it.
+    void launch_training(const TrainConfig& cfg, const std::string& preset);
     bool training_busy() const;   // Preparing or Training
+
+    // ---- batch ----
+    // Append a row for this dataset, seeded with the preset the trainer
+    // screen is on. Shared by the picker, the recents menu and the drop
+    // handler.
+    void add_batch_row(const std::string& dataset);
+    void check_batch();                     // pre-flight every row
+    void request_start_batch(bool skip_invalid);
+    void start_batch(bool skip_invalid);
+    // Called once per frame while a batch is live: records the row that just
+    // finished and launches the next one.
+    void advance_batch();
+    void finish_batch();
+    // Give up on the queue without waiting for the current row (the stop
+    // confirmation took the session away).
+    void cancel_batch();
 
     // ---- dataset creation ----
     // Which engines this build and this machine can actually offer.
@@ -125,7 +159,15 @@ private:
     void draw_language_menu();       // the picker, and the CJK font prompt
     void draw_train();
     void draw_viewer();
+    void draw_batch();
+    void draw_batch_table();
+    void draw_batch_preset_combo(BatchJob& job, int row);
+    void draw_batch_issues();
+    void draw_batch_progress();      // the running-job block on the trainer screen
     void draw_train_settings();      // left panel
+    void draw_preset_picker();       // built-in + saved presets, save / load
+    void draw_preset_save_modal();
+    void draw_preset_delete_modal();
     void draw_basic_options();
     void draw_train_controls();
     void draw_metrics();
@@ -156,14 +198,42 @@ private:
     bool _stop_confirmed = false;    // user chose "Stop & Save"
     Pending _pending = Pending::None;
     std::string _pending_path;       // dataset dir for Pending::OpenDataset
+    bool _pending_batch_skip = false;  // Pending::StartBatch's argument
     bool _parse_dirty = false;       // dataparser option edited -> reload
     bool _device_locked = false;     // backend initialized -> device fixed
 
     // Config being edited + the preset baseline it diffs against.
     TrainConfig _cfg;
     TrainConfig _defaults;
+    // The built-in preset the config descends from. Still set when a saved
+    // preset is in use -- it is what the run's config.json records, and what
+    // the options editor's "preset default" tooltips are relative to.
     std::string _preset = "3dgs";
     ConfigUIState _cfg_ui;
+
+    // Saved presets. `_preset_file` is "" while a built-in preset is selected;
+    // otherwise it is the file in use and names the row shown in the picker.
+    std::vector<TrainPreset> _presets;
+    double _presets_scanned_at = -1.0;
+    std::string _preset_file;
+    std::string _preset_display;
+    std::string _preset_desc;
+    // The last save / load outcome, already formatted, and whether it failed.
+    std::string _preset_msg;
+    bool _preset_msg_err = false;
+    // The save dialog.
+    bool _preset_save_open = false;    // arm the modal
+    bool _preset_save_shown = false;
+    // The modal stepped aside for the file dialog and wants to come back.
+    bool _preset_save_reopen = false;
+    std::string _preset_save_name;
+    std::string _preset_save_desc;
+    std::string _preset_save_path;
+    // The path field follows the name until the user edits it by hand.
+    bool _preset_path_edited = false;
+    // The delete confirmation, which always targets _preset_file.
+    bool _preset_delete_open = false;
+    bool _preset_delete_shown = false;
 
     TrainRunner _runner;
     ViewportPanel _viewport;
@@ -210,9 +280,25 @@ private:
     std::string _license_prompt;      // family whose modal is open
     bool _license_tick = false;
 
+    // Batch training. The queue is data; the driver is advance_batch(), so a
+    // running batch is an ordinary training session the trainer screen shows
+    // exactly as it shows a hand-started one.
+    std::vector<BatchJob> _batch;
+    bool _batch_dirty = false;        // edited -> persist once the widget is idle
+    bool _batch_checked = false;      // a pre-flight has run since the last edit
+    bool _batch_active = false;
+    bool _batch_launched = false;     // a row's session is in flight
+    int  _batch_current = -1;         // which row that is
+    bool _batch_stop_after = false;   // finish this row, then stop
+    bool _batch_stop_now = false;     // ... and record it as stopped, not done
+    std::string _batch_msg;           // already formatted; "" when there is none
+    bool _batch_msg_err = false;
+
     FileDialog _dialog;
     PickAction _pick = PickAction::None;
     int _pick_source = -1;            // which input PickAction::SourceReplace edits
+    // Which batch row the pending pick edits; -1 appends a new row.
+    int _pick_row = -1;
 
     // Settings (persisted).
     std::vector<std::string> _recents;
