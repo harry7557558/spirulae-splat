@@ -182,7 +182,7 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
         for (int64_t i = 0; i < n; i++) pick[i] = i % n_src;
     }
     const int64_t num = (int64_t)pick.size();
-    const int64_t cap = cfg.preallocate_splat_tensors && cfg.use_mcmc
+    const int64_t cap = cfg.preallocate_splat_tensors
         ? std::max<int64_t>(num, cfg.cap_max) : num;
     const int64_t dim_sh = (int64_t)(cfg.sh_degree + 1) * (cfg.sh_degree + 1);
 
@@ -531,9 +531,6 @@ void TrainerSession::check_config() {
     if (!cfg.optimizer_offload.empty()) not_impl("--optimizer-offload");
     if (cfg.cache_images == "gpu")      not_impl("--cache-images gpu");
     if (cfg.rescale_camera_to_fit < 0)  not_impl("--rescale-camera-to-fit auto-detect");
-    if (cfg.num_downscales > 0)
-        log("warning: --num-downscales is a Python-data-path "
-            "feature; ignored by the managed engine path");
     if (cfg.validation_fraction > 0)
         log("warning: validation images are held out but "
             "early stopping / eval is not ported yet");
