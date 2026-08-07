@@ -148,7 +148,7 @@ if(SS_BUILD_GUI)
     # Embed scripts/mask.py (AI masking helper, run via external Python) so
     # the exe is self-contained. Same mechanism as the viewer.html embed.
     ss_embed_file(
-        ${SS_ROOT}/scripts/mask.py
+        ${SS_ROOT}/reference/scripts/mask.py
         ${CMAKE_BINARY_DIR}/app_generated/mask_py.h
         MaskPy)
 

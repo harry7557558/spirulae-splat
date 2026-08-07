@@ -687,11 +687,6 @@ private:
         const double cgMB = estimateMB(false, true, false, 0);
         const double bothMB = estimateMB(true, true, pairOk, pairEntries);
 
-        // n_dim above which the cubic dense factor loses to CG. Measured on an
-        // RTX 4080 Super at fp64: 871 cams (n=7839, ill-conditioned BAL set,
-        // ~56 CG iters/solve) still favors dense; 1936 cams (n=17424, ~9 CG
-        // iters/solve) favors CG by ~50x. The dense factor costs ~(n/8192)^3
-        // seconds per iteration here, so n=8192 keeps dense under ~0.3 s/iter.
         const uint32_t kDenseMaxDim = 8192;
 
         switch (opt_.solver) {

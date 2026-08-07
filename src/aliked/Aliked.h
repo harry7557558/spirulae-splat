@@ -10,7 +10,6 @@
 //
 // Conventions, all inherited from COLMAP's extractor so that a reconstruction
 // built on our features and one built on COLMAP's are comparable
-// (docs/notes/aliked-port-plan.md):
 //
 //   * Input is 8-bit interleaved RGB, normalized by 1/255 and nothing else.
 //   * The image is padded to a multiple of 32 by replicating its right and

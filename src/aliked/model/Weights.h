@@ -15,8 +15,7 @@
 //
 // Everything stays f32 on the device. The whole checkpoint is 2.7 MB; what
 // costs memory in this model is the full-resolution activations, and halving
-// 2.7 MB against that is not worth a second numeric path (docs/notes/
-// aliked-port-plan.md).
+// 2.7 MB against that is not worth a second numeric path.
 
 #include "aliked/model/Onnx.h"
 #include "nn/Tensor.h"

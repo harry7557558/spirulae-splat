@@ -2,7 +2,7 @@
 // Getting a checkpoint onto disk.
 //
 // The artifacts are COLMAP's, fetched from COLMAP's release URLs and verified
-// against COLMAP's SHA-256 (docs/notes/aliked-port-plan.md). Nothing is
+// against COLMAP's SHA-256. Nothing is
 // bundled, nothing is committed, and nothing of ours is hosted anywhere -- so
 // there is no converter to keep in step with an upstream re-export, and the
 // bytes we run are the bytes the reference implementation runs.

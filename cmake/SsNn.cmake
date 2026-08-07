@@ -145,8 +145,8 @@ set_property(TARGET ss_sam PROPERTY CXX_STANDARD 17)
 # ss_aliked -- the ALIKED / LightGlue learned SfM frontend
 #
 # Its checkpoints are ONNX files fetched from COLMAP's releases and parsed in
-# process (docs/notes/aliked-port-plan.md), so this needs no protobuf, no
-# onnxruntime and no converter -- src/aliked/model/Onnx.cpp is a varint walk.
+# process, so this needs no protobuf, no onnxruntime and no converter --
+# src/aliked/model/Onnx.cpp is a varint walk.
 #
 # The ops it needs that nn/ did not have -- deformable convolution, point-wise
 # grid sample, average pooling, row L2 normalization -- are general and went

@@ -605,8 +605,7 @@ void bilagrid_ppisp_bwd_v1_rgb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 // additionally scatters w_corner * grad_weight to the 8 corners (atomicAdd),
 // so it computes grid-grad and image-grad in one pass. Image-grad is always
 // on for RGB PPISP (mirrors the CUDA v2 <NEEDS_IMAGE_GRAD=true>). Uniform
-// only (the engine path); supports grid_indices. See
-// ../docs/notes/bilagrid-backward-selection.md and BilagridPpispUniformSampleBwdV2_kernel.cuh.
+// only (the engine path); supports grid_indices.
 // ---------------------------------------------------------------------------
 
 struct BpV2Params {

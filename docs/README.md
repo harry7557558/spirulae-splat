@@ -12,7 +12,6 @@ the detail.
 | [datasets.md](datasets.md) | supported dataset layouts and how they are parsed |
 | [i18n.md](i18n.md) | shipping a localized build: `SS_DEFAULT_LANG`, `SS_FONT_CJK`, what is translated |
 | [testing.md](testing.md) | native parity tests and the CUDA-vs-Vulkan reference-dump workflow |
-| [restructure-proposal.md](restructure-proposal.md) | the in-progress plan for reorganizing the tree |
 | [notes/rename-and-i18n-plan.md](notes/rename-and-i18n-plan.md) | the Spirula Studio rename, 13-locale localization, and retiring the Python client |
 | [notes/pose-normalization.md](notes/pose-normalization.md) | orientation/centering: what the native parser implements, and the kept reference for what it doesn't |
 | [notes/](notes/) | design notes for individual subsystems |

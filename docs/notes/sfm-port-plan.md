@@ -280,8 +280,8 @@ refused with an actionable message.
 
 ### Phase 5 — GUI integration — **landed 2026-08-01, out of order**
 
-It landed while the segmentation stack was being merged
-(`docs/notes/segmentation-port.md`), and it landed **without phase 3** — which
+It landed while the segmentation stack was being merged,
+and it landed **without phase 3** — which
 changes one thing from the plan below and nothing else.
 
 `SfmRunner` drives `spirula sfm` as a **child process** rather than calling the

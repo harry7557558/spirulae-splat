@@ -2,7 +2,7 @@
 // Just enough ONNX to read a checkpoint: the initializers, and the epsilon of
 // every BatchNormalization node.
 //
-// We do not host or convert weights (docs/notes/aliked-port-plan.md). The
+// We do not host or convert weights. The
 // artifact fetched is byte-for-byte the one COLMAP fetches, so a parity check
 // against `colmap feature_extractor --FeatureExtraction.type ALIKED_N16ROT`
 // compares two implementations of the same numbers rather than two

@@ -312,8 +312,7 @@ RTX 3070 Laptop the same Hiera-T run goes 418 → 358 ms/frame (1.17x) rather th
 PyTorch's SAM 2 video predictor still does ~10 fps with Hiera-L on comparable
 hardware (`scripts/SAM2-GUI`) where this does 2.1. The rest of that gap is the
 second attention matmul, which cannot use a cooperative matrix without a
-per-element mapping the KHR extension does not expose — see
-`docs/notes/segmentation-port.md` §8.
+per-element mapping the KHR extension does not expose.
 
 The levers a user has today are the checkpoint (**SAM 2.1 is 3–4× faster than
 SAM 3**, and one of its four sizes is the right default for tracking a clicked

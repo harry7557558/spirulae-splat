@@ -80,9 +80,6 @@ have not been run recently. Treat a failure here as "needs investigation",
 not as a release blocker — but do investigate, since they are the only
 remaining check on the `_torch_impl.py` reference math.
 
-There is also `tests/python/test_delaunay3d.py` and the standalone benchmark
-`tests/native/delaunay3d_bench.cpp` (not built by CMake; compile it directly).
-
 ## 4. Dataparser gate
 
 `tests/python/test_dataparser_parity.py` runs COLMAP (text + binary),
