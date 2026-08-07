@@ -169,10 +169,16 @@ HTTP/viewer.
 ## The config table (source of truth = `src/config/TrainConfig.h`)
 
 Hand-written, one `SS_CONFIG_FIELDS` row per flag:
-`X(type, member, default, section, tier, choices, help)`. `struct TrainConfig` is
+`X(type, member, default, section, tier, choices)`. `struct TrainConfig` is
 expanded from the same table, so the declaration and the metadata cannot
 drift. Add a row and the flag appears in the CLI parser, `--help`, the GUI's
-"All Options" editor, `config.json` and the pybind module.
+"All Options" editor and `config.json`.
+
+What the row does *not* carry is what the flag is called or what it does in
+words: that text is translated, so it lives in `../i18n/catalog/TrainFields.h`
+as `SS_MSG(<member>, ...)` and `SS_MSG(<member>_help, ...)`. Consumers paste
+the two together while expanding the table (`fld::member##_help`), so a row
+with no entry there is a compile error naming the flag.
 
 - **Flag names**: `member` stringified. `-` and `_` are interchangeable, so
   `--sh-degree` sets `sh_degree`. A flag cannot drift from its member.
@@ -195,8 +201,6 @@ drift. Add a row and the flag appears in the CLI parser, `--help`, the GUI's
 - **Commas**: macro arguments split on them, so `std::array<T, N>` fields use
   the `TrainVec3i` / `TrainVec3f` aliases and the `train_v3i()` /
   `train_v3f()` makers.
-- **Grouping**: rows must stay contiguous per group — `--help` and the GUI
-  stream group headers as they walk the table rather than sorting first.
 
 This was generated from the Python dataclasses by `generate_cli_config.py`
 until 2026-08-04. The migration was verified by diffing `train --help` for

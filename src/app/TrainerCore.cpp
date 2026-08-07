@@ -490,7 +490,7 @@ void save_config_json(const TrainConfig& c, const fs::path& out_dir,
     FILE* f = std::fopen((out_dir / "config.json").string().c_str(), "w");
     if (!f) throw std::runtime_error("cannot write config.json");
     std::fprintf(f, "{\n    \"preset\": \"%s\"", preset.c_str());
-#define SS_DUMP(type, member, default_, section, tier, choices, help)          \
+#define SS_DUMP(type, member, default_, section, tier, choices)               \
     std::fprintf(f, ",\n    \"%s\": %s", #member, json_str(c.member).c_str());
     SS_CONFIG_FIELDS(SS_DUMP)
 #undef SS_DUMP

@@ -107,7 +107,9 @@ rather than instantiating everything in one TU.
 source of truth. It holds:
 
 - `SS_CONFIG_FIELDS(X)` — one X-macro row per flag,
-  `(type, member, default, section, tier, choices, help)`;
+  `(type, member, default, section, tier, choices)`. The flag's NAME and help
+  sentence are translated and live in `src/i18n/catalog/TrainFields.h`, keyed
+  by member and resolved at compile time;
 - `struct TrainConfig` — **expanded from that same table**, so a field cannot
   exist in one and not the other;
 - `kTrainPresets` + `train_apply_preset()` — one branch per preset.

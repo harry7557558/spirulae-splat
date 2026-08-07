@@ -14,6 +14,7 @@
 #include "i18n/catalog/Dataset.h"
 #include "i18n/catalog/Gui.h"
 #include "i18n/catalog/Train.h"
+#include "i18n/catalog/TrainFields.h"
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -28,6 +29,7 @@
 namespace fs = std::filesystem;
 namespace i18n = spirula::i18n;
 namespace msg = spirula::i18n::msg::gui;
+namespace fld = spirula::i18n::msg::field;
 namespace dmsg = spirula::i18n::msg::dataset;
 using spirula::i18n::Msg;
 
@@ -2254,6 +2256,27 @@ void GuiApp::draw_train_settings() {
 void GuiApp::draw_basic_options() {
     const float w = 170.0f;
 
+    // A macro option: one dropdown standing for the several flags
+    // train_resolve_macros() fills in behind it. The value written is the
+    // token the flag takes; what the user picks is the word for it.
+    auto macro_option = [&](const char* key, std::string& value,
+                            const Msg& label, const Msg& help,
+                            std::initializer_list<const char*> values) {
+        ImGui::SetNextItemWidth(w);
+        const bool open = ui::BeginComboRaw(ui::detail::label(label),
+                                            gui::choice_display(key, value).c_str());
+        if (!open) { ui::help_on_hover(help); return; }
+        for (const char* v : values) {
+            bool sel = value == v;
+            if (ui::SelectableRaw(gui::choice_display(key, v), sel)) {
+                value = v;
+                _cfg_ui.touched.insert(key);
+            }
+            if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    };
+
     // Output location first -- the thing every new user looks for.
     ImGui::SetNextItemWidth(w);
     if (ui::InputTextRaw("##outdir", &_cfg.output_dir_prefix))
@@ -2280,6 +2303,11 @@ void GuiApp::draw_basic_options() {
             kDim, "-> " + (fs::path(_cfg.output_dir_prefix) / run).string());
     }
     ImGui::Spacing();
+
+    // Ahead of the two flags it sets, so the usual path is to pick a quality
+    // and move on, and the numbers below are what that choice came to.
+    macro_option("quality", _cfg.quality, fld::quality, fld::quality_help,
+                 {"low", "medium", "high", "ultra"});
 
     ImGui::SetNextItemWidth(w);
     if (ui::InputInt(msg::opt_steps, &_cfg.num_iterations))
@@ -2342,6 +2370,18 @@ void GuiApp::draw_basic_options() {
     if (ui::Checkbox(msg::opt_ppisp, &_cfg.use_ppisp))
         _cfg_ui.touched.insert("use_ppisp");
     ui::help_on_hover(msg::opt_ppisp_help);
+
+    ImGui::Spacing();
+
+    // The two "if the capture went wrong" dials, last because a first run
+    // should leave them alone and come back to them only if the result has
+    // the problem they name.
+    macro_option("floater_suppression", _cfg.floater_suppression,
+                 fld::floater_suppression, fld::floater_suppression_help,
+                 {"off", "mild", "strong"});
+    macro_option("distraction_robustness", _cfg.distraction_robustness,
+                 fld::distraction_robustness, fld::distraction_robustness_help,
+                 {"off", "mild", "strong"});
 }
 
 void GuiApp::draw_train_controls() {

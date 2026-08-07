@@ -135,7 +135,7 @@ TrainConfig config_from_json(const fs::path& config_json) {
     JsonValue root = json_parse_file(config_json.string());
     TrainConfig c;
 
-#define SS_LOAD_FIELD(type, member, default_, section, tier, choices, help)    \
+#define SS_LOAD_FIELD(type, member, default_, section, tier, choices)         \
     if (const JsonValue* v = root.find(#member)) assign(c.member, *v);
     SS_CONFIG_FIELDS(SS_LOAD_FIELD)
 #undef SS_LOAD_FIELD
@@ -173,7 +173,7 @@ TrainConfig build_resume_config(const TrainConfig& cli,
         throw std::runtime_error("unknown preset: " + preset);
 
     // Explicit flags win over both.
-#define SS_APPLY_EXPLICIT(type, member, default_, section, tier, choices, help) \
+#define SS_APPLY_EXPLICIT(type, member, default_, section, tier, choices)     \
     if (explicit_flags.count(#member)) base.member = cli.member;
     SS_CONFIG_FIELDS(SS_APPLY_EXPLICIT)
 #undef SS_APPLY_EXPLICIT

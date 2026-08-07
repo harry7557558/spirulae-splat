@@ -19,6 +19,7 @@
 #include "app/webviewer/Viewer.h"
 #include "checkpoint/Resume.h"
 #include "i18n/catalog/Train.h"
+#include "i18n/catalog/TrainFields.h"
 
 #include <algorithm>
 #include <chrono>
@@ -127,7 +128,7 @@ void check_choices(const T&, const std::string&, const char*) {}
 bool set_config_field(TrainConfig& c, const std::string& key,
                       int argc, char** argv, int& i,
                       std::set<std::string>& seen) {
-#define SS_TRY_SET(type, member, default_, section, tier, choices, help)       \
+#define SS_TRY_SET(type, member, default_, section, tier, choices)            \
     if (key == #member) {                                                      \
         consume(c.member, key, argc, argv, i);                                 \
         check_choices(c.member, key, choices);                                 \
@@ -154,6 +155,66 @@ template <typename T> std::string value_str(const std::optional<T>& v) {
 template <typename T, size_t N> std::string value_str(const std::array<T, N>& v) {
     std::string s;
     for (size_t i = 0; i < N; i++) s += (i ? " " : "") + value_str(v[i]);
+    return s;
+}
+
+// ---- Help text shortening ---------------------------------------------------
+
+// Display columns of one UTF-8 codepoint: the CJK blocks are drawn full-width
+// in every terminal that can draw them at all, so a Japanese line fits half as
+// many characters as an English one.
+int char_columns(unsigned cp) {
+    return (cp >= 0x1100 && cp <= 0x115F) ||    // Hangul jamo
+           (cp >= 0x2E80 && cp <= 0xA4CF) ||    // radicals .. Yi
+           (cp >= 0xAC00 && cp <= 0xD7A3) ||    // Hangul syllables
+           (cp >= 0xF900 && cp <= 0xFAFF) ||    // compatibility ideographs
+           (cp >= 0xFE30 && cp <= 0xFE6F) ||    // CJK compatibility forms
+           (cp >= 0xFF00 && cp <= 0xFF60) ||    // full-width forms
+           (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+           (cp >= 0x20000 && cp <= 0x3FFFD)     // ideographic planes
+           ? 2 : 1;
+}
+
+// The first sentence of a help string, cut to one terminal line.
+//
+// Two things stop this from being substr(0, s.find(". ")): a Japanese or
+// Chinese sentence ends in "。" with no space after it, and a width limit in
+// bytes would both slice a multi-byte character in half and still overflow
+// the line, since those characters are twice as wide as they are numerous.
+std::string help_summary(const char* text, size_t max_columns = 110) {
+    std::string s = text;
+
+    struct Ender { const char* text; size_t keep; };
+    static const Ender kEnders[] = {
+        {". ", 1}, {"! ", 1}, {"? ", 1},        // space-separated
+        {"\xe3\x80\x82", 3},                    // 。 ideographic full stop
+        {"\xef\xbc\x81", 3}, {"\xef\xbc\x9f", 3},  // ！ ？ full-width
+    };
+    size_t at = std::string::npos, keep = 0;
+    for (const Ender& e : kEnders) {
+        size_t p = s.find(e.text);
+        if (p != std::string::npos && (at == std::string::npos || p < at)) {
+            at = p;
+            keep = e.keep;
+        }
+    }
+    if (at != std::string::npos) s.resize(at + keep);
+
+    size_t cols = 0, i = 0;
+    while (i < s.size()) {
+        unsigned char c = (unsigned char)s[i];
+        size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : 4;
+        if (i + len > s.size()) break;
+        unsigned cp = c < 0x80 ? c : c & (0xFF >> (len + 1));
+        for (size_t k = 1; k < len; k++) cp = (cp << 6) | (s[i + k] & 0x3F);
+        size_t w = (size_t)char_columns(cp);
+        if (cols + w > max_columns - 3) {
+            s = s.substr(0, i) + "...";
+            break;
+        }
+        cols += w;
+        i += len;
+    }
     return s;
 }
 
@@ -229,14 +290,14 @@ void print_help(const char* argv0, const TrainConfig& c, int max_tier) {
     // a heading with nothing under it is not printed at all.
     int hidden = 0;
     int vis[kTrainNumSections] = {0};
-#define SS_COUNT_HELP(type, member, default_, section, tier, choices, help)    \
+#define SS_COUNT_HELP(type, member, default_, section, tier, choices)         \
     if (train_tier_rank(tier) <= max_tier) vis[train_section_index(section)]++; \
     else                                   hidden++;
     SS_CONFIG_FIELDS(SS_COUNT_HELP)
 #undef SS_COUNT_HELP
 
     const char* cur_section = "";
-#define SS_PRINT_HELP(type, member, default_, section, tier, choices, help)    \
+#define SS_PRINT_HELP(type, member, default_, section, tier, choices)         \
     if (std::strcmp(cur_section, section) != 0) {                              \
         cur_section = section;                                                 \
         if (vis[train_section_index(section)]) {                               \
@@ -246,10 +307,8 @@ void print_help(const char* argv0, const TrainConfig& c, int max_tier) {
         }                                                                      \
     }                                                                          \
     if (train_tier_rank(tier) <= max_tier) {                                   \
-        std::string h = help;                                                  \
-        size_t dot = h.find(". ");                                             \
-        if (dot != std::string::npos) h = h.substr(0, dot + 1);                \
-        if (h.size() > 110) h = h.substr(0, 107) + "...";                      \
+        std::string h =                                                        \
+            help_summary(spirula::i18n::msg::field::member##_help.get());      \
         std::string ch = choices;                                              \
         std::string key_disp = #member;                                        \
         for (auto& ck : key_disp) if (ck == '_') ck = '-';                     \

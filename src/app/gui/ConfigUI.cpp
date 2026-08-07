@@ -9,6 +9,7 @@
 
 #include "i18n/catalog/Gui.h"
 #include "i18n/catalog/Train.h"
+#include "i18n/catalog/TrainFields.h"
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -22,6 +23,7 @@
 #include <vector>
 
 namespace msg = spirula::i18n::msg::gui;
+namespace fld = spirula::i18n::msg::field;
 using spirula::i18n::Msg;
 
 namespace gui {
@@ -78,21 +80,21 @@ std::vector<std::string> split_choices(const char* choices) {
     return out;
 }
 
-bool draw_value(bool& v, const char*) {
+bool draw_value(const char*, bool& v, const char*) {
     return ui::CheckboxRaw("##v", &v);
 }
 
-bool draw_value(int& v, const char*) {
+bool draw_value(const char*, int& v, const char*) {
     ImGui::SetNextItemWidth(kFieldWidth);
     return ui::InputIntRaw("##v", &v);
 }
 
-bool draw_value(float& v, const char*) {
+bool draw_value(const char*, float& v, const char*) {
     ImGui::SetNextItemWidth(kFieldWidth);
     return ui::InputFloatRaw("##v", &v, "%g");
 }
 
-bool draw_value(std::string& v, const char* choices) {
+bool draw_value(const char* key, std::string& v, const char* choices) {
     std::string ch = choices;
     if (ch.empty() || ch == "none") {
         ImGui::SetNextItemWidth(kFieldWidth);
@@ -103,12 +105,10 @@ bool draw_value(std::string& v, const char* choices) {
     std::string cur = v.empty() ? "none" : v;
     bool changed = false;
     ImGui::SetNextItemWidth(kFieldWidth);
-    // The choices are the literal values `--<flag>` accepts and config.json
-    // stores; they are not translated.
-    if (ui::BeginComboRaw("##v", cur.c_str())) {
+    if (ui::BeginComboRaw("##v", choice_display(key, cur).c_str())) {
         for (const auto& o : opts) {
             bool sel = (o == cur);
-            if (ui::SelectableRaw(o, sel)) {
+            if (ui::SelectableRaw(choice_display(key, o), sel)) {
                 v = (o == "none") ? "" : o;
                 changed = true;
             }
@@ -119,7 +119,7 @@ bool draw_value(std::string& v, const char* choices) {
     return changed;
 }
 
-bool draw_value(std::optional<bool>& v, const char*) {
+bool draw_value(const char*, std::optional<bool>& v, const char*) {
     // Literal[True, False, None] -> tri-state dropdown.
     const char* cur = !v.has_value() ? "auto" : (*v ? "true" : "false");
     bool changed = false;
@@ -134,7 +134,7 @@ bool draw_value(std::optional<bool>& v, const char*) {
 }
 
 template <typename T>
-bool draw_value(std::optional<T>& v, const char* choices) {
+bool draw_value(const char* key, std::optional<T>& v, const char* choices) {
     bool has = v.has_value();
     bool changed = false;
     if (ui::CheckboxRaw("##has", &has)) {
@@ -146,7 +146,7 @@ bool draw_value(std::optional<T>& v, const char* choices) {
     ImGui::SameLine();
     if (v.has_value()) {
         T tmp = *v;
-        if (draw_value(tmp, choices)) { v = tmp; changed = true; }
+        if (draw_value(key, tmp, choices)) { v = tmp; changed = true; }
     } else {
         ui::TextDisabled(msg::cfg_auto);
     }
@@ -154,14 +154,14 @@ bool draw_value(std::optional<T>& v, const char* choices) {
 }
 
 template <size_t N>
-bool draw_value(std::array<float, N>& v, const char*) {
+bool draw_value(const char*, std::array<float, N>& v, const char*) {
     ImGui::SetNextItemWidth(kFieldWidth + 90);
     return ImGui::InputScalarN("##v", ImGuiDataType_Float, v.data(), (int)N,
                                nullptr, nullptr, "%g");
 }
 
 template <size_t N>
-bool draw_value(std::array<int, N>& v, const char*) {
+bool draw_value(const char*, std::array<int, N>& v, const char*) {
     ImGui::SetNextItemWidth(kFieldWidth + 90);
     return ImGui::InputScalarN("##v", ImGuiDataType_S32, v.data(), (int)N);
 }
@@ -169,19 +169,19 @@ bool draw_value(std::array<int, N>& v, const char*) {
 // ---- one field row -----------------------------------------------------------
 
 template <typename T>
-bool field_row(const char* cli_key, T& v, const T& def,
-               const char* choices, const char* help) {
+bool field_row(const char* cli_key, const Msg& name, const Msg& help,
+               T& v, const T& def, const char* choices) {
     bool modified = !(v == def);
     ImGui::PushID(cli_key);
-    bool changed = draw_value(v, choices);
+    bool changed = draw_value(cli_key, v, choices);
     bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
                                         ImGuiHoveredFlags_AllowWhenDisabled);
     ImGui::OpenPopupOnItemClick("ctx", ImGuiPopupFlags_MouseButtonRight);
     ImGui::SameLine();
-    // The flag name is the flag name in every language: this row is a direct
-    // view of `spirula train --<key>`.
-    if (modified) ui::TextColoredRaw(kModifiedColor, std::string(cli_key) + " *");
-    else          ui::TextRaw(cli_key);
+    // What the row is called is translated; what it IS on the command line is
+    // `--<cli_key>`, one hover away and still what the search box matches.
+    if (modified) ui::TextColoredRaw(kModifiedColor, std::string(name.get()) + " *");
+    else          ui::TextRaw(name.get());
     hovered |= ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
                                     ImGuiHoveredFlags_AllowWhenDisabled);
     ImGui::OpenPopupOnItemClick("ctx", ImGuiPopupFlags_MouseButtonRight);
@@ -189,10 +189,8 @@ bool field_row(const char* cli_key, T& v, const T& def,
     if (hovered && ImGui::BeginTooltip()) {
         ImGui::PushTextWrapPos(420.0f);
         ui::TextColoredRaw(kModifiedColor, "--" + std::string(cli_key));
-        // The field help is shared with `spirula train --help` and is still
-        // English everywhere; translating the 190 of them is the last tier.
-        if (*help) ui::TextRaw(help);
-        else       ui::Text(msg::cfg_no_description);
+        // The same sentence `spirula train --help` prints for this flag.
+        ui::TextRaw(help.get());
         ImGui::Separator();
         ui::Text(msg::cfg_preset_default, {value_str(def)});
         ImGui::PopTextWrapPos();
@@ -229,12 +227,25 @@ const Msg& tier_label(int rank) {
 constexpr int kNumTierChoices = 3;
 
 // Fields owned by dedicated GUI controls; hidden from the generated list.
+// The dataset path has the folder picker next to it, and the macro options
+// (train_resolve_macros()) are the top of Basic Options -- listing them again
+// here would offer the user two places to set the same thing.
 bool gui_managed(const char* cli_key) {
-    return !std::strcmp(cli_key, "data");
+    return !std::strcmp(cli_key, "data") ||
+           !std::strcmp(cli_key, "quality") ||
+           !std::strcmp(cli_key, "floater_suppression") ||
+           !std::strcmp(cli_key, "distraction_robustness");
 }
 
 }  // namespace
 
+
+std::string choice_display(const char* flag, const std::string& value) {
+    const Msg* m = fld::choice_label(flag, value.c_str());
+    if (!m) return value;
+    std::string label = m->get();
+    return label == value ? value : label + " (" + value + ")";
+}
 
 bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
                         ConfigUIState& st) {
@@ -263,12 +274,16 @@ bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
                        : st.tier >= kNumTierChoices - 1 ? kTrainNumTiers - 1
                                                         : st.tier;
 
-    auto passes = [&](const char* key, const char* tier, const char* help,
-                      bool modified) {
+    // Search matches the flag name as well as the translated text: someone
+    // who read `--help` or a config.json types `depth_distortion_reg`, and
+    // someone who did not types what they see.
+    auto passes = [&](const char* key, const char* tier, const Msg& name,
+                      const Msg& help, bool modified) {
         if (gui_managed(key)) return false;
         if (train_tier_rank(tier) > max_tier) return false;
         if (st.modified_only && !modified) return false;
-        if (st.search[0] && !icontains(key, st.search) && !icontains(help, st.search))
+        if (st.search[0] && !icontains(key, st.search) &&
+            !icontains(name.get(), st.search) && !icontains(help.get(), st.search))
             return false;
         return true;
     };
@@ -276,8 +291,9 @@ bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
     // Pass 1: per-section visible-field counts (sections are contiguous in
     // the field table, so pass 2 can stream headings).
     int vis[kTrainNumSections] = {0};
-#define SS_COUNT(type, member, default_, section, tier, choices, help)         \
-    if (passes(#member, tier, help, !(cfg.member == defaults.member)))         \
+#define SS_COUNT(type, member, default_, section, tier, choices)               \
+    if (passes(#member, tier, fld::member, fld::member##_help,                 \
+               !(cfg.member == defaults.member)))                              \
         vis[train_section_index(section)]++;
     SS_CONFIG_FIELDS(SS_COUNT)
 #undef SS_COUNT
@@ -286,7 +302,7 @@ bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
     bool any_changed = false;
     const char* cur_section = "";
     bool section_open = false;
-#define SS_DRAW(type, member, default_, section, tier, choices, help)          \
+#define SS_DRAW(type, member, default_, section, tier, choices)                \
     if (std::strcmp(cur_section, section) != 0) {                              \
         cur_section = section;                                                 \
         if (vis[train_section_index(section)] == 0) {                          \
@@ -297,8 +313,10 @@ bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
         }                                                                      \
     }                                                                          \
     if (section_open &&                                                        \
-        passes(#member, tier, help, !(cfg.member == defaults.member)) &&       \
-        field_row(#member, cfg.member, defaults.member, choices, help)) {      \
+        passes(#member, tier, fld::member, fld::member##_help,                 \
+               !(cfg.member == defaults.member)) &&                            \
+        field_row(#member, fld::member, fld::member##_help,                    \
+                  cfg.member, defaults.member, choices)) {                     \
         any_changed = true;                                                    \
         st.touched.insert(#member);                                            \
     }

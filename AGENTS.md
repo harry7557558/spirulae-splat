@@ -208,7 +208,10 @@ Rules:
    also carries a `section` (which heading it is listed under) and a `tier`
    (`basic` / `advanced` / `expert` / `stub`, which decides whether `--help`
    and the GUI's default view show it at all); both are display metadata, and
-   `config.json` is flat so neither reaches disk.
+   `config.json` is flat so neither reaches disk. What the row does NOT carry
+   is the flag's human name and help sentence: those are translated and live
+   in `src/i18n/catalog/TrainFields.h`, resolved by member name at compile
+   time, so a row without an entry there fails to build.
 5. `.cuh` declaration sections must stay CUDA-include-free — they have to
    parse under `-DSS_BACKEND_VULKAN` without the CUDA toolkit.
 
@@ -299,6 +302,14 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   retrofit and are already followed everywhere: never build a sentence from
   fragments — use `{0}` placeholders and `i18n::format()` — and never write a
   plural-sensitive sentence ("Objects: 3", not "3 objects").
+- **A training flag's name and help are interface copy too**
+  (`src/i18n/catalog/TrainFields.h`, one `SS_MSG` pair per row of
+  `SS_CONFIG_FIELDS`). What stays untranslated is the *identifier*:
+  `--sh-degree` is `--sh-degree` in every language, and so are the `choices`
+  values, which `config.json` stores and the help text quotes in backticks.
+  Where those values are ordinary words the GUI shows the translation in
+  front of the value rather than instead of it — "按间隔 (interval)".
+  `spirula train --help` reads the same catalog, so it follows `--lang`.
 - **A mask prompt is English, not interface copy.** SAM 3's text encoder reads
   English, so the field, its placeholder and the palette's inserted words stay
   English in every language; `ui::InputTextEnglish()` is the wrapper that says
