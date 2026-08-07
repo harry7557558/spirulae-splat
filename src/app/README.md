@@ -72,16 +72,17 @@ Design: novice path is Home → "Open a Dataset" (or "Create Dataset from
 Photos/Video", which drives external `colmap`/`ffmpeg` CLIs with live log +
 cancel) → preset dropdown + a curated Basic Options list → Start Training →
 live native viewport. Advanced path: "All Options" editor **generated from
-the `SS_CONFIG_FIELDS` X-macro** — all config fields, grouped by
-sub-config, searchable, Python docstrings as tooltips, modified-from-preset
-highlighting with right-click reset; new Python config fields appear
-automatically after codegen. Web viewer can be additionally served from the
+the `SS_CONFIG_FIELDS` X-macro** — all config fields, under the field
+table's `section` headings, filtered by its `tier` (Basic / Advanced /
+Everything), searchable across the filter, help text as tooltips,
+modified-from-preset highlighting with right-click reset; a new row in the
+field table appears automatically. Web viewer can be additionally served from the
 GUI (Basic Options) for remote monitoring.
 
 | File | Role |
 |---|---|
 | `gui/GuiMain.cpp` | GLFW window + GL 3.2 core context + ImGui bootstrap, dark style, DPI scale, frame loop, close-confirm flow. **Drag-and-drop** (glfwSetDropCallback → `GuiApp::handle_drop`, which takes the **whole drop at once** — several videos dropped together are the inputs of one dataset, and `spirula <path>...` goes through the same call): each path is auto-detected as an SfM dataset folder (transforms.json / sparse/ / colmap/ marker, or a Metashape camera .xml + point-cloud .ply pair → open; only honoured when dropped alone), a photo folder (contains images), or a video file (extension; the .insv preset applies per file). Files from inside a dataset (transforms.json, .db/.bin/.txt/.xml) open their parent. Raw input dropped onto the dataset screen is **added** to the list there; dropped anywhere else it starts a new dataset. Video/photo drops are ignored while training (datasets go through the stop-confirm flow). |
-| `gui/GuiApp.h/.cpp` | Screens (Home / COLMAP / Train), layout, wiring; recents + tool paths persisted to `~/.config/spirula-studio/gui.conf` (`%APPDATA%` on Windows). Session-destroying navigation (Home / open-dataset / quit during training) goes through a stop-and-save confirm modal with a deferred pending-action; output folder defaults to `<dataset>/outputs` with a Browse button + resolved-run-path preview. Editing any dataset-parsing option (dataparser group via the generated `parse_settings_equal`, plus warp/load/scale flags) marks the dataset dirty and auto-reloads it once the edited widget loses focus. NOTE: `open_dataset`/`add_recent` take `std::string` **by value** — callers pass `_recents` elements and `add_recent` mutates that vector (a const& dangles; this was a real bug that corrupted the path to ""). |
+| `gui/GuiApp.h/.cpp` | Screens (Home / COLMAP / Train), layout, wiring; recents + tool paths persisted to `~/.config/spirula-studio/gui.conf` (`%APPDATA%` on Windows). Session-destroying navigation (Home / open-dataset / quit during training) goes through a stop-and-save confirm modal with a deferred pending-action; output folder defaults to `<dataset>/outputs` with a Browse button + resolved-run-path preview. Editing any dataset-parsing option (`SS_DATASET_PARSE_FIELDS` via the generated `parse_settings_equal`) marks the dataset dirty and auto-reloads it once the edited widget loses focus. NOTE: `open_dataset`/`add_recent` take `std::string` **by value** — callers pass `_recents` elements and `add_recent` mutates that vector (a const& dangles; this was a real bug that corrupted the path to ""). |
 | `gui/ConfigUI.h/.cpp` | The X-macro-generated options editor. Zero per-field special cases (only `data` is hidden, managed by the dataset picker). |
 | `gui/ViewportPanel.h/.cpp` | Native viewport with two backends behind the browser-identical NavCamera navigation: **Preview** = GL point cloud + frusta as soon as the dataset parses (PreviewRenderer), **Engine** = RenderWorker once training starts, with all four web-viewer camera models (Pinhole / Fisheye-equidistant / Fisheye-equisolid / Equirectangular; `fovToIntrinsics` + per-model FOV ranges ported from viewer.html). Buffer picker, camera-frusta overlay with a live **frustum-size slider** (`ViewRequest::cam_size_scale`), render-scale + live-refresh throttle (0.15 s). Initial framing: seed-point centroid target, median camera distance, camera-centroid direction. **Double-click centering** (viewer.html `recenterAt`): pan laterally so the 3D point under the cursor sits on the optical axis and make it the orbit pivot (rotate toward it when behind the camera plane, >180° models); preview mode picks the nearest displayed point along the cursor ray (3% angular cone, `PreviewRenderer::pick_point`), engine mode attaches `pick_px/py` to the next render and gets the point back in the ViewResult — depth-channel readback, no extra VRAM or render pass; all four display camera models via `viewer_pixel_ray`. |
 | `gui/NavCamera.h/.cpp` | 1:1 port of viewer.html's `cam`/`quat`/`Nav`: quaternion camera, four modes (Turntable / Trackball / First Person / Free Fly), same sensitivities and mappings for **mouse** (LMB orbit-or-look, RMB/MMB/Shift pan, wheel dolly), **keyboard** (WASD/arrows, E/Q up-down or Fly-roll, active while the pointer is over the viewport), **gamepad** (GLFW gamepad API: left stick move, right stick look, triggers up-down/roll -- including the browser quirk that triggers only translate while the left stick is deflected), and **touch** via the OS's pointer/gesture emulation (single finger = orbit; system pinch/pan gestures arrive as wheel; GLFW exposes no raw multitouch). Keep in sync with viewer.html's Nav. The initial pose replicates `cam.reset()` verbatim (target = client-frame origin = the CAMERA-POSE center via center_method="poses", pos=[0,0,1], orbit(0,-250)) -- verified pixel-equivalent against a `/render` fetch from `spirula train`'s web viewer at the client's default c2w. `SS_NAV_DEBUG=1` logs per-frame mouse-drag nav decisions (button/pan/target/pos) to stderr. |
@@ -128,7 +129,7 @@ extraction (see below).
 | `WriterPool.h` | Bounded-queue worker threads that JPEG/PNG-encode and write frames and masks off the calling thread. Used by `FrameExtract`, `spirula sam track` and the GUI's folder-masking loop. Encoding a 1080p mask through stb's deflate is ~75 ms — a third of a SAM 2.1 Tiny frame — and none of it needs the GPU, so a caller that writes inline sets the frame rate with zlib. The queue bound is what keeps a slow disk applying back-pressure instead of growing until memory runs out. |
 | `HttpServer.h/.cpp` | Minimal HTTP/1.0 GET server (POSIX sockets; winsock shim compiles but untested). Serial request handling — parity with Python's non-threading `HTTPServer`. |
 | `Viewer.h/.cpp` | Web-viewer server port (viewer/server.py + http_server.py + render_worker.py + annotation.py): latest-wins render worker, `get_outputs` viewer subset, `engine_blit_view` GPU annotation/colormap, stb JPEG encode. Serves the **unchanged** `viewer.html` (embedded at configure time via CMake hex; `SS_VIEWER_HTML=<path>` env overrides for dev). `/pick?px=&py=&<camera params>` returns the 3D point under a pixel as JSON for viewer.html's double-click centering (the Python server has no /pick; the client treats non-OK responses as a no-op). |
-| `../config/TrainConfig.h` | Hand-written, the training config's single source of truth: the `SS_CONFIG_FIELDS(X)` X-macro flag table (190 rows), `struct TrainConfig` expanded from it, `kTrainPresets` and `train_apply_preset()`. |
+| `../config/TrainConfig.h` | Hand-written, the training config's single source of truth: the `SS_CONFIG_FIELDS(X)` X-macro flag table (178 rows), `struct TrainConfig` expanded from it, `SS_DATASET_PARSE_FIELDS`, `kTrainPresets` + `train_apply_preset()`, and `train_resolve_macros()`. |
 | `../external/` | All vendored third-party code (marked `linguist-vendored` in `.gitattributes` along with the generated dirs): `stb_image.h`/`stb_image_write.h` (images), `npy.hpp` (checkpoints), `miniz.c/.h` (zip reading for the Metashape `.psx` camera table; compiled into `spirula` only). |
 
 Debug: `SS_DUMP_CAMERAS=<path> spirula train ...` dumps parsed + post-split
@@ -168,19 +169,29 @@ HTTP/viewer.
 ## The config table (source of truth = `src/config/TrainConfig.h`)
 
 Hand-written, one `SS_CONFIG_FIELDS` row per flag:
-`X(type, member, default, group, choices, help)`. `struct TrainConfig` is
+`X(type, member, default, section, tier, choices, help)`. `struct TrainConfig` is
 expanded from the same table, so the declaration and the metadata cannot
 drift. Add a row and the flag appears in the CLI parser, `--help`, the GUI's
 "All Options" editor, `config.json` and the pybind module.
 
 - **Flag names**: `member` stringified. `-` and `_` are interchangeable, so
   `--sh-degree` sets `sh_degree`. A flag cannot drift from its member.
-- **`config.json` keys**: `train_json_key(flag)`, the identity except
-  `dm_split_batch` → `split_batch`. `config.json` is read back by
-  `spirula mesh` and `--resume`, and the datamanager field would otherwise
-  collide with `model.split_batch` (datamanager's is the legacy Python-path
-  OOM workaround, a no-op on the managed path). New fields never need an
-  entry — the shim is compatibility, not a mechanism.
+- **`config.json` keys**: the flag name, at the top level — the file is
+  flat. It used to nest under `group`, which quietly made a presentational
+  choice part of an on-disk format: move a flag to another heading and its
+  key moved with it, and the reader (`spirula mesh`, `--resume`) fell back to
+  the default without saying so. `section` and `tier` never reach disk.
+- **`section` / `tier`**: which heading a flag is listed under, and how
+  specialist it is (`basic` / `advanced` / `expert` / `stub`). `--help` shows
+  the basic ones and points at `--help-all`; the GUI has the same filter as a
+  dropdown. Rows must stay contiguous per section — both consumers stream
+  headings as they walk the table.
+- **Macro options**: `quality`, `floater_suppression`,
+  `distraction_robustness` are ordinary rows that stand in for several
+  specialist flags each. `train_resolve_macros()` applies them after the
+  preset and never over a flag the user set by hand; a macro at its default
+  writes nothing. The CLI passes its `seen` set, the GUI its
+  `ConfigUIState::touched`.
 - **Commas**: macro arguments split on them, so `std::array<T, N>` fields use
   the `TrainVec3i` / `TrainVec3f` aliases and the `train_v3i()` /
   `train_v3f()` makers.
@@ -275,9 +286,9 @@ without the other and that gate fails.
 ## TODOs (rough priority)
 
 1. **Eval pass + metrics** — iterate `next_val_batch` / render train views,
-   PSNR/SSIM from engine buffers; then `validation_fraction` early-stop
-   (model config `overfit_score_*`, `early_stop_*` fields are parsed but
-   unused).
+   PSNR/SSIM from engine buffers; then `validation_fraction` early-stop (the
+   `overfit_score_*` / `early_stop_*` fields were parsed but unused and have
+   been removed; re-add them when the pass lands).
 2. **Resume** — `engine_load_checkpoint` after skeleton setup
    (trainer.py:132-137); config.json round-trip (CLI dump is close to but
    not tyro-compatible; decide on a shared format).

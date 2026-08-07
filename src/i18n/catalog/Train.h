@@ -351,6 +351,148 @@ inline const PresetText* preset_text(const char* name) {
     return nullptr;
 }
 
+
+// ===========================================================================
+// Section headings -- the `section` column of config/TrainConfig.h's field
+// table, shown by `spirula train --help` and by the GUI's options editor.
+// ===========================================================================
+
+SS_MSG(section_run,
+    EN("Run & Output"),  JA("実行と出力"),     ZH_HANS("运行与输出"), ZH_HANT("執行與輸出"),
+    KO("실행과 출력"),    DE("Lauf & Ausgabe"), FR("Exécution et sortie"),
+    ES("Ejecución y salida"), PT("Execução e saída"), IT("Esecuzione e output"),
+    NL("Run en uitvoer"), RU("Запуск и вывод"), TR("Çalıştırma ve çıktı"));
+
+SS_MSG(section_dataset,
+    EN("Dataset"),       JA("データセット"),   ZH_HANS("数据集"),   ZH_HANT("資料集"),
+    KO("데이터셋"),       DE("Datensatz"),    FR("Jeu de données"),
+    ES("Conjunto de datos"), PT("Conjunto de dados"), IT("Set di dati"),
+    NL("Dataset"),       RU("Набор данных"), TR("Veri kümesi"));
+
+SS_MSG(section_scene,
+    EN("Scene Placement"), JA("シーンの位置と向き"), ZH_HANS("场景位置"),
+    ZH_HANT("場景位置"),  KO("장면 위치"),     DE("Szenenausrichtung"),
+    FR("Placement de la scène"), ES("Ubicación de la escena"),
+    PT("Posicionamento da cena"), IT("Posizione della scena"),
+    NL("Scèneplaatsing"), RU("Размещение сцены"), TR("Sahne yerleşimi"));
+
+SS_MSG(section_splats,
+    EN("Splat Model"),   JA("スプラットのモデル"), ZH_HANS("泼溅模型"), ZH_HANT("潑濺模型"),
+    KO("스플랫 모델"),    DE("Splat-Modell"), FR("Modèle de splats"),
+    ES("Modelo de splats"), PT("Modelo de splats"), IT("Modello di splat"),
+    NL("Splatmodel"),    RU("Модель сплатов"), TR("Splat modeli"));
+
+SS_MSG(section_detail,
+    EN("Detail & Splat Count"),
+    JA("精細さとスプラット数"),
+    ZH_HANS("细节与泼溅数"),
+    ZH_HANT("細節與潑濺數"),
+    KO("디테일과 스플랫 수"),
+    DE("Detail & Splat-Anzahl"),
+    FR("Détail et nombre de splats"),
+    ES("Detalle y número de splats"),
+    PT("Detalhe e número de splats"),
+    IT("Dettaglio e numero di splat"),
+    NL("Detail en aantal splats"),
+    RU("Детализация и число сплатов"),
+    TR("Ayrıntı ve splat sayısı"));
+
+SS_MSG(section_loss,
+    EN("Image Loss"),    JA("画像の損失"),     ZH_HANS("图像损失"),  ZH_HANT("影像損失"),
+    KO("이미지 손실"),    DE("Bildverlust"),  FR("Perte d'image"),
+    ES("Pérdida de imagen"), PT("Perda de imagem"), IT("Perdita d'immagine"),
+    NL("Beeldverlies"),  RU("Потери по изображению"), TR("Görüntü kaybı"));
+
+SS_MSG(section_geometry,
+    EN("Geometry & Surfaces"),
+    JA("ジオメトリと面"),
+    ZH_HANS("几何与表面"),
+    ZH_HANT("幾何與表面"),
+    KO("지오메트리와 표면"),
+    DE("Geometrie & Oberflächen"),
+    FR("Géométrie et surfaces"),
+    ES("Geometría y superficies"),
+    PT("Geometria e superfícies"),
+    IT("Geometria e superfici"),
+    NL("Geometrie en oppervlakken"),
+    RU("Геометрия и поверхности"),
+    TR("Geometri ve yüzeyler"));
+
+SS_MSG(section_shape,
+    EN("Splat Shape"),   JA("スプラットの形状"), ZH_HANS("泼溅形状"), ZH_HANT("潑濺形狀"),
+    KO("스플랫 모양"),    DE("Splat-Form"),   FR("Forme des splats"),
+    ES("Forma de los splats"), PT("Forma dos splats"), IT("Forma degli splat"),
+    NL("Splatvorm"),     RU("Форма сплатов"), TR("Splat biçimi"));
+
+SS_MSG(section_correction,
+    EN("Camera & Color Correction"),
+    JA("カメラと色の補正"),
+    ZH_HANS("相机与色彩校正"),
+    ZH_HANT("相機與色彩校正"),
+    KO("카메라와 색 보정"),
+    DE("Kamera- & Farbkorrektur"),
+    FR("Correction caméra et couleur"),
+    ES("Corrección de cámara y color"),
+    PT("Correção de câmera e cor"),
+    IT("Correzione camera e colore"),
+    NL("Camera- en kleurcorrectie"),
+    RU("Коррекция камеры и цвета"),
+    TR("Kamera ve renk düzeltme"));
+
+SS_MSG(section_colorspace,
+    EN("Color Space"),   JA("色空間"),        ZH_HANS("色彩空间"),  ZH_HANT("色彩空間"),
+    KO("색 공간"),        DE("Farbraum"),     FR("Espace colorimétrique"),
+    ES("Espacio de color"), PT("Espaço de cor"), IT("Spazio colore"),
+    NL("Kleurruimte"),   RU("Цветовое пространство"), TR("Renk uzayı"));
+
+SS_MSG(section_perf,
+    EN("Speed & Memory"), JA("速度とメモリ"),   ZH_HANS("速度与内存"), ZH_HANT("速度與記憶體"),
+    KO("속도와 메모리"),   DE("Geschwindigkeit & Speicher"), FR("Vitesse et mémoire"),
+    ES("Velocidad y memoria"), PT("Velocidade e memória"), IT("Velocità e memoria"),
+    NL("Snelheid en geheugen"), RU("Скорость и память"), TR("Hız ve bellek"));
+
+SS_MSG(section_rates,
+    EN("Learning Rates"), JA("学習率"),        ZH_HANS("学习率"),   ZH_HANT("學習率"),
+    KO("학습률"),         DE("Lernraten"),    FR("Taux d'apprentissage"),
+    ES("Tasas de aprendizaje"), PT("Taxas de aprendizado"),
+    IT("Tassi di apprendimento"), NL("Leersnelheden"),
+    RU("Скорости обучения"), TR("Öğrenme oranları"));
+
+// ---------------------------------------------------------------------------
+// name -> heading. The names are config/TrainConfig.h's kTrainSections, and
+// each consumer static_asserts that the two lists are the same length.
+// ---------------------------------------------------------------------------
+
+struct SectionText {
+    const char* name;
+    const Msg* label;
+};
+
+inline constexpr SectionText kSectionText[] = {
+    {"run",        &section_run},
+    {"dataset",    &section_dataset},
+    {"scene",      &section_scene},
+    {"splats",     &section_splats},
+    {"detail",     &section_detail},
+    {"loss",       &section_loss},
+    {"geometry",   &section_geometry},
+    {"shape",      &section_shape},
+    {"correction", &section_correction},
+    {"colorspace", &section_colorspace},
+    {"perf",       &section_perf},
+    {"rates",      &section_rates},
+};
+inline constexpr size_t kNumSectionText =
+    sizeof(kSectionText) / sizeof(kSectionText[0]);
+
+// Null for a heading with no entry, so a section added to TrainConfig.h
+// without text here still lists its flags -- under its bare name.
+inline const Msg* section_label(const char* name) {
+    for (const SectionText& s : kSectionText)
+        if (std::strcmp(s.name, name) == 0) return s.label;
+    return nullptr;
+}
+
 }  // namespace train
 }  // namespace msg
 }  // namespace i18n

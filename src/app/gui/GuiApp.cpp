@@ -77,21 +77,14 @@ std::string preset_help(const std::string& name) {
     return t ? t->help->get() : "";
 }
 
-// True when two configs parse to the same dataset: every dataparser-group
-// field plus the non-dataparser fields load_dataset() consumes.
+// True when two configs parse to the same dataset -- every field
+// load_dataset() consumes, listed as SS_DATASET_PARSE_FIELDS.
 bool parse_settings_equal(const TrainConfig& a, const TrainConfig& b) {
     bool eq = true;
-#define SS_CMP(type, member, default_, group, choices, help)                   \
-    if (!std::strcmp(group, "dataparser")) eq = eq && (a.member == b.member);
-    SS_CONFIG_FIELDS(SS_CMP)
+#define SS_CMP(member) eq = eq && (a.member == b.member);
+    SS_DATASET_PARSE_FIELDS(SS_CMP)
 #undef SS_CMP
-    return eq && a.data == b.data &&
-           a.warp_to_pinhole == b.warp_to_pinhole &&
-           a.warp_spherical_to_pinhole == b.warp_spherical_to_pinhole &&
-           a.load_depths == b.load_depths &&
-           a.load_normals == b.load_normals &&
-           a.relative_scale == b.relative_scale &&
-           a.auto_scale_poses == b.auto_scale_poses;
+    return eq;
 }
 
 // The file-dialog filter list, from DatasetPrep's one list of containers.
@@ -245,6 +238,7 @@ void GuiApp::apply_preset(const std::string& preset) {
     _preset = preset;
     _cfg = fresh;
     _defaults = fresh;
+    _cfg_ui.touched.clear();
     if (!_cfg.data.empty()) {
         _viewport.detach();
         _runner.load_dataset(_cfg, _preset);
@@ -2239,6 +2233,13 @@ void GuiApp::draw_train_settings() {
         draw_config_editor(_cfg, _defaults, _cfg_ui);
     ImGui::EndDisabled();
 
+    // The macro options (quality, floater_suppression, ...) fill in the flags
+    // they stand for, skipping any the user has edited by hand -- so the two
+    // panels above always show the values the run will actually use. None of
+    // what they write is a dataset-parsing field, so this cannot make the
+    // snapshot below think the dataset went stale.
+    train_resolve_macros(_cfg, _cfg_ui.touched);
+
     if (!parse_settings_equal(parse_before, _cfg)) _parse_dirty = true;
 
     // ---- controls + metrics ----
@@ -2247,12 +2248,16 @@ void GuiApp::draw_train_settings() {
     draw_metrics();
 }
 
+// Every edit here records itself in _cfg_ui.touched, the same way the
+// generated editor does: a flag the user set by hand is off limits to the
+// macro options (see train_resolve_macros()).
 void GuiApp::draw_basic_options() {
     const float w = 170.0f;
 
     // Output location first -- the thing every new user looks for.
     ImGui::SetNextItemWidth(w);
-    ui::InputTextRaw("##outdir", &_cfg.output_dir_prefix);
+    if (ui::InputTextRaw("##outdir", &_cfg.output_dir_prefix))
+        _cfg_ui.touched.insert("output_dir_prefix");
     ImGui::SameLine();
     if (ui::ButtonRaw("...##outdir")) {
         _pick = PickAction::OutputPrefix;
@@ -2263,8 +2268,9 @@ void GuiApp::draw_basic_options() {
     ui::Text(msg::opt_output_folder);
     ui::help_on_hover(msg::opt_output_folder_help);
     ImGui::SetNextItemWidth(w);
-    ui::InputTextWithHint(msg::opt_run_name, msg::opt_run_name_hint,
-                          &_cfg.output_dir_name);
+    if (ui::InputTextWithHint(msg::opt_run_name, msg::opt_run_name_hint,
+                              &_cfg.output_dir_name))
+        _cfg_ui.touched.insert("output_dir_name");
     ui::help_on_hover(msg::opt_run_name_help);
     {
         std::string run = _cfg.output_dir_name.empty()
@@ -2276,11 +2282,13 @@ void GuiApp::draw_basic_options() {
     ImGui::Spacing();
 
     ImGui::SetNextItemWidth(w);
-    ui::InputInt(msg::opt_steps, &_cfg.num_iterations);
+    if (ui::InputInt(msg::opt_steps, &_cfg.num_iterations))
+        _cfg_ui.touched.insert("num_iterations");
     ui::help_on_hover(msg::opt_steps_help);
 
     ImGui::SetNextItemWidth(w);
-    ui::InputInt(msg::opt_max_splats, &_cfg.cap_max);
+    if (ui::InputInt(msg::opt_max_splats, &_cfg.cap_max))
+        _cfg_ui.touched.insert("cap_max");
     ui::help_on_hover(msg::opt_max_splats_help);
 
     {
@@ -2289,8 +2297,10 @@ void GuiApp::draw_basic_options() {
         static const char* prims[] = {"3dgs", "mip", "3dgut"};
         int pi = _cfg.primitive == "mip" ? 1 : _cfg.primitive == "3dgut" ? 2 : 0;
         ImGui::SetNextItemWidth(w);
-        if (ui::ComboRaw(ui::detail::label(msg::opt_primitive), &pi, prims, 3))
+        if (ui::ComboRaw(ui::detail::label(msg::opt_primitive), &pi, prims, 3)) {
             _cfg.primitive = prims[pi];
+            _cfg_ui.touched.insert("primitive");
+        }
         ui::help_on_hover(msg::opt_primitive_help);
     }
 
@@ -2304,6 +2314,7 @@ void GuiApp::draw_basic_options() {
         if (ui::ComboRaw(ui::detail::label(msg::opt_resolution), &ds_idx, items, 4)) {
             const float vals[] = {0.0f, 2.0f, 4.0f, 8.0f};
             _cfg.rescale_camera_to_fit = vals[ds_idx];
+            _cfg_ui.touched.insert("rescale_camera_to_fit");
         }
     }
     ui::help_on_hover(msg::opt_resolution_help);
@@ -2312,19 +2323,24 @@ void GuiApp::draw_basic_options() {
         int mi = _cfg.apply_loss_for_mask ? 1 : 0;
         ImGui::SetNextItemWidth(w);
         if (ui::Combo(msg::opt_mask_mode, &mi,
-                      {&msg::opt_mask_mode_ignore, &msg::opt_mask_mode_segment}))
+                      {&msg::opt_mask_mode_ignore, &msg::opt_mask_mode_segment})) {
             _cfg.apply_loss_for_mask = mi == 1;
+            _cfg_ui.touched.insert("apply_loss_for_mask");
+        }
         ui::help_on_hover(msg::opt_mask_mode_help);
     }
 
     ImGui::SetNextItemWidth(w);
-    ui::SliderInt(msg::opt_sh_degree, &_cfg.sh_degree, 0, 4);
+    if (ui::SliderInt(msg::opt_sh_degree, &_cfg.sh_degree, 0, 4))
+        _cfg_ui.touched.insert("sh_degree");
     ui::help_on_hover(msg::opt_sh_degree_help);
 
-    ui::Checkbox(msg::opt_bilateral_grid, &_cfg.use_bilateral_grid);
+    if (ui::Checkbox(msg::opt_bilateral_grid, &_cfg.use_bilateral_grid))
+        _cfg_ui.touched.insert("use_bilateral_grid");
     ui::help_on_hover(msg::opt_bilateral_grid_help);
 
-    ui::Checkbox(msg::opt_ppisp, &_cfg.use_ppisp);
+    if (ui::Checkbox(msg::opt_ppisp, &_cfg.use_ppisp))
+        _cfg_ui.touched.insert("use_ppisp");
     ui::help_on_hover(msg::opt_ppisp_help);
 }
 

@@ -2200,45 +2200,47 @@ SS_MSG(viewport_render_error,
 // Config editor (the "All Options" table)
 // ===========================================================================
 
-SS_MSG(cfg_group_run,
-    EN("Run & Output"),  JA("実行と出力"),     ZH_HANS("运行与输出"), ZH_HANT("執行與輸出"),
-    KO("실행과 출력"),    DE("Lauf & Ausgabe"), FR("Exécution et sortie"),
-    ES("Ejecución y salida"), PT("Execução e saída"), IT("Esecuzione e output"),
-    NL("Run en uitvoer"), RU("Запуск и вывод"), TR("Çalıştırma ve çıktı"));
+SS_MSG(cfg_tier_basic,
+    EN("Basic"),         JA("基本"),          ZH_HANS("基本"),     ZH_HANT("基本"),
+    KO("기본"),           DE("Basis"),        FR("Essentiel"),    ES("Básico"),
+    PT("Básico"),        IT("Base"),         NL("Basis"),        RU("Основные"),
+    TR("Temel"));
 
-SS_MSG(cfg_group_dataparser,
-    EN("Dataset Parsing"), JA("データセットの解析"), ZH_HANS("数据集解析"),
-    ZH_HANT("資料集解析"), KO("데이터셋 해석"),  DE("Datensatz einlesen"),
-    FR("Lecture du jeu de données"), ES("Análisis del conjunto"),
-    PT("Análise do conjunto"), IT("Lettura del set di dati"),
-    NL("Dataset inlezen"), RU("Разбор набора данных"), TR("Veri kümesi okuma"));
+SS_MSG(cfg_tier_advanced,
+    EN("Advanced"),      JA("詳細"),          ZH_HANS("进阶"),     ZH_HANT("進階"),
+    KO("고급"),           DE("Erweitert"),    FR("Avancé"),       ES("Avanzado"),
+    PT("Avançado"),      IT("Avanzate"),     NL("Geavanceerd"),  RU("Дополнительные"),
+    TR("Gelişmiş"));
 
-SS_MSG(cfg_group_datamanager,
-    EN("Data Loading"),  JA("データの読み込み"), ZH_HANS("数据加载"),  ZH_HANT("資料載入"),
-    KO("데이터 로딩"),    DE("Daten laden"),  FR("Chargement des données"),
-    ES("Carga de datos"), PT("Carregamento de dados"), IT("Caricamento dei dati"),
-    NL("Gegevens laden"), RU("Загрузка данных"), TR("Veri yükleme"));
+SS_MSG(cfg_tier_all,
+    EN("Everything"),    JA("すべて"),        ZH_HANS("全部"),     ZH_HANT("全部"),
+    KO("전체"),           DE("Alles"),        FR("Tout"),         ES("Todo"),
+    PT("Tudo"),          IT("Tutto"),        NL("Alles"),        RU("Все"),
+    TR("Tümü"));
 
-SS_MSG(cfg_group_model,
-    EN("Model & Losses"), JA("モデルと損失"),   ZH_HANS("模型与损失"), ZH_HANT("模型與損失"),
-    KO("모델과 손실"),    DE("Modell & Verluste"), FR("Modèle et pertes"),
-    ES("Modelo y pérdidas"), PT("Modelo e perdas"), IT("Modello e perdite"),
-    NL("Model en verliezen"), RU("Модель и потери"), TR("Model ve kayıplar"));
-
-SS_MSG(cfg_group_optimizer,
-    EN("Optimizer & Learning Rates"),
-    JA("オプティマイザと学習率"),
-    ZH_HANS("优化器与学习率"),
-    ZH_HANT("最佳化器與學習率"),
-    KO("옵티마이저와 학습률"),
-    DE("Optimierer & Lernraten"),
-    FR("Optimiseur et taux d'apprentissage"),
-    ES("Optimizador y tasas de aprendizaje"),
-    PT("Otimizador e taxas de aprendizado"),
-    IT("Ottimizzatore e tassi di apprendimento"),
-    NL("Optimalisator en leersnelheden"),
-    RU("Оптимизатор и скорости обучения"),
-    TR("İyileştirici ve öğrenme oranları"));
+SS_MSG(cfg_tier_help,
+    EN("How specialist an option may be and still be listed. Searching looks "
+       "through all of them either way."),
+    JA("一覧に出す設定の細かさです。検索はどの設定でも対象になります。"),
+    ZH_HANS("列出多少高级选项。搜索始终覆盖全部选项。"),
+    ZH_HANT("列出多少進階選項。搜尋始終涵蓋全部選項。"),
+    KO("목록에 나오는 옵션의 전문성 수준입니다. 검색은 언제나 전체를 대상으로 합니다."),
+    DE("Wie speziell eine Einstellung sein darf, um noch gelistet zu werden. "
+       "Die Suche geht ohnehin durch alle."),
+    FR("Jusqu'à quel point une option peut être spécialisée et rester listée. "
+       "La recherche parcourt toutes les options."),
+    ES("Hasta qué punto una opción puede ser especializada y seguir listada. "
+       "La búsqueda las recorre todas."),
+    PT("Até que ponto uma opção pode ser especializada e continuar listada. "
+       "A busca percorre todas."),
+    IT("Quanto può essere specialistica un'opzione e restare in elenco. "
+       "La ricerca le attraversa tutte."),
+    NL("Hoe specialistisch een optie mag zijn om nog te worden getoond. "
+       "Zoeken doorloopt ze hoe dan ook allemaal."),
+    RU("Насколько узкоспециальным может быть параметр, чтобы попасть в список. "
+       "Поиск всё равно идёт по всем."),
+    TR("Bir seçenek listede kalabilmek için ne kadar uzmanlaşmış olabilir. "
+       "Arama yine de hepsini tarar."));
 
 SS_MSG(cfg_search_hint,
     EN("search options (name or description)"),

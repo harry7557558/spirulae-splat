@@ -476,34 +476,24 @@ template <typename T, size_t N> std::string json_str(const std::array<T, N>& v) 
 
 }  // namespace
 
-// Nested-by-group dump. Keys are train_json_key(flag) -- see the note on it
-// in config/TrainConfig.h; this is a read-back format (`spirula mesh` and
-// --resume parse it), so the key set is not free to change.
+// Flat dump: one key per flag, spelled exactly as the flag is. It used to be
+// nested under the field table's group column, which quietly made a
+// presentational choice part of an on-disk format -- moving a flag to another
+// heading moved its key, and a reader that could not find it silently fell
+// back to the default. Flat, a heading can be renamed or reshuffled without
+// touching anything that reads this file (`spirula mesh`, --resume).
+//
+// Macro flags (--quality and friends) are written alongside the values they
+// resolved to, so a reader takes the values and never re-resolves them.
 void save_config_json(const TrainConfig& c, const fs::path& out_dir,
                       const std::string& preset) {
     FILE* f = std::fopen((out_dir / "config.json").string().c_str(), "w");
     if (!f) throw std::runtime_error("cannot write config.json");
     std::fprintf(f, "{\n    \"preset\": \"%s\"", preset.c_str());
-    const char* open_group = "";
-#define SS_DUMP(type, member, default_, group, choices, help)                  \
-    {                                                                          \
-    const char* key = train_json_key(#member);                                \
-    if (std::strcmp(group, "trainer") == 0) {                                  \
-        std::fprintf(f, ",\n    \"%s\": %s", key, json_str(c.member).c_str()); \
-    } else {                                                                   \
-        if (std::strcmp(open_group, group) != 0) {                             \
-            if (*open_group) std::fprintf(f, "\n    }");                       \
-            std::fprintf(f, ",\n    \"%s\": {", group);                        \
-            open_group = group;                                                \
-            std::fprintf(f, "\n        \"%s\": %s", key, json_str(c.member).c_str()); \
-        } else {                                                               \
-            std::fprintf(f, ",\n        \"%s\": %s", key, json_str(c.member).c_str()); \
-        }                                                                      \
-    }                                                                          \
-    }
+#define SS_DUMP(type, member, default_, section, tier, choices, help)          \
+    std::fprintf(f, ",\n    \"%s\": %s", #member, json_str(c.member).c_str());
     SS_CONFIG_FIELDS(SS_DUMP)
 #undef SS_DUMP
-    if (*open_group) std::fprintf(f, "\n    }");
     std::fprintf(f, "\n}\n");
     std::fclose(f);
 }

@@ -8,6 +8,7 @@
 #include "app/gui/Ui.h"
 
 #include "i18n/catalog/Gui.h"
+#include "i18n/catalog/Train.h"
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -206,23 +207,26 @@ bool field_row(const char* cli_key, T& v, const T& def,
     return changed;
 }
 
-int group_index(const char* g) {
-    if (!std::strcmp(g, "trainer"))     return 0;
-    if (!std::strcmp(g, "dataparser"))  return 1;
-    if (!std::strcmp(g, "datamanager")) return 2;
-    if (!std::strcmp(g, "model"))       return 3;
-    return 4;  // optimizer
+// The heading text is shared with `spirula train --help`, so it lives in the
+// train catalog rather than this file's.
+const Msg& section_label(const char* section) {
+    static_assert((size_t)kTrainNumSections ==
+                      spirula::i18n::msg::train::kNumSectionText,
+                  "config/TrainConfig.h and i18n/catalog/Train.h disagree "
+                  "about how many section headings there are");
+    const Msg* m = spirula::i18n::msg::train::section_label(section);
+    return m ? *m : msg::cfg_no_description;
 }
 
-const Msg& group_label(const char* g) {
-    switch (group_index(g)) {
-        case 0: return msg::cfg_group_run;
-        case 1: return msg::cfg_group_dataparser;
-        case 2: return msg::cfg_group_datamanager;
-        case 3: return msg::cfg_group_model;
-        default: return msg::cfg_group_optimizer;
+// The detail filter: how specialist a flag may be and still be listed.
+const Msg& tier_label(int rank) {
+    switch (rank) {
+        case 0:  return msg::cfg_tier_basic;
+        case 1:  return msg::cfg_tier_advanced;
+        default: return msg::cfg_tier_all;
     }
 }
+constexpr int kNumTierChoices = 3;
 
 // Fields owned by dedicated GUI controls; hidden from the generated list.
 bool gui_managed(const char* cli_key) {
@@ -234,48 +238,70 @@ bool gui_managed(const char* cli_key) {
 
 bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
                         ConfigUIState& st) {
-    ImGui::SetNextItemWidth(-115);
+    ImGui::SetNextItemWidth(-250);
     ui::InputTextHintBufRaw("##cfgsearch", msg::cfg_search_hint,
                             st.search, sizeof st.search);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(130);
+    // The list is short and its entries are the label, so the combo carries
+    // no separate caption -- what it filters is explained on hover.
+    const bool tier_open = ui::BeginComboRaw("##cfgtier", tier_label(st.tier).get());
+    if (!tier_open) ui::help_on_hover(msg::cfg_tier_help);
+    if (tier_open) {
+        for (int i = 0; i < kNumTierChoices; i++)
+            if (ui::Selectable(tier_label(i), i == st.tier)) st.tier = i;
+        ImGui::EndCombo();
+    }
     ImGui::SameLine();
     ui::Checkbox(msg::cfg_edited_only, &st.modified_only);
     ui::help_on_hover(msg::cfg_edited_only_help);
 
     const bool searching = st.search[0] != 0 || st.modified_only;
+    // Searching reaches past the detail filter: a flag you can name should be
+    // findable without first working out how specialist it is.
+    const int max_tier = searching ? kTrainNumTiers - 1
+                       : st.tier >= kNumTierChoices - 1 ? kTrainNumTiers - 1
+                                                        : st.tier;
 
-    auto passes = [&](const char* key, const char* help, bool modified) {
+    auto passes = [&](const char* key, const char* tier, const char* help,
+                      bool modified) {
         if (gui_managed(key)) return false;
+        if (train_tier_rank(tier) > max_tier) return false;
         if (st.modified_only && !modified) return false;
         if (st.search[0] && !icontains(key, st.search) && !icontains(help, st.search))
             return false;
         return true;
     };
 
-    // Pass 1: per-group visible-field counts (groups are contiguous in the
-    // field table, so pass 2 can stream group headers).
-    int vis[5] = {0, 0, 0, 0, 0};
-#define SS_COUNT(type, member, default_, group, choices, help)                 \
-    if (passes(#member, help, !(cfg.member == defaults.member)))               \
-        vis[group_index(group)]++;
+    // Pass 1: per-section visible-field counts (sections are contiguous in
+    // the field table, so pass 2 can stream headings).
+    int vis[kTrainNumSections] = {0};
+#define SS_COUNT(type, member, default_, section, tier, choices, help)         \
+    if (passes(#member, tier, help, !(cfg.member == defaults.member)))         \
+        vis[train_section_index(section)]++;
     SS_CONFIG_FIELDS(SS_COUNT)
 #undef SS_COUNT
 
     // Pass 2: draw.
     bool any_changed = false;
-    const char* cur_group = "";
-    bool group_open = false;
-#define SS_DRAW(type, member, default_, group, choices, help)                  \
-    if (std::strcmp(cur_group, group) != 0) {                                  \
-        cur_group = group;                                                     \
-        if (vis[group_index(group)] == 0) {                                    \
-            group_open = false;                                                \
+    const char* cur_section = "";
+    bool section_open = false;
+#define SS_DRAW(type, member, default_, section, tier, choices, help)          \
+    if (std::strcmp(cur_section, section) != 0) {                              \
+        cur_section = section;                                                 \
+        if (vis[train_section_index(section)] == 0) {                          \
+            section_open = false;                                              \
         } else {                                                               \
             if (searching) ImGui::SetNextItemOpen(true);                       \
-            group_open = ui::CollapsingHeader(group_label(group));             \
+            section_open = ui::CollapsingHeader(section_label(section));       \
         }                                                                      \
     }                                                                          \
-    if (group_open && passes(#member, help, !(cfg.member == defaults.member))) \
-        any_changed |= field_row(#member, cfg.member, defaults.member, choices, help);
+    if (section_open &&                                                        \
+        passes(#member, tier, help, !(cfg.member == defaults.member)) &&       \
+        field_row(#member, cfg.member, defaults.member, choices, help)) {      \
+        any_changed = true;                                                    \
+        st.touched.insert(#member);                                            \
+    }
     SS_CONFIG_FIELDS(SS_DRAW)
 #undef SS_DRAW
 

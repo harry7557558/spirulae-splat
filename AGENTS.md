@@ -204,7 +204,11 @@ Rules:
    training config, and it is hand-written, not generated. Adding a row to
    `SS_CONFIG_FIELDS` makes the field appear in the native CLI, `--help`,
    the GUI's "All Options" editor, the run's `config.json` and `TrainerCore` —
-   the struct is expanded from the same table, so the two cannot drift.
+   the struct is expanded from the same table, so the two cannot drift. A row
+   also carries a `section` (which heading it is listed under) and a `tier`
+   (`basic` / `advanced` / `expert` / `stub`, which decides whether `--help`
+   and the GUI's default view show it at all); both are display metadata, and
+   `config.json` is flat so neither reaches disk.
 5. `.cuh` declaration sections must stay CUDA-include-free — they have to
    parse under `-DSS_BACKEND_VULKAN` without the CUDA toolkit.
 

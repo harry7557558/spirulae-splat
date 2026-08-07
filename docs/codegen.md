@@ -107,7 +107,7 @@ rather than instantiating everything in one TU.
 source of truth. It holds:
 
 - `SS_CONFIG_FIELDS(X)` — one X-macro row per flag,
-  `(type, member, default, group, choices, help)`;
+  `(type, member, default, section, tier, choices, help)`;
 - `struct TrainConfig` — **expanded from that same table**, so a field cannot
   exist in one and not the other;
 - `kTrainPresets` + `train_apply_preset()` — one branch per preset.
@@ -118,10 +118,12 @@ path's `config.json` reader. Add a row and the flag appears in all of them.
 
 The CLI flag is `member` stringified (`--sh-degree` sets `sh_degree`; `-` and
 `_` are interchangeable), so a flag name cannot drift from its member. The
-`config.json` key is `train_json_key(flag)`, which is the identity for
-everything except `dm_split_batch` → `split_batch`; that shim exists because
-`config.json` is read back by `spirula mesh` and `--resume`, and the
-datamanager field would otherwise collide with `model.split_batch`.
+`config.json` key is the flag, spelled the same way, at the top level: the
+file is flat. It used to nest under the `group` column, which made a
+presentational choice part of an on-disk format — moving a flag to another
+heading moved its key, and the reader (`spirula mesh`, `--resume`) silently
+fell back to the default when it could not find it. `section` and `tier` are
+display metadata only and can be reshuffled freely.
 
 This used to be generated from the Python dataclasses by
 `generate_cli_config.py`. It isn't any more — the Python dataclasses are

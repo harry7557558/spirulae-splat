@@ -127,7 +127,7 @@ void check_choices(const T&, const std::string&, const char*) {}
 bool set_config_field(TrainConfig& c, const std::string& key,
                       int argc, char** argv, int& i,
                       std::set<std::string>& seen) {
-#define SS_TRY_SET(type, member, default_, group, choices, help)               \
+#define SS_TRY_SET(type, member, default_, section, tier, choices, help)       \
     if (key == #member) {                                                      \
         consume(c.member, key, argc, argv, i);                                 \
         check_choices(c.member, key, choices);                                 \
@@ -201,13 +201,19 @@ void select_and_print_devices(const std::string& requested) {
     std::fflush(stdout);
 }
 
-void print_help(const char* argv0, const TrainConfig& c) {
+// `max_tier` is a rank into kTrainTiers: 0 lists only the flags a first run
+// needs (--help), kTrainNumTiers-1 lists every one of them (--help-all).
+void print_help(const char* argv0, const TrainConfig& c, int max_tier) {
     std::printf("usage: %s [<preset>] --data <dataset_dir> [--flag value ...]\n\n", argv0);
     std::printf("presets (tyro subcommands; default: 3dgs):\n");
     static_assert(sizeof(kTrainPresets) / sizeof(kTrainPresets[0]) ==
                       spirula::i18n::msg::train::kNumPresetText,
                   "config/TrainConfig.h and i18n/catalog/Train.h disagree "
                   "about how many presets there are");
+    static_assert((size_t)kTrainNumSections ==
+                      spirula::i18n::msg::train::kNumSectionText,
+                  "config/TrainConfig.h and i18n/catalog/Train.h disagree "
+                  "about how many section headings there are");
     for (const auto& p : kTrainPresets) {
         const auto* t = spirula::i18n::msg::train::preset_text(p.name);
         std::printf("  %-18s %s\n", p.name, t ? t->help->get() : "");
@@ -218,13 +224,28 @@ void print_help(const char* argv0, const TrainConfig& c) {
                 " list prints at startup.\n");
     std::printf("\nflags ('-' and '_' interchangeable; bools take 0/1; 'none' clears "
                 "optional values;\n defaults shown for the selected preset):\n");
-    const char* cur_group = "";
-#define SS_PRINT_HELP(type, member, default_, group, choices, help)            \
-    if (std::strcmp(cur_group, group) != 0) {                                  \
-        cur_group = group;                                                     \
-        std::printf("\n  [%s]\n", group);                                      \
+
+    // Pass 1: how many flags each heading has left after the tier filter, so
+    // a heading with nothing under it is not printed at all.
+    int hidden = 0;
+    int vis[kTrainNumSections] = {0};
+#define SS_COUNT_HELP(type, member, default_, section, tier, choices, help)    \
+    if (train_tier_rank(tier) <= max_tier) vis[train_section_index(section)]++; \
+    else                                   hidden++;
+    SS_CONFIG_FIELDS(SS_COUNT_HELP)
+#undef SS_COUNT_HELP
+
+    const char* cur_section = "";
+#define SS_PRINT_HELP(type, member, default_, section, tier, choices, help)    \
+    if (std::strcmp(cur_section, section) != 0) {                              \
+        cur_section = section;                                                 \
+        if (vis[train_section_index(section)]) {                               \
+            const spirula::i18n::Msg* label =                                  \
+                spirula::i18n::msg::train::section_label(section);              \
+            std::printf("\n  [%s]\n", label ? label->get() : section);         \
+        }                                                                      \
     }                                                                          \
-    {                                                                          \
+    if (train_tier_rank(tier) <= max_tier) {                                   \
         std::string h = help;                                                  \
         size_t dot = h.find(". ");                                             \
         if (dot != std::string::npos) h = h.substr(0, dot + 1);                \
@@ -239,6 +260,10 @@ void print_help(const char* argv0, const TrainConfig& c) {
     }
     SS_CONFIG_FIELDS(SS_PRINT_HELP)
 #undef SS_PRINT_HELP
+
+    if (hidden)
+        std::printf("\n%d more flags, for tuning rather than for getting a "
+                    "first result: --help-all\n", hidden);
 }
 
 
@@ -314,7 +339,14 @@ int spirula_train_main(int argc, char** argv) {
         std::string device_flag;
         for (int i = argi; i < argc; i++) {
             std::string arg = argv[i];
-            if (arg == "--help" || arg == "-h") { print_help(argv[0], cfg); return 0; }
+            if (arg == "--help" || arg == "-h") {
+                print_help(argv[0], cfg, 0);
+                return 0;
+            }
+            if (arg == "--help-all" || arg == "--help_all") {
+                print_help(argv[0], cfg, kTrainNumTiers - 1);
+                return 0;
+            }
             if (arg.rfind("--", 0) != 0)
                 throw std::runtime_error("unexpected argument: " + arg + " (flags are --key value)");
             // App-level flag, not part of the generated training config.
@@ -342,6 +374,12 @@ int spirula_train_main(int argc, char** argv) {
                 throw std::runtime_error("unknown flag: " + key +
                                          " (see --help for the full list)");
         }
+
+        // ---- Macro options -------------------------------------------------
+        // --quality and friends stand in for a handful of flags each; they
+        // fill in only the ones this command line left alone. What they write
+        // joins `seen`, so a macro passed here still beats a --resume base.
+        train_resolve_macros(cfg, seen, &seen);
 
         // ---- Resume --------------------------------------------------------
         // The checkpoint's config.json becomes the base: it carries the

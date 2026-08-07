@@ -56,10 +56,9 @@ MeshCameras load_cameras(const JsonValue& run_cfg, const std::string& data_dir,
                          const std::string& data_format_override) {
     DatasetParserConfig pcfg;
     std::string data_format = data_format_override;
-    const JsonValue* dp = run_cfg.find("dataparser");
+    // config.json is flat: one key per training flag, spelled as the flag is.
     auto dp_str = [&](const char* key, const std::string& def) {
-        if (!dp) return def;
-        const JsonValue* v = dp->find(key);
+        const JsonValue* v = run_cfg.find(key);
         return (v && !v->is_null()) ? v->as_string() : def;
     };
     pcfg.recon_dir  = dp_str("colmap_recon_dir", "");
@@ -69,12 +68,12 @@ MeshCameras load_cameras(const JsonValue& run_cfg, const std::string& data_dir,
     pcfg.metashape_ply = dp_str("metashape_ply", "");
     pcfg.metashape_psx = dp_str("metashape_psx", "");
     pcfg.downscale_rounding_mode = dp_str("downscale_rounding_mode", "floor");
-    if (dp) {
-        const JsonValue* v = dp->find("rescale_camera_to_fit");
+    {
+        const JsonValue* v = run_cfg.find("rescale_camera_to_fit");
         // bool auto-detect is unported; a number divides intrinsics
         if (v && v->type == JsonValue::Type::Number)
             pcfg.rescale_camera_to_fit = (float)v->as_double(0.0);
-        const JsonValue* fmt = dp->find("data_format");
+        const JsonValue* fmt = run_cfg.find("data_format");
         if (data_format.empty() && fmt && !fmt->is_null()) data_format = fmt->as_string();
     }
     // Use every parsed frame (train + would-be eval): more cameras only make
@@ -89,10 +88,8 @@ MeshCameras load_cameras(const JsonValue& run_cfg, const std::string& data_dir,
     // relative_scale: splats live in a frame scaled by this (model.py:561);
     // scale the c2w translations to match before inverting.
     float rel = 1.0f;
-    if (const JsonValue* model = run_cfg.find("model")) {
-        const JsonValue* rs = model->find("relative_scale");
-        if (rs && rs->type == JsonValue::Type::Number) rel = (float)rs->as_double(1.0);
-    }
+    if (const JsonValue* rs = run_cfg.find("relative_scale"))
+        if (rs->type == JsonValue::Type::Number) rel = (float)rs->as_double(1.0);
     if (rel != 1.0f)
         for (int64_t i = 0; i < C; ++i)
             for (int r = 0; r < 3; ++r)
