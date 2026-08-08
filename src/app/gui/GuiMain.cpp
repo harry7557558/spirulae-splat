@@ -8,6 +8,16 @@
 #include "app/gui/GuiApp.h"
 #include "i18n/catalog/Brand.h"
 
+#ifdef _WIN32
+// Before the GL headers: both this and they define APIENTRY, and windows.h
+// first is the order that does not warn.
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX   // keep windows.h from defining min()/max() macros
+#endif
+#include <windows.h>
+#endif
+
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -23,6 +33,38 @@ namespace {
 void glfw_error_callback(int error, const char* description) {
     std::fprintf(stderr, "[glfw] error %d: %s\n", error, description);
 }
+
+#ifdef _WIN32
+// Close the terminal the loader put behind the window.
+
+bool is_console(HANDLE h) {
+    DWORD mode = 0;
+    return h != nullptr && h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode);
+}
+
+void reopen_null(FILE* stream, const char* mode) {
+#ifdef _MSC_VER
+    FILE* unused = nullptr;
+    freopen_s(&unused, "NUL", mode, stream);
+#else
+    (void)std::freopen("NUL", mode, stream);
+#endif
+}
+
+void release_own_console() {
+    if (GetConsoleWindow() == nullptr) return;      // never had one
+    DWORD pids[2];
+    if (GetConsoleProcessList(pids, 2) != 1) return;  // shared: a shell's
+
+    const bool had_out = is_console(GetStdHandle(STD_OUTPUT_HANDLE));
+    const bool had_err = is_console(GetStdHandle(STD_ERROR_HANDLE));
+    const bool had_in  = is_console(GetStdHandle(STD_INPUT_HANDLE));
+    if (!FreeConsole()) return;
+    if (had_out) reopen_null(stdout, "w");
+    if (had_err) reopen_null(stderr, "w");
+    if (had_in)  reopen_null(stdin, "r");
+}
+#endif  // _WIN32
 
 void apply_style(float scale) {
     ImGuiStyle& style = ImGui::GetStyle();
@@ -55,6 +97,11 @@ void apply_style(float scale) {
 }  // namespace
 
 int spirula_gui_main(int argc, char** argv) {
+    // First, and before anything slow: the console is on screen until it goes.
+#ifdef _WIN32
+    release_own_console();
+#endif
+
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
         std::fprintf(stderr, "%s\n",
