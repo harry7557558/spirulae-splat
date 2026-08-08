@@ -84,7 +84,7 @@ function(ss_nn_shaders tag shader_dir out_embed_cpp)
 
     set(_listfile ${_spv_dir}/blobs.txt)
     string(REPLACE ";" "\n" _listbody "${_blobs}")
-    file(WRITE ${_listfile} "${_listbody}\n")
+    ss_write_if_different(${_listfile} "${_listbody}\n")
 
     set(_embed ${CMAKE_CURRENT_BINARY_DIR}/nn_shaders_${tag}.cpp)
     add_custom_command(OUTPUT ${_embed}

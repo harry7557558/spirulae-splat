@@ -738,7 +738,7 @@ bool PreviewRenderer::build(const meshing::MeshData& mesh,
     glx::BindVertexArray(vao);
     glx::BindBuffer(GL_ARRAY_BUFFER, vbo);
     glx::BufferData(GL_ARRAY_BUFFER,
-                    (GLsizeiptr)(verts.size() * sizeof(MV)), verts.data(),
+                    (glx::glSizeiptr)(verts.size() * sizeof(MV)), verts.data(),
                     GL_STATIC_DRAW);
     const GLsizei st = (GLsizei)sizeof(MV);
     glx::EnableVertexAttribArray(0);
@@ -754,7 +754,7 @@ bool PreviewRenderer::build(const meshing::MeshData& mesh,
                              (void*)(9 * sizeof(float)));
     glx::BindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
     glx::BufferData(GL_ELEMENT_ARRAY_BUFFER,
-                    (GLsizeiptr)(idx.size() * sizeof(uint32_t)), idx.data(),
+                    (glx::glSizeiptr)(idx.size() * sizeof(uint32_t)), idx.data(),
                     GL_STATIC_DRAW);
     glx::BindVertexArray(0);
     _vao_mesh = vao;

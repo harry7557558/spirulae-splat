@@ -79,6 +79,29 @@ rem ---------------------------------------------------------------------------
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release %CUDAARG% %*
 if errorlevel 1 exit /b 1
 
+rem ---------------------------------------------------------------------------
+rem Repair the ninja dependency log. build_develop.bash carries the long form:
+rem a record with a mismatched node index survives ninja's own recovery, and
+rem from then on every build discards its header dependencies and the next one
+rem recompiles every object. `-t recompact` rewrites the log and drops it.
+rem ---------------------------------------------------------------------------
+if not exist build\.ninja_deps goto :deps_done
+cmake --build build -- -t recompact >"%TEMP%\ss_ninja_deps.log" 2>&1
+findstr /c:"premature end of file" /c:"bad deps log" "%TEMP%\ss_ninja_deps.log" >nul
+if errorlevel 1 goto :deps_checked
+rem The rewrite is what heals it, so a second pass is what confirms it.
+cmake --build build -- -t recompact >"%TEMP%\ss_ninja_deps.log" 2>&1
+findstr /c:"premature end of file" /c:"bad deps log" "%TEMP%\ss_ninja_deps.log" >nul
+if errorlevel 1 (
+    echo repaired a corrupt build\.ninja_deps ^(this build recompiles everything once^)
+) else (
+    echo build\.ninja_deps did not survive a recompact -- removing it
+    del /q build\.ninja_deps
+)
+:deps_checked
+del /q "%TEMP%\ss_ninja_deps.log" >nul 2>&1
+:deps_done
+
 echo.
 set JOB_RAM_MB=750
 set AVAILABLE_MB=0

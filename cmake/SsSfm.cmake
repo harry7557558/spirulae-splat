@@ -134,7 +134,7 @@ message(STATUS "SfM SPIR-V: ${_sfm_nblobs} blobs "
 # List file for the embed step (keeps the command line short).
 set(_sfm_listfile ${_sfm_spirv_dir}/blobs.txt)
 string(REPLACE ";" "\n" _sfm_listbody "${_sfm_blobs}")
-file(WRITE ${_sfm_listfile} "${_sfm_listbody}\n")
+ss_write_if_different(${_sfm_listfile} "${_sfm_listbody}\n")
 
 add_custom_command(OUTPUT ${_sfm_embed_cpp}
     COMMAND ${SS_SFM_SPIRV_TOOL} embed --sfm ${_sfm_embed_cpp}

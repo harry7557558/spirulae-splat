@@ -176,3 +176,31 @@ into function-named parts (see [codegen.md](codegen.md)) both improves
 readability and parallelizes the build — no build-file edits needed, since
 both builds glob `cmake/sources.txt`. Only `HEADER_SOURCES` in
 `generate_headers.py` has to learn the new file.
+
+### Re-running the build script with nothing changed must be a no-op
+
+`build_develop.bash` / `.bat` re-run `cmake -B build` on every invocation, so
+the whole configure step executes every time. The invariant that keeps
+incremental builds cheap is that configure must not **touch** a file the build
+reads unless its content actually changed — and `file(WRITE)` rewrites
+unconditionally, giving the file a fresh mtime and rebuilding everything
+downstream of it. Write generated files with `ss_write_if_different()`
+(`SsOptions.cmake`) instead. It is what `ss_embed_file()`, `ss_cjk_faces()` and
+the four SPIR-V `blobs.txt` list files use.
+
+Check it after touching anything under `cmake/`: run the build script twice and
+the second run must print `ninja: no work to do.`
+
+Two failure modes look identical from the outside — a full rebuild on an
+unedited tree — so `ninja -C build -d explain` is the tool that tells them
+apart:
+
+- `output ... older than most recent input <file>` — a configure-time write
+  that should have gone through `ss_write_if_different()`.
+- `stored deps info out of date for ...`, on *every* object, with a
+  `ninja: warning: premature end of file; recovering` near the top — a corrupt
+  `build/.ninja_deps`. Ninja's recovery truncates the log but not past the bad
+  record, so the log never heals on its own: each build's header dependencies
+  are discarded when the next build loads it back. The build scripts detect
+  this and repair it with `ninja -t recompact`; by hand,
+  `cmake --build build -- -t recompact` (or just delete `build/.ninja_deps`).

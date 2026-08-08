@@ -9,12 +9,13 @@ function(ss_embed_file input output_header symbol)
     file(READ ${input} _hex HEX)
     string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _bytes ${_hex})
     file(RELATIVE_PATH _rel ${SS_ROOT} ${input})
-    file(WRITE ${output_header}
+    string(CONCAT _text
         "#pragma once\n"
         "// AUTO-GENERATED from ${_rel} -- do not edit.\n"
         "#include <cstddef>\n"
         "inline const unsigned char k${symbol}[] = {${_bytes}};\n"
         "inline const size_t k${symbol}Size = sizeof(k${symbol});\n")
+    ss_write_if_different(${output_header} "${_text}")
     set_property(DIRECTORY ${SS_ROOT} APPEND
         PROPERTY CMAKE_CONFIGURE_DEPENDS ${input})
 endfunction()
@@ -121,7 +122,7 @@ function(ss_cjk_faces)
     endif()
 
     file(RELATIVE_PATH rel ${SS_ROOT} ${spec})
-    file(WRITE ${header}
+    string(CONCAT _faces_text
         "#pragma once\n"
         "// AUTO-GENERATED from ${rel} -- do not edit.\n"
         "#include \"app/gui/Fonts.h\"\n"
@@ -131,8 +132,9 @@ function(ss_cjk_faces)
         "${body}"
         "};\n"
         "}  // namespace gui\n")
+    ss_write_if_different(${header} "${_faces_text}")
 
-    file(WRITE ${sub_header}
+    string(CONCAT _subsets_text
         "#pragma once\n"
         "// AUTO-GENERATED from assets/fonts/SpirulaCJK-*.otf -- do not edit.\n"
         "// Those files are themselves generated: tools/make_ui_font.py.\n"
@@ -144,6 +146,7 @@ function(ss_cjk_faces)
         "${sub_table}"
         "};\n"
         "}  // namespace gui\n")
+    ss_write_if_different(${sub_header} "${_subsets_text}")
 
     set_property(DIRECTORY ${SS_ROOT} APPEND
         PROPERTY CMAKE_CONFIGURE_DEPENDS ${spec})

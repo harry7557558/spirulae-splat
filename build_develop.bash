@@ -27,6 +27,26 @@ fi
 
 cmake -G Ninja -B build "$@" || exit $?
 
+# Repair the ninja dependency log.
+if [ -f build/.ninja_deps ]; then
+    ss_deps_broken() {
+        case "$1" in
+            *"premature end of file"*|*"bad deps log signature"*|\
+            *"bad deps log version"*) return 0 ;;
+        esac
+        return 1
+    }
+    if ss_deps_broken "$(cmake --build build -- -t recompact 2>&1)"; then
+        # The rewrite is what heals it, so a second pass is what confirms it.
+        if ss_deps_broken "$(cmake --build build -- -t recompact 2>&1)"; then
+            echo "build/.ninja_deps did not survive a recompact -- removing it"
+            rm -f build/.ninja_deps
+        else
+            echo "repaired a corrupt build/.ninja_deps (this build recompiles everything once)"
+        fi
+    fi
+fi
+
 echo ""
 
 JOB_RAM_MB=750   # 750MB per job

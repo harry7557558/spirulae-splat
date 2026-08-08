@@ -1,5 +1,29 @@
-# Build options, backend selection, and the source-tree paths every other
-# module builds on. Included first by the top-level CMakeLists.txt.
+# Build options, backend selection, the source-tree paths every other module
+# builds on, and the helpers they share. Included first by the top-level
+# CMakeLists.txt.
+
+# ---------------------------------------------------------------------------
+# ss_write_if_different(<path> <content>)
+#
+# file(WRITE) rewrites unconditionally. The dev build scripts re-run
+# `cmake -B build` on every invocation, so a generated file written with
+# file(WRITE) gets a fresh mtime every time -- and ninja then rebuilds
+# everything downstream of it on a tree with no edits at all. Write only when
+# the bytes actually differ, so an unchanged generated file keeps its mtime.
+#
+# Callers pass ONE content string: file(WRITE) concatenates its extra arguments,
+# and comparing against what is on disk needs the whole thing up front anyway.
+# ---------------------------------------------------------------------------
+function(ss_write_if_different path content)
+    if(EXISTS "${path}")
+        file(READ "${path}" _existing)
+        string(COMPARE EQUAL "${_existing}" "${content}" _same)
+        if(_same)
+            return()
+        endif()
+    endif()
+    file(WRITE "${path}" "${content}")
+endfunction()
 
 # ---------------------------------------------------------------------------
 # Deprecated SSPLAT_* option names

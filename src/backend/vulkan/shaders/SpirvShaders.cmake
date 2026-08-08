@@ -86,7 +86,7 @@ function(ss_setup_spirv shared_dir vk_dir slangc spirv_dir embed_cpp debug)
     # List file for the embed step (avoids a very long command line).
     set(listfile ${spirv_dir}/blobs.txt)
     string(REPLACE ";" "\n" listfile_body "${blob_outputs}")
-    file(WRITE ${listfile} "${listfile_body}\n")
+    ss_write_if_different(${listfile} "${listfile_body}\n")
 
     add_custom_command(
         OUTPUT ${embed_cpp}
