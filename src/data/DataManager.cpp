@@ -1,6 +1,8 @@
 // DataManager — see DataManager.h for the public contract.
 
 #include "data/DataManager.h"
+#include "i18n/catalog/Data.h"
+
 #include "external/stb_image.h"
 
 #include <algorithm>
@@ -19,6 +21,9 @@
 #include <set>
 #include <unordered_map>
 
+
+namespace dmsg = spirula::i18n::msg::data;
+using spirula::i18n::format;
 
 // ===========================================================================
 // Small utilities
@@ -347,12 +352,9 @@ static void _warn_rgb_dim_mismatch_once(
     std::lock_guard<std::mutex> lk(mu);
     auto key = std::make_pair(expected_w, expected_h);
     if (seen.insert(key).second) {
-        std::fprintf(stderr,
-            "DataManager: rgb shape mismatch for '%s': %dx%d vs camera %dx%d. "
-            "Resizing on-disk image to match camera dims. "
-            "Suppressing further warnings for this group.\n",
-            path.c_str(),
-            actual_w, actual_h, expected_w, expected_h);
+        std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+            format(dmsg::rgb_shape_mismatch,
+                   {path, actual_w, actual_h, expected_w, expected_h}).c_str());
         std::fflush(stderr);
     }
 }
@@ -1085,29 +1087,23 @@ std::vector<IndexGroup> DataManagerImpl::build_index_groups_member(
             merge_max_area(_normal_h_per[i], _normal_w_per[i], g.normal_h, g.normal_w, normal_mm);
 
         if (mask_mm && !warned_mask) {
-            std::fprintf(stderr,
-                "[DataManager] warning: mismatched mask shapes within group "
-                "%dx%d; bilinear-nearest upsampling to %dx%d. "
-                "(Further mask warnings suppressed.)\n",
-                g.width, g.height, g.mask_w, g.mask_h);
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                format(dmsg::mask_shape_mismatch,
+                       {g.width, g.height, g.mask_w, g.mask_h}).c_str());
             std::fflush(stderr);
             warned_mask = true;
         }
         if (depth_mm && !warned_depth) {
-            std::fprintf(stderr,
-                "[DataManager] warning: mismatched depth shapes within group "
-                "%dx%d; bilinear-upsampling to %dx%d. "
-                "(Further depth warnings suppressed.)\n",
-                g.width, g.height, g.depth_w, g.depth_h);
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                format(dmsg::depth_shape_mismatch,
+                       {g.width, g.height, g.depth_w, g.depth_h}).c_str());
             std::fflush(stderr);
             warned_depth = true;
         }
         if (normal_mm && !warned_normal) {
-            std::fprintf(stderr,
-                "[DataManager] warning: mismatched normal shapes within group "
-                "%dx%d; bilinear-upsampling to %dx%d. "
-                "(Further normal warnings suppressed.)\n",
-                g.width, g.height, g.normal_w, g.normal_h);
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                format(dmsg::normal_shape_mismatch,
+                       {g.width, g.height, g.normal_w, g.normal_h}).c_str());
             std::fflush(stderr);
             warned_normal = true;
         }
@@ -1215,8 +1211,9 @@ void DataManagerImpl::preload_cpu_cache() {
                 int64_t d = done_count.fetch_add(1) + 1;
                 {
                     std::lock_guard<std::mutex> lk(print_mu);
-                    std::fprintf(stderr, "\rLoading images %lld/%lld",
-                                 (long long)d, (long long)N);
+                    std::fprintf(stderr, "\r%s",
+                                 format(dmsg::loading_images,
+                                        {(long long)d, (long long)N}).c_str());
                     std::fflush(stderr);
                 }
             }

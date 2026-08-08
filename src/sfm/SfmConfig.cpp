@@ -3,8 +3,11 @@
 // table in SfmConfig.h, so a new knob is one row and never a fourth edit.
 #include "sfm/SfmConfig.h"
 
+#include "i18n/catalog/SfmFields.h"
+
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <stdexcept>
 
@@ -199,21 +202,31 @@ std::string flagFor(const T&, const char* name) {
 constexpr int kFlagCol = 42;  // flag column width; the widest flag+metavar fits
 constexpr int kWidth = 96;
 
+// Wrapping is i18n::wrap's job rather than a find(' ') loop: it measures in
+// terminal columns instead of bytes, and it breaks between characters where a
+// language has no spaces to break at -- without which a Japanese help string
+// is one line four hundred columns wide.
 void printWrapped(FILE* out, const std::string& text, int indent) {
-    std::string line;
-    size_t pos = 0;
-    while (pos < text.size()) {
-        size_t sp = text.find(' ', pos);
-        std::string word = text.substr(pos, sp == std::string::npos ? sp : sp - pos);
-        if (!line.empty() && (int)(line.size() + 1 + word.size()) + indent > kWidth) {
-            std::fprintf(out, "%*s%s\n", indent, "", line.c_str());
-            line.clear();
-        }
-        line += (line.empty() ? "" : " ") + word;
-        if (sp == std::string::npos) break;
-        pos = sp + 1;
-    }
-    if (!line.empty()) std::fprintf(out, "%*s%s\n", indent, "", line.c_str());
+    for (const std::string& line : spirula::i18n::wrap(text, kWidth - indent))
+        std::fprintf(out, "%*s%s\n", indent, "", line.c_str());
+}
+
+// The heading a block of options is printed under. Keyed by the same string
+// the table carries, so a group added there without an entry here still
+// prints -- as itself, which is the honest fallback for a heading.
+const char* groupLabel(const char* group) {
+    namespace F = spirula::i18n::msg::sfmfield;
+    struct Row { const char* key; const spirula::i18n::Msg* msg; };
+    static const Row kRows[] = {
+        {"pipeline", &F::group_pipeline}, {"camera", &F::group_camera},
+        {"features", &F::group_features}, {"matching", &F::group_matching},
+        {"mapper", &F::group_mapper},     {"manage", &F::group_manage},
+        {"merge", &F::group_merge},       {"input", &F::group_input},
+        {"runtime", &F::group_runtime},
+    };
+    for (const Row& r : kRows)
+        if (std::strcmp(r.key, group) == 0) return r.msg->get();
+    return group;
 }
 
 void printOption(FILE* out, const std::string& flag, const std::string& metavar,
@@ -451,10 +464,11 @@ void printConfigOptions(FILE* out, uint32_t cmd, const SfmConfig& defaults) {
     if (((uint32_t)(cmds) & cmd) && (tier) != Tier::Alias) {                                       \
         if (std::string(cur_group) != group) {                                                     \
             cur_group = group;                                                                     \
-            std::fprintf(out, "\n %s:\n", group);                                                  \
+            std::fprintf(out, "\n %s:\n", groupLabel(group));                                      \
         }                                                                                          \
         printOption(out, flagFor(defaults.member, name), metavarFor(defaults.member, name, choices),\
-                    valueString(defaults.member), help, choices);                                  \
+                    valueString(defaults.member),                                                  \
+                    spirula::i18n::msg::sfmfield::help##_help.get(), choices);                     \
     }
     SFM_CONFIG_FIELDS(SFM_PRINT_FIELD)
 #undef SFM_PRINT_FIELD

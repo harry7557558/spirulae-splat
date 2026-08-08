@@ -62,12 +62,10 @@ bool has_model(const fs::path& sparse) {
 
 std::string SfmRunner::availability() {
 #ifndef SS_TOOL_SFM
-    return "this build has no structure-from-motion module "
-           "(-DSS_BUILD_SFM=OFF); use COLMAP instead.";
+    return lmsg::err_no_sfm_module.get();
 #else
     if (exe_path().empty())
-        return "this program could not work out its own path, so it cannot "
-               "run the reconstruction step.";
+        return lmsg::err_no_exe_path.get();
     return "";
 #endif
 }

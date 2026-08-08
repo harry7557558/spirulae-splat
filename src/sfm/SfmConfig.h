@@ -192,326 +192,248 @@ struct SfmConfig {
 //   group    display group, in the order the rows appear here
 //   lo, hi   accepted range; lo >= hi means unbounded
 //   choices  "a|b|c" for string fields, "" otherwise
-//   help     one sentence, no trailing default (the printer appends it)
+//   help     the NAME of a message in i18n/catalog/SfmFields.h -- a token, not
+//            a string: `quality` resolves to `msg::sfmfield::quality_help`.
+//            One sentence, no trailing default (the printer appends it). It
+//            lives there rather than here so that `spirula sfm --help` can be
+//            read in the language the rest of the program is in, and a row
+//            added with no entry there is a compile error naming the flag.
 //
 // A bool field is a switch: `--name` sets it true and `--no-name` false, so a
 // field defaulting to true reads as `--no-name` on the command line and is
 // printed that way. Keep the name positive.
 #define SFM_CONFIG_FIELDS(F)                                                                       \
     /* ---- pipeline ---- */                                                                       \
-    F(quality, "quality", CMD_AUTO, Tier::Basic, "pipeline", 0, 0,                                  \
-      "low|medium|high|extreme",                                                                    \
-      "Working resolution, feature budget and pair-selection breadth")                              \
-    F(data_type, "data-type", CMD_AUTO, Tier::Basic, "pipeline", 0, 0,                              \
-      "individual|video|internet",                                                                  \
-      "What the capture is: individual photos, video frames, or an unordered internet collection")  \
-    F(pairs, "pairs", CMD_AUTO | CMD_MATCH, Tier::Basic, "pipeline", 0, 0,                          \
-      "auto|exhaustive|sequential|prefilter",                                                       \
-      "Which image pairs are matched; auto is GPU pair selection at 100 images or more, "           \
-      "sequential (plus loop closure) for video below that, and exhaustive otherwise")              \
-    F(overlap, "overlap", CMD_AUTO | CMD_MATCH, Tier::Advanced, "pipeline", 1, 1000000, "",         \
-      "Neighbours each image is paired with under --pairs sequential")                              \
-    F(loop_closure, "loop-closure", CMD_AUTO | CMD_MATCH, Tier::Advanced, "pipeline", 0, 0, "",     \
-      "Under --pairs sequential, also match the content-similar pairs GPU pair selection finds, "   \
-      "so a capture that revisits a place links back to it")                                        \
-    F(max_error, "max-error", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "pipeline",           \
-      0.1, 100, "",                                                                                 \
-      "Inlier radius for verification and mapping, in pixels of the image SIFT ran on rather "      \
-      "than of the source file (D47)")                                                              \
-    F(max_image_size, "max-image-size", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "pipeline",         \
-      0, 20000, "",                                                                                 \
-      "Longest edge the extractor runs on; larger images are downscaled first, and keypoints are "  \
-      "still reported in the source image's pixels. 0 picks the frontend's own default (3200 for "  \
-      "sift, 1600 for aliked)")                                                                     \
-    F(mask_dir, "masks", CMD_AUTO | CMD_EXTRACT, Tier::Basic, "pipeline", 0, 0, "",                 \
-      "Directory of masks; keypoints on zero (black) pixels are dropped. auto defaults it to "      \
-      "`masks` beside the image directory")                                                         \
-    F(mask_dir, "mask-dir", CMD_AUTO | CMD_EXTRACT, Tier::Alias, "pipeline", 0, 0, "",              \
-      "Alias of --masks")                                                                           \
-    /* ---- camera ---- */                                                                          \
-    F(camera_mode, "camera-mode", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Basic, "camera", 0, 0,      \
-      "single|folder|image",                                                                        \
-      "How images are grouped into cameras; every mode splits on image resolution first")           \
-    F(camera_model, "camera-model", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Basic, "camera", 0, 0,    \
-      "simple-pinhole|pinhole|radial|opencv|full-opencv|opencv-fisheye|thin-prism-fisheye|"         \
-      "equirectangular",                                                                            \
-      "Distortion model fitted to each camera group; also takes PREFIX=MODEL to set one group")     \
-    F(focal, "focal", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Basic, "camera", 0, 10000000, "",       \
-      "Starting focal length in pixels, 0 to guess from EXIF or image size; also takes PREFIX=F")   \
-    F(camera.exif_focal, "exif-focal", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "camera",    \
-      0, 0, "",                                                                                     \
-      "Use the focal length EXIF recorded when no --focal covers the group")                        \
-    F(camera.exif_groups, "exif-groups", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "camera",  \
-      0, 0, "",                                                                                     \
-      "Split camera groups by what EXIF says the body and the focal setting were (D48)")            \
-    F(camera.exif_focal_tol, "exif-focal-tol", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced,      \
-      "camera", 0.001, 1.0, "",                                                                     \
-      "Relative tolerance clustering EXIF focals into one group; must exceed EXIF's 1 mm "          \
-      "quantization and stay under a real zoom step")                                               \
+    F(quality, "quality", CMD_AUTO, Tier::Basic, "pipeline", 0, 0, "low|medium|high|extreme",      \
+      quality)                                                                                     \
+    F(data_type, "data-type", CMD_AUTO, Tier::Basic, "pipeline", 0, 0,                             \
+      "individual|video|internet", data_type)                                                      \
+    F(pairs, "pairs", CMD_AUTO | CMD_MATCH, Tier::Basic, "pipeline", 0, 0,                         \
+      "auto|exhaustive|sequential|prefilter", pairs)                                               \
+    F(overlap, "overlap", CMD_AUTO | CMD_MATCH, Tier::Advanced, "pipeline", 1, 1000000, "",        \
+      overlap)                                                                                     \
+    F(loop_closure, "loop-closure", CMD_AUTO | CMD_MATCH, Tier::Advanced, "pipeline", 0, 0, "",    \
+      loop_closure)                                                                                \
+    F(max_error, "max-error", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "pipeline", 0.1,     \
+      100, "", max_error)                                                                          \
+    F(max_image_size, "max-image-size", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "pipeline", 0,     \
+      20000, "", max_image_size)                                                                   \
+    F(mask_dir, "masks", CMD_AUTO | CMD_EXTRACT, Tier::Basic, "pipeline", 0, 0, "", masks)         \
+    F(mask_dir, "mask-dir", CMD_AUTO | CMD_EXTRACT, Tier::Alias, "pipeline", 0, 0, "", mask_dir)   \
+    /* ---- camera ---- */                                                                         \
+    F(camera_mode, "camera-mode", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Basic, "camera", 0, 0,     \
+      "single|folder|image", camera_mode)                                                          \
+    F(camera_model, "camera-model", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Basic, "camera", 0, 0,   \
+      "simple-pinhole|pinhole|radial|opencv|full-opencv|opencv-fisheye|thin-prism-fisheye|equirectangular",\
+      camera_model)                                                                                \
+    F(focal, "focal", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Basic, "camera", 0, 10000000, "",      \
+      focal)                                                                                       \
+    F(camera.exif_focal, "exif-focal", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "camera",   \
+      0, 0, "", exif_focal)                                                                        \
+    F(camera.exif_groups, "exif-groups", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "camera", \
+      0, 0, "", exif_groups)                                                                       \
+    F(camera.exif_focal_tol, "exif-focal-tol", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced,     \
+      "camera", 0.001, 1.0, "", exif_focal_tol)                                                    \
     /* ---- features ---- */                                                                       \
-    F(features, "features", CMD_AUTO | CMD_EXTRACT, Tier::Basic, "features", 0, 0,                  \
-      "sift|aliked-n16rot|aliked-n32",                                                              \
-      "Which detector and descriptor; the aliked ones are learned and fetch a checkpoint on "       \
-      "first use")                                                                                  \
-    F(sift.max_num_features, "max-features", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features",    \
-      128, 1000000, "", "Keypoints kept per image with --features sift, the largest scales first")  \
-    F(aliked.max_num_features, "aliked-max-features", CMD_AUTO | CMD_EXTRACT, Tier::Advanced,       \
-      "features", 128, 1000000, "",                                                                 \
-      "Keypoints kept per image with a learned frontend, the highest scores first")                 \
-    F(aliked.min_score, "aliked-min-score", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features",     \
-      0, 1, "", "Detection score a learned keypoint must reach")                                    \
-    F(aliked.model, "aliked-model", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features", 0, 0, "",   \
-      "Path to an ALIKED .onnx checkpoint, overriding the one --features names")                    \
-    F(sift.num_octaves, "octaves", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features", 1, 8, "",    \
-      "Scale-space octaves")                                                                        \
-    F(sift.peak_threshold, "peak-threshold", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features",    \
-      0, 1, "", "DoG response a keypoint must reach")                                               \
-    F(sift.edge_threshold, "edge-threshold", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features",    \
-      1, 1000, "", "Principal-curvature ratio above which a keypoint is an edge, not a corner")     \
-    F(sift.max_num_orientations, "max-orientations", CMD_AUTO | CMD_EXTRACT, Tier::Advanced,        \
-      "features", 1, 8, "", "Descriptors emitted per keypoint when its gradient is ambiguous")      \
-    F(sift.profile, "profile", CMD_EXTRACT, Tier::Advanced, "features", 0, 0, "",                   \
-      "Print per-stage GPU timings for the extractor")                                              \
-    F(sift.spv_path, "spv-path", CMD_EXTRACT, Tier::Advanced, "features", 0, 0, "",                 \
-      "Load the SIFT kernels from this SPIR-V file instead of the embedded blob")                   \
-    /* ---- matching ---- */                                                                        \
-    F(matcher, "matcher", CMD_AUTO | CMD_MATCH, Tier::Basic, "matching", 0, 0,                      \
-      "bruteforce|lightglue",                                                                       \
-      "How descriptors are matched. lightglue is a learned matcher for --features aliked-*; it is " \
-      "an order of magnitude slower per pair, so it only makes sense behind pair selection")        \
-    F(lightglue.min_score, "lightglue-min-score", CMD_AUTO | CMD_MATCH, Tier::Advanced,             \
-      "matching", 0, 1, "", "Assignment confidence a LightGlue match must reach")                   \
-    F(lightglue.model, "lightglue-model", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching",         \
-      0, 0, "", "Path to a LightGlue .onnx checkpoint, overriding the fetched one")                 \
-    F(match.max_ratio, "ratio", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0, 1, "",         \
-      "Lowe ratio: a match is kept when the best distance is below this times the second best")     \
-    F(match.min_similarity, "min-similarity", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching",     \
-      0, 1, "",                                                                                     \
-      "Cosine similarity a match must reach, for float descriptors; 0 disables it. Learned "        \
-      "descriptors are filtered on this rather than on the ratio")                                  \
-    F(match.cross_check, "cross-check", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0, 0,     \
-      "", "Keep only mutual nearest neighbours")                                                    \
-    F(match.max_num_matches, "max-matches", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching",       \
-      0, 1000000000, "", "Cap on matches per pair, 0 for no cap")                                   \
-    F(verify, "verify", CMD_MATCH, Tier::Advanced, "matching", 0, 0, "",                            \
-      "Geometrically verify each pair (F/H RANSAC); off keeps the raw putative matches")            \
-    F(twoview.min_num_inliers, "min-inliers", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching",     \
-      4, 1000000, "", "Inliers a verified pair must keep to be recorded")                           \
-    F(prefilter.num_features, "prefilter-features", CMD_AUTO | CMD_MATCH, Tier::Advanced,           \
-      "matching", 16, 100000, "", "Query descriptors per image in the pair-selection pass")         \
-    F(prefilter.train_features, "prefilter-train", CMD_AUTO | CMD_MATCH, Tier::Advanced,            \
-      "matching", 0, 1000000, "",                                                                   \
-      "Cap on the train side of that pass, 0 to score against every descriptor")                    \
-    F(prefilter.num_neighbors, "prefilter-neighbors", CMD_AUTO | CMD_MATCH, Tier::Advanced,         \
-      "matching", 1, 100000, "", "Best-scoring partners each image keeps for full matching")        \
-    F(prefilter.min_score, "prefilter-min-score", CMD_AUTO | CMD_MATCH, Tier::Advanced,             \
-      "matching", 0, 1000000, "", "Mini-matches below which a pair never qualifies")                \
-    F(prefilter.ratio, "prefilter-ratio", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching",         \
-      0, 1, "", "Lowe ratio of the scoring pass; looser than the matcher's, as it only ranks")      \
-    /* ---- mapper ---- */                                                                          \
-    F(mapper.focal_trials, "focal-trials", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",            \
-      0, 1000, "",                                                                                  \
-      "Trial reconstructions used to pick a focal the motion cannot determine (D48), 0 to skip")    \
-    F(mapper.refine_principal_point, "refine-principal-point", CMD_AUTO | CMD_MAP, Tier::Advanced,  \
-      "mapper", 0, 0, "",                                                                           \
-      "Let BA move cx,cy throughout; off as in COLMAP, where it is nearly a camera rotation (D50)") \
-    F(final_principal_point, "final-principal-point", CMD_AUTO | CMD_MAP, Tier::Advanced,           \
-      "mapper", 0, 0, "",                                                                           \
-      "One principal-point-free global BA on the finished model, for a single camera group (D51)")  \
-    F(mapper.pp_min_images, "pp-min-images", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",          \
-      2, 1000000, "", "Images a group needs before that final pass runs on it")                     \
-    F(orient, "orient", CMD_AUTO | CMD_MAP | CMD_MERGE, Tier::Advanced, "mapper", 0, 0, "",         \
-      "Write the model upright, centred and unit-scaled from the camera poses, "                    \
-      "instead of in the seed pair's arbitrary gauge")                                              \
-    F(mapper.min_tri_angle_deg, "min-tri-angle", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",      \
-      0, 90, "", "Triangulation angle a 3D point must subtend to be kept")                          \
-    F(mapper.init_min_tri_angle_deg, "init-min-tri-angle", CMD_AUTO | CMD_MAP, Tier::Advanced,      \
-      "mapper", 0, 90, "",                                                                          \
-      "Median triangulation angle the seed pair must reach; relaxed stepwise if nothing passes")    \
-    F(mapper.min_num_pnp_inliers, "min-pnp-inliers", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",  \
-      4, 1000000, "", "2D-3D inliers an image needs to register")                                   \
-    F(mapper.min_pnp_inlier_ratio, "min-pnp-ratio", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",   \
-      0, 1, "", "Inlier fraction an image needs to register, which rejects accidental agreement")   \
-    F(mapper.min_image_points, "min-image-points", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",    \
-      1, 1000000, "", "Observations below which a registered image is dropped again")               \
-    F(mapper.ba_loss, "ba-loss", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,                \
-      "trivial|huber|cauchy", "Robust loss used by mapping-time bundle adjustment")                 \
-    F(mapper.ba_loss_param, "ba-loss-param", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",          \
-      0, 1000, "", "Huber delta / Cauchy c, in extraction pixels")                                  \
-    F(mapper.seed_homography, "seed-homography", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",      \
-      0, 0, "", "Re-test a seed candidate for a planar or panoramic configuration on its own "      \
-      "inliers, rather than trusting verification's verdict")                                       \
-    F(mapper.ba_real, "ba-real", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,                \
-      "float|double|df",                                                                            \
-      "Scalar bundle adjustment computes in; df emulates double with a pair of floats, which "      \
-      "wins where fp64 throughput is a fraction of fp32")                                           \
-    F(mapper.ba_real_coarse, "ba-real-coarse", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,  \
-      "float|double|df",                                                                            \
-      "Scalar for solves another solve will redo -- growth refinements and merge-tree levels; "     \
-      "set equal to --ba-real to compute everything the same way")                                  \
-    F(mapper.ba_solver, "ba-solver", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,            \
-      "auto|dense|cg",                                                                              \
-      "Linear solver for the reduced camera system; auto switches to CG above the size where "      \
-      "the dense factorization stops paying")                                                       \
-    F(mapper.retri_scale, "retri-scale", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 10, "",   \
-      "Retriangulation tolerance as a fraction of --max-error, 0 to skip the pass")                 \
-    F(mapper.merge_tracks, "merge-tracks", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,      \
-      "", "Fuse two 3D points a correspondence says are the same feature")                          \
-    F(mapper.rank_by_visibility, "rank-by-visibility", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
-      "mapper", 0, 0, "",                                                                           \
-      "Rank the next image by how its visible structure spreads over the frame, not by count")      \
-    F(mapper.seed_blocking, "seed-blocking", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,    \
-      "", "A seed retry starts somewhere no earlier attempt reached, instead of rebuilding it")     \
-    F(mapper_mode, "mapper", CMD_AUTO | CMD_MAP, Tier::Basic, "mapper", 0, 0,                       \
-      "flat|bottom-up",                                                                             \
-      "One incremental reconstruction of the whole capture, or small atoms of the view graph "      \
-      "reconstructed separately and merged upwards")                                                \
-    F(bup.partition.leaf_max_images, "bup-atom-size", CMD_AUTO | CMD_MAP, Tier::Advanced,           \
-      "mapper", 8, 100000, "", "Images a view-graph atom is split until it is under")               \
-    F(bup.partition.overlap, "bup-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",           \
-      0, 100000, "", "Images each atom borrows from its sibling, which is what a merge aligns on")  \
-    F(assemble.max_rounds, "bup-rounds", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1,           \
-      100, "", "Levels of the merge tree")                                                          \
-    F(bup.atom.threads, "bup-atom-threads", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,        \
-      1024, "", "Atoms reconstructed at once, each on its own Vulkan context; 0 for the default")   \
-    F(bup.atom.ba_growth, "bup-atom-ba-growth", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1,    \
-      1000000, "", "Model growth that triggers a bundle adjustment inside an atom")                 \
-    F(assemble.joint_every, "bup-joint-every", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",        \
-      1, 100, "", "Merge-tree levels between joint solves over every model")                        \
-    F(bup.atom.tight_final_ba, "bup-atom-tight-final", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
-      "mapper", 0, 0, "", "Converge each atom fully before the merge tree re-solves it anyway")     \
-    F(assemble.coarse_joint_ba, "bup-coarse-ba", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",      \
-      0, 0, "",                                                                                     \
-      "Run the merge tree's intermediate joint solves to the loose growth-phase tolerance")         \
-    F(bup.atom.init_trials, "bup-atom-init-trials", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",   \
-      1, 1000, "", "Seed attempts for an atom's primary model")                                     \
-    F(bup.atom.min_model_fraction, "bup-atom-min-fraction", CMD_AUTO | CMD_MAP, Tier::Advanced,     \
-      "mapper", 0, 1, "", "Fraction of an atom its primary model must cover to be kept")            \
-    F(assemble.joint_intrinsics, "bup-joint-intrinsics", CMD_AUTO | CMD_MAP, Tier::Advanced,        \
-      "mapper", 0, 0, "",                                                                           \
-      "Bundle-adjust every model in one problem with the intrinsics shared per camera")             \
-    F(assemble.grow_every, "bup-grow-every", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,       \
-      100, "", "Levels between growth passes over the models that did not merge; 0 disables")       \
-    F(assemble.grow_budget_frac, "bup-grow-budget", CMD_AUTO | CMD_MAP, Tier::Advanced,             \
-      "mapper", 0, 1000, "",                                                                        \
-      "Images one growth pass may add to a model, as a fraction of what it holds")                  \
-    F(mapper.ba_growth_ratio, "ba-growth", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1, 100,    \
-      "", "Model growth that triggers the next global bundle adjustment")                           \
-    F(mapper.ba_growth_rtol, "ba-growth-rtol", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",        \
-      0, 1, "", "Relative cost improvement a growth-phase BA stops below, 0 for the solver's")      \
-    F(mapper.ba_growth_patience, "ba-growth-patience", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
-      "mapper", 1, 1000, "", "Accepted steps below that tolerance before it stops")                 \
-    F(mapper.max_num_models, "max-models", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",            \
-      1, 100000, "", "Reconstructions a fragmented capture may produce; 1 for a single model")      \
-    F(mapper.max_model_overlap, "model-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",      \
-      0, 1000000, "", "Images a further model may take from one already kept -- what a merge "      \
-      "later aligns on")                                                                            \
-    F(mapper.model_overlap_ratio, "model-overlap-ratio", CMD_AUTO | CMD_MAP, Tier::Advanced,        \
-      "mapper", 0, 1000, "", "Further images it earns per image it finds that nothing holds, on "   \
-      "top of --model-overlap; 0 for COLMAP's flat cap (D66)")                                      \
-    F(mapper.min_model_size, "min-model-size", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",        \
-      2, 1000000, "", "Images a model must reach to be kept at all")                                \
-    F(mapper.pnp_ratio_visible_only, "pnp-ratio-visible", CMD_AUTO | CMD_MAP, Tier::Advanced,    \
-      "mapper", 0, 0, "", "Measure the PnP inlier ratio over the correspondences the pose could "   \
-      "see, not every one offered (D69)")                                                           \
-    F(mapper.strong_pnp_inliers, "strong-pnp-inliers", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
-      "mapper", 0, 1000000, "", "Agreeing correspondences past which a registration is admitted "   \
-      "whatever its inlier ratio, since the ratio reads a pool the scene decides (D69); 0 off")     \
-    F(mapper.strong_pnp_max_rival, "strong-pnp-max-rival", CMD_AUTO | CMD_MAP, Tier::Advanced,      \
-      "mapper", 0, 1, "", "... but only if no second pose explains this share of the winner's "     \
-      "count among the correspondences it rejected -- two plausible places is not evidence")        \
-    F(mapper.audit_min_evidence, "audit-evidence", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",    \
-      0, 1000000, "", "Correspondences an image needs before the audit will judge its pose")        \
-    /* ---- assembling the models ---- */                                                           \
-    F(assemble.max_rounds, "rounds", CMD_AUTO | CMD_MAP, Tier::Alias, "manage", 1, 1000, "",        \
-      "Merge levels, run until one changes nothing")                                                \
-    F(assemble.max_bridges, "max-bridges", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",            \
-      0, 1000, "", "Merges a stalled level may attempt on shared structure instead of shared "      \
-      "images (D70); off, because the seam test then judges the evidence that made them")           \
-    F(manager.do_merge, "merge", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",            \
-      "Merge models that share images, on the Sim(3) those shared poses give (D43)")                \
-    F(manager.do_grow, "grow", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",              \
-      "Register still-unregistered images into the models that exist")                              \
-    F(manager.do_reseed, "reseed", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",          \
-      "Look for further models among the images nothing covers")                                    \
-    F(manager.do_audit, "audit", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",            \
-      "Check each pose against the correspondence graph and re-register what a model cannot "       \
-      "support (D44)")                                                                              \
-    F(manager.do_split, "split", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "",            \
-      "Break a model its own verified pairs contradict")                                            \
-    F(manager.do_duplicate_split, "fold-split", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",       \
-      0, 0, "",                                                                                     \
-      "Cut a model that has written two places on top of each other, when the cut severs almost "   \
-      "no co-visibility (D46)")                                                                     \
-    F(manager.duplicate.max_cut_fraction, "fold-max-cut", CMD_AUTO | CMD_MAP, Tier::Advanced,       \
-      "manage", 0, 1, "", "Co-visibility that cut may sever, as a fraction of the model's total")   \
-    F(manager.duplicate.min_fold_overlap, "fold-min-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced,   \
-      "manage", 0, 1, "", "Images of a cut-off piece that must stand where an image outside it "    \
-      "stands, or it is put back rather than called a duplicate (D67); 0 disables")                 \
-    F(assemble.joint_intrinsics, "joint-ba", CMD_AUTO | CMD_MAP, Tier::Alias, "manage", 0, 0, "",   \
-      "Refine every component in one problem with intrinsics shared per camera group (D45)")        \
-    F(manager.seam_min_agreement, "seam-min-agreement", CMD_AUTO | CMD_MAP, Tier::Advanced,         \
-      "manage", 0, 1, "",                                                                           \
-      "Verified pairs crossing a merge seam that must still hold in the merged model; 0 disables")  \
-    F(manager.seam_relative_bar, "seam-relative-bar", CMD_AUTO | CMD_MAP, Tier::Advanced,           \
-      "manage", 0, 10, "",                                                                          \
-      "Judge a seam against what the model's own non-crossing pairs explain, times this; it "       \
-      "only ever loosens --seam-min-pair-fraction (D68). 0 uses that flat")                         \
-    F(manager.seam_min_pairs, "seam-min-pairs", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",       \
-      1, 100000, "", "Cross-seam pairs below which the seam test has nothing to judge on")          \
-    F(manager.seam_rescue_frac, "seam-rescue", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",        \
-      0, 1, "",                                                                                     \
-      "Median cross-seam pair a refused merge must still explain to earn one refinement and a "     \
-      "second verdict; 0 refuses outright")                                                         \
-    F(manager.seam_max_rescues, "seam-max-rescues", CMD_AUTO | CMD_MAP, Tier::Advanced,             \
-      "manage", 0, 100000, "", "Refinements the seam rescue may spend in one merge pass")           \
-    /* ---- merging ---- */                                                                         \
-    F(merge.max_reproj_error, "max-error", CMD_MERGE, Tier::Advanced, "merge", 0.1, 1000, "",       \
-      "Alignment inlier threshold in pixels; looser than the mapper's, as the two models were "     \
-      "optimized independently")                                                                    \
-    F(merge.max_reproj_error, "merge-max-error", CMD_AUTO | CMD_MAP, Tier::Advanced, "merge",       \
-      0.1, 1000, "", "Alignment inlier threshold in pixels for the merge step")                     \
-    F(merge.min_common_images, "min-common", CMD_MERGE, Tier::Advanced, "merge", 2, 1000000, "",    \
-      "Shared images an alignment needs; two determine a Sim(3), three give it a vote")             \
-    F(merge.min_common_images, "merge-min-common", CMD_AUTO | CMD_MAP, Tier::Advanced, "merge",     \
-      2, 1000000, "", "Shared images an alignment needs in the merge step")                         \
-    F(merge.splice_arbitrate_inliers, "merge-arbitrate", CMD_AUTO | CMD_MAP | CMD_MERGE,            \
-      Tier::Advanced, "merge", 0, 1000000, "",                                                      \
-      "Shared images whose poses agree, past which a disagreement about the shape of what two "     \
-      "models share is arbitrated by the cross-seam test instead of refusing the merge; "           \
-      "0 always refuses")                                                                           \
-    F(merge.min_inlier_ratio, "min-inlier-ratio", CMD_MERGE, Tier::Advanced, "merge", 0, 1, "",     \
-      "Fraction of the shared images an alignment must explain")                                    \
-    F(merge.filter_reproj_error, "filter-error", CMD_MERGE, Tier::Advanced, "merge", 0, 1000, "",   \
-      "Post-merge observation filtering, in pixels")                                                \
-    F(merge.min_tri_angle_deg, "min-tri-angle", CMD_MERGE, Tier::Advanced, "merge", 0, 90, "",      \
-      "Post-merge triangulation-angle filtering")                                                   \
-    F(merge_ba, "ba", CMD_MERGE, Tier::Advanced, "merge", 0, 0, "",                                 \
-      "Bundle-adjust across the seams a merge created; the seam is the one part no BA has seen")    \
-    F(in_place, "in-place", CMD_MERGE, Tier::Advanced, "merge", 0, 0, "",                           \
-      "Write the merged models back over the input directory")                                      \
-    /* ---- inputs ---- */                                                                          \
-    F(image_dir, "images", CMD_MAP, Tier::Advanced, "input", 0, 0, "",                              \
-      "Image directory, used to put real filenames back into the model")                            \
-    F(feature_dir, "features", CMD_MAP, Tier::Advanced, "input", 0, 0, "",                          \
-      "Feature directory, if not given positionally")                                               \
-    F(resume, "resume", CMD_MAP, Tier::Advanced, "input", 0, 0, "",                                 \
-      "Adopt the models in this directory instead of mapping from scratch (D44)")                   \
-    F(check, "check", CMD_MAP, Tier::Advanced, "input", 0, 0, "",                                   \
-      "With --resume: report how far each model agrees with the two-view geometries it was "        \
-      "built from, then exit without writing anything")                                             \
-    /* ---- runtime ---- */                                                                         \
-    F(threads, "threads", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "runtime", 0, 4096, "",   \
-      "Host worker threads: two-view verification, and the mapper's per-point and per-image "       \
-      "passes; 0 is every core, 1 is serial, and results do not depend on the count")               \
-    F(decode_threads, "decode-threads", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "runtime",          \
-      0, 4096, "", "Image decode threads; 0 is every core, 1 decodes inline")                       \
-    F(decode_budget_mb, "decode-budget", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "runtime",         \
-      0, 1048576, "", "Memory the decode pool may hold in flight, in MB")                           \
-    F(device, "device", CMD_ALL, Tier::Advanced, "runtime", -1, 64, "",                             \
-      "Vulkan device index; -1 picks the first suitable one")                                       \
-    F(quiet, "quiet", CMD_ALL, Tier::Advanced, "runtime", 0, 0, "",                                 \
-      "Print only the result lines, not per-stage progress")
+    F(features, "features", CMD_AUTO | CMD_EXTRACT, Tier::Basic, "features", 0, 0,                 \
+      "sift|aliked-n16rot|aliked-n32", features)                                                   \
+    F(sift.max_num_features, "max-features", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features",   \
+      128, 1000000, "", max_features)                                                              \
+    F(aliked.max_num_features, "aliked-max-features", CMD_AUTO | CMD_EXTRACT, Tier::Advanced,      \
+      "features", 128, 1000000, "", aliked_max_features)                                           \
+    F(aliked.min_score, "aliked-min-score", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features", 0, \
+      1, "", aliked_min_score)                                                                     \
+    F(aliked.model, "aliked-model", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features", 0, 0, "",  \
+      aliked_model)                                                                                \
+    F(sift.num_octaves, "octaves", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features", 1, 8, "",   \
+      octaves)                                                                                     \
+    F(sift.peak_threshold, "peak-threshold", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features",   \
+      0, 1, "", peak_threshold)                                                                    \
+    F(sift.edge_threshold, "edge-threshold", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "features",   \
+      1, 1000, "", edge_threshold)                                                                 \
+    F(sift.max_num_orientations, "max-orientations", CMD_AUTO | CMD_EXTRACT, Tier::Advanced,       \
+      "features", 1, 8, "", max_orientations)                                                      \
+    F(sift.profile, "profile", CMD_EXTRACT, Tier::Advanced, "features", 0, 0, "", profile)         \
+    F(sift.spv_path, "spv-path", CMD_EXTRACT, Tier::Advanced, "features", 0, 0, "", spv_path)      \
+    /* ---- matching ---- */                                                                       \
+    F(matcher, "matcher", CMD_AUTO | CMD_MATCH, Tier::Basic, "matching", 0, 0,                     \
+      "bruteforce|lightglue", matcher)                                                             \
+    F(lightglue.min_score, "lightglue-min-score", CMD_AUTO | CMD_MATCH, Tier::Advanced,            \
+      "matching", 0, 1, "", lightglue_min_score)                                                   \
+    F(lightglue.model, "lightglue-model", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0, 0,  \
+      "", lightglue_model)                                                                         \
+    F(match.max_ratio, "ratio", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0, 1, "", ratio) \
+    F(match.min_similarity, "min-similarity", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0, \
+      1, "", min_similarity)                                                                       \
+    F(match.cross_check, "cross-check", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0, 0,    \
+      "", cross_check)                                                                             \
+    F(match.max_num_matches, "max-matches", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0,   \
+      1000000000, "", max_matches)                                                                 \
+    F(verify, "verify", CMD_MATCH, Tier::Advanced, "matching", 0, 0, "", verify)                   \
+    F(twoview.min_num_inliers, "min-inliers", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 4, \
+      1000000, "", min_inliers)                                                                    \
+    F(prefilter.num_features, "prefilter-features", CMD_AUTO | CMD_MATCH, Tier::Advanced,          \
+      "matching", 16, 100000, "", prefilter_features)                                              \
+    F(prefilter.train_features, "prefilter-train", CMD_AUTO | CMD_MATCH, Tier::Advanced,           \
+      "matching", 0, 1000000, "", prefilter_train)                                                 \
+    F(prefilter.num_neighbors, "prefilter-neighbors", CMD_AUTO | CMD_MATCH, Tier::Advanced,        \
+      "matching", 1, 100000, "", prefilter_neighbors)                                              \
+    F(prefilter.min_score, "prefilter-min-score", CMD_AUTO | CMD_MATCH, Tier::Advanced,            \
+      "matching", 0, 1000000, "", prefilter_min_score)                                             \
+    F(prefilter.ratio, "prefilter-ratio", CMD_AUTO | CMD_MATCH, Tier::Advanced, "matching", 0, 1,  \
+      "", prefilter_ratio)                                                                         \
+    /* ---- mapper ---- */                                                                         \
+    F(mapper.focal_trials, "focal-trials", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 1000,  \
+      "", focal_trials)                                                                            \
+    F(mapper.refine_principal_point, "refine-principal-point", CMD_AUTO | CMD_MAP, Tier::Advanced, \
+      "mapper", 0, 0, "", refine_principal_point)                                                  \
+    F(final_principal_point, "final-principal-point", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
+      "mapper", 0, 0, "", final_principal_point)                                                   \
+    F(mapper.pp_min_images, "pp-min-images", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 2,      \
+      1000000, "", pp_min_images)                                                                  \
+    F(orient, "orient", CMD_AUTO | CMD_MAP | CMD_MERGE, Tier::Advanced, "mapper", 0, 0, "",        \
+      orient)                                                                                      \
+    F(mapper.min_tri_angle_deg, "min-tri-angle", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,  \
+      90, "", min_tri_angle)                                                                       \
+    F(mapper.init_min_tri_angle_deg, "init-min-tri-angle", CMD_AUTO | CMD_MAP, Tier::Advanced,     \
+      "mapper", 0, 90, "", init_min_tri_angle)                                                     \
+    F(mapper.min_num_pnp_inliers, "min-pnp-inliers", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", \
+      4, 1000000, "", min_pnp_inliers)                                                             \
+    F(mapper.min_pnp_inlier_ratio, "min-pnp-ratio", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",  \
+      0, 1, "", min_pnp_ratio)                                                                     \
+    F(mapper.min_image_points, "min-image-points", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",   \
+      1, 1000000, "", min_image_points)                                                            \
+    F(mapper.ba_loss, "ba-loss", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,               \
+      "trivial|huber|cauchy", ba_loss)                                                             \
+    F(mapper.ba_loss_param, "ba-loss-param", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,      \
+      1000, "", ba_loss_param)                                                                     \
+    F(mapper.seed_homography, "seed-homography", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,  \
+      0, "", seed_homography)                                                                      \
+    F(mapper.ba_real, "ba-real", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,               \
+      "float|double|df", ba_real)                                                                  \
+    F(mapper.ba_real_coarse, "ba-real-coarse", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0, \
+      "float|double|df", ba_real_coarse)                                                           \
+    F(mapper.ba_solver, "ba-solver", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,           \
+      "auto|dense|cg", ba_solver)                                                                  \
+    F(mapper.retri_scale, "retri-scale", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 10, "",  \
+      retri_scale)                                                                                 \
+    F(mapper.merge_tracks, "merge-tracks", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0, "", \
+      merge_tracks)                                                                                \
+    F(mapper.rank_by_visibility, "rank-by-visibility", CMD_AUTO | CMD_MAP, Tier::Advanced,         \
+      "mapper", 0, 0, "", rank_by_visibility)                                                      \
+    F(mapper.seed_blocking, "seed-blocking", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,   \
+      "", seed_blocking)                                                                           \
+    F(mapper_mode, "mapper", CMD_AUTO | CMD_MAP, Tier::Basic, "mapper", 0, 0, "flat|bottom-up",    \
+      mapper)                                                                                      \
+    F(bup.partition.leaf_max_images, "bup-atom-size", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
+      "mapper", 8, 100000, "", bup_atom_size)                                                      \
+    F(bup.partition.overlap, "bup-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,       \
+      100000, "", bup_overlap)                                                                     \
+    F(assemble.max_rounds, "bup-rounds", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1, 100, "", \
+      bup_rounds)                                                                                  \
+    F(bup.atom.threads, "bup-atom-threads", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 1024, \
+      "", bup_atom_threads)                                                                        \
+    F(bup.atom.ba_growth, "bup-atom-ba-growth", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1,   \
+      1000000, "", bup_atom_ba_growth)                                                             \
+    F(assemble.joint_every, "bup-joint-every", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1,    \
+      100, "", bup_joint_every)                                                                    \
+    F(bup.atom.tight_final_ba, "bup-atom-tight-final", CMD_AUTO | CMD_MAP, Tier::Advanced,         \
+      "mapper", 0, 0, "", bup_atom_tight_final)                                                    \
+    F(assemble.coarse_joint_ba, "bup-coarse-ba", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,  \
+      0, "", bup_coarse_ba)                                                                        \
+    F(bup.atom.init_trials, "bup-atom-init-trials", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",  \
+      1, 1000, "", bup_atom_init_trials)                                                           \
+    F(bup.atom.min_model_fraction, "bup-atom-min-fraction", CMD_AUTO | CMD_MAP, Tier::Advanced,    \
+      "mapper", 0, 1, "", bup_atom_min_fraction)                                                   \
+    F(assemble.joint_intrinsics, "bup-joint-intrinsics", CMD_AUTO | CMD_MAP, Tier::Advanced,       \
+      "mapper", 0, 0, "", bup_joint_intrinsics)                                                    \
+    F(assemble.grow_every, "bup-grow-every", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 100, \
+      "", bup_grow_every)                                                                          \
+    F(assemble.grow_budget_frac, "bup-grow-budget", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",  \
+      0, 1000, "", bup_grow_budget)                                                                \
+    F(mapper.ba_growth_ratio, "ba-growth", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1, 100,   \
+      "", ba_growth)                                                                               \
+    F(mapper.ba_growth_rtol, "ba-growth-rtol", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 1, \
+      "", ba_growth_rtol)                                                                          \
+    F(mapper.ba_growth_patience, "ba-growth-patience", CMD_AUTO | CMD_MAP, Tier::Advanced,         \
+      "mapper", 1, 1000, "", ba_growth_patience)                                                   \
+    F(mapper.max_num_models, "max-models", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 1,        \
+      100000, "", max_models)                                                                      \
+    F(mapper.max_model_overlap, "model-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,  \
+      1000000, "", model_overlap)                                                                  \
+    F(mapper.model_overlap_ratio, "model-overlap-ratio", CMD_AUTO | CMD_MAP, Tier::Advanced,       \
+      "mapper", 0, 1000, "", model_overlap_ratio)                                                  \
+    F(mapper.min_model_size, "min-model-size", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 2,    \
+      1000000, "", min_model_size)                                                                 \
+    F(mapper.pnp_ratio_visible_only, "pnp-ratio-visible", CMD_AUTO | CMD_MAP, Tier::Advanced,      \
+      "mapper", 0, 0, "", pnp_ratio_visible)                                                       \
+    F(mapper.strong_pnp_inliers, "strong-pnp-inliers", CMD_AUTO | CMD_MAP, Tier::Advanced,         \
+      "mapper", 0, 1000000, "", strong_pnp_inliers)                                                \
+    F(mapper.strong_pnp_max_rival, "strong-pnp-max-rival", CMD_AUTO | CMD_MAP, Tier::Advanced,     \
+      "mapper", 0, 1, "", strong_pnp_max_rival)                                                    \
+    F(mapper.audit_min_evidence, "audit-evidence", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper",   \
+      0, 1000000, "", audit_evidence)                                                              \
+    /* ---- assembling the models ---- */                                                          \
+    F(assemble.max_rounds, "rounds", CMD_AUTO | CMD_MAP, Tier::Alias, "manage", 1, 1000, "",       \
+      rounds)                                                                                      \
+    F(assemble.max_bridges, "max-bridges", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 1000,  \
+      "", max_bridges)                                                                             \
+    F(manager.do_merge, "merge", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "", merge)    \
+    F(manager.do_grow, "grow", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "", grow)       \
+    F(manager.do_reseed, "reseed", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "", reseed) \
+    F(manager.do_audit, "audit", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "", audit)    \
+    F(manager.do_split, "split", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 0, "", split)    \
+    F(manager.do_duplicate_split, "fold-split", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0,   \
+      0, "", fold_split)                                                                           \
+    F(manager.duplicate.max_cut_fraction, "fold-max-cut", CMD_AUTO | CMD_MAP, Tier::Advanced,      \
+      "manage", 0, 1, "", fold_max_cut)                                                            \
+    F(manager.duplicate.min_fold_overlap, "fold-min-overlap", CMD_AUTO | CMD_MAP, Tier::Advanced,  \
+      "manage", 0, 1, "", fold_min_overlap)                                                        \
+    F(assemble.joint_intrinsics, "joint-ba", CMD_AUTO | CMD_MAP, Tier::Alias, "manage", 0, 0, "",  \
+      joint_ba)                                                                                    \
+    F(manager.seam_min_agreement, "seam-min-agreement", CMD_AUTO | CMD_MAP, Tier::Advanced,        \
+      "manage", 0, 1, "", seam_min_agreement)                                                      \
+    F(manager.seam_relative_bar, "seam-relative-bar", CMD_AUTO | CMD_MAP, Tier::Advanced,          \
+      "manage", 0, 10, "", seam_relative_bar)                                                      \
+    F(manager.seam_min_pairs, "seam-min-pairs", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 1,   \
+      100000, "", seam_min_pairs)                                                                  \
+    F(manager.seam_rescue_frac, "seam-rescue", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage", 0, 1, \
+      "", seam_rescue)                                                                             \
+    F(manager.seam_max_rescues, "seam-max-rescues", CMD_AUTO | CMD_MAP, Tier::Advanced, "manage",  \
+      0, 100000, "", seam_max_rescues)                                                             \
+    /* ---- merging ---- */                                                                        \
+    F(merge.max_reproj_error, "max-error", CMD_MERGE, Tier::Advanced, "merge", 0.1, 1000, "",      \
+      merge_align_max_error)                                                                       \
+    F(merge.max_reproj_error, "merge-max-error", CMD_AUTO | CMD_MAP, Tier::Advanced, "merge", 0.1, \
+      1000, "", merge_max_error)                                                                   \
+    F(merge.min_common_images, "min-common", CMD_MERGE, Tier::Advanced, "merge", 2, 1000000, "",   \
+      min_common)                                                                                  \
+    F(merge.min_common_images, "merge-min-common", CMD_AUTO | CMD_MAP, Tier::Advanced, "merge", 2, \
+      1000000, "", merge_min_common)                                                               \
+    F(merge.splice_arbitrate_inliers, "merge-arbitrate", CMD_AUTO | CMD_MAP | CMD_MERGE,           \
+      Tier::Advanced, "merge", 0, 1000000, "", merge_arbitrate)                                    \
+    F(merge.min_inlier_ratio, "min-inlier-ratio", CMD_MERGE, Tier::Advanced, "merge", 0, 1, "",    \
+      min_inlier_ratio)                                                                            \
+    F(merge.filter_reproj_error, "filter-error", CMD_MERGE, Tier::Advanced, "merge", 0, 1000, "",  \
+      filter_error)                                                                                \
+    F(merge.min_tri_angle_deg, "min-tri-angle", CMD_MERGE, Tier::Advanced, "merge", 0, 90, "",     \
+      merge_min_tri_angle)                                                                         \
+    F(merge_ba, "ba", CMD_MERGE, Tier::Advanced, "merge", 0, 0, "", ba)                            \
+    F(in_place, "in-place", CMD_MERGE, Tier::Advanced, "merge", 0, 0, "", in_place)                \
+    /* ---- inputs ---- */                                                                         \
+    F(image_dir, "images", CMD_MAP, Tier::Advanced, "input", 0, 0, "", images)                     \
+    F(feature_dir, "features", CMD_MAP, Tier::Advanced, "input", 0, 0, "", feature_dir)            \
+    F(resume, "resume", CMD_MAP, Tier::Advanced, "input", 0, 0, "", resume)                        \
+    F(check, "check", CMD_MAP, Tier::Advanced, "input", 0, 0, "", check)                           \
+    /* ---- runtime ---- */                                                                        \
+    F(threads, "threads", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Advanced, "runtime", 0, 4096, "",  \
+      threads)                                                                                     \
+    F(decode_threads, "decode-threads", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "runtime", 0,      \
+      4096, "", decode_threads)                                                                    \
+    F(decode_budget_mb, "decode-budget", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "runtime", 0,     \
+      1048576, "", decode_budget)                                                                  \
+    F(device, "device", CMD_ALL, Tier::Advanced, "runtime", -1, 64, "", device)                    \
+    F(quiet, "quiet", CMD_ALL, Tier::Advanced, "runtime", 0, 0, "", quiet)
 
 // ---------------------------------------------------------------------------
 // Consumers

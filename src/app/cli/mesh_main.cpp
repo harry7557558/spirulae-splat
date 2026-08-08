@@ -20,6 +20,8 @@
 #include "core/Camera.h"
 #include "data/DatasetParser.h"
 #include "data/Json.h"
+#include "i18n/catalog/Cli.h"
+#include "mesh/MeshLog.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,6 +37,11 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+
+namespace cmsg = spirula::i18n::msg::cli;
+namespace mmsg = spirula::i18n::msg::mesh;
+namespace mlog = meshing::mlog;
+using spirula::i18n::format;
 
 namespace {
 
@@ -115,8 +122,7 @@ MeshCameras load_cameras(const JsonValue& run_cfg, const std::string& data_dir,
     int32_t m0 = ds.camera_models.empty() ? 0 : ds.camera_models[0];
     for (int32_t m : ds.camera_models)
         if (m != m0) {
-            std::fprintf(stderr, "warning: mixed camera models in dataset; "
-                         "using the first one for all cameras\n");
+            mlog::warn(mlog::Stage::Loading, cmsg::mesh_mixed_camera_models);
             break;
         }
     out.model = camera_model_to_string((CameraModelType)m0);
@@ -139,56 +145,81 @@ struct Options {
     meshing::MeshingConfig m;           // remaining knobs live here
 };
 
+// One row of `--help`: the flag with its value syntax on the left, the
+// sentence for it on the right. The flag is an identifier and stays as it is;
+// only the sentence is translated -- and a translated sentence runs longer
+// than the English one more often than not, so each of its lines is laid out
+// at the same column rather than assumed to fit beside the flag.
+void help_row(const char* flags, const std::string& text) {
+    constexpr int kCol = 26;
+    std::string left = std::string("  ") + flags;
+    if ((int)left.size() >= kCol) {
+        std::printf("%s\n", left.c_str());
+        left.clear();
+    }
+    left.resize(kCol, ' ');
+    size_t at = 0;
+    while (at <= text.size()) {
+        const size_t nl = text.find('\n', at);
+        const std::string line =
+            text.substr(at, nl == std::string::npos ? nl : nl - at);
+        std::printf("%s%s\n", left.c_str(), line.c_str());
+        left.assign(kCol, ' ');
+        if (nl == std::string::npos) break;
+        at = nl + 1;
+    }
+}
+
+void help_row(const char* flags, const spirula::i18n::Msg& m) {
+    help_row(flags, std::string(m.get()));
+}
+void help_row(const char* flags, const spirula::i18n::Msg& m,
+              std::initializer_list<spirula::i18n::Arg> args) {
+    help_row(flags, spirula::i18n::format(m, args));
+}
+
 void print_help(const char* argv0) {
     Options d;
-    std::printf(
-        "usage: %s <checkpoint> [--flag value ...]\n"
-        "\n"
-        "Extract a surface mesh from a trained 3DGS model.\n"
-        "<checkpoint> is a run dir (with config.json + step-*.ckpt/), a *.ckpt\n"
-        "dir, or a splat.ply file.\n"
-        "\n"
-        "  --data <dir>            dataset for camera-based occupancy/colors\n"
-        "                          (default: config.json's data)\n"
-        "  --no-data               mesh from Gaussian densities only\n"
-        "  --data-format <fmt>     colmap|nerfstudio|metashape (default: auto)\n"
-        "  --output <path>         output base path (default: <ckpt>/mesh);\n"
-        "                          a known extension is stripped\n"
-        "  --format <list>         comma-separated: ply,obj,gltf,glb [%s].\n"
-        "                          With --color texture, a format may carry a\n"
-        "                          texture encoding: glb+png (default),\n"
-        "                          glb+jpg (JPEG q95), glb+jpeg75 (JPEG q75)\n"
-        "  --color <mode>          none|vertex|texture [%s]\n"
-        "                          (PLY+texture and OBJ+vertex are rejected)\n"
-        "  --texture-size <n>      texture atlas resolution; 0 = auto from the\n"
-        "                          observed-detail texel budget [%d]\n"
-        "  --tex-gutter-px <n>     atlas spacing between UV charts [%d]\n"
-        "  --chart-angle-deg <a>   max normal deviation within a UV chart [%g]\n"
-        "\n"
-        "  --iso <v>               isosurface level [0.5 with cameras, 0.2 without]\n"
-        "  --merge-factor <v>      short-edge merge threshold multiplier [%g]\n"
-        "  --bisection-iters <n>   bisection steps per cut edge [%d]\n"
-        "  --max-cameras <n>       cap on cameras used, -1 = all [%d]\n"
-        "  --max-grid-res <n>      acceleration grid cap [%d]\n"
-        "  --grid-cell-factor <v>  grid cell size factor [%g]\n"
-        "  --num-threads <n>       0 = all hardware threads [%d]\n"
-        "  --carve-k <n>           k-th smallest occupancy over cameras [%d]\n"
-        "  --cull-unseen <0|1>     drop mesh verts seen by no camera [%d]\n"
-        "  --merge-max-flip-deg <a> fold guard for merge collapses [%g]\n"
-        "  --floater-min-faces <n> drop components smaller than this [%d]\n"
-        "  --fill-hole-ratio <v>   fill loops smaller than this x component [%g]\n"
-        "  --fill-hole-max-edges <n> always fill loops with <= n edges [%d]\n"
-        "  --degenerate-angle-deg <a> repair triangles with angles below [%g]\n"
-        "  --quality-iters <n>     valence-flip + tangential-relax iterations [%d]\n"
-        "  --quiet                 less progress output\n",
-        argv0, d.format.c_str(), d.color.c_str(),
-        d.m.texture_size, d.m.tex_gutter_px, (double)d.m.chart_angle_deg,
-        (double)d.m.merge_factor, d.m.bisection_iters, d.m.max_cameras,
-        d.m.max_grid_res, (double)d.m.grid_cell_factor, d.m.num_threads,
-        d.m.carve_k, (int)d.m.cull_unseen, (double)d.m.merge_max_flip_deg,
-        d.m.floater_min_faces, (double)d.m.fill_hole_ratio,
-        d.m.fill_hole_max_edges, (double)d.m.degenerate_angle_deg,
-        d.m.quality_iters);
+    std::printf("%s\n\n", format(mmsg::help_usage, {argv0}).c_str());
+    std::printf("%s\n\n", mmsg::help_intro.get());
+
+    help_row("--data <dir>", mmsg::help_data);
+    help_row("--no-data", mmsg::help_no_data);
+    help_row("--data-format <fmt>", mmsg::help_data_format);
+    help_row("--output <path>", mmsg::help_output);
+    help_row("--format <list>", mmsg::help_format, {d.format});
+    help_row("--color <mode>", mmsg::help_color, {d.color});
+    help_row("--texture-size <n>", mmsg::help_texture_size, {d.m.texture_size});
+    help_row("--tex-gutter-px <n>", mmsg::help_tex_gutter, {d.m.tex_gutter_px});
+    help_row("--chart-angle-deg <a>", mmsg::help_chart_angle,
+             {(double)d.m.chart_angle_deg});
+    std::printf("\n");
+    help_row("--iso <v>", mmsg::help_iso);
+    help_row("--merge-factor <v>", mmsg::help_merge_factor,
+             {(double)d.m.merge_factor});
+    help_row("--bisection-iters <n>", mmsg::help_bisection_iters,
+             {d.m.bisection_iters});
+    help_row("--max-cameras <n>", mmsg::help_max_cameras, {d.m.max_cameras});
+    help_row("--max-grid-res <n>", mmsg::help_max_grid_res, {d.m.max_grid_res});
+    help_row("--grid-cell-factor <v>", mmsg::help_grid_cell_factor,
+             {(double)d.m.grid_cell_factor});
+    help_row("--num-threads <n>", mmsg::help_num_threads, {d.m.num_threads});
+    help_row("--carve-k <n>", mmsg::help_carve_k, {d.m.carve_k});
+    help_row("--cull-unseen <0|1>", mmsg::help_cull_unseen,
+             {(int)d.m.cull_unseen});
+    help_row("--merge-max-flip-deg <a>", mmsg::help_merge_max_flip,
+             {(double)d.m.merge_max_flip_deg});
+    help_row("--floater-min-faces <n>", mmsg::help_floater_min_faces,
+             {d.m.floater_min_faces});
+    help_row("--fill-hole-ratio <v>", mmsg::help_fill_hole_ratio,
+             {(double)d.m.fill_hole_ratio});
+    help_row("--fill-hole-max-edges <n>", mmsg::help_fill_hole_max_edges,
+             {d.m.fill_hole_max_edges});
+    help_row("--degenerate-angle-deg <a>", mmsg::help_degenerate_angle,
+             {(double)d.m.degenerate_angle_deg});
+    help_row("--quality-iters <n>", mmsg::help_quality_iters,
+             {d.m.quality_iters});
+    help_row("--quiet", mmsg::help_quiet);
 }
 
 float parse_f(const std::string& key, const char* v) {
@@ -284,7 +315,7 @@ int spirula_mesh_main(int argc, char** argv) {
         // ---- checkpoint ----
         auto [splat_ply_s, run_dir_s] = spirula::find_splat_ply(o.checkpoint);
         const fs::path splat_ply(splat_ply_s), run_dir(run_dir_s);
-        std::printf("[meshing] loading %s\n", splat_ply.string().c_str());
+        mlog::out_raw(mlog::Stage::Loading, splat_ply.string());
 
         // ---- output base, and the one check that must happen FIRST ----
         // The output must not be one of the inputs: meshing a `foo.ply` with
@@ -304,7 +335,8 @@ int spirula_mesh_main(int argc, char** argv) {
         // skips most of the file.
         spirula::SplatCloud splats =
             spirula::read_splat_ply(splat_ply.string(), /*want_sh=*/false);
-        std::printf("[meshing] %lld Gaussians\n", (long long)splats.num);
+        mlog::out(mlog::Stage::Loading, mmsg::gaussians_loaded,
+                  {(long long)splats.num});
 
         JsonValue run_cfg;
         fs::path cfg_path = run_dir / "config.json";
@@ -324,18 +356,17 @@ int spirula_mesh_main(int argc, char** argv) {
                 }
             }
             if (!data_dir.empty() && fs::exists(data_dir)) {
-                std::printf("[meshing] loading cameras from %s\n", data_dir.c_str());
+                mlog::out(mlog::Stage::Loading, mmsg::reading_cameras,
+                          {data_dir});
                 cams = load_cameras(run_cfg, data_dir, o.data_format);
-                std::printf("[meshing] %lld cameras (%dx%d, %s)\n",
-                            (long long)cams.num(), cams.widths[0], cams.heights[0],
-                            cams.model.c_str());
+                mlog::out(mlog::Stage::Loading, mmsg::cameras_loaded,
+                          {(long long)cams.num(), cams.widths[0],
+                           cams.heights[0], cams.model});
             }
         }
         const bool using_cameras = cams.num() > 0;
         if (!using_cameras)
-            std::printf("\033[1;33m[meshing] No camera dataset in use: meshing "
-                        "from Gaussian densities only.\n          Pass --data "
-                        "<dataset_dir> for significantly better surfaces.\033[0m\n");
+            mlog::warn(mlog::Stage::Loading, cmsg::mesh_no_cameras);
 
         o.m.iso = o.iso.value_or(using_cameras ? 0.5f : 0.2f);
 
@@ -356,7 +387,7 @@ int spirula_mesh_main(int argc, char** argv) {
             cp, o.m, out_base);
         if (!ok) return 1;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "error: %s\n", e.what());
+        mlog::fail_raw(e.what());
         return 1;
     }
     return 0;

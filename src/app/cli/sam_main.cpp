@@ -19,6 +19,8 @@
 //   spirula-sam segment ... 2>/dev/null > detections.tsv
 
 #include "app/Tools.h"
+#include "i18n/catalog/Cli.h"
+#include "i18n/catalog/SamHelp.h"
 #include "app/WriterPool.h"
 #include "nn/core/Log.h"
 #include "nn/Device.h"
@@ -39,70 +41,100 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+namespace cmsg = spirula::i18n::msg::cli;
+using spirula::i18n::format;
 
 namespace {
 
+// One row of `--help`: the flag with its value syntax on the left, the
+// sentence for it on the right, wrapped where the language allows. Translated
+// prose runs longer than the English it came from, and Chinese has no spaces
+// to wrap at, so i18n::wrap does the breaking rather than a hand-placed \n.
+void help_row(const char* flags, const std::string& text, int col = 24) {
+    std::string left = std::string("        ") + flags;
+    if (spirula::i18n::display_width(left) >= col + 8) {
+        std::printf("%s\n", left.c_str());
+        left.clear();
+    }
+    left = spirula::i18n::pad_to(left, col + 8);
+    for (const std::string& line : spirula::i18n::wrap(text, 86 - col - 8)) {
+        std::fprintf(stderr, "%s%s\n", left.c_str(), line.c_str());
+        left.assign((size_t)col + 8, ' ');
+    }
+}
+void help_row(const char* flags, const spirula::i18n::Msg& m, int col = 24) {
+    help_row(flags, std::string(m.get()), col);
+}
+
 void usage() {
-    // Written against the historical name; app::help_text swaps in how this
-    // tool was actually invoked ("spirula sam", normally).
-    static const char* kUsage =
-        "spirula-sam -- SAM 2 / SAM 3 segmentation and tracking on Vulkan\n"
-        "\n"
-        "  spirula-sam devices\n"
-        "        List Vulkan devices and whether each meets the baseline.\n"
-        "\n"
-        "  spirula-sam segment --model <file> --image <file> [options]\n"
-        "        --text <phrase>        concept prompt (all matching instances)\n"
-        "        --box x0,y0,x1,y1      exemplar box; repeatable\n"
-        "        --neg-box x0,y0,x1,y1  negative exemplar box; repeatable\n"
-        "        --point x,y            positive click; repeatable (visual prompt)\n"
-        "        --neg-point x,y        negative click; repeatable\n"
-        "        --prompt-box x0,y0,x1,y1   box prompt for the visual path\n"
-        "        --multimask            return the three ambiguity masks\n"
-        "        --threshold <f>        detection score threshold (default 0.5)\n"
-        "        --nms <f>              NMS IoU threshold (default 0.1)\n"
-        "        --out <dir>            write mask PNGs and an overlay\n"
-        "\n"
-        "  spirula-sam track --model <file> --frames <dir> [options]\n"
-        "        --text <phrase>        detect and track matching instances;\n"
-        "                               semicolon-separated for several concepts\n"
-        "        --neg-text <phrase>    concepts to KEEP even where --text matches\n"
-        "        --point x,y            click on an object to track; repeatable\n"
-        "        --neg-point x,y        click on something that is NOT it\n"
-        "        --object               end this object, start the next one --\n"
-        "                               two things need two objects, since one\n"
-        "                               instance prompted with both fits neither\n"
-        "        --at-frame <n>         put the clicks that follow on frame n\n"
-        "                               instead of the first, and use them to\n"
-        "                               correct the object there. Frames are\n"
-        "                               numbered as this command reads them:\n"
-        "                                 --point 640,360 --at-frame 90 --point 700,300\n"
-        "                                 --object --point 120,500\n"
-        "                               is one object clicked once and corrected\n"
-        "                               at frame 90, and a second object.\n"
-        "        --detect-every <n>     run the detector every n frames (default 1);\n"
-        "                               the memory bank carries tracks in between\n"
-        "        --memory-frames <n>    cap spatial memory frames per instance\n"
-        "        --max-frames <n>       stop after n frames\n"
-        "        --out <dir>            write a per-frame binary mask PNG\n"
-        "        --keep-prompted        white = the prompted objects. By default\n"
-        "                               they are BLACK and everything else is\n"
-        "                               white, which is what a reconstruction\n"
-        "                               pipeline wants from \"mask out the people\"\n"
-        "        --overlay              write a colour overlay instead\n"
-        "\n"
-        "  spirula-sam video --info <file>\n"
-        "        Probe a video file and report codec, geometry and decode support.\n"
-        "\n"
-        "  spirula-sam extract <video> [options]\n"
-        "        Write the sharpest frames of a video, optionally masked.\n"
-        "        `spirula-sam extract --help` lists its own options.\n"
-        "\n"
-        "Common: --device <index|name>  --vram  --profile  --validate  --img-size <n>\n"
-        "        --max-size <n>         downscale inputs to fit (default 1600, 0 = off)\n"
-        "Environment: SS_NN_LOG=0..3  SS_VK_DEVICE  SS_PROFILE=1\n"
-        "             SS_VK_VALIDATION=1  SS_NN_DEBUG_SYNC=1\n";
-    std::fprintf(stderr, "%s", app::help_text(kUsage, "spirula-sam").c_str());
+    namespace H = spirula::i18n::msg::samhelp;
+    const std::string prog = app::program_name();
+    auto line = [&](const char* rest) {
+        std::fprintf(stderr, "  %s %s\n", prog.c_str(), rest);
+    };
+    auto para = [&](const spirula::i18n::Msg& m) {
+        for (const std::string& l : spirula::i18n::wrap(m.get(), 76))
+            std::fprintf(stderr, "        %s\n", l.c_str());
+    };
+
+    std::fprintf(stderr, "%s -- %s\n\n", prog.c_str(), H::tagline.get());
+
+    line("devices");
+    para(H::cmd_devices);
+    std::fprintf(stderr, "\n");
+
+    line("segment --model <file> --image <file> [options]");
+    help_row("--text <phrase>", H::seg_text);
+    help_row("--box x0,y0,x1,y1", H::seg_box);
+    help_row("--neg-box x0,y0,x1,y1", H::seg_neg_box);
+    help_row("--point x,y", H::seg_point);
+    help_row("--neg-point x,y", H::seg_neg_point);
+    help_row("--prompt-box x0,y0,x1,y1", H::seg_prompt_box);
+    help_row("--multimask", H::seg_multimask);
+    help_row("--threshold <f>", H::seg_threshold);
+    help_row("--nms <f>", H::seg_nms);
+    help_row("--out <dir>", H::seg_out);
+    std::fprintf(stderr, "\n");
+
+    line("track --model <file> --frames <dir> [options]");
+    help_row("--text <phrase>", H::trk_text);
+    help_row("--neg-text <phrase>", H::trk_neg_text);
+    help_row("--point x,y", H::trk_point);
+    help_row("--neg-point x,y", H::trk_neg_point);
+    help_row("--object", H::trk_object);
+    help_row("--at-frame <n>", H::trk_at_frame);
+    std::fprintf(stderr,
+                 "                                --point 640,360 --at-frame 90 "
+                 "--point 700,300\n"
+                 "                                --object --point 120,500\n");
+    help_row("", H::trk_at_frame_example);
+    help_row("--detect-every <n>", H::trk_detect_every);
+    help_row("--memory-frames <n>", H::trk_memory_frames);
+    help_row("--max-frames <n>", H::trk_max_frames);
+    help_row("--out <dir>", H::trk_out);
+    help_row("--keep-prompted", H::trk_keep_prompted);
+    help_row("--overlay", H::trk_overlay);
+    std::fprintf(stderr, "\n");
+
+    line("video --info <file>");
+    para(H::cmd_video);
+    std::fprintf(stderr, "\n");
+
+    line("extract <video> [options]");
+    para(H::cmd_extract);
+    for (const std::string& l : spirula::i18n::wrap(
+             spirula::i18n::format(H::cmd_extract_more, {prog}), 76))
+        std::fprintf(stderr, "        %s\n", l.c_str());
+    std::fprintf(stderr, "\n");
+
+    std::fprintf(stderr, "%s --device <index|name>  --vram  --profile  "
+                         "--validate  --img-size <n>\n",
+                 H::label_common.get());
+    help_row("--max-size <n>", H::common_max_size);
+    std::fprintf(stderr,
+                 "%s SS_NN_LOG=0..3  SS_VK_DEVICE  SS_PROFILE=1\n"
+                 "             SS_VK_VALIDATION=1  SS_NN_DEBUG_SYNC=1\n",
+                 H::label_environment.get());
 }
 
 bool parse_floats(const char* s, float* out, int n) {
@@ -161,7 +193,8 @@ bool parse_args(int argc, char** argv, Options& o) {
         const std::string a = argv[i];
         auto next = [&](const char* what) -> const char* {
             if (i + 1 >= argc) {
-                std::fprintf(stderr, "%s needs a value\n", what);
+                std::fprintf(stderr, "%s\n",
+                             format(cmsg::sam_flag_needs_value, {what}).c_str());
                 std::exit(2);
             }
             return argv[++i];
@@ -211,7 +244,8 @@ bool parse_args(int argc, char** argv, Options& o) {
             o.neg_points.push_back({v[0], v[1]});
             current_seed(o).prompt.neg_points.push_back({v[0], v[1]});
         } else {
-            std::fprintf(stderr, "unknown or malformed option: %s\n", a.c_str());
+            std::fprintf(stderr, "%s\n",
+                         format(cmsg::sam_unknown_option, {a}).c_str());
             return false;
         }
     }
@@ -221,14 +255,36 @@ bool parse_args(int argc, char** argv, Options& o) {
 int cmd_devices() {
     auto devices = nn::list_devices();
     if (devices.empty()) {
-        std::fprintf(stderr, "no Vulkan devices found -- is a driver installed?\n");
+        std::fprintf(stderr, "%s\n", cmsg::sam_no_devices.get());
         return 1;
     }
-    std::printf("%-3s %-42s %-11s %8s  %s\n", "idx", "name", "type", "vram", "status");
-    for (const auto& d : devices)
-        std::printf("%-3d %-42s %-11s %6.1f G  %s\n", d.index, d.name.c_str(),
-                    d.type.c_str(), d.vram_bytes / 1073741824.0,
-                    d.usable ? "ok" : d.unusable_reason.c_str());
+    // Padded by display width rather than by byte count -- a heading of two Han
+    // characters is four bytes and two columns wide -- and each column is at
+    // least as wide as its own heading, since a translated one can be longer
+    // than the values under it.
+    using spirula::i18n::display_width;
+    using spirula::i18n::pad_to;
+    const int w_idx = std::max(3, display_width(cmsg::sam_col_index.get()));
+    const int w_name = std::max(42, display_width(cmsg::sam_col_name.get()));
+    const int w_type = std::max(11, display_width(cmsg::sam_col_type.get()));
+    const int w_vram = std::max(8, display_width(cmsg::sam_col_vram.get()));
+    std::printf("%s %s %s %s  %s\n",
+                pad_to(cmsg::sam_col_index.get(), w_idx).c_str(),
+                pad_to(cmsg::sam_col_name.get(), w_name).c_str(),
+                pad_to(cmsg::sam_col_type.get(), w_type).c_str(),
+                pad_to(cmsg::sam_col_vram.get(), w_vram).c_str(),
+                cmsg::sam_col_status.get());
+    for (const auto& d : devices) {
+        char vram[32];
+        std::snprintf(vram, sizeof vram, "%6.1f G", d.vram_bytes / 1073741824.0);
+        std::printf("%s %s %s %s  %s\n",
+                    pad_to(std::to_string(d.index), w_idx).c_str(),
+                    pad_to(d.name, w_name).c_str(),
+                    pad_to(d.type, w_type).c_str(),
+                    pad_to(vram, w_vram).c_str(),
+                    d.usable ? cmsg::sam_status_ok.get()
+                             : d.unusable_reason.c_str());
+    }
     return 0;
 }
 
@@ -256,8 +312,9 @@ void write_results(const Options& o, const nn::Image& image, const sam::Result& 
     std::snprintf(overlay, sizeof overlay, "%s/%s_overlay.png", o.out_dir.c_str(),
                   tag.c_str());
     sam::save_overlay_png(image, r, overlay);
-    std::fprintf(stderr, "wrote %zu masks + overlay to %s\n", r.detections.size(),
-                 o.out_dir.c_str());
+    std::fprintf(stderr, "%s\n",
+                 format(cmsg::sam_wrote_masks,
+                        {(long long)r.detections.size(), o.out_dir}).c_str());
 }
 
 bool load_session(const Options& o, sam::Session& session) {
@@ -273,7 +330,8 @@ bool load_session(const Options& o, sam::Session& session) {
         else mp.device_match = o.device;
     }
     if (!session.loadModel(mp)) {
-        std::fprintf(stderr, "error: %s\n", session.lastError().c_str());
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::error_line, {session.lastError()}).c_str());
         return false;
     }
     return true;
@@ -281,7 +339,7 @@ bool load_session(const Options& o, sam::Session& session) {
 
 int cmd_segment(const Options& o) {
     if (o.model.empty() || o.image.empty()) {
-        std::fprintf(stderr, "segment needs --model and --image\n");
+        std::fprintf(stderr, "%s\n", cmsg::sam_segment_needs.get());
         return 2;
     }
     sam::Session session;
@@ -290,7 +348,8 @@ int cmd_segment(const Options& o) {
     nn::Image image = nn::load_image(o.image);
     if (image.empty()) return 1;
     if (!session.encodeImage(image)) {
-        std::fprintf(stderr, "error: %s\n", session.lastError().c_str());
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::error_line, {session.lastError()}).c_str());
         return 1;
     }
 
@@ -314,7 +373,8 @@ int cmd_segment(const Options& o) {
         r = session.segmentConcept(cp);
     }
     if (r.detections.empty() && !session.lastError().empty()) {
-        std::fprintf(stderr, "error: %s\n", session.lastError().c_str());
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::error_line, {session.lastError()}).c_str());
         return 1;
     }
     write_results(o, image, r, "seg");
@@ -325,7 +385,7 @@ int cmd_segment(const Options& o) {
 
 int cmd_track(const Options& o) {
     if (o.model.empty() || o.frames.empty()) {
-        std::fprintf(stderr, "track needs --model and --frames <dir>\n");
+        std::fprintf(stderr, "%s\n", cmsg::sam_track_needs.get());
         return 2;
     }
     std::vector<std::string> files;
@@ -339,7 +399,8 @@ int cmd_track(const Options& o) {
     }
     std::sort(files.begin(), files.end());
     if (files.empty()) {
-        std::fprintf(stderr, "no images in %s\n", o.frames.c_str());
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::sam_no_images_in, {o.frames}).c_str());
         return 1;
     }
     if (o.max_frames > 0 && (int)files.size() > o.max_frames)
@@ -367,7 +428,8 @@ int cmd_track(const Options& o) {
     sam::Masker masker;
     std::string error;
     if (!masker.init(mo, error)) {
-        std::fprintf(stderr, "error: %s\n", error.c_str());
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::error_line, {error}).c_str());
         return 1;
     }
 
@@ -394,7 +456,8 @@ int cmd_track(const Options& o) {
         sam::Mask mask;
         sam::Result r;
         if (!masker.run(frame, mask, o.overlay ? &r : nullptr, (int64_t)f)) {
-            std::fprintf(stderr, "error: %s\n", masker.lastError().c_str());
+            std::fprintf(stderr, "%s\n",
+                         format(cmsg::error_line, {masker.lastError()}).c_str());
             return 1;
         }
         t_track += nn::now_ms() - t0;
@@ -402,9 +465,17 @@ int cmd_track(const Options& o) {
 
         size_t white = 0;
         for (uint8_t v : mask.data) white += (v > 127) ? 1 : 0;
-        std::fprintf(stderr, "[frame %3zu] %-40s %5.1f%% kept\n", f,
-                     fs::path(files[f]).filename().string().c_str(),
-                     100.0 * (double)white / (double)std::max<size_t>(mask.data.size(), 1));
+        {
+            char pct[16];
+            std::snprintf(pct, sizeof pct, "%.1f",
+                          100.0 * (double)white /
+                              (double)std::max<size_t>(mask.data.size(), 1));
+            std::fprintf(stderr, "%s\n",
+                         format(cmsg::sam_frame_line,
+                                {(long long)f,
+                                 fs::path(files[f]).filename().string(),
+                                 pct}).c_str());
+        }
         if (!o.out_dir.empty()) {
             std::error_code dec;
             fs::create_directories(o.out_dir, dec);
@@ -424,11 +495,20 @@ int cmd_track(const Options& o) {
     writers.finish();
     const double total = nn::now_ms() - t_all;
     const double n = (double)files.size();
-    std::fprintf(stderr,
-                 "%zu frames in %.1f s -- %.0f ms/frame "
-                 "(decode %.0f, model %.0f, write %.0f)\n",
-                 files.size(), total / 1000.0, total / n, t_load / n, t_track / n,
-                 t_write / n);
+    {
+        auto ms = [](double v) {
+            char b[32];
+            std::snprintf(b, sizeof b, "%.0f", v);
+            return std::string(b);
+        };
+        char secs[32];
+        std::snprintf(secs, sizeof secs, "%.1f", total / 1000.0);
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::sam_track_summary,
+                            {(long long)files.size(), secs, ms(total / n),
+                             ms(t_load / n), ms(t_track / n),
+                             ms(t_write / n)}).c_str());
+    }
     if (o.show_vram)
         std::fprintf(stderr, "VRAM:\n%s", masker.session().vramReport().c_str());
     if (o.profile) masker.session().printProfile();
@@ -438,22 +518,22 @@ int cmd_track(const Options& o) {
 int cmd_video(const Options& o) {
 #ifndef SS_HAVE_VIDEO
     (void)o;
-    std::fprintf(stderr,
-                 "this build has no in-process video decoder: it is compiled "
-                 "only with -DSS_ENABLE_PATENTED=ON (see "
-                 "cmake/SsOptions.cmake). Use ffmpeg to inspect a file or "
-                 "extract frames instead.\n");
+    std::fprintf(stderr, "%s\n", cmsg::sam_no_video_decoder.get());
     return 1;
 #else
     const std::string why = video::VideoReader::availability();
-    if (why.empty()) std::fprintf(stderr, "Vulkan video decode: available\n");
-    else std::fprintf(stderr, "Vulkan video decode: %s\n", why.c_str());
+    if (why.empty())
+        std::fprintf(stderr, "%s\n", cmsg::sam_video_decode.get());
+    else
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::sam_video_decode_why, {why}).c_str());
 
     if (o.video_path.empty()) return why.empty() ? 0 : 1;
 
     video::VideoReader reader;
     if (!reader.open(o.video_path)) {
-        std::fprintf(stderr, "error: %s\n", reader.lastError().c_str());
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::error_line, {reader.lastError()}).c_str());
         return 1;
     }
     const auto& i = reader.info();
@@ -470,18 +550,25 @@ int cmd_video(const Options& o) {
             nn::Image frame = reader.readFrame();
             if (frame.empty()) {
                 if (!reader.lastError().empty())
-                    std::fprintf(stderr, "error: %s\n", reader.lastError().c_str());
+                    std::fprintf(stderr, "%s\n",
+                                 format(cmsg::error_line,
+                                        {reader.lastError()}).c_str());
                 break;
             }
             if (o.out_dir.empty()) continue;
             char path[512];
             std::snprintf(path, sizeof(path), "%s/frame_%05d.png", o.out_dir.c_str(), n);
             nn::save_image(frame, path, -1);
-            std::printf("wrote %s\n", path);
+            std::printf("%s\n", format(cmsg::sam_wrote_path, {path}).c_str());
         }
         const double ms = nn::now_ms() - t0;
-        std::printf("decoded\t%d frames in %.0f ms (%.1f fps)\n", n, ms,
-                    n > 0 ? 1000.0 * n / ms : 0.0);
+        {
+            char ms_s[32], fps[32];
+            std::snprintf(ms_s, sizeof ms_s, "%.0f", ms);
+            std::snprintf(fps, sizeof fps, "%.1f", n > 0 ? 1000.0 * n / ms : 0.0);
+            std::printf("%s\n",
+                        format(cmsg::sam_decoded, {n, ms_s, fps}).c_str());
+        }
     }
     return 0;
 #endif
@@ -503,12 +590,9 @@ int spirula_sam_main(int argc, char** argv) {
         nn::shutdown();
         return rc;
 #else
-        std::fprintf(stderr,
-                     "`extract` needs the in-process video decoder, which is "
-                     "compiled only with -DSS_ENABLE_PATENTED=ON (see "
-                     "cmake/SsOptions.cmake). Extract frames with ffmpeg "
-                     "and mask them with `%s track` instead.\n",
-                     app::program_name().c_str());
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::sam_extract_needs_decoder,
+                            {app::program_name()}).c_str());
         return 1;
 #endif
     }

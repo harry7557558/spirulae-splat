@@ -55,6 +55,8 @@
 #include "sfm/map/Merge.h"
 
 #include "i18n/catalog/Sfm.h"
+#include "i18n/catalog/Cli.h"
+#include "i18n/catalog/SfmHelp.h"
 
 // `spirula-sfm ba`, in sfm_ba.cpp. It prints its own help.
 int cmdBa(int argc, char** argv);
@@ -72,6 +74,8 @@ using namespace sfm;
 // sfm/core/Log.h for the mechanism and for what stays English.
 namespace L = sfm::slog;
 namespace M = spirula::i18n::msg::sfm;
+namespace CM = spirula::i18n::msg::cli;
+namespace H = spirula::i18n::msg::sfmhelp;
 using sfm::slog::Tag;
 
 // How this tool was invoked ("spirula sfm" as dispatched); see app/Tools.h.
@@ -92,13 +96,22 @@ static std::string with_program_name(const char* text) {
 struct CommandInfo {
     const char* name;
     uint32_t mask;
-    const char* summary;      // one line, for `spirula-sfm --help`
-    const char* usage;        // argument syntax after the command name
-    const char* description;  // pre-wrapped, two-space indented
+    // The prose is translated (i18n/catalog/SfmHelp.h); the syntax and the
+    // examples are what the reader types, so they are not.
+    const spirula::i18n::Msg* summary;              // one line, for `--help`
+    const char* usage;                              // argument syntax
+    const spirula::i18n::Msg* description[3];       // one per paragraph, then null
     void (*own_options)(FILE*);
-    const char* examples;     // pre-wrapped, two-space indented
-    const char* footer;       // exit status and the like, or nullptr
+    const char* examples;                           // pre-wrapped, indented
+    bool exit_status;                               // print `auto`'s footer
 };
+
+// A description paragraph, wrapped where the language allows rather than where
+// an English hand-wrap once put a newline.
+static void printParagraph(FILE* out, const spirula::i18n::Msg& m) {
+    for (const std::string& line : spirula::i18n::wrap(m.get(), 94))
+        std::fprintf(out, "  %s\n", line.c_str());
+}
 
 // One line of a command's own (hand-parsed) options, in the table's layout.
 static void helpLine(FILE* out, const char* flag, const char* value, const char* help) {
@@ -106,137 +119,80 @@ static void helpLine(FILE* out, const char* flag, const char* value, const char*
 }
 
 static void ownOptionsAuto(FILE* out) {
-    helpLine(out, "-o, --output DIR", "required",
-        "Workspace to write: features/, matches.bin and sparse/0.. land in it.");
-    helpLine(out, "--no-masks", "",
-        "Ignore a masks directory even if one is sitting beside the images.");
-    helpLine(out, "--no-manage", "",
-        "Skip merging, growing, reseeding and splitting, keeping the mapper's raw models.");
-    helpLine(out, "-h, --help", "", "Show this help and exit.");
+    helpLine(out, "-o, --output DIR", H::word_required.get(),
+             H::opt_auto_output.get());
+    helpLine(out, "--no-masks", "", H::opt_no_masks.get());
+    helpLine(out, "--no-manage", "", H::opt_no_manage_auto.get());
+    helpLine(out, "-h, --help", "", H::opt_help.get());
 }
 static void ownOptionsExtract(FILE* out) {
-    helpLine(out, "-o, --output DIR|FILE", "features",
-        "Output directory for a directory of images, or the .bin file for a single image.");
-    helpLine(out, "-h, --help", "", "Show this help and exit.");
+    helpLine(out, "-o, --output DIR|FILE", "features", H::opt_extract_output.get());
+    helpLine(out, "-h, --help", "", H::opt_help.get());
 }
 static void ownOptionsMatch(FILE* out) {
-    helpLine(out, "-o, --output FILE", "",
-        "Match database to write. Without it the run reports and writes nothing.");
-    helpLine(out, "-h, --help", "", "Show this help and exit.");
+    helpLine(out, "-o, --output FILE", "", H::opt_match_output.get());
+    helpLine(out, "-h, --help", "", H::opt_help.get());
 }
 static void ownOptionsMap(FILE* out) {
-    helpLine(out, "-o, --output DIR", "",
-        "Directory to write the models into, as 0/, 1/, ... largest first.");
-    helpLine(out, "--audit", "",
-        "Audit every pose against the correspondence graph before anything else, and "
-        "re-register what the model cannot support. Use with --resume on models from elsewhere.");
-    helpLine(out, "--no-manage", "",
-        "Skip merging, growing, reseeding and splitting.");
-    helpLine(out, "-h, --help", "", "Show this help and exit.");
+    helpLine(out, "-o, --output DIR", "", H::opt_map_output.get());
+    helpLine(out, "--audit", "", H::opt_map_audit.get());
+    helpLine(out, "--no-manage", "", H::opt_no_manage_map.get());
+    helpLine(out, "-h, --help", "", H::opt_help.get());
 }
 static void ownOptionsMerge(FILE* out) {
-    helpLine(out, "-o, --output DIR", "",
-        "Directory to write the merged models into. Required unless --in-place.");
-    helpLine(out, "-h, --help", "", "Show this help and exit.");
+    helpLine(out, "-o, --output DIR", "", H::opt_merge_output.get());
+    helpLine(out, "-h, --help", "", H::opt_help.get());
 }
 
 static const CommandInfo kCommands[] = {
-    {"auto", CMD_AUTO,
-     "reconstruct a sparse model from a directory of images, in one command",
+    {"auto", CMD_AUTO, &H::sum_auto,
      "[IMAGE_DIR|DATASET_DIR] -o WORKSPACE [options]",
-     "  Runs extract -> match -> map -> merge with COLMAP's automatic_reconstructor presets\n"
-     "  and writes WORKSPACE/{features,matches.bin,sparse/0}. A capture that is not one\n"
-     "  connected view graph also writes sparse/1, sparse/2, ... -- the remaining\n"
-     "  components, largest first.\n"
-     "\n"
-     "  The positional defaults to `images`; a dataset directory containing `images/` is\n"
-     "  accepted and that sub-directory used, so `auto DATASET` and `auto DATASET/images`\n"
-     "  behave the same. `masks` beside the image directory is picked up automatically.\n"
-     "\n"
-     "  Two knobs decide the rest: --quality and --data-type. Anything they set can be\n"
-     "  overridden by naming the flag explicitly, and the run reports what they moved.",
+     {&H::desc_auto_1, &H::desc_auto_2, &H::desc_auto_3},
      ownOptionsAuto,
      "  spirula-sfm auto images/ -o workspace/\n"
      "  spirula-sfm auto -o ws/                       # ./images and ./masks, all defaults\n"
      "  spirula-sfm auto DATASET/ -o ws/ --data-type video --quality medium\n"
      "  spirula-sfm auto images/ -o ws/ --camera-model opencv-fisheye --focal 520\n"
      "  spirula-sfm auto images/ -o ws/ --camera-model cam0=thin-prism-fisheye",
-     "Exit status:\n"
-     "  0  a reconstruction that looks sound\n"
-     "  1  usage or runtime error\n"
-     "  2  no reconstruction at all\n"
-     "  3  partial: under half the images registered, or over 2 px mean reprojection"},
+     /*exit_status=*/true},
 
-    {"extract", CMD_EXTRACT,
-     "detect features in an image or a directory of images",
+    {"extract", CMD_EXTRACT, &H::sum_extract,
      "<IMAGE|DIR> [-o OUT] [options]",
-     "  GPU SIFT over one image or, recursively, a directory. A directory reuses one GPU\n"
-     "  context and processes largest-first, so device buffers are allocated once;\n"
-     "  decoding runs on a pool sized to fit --decode-budget, and peak memory does not\n"
-     "  grow with the number of images. Feature files mirror the image tree.\n"
-     "\n"
-     "  Keypoints are written in the *source* image's coordinates even when\n"
-     "  --max-image-size downscaled it, and each file records what EXIF said about the\n"
-     "  focal length and the camera, so `match` and `map` can build intrinsics for the\n"
-     "  images on disk without seeing them (D46).",
+     {&H::desc_extract_1, &H::desc_extract_2, nullptr},
      ownOptionsExtract,
      "  spirula-sfm extract images/ -o features/\n"
      "  spirula-sfm extract images/ -o features/ --masks masks/ --max-features 4096\n"
      "  spirula-sfm extract photo.jpg -o photo.bin",
-     nullptr},
+     false},
 
-    {"match", CMD_MATCH,
-     "match and geometrically verify a directory of feature files",
+    {"match", CMD_MATCH, &H::sum_match,
      "<FEATURE_DIR> -o MATCHES.BIN [options]",
-     "  Brute-force descriptor matching on the GPU, then two-view geometric verification\n"
-     "  (F/H RANSAC) on a worker pool fed by the matcher. Verification is where the time\n"
-     "  goes; --threads sizes it and results do not depend on the count.\n"
-     "\n"
-     "  A fisheye --camera-model switches verification to unit bearings, where the\n"
-     "  epipolar constraint holds at any field of view; the focal is searched per camera\n"
-     "  group on a sample of pairs unless --focal or EXIF gives one (D45/D46). The camera\n"
-     "  grouping and the focals this stage settles on travel in the match database, so\n"
-     "  `map` inherits them instead of re-deriving them (D47).",
+     {&H::desc_match_1, &H::desc_match_2, nullptr},
      ownOptionsMatch,
      "  spirula-sfm match features/ -o matches.bin\n"
      "  spirula-sfm match features/ -o matches.bin --pairs prefilter --threads 8\n"
      "  spirula-sfm match features/ -o matches.bin --camera-model opencv \\\n"
      "                             --camera-model cam0=thin-prism-fisheye --focal cam0=520",
-     nullptr},
+     false},
 
-    {"map", CMD_MAP,
-     "incremental reconstruction: matches to a COLMAP sparse model",
+    {"map", CMD_MAP, &H::sum_map,
      "<MATCHES.BIN> <FEATURE_DIR> -o SPARSE_DIR [options]",
-     "  Seed, register, triangulate, bundle-adjust, filter -- then the merge levels and\n"
-     "  the finishing passes. A capture that is not one connected view graph\n"
-     "  reconstructs as several models, written to <out>/0, <out>/1, ... largest first\n"
-     "  (COLMAP's layout); they are then merged where they share images and grown into\n"
-     "  whatever else they can register.\n"
-     "\n"
-     "  --camera-model and --focal take either a dataset-wide value or PREFIX=VALUE\n"
-     "  naming one camera group by image path, so a rig can mix models. Say nothing\n"
-     "  about cameras and the setup recorded by verification is used as it stands.",
+     {&H::desc_map_1, &H::desc_map_2, nullptr},
      ownOptionsMap,
      "  spirula-sfm map matches.bin features/ -o sparse/ --images images/\n"
      "  spirula-sfm map matches.bin features/ -o sparse/ --max-models 1\n"
      "  spirula-sfm map matches.bin features/ --resume sparse/ --check\n"
      "  spirula-sfm map matches.bin features/ -o sparse/ --resume sparse/ --audit",
-     nullptr},
+     false},
 
-    {"merge", CMD_MERGE,
-     "fuse the models of a fragmented capture into fewer",
+    {"merge", CMD_MERGE, &H::sum_merge,
      "<SPARSE_DIR|MODEL_DIR> [more...] -o DIR [options]",
-     "  Merges models on the images they share: those give the similarity transform\n"
-     "  between the two gauges (D43). A directory holding 0/, 1/, ... is expanded to all\n"
-     "  of them. Models built from different features cannot be merged.\n"
-     "\n"
-     "  A merged model is two independently optimized halves glued along a seam no\n"
-     "  bundle adjustment has ever seen, so one runs across it afterwards unless --no-ba.",
+     {&H::desc_merge_1, &H::desc_merge_2, nullptr},
      ownOptionsMerge,
      "  spirula-sfm merge sparse/ -o merged/\n"
      "  spirula-sfm merge sparse/ --in-place\n"
      "  spirula-sfm merge runA/sparse/0 runB/sparse/0 -o merged/ --min-common 5",
-     nullptr},
+     false},
 };
 
 static const CommandInfo* findCommand(const std::string& name) {
@@ -247,47 +203,59 @@ static const CommandInfo* findCommand(const std::string& name) {
 
 static void printCommandHelp(const CommandInfo& c) {
     FILE* out = stdout;
-    std::fprintf(out, "%s %s -- %s\n\n", kProgram, c.name, c.summary);
-    std::fprintf(out, "Usage:\n  %s %s %s\n\n", kProgram, c.name, c.usage);
-    std::fprintf(out, "Description:\n%s\n\n", c.description);
-    std::fprintf(out, "Options:\n");
+    std::fprintf(out, "%s %s -- %s\n\n", kProgram, c.name, c.summary->get());
+    std::fprintf(out, "%s\n  %s %s %s\n\n", H::label_usage.get(), kProgram, c.name,
+                 c.usage);
+    std::fprintf(out, "%s\n", H::label_description.get());
+    for (int i = 0; i < 3 && c.description[i]; i++) {
+        if (i) std::fprintf(out, "\n");
+        printParagraph(out, *c.description[i]);
+    }
+    std::fprintf(out, "\n%s\n", H::label_options.get());
     c.own_options(out);
     // Defaults are printed from a fresh config, which is exactly what the
     // command starts from; `auto` says separately what its presets then move.
     SfmConfig defaults;
     printConfigOptions(out, c.mask, defaults);
-    std::fprintf(out, "\nExamples:\n%s\n", with_program_name(c.examples).c_str());
-    if (c.footer)
-        std::fprintf(out, "\n%s\n", with_program_name(c.footer).c_str());
+    std::fprintf(out, "\n%s\n%s\n", H::label_examples.get(),
+                 with_program_name(c.examples).c_str());
+    if (c.exit_status) {
+        std::fprintf(out, "\n%s\n", H::label_exit_status.get());
+        std::fprintf(out, "  0  %s\n", H::exit_0.get());
+        std::fprintf(out, "  1  %s\n", H::exit_1.get());
+        std::fprintf(out, "  2  %s\n", H::exit_2.get());
+        std::fprintf(out, "  3  %s\n", H::exit_3.get());
+    }
 }
 
 static void printTopHelp(FILE* out) {
-    std::fprintf(out, "%s %s -- Structure from Motion for Spirula Studio\n\n", kProgram,
-                 SS_VERSION);
-    std::fprintf(out, "Usage:\n  %s <command> [options]\n  %s <command> --help\n\n", kProgram,
-                 kProgram);
-    std::fprintf(out, "Commands:\n");
+    std::fprintf(out, "%s %s -- %s\n\n", kProgram, SS_VERSION, H::tagline.get());
+    std::fprintf(out, "%s\n  %s <command> [options]\n  %s <command> --help\n\n",
+                 H::label_usage.get(), kProgram, kProgram);
+    std::fprintf(out, "%s\n", H::label_commands.get());
     for (const CommandInfo& c : kCommands)
-        std::fprintf(out, "  %-9s %s\n", c.name, c.summary);
-    std::fprintf(out, "  %-9s %s\n", "ba", "bundle-adjust a BAL problem (solver benchmark)");
-    std::fprintf(out,
-                 "\nOptions:\n"
-                 "  -h, --help      show this help and exit\n"
-                 "  -V, --version   show the version and exit\n"
-                 "\n"
-                 "Every stage reads and writes COLMAP's formats, so any one of them can be\n"
-                 "replaced by COLMAP's equivalent to bisect a failure. `auto` runs all of them.\n"
-                 "\n"
-                 "Environment:\n"
-                 "  SS_SFM_MAP_PROF=1   print a per-stage breakdown of the mapper's time\n");
+        std::fprintf(out, "  %-9s %s\n", c.name, c.summary->get());
+    std::fprintf(out, "  %-9s %s\n", "ba", H::sum_ba.get());
+    std::fprintf(out, "\n%s\n", H::label_options.get());
+    std::fprintf(out, "  %-15s %s\n", "-h, --help", H::opt_help.get());
+    std::fprintf(out, "  %-15s %s\n", "-V, --version", H::opt_version.get());
+    std::fprintf(out, "\n");
+    for (const std::string& line : spirula::i18n::wrap(H::top_note.get(), 78))
+        std::fprintf(out, "%s\n", line.c_str());
+    std::fprintf(out, "\n%s\n", H::label_environment.get());
+    std::fprintf(out, "  %-19s %s\n", "SS_SFM_MAP_PROF=1", H::env_map_prof.get());
 }
 
 // A usage error, in the shape every command-line tool uses: what was wrong, and
 // where to look. Never exit code 2 or 3 -- `auto` spends those on the quality
 // of the reconstruction, and a batch script must be able to tell them apart.
 static int usageError(const char* cmd, const std::string& msg) {
-    std::fprintf(stderr, "%s %s: error: %s\n", kProgram, cmd, msg.c_str());
-    std::fprintf(stderr, "Try '%s %s --help' for more information.\n", kProgram, cmd);
+    std::fprintf(stderr, "%s %s: %s\n", kProgram, cmd,
+                 spirula::i18n::format(CM::error_line, {msg}).c_str());
+    std::fprintf(stderr, "%s\n",
+                 spirula::i18n::format(
+                     CM::usage_try_help,
+                     {std::string(kProgram) + " " + cmd + " --help"}).c_str());
     return 1;
 }
 
@@ -604,10 +572,9 @@ static std::vector<Reconstruction> mergeModels(std::vector<Reconstruction> model
             size_t robs = 0, rpts = 0;
             filterModel(m, mo.filter_reproj_error, mo.min_tri_angle_deg, robs, rpts);
             if (mo.verbose)
-                fprintf(stderr,
-                        "[merge] model %zu re-bundled (cost %.3e), filtered %zu obs / %zu points, "
-                        "%zu remain\n",
-                        i, cost, robs, rpts, m.points3D.size());
+                L::err(Tag::Merge, M::merge_rebundled,
+                       {(long long)i, cost, (long long)robs, (long long)rpts,
+                        (long long)m.points3D.size()});
         }
         sum.ba_seconds = now() - tb;
     }
@@ -628,7 +595,7 @@ static bool isModelDir(const fs::path& p) {
 static bool collectModelDirs(const std::string& input, std::vector<fs::path>& out) {
     fs::path p(input);
     if (!fs::is_directory(p)) {
-        fprintf(stderr, "%s is not a directory\n", input.c_str());
+        L::fail(Tag::Map, M::map_not_a_directory, {input});
         return false;
     }
     if (isModelDir(p)) {
@@ -643,8 +610,7 @@ static bool collectModelDirs(const std::string& input, std::vector<fs::path>& ou
         numbered.emplace_back(std::stol(n), e.path());
     }
     if (numbered.empty()) {
-        fprintf(stderr, "%s holds no model (no cameras.bin, no numbered sub-model)\n",
-                input.c_str());
+        L::fail(Tag::Map, M::map_no_model_in, {input});
         return false;
     }
     std::sort(numbered.begin(), numbered.end());
@@ -659,12 +625,13 @@ static bool readModels(const std::string& dir, std::vector<Reconstruction>& mode
         try {
             models.push_back(Reconstruction::readBinary(d.string()));
         } catch (const std::exception& e) {
-            fprintf(stderr, "cannot read %s: %s\n", d.string().c_str(), e.what());
+            L::fail(Tag::Map, M::map_cannot_read, {d.string(), e.what()});
             return false;
         }
         if (verbose)
-            printf("   read %s: %u images, %zu points\n", d.string().c_str(),
-                   models.back().numRegistered(), models.back().points3D.size());
+            L::out(Tag::Map, M::map_read_model,
+                   {d.string(), models.back().numRegistered(),
+                    (long long)models.back().points3D.size()});
     }
     return true;
 }
@@ -1057,14 +1024,15 @@ static int cmdExtract(int argc, char** argv) {
         ExtractStats st;
         int rc = extractDirectory(image, outdir, cfg, st);
         if (rc) return rc;
-        printf("done: %zu images, %llu features total", st.images,
-               (unsigned long long)st.features);
+        L::out(Tag::Extract, M::extract_dir_done,
+               {(long long)st.images, (unsigned long long)st.features});
         if (st.masked_out)
-            printf(" (%llu masked out over %zu masked images)",
-                   (unsigned long long)st.masked_out, st.masked_images);
+            L::out(Tag::Extract, M::extract_dir_masked,
+                   {(unsigned long long)st.masked_out,
+                    (long long)st.masked_images});
         if (st.failed || st.unreadable)
-            printf(" (%zu failed to decode, %zu unreadable headers)", st.failed, st.unreadable);
-        printf("\n");
+            L::out(Tag::Extract, M::extract_dir_failed,
+                   {(long long)st.failed, (long long)st.unreadable});
         warnIfMasksLookInverted(st);
         return (st.failed || st.unreadable) ? 1 : 0;
     }
@@ -1076,26 +1044,30 @@ static int cmdExtract(int argc, char** argv) {
     if (!cfg.mask_dir.empty()) {
         maskpath = MaskIndex(cfg.mask_dir).find(fs::path(image).filename().generic_string());
         if (maskpath.empty())
-            fprintf(stderr, "[sfm] WARNING: no mask for %s in %s\n", image.c_str(),
-                    cfg.mask_dir.c_str());
+            L::warn(Tag::Extract, M::match_no_mask_for,
+                    {image, cfg.mask_dir});
     }
     GrayImage img = loadGrayImage(image, cfg.max_image_size, /*want_color=*/true, maskpath);
     if (cfg.sift.verbose)
-        fprintf(stderr, "[sfm] %s -> %dx%d gray\n", image.c_str(), img.width, img.height);
+        L::err(Tag::Extract, M::extract_to_gray,
+               {image, img.width, img.height});
     std::unique_ptr<IFeatureExtractor> ext =
         createFeatureExtractor(cfg.features, cfg.sift, cfg.aliked);
     FeatureSet fset = ext->extract(img);
     sampleFeatureColors(fset, img);
     uint32_t masked_out = applyMask(fset, img.mask);
     finishFeatures(fset, img);
-    printf("features: %u  dim: %u  image: %dx%d", fset.count(), fset.dim, fset.width, fset.height);
-    if (fset.exif_focal > 0) printf("  exif focal: %.1f px", fset.exif_focal);
+    L::out(Tag::Extract, M::extract_one_done,
+           {fset.count(), fset.dim, fset.width, fset.height});
+    if (fset.exif_focal > 0)
+        L::out(Tag::Extract, M::extract_one_exif_focal,
+               {L::num(fset.exif_focal, 1)});
     if (!img.mask.empty())
-        printf("  mask: %dx%d, %u masked out", img.mask.width, img.mask.height, masked_out);
-    printf("\n");
+        L::out(Tag::Extract, M::extract_one_mask,
+               {img.mask.width, img.mask.height, masked_out});
     if (!output.empty()) {
         writeFeatures(output, fset);
-        if (cfg.sift.verbose) fprintf(stderr, "[sfm] wrote %s\n", output.c_str());
+        if (cfg.sift.verbose) L::err(Tag::Extract, M::wrote_file, {output});
     }
     return 0;
 }
@@ -1176,7 +1148,7 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
             });
         for (std::thread& t : pool) t.join();
         if (!first_error.empty()) {
-            fprintf(stderr, "[match] %s\n", first_error.c_str());
+            L::err_raw(Tag::Match, first_error);
             return 1;
         }
     }
@@ -1191,7 +1163,11 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
     std::function<void(size_t, size_t)> sp;
     if (verbose)
         sp = [&](size_t done, size_t total) {
-            fprintf(stderr, "\r[match] %zu/%zu pairs scored", done, total);
+            // Redrawn in place, so it carries the tag itself rather than
+            // going through L::err(), which always ends its line.
+            fprintf(stderr, "\r%s%s", L::prefix(Tag::Match).c_str(),
+                    spirula::i18n::format(M::match_pairs_scored,
+                                 {(long long)done, (long long)total}).c_str());
         };
     if (mode == PairMode::Prefilter) {
         stats.scored = files.size() * (files.size() - 1) / 2;
@@ -1199,11 +1175,11 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
         pairs = prefilterPairs(feats, popt, sp);
         stats.select_seconds = now() - t0;
         if (verbose)
-            fprintf(stderr,
-                    "\n[match] pair selection kept %zu/%zu pairs "
-                    "(top-%u features, %u neighbors, %.1f s)\n",
-                    pairs.size(), stats.scored, popt.num_features, popt.num_neighbors,
-                    stats.select_seconds);
+            fprintf(stderr, "\n");
+            L::err(Tag::Match, M::match_prefilter_kept,
+                   {(long long)pairs.size(), (long long)stats.scored,
+                    popt.num_features, popt.num_neighbors,
+                    L::num(stats.select_seconds, 1)});
     } else {
         pairs = generatePairs((uint32_t)files.size(), mode, cfg.overlap);
         // Loop closure. A sequential chain has no link between the start and
@@ -1221,10 +1197,11 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
             std::sort(pairs.begin(), pairs.end());
             pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
             if (verbose)
-                fprintf(stderr,
-                        "\n[match] loop closure added %zu pairs to %zu sequential ones "
-                        "(%zu selected, %.1f s; --no-loop-closure turns this off)\n",
-                        pairs.size() - seq, seq, extra.size(), stats.select_seconds);
+                fprintf(stderr, "\n");
+                L::err(Tag::Match, M::match_loop_closure_added,
+                       {(long long)(pairs.size() - seq), (long long)seq,
+                        (long long)extra.size(),
+                        L::num(stats.select_seconds, 1)});
         }
     }
     stats.pairs = pairs.size();
@@ -1236,13 +1213,13 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
                     ? (cfg.loop_closure ? "sequential + loop closure" : "sequential")
                     : "prefilter"});
     if (verbose && mode == PairMode::Prefilter)
-        fprintf(stderr, "[match] pair selection: top-%u features, %u neighbors\n",
-                popt.num_features, popt.num_neighbors);
+        L::err(Tag::Match, M::match_prefilter_params,
+               {popt.num_features, popt.num_neighbors});
 
     std::unique_ptr<IFeatureMatcher> matcher =
         createFeatureMatcher(cfg.matcher, opt, cfg.lightglue);
     if (verbose && cfg.matcher != "bruteforce")
-        fprintf(stderr, "[match] matcher: %s\n", matcher->name());
+        L::err(Tag::Match, M::match_matcher_name, {matcher->name()});
     auto matchFn = [&](size_t b, size_t e, std::vector<std::vector<FeatureMatch>>& mout) {
         matcher->matchBatch(feats, pairs, b, e, mout);
     };
@@ -1297,7 +1274,8 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
                                            cs.focal_measured, tvopt, calib->sample_pairs,
                                            cfg.threads, verbose);
                 if (verbose && !cs.focal_measured.empty())
-                    fprintf(stderr, "[focal] epipolar focal search %.1f s\n", now() - t_f);
+                    L::err(Tag::Match, M::focal_epipolar_search,
+                           {L::num(now() - t_f, 1)});
             }
             if (cs.anyWide()) {
                 bootstrapGroupFocals(feats, cs.ids, sample, sm, cs.cameras, cs.focal_given,
@@ -1315,11 +1293,17 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
                 vopt.bearings = &bc;
                 calib->used_bearings = true;
                 if (verbose) {
-                    fprintf(stderr, "[match] calibrated verification on bearings (%.1f s, %.0f MB)",
-                            now() - t_b, bc.bytes() / 1048576.0);
-                    for (const auto& kv : cs.cameras)
-                        fprintf(stderr, " | cam %u f=%.1f", kv.first, kv.second.focal());
-                    fprintf(stderr, "\n");
+                    // The focal list is identifiers and numbers, built here and
+                    // passed through the message as one argument.
+                    std::string focals;
+                    for (const auto& kv : cs.cameras) {
+                        if (!focals.empty()) focals += ", ";
+                        focals += "cam " + std::to_string(kv.first) + ": " +
+                                  L::num(kv.second.focal(), 1);
+                    }
+                    L::err(Tag::Match, M::match_bearings,
+                           {L::num(now() - t_b, 1),
+                            L::num(bc.bytes() / 1048576.0, 0), focals});
                 }
             }
         }
@@ -1403,15 +1387,17 @@ static int cmdMatch(int argc, char** argv) {
                                  &calib))
         return rc;
     if (cfg.verify)
-        printf("matched %zu/%zu pairs (>=1 inlier), %llu inlier / %llu putative matches\n",
-               stats.kept, stats.pairs, (unsigned long long)stats.inliers,
-               (unsigned long long)stats.putative);
+        L::out(Tag::Match, M::match_done_inliers,
+               {(long long)stats.kept, (long long)stats.pairs,
+                (unsigned long long)stats.inliers,
+                (unsigned long long)stats.putative});
     else
-        printf("matched %zu/%zu pairs with >=1 match, %llu total matches\n", stats.kept,
-               stats.pairs, (unsigned long long)stats.inliers);
+        L::out(Tag::Match, M::match_done_raw,
+               {(long long)stats.kept, (long long)stats.pairs,
+                (unsigned long long)stats.inliers});
     if (!output.empty()) {
         writeMatches(output, db);
-        if (!cfg.quiet) fprintf(stderr, "[match] wrote %s\n", output.c_str());
+        if (!cfg.quiet) L::err(Tag::Match, M::wrote_file, {output});
     }
     return 0;
 }
@@ -1491,7 +1477,7 @@ static int cmdMap(int argc, char** argv) {
             });
         for (std::thread& th : pool) th.join();
         if (!first_error.empty()) {
-            fprintf(stderr, "map: %s\n", first_error.c_str());
+            L::err_raw(Tag::Map, first_error);
             return 1;
         }
     }
@@ -1505,11 +1491,9 @@ static int cmdMap(int argc, char** argv) {
     if (opt.verbose) {
         printCameraSetup(Tag::Map, cs, cfg.camera, db.images.size());
         if (from_db)
-            fprintf(stderr, "[map] camera setup taken from %s (as verified)\n",
-                    matchesPath.c_str());
+            L::err(Tag::Map, M::map_camera_setup_from_db, {matchesPath});
         else if (cam_args && db.hasCameras())
-            fprintf(stderr, "[map] camera setup rebuilt from the command line, ignoring the "
-                            "one in %s\n", matchesPath.c_str());
+            L::err(Tag::Map, M::map_camera_setup_rebuilt, {matchesPath});
     }
 
     // A fisheye group with no focal prior and none recorded (D45/D46/D47).
@@ -1547,11 +1531,13 @@ static int cmdMap(int argc, char** argv) {
         // must come from this database (image ids are positions in it); adopt()
         // checks the names and says so if they do not.
         if (!readModels(cfg.resume, models, opt.verbose)) return 1;
-        printf("resumed %zu model(s) covering %zu/%zu images\n", models.size(),
-               distinctRegistered(models), db.images.size());
+        L::out(Tag::Map, M::map_resumed,
+               {(long long)models.size(),
+                (long long)distinctRegistered(models),
+                (long long)db.images.size()});
     }
     if (models.empty()) {
-        fprintf(stderr, "map: no model to work with\n");
+        L::fail(Tag::Map, M::map_no_model_to_work_with);
         return 1;
     }
 
@@ -1636,12 +1622,15 @@ static int cmdMap(int argc, char** argv) {
     double mean = 0, median = 0;
     size_t nobs = 0;
     reprojStats(rec, feats, mean, median, nobs);
-    printf("reconstruction: %u/%zu images registered, %zu 3D points, "
-           "%.3f px mean reprojection (%.3f median, %zu obs)\n",
-           rec.numRegistered(), db.images.size(), rec.points3D.size(), mean, median, nobs);
+    L::out(Tag::Map, M::map_reconstruction_summary,
+           {rec.numRegistered(), (long long)db.images.size(),
+            (long long)rec.points3D.size(), L::num(mean, 3), L::num(median, 3),
+            (long long)nobs});
     if (models.size() > 1) {
-        printf("  %zu models covering %zu/%zu distinct images:\n", models.size(),
-               distinctRegistered(models), db.images.size());
+        L::out(Tag::Map, M::map_models_covering,
+               {(long long)models.size(),
+                (long long)distinctRegistered(models),
+                (long long)db.images.size()});
         printExtraModels(models, feats);
     }
     orientModels(models, cfg.orient, opt.verbose);
@@ -1691,10 +1680,7 @@ static int cmdMerge(int argc, char** argv) {
     if (!cfg.in_place)
         for (const fs::path& d : dirs)
             if (fs::exists(output) && fs::equivalent(fs::path(output), d.parent_path())) {
-                fprintf(stderr,
-                        "merge: --output %s is where the input models live; pass --in-place if "
-                        "that is what you want\n",
-                        output.c_str());
+                L::fail(Tag::Merge, CM::sfm_merge_output_is_input, {output});
                 return 1;
             }
 
@@ -1703,14 +1689,15 @@ static int cmdMerge(int argc, char** argv) {
         try {
             models.push_back(Reconstruction::readBinary(d.string()));
         } catch (const std::exception& e) {
-            fprintf(stderr, "merge: cannot read %s: %s\n", d.string().c_str(), e.what());
+            L::fail(Tag::Merge, M::map_cannot_read, {d.string(), e.what()});
             return 1;
         }
-        printf("   read %s: %u images, %zu points\n", d.string().c_str(),
-               models.back().numRegistered(), models.back().points3D.size());
+        L::out(Tag::Merge, M::map_read_model,
+               {d.string(), models.back().numRegistered(),
+                (long long)models.back().points3D.size()});
     }
     if (models.size() < 2) {
-        fprintf(stderr, "merge: need at least two models, found %zu\n", models.size());
+        L::fail(Tag::Merge, M::merge_need_two, {(long long)models.size()});
         return 1;
     }
     const size_t covered_before = distinctRegistered(models);
@@ -1718,21 +1705,24 @@ static int cmdMerge(int argc, char** argv) {
     MergeSummary sum;
     models = mergeModels(std::move(models), mo, cfg.merge_ba, cfg.device, sum);
 
-    printf("merged %zu -> %zu model(s) in %.2f s (%zu merge(s), %zu refused",
-           sum.before, sum.after, sum.seconds, sum.merges, sum.refused);
-    if (sum.ba_seconds > 0) printf(", %.2f s bundle adjustment", sum.ba_seconds);
-    printf(")\n");
+    L::out(Tag::Merge, M::merge_summary,
+           {(long long)sum.before, (long long)sum.after, L::num(sum.seconds, 2),
+            (long long)sum.merges, (long long)sum.refused});
+    if (sum.ba_seconds > 0)
+        L::out(Tag::Merge, M::merge_ba_seconds, {L::num(sum.ba_seconds, 2)});
     for (size_t i = 0; i < models.size(); i++) {
         double mean = 0, median = 0;
         size_t nobs = 0;
         modelReprojStats(models[i], mean, median, nobs);
-        printf("  model %zu: %u images, %zu points, %.3f px mean (%.3f median, %zu obs)\n", i,
-               models[i].numRegistered(), models[i].points3D.size(), mean, median, nobs);
+        L::out(Tag::Merge, M::merge_model_line,
+               {(long long)i, models[i].numRegistered(),
+                (long long)models[i].points3D.size(), L::num(mean, 3),
+                L::num(median, 3), (long long)nobs});
     }
     const size_t covered_after = distinctRegistered(models);
     if (covered_after != covered_before)
-        printf("  NOTE: %zu/%zu distinct images survived the merge\n", covered_after,
-               covered_before);
+        L::out(Tag::Merge, M::merge_survived,
+               {(long long)covered_after, (long long)covered_before});
 
     orientModels(models, cfg.orient, mo.verbose);
     writeModels(models, fs::path(output), mo.verbose);
@@ -1747,7 +1737,7 @@ static int cmdMerge(int argc, char** argv) {
             long idx = std::stol(name);
             if (idx >= (long)models.size()) {
                 fs::remove_all(d);
-                printf("  removed %s (absorbed)\n", d.string().c_str());
+                L::out(Tag::Merge, M::merge_removed_absorbed, {d.string()});
             }
         }
     return 0;
@@ -2075,6 +2065,9 @@ int spirula_sfm_main(int argc, char** argv) {
         return 1;
     }
     std::fprintf(stderr, "%s: error: unknown command '%s'\n", kProgram, cmd.c_str());
-    std::fprintf(stderr, "Try '%s --help' for the list of commands.\n", kProgram);
+    std::fprintf(stderr, "%s\n",
+                 spirula::i18n::format(
+                     CM::usage_try_help,
+                     {std::string(kProgram) + " --help"}).c_str());
     return 1;
 }

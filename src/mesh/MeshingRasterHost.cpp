@@ -12,6 +12,7 @@
  */
 
 #include "mesh/MeshingRaster.h"
+#include "mesh/MeshLog.h"
 #include "mesh/MeshingDevice.h"
 
 #include <algorithm>
@@ -74,13 +75,14 @@ inline TorchTensorView tv(const float* p, std::initializer_list<int64_t> shape) 
 
 // Per-camera progress for the three loops below. Rate-limited to ~50 lines
 // per phase so a 2000-camera capture does not drown the log, and always
-// printing the last one so the phase visibly completes. The "i/n" shape is
-// what the GUI's runner parses to move its bar WITHIN a phase.
-void report_cameras(bool verbose, const char* stage, int done, int total) {
+// printing the last one so the phase visibly completes. The GUI's runner reads
+// the two counts back out of this line -- with i18n::scan() against the same
+// message, so the line is translated like every other one.
+void report_cameras(bool verbose, mlog::Stage stage, int done, int total) {
     if (!verbose || total <= 0) return;
     const int step = total <= 50 ? 1 : total / 50;
     if (done != total && (done % step) != 0) return;
-    std::printf("[meshing] %s: rendered %d/%d cameras\n", stage, done, total);
+    mlog::out(stage, spirula::i18n::msg::mesh::cameras_rendered, {done, total});
 }
 
 }  // namespace
@@ -242,7 +244,7 @@ void render_evaluate_occupancy(
     for (int ci = 0; ci < num_cams; ++ci) {
         int cam = cam_indices[ci];
         render_one(ctx, cam, d_moments, nullptr);
-        report_cameras(ctx->verbose, "occupancy", ci + 1, num_cams);
+        report_cameras(ctx->verbose, mlog::Stage::Occupancy, ci + 1, num_cams);
         launch_sample_occ(
             d_xyz, n,
             ctx->d_viewmats.get() + (size_t)cam * 16,
@@ -276,7 +278,7 @@ void render_evaluate_color(
     for (int ci = 0; ci < num_cams; ++ci) {
         int cam = cam_indices[ci];
         render_one(ctx, cam, d_moments, d_rgbimg);
-        report_cameras(ctx->verbose, "color", ci + 1, num_cams);
+        report_cameras(ctx->verbose, mlog::Stage::Color, ci + 1, num_cams);
         launch_sample_color(
             d_xyz, n,
             ctx->d_viewmats.get() + (size_t)cam * 16,
@@ -308,7 +310,7 @@ void render_evaluate_view_density(
     for (int ci = 0; ci < num_cams; ++ci) {
         int cam = cam_indices[ci];
         render_one(ctx, cam, d_moments, nullptr);
-        report_cameras(ctx->verbose, "texel density", ci + 1, num_cams);
+        report_cameras(ctx->verbose, mlog::Stage::TexelDensity, ci + 1, num_cams);
         launch_sample_view_density(
             d_xyz, n,
             ctx->d_viewmats.get() + (size_t)cam * 16,

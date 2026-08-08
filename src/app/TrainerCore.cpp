@@ -489,8 +489,11 @@ void TrainerSession::log(const std::string& msg) {
 // exception: the GUI's batch pre-flight reports every row's problems at once,
 // before anything starts, which is the whole point of a pre-flight.
 std::string train_config_unsupported(const TrainConfig& c) {
+    // The flag name is an IDENTIFIER and goes in as {0}: `--use-bvh` reads the
+    // same in every language, and it is what the reader would type or search
+    // for. Only the sentence around it is translated.
     auto not_impl = [](const std::string& what) {
-        return what + " is not supported yet";
+        return lfmt(lmsg::not_supported_yet, {what});
     };
     if (c.use_bvh)                    return not_impl("--use-bvh");
     if (c.use_camera_optimizer)       return not_impl("--use-camera-optimizer");
@@ -502,7 +505,7 @@ std::string train_config_unsupported(const TrainConfig& c) {
     if (c.primitive != "3dgs" && c.primitive != "mip" && c.primitive != "3dgut")
         return not_impl("--primitive " + c.primitive);
     if (c.quantization_level != 0 && c.quantization_level != 1)
-        return "quantization_level must be 0 or 1";
+        return lmsg::bad_quantization_level.get();
     return {};
 }
 
@@ -511,13 +514,10 @@ void TrainerSession::check_config() {
     if (std::string what = train_config_unsupported(cfg); !what.empty())
         throw std::runtime_error(what);
     if (cfg.validation_fraction > 0)
-        log("warning: validation images are held out but "
-            "early stopping / eval is not ported yet");
+        log(lmsg::warn_validation_unported.get());
     if (cfg.orientation_method != "up" || cfg.center_method != "poses")
-        log("warning: orientation/center method '" + cfg.orientation_method +
-            "'/'" + cfg.center_method + "' approximated as 'up'/'poses' "
-            "(affects only train_frame_scale; see docs/notes/pose-normalization.md "
-            "for the unported reference implementation)");
+        log(lfmt(lmsg::warn_pose_normalization_approx,
+                 {cfg.orientation_method, cfg.center_method}));
 }
 
 void TrainerSession::load_dataset() {

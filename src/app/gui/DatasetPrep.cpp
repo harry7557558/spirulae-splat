@@ -154,13 +154,18 @@ bool clicks_apply_to(const PrepJob& job, const PrepInput& in) {
            job.mask_clicks_source == in.path;
 }
 
-std::string human_duration(double seconds) {
-    if (seconds < 1.0) return "a moment";
+std::string round_to(double v, int decimals) {
     char b[64];
-    if (seconds < 90.0) std::snprintf(b, sizeof b, "%.0f s", seconds);
-    else if (seconds < 5400.0) std::snprintf(b, sizeof b, "%.0f min", seconds / 60.0);
-    else std::snprintf(b, sizeof b, "%.1f h", seconds / 3600.0);
+    std::snprintf(b, sizeof b, "%.*f", decimals, v);
     return b;
+}
+
+std::string human_duration(double seconds) {
+    if (seconds < 1.0) return lmsg::dur_moment.get();
+    if (seconds < 90.0) return fmt(lmsg::dur_seconds, {round_to(seconds, 0)});
+    if (seconds < 5400.0)
+        return fmt(lmsg::dur_minutes, {round_to(seconds / 60.0, 0)});
+    return fmt(lmsg::dur_hours, {round_to(seconds / 3600.0, 1)});
 }
 
 // Progress that answers "how long is this going to take", which is the only
@@ -175,8 +180,8 @@ public:
     using Clock = std::chrono::steady_clock;
 
     RateLimitedProgress(std::function<void(const std::string&)> log,
-                        std::string noun, int64_t total)
-        : _log(std::move(log)), _noun(std::move(noun)), _total(total),
+                        const spirula::i18n::Msg& noun, int64_t total)
+        : _log(std::move(log)), _noun(&noun), _total(total),
           _start(Clock::now()), _last(_start) {}
 
     void update(int64_t done, bool force = false) {
@@ -195,26 +200,33 @@ public:
         }
         const double elapsed = std::chrono::duration<double>(now - _start).count();
         const int64_t measured = done - _anchor_done;
-        std::string line = "  " + std::to_string(done);
-        if (_total > 0) line += " / " + std::to_string(_total);
-        line += " " + _noun;
-        if (measured > 0 && elapsed > 0.5) {
-            const double per = elapsed / (double)measured;
-            char rate[64];
-            if (per >= 0.5) std::snprintf(rate, sizeof rate, "%.1f s each", per);
-            else            std::snprintf(rate, sizeof rate, "%.0f/s", 1.0 / per);
-            line += std::string("  (") + rate;
-            if (_total > done)
-                line += ", about " + human_duration(per * (double)(_total - done)) +
-                        " left";
-            line += ")";
+        // One whole sentence per shape, never a stem with clauses appended:
+        // the rate and the estimate sit in different places in a verb-final
+        // language, and "about ... left" cannot be glued onto a Japanese noun
+        // phrase and still parse.
+        const std::string noun = _noun->get();
+        if (measured <= 0 || elapsed <= 0.5) {
+            _log(_total > 0 ? fmt(lmsg::prog_count_total, {noun, done, _total})
+                            : fmt(lmsg::prog_count, {noun, done}));
+            return;
         }
-        _log(line);
+        const double per = elapsed / (double)measured;
+        const std::string rate =
+            per >= 0.5 ? fmt(lmsg::rate_each, {round_to(per, 1)})
+                       : fmt(lmsg::rate_per_second, {round_to(1.0 / per, 0)});
+        if (_total <= 0)
+            _log(fmt(lmsg::prog_count_rate, {noun, done, rate}));
+        else if (_total > done)
+            _log(fmt(lmsg::prog_count_total_rate_eta,
+                     {noun, done, _total, rate,
+                      human_duration(per * (double)(_total - done))}));
+        else
+            _log(fmt(lmsg::prog_count_total_rate, {noun, done, _total, rate}));
     }
 
 private:
     std::function<void(const std::string&)> _log;
-    std::string _noun;
+    const spirula::i18n::Msg* _noun;
     int64_t     _total = 0;
     int64_t     _reported = -1;
     int64_t     _anchor_done = -1;   // count at the first report; see update()
@@ -475,7 +487,7 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
     std::error_code ec;
     fs::create_directories(ws, ec);
     if (job.inputs.empty()) {
-        error = "nothing to prepare: no video or photo folder was picked";
+        error = lmsg::err_nothing_to_prepare.get();
         return false;
     }
 
@@ -549,16 +561,13 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
     out.n_images = count_images(out.image_dir, skip_dir);
     _log(fmt(lmsg::found_images, {(long long)out.n_images, out.image_dir}));
     if (out.n_images < 3) {
-        error = "need at least 3 images (found " + std::to_string(out.n_images) +
-                ")";
+        error = fmt(lmsg::err_too_few_images, {(long long)out.n_images});
         return false;
     }
 
     if (job.mask_enable) {
         if (job.mask_prompt.empty() && job.mask_clicks.empty()) {
-            error = "masking is on but nothing says what to mask: type a prompt "
-                    "(e.g. \"people; cars\"), or open \"Try the mask\" and click "
-                    "the object";
+            error = lmsg::err_mask_no_target.get();
             return false;
         }
         for (size_t i = 0; i < job.inputs.size(); i++) {
@@ -694,9 +703,11 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
     app::FrameExtractSinks sinks;
     sinks.log = _log;
     sinks.cancel = &_cancel;
-    RateLimitedProgress progress(
-        _log, fx.mask.model.empty() ? "frames written" : "frames written and masked",
-        expect);
+    RateLimitedProgress progress(_log,
+                                 fx.mask.model.empty()
+                                     ? lmsg::noun_frames_written
+                                     : lmsg::noun_frames_written_masked,
+                                 expect);
     sinks.progress = [&](int64_t written, int64_t decoded) {
         (void)decoded;
         progress.update(written);
@@ -706,7 +717,7 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
     if (!app::extract_frames(fx, sinks, stats, error)) return false;
     _log(app::format_extract_stats(stats, images, !fx.mask.model.empty()));
     if (stats.written == 0) {
-        error = "no frames were extracted";
+        error = lmsg::err_no_frames_extracted.get();
         return false;
     }
     if (!fx.mask.model.empty()) masked = true;
@@ -719,9 +730,7 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
                                        PrepResult& out, std::string& error) {
     const fs::path ws = job.workspace;
     if (!command_exists(job.ffmpeg_exe)) {
-        error = "ffmpeg not found ('" + job.ffmpeg_exe +
-                "'). Install it, set its path under Tool locations, or build "
-                "with -DSS_ENABLE_PATENTED=ON for in-process decoding.";
+        error = fmt(lmsg::err_ffmpeg_missing, {job.ffmpeg_exe});
         return false;
     }
     _log(fmt(lmsg::video_input, {in.path}));
@@ -758,8 +767,11 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
             int rc = exec({job.ffmpeg_exe, "-nostdin", "-y", "-i", in.path,
                            "-map", "0:v:" + std::to_string(tr), "-c", "copy",
                            tmp_track.string()});
-            if (rc == kCancelled) { error = "cancelled"; return false; }
-            if (rc != 0) { error = "ffmpeg track split failed (see log)"; return false; }
+            if (rc == kCancelled) { error = lmsg::err_cancelled.get(); return false; }
+            if (rc != 0) {
+                error = lmsg::err_ffmpeg_split_failed.get();
+                return false;
+            }
             track_path = tmp_track.string();
         }
 
@@ -774,8 +786,11 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
         int rc = exec({job.ffmpeg_exe, "-nostdin", "-y", "-i", track_path,
                        "-vf", vf, "-qscale:v", "2",
                        (cand / "c_%06d.jpg").string()});
-        if (rc == kCancelled) { error = "cancelled"; return false; }
-        if (rc != 0) { error = "ffmpeg frame extraction failed (see log)"; return false; }
+        if (rc == kCancelled) { error = lmsg::err_cancelled.get(); return false; }
+        if (rc != 0) {
+            error = lmsg::err_ffmpeg_extract_failed.get();
+            return false;
+        }
 
         if (window > 1) _stage(lmsg::stage_select_sharpest.get());
         fs::create_directories(out_dir, ec);
@@ -811,7 +826,7 @@ bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
     std::error_code ec;
     const fs::path src = fs::absolute(in.path, ec);
     if (!fs::is_directory(src, ec)) {
-        error = "not a folder: " + in.path;
+        error = fmt(lmsg::err_not_a_folder, {in.path});
         return false;
     }
     _stage(lmsg::stage_collecting_photos.get());
@@ -820,23 +835,34 @@ bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
     // mask is found by its image's relative name, so the two trees have to move
     // together or every mask stops matching.
     const bool with_masks = !in.mask_dir.empty();
-    struct Tree { fs::path from, to; const char* noun; };
-    std::vector<Tree> trees{{src, fs::path(images), "photos"}};
+    // Photos and masks move the same way but are named differently at every
+    // step, so each carries its three messages rather than a noun that gets
+    // pasted into an English sentence.
+    struct Tree {
+        fs::path from, to;
+        const spirula::i18n::Msg* moving;   // "<kind>: <from> -> <to>"
+        const spirula::i18n::Msg* empty;    // "there are no <kind> in <from>"
+        const spirula::i18n::Msg* counted;  // what the progress line counts
+    };
+    std::vector<Tree> trees{{src, fs::path(images), &lmsg::copying_photos,
+                             &lmsg::err_no_photos_in,
+                             &lmsg::noun_photos_collected}};
     if (with_masks)
-        trees.push_back({fs::absolute(in.mask_dir, ec), fs::path(masks), "masks"});
+        trees.push_back({fs::absolute(in.mask_dir, ec), fs::path(masks),
+                         &lmsg::copying_masks, &lmsg::err_no_masks_in,
+                         &lmsg::noun_masks_collected});
 
     for (const Tree& t : trees) {
-        _log(std::string(t.noun) + ": " + t.from.string() + " -> " + t.to.string());
+        _log(fmt(*t.moving, {t.from.string(), t.to.string()}));
         const std::vector<fs::path> files = walk_images(t.from);
         if (files.empty()) {
-            error = std::string("no ") + t.noun + " in " + t.from.string();
+            error = fmt(*t.empty, {t.from.string()});
             return false;
         }
         int linked = 0, copied = 0, kept = 0;
-        RateLimitedProgress progress(_log, std::string(t.noun) + " collected",
-                                     (int64_t)files.size());
+        RateLimitedProgress progress(_log, *t.counted, (int64_t)files.size());
         for (const fs::path& f : files) {
-            if (_cancel.load()) { error = "cancelled"; return false; }
+            if (_cancel.load()) { error = lmsg::err_cancelled.get(); return false; }
             fs::path rel = f.lexically_relative(t.from);
             if (rel.empty() || *rel.begin() == "..") rel = f.filename();
             const fs::path out_path = t.to / rel;
@@ -850,8 +876,8 @@ bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
                 std::error_code copy_ec;
                 fs::copy_file(f, out_path, copy_ec);
                 if (copy_ec) {
-                    error = "could not put " + f.string() + " into " +
-                            t.to.string() + " (" + copy_ec.message() + ")";
+                    error = fmt(lmsg::err_copy_failed,
+                                {f.string(), t.to.string(), copy_ec.message()});
                     return false;
                 }
                 copied++;
@@ -891,9 +917,7 @@ bool DatasetPrep::generate_masks(const PrepJob& job, const PrepInput& in,
         // The Python fallback is lang-segment-anything: text in, masks out. It
         // has no way to take a click, so saying so beats writing masks that
         // quietly ignore half of what the user asked for.
-        error = "clicked objects need the built-in segmentation; the external "
-                "Python masker only understands text prompts. Turn off "
-                "\"external masking\", or describe the object in words.";
+        error = lmsg::err_clicks_need_builtin.get();
         return false;
     }
     return generate_masks_python(job, images_rel, masks_rel, error);
@@ -915,7 +939,10 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
     // read where they are, and those already have masks -- but the guard costs
     // nothing and the alternative is masking a folder of masks.
     const std::vector<fs::path> files = walk_images(images, masks);
-    if (files.empty()) { error = "no images to mask"; return false; }
+    if (files.empty()) {
+        error = lmsg::err_no_images_to_mask.get();
+        return false;
+    }
 
     sam::MaskOptions mo;
     mo.model = job.mask_model_path;
@@ -953,10 +980,11 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
     app::WriterPool writers;
     int done = 0;
     int64_t index = -1;
-    RateLimitedProgress progress(_log, "images masked", (int64_t)files.size());
+    RateLimitedProgress progress(_log, lmsg::noun_images_masked,
+                                 (int64_t)files.size());
     for (const fs::path& f : files) {
         ++index;
-        if (_cancel.load()) { error = "cancelled"; return false; }
+        if (_cancel.load()) { error = lmsg::err_cancelled.get(); return false; }
         // Masks mirror the image tree, so cam0/ and cam1/ keep their names.
         fs::path rel = fs::relative(f, image_root, ec);
         if (ec || rel.empty()) rel = f.filename();
@@ -972,8 +1000,8 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
         }
         sam::Mask mask;
         if (!masker.run(img, mask, nullptr, index)) {
-            error = "masking failed on " + f.filename().string() + ": " +
-                    masker.lastError();
+            error = fmt(lmsg::err_masking_failed_on,
+                        {f.filename().string(), masker.lastError()});
             return false;
         }
         app::WriteJob wj;
@@ -1004,17 +1032,17 @@ bool DatasetPrep::generate_masks_python(const PrepJob& job,
                                         std::string& error) {
     _stage(lmsg::stage_masks_python.get());
     if (!command_exists(job.python_exe)) {
-        error = "Python not found ('" + job.python_exe +
-                "'); external masking needs Python with the "
-                "lang-segment-anything package. Set the Python path under "
-                "Tool locations, or use the built-in segmentation.";
+        error = fmt(lmsg::err_python_missing, {job.python_exe});
         return false;
     }
     const fs::path ws = job.workspace;
     const fs::path script = ws / ".spirula_mask.py";
     {
         FILE* f = std::fopen(script.string().c_str(), "wb");
-        if (!f) { error = "cannot write " + script.string(); return false; }
+        if (!f) {
+            error = fmt(lmsg::err_cannot_write, {script.string()});
+            return false;
+        }
         std::fwrite(kMaskPy, 1, kMaskPySize, f);
         std::fclose(f);
     }
@@ -1044,22 +1072,21 @@ bool DatasetPrep::generate_masks_python(const PrepJob& job,
             l.find("ModuleNotFoundError") != std::string::npos)
             install_hint = l;
     }, _cancel);
-    if (rc == kCancelled) { error = "cancelled"; return false; }
+    if (rc == kCancelled) { error = lmsg::err_cancelled.get(); return false; }
 
     std::error_code ec;
     const bool have_masks = fs::is_directory(ws / masks_rel, ec) &&
                             !fs::is_empty(ws / masks_rel, ec);
     if (!install_hint.empty() || rc != 0 || !have_masks) {
-        error = "Mask generation failed";
-        if (!install_hint.empty())
-            error += " -- missing Python packages. Install "
-                     "lang-segment-anything (pip install git+https://github.com/"
-                     "luca-medeiros/lang-segment-anything, needs CUDA PyTorch)"
-                     + std::string(job.mask_model_name == "sam3"
-                         ? ", or for SAM 3: https://github.com/facebookresearch/sam3"
-                         : "");
+        // Three whole sentences rather than one with tails appended: the
+        // install advice is the message when there is any, and which advice
+        // depends on the model.
+        if (install_hint.empty())
+            error = lmsg::err_mask_generation_failed.get();
+        else if (job.mask_model_name == "sam3")
+            error = lmsg::err_mask_missing_packages_sam3.get();
         else
-            error += " (see log)";
+            error = lmsg::err_mask_missing_packages.get();
         return false;
     }
     return true;

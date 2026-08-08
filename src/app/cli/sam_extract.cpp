@@ -23,6 +23,9 @@
 
 #include "app/FrameExtract.h"
 #include "app/Tools.h"
+#include "i18n/catalog/Cli.h"
+#include "i18n/catalog/Data.h"
+#include "i18n/catalog/SamHelp.h"
 #include "nn/core/Log.h"
 #include "sam/Masking.h"
 
@@ -48,45 +51,54 @@ void set_env(const char* key, const char* value) {
 // Options
 // ---------------------------------------------------------------------------
 
+// A row of `--help`: identifier on the left, translated sentence on the right,
+// wrapped by i18n::wrap so a language without spaces still breaks.
+void help_row(const char* flags, const spirula::i18n::Msg& m) {
+    constexpr int kCol = 25;
+    std::string left = std::string("  ") + flags;
+    if (spirula::i18n::display_width(left) >= kCol) {
+        std::fprintf(stderr, "%s\n", left.c_str());
+        left.clear();
+    }
+    left = spirula::i18n::pad_to(left, kCol);
+    for (const std::string& line : spirula::i18n::wrap(m.get(), 86 - kCol)) {
+        std::fprintf(stderr, "%s%s\n", left.c_str(), line.c_str());
+        left.assign(kCol, ' ');
+    }
+}
+
 void usage() {
-    static const char* kUsage =
-        "spirula-sam extract <video> [options]\n"
-        "\n"
-        "Frame selection\n"
-        "  -o, --out <dir>        output directory (default: <video-without-ext>/images)\n"
-        "  -s, --skip <n>         write one frame every n source frames (default 1)\n"
-        "  -k, --keep <n>         choose the sharpest of the last n frames;\n"
-        "                         -1 = round(skip/2) (default), 0 = no selection\n"
-        "  -n, --max-frames <n>   stop after writing n frames\n"
-        "  -q, --quality <0..100> JPEG quality; outside that range writes PNG (default 95)\n"
-        "  -r, --rotate <deg>     0, 90, 180 or 270, clockwise\n"
-        "      --scale <f>        resize factor, <= 1\n"
-        "      --track <i>        video track to read; default is every track,\n"
-        "                         written to <out>/cam0, <out>/cam1, ...\n"
-        "      --threads <n>      image-encoder threads (default: cores - 1)\n"
-        "\n"
-        "Masking (needs --model)\n"
-        "      --model <file>     SAM 3 checkpoint\n"
-        "      --text <phrases>   semicolon-separated noun phrases, e.g. \"person; car\"\n"
-        "      --neg-text <ph>    phrases to subtract from the mask\n"
-        "      --mask-mode <m>    video (default) tracks instances across frames;\n"
-        "                         image treats every written frame independently\n"
-        "      --mask-keep <w>    background (default): the prompt names distractors and\n"
-        "                         everything else is kept; subject: the prompt names what\n"
-        "                         to keep and everything else is masked out\n"
-        "      --mask-out <dir>   default: 'masks' beside the image directory\n"
-        "      --detect-every <n> run the detector every n frames (default 1); the\n"
-        "                         memory bank carries instances in between\n"
-        "      --memory-frames <n> cap spatial memory frames per instance; memory\n"
-        "                         attention is linear in this and dominates the cost\n"
-        "      --max-size <n>     longest side handed to the model (default 1600,\n"
-        "                         0 = off); masks come back at frame resolution\n"
-        "      --threshold <f>    detection score threshold (default 0.5)\n"
-        "      --nms <f>          NMS IoU threshold (default 0.1)\n"
-        "      --overlay          also write a colour overlay next to each mask\n"
-        "\n"
-        "Common: --device <index|name>  --profile  --validate\n";
-    std::fprintf(stderr, "%s", app::help_text(kUsage, "spirula-sam").c_str());
+    namespace H = spirula::i18n::msg::samhelp;
+    std::fprintf(stderr, "%s extract <video> [options]\n\n",
+                 app::program_name().c_str());
+
+    std::fprintf(stderr, "%s\n", H::xh_frame_selection.get());
+    help_row("-o, --out <dir>", H::xh_out);
+    help_row("-s, --skip <n>", H::xh_skip);
+    help_row("-k, --keep <n>", H::xh_keep);
+    help_row("-n, --max-frames <n>", H::xh_max_frames);
+    help_row("-q, --quality <0..100>", H::xh_quality);
+    help_row("-r, --rotate <deg>", H::xh_rotate);
+    help_row("    --scale <f>", H::xh_scale);
+    help_row("    --track <i>", H::xh_track);
+    help_row("    --threads <n>", H::xh_threads);
+
+    std::fprintf(stderr, "\n%s\n", H::xh_masking.get());
+    help_row("    --model <file>", H::xh_model);
+    help_row("    --text <phrases>", H::xh_text);
+    help_row("    --neg-text <ph>", H::xh_neg_text);
+    help_row("    --mask-mode <m>", H::xh_mask_mode);
+    help_row("    --mask-keep <w>", H::xh_mask_keep);
+    help_row("    --mask-out <dir>", H::xh_mask_out);
+    help_row("    --detect-every <n>", H::xh_detect_every);
+    help_row("    --memory-frames <n>", H::xh_memory_frames);
+    help_row("    --max-size <n>", H::xh_max_size);
+    help_row("    --threshold <f>", H::xh_threshold);
+    help_row("    --nms <f>", H::xh_nms);
+    help_row("    --overlay", H::xh_overlay);
+
+    std::fprintf(stderr, "\n%s --device <index|name>  --profile  --validate\n",
+                 H::label_common.get());
 }
 
 struct Options {
@@ -112,7 +124,10 @@ bool parse_args(int argc, char** argv, Options& o) {
         const std::string a = argv[i];
         auto next = [&](const char* what) -> const char* {
             if (i + 1 >= argc) {
-                std::fprintf(stderr, "%s needs a value\n", what);
+                std::fprintf(stderr, "%s\n",
+                             spirula::i18n::format(
+                                 spirula::i18n::msg::cli::sam_flag_needs_value,
+                                 {what}).c_str());
                 std::exit(2);
             }
             return argv[++i];
@@ -143,12 +158,18 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--validate") o.validate = true;
         else if (a == "-h" || a == "--help") return false;
         else if (a[0] == '-') {
-            std::fprintf(stderr, "unknown option %s\n", a.c_str());
+            std::fprintf(stderr, "%s\n",
+                         spirula::i18n::format(
+                             spirula::i18n::msg::cli::sam_unknown_option,
+                             {a}).c_str());
             return false;
         } else if (o.input.empty()) {
             o.input = a;
         } else {
-            std::fprintf(stderr, "unexpected argument %s\n", a.c_str());
+            std::fprintf(stderr, "%s\n",
+                         spirula::i18n::format(
+                             spirula::i18n::msg::cli::sam_unexpected_argument,
+                             {a}).c_str());
             return false;
         }
     }
@@ -156,7 +177,8 @@ bool parse_args(int argc, char** argv, Options& o) {
     if (o.skip < 1) o.skip = 1;
     if (o.keep < 0) o.keep = (int)(0.5 * o.skip + 0.5);
     if (o.rotate % 90 != 0) {
-        std::fprintf(stderr, "--rotate must be a multiple of 90\n");
+        std::fprintf(stderr, "%s\n",
+                     spirula::i18n::msg::cli::sam_rotate_multiple_of_90.get());
         return false;
     }
     return true;
@@ -220,14 +242,19 @@ int sam_cli_extract(int argc, char** argv) {
     std::string error;
     int rc = 0;
     if (!app::extract_frames(job, sinks, stats, error)) {
-        std::fprintf(stderr, "error: %s\n", error.c_str());
+        std::fprintf(stderr, "%s\n",
+                     spirula::i18n::format(spirula::i18n::msg::cli::error_line,
+                                           {error}).c_str());
         rc = 1;
     }
     std::printf("%s", app::format_extract_stats(stats, base.string(),
                                                 !o.model.empty()).c_str());
     if (stats.write_failures) {
-        std::fprintf(stderr, "warning: %d image(s) failed to write\n",
-                     stats.write_failures);
+        std::fprintf(stderr, "%s %s\n",
+                     spirula::i18n::msg::data::word_warning.get(),
+                     spirula::i18n::format(
+                         spirula::i18n::msg::data::write_failures,
+                         {stats.write_failures}).c_str());
         rc = 1;
     }
     return rc;

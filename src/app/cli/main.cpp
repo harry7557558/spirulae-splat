@@ -18,6 +18,7 @@
 #include "app/TrainerCore.h"
 #include "app/webviewer/Viewer.h"
 #include "checkpoint/Resume.h"
+#include "i18n/catalog/Cli.h"
 #include "i18n/catalog/Train.h"
 #include "i18n/catalog/TrainFields.h"
 
@@ -38,6 +39,9 @@
 namespace fs = std::filesystem;
 
 using namespace spirula;
+
+namespace cmsg = spirula::i18n::msg::cli;
+using spirula::i18n::format;
 
 
 // ===========================================================================
@@ -251,13 +255,16 @@ void select_and_print_devices(const std::string& requested) {
                 "a run without --device)");
     }
     int cur = backend::device_current();
-    std::printf("Devices:\n");
+    std::printf("%s\n", cmsg::devices_header.get());
     for (int i = 0; i < n; i++) {
         backend::DeviceInfo d = backend::device_info(i);
+        // The name and the type come from the driver; only the note after an
+        // unusable row is ours to translate.
+        const std::string note =
+            d.usable ? std::string() : "  " + std::string(cmsg::device_unusable.get());
         std::printf("  %c [%d] %s (%s, %llu MB)%s\n", i == cur ? '*' : ' ',
                     i, d.name, d.type,
-                    (unsigned long long)(d.vram_bytes >> 20),
-                    d.usable ? "" : "  [missing required features]");
+                    (unsigned long long)(d.vram_bytes >> 20), note.c_str());
     }
     std::fflush(stdout);
 }
@@ -265,8 +272,8 @@ void select_and_print_devices(const std::string& requested) {
 // `max_tier` is a rank into kTrainTiers: 0 lists only the flags a first run
 // needs (--help), kTrainNumTiers-1 lists every one of them (--help-all).
 void print_help(const char* argv0, const TrainConfig& c, int max_tier) {
-    std::printf("usage: %s [<preset>] --data <dataset_dir> [--flag value ...]\n\n", argv0);
-    std::printf("presets (tyro subcommands; default: 3dgs):\n");
+    std::printf("%s\n\n", format(cmsg::train_usage, {argv0}).c_str());
+    std::printf("%s\n", cmsg::train_presets_header.get());
     static_assert(sizeof(kTrainPresets) / sizeof(kTrainPresets[0]) ==
                       spirula::i18n::msg::train::kNumPresetText,
                   "config/TrainConfig.h and i18n/catalog/Train.h disagree "
@@ -279,12 +286,10 @@ void print_help(const char* argv0, const TrainConfig& c, int max_tier) {
         const auto* t = spirula::i18n::msg::train::preset_text(p.name);
         std::printf("  %-18s %s\n", p.name, t ? t->help->get() : "");
     }
-    std::printf("\napp flags:\n");
-    std::printf("  --device <index|name substring>\n"
-                "      Compute device to train on (default: auto). The device"
-                " list prints at startup.\n");
-    std::printf("\nflags ('-' and '_' interchangeable; bools take 0/1; 'none' clears "
-                "optional values;\n defaults shown for the selected preset):\n");
+    std::printf("\n%s\n", cmsg::train_app_flags_header.get());
+    std::printf("  --device <index|name substring>\n      %s\n",
+                cmsg::train_device_help.get());
+    std::printf("\n%s\n", cmsg::train_flags_header.get());
 
     // Pass 1: how many flags each heading has left after the tier filter, so
     // a heading with nothing under it is not printed at all.
@@ -321,8 +326,7 @@ void print_help(const char* argv0, const TrainConfig& c, int max_tier) {
 #undef SS_PRINT_HELP
 
     if (hidden)
-        std::printf("\n%d more flags, for tuning rather than for getting a "
-                    "first result: --help-all\n", hidden);
+        std::printf("\n%s\n", format(cmsg::train_more_flags, {hidden}).c_str());
 }
 
 
@@ -446,7 +450,7 @@ int spirula_train_main(int argc, char** argv) {
         // Everything the user named on this command line is layered back on.
         if (!cfg.resume.empty()) {
             cfg = ckpt::build_resume_config(cfg, preset_arg, seen);
-            std::printf("[resume] %s\n", cfg.resume.c_str());
+            std::printf("%s\n", format(cmsg::resume_target, {cfg.resume}).c_str());
         }
 
 #define SS_CHECK_REQUIRED(member)                                          \
@@ -483,9 +487,9 @@ int spirula_train_main(int argc, char** argv) {
             viewer.start("0.0.0.0", cfg.viewer_port,
                          session.make_viewer_config(), session.make_viewer_hooks(),
                          session.post);
-            std::printf("Viewer at http://0.0.0.0:%d/ (forward the port for "
-                        "remote boxes: ssh -L %d:localhost:%d <host>)\n",
-                        cfg.viewer_port, cfg.viewer_port, cfg.viewer_port);
+            std::printf("%s\n", format(cmsg::viewer_at,
+                                       {cfg.viewer_port, cfg.viewer_port,
+                                        cfg.viewer_port}).c_str());
         }
 
         // ---- Train loop ------------------------------------------------------
@@ -495,8 +499,16 @@ int spirula_train_main(int argc, char** argv) {
             if (p.step % 100 == 0 || p.step == p.total_steps - 1) {
                 double dt = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - t0).count();
-                std::printf("step %6d/%d  splats %lld  [%.1fs]",
-                            p.step, p.total_steps, (long long)p.num_splats, dt);
+                // The step and the elapsed time are padded/rounded here rather
+                // than by the message, so the numbers keep their column while
+                // the words around them change length per language.
+                char step[16], secs[16];
+                std::snprintf(step, sizeof step, "%6d", p.step);
+                std::snprintf(secs, sizeof secs, "%.1f", dt);
+                std::printf("%s", format(cmsg::train_step_line,
+                                         {step, p.total_steps,
+                                          (long long)p.num_splats,
+                                          secs}).c_str());
                 for (const char* k : {"rgb_loss", "ssim", "psnr"}) {
                     auto it = p.losses.find(k);
                     if (it != p.losses.end()) std::printf("  %s=%.4g", k, it->second);
@@ -512,14 +524,13 @@ int spirula_train_main(int argc, char** argv) {
         session.eval();
 
         if (viewer_on && cfg.keep_viewer_alive) {
-            std::printf("Training complete. Viewer still running -- press "
-                        "Ctrl-C to exit.\n");
+            std::printf("%s\n", cmsg::train_done_viewer.get());
             std::fflush(stdout);
             for (;;) std::this_thread::sleep_for(std::chrono::seconds(3600));
         }
 
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "error: %s\n", e.what());
+        std::fprintf(stderr, "%s\n", format(cmsg::error_line, {e.what()}).c_str());
         return 1;
     }
     return 0;

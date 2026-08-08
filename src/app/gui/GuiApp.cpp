@@ -3073,12 +3073,16 @@ void GuiApp::draw_batch_table() {
                          ImGuiTableColumnFlags_WidthStretch, 3.0f);
     ui::TableSetupColumn(msg::batch_col_preset,
                          ImGuiTableColumnFlags_WidthStretch, 2.0f);
+    // Wide enough for the longest of the thirteen headings, not just the
+    // English one: a fixed column sized to "Max splats" truncates
+    // "Максимум сплатов" and every CJK heading, whose characters are twice
+    // as wide as they are numerous.
     ui::TableSetupColumn(msg::batch_col_splats,
-                         ImGuiTableColumnFlags_WidthFixed, 86.0f);
+                         ImGuiTableColumnFlags_WidthFixed, 116.0f);
     ui::TableSetupColumn(msg::batch_col_sh,
-                         ImGuiTableColumnFlags_WidthFixed, 74.0f);
+                         ImGuiTableColumnFlags_WidthFixed, 90.0f);
     ui::TableSetupColumn(msg::batch_col_steps,
-                         ImGuiTableColumnFlags_WidthFixed, 74.0f);
+                         ImGuiTableColumnFlags_WidthFixed, 84.0f);
     ui::TableSetupColumn(msg::batch_col_output,
                          ImGuiTableColumnFlags_WidthStretch, 3.0f);
     ui::TableSetupColumn(msg::batch_col_status,

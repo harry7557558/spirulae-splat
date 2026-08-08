@@ -318,6 +318,28 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   Where those values are ordinary words the GUI shows the translation in
   front of the value rather than instead of it — "按间隔 (interval)".
   `spirula train --help` reads the same catalog, so it follows `--lang`.
+- **The command line is interface copy too, and so is everything a run
+  prints.** A terminal has no language picker to fix it with afterwards, and
+  the GUI *shows* a terminal: `spirula sfm` and `spirula mesh` run inside it as
+  child processes launched with `--lang`. `spirula --help` and the trainer's
+  output are `catalog/Cli.h`; a reconstruction is `catalog/Sfm.h` through
+  `src/sfm/core/Log.h`; a meshing run is `catalog/Mesh.h` through
+  `src/mesh/MeshLog.h`; reading a dataset is `catalog/Data.h`. `--help` is
+  included: `spirula sfm --help` alone is 120 flag descriptions
+  (`catalog/SfmFields.h`) plus its command pages (`catalog/SfmHelp.h`), and
+  `spirula sam --help` is `catalog/SamHelp.h`.
+- **Help text is stored one string per paragraph and wrapped by
+  `i18n::wrap()`, never by hand.** It measures in terminal columns rather than
+  bytes, and it breaks BETWEEN CHARACTERS in the languages that have no spaces
+  to break at -- without which a Chinese paragraph is one line four hundred
+  columns wide. `i18n::pad_to()` lays out the flag column the same way.
+- **A parent that reads a child's output matches on the MESSAGE, never on
+  English.** `i18n::scan()` is the inverse of `i18n::format()`: hand it the
+  same `Msg` the child printed with and it gives back what stood in the `{0}`,
+  `{1}` positions. That is how `src/app/gui/MeshRunner.cpp` drives its progress
+  bar off a Japanese child. Two rules follow for any message a parent reads:
+  keep a separator between adjacent placeholders, and do not reorder the
+  numbers past what every translation can live with.
 - **A mask prompt is English, not interface copy.** SAM 3's text encoder reads
   English, so the field, its placeholder and the palette's inserted words stay
   English in every language; `ui::InputTextEnglish()` is the wrapper that says
@@ -327,8 +349,10 @@ CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
   `i18n/catalog/Log.h`, its own lines are not ours to rewrite. `spirula sfm`
   is ours, so it *is* translated: every line a default run prints goes through
   `src/sfm/core/Log.h`, which puts a localized, equal-width `[tag]` in front
-  of a localized message (`i18n/catalog/Sfm.h`). Its deep diagnostics and
-  `--help` stay English.
+  of a localized message (`i18n/catalog/Sfm.h`). `spirula mesh` is ours in the
+  same way. What stays English in both is the deep diagnostics — `--check`,
+  `--audit`, `SS_SFM_MAP_PROF`, `SS_MESH_DEBUG_RENDER` — and `spirula sam`'s
+  machine-readable detection table, which a script reads.
 
 ## Gotchas worth knowing before you hit them
 

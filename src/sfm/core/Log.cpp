@@ -72,39 +72,7 @@ void write(std::FILE* f, Tag t, const std::string& body) {
 }  // namespace
 
 
-int display_width(const char* s) {
-    // UTF-8 decode, counting East Asian Wide / Fullwidth as two columns. The
-    // ranges are the ones a tag can plausibly land in -- CJK, kana, hangul and
-    // fullwidth forms -- not a full UAX #11 table.
-    int w = 0;
-    for (const unsigned char* p = (const unsigned char*)s; *p;) {
-        uint32_t cp = *p;
-        int len = 1;
-        if (cp >= 0xF0)      { cp &= 0x07; len = 4; }
-        else if (cp >= 0xE0) { cp &= 0x0F; len = 3; }
-        else if (cp >= 0xC0) { cp &= 0x1F; len = 2; }
-        for (int i = 1; i < len; i++) {
-            if ((p[i] & 0xC0) != 0x80) { len = i; break; }
-            cp = (cp << 6) | (p[i] & 0x3F);
-        }
-        p += len;
-        const bool wide =
-            (cp >= 0x1100 && cp <= 0x115F) ||    // hangul jamo
-            (cp >= 0x2E80 && cp <= 0x303E) ||    // CJK radicals, punctuation
-            (cp >= 0x3041 && cp <= 0x33FF) ||    // kana, hangul compat, CJK compat
-            (cp >= 0x3400 && cp <= 0x4DBF) ||    // CJK ext A
-            (cp >= 0x4E00 && cp <= 0x9FFF) ||    // CJK unified
-            (cp >= 0xA000 && cp <= 0xA4CF) ||    // yi
-            (cp >= 0xAC00 && cp <= 0xD7A3) ||    // hangul syllables
-            (cp >= 0xF900 && cp <= 0xFAFF) ||    // CJK compat ideographs
-            (cp >= 0xFE30 && cp <= 0xFE6F) ||    // CJK compat forms
-            (cp >= 0xFF00 && cp <= 0xFF60) ||    // fullwidth forms
-            (cp >= 0xFFE0 && cp <= 0xFFE6) ||
-            (cp >= 0x20000 && cp <= 0x3FFFD);    // CJK ext B+
-        w += wide ? 2 : 1;
-    }
-    return w;
-}
+int display_width(const char* s) { return spirula::i18n::display_width(s); }
 
 std::string prefix(Tag t) {
     std::lock_guard<std::mutex> lk(g_mu);

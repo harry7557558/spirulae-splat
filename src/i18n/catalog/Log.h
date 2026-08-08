@@ -1162,6 +1162,1465 @@ SS_MSG(err_mesh_failed,
     RU("Не удалось построить меш (смотрите журнал)."),
     TR("Ağ çıkarma başarısız oldu (günlüğe bakın)."));
 
+
+// ===========================================================================
+// What the trainer says about its own limits
+// ===========================================================================
+//
+// The flag NAME in each of these is an identifier -- `--use-bvh` is
+// `--use-bvh` in every language -- so it arrives as {0} and is printed
+// verbatim. These reach the GUI's batch pre-flight as well as the log, which
+// is why they are messages and not sentences built in place.
+
+SS_MSG(not_supported_yet,
+    EN("{0} is not supported yet"),
+    JA("{0} はまだ対応していません"),
+    ZH_HANS("{0} 还不支持"),
+    ZH_HANT("{0} 還不支援"),
+    KO("{0}은(는) 아직 지원하지 않습니다"),
+    DE("{0} wird noch nicht unterstützt"),
+    FR("{0} n'est pas encore pris en charge"),
+    ES("{0} todavía no está admitido"),
+    PT("{0} ainda não é aceito"),
+    IT("{0} non è ancora supportato"),
+    NL("{0} wordt nog niet ondersteund"),
+    RU("{0} пока не поддерживается"),
+    TR("{0} henüz desteklenmiyor"));
+SS_MSG(bad_quantization_level,
+    EN("quantization_level must be 0 or 1"),
+    JA("quantization_level は 0 か 1 にしてください"),
+    ZH_HANS("quantization_level 必须是 0 或 1"),
+    ZH_HANT("quantization_level 必須是 0 或 1"),
+    KO("quantization_level은 0 또는 1이어야 합니다"),
+    DE("quantization_level muss 0 oder 1 sein"),
+    FR("quantization_level doit valoir 0 ou 1"),
+    ES("quantization_level debe ser 0 o 1"),
+    PT("quantization_level precisa ser 0 ou 1"),
+    IT("quantization_level deve essere 0 o 1"),
+    NL("quantization_level moet 0 of 1 zijn"),
+    RU("quantization_level должен быть 0 или 1"),
+    TR("quantization_level 0 ya da 1 olmalı"));
+SS_MSG(warn_validation_unported,
+    EN("warning: validation images are held out but early stopping / eval is "
+       "not ported yet"),
+    JA("警告: 検証用の画像は取り分けられますが、早期終了と評価はまだ移植されて"
+       "いません"),
+    ZH_HANS("警告：验证图像已经留出，但提前停止和评估还没有移植过来"),
+    ZH_HANT("警告：驗證影像已經留出，但提前停止和評估還沒有移植過來"),
+    KO("경고: 검증용 이미지는 떼어 두지만, 조기 종료와 평가는 아직 이식되지 "
+       "않았습니다"),
+    DE("Warnung: Validierungsbilder werden zurückgehalten, aber vorzeitiges "
+       "Beenden und die Auswertung sind noch nicht portiert"),
+    FR("Avertissement : des images de validation sont mises de côté, mais "
+       "l'arrêt anticipé et l'évaluation ne sont pas encore portés"),
+    ES("Aviso: se apartan imágenes de validación, pero la parada temprana y la "
+       "evaluación todavía no están portadas"),
+    PT("Aviso: imagens de validação são separadas, mas a parada antecipada e a "
+       "avaliação ainda não foram portadas"),
+    IT("Avviso: le immagini di validazione vengono messe da parte, ma "
+       "l'arresto anticipato e la valutazione non sono ancora stati portati"),
+    NL("Waarschuwing: er worden validatiebeelden apart gehouden, maar vroegtijdig "
+       "stoppen en evalueren zijn nog niet overgezet"),
+    RU("Предупреждение: проверочные снимки откладываются, но ранняя остановка и "
+       "оценка ещё не перенесены"),
+    TR("Uyarı: doğrulama görüntüleri ayrılıyor ama erken durdurma ve "
+       "değerlendirme henüz taşınmadı"));
+// {0} is --orientation-method's value and {1} is --center-method's; both are
+// identifiers ('up', 'poses') and print verbatim.
+SS_MSG(warn_pose_normalization_approx,
+    EN("warning: orientation/center method '{0}'/'{1}' approximated as "
+       "'up'/'poses' (affects only train_frame_scale; see "
+       "docs/notes/pose-normalization.md for the unported reference "
+       "implementation)"),
+    JA("警告: 向き／中心の求め方 '{0}'／'{1}' は 'up'／'poses' で近似します"
+       "（影響するのは train_frame_scale だけです。未移植の参照実装は "
+       "docs/notes/pose-normalization.md にあります）"),
+    ZH_HANS("警告：朝向／中心方法 '{0}'／'{1}' 用 'up'／'poses' 近似"
+            "（只影响 train_frame_scale；未移植的参考实现见 "
+            "docs/notes/pose-normalization.md）"),
+    ZH_HANT("警告：朝向／中心方法 '{0}'／'{1}' 用 'up'／'poses' 近似"
+            "（只影響 train_frame_scale；未移植的參考實作見 "
+            "docs/notes/pose-normalization.md）"),
+    KO("경고: 방향/중심 방식 '{0}'/'{1}'을(를) 'up'/'poses'로 근사합니다"
+       "(train_frame_scale에만 영향을 줍니다. 이식되지 않은 참조 구현은 "
+       "docs/notes/pose-normalization.md에 있습니다)"),
+    DE("Warnung: Ausrichtungs-/Zentrierungsverfahren '{0}'/'{1}' wird durch "
+       "'up'/'poses' angenähert (betrifft nur train_frame_scale; die nicht "
+       "portierte Referenzimplementierung steht in "
+       "docs/notes/pose-normalization.md)"),
+    FR("Avertissement : les méthodes d'orientation/centrage '{0}'/'{1}' sont "
+       "approchées par 'up'/'poses' (n'affecte que train_frame_scale ; "
+       "l'implémentation de référence, non portée, est dans "
+       "docs/notes/pose-normalization.md)"),
+    ES("Aviso: los métodos de orientación/centrado '{0}'/'{1}' se aproximan "
+       "por 'up'/'poses' (solo afecta a train_frame_scale; la implementación "
+       "de referencia, sin portar, está en docs/notes/pose-normalization.md)"),
+    PT("Aviso: os métodos de orientação/centralização '{0}'/'{1}' são "
+       "aproximados por 'up'/'poses' (afeta só train_frame_scale; a "
+       "implementação de referência, não portada, está em "
+       "docs/notes/pose-normalization.md)"),
+    IT("Avviso: i metodi di orientamento/centratura '{0}'/'{1}' sono "
+       "approssimati con 'up'/'poses' (riguarda solo train_frame_scale; "
+       "l'implementazione di riferimento, non portata, è in "
+       "docs/notes/pose-normalization.md)"),
+    NL("Waarschuwing: de oriëntatie-/centreermethode '{0}'/'{1}' wordt benaderd "
+       "met 'up'/'poses' (raakt alleen train_frame_scale; de niet overgezette "
+       "referentie-implementatie staat in docs/notes/pose-normalization.md)"),
+    RU("Предупреждение: способы ориентации/центрирования '{0}'/'{1}' заменены "
+       "приближением 'up'/'poses' (влияет только на train_frame_scale; "
+       "непереносённая эталонная реализация -- в "
+       "docs/notes/pose-normalization.md)"),
+    TR("Uyarı: yönlendirme/merkezleme yöntemi '{0}'/'{1}', 'up'/'poses' ile "
+       "yaklaşık olarak karşılanıyor (yalnızca train_frame_scale'i etkiler; "
+       "taşınmamış referans gerçekleme docs/notes/pose-normalization.md "
+       "dosyasında)"));
+
+// ===========================================================================
+// Meshing stages -- the caption under the GUI's mesh progress bar
+// ===========================================================================
+//
+// `spirula mesh` runs as a child process and prints "[meshing] <stage> ..."
+// lines that are DIAGNOSTICS: numbers, timings, chart counts, read by whoever
+// is tuning the pipeline, and English like the rest of that layer. The GUI
+// reads those same lines to move its progress bar (src/app/gui/MeshRunner.cpp),
+// which is the second reason they do not get translated -- they are a protocol
+// between two processes, and a protocol in thirteen languages is thirteen
+// protocols.
+//
+// What the GUI SHOWS, though, is addressed to whoever is waiting for a mesh.
+// So MeshRunner matches the English stage word and displays the message below
+// it. One entry per row of kStages there; adding a stage there without one
+// here shows nothing, which is why the two lists sit next to each other in
+// that file.
+
+SS_MSG(mesh_stage_loading,
+    EN("Loading the model"),
+    JA("モデルを読み込んでいます"),
+    ZH_HANS("正在加载模型"),
+    ZH_HANT("正在載入模型"),
+    KO("모델을 불러오는 중"),
+    DE("Modell wird geladen"),
+    FR("Chargement du modèle"),
+    ES("Cargando el modelo"),
+    PT("Carregando o modelo"),
+    IT("Caricamento del modello"),
+    NL("Model laden"),
+    RU("Загрузка модели"),
+    TR("Model yükleniyor"));
+SS_MSG(mesh_stage_point_cloud,
+    EN("Sampling a point cloud"),
+    JA("点群をサンプリングしています"),
+    ZH_HANS("正在采样点云"),
+    ZH_HANT("正在取樣點雲"),
+    KO("점 구름을 표본으로 뽑는 중"),
+    DE("Punktwolke wird abgetastet"),
+    FR("Échantillonnage d'un nuage de points"),
+    ES("Muestreando una nube de puntos"),
+    PT("Amostrando uma nuvem de pontos"),
+    IT("Campionamento di una nuvola di punti"),
+    NL("Puntenwolk bemonsteren"),
+    RU("Выборка облака точек"),
+    TR("Nokta bulutu örnekleniyor"));
+SS_MSG(mesh_stage_delaunay,
+    EN("Triangulating the points"),
+    JA("点を三角形分割しています"),
+    ZH_HANS("正在对点做三角剖分"),
+    ZH_HANT("正在對點做三角剖分"),
+    KO("점을 삼각 분할하는 중"),
+    DE("Punkte werden trianguliert"),
+    FR("Triangulation des points"),
+    ES("Triangulando los puntos"),
+    PT("Triangulando os pontos"),
+    IT("Triangolazione dei punti"),
+    NL("Punten trianguleren"),
+    RU("Триангуляция точек"),
+    TR("Noktalar üçgenleniyor"));
+SS_MSG(mesh_stage_occupancy,
+    EN("Measuring where the surface is"),
+    JA("面がどこにあるかを調べています"),
+    ZH_HANS("正在判断表面在哪里"),
+    ZH_HANT("正在判斷表面在哪裡"),
+    KO("표면이 어디인지 재는 중"),
+    DE("Es wird ermittelt, wo die Oberfläche liegt"),
+    FR("Repérage de la surface"),
+    ES("Midiendo dónde está la superficie"),
+    PT("Medindo onde está a superfície"),
+    IT("Individuazione della superficie"),
+    NL("Bepalen waar het oppervlak ligt"),
+    RU("Определение положения поверхности"),
+    TR("Yüzeyin nerede olduğu ölçülüyor"));
+SS_MSG(mesh_stage_cut_edges,
+    EN("Finding the surface crossings"),
+    JA("面と交わる辺を探しています"),
+    ZH_HANS("正在寻找与表面相交的边"),
+    ZH_HANT("正在尋找與表面相交的邊"),
+    KO("표면과 만나는 모서리를 찾는 중"),
+    DE("Die Kanten durch die Oberfläche werden gesucht"),
+    FR("Recherche des arêtes traversant la surface"),
+    ES("Buscando las aristas que cruzan la superficie"),
+    PT("Procurando as arestas que cruzam a superfície"),
+    IT("Ricerca degli spigoli che attraversano la superficie"),
+    NL("Zoeken naar de ribben door het oppervlak"),
+    RU("Поиск рёбер, пересекающих поверхность"),
+    TR("Yüzeyi kesen kenarlar aranıyor"));
+SS_MSG(mesh_stage_bisection,
+    EN("Pinning the surface down"),
+    JA("面の位置を絞り込んでいます"),
+    ZH_HANS("正在把表面位置收紧"),
+    ZH_HANT("正在把表面位置收緊"),
+    KO("표면 위치를 좁히는 중"),
+    DE("Die Lage der Oberfläche wird eingegrenzt"),
+    FR("Localisation précise de la surface"),
+    ES("Afinando la posición de la superficie"),
+    PT("Afinando a posição da superfície"),
+    IT("Individuazione precisa della superficie"),
+    NL("De ligging van het oppervlak nauwkeuriger bepalen"),
+    RU("Уточнение положения поверхности"),
+    TR("Yüzeyin yeri daraltılıyor"));
+SS_MSG(mesh_stage_marching_tets,
+    EN("Building the triangles"),
+    JA("三角形を組み立てています"),
+    ZH_HANS("正在生成三角面"),
+    ZH_HANT("正在產生三角面"),
+    KO("삼각형을 만드는 중"),
+    DE("Dreiecke werden gebaut"),
+    FR("Construction des triangles"),
+    ES("Construyendo los triángulos"),
+    PT("Construindo os triângulos"),
+    IT("Costruzione dei triangoli"),
+    NL("Driehoeken bouwen"),
+    RU("Построение треугольников"),
+    TR("Üçgenler oluşturuluyor"));
+SS_MSG(mesh_stage_merge,
+    EN("Merging short edges"),
+    JA("短い辺をまとめています"),
+    ZH_HANS("正在合并过短的边"),
+    ZH_HANT("正在合併過短的邊"),
+    KO("짧은 모서리를 합치는 중"),
+    DE("Kurze Kanten werden zusammengefasst"),
+    FR("Fusion des arêtes courtes"),
+    ES("Fusionando las aristas cortas"),
+    PT("Juntando as arestas curtas"),
+    IT("Unione degli spigoli corti"),
+    NL("Korte ribben samenvoegen"),
+    RU("Слияние коротких рёбер"),
+    TR("Kısa kenarlar birleştiriliyor"));
+SS_MSG(mesh_stage_cleanup,
+    EN("Cleaning up the mesh"),
+    JA("メッシュを整理しています"),
+    ZH_HANS("正在清理网格"),
+    ZH_HANT("正在清理網格"),
+    KO("메시를 정리하는 중"),
+    DE("Das Netz wird aufgeräumt"),
+    FR("Nettoyage du maillage"),
+    ES("Limpiando la malla"),
+    PT("Limpando a malha"),
+    IT("Pulizia della mesh"),
+    NL("De mesh opschonen"),
+    RU("Очистка меша"),
+    TR("Ağ temizleniyor"));
+SS_MSG(mesh_stage_cull_unseen,
+    EN("Dropping what no camera saw"),
+    JA("どのカメラからも見えない部分を落としています"),
+    ZH_HANS("正在丢掉没有相机看到的部分"),
+    ZH_HANT("正在丟掉沒有相機看到的部分"),
+    KO("어느 카메라에도 보이지 않은 부분을 버리는 중"),
+    DE("Was keine Kamera gesehen hat, wird entfernt"),
+    FR("Suppression de ce qu'aucune caméra n'a vu"),
+    ES("Descartando lo que ninguna cámara vio"),
+    PT("Descartando o que nenhuma câmera viu"),
+    IT("Rimozione di ciò che nessuna camera ha visto"),
+    NL("Weggooien wat geen camera zag"),
+    RU("Удаление того, чего не видела ни одна камера"),
+    TR("Hiçbir kameranın görmediği kısımlar atılıyor"));
+SS_MSG(mesh_stage_quality,
+    EN("Improving the triangles"),
+    JA("三角形の質を上げています"),
+    ZH_HANS("正在改善三角面质量"),
+    ZH_HANT("正在改善三角面品質"),
+    KO("삼각형 품질을 높이는 중"),
+    DE("Die Dreiecke werden verbessert"),
+    FR("Amélioration des triangles"),
+    ES("Mejorando los triángulos"),
+    PT("Melhorando os triângulos"),
+    IT("Miglioramento dei triangoli"),
+    NL("De driehoeken verbeteren"),
+    RU("Улучшение треугольников"),
+    TR("Üçgenler iyileştiriliyor"));
+SS_MSG(mesh_stage_orient,
+    EN("Orienting the surface"),
+    JA("面の向きをそろえています"),
+    ZH_HANS("正在统一表面朝向"),
+    ZH_HANT("正在統一表面朝向"),
+    KO("표면 방향을 맞추는 중"),
+    DE("Die Oberfläche wird ausgerichtet"),
+    FR("Orientation de la surface"),
+    ES("Orientando la superficie"),
+    PT("Orientando a superfície"),
+    IT("Orientamento della superficie"),
+    NL("Het oppervlak oriënteren"),
+    RU("Ориентирование поверхности"),
+    TR("Yüzey yönlendiriliyor"));
+SS_MSG(mesh_stage_color,
+    EN("Coloring the vertices"),
+    JA("頂点に色を付けています"),
+    ZH_HANS("正在给顶点上色"),
+    ZH_HANT("正在給頂點上色"),
+    KO("정점에 색을 입히는 중"),
+    DE("Die Eckpunkte werden eingefärbt"),
+    FR("Coloration des sommets"),
+    ES("Coloreando los vértices"),
+    PT("Colorindo os vértices"),
+    IT("Colorazione dei vertici"),
+    NL("De hoekpunten kleuren"),
+    RU("Раскраска вершин"),
+    TR("Köşeler renklendiriliyor"));
+SS_MSG(mesh_stage_uv,
+    EN("Laying out the texture map"),
+    JA("テクスチャの配置を決めています"),
+    ZH_HANS("正在排布纹理贴图"),
+    ZH_HANT("正在排布紋理貼圖"),
+    KO("텍스처 배치를 잡는 중"),
+    DE("Die Texturbelegung wird angeordnet"),
+    FR("Disposition de la carte de texture"),
+    ES("Distribuyendo el mapa de textura"),
+    PT("Distribuindo o mapa de textura"),
+    IT("Disposizione della mappa di texture"),
+    NL("De textuurkaart indelen"),
+    RU("Раскладка текстурной карты"),
+    TR("Doku haritası yerleştiriliyor"));
+SS_MSG(mesh_stage_bake,
+    EN("Baking the texture"),
+    JA("テクスチャを焼き付けています"),
+    ZH_HANS("正在烘焙纹理"),
+    ZH_HANT("正在烘焙紋理"),
+    KO("텍스처를 굽는 중"),
+    DE("Die Textur wird gebacken"),
+    FR("Cuisson de la texture"),
+    ES("Horneando la textura"),
+    PT("Assando a textura"),
+    IT("Baking della texture"),
+    NL("De textuur bakken"),
+    RU("Запекание текстуры"),
+    TR("Doku pişiriliyor"));
+SS_MSG(mesh_stage_texture,
+    EN("Finishing the texture"),
+    JA("テクスチャを仕上げています"),
+    ZH_HANS("正在完成纹理"),
+    ZH_HANT("正在完成紋理"),
+    KO("텍스처를 마무리하는 중"),
+    DE("Die Textur wird fertiggestellt"),
+    FR("Finition de la texture"),
+    ES("Terminando la textura"),
+    PT("Finalizando a textura"),
+    IT("Rifinitura della texture"),
+    NL("De textuur afwerken"),
+    RU("Завершение текстуры"),
+    TR("Doku tamamlanıyor"));
+SS_MSG(mesh_stage_stats,
+    EN("Measuring the mesh"),
+    JA("メッシュを計測しています"),
+    ZH_HANS("正在统计网格"),
+    ZH_HANT("正在統計網格"),
+    KO("메시를 재는 중"),
+    DE("Das Netz wird vermessen"),
+    FR("Mesure du maillage"),
+    ES("Midiendo la malla"),
+    PT("Medindo a malha"),
+    IT("Misurazione della mesh"),
+    NL("De mesh opmeten"),
+    RU("Измерение меша"),
+    TR("Ağ ölçülüyor"));
+SS_MSG(mesh_stage_wrote,
+    EN("Writing the files"),
+    JA("ファイルを書き出しています"),
+    ZH_HANS("正在写出文件"),
+    ZH_HANT("正在寫出檔案"),
+    KO("파일을 쓰는 중"),
+    DE("Die Dateien werden geschrieben"),
+    FR("Écriture des fichiers"),
+    ES("Escribiendo los archivos"),
+    PT("Escrevendo os arquivos"),
+    IT("Scrittura dei file"),
+    NL("De bestanden schrijven"),
+    RU("Запись файлов"),
+    TR("Dosyalar yazılıyor"));
+
+
+// Both `split_batch` and `use_fused_proj_bwd_optim` on at once is a
+// contradiction the engine resolves for you; these say which way it went. The
+// two flag names are identifiers and stay as they are -- what is translated is
+// the reason.
+
+SS_MSG(warn_split_batch_noop,
+    EN("warning: both `split_batch` and `use_fused_proj_bwd_optim` are "
+       "enabled, but this dataset never puts more than one camera in a batch, "
+       "so `split_batch` would do nothing. Turning it off and keeping "
+       "`use_fused_proj_bwd_optim`."),
+    JA("警告: `split_batch` と `use_fused_proj_bwd_optim` が両方とも有効ですが、"
+       "このデータセットでは 1 バッチに 1 台のカメラしか入らないため "
+       "`split_batch` は何もしません。`split_batch` を無効にし、"
+       "`use_fused_proj_bwd_optim` を使います。"),
+    ZH_HANS("警告：`split_batch` 和 `use_fused_proj_bwd_optim` 同时开启，但这个"
+            "数据集每批最多只有一台相机，`split_batch` 起不到作用。已关闭 "
+            "`split_batch`，保留 `use_fused_proj_bwd_optim`。"),
+    ZH_HANT("警告：`split_batch` 和 `use_fused_proj_bwd_optim` 同時開啟，但這個"
+            "資料集每批最多只有一台相機，`split_batch` 起不到作用。已關閉 "
+            "`split_batch`，保留 `use_fused_proj_bwd_optim`。"),
+    KO("경고: `split_batch`와 `use_fused_proj_bwd_optim`이 모두 켜져 있지만, 이 "
+       "데이터셋은 한 배치에 카메라가 하나뿐이라 `split_batch`는 아무 일도 하지 "
+       "않습니다. `split_batch`를 끄고 `use_fused_proj_bwd_optim`을 씁니다."),
+    DE("Warnung: `split_batch` und `use_fused_proj_bwd_optim` sind beide an, "
+       "aber dieser Datensatz hat nie mehr als eine Kamera pro Stapel, also "
+       "täte `split_batch` nichts. Es wird abgeschaltet, "
+       "`use_fused_proj_bwd_optim` bleibt."),
+    FR("Avertissement : `split_batch` et `use_fused_proj_bwd_optim` sont tous "
+       "deux activés, mais ce jeu de données ne met jamais plus d'une caméra "
+       "par lot, donc `split_batch` ne ferait rien. Il est désactivé et "
+       "`use_fused_proj_bwd_optim` est conservé."),
+    ES("Aviso: `split_batch` y `use_fused_proj_bwd_optim` están activados los "
+       "dos, pero este conjunto de datos nunca pone más de una cámara por "
+       "lote, así que `split_batch` no haría nada. Se desactiva y se mantiene "
+       "`use_fused_proj_bwd_optim`."),
+    PT("Aviso: `split_batch` e `use_fused_proj_bwd_optim` estão ambos ligados, "
+       "mas este conjunto de dados nunca põe mais de uma câmera por lote, "
+       "então `split_batch` não faria nada. Ele é desligado e "
+       "`use_fused_proj_bwd_optim` fica."),
+    IT("Avviso: `split_batch` e `use_fused_proj_bwd_optim` sono entrambi "
+       "attivi, ma questo set di dati non mette mai più di una camera per "
+       "batch, quindi `split_batch` non farebbe nulla. Viene disattivato e "
+       "resta `use_fused_proj_bwd_optim`."),
+    NL("Waarschuwing: `split_batch` en `use_fused_proj_bwd_optim` staan allebei "
+       "aan, maar deze dataset zet nooit meer dan één camera in een batch, dus "
+       "`split_batch` zou niets doen. Het gaat uit en "
+       "`use_fused_proj_bwd_optim` blijft."),
+    RU("Предупреждение: включены и `split_batch`, и "
+       "`use_fused_proj_bwd_optim`, но в этом наборе данных в пакете никогда не "
+       "бывает больше одной камеры, так что `split_batch` ничего не даст. Он "
+       "выключается, `use_fused_proj_bwd_optim` остаётся."),
+    TR("Uyarı: `split_batch` ile `use_fused_proj_bwd_optim` birlikte açık ama "
+       "bu veri kümesi bir yığına asla birden fazla kamera koymuyor, yani "
+       "`split_batch` bir işe yaramazdı. Kapatıldı, `use_fused_proj_bwd_optim` "
+       "korunuyor."));
+// {0} is the largest batch this dataset produces.
+SS_MSG(warn_fpbo_incompatible,
+    EN("warning: both `split_batch` and `use_fused_proj_bwd_optim` are "
+       "enabled, but a batch here can hold more than one camera (at most {0}), "
+       "which `use_fused_proj_bwd_optim` cannot accumulate gradients across. "
+       "Turning it off and keeping `split_batch`."),
+    JA("警告: `split_batch` と `use_fused_proj_bwd_optim` が両方とも有効ですが、"
+       "ここでは 1 バッチに複数のカメラが入りえます（最大 {0} 台）。"
+       "`use_fused_proj_bwd_optim` はその間で勾配を足し合わせられないため、"
+       "無効にし、`split_batch` を使います。"),
+    ZH_HANS("警告：`split_batch` 和 `use_fused_proj_bwd_optim` 同时开启，但这里"
+            "一批里可能有多台相机（最多 {0} 台），而 `use_fused_proj_bwd_optim` "
+            "无法跨相机累积梯度。已关闭它，保留 `split_batch`。"),
+    ZH_HANT("警告：`split_batch` 和 `use_fused_proj_bwd_optim` 同時開啟，但這裡"
+            "一批裡可能有多台相機（最多 {0} 台），而 `use_fused_proj_bwd_optim` "
+            "無法跨相機累積梯度。已關閉它，保留 `split_batch`。"),
+    KO("경고: `split_batch`와 `use_fused_proj_bwd_optim`이 모두 켜져 있지만, "
+       "여기서는 한 배치에 카메라가 여러 대 들어올 수 있고(최대 {0}대), "
+       "`use_fused_proj_bwd_optim`은 그 사이로 기울기를 누적하지 못합니다. "
+       "이를 끄고 `split_batch`를 씁니다."),
+    DE("Warnung: `split_batch` und `use_fused_proj_bwd_optim` sind beide an, "
+       "aber ein Stapel kann hier mehr als eine Kamera enthalten (höchstens "
+       "{0}), und darüber kann `use_fused_proj_bwd_optim` keine Gradienten "
+       "aufsummieren. Es wird abgeschaltet, `split_batch` bleibt."),
+    FR("Avertissement : `split_batch` et `use_fused_proj_bwd_optim` sont tous "
+       "deux activés, mais un lot peut contenir ici plusieurs caméras ({0} au "
+       "plus), et `use_fused_proj_bwd_optim` ne sait pas cumuler les gradients "
+       "à travers elles. Il est désactivé et `split_batch` est conservé."),
+    ES("Aviso: `split_batch` y `use_fused_proj_bwd_optim` están activados los "
+       "dos, pero aquí un lote puede tener varias cámaras ({0} como máximo), y "
+       "`use_fused_proj_bwd_optim` no sabe acumular gradientes entre ellas. Se "
+       "desactiva y se mantiene `split_batch`."),
+    PT("Aviso: `split_batch` e `use_fused_proj_bwd_optim` estão ambos ligados, "
+       "mas aqui um lote pode ter mais de uma câmera (no máximo {0}), e "
+       "`use_fused_proj_bwd_optim` não acumula gradientes entre elas. Ele é "
+       "desligado e `split_batch` fica."),
+    IT("Avviso: `split_batch` e `use_fused_proj_bwd_optim` sono entrambi "
+       "attivi, ma qui un batch può contenere più camere (al massimo {0}), e "
+       "`use_fused_proj_bwd_optim` non sa accumulare gradienti fra di esse. "
+       "Viene disattivato e resta `split_batch`."),
+    NL("Waarschuwing: `split_batch` en `use_fused_proj_bwd_optim` staan allebei "
+       "aan, maar een batch kan hier meer dan één camera bevatten (hoogstens "
+       "{0}), en daarover kan `use_fused_proj_bwd_optim` geen gradiënten "
+       "optellen. Het gaat uit en `split_batch` blijft."),
+    RU("Предупреждение: включены и `split_batch`, и "
+       "`use_fused_proj_bwd_optim`, но пакет здесь может содержать несколько "
+       "камер (не больше {0}), а по ним `use_fused_proj_bwd_optim` не умеет "
+       "накапливать градиенты. Он выключается, `split_batch` остаётся."),
+    TR("Uyarı: `split_batch` ile `use_fused_proj_bwd_optim` birlikte açık ama "
+       "burada bir yığında birden çok kamera olabiliyor (en fazla {0}) ve "
+       "`use_fused_proj_bwd_optim` bunlar arasında gradyan biriktiremiyor. "
+       "Kapatıldı, `split_batch` korunuyor."));
+
+
+// ===========================================================================
+// Progress while a long pass runs
+// ===========================================================================
+// "how long is this going to take" is the only question a user has during a
+// twenty-minute masking pass, so the line answers it. Each shape is a whole
+// sentence rather than a stem with clauses glued on: the rate and the estimate
+// land in different places in a verb-final language, and "about ... left"
+// cannot be appended to a Japanese noun phrase and still parse.
+
+SS_MSG(prog_count,
+    EN("  {0}: {1}"),
+    JA("  {0}: {1}"),
+    ZH_HANS("  {0}：{1}"),
+    ZH_HANT("  {0}：{1}"),
+    KO("  {0}: {1}"),
+    DE("  {0}: {1}"),
+    FR("  {0} : {1}"),
+    ES("  {0}: {1}"),
+    PT("  {0}: {1}"),
+    IT("  {0}: {1}"),
+    NL("  {0}: {1}"),
+    RU("  {0}: {1}"),
+    TR("  {0}: {1}"));
+
+SS_MSG(prog_count_total,
+    EN("  {0}: {1} / {2}"),
+    JA("  {0}: {1} / {2}"),
+    ZH_HANS("  {0}：{1} / {2}"),
+    ZH_HANT("  {0}：{1} / {2}"),
+    KO("  {0}: {1} / {2}"),
+    DE("  {0}: {1} / {2}"),
+    FR("  {0} : {1} / {2}"),
+    ES("  {0}: {1} / {2}"),
+    PT("  {0}: {1} / {2}"),
+    IT("  {0}: {1} / {2}"),
+    NL("  {0}: {1} / {2}"),
+    RU("  {0}: {1} / {2}"),
+    TR("  {0}: {1} / {2}"));
+
+SS_MSG(prog_count_rate,
+    EN("  {0}: {1}  ({2})"),
+    JA("  {0}: {1}（{2}）"),
+    ZH_HANS("  {0}：{1}（{2}）"),
+    ZH_HANT("  {0}：{1}（{2}）"),
+    KO("  {0}: {1}({2})"),
+    DE("  {0}: {1}  ({2})"),
+    FR("  {0} : {1}  ({2})"),
+    ES("  {0}: {1}  ({2})"),
+    PT("  {0}: {1}  ({2})"),
+    IT("  {0}: {1}  ({2})"),
+    NL("  {0}: {1}  ({2})"),
+    RU("  {0}: {1}  ({2})"),
+    TR("  {0}: {1}  ({2})"));
+
+SS_MSG(prog_count_total_rate,
+    EN("  {0}: {1} / {2}  ({3})"),
+    JA("  {0}: {1} / {2}（{3}）"),
+    ZH_HANS("  {0}：{1} / {2}（{3}）"),
+    ZH_HANT("  {0}：{1} / {2}（{3}）"),
+    KO("  {0}: {1} / {2}({3})"),
+    DE("  {0}: {1} / {2}  ({3})"),
+    FR("  {0} : {1} / {2}  ({3})"),
+    ES("  {0}: {1} / {2}  ({3})"),
+    PT("  {0}: {1} / {2}  ({3})"),
+    IT("  {0}: {1} / {2}  ({3})"),
+    NL("  {0}: {1} / {2}  ({3})"),
+    RU("  {0}: {1} / {2}  ({3})"),
+    TR("  {0}: {1} / {2}  ({3})"));
+
+SS_MSG(prog_count_total_rate_eta,
+    EN("  {0}: {1} / {2}  ({3}, about {4} left)"),
+    JA("  {0}: {1} / {2}（{3}、残り約 {4}）"),
+    ZH_HANS("  {0}：{1} / {2}（{3}，大约还剩 {4}）"),
+    ZH_HANT("  {0}：{1} / {2}（{3}，大約還剩 {4}）"),
+    KO("  {0}: {1} / {2}({3}, 약 {4} 남음)"),
+    DE("  {0}: {1} / {2}  ({3}, noch etwa {4})"),
+    FR("  {0} : {1} / {2}  ({3}, encore {4} environ)"),
+    ES("  {0}: {1} / {2}  ({3}, quedan unos {4})"),
+    PT("  {0}: {1} / {2}  ({3}, faltam cerca de {4})"),
+    IT("  {0}: {1} / {2}  ({3}, mancano circa {4})"),
+    NL("  {0}: {1} / {2}  ({3}, nog ongeveer {4})"),
+    RU("  {0}: {1} / {2}  ({3}, осталось около {4})"),
+    TR("  {0}: {1} / {2}  ({3}, yaklaşık {4} kaldı)"));
+
+SS_MSG(rate_each,
+    EN("{0} s each"),
+    JA("1 件あたり {0} 秒"),
+    ZH_HANS("每个 {0} 秒"),
+    ZH_HANT("每個 {0} 秒"),
+    KO("개당 {0}초"),
+    DE("{0} s je Stück"),
+    FR("{0} s chacun"),
+    ES("{0} s cada uno"),
+    PT("{0} s cada"),
+    IT("{0} s ciascuno"),
+    NL("{0} s per stuk"),
+    RU("по {0} с"),
+    TR("her biri {0} sn"));
+
+SS_MSG(rate_per_second,
+    EN("{0} per second"),
+    JA("毎秒 {0} 件"),
+    ZH_HANS("每秒 {0} 个"),
+    ZH_HANT("每秒 {0} 個"),
+    KO("초당 {0}개"),
+    DE("{0} je Sekunde"),
+    FR("{0} par seconde"),
+    ES("{0} por segundo"),
+    PT("{0} por segundo"),
+    IT("{0} al secondo"),
+    NL("{0} per seconde"),
+    RU("{0} в секунду"),
+    TR("saniyede {0}"));
+
+SS_MSG(dur_moment,
+    EN("a moment"),
+    JA("わずか"),
+    ZH_HANS("一会儿"),
+    ZH_HANT("一會兒"),
+    KO("잠깐"),
+    DE("einen Augenblick"),
+    FR("un instant"),
+    ES("un momento"),
+    PT("um instante"),
+    IT("un istante"),
+    NL("een ogenblik"),
+    RU("мгновение"),
+    TR("bir an"));
+
+SS_MSG(dur_seconds,
+    EN("{0} s"),
+    JA("{0} 秒"),
+    ZH_HANS("{0} 秒"),
+    ZH_HANT("{0} 秒"),
+    KO("{0}초"),
+    DE("{0} s"),
+    FR("{0} s"),
+    ES("{0} s"),
+    PT("{0} s"),
+    IT("{0} s"),
+    NL("{0} s"),
+    RU("{0} с"),
+    TR("{0} sn"));
+
+SS_MSG(dur_minutes,
+    EN("{0} min"),
+    JA("{0} 分"),
+    ZH_HANS("{0} 分钟"),
+    ZH_HANT("{0} 分鐘"),
+    KO("{0}분"),
+    DE("{0} min"),
+    FR("{0} min"),
+    ES("{0} min"),
+    PT("{0} min"),
+    IT("{0} min"),
+    NL("{0} min"),
+    RU("{0} мин"),
+    TR("{0} dk"));
+
+SS_MSG(dur_hours,
+    EN("{0} h"),
+    JA("{0} 時間"),
+    ZH_HANS("{0} 小时"),
+    ZH_HANT("{0} 小時"),
+    KO("{0}시간"),
+    DE("{0} h"),
+    FR("{0} h"),
+    ES("{0} h"),
+    PT("{0} h"),
+    IT("{0} h"),
+    NL("{0} u"),
+    RU("{0} ч"),
+    TR("{0} sa"));
+
+// What is being counted. A label, so no plural agreement is needed.
+SS_MSG(noun_frames_written,
+    EN("frames written"),
+    JA("書き出したフレーム"),
+    ZH_HANS("已写出的帧"),
+    ZH_HANT("已寫出的影格"),
+    KO("저장한 프레임"),
+    DE("geschriebene Einzelbilder"),
+    FR("images écrites"),
+    ES("fotogramas escritos"),
+    PT("quadros escritos"),
+    IT("fotogrammi scritti"),
+    NL("geschreven beelden"),
+    RU("записано кадров"),
+    TR("yazılan kare"));
+
+SS_MSG(noun_frames_written_masked,
+    EN("frames written and masked"),
+    JA("書き出してマスクしたフレーム"),
+    ZH_HANS("已写出并遮罩的帧"),
+    ZH_HANT("已寫出並遮罩的影格"),
+    KO("저장하고 마스크한 프레임"),
+    DE("geschriebene und maskierte Einzelbilder"),
+    FR("images écrites et masquées"),
+    ES("fotogramas escritos y enmascarados"),
+    PT("quadros escritos e mascarados"),
+    IT("fotogrammi scritti e mascherati"),
+    NL("geschreven en gemaskeerde beelden"),
+    RU("записано и замаскировано кадров"),
+    TR("yazılan ve maskelenen kare"));
+
+SS_MSG(noun_photos_collected,
+    EN("photos collected"),
+    JA("集めた写真"),
+    ZH_HANS("已收集的照片"),
+    ZH_HANT("已收集的照片"),
+    KO("모은 사진"),
+    DE("gesammelte Fotos"),
+    FR("photos rassemblées"),
+    ES("fotos recopiladas"),
+    PT("fotos reunidas"),
+    IT("foto raccolte"),
+    NL("verzamelde foto's"),
+    RU("собрано фотографий"),
+    TR("toplanan fotoğraf"));
+
+SS_MSG(noun_masks_collected,
+    EN("masks collected"),
+    JA("集めたマスク"),
+    ZH_HANS("已收集的掩码"),
+    ZH_HANT("已收集的遮罩"),
+    KO("모은 마스크"),
+    DE("gesammelte Masken"),
+    FR("masques rassemblés"),
+    ES("máscaras recopiladas"),
+    PT("máscaras reunidas"),
+    IT("maschere raccolte"),
+    NL("verzamelde maskers"),
+    RU("собрано масок"),
+    TR("toplanan maske"));
+
+SS_MSG(noun_images_masked,
+    EN("images masked"),
+    JA("マスクした画像"),
+    ZH_HANS("已遮罩的图像"),
+    ZH_HANT("已遮罩的影像"),
+    KO("마스크한 이미지"),
+    DE("maskierte Bilder"),
+    FR("images masquées"),
+    ES("imágenes enmascaradas"),
+    PT("imagens mascaradas"),
+    IT("immagini mascherate"),
+    NL("gemaskeerde beelden"),
+    RU("замаскировано изображений"),
+    TR("maskelenen görüntü"));
+
+SS_MSG(copying_photos,
+    EN("photos: {0} -> {1}"),
+    JA("写真: {0} -> {1}"),
+    ZH_HANS("照片：{0} -> {1}"),
+    ZH_HANT("照片：{0} -> {1}"),
+    KO("사진: {0} -> {1}"),
+    DE("Fotos: {0} -> {1}"),
+    FR("photos : {0} -> {1}"),
+    ES("fotos: {0} -> {1}"),
+    PT("fotos: {0} -> {1}"),
+    IT("foto: {0} -> {1}"),
+    NL("foto's: {0} -> {1}"),
+    RU("фотографии: {0} -> {1}"),
+    TR("fotoğraflar: {0} -> {1}"));
+
+SS_MSG(copying_masks,
+    EN("masks: {0} -> {1}"),
+    JA("マスク: {0} -> {1}"),
+    ZH_HANS("掩码：{0} -> {1}"),
+    ZH_HANT("遮罩：{0} -> {1}"),
+    KO("마스크: {0} -> {1}"),
+    DE("Masken: {0} -> {1}"),
+    FR("masques : {0} -> {1}"),
+    ES("máscaras: {0} -> {1}"),
+    PT("máscaras: {0} -> {1}"),
+    IT("maschere: {0} -> {1}"),
+    NL("maskers: {0} -> {1}"),
+    RU("маски: {0} -> {1}"),
+    TR("maskeler: {0} -> {1}"));
+
+SS_MSG(download_percent_of,
+    EN("{0}% of {1}"),
+    JA("{1} のうち {0}%"),
+    ZH_HANS("{0}%，共 {1}"),
+    ZH_HANT("{0}%，共 {1}"),
+    KO("{1} 중 {0}%"),
+    DE("{0} % von {1}"),
+    FR("{0} % de {1}"),
+    ES("{0} % de {1}"),
+    PT("{0}% de {1}"),
+    IT("{0}% di {1}"),
+    NL("{0}% van {1}"),
+    RU("{0} % из {1}"),
+    TR("{1} içinden %{0}"));
+
+SS_MSG(colmap_reproj_error,
+    EN("Mean reprojection error: {0} px -> {1} px"),
+    JA("平均再投影誤差: {0} px -> {1} px"),
+    ZH_HANS("平均重投影误差：{0} px -> {1} px"),
+    ZH_HANT("平均重投影誤差：{0} px -> {1} px"),
+    KO("평균 재투영 오차: {0} px -> {1} px"),
+    DE("mittlerer Rückprojektionsfehler: {0} px -> {1} px"),
+    FR("erreur de reprojection moyenne : {0} px -> {1} px"),
+    ES("error medio de reproyección: {0} px -> {1} px"),
+    PT("erro médio de reprojeção: {0} px -> {1} px"),
+    IT("errore medio di riproiezione: {0} px -> {1} px"),
+    NL("gemiddelde herprojectiefout: {0} px -> {1} px"),
+    RU("средняя ошибка репроекции: {0} px -> {1} px"),
+    TR("ortalama yeniden izdüşüm hatası: {0} px -> {1} px"));
+
+// ===========================================================================
+// What went wrong
+// ===========================================================================
+
+SS_MSG(err_nothing_to_prepare,
+    EN("Nothing to prepare: no video and no photo folder was picked."),
+    JA("準備するものがありません。動画も写真フォルダーも選ばれていません。"),
+    ZH_HANS("没有可准备的内容：既没有选视频，也没有选照片文件夹。"),
+    ZH_HANT("沒有可準備的內容：既沒有選影片，也沒有選照片資料夾。"),
+    KO("준비할 것이 없습니다. 동영상도 사진 폴더도 고르지 않았습니다."),
+    DE("Es gibt nichts vorzubereiten: weder ein Video noch ein Fotoordner wurde "
+       "gewählt."),
+    FR("Rien à préparer : ni vidéo ni dossier de photos n'a été choisi."),
+    ES("No hay nada que preparar: no se eligió ni un vídeo ni una carpeta de "
+       "fotos."),
+    PT("Não há nada a preparar: nem um vídeo nem uma pasta de fotos foi "
+       "escolhida."),
+    IT("Non c'è nulla da preparare: non è stato scelto né un video né una "
+       "cartella di foto."),
+    NL("Er valt niets voor te bereiden: er is geen video en geen fotomap "
+       "gekozen."),
+    RU("Готовить нечего: не выбраны ни видео, ни папка с фотографиями."),
+    TR("Hazırlanacak bir şey yok: ne video ne de fotoğraf klasörü seçildi."));
+
+SS_MSG(err_too_few_images,
+    EN("At least 3 images are needed, and this has {0}."),
+    JA("画像は最低 3 枚必要ですが、{0} 枚しかありません。"),
+    ZH_HANS("至少需要 3 张图像，这里只有 {0} 张。"),
+    ZH_HANT("至少需要 3 張影像，這裡只有 {0} 張。"),
+    KO("이미지가 최소 3장 필요한데 {0}장뿐입니다."),
+    DE("Es werden mindestens 3 Bilder gebraucht, hier sind es {0}."),
+    FR("Il faut au moins 3 images, et il y en a {0}."),
+    ES("Hacen falta al menos 3 imágenes, y aquí hay {0}."),
+    PT("São necessárias pelo menos 3 imagens, e aqui há {0}."),
+    IT("Servono almeno 3 immagini, e qui ce ne sono {0}."),
+    NL("Er zijn minstens 3 beelden nodig, en dit zijn er {0}."),
+    RU("Нужно не меньше 3 изображений, а здесь их {0}."),
+    TR("En az 3 görüntü gerekiyor, burada {0} tane var."));
+
+SS_MSG(err_mask_no_target,
+    EN("Masking is on, but nothing says what to mask. Type a prompt (\"people; "
+       "cars\"), or open \"Try the mask\" and click the object."),
+    JA("マスクは有効ですが、何をマスクするかが指定されていません。プロンプトを"
+       "入力するか（\"people; cars\" など）、「マスクを試す」を開いて対象を"
+       "クリックしてください。"),
+    ZH_HANS("遮罩已开启，但没有说明要遮罩什么。请输入提示词（如 \"people; cars\"），"
+            "或打开“试一下遮罩”并点击目标。"),
+    ZH_HANT("遮罩已開啟，但沒有說明要遮罩什麼。請輸入提示詞（如 \"people; cars\"），"
+            "或開啟「試一下遮罩」並點選目標。"),
+    KO("마스크가 켜져 있지만 무엇을 마스크할지 정해지지 않았습니다. 프롬프트를 "
+       "입력하거나(\"people; cars\") \"마스크 시험\"을 열어 대상을 클릭하세요."),
+    DE("Die Maskierung ist an, aber nichts sagt, was maskiert werden soll. "
+       "Geben Sie einen Prompt ein (\"people; cars\") oder öffnen Sie \"Maske "
+       "ausprobieren\" und klicken Sie das Objekt an."),
+    FR("Le masquage est activé, mais rien n'indique quoi masquer. Saisissez une "
+       "consigne (\"people; cars\"), ou ouvrez « Essayer le masque » et cliquez "
+       "sur l'objet."),
+    ES("El enmascarado está activado, pero nada dice qué enmascarar. Escribe una "
+       "indicación (\"people; cars\"), o abre «Probar la máscara» y haz clic en "
+       "el objeto."),
+    PT("A máscara está ligada, mas nada diz o que mascarar. Escreva um comando "
+       "(\"people; cars\"), ou abra \"Experimentar a máscara\" e clique no "
+       "objeto."),
+    IT("La mascheratura è attiva, ma nulla dice cosa mascherare. Scriva un "
+       "prompt (\"people; cars\"), oppure apra \"Prova la maschera\" e clicchi "
+       "l'oggetto."),
+    NL("Maskeren staat aan, maar niets zegt wat er gemaskeerd moet worden. Typ "
+       "een prompt (\"people; cars\"), of open \"Masker proberen\" en klik het "
+       "object aan."),
+    RU("Маскирование включено, но не сказано, что маскировать. Введите запрос "
+       "(\"people; cars\") или откройте «Проверить маску» и щёлкните по объекту."),
+    TR("Maskeleme açık, ama neyin maskeleneceğini söyleyen bir şey yok. Bir "
+       "istem yazın (\"people; cars\") ya da \"Maskeyi dene\" bölümünü açıp "
+       "nesneye tıklayın."));
+
+SS_MSG(err_no_frames_extracted,
+    EN("No frames came out of the video."),
+    JA("動画からフレームが 1 枚も取り出せませんでした。"),
+    ZH_HANS("没有从视频中提取到任何帧。"),
+    ZH_HANT("沒有從影片中擷取到任何影格。"),
+    KO("동영상에서 프레임이 하나도 나오지 않았습니다."),
+    DE("Aus dem Video kamen keine Einzelbilder."),
+    FR("Aucune image n'est sortie de la vidéo."),
+    ES("No salió ningún fotograma del vídeo."),
+    PT("Nenhum quadro saiu do vídeo."),
+    IT("Dal video non è uscito alcun fotogramma."),
+    NL("Er kwamen geen beelden uit de video."),
+    RU("Из видео не получилось ни одного кадра."),
+    TR("Videodan hiç kare çıkmadı."));
+
+SS_MSG(err_ffmpeg_missing,
+    EN("ffmpeg was not found ('{0}'). Install it, set its path under Tool "
+       "locations, or build with -DSS_ENABLE_PATENTED=ON to decode in-process."),
+    JA("ffmpeg が見つかりません（'{0}'）。インストールするか、「ツールの場所」で"
+       "パスを設定するか、-DSS_ENABLE_PATENTED=ON でビルドしてプロセス内で"
+       "デコードしてください。"),
+    ZH_HANS("找不到 ffmpeg（'{0}'）。请安装它、在“工具位置”中设置其路径，"
+            "或以 -DSS_ENABLE_PATENTED=ON 构建以在进程内解码。"),
+    ZH_HANT("找不到 ffmpeg（'{0}'）。請安裝它、在「工具位置」中設定其路徑，"
+            "或以 -DSS_ENABLE_PATENTED=ON 建置以在行程內解碼。"),
+    KO("ffmpeg 을 찾지 못했습니다('{0}'). 설치하거나 \"도구 위치\"에서 경로를 "
+       "지정하거나, -DSS_ENABLE_PATENTED=ON 으로 빌드해 프로세스 안에서 "
+       "디코딩하세요."),
+    DE("ffmpeg wurde nicht gefunden ('{0}'). Installieren Sie es, tragen Sie "
+       "seinen Pfad unter Werkzeugpfade ein, oder bauen Sie mit "
+       "-DSS_ENABLE_PATENTED=ON, um im Prozess zu dekodieren."),
+    FR("ffmpeg est introuvable ('{0}'). Installez-le, indiquez son chemin sous "
+       "Emplacements des outils, ou compilez avec -DSS_ENABLE_PATENTED=ON pour "
+       "décoder dans le processus."),
+    ES("No se encontró ffmpeg ('{0}'). Instálalo, indica su ruta en Ubicaciones "
+       "de herramientas, o compila con -DSS_ENABLE_PATENTED=ON para descodificar "
+       "en el propio proceso."),
+    PT("O ffmpeg não foi encontrado ('{0}'). Instale-o, informe o caminho em "
+       "Locais das ferramentas, ou compile com -DSS_ENABLE_PATENTED=ON para "
+       "decodificar no próprio processo."),
+    IT("ffmpeg non è stato trovato ('{0}'). Lo installi, ne indichi il percorso "
+       "in Posizioni degli strumenti, oppure compili con "
+       "-DSS_ENABLE_PATENTED=ON per decodificare nel processo."),
+    NL("ffmpeg is niet gevonden ('{0}'). Installeer het, geef het pad op onder "
+       "Gereedschapslocaties, of bouw met -DSS_ENABLE_PATENTED=ON om in het "
+       "proces te decoderen."),
+    RU("ffmpeg не найден ('{0}'). Установите его, укажите путь в «Расположение "
+       "инструментов» или соберите с -DSS_ENABLE_PATENTED=ON, чтобы "
+       "декодировать внутри процесса."),
+    TR("ffmpeg bulunamadı ('{0}'). Kurun, yolunu Araç konumları altında "
+       "belirtin ya da süreç içinde çözmek için -DSS_ENABLE_PATENTED=ON ile "
+       "derleyin."));
+
+SS_MSG(err_ffmpeg_split_failed,
+    EN("ffmpeg could not split the tracks (see the log)."),
+    JA("ffmpeg がトラックを分割できませんでした（ログを参照）。"),
+    ZH_HANS("ffmpeg 无法拆分轨道（详见日志）。"),
+    ZH_HANT("ffmpeg 無法拆分軌道（詳見記錄）。"),
+    KO("ffmpeg 이 트랙을 나누지 못했습니다(로그 참고)."),
+    DE("ffmpeg konnte die Spuren nicht trennen (siehe Protokoll)."),
+    FR("ffmpeg n'a pas pu séparer les pistes (voir le journal)."),
+    ES("ffmpeg no pudo separar las pistas (mira el registro)."),
+    PT("O ffmpeg não conseguiu separar as trilhas (veja o registro)."),
+    IT("ffmpeg non è riuscito a separare le tracce (veda il registro)."),
+    NL("ffmpeg kon de sporen niet splitsen (zie het logboek)."),
+    RU("ffmpeg не смог разделить дорожки (см. журнал)."),
+    TR("ffmpeg izleri ayıramadı (günlüğe bakın)."));
+
+SS_MSG(err_ffmpeg_extract_failed,
+    EN("ffmpeg could not extract the frames (see the log)."),
+    JA("ffmpeg がフレームを取り出せませんでした（ログを参照）。"),
+    ZH_HANS("ffmpeg 无法提取帧（详见日志）。"),
+    ZH_HANT("ffmpeg 無法擷取影格（詳見記錄）。"),
+    KO("ffmpeg 이 프레임을 뽑아내지 못했습니다(로그 참고)."),
+    DE("ffmpeg konnte die Einzelbilder nicht entnehmen (siehe Protokoll)."),
+    FR("ffmpeg n'a pas pu extraire les images (voir le journal)."),
+    ES("ffmpeg no pudo extraer los fotogramas (mira el registro)."),
+    PT("O ffmpeg não conseguiu extrair os quadros (veja o registro)."),
+    IT("ffmpeg non è riuscito a estrarre i fotogrammi (veda il registro)."),
+    NL("ffmpeg kon de beelden niet uitpakken (zie het logboek)."),
+    RU("ffmpeg не смог извлечь кадры (см. журнал)."),
+    TR("ffmpeg kareleri çıkaramadı (günlüğe bakın)."));
+
+SS_MSG(err_not_a_folder,
+    EN("Not a folder: {0}"),
+    JA("フォルダーではありません: {0}"),
+    ZH_HANS("不是文件夹：{0}"),
+    ZH_HANT("不是資料夾：{0}"),
+    KO("폴더가 아닙니다: {0}"),
+    DE("Kein Ordner: {0}"),
+    FR("Ce n'est pas un dossier : {0}"),
+    ES("No es una carpeta: {0}"),
+    PT("Não é uma pasta: {0}"),
+    IT("Non è una cartella: {0}"),
+    NL("Geen map: {0}"),
+    RU("Это не папка: {0}"),
+    TR("Klasör değil: {0}"));
+
+SS_MSG(err_no_photos_in,
+    EN("There are no photos in {0}."),
+    JA("{0} に写真がありません。"),
+    ZH_HANS("{0} 中没有照片。"),
+    ZH_HANT("{0} 中沒有照片。"),
+    KO("{0} 에 사진이 없습니다."),
+    DE("In {0} sind keine Fotos."),
+    FR("Il n'y a aucune photo dans {0}."),
+    ES("No hay fotos en {0}."),
+    PT("Não há fotos em {0}."),
+    IT("In {0} non ci sono foto."),
+    NL("Er staan geen foto's in {0}."),
+    RU("В {0} нет фотографий."),
+    TR("{0} içinde fotoğraf yok."));
+
+SS_MSG(err_no_masks_in,
+    EN("There are no masks in {0}."),
+    JA("{0} にマスクがありません。"),
+    ZH_HANS("{0} 中没有掩码。"),
+    ZH_HANT("{0} 中沒有遮罩。"),
+    KO("{0} 에 마스크가 없습니다."),
+    DE("In {0} sind keine Masken."),
+    FR("Il n'y a aucun masque dans {0}."),
+    ES("No hay máscaras en {0}."),
+    PT("Não há máscaras em {0}."),
+    IT("In {0} non ci sono maschere."),
+    NL("Er staan geen maskers in {0}."),
+    RU("В {0} нет масок."),
+    TR("{0} içinde maske yok."));
+
+SS_MSG(err_copy_failed,
+    EN("{0} could not be put into {1} ({2})."),
+    JA("{0} を {1} に入れられませんでした（{2}）。"),
+    ZH_HANS("无法把 {0} 放入 {1}（{2}）。"),
+    ZH_HANT("無法把 {0} 放入 {1}（{2}）。"),
+    KO("{0} 을(를) {1} 에 넣지 못했습니다({2})."),
+    DE("{0} konnte nicht nach {1} gebracht werden ({2})."),
+    FR("{0} n'a pas pu être placé dans {1} ({2})."),
+    ES("No se pudo poner {0} en {1} ({2})."),
+    PT("Não foi possível colocar {0} em {1} ({2})."),
+    IT("Non è stato possibile mettere {0} in {1} ({2})."),
+    NL("{0} kon niet in {1} gezet worden ({2})."),
+    RU("Не удалось поместить {0} в {1} ({2})."),
+    TR("{0}, {1} içine konulamadı ({2})."));
+
+SS_MSG(err_clicks_need_builtin,
+    EN("Clicked objects need the built-in segmentation; the external Python "
+       "masker only understands text prompts. Turn off \"external masking\", or "
+       "describe the object in words."),
+    JA("クリックで選んだ対象には内蔵のセグメンテーションが必要です。外部の Python "
+       "マスカーはテキストのプロンプトしか解釈できません。「外部マスク」をオフに"
+       "するか、対象を言葉で説明してください。"),
+    ZH_HANS("点击选中的目标需要内置分割；外部的 Python 遮罩器只认文本提示。"
+            "请关闭“外部遮罩”，或用文字描述目标。"),
+    ZH_HANT("點選選中的目標需要內建分割；外部的 Python 遮罩器只認文字提示。"
+            "請關閉「外部遮罩」，或用文字描述目標。"),
+    KO("클릭으로 고른 대상에는 내장 분할이 필요합니다. 외부 Python 마스커는 텍스트 "
+       "프롬프트만 이해합니다. \"외부 마스킹\"을 끄거나 대상을 말로 설명하세요."),
+    DE("Angeklickte Objekte brauchen die eingebaute Segmentierung; der externe "
+       "Python-Masker versteht nur Textprompts. Schalten Sie \"externe "
+       "Maskierung\" ab, oder beschreiben Sie das Objekt in Worten."),
+    FR("Les objets cliqués ont besoin de la segmentation intégrée ; le masqueur "
+       "Python externe ne comprend que des consignes textuelles. Désactivez le "
+       "« masquage externe », ou décrivez l'objet avec des mots."),
+    ES("Los objetos señalados con clic necesitan la segmentación integrada; el "
+       "enmascarador externo de Python solo entiende indicaciones de texto. "
+       "Desactiva el «enmascarado externo», o describe el objeto con palabras."),
+    PT("Objetos clicados precisam da segmentação embutida; o mascarador externo "
+       "em Python só entende comandos de texto. Desligue a \"máscara externa\", "
+       "ou descreva o objeto em palavras."),
+    IT("Gli oggetti cliccati richiedono la segmentazione integrata; il "
+       "mascheratore Python esterno capisce solo prompt testuali. Disattivi la "
+       "\"mascheratura esterna\", oppure descriva l'oggetto a parole."),
+    NL("Aangeklikte objecten hebben de ingebouwde segmentatie nodig; de externe "
+       "Python-masker begrijpt alleen tekstprompts. Zet \"extern maskeren\" uit, "
+       "of beschrijf het object in woorden."),
+    RU("Объекты, выбранные щелчком, требуют встроенной сегментации; внешний "
+       "маскировщик на Python понимает только текстовые запросы. Отключите "
+       "«внешнее маскирование» или опишите объект словами."),
+    TR("Tıklanan nesneler yerleşik bölütlemeyi gerektirir; harici Python "
+       "maskeleyici yalnızca metin istemlerini anlar. \"Harici maskeleme\"yi "
+       "kapatın ya da nesneyi sözle anlatın."));
+
+SS_MSG(err_no_images_to_mask,
+    EN("There are no images to mask."),
+    JA("マスクする画像がありません。"),
+    ZH_HANS("没有可遮罩的图像。"),
+    ZH_HANT("沒有可遮罩的影像。"),
+    KO("마스크할 이미지가 없습니다."),
+    DE("Es gibt keine Bilder zum Maskieren."),
+    FR("Il n'y a aucune image à masquer."),
+    ES("No hay imágenes que enmascarar."),
+    PT("Não há imagens para mascarar."),
+    IT("Non ci sono immagini da mascherare."),
+    NL("Er zijn geen beelden om te maskeren."),
+    RU("Маскировать нечего."),
+    TR("Maskelenecek görüntü yok."));
+
+SS_MSG(err_masking_failed_on,
+    EN("Masking failed on {0}: {1}"),
+    JA("{0} のマスクに失敗しました: {1}"),
+    ZH_HANS("对 {0} 的遮罩失败：{1}"),
+    ZH_HANT("對 {0} 的遮罩失敗：{1}"),
+    KO("{0} 의 마스크에 실패했습니다: {1}"),
+    DE("Das Maskieren von {0} ist fehlgeschlagen: {1}"),
+    FR("Le masquage de {0} a échoué : {1}"),
+    ES("Falló el enmascarado de {0}: {1}"),
+    PT("A máscara de {0} falhou: {1}"),
+    IT("La mascheratura di {0} non è riuscita: {1}"),
+    NL("Het maskeren van {0} is mislukt: {1}"),
+    RU("Не удалось замаскировать {0}: {1}"),
+    TR("{0} maskelenemedi: {1}"));
+
+SS_MSG(err_python_missing,
+    EN("Python was not found ('{0}'). External masking needs Python with the "
+       "lang-segment-anything package. Set the Python path under Tool "
+       "locations, or use the built-in segmentation."),
+    JA("Python が見つかりません（'{0}'）。外部マスクには lang-segment-anything "
+       "パッケージを入れた Python が必要です。「ツールの場所」で Python のパスを"
+       "設定するか、内蔵のセグメンテーションを使ってください。"),
+    ZH_HANS("找不到 Python（'{0}'）。外部遮罩需要装有 lang-segment-anything 包的 "
+            "Python。请在“工具位置”中设置 Python 路径，或改用内置分割。"),
+    ZH_HANT("找不到 Python（'{0}'）。外部遮罩需要裝有 lang-segment-anything 套件的 "
+            "Python。請在「工具位置」中設定 Python 路徑，或改用內建分割。"),
+    KO("Python 을 찾지 못했습니다('{0}'). 외부 마스킹에는 lang-segment-anything "
+       "패키지가 있는 Python 이 필요합니다. \"도구 위치\"에서 Python 경로를 "
+       "지정하거나 내장 분할을 쓰세요."),
+    DE("Python wurde nicht gefunden ('{0}'). Externe Maskierung braucht Python "
+       "mit dem Paket lang-segment-anything. Tragen Sie den Python-Pfad unter "
+       "Werkzeugpfade ein, oder nutzen Sie die eingebaute Segmentierung."),
+    FR("Python est introuvable ('{0}'). Le masquage externe a besoin de Python "
+       "avec le paquet lang-segment-anything. Indiquez le chemin de Python sous "
+       "Emplacements des outils, ou utilisez la segmentation intégrée."),
+    ES("No se encontró Python ('{0}'). El enmascarado externo necesita Python "
+       "con el paquete lang-segment-anything. Indica la ruta de Python en "
+       "Ubicaciones de herramientas, o usa la segmentación integrada."),
+    PT("O Python não foi encontrado ('{0}'). A máscara externa precisa de Python "
+       "com o pacote lang-segment-anything. Informe o caminho do Python em "
+       "Locais das ferramentas, ou use a segmentação embutida."),
+    IT("Python non è stato trovato ('{0}'). La mascheratura esterna richiede "
+       "Python con il pacchetto lang-segment-anything. Indichi il percorso di "
+       "Python in Posizioni degli strumenti, oppure usi la segmentazione "
+       "integrata."),
+    NL("Python is niet gevonden ('{0}'). Extern maskeren heeft Python met het "
+       "pakket lang-segment-anything nodig. Geef het Python-pad op onder "
+       "Gereedschapslocaties, of gebruik de ingebouwde segmentatie."),
+    RU("Python не найден ('{0}'). Внешнему маскированию нужен Python с пакетом "
+       "lang-segment-anything. Укажите путь к Python в «Расположении "
+       "инструментов» или используйте встроенную сегментацию."),
+    TR("Python bulunamadı ('{0}'). Harici maskeleme, lang-segment-anything "
+       "paketinin kurulu olduğu bir Python ister. Python yolunu Araç konumları "
+       "altında belirtin ya da yerleşik bölütlemeyi kullanın."));
+
+SS_MSG(err_cannot_write,
+    EN("Cannot write {0}."),
+    JA("{0} を書き出せません。"),
+    ZH_HANS("无法写入 {0}。"),
+    ZH_HANT("無法寫入 {0}。"),
+    KO("{0} 을(를) 쓸 수 없습니다."),
+    DE("{0} kann nicht geschrieben werden."),
+    FR("Impossible d'écrire {0}."),
+    ES("No se puede escribir {0}."),
+    PT("Não é possível escrever {0}."),
+    IT("Non è possibile scrivere {0}."),
+    NL("{0} kan niet geschreven worden."),
+    RU("Не удаётся записать {0}."),
+    TR("{0} yazılamıyor."));
+
+SS_MSG(err_mask_generation_failed,
+    EN("Mask generation failed."),
+    JA("マスクの生成に失敗しました。"),
+    ZH_HANS("生成掩码失败。"),
+    ZH_HANT("產生遮罩失敗。"),
+    KO("마스크 생성에 실패했습니다."),
+    DE("Die Maskenerzeugung ist fehlgeschlagen."),
+    FR("La génération des masques a échoué."),
+    ES("Falló la generación de máscaras."),
+    PT("A geração de máscaras falhou."),
+    IT("La generazione delle maschere non è riuscita."),
+    NL("Het maken van de maskers is mislukt."),
+    RU("Не удалось создать маски."),
+    TR("Maske üretimi başarısız oldu."));
+
+SS_MSG(err_mask_missing_packages,
+    EN("Mask generation failed: the Python packages are missing. Install "
+       "lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, which needs CUDA PyTorch)."),
+    JA("マスクの生成に失敗しました。Python パッケージが足りません。"
+       "lang-segment-anything を入れてください（pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything。CUDA 版 PyTorch が必要です）。"),
+    ZH_HANS("生成掩码失败：缺少 Python 包。请安装 lang-segment-anything"
+            "（pip install git+https://github.com/luca-medeiros/lang-segment-anything，"
+            "需要 CUDA 版 PyTorch）。"),
+    ZH_HANT("產生遮罩失敗：缺少 Python 套件。請安裝 lang-segment-anything"
+            "（pip install git+https://github.com/luca-medeiros/lang-segment-anything，"
+            "需要 CUDA 版 PyTorch）。"),
+    KO("마스크 생성에 실패했습니다: Python 패키지가 없습니다. "
+       "lang-segment-anything 을 설치하세요(pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, CUDA PyTorch 필요)."),
+    DE("Die Maskenerzeugung ist fehlgeschlagen: die Python-Pakete fehlen. "
+       "Installieren Sie lang-segment-anything (pip install git+https://"
+       "github.com/luca-medeiros/lang-segment-anything, braucht CUDA-PyTorch)."),
+    FR("La génération des masques a échoué : les paquets Python manquent. "
+       "Installez lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, qui a besoin de PyTorch CUDA)."),
+    ES("Falló la generación de máscaras: faltan los paquetes de Python. Instala "
+       "lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, que necesita PyTorch con CUDA)."),
+    PT("A geração de máscaras falhou: faltam os pacotes de Python. Instale o "
+       "lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, que precisa de PyTorch com CUDA)."),
+    IT("La generazione delle maschere non è riuscita: mancano i pacchetti "
+       "Python. Installi lang-segment-anything (pip install git+https://"
+       "github.com/luca-medeiros/lang-segment-anything, richiede PyTorch CUDA)."),
+    NL("Het maken van de maskers is mislukt: de Python-pakketten ontbreken. "
+       "Installeer lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, met CUDA-PyTorch)."),
+    RU("Не удалось создать маски: отсутствуют пакеты Python. Установите "
+       "lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, нужен PyTorch с CUDA)."),
+    TR("Maske üretimi başarısız oldu: Python paketleri eksik. "
+       "lang-segment-anything kurun (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, CUDA'lı PyTorch ister)."));
+
+SS_MSG(err_mask_missing_packages_sam3,
+    EN("Mask generation failed: the Python packages are missing. Install "
+       "lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, which needs CUDA PyTorch), or for "
+       "SAM 3: https://github.com/facebookresearch/sam3"),
+    JA("マスクの生成に失敗しました。Python パッケージが足りません。"
+       "lang-segment-anything を入れてください（pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything。CUDA 版 PyTorch が必要です）。"
+       "SAM 3 の場合は https://github.com/facebookresearch/sam3 を参照。"),
+    ZH_HANS("生成掩码失败：缺少 Python 包。请安装 lang-segment-anything"
+            "（pip install git+https://github.com/luca-medeiros/lang-segment-anything，"
+            "需要 CUDA 版 PyTorch）；若用 SAM 3，见 "
+            "https://github.com/facebookresearch/sam3"),
+    ZH_HANT("產生遮罩失敗：缺少 Python 套件。請安裝 lang-segment-anything"
+            "（pip install git+https://github.com/luca-medeiros/lang-segment-anything，"
+            "需要 CUDA 版 PyTorch）；若用 SAM 3，見 "
+            "https://github.com/facebookresearch/sam3"),
+    KO("마스크 생성에 실패했습니다: Python 패키지가 없습니다. "
+       "lang-segment-anything 을 설치하세요(pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, CUDA PyTorch 필요). SAM 3 은 "
+       "https://github.com/facebookresearch/sam3 을 보세요."),
+    DE("Die Maskenerzeugung ist fehlgeschlagen: die Python-Pakete fehlen. "
+       "Installieren Sie lang-segment-anything (pip install git+https://"
+       "github.com/luca-medeiros/lang-segment-anything, braucht CUDA-PyTorch), "
+       "oder für SAM 3: https://github.com/facebookresearch/sam3"),
+    FR("La génération des masques a échoué : les paquets Python manquent. "
+       "Installez lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, qui a besoin de PyTorch CUDA), ou "
+       "pour SAM 3 : https://github.com/facebookresearch/sam3"),
+    ES("Falló la generación de máscaras: faltan los paquetes de Python. Instala "
+       "lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, que necesita PyTorch con CUDA), o "
+       "para SAM 3: https://github.com/facebookresearch/sam3"),
+    PT("A geração de máscaras falhou: faltam os pacotes de Python. Instale o "
+       "lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, que precisa de PyTorch com CUDA), "
+       "ou para o SAM 3: https://github.com/facebookresearch/sam3"),
+    IT("La generazione delle maschere non è riuscita: mancano i pacchetti "
+       "Python. Installi lang-segment-anything (pip install git+https://"
+       "github.com/luca-medeiros/lang-segment-anything, richiede PyTorch CUDA), "
+       "oppure per SAM 3: https://github.com/facebookresearch/sam3"),
+    NL("Het maken van de maskers is mislukt: de Python-pakketten ontbreken. "
+       "Installeer lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, met CUDA-PyTorch), of voor SAM 3: "
+       "https://github.com/facebookresearch/sam3"),
+    RU("Не удалось создать маски: отсутствуют пакеты Python. Установите "
+       "lang-segment-anything (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, нужен PyTorch с CUDA), либо для "
+       "SAM 3: https://github.com/facebookresearch/sam3"),
+    TR("Maske üretimi başarısız oldu: Python paketleri eksik. "
+       "lang-segment-anything kurun (pip install git+https://github.com/"
+       "luca-medeiros/lang-segment-anything, CUDA'lı PyTorch ister) ya da SAM 3 "
+       "için: https://github.com/facebookresearch/sam3"));
+
+SS_MSG(err_no_builtin_segmentation,
+    EN("This build has no built-in segmentation (-DSS_BUILD_SAM=OFF)."),
+    JA("このビルドには内蔵のセグメンテーションがありません（-DSS_BUILD_SAM=OFF）。"),
+    ZH_HANS("本版本没有内置分割（-DSS_BUILD_SAM=OFF）。"),
+    ZH_HANT("本版本沒有內建分割（-DSS_BUILD_SAM=OFF）。"),
+    KO("이 빌드에는 내장 분할이 없습니다(-DSS_BUILD_SAM=OFF)."),
+    DE("Dieser Build hat keine eingebaute Segmentierung (-DSS_BUILD_SAM=OFF)."),
+    FR("Cette version n'a pas de segmentation intégrée (-DSS_BUILD_SAM=OFF)."),
+    ES("Esta compilación no tiene segmentación integrada (-DSS_BUILD_SAM=OFF)."),
+    PT("Esta compilação não tem segmentação embutida (-DSS_BUILD_SAM=OFF)."),
+    IT("Questa build non ha la segmentazione integrata (-DSS_BUILD_SAM=OFF)."),
+    NL("Deze build heeft geen ingebouwde segmentatie (-DSS_BUILD_SAM=OFF)."),
+    RU("В этой сборке нет встроенной сегментации (-DSS_BUILD_SAM=OFF)."),
+    TR("Bu derlemede yerleşik bölütleme yok (-DSS_BUILD_SAM=OFF)."));
+
+SS_MSG(err_no_model_selected,
+    EN("No model is selected -- download one first."),
+    JA("モデルが選ばれていません。まずダウンロードしてください。"),
+    ZH_HANS("没有选择模型 —— 请先下载一个。"),
+    ZH_HANT("沒有選擇模型 —— 請先下載一個。"),
+    KO("모델이 선택되지 않았습니다 -- 먼저 내려받으세요."),
+    DE("Es ist kein Modell gewählt -- laden Sie zuerst eines herunter."),
+    FR("Aucun modèle n'est choisi -- téléchargez-en un d'abord."),
+    ES("No hay ningún modelo elegido: descarga uno primero."),
+    PT("Nenhum modelo está escolhido -- baixe um primeiro."),
+    IT("Non è scelto alcun modello -- ne scarichi prima uno."),
+    NL("Er is geen model gekozen -- download er eerst een."),
+    RU("Модель не выбрана -- сначала загрузите её."),
+    TR("Seçili model yok -- önce bir tane indirin."));
+
+SS_MSG(err_prompt_matched_nothing,
+    EN("Nothing on this frame matched the prompt."),
+    JA("このフレームにはプロンプトに合うものがありませんでした。"),
+    ZH_HANS("这一帧上没有与提示词匹配的内容。"),
+    ZH_HANT("這一格上沒有與提示詞相符的內容。"),
+    KO("이 프레임에서 프롬프트에 맞는 것이 없습니다."),
+    DE("Auf diesem Bild passte nichts zum Prompt."),
+    FR("Rien sur cette image ne correspond à la consigne."),
+    ES("Nada de este fotograma coincidió con la indicación."),
+    PT("Nada neste quadro correspondeu ao comando."),
+    IT("In questo fotogramma nulla corrisponde al prompt."),
+    NL("Niets op dit beeld kwam overeen met de prompt."),
+    RU("На этом кадре ничего не подошло под запрос."),
+    TR("Bu karede isteme uyan bir şey çıkmadı."));
+
+SS_MSG(err_clicks_matched_nothing,
+    EN("The clicks on this frame did not select anything."),
+    JA("このフレームでのクリックは何も選びませんでした。"),
+    ZH_HANS("这一帧上的点击没有选中任何东西。"),
+    ZH_HANT("這一格上的點選沒有選中任何東西。"),
+    KO("이 프레임에서 한 클릭이 아무것도 고르지 못했습니다."),
+    DE("Die Klicks auf diesem Bild haben nichts ausgewählt."),
+    FR("Les clics sur cette image n'ont rien sélectionné."),
+    ES("Los clics en este fotograma no seleccionaron nada."),
+    PT("Os cliques neste quadro não selecionaram nada."),
+    IT("I clic su questo fotogramma non hanno selezionato nulla."),
+    NL("De klikken op dit beeld hebben niets geselecteerd."),
+    RU("Щелчки на этом кадре ничего не выделили."),
+    TR("Bu karedeki tıklamalar hiçbir şey seçmedi."));
+
+SS_MSG(err_preview_unavailable,
+    EN("The preview renderer is unavailable (OpenGL 3.2 is required)."),
+    JA("プレビューの描画が使えません（OpenGL 3.2 が必要です）。"),
+    ZH_HANS("预览渲染器不可用（需要 OpenGL 3.2）。"),
+    ZH_HANT("預覽算繪器不可用（需要 OpenGL 3.2）。"),
+    KO("미리보기 렌더러를 쓸 수 없습니다(OpenGL 3.2 필요)."),
+    DE("Die Vorschau-Darstellung steht nicht zur Verfügung (OpenGL 3.2 wird "
+       "gebraucht)."),
+    FR("Le rendu d'aperçu n'est pas disponible (OpenGL 3.2 est requis)."),
+    ES("El renderizador de vista previa no está disponible (hace falta OpenGL "
+       "3.2)."),
+    PT("O renderizador de pré-visualização não está disponível (é preciso "
+       "OpenGL 3.2)."),
+    IT("Il rendering dell'anteprima non è disponibile (serve OpenGL 3.2)."),
+    NL("De voorbeeldweergave is niet beschikbaar (OpenGL 3.2 is vereist)."),
+    RU("Просмотр недоступен (нужен OpenGL 3.2)."),
+    TR("Önizleme işleyicisi kullanılamıyor (OpenGL 3.2 gerekiyor)."));
+
+SS_MSG(err_unknown_preset,
+    EN("Unknown preset: {0}"),
+    JA("知らないプリセットです: {0}"),
+    ZH_HANS("未知的预设：{0}"),
+    ZH_HANT("未知的預設：{0}"),
+    KO("모르는 프리셋입니다: {0}"),
+    DE("Unbekannte Voreinstellung: {0}"),
+    FR("Préréglage inconnu : {0}"),
+    ES("Ajuste preestablecido desconocido: {0}"),
+    PT("Predefinição desconhecida: {0}"),
+    IT("Preimpostazione sconosciuta: {0}"),
+    NL("Onbekende voorinstelling: {0}"),
+    RU("Неизвестная предустановка: {0}"),
+    TR("Bilinmeyen ön ayar: {0}"));
+
+SS_MSG(err_bad_flag_value,
+    EN("{0}: '{1}' is not a value this accepts."),
+    JA("{0}: '{1}' は受け付けられない値です。"),
+    ZH_HANS("{0}：'{1}' 不是可接受的值。"),
+    ZH_HANT("{0}：'{1}' 不是可接受的值。"),
+    KO("{0}: '{1}' 은(는) 받을 수 없는 값입니다."),
+    DE("{0}: '{1}' ist kein Wert, den das annimmt."),
+    FR("{0} : « {1} » n'est pas une valeur acceptée."),
+    ES("{0}: «{1}» no es un valor admitido."),
+    PT("{0}: '{1}' não é um valor aceito."),
+    IT("{0}: '{1}' non è un valore accettato."),
+    NL("{0}: '{1}' is geen waarde die hier kan."),
+    RU("{0}: «{1}» -- недопустимое значение."),
+    TR("{0}: '{1}' kabul edilen bir değer değil."));
+
+SS_MSG(err_glfw_init,
+    EN("GLFW could not start. Is a display available?"),
+    JA("GLFW を起動できませんでした。ディスプレイはありますか。"),
+    ZH_HANS("GLFW 无法启动。是否有可用的显示设备？"),
+    ZH_HANT("GLFW 無法啟動。是否有可用的顯示裝置？"),
+    KO("GLFW 를 시작하지 못했습니다. 디스플레이가 있습니까?"),
+    DE("GLFW konnte nicht starten. Gibt es eine Anzeige?"),
+    FR("GLFW n'a pas pu démarrer. Y a-t-il un affichage ?"),
+    ES("GLFW no pudo arrancar. ¿Hay alguna pantalla disponible?"),
+    PT("O GLFW não conseguiu iniciar. Há algum monitor disponível?"),
+    IT("GLFW non è riuscito ad avviarsi. C'è uno schermo disponibile?"),
+    NL("GLFW kon niet starten. Is er een scherm beschikbaar?"),
+    RU("GLFW не запустился. Есть ли доступный дисплей?"),
+    TR("GLFW başlatılamadı. Kullanılabilir bir ekran var mı?"));
+
+SS_MSG(err_window_create,
+    EN("The window or the GL context could not be created."),
+    JA("ウィンドウまたは GL コンテキストを作成できませんでした。"),
+    ZH_HANS("无法创建窗口或 GL 上下文。"),
+    ZH_HANT("無法建立視窗或 GL 內容。"),
+    KO("창이나 GL 컨텍스트를 만들지 못했습니다."),
+    DE("Das Fenster oder der GL-Kontext ließ sich nicht anlegen."),
+    FR("La fenêtre ou le contexte GL n'a pas pu être créé."),
+    ES("No se pudo crear la ventana o el contexto de GL."),
+    PT("Não foi possível criar a janela ou o contexto GL."),
+    IT("Non è stato possibile creare la finestra o il contesto GL."),
+    NL("Het venster of de GL-context kon niet gemaakt worden."),
+    RU("Не удалось создать окно или контекст GL."),
+    TR("Pencere ya da GL bağlamı oluşturulamadı."));
+
+SS_MSG(warn_font_unreadable,
+    EN("{0} could not be read."),
+    JA("{0} を読めませんでした。"),
+    ZH_HANS("无法读取 {0}。"),
+    ZH_HANT("無法讀取 {0}。"),
+    KO("{0} 을(를) 읽지 못했습니다."),
+    DE("{0} konnte nicht gelesen werden."),
+    FR("{0} n'a pas pu être lu."),
+    ES("No se pudo leer {0}."),
+    PT("Não foi possível ler {0}."),
+    IT("Non è stato possibile leggere {0}."),
+    NL("{0} kon niet gelezen worden."),
+    RU("Не удалось прочитать {0}."),
+    TR("{0} okunamadı."));
+
+SS_MSG(err_no_sfm_module,
+    EN("This build has no structure-from-motion module (-DSS_BUILD_SFM=OFF); "
+       "use COLMAP instead."),
+    JA("このビルドには Structure from Motion のモジュールがありません"
+       "（-DSS_BUILD_SFM=OFF）。代わりに COLMAP を使ってください。"),
+    ZH_HANS("本版本没有运动恢复结构模块（-DSS_BUILD_SFM=OFF），请改用 COLMAP。"),
+    ZH_HANT("本版本沒有運動恢復結構模組（-DSS_BUILD_SFM=OFF），請改用 COLMAP。"),
+    KO("이 빌드에는 Structure from Motion 모듈이 없습니다(-DSS_BUILD_SFM=OFF). "
+       "대신 COLMAP 을 쓰세요."),
+    DE("Dieser Build hat kein Structure-from-Motion-Modul "
+       "(-DSS_BUILD_SFM=OFF); verwenden Sie stattdessen COLMAP."),
+    FR("Cette version n'a pas de module structure-from-motion "
+       "(-DSS_BUILD_SFM=OFF) ; utilisez COLMAP à la place."),
+    ES("Esta compilación no tiene módulo de structure-from-motion "
+       "(-DSS_BUILD_SFM=OFF); usa COLMAP en su lugar."),
+    PT("Esta compilação não tem módulo de structure-from-motion "
+       "(-DSS_BUILD_SFM=OFF); use o COLMAP no lugar."),
+    IT("Questa build non ha il modulo structure-from-motion "
+       "(-DSS_BUILD_SFM=OFF); usi COLMAP al suo posto."),
+    NL("Deze build heeft geen structure-from-motion-module "
+       "(-DSS_BUILD_SFM=OFF); gebruik in plaats daarvan COLMAP."),
+    RU("В этой сборке нет модуля structure-from-motion (-DSS_BUILD_SFM=OFF); "
+       "используйте COLMAP."),
+    TR("Bu derlemede structure-from-motion modülü yok (-DSS_BUILD_SFM=OFF); "
+       "bunun yerine COLMAP kullanın."));
+
+SS_MSG(err_no_exe_path,
+    EN("This program could not work out its own path, so it cannot run the "
+       "reconstruction step."),
+    JA("このプログラムは自分自身のパスを特定できなかったため、再構成の段階を"
+       "実行できません。"),
+    ZH_HANS("本程序无法确定自身路径，因而无法运行重建步骤。"),
+    ZH_HANT("本程式無法確定自身路徑，因而無法執行重建步驟。"),
+    KO("이 프로그램이 자신의 경로를 알아내지 못해 재구성 단계를 실행할 수 없습니다."),
+    DE("Dieses Programm konnte seinen eigenen Pfad nicht ermitteln und kann den "
+       "Rekonstruktionsschritt daher nicht ausführen."),
+    FR("Ce programme n'a pas pu déterminer son propre chemin, il ne peut donc "
+       "pas lancer l'étape de reconstruction."),
+    ES("Este programa no pudo averiguar su propia ruta, así que no puede "
+       "ejecutar el paso de reconstrucción."),
+    PT("Este programa não conseguiu descobrir o próprio caminho, então não pode "
+       "executar a etapa de reconstrução."),
+    IT("Questo programma non è riuscito a determinare il proprio percorso, "
+       "quindi non può eseguire la fase di ricostruzione."),
+    NL("Dit programma kon zijn eigen pad niet bepalen en kan de "
+       "reconstructiestap daarom niet uitvoeren."),
+    RU("Программа не смогла определить собственный путь, поэтому не может "
+       "выполнить этап реконструкции."),
+    TR("Bu program kendi yolunu belirleyemedi, bu yüzden yeniden oluşturma "
+       "adımını çalıştıramıyor."));
+
 }  // namespace log
 }  // namespace msg
 }  // namespace i18n

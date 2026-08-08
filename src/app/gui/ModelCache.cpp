@@ -1,6 +1,7 @@
 // ModelCache.cpp -- see ModelCache.h.
 
 #include "app/gui/ModelCache.h"
+#include "i18n/catalog/Log.h"
 
 #include "app/gui/AppPaths.h"
 #include "app/gui/Subprocess.h"
@@ -194,11 +195,13 @@ void FileDownload::run(std::string url, std::string dest,
                 if (s < pct) {
                     const float v = std::strtof(line.substr(s, pct - s).c_str(), nullptr);
                     _progress = v / 100.0f;
-                    char buf[64];
-                    std::snprintf(buf, sizeof buf, "%.0f%% of %s", v,
-                                  human_bytes(expected_bytes).c_str());
+                    char pct_s[16];
+                    std::snprintf(pct_s, sizeof pct_s, "%.0f", v);
+                    std::string text = spirula::i18n::format(
+                        spirula::i18n::msg::log::download_percent_of,
+                        {pct_s, human_bytes(expected_bytes)});
                     std::lock_guard<std::mutex> lk(_mu);
-                    _status = buf;
+                    _status = std::move(text);
                 }
                 return;
             }

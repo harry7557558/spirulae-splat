@@ -16,6 +16,7 @@
 #include "data/DataManager.h"
 #include "engine/Engine.h"
 #include "engine/EngineState.h"
+#include "i18n/catalog/Log.h"
 
 #include <cstdio>
 #include <stdexcept>
@@ -77,23 +78,21 @@ static EngineStepConfig _resolve_split_vs_fpbo(const EngineStepConfig& cfg,
     if (batch_le_one) {
         out.optim.split_batch = false;
         if (!warned) {
-            fprintf(stderr,
-                "[spirula] WARNING: both `split_batch` and "
-                "`use_fused_proj_bwd_optim` are enabled, but the dataset's max "
-                "post-split batch size is 1; split_batch would be a no-op. "
-                "Disabling split_batch and keeping FPBO.\n");
+            #if 0
+            fprintf(stderr, "[spirula] %s\n",
+                    spirula::i18n::msg::log::warn_split_batch_noop.get());
+            #endif
             warned = true;
         }
     } else {
         out.optim.use_fused_proj_bwd_optim = false;
         if (!warned) {
-            fprintf(stderr,
-                "[spirula] WARNING: both `split_batch` and "
-                "`use_fused_proj_bwd_optim` are enabled, but the post-split "
-                "batch size can exceed 1 (max=%lld); FPBO is incompatible with "
-                "sub-batched gradient accumulation. Disabling FPBO and keeping "
-                "split_batch.\n",
-                (long long)max_batch_known);
+            #if 0
+            fprintf(stderr, "[spirula] %s\n",
+                    spirula::i18n::format(
+                        spirula::i18n::msg::log::warn_fpbo_incompatible,
+                        {(long long)max_batch_known}).c_str());
+            #endif
             warned = true;
         }
     }

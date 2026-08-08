@@ -4,6 +4,7 @@
 // point-cloud reader. JSON via app/Json.h; no external dependencies.
 
 #include "data/DatasetParser.h"
+#include "i18n/catalog/Data.h"
 #include "data/FastFloat.h"
 #include "data/Json.h"
 
@@ -16,6 +17,8 @@
 #include <cstring>
 #include <filesystem>
 #include <stdexcept>
+
+namespace dmsg = spirula::i18n::msg::data;
 
 namespace fs = std::filesystem;
 
@@ -327,14 +330,16 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
         if (!fp) continue;
         std::string file_path = fp->as_string();
         if (fs::path(file_path).extension() == ".webp") {
-            std::fprintf(stderr, "WARNING: %s has unsupported image format, skipping\n",
-                         file_path.c_str());
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                         spirula::i18n::format(dmsg::image_format_unsupported,
+                                               {file_path}).c_str());
             continue;
         }
         fs::path abs = root / file_path;
         if (cfg.require_image_files && !fs::exists(abs)) {
-            std::fprintf(stderr, "WARNING: %s does not exist, skipping\n",
-                         file_path.c_str());
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                         spirula::i18n::format(dmsg::image_missing,
+                                               {file_path}).c_str());
             continue;
         }
         frames.push_back({&fr, file_path, abs.string()});

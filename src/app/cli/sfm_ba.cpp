@@ -8,10 +8,12 @@
 #include <fstream>
 #include <random>
 
+#include "sfm/SfmConfig.h"
 #include "sfm/ba/Problem.h"
 #include "sfm/ba/Solver.h"
 #include "sfm/map/Bundle.h"
 #include "core/Env.h"
+#include "i18n/catalog/SfmHelp.h"
 
 // spirula::env with a default. (`getenv(x) ?: "d"` is a GNU extension MSVC
 // lacks.)
@@ -36,53 +38,60 @@ static void writePly(const char* path, const std::vector<double>& pts) {
 // options are not in the SfmConfig table: nothing else drives them, and the
 // pipeline's own bundle adjustment is configured through --ba-* on `map`.
 void printBaHelp(FILE* out) {
+    namespace H = spirula::i18n::msg::sfmhelp;
+    using spirula::i18n::wrap;
+
+    std::fprintf(out, "spirula-sfm ba -- %s\n\n", H::sum_ba.get());
+    std::fprintf(out, "%s\n  spirula-sfm ba <BAL_PROBLEM.TXT|SPARSE_MODEL_DIR> "
+                      "[options]\n\n", H::label_usage.get());
+
+    std::fprintf(out, "%s\n", H::label_description.get());
+    for (const spirula::i18n::Msg* m : {&H::ba_desc_1, &H::ba_desc_2}) {
+        if (m != &H::ba_desc_1) std::fprintf(out, "\n");
+        for (const std::string& line : wrap(m->get(), 94))
+            std::fprintf(out, "  %s\n", line.c_str());
+    }
+
+    // One row per flag: the flag and its value syntax on the left (identifiers,
+    // so untranslated), the sentence for it on the right, wrapped where the
+    // language allows.
+    struct Row { const char* flag; const char* def; const spirula::i18n::Msg* help; };
+    static const Row kRows[] = {
+        {"--real {float|double|df}", "double", &H::ba_opt_real},
+        {"--loss {trivial|huber|cauchy}", "trivial", &H::ba_opt_loss},
+        {"--loss-param X", "1", &H::ba_opt_loss_param},
+        {"--model {snavely|snavely_f}", "snavely", &H::ba_opt_model},
+        {"--shared-intrinsics", "", &H::ba_opt_shared_intrinsics},
+        {"--solver {auto|dense|cg}", "auto", &H::ba_opt_solver},
+        {"--max-iters N", "", &H::ba_opt_max_iters},
+        {"--damping X", "", &H::ba_opt_damping},
+        {"--rtol X", "", &H::ba_opt_rtol},
+        {"--patience N", "", &H::ba_opt_patience},
+        {"--cg-iters N", "", &H::ba_opt_cg_iters},
+        {"--cg-tol X", "", &H::ba_opt_cg_tol},
+        {"--cg-fallback {auto|on|off}", "", &H::ba_opt_cg_fallback},
+        {"--vram-budget MB", "", &H::ba_opt_vram_budget},
+        {"--ply PREFIX", "", &H::ba_opt_ply},
+        {"-o, --output DIR", "", &H::ba_opt_output},
+        {"--device N", "", &H::ba_opt_device},
+        {"--validate", "", &H::ba_opt_validate},
+        {"--profile", "", &H::ba_opt_profile},
+        {"--quiet", "", &H::ba_opt_quiet},
+        {"--spv-path FILE", "", &H::ba_opt_spv_path},
+        {"-h, --help", "", &H::opt_help},
+    };
+    std::fprintf(out, "\n%s\n", H::label_options.get());
+    for (const Row& r : kRows) {
+        sfm::printOptionLine(out, r.flag, r.def, r.help->get());
+    }
+
     std::fprintf(out,
-        "spirula-sfm ba -- bundle-adjust a BAL problem (solver benchmark)\n"
-        "\n"
-        "Usage:\n"
-        "  spirula-sfm ba <BAL_PROBLEM.TXT|SPARSE_MODEL_DIR> [options]\n"
-        "\n"
-        "Description:\n"
-        "  Runs the GPU bundle adjuster directly on a problem in Bundle Adjustment in the\n"
-        "  Large format, and reports cost, iterations, time and VRAM. This is how the\n"
-        "  solver is benchmarked and debugged against a published reference; the pipeline\n"
-        "  itself never reads BAL. See src/sfm/ba/README.md.\n"
-        "\n"
-        "  Given a directory instead, it reads a COLMAP sparse model and runs exactly the\n"
-        "  global BA the mapper runs on it (Huber 2 px unless --loss says otherwise), which\n"
-        "  is how the solver is profiled on real captures. -o writes the refined model.\n"
-        "\n"
-        "Options:\n"
-        "  --real {float|double|df}            [double]  scalar the solver works in; df is an\n"
-        "                                      emulated double-float, for devices without fp64\n"
-        "  --loss {trivial|huber|cauchy}       [trivial] robust loss\n"
-        "  --loss-param X                      [1]       Huber delta / Cauchy c\n"
-        "  --model {snavely|snavely_f}         [snavely] BAL camera model\n"
-        "  --shared-intrinsics                 one intrinsics block for every camera\n"
-        "  --solver {auto|dense|cg}            [auto]    dense Cholesky or implicit-Schur PCG\n"
-        "  --max-iters N                       Levenberg-Marquardt iteration cap\n"
-        "  --damping X                         initial LM damping\n"
-        "  --rtol X                            relative cost improvement to stop below\n"
-        "  --patience N                        steps below --rtol before stopping\n"
-        "  --cg-iters N                        PCG iteration cap per LM step\n"
-        "  --cg-tol X                          PCG relative residual tolerance\n"
-        "  --cg-fallback {auto|on|off}         fall back to dense when PCG stalls\n"
-        "  --vram-budget MB                    device memory the solver may use\n"
-        "  --ply PREFIX                        write PREFIX_before.ply and PREFIX_after.ply\n"
-        "  -o, --output DIR                    write the refined sparse model (model input only)\n"
-        "  --device N                          Vulkan device index\n"
-        "  --validate                          check the assembled system against a reference\n"
-        "  --profile                           per-kernel timings\n"
-        "  --quiet                             only the result lines\n"
-        "  --spv-path FILE                     load the solver kernels from this SPIR-V file\n"
-        "  -h, --help                          show this help and exit\n"
-        "\n"
-        "Examples:\n"
+        "\n%s\n"
         "  spirula-sfm ba problem-49-7776-pre.txt --real df --loss huber\n"
-        "  spirula-sfm ba problem-1778-993923-pre.txt --solver cg --vram-budget 4096\n"
-        "\n"
-        "A (--real, --loss) pair that was trimmed out of the build reports \"variant not\n"
-        "built into this binary\"; see SS_SFM_REALS / SS_SFM_LOSSES.\n");
+        "  spirula-sfm ba problem-1778-993923-pre.txt --solver cg --vram-budget 4096\n\n",
+        H::label_examples.get());
+    for (const std::string& line : wrap(H::ba_note.get(), 78))
+        std::fprintf(out, "%s\n", line.c_str());
 }
 
 int cmdBa(int argc, char** argv) {
@@ -228,14 +237,29 @@ int cmdBa(int argc, char** argv) {
     const SolverStats& st = solver.stats();
     printf("real=%s loss=%s model=%s solver=%s%s\n", realCfgName(solver.real()), loss.c_str(),
            model.c_str(), st.solver, shared_intr ? " shared-intrinsics" : "");
-    printf("initial cost: %.6e\n", st.initial_cost);
-    printf("final cost:   %.6e\n", st.final_cost);
-    printf("iterations:   %d (%d accepted)\n", st.iterations, st.accepted);
-    if (st.cg_solves)
-        printf("cg: %.1f iters/solve avg, %d dense fallbacks\n",
-               st.cg_iters_total / st.cg_solves, st.cg_fallbacks);
-    printf("time: preprocess %.3f s, solve %.3f s, total %.3f s\n", t_pre, st.solve_seconds,
-           t_pre + st.solve_seconds);
-    printf("vram: %.1f MB\n", st.vram_mb);
+    {
+        namespace H = spirula::i18n::msg::sfmhelp;
+        using spirula::i18n::format;
+        auto num = [](double v, int dec) {
+            char b[64];
+            std::snprintf(b, sizeof b, "%.*f", dec, v);
+            return std::string(b);
+        };
+        char c0[32], c1[32];
+        std::snprintf(c0, sizeof c0, "%.6e", st.initial_cost);
+        std::snprintf(c1, sizeof c1, "%.6e", st.final_cost);
+        printf("%s: %s\n", H::ba_res_initial_cost.get(), c0);
+        printf("%s: %s\n", H::ba_res_final_cost.get(), c1);
+        printf("%s\n", format(H::ba_res_iterations,
+                              {st.iterations, st.accepted}).c_str());
+        if (st.cg_solves)
+            printf("%s\n", format(H::ba_res_cg,
+                                  {num(st.cg_iters_total / st.cg_solves, 1),
+                                   st.cg_fallbacks}).c_str());
+        printf("%s\n", format(H::ba_res_time,
+                              {num(t_pre, 3), num(st.solve_seconds, 3),
+                               num(t_pre + st.solve_seconds, 3)}).c_str());
+        printf("%s\n", format(H::ba_res_vram, {num(st.vram_mb, 1)}).c_str());
+    }
     return 0;
 }

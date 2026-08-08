@@ -13,6 +13,7 @@
 #include "mesh/MeshExport.h"
 #include "mesh/MeshUV.h"
 #include "mesh/Delaunay3D.h"
+#include "mesh/MeshLog.h"
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -40,6 +41,8 @@
 #endif
 
 namespace meshing {
+
+namespace mmsg = spirula::i18n::msg::mesh;
 
 namespace {
 
@@ -393,8 +396,9 @@ static void merge_vertices(Mesh& mesh, float merge_factor, float max_flip_deg,
     mesh.V.swap(newV);
     mesh.F.swap(newF);
     if (verbose)
-        printf("[meshing] merge: %ld collapses -> %zu verts, %zu faces\n",
-               total_collapses, mesh.V.size(), mesh.F.size());
+        mlog::out(mlog::Stage::Merge, mmsg::merge_result,
+                  {total_collapses, (long long)mesh.V.size(),
+                   (long long)mesh.F.size()});
 }
 
 // ---------------------------------------------------------------------------
@@ -499,8 +503,8 @@ static void dedup_faces(Mesh& mesh, bool verbose) {
     for (long t = 0; t < nf; ++t) if (!drop[t]) newF.push_back(mesh.F[t]);
     mesh.F.swap(newF);
     if (verbose)
-        printf("[meshing] dedup faces: removed %ld duplicate faces -> %zu faces\n",
-               ndup, mesh.F.size());
+        mlog::out(mlog::Stage::Cleanup, mmsg::dedup_faces,
+                  {ndup, (long long)mesh.F.size()});
 }
 
 // ---------------------------------------------------------------------------
@@ -552,9 +556,9 @@ static void remove_floaters(Mesh& mesh, int min_faces, bool verbose) {
     mesh.V.swap(newV);
     mesh.F.swap(newF);
     if (verbose)
-        printf("[meshing] floaters: removed %ld faces, %zu verts "
-               "-> %zu verts, %zu faces\n",
-               dropped_f, removed_v, mesh.V.size(), mesh.F.size());
+        mlog::out(mlog::Stage::Cleanup, mmsg::floaters_removed,
+                  {dropped_f, (long long)removed_v, (long long)mesh.V.size(),
+                   (long long)mesh.F.size()});
 }
 
 // ---------------------------------------------------------------------------
@@ -804,9 +808,9 @@ static void fill_holes(Mesh& mesh, float ratio, int max_edges, bool verbose) {
         }
     }
     if (verbose)
-        printf("[meshing] fill holes: filled %ld loops (< %.3g x component size "
-               "or <= %d edges), added %ld faces -> %zu verts, %zu faces\n",
-               n_filled, ratio, max_edges, n_tris, mesh.V.size(), mesh.F.size());
+        mlog::out(mlog::Stage::Cleanup, mmsg::holes_filled,
+                  {n_filled, (double)ratio, max_edges, n_tris,
+                   (long long)mesh.V.size(), (long long)mesh.F.size()});
 }
 
 // ---------------------------------------------------------------------------
@@ -875,8 +879,8 @@ static void split_nonmanifold_vertices(Mesh& mesh, bool verbose) {
         if (!root2vid.empty()) ++n_split;
     }
     if (verbose)
-        printf("[meshing] split non-manifold verts: %ld split, %ld copies added "
-               "-> %zu verts\n", n_split, n_new, mesh.V.size());
+        mlog::out(mlog::Stage::Cleanup, mmsg::nonmanifold_split,
+                  {n_split, n_new, (long long)mesh.V.size()});
 }
 
 // ---------------------------------------------------------------------------
@@ -1138,7 +1142,7 @@ static void fix_degenerate_faces(Mesh& mesh, float angle_deg, bool verbose) {
     }
 
     if (n_collapse == 0 && n_flip == 0) {
-        if (verbose) printf("[meshing] fix degenerate faces: none found\n");
+        if (verbose) mlog::out(mlog::Stage::Cleanup, mmsg::degenerate_none);
         return;
     }
 
@@ -1167,9 +1171,9 @@ static void fix_degenerate_faces(Mesh& mesh, float angle_deg, bool verbose) {
     mesh.F.swap(nF);
     if (has_color) mesh.C.swap(nC);
     if (verbose)
-        printf("[meshing] fix degenerate faces: %ld collapses, %ld flips "
-               "-> %zu verts, %zu faces\n",
-               n_collapse, n_flip, mesh.V.size(), mesh.F.size());
+        mlog::out(mlog::Stage::Cleanup, mmsg::degenerate_fixed,
+                  {n_collapse, n_flip, (long long)mesh.V.size(),
+                   (long long)mesh.F.size()});
 }
 
 // ---------------------------------------------------------------------------
@@ -1395,8 +1399,8 @@ static void improve_mesh_quality(Mesh& mesh, int iters, bool verbose,
         if (flips == 0 && moved == 0) break;
     }
     if (verbose)
-        printf("[meshing] quality: %ld valence flips, %ld tangential moves "
-               "(%d iters)\n", total_flips, total_moved, iters);
+        mlog::out(mlog::Stage::Quality, mmsg::quality_result,
+                  {total_flips, total_moved, iters});
 }
 
 } // namespace
@@ -1431,7 +1435,7 @@ bool generate_mesh(
     for (const auto& spec : formats) {
         std::string err = check_export_support(spec, cfg.color_mode);
         if (!err.empty()) {
-            fprintf(stderr, "[meshing] error: %s\n", err.c_str());
+            mlog::err_raw(mlog::Stage::Wrote, err);
             return false;
         }
     }
@@ -1445,7 +1449,7 @@ bool generate_mesh(
         int cam = std::atoi(dbg);
         std::vector<float> mom; int W = 0, H = 0;
         if (!ev.debug_render_moments(cam, mom, W, H)) {
-            printf("[meshing] debug render unavailable (no camera intrinsics)\n");
+            mlog::out(mlog::Stage::Debug, mmsg::debug_render_unavailable);
             return false;
         }
         double m0sum = 0; float m0max = 0, mn = 1e30f, mx = -1e30f;
@@ -1455,16 +1459,25 @@ bool generate_mesh(
             m0sum += m0; m0max = std::max(m0max, m0);
             if (m0 > 0.5f) { mn = std::min(mn, me); mx = std::max(mx, me); ++seen; }
         }
-        printf("[meshing] debug moments cam %d: %dx%d, mean m0=%.4f max m0=%.4f; "
-               "depth(m0>0.5) in [%.3f, %.3f] over %zu px\n",
-               cam, W, H, m0sum / ((double)W * H), m0max, mn, mx, seen);
+        // A dump of numbers behind SS_MESH_DEBUG_RENDER, read by whoever is
+        // debugging the occupancy field rather than by whoever is waiting for
+        // a mesh. It stays as it is.
+        {
+            char buf[256];
+            std::snprintf(buf, sizeof buf,
+                          "cam %d: %dx%d, mean m0=%.4f max m0=%.4f; "
+                          "depth(m0>0.5) in [%.3f, %.3f] over %zu px",
+                          cam, W, H, m0sum / ((double)W * H), m0max, mn, mx, seen);
+            mlog::out_raw(mlog::Stage::Debug, buf);
+        }
         FILE* f = std::fopen("/tmp/ss_moments.f32", "wb");
         if (f) {
             int hdr[3] = {H, W, 3};
             std::fwrite(hdr, sizeof(int), 3, f);
             std::fwrite(mom.data(), sizeof(float), mom.size(), f);
             std::fclose(f);
-            printf("[meshing] wrote /tmp/ss_moments.f32 (header: H W 3, then floats)\n");
+            mlog::out_raw(mlog::Stage::Debug,
+                          "/tmp/ss_moments.f32 (header: H W 3, then floats)");
         }
         return true;
     }
@@ -1475,38 +1488,45 @@ bool generate_mesh(
     // nothing to show.
     // ---- 1. point cloud (float everywhere except the Delaunay call) ----
     if (cfg.verbose)
-        printf("[meshing] point cloud: sampling %d Gaussians...\n",
-               ev.num_kept());
+        mlog::out(mlog::Stage::PointCloud, mmsg::point_cloud_sampling,
+                  {ev.num_kept()});
     std::vector<float> pts;
     ev.generate_point_cloud(pts);
     const int P = ev.num_points();
-    if (cfg.verbose) printf("[meshing] point cloud: %d points (%.2fs)\n", P, secs_since(t0));
+    if (cfg.verbose)
+        mlog::out(mlog::Stage::PointCloud, mmsg::point_cloud_done,
+                  {P, mlog::num(secs_since(t0), 2)});
 
     // ---- 2. Delaunay tetrahedralization (needs double precision) ----
     auto t1 = Clock::now();
     if (cfg.verbose)
-        printf("[meshing] Delaunay: triangulating %d points...\n", P);
+        mlog::out(mlog::Stage::Delaunay, mmsg::delaunay_start, {P});
     std::vector<double> pts_d(pts.begin(), pts.end());
     auto tri = delaunay3d::compute_delaunay_3d(pts_d.data(), P, cfg.num_threads, false);
     pts_d.clear(); pts_d.shrink_to_fit();
     const int M = tri.nb_cells;
     if (cfg.verbose)
-        printf("[meshing] Delaunay: %d tets, %d threads (%.2fs)\n",
-               M, tri.num_threads, secs_since(t1));
-    if (M == 0) { printf("[meshing] no tetrahedra produced\n"); return false; }
+        mlog::out(mlog::Stage::Delaunay, mmsg::delaunay_done,
+                  {M, tri.num_threads, mlog::num(secs_since(t1), 2)});
+    if (M == 0) {
+        mlog::fail(mlog::Stage::Delaunay, mmsg::no_tetrahedra);
+        return false;
+    }
 
     // ---- 3. occupancy at all vertices ----
     auto t2 = Clock::now();
     if (cfg.verbose)
-        printf("[meshing] occupancy field: evaluating %d points...\n", P);
+        mlog::out(mlog::Stage::Occupancy, mmsg::occupancy_start, {P});
     std::vector<float> occ(P);
     ev.evaluate(pts.data(), P, occ.data());
-    if (cfg.verbose) printf("[meshing] occupancy field (%.2fs)\n", secs_since(t2));
+    if (cfg.verbose)
+        mlog::out(mlog::Stage::Occupancy, mmsg::seconds,
+                  {mlog::num(secs_since(t2), 2)});
 
     // ---- 4. collect cut edges ----
     auto t3 = Clock::now();
     if (cfg.verbose)
-        printf("[meshing] cut edges: scanning %d tetrahedra...\n", M);
+        mlog::out(mlog::Stage::CutEdges, mmsg::cut_edges_start, {M});
     std::unordered_map<int64_t, int> edge_id;
     edge_id.reserve((size_t)M * 2);
     std::vector<int32_t> ea, eb;
@@ -1531,14 +1551,20 @@ bool generate_mesh(
         }
     }
     const int E = (int)ea.size();
-    if (cfg.verbose) printf("[meshing] %d cut edges (%.2fs)\n", E, secs_since(t3));
-    if (E == 0) { printf("[meshing] isosurface empty (no edges cross %.3f)\n", iso); return false; }
+    if (cfg.verbose)
+        mlog::out(mlog::Stage::CutEdges, mmsg::cut_edges_done,
+                  {E, mlog::num(secs_since(t3), 2)});
+    if (E == 0) {
+        mlog::fail(mlog::Stage::CutEdges, mmsg::isosurface_empty,
+                   {mlog::num(iso, 3)});
+        return false;
+    }
 
     // ---- 5. bisection: one mesh vertex per cut edge ----
     auto t4 = Clock::now();
     if (cfg.verbose)
-        printf("[meshing] bisection: %d edges, %d iterations...\n",
-               E, cfg.bisection_iters);
+        mlog::out(mlog::Stage::Bisection, mmsg::bisection_start,
+                  {E, cfg.bisection_iters});
     Mesh mesh;
     mesh.V.resize(E);
     {
@@ -1547,7 +1573,9 @@ bool generate_mesh(
         for (int i = 0; i < E; ++i)
             mesh.V[i] = {xyz[3*i], xyz[3*i+1], xyz[3*i+2]};
     }
-    if (cfg.verbose) printf("[meshing] bisection (%.2fs)\n", secs_since(t4));
+    if (cfg.verbose)
+        mlog::out(mlog::Stage::Bisection, mmsg::seconds,
+                  {mlog::num(secs_since(t4), 2)});
 
     // ---- 6. emit triangles ----
     // Delaunay tets have no consistent signed-volume orientation, so the MT
@@ -1600,7 +1628,8 @@ bool generate_mesh(
         }
     }
     if (cfg.verbose)
-        printf("[meshing] marching tets: %zu raw faces (%.2fs)\n", mesh.F.size(), secs_since(t5));
+        mlog::out(mlog::Stage::Marching, mmsg::marching_done,
+                  {(long long)mesh.F.size(), mlog::num(secs_since(t5), 2)});
 
     pts.clear(); pts.shrink_to_fit();
     tri.cell_adjacents.clear(); tri.cell_adjacents.shrink_to_fit();
@@ -1609,7 +1638,9 @@ bool generate_mesh(
     // ---- 7. merge (do this once to reduce chance of GPU OOM during 6b, but risk CPU OOM) ----
     auto t6 = Clock::now();
     merge_vertices(mesh, cfg.merge_factor, cfg.merge_max_flip_deg, cfg.verbose, cfg.num_threads);
-    if (cfg.verbose) printf("[meshing] merge (%.2fs)\n", secs_since(t6));
+    if (cfg.verbose)
+        mlog::out(mlog::Stage::Merge, mmsg::seconds,
+                  {mlog::num(secs_since(t6), 2)});
 
   for (int iter = 0; iter < 2; ++iter) {
 
@@ -1646,15 +1677,18 @@ bool generate_mesh(
         mesh.V.swap(newV);
         mesh.F.swap(newF);
         if (cfg.verbose)
-            printf("[meshing] cull unseen: removed %zu/%d verts, %ld faces "
-                   "-> %zu verts, %zu faces (%.2fs)\n",
-                   removed_v, nv, dropped_f, mesh.V.size(), mesh.F.size(), secs_since(tc));
+            mlog::out(mlog::Stage::Cull, mmsg::cull_result,
+                      {(long long)removed_v, nv, dropped_f,
+                       (long long)mesh.V.size(), (long long)mesh.F.size(),
+                       mlog::num(secs_since(tc), 2)});
     }
 
     // ---- 7. manifold-preserving merge (with fold/sliver guard) ----
     auto t6 = Clock::now();
     merge_vertices(mesh, cfg.merge_factor, cfg.merge_max_flip_deg, cfg.verbose, cfg.num_threads);
-    if (cfg.verbose) printf("[meshing] merge (%.2fs)\n", secs_since(t6));
+    if (cfg.verbose)
+        mlog::out(mlog::Stage::Merge, mmsg::seconds,
+                  {mlog::num(secs_since(t6), 2)});
 
     // ---- 7a. post-merge cleanup: drop floaters, then fill small holes ----
     // Run after merge (final topology) and before orient so the orient pass
@@ -1687,7 +1721,9 @@ bool generate_mesh(
     remove_floaters(mesh, cfg.floater_min_faces, cfg.verbose);
     fix_degenerate_faces(mesh, cfg.degenerate_angle_deg, cfg.verbose);
     dedup_faces(mesh, cfg.verbose);
-    if (cfg.verbose) printf("[meshing] cleanup (%.2fs)\n", secs_since(tcl));
+    if (cfg.verbose)
+        mlog::out(mlog::Stage::Cleanup, mmsg::seconds,
+                  {mlog::num(secs_since(tcl), 2)});
   }
 
     // ---- 7a2. valence flips + tangential relaxation ----
@@ -1698,13 +1734,16 @@ bool generate_mesh(
         // slivers that were locked before
         fix_degenerate_faces(mesh, cfg.degenerate_angle_deg, cfg.verbose);
         if (cfg.verbose)
-            printf("[meshing] quality (%.2fs)\n", secs_since(tq));
+            mlog::out(mlog::Stage::Quality, mmsg::seconds,
+                      {mlog::num(secs_since(tq), 2)});
     }
 
     // ---- 7b. globally consistent, outward-facing winding ----
     auto t7 = Clock::now();
     orient_mesh(mesh);
-    if (cfg.verbose) printf("[meshing] orient (%.2fs)\n", secs_since(t7));
+    if (cfg.verbose)
+        mlog::out(mlog::Stage::Orient, mmsg::seconds,
+                  {mlog::num(secs_since(t7), 2)});
 
     // ---- 7c. smooth vertex normals (before any seam split, so normals stay
     //      continuous across UV seams) ----
@@ -1721,7 +1760,9 @@ bool generate_mesh(
             for (int a = 0; a < 3; ++a)
                 mesh.C[i][a] = (unsigned char)std::min(std::max(
                     (int)std::lround(rgb[3*i+a] * 255.0f), 0), 255);
-        if (cfg.verbose) printf("[meshing] color (%.2fs)\n", secs_since(t8));
+        if (cfg.verbose)
+            mlog::out(mlog::Stage::Color, mmsg::seconds,
+                      {mlog::num(secs_since(t8), 2)});
     } else if (cfg.color_mode == MeshColorMode::Texture && !mesh.V.empty()) {
         UVAtlasConfig uvcfg;
         uvcfg.texture_size = cfg.texture_size;
@@ -1781,15 +1822,18 @@ bool generate_mesh(
                      [&](const float* xyz, int n, float* rgb) {
                          ev.colorize(xyz, n, rgb);
                      });
-        if (cfg.verbose) printf("[meshing] texture (%.2fs)\n", secs_since(t8));
+        if (cfg.verbose)
+            mlog::out(mlog::Stage::Texture, mmsg::seconds,
+                      {mlog::num(secs_since(t8), 2)});
     }
 
     // ---- 8. write ----
     if (cfg.verbose) print_mesh_stats(mesh);
     for (const auto& spec : formats)
         write_mesh(mesh, cfg.color_mode, spec, out_base, /*verbose=*/true);
-    printf("[meshing] done: %zu vertices, %zu faces (total %.2fs)\n",
-           mesh.V.size(), mesh.F.size(), secs_since(t0));
+    mlog::out(mlog::Stage::Done, mmsg::done_summary,
+              {(long long)mesh.V.size(), (long long)mesh.F.size(),
+               mlog::num(secs_since(t0), 2)});
     return true;
 }
 

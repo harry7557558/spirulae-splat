@@ -11,6 +11,7 @@ project(spirula_studio LANGUAGES C CXX)  # CUDA enabled by the cuda backend modu
 #   SsBackendVulkan.cmake  portable engine + Vulkan compute runtime } of
 #   SsSfm.cmake            the SfM module (optional; Vulkan-only)
 #   SsNn.cmake             inference layer + SAM + video (optional; Vulkan-only)
+#   SsI18n.cmake           ss_i18n, the translation library (a leaf)
 #   SsApps.cmake           the `spirula` executable (every tool in one)
 #
 # Each backend module leaves SS_APP_LIBS behind for the shared app targets.
@@ -19,6 +20,10 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 include(SsOptions)
 include(SsSources)
+
+# A leaf everything else may link: the backends print device names, and their
+# test binaries link a backend without the engine.
+include(SsI18n)
 
 # The web viewer's browser client is compiled into the engine library
 # (app/webviewer/Viewer.cpp), so it must be embedded before either backend

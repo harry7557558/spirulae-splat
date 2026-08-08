@@ -230,13 +230,12 @@ if(SS_BUILD_CLI OR SS_BUILD_GUI)
     # itself. Symlink `spirula` if you want those names.
     if(SS_SEPARATE_TOOLS)
         function(ss_tool_exe name sources defs libs)
-            # i18n/Locale.cpp is compiled in rather than linked: these targets
-            # deliberately do not link the engine library it otherwise lives
-            # in, and Main.cpp's `--lang` handling needs it.
-            add_executable(${name} ${SS_SRC}/app/Main.cpp
-                                   ${SS_SRC}/i18n/Locale.cpp ${sources})
+            # ss_i18n is linked explicitly: these targets deliberately do not
+            # link the engine library, and Main.cpp's `--lang` handling needs
+            # it. It is a leaf (cmake/SsI18n.cmake), so this costs nothing.
+            add_executable(${name} ${SS_SRC}/app/Main.cpp ${sources})
             target_include_directories(${name} PRIVATE ${SS_SRC} ${CMAKE_BINARY_DIR})
-            target_link_libraries(${name} PRIVATE ${libs})
+            target_link_libraries(${name} PRIVATE ${libs} ss_i18n)
             target_compile_definitions(${name} PRIVATE
                 ${defs} SS_VERSION="${SS_VERSION}" ${SS_I18N_DEFS})
             target_compile_options(${name} PRIVATE

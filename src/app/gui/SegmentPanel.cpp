@@ -1,6 +1,7 @@
 // SegmentPanel.cpp -- see SegmentPanel.h.
 
 #include "app/gui/SegmentPanel.h"
+#include "i18n/catalog/Log.h"
 
 #include "app/gui/MaskPrompt.h"
 #include "app/gui/Subprocess.h"
@@ -196,14 +197,13 @@ void SegmentPanel::start_job(const MaskSettings& s) {
 #ifndef SS_BUILD_SAM
     (void)s;
     std::lock_guard<std::mutex> lk(_mu);
-    _error = "this build has no built-in segmentation "
-             "(-DSS_BUILD_SAM=OFF)";
+    _error = spirula::i18n::msg::log::err_no_builtin_segmentation.get();
 #else
     if (_busy.load()) return;
     if (_worker.joinable()) _worker.join();
     if (_model_path.empty()) {
         std::lock_guard<std::mutex> lk(_mu);
-        _error = "no model selected -- download one first";
+        _error = spirula::i18n::msg::log::err_no_model_selected.get();
         return;
     }
 
@@ -430,9 +430,11 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                 _status.clear();
                 if (detections.detections.empty() && !settings.prompt.empty() &&
                     clicks.empty())
-                    _error = "nothing matched this prompt on this frame";
+                    _error =
+                        spirula::i18n::msg::log::err_prompt_matched_nothing.get();
                 else if (detections.detections.empty() && !clicks.empty())
-                    _error = "the clicks on this frame did not select anything";
+                    _error =
+                        spirula::i18n::msg::log::err_clicks_matched_nothing.get();
             }
         } catch (const std::exception& e) {
             set_error(e.what());

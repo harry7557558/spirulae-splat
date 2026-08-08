@@ -1,6 +1,7 @@
 // Fonts.cpp -- see Fonts.h.
 
 #include "app/gui/Fonts.h"
+#include "i18n/catalog/Log.h"
 
 #include "app/gui/AppPaths.h"
 #include "core/Env.h"
@@ -146,7 +147,10 @@ void FontSet::ensure() {
             if (!fin) _cjk_data.clear();
         }
         if (_cjk_data.empty())
-            std::fprintf(stderr, "warning: could not read %s\n", chosen.c_str());
+            std::fprintf(stderr, "%s\n",
+                         spirula::i18n::format(
+                             spirula::i18n::msg::log::warn_font_unreadable,
+                             {chosen}).c_str());
     }
     rebuild();
     _built = true;

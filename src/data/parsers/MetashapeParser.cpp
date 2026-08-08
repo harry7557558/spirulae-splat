@@ -12,6 +12,7 @@
 // _parser_metashape_data -> _parse_nerfstudio_data(transforms[0]).
 
 #include "data/DatasetParser.h"
+#include "i18n/catalog/Data.h"
 #include "data/Json.h"
 #include "data/Xml.h"
 
@@ -29,6 +30,9 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace dmsg = spirula::i18n::msg::data;
+using spirula::i18n::format;
 
 namespace fs = std::filesystem;
 
@@ -201,7 +205,8 @@ fs::path resolve_input(const fs::path& root, const std::string& configured,
                                      " file found in dataset dir; specify using --" + flag);
         return {};
     }
-    std::printf("Using %s file found: %s\n", ext, found[0].string().c_str());
+    std::printf("%s\n",
+                format(dmsg::ms_using_file, {ext, found[0].string()}).c_str());
     return found[0];
 }
 
@@ -282,9 +287,9 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
             have_camera_dict = find_metashape_cameras_dict(files_root, camera_dict);
         }
         if (!have_camera_dict)
-            std::fprintf(stderr, "WARNING: no camera table found under %s; "
-                         "falling back to label matching\n",
-                         psx_path.string().c_str());
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                         format(dmsg::ms_no_camera_table,
+                                {psx_path.string()}).c_str());
     }
 
     // ---- Image file list (relative to the dataset dir) ---------------------
@@ -454,8 +459,9 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
         } else if (have_camera_dict) {
             auto it = camera_dict.find(*cam_id);
             if (it == camera_dict.end()) {
-                std::fprintf(stderr, "WARNING: camera %s not in project camera "
-                             "table, skipping\n", label_s.c_str());
+                std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                             format(dmsg::ms_camera_not_in_table,
+                                    {label_s}).c_str());
                 num_skipped++;
                 continue;
             }
@@ -464,11 +470,12 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
             matches = match_substring(image_filenames, label_s);
         }
         if (matches.size() != 1) {
-            std::fprintf(stderr, "WARNING: ambiguous filenames for %s "
-                         "(%zu candidates), skipping%s\n",
-                         label_s.c_str(), matches.size(),
-                         have_camera_dict ? "" :
-                         "; a Metashape .psx project file may resolve the ambiguity");
+            // Two whole sentences rather than one with a swappable tail:
+            // the hint lands in a different place in a verb-final language.
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                         format(have_camera_dict ? dmsg::ms_ambiguous
+                                                 : dmsg::ms_ambiguous_psx,
+                                {label_s, (long long)matches.size()}).c_str());
             num_skipped++;
             continue;
         }
@@ -476,23 +483,23 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
         const std::string* sensor_id = camera->attr("sensor_id");
         auto sit = sensor_id ? sensor_dict.find(*sensor_id) : sensor_dict.end();
         if (sit == sensor_dict.end()) {
-            std::fprintf(stderr, "Missing sensor calibration for %s, skipping\n",
-                         label_s.c_str());
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                         format(dmsg::ms_missing_sensor, {label_s}).c_str());
             num_skipped++;
             continue;
         }
 
         const XmlNode* transform = camera->find("transform");
         if (!transform) {
-            std::fprintf(stderr, "Missing transforms data for %s, skipping\n",
-                         label_s.c_str());
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                         format(dmsg::ms_missing_transform, {label_s}).c_str());
             num_skipped++;
             continue;
         }
         std::vector<double> t = split_doubles(transform->text);
         if (t.size() < 16) {
-            std::fprintf(stderr, "Malformed transform for %s, skipping\n",
-                         label_s.c_str());
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                         format(dmsg::ms_malformed_transform, {label_s}).c_str());
             num_skipped++;
             continue;
         }
@@ -530,10 +537,11 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
             best_count = counts[best];
         }
         if (component_groups.size() > 1)
-            std::fprintf(stderr, "WARNING: %zu components found in Metashape "
-                         "export; training on the largest (%zu of %zu aligned "
-                         "cameras). Clean up the project if needed.\n",
-                         component_groups.size(), best_count, valid_cameras.size());
+            std::fprintf(stderr, "%s %s\n", dmsg::word_warning.get(),
+                         format(dmsg::ms_components,
+                                {(long long)component_groups.size(),
+                                 (long long)best_count,
+                                 (long long)valid_cameras.size()}).c_str());
         // Keep document order within the group.
         std::vector<std::string> ids = component_groups[best].second;
         std::sort(ids.begin(), ids.end());
@@ -594,9 +602,11 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
              jstr(fs::relative(ply_path, root).generic_string()));
 
     if (num_skipped > 0)
-        std::printf("%lld image%s skipped.\n", (long long)num_skipped,
-                    num_skipped == 1 ? "" : "s were");
-    std::printf("Final dataset is %zu frames.\n", meta.find("frames")->arr.size());
+        std::printf("%s\n",
+                    format(dmsg::ms_skipped, {(long long)num_skipped}).c_str());
+    std::printf("%s\n",
+                format(dmsg::final_frames,
+                       {(long long)meta.find("frames")->arr.size()}).c_str());
 
     return parse_nerfstudio_meta(meta, dataset_dir, cfg);
 }

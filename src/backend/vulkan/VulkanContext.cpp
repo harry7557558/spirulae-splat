@@ -1,4 +1,5 @@
 #include "backend/vulkan/VulkanContext.h"
+#include "i18n/catalog/Data.h"
 
 #include "backend/api/BackendRuntime.h"
 
@@ -203,11 +204,10 @@ int resolve_device_index() {
                 : (list[i].name.find(want) != std::string::npos);
             if (!matches) continue;
             if (!list[i].usable) {
-                std::fprintf(stderr,
-                    "[spirula-vk] requested device '%s' lacks required "
-                    "features (Vulkan 1.2 + bufferDeviceAddress + "
-                    "timelineSemaphore)\n",
-                    list[i].name.c_str());
+                std::fprintf(stderr, "[spirula-vk] %s\n",
+                    spirula::i18n::format(
+                        spirula::i18n::msg::data::vk_device_lacks_features,
+                        {list[i].name}).c_str());
                 continue;
             }
             return i;

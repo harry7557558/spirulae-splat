@@ -33,6 +33,7 @@
 #include <atomic>
 #include <initializer_list>
 #include <string>
+#include <vector>
 
 namespace spirula {
 namespace i18n {
@@ -152,6 +153,51 @@ std::string format(const char* pattern, std::initializer_list<Arg> args);
 
 inline std::string format(const Msg& m, std::initializer_list<Arg> args) {
     return format(m.get(), args);
+}
+
+// ---------------------------------------------------------------------------
+// The inverse: reading a line back
+// ---------------------------------------------------------------------------
+// A subprocess prints translated lines and the parent has to understand them --
+// the GUI's progress bar reads what `spirula mesh` writes, and both are in the
+// language the user picked. Matching on English fragments is exactly the thing
+// that breaks the moment the child is translated, so match on the MESSAGE
+// instead: scan() takes the same Msg the child printed with, matches its
+// literal parts against the line, and hands back what stood in the {0}, {1},
+// ... positions.
+//
+//     std::vector<std::string> got;
+//     if (scan(msg::mesh::cameras_rendered, rest, got))  // "12/120 cameras"
+//         frac = atof(got[0].c_str()) / atof(got[1].c_str());
+//
+// The whole line must match, start to end. Literal parts are matched at the
+// earliest position that still allows the rest to match, so a placeholder never
+// swallows the separator that follows it. Two adjacent placeholders have
+// nothing to split on and are rejected rather than guessed at.
+bool scan(const char* pattern, const std::string& text,
+          std::vector<std::string>& out);
+
+// Terminal columns a UTF-8 string occupies (East Asian wide characters count
+// as two), for the places that lay text out in a fixed column: a log tag, a
+// table of labels. Not a full UAX #11 table -- the ranges a translation can
+// plausibly land in.
+int display_width(const char* s);
+inline int display_width(const std::string& s) { return display_width(s.c_str()); }
+
+// `s` padded on the right to `columns` terminal columns (never truncated).
+std::string pad_to(const std::string& s, int columns);
+
+// `text` broken into lines of at most `columns` terminal columns, for the help
+// printers. Breaks at spaces where there are any -- and BETWEEN CHARACTERS
+// where there are not, which is the only way Chinese and Japanese wrap at all:
+// they are written without spaces, so a space-only wrapper leaves one line
+// four hundred columns wide. A line never begins with the closing punctuation
+// or the small kana that may not start one.
+std::vector<std::string> wrap(const std::string& text, int columns);
+
+inline bool scan(const Msg& m, const std::string& text,
+                 std::vector<std::string>& out) {
+    return scan(m.get(), text, out);
 }
 
 }  // namespace i18n

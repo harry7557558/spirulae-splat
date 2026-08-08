@@ -653,11 +653,9 @@ void ColmapRunner::run(ColmapJob job) {
             if (rc == kCancelled) return fail("cancelled");
             double before = model_reproj_error(job, best.string());
             double after = rc == 0 ? model_reproj_error(job, tmp.string()) : 1e30;
-            char msg[160];
-            std::snprintf(msg, sizeof msg,
-                          "Mean reprojection error: %.4g px -> %.4g px",
-                          before, after);
-            log(msg);
+            log(spirula::i18n::format(
+                spirula::i18n::msg::log::colmap_reproj_error,
+                {before, after}));
             if (rc == 0 && std::isfinite(after) &&
                 (after <= before || !std::isfinite(before))) {
                 std::error_code ec;

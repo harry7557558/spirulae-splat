@@ -10,7 +10,13 @@ Message.h          Lang, Msg, SS_MSG / SS_MSG_EN, format()
 BeginCatalog.h     the short tag macros: EN(...) JA(...) ZH_HANS(...) ...
 EndCatalog.h       #undefs them again, so EN/TR never leak into ordinary code
 Locale.cpp/.h      which language the UI is in, and how that is decided
-catalog/           the messages themselves, one header per screen
+catalog/           the messages themselves, one header per screen -- plus
+                   the ones that are not screens: Cli.h (what the command-line
+                   tools print around their own work), Sfm.h and Mesh.h (what
+                   those two subcommands say while they run, in the GUI's
+                   terminal panel as well as in yours), Data.h (what reading a
+                   dataset says about it), and SfmFields.h / SfmHelp.h /
+                   SamHelp.h (the two big `--help` pages)
 ```
 
 ## Writing a message
@@ -39,7 +45,9 @@ assert. Three failure modes, three compile errors:
 
 `SS_MSG_EN(name, "…")` is the escape hatch for a message that has not been
 translated yet: every slot gets the English text, so it works, and
-`bash tools/check_i18n.sh` counts what is left.
+`bash tools/check_i18n.sh` counts what is left. There are none at the moment,
+so a new one is a visible, temporary decision rather than the normal way to
+add a message.
 
 ## Two rules that are expensive to retrofit
 
@@ -136,6 +144,41 @@ translation used before and they are stale;
 `python3 tools/check_font_coverage.py` runs on every build and says so.
 Regenerate with `python3 tools/make_ui_font.py`.
 
+## Reading a translated child process back
+
+`format()` has an inverse. The GUI runs `spirula mesh` as a child process with
+`--lang`, so the child prints Japanese and the GUI's progress bar has to
+understand it. Matching on English fragments is the thing that breaks the
+moment a tool is translated, so `scan()` matches on the MESSAGE:
+
+```cpp
+std::vector<std::string> got;
+if (i18n::scan(msg::mesh::cameras_rendered, tail, got))   // "cameras rendered: 12/120"
+    frac = atof(got[0].c_str()) / atof(got[1].c_str());
+```
+
+It takes the message's literal parts apart and matches them in order, handing
+back what stood between them. Two rules follow for anything a parent reads
+back: keep a separator between adjacent placeholders (there is nothing to split
+on otherwise, and `scan()` refuses rather than guessing), and keep the numbers
+in an order every translation can live with.
+
+`src/app/gui/MeshRunner.cpp` is the worked example: it compares the stage
+against the same `msg::mesh::stage_*` entries `mesh/MeshLog.h` printed, and
+pulls the two counts it needs out of the bodies with `scan()`. There is no
+English left anywhere in that protocol.
+
+## Wrapping
+
+Help text is stored one string per paragraph and wrapped by `i18n::wrap()` at
+print time, never by hand. It measures in terminal columns rather than bytes,
+and -- the part that matters -- it breaks BETWEEN CHARACTERS in the languages
+that have no spaces to break at. Chinese and Japanese are written without them;
+a `find(' ')` wrapper leaves a paragraph as one line four hundred columns wide.
+`i18n::pad_to()` lays out the flag column the same way, and a flag whose
+translated sentence no longer fits beside it takes its own line rather than
+widening the column for everybody.
+
 ## Text that stays English on purpose
 
 Not everything a user sees is addressed to them:
@@ -158,6 +201,27 @@ Not everything a user sees is addressed to them:
   what is addressed to whoever is debugging the pipeline rather than to the
   person waiting on it: `--help`, `SS_SFM_MAP_PROF`, the seam-test and
   focal-curve diagnostics, and the self-test binaries.
+  `spirula mesh` is the same: it is ours, it runs as a child of the GUI with
+  `--lang`, and every line it prints comes out as a localized `[meshing]`, a
+  localized stage and a localized message (`src/mesh/MeshLog.h`,
+  `i18n/catalog/Mesh.h`). Its `--help` is translated too. What stays English
+  there is the moment dumps behind `SS_MESH_DEBUG_RENDER`.
+- **Machine-readable output**: `spirula sam`'s detection table is a TSV a script
+  reads, and the codec table beside it is the same. A script has no language.
+- **`src/core/Env.h`'s deprecation notice.** That header is deliberately
+  dependency-free: the standalone tool binaries include it and link neither the
+  engine nor `ss_i18n`. The sentence is also about the spelling of an
+  environment variable.
 - **Identifiers**: preset names, camera and lens model names, config field
-  names. The picker shows a translated label next to the name rather than
-  instead of it, so a user who read the README still recognises the row.
+  names, COLMAP parameter names inside a translated sentence. The picker shows
+  a translated label next to the name rather than instead of it, so a user who
+  read the README still recognises the row; and `SiftMatching.max_ratio` stays
+  itself in every language, because it is what the reader types into COLMAP.
+
+The command line is **not** in this list at all -- `--help` included.
+`spirula --help`, `spirula sfm --help` (its 120 flag descriptions with them),
+`spirula sam --help`, `spirula train --help`, everything a training
+run prints, everything a reconstruction prints, everything a meshing run
+prints, and everything reading a dataset says about it are all translated --
+because a terminal has no language picker to fix it with afterwards, and
+because the GUI shows that terminal.

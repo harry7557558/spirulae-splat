@@ -32,6 +32,11 @@ inline const char* env(const char* suffix) {
         // to call from the worker threads that read these knobs.
         static std::atomic<bool> warned{false};
         if (!warned.exchange(true))
+            // English, and one of the few things that is. This header is
+            // deliberately dependency-free -- the standalone tool binaries
+            // include it and link neither the engine nor the i18n library --
+            // and the sentence is about the spelling of an environment
+            // variable, read by whoever typed one.
             std::fprintf(stderr,
                          "warning: %s is deprecated; use SS_%s "
                          "(SSPLAT_* is reported once per run)\n",

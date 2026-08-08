@@ -4,6 +4,7 @@
  */
 
 #include "mesh/MeshUV.h"
+#include "mesh/MeshLog.h"
 
 #include <algorithm>
 #include <array>
@@ -23,6 +24,8 @@
 #endif
 
 namespace meshing {
+
+namespace mmsg = spirula::i18n::msg::mesh;
 
 namespace {
 
@@ -415,8 +418,9 @@ static ChartSeg segment_charts(
         work.emplace_back(order.begin() + half, order.end());
     }
     if (cfg.verbose)
-        printf("[meshing] uv: grew %zu charts (cap %ld), %zu after disk split\n",
-               n_grown, cap, seg.charts.size());
+        mlog::out(mlog::Stage::Uv, mmsg::uv_grew,
+                  {(long long)n_grown, (long long)cap,
+                   (long long)seg.charts.size()});
     return seg;
 }
 
@@ -902,8 +906,8 @@ std::vector<int> build_uv_atlas(MeshData& mesh, UVAtlasConfig& cfg) {
         while ((double)ts * 1.41421356 < side && ts < 8192) ts <<= 1;
         cfg.texture_size = ts;
         if (cfg.verbose)
-            printf("[meshing] uv: auto texture size %d (budget %.3g texels)\n",
-                   cfg.texture_size, budget);
+            mlog::out(mlog::Stage::Uv, mmsg::uv_auto_size,
+                      {cfg.texture_size, budget});
     }
 
     // face normals + areas
@@ -924,8 +928,9 @@ std::vector<int> build_uv_atlas(MeshData& mesh, UVAtlasConfig& cfg) {
     // ---- 1. charts ----
     ChartSeg seg = segment_charts(mesh.V, mesh.F, nv, adj, faceN, faceA, cfg);
     if (cfg.verbose)
-        printf("[meshing] uv: %zu charts over %zu faces (%.2fs)\n",
-               seg.charts.size(), nf, secs_since(t0));
+        mlog::out(mlog::Stage::Uv, mmsg::uv_charts,
+                  {(long long)seg.charts.size(), (long long)nf,
+                   mlog::num(secs_since(t0), 2)});
 
     // ---- 2. parameterize (parallel, with split-and-retry) ----
     // A chart whose LSCM (and planar fallback) still has flipped/overlapping
@@ -1012,9 +1017,9 @@ std::vector<int> build_uv_atlas(MeshData& mesh, UVAtlasConfig& cfg) {
     #pragma omp parallel for schedule(dynamic, 16)
     for (long c = 0; c < (long)ncp; ++c) orient_chart(params[c]);
     if (cfg.verbose)
-        printf("[meshing] uv: parameterized %zu charts (%ld split-retries, "
-               "%ld parked) (%.2fs)\n",
-               ncp, n_split_retry, n_parked, secs_since(t1));
+        mlog::out(mlog::Stage::Uv, mmsg::uv_param,
+                  {(long long)ncp, n_split_retry, n_parked,
+                   mlog::num(secs_since(t1), 2)});
 
     // ---- 3. pack ----
     auto t2 = Clock::now();
@@ -1057,10 +1062,11 @@ std::vector<int> build_uv_atlas(MeshData& mesh, UVAtlasConfig& cfg) {
     // asked for (the budget overcommits when it exceeds the atlas)
     double px_per_unit = (double)cfg.texture_size * inv_side;
     if (cfg.verbose)
-        printf("[meshing] uv: packed %zu charts, %.0f%% efficiency, "
-               "%.2g texels per budget unit (%.2fs)\n",
-               ncp, 100.0 * total_area / (side * side),
-               px_per_unit * px_per_unit, secs_since(t2));
+        mlog::out(mlog::Stage::Uv, mmsg::uv_packed,
+                  {(long long)ncp,
+                   mlog::num(100.0 * total_area / (side * side), 0),
+                   (double)(px_per_unit * px_per_unit),
+                   mlog::num(secs_since(t2), 2)});
 
     // ---- 4. seam split + write back ----
     auto t3 = Clock::now();
@@ -1118,8 +1124,9 @@ std::vector<int> build_uv_atlas(MeshData& mesh, UVAtlasConfig& cfg) {
     if (has_n) mesh.N.swap(newN); else mesh.N.clear();
     if (has_c) mesh.C.swap(newC); else mesh.C.clear();
     if (cfg.verbose)
-        printf("[meshing] uv: seam split +%zu verts -> %zu verts (%.2fs total)\n",
-               n_seam, mesh.V.size(), secs_since(t0));
+        mlog::out(mlog::Stage::Uv, mmsg::uv_seam,
+                  {(long long)n_seam, (long long)mesh.V.size(),
+                   mlog::num(secs_since(t0), 2)});
     return seg.face_chart;
 }
 
@@ -1245,8 +1252,10 @@ void bake_texture(MeshData& mesh, const std::vector<int>& face_chart,
     }
     const size_t n_cov = texel_of.size();
     if (cfg.verbose)
-        printf("[meshing] bake: %zu/%d covered texels (%.1f%%) (%.2fs)\n",
-               n_cov, W * H, 100.0 * n_cov / ((double)W * H), secs_since(t0));
+        mlog::out(mlog::Stage::Bake, mmsg::bake_covered,
+                  {(long long)n_cov, W * H,
+                   mlog::num(100.0 * n_cov / ((double)W * H), 1),
+                   mlog::num(secs_since(t0), 2)});
     if (n_cov == 0) return;
 
     // ---- evaluate colors (chunked to bound VRAM; each chunk re-renders the
@@ -1261,7 +1270,8 @@ void bake_texture(MeshData& mesh, const std::vector<int>& face_chart,
     pos_of.clear();
     pos_of.shrink_to_fit();
     if (cfg.verbose)
-        printf("[meshing] bake: colorized %zu texels (%.2fs)\n", n_cov, secs_since(t1));
+        mlog::out(mlog::Stage::Bake, mmsg::bake_colorized,
+                  {(long long)n_cov, mlog::num(secs_since(t1), 2)});
 
     // ---- write texels + average color ----
     std::vector<char> filled((size_t)W * H, 0);
@@ -1322,8 +1332,9 @@ void bake_texture(MeshData& mesh, const std::vector<int>& face_chart,
         if (!filled[tx])
             for (int a = 0; a < 3; ++a) mesh.texture[3*tx + a] = avg8[a];
     if (cfg.verbose)
-        printf("[meshing] bake: dilation + fill (%.2fs); texture %dx%d done (%.2fs total)\n",
-               secs_since(t2), W, H, secs_since(t0));
+        mlog::out(mlog::Stage::Bake, mmsg::bake_done,
+                  {mlog::num(secs_since(t2), 2), W, H,
+                   mlog::num(secs_since(t0), 2)});
 }
 
 } // namespace meshing

@@ -14,6 +14,7 @@
  */
 
 #include "mesh/Meshing.h"
+#include "mesh/MeshLog.h"
 #include "mesh/MeshingDevice.h"
 #include "mesh/MeshingRaster.h"
 
@@ -28,6 +29,8 @@
 #include <vector>
 
 namespace meshing {
+
+namespace mmsg = spirula::i18n::msg::mesh;
 
 namespace {
 
@@ -275,8 +278,8 @@ OccupancyEvaluator::OccupancyEvaluator(
     upload(impl_->kept.get(), kept.data(), (size_t)impl_->num_kept);
 
     if (cfg.verbose)
-        printf("[meshing] %d/%d Gaussians kept, %d points, rel_scale=%.4g\n",
-               impl_->num_kept, N, num_points_, rel_scale);
+        mlog::out(mlog::Stage::Loading, mmsg::gaussians_kept,
+                  {impl_->num_kept, N, num_points_, (double)rel_scale});
 
     // ---- LBVH build ----
     const int n = impl_->num_kept;
@@ -348,8 +351,8 @@ OccupancyEvaluator::OccupancyEvaluator(
         impl_->campos.alloc(impl_->num_cameras);
         upload((float*)impl_->campos.get(), sel_pos.data(), sel_pos.size());
         if (cfg.verbose)
-            printf("[meshing] using %d/%d cameras (k-means medoids, dataset occupancy)\n",
-                   impl_->num_cameras, num_cameras);
+            mlog::out(mlog::Stage::Loading, mmsg::cameras_selected,
+                      {impl_->num_cameras, num_cameras});
     }
 
     // ---- camera intrinsics (rasterize-and-sample path) ----
@@ -375,11 +378,11 @@ OccupancyEvaluator::OccupancyEvaluator(
             for (int c = 1; c < num_cameras; ++c)
                 if (impl_->cam_widths[c] != w0 || impl_->cam_heights[c] != h0) { uniform = false; break; }
             if (uniform)
-                printf("[meshing] camera intrinsics: %dx%d, model=%s (render path ready)\n",
-                       w0, h0, cams.camera_model.c_str());
+                mlog::out(mlog::Stage::Loading, mmsg::intrinsics_uniform,
+                          {w0, h0, cams.camera_model});
             else
-                printf("[meshing] camera intrinsics: per-camera resolution, model=%s (render path ready)\n",
-                       cams.camera_model.c_str());
+                mlog::out(mlog::Stage::Loading, mmsg::intrinsics_varied,
+                          {cams.camera_model});
         }
     }
 }

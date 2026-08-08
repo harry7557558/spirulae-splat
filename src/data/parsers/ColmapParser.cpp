@@ -4,6 +4,7 @@
 // helpers live in DatasetCommon.cpp.
 
 #include "data/DatasetParser.h"
+#include "i18n/catalog/Data.h"
 #include "data/FastFloat.h"
 
 #include "core/CameraModel.h"   // camera_model_from_name (CUDA-free)
@@ -444,10 +445,12 @@ static std::string find_colmap_recon(const std::string& dataset_dir,
             return a.n != b.n ? a.n > b.n : a.rel < b.rel;
         });
         if (verbose && models.size() > 1)
-            std::printf("Found %zu COLMAP models under %s; using %s "
-                        "(%lld registered images)\n",
-                        models.size(), dataset_dir.c_str(),
-                        models[0].rel.c_str(), (long long)models[0].n);
+            std::printf("%s\n",
+                        spirula::i18n::format(
+                            spirula::i18n::msg::data::colmap_models_found,
+                            {(long long)models.size(), dataset_dir,
+                             models[0].rel, (long long)models[0].n})
+                            .c_str());
         for (const auto& m : models) probe.push_back(m.rel);
         for (const char* rel : {"sparse/0", "colmap/sparse/0", "sparse", "colmap", ""})
             probe.push_back(rel);
@@ -531,11 +534,12 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
         // equals COLMAP's h/pi only on a 2:1 panorama (see bake_post_split).
         // Anything else is trained with the wrong vertical angular scale.
         if (cam.height * 2 != cam.width)
-            std::printf("Warning: EQUIRECTANGULAR camera %d is %llux%llu, not 2:1; "
-                        "the engine assumes a full 360x180 panorama and will use "
-                        "the wrong vertical scale.\n",
-                        (int)id, (unsigned long long)cam.width,
-                        (unsigned long long)cam.height);
+            std::printf("%s %s\n", spirula::i18n::msg::data::word_warning.get(),
+                        spirula::i18n::format(
+                            spirula::i18n::msg::data::equirect_not_2to1,
+                            {(int)id, (unsigned long long)cam.width,
+                             (unsigned long long)cam.height})
+                            .c_str());
     }
 
     // ---- Assemble frames sorted by image filename (dataparser.py:300-316) -
@@ -754,8 +758,13 @@ ParsedDataset parse_dataset(const std::string& dataset_dir,
         try {
             return parse_colmap_dataset(dataset_dir, cfg);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "Failed to parse COLMAP data: %s\n", e.what());
-            std::fprintf(stderr, "Attempting to parse Metashape data...\n");
+            std::fprintf(stderr, "%s\n",
+                         spirula::i18n::format(
+                             spirula::i18n::msg::data::colmap_parse_failed,
+                             {e.what()})
+                             .c_str());
+            std::fprintf(stderr, "%s\n",
+                         spirula::i18n::msg::data::trying_metashape.get());
         }
     }
     if (has_metashape) return parse_metashape_dataset(dataset_dir, cfg);

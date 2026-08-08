@@ -732,20 +732,20 @@ void ViewportPanel::draw_preview(const ImVec2& avail) {
         }
     }
 
-    // A count and a unit -- and which unit depends on what is being
-    // previewed. Numbers are numbers in every language; "points" and
-    // "triangles" are the untranslated shorthand this overlay has always
-    // used, kept short because it sits on top of the image.
-    char info[96];
-    if (_preview.has_mesh())
-        std::snprintf(info, sizeof info, "%lld triangles",
-                      (long long)_preview.num_triangles());
-    else
-        std::snprintf(info, sizeof info, "%lld points",
-                      (long long)_preview.num_points());
+    // A count and what is being counted, which depends on what is being
+    // previewed. Labelled rather than inflected ("Triangles: 12", not
+    // "12 triangles") so no language needs a plural rule for it, and kept
+    // short because it sits on top of the image.
+    const std::string info =
+        _preview.has_mesh()
+            ? spirula::i18n::format(spirula::i18n::msg::gui::overlay_triangles,
+                                    {(long long)_preview.num_triangles()})
+            : spirula::i18n::format(spirula::i18n::msg::gui::overlay_points,
+                                    {(long long)_preview.num_points()});
     ImVec2 p = ImGui::GetItemRectMin();
     ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + 8, p.y + 6),
-                                        IM_COL32(200, 200, 200, 180), info);
+                                        IM_COL32(200, 200, 200, 180),
+                                        info.c_str());
 }
 
 // Adaptive render scale (`Auto`, the default).

@@ -9,7 +9,9 @@
 # Any path containing "hip" is dropped (ROCm sources are not part of the build).
 #
 # Not listed here, on purpose: src/app/{cli,gui}/ and src/backend/** -- their
-# targets own those. app/webviewer/, app/TrainerCore.cpp and app/EvalMetrics.cpp
+# targets own those; and src/i18n/, which is its own leaf library (ss_i18n,
+# cmake/SsI18n.cmake) because the backend libraries and their small test
+# binaries need it too. app/webviewer/, app/TrainerCore.cpp and app/EvalMetrics.cpp
 # ARE listed: they are shared by the CLI and the GUI, so they belong to the
 # library rather than being compiled once per app target.
 
@@ -37,7 +39,6 @@ src/data/parsers/*.cpp
 src/app/webviewer/*.cpp
 src/app/TrainerCore.cpp
 src/app/EvalMetrics.cpp
-src/i18n/*.cpp
 src/external/*.cpp
 src/external/*.c
 
@@ -53,6 +54,5 @@ src/data/parsers/*.cpp
 src/app/webviewer/*.cpp
 src/app/TrainerCore.cpp
 src/app/EvalMetrics.cpp
-src/i18n/*.cpp
 src/external/*.cpp
 src/external/*.c

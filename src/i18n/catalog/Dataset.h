@@ -3981,131 +3981,1260 @@ SS_MSG(use_python_masking_help,
 // ===========================================================================
 // Advanced: external COLMAP
 //
-// The one block still English-only, and deliberately last: every entry names
-// a COLMAP parameter (Mapper.abs_pose_min_num_inliers, SiftMatching.max_ratio)
-// and is read alongside COLMAP's own documentation, which exists in English
-// only. A translated sentence wrapped around an untranslatable identifier
-// helps less here than anywhere else in the app, and this panel is reached by
-// someone who has already chosen to drive an external COLMAP by hand.
-//
-// The parameter names must stay verbatim in every language when these are
-// translated; only the prose around them changes.
+// Every entry here names a COLMAP parameter (Mapper.abs_pose_min_num_inliers,
+// SiftMatching.max_ratio) and is read alongside COLMAP's own documentation,
+// which exists in English only. So the identifiers stay VERBATIM in every
+// language -- they are what the reader types into COLMAP and searches its
+// docs for -- and only the prose around them is translated. Someone driving
+// an external COLMAP by hand still deserves to read why a knob exists in
+// their own language.
 // ===========================================================================
 
-SS_MSG_EN(colmap_initial_focal, "Initial focal length (x width, 0 = unknown)");
-SS_MSG_EN(colmap_initial_focal_help,
-    "Seed COLMAP with fx = fy = factor * image width (principal point "
-    "centered, zero distortion) instead of its generic guess. A known focal "
-    "length stabilizes mapper initialization a lot, especially for fisheye "
-    "lenses. Insta360 X5: ~0.269 (set automatically for .insv input).");
-SS_MSG_EN(colmap_camera_params, "Initial camera params");
-SS_MSG_EN(colmap_camera_params_hint, "fx,fy,cx,cy,... (overrides focal length)");
-SS_MSG_EN(colmap_camera_params_help,
-    "Raw ImageReader.camera_params for the selected camera model (full "
-    "calibration prior). Leave empty to use the focal-length factor above, or "
-    "both empty for COLMAP's default initialization.");
-SS_MSG_EN(colmap_max_features, "Max features (0 = auto)");
-SS_MSG_EN(colmap_max_features_help,
-    "SiftExtraction / AlikedExtraction .max_num_features; overrides the "
-    "Quality preset when non-zero.");
-SS_MSG_EN(colmap_max_image_size, "Max image size (0 = off)");
-SS_MSG_EN(colmap_max_image_size_help,
-    "FeatureExtraction.max_image_size: downscale images beyond this for "
-    "feature extraction.");
-SS_MSG_EN(colmap_seq_overlap_help,
-    "How many neighboring frames each frame is matched against (sequential "
-    "matcher).");
-SS_MSG_EN(colmap_quadratic_overlap, "Quadratic overlap");
-SS_MSG_EN(colmap_quadratic_overlap_help,
-    "Additionally match frame i against frames i +- 2^k (sequential matcher). "
-    "Helps close loops in longer captures; enabled by default.");
-SS_MSG_EN(colmap_lightglue, "LightGlue matching");
-SS_MSG_EN(colmap_lightglue_help,
-    "Neural feature matcher (FeatureMatching.type *_LIGHTGLUE): more matches "
-    "on hard pairs than brute-force descriptor distance. Default for ALIKED "
-    "features; also works with SIFT.");
-SS_MSG_EN(colmap_affine_sift, "Affine SIFT + guided matching");
-SS_MSG_EN(colmap_affine_sift_help,
-    "SiftExtraction.estimate_affine_shape + FeatureMatching.guided_matching: "
-    "slower but more robust matching.");
-SS_MSG_EN(colmap_distortion_refinement, "Distortion refinement");
-SS_MSG_EN(colmap_extra_auto, "Auto");
-SS_MSG_EN(colmap_extra_during, "During mapping");
-SS_MSG_EN(colmap_extra_final, "Final pass only");
-SS_MSG_EN(colmap_distortion_refinement_help,
-    "When distortion coefficients are optimized. \"Final pass only\" holds "
-    "them fixed during mapping (Mapper.ba_refine_extra_params 0) -- more "
-    "stable for low-distortion perspective lenses -- and recovers them in the "
-    "final refinement pass. Auto: final-pass-only for perspective models, "
-    "during mapping for fisheye.");
-SS_MSG_EN(colmap_min_matches, "Min matches per pair (0 = default)");
-SS_MSG_EN(colmap_min_matches_help,
-    "Mapper.min_num_matches (default 15): image pairs with fewer inlier "
-    "matches are ignored by the mapper. Raise to suppress spurious "
-    "registrations, lower for sparse overlap.");
+SS_MSG(colmap_initial_focal,
+    EN("Initial focal length (x width, 0 = unknown)"),
+    JA("初期焦点距離（×幅、0 = 不明）"),
+    ZH_HANS("初始焦距（× 宽度，0 = 未知）"),
+    ZH_HANT("初始焦距（× 寬度，0 = 未知）"),
+    KO("초기 초점 거리(× 너비, 0 = 모름)"),
+    DE("Anfangsbrennweite (× Breite, 0 = unbekannt)"),
+    FR("Distance focale initiale (× largeur, 0 = inconnue)"),
+    ES("Distancia focal inicial (× ancho, 0 = desconocida)"),
+    PT("Distância focal inicial (× largura, 0 = desconhecida)"),
+    IT("Focale iniziale (× larghezza, 0 = sconosciuta)"),
+    NL("Beginbrandpuntsafstand (× breedte, 0 = onbekend)"),
+    RU("Начальное фокусное расстояние (× ширина, 0 = неизвестно)"),
+    TR("Başlangıç odak uzaklığı (× genişlik, 0 = bilinmiyor)"));
+SS_MSG(colmap_initial_focal_help,
+    EN("Seed COLMAP with fx = fy = factor * image width (principal point "
+       "centered, zero distortion) instead of its generic guess. A known focal "
+       "length stabilizes mapper initialization a lot, especially for fisheye "
+       "lenses. Insta360 X5: ~0.269 (set automatically for .insv input)."),
+    JA("COLMAP の一般的な推測ではなく、fx = fy = 係数 × 画像幅（主点は中央、"
+       "歪みなし）を初期値として渡します。焦点距離が分かっているとマッパーの"
+       "初期化がかなり安定し、特に魚眼レンズで効きます。Insta360 X5 は約 0.269"
+       "（.insv 入力では自動で設定されます）。"),
+    ZH_HANS("不用 COLMAP 的通用猜测，而是以 fx = fy = 系数 × 图像宽度（主点居中，"
+            "无畸变）作为初值。已知焦距会让建图的初始化稳定得多，尤其是鱼眼镜头。"
+            "Insta360 X5 约为 0.269（.insv 输入会自动设置）。"),
+    ZH_HANT("不用 COLMAP 的通用猜測，而是以 fx = fy = 係數 × 影像寬度（主點置中，"
+            "無畸變）作為初值。已知焦距會讓建圖的初始化穩定得多，尤其是魚眼鏡頭。"
+            "Insta360 X5 約為 0.269（.insv 輸入會自動設定）。"),
+    KO("COLMAP의 일반적인 추측 대신 fx = fy = 계수 × 이미지 너비(주점은 중앙, "
+       "왜곡 없음)를 초기값으로 넘깁니다. 초점 거리를 알면 매퍼 초기화가 훨씬 "
+       "안정되며, 특히 어안 렌즈에서 그렇습니다. Insta360 X5는 약 0.269"
+       "(.insv 입력에서는 자동으로 설정됩니다)."),
+    DE("COLMAP mit fx = fy = Faktor × Bildbreite (Hauptpunkt mittig, keine "
+       "Verzeichnung) starten statt mit seiner allgemeinen Schätzung. Eine "
+       "bekannte Brennweite stabilisiert den Start des Mappers erheblich, "
+       "besonders bei Fisheye-Objektiven. Insta360 X5: ~0.269 (bei "
+       ".insv-Eingaben automatisch gesetzt)."),
+    FR("Amorcer COLMAP avec fx = fy = facteur × largeur de l'image (point "
+       "principal centré, distorsion nulle) au lieu de son estimation "
+       "générique. Une distance focale connue stabilise beaucoup "
+       "l'initialisation du mapper, surtout avec des objectifs fisheye. "
+       "Insta360 X5 : ~0.269 (réglé automatiquement pour une entrée .insv)."),
+    ES("Arrancar COLMAP con fx = fy = factor × ancho de la imagen (punto "
+       "principal centrado, sin distorsión) en lugar de su estimación "
+       "genérica. Conocer la distancia focal estabiliza mucho el arranque del "
+       "mapper, sobre todo con objetivos de ojo de pez. Insta360 X5: ~0.269 "
+       "(se ajusta solo con entradas .insv)."),
+    PT("Iniciar o COLMAP com fx = fy = fator × largura da imagem (ponto "
+       "principal centrado, sem distorção) em vez do palpite genérico dele. "
+       "Uma distância focal conhecida estabiliza muito o início do mapper, "
+       "principalmente com lentes olho de peixe. Insta360 X5: ~0.269 "
+       "(definido automaticamente para entradas .insv)."),
+    IT("Avviare COLMAP con fx = fy = fattore × larghezza dell'immagine (punto "
+       "principale centrato, distorsione nulla) invece della sua stima "
+       "generica. Una focale nota stabilizza molto l'avvio del mapper, "
+       "soprattutto con obiettivi fisheye. Insta360 X5: ~0.269 (impostato da "
+       "solo per gli ingressi .insv)."),
+    NL("COLMAP starten met fx = fy = factor × beeldbreedte (hoofdpunt "
+       "gecentreerd, geen vertekening) in plaats van met zijn algemene "
+       "schatting. Een bekende brandpuntsafstand maakt de start van de mapper "
+       "veel stabieler, zeker bij fisheye-lenzen. Insta360 X5: ~0.269 (wordt "
+       "bij .insv-invoer vanzelf ingesteld)."),
+    RU("Задать COLMAP начальное fx = fy = коэффициент × ширина изображения "
+       "(главная точка в центре, без дисторсии) вместо его общей догадки. "
+       "Известное фокусное расстояние заметно стабилизирует запуск маппера, "
+       "особенно для объективов «рыбий глаз». Insta360 X5: ~0.269 (для входа "
+       ".insv ставится автоматически)."),
+    TR("COLMAP'ı genel tahmini yerine fx = fy = katsayı × görüntü genişliği "
+       "(ana nokta ortada, bozulma yok) ile başlatır. Bilinen bir odak "
+       "uzaklığı mapper'ın başlangıcını epeyce dengeler, özellikle balıkgözü "
+       "objektiflerde. Insta360 X5: ~0.269 (.insv girdilerinde kendiliğinden "
+       "ayarlanır)."));
 
-SS_MSG_EN(colmap_repetitive, "Repetitive scenes");
-SS_MSG_EN(colmap_repetitive_help,
-    "Large scenes with repeating structure (several similar rooms, tiled "
-    "facades) often weld physically different but similar-looking parts "
-    "together. These make matching and registration stricter to suppress "
-    "that; 0 = COLMAP default.");
-SS_MSG_EN(colmap_repetitive_level, "Repetitive level");
-SS_MSG_EN(colmap_rep_off, "Off (COLMAP defaults)");
-SS_MSG_EN(colmap_rep_low, "Low");
-SS_MSG_EN(colmap_rep_medium, "Medium");
-SS_MSG_EN(colmap_rep_high, "High");
-SS_MSG_EN(colmap_rep_custom, "Custom");
-SS_MSG_EN(colmap_repetitive_level_help,
-    "How aggressively wrong matches are suppressed; fills the fields below. "
-    "Low: mild tightening, keeps registration rate. Medium: good first "
-    "attempt for multi-room indoor captures. High: for heavy repetition "
-    "(identical rooms/facades) -- expect fewer registered images if overlap "
-    "is thin.");
-SS_MSG_EN(colmap_match_ratio, "Match ratio test (0 = default 0.8)");
-SS_MSG_EN(colmap_match_ratio_help,
-    "SiftMatching.max_ratio, the Lowe ratio test: a feature match is kept "
-    "only when its best match is this much better than the second best. LOWER "
-    "is stricter -- try 0.6-0.7 when repetitive texture creates false "
-    "matches. SIFT only.");
-SS_MSG_EN(colmap_min_inliers_pair, "Min inliers per pair (0 = default 15)");
-SS_MSG_EN(colmap_min_inliers_pair_help,
-    "TwoViewGeometry.min_num_inliers: image pairs whose geometric "
-    "verification finds fewer inliers are discarded outright. Raise to 50-100 "
-    "so weakly-supported (usually false) links between similar-looking areas "
-    "never enter the database.");
-SS_MSG_EN(colmap_min_inliers_reg, "Min inliers to register (0 = default 30)");
-SS_MSG_EN(colmap_min_inliers_reg_help,
-    "Mapper.abs_pose_min_num_inliers: minimum absolute-pose inliers to "
-    "register an image into the model. Raise to 50-100 to stop images from "
-    "registering onto the wrong (similar-looking) part of the scene.");
-SS_MSG_EN(colmap_min_inlier_ratio, "Min inlier ratio to register (0 = default 0.25)");
-SS_MSG_EN(colmap_min_inlier_ratio_help,
-    "Mapper.abs_pose_min_inlier_ratio: minimum fraction of 2D-3D "
-    "correspondences that must be pose inliers. Try 0.35-0.5 for stricter "
-    "registration.");
-SS_MSG_EN(colmap_max_reg_error, "Max registration error px (0 = default 12)");
-SS_MSG_EN(colmap_max_reg_error_help,
-    "Mapper.abs_pose_max_error: reprojection error threshold (px) for "
-    "absolute-pose RANSAC when registering images. Lower (6-8) = stricter; "
-    "combine with the inlier thresholds above.");
-SS_MSG_EN(colmap_gpu_ba, "GPU bundle adjustment");
-SS_MSG_EN(colmap_gpu_ba_help, "Mapper.ba_use_gpu.");
-SS_MSG_EN(colmap_gpu_ba_fisheye,
-    "Mapper.ba_use_gpu -- unavailable: COLMAP's GPU bundle adjustment does "
-    "not support fisheye camera models yet.");
-SS_MSG_EN(colmap_merge_models, "Merge partial models");
-SS_MSG_EN(colmap_merge_models_help,
-    "When the mapper splits the scene into several partial models, try colmap "
-    "model_merger to fuse them (kept only when the merged model registers "
-    "more images). The trainer otherwise auto-picks the largest partial "
-    "model.");
-SS_MSG_EN(colmap_final_ba, "Final refinement pass");
-SS_MSG_EN(colmap_final_ba_help,
-    "Run bundle_adjuster after mapping on the largest (or merged) model, "
-    "refining focal length, principal point, and distortion.");
-SS_MSG_EN(colmap_vocab_tree_hint, "vocabulary tree (auto find/download)");
-SS_MSG_EN(colmap_vocab_tree, "vocab tree");
+SS_MSG(colmap_camera_params,
+    EN("Initial camera params"),
+    JA("カメラパラメータの初期値"),
+    ZH_HANS("相机参数初值"),
+    ZH_HANT("相機參數初值"),
+    KO("카메라 파라미터 초기값"),
+    DE("Anfangs-Kameraparameter"),
+    FR("Paramètres de caméra initiaux"),
+    ES("Parámetros de cámara iniciales"),
+    PT("Parâmetros de câmera iniciais"),
+    IT("Parametri di camera iniziali"),
+    NL("Begincameraparameters"),
+    RU("Начальные параметры камеры"),
+    TR("Başlangıç kamera parametreleri"));
+SS_MSG(colmap_camera_params_hint,
+    EN("fx,fy,cx,cy,... (overrides focal length)"),
+    JA("fx,fy,cx,cy,…（焦点距離より優先）"),
+    ZH_HANS("fx,fy,cx,cy,…（优先于焦距）"),
+    ZH_HANT("fx,fy,cx,cy,…（優先於焦距）"),
+    KO("fx,fy,cx,cy,…(초점 거리보다 우선)"),
+    DE("fx,fy,cx,cy,… (hat Vorrang vor der Brennweite)"),
+    FR("fx,fy,cx,cy,… (prioritaire sur la distance focale)"),
+    ES("fx,fy,cx,cy,… (tiene prioridad sobre la distancia focal)"),
+    PT("fx,fy,cx,cy,… (tem prioridade sobre a distância focal)"),
+    IT("fx,fy,cx,cy,… (ha la precedenza sulla focale)"),
+    NL("fx,fy,cx,cy,… (gaat voor op de brandpuntsafstand)"),
+    RU("fx,fy,cx,cy,… (важнее фокусного расстояния)"),
+    TR("fx,fy,cx,cy,… (odak uzaklığından önce gelir)"));
+SS_MSG(colmap_camera_params_help,
+    EN("Raw ImageReader.camera_params for the selected camera model (full "
+       "calibration prior). Leave empty to use the focal-length factor above, "
+       "or both empty for COLMAP's default initialization."),
+    JA("選んだカメラモデルに対する ImageReader.camera_params をそのまま渡します"
+       "（較正値をすべて与える指定）。空にすると上の焦点距離の係数を使い、"
+       "両方とも空なら COLMAP の既定の初期化になります。"),
+    ZH_HANS("按所选相机模型直接给出 ImageReader.camera_params（完整的标定先验）。"
+            "留空则使用上面的焦距系数；两者都留空则用 COLMAP 的默认初始化。"),
+    ZH_HANT("依所選相機模型直接給出 ImageReader.camera_params（完整的校正先驗）。"
+            "留空則使用上面的焦距係數；兩者都留空則用 COLMAP 的預設初始化。"),
+    KO("선택한 카메라 모델에 대한 ImageReader.camera_params를 그대로 넘깁니다"
+       "(교정값 전체를 지정). 비워 두면 위의 초점 거리 계수를 쓰고, 둘 다 비우면 "
+       "COLMAP의 기본 초기화를 씁니다."),
+    DE("ImageReader.camera_params für das gewählte Kameramodell, unverändert "
+       "(vollständige Kalibrierung als Vorgabe). Leer lassen, um den "
+       "Brennweitenfaktor oben zu benutzen; sind beide leer, initialisiert "
+       "COLMAP wie üblich."),
+    FR("ImageReader.camera_params tel quel pour le modèle de caméra choisi "
+       "(étalonnage complet donné a priori). Laisser vide pour utiliser le "
+       "facteur de distance focale ci-dessus ; les deux vides, COLMAP "
+       "s'initialise par défaut."),
+    ES("ImageReader.camera_params tal cual para el modelo de cámara elegido "
+       "(calibración completa como valor previo). Déjalo vacío para usar el "
+       "factor de distancia focal de arriba; con ambos vacíos, COLMAP se "
+       "inicializa por defecto."),
+    PT("ImageReader.camera_params tal como está, para o modelo de câmera "
+       "escolhido (calibração completa como valor prévio). Deixe vazio para "
+       "usar o fator de distância focal acima; com os dois vazios, o COLMAP "
+       "inicializa como de costume."),
+    IT("ImageReader.camera_params così com'è, per il modello di camera scelto "
+       "(calibrazione completa data a priori). Lascialo vuoto per usare il "
+       "fattore di focale qui sopra; con entrambi vuoti, COLMAP si inizializza "
+       "in modo predefinito."),
+    NL("ImageReader.camera_params ongewijzigd, voor het gekozen cameramodel "
+       "(volledige kalibratie vooraf). Laat het leeg om de "
+       "brandpuntsafstandfactor hierboven te gebruiken; zijn beide leeg, dan "
+       "initialiseert COLMAP zoals gewoonlijk."),
+    RU("ImageReader.camera_params как есть, для выбранной модели камеры "
+       "(полная калибровка как априорные данные). Оставьте пустым, чтобы "
+       "использовать коэффициент фокусного расстояния выше; если пусто и то и "
+       "другое, COLMAP инициализируется по умолчанию."),
+    TR("Seçilen kamera modeli için ImageReader.camera_params değerini olduğu "
+       "gibi verir (kalibrasyonun tamamı önsel olarak). Yukarıdaki odak "
+       "uzaklığı katsayısını kullanmak için boş bırakın; ikisi de boşsa COLMAP "
+       "kendi varsayılanıyla başlar."));
+
+SS_MSG(colmap_max_features,
+    EN("Max features (0 = auto)"),
+    JA("特徴点の上限（0 = 自動）"),
+    ZH_HANS("特征点上限（0 = 自动）"),
+    ZH_HANT("特徵點上限（0 = 自動）"),
+    KO("특징점 최대 개수(0 = 자동)"),
+    DE("Höchstzahl Merkmale (0 = automatisch)"),
+    FR("Nombre maximal de points (0 = automatique)"),
+    ES("Máximo de puntos característicos (0 = automático)"),
+    PT("Máximo de pontos característicos (0 = automático)"),
+    IT("Numero massimo di punti (0 = automatico)"),
+    NL("Maximum aantal kenmerken (0 = automatisch)"),
+    RU("Предел числа точек (0 = автоматически)"),
+    TR("En çok öznitelik (0 = otomatik)"));
+SS_MSG(colmap_max_features_help,
+    EN("SiftExtraction / AlikedExtraction .max_num_features; overrides the "
+       "Quality preset when non-zero."),
+    JA("SiftExtraction / AlikedExtraction の .max_num_features です。0 以外に"
+       "すると品質プリセットより優先されます。"),
+    ZH_HANS("即 SiftExtraction / AlikedExtraction 的 .max_num_features；非 0 时"
+            "优先于「质量」预设。"),
+    ZH_HANT("即 SiftExtraction / AlikedExtraction 的 .max_num_features；非 0 時"
+            "優先於「品質」預設。"),
+    KO("SiftExtraction / AlikedExtraction의 .max_num_features입니다. 0이 아니면 "
+       "품질 프리셋보다 우선합니다."),
+    DE("SiftExtraction / AlikedExtraction .max_num_features; ungleich null hat "
+       "es Vorrang vor der Qualitätsvoreinstellung."),
+    FR("SiftExtraction / AlikedExtraction .max_num_features ; non nul, il "
+       "prime sur le préréglage de qualité."),
+    ES("SiftExtraction / AlikedExtraction .max_num_features; si no es cero, "
+       "tiene prioridad sobre el ajuste de calidad."),
+    PT("SiftExtraction / AlikedExtraction .max_num_features; se não for zero, "
+       "tem prioridade sobre a predefinição de qualidade."),
+    IT("SiftExtraction / AlikedExtraction .max_num_features; se diverso da "
+       "zero ha la precedenza sulla preimpostazione di qualità."),
+    NL("SiftExtraction / AlikedExtraction .max_num_features; niet nul gaat "
+       "voor op de kwaliteitsvoorinstelling."),
+    RU("SiftExtraction / AlikedExtraction .max_num_features; ненулевое "
+       "значение важнее пресета качества."),
+    TR("SiftExtraction / AlikedExtraction .max_num_features; sıfırdan farklıysa "
+       "kalite hazır ayarının önüne geçer."));
+
+SS_MSG(colmap_max_image_size,
+    EN("Max image size (0 = off)"),
+    JA("画像サイズの上限（0 = 無効）"),
+    ZH_HANS("图像尺寸上限（0 = 关闭）"),
+    ZH_HANT("影像尺寸上限（0 = 關閉）"),
+    KO("이미지 크기 상한(0 = 끔)"),
+    DE("Maximale Bildgröße (0 = aus)"),
+    FR("Taille d'image maximale (0 = désactivé)"),
+    ES("Tamaño máximo de imagen (0 = desactivado)"),
+    PT("Tamanho máximo de imagem (0 = desligado)"),
+    IT("Dimensione massima dell'immagine (0 = disattivo)"),
+    NL("Maximale beeldgrootte (0 = uit)"),
+    RU("Предел размера изображения (0 = выкл.)"),
+    TR("En büyük görüntü boyutu (0 = kapalı)"));
+SS_MSG(colmap_max_image_size_help,
+    EN("FeatureExtraction.max_image_size: downscale images beyond this for "
+       "feature extraction."),
+    JA("FeatureExtraction.max_image_size です。これを超える画像は特徴点の抽出時に"
+       "縮小されます。"),
+    ZH_HANS("即 FeatureExtraction.max_image_size：超过这个尺寸的图像会在提取特征时"
+            "先缩小。"),
+    ZH_HANT("即 FeatureExtraction.max_image_size：超過這個尺寸的影像會在擷取特徵時"
+            "先縮小。"),
+    KO("FeatureExtraction.max_image_size입니다. 이보다 큰 이미지는 특징점을 뽑을 때 "
+       "축소합니다."),
+    DE("FeatureExtraction.max_image_size: größere Bilder werden für die "
+       "Merkmalssuche verkleinert."),
+    FR("FeatureExtraction.max_image_size : les images plus grandes sont "
+       "réduites pour l'extraction des points."),
+    ES("FeatureExtraction.max_image_size: las imágenes más grandes se reducen "
+       "para extraer los puntos característicos."),
+    PT("FeatureExtraction.max_image_size: imagens maiores são reduzidas para a "
+       "extração de pontos característicos."),
+    IT("FeatureExtraction.max_image_size: le immagini più grandi vengono "
+       "ridotte per l'estrazione dei punti."),
+    NL("FeatureExtraction.max_image_size: grotere beelden worden verkleind om "
+       "kenmerken te zoeken."),
+    RU("FeatureExtraction.max_image_size: изображения крупнее уменьшаются перед "
+       "поиском точек."),
+    TR("FeatureExtraction.max_image_size: bundan büyük görüntüler öznitelik "
+       "çıkarımı için küçültülür."));
+
+SS_MSG(colmap_seq_overlap_help,
+    EN("How many neighboring frames each frame is matched against (sequential "
+       "matcher)."),
+    JA("各フレームを前後いくつのフレームと照合するかです（逐次マッチャー）。"),
+    ZH_HANS("每一帧与前后多少帧做匹配（顺序匹配器）。"),
+    ZH_HANT("每一影格與前後多少影格做比對（循序比對器）。"),
+    KO("각 프레임을 앞뒤 몇 개의 프레임과 매칭할지입니다(순차 매처)."),
+    DE("Mit wie vielen Nachbarbildern jedes Bild verglichen wird (sequenzieller "
+       "Matcher)."),
+    FR("Nombre d'images voisines auxquelles chaque image est comparée "
+       "(appariement séquentiel)."),
+    ES("Con cuántos fotogramas vecinos se compara cada fotograma "
+       "(emparejamiento secuencial)."),
+    PT("Com quantos quadros vizinhos cada quadro é comparado (correspondência "
+       "sequencial)."),
+    IT("Con quanti fotogrammi vicini viene confrontato ogni fotogramma "
+       "(matcher sequenziale)."),
+    NL("Met hoeveel naburige beelden elk beeld wordt vergeleken (sequentiële "
+       "matcher)."),
+    RU("Со сколькими соседними кадрами сопоставляется каждый кадр "
+       "(последовательное сопоставление)."),
+    TR("Her karenin kaç komşu kareyle eşleştirileceği (sıralı eşleştirici)."));
+
+SS_MSG(colmap_quadratic_overlap,
+    EN("Quadratic overlap"),
+    JA("二次的な重なり"),
+    ZH_HANS("二次重叠"),
+    ZH_HANT("二次重疊"),
+    KO("이차 겹침"),
+    DE("Quadratische Überlappung"),
+    FR("Recouvrement quadratique"),
+    ES("Solapamiento cuadrático"),
+    PT("Sobreposição quadrática"),
+    IT("Sovrapposizione quadratica"),
+    NL("Kwadratische overlap"),
+    RU("Квадратичное перекрытие"),
+    TR("Karesel örtüşme"));
+SS_MSG(colmap_quadratic_overlap_help,
+    EN("Additionally match frame i against frames i +- 2^k (sequential "
+       "matcher). Helps close loops in longer captures; enabled by default."),
+    JA("フレーム i を i ± 2^k のフレームとも照合します（逐次マッチャー）。"
+       "長い撮影でループを閉じやすくなります。既定で有効です。"),
+    ZH_HANS("再把第 i 帧与第 i ± 2^k 帧做匹配（顺序匹配器）。较长的拍摄更容易闭环；"
+            "默认开启。"),
+    ZH_HANT("再把第 i 影格與第 i ± 2^k 影格做比對（循序比對器）。較長的拍攝更容易"
+            "閉環；預設開啟。"),
+    KO("프레임 i를 i ± 2^k 프레임과도 매칭합니다(순차 매처). 긴 촬영에서 루프를 "
+       "닫는 데 도움이 됩니다. 기본값은 켬입니다."),
+    DE("Bild i zusätzlich mit den Bildern i ± 2^k vergleichen (sequenzieller "
+       "Matcher). Hilft, Schleifen in längeren Aufnahmen zu schließen; "
+       "standardmäßig an."),
+    FR("Comparer en plus l'image i aux images i ± 2^k (appariement "
+       "séquentiel). Aide à fermer les boucles des prises longues ; activé par "
+       "défaut."),
+    ES("Comparar además el fotograma i con los fotogramas i ± 2^k "
+       "(emparejamiento secuencial). Ayuda a cerrar bucles en tomas largas; "
+       "activado por defecto."),
+    PT("Comparar também o quadro i com os quadros i ± 2^k (correspondência "
+       "sequencial). Ajuda a fechar laços em capturas longas; ligado por "
+       "padrão."),
+    IT("Confrontare anche il fotogramma i con i fotogrammi i ± 2^k (matcher "
+       "sequenziale). Aiuta a chiudere gli anelli nelle riprese lunghe; attivo "
+       "per impostazione predefinita."),
+    NL("Beeld i ook vergelijken met de beelden i ± 2^k (sequentiële matcher). "
+       "Helpt lussen in langere opnamen te sluiten; standaard aan."),
+    RU("Дополнительно сопоставлять кадр i с кадрами i ± 2^k (последовательное "
+       "сопоставление). Помогает замыкать петли в длинных съёмках; включено по "
+       "умолчанию."),
+    TR("i karesini ayrıca i ± 2^k kareleriyle de eşleştirir (sıralı "
+       "eşleştirici). Uzun çekimlerde döngüleri kapatmaya yardım eder; "
+       "varsayılan olarak açık."));
+
+SS_MSG(colmap_lightglue,
+    EN("LightGlue matching"),
+    JA("LightGlue によるマッチング"),
+    ZH_HANS("LightGlue 匹配"),
+    ZH_HANT("LightGlue 比對"),
+    KO("LightGlue 매칭"),
+    DE("LightGlue-Zuordnung"),
+    FR("Appariement LightGlue"),
+    ES("Emparejamiento LightGlue"),
+    PT("Correspondência LightGlue"),
+    IT("Corrispondenze con LightGlue"),
+    NL("LightGlue-matching"),
+    RU("Сопоставление LightGlue"),
+    TR("LightGlue eşleştirmesi"));
+SS_MSG(colmap_lightglue_help,
+    EN("Neural feature matcher (FeatureMatching.type *_LIGHTGLUE): more matches "
+       "on hard pairs than brute-force descriptor distance. Default for ALIKED "
+       "features; also works with SIFT."),
+    JA("ニューラルネットによる特徴マッチャーです（FeatureMatching.type の "
+       "*_LIGHTGLUE）。記述子の総当たり距離より、難しい組み合わせで多くの対応が"
+       "得られます。ALIKED 特徴では既定で、SIFT でも使えます。"),
+    ZH_HANS("基于神经网络的特征匹配器（FeatureMatching.type 的 *_LIGHTGLUE）："
+            "在困难的图像对上比暴力比较描述子距离能找到更多匹配。ALIKED 特征默认"
+            "使用；SIFT 也可以用。"),
+    ZH_HANT("以神經網路為基礎的特徵比對器（FeatureMatching.type 的 *_LIGHTGLUE）："
+            "在困難的影像對上比暴力比較描述子距離能找到更多對應。ALIKED 特徵預設"
+            "使用；SIFT 也可以用。"),
+    KO("신경망 특징 매처입니다(FeatureMatching.type의 *_LIGHTGLUE). 서술자 거리를 "
+       "전수 비교하는 방식보다 어려운 쌍에서 대응을 더 많이 찾습니다. ALIKED "
+       "특징에서는 기본이며, SIFT에서도 동작합니다."),
+    DE("Neuronaler Merkmals-Matcher (FeatureMatching.type *_LIGHTGLUE): findet "
+       "bei schwierigen Paaren mehr Zuordnungen als der Brute-Force-Vergleich "
+       "der Deskriptoren. Standard für ALIKED-Merkmale, funktioniert auch mit "
+       "SIFT."),
+    FR("Appariement neuronal (FeatureMatching.type *_LIGHTGLUE) : trouve plus "
+       "de correspondances sur les paires difficiles que la comparaison "
+       "exhaustive des descripteurs. Par défaut pour les points ALIKED, "
+       "fonctionne aussi avec SIFT."),
+    ES("Emparejador neuronal (FeatureMatching.type *_LIGHTGLUE): encuentra más "
+       "correspondencias en los pares difíciles que comparar descriptores por "
+       "fuerza bruta. Es el predeterminado con puntos ALIKED y también sirve "
+       "con SIFT."),
+    PT("Emparelhador neural (FeatureMatching.type *_LIGHTGLUE): encontra mais "
+       "correspondências nos pares difíceis do que comparar descritores por "
+       "força bruta. É o padrão com pontos ALIKED e também funciona com SIFT."),
+    IT("Matcher neurale (FeatureMatching.type *_LIGHTGLUE): trova più "
+       "corrispondenze sulle coppie difficili rispetto al confronto esaustivo "
+       "dei descrittori. Predefinito per i punti ALIKED, funziona anche con "
+       "SIFT."),
+    NL("Neurale kenmerk-matcher (FeatureMatching.type *_LIGHTGLUE): vindt op "
+       "lastige paren meer overeenkomsten dan het brute-force vergelijken van "
+       "descriptoren. Standaard bij ALIKED-kenmerken, werkt ook met SIFT."),
+    RU("Нейросетевое сопоставление (FeatureMatching.type *_LIGHTGLUE): на "
+       "трудных парах находит больше соответствий, чем полный перебор "
+       "дескрипторов. По умолчанию для точек ALIKED, работает и с SIFT."),
+    TR("Sinir ağı tabanlı öznitelik eşleştirici (FeatureMatching.type "
+       "*_LIGHTGLUE): zor çiftlerde betimleyicileri kaba kuvvetle "
+       "karşılaştırmaktan daha çok eşleşme bulur. ALIKED özniteliklerinde "
+       "varsayılandır, SIFT ile de çalışır."));
+
+SS_MSG(colmap_affine_sift,
+    EN("Affine SIFT + guided matching"),
+    JA("アフィン SIFT ＋ ガイド付きマッチング"),
+    ZH_HANS("仿射 SIFT ＋ 引导匹配"),
+    ZH_HANT("仿射 SIFT ＋ 引導比對"),
+    KO("어파인 SIFT + 유도 매칭"),
+    DE("Affines SIFT + geführte Zuordnung"),
+    FR("SIFT affine + appariement guidé"),
+    ES("SIFT afín + emparejamiento guiado"),
+    PT("SIFT afim + correspondência guiada"),
+    IT("SIFT affine + corrispondenze guidate"),
+    NL("Affiene SIFT + geleide matching"),
+    RU("Аффинный SIFT + управляемое сопоставление"),
+    TR("Afin SIFT + yönlendirmeli eşleştirme"));
+SS_MSG(colmap_affine_sift_help,
+    EN("SiftExtraction.estimate_affine_shape + FeatureMatching.guided_matching: "
+       "slower but more robust matching."),
+    JA("SiftExtraction.estimate_affine_shape と "
+       "FeatureMatching.guided_matching です。遅くなりますが、マッチングが"
+       "崩れにくくなります。"),
+    ZH_HANS("即 SiftExtraction.estimate_affine_shape 与 "
+            "FeatureMatching.guided_matching：更慢，但匹配更稳健。"),
+    ZH_HANT("即 SiftExtraction.estimate_affine_shape 與 "
+            "FeatureMatching.guided_matching：更慢，但比對更穩健。"),
+    KO("SiftExtraction.estimate_affine_shape와 "
+       "FeatureMatching.guided_matching입니다. 느려지지만 매칭이 더 튼튼해집니다."),
+    DE("SiftExtraction.estimate_affine_shape + FeatureMatching.guided_matching: "
+       "langsamer, aber robuster."),
+    FR("SiftExtraction.estimate_affine_shape + FeatureMatching.guided_matching : "
+       "plus lent, mais plus robuste."),
+    ES("SiftExtraction.estimate_affine_shape + FeatureMatching.guided_matching: "
+       "más lento, pero más robusto."),
+    PT("SiftExtraction.estimate_affine_shape + FeatureMatching.guided_matching: "
+       "mais lento, mas mais robusto."),
+    IT("SiftExtraction.estimate_affine_shape + FeatureMatching.guided_matching: "
+       "più lento, ma più robusto."),
+    NL("SiftExtraction.estimate_affine_shape + FeatureMatching.guided_matching: "
+       "trager, maar robuuster."),
+    RU("SiftExtraction.estimate_affine_shape + FeatureMatching.guided_matching: "
+       "медленнее, но устойчивее."),
+    TR("SiftExtraction.estimate_affine_shape + FeatureMatching.guided_matching: "
+       "daha yavaş ama daha sağlam eşleştirme."));
+
+SS_MSG(colmap_distortion_refinement,
+    EN("Distortion refinement"),
+    JA("歪みの最適化"),
+    ZH_HANS("畸变优化"),
+    ZH_HANT("畸變最佳化"),
+    KO("왜곡 보정 최적화"),
+    DE("Verzeichnung mitoptimieren"),
+    FR("Affinage de la distorsion"),
+    ES("Refinado de la distorsión"),
+    PT("Refino da distorção"),
+    IT("Affinamento della distorsione"),
+    NL("Vertekening bijstellen"),
+    RU("Уточнение дисторсии"),
+    TR("Bozulmanın iyileştirilmesi"));
+SS_MSG(colmap_extra_auto,
+    EN("Auto"),           JA("自動"),          ZH_HANS("自动"),     ZH_HANT("自動"),
+    KO("자동"),            DE("Automatisch"),  FR("Automatique"),  ES("Automático"),
+    PT("Automático"),     IT("Automatico"),   NL("Automatisch"),  RU("Автоматически"),
+    TR("Otomatik"));
+SS_MSG(colmap_extra_during,
+    EN("During mapping"),
+    JA("マッピング中"),
+    ZH_HANS("建图过程中"),
+    ZH_HANT("建圖過程中"),
+    KO("매핑 중"),
+    DE("Während des Mappings"),
+    FR("Pendant le mapping"),
+    ES("Durante el mapeo"),
+    PT("Durante o mapeamento"),
+    IT("Durante il mapping"),
+    NL("Tijdens het mappen"),
+    RU("Во время реконструкции"),
+    TR("Haritalama sırasında"));
+SS_MSG(colmap_extra_final,
+    EN("Final pass only"),
+    JA("最後の仕上げだけ"),
+    ZH_HANS("只在最后一遍"),
+    ZH_HANT("只在最後一遍"),
+    KO("마지막 단계에서만"),
+    DE("Nur im letzten Durchgang"),
+    FR("Seulement à la passe finale"),
+    ES("Solo en la pasada final"),
+    PT("Só na passagem final"),
+    IT("Solo nella passata finale"),
+    NL("Alleen in de laatste ronde"),
+    RU("Только на финальном проходе"),
+    TR("Yalnızca son geçişte"));
+SS_MSG(colmap_distortion_refinement_help,
+    EN("When distortion coefficients are optimized. \"Final pass only\" holds "
+       "them fixed during mapping (Mapper.ba_refine_extra_params 0) -- more "
+       "stable for low-distortion perspective lenses -- and recovers them in "
+       "the final refinement pass. Auto: final-pass-only for perspective "
+       "models, during mapping for fisheye."),
+    JA("歪み係数をいつ最適化するかです。「最後の仕上げだけ」ならマッピング中は"
+       "固定し（Mapper.ba_refine_extra_params 0）、最後の仕上げで求めます。"
+       "歪みの小さい透視レンズではこちらが安定します。「自動」は透視モデルなら"
+       "最後の仕上げだけ、魚眼ならマッピング中です。"),
+    ZH_HANS("何时优化畸变系数。选「只在最后一遍」时，建图过程中保持固定"
+            "（Mapper.ba_refine_extra_params 0），到最后一遍精修时再求解；对畸变"
+            "较小的透视镜头更稳。「自动」：透视模型只在最后一遍，鱼眼在建图过程中。"),
+    ZH_HANT("何時最佳化畸變係數。選「只在最後一遍」時，建圖過程中保持固定"
+            "（Mapper.ba_refine_extra_params 0），到最後一遍精修時再求解；對畸變"
+            "較小的透視鏡頭更穩。「自動」：透視模型只在最後一遍，魚眼在建圖過程中。"),
+    KO("왜곡 계수를 언제 최적화할지입니다. ‘마지막 단계에서만’은 매핑 중에는 "
+       "고정해 두고(Mapper.ba_refine_extra_params 0) 마지막 정밀화 단계에서 "
+       "구합니다. 왜곡이 작은 원근 렌즈에서는 이쪽이 더 안정적입니다. ‘자동’은 "
+       "원근 모델이면 마지막 단계에서만, 어안이면 매핑 중입니다."),
+    DE("Wann die Verzeichnungskoeffizienten optimiert werden. „Nur im letzten "
+       "Durchgang“ hält sie während des Mappings fest "
+       "(Mapper.ba_refine_extra_params 0) -- bei perspektivischen Objektiven "
+       "mit wenig Verzeichnung stabiler -- und bestimmt sie erst im letzten "
+       "Feinschliff. Automatisch: bei perspektivischen Modellen nur im letzten "
+       "Durchgang, bei Fisheye während des Mappings."),
+    FR("Quand les coefficients de distorsion sont optimisés. « Seulement à la "
+       "passe finale » les garde fixes pendant le mapping "
+       "(Mapper.ba_refine_extra_params 0) -- plus stable pour les objectifs "
+       "perspectifs peu distordus -- et les retrouve à l'affinage final. "
+       "Automatique : passe finale seule pour les modèles perspectifs, pendant "
+       "le mapping pour le fisheye."),
+    ES("Cuándo se optimizan los coeficientes de distorsión. «Solo en la pasada "
+       "final» los mantiene fijos durante el mapeo "
+       "(Mapper.ba_refine_extra_params 0) -- más estable con objetivos "
+       "perspectivos de poca distorsión -- y los recupera en el refinado "
+       "final. Automático: solo pasada final para los modelos perspectivos, "
+       "durante el mapeo para el ojo de pez."),
+    PT("Quando os coeficientes de distorção são otimizados. “Só na passagem "
+       "final” mantém-nos fixos durante o mapeamento "
+       "(Mapper.ba_refine_extra_params 0) -- mais estável com lentes "
+       "perspectivas de pouca distorção -- e recupera-os no refino final. "
+       "Automático: só a passagem final para modelos perspectivos, durante o "
+       "mapeamento para olho de peixe."),
+    IT("Quando vengono ottimizzati i coefficienti di distorsione. «Solo nella "
+       "passata finale» li tiene fissi durante il mapping "
+       "(Mapper.ba_refine_extra_params 0) -- più stabile con obiettivi "
+       "prospettici poco distorti -- e li ricava nell'affinamento finale. "
+       "Automatico: solo passata finale per i modelli prospettici, durante il "
+       "mapping per il fisheye."),
+    NL("Wanneer de vertekeningscoëfficiënten worden geoptimaliseerd. „Alleen in "
+       "de laatste ronde” houdt ze vast tijdens het mappen "
+       "(Mapper.ba_refine_extra_params 0) -- stabieler bij perspectivische "
+       "lenzen met weinig vertekening -- en bepaalt ze pas in de laatste "
+       "verfijning. Automatisch: alleen de laatste ronde bij perspectivische "
+       "modellen, tijdens het mappen bij fisheye."),
+    RU("Когда оптимизируются коэффициенты дисторсии. «Только на финальном "
+       "проходе» держит их фиксированными во время реконструкции "
+       "(Mapper.ba_refine_extra_params 0) -- устойчивее для перспективных "
+       "объективов с малой дисторсией -- и находит их на финальном уточнении. "
+       "Автоматически: только финальный проход для перспективных моделей, во "
+       "время реконструкции для «рыбьего глаза»."),
+    TR("Bozulma katsayılarının ne zaman iyileştirileceği. «Yalnızca son "
+       "geçişte», haritalama boyunca onları sabit tutar "
+       "(Mapper.ba_refine_extra_params 0) -- bozulması az perspektif "
+       "objektiflerde daha kararlıdır -- ve son iyileştirme geçişinde bulur. "
+       "Otomatik: perspektif modellerde yalnızca son geçiş, balıkgözünde "
+       "haritalama sırasında."));
+
+SS_MSG(colmap_min_matches,
+    EN("Min matches per pair (0 = default)"),
+    JA("ペアあたりの最小対応数（0 = 既定値）"),
+    ZH_HANS("每对图像的最少匹配数（0 = 默认）"),
+    ZH_HANT("每對影像的最少對應數（0 = 預設）"),
+    KO("쌍당 최소 대응 수(0 = 기본값)"),
+    DE("Mindestzahl Zuordnungen je Paar (0 = Standard)"),
+    FR("Correspondances minimales par paire (0 = valeur par défaut)"),
+    ES("Correspondencias mínimas por par (0 = valor predeterminado)"),
+    PT("Correspondências mínimas por par (0 = valor padrão)"),
+    IT("Corrispondenze minime per coppia (0 = valore predefinito)"),
+    NL("Minimum aantal overeenkomsten per paar (0 = standaard)"),
+    RU("Минимум соответствий на пару (0 = по умолчанию)"),
+    TR("Çift başına en az eşleşme (0 = varsayılan)"));
+SS_MSG(colmap_min_matches_help,
+    EN("Mapper.min_num_matches (default 15): image pairs with fewer inlier "
+       "matches are ignored by the mapper. Raise to suppress spurious "
+       "registrations, lower for sparse overlap."),
+    JA("Mapper.min_num_matches（既定 15）です。インライアの対応がこれより少ない"
+       "画像ペアはマッパーが無視します。誤った登録を抑えたいときは上げ、重なりが"
+       "少ない撮影では下げます。"),
+    ZH_HANS("即 Mapper.min_num_matches（默认 15）：内点匹配少于此数的图像对会被"
+            "建图阶段忽略。想压制错误的配准就调高，重叠很少时就调低。"),
+    ZH_HANT("即 Mapper.min_num_matches（預設 15）：內點對應少於此數的影像對會被"
+            "建圖階段忽略。想壓制錯誤的註冊就調高，重疊很少時就調低。"),
+    KO("Mapper.min_num_matches(기본 15)입니다. 인라이어 대응이 이보다 적은 이미지 "
+       "쌍은 매퍼가 무시합니다. 잘못된 등록을 줄이려면 올리고, 겹침이 적으면 "
+       "내립니다."),
+    DE("Mapper.min_num_matches (Standard 15): Bildpaare mit weniger "
+       "Inlier-Zuordnungen ignoriert der Mapper. Höher unterdrückt falsche "
+       "Registrierungen, niedriger hilft bei wenig Überlappung."),
+    FR("Mapper.min_num_matches (15 par défaut) : le mapper ignore les paires "
+       "d'images ayant moins de correspondances inliers. Augmenter pour "
+       "supprimer les enregistrements douteux, baisser si le recouvrement est "
+       "faible."),
+    ES("Mapper.min_num_matches (15 por defecto): el mapper ignora los pares de "
+       "imágenes con menos correspondencias inlier. Súbelo para eliminar "
+       "registros espurios, bájalo si hay poco solapamiento."),
+    PT("Mapper.min_num_matches (padrão 15): o mapper ignora pares de imagens "
+       "com menos correspondências inlier. Aumente para eliminar registros "
+       "espúrios, diminua quando houver pouca sobreposição."),
+    IT("Mapper.min_num_matches (predefinito 15): il mapper ignora le coppie di "
+       "immagini con meno corrispondenze inlier. Alzalo per eliminare "
+       "registrazioni spurie, abbassalo se la sovrapposizione è scarsa."),
+    NL("Mapper.min_num_matches (standaard 15): beeldparen met minder "
+       "inlier-overeenkomsten negeert de mapper. Hoger onderdrukt valse "
+       "registraties, lager helpt bij weinig overlap."),
+    RU("Mapper.min_num_matches (по умолчанию 15): пары изображений с меньшим "
+       "числом инлаерных соответствий маппер игнорирует. Повысьте, чтобы убрать "
+       "ложные регистрации, понизьте при малом перекрытии."),
+    TR("Mapper.min_num_matches (varsayılan 15): inlier eşleşmesi bundan az olan "
+       "görüntü çiftlerini mapper yok sayar. Yanlış kayıtları bastırmak için "
+       "yükseltin, örtüşme azsa düşürün."));
+
+SS_MSG(colmap_repetitive,
+    EN("Repetitive scenes"),
+    JA("繰り返しの多いシーン"),
+    ZH_HANS("重复结构的场景"),
+    ZH_HANT("重複結構的場景"),
+    KO("반복이 많은 장면"),
+    DE("Sich wiederholende Szenen"),
+    FR("Scènes répétitives"),
+    ES("Escenas repetitivas"),
+    PT("Cenas repetitivas"),
+    IT("Scene ripetitive"),
+    NL("Repetitieve scènes"),
+    RU("Повторяющиеся сцены"),
+    TR("Yinelenen sahneler"));
+SS_MSG(colmap_repetitive_help,
+    EN("Large scenes with repeating structure (several similar rooms, tiled "
+       "facades) often weld physically different but similar-looking parts "
+       "together. These make matching and registration stricter to suppress "
+       "that; 0 = COLMAP default."),
+    JA("似た部屋がいくつも並ぶ、同じ模様の外壁が続くといった繰り返しの多い"
+       "大きなシーンでは、物理的には別の場所が見た目の似ているせいで一つに"
+       "溶けてしまいがちです。ここの設定はマッチングと登録を厳しくして、それを"
+       "抑えます。0 は COLMAP の既定値です。"),
+    ZH_HANS("在有重复结构的大场景里（好几个相似的房间、成排的同款外墙），物理上"
+            "不同但看起来相似的部分常被焊在一起。这几项会让匹配和配准更严格来"
+            "压制它；0 表示 COLMAP 的默认值。"),
+    ZH_HANT("在有重複結構的大場景裡（好幾個相似的房間、成排的同款外牆），實際上"
+            "不同但看起來相似的部分常被焊在一起。這幾項會讓比對和註冊更嚴格來"
+            "壓制它；0 表示 COLMAP 的預設值。"),
+    KO("비슷한 방이 여러 개 있거나 같은 무늬의 외벽이 이어지는 등 반복이 많은 큰 "
+       "장면에서는, 실제로는 다른 곳인데 비슷해 보인다는 이유로 하나로 붙어버리기 "
+       "쉽습니다. 아래 설정은 매칭과 등록을 엄격하게 만들어 그것을 억제합니다. "
+       "0은 COLMAP 기본값입니다."),
+    DE("In großen Szenen mit wiederkehrender Struktur (mehrere ähnliche Räume, "
+       "gleichförmige Fassaden) verschmelzen oft physisch verschiedene, aber "
+       "ähnlich aussehende Teile. Diese Werte verschärfen Zuordnung und "
+       "Registrierung, um das zu verhindern; 0 = COLMAP-Standard."),
+    FR("Dans les grandes scènes à structure répétée (plusieurs pièces "
+       "semblables, façades identiques), des parties physiquement différentes "
+       "mais d'aspect proche finissent souvent soudées. Ces réglages durcissent "
+       "l'appariement et l'enregistrement pour l'éviter ; 0 = valeur COLMAP par "
+       "défaut."),
+    ES("En escenas grandes con estructura repetida (varias habitaciones "
+       "parecidas, fachadas iguales), partes físicamente distintas pero de "
+       "aspecto similar acaban soldadas. Estos valores endurecen el "
+       "emparejamiento y el registro para evitarlo; 0 = valor de COLMAP por "
+       "defecto."),
+    PT("Em cenas grandes com estrutura repetida (vários cômodos parecidos, "
+       "fachadas iguais), partes fisicamente diferentes mas de aparência "
+       "semelhante acabam soldadas. Estes valores tornam a correspondência e o "
+       "registro mais rígidos para evitar isso; 0 = padrão do COLMAP."),
+    IT("Nelle scene grandi con struttura ripetuta (più stanze simili, facciate "
+       "uguali) parti fisicamente diverse ma di aspetto simile finiscono "
+       "spesso saldate insieme. Questi valori rendono più severe corrispondenze "
+       "e registrazione per evitarlo; 0 = predefinito di COLMAP."),
+    NL("In grote scènes met herhalende structuur (meerdere gelijkende kamers, "
+       "identieke gevels) worden fysiek verschillende maar gelijkend delen vaak "
+       "aan elkaar gelast. Deze waarden maken matching en registratie strenger "
+       "om dat tegen te gaan; 0 = COLMAP-standaard."),
+    RU("В больших сценах с повторяющейся структурой (несколько похожих комнат, "
+       "однотипные фасады) физически разные, но похожие на вид части часто "
+       "склеиваются. Эти значения ужесточают сопоставление и регистрацию, чтобы "
+       "этого не было; 0 = значение COLMAP по умолчанию."),
+    TR("Yinelenen yapıya sahip büyük sahnelerde (birbirine benzeyen birkaç oda, "
+       "aynı desende cepheler) fiziksel olarak farklı ama benzer görünen "
+       "yerler sıkça birbirine kaynar. Bu değerler eşleştirmeyi ve kaydı "
+       "sıkılaştırarak bunu bastırır; 0 = COLMAP varsayılanı."));
+SS_MSG(colmap_repetitive_level,
+    EN("Repetitive level"),
+    JA("繰り返しへの強さ"),
+    ZH_HANS("重复结构强度"),
+    ZH_HANT("重複結構強度"),
+    KO("반복 대응 강도"),
+    DE("Stufe der Wiederholung"),
+    FR("Niveau de répétition"),
+    ES("Nivel de repetición"),
+    PT("Nível de repetição"),
+    IT("Livello di ripetizione"),
+    NL("Niveau van herhaling"),
+    RU("Уровень повторяемости"),
+    TR("Yinelenme düzeyi"));
+SS_MSG(colmap_rep_off,
+    EN("Off (COLMAP defaults)"),
+    JA("なし（COLMAP の既定値）"),
+    ZH_HANS("关闭（COLMAP 默认值）"),
+    ZH_HANT("關閉（COLMAP 預設值）"),
+    KO("끔(COLMAP 기본값)"),
+    DE("Aus (COLMAP-Standard)"),
+    FR("Désactivé (valeurs COLMAP par défaut)"),
+    ES("Desactivado (valores de COLMAP por defecto)"),
+    PT("Desligado (padrões do COLMAP)"),
+    IT("Disattivo (valori predefiniti di COLMAP)"),
+    NL("Uit (COLMAP-standaardwaarden)"),
+    RU("Выкл. (значения COLMAP по умолчанию)"),
+    TR("Kapalı (COLMAP varsayılanları)"));
+SS_MSG(colmap_rep_low,
+    EN("Low"),            JA("弱"),            ZH_HANS("低"),       ZH_HANT("低"),
+    KO("낮음"),            DE("Niedrig"),      FR("Faible"),       ES("Bajo"),
+    PT("Baixo"),          IT("Basso"),        NL("Laag"),         RU("Низкий"),
+    TR("Düşük"));
+SS_MSG(colmap_rep_medium,
+    EN("Medium"),         JA("中"),            ZH_HANS("中"),       ZH_HANT("中"),
+    KO("보통"),            DE("Mittel"),       FR("Moyen"),        ES("Medio"),
+    PT("Médio"),          IT("Medio"),        NL("Gemiddeld"),    RU("Средний"),
+    TR("Orta"));
+SS_MSG(colmap_rep_high,
+    EN("High"),           JA("強"),            ZH_HANS("高"),       ZH_HANT("高"),
+    KO("높음"),            DE("Hoch"),         FR("Élevé"),        ES("Alto"),
+    PT("Alto"),           IT("Alto"),         NL("Hoog"),         RU("Высокий"),
+    TR("Yüksek"));
+SS_MSG(colmap_rep_custom,
+    EN("Custom"),         JA("カスタム"),       ZH_HANS("自定义"),   ZH_HANT("自訂"),
+    KO("사용자 지정"),      DE("Benutzerdefiniert"), FR("Personnalisé"),
+    ES("Personalizado"),  PT("Personalizado"), IT("Personalizzato"),
+    NL("Aangepast"),      RU("Свой"),         TR("Özel"));
+SS_MSG(colmap_repetitive_level_help,
+    EN("How aggressively wrong matches are suppressed; fills the fields below. "
+       "Low: mild tightening, keeps registration rate. Medium: good first "
+       "attempt for multi-room indoor captures. High: for heavy repetition "
+       "(identical rooms/facades) -- expect fewer registered images if overlap "
+       "is thin."),
+    JA("誤った対応をどれだけ強く抑えるかで、下の各項目を埋めます。「弱」は"
+       "少し厳しくするだけで、登録できる枚数はほぼ保てます。「中」は部屋が"
+       "いくつもある屋内撮影の最初の一手として手堅い設定です。「強」は同じ部屋や"
+       "同じ外壁が繰り返される場合向けで、重なりが薄いと登録できる画像は減ります。"),
+    ZH_HANS("压制错误匹配的力度，会自动填好下面各项。「低」只是稍微收紧，配准率"
+            "基本不变。「中」适合作为多房间室内拍摄的第一次尝试。「高」用于重复"
+            "非常严重的情况（一模一样的房间／外墙）——如果重叠本来就少，配准上的"
+            "图像会变少。"),
+    ZH_HANT("壓制錯誤對應的力度，會自動填好下面各項。「低」只是稍微收緊，註冊率"
+            "基本不變。「中」適合作為多房間室內拍攝的第一次嘗試。「高」用於重複"
+            "非常嚴重的情況（一模一樣的房間／外牆）——如果重疊本來就少，註冊上的"
+            "影像會變少。"),
+    KO("잘못된 대응을 얼마나 강하게 억제할지이며, 아래 항목들을 자동으로 채웁니다. "
+       "‘낮음’은 살짝 조이는 정도라 등록되는 장수는 거의 유지됩니다. ‘보통’은 방이 "
+       "여럿인 실내 촬영의 첫 시도로 무난합니다. ‘높음’은 똑같은 방이나 외벽이 "
+       "반복될 때 쓰며, 겹침이 얇으면 등록되는 이미지가 줄어듭니다."),
+    DE("Wie stark falsche Zuordnungen unterdrückt werden; füllt die Felder "
+       "unten. Niedrig: leichtes Anziehen, die Registrierungsrate bleibt. "
+       "Mittel: guter erster Versuch für Innenaufnahmen mit mehreren Räumen. "
+       "Hoch: für starke Wiederholung (identische Räume/Fassaden) -- bei "
+       "dünner Überlappung werden weniger Bilder registriert."),
+    FR("Avec quelle force les mauvaises correspondances sont supprimées ; "
+       "remplit les champs ci-dessous. Faible : léger durcissement, le taux "
+       "d'enregistrement tient. Moyen : bon premier essai pour un intérieur à "
+       "plusieurs pièces. Élevé : pour une répétition forte (pièces ou façades "
+       "identiques) -- avec peu de recouvrement, moins d'images seront "
+       "enregistrées."),
+    ES("Con cuánta fuerza se eliminan las correspondencias erróneas; rellena "
+       "los campos de abajo. Bajo: aprieta un poco y mantiene la tasa de "
+       "registro. Medio: buen primer intento en interiores de varias "
+       "habitaciones. Alto: para repetición fuerte (habitaciones o fachadas "
+       "idénticas) -- con poco solapamiento se registrarán menos imágenes."),
+    PT("Com que força as correspondências erradas são eliminadas; preenche os "
+       "campos abaixo. Baixo: aperta pouco e mantém a taxa de registro. Médio: "
+       "boa primeira tentativa em interiores com vários cômodos. Alto: para "
+       "repetição forte (cômodos ou fachadas idênticos) -- com pouca "
+       "sobreposição, menos imagens serão registradas."),
+    IT("Con quanta forza vengono soppresse le corrispondenze sbagliate; "
+       "compila i campi qui sotto. Basso: stringe poco e mantiene il tasso di "
+       "registrazione. Medio: buon primo tentativo per interni con più stanze. "
+       "Alto: per ripetizioni forti (stanze o facciate identiche) -- con poca "
+       "sovrapposizione verranno registrate meno immagini."),
+    NL("Hoe hard verkeerde overeenkomsten worden onderdrukt; vult de velden "
+       "hieronder in. Laag: licht aandraaien, het registratiepercentage blijft. "
+       "Gemiddeld: goede eerste poging voor binnenopnamen met meerdere kamers. "
+       "Hoog: bij sterke herhaling (identieke kamers of gevels) -- bij weinig "
+       "overlap worden minder beelden geregistreerd."),
+    RU("Насколько жёстко подавляются ошибочные соответствия; заполняет поля "
+       "ниже. Низкий: лёгкое ужесточение, доля зарегистрированных снимков "
+       "сохраняется. Средний: хорошая первая попытка для съёмки в помещении из "
+       "нескольких комнат. Высокий: при сильной повторяемости (одинаковые "
+       "комнаты или фасады) -- при тонком перекрытии снимков зарегистрируется "
+       "меньше."),
+    TR("Yanlış eşleşmelerin ne kadar sert bastırılacağı; aşağıdaki alanları "
+       "doldurur. Düşük: hafif sıkılaştırma, kayıt oranı korunur. Orta: çok "
+       "odalı iç mekân çekimleri için iyi bir ilk deneme. Yüksek: yoğun "
+       "yinelenmede (birbirinin aynı oda/cephe) -- örtüşme zayıfsa daha az "
+       "görüntü kaydedilir."));
+
+SS_MSG(colmap_match_ratio,
+    EN("Match ratio test (0 = default 0.8)"),
+    JA("対応の比率テスト（0 = 既定の 0.8）"),
+    ZH_HANS("匹配比率检验（0 = 默认 0.8）"),
+    ZH_HANT("對應比率檢驗（0 = 預設 0.8）"),
+    KO("대응 비율 검사(0 = 기본값 0.8)"),
+    DE("Verhältnistest (0 = Standard 0.8)"),
+    FR("Test du rapport (0 = 0.8 par défaut)"),
+    ES("Prueba de razón (0 = 0.8 por defecto)"),
+    PT("Teste de razão (0 = padrão 0.8)"),
+    IT("Test del rapporto (0 = predefinito 0.8)"),
+    NL("Verhoudingstest (0 = standaard 0.8)"),
+    RU("Тест отношения (0 = по умолчанию 0.8)"),
+    TR("Oran testi (0 = varsayılan 0.8)"));
+SS_MSG(colmap_match_ratio_help,
+    EN("SiftMatching.max_ratio, the Lowe ratio test: a feature match is kept "
+       "only when its best match is this much better than the second best. "
+       "LOWER is stricter -- try 0.6-0.7 when repetitive texture creates false "
+       "matches. SIFT only."),
+    JA("SiftMatching.max_ratio、いわゆる Lowe の比率テストです。最良の対応が"
+       "2 番目の対応よりこの割合だけ良いときにだけ、その対応を残します。"
+       "小さいほど厳しくなります。模様の繰り返しで誤対応が出るときは 0.6〜0.7 を"
+       "試してください。SIFT のみ。"),
+    ZH_HANS("即 SiftMatching.max_ratio，也就是 Lowe 比率检验：只有当最佳匹配比"
+            "次佳匹配好这么多时才保留该匹配。数值越小越严格——纹理重复导致误匹配"
+            "时可以试 0.6～0.7。仅对 SIFT 有效。"),
+    ZH_HANT("即 SiftMatching.max_ratio，也就是 Lowe 比率檢驗：只有當最佳對應比"
+            "次佳對應好這麼多時才保留該對應。數值越小越嚴格——紋理重複導致誤對應"
+            "時可以試 0.6～0.7。僅對 SIFT 有效。"),
+    KO("SiftMatching.max_ratio, 이른바 Lowe 비율 검사입니다. 최선의 대응이 차선보다 "
+       "이만큼 좋을 때만 그 대응을 남깁니다. 값이 작을수록 엄격합니다. 무늬가 "
+       "반복되어 잘못된 대응이 생기면 0.6~0.7을 시도해 보세요. SIFT 전용."),
+    DE("SiftMatching.max_ratio, der Lowe-Verhältnistest: eine Zuordnung bleibt "
+       "nur, wenn die beste Übereinstimmung um diesen Faktor besser ist als die "
+       "zweitbeste. KLEINER ist strenger -- bei falschen Zuordnungen durch "
+       "wiederkehrende Textur 0.6-0.7 versuchen. Nur SIFT."),
+    FR("SiftMatching.max_ratio, le test du rapport de Lowe : une correspondance "
+       "n'est gardée que si la meilleure dépasse la deuxième de ce facteur. "
+       "PLUS BAS est plus strict -- essayer 0.6-0.7 quand une texture répétée "
+       "crée de fausses correspondances. SIFT uniquement."),
+    ES("SiftMatching.max_ratio, la prueba de razón de Lowe: una correspondencia "
+       "se conserva solo si la mejor supera a la segunda por este factor. MÁS "
+       "BAJO es más estricto -- prueba 0.6-0.7 cuando una textura repetida crea "
+       "correspondencias falsas. Solo SIFT."),
+    PT("SiftMatching.max_ratio, o teste de razão de Lowe: uma correspondência "
+       "só fica quando a melhor supera a segunda por este fator. MAIS BAIXO é "
+       "mais rígido -- tente 0.6-0.7 quando textura repetida cria "
+       "correspondências falsas. Só SIFT."),
+    IT("SiftMatching.max_ratio, il test del rapporto di Lowe: una corrispondenza "
+       "resta solo se la migliore supera la seconda di questo fattore. PIÙ "
+       "BASSO è più severo -- prova 0.6-0.7 quando una texture ripetuta crea "
+       "false corrispondenze. Solo SIFT."),
+    NL("SiftMatching.max_ratio, de ratiotest van Lowe: een overeenkomst blijft "
+       "alleen als de beste die factor beter is dan de op één na beste. LAGER "
+       "is strenger -- probeer 0.6-0.7 als herhalende textuur valse "
+       "overeenkomsten oplevert. Alleen SIFT."),
+    RU("SiftMatching.max_ratio, тест отношения Лоу: соответствие сохраняется, "
+       "только если лучшее лучше второго во столько раз. МЕНЬШЕ -- строже: при "
+       "ложных соответствиях из-за повторяющейся текстуры попробуйте 0.6-0.7. "
+       "Только для SIFT."),
+    TR("SiftMatching.max_ratio, yani Lowe oran testi: bir eşleşme, ancak en "
+       "iyisi ikinciden bu kadar iyiyse tutulur. DÜŞÜK olan daha katıdır -- "
+       "yinelenen doku yanlış eşleşme üretiyorsa 0.6-0.7 deneyin. Yalnızca "
+       "SIFT."));
+
+SS_MSG(colmap_min_inliers_pair,
+    EN("Min inliers per pair (0 = default 15)"),
+    JA("ペアあたりの最小インライア数（0 = 既定の 15）"),
+    ZH_HANS("每对图像的最少内点数（0 = 默认 15）"),
+    ZH_HANT("每對影像的最少內點數（0 = 預設 15）"),
+    KO("쌍당 최소 인라이어 수(0 = 기본값 15)"),
+    DE("Mindestzahl Inlier je Paar (0 = Standard 15)"),
+    FR("Inliers minimaux par paire (0 = 15 par défaut)"),
+    ES("Inliers mínimos por par (0 = 15 por defecto)"),
+    PT("Inliers mínimos por par (0 = padrão 15)"),
+    IT("Inlier minimi per coppia (0 = predefinito 15)"),
+    NL("Minimum aantal inliers per paar (0 = standaard 15)"),
+    RU("Минимум инлаеров на пару (0 = по умолчанию 15)"),
+    TR("Çift başına en az inlier (0 = varsayılan 15)"));
+SS_MSG(colmap_min_inliers_pair_help,
+    EN("TwoViewGeometry.min_num_inliers: image pairs whose geometric "
+       "verification finds fewer inliers are discarded outright. Raise to "
+       "50-100 so weakly-supported (usually false) links between "
+       "similar-looking areas never enter the database."),
+    JA("TwoViewGeometry.min_num_inliers です。幾何検証でこれより少ないインライア"
+       "しか得られなかった画像ペアは、その場で捨てられます。50〜100 まで上げると、"
+       "見た目の似た場所どうしの根拠の弱い（たいてい誤った）つながりが"
+       "データベースに入らなくなります。"),
+    ZH_HANS("即 TwoViewGeometry.min_num_inliers：几何验证得到的内点少于此数的图像对"
+            "会被直接丢弃。调到 50～100，可以让相似区域之间那些依据不足（通常是"
+            "错误）的连接根本进不了数据库。"),
+    ZH_HANT("即 TwoViewGeometry.min_num_inliers：幾何驗證得到的內點少於此數的影像對"
+            "會被直接丟棄。調到 50～100，可以讓相似區域之間那些依據不足（通常是"
+            "錯誤）的連結根本進不了資料庫。"),
+    KO("TwoViewGeometry.min_num_inliers입니다. 기하 검증에서 인라이어가 이보다 적게 "
+       "나온 이미지 쌍은 그 자리에서 버립니다. 50~100까지 올리면 비슷해 보이는 "
+       "영역 사이의 근거가 약한(대개 잘못된) 연결이 아예 데이터베이스에 들어오지 "
+       "않습니다."),
+    DE("TwoViewGeometry.min_num_inliers: Bildpaare, deren geometrische Prüfung "
+       "weniger Inlier findet, werden sofort verworfen. Auf 50-100 anheben, "
+       "damit schwach gestützte (meist falsche) Verbindungen zwischen ähnlich "
+       "aussehenden Bereichen gar nicht erst in die Datenbank kommen."),
+    FR("TwoViewGeometry.min_num_inliers : les paires dont la vérification "
+       "géométrique trouve moins d'inliers sont rejetées d'emblée. Monter à "
+       "50-100 pour que des liens peu étayés (le plus souvent faux) entre zones "
+       "d'aspect proche n'entrent jamais dans la base."),
+    ES("TwoViewGeometry.min_num_inliers: los pares cuya verificación geométrica "
+       "encuentra menos inliers se descartan de inmediato. Súbelo a 50-100 para "
+       "que los enlaces poco respaldados (casi siempre falsos) entre zonas "
+       "parecidas nunca entren en la base de datos."),
+    PT("TwoViewGeometry.min_num_inliers: pares cuja verificação geométrica "
+       "encontra menos inliers são descartados na hora. Aumente para 50-100 "
+       "para que ligações pouco fundamentadas (quase sempre falsas) entre áreas "
+       "parecidas nunca entrem no banco de dados."),
+    IT("TwoViewGeometry.min_num_inliers: le coppie la cui verifica geometrica "
+       "trova meno inlier vengono scartate subito. Portalo a 50-100 perché i "
+       "collegamenti poco sostenuti (di solito falsi) fra zone simili non "
+       "entrino nemmeno nel database."),
+    NL("TwoViewGeometry.min_num_inliers: beeldparen waarvan de geometrische "
+       "controle minder inliers vindt, gaan meteen weg. Zet het op 50-100 zodat "
+       "zwak onderbouwde (meestal onjuiste) verbindingen tussen gelijkend "
+       "gebieden nooit in de database komen."),
+    RU("TwoViewGeometry.min_num_inliers: пары, у которых геометрическая проверка "
+       "нашла меньше инлаеров, отбрасываются сразу. Поднимите до 50-100, чтобы "
+       "слабо подкреплённые (обычно ложные) связи между похожими участками "
+       "вообще не попадали в базу."),
+    TR("TwoViewGeometry.min_num_inliers: geometrik doğrulaması bundan az inlier "
+       "bulan görüntü çiftleri hemen atılır. 50-100'e çıkarırsanız, benzer "
+       "görünen bölgeler arasındaki zayıf temelli (çoğunlukla yanlış) bağlar "
+       "veritabanına hiç girmez."));
+
+SS_MSG(colmap_min_inliers_reg,
+    EN("Min inliers to register (0 = default 30)"),
+    JA("登録に必要な最小インライア数（0 = 既定の 30）"),
+    ZH_HANS("配准所需的最少内点数（0 = 默认 30）"),
+    ZH_HANT("註冊所需的最少內點數（0 = 預設 30）"),
+    KO("등록에 필요한 최소 인라이어 수(0 = 기본값 30)"),
+    DE("Mindestzahl Inlier zum Registrieren (0 = Standard 30)"),
+    FR("Inliers minimaux pour enregistrer (0 = 30 par défaut)"),
+    ES("Inliers mínimos para registrar (0 = 30 por defecto)"),
+    PT("Inliers mínimos para registrar (0 = padrão 30)"),
+    IT("Inlier minimi per registrare (0 = predefinito 30)"),
+    NL("Minimum aantal inliers om te registreren (0 = standaard 30)"),
+    RU("Минимум инлаеров для регистрации (0 = по умолчанию 30)"),
+    TR("Kayıt için en az inlier (0 = varsayılan 30)"));
+SS_MSG(colmap_min_inliers_reg_help,
+    EN("Mapper.abs_pose_min_num_inliers: minimum absolute-pose inliers to "
+       "register an image into the model. Raise to 50-100 to stop images from "
+       "registering onto the wrong (similar-looking) part of the scene."),
+    JA("Mapper.abs_pose_min_num_inliers です。画像をモデルに登録するのに必要な、"
+       "絶対姿勢のインライアの最小数です。50〜100 に上げると、見た目の似た別の"
+       "場所に画像が登録されてしまうのを防げます。"),
+    ZH_HANS("即 Mapper.abs_pose_min_num_inliers：把一张图像配准进模型所需的绝对位姿"
+            "内点下限。调到 50～100 可以避免图像被配准到场景中看起来相似的错误位置。"),
+    ZH_HANT("即 Mapper.abs_pose_min_num_inliers：把一張影像註冊進模型所需的絕對姿態"
+            "內點下限。調到 50～100 可以避免影像被註冊到場景中看起來相似的錯誤位置。"),
+    KO("Mapper.abs_pose_min_num_inliers입니다. 이미지를 모델에 등록하는 데 필요한 "
+       "절대 자세 인라이어의 최소 개수입니다. 50~100으로 올리면 비슷해 보이는 "
+       "엉뚱한 위치에 이미지가 등록되는 것을 막을 수 있습니다."),
+    DE("Mapper.abs_pose_min_num_inliers: Mindestzahl Inlier der absoluten Pose, "
+       "um ein Bild ins Modell aufzunehmen. Auf 50-100 anheben, damit Bilder "
+       "nicht am falschen (ähnlich aussehenden) Ort der Szene landen."),
+    FR("Mapper.abs_pose_min_num_inliers : nombre minimal d'inliers de pose "
+       "absolue pour enregistrer une image dans le modèle. Monter à 50-100 pour "
+       "empêcher qu'une image s'enregistre au mauvais endroit, d'aspect "
+       "semblable."),
+    ES("Mapper.abs_pose_min_num_inliers: mínimo de inliers de pose absoluta "
+       "para registrar una imagen en el modelo. Súbelo a 50-100 para que las "
+       "imágenes no se registren en la parte equivocada (de aspecto parecido) "
+       "de la escena."),
+    PT("Mapper.abs_pose_min_num_inliers: mínimo de inliers de pose absoluta "
+       "para registrar uma imagem no modelo. Aumente para 50-100 para impedir "
+       "que imagens sejam registradas na parte errada (parecida) da cena."),
+    IT("Mapper.abs_pose_min_num_inliers: numero minimo di inlier della posa "
+       "assoluta per registrare un'immagine nel modello. Portalo a 50-100 per "
+       "evitare che le immagini finiscano sulla parte sbagliata (simile) della "
+       "scena."),
+    NL("Mapper.abs_pose_min_num_inliers: minimum aantal inliers van de absolute "
+       "pose om een beeld in het model op te nemen. Zet het op 50-100 zodat "
+       "beelden niet op het verkeerde, gelijkend deel van de scène belanden."),
+    RU("Mapper.abs_pose_min_num_inliers: минимум инлаеров абсолютной позы, чтобы "
+       "зарегистрировать снимок в модели. Поднимите до 50-100, чтобы снимки не "
+       "регистрировались на похожем, но неверном участке сцены."),
+    TR("Mapper.abs_pose_min_num_inliers: bir görüntüyü modele kaydetmek için "
+       "gereken en az mutlak duruş inlier sayısı. 50-100'e çıkarmak, "
+       "görüntülerin sahnenin benzer görünen yanlış bölümüne kaydedilmesini "
+       "engeller."));
+
+SS_MSG(colmap_min_inlier_ratio,
+    EN("Min inlier ratio to register (0 = default 0.25)"),
+    JA("登録に必要な最小インライア比（0 = 既定の 0.25）"),
+    ZH_HANS("配准所需的最小内点比例（0 = 默认 0.25）"),
+    ZH_HANT("註冊所需的最小內點比例（0 = 預設 0.25）"),
+    KO("등록에 필요한 최소 인라이어 비율(0 = 기본값 0.25)"),
+    DE("Mindest-Inlier-Anteil zum Registrieren (0 = Standard 0.25)"),
+    FR("Taux d'inliers minimal pour enregistrer (0 = 0.25 par défaut)"),
+    ES("Proporción mínima de inliers para registrar (0 = 0.25 por defecto)"),
+    PT("Proporção mínima de inliers para registrar (0 = padrão 0.25)"),
+    IT("Frazione minima di inlier per registrare (0 = predefinito 0.25)"),
+    NL("Minimale inlier-verhouding om te registreren (0 = standaard 0.25)"),
+    RU("Минимальная доля инлаеров для регистрации (0 = по умолчанию 0.25)"),
+    TR("Kayıt için en az inlier oranı (0 = varsayılan 0.25)"));
+SS_MSG(colmap_min_inlier_ratio_help,
+    EN("Mapper.abs_pose_min_inlier_ratio: minimum fraction of 2D-3D "
+       "correspondences that must be pose inliers. Try 0.35-0.5 for stricter "
+       "registration."),
+    JA("Mapper.abs_pose_min_inlier_ratio です。2D-3D の対応のうち、姿勢の"
+       "インライアでなければならない割合の下限です。登録を厳しくするなら "
+       "0.35〜0.5 を試してください。"),
+    ZH_HANS("即 Mapper.abs_pose_min_inlier_ratio：2D-3D 对应中必须是位姿内点的最小"
+            "比例。想让配准更严格可以试 0.35～0.5。"),
+    ZH_HANT("即 Mapper.abs_pose_min_inlier_ratio：2D-3D 對應中必須是姿態內點的最小"
+            "比例。想讓註冊更嚴格可以試 0.35～0.5。"),
+    KO("Mapper.abs_pose_min_inlier_ratio입니다. 2D-3D 대응 가운데 자세 인라이어여야 "
+       "하는 최소 비율입니다. 등록을 더 엄격하게 하려면 0.35~0.5를 시도해 보세요."),
+    DE("Mapper.abs_pose_min_inlier_ratio: Mindestanteil der 2D-3D-Zuordnungen, "
+       "die Pose-Inlier sein müssen. Für strengere Registrierung 0.35-0.5 "
+       "versuchen."),
+    FR("Mapper.abs_pose_min_inlier_ratio : fraction minimale des "
+       "correspondances 2D-3D qui doivent être des inliers de pose. Essayer "
+       "0.35-0.5 pour un enregistrement plus strict."),
+    ES("Mapper.abs_pose_min_inlier_ratio: fracción mínima de correspondencias "
+       "2D-3D que deben ser inliers de pose. Prueba 0.35-0.5 para un registro "
+       "más estricto."),
+    PT("Mapper.abs_pose_min_inlier_ratio: fração mínima das correspondências "
+       "2D-3D que precisam ser inliers de pose. Tente 0.35-0.5 para um registro "
+       "mais rígido."),
+    IT("Mapper.abs_pose_min_inlier_ratio: frazione minima delle corrispondenze "
+       "2D-3D che devono essere inlier della posa. Prova 0.35-0.5 per una "
+       "registrazione più severa."),
+    NL("Mapper.abs_pose_min_inlier_ratio: minimale fractie van de "
+       "2D-3D-overeenkomsten die pose-inliers moeten zijn. Probeer 0.35-0.5 "
+       "voor strengere registratie."),
+    RU("Mapper.abs_pose_min_inlier_ratio: минимальная доля 2D-3D соответствий, "
+       "которые должны быть инлаерами позы. Для более строгой регистрации "
+       "попробуйте 0.35-0.5."),
+    TR("Mapper.abs_pose_min_inlier_ratio: 2B-3B karşılıklarının duruş inlier'ı "
+       "olması gereken en düşük oranı. Daha katı kayıt için 0.35-0.5 deneyin."));
+
+SS_MSG(colmap_max_reg_error,
+    EN("Max registration error px (0 = default 12)"),
+    JA("登録時の最大誤差（px、0 = 既定の 12）"),
+    ZH_HANS("配准误差上限（像素，0 = 默认 12）"),
+    ZH_HANT("註冊誤差上限（像素，0 = 預設 12）"),
+    KO("등록 오차 상한(픽셀, 0 = 기본값 12)"),
+    DE("Maximaler Registrierungsfehler px (0 = Standard 12)"),
+    FR("Erreur d'enregistrement maximale px (0 = 12 par défaut)"),
+    ES("Error máximo de registro px (0 = 12 por defecto)"),
+    PT("Erro máximo de registro px (0 = padrão 12)"),
+    IT("Errore massimo di registrazione px (0 = predefinito 12)"),
+    NL("Maximale registratiefout px (0 = standaard 12)"),
+    RU("Предел ошибки регистрации, px (0 = по умолчанию 12)"),
+    TR("En büyük kayıt hatası px (0 = varsayılan 12)"));
+SS_MSG(colmap_max_reg_error_help,
+    EN("Mapper.abs_pose_max_error: reprojection error threshold (px) for "
+       "absolute-pose RANSAC when registering images. Lower (6-8) = stricter; "
+       "combine with the inlier thresholds above."),
+    JA("Mapper.abs_pose_max_error です。画像を登録するときの絶対姿勢 RANSAC の"
+       "再投影誤差のしきい値（px）です。小さいほど（6〜8）厳しくなります。"
+       "上のインライアのしきい値と組み合わせて使ってください。"),
+    ZH_HANS("即 Mapper.abs_pose_max_error：配准图像时绝对位姿 RANSAC 的重投影误差"
+            "阈值（像素）。调小（6～8）更严格；配合上面的内点阈值一起用。"),
+    ZH_HANT("即 Mapper.abs_pose_max_error：註冊影像時絕對姿態 RANSAC 的重投影誤差"
+            "門檻（像素）。調小（6～8）更嚴格；搭配上面的內點門檻一起用。"),
+    KO("Mapper.abs_pose_max_error입니다. 이미지를 등록할 때 절대 자세 RANSAC의 "
+       "재투영 오차 임계값(픽셀)입니다. 작을수록(6~8) 엄격합니다. 위의 인라이어 "
+       "임계값과 함께 쓰세요."),
+    DE("Mapper.abs_pose_max_error: Schwelle des Rückprojektionsfehlers (px) für "
+       "das RANSAC der absoluten Pose beim Registrieren. Niedriger (6-8) ist "
+       "strenger; zusammen mit den Inlier-Schwellen oben verwenden."),
+    FR("Mapper.abs_pose_max_error : seuil d'erreur de reprojection (px) du "
+       "RANSAC de pose absolue lors de l'enregistrement. Plus bas (6-8) = plus "
+       "strict ; à combiner avec les seuils d'inliers ci-dessus."),
+    ES("Mapper.abs_pose_max_error: umbral de error de reproyección (px) del "
+       "RANSAC de pose absoluta al registrar imágenes. Más bajo (6-8) es más "
+       "estricto; combínalo con los umbrales de inliers de arriba."),
+    PT("Mapper.abs_pose_max_error: limiar do erro de reprojeção (px) do RANSAC "
+       "de pose absoluta ao registrar imagens. Mais baixo (6-8) é mais rígido; "
+       "combine com os limiares de inliers acima."),
+    IT("Mapper.abs_pose_max_error: soglia dell'errore di riproiezione (px) per "
+       "il RANSAC della posa assoluta durante la registrazione. Più basso (6-8) "
+       "è più severo; usalo insieme alle soglie di inlier qui sopra."),
+    NL("Mapper.abs_pose_max_error: drempel voor de herprojectiefout (px) van de "
+       "RANSAC voor de absolute pose bij het registreren. Lager (6-8) is "
+       "strenger; gebruik het samen met de inlier-drempels hierboven."),
+    RU("Mapper.abs_pose_max_error: порог ошибки репроекции (px) для RANSAC "
+       "абсолютной позы при регистрации снимков. Меньше (6-8) -- строже; "
+       "используйте вместе с порогами инлаеров выше."),
+    TR("Mapper.abs_pose_max_error: görüntüleri kaydederken mutlak duruş "
+       "RANSAC'ının yeniden izdüşüm hatası eşiği (px). Düşük olan (6-8) daha "
+       "katıdır; yukarıdaki inlier eşikleriyle birlikte kullanın."));
+
+SS_MSG(colmap_gpu_ba,
+    EN("GPU bundle adjustment"),
+    JA("GPU バンドル調整"),
+    ZH_HANS("GPU 光束法平差"),
+    ZH_HANT("GPU 光束法平差"),
+    KO("GPU 번들 조정"),
+    DE("Bündelausgleichung auf der GPU"),
+    FR("Ajustement de faisceaux sur GPU"),
+    ES("Ajuste de haces en la GPU"),
+    PT("Ajuste de feixes na GPU"),
+    IT("Bundle adjustment su GPU"),
+    NL("Bundelaanpassing op de GPU"),
+    RU("Уравнивание связок на GPU"),
+    TR("GPU'da demet düzeltmesi"));
+SS_MSG(colmap_gpu_ba_help,
+    EN("Mapper.ba_use_gpu."),
+    JA("Mapper.ba_use_gpu です。"),
+    ZH_HANS("即 Mapper.ba_use_gpu。"),
+    ZH_HANT("即 Mapper.ba_use_gpu。"),
+    KO("Mapper.ba_use_gpu입니다."),
+    DE("Mapper.ba_use_gpu."),
+    FR("Mapper.ba_use_gpu."),
+    ES("Mapper.ba_use_gpu."),
+    PT("Mapper.ba_use_gpu."),
+    IT("Mapper.ba_use_gpu."),
+    NL("Mapper.ba_use_gpu."),
+    RU("Mapper.ba_use_gpu."),
+    TR("Mapper.ba_use_gpu."));
+SS_MSG(colmap_gpu_ba_fisheye,
+    EN("Mapper.ba_use_gpu -- unavailable: COLMAP's GPU bundle adjustment does "
+       "not support fisheye camera models yet."),
+    JA("Mapper.ba_use_gpu — 使えません。COLMAP の GPU バンドル調整はまだ魚眼の"
+       "カメラモデルに対応していません。"),
+    ZH_HANS("即 Mapper.ba_use_gpu——不可用：COLMAP 的 GPU 光束法平差还不支持鱼眼"
+            "相机模型。"),
+    ZH_HANT("即 Mapper.ba_use_gpu——無法使用：COLMAP 的 GPU 光束法平差還不支援魚眼"
+            "相機模型。"),
+    KO("Mapper.ba_use_gpu — 쓸 수 없습니다. COLMAP의 GPU 번들 조정은 아직 어안 "
+       "카메라 모델을 지원하지 않습니다."),
+    DE("Mapper.ba_use_gpu -- nicht verfügbar: COLMAPs Bündelausgleichung auf "
+       "der GPU unterstützt noch keine Fisheye-Kameramodelle."),
+    FR("Mapper.ba_use_gpu -- indisponible : l'ajustement de faisceaux sur GPU "
+       "de COLMAP ne gère pas encore les modèles de caméra fisheye."),
+    ES("Mapper.ba_use_gpu -- no disponible: el ajuste de haces en GPU de COLMAP "
+       "aún no admite modelos de cámara de ojo de pez."),
+    PT("Mapper.ba_use_gpu -- indisponível: o ajuste de feixes na GPU do COLMAP "
+       "ainda não aceita modelos de câmera olho de peixe."),
+    IT("Mapper.ba_use_gpu -- non disponibile: il bundle adjustment su GPU di "
+       "COLMAP non supporta ancora i modelli di camera fisheye."),
+    NL("Mapper.ba_use_gpu -- niet beschikbaar: de bundelaanpassing op de GPU "
+       "van COLMAP kent nog geen fisheye-cameramodellen."),
+    RU("Mapper.ba_use_gpu -- недоступно: уравнивание связок на GPU в COLMAP пока "
+       "не поддерживает модели камеры «рыбий глаз»."),
+    TR("Mapper.ba_use_gpu -- kullanılamıyor: COLMAP'ın GPU demet düzeltmesi "
+       "balıkgözü kamera modellerini henüz desteklemiyor."));
+
+SS_MSG(colmap_merge_models,
+    EN("Merge partial models"),
+    JA("部分モデルを統合"),
+    ZH_HANS("合并局部模型"),
+    ZH_HANT("合併局部模型"),
+    KO("부분 모델 병합"),
+    DE("Teilmodelle zusammenführen"),
+    FR("Fusionner les modèles partiels"),
+    ES("Fusionar los modelos parciales"),
+    PT("Mesclar os modelos parciais"),
+    IT("Unire i modelli parziali"),
+    NL("Deelmodellen samenvoegen"),
+    RU("Объединять частичные модели"),
+    TR("Kısmi modelleri birleştir"));
+SS_MSG(colmap_merge_models_help,
+    EN("When the mapper splits the scene into several partial models, try "
+       "colmap model_merger to fuse them (kept only when the merged model "
+       "registers more images). The trainer otherwise auto-picks the largest "
+       "partial model."),
+    JA("マッパーがシーンを複数の部分モデルに分けてしまったとき、colmap "
+       "model_merger で統合を試みます（統合後のほうが登録画像が多いときだけ"
+       "採用します）。そうしない場合、学習側は最大の部分モデルを自動で選びます。"),
+    ZH_HANS("当建图把场景拆成好几个局部模型时，尝试用 colmap model_merger 把它们"
+            "合起来（只有合并后配准的图像更多才保留）。否则训练端会自动选最大的"
+            "那个局部模型。"),
+    ZH_HANT("當建圖把場景拆成好幾個局部模型時，嘗試用 colmap model_merger 把它們"
+            "合起來（只有合併後註冊的影像更多才保留）。否則訓練端會自動選最大的"
+            "那個局部模型。"),
+    KO("매퍼가 장면을 여러 부분 모델로 쪼갰을 때 colmap model_merger로 합쳐 봅니다"
+       "(합친 쪽이 등록된 이미지가 더 많을 때만 씁니다). 그렇지 않으면 학습 쪽이 "
+       "가장 큰 부분 모델을 자동으로 고릅니다."),
+    DE("Wenn der Mapper die Szene in mehrere Teilmodelle zerlegt, versuchen, "
+       "sie mit colmap model_merger zu verschmelzen (wird nur behalten, wenn "
+       "das vereinte Modell mehr Bilder registriert). Sonst nimmt das Training "
+       "automatisch das größte Teilmodell."),
+    FR("Quand le mapper découpe la scène en plusieurs modèles partiels, essayer "
+       "de les fusionner avec colmap model_merger (gardé seulement si le modèle "
+       "fusionné enregistre plus d'images). Sinon l'entraînement choisit tout "
+       "seul le plus grand modèle partiel."),
+    ES("Cuando el mapper parte la escena en varios modelos parciales, intentar "
+       "fusionarlos con colmap model_merger (solo se conserva si el modelo "
+       "fusionado registra más imágenes). Si no, el entrenamiento elige por su "
+       "cuenta el modelo parcial más grande."),
+    PT("Quando o mapper divide a cena em vários modelos parciais, tentar "
+       "fundi-los com colmap model_merger (só fica se o modelo fundido "
+       "registrar mais imagens). Caso contrário, o treinamento escolhe sozinho "
+       "o maior modelo parcial."),
+    IT("Quando il mapper divide la scena in più modelli parziali, provare a "
+       "fonderli con colmap model_merger (tenuto solo se il modello fuso "
+       "registra più immagini). Altrimenti l'addestramento sceglie da sé il "
+       "modello parziale più grande."),
+    NL("Als de mapper de scène in meerdere deelmodellen splitst, proberen ze "
+       "met colmap model_merger samen te voegen (alleen behouden als het "
+       "samengevoegde model meer beelden registreert). Anders kiest de training "
+       "vanzelf het grootste deelmodel."),
+    RU("Если маппер разбил сцену на несколько частичных моделей, попытаться "
+       "склеить их через colmap model_merger (оставляется, только если "
+       "объединённая модель регистрирует больше снимков). Иначе обучение само "
+       "берёт самую большую частичную модель."),
+    TR("Mapper sahneyi birkaç kısmi modele böldüğünde, colmap model_merger ile "
+       "birleştirmeyi dener (yalnızca birleşik model daha çok görüntü "
+       "kaydediyorsa tutulur). Aksi hâlde eğitim en büyük kısmi modeli kendisi "
+       "seçer."));
+
+SS_MSG(colmap_final_ba,
+    EN("Final refinement pass"),
+    JA("最後の仕上げ"),
+    ZH_HANS("最后一遍精修"),
+    ZH_HANT("最後一遍精修"),
+    KO("마지막 정밀화 단계"),
+    DE("Abschließender Feinschliff"),
+    FR("Passe d'affinage finale"),
+    ES("Pasada de refinado final"),
+    PT("Passagem de refino final"),
+    IT("Passata di affinamento finale"),
+    NL("Laatste verfijningsronde"),
+    RU("Финальный проход уточнения"),
+    TR("Son iyileştirme geçişi"));
+SS_MSG(colmap_final_ba_help,
+    EN("Run bundle_adjuster after mapping on the largest (or merged) model, "
+       "refining focal length, principal point, and distortion."),
+    JA("マッピングのあと、最大の（または統合した）モデルに bundle_adjuster を"
+       "かけて、焦点距離・主点・歪みを追い込みます。"),
+    ZH_HANS("建图结束后，对最大的（或合并后的）模型运行 bundle_adjuster，进一步"
+            "精修焦距、主点和畸变。"),
+    ZH_HANT("建圖結束後，對最大的（或合併後的）模型執行 bundle_adjuster，進一步"
+            "精修焦距、主點和畸變。"),
+    KO("매핑이 끝난 뒤 가장 큰(또는 병합된) 모델에 bundle_adjuster를 돌려 초점 "
+       "거리, 주점, 왜곡을 더 다듬습니다."),
+    DE("Nach dem Mapping bundle_adjuster auf dem größten (oder vereinten) "
+       "Modell laufen lassen und Brennweite, Hauptpunkt und Verzeichnung "
+       "nachziehen."),
+    FR("Lancer bundle_adjuster après le mapping sur le plus grand modèle (ou "
+       "le modèle fusionné), pour affiner distance focale, point principal et "
+       "distorsion."),
+    ES("Ejecutar bundle_adjuster tras el mapeo sobre el modelo más grande (o el "
+       "fusionado), afinando distancia focal, punto principal y distorsión."),
+    PT("Executar o bundle_adjuster depois do mapeamento no maior modelo (ou no "
+       "fundido), refinando distância focal, ponto principal e distorção."),
+    IT("Eseguire bundle_adjuster dopo il mapping sul modello più grande (o su "
+       "quello fuso), affinando focale, punto principale e distorsione."),
+    NL("Na het mappen bundle_adjuster draaien op het grootste (of "
+       "samengevoegde) model, en zo brandpuntsafstand, hoofdpunt en "
+       "vertekening bijstellen."),
+    RU("После реконструкции запустить bundle_adjuster на самой большой (или "
+       "объединённой) модели, уточняя фокусное расстояние, главную точку и "
+       "дисторсию."),
+    TR("Haritalamadan sonra en büyük (ya da birleştirilmiş) modelde "
+       "bundle_adjuster çalıştırıp odak uzaklığını, ana noktayı ve bozulmayı "
+       "iyileştirir."));
+
+SS_MSG(colmap_vocab_tree_hint,
+    EN("vocabulary tree (auto find/download)"),
+    JA("ボキャブラリツリー（自動で探す／取得する）"),
+    ZH_HANS("词汇树（自动查找／下载）"),
+    ZH_HANT("詞彙樹（自動尋找／下載）"),
+    KO("어휘 트리(자동으로 찾기/내려받기)"),
+    DE("Vokabularbaum (automatisch suchen/laden)"),
+    FR("arbre de vocabulaire (recherche/téléchargement auto)"),
+    ES("árbol de vocabulario (buscar/descargar automáticamente)"),
+    PT("árvore de vocabulário (localizar/baixar automaticamente)"),
+    IT("albero di vocabolario (ricerca/download automatici)"),
+    NL("vocabulaireboom (automatisch zoeken/downloaden)"),
+    RU("словарное дерево (найти/скачать автоматически)"),
+    TR("sözcük ağacı (otomatik bul/indir)"));
+SS_MSG(colmap_vocab_tree,
+    EN("vocab tree"),
+    JA("ボキャブラリツリー"),
+    ZH_HANS("词汇树"),
+    ZH_HANT("詞彙樹"),
+    KO("어휘 트리"),
+    DE("Vokabularbaum"),
+    FR("arbre de vocabulaire"),
+    ES("árbol de vocabulario"),
+    PT("árvore de vocabulário"),
+    IT("albero di vocabolario"),
+    NL("vocabulaireboom"),
+    RU("словарное дерево"),
+    TR("sözcük ağacı"));
 
 // ===========================================================================
 // Tool locations

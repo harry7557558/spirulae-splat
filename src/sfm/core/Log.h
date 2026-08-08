@@ -47,7 +47,9 @@ enum class Tag {
 std::string prefix(Tag t);
 
 // Terminal columns a UTF-8 string occupies (East Asian wide = 2). Exposed
-// because the summary block aligns its own labels the same way.
+// because the summary block aligns its own labels the same way; the counting
+// itself lives in i18n (i18n::display_width), since the CLI and the frame
+// extractor lay out their own tables with it too.
 int display_width(const char* s);
 
 // One line to stdout / stderr, tagged and translated. `args` fills the

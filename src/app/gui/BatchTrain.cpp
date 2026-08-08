@@ -1,6 +1,7 @@
 // BatchTrain.cpp -- see BatchTrain.h.
 
 #include "app/gui/BatchTrain.h"
+#include "i18n/catalog/Log.h"
 
 #include "app/TrainerCore.h"
 #include "app/gui/AppPaths.h"
@@ -228,7 +229,9 @@ bool batch_build_config(const BatchJob& job, TrainConfig& cfg,
 
     if (job.preset_path.empty()) {
         if (!train_apply_preset(cfg, job.preset_name)) {
-            error = "unknown preset: " + job.preset_name;
+            error = spirula::i18n::format(
+                spirula::i18n::msg::log::err_unknown_preset,
+                {job.preset_name});
             return false;
         }
     } else {
@@ -267,8 +270,8 @@ bool batch_build_config(const BatchJob& job, TrainConfig& cfg,
     for (const auto& o : overrides) {
         int v = 0;
         if (!parse_override(o.text, o.lo, o.hi, &v)) {
-            error = std::string(o.flag) + ": '" + o.text +
-                    "' is not a usable value";
+            error = spirula::i18n::format(
+                spirula::i18n::msg::log::err_bad_flag_value, {o.flag, o.text});
             return false;
         }
         if (o.text.find_first_not_of(" \t") == std::string::npos) continue;

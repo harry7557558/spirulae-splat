@@ -3,6 +3,7 @@
 // bootstrap, then hands every frame to gui::GuiApp.
 
 #include "app/Tools.h"
+#include "i18n/catalog/Log.h"
 #include "app/gui/Fonts.h"
 #include "app/gui/GuiApp.h"
 #include "i18n/catalog/Brand.h"
@@ -56,8 +57,8 @@ void apply_style(float scale) {
 int spirula_gui_main(int argc, char** argv) {
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
-        std::fprintf(stderr, "error: failed to initialize GLFW (is a display "
-                     "available?)\n");
+        std::fprintf(stderr, "%s\n",
+                     spirula::i18n::msg::log::err_glfw_init.get());
         return 1;
     }
 
@@ -75,7 +76,8 @@ int spirula_gui_main(int argc, char** argv) {
     GLFWwindow* window = glfwCreateWindow(1600, 950, "Spirula Studio",
                                           nullptr, nullptr);
     if (!window) {
-        std::fprintf(stderr, "error: failed to create window / GL context\n");
+        std::fprintf(stderr, "%s\n",
+                     spirula::i18n::msg::log::err_window_create.get());
         glfwTerminate();
         return 1;
     }

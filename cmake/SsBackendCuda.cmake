@@ -130,7 +130,7 @@ target_include_directories(csrc PRIVATE
 )
 
 find_package(Threads REQUIRED)
-target_link_libraries(csrc CUDA::cudart Threads::Threads)
+target_link_libraries(csrc CUDA::cudart Threads::Threads ss_i18n)
 if(OpenMP_CXX_FOUND AND NOT APPLE)
     # OpenMP::OpenMP_CXX's flags are language-guarded, so nvcc never sees them.
     target_link_libraries(csrc OpenMP::OpenMP_CXX)

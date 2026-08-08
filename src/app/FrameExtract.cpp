@@ -7,6 +7,7 @@
 #include "app/FrameExtract.h"
 
 #include "app/WriterPool.h"
+#include "i18n/catalog/Data.h"
 #include "nn/core/Log.h"
 #include "nn/io/Image.h"
 #include "sam/Sam.h"
@@ -284,32 +285,68 @@ bool extract_frames(const FrameExtractJob& job_in, const FrameExtractSinks& sink
 
 std::string format_extract_stats(const FrameExtractStats& s,
                                  const std::string& out_dir, bool masked) {
-    char b[2048];
-    std::snprintf(b, sizeof b,
-        "\nframes decoded      %lld\n"
-        "frames measured     %lld\n"
-        "frames written      %lld -> %s\n\n"
-        "decode              %8.0f ms  (%.1f fps)\n"
-        "sharpness           %8.0f ms\n"
-        "convert + download  %8.0f ms\n"
-        "%s"
-        "encode (%2d threads) %8.0f ms of CPU across workers\n"
-        "  stalled on queue  %8.0f ms\n"
-        "  drain at exit     %8.0f ms\n"
-        "total               %8.0f ms  (%.1f frames/s written)\n",
-        (long long)s.decoded, (long long)s.measured, (long long)s.written,
-        out_dir.c_str(),
-        s.decode, s.decoded > 0 ? 1000.0 * (double)s.decoded / std::max(s.decode, 1e-6) : 0.0,
-        s.sharpness, s.convert,
-        masked ? "" : "",
-        s.encoder_threads, s.encode_cpu, s.submit, s.drain,
-        s.total, s.written > 0 ? 1000.0 * (double)s.written / std::max(s.total, 1e-6) : 0.0);
-    std::string out = b;
-    if (masked) {
-        char m[64];
-        std::snprintf(m, sizeof m, "segmentation        %8.0f ms\n", s.mask);
-        const std::string anchor = "encode (";
-        out.insert(out.find(anchor), m);
+    namespace dmsg = spirula::i18n::msg::data;
+    using spirula::i18n::format;
+    using spirula::i18n::display_width;
+    using spirula::i18n::pad_to;
+
+    auto ms = [](double v) {
+        char b[32];
+        std::snprintf(b, sizeof b, "%.0f", v);
+        return std::string(b);
+    };
+    auto rate = [](double per_ms_count, double ms_total) {
+        char b[32];
+        std::snprintf(b, sizeof b, "%.1f",
+                      per_ms_count > 0 ? 1000.0 * per_ms_count /
+                                             std::max(ms_total, 1e-6)
+                                       : 0.0);
+        return std::string(b);
+    };
+
+    // A label column and a value column. The labels are the translated ones,
+    // so the column is as wide as the longest of THEM -- measured in terminal
+    // columns, since a CJK label is half the characters and twice the width.
+    struct Row { std::string label, value; bool gap_before; };
+    std::vector<Row> rows;
+    rows.push_back({dmsg::xs_decoded.get(),
+                    std::to_string((long long)s.decoded), false});
+    rows.push_back({dmsg::xs_measured.get(),
+                    std::to_string((long long)s.measured), false});
+    rows.push_back({dmsg::xs_written.get(),
+                    format(dmsg::xs_written_to,
+                           {(long long)s.written, out_dir}), false});
+    rows.push_back({dmsg::xs_decode.get(),
+                    format(dmsg::xs_ms_fps,
+                           {ms(s.decode), rate((double)s.decoded, s.decode)}),
+                    true});
+    rows.push_back({dmsg::xs_sharpness.get(),
+                    format(dmsg::xs_ms, {ms(s.sharpness)}), false});
+    rows.push_back({dmsg::xs_convert.get(),
+                    format(dmsg::xs_ms, {ms(s.convert)}), false});
+    if (masked)
+        rows.push_back({dmsg::xs_segmentation.get(),
+                        format(dmsg::xs_ms, {ms(s.mask)}), false});
+    rows.push_back({format(dmsg::xs_encode, {s.encoder_threads}),
+                    format(dmsg::xs_ms_cpu, {ms(s.encode_cpu)}), false});
+    rows.push_back({dmsg::xs_stalled.get(),
+                    format(dmsg::xs_ms, {ms(s.submit)}), false});
+    rows.push_back({dmsg::xs_drain.get(),
+                    format(dmsg::xs_ms, {ms(s.drain)}), false});
+    rows.push_back({dmsg::xs_total.get(),
+                    format(dmsg::xs_ms_written_rate,
+                           {ms(s.total), rate((double)s.written, s.total)}),
+                    false});
+
+    int width = 0;
+    for (const Row& r : rows) width = std::max(width, display_width(r.label));
+
+    std::string out = "\n";
+    for (const Row& r : rows) {
+        if (r.gap_before) out += "\n";
+        out += pad_to(r.label, width + 2);
+        out += r.value;
+        out += "\n";
     }
     return out;
 }

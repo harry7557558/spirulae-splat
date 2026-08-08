@@ -14,6 +14,7 @@
 
 #include "app/Tools.h"
 #include "i18n/Locale.h"
+#include "i18n/catalog/Cli.h"
 
 #include <cctype>
 #include <cstdio>
@@ -30,30 +31,35 @@
 
 namespace {
 
+namespace cmsg = spirula::i18n::msg::cli;
+
+// The subcommand NAME is an identifier and prints as it is written; the
+// summary is a message, so `spirula --help` follows --lang like everything
+// else. It is a pointer rather than a copy because a Msg is immortal .rodata
+// and the language may change under it (it cannot here, but the habit is what
+// keeps a cached `const char*` from ever appearing).
 struct Tool {
     const char* name;
-    const char* summary;
+    const spirula::i18n::Msg* summary;
     int (*run)(int, char**);
 };
 
 const std::vector<Tool>& tools() {
     static const std::vector<Tool> kTools = {
 #ifdef SS_TOOL_GUI
-        {app::kToolGui, "the graphical application (the default)", spirula_gui_main},
+        {app::kToolGui, &cmsg::tool_gui, spirula_gui_main},
 #endif
 #ifdef SS_TOOL_SFM
-        {app::kToolSfm, "structure from motion: photos or frames -> cameras",
-         spirula_sfm_main},
+        {app::kToolSfm, &cmsg::tool_sfm, spirula_sfm_main},
 #endif
 #ifdef SS_TOOL_TRAIN
-        {app::kToolTrain, "train a splat model on a dataset", spirula_train_main},
+        {app::kToolTrain, &cmsg::tool_train, spirula_train_main},
 #endif
 #ifdef SS_TOOL_SAM
-        {app::kToolSam, "segmentation, tracking and frame extraction",
-         spirula_sam_main},
+        {app::kToolSam, &cmsg::tool_sam, spirula_sam_main},
 #endif
 #ifdef SS_TOOL_MESH
-        {app::kToolMesh, "extract a mesh from a trained model", spirula_mesh_main},
+        {app::kToolMesh, &cmsg::tool_mesh, spirula_mesh_main},
 #endif
     };
     return kTools;
@@ -87,16 +93,17 @@ const Tool* tool_from_argv0(const char* argv0) {
 void print_usage() {
     std::printf("Spirula Studio " SS_VERSION "\n\n");
 #ifdef SS_TOOL_GUI
-    std::printf("  spirula                        open the application\n");
-    std::printf("  spirula <file-or-folder>       open it in the application\n");
+    std::printf("  spirula                        %s\n",
+                cmsg::usage_open_app.get());
+    std::printf("  spirula <file-or-folder>       %s\n",
+                cmsg::usage_open_target.get());
 #endif
     std::printf("  spirula <command> [options]\n\n");
-    std::printf("Commands:\n");
+    std::printf("%s\n", cmsg::usage_commands.get());
     for (const Tool& t : tools())
-        std::printf("  %-8s %s\n", t.name, t.summary);
-    std::printf("\n`spirula <command> --help` describes one of them.\n");
-    std::printf("\nEvery command also takes --lang <code>, which sets the "
-                "interface language\n(or SS_LANG in the environment):\n\n%s",
+        std::printf("  %-8s %s\n", t.name, t.summary->get());
+    std::printf("\n%s\n", cmsg::usage_per_command_help.get());
+    std::printf("\n%s\n\n%s", cmsg::usage_lang.get(),
                 spirula::i18n::language_list().c_str());
 }
 
@@ -157,10 +164,11 @@ int main(int argc, char** argv) {
     return spirula_gui_main(argc, argv);
 #else
     if (argc > 1)
-        std::fprintf(stderr, "error: unknown command '%s'\n\n", argv[1]);
+        std::fprintf(stderr, "%s\n\n",
+                     spirula::i18n::format(cmsg::err_unknown_command,
+                                           {argv[1]}).c_str());
     else
-        std::fprintf(stderr, "error: this build has no graphical application "
-                             "(-DSS_BUILD_GUI=OFF)\n\n");
+        std::fprintf(stderr, "%s\n\n", cmsg::err_no_gui.get());
     print_usage();
     return 2;
 #endif

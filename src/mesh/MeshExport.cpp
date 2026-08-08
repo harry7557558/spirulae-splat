@@ -6,6 +6,7 @@
  */
 
 #include "mesh/MeshExport.h"
+#include "mesh/MeshLog.h"
 
 #include <filesystem>
 
@@ -31,6 +32,8 @@
 #include "external/stb_image_write.h"
 
 namespace meshing {
+
+namespace mmsg = spirula::i18n::msg::mesh;
 
 namespace {
 
@@ -553,9 +556,9 @@ void write_mesh(const MeshData& mesh, MeshColorMode mode,
             extra = mode == MeshColorMode::Texture
                 ? std::string(" (+ .bin, .") + spec.tex_ext() + ")"
                 : std::string(" (+ .bin)");
-        printf("[meshing] wrote %s.%s%s: %zu vertices, %zu faces\n",
-               base_path.c_str(), fmt.c_str(), extra.c_str(),
-               mesh.V.size(), mesh.F.size());
+        mlog::out(mlog::Stage::Wrote, mmsg::wrote_file,
+                  {base_path + "." + fmt + extra, (long long)mesh.V.size(),
+                   (long long)mesh.F.size()});
     }
 }
 
@@ -587,7 +590,10 @@ void compute_vertex_normals(MeshData& mesh) {
 
 void print_mesh_stats(const MeshData& mesh) {
     const size_t nv = mesh.V.size(), nf = mesh.F.size();
-    if (nf == 0) { printf("[meshing] stats: empty mesh\n"); return; }
+    if (nf == 0) {
+        mlog::out(mlog::Stage::Stats, mmsg::stats_empty);
+        return;
+    }
 
     // undirected edge -> (face count, winding balance). For a consistently
     // oriented 2-face edge the two traversals are opposite: balance == 0.
@@ -660,11 +666,10 @@ void print_mesh_stats(const MeshData& mesh) {
         if (m < 15.0) ++n_deg15;
     }
 
-    printf("[meshing] stats: %zu verts, %zu faces, %zu components; "
-           "edges: %ld boundary, %ld non-manifold, %ld mis-oriented; "
-           "%ld duplicate faces; min angle %.2f deg (%ld faces < 5, %ld < 15)\n",
-           nv, nf, roots.size(), n_bnd, n_nonmanif, n_misoriented,
-           n_dup, min_angle, n_deg5, n_deg15);
+    mlog::out(mlog::Stage::Stats, mmsg::stats_line,
+              {(long long)nv, (long long)nf, (long long)roots.size(), n_bnd,
+               n_nonmanif, n_misoriented, n_dup, mlog::num(min_angle, 2),
+               n_deg5, n_deg15});
 }
 
 } // namespace meshing

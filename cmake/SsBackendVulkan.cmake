@@ -25,6 +25,7 @@ ss_collect_portable_sources(SS_PORTABLE_SOURCES)
 add_library(csrc_portable OBJECT ${SS_PORTABLE_SOURCES})
 target_compile_definitions(csrc_portable PUBLIC SS_BACKEND_VULKAN)
 target_include_directories(csrc_portable PUBLIC ${SS_SRC} ${CMAKE_BINARY_DIR})
+target_link_libraries(csrc_portable PUBLIC ss_i18n)
 
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
@@ -59,7 +60,7 @@ list(APPEND SS_VULKAN_SOURCES ${SS_SPIRV_EMBED})
 add_library(ss_backend_vulkan STATIC ${SS_VULKAN_SOURCES})
 target_compile_definitions(ss_backend_vulkan PUBLIC SS_BACKEND_VULKAN)
 target_include_directories(ss_backend_vulkan PUBLIC ${SS_SRC})
-target_link_libraries(ss_backend_vulkan PUBLIC Vulkan::Vulkan)
+target_link_libraries(ss_backend_vulkan PUBLIC Vulkan::Vulkan ss_i18n)
 
 # ---------------------------------------------------------------------------
 # Tests (run manually; see backend/vulkan/README.md)
