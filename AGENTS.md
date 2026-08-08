@@ -76,7 +76,11 @@ src/
 │                             (process-global singleton)
 ├── data/                   DataManager (image cache / prefetch / warp) and
 │   └── parsers/              COLMAP / Nerfstudio / Metashape readers
-├── mesh/                   meshing pipeline, Delaunay3D, UV, export
+├── mesh/                   meshing pipeline: Delaunay3D, UV, export/import, and
+│                             MeshingDevice.h -- the DEVICE SEAM the portable
+│                             host driver (OccupancyEvaluator.cpp,
+│                             MeshingRasterHost.cpp) reaches the kernels
+│                             through, so meshing runs on BOTH backends
 ├── sfm/                    structure from motion -- Vulkan-only, self-contained
 │                             (images in, a COLMAP sparse/ model out)
 │                             -- READ src/sfm/README.md
@@ -91,7 +95,8 @@ src/
 │                             SS_ENABLE_PATENTED=ON -- READ src/video/README.md
 ├── backend/                the backend seam — READ backend/README.md
 │   ├── api/                backend-neutral launch declarations (GENERATED forwarders)
-│   ├── cuda/  common/      CUDA runtime shim, SortScan, Profiler
+│   ├── cuda/  common/      CUDA runtime shim, SortScan (declaration in
+│   │                         common/, CUB implementation in cuda/), Profiler
 │   ├── vulkan/             the whole Vulkan backend: runtime + kernels/ +
 │   │                         shaders/ (its own entry points and SPIR-V build)
 │   │                         — READ backend/vulkan/README.md

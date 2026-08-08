@@ -70,6 +70,25 @@ std::vector<MeshFormatSpec> parse_mesh_formats(const std::string& csv);
 // rejects a texture encoding suffix when mode is not Texture).
 std::string check_export_support(const MeshFormatSpec& spec, MeshColorMode mode);
 
+// Every file write_mesh(spec, mode, base_path) would create -- the mesh file
+// first, then its sidecars. Callers use it to check, BEFORE doing any work,
+// that the run is not about to write over one of its own inputs: meshing a
+// `foo.ply` into a base of `foo` would silently replace the model it was
+// asked to mesh, and by the time the write happens the model is already the
+// only copy of itself. `check_mesh_outputs_safe` is that check.
+std::vector<std::string> mesh_output_paths(const MeshFormatSpec& spec,
+                                           MeshColorMode mode,
+                                           const std::string& base_path);
+
+// "" when none of the files `specs` would write at `base_path` is one of
+// `inputs`, else a human-readable error naming the collision. Paths are
+// compared by identity where both exist (so `./a.ply` and `a.ply` collide),
+// and lexically otherwise.
+std::string check_mesh_outputs_safe(const std::vector<MeshFormatSpec>& specs,
+                                    MeshColorMode mode,
+                                    const std::string& base_path,
+                                    const std::vector<std::string>& inputs);
+
 // Write `mesh` per `spec` at base_path + extension(s). base_path must have no
 // extension; sidecar files (.mtl/.bin/.png/.jpg) are placed next to it and
 // referenced by basename. Throws std::runtime_error on I/O failure or an

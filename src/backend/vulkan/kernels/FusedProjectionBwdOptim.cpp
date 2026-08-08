@@ -120,7 +120,7 @@ void launch_fpbo_vk(
             : 0;
 
     const bool level1 = quantization_level == 1;
-    if (level1 &&
+    if (level1 && sh_degree > 0 &&
         (!sh_packed.has_value() || !sh_quant_bounds.has_value() ||
          !sh_value_packed.has_value() || !sh_value_bounds.has_value()))
         throw std::runtime_error(

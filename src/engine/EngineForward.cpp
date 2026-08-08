@@ -6,11 +6,20 @@
 #include "engine/EngineState.h"
 
 #include <stdexcept>
+#include <string>
 
 
 extern void _engine_background_forward();
 extern void _engine_color_space_forward();
 
+
+void engine_release_screen_buffers() {
+    // Drop the views FIRST: they point into the pool slots below, and
+    // anything that read them after the free would be reading freed memory.
+    engine().fwd.splats_s.clear();
+    DevicePool::global().free_dynamic_prefix(
+        std::string(slot_name(PoolSlot::ProjScreen)) + ".");
+}
 
 void forward_3dgs(
     std::string primitive,   // "3dgs", "mip", "3dgut"

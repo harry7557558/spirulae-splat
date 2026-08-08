@@ -158,6 +158,10 @@ float ViewportPanel::nav_dist() const {
 }
 
 void ViewportPanel::build_request(ViewRequest& q, int W, int H) const {
+    if (_scene_options) {
+        q.primitive = kViewerPrimitives[_primitive_idx];
+        q.sh_degree = _sh_degree;
+    }
     _cam.c2w(q.c2w);
     compute_intrinsics(W, H, q.fx, q.fy);
     q.cx = 0.5f * (float)W;
@@ -223,6 +227,45 @@ void ViewportPanel::attach_preview_data(const ParsedDataset& ds,
     _mode = Mode::Preview;
 }
 
+void ViewportPanel::enable_scene_options(
+    const std::string& primitive, int sh_degree_max,
+    const std::string& gamut, bool linear,
+    std::function<void(const char*, bool)> apply_color_space,
+    std::function<void()> on_primitive_changed) {
+    _scene_options = true;
+    _primitive_idx = 0;
+    for (int i = 0; i < kNumViewerPrimitives; i++)
+        if (primitive == kViewerPrimitives[i]) _primitive_idx = i;
+    _sh_degree_max = std::max(0, sh_degree_max);
+    // Every band the file carries, which for a slider capped at that same
+    // number is simply its top end -- no separate "automatic" entry needed.
+    _sh_degree = _sh_degree_max;
+    _gamut_idx = 0;
+    for (int i = 0; i < kNumViewerGamuts; i++)
+        if (gamut == kViewerGamuts[i]) _gamut_idx = i;
+    _linear_color = linear;
+    _apply_color_space = std::move(apply_color_space);
+    _on_primitive_changed = std::move(on_primitive_changed);
+}
+
+void ViewportPanel::attach_preview_mesh(const meshing::MeshData& mesh,
+                                        const float to_normalized[12],
+                                        const std::string& key, float radius) {
+    detach();
+    _has_cameras = false;
+    _show_cams = false;
+    if (!_preview.build(mesh, to_normalized)) {
+        _last_error = "preview renderer unavailable (OpenGL 3.2 required)";
+        return;
+    }
+    if (key != _framed_key) {
+        _framed_key = key;
+        reset_pose(radius);
+    }
+    _last_error.clear();
+    _mode = Mode::Preview;
+}
+
 void ViewportPanel::attach(spirula::TrainerSession& session) {
     detach();
     _worker.start(session.make_viewer_config(), session.make_viewer_hooks());
@@ -254,6 +297,9 @@ void ViewportPanel::attach_scene(const ViewerRenderConfig& cfg,
 }
 
 void ViewportPanel::detach() {
+    _scene_options = false;
+    _apply_color_space = nullptr;
+    _on_primitive_changed = nullptr;
     if (_mode == Mode::Engine) _worker.stop();
     _pending = 0;
     _mode = Mode::None;
@@ -389,12 +435,49 @@ void ViewportPanel::handle_input(float /*item_h*/) {
 // ---------------------------------------------------------------------------
 
 void ViewportPanel::draw_controls(bool engine) {
-    // All controls fit on one row on a wide enough viewport; otherwise the
-    // navigation/camera group wraps to a second row.
-    bool one_row = ImGui::GetContentRegionAvail().x >= 1190.0f;
+    // The controls pack greedily onto as many rows as they need: an item goes
+    // on the current row when what is left of it can hold the item, and starts
+    // a new row otherwise. A fixed width threshold cannot do this -- WHICH
+    // controls are present depends on what is being shown (a viewer has render
+    // options a training session has not; a mesh has display switches a splat
+    // has not) and the panel is half-width when two are side by side, so a
+    // threshold calibrated for one combination overflows another.
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float row_w = ImGui::GetContentRegionAvail().x;
+    auto text_w = [](const char* s) { return ImGui::CalcTextSize(s).x; };
+    auto check_w = [&](const spirula::i18n::Msg& m) {
+        return ImGui::GetFrameHeight() + st.ItemInnerSpacing.x +
+               text_w(m.get());
+    };
+    auto button_w = [&](const spirula::i18n::Msg& m) {
+        return text_w(m.get()) + 2.0f * st.FramePadding.x;
+    };
+    // How much of the current row is used. TRACKED rather than read back from
+    // ImGui's last-item rectangle, which would pick up the tooltip's contents
+    // whenever one of these controls is hovered -- the row would then reflow
+    // under the cursor.
+    float used = 0.0f;
+    auto place = [&](float w) {
+        if (used > 0.0f && used + st.ItemSpacing.x + w <= row_w) {
+            ImGui::SameLine();
+            used += st.ItemSpacing.x + w;
+        } else {
+            used = w;    // first item, or a new row: no SameLine
+        }
+    };
+    // Keep a group of related controls together: if the whole of it will not
+    // fit on what is left of this row, start it on a fresh one.
+    auto place_group = [&](float w) {
+        if (used > 0.0f && used + st.ItemSpacing.x + w > row_w) used = 0.0f;
+    };
+
+    // The SH slider's width. Short enough to sit in a row of controls, wide
+    // enough for "SH 3" plus the grab.
+    constexpr float kShW = 86.0f;
 
     // ---- display group ----
     if (engine && !_buffer_keys.empty()) {
+        place(130);
         ImGui::SetNextItemWidth(130);
         // Buffer names ("color", "depth") come from the engine.
         if (ui::BeginComboRaw("##buffer", _buffer_keys[_buffer_idx].c_str())) {
@@ -406,30 +489,32 @@ void ViewportPanel::draw_controls(bool engine) {
             ImGui::EndCombo();
         }
         ui::help_on_hover(msg::viewport_buffer_help);
-        ImGui::SameLine();
     }
-    if (!engine) {
+    // The "dataset preview" note explains why the image is points and not a
+    // render; over a mesh it would be simply wrong.
+    if (!engine && !_preview.has_mesh()) {
+        place(text_w(msg::viewport_dataset_preview.get()));
         ui::TextDisabled(msg::viewport_dataset_preview);
         ui::help_on_hover(msg::viewport_dataset_preview_help);
-        ImGui::SameLine();
     }
     // No dataset behind a splat file, so nothing to draw a frustum for.
     if (_has_cameras) {
+        place(check_w(msg::viewport_cameras));
         if (ui::Checkbox(msg::viewport_cameras, &_show_cams)) _dirty = true;
         if (_show_cams) {
-            ImGui::SameLine();
+            place(110);
             ImGui::SetNextItemWidth(110);
             if (ui::SliderFloatRaw("##fsize", &_frustum_scale, 0.1f, 10.0f,
                                    "size x%.2f", ImGuiSliderFlags_Logarithmic))
                 _dirty = true;
             ui::help_on_hover(msg::viewport_frustum_size_help);
         }
-        ImGui::SameLine();
     }
+    place(check_w(msg::viewport_grid));
     if (ui::Checkbox(msg::viewport_grid, &_show_grid)) _dirty = true;
     ui::help_on_hover(msg::viewport_cameras_help);
     if (engine) {
-        ImGui::SameLine();
+        place(66);
         ImGui::SetNextItemWidth(66);
         // Only the first entry is a word; the rest are numbers, and a
         // percentage is a percentage in every language.
@@ -439,23 +524,97 @@ void ViewportPanel::draw_controls(bool engine) {
         ui::help_on_hover(msg::viewport_scale_help);
         // "Live" is about keeping up with training; a file does not move.
         if (_has_cameras) {
-            ImGui::SameLine();
+            place(check_w(msg::viewport_live));
             ui::Checkbox(msg::viewport_live, &_auto_refresh);
             ui::help_on_hover(msg::viewport_live_help);
         }
     }
-    ImGui::SameLine();
+    // ---- mesh display switches (preview over a mesh) ----
+    if (!engine && _preview.has_mesh()) {
+        place(check_w(msg::viewport_shading));
+        if (ui::Checkbox(msg::viewport_shading, &_mesh_shade)) _dirty = true;
+        if (_mesh_shade) {
+            place(check_w(msg::viewport_flat_shading));
+            if (ui::Checkbox(msg::viewport_flat_shading, &_mesh_flat))
+                _dirty = true;
+            ui::help_on_hover(msg::viewport_flat_shading_help);
+        }
+        // Nothing to switch off when the mesh has no color of its own.
+        if (_preview.mesh_color_kind() != 0) {
+            place(check_w(msg::viewport_mesh_color));
+            if (ui::Checkbox(msg::viewport_mesh_color, &_mesh_color_on))
+                _dirty = true;
+            ui::help_on_hover(msg::viewport_mesh_color_help);
+        }
+        _preview.set_mesh_display(_mesh_shade, _mesh_flat, _mesh_color_on);
+    }
+
+    place(button_w(msg::viewport_reset_view));
     if (ui::Button(msg::viewport_reset_view)) reset_view();
+
+    // ---- how the model is rendered (viewer only) ----
+    // A training session renders what it is training; only a file being
+    // LOOKED at can be drawn a different way than it was made.
+    if (engine && _scene_options) {
+        float w_group = 80.0f + 120.0f + check_w(msg::viewport_linear_color) +
+                        2.0f * st.ItemSpacing.x;
+        if (_sh_degree_max > 0) w_group += kShW + st.ItemSpacing.x;
+        place_group(w_group);
+        place(80);
+        ImGui::SetNextItemWidth(80);
+        // Primitive names are identifiers (they are what --primitive takes).
+        if (ui::ComboRaw("##primitive", &_primitive_idx, kViewerPrimitives,
+                         kNumViewerPrimitives)) {
+            if (_on_primitive_changed) _on_primitive_changed();
+            _dirty = true;
+        }
+        ui::help_on_hover(msg::viewport_primitive_help);
+
+        if (_sh_degree_max > 0) {
+            place(kShW);
+            ImGui::SetNextItemWidth(kShW);
+            // Capped at what the file actually carries -- bands it has not got
+            // cannot be drawn, so there is nothing above the top end to offer.
+            // Degrees are numbers in every language.
+            if (ui::SliderIntRaw("##shdeg", &_sh_degree, 0, _sh_degree_max,
+                                 "SH %d"))
+                _dirty = true;
+            ui::help_on_hover(msg::viewport_sh_degree_help);
+        }
+
+        place(120);
+        ImGui::SetNextItemWidth(120);
+        // Gamut names are standards ("DCI-P3"); only the "none" row is a word.
+        const char* gamuts[kNumViewerGamuts];
+        gamuts[0] = msg::viewport_gamut_none.get();
+        for (int i = 1; i < kNumViewerGamuts; i++) gamuts[i] = kViewerGamuts[i];
+        if (ui::ComboRaw("##gamut", &_gamut_idx, gamuts, kNumViewerGamuts)) {
+            if (_apply_color_space)
+                _apply_color_space(kViewerGamuts[_gamut_idx], _linear_color);
+            _dirty = true;
+        }
+        ui::help_on_hover(msg::viewport_gamut_help);
+        place(check_w(msg::viewport_linear_color));
+        if (ui::Checkbox(msg::viewport_linear_color, &_linear_color)) {
+            if (_apply_color_space)
+                _apply_color_space(kViewerGamuts[_gamut_idx], _linear_color);
+            _dirty = true;
+        }
+        ui::help_on_hover(msg::viewport_gamut_help);
+    }
 
     // ---- navigation + camera group ----
     // The four modes behave exactly as the web viewer's do; only the words
     // are localized. The tooltip names them by substitution so it always uses
     // the same words the combo just showed.
-    if (one_row) ImGui::SameLine();
     static const spirula::i18n::Msg* kNavModes[] = {
         &msg::nav_turntable, &msg::nav_trackball,
         &msg::nav_first_person, &msg::nav_free_fly};
+    const float w_fov = fov_max() > 0 ? 120.0f
+                                      : text_w("360\xc2\xb0 x 180\xc2\xb0");
+    place_group(150.0f + 100.0f + 160.0f + w_fov + 3.0f * st.ItemSpacing.x);
     int nav = (int)_cam.mode;
+    place(150);
     ImGui::SetNextItemWidth(150);
     if (ui::ComboRaw("##navmode", &nav,
                      {kNavModes[0], kNavModes[1], kNavModes[2], kNavModes[3]}))
@@ -463,11 +622,11 @@ void ViewportPanel::draw_controls(bool engine) {
     ui::help_on_hover(msg::viewport_nav_help,
                       {kNavModes[0]->get(), kNavModes[1]->get(),
                        kNavModes[2]->get(), kNavModes[3]->get()});
-    ImGui::SameLine();
+    place(100);
     ImGui::SetNextItemWidth(100);
     ui::SliderFloatRaw("##speed", &_cam.speed_exp, -2.0f, 2.0f, "spd 10^%.1f");
     ui::help_on_hover(msg::viewport_speed_help);
-    ImGui::SameLine();
+    place(160);
     ImGui::SetNextItemWidth(160);
     if (ui::BeginComboRaw("##cammodel", kViewerCameraModels[_cam_model].label->get())) {
         for (int i = 0; i < 4; i++)
@@ -482,7 +641,7 @@ void ViewportPanel::draw_controls(bool engine) {
         ImGui::EndCombo();
     }
     ui::help_on_hover(msg::viewport_projection_help);
-    ImGui::SameLine();
+    place(w_fov);
     if (fov_max() > 0) {
         ImGui::SetNextItemWidth(120);
         if (ui::SliderFloatRaw("##fov", &_fov_deg[_cam_model],
@@ -573,9 +732,17 @@ void ViewportPanel::draw_preview(const ImVec2& avail) {
         }
     }
 
+    // A count and a unit -- and which unit depends on what is being
+    // previewed. Numbers are numbers in every language; "points" and
+    // "triangles" are the untranslated shorthand this overlay has always
+    // used, kept short because it sits on top of the image.
     char info[96];
-    std::snprintf(info, sizeof info, "%lld points",
-                  (long long)_preview.num_points());
+    if (_preview.has_mesh())
+        std::snprintf(info, sizeof info, "%lld triangles",
+                      (long long)_preview.num_triangles());
+    else
+        std::snprintf(info, sizeof info, "%lld points",
+                      (long long)_preview.num_points());
     ImVec2 p = ImGui::GetItemRectMin();
     ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + 8, p.y + 6),
                                         IM_COL32(200, 200, 200, 180), info);
@@ -601,7 +768,8 @@ void ViewportPanel::note_motion(double now) {
     for (int i = 0; i < 3; i++) pose[i] = _cam.pos[i];
     for (int i = 0; i < 4; i++) pose[3 + i] = _cam.rot[i];
     for (int i = 0; i < 3; i++) pose[7 + i] = _cam.target[i];
-    if (std::memcmp(pose, _last_pose, sizeof pose) != 0) {
+    _moved_last_draw = std::memcmp(pose, _last_pose, sizeof pose) != 0;
+    if (_moved_last_draw) {
         std::memcpy(_last_pose, pose, sizeof pose);
         _last_move = now;
     }
@@ -613,6 +781,23 @@ void ViewportPanel::note_motion(double now) {
         _moving = moving;
         _dirty = true;
     }
+}
+
+// Side-by-side link: the whole navigation state, so the two panels are one
+// view shown two ways. The camera model and its FOV travel with the pose --
+// a fisheye splat render next to a pinhole mesh render is not a comparison.
+void ViewportPanel::sync_view_from(const ViewportPanel& src) {
+    if (&src == this) return;
+    if (std::memcmp(&_cam, &src._cam, sizeof(NavCamera)) == 0 &&
+        _cam_model == src._cam_model &&
+        _fov_deg[_cam_model] == src._fov_deg[src._cam_model])
+        return;
+    _cam = src._cam;
+    _cam_model = src._cam_model;
+    for (int i = 0; i < 4; i++) _fov_deg[i] = src._fov_deg[i];
+    _home = src._home;
+    _home_dist = src._home_dist;
+    _dirty = true;
 }
 
 float ViewportPanel::render_scale() {

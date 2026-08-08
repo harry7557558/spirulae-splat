@@ -4,6 +4,7 @@
 
 #include "app/gui/GlLoader.h"
 #include "app/TrainerCore.h"
+#include "mesh/MeshImport.h"   // mesh_compute_normals
 
 #include <algorithm>
 #include <cmath>
@@ -112,6 +113,109 @@ void main() {
     if (clipped ||
         length(px - gl_FragCoord.xy) > 0.05 * min(u_vp.x, u_vp.y)) discard;
     frag = vec4(v_col.rgb, 1.0);
+}
+)";
+
+// Mesh program. Shares kProj with the point/line program above -- one
+// projection implementation, so a mesh and a point cloud of the same scene
+// land on the same pixels -- and adds per-vertex normal / color / uv and a
+// fixed headlight.
+//
+// The discontinuity handling is the lines' rule adapted to filled triangles:
+// a triangle's projected outline is exact under pinhole (the projection of a
+// triangle IS the triangle of projected vertices), so no fragment is
+// discarded there; under the curved models the edges bend, so the check would
+// eat legitimate interior fragments and only the behind-camera / seam cases
+// are rejected.
+const char* kMeshVert = R"(
+in vec3 a_pos;
+in vec3 a_nrm;
+in vec3 a_col;
+in vec2 a_uv;
+uniform mat4 u_view;
+uniform vec2 u_zrange;
+out vec3 v_nrm;
+out vec3 v_col;
+out vec2 v_uv;
+out vec3 v_view;
+void main() {
+    vec3 v = (u_view * vec4(a_pos, 1.0)).xyz;
+    float dist = max(length(v), 1e-9);
+    float z = (dist - u_zrange.x) / (u_zrange.y - u_zrange.x) * 2.0 - 1.0;
+    v_nrm = mat3(u_view) * a_nrm;
+    v_col = a_col;
+    v_uv = a_uv;
+    v_view = v;
+    if (u_model == 0) {
+        // PINHOLE: emit a REAL clip-space position (w = -z_view) so the
+        // hardware clips triangles at the near plane. Writing NDC with w = 1
+        // (which is what the point/line program does, and what this used to
+        // do) leaves a triangle straddling the camera plane to rasterize
+        // between a finite vertex and a wrapped one -- the glitching wedges.
+        // The projected triangle IS the triangle of projected vertices under
+        // perspective, so past the clip there is nothing to discard.
+        float w = -v.z;
+        gl_Position = vec4(u_s * v.xy, z * w, w);
+    } else {
+        // The curved models have no linear clip space; NDC goes out directly
+        // and the fragment shader rejects what wrapped (see kMeshFrag).
+        bool clipped;
+        vec2 ndc = project_ndc(v, clipped);
+        gl_Position = vec4(ndc, clipped ? 3.0 : z, 1.0);
+    }
+}
+)";
+
+const char* kMeshFrag = R"(
+in vec3 v_nrm;
+in vec3 v_col;
+in vec2 v_uv;
+in vec3 v_view;
+uniform vec2 u_vp;
+uniform int u_mode;          // 0 flat, 1 vertex color, 2 texture
+uniform int u_color_on;      // show vertex/texture color
+uniform int u_shade;         // apply the headlight
+uniform int u_flat;          // face normals instead of interpolated ones
+uniform sampler2D u_tex;
+out vec4 frag;
+void main() {
+    if (u_model != 0) {
+        // Reject fragments of a triangle that crosses a projection
+        // discontinuity (the equirect +-180-degree seam, the fisheye backward
+        // point). Two tests, because either alone leaves artifacts:
+        //   * the reprojection ERROR is large across most of a wrapped
+        //     triangle -- but it vanishes at the vertices, leaving stubs;
+        //   * the error's GRADIENT stays O(1) right up to those vertices,
+        //     while an ordinary triangle's curvature error and gradient are
+        //     both small.
+        // Same pair the web viewer's MESH_FS uses, so the two agree on which
+        // triangles disappear.
+        bool clipped;
+        vec2 ndc = project_ndc(v_view, clipped);
+        if (clipped) discard;
+        vec2 err = (0.5 * ndc + 0.5) * u_vp - gl_FragCoord.xy;
+        vec2 gx = dFdx(err), gy = dFdy(err);
+        if (length(err) > 0.05 * min(u_vp.x, u_vp.y) ||
+            max(length(gx), length(gy)) > 0.5) discard;
+    }
+    vec3 base = vec3(0.78);
+    if (u_color_on == 1) {
+        if (u_mode == 2) base = texture(u_tex, v_uv).rgb;
+        else if (u_mode == 1) base = v_col;
+    }
+    float shade = 1.0;
+    if (u_shade == 1) {
+        vec3 n = v_nrm;
+        if (u_flat == 1 || dot(n, n) < 1e-12)
+            n = cross(dFdx(v_view), dFdy(v_view));   // face normal, view space
+        n = normalize(n);
+        // Headlight: the light follows the camera, so the surface reads from
+        // every angle; abs() lights back faces too, because a black backface
+        // reads as a hole rather than as an orientation problem.
+        vec3 l = normalize(-v_view);
+        shade = 0.25 + 0.75 * abs(dot(n, l));
+    }
+    frag = vec4(base * shade, 1.0);
 }
 )";
 
@@ -405,6 +509,47 @@ bool PreviewRenderer::ensure_program() {
     return true;
 }
 
+bool PreviewRenderer::ensure_mesh_program() {
+    if (_mprog) return true;
+    if (!glx::init()) return false;
+    std::string vs_src = std::string("#version 150\n") + kProj + kMeshVert;
+    std::string fs_src = std::string("#version 150\n") + kProj + kMeshFrag;
+    GLuint vs = compile(GL_VERTEX_SHADER, vs_src.c_str());
+    GLuint fs = compile(GL_FRAGMENT_SHADER, fs_src.c_str());
+    if (!vs || !fs) return false;
+    _mprog = glx::CreateProgram();
+    glx::AttachShader(_mprog, vs);
+    glx::AttachShader(_mprog, fs);
+    glx::BindAttribLocation(_mprog, 0, "a_pos");
+    glx::BindAttribLocation(_mprog, 1, "a_nrm");
+    glx::BindAttribLocation(_mprog, 2, "a_col");
+    glx::BindAttribLocation(_mprog, 3, "a_uv");
+    glx::LinkProgram(_mprog);
+    glx::DeleteShader(vs);
+    glx::DeleteShader(fs);
+    GLint ok = 0;
+    glx::GetProgramiv(_mprog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glx::GetProgramInfoLog(_mprog, sizeof log, nullptr, log);
+        std::fprintf(stderr, "[preview] mesh link error: %s\n", log);
+        glx::DeleteProgram(_mprog);
+        _mprog = 0;
+        return false;
+    }
+    _mu_view = glx::GetUniformLocation(_mprog, "u_view");
+    _mu_model = glx::GetUniformLocation(_mprog, "u_model");
+    _mu_s = glx::GetUniformLocation(_mprog, "u_s");
+    _mu_zrange = glx::GetUniformLocation(_mprog, "u_zrange");
+    _mu_vp = glx::GetUniformLocation(_mprog, "u_vp");
+    _mu_mode = glx::GetUniformLocation(_mprog, "u_mode");
+    _mu_tex = glx::GetUniformLocation(_mprog, "u_tex");
+    _mu_color_on = glx::GetUniformLocation(_mprog, "u_color_on");
+    _mu_shade = glx::GetUniformLocation(_mprog, "u_shade");
+    _mu_flat = glx::GetUniformLocation(_mprog, "u_flat");
+    return true;
+}
+
 // Ground-plane grid + axes, generated in the TRAINING (saved-splat) frame
 // so lines mark round coordinates of the exported model, then mapped into
 // the normalized frame the preview renders in (_t2n). Minor cells at a
@@ -513,6 +658,136 @@ void PreviewRenderer::ensure_grid(float scene_radius, float view_dist,
 
 bool PreviewRenderer::build(const spirula::TrainerSession& session) {
     return build(session.ds, session.post);
+}
+
+bool PreviewRenderer::build(const meshing::MeshData& mesh,
+                            const float to_normalized[12]) {
+    destroy_gl();
+    if (!ensure_mesh_program()) return false;
+    if (mesh.V.empty() || mesh.F.empty()) return false;
+
+    // The similarity into the navigated frame, or identity. Same 3x4
+    // row-major layout the point path keeps in _t2n, so the grid generated
+    // there works over a mesh unchanged.
+    const float ident[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
+    const float* A = to_normalized ? to_normalized : ident;
+    for (int i = 0; i < 12; i++) _t2n[i] = A[i];
+    _t2n_scale = std::sqrt(A[0]*A[0] + A[4]*A[4] + A[8]*A[8]);
+    if (!(_t2n_scale > 1e-20f)) _t2n_scale = 1.0f;
+
+    // Normals are what makes a shaded mesh readable; a file without them
+    // gets them here rather than rendering flat.
+    std::vector<std::array<float, 3>> gen_n;
+    const std::vector<std::array<float, 3>>* N = &mesh.N;
+    if (mesh.N.size() != mesh.V.size()) {
+        meshing::MeshData tmp;
+        tmp.V = mesh.V;
+        tmp.F = mesh.F;
+        meshing::mesh_compute_normals(tmp);
+        gen_n = std::move(tmp.N);
+        N = &gen_n;
+    }
+
+    const bool has_c = mesh.C.size() == mesh.V.size();
+    const bool has_uv = mesh.UV.size() == mesh.V.size() &&
+                        !mesh.texture.empty() && mesh.tex_width > 0 &&
+                        mesh.tex_height > 0;
+    _mesh_mode = has_uv ? 2 : (has_c ? 1 : 0);
+
+    struct MV { float px, py, pz, nx, ny, nz, r, g, b, u, v; };
+    std::vector<MV> verts(mesh.V.size());
+    for (size_t i = 0; i < mesh.V.size(); i++) {
+        const auto& p = mesh.V[i];
+        MV& o = verts[i];
+        o.px = A[0]*p[0] + A[1]*p[1] + A[2]*p[2] + A[3];
+        o.py = A[4]*p[0] + A[5]*p[1] + A[6]*p[2] + A[7];
+        o.pz = A[8]*p[0] + A[9]*p[1] + A[10]*p[2] + A[11];
+        const auto& n = (*N)[i];
+        // A similarity leaves directions' orientation alone up to the scale,
+        // which normalizing removes.
+        float nx = A[0]*n[0] + A[1]*n[1] + A[2]*n[2];
+        float ny = A[4]*n[0] + A[5]*n[1] + A[6]*n[2];
+        float nz = A[8]*n[0] + A[9]*n[1] + A[10]*n[2];
+        const float len = std::sqrt(nx*nx + ny*ny + nz*nz);
+        const float s = len > 1e-20f ? 1.0f / len : 0.0f;
+        o.nx = nx * s; o.ny = ny * s; o.nz = nz * s;
+        if (has_c) {
+            o.r = mesh.C[i][0] / 255.0f;
+            o.g = mesh.C[i][1] / 255.0f;
+            o.b = mesh.C[i][2] / 255.0f;
+        } else {
+            o.r = o.g = o.b = 0.72f;
+        }
+        if (has_uv) { o.u = mesh.UV[i][0]; o.v = mesh.UV[i][1]; }
+        else { o.u = o.v = 0.0f; }
+    }
+
+    std::vector<uint32_t> idx;
+    idx.reserve(mesh.F.size() * 3);
+    for (const auto& f : mesh.F) {
+        idx.push_back((uint32_t)f[0]);
+        idx.push_back((uint32_t)f[1]);
+        idx.push_back((uint32_t)f[2]);
+    }
+    _num_mesh_idx = (int64_t)idx.size();
+
+    GLuint vao = 0, vbo = 0, ebo = 0;
+    glx::GenVertexArrays(1, &vao);
+    glx::GenBuffers(1, &vbo);
+    glx::GenBuffers(1, &ebo);
+    glx::BindVertexArray(vao);
+    glx::BindBuffer(GL_ARRAY_BUFFER, vbo);
+    glx::BufferData(GL_ARRAY_BUFFER,
+                    (GLsizeiptr)(verts.size() * sizeof(MV)), verts.data(),
+                    GL_STATIC_DRAW);
+    const GLsizei st = (GLsizei)sizeof(MV);
+    glx::EnableVertexAttribArray(0);
+    glx::VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, st, (void*)0);
+    glx::EnableVertexAttribArray(1);
+    glx::VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, st,
+                             (void*)(3 * sizeof(float)));
+    glx::EnableVertexAttribArray(2);
+    glx::VertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, st,
+                             (void*)(6 * sizeof(float)));
+    glx::EnableVertexAttribArray(3);
+    glx::VertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, st,
+                             (void*)(9 * sizeof(float)));
+    glx::BindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    glx::BufferData(GL_ELEMENT_ARRAY_BUFFER,
+                    (GLsizeiptr)(idx.size() * sizeof(uint32_t)), idx.data(),
+                    GL_STATIC_DRAW);
+    glx::BindVertexArray(0);
+    _vao_mesh = vao;
+    _vbo_mesh = vbo;
+    _ebo_mesh = ebo;
+
+    if (has_uv) {
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, mesh.tex_width,
+                     mesh.tex_height, 0, GL_RGB, GL_UNSIGNED_BYTE,
+                     mesh.texture.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        _tex_mesh = tex;
+    }
+
+    // Double-click picking over the mesh vertices, exactly as over points.
+    _pick_xyz.resize(verts.size() * 3);
+    for (size_t i = 0; i < verts.size(); i++) {
+        _pick_xyz[3*i + 0] = verts[i].px;
+        _pick_xyz[3*i + 1] = verts[i].py;
+        _pick_xyz[3*i + 2] = verts[i].pz;
+    }
+    _num_points = 0;   // the mesh replaces the cloud, it does not add to it
+    _built = true;
+    _gl_ok = true;
+    return true;
 }
 
 bool PreviewRenderer::build(const ParsedDataset& ds, const PostSplitCameras& post) {
@@ -757,6 +1032,32 @@ unsigned PreviewRenderer::render(int W, int H, const float view[16],
     glDepthFunc(GL_LEQUAL);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    // Mesh first: it owns the depth buffer the grid and the cloud then test
+    // against, and it is the only draw with its own program.
+    if (_num_mesh_idx > 0 && _mprog) {
+        glx::UseProgram(_mprog);
+        glx::UniformMatrix4fv(_mu_view, 1, GL_TRUE, view);
+        glx::Uniform1i(_mu_model, (int)proj);
+        glx::Uniform2f(_mu_s, sx, sy);
+        glx::Uniform2f(_mu_zrange, zn, zf);
+        glx::Uniform2f(_mu_vp, (float)W, (float)H);
+        glx::Uniform1i(_mu_mode, _mesh_mode);
+        glx::Uniform1i(_mu_color_on, _mesh_color_on ? 1 : 0);
+        glx::Uniform1i(_mu_shade, _mesh_shade ? 1 : 0);
+        glx::Uniform1i(_mu_flat, _mesh_flat ? 1 : 0);
+        if (_mesh_mode == 2 && _mesh_color_on && _tex_mesh) {
+            glx::ActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, (GLuint)_tex_mesh);
+            glx::Uniform1i(_mu_tex, 0);
+        }
+        glx::BindVertexArray(_vao_mesh);
+        glDrawElements(GL_TRIANGLES, (GLsizei)_num_mesh_idx, GL_UNSIGNED_INT,
+                       nullptr);
+        glx::BindVertexArray(0);
+        if (_mesh_mode == 2 && _mesh_color_on && _tex_mesh)
+            glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
     glx::UseProgram(_prog);
     glx::UniformMatrix4fv(_u_view, 1, GL_TRUE, view);
     glx::Uniform1i(_u_model, (int)proj);
@@ -806,7 +1107,26 @@ unsigned PreviewRenderer::render(int W, int H, const float view[16],
     return _color_tex;
 }
 
+void PreviewRenderer::destroy_mesh_gl() {
+    if (_vbo_mesh) {
+        GLuint b[2] = {(GLuint)_vbo_mesh, (GLuint)_ebo_mesh};
+        glx::DeleteBuffers(2, b);
+    }
+    if (_vao_mesh) {
+        GLuint a = (GLuint)_vao_mesh;
+        glx::DeleteVertexArrays(1, &a);
+    }
+    if (_tex_mesh) {
+        GLuint t = (GLuint)_tex_mesh;
+        glDeleteTextures(1, &t);
+    }
+    _vbo_mesh = _ebo_mesh = _vao_mesh = _tex_mesh = 0;
+    _num_mesh_idx = 0;
+    _mesh_mode = 0;
+}
+
 void PreviewRenderer::destroy_gl() {
+    destroy_mesh_gl();
     if (_vbo_pts) { GLuint b[2] = {(GLuint)_vbo_pts, (GLuint)_vbo_cam}; glx::DeleteBuffers(2, b); }
     if (_vao_pts) { GLuint a[2] = {(GLuint)_vao_pts, (GLuint)_vao_cam}; glx::DeleteVertexArrays(2, a); }
     _vbo_pts = _vbo_cam = _vao_pts = _vao_cam = 0;

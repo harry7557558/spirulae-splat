@@ -27,6 +27,12 @@ int run_process(const std::vector<std::string>& argv,
 // True when `exe` resolves to an executable (PATH search like the shell).
 bool command_exists(const std::string& exe);
 
+// Splits a free-form flag string the way a shell would for the simple cases:
+// whitespace separated, with "quoted runs" kept together. Enough for
+// `--max-error 2 --masks "/path/with space"`. This is what the runners' "extra
+// arguments" fields go through before becoming argv entries.
+std::vector<std::string> split_args(const std::string& s);
+
 // Hands a URL to the desktop's default browser and returns immediately. False
 // when nothing could be launched (a headless session, no xdg-open), which is
 // the caller's cue to fall back to showing the address. Never blocks and never

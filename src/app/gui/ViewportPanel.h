@@ -19,6 +19,7 @@
 #include "app/gui/PreviewRenderer.h"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,18 @@ namespace spirula { class TrainerSession; }
 
 namespace gui {
 
+// What the viewer's primitive combo offers, in order. These are the
+// `forward_3dgs` primitive names, so they are identifiers, not words.
+inline const char* kViewerPrimitives[] = {"3dgs", "mip", "3dgut"};
+inline constexpr int kNumViewerPrimitives = 3;
+
+// Color gamuts the render can be converted FROM, in combo order. "" is
+// Rec.709 (no conversion); the rest are gamut_to_rec709's names, which are
+// standard identifiers rather than translatable words.
+inline const char* kViewerGamuts[] = {"", "DCI-P3", "Rec.2020", "AdobeRGB",
+                                      "ACEScg", "ACES2065-1"};
+inline constexpr int kNumViewerGamuts = 6;
+
 class ViewportPanel {
 public:
     // Dataset preview (needs load_dataset() done; no GPU engine).
@@ -34,6 +47,12 @@ public:
     // The same GL preview over a bare point cloud -- a .ply that turned out to
     // hold points rather than Gaussians. No cameras, so no frusta.
     void attach_preview_data(const ParsedDataset& ds, const PostSplitCameras& post,
+                             const std::string& key, float radius = 1.0f);
+    // The same GL preview over an extracted triangle mesh, shaded.
+    // `to_normalized` is the row-major 3x4 similarity into the navigated
+    // frame (PreviewRenderer's convention); nullptr for identity.
+    void attach_preview_mesh(const meshing::MeshData& mesh,
+                             const float to_normalized[12],
                              const std::string& key, float radius = 1.0f);
     // Engine renderer (needs engine_ready).
     void attach(spirula::TrainerSession& session);
@@ -45,8 +64,34 @@ public:
     // not offered.
     void attach_scene(const ViewerRenderConfig& cfg, const ViewerHooks& hooks,
                       const std::string& key, float radius = 1.0f);
+    // Offer the render-option controls a VIEWER gets (primitive, SH degree,
+    // color space) on top of attach_scene. `sh_degree_max` is what the file
+    // actually carries, and caps the SH slider -- bands that are not there
+    // cannot be drawn -- while `apply_color_space` is called when the gamut or
+    // the linear toggle changes, because that is an engine call and only the
+    // owner knows how to take the engine lock.
+    // `on_primitive_changed` is called after the user picks a different
+    // primitive, so the owner can hand the previous one's screen buffers
+    // back -- the two layouts share pool slots but not shapes, and keeping
+    // both resident is VRAM for nothing.
+    void enable_scene_options(
+        const std::string& primitive, int sh_degree_max,
+        const std::string& gamut, bool linear,
+        std::function<void(const char* gamut, bool linear)> apply_color_space,
+        std::function<void()> on_primitive_changed);
     void detach();
     bool attached() const { return _mode == Mode::Engine; }
+
+    // Side-by-side: adopt `src`'s navigation pose, camera model and FOV, so
+    // two panels showing the same scene stay locked to one view. `moved()`
+    // says whether this panel's own pose changed on the last draw, which is
+    // how the caller decides which of the two is currently the master.
+    void sync_view_from(const ViewportPanel& src);
+    bool moved() const { return _moved_last_draw; }
+    // A drag is in progress in THIS panel. The link's master has to be sticky
+    // for the length of a drag: picking it from moved() alone would let the
+    // panel that was synced last frame claim it back and fight the drag.
+    bool dragging() const { return _dragging; }
     bool preview_active() const { return _mode == Mode::Preview; }
 
     // Draw the viewport (controls rows + image) into the current ImGui
@@ -125,6 +170,24 @@ private:
     // shown doing nothing.
     bool _has_cameras = true;
 
+    // ---- render options a VIEWER may change (a training session may not:
+    // what it renders has to be what it is training) ----
+    // Offered only when enable_scene_options() said so.
+    bool _scene_options = false;
+    int _primitive_idx = 0;       // index into kViewerPrimitives
+    int _sh_degree = -1;          // < 0 = every band the file carries
+    int _sh_degree_max = 0;       // what the file carries (the slider's top)
+    int _gamut_idx = 0;           // index into kViewerGamuts
+    bool _linear_color = false;
+    // Applying a gamut / linear change is an ENGINE call, not a render flag,
+    // so it is done by the owner (SplatViewer, which holds the engine lock)
+    // rather than here.
+    std::function<void(const char* gamut, bool linear)> _apply_color_space;
+    std::function<void()> _on_primitive_changed;
+
+    // Mesh display switches (preview mode over a mesh).
+    bool _mesh_shade = true, _mesh_flat = false, _mesh_color_on = true;
+
     // Render options.
     int _buffer_idx = 0;
     std::vector<std::string> _buffer_keys;
@@ -134,6 +197,9 @@ private:
     // 0 = auto (see render_scale), 1 = 50%, 2 = 75%, 3 = 100%
     int _scale_idx = 0;
     float _last_pose[10] = {};       // pos + rot + target, to spot motion
+    // The pose (or camera model / FOV) changed during the last draw. Drives
+    // the side-by-side link; note_motion sets it, draw clears it.
+    bool _moved_last_draw = false;
     double _last_move = -1e9;
     bool _moving = false;
     bool _auto_refresh = true;

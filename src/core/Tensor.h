@@ -227,6 +227,27 @@ public:
         }
     }
 
+    // Free every acquire_dynamic slot whose name starts with `prefix`.
+    //
+    // The one caller is a primitive switch in the viewer: the 3DGS/Mip and
+    // 3DGUT screen buffers share slot NAMES but not shapes (10 floats per
+    // splat against 7, and the first slot is float2 against float3), so a
+    // pool that only ever grows ends up holding the union of the two rather
+    // than the larger. Handing them back on the switch costs one
+    // reallocation on the next render and keeps the high-water mark at the
+    // larger of the two, which is what a user comparing primitives expects.
+    void free_dynamic_prefix(const std::string& prefix) {
+        std::lock_guard<std::mutex> lock(_mu);
+        for (auto it = _dyn.begin(); it != _dyn.end();) {
+            if (it->first.rfind(prefix, 0) == 0) {
+                if (it->second.slot.ptr) backend::device_free(it->second.slot.ptr);
+                it = _dyn.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     // Free all managed device memory.
     void freeAll() {
         std::lock_guard<std::mutex> lock(_mu);

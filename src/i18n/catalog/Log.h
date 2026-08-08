@@ -1147,6 +1147,21 @@ SS_MSG(err_no_reconstruction,
        "olabilir. Nesnenin çevresinde daha çok fotoğraf çekin ya da kalite "
        "ayarını yükseltin."));
 
+SS_MSG(err_mesh_failed,
+    EN("mesh extraction failed (see the log)."),
+    JA("メッシュの抽出に失敗しました（ログを見てください）。"),
+    ZH_HANS("网格提取失败（请看日志）。"),
+    ZH_HANT("網格擷取失敗（請看日誌）。"),
+    KO("메시 추출에 실패했습니다(로그를 보세요)."),
+    DE("Die Netzerzeugung ist fehlgeschlagen (siehe Protokoll)."),
+    FR("L'extraction du maillage a échoué (voir le journal)."),
+    ES("La extracción de la malla falló (consulta el registro)."),
+    PT("A extração da malha falhou (veja o registro)."),
+    IT("L'estrazione della mesh non è riuscita (vedi il registro)."),
+    NL("Het maken van de mesh is mislukt (zie het logboek)."),
+    RU("Не удалось построить меш (смотрите журнал)."),
+    TR("Ağ çıkarma başarısız oldu (günlüğe bakın)."));
+
 }  // namespace log
 }  // namespace msg
 }  // namespace i18n

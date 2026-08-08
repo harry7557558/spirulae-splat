@@ -1,7 +1,12 @@
 /*
  * Meshing.cu
  *
- * GPU side of the 3DGS surface meshing pipeline (see Meshing.h):
+ * CUDA device side of the 3DGS surface meshing pipeline: the kernels behind
+ * mesh/MeshingDevice.h's first two sections. The host orchestration that
+ * drives them lives in mesh/OccupancyEvaluator.cpp (portable, both backends);
+ * the Vulkan half is backend/vulkan/kernels/Meshing.cpp + shaders/meshing.slang.
+ *
+ * What is here (see Meshing.h for the pipeline):
  *   - Gaussian activation (quat/scale/opacity) and principal-axis extraction.
  *   - 7-points-per-Gaussian point cloud sampling.
  *   - An LBVH over the Gaussians' support (Karras radix tree + coordinate
@@ -15,17 +20,12 @@
  *   - Per-edge crossing-point bisection.
  */
 
-#include "mesh/Meshing.h"
-#include "mesh/MeshingRaster.cuh"
+#include "mesh/MeshingDevice.h"
 
 #include "core/Common.cuh"
 
-#include <cub/cub.cuh>
-
-#include <cstdio>
 #include <cmath>
-#include <vector>
-#include <algorithm>
+#include <cstdint>
 
 namespace meshing {
 
@@ -44,8 +44,10 @@ __device__ __forceinline__ float3 fmax3(float3 a, float3 b) {
 
 // Coordinate remap: identity near the origin, ~ x^(1/k) for large |x|. Applied
 // only to Morton ordering so a few distant splats don't starve the near-origin
-// region of spatial resolution. (Copied from SplatTileIntersector.cu.)
-__host__ __device__ __forceinline__ float remap_coord(float x, float rel_scale) {
+// region of spatial resolution. (Copied from SplatTileIntersector.cu.) The host
+// mirror is MeshingDevice.h's remap_coord, the Slang one meshing.slang's --
+// keep the three identical.
+__device__ __forceinline__ float remap_coord_dev(float x, float rel_scale) {
     constexpr float k = 2.5f;
     return k * sinhf((1.0f / k) * asinhf(x / rel_scale)) * rel_scale;
 }
@@ -84,109 +86,6 @@ __device__ __forceinline__ float atomicMaxF(float* addr, float val) {
     } while (assumed != old);
     return __int_as_float(old);
 }
-
-// ---------------------------------------------------------------------------
-// Host: pick k representative cameras out of C.
-//
-// For small k, uniform-interval (file-order) sampling clusters poorly and is
-// order-dependent. Instead run k-means (farthest-point seeding + Lloyd) on the
-// camera centers and return the MEDOID of each cluster -- the real camera
-// nearest the centroid. Medoids (not centroids) matter: averaging cameras that
-// surround an object lands near the object center, a useless ray origin.
-// Returns the selected positions interleaved (xyz), up to k of them.
-// ---------------------------------------------------------------------------
-static std::vector<float> select_cameras_kmeans(
-    const float* cam, int C, int k, int iters = 25,
-    std::vector<int>* out_idx = nullptr
-) {
-    auto d2 = [&](int a, const float* c) {
-        float dx = cam[3*a]-c[0], dy = cam[3*a+1]-c[1], dz = cam[3*a+2]-c[2];
-        return dx*dx + dy*dy + dz*dz;
-    };
-    std::vector<float> cen(3 * k);
-    // farthest-point (k-center greedy) seeding -- deterministic, good spread
-    std::vector<float> mind(C, 1e30f);
-    int pick = 0;
-    for (int j = 0; j < k; ++j) {
-        cen[3*j] = cam[3*pick]; cen[3*j+1] = cam[3*pick+1]; cen[3*j+2] = cam[3*pick+2];
-        float best = -1.0f; int bi = 0;
-        for (int c = 0; c < C; ++c) {
-            float dd = d2(c, &cen[3*j]);
-            if (dd < mind[c]) mind[c] = dd;
-            if (mind[c] > best) { best = mind[c]; bi = c; }
-        }
-        pick = bi;
-    }
-    // Lloyd iterations
-    std::vector<int> assign(C, 0);
-    for (int it = 0; it < iters; ++it) {
-        bool changed = false;
-        for (int c = 0; c < C; ++c) {
-            int best = 0; float bd = 1e30f;
-            for (int j = 0; j < k; ++j) {
-                float dd = d2(c, &cen[3*j]);
-                if (dd < bd) { bd = dd; best = j; }
-            }
-            if (assign[c] != best) { assign[c] = best; changed = true; }
-        }
-        std::vector<double> sum(3 * k, 0.0);
-        std::vector<int> cnt(k, 0);
-        for (int c = 0; c < C; ++c) {
-            int j = assign[c];
-            sum[3*j] += cam[3*c]; sum[3*j+1] += cam[3*c+1]; sum[3*j+2] += cam[3*c+2];
-            ++cnt[j];
-        }
-        for (int j = 0; j < k; ++j)
-            if (cnt[j] > 0)
-                for (int a = 0; a < 3; ++a) cen[3*j+a] = (float)(sum[3*j+a] / cnt[j]);
-        if (!changed) break;
-    }
-    // medoid per non-empty cluster
-    std::vector<int> medoid(k, -1);
-    std::vector<float> mbest(k, 1e30f);
-    for (int c = 0; c < C; ++c) {
-        int j = assign[c];
-        float dd = d2(c, &cen[3*j]);
-        if (dd < mbest[j]) { mbest[j] = dd; medoid[j] = c; }
-    }
-    std::vector<float> out;
-    for (int j = 0; j < k; ++j)
-        if (medoid[j] >= 0) {
-            int c = medoid[j];
-            out.push_back(cam[3*c]); out.push_back(cam[3*c+1]); out.push_back(cam[3*c+2]);
-            if (out_idx) out_idx->push_back(c);
-        }
-    return out;
-}
-
-// ---------------------------------------------------------------------------
-// Device-side view of the whole scene (Gaussians + LBVH + cameras). POD.
-// ---------------------------------------------------------------------------
-struct GpuScene {
-    // Gaussian SoA, indexed by ORIGINAL splat id [0, N)
-    const float3* __restrict__ mean;
-    const float3* __restrict__ ax0;   // unit principal axes (columns of R)
-    const float3* __restrict__ ax1;
-    const float3* __restrict__ ax2;
-    const float3* __restrict__ invs2; // 1 / sigma^2 per axis
-    const float*  __restrict__ opac;  // sigmoid opacity
-    const float*  __restrict__ k2;    // 2 ln(opac / ALPHA): Mahalanobis cutoff^2
-    const float3* __restrict__ gcol;  // base RGB from SH DC, in [0,1]
-
-    // LBVH over kept Gaussians (leaf index = "kept position" kp)
-    const int*    __restrict__ kept;        // [num_kept] kp -> original id
-    const float3* __restrict__ leafMin;     // [num_kept]
-    const float3* __restrict__ leafMax;     // [num_kept]
-    const int2*   __restrict__ internal;    // [num_kept-1] child links
-    const float3* __restrict__ nodeAABB;    // [2*(num_kept-1)] (min,max) pairs
-    int num_kept;
-
-    // cameras
-    const float3* __restrict__ campos;
-    int num_cameras;
-
-    float iso;
-};
 
 // ---- Gaussian density math -------------------------------------------------
 __device__ __forceinline__ float quad_form(const GpuScene& s, int g, float3 d) {
@@ -612,15 +511,15 @@ __global__ void bvh_prep_kernel(
     leafMax[kp] = m + bound;
 
     float3 rc = make_float3(
-        (remap_coord(m.x, rel_scale) - remap_min.x) * remap_inv_ext.x,
-        (remap_coord(m.y, rel_scale) - remap_min.y) * remap_inv_ext.y,
-        (remap_coord(m.z, rel_scale) - remap_min.z) * remap_inv_ext.z);
+        (remap_coord_dev(m.x, rel_scale) - remap_min.x) * remap_inv_ext.x,
+        (remap_coord_dev(m.y, rel_scale) - remap_min.y) * remap_inv_ext.y,
+        (remap_coord_dev(m.z, rel_scale) - remap_min.z) * remap_inv_ext.z);
     morton[kp] = morton3D(rc);
     iota[kp] = kp;
 }
 
 // Karras 2012 single-level radix tree over the sorted Morton array.
-__global__ void bvh_internal_kernel(
+__global__ void lbvh_internal_kernel(
     int n, const uint64_t* __restrict__ morton, const int* __restrict__ argsort,
     int2* __restrict__ internal, int* __restrict__ parent
 ) {
@@ -655,7 +554,7 @@ __global__ void bvh_internal_kernel(
     #undef delta
 }
 
-__global__ void bvh_initaabb_kernel(int n_internal, float3* nodeAABB) {
+__global__ void lbvh_initaabb_kernel(int n_internal, float3* nodeAABB) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_internal) return;
     nodeAABB[2*i]   = make_float3(1e30f, 1e30f, 1e30f);
@@ -664,7 +563,7 @@ __global__ void bvh_initaabb_kernel(int n_internal, float3* nodeAABB) {
 
 // Bottom-up node AABBs: seed from internal nodes that have a leaf child, then
 // walk to the root via parent pointers (same merge pattern as the codebase).
-__global__ void bvh_aabb_kernel(
+__global__ void lbvh_aabb_kernel(
     int n,
     const int2* __restrict__ internal, const int* __restrict__ parent,
     const float3* __restrict__ leafMin, const float3* __restrict__ leafMax,
@@ -735,438 +634,111 @@ __global__ void bisect_kernel(
     out[3*i+0] = cross.x; out[3*i+1] = cross.y; out[3*i+2] = cross.z;
 }
 
+
 // ---------------------------------------------------------------------------
-// Impl
+// Launchers (mesh/MeshingDevice.h)
 // ---------------------------------------------------------------------------
-template<typename T> static T* dmalloc(size_t n) {
-    T* p = nullptr;
-    CHECK_DEVICE_ERROR(cudaMalloc(&p, n * sizeof(T)));
-    return p;
-}
-
-struct OccupancyEvaluator::Impl {
-    MeshingConfig cfg;
-    int N = 0;
-
-    float3 *mean=nullptr, *ax0=nullptr, *ax1=nullptr, *ax2=nullptr, *invs2=nullptr;
-    float  *opac=nullptr, *radius=nullptr, *k2=nullptr;
-    float3 *gcol=nullptr;
-    int    *valid=nullptr;
-
-    int *kept = nullptr;
-    int num_kept = 0;
-
-    // LBVH
-    float3 *leafMin=nullptr, *leafMax=nullptr, *nodeAABB=nullptr;
-    int2   *internal=nullptr;
-
-    float3 *campos = nullptr;
-    int num_cameras = 0;
-
-    // Camera intrinsics for the rasterize-and-sample path. Host-side copies kept
-    // for the lifetime of the evaluator (the caller's tensors may be freed after
-    // construction); uploaded to device lazily by the render path (Phase 2+).
-    // Empty when the static (LBVH) occupancy path is in use.
-    std::vector<float> cam_viewmats;  // [C*16] row-major world->cam
-    std::vector<float> cam_intrins;   // [C*4]  fx, fy, cx, cy
-    std::vector<float> cam_dist;      // [C*10] engine distortion layout
-    std::vector<int> cam_widths;      // [C] per-camera image width
-    std::vector<int> cam_heights;     // [C] per-camera image height
-    std::string cam_model;
-    bool use_render = false;          // cams.valid() && cameras present
-    RenderContext* rctx = nullptr;    // built when use_render (MeshingRaster.cu)
-    std::vector<int> render_cam_indices;  // camera subset rendered per batch
-
-    ~Impl() {
-        if (rctx) render_context_destroy(rctx);
-        for (void* p : {(void*)mean,(void*)ax0,(void*)ax1,(void*)ax2,(void*)invs2,
-                        (void*)opac,(void*)radius,(void*)k2,(void*)gcol,(void*)valid,(void*)kept,
-                        (void*)leafMin,(void*)leafMax,(void*)nodeAABB,(void*)internal,
-                        (void*)campos})
-            if (p) cudaFree(p);
-    }
-
-    GpuScene make_scene() const {
-        GpuScene s{};
-        s.mean=mean; s.ax0=ax0; s.ax1=ax1; s.ax2=ax2; s.invs2=invs2;
-        s.opac=opac; s.k2=k2; s.gcol=gcol;
-        s.kept=kept; s.leafMin=leafMin; s.leafMax=leafMax;
-        s.internal=internal; s.nodeAABB=nodeAABB; s.num_kept=num_kept;
-        s.campos=campos; s.num_cameras=num_cameras;
-        s.iso = cfg.iso;
-        return s;
-    }
-};
-
-OccupancyEvaluator::OccupancyEvaluator(
-    const float* means, const float* quats,
-    const float* log_scales, const float* logit_opac, const float* features_dc,
-    int num_splats,
-    const float* cam_pos, int num_cameras,
-    const CameraParams& cams,
-    const MeshingConfig& cfg
+void launch_activate(
+    int N,
+    const float* means, const float* quats, const float* logsc,
+    const float* logit, const float* fdc,
+    float3* mean, float3* ax0, float3* ax1, float3* ax2, float3* invs2,
+    float* opac, float* radius, float* k2, int* valid, float3* gcol
 ) {
-    impl_ = new Impl();
-    impl_->cfg = cfg;
-    impl_->N = num_splats;
-    const int N = num_splats;
-
-    // ---- upload + activate ----
-    float *d_means = dmalloc<float>((size_t)N*3), *d_quats = dmalloc<float>((size_t)N*4);
-    float *d_logsc = dmalloc<float>((size_t)N*3), *d_logit = dmalloc<float>((size_t)N);
-    float *d_fdc = dmalloc<float>((size_t)N*3);
-    cudaMemcpy(d_means, means, sizeof(float)*N*3, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_quats, quats, sizeof(float)*N*4, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_logsc, log_scales, sizeof(float)*N*3, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_logit, logit_opac, sizeof(float)*N, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_fdc, features_dc, sizeof(float)*N*3, cudaMemcpyHostToDevice);
-
-    impl_->mean=dmalloc<float3>(N); impl_->ax0=dmalloc<float3>(N);
-    impl_->ax1=dmalloc<float3>(N);  impl_->ax2=dmalloc<float3>(N);
-    impl_->invs2=dmalloc<float3>(N); impl_->opac=dmalloc<float>(N);
-    impl_->radius=dmalloc<float>(N); impl_->k2=dmalloc<float>(N);
-    impl_->gcol=dmalloc<float3>(N); impl_->valid=dmalloc<int>(N);
-
+    if (N <= 0) return;
     activate_kernel<<<_LAUNCH_ARGS_1D(N, 256)>>>(
-        N, d_means, d_quats, d_logsc, d_logit, d_fdc,
-        impl_->mean, impl_->ax0, impl_->ax1, impl_->ax2, impl_->invs2,
-        impl_->opac, impl_->radius, impl_->k2, impl_->valid, impl_->gcol);
-    CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-    cudaFree(d_means); cudaFree(d_quats); cudaFree(d_logsc); cudaFree(d_logit); cudaFree(d_fdc);
-
-    // ---- kept list + scene bbox (host) ----
-    std::vector<float> h_mean(N*3);
-    std::vector<int> h_valid(N);
-    cudaMemcpy(h_mean.data(), impl_->mean, sizeof(float)*N*3, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_valid.data(), impl_->valid, sizeof(int)*N, cudaMemcpyDeviceToHost);
-
-    std::vector<int> kept; kept.reserve(N);
-    float bmin[3]={1e30f,1e30f,1e30f}, bmax[3]={-1e30f,-1e30f,-1e30f};
-    double csum[3]={0,0,0};
-    for (int i = 0; i < N; ++i) {
-        if (!h_valid[i]) continue;
-        kept.push_back(i);
-        for (int a = 0; a < 3; ++a) {
-            float m = h_mean[3*i+a];
-            bmin[a] = std::min(bmin[a], m); bmax[a] = std::max(bmax[a], m);
-            csum[a] += m;
-        }
-    }
-    impl_->num_kept = (int)kept.size();
-    num_kept_ = impl_->num_kept;
-    num_points_ = impl_->num_kept * 7;
-    if (impl_->num_kept == 0)
-        throw std::runtime_error("meshing: no Gaussians above the opacity threshold");
-
-    // rel_scale ~ RMS spread of centroids (core scene scale for the remap)
-    double cmean[3] = {csum[0]/impl_->num_kept, csum[1]/impl_->num_kept, csum[2]/impl_->num_kept};
-    double var = 0.0;
-    for (int kp = 0; kp < impl_->num_kept; ++kp) {
-        int i = kept[kp];
-        for (int a = 0; a < 3; ++a) { double d = h_mean[3*i+a] - cmean[a]; var += d*d; }
-    }
-    float rel_scale = (float)std::max(1e-6, std::sqrt(var / (3.0 * impl_->num_kept)));
-
-    impl_->kept = dmalloc<int>(impl_->num_kept);
-    cudaMemcpy(impl_->kept, kept.data(), sizeof(int)*impl_->num_kept, cudaMemcpyHostToDevice);
-
-    if (cfg.verbose)
-        printf("[meshing] %d/%d Gaussians kept, %d points, rel_scale=%.4g\n",
-               impl_->num_kept, N, num_points_, rel_scale);
-
-    // ---- LBVH build ----
-    const int n = impl_->num_kept;
-    impl_->leafMin = dmalloc<float3>(n);
-    impl_->leafMax = dmalloc<float3>(n);
-    uint64_t* d_morton = dmalloc<uint64_t>(n);
-    int* d_iota = dmalloc<int>(n);
-
-    // remapped root bounds (remap is monotone per-axis, so remap of the real
-    // bbox bounds the remapped centroids)
-    float3 remap_min = make_float3(0,0,0), remap_inv_ext = make_float3(1,1,1);
-    {
-        float rmin[3], rext[3];
-        for (int a = 0; a < 3; ++a) {
-            float lo = remap_coord(bmin[a], rel_scale);
-            float hi = remap_coord(bmax[a], rel_scale);
-            rmin[a] = lo;
-            rext[a] = std::max(hi - lo, 1e-12f);
-        }
-        remap_min = make_float3(rmin[0], rmin[1], rmin[2]);
-        remap_inv_ext = make_float3(1.0f/rext[0], 1.0f/rext[1], 1.0f/rext[2]);
-    }
-
-    bvh_prep_kernel<<<_LAUNCH_ARGS_1D(n, 256)>>>(
-        n, impl_->kept, impl_->mean, impl_->ax0, impl_->ax1, impl_->ax2,
-        impl_->invs2, impl_->k2, remap_min, remap_inv_ext, rel_scale,
-        impl_->leafMin, impl_->leafMax, d_morton, d_iota);
+        N, means, quats, logsc, logit, fdc,
+        mean, ax0, ax1, ax2, invs2, opac, radius, k2, valid, gcol);
     CHECK_DEVICE_ERROR(cudaGetLastError());
-
-    if (n >= 2) {
-        // sort (morton, iota) -> argsort
-        uint64_t* d_morton_s = dmalloc<uint64_t>(n);
-        int* d_argsort = dmalloc<int>(n);
-        CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
-            d_morton, d_morton_s, d_iota, d_argsort, n);
-        CHECK_DEVICE_ERROR(cudaGetLastError());
-
-        impl_->internal = dmalloc<int2>(n - 1);
-        int* d_parent = dmalloc<int>(n - 1);
-        cudaMemset(d_parent, 0xff, sizeof(int)*(n - 1));
-        bvh_internal_kernel<<<_LAUNCH_ARGS_1D(n - 1, 256)>>>(
-            n, d_morton_s, d_argsort, impl_->internal, d_parent);
-        CHECK_DEVICE_ERROR(cudaGetLastError());
-
-        impl_->nodeAABB = dmalloc<float3>(2*(n - 1));
-        bvh_initaabb_kernel<<<_LAUNCH_ARGS_1D(n - 1, 256)>>>(n - 1, impl_->nodeAABB);
-        bvh_aabb_kernel<<<_LAUNCH_ARGS_1D(n - 1, 256)>>>(
-            n, impl_->internal, d_parent, impl_->leafMin, impl_->leafMax, impl_->nodeAABB);
-        CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-
-        cudaFree(d_morton_s); cudaFree(d_argsort); cudaFree(d_parent);
-    }
-    cudaFree(d_morton); cudaFree(d_iota);
-
-    // ---- cameras: keep all, else select max_cameras representatives ----
-    if (cam_pos != nullptr && num_cameras > 0) {
-        std::vector<float> cams;
-        std::vector<int>& sel = impl_->render_cam_indices;
-        auto max_cameras = cfg.max_cameras;
-        if (max_cameras <= 0)
-            max_cameras = num_cameras;
-        if (num_cameras <= max_cameras) {
-            cams.assign(cam_pos, cam_pos + 3 * num_cameras);
-            sel.resize(num_cameras);
-            for (int c = 0; c < num_cameras; ++c) sel[c] = c;
-        } else {
-            cams = select_cameras_kmeans(cam_pos, num_cameras, max_cameras, 25, &sel);
-        }
-        impl_->num_cameras = (int)(cams.size()/3);
-        impl_->campos = dmalloc<float3>(impl_->num_cameras);
-        cudaMemcpy(impl_->campos, cams.data(), sizeof(float)*cams.size(), cudaMemcpyHostToDevice);
-        if (cfg.verbose)
-            printf("[meshing] using %d/%d cameras (k-means medoids, dataset occupancy)\n",
-                   impl_->num_cameras, num_cameras);
-    }
-
-    // ---- camera intrinsics (rasterize-and-sample path) ----
-    // Stored host-side now; the render path uploads + uses them in Phase 2+.
-    // For now this only records availability so generate_mesh can branch.
-    if (cams.valid() && num_cameras > 0) {
-        impl_->cam_viewmats.assign(cams.viewmats, cams.viewmats + (size_t)num_cameras * 16);
-        impl_->cam_intrins.assign(cams.intrins, cams.intrins + (size_t)num_cameras * 4);
-        impl_->cam_dist.assign((size_t)num_cameras * 10, 0.0f);
-        if (cams.dist_coeffs)
-            impl_->cam_dist.assign(cams.dist_coeffs, cams.dist_coeffs + (size_t)num_cameras * 10);
-        impl_->cam_widths.assign(cams.widths, cams.widths + num_cameras);
-        impl_->cam_heights.assign(cams.heights, cams.heights + num_cameras);
-        impl_->cam_model  = cams.camera_model;
-        impl_->use_render = true;
-        impl_->rctx = render_context_create(
-            means, quats, log_scales, logit_opac, features_dc, N,
-            impl_->cam_viewmats.data(), impl_->cam_intrins.data(),
-            impl_->cam_dist.empty() ? nullptr : impl_->cam_dist.data(),
-            num_cameras, impl_->cam_widths.data(), impl_->cam_heights.data(),
-            cams.camera_model, cfg.carve_k);
-        if (cfg.verbose) {
-            int w0 = impl_->cam_widths[0], h0 = impl_->cam_heights[0];
-            bool uniform = true;
-            for (int c = 1; c < num_cameras; ++c)
-                if (impl_->cam_widths[c] != w0 || impl_->cam_heights[c] != h0) { uniform = false; break; }
-            if (uniform)
-                printf("[meshing] camera intrinsics: %dx%d, model=%s (render path ready)\n",
-                       w0, h0, cams.camera_model.c_str());
-            else
-                printf("[meshing] camera intrinsics: per-camera resolution, model=%s (render path ready)\n",
-                       cams.camera_model.c_str());
-        }
-    }
 }
 
-OccupancyEvaluator::~OccupancyEvaluator() { delete impl_; }
-
-bool OccupancyEvaluator::debug_render_moments(
-    int cam_idx, std::vector<float>& out, int& width, int& height
+void launch_pointcloud(
+    int num_kept, const int* kept,
+    const float3* mean, const float3* ax0, const float3* ax1,
+    const float3* ax2, const float3* invs2, const float* k2, float* out
 ) {
-    if (!impl_->rctx) return false;
-    width = render_context_width(impl_->rctx, cam_idx);
-    height = render_context_height(impl_->rctx, cam_idx);
-    size_t npix = (size_t)width * height;
-    float3* d_mom = dmalloc<float3>(npix);
-    render_camera_moments(impl_->rctx, cam_idx, d_mom);
-    out.resize(npix * 3);
-    cudaMemcpy(out.data(), d_mom, sizeof(float3) * npix, cudaMemcpyDeviceToHost);
-    cudaFree(d_mom);
-    return true;
+    if (num_kept <= 0) return;
+    pointcloud_kernel<<<_LAUNCH_ARGS_1D(num_kept, 256)>>>(
+        num_kept, kept, mean, ax0, ax1, ax2, invs2, k2, out);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
-void OccupancyEvaluator::generate_point_cloud(std::vector<float>& xyz_out) {
-    long n = (long)impl_->num_kept * 7;
-    xyz_out.resize((size_t)n * 3);
-    float* d_out = dmalloc<float>((size_t)n * 3);
-    pointcloud_kernel<<<_LAUNCH_ARGS_1D(impl_->num_kept, 256)>>>(
-        impl_->num_kept, impl_->kept,
-        impl_->mean, impl_->ax0, impl_->ax1, impl_->ax2, impl_->invs2, impl_->k2, d_out);
-    CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-    cudaMemcpy(xyz_out.data(), d_out, sizeof(float)*n*3, cudaMemcpyDeviceToHost);
-    cudaFree(d_out);
-}
-
-void OccupancyEvaluator::evaluate(const float* xyz, int n, float* occ_out) {
-    if (n <= 0) return;
-    float* d_xyz = dmalloc<float>((size_t)n*3);
-    float* d_occ = dmalloc<float>(n);
-    cudaMemcpy(d_xyz, xyz, sizeof(float)*n*3, cudaMemcpyHostToDevice);
-    if (impl_->use_render && !impl_->render_cam_indices.empty()) {
-        render_evaluate_occupancy(impl_->rctx, impl_->render_cam_indices.data(),
-            (int)impl_->render_cam_indices.size(), d_xyz, n, d_occ);
-        // protect surfaces with the static density term (BVH-equivalent field)
-        float* d_s = dmalloc<float>(n);
-        GpuScene s = impl_->make_scene();
-        occ_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_xyz, n, d_s, 0);
-        occ_combine_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(n, d_occ, d_s);
-        CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-        cudaFree(d_s);
-    } else {
-        GpuScene s = impl_->make_scene();
-        int dynamic = impl_->num_cameras > 0 ? 1 : 0;
-        occ_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_xyz, n, d_occ, dynamic);
-        CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-    }
-    cudaMemcpy(occ_out, d_occ, sizeof(float)*n, cudaMemcpyDeviceToHost);
-    cudaFree(d_xyz); cudaFree(d_occ);
-}
-
-void OccupancyEvaluator::bisect_edges(
-    const float* cloud_xyz,
-    const int32_t* edge_a, const int32_t* edge_b,
-    const float* occ_a, const float* occ_b,
-    int n_edges, float* xyz_out
+void launch_bvh_prep(
+    int num_kept, const int* kept,
+    const float3* mean, const float3* ax0, const float3* ax1,
+    const float3* ax2, const float3* invs2, const float* k2,
+    float3 remap_min, float3 remap_inv_ext, float rel_scale,
+    float3* leafMin, float3* leafMax, uint64_t* morton, int* iota
 ) {
-    if (n_edges <= 0) return;
-
-    // Render path: host-driven bisection (each iteration renders all cameras and
-    // samples the midpoint batch), so the occupancy field is consistent with
-    // evaluate(). Finishes with a linear interpolation between the final bracket.
-    if (impl_->use_render && !impl_->render_cam_indices.empty()) {
-        const float iso = impl_->cfg.iso;
-        const int* idx = impl_->render_cam_indices.data();
-        const int ncam = (int)impl_->render_cam_indices.size();
-        std::vector<float> lo((size_t)n_edges*3), hi((size_t)n_edges*3);
-        for (int e = 0; e < n_edges; ++e) {
-            int a = edge_a[e], b = edge_b[e];
-            for (int t = 0; t < 3; ++t) {
-                lo[3*e+t] = cloud_xyz[3*a+t];
-                hi[3*e+t] = cloud_xyz[3*b+t];
-            }
-        }
-        std::vector<float> occ_lo(occ_a, occ_a + n_edges);
-        std::vector<float> occ_hi(occ_b, occ_b + n_edges);
-        std::vector<float> mid((size_t)n_edges*3), occ_mid(n_edges);
-        float* d_mid = dmalloc<float>((size_t)n_edges*3);
-        float* d_occ = dmalloc<float>(n_edges);
-        float* d_occ_s = dmalloc<float>(n_edges);
-        GpuScene s = impl_->make_scene();
-        for (int it = 0; it < impl_->cfg.bisection_iters; ++it) {
-            for (size_t k = 0; k < (size_t)n_edges*3; ++k) mid[k] = 0.5f*(lo[k]+hi[k]);
-            cudaMemcpy(d_mid, mid.data(), sizeof(float)*(size_t)n_edges*3, cudaMemcpyHostToDevice);
-            render_evaluate_occupancy(impl_->rctx, idx, ncam, d_mid, n_edges, d_occ);
-            occ_kernel<<<_LAUNCH_ARGS_1D(n_edges, 128)>>>(s, d_mid, n_edges, d_occ_s, 0);
-            occ_combine_kernel<<<_LAUNCH_ARGS_1D(n_edges, 128)>>>(n_edges, d_occ, d_occ_s);
-            CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-            cudaMemcpy(occ_mid.data(), d_occ, sizeof(float)*n_edges, cudaMemcpyDeviceToHost);
-            for (int e = 0; e < n_edges; ++e) {
-                bool mid_neg = (occ_mid[e] - iso) < 0.0f;
-                bool lo_neg  = (occ_lo[e]  - iso) < 0.0f;
-                if (mid_neg == lo_neg) {
-                    for (int t = 0; t < 3; ++t) lo[3*e+t] = mid[3*e+t];
-                    occ_lo[e] = occ_mid[e];
-                } else {
-                    for (int t = 0; t < 3; ++t) hi[3*e+t] = mid[3*e+t];
-                    occ_hi[e] = occ_mid[e];
-                }
-            }
-        }
-        for (int e = 0; e < n_edges; ++e) {
-            float denom = occ_hi[e] - occ_lo[e];
-            float t = (fabsf(denom) > 1e-12f) ? (iso - occ_lo[e]) / denom : 0.5f;
-            t = std::min(std::max(t, 0.0f), 1.0f);
-            for (int a = 0; a < 3; ++a)
-                xyz_out[3*e+a] = lo[3*e+a] + t * (hi[3*e+a] - lo[3*e+a]);
-        }
-        cudaFree(d_mid); cudaFree(d_occ); cudaFree(d_occ_s);
-        return;
-    }
-
-    long ncloud = (long)num_points_;
-    float* d_cloud = dmalloc<float>((size_t)ncloud*3);
-    cudaMemcpy(d_cloud, cloud_xyz, sizeof(float)*ncloud*3, cudaMemcpyHostToDevice);
-    int* d_ea = dmalloc<int>(n_edges); int* d_eb = dmalloc<int>(n_edges);
-    float* d_oa = dmalloc<float>(n_edges); float* d_ob = dmalloc<float>(n_edges);
-    float* d_out = dmalloc<float>((size_t)n_edges*3);
-    cudaMemcpy(d_ea, edge_a, sizeof(int)*n_edges, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_eb, edge_b, sizeof(int)*n_edges, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_oa, occ_a, sizeof(float)*n_edges, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_ob, occ_b, sizeof(float)*n_edges, cudaMemcpyHostToDevice);
-    GpuScene s = impl_->make_scene();
-    int dynamic = impl_->num_cameras > 0 ? 1 : 0;
-    bisect_kernel<<<_LAUNCH_ARGS_1D(n_edges, 128)>>>(
-        s, d_cloud, d_ea, d_eb, d_oa, d_ob, n_edges, impl_->cfg.bisection_iters, dynamic, d_out);
-    CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-    cudaMemcpy(xyz_out, d_out, sizeof(float)*n_edges*3, cudaMemcpyDeviceToHost);
-    cudaFree(d_cloud); cudaFree(d_ea); cudaFree(d_eb);
-    cudaFree(d_oa); cudaFree(d_ob); cudaFree(d_out);
+    if (num_kept <= 0) return;
+    bvh_prep_kernel<<<_LAUNCH_ARGS_1D(num_kept, 256)>>>(
+        num_kept, kept, mean, ax0, ax1, ax2, invs2, k2,
+        remap_min, remap_inv_ext, rel_scale, leafMin, leafMax, morton, iota);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
-void OccupancyEvaluator::colorize(const float* verts, int n, float* rgb_out) {
+void launch_lbvh_internal(
+    int n, const uint64_t* morton_sorted, const int* argsort,
+    int2* internal, int* parent
+) {
+    if (n < 2) return;
+    lbvh_internal_kernel<<<_LAUNCH_ARGS_1D(n - 1, 256)>>>(
+        n, morton_sorted, argsort, internal, parent);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+void launch_lbvh_init_aabb(int n_internal, float3* nodeAABB) {
+    if (n_internal <= 0) return;
+    lbvh_initaabb_kernel<<<_LAUNCH_ARGS_1D(n_internal, 256)>>>(n_internal, nodeAABB);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+void launch_lbvh_aabb(
+    int n, const int2* internal, const int* parent,
+    const float3* leafMin, const float3* leafMax, float3* nodeAABB
+) {
+    if (n < 2) return;
+    lbvh_aabb_kernel<<<_LAUNCH_ARGS_1D(n - 1, 256)>>>(
+        n, internal, parent, leafMin, leafMax, nodeAABB);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+void launch_occ(const GpuScene& s, const float* pts, int n, float* occ,
+                int dynamic) {
     if (n <= 0) return;
-    float* d_v = dmalloc<float>((size_t)n*3);
-    float* d_c = dmalloc<float>((size_t)n*3);
-    cudaMemcpy(d_v, verts, sizeof(float)*n*3, cudaMemcpyHostToDevice);
-    GpuScene s = impl_->make_scene();
-    if (impl_->use_render && !impl_->render_cam_indices.empty()) {
-        render_evaluate_color(impl_->rctx, impl_->render_cam_indices.data(),
-            (int)impl_->render_cam_indices.size(), d_v, n, d_c);
-        colorize_fallback_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_v, n, d_c);
-        CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-    } else {
-        int dynamic = impl_->num_cameras > 0 ? 1 : 0;
-        colorize_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, d_v, n, d_c, dynamic);
-        CHECK_DEVICE_ERROR(cudaDeviceSynchronize());
-    }
-    cudaMemcpy(rgb_out, d_c, sizeof(float)*n*3, cudaMemcpyDeviceToHost);
-    cudaFree(d_v); cudaFree(d_c);
+    occ_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, pts, n, occ, dynamic);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
-void OccupancyEvaluator::view_texel_density(const float* verts, int n, float* dens_out) {
-    if (n <= 0) return;
-    if (!(impl_->use_render && !impl_->render_cam_indices.empty())) {
-        std::fill(dens_out, dens_out + n, 0.0f);
-        return;
-    }
-    float* d_v = dmalloc<float>((size_t)n*3);
-    float* d_d = dmalloc<float>(n);
-    cudaMemcpy(d_v, verts, sizeof(float)*(size_t)n*3, cudaMemcpyHostToDevice);
-    render_evaluate_view_density(impl_->rctx, impl_->render_cam_indices.data(),
-        (int)impl_->render_cam_indices.size(), d_v, n, d_d);
-    cudaMemcpy(dens_out, d_d, sizeof(float)*(size_t)n, cudaMemcpyDeviceToHost);
-    cudaFree(d_v); cudaFree(d_d);
-}
-
-bool OccupancyEvaluator::has_render_cameras() const {
-    return impl_->use_render && impl_->rctx != nullptr;
-}
-
-void OccupancyEvaluator::cull_unseen_vertices(
-    const float* verts, int n, const int* faces, int n_faces, unsigned char* visible_out
+void launch_bisect(
+    const GpuScene& s, const float* cloud,
+    const int* ea, const int* eb, const float* oa, const float* ob,
+    int n, int iters, int dynamic, float* out
 ) {
     if (n <= 0) return;
-    if (!has_render_cameras()) {
-        // No camera intrinsics: visibility is undefined, keep everything.
-        std::fill(visible_out, visible_out + n, (unsigned char)1);
-        return;
-    }
-    render_cull_unseen_vertices(impl_->rctx, verts, n, faces, n_faces, visible_out);
+    bisect_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(
+        s, cloud, ea, eb, oa, ob, n, iters, dynamic, out);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+void launch_colorize(const GpuScene& s, const float* verts, int n, float* rgb,
+                     int dynamic) {
+    if (n <= 0) return;
+    colorize_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, verts, n, rgb, dynamic);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+void launch_occ_combine(int n, float* occ, const float* occ_static) {
+    if (n <= 0) return;
+    occ_combine_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(n, occ, occ_static);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+void launch_colorize_fallback(const GpuScene& s, const float* verts, int n,
+                              float* rgb) {
+    if (n <= 0) return;
+    colorize_fallback_kernel<<<_LAUNCH_ARGS_1D(n, 128)>>>(s, verts, n, rgb);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 } // namespace meshing

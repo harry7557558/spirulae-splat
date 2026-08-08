@@ -2,6 +2,8 @@
 
 #include "app/gui/Subprocess.h"
 
+#include <cctype>
+
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -147,6 +149,7 @@ int run_process(const std::vector<std::string>& argv,
     CloseHandle(rd);
     return killed ? kCancelled : (int)code;
 }
+
 
 bool command_exists(const std::string& exe) {
     if (exe.find('\\') != std::string::npos || exe.find('/') != std::string::npos) {
@@ -298,5 +301,30 @@ bool open_url(const std::string& url) {
 }
 
 #endif
+
+// Platform-independent: argv assembly is the same everywhere.
+std::vector<std::string> split_args(const std::string& s) {
+    std::vector<std::string> out;
+    std::string cur;
+    bool in_quote = false, have = false;
+    char quote = 0;
+    for (char c : s) {
+        if (in_quote) {
+            if (c == quote) in_quote = false;
+            else cur += c;
+        } else if (c == '"' || c == '\'') {
+            in_quote = true;
+            quote = c;
+            have = true;
+        } else if (std::isspace((unsigned char)c)) {
+            if (have) { out.push_back(cur); cur.clear(); have = false; }
+        } else {
+            cur += c;
+            have = true;
+        }
+    }
+    if (have) out.push_back(cur);
+    return out;
+}
 
 }  // namespace gui

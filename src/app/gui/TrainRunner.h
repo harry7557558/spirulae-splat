@@ -62,6 +62,11 @@ public:
 
     Phase phase() const { return _phase.load(); }
     bool engine_ready() const { return _engine_ready.load(); }
+    // The engine is a process-global singleton, and something else (a splat
+    // file in the viewer, the mesh preview) has just reset it -- which takes
+    // this session's engine state with it. Nothing may attach a renderer to
+    // the session after that, so engine_ready() goes back to false.
+    void note_engine_taken() { _engine_ready = false; }
     std::string error();
 
     // Valid between load_dataset()/start_training() calls; see lifetime

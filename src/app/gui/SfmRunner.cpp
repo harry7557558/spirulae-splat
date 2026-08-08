@@ -48,33 +48,6 @@ const char* pick(const char* const (&table)[N], int i, int fallback = 0) {
     return table[(i >= 0 && i < N) ? i : fallback];
 }
 
-// Splits a free-form flag string the way a shell would for the simple cases:
-// whitespace separated, with "quoted runs" kept together. Enough for
-// `--max-error 2 --masks "/path/with space"`.
-std::vector<std::string> split_args(const std::string& s) {
-    std::vector<std::string> out;
-    std::string cur;
-    bool in_quote = false, have = false;
-    char quote = 0;
-    for (char c : s) {
-        if (in_quote) {
-            if (c == quote) in_quote = false;
-            else cur += c;
-        } else if (c == '"' || c == '\'') {
-            in_quote = true;
-            quote = c;
-            have = true;
-        } else if (std::isspace((unsigned char)c)) {
-            if (have) { out.push_back(cur); cur.clear(); have = false; }
-        } else {
-            cur += c;
-            have = true;
-        }
-    }
-    if (have) out.push_back(cur);
-    return out;
-}
-
 // The mapper only writes a model when it finishes, so any model on disk is
 // from a completed run.
 bool has_model(const fs::path& sparse) {

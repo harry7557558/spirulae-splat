@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * MeshingRaster.cuh
+ * MeshingRaster.h
  *
  * Rasterize-and-sample render driver for the meshing pipeline. Holds device
  * copies of the (raw) splat parameters and the camera intrinsics, and renders
@@ -9,8 +9,13 @@
  * (moment / color) rasterization. The per-camera render replaces the
  * per-point/per-camera LBVH traversal on the dataset path.
  *
- * Opaque RenderContext so Meshing.cu (which owns the OccupancyEvaluator) can
- * drive rendering without pulling in the heavy Tensor / projection headers.
+ * Opaque RenderContext so OccupancyEvaluator.cpp (which owns the evaluator)
+ * can drive rendering without pulling in the heavy Tensor / projection
+ * headers.
+ *
+ * The driver itself (mesh/MeshingRasterHost.cpp) is portable; its per-point
+ * sampling kernels are declared in mesh/MeshingDevice.h and implemented per
+ * backend.
  */
 
 #include <cstdint>
@@ -28,12 +33,16 @@ struct RenderContext;
 //   dist     : [num_cameras*10] engine distortion layout (may be null => zeros)
 //   widths   : [num_cameras] per-camera image width   (HOST array)
 //   heights  : [num_cameras] per-camera image height  (HOST array)
+//   verbose  : report per-camera progress on the long render loops. Each of
+//       them renders EVERY selected camera once, which on a large capture is
+//       minutes of silence otherwise -- and the progress display upstream has
+//       nothing to move until the phase ends.
 RenderContext* render_context_create(
     const float* means, const float* quats, const float* log_scales,
     const float* logit_opac, const float* features_dc, int num_splats,
     const float* viewmats, const float* intrins, const float* dist,
     int num_cameras, const int* widths, const int* heights,
-    const std::string& camera_model, int carve_k);
+    const std::string& camera_model, int carve_k, bool verbose);
 
 void render_context_destroy(RenderContext*);
 

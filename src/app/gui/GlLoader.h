@@ -65,6 +65,9 @@
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE         0x812F
 #endif
+#ifndef GL_TEXTURE0
+#define GL_TEXTURE0              0x84C0
+#endif
 
 namespace glx {
 
@@ -113,5 +116,8 @@ extern void (*GenRenderbuffers)(GLsizei n, GLuint* renderbuffers);
 extern void (*BindRenderbuffer)(GLenum target, GLuint renderbuffer);
 extern void (*RenderbufferStorage)(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
 extern void (*DeleteRenderbuffers)(GLsizei n, const GLuint* renderbuffers);
+// GL 1.3; the Linux OpenGL ABI only guarantees 1.2, so it is loaded like the
+// rest rather than called directly.
+extern void (*ActiveTexture)(GLenum texture);
 
 }  // namespace glx

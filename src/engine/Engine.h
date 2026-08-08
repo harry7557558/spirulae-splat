@@ -118,6 +118,17 @@ void forward_3dgs(
     int dist_type = 0  // DistortionType (0=None,1=D,2=RGB_D,3=DN,4=RGB_DN)
 );
 
+// Hand back the per-splat SCREEN buffers the last forward filled (the
+// projection's output layout). They are re-acquired, correctly shaped, by the
+// next forward_3dgs -- so this is safe at any point between renders, and it
+// is what makes switching primitive in a viewer cost the LARGER of the two
+// layouts rather than their union: the layouts share pool slot names but not
+// shapes, and the pool only grows.
+//
+// Not for the training loop: there the shape never changes, and handing the
+// buffers back every iteration would trade a free reallocation for a real one.
+void engine_release_screen_buffers();
+
 // --- Loss + backward (combined) ---
 
 std::map<std::string, float> engine_compute_loss_backward(

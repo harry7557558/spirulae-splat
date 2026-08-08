@@ -255,8 +255,13 @@ struct RenderWorker::Impl {
         bool want_dist = cfg.distortion_reg_on &&
                          q.key.find("distortion") != std::string::npos;
         bool want_median = cfg.output_median;
-        int sh_deg = hooks.current_step
-            ? hooks.current_step() / std::max(cfg.sh_degree_warmup_every, 1) : 100;
+        int sh_deg = q.sh_degree >= 0
+            ? q.sh_degree
+            : (hooks.current_step
+                   ? hooks.current_step() / std::max(cfg.sh_degree_warmup_every, 1)
+                   : 100);
+        const std::string& primitive =
+            q.primitive.empty() ? cfg.primitive : q.primitive;
 
         std::vector<float> rgb(npx * 3), depth(npx), Ts(npx);
         std::vector<float> median(want_median ? npx : 0);
@@ -273,7 +278,7 @@ struct RenderWorker::Impl {
                               tvp(vm, 4, {1, 4, 4}),
                               tvp(intr, 4, {1, 4}),
                               tvp(dist0, 4, {1, 10}));
-            forward_3dgs(cfg.primitive, sh_deg, cfg.packed,
+            forward_3dgs(primitive, sh_deg, cfg.packed,
                          want_median, want_dist ? 2 : 0);
             engine_copy_render_to_host(
                 tvp(rgb.data(), 4, {1, H, W, 3}),

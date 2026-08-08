@@ -8,6 +8,8 @@
 #include "data/DatasetParser.h"
 #include "engine/Engine.h"
 #include "i18n/catalog/Gui.h"
+#include "app/TrainerCore.h"
+#include "mesh/MeshImport.h"
 
 #include <algorithm>
 #include <cmath>
@@ -100,9 +102,13 @@ void SplatViewer::close() {
     }
     _state = State::Idle;
     _num_splats = 0;
+    _num_faces = 0;
     std::lock_guard<std::mutex> lk(_mu);
     _path.clear();
     _file.clear();
+    // A baked 4096^2 atlas is 48 MB; do not hold it until the next open.
+    _mesh = meshing::MeshData();
+    _points = ParsedDataset();
 }
 
 std::string SplatViewer::error() {
@@ -124,6 +130,41 @@ ViewerRenderConfig SplatViewer::render_config() {
 std::string SplatViewer::scene_key() {
     std::lock_guard<std::mutex> lk(_mu);
     return _file + ":" + std::to_string(_num_splats.load());
+}
+
+std::string SplatViewer::gamut() const {
+    std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(_mu));
+    return _gamut;
+}
+bool SplatViewer::linear_color() const {
+    std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(_mu));
+    return _linear;
+}
+
+void SplatViewer::set_color_space(const char* gamut, bool linear) {
+    if (!_owns_engine.load()) return;
+    const std::string g = gamut ? gamut : "";
+    const bool on = linear || !g.empty();
+    {
+        std::lock_guard<std::mutex> lk(_engine_mutex);
+        // Splat side only: there is no GT image to convert here.
+        auto vec = [](const spirula::Mat3f& m) {
+            return std::vector<float>(m.begin(), m.end());
+        };
+        engine_init_color_space(
+            on, linear,
+            on ? vec(spirula::gamut_to_rec709(g)) : std::vector<float>{},
+            false, false, std::vector<float>{});
+    }
+    std::lock_guard<std::mutex> lk(_mu);
+    _gamut = g;
+    _linear = linear;
+}
+
+void SplatViewer::release_screen_buffers() {
+    if (!_owns_engine.load()) return;
+    std::lock_guard<std::mutex> lk(_engine_mutex);
+    engine_release_screen_buffers();
 }
 
 ViewerHooks SplatViewer::make_hooks() {
@@ -156,6 +197,56 @@ void SplatViewer::run(std::string path) {
         _state = State::Failed;
     };
     try {
+        // A mesh is not a checkpoint, so it is resolved before
+        // find_splat_ply (which looks for step-*.ckpt directories) gets a
+        // chance to misread the path. A .ply only counts as a mesh when its
+        // header declares faces -- otherwise it is a splat or point cloud.
+        if (meshing::is_mesh_path(path) &&
+            (fs::path(path).extension() != ".ply" ||
+             meshing::ply_is_mesh(path))) {
+            {
+                std::lock_guard<std::mutex> lk(_mu);
+                _file = path;
+            }
+            log(format(msg::viewer_reading, {path}));
+            meshing::MeshData m;
+            std::string err;
+            if (!meshing::read_mesh(path, m, err)) return fail(err);
+            meshing::mesh_compute_normals(m);
+
+            // The mesh lives in the model's own coordinates; the viewport
+            // navigates a normalized frame centred on it and one unit across,
+            // exactly as for a splat file.
+            std::vector<float> xyz(m.V.size() * 3);
+            for (size_t i = 0; i < m.V.size(); i++)
+                for (int a = 0; a < 3; a++) xyz[3 * i + a] = m.V[i][a];
+            float center[3], radius;
+            scene_extent(xyz, (int64_t)m.V.size(), center, radius);
+            const float unit = view_distance_for(radius);
+            const float inv = unit > 1e-20f ? 1.0f / unit : 1.0f;
+            const int64_t nv = (int64_t)m.V.size();
+            const int64_t nf = (int64_t)m.F.size();
+            {
+                std::lock_guard<std::mutex> lk(_mu);
+                _mesh = std::move(m);
+                // model -> normalized: subtract the centre, divide by the
+                // unit (the inverse of the train_to_normalized similarity
+                // the splat path builds).
+                const float t[12] = {inv, 0, 0, -inv * center[0],
+                                     0, inv, 0, -inv * center[1],
+                                     0, 0, inv, -inv * center[2]};
+                for (int i = 0; i < 12; i++) _mesh_t2n[i] = t[i];
+            }
+            _kind = Kind::Mesh;
+            _num_splats = nv;
+            _num_faces = nf;
+            _sh_degree = 0;
+            log(format(msg::viewer_loaded_mesh,
+                       {(long long)nv, (long long)nf}));
+            _state = State::Ready;
+            return;
+        }
+
         auto [ply, run_dir] = spirula::find_splat_ply(path);
         {
             std::lock_guard<std::mutex> lk(_mu);
@@ -211,6 +302,15 @@ void SplatViewer::run(std::string path) {
             } catch (const std::exception& e) {
                 log(format(msg::viewer_run_config_unreadable, {e.what()}));
             }
+        }
+
+        // The run's own color space, so the model opens looking the way it
+        // was trained rather than the way an untagged PLY defaults to.
+        const spirula::ColorResolution color = spirula::resolve_color(cfg);
+        {
+            std::lock_guard<std::mutex> lk(_mu);
+            _gamut = color.splat_gamut;
+            _linear = color.splat_linear;
         }
 
         float center[3], radius;
@@ -273,6 +373,15 @@ void SplatViewer::run(std::string path) {
             // A file has no grid extent of its own; the model's does, and it
             // is the frame the overlay is drawn in.
             engine_viewer_set_grid(radius, unit);
+            const bool cs_on = color.splat_linear || !color.splat_gamut.empty();
+            auto vec = [](const spirula::Mat3f& m) {
+                return std::vector<float>(m.begin(), m.end());
+            };
+            engine_init_color_space(
+                cs_on, color.splat_linear,
+                cs_on ? vec(spirula::gamut_to_rec709(color.splat_gamut))
+                      : std::vector<float>{},
+                false, false, std::vector<float>{});
         }
 
         _num_splats = c.num;

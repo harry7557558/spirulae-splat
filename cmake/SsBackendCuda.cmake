@@ -13,6 +13,13 @@ find_package(CUDAToolkit REQUIRED)
 # ---------------------------------------------------------------------------
 ss_collect_sources(SPLAT_SOURCES)
 
+# The CUDA half of the backend seam (backend/common/SortScan.h). src/backend/**
+# is not listed in cmake/sources.txt on purpose -- the backend targets own it --
+# so the CUDA branch adds its own here, exactly as SsBackendVulkan.cmake globs
+# backend/vulkan/.
+file(GLOB SS_CUDA_BACKEND_SOURCES CONFIGURE_DEPENDS ${SS_SRC}/backend/cuda/*.cu)
+list(APPEND SPLAT_SOURCES ${SS_CUDA_BACKEND_SOURCES})
+
 # ---------------------------------------------------------------------------
 # Detect CUDA architectures
 # ---------------------------------------------------------------------------

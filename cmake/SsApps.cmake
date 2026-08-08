@@ -68,12 +68,11 @@ if(SS_BUILD_CLI)
     list(APPEND SS_TOOL_DEFS SS_TOOL_TRAIN=1)
 
     # ---- mesh extraction ----
-    # CUDA-only: the Vulkan backend stubs the meshing kernels
-    # (meshing::OccupancyEvaluator), so the tool would throw at startup.
-    if(NOT SS_BACKEND STREQUAL "vulkan")
-        list(APPEND SS_TOOL_SOURCES ${SS_SRC}/app/cli/mesh_main.cpp)
-        list(APPEND SS_TOOL_DEFS SS_TOOL_MESH=1)
-    endif()
+    # Both backends: the pipeline's host side is portable
+    # (mesh/OccupancyEvaluator.cpp) and its kernels exist on each
+    # (mesh/Meshing.cu, backend/vulkan/kernels/Meshing.cpp).
+    list(APPEND SS_TOOL_SOURCES ${SS_SRC}/app/cli/mesh_main.cpp)
+    list(APPEND SS_TOOL_DEFS SS_TOOL_MESH=1)
 endif()
 
 if((SS_BUILD_CLI OR SS_BUILD_GUI) AND SS_BUILD_SFM)

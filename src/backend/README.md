@@ -94,7 +94,7 @@ Engine*.cpp  ──►  backend/api/*.h          (launch declarations, generated
 
 ## Not covered by the generated API (hand-written headers, port separately)
 
-`Meshing.h` / `MeshingRaster.cuh`, `BilagridBindings.h` (sample / TV-loss /
+`Meshing.h` / `MeshingRaster.h`, `BilagridBindings.h` (sample / TV-loss /
 fused-Adam family), `Quantile`, `ColorShiftReg`, `RasterizationMomentsFwd`
 (no export markers), `CheckpointIO.h`, `DataManager.h`, plus the
 engine-internal exports in `EngineColorSpace.cpp`. Same portability rules

@@ -7,6 +7,8 @@
 
 #include "mesh/MeshExport.h"
 
+#include <filesystem>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -485,6 +487,47 @@ std::string check_export_support(const MeshFormatSpec& spec, MeshColorMode mode)
     if (spec.jpeg && mode != MeshColorMode::Texture)
         return "'" + spec.token() + "': a texture encoding was given but the "
                "color mode is not 'texture'";
+    return "";
+}
+
+std::vector<std::string> mesh_output_paths(const MeshFormatSpec& spec,
+                                           MeshColorMode mode,
+                                           const std::string& base_path) {
+    const bool tex = mode == MeshColorMode::Texture;
+    std::vector<std::string> out;
+    out.push_back(base_path + "." + spec.fmt);
+    if (spec.fmt == "obj" && tex) {
+        out.push_back(base_path + ".mtl");
+        out.push_back(base_path + "." + spec.tex_ext());
+    } else if (spec.fmt == "gltf") {
+        out.push_back(base_path + ".bin");
+        if (tex) out.push_back(base_path + "." + spec.tex_ext());
+    }
+    return out;
+}
+
+std::string check_mesh_outputs_safe(const std::vector<MeshFormatSpec>& specs,
+                                    MeshColorMode mode,
+                                    const std::string& base_path,
+                                    const std::vector<std::string>& inputs) {
+    std::error_code ec;
+    auto same = [&](const std::string& a, const std::string& b) {
+        if (a == b) return true;
+        if (!std::filesystem::exists(a, ec) ||
+            !std::filesystem::exists(b, ec))
+            return std::filesystem::weakly_canonical(a, ec) ==
+                   std::filesystem::weakly_canonical(b, ec);
+        return std::filesystem::equivalent(a, b, ec) && !ec;
+    };
+    for (const MeshFormatSpec& spec : specs)
+        for (const std::string& o : mesh_output_paths(spec, mode, base_path))
+            for (const std::string& in : inputs) {
+                if (in.empty()) continue;
+                if (same(o, in))
+                    return "refusing to write " + o +
+                           ": that is this run's own input. Pass a different "
+                           "--output.";
+            }
     return "";
 }
 

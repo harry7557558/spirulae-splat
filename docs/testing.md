@@ -4,9 +4,11 @@ Three suites, in descending order of how much you should trust them.
 
 ## 1. Native cross-backend parity tests (the important ones)
 
-`src/backend/tests/*.cpp` — currently 17 tools covering projection (fwd, bwd,
+`src/backend/tests/*.cpp` — currently 18 tools covering projection (fwd, bwd,
 quant-grad), rasterization bwd, tile intersect, warp, FPBO, optimizer (general
-+ geometry), densify, per-pixel train, PPISP, bilagrid, multi-scale loss, plus
++ geometry), densify, per-pixel train, PPISP, bilagrid, multi-scale loss,
+meshing (activation, LBVH, occupancy/bisection/color, moment raster, the
+per-camera samplers and the visibility cull), plus
 `backend/tests/engine/` which drives the *real* engine end to end
 (render parity, train parity). `backend/vulkan/tests/` adds 3 Vulkan-only
 smoke tests (runtime, pipeline, sort/scan).

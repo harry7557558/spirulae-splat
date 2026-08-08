@@ -285,6 +285,21 @@ int spirula_mesh_main(int argc, char** argv) {
         auto [splat_ply_s, run_dir_s] = spirula::find_splat_ply(o.checkpoint);
         const fs::path splat_ply(splat_ply_s), run_dir(run_dir_s);
         std::printf("[meshing] loading %s\n", splat_ply.string().c_str());
+
+        // ---- output base, and the one check that must happen FIRST ----
+        // The output must not be one of the inputs: meshing a `foo.ply` with
+        // `--output foo` would replace the model being meshed, and that model
+        // is usually the only copy of itself. Checked before a single byte is
+        // read, so the refusal costs nothing and can never come after the
+        // pipeline has already earned the right to destroy it.
+        std::string out_base = o.output;
+        if (out_base.empty())
+            out_base = (splat_ply.parent_path() / "mesh").string();
+        {
+            std::string err = meshing::check_mesh_outputs_safe(
+                specs, mode, out_base, {splat_ply.string()});
+            if (!err.empty()) throw std::runtime_error(err);
+        }
         // Meshing reads geometry and DC colour only; skipping f_rest
         // skips most of the file.
         spirula::SplatCloud splats =
@@ -324,10 +339,6 @@ int spirula_mesh_main(int argc, char** argv) {
 
         o.m.iso = o.iso.value_or(using_cameras ? 0.5f : 0.2f);
 
-        // ---- output base ----
-        std::string out_base = o.output;
-        if (out_base.empty())
-            out_base = (splat_ply.parent_path() / "mesh").string();
 
         meshing::CameraParams cp;
         if (using_cameras) {

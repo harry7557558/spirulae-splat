@@ -532,30 +532,37 @@ SS_MSG(home_from_video_help,
        "olur."));
 
 SS_MSG(home_drop_hint,
-    EN("...or drop a dataset folder, photo folders, video files or a .ply model "
-       "anywhere in this window"),
-    JA("…または、データセットフォルダ・写真フォルダ・動画ファイル・PLYモデルを"
-       "このウィンドウのどこかにドロップしてください"),
-    ZH_HANS("…或者把数据集文件夹、照片文件夹、视频文件或 .ply 模型拖到这个窗口的任意位置"),
-    ZH_HANT("…或者把資料集資料夾、相片資料夾、影片檔或 .ply 模型拖到這個視窗的任意位置"),
-    KO("…또는 데이터셋 폴더, 사진 폴더, 동영상 파일, .ply 모델을 이 창 아무 곳에나 "
-       "끌어다 놓으세요"),
-    DE("… oder ziehen Sie einen Datensatzordner, Fotoordner, Videodateien oder ein "
-       ".ply-Modell irgendwo in dieses Fenster"),
+    EN("...or drop a dataset folder, photo folders, video files, or a model or "
+       "mesh file anywhere in this window"),
+    JA("…または、データセットフォルダ・写真フォルダ・動画ファイル・モデルや"
+       "メッシュのファイルをこのウィンドウのどこかにドロップしてください"),
+    ZH_HANS("…或者把数据集文件夹、照片文件夹、视频文件，或者模型和网格文件拖到"
+            "这个窗口的任意位置"),
+    ZH_HANT("…或者把資料集資料夾、相片資料夾、影片檔，或者模型和網格檔案拖到"
+            "這個視窗的任意位置"),
+    KO("…또는 데이터셋 폴더, 사진 폴더, 동영상 파일, 모델이나 메시 파일을 이 창 "
+       "아무 곳에나 끌어다 놓으세요"),
+    DE("… oder ziehen Sie einen Datensatzordner, Fotoordner, Videodateien oder "
+       "eine Modell- oder Netzdatei irgendwo in dieses Fenster"),
     FR("… ou déposez un dossier de jeu de données, des dossiers de photos, des "
-       "fichiers vidéo ou un modèle .ply n'importe où dans cette fenêtre"),
-    ES("… o arrastre una carpeta de conjunto de datos, carpetas de fotos, archivos "
-       "de vídeo o un modelo .ply a cualquier punto de esta ventana"),
-    PT("… ou arraste uma pasta de conjunto de dados, pastas de fotos, arquivos de "
-       "vídeo ou um modelo .ply para qualquer ponto desta janela"),
-    IT("… oppure trascini una cartella di set di dati, cartelle di foto, file video "
-       "o un modello .ply in un punto qualsiasi di questa finestra"),
-    NL("… of sleep een datasetmap, fotomappen, videobestanden of een .ply-model "
-       "ergens in dit venster"),
-    RU("… или перетащите папку набора данных, папки с фотографиями, видеофайлы или "
-       "модель .ply в любое место этого окна"),
-    TR("… ya da bir veri kümesi klasörünü, fotoğraf klasörlerini, video dosyalarını "
-       "veya bir .ply modelini bu pencerenin herhangi bir yerine bırakın"));
+       "fichiers vidéo, ou un fichier de modèle ou de maillage n'importe où "
+       "dans cette fenêtre"),
+    ES("… o arrastre una carpeta de conjunto de datos, carpetas de fotos, "
+       "archivos de vídeo, o un archivo de modelo o de malla a cualquier punto "
+       "de esta ventana"),
+    PT("… ou arraste uma pasta de conjunto de dados, pastas de fotos, arquivos "
+       "de vídeo, ou um arquivo de modelo ou de malha para qualquer ponto "
+       "desta janela"),
+    IT("… oppure trascina una cartella di dataset, cartelle di foto, file video, "
+       "o un file di modello o di mesh in un punto qualsiasi di questa "
+       "finestra"),
+    NL("… of sleep een datasetmap, fotomappen, videobestanden, of een model- of "
+       "meshbestand ergens in dit venster"),
+    RU("…или перетащите папку набора данных, папки с фотографиями, видеофайлы, "
+       "либо файл модели или меша в любое место этого окна"),
+    TR("…ya da bir veri kümesi klasörünü, fotoğraf klasörlerini, video "
+       "dosyalarını veya bir model ya da ağ dosyasını bu pencerenin herhangi "
+       "bir yerine bırakın"));
 
 SS_MSG(home_recent,
     EN("Recent"),        JA("最近使った項目"), ZH_HANS("最近"),   ZH_HANT("最近"),
@@ -2904,6 +2911,1014 @@ SS_MSG_EN(chk_output_unusable,
 SS_MSG_EN(chk_output_is_file, "The output path is a file: {0}");
 SS_MSG_EN(chk_unsupported, "This preset asks for something the trainer does not do: {0}");
 SS_MSG_EN(chk_no_device, "No usable GPU was found; nothing can train.");
+
+
+// ---------------------------------------------------------------------------
+// Mesh: the "create mesh from splats" screen, and viewing a mesh file
+// ---------------------------------------------------------------------------
+
+SS_MSG(home_make_mesh,
+    EN("Create a mesh from splats"),
+    JA("スプラットからメッシュを作る"),
+    ZH_HANS("从高斯点生成网格"),
+    ZH_HANT("從高斯點產生網格"),
+    KO("스플랫에서 메시 만들기"),
+    DE("Netz aus Splats erzeugen"),
+    FR("Créer un maillage à partir des splats"),
+    ES("Crear una malla a partir de los splats"),
+    PT("Criar uma malha a partir dos splats"),
+    IT("Crea una mesh dagli splat"),
+    NL("Mesh maken van splats"),
+    RU("Построить меш из сплатов"),
+    TR("Splat'lardan ağ oluştur"));
+
+SS_MSG(home_make_mesh_help,
+    EN("Turn a trained model into a triangle surface you can open in Blender, "
+       "3D print, or drop into a game engine. Uses the training photos when "
+       "they are still on disk, which makes the surface much cleaner."),
+    JA("学習済みモデルを三角形の面に変換します。Blenderで開く、3Dプリントする、"
+       "ゲームエンジンに読み込む、といった使い方ができます。学習に使った写真が"
+       "残っていればそれも使い、面がずっときれいになります。"),
+    ZH_HANS("把训练好的模型变成三角面片，可以在 Blender 里打开、3D 打印，或者放进"
+            "游戏引擎。如果训练用的照片还在，也会一起使用，表面会干净很多。"),
+    ZH_HANT("把訓練好的模型變成三角面片，可以在 Blender 裡開啟、3D 列印，或者放進"
+            "遊戲引擎。如果訓練用的相片還在，也會一起使用，表面會乾淨很多。"),
+    KO("학습한 모델을 삼각형 표면으로 바꿉니다. Blender에서 열거나 3D 프린트하거나 "
+       "게임 엔진에 넣을 수 있습니다. 학습에 쓴 사진이 남아 있으면 함께 사용해서 "
+       "표면이 훨씬 깨끗해집니다."),
+    DE("Macht aus einem trainierten Modell eine Dreiecksfläche, die sich in "
+       "Blender öffnen, 3D-drucken oder in eine Spiel-Engine laden lässt. "
+       "Nutzt die Trainingsfotos, wenn sie noch da sind -- das macht die "
+       "Oberfläche deutlich sauberer."),
+    FR("Transforme un modèle entraîné en une surface de triangles, à ouvrir "
+       "dans Blender, à imprimer en 3D ou à charger dans un moteur de jeu. "
+       "Utilise les photos d'entraînement si elles sont encore là, ce qui rend "
+       "la surface bien plus propre."),
+    ES("Convierte un modelo entrenado en una superficie de triángulos que "
+       "puedes abrir en Blender, imprimir en 3D o cargar en un motor de "
+       "juego. Usa las fotos de entrenamiento si siguen ahí, lo que deja la "
+       "superficie mucho más limpia."),
+    PT("Transforma um modelo treinado em uma superfície de triângulos que você "
+       "pode abrir no Blender, imprimir em 3D ou carregar em um motor de "
+       "jogo. Usa as fotos de treinamento se ainda estiverem lá, o que deixa a "
+       "superfície bem mais limpa."),
+    IT("Trasforma un modello addestrato in una superficie di triangoli da "
+       "aprire in Blender, stampare in 3D o caricare in un motore di gioco. "
+       "Usa le foto di addestramento se ci sono ancora, e la superficie viene "
+       "molto più pulita."),
+    NL("Maakt van een getraind model een driehoeksoppervlak dat je in Blender "
+       "kunt openen, 3D kunt printen of in een game-engine kunt laden. Gebruikt "
+       "de trainingsfoto's als die er nog zijn; dat maakt het oppervlak veel "
+       "schoner."),
+    RU("Превращает обученную модель в треугольную поверхность: её можно открыть "
+       "в Blender, напечатать на 3D-принтере или загрузить в игровой движок. "
+       "Если фотографии обучения ещё на диске, они тоже используются, и "
+       "поверхность выходит гораздо чище."),
+    TR("Eğitilmiş bir modeli, Blender'da açabileceğiniz, 3B yazdırabileceğiniz "
+       "ya da bir oyun motoruna alabileceğiniz üçgen yüzeye dönüştürür. Eğitim "
+       "fotoğrafları hâlâ diskteyse onları da kullanır ve yüzey çok daha temiz "
+       "çıkar."));
+
+SS_MSG(viewport_shading,
+    EN("Shading"),
+    JA("陰影"),
+    ZH_HANS("明暗"),
+    ZH_HANT("明暗"),
+    KO("음영"),
+    DE("Schattierung"),
+    FR("Ombrage"),
+    ES("Sombreado"),
+    PT("Sombreamento"),
+    IT("Ombreggiatura"),
+    NL("Schaduw"),
+    RU("Затенение"),
+    TR("Gölgeleme"));
+
+SS_MSG(viewport_flat_shading,
+    EN("Flat"),
+    JA("フラット"),
+    ZH_HANS("平面"),
+    ZH_HANT("平面"),
+    KO("평면"),
+    DE("Flach"),
+    FR("Plat"),
+    ES("Plano"),
+    PT("Plano"),
+    IT("Piatto"),
+    NL("Vlak"),
+    RU("Плоское"),
+    TR("Düz"));
+
+SS_MSG(viewport_flat_shading_help,
+    EN("Light each triangle by its own normal, so the individual faces show."),
+    JA("三角形ごとの法線で陰影を付けます。面のひとつひとつが見えます。"),
+    ZH_HANS("按每个三角形自己的法线上光，可以看清一个个的面。"),
+    ZH_HANT("按每個三角形自己的法線上光，可以看清一個個的面。"),
+    KO("삼각형마다 자기 법선으로 빛을 줍니다. 면 하나하나가 보입니다."),
+    DE("Beleuchtet jedes Dreieck mit seiner eigenen Normalen, sodass die "
+       "einzelnen Flächen sichtbar werden."),
+    FR("Éclaire chaque triangle avec sa propre normale : les facettes "
+       "deviennent visibles."),
+    ES("Ilumina cada triángulo con su propia normal, así se ven las caras una "
+       "a una."),
+    PT("Ilumina cada triângulo com a sua própria normal, então as faces "
+       "aparecem uma a uma."),
+    IT("Illumina ogni triangolo con la sua normale, così si vedono le singole "
+       "facce."),
+    NL("Belicht elke driehoek met zijn eigen normaal, zodat de losse vlakken "
+       "zichtbaar worden."),
+    RU("Освещает каждый треугольник по его собственной нормали, так что видны "
+       "отдельные грани."),
+    TR("Her üçgeni kendi normaliyle aydınlatır, böylece yüzler tek tek "
+       "görünür."));
+
+SS_MSG(viewport_mesh_color,
+    EN("Color"),
+    JA("色"),
+    ZH_HANS("颜色"),
+    ZH_HANT("顏色"),
+    KO("색"),
+    DE("Farbe"),
+    FR("Couleur"),
+    ES("Color"),
+    PT("Cor"),
+    IT("Colore"),
+    NL("Kleur"),
+    RU("Цвет"),
+    TR("Renk"));
+
+SS_MSG(viewport_mesh_color_help,
+    EN("Show the mesh's own color. Off leaves plain grey, which is the best "
+       "way to look at the shape."),
+    JA("メッシュ自身の色を表示します。オフにすると無地のグレーになり、形を"
+       "見るのに一番向いています。"),
+    ZH_HANS("显示网格自带的颜色。关掉就是纯灰色，最适合看形状。"),
+    ZH_HANT("顯示網格自帶的顏色。關掉就是純灰色，最適合看形狀。"),
+    KO("메시 자체의 색을 보여 줍니다. 끄면 단색 회색이 되어 모양을 보기에 가장 "
+       "좋습니다."),
+    DE("Zeigt die eigene Farbe des Netzes. Aus bleibt schlichtes Grau -- am "
+       "besten geeignet, um die Form zu beurteilen."),
+    FR("Affiche la couleur propre du maillage. Désactivé, tout reste gris "
+       "uni, ce qui est le mieux pour juger la forme."),
+    ES("Muestra el color propio de la malla. Desactivado queda gris liso, que "
+       "es lo mejor para ver la forma."),
+    PT("Mostra a cor própria da malha. Desligado fica cinza liso, que é o "
+       "melhor para ver a forma."),
+    IT("Mostra il colore proprio della mesh. Spento resta grigio uniforme, "
+       "che è il modo migliore per guardare la forma."),
+    NL("Toont de eigen kleur van de mesh. Uit blijft het effen grijs, en dat "
+       "is het beste om de vorm te bekijken."),
+    RU("Показывает собственный цвет меша. Выключено -- ровный серый, на "
+       "котором форма читается лучше всего."),
+    TR("Ağın kendi rengini gösterir. Kapalıyken düz gri kalır; biçimi "
+       "incelemek için en iyisi budur."));
+
+SS_MSG(viewport_primitive_help,
+    EN("How each Gaussian is drawn. 3DGS is what most models are trained as; "
+       "Mip antialiases; 3DGUT evaluates the Gaussian along each pixel's ray "
+       "and is the honest one for fisheye and 360 views."),
+    JA("ガウシアンの描き方です。3DGSはほとんどのモデルの学習方法、Mipは"
+       "アンチエイリアスあり、3DGUTはピクセルごとの光線に沿って評価するもので、"
+       "魚眼や360度の表示ではこれが正確です。"),
+    ZH_HANS("每个高斯怎么画。3DGS 是大多数模型的训练方式；Mip 会抗锯齿；"
+            "3DGUT 沿每个像素的光线求值，鱼眼和 360 度视图下最准确。"),
+    ZH_HANT("每個高斯怎麼畫。3DGS 是大多數模型的訓練方式；Mip 會抗鋸齒；"
+            "3DGUT 沿每個像素的光線求值，魚眼和 360 度檢視下最準確。"),
+    KO("가우시안을 어떻게 그릴지입니다. 3DGS는 대부분의 모델이 학습된 방식, "
+       "Mip은 계단 현상을 줄이고, 3DGUT는 픽셀마다 광선을 따라 계산해서 어안과 "
+       "360도 화면에서 가장 정확합니다."),
+    DE("Wie jede Gauß-Verteilung gezeichnet wird. 3DGS ist, womit die meisten "
+       "Modelle trainiert werden; Mip glättet Kanten; 3DGUT wertet entlang des "
+       "Strahls jedes Pixels aus und ist bei Fisheye- und 360-Grad-Ansichten "
+       "das ehrliche Verfahren."),
+    FR("Comment chaque gaussienne est dessinée. 3DGS est ce avec quoi la "
+       "plupart des modèles sont entraînés ; Mip lisse les bords ; 3DGUT "
+       "évalue le long du rayon de chaque pixel et c'est le procédé honnête "
+       "en fisheye et en 360 degrés."),
+    ES("Cómo se dibuja cada gaussiana. 3DGS es con lo que se entrena la "
+       "mayoría de los modelos; Mip suaviza los bordes; 3DGUT evalúa a lo "
+       "largo del rayo de cada píxel y es el honesto en ojo de pez y 360 "
+       "grados."),
+    PT("Como cada gaussiana é desenhada. 3DGS é com o que a maioria dos "
+       "modelos é treinada; Mip suaviza as bordas; 3DGUT avalia ao longo do "
+       "raio de cada pixel e é o honesto em olho de peixe e 360 graus."),
+    IT("Come viene disegnata ogni gaussiana. 3DGS è ciò con cui viene "
+       "addestrata la maggior parte dei modelli; Mip attenua i bordi; 3DGUT "
+       "valuta lungo il raggio di ogni pixel ed è quello onesto in fisheye e "
+       "a 360 gradi."),
+    NL("Hoe elke Gaussiaan wordt getekend. 3DGS is waarmee de meeste modellen "
+       "getraind zijn; Mip haalt kartelranden weg; 3DGUT rekent langs de "
+       "straal van elke pixel en is de eerlijke keuze bij fisheye en 360 "
+       "graden."),
+    RU("Как рисуется каждая гауссиана. 3DGS -- то, на чём обучено большинство "
+       "моделей; Mip сглаживает края; 3DGUT считает вдоль луча каждого "
+       "пикселя и честнее всего работает на «рыбьем глазе» и в 360 градусах."),
+    TR("Her gauss'un nasıl çizileceği. 3DGS çoğu modelin eğitildiği yöntem; "
+       "Mip kenar pürüzlerini giderir; 3DGUT her pikselin ışını boyunca hesap "
+       "yapar ve balıkgözü ile 360 derece görünümlerde dürüst olanıdır."));
+
+SS_MSG(viewport_sh_degree,
+    EN("SH"),
+    JA("SH"),
+    ZH_HANS("SH"),
+    ZH_HANT("SH"),
+    KO("SH"),
+    DE("SH"),
+    FR("SH"),
+    ES("SH"),
+    PT("SH"),
+    IT("SH"),
+    NL("SH"),
+    RU("SH"),
+    TR("SH"));
+
+SS_MSG(viewport_sh_degree_help,
+    EN("Spherical-harmonic bands to use. 0 is the flat base color; higher "
+       "bands add the view-dependent shine the model learned."),
+    JA("使う球面調和関数の次数です。0は下地の色だけ、次数を上げると学習した"
+       "見る角度による艶が加わります。"),
+    ZH_HANS("用到第几阶球谐。0 只有底色；阶数越高，越能加上模型学到的随视角变化"
+            "的高光。"),
+    ZH_HANT("用到第幾階球諧。0 只有底色；階數越高，越能加上模型學到的隨視角變化"
+            "的高光。"),
+    KO("사용할 구면조화 차수입니다. 0은 바탕색만이고, 차수를 올리면 모델이 배운 "
+       "시점에 따른 광택이 더해집니다."),
+    DE("Wie viele Kugelflächenfunktions-Bänder verwendet werden. 0 ist die "
+       "flache Grundfarbe; höhere Bänder fügen den gelernten "
+       "blickwinkelabhängigen Glanz hinzu."),
+    FR("Nombre de bandes d'harmoniques sphériques utilisées. 0 donne la "
+       "couleur de base ; les bandes supérieures ajoutent les reflets "
+       "dépendant du point de vue que le modèle a appris."),
+    ES("Cuántas bandas de armónicos esféricos se usan. 0 es el color base "
+       "plano; las bandas altas añaden el brillo según el ángulo que el "
+       "modelo aprendió."),
+    PT("Quantas bandas de harmônicos esféricos usar. 0 é a cor base plana; as "
+       "bandas altas acrescentam o brilho conforme o ângulo que o modelo "
+       "aprendeu."),
+    IT("Quante bande di armoniche sferiche usare. 0 è il colore di base "
+       "piatto; le bande più alte aggiungono i riflessi che dipendono dal "
+       "punto di vista appresi dal modello."),
+    NL("Hoeveel banden sferische harmonischen worden gebruikt. 0 is de vlakke "
+       "basiskleur; hogere banden voegen de aangeleerde glans toe die van de "
+       "kijkhoek afhangt."),
+    RU("Сколько полос сферических гармоник использовать. 0 -- плоский базовый "
+       "цвет; старшие полосы добавляют выученный блик, зависящий от угла "
+       "обзора."),
+    TR("Kaç küresel harmonik bandının kullanılacağı. 0 düz taban rengidir; "
+       "üst bantlar modelin öğrendiği, bakış açısına bağlı parlaklığı ekler."));
+
+SS_MSG(viewport_gamut,
+    EN("Gamut"),
+    JA("色域"),
+    ZH_HANS("色域"),
+    ZH_HANT("色域"),
+    KO("색역"),
+    DE("Farbraum"),
+    FR("Gamut"),
+    ES("Gama"),
+    PT("Gama"),
+    IT("Gamut"),
+    NL("Gamut"),
+    RU("Гамма"),
+    TR("Renk gamı"));
+
+SS_MSG(viewport_gamut_help,
+    EN("The color space the model's values are in. Set it to what the run was "
+       "trained with; the render is converted to sRGB for the screen. "
+       "'Linear' says the values are linear light rather than already "
+       "gamma-encoded."),
+    JA("モデルの値がどの色空間かです。学習時の設定に合わせてください。表示用に"
+       "sRGBへ変換されます。「リニア」は、ガンマ済みではなくリニアな光の値だと"
+       "いう指定です。"),
+    ZH_HANS("模型数值所处的色彩空间。设成训练时用的那个；显示前会转成 sRGB。"
+            "“线性”表示数值是线性光，而不是已经做过伽马编码的。"),
+    ZH_HANT("模型數值所處的色彩空間。設成訓練時用的那個；顯示前會轉成 sRGB。"
+            "「線性」表示數值是線性光，而不是已經做過伽馬編碼的。"),
+    KO("모델 값이 어느 색 공간인지입니다. 학습할 때 쓴 것으로 맞추세요. 화면용 "
+       "sRGB로 변환됩니다. '선형'은 값이 감마가 적용된 값이 아니라 선형 광량이라는 "
+       "뜻입니다."),
+    DE("Der Farbraum, in dem die Werte des Modells liegen. Stellen Sie ihn auf "
+       "das ein, womit der Lauf trainiert wurde; für den Bildschirm wird nach "
+       "sRGB konvertiert. „Linear“ heißt, die Werte sind lineares Licht und "
+       "nicht bereits gammakodiert."),
+    FR("L'espace colorimétrique des valeurs du modèle. Réglez-le sur celui de "
+       "l'entraînement ; le rendu est converti en sRGB pour l'écran. "
+       "« Linéaire » signifie que les valeurs sont de la lumière linéaire et "
+       "non déjà encodées en gamma."),
+    ES("El espacio de color en el que están los valores del modelo. Ponlo "
+       "como se entrenó; el render se convierte a sRGB para la pantalla. "
+       "«Lineal» indica que los valores son luz lineal y no ya codificados "
+       "en gamma."),
+    PT("O espaço de cor em que estão os valores do modelo. Coloque como foi "
+       "treinado; o render é convertido para sRGB na tela. «Linear» indica "
+       "que os valores são luz linear e não já codificados em gama."),
+    IT("Lo spazio colore in cui stanno i valori del modello. Impostalo come "
+       "l'addestramento; il render viene convertito in sRGB per lo schermo. "
+       "«Lineare» significa che i valori sono luce lineare e non già "
+       "codificati in gamma."),
+    NL("De kleurruimte waarin de waarden van het model staan. Zet hem op "
+       "waarmee de run getraind is; de render wordt voor het scherm naar sRGB "
+       "omgezet. 'Lineair' betekent dat de waarden lineair licht zijn en niet "
+       "al gamma-gecodeerd."),
+    RU("Цветовое пространство значений модели. Поставьте то, с которым шло "
+       "обучение; для экрана рендер переводится в sRGB. «Линейно» означает, "
+       "что значения -- линейный свет, а не уже гамма-кодированные."),
+    TR("Modelin değerlerinin bulunduğu renk uzayı. Eğitimde ne kullanıldıysa "
+       "onu seçin; render ekran için sRGB'ye çevrilir. «Doğrusal», değerlerin "
+       "gama uygulanmış değil doğrusal ışık olduğunu söyler."));
+
+SS_MSG(viewport_linear_color,
+    EN("Linear"),
+    JA("リニア"),
+    ZH_HANS("线性"),
+    ZH_HANT("線性"),
+    KO("선형"),
+    DE("Linear"),
+    FR("Linéaire"),
+    ES("Lineal"),
+    PT("Linear"),
+    IT("Lineare"),
+    NL("Lineair"),
+    RU("Линейно"),
+    TR("Doğrusal"));
+
+SS_MSG(viewport_gamut_none,
+    EN("Rec.709 / sRGB"),
+    JA("Rec.709 / sRGB"),
+    ZH_HANS("Rec.709 / sRGB"),
+    ZH_HANT("Rec.709 / sRGB"),
+    KO("Rec.709 / sRGB"),
+    DE("Rec.709 / sRGB"),
+    FR("Rec.709 / sRGB"),
+    ES("Rec.709 / sRGB"),
+    PT("Rec.709 / sRGB"),
+    IT("Rec.709 / sRGB"),
+    NL("Rec.709 / sRGB"),
+    RU("Rec.709 / sRGB"),
+    TR("Rec.709 / sRGB"));
+
+SS_MSG(mesh_drop_hint,
+    EN("...or drop the model, or the photo folder, anywhere in this window"),
+    JA("…または、モデルや写真フォルダをこのウィンドウのどこかにドロップして"
+       "ください"),
+    ZH_HANS("…或者把模型或照片文件夹拖到这个窗口的任意位置"),
+    ZH_HANT("…或者把模型或相片資料夾拖到這個視窗的任意位置"),
+    KO("…또는 모델이나 사진 폴더를 이 창 아무 곳에나 끌어다 놓으세요"),
+    DE("… oder ziehen Sie das Modell oder den Fotoordner irgendwo in dieses "
+       "Fenster"),
+    FR("… ou déposez le modèle, ou le dossier de photos, n'importe où dans "
+       "cette fenêtre"),
+    ES("… o arrastre el modelo, o la carpeta de fotos, a cualquier punto de "
+       "esta ventana"),
+    PT("… ou arraste o modelo, ou a pasta de fotos, para qualquer ponto desta "
+       "janela"),
+    IT("… oppure trascina il modello, o la cartella delle foto, in un punto "
+       "qualsiasi di questa finestra"),
+    NL("… of sleep het model, of de fotomap, ergens in dit venster"),
+    RU("…или перетащите модель либо папку с фотографиями в любое место этого "
+       "окна"),
+    TR("…ya da modeli veya fotoğraf klasörünü bu pencerenin herhangi bir "
+       "yerine bırakın"));
+
+SS_MSG(mesh_title,
+    EN("Create a mesh"),
+    JA("メッシュを作る"),
+    ZH_HANS("生成网格"),
+    ZH_HANT("產生網格"),
+    KO("메시 만들기"),
+    DE("Netz erzeugen"),
+    FR("Créer un maillage"),
+    ES("Crear una malla"),
+    PT("Criar uma malha"),
+    IT("Crea una mesh"),
+    NL("Mesh maken"),
+    RU("Построить меш"),
+    TR("Ağ oluştur"));
+
+SS_MSG(mesh_source,
+    EN("Trained model"),
+    JA("学習済みモデル"),
+    ZH_HANS("训练好的模型"),
+    ZH_HANT("訓練好的模型"),
+    KO("학습한 모델"),
+    DE("Trainiertes Modell"),
+    FR("Modèle entraîné"),
+    ES("Modelo entrenado"),
+    PT("Modelo treinado"),
+    IT("Modello addestrato"),
+    NL("Getraind model"),
+    RU("Обученная модель"),
+    TR("Eğitilmiş model"));
+
+SS_MSG(mesh_source_help,
+    EN("A run folder, a step-*.ckpt folder, or a splat .ply file."),
+    JA("実行フォルダ、step-*.ckpt フォルダ、またはスプラットの .ply ファイル。"),
+    ZH_HANS("一个运行文件夹、一个 step-*.ckpt 文件夹，或者一个高斯点 .ply 文件。"),
+    ZH_HANT("一個執行資料夾、一個 step-*.ckpt 資料夾，或者一個高斯點 .ply 檔案。"),
+    KO("실행 폴더, step-*.ckpt 폴더, 또는 스플랫 .ply 파일."),
+    DE("Ein Lauf-Ordner, ein step-*.ckpt-Ordner oder eine Splat-.ply-Datei."),
+    FR("Un dossier de run, un dossier step-*.ckpt, ou un fichier .ply de splats."),
+    ES("Una carpeta de ejecución, una carpeta step-*.ckpt o un archivo .ply de splats."),
+    PT("Uma pasta de execução, uma pasta step-*.ckpt ou um arquivo .ply de splats."),
+    IT("Una cartella di run, una cartella step-*.ckpt o un file .ply di splat."),
+    NL("Een run-map, een step-*.ckpt-map of een splat-.ply-bestand."),
+    RU("Папка запуска, папка step-*.ckpt или файл .ply со сплатами."),
+    TR("Bir çalıştırma klasörü, bir step-*.ckpt klasörü ya da bir splat .ply dosyası."));
+
+SS_MSG(mesh_use_photos,
+    EN("Use the training photos"),
+    JA("学習に使った写真を使う"),
+    ZH_HANS("使用训练用的照片"),
+    ZH_HANT("使用訓練用的相片"),
+    KO("학습에 쓴 사진 사용"),
+    DE("Die Trainingsfotos verwenden"),
+    FR("Utiliser les photos d'entraînement"),
+    ES("Usar las fotos de entrenamiento"),
+    PT("Usar as fotos de treinamento"),
+    IT("Usa le foto di addestramento"),
+    NL("De trainingsfoto's gebruiken"),
+    RU("Использовать фотографии обучения"),
+    TR("Eğitim fotoğraflarını kullan"));
+
+SS_MSG(mesh_use_photos_help,
+    EN("The surface is carved from what the cameras actually saw, which "
+       "removes interior fog and gives much better color. Turn this off to "
+       "mesh from the Gaussians alone."),
+    JA("カメラが実際に見たものから面を削り出します。内部のもやが消え、色も"
+       "ずっと良くなります。オフにするとガウシアンだけからメッシュを作ります。"),
+    ZH_HANS("用相机真正看到的内容来雕出表面，可以去掉内部的雾，颜色也好很多。"
+            "关掉的话就只用高斯本身生成网格。"),
+    ZH_HANT("用相機真正看到的內容來雕出表面，可以去掉內部的霧，顏色也好很多。"
+            "關掉的話就只用高斯本身產生網格。"),
+    KO("카메라가 실제로 본 것에서 표면을 깎아냅니다. 내부의 안개가 사라지고 색도 "
+       "훨씬 좋아집니다. 끄면 가우시안만으로 메시를 만듭니다."),
+    DE("Die Oberfläche wird aus dem geschnitten, was die Kameras wirklich "
+       "gesehen haben: kein Nebel im Inneren und deutlich bessere Farben. "
+       "Ausschalten, um nur aus den Gauß-Verteilungen zu vernetzen."),
+    FR("La surface est taillée dans ce que les caméras ont vraiment vu : plus "
+       "de brume à l'intérieur et de bien meilleures couleurs. Désactivez pour "
+       "mailler à partir des seules gaussiennes."),
+    ES("La superficie se talla a partir de lo que las cámaras vieron de "
+       "verdad: quita la niebla interior y da mucho mejor color. Desactívalo "
+       "para mallar solo con las gaussianas."),
+    PT("A superfície é esculpida a partir do que as câmeras realmente viram: "
+       "tira a névoa interna e dá cores bem melhores. Desligue para gerar a "
+       "malha só com as gaussianas."),
+    IT("La superficie viene scavata da ciò che le fotocamere hanno visto "
+       "davvero: niente nebbia interna e colori molto migliori. Disattiva per "
+       "creare la mesh dalle sole gaussiane."),
+    NL("Het oppervlak wordt uitgesneden uit wat de camera's echt zagen: geen "
+       "mist binnenin en veel betere kleuren. Zet dit uit om alleen uit de "
+       "Gaussianen een mesh te maken."),
+    RU("Поверхность вырезается по тому, что действительно видели камеры: "
+       "исчезает внутренний туман и цвет получается заметно лучше. Выключите, "
+       "чтобы строить меш только по гауссианам."),
+    TR("Yüzey, kameraların gerçekten gördüğünden oyulur: içerideki sis gider "
+       "ve renk çok daha iyi olur. Yalnızca gauss'lardan ağ oluşturmak için "
+       "kapatın."));
+
+SS_MSG(mesh_photos_dir,
+    EN("Photo folder"),
+    JA("写真フォルダ"),
+    ZH_HANS("照片文件夹"),
+    ZH_HANT("相片資料夾"),
+    KO("사진 폴더"),
+    DE("Fotoordner"),
+    FR("Dossier de photos"),
+    ES("Carpeta de fotos"),
+    PT("Pasta de fotos"),
+    IT("Cartella delle foto"),
+    NL("Fotomap"),
+    RU("Папка с фотографиями"),
+    TR("Fotoğraf klasörü"));
+
+SS_MSG(mesh_photos_dir_help,
+    EN("Leave empty to use the folder recorded in the run's config.json."),
+    JA("空にしておくと、実行の config.json に記録されたフォルダを使います。"),
+    ZH_HANS("留空则使用运行的 config.json 里记录的文件夹。"),
+    ZH_HANT("留空則使用執行的 config.json 裡記錄的資料夾。"),
+    KO("비워 두면 실행의 config.json에 기록된 폴더를 사용합니다."),
+    DE("Leer lassen, um den in der config.json des Laufs vermerkten Ordner zu nehmen."),
+    FR("Laissez vide pour utiliser le dossier noté dans le config.json du run."),
+    ES("Déjalo vacío para usar la carpeta anotada en el config.json de la ejecución."),
+    PT("Deixe vazio para usar a pasta anotada no config.json da execução."),
+    IT("Lascia vuoto per usare la cartella indicata nel config.json del run."),
+    NL("Laat leeg om de map te gebruiken die in de config.json van de run staat."),
+    RU("Оставьте пустым, чтобы взять папку из config.json запуска."),
+    TR("Çalıştırmanın config.json dosyasındaki klasörü kullanmak için boş bırakın."));
+
+SS_MSG(mesh_color,
+    EN("Color"),
+    JA("色"),
+    ZH_HANS("颜色"),
+    ZH_HANT("顏色"),
+    KO("색"),
+    DE("Farbe"),
+    FR("Couleur"),
+    ES("Color"),
+    PT("Cor"),
+    IT("Colore"),
+    NL("Kleur"),
+    RU("Цвет"),
+    TR("Renk"));
+
+SS_MSG(mesh_color_none,
+    EN("None (shape only)"),
+    JA("なし（形だけ）"),
+    ZH_HANS("无（只有形状）"),
+    ZH_HANT("無（只有形狀）"),
+    KO("없음(모양만)"),
+    DE("Keine (nur Form)"),
+    FR("Aucune (forme seule)"),
+    ES("Ninguno (solo la forma)"),
+    PT("Nenhuma (só a forma)"),
+    IT("Nessuno (solo la forma)"),
+    NL("Geen (alleen de vorm)"),
+    RU("Нет (только форма)"),
+    TR("Yok (yalnızca biçim)"));
+
+SS_MSG(mesh_color_vertex,
+    EN("Per-vertex color"),
+    JA("頂点ごとの色"),
+    ZH_HANS("逐顶点颜色"),
+    ZH_HANT("逐頂點顏色"),
+    KO("정점별 색"),
+    DE("Farbe pro Eckpunkt"),
+    FR("Couleur par sommet"),
+    ES("Color por vértice"),
+    PT("Cor por vértice"),
+    IT("Colore per vertice"),
+    NL("Kleur per hoekpunt"),
+    RU("Цвет в вершинах"),
+    TR("Köşe başına renk"));
+
+SS_MSG(mesh_color_texture,
+    EN("Baked texture"),
+    JA("焼き込みテクスチャ"),
+    ZH_HANS("烘焙贴图"),
+    ZH_HANT("烘焙貼圖"),
+    KO("구운 텍스처"),
+    DE("Gebackene Textur"),
+    FR("Texture cuite"),
+    ES("Textura horneada"),
+    PT("Textura assada"),
+    IT("Texture cotta"),
+    NL("Ingebakken textuur"),
+    RU("Запечённая текстура"),
+    TR("Pişirilmiş doku"));
+
+SS_MSG(mesh_formats,
+    EN("Save as"),
+    JA("保存形式"),
+    ZH_HANS("保存为"),
+    ZH_HANT("儲存為"),
+    KO("저장 형식"),
+    DE("Speichern als"),
+    FR("Enregistrer en"),
+    ES("Guardar como"),
+    PT("Salvar como"),
+    IT("Salva come"),
+    NL("Opslaan als"),
+    RU("Сохранить как"),
+    TR("Farklı kaydet"));
+
+SS_MSG(mesh_output,
+    EN("Output name"),
+    JA("出力名"),
+    ZH_HANS("输出名称"),
+    ZH_HANT("輸出名稱"),
+    KO("출력 이름"),
+    DE("Ausgabename"),
+    FR("Nom de sortie"),
+    ES("Nombre de salida"),
+    PT("Nome de saída"),
+    IT("Nome di uscita"),
+    NL("Uitvoernaam"),
+    RU("Имя результата"),
+    TR("Çıktı adı"));
+
+SS_MSG(mesh_output_help,
+    EN("Without an extension: one file per chosen format is written next to "
+       "it. Leave empty to write beside the model."),
+    JA("拡張子は付けません。選んだ形式ごとに1つのファイルが隣に書き出されます。"
+       "空にするとモデルの隣に書き出します。"),
+    ZH_HANS("不要带扩展名：每种选中的格式会各写一个文件放在旁边。留空就写在模型旁边。"),
+    ZH_HANT("不要帶副檔名：每種選取的格式會各寫一個檔案放在旁邊。留空就寫在模型旁邊。"),
+    KO("확장자 없이 적습니다. 고른 형식마다 파일이 하나씩 옆에 쓰입니다. 비워 두면 "
+       "모델 옆에 씁니다."),
+    DE("Ohne Endung: pro gewähltem Format wird eine Datei daneben geschrieben. "
+       "Leer lassen, um neben dem Modell zu schreiben."),
+    FR("Sans extension : un fichier par format choisi est écrit à côté. Laissez "
+       "vide pour écrire à côté du modèle."),
+    ES("Sin extensión: se escribe un archivo por cada formato elegido al lado. "
+       "Déjalo vacío para escribir junto al modelo."),
+    PT("Sem extensão: é escrito um arquivo por formato escolhido ao lado. Deixe "
+       "vazio para escrever ao lado do modelo."),
+    IT("Senza estensione: viene scritto un file per ogni formato scelto "
+       "accanto. Lascia vuoto per scrivere accanto al modello."),
+    NL("Zonder extensie: per gekozen formaat wordt er een bestand naast "
+       "geschreven. Laat leeg om naast het model te schrijven."),
+    RU("Без расширения: рядом появится по одному файлу на каждый выбранный "
+       "формат. Оставьте пустым, чтобы записать рядом с моделью."),
+    TR("Uzantısız: seçilen her biçim için yanına bir dosya yazılır. Modelin "
+       "yanına yazmak için boş bırakın."));
+
+SS_MSG(mesh_max_cameras,
+    EN("Photos to use"),
+    JA("使う写真の枚数"),
+    ZH_HANS("使用的照片数"),
+    ZH_HANT("使用的相片數"),
+    KO("사용할 사진 수"),
+    DE("Zu verwendende Fotos"),
+    FR("Photos à utiliser"),
+    ES("Fotos a usar"),
+    PT("Fotos a usar"),
+    IT("Foto da usare"),
+    NL("Te gebruiken foto's"),
+    RU("Сколько фотографий брать"),
+    TR("Kullanılacak fotoğraflar"));
+
+SS_MSG(mesh_max_cameras_help,
+    EN("0 uses every photo, which is slowest and best. A smaller number picks "
+       "a well-spread subset."),
+    JA("0 ならすべての写真を使います（最も遅く、最も良い）。小さい数にすると"
+       "満遍なく散らばった一部だけを使います。"),
+    ZH_HANS("0 表示用上全部照片，最慢也最好。填小一点会挑一批分布均匀的照片。"),
+    ZH_HANT("0 表示用上全部相片，最慢也最好。填小一點會挑一批分布均勻的相片。"),
+    KO("0이면 사진을 모두 씁니다. 가장 느리고 가장 좋습니다. 작게 잡으면 고르게 "
+       "퍼진 일부만 고릅니다."),
+    DE("0 nutzt jedes Foto -- am langsamsten und am besten. Eine kleinere Zahl "
+       "wählt eine gut verteilte Teilmenge."),
+    FR("0 utilise toutes les photos : le plus lent et le meilleur. Un nombre "
+       "plus petit choisit un sous-ensemble bien réparti."),
+    ES("0 usa todas las fotos: lo más lento y lo mejor. Un número menor elige "
+       "un subconjunto bien repartido."),
+    PT("0 usa todas as fotos: o mais lento e o melhor. Um número menor escolhe "
+       "um subconjunto bem espalhado."),
+    IT("0 usa tutte le foto: il più lento e il migliore. Un numero più piccolo "
+       "sceglie un sottoinsieme ben distribuito."),
+    NL("0 gebruikt elke foto: het traagst en het best. Een kleiner getal kiest "
+       "een goed verspreide selectie."),
+    RU("0 берёт все фотографии -- дольше всего и лучше всего. Меньшее число "
+       "выбирает равномерно разбросанное подмножество."),
+    TR("0 tüm fotoğrafları kullanır; en yavaş ve en iyi olan budur. Daha küçük "
+       "bir sayı iyi dağılmış bir alt küme seçer."));
+
+SS_MSG(mesh_texture_size,
+    EN("Texture size"),
+    JA("テクスチャのサイズ"),
+    ZH_HANS("贴图尺寸"),
+    ZH_HANT("貼圖尺寸"),
+    KO("텍스처 크기"),
+    DE("Texturgröße"),
+    FR("Taille de la texture"),
+    ES("Tamaño de la textura"),
+    PT("Tamanho da textura"),
+    IT("Dimensione della texture"),
+    NL("Textuurgrootte"),
+    RU("Размер текстуры"),
+    TR("Doku boyutu"));
+
+SS_MSG(mesh_texture_size_auto,
+    EN("Automatic"),
+    JA("自動"),
+    ZH_HANS("自动"),
+    ZH_HANT("自動"),
+    KO("자동"),
+    DE("Automatisch"),
+    FR("Automatique"),
+    ES("Automático"),
+    PT("Automático"),
+    IT("Automatico"),
+    NL("Automatisch"),
+    RU("Автоматически"),
+    TR("Otomatik"));
+
+SS_MSG(mesh_advanced,
+    EN("Advanced"),
+    JA("詳細設定"),
+    ZH_HANS("高级设置"),
+    ZH_HANT("進階設定"),
+    KO("고급 설정"),
+    DE("Erweitert"),
+    FR("Avancé"),
+    ES("Avanzado"),
+    PT("Avançado"),
+    IT("Avanzate"),
+    NL("Geavanceerd"),
+    RU("Дополнительно"),
+    TR("Gelişmiş"));
+
+SS_MSG(mesh_detail,
+    EN("Surface detail"),
+    JA("面の細かさ"),
+    ZH_HANS("表面细节"),
+    ZH_HANT("表面細節"),
+    KO("표면 세밀도"),
+    DE("Oberflächendetail"),
+    FR("Détail de la surface"),
+    ES("Detalle de la superficie"),
+    PT("Detalhe da superfície"),
+    IT("Dettaglio della superficie"),
+    NL("Oppervlaktedetail"),
+    RU("Детальность поверхности"),
+    TR("Yüzey ayrıntısı"));
+
+SS_MSG(mesh_detail_help,
+    EN("Lower keeps more triangles and more detail; higher merges short edges "
+       "into a lighter mesh."),
+    JA("小さいほど三角形が多く残り、細かくなります。大きいほど短い辺をまとめて"
+       "軽いメッシュになります。"),
+    ZH_HANS("越小保留的三角形越多、越细；越大就把短边合并掉，网格更轻。"),
+    ZH_HANT("越小保留的三角形越多、越細；越大就把短邊合併掉，網格更輕。"),
+    KO("작을수록 삼각형과 디테일이 더 남고, 클수록 짧은 변을 합쳐 가벼운 메시가 "
+       "됩니다."),
+    DE("Kleiner behält mehr Dreiecke und mehr Details; größer fasst kurze "
+       "Kanten zu einem leichteren Netz zusammen."),
+    FR("Plus bas garde plus de triangles et de détails ; plus haut fusionne les "
+       "arêtes courtes en un maillage plus léger."),
+    ES("Más bajo conserva más triángulos y más detalle; más alto fusiona las "
+       "aristas cortas en una malla más ligera."),
+    PT("Menor mantém mais triângulos e mais detalhe; maior junta as arestas "
+       "curtas em uma malha mais leve."),
+    IT("Più basso mantiene più triangoli e più dettaglio; più alto unisce gli "
+       "spigoli corti in una mesh più leggera."),
+    NL("Lager houdt meer driehoeken en meer detail; hoger voegt korte randen "
+       "samen tot een lichtere mesh."),
+    RU("Меньше -- больше треугольников и деталей; больше -- короткие рёбра "
+       "сливаются, и меш становится легче."),
+    TR("Daha düşük olması daha çok üçgen ve ayrıntı bırakır; daha yüksek olması "
+       "kısa kenarları birleştirip daha hafif bir ağ yapar."));
+
+SS_MSG(mesh_drop_specks,
+    EN("Drop specks smaller than"),
+    JA("これより小さいかけらを捨てる"),
+    ZH_HANS("丢掉小于此值的碎片"),
+    ZH_HANT("丟掉小於此值的碎片"),
+    KO("이보다 작은 조각 버리기"),
+    DE("Bruchstücke verwerfen, kleiner als"),
+    FR("Jeter les fragments plus petits que"),
+    ES("Descartar fragmentos menores que"),
+    PT("Descartar fragmentos menores que"),
+    IT("Scarta i frammenti più piccoli di"),
+    NL("Snippers weggooien kleiner dan"),
+    RU("Убирать обрывки меньше"),
+    TR("Şundan küçük parçaları at"));
+
+SS_MSG(mesh_cull_unseen,
+    EN("Remove parts no photo saw"),
+    JA("どの写真にも写っていない部分を消す"),
+    ZH_HANS("删掉没有任何照片拍到的部分"),
+    ZH_HANT("刪掉沒有任何相片拍到的部分"),
+    KO("어떤 사진에도 없는 부분 지우기"),
+    DE("Teile entfernen, die kein Foto gesehen hat"),
+    FR("Supprimer ce qu'aucune photo n'a vu"),
+    ES("Quitar las partes que ninguna foto vio"),
+    PT("Remover as partes que nenhuma foto viu"),
+    IT("Rimuovi le parti che nessuna foto ha visto"),
+    NL("Delen verwijderen die geen enkele foto zag"),
+    RU("Убрать участки, которых не видела ни одна фотография"),
+    TR("Hiçbir fotoğrafın görmediği parçaları kaldır"));
+
+SS_MSG(mesh_extra_args,
+    EN("Extra arguments"),
+    JA("追加の引数"),
+    ZH_HANS("额外参数"),
+    ZH_HANT("額外參數"),
+    KO("추가 인자"),
+    DE("Zusätzliche Argumente"),
+    FR("Arguments supplémentaires"),
+    ES("Argumentos adicionales"),
+    PT("Argumentos adicionais"),
+    IT("Argomenti aggiuntivi"),
+    NL("Extra argumenten"),
+    RU("Дополнительные аргументы"),
+    TR("Ek argümanlar"));
+
+SS_MSG(mesh_start,
+    EN("Create the mesh"),
+    JA("メッシュを作る"),
+    ZH_HANS("开始生成网格"),
+    ZH_HANT("開始產生網格"),
+    KO("메시 만들기"),
+    DE("Netz erzeugen"),
+    FR("Créer le maillage"),
+    ES("Crear la malla"),
+    PT("Criar a malha"),
+    IT("Crea la mesh"),
+    NL("Mesh maken"),
+    RU("Построить меш"),
+    TR("Ağı oluştur"));
+
+SS_MSG(mesh_cancel,
+    EN("Stop"),
+    JA("中止"),
+    ZH_HANS("停止"),
+    ZH_HANT("停止"),
+    KO("중지"),
+    DE("Anhalten"),
+    FR("Arrêter"),
+    ES("Detener"),
+    PT("Parar"),
+    IT("Ferma"),
+    NL("Stoppen"),
+    RU("Остановить"),
+    TR("Durdur"));
+
+SS_MSG(mesh_running,
+    EN("Creating the mesh..."),
+    JA("メッシュを作っています..."),
+    ZH_HANS("正在生成网格..."),
+    ZH_HANT("正在產生網格..."),
+    KO("메시를 만드는 중..."),
+    DE("Netz wird erzeugt..."),
+    FR("Création du maillage..."),
+    ES("Creando la malla..."),
+    PT("Criando a malha..."),
+    IT("Creazione della mesh..."),
+    NL("Mesh wordt gemaakt..."),
+    RU("Строится меш..."),
+    TR("Ağ oluşturuluyor..."));
+
+SS_MSG(mesh_done,
+    EN("Done. Vertices: {0}   Triangles: {1}"),
+    JA("完了。頂点: {0}   三角形: {1}"),
+    ZH_HANS("完成。顶点: {0}   三角形: {1}"),
+    ZH_HANT("完成。頂點: {0}   三角形: {1}"),
+    KO("완료. 정점: {0}   삼각형: {1}"),
+    DE("Fertig. Eckpunkte: {0}   Dreiecke: {1}"),
+    FR("Terminé. Sommets : {0}   Triangles : {1}"),
+    ES("Listo. Vértices: {0}   Triángulos: {1}"),
+    PT("Pronto. Vértices: {0}   Triângulos: {1}"),
+    IT("Fatto. Vertici: {0}   Triangoli: {1}"),
+    NL("Klaar. Hoekpunten: {0}   Driehoeken: {1}"),
+    RU("Готово. Вершин: {0}   Треугольников: {1}"),
+    TR("Bitti. Köşe: {0}   Üçgen: {1}"));
+
+SS_MSG(mesh_failed,
+    EN("The mesh could not be created."),
+    JA("メッシュを作れませんでした。"),
+    ZH_HANS("没能生成网格。"),
+    ZH_HANT("沒能產生網格。"),
+    KO("메시를 만들지 못했습니다."),
+    DE("Das Netz konnte nicht erzeugt werden."),
+    FR("Le maillage n'a pas pu être créé."),
+    ES("No se pudo crear la malla."),
+    PT("Não foi possível criar a malha."),
+    IT("Non è stato possibile creare la mesh."),
+    NL("De mesh kon niet worden gemaakt."),
+    RU("Не удалось построить меш."),
+    TR("Ağ oluşturulamadı."));
+
+SS_MSG(mesh_side_splats,
+    EN("Splats"),
+    JA("スプラット"),
+    ZH_HANS("高斯点"),
+    ZH_HANT("高斯點"),
+    KO("스플랫"),
+    DE("Splats"),
+    FR("Splats"),
+    ES("Splats"),
+    PT("Splats"),
+    IT("Splat"),
+    NL("Splats"),
+    RU("Сплаты"),
+    TR("Splat'lar"));
+
+SS_MSG(mesh_side_mesh,
+    EN("Mesh"),
+    JA("メッシュ"),
+    ZH_HANS("网格"),
+    ZH_HANT("網格"),
+    KO("메시"),
+    DE("Netz"),
+    FR("Maillage"),
+    ES("Malla"),
+    PT("Malha"),
+    IT("Mesh"),
+    NL("Mesh"),
+    RU("Меш"),
+    TR("Ağ"));
+
+SS_MSG(mesh_open_in_viewer,
+    EN("Open the mesh on its own"),
+    JA("メッシュだけを開く"),
+    ZH_HANS("单独打开网格"),
+    ZH_HANT("單獨開啟網格"),
+    KO("메시만 따로 열기"),
+    DE("Nur das Netz öffnen"),
+    FR("Ouvrir le maillage seul"),
+    ES("Abrir solo la malla"),
+    PT("Abrir só a malha"),
+    IT("Apri solo la mesh"),
+    NL("Alleen de mesh openen"),
+    RU("Открыть только меш"),
+    TR("Yalnızca ağı aç"));
+
+SS_MSG(mesh_link_views,
+    EN("Move both views together"),
+    JA("両方のビューを一緒に動かす"),
+    ZH_HANS("两个视图一起转"),
+    ZH_HANT("兩個檢視一起轉"),
+    KO("두 화면을 함께 움직이기"),
+    DE("Beide Ansichten zusammen bewegen"),
+    FR("Déplacer les deux vues ensemble"),
+    ES("Mover las dos vistas juntas"),
+    PT("Mover as duas vistas juntas"),
+    IT("Muovi le due viste insieme"),
+    NL("Beide beelden samen bewegen"),
+    RU("Двигать оба вида вместе"),
+    TR("İki görünümü birlikte oynat"));
+
+SS_MSG(mesh_pick_model,
+    EN("Pick a trained model"),
+    JA("学習済みモデルを選ぶ"),
+    ZH_HANS("选择训练好的模型"),
+    ZH_HANT("選擇訓練好的模型"),
+    KO("학습한 모델 고르기"),
+    DE("Trainiertes Modell auswählen"),
+    FR("Choisir un modèle entraîné"),
+    ES("Elegir un modelo entrenado"),
+    PT("Escolher um modelo treinado"),
+    IT("Scegli un modello addestrato"),
+    NL("Kies een getraind model"),
+    RU("Выберите обученную модель"),
+    TR("Eğitilmiş bir model seçin"));
+
+SS_MSG(mesh_pick_photos,
+    EN("Pick the photo folder"),
+    JA("写真フォルダを選ぶ"),
+    ZH_HANS("选择照片文件夹"),
+    ZH_HANT("選擇相片資料夾"),
+    KO("사진 폴더 고르기"),
+    DE("Fotoordner auswählen"),
+    FR("Choisir le dossier de photos"),
+    ES("Elegir la carpeta de fotos"),
+    PT("Escolher a pasta de fotos"),
+    IT("Scegli la cartella delle foto"),
+    NL("Kies de fotomap"),
+    RU("Выберите папку с фотографиями"),
+    TR("Fotoğraf klasörünü seçin"));
+
+SS_MSG(mesh_pick_output,
+    EN("Pick where to save"),
+    JA("保存先を選ぶ"),
+    ZH_HANS("选择保存位置"),
+    ZH_HANT("選擇儲存位置"),
+    KO("저장할 곳 고르기"),
+    DE("Speicherort auswählen"),
+    FR("Choisir où enregistrer"),
+    ES("Elegir dónde guardar"),
+    PT("Escolher onde salvar"),
+    IT("Scegli dove salvare"),
+    NL("Kies waar op te slaan"),
+    RU("Выберите, куда сохранить"),
+    TR("Nereye kaydedileceğini seçin"));
+
+SS_MSG(mesh_no_model,
+    EN("Choose a trained model first."),
+    JA("先に学習済みモデルを選んでください。"),
+    ZH_HANS("请先选一个训练好的模型。"),
+    ZH_HANT("請先選一個訓練好的模型。"),
+    KO("먼저 학습한 모델을 고르세요."),
+    DE("Wählen Sie zuerst ein trainiertes Modell."),
+    FR("Choisissez d'abord un modèle entraîné."),
+    ES("Elige primero un modelo entrenado."),
+    PT("Escolha primeiro um modelo treinado."),
+    IT("Scegli prima un modello addestrato."),
+    NL("Kies eerst een getraind model."),
+    RU("Сначала выберите обученную модель."),
+    TR("Önce eğitilmiş bir model seçin."));
+
+SS_MSG(viewer_loaded_mesh,
+    EN("Loaded. Vertices: {0}   Triangles: {1}"),
+    JA("読み込みました。頂点: {0}   三角形: {1}"),
+    ZH_HANS("已载入。顶点: {0}   三角形: {1}"),
+    ZH_HANT("已載入。頂點: {0}   三角形: {1}"),
+    KO("불러왔습니다. 정점: {0}   삼각형: {1}"),
+    DE("Geladen. Eckpunkte: {0}   Dreiecke: {1}"),
+    FR("Chargé. Sommets : {0}   Triangles : {1}"),
+    ES("Cargado. Vértices: {0}   Triángulos: {1}"),
+    PT("Carregado. Vértices: {0}   Triângulos: {1}"),
+    IT("Caricato. Vertici: {0}   Triangoli: {1}"),
+    NL("Geladen. Hoekpunten: {0}   Driehoeken: {1}"),
+    RU("Загружено. Вершин: {0}   Треугольников: {1}"),
+    TR("Yüklendi. Köşe: {0}   Üçgen: {1}"));
+
+SS_MSG(viewer_mesh_count,
+    EN("Vertices: {0}   Triangles: {1}"),
+    JA("頂点: {0}   三角形: {1}"),
+    ZH_HANS("顶点: {0}   三角形: {1}"),
+    ZH_HANT("頂點: {0}   三角形: {1}"),
+    KO("정점: {0}   삼각형: {1}"),
+    DE("Eckpunkte: {0}   Dreiecke: {1}"),
+    FR("Sommets : {0}   Triangles : {1}"),
+    ES("Vértices: {0}   Triángulos: {1}"),
+    PT("Vértices: {0}   Triângulos: {1}"),
+    IT("Vertici: {0}   Triangoli: {1}"),
+    NL("Hoekpunten: {0}   Driehoeken: {1}"),
+    RU("Вершин: {0}   Треугольников: {1}"),
+    TR("Köşe: {0}   Üçgen: {1}"));
 
 }  // namespace gui
 }  // namespace msg

@@ -17,6 +17,13 @@
 
 #include <cctype>
 #include <cstdio>
+#ifdef _WIN32
+#include <io.h>
+#define isatty _isatty
+#define fileno _fileno
+#else
+#include <unistd.h>
+#endif
 #include <cstring>
 #include <string>
 #include <vector>
@@ -96,6 +103,15 @@ void print_usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // Line-buffer stdout whenever it is NOT a terminal. Every tool here is
+    // routinely run as a CHILD PROCESS with its output piped to a live log --
+    // the GUI does it for reconstruction, masking and meshing -- and the C
+    // runtime's default for a pipe is FULL buffering, which holds 4 KB of
+    // progress back until the buffer fills or the process exits. A run that
+    // prints one line a minute then appears to print nothing at all for the
+    // first hour, which is exactly the failure it looks like.
+    if (!isatty(fileno(stdout))) std::setvbuf(stdout, nullptr, _IOLBF, 0);
+
     // --lang is handled here and removed from argv, so no tool's own parser
     // has to know about it. The chain that decides the language is in
     // src/i18n/Locale.h; the GUI re-runs it once it has read its settings

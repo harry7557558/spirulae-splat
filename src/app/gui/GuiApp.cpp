@@ -7,6 +7,7 @@
 #include "app/gui/DatasetPrep.h"
 #include "app/gui/MaskPrompt.h"
 #include "app/gui/Subprocess.h"
+#include "mesh/MeshImport.h"
 #include "app/gui/Ui.h"
 
 #include "i18n/Locale.h"
@@ -110,6 +111,12 @@ bool parse_settings_equal(const TrainConfig& a, const TrainConfig& b) {
 }
 
 // The file-dialog filter list, from DatasetPrep's one list of containers.
+// What the viewer can open: Gaussians and SfM clouds (.ply), and every mesh
+// format the mesher writes -- one list, so the picker and the drop handler
+// cannot disagree about what is openable.
+const std::vector<std::string> kViewableExtensions = {".ply", ".obj", ".gltf",
+                                                      ".glb"};
+
 std::vector<std::string> video_dialog_filters() {
     return std::vector<std::string>(kVideoExtensions,
                                     kVideoExtensions + kNumVideoExtensions);
@@ -139,6 +146,12 @@ void GuiApp::shutdown() {
     _batch_active = false;
     _viewport.detach();
     _viewport.destroy_gl();
+    _mesh_viewport.detach();
+    _mesh_viewport.destroy_gl();
+    _mesh.cancel();
+    _mesh_view.close();
+    _mesh_preview_open = false;
+    _mesh_splats_open = false;
     // Before ~SplatViewer, which hands the engine back: the viewport's render
     // worker must have stopped reading from it first.
     _splat.close();
@@ -226,6 +239,8 @@ void GuiApp::append_logs() {
     for (auto& s : _colmap.drain_log()) log(s);
     for (auto& s : _sfm.drain_log()) log(s);
     for (auto& s : _splat.drain_log()) log(s);
+    for (auto& s : _mesh_view.drain_log()) log(s);
+    for (auto& s : _mesh.drain_log()) log(s);
     for (auto& s : _download.drain_log()) log(s);
     for (auto& s : _font_download.drain_log()) log(s);
     // A finished font download is the one thing besides a language switch
@@ -344,6 +359,7 @@ void GuiApp::refresh_presets() {
 void GuiApp::open_dataset(std::string dir, std::string image_dir,
                           std::string mask_dir, bool keep_log) {
     if (dir.empty()) return;
+    close_mesh_preview();
     close_splat();
     // A different dataset means the log so far is about something else --
     // another capture's reconstruction, another run's warnings -- and keeping
@@ -396,6 +412,10 @@ void GuiApp::request_go_home() {
         _open_confirm = true;
         return;
     }
+    // The mesh preview holds the engine through _splat and two attached
+    // viewports; leaving the screen by ANY route (the button, the menu, the
+    // deferred confirmation) has to hand them back.
+    close_mesh_preview();
     close_splat();
     _screen = Screen::Home;
 }
@@ -406,8 +426,12 @@ void GuiApp::request_go_home() {
 void GuiApp::open_splat(std::string path) {
     if (path.empty()) return;
     _log.clear();
+    close_mesh_preview();
     _viewport.detach();
     _viewing_splat = false;
+    // Opening a file resets the engine; a finished run's session cannot be
+    // rendered from once that has happened.
+    _runner.note_engine_taken();
     _splat.open(path);
     _screen = Screen::Viewer;
 }
@@ -436,6 +460,7 @@ void GuiApp::close_splat() {
 
 void GuiApp::launch_training(const TrainConfig& cfg, const std::string& preset) {
     if (cfg.data.empty()) return;
+    close_mesh_preview();
     close_splat();      // the engine is one object; the viewer has to let go
     _viewport.detach();
     // Engine setup initializes the backend on the selected device; from
@@ -676,6 +701,46 @@ static bool looks_like_model(const fs::path& p) {
 
 void GuiApp::handle_drop(const std::vector<std::string>& paths) {
     std::error_code ec;
+    // The mesh screen is asking two specific questions -- which model, and
+    // which photos -- so a drop there ANSWERS one of them instead of
+    // navigating away. Dropping a splat .ply on a screen whose first field
+    // wants a splat .ply and landing in the viewer is the kind of thing that
+    // makes a user stop trusting drag and drop.
+    // A finished preview does not block it: dropping a second model right
+    // after looking at the first is exactly how someone works through a
+    // folder of runs. (A run in flight does -- its inputs are already gone
+    // to the child.)
+    if (_screen == Screen::Mesh && !_mesh.busy() && paths.size() == 1) {
+        const fs::path p(paths[0]);
+        std::string ext = p.extension().string();
+        for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+        const bool is_file = fs::is_regular_file(p, ec);
+        const bool is_dir = fs::is_directory(p, ec);
+        // A splat .ply, a *.ckpt / run folder -> the model. A folder that is
+        // only a dataset -> the photos. A folder that is BOTH (a dataset with
+        // a splat.ply sitting in it, which is what an in-place workflow
+        // produces) is the model, and the child reads the dataset out of the
+        // run's config.json or out of the same folder.
+        if (is_file && ext == ".ply" && !meshing::ply_is_mesh(paths[0])) {
+            set_mesh_source(paths[0]);
+            return;
+        }
+        if (is_dir && looks_like_model(p)) {
+            set_mesh_source(paths[0]);
+            // The same folder is often the dataset too; offer it rather than
+            // making the user type it again.
+            if (folder_looks_like_dataset(paths[0]))
+                _mesh_job.data_dir = paths[0];
+            return;
+        }
+        if (is_dir && folder_looks_like_dataset(paths[0])) {
+            close_mesh_preview();
+            _mesh_job.use_data = true;
+            _mesh_job.data_dir = paths[0];
+            return;
+        }
+    }
+
     // A preset, or the config.json of a run that came out well. Checked first
     // and by content rather than by name: it is a file that changes settings,
     // never a dataset or a model, so there is nothing else it could be.
@@ -720,10 +785,12 @@ void GuiApp::handle_drop(const std::vector<std::string>& paths) {
         const fs::path p(paths[0]);
         std::string ext = p.extension().string();
         for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
-        // A .ply is a model to look at -- Gaussians or a point cloud, which
-        // the viewer works out for itself. (A Metashape dataset FOLDER is
-        // caught above, before this, so dropping one still opens the dataset.)
-        if (ext == ".ply") {
+        // A .ply is a model to look at -- Gaussians, a point cloud or a
+        // mesh, which the viewer works out for itself; .obj/.gltf/.glb can
+        // only be a mesh. (A Metashape dataset FOLDER is caught above, before
+        // this, so dropping one still opens the dataset.)
+        if (std::find(kViewableExtensions.begin(), kViewableExtensions.end(),
+                      ext) != kViewableExtensions.end()) {
             request_open_splat(p.string());
             return;
         }
@@ -1066,6 +1133,23 @@ void GuiApp::handle_dialog_result(const std::vector<std::string>& paths) {
         case PickAction::SplatFile:
             request_open_splat(path);
             break;
+        case PickAction::MeshSource:
+            set_mesh_source(path);
+            break;
+        case PickAction::MeshPhotos:
+            _mesh_job.data_dir = path;
+            break;
+        case PickAction::MeshOutput:
+            // Only the folder is picked; the file name keeps whatever
+            // set_mesh_source derived, as the preset save dialog does.
+            if (!path.empty())
+                _mesh_job.output =
+                    (fs::path(path) /
+                     fs::path(_mesh_job.output.empty() ? "mesh"
+                                                       : _mesh_job.output)
+                         .filename())
+                        .string();
+            break;
         case PickAction::PresetFile:
             load_preset_file(path);
             break;
@@ -1164,9 +1248,24 @@ void GuiApp::frame() {
             if (_splat.kind() == SplatViewer::Kind::Points)
                 _viewport.attach_preview_data(_splat.points(), _splat.post(),
                                               _splat.scene_key());
-            else
+            else if (_splat.kind() == SplatViewer::Kind::Mesh)
+                _viewport.attach_preview_mesh(_splat.mesh(),
+                                              _splat.mesh_to_normalized(),
+                                              _splat.scene_key());
+            else {
                 _viewport.attach_scene(_splat.render_config(), _splat.make_hooks(),
                                        _splat.scene_key());
+                // A file being looked at can be drawn a different way than it
+                // was trained; a training session cannot, so only this path
+                // offers the controls.
+                _viewport.enable_scene_options(
+                    _splat.render_config().primitive, _splat.sh_degree(),
+                    _splat.gamut(), _splat.linear_color(),
+                    [this](const char* g, bool lin) {
+                        _splat.set_color_space(g, lin);
+                    },
+                    [this] { _splat.release_screen_buffers(); });
+            }
             _viewing_splat = true;
         }
     } else if (_runner.engine_ready()) {
@@ -1195,6 +1294,7 @@ void GuiApp::frame() {
         case Screen::Train:  draw_train();  break;
         case Screen::Viewer: draw_viewer(); break;
         case Screen::Batch:  draw_batch();  break;
+        case Screen::Mesh:   draw_mesh();   break;
     }
 
     if (_dialog.draw()) handle_dialog_result(_dialog.results());
@@ -1358,9 +1458,12 @@ void GuiApp::draw_home() {
     if (ui::Button(msg::home_open_splat, ImVec2(-1, 42))) {
         _pick = PickAction::SplatFile;
         _dialog.open(msg::viewer_pick_file.get(), FileDialog::Mode::File,
-                     {".ply"});
+                     kViewableExtensions);
     }
     ui::help_on_hover(msg::home_open_splat_help);
+
+    if (ui::Button(msg::home_make_mesh, ImVec2(-1, 42))) _screen = Screen::Mesh;
+    ui::help_on_hover(msg::home_make_mesh_help);
 
     if (ui::Button(msg::home_batch, ImVec2(-1, 42))) _screen = Screen::Batch;
     ui::help_on_hover(msg::home_batch_help);
@@ -2434,7 +2537,7 @@ void GuiApp::draw_viewer() {
     if (ui::Button(msg::viewer_open_another)) {
         _pick = PickAction::SplatFile;
         _dialog.open(msg::viewer_pick_file.get(), FileDialog::Mode::File,
-                     {".ply"});
+                     kViewableExtensions);
     }
     ImGui::SameLine();
     // The file's own path, which is what identifies it.
@@ -2444,6 +2547,10 @@ void GuiApp::draw_viewer() {
         if (_splat.kind() == SplatViewer::Kind::Points)
             ui::TextDisabled(msg::viewer_point_count,
                              {(long long)_splat.num_splats()});
+        else if (_splat.kind() == SplatViewer::Kind::Mesh)
+            ui::TextDisabled(msg::viewer_mesh_count,
+                             {(long long)_splat.num_splats(),
+                              (long long)_splat.num_faces()});
         else
             ui::TextDisabled(msg::viewer_splat_count,
                              {(long long)_splat.num_splats(),
@@ -2473,6 +2580,381 @@ void GuiApp::draw_viewer() {
             ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.4f));
             ui::TextDisabled(msg::viewer_nothing_open);
             break;
+    }
+    ImGui::EndChild();
+    if (_show_log) draw_log_panel(log_h);
+}
+
+
+// ===========================================================================
+// Mesh screen
+//
+// One screen for the whole thing: what to mesh, the four choices that matter
+// (color, formats, how many photos, where it goes), an Advanced header for the
+// rest, and -- once it has run -- the splats and the extracted surface side by
+// side on one linked camera, which is the only honest way to look at a mesh.
+// ===========================================================================
+
+void GuiApp::set_mesh_source(const std::string& path) {
+    if (path.empty()) return;
+    _mesh_job.checkpoint = path;
+    // The output name follows the source until the user edits it. A file
+    // becomes <name>_mesh, NEVER <name> -- meshing `splat.ply` to base
+    // `splat` writes `splat.ply`, i.e. over the model being meshed.
+    std::error_code ec;
+    fs::path base(path);
+    if (fs::is_regular_file(base, ec)) {
+        const std::string stem = base.stem().string();
+        base.replace_filename(stem + "_mesh");
+    } else {
+        base /= "mesh";
+    }
+    _mesh_job.output = base.string();
+    // A run folder usually records its dataset; leave the field empty and let
+    // the child read config.json, which is what the help text promises.
+    _mesh_job.data_dir.clear();
+    close_mesh_preview();
+}
+
+void GuiApp::start_meshing() {
+    if (_mesh_job.checkpoint.empty()) return;
+    close_mesh_preview();
+    _mesh.start(_mesh_job);
+}
+
+void GuiApp::close_mesh_preview() {
+    if (_mesh_preview_open) {
+        _mesh_viewport.detach();
+        _mesh_view.close();
+        _mesh_preview_open = false;
+    }
+    if (_mesh_splats_open) {
+        close_splat();
+        _mesh_splats_open = false;
+    }
+}
+
+void GuiApp::open_mesh_preview() {
+    close_mesh_preview();
+    // Whatever else had the engine (a file opened from the viewer screen)
+    // has to let go before the splat side takes it -- and the viewport has to
+    // stop rendering from it first, which close_splat does.
+    close_splat();
+    const std::string out = _mesh.output_path();
+    if (out.empty()) return;
+    _mesh_view.open(out);
+    _mesh_preview_open = true;
+    // The left-hand panel is the model the mesh came from, on the engine.
+    // Opening it resets the engine, so it is skipped only while a run is
+    // actually USING it -- a finished run has already saved its checkpoint and
+    // hands the engine over exactly as the viewer screen does. (Requiring an
+    // idle runner meant that meshing a model right after training it -- the
+    // ordinary case -- silently showed the mesh alone.)
+    if (!training_busy()) {
+        _viewport.detach();
+        _viewing_splat = false;
+        _runner.note_engine_taken();
+        _splat.open(_mesh_job.checkpoint);
+        _mesh_splats_open = true;
+    }
+}
+
+void GuiApp::draw_mesh_options() {
+    // A path row is [field][...][label]. The field takes what is left after
+    // the button and the label, measured rather than guessed -- a fixed
+    // reserve pushes the label off the edge in the longer languages.
+    const float style_x = ImGui::GetStyle().ItemSpacing.x;
+    auto field_width = [&](const Msg& label) {
+        return -(60.0f + 2.0f * style_x + ImGui::CalcTextSize(label.get()).x);
+    };
+
+    // ---- what to mesh ----
+    ui::SeparatorText(msg::mesh_source);
+    ImGui::SetNextItemWidth(-140.0f);
+    if (ui::InputTextRaw("##meshsrc", &_mesh_job.checkpoint)) {
+        // Typed by hand: keep the derived output in step until it is edited.
+    }
+    ImGui::SameLine();
+    if (ui::ButtonRaw("...##meshsrcdir", ImVec2(60, 0))) {
+        _pick = PickAction::MeshSource;
+        _dialog.open(msg::mesh_pick_model.get(), FileDialog::Mode::Folder);
+    }
+    ImGui::SameLine();
+    if (ui::ButtonRaw(".ply##meshsrcfile", ImVec2(60, 0))) {
+        _pick = PickAction::MeshSource;
+        _dialog.open(msg::mesh_pick_model.get(), FileDialog::Mode::File,
+                     {".ply"});
+    }
+    ui::help_on_hover(msg::mesh_source_help);
+    ui::TextDisabled(msg::mesh_drop_hint);
+
+    // ---- the photos ----
+    ui::Checkbox(msg::mesh_use_photos, &_mesh_job.use_data);
+    ui::help_on_hover(msg::mesh_use_photos_help);
+    if (_mesh_job.use_data) {
+        ImGui::Indent();
+        ImGui::SetNextItemWidth(field_width(msg::mesh_photos_dir));
+        ui::InputTextWithHintRaw("##meshdata", msg::mesh_photos_dir_help,
+                                 &_mesh_job.data_dir);
+        ImGui::SameLine();
+        if (ui::ButtonRaw("...##meshdatapick", ImVec2(60, 0))) {
+            _pick = PickAction::MeshPhotos;
+            _dialog.open(msg::mesh_pick_photos.get(), FileDialog::Mode::Folder);
+        }
+        ImGui::SameLine();
+        ui::TextDisabled(msg::mesh_photos_dir);
+
+        ImGui::SetNextItemWidth(120.0f);
+        ui::InputInt(msg::mesh_max_cameras, &_mesh_job.max_cameras);
+        _mesh_job.max_cameras = std::max(0, _mesh_job.max_cameras);
+        ui::help_on_hover(msg::mesh_max_cameras_help);
+        ImGui::Unindent();
+    }
+
+    // ---- color ----
+    ImGui::SetNextItemWidth(220.0f);
+    ui::Combo(msg::mesh_color, &_mesh_job.color,
+              {&msg::mesh_color_none, &msg::mesh_color_vertex,
+               &msg::mesh_color_texture});
+    if (_mesh_job.color == 2) {
+        ImGui::Indent();
+        static const int kTexSizes[] = {0, 1024, 2048, 4096, 8192};
+        int idx = 0;
+        for (int i = 0; i < 5; i++)
+            if (kTexSizes[i] == _mesh_job.texture_size) idx = i;
+        // Mixed list: one translated entry and four resolutions, which are
+        // numbers in every language -- hence ComboRaw with a separate label.
+        char items[5][64];
+        const char* ptrs[5];
+        for (int i = 0; i < 5; i++) {
+            if (i == 0) std::snprintf(items[i], sizeof items[i], "%s",
+                                      msg::mesh_texture_size_auto.get());
+            else std::snprintf(items[i], sizeof items[i], "%d", kTexSizes[i]);
+            ptrs[i] = items[i];
+        }
+        ImGui::SetNextItemWidth(160.0f);
+        if (ui::ComboRaw("##texsize", &idx, ptrs, 5))
+            _mesh_job.texture_size = kTexSizes[idx];
+        ImGui::SameLine();
+        ui::TextDisabled(msg::mesh_texture_size);
+        ImGui::Unindent();
+    }
+
+    // ---- formats ----
+    // PLY cannot carry a texture and OBJ has no standard place for vertex
+    // colors; the child refuses those combinations outright, so they are
+    // greyed out here rather than failing the run three minutes in.
+    ui::SeparatorText(msg::mesh_formats);
+    for (int i = 0; i < kNumMeshFormats; i++) {
+        if (i) ImGui::SameLine();
+        const bool ok = !(i == 0 && _mesh_job.color == 2) &&
+                        !(i == 1 && _mesh_job.color == 1);
+        if (!ok) _mesh_job.formats[i] = false;
+        ImGui::BeginDisabled(!ok);
+        // A file extension is a file extension in every language.
+        ImGui::PushID(i);
+        ui::CheckboxRaw(kMeshFormats[i], &_mesh_job.formats[i]);
+        ImGui::PopID();
+        ImGui::EndDisabled();
+    }
+    // Every format was ruled out by the color choice: fall back to one that
+    // can carry it, so the Create button is never armed with nothing to write.
+    bool any = false;
+    for (int i = 0; i < kNumMeshFormats; i++) any |= _mesh_job.formats[i];
+    if (!any) _mesh_job.formats[_mesh_job.color == 2 ? 3 : 0] = true;
+    ImGui::SetNextItemWidth(field_width(msg::mesh_output));
+    ui::InputTextRaw("##meshout", &_mesh_job.output);
+    ImGui::SameLine();
+    if (ui::ButtonRaw("...##meshoutpick", ImVec2(60, 0))) {
+        _pick = PickAction::MeshOutput;
+        _dialog.open(msg::mesh_pick_output.get(), FileDialog::Mode::Folder);
+    }
+    ImGui::SameLine();
+    ui::TextDisabled(msg::mesh_output);
+    ui::help_on_hover(msg::mesh_output_help);
+
+    // ---- advanced ----
+    if (ui::CollapsingHeader(msg::mesh_advanced)) {
+        ImGui::SetNextItemWidth(220.0f);
+        ui::SliderFloat(msg::mesh_detail, &_mesh_job.merge_factor, 0.25f, 4.0f,
+                        "%.2f");
+        ui::help_on_hover(msg::mesh_detail_help);
+        ImGui::SetNextItemWidth(220.0f);
+        ui::InputInt(msg::mesh_drop_specks, &_mesh_job.floater_min_faces);
+        _mesh_job.floater_min_faces = std::max(0, _mesh_job.floater_min_faces);
+        if (_mesh_job.use_data)
+            ui::Checkbox(msg::mesh_cull_unseen, &_mesh_job.cull_unseen);
+        ImGui::SetNextItemWidth(
+            -(style_x + ImGui::CalcTextSize(msg::mesh_extra_args.get()).x));
+        ui::InputTextRaw("##meshextra", &_mesh_job.extra_args);
+        ImGui::SameLine();
+        ui::TextDisabled(msg::mesh_extra_args);
+    }
+}
+
+void GuiApp::draw_mesh_preview(float height) {
+    // The splat panel is drawn from the moment it is asked for, not from the
+    // moment it is ready: a large model takes seconds to land, and a panel
+    // that appears only on success turns "it failed" into "it silently showed
+    // you one side".
+    const bool both = _mesh_splats_open;
+    const bool linked = both && _splat.ready();
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float w = both ? (avail.x - spacing) * 0.5f : avail.x;
+
+    // One panel, one loader: whatever state it is in, say so rather than
+    // drawing an empty viewport.
+    auto side = [&](const Msg& title, SplatViewer& src, ViewportPanel& panel) {
+        ui::Text(title);
+        switch (src.state()) {
+            case SplatViewer::State::Loading:
+                ui::TextDisabled(msg::viewer_loading);
+                break;
+            case SplatViewer::State::Failed:
+                ui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), msg::viewer_failed);
+                ui::TextDisabledRaw(src.error());
+                break;
+            case SplatViewer::State::Ready:
+                panel.draw(/*training=*/false);
+                break;
+            default:
+                ui::TextDisabled(msg::viewer_nothing_open);
+                break;
+        }
+    };
+
+    if (both) {
+        ImGui::BeginChild("##meshleft", ImVec2(w, height),
+                          ImGuiChildFlags_Borders);
+        side(msg::mesh_side_splats, _splat, _viewport);
+        ImGui::EndChild();
+        ImGui::SameLine();
+    }
+
+    ImGui::BeginChild("##meshright", ImVec2(w, height),
+                      ImGuiChildFlags_Borders);
+    side(msg::mesh_side_mesh, _mesh_view, _mesh_viewport);
+    ImGui::EndChild();
+
+    // The link, applied after both panels have handled their input. The
+    // master is the panel being dragged (sticky for the whole drag), else
+    // whichever one moved this frame.
+    if (linked && _mesh_link_views) {
+        ViewportPanel* master = nullptr;
+        if (_viewport.dragging()) master = &_viewport;
+        else if (_mesh_viewport.dragging()) master = &_mesh_viewport;
+        else if (_viewport.moved()) master = &_viewport;
+        else if (_mesh_viewport.moved()) master = &_mesh_viewport;
+        if (master == &_viewport) _mesh_viewport.sync_view_from(_viewport);
+        else if (master == &_mesh_viewport) _viewport.sync_view_from(_mesh_viewport);
+    }
+}
+
+void GuiApp::draw_mesh() {
+    // The run finished while this screen was up: show what it made, ONCE.
+    // Doing this here rather than in frame() keeps the engine take-over on the
+    // one screen that asked for it; keying on the run id rather than on
+    // "Done && not open" is what lets the preview be closed (by the button,
+    // or by leaving for Home) without it springing straight back.
+    if (_mesh.state() == MeshRunner::State::Done && !_mesh_preview_open &&
+        _mesh.run_id() != _mesh_shown_run) {
+        _mesh_shown_run = _mesh.run_id();
+        open_mesh_preview();
+    }
+
+    if (ui::Button(msg::back_home)) request_go_home();
+    ImGui::SameLine();
+    ui::Text(msg::mesh_title);
+
+    // Attach the produced geometry once its loader has published it -- and,
+    // when the splats are being shown next to it, once THEY have landed too:
+    // the mesh is then placed in the SPLATS' normalized frame rather than in
+    // one fitted to itself, so both panels are literally the same view and
+    // the linked camera means something. (The two frames would otherwise
+    // differ by however much culling and floaters move the median.)
+    if (_mesh_preview_open && _mesh_view.ready() &&
+        _mesh_view.kind() == SplatViewer::Kind::Mesh &&
+        !_mesh_viewport.preview_active() &&
+        (!_mesh_splats_open || _splat.state() != SplatViewer::State::Loading)) {
+        const float* t2n = _mesh_view.mesh_to_normalized();
+        float shared[12];
+        if (_mesh_splats_open && _splat.ready()) {
+            // render_config().train_to_normalized is normalized -> model
+            // (a uniform scale + centre); the mesh wants its inverse.
+            const auto& m = _splat.render_config().train_to_normalized;
+            const float unit = m[0] != 0.0f ? m[0] : 1.0f;
+            const float inv = 1.0f / unit;
+            const float t[12] = {inv, 0, 0, -inv * m[3],
+                                 0, inv, 0, -inv * m[7],
+                                 0, 0, inv, -inv * m[11]};
+            for (int i = 0; i < 12; i++) shared[i] = t[i];
+            t2n = shared;
+        }
+        _mesh_viewport.attach_preview_mesh(_mesh_view.mesh(), t2n,
+                                           _mesh_view.scene_key());
+        // Both panels start on the same pose; the link keeps them there.
+        if (_mesh_splats_open && _splat.ready())
+            _mesh_viewport.sync_view_from(_viewport);
+    }
+
+    const bool running = _mesh.busy();
+    const float log_h = _show_log ? 140.0f : 0.0f;
+    const float spacing = ImGui::GetStyle().ItemSpacing.y;
+
+    ImGui::BeginChild("##meshbody",
+                      ImVec2(0, -(log_h + (log_h > 0 ? spacing : 0))));
+
+    if (_mesh_preview_open) {
+        // ---- results ----
+        if (_mesh.num_verts() > 0)
+            ui::Text(msg::mesh_done, {(long long)_mesh.num_verts(),
+                                      (long long)_mesh.num_faces()});
+        ui::TextDisabledRaw(_mesh.output_path());
+        if (_mesh_splats_open && _splat.ready())
+            ui::Checkbox(msg::mesh_link_views, &_mesh_link_views);
+        ImGui::SameLine();
+        if (ui::Button(msg::mesh_open_in_viewer)) {
+            // Hand both panels back first: the viewer screen reuses _splat,
+            // which is holding this preview's model.
+            const std::string out = _mesh.output_path();
+            close_mesh_preview();
+            request_open_splat(out);
+        }
+        ImGui::SameLine();
+        // Same message as the button that started this run, so it needs its
+        // own ImGui ID (a label IS the ID -- see AGENTS.md).
+        ImGui::PushID("again");
+        if (ui::Button(msg::mesh_start)) close_mesh_preview();
+        ImGui::PopID();
+        draw_mesh_preview(ImGui::GetContentRegionAvail().y);
+    } else {
+        ImGui::BeginDisabled(running);
+        draw_mesh_options();
+        ImGui::EndDisabled();
+
+        ImGui::Spacing();
+        if (running) {
+            const float p = _mesh.progress();
+            ui::ProgressBar(p >= 0 ? p : 0.0f, ImVec2(-1, 0), msg::mesh_running);
+            const std::string st = _mesh.stage();
+            if (!st.empty()) ui::TextDisabledRaw(st);
+            if (ui::Button(msg::mesh_cancel)) _mesh.cancel();
+        } else {
+            ImGui::BeginDisabled(_mesh_job.checkpoint.empty());
+            if (ui::Button(msg::mesh_start, ImVec2(220, 34))) start_meshing();
+            ImGui::EndDisabled();
+            if (_mesh_job.checkpoint.empty()) {
+                ImGui::SameLine();
+                ui::TextColored(kDim, msg::mesh_no_model);
+            }
+            if (_mesh.state() == MeshRunner::State::Failed) {
+                ui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), msg::mesh_failed);
+                ui::TextDisabledRaw(_mesh.error());
+            } else if (_mesh.state() == MeshRunner::State::Cancelled) {
+                ui::TextColored(kDim, dmsg::cancelled);
+            }
+        }
     }
     ImGui::EndChild();
     if (_show_log) draw_log_panel(log_h);

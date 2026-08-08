@@ -93,6 +93,16 @@ struct ViewRequest {
     // pixel (render resolution), read from the ray-depth channel the render
     // already downloads -- no extra VRAM or render pass.
     int pick_px = -1, pick_py = -1;
+
+    // ---- per-request overrides of the static config ----
+    // A viewer looking at a finished model can legitimately want to see it
+    // rendered a different way than it was trained (the web client offers
+    // exactly these), and both are cheap: the primitive selects which
+    // projection/raster pair runs, and the SH degree only bounds a loop.
+    // They ride on the REQUEST rather than mutating the shared config so a
+    // render in flight is never half-switched.
+    std::string primitive;    // "" = ViewerRenderConfig::primitive
+    int sh_degree = -1;       // < 0 = the warmup schedule
 };
 
 struct ViewResult {

@@ -147,15 +147,17 @@ inline uint32_t resolve_sh_quant(
     *out_stride = 1;
     if (sh_value_bits == 32)
         return 0;
-    if (sh_value_bits != 8 && sh_value_bits != 16)
-        throw std::runtime_error(
-            "projection: sh_value_bits must be 8, 16 or 32");
-    if (!sh_value_packed.has_value() || !sh_value_bounds.has_value())
-        throw std::runtime_error(
-            "projection: sh_value_bits != 32 requires "
-            "sh_value_packed and sh_value_bounds");
-    *out_packed = std::get<0>(sh_value_packed.value());
-    *out_bounds = std::get<0>(sh_value_bounds.value());
+    if (num_sh_buffer != 0) {
+        if (sh_value_bits != 8 && sh_value_bits != 16)
+            throw std::runtime_error(
+                "projection: sh_value_bits must be 8, 16 or 32");
+        if (!sh_value_packed.has_value() || !sh_value_bounds.has_value())
+            throw std::runtime_error(
+                "projection: sh_value_bits != 32 requires "
+                "sh_value_packed and sh_value_bounds");
+        *out_packed = std::get<0>(sh_value_packed.value());
+        *out_bounds = std::get<0>(sh_value_bounds.value());
+    }
     *out_stride = sh_bounds_stride > 0
                       ? sh_bounds_stride
                       : (int64_t)256 * 3 * (int64_t)num_sh_buffer;

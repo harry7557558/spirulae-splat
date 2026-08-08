@@ -1469,7 +1469,14 @@ bool generate_mesh(
         return true;
     }
 
+    // Each long phase announces itself BEFORE it runs, not only when it
+    // finishes. A phase that takes minutes and prints only on completion is
+    // indistinguishable from a hang, and it leaves any progress display with
+    // nothing to show.
     // ---- 1. point cloud (float everywhere except the Delaunay call) ----
+    if (cfg.verbose)
+        printf("[meshing] point cloud: sampling %d Gaussians...\n",
+               ev.num_kept());
     std::vector<float> pts;
     ev.generate_point_cloud(pts);
     const int P = ev.num_points();
@@ -1477,6 +1484,8 @@ bool generate_mesh(
 
     // ---- 2. Delaunay tetrahedralization (needs double precision) ----
     auto t1 = Clock::now();
+    if (cfg.verbose)
+        printf("[meshing] Delaunay: triangulating %d points...\n", P);
     std::vector<double> pts_d(pts.begin(), pts.end());
     auto tri = delaunay3d::compute_delaunay_3d(pts_d.data(), P, cfg.num_threads, false);
     pts_d.clear(); pts_d.shrink_to_fit();
@@ -1488,12 +1497,16 @@ bool generate_mesh(
 
     // ---- 3. occupancy at all vertices ----
     auto t2 = Clock::now();
+    if (cfg.verbose)
+        printf("[meshing] occupancy field: evaluating %d points...\n", P);
     std::vector<float> occ(P);
     ev.evaluate(pts.data(), P, occ.data());
     if (cfg.verbose) printf("[meshing] occupancy field (%.2fs)\n", secs_since(t2));
 
     // ---- 4. collect cut edges ----
     auto t3 = Clock::now();
+    if (cfg.verbose)
+        printf("[meshing] cut edges: scanning %d tetrahedra...\n", M);
     std::unordered_map<int64_t, int> edge_id;
     edge_id.reserve((size_t)M * 2);
     std::vector<int32_t> ea, eb;
@@ -1523,6 +1536,9 @@ bool generate_mesh(
 
     // ---- 5. bisection: one mesh vertex per cut edge ----
     auto t4 = Clock::now();
+    if (cfg.verbose)
+        printf("[meshing] bisection: %d edges, %d iterations...\n",
+               E, cfg.bisection_iters);
     Mesh mesh;
     mesh.V.resize(E);
     {

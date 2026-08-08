@@ -47,6 +47,7 @@ void (*GenRenderbuffers)(GLsizei, GLuint*) = nullptr;
 void (*BindRenderbuffer)(GLenum, GLuint) = nullptr;
 void (*RenderbufferStorage)(GLenum, GLenum, GLsizei, GLsizei) = nullptr;
 void (*DeleteRenderbuffers)(GLsizei, const GLuint*) = nullptr;
+void (*ActiveTexture)(GLenum) = nullptr;
 
 bool init() {
     static bool done = false, ok = false;
@@ -97,6 +98,7 @@ bool init() {
     load(BindRenderbuffer, "glBindRenderbuffer");
     load(RenderbufferStorage, "glRenderbufferStorage");
     load(DeleteRenderbuffers, "glDeleteRenderbuffers");
+    load(ActiveTexture, "glActiveTexture");
     ok = all;
     return ok;
 }

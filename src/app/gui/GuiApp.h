@@ -11,6 +11,7 @@
 #include "app/gui/Fonts.h"
 #include "app/gui/ConfigUI.h"
 #include "app/gui/FileDialog.h"
+#include "app/gui/MeshRunner.h"
 #include "app/gui/ModelCache.h"
 #include "app/gui/SegmentPanel.h"
 #include "app/gui/SfmRunner.h"
@@ -47,11 +48,12 @@ public:
     FontSet& fonts() { return _fonts; }
 
 private:
-    enum class Screen { Home, NewDataset, Train, Viewer, Batch };
+    enum class Screen { Home, NewDataset, Train, Viewer, Batch, Mesh };
     enum class PickAction {
         None, OpenDataset, SourceImages, SourceVideo, SourceReplace, Workspace,
         OutputPrefix, VocabTree, MaskModelFile, SplatFile,
-        PresetFile, PresetSaveFolder, BatchDataset, BatchOutput, BatchPresetFile
+        PresetFile, PresetSaveFolder, BatchDataset, BatchOutput, BatchPresetFile,
+        MeshSource, MeshPhotos, MeshOutput
     };
     // Which reconstruction back end the New Dataset screen runs.
     enum class Engine { BuiltIn, Colmap };
@@ -159,6 +161,17 @@ private:
     void draw_language_menu();       // the picker, and the CJK font prompt
     void draw_train();
     void draw_viewer();
+    void draw_mesh();
+    void draw_mesh_options();
+    void draw_mesh_preview(float height);
+    // Set the meshing source (and derive the output name from it). Shared by
+    // the picker, the drop handler and the "mesh this run" shortcut.
+    void set_mesh_source(const std::string& path);
+    void start_meshing();
+    // Load whatever the run wrote, plus the model it came from, into the two
+    // preview panels. No-op (mesh side only) while training holds the engine.
+    void open_mesh_preview();
+    void close_mesh_preview();
     void draw_batch();
     void draw_batch_table();
     void draw_batch_preset_combo(BatchJob& job, int row);
@@ -240,6 +253,23 @@ private:
     SplatViewer _splat;
     // The viewport is showing _splat rather than _runner's session.
     bool _viewing_splat = false;
+
+    // ---- meshing ----
+    // The extraction runs as a child process (MeshRunner); the preview after
+    // it is two panels of the same scene -- the splats on the engine
+    // renderer, the mesh on the GL one -- with their navigation linked.
+    MeshRunner _mesh;
+    MeshJob _mesh_job;
+    SplatViewer _mesh_view;          // the produced file, as geometry
+    ViewportPanel _mesh_viewport;    // the right-hand panel
+    bool _mesh_preview_open = false; // the mesh side is attached
+    bool _mesh_splats_open = false;  // the splat side is attached too
+    bool _mesh_link_views = true;
+    // The MeshRunner::run_id() whose result has already been opened. The
+    // runner stays Done for the rest of the session, so without this the
+    // screen would reopen the preview the frame after it is closed -- which
+    // is what made "make another mesh" impossible without a restart.
+    uint64_t _mesh_shown_run = 0;
 
     // Dataset creation. Both runners exist; only one runs, chosen by _engine
     // (and forced when only one is available).
