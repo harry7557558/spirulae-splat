@@ -110,14 +110,31 @@ void print_usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    // Line-buffer stdout whenever it is NOT a terminal. Every tool here is
-    // routinely run as a CHILD PROCESS with its output piped to a live log --
-    // the GUI does it for reconstruction, masking and meshing -- and the C
-    // runtime's default for a pipe is FULL buffering, which holds 4 KB of
+    // Stop FULL buffering of stdout whenever it is NOT a terminal. Every tool
+    // here is routinely run as a CHILD PROCESS with its output piped to a live
+    // log -- the GUI does it for reconstruction, masking and meshing -- and the
+    // C runtime's default for a pipe is full buffering, which holds 4 KB of
     // progress back until the buffer fills or the process exits. A run that
     // prints one line a minute then appears to print nothing at all for the
     // first hour, which is exactly the failure it looks like.
-    if (!isatty(fileno(stdout))) std::setvbuf(stdout, nullptr, _IOLBF, 0);
+    //
+    // The two runtimes need different modes for the same result, and the
+    // Windows one is unforgiving about both halves:
+    //   * its CRT has no line buffering at all -- `_IOLBF` is documented to be
+    //     treated as `_IOFBF` -- so asking for it would leave the stall in
+    //     place;
+    //   * and it rejects a zero size for the buffered modes, through an
+    //     invalid-parameter handler that is `__fastfail`. The process then dies
+    //     at this line with status 0xC0000409 and NOTHING on either stream --
+    //     which reads, from the parent, as a tool that failed instantly for no
+    //     reason. Only `_IONBF` is allowed a zero size there.
+    if (!isatty(fileno(stdout))) {
+#ifdef _WIN32
+        std::setvbuf(stdout, nullptr, _IONBF, 0);
+#else
+        std::setvbuf(stdout, nullptr, _IOLBF, 0);
+#endif
+    }
 
     // --lang is handled here and removed from argv, so no tool's own parser
     // has to know about it. The chain that decides the language is in
