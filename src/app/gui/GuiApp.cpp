@@ -2,6 +2,7 @@
 
 #include "app/gui/GuiApp.h"
 
+#include "checkpoint/SplatPly.h"
 #include "data/Json.h"
 #include "app/gui/AppPaths.h"
 #include "app/gui/DatasetPrep.h"
@@ -2616,6 +2617,40 @@ void GuiApp::set_mesh_source(const std::string& path) {
     close_mesh_preview();
 }
 
+bool GuiApp::mesh_dataset_found() {
+    if (!_mesh_job.use_data) return false;
+    const std::string key = _mesh_job.checkpoint + '\n' + _mesh_job.data_dir;
+    if (key == _mesh_data_probe_key) return _mesh_data_probe_found;
+    _mesh_data_probe_key = key;
+    _mesh_data_probe_found = false;
+    std::error_code ec;
+    if (!_mesh_job.data_dir.empty()) {
+        // Exactly the child's test: a folder that is not there is no dataset,
+        // and it meshes without one rather than failing.
+        _mesh_data_probe_found = fs::exists(_mesh_job.data_dir, ec);
+    } else if (!_mesh_job.checkpoint.empty()) {
+        // Empty field: the child reads `data` out of the run's config.json,
+        // relative to the run directory. Both steps throw on a path that is
+        // not a checkpoint at all, which simply means no dataset.
+        try {
+            auto [ply, run_dir] = spirula::find_splat_ply(_mesh_job.checkpoint);
+            (void)ply;
+            const fs::path cfg = fs::path(run_dir) / "config.json";
+            if (fs::is_regular_file(cfg, ec)) {
+                const JsonValue run_cfg = json_parse_file(cfg.string());
+                const JsonValue* d = run_cfg.find("data");
+                if (d && !d->is_null()) {
+                    fs::path cand = d->as_string();
+                    if (cand.is_relative()) cand = fs::path(run_dir) / cand;
+                    _mesh_data_probe_found = fs::exists(cand, ec);
+                }
+            }
+        } catch (const std::exception&) {
+        }
+    }
+    return _mesh_data_probe_found;
+}
+
 void GuiApp::start_meshing() {
     if (_mesh_job.checkpoint.empty()) return;
     close_mesh_preview();
@@ -2691,6 +2726,11 @@ void GuiApp::draw_mesh_options() {
     // ---- the photos ----
     ui::Checkbox(msg::mesh_use_photos, &_mesh_job.use_data);
     ui::help_on_hover(msg::mesh_use_photos_help);
+    // Meshing without cameras is a real choice, and a much worse mesh, so it
+    // is said out loud on the screen rather than left to the child's warning
+    // in the log panel -- which scrolls past, and only after the run starts.
+    if (!_mesh_job.use_data)
+        ui::TextColoredWrapped(kWarn, msg::mesh_no_photos_warn);
     if (_mesh_job.use_data) {
         ImGui::Indent();
         ImGui::SetNextItemWidth(field_width(msg::mesh_photos_dir));
@@ -2703,6 +2743,14 @@ void GuiApp::draw_mesh_options() {
         }
         ImGui::SameLine();
         ui::TextDisabled(msg::mesh_photos_dir);
+        // The box is ticked but nothing will be found: a loose splat.ply, a
+        // run whose config.json records a dataset that has since moved, or a
+        // folder typed wrong. Same outcome as unticking it, so same warning.
+        // (Silent while there is no model yet: with nothing picked there is
+        // nothing to have found a dataset FOR, and the Create button already
+        // says what is missing.)
+        if (!_mesh_job.checkpoint.empty() && !mesh_dataset_found())
+            ui::TextColoredWrapped(kWarn, msg::mesh_photos_missing_warn);
 
         ImGui::SetNextItemWidth(120.0f);
         ui::InputInt(msg::mesh_max_cameras, &_mesh_job.max_cameras);

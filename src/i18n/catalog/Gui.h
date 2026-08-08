@@ -4838,6 +4838,86 @@ SS_MSG(mesh_photos_dir_help,
     RU("Оставьте пустым, чтобы взять папку из config.json запуска."),
     TR("Çalıştırmanın config.json dosyasındaki klasörü kullanmak için boş bırakın."));
 
+// The two warnings the mesh screen shows when the run about to start would
+// have no cameras -- the checkbox is off, or nothing was found to use. Both
+// say the same thing the CLI says (i18n/catalog/Cli.h, mesh_no_cameras): a
+// mesh carved from the photos is a much better mesh, and this is the moment
+// to say so, before three minutes of work produce the worse one.
+SS_MSG(mesh_no_photos_warn,
+    EN("Without the photos the mesh comes from the Gaussian densities alone: "
+       "the surface is rougher and the colors are worse. Turn this on for "
+       "much better quality."),
+    JA("写真を使わないと、メッシュはガウシアンの密度だけから作られ、面は粗く、"
+       "色も悪くなります。オンにすると品質が大きく上がります。"),
+    ZH_HANS("不用照片时，网格只根据高斯密度生成：内部会留下雾，颜色也更差。"
+            "打开它可以让质量好很多。"),
+    ZH_HANT("不用相片時，網格只根據高斯密度產生：內部會留下霧，顏色也更差。"
+            "打開它可以讓品質好很多。"),
+    KO("사진을 쓰지 않으면 메시가 가우시안 밀도만으로 만들어져 표면이 거칠고 "
+       "색도 나빠집니다. 켜면 품질이 훨씬 좋아집니다."),
+    DE("Ohne die Fotos entsteht das Netz nur aus den Gauß-Dichten: die "
+       "Oberfläche wird rauer und die Farben schlechter. Einschalten für "
+       "deutlich bessere Qualität."),
+    FR("Sans les photos, le maillage ne vient que des densités gaussiennes : "
+       "la surface est plus grossière et les couleurs moins bonnes. Activez "
+       "pour une qualité bien meilleure."),
+    ES("Sin las fotos la malla sale solo de las densidades gaussianas: la "
+       "superficie queda más basta y el color peor. Actívalo para una calidad "
+       "bastante mejor."),
+    PT("Sem as fotos a malha vem só das densidades gaussianas: a superfície "
+       "fica mais grosseira e as cores piores. Ligue para uma qualidade bem "
+       "melhor."),
+    IT("Senza le foto la mesh viene solo dalle densità gaussiane: la "
+       "superficie è più grezza e i colori peggiori. Attivalo per una qualità "
+       "molto migliore."),
+    NL("Zonder de foto's komt de mesh alleen uit de Gauss-dichtheden: het "
+       "oppervlak wordt ruwer en de kleuren slechter. Zet dit aan voor "
+       "duidelijk betere kwaliteit."),
+    RU("Без фотографий меш строится только по гауссовым плотностям: "
+       "поверхность грубее, а цвета хуже. Включите — качество будет заметно "
+       "лучше."),
+    TR("Fotoğraflar olmadan ağ yalnızca Gauss yoğunluklarından çıkar: yüzey "
+       "daha kaba, renkler daha kötü olur. Belirgin biçimde daha iyi kalite "
+       "için açın."));
+
+SS_MSG(mesh_photos_missing_warn,
+    EN("No photo folder found for this model, so the mesh will come from the "
+       "Gaussian densities alone. Fill in the folder above for a much better "
+       "surface."),
+    JA("このモデルの写真フォルダが見つかりません。このままではガウシアンの密度"
+       "だけからメッシュを作ります。上でフォルダを指定すると、面がずっと良く"
+       "なります。"),
+    ZH_HANS("找不到这个模型的照片文件夹，网格将只根据高斯密度生成。"
+            "在上面填入文件夹，表面会好很多。"),
+    ZH_HANT("找不到這個模型的相片資料夾，網格將只根據高斯密度產生。"
+            "在上面填入資料夾，表面會好很多。"),
+    KO("이 모델의 사진 폴더를 찾지 못했습니다. 이대로면 가우시안 밀도만으로 "
+       "메시를 만듭니다. 위에 폴더를 넣으면 표면이 훨씬 좋아집니다."),
+    DE("Für dieses Modell wurde kein Fotoordner gefunden, das Netz entsteht "
+       "also nur aus den Gauß-Dichten. Oben einen Ordner eintragen, dann wird "
+       "die Oberfläche deutlich besser."),
+    FR("Aucun dossier de photos trouvé pour ce modèle : le maillage ne "
+       "viendra que des densités gaussiennes. Indiquez le dossier ci-dessus "
+       "pour une surface bien meilleure."),
+    ES("No se encontró ninguna carpeta de fotos para este modelo, así que la "
+       "malla saldrá solo de las densidades gaussianas. Indica la carpeta "
+       "arriba para una superficie bastante mejor."),
+    PT("Nenhuma pasta de fotos encontrada para este modelo, então a malha "
+       "virá só das densidades gaussianas. Preencha a pasta acima para uma "
+       "superfície bem melhor."),
+    IT("Nessuna cartella di foto trovata per questo modello: la mesh verrà "
+       "solo dalle densità gaussiane. Indica la cartella qui sopra per una "
+       "superficie molto migliore."),
+    NL("Geen fotomap gevonden voor dit model, dus de mesh komt alleen uit de "
+       "Gauss-dichtheden. Vul hierboven de map in voor een duidelijk beter "
+       "oppervlak."),
+    RU("Папка с фотографиями для этой модели не найдена, поэтому меш будет "
+       "построен только по гауссовым плотностям. Укажите папку выше — "
+       "поверхность будет заметно лучше."),
+    TR("Bu model için fotoğraf klasörü bulunamadı, bu yüzden ağ yalnızca "
+       "Gauss yoğunluklarından çıkacak. Yukarıya klasörü girerseniz yüzey "
+       "belirgin biçimde iyileşir."));
+
 SS_MSG(mesh_color,
     EN("Color"),
     JA("色"),

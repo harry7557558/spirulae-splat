@@ -168,6 +168,12 @@ private:
     // the picker, the drop handler and the "mesh this run" shortcut.
     void set_mesh_source(const std::string& path);
     void start_meshing();
+    // Would the run about to start actually get cameras? Resolves the dataset
+    // the way the child does -- the folder typed here, else the `data` entry
+    // in the run's config.json -- so the screen can warn BEFORE the run that
+    // the mesh is about to be the density-only, much rougher kind. Touches
+    // the disk, so the answer is cached until the source or folder changes.
+    bool mesh_dataset_found();
     // Load whatever the run wrote, plus the model it came from, into the two
     // preview panels. No-op (mesh side only) while training holds the engine.
     void open_mesh_preview();
@@ -270,6 +276,10 @@ private:
     // screen would reopen the preview the frame after it is closed -- which
     // is what made "make another mesh" impossible without a restart.
     uint64_t _mesh_shown_run = 0;
+    // mesh_dataset_found()'s cache: the (source, folder) it was asked about
+    // and what it answered.
+    std::string _mesh_data_probe_key;
+    bool _mesh_data_probe_found = false;
 
     // Dataset creation. Both runners exist; only one runs, chosen by _engine
     // (and forced when only one is available).
