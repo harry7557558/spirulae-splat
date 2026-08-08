@@ -4,7 +4,7 @@
 [**Quick Start**](#quick-start) &#8226;
 [**Acknowledgement**](#acknowledgement) &#10073;
 [**SuperSplat**](https://superspl.at/user?id=harry7557558) &#10073;
-[**Online Viewer**](https://harry7557558.github.io/spirulae-splat/viewer/)
+[**Web Viewer**](https://harry7557558.github.io/spirulae-splat/viewer/)
 
 This is my personal project that trains 3D Gaussian Splatting (3DGS) models. Formerly Spirulae-Splat.
 
@@ -20,8 +20,9 @@ This is my personal project that trains 3D Gaussian Splatting (3DGS) models. For
 - Cross vendor support via Vulkan compute &ndash; Runs on **NVIDIA, AMD, Intel(R), and Apple** GPUs
 - Unified densification strategy combining elements from **MCMC** and **IGS/IGS+/MRNF**
 - Extreme **VRAM efficiency** with quantized training &ndash; Up to 10 million SH3 Gaussians in 8GB VRAM
-- **Bilateral grid** and **PPISP** for exposure/WB correction
+- Modified **Bilateral grid** and **PPISP** for exposure/WB correction, with enhanced color accuracy
 - Camera models: perspective, **equidistant/equisolid fisheye** (supports >180° fov like in typical **360 cameras**), **equirectangular/spherical**; fully supports radial, tangential, and thin prism distortion coefficients
+- Enhanced **floater** and **false-transparency** suppression with depth and color consistency regularization
 - Generalization from small objects to **city-scale scenes** with minimum tuning
 - **Depth and normal** supervision using monocular geometry models
 - Training on images in linear and various wide-gamut color spaces (e.g. **ACEScg**)
@@ -29,8 +30,18 @@ This is my personal project that trains 3D Gaussian Splatting (3DGS) models. For
 - **Masking** (segment and ignore modes)
 - 3DGS, **anti-aliased** 3DGS, and **3DGUT** primitives, with improved cross-viewer compatibility
 - **Skybox**, with regularization to balance sky removal and discouraging transparency
-- 2DGS-like depth regularization to discourage floaters
 - And more (see "Quick start" below).
+
+## News
+
+- **August 8, 2026: Multilingual Support** &ndash; Multilingual support has been added, available to both GUI and CLI via `--lang`. Supported languages: English, 日本語, 简体中文, 繁體中文, 한국어, Deutsch, Français, Español, Português, Italiano, Nederlands, Русский, Türkçe.
+
+- **August 8, 2026: End-to-end workflow** &ndash; We've added components to extract frames from video, AI masking, native SfM, meshing, and batch training, available to the Vulkan backend, accessible from both GUI and CLI.
+
+- **July 22, 2026: Cross-vendor support** &ndash; We've added a Vulkan backend that works on NVIDIA, AMD, and Intel(R) GPUs. Mac/Apple Silicon (via MoltenVK) remain experimental since we don't have a device to test on, and we welcome community feedback.
+
+- **July 12, 2027: GUI** &ndash; A training GUI has been implemented. CLI training will remain accessible.
+
 
 # Installation
 
@@ -38,14 +49,14 @@ Spirula Studio provides two installation options:
 
 - **Native CLI/GUI trainer with Vulkan backend:** The new cross-platform and cross-vendor option. Works on all major GPUs.
 
-- **Native CLI/GUI trainer with CUDA backend:** Recommended option for CUDA-capable NVIDIA GPUs.
+- **Native CLI/GUI trainer with CUDA backend:** Legacy option for CUDA-capable NVIDIA GPUs.
 
-Both provide the same training functionality; each adds a few tools of its own.
+Both provide the same training and meshing functionality.
 
 | Installation Option | GPU/Vendor Support | Platform Support | Dependencies | Additional Features |
 |--------|--------|--------|--------|--------|
 | Native Vulkan CLI/GUI | NVIDIA, AMD, Intel(R), Apple Silicon | Windows, Linux, macOS | Vulkan/MoltenVK, CMake/Ninja | Native support for SfM, frame extraction from videos, and AI masking |
-| Native CUDA CLI/GUI | CUDA-capable NVIDIA GPUs | Windows, Linux | CUDA, CMake/Ninja | Meshing |
+| Native CUDA CLI/GUI | CUDA-capable NVIDIA GPUs | Windows, Linux | CUDA, CMake/Ninja | - |
 
 ## Native CLI/GUI trainer with Vulkan backend
 
@@ -176,12 +187,6 @@ Spirula Studio provides presets. Run `spirula train <preset name> --data [DATASE
 - To specify linear color space for splat and input images, use `--image_color_is_linear` and `--splat_color_is_linear True`. 16 bit PNG is recommended for linear input images.
 - To specify color gamut for splat and input images, use `--image_color_gamut` and `--splat_color_gamut`. (supports `ACES2065-1`, `ACEScg`, `Rec.2020`, `AdobeRGB`, `DCI-3`)
 - Specify `--convert_initial_point_cloud_color True` if colors in initial point cloud is in sRGB, and color in initial point cloud will be converted to splat's color space. If you don't specify True or False, it will auto decide based on arguments.
-<!-- 
-- Batch many tiny tiles instead of whole images: `spirulae-train 3dgs-patched ...` instead of `spirulae-train 3dgs`
-- Validation (early stop training if loss on validation images start to increase): append `nerfstudio-data --validation_fraction 0.1` to the end of training command
-- Second-order optimizer using Jacobian-residual product and Hessian diagonal: `spirulae-train 3dgs^2-pos` (more stable) or `3dgs^2` (less stable) instead of `spirulae`. We also provide presets `3dgs^2-confined` and `3dgs^2-open` for the corresponding presets with `3dgs^2` methods, which otherwise run on `3dgs^2-pos`.
-    - Note: on Windows, you may need to wrap parentheses around method name with `^2`. For example, use `spirulae-train "3dgs^2-pos"` instead of `spirulae-train 3dgs^2-pos`.
-- 2DGS-like depth regularization to discourage floaters: `--depth_distortion_reg 0.01`. Similar regularization can also be applied to RGB by setting `--rgb_distortion_reg` to a positive value. -->
 
 # Acknowledgement
 
