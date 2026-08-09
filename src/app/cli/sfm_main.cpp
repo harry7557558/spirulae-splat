@@ -30,6 +30,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -37,6 +38,7 @@
 
 #include "sfm/SfmConfig.h"
 #include "sfm/core/CameraSetup.h"
+#include "sfm/core/FeatureCompaction.h"
 #include "sfm/core/Log.h"
 #include "sfm/core/Features.h"
 #include "sfm/core/Image.h"
@@ -1452,6 +1454,8 @@ static int cmdMap(int argc, char** argv) {
     const std::string& featdir = cfg.feature_dir;
 
     MatchesDatabase db = readMatches(matchesPath);
+    std::optional<FeatureCompactionPlan> compaction;
+    if (cfg.compact_unused_features) compaction.emplace(buildFeatureCompactionPlan(db));
     std::vector<FeatureSet> feats(db.images.size());
     {
         // Descriptors are skipped: matching is over, and on a 5000-image
@@ -1468,7 +1472,14 @@ static int cmdMap(int argc, char** argv) {
             pool.emplace_back([&] {
                 for (size_t i = next++; i < db.images.size(); i = next++) {
                     try {
-                        feats[i] = readFeatures(featdir + "/" + db.images[i].name + ".bin", false);
+                        FeatureSet loaded =
+                            readFeatures(featdir + "/" + db.images[i].name + ".bin", false);
+                        if (compaction)
+                            feats[i] = compactFeatureSet(std::move(loaded),
+                                                         compaction->old_to_new[i],
+                                                         compaction->compact_counts[i]);
+                        else
+                            feats[i] = std::move(loaded);
                     } catch (const std::exception& e) {
                         std::lock_guard<std::mutex> lk(err_mtx);
                         if (first_error.empty()) first_error = e.what();
@@ -1479,6 +1490,23 @@ static int cmdMap(int argc, char** argv) {
         if (!first_error.empty()) {
             L::err_raw(Tag::Map, first_error);
             return 1;
+        }
+    }
+    if (compaction) {
+        remapMatches(db, *compaction, feats);
+        const FeatureCompactionStats stats = compaction->stats;
+        // old_to_new is the only temporary proportional to the original row count.
+        compaction.reset();
+        if (opt.verbose) {
+            const double removed_pct = stats.original_features
+                                           ? 100.0 * stats.removedFeatures() /
+                                                 stats.original_features
+                                           : 0.0;
+            L::out(Tag::Map, M::map_feature_compaction,
+                   {(long long)stats.original_features, (long long)stats.compact_features,
+                    (long long)stats.removedFeatures(), L::num(removed_pct, 2),
+                    (long long)stats.images, (long long)stats.zero_feature_images,
+                    (long long)stats.pairs, (long long)stats.correspondences});
         }
     }
 

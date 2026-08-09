@@ -879,6 +879,42 @@ SS_MSG(focal_search,
 // Mapping
 // ===========================================================================
 
+SS_MSG(map_feature_compaction,
+    EN("Unused-feature compaction: features {0} -> {1}; removed {2} ({3}%); images {4}; "
+       "zero-active images {5}; stored pairs {6}; correspondences {7}"),
+    JA("未使用特徴点の整理: 特徴点 {0} -> {1}; 削除 {2} ({3}%); 画像 {4}; "
+       "使用特徴点がない画像 {5}; 保存されたペア {6}; 対応点 {7}"),
+    ZH_HANS("整理未用特征点: 特征点 {0} -> {1}; 移除 {2} ({3}%); 图像 {4}; "
+            "使用特征点为零的图像 {5}; 已存储图像对 {6}; 对应关系 {7}"),
+    ZH_HANT("整理未用特徵點: 特徵點 {0} -> {1}; 移除 {2} ({3}%); 影像 {4}; "
+            "使用特徵點為零的影像 {5}; 已儲存影像對 {6}; 對應關係 {7}"),
+    KO("미사용 특징점 정리: 특징점 {0} -> {1}; 제거 {2} ({3}%); 이미지 {4}; "
+       "사용 특징점이 없는 이미지 {5}; 저장된 쌍 {6}; 대응점 {7}"),
+    DE("Komprimierung ungenutzter Merkmale: Merkmale {0} -> {1}; entfernt {2} ({3}%); "
+       "Bilder {4}; Bilder ohne aktive Merkmale {5}; gespeicherte Paare {6}; "
+       "Korrespondenzen {7}"),
+    FR("Compactage des points inutilisés : points {0} -> {1} ; retirés {2} ({3} %) ; "
+       "images {4} ; images sans point actif {5} ; paires stockées {6} ; "
+       "correspondances {7}"),
+    ES("Compactación de puntos no usados: puntos {0} -> {1}; eliminados {2} ({3}%); "
+       "imágenes {4}; imágenes sin puntos activos {5}; pares almacenados {6}; "
+       "correspondencias {7}"),
+    PT("Compactação de pontos não usados: pontos {0} -> {1}; removidos {2} ({3}%); "
+       "imagens {4}; imagens sem pontos ativos {5}; pares armazenados {6}; "
+       "correspondências {7}"),
+    IT("Compattazione dei punti inutilizzati: punti {0} -> {1}; rimossi {2} ({3}%); "
+       "immagini {4}; immagini senza punti attivi {5}; coppie memorizzate {6}; "
+       "corrispondenze {7}"),
+    NL("Compactie van ongebruikte kenmerken: kenmerken {0} -> {1}; verwijderd {2} ({3}%); "
+       "afbeeldingen {4}; afbeeldingen zonder actieve kenmerken {5}; opgeslagen paren {6}; "
+       "overeenkomsten {7}"),
+    RU("Сжатие неиспользуемых признаков: признаки {0} -> {1}; удалено {2} ({3}%); "
+       "изображения {4}; изображения без активных признаков {5}; сохранённые пары {6}; "
+       "соответствия {7}"),
+    TR("Kullanılmayan öznitelik sıkıştırması: öznitelikler {0} -> {1}; kaldırılan {2} "
+       "({3}%); görüntüler {4}; etkin özniteliği olmayan görüntüler {5}; saklanan çiftler "
+       "{6}; eşleşmeler {7}"));
+
 SS_MSG(map_seed_relax,
     EN("No seed pair passed the current thresholds; relaxing to inliers {0}, angle {1} degrees"),
     JA("現在のしきい値では初期ペアが見つかりません。インライア {0}、角度 {1} 度まで緩めます"),

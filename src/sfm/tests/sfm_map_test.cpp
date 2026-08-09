@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "sfm/core/FeatureCompaction.h"
 #include "sfm/core/Model.h"
 #include "sfm/map/Bundle.h"
 #include "sfm/map/Assemble.h"
@@ -103,6 +104,16 @@ int cmdMapSelftest(int argc, char** argv) {
             if (tv.matches.size() >= 15) db.pairs.push_back(std::move(tv));
         }
 
+    MatchesDatabase compact_db = db;
+    std::vector<FeatureSet> compact_feats(feats.size());
+    {
+        FeatureCompactionPlan plan = buildFeatureCompactionPlan(compact_db);
+        for (size_t i = 0; i < feats.size(); i++)
+            compact_feats[i] =
+                compactFeatureSet(feats[i], plan.old_to_new[i], plan.compact_counts[i]);
+        remapMatches(compact_db, plan, compact_feats);
+    }
+
     Mapper mapper(db, feats, opt);
     // The synthetic scene is one connected component, so this must stay a
     // single model -- more than one would mean the mapper split a graph that
@@ -116,6 +127,44 @@ int cmdMapSelftest(int argc, char** argv) {
            rec.points3D.size(), models.size());
     if (reg < (uint32_t)M) { printf("  FAIL: not all images registered\n"); fails++; }
     if (models.size() != 1) { printf("  FAIL: connected scene split into models\n"); fails++; }
+
+    Mapper compact_mapper(compact_db, compact_feats, opt);
+    std::vector<Reconstruction> compact_models = compact_mapper.run();
+    bool compact_equivalent = !compact_models.empty() && compact_models.size() == models.size();
+    const Reconstruction* compact_rec = compact_models.empty() ? nullptr : &compact_models.front();
+    if (compact_equivalent)
+        compact_equivalent = compact_rec->numRegistered() == rec.numRegistered() &&
+                             compact_rec->points3D.size() == rec.points3D.size() &&
+                             countObservations(*compact_rec) == countObservations(rec);
+    if (compact_equivalent) {
+        for (const auto& image : rec.images) {
+            auto found = compact_rec->images.find(image.first);
+            if (found == compact_rec->images.end() ||
+                found->second.registered != image.second.registered) {
+                compact_equivalent = false;
+                break;
+            }
+        }
+    }
+    if (compact_equivalent) {
+        for (const auto& camera : rec.cameras) {
+            auto found = compact_rec->cameras.find(camera.first);
+            if (found == compact_rec->cameras.end() ||
+                std::fabs(found->second.fx - camera.second.fx) > 1e-9 ||
+                std::fabs(found->second.fy - camera.second.fy) > 1e-9 ||
+                std::fabs(found->second.cx - camera.second.cx) > 1e-9 ||
+                std::fabs(found->second.cy - camera.second.cy) > 1e-9) {
+                compact_equivalent = false;
+                break;
+            }
+        }
+    }
+    printf("  unused-feature compaction A/B: %s (%u images, %zu points, %zu obs)\n",
+           compact_equivalent ? "equivalent" : "BAD",
+           compact_rec ? compact_rec->numRegistered() : 0,
+           compact_rec ? compact_rec->points3D.size() : 0,
+           compact_rec ? countObservations(*compact_rec) : 0);
+    if (!compact_equivalent) fails++;
 
     // Relative rotations are invariant to the global similarity gauge.
     double maxRelErr = 0;

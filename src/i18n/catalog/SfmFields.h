@@ -1024,6 +1024,32 @@ SS_MSG(prefilter_ratio_help,
 // mapper
 // ===========================================================================
 
+SS_MSG(compact_unused_features_help,
+    EN("Keep in memory only feature rows referenced by stored matches; files on "
+       "disk stay unchanged"),
+    JA("保存済みマッチが参照する特徴点行だけをメモリに保持します。ディスク上の"
+       "ファイルは変更しません"),
+    ZH_HANS("内存中只保留已存储匹配所引用的特征行；磁盘上的文件保持不变"),
+    ZH_HANT("記憶體中只保留已儲存匹配所引用的特徵列；磁碟上的檔案保持不變"),
+    KO("저장된 매치가 참조하는 특징점 행만 메모리에 유지합니다. 디스크의 파일은 "
+       "변경하지 않습니다"),
+    DE("Im Speicher nur Merkmalszeilen behalten, auf die gespeicherte Matches "
+       "verweisen; Dateien auf dem Datenträger bleiben unverändert"),
+    FR("Ne garder en mémoire que les lignes de points référencées par les "
+       "correspondances stockées ; les fichiers restent inchangés sur le disque"),
+    ES("Mantener en memoria solo las filas de puntos referenciadas por las "
+       "correspondencias almacenadas; los archivos del disco no cambian"),
+    PT("Manter na memória apenas as linhas de pontos referenciadas pelas "
+       "correspondências armazenadas; os arquivos no disco não mudam"),
+    IT("Mantenere in memoria solo le righe dei punti richiamate dalle "
+       "corrispondenze memorizzate; i file su disco restano invariati"),
+    NL("Alleen kenmerkrijen waar opgeslagen overeenkomsten naar verwijzen in het "
+       "geheugen houden; bestanden op schijf blijven ongewijzigd"),
+    RU("Оставлять в памяти только строки признаков, на которые ссылаются сохранённые "
+       "соответствия; файлы на диске не изменяются"),
+    TR("Bellekte yalnızca saklanan eşleşmelerin başvurduğu öznitelik satırlarını "
+       "tut; diskteki dosyalar değişmeden kalır"));
+
 SS_MSG(focal_trials_help,
     EN("Trial reconstructions used to pick a focal the motion cannot determine "
        "(D48), 0 to skip"),
