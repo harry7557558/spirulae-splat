@@ -115,7 +115,7 @@ if __name__ == "__main__":
     parser.add_argument("input_dir", nargs=1, help="The dataset folder. Should contain a subfolder containing images. Masks will be saved to a different subfolder.")
     parser.add_argument("--prompt", required=True,
                         help="Text prompt for mask objects, semicolon separated. "
-                            "Example: \"people; cars; shadow; fisheye border\"")
+                            "Example: \"person; car; shadow of a person\"")
     parser.add_argument("--negative_prompt", "--negative-prompt", default="",
                         help="Text prompt for objects to exclude from masking, semicolon separated. "
                             "Regions matching these are kept even if they also match --prompt. "

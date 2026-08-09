@@ -1560,6 +1560,10 @@ std::string GuiApp::selected_model_path() const {
 void GuiApp::sync_dataset_jobs() {
     PrepJob prep;
     prep.inputs = _sources;
+    // The checkbox decides whether the run is given the stencils; the drawings
+    // stay on _sources either way, so switching it off does not lose them.
+    if (!_border_enable)
+        for (PrepInput& in : prep.inputs) in.stencil = app::FrameStencil{};
     prep.workspace = _workspace;
     prep.resume = _resume;
     prep.video_fps = _sfm_job.prep.video_fps;
@@ -1884,6 +1888,23 @@ void GuiApp::draw_source_cameras() {
 // Masking
 // ---------------------------------------------------------------------------
 
+void GuiApp::open_mask_preview() {
+    if (_sources.empty()) {
+        log(dmsg::mask_pick_input_first.get());
+        return;
+    }
+    const PrepInput& s = _sources[(size_t)_mask_preview_input];
+    // The clicks made from here are prompts for THIS input; record which one so
+    // the run does not carry them into a different capture
+    // (PrepJob::mask_clicks_source). The stencil needs no such note -- it is
+    // stored on the input it describes.
+    _mask.clicks_source = s.path;
+    // The preview reads the video the same way preparation will: in process
+    // where the driver can, ffmpeg where it cannot or where the job said to.
+    _segment.open(s.path, s.is_video, _mask_enable ? selected_model_path() : "",
+                  _ffmpeg_exe, _sfm_job.prep.force_external_decode);
+}
+
 void GuiApp::draw_masking_options() {
     // Masks that came with an input need no checkbox and no model: they are
     // already the answer. Say so where the question is asked, because the
@@ -1902,14 +1923,25 @@ void GuiApp::draw_masking_options() {
 
     ui::Checkbox(dmsg::mask_enable, &_mask_enable);
     ui::help_on_hover(dmsg::mask_enable_help);
-    if (!_mask_enable) return;
+
+    // A sibling, not a child: the stencil is geometry, so it works with no
+    // model downloaded and on a build with no segmentation in it at all.
+    if (ui::Checkbox(dmsg::mask_border_enable, &_border_enable) && _border_enable) {
+        // Ticking it has to do something on its own. The fisheye border is
+        // what it is for, so an input with nothing drawn on it yet gets the
+        // fit switched on; one that has been edited is left alone.
+        for (PrepInput& in : _sources)
+            if (in.stencil.empty()) in.stencil.detect_border = true;
+    }
+    ui::help_on_hover(dmsg::mask_border_enable_help);
+    if (!_mask_enable && !_border_enable) return;
 
     ImGui::Indent();
 
     const ModelEntry* entry = find_model(_model_id);
     const bool builtin_masking = backends().builtin_masking;
 
-    if (builtin_masking) {
+    if (_mask_enable && builtin_masking) {
         // ---- model selection + download ----
         int model_idx = 0;
         const auto& catalog = model_catalog();
@@ -1954,50 +1986,6 @@ void GuiApp::draw_masking_options() {
             if (ui::Button(dmsg::stop)) _download.cancel();
         } else if (entry) {
             ui::TextColored(kOk, dmsg::mask_model_ready);
-            ImGui::SameLine();
-            if (ui::Button(dmsg::mask_try)) {
-                if (_sources.empty()) {
-                    log(dmsg::mask_pick_input_first.get());
-                } else {
-                    const PrepInput& s = _sources[(size_t)_mask_preview_input];
-                    // The clicks made from here are prompts for THIS input;
-                    // record which one so the run does not carry them into a
-                    // different capture (PrepJob::mask_clicks_source).
-                    _mask.clicks_source = s.path;
-                    // The preview reads the video the same way preparation
-                    // will: in process where the driver can, ffmpeg where it
-                    // cannot or where the job said to.
-                    _segment.open(s.path, s.is_video, selected_model_path(),
-                                  _ffmpeg_exe,
-                                  _sfm_job.prep.force_external_decode);
-                }
-            }
-            ui::help_on_hover(dmsg::mask_try_help);
-            // Which input it opens, once there is a choice. Clicks belong to
-            // the frames of one capture, so this also decides which input they
-            // prompt -- and switching after clicking would silently reattribute
-            // them, so they are dropped instead, loudly.
-            if (_sources.size() > 1) {
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(220);
-                std::vector<const char*> names;
-                for (const PrepInput& s : _sources) names.push_back(s.subdir.c_str());
-                int pick = _mask_preview_input;
-                if (ui::ComboRaw(ui::detail::label(dmsg::mask_on_input), &pick,
-                                 names.data(), (int)names.size()) &&
-                    pick != _mask_preview_input) {
-                    if (!_mask.clicks.empty() &&
-                        _mask.clicks_source != _sources[(size_t)pick].path) {
-                        log(i18n::format(dmsg::log_clicks_dropped_switched,
-                                         {_mask.clicks_source}));
-                        _mask.clicks.clear();
-                        _mask.object_count = 1;
-                        _mask.current_object = 0;
-                    }
-                    _mask_preview_input = pick;
-                }
-                ui::help_on_hover(dmsg::mask_on_input_help);
-            }
         }
         if (_download.state() == ModelDownload::State::Failed)
             ui::TextColoredWrappedRaw(kErr, _download.status());
@@ -2019,9 +2007,48 @@ void GuiApp::draw_masking_options() {
                 ui::TextColoredWrapped(kWarn, dmsg::mask_clicks_one_input_only,
                                        {_mask.clicks_source});
         }
-    } else {
+    } else if (_mask_enable) {
         ui::TextWrappedRaw(backends().masking_note);
         ui::help_on_hover_raw(backends().masking_reason.c_str());
+    }
+
+    // One button for both halves: it is the same panel on the same input, and
+    // the stencil half of it needs no model, so it must not sit behind one.
+    if (ui::Button(dmsg::mask_try)) open_mask_preview();
+    ui::help_on_hover(dmsg::mask_try_help);
+    // Which input it opens, once there is a choice. Clicks belong to the frames
+    // of one capture, so this also decides which input they prompt -- and
+    // switching after clicking would silently reattribute them, so they are
+    // dropped instead, loudly. The stencil needs no such care: it is stored on
+    // the input it describes.
+    if (_sources.size() > 1) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(220);
+        std::vector<const char*> names;
+        for (const PrepInput& s : _sources) names.push_back(s.subdir.c_str());
+        int pick = _mask_preview_input;
+        if (ui::ComboRaw(ui::detail::label(dmsg::mask_on_input), &pick,
+                         names.data(), (int)names.size()) &&
+            pick != _mask_preview_input) {
+            if (!_mask.clicks.empty() &&
+                _mask.clicks_source != _sources[(size_t)pick].path) {
+                log(i18n::format(dmsg::log_clicks_dropped_switched,
+                                 {_mask.clicks_source}));
+                _mask.clicks.clear();
+                _mask.object_count = 1;
+                _mask.current_object = 0;
+            }
+            _mask_preview_input = pick;
+            // An open panel is showing the old input's frames and editing its
+            // stencil; point both at the new one.
+            if (_segment.is_open()) open_mask_preview();
+        }
+        ui::help_on_hover(dmsg::mask_on_input_help);
+    }
+
+    if (!_mask_enable) {
+        ImGui::Unindent();
+        return;
     }
 
     // Polarity above the two prompts, which are labelled by it -- the same
@@ -2040,7 +2067,7 @@ void GuiApp::draw_masking_options() {
     ImGui::SetNextItemWidth(320);
     ui::InputTextEnglish(
         keep_subject ? dmsg::mask_what_to_keep : dmsg::mask_what_to_remove,
-        keep_subject ? "the statue; its pedestal" : "people; cars; my shadow",
+        keep_subject ? "the statue; its pedestal" : "person; car; shadow of a person",
         &_mask.prompt);
     ui::help_on_hover(keep_subject ? dmsg::mask_prompt_help_keep
                                    : dmsg::mask_prompt_help_remove);
@@ -2419,7 +2446,16 @@ void GuiApp::draw_new_dataset() {
     ImGui::Spacing();
     draw_log_panel(-1.0f);
 
-    _segment.draw(_mask);
+    if (_segment.is_open()) {
+        // It edits one input's stencil and shows one input's frames, so it
+        // cannot outlive the list it was opened against.
+        if (_sources.empty()) {
+            _segment.close();
+        } else {
+            if (_mask_preview_input >= (int)_sources.size()) _mask_preview_input = 0;
+            _segment.draw(_mask, _sources[(size_t)_mask_preview_input].stencil);
+        }
+    }
     draw_license_modal();
 }
 

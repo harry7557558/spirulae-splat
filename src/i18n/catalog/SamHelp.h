@@ -1005,6 +1005,244 @@ SS_MSG(xh_overlay,
     RU("рядом с каждой маской записывать ещё и цветное наложение"),
     TR("her maskenin yanına renkli bir bindirme de yaz"));
 
+// ---------------------------------------------------------------------------
+// mask
+// ---------------------------------------------------------------------------
+
+SS_MSG(cmd_mask,
+    EN("Mask the part of every frame that is never scene: a fisheye border, a "
+       "watermark, the rig in shot. Needs no model -- it is in the same place "
+       "in every frame, so it is a shape, not an object."),
+    JA("どのフレームでも風景ではない部分にマスクをかけます。魚眼の黒枠、透かし、"
+       "写り込んだ機材など。モデルは不要です。位置がどのフレームでも同じなので、"
+       "物体ではなく図形として扱えます。"),
+    ZH_HANS("为每一帧中始终不是景物的部分做掩码：鱼眼黑边、水印、入镜的器材。"
+            "不需要模型——它在每一帧的位置都相同，所以是图形，不是物体。"),
+    ZH_HANT("為每一格中始終不是景物的部分做遮罩：魚眼黑邊、浮水印、入鏡的器材。"
+            "不需要模型——它在每一格的位置都相同，所以是圖形，不是物體。"),
+    KO("어느 프레임에서도 장면이 아닌 부분을 가립니다. 어안 검은 테두리, "
+       "워터마크, 화면에 든 장비 같은 것들입니다. 모델은 필요 없습니다. "
+       "자리가 프레임마다 같으니 물체가 아니라 도형입니다."),
+    DE("Den Teil jedes Bildes maskieren, der nie Szene ist: ein Fisheye-Rand, "
+       "ein Wasserzeichen, das Stativ im Bild. Ohne Modell -- er steht in "
+       "jedem Bild an derselben Stelle, ist also eine Form, kein Objekt."),
+    FR("Masquer la part de chaque image qui n'est jamais la scène : bord de "
+       "fisheye, filigrane, matériel dans le champ. Sans modèle : c'est au "
+       "même endroit sur chaque image, donc une forme, pas un objet."),
+    ES("Enmascarar la parte de cada fotograma que nunca es la escena: el borde "
+       "de ojo de pez, una marca de agua, el equipo en cuadro. Sin modelo: "
+       "está en el mismo sitio en todos, así que es una forma, no un objeto."),
+    PT("Mascarar a parte de cada quadro que nunca é a cena: a borda de "
+       "olho-de-peixe, uma marca d'água, o equipamento em quadro. Sem modelo: "
+       "fica no mesmo lugar em todos, então é uma forma, não um objeto."),
+    IT("Mascherare la parte di ogni fotogramma che non è mai la scena: il "
+       "bordo fisheye, una filigrana, l'attrezzatura in campo. Senza modello: "
+       "sta sempre nello stesso punto, quindi è una forma, non un oggetto."),
+    NL("Het deel van elk beeld maskeren dat nooit scène is: een fisheye-rand, "
+       "een watermerk, de statiefkop in beeld. Zonder model -- het staat in "
+       "elk beeld op dezelfde plek, dus het is een vorm, geen object."),
+    RU("Замаскировать ту часть каждого кадра, которая никогда не является "
+       "сценой: чёрный край фишая, водяной знак, штатив в кадре. Модель не "
+       "нужна: место одно и то же во всех кадрах, так что это фигура, а не "
+       "объект."),
+    TR("Her karede sahne olmayan bölümü maskele: balıkgözü kenarı, filigran, "
+       "kadrajdaki ekipman. Model gerekmez -- her karede aynı yerde durur, "
+       "yani nesne değil, biçimdir."));
+
+SS_MSG(mh_out,
+    EN("where the masks go (default: 'masks' beside the image directory)"),
+    JA("マスクの書き出し先（既定: 画像ディレクトリの隣の 'masks'）"),
+    ZH_HANS("掩码写到哪里（默认：图像目录旁边的 'masks'）"),
+    ZH_HANT("遮罩寫到哪裡（預設：影像目錄旁邊的 'masks'）"),
+    KO("마스크를 쓸 곳(기본값: 이미지 디렉터리 옆의 'masks')"),
+    DE("wohin die Masken kommen (Vorgabe: 'masks' neben dem Bildverzeichnis)"),
+    FR("où vont les masques (défaut : 'masks' à côté du dossier d'images)"),
+    ES("dónde van las máscaras (por defecto: 'masks' junto a las imágenes)"),
+    PT("para onde vão as máscaras (padrão: 'masks' ao lado das imagens)"),
+    IT("dove vanno le maschere (predefinito: 'masks' accanto alle immagini)"),
+    NL("waar de maskers heen gaan (standaard: 'masks' naast de beeldmap)"),
+    RU("куда класть маски (по умолчанию: 'masks' рядом с изображениями)"),
+    TR("maskelerin gideceği yer (varsayılan: görüntülerin yanındaki 'masks')"));
+
+SS_MSG(mh_shape,
+    EN("use these shapes instead of looking for a border; ';' separates them "
+       "and a leading '-' cuts one out again"),
+    JA("枠を探す代わりにこの図形を使います。';' で区切り、先頭の '-' はその"
+       "図形の内側を逆に取り除きます"),
+    ZH_HANS("用这些图形，而不是去找边框；用 ';' 分隔，开头的 '-' 表示反过来去掉"
+            "该图形内部"),
+    ZH_HANT("用這些圖形，而不是去找邊框；用 ';' 分隔，開頭的 '-' 表示反過來去掉"
+            "該圖形內部"),
+    KO("테두리를 찾는 대신 이 도형을 씁니다. ';' 로 나누고, 앞의 '-' 는 그 "
+       "도형 안쪽을 도로 없앱니다"),
+    DE("diese Formen benutzen statt einen Rand zu suchen; ';' trennt sie, ein "
+       "vorangestelltes '-' schneidet eine wieder heraus"),
+    FR("utiliser ces formes au lieu de chercher un bord ; ';' les sépare, un "
+       "'-' en tête en retire une au contraire"),
+    ES("usar estas formas en vez de buscar un borde; ';' las separa y un '-' "
+       "delante recorta una en lugar de conservarla"),
+    PT("usar estas formas em vez de procurar uma borda; ';' as separa e um '-' "
+       "à frente recorta uma em vez de mantê-la"),
+    IT("usare queste forme invece di cercare un bordo; ';' le separa e un '-' "
+       "davanti ne ritaglia una invece di tenerla"),
+    NL("deze vormen gebruiken in plaats van een rand te zoeken; ';' scheidt "
+       "ze, een '-' ervoor snijdt er juist een weg"),
+    RU("взять эти фигуры вместо поиска края; ';' разделяет их, а '-' в начале "
+       "наоборот вырезает фигуру"),
+    TR("kenar aramak yerine bu biçimleri kullan; ';' ayırır, baştaki '-' ise "
+       "biçimin içini tersine keser"));
+
+SS_MSG(mh_shrink,
+    EN("pull the found boundary inwards, as a fraction of its radius "
+       "(default 0.01); the outermost pixels of a lens circle are dim and "
+       "smeared, and worth losing"),
+    JA("見つけた境界を半径に対する割合だけ内側に寄せます（既定 0.01）。"
+       "レンズ円のいちばん外側の画素は暗くにじんでおり、捨ててよい部分です"),
+    ZH_HANS("把找到的边界按半径的比例往里收（默认 0.01）；镜头圆最外圈的像素又"
+            "暗又糊，丢掉更好"),
+    ZH_HANT("把找到的邊界按半徑的比例往裡收（預設 0.01）；鏡頭圓最外圈的像素又"
+            "暗又糊，丟掉更好"),
+    KO("찾은 경계를 반지름 대비 비율만큼 안쪽으로 당깁니다(기본값 0.01). "
+       "렌즈 원의 가장 바깥 화소는 어둡고 번져 있어 버리는 편이 낫습니다"),
+    DE("die gefundene Grenze nach innen ziehen, als Bruchteil ihres Radius "
+       "(Vorgabe 0,01); die äußersten Pixel eines Objektivkreises sind dunkel "
+       "und verschmiert und dürfen weg"),
+    FR("resserrer la limite trouvée, en fraction de son rayon (défaut 0,01) ; "
+       "les pixels du bord d'un cercle-image sont sombres et étalés, autant "
+       "les perdre"),
+    ES("meter hacia dentro el límite hallado, como fracción de su radio (por "
+       "defecto 0,01); los píxeles del borde del círculo son oscuros y "
+       "emborronados, y conviene perderlos"),
+    PT("puxar para dentro o limite achado, como fração do raio (padrão 0,01); "
+       "os pixels da borda do círculo são escuros e borrados, e é melhor "
+       "perdê-los"),
+    IT("stringere il confine trovato, come frazione del raggio (predefinito "
+       "0,01); i pixel più esterni del cerchio dell'obiettivo sono scuri e "
+       "sbavati, meglio perderli"),
+    NL("de gevonden grens naar binnen halen, als fractie van de straal "
+       "(standaard 0,01); de buitenste pixels van een lenscirkel zijn donker "
+       "en uitgesmeerd, en mogen weg"),
+    RU("подтянуть найденную границу внутрь, долей от её радиуса (по умолчанию "
+       "0,01): крайние пиксели круга изображения тусклые и смазанные, их не "
+       "жалко"),
+    TR("bulunan sınırı yarıçapının bir kesri kadar içeri çek (varsayılan "
+       "0,01); mercek dairesinin en dış pikselleri sönük ve bulaşıktır, "
+       "gitmeleri iyidir"));
+
+SS_MSG(mh_samples,
+    EN("frames read per camera when looking for the border (default 24)"),
+    JA("枠を探すときにカメラごとに読むフレーム数（既定 24）"),
+    ZH_HANS("找边框时每台相机读取的帧数（默认 24）"),
+    ZH_HANT("找邊框時每台相機讀取的影格數（預設 24）"),
+    KO("테두리를 찾을 때 카메라마다 읽는 프레임 수(기본값 24)"),
+    DE("Bilder je Kamera, die für die Randsuche gelesen werden (Vorgabe 24)"),
+    FR("images lues par caméra pour chercher le bord (défaut 24)"),
+    ES("fotogramas leídos por cámara al buscar el borde (por defecto 24)"),
+    PT("quadros lidos por câmera ao procurar a borda (padrão 24)"),
+    IT("fotogrammi letti per fotocamera nella ricerca del bordo (predefinito 24)"),
+    NL("beelden per camera die voor de randzoektocht worden gelezen (standaard 24)"),
+    RU("сколько кадров с камеры читать при поиске края (по умолчанию 24)"),
+    TR("kenar aranırken her kameradan okunan kare sayısı (varsayılan 24)"));
+
+SS_MSG(mh_dark,
+    EN("brightness at or below which a pixel counts as black, 0..255 "
+       "(default 16)"),
+    JA("この明るさ以下の画素を黒とみなします。0..255（既定 16）"),
+    ZH_HANS("亮度不高于此值的像素算作黑色，0..255（默认 16）"),
+    ZH_HANT("亮度不高於此值的像素算作黑色，0..255（預設 16）"),
+    KO("이 밝기 이하의 화소를 검정으로 봅니다. 0..255(기본값 16)"),
+    DE("Helligkeit, bis zu der ein Pixel als schwarz gilt, 0..255 (Vorgabe 16)"),
+    FR("luminosité jusqu'à laquelle un pixel compte comme noir, 0..255 "
+       "(défaut 16)"),
+    ES("brillo hasta el que un píxel cuenta como negro, 0..255 (por defecto 16)"),
+    PT("brilho até o qual um pixel conta como preto, 0..255 (padrão 16)"),
+    IT("luminosità fino a cui un pixel conta come nero, 0..255 (predefinito 16)"),
+    NL("helderheid tot waar een pixel als zwart telt, 0..255 (standaard 16)"),
+    RU("яркость, до которой пиксель считается чёрным, 0..255 (по умолчанию 16)"),
+    TR("bir pikselin siyah sayıldığı üst parlaklık, 0..255 (varsayılan 16)"));
+
+SS_MSG(mh_image,
+    EN("also drop wherever this image is black -- the way out when no ellipse "
+       "or rectangle describes the region"),
+    JA("この画像が黒い場所も併せて取り除きます。楕円や矩形で表せない領域の"
+       "逃げ道です"),
+    ZH_HANS("这张图为黑的地方也一并去掉——椭圆和矩形描述不了的区域走这条路"),
+    ZH_HANT("這張圖為黑的地方也一併去掉——橢圓和矩形描述不了的區域走這條路"),
+    KO("이 이미지가 검은 곳도 함께 없앱니다. 타원이나 사각형으로 못 그리는 "
+       "영역을 위한 통로입니다"),
+    DE("auch dort verwerfen, wo dieses Bild schwarz ist -- der Ausweg, wenn "
+       "weder Ellipse noch Rechteck den Bereich beschreibt"),
+    FR("retirer aussi là où cette image est noire -- la porte de sortie quand "
+       "ni ellipse ni rectangle ne décrit la zone"),
+    ES("quitar además donde esta imagen sea negra: la salida cuando ni una "
+       "elipse ni un rectángulo describen la zona"),
+    PT("tirar também onde esta imagem for preta -- a saída quando nem elipse "
+       "nem retângulo descrevem a região"),
+    IT("togliere anche dove questa immagine è nera -- la via d'uscita quando "
+       "né un'ellisse né un rettangolo descrivono la zona"),
+    NL("ook weghalen waar dit beeld zwart is -- de uitweg als geen ellips of "
+       "rechthoek het gebied beschrijft"),
+    RU("убрать ещё и там, где это изображение чёрное: выход, когда область не "
+       "описать ни эллипсом, ни прямоугольником"),
+    TR("bu görüntünün siyah olduğu yerleri de at -- bölgeyi elips ya da "
+       "dikdörtgen anlatamadığında çıkış yolu"));
+
+SS_MSG(mh_print,
+    EN("print the shapes and write nothing"),
+    JA("図形を表示するだけで、何も書き出しません"),
+    ZH_HANS("只打印图形，不写出任何文件"),
+    ZH_HANT("只印出圖形，不寫出任何檔案"),
+    KO("도형만 보이고 아무것도 쓰지 않습니다"),
+    DE("die Formen ausgeben und nichts schreiben"),
+    FR("afficher les formes sans rien écrire"),
+    ES("imprimir las formas y no escribir nada"),
+    PT("imprimir as formas e não escrever nada"),
+    IT("stampare le forme senza scrivere nulla"),
+    NL("de vormen tonen en niets schrijven"),
+    RU("вывести фигуры и ничего не записывать"),
+    TR("biçimleri yazdır, hiçbir şey yazma"));
+
+SS_MSG(mh_preview,
+    EN("write one frame with the mask drawn over it, to check by eye"),
+    JA("目で確かめられるよう、マスクを重ねたフレームを 1 枚書き出します"),
+    ZH_HANS("写出一帧并叠上掩码，便于用眼睛核对"),
+    ZH_HANT("寫出一格並疊上遮罩，便於用眼睛核對"),
+    KO("눈으로 확인하도록 마스크를 덧그린 프레임 한 장을 씁니다"),
+    DE("ein Bild mit darübergelegter Maske schreiben, zum Prüfen mit dem Auge"),
+    FR("écrire une image avec le masque dessus, pour vérifier à l'œil"),
+    ES("escribir un fotograma con la máscara encima, para comprobarlo a ojo"),
+    PT("escrever um quadro com a máscara por cima, para conferir a olho"),
+    IT("scrivere un fotogramma con la maschera sopra, da controllare a occhio"),
+    NL("één beeld met het masker eroverheen schrijven, om met het oog te controleren"),
+    RU("записать один кадр с наложенной маской, чтобы проверить глазом"),
+    TR("gözle bakmak için maskesi üstüne çizilmiş bir kare yaz"));
+
+SS_MSG(mh_replace,
+    EN("overwrite masks already in the output folder; without it they are "
+       "intersected, which is how this stacks on top of a model's masks"),
+    JA("出力先にあるマスクを上書きします。付けない場合は積を取り、モデルの"
+       "マスクの上に重ねられます"),
+    ZH_HANS("覆盖输出目录中已有的掩码；不加时取交集，正是靠这一点叠在模型掩码之上"),
+    ZH_HANT("覆蓋輸出目錄中已有的遮罩；不加時取交集，正是靠這一點疊在模型遮罩之上"),
+    KO("출력 폴더에 이미 있는 마스크를 덮어씁니다. 없으면 교집합을 취하며, "
+       "그렇게 모델 마스크 위에 겹칩니다"),
+    DE("Masken im Ausgabeordner überschreiben; ohne das werden sie geschnitten, "
+       "und genau so legt sich dies über die Masken eines Modells"),
+    FR("écraser les masques déjà dans le dossier de sortie ; sans cela ils sont "
+       "intersectés, et c'est ainsi que ceci se pose sur ceux d'un modèle"),
+    ES("sobrescribir las máscaras que ya estén en la carpeta de salida; sin "
+       "esto se intersecan, que es como esto se apila sobre las de un modelo"),
+    PT("sobrescrever as máscaras já na pasta de saída; sem isso elas são "
+       "interseccionadas, que é como isto se empilha sobre as de um modelo"),
+    IT("sovrascrivere le maschere già nella cartella di uscita; senza, vengono "
+       "intersecate, ed è così che questo si somma a quelle di un modello"),
+    NL("maskers die al in de uitvoermap staan overschrijven; zonder dit worden "
+       "ze doorsneden, en zo stapelt dit op die van een model"),
+    RU("перезаписать маски, уже лежащие в выходной папке; без этого берётся их "
+       "пересечение — так это и ложится поверх масок модели"),
+    TR("çıktı klasöründeki maskeleri üzerine yaz; bu olmadan kesişimleri "
+       "alınır, bu da modelin maskelerinin üstüne böyle biner"));
+
 }  // namespace samhelp
 }  // namespace msg
 }  // namespace i18n

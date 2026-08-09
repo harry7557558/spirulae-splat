@@ -136,6 +136,10 @@ int spirula_gui_main(int argc, char** argv) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.IniFilename = nullptr;   // fixed layout; nothing worth persisting
+    // Every window here has a title bar, and one of them (the mask preview)
+    // has a canvas whose shapes are dragged around: without this, pulling a
+    // handle drags the window out from under the picture.
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
 
     float xscale = 1.0f, yscale = 1.0f;
     glfwGetWindowContentScale(window, &xscale, &yscale);

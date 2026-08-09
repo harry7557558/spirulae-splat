@@ -158,6 +158,9 @@ private:
     void draw_dataset_basics();       // the four or five knobs a beginner needs
     void draw_source_cameras();       // one lens per input, when there are several
     void draw_masking_options();
+    // Opens "Try the mask" on the input the combo points at, which is also the
+    // input whose clicks and stencil it edits.
+    void open_mask_preview();
     void draw_sfm_advanced();
     void draw_colmap_options();
     void draw_tool_locations();
@@ -308,10 +311,15 @@ private:
     std::string _workspace_auto;
     bool _resume = true;
     bool _mask_enable = false;
+    // The static stencils are kept on the inputs themselves (PrepInput::
+    // stencil); this only says whether the run is given them, so that turning
+    // the option off and on again does not throw away what was drawn.
+    bool _border_enable = false;
     MaskSettings _mask;
     SegmentPanel _segment;
     // Which input "Try the mask" runs on, and so which input the clicked
-    // objects are prompts for (MaskSettings::clicks_source).
+    // objects are prompts for (MaskSettings::clicks_source) and which one's
+    // stencil the panel edits.
     int _mask_preview_input = 0;
 
     // Segmentation checkpoints.

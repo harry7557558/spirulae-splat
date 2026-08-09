@@ -582,6 +582,13 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
                 return false;
         }
     }
+
+    for (size_t i = 0; i < job.inputs.size(); i++) {
+        if (job.inputs[i].stencil.empty()) continue;
+        if (!apply_stencil(job.inputs[i], per[i].images, per[i].masks, error))
+            return false;
+        want_masks = true;
+    }
     // Masks are whatever ended up in the dataset's own masks/ -- generated
     // here, written by the decoder, or linked in beside gathered photos. The
     // in-place case has already named the folder it reads them from.
@@ -1021,6 +1028,52 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
     }
     return true;
 #endif
+}
+
+bool DatasetPrep::apply_stencil(const PrepInput& in, const std::string& images,
+                                const std::string& masks, std::string& error) {
+    std::error_code ec;
+    // Masks an input brought with it are in a folder we were only asked to
+    // read. Cutting the border into them would edit the user's own data.
+    if (!in.mask_dir.empty() &&
+        fs::weakly_canonical(masks, ec) == fs::weakly_canonical(in.mask_dir, ec)) {
+        _log(fmt(lmsg::stencil_keeps_bundled, {in.path}));
+        return true;
+    }
+    _stage(lmsg::stage_frame_mask.get());
+
+    app::FrameStencilRun run;
+    run.image_dir = images;
+    run.mask_dir = masks;
+    run.skip_dir = masks;
+    run.stencil = in.stencil;
+
+    RateLimitedProgress progress(_log, lmsg::noun_images_masked,
+                                 (int64_t)count_images(images, masks));
+    app::FrameStencilSinks sinks;
+    sinks.cancel = &_cancel;
+    sinks.progress = [&](int64_t done, int64_t total) {
+        progress.update(done, done == total);
+    };
+    sinks.resolved = [&](const std::string& camera, const app::FrameMask&,
+                         const app::BorderDetect& d) {
+        if (!in.stencil.detect_border) return;
+        const std::string name = camera.empty() ? in.path : camera;
+        if (!d.found) {
+            _log(fmt(lmsg::frame_mask_no_border, {name}));
+            return;
+        }
+        char pct[16];
+        std::snprintf(pct, sizeof pct, "%.0f", 100.0f * d.kept_fraction);
+        _log(fmt(lmsg::frame_mask_border, {name, pct}));
+    };
+
+    if (app::apply_frame_stencil(run, sinks, error) < 0) return false;
+    if (_cancel.load()) {
+        error = lmsg::err_cancelled.get();
+        return false;
+    }
+    return true;
 }
 
 // The Python fallback: the embedded reference/scripts/mask.py run through an

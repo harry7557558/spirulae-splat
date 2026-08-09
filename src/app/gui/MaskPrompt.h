@@ -14,9 +14,9 @@
 //   - and this palette gives the twenty or so subjects that account for most
 //     real prompts, LABELLED in the interface language, INSERTING English
 //
-// A user who reads only Japanese can therefore build "person; car; my shadow"
-// without writing a word of English, and can still type into the box if they
-// want something the palette does not have.
+// A user who reads only Japanese can therefore build "person; car; shadow of a
+// person" without writing a word of English, and can still type into the box
+// if they want something the palette does not have.
 //
 // The chips toggle: clicking one that is already in the prompt takes it out,
 // and a chip whose term is present is drawn highlighted, so the palette also

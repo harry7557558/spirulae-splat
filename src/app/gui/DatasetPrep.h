@@ -24,6 +24,8 @@
 // better). `Backends` reports what this build and this machine can actually
 // do, so the GUI can say so instead of failing at run time.
 
+#include "app/FrameMask.h"
+
 #include <atomic>
 #include <functional>
 #include <string>
@@ -79,6 +81,11 @@ struct PrepInput {
     // job's dataset-wide one; a factor of 0 means no focal prior.
     std::string camera_model;
     float focal_factor = 0.0f;       // fx = fy = factor * image width
+    // Areas of the frame that are never scene -- the fisheye border, a
+    // watermark, the rig in shot. Per input because it describes a lens, and
+    // resolved per camera folder when it asks for the border to be fitted
+    // (app::FrameStencil), which is what gives a dual-fisheye file two circles.
+    app::FrameStencil stencil;
 };
 
 struct PrepJob {
@@ -302,6 +309,10 @@ private:
                                 std::string& error);
     bool generate_masks_python(const PrepJob& job, const std::string& images_rel,
                                const std::string& masks_rel, std::string& error);
+    // The static stencil, intersected with whatever masking already wrote. No
+    // model and no GPU, so it runs whether or not segmentation did.
+    bool apply_stencil(const PrepInput& in, const std::string& images,
+                       const std::string& masks, std::string& error);
     int exec(const std::vector<std::string>& argv);
 
     LogFn _log;

@@ -21,6 +21,7 @@
 #include "app/Tools.h"
 #include "i18n/catalog/Cli.h"
 #include "i18n/catalog/SamHelp.h"
+#include "app/FrameMask.h"
 #include "app/WriterPool.h"
 #include "nn/core/Log.h"
 #include "nn/Device.h"
@@ -37,7 +38,9 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -116,6 +119,24 @@ void usage() {
     help_row("--overlay", H::trk_overlay);
     std::fprintf(stderr, "\n");
 
+    line("mask <images> [options]");
+    para(H::cmd_mask);
+    help_row("--out <dir>", H::mh_out);
+    help_row("--shape <spec>", H::mh_shape);
+    std::fprintf(stderr,
+                 "                                ellipse cx,cy,rx,ry  |  "
+                 "rect x0,y0,x1,y1\n"
+                 "                                \"ellipse 0.5,0.5,0.49,0.49; "
+                 "-rect 0,0.93,1,1\"\n");
+    help_row("--shrink <f>", H::mh_shrink);
+    help_row("--samples <n>", H::mh_samples);
+    help_row("--dark <0..255>", H::mh_dark);
+    help_row("--mask-image <file>", H::mh_image);
+    help_row("--preview <file>", H::mh_preview);
+    help_row("--print", H::mh_print);
+    help_row("--replace", H::mh_replace);
+    std::fprintf(stderr, "\n");
+
     line("video --info <file>");
     para(H::cmd_video);
     std::fprintf(stderr, "\n");
@@ -171,6 +192,11 @@ struct Options {
     int max_frames = 0;
     int img_size = 0;
     int detect_every = 1, memory_frames = 0, max_size = 1600;
+
+    // `mask`
+    std::string shape_spec, mask_image, preview;
+    bool print_only = false, replace = false;
+    app::BorderDetectOptions border;
 };
 
 // The seed the next click goes into: one per (object, frame), created on
@@ -216,6 +242,14 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--nms") o.nms = std::strtof(next("--nms"), nullptr);
         else if (a == "--max-frames") o.max_frames = std::atoi(next("--max-frames"));
         else if (a == "--img-size") o.img_size = std::atoi(next("--img-size"));
+        else if (a == "--shape") o.shape_spec = next("--shape");
+        else if (a == "--mask-image") o.mask_image = next("--mask-image");
+        else if (a == "--preview") o.preview = next("--preview");
+        else if (a == "--print") o.print_only = true;
+        else if (a == "--replace") o.replace = true;
+        else if (a == "--shrink") o.border.shrink = std::strtof(next("--shrink"), nullptr);
+        else if (a == "--samples") o.border.samples = std::atoi(next("--samples"));
+        else if (a == "--dark") o.border.dark = std::atoi(next("--dark"));
         else if (a == "--multimask") o.multimask = true;
         else if (a == "--overlay") o.overlay = true;
         else if (a == "--vram") o.show_vram = true;
@@ -243,6 +277,8 @@ bool parse_args(int argc, char** argv, Options& o) {
         } else if (a == "--neg-point" && parse_floats(next("--neg-point"), v, 2)) {
             o.neg_points.push_back({v[0], v[1]});
             current_seed(o).prompt.neg_points.push_back({v[0], v[1]});
+        } else if (a[0] != '-' && o.command == "mask" && o.frames.empty()) {
+            o.frames = a;   // `mask <images>`, the one positional this tool has
         } else {
             std::fprintf(stderr, "%s\n",
                          format(cmsg::sam_unknown_option, {a}).c_str());
@@ -515,6 +551,114 @@ int cmd_track(const Options& o) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// mask -- the stencil that needs no model
+// ---------------------------------------------------------------------------
+
+void write_preview(const std::string& frame, const app::FrameMask& fm,
+                   const std::string& path) {
+    nn::Image img = nn::load_image(frame);
+    if (img.empty()) return;
+    std::vector<uint8_t> px;
+    std::string err;
+    if (!app::rasterize_frame_mask(fm, img.width, img.height, px, err)) return;
+    for (size_t i = 0; i < px.size(); i++) {
+        if (px[i]) continue;
+        uint8_t* p = &img.data[i * 3];
+        p[0] = (uint8_t)((p[0] * 45 + 230 * 55) / 100);
+        p[1] = (uint8_t)((p[1] * 45 + 40 * 55) / 100);
+        p[2] = (uint8_t)((p[2] * 45 + 40 * 55) / 100);
+    }
+    if (nn::save_image(img, path, -1))
+        std::fprintf(stderr, "%s\n", format(cmsg::sam_wrote_path, {path}).c_str());
+}
+
+int cmd_mask(const Options& o) {
+    std::error_code ec;
+    const fs::path root(o.frames);
+    if (o.frames.empty() || !fs::is_directory(root, ec)) {
+        std::fprintf(stderr, "%s\n", cmsg::sam_mask_needs.get());
+        return 2;
+    }
+    if (!o.mask_image.empty()) {
+        int w = 0, h = 0;
+        std::vector<uint8_t> probe;
+        if (!app::load_stencil(o.mask_image, w, h, probe)) {
+            std::fprintf(stderr, "%s\n",
+                         format(cmsg::sam_mask_bad_image, {o.mask_image}).c_str());
+            return 2;
+        }
+    }
+
+    app::FrameStencilRun run;
+    run.image_dir = o.frames;
+    run.mask_dir = o.out_dir.empty() ? (root.parent_path() / "masks").string()
+                                     : o.out_dir;
+    run.skip_dir = run.mask_dir;
+    run.replace = o.replace;
+    run.dry_run = o.print_only;
+    run.detect = o.border;
+    run.stencil.shrink = o.border.shrink;
+    run.stencil.mask.image = o.mask_image;
+    // Named shapes are the whole answer; only an unnamed one asks for a fit.
+    if (!o.shape_spec.empty()) {
+        std::string bad;
+        if (!app::parse_mask_shapes(o.shape_spec, run.stencil.mask.shapes, bad)) {
+            std::fprintf(stderr, "%s\n",
+                         format(cmsg::sam_mask_bad_shape, {bad}).c_str());
+            return 2;
+        }
+    } else {
+        run.stencil.detect_border = true;
+    }
+
+    app::FrameStencilSinks sinks;
+    std::string preview_left = o.preview;
+    sinks.camera = [&](const std::string& rel, int64_t n) {
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::sam_mask_camera,
+                            {rel.empty() ? o.frames : rel, n}).c_str());
+    };
+    sinks.resolved = [&](const std::string& rel, const app::FrameMask& fm,
+                         const app::BorderDetect& d) {
+        const std::string name = rel.empty() ? o.frames : rel;
+        if (run.stencil.detect_border && !d.found) {
+            std::fprintf(stderr, "%s\n",
+                         format(cmsg::sam_mask_no_border, {name}).c_str());
+        } else if (run.stencil.detect_border) {
+            char pct[16];
+            std::snprintf(pct, sizeof pct, "%.1f", 100.0f * d.kept_fraction);
+            std::fprintf(stderr, "%s\n",
+                         format(cmsg::sam_mask_found,
+                                {app::format_mask_shapes(fm.shapes), pct}).c_str());
+        }
+        // Machine-readable, so a script can feed it back through --shape.
+        if (o.print_only) {
+            std::printf("%s\t%s\n", name.c_str(),
+                        app::format_mask_shapes(fm.shapes).c_str());
+            return;
+        }
+        if (!preview_left.empty() && !fm.empty()) {
+            const auto groups = app::group_frames_by_camera(run.image_dir, run.skip_dir);
+            const auto it = groups.find(rel);
+            if (it != groups.end() && !it->second.empty())
+                write_preview(it->second.front(), fm, preview_left);
+            preview_left.clear();
+        }
+    };
+
+    std::string error;
+    const int64_t written = app::apply_frame_stencil(run, sinks, error);
+    if (written < 0) {
+        std::fprintf(stderr, "%s\n", format(cmsg::error_line, {error}).c_str());
+        return 1;
+    }
+    if (!o.print_only)
+        std::fprintf(stderr, "%s\n",
+                     format(cmsg::sam_mask_wrote, {written, run.mask_dir}).c_str());
+    return 0;
+}
+
 int cmd_video(const Options& o) {
 #ifndef SS_HAVE_VIDEO
     (void)o;
@@ -606,6 +750,7 @@ int spirula_sam_main(int argc, char** argv) {
     if (o.command == "devices")      rc = cmd_devices();
     else if (o.command == "segment") rc = cmd_segment(o);
     else if (o.command == "track")   rc = cmd_track(o);
+    else if (o.command == "mask")    rc = cmd_mask(o);
     else if (o.command == "video")   rc = cmd_video(o);
     else usage();
     nn::shutdown();

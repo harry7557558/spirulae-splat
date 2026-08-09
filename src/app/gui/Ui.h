@@ -191,6 +191,12 @@ inline bool SmallButton(const Msg& m) {
 inline bool ButtonRaw(const char* id, const ImVec2& size = ImVec2(0, 0)) {
     return ImGui::Button(id, size);
 }
+// A region that holds the mouse without drawing anything: a canvas that is
+// dragged on, which without an item under it would drag the window instead.
+inline bool InvisibleButtonRaw(const char* id, const ImVec2& size,
+                               ImGuiButtonFlags flags = 0) {
+    return ImGui::InvisibleButton(id, size, flags);
+}
 inline bool Checkbox(const Msg& m, bool* v) {
     return ImGui::Checkbox(detail::label(m), v);
 }

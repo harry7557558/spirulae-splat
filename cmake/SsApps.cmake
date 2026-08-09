@@ -53,6 +53,12 @@ set(SS_TOOL_SOURCES "")
 set(SS_TOOL_DEFS "")
 set(SS_TOOL_LIBS "")
 
+# The static frame stencil: shapes and border detection, stb and nothing else,
+# so every app target has it whichever subsystems this build carries.
+if(SS_BUILD_CLI OR SS_BUILD_GUI)
+    list(APPEND SS_TOOL_SOURCES ${SS_SRC}/app/FrameMask.cpp)
+endif()
+
 # Localization settings every app target gets. SS_DEFAULT_LANG is an
 # identifier, not a string: src/i18n/Locale.h spells it `Lang::SS_DEFAULT_LANG`,
 # so a value that is not a language fails to compile instead of quietly
@@ -253,7 +259,7 @@ if(SS_BUILD_CLI OR SS_BUILD_GUI)
                 "SS_TOOL_SFM=1" "ss_sfm")
         endif()
         if(SS_BUILD_SAM)
-            set(_sam_src ${SS_SRC}/app/cli/sam_main.cpp)
+            set(_sam_src ${SS_SRC}/app/cli/sam_main.cpp ${SS_SRC}/app/FrameMask.cpp)
             set(_sam_lib ss_sam)
             if(SS_ENABLE_PATENTED)
                 list(APPEND _sam_src ${SS_SRC}/app/cli/sam_extract.cpp

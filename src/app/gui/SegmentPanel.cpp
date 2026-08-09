@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 
@@ -55,15 +56,23 @@ ImU32 object_color(int object) {
 
 }  // namespace
 
-// The GPU-side state, kept alive across runs so a prompt edit costs one
-// forward pass rather than a 3-second weight upload.
+// One frame in the panel's own hands. Not nn::Image: the shape editor works
+// with no inference layer built, and this is the only picture it needs.
+struct SegmentPanel::Rgb {
+    int w = 0, h = 0;
+    std::vector<uint8_t> px;        // w*h*3, interleaved
+    bool empty() const { return px.empty(); }
+};
+
+// State kept alive across runs so a prompt edit costs one forward pass rather
+// than a 3-second weight upload.
 struct SegmentPanel::Job {
+    std::string frame_key;          // which frame `frame` holds
+    Rgb         frame;
 #ifdef SS_BUILD_SAM
     sam::Masker masker;
     std::string loaded_model;       // what masker was initialized with
     std::string loaded_signature;   // and with which prompt settings
-    std::string frame_key;          // the frame currently held
-    nn::Image   frame;
 #endif
 };
 
@@ -86,6 +95,11 @@ void SegmentPanel::open(const std::string& input, bool is_video,
     _frame_dirty = true;
     _needs_run = true;
     _kept_fraction = -1.0f;
+    _border = app::BorderDetect{};
+    _detect_asked = false;
+    _shape_sel = -1;
+    _drag_handle = -1;
+    _stencil_key.clear();
     {
         std::lock_guard<std::mutex> lk(_mu);
         _status.clear();
@@ -114,6 +128,11 @@ void SegmentPanel::destroy_gl() {
         glDeleteTextures(1, &_tex);
         _tex = 0;
     }
+    if (_stencil_tex) {
+        glDeleteTextures(1, &_stencil_tex);
+        _stencil_tex = 0;
+        _stencil_key.clear();
+    }
 }
 
 bool SegmentPanel::builtin_decode() const {
@@ -122,6 +141,7 @@ bool SegmentPanel::builtin_decode() const {
 
 void SegmentPanel::collect_frames(const std::string& input, bool is_video) {
     _frames.clear();
+    _all_files.clear();
     _video_seconds = 0.0;
     std::error_code ec;
     if (is_video) {
@@ -175,6 +195,7 @@ void SegmentPanel::collect_frames(const std::string& input, bool is_video) {
         if (it->is_regular_file(ec) && is_image_file(it->path()))
             all.push_back(it->path().string());
     std::sort(all.begin(), all.end());
+    _all_files = all;
     // A dozen spread through the capture is enough to judge a prompt, and
     // keeps the slider meaningful on a 3000-photo folder. The index kept is
     // the one in the FULL list, because that is what the masking run counts.
@@ -190,22 +211,116 @@ void SegmentPanel::collect_frames(const std::string& input, bool is_video) {
 }
 
 // ---------------------------------------------------------------------------
+// Finding the border
+// ---------------------------------------------------------------------------
+
+app::FrameMask SegmentPanel::resolved(const app::FrameStencil& s) const {
+    app::FrameMask fm = s.mask;
+    if (s.detect_border && _border.found) {
+        app::MaskShape e = _border.shape;
+        const float k = 1.0f - std::clamp(s.shrink, 0.0f, 0.9f);
+        e.rx *= k;
+        e.ry *= k;
+        // First: it is what the drawn shapes are applied to, in order.
+        fm.shapes.insert(fm.shapes.begin(), e);
+    }
+    return fm;
+}
+
+void SegmentPanel::start_detect() {
+    if (_busy.load() || _detecting.load()) return;
+    if (_worker.joinable()) _worker.join();
+    _detect_asked = true;
+    _detecting = true;
+
+    const std::vector<std::string> files = _all_files;
+    const std::string input = _input;
+    const bool is_video = _is_video;
+    const std::string ffmpeg_exe = _ffmpeg_exe;
+    const bool builtin = builtin_decode();
+    const double video_seconds = _video_seconds;
+
+    _worker = std::thread([this, files, input, is_video, ffmpeg_exe, builtin,
+                           video_seconds] {
+        struct Guard {
+            std::atomic<bool>& flag;
+            ~Guard() { flag = false; }
+        } guard{_detecting};
+
+        // The shrink is applied when the shape is used, so the slider costs no
+        // second fit.
+        app::BorderDetectOptions o;
+        o.shrink = 0.0f;
+        app::BorderDetect found;
+        if (!is_video) {
+            found = app::detect_fisheye_border(files, o);
+        } else {
+            app::BorderAccumulator acc;
+            bool decoded = false;
+#ifdef SS_HAVE_VIDEO
+            if (builtin) {
+                // The decoder cannot seek, so this reads forward from the
+                // start. Frames are cheap (~1000 per second) and a fit only
+                // needs the camera to have moved, which a few seconds of a
+                // handheld capture gives; reading the whole file would not buy
+                // a better circle.
+                video::VideoReader r;
+                if (r.open(input)) {
+                    const long long total = std::max(1LL, (long long)r.info().frame_count);
+                    const long long span = std::min(total, 720LL);
+                    const long long stride = std::max(1LL, span / o.samples);
+                    for (long long i = 0; i < span; i++) {
+                        if (_cancel.load()) return;
+                        nn::Image f = r.readFrame();
+                        if (f.empty()) break;
+                        if (i % stride == 0)
+                            acc.add(f.data.data(), f.width, f.height, f.channels);
+                    }
+                    decoded = acc.frames() >= 2;
+                    if (decoded) found = acc.finish(o);
+                }
+            }
+#else
+            (void)builtin;
+#endif
+            if (!decoded) {
+                // One subprocess per still, so far fewer of them -- ffmpeg can
+                // at least seek, which is what makes the spread worth having.
+                constexpr int kStills = 8;
+                std::vector<std::string> stills;
+                for (int i = 0; i < kStills; i++) {
+                    if (_cancel.load()) break;
+                    const double at = std::min(
+                        video_seconds * (double)i / (double)kStills,
+                        std::max(0.0, video_seconds - 0.1));
+                    const fs::path tmp =
+                        fs::temp_directory_path() /
+                        ("spirula-border-" + std::to_string(i) + "-" +
+                         std::to_string(std::chrono::steady_clock::now()
+                                            .time_since_epoch().count()) + ".jpg");
+                    if (ffmpeg_extract_frame(ffmpeg_exe, input, at, tmp.string(),
+                                             _cancel))
+                        stills.push_back(tmp.string());
+                }
+                found = app::detect_fisheye_border(stills, o);
+                std::error_code rm;
+                for (const std::string& p : stills) fs::remove(p, rm);
+            }
+        }
+        if (_cancel.load()) return;
+        std::lock_guard<std::mutex> lk(_mu);
+        _border_pending = found;
+        _border_ready = true;
+    });
+}
+
+// ---------------------------------------------------------------------------
 // The worker
 // ---------------------------------------------------------------------------
 
-void SegmentPanel::start_job(const MaskSettings& s) {
-#ifndef SS_BUILD_SAM
-    (void)s;
-    std::lock_guard<std::mutex> lk(_mu);
-    _error = spirula::i18n::msg::log::err_no_builtin_segmentation.get();
-#else
-    if (_busy.load()) return;
+void SegmentPanel::start_job(const MaskSettings& s, const app::FrameMask& stencil) {
+    if (_busy.load() || _detecting.load()) return;
     if (_worker.joinable()) _worker.join();
-    if (_model_path.empty()) {
-        std::lock_guard<std::mutex> lk(_mu);
-        _error = spirula::i18n::msg::log::err_no_model_selected.get();
-        return;
-    }
 
     const int idx = _frame_idx;
     const Frame frame = (idx >= 0 && idx < (int)_frames.size()) ? _frames[idx]
@@ -231,12 +346,12 @@ void SegmentPanel::start_job(const MaskSettings& s) {
     {
         std::lock_guard<std::mutex> lk(_mu);
         _error.clear();
-        _status = "working...";
+        _status = dmsg::preview_working.get();
     }
 
     _worker = std::thread([this, settings, model, frame, frame_path, input, is_video,
                            idx, clicks, frame_dirty, ffmpeg_exe, builtin,
-                           video_seconds] {
+                           video_seconds, stencil] {
         // Every failure below leaves through `return set_error(...)`, so the
         // flag cannot be cleared at the end of the function: one early exit
         // would strand it at true, and start_job() refuses to run while it is
@@ -251,15 +366,19 @@ void SegmentPanel::start_job(const MaskSettings& s) {
             _error = e;
             _status.clear();
         };
-        // The frame on its own, before any mask exists. Called as soon as it
-        // is decoded so the panel shows a picture while the checkpoint uploads
-        // -- and so that a user with a SAM 2 checkpoint, whose only prompt is
-        // a click, has something to click on.
-        auto show_frame = [&](const nn::Image& img) {
+        auto set_status = [&](const spirula::i18n::Msg& m) {
             std::lock_guard<std::mutex> lk(_mu);
-            _preview = img.data;
-            _preview_w = img.width;
-            _preview_h = img.height;
+            _status = m.get();
+        };
+        // The frame on its own, before any mask exists. Called as soon as it is
+        // decoded so the panel shows a picture while the checkpoint uploads --
+        // and so that a user whose only prompt is a click, or who is dragging a
+        // shape and has no model at all, has something to work on.
+        auto show_frame = [&](const Rgb& img) {
+            std::lock_guard<std::mutex> lk(_mu);
+            _preview = img.px;
+            _preview_w = img.w;
+            _preview_h = img.h;
             _preview_dirty = true;
             _kept_fraction = -1.0f;
         };
@@ -271,12 +390,9 @@ void SegmentPanel::start_job(const MaskSettings& s) {
             const std::string key = is_video ? ("#" + std::to_string(idx))
                                              : frame_path;
             if (frame_dirty || j.frame_key != key || j.frame.empty()) {
-                {
-                    std::lock_guard<std::mutex> lk(_mu);
-                    _status = "loading the frame...";
-                }
+                set_status(dmsg::preview_loading_frame);
+                Rgb img;
                 if (is_video) {
-                    nn::Image img;
 #ifdef SS_HAVE_VIDEO
                     if (builtin) {
                         // No seek: read forward to the frame this offer names.
@@ -284,8 +400,11 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                         if (r.open(input)) {
                             for (long long i = 0; i <= frame.index; i++) {
                                 if (_cancel.load()) return;
-                                img = r.readFrame();
-                                if (img.empty()) break;
+                                nn::Image f = r.readFrame();
+                                if (f.empty()) break;
+                                img.w = f.width;
+                                img.h = f.height;
+                                img.px = std::move(f.data);
                             }
                         }
                     }
@@ -320,34 +439,64 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                         const bool ok = ffmpeg_extract_frame(
                             ffmpeg_exe, input, at, tmp.string(), _cancel);
                         if (_cancel.load()) return;
-                        if (ok) img = nn::load_image(tmp.string());
+                        if (ok) app::load_rgb(tmp.string(), img.w, img.h, img.px);
                         std::error_code rm;
                         fs::remove(tmp, rm);
                     }
                     if (img.empty())
                         return set_error(dmsg::preview_frame_unreadable.get());
-                    j.frame = std::move(img);
                 } else {
-                    if (frame_path.empty()) return set_error("no frame to show");
-                    j.frame = nn::load_image(frame_path);
-                    if (j.frame.empty())
-                        return set_error("could not read " + frame_path);
+                    if (frame_path.empty() ||
+                        !app::load_rgb(frame_path, img.w, img.h, img.px))
+                        return set_error(dmsg::preview_frame_unreadable.get());
                 }
+                j.frame = std::move(img);
                 j.frame_key = key;
                 show_frame(j.frame);
             }
             if (_cancel.load()) return;
 
-            // Nothing to segment yet. The frame is up, which is the whole
-            // point of getting here: with a SAM 2 checkpoint a click is the
-            // only prompt there is, and it cannot be made on a blank panel.
-            if (settings.prompt.empty() && clicks.empty()) {
+            // ---- the stencil ----
+            // Geometry, so it is known here with no model and no forward pass.
+            // It is drawn OVER the picture rather than into it (the panel keeps
+            // a live overlay while a shape is dragged), so it is counted below
+            // and tinted nowhere.
+            std::vector<uint8_t> stencil_px;
+            if (!stencil.empty()) {
+                std::string err;
+                app::rasterize_frame_mask(stencil, j.frame.w, j.frame.h,
+                                          stencil_px, err);
+            }
+            auto stencil_keeps = [&](size_t i) {
+                return stencil_px.empty() || stencil_px[i] > 127;
+            };
+            auto stencil_only = [&]() {
                 show_frame(j.frame);
                 std::lock_guard<std::mutex> lk(_mu);
-                _status = "Say what to look for above, or click the object in "
-                          "the picture.";
-                _error.clear();
+                if (stencil_px.empty()) {
+                    _status = dmsg::preview_say_or_click.get();
+                } else {
+                    size_t kept = 0;
+                    for (uint8_t v : stencil_px) kept += v > 127 ? 1 : 0;
+                    _kept_fraction = (float)((double)kept / (double)stencil_px.size());
+                    _status.clear();
+                }
+            };
+
+            const bool wants_model = !settings.prompt.empty() || !clicks.empty();
+#ifndef SS_BUILD_SAM
+            stencil_only();
+            if (wants_model)
+                set_error(spirula::i18n::msg::log::err_no_builtin_segmentation.get());
+#else
+            if (!wants_model) {
+                stencil_only();
                 return;
+            }
+            if (model.empty()) {
+                stencil_only();
+                return set_error(
+                    spirula::i18n::msg::log::err_no_model_selected.get());
             }
 
             // ---- the model ----
@@ -362,12 +511,8 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                 sig += "|" + std::to_string(c.object) + ":" + std::to_string(c.x) +
                        "," + std::to_string(c.y) + (c.positive ? "+" : "-");
             if (j.loaded_model != model || j.loaded_signature != sig) {
-                {
-                    std::lock_guard<std::mutex> lk(_mu);
-                    _status = j.loaded_model == model
-                                  ? "preparing..."
-                                  : "loading the model (first run is slow)...";
-                }
+                set_status(j.loaded_model == model ? dmsg::preview_preparing
+                                                   : dmsg::preview_loading_model);
                 sam::MaskOptions mo;
                 mo.model = model;
                 mo.text = settings.prompt;
@@ -397,25 +542,29 @@ void SegmentPanel::start_job(const MaskSettings& s) {
             if (_cancel.load()) return;
 
             // ---- run ----
-            {
-                std::lock_guard<std::mutex> lk(_mu);
-                _status = "segmenting...";
-            }
+            set_status(dmsg::preview_segmenting);
+            nn::Image img;
+            img.width = j.frame.w;
+            img.height = j.frame.h;
+            img.channels = 3;
+            img.data = j.frame.px;
             sam::Mask mask;
             sam::Result detections;
-            if (!j.masker.run(j.frame, mask, &detections, frame.index))
+            if (!j.masker.run(img, mask, &detections, frame.index))
                 return set_error(j.masker.lastError());
 
             // ---- composite ----
             // Kept pixels stay as they are; masked-out pixels are dimmed and
             // tinted red, which reads as "this will be ignored" far better
             // than a separate black-and-white mask image next to the photo.
-            const nn::Image& img = j.frame;
-            std::vector<uint8_t> rgb = img.data;
+            std::vector<uint8_t> rgb = j.frame.px;
             size_t kept = 0;
-            const size_t n = (size_t)img.width * img.height;
+            const size_t n = (size_t)j.frame.w * j.frame.h;
             for (size_t i = 0; i < n && i * 3 + 2 < rgb.size(); i++) {
-                if (i < mask.data.size() && mask.data[i] > 127) { kept++; continue; }
+                if (i < mask.data.size() && mask.data[i] > 127) {
+                    kept += stencil_keeps(i) ? 1 : 0;
+                    continue;
+                }
                 rgb[i * 3 + 0] = (uint8_t)(rgb[i * 3 + 0] / 3 + 150);
                 rgb[i * 3 + 1] = (uint8_t)(rgb[i * 3 + 1] / 3);
                 rgb[i * 3 + 2] = (uint8_t)(rgb[i * 3 + 2] / 3);
@@ -423,8 +572,8 @@ void SegmentPanel::start_job(const MaskSettings& s) {
             {
                 std::lock_guard<std::mutex> lk(_mu);
                 _preview.swap(rgb);
-                _preview_w = img.width;
-                _preview_h = img.height;
+                _preview_w = j.frame.w;
+                _preview_h = j.frame.h;
                 _preview_dirty = true;
                 _kept_fraction = n ? (float)((double)kept / (double)n) : -1.0f;
                 _status.clear();
@@ -436,11 +585,11 @@ void SegmentPanel::start_job(const MaskSettings& s) {
                     _error =
                         spirula::i18n::msg::log::err_clicks_matched_nothing.get();
             }
+#endif
         } catch (const std::exception& e) {
             set_error(e.what());
         }
     });
-#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -472,7 +621,104 @@ void SegmentPanel::upload_preview() {
     _tex_h = h;
 }
 
-void SegmentPanel::draw_image(MaskSettings& settings) {
+// The stencil as a translucent red layer over the frame. Rasterizing it into a
+// small texture beats drawing it: shapes that keep and shapes that remove can
+// compose into a region no sequence of ImDrawList calls describes, and the
+// rasterizer that answers it here is the one that writes the masks.
+void SegmentPanel::upload_stencil(const app::FrameMask& stencil) {
+    const std::string key = app::format_mask_shapes(stencil.shapes) + "|" +
+                            stencil.image;
+    if (key == _stencil_key) return;
+    _stencil_key = key;
+    if (stencil.empty()) {
+        if (_stencil_tex) {
+            glDeleteTextures(1, &_stencil_tex);
+            _stencil_tex = 0;
+        }
+        return;
+    }
+    const float aspect = _tex_h > 0 ? (float)_tex_w / (float)_tex_h : 1.0f;
+    const int w = aspect >= 1.0f ? 512 : std::max(8, (int)(512 * aspect));
+    const int h = aspect >= 1.0f ? std::max(8, (int)(512 / aspect)) : 512;
+    std::vector<uint8_t> px;
+    std::string err;
+    if (!app::rasterize_frame_mask(stencil, w, h, px, err)) return;
+    std::vector<uint8_t> rgba((size_t)w * h * 4, 0);
+    for (size_t i = 0; i < px.size(); i++) {
+        if (px[i] > 127) continue;
+        rgba[i * 4 + 0] = 235;
+        rgba[i * 4 + 1] = 45;
+        rgba[i * 4 + 2] = 45;
+        rgba[i * 4 + 3] = 150;
+    }
+    if (!_stencil_tex) glGenTextures(1, &_stencil_tex);
+    glBindTexture(GL_TEXTURE_2D, _stencil_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 rgba.data());
+}
+
+namespace {
+
+// A shape's draggable points, in normalized image coordinates: the first is
+// what moves the whole thing, the rest resize it.
+int shape_handles(const app::MaskShape& s, ImVec2 out[3]) {
+    if (s.kind == app::MaskShape::Kind::Ellipse) {
+        out[0] = ImVec2(s.cx, s.cy);
+        out[1] = ImVec2(s.cx + s.rx, s.cy);
+        out[2] = ImVec2(s.cx, s.cy + s.ry);
+        return 3;
+    }
+    out[0] = ImVec2((s.cx + s.rx) * 0.5f, (s.cy + s.ry) * 0.5f);
+    out[1] = ImVec2(s.cx, s.cy);
+    out[2] = ImVec2(s.rx, s.ry);
+    return 3;
+}
+
+bool shape_contains(const app::MaskShape& s, float u, float v) {
+    if (s.kind == app::MaskShape::Kind::Ellipse) {
+        if (s.rx <= 0.0f || s.ry <= 0.0f) return false;
+        const float du = (u - s.cx) / s.rx, dv = (v - s.cy) / s.ry;
+        return du * du + dv * dv <= 1.0f;
+    }
+    return u >= std::min(s.cx, s.rx) && u <= std::max(s.cx, s.rx) &&
+           v >= std::min(s.cy, s.ry) && v <= std::max(s.cy, s.ry);
+}
+
+void move_shape(app::MaskShape& s, float du, float dv) {
+    s.cx += du;
+    s.cy += dv;
+    if (s.kind == app::MaskShape::Kind::Rect) {
+        s.rx += du;
+        s.ry += dv;
+    }
+}
+
+void move_handle(app::MaskShape& s, int handle, float u, float v) {
+    if (s.kind == app::MaskShape::Kind::Ellipse) {
+        if (handle == 0) { s.cx = u; s.cy = v; }
+        else if (handle == 1) s.rx = std::max(0.005f, std::fabs(u - s.cx));
+        else s.ry = std::max(0.005f, std::fabs(v - s.cy));
+        return;
+    }
+    if (handle == 0) {
+        const float w = s.rx - s.cx, h = s.ry - s.cy;
+        s.cx = u - w * 0.5f;
+        s.cy = v - h * 0.5f;
+        s.rx = s.cx + w;
+        s.ry = s.cy + h;
+    } else if (handle == 1) { s.cx = u; s.cy = v; }
+    else { s.rx = u; s.ry = v; }
+}
+
+}  // namespace
+
+void SegmentPanel::draw_image(MaskSettings& settings, app::FrameStencil& stencil,
+                              bool& edited) {
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float box_h = std::max(avail.y - 8.0f, 120.0f);
     if (!_tex || _tex_w <= 0) {
@@ -485,30 +731,107 @@ void SegmentPanel::draw_image(MaskSettings& settings) {
         size.y = box_h;
         size.x = box_h * aspect;
     }
+    // An InvisibleButton rather than an Image: a plain Image is not an item the
+    // mouse can hold, so a drag across it moves the WINDOW, which is exactly
+    // what happens while pulling a shape's handle around.
     const ImVec2 origin = ImGui::GetCursorScreenPos();
-    ImGui::Image((ImTextureID)(intptr_t)_tex, size);
+    ui::InvisibleButtonRaw("##canvas", size,
+                           ImGuiButtonFlags_MouseButtonLeft |
+                               ImGuiButtonFlags_MouseButtonRight);
+    const ImVec2 far_corner(origin.x + size.x, origin.y + size.y);
 
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddImage((ImTextureID)(intptr_t)_tex, origin, far_corner);
+    const app::FrameMask shown = resolved(stencil);
+    upload_stencil(shown);
+    if (_stencil_tex)
+        dl->AddImage((ImTextureID)(intptr_t)_stencil_tex, origin, far_corner);
+
+    auto to_screen = [&](float u, float v) {
+        return ImVec2(origin.x + u * size.x, origin.y + v * size.y);
+    };
     const Frame frame = _frames.empty() ? Frame{} : _frames[(size_t)_frame_idx];
+    const bool hovered = ImGui::IsItemHovered();
+
+    // The selected shape owns the mouse over its handles and over its body:
+    // dragging a circle and pointing at an object share this canvas, and the
+    // shape being SELECTED is what tells the two apart -- no mode switch, and
+    // an unselected shape (the fisheye circle, usually) never eats a click.
+    const ImVec2 mouse = ImGui::GetMousePos();
+    const float mu = (mouse.x - origin.x) / size.x;
+    const float mv = (mouse.y - origin.y) / size.y;
+    bool on_shape = false;
+    if (_shape_sel >= 0 && _shape_sel < (int)stencil.mask.shapes.size()) {
+        app::MaskShape& s = stencil.mask.shapes[(size_t)_shape_sel];
+        ImVec2 hs[3];
+        const int n = shape_handles(s, hs);
+        for (int i = 0; i < n; i++) {
+            const ImVec2 p = to_screen(hs[i].x, hs[i].y);
+            // `near` is a macro in the Windows headers; do not name it that.
+            const bool hit = std::fabs(mouse.x - p.x) < 9.0f &&
+                             std::fabs(mouse.y - p.y) < 9.0f;
+            on_shape |= hit && hovered;
+            dl->AddCircleFilled(p, 6.0f, IM_COL32(255, 255, 255, 230));
+            dl->AddCircle(p, 6.0f, IM_COL32(30, 30, 30, 220), 0, 1.5f);
+            if (hit && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                _drag_handle = i;
+        }
+        if (hovered && shape_contains(s, mu, mv)) {
+            on_shape = true;
+            if (_drag_handle == -1 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                _drag_handle = kDragBody;
+                _drag_from_u = mu;
+                _drag_from_v = mv;
+            }
+        }
+        if (_drag_handle != -1) {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (_drag_handle == kDragBody) {
+                    move_shape(s, mu - _drag_from_u, mv - _drag_from_v);
+                    _drag_from_u = mu;
+                    _drag_from_v = mv;
+                } else {
+                    move_handle(s, _drag_handle, mu, mv);
+                }
+                on_shape = true;
+            } else {
+                _drag_handle = -1;
+                edited = true;      // rerun once, on release
+            }
+        }
+    }
 
     // Clicks land in source-image pixels, which is what the model wants.
-    const bool hovered = ImGui::IsItemHovered();
-    if (hovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Right))) {
-        const ImVec2 m = ImGui::GetMousePos();
+    const bool canvas_free = hovered && !on_shape && _drag_handle == -1;
+    if (canvas_free && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                        ImGui::IsMouseClicked(ImGuiMouseButton_Right))) {
         MaskClick c;
-        c.x = (m.x - origin.x) / size.x * (float)_tex_w;
-        c.y = (m.y - origin.y) / size.y * (float)_tex_h;
+        c.x = mu * (float)_tex_w;
+        c.y = mv * (float)_tex_h;
         c.positive = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         c.object = settings.current_object;
         c.frame = frame.index;
         c.position = frame.position;
         settings.clicks.push_back(c);
-        start_job(settings);
+        start_job(settings, shown);
     }
-    if (hovered)
+    if (canvas_free)
         ui::SetTooltip(dmsg::click_tooltip, {settings.current_object + 1});
 
-    ImDrawList* dl = ImGui::GetWindowDrawList();
+    // Outlines: the exact boundary, over an overlay that is only 512 px wide.
+    for (size_t i = 0; i < stencil.mask.shapes.size(); i++) {
+        const app::MaskShape& s = stencil.mask.shapes[i];
+        const ImU32 col = (int)i == _shape_sel ? IM_COL32(255, 255, 255, 235)
+                                               : IM_COL32(255, 255, 255, 120);
+        if (s.kind == app::MaskShape::Kind::Ellipse)
+            dl->AddEllipse(to_screen(s.cx, s.cy),
+                           ImVec2(s.rx * size.x, s.ry * size.y), col, 0.0f, 64,
+                           (int)i == _shape_sel ? 2.0f : 1.5f);
+        else
+            dl->AddRect(to_screen(s.cx, s.cy), to_screen(s.rx, s.ry), col, 0.0f,
+                        0, (int)i == _shape_sel ? 2.0f : 1.5f);
+    }
+
     for (const MaskClick& c : settings.clicks) {
         if (c.frame != frame.index) continue;
         const ImVec2 p(origin.x + c.x / (float)_tex_w * size.x,
@@ -526,6 +849,103 @@ void SegmentPanel::draw_image(MaskSettings& settings) {
                         IM_COL32(255, 255, 255, 255), 1.5f);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The stencil
+// ---------------------------------------------------------------------------
+
+void SegmentPanel::draw_stencil(app::FrameStencil& s, bool& edited) {
+    ui::Text(dmsg::stencil_section);
+    ui::help_on_hover(dmsg::stencil_section_help);
+
+    bool detect = s.detect_border;
+    if (ui::Checkbox(dmsg::stencil_border, &detect)) {
+        s.detect_border = detect;
+        edited = true;
+    }
+    ui::help_on_hover(dmsg::stencil_border_help);
+    if (s.detect_border) {
+        // Lazily, here rather than off the checkbox: the option is on already
+        // when the panel opens on an input that was set up before.
+        if (!_detect_asked) start_detect();
+        ImGui::Indent();
+        float pct = s.shrink * 100.0f;
+        ImGui::SetNextItemWidth(-1);
+        if (ui::SliderFloatRaw("##shrink", &pct, 0.0f, 5.0f, "%.1f%%")) {
+            s.shrink = pct / 100.0f;
+            _stencil_key.clear();
+            edited = true;
+        }
+        ui::help_on_hover(dmsg::stencil_shrink_help);
+        if (_detecting.load())
+            ui::TextDisabled(dmsg::stencil_looking);
+        else if (_detect_asked && !_border.found)
+            ui::TextColoredWrapped(ImVec4(0.95f, 0.75f, 0.30f, 1.0f),
+                                   dmsg::stencil_border_none);
+        if (!_detecting.load() && ui::SmallButton(dmsg::stencil_look_again))
+            start_detect();
+        ImGui::Unindent();
+    }
+
+    ImGui::Spacing();
+    ui::Text(dmsg::stencil_shapes);
+    ui::help_on_hover(dmsg::stencil_shapes_help);
+    auto add = [&](app::MaskShape::Kind kind, bool remove) {
+        app::MaskShape n;
+        n.kind = kind;
+        n.remove = remove;
+        // Half the frame, in the middle: big enough to grab, small enough that
+        // what it does is visible at a glance.
+        n.cx = kind == app::MaskShape::Kind::Ellipse ? 0.5f : 0.25f;
+        n.cy = kind == app::MaskShape::Kind::Ellipse ? 0.5f : 0.25f;
+        n.rx = kind == app::MaskShape::Kind::Ellipse ? 0.25f : 0.75f;
+        n.ry = kind == app::MaskShape::Kind::Ellipse ? 0.25f : 0.75f;
+        s.mask.shapes.push_back(n);
+        _shape_sel = (int)s.mask.shapes.size() - 1;
+        _stencil_key.clear();
+        edited = true;
+    };
+    if (ui::SmallButton(dmsg::stencil_add_box)) add(app::MaskShape::Kind::Rect, true);
+    ImGui::SameLine();
+    if (ui::SmallButton(dmsg::stencil_add_circle))
+        add(app::MaskShape::Kind::Ellipse, true);
+
+    for (size_t i = 0; i < s.mask.shapes.size(); i++) {
+        app::MaskShape& sh = s.mask.shapes[i];
+        ImGui::PushID((int)i);
+        const std::string label = spirula::i18n::format(
+            sh.kind == app::MaskShape::Kind::Rect ? dmsg::stencil_shape_box
+                                                  : dmsg::stencil_shape_circle,
+            {(int)i + 1});
+        // Toggling, not a plain radio: the selected shape swallows clicks on
+        // the picture, so there has to be a way to let go of it again.
+        const bool sel = _shape_sel == (int)i;
+        if (ui::RadioButtonRaw(label.c_str(), sel)) {
+            _shape_sel = sel ? -1 : (int)i;
+            _drag_handle = -1;
+        }
+        ImGui::SameLine();
+        if (ui::SmallButton(sh.remove ? dmsg::stencil_removes_inside
+                                      : dmsg::stencil_keeps_inside)) {
+            sh.remove = !sh.remove;
+            _stencil_key.clear();
+            edited = true;
+        }
+        ui::help_on_hover(dmsg::stencil_flip_help);
+        ImGui::SameLine();
+        if (ui::SmallButton(dmsg::remove)) {
+            s.mask.shapes.erase(s.mask.shapes.begin() + (long)i);
+            _shape_sel = -1;
+            _drag_handle = -1;
+            _stencil_key.clear();
+            edited = true;
+            ImGui::PopID();
+            break;
+        }
+        ImGui::PopID();
+    }
+    if (_shape_sel >= 0) ui::TextDisabled(dmsg::stencil_drag_hint);
 }
 
 // ---------------------------------------------------------------------------
@@ -586,10 +1006,19 @@ void SegmentPanel::draw_objects(MaskSettings& settings, bool& edited) {
     }
 }
 
-void SegmentPanel::draw(MaskSettings& settings) {
+void SegmentPanel::draw(MaskSettings& settings, app::FrameStencil& stencil) {
     if (!_open) return;
 
     upload_preview();
+    {
+        std::lock_guard<std::mutex> lk(_mu);
+        if (_border_ready) {
+            _border_ready = false;
+            _border = _border_pending;
+            _stencil_key.clear();
+            _needs_run = true;
+        }
+    }
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x * 0.8f, vp->WorkSize.y * 0.8f),
@@ -612,6 +1041,12 @@ void SegmentPanel::draw(MaskSettings& settings) {
 
     bool edited = false;
 
+#ifndef SS_BUILD_SAM
+    // No segmentation in this build, so the half of the panel that prompts a
+    // model would be a row of dead controls. The shapes below need none.
+    ui::TextWrappedRaw(backends().masking_note);
+    ui::help_on_hover_raw(backends().masking_reason.c_str());
+#else
     // Polarity first, and the two fields below it are labelled by it: the same
     // box means "take this out" or "this is the subject" depending on the
     // radio, and a label that does not follow the switch reads as a bug.
@@ -632,7 +1067,7 @@ void SegmentPanel::draw(MaskSettings& settings) {
     ImGui::SetNextItemWidth(-1);
     edited |= ui::InputTextEnglishRaw(
         "##prompt",
-        keep ? "the statue; its pedestal" : "people; cars; my shadow",
+        keep ? "the statue; its pedestal" : "person; car; shadow of a person",
         &settings.prompt);
     ui::help_on_hover(keep ? dmsg::preview_prompt_help_keep
                            : dmsg::preview_prompt_help_remove);
@@ -658,6 +1093,11 @@ void SegmentPanel::draw(MaskSettings& settings) {
     ImGui::Spacing();
     ImGui::Separator();
     draw_objects(settings, edited);
+#endif
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    draw_stencil(stencil, edited);
 
     // ---- frame chooser ----
     if (_frames.size() > 1) {
@@ -685,9 +1125,10 @@ void SegmentPanel::draw(MaskSettings& settings) {
     // Rerun once the user stops typing, so every keystroke does not queue a
     // forward pass.
     if (edited) _needs_run = true;
-    if (_needs_run && !_busy.load() && !ImGui::IsAnyItemActive()) {
+    if (_needs_run && !_busy.load() && !_detecting.load() && _drag_handle == -1 &&
+        !ImGui::IsAnyItemActive()) {
         _needs_run = false;
-        start_job(settings);
+        start_job(settings, resolved(stencil));
     }
 
     ImGui::Spacing();
@@ -705,15 +1146,18 @@ void SegmentPanel::draw(MaskSettings& settings) {
         ui::Text(dmsg::preview_kept_fraction, {pct});
         if (_kept_fraction < 0.05f)
             ui::TextColoredWrapped(ImVec4(0.95f, 0.75f, 0.30f, 1.0f),
-                                   keep ? dmsg::preview_almost_nothing_kept
-                                        : dmsg::preview_almost_all_masked);
+                                   settings.keep_subject
+                                       ? dmsg::preview_almost_nothing_kept
+                                       : dmsg::preview_almost_all_masked);
     }
 
     ImGui::EndChild();
 
     ImGui::SameLine();
     ImGui::BeginChild("##segimg", ImVec2(0, 0));
-    draw_image(settings);
+    bool canvas_edited = false;
+    draw_image(settings, stencil, canvas_edited);
+    if (canvas_edited) _needs_run = true;
     ImGui::EndChild();
 
     ImGui::End();

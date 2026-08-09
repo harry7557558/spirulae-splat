@@ -15,24 +15,31 @@ namespace gui {
 namespace {
 
 // The English terms. Chosen for what SAM 3 actually responds to -- a concrete
-// countable noun -- rather than for what reads best in a menu. "my shadow"
-// would be the natural English but the model has no idea whose shadow it is,
-// so the term is "shadow" and the label carries the nuance.
+// countable noun, singular, optionally qualified -- rather than for what reads
+// best in a menu.
+//
+// Nothing here names the black area outside a fisheye circle. It is not an
+// object, the model does not find it under any wording, and it is in the same
+// place in every frame anyway, which makes it app::FrameMask's job.
 const std::vector<MaskSubject>& subjects_impl() {
     static const std::vector<MaskSubject> v = {
         {&dmsg::subj_person,          "person"},
         {&dmsg::subj_hand,            "hand"},
+        {&dmsg::subj_shoe,            "shoe"},
         {&dmsg::subj_dog,             "dog"},
         {&dmsg::subj_animal,          "animal"},
         {&dmsg::subj_car,             "car"},
         {&dmsg::subj_bicycle,         "bicycle"},
         {&dmsg::subj_vehicle,         "vehicle"},
+        {&dmsg::subj_license_plate,   "license plate"},
         {&dmsg::subj_sky,             "sky"},
-        {&dmsg::subj_shadow,          "shadow"},
-        {&dmsg::subj_water,           "water"},
-        {&dmsg::subj_reflection,      "reflection"},
+        {&dmsg::subj_shadow,          "shadow of person"},
+        // {&dmsg::subj_water,           "water"},
+        // {&dmsg::subj_reflection,      "reflection"},
+        {&dmsg::subj_camera,          "camera"},
         {&dmsg::subj_tripod,          "tripod"},
-        {&dmsg::subj_fisheye_border,  "black border"},
+        {&dmsg::subj_backpack,        "backpack"},
+        {&dmsg::subj_helmet,          "helmet"},
         {&dmsg::subj_watermark,       "watermark"},
     };
     return v;

@@ -2426,6 +2426,12 @@ SS_MSG(subj_hand,
     PT("Mão"),          IT("Mano"),       NL("Hand"),        RU("Рука"),
     TR("El"));
 
+SS_MSG(subj_shoe,
+    EN("Shoe"),         JA("靴"),         ZH_HANS("鞋"),       ZH_HANT("鞋"),
+    KO("신발"),          DE("Schuh"),      FR("Chaussure"),     ES("Zapato"),
+    PT("Sapato"),       IT("Scarpa"),     NL("Schoen"),       RU("Обувь"),
+    TR("Ayakkabı"));
+
 SS_MSG(subj_dog,
     EN("Dog"),          JA("犬"),          ZH_HANS("狗"),      ZH_HANT("狗"),
     KO("개"),            DE("Hund"),       FR("Chien"),       ES("Perro"),
@@ -2456,6 +2462,12 @@ SS_MSG(subj_vehicle,
     PT("Veículo"),      IT("Veicolo"),    NL("Voertuig"),    RU("Транспорт"),
     TR("Araç"));
 
+SS_MSG(subj_license_plate,
+    EN("License plate"), JA("ナンバープレート"), ZH_HANS("车牌"), ZH_HANT("車牌"),
+    KO("번호판"), DE("Nummernschild"), FR("Plaque d'immatriculation"),
+    ES("Matrícula"), PT("Placa"), IT("Targa"), NL("Kenteken"),
+    RU("Номерной знак"), TR("Plaka"));
+
 SS_MSG(subj_sky,
     EN("Sky"),          JA("空"),          ZH_HANS("天空"),     ZH_HANT("天空"),
     KO("하늘"),          DE("Himmel"),     FR("Ciel"),        ES("Cielo"),
@@ -2463,10 +2475,19 @@ SS_MSG(subj_sky,
     TR("Gökyüzü"));
 
 SS_MSG(subj_shadow,
-    EN("Shadow"),       JA("影"),          ZH_HANS("影子"),     ZH_HANT("影子"),
-    KO("그림자"),        DE("Schatten"),   FR("Ombre"),       ES("Sombra"),
-    PT("Sombra"),       IT("Ombra"),      NL("Schaduw"),     RU("Тень"),
-    TR("Gölge"));
+    EN("Shadow of a person"),
+    JA("人の影"),
+    ZH_HANS("人的影子"),
+    ZH_HANT("人的影子"),
+    KO("사람 그림자"),
+    DE("Schatten einer Person"),
+    FR("Ombre d'une personne"),
+    ES("Sombra de una persona"),
+    PT("Sombra de uma pessoa"),
+    IT("Ombra di una persona"),
+    NL("Schaduw van een persoon"),
+    RU("Тень человека"),
+    TR("İnsan gölgesi"));
 
 SS_MSG(subj_water,
     EN("Water"),        JA("水面"),        ZH_HANS("水面"),     ZH_HANT("水面"),
@@ -2480,29 +2501,29 @@ SS_MSG(subj_reflection,
     PT("Reflexo"),      IT("Riflesso"),   NL("Weerspiegeling"), RU("Отражение"),
     TR("Yansıma"));
 
+SS_MSG(subj_camera,
+    EN("Camera"), JA("カメラ"), ZH_HANS("相机"), ZH_HANT("相機"),
+    KO("카메라"), DE("Kamera"), FR("Appareil photo"), ES("Cámara"),
+    PT("Câmera"), IT("Fotocamera"), NL("Camera"), RU("Камера"),
+    TR("Kamera"));
+
 SS_MSG(subj_tripod,
     EN("Tripod"),       JA("三脚"),        ZH_HANS("三脚架"),   ZH_HANT("三腳架"),
     KO("삼각대"),        DE("Stativ"),     FR("Trépied"),     ES("Trípode"),
     PT("Tripé"),        IT("Treppiede"),  NL("Statief"),     RU("Штатив"),
     TR("Tripod"));
 
-// The black area outside the image circle of a 360 / fisheye camera. Worth a
-// chip of its own: it is the one thing on this list that is not part of the
-// scene at all, and every Insta360 or fisheye capture has it.
-SS_MSG(subj_fisheye_border,
-    EN("Fisheye border"),
-    JA("魚眼の黒枠"),
-    ZH_HANS("鱼眼黑边"),
-    ZH_HANT("魚眼黑邊"),
-    KO("어안 검은 테두리"),
-    DE("Fisheye-Rand"),
-    FR("Bord du fisheye"),
-    ES("Borde de ojo de pez"),
-    PT("Borda olho-de-peixe"),
-    IT("Bordo fisheye"),
-    NL("Fisheye-rand"),
-    RU("Чёрный край фишая"),
-    TR("Balıkgözü kenarı"));
+SS_MSG(subj_backpack,
+    EN("Backpack"),     JA("バックパック"),  ZH_HANS("背包"),     ZH_HANT("背包"),
+    KO("배낭"),         DE("Rucksack"),     FR("Sac à dos"),    ES("Mochila"),
+    PT("Mochila"),      IT("Zaino"),       NL("Rugzak"),        RU("Рюкзак"),
+    TR("Sırt çantası"));
+
+SS_MSG(subj_helmet,
+    EN("Helmet"),       JA("ヘルメット"),   ZH_HANS("头盔"),     ZH_HANT("頭盔"),
+    KO("헬멧"),          DE("Helm"),       FR("Casque"),        ES("Casco"),
+    PT("Capacete"),     IT("Casco"),      NL("Helm"),          RU("Шлем"),
+    TR("Kask"));
 
 SS_MSG(subj_watermark,
     EN("Watermark or timestamp"),
@@ -2965,6 +2986,472 @@ SS_MSG(object_clear_all,
     PT("Limpar tudo"),   IT("Cancella tutto"), NL("Alles wissen"),
     RU("Очистить всё"),  TR("Hepsini temizle"));
 
+// ===========================================================================
+// Fixed areas of the frame (the stencil -- app/FrameMask.h)
+// ===========================================================================
+
+SS_MSG(stencil_section,
+    EN("Fixed areas of the frame"),
+    JA("画面の決まった位置"),
+    ZH_HANS("画面中固定的区域"),
+    ZH_HANT("畫面中固定的區域"),
+    KO("화면에서 늘 같은 자리"),
+    DE("Feste Bereiche des Bildes"),
+    FR("Zones fixes de l'image"),
+    ES("Zonas fijas del fotograma"),
+    PT("Áreas fixas do quadro"),
+    IT("Zone fisse del fotogramma"),
+    NL("Vaste gebieden van het beeld"),
+    RU("Постоянные участки кадра"),
+    TR("Karenin sabit alanları"));
+
+SS_MSG(stencil_section_help,
+    EN("Anything that sits in the same place in every shot: the black edge of "
+       "a fisheye, a watermark, the pole the camera is on. No model is "
+       "involved -- these are shapes, and they apply to the whole capture."),
+    JA("どのカットでも同じ位置にあるもの、たとえば魚眼の黒枠、透かし、カメラを"
+       "付けた棒などです。モデルは使いません。図形として扱い、撮影全体に"
+       "適用されます。"),
+    ZH_HANS("在每一张里都在同一位置的东西：鱼眼的黑边、水印、举着相机的杆。"
+            "不涉及模型——它们是图形，对整段素材都生效。"),
+    ZH_HANT("在每一張裡都在同一位置的東西：魚眼的黑邊、浮水印、舉著相機的桿。"
+            "不涉及模型——它們是圖形，對整段素材都生效。"),
+    KO("어느 장면에서나 같은 자리에 있는 것들입니다. 어안의 검은 가장자리, "
+       "워터마크, 카메라를 단 장대 같은 것이죠. 모델은 쓰지 않습니다. 도형이며 "
+       "촬영 전체에 적용됩니다."),
+    DE("Alles, was in jeder Aufnahme an derselben Stelle sitzt: der schwarze "
+       "Rand eines Fisheye, ein Wasserzeichen, die Stange, an der die Kamera "
+       "hängt. Ohne Modell -- das sind Formen, und sie gelten für die ganze "
+       "Aufnahme."),
+    FR("Tout ce qui occupe la même place sur chaque prise : le bord noir d'un "
+       "fisheye, un filigrane, la perche qui porte la caméra. Sans modèle : ce "
+       "sont des formes, et elles valent pour toute la prise."),
+    ES("Todo lo que ocupa el mismo sitio en cada toma: el borde negro de un "
+       "ojo de pez, una marca de agua, el palo que sostiene la cámara. Sin "
+       "modelo: son formas, y valen para toda la captura."),
+    PT("Tudo o que fica no mesmo lugar em cada tomada: a borda preta de um "
+       "olho-de-peixe, uma marca d'água, o bastão que segura a câmera. Sem "
+       "modelo: são formas, e valem para a captura inteira."),
+    IT("Tutto ciò che sta nello stesso punto in ogni ripresa: il bordo nero di "
+       "un fisheye, una filigrana, l'asta che regge la fotocamera. Senza "
+       "modello: sono forme, e valgono per l'intera ripresa."),
+    NL("Alles wat in elke opname op dezelfde plek zit: de zwarte rand van een "
+       "fisheye, een watermerk, de stok waar de camera aan hangt. Zonder "
+       "model -- dit zijn vormen, en ze gelden voor de hele opname."),
+    RU("Всё, что стоит на одном и том же месте в каждом кадре: чёрный край "
+       "фишая, водяной знак, палка, на которой камера. Модель не нужна: это "
+       "фигуры, и они действуют на всю съёмку."),
+    TR("Her çekimde aynı yerde duran her şey: balıkgözünün siyah kenarı, bir "
+       "filigran, kameranın takılı olduğu çubuk. Model yok -- bunlar biçimdir "
+       "ve tüm çekim için geçerlidir."));
+
+SS_MSG(stencil_border,
+    EN("Cut away the fisheye border"),
+    JA("魚眼の黒枠を切り落とす"),
+    ZH_HANS("裁掉鱼眼黑边"),
+    ZH_HANT("裁掉魚眼黑邊"),
+    KO("어안 검은 테두리 잘라내기"),
+    DE("Den Fisheye-Rand wegschneiden"),
+    FR("Découper le bord du fisheye"),
+    ES("Recortar el borde de ojo de pez"),
+    PT("Recortar a borda olho-de-peixe"),
+    IT("Ritagliare il bordo fisheye"),
+    NL("De fisheye-rand wegsnijden"),
+    RU("Срезать чёрный край фишая"),
+    TR("Balıkgözü kenarını kes"));
+
+SS_MSG(stencil_border_help,
+    EN("Finds the circle the lens draws and keeps only what is inside it. It "
+       "is measured again for each camera when the dataset is built, so the "
+       "two lenses of a 360 camera each get their own."),
+    JA("レンズが描く円を見つけ、その内側だけを残します。データセットを作るとき"
+       "にカメラごとに測り直すので、360度カメラの 2 つのレンズはそれぞれ別の円に"
+       "なります。"),
+    ZH_HANS("找出镜头成的圆，只保留圆内。建数据集时会为每台相机重新测一次，"
+            "所以 360 相机的两个镜头各有各的圆。"),
+    ZH_HANT("找出鏡頭成的圓，只保留圓內。建資料集時會為每台相機重新測一次，"
+            "所以 360 相機的兩個鏡頭各有各的圓。"),
+    KO("렌즈가 그리는 원을 찾아 그 안쪽만 남깁니다. 데이터셋을 만들 때 카메라마다 "
+       "다시 재므로 360도 카메라의 두 렌즈는 각각 자기 원을 갖습니다."),
+    DE("Findet den Kreis, den das Objektiv zeichnet, und behält nur, was darin "
+       "liegt. Beim Bau des Datensatzes wird er je Kamera neu bestimmt, sodass "
+       "die beiden Objektive einer 360-Grad-Kamera je einen eigenen bekommen."),
+    FR("Trouve le cercle que dessine l'objectif et ne garde que l'intérieur. "
+       "Il est remesuré pour chaque caméra à la construction du jeu de "
+       "données, si bien que les deux objectifs d'une caméra 360 ont chacun le "
+       "leur."),
+    ES("Encuentra el círculo que dibuja el objetivo y conserva solo lo de "
+       "dentro. Se vuelve a medir para cada cámara al construir el conjunto, "
+       "así que los dos objetivos de una cámara 360 tienen el suyo."),
+    PT("Acha o círculo que a lente desenha e mantém só o que está dentro. Ele "
+       "é medido de novo para cada câmera ao montar o conjunto, então as duas "
+       "lentes de uma câmera 360 ficam cada uma com o seu."),
+    IT("Trova il cerchio disegnato dall'obiettivo e tiene solo ciò che vi sta "
+       "dentro. Viene rimisurato per ogni fotocamera quando si costruisce il "
+       "dataset, così i due obiettivi di una 360 hanno ciascuno il proprio."),
+    NL("Zoekt de cirkel die de lens tekent en houdt alleen wat erbinnen ligt. "
+       "Bij het bouwen van de dataset wordt hij per camera opnieuw gemeten, "
+       "zodat de twee lenzen van een 360-camera elk hun eigen cirkel krijgen."),
+    RU("Находит круг, который рисует объектив, и оставляет только то, что "
+       "внутри. При сборке набора он измеряется заново для каждой камеры, так "
+       "что два объектива камеры 360 получают каждый свой."),
+    TR("Merceğin çizdiği daireyi bulur ve yalnızca içini tutar. Veri kümesi "
+       "kurulurken her kamera için yeniden ölçülür, böylece bir 360 kameranın "
+       "iki merceği kendi dairesini alır."));
+
+SS_MSG(stencil_shrink,
+    EN("Shrink"),
+    JA("内側に寄せる"),
+    ZH_HANS("往里收"),
+    ZH_HANT("往裡收"),
+    KO("안쪽으로"),
+    DE("Enger"),
+    FR("Resserrer"),
+    ES("Estrechar"),
+    PT("Estreitar"),
+    IT("Stringi"),
+    NL("Krimpen"),
+    RU("Сузить"),
+    TR("Daralt"));
+
+SS_MSG(stencil_shrink_help,
+    EN("Pulls the circle in a little. The outermost ring of a lens circle is "
+       "dark and smeared, and it costs nothing to lose."),
+    JA("円を少しだけ内側に寄せます。レンズ円のいちばん外側は暗くにじんでおり、"
+       "捨てても損はありません。"),
+    ZH_HANS("把圆稍微往里收一点。镜头圆最外的一圈又暗又糊，丢掉不可惜。"),
+    ZH_HANT("把圓稍微往裡收一點。鏡頭圓最外的一圈又暗又糊，丟掉不可惜。"),
+    KO("원을 조금 안쪽으로 당깁니다. 렌즈 원의 가장 바깥 테는 어둡고 번져 있어 "
+       "버려도 아깝지 않습니다."),
+    DE("Zieht den Kreis ein Stück nach innen. Der äußerste Ring eines "
+       "Objektivkreises ist dunkel und verschmiert und kostet nichts."),
+    FR("Resserre un peu le cercle. L'anneau le plus extérieur d'un "
+       "cercle-image est sombre et étalé : le perdre ne coûte rien."),
+    ES("Mete un poco el círculo. El anillo más externo del círculo del "
+       "objetivo es oscuro y borroso, y perderlo no cuesta nada."),
+    PT("Puxa o círculo um pouco para dentro. O anel mais externo do círculo da "
+       "lente é escuro e borrado, e perdê-lo não custa nada."),
+    IT("Stringe un poco il cerchio. L'anello più esterno del cerchio "
+       "dell'obiettivo è scuro e sbavato, e perderlo non costa nulla."),
+    NL("Haalt de cirkel een stukje naar binnen. De buitenste ring van een "
+       "lenscirkel is donker en uitgesmeerd, en kost niets om kwijt te raken."),
+    RU("Немного поджимает круг. Самое внешнее кольцо круга изображения тусклое "
+       "и смазанное, потерять его не жалко."),
+    TR("Daireyi biraz içeri çeker. Mercek dairesinin en dış halkası sönük ve "
+       "bulaşıktır, gitmesi bir şey kaybettirmez."));
+
+SS_MSG(stencil_looking,
+    EN("Looking for the border..."),
+    JA("枠を探しています..."),
+    ZH_HANS("正在寻找边框……"),
+    ZH_HANT("正在尋找邊框……"),
+    KO("테두리를 찾는 중..."),
+    DE("Der Rand wird gesucht..."),
+    FR("Recherche du bord..."),
+    ES("Buscando el borde..."),
+    PT("Procurando a borda..."),
+    IT("Ricerca del bordo..."),
+    NL("De rand wordt gezocht..."),
+    RU("Идёт поиск края..."),
+    TR("Kenar aranıyor..."));
+
+SS_MSG(stencil_look_again,
+    EN("Look again"),
+    JA("もう一度探す"),
+    ZH_HANS("重新找一次"),
+    ZH_HANT("重新找一次"),
+    KO("다시 찾기"),
+    DE("Erneut suchen"),
+    FR("Chercher encore"),
+    ES("Buscar otra vez"),
+    PT("Procurar de novo"),
+    IT("Cerca di nuovo"),
+    NL("Opnieuw zoeken"),
+    RU("Искать снова"),
+    TR("Yeniden ara"));
+
+SS_MSG(stencil_border_none,
+    EN("No border was found here. Draw a circle instead, or leave this off."),
+    JA("ここでは枠が見つかりませんでした。代わりに円を描くか、これを外して"
+       "ください。"),
+    ZH_HANS("这里没找到边框。可以改为自己画一个圆，或者不勾选这一项。"),
+    ZH_HANT("這裡沒找到邊框。可以改為自己畫一個圓，或者不勾選這一項。"),
+    KO("여기서는 테두리를 찾지 못했습니다. 대신 원을 그리거나 이 항목을 꺼 두세요."),
+    DE("Hier wurde kein Rand gefunden. Zeichnen Sie stattdessen einen Kreis, "
+       "oder lassen Sie das aus."),
+    FR("Aucun bord trouvé ici. Dessinez plutôt un cercle, ou laissez ceci "
+       "décoché."),
+    ES("Aquí no se encontró borde. Dibuje un círculo en su lugar, o deje esto "
+       "sin marcar."),
+    PT("Nenhuma borda foi achada aqui. Desenhe um círculo, ou deixe isto "
+       "desmarcado."),
+    IT("Qui non è stato trovato alcun bordo. Disegni invece un cerchio, o "
+       "lasci questa opzione spenta."),
+    NL("Hier is geen rand gevonden. Teken in plaats daarvan een cirkel, of "
+       "laat dit uit."),
+    RU("Здесь край не найден. Нарисуйте круг сами или снимите этот флажок."),
+    TR("Burada kenar bulunamadı. Yerine bir daire çizin ya da bunu kapalı "
+       "bırakın."));
+
+SS_MSG(stencil_shapes,
+    EN("Block out an area"),
+    JA("範囲を塗りつぶす"),
+    ZH_HANS("挡掉一块区域"),
+    ZH_HANT("擋掉一塊區域"),
+    KO("영역 가리기"),
+    DE("Einen Bereich abdecken"),
+    FR("Masquer une zone"),
+    ES("Tapar una zona"),
+    PT("Tapar uma área"),
+    IT("Coprire una zona"),
+    NL("Een gebied afdekken"),
+    RU("Закрыть участок"),
+    TR("Bir alanı kapat"));
+
+SS_MSG(stencil_shapes_help,
+    EN("Add a box or a circle and drag it over what should go -- a watermark, "
+       "a timestamp, the operator at the bottom of the frame. Each one can "
+       "instead keep what is inside it, which is how you draw a lens circle by "
+       "hand."),
+    JA("四角か円を足して、消したいものの上にドラッグしてください。透かし、日時"
+       "表示、画面の下に写り込んだ撮影者などです。逆に内側を残す設定にもでき、"
+       "レンズの円を手で描くときはこちらを使います。"),
+    ZH_HANS("加一个方框或圆，拖到要去掉的东西上——水印、时间戳、画面下方的拍摄者。"
+            "每个也可以反过来只保留内部，手工画镜头圆时就这么用。"),
+    ZH_HANT("加一個方框或圓，拖到要去掉的東西上——浮水印、時間戳、畫面下方的拍攝者。"
+            "每個也可以反過來只保留內部，手工畫鏡頭圓時就這麼用。"),
+    KO("상자나 원을 더해 없앨 것 위로 끌어다 놓으세요. 워터마크, 날짜 표시, 화면 "
+       "아래에 든 촬영자 같은 것들입니다. 반대로 안쪽만 남기게도 할 수 있는데, "
+       "렌즈 원을 손으로 그릴 때 그렇게 씁니다."),
+    DE("Fügen Sie ein Rechteck oder einen Kreis hinzu und ziehen Sie es über "
+       "das, was weg soll -- ein Wasserzeichen, eine Zeitangabe, den Filmenden "
+       "am unteren Bildrand. Jede Form kann stattdessen behalten, was in ihr "
+       "liegt; so zeichnet man einen Objektivkreis von Hand."),
+    FR("Ajoutez un rectangle ou un cercle et faites-le glisser sur ce qui doit "
+       "disparaître : un filigrane, un horodatage, l'opérateur en bas de "
+       "l'image. Chaque forme peut au contraire garder son intérieur, ce qui "
+       "permet de tracer un cercle-image à la main."),
+    ES("Añada un rectángulo o un círculo y arrástrelo sobre lo que debe "
+       "irse: una marca de agua, una fecha, el operador al pie del "
+       "fotograma. Cada forma puede en cambio conservar su interior, que es "
+       "como se dibuja a mano un círculo de objetivo."),
+    PT("Acrescente um retângulo ou um círculo e arraste-o sobre o que deve "
+       "sair: uma marca d'água, uma data, o operador no pé do quadro. Cada "
+       "forma pode, ao contrário, manter o seu interior, e é assim que se "
+       "desenha um círculo de lente à mão."),
+    IT("Aggiunga un rettangolo o un cerchio e lo trascini su ciò che deve "
+       "sparire: una filigrana, una data, l'operatore in fondo al fotogramma. "
+       "Ogni forma può invece tenere il proprio interno, ed è così che si "
+       "disegna a mano un cerchio dell'obiettivo."),
+    NL("Voeg een rechthoek of cirkel toe en sleep die over wat weg moet: een "
+       "watermerk, een datumstempel, de filmer onderaan het beeld. Elke vorm "
+       "kan juist ook houden wat erbinnen ligt; zo teken je een lenscirkel met "
+       "de hand."),
+    RU("Добавьте прямоугольник или круг и перетащите его на то, что должно "
+       "уйти: водяной знак, дату, оператора внизу кадра. Любую фигуру можно "
+       "наоборот заставить сохранять своё нутро -- так круг объектива рисуют "
+       "вручную."),
+    TR("Bir dikdörtgen ya da daire ekleyip gitmesi gerekenin üstüne sürükleyin: "
+       "bir filigran, bir tarih damgası, karenin altındaki çekimci. Her biri "
+       "tersine içini tutabilir de; mercek dairesi elle böyle çizilir."));
+
+SS_MSG(stencil_add_box,
+    EN("Add a box"),
+    JA("四角を足す"),
+    ZH_HANS("加方框"),
+    ZH_HANT("加方框"),
+    KO("상자 더하기"),
+    DE("Rechteck"),
+    FR("Rectangle"),
+    ES("Rectángulo"),
+    PT("Retângulo"),
+    IT("Rettangolo"),
+    NL("Rechthoek"),
+    RU("Прямоугольник"),
+    TR("Dikdörtgen ekle"));
+
+SS_MSG(stencil_add_circle,
+    EN("Add a circle"),
+    JA("円を足す"),
+    ZH_HANS("加圆"),
+    ZH_HANT("加圓"),
+    KO("원 더하기"),
+    DE("Kreis"),
+    FR("Cercle"),
+    ES("Círculo"),
+    PT("Círculo"),
+    IT("Cerchio"),
+    NL("Cirkel"),
+    RU("Круг"),
+    TR("Daire ekle"));
+
+SS_MSG(stencil_shape_box,
+    EN("Box {0}"),       JA("四角 {0}"),      ZH_HANS("方框 {0}"),  ZH_HANT("方框 {0}"),
+    KO("상자 {0}"),       DE("Rechteck {0}"), FR("Rectangle {0}"),
+    ES("Rectángulo {0}"), PT("Retângulo {0}"), IT("Rettangolo {0}"),
+    NL("Rechthoek {0}"), RU("Прямоугольник {0}"), TR("Dikdörtgen {0}"));
+
+SS_MSG(stencil_shape_circle,
+    EN("Circle {0}"),    JA("円 {0}"),        ZH_HANS("圆 {0}"),    ZH_HANT("圓 {0}"),
+    KO("원 {0}"),         DE("Kreis {0}"),    FR("Cercle {0}"),   ES("Círculo {0}"),
+    PT("Círculo {0}"),   IT("Cerchio {0}"),  NL("Cirkel {0}"),   RU("Круг {0}"),
+    TR("Daire {0}"));
+
+SS_MSG(stencil_removes_inside,
+    EN("removes the inside"),
+    JA("内側を消す"),
+    ZH_HANS("去掉内部"),
+    ZH_HANT("去掉內部"),
+    KO("안쪽을 없앰"),
+    DE("nimmt das Innere weg"),
+    FR("retire l'intérieur"),
+    ES("quita el interior"),
+    PT("tira o interior"),
+    IT("toglie l'interno"),
+    NL("haalt de binnenkant weg"),
+    RU("убирает нутро"),
+    TR("içini atar"));
+
+SS_MSG(stencil_keeps_inside,
+    EN("keeps the inside"),
+    JA("内側を残す"),
+    ZH_HANS("保留内部"),
+    ZH_HANT("保留內部"),
+    KO("안쪽을 남김"),
+    DE("behält das Innere"),
+    FR("garde l'intérieur"),
+    ES("conserva el interior"),
+    PT("mantém o interior"),
+    IT("tiene l'interno"),
+    NL("houdt de binnenkant"),
+    RU("оставляет нутро"),
+    TR("içini tutar"));
+
+SS_MSG(stencil_flip_help,
+    EN("Click to swap. The list is applied from top to bottom, each shape "
+       "taking its inside away or putting it back, so a box that cuts a band "
+       "out and a circle over it leave only the crescent outside the circle."),
+    JA("押すと入れ替わります。一覧は上から順に適用され、各図形が内側を取り除く"
+       "か戻すかします。帯を切る四角の上に円を置けば、円の外の三日月だけが"
+       "残って消えます。"),
+    ZH_HANS("点一下切换。列表自上而下依次生效，每个图形把内部去掉或加回来，"
+            "所以在切出一条带的方框上再放一个圆，最后只去掉圆外的那道月牙。"),
+    ZH_HANT("按一下切換。清單自上而下依次生效，每個圖形把內部去掉或加回來，"
+            "所以在切出一條帶的方框上再放一個圓，最後只去掉圓外的那道月牙。"),
+    KO("눌러서 바꿉니다. 목록은 위에서 아래로 차례로 적용되며 각 도형이 안쪽을 "
+       "없애거나 되돌립니다. 띠를 잘라내는 상자 위에 원을 두면 원 밖의 초승달만 "
+       "빠집니다."),
+    DE("Klicken schaltet um. Die Liste wirkt von oben nach unten, jede Form "
+       "nimmt ihr Inneres weg oder gibt es zurück: ein Rechteck, das ein Band "
+       "herausschneidet, und ein Kreis darüber lassen nur die Sichel außerhalb "
+       "des Kreises verschwinden."),
+    FR("Cliquez pour permuter. La liste s'applique de haut en bas, chaque "
+       "forme retirant son intérieur ou le rendant : un rectangle qui découpe "
+       "une bande, surmonté d'un cercle, ne fait disparaître que le croissant "
+       "hors du cercle."),
+    ES("Pulse para cambiar. La lista se aplica de arriba abajo, cada forma "
+       "quitando su interior o devolviéndolo: un rectángulo que corta una "
+       "franja con un círculo encima solo elimina la media luna de fuera del "
+       "círculo."),
+    PT("Clique para trocar. A lista é aplicada de cima para baixo, cada forma "
+       "tirando o seu interior ou devolvendo-o: um retângulo que corta uma "
+       "faixa com um círculo por cima só faz sumir o crescente fora do "
+       "círculo."),
+    IT("Clicchi per invertire. L'elenco si applica dall'alto in basso, ogni "
+       "forma togliendo il proprio interno o restituendolo: un rettangolo che "
+       "ritaglia una fascia, con un cerchio sopra, fa sparire solo la falce "
+       "fuori dal cerchio."),
+    NL("Klik om om te wisselen. De lijst werkt van boven naar beneden: elke "
+       "vorm haalt zijn binnenkant weg of geeft die terug, dus een rechthoek "
+       "die een band wegsnijdt met een cirkel erover laat alleen de sikkel "
+       "buiten de cirkel verdwijnen."),
+    RU("Нажмите, чтобы поменять. Список применяется сверху вниз: каждая фигура "
+       "либо убирает своё нутро, либо возвращает его. Прямоугольник, "
+       "вырезающий полосу, и круг поверх него убирают только серп за кругом."),
+    TR("Değiştirmek için tıklayın. Liste yukarıdan aşağıya uygulanır, her "
+       "biçim içini alır ya da geri verir: bir şerit kesen dikdörtgenin "
+       "üstüne bir daire koyunca yalnızca dairenin dışındaki hilal gider."));
+
+SS_MSG(stencil_drag_hint,
+    EN("Drag it on the picture to move it, or its white dots to resize it."),
+    JA("画像の上でドラッグすると動き、白い点をドラッグすると大きさが変わります。"),
+    ZH_HANS("在图上拖动它可以移动，拖动白点可以改变大小。"),
+    ZH_HANT("在圖上拖曳它可以移動，拖曳白點可以改變大小。"),
+    KO("사진 위에서 끌면 옮겨지고, 흰 점을 끌면 크기가 바뀝니다."),
+    DE("Im Bild ziehen verschiebt sie, an den weißen Punkten ziehen ändert die "
+       "Größe."),
+    FR("Faites-la glisser sur l'image pour la déplacer, ou ses points blancs "
+       "pour la redimensionner."),
+    ES("Arrástrela sobre la imagen para moverla, o sus puntos blancos para "
+       "cambiar su tamaño."),
+    PT("Arraste-a na imagem para movê-la, ou os pontos brancos para "
+       "redimensioná-la."),
+    IT("La trascini sull'immagine per spostarla, o i suoi punti bianchi per "
+       "ridimensionarla."),
+    NL("Sleep hem op het beeld om te verplaatsen, of zijn witte stippen om te "
+       "schalen."),
+    RU("Тяните её по снимку, чтобы двигать, а белые точки -- чтобы менять "
+       "размер."),
+    TR("Taşımak için resimde sürükleyin, boyutlandırmak için beyaz noktalarını "
+       "sürükleyin."));
+
+SS_MSG(mask_border_enable,
+    EN("Remove fixed areas of the frame"),
+    JA("画面の決まった位置を取り除く"),
+    ZH_HANS("去掉画面中固定的区域"),
+    ZH_HANT("去掉畫面中固定的區域"),
+    KO("화면에서 늘 같은 자리를 없애기"),
+    DE("Feste Bereiche des Bildes entfernen"),
+    FR("Retirer les zones fixes de l'image"),
+    ES("Quitar las zonas fijas del fotograma"),
+    PT("Tirar as áreas fixas do quadro"),
+    IT("Togliere le zone fisse del fotogramma"),
+    NL("Vaste gebieden van het beeld weghalen"),
+    RU("Убрать постоянные участки кадра"),
+    TR("Karenin sabit alanlarını çıkar"));
+
+SS_MSG(mask_border_enable_help,
+    EN("The black edge of a fisheye, a watermark, the pole the camera is on -- "
+       "whatever sits in the same place in every shot. Set it up in \"Try the "
+       "mask\"; it needs no model and no download."),
+    JA("魚眼の黒枠、透かし、カメラを付けた棒など、どのカットでも同じ位置に"
+       "あるものです。「マスクを試す」で設定します。モデルもダウンロードも"
+       "要りません。"),
+    ZH_HANS("鱼眼的黑边、水印、举着相机的杆——凡是每张里都在同一位置的东西。"
+            "在“试一下蒙版”里设置；不需要模型，也不用下载。"),
+    ZH_HANT("魚眼的黑邊、浮水印、舉著相機的桿——凡是每張裡都在同一位置的東西。"
+            "在「試一下遮罩」裡設定；不需要模型，也不用下載。"),
+    KO("어안의 검은 가장자리, 워터마크, 카메라를 단 장대처럼 어느 장면에서나 "
+       "같은 자리에 있는 것들입니다. '마스크를 시험해 보기'에서 설정하며, 모델도 "
+       "내려받기도 필요 없습니다."),
+    DE("Der schwarze Rand eines Fisheye, ein Wasserzeichen, die Stange, an der "
+       "die Kamera hängt -- was auch immer in jeder Aufnahme an derselben "
+       "Stelle sitzt. Einzustellen unter „Maske ausprobieren“; ohne Modell und "
+       "ohne Download."),
+    FR("Le bord noir d'un fisheye, un filigrane, la perche qui porte la caméra "
+       "-- tout ce qui occupe la même place sur chaque prise. Cela se règle "
+       "dans « Essayer le masque » ; sans modèle ni téléchargement."),
+    ES("El borde negro de un ojo de pez, una marca de agua, el palo que "
+       "sostiene la cámara: lo que ocupe el mismo sitio en cada toma. Se "
+       "ajusta en «Probar la máscara»; no necesita modelo ni descarga."),
+    PT("A borda preta de um olho-de-peixe, uma marca d'água, o bastão que "
+       "segura a câmera -- o que ficar no mesmo lugar em cada tomada. "
+       "Ajusta-se em \"Testar a máscara\"; não precisa de modelo nem de "
+       "download."),
+    IT("Il bordo nero di un fisheye, una filigrana, l'asta che regge la "
+       "fotocamera: tutto ciò che sta nello stesso punto in ogni ripresa. Si "
+       "imposta in \"Prova la maschera\"; non serve alcun modello né alcun "
+       "download."),
+    NL("De zwarte rand van een fisheye, een watermerk, de stok waar de camera "
+       "aan hangt -- alles wat in elke opname op dezelfde plek zit. In te "
+       "stellen bij \"Masker uitproberen\"; zonder model en zonder download."),
+    RU("Чёрный край фишая, водяной знак, палка, на которой камера, -- всё, что "
+       "стоит на одном месте в каждом кадре. Настраивается в «Проверить "
+       "маску»; ни модели, ни загрузки не нужно."),
+    TR("Balıkgözünün siyah kenarı, bir filigran, kameranın takılı olduğu çubuk "
+       "-- her çekimde aynı yerde duran ne varsa. \"Maskeyi dene\" içinden "
+       "ayarlanır; model de indirme de gerekmez."));
+
 // {0} is the object number under the cursor.
 SS_MSG(click_tooltip,
     EN("Left-click: this is object {0}.  Right-click: not this."),
@@ -2980,6 +3467,85 @@ SS_MSG(click_tooltip,
     NL("Linkerklik: dit is object {0}.  Rechterklik: dit niet."),
     RU("Левый щелчок: это объект {0}.  Правый щелчок: это не он."),
     TR("Sol tık: bu, nesne {0}.  Sağ tık: bu değil."));
+
+// Progress inside the preview panel, in the order they appear.
+
+SS_MSG(preview_working,
+    EN("working..."),        JA("処理中..."),      ZH_HANS("正在处理……"),
+    ZH_HANT("正在處理……"),    KO("작업 중..."),     DE("wird bearbeitet..."),
+    FR("en cours..."),       ES("trabajando..."), PT("trabalhando..."),
+    IT("in corso..."),       NL("bezig..."),      RU("идёт работа..."),
+    TR("çalışıyor..."));
+
+SS_MSG(preview_loading_frame,
+    EN("loading the frame..."),
+    JA("フレームを読み込んでいます..."),
+    ZH_HANS("正在读取这一帧……"),
+    ZH_HANT("正在讀取這一格……"),
+    KO("프레임을 읽는 중..."),
+    DE("Einzelbild wird geladen..."),
+    FR("chargement de l'image..."),
+    ES("cargando el fotograma..."),
+    PT("carregando o quadro..."),
+    IT("caricamento del fotogramma..."),
+    NL("beeld wordt geladen..."),
+    RU("загрузка кадра..."),
+    TR("kare yükleniyor..."));
+
+SS_MSG(preview_loading_model,
+    EN("loading the model (the first run is slow)..."),
+    JA("モデルを読み込んでいます（初回は時間がかかります）..."),
+    ZH_HANS("正在载入模型（第一次比较慢）……"),
+    ZH_HANT("正在載入模型（第一次比較慢）……"),
+    KO("모델을 읽는 중(처음은 느립니다)..."),
+    DE("Modell wird geladen (der erste Lauf dauert)..."),
+    FR("chargement du modèle (le premier passage est lent)..."),
+    ES("cargando el modelo (la primera vez es lenta)..."),
+    PT("carregando o modelo (a primeira vez é lenta)..."),
+    IT("caricamento del modello (la prima volta è lenta)..."),
+    NL("model wordt geladen (de eerste keer duurt het)..."),
+    RU("загрузка модели (первый раз медленно)..."),
+    TR("model yükleniyor (ilk çalıştırma yavaştır)..."));
+
+SS_MSG(preview_preparing,
+    EN("preparing..."),      JA("準備しています..."), ZH_HANS("正在准备……"),
+    ZH_HANT("正在準備……"),    KO("준비 중..."),       DE("wird vorbereitet..."),
+    FR("préparation..."),    ES("preparando..."),   PT("preparando..."),
+    IT("preparazione..."),   NL("voorbereiden..."), RU("подготовка..."),
+    TR("hazırlanıyor..."));
+
+SS_MSG(preview_segmenting,
+    EN("segmenting..."),
+    JA("領域を切り分けています..."),
+    ZH_HANS("正在分割……"),
+    ZH_HANT("正在分割……"),
+    KO("나누는 중..."),
+    DE("wird segmentiert..."),
+    FR("segmentation..."),
+    ES("segmentando..."),
+    PT("segmentando..."),
+    IT("segmentazione..."),
+    NL("segmenteren..."),
+    RU("сегментация..."),
+    TR("bölütleniyor..."));
+
+SS_MSG(preview_say_or_click,
+    EN("Say what to look for above, or click the object in the picture."),
+    JA("上に探すものを書くか、写真の中の物体をクリックしてください。"),
+    ZH_HANS("在上面写出要找的东西，或者在图上点一下那个物体。"),
+    ZH_HANT("在上面寫出要找的東西，或者在圖上點一下那個物體。"),
+    KO("위에 찾을 것을 적거나, 사진 속 물체를 누르세요."),
+    DE("Oben eintragen, wonach gesucht werden soll, oder das Objekt im Bild "
+       "anklicken."),
+    FR("Indiquez ci-dessus ce qu'il faut chercher, ou cliquez sur l'objet dans "
+       "l'image."),
+    ES("Escriba arriba qué buscar, o pulse el objeto en la imagen."),
+    PT("Escreva acima o que procurar, ou clique no objeto na imagem."),
+    IT("Scriva sopra che cosa cercare, oppure clicchi l'oggetto nell'immagine."),
+    NL("Zet hierboven wat er gezocht moet worden, of klik het object in het "
+       "beeld aan."),
+    RU("Впишите выше, что искать, или щёлкните объект на снимке."),
+    TR("Yukarıya ne aranacağını yazın ya da resimdeki nesneye tıklayın."));
 
 SS_MSG(preview_frame,
     EN("frame {0}"),     JA("フレーム {0}"),  ZH_HANS("第 {0} 帧"), ZH_HANT("第 {0} 影格"),

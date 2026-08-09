@@ -128,6 +128,15 @@ either way is the same dataset. Clicks have no counterpart there —
 lang-segment-anything takes words and nothing else — and the GUI says so rather
 than dropping them.
 
+### What is not a prompt
+
+A fisheye border, a watermark, a timestamp and the rig holding the camera are
+fixed in image space for a whole capture. They are not objects, no wording
+finds them, and asking a segmentation model for them once per frame is the
+wrong tool: they belong to `app/FrameMask.h`, which is shapes and one
+per-camera stencil, needs no model, and intersects with whatever this produces.
+`spirula sam mask` is its command line.
+
 ### Clicked objects
 
 A `SeedPrompt` is one object's clicks on one frame, and both halves of that are
