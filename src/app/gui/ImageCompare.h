@@ -1,0 +1,180 @@
+#pragma once
+
+// ImageCompare -- the training preview's second mode: one training frame's
+// ground truth beside the render of the same camera.
+//
+// The pair comes out of the engine (engine_preview_forward), so what is on
+// screen is what the loss compares -- the same decode, mask, downscale,
+// fisheye / equirectangular split and per-image colour correction. Zoom and
+// pan are shared by the two panes, which is the point: the question this mode
+// answers is whether the render is soft because the model is, or because the
+// photograph was.
+//
+// GUI thread only, plus the one worker it starts for the engine call.
+// attach() once the engine is ready; detach() BEFORE the session goes away.
+
+#include "app/gui/GlLoader.h"
+
+#include "imgui.h"
+
+#include <condition_variable>
+#include <cstdint>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace spirula {
+class TrainerSession;
+namespace i18n { struct Msg; }
+}
+
+namespace gui {
+
+// Where one post-split view goes when the pair is drawn, and how far it has to
+// be turned to sit flush against its neighbours (ImageCompare.cpp's kCross5 /
+// kCross6 build the tables).
+struct FaceCell { int col, row, turns; };   // turns = quarter turns clockwise
+
+class ImageCompare {
+public:
+    ~ImageCompare();
+
+    void attach(spirula::TrainerSession& session);
+    void detach();
+    bool attached() const { return _session != nullptr; }
+
+    // Draw into the current window. `step` is the training iteration that has
+    // just finished (< 0 when unknown); `training` enables the follow-along
+    // refresh.
+    void draw(bool training, int step);
+
+    // Free the GL textures. Call while the GL context is still current.
+    void destroy_gl();
+
+private:
+    // What the region the mask excludes looks like.
+    enum class MaskShow { Dim = 0, Ignore = 1, Hide = 2 };
+
+    // What the worker was asked for. Equality decides whether the pair on
+    // screen still answers the current selection.
+    struct Job {
+        int  index = 0;
+        bool color_correct = true;
+        // Show the file itself rather than the downscaled copy the loss sees.
+        bool source_gt = false;
+        bool operator==(const Job& o) const {
+            return index == o.index && color_correct == o.color_correct &&
+                   source_gt == o.source_gt;
+        }
+    };
+
+    // What came back. The views are packed into `gt` / `render` / `mask` as a
+    // tight row-major grid, `pack_cols` wide; where each of them BELONGS on
+    // screen is `cells`. Keeping the two apart is what lets the cross leave
+    // cells empty without the texture paying for them.
+    struct Shot {
+        uint64_t id = 0;
+        Job  job;
+        int  views = 1;
+        int  view_w = 0, view_h = 0;       // one view
+        int  pack_cols = 1, pack_rows = 1; // the packed grid, in views
+        int  lay_cols = 1, lay_rows = 1;   // the canvas, in cells
+        std::vector<FaceCell> cells;       // one per view, in view order
+        std::vector<uint8_t> gt, render;   // [pack_rows*view_h, pack_cols*view_w, 3]
+        std::vector<uint8_t> mask;         // the same grid; empty when there is none
+        int  src_w = 0, src_h = 0;
+        std::vector<uint8_t> src;          // the file itself, when asked for
+        float psnr = -1.0f;                // < 0 = no unmasked pixel to score
+        int  step = -1;
+        std::string error;
+    };
+
+    // One pane's picture, ready to draw: the packed texture plus the canvas
+    // the shared zoom and pan move over.
+    struct Pane {
+        GLuint tex = 0;
+        int tex_w = 0, tex_h = 0;
+        int view_w = 0, view_h = 0;
+        int pack_cols = 1;
+        int canvas_w = 0, canvas_h = 0;
+        std::vector<FaceCell> cells;
+    };
+
+    void worker_loop();
+    void run_job(const Job& j, Shot& out);
+    void submit(const Job& j);
+    void poll();
+    // Re-composite the mask into the two byte images and re-upload. Cheap
+    // enough to run on every mask / GT-source change, so those toggle without
+    // costing a render.
+    void rebuild_textures();
+    void upload(GLuint& tex, const uint8_t* rgb, int w, int h);
+    void draw_toolbar(bool training);
+    void draw_image_picker();
+    // Put the next control on this row if `w` still fits, else start a row.
+    void place(float w);
+    void draw_panes(const ImVec2& avail);
+    void draw_pane(const Pane& p, const ImVec2& box,
+                   const spirula::i18n::Msg& caption);
+    void handle_view_input();
+    void handle_keys();
+    // The split factor of the selected image (1, 5 or 6).
+    int  faces() const;
+    bool has_masks() const;
+    void select(int index);
+
+    spirula::TrainerSession* _session = nullptr;
+
+    // ---- selection + options ----
+    int  _index = 0;
+    MaskShow _mask_show = MaskShow::Dim;
+    bool _color_correct = true;
+    bool _source_gt = false;
+    bool _smooth = false;
+    bool _live = true;
+    std::string _filter;          // the picker's file-name search
+    float _row_w = 0.0f, _row_used = 0.0f;   // toolbar packing (see place)
+
+    // ---- view transform, shared by both panes ----
+    float _zoom = 1.0f;           // 1 = fit the pane
+    float _cx = 0.5f, _cy = 0.5f; // view centre, normalized image coordinates
+    bool  _dragging = false;
+    // The pane under the cursor on this frame, and the size the image is
+    // drawn at there -- what the wheel and the drag are resolved against.
+    bool   _hot = false;
+    ImVec2 _hot_min{}, _hot_size{};
+    float  _hot_w = 1.0f, _hot_h = 1.0f;
+
+    // ---- worker ----
+    std::thread _worker;
+    std::mutex _mu;
+    std::condition_variable _cv;
+    bool _running = false;
+    bool _has_pending = false;
+    Job  _pending;
+    uint64_t _pending_id = 0, _next_id = 1;
+    Shot _result;                 // guarded by _mu until poll() takes it
+    // Readback scratch, worker thread only. Reused across jobs: see run_job.
+    std::vector<float> _wgt, _wrender;
+    std::vector<uint8_t> _walpha;
+
+    // ---- what is on screen ----
+    Shot _shot;
+    Job  _requested{-1, false, false};   // never equals a real selection
+    uint64_t _in_flight = 0;
+    bool _dirty = true;           // the selection changed; re-request
+    bool _tex_dirty = true;       // the composite changed; re-upload
+    Pane _gt, _render;
+    std::string _error;
+
+    // ---- refresh pacing while training (see draw) ----
+    int    _rendered_step = -1;
+    int    _last_seen_step = -1;
+    double _last_step_time = -1.0;
+    double _submitted_at = 0.0;
+    double _job_secs = 0.0;
+    double _step_secs = 0.0;
+};
+
+}  // namespace gui

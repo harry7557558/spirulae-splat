@@ -305,6 +305,13 @@ public:
     // Same for eval. Returns nullptr if no validation indices were configured.
     const DecodedBatch* next_val_batch();
 
+    // Decode ONE input image, by dataset index, into `out`: a batch of size 1
+    // carrying the mask, warp and resize a training batch over that image
+    // would carry. Synchronous, and it touches neither the sampling cursors
+    // nor the prefetch queues, so it may run between training steps. RGB and
+    // mask only -- its caller is the GUI's ground-truth-vs-render view.
+    void fetch_one(int32_t index, DecodedBatch& out);
+
     // ---- Stats ------------------------------------------------------------
 
     int64_t num_train()     const;

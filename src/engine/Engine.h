@@ -421,6 +421,19 @@ std::map<std::string, float> engine_train_step_managed(
 // the training DataManager, so this belongs after the training loop.
 int engine_eval_forward(std::string primitive, int sh_degree, bool packed);
 
+// Same, for ONE image chosen by dataset index instead of the next one in the
+// stream: the GUI's ground-truth-vs-render view. `apply_color_correction`
+// additionally runs the per-image bilagrid / PPISP forward the training step
+// runs, so the pair read back is the pair the loss is computed on rather than
+// the raw render.
+//
+// This overwrites the GT and camera-parameter state a training step owns. The
+// next engine_train_step_managed sets both again, so it is safe BETWEEN steps
+// -- take the same mutex the trainer does. Returns the POST-split view count
+// (K) for that image.
+int engine_preview_forward(int index, std::string primitive, int sh_degree,
+                           bool packed, bool apply_color_correction);
+
 // --- Debug rendering ---
 
 void engine_debug_forward(

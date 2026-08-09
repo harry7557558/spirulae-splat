@@ -11,6 +11,7 @@
 #include "app/gui/Fonts.h"
 #include "app/gui/ConfigUI.h"
 #include "app/gui/FileDialog.h"
+#include "app/gui/ImageCompare.h"
 #include "app/gui/MeshRunner.h"
 #include "app/gui/ModelCache.h"
 #include "app/gui/SegmentPanel.h"
@@ -109,6 +110,9 @@ private:
     // Re-scan preset_dir(), rate-limited: this runs while a dropdown is open.
     void refresh_presets();
     void start_training();
+    // Everything that renders from the training session, released together.
+    // Every path that replaces or destroys the session goes through this.
+    void detach_session_views();
     // Hand a config to the runner. Everything a new session invalidates --
     // the splat viewer holding the engine, the viewport's render worker --
     // is released here, so both the Start button and the batch queue go
@@ -256,6 +260,11 @@ private:
 
     TrainRunner _runner;
     ViewportPanel _viewport;
+    // The trainer screen's other preview: one training photograph beside the
+    // render of the same camera. Reads from the session's engine, so it is
+    // released together with the viewport (detach_session_views).
+    ImageCompare _images;
+    bool _preview_images = false;    // which of the two the trainer screen shows
     SplatViewer _splat;
     // The viewport is showing _splat rather than _runner's session.
     bool _viewing_splat = false;

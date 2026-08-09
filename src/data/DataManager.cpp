@@ -482,6 +482,15 @@ void DecodedBatch::build_views() {
                  std::vector<int64_t> shape) -> TorchTensorView {
         return TorchTensorView((uint64_t)data, es, std::move(shape));
     };
+    // Start from nothing. A batch is a reused object -- the prefetch pools
+    // recycle their slots and the preview keeps one static batch across
+    // datasets -- and downstream a non-null view IS the statement that the
+    // batch carries that modality. Leaving last time's view standing is how a
+    // masked dataset's mask ends up supervising an unmasked one.
+    const TorchTensorView none{0, 0, {}};
+    input_intrins_view = input_dist_coeffs_view = none;
+    viewmats_view = intrins_view = dist_coeffs_view = none;
+    rgb_view = mask_view = depth_view = normal_view = none;
     // Camera-param views use the POST-split count.
     int64_t B_post = num;
     viewmats_view    = mk(viewmats.data(),    4, {B_post, 4LL, 4LL});
@@ -548,6 +557,7 @@ public:
     const TrainStep&    next_train_step();
     const DecodedBatch& next_train_batch();
     const DecodedBatch* next_val_batch();
+    void                fetch_one(int32_t index, DecodedBatch& out);
 
     int64_t num_train()    const { return (int64_t)_train_indices.size(); }
     int64_t num_val()      const { return (int64_t)_val_indices.size(); }
@@ -1903,6 +1913,43 @@ const DecodedBatch* DataManagerImpl::next_val_batch() {
     return _last_val_held.get();
 }
 
+void DataManagerImpl::fetch_one(int32_t index, DecodedBatch& out) {
+    const int64_t N = (int64_t)_image_filenames.size();
+    if (index < 0 || (int64_t)index >= N)
+        throw std::runtime_error("DataManager::fetch_one: index out of range");
+
+    // A group of one, built by the same code the training groups come from, so
+    // the batch gets the shapes and the K a training batch over this image
+    // would get.
+    const std::vector<int32_t> one{index};
+    std::vector<IndexGroup> g = build_index_groups_member(one);
+    allocate_batch(out, g.front(), one);
+
+    if (_cfg.cache_mode == CacheMode::CPU) {
+        fill_batch_from_cache(out);
+    } else {
+        decode_rgb_into(_image_filenames[index], out.input_height,
+                        out.input_width, out.rgb_dtype, out.rgb_buffer.data());
+        if (!out.mask_buffer.empty()) {
+            bool synth = !_synth_white_mask.empty() &&
+                         _synth_white_mask[(size_t)index];
+            if (synth) {
+                std::memset(out.mask_buffer.data(), 1, out.mask_buffer.size());
+            } else if (!_mask_filenames.empty() &&
+                       !_mask_filenames[index].empty()) {
+                decode_mask_into(_mask_filenames[index], out.mask_height,
+                                 out.mask_width, _cfg.mask_boundary_offset,
+                                 out.mask_buffer.data());
+            }
+            // Neither: the row stays zero, which is what the training path
+            // leaves for an image with no mask of its own.
+        }
+    }
+    // Depth / normal slots stay as allocate_batch left them (zero); the
+    // preview forward runs without them.
+    out.build_views();
+}
+
 
 // ===========================================================================
 // Public DataManager thin facade
@@ -1942,6 +1989,7 @@ DataManager::~DataManager() = default;
 const TrainStep&    DataManager::next_train_step()         { return _impl->next_train_step(); }
 const DecodedBatch& DataManager::next_train_batch()        { return _impl->next_train_batch(); }
 const DecodedBatch* DataManager::next_val_batch()          { return _impl->next_val_batch(); }
+void      DataManager::fetch_one(int32_t i, DecodedBatch& o) { _impl->fetch_one(i, o); }
 int64_t   DataManager::num_train()      const              { return _impl->num_train(); }
 int64_t   DataManager::num_val()        const              { return _impl->num_val(); }
 bool      DataManager::has_val()        const              { return _impl->has_val(); }

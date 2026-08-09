@@ -145,8 +145,9 @@ void GuiApp::shutdown() {
     save_settings();
     save_batch_list(_batch);
     _batch_active = false;
-    _viewport.detach();
+    detach_session_views();
     _viewport.destroy_gl();
+    _images.destroy_gl();
     _mesh_viewport.detach();
     _mesh_viewport.destroy_gl();
     _mesh.cancel();
@@ -285,7 +286,7 @@ void GuiApp::apply_preset(const std::string& preset) {
     _defaults = fresh;
     _cfg_ui.touched.clear();
     if (!_cfg.data.empty()) {
-        _viewport.detach();
+        detach_session_views();
         _runner.load_dataset(_cfg, _preset);
     }
 }
@@ -319,7 +320,7 @@ void GuiApp::apply_user_preset(const TrainPreset& p) {
     // as if the user had just typed it (train_resolve_macros).
     _cfg_ui.touched = p.touched;
     if (!_cfg.data.empty()) {
-        _viewport.detach();
+        detach_session_views();
         _runner.load_dataset(_cfg, _preset);
     }
 }
@@ -392,7 +393,7 @@ void GuiApp::open_dataset(std::string dir, std::string image_dir,
     _defaults.output_dir_prefix = _cfg.output_dir_prefix;
     add_recent(dir);
     save_settings();
-    _viewport.detach();
+    detach_session_views();
     _runner.load_dataset(_cfg, _preset);
     _screen = Screen::Train;
 }
@@ -428,7 +429,7 @@ void GuiApp::open_splat(std::string path) {
     if (path.empty()) return;
     _log.clear();
     close_mesh_preview();
-    _viewport.detach();
+    detach_session_views();
     _viewing_splat = false;
     // Opening a file resets the engine; a finished run's session cannot be
     // rendered from once that has happened.
@@ -463,7 +464,7 @@ void GuiApp::launch_training(const TrainConfig& cfg, const std::string& preset) 
     if (cfg.data.empty()) return;
     close_mesh_preview();
     close_splat();      // the engine is one object; the viewer has to let go
-    _viewport.detach();
+    detach_session_views();
     // Engine setup initializes the backend on the selected device; from
     // here on the device combo is display-only (one device per process).
     _device_locked = true;
@@ -472,6 +473,16 @@ void GuiApp::launch_training(const TrainConfig& cfg, const std::string& preset) 
 
 void GuiApp::start_training() {
     launch_training(_cfg, _preset);
+}
+
+void GuiApp::detach_session_views() {
+    _viewport.detach();
+    _images.detach();
+    // Every caller is about to take the session away, so whatever the image
+    // view was showing is gone and the next thing to look at is the sparse
+    // points the 3D view puts up as soon as the dataset parses. Land there
+    // rather than on the image view's empty message.
+    _preview_images = false;
 }
 
 void GuiApp::request_close() {
@@ -1235,7 +1246,7 @@ void GuiApp::frame() {
         _parse_dirty = false;
         if (!_cfg.data.empty()) {
             log(dmsg::log_dataset_settings_changed.get());
-            _viewport.detach();
+            detach_session_views();
             _runner.load_dataset(_cfg, _preset);
         }
     }
@@ -1269,9 +1280,14 @@ void GuiApp::frame() {
             }
             _viewing_splat = true;
         }
+        _images.detach();   // the file owns the engine while it is open
     } else if (_runner.engine_ready()) {
         if (!_viewport.attached() && _runner.session())
             _viewport.attach(*_runner.session());
+        // The photograph-vs-render mode needs the DataManager as well as the
+        // splats, so it waits for engine setup exactly as the viewport does.
+        if (!_images.attached() && _runner.session())
+            _images.attach(*_runner.session());
     } else if (_runner.phase() == TrainRunner::Phase::Ready) {
         if (!_viewport.preview_active() && _runner.session())
             _viewport.attach_preview(*_runner.session());
@@ -2499,6 +2515,19 @@ void GuiApp::draw_train() {
     } else {
         ui::TextDisabledRaw(_cfg.data);
     }
+    // Two ways to watch a run: the scene in 3D, or one training photograph
+    // beside the render of the same camera. Right-aligned on the header row so
+    // it costs the preview below no height.
+    {
+        const float w = 160.0f;
+        ImGui::SameLine(std::max(0.0f, ImGui::GetContentRegionMax().x - w));
+        ImGui::SetNextItemWidth(w);
+        int mode = _preview_images ? 1 : 0;
+        if (ui::ComboRaw("##previewmode", &mode,
+                         {&msg::preview_mode_3d, &msg::preview_mode_images}))
+            _preview_images = mode == 1;
+        ui::help_on_hover(msg::preview_mode_help);
+    }
 
     ImGui::BeginChild("##settings", ImVec2(420, 0), ImGuiChildFlags_Borders);
     draw_train_settings();
@@ -2513,8 +2542,10 @@ void GuiApp::draw_train() {
     float vp_h = -(log_h + (log_h > 0 ? spacing : 0) + status_h + spacing);
     ImGui::BeginChild("##viewport", ImVec2(0, vp_h), ImGuiChildFlags_Borders);
     const bool stepping = _runner.phase() == TrainRunner::Phase::Training;
-    // The step the viewport paces its refresh by while nobody is steering it.
-    _viewport.draw(stepping, stepping ? _runner.latest_progress().step : -1);
+    // The step both previews pace their refresh by while nobody is steering.
+    const int step = stepping ? _runner.latest_progress().step : -1;
+    if (_preview_images) _images.draw(stepping, step);
+    else                 _viewport.draw(stepping, step);
     ImGui::EndChild();
     draw_status_strip();
     if (_show_log) draw_log_panel(log_h);
@@ -2686,7 +2717,7 @@ void GuiApp::open_mesh_preview() {
     // idle runner meant that meshing a model right after training it -- the
     // ordinary case -- silently showed the mesh alone.)
     if (!training_busy()) {
-        _viewport.detach();
+        detach_session_views();
         _viewing_splat = false;
         _runner.note_engine_taken();
         _splat.open(_mesh_job.checkpoint);

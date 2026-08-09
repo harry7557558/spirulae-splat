@@ -20,6 +20,7 @@
 
 #include <cstdio>
 #include <stdexcept>
+#include <vector>
 
 
 void engine_setup_data_manager(
@@ -222,31 +223,21 @@ std::map<std::string, float> engine_train_step_managed(
 
 
 // ---------------------------------------------------------------------------
-// Eval: pull a batch, install it, forward only. See Engine.h.
+// Forward-only paths: take a batch, install it, render it. See Engine.h.
 // ---------------------------------------------------------------------------
 static TorchTensorView _tv_null() { return {0, 0, {}}; }
 
-int engine_eval_forward(std::string primitive, int sh_degree, bool packed) {
-    if (!engine().dm)
-        throw std::runtime_error(
-            "engine_eval_forward: DataManager not configured — call "
-            "engine_setup_data_manager(...) with the eval split first.");
-
-    const TrainStep& stp = engine().dm->next_train_step();
-    if (stp.subs.empty()) return 0;
-    if (stp.subs.size() != 1)
-        throw std::runtime_error(
-            "engine_eval_forward: expected one sub-batch per eval step "
-            "(set train_batch_size = 1)");
-
-    const DecodedBatch& b = *stp.subs[0];
-
+// Install a decoded batch as GT + camera params and run the forward pass.
+// Shared by the eval stream and the by-index preview; both want the decode,
+// mask and warp training used, and neither wants loss, backward or optim.
+static void _install_and_forward(const DecodedBatch& b, std::string primitive,
+                                 int sh_degree, bool packed) {
     if (b.K <= 1) {
         set_camera_params((int)b.width, (int)b.height,
                           camera_model_to_string(b.model),
                           b.viewmats_view, b.intrins_view, b.dist_coeffs_view);
-        // No depth/normal: eval compares RGB only, and skipping them avoids
-        // the linear->ray depth conversion pass.
+        // No depth/normal: both callers compare RGB only, and skipping them
+        // avoids the linear->ray depth conversion pass.
         set_training_data(b.rgb_view, _tv_null(), _tv_null(),
                           b.mask_view, true);
     } else {
@@ -265,5 +256,58 @@ int engine_eval_forward(std::string primitive, int sh_degree, bool packed) {
     }
 
     forward_3dgs(std::move(primitive), sh_degree, packed);
+}
+
+int engine_eval_forward(std::string primitive, int sh_degree, bool packed) {
+    if (!engine().dm)
+        throw std::runtime_error(
+            "engine_eval_forward: DataManager not configured — call "
+            "engine_setup_data_manager(...) with the eval split first.");
+
+    const TrainStep& stp = engine().dm->next_train_step();
+    if (stp.subs.empty()) return 0;
+    if (stp.subs.size() != 1)
+        throw std::runtime_error(
+            "engine_eval_forward: expected one sub-batch per eval step "
+            "(set train_batch_size = 1)");
+
+    const DecodedBatch& b = *stp.subs[0];
+    _install_and_forward(b, std::move(primitive), sh_degree, packed);
+    return (int)b.num;
+}
+
+int engine_preview_forward(int index, std::string primitive, int sh_degree,
+                           bool packed, bool apply_color_correction) {
+    if (!engine().dm)
+        throw std::runtime_error(
+            "engine_preview_forward: DataManager not configured — call "
+            "engine_setup_data_manager(...) first.");
+
+    // Static: the buffers the views point into must outlive the forward, and
+    // a preview is one call at a time under the engine mutex.
+    static DecodedBatch b;
+    engine().dm->fetch_one((int32_t)index, b);
+    _install_and_forward(b, std::move(primitive), sh_degree, packed);
+
+    if (apply_color_correction) {
+        // POST-split camera ids, the same ones the training step hands the
+        // per-image tables (see build_bg_idx above).
+        std::vector<int32_t> cam_idx((size_t)b.num);
+        for (int j = 0; j < b.input_num; ++j)
+            for (int k = 0; k < b.K; ++k)
+                cam_idx[(size_t)j * b.K + k] = b.post_offsets[j] + k;
+        TorchTensorView cam_view((uint64_t)cam_idx.data(), 4,
+                                 {(int64_t)b.num, 1LL});
+        const bool bg_enabled = engine().bilagrid_rgb.enabled ||
+                                engine().bilagrid_depth.enabled ||
+                                engine().bilagrid_normal.enabled;
+        if (engine().ppisp.cur_run_before_bilagrid) {
+            if (engine().ppisp.enabled) engine_ppisp_forward(cam_view);
+            if (bg_enabled)             engine_bilagrid_forward(cam_view);
+        } else {
+            if (bg_enabled)             engine_bilagrid_forward(cam_view);
+            if (engine().ppisp.enabled) engine_ppisp_forward(cam_view);
+        }
+    }
     return (int)b.num;
 }

@@ -5464,6 +5464,604 @@ SS_MSG(overlay_points,
     RU("Точки: {0}"),
     TR("Nokta: {0}"));
 
+
+// ===========================================================================
+// Photograph vs render (src/app/gui/ImageCompare.h)
+// ===========================================================================
+
+SS_MSG(preview_mode_3d,
+    EN("3D view"),       JA("3Dビュー"),      ZH_HANS("3D 视图"),  ZH_HANT("3D 檢視"),
+    KO("3D 보기"),        DE("3D-Ansicht"),   FR("Vue 3D"),       ES("Vista 3D"),
+    PT("Vista 3D"),      IT("Vista 3D"),     NL("3D-weergave"),  RU("3D-вид"),
+    TR("3B görünüm"));
+
+SS_MSG(preview_mode_images,
+    EN("Images"),        JA("画像"),          ZH_HANS("图像"),     ZH_HANT("影像"),
+    KO("이미지"),         DE("Bilder"),       FR("Images"),       ES("Imágenes"),
+    PT("Imagens"),       IT("Immagini"),     NL("Beelden"),      RU("Изображения"),
+    TR("Görüntüler"));
+
+SS_MSG(preview_mode_help,
+    EN("What the preview shows: the scene in 3D, or one training photograph "
+       "beside the render of the same camera."),
+    JA("プレビューに何を表示するかです。シーンを3Dで見るか、学習用の写真1枚と"
+       "同じカメラのレンダリングを並べて見るかを選べます。"),
+    ZH_HANS("预览显示什么：三维场景，或者一张训练照片与同一相机的渲染结果并排"
+            "显示。"),
+    ZH_HANT("預覽顯示什麼：三維場景，或者一張訓練照片與同一相機的算繪結果並排"
+            "顯示。"),
+    KO("미리보기에 무엇을 보여줄지 정합니다. 장면을 3D로 보거나, 학습용 사진 "
+       "한 장과 같은 카메라의 렌더링을 나란히 봅니다."),
+    DE("Was die Vorschau zeigt: die Szene in 3D oder ein Trainingsfoto neben "
+       "dem Rendering derselben Kamera."),
+    FR("Ce que montre l'aperçu : la scène en 3D, ou une photo d'entraînement à "
+       "côté du rendu de la même caméra."),
+    ES("Lo que muestra la vista previa: la escena en 3D, o una foto de "
+       "entrenamiento junto al render de la misma cámara."),
+    PT("O que a pré-visualização mostra: a cena em 3D, ou uma foto de "
+       "treinamento ao lado da renderização da mesma câmera."),
+    IT("Che cosa mostra l'anteprima: la scena in 3D, oppure una foto di "
+       "addestramento accanto al render della stessa fotocamera."),
+    NL("Wat de voorvertoning toont: de scène in 3D, of één trainingsfoto naast "
+       "de render van dezelfde camera."),
+    RU("Что показывает предпросмотр: сцену в 3D или один обучающий снимок рядом "
+       "с рендером той же камеры."),
+    TR("Önizlemenin ne göstereceği: sahne 3B olarak ya da bir eğitim fotoğrafı "
+       "aynı kameranın görüntüsünün yanında."));
+
+SS_MSG(compare_navigate_help,
+    EN("Previous and next training image. The left and right arrow keys do the "
+       "same; Page Up and Page Down move ten at a time, Home and End go to the "
+       "first and the last."),
+    JA("前後の学習画像に移動します。左右の矢印キーでも同じことができ、Page Up と "
+       "Page Down は10枚ずつ、Home と End は最初と最後に移動します。"),
+    ZH_HANS("切换到上一张或下一张训练图像。左右方向键作用相同；Page Up 和 "
+            "Page Down 一次跳十张，Home 和 End 跳到第一张和最后一张。"),
+    ZH_HANT("切換到上一張或下一張訓練影像。左右方向鍵作用相同；Page Up 和 "
+            "Page Down 一次跳十張，Home 和 End 跳到第一張和最後一張。"),
+    KO("이전·다음 학습 이미지로 이동합니다. 좌우 화살표 키도 같은 일을 하고, "
+       "Page Up과 Page Down은 열 장씩, Home과 End는 처음과 끝으로 갑니다."),
+    DE("Vorheriges und nächstes Trainingsbild. Die Pfeiltasten links und rechts "
+       "tun dasselbe; Bild auf und Bild ab springen zehn weiter, Pos1 und Ende "
+       "an den Anfang und ans Ende."),
+    FR("Image d'entraînement précédente et suivante. Les flèches gauche et "
+       "droite font la même chose ; Page précédente et Page suivante avancent "
+       "de dix, Origine et Fin vont au début et à la fin."),
+    ES("Imagen de entrenamiento anterior y siguiente. Las flechas izquierda y "
+       "derecha hacen lo mismo; Re Pág y Av Pág saltan de diez en diez, Inicio "
+       "y Fin van al principio y al final."),
+    PT("Imagem de treinamento anterior e seguinte. As setas para a esquerda e "
+       "para a direita fazem o mesmo; Page Up e Page Down saltam de dez em dez, "
+       "Home e End vão ao início e ao fim."),
+    IT("Immagine di addestramento precedente e successiva. Le frecce sinistra e "
+       "destra fanno lo stesso; Pag su e Pag giù saltano di dieci, Inizio e "
+       "Fine vanno al principio e alla fine."),
+    NL("Vorig en volgend trainingsbeeld. De pijltjestoetsen links en rechts "
+       "doen hetzelfde; Page Up en Page Down springen tien verder, Home en End "
+       "naar het begin en het einde."),
+    RU("Предыдущий и следующий обучающий снимок. Стрелки влево и вправо делают "
+       "то же самое; Page Up и Page Down перемещают на десять, Home и End — в "
+       "начало и в конец."),
+    TR("Önceki ve sonraki eğitim görüntüsü. Sol ve sağ ok tuşları da aynı işi "
+       "yapar; Page Up ve Page Down onar atlar, Home ve End başa ve sona "
+       "gider."));
+
+SS_MSG(compare_slider_help,
+    EN("Which training image is shown. They are in file-name order."),
+    JA("どの学習画像を表示するかです。並び順はファイル名順です。"),
+    ZH_HANS("显示哪一张训练图像。顺序按文件名排列。"),
+    ZH_HANT("顯示哪一張訓練影像。順序按檔名排列。"),
+    KO("어떤 학습 이미지를 보여줄지 정합니다. 순서는 파일 이름순입니다."),
+    DE("Welches Trainingsbild gezeigt wird. Die Reihenfolge ist die der "
+       "Dateinamen."),
+    FR("Quelle image d'entraînement est affichée. L'ordre est celui des noms de "
+       "fichiers."),
+    ES("Qué imagen de entrenamiento se muestra. El orden es el de los nombres "
+       "de archivo."),
+    PT("Qual imagem de treinamento é mostrada. A ordem é a dos nomes de "
+       "arquivo."),
+    IT("Quale immagine di addestramento è mostrata. L'ordine è quello dei nomi "
+       "dei file."),
+    NL("Welk trainingsbeeld wordt getoond. De volgorde is die van de "
+       "bestandsnamen."),
+    RU("Какой обучающий снимок показан. Порядок — по именам файлов."),
+    TR("Hangi eğitim görüntüsünün gösterileceği. Sıralama dosya adına "
+       "göredir."));
+
+SS_MSG(compare_search_hint,
+    EN("search file name"),
+    JA("ファイル名で検索"),
+    ZH_HANS("按文件名搜索"),
+    ZH_HANT("以檔名搜尋"),
+    KO("파일 이름 검색"),
+    DE("Dateiname suchen"),
+    FR("chercher un nom de fichier"),
+    ES("buscar nombre de archivo"),
+    PT("buscar nome de arquivo"),
+    IT("cerca un nome di file"),
+    NL("bestandsnaam zoeken"),
+    RU("поиск по имени файла"),
+    TR("dosya adı ara"));
+
+SS_MSG(compare_pick_help,
+    EN("Pick a training image by file name."),
+    JA("ファイル名で学習画像を選びます。"),
+    ZH_HANS("按文件名选择训练图像。"),
+    ZH_HANT("以檔名選擇訓練影像。"),
+    KO("파일 이름으로 학습 이미지를 고릅니다."),
+    DE("Ein Trainingsbild über seinen Dateinamen wählen."),
+    FR("Choisir une image d'entraînement par son nom de fichier."),
+    ES("Elegir una imagen de entrenamiento por su nombre de archivo."),
+    PT("Escolher uma imagem de treinamento pelo nome do arquivo."),
+    IT("Scegliere un'immagine di addestramento dal nome del file."),
+    NL("Een trainingsbeeld op bestandsnaam kiezen."),
+    RU("Выбрать обучающий снимок по имени файла."),
+    TR("Eğitim görüntüsünü dosya adından seçin."));
+
+SS_MSG(compare_mask_dim,
+    EN("Mask: dimmed"),  JA("マスク: 暗く表示"), ZH_HANS("遮罩：变暗"),
+    ZH_HANT("遮罩：變暗"), KO("마스크: 어둡게"), DE("Maske: abgedunkelt"),
+    FR("Masque : assombri"), ES("Máscara: atenuada"), PT("Máscara: escurecida"),
+    IT("Maschera: scurita"), NL("Masker: gedimd"), RU("Маска: затемнить"),
+    TR("Maske: karartılmış"));
+
+SS_MSG(compare_mask_ignore,
+    EN("Mask: ignored"), JA("マスク: 無視"),    ZH_HANS("遮罩：忽略"),
+    ZH_HANT("遮罩：忽略"), KO("마스크: 무시"),  DE("Maske: ignoriert"),
+    FR("Masque : ignoré"), ES("Máscara: ignorada"), PT("Máscara: ignorada"),
+    IT("Maschera: ignorata"), NL("Masker: genegeerd"), RU("Маска: игнорировать"),
+    TR("Maske: yok sayılmış"));
+
+SS_MSG(compare_mask_hide,
+    EN("Mask: black"),   JA("マスク: 黒"), ZH_HANS("遮罩：黑色"),
+    ZH_HANT("遮罩：黑色"), KO("마스크: 검게"),  DE("Maske: schwarz"),
+    FR("Masque : noir"), ES("Máscara: en negro"), PT("Máscara: em preto"),
+    IT("Maschera: in nero"), NL("Masker: zwart"), RU("Маска: чёрным"),
+    TR("Maske: siyah"));
+
+SS_MSG(compare_mask_help,
+    EN("How the part of the image the mask excludes is drawn. Training does not "
+       "look at it at all, so both sides mark it the same way -- and the score "
+       "below counts only what is left."),
+    JA("マスクで除外された部分の描き方です。学習はその部分をまったく見ないので、"
+       "両側とも同じ印を付けます。下のスコアも残った部分だけで計算します。"),
+    ZH_HANS("遮罩排除的部分怎么显示。训练完全不看这部分，所以两边用同样的方式"
+            "标出；下面的分数也只统计剩下的部分。"),
+    ZH_HANT("遮罩排除的部分怎麼顯示。訓練完全不看這部分，所以兩邊用同樣的方式"
+            "標出；下面的分數也只統計剩下的部分。"),
+    KO("마스크가 제외한 부분을 어떻게 그릴지 정합니다. 학습은 그 부분을 전혀 "
+       "보지 않으므로 양쪽에 같은 표시를 하고, 아래 점수도 남은 부분만으로 "
+       "계산합니다."),
+    DE("Wie der von der Maske ausgeschlossene Teil gezeichnet wird. Das "
+       "Training sieht ihn gar nicht, also markieren ihn beide Seiten gleich -- "
+       "und der Wert darunter zählt nur den Rest."),
+    FR("Comment est dessinée la partie que le masque exclut. L'entraînement ne "
+       "la voit pas du tout, donc les deux côtés la marquent de la même façon, "
+       "et le score ci-dessous ne compte que le reste."),
+    ES("Cómo se dibuja la parte que la máscara excluye. El entrenamiento no la "
+       "ve en absoluto, así que ambos lados la marcan igual, y la puntuación de "
+       "abajo solo cuenta el resto."),
+    PT("Como é desenhada a parte que a máscara exclui. O treinamento não a vê, "
+       "então os dois lados a marcam do mesmo jeito, e a pontuação abaixo conta "
+       "apenas o resto."),
+    IT("Come viene disegnata la parte che la maschera esclude. L'addestramento "
+       "non la vede affatto, quindi entrambi i lati la segnano allo stesso modo "
+       "e il punteggio sotto conta solo il resto."),
+    NL("Hoe het deel dat het masker uitsluit wordt getekend. Het trainen ziet "
+       "dat deel helemaal niet, dus beide kanten markeren het gelijk, en de "
+       "score eronder telt alleen de rest."),
+    RU("Как рисуется часть, исключённая маской. Обучение её вовсе не видит, "
+       "поэтому обе стороны помечают её одинаково, а оценка ниже считает только "
+       "остальное."),
+    TR("Maskenin dışladığı bölümün nasıl çizileceği. Eğitim orayı hiç görmez, "
+       "bu yüzden iki taraf da aynı biçimde işaretler ve aşağıdaki puan "
+       "yalnızca kalanı sayar."));
+
+SS_MSG(compare_color_match,
+    EN("Colour match"), JA("色を合わせる"),   ZH_HANS("匹配色彩"), ZH_HANT("比對色彩"),
+    KO("색 맞추기"),     DE("Farbabgleich"), FR("Accord des couleurs"),
+    ES("Ajuste de color"), PT("Ajuste de cor"), IT("Adattamento del colore"),
+    NL("Kleuraanpassing"), RU("Подгонка цвета"), TR("Renk eşleme"));
+
+SS_MSG(compare_color_match_help,
+    EN("Apply this run's per-image exposure and colour correction to the "
+       "render, as the loss does. Turn it off to see the model's own colours."),
+    JA("この実行で使っている画像ごとの露出と色の補正を、損失の計算と同じように"
+       "レンダリングにも適用します。オフにするとモデル本来の色が見えます。"),
+    ZH_HANS("把本次训练中每张图像的曝光与色彩校正也应用到渲染上，和计算损失时"
+            "一样。关掉就能看到模型本身的颜色。"),
+    ZH_HANT("把本次訓練中每張影像的曝光與色彩校正也套用到算繪上，和計算損失時"
+            "一樣。關掉就能看到模型本身的顏色。"),
+    KO("이번 학습이 이미지마다 쓰는 노출·색 보정을 손실 계산과 똑같이 "
+       "렌더링에도 적용합니다. 끄면 모델 자체의 색이 보입니다."),
+    DE("Die bildweise Belichtungs- und Farbkorrektur dieses Laufs auf das "
+       "Rendering anwenden, so wie der Verlust es tut. Ausgeschaltet zeigt es "
+       "die Farben des Modells selbst."),
+    FR("Appliquer au rendu la correction d'exposition et de couleur propre à "
+       "chaque image, comme le fait la perte. Désactivé, on voit les couleurs "
+       "du modèle lui-même."),
+    ES("Aplicar al render la corrección de exposición y color por imagen de "
+       "esta ejecución, como hace la pérdida. Desactivado, se ven los colores "
+       "del propio modelo."),
+    PT("Aplicar à renderização a correção de exposição e cor por imagem desta "
+       "execução, como a perda faz. Desligado, veem-se as cores do próprio "
+       "modelo."),
+    IT("Applicare al render la correzione di esposizione e colore per immagine "
+       "di questa esecuzione, come fa la perdita. Disattivato, si vedono i "
+       "colori del modello stesso."),
+    NL("De belichtings- en kleurcorrectie per beeld van deze run op de render "
+       "toepassen, zoals het verlies dat doet. Uit toont de kleuren van het "
+       "model zelf."),
+    RU("Применить к рендеру покадровую коррекцию экспозиции и цвета этого "
+       "запуска — так же, как это делает функция потерь. Выключено — видны "
+       "собственные цвета модели."),
+    TR("Bu çalışmanın görüntü başına pozlama ve renk düzeltmesini, kayıp "
+       "işlevinin yaptığı gibi görüntülemeye de uygula. Kapalıyken modelin "
+       "kendi renkleri görünür."));
+
+SS_MSG(compare_source_gt,
+    EN("Original file"), JA("元のファイル"),   ZH_HANS("原始文件"), ZH_HANT("原始檔案"),
+    KO("원본 파일"),      DE("Originaldatei"), FR("Fichier d'origine"),
+    ES("Archivo original"), PT("Arquivo original"), IT("File originale"),
+    NL("Oorspronkelijk bestand"), RU("Исходный файл"), TR("Özgün dosya"));
+
+SS_MSG(compare_source_gt_help,
+    EN("Show the photograph at its own resolution instead of the downscaled "
+       "copy training feeds the loss. Zoom in to see what the downscale costs."),
+    JA("学習が損失に渡している縮小後のコピーではなく、写真そのものの解像度で"
+       "表示します。拡大すると、縮小で失われた細部がわかります。"),
+    ZH_HANS("按照片本身的分辨率显示，而不是训练送进损失的缩小副本。放大就能看出"
+            "缩小损失了多少细节。"),
+    ZH_HANT("按照片本身的解析度顯示，而不是訓練送進損失的縮小副本。放大就能看出"
+            "縮小損失了多少細節。"),
+    KO("학습이 손실에 넣는 축소본 대신 사진 본래 해상도로 보여줍니다. 확대하면 "
+       "축소로 잃은 디테일이 얼마나 되는지 알 수 있습니다."),
+    DE("Das Foto in seiner eigenen Auflösung zeigen statt der verkleinerten "
+       "Kopie, die das Training dem Verlust gibt. Hineinzoomen zeigt, was die "
+       "Verkleinerung kostet."),
+    FR("Montrer la photo dans sa propre résolution plutôt que la copie réduite "
+       "que l'entraînement donne à la perte. En zoomant, on voit ce que la "
+       "réduction coûte."),
+    ES("Mostrar la foto en su propia resolución en vez de la copia reducida que "
+       "el entrenamiento pasa a la pérdida. Al ampliar se ve lo que cuesta la "
+       "reducción."),
+    PT("Mostrar a foto na sua própria resolução em vez da cópia reduzida que o "
+       "treinamento passa à perda. Ao ampliar, vê-se o que a redução custa."),
+    IT("Mostrare la foto alla sua risoluzione invece della copia ridotta che "
+       "l'addestramento passa alla perdita. Ingrandendo si vede quanto costa la "
+       "riduzione."),
+    NL("De foto op zijn eigen resolutie tonen in plaats van de verkleinde kopie "
+       "die het trainen aan het verlies geeft. Inzoomen laat zien wat het "
+       "verkleinen kost."),
+    RU("Показать снимок в его собственном разрешении, а не уменьшённую копию, "
+       "которую обучение передаёт функции потерь. При увеличении видно, во что "
+       "обходится уменьшение."),
+    TR("Fotoğrafı, eğitimin kayba verdiği küçültülmüş kopya yerine kendi "
+       "çözünürlüğünde göster. Yakınlaştırınca küçültmenin neye mal olduğu "
+       "görünür."));
+
+SS_MSG(compare_source_gt_split,
+    EN("Not available for a split image: the views the loss sees do not line up "
+       "with any single source frame."),
+    JA("分割された画像では使えません。損失が見ている各ビューは、元の1枚の画像と"
+       "そのまま重なりません。"),
+    ZH_HANS("拆分后的图像不能用：损失看到的各个视图和原来的单张图像对不上。"),
+    ZH_HANT("拆分後的影像不能用：損失看到的各個檢視和原本的單張影像對不上。"),
+    KO("분할된 이미지에서는 쓸 수 없습니다. 손실이 보는 각 뷰는 원본 한 장과 "
+       "그대로 겹치지 않습니다."),
+    DE("Bei einem aufgeteilten Bild nicht verfügbar: die Ansichten, die der "
+       "Verlust sieht, decken sich mit keiner einzelnen Quellaufnahme."),
+    FR("Indisponible pour une image découpée : les vues que voit la perte ne "
+       "coïncident avec aucune image source unique."),
+    ES("No disponible para una imagen dividida: las vistas que ve la pérdida no "
+       "coinciden con ninguna imagen de origen."),
+    PT("Indisponível para uma imagem dividida: as vistas que a perda vê não "
+       "coincidem com nenhuma imagem de origem."),
+    IT("Non disponibile per un'immagine divisa: le viste che la perdita vede "
+       "non coincidono con nessuna immagine sorgente."),
+    NL("Niet beschikbaar bij een opgesplitst beeld: de weergaven die het "
+       "verlies ziet vallen met geen enkel bronbeeld samen."),
+    RU("Недоступно для разрезанного снимка: виды, которые видит функция потерь, "
+       "не совпадают ни с одним исходным кадром."),
+    TR("Bölünmüş bir görüntüde kullanılamaz: kaybın gördüğü görünümler tek bir "
+       "kaynak kareyle örtüşmez."));
+
+SS_MSG(compare_smooth,
+    EN("Smooth"),        JA("なめらか"),      ZH_HANS("平滑"),     ZH_HANT("平滑"),
+    KO("부드럽게"),       DE("Weich"),        FR("Lissé"),        ES("Suave"),
+    PT("Suave"),         IT("Morbido"),      NL("Vloeiend"),     RU("Сглаживание"),
+    TR("Yumuşak"));
+
+SS_MSG(compare_smooth_help,
+    EN("Interpolate between pixels when zoomed in. Switch it off to see the "
+       "individual pixels."),
+    JA("拡大したときにピクセルの間を補間します。オフにすると1ピクセルずつ"
+       "そのまま見えます。"),
+    ZH_HANS("放大时在像素之间平滑过渡。关掉就能看到一个个像素。"),
+    ZH_HANT("放大時在像素之間平滑過渡。關掉就能看到一個個像素。"),
+    KO("확대했을 때 픽셀 사이를 보간합니다. 끄면 픽셀 하나하나가 그대로 "
+       "보입니다."),
+    DE("Beim Hineinzoomen zwischen den Pixeln interpolieren. Ausgeschaltet "
+       "zeigt es die einzelnen Pixel."),
+    FR("Interpoler entre les pixels lors du zoom. Désactivé, les pixels "
+       "apparaissent un à un."),
+    ES("Interpolar entre píxeles al ampliar. Desactivado, se ven los píxeles "
+       "uno a uno."),
+    PT("Interpolar entre os pixels ao ampliar. Desligado, veem-se os pixels um "
+       "a um."),
+    IT("Interpolare tra i pixel quando si ingrandisce. Disattivato, i pixel si "
+       "vedono uno per uno."),
+    NL("Bij inzoomen tussen de pixels interpoleren. Uit toont de afzonderlijke "
+       "pixels."),
+    RU("Интерполировать между пикселями при увеличении. Выключено — видны "
+       "отдельные пиксели."),
+    TR("Yakınlaştırırken pikseller arasında ara değer hesapla. Kapalıyken "
+       "pikseller tek tek görünür."));
+
+SS_MSG(compare_live_help,
+    EN("Re-render the shown image while training, so the comparison keeps up "
+       "with the optimization."),
+    JA("学習中も表示中の画像を描き直し、比較が最適化に追いつくようにします。"),
+    ZH_HANS("训练时不断重新渲染当前图像，让对比跟上优化过程。"),
+    ZH_HANT("訓練時不斷重新算繪目前影像，讓比較跟上最佳化過程。"),
+    KO("학습 중에도 보고 있는 이미지를 다시 렌더링해서 비교가 최적화를 "
+       "따라가게 합니다."),
+    DE("Das gezeigte Bild während des Trainings neu rendern, damit der "
+       "Vergleich der Optimierung folgt."),
+    FR("Refaire le rendu de l'image affichée pendant l'entraînement, pour que "
+       "la comparaison suive l'optimisation."),
+    ES("Volver a renderizar la imagen mostrada durante el entrenamiento, para "
+       "que la comparación siga a la optimización."),
+    PT("Renderizar de novo a imagem mostrada durante o treinamento, para que a "
+       "comparação acompanhe a otimização."),
+    IT("Rifare il render dell'immagine mostrata durante l'addestramento, così "
+       "il confronto segue l'ottimizzazione."),
+    NL("Het getoonde beeld tijdens het trainen opnieuw renderen, zodat de "
+       "vergelijking de optimalisatie volgt."),
+    RU("Перерисовывать показанный снимок во время обучения, чтобы сравнение "
+       "поспевало за оптимизацией."),
+    TR("Eğitim sürerken gösterilen görüntüyü yeniden oluştur, böylece "
+       "karşılaştırma eniyilemeye ayak uydurur."));
+
+SS_MSG(compare_reset_zoom,
+    EN("Fit"),           JA("全体表示"),      ZH_HANS("适应窗口"), ZH_HANT("符合視窗"),
+    KO("전체 보기"),      DE("Einpassen"),    FR("Ajuster"),      ES("Ajustar"),
+    PT("Ajustar"),       IT("Adatta"),       NL("Passend"),      RU("Вписать"),
+    TR("Sığdır"));
+
+SS_MSG(compare_zoom_help,
+    EN("The scroll wheel zooms where the cursor is and dragging moves the "
+       "image. Both sides follow one another."),
+    JA("ホイールでカーソルの位置を中心に拡大縮小し、ドラッグで画像を動かします。"
+       "左右の表示は連動します。"),
+    ZH_HANS("滚轮以光标处为中心缩放，拖动可平移图像。两边始终保持一致。"),
+    ZH_HANT("滾輪以游標處為中心縮放，拖動可平移影像。兩邊始終保持一致。"),
+    KO("휠은 커서 위치를 중심으로 확대·축소하고, 끌면 이미지가 움직입니다. "
+       "양쪽은 서로 따라갑니다."),
+    DE("Das Mausrad zoomt dort, wo der Zeiger steht, Ziehen verschiebt das "
+       "Bild. Beide Seiten folgen einander."),
+    FR("La molette zoome à l'endroit du curseur et le glissement déplace "
+       "l'image. Les deux côtés se suivent."),
+    ES("La rueda amplía donde está el cursor y arrastrar mueve la imagen. Los "
+       "dos lados se siguen."),
+    PT("A roda amplia onde está o cursor e arrastar move a imagem. Os dois "
+       "lados se acompanham."),
+    IT("La rotella ingrandisce dove si trova il cursore e il trascinamento "
+       "sposta l'immagine. I due lati si seguono."),
+    NL("Het scrollwiel zoomt waar de aanwijzer staat en slepen verschuift het "
+       "beeld. Beide kanten volgen elkaar."),
+    RU("Колесо увеличивает там, где стоит курсор, перетаскивание сдвигает "
+       "изображение. Обе стороны следуют друг за другом."),
+    TR("Tekerlek imlecin bulunduğu yerde yakınlaştırır, sürüklemek görüntüyü "
+       "kaydırır. İki taraf birbirini izler."));
+
+SS_MSG(compare_pane_gt,
+    EN("Photograph"),    JA("写真"),          ZH_HANS("照片"),     ZH_HANT("照片"),
+    KO("사진"),           DE("Foto"),         FR("Photo"),        ES("Foto"),
+    PT("Foto"),          IT("Foto"),         NL("Foto"),         RU("Снимок"),
+    TR("Fotoğraf"));
+
+SS_MSG(compare_pane_render,
+    EN("Render"),        JA("レンダリング"),   ZH_HANS("渲染"),     ZH_HANT("算繪"),
+    KO("렌더링"),         DE("Rendering"),    FR("Rendu"),        ES("Render"),
+    PT("Renderização"),  IT("Render"),       NL("Render"),       RU("Рендер"),
+    TR("Görüntüleme"));
+
+SS_MSG(compare_waiting,
+    EN("Start training to put a photograph next to the render of the same "
+       "camera."),
+    JA("学習を開始すると、写真と同じカメラのレンダリングを並べて表示できます。"),
+    ZH_HANS("开始训练后，就能把照片和同一相机的渲染结果并排看。"),
+    ZH_HANT("開始訓練後，就能把照片和同一相機的算繪結果並排看。"),
+    KO("학습을 시작하면 사진과 같은 카메라의 렌더링을 나란히 볼 수 있습니다."),
+    DE("Starten Sie das Training, um ein Foto neben das Rendering derselben "
+       "Kamera zu stellen."),
+    FR("Lancez l'entraînement pour placer une photo à côté du rendu de la même "
+       "caméra."),
+    ES("Inicie el entrenamiento para poner una foto junto al render de la misma "
+       "cámara."),
+    PT("Inicie o treinamento para pôr uma foto ao lado da renderização da mesma "
+       "câmera."),
+    IT("Avvii l'addestramento per mettere una foto accanto al render della "
+       "stessa fotocamera."),
+    NL("Start het trainen om een foto naast de render van dezelfde camera te "
+       "zetten."),
+    RU("Запустите обучение, чтобы поставить снимок рядом с рендером той же "
+       "камеры."),
+    TR("Bir fotoğrafı aynı kameranın görüntüsünün yanına koymak için eğitimi "
+       "başlatın."));
+
+SS_MSG(compare_trained_size,
+    EN("Trained at: {0} x {1}"),
+    JA("学習解像度: {0} x {1}"),
+    ZH_HANS("训练分辨率：{0} x {1}"),
+    ZH_HANT("訓練解析度：{0} x {1}"),
+    KO("학습 해상도: {0} x {1}"),
+    DE("Trainingsgröße: {0} x {1}"),
+    FR("Taille d'entraînement : {0} x {1}"),
+    ES("Tamaño de entrenamiento: {0} x {1}"),
+    PT("Tamanho de treinamento: {0} x {1}"),
+    IT("Dimensione di addestramento: {0} x {1}"),
+    NL("Trainingsformaat: {0} x {1}"),
+    RU("Размер при обучении: {0} x {1}"),
+    TR("Eğitim boyutu: {0} x {1}"));
+
+SS_MSG(compare_trained_size_help,
+    EN("The size the loss actually sees. It is smaller than the file when the "
+       "dataset is being downscaled."),
+    JA("損失が実際に見ているサイズです。データセットを縮小して学習している場合は、"
+       "ファイルより小さくなります。"),
+    ZH_HANS("损失实际看到的尺寸。如果数据集缩小后再训练，它就比文件本身小。"),
+    ZH_HANT("損失實際看到的尺寸。如果資料集縮小後再訓練，它就比檔案本身小。"),
+    KO("손실이 실제로 보는 크기입니다. 데이터셋을 축소해 학습하면 파일보다 "
+       "작습니다."),
+    DE("Die Größe, die der Verlust tatsächlich sieht. Wird der Datensatz "
+       "verkleinert, ist sie kleiner als die Datei."),
+    FR("La taille que la perte voit réellement. Elle est plus petite que le "
+       "fichier lorsque le jeu de données est réduit."),
+    ES("El tamaño que la pérdida ve realmente. Es menor que el archivo cuando "
+       "el conjunto de datos se reduce."),
+    PT("O tamanho que a perda realmente vê. É menor que o arquivo quando o "
+       "conjunto de dados é reduzido."),
+    IT("La dimensione che la perdita vede davvero. È più piccola del file "
+       "quando il set di dati viene ridotto."),
+    NL("Het formaat dat het verlies werkelijk ziet. Het is kleiner dan het "
+       "bestand wanneer de dataset verkleind wordt."),
+    RU("Размер, который на самом деле видит функция потерь. Он меньше файла, "
+       "если набор данных уменьшают."),
+    TR("Kaybın gerçekte gördüğü boyut. Veri kümesi küçültülüyorsa dosyadan "
+       "küçüktür."));
+
+SS_MSG(compare_source_size,
+    EN("File: {0} x {1}"),
+    JA("ファイル: {0} x {1}"),
+    ZH_HANS("文件：{0} x {1}"),
+    ZH_HANT("檔案：{0} x {1}"),
+    KO("파일: {0} x {1}"),
+    DE("Datei: {0} x {1}"),
+    FR("Fichier : {0} x {1}"),
+    ES("Archivo: {0} x {1}"),
+    PT("Arquivo: {0} x {1}"),
+    IT("File: {0} x {1}"),
+    NL("Bestand: {0} x {1}"),
+    RU("Файл: {0} x {1}"),
+    TR("Dosya: {0} x {1}"));
+
+SS_MSG(compare_faces,
+    EN("Views: {0}"),
+    JA("ビュー数: {0}"),
+    ZH_HANS("视图数：{0}"),
+    ZH_HANT("檢視數：{0}"),
+    KO("뷰 수: {0}"),
+    DE("Ansichten: {0}"),
+    FR("Vues : {0}"),
+    ES("Vistas: {0}"),
+    PT("Vistas: {0}"),
+    IT("Viste: {0}"),
+    NL("Weergaven: {0}"),
+    RU("Видов: {0}"),
+    TR("Görünüm: {0}"));
+
+SS_MSG(compare_faces_help,
+    EN("This lens is split into several flat views before training, and both "
+       "panes show all of them in one grid."),
+    JA("このレンズは学習前に複数の平面ビューに分割されます。左右のパネルは"
+       "それらをまとめて1つの格子で表示します。"),
+    ZH_HANS("这种镜头在训练前会被拆成若干个平面视图，两边面板都把它们排在同一个"
+            "网格里显示。"),
+    ZH_HANT("這種鏡頭在訓練前會被拆成數個平面檢視，兩邊面板都把它們排在同一個"
+            "格線裡顯示。"),
+    KO("이 렌즈는 학습 전에 여러 개의 평면 뷰로 나누어지며, 양쪽 패널은 그것들을 "
+       "한 격자에 모아 보여줍니다."),
+    DE("Dieses Objektiv wird vor dem Training in mehrere flache Ansichten "
+       "zerlegt; beide Felder zeigen sie zusammen in einem Raster."),
+    FR("Cet objectif est découpé en plusieurs vues planes avant l'entraînement, "
+       "et les deux panneaux les montrent toutes dans une grille."),
+    ES("Este objetivo se divide en varias vistas planas antes de entrenar, y "
+       "ambos paneles las muestran todas en una cuadrícula."),
+    PT("Esta lente é dividida em várias vistas planas antes do treinamento, e "
+       "os dois painéis mostram todas elas numa grade."),
+    IT("Questo obiettivo viene diviso in più viste piane prima "
+       "dell'addestramento, ed entrambi i pannelli le mostrano tutte in una "
+       "griglia."),
+    NL("Deze lens wordt voor het trainen in meerdere vlakke weergaven "
+       "gesplitst; beide panelen tonen ze samen in één raster."),
+    RU("Этот объектив перед обучением разрезается на несколько плоских видов, и "
+       "обе панели показывают их все в одной сетке."),
+    TR("Bu mercek eğitimden önce birkaç düz görünüme bölünür; iki panel de "
+       "hepsini tek bir ızgarada gösterir."));
+
+SS_MSG(compare_psnr,
+    EN("PSNR: {0} dB"),
+    JA("PSNR: {0} dB"),
+    ZH_HANS("PSNR：{0} dB"),
+    ZH_HANT("PSNR：{0} dB"),
+    KO("PSNR: {0} dB"),
+    DE("PSNR: {0} dB"),
+    FR("PSNR : {0} dB"),
+    ES("PSNR: {0} dB"),
+    PT("PSNR: {0} dB"),
+    IT("PSNR: {0} dB"),
+    NL("PSNR: {0} dB"),
+    RU("PSNR: {0} дБ"),
+    TR("PSNR: {0} dB"));
+
+SS_MSG(compare_psnr_none,
+    EN("PSNR: not available"),
+    JA("PSNR: なし"),
+    ZH_HANS("PSNR：无"),
+    ZH_HANT("PSNR：無"),
+    KO("PSNR: 없음"),
+    DE("PSNR: nicht verfügbar"),
+    FR("PSNR : indisponible"),
+    ES("PSNR: no disponible"),
+    PT("PSNR: indisponível"),
+    IT("PSNR: non disponibile"),
+    NL("PSNR: niet beschikbaar"),
+    RU("PSNR: нет"),
+    TR("PSNR: yok"));
+
+SS_MSG(compare_psnr_help,
+    EN("How close the render is to the photograph, over the pixels the loss "
+       "counts. Higher is better."),
+    JA("レンダリングが写真にどれだけ近いかを、損失が数える画素について示します。"
+       "大きいほど良い値です。"),
+    ZH_HANS("在损失统计的像素上，渲染与照片有多接近。数值越大越好。"),
+    ZH_HANT("在損失統計的像素上，算繪與照片有多接近。數值越大越好。"),
+    KO("손실이 세는 픽셀에 대해 렌더링이 사진에 얼마나 가까운지를 나타냅니다. "
+       "값이 클수록 좋습니다."),
+    DE("Wie nah das Rendering dem Foto kommt, über die Pixel, die der Verlust "
+       "zählt. Höher ist besser."),
+    FR("À quel point le rendu approche la photo, sur les pixels que la perte "
+       "compte. Plus la valeur est haute, mieux c'est."),
+    ES("Cuánto se acerca el render a la foto, sobre los píxeles que cuenta la "
+       "pérdida. Cuanto más alto, mejor."),
+    PT("O quanto a renderização se aproxima da foto, sobre os pixels que a "
+       "perda conta. Quanto mais alto, melhor."),
+    IT("Quanto il render si avvicina alla foto, sui pixel che la perdita conta. "
+       "Più alto è, meglio è."),
+    NL("Hoe dicht de render bij de foto komt, over de pixels die het verlies "
+       "telt. Hoger is beter."),
+    RU("Насколько рендер близок к снимку по тем пикселям, которые считает "
+       "функция потерь. Чем выше, тем лучше."),
+    TR("Kaybın saydığı pikseller üzerinde görüntülemenin fotoğrafa ne kadar "
+       "yaklaştığı. Yüksek olması iyidir."));
+
+SS_MSG(compare_at_step,
+    EN("at step {0}"),
+    JA("ステップ {0} 時点"),
+    ZH_HANS("第 {0} 步时"),
+    ZH_HANT("第 {0} 步時"),
+    KO("{0} 단계 시점"),
+    DE("bei Schritt {0}"),
+    FR("à l'étape {0}"),
+    ES("en el paso {0}"),
+    PT("no passo {0}"),
+    IT("al passo {0}"),
+    NL("bij stap {0}"),
+    RU("на шаге {0}"),
+    TR("{0}. adımda"));
+
 }  // namespace gui
 }  // namespace msg
 }  // namespace i18n
