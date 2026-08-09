@@ -84,14 +84,14 @@ the native parser currently requires an explicit factor.
 
 ## Preprocessing tools
 
-`scripts/` holds standalone Python utilities that produce these layouts:
-frame extraction with blur skipping, COLMAP/GLOMAP driving, Metashape
-conversion, downscaling, undistortion, masking (including a SAM2 GUI),
-monocular depth/normal prediction, and raw conversion. See
-`scripts/README.md`. These are *preprocessing*, separate from the training
-data path, and stay on the Python side.
+`reference/scripts/` holds standalone Python utilities that produce these
+layouts: frame extraction with blur skipping, COLMAP/GLOMAP driving,
+Metashape conversion, downscaling, undistortion, masking (including a SAM2
+GUI), monocular depth/normal prediction, and raw conversion. See
+`reference/scripts/README.md`. These are *preprocessing*, separate from the
+training data path, and stay on the Python side.
 
-`scripts/batch_process_data.bash` needs a COLMAP vocabulary tree; set
+`reference/scripts/batch_process_data.bash` needs a COLMAP vocabulary tree; set
 `SS_VOCAB_TREE` to its path.
 
 ## Benchmarking

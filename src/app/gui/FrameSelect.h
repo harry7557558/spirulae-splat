@@ -1,10 +1,10 @@
 #pragma once
 
 // FrameSelect -- motion-blur-aware frame selection for video datasets.
-// C++ multithreaded port of scripts/extract_frames.py's FrameSelector: the
-// sharpness metric is the variance of the 3x3 Laplacian of the mean-
-// subtracted 512x512 grayscale image; within each group of `group`
-// consecutive candidate frames the sharpest one is kept.
+// C++ multithreaded port of reference/scripts/extract_frames.py's
+// FrameSelector: the sharpness metric is the variance of the 3x3 Laplacian
+// of the mean-subtracted 512x512 grayscale image; within each group of
+// `group` consecutive candidate frames the sharpest one is kept.
 //
 // The GUI extracts candidates with ffmpeg at (target fps x group), then
 // calls this to keep the best frame per group -- same output rate as a

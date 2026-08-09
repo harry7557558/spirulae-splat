@@ -92,7 +92,7 @@ MeshCameras load_cameras(const JsonValue& run_cfg, const std::string& data_dir,
     const int64_t C = ds.num_cameras;
     if (C == 0) throw std::runtime_error("dataset has no cameras: " + data_dir);
 
-    // relative_scale: splats live in a frame scaled by this (model.py:561);
+    // relative_scale: splats live in a frame scaled by this;
     // scale the c2w translations to match before inverting.
     float rel = 1.0f;
     if (const JsonValue* rs = run_cfg.find("relative_scale"))
@@ -235,7 +235,7 @@ int parse_i(const std::string& key, const char* v) {
 
 Options parse_args(int argc, char** argv) {
     Options o;
-    // meshing preset defaults match ss_meshing.py's argparse defaults
+    // meshing preset defaults
     o.m.floater_min_faces = 10;
     o.m.fill_hole_max_edges = 20;
     o.m.degenerate_angle_deg = 15.0f;

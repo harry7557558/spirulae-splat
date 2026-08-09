@@ -2,6 +2,10 @@
 
 Read this first. Detail lives in `docs/`; this file is the map and the rules.
 
+If you are an agent writing code here, the one section you are most likely to
+get wrong is **[Comments](#comments--write-fewer-and-shorter)**. Read it before
+you write your first comment, not after the review.
+
 ## What this project is
 
 **Spirula Studio**, a 3D Gaussian Splatting trainer, formerly spirulae-splat.
@@ -43,7 +47,7 @@ assets/fonts/               the five embedded UI faces + the full-CJK face
                               table (assets/fonts/README.md). The CJK subsets
                               are GENERATED from the catalogs -- see below
 tools/codegen/              the four codegen tools (see "Codegen" below)
-scripts/                    dataset preprocessing CLI tools (Python, standalone;
+reference/scripts/          dataset preprocessing CLI tools (Python, standalone;
                               mask.py is embedded into the GUI binary)
 reference/python/           hand-run tools on NO code path: eval_lpips.py,
                               benchmark.py, camera_utils.py (the unported
@@ -272,6 +276,88 @@ bash build_develop.bash -DSS_BUILD_BACKEND_TESTS=ON && ./build/<test_name>
 Each `src/backend/tests/*.cpp` becomes an executable of the same name.
 `backend/tests/engine/*` drive the real engine end to end. Details and the
 CUDA-vs-Vulkan reference-dump workflow: `docs/testing.md`.
+
+## Comments — write fewer, and shorter
+
+This section exists because the codebase is 14% comment by line and a lot of
+that is agent-written narration nobody needs. **A comment is a cost.** It is
+read every time the code is read, it is not compiled or tested, and it rots
+silently the moment the code under it changes. The default is *no comment*;
+lines earn their place one at a time.
+
+The one test: **could a competent reader recover this from the code?** If yes,
+delete it. Comment the *why* — the alternative you rejected, the number you
+measured, the invariant the compiler cannot state. Never the *what*.
+
+### Do not write
+
+- **Narration of the code below.** `// Loop over the cameras` above the loop,
+  `// Constructor` above the constructor, a comment listing a class's five
+  constructors when the five declarations are twenty lines down, a comment
+  tabulating an enum that is defined in the header next door. The declaration
+  is the documentation; keeping a second copy in prose guarantees they drift.
+- **Archaeology.** This began as a Python fork; that Python is *gone*. Do not
+  write "port of <that file>, lines 547-559", "mirrors <that other file>",
+  "the Python path did X". A citation into a file that does not exist cannot
+  be checked by anyone and reads as authority it has not got. Real
+  provenance — the ONNX operator we match, torchmetrics' SSIM convention,
+  COLMAP's `ba_global_images_ratio` — is fine and stays, because those
+  references are live and checkable.
+- **Changelog.** "Previously X, now Y", "this used to be", "was changed to".
+  Git knows. When you change code, **rewrite the comment to describe what is
+  true now** — never append a paragraph about what changed.
+- **Deliberate omissions.** "`Cameras::__getitem__` is intentionally NOT
+  ported", "rescale is omitted for the same reason". Absent code needs no
+  comment; if the omission is a real design decision, it belongs in `docs/` or
+  the subsystem README once, not in a header forever.
+- **Meta-narration and reassurance.** "Note that", "It is important to",
+  "This ensures correctness", "for clarity", "just to be safe". Either the
+  point is load-bearing — then state it flatly in one line — or it is filler.
+- **Tutorial voice.** No "we", "our", "let's", "you can now", "first…
+  second… finally". Write the fact, not the walkthrough.
+- **Essays where a doc belongs.** A thirty-line architecture lecture at the top
+  of a header is a document that has escaped `docs/`. Put it in `docs/` or the
+  subsystem README and leave a one-line pointer.
+
+### Do write
+
+Rationale that cannot be recovered any other way, and keep it dense:
+
+- A measured number and what measured it — `src/sfm/map/Mapper.h`'s tuning
+  constants are the model: each carries the dataset and the effect size that
+  chose it. That is worth every line it takes.
+- A footgun with teeth: the gridDim 65535 fold, `thread_local` under OpenMP,
+  code 0 decoding to exactly `0.0`, an ImGui ID pinned to a message name.
+- A cross-file invariant the compiler cannot enforce — "must match the layout
+  in `<file>`", a Slang/CUDA ABI constraint, an ordering requirement between
+  two calls.
+- Units, frames and conventions on a bare number: what space, which handedness,
+  whose pixel-center offset.
+
+### Budget
+
+Rules of thumb, not a linter, but a 40-line block should feel wrong:
+
+- file header: **≤ 10 lines** — what this file is for and its one non-obvious
+  constraint; everything longer goes to `docs/` or the subsystem README
+- a block above a function or a constant: **≤ 3 lines**
+- an inline note: **1 line**, and prefer a better name over the note
+
+Section banners (see Conventions below) are exempt — they are structure, not
+prose. So is an untitled horizontal rule used to separate top-level
+definitions, which several subsystems use consistently.
+
+`tools/check_comments.sh` enforces the one part of this a script can decide:
+every file a comment names must exist. It runs from `build_develop.bash` and
+fails the build. A citation into a deleted file is unfollowable, and the
+reader cannot tell it from a live one.
+
+### When you edit a file
+
+Cleaning up as you go is the whole plan; there is no separate cleanup pass
+coming. If you touch a function whose comment breaks a rule above, fix the
+comment in the same diff. Deleting a stale comment needs no justification and
+no ceremony — do not ask, do not leave a note saying you removed it.
 
 ## Conventions
 

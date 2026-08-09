@@ -338,7 +338,7 @@ void Context::init() {
         _caps.shader_int8 = false;
 
     std::vector<const char*> extensions;
-    // Shader blobs carry NonSemantic debug info (build_spirv.py -g2, for
+    // Shader blobs carry NonSemantic debug info (slangc -g2, for
     // profiler source correlation); a 1.2 device must enable this extension
     // for SPV_KHR_non_semantic_info to be legal (core in 1.3). Universally
     // present on current drivers; stripped-debug fallback not needed.

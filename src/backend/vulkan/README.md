@@ -620,8 +620,7 @@ the engine level.
     keyed on `(family, resolution, grid shape)` — reusing vksplat's
     Gaussian-Thompson-sampling stats but making them per-key, so it needs no
     offline calibration pass (unlike fused-bilagrid) and does not average over
-    resolutions (unlike vksplat's context-free bandit). Full design +
-    phasing: `docs/notes/bilagrid-backward-selection.md`. When porting v2, the
+    resolutions (unlike vksplat's context-free bandit). When porting v2, the
     `needs_image_grad` axis is a Slang spec-constant (false for depth/normal,
     which skip the image-grad scatter — the v2 analogue of the existing
     `v_in == nullptr` skip), and the grid-fold tail rule + null-`v_in` guard

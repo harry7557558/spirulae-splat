@@ -1,6 +1,4 @@
-// TrainerCore.cpp -- see TrainerCore.h. Function-level comments still cite the
-// Python trainer this began as (model.py, trainer.py, ...); those files are
-// gone, and the citations are kept only as provenance for the numerics.
+// TrainerCore.cpp -- see TrainerCore.h.
 
 #include "app/TrainerCore.h"
 #include "app/EvalMetrics.h"
@@ -104,8 +102,6 @@ Mat3f invert3x3(const Mat3f& m) {
             (d*i - e*h)*inv, (b*h - a*i)*inv, (a*e - b*d)*inv};
 }
 
-// model.py populate_modules:612-623, applied to the config in place there;
-// pure-function port here.
 ColorResolution resolve_color(const TrainConfig& c) {
     ColorResolution r;
     r.image_gamut  = c.image_color_gamut;
@@ -129,10 +125,7 @@ ColorResolution resolve_color(const TrainConfig& c) {
 
 
 // ===========================================================================
-// LR schedule -- port of OptimizerConfig.get_scheduled_lr (optimizer.py:54).
-// `lr_final` mirrors getattr(name+"_lr_final", lr): pass the field when the
-// Python class has one, std::nullopt when the attribute doesn't exist (which
-// getattr defaults to lr -> same constant result as nullopt here).
+// LR schedule. std::nullopt for `lr_final` means "constant at `lr`".
 // ===========================================================================
 
 float scheduled_lr(int step, int max_steps, float lr,
@@ -149,7 +142,7 @@ float scheduled_lr(int step, int max_steps, float lr,
 
 
 // ===========================================================================
-// Splat seeding -- port of model.py populate_modules:546-651 (3dgs branch)
+// Splat seeding (3dgs branch)
 // ===========================================================================
 
 SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
@@ -158,10 +151,10 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
     std::normal_distribution<float> gauss(0.f, 1.f);
     std::uniform_real_distribution<float> uni(0.f, 1.f);
 
-    float scale_init   = cfg.scale_init.value_or(0.5f);     // model.py:569-573
+    float scale_init   = cfg.scale_init.value_or(0.5f);
     float opacity_init = cfg.opacity_init.value_or(0.1f);
 
-    // Resolve seed count into [min_init, cap_max] (model.py:547-559).
+    // Resolve seed count into [min_init, cap_max].
     int64_t n_src = pts.num();
     if (n_src == 0) throw std::runtime_error("seed_splats: empty point cloud");
     int64_t min_init = std::max<int64_t>(
@@ -175,9 +168,8 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
         std::shuffle(pick.begin(), pick.end(), rng);
         pick.resize(cfg.cap_max);
     } else {
-        // Repeat modulo when under min_init. TODO: the Python path jitters
-        // repeats toward a nearest neighbor (model.py:550-556) instead of
-        // duplicating exactly.
+        // Repeat modulo when under min_init. TODO: jitter the repeats toward
+        // a nearest neighbor instead of duplicating exactly.
         int64_t n = std::max(n_src, min_init);
         pick.resize(n);
         for (int64_t i = 0; i < n; i++) pick[i] = i % n_src;
@@ -196,14 +188,14 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
     s.features_dc.assign(cap * 3, 0.f);
     s.features_sh.assign(cap * (dim_sh - 1) * 3, 0.f);
 
-    // means (*= relative_scale, model.py:561-562)
+    // means, scaled into the training frame
     float rescale = cfg.relative_scale.value_or(1.0f);
     for (int64_t i = 0; i < num; i++)
         for (int d = 0; d < 3; d++)
             s.means[i*3 + d] = pts.xyz[pick[i]*3 + d] * rescale;
 
-    // log(scale_init * sqrt(mean d^2 of 4-NN)) over xyz (model.py:578-583).
-    // TODO: suppress_initial_scales (model.py:584-585).
+    // log(scale_init * sqrt(mean d^2 of 4-NN)) over xyz.
+    // TODO: suppress_initial_scales.
     std::vector<float> nn = knn::mean_knn_dist(s.means, num, 4);
     for (int64_t i = 0; i < num; i++) {
         float v = std::log(scale_init * nn[i] + 1e-8f);
@@ -217,7 +209,7 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
         s.opacities[i] = std::log(opacity_init / (1.f - opacity_init));
     }
 
-    // Seed colors (model.py:596-635). Uniform-color clouds are randomized.
+    // Seed colors. Uniform-color clouds are randomized.
     bool all_same = true;
     for (int64_t i = 0; i < num && all_same; i++)
         for (int d = 0; d < 3; d++)
@@ -228,7 +220,7 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
         for (int d = 0; d < 3; d++)
             col[d] = all_same ? uni(rng) : pts.rgb[pick[i]*3 + d] / 255.f;
         if (color.convert_seed) {
-            // sRGB -> linear (thresholds as in model.py:626/631).
+            // sRGB -> linear
             if (color.splat_linear || !color.splat_gamut.empty())
                 for (int d = 0; d < 3; d++)
                     col[d] = col[d] < 0.055f ? col[d] / 12.92f
@@ -257,7 +249,6 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
 namespace {
 
 int densify_loss_map_mode_int(const std::string& mode) {
-    // Mirrors _DENSIFY_LOSS_MAP_MODE_TO_INT (model.py:437).
     if (mode == "none")              return 0;
     if (mode == "loss_full")         return 1;
     if (mode == "ssim_full")         return 2;
@@ -270,7 +261,6 @@ int densify_loss_map_mode_int(const std::string& mode) {
 
 }  // namespace
 
-// model.py:1483 _build_loss_weights.
 std::array<float, (int)LossWeightIndex::length>
 build_loss_weights(const TrainConfig& c, int step) {
     float dist_factor = std::min((float)step / std::max(c.distortion_reg_warmup, 1), 1.0f);
@@ -318,7 +308,7 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
     float alpha = st.train_frame_scale;
     EngineStepConfig cfg;
 
-    // ---- loss (model.py engine_train_step_managed:1903-1915) --------------
+    // ---- loss ----------------------------------------------------------
     cfg.loss.weights = build_loss_weights(c, step);
     cfg.loss.w_ssim = c.ssim_lambda;
     cfg.loss.num_loss_scales = c.num_loss_scales + 1;
@@ -337,7 +327,7 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
     }
     cfg.loss.input_depth_is_ray_depth = c.input_depth_is_ray_depth;
 
-    // ---- optim (core.py _build_optim_config:280) ---------------------------
+    // ---- optim ---------------------------------------------------------
     float means_lr = scheduled_lr(step, max_steps_lr, c.means_lr, c.means_lr_final);
     if (!c.use_scale_agnostic_mean) means_lr *= alpha;
     cfg.optim.lr_means       = means_lr;
@@ -355,7 +345,7 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
     cfg.optim.quat_norm_reg_weight        = c.quat_norm_reg;
     cfg.optim.sh_reg_weight               = c.sh_reg;
     cfg.optim.use_scale_agnostic_mean     = c.use_scale_agnostic_mean;
-    // Renderer.__init__ level -> bits mapping (core.py:95-102).
+    // quantization level -> bit depths
     cfg.optim.quantization_level = c.quantization_level;
     cfg.optim.sh_optim_bits      = c.quantization_level == 0 ? 32 : 8;
     cfg.optim.sh_value_bits      = c.quantization_level == 0 ? 32 : 16;
@@ -369,7 +359,7 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
     cfg.optim.use_color_trust_region = st.splat_linear;
     cfg.optim.eps_tr = 1e-6f * std::pow(0.01f, (float)step / std::max(max_steps_lr, 1));
 
-    // ---- densify (core.py _build_densify_config:321) -----------------------
+    // ---- densify -------------------------------------------------------
     float noise_lr_scalar = c.use_revised_densification ? 1.0f : alpha;
     cfg.densify.refine_start_iter             = c.refine_start_iter;
     cfg.densify.refine_stop_num_iter          = c.refine_stop_num_iter;
@@ -391,7 +381,7 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
     cfg.densify.las_split_opacity_k_final  = c.long_axis_split_opacity_k[1];
     cfg.densify.las_split_opacity_k_warmup = (int)c.long_axis_split_opacity_k[2];
 
-    // ---- bilagrid LRs + TV (model.py:1931-1961) ----------------------------
+    // ---- bilagrid LRs + TV ---------------------------------------------
     if (st.bilagrid_rgb_init) {
         cfg.bilagrid.lr_rgb = c.use_adagrad_bilagrid_optim
             ? c.bilagrid_adagrad_lr
@@ -414,13 +404,13 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
         cfg.bilagrid.tv_weight_normal = c.bilagrid_tv_loss_weight_geometry;
     }
 
-    // ---- PPISP (model.py:1980-1997) ----------------------------------------
+    // ---- PPISP ---------------------------------------------------------
     if (st.ppisp_init) {
         cfg.ppisp.lr = c.use_adagrad_ppisp_optim
             ? c.ppisp_adagrad_lr
             : scheduled_lr(step, max_steps_lr, c.ppisp_lr, c.ppisp_lr_final,
                            c.ppisp_lr_warmup);
-        // PPISPRegLossIndex order (core.py:449-456).
+        // PPISPRegLossIndex order
         cfg.ppisp.reg_weights = {
             c.ppisp_reg_exposure_mean, c.ppisp_reg_vig_center,
             c.ppisp_reg_vig_non_pos,   c.ppisp_reg_vig_channel_var,
@@ -428,10 +418,10 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
         };
     }
     // Outside the guard: it is an ordering flag, not a rate, so it reflects
-    // the config whether or not PPISP is live (matching the Python path).
+    // the config whether or not PPISP is live.
     cfg.ppisp.run_before_bilagrid = c.apply_ppisp_before_bilagrid;
 
-    // ---- background (model.py:1963-1977) -----------------------------------
+    // ---- background ----------------------------------------------------
     if (c.background_mode == "noise") {
         float rw = std::min((float)step / std::max(c.background_noise_warmup, 1), 1.0f);
         cfg.background.randomize_weight =
@@ -539,10 +529,9 @@ void TrainerSession::load_dataset() {
     pcfg.metashape_psx           = cfg.metashape_psx;
     ds = parse_dataset(cfg.data, pcfg, cfg.data_format);
 
-    // relative_scale: scale the world like model.py:561 (means) +
-    // trainer.py:407 (viewmat T; c2w t scaled here, pre-bake).
-    // auto_scale_poses=False forces the normalized-frame scale to 1
-    // (dataparser.py:466-468).
+    // relative_scale scales the world: point means here, and the c2w
+    // translations pre-bake so the baked viewmats follow.
+    // auto_scale_poses=false forces the normalized-frame scale to 1.
     if (cfg.relative_scale.has_value()) {
         float rs = *cfg.relative_scale;
         for (auto& v : ds.points.xyz) v *= rs;
@@ -556,7 +545,7 @@ void TrainerSession::load_dataset() {
     post = bake_post_split(
         ds, cfg.warp_to_pinhole, cfg.warp_spherical_to_pinhole);
 
-    // Warp-path feature guards (trainer.py:294-303).
+    // Warp-path feature guards.
     has_depth  = !ds.depth_filenames.empty()  && cfg.load_depths;
     has_normal = !ds.normal_filenames.empty() && cfg.load_normals;
     if (post.direct_equirect && (has_depth || has_normal))
@@ -625,7 +614,7 @@ void TrainerSession::setup_engine() {
     check_cuda_runtime();
 #endif
 
-    // ---- Output dir (trainer.py _setup_output_dir:524) ----------------------
+    // ---- Output dir ----------------------------------------------------
     if (!out_dir_override.empty()) {
         out_dir = fs::path(out_dir_override);
     } else if (!cfg.output_dir_name.empty()) {
@@ -660,13 +649,13 @@ void TrainerSession::setup_engine() {
                   tv(seed.features_dc, {cap, 3}),
                   tv(seed.features_sh, {cap, dim_sh - 1, 3}));
 
-    // Background blending (model.py:516-526).
+    // Background blending.
     if (cfg.background_mode == "noise")
         engine_init_background_noise(color.splat_linear);
     else if (cfg.background_mode == "sh")
         engine_init_background_sh(cfg.background_sh_degree, color.splat_linear);
 
-    // Linear / wide-gamut color space (model.py:532-543).
+    // Linear / wide-gamut color space.
     bool splat_cs_on = color.splat_linear || !color.splat_gamut.empty();
     bool image_cs_on = color.image_linear || !color.image_gamut.empty();
     {
@@ -678,11 +667,11 @@ void TrainerSession::setup_engine() {
             image_cs_on ? vec(gamut_to_rec709(color.image_gamut)) : std::vector<float>{});
     }
 
-    // ---- DataManager (trainer.py _setup_cpp_data_manager) -------------------
+    // ---- DataManager ---------------------------------------------------
     const int64_t N = ds.num_cameras;
     int64_t num_val = (int64_t)ds.val_indices.size();
     int64_t num_train = N - num_val;
-    // Batch-size policy (datamanager.py:91-105, stochastic=False).
+    // Batch-size policy.
     double n_batch = std::max((double)num_train / std::max(cfg.max_batch_per_epoch, 1), 1.0);
     int train_bs = std::max(1, (int)(n_batch + 0.5));
     int val_bs = 1;
@@ -695,7 +684,7 @@ void TrainerSession::setup_engine() {
     // masks -- the DataManager synthesizes a 1x1 white placeholder per
     // such image so the wide-warp kernel produces the post-split FOV
     // mask (1 inside the lens circle, 0 outside). Without it the unseen
-    // face regions train as black (trainer.py:452-461).
+    // face regions train as black.
     dm.load_masks  = !ds.mask_filenames.empty() || post.any_fisheye_warp;
     dm.load_depths      = has_depth;
     dm.load_normals     = has_normal;
@@ -715,9 +704,9 @@ void TrainerSession::setup_engine() {
         post.input_intrins, post.input_dist_coeffs,
         ds.train_indices, ds.val_indices);
 
-    // ---- Bilagrid / PPISP init (model.py _maybe_init_bilagrid:823). --------
+    // ---- Bilagrid / PPISP init -----------------------------------------
     // Enablement conditions are static here (dataset modalities known up
-    // front), so the lazy per-step init collapses to setup time.
+    // front), so the init happens once at setup rather than per step.
     st = RunState{};
     st.train_frame_scale = ds.train_frame_scale;
     st.splat_linear      = color.splat_linear;
@@ -725,13 +714,13 @@ void TrainerSession::setup_engine() {
     int value_bits = cfg.quantization_level == 0 ? 32 : 16;
     // num_train_data resolves to the POST-split camera count -- the
     // bilagrid / PPISP tables have one slot per post camera and the
-    // TV-loss normalization depends on it (trainer.py:486-494).
+    // TV-loss normalization depends on it.
     int n_grids = (int)post.n_post;
 
     if (cfg.use_bilateral_grid &&
         (cfg.use_adagrad_bilagrid_optim ? cfg.bilagrid_adagrad_lr
                                         : cfg.bilagrid_lr) > 0.0f) {
-        // bilagrid_shape is (X, Y, W) -> engine (L=W, H=Y, W=X) (model.py:847-851).
+        // bilagrid_shape is (X, Y, W) -> engine (L=W, H=Y, W=X).
         engine_init_bilagrid_rgb(n_grids, cfg.bilagrid_type,
                                  cfg.bilagrid_shape[2], cfg.bilagrid_shape[1],
                                  cfg.bilagrid_shape[0],
@@ -769,7 +758,7 @@ void TrainerSession::setup_engine() {
         st.ppisp_init = true;
     }
 
-    // ---- Resume (resume.py + trainer.py _resume_from_checkpoint:510) --------
+    // ---- Resume --------------------------------------------------------
     // Last, because engine_load_checkpoint() overwrites the skeleton just
     // built: the world must already be allocated at max_num_splats and every
     // appearance channel the checkpoint carries must already exist as a
@@ -824,7 +813,6 @@ void TrainerSession::restore_checkpoint() {
     log(lfmt(lmsg::resumed_from, {r.ckpt_dir.string(), (long long)start_step}));
 }
 
-// Checkpoint save (trainer.py save_checkpoint:939).
 void TrainerSession::save_checkpoint(int step) {
     char name[32];
     std::snprintf(name, sizeof name, "step-%09d.ckpt", step);
@@ -844,8 +832,7 @@ void TrainerSession::save_checkpoint(int step) {
 }
 
 // One step. Split out of train() so a front-end that keeps its own loop
-// (the Python trainer, for resume / eval / profiling) shares the ported
-// per-step config rather than rebuilding it -- see bindings/bind_trainer.cpp.
+// shares this per-step config rather than rebuilding it.
 std::map<std::string, float> TrainerSession::train_step(int step) {
     int sh_degree_to_use = step / std::max(cfg.sh_degree_warmup_every, 1);
     EngineStepConfig sc = build_step_config(cfg, st, step);
@@ -854,7 +841,6 @@ std::map<std::string, float> TrainerSession::train_step(int step) {
         cfg.packed || cfg.use_bvh, sc);
 }
 
-// The training loop (trainer.py train:741).
 void TrainerSession::train(const TrainerCallbacks& cb) {
     _start_time = std::chrono::steady_clock::now();
 
@@ -979,7 +965,7 @@ ViewerHooks TrainerSession::make_viewer_hooks() {
 
 
 // ===========================================================================
-// Eval (trainer.py eval:465 + model.py get_image_metrics_and_images:1597)
+// Eval
 // ===========================================================================
 
 namespace {
@@ -1242,7 +1228,7 @@ void TrainerSession::eval() {
     }
 
     // metrics.json: per-image lists plus avg_* scalars, the shape
-    // ss_benchmark.py reads back.
+    // reference/python/benchmark.py reads back.
     std::ofstream mf((out_dir / "metrics.json").string());
     if (!mf) throw std::runtime_error("cannot write metrics.json");
     mf << "{\n";

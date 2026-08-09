@@ -124,7 +124,7 @@ struct IndexGroup {
 };
 
 // Group-size-weighted sampler — picks a group with probability proportional
-// to its size, mirroring datamanager.py:IndexGroups::random_idx().
+// to its size.
 class GroupSampler {
 public:
     GroupSampler() = default;
@@ -970,10 +970,9 @@ void DataManagerImpl::probe_dtypes() {
 }
 
 
-// Cubemap axis tables. Layout matches modules/resample.py:
-//   get_cubemap_faces_fisheye5()  -> 5 faces, axes_fisheye5
-//   get_cubemap_faces_equirectangular() -> 6 faces, axes_equirect6
-// Each face is a 3x3 row-major rotation laid out as 9 contiguous floats.
+// Cubemap axis tables: 5 faces for fisheye, 6 for equirectangular. Each face
+// is a 3x3 row-major rotation laid out as 9 contiguous floats. MUST match
+// DatasetCommon.cpp's kAxes5 / kAxes6, which drive the camera poses.
 static const float kAxesFisheye5[5 * 9] = {
     1, 0, 0,  0, 1, 0,  0, 0, 1,
     0, 1, 0,  0, 0, 1,  1, 0, 0,
@@ -1041,8 +1040,7 @@ std::vector<IndexGroup> DataManagerImpl::build_index_groups_member(
             if (g.K == 5) g.axes_dev = _axes_fisheye5_dev;
             else if (g.K == 6) g.axes_dev = _axes_equirect6_dev;
             else g.axes_dev = nullptr;
-            // Post-split sub-image size mirrors modules/resample.py:
-            //   out_shape = ceil(sqrt(H * W / K)).
+            // Post-split sub-image size: out_shape = ceil(sqrt(H * W / K)).
             if (g.K > 1) {
                 int s = (int)std::ceil(std::sqrt((double)g.height * g.width / (double)g.K));
                 g.out_h = g.out_w = s;

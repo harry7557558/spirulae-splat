@@ -8,10 +8,11 @@
 // same reason TrainerCore does: it belongs to neither subsystem, and every
 // front end wants exactly one copy of it.
 //
-// The frame-selection arithmetic reproduces scripts/extract_frames.py's -- a
-// window of `keep` frames, one written every `skip` -- so the same source
-// frames get the same file names whichever path produced them. That is what
-// lets the GUI fall back to ffmpeg + FrameSelect without the dataset changing.
+// The frame-selection arithmetic reproduces
+// reference/scripts/extract_frames.py's -- a window of `keep` frames, one
+// written every `skip` -- so the same source frames get the same file names
+// whichever path produced them. That is what lets the GUI fall back to
+// ffmpeg + FrameSelect without the dataset changing.
 //
 // Only compiled when SS_ENABLE_PATENTED is ON; every caller has an ffmpeg
 // fallback for when it is not.

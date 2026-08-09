@@ -125,11 +125,11 @@ endif()
 # ---------------------------------------------------------------------------
 # GPU inference (src/nn/) and segmentation (src/sam/)
 #
-# The native replacement for the scripts/mask.py subprocess: SAM 2 / SAM 3 on
-# the same Vulkan + Slang stack as the SfM module, over a reusable inference
-# layer. Same rule as SfM -- Vulkan-only, on by default only for the Vulkan
-# build, opt-in for CUDA if the Vulkan SDK is present. See cmake/SsNn.cmake
-# and src/nn/README.md.
+# The native replacement for the reference/scripts/mask.py subprocess: SAM 2
+# / SAM 3 on the same Vulkan + Slang stack as the SfM module, over a
+# reusable inference layer. Same rule as SfM -- Vulkan-only, on by default
+# only for the Vulkan build, opt-in for CUDA if the Vulkan SDK is present.
+# See cmake/SsNn.cmake and src/nn/README.md.
 # ---------------------------------------------------------------------------
 if(SS_BACKEND STREQUAL "vulkan")
     option(SS_BUILD_SAM "Build the inference layer + SAM segmentation" ON)

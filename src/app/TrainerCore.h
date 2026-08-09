@@ -38,8 +38,7 @@
 namespace spirula {
 
 // ===========================================================================
-// Color-space handling (port of _wrapper_per_pixel.get_color_transform_matrix
-// + the resolution logic in model.py populate_modules:612-631 / __init__:532)
+// Color-space handling
 // ===========================================================================
 
 using Mat3f = std::array<float, 9>;
@@ -59,7 +58,7 @@ ColorResolution resolve_color(const TrainConfig& c);
 
 
 // ===========================================================================
-// LR schedule -- port of OptimizerConfig.get_scheduled_lr (optimizer.py:54).
+// LR schedule
 // ===========================================================================
 
 float scheduled_lr(int step, int max_steps, float lr,
@@ -68,7 +67,7 @@ float scheduled_lr(int step, int max_steps, float lr,
 
 
 // ===========================================================================
-// Splat seeding -- port of model.py populate_modules:546-651 (3dgs branch)
+// Splat seeding (3dgs branch)
 // ===========================================================================
 
 struct SeedSplats {
@@ -86,9 +85,7 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
 
 
 // ===========================================================================
-// Per-step EngineStepConfig -- ports of model.py _build_loss_weights /
-// engine_train_step_managed and core.py _build_optim_config /
-// _build_densify_config.
+// Per-step EngineStepConfig
 // ===========================================================================
 
 struct RunState {
@@ -219,7 +216,7 @@ public:
     // setup_engine().
     void restore_checkpoint();
 
-    // Trainer.get_progress port (trainer.py:181-205); the /progress body.
+    // The /progress response body.
     std::string progress_json();
 
     // Viewer wiring shared by the web viewer and the GUI viewport.

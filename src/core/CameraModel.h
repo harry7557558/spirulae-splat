@@ -5,8 +5,7 @@
 // CameraModelType and camera_model_from_name were historically defined in
 // Common.cuh / Camera.h, which under the CUDA backend transitively pull in
 // <cuda_runtime.h> (via backend/api/BackendTypes.h). The
-// standalone dataset parsers (app/ColmapParser.cpp, app/NerfstudioParser.cpp,
-// app/MetashapeParser.cpp, app/DatasetCommon.cpp) only need these two trivial
+// standalone dataset parsers (data/parsers/) only need these two trivial
 // symbols, and are also compiled for WebAssembly (viewer/), where CUDA headers
 // are unavailable. They include THIS header instead of Camera.h.
 //

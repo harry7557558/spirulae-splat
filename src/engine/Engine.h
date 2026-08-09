@@ -9,7 +9,6 @@
 #include "kernels/pixelwise/PixelWise.cuh"
 #include "kernels/loss/FusedSSIM.cuh"
 #include "kernels/tile/SplatTileIntersector.cuh"
-// #include "kernels/projection/Projection.cuh"
 #include "kernels/projection/ProjectionFwd.cuh"
 #include "kernels/projection/ProjectionBwd.cuh"
 #include "kernels/projection/ProjectionPackedFwd.cuh"
@@ -32,15 +31,15 @@
 
 
 // ============================================================
-// Engine API -- not auto-generated; manually maintained
+// Engine API -- hand-written, unlike backend/api/
 // ============================================================
 
 // --- Lifecycle ---
 //
 // Reset the EngineState singleton to a freshly-constructed state and free all
 // device memory owned by the global pool + scratch buffer. Must be called
-// between training runs that swap datasets (e.g. ss_benchmark looping over
-// scenes) -- without it the new run inherits the previous run's world splats,
+// between training runs that swap datasets (a benchmark looping over scenes)
+// -- without it the new run inherits the previous run's world splats,
 // camera table, bilagrid / PPISP / background config, optimizer moments, and
 // color-space matrices, which produces broken renders and wrong metrics.
 void engine_reset();
@@ -154,13 +153,13 @@ std::map<std::string, float> engine_compute_loss_backward(
 
 // --- Backward from supplied output cotangents (no loss) ---
 //
-// Drop-in for the old renderer.backward(v_render_colors, v_render_Ts): seeds
-// the rasterization backward with caller-supplied per-pixel cotangents instead
-// of a loss gradient, then runs raster + projection backward. Per-splat grads
-// land in engine().grad.* (read with engine_copy_grads_to_host). The seeds may
-// be host or device pointers (backend::MemcpyKind::Auto auto-detects). forward_3dgs
-// must have run first. Note: the 3dgs / mip path does not accumulate a viewmats
-// gradient (projection bwd is called with v_viewmats = null).
+// Seeds the rasterization backward with caller-supplied per-pixel cotangents
+// instead of a loss gradient, then runs raster + projection backward.
+// Per-splat grads land in engine().grad.* (read with
+// engine_copy_grads_to_host). The seeds may be host or device pointers
+// (backend::MemcpyKind::Auto auto-detects). forward_3dgs must have run
+// first. The 3dgs / mip path does not accumulate a viewmats gradient
+// (projection bwd is called with v_viewmats = null).
 void engine_backward_from_render_grad(
     TorchTensorView v_render_rgb,    // [C, H, W, 3] float32
     TorchTensorView v_render_depth,  // [C, H, W, 1] float32
@@ -174,7 +173,7 @@ void engine_optim_step(int step, const OptimConfig& cfg);
 // --- Bilagrid (RGB / depth / normal) ---
 // Allocates and identity-initializes a bilagrid per camera. Must be called
 // after set_camera_params. RGB applies to the rendered prediction; depth and
-// normal apply to GT (matching the Python flow in training_losses.py).
+// normal apply to GT.
 
 // optim_bits: bit depth for the optimizer-state quantization. 32 = no quant
 // (full fp32 g1/g2 for Adam; fp32 accum for AdaGrad). 4 or 8 = packed
@@ -257,9 +256,8 @@ int engine_copy_background_to_host(TorchTensorView out_image);
 // (linear or wide-gamut -> sRGB) runs at the end of every forward, and is
 // inverted through the vjp on the loss-side gradient before raster bwd. The
 // image-side conversion (same direction) runs once per upload in
-// set_training_data. Pass row-major 3x3 source->Rec.709 matrices (matches
-// get_color_transform_matrix in Python). Pass empty matrices when the
-// corresponding side is not enabled.
+// set_training_data. Pass row-major 3x3 source->Rec.709 matrices, or empty
+// matrices when the corresponding side is not enabled.
 void engine_init_color_space(
     bool splat_enabled,
     bool splat_is_linear,
@@ -371,8 +369,8 @@ std::map<std::string, float> engine_train_step_hetero(
 // internally and run the same fused forward + loss/bwd + optim + densify
 // pipeline as `engine_train_step`.
 //
-// This is the "engine handles data loading" entrypoint -- Python (or any
-// future C++ trainer) no longer constructs per-step GT/camera tensors.
+// This is the "engine handles data loading" entrypoint: the caller does not
+// construct per-step GT/camera tensors.
 
 void engine_setup_data_manager(
     DataManagerConfig         cfg,

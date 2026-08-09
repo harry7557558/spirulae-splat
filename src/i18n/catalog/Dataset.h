@@ -3951,32 +3951,32 @@ SS_MSG(use_python_masking,
     TR("Harici Python betiğiyle maskele"));
 
 SS_MSG(use_python_masking_help,
-    EN("Use scripts/mask.py through an external Python with "
+    EN("Use reference/scripts/mask.py through an external Python with "
        "lang-segment-anything, instead of the built-in segmentation."),
     JA("内蔵のセグメンテーションの代わりに、lang-segment-anything を入れた"
-       "外部の Python で scripts/mask.py を使います。"),
+       "外部の Python で reference/scripts/mask.py を使います。"),
     ZH_HANS("不用内置分割，而是通过装有 lang-segment-anything 的外部 Python "
-            "运行 scripts/mask.py。"),
+            "运行 reference/scripts/mask.py。"),
     ZH_HANT("不用內建分割，而是透過裝有 lang-segment-anything 的外部 Python "
-            "執行 scripts/mask.py。"),
+            "執行 reference/scripts/mask.py。"),
     KO("내장 분할 대신, lang-segment-anything이 설치된 외부 Python으로 "
-       "scripts/mask.py를 실행합니다."),
-    DE("scripts/mask.py über ein externes Python mit lang-segment-anything "
-       "benutzen statt der eingebauten Segmentierung."),
-    FR("Utiliser scripts/mask.py via un Python externe doté de "
+       "reference/scripts/mask.py를 실행합니다."),
+    DE("reference/scripts/mask.py über ein externes Python mit "
+       "lang-segment-anything benutzen statt der eingebauten Segmentierung."),
+    FR("Utiliser reference/scripts/mask.py via un Python externe doté de "
        "lang-segment-anything, au lieu de la segmentation intégrée."),
-    ES("Usar scripts/mask.py mediante un Python externo con "
+    ES("Usar reference/scripts/mask.py mediante un Python externo con "
        "lang-segment-anything, en lugar de la segmentación integrada."),
-    PT("Usar scripts/mask.py por meio de um Python externo com "
+    PT("Usar reference/scripts/mask.py por meio de um Python externo com "
        "lang-segment-anything, em vez da segmentação integrada."),
-    IT("Usare scripts/mask.py tramite un Python esterno con "
+    IT("Usare reference/scripts/mask.py tramite un Python esterno con "
        "lang-segment-anything, invece della segmentazione integrata."),
-    NL("scripts/mask.py gebruiken via een externe Python met "
+    NL("reference/scripts/mask.py gebruiken via een externe Python met "
        "lang-segment-anything, in plaats van de ingebouwde segmentatie."),
-    RU("Использовать scripts/mask.py через внешний Python с "
+    RU("Использовать reference/scripts/mask.py через внешний Python с "
        "lang-segment-anything вместо встроенной сегментации."),
     TR("Yerleşik bölütleme yerine, lang-segment-anything kurulu harici bir "
-       "Python üzerinden scripts/mask.py kullanır."));
+       "Python üzerinden reference/scripts/mask.py kullanır."));
 
 // ===========================================================================
 // Advanced: external COLMAP

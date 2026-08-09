@@ -2,22 +2,16 @@
 
 // RenderWorker -- the interactive render path shared by the web-viewer HTTP
 // server (Viewer.cpp, which JPEG-encodes the result) and the native GUI
-// viewport (gui/, which uploads it to an OpenGL texture). Extracted from
-// Viewer.cpp; ports:
-//   viewer/render_worker.py latest-wins pending slot + result handoff
-//   trainer.py _render/render  c2w remap + engine render + annotation call
-//   model.py get_outputs    (viewer subset: rgb/depth/alpha/normals/median/
-//                            distortion display transforms)
-//   viewer/annotation.py    engine_viewer_init upload + engine_blit_view call
-//                           + the camera_size kNN heuristic
+// viewport (gui/, which uploads it to an OpenGL texture): the c2w remap into
+// the training frame, the engine render, the annotation overlay, and the
+// rgb/depth/alpha/normals/median/distortion display transforms.
 //
 // Threading model: submit() stores the request in a single latest-wins slot
 // and synchronously flips hooks.set_render_pending(true) so the training
-// loop yields the engine mutex at its next iteration boundary (the Python
-// _render_pending fairness dance, trainer.py:146-153). The worker thread
-// takes hooks.engine_mutex around all engine work and publishes a ViewResult;
-// callers either block (wait_result, HTTP thread) or poll (try_get_result,
-// GUI frame loop).
+// loop yields the engine mutex at its next iteration boundary. The worker
+// thread takes hooks.engine_mutex around all engine work and publishes a
+// ViewResult; callers either block (wait_result, HTTP thread) or poll
+// (try_get_result, GUI frame loop).
 
 #include "data/DatasetParser.h"
 
@@ -38,13 +32,12 @@ struct ViewerRenderConfig {
     int   sh_degree_warmup_every = 1000;
     std::optional<float> relative_scale;
     // Median-depth buffers are rendered only when a median loss is
-    // configured (model.py get_outputs:1103-1108); requesting them
-    // otherwise 400s, matching Python.
+    // configured; requesting them otherwise 400s.
     bool  output_median = false;
     // Distortion render enabled when a distortion regularizer is configured;
     // also enabled on demand when a *_distortion buffer is requested.
     bool  distortion_reg_on = false;
-    // Viewer-client c2w remap into the training frame (trainer.py:557-576).
+    // Viewer-client c2w remap into the training frame.
     float train_frame_scale = 1.0f;
     std::array<float, 16> train_to_normalized{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     // Unscaled frustum size from the camera-kNN heuristic (the return value

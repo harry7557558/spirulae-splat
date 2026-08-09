@@ -74,7 +74,7 @@ void revised_add_noise_3dgs(
 
 [CudaDeviceExport]
 void long_axis_split_3dgs(
-    float k,  // opacity split factor, scheduled from Python (see model.py)
+    float k,  // opacity split factor, scheduled by the caller
     float3 log_scale, float logit_opacity, float4 quat,
     out float3 new_log_scale, out float new_logit_opacity, out float3 mean_delta
 ) {

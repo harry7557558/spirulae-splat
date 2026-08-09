@@ -7,9 +7,9 @@ detector, a matcher or a depth model is added later it builds on this
 unchanged. Do not put model-specific constants here.
 
 Vulkan-only, like `src/sfm/`: built by default for `SS_BACKEND=vulkan`
-(`SS_BUILD_SAM`), absent from a CUDA build, and invisible to `setup.py` and
-the pybind module. It carries its own device; converging the repository's three
-Vulkan contexts onto one is `docs/notes/sfm-port-plan.md` phase 6.
+(`SS_BUILD_SAM`) and absent from a CUDA build. It carries its own device;
+converging the repository's three Vulkan contexts onto one is
+`docs/notes/sfm-port-plan.md` phase 6.
 
 Runtime knobs: `SS_NN_LOG=0..3`, `SS_VK_DEVICE`, `SS_PROFILE=1`,
 `SS_VK_VALIDATION=1`, `SS_NN_DEBUG_SYNC=1`, `SS_NN_COOPMAT=0`.
@@ -186,7 +186,7 @@ same way, so the tolerances stay tight rather than being widened to absorb it.
 
 ## Portability rules for new kernels
 
-These are load-bearing; see `src/vk/README.md` for the device baseline.
+These are load-bearing; see `src/nn/vk/README.md` for the device baseline.
 
 1. Workgroup **X** must be a multiple of every plausible subgroup size. 2-D
    kernels use flat 64/128/256-wide X and decode `(x, y)` in-shader.
@@ -206,6 +206,6 @@ These are load-bearing; see `src/vk/README.md` for the device baseline.
 
 ## Testing
 
-`tests/test_ops.cpp` checks every kernel against an independent scalar CPU
+`tests/nn_ops_test.cpp` checks every kernel against an independent scalar CPU
 implementation. A new op lands with a case there — the model layer treats this
 API as trustworthy, and that is only true because of that file.

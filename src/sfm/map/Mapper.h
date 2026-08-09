@@ -823,8 +823,8 @@ public:
     // ordinary rules.
     //
     // Measured on the same dataset: without this, merging models that have
-    // each drifted along a long walk left ~7% of the rig frames (which share a
-    // pose by construction, tools/rig_check.py) tens of degrees apart.
+    // each drifted along a long walk left ~7% of the rig frames (which share
+    // a pose by construction) tens of degrees apart.
     // `max_reg` caps the size the repair may grow the model to (0 = uncapped).
     // The repair re-registers the images it moved, and images that could not
     // register before may be able to now -- but with nothing bounding it that
@@ -3621,8 +3621,8 @@ private:
     // with the number of images that constrained them (D45; recordCameras).
     std::map<uint32_t, std::pair<Camera, double>> cam_consensus_;
     bool setup_done_ = false;
-    // SS_SFM_AUDIT_DUMP=1 prints the support ratio of every audited image, which
-    // is how the threshold above was chosen against tools/rig_check.py.
+    // SS_SFM_AUDIT_DUMP=1 prints the support ratio of every audited image,
+    // which is how the threshold above was chosen against a rig capture.
     const bool audit_dump_ = spirula::env("SFM_AUDIT_DUMP") != nullptr;
     mutable double scale_cache_ = 0;  // modelScale(), reset by resetModel()
     int init_relax_ = 0;              // reached seed-threshold relaxation level

@@ -194,7 +194,7 @@ void color_matrix(int matrix_coefficients, bool full_range, int bit_depth, int h
         m[i][3] = (float)(-y_s * y_off - (double)m[i][1] * c_off - (double)m[i][2] * c_off);
 }
 
-// Shader parameter blocks (must mirror src/shaders/video.slang).
+// Shader parameter blocks (must mirror src/video/shaders/video.slang).
 struct YuvParams {
     float m0[4], m1[4], m2[4];
     vk::DevicePtr out, luma, cb, cr;
@@ -357,7 +357,7 @@ VideoPipeline::Impl::~Impl() {
     // copy recorded in the compute stream's open command buffer, referencing
     // these images; vkDeviceWaitIdle does not submit it, and the next flush
     // would then run over destroyed handles. Same rule as Allocator::free --
-    // see src/vk/README.md, "The rule that cost a day".
+    // see src/nn/vk/README.md, "The rule that cost a day".
     vk::Stream::get().sync();
     vkDeviceWaitIdle(dev);
     for (auto& p : pool) {

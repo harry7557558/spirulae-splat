@@ -1,6 +1,4 @@
-// RenderWorker.cpp -- see RenderWorker.h. Extracted from Viewer.cpp; the
-// render math is a verified port of trainer.py _render/render + model.py
-// get_outputs (viewer subset) + viewer/annotation.py.
+// RenderWorker.cpp -- see RenderWorker.h.
 
 #include "app/webviewer/RenderWorker.h"
 
@@ -54,7 +52,7 @@ struct DevBuf {
 };
 
 // Median distance to the 4th-nearest unique camera position, for the frustum
-// scale (port of annotation.py _knn_dist; O(N^2) is fine at camera counts).
+// scale. O(N^2) is fine at realistic camera counts.
 double camera_knn_dist(const std::vector<float>& c2w_flip, int64_t n, int k = 4) {
     if (n <= 1) return 1.0;
     std::vector<std::array<double, 3>> pos;
@@ -130,7 +128,7 @@ struct RenderWorker::Impl {
         uint64_t id = pending.id;
         lk.unlock();
         // Synchronously flip the "render desired" flag so the training loop
-        // yields at its next iteration boundary (render_worker.py:44-53).
+        // yields at its next iteration boundary.
         if (hooks.set_render_pending) hooks.set_render_pending(true);
         cv_work.notify_one();
         return id;
@@ -192,8 +190,8 @@ struct RenderWorker::Impl {
         static const float D[3] = {1.f, -1.f, -1.f};
 
         // Client c2w is in the legacy normalized frame; remap to the training
-        // frame (trainer.py:557-576). T is a similarity (scale*R | t): full
-        // similarity on the position, unit rotation on the basis.
+        // frame. T is a similarity (scale*R | t): full similarity on the
+        // position, unit rotation on the basis.
         float c2w[12];
         std::memcpy(c2w, q.c2w, sizeof c2w);
         if (cfg.train_frame_scale != 1.0f) {
@@ -226,7 +224,7 @@ struct RenderWorker::Impl {
                                  T[r*4+2]*q.grid_target[2] + T[r*4+3];
         }
 
-        // c2w -> engine viewmat (model.py get_outputs:1016-1025).
+        // c2w -> engine viewmat.
         double t[3] = {c2w[3], c2w[7], c2w[11]};
         if (cfg.relative_scale.has_value())
             for (auto& v : t) v *= *cfg.relative_scale;
@@ -294,7 +292,7 @@ struct RenderWorker::Impl {
                     tvp(depthd.data(), 4, {1, H, W, 1}));
             }
 
-            // Display transforms (model.py get_outputs:1223-1254).
+            // Display transforms.
             float inv_rs = cfg.relative_scale.has_value() ? 1.0f / *cfg.relative_scale : 1.0f;
             for (auto& v : depth) v *= inv_rs;
             if (want_median) for (auto& v : median) v *= inv_rs;
@@ -350,7 +348,7 @@ struct RenderWorker::Impl {
             }
 
             // depth -> normal display (0.5 + 0.5n), via the engine kernel on
-            // device copies (model.py:1141-1161).
+            // device copies.
             auto depth_normal_display = [&](const std::vector<float>& d_host) {
                 float* dd = (float*)d_depth_in.upload(d_host.data(), npx * 4);
                 float* dn = (float*)d_normals.ensure(npx * 12);
@@ -369,9 +367,9 @@ struct RenderWorker::Impl {
                 return n_host;
             };
 
-            // Debug renders (model.py get_outputs:1329-1354): re-run the
-            // forward with overridden splat DC colors. engine_debug_forward
-            // requires the forward_3dgs above and copies the result to host.
+            // Debug renders: re-run the forward with overridden splat DC
+            // colors. engine_debug_forward requires the forward_3dgs above
+            // and copies the result to host.
             auto debug_render = [&](const std::vector<float>& dc, int deg) {
                 std::vector<float> out(npx * 3);
                 int64_t nsp = (int64_t)dc.size() / 3;
@@ -406,8 +404,7 @@ struct RenderWorker::Impl {
             else if (q.key == "refinement_score") {
                 // Densification score: per-splat accum weight (raster bwd)
                 // normalized and rendered as a flat color, shown
-                // single-channel (turbo colormap). Padded to max splats
-                // like model.py:1348.
+                // single-channel (turbo colormap). Padded to max splats.
                 int64_t nsp = engine_get_cur_num_splats();
                 int64_t nmax = engine_get_max_num_splats();
                 std::vector<float> aw((size_t)nsp * 2, 0.0f);
@@ -526,10 +523,10 @@ float viewer_camera_size_heuristic(const PostSplitCameras& post) {
 }
 
 float viewer_upload_cameras(const PostSplitCameras& post) {
-    // No training cameras is a legitimate state: ss_viewer.py serves a bare
-    // PLY, which has none. Skip the upload rather than initializing an
-    // empty camera table -- the frustum overlay and the thumbnail cache
-    // simply have nothing to draw, and engine_viewer_init rejects N_post=0.
+    // No training cameras is a legitimate state: serving a bare PLY has none.
+    // Skip the upload rather than initializing an empty camera table -- the
+    // frustum overlay and the thumbnail cache simply have nothing to draw,
+    // and engine_viewer_init rejects N_post=0.
     if (post.n_post <= 0) return 0.0f;
     float camera_size = viewer_camera_size_heuristic(post);
     engine_viewer_init(

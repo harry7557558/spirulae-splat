@@ -1,14 +1,11 @@
 #pragma once
 
-// HttpServer -- minimal dependency-free HTTP/1.0 server for the CLI viewer
-// (port of the stdlib http.server usage in viewer/http_server.py).
+// HttpServer -- minimal dependency-free HTTP/1.0 server for the CLI viewer.
 //
 // Deliberately tiny: GET only, serial request handling on one background
-// thread (parity with Python's non-threading HTTPServer -- the viewer
-// protocol is polling + latest-wins, so serialization is part of the
-// contract), Connection: close per request. Handlers run on the server
-// thread; anything slow (rendering) should hand off and wait, like the
-// Python /render handler does.
+// thread (the viewer protocol is polling + latest-wins, so serialization is
+// part of the contract), Connection: close per request. Handlers run on the
+// server thread; anything slow (rendering) hands off and waits.
 //
 // POSIX sockets on Linux/macOS; winsock on Windows (compiles, untested --
 // cloud training boxes are Linux).

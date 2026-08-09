@@ -19,8 +19,7 @@ constexpr double kPi = 3.14159265358979323846;   // MSVC has no M_PI by default
 namespace dsparse {
 
 // ---------------------------------------------------------------------------
-// Normalized-frame scale (port of the scale-relevant subset of
-// camera_utils.auto_orient_and_center_poses + auto_scale, dataparser.py:461):
+// Normalized-frame scale:
 //   up      = normalize(mean of c2w Y columns)
 //   R_align = rotation taking `up` to +Z (Rodrigues)
 //   center  = mean camera position
@@ -115,14 +114,13 @@ void invert_affine4x4(const double in[16], double out[16]) {
 
 
 // ---------------------------------------------------------------------------
-// eval_mode train subset (get_train_eval_split_*, dataparser.py:51-129)
+// eval_mode train subset
 // ---------------------------------------------------------------------------
-// numpy's `np.linspace(0, n-1, count, dtype=int)` -- the index picker both
-// get_train_eval_split_fraction and the validation split use. numpy computes
-// (k * (n-1)) / (count-1) in that order, TRUNCATES toward zero (dtype=int is a
-// cast, not a round), and pins the last sample to n-1 exactly. Rounding
-// instead selects different frames for most (n, count) pairs, which silently
-// gave the native trainer a different train/val split than the Python one.
+// numpy's `np.linspace(0, n-1, count, dtype=int)`, the index picker both the
+// eval-mode fraction split and the validation split use: compute
+// (k * (n-1)) / (count-1) in that order, TRUNCATE toward zero (not round),
+// and pin the last sample to n-1 exactly. Rounding instead selects different
+// frames for most (n, count) pairs -- a different train/val split.
 static std::vector<int64_t> linspace_indices(int64_t n, int64_t count) {
     std::vector<int64_t> out;
     if (count <= 0 || n <= 0) return out;
@@ -167,8 +165,8 @@ std::vector<int64_t> train_subset(int64_t n, const std::vector<std::string>& nam
         throw std::runtime_error("eval_mode split left no training images");
 
     if (cfg.split == "eval") {
-        // eval_mode="all" means "all images for any split" (dataparser.py),
-        // so the eval side is the full set, not the empty complement.
+        // eval_mode="all" means "all images for any split", so the eval side
+        // is the full set, not the empty complement.
         if (cfg.eval_mode == "all") return keep;
         std::vector<char> is_train(n, 0);
         for (int64_t i : keep) is_train[i] = 1;
@@ -202,7 +200,7 @@ void assign_val_split(ParsedDataset& ds, float validation_fraction) {
 
 
 // ---------------------------------------------------------------------------
-// Auxiliary buffer discovery (dataparser.py _add_auxiliary_buffers, trimmed)
+// Auxiliary buffer discovery
 // ---------------------------------------------------------------------------
 std::string find_aux_file(const std::string& aux_dir_s, const std::string& rel_name,
                           const char* suffix_tag) {
@@ -226,7 +224,7 @@ std::string find_aux_file(const std::string& aux_dir_s, const std::string& rel_n
 
 
 // ---------------------------------------------------------------------------
-// Outlier rejection (geometric_median, dataparser.py:138-173 + 319-325)
+// Outlier rejection via geometric median
 // ---------------------------------------------------------------------------
 namespace {
 double median_of(std::vector<double> v) {
@@ -247,7 +245,7 @@ std::vector<char> outlier_keep_mask(const std::vector<double>& pos,
         return keep;
 
     // Geometric median via Weiszfeld with the zero-distance correction
-    // (dataparser.py geometric_median, eps=0, maxiter=10).
+    // (eps=0, maxiter=10).
     double y[3];
     for (int d = 0; d < 3; d++) {
         std::vector<double> col(n);
@@ -301,14 +299,14 @@ std::vector<char> outlier_keep_mask(const std::vector<double>& pos,
 
 
 // ===========================================================================
-// bake_post_split (trainer.py _setup_cpp_data_manager:257-414)
+// bake_post_split
 // ===========================================================================
 
 namespace {
 
 // 5- / 6-face cubemap axis tables. MUST match DataManager.cpp's
-// kAxesFisheye5 / kAxesEquirect6 (and trainer.py:332-346) -- the engine's
-// GPU warp kernel reads its own copies; these drive the camera poses.
+// kAxesFisheye5 / kAxesEquirect6 -- the engine's GPU warp kernel reads its
+// own copies; these drive the camera poses.
 const double kAxes5[5][3][3] = {
     {{1,0,0},{0,1,0},{0,0,1}},
     {{0,1,0},{0,0,1},{1,0,0}},
@@ -366,7 +364,7 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
     out.post_heights.assign(n_post, 0);
     out.post_models.assign(n_post, PINHOLE_V);
 
-    // POST-split c2w staging (double; algebra matches trainer.py:355-401).
+    // POST-split c2w staging (double).
     std::vector<double> post_c2w(n_post * 12);
     static const double D[3] = {1.0, -1.0, -1.0};
 
@@ -385,7 +383,7 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
             out.post_models[off]  = ds.camera_models[i];
             if (ds.camera_models[i] == EQUIRECT_V) {
                 // Direct equirectangular: canonical panorama intrinsics
-                // matching the equirect projection kernel (trainer.py:361-369).
+                // matching the equirect projection kernel.
                 double f = ds.widths[i] / (2.0 * kPi);
                 out.intrins[off*4 + 0] = (float)f;
                 out.intrins[off*4 + 1] = (float)f;
@@ -429,10 +427,9 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
         }
     }
 
-    // c2w -> engine viewmat over the POST arrays (trainer.py:403-414):
+    // c2w -> engine viewmat over the POST arrays:
     // R_v = R_post * diag(1,-1,-1) (columns); viewmat = [R_v^T | -R_v^T t].
-    // [R_v | t] is also the y/z-flipped c2w form the viewer blit expects
-    // (annotation.py:103-106).
+    // [R_v | t] is also the y/z-flipped c2w form the viewer blit expects.
     for (int64_t j = 0; j < n_post; j++) {
         const double* pc = &post_c2w[j*12];
         double Rv[3][3], t[3];

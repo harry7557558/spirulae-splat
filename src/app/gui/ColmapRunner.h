@@ -2,8 +2,8 @@
 
 // ColmapRunner -- turns raw images or a video into a trainable COLMAP
 // dataset by driving the external `colmap` (>= 4.x; the CLI flags follow
-// scripts/run_colmap.bash) on a worker thread with live log streaming and
-// cancellation.
+// reference/scripts/run_colmap.bash) on a worker thread with live log
+// streaming and cancellation.
 //
 // It is the CUDA build's dataset path and the fallback everywhere else; the
 // Vulkan build defaults to SfmRunner, which needs nothing installed. The two
@@ -70,7 +70,7 @@ struct ColmapJob {
     std::string ffmpeg_exe = "ffmpeg";
     std::string python_exe = "python3";  // for the masking script
     bool force_external_decode = false;  // ffmpeg even when we could decode
-    bool force_external_masking = false; // scripts/mask.py even when we could not
+    bool force_external_masking = false; // mask.py even when we could segment
 
     // Cameras
     std::string camera_model = "OPENCV"; // ImageReader.camera_model
@@ -137,7 +137,7 @@ struct ColmapJob {
     std::string vocab_tree_path;         // "" = auto find / download
 
     // AI masking. The built-in path wants a checkpoint file
-    // (mask_model_path, from ModelCache); the scripts/mask.py fallback wants
+    // (mask_model_path, from ModelCache); the mask.py fallback wants
     // a model name it understands (mask_model).
     bool mask_enable = false;
     std::string mask_prompt;             // "people; cars; ..."

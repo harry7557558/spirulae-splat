@@ -58,7 +58,7 @@ enum class LossWeightIndex {
     RgbDistReg,
     DepthDistReg,
     NormalDistReg,
-    // median-depth loss weights (configured from model.py)
+    // median-depth loss weights
     MeanMedianDepthSup,
     MedianDepthNormalReg,
     MedianNormalSup,
@@ -92,7 +92,7 @@ struct PerPixelGrads {
 };
 
 // What gets accumulated into the densification loss_map. Numeric values are
-// shared with the Python config (model.py `densify_loss_map_mode`).
+// shared with the `densify_loss_map_mode` config flag.
 //   None              -> loss_map_out is left null upstream; no kernel writes.
 //   LossFull          -> per-pixel L1/L2/aux + full SSIM(LCS).
 //   SsimFull          -> full SSIM(LCS) only.

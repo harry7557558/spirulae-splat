@@ -1,11 +1,10 @@
 #pragma once
 
-// DatasetParser -- standalone C++ dataset readers + camera bakes for the
-// CLI trainer (app/main.cpp). No Python, no external deps (JSON via
-// app/Json.h, PLY reader in NerfstudioParser.cpp, stb handles images in
-// the engine's DataManager).
+// DatasetParser -- dataset readers + camera bakes. No external deps: JSON via
+// app/Json.h, PLY reader in NerfstudioParser.cpp, images via stb in the
+// engine's DataManager.
 //
-// Three formats, mirroring modules/dataparser.py:
+// Three formats:
 //   parse_colmap_dataset      cameras / images / points3D, .bin or .txt
 //                             (ColmapParser.cpp)
 //   parse_nerfstudio_dataset  transforms.json + PLY point cloud
@@ -27,7 +26,7 @@
 // bake_post_split() then expands to the POST-split arrays
 // engine_setup_data_manager consumes -- identity (K=1) pass-through, or the
 // fisheye/equisolid 5-face / equirectangular 6-face cubemap split when
-// warp-to-pinhole is enabled (port of trainer.py _setup_cpp_data_manager).
+// warp-to-pinhole is enabled.
 
 #include <array>
 #include <cstdint>
@@ -103,7 +102,7 @@ struct DatasetParserConfig {
     // matching get_train_eval_split_fraction). 0 = no validation set.
     float validation_fraction = 0.0f;
 
-    // Train/eval split (dataparser.py eval_mode):
+    // Train/eval split:
     //   "all"      -> every image trains (default).
     //   "fraction" -> linspace-spread ceil(N * train_split_fraction) train.
     //   "interval" -> index % eval_interval == 0 is eval, rest train.
@@ -113,24 +112,21 @@ struct DatasetParserConfig {
     int         eval_interval = 8;
 
     // Which side of that split to return. "train" is what training wants;
-    // "eval" returns the complement, for a front-end that runs an eval pass
-    // (the Python trainer does -- LPIPS is a torch model). Everything derived
-    // from the camera set -- train_frame_scale, train_to_normalized, the
-    // outlier filter -- is computed over ALL frames BEFORE the split, so the
-    // two parses agree frame-for-frame and with dataparser.py, which returns
-    // both splits from one call. "all" makes both sides the full set, again
-    // matching Python. An empty eval split is legal (and the caller's cue to
-    // skip eval); an empty train split is an error.
+    // "eval" returns the complement. Everything derived from the camera set
+    // -- train_frame_scale, train_to_normalized, the outlier filter -- is
+    // computed over ALL frames BEFORE the split, so the two parses agree
+    // frame-for-frame. "all" makes both sides the full set. An empty eval
+    // split is legal (and the caller's cue to skip eval); an empty train
+    // split is an error.
     std::string split = "train";
 
     // Reject frames whose camera position is more than this many MADs from
-    // the geometric median of all camera positions (dataparser.py:319-325).
-    // inf = off (default).
+    // the geometric median of all camera positions. inf = off (default).
     float outlier_threshold = std::numeric_limits<float>::infinity();
 
     // Divide stored intrinsics by this factor (Mip-NeRF 360 images_2/_4
-    // style). 0 = off. TODO: the auto-detect (bool) mode which probes the
-    // first image's actual resolution (dataparser.py:363-372).
+    // style). 0 = off. TODO: an auto-detect mode that probes the first
+    // image's actual resolution.
     float       rescale_camera_to_fit = 0.0f;
     std::string downscale_rounding_mode = "floor";   // floor | ceil | round
 
@@ -150,7 +146,7 @@ struct DatasetParserConfig {
 };
 
 // Everything main.cpp needs, PER-INPUT camera (length N), sorted by image
-// filename (matching dataparser.py's argsort over fnames).
+// filename.
 struct ParsedDataset {
     int64_t num_cameras = 0;
 
@@ -182,17 +178,15 @@ struct ParsedDataset {
     // Seed point cloud in the training frame.
     ColmapPoints3D           points;
 
-    // 1 / scale_factor of the would-be normalized frame (dataparser.py
-    // train_frame="points" branch). Computed over ALL frames (before the
-    // eval_mode subset is dropped), like the Python dataparser.
+    // 1 / scale_factor of the would-be normalized frame. Computed over ALL
+    // frames, before the eval_mode subset is dropped.
     float                    train_frame_scale = 1.0f;
 
-    // Similarity mapping a normalized-frame point into the training frame
-    // (dataparser.py:493-537 "train_to_normalized_transform" -- the name is
-    // historical; the stored value is inv(T_n_from_train)). The viewer
-    // client navigates in the normalized frame; Trainer._render remaps its
-    // c2w through this before rendering (trainer.py:557-576). Row-major
-    // 4x4; identity when train_frame_scale == 1.
+    // Similarity mapping a normalized-frame point into the training frame.
+    // The name is historical; the stored value is inv(T_n_from_train). The
+    // viewer client navigates in the normalized frame and remaps its c2w
+    // through this before rendering (RenderWorker.cpp). Row-major 4x4;
+    // identity when train_frame_scale == 1.
     std::array<float, 16>    train_to_normalized{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 };
 
@@ -218,7 +212,7 @@ ParsedDataset parse_dataset(const std::string& dataset_dir,
 
 
 // ===========================================================================
-// POST-split camera bake (trainer.py _setup_cpp_data_manager:257-414)
+// POST-split camera bake
 // ===========================================================================
 
 // Per-input split factor K:
@@ -239,15 +233,14 @@ struct PostSplitCameras {
     std::vector<int32_t> K_per_camera;   // [N]  (empty vectors passed to the
     std::vector<int32_t> post_offsets;   // [N]   engine when !any_warp)
 
-    // Engine-convention world-to-camera (R/T inverse + Y/Z flip pre-baked,
-    // trainer.py:403-414), POST-split.
+    // Engine-convention world-to-camera (R/T inverse + Y/Z flip pre-baked),
+    // POST-split.
     std::vector<float>   viewmats;       // [N_post, 4, 4]
     std::vector<float>   intrins;        // [N_post, 4]
     std::vector<float>   dist_coeffs;    // [N_post, 10]
 
     // Viewer (engine_viewer_init) arrays, POST-split: camera-to-world in the
-    // y/z-flipped form the blit kernel expects (annotation.py:103-106), plus
-    // per-post W/H/model.
+    // y/z-flipped form the blit kernel expects, plus per-post W/H/model.
     std::vector<float>   c2w_flip;       // [N_post, 3, 4]
     std::vector<int32_t> post_widths;    // [N_post]
     std::vector<int32_t> post_heights;   // [N_post]
@@ -271,13 +264,13 @@ namespace dsparse {
 
 // Normalized-frame scale factor over c2w [N,3,4] (orient="up",
 // center="poses", auto-scale). Only the scalar matters for
-// train_frame="points". Returns 1/max_abs (the dataparser's scale_factor).
+// train_frame="points". Returns 1/max_abs.
 double compute_normalized_scale_factor(const std::vector<float>& c2w, int64_t n);
 
 // Full normalized-frame similarity: writes the row-major 4x4
-// T_n_from_camera = scale * [R_align | -R_align @ center] (dataparser.py
-// T_n_from_camera, lines 497-499) and returns scale_factor. The viewer
-// remap transform is inv(T_n_from_camera @ applied_transform).
+// T_n_from_camera = scale * [R_align | -R_align @ center], and returns
+// scale_factor. The viewer remap transform is
+// inv(T_n_from_camera @ applied_transform).
 double compute_normalized_transform(const std::vector<float>& c2w, int64_t n,
                                     double T_out[16]);
 
@@ -292,14 +285,12 @@ std::vector<int64_t> train_subset(int64_t n, const std::vector<std::string>& nam
 // validation_fraction partition of 0..N-1 into ds.train_indices/val_indices.
 void assign_val_split(ParsedDataset& ds, float validation_fraction);
 
-// Auxiliary mask/depth/normal discovery by filename convention
-// (dataparser.py _add_auxiliary_buffers, trimmed candidate list).
+// Auxiliary mask/depth/normal discovery by filename convention.
 std::string find_aux_file(const std::string& aux_dir, const std::string& rel_name,
                           const char* suffix_tag);
 
-// Outlier-frame mask via geometric median of camera positions
-// (dataparser.py:138-173, 319-325). Returns keep-flags, all-true when
-// threshold is inf. positions = [N, 3].
+// Outlier-frame mask via geometric median of camera positions. Returns
+// keep-flags, all-true when threshold is inf. positions = [N, 3].
 std::vector<char> outlier_keep_mask(const std::vector<double>& positions,
                                     int64_t n, float threshold);
 

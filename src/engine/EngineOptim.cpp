@@ -251,8 +251,8 @@ static void _ensure_optim_state(int sh_optim_bits, int sh_value_bits,
     // SH VALUE-quant zero-init. Initial features_sh is zero (only DC has
     // non-zero defaults), so zeroing both packed bytes and bounds is a valid
     // initial state -- the codec decodes byte=0 against bound=(0,0) to 0.0f.
-    // If non-zero initial values get baked in upstream, an encode pass would
-    // be needed here -- not done in this turn.
+    // If non-zero initial values ever get baked in upstream, this needs an
+    // encode pass instead.
     if (engine().world.features_sh_quant8.initialized())       engine().world.features_sh_quant8.zero();
     if (engine().world.features_sh_quant16.initialized())      engine().world.features_sh_quant16.zero();
     if (engine().world.features_sh_quant8_fpbo.initialized())  engine().world.features_sh_quant8_fpbo.zero();

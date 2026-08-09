@@ -1,5 +1,6 @@
 // ColmapRunner.cpp -- see ColmapRunner.h. CLI flags mirror
-// scripts/run_colmap.bash (COLMAP >= 4.x; use_gpu-style flags are gone).
+// reference/scripts/run_colmap.bash (COLMAP >= 4.x; use_gpu-style flags are
+// gone).
 
 #include "app/gui/ColmapRunner.h"
 

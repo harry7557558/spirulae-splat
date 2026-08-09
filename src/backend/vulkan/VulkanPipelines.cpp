@@ -38,7 +38,7 @@ const SpirvBlob* find_blob(const char* name) {
 // dotted suffixes (see shaders/spirv_tool.cpp): ".atomicadd" (native
 // OpAtomicFAddEXT instead of the CAS loop), ".int8" (native byte access
 // instead of u32-word packing), ".noint64" (no Int64 capability, for
-// devices WITHOUT shaderInt64). build_spirv.py compiles every subset of an
+// devices WITHOUT shaderInt64). spirv_tool.cpp compiles every subset of an
 // entry's applicable features, so the largest device-desired subset that
 // exists is exactly desired-intersect-applicable — probing subsets from
 // largest to smallest and taking the first hit is correct. The choice is

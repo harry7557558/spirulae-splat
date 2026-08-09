@@ -156,7 +156,7 @@ void _engine_ppisp_backward_hook(TorchTensorView v_render_rgb) {
 // Compute the 6 PPISP regularization losses, scaled by their loss weights.
 // Returns the [6]-float device buffer (pool-backed). When `compute_grad=true`,
 // also accumulates the per-camera parameter gradient into engine().ppisp.grads
-// using v_losses = ones (matching training_losses.py).
+// using v_losses = ones.
 float* _engine_ppisp_reg_loss_into(
     const std::array<float, (int)PPISPRegLossIndex::length>& loss_weights,
     bool compute_grad

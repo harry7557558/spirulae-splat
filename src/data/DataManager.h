@@ -2,35 +2,24 @@
 
 // DataManager — host-side training-data orchestrator.
 //
-// C++ port of `modules/datamanager.py` + `modules/dataset.py`. Owns the on-disk
-// dataset layout, decodes images via stb_image, batches indices by image-shape
-// group (so each engine_train_step sees uniform [B,H,W,C] inputs), and feeds
-// the resulting batches directly into the engine.
+// Owns the on-disk dataset layout, decodes images via stb_image, batches
+// indices by image-shape group (so each engine_train_step sees uniform
+// [B,H,W,C] inputs), and feeds the resulting batches directly into the engine.
 //
-// Two caching modes are supported:
+// The two cache modes trade RAM for per-step latency:
 //
-//   CacheMode::CPU
-//       At construction time, every image (RGB + mask + depth + normal as
-//       configured) is decoded into a per-image host-pageable byte buffer.
-//       next_*_batch() then just gathers the relevant rows into a contiguous
-//       batch buffer and hands the engine a host TorchTensorView. Cheap
-//       per-step latency, peak RAM ~= the full decoded dataset.
+//   CPU    every image is decoded up front into a host byte buffer, so
+//          next_*_batch() only gathers rows. Peak RAM ~= the whole decoded
+//          dataset.
+//   DISK   nothing is pre-decoded. Three worker pools (four with masks) run
+//          per modality -- RGB+MASK / DEPTH / NORMAL -- each with its own
+//          bounded job and ready queues, keeping `prefetch_batches` batches in
+//          flight. The split is per modality because depth and normal dominate
+//          decode cost on dense-supervision datasets, and one shared pool lets
+//          them starve the RGB stream.
 //
-//   CacheMode::DISK
-//       Nothing is pre-decoded. A prefetch pipeline runs three (or four, when
-//       masks are present) independent worker pools — RGB+MASK / DEPTH /
-//       NORMAL — each with its own bounded job queue and a bounded ready queue.
-//       The pipeline keeps ``prefetch_batches`` decoded batches in flight at a
-//       time; next_*_batch() pops the next ready one and blocks only if the
-//       pool is empty. This mirrors PyTorch's DataLoader's prefetch_factor +
-//       num_workers semantics, with the per-modality split that the user asked
-//       for (depth/normal often dominate decode cost on dense-supervision
-//       datasets and benefit from dedicated worker threads).
-//
-// Image format support (stb_image): 8-bit and 16-bit PNG (one channel for
-// depth / masks, three or four for RGB / normals), JPEG, BMP, TGA. EXR / DNG
-// from the Python path are intentionally dropped — bring them back via a
-// pluggable decoder if needed.
+// Formats are whatever stb_image reads: 8- and 16-bit PNG (one channel for
+// depth / masks, three or four for RGB / normals), JPEG, BMP, TGA.
 
 #include "core/Common.cuh"
 #include "core/Tensor.h"
@@ -280,7 +269,7 @@ public:
         // When the warp path is inactive, N_post == N and these are just
         // the per-input camera params. When the warp path is active, the
         // caller pre-expands these per cubemap face / equirectangular face
-        // using the same algebra as modules/resample.py.
+        // (bake_post_split in DatasetCommon.cpp).
         std::vector<float>         viewmats,            // [N_post, 4, 4]
         std::vector<float>         intrins,             // [N_post, 4]
         std::vector<float>         dist_coeffs,         // [N_post, 10]

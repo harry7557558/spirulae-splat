@@ -118,8 +118,7 @@ void uint16_image_to_float_raw(
 }
 
 // ---- gt_normal: uint8 [0,255] -> float in [-1, 1] ----
-// Mirrors model.py's `gt_normal.float() / (255/2) - 1.0`. Per-channel:
-//   out = (float)in / 127.5f - 1.0f
+// Per-channel: out = (float)in / 127.5f - 1.0f
 __global__ void uint8_normal_to_float_kernel(
     const TensorView<uint8_t, 4> img_in,
     TensorView<float, 4> img_out
@@ -157,7 +156,7 @@ void uint8_normal_to_float_raw(
 }
 
 // ---- gt_depth: uint16 -> float (cast only, no scaling) ----
-// Mirrors model.py's `gt_depth.float()` (which preserves the raw integer value).
+// Cast only: the raw integer value is preserved.
 __global__ void uint16_depth_to_float_kernel(
     const TensorView<uint16_t, 4> img_in,
     TensorView<float, 4> img_out

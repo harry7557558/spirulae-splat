@@ -7,7 +7,7 @@
 #include "app/gui/FrameSelect.h"
 #include "app/gui/Subprocess.h"
 
-#include "app_generated/mask_py.h"   // kMaskPy[] (CMake-embedded scripts/mask.py)
+#include "app_generated/mask_py.h"   // kMaskPy[], from reference/scripts/mask.py
 
 #include "external/stb_image.h"      // stbi_info (image size probe)
 
@@ -437,9 +437,10 @@ const Backends& backends() {
         b.masking_reason = "built without the segmentation module "
                            "(-DSS_BUILD_SAM=OFF)";
         b.masking_note =
-            "Masks are made by an external Python script (scripts/mask.py with "
-            "lang-segment-anything, which needs a CUDA PyTorch). Set the Python "
-            "path under Tool locations if it is not on PATH.";
+            "Masks are made by an external Python script "
+            "(reference/scripts/mask.py with lang-segment-anything, which "
+            "needs a CUDA PyTorch). Set the Python path under Tool "
+            "locations if it is not on PATH.";
 #endif
         return b;
     }();
@@ -736,7 +737,7 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
     _log(fmt(lmsg::video_input, {in.path}));
 
     // Multi-track videos (Insta360 .insv): one folder per track, one camera
-    // per folder, as in scripts/extract_frames.py.
+    // per folder, as in reference/scripts/extract_frames.py.
     std::vector<int> streams = {0};
     if (is_dual_fisheye_path(in.path)) {
         std::vector<int> found;
@@ -1022,10 +1023,10 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
 #endif
 }
 
-// The Python fallback: the embedded scripts/mask.py run through an external
-// interpreter with lang-segment-anything. It prints an install hint and exits
-// 0 when the packages are missing, so that is detected from its output rather
-// than its exit code.
+// The Python fallback: the embedded reference/scripts/mask.py run through an
+// external interpreter with lang-segment-anything. It prints an install hint
+// and exits 0 when the packages are missing, so that is detected from its
+// output rather than its exit code.
 bool DatasetPrep::generate_masks_python(const PrepJob& job,
                                         const std::string& images_rel,
                                         const std::string& masks_rel,

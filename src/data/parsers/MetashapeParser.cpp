@@ -1,6 +1,4 @@
-// MetashapeParser.cpp -- Agisoft Metashape dataset reader for
-// DatasetParser.h. Port of modules/dataparser.py _parser_metashape_data +
-// modules/metashape_utils.py (metashape_to_json, find_metashape_cameras_dict).
+// MetashapeParser.cpp -- Agisoft Metashape dataset reader for DatasetParser.h.
 //
 // Inputs: a camera-export .xml + a point-export .ply in the dataset dir,
 // plus an optional .psx project whose .files zips provide the camera_id ->
@@ -174,7 +172,7 @@ bool find_metashape_cameras_dict(const fs::path& root_dir,
 
 
 // ===========================================================================
-// Input-file discovery (dataparser.py _parser_metashape_data:669-730).
+// Input-file discovery.
 // Relative paths resolve against the dataset dir; empty = the unique
 // candidate with that extension in the dataset dir.
 // ===========================================================================

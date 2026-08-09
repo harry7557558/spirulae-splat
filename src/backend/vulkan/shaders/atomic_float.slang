@@ -6,7 +6,7 @@
 // CAS (well-defined; not a UB-terminated loop — see README loop rules).
 //
 // Under -DSS_NATIVE_F32_ATOMIC_ADD the emulation is replaced by the
-// native OpAtomicFAddEXT (SPV_EXT_shader_atomic_float_add): build_spirv.py
+// native OpAtomicFAddEXT (SPV_EXT_shader_atomic_float_add): spirv_tool.cpp
 // compiles every entry whose include closure reaches this file a second
 // time with the define, and the pipeline layer picks the native blob when
 // the device enabled shaderBufferFloat32AtomicAdd — so the choice is made

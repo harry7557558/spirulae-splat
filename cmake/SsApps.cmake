@@ -144,8 +144,9 @@ if(SS_BUILD_GUI)
     target_link_libraries(imgui_glfw PUBLIC glfw)
     set_property(TARGET imgui_glfw PROPERTY CXX_STANDARD 17)
 
-    # Embed scripts/mask.py (AI masking helper, run via external Python) so
-    # the exe is self-contained. Same mechanism as the viewer.html embed.
+    # Embed reference/scripts/mask.py (AI masking helper, run via external
+    # Python) so the exe is self-contained. Same mechanism as the
+    # viewer.html embed.
     ss_embed_file(
         ${SS_ROOT}/reference/scripts/mask.py
         ${CMAKE_BINARY_DIR}/app_generated/mask_py.h
@@ -172,9 +173,9 @@ if(SS_BUILD_GUI)
 
     # In-process segmentation (interactive preview + dataset masking) and, when
     # patented modules are enabled, in-process video decoding. Both are
-    # optional: DatasetPrep falls back to python + scripts/mask.py and to
-    # ffmpeg, and the GUI hides what this build cannot do rather than failing
-    # at run time.
+    # optional: DatasetPrep falls back to python + reference/scripts/mask.py
+    # and to ffmpeg, and the GUI hides what this build cannot do rather than
+    # failing at run time.
     if(SS_BUILD_SAM)
         list(APPEND SS_TOOL_DEFS SS_BUILD_SAM=1)
         if(SS_ENABLE_PATENTED)

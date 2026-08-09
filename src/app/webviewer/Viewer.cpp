@@ -1,5 +1,4 @@
-// Viewer.cpp -- see Viewer.h. HTTP endpoint handlers are ports of
-// viewer/http_server.py; the render path itself lives in RenderWorker.cpp.
+// Viewer.cpp -- see Viewer.h. The render path lives in RenderWorker.cpp.
 
 #include "app/webviewer/Viewer.h"
 #include "app/webviewer/HttpServer.h"
@@ -41,7 +40,7 @@ struct ViewerServer::Impl {
     std::vector<std::string> buffer_keys;
     bool started = false;
 
-    // ---- endpoint handlers (http_server.py port) ----------------------------
+    // ---- endpoint handlers -------------------------------------------------
 
     HttpResponse handle_index() {
         // Dev override so viewer.html edits don't need a rebuild.
@@ -96,7 +95,7 @@ struct ViewerServer::Impl {
         q.grid_target[2] = (float)req.get_double("grid_tz", 0.0);
         q.cam_size_scale = (float)req.get_double("camera_size_scale", 1.0);
 
-        constexpr int MAX_DIM = 2160;   // prevent OOM (http_server.py:74)
+        constexpr int MAX_DIM = 2160;   // prevent OOM
         if (q.W <= 0 || q.H <= 0 || std::max(q.W, q.H) > MAX_DIM)
             return "image too large";
         if (std::find(buffer_keys.begin(), buffer_keys.end(), q.key) == buffer_keys.end())

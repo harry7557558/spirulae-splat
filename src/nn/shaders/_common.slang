@@ -1,7 +1,7 @@
 // Shared device helpers. Include-only: the leading underscore tells
-// cmake/Shaders.cmake not to compile it as a module of its own.
+// cmake/SsNn.cmake not to compile it as a module of its own.
 //
-// Rules this file exists to enforce (see AGENTS.md "Kernel conventions"):
+// Rules this file exists to enforce:
 //
 //  * fp16 tensors are read through a `uint*` as packed half pairs, unpacked
 //    with GLSL.std.450 UnpackHalf2x16 -- which needs no capability beyond

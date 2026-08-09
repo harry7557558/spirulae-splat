@@ -16,7 +16,7 @@
 //   frames   in-process VK_KHR_video_decode_* (SS_ENABLE_PATENTED)
 //            -> ffmpeg subprocess
 //   masks    in-process SAM 2 / SAM 3          (SS_BUILD_SAM)
-//            -> python + scripts/mask.py
+//            -> python + reference/scripts/mask.py
 //
 // The built-in path is the default when it is compiled in and the device
 // supports it; the fallback is picked automatically otherwise, and can be
@@ -110,7 +110,7 @@ struct PrepJob {
     std::string mask_clicks_source;
 
     // Built-in: a checkpoint file (ModelCache resolves it). External: the
-    // model name scripts/mask.py understands.
+    // model name reference/scripts/mask.py understands.
     std::string mask_model_path;
     std::string mask_model_name = "sam2.1_hiera_large";
     bool  force_external_masking = false;

@@ -1,7 +1,7 @@
 // Compiles the Slang shaders and embeds the SPIR-V, natively.
 //
 // A single self-contained C++17 host tool (no dependencies beyond the standard
-// library) so the Vulkan (SS_BACKEND=vulkan) build no longer needs Python.
+// library), so the Vulkan (SS_BACKEND=vulkan) build needs no Python.
 // CMake compiles this once at configure time (try_compile + COPY_FILE) and uses
 // it in two modes:
 //
@@ -15,9 +15,9 @@
 //
 //   embed <out.cpp> --list <listfile>
 //       Read the compiled .spv blobs named in <listfile>, drop the .noint64
-//       variants whose base does not actually declare the Int64 capability
-//       (reproducing build_spirv.py's phase-2 gate), verify no capability leaks,
-//       and emit the C++ translation unit consumed by VulkanPipelines.cpp.
+//       variants whose base does not actually declare the Int64 capability,
+//       verify no capability leaks, and emit the C++ translation unit
+//       consumed by VulkanPipelines.cpp.
 //
 //   embed --nn <tag> <out.cpp> --list <listfile>
 //       The same, for a library of the inference layer (cmake/SsNn.cmake).
@@ -40,8 +40,8 @@
 //       adjuster's emulated double-float type is built on. Used only by the
 //       SfM `df` blobs; see src/sfm/ba/README.md.
 //
-// Blob naming, feature variants, and the capability audit mirror build_spirv.py
-// exactly; see that file's history and backend/vulkan/README.md for the why.
+// backend/vulkan/README.md has the why behind the blob naming, the feature
+// variants and the capability audit.
 
 #include <algorithm>
 #include <cstdint>
@@ -95,7 +95,7 @@ bool file_exists(const std::string& p) {
     return static_cast<bool>(f);
 }
 
-// ---- shader source scanning (mirrors build_spirv.py regexes) -------------
+// ---- shader source scanning ---------------------------------------------
 
 // `[shader("compute")]` ... `void <name>(`, allowing attribute/comment lines in
 // between: take the first `void <name>(` after each compute marker.
@@ -123,7 +123,7 @@ bool parse_void_name(const std::string& s, size_t from, std::string* name) {
 
 // Discover entry points: `[shader("compute")]`-marked functions and line-initial
 // `DEF_<macro>(<entry>, ...)` instantiations (the literal macro parameter NAME
-// is skipped, matching build_spirv.py).
+// is skipped).
 std::vector<std::string> find_entries(const std::string& src) {
     std::vector<std::string> out;
     std::set<std::string> seen;
@@ -263,7 +263,7 @@ std::vector<std::pair<std::string, std::vector<std::string>>>
 variant_subsets(const std::vector<Feature>& feats) {
     std::vector<std::pair<std::string, std::vector<std::string>>> out;
     size_t n = feats.size();
-    // Ordered by subset size then canonical index order (matches build_spirv.py).
+    // Ordered by subset size then canonical index order.
     for (size_t r = 0; r <= n; r++) {
         // iterate combinations of size r preserving index order
         std::vector<size_t> idx(r);
@@ -463,8 +463,8 @@ int run_discover(const std::vector<std::string>& args) {
                           {"u8_load", "s8_load", "u8_store"}))
             feats.push_back(INT8);
         // noint64 candidate: the source can route 64-bit integers through
-        // int64_compat.slang. Over-approximates build_spirv.py's compile-then-
-        // inspect gate; the embed step drops variants whose base has no Int64.
+        // int64_compat.slang. An over-approximation; the embed step drops
+        // variants whose base turns out to have no Int64.
         bool noint64_cand = closure_has(closure, "int64_compat.slang");
 
         std::string deps;
@@ -562,8 +562,8 @@ int run_embed(const std::vector<std::string>& args) {
     }
 
     // Keep every base/feature blob; keep a .noint64 variant only when its base
-    // actually declares Int64 (build_spirv.py's phase-2 condition). The SfM
-    // blobs have no feature variants, so the gate has nothing to say about them.
+    // actually declares Int64. The SfM blobs have no feature variants, so the
+    // gate has nothing to say about them.
     std::vector<std::string> kept;
     for (auto& [name, bytes] : blob_bytes) {
         (void)bytes;
@@ -586,8 +586,8 @@ int run_embed(const std::vector<std::string>& args) {
                   return a + ".spv" < b + ".spv";
               });
 
-    // Capability audit (mirrors build_spirv.py's final pass). It checks the
-    // engine's variant invariants, which the SfM blobs do not participate in.
+    // Capability audit. It checks the engine's variant invariants, which the
+    // SfM blobs do not participate in.
     bool failed = false;
     for (auto& name : plain ? std::vector<std::string>{} : kept) {
         const auto& caps = blob_caps[name];
@@ -610,7 +610,7 @@ int run_embed(const std::vector<std::string>& args) {
     }
     if (failed) return 1;
 
-    // Emit the translation unit (layout matches the former embed_spirv.py).
+    // Emit the translation unit.
     std::ostringstream o;
     o << "// GENERATED by shaders/spirv_tool.cpp -- DO NOT EDIT.\n"
          "#include <cstddef>\n#include <cstdint>\n";

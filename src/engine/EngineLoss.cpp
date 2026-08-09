@@ -514,10 +514,10 @@ std::map<std::string, float> engine_compute_loss_backward(
         normal_dist = TorchTensorView(
             (uint64_t)std::get<2>(engine().fwd.distortions).data_ptr(), 4, {C, H, W, 3});
 
-    // Depth -> normal: derive depth_normal from rendered depth when gt_normal is provided
-    // (matches training_losses.py logic: pred_normal is None, pred_depth exists, gt_normal exists).
-    // Also needed (independently of gt_normal) by the median-vs-depth-normal
-    // regularizer, which compares the median normal against this depth normal.
+    // Depth -> normal: derive depth_normal from rendered depth when gt_normal
+    // is provided. Also needed (independently of gt_normal) by the
+    // median-vs-depth-normal regularizer, which compares the median normal
+    // against this depth normal.
     bool compute_depth_normal = (engine().gt.normal.data_ptr() != nullptr) ||
         loss_weights[(int)LossWeightIndex::MedianDepthNormalReg] > 0.0f;
     // bool is_ray_depth = (engine().primitive != "3dgs" && engine().primitive != "mip");

@@ -1,7 +1,7 @@
 // `spirula-sam extract` -- pull the sharpest frames out of a video, and
 // optionally mask them.
 //
-// The native replacement for scripts/extract_frames.py, with the
+// The native replacement for reference/scripts/extract_frames.py, with the
 // OpenCV/ffmpeg/PyTorch stack replaced by this tree: decode is Vulkan Video,
 // the motion-blur metric is a compute shader, and masking is SAM on the same
 // device. Only the JPEG/PNG encode stays on the CPU, on a pool of worker

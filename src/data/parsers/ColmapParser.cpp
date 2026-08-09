@@ -1,7 +1,6 @@
-// ColmapParser.cpp -- COLMAP-format reader for DatasetParser.h. Port of
-// modules/colmap_utils.py (binary readers) + the COLMAP branch of
-// modules/dataparser.py (frame assembly, pose conventions). Shared bake
-// helpers live in DatasetCommon.cpp.
+// ColmapParser.cpp -- COLMAP-format reader for DatasetParser.h: the .bin/.txt
+// readers, frame assembly and pose conventions. Shared bake helpers live in
+// DatasetCommon.cpp.
 
 #include "data/DatasetParser.h"
 #include "i18n/catalog/Data.h"
@@ -271,9 +270,8 @@ ColmapPoints3D read_points3D_text(const std::string& recon_dir) {
 
 
 // ===========================================================================
-// Camera-param normalization (port of parse_colmap_camera_params,
-// colmap_utils.py:431) + engine dist_coeffs layout (dataparser.py
-// DISTORTION_KEYS = k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2).
+// Camera-param normalization + engine dist_coeffs layout
+// (k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2).
 // ===========================================================================
 
 namespace {
@@ -351,7 +349,7 @@ void qvec2rotmat(const std::array<double, 4>& q, double R[3][3]) {
     R[2][0] = 2*x*z - 2*w*y;     R[2][1] = 2*y*z + 2*w*x;     R[2][2] = 1 - 2*x*x - 2*y*y;
 }
 
-// dataparser.py:644-649 -- COLMAP w2c -> nerfstudio/OpenGL c2w:
+// COLMAP w2c -> nerfstudio/OpenGL c2w:
 //   c2w[:3,:3] = R^T with columns 1, 2 negated (OpenCV -> OpenGL axis flip)
 //   c2w[:3,3]  = -R^T @ t
 void colmap_to_c2w(const ColmapImage& im, float* out12) {
@@ -409,7 +407,7 @@ static std::string join_files(const std::vector<std::string>& v) {
     return s;
 }
 
-// Locate the reconstruction (dataparser.py:609-635). Returns "" when the
+// Locate the reconstruction. Returns "" when the
 // dataset dir holds no COLMAP model; `text_format` says which extension
 // matched. `verbose` gates the multi-model note, so the auto-detect probe in
 // parse_dataset can call this silently. On failure `near_miss` (when given)
@@ -542,7 +540,7 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
                             .c_str());
     }
 
-    // ---- Assemble frames sorted by image filename (dataparser.py:300-316) -
+    // ---- Assemble frames sorted by image filename ----------------------
     std::vector<const ColmapImage*> frames;
     frames.reserve(images.size());
     for (const auto& [id, im] : images) frames.push_back(&im);
@@ -558,7 +556,7 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
         for (int r = 0; r < 3; r++) positions[i*3 + r] = c2w_all[i*12 + r*4 + 3];
     }
 
-    // ---- Outlier rejection (dataparser.py:319-325) -------------------------
+    // ---- Outlier rejection ---------------------------------------------
     {
         std::vector<char> keep = dsparse::outlier_keep_mask(
             positions, n_all, cfg.outlier_threshold);
@@ -682,8 +680,8 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
 
 
 // ===========================================================================
-// Format dispatch / auto-detect (dataparser.py parse():246-269, same probe
-// order: nerfstudio first, then COLMAP, then Metashape).
+// Format dispatch / auto-detect. Probe order: nerfstudio first, then COLMAP,
+// then Metashape.
 //
 // Auto-detect *identifies* the format from its marker files before parsing,
 // rather than trying each parser and reporting whichever failed last -- a

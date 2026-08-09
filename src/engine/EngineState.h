@@ -383,7 +383,7 @@ struct EngineBackground {
     float    cur_randomize_weight = 0.0f;
 };
 
-// Linear / wide-gamut color space conversion (mirrors training_losses.py).
+// Linear / wide-gamut color space conversion.
 // Splat side: pred RGB (rendered in working color space) is converted to sRGB
 // before loss; the loss-side gradient is converted back through the vjp.
 // Image side: GT RGB is converted to sRGB once at upload time and kept that way.

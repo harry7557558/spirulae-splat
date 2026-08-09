@@ -9,7 +9,7 @@
 // was added and someone forgot to update a matching site:
 //   1. checkpoint save (a buffer omitted from the hand-written dump),
 //   2. the training-time VRAM breakdown (a buffer mis-bucketed by string
-//      prefix-matching in model.py), and
+//      prefix-matching), and
 //   3. any future save/load-for-resume path.
 //
 // Every buffer is now one row in POOL_SLOT_TABLE below. A row carries all the
@@ -46,9 +46,8 @@
 #include <cstddef>
 
 
-// VRAM report buckets. MUST stay in sync with the buckets model.py prints
-// (splat / splat x img / image / appearance / viewer / other) -- the category
-// now comes from here instead of Python guessing from the key string.
+// VRAM report buckets: splat / splat x img / image / appearance / viewer /
+// other.
 enum class VramCategory : uint8_t {
     Splat = 0,   // per-splat params, gradients, optimizer state, densify aux
     SplatXImg,   // scratch sized ~ (splats seen per image): projection, tiling

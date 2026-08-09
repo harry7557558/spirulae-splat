@@ -127,9 +127,8 @@ heading moved its key, and the reader (`spirula mesh`, `--resume`) silently
 fell back to the default when it could not find it. `section` and `tier` are
 display metadata only and can be reshuffled freely.
 
-This used to be generated from the Python dataclasses by
-`generate_cli_config.py`. It isn't any more — the Python dataclasses are
-downstream copies until they are deleted.
+It is hand-written: nothing generates it, and nothing is generated from it
+except the struct and the tables `SS_CONFIG_FIELDS` expands into.
 
 ---
 

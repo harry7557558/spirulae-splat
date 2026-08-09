@@ -956,8 +956,7 @@ public:
 //     bounds.x, bounds.y = (u_min, u_max)             -- linear u domain
 //     bounds.z, bounds.w = (log_s_min, log_s_max)     -- log-mapped sqrt(g2) domain
 //
-// Why log_s instead of plain sqrt(g2)? Empirically (see
-// scripts/investigate_quantization.py "SNR(u_next)" column) the next-step
+// Why log_s instead of plain sqrt(g2)? Empirically, the next-step
 // Adam update u' = β1·g1 / sqrt(β2·g2 + ...) is dominated by errors in
 // sqrt(g2) at small magnitudes -- exactly the region where linear quantization
 // has the worst RELATIVE precision and where Adam's normalizer is most

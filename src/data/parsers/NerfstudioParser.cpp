@@ -1,7 +1,6 @@
-// NerfstudioParser.cpp -- transforms.json dataset reader for
-// DatasetParser.h. Port of modules/dataparser.py _parse_nerfstudio_data
-// (minus the COLMAP/Metashape front-ends), with a self-contained PLY
-// point-cloud reader. JSON via app/Json.h; no external dependencies.
+// NerfstudioParser.cpp -- transforms.json dataset reader for DatasetParser.h,
+// with a self-contained PLY point-cloud reader. JSON via app/Json.h; no
+// external dependencies.
 
 #include "data/DatasetParser.h"
 #include "i18n/catalog/Data.h"
@@ -255,12 +254,12 @@ ColmapPoints3D read_ply_points(const std::string& path) {
 
 
 // ===========================================================================
-// parse_nerfstudio_dataset (dataparser.py _parse_nerfstudio_data)
+// parse_nerfstudio_dataset
 // ===========================================================================
 
 namespace {
 
-// dataparser.py DISTORTION_KEYS, in engine dist_coeffs order.
+// Distortion keys, in engine dist_coeffs order.
 const char* kDistortionKeys[10] = {
     "k1", "k2", "k3", "k4", "p1", "p2", "sx1", "sy1", "b1", "b2"};
 
@@ -322,7 +321,7 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
     if (!jframes || !jframes->is_array() || jframes->arr.empty())
         throw std::runtime_error("NerfstudioParser: no frames in transforms.json");
 
-    // ---- Collect frames; skip .webp / missing files (dataparser.py:300-317) -
+    // ---- Collect frames; skip .webp / missing files ---------------------
     struct Frame { const JsonValue* j; std::string file_path; std::string abs; };
     std::vector<Frame> frames;
     for (const JsonValue& fr : jframes->arr) {
@@ -369,7 +368,7 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
         for (int r = 0; r < 3; r++) positions[i*3 + r] = c2w_all[i*12 + r*4 + 3];
     }
 
-    // ---- Outlier rejection (dataparser.py:319-325) ---------------------------
+    // ---- Outlier rejection ----------------------------------------------
     {
         std::vector<char> keep = dsparse::outlier_keep_mask(
             positions, n_all, cfg.outlier_threshold);
@@ -426,8 +425,7 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
         std::string model_name = "OPENCV";
         if (const JsonValue* v = fr.find("camera_model"))        model_name = v->as_string();
         else if (const JsonValue* v2 = meta.find("camera_model")) model_name = v2->as_string();
-        // camera_model_from_name accepts exactly the models Python's
-        // _COLMAP_CAMERA_MODEL_TO_TYPE supports (camera.py:29-51).
+        // camera_model_from_name accepts exactly the COLMAP camera models.
         CameraModelType model = camera_model_from_name(model_name);
         if ((int)model < 0)
             throw std::runtime_error("NerfstudioParser: unsupported camera model " +
@@ -448,7 +446,7 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
             W = round_dim(W); H = round_dim(H);
         }
 
-        // Equirectangular: canonical panorama intrinsics (dataparser.py:374-387).
+        // Equirectangular: canonical panorama intrinsics.
         if ((int)model == EQUIRECT_V) {
             fx = fy = W / (2.0 * kPi);
             cx = W / 2.0;
@@ -493,7 +491,7 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
     if (any_depth)  ds.depth_filenames  = std::move(depth_files);
     if (any_normal) ds.normal_filenames = std::move(normal_files);
 
-    // ---- Seed points (dataparser.py:434-449) ----------------------------------
+    // ---- Seed points ------------------------------------------------------
     std::string ply_rel;
     if (const JsonValue* v = meta.find("ply_file_path")) ply_rel = v->as_string();
     else {
@@ -511,10 +509,10 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
         ds.points = read_ply_points((root / ply_rel).string());
     }
 
-    // ---- applied_transform inverse (train_frame="points" branch,
-    // dataparser.py:501-531): poses and points go back to the ORIGINAL
-    // (pre-applied_transform) frame. Also folds into the viewer remap:
-    // train_to_normalized = inv(T_n_from_camera @ applied) (dataparser.py:536).
+    // ---- applied_transform inverse (train_frame="points" branch): poses and
+    // points go back to the ORIGINAL (pre-applied_transform) frame. Also folds
+    // into the viewer remap:
+    //   train_to_normalized = inv(T_n_from_camera @ applied)
     double T_n_from_train[16];
     std::copy(T_n_from_camera, T_n_from_camera + 16, T_n_from_train);
     if (const JsonValue* at = meta.find("applied_transform")) {

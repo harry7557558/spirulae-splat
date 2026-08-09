@@ -32,7 +32,7 @@ It replaces `src/app/gui/ColmapRunner.cpp`'s COLMAP half: `colmap
 feature_extractor / *_matcher / mapper / model_merger / bundle_adjuster`, the
 vocabulary-tree download, and the COLMAP version check. It does **not** replace
 ColmapRunner's other half — ffmpeg frame extraction, sharpest-frame selection,
-multi-track `.insv` splitting, and AI masking via `scripts/mask.py` — which is
+multi-track `.insv` splitting, and AI masking via `reference/scripts/mask.py` — which is
 shared, not COLMAP-specific, and gets factored out for both paths (phase 5).
 
 Output is unchanged in kind: `<workspace>/sparse/0/{cameras,images,points3D}.bin`
@@ -323,7 +323,7 @@ The original plan, for reference:
 1. **Factor the shared half out of `ColmapRunner`** into
    `src/app/gui/DatasetPrep.{h,cpp}`: ffmpeg frame extraction, sharpest-frame
    selection (`FrameSelect`), multi-track `.insv` splitting into
-   `images/cam<N>/`, AI masking via the embedded `scripts/mask.py`, image
+   `images/cam<N>/`, AI masking via the embedded `reference/scripts/mask.py`, image
    counting and dimension probing, and the resume semantics that let an
    interrupted run reuse what it left behind. Move it verbatim; `ColmapRunner`
    keeps working through it.
@@ -420,8 +420,8 @@ device in both subsystems, and `SS_VK_DEVICE` moves both.
 - `setup.py` / `pyproject.toml` / `cmake/sources.txt` — the pip build never
   sees SfM.
 - `src/bindings/` — no Python binding for SfM.
-- `scripts/process_data_colmap.py`, `scripts/run_colmap.bash`,
-  `scripts/colmap_utils.py` — standalone Python preprocessing tools with their
+- `reference/scripts/process_data_colmap.py`, `reference/scripts/run_colmap.bash`,
+  `reference/scripts/colmap_utils.py` — standalone Python preprocessing tools with their
   own users. They are not on the GUI path and are out of scope here; revisit
   once `spirula sfm` has run on enough datasets to be the obvious default.
 - `ColmapRunner` — kept and working. It is the CUDA GUI's dataset path and the

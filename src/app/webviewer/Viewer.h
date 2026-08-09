@@ -1,12 +1,11 @@
 #pragma once
 
-// Viewer -- C++ port of the Python web viewer server (viewer/server.py +
-// http_server.py) for the standalone CLI trainer. Serves the SAME
-// single-file viewer.html (embedded at build time) over a dependency-free
-// HTTP server, so the browser client is unchanged -- ssh port-forward the
-// viewer port from a headless cloud box and open http://localhost:<port>/.
+// Viewer -- the web viewer server. Serves the single-file viewer.html
+// (embedded at build time) over a dependency-free HTTP server -- ssh
+// port-forward the viewer port from a headless cloud box and open
+// http://localhost:<port>/.
 //
-// Endpoints (unchanged from the Python server):
+// Endpoints:
 //   GET /              viewer.html
 //   GET /render?...    JPEG of the requested buffer from the requested camera
 //   GET /buffers       JSON list of viewable buffer keys

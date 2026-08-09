@@ -4,7 +4,7 @@ SAM 2 / SAM 2.1 / SAM 3 on the inference layer (`src/nn/`): text-prompted
 detection, point and box segmentation, and video tracking with a memory bank.
 
 It exists to replace the Python/PyTorch subprocess the GUI used to shell out to
-for masking (`scripts/mask.py` with lang-segment-anything, which pulls in a
+for masking (`reference/scripts/mask.py` with lang-segment-anything, which pulls in a
 CUDA PyTorch). What lands in a dataset's `masks/` is the same idea and the same
 defaults; what changed is that it runs on the same Vulkan device as everything
 else, needs nothing installed, and can be tried on one frame before committing
@@ -32,7 +32,7 @@ way in; that tree is now read-only and this is upstream.
 
 - **Vulkan only**, like `src/sfm/`. There is no CUDA path here and there will
   not be one; the module is built by default only for `SS_BACKEND=vulkan`
-  (`SS_BUILD_SAM`), and a CUDA build keeps the `scripts/mask.py`
+  (`SS_BUILD_SAM`), and a CUDA build keeps the `reference/scripts/mask.py`
   subprocess.
 - **Nothing model-agnostic belongs here.** Tensors, ops, the Vulkan runtime and
   host image I/O are `src/nn/`'s. If you find yourself adding a general kernel
@@ -123,7 +123,7 @@ user sees in the preview is what gets written.
   source resolution;
 - **clicked objects** (`MaskOptions::seeds`), described below.
 
-The text half matches `scripts/mask.py`, defaults included, so a dataset masked
+The text half matches `reference/scripts/mask.py`, defaults included, so a dataset masked
 either way is the same dataset. Clicks have no counterpart there —
 lang-segment-anything takes words and nothing else — and the GUI says so rather
 than dropping them.
@@ -310,7 +310,7 @@ RTX 3070 Laptop the same Hiera-T run goes 418 → 358 ms/frame (1.17x) rather th
 299 → 246 (1.22x), and its GEMM gains 1.2x where the 5070's gains 2x.
 
 PyTorch's SAM 2 video predictor still does ~10 fps with Hiera-L on comparable
-hardware (`scripts/SAM2-GUI`) where this does 2.1. The rest of that gap is the
+hardware (`reference/scripts/SAM2-GUI`) where this does 2.1. The rest of that gap is the
 second attention matmul, which cannot use a cooperative matrix without a
 per-element mapping the KHR extension does not expose.
 

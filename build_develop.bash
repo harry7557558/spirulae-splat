@@ -25,6 +25,10 @@ if command -v python3 >/dev/null 2>&1; then
     python3 tools/check_font_coverage.py || exit 1
 fi
 
+# A comment must not cite a file that does not exist -- an unfollowable
+# pointer reads exactly like a live one.
+bash tools/check_comments.sh >/dev/null || { bash tools/check_comments.sh; exit 1; }
+
 cmake -G Ninja -B build "$@" || exit $?
 
 # Repair the ninja dependency log.

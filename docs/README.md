@@ -30,4 +30,4 @@ Authoritative documents that live next to their code rather than here:
 - `assets/fonts/README.md` — the embedded UI font, why it is renamed, and the
   CJK faces.
 - `viewer/README.md` — the standalone WebGL2/WASM viewer.
-- `scripts/README.md` — dataset preprocessing tools.
+- `reference/scripts/README.md` — dataset preprocessing tools.

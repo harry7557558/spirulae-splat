@@ -122,8 +122,7 @@ private:
 
 // sqrt(mean of squared distances) to the k nearest neighbors of each point
 // (self excluded by index; exact duplicates in the cloud still count as
-// zero-distance neighbors, matching the Python k_nearest_neighbor +
-// model.py:582 reduction). Queries run across all hardware threads.
+// zero-distance neighbors). Queries run across all hardware threads.
 inline std::vector<float> mean_knn_dist(
         const std::vector<float>& xyz, int64_t n, int k) {
     std::vector<float> out(n, 1e-2f);

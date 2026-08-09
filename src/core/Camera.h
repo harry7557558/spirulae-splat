@@ -1,64 +1,21 @@
 #pragma once
 
-// Cameras — device-resident table of N cameras.
+// Cameras -- device-resident table of N cameras.
 //
-// Storage is pool-backed and non-owning: all DeviceVector / DeviceTensor* members reference memory owned
-// by DevicePool (when constructed from host data) or by an external owner
-// (when shallow-copied from existing device tensors).
+// Storage is non-owning throughout: the device members reference memory owned
+// by DevicePool, or by an external owner when shallow-copied from existing
+// device tensors. Copy and move are therefore shallow.
 //
-// Design choices worth knowing:
+// Two constraints are not visible from the declarations:
 //
-//   - Model type is a strong enum (CameraModelType, defined in Common.cuh)
-//     instead of a string. A static `model_from_colmap_name(...)` mirrors the
-//     Python COLMAP-name lookup, and `model_to_string(...)` provides the
-//     reverse for logging/serialization.
+//   - The model is ONE enum for the whole batch, not per camera, because that
+//     is how the projection / rasterization kernels dispatch. Mixed models in
+//     one batch have to be split into separate tables.
 //
-//   - The model is a single batch-level enum (uniform across all N cameras),
-//     matching how the rasterization / projection kernels dispatch. Mixed
-//     models per batch are out of scope for the engine and so out of scope
-//     here.
-//
-//   - Width / height are stored host-side as std::vector<int32_t>. They are
-//     only ever read by host code (kernel launch dimensions, image-size
-//     bookkeeping) — keeping them off device avoids a pointless H->D->H round
-//     trip and lets callers indexed-access without a cudaMemcpy. A uniform
-//     single-image-size batch is represented as N copies of the same value.
-//
-//   - The Python `Cameras.__getitem__` is intentionally NOT ported — slicing
-//     by index list belongs at the trainer level via a gather kernel on
-//     device tensors, not at the Camera-class level. (When needed, add a
-//     `gather(prefix, indices)` member that allocates a new Cameras with
-//     gathered rows.)
-//
-//   - `rescale(...)` is omitted for the same reason: image-rescaling is a
-//     pipeline-level concern, and a per-camera rescale-on-device kernel is
-//     trivial to add downstream when actually needed.
-//
-// Constructors:
-//
-//   1. Default-constructed empty Cameras (num()==0, all tensors null).
-//
-//   2. Uniform-size host upload (most common training path):
-//        Cameras(prefix, num, width, height, model,
-//                viewmats_tv, intrins_tv, dist_coeffs_tv)
-//      Where the three TorchTensorView arguments may be host or device — the
-//      `_upload_*` helpers transparently zero-copy if device, H2D-stage if
-//      host. Width/Height are uniform across all cameras and broadcast into
-//      the host-side std::vector members.
-//
-//   3. Per-camera host upload (dataparser path):
-//        Cameras(prefix, num, model,
-//                viewmats_tv, intrins_tv, dist_coeffs_tv,
-//                widths, heights)        // std::vector<int32_t> by const-ref
-//
-//   4. Shallow / non-owning view from existing device tensors:
-//        Cameras(num, model, viewmats_dv, intrins_dv, dist_coeffs_dv,
-//                widths, heights)        // std::vector<int32_t>
-//      No device allocations; underlying device-tensor lifetime is the
-//      caller's responsibility.
-//
-//   5. Copy / move are defaulted and are shallow (DeviceVector / DeviceTensor
-//      are non-owning views).
+//   - Width / height live host-side. Only host code reads them (launch
+//     dimensions, image-size bookkeeping), so keeping them off device avoids
+//     an H->D->H round trip per query. A uniform-size batch is N copies of
+//     the same value.
 
 #include "core/Common.cuh"
 #include "core/Tensor.h"
@@ -69,8 +26,8 @@
 #include <vector>
 
 
-// Distortion parameter layout per camera (must match the projection/raster
-// kernels and the upstream Python convention).
+// Distortion parameter layout per camera. MUST match the projection/raster
+// kernels.
 //
 //   index 0..3  : k1, k2, p1, p2     (radial + tangential)
 //   index 4..7  : k3, k4, k5, k6     (extended radial — OpenCV fisheye etc.)
@@ -82,8 +39,7 @@ inline constexpr int kCameraDistortionParams = 10;
 
 // COLMAP / NerfStudio camera-model string -> CameraModelType.
 // Returns CameraModelType(-1) for unknown / unsupported models; callers
-// should validate and raise. Kept as a free function so it can be reused
-// outside of class context (e.g. from Python bindings, dataparser).
+// validate and raise.
 inline CameraModelType camera_model_from_name(const std::string& name) {
     if (name == "PINHOLE" ||
         name == "SIMPLE_PINHOLE" ||
@@ -119,7 +75,8 @@ public:
 
     Cameras() = default;
 
-    // 2) Uniform-size host (or device) upload. Width / height are broadcast.
+    // Uniform-size upload. The views may be host or device; width / height
+    // are broadcast.
     Cameras(const std::string& key_prefix,
             int64_t num,
             int32_t width,
@@ -143,7 +100,7 @@ public:
         _heights.assign((size_t)num, height);
     }
 
-    // 3) Per-camera host (or device) upload — sizes are passed host-side.
+    // Per-camera upload — sizes are passed host-side.
     Cameras(const std::string& key_prefix,
             int64_t num,
             CameraModelType model,
@@ -169,8 +126,8 @@ public:
         _dist_coeffs = _upload_dt2d<float>(PoolSlot::CamDistCoeffs, dist_coeffs);
     }
 
-    // 4) Shallow / non-owning view from existing device tensors. Underlying
-    //    device storage lifetime is the caller's responsibility.
+    // View over existing device tensors: no allocation, and their lifetime
+    // is the caller's responsibility.
     Cameras(int64_t num,
             CameraModelType model,
             DeviceTensor2D<float4> viewmats,

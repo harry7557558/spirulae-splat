@@ -1,5 +1,5 @@
 # Embedding data files into the executables as byte arrays, so the apps are
-# self-contained (no runtime lookup of viewer.html or scripts/mask.py).
+# self-contained (no runtime lookup of viewer.html or reference/scripts/mask.py).
 
 # ss_embed_file(<input> <output_header> <symbol>)
 #

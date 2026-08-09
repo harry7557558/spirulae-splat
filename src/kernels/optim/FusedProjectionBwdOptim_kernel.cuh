@@ -147,10 +147,10 @@ template<
     typename SplatPrimitive,
     CameraModelType camera_model,
     bool use_scale_agnostic_mean,
-    // Merged flag for the two color-space variants. In Python both
+    // Merged flag for the two color-space variants. Both
     // `OptimConfig::use_color_trust_region` and `OptimConfig::color_is_linear`
-    // are wired to the same `splat_color_is_linear` flag (core.py), so
-    // collapsing the bool2 -> bool here halves the FPBO instantiation count
+    // are wired to the same `splat_color_is_linear` flag, so collapsing the
+    // bool2 -> bool here halves the FPBO instantiation count
     // on the color-space axis. Gates BOTH the trust-region clip on the
     // per-channel Adam delta AND the linear-to-sRGB Jacobian inversion on
     // the per-channel gradient.

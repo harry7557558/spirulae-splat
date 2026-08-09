@@ -1,12 +1,11 @@
 // Engine linear / wide-gamut color space conversion.
 //
-// Mirrors the Python pipeline in training_losses.py: when the splat (model)
-// works in a non-sRGB color space, the rendered RGB is converted to sRGB
-// before any downstream stage (bilagrid / PPISP / loss). When the input GT
-// imagery is in a non-sRGB space, the GT is converted once at upload time
-// and kept in sRGB thereafter. The 3x3 transform matrix maps the source
-// color space to Rec.709; identity when source is sRGB already and
-// is_linear is the only active flag.
+// When the splat (model) works in a non-sRGB color space, the rendered RGB
+// is converted to sRGB before any downstream stage (bilagrid / PPISP /
+// loss). When the input GT imagery is in a non-sRGB space, the GT is
+// converted once at upload time and kept in sRGB thereafter. The 3x3
+// transform matrix maps the source color space to Rec.709; identity when
+// source is sRGB already and is_linear is the only active flag.
 
 #include "engine/Engine.h"
 #include "engine/EngineCommon.h"

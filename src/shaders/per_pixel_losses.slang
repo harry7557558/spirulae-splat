@@ -106,7 +106,7 @@ enum LossWeightIndex {
     RgbDistReg,
     DepthDistReg,
     NormalDistReg,
-    // median-depth loss weights (configured from model.py)
+    // median-depth loss weights
     MeanMedianDepthSup,
     MedianDepthNormalReg,
     MedianNormalSup,

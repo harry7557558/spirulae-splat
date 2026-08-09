@@ -1,9 +1,8 @@
 #pragma once
 
 // EngineConfig -- per-step config structs accepted by the engine_*_step
-// entrypoints. These collapse what used to be ~40-arg signatures into a
-// handful of typed bundles, while keeping all scheduling on the Python side
-// (every numeric field below is the already-resolved value for this step).
+// entrypoints. Every numeric field below is the already-resolved value for
+// this step: scheduling lives in the caller (TrainerCore), never here.
 
 #include "kernels/loss/PerPixelLoss.cuh"   // LossWeightIndex
 #include "kernels/pixelwise/PixelWise.cuh"      // PPISPRegLossIndex
@@ -11,9 +10,8 @@
 #include <array>
 
 
-// engine_compute_loss_backward keeps its (step, weights, w_ssim, scales, map)
-// signature; LossConfig exists to bundle those four scalars when called
-// transitively from engine_train_step.
+// Bundles the scalars engine_compute_loss_backward takes, for the call path
+// that reaches it through engine_train_step.
 struct LossConfig {
     std::array<float, (int)LossWeightIndex::length> weights{};
     float w_ssim          = 0.0f;
@@ -28,18 +26,9 @@ struct LossConfig {
     // num_loss_scales untouched.
     int   loss_scale_min_pixels = 0;
     bool  compute_loss_map = false;
-    // Selects what the densification loss map is filled with. See
-    // DensifyLossMapMode in PerPixelLoss.cuh:
-    //   0 = None (no map populated; densification falls back to uniform alpha*T)
-    //   1 = LossFull (per-pixel L1/L2/aux + full SSIM LCS)
-    //   2 = SsimFull (full SSIM LCS only)
-    //   3 = SsimContrastStruct (D_/B, no luminance)
-    //   4 = SsimStructure (structure-only, D_/(2*sqrt(sig1*sig2)+C2))
-    //   5 = EdgeAware (canny edge magnitude of GT rgb)
-    //   6 = RobustEdgeAware (Tukey biweight on |render - GT| + canny;
-    //       cutoff at the per-image robust_edge_aware_quantile of |r|)
-    // Affects loss_map output only; gradients, scalar loss values and the
-    // SSIM display scalar are unchanged.
+    // DensifyLossMapMode (PerPixelLoss.cuh) as an int. Affects loss_map
+    // output only; gradients, scalar loss values and the SSIM display
+    // scalar are unchanged.
     int   loss_map_mode = 0;
     // Per-image quantile of the BT.601-luma residual used as the Tukey
     // cutoff in RobustEdgeAware mode. Lower values are more aggressive
@@ -73,8 +62,8 @@ struct LossConfig {
 
 
 // Per-param learning rates + per-splat regularization weights + flags.
-// All LR values are *already* multiplied by train_frame_scale / alpha on the
-// Python side where needed; the engine consumes them verbatim.
+// LR values arrive already multiplied by train_frame_scale / alpha where
+// that applies; the engine consumes them verbatim.
 struct OptimConfig {
     float lr_means        = 0.0f;
     float lr_quats        = 0.0f;
@@ -101,35 +90,32 @@ struct OptimConfig {
     // fp32 features_sh). 8 or 16 = QuantizedTensor<BITS, 256> with one float2
     // per 256-cell block of (min, max) bounds; canonical storage is the packed
     // buffer, and every consumer kernel dequantizes on load via the codec.
-    // Other values are rejected. NOTE: end-to-end kernel threading is
-    // multi-turn work; the engine currently allocates storage and exposes the
-    // flag but the read/write paths through Slang harmonics + FPBO + densify
-    // are not yet plumbed. Setting this != 32 at training time will throw at
-    // optimizer state init until that work lands.
+    // Other values are rejected. INCOMPLETE: storage is allocated and the
+    // flag exposed, but the read/write paths through Slang harmonics + FPBO
+    // + densify are not plumbed, so != 32 throws at optimizer state init.
     int   sh_value_bits                   = 8;
     // Non-SH Adam-state quantization bit depth (means, quats, scales, opacities,
     // features_dc). 32 = no quantization (full fp32 g1/g2). 16 =
     // QuantizedAdamState<16, 256> -- joint (u, log_s) at 16-bit per primitive
     // (4 B / cell). FPBO-only; the non-FPBO Adam kernel throws when this is
-    // non-32. Coupled to quantization_level on the Python side: level 1
-    // sets this to 16 automatically.
+    // non-32. quantization_level 1 sets it to 16.
     int   non_sh_optim_bits               = 32;
     // Single SH quantization level. Collapses the FPBO dispatch's
     // (sh_optim_bits, sh_value_bits) axes down to 2 instantiations:
     //   0 = off    : fp32 everywhere
     //   1 = light  : 16-bit SH value, 8x2-bit SH optim, 16x2-bit non-SH optim
-    // Python is expected to ALSO set sh_optim_bits / sh_value_bits /
-    // non_sh_optim_bits to the values implied by this level (the FPBO
-    // dispatcher only uses the level; non-FPBO paths and EngineState still
-    // read the individual bits).
+    // The caller must ALSO set sh_optim_bits / sh_value_bits /
+    // non_sh_optim_bits to the values this level implies: the FPBO dispatcher
+    // reads only the level, but non-FPBO paths and EngineState read the
+    // individual bits.
     int   quantization_level           = 0;
     bool  use_per_splat_bias_correction   = false;
 
     // When true, fold projection-backward and Adam-based per-splat optim into
     // a single fused kernel (FusedProjectionBwdOptim). The engine then skips
-    // the standalone projection_*_backward + engine_optim_step calls. SH
-    // quantization is not yet supported by the fused path; the MVP allocates
-    // full fp32 g1/g2 momentum (no `sh_quant_state`) in this mode.
+    // the standalone projection_*_backward + engine_optim_step calls. The
+    // fused path does not support SH quantization: it allocates full fp32
+    // g1/g2 momentum (no `sh_quant_state`).
     bool  use_fused_proj_bwd_optim        = false;
 
     // When true, the splat optim step writes engine().fwd.world_grad_score
@@ -151,16 +137,15 @@ struct OptimConfig {
     // buffers (splats_s, aabb, depths, isect/flatten ids, render_Ts, raster
     // bwd v_splats_s) between sub-batches -- peak VRAM scales by ~1/B.
     //
-    // Not compatible with use_fused_proj_bwd_optim or use_color_trust_region
-    // in this turn; the engine throws when either is also set. Warped
-    // training_step path also throws (would need per-input-image splitting).
+    // Not compatible with use_fused_proj_bwd_optim or use_color_trust_region;
+    // the engine throws when either is also set. The warped training_step
+    // path also throws (would need per-input-image splitting).
     bool  split_batch      = false;
 
-    // Trust-region color-space Adam.  Mirrors the
-    // fused_adamtr_(linear_)rgb_(sh_)optim variants used in Python when
-    // splat_color_is_linear or splat_color_gamut is set: the DC and SH color
-    // updates are clipped to +/-kSh0*sqrt(4*eps_tr*c/opac) per step so the
-    // working-color-space update stays inside the model's confidence radius.
+    // Trust-region color-space Adam, for a linear or wide-gamut splat color
+    // space: the DC and SH color updates are clipped to
+    // +/-kSh0*sqrt(4*eps_tr*c/opac) per step, so the working-color-space
+    // update stays inside the model's confidence radius.
     bool  use_color_trust_region          = false;
     bool  color_is_linear                 = false;   // gradient gets divided by linear->sRGB Jacobian
     float eps_tr                          = 1e-6f;
@@ -168,7 +153,7 @@ struct OptimConfig {
 
 
 // MCMC / revised-relocate densification controls. max_world_size / noise_lr*
-// are pre-scaled by alpha on the Python side.
+// arrive pre-scaled by alpha.
 struct DensifyConfig {
     int   refine_start_iter             = 0;
     int   refine_stop_num_iter          = 0;

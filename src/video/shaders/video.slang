@@ -144,10 +144,11 @@ void yuv_to_rgb(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
 // Sharpness: variance of the Laplacian on a fixed-size grey thumbnail
 // ---------------------------------------------------------------------------
 //
-// The reference (scripts/extract_frames.py) resizes to 512x512, takes
-// the grey channel and reports var(Laplacian). Reproducing the size exactly
-// keeps the numbers comparable; luma alone stands in for grey, which saves
-// copying the chroma planes for a frame that may never be written out.
+// The reference (reference/scripts/extract_frames.py) resizes to 512x512,
+// takes the grey channel and reports var(Laplacian). Reproducing the size
+// exactly keeps the numbers comparable; luma alone stands in for grey,
+// which saves copying the chroma planes for a frame that may never be
+// written out.
 
 struct ThumbParams {
     float* out;      // S*S

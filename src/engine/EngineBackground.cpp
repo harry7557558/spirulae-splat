@@ -15,9 +15,9 @@
 // per-camera gradient into the SH coefficient table; the rotation gradient
 // is dropped here (cameras are fixed in the engine path).
 //
-// This is an MVP: separate scratch buffers (v_Ts, v_bg, v_sh) are pool-acquired
-// rather than fused. VRAM footprint is one extra [C, H, W, 1] (v_Ts) and, for
-// SH mode, two more [C, H, W, 3] (pre-blend rgb + skybox + v_bg).
+// Scratch buffers (v_Ts, v_bg, v_sh) are pool-acquired rather than fused, so
+// the footprint is one extra [C, H, W, 1] (v_Ts) and, for SH mode, two more
+// [C, H, W, 3] (pre-blend rgb + skybox + v_bg).
 
 #include "engine/Engine.h"
 #include "engine/EngineCommon.h"

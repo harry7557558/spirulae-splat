@@ -19,7 +19,7 @@
 //    `p == nullptr` by bitcasting the pointer to uint2 (explicitly legal
 //    under SPV_KHR_physical_storage_buffer without Int64).
 //
-// build_spirv.py verifies each .noint64 blob really dropped OpCapability
+// spirv_tool.cpp verifies each .noint64 blob really dropped OpCapability
 // Int64, so an unguarded int64 use fails the build instead of the device.
 
 #ifndef SS_INT64_COMPAT
