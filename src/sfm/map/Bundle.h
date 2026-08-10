@@ -80,6 +80,8 @@ struct BundleOptions {
     // outlive one solve. The caller owns it and must keep (real, loss) fixed
     // across calls on the same context. Null = scoped context per call.
     VkContext* shared_ctx = nullptr;
+    // Host worker threads, for the `cpu` scalar; 0 = hardware_concurrency.
+    int threads = 0;
 };
 
 // The problem built from a reconstruction, plus what writing the solution back
@@ -242,6 +244,7 @@ inline SolverOptions bundleSolverOptions(const BundleOptions& bopt) {
     if (bopt.solver == "dense") sopt.solver = SolverSel::Dense;
     else if (bopt.solver == "cg") sopt.solver = SolverSel::CG;
     sopt.over_budget_throws = bopt.over_budget_throws;
+    sopt.threads = bopt.threads;
     return sopt;
 }
 

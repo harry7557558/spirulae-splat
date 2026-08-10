@@ -224,44 +224,6 @@ SS_MSG(run_nested_images,
     RU("В {0} нет ничего для восстановления, кроме папки images/, поэтому каталог изображений — {1}."),
     TR("{0} içinde images/ klasöründen başka yeniden oluşturulacak bir şey yok, bu yüzden görüntü dizini {1}."));
 
-SS_MSG(run_device_cannot_solve,
-    EN("The selected device can run none of the bundle-adjustment scalar types: "
-       "it has no fp64, no buffer int64 atomics and no buffer float32 atomic add. "
-       "Pick another device with --device (`spirula sam devices` lists them)."),
-    JA("選択したデバイスはバンドル調整のどのスカラー型も実行できません。fp64も、バッファint64アトミックも、"
-       "バッファfloat32アトミック加算もありません。--device で別のデバイスを選んでください"
-       "（一覧は `spirula sam devices`）。"),
-    ZH_HANS("所选设备无法运行任何一种光束法平差标量类型: 它没有 fp64，没有缓冲区 int64 原子操作，"
-            "也没有缓冲区 float32 原子加。请用 --device 选择别的设备（`spirula sam devices` 可列出）。"),
-    ZH_HANT("所選裝置無法執行任何一種光束法平差純量型別: 它沒有 fp64，沒有緩衝區 int64 原子操作，"
-            "也沒有緩衝區 float32 原子加。請用 --device 選擇別的裝置（`spirula sam devices` 可列出）。"),
-    KO("선택한 장치는 번들 조정의 스칼라 형식을 하나도 실행할 수 없습니다. fp64도, 버퍼 int64 원자 연산도, "
-       "버퍼 float32 원자 덧셈도 없습니다. --device 로 다른 장치를 고르세요(`spirula sam devices` 로 목록 확인)."),
-    DE("Das gewählte Gerät beherrscht keinen der Skalartypen der Bündelblockausgleichung: "
-       "kein fp64, keine int64-Atomics auf Puffern, kein atomares float32-Addieren auf Puffern. "
-       "Wählen Sie mit --device ein anderes Gerät (`spirula sam devices` listet sie auf)."),
-    FR("L'appareil choisi ne peut exécuter aucun des types scalaires de l'ajustement de faisceaux : "
-       "ni fp64, ni atomiques int64 sur tampon, ni addition atomique float32 sur tampon. "
-       "Choisissez un autre appareil avec --device (`spirula sam devices` les liste)."),
-    ES("El equipo elegido no puede ejecutar ninguno de los tipos escalares del ajuste de haces: "
-       "no tiene fp64, ni atómicas int64 en búfer, ni suma atómica float32 en búfer. "
-       "Elija otro con --device (`spirula sam devices` los enumera)."),
-    PT("O aparelho escolhido não executa nenhum dos tipos escalares do ajustamento de feixes: "
-       "não tem fp64, nem atômicas int64 em buffer, nem soma atômica float32 em buffer. "
-       "Escolha outro com --device (`spirula sam devices` os lista)."),
-    IT("L'unità scelta non può eseguire nessuno dei tipi scalari del bundle adjustment: "
-       "niente fp64, niente atomiche int64 su buffer, niente somma atomica float32 su buffer. "
-       "Ne scelga un'altra con --device (`spirula sam devices` le elenca)."),
-    NL("Het gekozen apparaat kan geen van de scalaire typen van de bundelaanpassing draaien: "
-       "geen fp64, geen int64-atomics op buffers, geen atomaire float32-optelling op buffers. "
-       "Kies met --device een ander apparaat (`spirula sam devices` toont ze)."),
-    RU("Выбранное устройство не поддерживает ни один скалярный тип уравнивания связок: "
-       "нет fp64, нет атомарных int64 в буферах, нет атомарного сложения float32 в буферах. "
-       "Выберите другое устройство через --device (список: `spirula sam devices`)."),
-    TR("Seçilen aygıt demet düzeltmesinin skaler türlerinden hiçbirini çalıştıramıyor: "
-       "fp64 yok, tampon int64 atomikleri yok, tampon float32 atomik toplaması yok. "
-       "--device ile başka bir aygıt seçin (`spirula sam devices` listeler)."));
-
 SS_MSG(device_using,
     EN("Using {0}"),
     JA("{0} を使用します"),

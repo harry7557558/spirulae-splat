@@ -6,7 +6,9 @@ Cholesky, or -- for large camera counts -- by a matrix-free implicit-Schur PCG
 that never forms the reduced matrix, keeping VRAM linear in the observation
 count. Selection is automatic by problem size and VRAM budget (`--solver` to
 force). All GPU code is [Slang](https://shader-slang.org/) compiled to SPIR-V;
-Jacobians come from Slang's autodiff.
+Jacobians come from Slang's autodiff. The same solver also exists on the host,
+for devices that can run none of the scalar configurations -- see "Host
+fallback".
 
 This is the last stage of the SfM pipeline and the one it was built around; the
 mapper drives it through `sfm/map/Bundle.h`. For the pipeline as a whole see
@@ -28,7 +30,12 @@ sfm/shaders/
 sfm/ba/
   Problem.h          model registry, camera groups, column layout, per-model obs lists,
                        BAL problem loading
+  Options.h          scalar config, solver selection, options and stats
   Solver.h           LM driver (records one command buffer per iteration)
+  SolverCpu.h        the same solver on the host -- see "Host fallback" below
+  CpuCamera.h        host mirror of the camera and loss models, forward-mode duals
+  CpuDense.h         packed blocked Cholesky for the host path
+  CpuParallel.h      the process-wide worker pool the host path runs on
 src/app/cli/sfm_ba.cpp   the `spirula sfm ba` subcommand: BAL problems + PLY dump
 ```
 
@@ -44,7 +51,9 @@ bash build_develop.bash -DSS_BACKEND=vulkan -DSS_BUILD_CLI=ON
 ./build/spirula sfm ba /path/to/bal/problem-16-22106-pre.txt --real double
 ./build/spirula sfm ba problem.txt --real df --loss huber --loss-param 1.0 --ply out
 ./build/spirula sfm ba /path/to/sparse/0 -o refined/       # a COLMAP model
+./build/spirula sfm ba /path/to/sparse/0 --real cpu        # ... on the host
 ./build/sfm_cholesky_test 500 --real df          # dense solver unit test
+./build/sfm_ba_cpu_test                          # host solver vs a written-out reference
 ```
 
 Given a *directory* rather than a BAL file, `ba` reads a COLMAP sparse model and
@@ -57,7 +66,7 @@ The shader variant matrix can be trimmed for faster iteration:
 `-DSS_SFM_REALS=df -DSS_SFM_LOSSES=trivial`. slangc is taken from PATH
 or downloaded into the build tree (`cmake/SsSlang.cmake`).
 
-Options: `--real float|double|df`, `--loss trivial|huber|cauchy`,
+Options: `--real float|double|df|cpu`, `--loss trivial|huber|cauchy`,
 `--loss-param X`, `--model snavely|snavely_f`, `--shared-intrinsics`,
 `--max-iters N`, `--damping X`, `--rtol X`, `--patience N`, `--ply prefix`,
 `--solver auto|dense|cg`, `--vram-budget MB`, `--cg-iters N`, `--cg-tol X`,
@@ -151,7 +160,8 @@ line in `sfm/ba/Problem.h`. Different intrinsic counts need no other changes.
 
 ### Scalar configs
 
-Everything is written against `Real`, selected per-module with a `-D` flag:
+Everything on the device is written against `Real`, selected per-module with a
+`-D` flag (`cpu` is not one of them -- it is the host solver, below):
 
 - `float` — fp32 + native f32 buffer atomic add (`VK_EXT_shader_atomic_float`)
 - `double` — fp64 + native f64 atomic add. GLSL.std.450 does not define
@@ -267,6 +277,64 @@ inexact steps on its own, at zero extra memory.
 `SS_SFM_CMP_STEP=1` (env) solves one assembly with both paths and prints the
 step difference: with `--cg-tol 1e-8` the CG step matches the dense step to
 ~1e-8 at fp64.
+
+### Host fallback (`--real cpu`)
+
+`pickRealForDevice` steps down `double` -> `cpu`, and `cpu` is the same solver
+in fp64 on the host: same parameterization, same LM loop, same two linear
+solvers, same automatic selection between them, same `BAOverBudget` contract.
+Final costs match the fp64 GPU path to seven digits on real captures, and the
+assembled `S` and `g` match an independently written unreduced normal-equation
+reference to ~1e-15 (`sfm_ba_cpu_test`).
+
+Neither fp32-based configuration is in that chain. `float` stalls the normal
+equations above ~1e-7 relative accuracy, which is looser than the tolerance the
+mapper's finishing passes ask for, and `df` pays for its ~48 bits with CAS-loop
+atomics and emulated transcendentals. Both are still there to ask for --
+`--ba-real df` is the right answer on a large GPU with no fp64 atomics -- but a
+host solver that is fp64 throughout is the better default for a device that
+cannot run `double`.
+
+Three things differ from the GPU path, all of them consequences of running on
+a CPU rather than choices:
+
+- **No pair tables.** The Schur assembly is one task per *image*: for each of
+  its observations it walks that point's track prefix, so an element of `S`
+  belongs to the image pair that produced it and the pose rows are written with
+  no atomics and no aggregation buffer. Columns owned by an intrinsics group
+  that several images refine are the exception -- every element touching one
+  lands in an intrinsics *row* after symmetrization -- and those go to a
+  per-task `(shared columns) x n_dim` buffer that is summed afterwards. That is
+  ~800 kB a task on a real capture, and zero when each image owns its
+  intrinsics. The GPU's pair-entry tables, which cost 3.6 s and hundreds of MB
+  to build, are never built.
+- **Jacobians by forward-mode duals** (`CpuCamera.h`), against Slang's reverse
+  mode on the device. The widths are small (3 + intrinsics) and it needs no
+  generated code. The angle-axis block gets a dual pass of its own and the point
+  block comes from the rotation matrix, because the axis norm has no derivative
+  at a zero rotation -- which is every seed pair's first image -- and one pass
+  over both would spread that 0/0 across the point and translation blocks
+  instead of leaving it where reverse mode does.
+- **A process-wide worker pool** (`CpuParallel.h`), not one per solver: the
+  bottom-up phase runs a mapper per atom worker and a pool inside each would
+  oversubscribe the machine by that factor. Solves too small to be worth
+  splitting -- which is every atom -- run inline on the calling thread instead.
+  `--threads` caps the tasks one solve splits into; `SS_SFM_BA_THREADS`
+  overrides the pool's own width.
+
+The dense factorization is `CpuDense.h`: the same packed lower triangle, a
+blocked right-looking Cholesky (block 48) whose trailing update copies the
+current block column out to a contiguous panel once per step, so both operands
+of every tile update are unit-stride. 132 GFLOP/s at `n_dim = 6102` on an
+i9-14900HX (32 threads), 17.6 single-threaded, which is ~88% of the SSE2
+baseline's peak; `-march=native` measured 1.27x on top and is deliberately not
+taken, since nothing else in the tree is built for it.
+
+Measured against the fp64 GPU path on an RTX 5070 Laptop, same machine, one
+global BA: a 152-image capture 1.85 s against 0.81 s, a 1015-image one
+(`n_dim = 6102`) 3.6 s against 2.4 s, both at identical final cost. Peak
+memory is slightly *below* the GPU path's, which uploads a copy of the problem
+tables. `SS_SFM_MAP_PROF=1` prints the per-phase breakdown.
 
 ### LM loop
 

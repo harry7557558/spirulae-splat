@@ -32,6 +32,11 @@ int selftestChol(uint32_t n, SolverOptions opt) {
     // init() may have stepped the scalar type down to what the device supports;
     // everything below packs and unpacks against what the kernels actually use.
     const RealCfg real = solver.real();
+    if (real == RealCfg::CPU) {
+        printf("selftest-chol: this device runs bundle adjustment on the host; "
+               "the factorization there is covered by sfm_ba_cpu_test\nPASS\n");
+        return 0;
+    }
 
     std::mt19937 rng(12345);
     std::normal_distribution<double> gauss;
@@ -122,6 +127,10 @@ int benchDispatch(SolverOptions opt) {
             P.n_dim = n;
             BundleSolver solver(P, opt);
             solver.init();
+            if (solver.real() == RealCfg::CPU) {
+                printf("no device runs the kernels; nothing to time\n");
+                return 0;
+            }
 
             std::vector<double> packed((size_t)n * (n + 1) / 2, 0.0);
             for (uint32_t i = 0; i < n; i++) packed[(size_t)i * (i + 1) / 2 + i] = 1.0;
@@ -158,8 +167,7 @@ int run(int argc, char** argv) {
         if (a == "--bench") {
             bench = true;
         } else if (a == "--real") {
-            std::string s = next();
-            opt.real = s == "float" ? RealCfg::F32 : s == "double" ? RealCfg::F64 : RealCfg::DF64;
+            opt.real = realCfgFromName(next());
         } else if (a == "--device") {
             opt.device = std::stoi(next());
         } else if (a[0] != '-') {

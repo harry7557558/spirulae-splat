@@ -310,9 +310,9 @@ struct SfmConfig {
     F(mapper.seed_homography, "seed-homography", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0,  \
       0, "", seed_homography)                                                                      \
     F(mapper.ba_real, "ba-real", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,               \
-      "float|double|df", ba_real)                                                                  \
+      "float|double|df|cpu", ba_real)                                                              \
     F(mapper.ba_real_coarse, "ba-real-coarse", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0, \
-      "float|double|df", ba_real_coarse)                                                           \
+      "float|double|df|cpu", ba_real_coarse)                                                       \
     F(mapper.ba_solver, "ba-solver", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 0,           \
       "auto|dense|cg", ba_solver)                                                                  \
     F(mapper.retri_scale, "retri-scale", CMD_AUTO | CMD_MAP, Tier::Advanced, "mapper", 0, 10, "",  \

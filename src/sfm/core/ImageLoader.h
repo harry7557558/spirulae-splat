@@ -45,13 +45,8 @@
 #include <utility>
 #include <vector>
 
+#include "sfm/core/HostMemory.h"
 #include "sfm/core/Image.h"
-
-#if defined(_WIN32)
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace sfm {
 
@@ -84,15 +79,7 @@ struct ImageLoadOptions {
 // very files being decoded. Falls back to the historical 1 GiB when the
 // platform will not say how much memory it has.
 inline size_t defaultDecodeBudget() {
-    size_t total = 0;
-#if defined(_WIN32)
-    MEMORYSTATUSEX st{};
-    st.dwLength = sizeof(st);
-    if (GlobalMemoryStatusEx(&st)) total = (size_t)st.ullTotalPhys;
-#elif defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
-    long pages = sysconf(_SC_PHYS_PAGES), page = sysconf(_SC_PAGESIZE);
-    if (pages > 0 && page > 0) total = (size_t)pages * (size_t)page;
-#endif
+    const size_t total = physicalRamBytes();
     if (total == 0) return 1ull << 30;
     return std::min<size_t>(std::max<size_t>(total / 4, 1ull << 30), 8ull << 30);
 }

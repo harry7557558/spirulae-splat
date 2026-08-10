@@ -12,6 +12,10 @@
 // or forced with SolverOptions::solver. Optionally the dense machinery is
 // kept allocated as a fallback: if CG fails to converge, the iteration is
 // re-solved densely (assembly reuse, like a rejected step).
+//
+// A device that can run none of the scalar configurations gets `RealCfg::CPU`,
+// and every entry point below delegates to bacpu::Solver -- the same LM loop
+// and the same two linear solvers, on the host.
 #pragma once
 
 #include <chrono>
@@ -25,31 +29,19 @@
 #include <memory>
 #include <vector>
 
+#include "sfm/ba/Options.h"
 #include "sfm/ba/Problem.h"
+#include "sfm/ba/SolverCpu.h"
 #include "sfm/vk/EmbeddedSpirv.h"
 #include "sfm/vk/VkContext.h"
 #include "core/Env.h"
-
-enum class RealCfg { F32, F64, DF64 };
-
-inline RealCfg realCfgFromName(const std::string& s) {
-    return s == "float" ? RealCfg::F32 : s == "df" ? RealCfg::DF64 : RealCfg::F64;
-}
-
-inline const char* realCfgName(RealCfg c) {
-    switch (c) {
-        case RealCfg::F32: return "float";
-        case RealCfg::F64: return "double";
-        default: return "df";
-    }
-}
-inline size_t realSize(RealCfg c) { return c == RealCfg::F32 ? 4 : 8; }
 
 // Can this device run the kernels compiled for `c`?
 //   double - fp64 arithmetic, and an fp64 atomic add for the reductions
 //   float  - an fp32 atomic add
 //   df     - neither; the emulated double-float pair reduces through int64
-//            atomics, which is why it is the fallback and not a last resort
+//            atomics
+//   cpu    - nothing at all; it runs on the host (sfm/ba/SolverCpu.h)
 inline bool realSupportedByDevice(RealCfg c, const VkDeviceCaps& caps) {
     switch (c) {
         case RealCfg::F64:
@@ -58,19 +50,20 @@ inline bool realSupportedByDevice(RealCfg c, const VkDeviceCaps& caps) {
             return caps.float32AtomicAdd;
         case RealCfg::DF64:
             return caps.int64Atomics;
+        case RealCfg::CPU:
+            return true;
     }
     return false;
 }
 
-// The closest thing to `want` the device can actually run, most accurate
-// first. Returns `want` unchanged when nothing fits, so device creation can
-// report the missing feature by name rather than this silently picking a
-// configuration that fails the same way.
+// The closest thing to `want` the device can run: fp64, else the host. Neither
+// fp32-based configuration is in the chain -- `float` stalls the normal
+// equations above ~1e-7 relative accuracy and `df` buys its ~48 bits with
+// CAS-loop atomics; both stay available on request (../README.md).
 inline RealCfg pickRealForDevice(RealCfg want, const VkDeviceCaps& caps) {
     if (realSupportedByDevice(want, caps)) return want;
-    for (RealCfg c : {RealCfg::F64, RealCfg::DF64, RealCfg::F32})
-        if (realSupportedByDevice(c, caps)) return c;
-    return want;
+    if (realSupportedByDevice(RealCfg::F64, caps)) return RealCfg::F64;
+    return RealCfg::CPU;
 }
 
 // Probing means an instance + an enumeration, and the mapper's scoped solves
@@ -85,90 +78,6 @@ inline const VkDeviceCaps& cachedDeviceCaps(int deviceIndex) {
         it = cache.emplace(deviceIndex, VkContext::probeCaps(deviceIndex)).first;
     return it->second;
 }
-
-inline void packReals(std::vector<uint8_t>& out, const double* v, size_t n, RealCfg cfg) {
-    out.resize(n * realSize(cfg));
-    if (cfg == RealCfg::F32) {
-        float* p = (float*)out.data();
-        for (size_t i = 0; i < n; i++) p[i] = (float)v[i];
-    } else if (cfg == RealCfg::F64) {
-        memcpy(out.data(), v, n * 8);
-    } else {
-        float* p = (float*)out.data();
-        for (size_t i = 0; i < n; i++) {
-            float hi = (float)v[i];
-            p[2 * i] = hi;
-            p[2 * i + 1] = (float)(v[i] - hi);
-        }
-    }
-}
-
-inline void unpackReals(std::vector<double>& out, const uint8_t* v, size_t n, RealCfg cfg) {
-    out.resize(n);
-    if (cfg == RealCfg::F32) {
-        const float* p = (const float*)v;
-        for (size_t i = 0; i < n; i++) out[i] = p[i];
-    } else if (cfg == RealCfg::F64) {
-        memcpy(out.data(), v, n * 8);
-    } else {
-        const float* p = (const float*)v;
-        for (size_t i = 0; i < n; i++) out[i] = (double)p[2 * i] + (double)p[2 * i + 1];
-    }
-}
-
-enum class SolverSel { Auto, Dense, CG };
-enum class CgFallback { Auto, On, Off };
-
-// Raised, before anything is allocated, when the chosen path does not fit the
-// VRAM budget and the caller asked to be told rather than to find out from the
-// driver. There is nothing below CG to fall back to -- its footprint is the
-// problem data plus a few vectors -- so the only answer is a smaller problem,
-// and only the caller knows how to make one (Mapper::jointRefine splits its
-// models into batches).
-struct BAOverBudget : std::runtime_error {
-    BAOverBudget(double need, double budget)
-        : std::runtime_error("bundle adjustment needs more device memory than the budget allows"),
-          need_mb(need), budget_mb(budget) {}
-    double need_mb, budget_mb;
-};
-
-struct SolverOptions {
-    RealCfg real = RealCfg::F64;
-    float loss_param = 1.0f;      // Huber delta / Cauchy c (unused by trivial loss)
-    int max_iters = 50;
-    double init_damping = 1e-2;
-    double rtol = 1e-6;
-    int patience = 10;
-    SolverSel solver = SolverSel::Auto;
-    double vram_budget_mb = 0;    // 0 = 90% of the device-local heap
-    // Throw BAOverBudget instead of warning and trying anyway. For a caller
-    // that can split the problem; the default keeps the old behaviour, since a
-    // caller that cannot split is better served by an attempt than by a refusal.
-    bool over_budget_throws = false;
-    int cg_max_iters = 100;       // CG iteration cap per LM step
-    double cg_tol = 0.1;          // relative residual tolerance eta
-    CgFallback cg_fallback = CgFallback::Auto;
-    // The kernels are compiled per (real, loss); `loss` selects the embedded
-    // blob "ba_<real>_<loss>". spv_path overrides it with a module from disk
-    // (a hand-compiled shader, for iteration without relinking).
-    std::string loss = "trivial";
-    std::string spv_path;
-    int device = -1;
-    bool validate = false;
-    bool verbose = true;
-    bool profile = false;
-};
-
-struct SolverStats {
-    double initial_cost = 0, final_cost = 0;
-    int iterations = 0, accepted = 0;
-    double solve_seconds = 0;
-    double vram_mb = 0;
-    const char* solver = "dense";
-    double cg_iters_total = 0;    // CG iterations summed over LM solves
-    int cg_solves = 0;
-    int cg_fallbacks = 0;         // LM iterations re-solved densely
-};
 
 class BundleSolver {
     enum class LinSolve { DenseObs, DensePair, CG };
@@ -200,13 +109,11 @@ public:
             prof_t0 = t1;
             return dt;
         };
-        // Not every device runs every scalar type, and the gap does not follow
-        // "bigger GPU, more features": Intel's Xe iGPU has int64 buffer atomics
-        // but no fp64 and no fp32 atomic add, so `df` is the only configuration
-        // it can run. Fall back rather than fail -- an unsupported request used
-        // to surface as VK_ERROR_FEATURE_NOT_PRESENT from vkCreateDevice, which
-        // killed the run at its first bundle adjustment.
-        {
+        // Fall back rather than fail: an unsupported request used to surface as
+        // VK_ERROR_FEATURE_NOT_PRESENT from vkCreateDevice, which killed the
+        // run at its first bundle adjustment. No AMD part has an fp64 buffer
+        // atomic add, so this is the ordinary path, not a corner.
+        if (opt_.real != RealCfg::CPU) {
             const VkDeviceCaps& caps = ctx_.initialized()
                                            ? ctx_.caps()
                                            : cachedDeviceCaps(opt_.device);
@@ -229,6 +136,11 @@ public:
                             realCfgName(opt_.real), realCfgName(real));
                 opt_.real = real;
             }
+        }
+        if (opt_.real == RealCfg::CPU) {
+            cpu_.reset(new bacpu::Solver(P_, opt_));
+            cpu_->init();
+            return;
         }
         VkContextOptions vopt;
         vopt.needFloat64 = opt_.real == RealCfg::F64;
@@ -446,7 +358,10 @@ public:
                     P_.n_dim, stats_.solver, stats_.vram_mb);
     }
 
+    // The host solver works on the problem's own parameter vectors, so upload
+    // and download are the identity there.
     void uploadParams() {
+        if (cpu_) return;
         std::vector<uint8_t> poses, intr, points;
         packReals(poses, P_.poses.data(), P_.poses.size(), opt_.real);
         packReals(intr, P_.intr.data(), P_.intr.size(), opt_.real);
@@ -460,6 +375,7 @@ public:
     }
 
     void downloadParams() {
+        if (cpu_) return;
         std::vector<uint8_t> tmp(std::max({bPoses_.size, bIntr_.size, bPoints_.size}));
         ctx_.download(bPoses_, tmp.data(), P_.poses.size() * realSize(opt_.real));
         unpackReals(P_.poses, tmp.data(), P_.poses.size(), opt_.real);
@@ -470,6 +386,7 @@ public:
     }
 
     double computeCost() {
+        if (cpu_) return cpu_->computeCost();
         VkCommandBuffer cb = ctx_.begin();
         recordCost(cb);
         ctx_.barrier(cb);
@@ -479,6 +396,7 @@ public:
     }
 
     void solve() {
+        if (cpu_) return cpu_->solve();
         auto t0 = std::chrono::high_resolution_clock::now();
         double damping = opt_.init_damping;
         double cost = computeCost();
@@ -580,26 +498,41 @@ public:
         ctx_.printProfile();
     }
 
-    const SolverStats& stats() const { return stats_; }
+    const SolverStats& stats() const { return cpu_ ? cpu_->stats() : stats_; }
     // The scalar type actually in use, which init() may have stepped down from
     // what SolverOptions asked for (see pickRealForDevice). Anything that packs
     // or unpacks solver buffers from outside has to ask -- packing `double`
     // into buffers a `df` kernel reads gives silent garbage, not an error.
     RealCfg real() const { return opt_.real; }
+    // GPU-path handles; the host solver has no context and no device buffers.
     VkContext& ctx() { return ctx_; }
     GpuBuffer& bufS() { return bS_; }
     GpuBuffer& bufG() { return bG_; }
 
     // debug: run one full assembly (no factor/solve) so S and g can be dumped
     void debugAssemble(float damping) {
+        if (cpu_) return cpu_->assembleOnly(damping);
         VkCommandBuffer cb = ctx_.begin();
         recordAssembly(cb, damping, false, densePath_);
         ctx_.submit(cb);
     }
 
+    // debug: the assembled S (packed lower triangle) and g, from whichever path
+    // ran, as doubles
+    std::vector<double> debugPackedS() {
+        if (cpu_) return cpu_->packedS();
+        std::vector<uint8_t> raw(bS_.size);
+        ctx_.download(bS_, raw.data(), bS_.size);
+        std::vector<double> v;
+        unpackReals(v, raw.data(), (uint64_t)P_.n_dim * (P_.n_dim + 1) / 2, opt_.real);
+        return v;
+    }
+    std::vector<double> debugG() { return cpu_ ? cpu_->gradient() : downloadG(); }
+
     // debug: solve the same assembly with both paths and report the step
     // difference (requires the cg+fallback configuration)
     double debugCompareStep(float damping) {
+        if (cpu_) return cpu_->compareStep(damping);
         if (!useCG_ || !haveFallback_)
             throw std::runtime_error("step comparison needs --solver cg + fallback on");
         VkCommandBuffer cb = ctx_.begin();
@@ -1043,6 +976,7 @@ private:
 
     BAProblem& P_;
     SolverOptions opt_;
+    std::unique_ptr<bacpu::Solver> cpu_;  // non-null when running on the host
     const char* schurSuffix_ = "_c";  // "_c"/"_w" dof tier for the Schur kernels
     SolverStats stats_;
     std::unique_ptr<VkContext> owned_;      // null when running on a shared context

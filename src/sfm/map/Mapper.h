@@ -320,7 +320,8 @@ struct MapperOptions {
     std::string ba_real_coarse = "double";
     int device = -1;
     // Host worker threads for the passes that fan out over points
-    // (filterPoints). 0 = hardware_concurrency.
+    // (filterPoints) and for a bundle adjustment that runs on the host.
+    // 0 = hardware_concurrency.
     int threads = 0;
     bool verbose = true;
 };
@@ -1235,6 +1236,7 @@ public:
         BundleOptions bo;
         bo.real = baReal(coarse);
         bo.device = opt_.device;
+        bo.threads = opt_.threads;
         bo.verbose = false;
         bo.loss = opt_.ba_loss;
         bo.loss_param = (float)(opt_.ba_loss_param * medianPixelScale());
@@ -3172,6 +3174,7 @@ private:
             BundleOptions bo;
             bo.real = realCfgFromName(opt_.ba_real);
             bo.device = opt_.device;
+            bo.threads = opt_.threads;
             bo.verbose = false;
             bo.loss = opt_.ba_loss;
             bo.loss_param = (float)(opt_.ba_loss_param * medianPixelScale());

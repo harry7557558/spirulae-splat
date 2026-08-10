@@ -1822,22 +1822,6 @@ static int cmdAuto(int argc, char** argv) {
         if (fs::is_directory(sibling)) cfg.mask_dir = sibling.string();
     }
 
-    // The mapper's bundle adjustment needs one of three scalar configurations,
-    // each with its own device requirement (see pickRealForDevice). A device
-    // that supports none of them -- Intel's UHD 750 has neither fp64 nor int64
-    // nor a float32 atomic add -- can extract and match perfectly well and then
-    // fail at the first solve, which is a poor way to spend a minute of someone's
-    // time. Say so before any of the work starts.
-    {
-        const VkDeviceCaps caps = VkContext::probeCaps(cfg.device);
-        if (!realSupportedByDevice(RealCfg::F64, caps) &&
-            !realSupportedByDevice(RealCfg::DF64, caps) &&
-            !realSupportedByDevice(RealCfg::F32, caps)) {
-            L::fail(Tag::Run, M::run_device_cannot_solve);
-            return 1;
-        }
-    }
-
     fs::path ws(workspace);
     fs::create_directories(ws);
     const fs::path featdir = ws / "features";

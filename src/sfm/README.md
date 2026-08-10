@@ -122,22 +122,30 @@ into an unattributable `VK_ERROR_FEATURE_NOT_PRESENT`:
 | `double` | fp64 arithmetic + fp64 and fp32 buffer atomic add | NVIDIA |
 | `df` | `shaderInt64` + int64 buffer atomics | AMD (both ICDs), Intel Xe/RPL-S, llvmpipe |
 | `float` | fp32 buffer atomic add | NVIDIA, AMD |
+| `cpu` | nothing: it runs on the host (`sfm/ba/SolverCpu.h`) | anything |
 
-`BundleSolver::init` steps down to the most accurate configuration the device
-can run and says so once; ask the solver what it settled on with
-`solver.real()` rather than reading `SolverOptions::real` back, because packing
-`double` into buffers a `df` kernel reads is silent garbage, not an error. Note
-that no AMD part here has an fp64 buffer atomic add, so `double` falls back to
-`df` on all of them — accurate to ~48 bits, which is enough for every real
-capture (0.01 px of reprojection against fp64) but not for the two deliberately
-ill-conditioned convergence checks in `sfm_map_test`, which report rather than
-assert when fp64 is missing.
+`BundleSolver::init` steps down and says so once; ask the solver what it
+settled on with `solver.real()` rather than reading `SolverOptions::real` back,
+because packing `double` into buffers a `df` kernel reads is silent garbage,
+not an error. The chain is **`double` -> `cpu`**: neither fp32-based
+configuration is in it, because neither is a better default than a host solver
+that is fp64 throughout — `float` stalls the normal equations above ~1e-7
+relative accuracy (above), and `df` buys its ~48-bit accuracy with CAS-loop
+atomics and emulated transcendentals. Both remain available on request, and
+`df` is the one to ask for on a big GPU without fp64 atomics: it is accurate
+enough for every real capture (0.01 px of reprojection against fp64), though
+not for the two deliberately ill-conditioned convergence checks in
+`sfm_map_test`, which report rather than assert when fp64 is missing. No AMD
+part here has an fp64 buffer atomic add, so all of them take the host path
+unless `--ba-real df` says otherwise.
 
 Two devices deserve naming:
 
 - **Intel UHD 750 (Gen12, RPL-S desktop)** has *none* of the three: no fp64, no
   int64 atomics, no fp32 atomic add. It extracts and matches perfectly well and
-  then cannot solve, so `sfm auto` refuses up front rather than a minute in.
+  reaches the solver with nothing to run there, which is what the host solver
+  exists for; a reconstruction on such a device costs roughly twice the
+  bundle-adjustment time of an fp64 GPU and nothing else changes.
   It also lacks `VK_KHR_shader_integer_dot_product`, which is what the second
   build of the matcher (`match_nodot`, same integer result without DP4A) is
   for; `SS_SFM_NO_DOT4=1` forces that path on a device that has DP4A.
@@ -169,7 +177,8 @@ geometry/    Essential, Fundamental, Homography, P3P, AbsolutePose,
                Triangulation, TwoView, LinAlg
 optim/       Ransac   LO-RANSAC with MSAC scoring
 ba/          Problem (model registry + problem layout), Solver (LM, dense
-               Cholesky / implicit-Schur PCG), README.md
+               Cholesky / implicit-Schur PCG), SolverCpu (the same two on the
+               host, for devices that run neither fp64 nor df), README.md
 map/         Mapper, Bundle, CorrespondenceGraph, Merge, Profile,
                ModelOps (the passes over a *set* of models: merge validator,
                  audit, split, fold cut, prune -- shared, owned by neither)
@@ -222,6 +231,7 @@ spirula sfm match   feats/ -o matches.bin
 spirula sfm map     matches.bin feats/ -o sparse/ --images IMAGES/
 spirula sfm merge   sparse/ -o merged/
 spirula sfm ba      problem.txt --real df       # solver benchmark on a BAL problem
+spirula sfm ba      sparse/0 --real cpu        # ... the same solve, on the host
 ```
 
 `spirula sfm --help` lists the commands, `spirula sfm <command> --help` (or

@@ -57,7 +57,7 @@ void printBaHelp(FILE* out) {
     // language allows.
     struct Row { const char* flag; const char* def; const spirula::i18n::Msg* help; };
     static const Row kRows[] = {
-        {"--real {float|double|df}", "double", &H::ba_opt_real},
+        {"--real {float|double|df|cpu}", "double", &H::ba_opt_real},
         {"--loss {trivial|huber|cauchy}", "trivial", &H::ba_opt_loss},
         {"--loss-param X", "1", &H::ba_opt_loss_param},
         {"--model {snavely|snavely_f}", "snavely", &H::ba_opt_model},
@@ -103,10 +103,8 @@ int cmdBa(int argc, char** argv) {
         std::string a = argv[i];
         auto next = [&]() { return std::string(argv[++i]); };
         if (a == "--help" || a == "-h") { printBaHelp(stdout); return 0; }
-        else if (a == "--real") {
-            std::string r = next();
-            opt.real = r == "float" ? RealCfg::F32 : r == "df" ? RealCfg::DF64 : RealCfg::F64;
-        } else if (a == "--loss") { loss = next(); loss_given = true; }
+        else if (a == "--real") opt.real = realCfgFromName(next());
+        else if (a == "--loss") { loss = next(); loss_given = true; }
         else if (a == "--spv-path") opt.spv_path = next();
         else if (a == "--loss-param") { opt.loss_param = std::stof(next()); loss_given = true; }
         else if (a == "-o" || a == "--output") out_dir = next();
@@ -202,15 +200,11 @@ int cmdBa(int argc, char** argv) {
 
     if (spirula::env("SFM_DUMP_SG")) {
         solver.debugAssemble(atof(env_or("SFM_DUMP_SG_LAMBDA", "0.01")));
-        std::vector<uint8_t> raw(solver.bufS().size);
-        std::vector<double> v;
-        solver.ctx().download(solver.bufS(), raw.data(), solver.bufS().size);
-        unpackReals(v, raw.data(), (uint64_t)P.n_dim * (P.n_dim + 1) / 2, solver.real());
         std::string base = spirula::env("SFM_DUMP_SG");
+        std::vector<double> v = solver.debugPackedS();
         std::ofstream fs(base + "_S.bin", std::ios::binary);
         fs.write((const char*)v.data(), v.size() * 8);
-        solver.ctx().download(solver.bufG(), raw.data(), solver.bufG().size);
-        unpackReals(v, raw.data(), P.n_dim, solver.real());
+        v = solver.debugG();
         std::ofstream fg(base + "_g.bin", std::ios::binary);
         fg.write((const char*)v.data(), v.size() * 8);
         return 0;
