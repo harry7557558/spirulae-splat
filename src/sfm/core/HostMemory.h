@@ -5,6 +5,9 @@
 #include <cstddef>
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN   // rpcndr.h's `#define small char` reaches far from here
+#endif
 #include <windows.h>
 #else
 #include <unistd.h>

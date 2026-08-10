@@ -303,7 +303,7 @@ Reference referenceSolve(const BAProblem& P, double lambda, double lossParam,
     std::vector<double> V(9 * (size_t)P.num_points, 0.0), bp(3 * (size_t)P.num_points, 0.0);
     std::vector<double> Wp((size_t)P.num_points * n * 3, 0.0);
 
-    bacpu::withLoss(loss, [&](auto L) {
+    bacpu::withLoss(loss, [&]([[maybe_unused]] auto L) {  // only decltype(L) is read
         for (uint32_t o = 0; o < P.num_obs; o++) {
             const uint32_t img = P.obs_image[o], pt = P.obs_point[o];
             const BAProblem::Group& gr = P.groups[P.image_group[img]];
