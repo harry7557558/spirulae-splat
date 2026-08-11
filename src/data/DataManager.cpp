@@ -495,6 +495,7 @@ void DecodedBatch::build_views() {
     // masked dataset's mask ends up supervising an unmasked one.
     const TorchTensorView none{0, 0, {}};
     input_intrins_view = input_dist_coeffs_view = none;
+    input_source_models_view = input_source_params_view = none;
     viewmats_view = intrins_view = dist_coeffs_view = none;
     rgb_view = mask_view = depth_view = normal_view = none;
     // Camera-param views use the POST-split count.
@@ -1305,19 +1306,20 @@ void DataManagerImpl::allocate_batch(
     // Per-INPUT intrins / dist_coeffs (needed by the wide warp kernel for
     // fisheye / equisolid). Allocate only when K > 1 and the source arrays
     // are present.
-    if ((K > 1 || g.redistort) && !_input_intrins.empty()) {
+    const bool want_input = (K > 1 || g.redistort) && !_input_intrins.empty();
+    if (want_input) {
         b.input_intrins.assign((size_t)B * 4, 0.0f);
         b.input_dist_coeffs.assign((size_t)B * kCameraDistortionParams, 0.0f);
-        if (g.redistort) {
-            b.input_source_models.assign((size_t)B, -1);
-            b.input_source_params.assign((size_t)B * 16, 0.0f);
-        } else {
-            b.input_source_models.clear();
-            b.input_source_params.clear();
-        }
     } else {
         b.input_intrins.clear();
         b.input_dist_coeffs.clear();
+    }
+    if (want_input && g.redistort) {
+        b.input_source_models.assign((size_t)B, -1);
+        b.input_source_params.assign((size_t)B * 16, 0.0f);
+    } else {
+        b.input_source_models.clear();
+        b.input_source_params.clear();
     }
 
     // RGB: still allocated at INPUT shape -- the warp kernel reads the byte
@@ -1511,10 +1513,11 @@ void DataManagerImpl::build_train_schedule_locked() {
         std::shuffle(g.indices.begin(), g.indices.end(), _rng);
 
     // Full B-image chunks become their own single-sub-batch (homogeneous)
-    // steps. Sub-B remainders are collected for cross-group packing; warp
-    // groups (K > 1) are never packed with other resolutions (the engine's
-    // heterogeneous accumulation path is non-warp only), so their remainder
-    // is emitted as its own step.
+    // steps. Sub-B remainders are collected for cross-group packing; groups
+    // that need the warp path -- K > 1, and K == 1 re-distort -- are never
+    // packed with other resolutions (the engine's heterogeneous accumulation
+    // path is non-warp only, and would take their images unresampled), so
+    // their remainder is emitted as its own step.
     std::vector<SubBatchSpec> remainders;
     for (size_t gi = 0; gi < _train_groups.size(); ++gi) {
         const auto& idx = _train_groups[gi].indices;
@@ -1534,7 +1537,7 @@ void DataManagerImpl::build_train_schedule_locked() {
             s.group = (int32_t)gi;
             s.picks.reserve(n - off);
             for (size_t t = off; t < n; ++t) s.picks.push_back(idx[t]);
-            if (_train_groups[gi].K > 1)
+            if (_train_groups[gi].K > 1 || _train_groups[gi].redistort)
                 _train_schedule.push_back(StepSpec{ std::move(s) });
             else
                 remainders.push_back(std::move(s));

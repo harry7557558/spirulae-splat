@@ -198,10 +198,11 @@ std::map<std::string, float> engine_train_step_managed(
     hsubs.reserve(stp.subs.size());
     for (size_t i = 0; i < stp.subs.size(); ++i) {
         const DecodedBatch& b = *stp.subs[i];
-        if (b.K > 1) {
+        if (b.K > 1 || !b.input_source_models.empty()) {
             throw std::runtime_error(
-                "engine_train_step_managed: warp (K>1) sub-batch inside a "
-                "multi-sub-batch step — the scheduler must never pack these.");
+                "engine_train_step_managed: warp sub-batch (K>1 or re-distort) "
+                "inside a multi-sub-batch step — the scheduler must never pack "
+                "these.");
         }
         build_bg_idx(b, bg_bufs[i]);
 

@@ -173,6 +173,10 @@ void set_training_data_warped(
     const bool redistort_only = (K == 1 && d_src_models != nullptr);
 
     CameraModelType cm = cmt(input_model_name);
+    if (!d_intrins && cm != CameraModelType::EQUIRECTANGULAR)
+        throw std::runtime_error(
+            "set_training_data_warped: the warp path needs per-input "
+            "intrinsics, which this batch did not carry");
     if (redistort_only) {
         launch_redistort_byte_to_float(
             input_model_name, input_distortion, d_intrins, d_dist,
