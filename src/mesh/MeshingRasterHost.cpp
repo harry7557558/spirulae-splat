@@ -94,6 +94,7 @@ struct RenderContext {
     std::vector<int> Ws, Hs;     // per-camera image size
     int Wmax = 0, Hmax = 0;      // max over cameras (scratch-buffer sizing)
     std::string model;
+    std::string distortion;
 
     // raw (un-activated) splat params on device
     DBuf<float> d_means;
@@ -105,7 +106,7 @@ struct RenderContext {
     // camera intrinsics on device (all cameras)
     DBuf<float> d_viewmats;  // [C*16]
     DBuf<float> d_intrins;   // [C*4]
-    DBuf<float> d_dist;      // [C*10]
+    DBuf<float> d_dist;      // [C*8]
 
     DeviceVector<float> radii;   // pool-backed scratch, size N
 
@@ -137,7 +138,8 @@ RenderContext* render_context_create(
     const float* logit_opac, const float* features_dc, int num_splats,
     const float* viewmats, const float* intrins, const float* dist,
     int num_cameras, const int* widths, const int* heights,
-    const std::string& camera_model, int carve_k, bool verbose
+    const std::string& camera_model, const std::string& distortion,
+    int carve_k, bool verbose
 ) {
     RenderContext* ctx = new RenderContext();
     ctx->verbose = verbose;
@@ -150,6 +152,7 @@ RenderContext* render_context_create(
         ctx->Hmax = std::max(ctx->Hmax, ctx->Hs[c]);
     }
     ctx->model = camera_model;
+    ctx->distortion = distortion;
     ctx->carve_k = (carve_k < 1) ? 1 : carve_k;
 
     const size_t N = (size_t)num_splats;
@@ -161,7 +164,7 @@ RenderContext* render_context_create(
 
     ctx->d_viewmats.alloc_copy(viewmats, (size_t)num_cameras * 16);
     ctx->d_intrins.alloc_copy(intrins, (size_t)num_cameras * 4);
-    ctx->d_dist.alloc_copy(dist, (size_t)num_cameras * 10);  // null -> zeros
+    ctx->d_dist.alloc_copy(dist, (size_t)num_cameras * kCameraDistortionParams);  // null -> zeros
 
     ctx->radii.resize(PoolSlot::MeshingRenderRadii, N);
     return ctx;
@@ -179,14 +182,15 @@ static void render_one(RenderContext* ctx, int cam_idx,
     // per-camera views (single image, I=1)
     TorchTensorView viewmats = tv(ctx->d_viewmats.get() + (size_t)cam_idx * 16, {1, 4, 4});
     TorchTensorView intrins  = tv(ctx->d_intrins.get()  + (size_t)cam_idx * 4,  {1, 4});
-    TorchTensorView dist     = tv(ctx->d_dist.get()     + (size_t)cam_idx * 10, {1, 10});
+    TorchTensorView dist     = tv(ctx->d_dist.get() + (size_t)cam_idx * kCameraDistortionParams,
+                                  {1, kCameraDistortionParams});
 
     ctx->radii.zero();  // projection accumulates via atomicMax
 
     // --- projection (3DGUT, sh_degree = 0 -> DC color only) ---
     auto [aabb_2d, depths_2d, splats_s] = projection_3dgut_forward(
         (int64_t)ctx->N, /*max_sh_degree=*/0, in_splats,
-        viewmats, intrins, W, H, ctx->model, dist,
+        viewmats, intrins, W, H, ctx->model, ctx->distortion, dist,
         ctx->radii,
         std::nullopt, std::nullopt, /*num_sh_buffer=*/0, /*sh_value_bits=*/32,
         /*sh_bounds_stride=*/0);
@@ -203,7 +207,7 @@ static void render_one(RenderContext* ctx, int cam_idx,
     // --- moment (+ rgb) rasterization ---
     rasterize_moments_3dgut_fwd(
         (int64_t)ctx->N, in_splats, splats_s, DeviceVector<int32_t>(),
-        viewmats, intrins, ctx->model, dist,
+        viewmats, intrins, ctx->model, ctx->distortion, dist,
         aabb_2d, W, H, tile_offsets, flatten_ids,
         d_moments, d_rgb);
 }
@@ -241,6 +245,7 @@ void render_evaluate_occupancy(
     }
 
     const int cm = (int)cmt(ctx->model);
+    const int cd = (int)cdt(ctx->distortion);
     for (int ci = 0; ci < num_cams; ++ci) {
         int cam = cam_indices[ci];
         render_one(ctx, cam, d_moments, nullptr);
@@ -249,7 +254,7 @@ void render_evaluate_occupancy(
             d_xyz, n,
             ctx->d_viewmats.get() + (size_t)cam * 16,
             ctx->d_intrins.get() + (size_t)cam * 4,
-            ctx->d_dist.get() + (size_t)cam * 10, cm,
+            ctx->d_dist.get() + (size_t)cam * kCameraDistortionParams, cm, cd,
             d_moments, ctx->Ws[cam], ctx->Hs[cam], k,
             d_occ_kmin, d_cnt);
     }
@@ -275,6 +280,7 @@ void render_evaluate_color(
     backend::memset_sync(d_den.get(), 0, (size_t)n * sizeof(float));
 
     const int cm = (int)cmt(ctx->model);
+    const int cd = (int)cdt(ctx->distortion);
     for (int ci = 0; ci < num_cams; ++ci) {
         int cam = cam_indices[ci];
         render_one(ctx, cam, d_moments, d_rgbimg);
@@ -283,7 +289,7 @@ void render_evaluate_color(
             d_xyz, n,
             ctx->d_viewmats.get() + (size_t)cam * 16,
             ctx->d_intrins.get() + (size_t)cam * 4,
-            ctx->d_dist.get() + (size_t)cam * 10, cm,
+            ctx->d_dist.get() + (size_t)cam * kCameraDistortionParams, cm, cd,
             d_moments, d_rgbimg, ctx->Ws[cam], ctx->Hs[cam],
             d_num, d_den);
     }
@@ -307,6 +313,7 @@ void render_evaluate_view_density(
     backend::memset_sync(d_dens, 0, (size_t)n * sizeof(float));
 
     const int cm = (int)cmt(ctx->model);
+    const int cd = (int)cdt(ctx->distortion);
     for (int ci = 0; ci < num_cams; ++ci) {
         int cam = cam_indices[ci];
         render_one(ctx, cam, d_moments, nullptr);
@@ -315,7 +322,7 @@ void render_evaluate_view_density(
             d_xyz, n,
             ctx->d_viewmats.get() + (size_t)cam * 16,
             ctx->d_intrins.get() + (size_t)cam * 4,
-            ctx->d_dist.get() + (size_t)cam * 10, cm,
+            ctx->d_dist.get() + (size_t)cam * kCameraDistortionParams, cm, cd,
             d_moments, ctx->Ws[cam], ctx->Hs[cam],
             d_dens);
     }
@@ -393,7 +400,7 @@ void render_cull_unseen_vertices(
 
     launch_cull(d_verts, nv, d_faces, nf,
                 ctx->d_viewmats.get(), ctx->d_intrins.get(), ctx->d_dist.get(),
-                d_W, d_H, (int)cmt(ctx->model), ctx->C,
+                d_W, d_H, (int)cmt(ctx->model), (int)cdt(ctx->distortion), ctx->C,
                 d_leafMin, d_leafMax, d_internal, d_nodeAABB, d_vis);
     backend::device_synchronize();
 

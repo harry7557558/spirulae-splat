@@ -1,5 +1,7 @@
 #include "kernels/projection/ProjectionBwdQuantGrad.cuh"
 
+#include "kernels/projection/CameraVariants.cuh"
+
 #include <core/Common.cuh>
 #include <optional>
 
@@ -12,11 +14,13 @@ namespace cg = cooperative_groups;
 #include <cub/cub.cuh>
 
 
-// Thin per-(primitive, camera_model) launcher, defined by the codegen'd
-// instantiations in ins/*.cu (extern here). Dispatches VALUE_BITS internally.
+// Thin per-(primitive, camera model, distortion tier) launcher, defined by the
+// codegen'd instantiations in ins/*.cu (extern here). Dispatches VALUE_BITS
+// internally.
 template<
     typename SplatPrimitive,
-    CameraModelType camera_model
+    CameraModelType camera_model,
+    CameraDistortionType distortion
 >
 void projection_bwd_quantgrad_kernel_wrapper(
     cudaStream_t stream,
@@ -74,6 +78,7 @@ static inline void launch_projection_bwd_quantgrad(
     const uint32_t image_width,
     const uint32_t image_height,
     const CameraModelType camera_model,
+    const CameraDistortionType distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -141,16 +146,13 @@ static inline void launch_projection_bwd_quantgrad(
             v_splats_world, v_splats_screen, gq, \
             sh_value_packed, sh_value_bounds, sh_value_bounds_stride, sh_value_bits )
 
-    if (camera_model == CameraModelType::PINHOLE)
-        projection_bwd_quantgrad_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::FISHEYE)
-        projection_bwd_quantgrad_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::EQUISOLID)
-        projection_bwd_quantgrad_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::EQUIRECTANGULAR)
-        projection_bwd_quantgrad_kernel_wrapper<SplatPrimitive, CameraModelType::EQUIRECTANGULAR> _LAUNCH_ARGS;
-    else
-        throw std::runtime_error("Unsupported camera model");
+    #define _DISPATCH(M, D) \
+        if (camera_model == CameraModelType::M && distortion == CameraDistortionType::D) \
+            projection_bwd_quantgrad_kernel_wrapper<SplatPrimitive, \
+                CameraModelType::M, CameraDistortionType::D> _LAUNCH_ARGS; else
+    SS_FOR_EACH_CAMERA_VARIANT(_DISPATCH)
+        throw std::runtime_error("Unsupported camera model / distortion tier");
+    #undef _DISPATCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
     #undef _LAUNCH_ARGS
 }
@@ -168,6 +170,7 @@ static inline void _projection_bwd_quantgrad_dispatch(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -188,7 +191,7 @@ static inline void _projection_bwd_quantgrad_dispatch(
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_bwd_quantgrad<PrimT<n>>( \
             num_splats, num_sh_buffer, splats_world, viewmats, intrins, \
-            image_width, image_height, cmt(camera_model), dist_coeffs, \
+            image_width, image_height, cmt(camera_model), cdt(distortion), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, v_splats_world, \
             gq, vp, vb, sh_value_bounds_stride, sh_value_bits);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
@@ -206,6 +209,7 @@ void projection_3dgs_backward_quantgrad(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -221,7 +225,7 @@ void projection_3dgs_backward_quantgrad(
 ) {
     _projection_bwd_quantgrad_dispatch<Vanilla3DGS>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins,
-        image_width, image_height, camera_model, dist_coeffs,
+        image_width, image_height, camera_model, distortion, dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, v_splats_world,
         gq, sh_value_packed, sh_value_bounds, num_sh_buffer, sh_value_bits, sh_value_bounds_stride);
 }
@@ -237,6 +241,7 @@ void projection_mip_backward_quantgrad(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -252,7 +257,7 @@ void projection_mip_backward_quantgrad(
 ) {
     _projection_bwd_quantgrad_dispatch<MipSplatting>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins,
-        image_width, image_height, camera_model, dist_coeffs,
+        image_width, image_height, camera_model, distortion, dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, v_splats_world,
         gq, sh_value_packed, sh_value_bounds, num_sh_buffer, sh_value_bits, sh_value_bounds_stride);
 }
@@ -268,6 +273,7 @@ void projection_3dgut_backward_quantgrad(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -283,7 +289,7 @@ void projection_3dgut_backward_quantgrad(
 ) {
     _projection_bwd_quantgrad_dispatch<Vanilla3DGUT>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins,
-        image_width, image_height, camera_model, dist_coeffs,
+        image_width, image_height, camera_model, distortion, dist_coeffs,
         camera_ids, gaussian_ids, aabb, v_splats_screen, v_splats_world,
         gq, sh_value_packed, sh_value_bounds, num_sh_buffer, sh_value_bits, sh_value_bounds_stride);
 }

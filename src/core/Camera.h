@@ -8,9 +8,9 @@
 //
 // Two constraints are not visible from the declarations:
 //
-//   - The model is ONE enum for the whole batch, not per camera, because that
-//     is how the projection / rasterization kernels dispatch. Mixed models in
-//     one batch have to be split into separate tables.
+//   - The model AND the distortion tier are ONE enum each for the whole batch,
+//     not per camera, because that is how the projection / rasterization
+//     kernels dispatch. Mixed cameras have to be split into separate tables.
 //
 //   - Width / height live host-side. Only host code reads them (launch
 //     dimensions, image-size bookkeeping), so keeping them off device avoids
@@ -24,17 +24,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-
-// Distortion parameter layout per camera. MUST match the projection/raster
-// kernels.
-//
-//   index 0..3  : k1, k2, p1, p2     (radial + tangential)
-//   index 4..7  : k3, k4, k5, k6     (extended radial — OpenCV fisheye etc.)
-//   index 8..9  : sx1, sy1           (thin-prism)
-//
-// Cameras with fewer parameters pad the tail with zero.
-inline constexpr int kCameraDistortionParams = 10;
 
 
 // COLMAP / NerfStudio camera-model string -> CameraModelType.
@@ -55,6 +44,16 @@ inline CameraModelType camera_model_from_name(const std::string& name) {
     if (name == "EQUISOLID")          return CameraModelType::EQUISOLID;
     if (name == "EQUIRECTANGULAR")    return CameraModelType::EQUIRECTANGULAR;
     return (CameraModelType)-1;
+}
+
+inline const char* camera_distortion_to_string(CameraDistortionType d) {
+    switch (d) {
+        case CameraDistortionType::None:      return "NONE";
+        case CameraDistortionType::OpenCV:    return "OPENCV";
+        case CameraDistortionType::ThinPrism: return "THIN_PRISM";
+        case CameraDistortionType::Rational:  return "RATIONAL";
+        default:                              return "UNKNOWN";
+    }
 }
 
 inline const char* camera_model_to_string(CameraModelType m) {
@@ -82,10 +81,11 @@ public:
             int32_t width,
             int32_t height,
             CameraModelType model,
+            CameraDistortionType distortion,
             const TorchTensorView& viewmats,     // host or device, [N, 4, 4]
             const TorchTensorView& intrins,      // host or device, [N, 4]
-            const TorchTensorView& dist_coeffs)  // host or device, [N, 10]
-        : _num(num), _model(model)
+            const TorchTensorView& dist_coeffs)  // host or device, [N, 8]
+        : _num(num), _model(model), _distortion(distortion)
     {
         _validate_shape("viewmats",   viewmats,    {num, 4, 4});
         _validate_shape("intrins",    intrins,     {num, 4});
@@ -104,12 +104,13 @@ public:
     Cameras(const std::string& key_prefix,
             int64_t num,
             CameraModelType model,
+            CameraDistortionType distortion,
             const TorchTensorView& viewmats,
             const TorchTensorView& intrins,
             const TorchTensorView& dist_coeffs,
             std::vector<int32_t> widths,
             std::vector<int32_t> heights)
-        : _num(num), _model(model),
+        : _num(num), _model(model), _distortion(distortion),
           _widths(std::move(widths)), _heights(std::move(heights))
     {
         _validate_shape("viewmats",   viewmats,    {num, 4, 4});
@@ -130,12 +131,13 @@ public:
     // is the caller's responsibility.
     Cameras(int64_t num,
             CameraModelType model,
+            CameraDistortionType distortion,
             DeviceTensor2D<float4> viewmats,
             DeviceVector<float4>   intrins,
             DeviceTensor2D<float>  dist_coeffs,
             std::vector<int32_t>   widths,
             std::vector<int32_t>   heights)
-        : _num(num), _model(model),
+        : _num(num), _model(model), _distortion(distortion),
           _viewmats(viewmats), _intrins(intrins), _dist_coeffs(dist_coeffs),
           _widths(std::move(widths)), _heights(std::move(heights))
     {
@@ -153,9 +155,10 @@ public:
 
     // ---- Read-only accessors ----------------------------------------------
 
-    int64_t          num()   const { return _num; }
-    CameraModelType  model() const { return _model; }
-    bool             empty() const { return _num == 0; }
+    int64_t              num()        const { return _num; }
+    CameraModelType      model()      const { return _model; }
+    CameraDistortionType distortion() const { return _distortion; }
+    bool                 empty()      const { return _num == 0; }
 
     const DeviceTensor2D<float4>& viewmats()    const { return _viewmats; }
     const DeviceVector<float4>&   intrins()     const { return _intrins; }
@@ -174,12 +177,13 @@ public:
 
 private:
 
-    int64_t          _num   = 0;
-    CameraModelType  _model = (CameraModelType)-1;
+    int64_t              _num        = 0;
+    CameraModelType      _model      = (CameraModelType)-1;
+    CameraDistortionType _distortion = CameraDistortionType::None;
 
     DeviceTensor2D<float4> _viewmats;     // [N, 4]    -- each row is a float4
     DeviceVector<float4>   _intrins;      // [N]       -- (fx, fy, cx, cy)
-    DeviceTensor2D<float>  _dist_coeffs;  // [N, 10]
+    DeviceTensor2D<float>  _dist_coeffs;  // [N, 8]
     std::vector<int32_t>   _widths;       // size N, host-side
     std::vector<int32_t>   _heights;      // size N, host-side
 

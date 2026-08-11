@@ -358,11 +358,14 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
 
     out.viewmats.assign(n_post * 16, 0.f);
     out.intrins.assign(n_post * 4, 0.f);
-    out.dist_coeffs.assign(n_post * 10, 0.f);
+    out.dist_coeffs.assign(n_post * kCameraDistortionParams, 0.f);
     out.c2w_flip.assign(n_post * 12, 0.f);
     out.post_widths.assign(n_post, 0);
     out.post_heights.assign(n_post, 0);
     out.post_models.assign(n_post, PINHOLE_V);
+    // Cubemap faces are canonical pinhole with zero coefficients; only a K == 1
+    // camera keeps the tier the parser chose.
+    out.post_distortions.assign(n_post, (int32_t)CameraDistortionType::None);
 
     // POST-split c2w staging (double).
     std::vector<double> post_c2w(n_post * 12);
@@ -393,8 +396,12 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
                 std::copy(&ds.intrins[i*4], &ds.intrins[i*4] + 4,
                           &out.intrins[off*4]);
             }
-            std::copy(&ds.dist_coeffs[i*10], &ds.dist_coeffs[i*10] + 10,
-                      &out.dist_coeffs[off*10]);
+            if (ds.camera_models[i] != EQUIRECT_V) {
+                std::copy(&ds.dist_coeffs[i*kCameraDistortionParams],
+                          &ds.dist_coeffs[i*kCameraDistortionParams] + kCameraDistortionParams,
+                          &out.dist_coeffs[off*kCameraDistortionParams]);
+                out.post_distortions[off] = ds.camera_distortions[i];
+            }
             continue;
         }
 
@@ -452,9 +459,26 @@ PostSplitCameras bake_post_split(const ParsedDataset& ds,
         vm[15] = 1.f;
     }
 
+    // A camera whose lens model had to be fitted needs its images resampled,
+    // which runs on the warp path's staging even when K == 1.
+    bool any_redistort = false;
+    for (const RedistortSource& r : ds.redistort)
+        any_redistort |= (r.source_model >= 0);
+    if (any_redistort) {
+        out.any_warp = true;
+        out.redistort_models.assign(N, -1);
+        out.redistort_params.assign((size_t)N * 16, 0.0f);
+        for (int64_t i = 0; i < N && i < (int64_t)ds.redistort.size(); i++) {
+            out.redistort_models[i] = ds.redistort[i].source_model;
+            for (int k = 0; k < 16; k++)
+                out.redistort_params[i*16 + k] = ds.redistort[i].params[k];
+        }
+    }
+
     if (out.any_warp) {
         out.input_intrins     = ds.intrins;
         out.input_dist_coeffs = ds.dist_coeffs;
+        out.input_distortions = ds.camera_distortions;
     }
     return out;
 }

@@ -45,6 +45,7 @@ namespace cg = cooperative_groups;
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
+    CameraDistortionType distortion,
     int VALUE_BITS = 32,
     int BLOCK_SIZE = 256
 >
@@ -117,24 +118,24 @@ __global__ void __launch_bounds__(BLOCK_SIZE) projection_bwd_quantgrad_kernel(
             viewmats[cid*16+8], viewmats[cid*16+9], viewmats[cid*16+10],
         };
         float3 t = { viewmats[cid*16+3], viewmats[cid*16+7], viewmats[cid*16+11] };
-        ProjCamera cam = {
+        ProjCameraT<distortion> cam = {
             R, t, intrin.x, intrin.y, intrin.z, intrin.w,
             image_width, image_height,
         };
-        cam.dist_coeffs = dist_coeffs_buffer.load(cid);
+        cam.dist_coeffs = dist_coeffs_buffer.load<distortion>(cid);
 
         typename SplatPrimitive::Screen v_screen;
         v_screen.load(v_splats_screen, idx);
 
         if constexpr (VALUE_BITS == 32) {
-            splat_world.template project_vjp<camera_model, false, 32>(
+            splat_world.template project_vjp<camera_model, distortion, false, 32>(
                 cam, v_screen, v, v_R, v_t);
         } else {
             const int64_t sh_base_vjp   = (int64_t)3 * (int64_t)num_sh_buffer * (int64_t)gid;
             const int64_t sh_stride_vjp = (sh_value_bounds_stride > 0)
                 ? sh_value_bounds_stride
                 : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
-            splat_world.template project_vjp<camera_model, false, VALUE_BITS>(
+            splat_world.template project_vjp<camera_model, distortion, false, VALUE_BITS>(
                 cam, v_screen, v, v_R, v_t,
                 const_cast<uint8_t*>(sh_value_packed),
                 const_cast<float2*>(sh_value_bounds),
@@ -209,11 +210,13 @@ __global__ void __launch_bounds__(BLOCK_SIZE) projection_bwd_quantgrad_kernel(
 }
 
 
-// Thin per-(primitive, camera_model) launcher; dispatches VALUE_BITS at runtime
-// (mirrors projection_fused_bwd_kernel_wrapper in ProjectionBwd_kernel.cuh).
+// Thin per-(primitive, camera model, distortion tier) launcher; dispatches
+// VALUE_BITS at runtime (mirrors projection_fused_bwd_kernel_wrapper in
+// ProjectionBwd_kernel.cuh).
 template<
     typename SplatPrimitive,
-    CameraModelType camera_model
+    CameraModelType camera_model,
+    CameraDistortionType distortion
 >
 void projection_bwd_quantgrad_kernel_wrapper(
     cudaStream_t stream,
@@ -242,7 +245,8 @@ void projection_bwd_quantgrad_kernel_wrapper(
     const uint32_t grid = (N + BLOCK - 1) / BLOCK;
     if (grid == 0) return;
     #define _QG_LAUNCH(VB)                                                        \
-        projection_bwd_quantgrad_kernel<SplatPrimitive, camera_model, VB, BLOCK>  \
+        projection_bwd_quantgrad_kernel<SplatPrimitive, camera_model,             \
+                                       distortion, VB, BLOCK>                    \
             <<<grid, BLOCK, 0, stream>>>(                                         \
                 C, N, num_sh_buffer, splats_world, viewmats, intrins,             \
                 dist_coeffs_buffer, image_width, image_height,                    \

@@ -7,7 +7,8 @@
 // occ_from_moment) -- plus the optional full-ray DC color image.
 //
 // Only 3DGUT with the three supported camera models is instantiated, matching
-// the CUDA side; the camera model is a specialization constant.
+// the CUDA side; the camera model and distortion tier are specialization
+// constants (kDistortion declared last -- see dist_spec.slang).
 
 #define CudaDeviceExport ForceInline
 #include "int64_compat.slang"
@@ -15,6 +16,7 @@
 #undef CudaDeviceExport
 
 #include "raster_common.slang"
+#include "dist_spec.slang"
 
 [SpecializationConstant]
 const int kCameraModel = 0;
@@ -51,7 +53,7 @@ struct RasterMomentsParams {
     // cameras
     float* viewmats;     // [I, 16] row-major
     float4* intrins;     // [I]
-    float* dist_coeffs;  // [I, 10] (never null: zeroed fallback)
+    float* dist_coeffs;  // [I, 8] (never null: zeroed fallback)
     float4* aabb;        // [..] projected 2D AABB (xmin,ymin,xmax,ymax)
     int* tile_offsets;   // [I, tile_height, tile_width]
     int* flatten_ids;    // [n_isects]
@@ -67,6 +69,11 @@ struct RasterMomentsParams {
     uint32_t tile_height;
     uint32_t _pad0;
 };
+
+#define _rm_ray(D)                                                    \
+    ray_ok = pixel_ray<D>(p.dist_coeffs, image_id, kCameraModel,      \
+                          float2((px - intrin.z) / intrin.x,          \
+                                 (py - intrin.w) / intrin.y), raydir)
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -92,10 +99,6 @@ void rasterize_moments_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         ct[r] = vm[4 * r + 3];
     }
     float4 intrin = p.intrins[image_id];
-    float dist[10];
-    [ForceUnroll]
-    for (int k = 0; k < 10; k++)
-        dist[k] = p.dist_coeffs[10 * image_id + k];
 
     float3 ray_o = transform_ray_o(R, ct);
 
@@ -106,11 +109,10 @@ void rasterize_moments_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
     bool inside = (i < p.height && j < p.width);
 
-    float3 raydir;
-    inside = inside &&
-             generate_ray(float2((px - intrin.z) / intrin.x,
-                                 (py - intrin.w) / intrin.y),
-                          kCameraModel, dist, raydir);
+    float3 raydir = float3(0.0f);
+    bool ray_ok = false;
+    SS_DISPATCH_DIST(_rm_ray)
+    inside = inside && ray_ok;
     float3 ray_d = transform_ray_d(R, raydir);
 
     bool done = !inside;
@@ -243,3 +245,9 @@ void rasterize_moments_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         }
     }
 }
+
+#undef _rm_ray
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

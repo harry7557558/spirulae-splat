@@ -51,9 +51,15 @@ list(REMOVE_DUPLICATES TORCH_CUDA_ARCH_LIST)
 
 message(STATUS "CUDA architecture(s): ${TORCH_CUDA_ARCH_LIST}")
 
+# "<arch>-real" emits cubin only; the bare form also emits PTX. See
+# SS_CUDA_EMBED_PTX in SsOptions.cmake for why the default drops it.
 set(CMAKE_CUDA_ARCHITECTURES "")
 foreach(arch ${TORCH_CUDA_ARCH_LIST})
-    list(APPEND CMAKE_CUDA_ARCHITECTURES "${arch}")
+    if(SS_CUDA_EMBED_PTX)
+        list(APPEND CMAKE_CUDA_ARCHITECTURES "${arch}")
+    else()
+        list(APPEND CMAKE_CUDA_ARCHITECTURES "${arch}-real")
+    endif()
 endforeach()
 
 # ---------------------------------------------------------------------------
@@ -101,10 +107,7 @@ if(SS_DEBUG_SYMBOLS)
     list(APPEND SPLAT_NVCC_FLAGS "-lineinfo" "--generate-line-info" "--source-in-ptx")
 endif()
 
-# Add gencode flags
-foreach(arch ${TORCH_CUDA_ARCH_LIST})
-    list(APPEND SPLAT_NVCC_FLAGS "-gencode" "arch=compute_${arch},code=sm_${arch}")
-endforeach()
+
 
 # Host side optimizations
 if(NOT WIN32)

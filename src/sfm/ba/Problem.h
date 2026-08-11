@@ -34,12 +34,12 @@ static const ModelDesc kModels[] = {
     {"simple_pinhole", 3, "cost_simple_pinhole", "jac_simple_pinhole"},  // COLMAP SIMPLE_PINHOLE
     {"pinhole", 4, "cost_pinhole", "jac_pinhole"},                       // COLMAP PINHOLE
     {"opencv_fisheye", 8, "cost_opencv_fisheye", "jac_opencv_fisheye"},  // COLMAP OPENCV_FISHEYE (D29-C)
-    {"full_opencv", 9, "cost_full_opencv", "jac_full_opencv"},           // COLMAP FULL_OPENCV, reduced (D34)
+    {"full_opencv", 12, "cost_full_opencv", "jac_full_opencv"},          // COLMAP FULL_OPENCV (D34)
     {"thin_prism_fisheye", 12, "cost_thin_prism_fisheye", "jac_thin_prism_fisheye"},  // COLMAP THIN_PRISM_FISHEYE (D34)
     {"equirect", 2, "cost_equirect", "jac_equirect"},                    // COLMAP EQUIRECTANGULAR (D49)
 };
 static const int kNumModels = sizeof(kModels) / sizeof(kModels[0]);
-static const uint32_t kMaxCamDof = 18;  // 6 pose + up to 12 intrinsics (thin-prism); must match ba.slang
+static const uint32_t kMaxCamDof = 18;  // 6 pose + up to 12 intrinsics; must match ba.slang
 
 struct BAProblem {
     uint32_t num_images = 0, num_points = 0, num_obs = 0;

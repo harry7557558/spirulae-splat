@@ -18,6 +18,8 @@
 #include "mesh/MeshingDevice.h"
 #include "mesh/MeshingRaster.h"
 
+#include "core/CameraModel.h"     // kCameraDistortionParams (portable spelling)
+
 #include "backend/api/BackendRuntime.h"
 #include "backend/common/SortScan.h"
 
@@ -176,7 +178,7 @@ struct OccupancyEvaluator::Impl {
     // is in use.
     std::vector<float> cam_viewmats;  // [C*16] row-major world->cam
     std::vector<float> cam_intrins;   // [C*4]  fx, fy, cx, cy
-    std::vector<float> cam_dist;      // [C*10] engine distortion layout
+    std::vector<float> cam_dist;      // [C*8] distortion coefficients
     std::vector<int> cam_widths;      // [C] per-camera image width
     std::vector<int> cam_heights;     // [C] per-camera image height
     std::string cam_model;
@@ -359,9 +361,10 @@ OccupancyEvaluator::OccupancyEvaluator(
     if (cams.valid() && num_cameras > 0) {
         impl_->cam_viewmats.assign(cams.viewmats, cams.viewmats + (size_t)num_cameras * 16);
         impl_->cam_intrins.assign(cams.intrins, cams.intrins + (size_t)num_cameras * 4);
-        impl_->cam_dist.assign((size_t)num_cameras * 10, 0.0f);
+        const size_t ndist = (size_t)num_cameras * kCameraDistortionParams;
+        impl_->cam_dist.assign(ndist, 0.0f);
         if (cams.dist_coeffs)
-            impl_->cam_dist.assign(cams.dist_coeffs, cams.dist_coeffs + (size_t)num_cameras * 10);
+            impl_->cam_dist.assign(cams.dist_coeffs, cams.dist_coeffs + ndist);
         impl_->cam_widths.assign(cams.widths, cams.widths + num_cameras);
         impl_->cam_heights.assign(cams.heights, cams.heights + num_cameras);
         impl_->cam_model  = cams.camera_model;
@@ -371,7 +374,7 @@ OccupancyEvaluator::OccupancyEvaluator(
             impl_->cam_viewmats.data(), impl_->cam_intrins.data(),
             impl_->cam_dist.empty() ? nullptr : impl_->cam_dist.data(),
             num_cameras, impl_->cam_widths.data(), impl_->cam_heights.data(),
-            cams.camera_model, cfg.carve_k, cfg.verbose);
+            cams.camera_model, cams.distortion, cfg.carve_k, cfg.verbose);
         if (cfg.verbose) {
             int w0 = impl_->cam_widths[0], h0 = impl_->cam_heights[0];
             bool uniform = true;

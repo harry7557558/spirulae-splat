@@ -69,6 +69,7 @@ without reconfiguring, e.g. `-B build_cuda` and `-B build`.
 | `SS_SEPARATE_TOOLS` | `OFF` | *also* build `spirula-sfm` and `spirula-sam` standalone — same code, but neither links the engine (24 MB vs the combined 61 MB) |
 | `SS_BUILD_BACKEND_TESTS` | `OFF` | build `backend/tests/*` (CUDA branch; Vulkan always builds them) |
 | `SS_DEBUG_SYMBOLS` | `OFF` | host `-g`, CUDA cubin lineinfo, `slangc -g2`. Bloats binaries substantially — profiling/debugging only. |
+| `SS_CUDA_EMBED_PTX` | `OFF` | embed PTX beside the cubin in the CUDA fatbin. Only buys JIT onto an architecture the binary was not built for, and costs about a third of every object; the build already detects the local GPU. Turn on for a redistributable binary. |
 | `SS_SLANGC` | *(empty)* | path to a `slangc` to use; empty means find on PATH and fetch the pinned release on miss/mismatch |
 | `SS_BUILD_SFM` | `ON` for `vulkan`, `OFF` for `cuda` | `ss_sfm` + `spirula sfm` + `sfm_*_test`. Vulkan-only; a CUDA build can opt in if the Vulkan SDK is present. |
 | `SS_BUILD_SAM` | `ON` for `vulkan`, `OFF` for `cuda` | `ss_nn` + `ss_sam` + `spirula sam` + `nn_ops_test` / `sam_pipeline_test`, and the GUI's in-process masking. Same rule as SfM. |

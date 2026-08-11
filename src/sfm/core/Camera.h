@@ -47,7 +47,8 @@ struct Camera {
     double fx = 0, fy = 0, cx = 0, cy = 0;
     double k1 = 0, k2 = 0;   // radial
     double p1 = 0, p2 = 0;   // tangential (OpenCV / FullOpenCV / ThinPrismFisheye)
-    double k3 = 0, k4 = 0;   // extra radial (FullOpenCV uses k3; fisheye uses k3,k4)
+    double k3 = 0, k4 = 0;   // extra radial (fisheye k3,k4; FullOpenCV k3 + denominator k4)
+    double k5 = 0, k6 = 0;   // FullOpenCV rational denominator (with k4)
     double sx1 = 0, sy1 = 0; // thin-prism (ThinPrismFisheye only)
 
     // How many of this camera's pixels one *measurement* pixel is worth: the
@@ -151,7 +152,8 @@ struct Camera {
     }
 
     // Camera-frame 3D point -> pixel.
-    //  - pinhole family (incl. FullOpenCV's k3): Brown-Conrady radial+tangential.
+    //  - pinhole family: Brown-Conrady radial+tangential; FullOpenCV divides the
+    //    radial term by the rational denominator 1 + k4 r^2 + k5 r^4 + k6 r^6.
     //  - OpenCV_FISHEYE: Kannala-Brandt, radial-only in theta.
     //  - THIN_PRISM_FISHEYE: KB radial + tangential + thin-prism, all in the
     //    equidistant coords (uf,vf) = theta*(x,y)/r.
@@ -185,7 +187,9 @@ struct Camera {
         }
         double xp = p.x / p.z, yp = p.y / p.z;
         double r2 = xp * xp + yp * yp;
-        double radial = 1.0 + r2 * (k1 + r2 * (k2 + r2 * k3));  // k3=0 except FullOpenCV
+        double radial = (model == CamModel::FullOpenCV) ?
+            (1.0 + r2 * (k1 + r2 * (k2 + r2 * k3))) / (1.0 + r2 * (k4 + r2 * (k5 + r2 * k6))) :
+            (1.0 + r2 * (k1 + r2 * (k2 + r2 * (k3 + r2 * k4))));
         double dx = xp * radial + 2.0 * p1 * xp * yp + p2 * (r2 + 2.0 * xp * xp);
         double dy = yp * radial + p1 * (r2 + 2.0 * yp * yp) + 2.0 * p2 * xp * yp;
         return {fx * dx + cx, fy * dy + cy};
@@ -202,16 +206,21 @@ struct Camera {
             return {b.x / b.z, b.y / b.z};
         }
         double u = (px.x - cx) / fx, v = (px.y - cy) / fy;
-        if (k1 == 0 && k2 == 0 && k3 == 0 && p1 == 0 && p2 == 0) return {u, v};
+        if (k1 == 0 && k2 == 0 && k3 == 0 && k4 == 0 && k5 == 0 && k6 == 0 &&
+            p1 == 0 && p2 == 0)
+            return {u, v};
         // 5 fixed-point steps: a contraction for the distortion magnitudes we
         // see, and exactly what the radial-only path did before (so the RADIAL
         // model stays bit-identical -- the tangential/k3 terms are literally zero
         // there). Revisit the count only if a strongly-distorted camera shows
         // unconverged undistortion.
+        const bool rational = model == CamModel::FullOpenCV;
         double xu = u, yu = v;
         for (int i = 0; i < 5; i++) {
             double r2 = xu * xu + yu * yu;
-            double radial = 1.0 + r2 * (k1 + r2 * (k2 + r2 * k3));
+            double radial = rational ?
+                (1.0 + r2 * (k1 + r2 * (k2 + r2 * k3))) / (1.0 + r2 * (k4 + r2 * (k5 + r2 * k6))) :
+                (1.0 + r2 * (k1 + r2 * (k2 + r2 * (k3 + r2 * k4))));
             double dtx = 2.0 * p1 * xu * yu + p2 * (r2 + 2.0 * xu * xu);
             double dty = p1 * (r2 + 2.0 * yu * yu) + 2.0 * p2 * xu * yu;
             xu = (u - dtx) / radial;
@@ -294,9 +303,6 @@ struct CamModelInfo {
 //   0 snavely, 1 snavely_f, 2 pinhole_radial, 3 opencv, 4 simple_pinhole,
 //   5 pinhole, 6 opencv_fisheye, 7 full_opencv, 8 thin_prism_fisheye,
 //   9 equirect
-// ba_params == colmap_params for every model except FullOpenCV, which BA fits as
-// a reduced rational model (k1,k2,k3 + p1,p2) but emits as COLMAP FULL_OPENCV
-// with k4,k5,k6 = 0 (compatible with our parser).
 //
 // ba_pp is how many *trailing* BA parameters are the principal point, and
 // ba_refinable says whether BA may touch this model's parameters at all. The BA
@@ -312,7 +318,7 @@ static constexpr CamModelInfo kCamModelInfo[] = {
     {CamModel::Radial,           3, 2,  5, 2, true,   5, "radial"},
     {CamModel::OpenCV,           4, 3,  8, 2, true,   8, "opencv"},
     {CamModel::OpenCVFisheye,    5, 6,  8, 2, true,   8, "opencv-fisheye"},
-    {CamModel::FullOpenCV,       6, 7,  9, 2, true,  12, "full-opencv"},
+    {CamModel::FullOpenCV,       6, 7, 12, 2, true,  12, "full-opencv"},
     {CamModel::ThinPrismFisheye, 10, 8, 12, 2, true,  12, "thin-prism-fisheye"},
     {CamModel::Equirect,         17, 9,  2, 0, false,  2, "equirectangular"},
 };
@@ -378,8 +384,8 @@ inline void packIntrinsics(const Camera& c, double* d) {
                                       d[6] = c.cx; d[7] = c.cy; break;
         case CamModel::FullOpenCV:    d[0] = c.fx; d[1] = c.fy;
                                       d[2] = c.k1; d[3] = c.k2; d[4] = c.p1; d[5] = c.p2;
-                                      d[6] = c.k3;
-                                      d[7] = c.cx; d[8] = c.cy; break;
+                                      d[6] = c.k3; d[7] = c.k4; d[8] = c.k5; d[9] = c.k6;
+                                      d[10] = c.cx; d[11] = c.cy; break;
         case CamModel::ThinPrismFisheye:
                                       d[0] = c.fx; d[1] = c.fy;
                                       d[2] = c.k1; d[3] = c.k2; d[4] = c.p1; d[5] = c.p2;
@@ -391,7 +397,7 @@ inline void packIntrinsics(const Camera& c, double* d) {
     }
 }
 inline void unpackIntrinsics(Camera& c, const double* d) {  // c.model set by caller
-    c.k1 = c.k2 = c.p1 = c.p2 = c.k3 = c.k4 = c.sx1 = c.sy1 = 0;
+    c.k1 = c.k2 = c.p1 = c.p2 = c.k3 = c.k4 = c.k5 = c.k6 = c.sx1 = c.sy1 = 0;
     switch (c.model) {
         case CamModel::SimplePinhole: c.setFocal(d[0]);
                                       c.cx = d[1]; c.cy = d[2]; break;
@@ -407,8 +413,8 @@ inline void unpackIntrinsics(Camera& c, const double* d) {  // c.model set by ca
                                       c.cx = d[6]; c.cy = d[7]; break;
         case CamModel::FullOpenCV:    c.fx = d[0]; c.fy = d[1];
                                       c.k1 = d[2]; c.k2 = d[3]; c.p1 = d[4]; c.p2 = d[5];
-                                      c.k3 = d[6];
-                                      c.cx = d[7]; c.cy = d[8]; break;
+                                      c.k3 = d[6]; c.k4 = d[7]; c.k5 = d[8]; c.k6 = d[9];
+                                      c.cx = d[10]; c.cy = d[11]; break;
         case CamModel::ThinPrismFisheye:
                                       c.fx = d[0]; c.fy = d[1];
                                       c.k1 = d[2]; c.k2 = d[3]; c.p1 = d[4]; c.p2 = d[5];
@@ -420,9 +426,7 @@ inline void unpackIntrinsics(Camera& c, const double* d) {  // c.model set by ca
 }
 
 // Camera fields -> the *COLMAP* cameras.bin layout (camColmapParams slots):
-// focal length(s), cx, cy, then the extra parameters. FULL_OPENCV's reduced BA
-// params are its first 9, with the rational k4,k5,k6 emitted as 0
-// (dataset-parser compatibility, D34).
+// focal length(s), cx, cy, then the extra parameters.
 inline void packColmap(const Camera& c, double* d) {
     switch (c.model) {
         case CamModel::SimplePinhole: d[0] = c.focal(); d[1] = c.cx; d[2] = c.cy; break;
@@ -435,7 +439,7 @@ inline void packColmap(const Camera& c, double* d) {
                                       d[4] = c.k1; d[5] = c.k2; d[6] = c.k3; d[7] = c.k4; break;
         case CamModel::FullOpenCV:    d[0] = c.fx; d[1] = c.fy; d[2] = c.cx; d[3] = c.cy;
                                       d[4] = c.k1; d[5] = c.k2; d[6] = c.p1; d[7] = c.p2;
-                                      d[8] = c.k3; d[9] = d[10] = d[11] = 0; break;  // k4,k5,k6
+                                      d[8] = c.k3; d[9] = c.k4; d[10] = c.k5; d[11] = c.k6; break;
         case CamModel::ThinPrismFisheye:
                                       d[0] = c.fx; d[1] = c.fy; d[2] = c.cx; d[3] = c.cy;
                                       d[4] = c.k1; d[5] = c.k2; d[6] = c.p1; d[7] = c.p2;
@@ -443,10 +447,9 @@ inline void packColmap(const Camera& c, double* d) {
         case CamModel::Equirect:      d[0] = 2.0 * M_PI * c.fx; d[1] = M_PI * c.fy; break;
     }
 }
-// COLMAP layout -> fields. FULL_OPENCV's rational k4,k5,k6 tail is ignored (we
-// do not model it).
+// COLMAP layout -> fields.
 inline void unpackColmap(Camera& c, const double* d) {
-    c.k1 = c.k2 = c.p1 = c.p2 = c.k3 = c.k4 = c.sx1 = c.sy1 = 0;
+    c.k1 = c.k2 = c.p1 = c.p2 = c.k3 = c.k4 = c.k5 = c.k6 = c.sx1 = c.sy1 = 0;
     switch (c.model) {
         case CamModel::SimplePinhole: c.setFocal(d[0]); c.cx = d[1]; c.cy = d[2]; break;
         case CamModel::Pinhole:       c.fx = d[0]; c.fy = d[1]; c.cx = d[2]; c.cy = d[3]; break;
@@ -458,7 +461,7 @@ inline void unpackColmap(Camera& c, const double* d) {
                                       c.k1 = d[4]; c.k2 = d[5]; c.k3 = d[6]; c.k4 = d[7]; break;
         case CamModel::FullOpenCV:    c.fx = d[0]; c.fy = d[1]; c.cx = d[2]; c.cy = d[3];
                                       c.k1 = d[4]; c.k2 = d[5]; c.p1 = d[6]; c.p2 = d[7];
-                                      c.k3 = d[8]; break;
+                                      c.k3 = d[8]; c.k4 = d[9]; c.k5 = d[10]; c.k6 = d[11]; break;
         case CamModel::ThinPrismFisheye:
                                       c.fx = d[0]; c.fy = d[1]; c.cx = d[2]; c.cy = d[3];
                                       c.k1 = d[4]; c.k2 = d[5]; c.p1 = d[6]; c.p2 = d[7];

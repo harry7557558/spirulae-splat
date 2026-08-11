@@ -30,7 +30,7 @@ struct RenderContext;
 //       params, [num_splats * {3,4,3,1,3}]; the projection activates them.
 //   viewmats : [num_cameras*16] row-major world->cam 4x4
 //   intrins  : [num_cameras*4]  fx, fy, cx, cy
-//   dist     : [num_cameras*10] engine distortion layout (may be null => zeros)
+//   dist     : [num_cameras*8] distortion coefficients (may be null => zeros)
 //   widths   : [num_cameras] per-camera image width   (HOST array)
 //   heights  : [num_cameras] per-camera image height  (HOST array)
 //   verbose  : report per-camera progress on the long render loops. Each of
@@ -42,7 +42,8 @@ RenderContext* render_context_create(
     const float* logit_opac, const float* features_dc, int num_splats,
     const float* viewmats, const float* intrins, const float* dist,
     int num_cameras, const int* widths, const int* heights,
-    const std::string& camera_model, int carve_k, bool verbose);
+    const std::string& camera_model, const std::string& distortion,
+    int carve_k, bool verbose);
 
 void render_context_destroy(RenderContext*);
 

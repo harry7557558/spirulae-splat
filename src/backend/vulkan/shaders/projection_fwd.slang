@@ -8,6 +8,7 @@
 //   kAntialiased  = 0 (Vanilla3DGS) | 1 (MipSplatting)
 //   kShValueBits  = 0 (fp32) | 8 | 16 (the CUDA VALUE_BITS template axis;
 //                   decode via sh_quant.slang's word-based q8/q16 loads)
+//   kDistortion   = CameraDistortionType (0..3), declared last (dist_spec.slang)
 //
 // Params exceed the 128-byte push floor -> delivered via the params ring
 // (push constant = one device address).
@@ -18,6 +19,7 @@
 #include "shaders/harmonics.slang"
 #undef CudaDeviceExport
 #include "sh_quant.slang"
+#include "dist_spec.slang"
 
 [SpecializationConstant]
 const int kCameraModel = 0;
@@ -68,7 +70,7 @@ struct ProjectionFwdParams {
     // cameras
     float* viewmats;      // [C,16] row-major
     float4* intrins;      // [C]
-    float* dist_coeffs;   // [C,10] or null
+    float* dist_coeffs;   // [C,8] or null
     // outputs
     float4* out_aabb;     // [C,N]
     float* out_depths;    // [C,N]
@@ -93,8 +95,8 @@ struct ProjectionFwdParams {
     uint32_t _pad0;
 };
 
-void run_projection<let cam: CameraModelType>(ProjectionFwdParams p,
-                                              uint idx) {
+void run_projection<let cam: CameraModelType, D : ICameraDistortion>(
+    ProjectionFwdParams p, uint idx) {
     uint cid = (idx / p.N) % p.C;
     uint gid = idx % p.N;
 
@@ -108,11 +110,8 @@ void run_projection<let cam: CameraModelType>(ProjectionFwdParams p,
         t[r] = vm[4 * r + 3];
     }
     float4 intrin = p.intrins[cid];
-    float dist[10];
-    [ForceUnroll]
-    for (int i = 0; i < 10; i++)
-        dist[i] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * cid + i];
+    float dist[D.kNumParams];
+    load_dist_coeffs<D>(p.dist_coeffs, cid, dist);
 
     // splat
     float3 mean = float3(p.means[3 * gid], p.means[3 * gid + 1],
@@ -131,7 +130,7 @@ void run_projection<let cam: CameraModelType>(ProjectionFwdParams p,
     float s_depth;
     float3 s_conic;
     float s_opac;
-    projection_3dgs<cam, false, false>(
+    projection_3dgs<cam, D, false, false>(
         kAntialiased != 0,
         mean, quat, scale, in_opacity, R, t,
         intrin.x, intrin.y, intrin.z, intrin.w, dist,
@@ -177,6 +176,8 @@ void run_projection<let cam: CameraModelType>(ProjectionFwdParams p,
     }
 }
 
+#define _pf_call(M, D) run_projection<M, D>(p, idx)
+
 [shader("compute")]
 [numthreads(128, 1, 1)]
 void projection_fwd_3dgs(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -184,16 +185,12 @@ void projection_fwd_3dgs(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     ProjectionFwdParams p = *pp;
     uint idx = (wg.y * p.wgs_per_row + wg.x) * 128 + tid;
     if (idx >= p.C * p.N) return;
-    switch (kCameraModel) {
-    case 0: run_projection<CameraModelType::PINHOLE>(p, idx); break;
-    case 1: run_projection<CameraModelType::FISHEYE>(p, idx); break;
-    case 2: run_projection<CameraModelType::EQUISOLID>(p, idx); break;
-    case 3: run_projection<CameraModelType::EQUIRECTANGULAR>(p, idx); break;
-    }
+    SS_DISPATCH_CAM_DIST(_pf_call)
 }
+#undef _pf_call
 
 // ---------------------------------------------------------------------------
-// 3DGUT (eval3d): projection_3dgs<cam, false, true>, antialiased always
+// 3DGUT (eval3d): projection_3dgs<cam, D, false, true>, antialiased always
 // false; the ScreenBuffer is TensorArray<3> {scale, opacity, rgb} where the
 // "conic" output lands in the scale slot (the eval3d rasterizer culls with
 // the projected 2D conic). Mirrors Primitive3DGUT.cuh project().
@@ -228,8 +225,8 @@ struct Projection3dgutParams {
     uint32_t _pad0;
 };
 
-void run_projection_3dgut<let cam: CameraModelType>(Projection3dgutParams p,
-                                                    uint idx) {
+void run_projection_3dgut<let cam: CameraModelType, D : ICameraDistortion>(
+    Projection3dgutParams p, uint idx) {
     uint cid = (idx / p.N) % p.C;
     uint gid = idx % p.N;
 
@@ -242,11 +239,8 @@ void run_projection_3dgut<let cam: CameraModelType>(Projection3dgutParams p,
         t[r] = vm[4 * r + 3];
     }
     float4 intrin = p.intrins[cid];
-    float dist[10];
-    [ForceUnroll]
-    for (int i = 0; i < 10; i++)
-        dist[i] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * cid + i];
+    float dist[D.kNumParams];
+    load_dist_coeffs<D>(p.dist_coeffs, cid, dist);
 
     float3 mean = float3(p.means[3 * gid], p.means[3 * gid + 1],
                          p.means[3 * gid + 2]);
@@ -264,7 +258,7 @@ void run_projection_3dgut<let cam: CameraModelType>(Projection3dgutParams p,
     float depth;
     float3 s_scale;
     float s_opac;
-    projection_3dgs<cam, false, true>(
+    projection_3dgs<cam, D, false, true>(
         false,  // antialiased: always false for 3DGUT
         mean, quat, scale, in_opacity, R, t,
         intrin.x, intrin.y, intrin.z, intrin.w, dist,
@@ -302,6 +296,8 @@ void run_projection_3dgut<let cam: CameraModelType>(Projection3dgutParams p,
     }
 }
 
+#define _pg_call(M, D) run_projection_3dgut<M, D>(p, idx)
+
 [shader("compute")]
 [numthreads(128, 1, 1)]
 void projection_fwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -309,14 +305,9 @@ void projection_fwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     Projection3dgutParams p = *pp;
     uint idx = (wg.y * p.wgs_per_row + wg.x) * 128 + tid;
     if (idx >= p.C * p.N) return;
-    switch (kCameraModel) {
-    case 0: run_projection_3dgut<CameraModelType::PINHOLE>(p, idx); break;
-    case 1: run_projection_3dgut<CameraModelType::FISHEYE>(p, idx); break;
-    case 2: run_projection_3dgut<CameraModelType::EQUISOLID>(p, idx); break;
-    case 3: run_projection_3dgut<CameraModelType::EQUIRECTANGULAR>(p, idx);
-        break;
-    }
+    SS_DISPATCH_CAM_DIST(_pg_call)
 }
+#undef _pg_call
 
 // ---------------------------------------------------------------------------
 // Packed projection (two-pass compaction, ProjectionPackedFwd_kernel.cuh).
@@ -345,8 +336,8 @@ struct PackedMaskParams {  // fits in the 128-byte push floor: pushed direct
     uint32_t wgs_per_row;
 };
 
-void run_packed_mask<let cam: CameraModelType, let eval3d: bool>(
-    PackedMaskParams p, uint idx) {
+void run_packed_mask<let cam: CameraModelType, D : ICameraDistortion,
+                     let eval3d: bool>(PackedMaskParams p, uint idx) {
     uint cid = (idx / p.N) % p.C;
     uint gid = idx % p.N;
 
@@ -359,11 +350,8 @@ void run_packed_mask<let cam: CameraModelType, let eval3d: bool>(
         t[r] = vm[4 * r + 3];
     }
     float4 intrin = p.intrins[cid];
-    float dist[10];
-    [ForceUnroll]
-    for (int i = 0; i < 10; i++)
-        dist[i] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * cid + i];
+    float dist[D.kNumParams];
+    load_dist_coeffs<D>(p.dist_coeffs, cid, dist);
 
     float3 mean = float3(p.means[3 * gid], p.means[3 * gid + 1],
                          p.means[3 * gid + 2]);
@@ -381,7 +369,7 @@ void run_packed_mask<let cam: CameraModelType, let eval3d: bool>(
     float opac;
     // The mask only consumes the AABB; SH evaluation is skipped (the CUDA
     // mask kernel computes and discards it).
-    projection_3dgs<cam, false, eval3d>(
+    projection_3dgs<cam, D, false, eval3d>(
         !eval3d && kAntialiased != 0,
         mean, quat, scale, in_opacity, R, t,
         intrin.x, intrin.y, intrin.z, intrin.w, dist,
@@ -396,6 +384,9 @@ void run_packed_mask<let cam: CameraModelType, let eval3d: bool>(
         (aabb.z - aabb.x > 1e-3f && aabb.w - aabb.y > 1e-3f) ? 1 : 0;
 }
 
+#define _pm_call_3d(M, D) run_packed_mask<M, D, true>(p, idx)
+#define _pm_call_2d(M, D) run_packed_mask<M, D, false>(p, idx)
+
 [shader("compute")]
 [numthreads(128, 1, 1)]
 void projection_packed_mask(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -403,21 +394,13 @@ void projection_packed_mask(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint idx = (wg.y * p.wgs_per_row + wg.x) * 128 + tid;
     if (idx >= p.C * p.N) return;
     if (kEval3d != 0) {
-        switch (kCameraModel) {
-        case 0: run_packed_mask<CameraModelType::PINHOLE, true>(p, idx); break;
-        case 1: run_packed_mask<CameraModelType::FISHEYE, true>(p, idx); break;
-        case 2: run_packed_mask<CameraModelType::EQUISOLID, true>(p, idx); break;
-        case 3: run_packed_mask<CameraModelType::EQUIRECTANGULAR, true>(p, idx); break;
-        }
+        SS_DISPATCH_CAM_DIST(_pm_call_3d)
     } else {
-        switch (kCameraModel) {
-        case 0: run_packed_mask<CameraModelType::PINHOLE, false>(p, idx); break;
-        case 1: run_packed_mask<CameraModelType::FISHEYE, false>(p, idx); break;
-        case 2: run_packed_mask<CameraModelType::EQUISOLID, false>(p, idx); break;
-        case 3: run_packed_mask<CameraModelType::EQUIRECTANGULAR, false>(p, idx); break;
-        }
+        SS_DISPATCH_CAM_DIST(_pm_call_2d)
     }
 }
+#undef _pm_call_3d
+#undef _pm_call_2d
 
 struct PackedFwdParams {
     float* means;
@@ -453,8 +436,8 @@ struct PackedFwdParams {
     uint32_t _pad0;
 };
 
-void run_packed_fwd<let cam: CameraModelType, let eval3d: bool>(
-    PackedFwdParams p, uint idx) {
+void run_packed_fwd<let cam: CameraModelType, D : ICameraDistortion,
+                    let eval3d: bool>(PackedFwdParams p, uint idx) {
     int out_idx = idx == 0 ? 0 : p.mask_scan[idx - 1];
     if (p.mask_scan[idx] == out_idx) return;
 
@@ -470,11 +453,8 @@ void run_packed_fwd<let cam: CameraModelType, let eval3d: bool>(
         t[r] = vm[4 * r + 3];
     }
     float4 intrin = p.intrins[cid];
-    float dist[10];
-    [ForceUnroll]
-    for (int i = 0; i < 10; i++)
-        dist[i] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * cid + i];
+    float dist[D.kNumParams];
+    load_dist_coeffs<D>(p.dist_coeffs, cid, dist);
 
     float3 mean = float3(p.means[3 * gid], p.means[3 * gid + 1],
                          p.means[3 * gid + 2]);
@@ -492,7 +472,7 @@ void run_packed_fwd<let cam: CameraModelType, let eval3d: bool>(
     float depth;
     float3 conic;  // eval3d: carries the culling scale (see 3DGUT notes)
     float opac;
-    projection_3dgs<cam, false, eval3d>(
+    projection_3dgs<cam, D, false, eval3d>(
         !eval3d && kAntialiased != 0,
         mean, quat, scale, in_opacity, R, t,
         intrin.x, intrin.y, intrin.z, intrin.w, dist,
@@ -546,6 +526,9 @@ void run_packed_fwd<let cam: CameraModelType, let eval3d: bool>(
     InterlockedMax(p.out_radii[gid], asuint(radius));
 }
 
+#define _pk_call_3d(M, D) run_packed_fwd<M, D, true>(p, idx)
+#define _pk_call_2d(M, D) run_packed_fwd<M, D, false>(p, idx)
+
 [shader("compute")]
 [numthreads(128, 1, 1)]
 void projection_packed_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -554,18 +537,14 @@ void projection_packed_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint idx = (wg.y * p.wgs_per_row + wg.x) * 128 + tid;
     if (idx >= p.C * p.N) return;
     if (kEval3d != 0) {
-        switch (kCameraModel) {
-        case 0: run_packed_fwd<CameraModelType::PINHOLE, true>(p, idx); break;
-        case 1: run_packed_fwd<CameraModelType::FISHEYE, true>(p, idx); break;
-        case 2: run_packed_fwd<CameraModelType::EQUISOLID, true>(p, idx); break;
-        case 3: run_packed_fwd<CameraModelType::EQUIRECTANGULAR, true>(p, idx); break;
-        }
+        SS_DISPATCH_CAM_DIST(_pk_call_3d)
     } else {
-        switch (kCameraModel) {
-        case 0: run_packed_fwd<CameraModelType::PINHOLE, false>(p, idx); break;
-        case 1: run_packed_fwd<CameraModelType::FISHEYE, false>(p, idx); break;
-        case 2: run_packed_fwd<CameraModelType::EQUISOLID, false>(p, idx); break;
-        case 3: run_packed_fwd<CameraModelType::EQUIRECTANGULAR, false>(p, idx); break;
-        }
+        SS_DISPATCH_CAM_DIST(_pk_call_2d)
     }
 }
+#undef _pk_call_3d
+#undef _pk_call_2d
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

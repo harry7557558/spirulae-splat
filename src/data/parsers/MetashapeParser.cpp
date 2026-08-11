@@ -385,6 +385,18 @@ ParsedDataset parse_metashape_dataset(const std::string& dataset_dir,
             jset(s, "p2", jnum(child_double(*calib, "p1")));
             jset(s, "b1", jnum(child_double(*calib, "b1") / fl));
             jset(s, "b2", jnum(child_double(*calib, "b2") / fl));
+            // Metashape's k4 is the 4th RADIAL term, not OpenCV's first
+            // rational denominator, so say so rather than let the nerfstudio
+            // back end guess from which keys are present.
+            jset(s, "camera_distortion", jstr("THIN_PRISM"));
+            // PhotoScan <= 1.5 multiplied the tangential terms by
+            // (1 + P3 r^2 + P4 r^4); nothing here carries that.
+            if (child_double(*calib, "p3") != 0.0 ||
+                child_double(*calib, "p4") != 0.0)
+                throw std::runtime_error(
+                    "MetashapeParser: sensor " + *idp + " has nonzero p3/p4 "
+                    "(the pre-1.6 tangential scaling), which no supported "
+                    "distortion model carries");
         }
         sensor_dict.emplace(*idp, std::move(s));
     }

@@ -107,6 +107,7 @@ void rgb_to_srgb_forward(
 
 void depth_to_normal_forward(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
     bool is_ray_depth,
@@ -126,21 +127,24 @@ void depth_to_normal_forward(
     p.H = H;
     p.B = B;
     p.is_ray_depth = is_ray_depth ? 1u : 0u;
-    p.camera_model = (int32_t)cmt(camera_model);
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
+    p.camera_model = (int32_t)cd.cam;
     vkk::dispatch("pixel_wise_render.depth_to_normal_fwd",
-                  backend::vk::SpecList{}, (W + 15) / 16, (H + 15) / 16, B,
-                  &p, sizeof(p));
+                  backend::vk::SpecList{0u, cd.dist}, (W + 15) / 16,
+                  (H + 15) / 16, B, &p, sizeof(p));
 }
 
 void depth_to_normal_forward_tv(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
     bool is_ray_depth,
     TorchTensorView depths,
     TorchTensorView normals
 ) {
-    depth_to_normal_forward(camera_model, intrins, dist_coeffs, is_ray_depth,
+    depth_to_normal_forward(camera_model, distortion, intrins, dist_coeffs,
+                            is_ray_depth,
                             DeviceTensor3D<float>(depths),
                             DeviceTensor3D<float3>(normals));
 }

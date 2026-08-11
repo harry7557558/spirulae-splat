@@ -117,6 +117,161 @@ SS_MSG(equirect_not_2to1,
     TR("EQUIRECTANGULAR kamera {0} {1}x{2} boyutunda, yani 2:1 değil. Motor tam "
        "bir 360x180 panorama varsaydığı için dikey ölçeği yanlış alacak."));
 
+SS_MSG(camera_model_fitted,
+    EN("no exact match here for the {0} camera model ({1} in this dataset); "
+       "fitted as {2} with {3} distortion, max error {4} px. Its images are "
+       "re-distorted to match."),
+    JA("{0} カメラモデル（このデータセットに {1} 台）には厳密に一致するものがないため、"
+       "{2} と {3} 歪みで近似しました（最大誤差 {4} px）。画像はそれに合わせて"
+       "再歪曲されます。"),
+    ZH_HANS("{0} 相机模型（本数据集中 {1} 台）没有精确对应的模型，已用 {2} 与 {3} "
+            "畸变拟合，最大误差 {4} 像素。其图像会相应重新畸变。"),
+    ZH_HANT("{0} 相機模型（本資料集中 {1} 台）沒有精確對應的模型，已用 {2} 與 {3} "
+            "畸變擬合，最大誤差 {4} 像素。其影像會相應重新畸變。"),
+    KO("{0} 카메라 모델(이 데이터셋에 {1} 대)은 정확히 일치하는 모델이 없어 {2} 와 "
+       "{3} 왜곡으로 근사했습니다. 최대 오차 {4} px. 해당 이미지는 그에 맞게 다시 "
+       "왜곡됩니다."),
+    ES("el modelo de cámara {0} ({1} en este conjunto) no tiene equivalente "
+       "exacto; ajustado como {2} con distorsión {3}, error máximo {4} px. Sus "
+       "imágenes se redistorsionan."),
+    FR("le modèle de caméra {0} ({1} dans ce jeu de données) n'a pas "
+       "d'équivalent exact ; ajusté en {2} avec la distorsion {3}, erreur "
+       "maximale {4} px. Ses images sont redistordues."),
+    DE("für das Kameramodell {0} ({1} in diesem Datensatz) gibt es hier keine "
+       "exakte Entsprechung; angepasst als {2} mit {3}-Verzeichnung, maximaler "
+       "Fehler {4} px. Ihre Bilder werden entsprechend neu verzeichnet."),
+    PT("o modelo de câmera {0} ({1} neste conjunto) não tem equivalente exato; "
+       "ajustado como {2} com distorção {3}, erro máximo {4} px. As imagens são "
+       "redistorcidas."),
+    IT("il modello di camera {0} ({1} in questo dataset) non ha un equivalente "
+       "esatto; approssimato come {2} con distorsione {3}, errore massimo {4} "
+       "px. Le immagini vengono ridistorte di conseguenza."),
+    NL("het cameramodel {0} ({1} in deze dataset) heeft hier geen exacte "
+       "tegenhanger; benaderd als {2} met {3}-vervorming, maximale fout {4} px. "
+       "De beelden worden opnieuw vervormd."),
+    RU("модель камеры {0} ({1} в этом наборе) не имеет точного соответствия; "
+       "приближена как {2} с искажением {3}, максимальная ошибка {4} пикс. Её "
+       "изображения переискажаются соответственно."),
+    TR("{0} kamera modeli (bu veri kumesinde {1} adet) icin birebir karsilik "
+       "yok; {2} ve {3} bozulmasi ile yaklasildi, en buyuk hata {4} px. "
+       "Goruntuleri buna gore yeniden bozuluyor."));
+
+SS_MSG(camera_model_fitted_exact,
+    EN("no exact match here for the {0} camera model ({1} in this dataset); "
+       "fitted as {2} with {3} distortion to within {4} px, so its images are "
+       "used as they are."),
+    JA("{0} カメラモデル（このデータセットに {1} 台）には厳密に一致するものがないため、"
+       "{2} と {3} 歪みで近似しました（誤差 {4} px 以内）。画像はそのまま使います。"),
+    ZH_HANS("{0} 相机模型（本数据集中 {1} 台）没有精确对应的模型，已用 {2} 与 {3} "
+            "畸变拟合，误差在 {4} 像素以内，因此其图像按原样使用。"),
+    ZH_HANT("{0} 相機模型（本資料集中 {1} 台）沒有精確對應的模型，已用 {2} 與 {3} "
+            "畸變擬合，誤差在 {4} 像素以內，因此其影像按原樣使用。"),
+    KO("{0} 카메라 모델(이 데이터셋에 {1} 대)은 정확히 일치하는 모델이 없어 {2} 와 "
+       "{3} 왜곡으로 근사했습니다. 오차 {4} px 이내이므로 이미지는 그대로 사용합니다."),
+    ES("el modelo de cámara {0} ({1} en este conjunto) no tiene equivalente "
+       "exacto; ajustado como {2} con distorsión {3} con un error de {4} px, "
+       "así que sus imágenes se usan tal cual."),
+    FR("le modèle de caméra {0} ({1} dans ce jeu de données) n'a pas "
+       "d'équivalent exact ; ajusté en {2} avec la distorsion {3} à {4} px "
+       "près, donc ses images sont utilisées telles quelles."),
+    DE("für das Kameramodell {0} ({1} in diesem Datensatz) gibt es hier keine "
+       "exakte Entsprechung; angepasst als {2} mit {3}-Verzeichnung auf {4} px "
+       "genau, ihre Bilder werden daher unverändert verwendet."),
+    PT("o modelo de câmera {0} ({1} neste conjunto) não tem equivalente exato; "
+       "ajustado como {2} com distorção {3} com erro de {4} px, então as "
+       "imagens são usadas como estão."),
+    IT("il modello di camera {0} ({1} in questo dataset) non ha un equivalente "
+       "esatto; approssimato come {2} con distorsione {3} entro {4} px, quindi "
+       "le immagini sono usate così come sono."),
+    NL("het cameramodel {0} ({1} in deze dataset) heeft hier geen exacte "
+       "tegenhanger; benaderd als {2} met {3}-vervorming tot op {4} px, dus de "
+       "beelden worden ongewijzigd gebruikt."),
+    RU("модель камеры {0} ({1} в этом наборе) не имеет точного соответствия; "
+       "приближена как {2} с искажением {3} с точностью {4} пикс., поэтому её "
+       "изображения используются как есть."),
+    TR("{0} kamera modeli (bu veri kumesinde {1} adet) icin birebir karsilik "
+       "yok; {2} ve {3} bozulmasi ile {4} px hata payiyla yaklasildi, bu "
+       "yuzden goruntuleri oldugu gibi kullaniliyor."));
+
+SS_MSG(camera_sensor_skew,
+    EN("the camera for {0} has a {1} px sensor skew, which no supported camera "
+       "model carries; its images are re-distorted onto a {2} camera with {3} "
+       "distortion, max error {4} px."),
+    JA("{0} のカメラには {1} px のセンサースキューがあり、対応するモデルがありません。"
+       "画像は {2} カメラ（{3} 歪み）に合わせて再歪曲します（最大誤差 {4} px）。"),
+    ZH_HANS("{0} 的相机存在 {1} 像素的传感器切变，没有支持的相机模型能表示；其图像会"
+            "重新畸变到 {2} 相机与 {3} 畸变上，最大误差 {4} 像素。"),
+    ZH_HANT("{0} 的相機存在 {1} 像素的感光元件切變，沒有支援的相機模型能表示；其影像會"
+            "重新畸變到 {2} 相機與 {3} 畸變上，最大誤差 {4} 像素。"),
+    KO("{0} 의 카메라에 {1} px 센서 스큐가 있는데 이를 담는 카메라 모델이 없습니다. "
+       "이미지는 {2} 카메라와 {3} 왜곡에 맞춰 다시 왜곡됩니다. 최대 오차 {4} px."),
+    ES("la cámara de {0} tiene una inclinación de sensor de {1} px que ningún "
+       "modelo admitido representa; sus imágenes se redistorsionan a una cámara "
+       "{2} con distorsión {3}, error máximo {4} px."),
+    FR("la caméra de {0} a un cisaillement de capteur de {1} px qu'aucun modèle "
+       "pris en charge ne porte ; ses images sont redistordues vers une caméra "
+       "{2} avec la distorsion {3}, erreur maximale {4} px."),
+    DE("die Kamera von {0} hat eine Sensorscherung von {1} px, die kein "
+       "unterstütztes Kameramodell trägt; ihre Bilder werden auf eine "
+       "{2}-Kamera mit {3}-Verzeichnung umverzeichnet, maximaler Fehler {4} px."),
+    PT("a câmera de {0} tem uma inclinação de sensor de {1} px que nenhum modelo "
+       "suportado carrega; suas imagens são redistorcidas para uma câmera {2} "
+       "com distorção {3}, erro máximo {4} px."),
+    IT("la camera di {0} ha uno scorrimento del sensore di {1} px che nessun "
+       "modello supportato porta; le sue immagini vengono ridistorte su una "
+       "camera {2} con distorsione {3}, errore massimo {4} px."),
+    NL("de camera van {0} heeft een sensorschuining van {1} px die geen enkel "
+       "ondersteund cameramodel draagt; de beelden worden opnieuw vervormd naar "
+       "een {2}-camera met {3}-vervorming, maximale fout {4} px."),
+    RU("камера для {0} имеет наклон матрицы {1} пикс., которого нет ни в одной "
+       "поддерживаемой модели; её изображения переискажаются в камеру {2} с "
+       "искажением {3}, максимальная ошибка {4} пикс."),
+    TR("{0} icin kamerada {1} px sensor egimi var, bunu tasiyan desteklenen bir "
+       "kamera modeli yok; goruntuleri {3} bozulmali bir {2} kameraya yeniden "
+       "bozuluyor, en buyuk hata {4} px."));
+
+SS_MSG(camera_model_fit_failed,
+    EN("the {0} camera model ({1} in this dataset) projects nothing this reader "
+       "understands, so it could not be fitted; falling back to a plain {2}. "
+       "What is reconstructed from those cameras will be wrong."),
+    JA("{0} カメラモデル（このデータセットに {1} 台）はこのリーダーが解釈できる投影を"
+       "返さず、近似できませんでした。素の {2} で代用します。これらのカメラからの"
+       "復元は正しくなりません。"),
+    ZH_HANS("{0} 相机模型（本数据集中 {1} 台）未给出本读取器能理解的投影，无法拟合；"
+            "改用普通的 {2}。由这些相机重建的结果会是错的。"),
+    ZH_HANT("{0} 相機模型（本資料集中 {1} 台）未給出本讀取器能理解的投影，無法擬合；"
+            "改用普通的 {2}。由這些相機重建的結果會是錯的。"),
+    KO("{0} 카메라 모델(이 데이터셋에 {1} 대)은 이 리더가 이해할 수 있는 투영을 "
+       "내놓지 않아 근사할 수 없었습니다. 기본 {2} 로 대체합니다. 이 카메라들로부터의 "
+       "복원은 잘못됩니다."),
+    ES("el modelo de cámara {0} ({1} en este conjunto) no proyecta nada que "
+       "este lector entienda, así que no se pudo ajustar; se usa una {2} "
+       "simple. Lo que se reconstruya desde esas cámaras estará mal."),
+    FR("le modèle de caméra {0} ({1} dans ce jeu de données) ne projette rien "
+       "que ce lecteur comprenne, il n'a donc pas pu être ajusté ; repli sur "
+       "une {2} simple. Ce qui sera reconstruit depuis ces caméras sera faux."),
+    DE("das Kameramodell {0} ({1} in diesem Datensatz) liefert keine Projektion, "
+       "die dieser Leser versteht, und ließ sich daher nicht anpassen; "
+       "ersatzweise eine schlichte {2}. Was aus diesen Kameras rekonstruiert "
+       "wird, ist falsch."),
+    PT("o modelo de câmera {0} ({1} neste conjunto) não projeta nada que este "
+       "leitor entenda, então não pôde ser ajustado; usando uma {2} simples. O "
+       "que for reconstruído a partir dessas câmeras ficará errado."),
+    IT("il modello di camera {0} ({1} in questo dataset) non proietta nulla che "
+       "questo lettore capisca, quindi non è stato possibile approssimarlo; si "
+       "ripiega su una {2} semplice. Ciò che viene ricostruito da queste camere "
+       "sarà sbagliato."),
+    NL("het cameramodel {0} ({1} in deze dataset) projecteert niets wat deze "
+       "lezer begrijpt en kon dus niet benaderd worden; er wordt teruggevallen "
+       "op een gewone {2}. Wat uit die camera's gereconstrueerd wordt, klopt "
+       "niet."),
+    RU("модель камеры {0} ({1} в этом наборе) не даёт проекции, понятной этому "
+       "загрузчику, поэтому приблизить её не удалось; берётся обычная {2}. "
+       "Всё, что будет восстановлено с этих камер, окажется неверным."),
+    TR("{0} kamera modeli (bu veri kumesinde {1} adet) bu okuyucunun anladigi "
+       "bir izdusum vermiyor, bu yuzden yaklasilamadi; duz bir {2} "
+       "kullaniliyor. Bu kameralardan yeniden olusturulan sey yanlis olacak."));
+
 SS_MSG(colmap_parse_failed,
     EN("the COLMAP data could not be read: {0}"),
     JA("COLMAP のデータを読めませんでした: {0}"),

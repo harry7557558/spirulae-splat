@@ -179,54 +179,54 @@ float3 unproject_raydir(
     return raydir;
 }
 
-[CudaDeviceExport]
-float3 generate_ray_d2n(
+[ForceInline]
+float3 generate_ray_d2n<D : ICameraDistortion>(
     const no_diff float2 pix_pos,
     const no_diff float4 intrins,
-    const no_diff float[10] dist_coeffs,
+    const no_diff float dist_coeffs[D.kNumParams],
     const int camera_model,
     const bool is_ray_depth
 ) {
     float2 uv = (pix_pos - intrins.zw) / intrins.xy;
     float2 uv_u;
-    if (!undistort_point(uv, dist_coeffs, 12, uv_u)) {
+    if (!undistort_point<D>(uv, dist_coeffs, 12, uv_u)) {
         return float3(0);
     }
 
     return unproject_raydir(uv_u, camera_model, is_ray_depth);
 }
 
-[CudaDeviceExport]
+[ForceInline]
 [Differentiable]
-float3 depth_to_point(
+float3 depth_to_point<D : ICameraDistortion>(
     const no_diff float2 pix_pos,
     const no_diff float4 intrins,  // fx, fy, cx, cy
-    const no_diff float[10] dist_coeffs,
+    const no_diff float dist_coeffs[D.kNumParams],
     const int camera_model,
     const bool is_ray_depth,
     const float depth
 ) {
     float2 uv = (pix_pos - intrins.zw) / intrins.xy;
     float2 uv_u;
-    if (!no_diff undistort_point(uv, dist_coeffs, 12, uv_u)) {
+    if (!no_diff undistort_point<D>(uv, dist_coeffs, 12, uv_u)) {
         return float3(0.0f);
     }
 
     return depth * unproject_raydir(uv_u, camera_model, is_ray_depth);
 }
 
-[CudaDeviceExport]
-float depth_to_point_vjp(
+[ForceInline]
+float depth_to_point_vjp<D : ICameraDistortion>(
     const no_diff float2 pix_pos,
     const no_diff float4 intrins,  // fx, fy, cx, cy
-    const no_diff float[10] dist_coeffs,
+    const no_diff float dist_coeffs[D.kNumParams],
     const int camera_model,
     const bool is_ray_depth,
     const float depth,
     const float3 v_point
 ) {
     DifferentialPair<float> dp_depth = diffPair(depth);
-    bwd_diff(depth_to_point)(
+    bwd_diff(depth_to_point<D>)(
         pix_pos,
         intrins, dist_coeffs,
         camera_model, is_ray_depth,
@@ -268,12 +268,12 @@ void points_to_normal_vjp(
     v_points = dp_points.d;
 }
 
-[CudaDeviceExport]
+[ForceInline]
 [Differentiable]
-float3 depth_to_normal(
+float3 depth_to_normal<D : ICameraDistortion>(
     const no_diff float2 pix_center,
     const no_diff float4 intrins,  // fx, fy, cx, cy
-    const no_diff float[10] dist_coeffs,
+    const no_diff float dist_coeffs[D.kNumParams],
     const int camera_model,
     const bool is_ray_depth,
     const float4 depths  // x-, x+, y-, y+
@@ -291,7 +291,7 @@ float3 depth_to_normal(
 
         float2 uv = (pix_pos - intrins.zw) / intrins.xy;
         float2 uv_u;
-        if (!no_diff undistort_point(uv, dist_coeffs, 12, uv_u)) {
+        if (!no_diff undistort_point<D>(uv, dist_coeffs, 12, uv_u)) {
             return float3(0.0f);
         }
 
@@ -307,11 +307,11 @@ float3 depth_to_normal(
     return normal;
 }
 
-[CudaDeviceExport]
-void depth_to_normal_vjp(
+[ForceInline]
+void depth_to_normal_vjp<D : ICameraDistortion>(
     const no_diff float2 pix_center,
     const no_diff float4 intrins,  // fx, fy, cx, cy
-    const no_diff float[10] dist_coeffs,
+    const no_diff float dist_coeffs[D.kNumParams],
     const int camera_model,
     const bool is_ray_depth,
     const float4 depths,  // x-, x+, y-, y+
@@ -319,7 +319,7 @@ void depth_to_normal_vjp(
     out float4 v_depths
 ) {
     DifferentialPair<float4> dp_depths = diffPair(depths);
-    bwd_diff(depth_to_normal)(
+    bwd_diff(depth_to_normal<D>)(
         pix_center,
         intrins, dist_coeffs,
         camera_model, is_ray_depth,
@@ -329,19 +329,19 @@ void depth_to_normal_vjp(
 }
 
 
-[CudaDeviceExport]
+[ForceInline]
 [Differentiable]
-float ray_depth_to_linear_depth_factor(
+float ray_depth_to_linear_depth_factor<D : ICameraDistortion>(
     const no_diff float2 pix_center,
     const no_diff float4 intrins,  // fx, fy, cx, cy
-    const no_diff float[10] dist_coeffs,
+    const no_diff float dist_coeffs[D.kNumParams],
     const int camera_model
 ) {
 
     float2 uv = (pix_center - intrins.zw) / intrins.xy;
 
     float2 uv_u;
-    if (!no_diff undistort_point(uv, dist_coeffs, 12, uv_u))
+    if (!no_diff undistort_point<D>(uv, dist_coeffs, 12, uv_u))
         return 0.0f;
 
     // ray scaled to z == 1; factor = linear_depth / ray_depth
@@ -350,12 +350,12 @@ float ray_depth_to_linear_depth_factor(
     return sign(raydir.z) / length(raydir);
 }
 
-[CudaDeviceExport]
+[ForceInline]
 [Differentiable]
-float depth_normal_loss(
+float depth_normal_loss<D : ICameraDistortion>(
     const no_diff float2 pix_center,
     const no_diff float4 intrins, // fx, fy, cx, cy
-    const no_diff float[10] dist_coeffs,
+    const no_diff float dist_coeffs[D.kNumParams],
     const int camera_model,
     const bool is_ray_depth,
     const float4 depths, // x-, x+, y-, y+
@@ -372,7 +372,7 @@ float depth_normal_loss(
 
         float2 uv = (pix_pos - intrins.zw) / intrins.xy;
         float2 uv_u;
-        if (!no_diff undistort_point(uv, dist_coeffs, 12, uv_u)) {
+        if (!no_diff undistort_point<D>(uv, dist_coeffs, 12, uv_u)) {
             return 0.0f;
         }
 
@@ -396,11 +396,11 @@ float depth_normal_loss(
     return (num + eps) / (max(den, 0.0f) + eps);
 }
 
-[CudaDeviceExport]
-void depth_normal_loss_vjp(
+[ForceInline]
+void depth_normal_loss_vjp<D : ICameraDistortion>(
     const no_diff float2 pix_center,
     const no_diff float4 intrins, // fx, fy, cx, cy
-    const no_diff float[10] dist_coeffs,
+    const no_diff float dist_coeffs[D.kNumParams],
     const int camera_model,
     const bool is_ray_depth,
     const float4 depths, // x-, x+, y-, y+
@@ -411,7 +411,7 @@ void depth_normal_loss_vjp(
 ) {
     DifferentialPair<float4> dp_depths = diffPair(depths);
     DifferentialPair<float3> dp_gt_normal = diffPair(gt_normal);
-    bwd_diff(depth_normal_loss)(
+    bwd_diff(depth_normal_loss<D>)(
         pix_center,
         intrins, dist_coeffs,
         camera_model, is_ray_depth,
@@ -420,3 +420,88 @@ void depth_normal_loss_vjp(
     v_depths = dp_depths.d;
     v_gt_normal = dp_gt_normal.d;
 }
+
+
+// ================
+// Per-tier CUDA exports
+// ================
+//
+// slangc cannot export a generic. These kernels take the camera model at
+// runtime (one launch covers a whole batch) but the distortion tier at compile
+// time, so there is one wrapper per tier and none per model.
+
+#define _DEF_PIXELWISE_DIST_ENTRIES(suffix, D, NC) \
+    [CudaDeviceExport] \
+    float3 generate_ray_d2n##suffix( \
+        const float2 pix_pos, const float4 intrins, const float dist_coeffs[NC], \
+        const int camera_model, const bool is_ray_depth \
+    ) { \
+        return generate_ray_d2n<D>(pix_pos, intrins, dist_coeffs, camera_model, is_ray_depth); \
+    } \
+    [CudaDeviceExport] \
+    float3 depth_to_point##suffix( \
+        const float2 pix_pos, const float4 intrins, const float dist_coeffs[NC], \
+        const int camera_model, const bool is_ray_depth, const float depth \
+    ) { \
+        return depth_to_point<D>(pix_pos, intrins, dist_coeffs, camera_model, is_ray_depth, depth); \
+    } \
+    [CudaDeviceExport] \
+    float depth_to_point_vjp##suffix( \
+        const float2 pix_pos, const float4 intrins, const float dist_coeffs[NC], \
+        const int camera_model, const bool is_ray_depth, const float depth, \
+        const float3 v_point \
+    ) { \
+        return depth_to_point_vjp<D>(pix_pos, intrins, dist_coeffs, camera_model, \
+                                     is_ray_depth, depth, v_point); \
+    } \
+    [CudaDeviceExport] \
+    float3 depth_to_normal##suffix( \
+        const float2 pix_center, const float4 intrins, const float dist_coeffs[NC], \
+        const int camera_model, const bool is_ray_depth, const float4 depths \
+    ) { \
+        return depth_to_normal<D>(pix_center, intrins, dist_coeffs, camera_model, \
+                                  is_ray_depth, depths); \
+    } \
+    [CudaDeviceExport] \
+    void depth_to_normal_vjp##suffix( \
+        const float2 pix_center, const float4 intrins, const float dist_coeffs[NC], \
+        const int camera_model, const bool is_ray_depth, const float4 depths, \
+        const float3 v_normal, out float4 v_depths \
+    ) { \
+        depth_to_normal_vjp<D>(pix_center, intrins, dist_coeffs, camera_model, \
+                               is_ray_depth, depths, v_normal, v_depths); \
+    } \
+    [CudaDeviceExport] \
+    float ray_depth_to_linear_depth_factor##suffix( \
+        const float2 pix_center, const float4 intrins, const float dist_coeffs[NC], \
+        const int camera_model \
+    ) { \
+        return ray_depth_to_linear_depth_factor<D>(pix_center, intrins, dist_coeffs, camera_model); \
+    } \
+    [CudaDeviceExport] \
+    float depth_normal_loss##suffix( \
+        const float2 pix_center, const float4 intrins, const float dist_coeffs[NC], \
+        const int camera_model, const bool is_ray_depth, const float4 depths, \
+        const float3 gt_normal \
+    ) { \
+        return depth_normal_loss<D>(pix_center, intrins, dist_coeffs, camera_model, \
+                                    is_ray_depth, depths, gt_normal); \
+    } \
+    [CudaDeviceExport] \
+    void depth_normal_loss_vjp##suffix( \
+        const float2 pix_center, const float4 intrins, const float dist_coeffs[NC], \
+        const int camera_model, const bool is_ray_depth, const float4 depths, \
+        const float3 gt_normal, const float v_loss, \
+        out float4 v_depths, out float3 v_gt_normal \
+    ) { \
+        depth_normal_loss_vjp<D>(pix_center, intrins, dist_coeffs, camera_model, \
+                                 is_ray_depth, depths, gt_normal, v_loss, \
+                                 v_depths, v_gt_normal); \
+    }
+
+_DEF_PIXELWISE_DIST_ENTRIES(_none, DistNone, 1)
+_DEF_PIXELWISE_DIST_ENTRIES(_opencv, DistOpenCV, 4)
+_DEF_PIXELWISE_DIST_ENTRIES(_prism, DistThinPrism, 8)
+_DEF_PIXELWISE_DIST_ENTRIES(_rational, DistRational, 8)
+
+#undef _DEF_PIXELWISE_DIST_ENTRIES

@@ -288,6 +288,8 @@ enum class SaveClass : uint8_t {
   /* ---- warped-setup staging ---- */ \
   X(WarpInputIntrins               , "warp.input_intrins",                Other    , Never) \
   X(WarpInputDistCoeffs            , "warp.input_dist_coeffs",            Other    , Never) \
+  X(WarpSourceModels               , "warp.source_models",                Other    , Never) \
+  X(WarpSourceParams               , "warp.source_params",                Other    , Never) \
   /* ---- data-manager scratch ---- */ \
   X(DmAxesFisheye5                 , "dm.axes.fisheye5",                  Other    , Never) \
   X(DmAxesEquirect6                , "dm.axes.equirect6",                 Other    , Never) \

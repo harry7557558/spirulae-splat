@@ -26,7 +26,19 @@ namespace SlangProjectionUtils {
 #include "generated/set_namespace.cuh"
 #include "generated/projection_utils.cuh"
 }
+#include "core/CameraDistortion.cuh"
 #endif
+
+// Run BODY(tier) for the tier `value` names. The camera model stays runtime;
+// the tier is one compile-time axis shared by every camera in the context.
+#define _SS_DISPATCH_DISTORTION(value, BODY)                                       \
+    do { switch ((CameraDistortionType)(value)) {                                  \
+        case CameraDistortionType::None:      BODY(CameraDistortionType::None);      break; \
+        case CameraDistortionType::OpenCV:    BODY(CameraDistortionType::OpenCV);    break; \
+        case CameraDistortionType::ThinPrism: BODY(CameraDistortionType::ThinPrism); break; \
+        case CameraDistortionType::Rational:  BODY(CameraDistortionType::Rational);  break; \
+        default: throw std::runtime_error("Unknown camera distortion tier");        \
+    } } while (0)
 
 namespace meshing {
 
@@ -61,8 +73,10 @@ __device__ __forceinline__ float3 bilinear3(
 // the rasterizer's evaluate_color depth metric). Uses the same projection +
 // distortion model the occupancy/color images were rendered with, so the sample
 // lands on the pixel the splats were actually rasterized to.
+template<CameraDistortionType distortion>
 __device__ __forceinline__ bool project_point(
-    const float* viewmat, const float* intrin, const float* dist,
+    const float* viewmat, const float* intrin,
+    const CameraDistortionCoeffsBuffer& dist, int cam,
     int model, int W, int H,
     float px, float py, float pz, float& u, float& v, float& z
 ) {
@@ -72,19 +86,13 @@ __device__ __forceinline__ bool project_point(
 
     float3 p_cam = make_float3(cx_, cy_, cz_);
     float4 intr = make_float4(intrin[0], intrin[1], intrin[2], intrin[3]);
-    CameraDistortionCoeffs dist_coeffs;
-    #pragma unroll
-    for (int t = 0; t < 10; ++t) dist_coeffs[t] = dist ? dist[t] : 0.0f;
+    auto dist_coeffs = dist.load<distortion>(cam);
 
     // proj_nav handles the behind-camera / invalid-distortion cases and returns
     // pixel-space uv (already scaled by fx,fy and offset by cx,cy).
     float2 uv;
-    bool valid =
-        (model == (int)CameraModelType::FISHEYE)
-            ? SlangProjectionUtils::fisheye_proj_nav(p_cam, intr, dist_coeffs, &uv) :
-        (model == (int)CameraModelType::EQUISOLID)
-            ? SlangProjectionUtils::equisolid_proj_nav(p_cam, intr, dist_coeffs, &uv) :
-            SlangProjectionUtils::persp_proj_nav(p_cam, intr, dist_coeffs, &uv);
+    bool valid = camera_proj_nav<distortion>(
+        (CameraModelType)model, p_cam, intr, dist_coeffs, &uv);
     if (!valid) return false;
     u = uv.x; v = uv.y;
     if (u < 0.0f || u >= (float)W || v < 0.0f || v >= (float)H) return false;
@@ -137,10 +145,11 @@ __device__ __forceinline__ bool occ_bilinear(
 // ---------------------------------------------------------------------------
 // Occupancy sampling (k-th-smallest over the cameras that see the point)
 // ---------------------------------------------------------------------------
+template<CameraDistortionType distortion>
 __global__ void sample_occ_kernel(
     const float* __restrict__ xyz, int n,
     const float* __restrict__ viewmat, const float* __restrict__ intrin,
-    const float* __restrict__ dist, int model,
+    const CameraDistortionCoeffsBuffer dist, int model,
     const float3* __restrict__ moments, int W, int H,
     int k,
     float* __restrict__ occ_kmin, int* __restrict__ cnt
@@ -148,7 +157,7 @@ __global__ void sample_occ_kernel(
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     float u, v, z;
-    if (!project_point(viewmat, intrin, dist, model, W, H,
+    if (!project_point<distortion>(viewmat, intrin, dist, 0, model, W, H,
                        xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
         return;
     float occ;
@@ -180,10 +189,11 @@ __global__ void finalize_occ_kernel(
 // ---------------------------------------------------------------------------
 // Color sampling (rendered DC color weighted by transmittance until the point)
 // ---------------------------------------------------------------------------
+template<CameraDistortionType distortion>
 __global__ void sample_color_kernel(
     const float* __restrict__ xyz, int n,
     const float* __restrict__ viewmat, const float* __restrict__ intrin,
-    const float* __restrict__ dist, int model,
+    const CameraDistortionCoeffsBuffer dist, int model,
     const float3* __restrict__ moments, const float3* __restrict__ rgb,
     int W, int H,
     float3* __restrict__ num, float* __restrict__ den
@@ -191,7 +201,7 @@ __global__ void sample_color_kernel(
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     float u, v, z;
-    if (!project_point(viewmat, intrin, dist, model, W, H,
+    if (!project_point<distortion>(viewmat, intrin, dist, 0, model, W, H,
                        xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
         return;
     float occ;
@@ -239,17 +249,18 @@ __global__ void finalize_color_kernel(
 // ---------------------------------------------------------------------------
 // View texel density
 // ---------------------------------------------------------------------------
+template<CameraDistortionType distortion>
 __global__ void sample_view_density_kernel(
     const float* __restrict__ xyz, int n,
     const float* __restrict__ viewmat, const float* __restrict__ intrin,
-    const float* __restrict__ dist, int model,
+    const CameraDistortionCoeffsBuffer dist, int model,
     const float3* __restrict__ moments, int W, int H,
     float* __restrict__ dens
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     float u, v, z;
-    if (!project_point(viewmat, intrin, dist, model, W, H,
+    if (!project_point<distortion>(viewmat, intrin, dist, 0, model, W, H,
                        xyz[3*i], xyz[3*i+1], xyz[3*i+2], u, v, z))
         return;
     float occ;
@@ -407,11 +418,12 @@ __global__ void tri_prep_kernel(
     iota[t] = t;
 }
 
+template<CameraDistortionType distortion>
 __global__ void cull_kernel(
     const float* __restrict__ verts, int nv,
     const int* __restrict__ faces, int nf,
     const float* __restrict__ viewmats, const float* __restrict__ intrins,
-    const float* __restrict__ dist,
+    const CameraDistortionCoeffsBuffer dist,
     const int* __restrict__ Ws, const int* __restrict__ Hs,
     int model, int C,
     const float3* __restrict__ leafMin, const float3* __restrict__ leafMax,
@@ -424,8 +436,9 @@ __global__ void cull_kernel(
     for (int c = 0; c < C; ++c) {
         const float* vm = viewmats + (size_t)c * 16;
         float u, v, z;
-        if (!project_point(vm, intrins + (size_t)c*4, dist + (size_t)c*10,
-                           model, Ws[c], Hs[c], p.x, p.y, p.z, u, v, z))
+        if (!project_point<distortion>(
+                vm, intrins + (size_t)c*4, dist, c,
+                model, Ws[c], Hs[c], p.x, p.y, p.z, u, v, z))
             continue;                              // out of frame / behind camera
         // camera center in world: C = -R^T t (viewmat row-major world->cam 4x4)
         float3 cam = make_float3(
@@ -450,13 +463,18 @@ __global__ void cull_kernel(
 void launch_sample_occ(
     const float* xyz, int n,
     const float* viewmat, const float* intrin, const float* dist,
-    int camera_model, const float3* moments, int W, int H, int k,
+    int camera_model, int distortion,
+    const float3* moments, int W, int H, int k,
     float* occ_kmin, int* cnt
 ) {
     if (n <= 0) return;
-    sample_occ_kernel<<<_LAUNCH_ARGS_1D(n, 256)>>>(
-        xyz, n, viewmat, intrin, dist, camera_model, moments, W, H, k,
-        occ_kmin, cnt);
+    const CameraDistortionCoeffsBuffer dcb(const_cast<float*>(dist));
+    #define LAUNCH(D) \
+        sample_occ_kernel<D><<<_LAUNCH_ARGS_1D(n, 256)>>>( \
+            xyz, n, viewmat, intrin, dcb, camera_model, moments, W, H, k, \
+            occ_kmin, cnt)
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -470,13 +488,18 @@ void launch_finalize_occ(int n, const float* occ_kmin, const int* cnt, int k,
 void launch_sample_color(
     const float* xyz, int n,
     const float* viewmat, const float* intrin, const float* dist,
-    int camera_model, const float3* moments, const float3* rgb_img,
+    int camera_model, int distortion,
+    const float3* moments, const float3* rgb_img,
     int W, int H, float3* num, float* den
 ) {
     if (n <= 0) return;
-    sample_color_kernel<<<_LAUNCH_ARGS_1D(n, 256)>>>(
-        xyz, n, viewmat, intrin, dist, camera_model, moments, rgb_img, W, H,
-        num, den);
+    const CameraDistortionCoeffsBuffer dcb(const_cast<float*>(dist));
+    #define LAUNCH(D) \
+        sample_color_kernel<D><<<_LAUNCH_ARGS_1D(n, 256)>>>( \
+            xyz, n, viewmat, intrin, dcb, camera_model, moments, rgb_img, W, H, \
+            num, den)
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -490,11 +513,16 @@ void launch_finalize_color(int n, const float3* num, const float* den,
 void launch_sample_view_density(
     const float* xyz, int n,
     const float* viewmat, const float* intrin, const float* dist,
-    int camera_model, const float3* moments, int W, int H, float* dens
+    int camera_model, int distortion,
+    const float3* moments, int W, int H, float* dens
 ) {
     if (n <= 0) return;
-    sample_view_density_kernel<<<_LAUNCH_ARGS_1D(n, 256)>>>(
-        xyz, n, viewmat, intrin, dist, camera_model, moments, W, H, dens);
+    const CameraDistortionCoeffsBuffer dcb(const_cast<float*>(dist));
+    #define LAUNCH(D) \
+        sample_view_density_kernel<D><<<_LAUNCH_ARGS_1D(n, 256)>>>( \
+            xyz, n, viewmat, intrin, dcb, camera_model, moments, W, H, dens)
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -512,15 +540,19 @@ void launch_tri_prep(
 void launch_cull(
     const float* verts, int nv, const int* faces, int nf,
     const float* viewmats, const float* intrins, const float* dist,
-    const int* Ws, const int* Hs, int camera_model, int C,
+    const int* Ws, const int* Hs, int camera_model, int distortion, int C,
     const float3* leafMin, const float3* leafMax,
     const int2* internal, const float3* nodeAABB,
     uint32_t* visible
 ) {
     if (nv <= 0) return;
-    cull_kernel<<<_LAUNCH_ARGS_1D(nv, 256)>>>(
-        verts, nv, faces, nf, viewmats, intrins, dist, Ws, Hs, camera_model, C,
-        leafMin, leafMax, internal, nodeAABB, visible);
+    const CameraDistortionCoeffsBuffer dcb(const_cast<float*>(dist));
+    #define LAUNCH(D) \
+        cull_kernel<D><<<_LAUNCH_ARGS_1D(nv, 256)>>>( \
+            verts, nv, faces, nf, viewmats, intrins, dcb, Ws, Hs, camera_model, C, \
+            leafMin, leafMax, internal, nodeAABB, visible)
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 

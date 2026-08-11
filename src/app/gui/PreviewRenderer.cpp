@@ -277,39 +277,56 @@ constexpr double kPi = 3.14159265358979323846;   // MSVC has no M_PI by default
 
 struct P3 { float x, y, z; };
 
-bool has_distortion(const float* d) {
-    for (int i = 0; i < 10; i++) if (d[i] != 0.0f) return true;
+bool has_distortion(int tier, const float* d) {
+    if (tier == (int)CameraDistortionType::None) return false;
+    for (int i = 0; i < kCameraDistortionParams; i++) if (d[i] != 0.0f) return true;
     return false;
 }
 
-// dist = [k1 k2 k3 k4 p1 p2 s1 s2 b1 b2] (projection_utils.cuh:1166)
-void distort_pt(double u, double v, const float* d, double out[2]) {
+// Host mirror of the tier structs in shaders/projection_utils.slang; the slot
+// order differs per tier, which is why the tier travels with the coefficients.
+void distort_pt(double u, double v, int tier, const float* d, double out[2]) {
     double r2 = u*u + v*v;
+    if (tier == (int)CameraDistortionType::None) {
+        out[0] = u; out[1] = v;
+        return;
+    }
+    if (tier == (int)CameraDistortionType::OpenCV) {
+        double radial = 1 + r2*(d[0] + r2*d[1]);
+        out[0] = u*radial + 2*d[2]*u*v + d[3]*(r2 + 2*u*u);
+        out[1] = v*radial + 2*d[3]*u*v + d[2]*(r2 + 2*v*v);
+        return;
+    }
+    if (tier == (int)CameraDistortionType::Rational) {
+        double radial = (1 + r2*(d[0] + r2*(d[1] + r2*d[2])))
+                      / (1 + r2*(d[3] + r2*(d[4] + r2*d[5])));
+        out[0] = u*radial + 2*d[6]*u*v + d[7]*(r2 + 2*u*u);
+        out[1] = v*radial + 2*d[7]*u*v + d[6]*(r2 + 2*v*v);
+        return;
+    }
     double radial = 1 + r2*(d[0] + r2*(d[1] + r2*(d[2] + r2*d[3])));
-    double xd = u*radial + 2*d[4]*u*v + d[5]*(r2 + 2*u*u) + d[6]*r2;
-    double yd = v*radial + 2*d[5]*u*v + d[4]*(r2 + 2*v*v) + d[7]*r2;
-    out[0] = xd + d[8]*xd + d[9]*yd;   // b1/b2 mix into x
-    out[1] = yd;
+    out[0] = u*radial + 2*d[4]*u*v + d[5]*(r2 + 2*u*u) + d[6]*r2;
+    out[1] = v*radial + 2*d[5]*u*v + d[4]*(r2 + 2*v*v) + d[7]*r2;
 }
 
-void distort_jac(double qx, double qy, const float* d, double J[4]) {
+void distort_jac(double qx, double qy, int tier, const float* d, double J[4]) {
     const double e = 1e-5;
     double f[2], fx[2], fy[2];
-    distort_pt(qx, qy, d, f);
-    distort_pt(qx + e, qy, d, fx);
-    distort_pt(qx, qy + e, d, fy);
+    distort_pt(qx, qy, tier, d, f);
+    distort_pt(qx + e, qy, tier, d, fx);
+    distort_pt(qx, qy + e, tier, d, fy);
     J[0] = (fx[0]-f[0])/e; J[1] = (fx[1]-f[1])/e;   // j00 j10
     J[2] = (fy[0]-f[0])/e; J[3] = (fy[1]-f[1])/e;   // j01 j11
 }
 
 // Newton solve distort(q) = (u,v), with undistort_point_0's failure
 // conditions (well-posed forward Jacobian + re-distorts within 0.01).
-bool undistort_pt(double u, double v, const float* d, double out[2]) {
+bool undistort_pt(double u, double v, int tier, const float* d, double out[2]) {
     double qx = u, qy = v;
     for (int it = 0; it < 8; it++) {
         double f[2], J[4];
-        distort_pt(qx, qy, d, f);
-        distort_jac(qx, qy, d, J);
+        distort_pt(qx, qy, tier, d, f);
+        distort_jac(qx, qy, tier, d, J);
         double det = J[0]*J[3] - J[2]*J[1];
         if (std::fabs(det) < 1e-12) break;
         double rx = f[0] - u, ry = f[1] - v, inv = 1/det;
@@ -318,10 +335,10 @@ bool undistort_pt(double u, double v, const float* d, double out[2]) {
     }
     if (!std::isfinite(qx) || !std::isfinite(qy)) return false;
     double J[4], f[2];
-    distort_jac(qx, qy, d, J);
+    distort_jac(qx, qy, tier, d, J);
     double det = J[0]*J[3] - J[2]*J[1];
     if (std::min(det, std::min(J[0], J[3])) <= 0) return false;   // folded
-    distort_pt(qx, qy, d, f);
+    distort_pt(qx, qy, tier, d, f);
     if (std::hypot(f[0]-u, f[1]-v) >= 0.01) return false;
     out[0] = qx; out[1] = qy;
     return true;
@@ -337,7 +354,7 @@ bool norm3(double x, double y, double z, double out[3]) {
 // Unproject a normalized image point to a unit ray in CV camera space
 // (+Z forward, +Y down); false when outside the valid domain. Mirrors
 // generate_ray (projection_utils.cuh:1368).
-bool generate_ray(double u, double v, int model, const float* d, double out[3]) {
+bool generate_ray(double u, double v, int model, int tier, const float* d, double out[3]) {
     if (model == M_EQUIRECT) {
         if (std::fabs(u) > kPi || std::fabs(v) > kPi/2) return false;
         double cl = std::cos(v);
@@ -345,9 +362,9 @@ bool generate_ray(double u, double v, int model, const float* d, double out[3]) 
         return true;
     }
     double uu = u, vv = v;
-    if (has_distortion(d)) {
+    if (has_distortion(tier, d)) {
         double q[2];
-        if (!undistort_pt(u, v, d, q)) return false;
+        if (!undistort_pt(u, v, tier, d, q)) return false;
         uu = q[0]; vv = q[1];
     }
     double r = std::hypot(uu, vv);
@@ -372,7 +389,7 @@ struct FrustumTemplate { std::vector<FrustumLine> lines; std::vector<P3> anchors
 // interior gridlines (wire dome); equirectangular gets a lat/long wire
 // globe over the pixel grid. See viewer/js/dataset.js frustumTemplate for
 // the full rationale.
-FrustumTemplate frustum_template(int model, int w, int h, float fx, float fy,
+FrustumTemplate frustum_template(int model, int tier, int w, int h, float fx, float fy,
                                  float cx, float cy, const float* dist) {
     FrustumTemplate out;
     if (w < 1) w = std::max(1, (int)std::lround(2*cx));
@@ -392,12 +409,12 @@ FrustumTemplate frustum_template(int model, int w, int h, float fx, float fy,
     // Unproject; outside the valid domain, shrink uv toward the principal
     // point until it re-enters (Visualizer.cu:146-157).
     auto ray = [&](double u, double v, double dir[3]) {
-        if (generate_ray(u, v, model, dist, dir)) return;
+        if (generate_ray(u, v, model, tier, dist, dir)) return;
         double t0 = 0, t1 = 1, best[3] = {0, 0, 1};
         bool have = false;
         for (int k = 0; k < 12; k++) {
             double s = 0.5*(t0+t1), rr[3];
-            if (generate_ray(u*s, v*s, model, dist, rr)) {
+            if (generate_ray(u*s, v*s, model, tier, dist, rr)) {
                 t0 = s; best[0]=rr[0]; best[1]=rr[1]; best[2]=rr[2]; have = true;
             } else t1 = s;
         }
@@ -862,22 +879,24 @@ bool PreviewRenderer::build(const ParsedDataset& ds, const PostSplitCameras& pos
         map_dir(dx, X); map_dir(dy, Y); map_dir(dz, Z);
 
         int model = ds.camera_models.empty() ? M_PINHOLE : (int)ds.camera_models[i];
+        int tier = ds.camera_distortions.empty()
+                       ? (int)CameraDistortionType::None : ds.camera_distortions[i];
         float fx = ds.intrins[i*4 + 0], fy = ds.intrins[i*4 + 1];
         float cx = ds.intrins[i*4 + 2], cy = ds.intrins[i*4 + 3];
-        static const float kZeroDist[10] = {};
+        static const float kZeroDist[kCameraDistortionParams] = {};
         const float* dist = ds.dist_coeffs.empty() ? kZeroDist
-                                                   : &ds.dist_coeffs[i*10];
+                                                   : &ds.dist_coeffs[i*kCameraDistortionParams];
         char key[256];
-        std::snprintf(key, sizeof key, "%d|%d|%d|%.3f|%.3f|%.3f|%.3f", model,
-                      ds.widths[i], ds.heights[i], fx, fy, cx, cy);
+        std::snprintf(key, sizeof key, "%d|%d|%d|%d|%.3f|%.3f|%.3f|%.3f",
+                      model, tier, ds.widths[i], ds.heights[i], fx, fy, cx, cy);
         std::string k = key;
-        for (int j = 0; j < 10; j++) {
+        for (int j = 0; j < kCameraDistortionParams; j++) {
             std::snprintf(key, sizeof key, "|%g", dist[j]);
             k += key;
         }
         auto it = templates.find(k);
         if (it == templates.end())
-            it = templates.emplace(k, frustum_template(model, ds.widths[i],
+            it = templates.emplace(k, frustum_template(model, tier, ds.widths[i],
                      ds.heights[i], fx, fy, cx, cy, dist)).first;
         const FrustumTemplate& tmpl = it->second;
 

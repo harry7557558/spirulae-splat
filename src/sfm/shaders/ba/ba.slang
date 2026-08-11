@@ -33,17 +33,14 @@
 // Bounds on 6 + kNumIntr for the model-agnostic Schur kernels, which size
 // register arrays by a compile-time dof. These kernels are *not* per-model
 // (a point's observations may span groups with different models), so they take
-// the dof as a generic value parameter MD and are instantiated at two tiers:
-//   compact -- covers every model up to RADIAL (dof 11); byte-identical to the
-//              pre-OpenCV kernels, so problems without OpenCV pay nothing.
-//   wide    -- covers OpenCV (dof 14).
+// the dof as a generic value parameter MD and are instantiated at three tiers,
+// so a problem pays for only the widest camera it actually uses:
+//   compact 12 -- up to RADIAL (dof 11); byte-identical to the pre-OpenCV kernels
+//   mid     14 -- OpenCV / OpenCV_FISHEYE
+//   wide    18 -- FullOpenCV / ThinPrismFisheye
 // The host (sfm/ba/Solver.h) picks the tier from the problem's actual maximum dof.
 // Adding a model with dof > kDofWide means bumping kDofWide (and kMaxCamDof in
-// sfm/ba/Problem.h). kDofCompact must stay >= the largest non-OpenCV model's dof.
-// Three dof tiers so a problem pays for only the widest camera it actually uses:
-//   compact 12 -- up to RADIAL (dof 11); byte-identical to the pre-OpenCV kernels
-//   mid     14 -- OpenCV / OpenCV_FISHEYE (dof 14)
-//   wide    18 -- FullOpenCV (15) / ThinPrismFisheye (18)
+// sfm/ba/Problem.h).
 static const int kDofCompact = 12;
 static const int kDofMid = 14;
 static const int kDofWide = 18;

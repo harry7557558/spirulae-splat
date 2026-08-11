@@ -51,6 +51,7 @@ void set_camera_params(
     int width,
     int height,
     std::string camera_model,
+    std::string distortion,
     TorchTensorView viewmats,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs
@@ -59,6 +60,8 @@ void set_camera_params(
     engine().camera.height = height;
     engine().camera.model = cmt(camera_model);
     engine().camera.model_str = camera_model;
+    engine().camera.distortion = cdt(distortion);
+    engine().camera.distortion_str = distortion;
     engine().camera.num = std::get<2>(viewmats)[0];
 
     if (std::get<2>(intrins)[0] != engine().camera.num ||
@@ -108,6 +111,7 @@ void set_training_data(
     if (!input_depth_is_ray_depth && engine().gt.depth.data_ptr() != nullptr) {
         linear_depth_to_ray_depth_inplace(
             engine().camera.model_str,
+        engine().camera.distortion_str,
             _dv_tv(engine().camera.intrins),
             _dt2d_tv(engine().camera.dist_coeffs),
             engine().camera.width, engine().camera.height,

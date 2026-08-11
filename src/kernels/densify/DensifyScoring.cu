@@ -4,15 +4,57 @@
 
 #include "kernels/densify/DensifyCommon.cuh"
 
+#include "kernels/projection/CameraVariants.cuh"
+
 // ================
 // Covariance-Based Scale Initialization
 // ================
 
+// (camera model, distortion tier) -> the matching *_proj_3dgs_nav export in
+// shaders/primitive_3dgs.slang. Only PINHOLE takes the image size;
+// EQUIRECTANGULAR takes no coefficients.
+template<CameraModelType M, CameraDistortionType D>
+struct CovProjNav;
+
+#define _SS_COV_PROJ(MODEL, TIER, CALL)                                            \
+template<> struct CovProjNav<CameraModelType::MODEL, CameraDistortionType::TIER> { \
+    static __device__ __forceinline__ bool proj(                                   \
+        float3 p_view, float3x3 cov3d, float4 intrins,                             \
+        const CameraDistortionCoeffsT<CameraDistortionType::TIER>& c,              \
+        uint width, uint height, float2x2* cov2d, float2* mean2d                   \
+    ) { return SlangProjectionUtils::CALL; }                                       \
+};
+
+#define _SS_COV_PERSP(TIER, SUFFIX) _SS_COV_PROJ(PINHOLE, TIER,                    \
+    persp_proj_3dgs_nav##SUFFIX(p_view, cov3d, intrins, c.v, width, height, cov2d, mean2d))
+
+#define _SS_COV_RADIAL(MODEL, PREFIX, TIER, SUFFIX) _SS_COV_PROJ(MODEL, TIER,      \
+    PREFIX##_proj_3dgs_nav##SUFFIX(p_view, cov3d, intrins, c.v, cov2d, mean2d))
+
+#define _SS_COV_RADIAL_TIERS(MODEL, PREFIX)          \
+    _SS_COV_RADIAL(MODEL, PREFIX, None,      _none)  \
+    _SS_COV_RADIAL(MODEL, PREFIX, OpenCV,    _opencv)\
+    _SS_COV_RADIAL(MODEL, PREFIX, ThinPrism, _prism)
+
+_SS_COV_PERSP(None,      _none)
+_SS_COV_PERSP(OpenCV,    _opencv)
+_SS_COV_PERSP(ThinPrism, _prism)
+_SS_COV_PERSP(Rational,  _rational)
+_SS_COV_RADIAL_TIERS(FISHEYE,   fisheye)
+_SS_COV_RADIAL_TIERS(EQUISOLID, equisolid)
+_SS_COV_PROJ(EQUIRECTANGULAR, None,
+             equirect_proj_3dgs_nav(p_view, cov3d, intrins, cov2d, mean2d))
+
+#undef _SS_COV_RADIAL_TIERS
+#undef _SS_COV_RADIAL
+#undef _SS_COV_PERSP
+#undef _SS_COV_PROJ
+
+template<CameraModelType camera_model, CameraDistortionType distortion>
 __global__ void cov_scale_init_kernel(
     int64_t num_points,
     int32_t num_cameras,
     const float3* __restrict__ points,  // [N, 3]
-    const bool* __restrict__ is_fisheye,  // [C]; TODO: equisolid
     const int2* __restrict__ sizes,  // [C, 2]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const float4 *__restrict__ viewmats,  // [C, 4, 4]
@@ -29,7 +71,7 @@ __global__ void cov_scale_init_kernel(
     for (int32_t i = 0; i < num_cameras; ++i) {
         float4 intrin = intrins[i];
         int width = sizes[i].x, height = sizes[i].y;
-        CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(i);
+        CameraDistortionCoeffsT<distortion> dist_coeffs = dist_coeffs_buffer.load<distortion>(i);
 
         float4 p_wh = {p_world.x, p_world.y, p_world.z, 1.0f};
         float3 p_view = {
@@ -38,21 +80,12 @@ __global__ void cov_scale_init_kernel(
             dot(viewmats[4*i+2], p_wh),
         };
 
-        bool valid = false;
         constexpr float eps = 1e-6f;
         float3x3 cov3d = {eps, 0, 0, 0, eps, 0, 0, 0, eps};
         float2x2 cov2d;
         float2 mean2d;
-        if (is_fisheye[i]) {
-            valid = SlangProjectionUtils::fisheye_proj_3dgs_nav(
-                p_view, cov3d, intrin, dist_coeffs, &cov2d, &mean2d
-            );
-        }
-        else {
-            valid = SlangProjectionUtils::persp_proj_3dgs_nav(
-                p_view, cov3d, intrin, dist_coeffs, width, height, &cov2d, &mean2d
-            );
-        }
+        bool valid = CovProjNav<camera_model, distortion>::proj(
+            p_view, cov3d, intrin, dist_coeffs, width, height, &cov2d, &mean2d);
 
         #pragma unroll
         for (int i = 0; i < 2; ++i) {
@@ -73,26 +106,38 @@ __global__ void cov_scale_init_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void cov_scale_init_tensor(
     DeviceVector<float3> points,  // [N, 3]
-    DeviceVector<bool> is_fisheye,  // [C], bool
+    const std::string camera_model,
+    const std::string distortion,
     DeviceVector<int2> sizes,  // [C, 2], int32
     DeviceVector<float4> intrins,  // [C, 4]
     DeviceVector<float4> viewmats,  // [C, 4, 4] as 4*C float4 elements
-    TorchTensorView dist_coeffs, // [C]
+    TorchTensorView dist_coeffs, // [C, 8]
     DeviceVector<float> log_scales  // [N, 1] output
 ) {
     int64_t N = points.size();
     int64_t C = intrins.size();
 
-    cov_scale_init_kernel<<<_LAUNCH_ARGS_1D(N, 256)>>>(
-        N, C,
-        points.data_ptr(),
-        is_fisheye.data_ptr(),
-        sizes.data_ptr(),
-        intrins.data_ptr(),
-        viewmats.data_ptr(),
-        dist_coeffs,
-        log_scales.data_ptr()
-    );
+    const CameraModelType cm = cmt(camera_model);
+    const CameraDistortionType cd = cdt(distortion);
+
+    #define _LAUNCH_ARGS ( \
+        N, C, \
+        points.data_ptr(), \
+        sizes.data_ptr(), \
+        intrins.data_ptr(), \
+        viewmats.data_ptr(), \
+        dist_coeffs, \
+        log_scales.data_ptr() )
+
+    #define _DISPATCH(M, D) \
+        if (cm == CameraModelType::M && cd == CameraDistortionType::D) \
+            cov_scale_init_kernel<CameraModelType::M, CameraDistortionType::D> \
+                <<<_LAUNCH_ARGS_1D(N, 256)>>> _LAUNCH_ARGS; else
+    SS_FOR_EACH_CAMERA_VARIANT(_DISPATCH)
+        throw std::runtime_error("cov_scale_init_tensor: unsupported camera model / distortion tier");
+    #undef _DISPATCH
+    #undef _LAUNCH_ARGS
+
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 

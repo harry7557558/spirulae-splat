@@ -6,7 +6,8 @@
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV,
     DistortionType::None,
     true,
     false,
@@ -51,7 +52,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV,
     DistortionType::None,
     false,
     true,
@@ -96,7 +98,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV,
     DistortionType::None,
     false,
     true,
@@ -141,7 +144,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV,
     DistortionType::None,
     false,
     false,
@@ -186,7 +190,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV,
     DistortionType::None,
     false,
     false,
@@ -231,7 +236,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV,
     DistortionType::D,
     true,
     true,
@@ -276,7 +282,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV,
     DistortionType::D,
     true,
     true,
@@ -321,7 +328,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV,
     DistortionType::D,
     true,
     false,
@@ -366,7 +374,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV,
     DistortionType::D,
     true,
     false,

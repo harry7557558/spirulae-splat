@@ -283,8 +283,9 @@ RootBox compute_root_box(const void* root_aabb_dev) {
 
 void fill_frustums(int64_t n, const void* intrins, const void* widths,
                    const void* heights, const void* camera_models,
-                   const void* dist_coeffs, const void* c2w, float size,
-                   void* lss_buffer, void* tri_buffer) {
+                   const void* dist_coeffs, uint32_t dist_spec,
+                   const void* c2w, float size, void* lss_buffer,
+                   void* tri_buffer) {
     VisFrustumParams p{};
     p.intrins = (uint64_t)intrins;
     p.widths = (uint64_t)widths;
@@ -296,8 +297,9 @@ void fill_frustums(int64_t n, const void* intrins, const void* widths,
     p.tri_buffer = (uint64_t)tri_buffer;
     p.size = size;
     p.N = (uint32_t)n;
-    vkk::dispatch("visualizer.vis_fill_frustum", backend::vk::SpecList{},
-                 (uint32_t)n, 1, 1, &p, sizeof(p));
+    vkk::dispatch("visualizer.vis_fill_frustum",
+                 backend::vk::SpecList{0u, dist_spec}, (uint32_t)n, 1, 1, &p,
+                 sizeof(p));
 }
 
 // root_aabb: u32[6] mapped; min words init 0xffffffff, max words 0.
@@ -347,7 +349,7 @@ struct BlitGeom {
 void run_blit(const TorchTensorView& render_rgbs,
               const TorchTensorView& render_depths,
               const TorchTensorView& render_alphas, int view_camera_model,
-              const TorchTensorView& view_intrins,
+              uint32_t dist_spec, const TorchTensorView& view_intrins,
               const TorchTensorView& view_viewmat,
               const TorchTensorView& view_dist_coeffs, const BlitGeom& geom,
               const void* thumbnails, int thumb_w, int thumb_h,
@@ -396,7 +398,7 @@ void run_blit(const TorchTensorView& render_rgbs,
     if (!backend::vk::params_alloc(sizeof(p), &params_addr, &params_mapped))
         throw std::runtime_error("Vulkan backend: params ring failed");
     std::memcpy(params_mapped, &p, sizeof(p));
-    vkk::dispatch("visualizer.vis_blit", backend::vk::SpecList{},
+    vkk::dispatch("visualizer.vis_blit", backend::vk::SpecList{0u, dist_spec},
                  (uint32_t)((w + 7) / 8), (uint32_t)((h + 3) / 4), 1,
                  &params_addr, sizeof(params_addr));
 
@@ -411,7 +413,7 @@ void run_blit(const TorchTensorView& render_rgbs,
 
 /* ---- engine-cached BVH build (mirrors _viewer_build_bvh) ---- */
 
-void _viewer_build_bvh() {
+void _viewer_build_bvh(uint32_t dist_spec) {
     auto& v = engine().viewer;
     int64_t n = v.N_post;
 
@@ -426,8 +428,9 @@ void _viewer_build_bvh() {
 
     fill_frustums(n, v.d_intrins.data_ptr(), v.d_widths.data_ptr(),
                   v.d_heights.data_ptr(), v.d_camera_models.data_ptr(),
-                  v.d_dist_coeffs.data_ptr(), v.d_camera_to_worlds.data_ptr(),
-                  v.camera_size, lss_buffer, tri_buffer);
+                  v.d_dist_coeffs.data_ptr(), dist_spec,
+                  v.d_camera_to_worlds.data_ptr(), v.camera_size, lss_buffer,
+                  tri_buffer);
 
     if (v.num_overlay > 0)
         backend::memcpy_sync(lss_buffer + (size_t)num_cam_lss * 2,
@@ -557,7 +560,8 @@ void engine_viewer_init(
         _hv_to_dv<int32_t>(PoolSlot::ViewerCmodels, camera_models);
     v.d_dist_coeffs = _hv_to_dv<float>(
         PoolSlot::ViewerDist,
-        TorchTensorView(std::get<0>(dist_coeffs), 4, {N * 10LL}));
+        TorchTensorView(std::get<0>(dist_coeffs), 4,
+                        {N * (int64_t)kCameraDistortionParams}));
     v.d_camera_to_worlds = _hv_to_dv<float>(
         PoolSlot::ViewerC2w,
         TorchTensorView(std::get<0>(camera_to_worlds), 4, {N * 12LL}));
@@ -677,6 +681,7 @@ void engine_blit_view(
     TorchTensorView render_depth,
     TorchTensorView render_alpha,
     int             view_camera_model,
+    std::string     distortion,
     TorchTensorView view_intrins,
     TorchTensorView view_viewmat,
     TorchTensorView view_dist_coeffs,
@@ -688,6 +693,7 @@ void engine_blit_view(
     float           grid_target_z,
     TorchTensorView out_rgb)
 {
+    const uint32_t dist_spec = vkk::distortion_spec(distortion);
     std::lock_guard<std::mutex> _vlock(viewer_mutex());
     auto& v = engine().viewer;
     if (!v.initialized) {
@@ -715,7 +721,7 @@ void engine_blit_view(
     BlitGeom geom;
     if (show_training_cameras || show_overlay) {
         if (!v.bvh_built || v.bvh_camera_size != v.camera_size)
-            _viewer_build_bvh();
+            _viewer_build_bvh(dist_spec);
         geom.lss_buffer = DevicePool::global().acquire<float4>(
             PoolSlot::ViewerLss, (size_t)v.bvh_num_lss * 2);
         geom.lss_nodes = v.bvh_lss_nodes_ptr;
@@ -733,7 +739,7 @@ void engine_blit_view(
     }
 
     run_blit(render_buffer, render_depth, render_alpha, view_camera_model,
-             view_intrins, view_viewmat, view_dist_coeffs, geom,
+             dist_spec, view_intrins, view_viewmat, view_dist_coeffs, geom,
              v.thumbnails.data_ptr(), VIEWER_THUMBNAIL_SIZE,
              VIEWER_THUMBNAIL_SIZE, min_max, out_rgb);
 }
@@ -744,6 +750,7 @@ void blit_train_cameras_tensor(
     TorchTensorView render_depths,
     TorchTensorView render_alphas,
     const int view_camera_model,
+    std::string distortion,
     TorchTensorView view_intrins,
     TorchTensorView view_viewmat,
     TorchTensorView view_dist_coeffs,
@@ -758,6 +765,7 @@ void blit_train_cameras_tensor(
     bool show_training_cameras,
     TorchTensorView out_rgb
 ) {
+    const uint32_t dist_spec = vkk::distortion_spec(distortion);
     auto& rgb_shape = std::get<2>(render_rgbs);
     int64_t h = rgb_shape[0], w = rgb_shape[1], c = rgb_shape[2];
     int64_t n = std::get<2>(intrins)[0];
@@ -773,7 +781,7 @@ void blit_train_cameras_tensor(
     if (!show_training_cameras) {
         BlitGeom geom;  // no frusta, no overlay
         run_blit(render_rgbs, render_depths, render_alphas,
-                 view_camera_model, view_intrins, view_viewmat,
+                 view_camera_model, dist_spec, view_intrins, view_viewmat,
                  view_dist_coeffs, geom, (void*)std::get<0>(thumbnails),
                  thumb_w, thumb_h, min_max, out_rgb);
         return;
@@ -789,7 +797,7 @@ void blit_train_cameras_tensor(
                   (const void*)std::get<0>(widths),
                   (const void*)std::get<0>(heights),
                   (const void*)std::get<0>(camera_models),
-                  (const void*)std::get<0>(dist_coeffs),
+                  (const void*)std::get<0>(dist_coeffs), dist_spec,
                   (const void*)std::get<0>(camera_to_worlds), camera_size,
                   lss_buffer, tri_buffer);
 
@@ -815,7 +823,7 @@ void blit_train_cameras_tensor(
     geom.show_cams = true;
     geom.show_overlay = false;
     run_blit(render_rgbs, render_depths, render_alphas, view_camera_model,
-             view_intrins, view_viewmat, view_dist_coeffs, geom,
+             dist_spec, view_intrins, view_viewmat, view_dist_coeffs, geom,
              (void*)std::get<0>(thumbnails), thumb_w, thumb_h, min_max,
              out_rgb);
 }

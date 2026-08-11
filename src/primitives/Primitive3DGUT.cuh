@@ -13,6 +13,7 @@ namespace SlangHarmonics {
 #endif
 
 #include "primitives/PrimitiveBase3DGS.cuh"
+#include "primitives/PrimitiveProjection.cuh"
 
 template<int sh_degree>
 struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
@@ -45,9 +46,10 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
         // See Primitive3DGS::project() for VALUE_BITS semantics. Identical
         // contract; the 3dgut path uses a different projection geometry but
         // shares the SH eval pipeline.
-        template<CameraModelType camera_model, int VALUE_BITS = 32>
+        template<CameraModelType camera_model, CameraDistortionType distortion,
+                 int VALUE_BITS = 32>
         inline __device__ void project(
-            ProjCamera cam,
+            ProjCameraT<distortion> cam,
             Vanilla3DGUT<sh_degree>::Screen& proj, float4& aabb, float& sorting_depth, float& radius,
             uint8_t* sh_packed = nullptr,
             float2*  sh_bounds = nullptr,
@@ -56,38 +58,14 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
         ) {
             float2 xy;
             float depth;
-            if constexpr (camera_model == CameraModelType::PINHOLE)
-                Slang3DGS::projection_3dgut_persp(
-                    false,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity
-                );
-            else if constexpr (camera_model == CameraModelType::FISHEYE)
-                Slang3DGS::projection_3dgut_fisheye(
-                    false,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity
-                );
-            else if constexpr (camera_model == CameraModelType::EQUISOLID)
-                Slang3DGS::projection_3dgut_equisolid(
-                    false,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity
-                );
-            else if constexpr (camera_model == CameraModelType::EQUIRECTANGULAR)
-                Slang3DGS::projection_3dgut_equirect(
-                    false,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity
-                );
+            Slang3DGSProj<camera_model, distortion>::fwd_3d(
+                false,
+                this->mean, this->quat, this->scale, this->opacity,
+                cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+                cam.dist_coeffs.v,
+                cam.width, cam.height,
+                &aabb, &sorting_depth, &radius, &xy, &depth, &proj.scale, &proj.opacity
+            );
             if (aabb.z > aabb.x && aabb.w > aabb.y) {
                 if constexpr (VALUE_BITS == 32) {
                     if constexpr (sh_degree == 0) proj.rgb = SlangHarmonics::sh0_to_color
@@ -126,9 +104,10 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
             }
         }
 
-        template<CameraModelType camera_model, bool atomic=true, int VALUE_BITS = 32>
+        template<CameraModelType camera_model, CameraDistortionType distortion,
+                 bool atomic=true, int VALUE_BITS = 32>
         inline __device__ void project_vjp(
-            ProjCamera cam,
+            ProjCameraT<distortion> cam,
             Vanilla3DGUT<sh_degree>::Screen v_proj,
             Vanilla3DGUT<sh_degree>::World& v_world, float3x3 &v_R, float3 &v_t,
             uint8_t* sh_packed = nullptr,
@@ -136,46 +115,16 @@ struct Vanilla3DGUT : public _BasePrimitive3DGUT<sh_degree> {
             int64_t  sh_base   = 0,
             int64_t  sh_bounds_stride = 256
         ) {
-            if constexpr (camera_model == CameraModelType::PINHOLE)
-                Slang3DGS::projection_3dgut_persp_vjp(
-                    false,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    make_float2(0), 0.0f, v_proj.scale, v_proj.opacity,
-                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
-                    &v_R, &v_t
-                );
-            else if constexpr (camera_model == CameraModelType::FISHEYE)
-                Slang3DGS::projection_3dgut_fisheye_vjp(
-                    false,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    make_float2(0), 0.0f, v_proj.scale, v_proj.opacity,
-                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
-                    &v_R, &v_t
-                );
-            else if constexpr (camera_model == CameraModelType::EQUISOLID)
-                Slang3DGS::projection_3dgut_equisolid_vjp(
-                    false,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    make_float2(0), 0.0f, v_proj.scale, v_proj.opacity,
-                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
-                    &v_R, &v_t
-                );
-            else if constexpr (camera_model == CameraModelType::EQUIRECTANGULAR)
-                Slang3DGS::projection_3dgut_equirect_vjp(
-                    false,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    make_float2(0), 0.0f, v_proj.scale, v_proj.opacity,
-                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
-                    &v_R, &v_t
-                );
+            Slang3DGSProj<camera_model, distortion>::vjp_3d(
+                false,
+                this->mean, this->quat, this->scale, this->opacity,
+                cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+                cam.dist_coeffs.v,
+                cam.width, cam.height,
+                make_float2(0), 0.0f, v_proj.scale, v_proj.opacity,
+                &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
+                &v_R, &v_t
+            );
             // SH: atomic for global memory, add for local/shared memory
             #define _ARGS_F32 ( \
                 this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh, \

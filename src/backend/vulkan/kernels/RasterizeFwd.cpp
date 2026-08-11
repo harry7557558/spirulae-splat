@@ -206,6 +206,7 @@ std::tuple<
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB
     const uint32_t image_width,
@@ -215,9 +216,7 @@ std::tuple<
     DistortionType dist_type,
     bool output_median
 ) {
-    CameraModelType cam = cmt(camera_model);
-    if ((int)cam < 0 || (int)cam > 3)
-        throw std::runtime_error("Unsupported camera model");
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
 
     const int64_t batch = tile_offsets.size<0>();
     const uint32_t tile_height = (uint32_t)tile_offsets.size<1>();
@@ -261,10 +260,10 @@ std::tuple<
     p.tile_height = tile_height;
 
     // Spec IDs: 0 = camera model, 1 = dist type, 2 = median,
-    // 3 = kRasterPacked (gaussian_ids present).
-    backend::vk::SpecList spec{(uint32_t)cam, dist_spec(dist_type),
+    // 3 = kRasterPacked (gaussian_ids present), 4 = distortion tier.
+    backend::vk::SpecList spec{cd.cam, dist_spec(dist_type),
                                output_median ? 1u : 0u,
-                               gaussian_ids.data_ptr() ? 1u : 0u};
+                               gaussian_ids.data_ptr() ? 1u : 0u, cd.dist};
     dispatch_raster("rasterize_fwd.rasterize_fwd_3dgut", spec,
                     (uint32_t)batch, tile_width, tile_height, &p, sizeof(p));
 

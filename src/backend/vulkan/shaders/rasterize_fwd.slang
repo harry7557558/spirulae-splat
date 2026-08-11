@@ -10,6 +10,7 @@
 //   kCameraModel  = CameraModelType 0..3 (eval3d entry only)
 //   kDistType     = 0 None | 1 D | 2 RGB_D (the instantiated subset)
 //   kOutputMedian = 0 | 1
+//   kDistortion   = CameraDistortionType 0..3 (eval3d entry only), last
 // The primitive pixel type is RGB_D for all current primitives, so the
 // render output channels are hard-wired to rgb + depth.
 //
@@ -27,6 +28,7 @@
 #undef CudaDeviceExport
 
 #include "raster_common.slang"
+#include "dist_spec.slang"
 
 [SpecializationConstant]
 const int kCameraModel = 0;
@@ -306,7 +308,7 @@ struct RasterFwd3dgutParams {
     // cameras
     float* viewmats;     // [I, 16] row-major
     float4* intrins;     // [I]
-    float* dist_coeffs;  // [I, 10] or null
+    float* dist_coeffs;  // [I, 8] or null
     float4* aabb;        // [..] projected 2D AABB (xmin,ymin,xmax,ymax)
     int* tile_offsets;   // [I, tile_height, tile_width]
     int* flatten_ids;    // [n_isects]
@@ -326,6 +328,11 @@ struct RasterFwd3dgutParams {
     uint32_t tile_width;
     uint32_t tile_height;
 };
+
+#define _rf_ray(D)                                                    \
+    ray_ok = pixel_ray<D>(p.dist_coeffs, image_id, kCameraModel,      \
+                          float2((px - intrin.z) / intrin.x,          \
+                                 (py - intrin.w) / intrin.y), raydir)
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -351,11 +358,6 @@ void rasterize_fwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         ct[r] = vm[4 * r + 3];
     }
     float4 intrin = p.intrins[image_id];
-    float dist[10];
-    [ForceUnroll]
-    for (int k = 0; k < 10; k++)
-        dist[k] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * image_id + k];
 
     float3 ray_o = transform_ray_o(R, ct);
 
@@ -366,11 +368,10 @@ void rasterize_fwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
     bool inside = (i < p.height && j < p.width);
 
-    float3 raydir;
-    inside = inside &&
-             generate_ray(float2((px - intrin.z) / intrin.x,
-                                 (py - intrin.w) / intrin.y),
-                          kCameraModel, dist, raydir);
+    float3 raydir = float3(0.0f);
+    bool ray_ok = false;
+    SS_DISPATCH_DIST(_rf_ray)
+    inside = inside && ray_ok;
     float3 ray_d = transform_ray_d(R, raydir);
 
     bool done = !inside;
@@ -538,3 +539,9 @@ void rasterize_fwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         p.out_last_ids[pix_id_global] = int(cur_idx);
     }
 }
+
+#undef _rf_ray
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

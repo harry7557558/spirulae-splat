@@ -179,26 +179,28 @@ struct FisheyeModel : ICameraModel {
     }
 };
 
-// COLMAP FULL_OPENCV, reduced to the polynomial (non-rational) part: pinhole
-// Brown-Conrady with three radial (k1,k2,k3) and two tangential (p1,p2) terms.
-// Host mirror: sfm/core/Camera.h CamModel::FullOpenCV. Emitted as FULL_OPENCV with
-// k4..k6 = 0.
+// COLMAP FULL_OPENCV: pinhole Brown-Conrady with a rational radial term --
+// (1 + k1 r^2 + k2 r^4 + k3 r^6) / (1 + k4 r^2 + k5 r^4 + k6 r^6) -- plus the
+// two tangential terms. Host mirror: sfm/core/Camera.h CamModel::FullOpenCV.
 struct FullOpenCVModel : ICameraModel {
-    static const int kNumIntr = 9;
-    Real fx; Real fy; Real cx; Real cy; Real k1; Real k2; Real p1; Real p2; Real k3;
+    static const int kNumIntr = 12;
+    Real fx; Real fy; Real cx; Real cy;
+    Real k1; Real k2; Real p1; Real p2; Real k3; Real k4; Real k5; Real k6;
 
-    [Differentiable] static FullOpenCVModel fromArray(Real v[9]) {
+    [Differentiable] static FullOpenCVModel fromArray(Real v[12]) {
         FullOpenCVModel m;
         m.fx = v[0]; m.fy = v[1];
-        m.k1 = v[2]; m.k2 = v[3]; m.p1 = v[4]; m.p2 = v[5]; m.k3 = v[6];
-        m.cx = v[7]; m.cy = v[8];
+        m.k1 = v[2]; m.k2 = v[3]; m.p1 = v[4]; m.p2 = v[5];
+        m.k3 = v[6]; m.k4 = v[7]; m.k5 = v[8]; m.k6 = v[9];
+        m.cx = v[10]; m.cy = v[11];
         return m;
     }
     [Differentiable] RVec2 project(RVec3 p) {
         Real xp = p.x / p.z;
         Real yp = p.y / p.z;
         Real r2 = xp * xp + yp * yp;
-        Real radial = Real(1.0) + r2 * (k1 + r2 * (k2 + r2 * k3));
+        Real radial = (Real(1.0) + r2 * (k1 + r2 * (k2 + r2 * k3))) /
+                      (Real(1.0) + r2 * (k4 + r2 * (k5 + r2 * k6)));
         Real dx = xp * radial + Real(2.0) * p1 * xp * yp + p2 * (r2 + Real(2.0) * xp * xp);
         Real dy = yp * radial + p1 * (r2 + Real(2.0) * yp * yp) + Real(2.0) * p2 * xp * yp;
         return rvec2(fx * dx + cx, fy * dy + cy);

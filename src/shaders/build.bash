@@ -15,6 +15,7 @@ mkdir -p "$out_dir"
 shaders=(
     "shaders/.slang:${out_dir}/slang.cu"
     "shaders/projection_utils.slang:${out_dir}/projection_utils.cu"
+    "shaders/camera_source.slang:${out_dir}/camera_source.cu"
     "shaders/per_pixel_losses.slang:${out_dir}/per_pixel_losses.cu"
     "shaders/per_splat_losses.slang:${out_dir}/per_splat_losses.cu"
     "shaders/pixel_wise.slang:${out_dir}/pixel_wise.cu"
@@ -28,6 +29,7 @@ shaders=(
 mv_targets=(
     "${out_dir}/slang.cu"
     "${out_dir}/projection_utils.cu"
+    "${out_dir}/camera_source.cu"
     "${out_dir}/per_pixel_losses.cu"
     "${out_dir}/per_splat_losses.cu"
     "${out_dir}/pixel_wise.cu"

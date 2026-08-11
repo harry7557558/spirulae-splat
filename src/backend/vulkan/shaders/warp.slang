@@ -1,6 +1,7 @@
-// Dataset GT warp + byte->float conversion kernels (Vulkan backend),
-// mirroring kernels/pixelwise/ImageWarp.cu + GtDepthNormalWarp.cu (launch_warp_*) and
-// the raw converters (uint8/16_*_to_float_raw). The wide warps project each
+// Dataset GT warp + re-distort + byte->float conversion kernels (Vulkan
+// backend), mirroring kernels/pixelwise/ImageWarp.cu + GtDepthNormalWarp.cu
+// (launch_warp_*) + ImageRedistort.cu (launch_redistort_*) and the raw
+// converters (uint8/16_*_to_float_raw). The wide warps project each
 // pinhole-face ray through the same canonical projection_utils.slang
 // *_proj_nav exports the CUDA kernels call, so per-pixel outputs differ only
 // by fast-math rounding (plus isolated valid-flip / nearest-rounding pixels
@@ -21,7 +22,9 @@
 #include "int64_compat.slang"
 #include "int8_compat.slang"
 #include "shaders/projection_utils.slang"
+#include "shaders/camera_source.slang"
 #undef CudaDeviceExport
+#include "dist_spec.slang"
 
 // Input element kinds (the CUDA T_in template axis / elem_size dispatch).
 static const int kElemU8 = 0;
@@ -93,14 +96,6 @@ float4 _wp_intrin(float* intrins, int bid) {
 }
 
 [ForceInline]
-float[10] _wp_dist(float* dist_coeffs, int bid) {
-    float[10] dc;
-    [ForceUnroll]
-    for (int k = 0; k < 10; k++) dc[k] = dist_coeffs[bid * 10 + k];
-    return dc;
-}
-
-[ForceInline]
 void _wp_axes(float* axes, int ki, out float3 ax, out float3 ay,
               out float3 az) {
     int b = 9 * ki;
@@ -109,15 +104,44 @@ void _wp_axes(float* axes, int ki, out float3 ax, out float3 ay,
     az = float3(axes[b + 6], axes[b + 7], axes[b + 8]);
 }
 
-// Camera-model dispatch matching the CUDA kernels' ternary chain.
+// Camera-model dispatch matching the CUDA kernels' ternary chain; the
+// distortion tier comes from kDistortion.
 [ForceInline]
-bool _wp_proj(int camera_model, float3 raydir, float4 intrin,
-              float[10] dist_coeffs, out float2 uv) {
+bool _wp_proj<D : ICameraDistortion>(int camera_model, float3 raydir,
+                                     float4 intrin, float* dist_coeffs,
+                                     int bid, out float2 uv) {
+    float dc[D.kNumParams];
+    load_dist_coeffs<D>(dist_coeffs, uint(bid), dc);
     if (camera_model == int(CameraModelType::FISHEYE))
-        return fisheye_proj_nav(raydir, intrin, dist_coeffs, uv);
+        return fisheye_proj<D, false>(raydir, intrin, dc, uv);
     if (camera_model == int(CameraModelType::EQUISOLID))
-        return equisolid_proj_nav(raydir, intrin, dist_coeffs, uv);
-    return persp_proj_nav(raydir, intrin, dist_coeffs, uv);
+        return equisolid_proj<D, false>(raydir, intrin, dc, uv);
+    return persp_proj<D, false>(raydir, intrin, dc, uv);
+}
+
+// Ray -> pixel of image `bid` through its TRUE COLMAP lens model, for cameras
+// the parser could only fit onto a tier (see shaders/camera_source.slang).
+[ForceInline]
+bool _wp_source_proj(int* source_models, float* source_params, int bid,
+                     float3 raydir, out float2 uv) {
+    float sp[kSourceMaxParams];
+    [ForceUnroll]
+    for (int k = 0; k < kSourceMaxParams; k++)
+        sp[k] = source_params[kSourceMaxParams * bid + k];
+    return source_project(source_models[bid], sp, raydir, uv);
+}
+
+// RayToPixel mirror: kFromSource resamples from the source projection instead
+// of the fitted one.
+[ForceInline]
+bool _wp_to_pixel<D : ICameraDistortion>(int camera_model, float3 raydir,
+                                         float4 intrin, float* dist_coeffs,
+                                         int* source_models,
+                                         float* source_params, int bid,
+                                         out float2 uv) {
+    if (kFromSource != 0)
+        return _wp_source_proj(source_models, source_params, bid, raydir, uv);
+    return _wp_proj<D>(camera_model, raydir, intrin, dist_coeffs, bid, uv);
 }
 
 // Equirectangular sample position for a face ray (see ImageWarp.cu; f is
@@ -164,15 +188,17 @@ float3 _wp_one_normal(uint* src, int kind, gindex_t plane, int H, int W,
     return r / rl;
 }
 
-// Shared params for the image / depth / normal warp entries. 96 bytes:
-// pushed directly (by value). Pointer fields are never null (zeros
+// Shared params for the image / depth / normal warp and re-distort entries.
+// 120 bytes: pushed directly (by value). Pointer fields are never null (zeros
 // fallback); the *_equi entries statically ignore intrins / dist_coeffs.
 struct WarpParams {
-    float* intrins;      // [B, 4]
-    float* dist_coeffs;  // [B, 10]
-    uint* src;           // [B, Hin, Win, C] u8 / u16 / f32 elements
-    float* dst;          // [B, K, Hout, Wout, C] float
-    float* axes;         // [K, 3, 3] face axes
+    float* intrins;        // [B, 4]
+    float* dist_coeffs;    // [B, 8]
+    int* source_models;    // [B] COLMAP model id (kFromSource / redistort)
+    float* source_params;  // [B, 16] that model's parameters
+    uint* src;             // [B, Hin, Win, C] u8 / u16 / f32 elements
+    float* dst;            // [B, K, Hout, Wout, C] float
+    float* axes;           // [K, 3, 3] face axes
     int B;
     int Hin;
     int Win;
@@ -182,11 +208,13 @@ struct WarpParams {
     int Wout;
     int elem_kind;     // kElemU8 / kElemU16 / kElemF32
     int camera_model;  // CameraModelType (wide entries)
-    int in_H;          // intrinsics reference resolution (the projected uv is
-    int in_W;          //   in this pixel space; depth/normal rescale to Hin/Win)
+    int ref_H;         // intrinsics reference resolution (the projected uv is
+    int ref_W;         //   in this pixel space; every grid rescales from it)
     int ray_depth;     // depth entries: input already stores ray depth
     float norm_inv;
     float decode_off;  // normal entries: post-normalization offset
+    float invalid;     // redistort entries: out-of-frame fill
+    int _pad0;
 };
 
 // 16x16 logical tile decode: flat 256-wide workgroups (the pinned 32-wide
@@ -202,22 +230,19 @@ bool _wp_tile(WarpParams p, uint3 wg, uint tid, out int i, out int j,
     return i < p.Wout && j < p.Hout;
 }
 
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void warp_img_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
-                   uint tid: SV_GroupIndex) {
-    int i, j, bid;
-    float tx, ty;
-    if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
+[ForceInline]
+void _wp_img_wide<D : ICameraDistortion>(WarpParams p, int i, int j, int bid,
+                                         float tx, float ty) {
     float4 intrin = _wp_intrin(p.intrins, bid);
-    float[10] dc = _wp_dist(p.dist_coeffs, bid);
     gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
     for (int ki = 0; ki < p.K; ki++) {
         float3 ax, ay, az;
         _wp_axes(p.axes, ki, ax, ay, az);
         float3 raydir = az + tx * ax + ty * ay;
         float2 uv;
-        bool valid = _wp_proj(p.camera_model, raydir, intrin, dc, uv);
+        bool valid = _wp_to_pixel<D>(p.camera_model, raydir, intrin,
+                                     p.dist_coeffs, p.source_models,
+                                     p.source_params, bid, uv);
         gindex_t base = (((gindex_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i) * p.C;
         for (int c = 0; c < p.C; c++) {
             float v = 0.5f;
@@ -228,6 +253,19 @@ void warp_img_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
         }
     }
 }
+
+#define _wp_img_call(D) _wp_img_wide<D>(p, i, j, bid, tx, ty)
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void warp_img_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
+                   uint tid: SV_GroupIndex) {
+    int i, j, bid;
+    float tx, ty;
+    if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
+    SS_DISPATCH_DIST(_wp_img_call)
+}
+#undef _wp_img_call
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -250,25 +288,22 @@ void warp_img_equi(uniform WarpParams p, uint3 wg: SV_GroupID,
     }
 }
 
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void warp_depth_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
-                     uint tid: SV_GroupIndex) {
-    int i, j, bid;
-    float tx, ty;
-    if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
+[ForceInline]
+void _wp_depth_wide<D : ICameraDistortion>(WarpParams p, int i, int j,
+                                           int bid, float tx, float ty) {
     float4 intrin = _wp_intrin(p.intrins, bid);
-    float[10] dc = _wp_dist(p.dist_coeffs, bid);
     gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
     // Projected uv is in intrinsics-reference (RGB input) pixel space;
     // rescale to the GT depth map's own resolution.
-    float sx = float(p.Win) / float(p.in_W), sy = float(p.Hin) / float(p.in_H);
+    float sx = float(p.Win) / float(p.ref_W), sy = float(p.Hin) / float(p.ref_H);
     for (int ki = 0; ki < p.K; ki++) {
         float3 ax, ay, az;
         _wp_axes(p.axes, ki, ax, ay, az);
         float3 raydir = az + tx * ax + ty * ay;
         float2 uv;
-        bool valid = _wp_proj(p.camera_model, raydir, intrin, dc, uv);
+        bool valid = _wp_to_pixel<D>(p.camera_model, raydir, intrin,
+                                     p.dist_coeffs, p.source_models,
+                                     p.source_params, bid, uv);
         float outv = 0.0f;
         if (valid) {
             float d = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, 1,
@@ -279,6 +314,19 @@ void warp_depth_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
         p.dst[((gindex_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i] = outv;
     }
 }
+
+#define _wp_depth_call(D) _wp_depth_wide<D>(p, i, j, bid, tx, ty)
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void warp_depth_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
+                     uint tid: SV_GroupIndex) {
+    int i, j, bid;
+    float tx, ty;
+    if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
+    SS_DISPATCH_DIST(_wp_depth_call)
+}
+#undef _wp_depth_call
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -300,23 +348,20 @@ void warp_depth_equi(uniform WarpParams p, uint3 wg: SV_GroupID,
     }
 }
 
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void warp_normal_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
-                      uint tid: SV_GroupIndex) {
-    int i, j, bid;
-    float tx, ty;
-    if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
+[ForceInline]
+void _wp_normal_wide<D : ICameraDistortion>(WarpParams p, int i, int j,
+                                            int bid, float tx, float ty) {
     float4 intrin = _wp_intrin(p.intrins, bid);
-    float[10] dc = _wp_dist(p.dist_coeffs, bid);
     gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
-    float sx = float(p.Win) / float(p.in_W), sy = float(p.Hin) / float(p.in_H);
+    float sx = float(p.Win) / float(p.ref_W), sy = float(p.Hin) / float(p.ref_H);
     for (int ki = 0; ki < p.K; ki++) {
         float3 ax, ay, az;
         _wp_axes(p.axes, ki, ax, ay, az);
         float3 raydir = az + tx * ax + ty * ay;
         float2 uv;
-        bool valid = _wp_proj(p.camera_model, raydir, intrin, dc, uv);
+        bool valid = _wp_to_pixel<D>(p.camera_model, raydir, intrin,
+                                     p.dist_coeffs, p.source_models,
+                                     p.source_params, bid, uv);
         float3 nf = float3(-1.0f);
         if (valid)
             nf = _wp_one_normal(p.src, p.elem_kind, plane, p.Hin, p.Win,
@@ -328,6 +373,19 @@ void warp_normal_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
         p.dst[base + 2] = nf.z;
     }
 }
+
+#define _wp_normal_call(D) _wp_normal_wide<D>(p, i, j, bid, tx, ty)
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void warp_normal_wide(uniform WarpParams p, uint3 wg: SV_GroupID,
+                      uint tid: SV_GroupIndex) {
+    int i, j, bid;
+    float tx, ty;
+    if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
+    SS_DISPATCH_DIST(_wp_normal_call)
+}
+#undef _wp_normal_call
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -356,12 +414,14 @@ void warp_normal_equi(uniform WarpParams p, uint3 wg: SV_GroupID,
 // map to whole u32 OUTPUT words in the flat [B, K, Hout, Wout] byte space:
 // each thread decodes its 4 byte positions independently and stores one
 // word, so there is exactly one writer per word and no atomics.
-struct WarpMaskParams {  // 72 bytes: pushed directly
-    float* intrins;      // [B, 4]
-    float* dist_coeffs;  // [B, 10]
-    uint* src;           // [B, Hin, Win] uint8
-    uint* dst;           // [B, K, Hout, Wout] uint8 (word writes)
-    float* axes;         // [K, 3, 3]
+struct WarpMaskParams {    // 96 bytes: pushed directly
+    float* intrins;        // [B, 4]
+    float* dist_coeffs;    // [B, 8]
+    int* source_models;    // [B]
+    float* source_params;  // [B, 16]
+    uint* src;             // [B, Hin, Win] uint8
+    uint* dst;             // [B, K, Hout, Wout] uint8 (word writes)
+    float* axes;           // [K, 3, 3]
     int B;
     int Hin;
     int Win;
@@ -369,11 +429,14 @@ struct WarpMaskParams {  // 72 bytes: pushed directly
     int Hout;
     int Wout;
     int camera_model;
+    int ref_H;  // intrinsics reference resolution (redistort entry)
+    int ref_W;
     uint wgs_per_row;
 };
 
 [ForceInline]
-uint _wp_mask_byte(WarpMaskParams p, uint n, bool equi) {
+uint _wp_mask_byte<D : ICameraDistortion>(WarpMaskParams p, uint n,
+                                          bool equi) {
     uint i = n % uint(p.Wout);
     uint t = n / uint(p.Wout);
     uint j = t % uint(p.Hout);
@@ -395,9 +458,10 @@ uint _wp_mask_byte(WarpMaskParams p, uint n, bool equi) {
         ys = clamp(ys, 0, p.Hin - 1);
     } else {
         float4 intrin = _wp_intrin(p.intrins, int(bid));
-        float[10] dc = _wp_dist(p.dist_coeffs, int(bid));
         float2 uv;
-        if (!_wp_proj(p.camera_model, raydir, intrin, dc, uv)) return 0u;
+        if (!_wp_to_pixel<D>(p.camera_model, raydir, intrin, p.dist_coeffs,
+                             p.source_models, p.source_params, int(bid), uv))
+            return 0u;
         xs = int(floor(clamp(uv.x + 0.5f, -8.0f, float(p.Win) + 8.0f)));
         ys = int(floor(clamp(uv.y + 0.5f, -8.0f, float(p.Hin) + 8.0f)));
         if (xs < 0 || xs >= p.Win || ys < 0 || ys >= p.Hin) return 0u;
@@ -407,7 +471,8 @@ uint _wp_mask_byte(WarpMaskParams p, uint n, bool equi) {
 }
 
 [ForceInline]
-void _wp_mask_main(WarpMaskParams p, uint3 wg, uint tid, bool equi) {
+void _wp_mask_main<D : ICameraDistortion>(WarpMaskParams p, uint3 wg,
+                                          uint tid, bool equi) {
     uint word = (wg.y * p.wgs_per_row + wg.x) * 256u + tid;
     uint total = uint(p.B * p.K) * uint(p.Hout) * uint(p.Wout);
     if (word >= (total + 3u) / 4u) return;
@@ -415,24 +480,178 @@ void _wp_mask_main(WarpMaskParams p, uint3 wg, uint tid, bool equi) {
     for (uint b = 0; b < 4u; b++) {
         uint n = word * 4u + b;
         if (n < total)
-            outw |= _wp_mask_byte(p, n, equi) << (b * 8u);
+            outw |= _wp_mask_byte<D>(p, n, equi) << (b * 8u);
     }
     p.dst[word] = outw;
 }
+
+#define _wp_mask_call(D) _wp_mask_main<D>(p, wg, tid, false)
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void warp_mask_wide(uniform WarpMaskParams p, uint3 wg: SV_GroupID,
                     uint tid: SV_GroupIndex) {
-    _wp_mask_main(p, wg, tid, false);
+    SS_DISPATCH_DIST(_wp_mask_call)
 }
+#undef _wp_mask_call
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void warp_mask_equi(uniform WarpMaskParams p, uint3 wg: SV_GroupID,
                     uint tid: SV_GroupIndex) {
-    _wp_mask_main(p, wg, tid, true);
+    _wp_mask_main<DistNone>(p, wg, tid, true);
 }
+
+// Re-distort: resample a GT image from a camera whose lens model no distortion
+// tier represents onto the tier the parser fitted for it (mirrors
+// kernels/pixelwise/ImageRedistort.cu). The fit keeps the pose, so a
+// destination pixel and its source pixel are the same ray. Both grids are
+// expressed relative to the intrinsics reference (ref_H/ref_W, the RGB
+// resolution) and need not match: a depth or normal map carries its own size,
+// so scale_out (destination step) and scale_in (source lookup) differ.
+[ForceInline]
+bool _rd_lookup<D : ICameraDistortion>(float* intrins, float* dist_coeffs,
+                                       int* source_models,
+                                       float* source_params, int camera_model,
+                                       int bid, int i, int j, float2 scale_out,
+                                       float2 scale_in, out float2 uv_src) {
+    uv_src = float2(0.0f);
+    float4 intrin = _wp_intrin(intrins, bid);
+    float2 uv = float2(((float(i) + 0.5f) / scale_out.x - intrin.z) / intrin.x,
+                       ((float(j) + 0.5f) / scale_out.y - intrin.w) / intrin.y);
+    float dc[D.kNumParams];
+    load_dist_coeffs<D>(dist_coeffs, uint(bid), dc);
+    float3 raydir;
+    if (!unproject_point<D>(uv, camera_model, dc, raydir))
+        return false;
+    if (!_wp_source_proj(source_models, source_params, bid, raydir, uv_src))
+        return false;
+    uv_src *= scale_in;
+    return true;
+}
+
+[ForceInline]
+float2 _rd_scale(int W, int H, int ref_W, int ref_H) {
+    return float2(float(W) / float(ref_W), float(H) / float(ref_H));
+}
+
+[ForceInline]
+void _rd_img<D : ICameraDistortion>(WarpParams p, int i, int j, int bid) {
+    float2 uv_src;
+    bool valid = _rd_lookup<D>(p.intrins, p.dist_coeffs, p.source_models,
+                               p.source_params, p.camera_model, bid, i, j,
+                               _rd_scale(p.Wout, p.Hout, p.ref_W, p.ref_H),
+                               _rd_scale(p.Win, p.Hin, p.ref_W, p.ref_H),
+                               uv_src);
+    gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
+    gindex_t base = ((gindex_t(bid) * p.Hout + j) * p.Wout + i) * p.C;
+    for (int c = 0; c < p.C; c++) {
+        float v = p.invalid;
+        if (valid)
+            v = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, p.C, c,
+                             uv_src.x, uv_src.y, p.norm_inv, p.invalid, false);
+        p.dst[base + c] = v;
+    }
+}
+
+#define _rd_img_call(D) _rd_img<D>(p, i, j, bid)
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void redistort_img(uniform WarpParams p, uint3 wg: SV_GroupID,
+                   uint tid: SV_GroupIndex) {
+    int i, j, bid;
+    float tx, ty;
+    if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
+    SS_DISPATCH_DIST(_rd_img_call)
+}
+#undef _rd_img_call
+
+[ForceInline]
+void _rd_normal<D : ICameraDistortion>(WarpParams p, int i, int j, int bid) {
+    float2 uv_src;
+    float3 n = float3(-1.0f);
+    if (_rd_lookup<D>(p.intrins, p.dist_coeffs, p.source_models,
+                      p.source_params, p.camera_model, bid, i, j,
+                      _rd_scale(p.Wout, p.Hout, p.ref_W, p.ref_H),
+                      _rd_scale(p.Win, p.Hin, p.ref_W, p.ref_H), uv_src)) {
+        gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
+        float3 s;
+        s.x = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, 3, 0,
+                           uv_src.x, uv_src.y, p.norm_inv, 0.0f, false) + p.decode_off;
+        s.y = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, 3, 1,
+                           uv_src.x, uv_src.y, p.norm_inv, 0.0f, false) + p.decode_off;
+        s.z = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, 3, 2,
+                           uv_src.x, uv_src.y, p.norm_inv, 0.0f, false) + p.decode_off;
+        float sl = length(s);
+        // The pose is unchanged, so a camera-frame normal needs no rotation.
+        if (s.x + s.y + s.z > -2.366f && sl > 1e-8f)
+            n = s / sl;
+    }
+    gindex_t base = ((gindex_t(bid) * p.Hout + j) * p.Wout + i) * 3;
+    p.dst[base + 0] = n.x;
+    p.dst[base + 1] = n.y;
+    p.dst[base + 2] = n.z;
+}
+
+#define _rd_normal_call(D) _rd_normal<D>(p, i, j, bid)
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void redistort_normal(uniform WarpParams p, uint3 wg: SV_GroupID,
+                      uint tid: SV_GroupIndex) {
+    int i, j, bid;
+    float tx, ty;
+    if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
+    SS_DISPATCH_DIST(_rd_normal_call)
+}
+#undef _rd_normal_call
+
+// Out-of-frame is masked OUT rather than padded: the fitted camera can see a
+// little past the source image. Word-per-thread output, as warp_mask_wide.
+[ForceInline]
+uint _rd_mask_byte<D : ICameraDistortion>(WarpMaskParams p, uint n) {
+    uint i = n % uint(p.Wout);
+    uint t = n / uint(p.Wout);
+    uint j = t % uint(p.Hout);
+    uint bid = t / uint(p.Hout);
+    float2 uv;
+    if (!_rd_lookup<D>(p.intrins, p.dist_coeffs, p.source_models,
+                       p.source_params, p.camera_model, int(bid), int(i),
+                       int(j), _rd_scale(p.Wout, p.Hout, p.ref_W, p.ref_H),
+                       _rd_scale(p.Win, p.Hin, p.ref_W, p.ref_H), uv))
+        return 0u;
+    int xs = int(floor(clamp(uv.x + 0.5f, -8.0f, float(p.Win) + 8.0f)));
+    int ys = int(floor(clamp(uv.y + 0.5f, -8.0f, float(p.Hin) + 8.0f)));
+    if (xs < 0 || xs >= p.Win || ys < 0 || ys >= p.Hin) return 0u;
+    gindex_t idx = gindex_t(bid) * p.Hin * p.Win + gindex_t(ys) * p.Win + xs;
+    return _wp_load(p.src, idx, kElemU8) != 0.0f ? 1u : 0u;
+}
+
+[ForceInline]
+void _rd_mask_main<D : ICameraDistortion>(WarpMaskParams p, uint3 wg,
+                                          uint tid) {
+    uint word = (wg.y * p.wgs_per_row + wg.x) * 256u + tid;
+    uint total = uint(p.B) * uint(p.Hout) * uint(p.Wout);
+    if (word >= (total + 3u) / 4u) return;
+    uint outw = 0u;
+    for (uint b = 0; b < 4u; b++) {
+        uint n = word * 4u + b;
+        if (n < total)
+            outw |= _rd_mask_byte<D>(p, n) << (b * 8u);
+    }
+    p.dst[word] = outw;
+}
+
+#define _rd_mask_call(D) _rd_mask_main<D>(p, wg, tid)
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void redistort_mask(uniform WarpMaskParams p, uint3 wg: SV_GroupID,
+                    uint tid: SV_GroupIndex) {
+    SS_DISPATCH_DIST(_rd_mask_call)
+}
+#undef _rd_mask_call
 
 // Flat byte/u16 -> float conversion: out[i] = elem(i) * scale + offset.
 // Covers uint8/16_image_to_float (1/255, 1/65535), uint8_normal_to_float
@@ -456,3 +675,11 @@ void bytes_to_float(uniform BytesToFloatParams p, uint3 wg: SV_GroupID,
     if (idx >= p.total) return;
     p.dst[idx] = _wp_load(p.src, gindex_t(idx), p.elem_kind) * p.scale + p.offset;
 }
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+// kFromSource trails kDistortion so the launches that never re-distort keep
+// passing a one-element SpecList.
+[SpecializationConstant]
+const int kDistortion = 0;
+[SpecializationConstant]
+const int kFromSource = 0;

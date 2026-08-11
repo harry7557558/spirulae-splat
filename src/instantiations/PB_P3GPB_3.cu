@@ -5,14 +5,15 @@
 #include "kernels/projection/ProjectionBwd_kernel.cuh"
 
 template void projection_fused_bwd_kernel_wrapper<
-    Vanilla3DGS<3>,
-    CameraModelType::EQUIRECTANGULAR
+    Vanilla3DGS<1>,
+    CameraModelType::FISHEYE,
+    CameraDistortionType::OpenCV
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<3>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -23,9 +24,9 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    Vanilla3DGS<3>::ScreenBuffer v_splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer v_splats_screen,
     // grad inputs
-    Vanilla3DGS<3>::WorldBuffer v_splats_world,
+    Vanilla3DGS<1>::WorldBuffer v_splats_world,
     float * v_viewmats, // [C, 4, 4] optional
     // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
     // args; the bwd uses them to evaluate v_dir against the codec'd SH.
@@ -37,14 +38,15 @@ template void projection_fused_bwd_kernel_wrapper<
 );
 
 template void projection_fused_bwd_kernel_wrapper<
-    MipSplatting<3>,
-    CameraModelType::PINHOLE
+    Vanilla3DGS<1>,
+    CameraModelType::FISHEYE,
+    CameraDistortionType::ThinPrism
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<3>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -55,9 +57,9 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    MipSplatting<3>::ScreenBuffer v_splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer v_splats_screen,
     // grad inputs
-    MipSplatting<3>::WorldBuffer v_splats_world,
+    Vanilla3DGS<1>::WorldBuffer v_splats_world,
     float * v_viewmats, // [C, 4, 4] optional
     // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
     // args; the bwd uses them to evaluate v_dir against the codec'd SH.
@@ -69,14 +71,15 @@ template void projection_fused_bwd_kernel_wrapper<
 );
 
 template void projection_fused_bwd_kernel_wrapper<
-    MipSplatting<3>,
-    CameraModelType::FISHEYE
+    Vanilla3DGS<1>,
+    CameraModelType::EQUISOLID,
+    CameraDistortionType::None
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<3>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -87,9 +90,9 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    MipSplatting<3>::ScreenBuffer v_splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer v_splats_screen,
     // grad inputs
-    MipSplatting<3>::WorldBuffer v_splats_world,
+    Vanilla3DGS<1>::WorldBuffer v_splats_world,
     float * v_viewmats, // [C, 4, 4] optional
     // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
     // args; the bwd uses them to evaluate v_dir against the codec'd SH.
@@ -101,14 +104,15 @@ template void projection_fused_bwd_kernel_wrapper<
 );
 
 template void projection_fused_bwd_kernel_wrapper<
-    MipSplatting<3>,
-    CameraModelType::EQUISOLID
+    Vanilla3DGS<1>,
+    CameraModelType::EQUISOLID,
+    CameraDistortionType::OpenCV
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<3>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -119,9 +123,9 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    MipSplatting<3>::ScreenBuffer v_splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer v_splats_screen,
     // grad inputs
-    MipSplatting<3>::WorldBuffer v_splats_world,
+    Vanilla3DGS<1>::WorldBuffer v_splats_world,
     float * v_viewmats, // [C, 4, 4] optional
     // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
     // args; the bwd uses them to evaluate v_dir against the codec'd SH.
@@ -133,14 +137,15 @@ template void projection_fused_bwd_kernel_wrapper<
 );
 
 template void projection_fused_bwd_kernel_wrapper<
-    MipSplatting<3>,
-    CameraModelType::EQUIRECTANGULAR
+    Vanilla3DGS<1>,
+    CameraModelType::EQUISOLID,
+    CameraDistortionType::ThinPrism
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<3>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -151,9 +156,9 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    MipSplatting<3>::ScreenBuffer v_splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer v_splats_screen,
     // grad inputs
-    MipSplatting<3>::WorldBuffer v_splats_world,
+    Vanilla3DGS<1>::WorldBuffer v_splats_world,
     float * v_viewmats, // [C, 4, 4] optional
     // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
     // args; the bwd uses them to evaluate v_dir against the codec'd SH.
@@ -165,14 +170,15 @@ template void projection_fused_bwd_kernel_wrapper<
 );
 
 template void projection_fused_bwd_kernel_wrapper<
-    Vanilla3DGS<4>,
-    CameraModelType::PINHOLE
+    Vanilla3DGS<1>,
+    CameraModelType::EQUIRECTANGULAR,
+    CameraDistortionType::None
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<4>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -183,9 +189,9 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    Vanilla3DGS<4>::ScreenBuffer v_splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer v_splats_screen,
     // grad inputs
-    Vanilla3DGS<4>::WorldBuffer v_splats_world,
+    Vanilla3DGS<1>::WorldBuffer v_splats_world,
     float * v_viewmats, // [C, 4, 4] optional
     // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
     // args; the bwd uses them to evaluate v_dir against the codec'd SH.
@@ -197,14 +203,15 @@ template void projection_fused_bwd_kernel_wrapper<
 );
 
 template void projection_fused_bwd_kernel_wrapper<
-    Vanilla3DGS<4>,
-    CameraModelType::FISHEYE
+    MipSplatting<1>,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::None
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<4>::WorldBuffer splats_world,
+    MipSplatting<1>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -215,9 +222,9 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    Vanilla3DGS<4>::ScreenBuffer v_splats_screen,
+    MipSplatting<1>::ScreenBuffer v_splats_screen,
     // grad inputs
-    Vanilla3DGS<4>::WorldBuffer v_splats_world,
+    MipSplatting<1>::WorldBuffer v_splats_world,
     float * v_viewmats, // [C, 4, 4] optional
     // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
     // args; the bwd uses them to evaluate v_dir against the codec'd SH.
@@ -229,14 +236,15 @@ template void projection_fused_bwd_kernel_wrapper<
 );
 
 template void projection_fused_bwd_kernel_wrapper<
-    Vanilla3DGS<4>,
-    CameraModelType::EQUISOLID
+    MipSplatting<1>,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<4>::WorldBuffer splats_world,
+    MipSplatting<1>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -247,9 +255,9 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    Vanilla3DGS<4>::ScreenBuffer v_splats_screen,
+    MipSplatting<1>::ScreenBuffer v_splats_screen,
     // grad inputs
-    Vanilla3DGS<4>::WorldBuffer v_splats_world,
+    MipSplatting<1>::WorldBuffer v_splats_world,
     float * v_viewmats, // [C, 4, 4] optional
     // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
     // args; the bwd uses them to evaluate v_dir against the codec'd SH.
@@ -261,14 +269,15 @@ template void projection_fused_bwd_kernel_wrapper<
 );
 
 template void projection_fused_bwd_kernel_wrapper<
-    Vanilla3DGS<4>,
-    CameraModelType::EQUIRECTANGULAR
+    MipSplatting<1>,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::ThinPrism
 >(
     cudaStream_t stream,
     // fwd inputs
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<4>::WorldBuffer splats_world,
+    MipSplatting<1>::WorldBuffer splats_world,
     const float * viewmats, // [C, 4, 4]
     const float4 * intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -279,9 +288,9 @@ template void projection_fused_bwd_kernel_wrapper<
     const int32_t * gaussian_ids,          // [nnz, 4]
     const float4 * aabb,          // [C, N, 4]
     // grad outputs
-    Vanilla3DGS<4>::ScreenBuffer v_splats_screen,
+    MipSplatting<1>::ScreenBuffer v_splats_screen,
     // grad inputs
-    Vanilla3DGS<4>::WorldBuffer v_splats_world,
+    MipSplatting<1>::WorldBuffer v_splats_world,
     float * v_viewmats, // [C, 4, 4] optional
     // SH VALUE-quant (active when sh_value_bits != 32). Mirrors fwd kernel
     // args; the bwd uses them to evaluate v_dir against the codec'd SH.

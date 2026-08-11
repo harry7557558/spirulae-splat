@@ -10,6 +10,9 @@ namespace SlangProjectionUtils {
 #include "generated/projection_utils.cuh"
 }
 
+#include "core/CameraDistortion.cuh"
+#include "kernels/projection/CameraVariants.cuh"
+
 
 
 __device__ __forceinline__ float remapFunction(float x, float rel_scale) {
@@ -59,13 +62,13 @@ __device__ bool getAABB(
 }
 
 
-template<CameraModelType camera_model>
+template<CameraModelType camera_model, CameraDistortionType distortion>
 struct Tile {
     float3 ro, rd;
     float3 n0, n1, n2, n3;
 
     __device__ bool init(
-        CameraDistortionCoeffs dist_coeffs,
+        CameraDistortionCoeffsT<distortion> dist_coeffs,
         float x0, float x1, float y0, float y1,
         const float3 R0, const float3 R1, const float3 R2,  // columns of R (world rotation)
         const float3 t                                       // translation
@@ -78,10 +81,11 @@ struct Tile {
         // TODO: better way to handle this in nonlinear and partially invalid case
         // May not matter in training with small tiles, but obvious artifact when rendering >180deg fisheye
         float3 e0_, e1_, e2_, e3_;
-        bool valid0 = SlangProjectionUtils::unproject_point({x0, y0}, (int)camera_model, dist_coeffs, &e0_);
-        bool valid1 = SlangProjectionUtils::unproject_point({x0, y1}, (int)camera_model, dist_coeffs, &e1_);
-        bool valid2 = SlangProjectionUtils::unproject_point({x1, y1}, (int)camera_model, dist_coeffs, &e2_);
-        bool valid3 = SlangProjectionUtils::unproject_point({x1, y0}, (int)camera_model, dist_coeffs, &e3_);
+        using Dist = SlangDistortion<distortion>;
+        bool valid0 = Dist::unproject_point({x0, y0}, (int)camera_model, dist_coeffs, &e0_);
+        bool valid1 = Dist::unproject_point({x0, y1}, (int)camera_model, dist_coeffs, &e1_);
+        bool valid2 = Dist::unproject_point({x1, y1}, (int)camera_model, dist_coeffs, &e2_);
+        bool valid3 = Dist::unproject_point({x1, y0}, (int)camera_model, dist_coeffs, &e3_);
         if (!valid0 && valid3 && valid1 && valid2)
             e0_ = e3_ + e1_ - e2_, valid0 = true;
         if (!valid1 && valid0 && valid2 && valid3)
@@ -139,9 +143,9 @@ struct Tile {
 };
 
 
-template<CameraModelType camera_model>
-__device__ __forceinline__ Tile<camera_model>
-loadTile(unsigned tileIdx, const TileBuffers<camera_model> buffers, bool& isActive) {
+template<CameraModelType camera_model, CameraDistortionType distortion>
+__device__ __forceinline__ Tile<camera_model, distortion>
+loadTile(unsigned tileIdx, const TileBuffers<camera_model, distortion> buffers, bool& isActive) {
     // Row-major 4x4 view matrix: m[4*row + col].  Top-left 3x3 is the world rotation R,
     // right column is translation t.  Columns of R are read across the row stride.
     const float* m = buffers.viewmats + 16 * tileIdx;
@@ -156,9 +160,9 @@ loadTile(unsigned tileIdx, const TileBuffers<camera_model> buffers, bool& isActi
     float cx = intrin.z;
     float cy = intrin.w;
 
-    Tile<camera_model> res;
+    Tile<camera_model, distortion> res;
     isActive &= res.init(
-        buffers.dist_coeffs.load(tileIdx),
+        buffers.dist_coeffs.load<distortion>(tileIdx),
         -cx / fx, (buffers.width - cx) / fx,
         -cy / fy, (buffers.height - cy) / fy,
         R0, R1, R2, t
@@ -252,10 +256,10 @@ __global__ void fillTreeSubcells_initAABB(
 }
 
 
-template<typename Primitive, CameraModelType camera_model>
+template<typename Primitive, CameraModelType camera_model, CameraDistortionType distortion>
 __global__ void getTileSplatIntersections_brute(
     const long numSplats,
-    const TileBuffers<camera_model> tiles,
+    const TileBuffers<camera_model, distortion> tiles,
     const typename Primitive::WorldBuffer splatBuffer,
     uint32_t* __restrict__ intersect_counts,  // to be filled or exclusive scan
     uint32_t* __restrict__ intersectionSplatID  // nullptr or to be filled
@@ -273,7 +277,7 @@ __global__ void getTileSplatIntersections_brute(
     uint32_t intersectCount = 0;
 
     bool isActive = true;
-    Tile<camera_model> tile = loadTile(tid, tiles, isActive);
+    Tile<camera_model, distortion> tile = loadTile(tid, tiles, isActive);
     if (!isActive) {
         if (isCountingPass)
             intersect_counts[tid] = 0;
@@ -568,9 +572,9 @@ __global__ void computeLbvhAABB(
 }
 
 
-template<typename Primitive, CameraModelType camera_model>
+template<typename Primitive, CameraModelType camera_model, CameraDistortionType distortion>
 __global__ void getTileSplatIntersections_lbvh_warp(
-    const TileBuffers<camera_model> tiles,
+    const TileBuffers<camera_model, distortion> tiles,
     const typename Primitive::WorldBuffer splatBuffer,
     unsigned num_levels,
     const uint2* __restrict__ trees_ranges,
@@ -593,7 +597,7 @@ __global__ void getTileSplatIntersections_lbvh_warp(
     }
 
     bool isActive = true;
-    Tile<camera_model> tile = loadTile(tileIdx, tiles, isActive);
+    Tile<camera_model, distortion> tile = loadTile(tileIdx, tiles, isActive);
     if (__ballot_sync(~0u, isActive) != ~0u) {
         if (isCountingPass) {
             if (laneIdx == 0)
@@ -747,25 +751,25 @@ __forceinline__ DeviceVector<int32_t> exclusiveScan(
 
 
 
-template<typename Primitive, CameraModelType camera_model>
-SplatTileIntersector<Primitive, camera_model>::SplatTileIntersector(
+template<typename Primitive, CameraModelType camera_model, CameraDistortionType distortion>
+SplatTileIntersector<Primitive, camera_model, distortion>::SplatTileIntersector(
     const typename Primitive::WorldBuffer &splats,
-    const TileBuffers<camera_model> &tiles,
+    const TileBuffers<camera_model, distortion> &tiles,
     float rel_scale
 ) : tiles(tiles), splats(splats), rel_scale(rel_scale)
 {
     this->numSplats = splats.size();
 }
 
-template<typename Primitive, CameraModelType camera_model>
+template<typename Primitive, CameraModelType camera_model, CameraDistortionType distortion>
 std::tuple<DeviceVector<int32_t>, DeviceVector<int32_t>>
-SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
+SplatTileIntersector<Primitive, camera_model, distortion>::getIntersections_brute() {
     constexpr unsigned warp = 32;
 
     DeviceVector<int32_t> intersection_count;
     intersection_count.resize(PoolSlot::StiBruteCount, tiles.size+1);
     intersection_count.zero();
-    getTileSplatIntersections_brute<Primitive, camera_model><<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
+    getTileSplatIntersections_brute<Primitive, camera_model, distortion><<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
         numSplats,
         tiles, splats,
         (uint32_t*)intersection_count.data_ptr(),
@@ -781,7 +785,7 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
 
     DeviceVector<int32_t> intersectionSplatID;
     intersectionSplatID.resize(PoolSlot::StiBruteIds, (int64_t)total_intersections);
-    getTileSplatIntersections_brute<Primitive, camera_model><<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
+    getTileSplatIntersections_brute<Primitive, camera_model, distortion><<<_LAUNCH_ARGS_1D(tiles.size, warp)>>>(
         numSplats,
         tiles, splats,
         (uint32_t*)intersection_count_map.data_ptr(),
@@ -793,9 +797,9 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_brute() {
 }
 
 
-template<typename Primitive, CameraModelType camera_model>
+template<typename Primitive, CameraModelType camera_model, CameraDistortionType distortion>
 std::tuple<DeviceVector<int32_t>, DeviceVector<int32_t>>
-SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
+SplatTileIntersector<Primitive, camera_model, distortion>::getIntersections_lbvh() {
     // TODO: use a separate rotated AABB aligned with (1,1,1) for thin off-diagnoal Gaussians?
     constexpr uint MAX_NUM_LEVELS = 28;
     constexpr float BRANCH_FACTOR = 2.0f;
@@ -916,7 +920,7 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
     DeviceVector<int32_t> intersection_count;
     intersection_count.resize(PoolSlot::StiLbvhCount, tiles.size+1);
     intersection_count.zero();
-    getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp>>>(
+    getTileSplatIntersections_lbvh_warp<Primitive, camera_model, distortion><<<tiles.size, warp>>>(
         tiles, splats, MAX_NUM_LEVELS,
         (uint2*)tree_ranges.data_ptr(),
         (int2*)internal_nodes.data_ptr(),
@@ -934,7 +938,7 @@ SplatTileIntersector<Primitive, camera_model>::getIntersections_lbvh() {
 
     DeviceVector<int32_t> intersectionSplatID;
     intersectionSplatID.resize(PoolSlot::StiLbvhIds, (int64_t)total_intersections);
-    getTileSplatIntersections_lbvh_warp<Primitive, camera_model><<<tiles.size, warp>>>(
+    getTileSplatIntersections_lbvh_warp<Primitive, camera_model, distortion><<<tiles.size, warp>>>(
         tiles, splats, MAX_NUM_LEVELS,
         (uint2*)tree_ranges.data_ptr(),
         (int2*)internal_nodes.data_ptr(),
@@ -957,7 +961,8 @@ intersect_splat_tile_3dgs(
     DeviceVector<float> viewmats,        // [C*16] row-major 4x4
     DeviceVector<float4> intrins,        // [C]
     const std::string& camera_model,
-    const DeviceTensor2D<float>& dist_coeffs,  // [C, 10] or null
+    const std::string& distortion,
+    const DeviceTensor2D<float>& dist_coeffs,  // [C, 8] or null
     float rel_scale
 ) {
     Vanilla3DGS<0>::WorldBuffer splats_tensor(splats_tuple);
@@ -967,30 +972,18 @@ intersect_splat_tile_3dgs(
     float*        dist_coeffs_ptr = dist_coeffs.data_ptr();
     const long    num_cams        = intrins.size();
 
-    if (cmt(camera_model) == CameraModelType::PINHOLE) {
-        TileBuffers<CameraModelType::PINHOLE> tile_buffers(
-            width, height, viewmats_ptr, intrins_ptr, dist_coeffs_ptr, num_cams);
-        return SplatTileIntersector<Vanilla3DGS<0>, CameraModelType::PINHOLE>
-            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-    }
-    else if (cmt(camera_model) == CameraModelType::FISHEYE) {
-        TileBuffers<CameraModelType::FISHEYE> tile_buffers(
-            width, height, viewmats_ptr, intrins_ptr, dist_coeffs_ptr, num_cams);
-        return SplatTileIntersector<Vanilla3DGS<0>, CameraModelType::FISHEYE>
-            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-    }
-    else if (cmt(camera_model) == CameraModelType::EQUISOLID) {
-        TileBuffers<CameraModelType::EQUISOLID> tile_buffers(
-            width, height, viewmats_ptr, intrins_ptr, dist_coeffs_ptr, num_cams);
-        return SplatTileIntersector<Vanilla3DGS<0>, CameraModelType::EQUISOLID>
-            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-    }
-    else if (cmt(camera_model) == CameraModelType::EQUIRECTANGULAR) {
-        TileBuffers<CameraModelType::EQUIRECTANGULAR> tile_buffers(
-            width, height, viewmats_ptr, intrins_ptr, dist_coeffs_ptr, num_cams);
-        return SplatTileIntersector<Vanilla3DGS<0>, CameraModelType::EQUIRECTANGULAR>
-            (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh();
-    }
-    else
-        throw std::runtime_error("Unsupported camera model");
+    const CameraModelType cm = cmt(camera_model);
+    const CameraDistortionType cd = cdt(distortion);
+
+    #define _DISPATCH(M, D) \
+        if (cm == CameraModelType::M && cd == CameraDistortionType::D) { \
+            TileBuffers<CameraModelType::M, CameraDistortionType::D> tile_buffers( \
+                width, height, viewmats_ptr, intrins_ptr, dist_coeffs_ptr, num_cams); \
+            return SplatTileIntersector<Vanilla3DGS<0>, \
+                CameraModelType::M, CameraDistortionType::D> \
+                (splats_tensor, tile_buffers, rel_scale).getIntersections_lbvh(); \
+        } else
+    SS_FOR_EACH_CAMERA_VARIANT(_DISPATCH)
+        throw std::runtime_error("Unsupported camera model / distortion tier");
+    #undef _DISPATCH
 }

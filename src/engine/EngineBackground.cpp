@@ -174,7 +174,8 @@ void _engine_background_forward() {
     TorchTensorView bg_image_tv = _dt3d_tv(bg.fwd_background);
     BgShViews vs = _engine_bg_sh_views(C_batch);
     render_background_sh_forward(
-        W, H, engine().camera.model_str, bg.sh_degree,
+        W, H, engine().camera.model_str,
+        engine().camera.distortion_str, bg.sh_degree,
         vs.viewmats, vs.intrins, vs.dist_coeffs,
         vs.sh_coeffs, bg_image_tv);
 
@@ -268,7 +269,8 @@ void _engine_background_backward_hook(
         BgShViews vs = _engine_bg_sh_views(C_batch);
 
         render_background_sh_backward(
-            W, H, engine().camera.model_str, bg.sh_degree,
+            W, H, engine().camera.model_str,
+        engine().camera.distortion_str, bg.sh_degree,
             vs.viewmats, vs.intrins, vs.dist_coeffs,
             vs.sh_coeffs,
             bg_image_tv, v_bg_tv2,

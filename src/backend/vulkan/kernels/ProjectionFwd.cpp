@@ -1,7 +1,7 @@
 // Vulkan implementation of the projection-forward launch API
 // (kernels/projection/ProjectionFwd.cuh). Mirrors ProjectionFwd.cu's launcher logic; the
 // device work runs shaders/projection_fwd.slang with camera model /
-// SH degree / antialiased as specialization constants.
+// distortion tier / SH degree / antialiased as specialization constants.
 
 #include <kernels/projection/ProjectionFwd.cuh>
 
@@ -56,7 +56,8 @@ launch_projection_fwd_vk(
     const int max_sh_degree,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string& camera_model, const TorchTensorView& dist_coeffs,
+    const std::string& camera_model, const std::string& distortion,
+    const TorchTensorView& dist_coeffs,
     DeviceVector<float>& radii,
     const std::optional<TorchTensorView>& sh_value_packed,
     const std::optional<TorchTensorView>& sh_value_bounds,
@@ -70,9 +71,7 @@ launch_projection_fwd_vk(
                          sh_value_bits, sh_bounds_stride, &q_packed,
                          &q_bounds, &q_stride);
 
-    CameraModelType cam = cmt(camera_model);
-    if ((int)cam < 0 || (int)cam > 3)
-        throw std::runtime_error("Unsupported camera model");
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
 
     Vanilla3DGS<0>::WorldBuffer wb(in_splats);
     int sh_degree = wb.sh_degree();
@@ -123,8 +122,8 @@ launch_projection_fwd_vk(
     p.height = image_height;
     p.wgs_per_row = per_row;
 
-    backend::vk::SpecList spec{(uint32_t)cam, (uint32_t)sh_degree,
-                               antialiased ? 1u : 0u, spec_bits};
+    backend::vk::SpecList spec{cd.cam, (uint32_t)sh_degree,
+                               antialiased ? 1u : 0u, spec_bits, 0u, cd.dist};
     vkk::dispatch_ring("projection_fwd.projection_fwd_3dgs", spec, per_row,
                        rows, 1, &p, sizeof(p));
 
@@ -142,7 +141,8 @@ std::tuple<
     const std::vector<DeviceTensorFloatND> &in_splats,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string camera_model, const TorchTensorView dist_coeffs,
+    const std::string camera_model, const std::string distortion,
+    const TorchTensorView dist_coeffs,
     DeviceVector<float> radii,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
@@ -153,7 +153,7 @@ std::tuple<
     return launch_projection_fwd_vk(
         /*antialiased=*/false, num_splats, in_splats, max_sh_degree,
         viewmats, intrins, image_width, image_height, camera_model,
-        dist_coeffs, radii, sh_value_packed, sh_value_bounds,
+        distortion, dist_coeffs, radii, sh_value_packed, sh_value_bounds,
         num_sh_buffer, sh_value_bits, sh_bounds_stride);
 }
 
@@ -164,7 +164,8 @@ std::tuple<
     const std::vector<DeviceTensorFloatND> &in_splats,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string camera_model, const TorchTensorView dist_coeffs,
+    const std::string camera_model, const std::string distortion,
+    const TorchTensorView dist_coeffs,
     DeviceVector<float> radii,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
@@ -175,7 +176,7 @@ std::tuple<
     return launch_projection_fwd_vk(
         /*antialiased=*/true, num_splats, in_splats, max_sh_degree,
         viewmats, intrins, image_width, image_height, camera_model,
-        dist_coeffs, radii, sh_value_packed, sh_value_bounds,
+        distortion, dist_coeffs, radii, sh_value_packed, sh_value_bounds,
         num_sh_buffer, sh_value_bits, sh_bounds_stride);
 }
 
@@ -186,7 +187,8 @@ std::tuple<
     const std::vector<DeviceTensorFloatND> &in_splats,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string camera_model, const TorchTensorView dist_coeffs,
+    const std::string camera_model, const std::string distortion,
+    const TorchTensorView dist_coeffs,
     DeviceVector<float> radii,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
@@ -201,9 +203,7 @@ std::tuple<
                          sh_value_bits, sh_bounds_stride, &q_packed,
                          &q_bounds, &q_stride);
 
-    CameraModelType cam = cmt(camera_model);
-    if ((int)cam < 0 || (int)cam > 3)
-        throw std::runtime_error("Unsupported camera model");
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
 
     const int64_t N = num_splats;
     Vanilla3DGUT<0>::WorldBuffer wb(in_splats);
@@ -253,8 +253,8 @@ std::tuple<
     p.height = image_height;
     p.wgs_per_row = per_row;
 
-    backend::vk::SpecList spec{(uint32_t)cam, (uint32_t)sh_degree, 0u,
-                               spec_bits};
+    backend::vk::SpecList spec{cd.cam, (uint32_t)sh_degree, 0u, spec_bits, 0u,
+                               cd.dist};
     vkk::dispatch_ring("projection_fwd.projection_fwd_3dgut", spec, per_row,
                        rows, 1, &p, sizeof(p));
 

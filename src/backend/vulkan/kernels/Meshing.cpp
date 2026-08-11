@@ -194,11 +194,13 @@ void fill_scene(P& p, const meshing::GpuScene& s) {
     p.sc_iso = s.iso;
 }
 
-// Spec IDs for meshing_raster.slang: 0 = camera model.
-backend::vk::SpecList camera_spec(int camera_model) {
-    if (camera_model < 0 || camera_model > 3)
-        throw std::runtime_error("meshing: unsupported camera model");
-    return backend::vk::SpecList{(uint32_t)camera_model};
+// Spec IDs for meshing_raster.slang: 0 = camera model, 1 = distortion tier.
+backend::vk::SpecList camera_spec(int camera_model, int distortion) {
+    if (camera_model < 0 || camera_model > 3 || distortion < 0 ||
+        distortion > 3)
+        throw std::runtime_error(
+            "meshing: unsupported camera model / distortion tier");
+    return backend::vk::SpecList{(uint32_t)camera_model, (uint32_t)distortion};
 }
 
 // Ring dispatch of a flat 1D range (the params structs above the push floor).
@@ -434,7 +436,8 @@ void launch_occ_combine(int n, float* occ, const float* occ_static) {
 void launch_sample_occ(
     const float* xyz, int n,
     const float* viewmat, const float* intrin, const float* dist,
-    int camera_model, const float3* moments, int W, int H, int k,
+    int camera_model, int distortion,
+    const float3* moments, int W, int H, int k,
     float* occ_kmin, int* cnt
 ) {
     if (n <= 0) return;
@@ -451,8 +454,8 @@ void launch_sample_occ(
     p.H = (uint32_t)H;
     p.k = (uint32_t)k;
     vkk::dispatch_flat("meshing_raster.mesh_sample_occ",
-                       camera_spec(camera_model), n, 256, &p, sizeof(p),
-                       &p.wgs_per_row);
+                       camera_spec(camera_model, distortion), n, 256, &p,
+                       sizeof(p), &p.wgs_per_row);
 }
 
 void launch_finalize_occ(int n, const float* occ_kmin, const int* cnt, int k,
@@ -464,14 +467,15 @@ void launch_finalize_occ(int n, const float* occ_kmin, const int* cnt, int k,
     p.occ = (uint64_t)occ;
     p.n = (uint32_t)n;
     p.k = (uint32_t)k;
-    vkk::dispatch_flat("meshing_raster.mesh_finalize_occ", camera_spec(0), n,
+    vkk::dispatch_flat("meshing_raster.mesh_finalize_occ", camera_spec(0, 0), n,
                        256, &p, sizeof(p), &p.wgs_per_row);
 }
 
 void launch_sample_color(
     const float* xyz, int n,
     const float* viewmat, const float* intrin, const float* dist,
-    int camera_model, const float3* moments, const float3* rgb_img,
+    int camera_model, int distortion,
+    const float3* moments, const float3* rgb_img,
     int W, int H, float3* num, float* den
 ) {
     if (n <= 0) return;
@@ -488,8 +492,8 @@ void launch_sample_color(
     p.W = (uint32_t)W;
     p.H = (uint32_t)H;
     vkk::dispatch_flat("meshing_raster.mesh_sample_color",
-                       camera_spec(camera_model), n, 256, &p, sizeof(p),
-                       &p.wgs_per_row);
+                       camera_spec(camera_model, distortion), n, 256, &p,
+                       sizeof(p), &p.wgs_per_row);
 }
 
 void launch_finalize_color(int n, const float3* num, const float* den,
@@ -500,14 +504,16 @@ void launch_finalize_color(int n, const float3* num, const float* den,
     p.den = (uint64_t)den;
     p.rgb = (uint64_t)rgb;
     p.n = (uint32_t)n;
-    vkk::dispatch_flat("meshing_raster.mesh_finalize_color", camera_spec(0), n,
-                       256, &p, sizeof(p), &p.wgs_per_row);
+    vkk::dispatch_flat("meshing_raster.mesh_finalize_color",
+                       camera_spec(0, 0), n, 256, &p, sizeof(p),
+                       &p.wgs_per_row);
 }
 
 void launch_sample_view_density(
     const float* xyz, int n,
     const float* viewmat, const float* intrin, const float* dist,
-    int camera_model, const float3* moments, int W, int H, float* dens
+    int camera_model, int distortion,
+    const float3* moments, int W, int H, float* dens
 ) {
     if (n <= 0) return;
     MeshViewDensityParams p{};
@@ -521,8 +527,8 @@ void launch_sample_view_density(
     p.W = (uint32_t)W;
     p.H = (uint32_t)H;
     vkk::dispatch_flat("meshing_raster.mesh_sample_view_density",
-                       camera_spec(camera_model), n, 256, &p, sizeof(p),
-                       &p.wgs_per_row);
+                       camera_spec(camera_model, distortion), n, 256, &p,
+                       sizeof(p), &p.wgs_per_row);
 }
 
 void launch_tri_prep(
@@ -545,14 +551,14 @@ void launch_tri_prep(
     p.ext_y = inv_ext.y;
     p.ext_z = inv_ext.z;
     p.nf = (uint32_t)nf;
-    vkk::dispatch_flat("meshing_raster.mesh_tri_prep", camera_spec(0), nf, 256,
-                       &p, sizeof(p), &p.wgs_per_row);
+    vkk::dispatch_flat("meshing_raster.mesh_tri_prep", camera_spec(0, 0), nf,
+                       256, &p, sizeof(p), &p.wgs_per_row);
 }
 
 void launch_cull(
     const float* verts, int nv, const int* faces, int nf,
     const float* viewmats, const float* intrins, const float* dist,
-    const int* Ws, const int* Hs, int camera_model, int C,
+    const int* Ws, const int* Hs, int camera_model, int distortion, int C,
     const float3* leafMin, const float3* leafMax,
     const int2* internal, const float3* nodeAABB,
     uint32_t* visible
@@ -576,7 +582,8 @@ void launch_cull(
     p.nv = (uint32_t)nv;
     p.nf = (uint32_t)nf;
     p.C = (uint32_t)C;
-    dispatch_flat_ring("meshing_raster.mesh_cull", camera_spec(camera_model),
+    dispatch_flat_ring("meshing_raster.mesh_cull",
+                       camera_spec(camera_model, distortion),
                        nv, 256, &p, sizeof(p), &p.wgs_per_row);
 }
 

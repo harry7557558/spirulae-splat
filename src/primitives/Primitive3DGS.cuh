@@ -14,6 +14,7 @@ namespace SlangHarmonics {
 
 #include "primitives/Primitive.cuh"
 #include "primitives/PrimitiveBase3DGS.cuh"
+#include "primitives/PrimitiveProjection.cuh"
 
 
 template<int sh_degree, bool antialiased>
@@ -50,48 +51,25 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
         //                        same code handles both layouts.
         // The codec read is dispatched via the matching sh{N}_to_color_q{8,16}
         // slang export, which decodes per-coef inside the SH eval loop.
-        template<CameraModelType camera_model, int VALUE_BITS = 32>
+        template<CameraModelType camera_model, CameraDistortionType distortion,
+                 int VALUE_BITS = 32>
         inline __device__ void project(
-            ProjCamera cam,
+            ProjCameraT<distortion> cam,
             typename _Base3DGS<sh_degree, antialiased>::Screen& screen, float4& aabb, float& sorting_depth, float& radius,
             uint8_t* sh_packed = nullptr,
             float2*  sh_bounds = nullptr,
             int64_t  sh_base   = 0,
             int64_t  sh_bounds_stride = 256
         ) {
-            if constexpr (camera_model == CameraModelType::PINHOLE)
-                Slang3DGS::projection_3dgs_persp(
-                    antialiased,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
-                    cam.dist_coeffs,
-                    cam.width, cam.height,
-                    &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac
-                );
-            else if constexpr (camera_model == CameraModelType::FISHEYE)
-                Slang3DGS::projection_3dgs_fisheye(
-                    antialiased,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac
-                );
-            else if constexpr (camera_model == CameraModelType::EQUISOLID)
-                Slang3DGS::projection_3dgs_equisolid(
-                    antialiased,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac
-                );
-            else if constexpr (camera_model == CameraModelType::EQUIRECTANGULAR)
-                Slang3DGS::projection_3dgs_equirect(
-                    antialiased,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    &aabb, &sorting_depth, &radius, &screen.xy, &screen.depth, &screen.conic, &screen.opac
-                );
+            Slang3DGSProj<camera_model, distortion>::fwd_2d(
+                antialiased,
+                this->mean, this->quat, this->scale, this->opacity,
+                cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+                cam.dist_coeffs.v,
+                cam.width, cam.height,
+                &aabb, &sorting_depth, &radius,
+                &screen.xy, &screen.depth, &screen.conic, &screen.opac
+            );
             if (aabb.z > aabb.x && aabb.w > aabb.y) {
                 if constexpr (VALUE_BITS == 32) {
                     // screen.rgb = SlangHarmonics::sh_coeffs_to_color(
@@ -138,9 +116,10 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
         // buffer (`v_world.features_sh`) stays fp32 regardless of VALUE_BITS
         // -- gradients always live in fp32 inside engine().grad.features_sh.
         // Only the INPUT SH read (used for v_dir grads) goes through the codec.
-        template<CameraModelType camera_model, bool atomic=true, int VALUE_BITS = 32>
+        template<CameraModelType camera_model, CameraDistortionType distortion,
+                 bool atomic=true, int VALUE_BITS = 32>
         inline __device__ void project_vjp(
-            ProjCamera cam,
+            ProjCameraT<distortion> cam,
             typename _Base3DGS<sh_degree, antialiased>::Screen v_screen,
             typename _Base3DGS<sh_degree, antialiased>::World& v_world, float3x3 &v_R, float3 &v_t,
             uint8_t* sh_packed = nullptr,
@@ -148,46 +127,16 @@ struct _Base3DGS : public _BasePrimitive3DGS<sh_degree> {
             int64_t  sh_base   = 0,
             int64_t  sh_bounds_stride = 256
         ) {
-            if constexpr (camera_model == CameraModelType::PINHOLE)
-                Slang3DGS::projection_3dgs_persp_vjp(
-                    antialiased,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac,
-                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
-                    &v_R, &v_t
-                );
-            else if constexpr (camera_model == CameraModelType::FISHEYE)
-                Slang3DGS::projection_3dgs_fisheye_vjp(
-                    antialiased,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac,
-                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
-                    &v_R, &v_t
-                );
-            else if constexpr (camera_model == CameraModelType::EQUISOLID)
-                Slang3DGS::projection_3dgs_equisolid_vjp(
-                    antialiased,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac,
-                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
-                    &v_R, &v_t
-                );
-            else if constexpr (camera_model == CameraModelType::EQUIRECTANGULAR)
-                Slang3DGS::projection_3dgs_equirect_vjp(
-                    antialiased,
-                    this->mean, this->quat, this->scale, this->opacity,
-                    cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy, cam.dist_coeffs,
-                    cam.width, cam.height,
-                    v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac,
-                    &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
-                    &v_R, &v_t
-                );
+            Slang3DGSProj<camera_model, distortion>::vjp_2d(
+                antialiased,
+                this->mean, this->quat, this->scale, this->opacity,
+                cam.R, cam.t, cam.fx, cam.fy, cam.cx, cam.cy,
+                cam.dist_coeffs.v,
+                cam.width, cam.height,
+                v_screen.xy, v_screen.depth, v_screen.conic, v_screen.opac,
+                &v_world.mean, &v_world.quat, &v_world.scale, &v_world.opacity,
+                &v_R, &v_t
+            );
             // SH: atomic for global memory, add for local/shared memory
             #define _ARGS_F32 ( \
                 this->mean, cam.R, cam.t, this->features_dc, (float3*)this->features_sh, \

@@ -244,7 +244,7 @@ struct RenderWorker::Impl {
         vm[15] = 1.f;
 
         float intr[4] = {q.fx, q.fy, q.cx, q.cy};
-        float dist0[10] = {0};
+        float dist0[8] = {0};
         // Distortion images are FULL render resolution (never-freed pool
         // slots) -- emit them only when the user is actually LOOKING at a
         // distortion buffer, and only offer those buffers when a distortion
@@ -272,10 +272,10 @@ struct RenderWorker::Impl {
             // Trainer.render's "post-processor + D->H inside the lock".
             std::lock_guard<std::mutex> lk(*hooks.engine_mutex);
 
-            set_camera_params(W, H, q.model,
+            set_camera_params(W, H, q.model, "NONE",
                               tvp(vm, 4, {1, 4, 4}),
                               tvp(intr, 4, {1, 4}),
-                              tvp(dist0, 4, {1, 10}));
+                              tvp(dist0, 4, {1, 8}));
             forward_3dgs(primitive, sh_deg, cfg.packed,
                          want_median, want_dist ? 2 : 0);
             engine_copy_render_to_host(
@@ -355,7 +355,7 @@ struct RenderWorker::Impl {
                 float* di = (float*)d_intr.upload(intr, sizeof intr);
                 float* dc = (float*)d_dist.upload(dist0, sizeof dist0);
                 depth_to_normal_forward_tv(
-                    q.model, tvp(di, 4, {1, 4}), tvp(dc, 4, {1, 10}),
+                    q.model, "NONE", tvp(di, 4, {1, 4}), tvp(dc, 4, {1, 8}),
                     /*is_ray_depth=*/true,
                     tvp(dd, 4, {1, H, W, 1}), tvp(dn, 4, {1, H, W, 3}));
                 std::vector<float> n_host(npx * 3);
@@ -447,7 +447,7 @@ struct RenderWorker::Impl {
                 tvp(db, 4, {H, W, C}),
                 tvp(dz, 4, {H, W, 1}),
                 tvp(da, 4, {H, W, 3}),
-                (int)camera_model_from_name(q.model),
+                (int)camera_model_from_name(q.model), "NONE",
                 tvp(di, 4, {1, 4}),
                 tvp(dv, 4, {4, 4}),
                 tvp(dc, 4, {1, 10}),
@@ -532,7 +532,7 @@ float viewer_upload_cameras(const PostSplitCameras& post) {
     engine_viewer_init(
         tvp(post.post_models.data(), 4, {post.n_post}),
         tvp(post.intrins.data(), 4, {post.n_post, 4}),
-        tvp(post.dist_coeffs.data(), 4, {post.n_post, 10}),
+        tvp(post.dist_coeffs.data(), 4, {post.n_post, kCameraDistortionParams}),
         tvp(post.c2w_flip.data(), 4, {post.n_post, 3, 4}),
         tvp(post.post_widths.data(), 4, {post.n_post}),
         tvp(post.post_heights.data(), 4, {post.n_post}),

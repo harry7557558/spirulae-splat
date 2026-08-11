@@ -14,6 +14,7 @@
 #include "int64_compat.slang"
 #include "shaders/pixel_wise.slang"
 #undef CudaDeviceExport
+#include "dist_spec.slang"
 
 // Single boolean variant flag shared by the entries that need one
 // (noise blend: is_linear; srgb: is_input_linear).
@@ -158,7 +159,7 @@ static const int D2N_TILE = 16;
 
 struct DepthToNormalParams {  // 52 bytes: pushed directly
     float4* intrins;      // [B]
-    float* dist_coeffs;   // [B,10] or null
+    float* dist_coeffs;   // [B,8] or null
     float* depths;        // [B,H,W,1]
     float* normals;       // [B,H,W,3]
     uint32_t W;
@@ -169,6 +170,33 @@ struct DepthToNormalParams {  // 52 bytes: pushed directly
 };
 
 groupshared float3 _d2n_points[(D2N_TILE + 2) * (D2N_TILE + 2)];
+
+// Apron fill, generic over the tier so the entry folds kDistortion once
+// instead of switching inside the loop.
+[ForceInline]
+void _d2n_fill_apron<D : ICameraDistortion>(DepthToNormalParams p, uint bid,
+                                            uint2 tile0, uint tid,
+                                            float4 intrin) {
+    float dist[D.kNumParams];
+    load_dist_coeffs<D>(p.dist_coeffs, bid, dist);
+    for (uint k = tid; k < uint((D2N_TILE + 2) * (D2N_TILE + 2)); k += 256) {
+        int it = int(k % (D2N_TILE + 2)), jt = int(k / (D2N_TILE + 2));
+        int ig = int(tile0.x) + it - 1;
+        int jg = int(tile0.y) + jt - 1;
+        float depth =
+            (ig >= 0 && ig < int(p.W) && jg >= 0 && jg < int(p.H))
+                ? p.depths[(bid * p.H + uint(jg)) * p.W + uint(ig)]
+                : 0.0f;
+        float3 ray = generate_ray_d2n<D>(
+            float2(float(ig) + 0.5f, float(jg) + 0.5f), intrin, dist,
+            p.camera_model, p.is_ray_depth != 0);
+        _d2n_points[k] = ray * depth;
+    }
+}
+
+#define _d2n_call(D) \
+    _d2n_fill_apron<D>(p, bid, uint2(wg.x * D2N_TILE, wg.y * D2N_TILE), tid, \
+                       intrin)
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -189,27 +217,10 @@ void depth_to_normal_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     }
 
     float4 intrin = p.intrins[bid];
-    float dist[10];
-    [ForceUnroll]
-    for (int k = 0; k < 10; k++)
-        dist[k] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * bid + k];
 
     // Shared apron of unprojected points (ray * depth), same layout as the
     // CUDA kernel's shared_points[TILE+2][TILE+2].
-    for (uint k = tid; k < uint((D2N_TILE + 2) * (D2N_TILE + 2)); k += 256) {
-        int it = int(k % (D2N_TILE + 2)), jt = int(k / (D2N_TILE + 2));
-        int ig = int(wg.x * D2N_TILE) + it - 1;
-        int jg = int(wg.y * D2N_TILE) + jt - 1;
-        float depth =
-            (ig >= 0 && ig < int(p.W) && jg >= 0 && jg < int(p.H))
-                ? p.depths[(bid * p.H + uint(jg)) * p.W + uint(ig)]
-                : 0.0f;
-        float3 ray = generate_ray_d2n(
-            float2(float(ig) + 0.5f, float(jg) + 0.5f), intrin, dist,
-            p.camera_model, p.is_ray_depth != 0);
-        _d2n_points[k] = ray * depth;
-    }
+    SS_DISPATCH_DIST(_d2n_call)
     GroupMemoryBarrierWithGroupSync();
     if (!inside) return;
 
@@ -226,3 +237,9 @@ void depth_to_normal_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     p.normals[3 * o + 1] = normal.y;
     p.normals[3 * o + 2] = normal.z;
 }
+
+#undef _d2n_call
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

@@ -15,10 +15,10 @@
  *
  * Same contract as src/backend/api/: this header must parse under
  * -DSS_BACKEND_VULKAN, so it stays CUDA-include-free. The camera model
- * travels as a plain int (CameraModelType's value) rather than the enum,
- * because that enum has two spellings -- Common.cuh's (CUDA translation
- * units) and CameraModel.h's (portable ones) -- and no translation unit may
- * see both.
+ * travels as a plain int (CameraModelType's value) rather than the enum, and
+ * so does the distortion tier (CameraDistortionType's value), because those
+ * enums have two spellings -- Common.cuh's (CUDA translation units) and
+ * CameraModel.h's (portable ones) -- and no translation unit may see both.
  *
  * Every launch below is asynchronous on the default stream unless noted; the
  * host synchronizes where it reads results back.
@@ -156,7 +156,8 @@ void launch_colorize_fallback(const GpuScene& s, const float* verts, int n,
 void launch_sample_occ(
     const float* xyz, int n,
     const float* viewmat, const float* intrin, const float* dist,
-    int camera_model, const float3* moments, int W, int H, int k,
+    int camera_model, int distortion,
+    const float3* moments, int W, int H, int k,
     float* occ_kmin, int* cnt);
 
 // occ[i] = the k-th smallest sample (or the largest available when fewer
@@ -168,7 +169,8 @@ void launch_finalize_occ(int n, const float* occ_kmin, const int* cnt, int k,
 void launch_sample_color(
     const float* xyz, int n,
     const float* viewmat, const float* intrin, const float* dist,
-    int camera_model, const float3* moments, const float3* rgb_img,
+    int camera_model, int distortion,
+    const float3* moments, const float3* rgb_img,
     int W, int H, float3* num, float* den);
 
 // rgb = num/den, or (-1,-1,-1) when no view contributed.
@@ -179,7 +181,8 @@ void launch_finalize_color(int n, const float3* num, const float* den,
 void launch_sample_view_density(
     const float* xyz, int n,
     const float* viewmat, const float* intrin, const float* dist,
-    int camera_model, const float3* moments, int W, int H, float* dens);
+    int camera_model, int distortion,
+    const float3* moments, int W, int H, float* dens);
 
 // Per mesh triangle: leaf AABB + centroid Morton code + iota (the LBVH build
 // then reuses launch_lbvh_* above).
@@ -195,7 +198,7 @@ void launch_tri_prep(
 void launch_cull(
     const float* verts, int nv, const int* faces, int nf,
     const float* viewmats, const float* intrins, const float* dist,
-    const int* Ws, const int* Hs, int camera_model, int C,
+    const int* Ws, const int* Hs, int camera_model, int distortion, int C,
     const float3* leafMin, const float3* leafMax,
     const int2* internal, const float3* nodeAABB,
     uint32_t* visible);

@@ -16,6 +16,7 @@ namespace cg = cooperative_groups;
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
+    CameraDistortionType distortion,
     int VALUE_BITS = 32
 >
 __global__ void projection_fused_bwd_kernel(
@@ -71,11 +72,11 @@ __global__ void projection_fused_bwd_kernel(
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    ProjCamera cam = {
+    ProjCameraT<distortion> cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
     };
-    cam.dist_coeffs = dist_coeffs_buffer.load(cid);
+    cam.dist_coeffs = dist_coeffs_buffer.load<distortion>(cid);
 
     // Load splat
     typename SplatPrimitive::World splat_world;
@@ -88,14 +89,14 @@ __global__ void projection_fused_bwd_kernel(
     float3x3 v_R = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float3 v_t = {0.f, 0.f, 0.f};
     if constexpr (VALUE_BITS == 32) {
-        splat_world.template project_vjp<camera_model, true, 32>(
+        splat_world.template project_vjp<camera_model, distortion, true, 32>(
             cam, v_splat_screen, v_splat_world, v_R, v_t);
     } else {
         const int64_t sh_base = (int64_t)3 * (int64_t)num_sh_buffer * gid;
         const int64_t stride = (sh_bounds_stride > 0)
             ? sh_bounds_stride
             : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
-        splat_world.template project_vjp<camera_model, true, VALUE_BITS>(
+        splat_world.template project_vjp<camera_model, distortion, true, VALUE_BITS>(
             cam, v_splat_screen, v_splat_world, v_R, v_t,
             const_cast<uint8_t*>(sh_value_packed),
             const_cast<float2*>(sh_value_bounds),
@@ -130,7 +131,8 @@ __global__ void projection_fused_bwd_kernel(
 
 template<
     typename SplatPrimitive,
-    CameraModelType camera_model
+    CameraModelType camera_model,
+    CameraDistortionType distortion
 >
 void projection_fused_bwd_kernel_wrapper(
     cudaStream_t stream,
@@ -162,7 +164,7 @@ void projection_fused_bwd_kernel_wrapper(
 ) {
     constexpr uint block = 128;
     #define _LAUNCH(VB) \
-        projection_fused_bwd_kernel<SplatPrimitive, camera_model, VB> \
+        projection_fused_bwd_kernel<SplatPrimitive, camera_model, distortion, VB> \
         <<<_CEIL_DIV(C*N, block), block, 0, stream>>>( \
             C, N, \
             splats_world, viewmats, intrins, dist_coeffs_buffer, \

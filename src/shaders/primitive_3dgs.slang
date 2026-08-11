@@ -60,12 +60,12 @@ SigmaPoints world_gaussian_sigma_points(
 
 [ForceInline]
 [Differentiable]
-bool persp_proj_3dgs<let assume_valid : bool>(
+bool persp_proj_3dgs<D : ICameraDistortion, let assume_valid : bool>(
     // inputs
     const float3 mean3d,
     const float3x3 cov3d,
     const float4 intrins,
-    const float[10] dist_coeffs,
+    const float dist_coeffs[D.kNumParams],
     const uint width,
     const uint height,
     // outputs
@@ -75,11 +75,11 @@ bool persp_proj_3dgs<let assume_valid : bool>(
     float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
     cov2d = float2x2(0.0f);
 
-    bool valid = persp_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
+    bool valid = persp_proj<D, assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
     if (!assume_valid && !valid)
         return false;
 
-    float2x3 J = persp_proj_jac(mean3d, intrins, dist_coeffs);
+    float2x3 J = persp_proj_jac<D>(mean3d, intrins, dist_coeffs);
 
     float lim_x_pos = width + 0.3f * (0.5f * width);
     float lim_x_neg = 0.3f * (0.5f * width);
@@ -98,26 +98,12 @@ bool persp_proj_3dgs<let assume_valid : bool>(
     return true;
 }
 
-[CudaDeviceExport]
-bool persp_proj_3dgs_nav(
-    const float3 mean3d,
-    const float3x3 cov3d,
-    const float4 intrins,
-    const float[10] dist_coeffs,
-    const uint width,
-    const uint height,
-    out float2x2 cov2d,
-    out float2 mean2d
-) {
-    return persp_proj_3dgs<false>(mean3d, cov3d, intrins, dist_coeffs, width, height, cov2d, mean2d);
-}
-
 [ForceInline]
-bool persp_proj_3dgs_ut<let assume_valid : bool>(
+bool persp_proj_3dgs_ut<D : ICameraDistortion, let assume_valid : bool>(
     // inputs
     const SigmaPoints sigmas,
     const float4 intrins,
-    const float[10] dist_coeffs,
+    const float dist_coeffs[D.kNumParams],
     const uint width,
     const uint height,
     // outputs
@@ -138,7 +124,7 @@ bool persp_proj_3dgs_ut<let assume_valid : bool>(
     float2 proj_points[7];
     bool all_valid = true;
     [ForceUnroll] for (int i = 0; i < 7; i++)
-        all_valid &= persp_proj<assume_valid>(sigmas.p[i], intrins, dist_coeffs, proj_points[i]);
+        all_valid &= persp_proj<D, assume_valid>(sigmas.p[i], intrins, dist_coeffs, proj_points[i]);
     if (!assume_valid && !all_valid)
         return false;
 
@@ -161,111 +147,124 @@ bool persp_proj_3dgs_ut<let assume_valid : bool>(
 
 [ForceInline]
 [Differentiable]
-bool fisheye_proj_3dgs<let assume_valid : bool>(
+bool fisheye_proj_3dgs<D : ICameraDistortion, let assume_valid : bool>(
     // inputs
     const float3 mean3d,
     const float3x3 cov3d,
     const float4 intrins,
-    const float[10] dist_coeffs,
+    const float dist_coeffs[D.kNumParams],
     // outputs
     out float2x2 cov2d,
     out float2 mean2d
 ) {
     cov2d = float2x2(0.0f);
-    bool valid = fisheye_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
+    bool valid = fisheye_proj<D, assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
     if (!assume_valid && !valid)
         return false;
 
-    float2x3 J = fisheye_proj_jac(mean3d, intrins, dist_coeffs);
+    float2x3 J = fisheye_proj_jac<D>(mean3d, intrins, dist_coeffs);
     cov2d = mul(mul(J, cov3d), transpose(J));
     return true;
 }
 
 [ForceInline]
 [Differentiable]
-bool equisolid_proj_3dgs<let assume_valid : bool>(
+bool equisolid_proj_3dgs<D : ICameraDistortion, let assume_valid : bool>(
     // inputs
     const float3 mean3d,
     const float3x3 cov3d,
     const float4 intrins,
-    const float[10] dist_coeffs,
+    const float dist_coeffs[D.kNumParams],
     // outputs
     out float2x2 cov2d,
     out float2 mean2d
 ) {
     cov2d = float2x2(0.0f);
-    bool valid = equisolid_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
+    bool valid = equisolid_proj<D, assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
     if (!assume_valid && !valid)
         return false;
 
-    float2x3 J = equisolid_proj_jac(mean3d, intrins, dist_coeffs);
+    float2x3 J = equisolid_proj_jac<D>(mean3d, intrins, dist_coeffs);
     cov2d = mul(mul(J, cov3d), transpose(J));
     return true;
 }
 
 [ForceInline]
 [Differentiable]
-bool equirect_proj_3dgs<let assume_valid : bool>(
+bool equirect_proj_3dgs<D : ICameraDistortion, let assume_valid : bool>(
     // inputs
     const float3 mean3d,
     const float3x3 cov3d,
     const float4 intrins,
-    const float[10] dist_coeffs,
+    const float dist_coeffs[D.kNumParams],
     // outputs
     out float2x2 cov2d,
     out float2 mean2d
 ) {
     // Every direction is valid for equirectangular; equirect_proj always
     // succeeds. The covariance is pushed through the analytic angular Jacobian.
-    equirect_proj<assume_valid>(mean3d, intrins, dist_coeffs, mean2d);
+    equirect_proj<assume_valid>(mean3d, intrins, mean2d);
 
-    float2x3 J = equirect_proj_jac(mean3d, intrins, dist_coeffs);
+    float2x3 J = equirect_proj_jac(mean3d, intrins);
     cov2d = mul(mul(J, cov3d), transpose(J));
     return true;
 }
 
-[CudaDeviceExport]
-bool fisheye_proj_3dgs_nav(
-    const float3 mean3d,
-    const float3x3 cov3d,
-    const float4 intrins,
-    const float[10] dist_coeffs,
-    out float2x2 cov2d,
-    out float2 mean2d
-) {
-    return fisheye_proj_3dgs<false>(mean3d, cov3d, intrins, dist_coeffs, cov2d, mean2d);
-}
+// Per-tier wrappers: slangc cannot export a generic. The CUDA side selects one
+// at compile time through SlangPrimitive3DGS<D> (core/CameraDistortion.cuh).
+#define _DEF_proj_3dgs_nav(suffix, D, NC) \
+    [CudaDeviceExport] \
+    bool persp_proj_3dgs_nav##suffix( \
+        const float3 mean3d, const float3x3 cov3d, const float4 intrins, \
+        const float dist_coeffs[NC], const uint width, const uint height, \
+        out float2x2 cov2d, out float2 mean2d \
+    ) { \
+        return persp_proj_3dgs<D, false>( \
+            mean3d, cov3d, intrins, dist_coeffs, width, height, cov2d, mean2d); \
+    } \
+    [CudaDeviceExport] \
+    bool fisheye_proj_3dgs_nav##suffix( \
+        const float3 mean3d, const float3x3 cov3d, const float4 intrins, \
+        const float dist_coeffs[NC], out float2x2 cov2d, out float2 mean2d \
+    ) { \
+        return fisheye_proj_3dgs<D, false>( \
+            mean3d, cov3d, intrins, dist_coeffs, cov2d, mean2d); \
+    } \
+    [CudaDeviceExport] \
+    bool equisolid_proj_3dgs_nav##suffix( \
+        const float3 mean3d, const float3x3 cov3d, const float4 intrins, \
+        const float dist_coeffs[NC], out float2x2 cov2d, out float2 mean2d \
+    ) { \
+        return equisolid_proj_3dgs<D, false>( \
+            mean3d, cov3d, intrins, dist_coeffs, cov2d, mean2d); \
+    }
 
-[CudaDeviceExport]
-bool equisolid_proj_3dgs_nav(
-    const float3 mean3d,
-    const float3x3 cov3d,
-    const float4 intrins,
-    const float[10] dist_coeffs,
-    out float2x2 cov2d,
-    out float2 mean2d
-) {
-    return equisolid_proj_3dgs<false>(mean3d, cov3d, intrins, dist_coeffs, cov2d, mean2d);
-}
+_DEF_proj_3dgs_nav(_none, DistNone, 1)
+_DEF_proj_3dgs_nav(_opencv, DistOpenCV, 4)
+_DEF_proj_3dgs_nav(_prism, DistThinPrism, 8)
+_DEF_proj_3dgs_nav(_rational, DistRational, 8)
+
+#undef _DEF_proj_3dgs_nav
 
 [CudaDeviceExport]
 bool equirect_proj_3dgs_nav(
     const float3 mean3d,
     const float3x3 cov3d,
     const float4 intrins,
-    const float[10] dist_coeffs,
     out float2x2 cov2d,
     out float2 mean2d
 ) {
-    return equirect_proj_3dgs<false>(mean3d, cov3d, intrins, dist_coeffs, cov2d, mean2d);
+    const float dist_coeffs[1] = { 0.0f };
+    return equirect_proj_3dgs<DistNone, false>(
+        mean3d, cov3d, intrins, dist_coeffs, cov2d, mean2d);
 }
 
 [ForceInline]
-bool fisheye_proj_3dgs_ut<let assume_valid : bool>(
+bool fisheye_proj_3dgs_ut<D : ICameraDistortion, let assume_valid : bool>(
     // inputs
     const SigmaPoints sigmas,
     const float4 intrins,
-    const float[10] dist_coeffs,
+    const float dist_coeffs[D.kNumParams],
     // outputs
     out float2x2 cov2d,
     out float2 mean2d
@@ -276,7 +275,7 @@ bool fisheye_proj_3dgs_ut<let assume_valid : bool>(
     float2 proj_points[7];
     bool all_valid = true;
     [ForceUnroll] for (int i = 0; i < 7; i++)
-        all_valid &= fisheye_proj<assume_valid>(sigmas.p[i], intrins, dist_coeffs, proj_points[i]);
+        all_valid &= fisheye_proj<D, assume_valid>(sigmas.p[i], intrins, dist_coeffs, proj_points[i]);
     if (!assume_valid && !all_valid)
         return false;
 
@@ -308,11 +307,11 @@ bool fisheye_proj_3dgs_ut<let assume_valid : bool>(
 }
 
 [ForceInline]
-bool equisolid_proj_3dgs_ut<let assume_valid : bool>(
+bool equisolid_proj_3dgs_ut<D : ICameraDistortion, let assume_valid : bool>(
     // inputs
     const SigmaPoints sigmas,
     const float4 intrins,
-    const float[10] dist_coeffs,
+    const float dist_coeffs[D.kNumParams],
     // outputs
     out float2x2 cov2d,
     out float2 mean2d
@@ -323,7 +322,7 @@ bool equisolid_proj_3dgs_ut<let assume_valid : bool>(
     float2 proj_points[7];
     bool all_valid = true;
     [ForceUnroll] for (int i = 0; i < 7; i++)
-        all_valid &= equisolid_proj<assume_valid>(sigmas.p[i], intrins, dist_coeffs, proj_points[i]);
+        all_valid &= equisolid_proj<D, assume_valid>(sigmas.p[i], intrins, dist_coeffs, proj_points[i]);
     if (!assume_valid && !all_valid)
         return false;
 
@@ -355,11 +354,11 @@ bool equisolid_proj_3dgs_ut<let assume_valid : bool>(
 }
 
 [ForceInline]
-bool equirect_proj_3dgs_ut<let assume_valid : bool>(
+bool equirect_proj_3dgs_ut<D : ICameraDistortion, let assume_valid : bool>(
     // inputs
     const SigmaPoints sigmas,
     const float4 intrins,
-    const float[10] dist_coeffs,
+    const float dist_coeffs[D.kNumParams],
     // outputs
     out float2x2 cov2d,
     out float2 mean2d
@@ -369,7 +368,7 @@ bool equirect_proj_3dgs_ut<let assume_valid : bool>(
 
     float2 proj_points[7];
     [ForceUnroll] for (int i = 0; i < 7; i++)
-        equirect_proj<assume_valid>(sigmas.p[i], intrins, dist_coeffs, proj_points[i]);
+        equirect_proj<assume_valid>(sigmas.p[i], intrins, proj_points[i]);
 
     // Unwrap longitude (u) of each sigma point relative to the center point so
     // a splat straddling the +-pi seam averages coherently instead of snapping
@@ -406,19 +405,22 @@ float add_blur(const float eps2d, inout float2x2 covar, out float compensation) 
 }
 
 
-#define _projection_3dgs_ARGS \
+#define _projection_3dgs_ARGS(NC) \
     const bool antialiased, \
     const float3 mean, const float4 quat, const float3 scale, const float in_opacity, \
     const float3x3 R, const float3 t, \
     no_diff const float fx, no_diff const float fy,  no_diff const float cx, no_diff const float cy, \
-    no_diff const float[10] dist_coeffs, const uint image_width, const uint image_height, \
+    no_diff const float dist_coeffs[NC], const uint image_width, const uint image_height, \
     no_diff out float4 aabb_xyxy, no_diff out float sorting_depth, no_diff out float radius, \
     out float2 mean2d, out float depth, out float3 conic, out float opacity
 
 [ForceInline]
 [Differentiable]
-void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, let eval3d: bool>(
-    _projection_3dgs_ARGS
+void projection_3dgs<
+    let camera_model: CameraModelType, D : ICameraDistortion,
+    let assume_valid: bool, let eval3d: bool
+>(
+    _projection_3dgs_ARGS(D.kNumParams)
 ) {
     // Culled early returns leave every output at this "invalid" state
     // (aabb_xyxy == 0 is the marker consumers test).
@@ -450,25 +452,25 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         // SigmaPoints sigmas = world_gaussian_sigma_points(mean, exp(scale), quat, R, t);
 
         if (camera_model == CameraModelType::PINHOLE)
-            is_valid &= persp_proj_3dgs_ut<assume_valid>(
+            is_valid &= persp_proj_3dgs_ut<D, assume_valid>(
                 sigmas,
                 intrins, dist_coeffs, image_width, image_height,
                 covar2d, mean2d
             );
         else if (camera_model == CameraModelType::FISHEYE)
-            is_valid &= fisheye_proj_3dgs_ut<assume_valid>(
+            is_valid &= fisheye_proj_3dgs_ut<D, assume_valid>(
                 sigmas,
                 intrins, dist_coeffs,
                 covar2d, mean2d
             );
         else if (camera_model == CameraModelType::EQUISOLID)
-            is_valid &= equisolid_proj_3dgs_ut<assume_valid>(
+            is_valid &= equisolid_proj_3dgs_ut<D, assume_valid>(
                 sigmas,
                 intrins, dist_coeffs,
                 covar2d, mean2d
             );
         else if (camera_model == CameraModelType::EQUIRECTANGULAR)
-            is_valid &= equirect_proj_3dgs_ut<assume_valid>(
+            is_valid &= equirect_proj_3dgs_ut<D, assume_valid>(
                 sigmas,
                 intrins, dist_coeffs,
                 covar2d, mean2d
@@ -486,25 +488,25 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         covarW2C(R, covar, covar_c);
 
         if (camera_model == CameraModelType::PINHOLE)
-            is_valid &= persp_proj_3dgs<assume_valid>(
+            is_valid &= persp_proj_3dgs<D, assume_valid>(
                 mean_c, covar_c,
                 intrins, dist_coeffs, image_width, image_height,
                 covar2d, mean2d
             );
         else if (camera_model == CameraModelType::FISHEYE)
-            is_valid &= fisheye_proj_3dgs<assume_valid>(
+            is_valid &= fisheye_proj_3dgs<D, assume_valid>(
                 mean_c, covar_c,
                 intrins, dist_coeffs,
                 covar2d, mean2d
             );
         else if (camera_model == CameraModelType::EQUISOLID)
-            is_valid &= equisolid_proj_3dgs<assume_valid>(
+            is_valid &= equisolid_proj_3dgs<D, assume_valid>(
                 mean_c, covar_c,
                 intrins, dist_coeffs,
                 covar2d, mean2d
             );
         else if (camera_model == CameraModelType::EQUIRECTANGULAR)
-            is_valid &= equirect_proj_3dgs<assume_valid>(
+            is_valid &= equirect_proj_3dgs<D, assume_valid>(
                 mean_c, covar_c,
                 intrins, dist_coeffs,
                 covar2d, mean2d
@@ -577,12 +579,17 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
 
 /* Forward Projection */
 
-#define _DEF_projection_3dgs(funname, ...) \
+// One export per (camera model, distortion tier) the CUDA instantiation table
+// compiles -- slangc cannot export a generic. The set is curated: no COLMAP
+// fisheye model uses the rational tier, so FISHEYE / EQUISOLID stop at thin
+// prism, and EQUIRECTANGULAR carries no distortion at all. Keep this list and
+// kCameraVariants in tools/codegen/generate_kernel_instantiation.py in step.
+#define _DEF_projection_3dgs(funname, MODEL, D, NC, AV, E3D) \
     [CudaDeviceExport] \
     [ForceInline] \
     [Differentiable] \
-    void funname(_projection_3dgs_ARGS) { \
-        return projection_3dgs<__VA_ARGS__>( \
+    void funname(_projection_3dgs_ARGS(NC)) { \
+        return projection_3dgs<MODEL, D, AV, E3D>( \
             antialiased, \
             mean, quat, scale, in_opacity, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
@@ -591,31 +598,40 @@ void projection_3dgs<let camera_model: CameraModelType, let assume_valid: bool, 
         ); \
     }
 
-_DEF_projection_3dgs(projection_3dgs_persp, CameraModelType::PINHOLE, false, false)
-_DEF_projection_3dgs(projection_3dgs_fisheye, CameraModelType::FISHEYE, false, false)
-_DEF_projection_3dgs(projection_3dgs_equisolid, CameraModelType::EQUISOLID, false, false)
-_DEF_projection_3dgs(projection_3dgs_equirect, CameraModelType::EQUIRECTANGULAR, false, false)
-_DEF_projection_3dgs(projection_3dgut_persp, CameraModelType::PINHOLE, false, true)
-_DEF_projection_3dgs(projection_3dgut_fisheye, CameraModelType::FISHEYE, false, true)
-_DEF_projection_3dgs(projection_3dgut_equisolid, CameraModelType::EQUISOLID, false, true)
-_DEF_projection_3dgs(projection_3dgut_equirect, CameraModelType::EQUIRECTANGULAR, false, true)
+// Every tier a perspective camera can carry; the wide models drop the last one.
+#define _DEF_projection_3dgs_tiers(base, MODEL, E3D) \
+    _DEF_projection_3dgs(base##_none, MODEL, DistNone, 1, false, E3D) \
+    _DEF_projection_3dgs(base##_opencv, MODEL, DistOpenCV, 4, false, E3D) \
+    _DEF_projection_3dgs(base##_prism, MODEL, DistThinPrism, 8, false, E3D)
+
+_DEF_projection_3dgs_tiers(projection_3dgs_persp, CameraModelType::PINHOLE, false)
+_DEF_projection_3dgs(projection_3dgs_persp_rational, CameraModelType::PINHOLE, DistRational, 8, false, false)
+_DEF_projection_3dgs_tiers(projection_3dgs_fisheye, CameraModelType::FISHEYE, false)
+_DEF_projection_3dgs_tiers(projection_3dgs_equisolid, CameraModelType::EQUISOLID, false)
+_DEF_projection_3dgs(projection_3dgs_equirect_none, CameraModelType::EQUIRECTANGULAR, DistNone, 1, false, false)
+
+_DEF_projection_3dgs_tiers(projection_3dgut_persp, CameraModelType::PINHOLE, true)
+_DEF_projection_3dgs(projection_3dgut_persp_rational, CameraModelType::PINHOLE, DistRational, 8, false, true)
+_DEF_projection_3dgs_tiers(projection_3dgut_fisheye, CameraModelType::FISHEYE, true)
+_DEF_projection_3dgs_tiers(projection_3dgut_equisolid, CameraModelType::EQUISOLID, true)
+_DEF_projection_3dgs(projection_3dgut_equirect_none, CameraModelType::EQUIRECTANGULAR, DistNone, 1, false, true)
 
 
 /* Backward Projection */
 
-interface _DiffProjection3DGS
+interface _DiffProjection3DGS<let NC : int>
 {
     [ForceInline]
     [Differentiable]
-    static void projection(_projection_3dgs_ARGS);
+    static void projection(_projection_3dgs_ARGS(NC));
 };
 
-#define _DEF_projection_3dgs_interface(_InterfaceName, ...) \
-    struct _InterfaceName : _DiffProjection3DGS { \
+#define _DEF_projection_3dgs_interface(_InterfaceName, MODEL, D, NC, AV, E3D) \
+    struct _InterfaceName : _DiffProjection3DGS<NC> { \
         [ForceInline] \
         [Differentiable] \
-        static void projection(_projection_3dgs_ARGS) { \
-            return projection_3dgs<__VA_ARGS__>( \
+        static void projection(_projection_3dgs_ARGS(NC)) { \
+            return projection_3dgs<MODEL, D, AV, E3D>( \
                 antialiased, \
                 mean, quat, scale, in_opacity, R, t, \
                 fx, fy, cx, cy, dist_coeffs, \
@@ -625,21 +641,29 @@ interface _DiffProjection3DGS
         } \
     };
 
-_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgs_persp, CameraModelType::PINHOLE, true, false)
-_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgs_fisheye, CameraModelType::FISHEYE, true, false)
-_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgs_equisolid, CameraModelType::EQUISOLID, true, false)
-_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgs_equirect, CameraModelType::EQUIRECTANGULAR, true, false)
-_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_persp, CameraModelType::PINHOLE, true, true)
-_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_fisheye, CameraModelType::FISHEYE, true, true)
-_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_equisolid, CameraModelType::EQUISOLID, true, true)
-_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_equirect, CameraModelType::EQUIRECTANGULAR, true, true)
+#define _DEF_projection_3dgs_interface_tiers(base, MODEL, E3D) \
+    _DEF_projection_3dgs_interface(base##_none, MODEL, DistNone, 1, true, E3D) \
+    _DEF_projection_3dgs_interface(base##_opencv, MODEL, DistOpenCV, 4, true, E3D) \
+    _DEF_projection_3dgs_interface(base##_prism, MODEL, DistThinPrism, 8, true, E3D)
+
+_DEF_projection_3dgs_interface_tiers(_DiffProjection3DGS_3dgs_persp, CameraModelType::PINHOLE, false)
+_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgs_persp_rational, CameraModelType::PINHOLE, DistRational, 8, true, false)
+_DEF_projection_3dgs_interface_tiers(_DiffProjection3DGS_3dgs_fisheye, CameraModelType::FISHEYE, false)
+_DEF_projection_3dgs_interface_tiers(_DiffProjection3DGS_3dgs_equisolid, CameraModelType::EQUISOLID, false)
+_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgs_equirect_none, CameraModelType::EQUIRECTANGULAR, DistNone, 1, true, false)
+
+_DEF_projection_3dgs_interface_tiers(_DiffProjection3DGS_3dgut_persp, CameraModelType::PINHOLE, true)
+_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_persp_rational, CameraModelType::PINHOLE, DistRational, 8, true, true)
+_DEF_projection_3dgs_interface_tiers(_DiffProjection3DGS_3dgut_fisheye, CameraModelType::FISHEYE, true)
+_DEF_projection_3dgs_interface_tiers(_DiffProjection3DGS_3dgut_equisolid, CameraModelType::EQUISOLID, true)
+_DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_equirect_none, CameraModelType::EQUIRECTANGULAR, DistNone, 1, true, true)
 
 
-#define _projection_3dgs_vjp_ARGS \
+#define _projection_3dgs_vjp_ARGS(NC) \
     const bool antialiased, \
     const float3 mean, const float4 quat, const float3 scale, const float in_opacity, \
     const float3x3 R, const float3 t, const float fx, const float fy, const float cx, const float cy, \
-    const float[10] dist_coeffs, const uint image_width, const uint image_height, \
+    const float dist_coeffs[NC], const uint image_width, const uint image_height, \
     const float2 v_mean2d, const float v_depth, const float3 v_conic, const float v_opacity, \
     inout float3 v_mean, inout float4 v_quat, inout float3 v_scale, inout float v_in_opacity, \
     inout float3x3 v_R, inout float3 v_t
@@ -649,8 +673,8 @@ _DEF_projection_3dgs_interface(_DiffProjection3DGS_3dgut_equirect, CameraModelTy
 // through an interface-typed VALUE parameter; the generic-constraint form
 // compiles on both 2026.2.1 (CUDA emission) and 2026.12 (SPIR-V).
 [ForceInline]
-void _projection_3dgs_vjp<ProjT : _DiffProjection3DGS>(
-    _projection_3dgs_vjp_ARGS
+void _projection_3dgs_vjp<let NC : int, ProjT : _DiffProjection3DGS<NC> >(
+    _projection_3dgs_vjp_ARGS(NC)
 ) {
     DifferentialPair<float3> dp_mean = diffPair(mean);
     DifferentialPair<float4> dp_quat = diffPair(quat);
@@ -673,12 +697,12 @@ void _projection_3dgs_vjp<ProjT : _DiffProjection3DGS>(
     v_t += dp_t.d;
 }
 
-#define _DEF_projection_3dgs_vjp(funname, _InterfaceName, ...) \
+#define _DEF_projection_3dgs_vjp(funname, _InterfaceName, NC) \
     [CudaDeviceExport] \
     void funname( \
-        _projection_3dgs_vjp_ARGS \
+        _projection_3dgs_vjp_ARGS(NC) \
     ) { \
-        return _projection_3dgs_vjp<_InterfaceName>( \
+        return _projection_3dgs_vjp<NC, _InterfaceName>( \
             antialiased, \
             mean, quat, scale, in_opacity, R, t, \
             fx, fy, cx, cy, dist_coeffs, \
@@ -688,12 +712,20 @@ void _projection_3dgs_vjp<ProjT : _DiffProjection3DGS>(
         ); \
     }
 
-_DEF_projection_3dgs_vjp(projection_3dgs_persp_vjp, _DiffProjection3DGS_3dgs_persp)
-_DEF_projection_3dgs_vjp(projection_3dgs_fisheye_vjp, _DiffProjection3DGS_3dgs_fisheye)
-_DEF_projection_3dgs_vjp(projection_3dgs_equisolid_vjp, _DiffProjection3DGS_3dgs_equisolid)
-_DEF_projection_3dgs_vjp(projection_3dgs_equirect_vjp, _DiffProjection3DGS_3dgs_equirect)
-_DEF_projection_3dgs_vjp(projection_3dgut_persp_vjp, _DiffProjection3DGS_3dgut_persp)
-_DEF_projection_3dgs_vjp(projection_3dgut_fisheye_vjp, _DiffProjection3DGS_3dgut_fisheye)
-_DEF_projection_3dgs_vjp(projection_3dgut_equisolid_vjp, _DiffProjection3DGS_3dgut_equisolid)
-_DEF_projection_3dgs_vjp(projection_3dgut_equirect_vjp, _DiffProjection3DGS_3dgut_equirect)
+#define _DEF_projection_3dgs_vjp_tiers(base, iface) \
+    _DEF_projection_3dgs_vjp(base##_none_vjp, iface##_none, 1) \
+    _DEF_projection_3dgs_vjp(base##_opencv_vjp, iface##_opencv, 4) \
+    _DEF_projection_3dgs_vjp(base##_prism_vjp, iface##_prism, 8)
+
+_DEF_projection_3dgs_vjp_tiers(projection_3dgs_persp, _DiffProjection3DGS_3dgs_persp)
+_DEF_projection_3dgs_vjp(projection_3dgs_persp_rational_vjp, _DiffProjection3DGS_3dgs_persp_rational, 8)
+_DEF_projection_3dgs_vjp_tiers(projection_3dgs_fisheye, _DiffProjection3DGS_3dgs_fisheye)
+_DEF_projection_3dgs_vjp_tiers(projection_3dgs_equisolid, _DiffProjection3DGS_3dgs_equisolid)
+_DEF_projection_3dgs_vjp(projection_3dgs_equirect_none_vjp, _DiffProjection3DGS_3dgs_equirect_none, 1)
+
+_DEF_projection_3dgs_vjp_tiers(projection_3dgut_persp, _DiffProjection3DGS_3dgut_persp)
+_DEF_projection_3dgs_vjp(projection_3dgut_persp_rational_vjp, _DiffProjection3DGS_3dgut_persp_rational, 8)
+_DEF_projection_3dgs_vjp_tiers(projection_3dgut_fisheye, _DiffProjection3DGS_3dgut_fisheye)
+_DEF_projection_3dgs_vjp_tiers(projection_3dgut_equisolid, _DiffProjection3DGS_3dgut_equisolid)
+_DEF_projection_3dgs_vjp(projection_3dgut_equirect_none_vjp, _DiffProjection3DGS_3dgut_equirect_none, 1)
 

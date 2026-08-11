@@ -91,6 +91,14 @@ option(SS_SEPARATE_TOOLS "Also build spirula-sfm / spirula-sam standalone" OFF)
 # in the embedded SPIR-V). Turn on for profiling/debugging builds.
 option(SS_DEBUG_SYMBOLS "Emit debug symbols / line info (host -g, CUDA cubin lineinfo, SPIR-V -g2)" OFF)
 
+# Embed PTX alongside the cubin in the CUDA fatbin. PTX is only useful for
+# JIT onto an architecture the binary was NOT built for, and the CUDA build
+# detects the local GPU's compute capability from nvidia-smi, so a dev build
+# carries it for nothing -- it is a third of every object file, and the
+# per-(camera model, distortion tier) kernel instantiations make that a third
+# of a large binary. Turn it on for a redistributable build.
+option(SS_CUDA_EMBED_PTX "Embed PTX in the CUDA fatbin for forward-compatible JIT" OFF)
+
 # ---------------------------------------------------------------------------
 # Compute backend selection
 #

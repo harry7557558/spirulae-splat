@@ -1,5 +1,7 @@
 #include "kernels/projection/ProjectionBwd.cuh"
 
+#include "kernels/projection/CameraVariants.cuh"
+
 #include <core/Common.cuh>
 #include <optional>
 
@@ -9,7 +11,8 @@ namespace cg = cooperative_groups;
 
 template<
     typename SplatPrimitive,
-    CameraModelType camera_model
+    CameraModelType camera_model,
+    CameraDistortionType distortion
 >
 void projection_fused_bwd_kernel_wrapper(
     cudaStream_t stream,
@@ -51,6 +54,7 @@ inline void launch_projection_projection_fused_bwd_kernel(
     const uint32_t image_width,
     const uint32_t image_height,
     const CameraModelType camera_model,
+    const CameraDistortionType distortion,
     const TorchTensorView dist_coeffs,
     // fwd outputs
     const DeviceVector<int32_t> camera_ids,  // [nnz] or null
@@ -106,16 +110,13 @@ inline void launch_projection_projection_fused_bwd_kernel(
             sh_bounds_stride \
         )
 
-    if (camera_model == CameraModelType::PINHOLE)
-        projection_fused_bwd_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::FISHEYE)
-        projection_fused_bwd_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::EQUISOLID)
-        projection_fused_bwd_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::EQUIRECTANGULAR)
-        projection_fused_bwd_kernel_wrapper<SplatPrimitive, CameraModelType::EQUIRECTANGULAR> _LAUNCH_ARGS;
-    else
-        throw std::runtime_error("Unsupported camera model");
+    #define _DISPATCH(M, D) \
+        if (camera_model == CameraModelType::M && distortion == CameraDistortionType::D) \
+            projection_fused_bwd_kernel_wrapper<SplatPrimitive, \
+                CameraModelType::M, CameraDistortionType::D> _LAUNCH_ARGS; else
+    SS_FOR_EACH_CAMERA_VARIANT(_DISPATCH)
+        throw std::runtime_error("Unsupported camera model / distortion tier");
+    #undef _DISPATCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
@@ -140,6 +141,7 @@ void projection_3dgs_backward(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     // fwd outputs
     const DeviceVector<int32_t> camera_ids,  // [nnz] or null
@@ -166,7 +168,7 @@ void projection_3dgs_backward(
         ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGS<n>>( \
-            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), cdt(distortion), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, \
             v_splats_world, v_viewmats, \
             vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
@@ -190,6 +192,7 @@ void projection_mip_backward(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     // fwd outputs
     const DeviceVector<int32_t> camera_ids,  // [nnz] or null
@@ -216,7 +219,7 @@ void projection_mip_backward(
         ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<MipSplatting<n>>( \
-            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), cdt(distortion), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, \
             v_splats_world, v_viewmats, \
             vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
@@ -241,6 +244,7 @@ void projection_3dgut_backward(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     // fwd outputs
     const DeviceVector<int32_t> camera_ids,  // [nnz] or null
@@ -267,7 +271,7 @@ void projection_3dgut_backward(
         ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_projection_fused_bwd_kernel<Vanilla3DGUT<n>>( \
-            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), dist_coeffs, \
+            num_splats, splats_world, viewmats, intrins, image_width, image_height, cmt(camera_model), cdt(distortion), dist_coeffs, \
             camera_ids, gaussian_ids, aabb, v_splats_screen, \
             v_splats_world, v_viewmats, \
             vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);

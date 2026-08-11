@@ -175,6 +175,7 @@ void overexposure_grad_add(
 
 void depth_to_normal_backward(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
     bool is_ray_depth,
@@ -196,13 +197,16 @@ void depth_to_normal_backward(
     p.H = H;
     p.B = B;
     p.is_ray_depth = is_ray_depth ? 1u : 0u;
-    p.camera_model = (int32_t)cmt(camera_model);
-    vkk::dispatch("pixel_wise_train.d2n_bwd", backend::vk::SpecList{},
-                  (W + 15) / 16, (H + 15) / 16, B, &p, sizeof(p));
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
+    p.camera_model = (int32_t)cd.cam;
+    vkk::dispatch("pixel_wise_train.d2n_bwd",
+                  backend::vk::SpecList{0u, cd.dist}, (W + 15) / 16,
+                  (H + 15) / 16, B, &p, sizeof(p));
 }
 
 void depth_to_normal_backward_tv(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
     bool is_ray_depth,
@@ -210,7 +214,8 @@ void depth_to_normal_backward_tv(
     TorchTensorView v_normals,
     TorchTensorView v_depths
 ) {
-    depth_to_normal_backward(camera_model, intrins, dist_coeffs, is_ray_depth,
+    depth_to_normal_backward(camera_model, distortion, intrins, dist_coeffs,
+                             is_ray_depth,
                              DeviceTensor3D<float>(depths),
                              DeviceTensor3D<float3>(v_normals),
                              DeviceTensor3D<float>(v_depths));
@@ -218,6 +223,7 @@ void depth_to_normal_backward_tv(
 
 void linear_depth_to_ray_depth_inplace(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
     int image_width, int image_height,
@@ -234,8 +240,10 @@ void linear_depth_to_ray_depth_inplace(
     p.W = (uint32_t)w;
     p.H = (uint32_t)h;
     p.B = (uint32_t)b;
-    p.camera_model = (int32_t)cmt(camera_model);
-    vkk::dispatch("pixel_wise_train.lin_to_ray_depth", backend::vk::SpecList{},
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
+    p.camera_model = (int32_t)cd.cam;
+    vkk::dispatch("pixel_wise_train.lin_to_ray_depth",
+                  backend::vk::SpecList{0u, cd.dist},
                   (uint32_t)((w + 127) / 128), (uint32_t)h, (uint32_t)b, &p,
                   sizeof(p));
 }

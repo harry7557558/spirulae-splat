@@ -8,6 +8,8 @@
 #include "data/Json.h"
 
 #include "core/CameraModel.h"   // camera_model_from_name (CUDA-free)
+#include "data/DistortionFit.h"
+#include "data/SourceCamera.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,7 +17,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <stdexcept>
+#include <string>
 
 namespace dmsg = spirula::i18n::msg::data;
 
@@ -259,9 +263,12 @@ ColmapPoints3D read_ply_points(const std::string& path) {
 
 namespace {
 
-// Distortion keys, in engine dist_coeffs order.
-const char* kDistortionKeys[10] = {
-    "k1", "k2", "k3", "k4", "p1", "p2", "sx1", "sy1", "b1", "b2"};
+// transforms.json distortion keys. k4..k6 mean different things either side of
+// the fisheye divide: on a perspective camera they are OpenCV's RATIONAL
+// denominator, on a fisheye they are further theta-space radial terms.
+struct RawDistortion {
+    double k1, k2, k3, k4, k5, k6, p1, p2, sx1, sy1, b1, b2;
+};
 
 // frame-then-meta numeric lookup; throws when required and absent in both.
 double frame_or_meta(const JsonValue& frame, const JsonValue& meta,
@@ -272,6 +279,73 @@ double frame_or_meta(const JsonValue& frame, const JsonValue& meta,
         throw std::runtime_error(std::string("NerfstudioParser: missing '") +
                                  key + "' in frame and file header");
     return def;
+}
+
+// A sensor skew (Metashape b2) is an off-diagonal pixel term, and every tier's
+// pixel map is diagonal. So the camera is fitted without it and the images are
+// resampled from the true skewed projection -- unless the skew turns out to be
+// smaller than resampling can express, in which case it is simply dropped.
+struct SkewFit {
+    CameraModelType      model;
+    CameraDistortionType tier;
+    double fx, fy, cx, cy;
+    float  coeffs[kCameraDistortionParams];
+    RedistortSource source;   // source_model < 0 when the skew was negligible
+};
+
+// Keyed on everything the fit depends on: a transforms.json repeats the same
+// intrinsics on every frame and each fit is a least-squares solve.
+using SkewCache = std::map<std::string, SkewFit>;
+
+const SkewFit& fit_skewed_sensor(SkewCache& cache, CameraModelType model,
+                                 CameraDistortionType tier,
+                                 double fx, double fy, double cx, double cy,
+                                 double skew_px, const float* coeffs,
+                                 double W, double H, const std::string& label) {
+    RedistortSource src;
+    src.source_model = srccam::kSkewed;
+    src.params[0] = (float)fx; src.params[1] = (float)fy;
+    src.params[2] = (float)cx; src.params[3] = (float)cy;
+    src.params[4] = (float)skew_px;
+    for (int k = 0; k < kCameraDistortionParams; k++)
+        src.params[5 + k] = coeffs[k];
+    src.params[13] = model == CameraModelType::FISHEYE   ? srccam::kSkewBaseFisheye
+                   : model == CameraModelType::EQUISOLID ? srccam::kSkewBaseEquisolid
+                                                         : srccam::kSkewBasePerspective;
+    src.params[14] = tier == CameraDistortionType::Rational
+                   ? srccam::kSkewRadialRational : srccam::kSkewRadialPolynomial;
+
+    std::string key((const char*)src.params, sizeof(src.params));
+    key += std::string((const char*)&W, sizeof(W));
+    key += std::string((const char*)&H, sizeof(H));
+    auto it = cache.find(key);
+    if (it != cache.end())
+        return it->second;
+
+    dsfit::SourceProject project =
+        [&src](double x, double y, double z, double* u, double* v) {
+            return srccam::project(src.source_model, src.params, x, y, z, u, v);
+        };
+    // The same camera model reproduces everything but the skew, so try it
+    // before letting the fitter pick one it likes better.
+    dsfit::FitResult fit = dsfit::fit_camera(project, (int)W, (int)H, model);
+    if (!fit.invertible || fit.samples == 0)
+        fit = dsfit::fit_camera_auto(project, (int)W, (int)H);
+
+    SkewFit f{};
+    f.model = fit.target.model;
+    f.tier  = fit.target.distortion;
+    f.fx = fit.target.fx; f.fy = fit.target.fy;
+    f.cx = fit.target.cx; f.cy = fit.target.cy;
+    for (int k = 0; k < kCameraDistortionParams; k++) f.coeffs[k] = fit.target.coeffs[k];
+    if (fit.max_px >= dsfit::kExactFitPx) {
+        f.source = src;
+        f.source.fit_max_px = (float)fit.max_px;
+        std::printf("%s\n", spirula::i18n::format(dmsg::camera_sensor_skew,
+            {label, skew_px, camera_model_to_string(f.model),
+             camera_distortion_to_string(f.tier), fit.max_px}).c_str());
+    }
+    return cache.emplace(std::move(key), f).first->second;
 }
 
 // 3x3 inverse (adjugate); used for applied_transform^-1.
@@ -401,8 +475,9 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
     ds.train_frame_scale = (float)(scale_factor != 0.0 ? 1.0 / scale_factor : 1.0);
     ds.c2w.resize(N * 12);
     ds.intrins.resize(N * 4);
-    ds.dist_coeffs.resize(N * 10);
+    ds.dist_coeffs.resize(N * kCameraDistortionParams);
     ds.camera_models.reserve(N);
+    ds.camera_distortions.reserve(N);
     ds.image_filenames.reserve(N);
     ds.widths.reserve(N);
     ds.heights.reserve(N);
@@ -410,6 +485,8 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
     std::vector<std::string> mask_files(N), depth_files(N), normal_files(N);
     bool any_mask = false, any_depth = false, any_normal = false;
     const int EQUIRECT_V = (int)camera_model_from_name("EQUIRECTANGULAR");
+    const int PINHOLE_V  = (int)camera_model_from_name("PINHOLE");
+    SkewCache skew_cache;
 
     for (int64_t j = 0; j < N; j++) {
         const Frame& F = frames[subset[j]];
@@ -431,13 +508,92 @@ ParsedDataset parse_nerfstudio_meta(const JsonValue& meta,
             throw std::runtime_error("NerfstudioParser: unsupported camera model " +
                                      model_name);
 
-        for (int k = 0; k < 10; k++)
-            ds.dist_coeffs[j*10 + k] =
-                (float)frame_or_meta(fr, meta, kDistortionKeys[k], false, 0.0);
+        RawDistortion rd{};
+        auto get = [&](const char* key) {
+            return frame_or_meta(fr, meta, key, false, 0.0);
+        };
+        rd.k1 = get("k1"); rd.k2 = get("k2"); rd.k3 = get("k3");
+        rd.k4 = get("k4"); rd.k5 = get("k5"); rd.k6 = get("k6");
+        rd.p1 = get("p1"); rd.p2 = get("p2");
+        rd.sx1 = get("sx1"); rd.sy1 = get("sy1");
+        rd.b1 = get("b1"); rd.b2 = get("b2");
+
+        // b1/b2 arrive already converted, NOT as Metashape writes them:
+        // metashape_utils.py (and MetashapeParser, which mirrors it) divides
+        // both by fl_x, and swaps p1/p2 into OpenCV order on the way. So here
+        // they are affinity and skew relative to fl_x. The affinity is an fx
+        // correction and folds in exactly; the skew is off-diagonal, so it is
+        // handled after the tier is known, below.
+        const double skew_px = rd.b2 * fx;
+        if (rd.b1 != 0.0) fx *= 1.0 + rd.b1;
+
+        // An explicit "camera_distortion" resolves what k4 means; without one,
+        // a perspective camera follows OpenCV (k4..k6 are the rational
+        // denominator) and a fisheye follows Kannala-Brandt (k4 is radial).
+        // MetashapeParser always writes the key, because its 4th radial term
+        // would otherwise be read as a denominator.
+        CameraDistortionType hint = (CameraDistortionType)-1;
+        if (const JsonValue* v = fr.find("camera_distortion"))
+            hint = camera_distortion_from_name(v->as_string());
+        else if (const JsonValue* v2 = meta.find("camera_distortion"))
+            hint = camera_distortion_from_name(v2->as_string());
+
+        // b1/b2 are Metashape's affinity and skew and sx1/sy1 are thin-prism
+        // terms; a rational camera has none of them, so their mere PRESENCE
+        // resolves what k4 means for a file that omits "camera_distortion" --
+        // which is what a transforms.json converted from Metashape looks like.
+        // k5/k6 exist only in the rational model and decide on their own.
+        auto has = [&](const char* key) {
+            return fr.find(key) != nullptr || meta.find(key) != nullptr;
+        };
+        bool thin_prism_shaped =
+            has("b1") || has("b2") || has("sx1") || has("sy1");
+
+        float* dst = &ds.dist_coeffs[j*kCameraDistortionParams];
+        CameraDistortionType tier;
+        bool fisheye = ((int)model != PINHOLE_V);
+        bool rational = (hint == CameraDistortionType::Rational) ||
+                        ((int)hint < 0 && !fisheye &&
+                         (rd.k5 != 0.0 || rd.k6 != 0.0 ||
+                          (rd.k4 != 0.0 && !thin_prism_shaped)));
+        if (rational) {
+            tier = CameraDistortionType::Rational;
+            dst[0] = (float)rd.k1; dst[1] = (float)rd.k2; dst[2] = (float)rd.k3;
+            dst[3] = (float)rd.k4; dst[4] = (float)rd.k5; dst[5] = (float)rd.k6;
+            dst[6] = (float)rd.p1; dst[7] = (float)rd.p2;
+        } else {
+            tier = CameraDistortionType::ThinPrism;
+            dst[0] = (float)rd.k1;  dst[1] = (float)rd.k2;
+            dst[2] = (float)rd.k3;  dst[3] = (float)rd.k4;
+            dst[4] = (float)rd.p1;  dst[5] = (float)rd.p2;
+            dst[6] = (float)rd.sx1; dst[7] = (float)rd.sy1;
+        }
+        if ((int)model == EQUIRECT_V) {
+            // A panorama has no lens, so it has no skew either; b2 on one is
+            // meaningless and ignored along with the rest of the coefficients.
+            tier = CameraDistortionType::None;
+            for (int k = 0; k < kCameraDistortionParams; k++) dst[k] = 0.0f;
+        } else if (skew_px != 0.0) {
+            const SkewFit& f = fit_skewed_sensor(skew_cache, model, tier, fx, fy,
+                                                 cx, cy, skew_px, dst, W, H, F.abs);
+            model = f.model;
+            tier  = f.tier;
+            fx = f.fx; fy = f.fy; cx = f.cx; cy = f.cy;
+            std::copy(f.coeffs, f.coeffs + kCameraDistortionParams, dst);
+            if (f.source.source_model >= 0) {
+                if (ds.redistort.empty()) ds.redistort.resize(N);
+                ds.redistort[j] = f.source;
+            }
+        }
+        ds.camera_distortions.push_back(
+            (int32_t)camera_distortion_demote(tier, dst, dst));
 
         if (cfg.rescale_camera_to_fit > 0.0f) {
             double s = cfg.rescale_camera_to_fit;
             fx /= s; fy /= s; cx /= s; cy /= s;
+            if (!ds.redistort.empty() && ds.redistort[j].source_model >= 0)
+                srccam::rescale(ds.redistort[j].source_model,
+                                ds.redistort[j].params, s);
             auto round_dim = [&](double v) {
                 if (cfg.downscale_rounding_mode == "ceil")  return std::ceil(v / s);
                 if (cfg.downscale_rounding_mode == "round") return std::round(v / s);

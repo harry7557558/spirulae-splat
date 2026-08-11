@@ -54,6 +54,20 @@ static const void* _h2d_stage_byte(
 // views point at host std::vector memory (DecodedBatch hands out host
 // TorchTensorViews), so they must be copied to device first -- otherwise the
 // kernel faults on an illegal address. Zero-copy when already a device ptr.
+static const int32_t* _h2d_stage_ints(
+    const TorchTensorView& src_tv, size_t numel, PoolSlot slot)
+{
+    uint64_t src_ptr = std::get<0>(src_tv);
+    if (src_ptr == 0 || numel == 0) return nullptr;
+    if (_is_device_ptr((void*)src_ptr)) {
+        return (const int32_t*)src_ptr;
+    }
+    int32_t* p = DevicePool::global().acquire<int32_t>(slot, numel);
+    backend::memcpy_sync(p, (void*)src_ptr, numel * sizeof(int32_t),
+                         backend::MemcpyKind::HostToDevice);
+    return p;
+}
+
 static const float* _h2d_stage_floats(
     const TorchTensorView& src_tv, size_t numel, PoolSlot slot)
 {
@@ -72,6 +86,7 @@ void set_training_data_warped(
     // Input-side camera model name (FISHEYE / EQUISOLID / EQUIRECTANGULAR).
     // The kernel dispatcher uses this to pick wide vs equirectangular warp.
     std::string input_model_name,
+    std::string input_distortion,
     int B_in, int in_H, int in_W,
     int K, int out_H, int out_W,
     // GT RGB at INPUT shape, byte (uint8 or uint16). The kernel fuses
@@ -94,6 +109,14 @@ void set_training_data_warped(
     // be zero-copy when already on device.
     TorchTensorView input_intrins,
     TorchTensorView input_dist_coeffs,
+    // Per-INPUT source camera, for the cameras whose lens model no tier
+    // represents: [B_in] COLMAP model id and [B_in, 16] its own parameters.
+    // Null unless the dataset carries one. With K > 1 the wide warp projects
+    // straight through this instead of the fitted camera, so the two passes
+    // fuse and no intermediate image is allocated; with K == 1 it selects the
+    // re-distort kernels below.
+    TorchTensorView input_source_models,
+    TorchTensorView input_source_params,
     // Device pointer to the [K, 3, 3] cubemap axes table (lifetime managed
     // by DataManager).
     uint64_t axes_dev)
@@ -136,10 +159,26 @@ void set_training_data_warped(
     const float* d_intrins = _h2d_stage_floats(
         input_intrins, (size_t)B_in * 4, PoolSlot::WarpInputIntrins);
     const float* d_dist    = _h2d_stage_floats(
-        input_dist_coeffs, (size_t)B_in * 10, PoolSlot::WarpInputDistCoeffs);
+        input_dist_coeffs, (size_t)B_in * kCameraDistortionParams,
+        PoolSlot::WarpInputDistCoeffs);
+
+    const int* d_src_models = nullptr;
+    const float* d_src_params = nullptr;
+    if (std::get<0>(input_source_models) != 0) {
+        d_src_models = (const int*)_h2d_stage_ints(
+            input_source_models, (size_t)B_in, PoolSlot::WarpSourceModels);
+        d_src_params = _h2d_stage_floats(
+            input_source_params, (size_t)B_in * 16, PoolSlot::WarpSourceParams);
+    }
+    const bool redistort_only = (K == 1 && d_src_models != nullptr);
 
     CameraModelType cm = cmt(input_model_name);
-    if (cm == CameraModelType::EQUIRECTANGULAR) {
+    if (redistort_only) {
+        launch_redistort_byte_to_float(
+            input_model_name, input_distortion, d_intrins, d_dist,
+            d_src_models, d_src_params, d_rgb_byte, rgb_u16,
+            B_in, in_H, in_W, 3, d_rgb_float, out_H, out_W, in_H, in_W, 0.5f);
+    } else if (cm == CameraModelType::EQUIRECTANGULAR) {
         launch_warp_byte_to_float_equi(
             d_rgb_byte, rgb_u16, B_in, in_H, in_W, 3,
             d_rgb_float, K, out_H, out_W,
@@ -149,7 +188,8 @@ void set_training_data_warped(
         // projection dispatch internally on `cm`. (PINHOLE doesn't normally
         // hit this path -- K==1 there -- but the kernel handles it anyway.)
         launch_warp_byte_to_float_wide(
-            input_model_name, d_intrins, d_dist,
+            input_model_name, input_distortion, d_intrins, d_dist,
+            d_src_models, d_src_params,
             d_rgb_byte, rgb_u16, B_in, in_H, in_W, 3,
             d_rgb_float, K, out_H, out_W,
             (const float*)axes_dev);
@@ -175,13 +215,20 @@ void set_training_data_warped(
         uint8_t* d_mask_out = DevicePool::global().acquire<uint8_t>(
             PoolSlot::GtAlpha,
             (size_t)B_post * out_H * out_W);
-        if (cm == CameraModelType::EQUIRECTANGULAR) {
+        if (redistort_only) {
+            launch_redistort_mask(
+                input_model_name, input_distortion, d_intrins, d_dist,
+                d_src_models, d_src_params,
+                (const uint8_t*)d_mask_in, B_in, mask_in_H, mask_in_W,
+                d_mask_out, out_H, out_W, in_H, in_W);
+        } else if (cm == CameraModelType::EQUIRECTANGULAR) {
             launch_warp_mask_equi(
                 (const uint8_t*)d_mask_in, B_in, mask_in_H, mask_in_W,
                 d_mask_out, K, out_H, out_W, (const float*)axes_dev);
         } else {
             launch_warp_mask_wide(
-                input_model_name, d_intrins, d_dist,
+                input_model_name, input_distortion, d_intrins, d_dist,
+                d_src_models, d_src_params,
                 (const uint8_t*)d_mask_in, B_in, mask_in_H, mask_in_W,
                 d_mask_out, K, out_H, out_W, (const float*)axes_dev);
         }
@@ -211,14 +258,21 @@ void set_training_data_warped(
         }
         float* d_depth_out = DevicePool::global().acquire<float>(
             PoolSlot::GtDepth, (size_t)B_post * out_H * out_W);
-        if (cm == CameraModelType::EQUIRECTANGULAR) {
+        if (redistort_only) {
+            launch_redistort_depth(
+                input_model_name, input_distortion, d_intrins, d_dist,
+                d_src_models, d_src_params, d_depth_in, d_elem,
+                B_in, depth_in_H, depth_in_W, 1,
+                d_depth_out, out_H, out_W, in_H, in_W, 0.0f);
+        } else if (cm == CameraModelType::EQUIRECTANGULAR) {
             launch_warp_depth_equi(
                 d_depth_in, d_elem, B_in, depth_in_H, depth_in_W,
                 d_depth_out, K, out_H, out_W,
                 (const float*)axes_dev, input_depth_is_ray_depth);
         } else {
             launch_warp_depth_wide(
-                input_model_name, d_intrins, d_dist,
+                input_model_name, input_distortion, d_intrins, d_dist,
+                d_src_models, d_src_params,
                 d_depth_in, d_elem, B_in, depth_in_H, depth_in_W,
                 in_H, in_W, d_depth_out, K, out_H, out_W,
                 (const float*)axes_dev, input_depth_is_ray_depth);
@@ -247,13 +301,20 @@ void set_training_data_warped(
         }
         float* d_normal_out = DevicePool::global().acquire<float>(
             PoolSlot::GtNormal, (size_t)B_post * out_H * out_W * 3);
-        if (cm == CameraModelType::EQUIRECTANGULAR) {
+        if (redistort_only) {
+            launch_redistort_normal(
+                input_model_name, input_distortion, d_intrins, d_dist,
+                d_src_models, d_src_params, d_normal_in, n_elem == 4,
+                B_in, normal_in_H, normal_in_W,
+                d_normal_out, out_H, out_W, in_H, in_W);
+        } else if (cm == CameraModelType::EQUIRECTANGULAR) {
             launch_warp_normal_equi(
                 d_normal_in, n_elem, B_in, normal_in_H, normal_in_W,
                 d_normal_out, K, out_H, out_W, (const float*)axes_dev);
         } else {
             launch_warp_normal_wide(
-                input_model_name, d_intrins, d_dist,
+                input_model_name, input_distortion, d_intrins, d_dist,
+                d_src_models, d_src_params,
                 d_normal_in, n_elem, B_in, normal_in_H, normal_in_W,
                 in_H, in_W, d_normal_out, K, out_H, out_W,
                 (const float*)axes_dev);

@@ -13,6 +13,7 @@
 // The register camera-loop accumulation is deterministic; codes compare with
 // a +-1 quantum tolerance (codec rounding + last-ulp bound differences).
 
+#include <backend/tests/DistortionFixture.h>
 #include <kernels/projection/ProjectionFwd.cuh>
 #include <kernels/projection/ProjectionPackedFwd.cuh>
 #include <kernels/projection/ProjectionBwdQuantGrad.cuh>
@@ -120,9 +121,7 @@ int main(int argc, char** argv) {
         cy_, 0, sy_, 0.3f,  0, 1, 0, -0.2f,  -sy_, 0, cy_, 5.f,  0, 0, 0, 1,
     };
     std::vector<float> intr = {150, 152, 100, 75, 145, 146, 97, 78};
-    std::vector<float> dist(C * 10, 0.f);
-    dist[0] = 0.05f;  dist[1] = -0.01f;
-    dist[10] = -0.03f;
+    std::vector<float> dist = dist_fixture::distortion_rows(C);
 
     float* d_means = upload(means);
     float* d_quats = upload(quats);
@@ -164,21 +163,26 @@ int main(int argc, char** argv) {
 
     const char* cams[4] = {"PINHOLE", "FISHEYE", "EQUISOLID",
                            "EQUIRECTANGULAR"};
+    auto dist_tv = [&](int tier) {
+        return ttv(d_dist + dist_fixture::row_offset(tier, C),
+                   {C, kCameraDistortionParams});
+    };
 
     struct Cfg {
         int prim;    // 0 = 3dgs, 1 = mip, 2 = 3dgut
         bool packed;
         int cam;
+        int dist;    // distortion tier, index into dist_fixture::kTierNames
         int max_deg;
         bool geom_quant;  // quantize means/quats/scales (off for 3dgut)
         bool qsrc;        // q8 SH value source
     };
     const Cfg cfgs[] = {
-        {0, false, 0, 3, true, false},
-        {2, false, 1, 3, false, false},
-        {0, true, 2, 2, true, false},
-        {2, true, 0, 1, false, true},
-        {1, false, 0, 3, true, false},
+        {0, false, 0, 1, 3, true, false},
+        {2, false, 1, 2, 3, false, false},
+        {0, true, 2, 1, 2, true, false},
+        {2, true, 0, 3, 1, false, true},
+        {1, false, 0, 0, 3, true, false},
     };
 
     for (const Cfg& cfg : cfgs) {
@@ -203,7 +207,8 @@ int main(int argc, char** argv) {
                                       : projection_3dgut_packed_forward;
             auto out = fn(N, cfg.max_deg, splats_in, ttv(d_vm, {C, 16}),
                           ttv(d_intr, {C, 4}), W, H, cams[cfg.cam],
-                          ttv(d_dist, {C, 10}), radii, q_packed, q_bounds,
+                          dist_fixture::kTierNames[cfg.dist],
+                          dist_tv(cfg.dist), radii, q_packed, q_bounds,
                           (uint32_t)NUM_SH, quant_src ? 8 : 32, 256);
             cam_ids = std::get<0>(out);
             gauss_ids = std::get<1>(out);
@@ -216,7 +221,8 @@ int main(int argc, char** argv) {
                                       : projection_3dgut_forward;
             auto out = fn(N, cfg.max_deg, splats_in, ttv(d_vm, {C, 16}),
                           ttv(d_intr, {C, 4}), W, H, cams[cfg.cam],
-                          ttv(d_dist, {C, 10}), radii, q_packed, q_bounds,
+                          dist_fixture::kTierNames[cfg.dist],
+                          dist_tv(cfg.dist), radii, q_packed, q_bounds,
                           (uint32_t)NUM_SH, quant_src ? 8 : 32, 256);
             aabb_2d = std::get<0>(out);
         }
@@ -332,7 +338,8 @@ int main(int argc, char** argv) {
                                      n_isect * 4, MemcpyKind::HostToDevice);
             bwd(N, cfg.max_deg, splats_in, ttv(d_vm, {C, 16}),
                 ttv(d_intr, {C, 4}), W, H, cams[cfg.cam],
-                ttv(d_dist, {C, 10}), cam_ids, gauss_ids, aabb_2d, v_screen,
+                dist_fixture::kTierNames[cfg.dist], dist_tv(cfg.dist),
+                cam_ids, gauss_ids, aabb_2d, v_screen,
                 v_world, gq, q_packed, q_bounds, (uint32_t)NUM_SH,
                 quant_src ? 8 : 32, 256);
             backend::device_synchronize();

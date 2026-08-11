@@ -1,5 +1,7 @@
 #include "kernels/raster/RasterizationEval3DFwd.cuh"
 
+#include "kernels/projection/CameraVariants.cuh"
+
 #include <core/Common.cuh>
 
 
@@ -9,6 +11,7 @@
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
+    CameraDistortionType distortion,
     DistortionType dist_type,
     bool output_median
 >
@@ -48,6 +51,7 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const CameraModelType camera_model,
+    const CameraDistortionType distortion,
     const TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size
@@ -87,20 +91,14 @@ inline void launch_rasterize_to_pixels_eval3d_fwd_kernel(
             output_median ? render_median.data_ptr() : nullptr \
         )
 
-    if (camera_model == CameraModelType::PINHOLE)
-        rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            CameraModelType::PINHOLE, dist_type, output_median> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::FISHEYE)
-        rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            CameraModelType::FISHEYE, dist_type, output_median> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::EQUISOLID)
-        rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            CameraModelType::EQUISOLID, dist_type, output_median> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::EQUIRECTANGULAR)
-        rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive,
-            CameraModelType::EQUIRECTANGULAR, dist_type, output_median> _LAUNCH_ARGS;
-    else
-        throw std::runtime_error("Unsupported camera model");
+    #define _DISPATCH(M, D) \
+        if (camera_model == CameraModelType::M && distortion == CameraDistortionType::D) \
+            rasterize_to_pixels_eval3d_fwd_kernel_wrapper<SplatPrimitive, \
+                CameraModelType::M, CameraDistortionType::D, \
+                dist_type, output_median> _LAUNCH_ARGS; else
+    SS_FOR_EACH_CAMERA_VARIANT(_DISPATCH)
+        throw std::runtime_error("Unsupported camera model / distortion tier");
+    #undef _DISPATCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
@@ -123,6 +121,7 @@ inline std::tuple<
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const CameraModelType camera_model,
+    const CameraDistortionType distortion,
     const TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size
@@ -153,7 +152,7 @@ inline std::tuple<
     launch_rasterize_to_pixels_eval3d_fwd_kernel<SplatPrimitive, dist_type, output_median>(
         num_splats,
         splats_w, splats_s, gaussian_ids,
-        viewmats, intrins, camera_model, dist_coeffs, aabb,
+        viewmats, intrins, camera_model, distortion, dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
         renders, render_Ts, render_last_ids, distortions, render_median
     );
@@ -186,6 +185,7 @@ std::tuple<
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size
@@ -212,7 +212,7 @@ std::tuple<
     return dispatch(
         num_splats,
         splats_w, splats_s, gaussian_ids,
-        viewmats, intrins, cmt(camera_model), dist_coeffs, aabb,
+        viewmats, intrins, cmt(camera_model), cdt(distortion), dist_coeffs, aabb,
         image_width, image_height,
         tile_offsets, flatten_ids
     );

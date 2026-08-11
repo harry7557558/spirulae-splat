@@ -18,6 +18,7 @@
 //                    attributes); only ever set with kLevel == 1
 //   kVwMask        = which v_splats_world tensors exist (1 means, 2 quats,
 //                    4 scales, 8 opac, 16 dc) -- folded loads
+//   kDistortion    = CameraDistortionType (0..3), declared last
 //
 // Barriers only exist in the kLevel/kNonShQuant reduces and the staged SH
 // writeback, which every thread reaches (`inside` masks work, never control
@@ -158,6 +159,51 @@ float _fp_sigmoid(float x) { return 1.0f / (1.0f + exp(-x)); }
 // optim_quant.slang (oq_state_read / oq_accum_us / oq_state_encode /
 // oq_sqrt3 / oq_sqrt4), shared with optim_geometry.slang.
 
+// The per-splat camera loop, generic over the two projection spec axes so the
+// entry point folds them once (its block reduces stay outside).
+[ForceInline]
+void _fpbo_camera_loop<let cam : CameraModelType, D : ICameraDistortion>(
+    FpboParams p, PbSplat s, uint gid, int cid_0, int cid_1, gindex_t qbase,
+    gindex_t vstride, inout PbGrads g) {
+    for (int cid_t = cid_0; cid_t < cid_1; ++cid_t) {
+        int idx = (kPacked != 0) ? p.perm[cid_t]
+                                 : cid_t * int(p.N) + int(gid);
+        int cid = (kPacked != 0) ? p.camera_ids[idx] : cid_t;
+        float4 bb = p.aabb[idx];
+        if (bb.z <= bb.x || bb.w <= bb.y)
+            continue;
+        PbCamera<D> c = pb_load_camera<D>(p.viewmats, p.intrins,
+                                          p.dist_coeffs, uint(cid));
+        if (kEval3d != 0) {
+            float3 v_ss = float3(p.vs0[3 * idx], p.vs0[3 * idx + 1],
+                                 p.vs0[3 * idx + 2]);
+            float v_so = p.vs1[idx];
+            float3 v_rgb = float3(p.vs2[3 * idx], p.vs2[3 * idx + 1],
+                                  p.vs2[3 * idx + 2]);
+            pb_vjp_3dgut<cam, D>(s, c, p.width, p.height, v_ss, v_so, g);
+            pb_sh_vjp<D>(s, c, p.features_sh + gid * 3 * p.num_sh_buffer,
+                         p.sh_value_packed, p.sh_value_bounds, qbase,
+                         vstride, v_rgb, g);
+        } else {
+            float2 v_xy = float2(p.vs0[2 * idx], p.vs0[2 * idx + 1]);
+            float v_depth = p.vs1[idx];
+            float3 v_conic = float3(p.vs2[3 * idx], p.vs2[3 * idx + 1],
+                                    p.vs2[3 * idx + 2]);
+            float v_opac = p.vs3[idx];
+            float3 v_rgb = float3(p.vs4[3 * idx], p.vs4[3 * idx + 1],
+                                  p.vs4[3 * idx + 2]);
+            pb_vjp_2d<cam, D>(s, c, p.width, p.height, v_xy, v_depth, v_conic,
+                              v_opac, g);
+            pb_sh_vjp<D>(s, c, p.features_sh + gid * 3 * p.num_sh_buffer,
+                         p.sh_value_packed, p.sh_value_bounds, qbase,
+                         vstride, v_rgb, g);
+        }
+    }
+}
+
+#define _fpbo_call(M, D) \
+    _fpbo_camera_loop<M, D>(p, s, gid, cid_0, cid_1, qbase, vstride, g)
+
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -209,40 +255,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         // all 3*K cells; the host passes kShValueBits = 16 and the FPBO
         // stride below).
         gindex_t vstride = (gindex_t)256 * 3 * (gindex_t)p.num_sh_buffer;
-        for (int cid_t = cid_0; cid_t < cid_1; ++cid_t) {
-            int idx = (kPacked != 0) ? p.perm[cid_t]
-                                     : cid_t * int(p.N) + int(gid);
-            int cid = (kPacked != 0) ? p.camera_ids[idx] : cid_t;
-            float4 bb = p.aabb[idx];
-            if (bb.z <= bb.x || bb.w <= bb.y)
-                continue;
-            PbCamera cam = pb_load_camera(p.viewmats, p.intrins,
-                                          p.dist_coeffs, uint(cid));
-            if (kEval3d != 0) {
-                float3 v_ss = float3(p.vs0[3 * idx], p.vs0[3 * idx + 1],
-                                     p.vs0[3 * idx + 2]);
-                float v_so = p.vs1[idx];
-                float3 v_rgb = float3(p.vs2[3 * idx], p.vs2[3 * idx + 1],
-                                      p.vs2[3 * idx + 2]);
-                pb_vjp_3dgut(s, cam, p.width, p.height, v_ss, v_so, g);
-                pb_sh_vjp(s, cam, p.features_sh + gid * 3 * p.num_sh_buffer,
-                          p.sh_value_packed, p.sh_value_bounds, qbase,
-                          vstride, v_rgb, g);
-            } else {
-                float2 v_xy = float2(p.vs0[2 * idx], p.vs0[2 * idx + 1]);
-                float v_depth = p.vs1[idx];
-                float3 v_conic = float3(p.vs2[3 * idx], p.vs2[3 * idx + 1],
-                                        p.vs2[3 * idx + 2]);
-                float v_opac = p.vs3[idx];
-                float3 v_rgb = float3(p.vs4[3 * idx], p.vs4[3 * idx + 1],
-                                      p.vs4[3 * idx + 2]);
-                pb_vjp_2d(s, cam, p.width, p.height, v_xy, v_depth, v_conic,
-                          v_opac, g);
-                pb_sh_vjp(s, cam, p.features_sh + gid * 3 * p.num_sh_buffer,
-                          p.sh_value_packed, p.sh_value_bounds, qbase,
-                          vstride, v_rgb, g);
-            }
-        }
+        SS_DISPATCH_CAM_DIST(_fpbo_call)
 
         // per-splat regularizers -> gradient
         float v_losses[5] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
@@ -744,3 +757,9 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         }
     }
 }
+
+#undef _fpbo_call
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

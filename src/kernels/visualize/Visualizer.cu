@@ -11,6 +11,7 @@ namespace SlangProjectionUtils {
 
 #include <core/Tensor.h>
 #include <core/Common.cuh>
+#include "core/CameraDistortion.cuh"
 #include "engine/EngineState.h"
 #include "engine/EngineCommon.h"
 #include "core/Interpolation.cuh"
@@ -90,9 +91,23 @@ inline void default_stream_wait_viewer() {
 #define _LAUNCH_ARGS_2D_VS(nx,ny,bx,by) dim3(_CEIL_DIV(nx,bx),_CEIL_DIV(ny,by),1),dim3(bx,by),0,viewer_stream()
 
 
+// Run BODY(tier) for the tier `name` spells. The camera model stays runtime --
+// per-camera for the dataset frusta, a plain argument for the view camera.
+#define _SS_DISPATCH_DISTORTION(name, BODY)                                        \
+    do { switch (cdt(name)) {                                                      \
+        case CameraDistortionType::None:      BODY(CameraDistortionType::None);      break; \
+        case CameraDistortionType::OpenCV:    BODY(CameraDistortionType::OpenCV);    break; \
+        case CameraDistortionType::ThinPrism: BODY(CameraDistortionType::ThinPrism); break; \
+        case CameraDistortionType::Rational:  BODY(CameraDistortionType::Rational);  break; \
+        default: throw std::runtime_error(                                         \
+            "Unknown camera distortion: " + std::string(name));                    \
+    } } while (0)
+
+
 inline constexpr int kNumFrustumSegments = 16;
 inline constexpr int kNumFrustumFaces = 8;
 
+template<CameraDistortionType distortion>
 __global__ void fill_frustum_segments_kernel(
     const float4* __restrict__ intrins, // [N, 4]
     const int32_t* __restrict__ widths, // [N]
@@ -113,7 +128,7 @@ __global__ void fill_frustum_segments_kernel(
     float width = (float)widths[bid];
     float height = (float)heights[bid];
     CameraModelType camera_model = (CameraModelType)camera_models[bid];
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
     float2 corners[4] = {
         {-cx / fx, -cy / fy},
         {(width-cx) / fx, -cy / fy},
@@ -142,14 +157,14 @@ __global__ void fill_frustum_segments_kernel(
         float2 uv = corners[corner_idx] + (corners[(corner_idx+1)%4] - corners[corner_idx])
              * ((float)(i % kNumFrustumSegments) / kNumFrustumSegments);
         float3 raydir = float3{NAN, NAN, NAN};
-        bool valid = SlangProjectionUtils::generate_ray(uv, (int)camera_model, dist_coeffs, &raydir);
+        bool valid = SlangDistortion<distortion>::generate_ray(uv, (int)camera_model, dist_coeffs, &raydir);
         if (!valid) {
             // binary search for valid
             float t0 = 0.0f, t1 = 1.0f;
             for (int iter = 0; iter < 12; ++iter) {
                 float t = 0.5f*(t0+t1);
                 float3 temp;
-                if (SlangProjectionUtils::generate_ray(uv*t, (int)camera_model, dist_coeffs, &temp))
+                if (SlangDistortion<distortion>::generate_ray(uv*t, (int)camera_model, dist_coeffs, &temp))
                     t0 = t, raydir = temp;
                 else
                     t1 = t;
@@ -216,14 +231,14 @@ __global__ void fill_frustum_segments_kernel(
                 corners[2] * u*v +
                 corners[3] * (1.0f-u)*v;
             float3 raydir = float3{NAN, NAN, NAN};
-            bool valid = SlangProjectionUtils::generate_ray(uv, (int)camera_model, dist_coeffs, &raydir);
+            bool valid = SlangDistortion<distortion>::generate_ray(uv, (int)camera_model, dist_coeffs, &raydir);
             if (!valid) {
                 // binary search for valid
                 float t0 = 0.0f, t1 = 1.0f;
                 for (int iter = 0; iter < 12; ++iter) {
                     float t = 0.5f*(t0+t1);
                     float3 temp;
-                    if (SlangProjectionUtils::generate_ray(uv*t, (int)camera_model, dist_coeffs, &temp))
+                    if (SlangDistortion<distortion>::generate_ray(uv*t, (int)camera_model, dist_coeffs, &temp))
                         t0 = t, raydir = temp;
                     else
                         t1 = t;
@@ -621,6 +636,7 @@ inline __device__ bool ray_triangle_intersection(
 }
 
 
+template<CameraDistortionType distortion>
 __global__ void blit_aabb_bvh_kernel(
     TensorView<float, 3> render_rgbs,  // [H, W, 3]
     const TensorView<float, 3> render_depths,  // [H, W, 1]
@@ -651,14 +667,14 @@ __global__ void blit_aabb_bvh_kernel(
             view_viewmat[8], view_viewmat[9], view_viewmat[10],  // 3rd row
         };
         float3 t = { view_viewmat[3], view_viewmat[7], view_viewmat[11] };
-        CameraDistortionCoeffs dist_coeffs = view_dist_coeffs.load(0);
+        auto dist_coeffs = view_dist_coeffs.load<distortion>(0);
 
         #pragma unroll
         for (int i = 0; i < MSAA*MSAA; ++i) {
             const float px = (float)pix_x + (i/MSAA + 0.5f) / (float)MSAA;
             const float py = (float)pix_y + (i%MSAA + 0.5f) / (float)MSAA;
             ray_o[i] = SlangProjectionUtils::transform_ray_o(R, t);
-            inside |= SlangProjectionUtils::generate_ray(
+            inside |= SlangDistortion<distortion>::generate_ray(
                 {(px-cx)/fx, (py-cy)/fy},
                 view_camera_model, dist_coeffs,
                 &ray_d[i]
@@ -823,6 +839,7 @@ inline __device__ float3 get_thumbnail_bilinear(
     };
 }
 
+template<CameraDistortionType distortion>
 __global__ void blit_with_bvh_kernel(
     const TensorView<float, 3> render_rgbs,  // [H, W, 3]
     const TensorView<float, 3> render_depths,  // [H, W, 1]
@@ -913,7 +930,7 @@ __global__ void blit_with_bvh_kernel(
         view_viewmat[8], view_viewmat[9], view_viewmat[10],  // 3rd row
     };
     float3 t = { view_viewmat[3], view_viewmat[7], view_viewmat[11] };
-    CameraDistortionCoeffs dist_coeffs = view_dist_coeffs.load(0);
+    auto dist_coeffs = view_dist_coeffs.load<distortion>(0);
 
     float alpha_final = 0.0f;
     float3 rgb_final = {0.0f, 0.0f, 0.0f};
@@ -926,7 +943,7 @@ __global__ void blit_with_bvh_kernel(
         float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
         float3 ray_d;
         float2 uv = {(px-cx)/fx, (py-cy)/fy};
-        bool inside = SlangProjectionUtils::generate_ray(
+        bool inside = SlangDistortion<distortion>::generate_ray(
             uv,
             view_camera_model, dist_coeffs,
             &ray_d
@@ -1198,7 +1215,7 @@ void engine_viewer_init(
     v.d_heights          = _hv_to_dv<int32_t>(PoolSlot::ViewerHeights, heights);
     v.d_camera_models    = _hv_to_dv<int32_t>(PoolSlot::ViewerCmodels, camera_models);
     v.d_dist_coeffs      = _hv_to_dv<float>(PoolSlot::ViewerDist,
-                              TorchTensorView(std::get<0>(dist_coeffs), 4, {N * 10LL}));
+                              TorchTensorView(std::get<0>(dist_coeffs), 4, {N * (int64_t)kCameraDistortionParams}));
     v.d_camera_to_worlds = _hv_to_dv<float>(PoolSlot::ViewerC2w,
                               TorchTensorView(std::get<0>(camera_to_worlds), 4, {N * 12LL}));
 
@@ -1488,6 +1505,7 @@ namespace {
 // Build the BVH into engine().viewer.bvh_* pool slots. Runs the same kernel
 // dance as blit_train_cameras_tensor's show-cams branch but emits to
 // dedicated "viewer.*" keys so the buffers survive across calls.
+template<CameraDistortionType distortion>
 void _viewer_build_bvh()
 {
     auto& v = engine().viewer;
@@ -1503,10 +1521,10 @@ void _viewer_build_bvh()
     float4* tri_buffer = DevicePool::global().acquire<float4>(PoolSlot::ViewerTri, (size_t)num_tri * 4);
 
     TorchTensorView dist_tv((uint64_t)v.d_dist_coeffs.data_ptr(), 4,
-                            {(int64_t)n, 10LL});
+                            {(int64_t)n, (int64_t)kCameraDistortionParams});
     CameraDistortionCoeffsBuffer dist_buf(dist_tv);
 
-    fill_frustum_segments_kernel
+    fill_frustum_segments_kernel<distortion>
     <<<_LAUNCH_ARGS_1D(n * 4 * kNumFrustumSegments, 4 * kNumFrustumSegments)>>>(
         (const float4*)v.d_intrins.data_ptr(),
         v.d_widths.data_ptr(),
@@ -1583,6 +1601,7 @@ void engine_blit_view(
     TorchTensorView render_depth,
     TorchTensorView render_alpha,
     int             view_camera_model,
+    std::string     distortion,
     TorchTensorView view_intrins,
     TorchTensorView view_viewmat,
     TorchTensorView view_dist_coeffs,
@@ -1662,7 +1681,9 @@ void engine_blit_view(
             // buffers are populated relative to the default stream, so the
             // viewer stream must wait on the default stream once more before
             // the blit kernel reads them.
-            _viewer_build_bvh();
+            #define BUILD(D) _viewer_build_bvh<D>()
+            _SS_DISPATCH_DISTORTION(distortion, BUILD);
+            #undef BUILD
             viewer_stream_wait_default();
         }
         lss_buffer = (const float4*)DevicePool::global().acquire<float4>(
@@ -1680,24 +1701,26 @@ void engine_blit_view(
         }
     }
 
-    blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D_VS(w, h, 8, 4)>>>(
-        tv_to_view<float, 3>(render_buffer),
-        tv_to_view<float, 3>(render_depth),
-        tv_to_view<float, 3>(render_alpha),
-        view_camera_model, (int)w, (int)h,
-        (float4*)std::get<0>(view_intrins),
-        (float*)std::get<0>(view_viewmat),
-        view_dist_coeffs,
-        lss_buffer, lss_nodes, lss_aabb,
-        tri_buffer, tri_nodes, tri_aabb,
-        (const float*)v.d_overlay_colors.data_ptr(),
-        v.bvh_num_cam_lss,
-        show_training_cameras,
-        show_overlay,
-        thumb_view,
-        min_max,
-        tv_to_view<uint8_t, 3>(out_rgb)
-    );
+    #define LAUNCH(D) \
+        blit_with_bvh_kernel<D><<<_LAUNCH_ARGS_2D_VS(w, h, 8, 4)>>>( \
+            tv_to_view<float, 3>(render_buffer), \
+            tv_to_view<float, 3>(render_depth), \
+            tv_to_view<float, 3>(render_alpha), \
+            view_camera_model, (int)w, (int)h, \
+            (float4*)std::get<0>(view_intrins), \
+            (float*)std::get<0>(view_viewmat), \
+            view_dist_coeffs, \
+            lss_buffer, lss_nodes, lss_aabb, \
+            tri_buffer, tri_nodes, tri_aabb, \
+            (const float*)v.d_overlay_colors.data_ptr(), \
+            v.bvh_num_cam_lss, \
+            show_training_cameras, \
+            show_overlay, \
+            thumb_view, \
+            min_max, \
+            tv_to_view<uint8_t, 3>(out_rgb))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     // Ensure the default stream (which the Python caller will use to read
@@ -1712,6 +1735,7 @@ void blit_train_cameras_tensor(
     TorchTensorView render_depths,    // [H, W, 1] float32
     TorchTensorView render_alphas,    // [H, W, 1] float32
     const int view_camera_model,
+    std::string distortion,
     TorchTensorView view_intrins,     // [1, 4] or [4] float32
     TorchTensorView view_viewmat,     // [4, 4] float32
     TorchTensorView view_dist_coeffs,
@@ -1744,21 +1768,23 @@ void blit_train_cameras_tensor(
     }
 
     if (!show_training_cameras) {
-        blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
-            tv_to_view<float, 3>(render_rgbs),
-            tv_to_view<float, 3>(render_depths),
-            tv_to_view<float, 3>(render_alphas),
-            view_camera_model, w, h,
-            (float4*)std::get<0>(view_intrins),
-            (float*)std::get<0>(view_viewmat),
-            view_dist_coeffs,
-            nullptr, nullptr, nullptr,
-            nullptr, nullptr, nullptr,
-            nullptr, 0, false, false,
-            tv_to_view<uint8_t, 4>(thumbnails),
-            min_max,
-            tv_to_view<uint8_t, 3>(out_rgb)
-        );
+        #define LAUNCH(D) \
+            blit_with_bvh_kernel<D><<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>( \
+                tv_to_view<float, 3>(render_rgbs), \
+                tv_to_view<float, 3>(render_depths), \
+                tv_to_view<float, 3>(render_alphas), \
+                view_camera_model, w, h, \
+                (float4*)std::get<0>(view_intrins), \
+                (float*)std::get<0>(view_viewmat), \
+                view_dist_coeffs, \
+                nullptr, nullptr, nullptr, \
+                nullptr, nullptr, nullptr, \
+                nullptr, 0, false, false, \
+                tv_to_view<uint8_t, 4>(thumbnails), \
+                min_max, \
+                tv_to_view<uint8_t, 3>(out_rgb))
+        _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+        #undef LAUNCH
         CHECK_DEVICE_ERROR(cudaGetLastError());
         return;
     }
@@ -1767,18 +1793,20 @@ void blit_train_cameras_tensor(
     uint32_t num_tri = (uint32_t)(n * 4 * kNumFrustumFaces * kNumFrustumFaces);
     float4* lss_buffer = DevicePool::global().acquire<float4>(PoolSlot::VisLss, (size_t)num_lss * 2);
     float4* tri_buffer = DevicePool::global().acquire<float4>(PoolSlot::VisTri, (size_t)num_tri * 4);
-    fill_frustum_segments_kernel
-    <<<_LAUNCH_ARGS_1D(n * 4 * kNumFrustumSegments, 4 * kNumFrustumSegments)>>>(
-        (float4*)std::get<0>(intrins),
-        (int32_t*)std::get<0>(widths),
-        (int32_t*)std::get<0>(heights),
-        (int32_t*)std::get<0>(camera_models),
-        dist_coeffs,
-        (float*)std::get<0>(camera_to_worlds),
-        camera_size,
-        lss_buffer,
-        tri_buffer
-    );
+    #define LAUNCH(D) \
+        fill_frustum_segments_kernel<D> \
+        <<<_LAUNCH_ARGS_1D(n * 4 * kNumFrustumSegments, 4 * kNumFrustumSegments)>>>( \
+            (float4*)std::get<0>(intrins), \
+            (int32_t*)std::get<0>(widths), \
+            (int32_t*)std::get<0>(heights), \
+            (int32_t*)std::get<0>(camera_models), \
+            dist_coeffs, \
+            (float*)std::get<0>(camera_to_worlds), \
+            camera_size, \
+            lss_buffer, \
+            tri_buffer)
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     float3* root_aabb = DevicePool::global().acquire<float3>(PoolSlot::VisRootAabb, 2);
@@ -1811,24 +1839,26 @@ void blit_train_cameras_tensor(
     auto tri_bvh = build_bvh<VisPrimitive::Triangle>(
         num_tri, tri_buffer, rootAABBMin, rootAABBMax, "vis.tri_bvh");
 
-    blit_with_bvh_kernel<<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>(
-        tv_to_view<float, 3>(render_rgbs),
-        tv_to_view<float, 3>(render_depths),
-        tv_to_view<float, 3>(render_alphas),
-        view_camera_model, w, h,
-        (float4*)std::get<0>(view_intrins),
-        (float*)std::get<0>(view_viewmat),
-        view_dist_coeffs,
-        lss_buffer,
-        lss_bvh.nodes,
-        lss_bvh.aabb,
-        tri_buffer,
-        tri_bvh.nodes,
-        tri_bvh.aabb,
-        nullptr, (int)num_lss, true, false,   // no overlay in the legacy path
-        tv_to_view<uint8_t, 4>(thumbnails),
-        min_max,
-        tv_to_view<uint8_t, 3>(out_rgb)
-    );
+    #define LAUNCH(D) \
+        blit_with_bvh_kernel<D><<<_LAUNCH_ARGS_2D(w, h, 8, 4)>>>( \
+            tv_to_view<float, 3>(render_rgbs), \
+            tv_to_view<float, 3>(render_depths), \
+            tv_to_view<float, 3>(render_alphas), \
+            view_camera_model, w, h, \
+            (float4*)std::get<0>(view_intrins), \
+            (float*)std::get<0>(view_viewmat), \
+            view_dist_coeffs, \
+            lss_buffer, \
+            lss_bvh.nodes, \
+            lss_bvh.aabb, \
+            tri_buffer, \
+            tri_bvh.nodes, \
+            tri_bvh.aabb, \
+            nullptr, (int)num_lss, true, false,   /* no overlay in the legacy path */ \
+            tv_to_view<uint8_t, 4>(thumbnails), \
+            min_max, \
+            tv_to_view<uint8_t, 3>(out_rgb))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

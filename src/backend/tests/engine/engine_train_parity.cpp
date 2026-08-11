@@ -20,6 +20,7 @@
 // all optimizer steps (fed by atomically accumulated gradients).
 // Densification is disabled so the splat count stays fixed.
 
+#include <backend/tests/DistortionFixture.h>
 #include <engine/Engine.h>
 #include <engine/EngineState.h>
 #include <kernels/pixelwise/PixelWise.cuh>
@@ -181,7 +182,7 @@ int main(int argc, char** argv) {
             0, 0, 0, 1,
         };
         std::vector<float> intr = {70, 71, 48, 36, 69, 70, 47, 37};
-        std::vector<float> dist(C * 10, 0.f);
+        std::vector<float> dist = dist_fixture::distortion_rows(C);
 
         auto gt_rgb = r.bytes((int64_t)C * H * W * 3);
         auto gt_depth = r.words((int64_t)C * H * W, 12);
@@ -189,11 +190,15 @@ int main(int argc, char** argv) {
         auto gt_alpha = r.bytes((int64_t)C * H * W);
         for (auto& v : gt_alpha) v = v < 220 ? 1 : 0;
 
+        // One step per tier: PINHOLE compiles all four, and the tier is
+        // orthogonal to everything the step does with the GT.
         for (int s = 0; s < 4; s++, step++) {
             auto losses = engine_train_step(
                 step, max_steps, "3dgs", 3, /*packed=*/false, W, H,
-                "PINHOLE", ttv(vm.data(), 4, {C, 4, 4}),
-                ttv(intr.data(), 4, {C, 4}), ttv(dist.data(), 4, {C, 10}),
+                "PINHOLE", dist_fixture::kTierNames[s],
+                ttv(vm.data(), 4, {C, 4, 4}), ttv(intr.data(), 4, {C, 4}),
+                ttv(dist.data() + dist_fixture::row_offset(s, C), 4,
+                    {C, kCameraDistortionParams}),
                 ttv(gt_rgb.data(), 1, {C, H, W, 3}),
                 ttv(gt_depth.data(), 2, {C, H, W, 1}),
                 ttv(gt_normal.data(), 1, {C, H, W, 3}),
@@ -222,21 +227,26 @@ int main(int argc, char** argv) {
         post_intr.push_back(0.5f * out_W);
         post_intr.push_back(0.5f * out_H);
     }
-    std::vector<float> post_dist(B_post * 10, 0.f);
+    // engine_train_step_warped always sets the post-split table to
+    // PINHOLE / NONE.
+    std::vector<float> post_dist(B_post * kCameraDistortionParams, 0.f);
 
     struct WarpCase {
         const char* model;
+        int tier;      // distortion tier, index into dist_fixture::kTierNames
         int in_H, in_W;
         float fx, fy;
     };
     const WarpCase wcases[2] = {
-        {"FISHEYE", 48, 64, 20.0f, 20.5f},
-        {"EQUIRECTANGULAR", 32, 64, 10.2f, 10.2f},
+        {"FISHEYE", 2, 48, 64, 20.0f, 20.5f},
+        {"EQUIRECTANGULAR", 0, 32, 64, 10.2f, 10.2f},
     };
+    const std::vector<float> warp_dist = dist_fixture::distortion_rows(1);
     for (const WarpCase& wc : wcases) {
         std::vector<float> in_intr = {wc.fx, wc.fy, 0.5f * wc.in_W,
                                       0.5f * wc.in_H};
-        std::vector<float> in_dist(10, 0.005f);
+        const float* in_dist =
+            warp_dist.data() + dist_fixture::row_offset(wc.tier, 1);
 
         auto gt_rgb = r.bytes((int64_t)wc.in_H * wc.in_W * 3);
         auto gt_alpha = r.bytes((int64_t)wc.in_H * wc.in_W);
@@ -249,10 +259,12 @@ int main(int argc, char** argv) {
                 step, max_steps, "3dgs", 3, /*packed=*/false, out_W, out_H,
                 ttv(post_vm.data(), 4, {B_post, 4, 4}),
                 ttv(post_intr.data(), 4, {B_post, 4}),
-                ttv(post_dist.data(), 4, {B_post, 10}), wc.model,
+                ttv(post_dist.data(), 4, {B_post, kCameraDistortionParams}),
+                wc.model, dist_fixture::kTierNames[wc.tier],
                 /*B_in=*/1, wc.in_H, wc.in_W, K,
                 ttv(in_intr.data(), 4, {1, 4}),
-                ttv(in_dist.data(), 4, {1, 10}),
+                ttv(in_dist, 4, {1, kCameraDistortionParams}),
+                ttv_null(), ttv_null(),
                 ttv(gt_rgb.data(), 1, {1, wc.in_H, wc.in_W, 3}),
                 ttv(gt_alpha.data(), 1, {1, wc.in_H, wc.in_W, 1}),
                 wc.in_H, wc.in_W,

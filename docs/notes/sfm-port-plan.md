@@ -450,7 +450,7 @@ setup carried in `matches.bin`; BA solver (dense Cholesky, implicit-Schur PCG,
 `float`/`double`/`df`, Huber/Cauchy, dof-tiered Schur kernels).
 
 **Camera models.** SIMPLE_PINHOLE, PINHOLE, SIMPLE_RADIAL, RADIAL, OPENCV,
-FULL_OPENCV (reduced), OPENCV_FISHEYE (Kannala-Brandt, past 180°),
+FULL_OPENCV, OPENCV_FISHEYE (Kannala-Brandt, past 180°),
 THIN_PRISM_FISHEYE, EQUIRECTANGULAR — with the principal point held constant
 by default and one principal-point-free global BA at the end for a single
 camera group.

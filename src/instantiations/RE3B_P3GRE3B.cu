@@ -7,6 +7,7 @@
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    CameraDistortionType::None,
     DistortionType::None,
     true,
     true,
@@ -52,6 +53,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    CameraDistortionType::None,
     DistortionType::None,
     true,
     true,
@@ -97,6 +99,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    CameraDistortionType::None,
     DistortionType::None,
     true,
     false,
@@ -142,6 +145,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    CameraDistortionType::None,
     DistortionType::None,
     true,
     false,
@@ -187,6 +191,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    CameraDistortionType::None,
     DistortionType::None,
     false,
     true,
@@ -232,6 +237,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    CameraDistortionType::None,
     DistortionType::None,
     false,
     true,
@@ -277,6 +283,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    CameraDistortionType::None,
     DistortionType::None,
     false,
     false,
@@ -322,6 +329,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    CameraDistortionType::None,
     DistortionType::None,
     false,
     false,
@@ -367,6 +375,7 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
+    CameraDistortionType::None,
     DistortionType::D,
     true,
     true,

@@ -52,7 +52,8 @@ void launch_projection_qgrad_vk(
     const std::vector<DeviceTensorFloatND>& splats_world,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string& camera_model, const TorchTensorView& dist_coeffs,
+    const std::string& camera_model, const std::string& distortion,
+    const TorchTensorView& dist_coeffs,
     const DeviceVector<int32_t>& camera_ids,
     const DeviceVector<int32_t>& gaussian_ids,
     const DeviceTensor2D<float4>& aabb,
@@ -71,9 +72,7 @@ void launch_projection_qgrad_vk(
                          sh_value_bits, sh_value_bounds_stride, &q_packed,
                          &q_bounds, &q_stride);
 
-    CameraModelType cam = cmt(camera_model);
-    if ((int)cam < 0 || (int)cam > 3)
-        throw std::runtime_error("Unsupported camera model");
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
 
     Vanilla3DGS<0>::WorldBuffer wb(
         const_cast<std::vector<DeviceTensorFloatND>&>(splats_world));
@@ -168,10 +167,11 @@ void launch_projection_qgrad_vk(
 
     vkk::Fold f = vkk::fold_1d(N, 256);
     p.wgs_per_row = f.per_row;
-    backend::vk::SpecList spec{(uint32_t)cam,       (uint32_t)sh_degree,
+    backend::vk::SpecList spec{cd.cam,              (uint32_t)sh_degree,
                                antialiased ? 1u : 0u, spec_bits,
                                packed ? 1u : 0u,    eval3d ? 1u : 0u,
-                               gq_mask,             world_grad_add ? 1u : 0u};
+                               gq_mask,             world_grad_add ? 1u : 0u,
+                               cd.dist};
     vkk::dispatch_ring("projection_qgrad.projection_qgrad", spec, f.per_row,
                        f.rows, 1, &p, sizeof(p));
 }
@@ -189,6 +189,7 @@ void projection_3dgs_backward_quantgrad(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -205,7 +206,7 @@ void projection_3dgs_backward_quantgrad(
     launch_projection_qgrad_vk(
         /*eval3d=*/false, /*antialiased=*/false, num_splats, max_sh_degree,
         splats_world, viewmats, intrins, image_width, image_height,
-        camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
+        camera_model, distortion, dist_coeffs, camera_ids, gaussian_ids, aabb,
         v_splats_screen, v_splats_world, gq, sh_value_packed,
         sh_value_bounds, num_sh_buffer, sh_value_bits,
         sh_value_bounds_stride);
@@ -220,6 +221,7 @@ void projection_mip_backward_quantgrad(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -236,7 +238,7 @@ void projection_mip_backward_quantgrad(
     launch_projection_qgrad_vk(
         /*eval3d=*/false, /*antialiased=*/true, num_splats, max_sh_degree,
         splats_world, viewmats, intrins, image_width, image_height,
-        camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
+        camera_model, distortion, dist_coeffs, camera_ids, gaussian_ids, aabb,
         v_splats_screen, v_splats_world, gq, sh_value_packed,
         sh_value_bounds, num_sh_buffer, sh_value_bits,
         sh_value_bounds_stride);
@@ -251,6 +253,7 @@ void projection_3dgut_backward_quantgrad(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -267,7 +270,7 @@ void projection_3dgut_backward_quantgrad(
     launch_projection_qgrad_vk(
         /*eval3d=*/true, /*antialiased=*/false, num_splats, max_sh_degree,
         splats_world, viewmats, intrins, image_width, image_height,
-        camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
+        camera_model, distortion, dist_coeffs, camera_ids, gaussian_ids, aabb,
         v_splats_screen, v_splats_world, gq, sh_value_packed,
         sh_value_bounds, num_sh_buffer, sh_value_bits,
         sh_value_bounds_stride);

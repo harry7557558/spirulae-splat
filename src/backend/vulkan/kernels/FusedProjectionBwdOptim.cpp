@@ -53,7 +53,8 @@ void launch_fpbo_vk(
     std::vector<DeviceTensorFloatND>& splats_world,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string& camera_model, const TorchTensorView& dist_coeffs,
+    const std::string& camera_model, const std::string& distortion,
+    const TorchTensorView& dist_coeffs,
     const DeviceVector<int32_t>& camera_ids,
     const DeviceVector<int32_t>& gaussian_ids,
     DeviceTensorFloatND& aabb,
@@ -84,9 +85,7 @@ void launch_fpbo_vk(
             "fused_projection_bwd_optimizer: quantization_level must be "
             "0 or 1; got " + std::to_string(quantization_level));
 
-    CameraModelType cam = cmt(camera_model);
-    if ((int)cam < 0 || (int)cam > 3)
-        throw std::runtime_error("Unsupported camera model");
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
 
     Vanilla3DGS<0>::WorldBuffer wb(splats_world);
     Vanilla3DGS<0>::WorldBuffer vwb(
@@ -234,7 +233,7 @@ void launch_fpbo_vk(
     vkk::Fold f = vkk::fold_1d(N, 256);
     p.wgs_per_row = f.per_row;
     backend::vk::SpecList spec{
-        (uint32_t)cam,
+        cd.cam,
         (uint32_t)sh_degree,
         antialiased ? 1u : 0u,
         level1 ? 16u : 0u,  // kShValueBits: level 1 reads SH via the codec
@@ -244,7 +243,8 @@ void launch_fpbo_vk(
         color_trust_linear ? 1u : 0u,
         level1 ? 1u : 0u,
         (level1 && non_sh.enabled) ? 1u : 0u,
-        vw_mask};
+        vw_mask,
+        cd.dist};
     vkk::dispatch_ring("fpbo.fpbo", spec, f.per_row, f.rows, 1, &p,
                        sizeof(p));
 }
@@ -255,7 +255,8 @@ void launch_fpbo_vk(
 
 #define _FPBO_ARGS                                                          \
     num_splats, max_sh_degree, splats_world, viewmats, intrins,             \
-        image_width, image_height, camera_model, dist_coeffs, camera_ids,   \
+        image_width, image_height, camera_model, distortion, dist_coeffs,   \
+        camera_ids,                                                         \
         gaussian_ids, aabb, v_splats_world, v_splats_screen,                \
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,       \
         sh_value_packed, sh_value_bounds, non_sh, radii, densify_score,     \
@@ -271,7 +272,8 @@ void launch_fpbo_vk(
         std::vector<DeviceTensorFloatND> splats_world,                      \
         TorchTensorView viewmats, TorchTensorView intrins,                  \
         const uint32_t image_width, const uint32_t image_height,            \
-        const std::string camera_model, const TorchTensorView dist_coeffs,  \
+        const std::string camera_model, const std::string distortion,       \
+        const TorchTensorView dist_coeffs,                                  \
         const DeviceVector<int32_t> camera_ids,                             \
         const DeviceVector<int32_t> gaussian_ids, DeviceTensorFloatND aabb, \
         const std::vector<DeviceTensorFloatND> v_splats_world,              \
@@ -298,7 +300,8 @@ void launch_fpbo_vk(
 static void _fpbo_call(bool eval3d, bool antialiased, _FPBO_PARAMS) {
     launch_fpbo_vk(eval3d, antialiased, num_splats, max_sh_degree,
                    splats_world, viewmats, intrins, image_width, image_height,
-                   camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
+                   camera_model, distortion, dist_coeffs, camera_ids,
+                   gaussian_ids, aabb,
                    v_splats_world, v_splats_screen, g1_splats_world,
                    g2_splats_world, sh_packed, sh_quant_bounds,
                    sh_value_packed, sh_value_bounds, non_sh, radii,

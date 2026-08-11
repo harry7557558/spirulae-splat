@@ -9,7 +9,7 @@
 // ================
 
 
-template<bool is_undistort>
+template<CameraDistortionType distortion, bool is_undistort>
 __global__ void distort_image_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // [B, 4]
@@ -30,12 +30,13 @@ __global__ void distort_image_kernel(
     // Load camera
     float4 intrin = intrins[bid];
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    using Dist = SlangDistortion<distortion>;
+    typename Dist::Coeffs dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
 
     // Undistort point
     float2 uv = { (i+0.5f-cx) / fx, (j+0.5f-cy) / fy };
     if (is_undistort) {
-        if (dot(uv, uv) > 0.0f && !SlangProjectionUtils::is_valid_distortion(
+        if (dot(uv, uv) > 0.0f && !Dist::is_valid_distortion(
             camera_model == CameraModelType::FISHEYE ?
                 normalize(uv) * atanf(length(uv)) :
             camera_model == CameraModelType::EQUISOLID ?
@@ -44,10 +45,10 @@ __global__ void distort_image_kernel(
             dist_coeffs
         ))
             return;
-        uv = SlangProjectionUtils::distort_point(uv, (int)camera_model, dist_coeffs);
+        uv = Dist::distort_point(uv, (int)camera_model, dist_coeffs);
     }
     else {
-        if (!SlangProjectionUtils::undistort_point(uv, (int)camera_model, dist_coeffs, &uv))
+        if (!Dist::undistort_point(uv, (int)camera_model, dist_coeffs, &uv))
             return;
     }
 
@@ -73,36 +74,42 @@ static TensorView<float, 4> _bhwc_view(const TorchTensorView& tv) {
 /*[AutoHeaderGeneratorExport]*/
 void distort_image_tensor(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,            // [B, 4]
-    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView dist_coeffs,        // [B, 8]
     TorchTensorView in_image,           // [B, H, W, C] float
     TorchTensorView out_image           // [B, H, W, C] float (must be pre-zeroed)
 ) {
     const auto& s = std::get<2>(in_image);
     int b = s[0], h = s[1], w = s[2];
 
-    distort_image_kernel<false><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        _bhwc_view(in_image), _bhwc_view(out_image)
-    );
+    #define LAUNCH(D) \
+        distort_image_kernel<D, false><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+            cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, \
+            _bhwc_view(in_image), _bhwc_view(out_image))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 /*[AutoHeaderGeneratorExport]*/
 void undistort_image_tensor(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,            // [B, 4]
-    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView dist_coeffs,        // [B, 8]
     TorchTensorView in_image,           // [B, H, W, C] float
     TorchTensorView out_image           // [B, H, W, C] float (must be pre-zeroed)
 ) {
     const auto& s = std::get<2>(in_image);
     int b = s[0], h = s[1], w = s[2];
 
-    distort_image_kernel<true><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        _bhwc_view(in_image), _bhwc_view(out_image)
-    );
+    #define LAUNCH(D) \
+        distort_image_kernel<D, true><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+            cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, \
+            _bhwc_view(in_image), _bhwc_view(out_image))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 

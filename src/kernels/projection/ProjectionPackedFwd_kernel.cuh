@@ -13,7 +13,8 @@ namespace cg = cooperative_groups;
 
 
 
-template<typename SplatPrimitive, CameraModelType camera_model, int VALUE_BITS = 32>
+template<typename SplatPrimitive, CameraModelType camera_model,
+         CameraDistortionType distortion, int VALUE_BITS = 32>
 __global__ void projection_packed_mask_kernel(
     const uint32_t C,
     const uint32_t N,
@@ -51,11 +52,11 @@ __global__ void projection_packed_mask_kernel(
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    ProjCamera cam = {
+    ProjCameraT<distortion> cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
     };
-    cam.dist_coeffs = dist_coeffs_buffer.load(cid);
+    cam.dist_coeffs = dist_coeffs_buffer.load<distortion>(cid);
 
     // Load splat
     // TODO: verify that SH is not loaded after compiler optimization
@@ -68,14 +69,14 @@ __global__ void projection_packed_mask_kernel(
     float radius;
     typename SplatPrimitive::Screen splat_screen;
     if constexpr (VALUE_BITS == 32) {
-        splat_world.template project<camera_model, 32>(
+        splat_world.template project<camera_model, distortion, 32>(
             cam, splat_screen, aabb, sorting_depth, radius);
     } else {
         const int64_t sh_base = (int64_t)3 * (int64_t)num_sh_buffer * gid;
         const int64_t stride = (sh_bounds_stride > 0)
             ? sh_bounds_stride
             : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
-        splat_world.template project<camera_model, VALUE_BITS>(
+        splat_world.template project<camera_model, distortion, VALUE_BITS>(
             cam, splat_screen, aabb, sorting_depth, radius,
             const_cast<uint8_t*>(sh_value_packed),
             const_cast<float2*>(sh_value_bounds),
@@ -91,7 +92,8 @@ __global__ void projection_packed_mask_kernel(
 }
 
 
-template<typename SplatPrimitive, CameraModelType camera_model, int VALUE_BITS = 32>
+template<typename SplatPrimitive, CameraModelType camera_model,
+         CameraDistortionType distortion, int VALUE_BITS = 32>
 __global__ void projection_packed_fwd_kernel(
     const uint32_t C,
     const uint32_t N,
@@ -138,12 +140,11 @@ __global__ void projection_packed_fwd_kernel(
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    ProjCamera cam = {
+    ProjCameraT<distortion> cam = {
         R, t, fx, fy, cx, cy,
         image_width, image_height,
-       
     };
-    cam.dist_coeffs = dist_coeffs_buffer.load(cid);
+    cam.dist_coeffs = dist_coeffs_buffer.load<distortion>(cid);
 
     // Load splat
     typename SplatPrimitive::World splat_world;
@@ -155,14 +156,14 @@ __global__ void projection_packed_fwd_kernel(
     float radius = 0.0f;
     typename SplatPrimitive::Screen splat_screen;
     if constexpr (VALUE_BITS == 32) {
-        splat_world.template project<camera_model, 32>(
+        splat_world.template project<camera_model, distortion, 32>(
             cam, splat_screen, aabb, sorting_depth, radius);
     } else {
         const int64_t sh_base = (int64_t)3 * (int64_t)num_sh_buffer * gid;
         const int64_t stride = (sh_bounds_stride > 0)
             ? sh_bounds_stride
             : (int64_t)256 * 3 * (int64_t)num_sh_buffer;
-        splat_world.template project<camera_model, VALUE_BITS>(
+        splat_world.template project<camera_model, distortion, VALUE_BITS>(
             cam, splat_screen, aabb, sorting_depth, radius,
             const_cast<uint8_t*>(sh_value_packed),
             const_cast<float2*>(sh_value_bounds),
@@ -183,7 +184,8 @@ __global__ void projection_packed_fwd_kernel(
 }
 
 
-template<typename SplatPrimitive, CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model,
+         CameraDistortionType distortion>
 void projection_packed_mask_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t C,
@@ -204,7 +206,7 @@ void projection_packed_mask_kernel_wrapper(
 ) {
     constexpr uint block = 128;
     #define _LAUNCH(VB) \
-        projection_packed_mask_kernel<SplatPrimitive, camera_model, VB> \
+        projection_packed_mask_kernel<SplatPrimitive, camera_model, distortion, VB> \
         <<<_CEIL_DIV(C*N, block), block, 0, stream>>>( \
             C, N, \
             splats_world, viewmats, intrins, dist_coeffs_buffer, \
@@ -217,7 +219,8 @@ void projection_packed_mask_kernel_wrapper(
     #undef _LAUNCH
 }
 
-template<typename SplatPrimitive, CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model,
+         CameraDistortionType distortion>
 void projection_packed_fwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t C,
@@ -244,7 +247,7 @@ void projection_packed_fwd_kernel_wrapper(
 ) {
     constexpr uint block = 128;
     #define _LAUNCH(VB) \
-        projection_packed_fwd_kernel<SplatPrimitive, camera_model, VB> \
+        projection_packed_fwd_kernel<SplatPrimitive, camera_model, distortion, VB> \
         <<<_CEIL_DIV(C*N, block), block, 0, stream>>>( \
             C, N, \
             splats_world, viewmats, intrins, dist_coeffs_buffer, \

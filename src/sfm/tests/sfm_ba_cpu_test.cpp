@@ -164,7 +164,8 @@ const double* defaultIntr(uint32_t model, int& n) {
     static const double simple[3] = {600.0, 320.0, 240.0};
     static const double pinhole[4] = {600.0, 605.0, 320.0, 240.0};
     static const double fisheye[8] = {300.0, 305.0, 0.01, -0.002, 3e-4, -1e-5, 320.0, 240.0};
-    static const double full[9] = {600.0, 605.0, -0.02, 0.003, 1e-4, -2e-4, 1e-4, 320.0, 240.0};
+    static const double full[12] = {600.0, 605.0, -0.02, 0.003, 1e-4,  -2e-4,
+                                    1e-4,  5e-3,  -8e-4, 2e-5,  320.0, 240.0};
     static const double prism[12] = {300.0, 305.0, 0.01,  -0.002, 3e-4,  -1e-5,
                                      2e-4,  -1e-6, 1e-4,  -2e-4,  320.0, 240.0};
     static const double equirect[2] = {640.0, 480.0};
@@ -176,7 +177,7 @@ const double* defaultIntr(uint32_t model, int& n) {
         case 4: n = 3; return simple;
         case 5: n = 4; return pinhole;
         case 6: n = 8; return fisheye;
-        case 7: n = 9; return full;
+        case 7: n = 12; return full;
         case 8: n = 12; return prism;
         default: n = 2; return equirect;
     }
@@ -583,7 +584,7 @@ int run(int argc, char** argv) {
     }
 
     if (!quick)
-        for (uint32_t model : {3u, 6u, 8u})
+        for (uint32_t model : {3u, 6u, 7u, 8u})
             for (uint32_t groups : {1u, 12u}) testFullSolve(model, groups);
 
     printf("%s\n", g_fail ? "FAIL" : "PASS");

@@ -419,6 +419,26 @@ int cmdSelftest(int argc, char** argv) {
                projok ? "ok" : "BAD");
         if (!projok) fails++;
 
+        // FULL_OPENCV adds the rational denominator (k4,k5,k6); the fixed-point
+        // undistortion must invert that form too.
+        {
+            Camera fc = cam;
+            fc.model = CamModel::FullOpenCV;
+            fc.k3 = 0.004; fc.k4 = 0.02; fc.k5 = -0.003; fc.k6 = 0.0005;
+            double err = 0;
+            for (int gy = 1; gy < 12; gy++)
+                for (int gx = 1; gx < 12; gx++) {
+                    Vec2 px = {fc.cx + (gx - 6) * 100.0, fc.cy + (gy - 6) * 80.0};
+                    Vec2 xn = fc.unproject(px);
+                    Vec2 back = fc.project({xn.x, xn.y, 1.0});
+                    err = std::max(err, std::hypot(back.x - px.x, back.y - px.y));
+                }
+            bool rok = err < 1e-3;
+            printf("  camera project/unproject inverse (full-opencv rational): max %.2e px -> %s\n",
+                   err, rok ? "ok" : "BAD");
+            if (!rok) fails++;
+        }
+
         // Both fisheye models: project(ray) then bearing() must recover the ray,
         // INCLUDING rays past 90 deg (z<0), which the pinhole family cannot
         // represent -- the whole point of D31's bearings + D29-C/D34.
@@ -510,7 +530,8 @@ int cmdSelftest(int argc, char** argv) {
         Camera fe = Camera::defaultFor(5, 1920, 1920, 560.0, CamModel::OpenCVFisheye);
         fe.k1 = 0.02; fe.k2 = -0.01; fe.k3 = 0.003; fe.k4 = -0.001;
         Camera fo = Camera::defaultFor(6, 1600, 1200, 1300.0, CamModel::FullOpenCV);
-        fo.k1 = -0.11; fo.k2 = 0.02; fo.p1 = 0.001; fo.p2 = -0.0005; fo.k3 = 0.004;
+        fo.k1 = -0.11; fo.k2 = 0.02; fo.p1 = 0.001; fo.p2 = -0.0005;
+        fo.k3 = 0.004; fo.k4 = 0.021; fo.k5 = -0.003; fo.k6 = 0.0006;
         Camera tp = Camera::defaultFor(7, 1920, 1920, 560.0, CamModel::ThinPrismFisheye);
         tp.k1 = 0.02; tp.k2 = -0.005; tp.p1 = 0.001; tp.p2 = -0.0008;
         tp.k3 = 0.001; tp.k4 = -0.0003; tp.sx1 = 0.002; tp.sy1 = -0.0015;
@@ -539,7 +560,8 @@ int cmdSelftest(int argc, char** argv) {
                     eq(rr.cameras[5].k3, 0.003) && eq(rr.cameras[5].k4, -0.001) &&
                     rr.cameras[6].model == CamModel::FullOpenCV &&
                     eq(rr.cameras[6].k1, -0.11) && eq(rr.cameras[6].p1, 0.001) &&
-                    eq(rr.cameras[6].k3, 0.004) &&
+                    eq(rr.cameras[6].k3, 0.004) && eq(rr.cameras[6].k4, 0.021) &&
+                    eq(rr.cameras[6].k5, -0.003) && eq(rr.cameras[6].k6, 0.0006) &&
                     rr.cameras[7].model == CamModel::ThinPrismFisheye &&
                     eq(rr.cameras[7].k4, -0.0003) && eq(rr.cameras[7].sx1, 0.002) &&
                     eq(rr.cameras[7].sy1, -0.0015);
@@ -563,7 +585,8 @@ int cmdSelftest(int argc, char** argv) {
                 if (!(eq(back.fx, c.fx) && eq(back.fy, c.fy) && eq(back.cx, c.cx) &&
                       eq(back.cy, c.cy) && eq(back.k1, c.k1) && eq(back.k2, c.k2) &&
                       eq(back.p1, c.p1) && eq(back.p2, c.p2) && eq(back.k3, c.k3) &&
-                      eq(back.k4, c.k4) && eq(back.sx1, c.sx1) && eq(back.sy1, c.sy1)))
+                      eq(back.k4, c.k4) && eq(back.k5, c.k5) && eq(back.k6, c.k6) &&
+                      eq(back.sx1, c.sx1) && eq(back.sy1, c.sy1)))
                     ba_ok = false;
                 const int n = camNumParams(c.model);
                 const int nf = camNumFreeParams(c.model);
@@ -579,8 +602,8 @@ int cmdSelftest(int argc, char** argv) {
             if (!ba_ok) fails++;
         }
 
-        // FULL_OPENCV must be emitted as COLMAP model 6 with 12 params, the
-        // rational k4,k5,k6 tail zeroed (dataset-parser compatibility, D34).
+        // FULL_OPENCV must be emitted as COLMAP model 6 with all 12 params in
+        // COLMAP's order (fx,fy,cx,cy,k1,k2,p1,p2,k3,k4,k5,k6).
         {
             std::ifstream cf(cdir + "/cameras.bin", std::ios::binary);
             bool full_ok = false, eq_ok = false;
@@ -594,12 +617,14 @@ int cmdSelftest(int argc, char** argv) {
                 double ps[12] = {0};
                 for (int k = 0; k < np; k++) cf.read((char*)&ps[k], 8);
                 if (mdl == 6)  // FULL_OPENCV
-                    full_ok = np == 12 && ps[8] == 0.004 && ps[9] == 0 && ps[10] == 0 && ps[11] == 0;
+                    full_ok = np == 12 && ps[4] == -0.11 && ps[5] == 0.02 && ps[6] == 0.001 &&
+                              ps[7] == -0.0005 && ps[8] == 0.004 && ps[9] == 0.021 &&
+                              ps[10] == -0.003 && ps[11] == 0.0006;
                 if (mdl == 17)  // EQUIRECTANGULAR: params are exactly (w, h)
                     eq_ok = np == 2 && ps[0] == (double)cw && ps[1] == (double)ch &&
                             cw == 5760 && ch == 2880;
             }
-            printf("  FULL_OPENCV emit (12 params, k4-k6=0): %s\n", full_ok ? "ok" : "BAD");
+            printf("  FULL_OPENCV emit (12 params, COLMAP order): %s\n", full_ok ? "ok" : "BAD");
             if (!full_ok) fails++;
             printf("  EQUIRECTANGULAR emit (model 17, params = w,h): %s\n", eq_ok ? "ok" : "BAD");
             if (!eq_ok) fails++;

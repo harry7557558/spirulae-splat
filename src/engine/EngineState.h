@@ -115,10 +115,12 @@ struct CameraTable {
     int32_t width  = 0;
     int32_t height = 0;
     CameraModelType model = (CameraModelType)-1;
+    CameraDistortionType distortion = CameraDistortionType::None;
     std::string model_str;
+    std::string distortion_str = "NONE";
     DeviceTensor2D<float4> viewmats;      // [C, 4]
     DeviceVector<float4>   intrins;       // [C]
-    DeviceTensor2D<float>  dist_coeffs;   // [C, 10]
+    DeviceTensor2D<float>  dist_coeffs;   // [C, 8]
 };
 
 // Forward-pass intermediates retained for backward.
@@ -450,7 +452,7 @@ struct EngineViewerState {
     DeviceVector<int32_t> d_widths;           // [N_post]
     DeviceVector<int32_t> d_heights;          // [N_post]
     DeviceVector<int32_t> d_camera_models;    // [N_post]
-    DeviceVector<float>   d_dist_coeffs;      // [N_post, 10]
+    DeviceVector<float>   d_dist_coeffs;      // [N_post, 8]
     DeviceVector<float>   d_camera_to_worlds; // [N_post, 3, 4] (y/z-flipped form)
     float  camera_size = 0.0f;                // frustum render scale, from knn-dist
 

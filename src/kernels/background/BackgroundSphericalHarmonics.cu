@@ -24,6 +24,8 @@ namespace SlangHarmonics {
 #include "generated/harmonics.cuh"
 }
 
+#include "core/CameraDistortion.cuh"
+
 #include <stdexcept>
 
 
@@ -31,20 +33,22 @@ namespace SlangHarmonics {
 
 // Load viewmat[:3,:3] (row-major) as a slang-style float3x3, and intrinsics
 // and (optional) distortion for one camera.
+template<CameraDistortionType distortion>
 struct BgCamera {
     float3x3 R;            // world->camera (slang convention)
     float fx, fy, cx, cy;
-    CameraDistortionCoeffs dist;
+    typename SlangDistortion<distortion>::Coeffs dist;
 };
 
-static __device__ __forceinline__ BgCamera _load_bg_camera(
+template<CameraDistortionType distortion>
+static __device__ __forceinline__ BgCamera<distortion> _load_bg_camera(
     const float*  viewmats,    // [N_cam, 16] row-major
     const float4* intrins,     // [N_cam]
-    const float*  dist_coeffs, // [N_cam, 10] or null
+    const CameraDistortionCoeffsBuffer& dist_coeffs,
     int cam
 ) {
     const float* vm = viewmats + (int64_t)cam * 16;
-    BgCamera c;
+    BgCamera<distortion> c;
     c.R = float3x3{
         vm[0], vm[1], vm[2],   // row 0
         vm[4], vm[5], vm[6],   // row 1
@@ -52,28 +56,23 @@ static __device__ __forceinline__ BgCamera _load_bg_camera(
     };
     float4 intr = intrins[cam];
     c.fx = intr.x; c.fy = intr.y; c.cx = intr.z; c.cy = intr.w;
-    if (dist_coeffs == nullptr) {
-        #pragma unroll
-        for (int i = 0; i < 10; ++i) c.dist.m_data[i] = 0.0f;
-    } else {
-        const float* d = dist_coeffs + (int64_t)cam * 10;
-        #pragma unroll
-        for (int i = 0; i < 10; ++i) c.dist.m_data[i] = d[i];
-    }
+    c.dist = dist_coeffs.load<distortion>(cam);
     return c;
 }
 
 // Compute world-space ray direction at pixel (px, py) for the given camera.
 // Returns false if the pixel maps to an invalid ray (distortion model rejected).
+template<CameraDistortionType distortion>
 static __device__ __forceinline__ bool _bg_pixel_world_ray(
-    const BgCamera& c, int camera_model, int px, int py, float3& out_world_dir
+    const BgCamera<distortion>& c, int camera_model, int px, int py,
+    float3& out_world_dir
 ) {
     const float2 uv = {
         ((float)px + 0.5f - c.cx) / c.fx,
         ((float)py + 0.5f - c.cy) / c.fy,
     };
     float3 raydir;
-    if (!SlangProjectionUtils::generate_ray(uv, camera_model, c.dist, &raydir))
+    if (!SlangDistortion<distortion>::generate_ray(uv, camera_model, c.dist, &raydir))
         return false;
     out_world_dir = SlangProjectionUtils::transform_ray_d(c.R, raydir);
     return true;
@@ -82,13 +81,13 @@ static __device__ __forceinline__ bool _bg_pixel_world_ray(
 
 // ---- Forward kernel ---------------------------------------------------------
 
-template<int SH_DEGREE>
+template<CameraDistortionType distortion, int SH_DEGREE>
 __global__ void render_background_sh_forward_kernel(
     const dim3 img_size,
     int camera_model,
     const float*  __restrict__ viewmats,    // [B, 16] (per-batch image)
     const float4* __restrict__ intrins,     // [B]
-    const float*  __restrict__ dist_coeffs, // [B, 10] or null
+    const CameraDistortionCoeffsBuffer dist_coeffs,  // [B, 8]
     const float3* __restrict__ sh_coeffs,   // [(SH_DEGREE+1)^2]
     float3*       __restrict__ out_img      // [B, H, W]
 ) {
@@ -103,10 +102,10 @@ __global__ void render_background_sh_forward_kernel(
     // we index directly by bi — NOT by some global camera id. Indexing by
     // `cam_indices[bi]` (the global-cam-id pattern used by bilagrid/PPISP) is
     // wrong here: that would read past the buffer's [B] worth of entries.
-    BgCamera c = _load_bg_camera(viewmats, intrins, dist_coeffs, (int)bi);
+    auto c = _load_bg_camera<distortion>(viewmats, intrins, dist_coeffs, (int)bi);
 
     float3 world_dir;
-    if (!_bg_pixel_world_ray(c, camera_model, (int)px, (int)py, world_dir)) {
+    if (!_bg_pixel_world_ray<distortion>(c, camera_model, (int)px, (int)py, world_dir)) {
         out_img[pix_id] = {0.0f, 0.0f, 0.0f};
         return;
     }
@@ -135,13 +134,13 @@ __global__ void render_background_sh_forward_kernel(
 
 // ---- Backward kernel --------------------------------------------------------
 
-template<int SH_DEGREE>
+template<CameraDistortionType distortion, int SH_DEGREE>
 __global__ void __launch_bounds__(512) render_background_sh_backward_kernel(
     const dim3 img_size,
     int camera_model,
     const float*  __restrict__ viewmats,    // [B, 16]
     const float4* __restrict__ intrins,     // [B]
-    const float*  __restrict__ dist_coeffs, // [B, 10] or null
+    const CameraDistortionCoeffsBuffer dist_coeffs,  // [B, 8]
     const float3* __restrict__ sh_coeffs,
     const float3* __restrict__ out_color,
     const float3* __restrict__ v_out_color,
@@ -166,11 +165,11 @@ __global__ void __launch_bounds__(512) render_background_sh_backward_kernel(
     }
 
     // See forward kernel: index directly by bi (per-batch buffers).
-    BgCamera c = _load_bg_camera(viewmats, intrins, dist_coeffs, inside ? (int)bi : 0);
+    auto c = _load_bg_camera<distortion>(viewmats, intrins, dist_coeffs, inside ? (int)bi : 0);
 
     float3 world_dir = {0.0f, 0.0f, 1.0f};
     if (inside) {
-        if (!_bg_pixel_world_ray(c, camera_model, (int)px, (int)py, world_dir)) {
+        if (!_bg_pixel_world_ray<distortion>(c, camera_model, (int)px, (int)py, world_dir)) {
             inside = false;
             v_color = {0.0f, 0.0f, 0.0f};
         }
@@ -222,6 +221,63 @@ __global__ void __launch_bounds__(512) render_background_sh_backward_kernel(
 
 // ---- Host-side dispatchers --------------------------------------------------
 
+// The SH degree is a second compile-time axis, so the tier dispatch wraps a
+// per-tier helper rather than the launch itself.
+template<CameraDistortionType D>
+static void _launch_bg_sh_forward(
+    int sh_degree, dim3 img_size, int cm, int w, int h, int64_t b,
+    const float* p_vm, const float4* p_intrins,
+    const CameraDistortionCoeffsBuffer& p_dist,
+    const float3* p_sh_coeffs, float3* p_out
+) {
+    #define LAUNCH(DEG) \
+        render_background_sh_forward_kernel<D, DEG> \
+            <<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+                img_size, cm, p_vm, p_intrins, p_dist, p_sh_coeffs, p_out)
+    switch (sh_degree) {
+        case 0: LAUNCH(0); break;
+        case 1: LAUNCH(1); break;
+        case 2: LAUNCH(2); break;
+        case 3: LAUNCH(3); break;
+        case 4: LAUNCH(4); break;
+    }
+    #undef LAUNCH
+}
+
+template<CameraDistortionType D>
+static void _launch_bg_sh_backward(
+    int sh_degree, dim3 img_size, int cm, int w, int h, int64_t b,
+    const float* p_vm, const float4* p_intrins,
+    const CameraDistortionCoeffsBuffer& p_dist,
+    const float3* p_sh_coeffs, const float3* p_out_color,
+    const float3* p_v_out_color, float3* p_v_sh
+) {
+    #define LAUNCH(DEG) \
+        render_background_sh_backward_kernel<D, DEG> \
+            <<<_LAUNCH_ARGS_2D((uint32_t)(w * h), b, 512, 1)>>>( \
+                img_size, cm, p_vm, p_intrins, p_dist, p_sh_coeffs, \
+                p_out_color, p_v_out_color, p_v_sh)
+    switch (sh_degree) {
+        case 0: LAUNCH(0); break;
+        case 1: LAUNCH(1); break;
+        case 2: LAUNCH(2); break;
+        case 3: LAUNCH(3); break;
+        case 4: LAUNCH(4); break;
+    }
+    #undef LAUNCH
+}
+
+#define _SS_DISPATCH_DISTORTION(name, BODY)                                     \
+    do { switch (cdt(name)) {                                                      \
+        case CameraDistortionType::None:      BODY(CameraDistortionType::None);      break; \
+        case CameraDistortionType::OpenCV:    BODY(CameraDistortionType::OpenCV);    break; \
+        case CameraDistortionType::ThinPrism: BODY(CameraDistortionType::ThinPrism); break; \
+        case CameraDistortionType::Rational:  BODY(CameraDistortionType::Rational);  break; \
+        default: throw std::runtime_error(                                         \
+            "Unknown camera distortion: " + std::string(name));                    \
+    } } while (0)
+
+
 static inline int64_t _batch_count(const TorchTensorView& t, int64_t per_item) {
     int64_t n = 1;
     for (auto s : std::get<2>(t)) n *= s;
@@ -241,10 +297,11 @@ void render_background_sh_forward(
     int w,
     int h,
     std::string camera_model,
+    std::string distortion,
     int sh_degree,                       // actual SH degree (0..4)
     TorchTensorView viewmats,            // [B, 4, 4] row-major world->camera (per-batch)
     TorchTensorView intrins,             // [B, 4]
-    TorchTensorView dist_coeffs,         // [B, 10]; null/empty -> zeros
+    TorchTensorView dist_coeffs,         // [B, 8]; null/empty -> zeros
     TorchTensorView sh_coeffs,           // [(sh_degree+1)^2, 3]
     TorchTensorView out_color            // [B, H, W, 3]  pre-allocated
 ) {
@@ -260,23 +317,17 @@ void render_background_sh_forward(
     const dim3 img_size = {(uint32_t)w, (uint32_t)h, (uint32_t)b};
     const float*  p_vm        = (const float*)std::get<0>(viewmats);
     const float4* p_intrins   = (const float4*)std::get<0>(intrins);
-    const float*  p_dist      = (const float*)std::get<0>(dist_coeffs);  // null -> zero default
+    const CameraDistortionCoeffsBuffer p_dist(
+        (float*)std::get<0>(dist_coeffs));  // null -> zero default
     const float3* p_sh_coeffs = (const float3*)std::get<0>(sh_coeffs);
     float3*       p_out       = (float3*)std::get<0>(out_color);
 
     int cm = _camera_model_int(camera_model);
 
-    #define LAUNCH(DEG) \
-        render_background_sh_forward_kernel<DEG> \
-            <<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
-                img_size, cm, p_vm, p_intrins, p_dist, p_sh_coeffs, p_out)
-    switch (sh_degree) {
-        case 0: LAUNCH(0); break;
-        case 1: LAUNCH(1); break;
-        case 2: LAUNCH(2); break;
-        case 3: LAUNCH(3); break;
-        case 4: LAUNCH(4); break;
-    }
+    #define LAUNCH(D) \
+        _launch_bg_sh_forward<D>(sh_degree, img_size, cm, w, h, b, \
+                                 p_vm, p_intrins, p_dist, p_sh_coeffs, p_out)
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
     #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
@@ -287,6 +338,7 @@ void render_background_sh_backward(
     int w,
     int h,
     std::string camera_model,
+    std::string distortion,
     int sh_degree,
     TorchTensorView viewmats,
     TorchTensorView intrins,
@@ -314,7 +366,7 @@ void render_background_sh_backward(
     const dim3 img_size = {(uint32_t)w, (uint32_t)h, (uint32_t)b};
     const float*  p_vm          = (const float*)std::get<0>(viewmats);
     const float4* p_intrins     = (const float4*)std::get<0>(intrins);
-    const float*  p_dist        = (const float*)std::get<0>(dist_coeffs);
+    const CameraDistortionCoeffsBuffer p_dist((float*)std::get<0>(dist_coeffs));
     const float3* p_sh_coeffs   = (const float3*)std::get<0>(sh_coeffs);
     const float3* p_out_color   = (const float3*)std::get<0>(out_color);
     const float3* p_v_out_color = (const float3*)std::get<0>(v_out_color);
@@ -322,18 +374,11 @@ void render_background_sh_backward(
 
     int cm = _camera_model_int(camera_model);
 
-    #define LAUNCH(DEG) \
-        render_background_sh_backward_kernel<DEG> \
-            <<<_LAUNCH_ARGS_2D((uint32_t)(w * h), b, 512, 1)>>>( \
-                img_size, cm, p_vm, p_intrins, p_dist, p_sh_coeffs, \
-                p_out_color, p_v_out_color, p_v_sh)
-    switch (sh_degree) {
-        case 0: LAUNCH(0); break;
-        case 1: LAUNCH(1); break;
-        case 2: LAUNCH(2); break;
-        case 3: LAUNCH(3); break;
-        case 4: LAUNCH(4); break;
-    }
+    #define LAUNCH(D) \
+        _launch_bg_sh_backward<D>(sh_degree, img_size, cm, w, h, b, \
+                                  p_vm, p_intrins, p_dist, p_sh_coeffs, \
+                                  p_out_color, p_v_out_color, p_v_sh)
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
     #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

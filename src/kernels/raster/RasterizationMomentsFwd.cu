@@ -21,6 +21,9 @@ namespace SlangProjectionUtils {
 #include "generated/projection_utils.cuh"
 }
 
+#include "core/CameraDistortion.cuh"
+#include "kernels/projection/CameraVariants.cuh"
+
 #include <core/Common.cuh>
 #include "primitives/Primitive.cuh"
 #include "primitives/Primitive3DGUT.cuh"
@@ -34,7 +37,7 @@ inline constexpr uint32_t TILE_AREA_M = TILE_SIZE_X * TILE_SIZE_Y;
 
 // One CUDA block per micro-tile (one thread per pixel); binning is at the
 // macro-tile granularity. Mirrors rasterize_to_pixels_eval3d_fwd_kernel.
-template<CameraModelType camera_model>
+template<CameraModelType camera_model, CameraDistortionType distortion>
 __global__ void moments_fwd_kernel(
     const uint32_t I,
     const uint32_t N,   // zero if packed
@@ -77,7 +80,7 @@ __global__ void moments_fwd_kernel(
     };
     float3 cam_t = { viewmats[3], viewmats[7], viewmats[11] };
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(image_id);
+    CameraDistortionCoeffsT<distortion> dist_coeffs = dist_coeffs_buffer.load<distortion>(image_id);
 
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, cam_t);
 
@@ -89,7 +92,7 @@ __global__ void moments_fwd_kernel(
     bool inside = (i < image_height && j < image_width);
 
     float3 raydir;
-    inside &= SlangProjectionUtils::generate_ray(
+    inside &= SlangDistortion<distortion>::generate_ray(
         {(px - cx) / fx, (py - cy) / fy},
         (int)camera_model, dist_coeffs, &raydir);
     float3 ray_d = SlangProjectionUtils::transform_ray_d(R, raydir);
@@ -208,7 +211,7 @@ __global__ void moments_fwd_kernel(
     }
 }
 
-template<CameraModelType camera_model>
+template<CameraModelType camera_model, CameraDistortionType distortion>
 void launch_moments(
     uint32_t I, uint32_t N, uint32_t n_isects,
     const uint32_t* gaussian_ids,
@@ -221,7 +224,7 @@ void launch_moments(
 ) {
     dim3 threads = { TILE_AREA_M, 1, 1 };
     dim3 grid = { I, th * MACRO_TILE_SIZE_Y, tw * MACRO_TILE_SIZE_X };
-    moments_fwd_kernel<camera_model><<<grid, threads>>>(
+    moments_fwd_kernel<camera_model, distortion><<<grid, threads>>>(
         I, N, n_isects, gaussian_ids, wbuffer, sbuffer,
         viewmats, intrins, dist_buf, aabb,
         W, H, tw, th, tile_offsets, flatten_ids,
@@ -239,6 +242,7 @@ void rasterize_moments_3dgut_fwd(
     TorchTensorView viewmats,
     TorchTensorView intrins,
     const std::string& camera_model,
+    const std::string& distortion,
     TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,
     uint32_t image_width,
@@ -264,6 +268,7 @@ void rasterize_moments_3dgut_fwd(
     const uint32_t* gids = (const uint32_t*)gaussian_ids.data_ptr();
 
     CameraModelType cm = cmt(camera_model);
+    CameraDistortionType cd = cdt(distortion);
 
     #define _ARGS \
         I, N, n_isects, gids, wbuffer, sbuffer, \
@@ -272,14 +277,12 @@ void rasterize_moments_3dgut_fwd(
         tile_offsets.data_ptr(), flatten_ids.data_ptr(), \
         render_moments, render_rgb
 
-    if (cm == CameraModelType::PINHOLE)
-        launch_moments<CameraModelType::PINHOLE>(_ARGS);
-    else if (cm == CameraModelType::FISHEYE)
-        launch_moments<CameraModelType::FISHEYE>(_ARGS);
-    else if (cm == CameraModelType::EQUISOLID)
-        launch_moments<CameraModelType::EQUISOLID>(_ARGS);
-    else
-        throw std::runtime_error("rasterize_moments_3dgut_fwd: unsupported camera model");
+    #define _DISPATCH(M, D) \
+        if (cm == CameraModelType::M && cd == CameraDistortionType::D) \
+            launch_moments<CameraModelType::M, CameraDistortionType::D>(_ARGS); else
+    SS_FOR_EACH_CAMERA_VARIANT(_DISPATCH)
+        throw std::runtime_error("rasterize_moments_3dgut_fwd: unsupported camera model / distortion tier");
+    #undef _DISPATCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _ARGS

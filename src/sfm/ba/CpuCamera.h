@@ -245,7 +245,7 @@ struct FisheyeModel {
 };
 
 struct FullOpenCVModel {
-    static constexpr int kNumIntr = 9;
+    static constexpr int kNumIntr = 12;
     template <class T> static void project(const T* c, const T p[3], T out[2]) {
         const T& fx = c[0];
         const T& fy = c[1];
@@ -254,12 +254,16 @@ struct FullOpenCVModel {
         const T& p1 = c[4];
         const T& p2 = c[5];
         const T& k3 = c[6];
-        const T& cx = c[7];
-        const T& cy = c[8];
+        const T& k4 = c[7];
+        const T& k5 = c[8];
+        const T& k6 = c[9];
+        const T& cx = c[10];
+        const T& cy = c[11];
         T xp = p[0] / p[2];
         T yp = p[1] / p[2];
         T r2 = xp * xp + yp * yp;
-        T radial = T(1.0) + r2 * (k1 + r2 * (k2 + r2 * k3));
+        T radial = (T(1.0) + r2 * (k1 + r2 * (k2 + r2 * k3))) /
+                   (T(1.0) + r2 * (k4 + r2 * (k5 + r2 * k6)));
         T dx = xp * radial + 2.0 * p1 * xp * yp + p2 * (r2 + 2.0 * xp * xp);
         T dy = yp * radial + p1 * (r2 + 2.0 * yp * yp) + 2.0 * p2 * xp * yp;
         out[0] = fx * dx + cx;

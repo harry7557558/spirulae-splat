@@ -65,11 +65,12 @@ void weighted_sample_without_replacement_tensor(
 
 void cov_scale_init_tensor(
     DeviceVector<float3> points,  // [N, 3]
-    DeviceVector<bool> is_fisheye,  // [C], bool
+    const std::string camera_model,
+    const std::string distortion,
     DeviceVector<int2> sizes,  // [C, 2], int32
     DeviceVector<float4> intrins,  // [C, 4]
     DeviceVector<float4> viewmats,  // [C, 4, 4] as 4*C float4 elements
-    TorchTensorView dist_coeffs, // [C]
+    TorchTensorView dist_coeffs, // [C, 8]
     DeviceVector<float> log_scales  // [N, 1] output
 );
 

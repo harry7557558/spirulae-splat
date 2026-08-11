@@ -143,6 +143,7 @@ HEADER_SOURCES["kernels/pixelwise/PixelWise"] = [
                                               #   ray <-> linear depth
     "kernels/pixelwise/ImageDistort.cu",      # distort / undistort
     "kernels/pixelwise/ImageWarp.cu",         # wide <-> pinhole warps, incl. byte-fused
+    "kernels/pixelwise/ImageRedistort.cu",    # resample from an unrepresentable source lens
     "kernels/pixelwise/GtDepthNormalWarp.cu", # GT depth/normal wide -> pinhole warps
     "kernels/ppisp/Ppisp.cu",                 # per-pixel image signal processing
 ]

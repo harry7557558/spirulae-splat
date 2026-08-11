@@ -26,6 +26,8 @@ namespace SlangProjectionUtils {
 }
 #endif
 
+#include "core/CameraDistortion.cuh"
+
 #include <core/Common.cuh>
 
 #include "primitives/Primitive.cuh"
@@ -47,6 +49,7 @@ template<
     typename SplatPrimitive,
 #if IS_EVAL3D
     CameraModelType camera_model,
+    CameraDistortionType distortion,
 #endif
     DistortionType dist_type,
     bool output_median
@@ -106,7 +109,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     };
     float3 t = { viewmats[3], viewmats[7], viewmats[11] };
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(image_id);
+    CameraDistortionCoeffsT<distortion> dist_coeffs = dist_coeffs_buffer.load<distortion>(image_id);
 
     float3 ray_o = SlangProjectionUtils::transform_ray_o(R, t);
 #endif
@@ -121,7 +124,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
 #if IS_EVAL3D
     float3 raydir;
-    inside &= SlangProjectionUtils::generate_ray(
+    inside &= SlangDistortion<distortion>::generate_ray(
         {(px-cx)/fx, (py-cy)/fy},
         (int)camera_model, dist_coeffs,
         &raydir
@@ -313,6 +316,7 @@ template<
     typename SplatPrimitive,
 #if IS_EVAL3D
     CameraModelType camera_model,
+    CameraDistortionType distortion,
 #endif
     DistortionType dist_type,
     bool output_median
@@ -359,7 +363,7 @@ void rasterize_to_pixels_fwd_kernel_wrapper(
 #endif
         SplatPrimitive,
     #if IS_EVAL3D
-        camera_model,
+        camera_model, distortion,
     #endif
         dist_type,
         output_median

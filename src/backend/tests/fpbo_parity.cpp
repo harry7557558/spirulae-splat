@@ -12,6 +12,7 @@
 // N is a multiple of the 256-thread block (see projqgrad_parity note on the
 // CUDA kernel's tail-thread reads).
 
+#include <backend/tests/DistortionFixture.h>
 #include <kernels/projection/ProjectionFwd.cuh>
 #include <kernels/projection/ProjectionPackedFwd.cuh>
 #include <kernels/optim/FusedProjectionBwdOptim.cuh>
@@ -125,9 +126,7 @@ int main(int argc, char** argv) {
         cy_, 0, sy_, 0.3f,  0, 1, 0, -0.2f,  -sy_, 0, cy_, 5.f,  0, 0, 0, 1,
     };
     std::vector<float> intr = {150, 152, 100, 75, 145, 146, 97, 78};
-    std::vector<float> dist(C * 10, 0.f);
-    dist[0] = 0.05f;  dist[1] = -0.01f;
-    dist[10] = -0.03f;
+    std::vector<float> dist = dist_fixture::distortion_rows(C);
 
     float* d_vm = upload(vm);
     float* d_intr = upload(intr);
@@ -140,11 +139,16 @@ int main(int argc, char** argv) {
 
     const char* cams[4] = {"PINHOLE", "FISHEYE", "EQUISOLID",
                            "EQUIRECTANGULAR"};
+    auto dist_tv = [&](int tier) {
+        return ttv(d_dist + dist_fixture::row_offset(tier, C),
+                   {C, kCameraDistortionParams});
+    };
 
     struct Cfg {
         int prim;      // 0 = 3dgs, 1 = mip, 2 = 3dgut
         bool packed;
         int cam;
+        int dist;      // distortion tier, index into dist_fixture::kTierNames
         int max_deg;
         int level;     // 0 fp32, 1 quantized SH
         bool non_sh;   // non-SH quant (level 1 only)
@@ -154,16 +158,19 @@ int main(int argc, char** argv) {
         bool per_splat_steps;
         bool densify;
     };
+    // Rows 1 and 2 differ only in the tier, so the NONE fast path is read
+    // against a distorted neighbour.
     const Cfg cfgs[] = {
-        {0, false, 0, 3, 0, false, false, false, 31, false, true},
-        {1, false, 1, 2, 0, false, true, false, 0, true, false},
-        {2, false, 0, 3, 0, false, false, true, 7, false, true},
+        {0, false, 0, 0, 3, 0, false, false, false, 31, false, true},
+        {0, false, 0, 1, 3, 0, false, false, false, 31, false, true},
+        {1, false, 1, 2, 2, 0, false, true, false, 0, true, false},
+        {2, false, 0, 3, 3, 0, false, false, true, 7, false, true},
         // NOTE: scale-agnostic means x non-SH quant is excluded: the mixed
         // g1/g2 units make u = g1/sqrt(g2) unbounded for edge splats
         // (radii 0 with nonzero grad), so +-1 quantum decode differences
         // amplify chaotically -- inherent to the lossy codec, on CUDA too.
-        {0, true, 2, 3, 1, true, false, false, 31, false, false},
-        {2, true, 3, 1, 1, false, false, true, 7, false, false},
+        {0, true, 2, 1, 3, 1, true, false, false, 31, false, false},
+        {2, true, 3, 0, 1, 1, false, false, true, 7, false, false},
     };
 
     for (const Cfg& cfg : cfgs) {
@@ -234,7 +241,8 @@ int main(int argc, char** argv) {
                                       : projection_3dgut_packed_forward;
             auto out = fn(N, cfg.max_deg, splats_fwd, ttv(d_vm, {C, 16}),
                           ttv(d_intr, {C, 4}), W, H, cams[cfg.cam],
-                          ttv(d_dist, {C, 10}), radii, q_val_packed,
+                          dist_fixture::kTierNames[cfg.dist],
+                          dist_tv(cfg.dist), radii, q_val_packed,
                           q_val_bounds, (uint32_t)NUM_SH, level1 ? 16 : 32,
                           level1 ? 0 : 256);
             cam_ids = std::get<0>(out);
@@ -247,7 +255,8 @@ int main(int argc, char** argv) {
                                       : projection_3dgut_forward;
             auto out = fn(N, cfg.max_deg, splats_fwd, ttv(d_vm, {C, 16}),
                           ttv(d_intr, {C, 4}), W, H, cams[cfg.cam],
-                          ttv(d_dist, {C, 10}), radii, q_val_packed,
+                          dist_fixture::kTierNames[cfg.dist],
+                          dist_tv(cfg.dist), radii, q_val_packed,
                           q_val_bounds, (uint32_t)NUM_SH, level1 ? 16 : 32,
                           level1 ? 0 : 256);
             aabb_nd = DeviceTensorFloatND(std::get<0>(out));
@@ -375,7 +384,8 @@ int main(int argc, char** argv) {
                                      n_isect * 4, MemcpyKind::HostToDevice);
             fn(N, cfg.max_deg, splats, ttv(d_vm, {C, 16}),
                ttv(d_intr, {C, 4}), W, H, cams[cfg.cam],
-               ttv(d_dist, {C, 10}), cam_ids, gauss_ids, aabb_nd, v_world,
+               dist_fixture::kTierNames[cfg.dist], dist_tv(cfg.dist),
+               cam_ids, gauss_ids, aabb_nd, v_world,
                v_screen, g1_world, g2_world, shq_tv, shq_b_tv, shv_tv,
                shv_b_tv, non_sh, radii, densify_score,
                /*lr_means=*/1.6e-4f, /*lr_quats=*/1e-3f, /*lr_scales=*/5e-3f,

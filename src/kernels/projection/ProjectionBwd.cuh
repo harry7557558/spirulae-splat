@@ -25,6 +25,7 @@ void projection_3dgs_backward(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     // fwd outputs
     const DeviceVector<int32_t> camera_ids,  // [nnz] or null
@@ -55,6 +56,7 @@ void projection_mip_backward(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     // fwd outputs
     const DeviceVector<int32_t> camera_ids,  // [nnz] or null
@@ -85,6 +87,7 @@ void projection_3dgut_backward(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     // fwd outputs
     const DeviceVector<int32_t> camera_ids,  // [nnz] or null

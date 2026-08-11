@@ -693,7 +693,7 @@ void TrainerSession::setup_engine() {
     dm.mask_boundary_offset = cfg.mask_boundary_offset;
     dm.warp_to_pinhole  = cfg.warp_to_pinhole;
     engine_setup_data_manager(
-        dm, ds.camera_models,
+        dm, ds.camera_models, ds.camera_distortions,
         ds.image_filenames, ds.mask_filenames,
         has_depth ? ds.depth_filenames : std::vector<std::string>{},
         has_normal ? ds.normal_filenames : std::vector<std::string>{},
@@ -702,6 +702,7 @@ void TrainerSession::setup_engine() {
         post.any_warp ? post.post_offsets : std::vector<int32_t>{},
         post.viewmats, post.intrins, post.dist_coeffs,
         post.input_intrins, post.input_dist_coeffs,
+        post.redistort_models, post.redistort_params,
         ds.train_indices, ds.val_indices);
 
     // ---- Bilagrid / PPISP init -----------------------------------------
@@ -1039,13 +1040,14 @@ void TrainerSession::eval() {
     {
         std::lock_guard<std::mutex> lk(engine_mutex);
         engine_setup_data_manager(
-            dm, eds.camera_models,
+            dm, eds.camera_models, eds.camera_distortions,
             eds.image_filenames, eds.mask_filenames, {}, {},
             eds.widths, eds.heights,
             epost.any_warp ? epost.K_per_camera : std::vector<int32_t>{},
             epost.any_warp ? epost.post_offsets : std::vector<int32_t>{},
             epost.viewmats, epost.intrins, epost.dist_coeffs,
             epost.input_intrins, epost.input_dist_coeffs,
+            epost.redistort_models, epost.redistort_params,
             all_idx, {});
     }
 

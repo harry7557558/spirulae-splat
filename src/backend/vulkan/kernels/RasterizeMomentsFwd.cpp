@@ -38,6 +38,7 @@ void rasterize_moments_3dgut_fwd(
     TorchTensorView viewmats,
     TorchTensorView intrins,
     const std::string& camera_model,
+    const std::string& distortion,
     TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,
     uint32_t image_width,
@@ -47,9 +48,8 @@ void rasterize_moments_3dgut_fwd(
     float3* render_moments,
     float3* render_rgb
 ) {
-    CameraModelType cam = cmt(camera_model);
-    if (cam != CameraModelType::PINHOLE && cam != CameraModelType::FISHEYE &&
-        cam != CameraModelType::EQUISOLID)
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
+    if (cd.cam == (uint32_t)CameraModelType::EQUIRECTANGULAR)
         throw std::runtime_error(
             "rasterize_moments_3dgut_fwd: unsupported camera model");
 
@@ -86,10 +86,11 @@ void rasterize_moments_3dgut_fwd(
     p.tile_width = tile_width;
     p.tile_height = tile_height;
 
-    // Spec IDs: 0 = camera model, 1 = kRasterPacked, 2 = kOutputRgb.
-    backend::vk::SpecList spec{(uint32_t)cam,
+    // Spec IDs: 0 = camera model, 1 = kRasterPacked, 2 = kOutputRgb,
+    // 3 = distortion tier.
+    backend::vk::SpecList spec{cd.cam,
                                gaussian_ids.data_ptr() ? 1u : 0u,
-                               render_rgb ? 1u : 0u};
+                               render_rgb ? 1u : 0u, cd.dist};
     vkk::dispatch_ring("rasterize_moments.rasterize_moments_3dgut", spec, I,
                        tile_height * MACRO_TILE_SIZE_Y,
                        tile_width * MACRO_TILE_SIZE_X, &p, sizeof(p));

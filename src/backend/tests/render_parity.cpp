@@ -6,13 +6,14 @@
 //   Vulkan build: ./render_parity compare ref.bin   (per device)
 //
 // Sections:
-//   1. Background SH forward: SH degree x camera model image parity.
+//   1. Background SH forward: SH degree x (camera model, distortion tier).
 //   2. Full pipeline (projection -> intersect -> rasterize), fused + packed,
-//      per primitive, with distortion / median variants. Rendered images,
+//      per primitive, with dist-loss / median variants. Rendered images,
 //      transmittances, and tile offsets are compared with tolerance; near-tie
 //      depth keys may sort differently across backends (last-ulp projection
 //      divergence), so a small violation fraction is allowed.
 
+#include <backend/tests/DistortionFixture.h>
 #include <kernels/background/BackgroundSphericalHarmonics.cuh>
 #include <kernels/tile/IntersectTile.cuh>
 #include <kernels/projection/ProjectionFwd.cuh>
@@ -115,9 +116,7 @@ int main(int argc, char** argv) {
         cy_, 0, sy_, 0.3f,  0, 1, 0, -0.2f,  -sy_, 0, cy_, 5.f,  0, 0, 0, 1,
     };
     std::vector<float> intr = {150, 152, 100, 75, 145, 146, 97, 78};
-    std::vector<float> dist(C * 10, 0.f);
-    dist[0] = 0.05f;  dist[1] = -0.01f;  dist[2] = 0.001f;  dist[3] = -0.002f;
-    dist[10] = -0.03f; dist[11] = 0.004f;
+    std::vector<float> dist = dist_fixture::distortion_rows(C);
 
     float* d_means = upload(means);
     float* d_quats = upload(quats);
@@ -142,6 +141,10 @@ int main(int argc, char** argv) {
 
     const char* cams[4] = {"PINHOLE", "FISHEYE", "EQUISOLID",
                            "EQUIRECTANGULAR"};
+    auto dist_tv = [&](int tier) {
+        return ttv(d_dist + dist_fixture::row_offset(tier, C),
+                   {(int64_t)C, kCameraDistortionParams});
+    };
 
     std::vector<float> acc;
 
@@ -152,12 +155,19 @@ int main(int argc, char** argv) {
         float* d_bg_sh = upload(bg_sh);
         float* d_bg_out =
             (float*)backend::device_malloc((size_t)C * H * W * 3 * 4);
-        for (int shd = 0; shd <= 4; shd += 2)  // degrees 0, 2, 4
+        for (int si = 0; si < 3; si++)          // degrees 0, 2, 4
             for (int ci = 0; ci < 4; ci++) {
+                const int shd = 2 * si;
+                // PINHOLE has four compiled tiers and only three slots here,
+                // so start it at OpenCV; the NONE path is covered by the
+                // other models.
+                const int tier =
+                    dist_fixture::kTiers[ci][(ci == 0 ? si + 1 : si) %
+                                             dist_fixture::kNumTiers[ci]];
                 render_background_sh_forward(
-                    W, H, cams[ci], shd, ttv(d_vm, {(int64_t)C, 16}),
-                    ttv(d_intr, {(int64_t)C, 4}),
-                    ttv(d_dist, {(int64_t)C, 10}),
+                    W, H, cams[ci], dist_fixture::kTierNames[tier], shd,
+                    ttv(d_vm, {(int64_t)C, 16}),
+                    ttv(d_intr, {(int64_t)C, 4}), dist_tv(tier),
                     ttv(d_bg_sh, {(shd + 1) * (shd + 1), 3}),
                     ttv(d_bg_out, {(int64_t)C, H, W, 3}));
                 backend::device_synchronize();
@@ -173,18 +183,22 @@ int main(int argc, char** argv) {
         int prim;      // 0 = 3dgs, 1 = mip, 2 = 3dgut
         bool packed;
         int cam;
+        int dist;      // distortion tier, index into dist_fixture::kTierNames
         DistortionType dt;
         bool median;
     };
+    // Only the 3dgut rasterizer reads the camera, so its rows carry the tier
+    // sweep; for 3dgs/mip the tier reaches the projection alone.
     const Cfg cfgs[] = {
-        {0, false, 0, DistortionType::RGB_D, true},
-        {1, false, 0, DistortionType::RGB_D, true},
-        {2, false, 0, DistortionType::RGB_D, true},
-        {0, false, 1, DistortionType::D, false},
-        {2, false, 3, DistortionType::None, true},
-        {0, true, 3, DistortionType::None, false},
-        {1, true, 0, DistortionType::D, false},
-        {2, true, 0, DistortionType::None, false},
+        {0, false, 0, 1, DistortionType::RGB_D, true},
+        {1, false, 0, 0, DistortionType::RGB_D, true},
+        {2, false, 0, 1, DistortionType::RGB_D, true},
+        {2, false, 0, 2, DistortionType::D, false},
+        {0, false, 1, 2, DistortionType::D, false},
+        {2, false, 3, 0, DistortionType::None, true},
+        {0, true, 3, 0, DistortionType::None, false},
+        {1, true, 0, 3, DistortionType::D, false},
+        {2, true, 0, 3, DistortionType::None, false},
     };
 
     for (const Cfg& cfg : cfgs) {
@@ -203,7 +217,8 @@ int main(int argc, char** argv) {
                                       : projection_3dgut_packed_forward;
             auto out = fn(N, 3, in_splats, ttv(d_vm, {(int64_t)C, 16}),
                           ttv(d_intr, {(int64_t)C, 4}), W, H, cams[cfg.cam],
-                          ttv(d_dist, {(int64_t)C, 10}), radii, std::nullopt,
+                          dist_fixture::kTierNames[cfg.dist],
+                          dist_tv(cfg.dist), radii, std::nullopt,
                           std::nullopt, 0, 32, 0);
             cam_ids = std::get<0>(out);
             gauss_ids = std::get<1>(out);
@@ -220,7 +235,8 @@ int main(int argc, char** argv) {
                                       : projection_3dgut_forward;
             auto out = fn(N, 3, in_splats, ttv(d_vm, {(int64_t)C, 16}),
                           ttv(d_intr, {(int64_t)C, 4}), W, H, cams[cfg.cam],
-                          ttv(d_dist, {(int64_t)C, 10}), radii, std::nullopt,
+                          dist_fixture::kTierNames[cfg.dist],
+                          dist_tv(cfg.dist), radii, std::nullopt,
                           std::nullopt, 0, 32, 0);
             aabb_2d = std::get<0>(out);
             auto depths_2d = std::get<1>(out);
@@ -266,7 +282,8 @@ int main(int argc, char** argv) {
             rout = rasterize_to_pixels_3dgut_fwd(
                 N, in_splats, splats_s, gauss_ids,
                 ttv(d_vm, {(int64_t)C, 16}), ttv(d_intr, {(int64_t)C, 4}),
-                cams[cfg.cam], ttv(d_dist, {(int64_t)C, 10}), aabb_2d, W, H,
+                cams[cfg.cam], dist_fixture::kTierNames[cfg.dist],
+                dist_tv(cfg.dist), aabb_2d, W, H,
                 tile_offsets, flatten_ids, cfg.dt, cfg.median);
         } else {
             auto fn = cfg.prim == 0 ? rasterize_to_pixels_3dgs_fwd

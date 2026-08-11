@@ -13,6 +13,7 @@
 //                   loads never exist (llvmpipe speculated-load rule)
 //   kWorldGradAdd = 1: add mean/quat/scale register grads onto the fp32
 //                   world-grad buffer (3DGUT; one owner thread -> plain add)
+//   kDistortion   = CameraDistortionType (0..3), declared last
 //
 // One thread per splat also for !inside tail threads: the camera loop is
 // fully skipped for them (CUDA reads out-of-bounds aabb entries harmlessly
@@ -133,6 +134,55 @@ void _qg_nonsh<let PRIMS : int>(bool active, uint* packed, float2* bounds,
     }
 }
 
+// The per-splat camera loop, generic over the two projection spec axes so the
+// entry point folds them once (its block reduces stay outside).
+[ForceInline]
+void _qg_camera_loop<let cam : CameraModelType, D : ICameraDistortion>(
+    ProjectionQgradParams p, uint gid, bool inside, int cid_0, int cid_1,
+    inout PbGrads g) {
+    if (!inside)
+        return;
+    PbSplat s = pb_load_splat(p.means, p.quats, p.scales, p.opacities,
+                              p.features_dc, gid);
+    gindex_t qbase = (gindex_t)3 * (gindex_t)p.num_sh_buffer * (gindex_t)gid;
+    for (int cid_t = cid_0; cid_t < cid_1; ++cid_t) {
+        int idx = (kPacked != 0) ? p.perm[cid_t]
+                                 : cid_t * int(p.N) + int(gid);
+        int cid = (kPacked != 0) ? p.camera_ids[idx] : cid_t;
+        float4 bb = p.aabb[idx];
+        if (bb.z <= bb.x || bb.w <= bb.y)
+            continue;
+        PbCamera<D> c = pb_load_camera<D>(p.viewmats, p.intrins,
+                                          p.dist_coeffs, uint(cid));
+        if (kEval3d != 0) {
+            float3 v_ss = float3(p.vs0[3 * idx], p.vs0[3 * idx + 1],
+                                 p.vs0[3 * idx + 2]);
+            float v_so = p.vs1[idx];
+            float3 v_rgb = float3(p.vs2[3 * idx], p.vs2[3 * idx + 1],
+                                  p.vs2[3 * idx + 2]);
+            pb_vjp_3dgut<cam, D>(s, c, p.width, p.height, v_ss, v_so, g);
+            pb_sh_vjp<D>(s, c, p.features_sh + gid * p.sh_stride_src,
+                         p.sh_value_packed, p.sh_value_bounds, qbase,
+                         i64mem_get(p.sh_value_bounds_stride), v_rgb, g);
+        } else {
+            float2 v_xy = float2(p.vs0[2 * idx], p.vs0[2 * idx + 1]);
+            float v_depth = p.vs1[idx];
+            float3 v_conic = float3(p.vs2[3 * idx], p.vs2[3 * idx + 1],
+                                    p.vs2[3 * idx + 2]);
+            float v_opac = p.vs3[idx];
+            float3 v_rgb = float3(p.vs4[3 * idx], p.vs4[3 * idx + 1],
+                                  p.vs4[3 * idx + 2]);
+            pb_vjp_2d<cam, D>(s, c, p.width, p.height, v_xy, v_depth, v_conic,
+                              v_opac, g);
+            pb_sh_vjp<D>(s, c, p.features_sh + gid * p.sh_stride_src,
+                         p.sh_value_packed, p.sh_value_bounds, qbase,
+                         i64mem_get(p.sh_value_bounds_stride), v_rgb, g);
+        }
+    }
+}
+
+#define _qg_call(M, D) _qg_camera_loop<M, D>(p, gid, inside, cid_0, cid_1, g)
+
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void projection_qgrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -152,46 +202,7 @@ void projection_qgrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     }
 
     PbGrads g = pb_grads_zero();
-    if (inside) {
-        PbSplat s = pb_load_splat(p.means, p.quats, p.scales, p.opacities,
-                                  p.features_dc, gid);
-        gindex_t qbase =
-            (gindex_t)3 * (gindex_t)p.num_sh_buffer * (gindex_t)gid;
-        for (int cid_t = cid_0; cid_t < cid_1; ++cid_t) {
-            int idx = (kPacked != 0) ? p.perm[cid_t]
-                                     : cid_t * int(p.N) + int(gid);
-            int cid = (kPacked != 0) ? p.camera_ids[idx] : cid_t;
-            float4 bb = p.aabb[idx];
-            if (bb.z <= bb.x || bb.w <= bb.y)
-                continue;
-            PbCamera cam = pb_load_camera(p.viewmats, p.intrins,
-                                          p.dist_coeffs, uint(cid));
-            if (kEval3d != 0) {
-                float3 v_ss = float3(p.vs0[3 * idx], p.vs0[3 * idx + 1],
-                                     p.vs0[3 * idx + 2]);
-                float v_so = p.vs1[idx];
-                float3 v_rgb = float3(p.vs2[3 * idx], p.vs2[3 * idx + 1],
-                                      p.vs2[3 * idx + 2]);
-                pb_vjp_3dgut(s, cam, p.width, p.height, v_ss, v_so, g);
-                pb_sh_vjp(s, cam, p.features_sh + gid * p.sh_stride_src,
-                          p.sh_value_packed, p.sh_value_bounds, qbase,
-                          i64mem_get(p.sh_value_bounds_stride), v_rgb, g);
-            } else {
-                float2 v_xy = float2(p.vs0[2 * idx], p.vs0[2 * idx + 1]);
-                float v_depth = p.vs1[idx];
-                float3 v_conic = float3(p.vs2[3 * idx], p.vs2[3 * idx + 1],
-                                        p.vs2[3 * idx + 2]);
-                float v_opac = p.vs3[idx];
-                float3 v_rgb = float3(p.vs4[3 * idx], p.vs4[3 * idx + 1],
-                                      p.vs4[3 * idx + 2]);
-                pb_vjp_2d(s, cam, p.width, p.height, v_xy, v_depth, v_conic,
-                          v_opac, g);
-                pb_sh_vjp(s, cam, p.features_sh + gid * p.sh_stride_src,
-                          p.sh_value_packed, p.sh_value_bounds, qbase,
-                          i64mem_get(p.sh_value_bounds_stride), v_rgb, g);
-            }
-        }
-    }
+    SS_DISPATCH_CAM_DIST(_qg_call)
 
     // fp32 geometry writeback (3DGUT: add proj contribution onto the
     // raster-bwd world grads; one owner thread per gid -> race-free adds).
@@ -265,6 +276,8 @@ void projection_qgrad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     }
 }
 
+#undef _qg_call
+
 // ---------------------------------------------------------------------------
 // Packed-mode preprocessing helpers (mirror the FPBO/qgrad iota +
 // camera_id_bounds kernels; the sort itself runs via backend::sort_pairs).
@@ -306,3 +319,7 @@ void qgrad_camera_id_bounds(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     for (int k = lo; k <= hi; ++k)
         p.camera_id_bounds[k] = int(i);
 }
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

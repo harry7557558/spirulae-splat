@@ -125,12 +125,13 @@ struct DecodedBatch {
     int32_t                height = 0;     // post-split H
     int32_t                num    = 0;     // post-split B (= input B * K)
     CameraModelType        model  = (CameraModelType)-1;   // PINHOLE when K>1
+    CameraDistortionType   distortion = CameraDistortionType::None;  // None when K>1
 
     // Selected camera indices, in input batch order (length = input B).
     std::vector<int32_t>   indices;
 
     // Camera parameters at POST-split resolution, host-contiguous.
-    // Length = 16 / 4 / 10 * num (= B*K).
+    // Length = 16 / 4 / 8 * num (= B*K).
     std::vector<float>     viewmats;
     std::vector<float>     intrins;
     std::vector<float>     dist_coeffs;
@@ -179,15 +180,24 @@ struct DecodedBatch {
     int32_t                input_num     = 0;   // = num / K
     int32_t                K             = 1;
     CameraModelType        input_model   = (CameraModelType)-1;
+    CameraDistortionType   input_distortion = CameraDistortionType::None;
     const float*           axes_dev      = nullptr;
 
     // Per-INPUT intrins / dist_coeffs (length input_num). Populated when
     // K > 1 and the wide warp kernel (fisheye/equisolid) needs them. The
     // equirectangular path ignores these.
     std::vector<float>     input_intrins;       // 4 * input_num
-    std::vector<float>     input_dist_coeffs;   // 10 * input_num
+    std::vector<float>     input_dist_coeffs;   // 8 * input_num
+
+    // Per-INPUT source camera for the images that must be re-distorted.
+    // Empty when the dataset has none; see ParsedDataset::redistort.
+    std::vector<int32_t>   input_source_models;   // input_num
+    std::vector<float>     input_source_params;   // 16 * input_num
+
     TorchTensorView        input_intrins_view{0, 0, {}};
     TorchTensorView        input_dist_coeffs_view{0, 0, {}};
+    TorchTensorView        input_source_models_view{0, 0, {}};
+    TorchTensorView        input_source_params_view{0, 0, {}};
 
     // Engine-facing TorchTensorViews. Lazily filled by `build_views()` once
     // the buffers are populated. The Engine consumes these directly via
@@ -250,6 +260,7 @@ public:
         DataManagerConfig          config,
         // Per-INPUT-camera (length N) ---------------------------------------
         std::vector<int32_t>       camera_models,
+        std::vector<int32_t>       camera_distortions,
         std::vector<std::string>   image_filenames,
         std::vector<std::string>   mask_filenames,
         std::vector<std::string>   depth_filenames,
@@ -272,13 +283,17 @@ public:
         // (bake_post_split in DatasetCommon.cpp).
         std::vector<float>         viewmats,            // [N_post, 4, 4]
         std::vector<float>         intrins,             // [N_post, 4]
-        std::vector<float>         dist_coeffs,         // [N_post, 10]
+        std::vector<float>         dist_coeffs,         // [N_post, 8]
         // Per-INPUT intrins/dist_coeffs (length N). Needed by the wide warp
         // kernel (fisheye/equisolid projection). Pass empty vectors when
         // no fisheye-warp camera is in the dataset -- the kernel only reads
         // them on the fisheye path.
         std::vector<float>         input_intrins,       // [N, 4]
-        std::vector<float>         input_dist_coeffs,   // [N, 10]
+        std::vector<float>         input_dist_coeffs,   // [N, 8]
+        // Per-INPUT source camera for images that must be re-distorted;
+        // empty when the dataset has none. See PostSplitCameras.
+        std::vector<int32_t>       redistort_models,    // [N]
+        std::vector<float>         redistort_params,    // [N, 16]
         std::vector<int32_t>       train_indices,
         std::vector<int32_t>       val_indices);
 

@@ -87,43 +87,7 @@ struct FixedArray
 #endif  // #ifdef __CUDACC__
 
 
-#ifdef __CUDACC__
-// k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2
-typedef FixedArray<float, 10> CameraDistortionCoeffs;
-#endif
-
 #include <core/Tensor.h>
-
-struct CameraDistortionCoeffsBuffer {
-    float* __restrict__ coeffs;
-
-    CameraDistortionCoeffsBuffer(const TorchTensorView &tensor) {
-        if (std::get<2>(tensor).size() != 2 || std::get<2>(tensor)[1] != 10)
-            throw std::runtime_error("dist coeffs must have shape (C, 10)");
-        if (std::get<1>(tensor) != sizeof(float))
-            throw std::runtime_error("dist coeffs must be float");
-        coeffs = (float*)std::get<0>(tensor);
-    }
-
-    CameraDistortionCoeffsBuffer(float* ptr) : coeffs(ptr) {}
-
-    #ifdef __CUDACC__
-    __device__ CameraDistortionCoeffs load(long idx) const {
-        CameraDistortionCoeffs res;
-        if (coeffs == nullptr) {
-            #pragma unroll
-            for (int i = 0; i < 10; i++)
-                res[i] = 0.0f;
-        } else {
-            float* c = coeffs + 10 * idx;
-            #pragma unroll
-            for (int i = 0; i < 10; i++)
-                res[i] = c[i];
-        }
-        return res;
-    }
-    #endif
-};
 
 // Camera Types
 // This must match projection_utils.slang
@@ -134,12 +98,85 @@ enum class CameraModelType {
     EQUIRECTANGULAR = 3,
 };
 
+// Lens distortion tier, orthogonal to CameraModelType and a COMPILE-TIME axis
+// in every kernel that projects. Must match core/CameraModel.h and
+// projection_utils.slang; the per-tier coefficient order is documented there.
+enum class CameraDistortionType {
+    None = 0,
+    OpenCV = 1,
+    ThinPrism = 2,
+    Rational = 3,
+};
+
+// Storage width of one camera's coefficient row. Each tier reads a prefix.
+inline constexpr int kCameraDistortionParams = 8;
+
+inline constexpr int camera_distortion_num_params(CameraDistortionType d) {
+    return d == CameraDistortionType::None      ? 0 :
+           d == CameraDistortionType::OpenCV    ? 4 : 8;
+}
+
+#ifdef __CUDACC__
+// Per-tier coefficient pack. Sized to the tier, not to the storage row, so an
+// undistorted camera costs no registers at all. DistNone in Slang carries one
+// unread slot (Slang has no zero-length array), which the launchers mirror.
+template<CameraDistortionType D>
+struct CameraDistortionCoeffsT {
+    static constexpr int kNum = camera_distortion_num_params(D);
+    FixedArray<float, (kNum > 0 ? kNum : 1)> v;
+};
+#endif
+
+struct CameraDistortionCoeffsBuffer {
+    float* __restrict__ coeffs;
+
+    CameraDistortionCoeffsBuffer(const TorchTensorView &tensor) {
+        if (std::get<2>(tensor).size() != 2 ||
+            std::get<2>(tensor)[1] != kCameraDistortionParams)
+            throw std::runtime_error("dist coeffs must have shape (C, 8)");
+        if (std::get<1>(tensor) != sizeof(float))
+            throw std::runtime_error("dist coeffs must be float");
+        coeffs = (float*)std::get<0>(tensor);
+    }
+
+    CameraDistortionCoeffsBuffer(float* ptr) : coeffs(ptr) {}
+
+    #ifdef __CUDACC__
+    template<CameraDistortionType D>
+    __device__ CameraDistortionCoeffsT<D> load(long idx) const {
+        CameraDistortionCoeffsT<D> res;
+        constexpr int kNum = CameraDistortionCoeffsT<D>::kNum;
+        if constexpr (kNum == 0) {
+            res.v[0] = 0.0f;
+        } else if (coeffs == nullptr) {
+            #pragma unroll
+            for (int i = 0; i < kNum; i++)
+                res.v[i] = 0.0f;
+        } else {
+            const float* c = coeffs + kCameraDistortionParams * idx;
+            #pragma unroll
+            for (int i = 0; i < kNum; i++)
+                res.v[i] = c[i];
+        }
+        return res;
+    }
+    #endif
+};
+
 inline CameraModelType cmt(const std::string &s) {
     return (s == "PINHOLE") ? CameraModelType::PINHOLE :
         (s == "FISHEYE") ? CameraModelType::FISHEYE :
         (s == "EQUISOLID") ? CameraModelType::EQUISOLID :
         (s == "EQUIRECTANGULAR") ? CameraModelType::EQUIRECTANGULAR :
         (CameraModelType)-1;
+}
+
+inline CameraDistortionType cdt(const std::string &s) {
+    return (s == "NONE") ? CameraDistortionType::None :
+        (s == "OPENCV") ? CameraDistortionType::OpenCV :
+        (s == "THIN_PRISM") ? CameraDistortionType::ThinPrism :
+        (s == "RATIONAL") ? CameraDistortionType::Rational :
+        (CameraDistortionType)-1;
 }
 
 

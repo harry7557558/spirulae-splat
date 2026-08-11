@@ -6,7 +6,8 @@
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::EQUIRECTANGULAR,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::Rational,
     DistortionType::D,
     true,
     true,
@@ -51,7 +52,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::EQUIRECTANGULAR,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::Rational,
     DistortionType::D,
     true,
     false,
@@ -96,7 +98,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::EQUIRECTANGULAR,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::Rational,
     DistortionType::D,
     true,
     false,
@@ -141,7 +144,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::EQUIRECTANGULAR,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::Rational,
     DistortionType::D,
     false,
     true,
@@ -186,7 +190,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::EQUIRECTANGULAR,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::Rational,
     DistortionType::D,
     false,
     true,
@@ -231,7 +236,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::EQUIRECTANGULAR,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::Rational,
     DistortionType::D,
     false,
     false,
@@ -276,7 +282,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::EQUIRECTANGULAR,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::Rational,
     DistortionType::D,
     false,
     false,
@@ -321,7 +328,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::EQUIRECTANGULAR,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::Rational,
     DistortionType::RGB_D,
     true,
     true,
@@ -366,7 +374,8 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::EQUIRECTANGULAR,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::Rational,
     DistortionType::RGB_D,
     true,
     true,

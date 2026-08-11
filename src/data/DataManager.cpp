@@ -100,6 +100,12 @@ struct IndexGroup {
     int32_t              width  = 0;
     int32_t              height = 0;
     CameraModelType      model  = (CameraModelType)-1;  // uniform within a group
+    CameraDistortionType distortion = CameraDistortionType::None;  // likewise
+    // Whether this group's images must be resampled from a fitted source
+    // camera. Part of the group key: the kernels take it as a compile-time
+    // axis, so a group that mixes fitted and exact cameras would project the
+    // exact ones through source model -1 and blank them.
+    bool                 redistort = false;
     int32_t              mask_h   = 0, mask_w   = 0;
     int32_t              depth_h  = 0, depth_w  = 0;
     int32_t              normal_h = 0, normal_w = 0;
@@ -495,14 +501,21 @@ void DecodedBatch::build_views() {
     int64_t B_post = num;
     viewmats_view    = mk(viewmats.data(),    4, {B_post, 4LL, 4LL});
     intrins_view     = mk(intrins.data(),     4, {B_post, 4LL});
-    dist_coeffs_view = mk(dist_coeffs.data(), 4, {B_post, 10LL});
+    dist_coeffs_view = mk(dist_coeffs.data(), 4,
+                          {B_post, (long long)kCameraDistortionParams});
 
     // Per-INPUT intrins / dist_coeffs views (size B_in). Empty when the
     // warp kernel doesn't need them.
     int64_t B_in = input_num;
     if (!input_intrins.empty()) {
         input_intrins_view = mk(input_intrins.data(), 4, {B_in, 4LL});
-        input_dist_coeffs_view = mk(input_dist_coeffs.data(), 4, {B_in, 10LL});
+        input_dist_coeffs_view = mk(input_dist_coeffs.data(), 4,
+                                   {B_in, (long long)kCameraDistortionParams});
+        if (!input_source_models.empty()) {
+            input_source_models_view = TorchTensorView(
+                (uint64_t)input_source_models.data(), 4, {B_in});
+            input_source_params_view = mk(input_source_params.data(), 4, {B_in, 16LL});
+        }
     }
 
     // Image / modality views stay at INPUT shape. The engine warps on the
@@ -535,7 +548,8 @@ public:
 
     DataManagerImpl(
         DataManagerConfig config,
-        std::vector<int32_t>     camera_models,   // per-camera enum int
+        std::vector<int32_t>     camera_models,       // per-camera enum int
+        std::vector<int32_t>     camera_distortions,  // per-camera tier int
         std::vector<std::string> image_filenames,
         std::vector<std::string> mask_filenames,
         std::vector<std::string> depth_filenames,
@@ -548,7 +562,9 @@ public:
         std::vector<float>       intrins,         // post-split
         std::vector<float>       dist_coeffs,     // post-split
         std::vector<float>       input_intrins,   // per-input
-        std::vector<float>       input_dist_coeffs, // per-input
+        std::vector<float>       input_dist_coeffs,
+        std::vector<int32_t>     redistort_models,
+        std::vector<float>       redistort_params, // per-input
         std::vector<int32_t>     train_indices,
         std::vector<int32_t>     val_indices);
 
@@ -591,6 +607,9 @@ private:
     // partitioned by this so a mixed pinhole + fisheye dataset just yields
     // two extra groups; batches stay homogeneous.
     std::vector<int32_t>      _camera_models;
+    std::vector<int32_t>      _camera_distortions;
+    std::vector<int32_t>      _redistort_models;
+    std::vector<float>        _redistort_params;
     // Per-input K and post-split offset. Length N. K[i] is the split factor
     // for input camera i (1 / 5 / 6). post_offsets[i] is the starting index
     // in _viewmats / _intrins / _dist_coeffs (which are now POST-split).
@@ -771,6 +790,7 @@ private:
 DataManagerImpl::DataManagerImpl(
     DataManagerConfig          config,
     std::vector<int32_t>       camera_models,
+    std::vector<int32_t>       camera_distortions,
     std::vector<std::string>   image_filenames,
     std::vector<std::string>   mask_filenames,
     std::vector<std::string>   depth_filenames,
@@ -784,10 +804,15 @@ DataManagerImpl::DataManagerImpl(
     std::vector<float>         dist_coeffs,
     std::vector<float>         input_intrins,
     std::vector<float>         input_dist_coeffs,
+    std::vector<int32_t>       redistort_models,
+    std::vector<float>         redistort_params,
     std::vector<int32_t>       train_indices,
     std::vector<int32_t>       val_indices)
     : _cfg(config),
       _camera_models(std::move(camera_models)),
+      _camera_distortions(std::move(camera_distortions)),
+      _redistort_models(std::move(redistort_models)),
+      _redistort_params(std::move(redistort_params)),
       _K_per_camera(std::move(K_per_camera)),
       _post_offsets(std::move(post_offsets)),
       _image_filenames(std::move(image_filenames)),
@@ -830,14 +855,14 @@ DataManagerImpl::DataManagerImpl(
         (int64_t)_heights.size() != N ||
         (int64_t)_viewmats.size()    != n_post * 16 ||
         (int64_t)_intrins.size()     != n_post * 4 ||
-        (int64_t)_dist_coeffs.size() != n_post * 10) {
+        (int64_t)_dist_coeffs.size() != n_post * kCameraDistortionParams) {
         throw std::runtime_error(
             "DataManager: per-camera array length mismatch (expected widths/heights "
             "of length N and viewmats/intrins/dist_coeffs of length N_post = sum(K))");
     }
     if (!_input_intrins.empty() &&
         ((int64_t)_input_intrins.size() != N * 4 ||
-         (int64_t)_input_dist_coeffs.size() != N * 10)) {
+         (int64_t)_input_dist_coeffs.size() != N * kCameraDistortionParams)) {
         throw std::runtime_error(
             "DataManager: input_intrins / input_dist_coeffs length mismatch "
             "(expected length 4*N / 10*N respectively, or both empty)");
@@ -1032,19 +1057,26 @@ std::vector<IndexGroup> DataManagerImpl::build_index_groups_member(
     // Group key: (W, H, camera_model). std::map handles tuple keys natively,
     // and group build happens once at construction, so we don't need an
     // unordered_map's hash machinery here.
-    std::map<std::tuple<int32_t, int32_t, int32_t>, IndexGroup> by_shape;
+    std::map<std::tuple<int32_t, int32_t, int32_t, int32_t, int32_t>,
+             IndexGroup> by_shape;
 
     // Track first per-modality mismatch for a one-shot warning. Mutable so
     // this const method can update them; semantically they're cache.
     static bool warned_mask = false, warned_depth = false, warned_normal = false;
 
     for (int32_t i : flat_indices) {
-        auto key = std::make_tuple(_widths[i], _heights[i], _camera_models[i]);
+        const bool redistort_i =
+            !_redistort_models.empty() && _redistort_models[i] >= 0;
+        auto key = std::make_tuple(_widths[i], _heights[i], _camera_models[i],
+                                   _camera_distortions[i],
+                                   (int32_t)redistort_i);
         auto& g = by_shape[key];
         if (g.indices.empty()) {
             g.width  = _widths[i];
             g.height = _heights[i];
             g.model  = (CameraModelType)_camera_models[i];
+            g.distortion = (CameraDistortionType)_camera_distortions[i];
+            g.redistort  = redistort_i;
             g.K      = _K_per_camera[i];
             // Pick the cubemap axes corresponding to this group's split factor.
             if (g.K == 5) g.axes_dev = _axes_fisheye5_dev;
@@ -1252,6 +1284,7 @@ void DataManagerImpl::allocate_batch(
     b.height = g.out_h;
     b.num    = B_post;
     b.model  = (K > 1) ? CameraModelType::PINHOLE : g.model;
+    b.distortion = (K > 1) ? CameraDistortionType::None : g.distortion;
 
     b.indices      = ds_indices;
     b.post_offsets.assign((size_t)B, 0);
@@ -1262,18 +1295,26 @@ void DataManagerImpl::allocate_batch(
     b.input_num    = B;
     b.K            = K;
     b.input_model  = g.model;
+    b.input_distortion = g.distortion;
     b.axes_dev     = g.axes_dev;
 
     b.viewmats.assign((size_t)B_post * 16, 0.0f);
     b.intrins.assign((size_t)B_post * 4, 0.0f);
-    b.dist_coeffs.assign((size_t)B_post * 10, 0.0f);
+    b.dist_coeffs.assign((size_t)B_post * kCameraDistortionParams, 0.0f);
 
     // Per-INPUT intrins / dist_coeffs (needed by the wide warp kernel for
     // fisheye / equisolid). Allocate only when K > 1 and the source arrays
     // are present.
-    if (K > 1 && !_input_intrins.empty()) {
+    if ((K > 1 || g.redistort) && !_input_intrins.empty()) {
         b.input_intrins.assign((size_t)B * 4, 0.0f);
-        b.input_dist_coeffs.assign((size_t)B * 10, 0.0f);
+        b.input_dist_coeffs.assign((size_t)B * kCameraDistortionParams, 0.0f);
+        if (g.redistort) {
+            b.input_source_models.assign((size_t)B, -1);
+            b.input_source_params.assign((size_t)B * 16, 0.0f);
+        } else {
+            b.input_source_models.clear();
+            b.input_source_params.clear();
+        }
     } else {
         b.input_intrins.clear();
         b.input_dist_coeffs.clear();
@@ -1338,16 +1379,22 @@ void DataManagerImpl::fill_camera_params(DecodedBatch& b) {
         std::memcpy(&b.intrins[(size_t)j * K * 4],
                     &_intrins[(size_t)off * 4],
                     (size_t)K * 4 * sizeof(float));
-        std::memcpy(&b.dist_coeffs[(size_t)j * K * 10],
-                    &_dist_coeffs[(size_t)off * 10],
-                    (size_t)K * 10 * sizeof(float));
+        std::memcpy(&b.dist_coeffs[(size_t)j * K * kCameraDistortionParams],
+                    &_dist_coeffs[(size_t)off * kCameraDistortionParams],
+                    (size_t)K * kCameraDistortionParams * sizeof(float));
         if (have_in) {
             std::memcpy(&b.input_intrins[(size_t)j * 4],
                         &_input_intrins[(size_t)i_in * 4],
                         4 * sizeof(float));
-            std::memcpy(&b.input_dist_coeffs[(size_t)j * 10],
-                        &_input_dist_coeffs[(size_t)i_in * 10],
-                        10 * sizeof(float));
+            std::memcpy(&b.input_dist_coeffs[(size_t)j * kCameraDistortionParams],
+                        &_input_dist_coeffs[(size_t)i_in * kCameraDistortionParams],
+                        kCameraDistortionParams * sizeof(float));
+            if (!b.input_source_models.empty()) {
+                b.input_source_models[j] = _redistort_models[i_in];
+                std::memcpy(&b.input_source_params[(size_t)j * 16],
+                            &_redistort_params[(size_t)i_in * 16],
+                            16 * sizeof(float));
+            }
         }
     }
 }
@@ -1957,6 +2004,7 @@ void DataManagerImpl::fetch_one(int32_t index, DecodedBatch& out) {
 DataManager::DataManager(
     DataManagerConfig          config,
     std::vector<int32_t>       camera_models,
+    std::vector<int32_t>       camera_distortions,
     std::vector<std::string>   image_filenames,
     std::vector<std::string>   mask_filenames,
     std::vector<std::string>   depth_filenames,
@@ -1970,17 +2018,21 @@ DataManager::DataManager(
     std::vector<float>         dist_coeffs,
     std::vector<float>         input_intrins,
     std::vector<float>         input_dist_coeffs,
+    std::vector<int32_t>       redistort_models,
+    std::vector<float>         redistort_params,
     std::vector<int32_t>       train_indices,
     std::vector<int32_t>       val_indices)
 {
     _impl = std::make_unique<DataManagerImpl>(
         std::move(config), std::move(camera_models),
+        std::move(camera_distortions),
         std::move(image_filenames), std::move(mask_filenames),
         std::move(depth_filenames), std::move(normal_filenames),
         std::move(widths), std::move(heights),
         std::move(K_per_camera), std::move(post_offsets),
         std::move(viewmats), std::move(intrins), std::move(dist_coeffs),
         std::move(input_intrins), std::move(input_dist_coeffs),
+        std::move(redistort_models), std::move(redistort_params),
         std::move(train_indices), std::move(val_indices));
 }
 

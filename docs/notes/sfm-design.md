@@ -48,7 +48,7 @@ be re-derived or re-attempted: D25, D26, D27, D11, D16, D47, D50, D45, D46.
 | D31 | Geometry core on unit bearings (D29 phase B) |
 | D32 | Kannala-Brandt fisheye model (COLMAP OPENCV_FISHEYE); per-real atan by Newton |
 | D33 | Wide-FOV cheirality + physical fisheye focal init (D29 phase D) |
-| D34 | THIN_PRISM_FISHEYE + reduced FULL_OPENCV models |
+| D34 | THIN_PRISM_FISHEYE + FULL_OPENCV models |
 | D35 | GPU pair selection instead of exhaustive pairing (or a vocab tree) |
 | D36 | Mapper robustness: refined+gated registration, iterated refinement with retriangulation, and undo |
 | D37 | Mapper time: incremental next-image scoring + retuned BA cadence |

@@ -27,6 +27,7 @@ std::tuple<
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size

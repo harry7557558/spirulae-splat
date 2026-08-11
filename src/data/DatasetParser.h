@@ -77,6 +77,17 @@ ColmapPoints3D                  read_points3D_text(const std::string& recon_dir)
 ColmapPoints3D read_ply_points(const std::string& path);
 
 
+// The exotic camera a fitted camera stands in for, so the re-distort kernel
+// can evaluate the true source projection rather than an approximation of it.
+// `source_model` and `params` are as data/SourceCamera.h defines them; ignored
+// when `source_model < 0`.
+struct RedistortSource {
+    int32_t source_model = -1;
+    float   params[16]{};
+    float   fit_max_px = 0.0f;   // reported near-minimax error of the fit
+};
+
+
 // ===========================================================================
 // Parser config + baked dataset
 // ===========================================================================
@@ -150,9 +161,11 @@ struct DatasetParserConfig {
 struct ParsedDataset {
     int64_t num_cameras = 0;
 
-    // CameraModelType as int (Camera.h camera_model_from_name over the
-    // nerfstudio-normalized model name).
+    // CameraModelType / CameraDistortionType as int, per input camera. The
+    // distortion tier is the cheapest one that represents the source camera
+    // exactly; `redistort` says when that required resampling the images.
     std::vector<int32_t>     camera_models;
+    std::vector<int32_t>     camera_distortions;
 
     // Absolute file paths. mask/depth/normal are all-N with "" for images
     // that have no such auxiliary file, or empty vectors when no image has
@@ -169,7 +182,14 @@ struct ParsedDataset {
     std::vector<float>       c2w;
 
     std::vector<float>       intrins;      // [N, 4]  (fx, fy, cx, cy)
-    std::vector<float>       dist_coeffs;  // [N, 10] (k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2)
+    // [N, 8]; slot meaning is per-tier, see core/CameraModel.h
+    std::vector<float>       dist_coeffs;
+
+    // Cameras whose source model no tier represents exactly (COLMAP FOV /
+    // DIVISION / EUCM / RAD_TAN_THIN_PRISM_FISHEYE, Metashape affinity-skew).
+    // Empty when every camera mapped exactly. Indexed like the arrays above;
+    // `source_model < 0` marks a camera that needs no resampling.
+    std::vector<RedistortSource> redistort;
 
     // Per-INPUT train/val partition (validation_fraction).
     std::vector<int32_t>     train_indices;
@@ -237,7 +257,8 @@ struct PostSplitCameras {
     // POST-split.
     std::vector<float>   viewmats;       // [N_post, 4, 4]
     std::vector<float>   intrins;        // [N_post, 4]
-    std::vector<float>   dist_coeffs;    // [N_post, 10]
+    std::vector<float>   dist_coeffs;    // [N_post, 8]
+    std::vector<int32_t> post_distortions;   // [N_post] CameraDistortionType
 
     // Viewer (engine_viewer_init) arrays, POST-split: camera-to-world in the
     // y/z-flipped form the blit kernel expects, plus per-post W/H/model.
@@ -248,7 +269,15 @@ struct PostSplitCameras {
 
     // Per-INPUT copies for the wide-warp kernel; empty when !any_warp.
     std::vector<float>   input_intrins;      // [N, 4]
-    std::vector<float>   input_dist_coeffs;  // [N, 10]
+    std::vector<float>   input_dist_coeffs;  // [N, 8]
+    std::vector<int32_t> input_distortions;  // [N] CameraDistortionType
+
+    // Flattened ParsedDataset::redistort, per INPUT camera. Empty when no
+    // camera needs resampling; -1 in `redistort_models` marks one that does
+    // not. A dataset with any of these sets any_warp, because the re-distort
+    // shares the warp path's staging even at K == 1.
+    std::vector<int32_t> redistort_models;   // [N]
+    std::vector<float>   redistort_params;   // [N, 16]
 };
 
 PostSplitCameras bake_post_split(const ParsedDataset& ds,

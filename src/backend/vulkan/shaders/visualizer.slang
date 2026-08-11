@@ -28,6 +28,31 @@
 
 #include "int64_compat.slang"
 #include "int8_compat.slang"
+#include "dist_spec.slang"
+
+// generate_ray with the tier folded from kDistortion, taking the full 8-float
+// storage row: the callers keep their groupshared barriers at top level.
+[ForceInline]
+bool _vis_ray<D : ICameraDistortion>(float2 uv, int camera_model,
+                                     float row[kDistCoeffRow],
+                                     out float3 raydir) {
+    float dc[D.kNumParams];
+    [ForceUnroll]
+    for (int k = 0; k < D.kNumParams; k++) dc[k] = row[k];
+    return generate_ray<D>(uv, camera_model, dc, raydir);
+}
+
+#define _vis_ray_call(D) ok = _vis_ray<D>(uv, camera_model, row, raydir)
+
+[ForceInline]
+bool vis_ray(float2 uv, int camera_model, float row[kDistCoeffRow],
+             out float3 raydir) {
+    bool ok = false;
+    raydir = float3(0.0f);
+    SS_DISPATCH_DIST(_vis_ray_call)
+    return ok;
+}
+#undef _vis_ray_call
 
 static const int kNumFrustumSegments = 16;
 static const int kNumFrustumFaces = 8;
@@ -64,7 +89,7 @@ struct VisFrustumParams {  // 76 -> 80 bytes: pushed directly
     int* widths;             // [N]
     int* heights;            // [N]
     int* camera_models;      // [N]
-    float* dist_coeffs;      // [N,10] or null
+    float* dist_coeffs;      // [N,8] or null
     float* camera_to_worlds; // [N,3,4]
     float4* lss_buffer;      // [N, 8*kNumFrustumSegments, 2]
     float4* tri_buffer;      // [N, 4*kNumFrustumFaces^2, 4]
@@ -76,15 +101,15 @@ struct VisFrustumParams {  // 76 -> 80 bytes: pushed directly
 groupshared float3 _vis_polylines[4 * kNumFrustumSegments];
 
 [ForceInline]
-float3 frustum_ray(float2 uv, int camera_model, float dist[10]) {
+float3 frustum_ray(float2 uv, int camera_model, float dist[kDistCoeffRow]) {
     float3 raydir = float3(asfloat(0x7fc00000u));  // NaN
-    if (!generate_ray(uv, camera_model, dist, raydir)) {
+    if (!vis_ray(uv, camera_model, dist, raydir)) {
         // binary search for the last valid uv toward the center
         float t0 = 0.0f, t1 = 1.0f;
         for (int iter = 0; iter < 12; ++iter) {
             float t = 0.5f * (t0 + t1);
             float3 temp;
-            if (generate_ray(uv * t, camera_model, dist, temp)) {
+            if (vis_ray(uv * t, camera_model, dist, temp)) {
                 t0 = t;
                 raydir = temp;
             } else {
@@ -107,11 +132,12 @@ void vis_fill_frustum(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float width = float(p.widths[bid]);
     float height = float(p.heights[bid]);
     int camera_model = p.camera_models[bid];
-    float dist[10];
+    float dist[kDistCoeffRow];
     [ForceUnroll]
-    for (int k = 0; k < 10; k++)
-        dist[k] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * bid + k];
+    for (int k = 0; k < kDistCoeffRow; k++)
+        dist[k] = is_null(p.dist_coeffs)
+                      ? 0.0f
+                      : p.dist_coeffs[kDistCoeffRow * bid + k];
     float2 corners[4] = {
         float2(-cx / fx, -cy / fy),
         float2((width - cx) / fx, -cy / fy),
@@ -812,7 +838,7 @@ struct VisBlitParams {  // 16 ptrs + 11 scalars: via params ring
     float* render_alphas;  // [H,W,1]
     float4* view_intrins;  // [4] (one camera)
     float* view_viewmat;   // [4,4]
-    float* view_dist;      // [10] or null
+    float* view_dist;      // [8] or null
     float4* lss_buffer;    // or null
     int2* lss_nodes;
     float3* lss_aabb;
@@ -922,9 +948,9 @@ void vis_blit(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                       p.view_viewmat[4 * r + 2]);
     float3 t = float3(p.view_viewmat[3], p.view_viewmat[7],
                       p.view_viewmat[11]);
-    float dist[10];
+    float dist[kDistCoeffRow];
     [ForceUnroll]
-    for (int k = 0; k < 10; k++)
+    for (int k = 0; k < kDistCoeffRow; k++)
         dist[k] = is_null(p.view_dist) ? 0.0f : p.view_dist[k];
 
     float alpha_final = 0.0f;
@@ -938,8 +964,7 @@ void vis_blit(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float3 ray_o = transform_ray_o(R, t);
         float3 ray_d;
         float2 uv = float2((px - cx) / fx, (py - cy) / fy);
-        bool inside =
-            generate_ray(uv, p.view_camera_model, dist, ray_d);
+        bool inside = vis_ray(uv, p.view_camera_model, dist, ray_d);
         if (p.view_camera_model == 1 /*FISHEYE*/)
             inside = inside && length(uv) < 3.14159265358979323846f;
         if (p.view_camera_model == 2 /*EQUISOLID*/)
@@ -1197,3 +1222,7 @@ void vis_update_thumbnails(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     if (tid == 0)
         u8_store(p.done_mask, post_idx, 0xffu);
 }
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

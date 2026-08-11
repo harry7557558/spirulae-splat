@@ -248,6 +248,7 @@ static void _engine_raster_proj_backward(
             _dt2d_tv(engine().camera.viewmats),
             _dv_tv(engine().camera.intrins),
             engine().camera.model_str,
+        engine().camera.distortion_str,
             _dt2d_tv(engine().camera.dist_coeffs),
             engine().fwd.aabb,
             (uint32_t)engine().camera.width,
@@ -336,7 +337,8 @@ static void _engine_raster_proj_backward(
                 fn(engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
                    _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
                    (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-                   engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                   engine().camera.model_str,
+        engine().camera.distortion_str, _dt2d_tv(engine().camera.dist_coeffs),
                    engine().fwd.camera_ids, engine().fwd.gaussian_ids, engine().fwd.aabb,
                    v_splats_s_out, v_splats_w_out, gq,
                    vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
@@ -350,7 +352,8 @@ static void _engine_raster_proj_backward(
                 engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
                 _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
                 (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                engine().camera.model_str,
+        engine().camera.distortion_str, _dt2d_tv(engine().camera.dist_coeffs),
                 engine().fwd.camera_ids, engine().fwd.gaussian_ids,
                 engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
                 vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
@@ -359,7 +362,8 @@ static void _engine_raster_proj_backward(
                 engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
                 _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
                 (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                engine().camera.model_str,
+        engine().camera.distortion_str, _dt2d_tv(engine().camera.dist_coeffs),
                 engine().fwd.camera_ids, engine().fwd.gaussian_ids,
                 engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
                 vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
@@ -368,7 +372,8 @@ static void _engine_raster_proj_backward(
                 engine().cur_num_splats, engine().sh_degree, engine().fwd.splats_w,
                 _dt2d_tv(engine().camera.viewmats), _dv_tv(engine().camera.intrins),
                 (uint32_t)engine().camera.width, (uint32_t)engine().camera.height,
-                engine().camera.model_str, _dt2d_tv(engine().camera.dist_coeffs),
+                engine().camera.model_str,
+        engine().camera.distortion_str, _dt2d_tv(engine().camera.dist_coeffs),
                 engine().fwd.camera_ids, engine().fwd.gaussian_ids,
                 engine().fwd.aabb, v_splats_s_out, v_splats_w_out, nullptr,
                 vp_opt, vb_opt, num_sh_buffer, sh_value_bits, sh_bounds_stride);
@@ -526,6 +531,7 @@ std::map<std::string, float> engine_compute_loss_backward(
         depth_normal = _pool_tv(PoolSlot::EngDepthNormal, C, H, W, 3);
         depth_to_normal_forward(
             engine().camera.model_str,
+        engine().camera.distortion_str,
             _dv_tv(engine().camera.intrins),
             _dt2d_tv(engine().camera.dist_coeffs),
             is_ray_depth,
@@ -552,6 +558,7 @@ std::map<std::string, float> engine_compute_loss_backward(
             median_normal = _pool_tv(PoolSlot::EngMedianNormal, C, H, W, 3);
             depth_to_normal_forward(
                 engine().camera.model_str,
+        engine().camera.distortion_str,
                 _dv_tv(engine().camera.intrins),
                 _dt2d_tv(engine().camera.dist_coeffs),
                 is_ray_depth,
@@ -781,6 +788,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     if (compute_depth_normal) {
         depth_to_normal_backward(
             engine().camera.model_str,
+        engine().camera.distortion_str,
             _dv_tv(engine().camera.intrins),
             _dt2d_tv(engine().camera.dist_coeffs),
             is_ray_depth,
@@ -795,6 +803,7 @@ std::map<std::string, float> engine_compute_loss_backward(
     if (has_median && median_normal_active) {
         depth_to_normal_backward(
             engine().camera.model_str,
+        engine().camera.distortion_str,
             _dv_tv(engine().camera.intrins),
             _dt2d_tv(engine().camera.dist_coeffs),
             is_ray_depth,

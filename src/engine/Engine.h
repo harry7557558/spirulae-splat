@@ -60,6 +60,7 @@ void set_camera_params(
     int width,
     int height,
     std::string camera_model,
+    std::string distortion,
     TorchTensorView viewmats,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs
@@ -92,6 +93,7 @@ void set_training_data(
 // gt_depth / gt_normal to disable those.
 void set_training_data_warped(
     std::string  input_model_name,    // "FISHEYE" / "EQUISOLID" / "EQUIRECTANGULAR"
+    std::string  input_distortion,
     int B_in, int in_H, int in_W,
     int K, int out_H, int out_W,
     TorchTensorView gt_rgb,           // [B_in, in_H, in_W, 3] byte
@@ -103,7 +105,9 @@ void set_training_data_warped(
     int normal_in_H, int normal_in_W,
     bool input_depth_is_ray_depth,    // interpretation of the wide GT depth
     TorchTensorView input_intrins,    // [B_in, 4] float
-    TorchTensorView input_dist_coeffs,// [B_in, 10] float
+    TorchTensorView input_dist_coeffs,// [B_in, 8] float
+    TorchTensorView input_source_models,  // [B_in] int32 (nullable)
+    TorchTensorView input_source_params,  // [B_in, 16] float
     uint64_t axes_dev                 // device float ptr [K, 3, 3]
 );
 
@@ -282,7 +286,7 @@ std::map<std::string, float> engine_train_step(
     std::string primitive,
     int sh_degree,
     bool packed,
-    int width, int height, std::string camera_model,
+    int width, int height, std::string camera_model, std::string distortion,
     TorchTensorView viewmats,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
@@ -307,9 +311,12 @@ std::map<std::string, float> engine_train_step_warped(
     TorchTensorView post_intrins,
     TorchTensorView post_dist_coeffs,
     std::string input_camera_model,
+    std::string input_distortion,
     int B_in, int in_H, int in_W, int K,
     TorchTensorView input_intrins,
     TorchTensorView input_dist_coeffs,
+    TorchTensorView input_source_models,
+    TorchTensorView input_source_params,
     TorchTensorView gt_rgb_byte,
     TorchTensorView gt_alpha_byte,
     int mask_in_H, int mask_in_W,
@@ -332,6 +339,7 @@ struct HeteroSubBatch {
     int height = 0;
     int num    = 0;                       // number of cameras in this sub-batch
     std::string     camera_model;
+    std::string     distortion;
     TorchTensorView viewmats{0, 0, {}};
     TorchTensorView intrins{0, 0, {}};
     TorchTensorView dist_coeffs{0, 0, {}};
@@ -377,6 +385,7 @@ void engine_setup_data_manager(
     // Per-camera model enum value (int; cast to CameraModelType internally).
     // Mixed pinhole + fisheye datasets just produce extra index groups.
     std::vector<int32_t>      camera_models,
+    std::vector<int32_t>      camera_distortions,
     std::vector<std::string>  image_filenames,
     std::vector<std::string>  mask_filenames,
     std::vector<std::string>  depth_filenames,
@@ -397,6 +406,8 @@ void engine_setup_data_manager(
     // camera is in the dataset.
     std::vector<float>        input_intrins,
     std::vector<float>        input_dist_coeffs,
+    std::vector<int32_t>      redistort_models,
+    std::vector<float>        redistort_params,
     std::vector<int32_t>      train_indices,
     std::vector<int32_t>      val_indices);
 
@@ -555,6 +566,7 @@ void engine_blit_view(
     TorchTensorView render_depth,    // [H,W,1] float, may be null when buffer_key=="alpha"
     TorchTensorView render_alpha,    // [H,W,1] float
     int             view_camera_model,
+    std::string     distortion,
     TorchTensorView view_intrins,    // [1,4]   float
     TorchTensorView view_viewmat,    // [4,4]   float
     TorchTensorView view_dist_coeffs,

@@ -357,7 +357,7 @@ void SplatViewer::run(std::string path) {
             // control, because there are none to show. What the call is
             // really for is the state the axes/grid overlay lives in.
             std::vector<float> intrins{32, 32, 32, 32};
-            std::vector<float> dist((size_t)10, 0.0f);
+            std::vector<float> dist((size_t)kCameraDistortionParams, 0.0f);
             std::vector<float> c2w{1, 0, 0, center[0],
                                    0, 1, 0, center[1],
                                    0, 0, 1, center[2]};
@@ -367,7 +367,7 @@ void SplatViewer::run(std::string path) {
                                        (uint32_t)sizeof(int32_t), std::move(shape)};
             };
             engine_viewer_init(tvi(models_i, {1}), tv(intrins, {1, 4}),
-                               tv(dist, {1, 10}), tv(c2w, {1, 3, 4}),
+                               tv(dist, {1, kCameraDistortionParams}), tv(c2w, {1, 3, 4}),
                                tvi(w_i, {1}), tvi(h_i, {1}),
                                /*camera_size=*/radius * 1e-3f);
             // A file has no grid extent of its own; the model's does, and it

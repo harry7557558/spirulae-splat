@@ -51,7 +51,8 @@ launch_projection_packed_vk(
     const int max_sh_degree,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string& camera_model, const TorchTensorView& dist_coeffs,
+    const std::string& camera_model, const std::string& distortion,
+    const TorchTensorView& dist_coeffs,
     DeviceVector<float>& radii,
     const std::optional<TorchTensorView>& sh_value_packed,
     const std::optional<TorchTensorView>& sh_value_bounds,
@@ -65,9 +66,7 @@ launch_projection_packed_vk(
                          sh_value_bits, sh_bounds_stride, &q_packed,
                          &q_bounds, &q_stride);
 
-    CameraModelType cam = cmt(camera_model);
-    if ((int)cam < 0 || (int)cam > 3)
-        throw std::runtime_error("Unsupported camera model");
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
 
     Vanilla3DGS<0>::WorldBuffer wb(in_splats);
     int sh_degree = wb.sh_degree();
@@ -101,10 +100,11 @@ launch_projection_packed_vk(
     mp.wgs_per_row = per_row;
 
     // Spec IDs: 0 = camera model, 1 = SH degree (unused by the mask),
-    // 2 = antialiased, 3 = SH value bits (unused by the mask), 4 = eval3d.
-    backend::vk::SpecList spec{(uint32_t)cam, (uint32_t)sh_degree,
+    // 2 = antialiased, 3 = SH value bits (unused by the mask), 4 = eval3d,
+    // 5 = distortion tier.
+    backend::vk::SpecList spec{cd.cam, (uint32_t)sh_degree,
                                antialiased ? 1u : 0u, spec_bits,
-                               eval3d ? 1u : 0u};
+                               eval3d ? 1u : 0u, cd.dist};
     vkk::dispatch("projection_fwd.projection_packed_mask", spec, per_row,
                   rows, 1, &mp, sizeof(mp));
 
@@ -197,6 +197,7 @@ std::tuple<                                                                  \
     const uint32_t image_width,                                              \
     const uint32_t image_height,                                             \
     const std::string camera_model,                                          \
+    const std::string distortion,                                            \
     const TorchTensorView dist_coeffs,                                       \
     DeviceVector<float> radii,                                               \
     const std::optional<TorchTensorView> sh_value_packed,                    \
@@ -208,7 +209,7 @@ std::tuple<                                                                  \
     return launch_projection_packed_vk(                                      \
         eval3d, antialiased, num_splats, in_splats, max_sh_degree,           \
         viewmats, intrins, image_width, image_height, camera_model,          \
-        dist_coeffs, radii, sh_value_packed, sh_value_bounds,                \
+        distortion, dist_coeffs, radii, sh_value_packed, sh_value_bounds,    \
         num_sh_buffer, sh_value_bits, sh_bounds_stride);                     \
 }
 

@@ -216,7 +216,7 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
     std::string primitive,
     int sh_degree,
     bool packed,
-    int width, int height, std::string camera_model,
+    int width, int height, std::string camera_model, std::string distortion,
     TorchTensorView viewmats,      // [B, 4, 4]
     TorchTensorView intrins,       // [B, 4]
     TorchTensorView dist_coeffs,   // [B, K]
@@ -244,7 +244,7 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
     // Single-camera batch -> no point splitting; fall through to the
     // standard path with grad_scale = 1.
     if (B == 1) {
-        set_camera_params(width, height, camera_model,
+        set_camera_params(width, height, camera_model, distortion,
                           viewmats, intrins, dist_coeffs);
         set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha,
                           cfg.loss.input_depth_is_ray_depth);
@@ -305,7 +305,7 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
         TorchTensorView aph_k = _slice_tv_first_dim(gt_alpha,    k);
         TorchTensorView bgi_k = _slice_tv_first_dim(bilagrid_cam_indices, k);
 
-        set_camera_params(width, height, camera_model, vmt_k, itr_k, dst_k);
+        set_camera_params(width, height, camera_model, distortion, vmt_k, itr_k, dst_k);
         set_training_data(rgb_k, dep_k, nrm_k, aph_k,
                           cfg.loss.input_depth_is_ray_depth);
 
@@ -443,7 +443,7 @@ std::map<std::string, float> engine_train_step_hetero(
             TorchTensorView aph_c = _slice_tv_first_dim(s.gt_alpha,    c);
             TorchTensorView bgi_c = _slice_tv_first_dim(s.bilagrid_cam_indices, c);
 
-            set_camera_params(s.width, s.height, s.camera_model,
+            set_camera_params(s.width, s.height, s.camera_model, s.distortion,
                               vmt_c, itr_c, dst_c);
             set_training_data(rgb_c, dep_c, nrm_c, aph_c,
                               cfg.loss.input_depth_is_ray_depth);
@@ -495,7 +495,7 @@ std::map<std::string, float> engine_train_step(
     std::string primitive,
     int sh_degree,
     bool packed,
-    int width, int height, std::string camera_model,
+    int width, int height, std::string camera_model, std::string distortion,
     TorchTensorView viewmats,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
@@ -509,12 +509,12 @@ std::map<std::string, float> engine_train_step(
     if (cfg.optim.split_batch) {
         return _engine_train_step_split_one_per_camera(
             step, max_steps, std::move(primitive), sh_degree, packed,
-            width, height, std::move(camera_model),
+            width, height, std::move(camera_model), std::move(distortion),
             viewmats, intrins, dist_coeffs,
             gt_rgb, gt_depth, gt_normal, gt_alpha,
             bilagrid_cam_indices, cfg);
     }
-    set_camera_params(width, height, camera_model, viewmats, intrins, dist_coeffs);
+    set_camera_params(width, height, camera_model, distortion, viewmats, intrins, dist_coeffs);
     set_training_data(gt_rgb, gt_depth, gt_normal, gt_alpha,
                       cfg.loss.input_depth_is_ray_depth);
     return _engine_train_step_after_setup(
@@ -539,10 +539,13 @@ static std::map<std::string, float> _engine_train_step_split_warped(
     TorchTensorView post_intrins,
     TorchTensorView post_dist_coeffs,
     std::string input_camera_model,
+    std::string input_distortion,
     int B_in, int in_H, int in_W,
     int K,
     TorchTensorView input_intrins,
     TorchTensorView input_dist_coeffs,
+    TorchTensorView input_source_models,
+    TorchTensorView input_source_params,
     TorchTensorView gt_rgb_byte,
     TorchTensorView gt_alpha_byte,
     int mask_in_H, int mask_in_W,
@@ -564,20 +567,27 @@ static std::map<std::string, float> _engine_train_step_split_warped(
     if (K <= 0)
         throw std::runtime_error("split_batch (warped): K must be positive");
 
+    // Cubemap faces are canonical pinhole. K == 1 is the re-distort path,
+    // whose destination is the camera the parser fitted -- the input one.
+    const std::string post_model = K > 1 ? "PINHOLE" : input_camera_model;
+    const std::string post_dist  = K > 1 ? "NONE"    : input_distortion;
+
     // Single input image (B_in == 1) -> nothing to split; route through the
     // standard warped path so K cams are processed in one shot. grad_scale
     // stays at 1.0 (the normal post-batch normalization is correct).
     if (B_in == 1) {
-        set_camera_params(out_W, out_H, "PINHOLE",
+        set_camera_params(out_W, out_H, post_model, post_dist,
                           post_viewmats, post_intrins, post_dist_coeffs);
-        set_training_data_warped(input_camera_model,
+        set_training_data_warped(input_camera_model, input_distortion,
                                  B_in, in_H, in_W, K, out_H, out_W,
                                  gt_rgb_byte, gt_alpha_byte,
                                  mask_in_H, mask_in_W,
                                  gt_depth_byte, depth_in_H, depth_in_W,
                                  gt_normal_byte, normal_in_H, normal_in_W,
                                  cfg.loss.input_depth_is_ray_depth,
-                                 input_intrins, input_dist_coeffs, axes_dev);
+                                 input_intrins, input_dist_coeffs,
+                                 input_source_models, input_source_params,
+                                 axes_dev);
         return _engine_train_step_after_setup(
             step, max_steps, std::move(primitive), sh_degree, packed,
             bilagrid_cam_indices, cfg);
@@ -613,6 +623,10 @@ static std::map<std::string, float> _engine_train_step_split_warped(
         TorchTensorView nrm_k   = _slice_tv_first_dim(gt_normal_byte,     k);
         TorchTensorView i_itr_k = _slice_tv_first_dim(input_intrins,      k);
         TorchTensorView i_dst_k = _slice_tv_first_dim(input_dist_coeffs,  k);
+        TorchTensorView i_src_m_k = std::get<0>(input_source_models) == 0
+            ? input_source_models : _slice_tv_first_dim(input_source_models, k);
+        TorchTensorView i_src_p_k = std::get<0>(input_source_params) == 0
+            ? input_source_params : _slice_tv_first_dim(input_source_params, k);
 
         // Per-input-image POST-split slices (B_post axis, K consecutive rows
         // per input).
@@ -621,15 +635,17 @@ static std::map<std::string, float> _engine_train_step_split_warped(
         TorchTensorView p_dst_k = _slice_tv_range_first_dim(post_dist_coeffs,  k * K, K);
         TorchTensorView bgi_k   = _slice_tv_range_first_dim(bilagrid_cam_indices, k * K, K);
 
-        set_camera_params(out_W, out_H, "PINHOLE", p_vmt_k, p_itr_k, p_dst_k);
-        set_training_data_warped(input_camera_model,
+        set_camera_params(out_W, out_H, post_model, post_dist,
+                          p_vmt_k, p_itr_k, p_dst_k);
+        set_training_data_warped(input_camera_model, input_distortion,
                                  /*B_in=*/1, in_H, in_W, K, out_H, out_W,
                                  rgb_k, mask_k,
                                  mask_in_H, mask_in_W,
                                  dep_k, depth_in_H, depth_in_W,
                                  nrm_k, normal_in_H, normal_in_W,
                                  cfg.loss.input_depth_is_ray_depth,
-                                 i_itr_k, i_dst_k, axes_dev);
+                                 i_itr_k, i_dst_k, i_src_m_k, i_src_p_k,
+                                 axes_dev);
 
         _set_cur_cam_indices(bgi_k);
         engine_viewer_capture_thumbnails(bgi_k);
@@ -681,13 +697,16 @@ std::map<std::string, float> engine_train_step_warped(
     int out_W, int out_H,
     TorchTensorView post_viewmats,        // [B*K, 4, 4]
     TorchTensorView post_intrins,         // [B*K, 4]
-    TorchTensorView post_dist_coeffs,     // [B*K, 10]
+    TorchTensorView post_dist_coeffs,     // [B*K, 8]
     // Warp inputs (operate on INPUT shape).
     std::string input_camera_model,       // "FISHEYE" / "EQUISOLID" / "EQUIRECTANGULAR"
+    std::string input_distortion,
     int B_in, int in_H, int in_W,
     int K,
     TorchTensorView input_intrins,        // [B_in, 4]
-    TorchTensorView input_dist_coeffs,    // [B_in, 10]
+    TorchTensorView input_dist_coeffs,    // [B_in, 8]
+    TorchTensorView input_source_models,  // [B_in] int32 (nullable)
+    TorchTensorView input_source_params,  // [B_in, 16]
     TorchTensorView gt_rgb_byte,          // [B_in, in_H, in_W, 3] u8/u16
     TorchTensorView gt_alpha_byte,        // [B_in, mask_in_H, mask_in_W, 1] u8 (nullable)
     int mask_in_H, int mask_in_W,
@@ -704,25 +723,31 @@ std::map<std::string, float> engine_train_step_warped(
         return _engine_train_step_split_warped(
             step, max_steps, std::move(primitive), sh_degree, packed,
             out_W, out_H, post_viewmats, post_intrins, post_dist_coeffs,
-            std::move(input_camera_model), B_in, in_H, in_W, K,
+            std::move(input_camera_model), std::move(input_distortion), B_in, in_H, in_W, K,
             input_intrins, input_dist_coeffs,
+            input_source_models, input_source_params,
             gt_rgb_byte, gt_alpha_byte, mask_in_H, mask_in_W,
             gt_depth_byte, depth_in_H, depth_in_W,
             gt_normal_byte, normal_in_H, normal_in_W,
             axes_dev, bilagrid_cam_indices, cfg);
     }
-    // Camera table is set up at POST-split resolution + PINHOLE.
-    set_camera_params(out_W, out_H, "PINHOLE",
+    // Cubemap faces are canonical pinhole; K == 1 (re-distort) keeps the
+    // camera the parser fitted, which is the input one.
+    set_camera_params(out_W, out_H,
+                      K > 1 ? "PINHOLE" : input_camera_model,
+                      K > 1 ? "NONE"    : input_distortion,
                       post_viewmats, post_intrins, post_dist_coeffs);
     // GT is warped on the fly into a float [B*K, out_H, out_W, 3] buffer.
-    set_training_data_warped(input_camera_model,
+    set_training_data_warped(input_camera_model, input_distortion,
                              B_in, in_H, in_W, K, out_H, out_W,
                              gt_rgb_byte, gt_alpha_byte,
                              mask_in_H, mask_in_W,
                              gt_depth_byte, depth_in_H, depth_in_W,
                              gt_normal_byte, normal_in_H, normal_in_W,
                              cfg.loss.input_depth_is_ray_depth,
-                             input_intrins, input_dist_coeffs, axes_dev);
+                             input_intrins, input_dist_coeffs,
+                                 input_source_models, input_source_params,
+                                 axes_dev);
     return _engine_train_step_after_setup(
         step, max_steps, std::move(primitive), sh_degree, packed,
         bilagrid_cam_indices, cfg);

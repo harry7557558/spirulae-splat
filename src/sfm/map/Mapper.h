@@ -3567,7 +3567,10 @@ private:
                 c.setFocal(d.focal());
                 fixed++;
             }
-            for (double* k : {&c.k1, &c.k2, &c.k3, &c.k4, &c.p1, &c.p2, &c.sx1, &c.sy1})
+            // FullOpenCV's k4..k6 are the rational denominator, but in the same
+            // normalized-radius units as k1..k3, so one threshold covers both.
+            for (double* k : {&c.k1, &c.k2, &c.k3, &c.k4, &c.k5, &c.k6, &c.p1, &c.p2,
+                              &c.sx1, &c.sy1})
                 if (std::fabs(*k) > opt_.max_extra_param) { *k = 0; fixed++; }
             // The mapper never has evidence to move the principal point far
             // from the center (COLMAP does not refine it at all during

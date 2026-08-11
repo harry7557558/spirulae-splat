@@ -26,6 +26,7 @@
 void engine_setup_data_manager(
     DataManagerConfig         cfg,
     std::vector<int32_t>      camera_models,
+    std::vector<int32_t>      camera_distortions,
     std::vector<std::string>  image_filenames,
     std::vector<std::string>  mask_filenames,
     std::vector<std::string>  depth_filenames,
@@ -39,6 +40,8 @@ void engine_setup_data_manager(
     std::vector<float>        dist_coeffs,
     std::vector<float>        input_intrins,
     std::vector<float>        input_dist_coeffs,
+    std::vector<int32_t>      redistort_models,
+    std::vector<float>        redistort_params,
     std::vector<int32_t>      train_indices,
     std::vector<int32_t>      val_indices)
 {
@@ -47,7 +50,7 @@ void engine_setup_data_manager(
     engine().dm.reset();
 
     engine().dm = std::make_unique<DataManager>(
-        std::move(cfg), std::move(camera_models),
+        std::move(cfg), std::move(camera_models), std::move(camera_distortions),
         std::move(image_filenames),  std::move(mask_filenames),
         std::move(depth_filenames),  std::move(normal_filenames),
         std::move(widths),           std::move(heights),
@@ -55,6 +58,7 @@ void engine_setup_data_manager(
         std::move(viewmats),         std::move(intrins),
         std::move(dist_coeffs),
         std::move(input_intrins),    std::move(input_dist_coeffs),
+        std::move(redistort_models), std::move(redistort_params),
         std::move(train_indices),    std::move(val_indices));
 }
 
@@ -148,13 +152,14 @@ std::map<std::string, float> engine_train_step_managed(
         TorchTensorView bilagrid_cam_indices(
             (uint64_t)_bg_idx_buf.data(), 4, {(int64_t)b.num, 1LL});
 
-        if (b.K <= 1) {
+        if (b.K <= 1 && b.input_source_models.empty()) {
             // Standard path: GT is already at engine shape, no warp needed.
             return engine_train_step(
                 step, max_steps,
                 std::move(primitive), sh_degree, packed,
                 (int)b.width, (int)b.height,
                 camera_model_to_string(b.model),
+                camera_distortion_to_string(b.distortion),
                 b.viewmats_view, b.intrins_view, b.dist_coeffs_view,
                 b.rgb_view, b.depth_view, b.normal_view, b.mask_view,
                 bilagrid_cam_indices,
@@ -170,8 +175,10 @@ std::map<std::string, float> engine_train_step_managed(
             (int)b.width, (int)b.height,
             b.viewmats_view, b.intrins_view, b.dist_coeffs_view,
             camera_model_to_string(b.input_model),
+            camera_distortion_to_string(b.input_distortion),
             b.input_num, b.input_height, b.input_width, b.K,
             b.input_intrins_view, b.input_dist_coeffs_view,
+            b.input_source_models_view, b.input_source_params_view,
             b.rgb_view, b.mask_view,
             b.mask_height, b.mask_width,
             b.depth_view, b.depth_height, b.depth_width,
@@ -232,19 +239,25 @@ static TorchTensorView _tv_null() { return {0, 0, {}}; }
 // mask and warp training used, and neither wants loss, backward or optim.
 static void _install_and_forward(const DecodedBatch& b, std::string primitive,
                                  int sh_degree, bool packed) {
-    if (b.K <= 1) {
+    if (b.K <= 1 && b.input_source_models.empty()) {
         set_camera_params((int)b.width, (int)b.height,
                           camera_model_to_string(b.model),
+                          camera_distortion_to_string(b.distortion),
                           b.viewmats_view, b.intrins_view, b.dist_coeffs_view);
         // No depth/normal: both callers compare RGB only, and skipping them
         // avoids the linear->ray depth conversion pass.
         set_training_data(b.rgb_view, _tv_null(), _tv_null(),
                           b.mask_view, true);
     } else {
-        set_camera_params((int)b.width, (int)b.height, "PINHOLE",
+        // b.model / b.distortion are already PINHOLE / NONE when K > 1; at
+        // K == 1 (re-distort) they are the camera the parser fitted.
+        set_camera_params((int)b.width, (int)b.height,
+                          camera_model_to_string(b.model),
+                          camera_distortion_to_string(b.distortion),
                           b.viewmats_view, b.intrins_view, b.dist_coeffs_view);
         set_training_data_warped(
             camera_model_to_string(b.input_model),
+            camera_distortion_to_string(b.input_distortion),
             b.input_num, (int)b.input_height, (int)b.input_width,
             b.K, (int)b.height, (int)b.width,
             b.rgb_view, b.mask_view, (int)b.mask_height, (int)b.mask_width,
@@ -252,6 +265,7 @@ static void _install_and_forward(const DecodedBatch& b, std::string primitive,
             _tv_null(), 0, 0,
             true,
             b.input_intrins_view, b.input_dist_coeffs_view,
+            b.input_source_models_view, b.input_source_params_view,
             (uint64_t)b.axes_dev);
     }
 

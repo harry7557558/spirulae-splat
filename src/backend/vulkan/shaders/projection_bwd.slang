@@ -14,6 +14,7 @@
 //   kViewmatGrad  = 1: accumulate v_R / v_t into v_viewmats (per-thread CAS
 //                   adds -- CUDA's labeled-partition warp reduce is a perf
 //                   shortcut with identical, order-nondeterministic sums)
+//   kDistortion   = CameraDistortionType (0..3), declared last
 
 #define CudaDeviceExport ForceInline
 #include "int64_compat.slang"
@@ -43,7 +44,7 @@ struct ProjectionBwd3dgsParams {
     // cameras
     float* viewmats;     // [C,16] row-major
     float4* intrins;     // [C]
-    float* dist_coeffs;  // [C,10] or fallback zeros
+    float* dist_coeffs;  // [C,8] or fallback zeros
     // packed intersection ids (kPacked; fallback otherwise)
     int* camera_ids;    // [nnz]
     int* gaussian_ids;  // [nnz]
@@ -76,7 +77,8 @@ struct ProjectionBwd3dgsParams {
     uint32_t num_sh_buffer;
 };
 
-void _pb_run_3dgs(ProjectionBwd3dgsParams p, uint idx) {
+void _pb_run_3dgs<let cam : CameraModelType, D : ICameraDistortion>(
+    ProjectionBwd3dgsParams p, uint idx) {
     uint cid, gid;
     if (kPacked != 0) {
         cid = uint(p.camera_ids[idx]);
@@ -89,7 +91,8 @@ void _pb_run_3dgs(ProjectionBwd3dgsParams p, uint idx) {
         gid = idx % p.N;
     }
 
-    PbCamera cam = pb_load_camera(p.viewmats, p.intrins, p.dist_coeffs, cid);
+    PbCamera<D> c = pb_load_camera<D>(p.viewmats, p.intrins, p.dist_coeffs,
+                                      cid);
     PbSplat s = pb_load_splat(p.means, p.quats, p.scales, p.opacities,
                               p.features_dc, gid);
 
@@ -102,10 +105,11 @@ void _pb_run_3dgs(ProjectionBwd3dgsParams p, uint idx) {
                           p.vs_rgb[3 * idx + 2]);
 
     PbGrads g = pb_grads_zero();
-    pb_vjp_2d(s, cam, p.width, p.height, v_xy, v_depth, v_conic, v_opac, g);
+    pb_vjp_2d<cam, D>(s, c, p.width, p.height, v_xy, v_depth, v_conic, v_opac,
+                      g);
     gindex_t qbase = (gindex_t)3 * (gindex_t)p.num_sh_buffer * (gindex_t)gid;
-    pb_sh_vjp(s, cam, p.features_sh + gid * p.sh_stride_src, p.sh_packed,
-              p.sh_bounds, qbase, i64mem_get(p.sh_bounds_stride), v_rgb, g);
+    pb_sh_vjp<D>(s, c, p.features_sh + gid * p.sh_stride_src, p.sh_packed,
+                 p.sh_bounds, qbase, i64mem_get(p.sh_bounds_stride), v_rgb, g);
 
     pb_add3(p.vw_means + 3 * gid, g.v_mean);
     pb_add4(p.vw_quats + 4 * gid, g.v_quat);
@@ -118,6 +122,8 @@ void _pb_run_3dgs(ProjectionBwd3dgsParams p, uint idx) {
         pb_scatter_viewmat(p.v_viewmats, cid, g.v_R, g.v_t);
 }
 
+#define _pb_call_2d(M, D) _pb_run_3dgs<M, D>(p, idx)
+
 [shader("compute")]
 [numthreads(128, 1, 1)]
 void projection_bwd_3dgs(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -126,8 +132,9 @@ void projection_bwd_3dgs(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint idx = (wg.y * p.wgs_per_row + wg.x) * 128 + tid;
     uint total = (kPacked != 0) ? p.N : p.C * p.N;
     if (idx >= total) return;
-    _pb_run_3dgs(p, idx);
+    SS_DISPATCH_CAM_DIST(_pb_call_2d)
 }
+#undef _pb_call_2d
 
 // ---------------------------------------------------------------------------
 // 3DGUT: ScreenBuffer grads {scale, opacity, rgb}.
@@ -171,7 +178,8 @@ struct ProjectionBwd3dgutParams {
     uint32_t num_sh_buffer;
 };
 
-void _pb_run_3dgut(ProjectionBwd3dgutParams p, uint idx) {
+void _pb_run_3dgut<let cam : CameraModelType, D : ICameraDistortion>(
+    ProjectionBwd3dgutParams p, uint idx) {
     uint cid, gid;
     if (kPacked != 0) {
         cid = uint(p.camera_ids[idx]);
@@ -184,7 +192,8 @@ void _pb_run_3dgut(ProjectionBwd3dgutParams p, uint idx) {
         gid = idx % p.N;
     }
 
-    PbCamera cam = pb_load_camera(p.viewmats, p.intrins, p.dist_coeffs, cid);
+    PbCamera<D> c = pb_load_camera<D>(p.viewmats, p.intrins, p.dist_coeffs,
+                                      cid);
     PbSplat s = pb_load_splat(p.means, p.quats, p.scales, p.opacities,
                               p.features_dc, gid);
 
@@ -195,10 +204,10 @@ void _pb_run_3dgut(ProjectionBwd3dgutParams p, uint idx) {
                           p.vs_rgb[3 * idx + 2]);
 
     PbGrads g = pb_grads_zero();
-    pb_vjp_3dgut(s, cam, p.width, p.height, v_sscale, v_sopac, g);
+    pb_vjp_3dgut<cam, D>(s, c, p.width, p.height, v_sscale, v_sopac, g);
     gindex_t qbase = (gindex_t)3 * (gindex_t)p.num_sh_buffer * (gindex_t)gid;
-    pb_sh_vjp(s, cam, p.features_sh + gid * p.sh_stride_src, p.sh_packed,
-              p.sh_bounds, qbase, i64mem_get(p.sh_bounds_stride), v_rgb, g);
+    pb_sh_vjp<D>(s, c, p.features_sh + gid * p.sh_stride_src, p.sh_packed,
+                 p.sh_bounds, qbase, i64mem_get(p.sh_bounds_stride), v_rgb, g);
 
     pb_add3(p.vw_means + 3 * gid, g.v_mean);
     pb_add4(p.vw_quats + 4 * gid, g.v_quat);
@@ -211,6 +220,8 @@ void _pb_run_3dgut(ProjectionBwd3dgutParams p, uint idx) {
         pb_scatter_viewmat(p.v_viewmats, cid, g.v_R, g.v_t);
 }
 
+#define _pb_call_3d(M, D) _pb_run_3dgut<M, D>(p, idx)
+
 [shader("compute")]
 [numthreads(128, 1, 1)]
 void projection_bwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -219,5 +230,10 @@ void projection_bwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint idx = (wg.y * p.wgs_per_row + wg.x) * 128 + tid;
     uint total = (kPacked != 0) ? p.N : p.C * p.N;
     if (idx >= total) return;
-    _pb_run_3dgut(p, idx);
+    SS_DISPATCH_CAM_DIST(_pb_call_3d)
 }
+#undef _pb_call_3d
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

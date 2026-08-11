@@ -1,5 +1,7 @@
 #include "kernels/optim/FusedProjectionBwdOptim.cuh"
 
+#include "kernels/projection/CameraVariants.cuh"
+
 #include <core/Common.cuh>
 
 #include <cooperative_groups.h>
@@ -11,6 +13,7 @@ namespace cg = cooperative_groups;
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
+    CameraDistortionType distortion,
     const bool use_scale_agnostic_mean,
     const bool color_trust_linear,
     const int  LEVEL
@@ -110,6 +113,7 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
     const uint32_t image_width,
     const uint32_t image_height,
     const CameraModelType camera_model,
+    const CameraDistortionType distortion,
     const TorchTensorView dist_coeffs,
     // fwd outputs
     DeviceVector<int32_t> camera_ids,
@@ -238,16 +242,14 @@ inline void launch_fused_projection_bwd_optimizer_3dgs_kernel(
             scalar_step, steps_ptr \
         )
 
-    if (camera_model == CameraModelType::PINHOLE)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::FISHEYE)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::EQUISOLID)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::EQUIRECTANGULAR)
-        fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, CameraModelType::EQUIRECTANGULAR, use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS;
-    else
-        throw std::runtime_error("Unsupported camera model");
+    #define _DISPATCH(M, D) \
+        if (camera_model == CameraModelType::M && distortion == CameraDistortionType::D) \
+            fused_projection_bwd_optimizer_3dgs_kernel_wrapper<SplatPrimitive, \
+                CameraModelType::M, CameraDistortionType::D, \
+                use_scale_agnostic_mean, color_trust_linear, LEVEL> _LAUNCH_ARGS; else
+    SS_FOR_EACH_CAMERA_VARIANT(_DISPATCH)
+        throw std::runtime_error("Unsupported camera model / distortion tier");
+    #undef _DISPATCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
@@ -277,6 +279,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     // fwd outputs
     const DeviceVector<int32_t> camera_ids,
@@ -335,6 +338,7 @@ static inline void _fused_projection_bwd_optimizer_dispatch(
         image_width, \
         image_height, \
         cmt(camera_model), \
+        cdt(distortion), \
         dist_coeffs, \
         camera_ids, \
         gaussian_ids, \
@@ -424,6 +428,7 @@ void fused_projection_bwd_optimizer_3dgs(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -461,7 +466,7 @@ void fused_projection_bwd_optimizer_3dgs(
 ) {
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGS>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
-        camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
+        camera_model, distortion, dist_coeffs, camera_ids, gaussian_ids, aabb,
         v_splats_world, v_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
@@ -485,6 +490,7 @@ void fused_projection_bwd_optimizer_mip(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -522,7 +528,7 @@ void fused_projection_bwd_optimizer_mip(
 ) {
     _fused_projection_bwd_optimizer_dispatch<MipSplatting>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
-        camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
+        camera_model, distortion, dist_coeffs, camera_ids, gaussian_ids, aabb,
         v_splats_world, v_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,
@@ -546,6 +552,7 @@ void fused_projection_bwd_optimizer_3dgut(
     const uint32_t image_width,
     const uint32_t image_height,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     const DeviceVector<int32_t> camera_ids,
     const DeviceVector<int32_t> gaussian_ids,
@@ -583,7 +590,7 @@ void fused_projection_bwd_optimizer_3dgut(
 ) {
     _fused_projection_bwd_optimizer_dispatch<Vanilla3DGUT>(
         num_splats, max_sh_degree, splats_world, viewmats, intrins, image_width, image_height,
-        camera_model, dist_coeffs, camera_ids, gaussian_ids, aabb,
+        camera_model, distortion, dist_coeffs, camera_ids, gaussian_ids, aabb,
         v_splats_world, v_splats_screen,
         g1_splats_world, g2_splats_world, sh_packed, sh_quant_bounds,
         sh_value_packed, sh_value_bounds,

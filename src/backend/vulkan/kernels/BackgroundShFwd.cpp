@@ -44,14 +44,6 @@ int64_t _batch_count(const TorchTensorView& t, int64_t per_item) {
     return n / per_item;
 }
 
-int _camera_model_int(const std::string& camera_model) {
-    auto cm = cmt(camera_model);
-    if (cm == (CameraModelType)-1)
-        throw std::runtime_error("Camera model " + camera_model +
-                                 " is not supported for skybox");
-    return (int)cm;
-}
-
 }  // namespace
 
 /* API definitions matching kernels/background/BackgroundSphericalHarmonics.cuh */
@@ -60,6 +52,7 @@ void render_background_sh_forward(
     int w,
     int h,
     std::string camera_model,
+    std::string distortion,
     int sh_degree,
     TorchTensorView viewmats,
     TorchTensorView intrins,
@@ -71,10 +64,7 @@ void render_background_sh_forward(
         throw std::runtime_error(
             "render_background_sh_forward: sh_degree must be in [0, 4]");
 
-    CameraModelType cam = cmt(camera_model);
-    if ((int)cam < 0 || (int)cam > 3)
-        throw std::runtime_error("Camera model " + camera_model +
-                                 " is not supported for skybox");
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
 
     int64_t b = _batch_count(out_color, (int64_t)h * w * 3);
     if (b * h * w == 0) return;
@@ -91,9 +81,9 @@ void render_background_sh_forward(
     p.width = (uint32_t)w;
     p.height = (uint32_t)h;
     p.B = (uint32_t)b;
-    p.camera_model = (int32_t)cam;
+    p.camera_model = (int32_t)cd.cam;
 
-    backend::vk::SpecList spec{(uint32_t)sh_degree};
+    backend::vk::SpecList spec{(uint32_t)sh_degree, cd.dist};
     vkk::dispatch("background_sh.background_sh_fwd", spec,
                   (uint32_t)((w + 127) / 128), (uint32_t)h, (uint32_t)b, &p,
                   sizeof(p));
@@ -106,6 +96,7 @@ void render_background_sh_backward(
     int w,
     int h,
     std::string camera_model,
+    std::string distortion,
     int sh_degree,
     TorchTensorView viewmats,
     TorchTensorView intrins,
@@ -118,6 +109,7 @@ void render_background_sh_backward(
     if (sh_degree < 0 || sh_degree > 4)
         throw std::runtime_error(
             "render_background_sh_backward: sh_degree must be in [0, 4]");
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
     int64_t b = _batch_count(out_color, (int64_t)h * w * 3);
     if (b * h * w == 0) return;
     if (_batch_count(viewmats, 16) != b || _batch_count(intrins, 4) != b)
@@ -143,10 +135,10 @@ void render_background_sh_backward(
     p.width = (uint32_t)w;
     p.height = (uint32_t)h;
     p.B = (uint32_t)b;
-    p.camera_model = _camera_model_int(camera_model);
+    p.camera_model = (int32_t)cd.cam;
     vkk::dispatch("background_sh.background_sh_bwd",
-                  backend::vk::SpecList{(uint32_t)sh_degree}, kBgBwdWgs, 1, 1,
-                  &p, sizeof(p));
+                  backend::vk::SpecList{(uint32_t)sh_degree, cd.dist},
+                  kBgBwdWgs, 1, 1, &p, sizeof(p));
 
     BackgroundShBwdReduceParams r{};
     r.scratch = (uint64_t)scratch;

@@ -15,6 +15,7 @@ void engine_blit_view(
     TorchTensorView render_depth,
     TorchTensorView render_alpha,
     int             view_camera_model,
+    std::string     distortion,
     TorchTensorView view_intrins,
     TorchTensorView view_viewmat,
     TorchTensorView view_dist_coeffs,
@@ -32,6 +33,7 @@ void blit_train_cameras_tensor(
     TorchTensorView render_depths,    // [H, W, 1] float32
     TorchTensorView render_alphas,    // [H, W, 1] float32
     const int view_camera_model,
+    std::string distortion,
     TorchTensorView view_intrins,     // [1, 4] or [4] float32
     TorchTensorView view_viewmat,     // [4, 4] float32
     TorchTensorView view_dist_coeffs,

@@ -1,5 +1,7 @@
 #include "kernels/raster/RasterizationEval3DBwd.cuh"
 
+#include "kernels/projection/CameraVariants.cuh"
+
 #include <core/Common.cuh>
 
 
@@ -7,6 +9,7 @@
 template <
     typename SplatPrimitive,
     CameraModelType camera_model,
+    CameraDistortionType distortion,
     DistortionType dist_type,
     bool output_viewmat_grad,
     bool output_accum_weight,
@@ -61,6 +64,7 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
     TorchTensorView viewmats,              // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const CameraModelType camera_model,
+    const CameraDistortionType distortion,
     const TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size
@@ -123,40 +127,20 @@ inline void launch_rasterize_to_pixels_eval3d_bwd_kernel(
             v_viewmats.data_ptr() \
         )
 
-    if (camera_model == CameraModelType::PINHOLE) {
-        if (v_viewmats.data_ptr() != nullptr)
-            rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::PINHOLE, dist_type, true, output_accum_weight, output_median> _LAUNCH_ARGS;
-        else
-            rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::PINHOLE, dist_type, false, output_accum_weight, output_median> _LAUNCH_ARGS;
-    }
-    else if (camera_model == CameraModelType::FISHEYE) {
-        if (v_viewmats.data_ptr() != nullptr)
-            rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::FISHEYE, dist_type, true, output_accum_weight, output_median> _LAUNCH_ARGS;
-        else
-            rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::FISHEYE, dist_type, false, output_accum_weight, output_median> _LAUNCH_ARGS;
-    }
-    else if (camera_model == CameraModelType::EQUISOLID) {
-        if (v_viewmats.data_ptr() != nullptr)
-            rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::EQUISOLID, dist_type, true, output_accum_weight, output_median> _LAUNCH_ARGS;
-        else
-            rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::EQUISOLID, dist_type, false, output_accum_weight, output_median> _LAUNCH_ARGS;
-    }
-    else if (camera_model == CameraModelType::EQUIRECTANGULAR) {
-        if (v_viewmats.data_ptr() != nullptr)
-            rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::EQUIRECTANGULAR, dist_type, true, output_accum_weight, output_median> _LAUNCH_ARGS;
-        else
-            rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive,
-                CameraModelType::EQUIRECTANGULAR, dist_type, false, output_accum_weight, output_median> _LAUNCH_ARGS;
-    }
-    else
-        throw std::runtime_error("Unsupported camera model");
+    #define _DISPATCH(M, D) \
+        if (camera_model == CameraModelType::M && distortion == CameraDistortionType::D) { \
+            if (v_viewmats.data_ptr() != nullptr) \
+                rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive, \
+                    CameraModelType::M, CameraDistortionType::D, \
+                    dist_type, true, output_accum_weight, output_median> _LAUNCH_ARGS; \
+            else \
+                rasterize_to_pixels_eval3d_bwd_kernel_wrapper<SplatPrimitive, \
+                    CameraModelType::M, CameraDistortionType::D, \
+                    dist_type, false, output_accum_weight, output_median> _LAUNCH_ARGS; \
+        } else
+    SS_FOR_EACH_CAMERA_VARIANT(_DISPATCH)
+        throw std::runtime_error("Unsupported camera model / distortion tier");
+    #undef _DISPATCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
@@ -177,6 +161,7 @@ inline std::tuple<
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const CameraModelType camera_model,
+    const CameraDistortionType distortion,
     const TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size
@@ -236,7 +221,7 @@ inline std::tuple<
     launch_rasterize_to_pixels_eval3d_bwd_kernel<SplatPrimitive, dist_type, output_accum_weight, output_median>(
         num_splats,
         splats_w, splats_s, gaussian_ids,
-        viewmats, intrins, camera_model, dist_coeffs, aabb,
+        viewmats, intrins, camera_model, distortion, dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs,
         distortion_fwd_outputs, loss_map, accum_weight_map,
@@ -269,6 +254,7 @@ inline std::tuple<
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const CameraModelType camera_model,
+    const CameraDistortionType distortion,
     const TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size
@@ -297,7 +283,7 @@ inline std::tuple<
         _rasterize_to_pixels_eval3d_bwd_tensor<SplatPrimitive, dist_type, output_accum_weight, output_median>
     (
         num_splats, splats_w, splats_s, gaussian_ids,
-        viewmats, intrins, camera_model, dist_coeffs, aabb,
+        viewmats, intrins, camera_model, distortion, dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, distortion_fwd_outputs, loss_map, accum_weight_map,
         v_render_outputs, v_render_Ts, v_median, v_distortion_outputs, v_splats_w, v_splats_s,
@@ -325,6 +311,7 @@ std::tuple<
     TorchTensorView viewmats,  // [..., C, 4, 4]
     TorchTensorView intrins,  // [..., C, 4], fx, fy, cx, cy
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,  // [..., N] projected 2D AABB, for sub-tile culling
     // image size
@@ -368,7 +355,7 @@ std::tuple<
     return funcs[di][accum_weight_map.data_ptr() != nullptr]
                 [v_median.data_ptr() != nullptr](
         num_splats, splats_w, splats_s, gaussian_ids,
-        viewmats, intrins, cmt(camera_model), dist_coeffs, aabb,
+        viewmats, intrins, cmt(camera_model), cdt(distortion), dist_coeffs, aabb,
         image_width, image_height, tile_offsets, flatten_ids,
         render_Ts, last_ids, render_outputs, distortion_fwd_outputs, loss_map, accum_weight_map,
         v_render_outputs, v_render_Ts, v_median, v_distortion_outputs, v_splats_w, v_splats_s,

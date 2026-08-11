@@ -5,13 +5,14 @@
 #include "kernels/projection/ProjectionFwd_kernel.cuh"
 
 template void projection_fused_fwd_kernel_wrapper<
-    Vanilla3DGS<2>,
-    CameraModelType::EQUISOLID
+    MipSplatting<0>,
+    CameraModelType::EQUISOLID,
+    CameraDistortionType::None
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<2>::WorldBuffer splats_world,
+    MipSplatting<0>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -21,7 +22,7 @@ template void projection_fused_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [C, N, 4]
     float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
-    Vanilla3DGS<2>::ScreenBuffer splats_screen,
+    MipSplatting<0>::ScreenBuffer splats_screen,
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -33,13 +34,14 @@ template void projection_fused_fwd_kernel_wrapper<
 );
 
 template void projection_fused_fwd_kernel_wrapper<
-    Vanilla3DGS<2>,
-    CameraModelType::EQUIRECTANGULAR
+    MipSplatting<0>,
+    CameraModelType::EQUISOLID,
+    CameraDistortionType::OpenCV
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<2>::WorldBuffer splats_world,
+    MipSplatting<0>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -49,7 +51,7 @@ template void projection_fused_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [C, N, 4]
     float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
-    Vanilla3DGS<2>::ScreenBuffer splats_screen,
+    MipSplatting<0>::ScreenBuffer splats_screen,
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -61,13 +63,14 @@ template void projection_fused_fwd_kernel_wrapper<
 );
 
 template void projection_fused_fwd_kernel_wrapper<
-    MipSplatting<2>,
-    CameraModelType::PINHOLE
+    MipSplatting<0>,
+    CameraModelType::EQUISOLID,
+    CameraDistortionType::ThinPrism
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<2>::WorldBuffer splats_world,
+    MipSplatting<0>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -77,7 +80,7 @@ template void projection_fused_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [C, N, 4]
     float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
-    MipSplatting<2>::ScreenBuffer splats_screen,
+    MipSplatting<0>::ScreenBuffer splats_screen,
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -89,13 +92,14 @@ template void projection_fused_fwd_kernel_wrapper<
 );
 
 template void projection_fused_fwd_kernel_wrapper<
-    MipSplatting<2>,
-    CameraModelType::FISHEYE
+    MipSplatting<0>,
+    CameraModelType::EQUIRECTANGULAR,
+    CameraDistortionType::None
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<2>::WorldBuffer splats_world,
+    MipSplatting<0>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -105,7 +109,7 @@ template void projection_fused_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [C, N, 4]
     float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
-    MipSplatting<2>::ScreenBuffer splats_screen,
+    MipSplatting<0>::ScreenBuffer splats_screen,
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -117,13 +121,14 @@ template void projection_fused_fwd_kernel_wrapper<
 );
 
 template void projection_fused_fwd_kernel_wrapper<
-    MipSplatting<2>,
-    CameraModelType::EQUISOLID
+    Vanilla3DGS<1>,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::None
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<2>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -133,7 +138,7 @@ template void projection_fused_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [C, N, 4]
     float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
-    MipSplatting<2>::ScreenBuffer splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -145,13 +150,14 @@ template void projection_fused_fwd_kernel_wrapper<
 );
 
 template void projection_fused_fwd_kernel_wrapper<
-    MipSplatting<2>,
-    CameraModelType::EQUIRECTANGULAR
+    Vanilla3DGS<1>,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<2>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -161,7 +167,7 @@ template void projection_fused_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [C, N, 4]
     float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
-    MipSplatting<2>::ScreenBuffer splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -173,13 +179,14 @@ template void projection_fused_fwd_kernel_wrapper<
 );
 
 template void projection_fused_fwd_kernel_wrapper<
-    Vanilla3DGS<3>,
-    CameraModelType::PINHOLE
+    Vanilla3DGS<1>,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::ThinPrism
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<3>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -189,7 +196,7 @@ template void projection_fused_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [C, N, 4]
     float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
-    Vanilla3DGS<3>::ScreenBuffer splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -201,13 +208,14 @@ template void projection_fused_fwd_kernel_wrapper<
 );
 
 template void projection_fused_fwd_kernel_wrapper<
-    Vanilla3DGS<3>,
-    CameraModelType::FISHEYE
+    Vanilla3DGS<1>,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::Rational
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<3>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -217,7 +225,7 @@ template void projection_fused_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [C, N, 4]
     float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
-    Vanilla3DGS<3>::ScreenBuffer splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -229,13 +237,14 @@ template void projection_fused_fwd_kernel_wrapper<
 );
 
 template void projection_fused_fwd_kernel_wrapper<
-    Vanilla3DGS<3>,
-    CameraModelType::EQUISOLID
+    Vanilla3DGS<1>,
+    CameraModelType::FISHEYE,
+    CameraDistortionType::None
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<3>::WorldBuffer splats_world,
+    Vanilla3DGS<1>::WorldBuffer splats_world,
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -245,7 +254,7 @@ template void projection_fused_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [C, N, 4]
     float *__restrict__ sorting_depths,  // [C, N, 1]
     float *__restrict__ radii,  // [N, 1]
-    Vanilla3DGS<3>::ScreenBuffer splats_screen,
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,

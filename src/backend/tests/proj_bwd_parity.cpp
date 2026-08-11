@@ -11,6 +11,7 @@
 // whose order differs between backends, so the comparison is tolerance-based
 // with a small violation-fraction cap.
 
+#include <backend/tests/DistortionFixture.h>
 #include <kernels/projection/ProjectionFwd.cuh>
 #include <kernels/projection/ProjectionPackedFwd.cuh>
 #include <kernels/projection/ProjectionBwd.cuh>
@@ -98,9 +99,7 @@ int main(int argc, char** argv) {
         cy_, 0, sy_, 0.3f,  0, 1, 0, -0.2f,  -sy_, 0, cy_, 5.f,  0, 0, 0, 1,
     };
     std::vector<float> intr = {150, 152, 100, 75, 145, 146, 97, 78};
-    std::vector<float> dist(C * 10, 0.f);
-    dist[0] = 0.05f;  dist[1] = -0.01f;
-    dist[10] = -0.03f;
+    std::vector<float> dist = dist_fixture::distortion_rows(C);
 
     float* d_means = upload(means);
     float* d_quats = upload(quats);
@@ -152,24 +151,32 @@ int main(int argc, char** argv) {
 
     const char* cams[4] = {"PINHOLE", "FISHEYE", "EQUISOLID",
                            "EQUIRECTANGULAR"};
+    auto dist_tv = [&](int tier) {
+        return ttv(d_dist + dist_fixture::row_offset(tier, C),
+                   {C, kCameraDistortionParams});
+    };
 
     struct Cfg {
         int prim;      // 0 = 3dgs, 1 = mip, 2 = 3dgut
         bool packed;
         int cam;
+        int dist;      // distortion tier, index into dist_fixture::kTierNames
         int max_deg;   // max_sh_degree passed to fwd + bwd
         int qbits;     // 0 = fp32 SH, 8/16 = value-quant
         bool q_fpbo;   // bounds layout when qbits != 0
         bool vmg;      // viewmat grad
     };
+    // Rows 1 and 2 are the same config on NONE and on OpenCV, so the tier's
+    // fast path is read against a distorted neighbour.
     const Cfg cfgs[] = {
-        {0, false, 0, 3, 0, false, true},
-        {1, false, 1, 2, 0, false, false},
-        {0, true, 2, 3, 0, false, false},
-        {2, false, 0, 3, 0, false, true},
-        {2, true, 1, 1, 0, false, false},
-        {0, false, 0, 3, 8, false, false},
-        {2, false, 3, 3, 16, true, false},
+        {0, false, 0, 0, 3, 0, false, true},
+        {0, false, 0, 1, 3, 0, false, true},
+        {1, false, 1, 2, 2, 0, false, false},
+        {0, true, 2, 1, 3, 0, false, false},
+        {2, false, 0, 3, 3, 0, false, true},
+        {2, true, 1, 0, 1, 0, false, false},
+        {0, false, 0, 2, 3, 8, false, false},
+        {2, false, 3, 0, 3, 16, true, false},
     };
 
     for (const Cfg& cfg : cfgs) {
@@ -200,7 +207,8 @@ int main(int argc, char** argv) {
                                       : projection_3dgut_packed_forward;
             auto out = fn(N, cfg.max_deg, splats_in, ttv(d_vm, {C, 16}),
                           ttv(d_intr, {C, 4}), W, H, cams[cfg.cam],
-                          ttv(d_dist, {C, 10}), radii, q_packed, q_bounds,
+                          dist_fixture::kTierNames[cfg.dist],
+                          dist_tv(cfg.dist), radii, q_packed, q_bounds,
                           (uint32_t)NUM_SH, quant ? cfg.qbits : 32, q_stride);
             cam_ids = std::get<0>(out);
             gauss_ids = std::get<1>(out);
@@ -213,7 +221,8 @@ int main(int argc, char** argv) {
                                       : projection_3dgut_forward;
             auto out = fn(N, cfg.max_deg, splats_in, ttv(d_vm, {C, 16}),
                           ttv(d_intr, {C, 4}), W, H, cams[cfg.cam],
-                          ttv(d_dist, {C, 10}), radii, q_packed, q_bounds,
+                          dist_fixture::kTierNames[cfg.dist],
+                          dist_tv(cfg.dist), radii, q_packed, q_bounds,
                           (uint32_t)NUM_SH, quant ? cfg.qbits : 32, q_stride);
             aabb_2d = std::get<0>(out);
         }
@@ -269,7 +278,8 @@ int main(int argc, char** argv) {
                    : cfg.prim == 1 ? projection_mip_backward
                                    : projection_3dgut_backward;
         bwd(N, cfg.max_deg, splats_in, ttv(d_vm, {C, 16}),
-            ttv(d_intr, {C, 4}), W, H, cams[cfg.cam], ttv(d_dist, {C, 10}),
+            ttv(d_intr, {C, 4}), W, H, cams[cfg.cam],
+            dist_fixture::kTierNames[cfg.dist], dist_tv(cfg.dist),
             cam_ids, gauss_ids, aabb_2d, v_screen, v_world,
             cfg.vmg ? &v_viewmats : nullptr, q_packed, q_bounds,
             (uint32_t)NUM_SH, quant ? cfg.qbits : 32, q_stride);

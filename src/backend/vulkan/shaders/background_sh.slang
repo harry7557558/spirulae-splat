@@ -4,9 +4,9 @@
 // the camera-to-world rotation use the same projection_utils.slang exports
 // the CUDA kernel wraps (generate_ray + transform_ray_d).
 //
-// kShDegree is a specialization constant (the CUDA kernel's template
-// parameter); the camera model is a plain runtime value, exactly like the
-// CUDA kernel's `int camera_model` argument.
+// kShDegree and kDistortion (declared last) are specialization constants (the
+// CUDA kernel's template parameters); the camera model is a plain runtime
+// value, exactly like the CUDA kernel's `int camera_model` argument.
 //
 // Backward: CUDA's 512-thread block-atomic SH reduction
 // (sh_block_atomic_add_f3_512) hardcodes warp==32 and needs float atomics,
@@ -20,6 +20,7 @@
 #include "shaders/projection_utils.slang"
 #include "shaders/harmonics.slang"
 #undef CudaDeviceExport
+#include "dist_spec.slang"
 
 [SpecializationConstant]
 const int kShDegree = 0;
@@ -27,7 +28,7 @@ const int kShDegree = 0;
 struct BackgroundShFwdParams {  // 56 bytes: pushed directly
     float* viewmats;     // [B,16] row-major world->camera
     float4* intrins;     // [B] fx, fy, cx, cy
-    float* dist_coeffs;  // [B,10] or null
+    float* dist_coeffs;  // [B,8] or null
     float* sh_coeffs;    // [(kShDegree+1)^2, 3]
     float* out_img;      // [B,H,W,3]
     uint32_t width;
@@ -39,6 +40,9 @@ struct BackgroundShFwdParams {  // 56 bytes: pushed directly
 // Workgroups are a flat 128x1 pixel-row segment (not the CUDA kernel's
 // 16x16): REQUIRE_FULL_SUBGROUPS demands the X dimension be a multiple of
 // the pinned subgroup size (README subgroup rules). Grid (ceil(W/128), H, B).
+#define _bg_ray(D) \
+    ray_ok = pixel_ray<D>(p.dist_coeffs, bi, p.camera_model, uv, raydir)
+
 [shader("compute")]
 [numthreads(128, 1, 1)]
 void background_sh_fwd(uint3 gtid: SV_DispatchThreadID,
@@ -55,18 +59,15 @@ void background_sh_fwd(uint3 gtid: SV_DispatchThreadID,
     for (int r = 0; r < 3; r++)
         R[r] = float3(vm[4 * r + 0], vm[4 * r + 1], vm[4 * r + 2]);
     float4 intrin = p.intrins[bi];
-    float dist[10];
-    [ForceUnroll]
-    for (int i = 0; i < 10; i++)
-        dist[i] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * bi + i];
 
     float2 uv = float2((float(px) + 0.5f - intrin.z) / intrin.x,
                        (float(py) + 0.5f - intrin.w) / intrin.y);
 
     float3 color = float3(0.0f);
-    float3 raydir;
-    if (generate_ray(uv, p.camera_model, dist, raydir)) {
+    float3 raydir = float3(0.0f);
+    bool ray_ok = false;
+    SS_DISPATCH_DIST(_bg_ray)
+    if (ray_ok) {
         float3 dir = transform_ray_d(R, raydir);
         float3 dc = float3(p.sh_coeffs[0], p.sh_coeffs[1], p.sh_coeffs[2]);
         float3* coeffs_l1 = (float3*)p.sh_coeffs + 1;
@@ -94,7 +95,7 @@ static const uint kBgBwdSlices = kBgBwdWgs * 256;
 struct BackgroundShBwdParams {  // 80 bytes: pushed directly
     float* viewmats;     // [B,16]
     float4* intrins;     // [B]
-    float* dist_coeffs;  // [B,10] (fallback-backed)
+    float* dist_coeffs;  // [B,8] (fallback-backed)
     float* sh_coeffs;    // [K,3], K = (kShDegree+1)^2
     float* out_color;    // [B,H,W,3] forward output (clamp mask)
     float* v_out_color;  // [B,H,W,3]
@@ -146,15 +147,12 @@ void background_sh_bwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         for (int r = 0; r < 3; r++)
             R[r] = float3(vm[4 * r + 0], vm[4 * r + 1], vm[4 * r + 2]);
         float4 intrin = p.intrins[bi];
-        float dist[10];
-        [ForceUnroll]
-        for (int k = 0; k < 10; k++)
-            dist[k] = is_null(p.dist_coeffs) ? 0.0f
-                                               : p.dist_coeffs[10 * bi + k];
         float2 uv = float2((float(px) + 0.5f - intrin.z) / intrin.x,
                            (float(py) + 0.5f - intrin.w) / intrin.y);
-        float3 raydir;
-        if (!generate_ray(uv, p.camera_model, dist, raydir)) continue;
+        float3 raydir = float3(0.0f);
+        bool ray_ok = false;
+        SS_DISPATCH_DIST(_bg_ray)
+        if (!ray_ok) continue;
         float3 dir = transform_ray_d(R, raydir);
 
         // v_dir is discarded (engine holds cameras fixed, as in CUDA).
@@ -211,3 +209,9 @@ void background_sh_bwd_reduce(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     }
     if (tid == 0) p.v_sh_coeffs[col] += _bgsh_red[0];
 }
+
+#undef _bg_ray
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

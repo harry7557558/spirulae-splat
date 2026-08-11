@@ -4,16 +4,19 @@
 // Part of the PixelWise family -- see PixelWiseCommon.cuh.
 
 #include "kernels/pixelwise/BilinearSample.cuh"
+#include "kernels/pixelwise/RedistortSource.cuh"
 
 // ================
 // Warp / Unwarp
 // ================
 
-template<typename T>
+template<CameraDistortionType distortion, bool from_source, typename T>
 __global__ void warp_image_wide_to_pinhole_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // [B, 4]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const int *__restrict__ source_models,               // [B], null unless from_source
+    const float *__restrict__ source_params,             // [B, 16]
     TensorView<T, 4> wide_image,  // [B, H, W, C]
     TensorView<T, 5> pinhole_images,  // [B*K, H, W, C]
     const float* __restrict__ axes  // [K, 3, 3]
@@ -32,8 +35,8 @@ __global__ void warp_image_wide_to_pinhole_kernel(
     float tx = -1.0f + 2.0f * ((float)i + 0.5f) / (float)Wp;
     float ty = -1.0f + 2.0f * ((float)j + 0.5f) / (float)Hp;
 
-    float4 intrin = intrins[bid];
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto to_pixel = make_ray_to_pixel<distortion, from_source>(
+        bid, camera_model, intrins, dist_coeffs_buffer, source_models, source_params);
 
     for (int ki = 0; ki < K; ++ki) {
         float3 axis_x = {axes[0], axes[1], axes[2]};
@@ -43,11 +46,7 @@ __global__ void warp_image_wide_to_pinhole_kernel(
 
         float3 raydir = axis_z + tx * axis_x + ty * axis_y;
         float2 uv;
-        bool valid = camera_model == CameraModelType::FISHEYE ?
-                SlangProjectionUtils::fisheye_proj_nav(raydir, intrin, dist_coeffs, &uv) :
-            camera_model == CameraModelType::EQUISOLID ?
-                SlangProjectionUtils::equisolid_proj_nav(raydir, intrin, dist_coeffs, &uv) :
-            SlangProjectionUtils::persp_proj_nav(raydir, intrin, dist_coeffs, &uv);
+        bool valid = to_pixel(raydir, &uv);
         if (valid) {
             for (int c = 0; c < C; c++)
                 pinhole_images.at(bid, ki, j, i, c) = get_pixel_bilinear<T>(wide_image, bid, c, uv.x, uv.y, 0.5f);
@@ -62,8 +61,9 @@ __global__ void warp_image_wide_to_pinhole_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void warp_image_wide_to_pinhole_tensor(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,            // [B, 4]
-    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView dist_coeffs,        // [B, 8]
     TorchTensorView wide_image,         // [B, H, W, C] (float)
     TorchTensorView axes,               // [K, 3, 3]
     int out_w, int out_h,
@@ -91,11 +91,15 @@ void warp_image_wide_to_pinhole_tensor(
         return v;
     };
 
-    warp_image_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        make_tv4(wide_image), make_tv5(pinhole_images),
-        (float*)std::get<0>(axes)
-    );
+    #define LAUNCH(D) \
+        warp_image_wide_to_pinhole_kernel<D, false> \
+            <<<_LAUNCH_ARGS_3D(out_w, out_h, b, 16, 16, 1)>>>( \
+                cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, \
+                nullptr, nullptr, \
+                make_tv4(wide_image), make_tv5(pinhole_images), \
+                (float*)std::get<0>(axes))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -194,11 +198,13 @@ void warp_image_equirectangular_to_pinhole_tensor(
 
 // Wide -> pinhole, fused byte->float. Output is [B*K, H_out, W_out, C]
 // laid out as [B, K, H_out, W_out, C] -- flatten via stride math.
-template<typename T_in>
+template<CameraDistortionType distortion, bool from_source, typename T_in>
 __global__ void warp_image_wide_to_pinhole_byte_to_float_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,                  // [B, 4]
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const int *__restrict__ source_models,
+    const float *__restrict__ source_params,
     TensorView<T_in, 4>  wide_image,                     // [B, H, W, C]
     TensorView<float, 5> pinhole_images,                 // [B, K, H_out, W_out, C]
     const float* __restrict__ axes,                      // [K, 3, 3]
@@ -217,8 +223,8 @@ __global__ void warp_image_wide_to_pinhole_byte_to_float_kernel(
     float tx = -1.0f + 2.0f * ((float)i + 0.5f) / (float)Wp;
     float ty = -1.0f + 2.0f * ((float)j + 0.5f) / (float)Hp;
 
-    float4 intrin = intrins[bid];
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto to_pixel = make_ray_to_pixel<distortion, from_source>(
+        bid, camera_model, intrins, dist_coeffs_buffer, source_models, source_params);
 
     for (int ki = 0; ki < K; ++ki) {
         float3 axis_x = {axes[9*ki + 0], axes[9*ki + 1], axes[9*ki + 2]};
@@ -226,11 +232,7 @@ __global__ void warp_image_wide_to_pinhole_byte_to_float_kernel(
         float3 axis_z = {axes[9*ki + 6], axes[9*ki + 7], axes[9*ki + 8]};
         float3 raydir = axis_z + tx * axis_x + ty * axis_y;
         float2 uv;
-        bool valid = camera_model == CameraModelType::FISHEYE ?
-                SlangProjectionUtils::fisheye_proj_nav(raydir, intrin, dist_coeffs, &uv) :
-            camera_model == CameraModelType::EQUISOLID ?
-                SlangProjectionUtils::equisolid_proj_nav(raydir, intrin, dist_coeffs, &uv) :
-            SlangProjectionUtils::persp_proj_nav(raydir, intrin, dist_coeffs, &uv);
+        bool valid = to_pixel(raydir, &uv);
         if (valid) {
             for (int c = 0; c < C; c++)
                 pinhole_images.at(bid, ki, j, i, c) =
@@ -285,10 +287,13 @@ __global__ void warp_image_equirectangular_to_pinhole_byte_to_float_kernel(
 // Nearest-neighbor mask warps. Mask is bool; we read uint8 (0 / nonzero)
 // and emit uint8 0/1 at the post-split resolution. Camera-model dispatch
 // matches the RGB kernels.
+template<CameraDistortionType distortion, bool from_source>
 __global__ void warp_mask_wide_to_pinhole_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const int *__restrict__ source_models,
+    const float *__restrict__ source_params,
     TensorView<uint8_t, 4> wide_mask,                    // [B, H, W, 1]
     TensorView<uint8_t, 5> pinhole_masks,                // [B, K, H_out, W_out, 1]
     const float* __restrict__ axes
@@ -306,8 +311,8 @@ __global__ void warp_mask_wide_to_pinhole_kernel(
     float tx = -1.0f + 2.0f * ((float)i + 0.5f) / (float)Wp;
     float ty = -1.0f + 2.0f * ((float)j + 0.5f) / (float)Hp;
 
-    float4 intrin = intrins[bid];
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto to_pixel = make_ray_to_pixel<distortion, from_source>(
+        bid, camera_model, intrins, dist_coeffs_buffer, source_models, source_params);
 
     for (int ki = 0; ki < K; ++ki) {
         float3 axis_x = {axes[9*ki + 0], axes[9*ki + 1], axes[9*ki + 2]};
@@ -315,11 +320,7 @@ __global__ void warp_mask_wide_to_pinhole_kernel(
         float3 axis_z = {axes[9*ki + 6], axes[9*ki + 7], axes[9*ki + 8]};
         float3 raydir = axis_z + tx * axis_x + ty * axis_y;
         float2 uv;
-        bool valid = camera_model == CameraModelType::FISHEYE ?
-                SlangProjectionUtils::fisheye_proj_nav(raydir, intrin, dist_coeffs, &uv) :
-            camera_model == CameraModelType::EQUISOLID ?
-                SlangProjectionUtils::equisolid_proj_nav(raydir, intrin, dist_coeffs, &uv) :
-            SlangProjectionUtils::persp_proj_nav(raydir, intrin, dist_coeffs, &uv);
+        bool valid = to_pixel(raydir, &uv);
         uint8_t out = 0;
         if (valid) {
             int xs = (int)floorf(uv.x + 0.5f);
@@ -375,8 +376,11 @@ __global__ void warp_mask_equirectangular_to_pinhole_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void launch_warp_byte_to_float_wide(
     std::string camera_model,
+    std::string distortion,
     const float* d_intrins,                // [B, 4]
-    const float* d_dist_coeffs,            // [B, 10] (nullable -> all-zeros)
+    const float* d_dist_coeffs,            // [B, 8] (nullable -> all-zeros)
+    const int*   d_source_models,          // [B] (null unless re-distorting)
+    const float* d_source_params,          // [B, 16]
     const void* d_byte, bool input_is_u16,
     int B, int Hin, int Win, int C,
     float* d_float_out, int K, int Hout, int Wout,
@@ -409,19 +413,22 @@ void launch_warp_byte_to_float_wide(
     CameraModelType cm = cmt(camera_model);
     CameraDistortionCoeffsBuffer dcb(const_cast<float*>(d_dist_coeffs));
     const float4* intrins_f4 = (const float4*)d_intrins;
-    if (input_is_u16) {
-        warp_image_wide_to_pinhole_byte_to_float_kernel<uint16_t>
-            <<<_LAUNCH_ARGS_3D(Wout, Hout, B, 16, 16, 1)>>>(
-                cm, intrins_f4, dcb,
-                make_4_u16((const uint16_t*)d_byte), make_5(d_float_out),
-                d_axes, 1.0f / 65535.0f);
-    } else {
-        warp_image_wide_to_pinhole_byte_to_float_kernel<uint8_t>
-            <<<_LAUNCH_ARGS_3D(Wout, Hout, B, 16, 16, 1)>>>(
-                cm, intrins_f4, dcb,
-                make_4_u8((const uint8_t*)d_byte), make_5(d_float_out),
-                d_axes, 1.0f / 255.0f);
-    }
+    #define LAUNCH(D, FROM)                                                    \
+        if (input_is_u16) {                                                    \
+            warp_image_wide_to_pinhole_byte_to_float_kernel<D, FROM, uint16_t> \
+                <<<_LAUNCH_ARGS_3D(Wout, Hout, B, 16, 16, 1)>>>(               \
+                    cm, intrins_f4, dcb, d_source_models, d_source_params,     \
+                    make_4_u16((const uint16_t*)d_byte), make_5(d_float_out),  \
+                    d_axes, 1.0f / 65535.0f);                                  \
+        } else {                                                               \
+            warp_image_wide_to_pinhole_byte_to_float_kernel<D, FROM, uint8_t>  \
+                <<<_LAUNCH_ARGS_3D(Wout, Hout, B, 16, 16, 1)>>>(               \
+                    cm, intrins_f4, dcb, d_source_models, d_source_params,     \
+                    make_4_u8((const uint8_t*)d_byte), make_5(d_float_out),    \
+                    d_axes, 1.0f / 255.0f);                                    \
+        }
+    _SS_DISPATCH_SOURCE(distortion, d_source_models != nullptr, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -473,8 +480,11 @@ void launch_warp_byte_to_float_equi(
 /*[AutoHeaderGeneratorExport]*/
 void launch_warp_mask_wide(
     std::string camera_model,
+    std::string distortion,
     const float* d_intrins,                // [B, 4]
-    const float* d_dist_coeffs,            // [B, 10] (nullable)
+    const float* d_dist_coeffs,            // [B, 8] (nullable)
+    const int*   d_source_models,          // [B] (null unless re-distorting)
+    const float* d_source_params,          // [B, 16]
     const uint8_t* d_byte_mask,
     int B, int Hin, int Win,
     uint8_t* d_byte_out, int K, int Hout, int Wout,
@@ -494,8 +504,13 @@ void launch_warp_mask_wide(
     CameraModelType cm = cmt(camera_model);
     CameraDistortionCoeffsBuffer dcb(const_cast<float*>(d_dist_coeffs));
     const float4* intrins_f4 = (const float4*)d_intrins;
-    warp_mask_wide_to_pinhole_kernel<<<_LAUNCH_ARGS_3D(Wout, Hout, B, 16, 16, 1)>>>(
-        cm, intrins_f4, dcb, in_v, out_v, d_axes);
+    #define LAUNCH(D, FROM) \
+        warp_mask_wide_to_pinhole_kernel<D, FROM> \
+            <<<_LAUNCH_ARGS_3D(Wout, Hout, B, 16, 16, 1)>>>( \
+                cm, intrins_f4, dcb, d_source_models, d_source_params, \
+                in_v, out_v, d_axes)
+    _SS_DISPATCH_SOURCE(distortion, d_source_models != nullptr, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 

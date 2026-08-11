@@ -146,6 +146,7 @@ struct _NonShQ {
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
+    CameraDistortionType distortion,
     bool use_scale_agnostic_mean,
     // Merged flag for the two color-space variants. Both
     // `OptimConfig::use_color_trust_region` and `OptimConfig::color_is_linear`
@@ -277,11 +278,11 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         };
         float3 t = { viewmats[cid*16+3], viewmats[cid*16+7], viewmats[cid*16+11] };
         float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-        ProjCamera cam = {
+        ProjCameraT<distortion> cam = {
             R, t, fx, fy, cx, cy,
             image_width, image_height,
         };
-        cam.dist_coeffs = dist_coeffs_buffer.load(cid);
+        cam.dist_coeffs = dist_coeffs_buffer.load<distortion>(cid);
 
         // Load splat gradient
         typename SplatPrimitive::Screen v_splat_screen;
@@ -294,11 +295,11 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         // features_sh (left untouched by value-quant FPBO writeback) which is
         // typically all zero -> biased v_means / v_R / v_t every step.
         if constexpr (VALUE_BITS == 32) {
-            splat_world.template project_vjp<camera_model, false, 32>(cam, v_splat_screen, v_splat_world, v_R, v_t);
+            splat_world.template project_vjp<camera_model, distortion, false, 32>(cam, v_splat_screen, v_splat_world, v_R, v_t);
         } else {
             const int64_t sh_base_vjp = (int64_t)3 * (int64_t)num_sh_buffer * (int64_t)gid;
             const int64_t sh_bounds_stride_vjp = (int64_t)256 * 3 * (int64_t)num_sh_buffer;
-            splat_world.template project_vjp<camera_model, false, VALUE_BITS>(
+            splat_world.template project_vjp<camera_model, distortion, false, VALUE_BITS>(
                 cam, v_splat_screen, v_splat_world, v_R, v_t,
                 const_cast<uint8_t*>(sh_value_packed), sh_value_bounds,
                 sh_base_vjp, sh_bounds_stride_vjp);
@@ -1037,6 +1038,7 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
 template<
     typename SplatPrimitive,
     CameraModelType camera_model,
+    CameraDistortionType distortion,
     const bool use_scale_agnostic_mean,
     const bool color_trust_linear,
     // SH quantization level. Single int collapses the prior (QUANT_BITS, VALUE_BITS)
@@ -1118,7 +1120,7 @@ void fused_projection_bwd_optimizer_3dgs_kernel_wrapper(
     constexpr int KERNEL_BLOCK_SIZE = (LEVEL_QUANT_BITS == 0) ? 0 : BLOCK_SIZE_LAUNCH;
     constexpr int KERNEL_QUANT_BITS = (LEVEL_QUANT_BITS == 0) ? 8 : LEVEL_QUANT_BITS;
     fused_projection_bwd_optimizer_3dgs_kernel<
-        SplatPrimitive, camera_model,
+        SplatPrimitive, camera_model, distortion,
         use_scale_agnostic_mean, color_trust_linear,
         KERNEL_BLOCK_SIZE, KERNEL_QUANT_BITS, LEVEL_VALUE_BITS
     ><<<_CEIL_DIV(N, BLOCK_SIZE_LAUNCH), BLOCK_SIZE_LAUNCH, 0, stream>>>(

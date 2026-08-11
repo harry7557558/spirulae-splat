@@ -7,12 +7,14 @@
 // Declares the spec constants shared by every kernel in the family --
 // includers must list their extra spec constants AFTER this include so the
 // auto-assigned constant IDs stay 0..4 here and 5.. in the includer,
-// matching the host-side SpecList order.
+// matching the host-side SpecList order. kDistortion is the one exception:
+// every includer declares it LAST, after its own constants.
 //
 // Include AFTER primitive_3dgs.slang / harmonics.slang / sh_quant.slang /
 // sh_vjp.slang / atomic_float.slang.
 
 #include "int64_compat.slang"
+#include "dist_spec.slang"
 
 [SpecializationConstant]
 const int kCameraModel = 0;
@@ -48,17 +50,17 @@ PbSplat pb_load_splat(float* means, float* quats, float* scales,
     return s;
 }
 
-struct PbCamera {
+struct PbCamera<D : ICameraDistortion> {
     float3x3 R;
     float3 t;
     float4 intrin;
-    float dist[10];
+    float dist[D.kNumParams];
 };
 
 [ForceInline]
-PbCamera pb_load_camera(float* viewmats, float4* intrins, float* dist_coeffs,
-                        uint cid) {
-    PbCamera c;
+PbCamera<D> pb_load_camera<D : ICameraDistortion>(
+    float* viewmats, float4* intrins, float* dist_coeffs, uint cid) {
+    PbCamera<D> c;
     float* vm = viewmats + cid * 16;
     [ForceUnroll]
     for (int r = 0; r < 3; r++) {
@@ -66,9 +68,7 @@ PbCamera pb_load_camera(float* viewmats, float4* intrins, float* dist_coeffs,
         c.t[r] = vm[4 * r + 3];
     }
     c.intrin = intrins[cid];
-    [ForceUnroll]
-    for (int i = 0; i < 10; i++)
-        c.dist[i] = is_null(dist_coeffs) ? 0.0f : dist_coeffs[10 * cid + i];
+    load_dist_coeffs<D>(dist_coeffs, cid, c.dist);
     return c;
 }
 
@@ -99,101 +99,55 @@ PbGrads pb_grads_zero() {
     return g;
 }
 
+// primitive_3dgs.slang exports one VJP per (camera model, tier); this generic
+// conformance is the same body, reached with both axes still symbolic so the
+// callers can stay generic and fold once at the entry point.
+struct PbProj<let cam : CameraModelType, D : ICameraDistortion,
+              let eval3d : bool> : _DiffProjection3DGS<D.kNumParams> {
+    [ForceInline]
+    [Differentiable]
+    static void projection(_projection_3dgs_ARGS(D.kNumParams)) {
+        return projection_3dgs<cam, D, true, eval3d>(
+            antialiased, mean, quat, scale, in_opacity, R, t,
+            fx, fy, cx, cy, dist_coeffs, image_width, image_height,
+            aabb_xyxy, sorting_depth, radius, mean2d, depth, conic, opacity);
+    }
+};
+
 // One intersection's projection VJP, 2D (3DGS / Mip) screen layout
 // {xy, depth, conic, opac}. kAntialiased selects Mip.
 [ForceInline]
-void pb_vjp_2d(PbSplat s, PbCamera c, uint width, uint height, float2 v_xy,
-               float v_depth, float3 v_conic, float v_opac,
-               inout PbGrads g) {
-    const bool aa = kAntialiased != 0;
-    switch (kCameraModel) {
-    case 0:
-        projection_3dgs_persp_vjp(aa, s.mean, s.quat, s.scale, s.in_opacity,
-                                  c.R, c.t, c.intrin.x, c.intrin.y,
-                                  c.intrin.z, c.intrin.w, c.dist, width,
-                                  height, v_xy, v_depth, v_conic, v_opac,
-                                  g.v_mean, g.v_quat, g.v_scale, g.v_opacity,
-                                  g.v_R, g.v_t);
-        break;
-    case 1:
-        projection_3dgs_fisheye_vjp(aa, s.mean, s.quat, s.scale,
-                                    s.in_opacity, c.R, c.t, c.intrin.x,
-                                    c.intrin.y, c.intrin.z, c.intrin.w,
-                                    c.dist, width, height, v_xy, v_depth,
-                                    v_conic, v_opac, g.v_mean, g.v_quat,
-                                    g.v_scale, g.v_opacity, g.v_R, g.v_t);
-        break;
-    case 2:
-        projection_3dgs_equisolid_vjp(aa, s.mean, s.quat, s.scale,
-                                      s.in_opacity, c.R, c.t, c.intrin.x,
-                                      c.intrin.y, c.intrin.z, c.intrin.w,
-                                      c.dist, width, height, v_xy, v_depth,
-                                      v_conic, v_opac, g.v_mean, g.v_quat,
-                                      g.v_scale, g.v_opacity, g.v_R, g.v_t);
-        break;
-    default:
-        projection_3dgs_equirect_vjp(aa, s.mean, s.quat, s.scale,
-                                     s.in_opacity, c.R, c.t, c.intrin.x,
-                                     c.intrin.y, c.intrin.z, c.intrin.w,
-                                     c.dist, width, height, v_xy, v_depth,
-                                     v_conic, v_opac, g.v_mean, g.v_quat,
-                                     g.v_scale, g.v_opacity, g.v_R, g.v_t);
-        break;
-    }
+void pb_vjp_2d<let cam : CameraModelType, D : ICameraDistortion>(
+    PbSplat s, PbCamera<D> c, uint width, uint height, float2 v_xy,
+    float v_depth, float3 v_conic, float v_opac, inout PbGrads g) {
+    _projection_3dgs_vjp<D.kNumParams, PbProj<cam, D, false> >(
+        kAntialiased != 0, s.mean, s.quat, s.scale, s.in_opacity, c.R, c.t,
+        c.intrin.x, c.intrin.y, c.intrin.z, c.intrin.w, c.dist, width, height,
+        v_xy, v_depth, v_conic, v_opac, g.v_mean, g.v_quat, g.v_scale,
+        g.v_opacity, g.v_R, g.v_t);
 }
 
 // One intersection's projection VJP, 3DGUT screen layout {scale, opac}: the
 // screen-scale grad feeds the conic slot with v_mean2d = 0, v_depth = 0
 // (mirrors Primitive3DGUT::project_vjp), antialiased always false.
 [ForceInline]
-void pb_vjp_3dgut(PbSplat s, PbCamera c, uint width, uint height,
-                  float3 v_sscale, float v_sopac, inout PbGrads g) {
-    switch (kCameraModel) {
-    case 0:
-        projection_3dgut_persp_vjp(false, s.mean, s.quat, s.scale,
-                                   s.in_opacity, c.R, c.t, c.intrin.x,
-                                   c.intrin.y, c.intrin.z, c.intrin.w,
-                                   c.dist, width, height, float2(0.0f), 0.0f,
-                                   v_sscale, v_sopac, g.v_mean, g.v_quat,
-                                   g.v_scale, g.v_opacity, g.v_R, g.v_t);
-        break;
-    case 1:
-        projection_3dgut_fisheye_vjp(false, s.mean, s.quat, s.scale,
-                                     s.in_opacity, c.R, c.t, c.intrin.x,
-                                     c.intrin.y, c.intrin.z, c.intrin.w,
-                                     c.dist, width, height, float2(0.0f),
-                                     0.0f, v_sscale, v_sopac, g.v_mean,
-                                     g.v_quat, g.v_scale, g.v_opacity, g.v_R,
-                                     g.v_t);
-        break;
-    case 2:
-        projection_3dgut_equisolid_vjp(false, s.mean, s.quat, s.scale,
-                                       s.in_opacity, c.R, c.t, c.intrin.x,
-                                       c.intrin.y, c.intrin.z, c.intrin.w,
-                                       c.dist, width, height, float2(0.0f),
-                                       0.0f, v_sscale, v_sopac, g.v_mean,
-                                       g.v_quat, g.v_scale, g.v_opacity,
-                                       g.v_R, g.v_t);
-        break;
-    default:
-        projection_3dgut_equirect_vjp(false, s.mean, s.quat, s.scale,
-                                      s.in_opacity, c.R, c.t, c.intrin.x,
-                                      c.intrin.y, c.intrin.z, c.intrin.w,
-                                      c.dist, width, height, float2(0.0f),
-                                      0.0f, v_sscale, v_sopac, g.v_mean,
-                                      g.v_quat, g.v_scale, g.v_opacity,
-                                      g.v_R, g.v_t);
-        break;
-    }
+void pb_vjp_3dgut<let cam : CameraModelType, D : ICameraDistortion>(
+    PbSplat s, PbCamera<D> c, uint width, uint height, float3 v_sscale,
+    float v_sopac, inout PbGrads g) {
+    _projection_3dgs_vjp<D.kNumParams, PbProj<cam, D, true> >(
+        false, s.mean, s.quat, s.scale, s.in_opacity, c.R, c.t, c.intrin.x,
+        c.intrin.y, c.intrin.z, c.intrin.w, c.dist, width, height,
+        float2(0.0f), 0.0f, v_sscale, v_sopac, g.v_mean, g.v_quat, g.v_scale,
+        g.v_opacity, g.v_R, g.v_t);
 }
 
 // SH color VJP with the value-quant bit depth folded from kShValueBits
 // (generic args must be parse-time constants; the branch folds away).
 // `coeffs` is the splat's fp32 SH pointer (unused when kShValueBits != 0).
 [ForceInline]
-void pb_sh_vjp(PbSplat s, PbCamera c, float* coeffs, uint* qpacked,
-               float2* qbounds, gindex_t qbase, gindex_t qstride, float3 v_rgb,
-               inout PbGrads g) {
+void pb_sh_vjp<D : ICameraDistortion>(
+    PbSplat s, PbCamera<D> c, float* coeffs, uint* qpacked, float2* qbounds,
+    gindex_t qbase, gindex_t qstride, float3 v_rgb, inout PbGrads g) {
     if (kShValueBits == 8)
         sh_color_vjp<8>(kShDegree, s.mean, c.R, c.t, s.dc, coeffs, qpacked,
                         qbounds, qbase, qstride, v_rgb, g.v_dc, g.v_sh,

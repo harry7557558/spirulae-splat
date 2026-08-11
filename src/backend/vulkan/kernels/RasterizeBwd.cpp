@@ -190,6 +190,7 @@ std::tuple<
     TorchTensorView viewmats,
     TorchTensorView intrins,
     const std::string camera_model,
+    const std::string distortion,
     const TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,
     const uint32_t image_width,
@@ -212,9 +213,7 @@ std::tuple<
     bool need_viewmat_grad
 ) {
     (void)loss_map;  // declared but unused by the CUDA kernel as well
-    CameraModelType cam = cmt(camera_model);
-    if ((int)cam < 0 || (int)cam > 3)
-        throw std::runtime_error("Unsupported camera model");
+    const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
     const uint32_t spec_dist = dist_spec_bwd(dist_type);
     const bool aw = accum_weight_map.data_ptr() != nullptr;
     const bool md = v_median.data_ptr() != nullptr;
@@ -308,11 +307,12 @@ std::tuple<
         p.tile_height = tile_height;
 
         // Spec IDs: cam(0), dist(1), median(2), accum(3), viewmat(4),
-        // packed(5).
+        // packed(5), distortion tier(6).
         backend::vk::SpecList spec{
-            (uint32_t)cam,  spec_dist,
+            cd.cam,         spec_dist,
             md ? 1u : 0u,   aw ? 1u : 0u,
-            need_viewmat_grad ? 1u : 0u, packed ? 1u : 0u};
+            need_viewmat_grad ? 1u : 0u, packed ? 1u : 0u,
+            cd.dist};
         vkk::dispatch_ring("rasterize_bwd.rasterize_bwd_3dgut", spec, I,
                            tile_height * 2, tile_width * 2, &p, sizeof(p));
     }

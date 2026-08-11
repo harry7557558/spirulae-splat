@@ -16,9 +16,9 @@
  * where z_i is the Gaussian's ray depth (FragmentFwd::evaluate_color().depth).
  * The occupancy 1 - T(z) at depth z is then modeled as m0 * Phi((z-mean)/std).
  *
- * Only 3DGUT (Vanilla3DGUT<0>) with the three supported camera models and no
- * distortion output is instantiated -- all in this translation unit, so no
- * generated ins/ entry is needed.
+ * Only 3DGUT (Vanilla3DGUT<0>) with no distortion output is instantiated, over
+ * the compiled (camera model, distortion tier) pairs -- all in this translation
+ * unit, so no generated ins/ entry is needed.
  */
 
 #include <cstdint>
@@ -37,6 +37,7 @@ void rasterize_moments_3dgut_fwd(
     TorchTensorView viewmats,            // [..., C, 4, 4]
     TorchTensorView intrins,             // [..., C, 4], fx, fy, cx, cy
     const std::string& camera_model,
+    const std::string& distortion,
     TorchTensorView dist_coeffs,
     DeviceTensor2D<float4> aabb,         // [..., N] projected 2D AABB
     uint32_t image_width,

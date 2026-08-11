@@ -31,6 +31,7 @@
 //   kAccumWeight  = 0 | 1  (o_accum_weight + accum_weight_map wired)
 //   kViewmatGrad  = 0 | 1  (3dgut entry only)
 //   kPacked       = 0 | 1  (gaussian_ids present)
+//   kDistortion   = CameraDistortionType 0..3 (3dgut entry only), last
 
 #define CudaDeviceExport ForceInline
 #include "int64_compat.slang"
@@ -39,6 +40,7 @@
 
 #include "raster_common.slang"
 #include "atomic_float.slang"
+#include "dist_spec.slang"
 
 [SpecializationConstant]
 const int kCameraModel = 0;
@@ -491,7 +493,7 @@ struct Raster3dgutBwdParams {  // via params ring
     int* gaussian_ids;
     float* viewmats;     // [I,16]
     float4* intrins;     // [I]
-    float* dist_coeffs;  // [I,10] (fallback-backed)
+    float* dist_coeffs;  // [I,8] (fallback-backed)
     float4* aabb;
     int* tile_offsets;
     int* flatten_ids;
@@ -610,6 +612,11 @@ void _rb3_reduce_add(float* dst, float val, uint tid) {
     }
 }
 
+#define _rb_ray(D)                                                    \
+    ray_ok = pixel_ray<D>(p.dist_coeffs, image_id, kCameraModel,      \
+                          float2((px - intrin.z) / intrin.x,          \
+                                 (py - intrin.w) / intrin.y), raydir)
+
 [shader("compute")]
 [numthreads(32, 1, 1)]
 void rasterize_bwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -629,11 +636,6 @@ void rasterize_bwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         R[r] = float3(vm[4 * r + 0], vm[4 * r + 1], vm[4 * r + 2]);
     float3 tvec = float3(vm[3], vm[7], vm[11]);
     float4 intrin = p.intrins[image_id];
-    float dist[10];
-    [ForceUnroll]
-    for (int k = 0; k < 10; k++)
-        dist[k] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * image_id + k];
     float3 ray_o = transform_ray_o(R, tvec);
     float3 total_v_ray_o = float3(0.0f);
 
@@ -647,10 +649,9 @@ void rasterize_bwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         int bin_final = inside ? p.last_ids[img_off + gpix] : -1;
         float px = float(gx) + 0.5f;
         float py = float(gy) + 0.5f;
-        float3 raydir;
-        bool ray_ok = generate_ray(
-            float2((px - intrin.z) / intrin.x, (py - intrin.w) / intrin.y),
-            kCameraModel, dist, raydir);
+        float3 raydir = float3(0.0f);
+        bool ray_ok = false;
+        SS_DISPATCH_DIST(_rb_ray)
         inside = inside && ray_ok;
         float3 ray_d = transform_ray_d(R, raydir);
         _rb_raybin[pix] = float4(ray_d, asfloat(bin_final));
@@ -826,3 +827,9 @@ void rasterize_bwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         _rb3_reduce_add(v_viewmat + 11, v_t.z, tid);
     }
 }
+
+#undef _rb_ray
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

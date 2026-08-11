@@ -30,6 +30,7 @@
 // visibility) compare as exact CODES, also with a cap: a last-ulp Morton
 // difference reorders one leaf and rewrites a whole subtree's links.
 
+#include <backend/tests/DistortionFixture.h>
 #include <mesh/MeshingDevice.h>
 
 #include <kernels/projection/ProjectionFwd.cuh>
@@ -398,7 +399,10 @@ int main(int argc, char** argv) {
     }
 
     // === 4. rasterize_moments_3dgut_fwd over a real projection ===
-    std::vector<float> vm(16 * NCAM), intr(4 * NCAM), dist(10 * NCAM, 0.0f);
+    std::vector<float> vm(16 * NCAM), intr(4 * NCAM);
+    // One coefficient row per (tier, camera): the samplers below give each
+    // camera a different tier; the projection and the cull pick one block.
+    std::vector<float> dist = dist_fixture::distortion_rows(NCAM);
     for (int c = 0; c < NCAM; ++c) {
         // identity rotation, camera pushed back along -z
         float* m = &vm[16 * c];
@@ -411,7 +415,6 @@ int main(int argc, char** argv) {
         in[1] = 120.0f;
         in[2] = 0.5f * (float)W;
         in[3] = 0.5f * (float)H;
-        dist[10 * c + 0] = 0.02f;   // mild radial distortion
     }
     float* d_vm = upload(vm);
     float* d_intr = upload(intr);
@@ -436,9 +439,10 @@ int main(int argc, char** argv) {
         backend::memset_sync(d_radii, 0, N * sizeof(float));
         auto [aabb_2d, depths_2d, splats_s] = projection_3dgut_forward(
             (int64_t)N, 0, in_splats, ttv(d_vm + 16 * cam, {1, 4, 4}),
-            ttv(d_intr + 4 * cam, {1, 4}), W, H, "PINHOLE",
-            ttv(d_dist + 10 * cam, {1, 10}), radii, std::nullopt, std::nullopt,
-            0, 32, 0);
+            ttv(d_intr + 4 * cam, {1, 4}), W, H, "PINHOLE", "THIN_PRISM",
+            ttv(d_dist + dist_fixture::row_offset(2, NCAM, cam),
+                {1, kCameraDistortionParams}),
+            radii, std::nullopt, std::nullopt, 0, 32, 0);
         DeviceTensorFloatND aabb_nd(aabb_2d), depths_nd(depths_2d);
         DeviceTensorFloatND proj_conic = splats_s[0];
         DeviceTensorFloatND proj_opac = splats_s[1];
@@ -452,8 +456,10 @@ int main(int argc, char** argv) {
         rasterize_moments_3dgut_fwd(
             (int64_t)N, in_splats, splats_s, DeviceVector<int32_t>(),
             ttv(d_vm + 16 * cam, {1, 4, 4}), ttv(d_intr + 4 * cam, {1, 4}),
-            "PINHOLE", ttv(d_dist + 10 * cam, {1, 10}), aabb_2d, W, H,
-            tile_offsets, flatten_ids, d_moments, nullptr);
+            "PINHOLE", "THIN_PRISM",
+            ttv(d_dist + dist_fixture::row_offset(2, NCAM, cam),
+                {1, kCameraDistortionParams}),
+            aabb_2d, W, H, tile_offsets, flatten_ids, d_moments, nullptr);
         backend::device_synchronize();
         if (check_error()) return 1;
         readback(lacc, (const float*)d_moments, (int64_t)npix * 3);
@@ -461,8 +467,10 @@ int main(int argc, char** argv) {
         rasterize_moments_3dgut_fwd(
             (int64_t)N, in_splats, splats_s, DeviceVector<int32_t>(),
             ttv(d_vm + 16 * cam, {1, 4, 4}), ttv(d_intr + 4 * cam, {1, 4}),
-            "PINHOLE", ttv(d_dist + 10 * cam, {1, 10}), aabb_2d, W, H,
-            tile_offsets, flatten_ids, d_moments, d_rgbimg);
+            "PINHOLE", "THIN_PRISM",
+            ttv(d_dist + dist_fixture::row_offset(2, NCAM, cam),
+                {1, kCameraDistortionParams}),
+            aabb_2d, W, H, tile_offsets, flatten_ids, d_moments, d_rgbimg);
         backend::device_synchronize();
         if (check_error()) return 1;
         readback(lacc, (const float*)d_rgbimg, (int64_t)npix * 3);
@@ -504,14 +512,18 @@ int main(int argc, char** argv) {
 
         for (int c = 0; c < NCAM; ++c) {
             const int cm = 0;   // PINHOLE
+            // Thin prism is covered by the projection and the cull.
+            const int td = c == 0 ? 0 : c == 1 ? 1 : 3;
+            const float* d_dc =
+                d_dist + dist_fixture::row_offset(td, NCAM, c);
             meshing::launch_sample_occ(d_q, NQ, d_vm + 16 * c, d_intr + 4 * c,
-                                       d_dist + 10 * c, cm, d_mom_s, W, H, k,
+                                       d_dc, cm, td, d_mom_s, W, H, k,
                                        d_kmin, d_cnt);
             meshing::launch_sample_color(d_q, NQ, d_vm + 16 * c,
-                                         d_intr + 4 * c, d_dist + 10 * c, cm,
+                                         d_intr + 4 * c, d_dc, cm, td,
                                          d_mom_s, d_rgb_s, W, H, d_num, d_den);
             meshing::launch_sample_view_density(
-                d_q, NQ, d_vm + 16 * c, d_intr + 4 * c, d_dist + 10 * c, cm,
+                d_q, NQ, d_vm + 16 * c, d_intr + 4 * c, d_dc, cm, td,
                 d_mom_s, W, H, d_dens);
         }
         meshing::launch_finalize_occ(NQ, d_kmin, d_cnt, k, d_occ_k);
@@ -606,9 +618,11 @@ int main(int argc, char** argv) {
         int32_t* d_W = upload(ws);
         int32_t* d_H = upload(hs);
         uint32_t* d_vis = alloc<uint32_t>(NV);
-        meshing::launch_cull(d_verts, NV, d_faces, NF, d_vm, d_intr, d_dist,
-                             d_W, d_H, /*camera_model=*/0, NCAM, t_leafMin,
-                             t_leafMax, t_internal, t_nodeAABB, d_vis);
+        meshing::launch_cull(
+            d_verts, NV, d_faces, NF, d_vm, d_intr,
+            d_dist + dist_fixture::row_offset(2, NCAM),
+            d_W, d_H, /*camera_model=*/0, /*distortion=*/2, NCAM, t_leafMin,
+            t_leafMax, t_internal, t_nodeAABB, d_vis);
         backend::device_synchronize();
         if (check_error()) return 1;
         readback_i32(codes, (const int32_t*)d_vis, NV);

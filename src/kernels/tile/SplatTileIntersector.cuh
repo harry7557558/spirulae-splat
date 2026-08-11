@@ -9,7 +9,7 @@
 #include "primitives/Primitive3DGS.cuh"
 
 
-template<CameraModelType camera_model>
+template<CameraModelType camera_model, CameraDistortionType distortion>
 struct TileBuffers {
     long size;
     float width, height;
@@ -23,7 +23,7 @@ struct TileBuffers {
         unsigned height,
         const float* viewmats_ptr,   // [B*16], row-major 4x4
         const float4* intrins_ptr,   // [B], fx, fy, cx, cy
-        float* dist_coeffs_ptr,      // [B*10] or nullptr
+        float* dist_coeffs_ptr,      // [B*8] or nullptr
         long size
     )
         : size(size),
@@ -33,17 +33,17 @@ struct TileBuffers {
 };
 
 
-template<typename Primitive, CameraModelType camera_model>
+template<typename Primitive, CameraModelType camera_model, CameraDistortionType distortion>
 struct SplatTileIntersector {
 
     typename Primitive::WorldBuffer splats;
     long numSplats;
     float rel_scale;
-    TileBuffers<camera_model> tiles;
+    TileBuffers<camera_model, distortion> tiles;
 
     SplatTileIntersector(
         const typename Primitive::WorldBuffer &splats,
-        const TileBuffers<camera_model> &tiles,
+        const TileBuffers<camera_model, distortion> &tiles,
         float rel_scale
     );
 
@@ -62,6 +62,7 @@ intersect_splat_tile_3dgs(
     DeviceVector<float> viewmats,       // [C*16], row-major 4x4 per camera
     DeviceVector<float4> intrins,       // [C]
     const std::string& camera_model,
-    const DeviceTensor2D<float>& dist_coeffs,  // [C, 10], may be null
+    const std::string& distortion,
+    const DeviceTensor2D<float>& dist_coeffs,  // [C, 8], may be null
     float rel_scale
 );

@@ -5,11 +5,13 @@
 //   CUDA build:   ./projection_parity dump ref.bin
 //   Vulkan build: ./projection_parity compare ref.bin   (per device)
 //
-// Deterministic inputs; 16 configs = {3DGS, MIP} x 4 camera models x
-// SH degree {0, 3} (+ one no-distortion config). Comparison is tolerance-
-// based (fast-math exp/sqrt chains differ across compilers) with a small
-// allowance for borderline-cull flips, which change entire rows.
+// Deterministic inputs; the configs are {3DGS, MIP, 3DGUT} x 4 camera models
+// x SH degree {0, 3} x the distortion tiers compiled for that model.
+// Comparison is tolerance-based (fast-math exp/sqrt chains differ across
+// compilers) with a small allowance for borderline-cull flips, which change
+// entire rows.
 
+#include <backend/tests/DistortionFixture.h>
 #include <kernels/projection/ProjectionFwd.cuh>
 #include <kernels/projection/ProjectionPackedFwd.cuh>
 
@@ -83,9 +85,7 @@ int main(int argc, char** argv) {
         cy_, 0, sy_, 0.3f,  0, 1, 0, -0.2f,  -sy_, 0, cy_, 5.f,  0, 0, 0, 1,
     };
     std::vector<float> intr = {600, 610, 400, 300, 580, 585, 390, 310};
-    std::vector<float> dist(C * 10, 0.f);
-    dist[0] = 0.05f;  dist[1] = -0.01f;  dist[2] = 0.001f;  dist[3] = -0.002f;
-    dist[10] = -0.03f; dist[11] = 0.004f;
+    std::vector<float> dist = dist_fixture::distortion_rows(C);
 
     float* d_means = upload(means);
     float* d_quats = upload(quats);
@@ -112,12 +112,21 @@ int main(int argc, char** argv) {
     const char* cams[4] = {"PINHOLE", "FISHEYE", "EQUISOLID",
                            "EQUIRECTANGULAR"};
 
+    auto dist_tv = [&](int tier) {
+        return ttv(d_dist + dist_fixture::row_offset(tier, C),
+                   {C, kCameraDistortionParams});
+    };
+
     std::vector<float> acc;
     for (int prim = 0; prim < 3; prim++)
         for (int ci = 0; ci < 4; ci++)
             for (int shd = 0; shd <= 3; shd += 3)
-                for (int use_dist = 0; use_dist < 2; use_dist++) {
-                    if (use_dist == 0 && ci != 0) continue;  // one nodist cfg
+                // The tier is orthogonal to SH degree: sweep the compiled
+                // tiers at degree 3 and keep degree 0 on the NONE fast path,
+                // which also runs with a null coefficient tensor.
+                for (int t = 0; t < (shd ? dist_fixture::kNumTiers[ci] : 1);
+                     t++) {
+                    const int tier = dist_fixture::kTiers[ci][t];
                     backend::memset_sync(d_radii, 0, N * sizeof(float));
                     auto fn = prim == 0   ? projection_3dgs_forward
                               : prim == 1 ? projection_mip_forward
@@ -125,8 +134,9 @@ int main(int argc, char** argv) {
                     auto out = fn(
                         N, shd, in_splats, ttv(d_vm, {C, 16}),
                         ttv(d_intr, {C, 4}), W, H, cams[ci],
-                        use_dist ? ttv(d_dist, {C, 10})
-                                 : ttv(nullptr, {C, 10}),
+                        dist_fixture::kTierNames[tier],
+                        shd ? dist_tv(tier)
+                            : ttv(nullptr, {C, kCameraDistortionParams}),
                         radii, std::nullopt, std::nullopt, 0, 32, 0);
                     backend::device_synchronize();
                     if (const char* err = backend::last_error()) {
@@ -186,9 +196,14 @@ int main(int argc, char** argv) {
         return std::make_pair(packed_tv, bounds_tv);
     };
 
+    int qcfg = 0;
     for (int prim = 0; prim < 3; prim++)
         for (int bits = 8; bits <= 16; bits += 8)
-            for (int fpbo = 0; fpbo < 2; fpbo++) {
+            for (int fpbo = 0; fpbo < 2; fpbo++, qcfg++) {
+                // Value-quant and distortion are independent axes, so rotate
+                // the tier through the codec configs instead of crossing them.
+                const int tier = dist_fixture::kTiers[prim]
+                                     [qcfg % dist_fixture::kNumTiers[prim]];
                 backend::memset_sync(d_radii, 0, N * sizeof(float));
                 auto fn = prim == 0   ? projection_3dgs_forward
                           : prim == 1 ? projection_mip_forward
@@ -197,7 +212,8 @@ int main(int argc, char** argv) {
                 auto out = fn(
                     N, 3, in_splats_q, ttv(d_vm, {C, 16}),
                     ttv(d_intr, {C, 4}), W, H, cams[prim],
-                    ttv(d_dist, {C, 10}), radii, packed_tv, bounds_tv,
+                    dist_fixture::kTierNames[tier], dist_tv(tier), radii,
+                    packed_tv, bounds_tv,
                     (uint32_t)NUM_SH, bits, fpbo ? 0 : 256);
                 backend::device_synchronize();
                 if (const char* err = backend::last_error()) {
@@ -220,14 +236,17 @@ int main(int argc, char** argv) {
     // --- packed projection: nnz-compacted outputs (ids exact via float) ---
     for (int prim = 0; prim < 3; prim++)
         for (int ci = 0; ci < 4; ci += 3) {  // PINHOLE + EQUIRECTANGULAR
+            // PINHOLE walks the three distorted tiers across the primitives;
+            // EQUIRECTANGULAR has no lens distortion.
+            const int tier = ci == 0 ? 1 + prim : 0;
             backend::memset_sync(d_radii, 0, N * sizeof(float));
             auto fn = prim == 0   ? projection_3dgs_packed_forward
                       : prim == 1 ? projection_mip_packed_forward
                                   : projection_3dgut_packed_forward;
             auto out = fn(N, 3, in_splats, ttv(d_vm, {C, 16}),
                           ttv(d_intr, {C, 4}), W, H, cams[ci],
-                          ttv(d_dist, {C, 10}), radii, std::nullopt,
-                          std::nullopt, 0, 32, 0);
+                          dist_fixture::kTierNames[tier], dist_tv(tier),
+                          radii, std::nullopt, std::nullopt, 0, 32, 0);
             backend::device_synchronize();
             if (const char* err = backend::last_error()) {
                 std::fprintf(stderr, "backend error: %s\n", err);
@@ -261,13 +280,16 @@ int main(int argc, char** argv) {
         const int prim = k == 0 ? 0 : 2;
         const int bits = k == 0 ? 8 : 16;
         const int fpbo = k;
+        // PINHOLE rational, then FISHEYE thin-prism.
+        const int tier = k == 0 ? 3 : 2;
         backend::memset_sync(d_radii, 0, N * sizeof(float));
         auto fn = prim == 0 ? projection_3dgs_packed_forward
                             : projection_3dgut_packed_forward;
         auto [packed_tv, bounds_tv] = quant_args(bits, fpbo);
         auto out = fn(N, 3, in_splats_q, ttv(d_vm, {C, 16}),
                       ttv(d_intr, {C, 4}), W, H, cams[k],
-                      ttv(d_dist, {C, 10}), radii, packed_tv, bounds_tv,
+                      dist_fixture::kTierNames[tier], dist_tv(tier), radii,
+                      packed_tv, bounds_tv,
                       (uint32_t)NUM_SH, bits, fpbo ? 0 : 256);
         backend::device_synchronize();
         if (const char* err = backend::last_error()) {

@@ -11,6 +11,7 @@
 #include "backend/vulkan/VulkanPipelines.h"
 #include "backend/common/SortScan.h"
 
+#include <core/Common.cuh>
 #include <core/Tensor.h>
 
 #include <algorithm>
@@ -128,6 +129,42 @@ inline uint64_t or_fallback(uint64_t addr) {
 }
 inline uint64_t or_fallback(const void* p) {
     return or_fallback((uint64_t)p);
+}
+
+// The kCameraModel / kDistortion specialization values for a launch. Pairs
+// outside the compiled set (camera_distortion_is_compiled in
+// core/CameraModel.h) are rejected here rather than dispatched: the shaders'
+// SS_DISPATCH_CAM_DIST folds them onto a neighbouring tier instead of carrying
+// a dead arm, so an unchecked pair would silently project with the wrong
+// distortion.
+struct CamDistSpec {
+    uint32_t cam, dist;
+};
+
+inline CamDistSpec cam_dist_spec(const std::string& camera_model,
+                                 const std::string& distortion) {
+    const CameraModelType m = cmt(camera_model);
+    const CameraDistortionType d = cdt(distortion);
+    bool ok = (int)m >= 0 && (int)m <= 3 && (int)d >= 0 && (int)d <= 3;
+    if (ok) {
+        if (m == CameraModelType::FISHEYE || m == CameraModelType::EQUISOLID)
+            ok = d != CameraDistortionType::Rational;
+        else if (m == CameraModelType::EQUIRECTANGULAR)
+            ok = d == CameraDistortionType::None;
+    }
+    if (!ok)
+        throw std::runtime_error("Unsupported camera model / distortion tier");
+    return {(uint32_t)m, (uint32_t)d};
+}
+
+// kDistortion alone, for launches whose camera model stays a runtime value and
+// may differ from the one the coefficients were written for (the visualizer
+// blits the dataset cameras through a free-navigation view camera).
+inline uint32_t distortion_spec(const std::string& distortion) {
+    const CameraDistortionType d = cdt(distortion);
+    if ((int)d < 0 || (int)d > 3)
+        throw std::runtime_error("Unsupported camera distortion tier");
+    return (uint32_t)d;
 }
 
 // Validation + resolution of the SH value-quant launch args shared by the

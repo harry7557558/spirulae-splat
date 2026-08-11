@@ -10,6 +10,7 @@
 // ================
 
 
+template<CameraDistortionType distortion>
 __global__ void depth_to_points_forward_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
@@ -30,11 +31,11 @@ __global__ void depth_to_points_forward_kernel(
     // Load camera
     float4 intrin = intrins[bid];
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
 
     // Process
     float in_depth = in_depths.load1(bid, j, i);
-    float3 out_point = SlangPixelWise::depth_to_point(
+    float3 out_point = SlangPixelWiseDist<distortion>::depth_to_point(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
         (int)camera_model,
@@ -44,6 +45,7 @@ __global__ void depth_to_points_forward_kernel(
     out_points.store3(bid, j, i, out_point);
 }
 
+template<CameraDistortionType distortion>
 __global__ void depth_to_points_backward_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
@@ -65,12 +67,12 @@ __global__ void depth_to_points_backward_kernel(
     // Load camera
     float4 intrin = intrins[bid];
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
 
     // Process
     float in_depth = in_depths.load1(bid, j, i);
     float3 v_out_point = v_out_points.load3(bid, j, i);
-    float v_in_depth = SlangPixelWise::depth_to_point_vjp(
+    float v_in_depth = SlangPixelWiseDist<distortion>::depth_to_point_vjp(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
         (int)camera_model,
@@ -83,26 +85,30 @@ __global__ void depth_to_points_backward_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void depth_to_points_forward(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,            // [B, 4]
-    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView dist_coeffs,        // [B, 8]
     bool is_ray_depth,
     DeviceTensor3D<float>  depths,      // [B, H, W, 1]
     DeviceTensor3D<float3> out_points   // [B, H, W, 3]
 ) {
     int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
 
-    depth_to_points_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, is_ray_depth,
-        _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(out_points)
-    );
+    #define LAUNCH(D) \
+        depth_to_points_forward_kernel<D><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+            cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, is_ray_depth, \
+            _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(out_points))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 /*[AutoHeaderGeneratorExport]*/
 void depth_to_points_backward(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,            // [B, 4]
-    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView dist_coeffs,        // [B, 8]
     bool is_ray_depth,
     DeviceTensor3D<float>  in_depths,   // [B, H, W, 1]
     DeviceTensor3D<float3> v_out_points,// [B, H, W, 3]
@@ -110,11 +116,13 @@ void depth_to_points_backward(
 ) {
     int b = in_depths.size<0>(), h = in_depths.size<1>(), w = in_depths.size<2>();
 
-    depth_to_points_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, is_ray_depth,
-        _dt3d_to_tv4<float>(in_depths), _dt3d_to_tv4<float>(v_out_points),
-        _dt3d_to_tv4<float>(v_in_depths)
-    );
+    #define LAUNCH(D) \
+        depth_to_points_backward_kernel<D><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+            cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, is_ray_depth, \
+            _dt3d_to_tv4<float>(in_depths), _dt3d_to_tv4<float>(v_out_points), \
+            _dt3d_to_tv4<float>(v_in_depths))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -125,6 +133,7 @@ void depth_to_points_backward(
 // ================
 
 
+template<CameraDistortionType distortion>
 __global__ void depth_to_normal_forward_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
@@ -152,7 +161,7 @@ __global__ void depth_to_normal_forward_kernel(
     // Load camera
     float4 intrin = intrins[bid];
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
 
     // Process
 #if 0
@@ -179,7 +188,7 @@ __global__ void depth_to_normal_forward_kernel(
         int jg = int(blockIdx.y * TILE) + jt - 1;
         float depth = (ig >= 0 && ig < W && jg >= 0 && jg < H) ?
             depths.load1(bid, jg, ig) : 0.0f;
-        float3 ray = SlangPixelWise::generate_ray_d2n(
+        float3 ray = SlangPixelWiseDist<distortion>::generate_ray_d2n(
             {(float)ig+0.5f, (float)jg+0.5f},
             {fx, fy, cx, cy}, dist_coeffs,
             (int)camera_model, is_ray_depth
@@ -202,6 +211,7 @@ __global__ void depth_to_normal_forward_kernel(
 }
 
 
+template<CameraDistortionType distortion>
 __global__ void depth_to_normal_backward_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
@@ -229,7 +239,7 @@ __global__ void depth_to_normal_backward_kernel(
     // Load camera
     float4 intrin = intrins[bid];
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
 
     // Process
 #if 0
@@ -262,7 +272,7 @@ __global__ void depth_to_normal_backward_kernel(
         int jg = int(blockIdx.y * TILE) + jt - 1;
         float depth = (ig >= 0 && ig < W && jg >= 0 && jg < H) ?
             depths.load1(bid, jg, ig) : 0.0f;
-        float3 ray = SlangPixelWise::generate_ray_d2n(
+        float3 ray = SlangPixelWiseDist<distortion>::generate_ray_d2n(
             {(float)ig+0.5f, (float)jg+0.5f},
             {fx, fy, cx, cy}, dist_coeffs,
             (int)camera_model, is_ray_depth
@@ -296,26 +306,30 @@ __global__ void depth_to_normal_backward_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void depth_to_normal_forward(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,            // [B, 4]
-    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView dist_coeffs,        // [B, 8]
     bool is_ray_depth,
     DeviceTensor3D<float>  depths,      // [B, H, W, 1]
     DeviceTensor3D<float3> normals      // [B, H, W, 3]
 ) {
     int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
 
-    depth_to_normal_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        is_ray_depth, _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(normals)
-    );
+    #define LAUNCH(D) \
+        depth_to_normal_forward_kernel<D><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+            cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, \
+            is_ray_depth, _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(normals))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 /*[AutoHeaderGeneratorExport]*/
 void depth_to_normal_backward(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,            // [B, 4]
-    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView dist_coeffs,        // [B, 8]
     bool is_ray_depth,
     DeviceTensor3D<float>  depths,      // [B, H, W, 1]
     DeviceTensor3D<float3> v_normals,   // [B, H, W, 3]
@@ -323,21 +337,23 @@ void depth_to_normal_backward(
 ) {
     int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
 
-    depth_to_normal_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        is_ray_depth, _dt3d_to_tv4<float>(depths),
-        _dt3d_to_tv4<float>(v_normals),
-        _dt3d_to_tv4<float>(v_depths)
-    );
+    #define LAUNCH(D) \
+        depth_to_normal_backward_kernel<D><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+            cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, \
+            is_ray_depth, _dt3d_to_tv4<float>(depths), \
+            _dt3d_to_tv4<float>(v_normals), \
+            _dt3d_to_tv4<float>(v_depths))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 
 
-// Python-callable wrappers using only TorchTensorView (pybind11 can convert tuples).
 /*[AutoHeaderGeneratorExport]*/
 void depth_to_normal_forward_tv(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
     bool is_ray_depth,
@@ -345,7 +361,7 @@ void depth_to_normal_forward_tv(
     TorchTensorView normals    // [B, H, W, 3] float32, CUDA (pre-allocated output)
 ) {
     depth_to_normal_forward(
-        camera_model, intrins, dist_coeffs, is_ray_depth,
+        camera_model, distortion, intrins, dist_coeffs, is_ray_depth,
         DeviceTensor3D<float>(depths),
         DeviceTensor3D<float3>(normals)
     );
@@ -354,6 +370,7 @@ void depth_to_normal_forward_tv(
 /*[AutoHeaderGeneratorExport]*/
 void depth_to_normal_backward_tv(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
     bool is_ray_depth,
@@ -362,7 +379,7 @@ void depth_to_normal_backward_tv(
     TorchTensorView v_depths   // [B, H, W, 1] accumulated in-place
 ) {
     depth_to_normal_backward(
-        camera_model, intrins, dist_coeffs, is_ray_depth,
+        camera_model, distortion, intrins, dist_coeffs, is_ray_depth,
         DeviceTensor3D<float>(depths),
         DeviceTensor3D<float3>(v_normals),
         DeviceTensor3D<float>(v_depths)
@@ -375,6 +392,7 @@ void depth_to_normal_backward_tv(
 // ================
 
 
+template<CameraDistortionType distortion>
 __global__ void depth_normal_loss_forward_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
@@ -403,7 +421,7 @@ __global__ void depth_normal_loss_forward_kernel(
     // Load camera
     float4 intrin = intrins[bid];
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
 
     // Process
 #if 1
@@ -415,7 +433,7 @@ __global__ void depth_normal_loss_forward_kernel(
         depths.load1(bid, j+1, i),
     };
     float3 gt_normal = gt_normals.load3(bid, j, i);
-    float loss = SlangPixelWise::depth_normal_loss(
+    float loss = SlangPixelWiseDist<distortion>::depth_normal_loss(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
         (int)camera_model, is_ray_depth,
@@ -428,6 +446,7 @@ __global__ void depth_normal_loss_forward_kernel(
 }
 
 
+template<CameraDistortionType distortion>
 __global__ void depth_normal_loss_backward_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
@@ -457,7 +476,7 @@ __global__ void depth_normal_loss_backward_kernel(
     // Load camera
     float4 intrin = intrins[bid];
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
 
     // Process
 #if 1
@@ -475,7 +494,7 @@ __global__ void depth_normal_loss_backward_kernel(
     float v_loss = v_losses.load1(bid, j, i);
     float4 v_depth = {0.0f, 0.0f, 0.0f, 0.0f};
     float3 v_gt_normal = float3{0.0f, 0.0f, 0.0f};
-    SlangPixelWise::depth_normal_loss_vjp(
+    SlangPixelWiseDist<distortion>::depth_normal_loss_vjp(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
         (int)camera_model, is_ray_depth,
@@ -495,8 +514,9 @@ __global__ void depth_normal_loss_backward_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void depth_normal_loss_forward(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,            // [B, 4]
-    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView dist_coeffs,        // [B, 8]
     bool is_ray_depth,
     DeviceTensor3D<float>  depths,      // [B, H, W, 1]
     DeviceTensor3D<float3> gt_normals,  // [B, H, W, 3]
@@ -504,19 +524,22 @@ void depth_normal_loss_forward(
 ) {
     int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
 
-    depth_normal_loss_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        is_ray_depth, _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(gt_normals),
-        _dt3d_to_tv4<float>(losses)
-    );
+    #define LAUNCH(D) \
+        depth_normal_loss_forward_kernel<D><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+            cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, \
+            is_ray_depth, _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(gt_normals), \
+            _dt3d_to_tv4<float>(losses))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 /*[AutoHeaderGeneratorExport]*/
 void depth_normal_loss_backward(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,            // [B, 4]
-    TorchTensorView dist_coeffs,        // [B, 10]
+    TorchTensorView dist_coeffs,        // [B, 8]
     bool is_ray_depth,
     DeviceTensor3D<float>  depths,      // [B, H, W, 1]
     DeviceTensor3D<float3> gt_normals,  // [B, H, W, 3]
@@ -526,12 +549,14 @@ void depth_normal_loss_backward(
 ) {
     int b = depths.size<0>(), h = depths.size<1>(), w = depths.size<2>();
 
-    depth_normal_loss_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        is_ray_depth, _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(gt_normals),
-        _dt3d_to_tv4<float>(v_losses),
-        _dt3d_to_tv4<float>(v_depths), _dt3d_to_tv4<float>(v_gt_normals)
-    );
+    #define LAUNCH(D) \
+        depth_normal_loss_backward_kernel<D><<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+            cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, \
+            is_ray_depth, _dt3d_to_tv4<float>(depths), _dt3d_to_tv4<float>(gt_normals), \
+            _dt3d_to_tv4<float>(v_losses), \
+            _dt3d_to_tv4<float>(v_depths), _dt3d_to_tv4<float>(v_gt_normals))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -541,6 +566,7 @@ void depth_normal_loss_backward(
 // ================
 
 
+template<CameraDistortionType distortion>
 __global__ void ray_depth_to_linear_depth_forward_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
@@ -560,11 +586,11 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
     // Load camera
     float4 intrin = intrins[bid];
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
 
     // Process
     float in_depth = in_depths.load1(bid, j, i);
-    float out_depth = in_depth * SlangPixelWise::ray_depth_to_linear_depth_factor(
+    float out_depth = in_depth * SlangPixelWiseDist<distortion>::ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
         (int)camera_model
@@ -572,6 +598,7 @@ __global__ void ray_depth_to_linear_depth_forward_kernel(
     out_depths.store1(bid, j, i, out_depth);
 }
 
+template<CameraDistortionType distortion>
 __global__ void ray_depth_to_linear_depth_backward_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // fx, fy, cx, cy
@@ -591,11 +618,11 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
     // Load camera
     float4 intrin = intrins[bid];
     float fx = intrin.x, fy = intrin.y, cx = intrin.z, cy = intrin.w;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
 
     // Process
     float v_out_depth = v_out_depths.load1(bid, j, i);
-    float factor = SlangPixelWise::ray_depth_to_linear_depth_factor(
+    float factor = SlangPixelWiseDist<distortion>::ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
         (int)camera_model
@@ -607,36 +634,44 @@ __global__ void ray_depth_to_linear_depth_backward_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void ray_depth_to_linear_depth_forward(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,  // [B, 4]
-    TorchTensorView dist_coeffs,  // [B, 10]
+    TorchTensorView dist_coeffs,  // [B, 8]
     TorchTensorView depths,  // [B, H, W, 1]
     TorchTensorView out_depths  // [B, H, W, 1]
 ) {
     const auto& s = std::get<2>(depths);
     int64_t b = s[0], h = s[1], w = s[2];
 
-    ray_depth_to_linear_depth_forward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        _bhw1_view(depths), _bhw1_view(out_depths)
-    );
+    #define LAUNCH(D) \
+        ray_depth_to_linear_depth_forward_kernel<D> \
+            <<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+                cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, \
+                _bhw1_view(depths), _bhw1_view(out_depths))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 /*[AutoHeaderGeneratorExport]*/
 void ray_depth_to_linear_depth_backward(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,  // [B, 4]
-    TorchTensorView dist_coeffs,  // [B, 10]
+    TorchTensorView dist_coeffs,  // [B, 8]
     TorchTensorView v_out_depths,  // [B, H, W, 1]
     TorchTensorView v_in_depths  // [B, H, W, 1]
 ) {
     const auto& s = std::get<2>(v_out_depths);
     int64_t b = s[0], h = s[1], w = s[2];
 
-    ray_depth_to_linear_depth_backward_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        _bhw1_view(v_out_depths), _bhw1_view(v_in_depths)
-    );
+    #define LAUNCH(D) \
+        ray_depth_to_linear_depth_backward_kernel<D> \
+            <<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+                cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, \
+                _bhw1_view(v_out_depths), _bhw1_view(v_in_depths))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -650,6 +685,7 @@ void ray_depth_to_linear_depth_backward(
 // map resolution (depth maps may differ in size from the rendered image). The
 // zero sentinel (no GT) and degenerate rays (undistort failure -> factor 0)
 // map to 0 (i.e. "no supervision here").
+template<CameraDistortionType distortion>
 __global__ void linear_depth_to_ray_depth_inplace_kernel(
     CameraModelType camera_model,
     const float4 *__restrict__ intrins,  // image-res fx, fy, cx, cy
@@ -672,10 +708,10 @@ __global__ void linear_depth_to_ray_depth_inplace_kernel(
     float4 intrin = intrins[bid];
     float fx = intrin.x * sx, fy = intrin.y * sy;
     float cx = intrin.z * sx, cy = intrin.w * sy;
-    CameraDistortionCoeffs dist_coeffs = dist_coeffs_buffer.load(bid);
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
 
     float in_depth = depths.load1(bid, j, i);
-    float factor = SlangPixelWise::ray_depth_to_linear_depth_factor(
+    float factor = SlangPixelWiseDist<distortion>::ray_depth_to_linear_depth_factor(
         {(float)i+0.5f, (float)j+0.5f},
         {fx, fy, cx, cy}, dist_coeffs,
         (int)camera_model
@@ -687,8 +723,9 @@ __global__ void linear_depth_to_ray_depth_inplace_kernel(
 /*[AutoHeaderGeneratorExport]*/
 void linear_depth_to_ray_depth_inplace(
     std::string camera_model,
+    std::string distortion,
     TorchTensorView intrins,        // [B, 4] at image resolution
-    TorchTensorView dist_coeffs,    // [B, 10]
+    TorchTensorView dist_coeffs,    // [B, 8]
     int image_width, int image_height,
     DeviceTensor3D<float> depths    // [B, Hd, Wd, 1] in/out
 ) {
@@ -697,10 +734,13 @@ void linear_depth_to_ray_depth_inplace(
     float sx = (image_width  > 0) ? (float)w / (float)image_width  : 1.0f;
     float sy = (image_height > 0) ? (float)h / (float)image_height : 1.0f;
 
-    linear_depth_to_ray_depth_inplace_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
-        cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs,
-        sx, sy, _dt3d_to_tv4<float>(depths)
-    );
+    #define LAUNCH(D) \
+        linear_depth_to_ray_depth_inplace_kernel<D> \
+            <<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>( \
+                cmt(camera_model), (float4*)std::get<0>(intrins), dist_coeffs, \
+                sx, sy, _dt3d_to_tv4<float>(depths))
+    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
+    #undef LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 

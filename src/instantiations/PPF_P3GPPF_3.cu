@@ -5,13 +5,14 @@
 #include "kernels/projection/ProjectionPackedFwd_kernel.cuh"
 
 template void projection_packed_fwd_kernel_wrapper<
-    Vanilla3DGS<3>,
-    CameraModelType::EQUIRECTANGULAR
+    Vanilla3DGS<1>,
+    CameraModelType::FISHEYE,
+    CameraDistortionType::OpenCV
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<3>::WorldBuffer splats_world,  // [N, ...]
+    Vanilla3DGS<1>::WorldBuffer splats_world,  // [N, ...]
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -24,7 +25,7 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    Vanilla3DGS<3>::ScreenBuffer splats_screen,  // [nnz, ...]
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,  // [nnz, ...]
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -33,13 +34,14 @@ template void projection_packed_fwd_kernel_wrapper<
 );
 
 template void projection_packed_fwd_kernel_wrapper<
-    MipSplatting<3>,
-    CameraModelType::PINHOLE
+    Vanilla3DGS<1>,
+    CameraModelType::FISHEYE,
+    CameraDistortionType::ThinPrism
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<3>::WorldBuffer splats_world,  // [N, ...]
+    Vanilla3DGS<1>::WorldBuffer splats_world,  // [N, ...]
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -52,7 +54,7 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    MipSplatting<3>::ScreenBuffer splats_screen,  // [nnz, ...]
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,  // [nnz, ...]
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -61,13 +63,14 @@ template void projection_packed_fwd_kernel_wrapper<
 );
 
 template void projection_packed_fwd_kernel_wrapper<
-    MipSplatting<3>,
-    CameraModelType::FISHEYE
+    Vanilla3DGS<1>,
+    CameraModelType::EQUISOLID,
+    CameraDistortionType::None
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<3>::WorldBuffer splats_world,  // [N, ...]
+    Vanilla3DGS<1>::WorldBuffer splats_world,  // [N, ...]
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -80,7 +83,7 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    MipSplatting<3>::ScreenBuffer splats_screen,  // [nnz, ...]
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,  // [nnz, ...]
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -89,13 +92,14 @@ template void projection_packed_fwd_kernel_wrapper<
 );
 
 template void projection_packed_fwd_kernel_wrapper<
-    MipSplatting<3>,
-    CameraModelType::EQUISOLID
+    Vanilla3DGS<1>,
+    CameraModelType::EQUISOLID,
+    CameraDistortionType::OpenCV
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<3>::WorldBuffer splats_world,  // [N, ...]
+    Vanilla3DGS<1>::WorldBuffer splats_world,  // [N, ...]
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -108,7 +112,7 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    MipSplatting<3>::ScreenBuffer splats_screen,  // [nnz, ...]
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,  // [nnz, ...]
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -117,13 +121,14 @@ template void projection_packed_fwd_kernel_wrapper<
 );
 
 template void projection_packed_fwd_kernel_wrapper<
-    MipSplatting<3>,
-    CameraModelType::EQUIRECTANGULAR
+    Vanilla3DGS<1>,
+    CameraModelType::EQUISOLID,
+    CameraDistortionType::ThinPrism
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    MipSplatting<3>::WorldBuffer splats_world,  // [N, ...]
+    Vanilla3DGS<1>::WorldBuffer splats_world,  // [N, ...]
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -136,7 +141,7 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    MipSplatting<3>::ScreenBuffer splats_screen,  // [nnz, ...]
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,  // [nnz, ...]
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -145,13 +150,14 @@ template void projection_packed_fwd_kernel_wrapper<
 );
 
 template void projection_packed_fwd_kernel_wrapper<
-    Vanilla3DGS<4>,
-    CameraModelType::PINHOLE
+    Vanilla3DGS<1>,
+    CameraModelType::EQUIRECTANGULAR,
+    CameraDistortionType::None
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<4>::WorldBuffer splats_world,  // [N, ...]
+    Vanilla3DGS<1>::WorldBuffer splats_world,  // [N, ...]
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -164,7 +170,7 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    Vanilla3DGS<4>::ScreenBuffer splats_screen,  // [nnz, ...]
+    Vanilla3DGS<1>::ScreenBuffer splats_screen,  // [nnz, ...]
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -173,13 +179,14 @@ template void projection_packed_fwd_kernel_wrapper<
 );
 
 template void projection_packed_fwd_kernel_wrapper<
-    Vanilla3DGS<4>,
-    CameraModelType::FISHEYE
+    MipSplatting<1>,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::None
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<4>::WorldBuffer splats_world,  // [N, ...]
+    MipSplatting<1>::WorldBuffer splats_world,  // [N, ...]
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -192,7 +199,7 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    Vanilla3DGS<4>::ScreenBuffer splats_screen,  // [nnz, ...]
+    MipSplatting<1>::ScreenBuffer splats_screen,  // [nnz, ...]
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -201,13 +208,14 @@ template void projection_packed_fwd_kernel_wrapper<
 );
 
 template void projection_packed_fwd_kernel_wrapper<
-    Vanilla3DGS<4>,
-    CameraModelType::EQUISOLID
+    MipSplatting<1>,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::OpenCV
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<4>::WorldBuffer splats_world,  // [N, ...]
+    MipSplatting<1>::WorldBuffer splats_world,  // [N, ...]
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -220,7 +228,7 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    Vanilla3DGS<4>::ScreenBuffer splats_screen,  // [nnz, ...]
+    MipSplatting<1>::ScreenBuffer splats_screen,  // [nnz, ...]
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,
@@ -229,13 +237,14 @@ template void projection_packed_fwd_kernel_wrapper<
 );
 
 template void projection_packed_fwd_kernel_wrapper<
-    Vanilla3DGS<4>,
-    CameraModelType::EQUIRECTANGULAR
+    MipSplatting<1>,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::ThinPrism
 >(
     cudaStream_t stream,
     const uint32_t C,
     const uint32_t N,
-    Vanilla3DGS<4>::WorldBuffer splats_world,  // [N, ...]
+    MipSplatting<1>::WorldBuffer splats_world,  // [N, ...]
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float4 *__restrict__ intrins,  // [C, 4], fx, fy, cx, cy
     const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
@@ -248,7 +257,7 @@ template void projection_packed_fwd_kernel_wrapper<
     float4 *__restrict__ aabbs,         // [nnz, 4]
     float *__restrict__ sorting_depths,         // [nnz]
     float *__restrict__ radii,  // [N]
-    Vanilla3DGS<4>::ScreenBuffer splats_screen,  // [nnz, ...]
+    MipSplatting<1>::ScreenBuffer splats_screen,  // [nnz, ...]
     const uint8_t* __restrict__ sh_value_packed,
     const float2* __restrict__ sh_value_bounds,
     const uint32_t num_sh_buffer,

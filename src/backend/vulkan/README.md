@@ -155,10 +155,37 @@ Variant axes follow the CUDA instantiation structure
 
 - **Primitive** (Vanilla3DGS / MipSplatting / Vanilla3DGUT) is a type
   parameter → separate entry point (buffer layouts differ).
-- **Camera model, SH degree, DistortionType, output_median, VALUE_BITS**
-  are value parameters → specialization constants on ONE SPIR-V module,
-  folded at pipeline creation. Pipelines are created lazily and cached by
-  (entry point, spec-constant tuple, device capability set).
+- **Camera model, lens-distortion tier, SH degree, DistortionType,
+  output_median, VALUE_BITS** are value parameters → specialization
+  constants on ONE SPIR-V module, folded at pipeline creation. Pipelines are
+  created lazily and cached by (entry point, spec-constant tuple, device
+  capability set).
+
+### The lens-distortion tier (`kDistortion`)
+
+`CameraDistortionType` (0 None / 1 OpenCV / 2 ThinPrism / 3 Rational, see
+`core/CameraModel.h`) is a Slang generic `D : ICameraDistortion` in
+`shaders/projection_utils.slang`. `backend/vulkan/shaders/dist_spec.slang`
+carries the glue: `load_dist_coeffs<D>` (a camera's prefix of the 8-float
+storage row), `pixel_ray<D>`, and the `SS_DISPATCH_DIST` /
+`SS_DISPATCH_CAM_DIST` macros that fold the constant — the latter covering
+only the eleven compiled (model, tier) pairs, with the rest falling through
+to the nearest compiled tier. Launchers reject an uncompiled pair up front
+(`vkk::cam_dist_spec`), so the fallthrough is never reached.
+
+**`kDistortion` is declared LAST in every module, and its value appended last
+in every `SpecList`.** Spec-constant IDs are assigned by declaration order
+within a module and the host passes `SpecList` by index, so a constant
+inserted mid-module silently renumbers every axis after it (the class of bug
+the densify copy kernel hit — see "Spec IDs follow declaration order" below).
+The resulting IDs: warp 0; background_sh / pixel_wise_{render,train} /
+meshing_raster / visualizer 1; rasterize_moments 3; projection_fwd /
+rasterize_fwd 4; projection_bwd / rasterize_bwd 6; projection_qgrad 8;
+fpbo 11 (12 axes, still under `SpecList::kMax` = 16).
+
+The one axis declared after `kDistortion` is warp's `kFromSource` (ID 1),
+which selects the source-camera projection in the wide warps: it trails so the
+launches that never re-distort keep passing their one-element `SpecList`.
 
 ## Shaders: build and shipping
 
@@ -378,7 +405,9 @@ the engine level.
   field a shader may load through is NEVER null — launchers substitute
   `vkk::or_fallback()` (a 4 KB zeroed allocation in KernelCommon.h);
   "null means zeros" inputs (dist_coeffs and friends) just read the
-  fallback; "null selects a mode" moved to specialization constants
+  fallback (the identity distortion tier reads nothing at all: a large
+  camera index would run past the 4 KB fallback);
+  "null selects a mode" moved to specialization constants
   (intersect_tile kEllipse/kHasXy/kPacked, rasterize_fwd kRasterPacked —
   spec-folding removes the dead load entirely) or explicit flag fields
   (blit has_lss/has_tri, thumbnails has_alpha, optimizer has_steps/
@@ -671,11 +700,12 @@ the engine level.
     under bilinear-resampled GT, and the Pearson-depth chain fed by
     atomic-order-dependent sums); validation clean.
 - **Dataset warp/conversion + end-to-end training (phase 5, eighth and
-  final slice)**: `kernels/Warp.cpp` implements the 12 remaining launch
+  final slice)**: `kernels/Warp.cpp` implements the 16 remaining launch
   APIs — the fused byte->float GT warps of GtDepthNormalWarp.cu
-  (`launch_warp_{byte_to_float,mask,depth,normal}_{wide,equi}`) plus the
-  raw converters (`uint8/16_{image,depth,normal}_to_float_raw` and the
-  DeviceTensor3D wrappers). Device work in `warp.slang`:
+  (`launch_warp_{byte_to_float,mask,depth,normal}_{wide,equi}`), the
+  ImageRedistort.cu family (`launch_redistort_*`) and the raw converters
+  (`uint8/16_{image,depth,normal}_to_float_raw` and the DeviceTensor3D
+  wrappers). Device work in `warp.slang`:
   - The wide warps project each pinhole-face ray through the CANONICAL
     `projection_utils.slang` `*_proj_nav` exports (same functions the
     CUDA kernels call), with the camera model as a runtime params field
@@ -694,6 +724,14 @@ the engine level.
     by accident of the `valid` guard.
   - One `bytes_to_float` entry (elem_kind + scale + offset) covers all
     four raw converters.
+  - **Re-distort** (`launch_redistort_{byte_to_float,float,mask,normal}`,
+    mirroring ImageRedistort.cu): a COLMAP camera with no exact distortion
+    tier is fitted onto one, and the GT is resampled from the TRUE source
+    projection (`shaders/camera_source.slang`, shared with CUDA) instead of
+    from the fit. `redistort_{img,mask,normal}` cover the four launchers —
+    byte->float and float->float differ only in `elem_kind`. The fused
+    fisheye case never materializes the fitted camera: the wide warps take
+    the source projection directly under the `kFromSource` axis.
   - Parity: `warp_parity` (170K floats, one tight channel — everything
     here is deterministic per-pixel math; <= 0.0012% violations, isolated
     proj_nav valid-flip / nearest-rounding boundary pixels) and

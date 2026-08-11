@@ -12,6 +12,7 @@
 // pixels). The blit's uint8 output allows |d| <= 2 per byte (fp rounding at
 // the byte quantization boundary) with the same violation cap.
 
+#include <backend/tests/DistortionFixture.h>
 #include <engine/Engine.h>
 #include <engine/EngineState.h>
 #include <kernels/pixelwise/PixelWise.cuh>
@@ -89,13 +90,13 @@ int main(int argc, char** argv) {
         cy_, 0, sy_, 0.2f,  0, 1, 0, -0.1f,  -sy_, 0, cy_, 4.2f, 0, 0, 0, 1,
     };
     std::vector<float> intr = {180, 182, 120, 90, 175, 177, 118, 92};
-    std::vector<float> dist(C * 10, 0.f);
-    dist[0] = 0.04f; dist[1] = -0.008f; dist[10] = -0.02f; dist[11] = 0.003f;
+    std::vector<float> dist = dist_fixture::distortion_rows(C);
 
-    auto set_cams = [&](const char* model) {
-        set_camera_params(W, H, model, ttv(vm.data(), {C, 4, 4}),
-                          ttv(intr.data(), {C, 4}),
-                          ttv(dist.data(), {C, 10}));
+    auto set_cams = [&](const char* model, int tier) {
+        set_camera_params(W, H, model, dist_fixture::kTierNames[tier],
+                          ttv(vm.data(), {C, 4, 4}), ttv(intr.data(), {C, 4}),
+                          ttv(dist.data() + dist_fixture::row_offset(tier, C),
+                              {C, kCameraDistortionParams}));
     };
 
     // --- background: SH skybox with deterministic coefficients ---
@@ -149,18 +150,22 @@ int main(int argc, char** argv) {
     struct Cfg {
         const char* prim;
         const char* cam;
+        int tier;       // distortion tier, index into dist_fixture::kTierNames
         bool packed;
         bool median;
         int dist_type;  // 0 None, 2 RGB_D
     };
+    // Rows 1 and 2 differ only in the tier, so the NONE fast path is read
+    // against a distorted neighbour.
     const Cfg cfgs[] = {
-        {"3dgs", "PINHOLE", false, true, 0},
-        {"mip", "FISHEYE", false, false, 2},
-        {"3dgut", "PINHOLE", false, false, 0},
-        {"3dgs", "EQUIRECTANGULAR", true, false, 0},
+        {"3dgs", "PINHOLE", 0, false, true, 0},
+        {"3dgs", "PINHOLE", 1, false, true, 0},
+        {"mip", "FISHEYE", 2, false, false, 2},
+        {"3dgut", "PINHOLE", 3, false, false, 0},
+        {"3dgs", "EQUIRECTANGULAR", 0, true, false, 0},
     };
     for (const Cfg& c : cfgs) {
-        set_cams(c.cam);
+        set_cams(c.cam, c.tier);
         forward_3dgs(c.prim, 3, c.packed, c.median, c.dist_type);
         backend::device_synchronize();
         if (const char* err = backend::last_error()) {
@@ -173,7 +178,7 @@ int main(int argc, char** argv) {
 
     // --- noise background mode ---
     engine_init_background_noise(/*linear=*/false);
-    set_cams("PINHOLE");
+    set_cams("PINHOLE", 1);
     forward_3dgs("3dgs", 3, false, false, 0);
     backend::device_synchronize();
     pull(0, 0);
@@ -184,9 +189,10 @@ int main(int argc, char** argv) {
         float* d_normals =
             (float*)backend::device_malloc((size_t)C * H * W * 3 * 4);
         depth_to_normal_forward_tv(
-            "PINHOLE",
+            "PINHOLE", "OPENCV",
             ttv(engine().camera.intrins.data_ptr(), {C, 4}),
-            ttv(engine().camera.dist_coeffs.data_ptr(), {C, 10}),
+            ttv(engine().camera.dist_coeffs.data_ptr(),
+                {C, kCameraDistortionParams}),
             /*is_ray_depth=*/true,
             ttv(depth_t.data_ptr(), {C, H, W, 1}),
             ttv(d_normals, {C, H, W, 3}));
@@ -199,8 +205,8 @@ int main(int argc, char** argv) {
 
     // --- viewer blit: synthetic 6-camera dataset + grid overlay ---
     {
-        std::vector<float> v_intr(N_CAM * 4), v_dist(N_CAM * 10, 0.f),
-            v_c2w(N_CAM * 12);
+        std::vector<float> v_intr(N_CAM * 4),
+            v_dist(N_CAM * kCameraDistortionParams, 0.f), v_c2w(N_CAM * 12);
         std::vector<int32_t> v_w(N_CAM, 320), v_h(N_CAM, 240),
             v_model(N_CAM, 0);
         for (int i = 0; i < N_CAM; i++) {
@@ -229,7 +235,7 @@ int main(int argc, char** argv) {
         v_model[2] = 1;  // one fisheye frustum
         engine_viewer_init(ttv(v_model.data(), {N_CAM}),
                            ttv(v_intr.data(), {N_CAM, 4}),
-                           ttv(v_dist.data(), {N_CAM, 10}),
+                           ttv(v_dist.data(), {N_CAM, kCameraDistortionParams}),
                            ttv(v_c2w.data(), {N_CAM, 3, 4}),
                            ttv(v_w.data(), {N_CAM}),
                            ttv(v_h.data(), {N_CAM}), 0.25f);
@@ -238,7 +244,12 @@ int main(int argc, char** argv) {
         // view camera = render camera 0 (device copies)
         std::vector<float> view_vm(vm.begin(), vm.begin() + 16);
         std::vector<float> view_intr(intr.begin(), intr.begin() + 4);
-        std::vector<float> view_dist(10, 0.f);
+        // Visualization camera: OpenCV, so the blit's own projection runs a
+        // distorted tier rather than only the fast path.
+        std::vector<float> view_dist(
+            dist.begin() + dist_fixture::row_offset(1, C),
+            dist.begin() + dist_fixture::row_offset(1, C) +
+                kCameraDistortionParams);
         float* d_vm = upload(view_vm);
         float* d_vi = upload(view_intr);
         float* d_vd = upload(view_dist);
@@ -253,7 +264,8 @@ int main(int argc, char** argv) {
             engine_blit_view(
                 "rgb", ttv(rgb_t.data_ptr(), {H, W, 3}),
                 ttv(depth_t.data_ptr(), {H, W, 1}), ttv(d_Ts, {H, W, 1}), 0,
-                ttv(d_vi, {1, 4}), ttv(d_vm, {4, 4}), ttv(d_vd, {1, 10}),
+                "OPENCV", ttv(d_vi, {1, 4}), ttv(d_vm, {4, 4}),
+                ttv(d_vd, {1, kCameraDistortionParams}),
                 /*show_training_cameras=*/cams, /*show_overlay=*/true,
                 /*grid_dist=*/3.0f, 0.2f, -0.1f, 0.0f,
                 ttv(d_out, {H, W, 3}));

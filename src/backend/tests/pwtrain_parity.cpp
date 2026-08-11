@@ -11,6 +11,7 @@
 // contributions in a different order than CUDA's block-atomic scheme, so
 // comparison uses the usual tolerance + small violation-fraction cap.
 
+#include <backend/tests/DistortionFixture.h>
 #include <kernels/pixelwise/PixelWise.cuh>
 #include <kernels/background/BackgroundSphericalHarmonics.cuh>
 #include <engine/EngineInternal.h>
@@ -136,35 +137,40 @@ int main(int argc, char** argv) {
     // ---- cameras for depth kernels ----
     std::vector<float> intrins = {50.f, 50.f, 32.f, 24.f,
                                   55.f, 52.f, 30.f, 25.f};  // [B,4]
-    std::vector<float> dist(B * 10, 0.f);
-    dist[0] = 0.05f;  // mild k1 on batch 0
-    dist[10 + 0] = -0.03f;
+    std::vector<float> dist = dist_fixture::distortion_rows(B);
     float* d_intr = upload(intrins);
     float* d_dist = upload(dist);
+    auto dist_tv = [&](int tier) {
+        return ttv(d_dist + dist_fixture::row_offset(tier, B),
+                   {B, kCameraDistortionParams});
+    };
     std::vector<float> depths(PIX);
     fill(depths, 0.5f, 6.f);
     float* d_depths = upload(depths);
 
-    // ---- depth_to_normal_backward (pinhole w/ dist; ray + linear depth) ----
-    for (int rd = 0; rd < 2; rd++) {
-        std::vector<float> vn(PIX * 3);
-        fill(vn, -1.f, 1.f);
-        float* d_vn = upload(vn);
-        float* d_vd = fresh1();
-        depth_to_normal_backward("PINHOLE", ttv(d_intr, {B, 4}),
-                                 ttv(d_dist, {B, 10}), rd != 0, t1(d_depths),
-                                 t3(d_vn), t1(d_vd));
-        backend::device_synchronize();
-        readback_f(acc, d_vd, PIX);
-    }
+    // ---- depth_to_normal_backward (pinhole; every tier x ray/linear) ----
+    for (int tier = 0; tier < 4; tier++)
+        for (int rd = 0; rd < 2; rd++) {
+            std::vector<float> vn(PIX * 3);
+            fill(vn, -1.f, 1.f);
+            float* d_vn = upload(vn);
+            float* d_vd = fresh1();
+            depth_to_normal_backward("PINHOLE",
+                                     dist_fixture::kTierNames[tier],
+                                     ttv(d_intr, {B, 4}), dist_tv(tier),
+                                     rd != 0, t1(d_depths), t3(d_vn),
+                                     t1(d_vd));
+            backend::device_synchronize();
+            readback_f(acc, d_vd, PIX);
+        }
 
-    // ---- linear_depth_to_ray_depth_inplace (fisheye, no dist view) ----
+    // ---- linear_depth_to_ray_depth_inplace (fisheye, thin prism) ----
     {
         std::vector<float> dcopy = depths;
         float* d_d = upload(dcopy);
-        linear_depth_to_ray_depth_inplace("FISHEYE", ttv(d_intr, {B, 4}),
-                                          ttv(d_dist, {B, 10}), (int)W * 2,
-                                          (int)H * 2, t1(d_d));
+        linear_depth_to_ray_depth_inplace("FISHEYE", "THIN_PRISM",
+                                          ttv(d_intr, {B, 4}), dist_tv(2),
+                                          (int)W * 2, (int)H * 2, t1(d_d));
         backend::device_synchronize();
         readback_f(acc, d_d, PIX);
     }
@@ -198,6 +204,7 @@ int main(int argc, char** argv) {
             cy_, 0, sy_, 0,  0, 1, 0, 0,  -sy_, 0, cy_, 1.f,  0, 0, 0, 1};
         float* d_vm = upload(vm);
         for (int deg : {1, 3}) {
+            const int tier = deg == 1 ? 1 : 2;   // OpenCV, then thin prism
             const int K = (deg + 1) * (deg + 1);
             std::vector<float> sh(K * 3);
             fill(sh, -0.4f, 0.4f);
@@ -205,16 +212,18 @@ int main(int argc, char** argv) {
             float* d_sh = upload(sh);
             float* d_out = fresh3();
             render_background_sh_forward(
-                (int)W, (int)H, "PINHOLE", deg, ttv(d_vm, {B, 4, 4}),
-                ttv(d_intr, {B, 4}), ttv(d_dist, {B, 10}),
+                (int)W, (int)H, "PINHOLE", dist_fixture::kTierNames[tier],
+                deg, ttv(d_vm, {B, 4, 4}),
+                ttv(d_intr, {B, 4}), dist_tv(tier),
                 ttv(d_sh, {K, 3}), ttv(d_out, {B, H, W, 3}));
             std::vector<float> vout2(PIX * 3);
             fill(vout2, -1.f, 1.f);
             float* d_vout2 = upload(vout2);
             float* d_vsh = upload(std::vector<float>(K * 3, 0.f));
             render_background_sh_backward(
-                (int)W, (int)H, "PINHOLE", deg, ttv(d_vm, {B, 4, 4}),
-                ttv(d_intr, {B, 4}), ttv(d_dist, {B, 10}),
+                (int)W, (int)H, "PINHOLE", dist_fixture::kTierNames[tier],
+                deg, ttv(d_vm, {B, 4, 4}),
+                ttv(d_intr, {B, 4}), dist_tv(tier),
                 ttv(d_sh, {K, 3}), ttv(d_out, {B, H, W, 3}),
                 ttv(d_vout2, {B, H, W, 3}), ttv(d_vsh, {K, 3}));
             backend::device_synchronize();

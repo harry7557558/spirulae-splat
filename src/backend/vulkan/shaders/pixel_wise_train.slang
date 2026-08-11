@@ -13,6 +13,7 @@
 #undef CudaDeviceExport
 
 #include "atomic_float.slang"
+#include "dist_spec.slang"
 
 // Shared boolean variant flag (noise blend: is_linear; srgb:
 // is_input_linear), same convention as pixel_wise_render.slang.
@@ -208,7 +209,7 @@ static const int D2NB_TILE = 16;
 
 struct DepthToNormalBwdParams {  // 60 bytes: pushed directly
     float4* intrins;      // [B]
-    float* dist_coeffs;   // [B,10] (fallback-backed)
+    float* dist_coeffs;   // [B,8] (fallback-backed)
     float* depths;        // [B,H,W,1]
     float* v_normals;     // [B,H,W,3]
     float* v_depths;      // [B,H,W,1] accumulated in place
@@ -220,6 +221,33 @@ struct DepthToNormalBwdParams {  // 60 bytes: pushed directly
 };
 
 groupshared float4 _d2nb_points[(D2NB_TILE + 2) * (D2NB_TILE + 2)];
+
+// Apron fill, generic over the tier so the entry folds kDistortion once
+// instead of switching inside the loop.
+[ForceInline]
+void _d2nb_fill_apron<D : ICameraDistortion>(DepthToNormalBwdParams p,
+                                             uint bid, uint2 tile0, uint tid,
+                                             float4 intrin) {
+    float dist[D.kNumParams];
+    load_dist_coeffs<D>(p.dist_coeffs, bid, dist);
+    for (uint k = tid; k < uint((D2NB_TILE + 2) * (D2NB_TILE + 2)); k += 256) {
+        int it = int(k % (D2NB_TILE + 2)), jt = int(k / (D2NB_TILE + 2));
+        int ig = int(tile0.x) + it - 1;
+        int jg = int(tile0.y) + jt - 1;
+        float depth =
+            (ig >= 0 && ig < int(p.W) && jg >= 0 && jg < int(p.H))
+                ? p.depths[(bid * p.H + uint(jg)) * p.W + uint(ig)]
+                : 0.0f;
+        float3 ray = generate_ray_d2n<D>(
+            float2(float(ig) + 0.5f, float(jg) + 0.5f), intrin, dist,
+            p.camera_model, p.is_ray_depth != 0);
+        _d2nb_points[k] = float4(ray, depth);
+    }
+}
+
+#define _d2nb_call(D)                                                       \
+    _d2nb_fill_apron<D>(p, bid, uint2(wg.x * D2NB_TILE, wg.y * D2NB_TILE),  \
+                        tid, intrin)
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -234,25 +262,8 @@ void d2n_bwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     if (i == 0 || i == p.W - 1 || j == 0 || j == p.H - 1) inside = false;
 
     float4 intrin = p.intrins[bid];
-    float dist[10];
-    [ForceUnroll]
-    for (int k = 0; k < 10; k++)
-        dist[k] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * bid + k];
 
-    for (uint k = tid; k < uint((D2NB_TILE + 2) * (D2NB_TILE + 2)); k += 256) {
-        int it = int(k % (D2NB_TILE + 2)), jt = int(k / (D2NB_TILE + 2));
-        int ig = int(wg.x * D2NB_TILE) + it - 1;
-        int jg = int(wg.y * D2NB_TILE) + jt - 1;
-        float depth =
-            (ig >= 0 && ig < int(p.W) && jg >= 0 && jg < int(p.H))
-                ? p.depths[(bid * p.H + uint(jg)) * p.W + uint(ig)]
-                : 0.0f;
-        float3 ray = generate_ray_d2n(
-            float2(float(ig) + 0.5f, float(jg) + 0.5f), intrin, dist,
-            p.camera_model, p.is_ray_depth != 0);
-        _d2nb_points[k] = float4(ray, depth);
-    }
+    SS_DISPATCH_DIST(_d2nb_call)
     GroupMemoryBarrierWithGroupSync();
     if (!inside) return;
 
@@ -289,13 +300,26 @@ void d2n_bwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
 struct LinToRayDepthParams {  // 48 bytes: pushed directly
     float4* intrins;     // [B] at IMAGE resolution
-    float* dist_coeffs;  // [B,10] (fallback-backed)
+    float* dist_coeffs;  // [B,8] (fallback-backed)
     float* depths;       // [B,Hd,Wd,1] in/out
     float sx, sy;        // depth_res / image_res
     uint32_t W, H, B;
     int camera_model;
     uint32_t _pad0;
 };
+
+[ForceInline]
+float _l2r_factor<D : ICameraDistortion>(LinToRayDepthParams p, uint bid,
+                                         float4 scaled, float2 pix) {
+    float dist[D.kNumParams];
+    load_dist_coeffs<D>(p.dist_coeffs, bid, dist);
+    return ray_depth_to_linear_depth_factor<D>(pix, scaled, dist,
+                                               p.camera_model);
+}
+
+#define _l2r_call(D)                                                     \
+    factor = _l2r_factor<D>(p, bid, scaled,                              \
+                            float2(float(i) + 0.5f, float(j) + 0.5f))
 
 [shader("compute")]
 [numthreads(128, 1, 1)]
@@ -307,17 +331,11 @@ void lin_to_ray_depth(uint3 gtid: SV_DispatchThreadID,
     float4 intrin = p.intrins[bid];
     float4 scaled = float4(intrin.x * p.sx, intrin.y * p.sy, intrin.z * p.sx,
                            intrin.w * p.sy);
-    float dist[10];
-    [ForceUnroll]
-    for (int k = 0; k < 10; k++)
-        dist[k] = is_null(p.dist_coeffs) ? 0.0f
-                                           : p.dist_coeffs[10 * bid + k];
 
     uint o = (bid * p.H + j) * p.W + i;
     float in_depth = p.depths[o];
-    float factor = ray_depth_to_linear_depth_factor(
-        float2(float(i) + 0.5f, float(j) + 0.5f), scaled, dist,
-        p.camera_model);
+    float factor = 0.0f;
+    SS_DISPATCH_DIST(_l2r_call)
     p.depths[o] = (factor > 0.0f) ? (in_depth / factor) : 0.0f;
 }
 
@@ -391,3 +409,10 @@ void color_shift_update(uint tid: SV_GroupThreadID,
         p.batch_sum[tid] = 0.0f;
     }
 }
+
+#undef _d2nb_call
+#undef _l2r_call
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

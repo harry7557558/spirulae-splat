@@ -7,6 +7,8 @@
 #include "data/FastFloat.h"
 
 #include "core/CameraModel.h"   // camera_model_from_name (CUDA-free)
+#include "data/DistortionFit.h"
+#include "data/SourceCamera.h"
 
 #include <algorithm>
 #include <cctype>
@@ -88,6 +90,12 @@ const std::map<int, ColmapModelInfo>& colmap_model_table() {
         {17, {"EQUIRECTANGULAR", 2}},
     };
     return t;
+}
+
+int colmap_model_id(const std::string& name) {
+    for (const auto& [id, info] : colmap_model_table())
+        if (name == info.name) return id;
+    return -1;
 }
 
 }  // namespace
@@ -270,75 +278,221 @@ ColmapPoints3D read_points3D_text(const std::string& recon_dir) {
 
 
 // ===========================================================================
-// Camera-param normalization + engine dist_coeffs layout
-// (k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2).
+// COLMAP camera model -> (CameraModelType, CameraDistortionType, coefficients)
+//
+// Every one of COLMAP's 18 models is accepted. Fourteen map exactly onto a
+// tier; the remaining four (FOV, SIMPLE_DIVISION, DIVISION, EUCM) and
+// RAD_TAN_THIN_PRISM_FISHEYE have no exact representation and are fitted, with
+// the source model recorded so the images can be re-distorted to match.
+//
+// COLMAP's parameter ORDER is not ours: it interleaves p1,p2 between k2 and k3
+// (models.h FullOpenCVCameraModel / ThinPrismFisheyeCameraModel), and its
+// FULL_OPENCV k4..k6 are DENOMINATOR terms, not further radial terms.
 // ===========================================================================
 
 namespace {
 
 struct BakedIntrins {
     float fx, fy, cx, cy;
-    std::array<float, 10> dist{};   // k1 k2 k3 k4 p1 p2 sx1 sy1 b1 b2
-    std::string model_name;         // nerfstudio-normalized: OPENCV / OPENCV_FISHEYE / ...
+    CameraModelType      model      = CameraModelType::PINHOLE;
+    CameraDistortionType distortion = CameraDistortionType::None;
+    std::array<float, kCameraDistortionParams> dist{};
+    RedistortSource      source;      // source_model < 0 unless fitted
 };
 
 BakedIntrins bake_colmap_intrins(const ColmapCamera& cam) {
     const auto& p = cam.params;
     auto P = [&](size_t i) { return (float)p[i]; };
+    auto need = [&](size_t n) {
+        if (p.size() < n)
+            throw std::runtime_error(
+                "ColmapParser: camera model " + cam.model + " needs " +
+                std::to_string(n) + " parameters, got " +
+                std::to_string(p.size()));
+    };
     BakedIntrins o;
 
-    if (cam.model == "SIMPLE_PINHOLE" || cam.model == "SIMPLE_RADIAL" ||
-        cam.model == "RADIAL") {
-        o.fx = o.fy = P(0); o.cx = P(1); o.cy = P(2);
-        if (cam.model != "SIMPLE_PINHOLE") o.dist[0] = P(3);          // k1
-        if (cam.model == "RADIAL")         o.dist[1] = P(4);          // k2
-        o.model_name = "OPENCV";
+    // ---- one focal length, principal point, no distortion ----------------
+    if (cam.model == "SIMPLE_PINHOLE") {
+        need(3); o.fx = o.fy = P(0); o.cx = P(1); o.cy = P(2);
     } else if (cam.model == "PINHOLE") {
-        o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3);
-        o.model_name = "OPENCV";
-    } else if (cam.model == "OPENCV") {
-        o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3);
-        o.dist[0] = P(4); o.dist[1] = P(5);                           // k1 k2
-        o.dist[4] = P(6); o.dist[5] = P(7);                           // p1 p2
-        o.model_name = "OPENCV";
-    } else if (cam.model == "FULL_OPENCV") {
-        o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3);
-        o.dist[0] = P(4); o.dist[1] = P(5);                           // k1 k2
-        o.dist[4] = P(6); o.dist[5] = P(7);                           // p1 p2
-        o.dist[2] = P(8); o.dist[3] = P(9);                           // k3 k4
-        // k5/k6 have no slot in the engine's 10-coeff layout; the Python
-        // dataparser drops them too (DISTORTION_KEYS has no k5/k6).
-        o.model_name = "FULL_OPENCV";
-    } else if (cam.model == "OPENCV_FISHEYE" || cam.model == "THIN_PRISM_FISHEYE") {
-        o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3);
-        o.dist[0] = P(4); o.dist[1] = P(5);                           // k1 k2
-        if (cam.model == "OPENCV_FISHEYE") {
-            o.dist[2] = P(6); o.dist[3] = P(7);                       // k3 k4
-        } else {
-            o.dist[4] = P(6); o.dist[5] = P(7);                       // p1 p2
-            o.dist[2] = P(8); o.dist[3] = P(9);                       // k3 k4
-            o.dist[6] = P(10); o.dist[7] = P(11);                     // sx1 sy1
-        }
-        o.model_name = "OPENCV_FISHEYE";
-    } else if (cam.model == "SIMPLE_RADIAL_FISHEYE" || cam.model == "RADIAL_FISHEYE") {
+        need(4); o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3);
+    } else if (cam.model == "SIMPLE_FISHEYE") {
+        need(3); o.fx = o.fy = P(0); o.cx = P(1); o.cy = P(2);
+        o.model = CameraModelType::FISHEYE;
+    } else if (cam.model == "FISHEYE") {
+        need(4); o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3);
+        o.model = CameraModelType::FISHEYE;
+
+    // ---- radial-only, one focal length -> OpenCV tier with zero p1,p2 ----
+    } else if (cam.model == "SIMPLE_RADIAL" || cam.model == "RADIAL" ||
+               cam.model == "SIMPLE_RADIAL_FISHEYE" || cam.model == "RADIAL_FISHEYE") {
+        bool two = (cam.model == "RADIAL" || cam.model == "RADIAL_FISHEYE");
+        need(two ? 5 : 4);
         o.fx = o.fy = P(0); o.cx = P(1); o.cy = P(2);
-        o.dist[0] = P(3);                                             // k1
-        if (cam.model == "RADIAL_FISHEYE") o.dist[1] = P(4);          // k2
-        o.model_name = "OPENCV_FISHEYE";
-    } else if (cam.model == "SIMPLE_FISHEYE" || cam.model == "FISHEYE") {
-        if (cam.model == "SIMPLE_FISHEYE") { o.fx = o.fy = P(0); o.cx = P(1); o.cy = P(2); }
-        else                               { o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3); }
-        o.model_name = "OPENCV_FISHEYE";
+        o.distortion = CameraDistortionType::OpenCV;
+        o.dist[0] = P(3);                       // k1
+        if (two) o.dist[1] = P(4);              // k2
+        if (cam.model == "SIMPLE_RADIAL_FISHEYE" || cam.model == "RADIAL_FISHEYE")
+            o.model = CameraModelType::FISHEYE;
+
+    // ---- fx, fy, cx, cy + k1 k2 p1 p2 ------------------------------------
+    } else if (cam.model == "OPENCV") {
+        need(8);
+        o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3);
+        o.distortion = CameraDistortionType::OpenCV;
+        o.dist[0] = P(4); o.dist[1] = P(5);     // k1 k2
+        o.dist[2] = P(6); o.dist[3] = P(7);     // p1 p2
+
+    // ---- the rational model ----------------------------------------------
+    } else if (cam.model == "FULL_OPENCV") {
+        need(12);
+        o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3);
+        o.distortion = CameraDistortionType::Rational;
+        o.dist[0] = P(4);  o.dist[1] = P(5);    // k1 k2   numerator
+        o.dist[2] = P(8);                       // k3      numerator
+        o.dist[3] = P(9);  o.dist[4] = P(10); o.dist[5] = P(11);  // k4 k5 k6 denominator
+        o.dist[6] = P(6);  o.dist[7] = P(7);    // p1 p2
+
+    // ---- fisheye radial in theta-space -----------------------------------
+    } else if (cam.model == "OPENCV_FISHEYE") {
+        need(8);
+        o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3);
+        o.model = CameraModelType::FISHEYE;
+        o.distortion = CameraDistortionType::ThinPrism;
+        o.dist[0] = P(4); o.dist[1] = P(5); o.dist[2] = P(6); o.dist[3] = P(7);
+
+    } else if (cam.model == "THIN_PRISM_FISHEYE") {
+        need(12);
+        o.fx = P(0); o.fy = P(1); o.cx = P(2); o.cy = P(3);
+        o.model = CameraModelType::FISHEYE;
+        o.distortion = CameraDistortionType::ThinPrism;
+        o.dist[0] = P(4);  o.dist[1] = P(5);    // k1 k2
+        o.dist[2] = P(8);  o.dist[3] = P(9);    // k3 k4
+        o.dist[4] = P(6);  o.dist[5] = P(7);    // p1 p2
+        o.dist[6] = P(10); o.dist[7] = P(11);   // sx1 sy1
+
     } else if (cam.model == "EQUIRECTANGULAR") {
+        need(2);
         o.fx = (float)(p[0] / (2.0 * kPi));
         o.fy = (float)(p[1] / kPi);
         o.cx = (float)(p[0] / 2.0);
         o.cy = (float)(p[1] / 2.0);
-        o.model_name = "EQUIRECTANGULAR";
+        o.model = CameraModelType::EQUIRECTANGULAR;
+
+    // ---- no exact tier: fit and re-distort --------------------------------
     } else {
-        throw std::runtime_error("ColmapParser: unsupported camera model " + cam.model);
+        int id = colmap_model_id(cam.model);
+        if (id < 0)
+            throw std::runtime_error("ColmapParser: unknown camera model " + cam.model);
+        need((size_t)colmap_model_table().at(id).num_params);
+        o.source.source_model = id;
+        for (size_t i = 0; i < p.size() && i < 16; i++)
+            o.source.params[i] = (float)p[i];
+        // Camera model, intrinsics and coefficients all come from the fit
+        // below. Which model suits depends on the parameters, not the name:
+        // a FOV lens is perspective at omega 0.3 and a full fisheye at 0.87.
+        return o;
     }
+
+    // Drop to the cheapest tier the coefficients actually need.
+    o.distortion = camera_distortion_demote(o.distortion, o.dist.data(), o.dist.data());
     return o;
+}
+
+// One line per distinct outcome rather than per camera record: an image
+// collection run through COLMAP without --ImageReader.single_camera has one
+// camera record per photo, and the same sentence a thousand times is noise.
+struct FitReport {
+    std::string          source;      // COLMAP model name
+    CameraModelType      model;
+    CameraDistortionType distortion;
+    enum { Redistorted, Exact, Failed } kind;
+    double max_px = 0.0;              // worst in the group
+    int    count = 0;
+
+    std::string key() const {
+        return source + "/" + camera_model_to_string(model) + "/" +
+               camera_distortion_to_string(distortion) + "/" +
+               std::to_string((int)kind);
+    }
+};
+
+// Replace an unrepresentable camera with the nearest supported one. The images
+// are resampled to match later (DataManager's re-distort pass); what is chosen
+// here is only the target camera.
+void fit_colmap_source(const ColmapCamera& cam, BakedIntrins& bi,
+                       std::map<std::string, FitReport>& reports) {
+    const RedistortSource src = bi.source;
+    dsfit::SourceProject project =
+        [&src](double x, double y, double z, double* u, double* v) {
+            return srccam::project(src.source_model, src.params, x, y, z, u, v);
+        };
+    dsfit::FitResult fit = dsfit::fit_camera_auto(
+        project, (int)cam.width, (int)cam.height);
+
+    bi.model = fit.target.model;
+    bi.fx = fit.target.fx; bi.fy = fit.target.fy;
+    bi.cx = fit.target.cx; bi.cy = fit.target.cy;
+    for (int i = 0; i < kCameraDistortionParams; i++)
+        bi.dist[i] = fit.target.coeffs[i];
+    bi.distortion = camera_distortion_demote(
+        fit.target.distortion, bi.dist.data(), bi.dist.data());
+    bi.source.fit_max_px = (float)fit.max_px;
+
+    FitReport r;
+    r.source = cam.model;
+    r.model = bi.model;
+    r.distortion = bi.distortion;
+    r.max_px = fit.max_px;
+    if (!fit.ok && fit.samples == 0) {
+        // Only reachable when the source projected nothing anywhere -- a
+        // camera record this reader cannot interpret at all. Loading a wrong
+        // camera beats refusing to open a reconstruction that took hours.
+        r.kind = FitReport::Failed;
+        bi.source.source_model = -1;
+    } else if (fit.max_px < dsfit::kExactFitPx) {
+        // The fitted camera and the source agree to well under what bilinear
+        // resampling can resolve, so re-distorting would only cost VRAM and
+        // blur the images.
+        r.kind = FitReport::Exact;
+        bi.source.source_model = -1;
+    } else {
+        r.kind = FitReport::Redistorted;
+    }
+
+    auto [it, fresh] = reports.emplace(r.key(), r);
+    it->second.count++;
+    if (!fresh) it->second.max_px = std::max(it->second.max_px, r.max_px);
+}
+
+void print_fit_reports(const std::map<std::string, FitReport>& reports) {
+    namespace dm = spirula::i18n::msg::data;
+    for (const auto& [key, r] : reports) {
+        (void)key;
+        switch (r.kind) {
+            case FitReport::Failed:
+                std::printf("%s %s\n", dm::word_warning.get(),
+                    spirula::i18n::format(dm::camera_model_fit_failed,
+                        {r.source, r.count,
+                         camera_model_to_string(r.model)}).c_str());
+                break;
+            case FitReport::Exact:
+                std::printf("%s\n", spirula::i18n::format(
+                    dm::camera_model_fitted_exact,
+                    {r.source, r.count, camera_model_to_string(r.model),
+                     camera_distortion_to_string(r.distortion),
+                     dsfit::kExactFitPx}).c_str());
+                break;
+            case FitReport::Redistorted:
+                std::printf("%s\n", spirula::i18n::format(
+                    dm::camera_model_fitted,
+                    {r.source, r.count, camera_model_to_string(r.model),
+                     camera_distortion_to_string(r.distortion),
+                     r.max_px}).c_str());
+                break;
+        }
+    }
 }
 
 // colmap_utils.py qvec2rotmat (world->camera rotation from (w,x,y,z)).
@@ -594,12 +748,30 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
     ds.train_frame_scale = train_frame_scale;
     for (int k = 0; k < 16; k++) ds.train_to_normalized[k] = (float)T_inv[k];
     ds.camera_models.reserve(N);
+    ds.camera_distortions.reserve(N);
     ds.image_filenames.reserve(N);
     ds.widths.reserve(N);
     ds.heights.reserve(N);
     ds.c2w.resize(N * 12);
     ds.intrins.resize(N * 4);
-    ds.dist_coeffs.resize(N * 10);
+    ds.dist_coeffs.resize(N * kCameraDistortionParams);
+
+    // One bake per COLMAP camera record, not per frame: a record is one
+    // physical camera, and a fitted one costs a least-squares solve.
+    std::map<int32_t, BakedIntrins> baked;
+    std::map<std::string, FitReport> fit_reports;
+    bool any_redistort = false;
+    for (const auto& [id, cam] : cameras) {
+        BakedIntrins bi = bake_colmap_intrins(cam);
+        if (bi.source.source_model >= 0) {
+            // May clear source_model again when the fit turned out exact.
+            fit_colmap_source(cam, bi, fit_reports);
+            any_redistort |= (bi.source.source_model >= 0);
+        }
+        baked.emplace(id, bi);
+    }
+    print_fit_reports(fit_reports);
+    if (any_redistort) ds.redistort.resize(N);
 
     std::vector<std::string> mask_files(N), depth_files(N), normal_files(N);
     bool any_mask = false, any_depth = false, any_normal = false;
@@ -620,11 +792,13 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
                                      " does not exist (set --image-dir if needed)");
         ds.image_filenames.push_back(img_path.string());
 
-        BakedIntrins bi = bake_colmap_intrins(cam);
+        BakedIntrins bi = baked.at(im.camera_id);
         float W = (float)cam.width, H = (float)cam.height;
         if (cfg.rescale_camera_to_fit > 0.0f) {
             float s = cfg.rescale_camera_to_fit;
             bi.fx /= s; bi.fy /= s; bi.cx /= s; bi.cy /= s;
+            if (bi.source.source_model >= 0)
+                srccam::rescale(bi.source.source_model, bi.source.params, s);
             auto round_dim = [&](float v) {
                 if (cfg.downscale_rounding_mode == "ceil")  return std::ceil(v / s);
                 if (cfg.downscale_rounding_mode == "round") return std::round(v / s);
@@ -638,12 +812,12 @@ ParsedDataset parse_colmap_dataset(const std::string& dataset_dir,
         ds.intrins[j*4 + 1] = bi.fy;
         ds.intrins[j*4 + 2] = bi.cx;
         ds.intrins[j*4 + 3] = bi.cy;
-        std::copy(bi.dist.begin(), bi.dist.end(), ds.dist_coeffs.begin() + j*10);
+        std::copy(bi.dist.begin(), bi.dist.end(),
+                  ds.dist_coeffs.begin() + j*kCameraDistortionParams);
 
-        CameraModelType model = camera_model_from_name(bi.model_name);
-        if ((int)model < 0)
-            throw std::runtime_error("ColmapParser: unmapped camera model " + bi.model_name);
-        ds.camera_models.push_back((int32_t)model);
+        ds.camera_models.push_back((int32_t)bi.model);
+        ds.camera_distortions.push_back((int32_t)bi.distortion);
+        if (any_redistort) ds.redistort[j] = bi.source;
 
         std::copy(&c2w_all[i*12], &c2w_all[i*12] + 12, &ds.c2w[j*12]);
 

@@ -1,12 +1,15 @@
 #include "kernels/projection/ProjectionFwd.cuh"
 
+#include "kernels/projection/CameraVariants.cuh"
+
 #include <core/Common.cuh>
 
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
 
-template<typename SplatPrimitive, CameraModelType camera_model>
+template<typename SplatPrimitive, CameraModelType camera_model,
+         CameraDistortionType distortion>
 void projection_fused_fwd_kernel_wrapper(
     cudaStream_t stream,
     const uint32_t C,
@@ -48,6 +51,7 @@ inline std::tuple<
     const uint32_t image_width,
     const uint32_t image_height,
     const CameraModelType camera_model,
+    const CameraDistortionType distortion,
     const TorchTensorView dist_coeffs,
     DeviceVector<float> radii,
     // SH VALUE-quant: packed bytes + per-cell-block bounds. When sh_value_bits
@@ -77,16 +81,13 @@ inline std::tuple<
             sh_bounds_stride \
         )
 
-    if (camera_model == CameraModelType::PINHOLE)
-        projection_fused_fwd_kernel_wrapper<SplatPrimitive, CameraModelType::PINHOLE> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::FISHEYE)
-        projection_fused_fwd_kernel_wrapper<SplatPrimitive, CameraModelType::FISHEYE> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::EQUISOLID)
-        projection_fused_fwd_kernel_wrapper<SplatPrimitive, CameraModelType::EQUISOLID> _LAUNCH_ARGS;
-    else if (camera_model == CameraModelType::EQUIRECTANGULAR)
-        projection_fused_fwd_kernel_wrapper<SplatPrimitive, CameraModelType::EQUIRECTANGULAR> _LAUNCH_ARGS;
-    else
-        throw std::runtime_error("Unsupported camera model");
+    #define _DISPATCH(M, D) \
+        if (camera_model == CameraModelType::M && distortion == CameraDistortionType::D) \
+            projection_fused_fwd_kernel_wrapper<SplatPrimitive, \
+                CameraModelType::M, CameraDistortionType::D> _LAUNCH_ARGS; else
+    SS_FOR_EACH_CAMERA_VARIANT(_DISPATCH)
+        throw std::runtime_error("Unsupported camera model / distortion tier");
+    #undef _DISPATCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     #undef _LAUNCH_ARGS
@@ -107,7 +108,8 @@ std::tuple<
     const std::vector<DeviceTensorFloatND> &in_splats,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string camera_model, const TorchTensorView dist_coeffs,
+    const std::string camera_model, const std::string distortion,
+    const TorchTensorView dist_coeffs,
     DeviceVector<float> radii,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
@@ -129,7 +131,7 @@ std::tuple<
         ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_fused_fwd_kernel<Vanilla3DGS<n>>( \
-            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii, \
+            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), cdt(distortion), dist_coeffs, radii, \
             vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
@@ -149,7 +151,8 @@ std::tuple<
     const std::vector<DeviceTensorFloatND> &in_splats,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string camera_model, const TorchTensorView dist_coeffs,
+    const std::string camera_model, const std::string distortion,
+    const TorchTensorView dist_coeffs,
     DeviceVector<float> radii,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
@@ -171,7 +174,7 @@ std::tuple<
         ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_fused_fwd_kernel<MipSplatting<n>>( \
-            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii, \
+            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), cdt(distortion), dist_coeffs, radii, \
             vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH
@@ -192,7 +195,8 @@ std::tuple<
     const std::vector<DeviceTensorFloatND> &in_splats,
     TorchTensorView viewmats, TorchTensorView intrins,
     const uint32_t image_width, const uint32_t image_height,
-    const std::string camera_model, const TorchTensorView dist_coeffs,
+    const std::string camera_model, const std::string distortion,
+    const TorchTensorView dist_coeffs,
     DeviceVector<float> radii,
     const std::optional<TorchTensorView> sh_value_packed,
     const std::optional<TorchTensorView> sh_value_bounds,
@@ -214,7 +218,7 @@ std::tuple<
         ? (const float2*)std::get<0>(sh_value_bounds.value()) : nullptr;
     #define LAUNCH(n) if (sh_degree == (n)) \
         return launch_projection_fused_fwd_kernel<Vanilla3DGUT<n>>( \
-            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), dist_coeffs, radii, \
+            num_splats, in_splats, vm, intr, C, image_width, image_height, cmt(camera_model), cdt(distortion), dist_coeffs, radii, \
             vp, vb, num_sh_buffer, sh_value_bits, sh_bounds_stride);
     LAUNCH(3) LAUNCH(2) LAUNCH(1) LAUNCH(0) LAUNCH(4)
     #undef LAUNCH

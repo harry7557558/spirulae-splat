@@ -205,82 +205,122 @@ void sv_coeffs_to_color<let num_sv : int>(
     color = total_c / total_w;
 }
 
-[ForceInline]
-[Differentiable]
-float2 camera_distortion(float2 uv, no_diff float[10] dist_coeffs) {
-    float k1 = dist_coeffs[0],
-          k2 = dist_coeffs[1],
-          k3 = dist_coeffs[2],
-          k4 = dist_coeffs[3],
-          p1 = dist_coeffs[4],
-          p2 = dist_coeffs[5],
-          sx1 = dist_coeffs[6],
-          sy1 = dist_coeffs[7],
-          b1 = dist_coeffs[8],
-          b2 = dist_coeffs[9];
-    float u = uv.x, v = uv.y;
-    float r2 = u*u+v*v;
-    float radial = 1.0 + r2*(k1 + r2*(k2 + r2*(k3 + r2*k4)));
-    float du = 2.0*p1*u*v + p2*(r2+2.0*u*u) + sx1*r2;
-    float dv = 2.0*p2*u*v + p1*(r2+2.0*v*v) + sy1*r2;
-    uv = uv * radial + float2(du, dv);
-    return uv + float2(b1 * uv.x + b2 * uv.y, 0.0);
-}
+// ================
+// Lens distortion tiers
+// ================
+//
+// The tier is a compile-time choice on both backends (CUDA template argument,
+// Vulkan specialization constant) and is ORTHOGONAL to CameraModelType: it acts
+// on whatever normalized coordinates the camera model produced -- (x/z, y/z)
+// for PINHOLE, theta-space for FISHEYE / EQUISOLID -- which is the order COLMAP
+// applies it in too. EQUIRECTANGULAR carries no lens distortion.
+//
+// Coefficient order is each tier's own; a slot index does NOT mean the same
+// thing across tiers. Must match CameraDistortionType in core/CameraModel.h.
+enum CameraDistortionType {
+    DIST_NONE = 0,
+    DIST_OPENCV = 1,
+    DIST_THIN_PRISM = 2,
+    DIST_RATIONAL = 3,
+};
+
+interface ICameraDistortion {
+    static const int kNumParams;
+    static const bool kIsIdentity;
+    [Differentiable]
+    static float2 distort(float2 uv, no_diff float coeffs[kNumParams]);
+};
+
+// Slang has no zero-length array, so the identity tier carries one unread slot.
+struct DistNone : ICameraDistortion {
+    static const int kNumParams = 1;
+    static const bool kIsIdentity = true;
+    [Differentiable]
+    static float2 distort(float2 uv, no_diff float coeffs[1]) { return uv; }
+};
+
+// k1 k2 p1 p2 -- COLMAP OPENCV, and the radial-only models zero-extended into it.
+struct DistOpenCV : ICameraDistortion {
+    static const int kNumParams = 4;
+    static const bool kIsIdentity = false;
+    [Differentiable]
+    static float2 distort(float2 uv, no_diff float coeffs[4]) {
+        float k1 = coeffs[0], k2 = coeffs[1], p1 = coeffs[2], p2 = coeffs[3];
+        float u = uv.x, v = uv.y;
+        float r2 = u*u + v*v;
+        float radial = 1.0 + r2*(k1 + r2*k2);
+        return uv * radial + float2(
+            2.0*p1*u*v + p2*(r2 + 2.0*u*u),
+            2.0*p2*u*v + p1*(r2 + 2.0*v*v));
+    }
+};
+
+// k1 k2 k3 k4 p1 p2 sx1 sy1 -- COLMAP THIN_PRISM_FISHEYE, radial-first
+// (COLMAP's own file order interleaves p1,p2 between k2 and k3).
+struct DistThinPrism : ICameraDistortion {
+    static const int kNumParams = 8;
+    static const bool kIsIdentity = false;
+    [Differentiable]
+    static float2 distort(float2 uv, no_diff float coeffs[8]) {
+        float k1 = coeffs[0], k2 = coeffs[1], k3 = coeffs[2], k4 = coeffs[3],
+              p1 = coeffs[4], p2 = coeffs[5], sx1 = coeffs[6], sy1 = coeffs[7];
+        float u = uv.x, v = uv.y;
+        float r2 = u*u + v*v;
+        float radial = 1.0 + r2*(k1 + r2*(k2 + r2*(k3 + r2*k4)));
+        return uv * radial + float2(
+            2.0*p1*u*v + p2*(r2 + 2.0*u*u) + sx1*r2,
+            2.0*p2*u*v + p1*(r2 + 2.0*v*v) + sy1*r2);
+    }
+};
+
+// k1 k2 k3 k4 k5 k6 p1 p2 -- COLMAP FULL_OPENCV, i.e. OpenCV's 8-coefficient
+// rational model. k4..k6 are DENOMINATOR terms, which is why they cannot be
+// folded into the DistThinPrism slots of the same index.
+struct DistRational : ICameraDistortion {
+    static const int kNumParams = 8;
+    static const bool kIsIdentity = false;
+    [Differentiable]
+    static float2 distort(float2 uv, no_diff float coeffs[8]) {
+        float k1 = coeffs[0], k2 = coeffs[1], k3 = coeffs[2],
+              k4 = coeffs[3], k5 = coeffs[4], k6 = coeffs[5],
+              p1 = coeffs[6], p2 = coeffs[7];
+        float u = uv.x, v = uv.y;
+        float r2 = u*u + v*v;
+        float radial = (1.0 + r2*(k1 + r2*(k2 + r2*k3)))
+                     / (1.0 + r2*(k4 + r2*(k5 + r2*k6)));
+        return uv * radial + float2(
+            2.0*p1*u*v + p2*(r2 + 2.0*u*u),
+            2.0*p2*u*v + p1*(r2 + 2.0*v*v));
+    }
+};
+
 
 [ForceInline]
 [Differentiable]
-float2x2 camera_distortion_jac(float2 uv, no_diff float[10] dist_coeffs) {
-#if 0
-    DifferentialPair<float2> dp_uv_x = diffPair(uv);
-    bwd_diff(camera_distortion)(dp_uv_x, dist_coeffs, float2(1, 0));
-    DifferentialPair<float2> dp_uv_y = diffPair(uv);
-    bwd_diff(camera_distortion)(dp_uv_y, dist_coeffs, float2(0, 1));
-    return float2x2(dp_uv_x.d, dp_uv_y.d);
-#else
+float2x2 camera_distortion_jac<D : ICameraDistortion>(
+    float2 uv, no_diff float dist_coeffs[D.kNumParams]
+) {
     DifferentialPair<float2> dp_uv_x = diffPair(uv, float2(1, 0));
-    float2 j_x = fwd_diff(camera_distortion)(dp_uv_x, dist_coeffs).d;
+    float2 j_x = fwd_diff(D.distort)(dp_uv_x, dist_coeffs).d;
     DifferentialPair<float2> dp_uv_y = diffPair(uv, float2(0, 1));
-    float2 j_y = fwd_diff(camera_distortion)(dp_uv_y, dist_coeffs).d;
+    float2 j_y = fwd_diff(D.distort)(dp_uv_y, dist_coeffs).d;
     return transpose(float2x2(j_x, j_y));
-#endif
 }
 
 [ForceInline]
-[CudaDeviceExport]
-bool is_valid_distortion(no_diff float2 uv, no_diff float[10] dist_coeffs) {
+bool is_valid_distortion<D : ICameraDistortion>(
+    no_diff float2 uv, no_diff float dist_coeffs[D.kNumParams]
+) {
+    if (D.kIsIdentity)
+        return true;
     // TODO: doesn't always work for more than 2 radial coeffs
-    float2x2 J = camera_distortion_jac(uv, dist_coeffs);
-    return min(determinant(J), min(J[0][0], J[1][1])) > 0.0;
+    float2x2 J = camera_distortion_jac<D>(uv, dist_coeffs);
+    float Jdet = min(determinant(J), min(J[0][0], J[1][1]));
+    // return Jdet > 0.0f;
+    return Jdet > 0.25f && Jdet < 4.0f && dot(uv, D.distort(uv, dist_coeffs)) >= 0.0f;
 }
 
-// [ForceInline]
-[Differentiable]
-float valid_distortion_log_barrier(float2 uv, no_diff float[10] dist_coeffs) {
-    // TODO: doesn't always work for more than 2 radial coeffs
-    float2x2 J = camera_distortion_jac(uv, dist_coeffs);
-    float val0 = min(determinant(J), min(J[0][0], J[1][1])); // positive if inside
-    return -log(val0);
-}
 
-#if 0
-[ForceInline]
-[Differentiable]
-float2 valid_distortion_log_barrier_grad(float2 uv, no_diff float[10] dist_coeffs) {
-    DifferentialPair<float2> dp_uv = diffPair(uv);
-    bwd_diff(valid_distortion_log_barrier)(dp_uv, dist_coeffs, 1.0f);
-    return dp_uv.d;
-}
-
-[ForceInline]
-[Differentiable]
-float2x2 valid_distortion_log_barrier_hess(float2 uv, no_diff float[10] dist_coeffs) {
-    DifferentialPair<float2> dp_uv_x = diffPair(uv);
-    bwd_diff(valid_distortion_log_barrier_grad)(dp_uv_x, dist_coeffs, float2(1.0f, 0.0f));
-    DifferentialPair<float2> dp_uv_y = diffPair(uv);
-    bwd_diff(valid_distortion_log_barrier_grad)(dp_uv_y, dist_coeffs, float2(0.0f, 1.0f));
-    return float2x2(dp_uv_x.d, dp_uv_y.d);
-}
-#endif
 
 // Value-returning core (assume-valid path). The bool wrapper below and the
 // fwd_diff Jacobians both build on this: slangc crashes on bwd-of-fwd_diff
@@ -288,11 +328,11 @@ float2x2 valid_distortion_log_barrier_hess(float2 uv, no_diff float[10] dist_coe
 // #11160), and the documented workaround is returning the value instead.
 [ForceInline]
 [Differentiable]
-float2 persp_proj_uv(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs
+float2 persp_proj_uv<D : ICameraDistortion>(
+    float3 p_view, no_diff float4 intrins, no_diff float dist_coeffs[D.kNumParams]
 ) {
     float2 uv = p_view.xy / p_view.z;
-    uv = camera_distortion(uv, dist_coeffs);
+    uv = D.distort(uv, dist_coeffs);
     float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
     return float2(
         fx * uv.x + cx,
@@ -302,52 +342,35 @@ float2 persp_proj_uv(
 
 [ForceInline]
 [Differentiable]
-bool persp_proj<let assume_valid : bool>(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+bool persp_proj<D : ICameraDistortion, let assume_valid : bool>(
+    float3 p_view, no_diff float4 intrins, no_diff float dist_coeffs[D.kNumParams],
     out float2 uv
 ) {
     if (!assume_valid) {
         float2 uv0 = p_view.xy / p_view.z;
-        if (p_view.z < 0.0 || !is_valid_distortion(uv0, dist_coeffs)) {
+        if (p_view.z < 0.0 || !is_valid_distortion<D>(uv0, dist_coeffs)) {
             uv = uv0;
             return false;
         }
     }
-    uv = persp_proj_uv(p_view, intrins, dist_coeffs);
+    uv = persp_proj_uv<D>(p_view, intrins, dist_coeffs);
     return true;
-}
-
-[CudaDeviceExport]
-bool persp_proj_nav(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
-    out float2 uv
-) {
-    return persp_proj<false>(p_view, intrins, dist_coeffs, uv);
 }
 
 [ForceInline]
 [Differentiable]
-[CudaDeviceExport]
-float2x3 persp_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
+float2x3 persp_proj_jac<D : ICameraDistortion>(
+    float3 p_view, no_diff float4 intrins, no_diff float dist_coeffs[D.kNumParams]
+) {
     float2x3 J;
-#if 0
-    [ForceUnroll]
-    for (int i = 0; i < 2; ++i) {
-        float2 seed = 0.0; seed[i] = 1.0;
-        DifferentialPair<float3> dp_p_view = diffPair(p_view);
-        bwd_diff(persp_proj<true>)(dp_p_view, intrins, dist_coeffs, seed);
-        J[i] = dp_p_view.d;
-    }
-#else
     [ForceUnroll]
     for (int i = 0; i < 3; ++i) {
         DifferentialPair<float3> dp_p_view = diffPair(p_view,
             float3(float(i == 0), float(i == 1), float(i == 2)));
-        float2 duv = fwd_diff(persp_proj_uv)(dp_p_view, intrins, dist_coeffs).d;
+        float2 duv = fwd_diff(persp_proj_uv<D>)(dp_p_view, intrins, dist_coeffs).d;
         J[0][i] = duv.x;
         J[1][i] = duv.y;
     }
-#endif
     return J;
 }
 
@@ -374,11 +397,11 @@ float2 equisolid_proj(float3 p_view) {
 // Value-returning core; see persp_proj_uv for why (slang #11160).
 [ForceInline]
 [Differentiable]
-float2 fisheye_proj_uv(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs
+float2 fisheye_proj_uv<D : ICameraDistortion>(
+    float3 p_view, no_diff float4 intrins, no_diff float dist_coeffs[D.kNumParams]
 ) {
     float2 uv = fisheye_proj(p_view);
-    uv = camera_distortion(uv, dist_coeffs);
+    uv = D.distort(uv, dist_coeffs);
     float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
     return float2(
         fx * uv.x + cx,
@@ -388,29 +411,29 @@ float2 fisheye_proj_uv(
 
 [ForceInline]
 [Differentiable]
-bool fisheye_proj<let assume_valid : bool>(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+bool fisheye_proj<D : ICameraDistortion, let assume_valid : bool>(
+    float3 p_view, no_diff float4 intrins, no_diff float dist_coeffs[D.kNumParams],
     out float2 uv
 ) {
     if (!assume_valid) {
         float2 uv0 = fisheye_proj(p_view);
-        if (!is_valid_distortion(uv0, dist_coeffs)) {
+        if (!is_valid_distortion<D>(uv0, dist_coeffs)) {
             uv = uv0;
             return false;
         }
     }
-    uv = fisheye_proj_uv(p_view, intrins, dist_coeffs);
+    uv = fisheye_proj_uv<D>(p_view, intrins, dist_coeffs);
     return true;
 }
 
 // Value-returning core; see persp_proj_uv for why (slang #11160).
 [ForceInline]
 [Differentiable]
-float2 equisolid_proj_uv(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs
+float2 equisolid_proj_uv<D : ICameraDistortion>(
+    float3 p_view, no_diff float4 intrins, no_diff float dist_coeffs[D.kNumParams]
 ) {
     float2 uv = equisolid_proj(p_view);
-    uv = camera_distortion(uv, dist_coeffs);
+    uv = D.distort(uv, dist_coeffs);
     float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
     return float2(
         fx * uv.x + cx,
@@ -420,73 +443,49 @@ float2 equisolid_proj_uv(
 
 [ForceInline]
 [Differentiable]
-bool equisolid_proj<let assume_valid : bool>(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
+bool equisolid_proj<D : ICameraDistortion, let assume_valid : bool>(
+    float3 p_view, no_diff float4 intrins, no_diff float dist_coeffs[D.kNumParams],
     out float2 uv
 ) {
     if (!assume_valid) {
         float2 uv0 = equisolid_proj(p_view);
-        if (!is_valid_distortion(uv0, dist_coeffs)) {
+        if (!is_valid_distortion<D>(uv0, dist_coeffs)) {
             uv = uv0;
             return false;
         }
     }
-    uv = equisolid_proj_uv(p_view, intrins, dist_coeffs);
+    uv = equisolid_proj_uv<D>(p_view, intrins, dist_coeffs);
     return true;
-}
-
-[CudaDeviceExport]
-bool fisheye_proj_nav(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
-    out float2 uv
-) {
-    return fisheye_proj<false>(p_view, intrins, dist_coeffs, uv);
-}
-
-[CudaDeviceExport]
-bool equisolid_proj_nav(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
-    out float2 uv
-) {
-    return equisolid_proj<false>(p_view, intrins, dist_coeffs, uv);
 }
 
 [ForceInline]
 [Differentiable]
-[CudaDeviceExport]
-float2x3 fisheye_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
+float2x3 fisheye_proj_jac<D : ICameraDistortion>(
+    float3 p_view, no_diff float4 intrins, no_diff float dist_coeffs[D.kNumParams]
+) {
     float2x3 J;
-#if 0
-    [ForceUnroll]
-    for (int i = 0; i < 2; ++i) {
-        float2 seed = 0.0; seed[i] = 1.0;
-        DifferentialPair<float3> dp_p_view = diffPair(p_view);
-        bwd_diff(fisheye_proj<true>)(dp_p_view, intrins, dist_coeffs, seed);
-        J[i] = dp_p_view.d;
-    }
-#else
     [ForceUnroll]
     for (int i = 0; i < 3; ++i) {
         DifferentialPair<float3> dp_p_view = diffPair(p_view,
             float3(float(i == 0), float(i == 1), float(i == 2)));
-        float2 duv = fwd_diff(fisheye_proj_uv)(dp_p_view, intrins, dist_coeffs).d;
+        float2 duv = fwd_diff(fisheye_proj_uv<D>)(dp_p_view, intrins, dist_coeffs).d;
         J[0][i] = duv.x;
         J[1][i] = duv.y;
     }
-#endif
     return J;
 }
 
 [ForceInline]
 [Differentiable]
-[CudaDeviceExport]
-float2x3 equisolid_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
+float2x3 equisolid_proj_jac<D : ICameraDistortion>(
+    float3 p_view, no_diff float4 intrins, no_diff float dist_coeffs[D.kNumParams]
+) {
     float2x3 J;
     [ForceUnroll]
     for (int i = 0; i < 3; ++i) {
         DifferentialPair<float3> dp_p_view = diffPair(p_view,
             float3(float(i == 0), float(i == 1), float(i == 2)));
-        float2 duv = fwd_diff(equisolid_proj_uv)(dp_p_view, intrins, dist_coeffs).d;
+        float2 duv = fwd_diff(equisolid_proj_uv<D>)(dp_p_view, intrins, dist_coeffs).d;
         J[0][i] = duv.x;
         J[1][i] = duv.y;
     }
@@ -497,9 +496,10 @@ float2x3 equisolid_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float
 // Convention matches warp_image_equirectangular_to_pinhole_kernel in ImageWarp.cu:
 //   lon = atan2(x, z), lat = atan2(y, hypot(x, z)),
 //   u = fx*lon + cx, v = fy*lat + cy,  with fx = fy = width/(2*pi), cx = w/2, cy = h/2.
-// Assumes no lens distortion (dist_coeffs are ignored). Every viewing direction
-// is valid, so the whole sphere projects; the atan2 seam at lon = +-pi and the
-// poles at lat = +-pi/2 are the expected sources of nonlinearity/discontinuity.
+// Carries no lens distortion, so unlike the other models it takes no
+// coefficients. Every viewing direction is valid, so the whole sphere projects;
+// the atan2 seam at lon = +-pi and the poles at lat = +-pi/2 are the expected
+// sources of nonlinearity/discontinuity.
 [ForceInline]
 [Differentiable]
 float2 equirect_proj(float3 p_view) {
@@ -511,9 +511,7 @@ float2 equirect_proj(float3 p_view) {
 // Value-returning core; see persp_proj_uv for why (slang #11160).
 [ForceInline]
 [Differentiable]
-float2 equirect_proj_uv(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs
-) {
+float2 equirect_proj_uv(float3 p_view, no_diff float4 intrins) {
     float2 lonlat = equirect_proj(p_view);
     float fx = intrins.x, fy = intrins.y, cx = intrins.z, cy = intrins.w;
     return float2(fx * lonlat.x + cx, fy * lonlat.y + cy);
@@ -522,32 +520,27 @@ float2 equirect_proj_uv(
 [ForceInline]
 [Differentiable]
 bool equirect_proj<let assume_valid : bool>(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
-    out float2 uv
+    float3 p_view, no_diff float4 intrins, out float2 uv
 ) {
-    uv = equirect_proj_uv(p_view, intrins, dist_coeffs);
-    // full-sphere camera: no invalid region (dist_coeffs unused)
+    uv = equirect_proj_uv(p_view, intrins);
     return true;
 }
 
 [CudaDeviceExport]
-bool equirect_proj_nav(
-    float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs,
-    out float2 uv
-) {
-    return equirect_proj<false>(p_view, intrins, dist_coeffs, uv);
+bool equirect_proj_nav(float3 p_view, no_diff float4 intrins, out float2 uv) {
+    return equirect_proj<false>(p_view, intrins, uv);
 }
 
 [ForceInline]
 [Differentiable]
 [CudaDeviceExport]
-float2x3 equirect_proj_jac(float3 p_view, no_diff float4 intrins, no_diff float[10] dist_coeffs) {
+float2x3 equirect_proj_jac(float3 p_view, no_diff float4 intrins) {
     float2x3 J;
     [ForceUnroll]
     for (int i = 0; i < 3; ++i) {
         DifferentialPair<float3> dp_p_view = diffPair(p_view,
             float3(float(i == 0), float(i == 1), float(i == 2)));
-        float2 duv = fwd_diff(equirect_proj_uv)(dp_p_view, intrins, dist_coeffs).d;
+        float2 duv = fwd_diff(equirect_proj_uv)(dp_p_view, intrins).d;
         J[0][i] = duv.x;
         J[1][i] = duv.y;
     }
@@ -593,105 +586,41 @@ float2 _solve2x2(float2x2 A, float2 b) {
 }
 
 // find uv' s.t. distort(uv') = uv
-bool undistort_point(
-    no_diff float2 uv, no_diff float[10] dist_coeffs,
+bool undistort_point<D : ICameraDistortion>(
+    no_diff float2 uv, no_diff float dist_coeffs[D.kNumParams],
     int maxiter, out float2 uv_undist
 ) {
+    if (D.kIsIdentity) {
+        uv_undist = uv;
+        return true;
+    }
+
     float2 q = uv;
-    float2 prev_q = q;
-
     for (int i = 0; i < maxiter; i++) {
-        float2 qd = camera_distortion(q, dist_coeffs);
+        float2 qd = D.distort(q, dist_coeffs);
         float2 r = qd - uv;
-        float err = dot(r, r);
-
-        // bool use_newton = err < 1e-2;
-        bool use_newton = true;
-
-        if (use_newton) {
-            float2x2 J = camera_distortion_jac(q, dist_coeffs);
-            q -= _solve2x2(J, r);
-        } else {
-            // float step = 0.5;
-            float step = clamp(0.5 + 0.5 / (1.0 + dot(r, r) * 10.0), 0.1, 0.9);
-            q = q - step * r;
-        }
-
-        prev_q = q;
+        float2x2 J = camera_distortion_jac<D>(q, dist_coeffs);
+        q -= _solve2x2(J, r);
     }
 
     uv_undist = q;
     // TODO: better way to tell so
-    return is_valid_distortion(uv_undist, dist_coeffs) &&
-           length(camera_distortion(uv_undist, dist_coeffs) - uv) < 1e-2;
+    return is_valid_distortion<D>(uv_undist, dist_coeffs) &&
+           length(D.distort(uv_undist, dist_coeffs) - uv) < 1e-2;
 }
 
-#if 0
-// find uv' that minimizes (distort(uv') - uv)^2 s.t. is_valid_distortion_func(uv') < 0
-bool undistort_point_clipped(
-    no_diff float2 uv, no_diff float[10] dist_coeffs,
-    int maxiter, out float2 q
-) {
-    q = uv;
-    for (int i = 0; i < 4; i++) {
-        if (is_valid_distortion(q, dist_coeffs))
-            break;
-        q *= 0.618f;
-    }
-    if (!is_valid_distortion(q, dist_coeffs))
-        return false;
-
-    float weight_b = 0.0f;
-    for (int i = 0; i < maxiter; i++) {
-        float2 qd = camera_distortion(q, dist_coeffs);
-        float2 r = qd - uv;
-        if (length(r) < 1e-4)
-            break;
-
-        float2x2 J = camera_distortion_jac(q, dist_coeffs);
-        float2 grad_f = mul(transpose(J), r);
-        float2x2 hess_f = mul(transpose(J), J);
-
-        float2 grad_b = valid_distortion_log_barrier_grad(q, dist_coeffs);
-        float2x2 hess_b = valid_distortion_log_barrier_hess(q, dist_coeffs);
-
-        if (i == 0) {
-            weight_b = 10.0f * length(grad_f) / (length(grad_b) + 1e-6f);
-        }
-
-        bool valid_found = false;
-        for (int j = 0; j < 8; j++) {
-            float2 grad = grad_f + weight_b * grad_b;
-            float2x2 hess = hess_f + weight_b * hess_b;
-            float2 dq = _solve2x2(J, r);
-            float2 q1 = q - dq;
-            if (is_valid_distortion(q1, dist_coeffs)) {
-                valid_found = true;
-                q = q1;
-                weight_b *= 0.25f;
-                break;
-            }
-            else {
-                weight_b *= 1.618f;
-            }
-        }
-        if (!valid_found)
-            return false;
-    }
-
-    // TODO: better way to tell so
-    return true;
-    // return length(camera_distortion(q, dist_coeffs) - uv) < 1e-2;
-}
-#endif
 
 
-[CudaDeviceExport]
+// The model-aware helpers below take the camera model as a RUNTIME int (the
+// pixel-wise kernels dispatch per camera, not per launch); only the distortion
+// tier is compile-time.
+
+[ForceInline]
 [Differentiable]
-float2 distort_point(
+float2 distort_point<D : ICameraDistortion>(
     no_diff float2 uv,
     no_diff int camera_model,
-    no_diff float[10] dist_coeffs
+    no_diff float dist_coeffs[D.kNumParams]
 ) {
     CameraModelType model = (CameraModelType)camera_model;
 
@@ -712,15 +641,15 @@ float2 distort_point(
         uv *= k;
     }
 
-    return camera_distortion(uv, dist_coeffs);
+    return D.distort(uv, dist_coeffs);
 }
 
-[CudaDeviceExport]
+[ForceInline]
 [Differentiable]
-bool undistort_point(
+bool undistort_point_model<D : ICameraDistortion>(
     no_diff float2 uv,
     no_diff int camera_model,
-    no_diff float[10] dist_coeffs,
+    no_diff float dist_coeffs[D.kNumParams],
     out float2 uv_undist
 ) {
     CameraModelType model = (CameraModelType)camera_model;
@@ -735,7 +664,7 @@ bool undistort_point(
     }
 
     float2 uv_u;
-    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv_u))
+    if (!no_diff undistort_point<D>(uv, dist_coeffs, 8, uv_u))
         return false;
     uv = uv_u;
 
@@ -760,26 +689,25 @@ bool undistort_point(
     return true;
 }
 
-[CudaDeviceExport]
-bool unproject_point(
+[ForceInline]
+bool unproject_point<D : ICameraDistortion>(
     no_diff float2 uv,
     no_diff int camera_model,
-    no_diff float[10] dist_coeffs,
+    no_diff float dist_coeffs[D.kNumParams],
     out float3 raydir
 ) {
     CameraModelType model = (CameraModelType)camera_model;
 
     raydir = float3(0);
 
-    // Equirectangular: uv holds (lon, lat); map straight to a direction. No
-    // distortion inversion (dist_coeffs ignored).
+    // Equirectangular: uv holds (lon, lat); map straight to a direction.
     if (model == CameraModelType::EQUIRECTANGULAR) {
         raydir = equirect_unproj(uv);
         return true;
     }
 
     float2 uv_u;
-    if (!undistort_point(uv, dist_coeffs, 8, uv_u))
+    if (!undistort_point<D>(uv, dist_coeffs, 8, uv_u))
         return false;
     uv = uv_u;
 
@@ -802,12 +730,12 @@ bool unproject_point(
     return true;
 }
 
-[CudaDeviceExport]
+[ForceInline]
 [Differentiable]
-bool generate_ray(
+bool generate_ray<D : ICameraDistortion>(
     no_diff float2 uv,
     no_diff int camera_model,
-    no_diff float[10] dist_coeffs,
+    no_diff float dist_coeffs[D.kNumParams],
     out float3 raydir
 ) {
     CameraModelType model = (CameraModelType)camera_model;
@@ -825,7 +753,7 @@ bool generate_ray(
     }
 
     float2 uv_u;
-    if (!no_diff undistort_point(uv, dist_coeffs, 8, uv_u)) {
+    if (!no_diff undistort_point<D>(uv, dist_coeffs, 8, uv_u)) {
         raydir = float3(0);
         return false;
     }
@@ -858,6 +786,69 @@ bool generate_ray(
     raydir = normalize(raydir);
     return true;
 }
+
+
+// ================
+// Per-tier CUDA exports
+// ================
+//
+// slangc cannot export a generic, so each tier gets a thin wrapper. The CUDA
+// side selects one at compile time through SlangDistortion<D> in
+// core/CameraDistortion.cuh; the Vulkan side calls the generics directly and
+// picks the tier with the kDistortion specialization constant.
+
+#define _DEF_DIST_ENTRIES(suffix, D, NC) \
+    [CudaDeviceExport] \
+    bool is_valid_distortion##suffix(float2 uv, float dist_coeffs[NC]) { \
+        return is_valid_distortion<D>(uv, dist_coeffs); \
+    } \
+    [CudaDeviceExport] \
+    bool persp_proj_nav##suffix( \
+        float3 p_view, float4 intrins, float dist_coeffs[NC], out float2 uv \
+    ) { return persp_proj<D, false>(p_view, intrins, dist_coeffs, uv); } \
+    [CudaDeviceExport] \
+    bool fisheye_proj_nav##suffix( \
+        float3 p_view, float4 intrins, float dist_coeffs[NC], out float2 uv \
+    ) { return fisheye_proj<D, false>(p_view, intrins, dist_coeffs, uv); } \
+    [CudaDeviceExport] \
+    bool equisolid_proj_nav##suffix( \
+        float3 p_view, float4 intrins, float dist_coeffs[NC], out float2 uv \
+    ) { return equisolid_proj<D, false>(p_view, intrins, dist_coeffs, uv); } \
+    [CudaDeviceExport] \
+    float2x3 persp_proj_jac##suffix( \
+        float3 p_view, float4 intrins, float dist_coeffs[NC] \
+    ) { return persp_proj_jac<D>(p_view, intrins, dist_coeffs); } \
+    [CudaDeviceExport] \
+    float2x3 fisheye_proj_jac##suffix( \
+        float3 p_view, float4 intrins, float dist_coeffs[NC] \
+    ) { return fisheye_proj_jac<D>(p_view, intrins, dist_coeffs); } \
+    [CudaDeviceExport] \
+    float2x3 equisolid_proj_jac##suffix( \
+        float3 p_view, float4 intrins, float dist_coeffs[NC] \
+    ) { return equisolid_proj_jac<D>(p_view, intrins, dist_coeffs); } \
+    [CudaDeviceExport] \
+    float2 distort_point##suffix( \
+        float2 uv, int camera_model, float dist_coeffs[NC] \
+    ) { return distort_point<D>(uv, camera_model, dist_coeffs); } \
+    [CudaDeviceExport] \
+    bool undistort_point##suffix( \
+        float2 uv, int camera_model, float dist_coeffs[NC], out float2 uv_undist \
+    ) { return undistort_point_model<D>(uv, camera_model, dist_coeffs, uv_undist); } \
+    [CudaDeviceExport] \
+    bool unproject_point##suffix( \
+        float2 uv, int camera_model, float dist_coeffs[NC], out float3 raydir \
+    ) { return unproject_point<D>(uv, camera_model, dist_coeffs, raydir); } \
+    [CudaDeviceExport] \
+    bool generate_ray##suffix( \
+        float2 uv, int camera_model, float dist_coeffs[NC], out float3 raydir \
+    ) { return generate_ray<D>(uv, camera_model, dist_coeffs, raydir); }
+
+_DEF_DIST_ENTRIES(_none, DistNone, 1)
+_DEF_DIST_ENTRIES(_opencv, DistOpenCV, 4)
+_DEF_DIST_ENTRIES(_prism, DistThinPrism, 8)
+_DEF_DIST_ENTRIES(_rational, DistRational, 8)
+
+#undef _DEF_DIST_ENTRIES
 
 
 [CudaDeviceExport]

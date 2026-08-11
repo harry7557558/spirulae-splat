@@ -15,9 +15,11 @@
 #include "int64_compat.slang"
 #include "shaders/projection_utils.slang"
 #undef CudaDeviceExport
+#include "dist_spec.slang"
 
 // Camera model of the images being sampled. Value parameter on the CUDA side;
-// a specialization constant here, like every other camera-model axis.
+// a specialization constant here, like every other camera-model axis
+// (kDistortion follows at the end of the file).
 [SpecializationConstant]
 const int kCameraModel = 0;
 
@@ -58,8 +60,9 @@ float3 bilinear3(float* img, int W, int H, float u, float v) {
 // Project p (world) into the camera. Returns false if behind the camera or out
 // of frame; else fills pixel (u,v) and the along-ray depth z = |p_cam|.
 [ForceInline]
-bool project_point(float* viewmat, float* intrin, float* dist, int W, int H,
-                   float3 pw, out float u, out float v, out float z) {
+bool project_point<D : ICameraDistortion>(
+    float* viewmat, float* intrin, float* dist, int W, int H, float3 pw,
+    out float u, out float v, out float z) {
     u = 0.0f; v = 0.0f; z = 0.0f;
     float3 p_cam;
     [ForceUnroll]
@@ -68,17 +71,18 @@ bool project_point(float* viewmat, float* intrin, float* dist, int W, int H,
                    viewmat[4 * r + 2] * pw.z + viewmat[4 * r + 3];
 
     float4 intr = float4(intrin[0], intrin[1], intrin[2], intrin[3]);
-    float dc[10];
+    float dc[D.kNumParams];
     [ForceUnroll]
-    for (int t = 0; t < 10; ++t) dc[t] = dist[t];
+    for (int t = 0; t < D.kNumParams; ++t) dc[t] = dist[t];
 
-    // proj_nav handles the behind-camera / invalid-distortion cases and returns
-    // pixel-space uv (already scaled by fx,fy and offset by cx,cy).
+    // The projections handle the behind-camera / invalid-distortion cases and
+    // return pixel-space uv (already scaled by fx,fy and offset by cx,cy).
     float2 uv;
     bool valid =
-        (kCameraModel == 1) ? fisheye_proj_nav(p_cam, intr, dc, uv) :
-        (kCameraModel == 2) ? equisolid_proj_nav(p_cam, intr, dc, uv) :
-                              persp_proj_nav(p_cam, intr, dc, uv);
+        (kCameraModel == 1) ? fisheye_proj<D, false>(p_cam, intr, dc, uv) :
+        (kCameraModel == 2) ? equisolid_proj<D, false>(p_cam, intr, dc, uv) :
+        (kCameraModel == 3) ? equirect_proj<false>(p_cam, intr, uv) :
+                              persp_proj<D, false>(p_cam, intr, dc, uv);
     if (!valid) return false;
     u = uv.x; v = uv.y;
     if (u < 0.0f || u >= float(W) || v < 0.0f || v >= float(H)) return false;
@@ -148,16 +152,11 @@ struct MeshSampleOccParams {  // 56 bytes: pushed directly
     uint32_t _pad0;
 };
 
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void mesh_sample_occ(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
-                     uniform MeshSampleOccParams p) {
-    uint gid = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
-    if (gid >= p.n) return;
-    int i = int(gid);
+[ForceInline]
+void _ms_occ<D : ICameraDistortion>(MeshSampleOccParams p, int i) {
     float u, v, z;
-    if (!project_point(p.viewmat, p.intrin, p.dist, int(p.W), int(p.H),
-                       ld3(p.xyz, i), u, v, z))
+    if (!project_point<D>(p.viewmat, p.intrin, p.dist, int(p.W), int(p.H),
+                          ld3(p.xyz, i), u, v, z))
         return;
     float occ;
     if (!occ_bilinear(p.moments, int(p.W), int(p.H), u, v, z, occ))
@@ -172,6 +171,18 @@ void mesh_sample_occ(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     }
     p.cnt[i] += 1;
 }
+
+#define _ms_occ_call(D) _ms_occ<D>(p, int(gid))
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void mesh_sample_occ(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                     uniform MeshSampleOccParams p) {
+    uint gid = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
+    if (gid >= p.n) return;
+    SS_DISPATCH_DIST(_ms_occ_call)
+}
+#undef _ms_occ_call
 
 struct MeshFinalizeOccParams {  // 32 bytes: pushed directly
     float* occ_kmin;
@@ -215,16 +226,11 @@ struct MeshSampleColorParams {  // 72 bytes: pushed directly
     uint32_t wgs_per_row;
 };
 
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void mesh_sample_color(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
-                       uniform MeshSampleColorParams p) {
-    uint gid = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
-    if (gid >= p.n) return;
-    int i = int(gid);
+[ForceInline]
+void _ms_color<D : ICameraDistortion>(MeshSampleColorParams p, int i) {
     float u, v, z;
-    if (!project_point(p.viewmat, p.intrin, p.dist, int(p.W), int(p.H),
-                       ld3(p.xyz, i), u, v, z))
+    if (!project_point<D>(p.viewmat, p.intrin, p.dist, int(p.W), int(p.H),
+                          ld3(p.xyz, i), u, v, z))
         return;
     float occ;
     // Sample the occlusion slightly IN FRONT of the point (2% of depth):
@@ -245,6 +251,18 @@ void mesh_sample_color(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     p.num[3 * i + 2] += w4 * c.z;
     p.den[i] += w4;
 }
+
+#define _ms_color_call(D) _ms_color<D>(p, int(gid))
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void mesh_sample_color(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                       uniform MeshSampleColorParams p) {
+    uint gid = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
+    if (gid >= p.n) return;
+    SS_DISPATCH_DIST(_ms_color_call)
+}
+#undef _ms_color_call
 
 struct MeshFinalizeColorParams {  // 32 bytes: pushed directly
     float* num;
@@ -286,16 +304,11 @@ struct MeshViewDensityParams {  // 56 bytes: pushed directly
     uint32_t wgs_per_row;
 };
 
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void mesh_sample_view_density(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
-                              uniform MeshViewDensityParams p) {
-    uint gid = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
-    if (gid >= p.n) return;
-    int i = int(gid);
+[ForceInline]
+void _ms_density<D : ICameraDistortion>(MeshViewDensityParams p, int i) {
     float u, v, z;
-    if (!project_point(p.viewmat, p.intrin, p.dist, int(p.W), int(p.H),
-                       ld3(p.xyz, i), u, v, z))
+    if (!project_point<D>(p.viewmat, p.intrin, p.dist, int(p.W), int(p.H),
+                          ld3(p.xyz, i), u, v, z))
         return;
     float occ;
     // same front-shifted sample as the color path: tolerate surface fuzz
@@ -306,6 +319,18 @@ void mesh_sample_view_density(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float nu = f / max(z, 1e-9f);
     if (nu > p.dens[i]) p.dens[i] = nu;
 }
+
+#define _ms_density_call(D) _ms_density<D>(p, int(gid))
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void mesh_sample_view_density(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                              uniform MeshViewDensityParams p) {
+    uint gid = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
+    if (gid >= p.n) return;
+    SS_DISPATCH_DIST(_ms_density_call)
+}
+#undef _ms_density_call
 
 // ===========================================================================
 // Visibility cull
@@ -487,20 +512,14 @@ struct MeshCullParams {
     uint32_t wgs_per_row;
 };
 
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void mesh_cull(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
-               uniform MeshCullParams* pp) {
-    MeshCullParams p = *pp;
-    uint gid = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
-    if (gid >= p.nv) return;
-    int i = int(gid);
+[ForceInline]
+void _ms_cull<D : ICameraDistortion>(MeshCullParams p, int i) {
     float3 pt = ld3(p.verts, i);
     for (uint c = 0; c < p.C; ++c) {
         float* vm = p.viewmats + c * 16;
         float u, v, z;
-        if (!project_point(vm, p.intrins + c * 4, p.dist + c * 10,
-                           p.Ws[c], p.Hs[c], pt, u, v, z))
+        if (!project_point<D>(vm, p.intrins + c * 4, p.dist + c * kDistCoeffRow,
+                              p.Ws[c], p.Hs[c], pt, u, v, z))
             continue;   // out of frame / behind camera
         // camera center in world: C = -R^T t (viewmat row-major world->cam)
         float3 cam = float3(
@@ -515,3 +534,20 @@ void mesh_cull(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     }
     p.visible[i] = 0u;           // seen by no camera
 }
+
+#define _ms_cull_call(D) _ms_cull<D>(p, int(gid))
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void mesh_cull(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+               uniform MeshCullParams* pp) {
+    MeshCullParams p = *pp;
+    uint gid = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
+    if (gid >= p.nv) return;
+    SS_DISPATCH_DIST(_ms_cull_call)
+}
+#undef _ms_cull_call
+
+// Declared last: spec IDs follow declaration order (see dist_spec.slang).
+[SpecializationConstant]
+const int kDistortion = 0;

@@ -349,12 +349,13 @@ template<> struct DistortionStore<DistortionType::RGB_DN> {
 
 #ifdef __CUDACC__
 
-struct ProjCamera {
+template<CameraDistortionType D>
+struct ProjCameraT {
     float3x3 R;
     float3 t;
     float fx, fy, cx, cy;
     uint width, height;
-    CameraDistortionCoeffs dist_coeffs;
+    CameraDistortionCoeffsT<D> dist_coeffs;
 };
 
 #endif

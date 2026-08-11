@@ -105,15 +105,16 @@ struct MeshingConfig {
 
 // Full camera intrinsics/extrinsics for the rasterize-and-sample (dataset)
 // path. All host pointers; when !valid() the evaluator falls back to the static
-// LBVH path. Distortion uses the engine [C,10] layout expected by the 3DGUT
-// projection: k1,k2,p1,p2,k3,k4,k5,k6,sx1,sy1 (tail-padded with zeros).
+// LBVH path. Coefficient rows are 8 wide; the per-tier order is documented in
+// core/CameraModel.h.
 struct CameraParams {
     const float* viewmats = nullptr;    // [C*16] row-major world->cam 4x4
     const float* intrins = nullptr;     // [C*4]  fx, fy, cx, cy
-    const float* dist_coeffs = nullptr; // [C*10] (may be null => treated as 0)
+    const float* dist_coeffs = nullptr; // [C*8] (may be null => treated as 0)
     const int* widths  = nullptr;       // [C] per-camera image width
     const int* heights = nullptr;       // [C] per-camera image height
     std::string camera_model;           // engine name, e.g. "PINHOLE"/"FISHEYE"
+    std::string distortion = "NONE";    // tier name, e.g. "OPENCV"/"THIN_PRISM"
     bool valid() const {
         return viewmats && intrins && widths && heights;
     }
