@@ -450,7 +450,7 @@ struct RenderWorker::Impl {
                 (int)camera_model_from_name(q.model), "NONE",
                 tvp(di, 4, {1, 4}),
                 tvp(dv, 4, {4, 4}),
-                tvp(dc, 4, {1, 10}),
+                tvp(dc, 4, {1, kCameraDistortionParams}),
                 q.show_cams,
                 q.show_grid,
                 grid_dist,

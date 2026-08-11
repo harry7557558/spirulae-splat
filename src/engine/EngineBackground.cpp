@@ -107,9 +107,9 @@ static BgShViews _engine_bg_sh_views(int C_batch) {
     if (engine().camera.dist_coeffs.data_ptr() != nullptr) {
         v.dist_coeffs = TorchTensorView(
             (uint64_t)engine().camera.dist_coeffs.data_ptr(), 4,
-            {(int64_t)C_batch, 10LL});
+            {(int64_t)C_batch, (int64_t)kCameraDistortionParams});
     } else {
-        v.dist_coeffs = TorchTensorView(0, 4, {0});
+        v.dist_coeffs = TorchTensorView(0, 4, {0LL, (int64_t)kCameraDistortionParams});
     }
     v.sh_coeffs = _dv_tv(bg.sh_coeffs);
     return v;

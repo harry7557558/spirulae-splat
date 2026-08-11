@@ -131,9 +131,16 @@ struct CameraDistortionCoeffsBuffer {
     float* __restrict__ coeffs;
 
     CameraDistortionCoeffsBuffer(const TorchTensorView &tensor) {
-        if (std::get<2>(tensor).size() != 2 ||
-            std::get<2>(tensor)[1] != kCameraDistortionParams)
-            throw std::runtime_error("dist coeffs must have shape (C, 8)");
+        const auto &shape = std::get<2>(tensor);
+        // This converts implicitly at every kernel launch site, so the
+        // received shape is the only clue to which caller got it wrong.
+        if (shape.size() != 2 || shape[1] != kCameraDistortionParams) {
+            std::string got;
+            for (size_t i = 0; i < shape.size(); i++)
+                got += (i ? ", " : "") + std::to_string(shape[i]);
+            throw std::runtime_error("dist coeffs must have shape (C, " +
+                std::to_string(kCameraDistortionParams) + "), got (" + got + ")");
+        }
         if (std::get<1>(tensor) != sizeof(float))
             throw std::runtime_error("dist coeffs must be float");
         coeffs = (float*)std::get<0>(tensor);
