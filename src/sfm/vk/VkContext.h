@@ -35,9 +35,43 @@ inline const char* vkResultName(int r) {
         case -3: return "VK_ERROR_INITIALIZATION_FAILED";
         case -4: return "VK_ERROR_DEVICE_LOST";
         case -5: return "VK_ERROR_MEMORY_MAP_FAILED";
-        case -9: return "VK_ERROR_FEATURE_NOT_PRESENT";
+        case -8: return "VK_ERROR_FEATURE_NOT_PRESENT";
+        case -9: return "VK_ERROR_INCOMPATIBLE_DRIVER";
         case -11: return "VK_ERROR_FORMAT_NOT_SUPPORTED";
         default: return "";
+    }
+}
+
+inline bool hasDeviceExtension(VkPhysicalDevice phys, const char* name) {
+    uint32_t n = 0;
+    vkEnumerateDeviceExtensionProperties(phys, nullptr, &n, nullptr);
+    std::vector<VkExtensionProperties> exts(n);
+    vkEnumerateDeviceExtensionProperties(phys, nullptr, &n, exts.data());
+    for (const auto& e : exts)
+        if (std::strcmp(e.extensionName, name) == 0) return true;
+    return false;
+}
+
+// A driver implementing only a subset of Vulkan (MoltenVK, the sole driver on
+// macOS) stays hidden from vkEnumeratePhysicalDevices unless the instance opts
+// in, and vkCreateInstance fails with VK_ERROR_INCOMPATIBLE_DRIVER when it is
+// the only one installed. Where no such driver exists the extension is absent
+// and this does nothing. `exts` must outlive the vkCreateInstance call.
+inline void vkEnablePortability(VkInstanceCreateInfo& ici,
+                                std::vector<const char*>& exts) {
+    uint32_t n = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
+    std::vector<VkExtensionProperties> avail(n);
+    vkEnumerateInstanceExtensionProperties(nullptr, &n, avail.data());
+    for (const auto& e : avail) {
+        if (std::strcmp(e.extensionName,
+                        VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) != 0)
+            continue;
+        exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+        ici.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        ici.enabledExtensionCount = (uint32_t)exts.size();
+        ici.ppEnabledExtensionNames = exts.data();
+        return;
     }
 }
 
@@ -138,6 +172,8 @@ public:
         app.apiVersion = VK_API_VERSION_1_2;
         VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         ici.pApplicationInfo = &app;
+        std::vector<const char*> instExts;
+        vkEnablePortability(ici, instExts);
         VkInstance inst = VK_NULL_HANDLE;
         if (vkCreateInstance(&ici, nullptr, &inst) != VK_SUCCESS) return {};
         VkPhysicalDevice phys = choosePhysical(inst, deviceIndex);
@@ -153,6 +189,8 @@ public:
         app.apiVersion = VK_API_VERSION_1_2;
         VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         ici.pApplicationInfo = &app;
+        std::vector<const char*> instExts;
+        vkEnablePortability(ici, instExts);
         const char* layers[] = {"VK_LAYER_KHRONOS_validation"};
         if (opt.validate) {
             ici.enabledLayerCount = 1;
@@ -225,6 +263,11 @@ public:
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT fAtom{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
         std::vector<const char*> exts;
+        // Mandatory where advertised: the spec forbids creating a device from
+        // a portability physical device without it. Spelled out rather than
+        // using the macro, which is behind VK_ENABLE_BETA_EXTENSIONS.
+        if (hasDeviceExtension(phys_, "VK_KHR_portability_subset"))
+            exts.push_back("VK_KHR_portability_subset");
         if (opt.needFloatAtomics) {
             fAtom.shaderBufferFloat32Atomics = VK_TRUE;
             fAtom.shaderBufferFloat32AtomicAdd = VK_TRUE;

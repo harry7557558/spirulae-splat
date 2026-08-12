@@ -59,6 +59,21 @@ often offline. The pattern that works:
 
 Keep reference dumps out of git (`parity_refs/` is gitignored).
 
+### macOS / MoltenVK
+
+All 17 parity tools pass against a CUDA reference on Apple silicon except
+`engine_render_parity`, which fails on its blit channel only (~0.6% of bytes
+against a 0.2% cap; its float channel passes). The differing bytes lie on the
+viewer's grid and frustum overlay lines, which `vis_blit` ray-traces as swept
+spheres and antialiases with MSAA: a grazing ray that hits on one device
+misses on the other, and one flipped sample of four moves a byte by more than
+the cap allows. Nothing outside the overlay differs.
+
+Three tools -- `msloss_parity`, `optimgeo_parity`, `meshing_parity` -- pass
+only because `VulkanContext::init()` turns MoltenVK's default Metal fast-math
+off. `SS_VK_FAST_MATH=1` puts it back, and they fail again; that is the knob
+to reach for when measuring what the setting costs.
+
 ## 2. GUI / viewer checks
 
 The web viewer can be driven headlessly over the Chrome DevTools Protocol.

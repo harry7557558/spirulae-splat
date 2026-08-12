@@ -15,3 +15,9 @@ file(GLOB SS_I18N_SOURCES CONFIGURE_DEPENDS ${SS_SRC}/i18n/*.cpp)
 add_library(ss_i18n STATIC ${SS_I18N_SOURCES})
 target_include_directories(ss_i18n PUBLIC ${SS_SRC})
 target_compile_definitions(ss_i18n PUBLIC SS_DEFAULT_LANG=${SS_DEFAULT_LANG})
+if(APPLE)
+    # Locale.cpp asks CoreFoundation for the user's locale: POSIX env vars are
+    # usually absent for an app launched from Finder. PUBLIC, so the test
+    # binaries that link a backend without the engine get it too.
+    target_link_libraries(ss_i18n PUBLIC "-framework CoreFoundation")
+endif()

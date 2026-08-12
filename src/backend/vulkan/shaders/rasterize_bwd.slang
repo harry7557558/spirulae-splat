@@ -16,7 +16,7 @@
 //    never skipping the caller's barrier.
 //  - __ballot_sync survivor compaction -> WavePrefixCountBits + per-wave
 //    totals staged in groupshared (valid under pinned full subgroups).
-//  - atomicAdd/atomicMax on floats -> atomic_add_f32 / atomic_max_f32
+//  - atomicAdd/atomicMax on floats -> atomic_add_f32 / atomic_max_f32_nonneg
 //    (atomic_float.slang), with CUDA atomicAddFVec's isfinite filter.
 //
 // Render pixel type is RGB_D for all current primitives; color state is
@@ -255,7 +255,7 @@ struct Raster2dBwdParams {  // via params ring
     float* v_s_conic;
     float* v_s_opac;
     float* v_s_rgb;
-    float* o_accum_weight;  // kAccumWeight
+    uint* o_accum_weight;   // kAccumWeight; float bits (atomic_max_f32_nonneg)
     uint32_t I;
     uint32_t N;
     uint32_t n_isects;
@@ -472,7 +472,7 @@ void rasterize_bwd_2d(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 1, v_splat.rgb.y);
                 _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 2, v_splat.rgb.z);
                 if (kAccumWeight != 0)
-                    atomic_max_f32(p.o_accum_weight + wid, accum_weight);
+                    atomic_max_f32_nonneg(p.o_accum_weight + wid, accum_weight);
             }
         }
         GroupMemoryBarrierWithGroupSync();  // done reading surv[]
@@ -515,7 +515,7 @@ struct Raster3dgutBwdParams {  // via params ring
     float* v_scales;
     float* v_s_opac;
     float* v_s_rgb;
-    float* o_accum_weight;
+    uint* o_accum_weight;  // float bits (atomic_max_f32_nonneg)
     float* v_viewmats;   // [I,16], kViewmatGrad
     uint32_t I;
     uint32_t N;
@@ -791,8 +791,8 @@ void rasterize_bwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 1, v_splat.rgb.y);
                 _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 2, v_splat.rgb.z);
                 if (kAccumWeight != 0)
-                    atomic_max_f32(p.o_accum_weight + splat_wid,
-                                   accum_weight);
+                    atomic_max_f32_nonneg(p.o_accum_weight + splat_wid,
+                                          accum_weight);
             }
         }
         GroupMemoryBarrierWithGroupSync();

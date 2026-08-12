@@ -11,9 +11,17 @@
 // Backward: CUDA's 512-thread block-atomic SH reduction
 // (sh_block_atomic_add_f3_512) hardcodes warp==32 and needs float atomics,
 // so the port replaces it with a fixed grid of kBgBwdSlices grid-striding
-// threads, each accumulating its own float3 scratch slice via the plain
-// sh{N}_to_color_dir_vjp_inplace exports (no atomics at all), followed by a
-// small deterministic reduce pass that folds the slices into v_sh_coeffs.
+// threads, each accumulating its own scratch slice via the plain
+// sh_coeffs_to_color_vjp_inplace (no atomics at all), followed by a small
+// deterministic reduce pass that folds the slices into v_sh_coeffs.
+//
+// Coefficients are addressed as flat float*, not float3*, and the sh{N}_*_dir
+// wrappers -- which only exist for float3* -- are bypassed for the underlying
+// sh_coeffs_to_color(_vjp_inplace) they forward to. MoltenVK's SPIR-V -> MSL
+// translation cannot do arithmetic on a packed_float3 physical-storage
+// pointer: it emits a reinterpret_cast of the loaded packed_float3 to the
+// pointer's ulong, which the Metal compiler rejects, and every background
+// pipeline fails to create.
 
 #define CudaDeviceExport ForceInline
 #include "int64_compat.slang"
@@ -70,13 +78,13 @@ void background_sh_fwd(uint3 gtid: SV_DispatchThreadID,
     if (ray_ok) {
         float3 dir = transform_ray_d(R, raydir);
         float3 dc = float3(p.sh_coeffs[0], p.sh_coeffs[1], p.sh_coeffs[2]);
-        float3* coeffs_l1 = (float3*)p.sh_coeffs + 1;
+        float* coeffs_l1 = p.sh_coeffs + 3;
         switch (kShDegree) {
-        case 0: color = sh0_to_color_dir(dir, dc, coeffs_l1); break;
-        case 1: color = sh1_to_color_dir(dir, dc, coeffs_l1); break;
-        case 2: color = sh2_to_color_dir(dir, dc, coeffs_l1); break;
-        case 3: color = sh3_to_color_dir(dir, dc, coeffs_l1); break;
-        case 4: color = sh4_to_color_dir(dir, dc, coeffs_l1); break;
+        case 0: color = sh_coeffs_to_color(0, dir, dc, coeffs_l1); break;
+        case 1: color = sh_coeffs_to_color(1, dir, dc, coeffs_l1); break;
+        case 2: color = sh_coeffs_to_color(2, dir, dc, coeffs_l1); break;
+        case 3: color = sh_coeffs_to_color(3, dir, dc, coeffs_l1); break;
+        case 4: color = sh_coeffs_to_color(4, dir, dc, coeffs_l1); break;
         }
         color = max(color + 0.5f, float3(0.0f));
     }
@@ -99,7 +107,7 @@ struct BackgroundShBwdParams {  // 80 bytes: pushed directly
     float* sh_coeffs;    // [K,3], K = (kShDegree+1)^2
     float* out_color;    // [B,H,W,3] forward output (clamp mask)
     float* v_out_color;  // [B,H,W,3]
-    float3* scratch;     // [kBgBwdSlices, K] zero-initialized partials
+    float* scratch;      // [kBgBwdSlices, K, 3] zero-initialized partials
     uint32_t width;
     uint32_t height;
     uint32_t B;
@@ -117,12 +125,12 @@ void background_sh_bwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                        uniform BackgroundShBwdParams p) {
     uint slice = wg.x * 256 + tid;
     const int K = (kShDegree + 1) * (kShDegree + 1);
-    float3* my = p.scratch + slice * K;      // slot 0 = dc, 1..K-1 = bands
-    float3* my_coeffs = my + 1;
+    float* my = p.scratch + slice * K * 3;   // slot 0 = dc, 1..K-1 = bands
+    float* my_coeffs = my + 3;
     uint total = p.B * p.height * p.width;
 
     float3 dc = float3(p.sh_coeffs[0], p.sh_coeffs[1], p.sh_coeffs[2]);
-    float3* coeffs_l1 = (float3*)p.sh_coeffs + 1;
+    float* coeffs_l1 = p.sh_coeffs + 3;
 
     float3 v_dc = float3(0.0f);
     for (uint pix = slice; pix < total; pix += kBgBwdSlices) {
@@ -158,23 +166,25 @@ void background_sh_bwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         // v_dir is discarded (engine holds cameras fixed, as in CUDA).
         float3 v_dir = float3(0.0f);
         switch (kShDegree) {
-        case 0: sh0_to_color_dir_vjp_inplace(dir, dc, coeffs_l1, v_color,
-                                             v_dc, my_coeffs, v_dir); break;
-        case 1: sh1_to_color_dir_vjp_inplace(dir, dc, coeffs_l1, v_color,
-                                             v_dc, my_coeffs, v_dir); break;
-        case 2: sh2_to_color_dir_vjp_inplace(dir, dc, coeffs_l1, v_color,
-                                             v_dc, my_coeffs, v_dir); break;
-        case 3: sh3_to_color_dir_vjp_inplace(dir, dc, coeffs_l1, v_color,
-                                             v_dc, my_coeffs, v_dir); break;
-        case 4: sh4_to_color_dir_vjp_inplace(dir, dc, coeffs_l1, v_color,
-                                             v_dc, my_coeffs, v_dir); break;
+        case 0: sh_coeffs_to_color_vjp_inplace(0, dir, dc, coeffs_l1, v_color,
+                                               v_dc, my_coeffs, v_dir); break;
+        case 1: sh_coeffs_to_color_vjp_inplace(1, dir, dc, coeffs_l1, v_color,
+                                               v_dc, my_coeffs, v_dir); break;
+        case 2: sh_coeffs_to_color_vjp_inplace(2, dir, dc, coeffs_l1, v_color,
+                                               v_dc, my_coeffs, v_dir); break;
+        case 3: sh_coeffs_to_color_vjp_inplace(3, dir, dc, coeffs_l1, v_color,
+                                               v_dc, my_coeffs, v_dir); break;
+        case 4: sh_coeffs_to_color_vjp_inplace(4, dir, dc, coeffs_l1, v_color,
+                                               v_dc, my_coeffs, v_dir); break;
         }
     }
-    my[0] = v_dc;
+    my[0] = v_dc.x;
+    my[1] = v_dc.y;
+    my[2] = v_dc.z;
 }
 
 struct BackgroundShBwdReduceParams {  // 20 bytes: pushed directly
-    float3* scratch;      // [kBgBwdSlices, K]
+    float* scratch;       // [kBgBwdSlices, K, 3], read flat
     float* v_sh_coeffs;   // [K,3] accumulated (caller zeroes)
     uint32_t k3;          // K * 3
 };
@@ -194,10 +204,9 @@ void background_sh_bwd_reduce(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                               uniform BackgroundShBwdReduceParams p) {
     uint col = wg.x;
     if (col >= p.k3) return;  // whole workgroup shares col: uniform, no barrier split
-    float* sf = (float*)p.scratch;
     float s = 0.0f;
     for (uint i = tid; i < kBgBwdSlices; i += 256)
-        s += sf[i * p.k3 + col];
+        s += p.scratch[i * p.k3 + col];
 
     GroupMemoryBarrierWithGroupSync();
     _bgsh_red[tid] = s;

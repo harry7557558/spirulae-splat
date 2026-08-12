@@ -62,7 +62,6 @@ void fused_adam_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float x = p.param[idx];
     float v = p.grad[idx];
     if (!_finitef(v)) v = 0.0f;
-    if (p.zero_grad != 0) p.grad[idx] = 0.0f;
     v *= p.grad_scale;
     v += p.decay *
          (max(x - p.decay_offset, 0.0f) + min(x + p.decay_offset, 0.0f));
@@ -77,6 +76,8 @@ void fused_adam_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     p.param[idx] = x;
     p.exp_avg[idx] = g1;
     p.exp_avg_sq[idx] = g2;
+
+    if (p.zero_grad != 0) p.grad[idx] = 0.0f;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +146,6 @@ void _adam_q_impl<let BITS : int>(uint3 wg, uint tid, QAdamParams p) {
     float x = inside ? p.param[idx] : 0.0f;
     float v = inside ? p.grad[idx] : 0.0f;
     if (!_finitef(v)) v = 0.0f;
-    if (p.zero_grad != 0 && inside) p.grad[idx] = 0.0f;
     v *= p.grad_scale;
     v += p.decay *
          (max(x - p.decay_offset, 0.0f) + min(x + p.decay_offset, 0.0f));
@@ -172,6 +172,9 @@ void _adam_q_impl<let BITS : int>(uint3 wg, uint tid, QAdamParams p) {
     uint2 q = qadam_quantize_us<BITS>(us.x, us.y, mm);
     qadam_store<BITS>(p.packed, idx, tid, inside, q);
     if (tid == 0 && blk_ok) p.quant_bounds[blk] = mm;
+
+    // Last, per fused_adam_fwd.
+    if (p.zero_grad != 0 && inside) p.grad[idx] = 0.0f;
 }
 
 [shader("compute")]
@@ -238,7 +241,6 @@ void _adam_qq_impl<let OPTIM_BITS : int, let VALUE_BITS : int>(
         v = inside ? p.grad[idx] : 0.0f;
     }
     if (!_finitef(v)) v = 0.0f;
-    if (p.zero_grad != 0 && inside && p.grad_quant == 0) p.grad[idx] = 0.0f;
     v *= p.grad_scale;
     v += p.decay *
          (max(x - p.decay_offset, 0.0f) + min(x + p.decay_offset, 0.0f));
@@ -276,6 +278,9 @@ void _adam_qq_impl<let OPTIM_BITS : int, let VALUE_BITS : int>(
         p.value_bounds[blk] = value_mm;
         p.optim_bounds[blk] = optim_mm_new;
     }
+
+    // Last, per fused_adam_fwd.
+    if (p.zero_grad != 0 && inside && p.grad_quant == 0) p.grad[idx] = 0.0f;
 }
 
 [shader("compute")]

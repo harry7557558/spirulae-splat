@@ -167,6 +167,26 @@ VkInstance createInstance(bool validation, VkDebugUtilsMessengerEXT* messenger) 
 
     VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ici.pApplicationInfo = &app;
+
+    // A driver implementing only a subset of Vulkan (MoltenVK, the sole driver
+    // on macOS) stays hidden from vkEnumeratePhysicalDevices unless the
+    // instance opts in, and vkCreateInstance fails with
+    // VK_ERROR_INCOMPATIBLE_DRIVER when it is the only one installed. Where no
+    // such driver exists the extension is absent and this does nothing.
+    {
+        uint32_t n = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
+        std::vector<VkExtensionProperties> avail(n);
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, avail.data());
+        for (auto& e : avail)
+            if (std::strcmp(e.extensionName,
+                            VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0) {
+                exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+                ici.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+                break;
+            }
+    }
+
     ici.enabledLayerCount = (uint32_t)layers.size();
     ici.ppEnabledLayerNames = layers.data();
     ici.enabledExtensionCount = (uint32_t)exts.size();
@@ -424,6 +444,11 @@ void Context::createDevice(const ContextOptions& opts) {
     };
 
     std::vector<const char*> exts;
+    // Mandatory where advertised: the spec forbids creating a device from a
+    // portability physical device without it. Spelled out rather than using
+    // the macro, which is behind VK_ENABLE_BETA_EXTENSIONS.
+    if (has("VK_KHR_portability_subset"))
+        exts.push_back("VK_KHR_portability_subset");
     subgroup_size_control_ = has(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
     if (subgroup_size_control_) {
         exts.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);

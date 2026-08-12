@@ -161,6 +161,18 @@ build time (one `slangc` edge per blob, see `src/backend/vulkan/shaders/SpirvSha
 embedded into the binary. On an offline machine, transfer a matching `slangc`
 and point `-DSS_SLANGC=` at it.
 
+**macOS.** Vulkan backend only, through MoltenVK; `build_develop.bash` works
+as on Linux. Dependencies: `brew install cmake ninja molten-vk vulkan-headers
+vulkan-loader`. Three things are macOS-only in the build:
+`cmake/SsSlang.cmake` pins a different Slang release (the one this project
+pins publishes no macOS assets), `build_develop.bash` reads free memory from
+`vm_stat` rather than `/proc`, and `ss_i18n` links CoreFoundation, which
+`i18n/Locale.cpp` asks for the user's locale.
+
+```bash
+export CXXFLAGS="-nostdinc++ -isystem $(xcrun --show-sdk-path)/usr/include/c++/v1"
+```
+
 **Windows.** `build_develop.bat` always calls `vcvars64` even when `cl` is
 already on PATH (an ambient `cl`/`INCLUDE` may reference an uninstalled SDK),
 picks the newest installed CUDA toolkit unless `CUDA_PATH` is set, falls back

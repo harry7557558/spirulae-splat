@@ -26,7 +26,16 @@ static constexpr backend::Stream kBilagridStream = (backend::Stream)0;
 // Async per-dispatch GPU timer, harvested one iteration behind. In Phase 2 the
 // harvested times are only logged (SS_BILAGRID_PROFILE=1); Phase 5 feeds
 // them to the BilagridBwdSelector. Gated off by default -> zero overhead.
-static spirula::bilagrid::BwdTimingRing g_bg_bwd_timer;
+// Deliberately leaked, and never a plain static: its destructor hands query
+// slots back to the Vulkan runtime, and by the time a static destructor runs
+// the runtime is already gone -- the Context singleton is constructed on first
+// use, so it is destroyed *before* anything constructed at load, and the
+// runtime's global mutexes go with it. libc++ throws `mutex lock failed:
+// Invalid argument` out of a destructor for that, aborting the process after a
+// clean run; glibc happens to return success from the same call. Process exit
+// reclaims the slots regardless, so there is nothing to free here.
+static spirula::bilagrid::BwdTimingRing& g_bg_bwd_timer =
+    *new spirula::bilagrid::BwdTimingRing();
 static std::vector<spirula::bilagrid::BwdMeasurement> g_bg_bwd_meas;
 // Per-type selectors (different arm sets: PPISP is tile-only; affine adds v2).
 static spirula::bilagrid::BilagridBwdSelector

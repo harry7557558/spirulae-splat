@@ -48,11 +48,6 @@ void fused_adamtr_rgb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                       p.rgbs[3 * idx + 2]);
     float3 v = float3(p.grad[3 * idx], p.grad[3 * idx + 1],
                       p.grad[3 * idx + 2]);
-    if (p.zero_grad != 0) {
-        p.grad[3 * idx] = 0.0f;
-        p.grad[3 * idx + 1] = 0.0f;
-        p.grad[3 * idx + 2] = 0.0f;
-    }
     v = float3(p.grad_scale, p.grad_scale, p.grad_scale) * v;
     float3 m_val = float3(p.exp_avg[3 * idx], p.exp_avg[3 * idx + 1],
                           p.exp_avg[3 * idx + 2]);
@@ -98,6 +93,13 @@ void fused_adamtr_rgb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     p.rgbs[3 * idx] = x.x + delta.x;
     p.rgbs[3 * idx + 1] = x.y + delta.y;
     p.rgbs[3 * idx + 2] = x.z + delta.z;
+
+    // Last, per optimizer.slang's fused_adam_fwd.
+    if (p.zero_grad != 0) {
+        p.grad[3 * idx] = 0.0f;
+        p.grad[3 * idx + 1] = 0.0f;
+        p.grad[3 * idx + 2] = 0.0f;
+    }
 }
 
 struct AdamTrRgbShParams {  // 96 bytes: pushed directly
@@ -135,7 +137,6 @@ void fused_adamtr_rgb_sh(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float step_size = p.lr / p.bias_correction1;
 
     float v = p.grad[idx];
-    if (p.zero_grad != 0) p.grad[idx] = 0.0f;
     v *= p.grad_scale;
     float m_val = p.exp_avg[idx];
     float v_val = p.exp_avg_sq[idx];
@@ -159,4 +160,7 @@ void fused_adamtr_rgb_sh(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     delta = clamp(delta, -clip, clip);
     // NOTE: no exp_avg / exp_avg_sq writeback, matching CUDA (see above).
     p.param[idx] += delta;
+
+    // Last, per optimizer.slang's fused_adam_fwd.
+    if (p.zero_grad != 0) p.grad[idx] = 0.0f;
 }

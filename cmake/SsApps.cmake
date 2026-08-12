@@ -206,11 +206,6 @@ if(SS_BUILD_CLI OR SS_BUILD_GUI)
     if(WIN32)
         target_link_libraries(spirula PRIVATE ws2_32)
     endif()
-    if(APPLE)
-        # i18n/Locale.cpp asks CoreFoundation for the user's locale: POSIX env
-        # vars are usually absent for an app launched from Finder.
-        target_link_libraries(spirula PRIVATE "-framework CoreFoundation")
-    endif()
 
     # A regional build ships its face beside the executable; Fonts.cpp looks
     # in <exe dir>/fonts before the cache directory.
@@ -248,9 +243,6 @@ if(SS_BUILD_CLI OR SS_BUILD_GUI)
             target_compile_options(${name} PRIVATE
                 $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
             set_property(TARGET ${name} PROPERTY CXX_STANDARD 17)
-            if(APPLE)
-                target_link_libraries(${name} PRIVATE "-framework CoreFoundation")
-            endif()
         endfunction()
 
         if(SS_BUILD_SFM)

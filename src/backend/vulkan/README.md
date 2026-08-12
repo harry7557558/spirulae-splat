@@ -236,6 +236,44 @@ still compile + emit identical CUDA exports with 2026.2.1):
   explicitly, and treat parity coverage of every scalar gradient as
   mandatory.
 
+## MoltenVK (macOS): two rules the SPIR-V -> MSL step imposes
+
+MoltenVK translates our SPIR-V to Metal Shading Language through
+SPIRV-Cross, and two of its habits turn correct SPIR-V into wrong or
+uncompilable MSL. Both are invisible on every other driver, and both were
+found the same way: `spirv-cross --msl --stage comp build/spirv/<blob>.spv`
+prints exactly what the Metal compiler will see, so read that before
+guessing.
+
+**1. A load must not stay live across a store to the same buffer.**
+SPIRV-Cross forwards a load from a physical-storage pointer as an
+*expression*, re-reading memory where the value is used rather than where
+the source loaded it, and it does not invalidate that expression on a store
+through another pointer to the same buffer. It also reorders freely: the
+optimizers' `zero_grad` write ended up emitted *above* the gradient read it
+invalidated, so every such kernel trained on zeros. Write in-place updates
+so the last store comes after the last use — the optimizers zero the
+gradient at the end of the kernel for this reason — or force the load into
+an MSL temporary by giving it a bitcast (`asfloat` off a `uint*` buffer,
+as `misc.slang`'s RoPE does).
+
+**2. One pointer type per buffer, and never a 3-component vector.**
+SPIRV-Cross drops the bitcast between two physical-storage pointer types
+and emits `reinterpret_cast<device T*>` of the *loaded value*, which the
+Metal compiler rejects — the whole shader library fails to compile and
+every pipeline in it fails to create. So `(int*)(float* addr)` is out
+(`atomic_max_f32_nonneg` takes bits instead), and so is
+`(float3*)(float* p)`. `float3*` is worse than the cast: `packed_float3`
+pointer arithmetic hits the same bug with the pointer's own `ulong`, so
+`background_sh.slang` addresses SH coefficients as flat `float*` and calls
+the `float*` overloads.
+
+Beyond those, MoltenVK compiles every shader with Metal fast-math unless
+told not to. `VulkanContext::init()` turns it off through
+`VK_EXT_layer_settings`, because three parity tools exceed their tolerance
+with it on; `SS_VK_FAST_MATH=1` restores it for A/B timing. See
+`docs/testing.md` for what still differs on Apple silicon.
+
 ## Sort / scan (backend/common/SortScan.h implementation)
 
 Implemented in Slang (not the vendored GLSL): classic 3-kernel LSD radix

@@ -138,6 +138,38 @@ bool has_extension(VkPhysicalDevice pd, const char* name) {
     return false;
 }
 
+bool has_instance_extension(const char* name) {
+    static const std::vector<VkExtensionProperties> exts = [] {
+        uint32_t n = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
+        std::vector<VkExtensionProperties> v(n);
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, v.data());
+        return v;
+    }();
+    for (const auto& e : exts)
+        if (std::strcmp(e.extensionName, name) == 0) return true;
+    return false;
+}
+
+// A driver that only implements a subset of Vulkan (MoltenVK, the sole
+// driver on macOS) is hidden from vkEnumeratePhysicalDevices unless the
+// instance opts in, and vkCreateInstance fails outright with
+// VK_ERROR_INCOMPATIBLE_DRIVER when it is the only one installed. Opting in
+// costs nothing where no such driver exists: the extension is simply absent.
+//
+// Both instances this file creates -- the throwaway one in
+// enumerate_devices() and the real one in Context::init() -- go through here,
+// so they see the same device list.
+void enable_portability(VkInstanceCreateInfo& ici,
+                        std::vector<const char*>& exts) {
+    if (!has_instance_extension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME))
+        return;
+    exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    ici.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    ici.enabledExtensionCount = (uint32_t)exts.size();
+    ici.ppEnabledExtensionNames = exts.data();
+}
+
 // --- device enumeration / selection (backs the backend::device_* API) ---
 // Physical devices are addressed by their vkEnumeratePhysicalDevices index;
 // enumeration uses a throwaway instance so listing devices never initializes
@@ -164,6 +196,8 @@ const std::vector<EnumeratedDevice>& enumerate_devices() {
         app.apiVersion = VK_API_VERSION_1_2;
         VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         ici.pApplicationInfo = &app;
+        std::vector<const char*> inst_exts;
+        enable_portability(ici, inst_exts);
         VkInstance inst = VK_NULL_HANDLE;
         if (vkCreateInstance(&ici, nullptr, &inst) != VK_SUCCESS) return out;
         uint32_t n = 0;
@@ -244,12 +278,40 @@ void Context::init() {
 
     VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ici.pApplicationInfo = &app;
+    std::vector<const char*> inst_exts;
+    enable_portability(ici, inst_exts);
     const char* validation = "VK_LAYER_KHRONOS_validation";
     if (const char* env = spirula::env("VK_VALIDATION");
         env && env[0] == '1') {
         ici.enabledLayerCount = 1;
         ici.ppEnabledLayerNames = &validation;
     }
+
+    // MoltenVK hands the Metal compiler -ffast-math for every shader unless
+    // told otherwise, which is a wider licence than the CUDA build takes:
+    // with it on, msloss_parity, optimgeo_parity and meshing_parity all
+    // exceed their tolerance against the CUDA reference, and all three pass
+    // with it off. Correctness first; SS_VK_FAST_MATH=1 puts it back for A/B
+    // timing. The setting names a layer no other driver answers to, so this
+    // is inert everywhere else.
+    const int32_t fast_math = [] {
+        const char* e = spirula::env("VK_FAST_MATH");
+        return e && e[0] == '1' ? 1 : 0;
+    }();
+    const VkLayerSettingEXT mvk_setting{
+        "MoltenVK", "MVK_CONFIG_FAST_MATH_ENABLED",
+        VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &fast_math};
+    VkLayerSettingsCreateInfoEXT settings{
+        VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT};
+    settings.settingCount = 1;
+    settings.pSettings = &mvk_setting;
+    if (has_instance_extension(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME)) {
+        inst_exts.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+        ici.enabledExtensionCount = (uint32_t)inst_exts.size();
+        ici.ppEnabledExtensionNames = inst_exts.data();
+        ici.pNext = &settings;
+    }
+
     VkResult r = vkCreateInstance(&ici, nullptr, &_instance);
     if (r != VK_SUCCESS) {
         set_error("vkCreateInstance failed", r);
@@ -338,6 +400,12 @@ void Context::init() {
         _caps.shader_int8 = false;
 
     std::vector<const char*> extensions;
+    // Enabling this one is mandatory, not optional: the spec forbids creating
+    // a device from a physical device that advertises it without it in the
+    // list. Spelled out rather than using the header macro, which lives
+    // behind VK_ENABLE_BETA_EXTENSIONS.
+    if (has_extension(_physical, "VK_KHR_portability_subset"))
+        extensions.push_back("VK_KHR_portability_subset");
     // Shader blobs carry NonSemantic debug info (slangc -g2, for
     // profiler source correlation); a 1.2 device must enable this extension
     // for SPV_KHR_non_semantic_info to be legal (core in 1.3). Universally

@@ -12,18 +12,18 @@
 // the device enabled shaderBufferFloat32AtomicAdd — so the choice is made
 // at pipeline creation, never as a runtime branch in the shader.
 
-// Float atomic max mirroring Common.cuh's atomicMax(float*, float): signed
-// int max for non-negative v, unsigned min for negative v (IEEE order in
-// both halves). Single atomic — no CAS loop needed.
+// Float atomic max over a buffer declared as bits. Non-negative values only:
+// across those, the unsigned order of the bit patterns is the float order, so
+// one unsigned atomic does it. Common.cuh's atomicMax(float*, float) covers
+// the negative half too, with an unsigned min over an int* view of the same
+// address -- which is exactly what cannot be spelled here. MoltenVK's
+// SPIR-V -> MSL translation drops the bitcast between two physical-storage
+// pointer types and emits `reinterpret_cast<device int*>` of the *loaded
+// float*, which the Metal compiler rejects, taking the whole shader library
+// with it. Hence bits in, bits out, and one pointer type per buffer.
 [ForceInline]
-void atomic_max_f32(float* addr, float v) {
-    if (asint(v) >= 0) {
-        int* w = (int*)addr;
-        InterlockedMax(w[0], asint(v));
-    } else {
-        uint* w = (uint*)addr;
-        InterlockedMin(w[0], asuint(v));
-    }
+void atomic_max_f32_nonneg(uint* addr, float v) {
+    InterlockedMax(addr[0], asuint(v));
 }
 
 #ifdef SS_NATIVE_F32_ATOMIC_ADD

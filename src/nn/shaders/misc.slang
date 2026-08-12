@@ -17,7 +17,7 @@ static const int WG = 256;
 // ---------------------------------------------------------------------------
 
 struct RopeParams {
-    float* x;       // [B, N, n_heads * head_dim], updated in place
+    uint*  x;       // [B, N, n_heads * head_dim], updated in place
     uint*  freqs;   // [N, head_dim/2, 2] f32 -- (cos, sin) per complex pair
     uint   n;       // tokens
     uint   n_heads;
@@ -54,10 +54,10 @@ void rope_apply(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
     uint foff = (tok * half_d + pair) * 2u;
     float c = asfloat(p.freqs[foff + 0u]);
     float s = asfloat(p.freqs[foff + 1u]);
-    float re = p.x[base + 0u];
-    float im = p.x[base + 1u];
-    p.x[base + 0u] = re * c - im * s;
-    p.x[base + 1u] = re * s + im * c;
+    float re = asfloat(p.x[base + 0u]);
+    float im = asfloat(p.x[base + 1u]);
+    p.x[base + 0u] = asuint(re * c - im * s);
+    p.x[base + 1u] = asuint(re * s + im * c);
 }
 
 // ---------------------------------------------------------------------------
