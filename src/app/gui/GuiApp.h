@@ -12,6 +12,7 @@
 #include "app/gui/ConfigUI.h"
 #include "app/gui/FileDialog.h"
 #include "app/gui/ImageCompare.h"
+#include "app/gui/Layout.h"
 #include "app/gui/MeshRunner.h"
 #include "app/gui/ModelCache.h"
 #include "app/gui/SegmentPanel.h"
@@ -29,6 +30,9 @@ namespace gui {
 
 class GuiApp {
 public:
+    static constexpr float kDefaultPanelW = 420.0f;
+    static constexpr float kDefaultLogH = 150.0f;
+
     GuiApp();
     ~GuiApp();
 
@@ -47,6 +51,11 @@ public:
     // The font atlas. GuiMain calls ensure() between frames -- swapping a face
     // invalidates every ImFont pointer, so it cannot happen mid-frame.
     FontSet& fonts() { return _fonts; }
+
+    // The window's content scale, from GLFW. The interface size is this times
+    // the user's preference (or times a factor read off the window, which is
+    // the default).
+    void set_dpi_scale(float s) { _scale.set_dpi(s); }
 
 private:
     enum class Screen { Home, NewDataset, Train, Viewer, Batch, Mesh };
@@ -201,6 +210,16 @@ private:
     // Right-aligned VRAM readout on the status strip; x0/avail describe the
     // strip's content region (window-local left edge and width).
     void draw_vram_readout(float x0, float avail);
+
+    // ---- layout ----
+    // The height the log panel gets when `avail` vertical pixels are shared
+    // between a screen's body, the splitter and the log. 0 when it is hidden.
+    // Never more than 60% of what there is, so a short window still shows the
+    // screen; the body is a scrolling child and takes the rest.
+    float log_height(float avail) const;
+    // The body height to hand BeginChild, given what log_height() returned.
+    static float body_height(float log_h);
+    // The splitter and then the panel. Call after the body child has ended.
     void draw_log_panel(float height);
     void draw_confirm_modal();
     void handle_dialog_result(const std::vector<std::string>& paths);
@@ -367,10 +386,31 @@ private:
     std::string _python_exe = "python3";
 #endif
 
-    // Log console.
+    // Log console. `_log_dropped` counts the lines trimmed off the front since
+    // the panel was last drawn: every one of them moves the remaining text up
+    // by a line, which walks the passage a user has scrolled back to off the
+    // top of the panel unless the scroll position is moved with it.
     std::deque<std::string> _log;
-    bool _log_autoscroll = true;
+    size_t _log_dropped = 0;
+    bool _log_follow = true;
+    // Set from the jump button and the context menu, which are both drawn in
+    // windows of their own -- ImGui's scroll calls act on the current window,
+    // so neither can move the panel directly.
+    bool _log_scroll_end = false;
     bool _show_log = true;
+
+    // ---- interface size and panel extents ----
+    // The extents are UNSCALED: multiplied by ui_scale() where they are used,
+    // so what is saved survives a change of monitor or of size preference.
+    UiScale _scale;
+    float _panel_w = kDefaultPanelW;
+    float _log_h = kDefaultLogH;
+    bool _show_settings = true;
+    bool _layout_dirty = false;      // a splitter moved -> persist once idle
+    // The New Dataset screen's run/status band, measured last frame: the form
+    // above it is sized against this, and how tall it is depends on what the
+    // run is saying.
+    float _ds_action_h = 0.0f;
     // Masks sitting beside the photos are adopted automatically; this is the
     // way out for a folder whose masks/ describes something else.
     bool _use_found_masks = true;

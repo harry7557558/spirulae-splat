@@ -5,6 +5,7 @@
 
 #include "app/gui/ConfigUI.h"
 
+#include "app/gui/Layout.h"
 #include "app/gui/Ui.h"
 
 #include "i18n/catalog/Gui.h"
@@ -187,7 +188,7 @@ bool field_row(const char* cli_key, const Msg& name, const Msg& help,
     ImGui::OpenPopupOnItemClick("ctx", ImGuiPopupFlags_MouseButtonRight);
 
     if (hovered && ImGui::BeginTooltip()) {
-        ImGui::PushTextWrapPos(420.0f);
+        ImGui::PushTextWrapPos(px(420.0f));
         ui::TextColoredRaw(kModifiedColor, "--" + std::string(cli_key));
         // The same sentence `spirula train --help` prints for this flag.
         ui::TextRaw(help.get());
@@ -249,11 +250,11 @@ std::string choice_display(const char* flag, const std::string& value) {
 
 bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
                         ConfigUIState& st) {
-    ImGui::SetNextItemWidth(-250);
+    ImGui::SetNextItemWidth(px(-250.0f));
     ui::InputTextHintBufRaw("##cfgsearch", msg::cfg_search_hint,
                             st.search, sizeof st.search);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(130);
+    ImGui::SetNextItemWidth(px(130.0f));
     // The list is short and its entries are the label, so the combo carries
     // no separate caption -- what it filters is explained on hover.
     const bool tier_open = ui::BeginComboRaw("##cfgtier", tier_label(st.tier).get());

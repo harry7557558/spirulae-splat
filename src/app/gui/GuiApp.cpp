@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -90,7 +91,7 @@ void preset_hover(const std::string& description, const std::string& path) {
     if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) ||
         !ImGui::BeginTooltip())
         return;
-    ImGui::PushTextWrapPos(360);
+    ImGui::PushTextWrapPos(px(360.0f));
     if (!description.empty()) ui::TextRaw(description);
     // A path is a path in every language, and it is not a sentence about the
     // one above it -- so it is its own line, not appended to it.
@@ -197,8 +198,20 @@ void GuiApp::load_settings() {
         else if (k == "accepted_license" && !v.empty() && !license_accepted(v))
             _accepted_licenses.push_back(v);
         else if (k == "lang" && !v.empty()) saved_lang = v;
+        else if (k == "ui_scale") _scale.set_user(std::clamp((float)atof(v.c_str()),
+                                                             0.0f, 3.0f));
+        else if (k == "panel_w") _panel_w = (float)atof(v.c_str());
+        else if (k == "log_h") _log_h = (float)atof(v.c_str());
+        else if (k == "show_log") _show_log = v != "0";
+        else if (k == "show_settings") _show_settings = v != "0";
+        else if (k == "native_dialogs") _dialog.use_native(v != "0");
     }
     std::fclose(f);
+
+    // A stored extent from a build whose defaults have moved, or a hand-edited
+    // file, must not be able to leave a panel unreachably small or wide.
+    _panel_w = std::clamp(_panel_w, 220.0f, 900.0f);
+    _log_h = std::clamp(_log_h, 60.0f, 800.0f);
 
     // The settings file is the third step of the chain and loses to both
     // --lang and SS_LANG, so the whole chain is re-run rather than the stored
@@ -219,6 +232,12 @@ void GuiApp::save_settings() {
                  _engine == Engine::Colmap ? "colmap" : "builtin");
     std::fprintf(f, "mask_model=%s\n", _model_id.c_str());
     std::fprintf(f, "lang=%s\n", spirula::i18n::code(spirula::i18n::current()));
+    std::fprintf(f, "ui_scale=%.3f\n", _scale.user());
+    std::fprintf(f, "panel_w=%.1f\n", _panel_w);
+    std::fprintf(f, "log_h=%.1f\n", _log_h);
+    std::fprintf(f, "show_log=%d\n", _show_log ? 1 : 0);
+    std::fprintf(f, "show_settings=%d\n", _show_settings ? 1 : 0);
+    std::fprintf(f, "native_dialogs=%d\n", _dialog.native_enabled() ? 1 : 0);
     for (const auto& l : _accepted_licenses)
         std::fprintf(f, "accepted_license=%s\n", l.c_str());
     std::fclose(f);
@@ -231,9 +250,19 @@ void GuiApp::add_recent(std::string path) {
     if (_recents.size() > 10) _recents.resize(10);
 }
 
+// One entry per SCREEN line: the panel clips with a list clipper and
+// compensates its scroll for trimmed lines, and both want a uniform height.
 void GuiApp::log(const std::string& s) {
-    _log.push_back(s);
-    while (_log.size() > 4000) _log.pop_front();
+    size_t at = 0;
+    do {
+        const size_t nl = s.find('\n', at);
+        _log.push_back(s.substr(at, nl == std::string::npos ? nl : nl - at));
+        at = nl == std::string::npos ? nl : nl + 1;
+    } while (at != std::string::npos);
+    while (_log.size() > 4000) {
+        _log.pop_front();
+        _log_dropped++;
+    }
 }
 
 void GuiApp::append_logs() {
@@ -1223,6 +1252,10 @@ void GuiApp::handle_dialog_result(const std::vector<std::string>& paths) {
 // ===========================================================================
 
 void GuiApp::frame() {
+    // Before the first widget: a style swap halfway through a frame would
+    // measure half the window against one scale and half against the other.
+    _scale.update(ImGui::GetIO().DisplaySize);
+
     append_logs();
     run_pending_if_stopped();
     // Before the reload check below: between two batch rows the runner is
@@ -1235,6 +1268,12 @@ void GuiApp::frame() {
     if (_batch_dirty && !ImGui::IsAnyItemActive()) {
         _batch_dirty = false;
         save_batch_list(_batch);
+    }
+    // Same deferral for a dragged splitter: the file would otherwise be
+    // rewritten on every frame of the drag.
+    if (_layout_dirty && !ImGui::IsAnyItemActive()) {
+        _layout_dirty = false;
+        save_settings();
     }
 
     // Dataset-parsing option changed: re-parse once the user finishes
@@ -1356,7 +1395,46 @@ void GuiApp::draw_menu_bar() {
         ImGui::EndMenu();
     }
     if (ui::BeginMenu(msg::menu_view)) {
-        ui::MenuItem(msg::menu_show_log, nullptr, &_show_log);
+        if (ui::MenuItem(msg::menu_show_log, nullptr, &_show_log))
+            _layout_dirty = true;
+        if (ui::MenuItem(msg::menu_show_settings, nullptr, &_show_settings))
+            _layout_dirty = true;
+        if (ui::MenuItem(msg::menu_reset_layout)) {
+            _panel_w = kDefaultPanelW;
+            _log_h = kDefaultLogH;
+            _show_log = _show_settings = true;
+            _layout_dirty = true;
+        }
+        ImGui::Separator();
+        if (ui::BeginMenu(msg::menu_ui_size)) {
+            const float cur = _scale.user();
+            if (ui::MenuItem(msg::ui_size_auto, nullptr, cur <= 0.0f)) {
+                _scale.set_user(0.0f);
+                _layout_dirty = true;
+            }
+            ImGui::Separator();
+            // Percentages, which are the same in every language.
+            for (float f : {0.75f, 0.9f, 1.0f, 1.15f, 1.35f, 1.6f, 2.0f}) {
+                char label[16];
+                std::snprintf(label, sizeof label, "%d%%", (int)(f * 100.0f + 0.5f));
+                if (ui::MenuItemRaw(label, std::fabs(cur - f) < 1e-3f)) {
+                    _scale.set_user(f);
+                    _layout_dirty = true;
+                }
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        {
+            bool native = _dialog.native_enabled();
+            ImGui::BeginDisabled(!_dialog.native_available());
+            if (ui::MenuItem(msg::menu_native_dialogs, nullptr, &native)) {
+                _dialog.use_native(native);
+                _layout_dirty = true;
+            }
+            ImGui::EndDisabled();
+            ui::help_on_hover_disabled(msg::native_dialogs_help);
+        }
         ImGui::EndMenu();
     }
     draw_language_menu();
@@ -1402,7 +1480,7 @@ void GuiApp::draw_language_menu() {
 
     if (const CjkFace* f = _fonts.optional_face()) {
         ImGui::Separator();
-        ImGui::PushTextWrapPos(360.0f);
+        ImGui::PushTextWrapPos(px(360.0f));
         // The language's own name, not CjkFace::label -- that one is English
         // ("Korean"), which is the one word in this sentence a reader of a
         // Korean UI did not ask for.
@@ -1433,74 +1511,84 @@ void GuiApp::draw_language_menu() {
 // ===========================================================================
 
 void GuiApp::draw_home() {
-    float w = 480.0f;
-    ImGui::SetCursorPosX((ImGui::GetWindowWidth() - w) * 0.5f);
+    // The column is centred and never wider than the window: at 480 px it is
+    // wide enough for the longest button label in any language, and on a
+    // narrow window it gives up width rather than running text off the edge.
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float w = std::max(std::min(px(480.0f), avail - px(16.0f)), px(200.0f));
+    const float bh = px(42.0f);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                         std::max(0.0f, (avail - w) * 0.5f));
     ImGui::BeginChild("##home", ImVec2(w, 0));
-    ImGui::Dummy(ImVec2(0, 40));
+    ImGui::Dummy(ImVec2(0, px(40.0f)));
 
     ImGui::SetWindowFontScale(1.7f);
     ui::Text(spirula::i18n::msg::brand::product);
     ImGui::SetWindowFontScale(1.0f);
-    ui::TextDisabled(spirula::i18n::msg::brand::tagline);
-    ImGui::Dummy(ImVec2(0, 24));
+    ui::TextDisabledWrapped(spirula::i18n::msg::brand::tagline);
+    ImGui::Dummy(ImVec2(0, px(24.0f)));
 
     // A session (possibly still training) exists -- offer the way back.
     if (_runner.phase() != TrainRunner::Phase::Idle) {
         if (ui::Button(training_busy() ? msg::home_back_to_training
                                        : msg::home_back_to_trainer,
-                       ImVec2(-1, 42)))
+                       ImVec2(-1, bh)))
             _screen = Screen::Train;
-        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::Dummy(ImVec2(0, px(10.0f)));
     }
 
-    if (ui::Button(msg::home_open_dataset, ImVec2(-1, 42))) {
+    if (ui::Button(msg::home_open_dataset, ImVec2(-1, bh))) {
         _pick = PickAction::OpenDataset;
         _dialog.open(msg::menu_open_dataset.get(), FileDialog::Mode::Folder);
     }
     ui::help_on_hover(msg::home_open_dataset_help);
 
-    if (ui::Button(msg::home_from_photos, ImVec2(-1, 42))) {
+    if (ui::Button(msg::home_from_photos, ImVec2(-1, bh))) {
         _pick = PickAction::SourceImages;
         _dialog.open(msg::pick_photo_folder.get(), FileDialog::Mode::Folder);
     }
     ui::help_on_hover(msg::home_from_photos_help);
 
-    if (ui::Button(msg::home_from_video, ImVec2(-1, 42))) {
+    if (ui::Button(msg::home_from_video, ImVec2(-1, bh))) {
         _pick = PickAction::SourceVideo;
         _dialog.open(msg::pick_videos.get(), FileDialog::Mode::File,
                      video_dialog_filters(), "", /*multi_select=*/true);
     }
     ui::help_on_hover(msg::home_from_video_help);
 
-    if (ui::Button(msg::home_open_splat, ImVec2(-1, 42))) {
+    if (ui::Button(msg::home_open_splat, ImVec2(-1, bh))) {
         _pick = PickAction::SplatFile;
         _dialog.open(msg::viewer_pick_file.get(), FileDialog::Mode::File,
                      kViewableExtensions);
     }
     ui::help_on_hover(msg::home_open_splat_help);
 
-    if (ui::Button(msg::home_make_mesh, ImVec2(-1, 42))) _screen = Screen::Mesh;
+    if (ui::Button(msg::home_make_mesh, ImVec2(-1, bh))) _screen = Screen::Mesh;
     ui::help_on_hover(msg::home_make_mesh_help);
 
-    if (ui::Button(msg::home_batch, ImVec2(-1, 42))) _screen = Screen::Batch;
+    if (ui::Button(msg::home_batch, ImVec2(-1, bh))) _screen = Screen::Batch;
     ui::help_on_hover(msg::home_batch_help);
 
     ImGui::Spacing();
-    ui::TextDisabled(msg::home_drop_hint);
+    ui::TextDisabledWrapped(msg::home_drop_hint);
 
     if (!_recents.empty()) {
-        ImGui::Dummy(ImVec2(0, 18));
+        ImGui::Dummy(ImVec2(0, px(18.0f)));
         ui::SeparatorText(msg::home_recent);
+        const float row_w = ImGui::GetContentRegionAvail().x;
         for (size_t i = 0; i < _recents.size(); i++) {
             ImGui::PushID((int)i);
-            // A path is a path in every language.
-            if (ui::SelectableRaw(_recents[i]))
+            // A path is a path in every language. It is elided from the
+            // middle, where a dataset path repeats what the ones above it
+            // already said; the ends are what tells two of them apart.
+            if (ui::SelectableRaw(elide_middle(_recents[i], row_w)))
                 request_open_dataset(_recents[i]);
+            if (ImGui::IsItemHovered()) ui::SetTooltipRaw(_recents[i]);
             ImGui::PopID();
         }
     }
 
-    ImGui::Dummy(ImVec2(0, 18));
+    ImGui::Dummy(ImVec2(0, px(18.0f)));
     // Only worth saying when there is genuinely nothing that can do the job.
     if (!builtin_sfm_available() && !colmap_available())
         ui::TextColored(kDim, msg::home_no_engine);
@@ -1632,7 +1720,7 @@ void GuiApp::draw_dataset_source() {
         ImGui::PushID((int)i);
         // Room for Browse + Remove + where the frames go, which is longer than
         // any other row on the screen.
-        ImGui::SetNextItemWidth(-380);
+        ImGui::SetNextItemWidth(px(-380.0f));
         if (ui::InputTextRaw("##in", &s.path)) {
             std::error_code ec;
             s.is_video = !fs::is_directory(s.path, ec) && is_video_path(s.path);
@@ -1714,7 +1802,7 @@ void GuiApp::draw_dataset_source() {
         ui::help_on_hover(dmsg::use_found_masks_help);
     }
 
-    ImGui::SetNextItemWidth(-220);
+    ImGui::SetNextItemWidth(px(-220.0f));
     ui::InputTextRaw("##ws", &_workspace);
     ImGui::SameLine();
     // Two "Browse..." buttons in one scope: the message supplies the ID, so
@@ -1752,7 +1840,7 @@ void GuiApp::draw_dataset_basics() {
 
     // Quality means the same thing to both engines even though it moves
     // different knobs, so it is one control.
-    ImGui::SetNextItemWidth(220);
+    ImGui::SetNextItemWidth(px(220.0f));
     if (builtin) {
         ui::Combo(dmsg::quality, &_sfm_job.quality,
                   {&dmsg::quality_fast, &dmsg::quality_balanced,
@@ -1775,7 +1863,7 @@ void GuiApp::draw_dataset_basics() {
     // the run, so that path keeps one control and says so.
     const bool per_input_lens = builtin && _sources.size() > 1;
     if (!per_input_lens) {
-        ImGui::SetNextItemWidth(220);
+        ImGui::SetNextItemWidth(px(220.0f));
         if (builtin) {
             std::string& model =
                 _sources.empty() ? _sfm_job.camera_model : _sources[0].camera_model;
@@ -1802,7 +1890,7 @@ void GuiApp::draw_dataset_basics() {
         draw_source_cameras();
     }
 
-    ImGui::SetNextItemWidth(220);
+    ImGui::SetNextItemWidth(px(220.0f));
     ui::Combo(dmsg::camera_sharing,
               builtin ? &_sfm_job.camera_mode : &_colmap_job.camera_mode,
               {&dmsg::camera_sharing_one, &dmsg::camera_sharing_folder,
@@ -1810,7 +1898,7 @@ void GuiApp::draw_dataset_basics() {
     ui::help_on_hover(dmsg::camera_sharing_help);
 
     if (builtin) {
-        ImGui::SetNextItemWidth(220);
+        ImGui::SetNextItemWidth(px(220.0f));
         ui::Combo(dmsg::image_matching, &_sfm_job.pairs,
                   {&dmsg::matching_automatic, &dmsg::matching_every_pair,
                    &dmsg::matching_neighbours, &dmsg::matching_gpu_preselect});
@@ -1819,7 +1907,7 @@ void GuiApp::draw_dataset_basics() {
         int matcher_idx = _colmap_job.matcher - 1;
         if (matcher_idx < 0 || matcher_idx > 2)
             matcher_idx = (!_sources.empty() && _sources[0].is_video) ? 1 : 0;
-        ImGui::SetNextItemWidth(220);
+        ImGui::SetNextItemWidth(px(220.0f));
         ui::Combo(dmsg::image_matching, &matcher_idx,
                   {&dmsg::matching_exhaustive, &dmsg::matching_sequential,
                    &dmsg::matching_vocab_tree});
@@ -1836,11 +1924,11 @@ void GuiApp::draw_dataset_basics() {
     bool any_video = false;
     for (const PrepInput& s : _sources) any_video = any_video || s.is_video;
     if (any_video) {
-        ImGui::SetNextItemWidth(220);
+        ImGui::SetNextItemWidth(px(220.0f));
         ui::InputFloat(dmsg::frames_per_second, &_sfm_job.prep.video_fps,
                        0, 0, "%.2g");
         ui::help_on_hover(dmsg::frames_per_second_help);
-        ImGui::SetNextItemWidth(220);
+        ImGui::SetNextItemWidth(px(220.0f));
         ui::SliderInt(dmsg::sharpness_window, &_sfm_job.prep.sharp_window, 1, 8);
         ui::help_on_hover(dmsg::sharpness_window_help);
         if (!backends().builtin_video) {
@@ -1868,15 +1956,15 @@ void GuiApp::draw_source_cameras() {
         ImGui::PushID((int)i);
         ui::TextRaw(s.subdir);
         if (ImGui::IsItemHovered()) ui::SetTooltipRaw(s.path);
-        ImGui::SameLine(200);
-        ImGui::SetNextItemWidth(220);
+        ImGui::SameLine(px(200.0f));
+        ImGui::SetNextItemWidth(px(220.0f));
         int idx = 0;
         for (int m = 0; m < kNumSfmCameraModels; m++)
             if (s.camera_model == kSfmCameraModels[m]) idx = m;
         if (ui::ComboRaw("##lens", &idx, sfm_camera_model_labels()))
             s.camera_model = kSfmCameraModels[idx];
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(90);
+        ImGui::SetNextItemWidth(px(90.0f));
         ui::InputFloat(dmsg::focal_x_width, &s.focal_factor, 0, 0, "%.4g");
         ui::help_on_hover(dmsg::focal_x_width_help);
         ImGui::PopID();
@@ -1947,7 +2035,7 @@ void GuiApp::draw_masking_options() {
         const auto& catalog = model_catalog();
         for (size_t i = 0; i < catalog.size(); i++)
             if (_model_id == catalog[i].id) model_idx = (int)i;
-        ImGui::SetNextItemWidth(260);
+        ImGui::SetNextItemWidth(px(260.0f));
         if (ui::BeginCombo(dmsg::mask_model, catalog[model_idx].label->get())) {
             for (size_t i = 0; i < catalog.size(); i++) {
                 const bool cached = model_is_cached(catalog[i]);
@@ -2023,7 +2111,7 @@ void GuiApp::draw_masking_options() {
     // the input it describes.
     if (_sources.size() > 1) {
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(220);
+        ImGui::SetNextItemWidth(px(220.0f));
         std::vector<const char*> names;
         for (const PrepInput& s : _sources) names.push_back(s.subdir.c_str());
         int pick = _mask_preview_input;
@@ -2064,14 +2152,14 @@ void GuiApp::draw_masking_options() {
 
     // English, whatever the interface language is -- see MaskPrompt.h. The
     // placeholder examples are English for the same reason.
-    ImGui::SetNextItemWidth(320);
+    ImGui::SetNextItemWidth(px(320.0f));
     ui::InputTextEnglish(
         keep_subject ? dmsg::mask_what_to_keep : dmsg::mask_what_to_remove,
         keep_subject ? "the statue; its pedestal" : "person; car; shadow of a person",
         &_mask.prompt);
     ui::help_on_hover(keep_subject ? dmsg::mask_prompt_help_keep
                                    : dmsg::mask_prompt_help_remove);
-    ImGui::SetNextItemWidth(320);
+    ImGui::SetNextItemWidth(px(320.0f));
     ui::InputTextEnglish(
         keep_subject ? dmsg::mask_but_remove : dmsg::mask_but_keep,
         keep_subject ? "the hand holding it" : "person in a painting",
@@ -2082,7 +2170,7 @@ void GuiApp::draw_masking_options() {
     // Only worth saying when the interface is not already English: for an
     // English user the box being English is not news.
     if (i18n::current() != i18n::Lang::en) {
-        ImGui::PushTextWrapPos(560.0f);
+        ImGui::PushTextWrapPos(px(560.0f));
         ui::TextDisabled(dmsg::mask_english_only);
         ImGui::PopTextWrapPos();
     }
@@ -2098,13 +2186,13 @@ void GuiApp::draw_masking_options() {
 void GuiApp::draw_sfm_advanced() {
     if (!ui::CollapsingHeader(dmsg::section_advanced)) return;
 
-    ImGui::SetNextItemWidth(260);
+    ImGui::SetNextItemWidth(px(260.0f));
     ui::Combo(dmsg::capture_type, &_sfm_job.data_type,
               {&dmsg::capture_photos, &dmsg::capture_video,
                &dmsg::capture_internet});
     ui::help_on_hover(dmsg::capture_type_help);
 
-    ImGui::SetNextItemWidth(260);
+    ImGui::SetNextItemWidth(px(260.0f));
     ui::Combo(dmsg::features, &_sfm_job.features,
               {&dmsg::features_sift, &dmsg::features_aliked_n16,
                &dmsg::features_aliked_n32});
@@ -2115,7 +2203,7 @@ void GuiApp::draw_sfm_advanced() {
         // combo rather than by letting the run fail.
         const bool learned = _sfm_job.features != 0;
         ImGui::BeginDisabled(!learned);
-        ImGui::SetNextItemWidth(260);
+        ImGui::SetNextItemWidth(px(260.0f));
         int shown = learned ? _sfm_job.matcher : 0;
         if (ui::Combo(dmsg::matcher, &shown,
                       {&dmsg::matcher_brute_force, &dmsg::matcher_lightglue}) &&
@@ -2126,13 +2214,13 @@ void GuiApp::draw_sfm_advanced() {
                                   : dmsg::matcher_needs_learned);
     }
 
-    ImGui::SetNextItemWidth(260);
+    ImGui::SetNextItemWidth(px(260.0f));
     ui::Combo(dmsg::mapper_schedule, &_sfm_job.mapper,
               {&dmsg::mapper_flat, &dmsg::mapper_bottom_up});
     ui::help_on_hover(dmsg::mapper_schedule_help);
 
     if (_sfm_job.pairs == 2) {
-        ImGui::SetNextItemWidth(260);
+        ImGui::SetNextItemWidth(px(260.0f));
         ui::InputInt(dmsg::sequential_overlap, &_sfm_job.overlap);
         ui::help_on_hover(dmsg::sequential_overlap_help);
     }
@@ -2143,14 +2231,14 @@ void GuiApp::draw_sfm_advanced() {
         ui::help_on_hover(dmsg::loop_closure_help_builtin);
     }
 
-    ImGui::SetNextItemWidth(260);
+    ImGui::SetNextItemWidth(px(260.0f));
     ui::InputFloat(dmsg::initial_focal_px, &_sfm_job.init_focal_px, 0, 0, "%.4g");
     ui::help_on_hover(dmsg::initial_focal_px_help);
 
-    ImGui::SetNextItemWidth(260);
+    ImGui::SetNextItemWidth(px(260.0f));
     ui::InputInt(dmsg::max_features_auto, &_sfm_job.max_features);
     ui::help_on_hover(dmsg::max_features_auto_help);
-    ImGui::SetNextItemWidth(260);
+    ImGui::SetNextItemWidth(px(260.0f));
     ui::InputInt(dmsg::max_image_size_auto, &_sfm_job.max_image_size);
     ui::help_on_hover(dmsg::max_image_size_auto_help);
 
@@ -2181,22 +2269,22 @@ void GuiApp::draw_sfm_advanced() {
 void GuiApp::draw_colmap_options() {
     if (ui::CollapsingHeader(dmsg::section_advanced)) {
         bool fisheye = _colmap_job.camera_model.find("FISHEYE") != std::string::npos;
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::InputFloat(dmsg::colmap_initial_focal,
                        &_colmap_job.init_focal_factor, 0, 0, "%.4g");
         ui::help_on_hover(dmsg::colmap_initial_focal_help);
-        ImGui::SetNextItemWidth(280);
+        ImGui::SetNextItemWidth(px(280.0f));
         ui::InputTextWithHint(dmsg::colmap_camera_params,
                               dmsg::colmap_camera_params_hint,
                               &_colmap_job.camera_params);
         ui::help_on_hover(dmsg::colmap_camera_params_help);
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::InputInt(dmsg::colmap_max_features, &_colmap_job.max_num_features);
         ui::help_on_hover(dmsg::colmap_max_features_help);
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::InputInt(dmsg::colmap_max_image_size, &_colmap_job.max_image_size);
         ui::help_on_hover(dmsg::colmap_max_image_size_help);
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::InputInt(dmsg::sequential_overlap, &_colmap_job.seq_overlap);
         ui::help_on_hover(dmsg::colmap_seq_overlap_help);
         ui::Checkbox(dmsg::colmap_quadratic_overlap,
@@ -2209,13 +2297,13 @@ void GuiApp::draw_colmap_options() {
                          &_colmap_job.estimate_affine_shape);
             ui::help_on_hover(dmsg::colmap_affine_sift_help);
         }
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::Combo(dmsg::colmap_distortion_refinement,
                   &_colmap_job.mapper_extra_params,
                   {&dmsg::colmap_extra_auto, &dmsg::colmap_extra_during,
                    &dmsg::colmap_extra_final});
         ui::help_on_hover(dmsg::colmap_distortion_refinement_help);
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::InputInt(dmsg::colmap_min_matches, &_colmap_job.min_num_matches);
         ui::help_on_hover(dmsg::colmap_min_matches_help);
 
@@ -2244,7 +2332,7 @@ void GuiApp::draw_colmap_options() {
                 rep_idx = i;
                 break;
             }
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         if (ui::BeginCombo(dmsg::colmap_repetitive_level,
                            rep_idx < 0 ? dmsg::colmap_rep_custom.get()
                                        : kRepLevels[rep_idx].name->get())) {
@@ -2259,23 +2347,23 @@ void GuiApp::draw_colmap_options() {
             ImGui::EndCombo();
         }
         ui::help_on_hover(dmsg::colmap_repetitive_level_help);
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::InputFloat(dmsg::colmap_match_ratio, &_colmap_job.match_max_ratio,
                        0, 0, "%.3g");
         ui::help_on_hover(dmsg::colmap_match_ratio_help);
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::InputInt(dmsg::colmap_min_inliers_pair,
                      &_colmap_job.min_inliers_per_pair);
         ui::help_on_hover(dmsg::colmap_min_inliers_pair_help);
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::InputInt(dmsg::colmap_min_inliers_reg,
                      &_colmap_job.abs_pose_min_num_inliers);
         ui::help_on_hover(dmsg::colmap_min_inliers_reg_help);
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::InputFloat(dmsg::colmap_min_inlier_ratio,
                        &_colmap_job.abs_pose_min_inlier_ratio, 0, 0, "%.3g");
         ui::help_on_hover(dmsg::colmap_min_inlier_ratio_help);
-        ImGui::SetNextItemWidth(180);
+        ImGui::SetNextItemWidth(px(180.0f));
         ui::InputFloat(dmsg::colmap_max_reg_error,
                        &_colmap_job.abs_pose_max_error, 0, 0, "%.3g");
         ui::help_on_hover(dmsg::colmap_max_reg_error_help);
@@ -2289,7 +2377,7 @@ void GuiApp::draw_colmap_options() {
         ui::help_on_hover(dmsg::colmap_merge_models_help);
         ui::Checkbox(dmsg::colmap_final_ba, &_colmap_job.final_bundle_adjust);
         ui::help_on_hover(dmsg::colmap_final_ba_help);
-        ImGui::SetNextItemWidth(-160);
+        ImGui::SetNextItemWidth(px(-160.0f));
         ui::InputTextWithHintRaw("##vocab", dmsg::colmap_vocab_tree_hint,
                                  &_colmap_job.vocab_tree_path);
         ImGui::SameLine();
@@ -2309,15 +2397,15 @@ void GuiApp::draw_tool_locations() {
     if (ui::CollapsingHeader(dmsg::section_tool_locations)) {
         bool ch = false;
         if (effective_engine() == Engine::Colmap) {
-            ImGui::SetNextItemWidth(300);
+            ImGui::SetNextItemWidth(px(300.0f));
             ch |= ui::InputText(dmsg::colmap_executable, &_colmap_exe);
         }
-        ImGui::SetNextItemWidth(300);
+        ImGui::SetNextItemWidth(px(300.0f));
         ch |= ui::InputText(dmsg::ffmpeg_executable, &_ffmpeg_exe);
         ui::help_on_hover(backends().builtin_video
                               ? dmsg::ffmpeg_executable_help_fallback
                               : dmsg::ffmpeg_executable_help_always);
-        ImGui::SetNextItemWidth(300);
+        ImGui::SetNextItemWidth(px(300.0f));
         ch |= ui::InputText(dmsg::python_executable, &_python_exe);
         ui::help_on_hover(dmsg::python_executable_help);
         if (ch) save_settings();
@@ -2338,6 +2426,16 @@ void GuiApp::draw_new_dataset() {
     ui::Text(from_video ? dmsg::title_from_video : dmsg::title_from_photos);
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Spacing();
+
+    // Three bands: the form scrolls, the run controls and the log below it do
+    // not. Without that a window too short for the whole form pushed the log
+    // off the bottom -- and the log is what a reconstruction is watched
+    // through. The action band's height is measured from the last frame,
+    // because how tall it is depends on what it is saying.
+    const float log_h = log_height(ImGui::GetContentRegionAvail().y - _ds_action_h);
+    ImGui::BeginChild("##dsform",
+                      ImVec2(0, -(log_h + (log_h > 0 ? splitter_extent() : 0) +
+                                  _ds_action_h)));
 
     ImGui::BeginDisabled(running);
 
@@ -2374,21 +2472,25 @@ void GuiApp::draw_new_dataset() {
     draw_tool_locations();
 
     ImGui::EndDisabled();
+    ImGui::EndChild();
 
     // ---- run / status ----
+    const float action_y0 = ImGui::GetCursorPosY();
     ImGui::Spacing();
     if (!running) {
         bool ready = !_sources.empty() && !_workspace.empty();
         for (const PrepInput& s : _sources) ready = ready && !s.path.empty();
         ImGui::BeginDisabled(!ready);
-        if (ui::Button(dmsg::create_dataset, ImVec2(200, 34))) start_dataset_job();
+        if (ui::Button(dmsg::create_dataset, ImVec2(px(200.0f), px(34.0f))))
+            start_dataset_job();
         ImGui::EndDisabled();
         if (!ready) {
             ImGui::SameLine();
             ui::TextDisabled(dmsg::pick_input_first);
         }
     } else {
-        if (ui::Button(dmsg::cancel, ImVec2(200, 34))) cancel_dataset_job();
+        if (ui::Button(dmsg::cancel, ImVec2(px(200.0f), px(34.0f))))
+            cancel_dataset_job();
         ImGui::SameLine();
         const bool builtin = _sfm.state() == SfmRunner::State::Running;
         // The stage name comes from the runner and is a diagnostic, not copy.
@@ -2442,9 +2544,9 @@ void GuiApp::draw_new_dataset() {
     } else if (st.cancelled) {
         ui::TextColored(kDim, dmsg::cancelled);
     }
+    _ds_action_h = ImGui::GetCursorPosY() - action_y0;
 
-    ImGui::Spacing();
-    draw_log_panel(-1.0f);
+    draw_log_panel(log_h);
 
     if (_segment.is_open()) {
         // It edits one input's stencil and shows one input's frames, so it
@@ -2555,7 +2657,7 @@ void GuiApp::draw_train() {
     // beside the render of the same camera. Right-aligned on the header row so
     // it costs the preview below no height.
     {
-        const float w = 160.0f;
+        const float w = px(160.0f);
         ImGui::SameLine(std::max(0.0f, ImGui::GetContentRegionMax().x - w));
         ImGui::SetNextItemWidth(w);
         int mode = _preview_images ? 1 : 0;
@@ -2565,17 +2667,31 @@ void GuiApp::draw_train() {
         ui::help_on_hover(msg::preview_mode_help);
     }
 
-    ImGui::BeginChild("##settings", ImVec2(420, 0), ImGuiChildFlags_Borders);
-    draw_train_settings();
-    ImGui::EndChild();
+    const float body_avail = ImGui::GetContentRegionAvail().y;
+    if (_show_settings) {
+        // Never more than 45% of the window: the viewport is the point of the
+        // screen, and a settings column sized for a 1600 px window swallows a
+        // 1100 px one.
+        const float w = std::clamp(_panel_w * ui_scale(), px(220.0f),
+                                   std::max(px(220.0f),
+                                            ImGui::GetContentRegionAvail().x * 0.45f));
+        ImGui::BeginChild("##settings", ImVec2(w, 0), ImGuiChildFlags_Borders);
+        draw_train_settings();
+        ImGui::EndChild();
+        float dragged = w;
+        if (splitter_v("##panelsplit", &dragged, px(220.0f),
+                       ImGui::GetWindowWidth() * 0.7f, body_avail)) {
+            _panel_w = dragged / ui_scale();
+            _layout_dirty = true;
+        }
+    }
 
-    ImGui::SameLine();
     ImGui::BeginGroup();
-    float log_h = _show_log ? 150.0f : 0.0f;
     float status_h = ImGui::GetFrameHeightWithSpacing() +
-                     ImGui::GetTextLineHeightWithSpacing() + 10;
+                     ImGui::GetTextLineHeightWithSpacing() + px(10.0f);
     float spacing = ImGui::GetStyle().ItemSpacing.y;
-    float vp_h = -(log_h + (log_h > 0 ? spacing : 0) + status_h + spacing);
+    float log_h = log_height(body_avail - status_h - spacing);
+    float vp_h = -(log_h + (log_h > 0 ? splitter_extent() : 0) + status_h + spacing);
     ImGui::BeginChild("##viewport", ImVec2(0, vp_h), ImGuiChildFlags_Borders);
     const bool stepping = _runner.phase() == TrainRunner::Phase::Training;
     // The step both previews pace their refresh by while nobody is steering.
@@ -2584,7 +2700,7 @@ void GuiApp::draw_train() {
     else                 _viewport.draw(stepping, step);
     ImGui::EndChild();
     draw_status_strip();
-    if (_show_log) draw_log_panel(log_h);
+    draw_log_panel(log_h);
     ImGui::EndGroup();
 }
 
@@ -2625,9 +2741,8 @@ void GuiApp::draw_viewer() {
                               (long long)_splat.sh_degree()});
     }
 
-    float log_h = _show_log ? 120.0f : 0.0f;
-    float spacing = ImGui::GetStyle().ItemSpacing.y;
-    ImGui::BeginChild("##viewer", ImVec2(0, -(log_h + (log_h > 0 ? spacing : 0))),
+    const float log_h = log_height(ImGui::GetContentRegionAvail().y);
+    ImGui::BeginChild("##viewer", ImVec2(0, body_height(log_h)),
                       ImGuiChildFlags_Borders);
     switch (_splat.state()) {
         case SplatViewer::State::Loading:
@@ -2650,7 +2765,7 @@ void GuiApp::draw_viewer() {
             break;
     }
     ImGui::EndChild();
-    if (_show_log) draw_log_panel(log_h);
+    draw_log_panel(log_h);
 }
 
 
@@ -2772,7 +2887,7 @@ void GuiApp::draw_mesh_options() {
 
     // ---- what to mesh ----
     ui::SeparatorText(msg::mesh_source);
-    ImGui::SetNextItemWidth(-140.0f);
+    ImGui::SetNextItemWidth(px(-140.0f));
     if (ui::InputTextRaw("##meshsrc", &_mesh_job.checkpoint)) {
         // Typed by hand: keep the derived output in step until it is edited.
     }
@@ -2819,7 +2934,7 @@ void GuiApp::draw_mesh_options() {
         if (!_mesh_job.checkpoint.empty() && !mesh_dataset_found())
             ui::TextColoredWrapped(kWarn, msg::mesh_photos_missing_warn);
 
-        ImGui::SetNextItemWidth(120.0f);
+        ImGui::SetNextItemWidth(px(120.0f));
         ui::InputInt(msg::mesh_max_cameras, &_mesh_job.max_cameras);
         _mesh_job.max_cameras = std::max(0, _mesh_job.max_cameras);
         ui::help_on_hover(msg::mesh_max_cameras_help);
@@ -2827,7 +2942,7 @@ void GuiApp::draw_mesh_options() {
     }
 
     // ---- color ----
-    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SetNextItemWidth(px(220.0f));
     ui::Combo(msg::mesh_color, &_mesh_job.color,
               {&msg::mesh_color_none, &msg::mesh_color_vertex,
                &msg::mesh_color_texture});
@@ -2847,7 +2962,7 @@ void GuiApp::draw_mesh_options() {
             else std::snprintf(items[i], sizeof items[i], "%d", kTexSizes[i]);
             ptrs[i] = items[i];
         }
-        ImGui::SetNextItemWidth(160.0f);
+        ImGui::SetNextItemWidth(px(160.0f));
         if (ui::ComboRaw("##texsize", &idx, ptrs, 5))
             _mesh_job.texture_size = kTexSizes[idx];
         ImGui::SameLine();
@@ -2890,11 +3005,11 @@ void GuiApp::draw_mesh_options() {
 
     // ---- advanced ----
     if (ui::CollapsingHeader(msg::mesh_advanced)) {
-        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SetNextItemWidth(px(220.0f));
         ui::SliderFloat(msg::mesh_detail, &_mesh_job.merge_factor, 0.25f, 4.0f,
                         "%.2f");
         ui::help_on_hover(msg::mesh_detail_help);
-        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SetNextItemWidth(px(220.0f));
         ui::InputInt(msg::mesh_drop_specks, &_mesh_job.floater_min_faces);
         _mesh_job.floater_min_faces = std::max(0, _mesh_job.floater_min_faces);
         if (_mesh_job.use_data)
@@ -3014,11 +3129,9 @@ void GuiApp::draw_mesh() {
     }
 
     const bool running = _mesh.busy();
-    const float log_h = _show_log ? 140.0f : 0.0f;
-    const float spacing = ImGui::GetStyle().ItemSpacing.y;
+    const float log_h = log_height(ImGui::GetContentRegionAvail().y);
 
-    ImGui::BeginChild("##meshbody",
-                      ImVec2(0, -(log_h + (log_h > 0 ? spacing : 0))));
+    ImGui::BeginChild("##meshbody", ImVec2(0, body_height(log_h)));
 
     if (_mesh_preview_open) {
         // ---- results ----
@@ -3072,7 +3185,7 @@ void GuiApp::draw_mesh() {
         }
     }
     ImGui::EndChild();
-    if (_show_log) draw_log_panel(log_h);
+    draw_log_panel(log_h);
 }
 
 
@@ -3102,10 +3215,8 @@ void GuiApp::draw_batch() {
     ui::TextDisabled(msg::batch_intro);
     ImGui::PopTextWrapPos();
 
-    const float log_h = _show_log ? 150.0f : 0.0f;
-    const float spacing = ImGui::GetStyle().ItemSpacing.y;
-    ImGui::BeginChild("##batchlist",
-                      ImVec2(0, -(log_h + (log_h > 0 ? spacing : 0))));
+    const float log_h = log_height(ImGui::GetContentRegionAvail().y);
+    ImGui::BeginChild("##batchlist", ImVec2(0, body_height(log_h)));
 
     draw_batch_table();
 
@@ -3167,7 +3278,7 @@ void GuiApp::draw_batch() {
     draw_batch_issues();
     ImGui::EndChild();
 
-    if (_show_log) draw_log_panel(log_h);
+    draw_log_panel(log_h);
 }
 
 void GuiApp::draw_batch_table() {
@@ -3424,7 +3535,7 @@ void GuiApp::draw_train_settings() {
         int cur = backend::device_current();
         backend::DeviceInfo curd = backend::device_info(cur);
         ImGui::BeginDisabled(_device_locked || busy || n_dev == 0);
-        ImGui::SetNextItemWidth(-8);
+        ImGui::SetNextItemWidth(px(-8.0f));
         // Device names come from the driver; only the "none found" and
         // "unsupported" notes are ours.
         if (ui::BeginComboRaw("##device",
@@ -3502,7 +3613,7 @@ void GuiApp::draw_preset_picker() {
 
     const std::string preview =
         _preset_file.empty() ? preset_label(_preset) : _preset_display;
-    ImGui::SetNextItemWidth(-8);
+    ImGui::SetNextItemWidth(px(-8.0f));
     const bool combo_open = ui::BeginComboRaw("##preset", preview.c_str());
     // On the closed combo too: two saved presets can share a name, and this
     // is where the one in use says which file it is.
@@ -3580,7 +3691,7 @@ void GuiApp::draw_preset_delete_modal() {
         _preset_delete_shown = false;
         return;
     }
-    ImGui::PushTextWrapPos(460);
+    ImGui::PushTextWrapPos(px(460.0f));
     ui::Text(msg::preset_delete_confirm, {_preset_display});
     ui::TextDisabledRaw(_preset_file);
     ImGui::PopTextWrapPos();
@@ -4030,34 +4141,168 @@ void GuiApp::draw_vram_readout(float x0, float avail) {
     auto part = [](bool has, uint64_t bytes) {
         return has ? format_gib(bytes) : std::string("?");
     };
-    // proc / used / total, in GiB (the hover tooltip spells out which is
-    // which). '?' stands in for any figure the backend couldn't query.
-    std::string text = "VRAM " + part(m.has_process, m.process_bytes) + " / " +
-                       part(m.has_used, m.used_bytes) + " / " +
-                       part(m.has_total, m.total_bytes) + " GiB";
 
-    // Color by system-wide pressure when known, else neutral.
+    // A bar, because what matters here is a proportion: how close the device
+    // is to full, and how much of that is this program rather than everything
+    // else on the card. Three numbers in a row said neither without arithmetic.
+    const bool sized = m.has_total && m.total_bytes > 0;
+    const double total = sized ? (double)m.total_bytes : 0.0;
+    const double used = m.has_used ? (double)m.used_bytes : (double)m.process_bytes;
+    const double proc = m.has_process ? (double)m.process_bytes : 0.0;
+    const float used_f = sized ? (float)std::min(used / total, 1.0) : 0.0f;
+    const float proc_f = sized ? (float)std::min(proc / total, (double)used_f) : 0.0f;
+
+    // Pressure is a property of the whole device, so the fill colour follows
+    // system-wide use even though the bright segment is this process's share.
     ImVec4 color = kDim;
-    if (m.has_used && m.has_total && m.total_bytes > 0) {
-        double frac = (double)m.used_bytes / (double)m.total_bytes;
-        color = frac >= 0.9 ? kErr : frac >= 0.7 ? kWarn : kOk;
-    }
+    if (sized && m.has_used)
+        color = used_f >= 0.9f ? kErr : used_f >= 0.7f ? kWarn : kOk;
 
-    float tw = ImGui::CalcTextSize(text.c_str()).x;
-    float target = x0 + avail - tw - 8.0f;  // 8 px right pad, matches the bar
+    const std::string label =
+        sized ? part(m.has_used || m.has_process, (uint64_t)used) + " / " +
+                    format_gib(m.total_bytes) + " GiB"
+              : "VRAM " + part(m.has_process, m.process_bytes) + " GiB";
+
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float bar_w = sized ? px(120.0f) : 0.0f;
+    const float gap = sized ? st.ItemInnerSpacing.x : 0.0f;
+    const float text_w = ImGui::CalcTextSize(label.c_str()).x;
+    const float target = x0 + avail - bar_w - gap - text_w - px(8.0f);
     ImGui::SameLine();
     if (target > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(target);
-    ui::TextColoredRaw(color, text);
+
+    if (sized) {
+        const float h = ImGui::GetTextLineHeight();
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float r = st.FrameRounding;
+        dl->AddRectFilled(p, ImVec2(p.x + bar_w, p.y + h),
+                          ImGui::GetColorU32(ImGuiCol_FrameBg), r);
+        // Everything in use, dim; this process's share of it, solid on top.
+        ImVec4 rest = color;
+        rest.w = 0.35f;
+        if (used_f > 0.0f)
+            dl->AddRectFilled(p, ImVec2(p.x + bar_w * used_f, p.y + h),
+                              ImGui::GetColorU32(rest), r);
+        if (proc_f > 0.0f)
+            dl->AddRectFilled(p, ImVec2(p.x + bar_w * proc_f, p.y + h),
+                              ImGui::GetColorU32(color), r);
+        dl->AddRect(p, ImVec2(p.x + bar_w, p.y + h),
+                    ImGui::GetColorU32(ImGuiCol_Border), r);
+        ui::InvisibleButtonRaw("##vram", ImVec2(bar_w, h));
+        if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
+            ui::TextColoredRaw(color,
+                               part(m.has_process, m.process_bytes) + " / " +
+                                   part(m.has_used, m.used_bytes) + " / " +
+                                   part(m.has_total, m.total_bytes) + " GiB");
+            ImGui::PushTextWrapPos(px(360.0f));
+            ui::Text(msg::vram_help);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+        ImGui::SameLine(0.0f, gap);
+    }
+    ui::TextColoredRaw(sized ? kDim : color, label);
     ui::help_on_hover(msg::vram_help);
 }
 
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+float GuiApp::log_height(float avail) const {
+    if (!_show_log) return 0.0f;
+    const float line = ImGui::GetTextLineHeightWithSpacing();
+    const float pad = ImGui::GetStyle().WindowPadding.y * 2.0f;
+    float h = std::max(_log_h * ui_scale(), 4.0f * line + pad);
+    // The cap wins over the floor: on a window too short for both, a log that
+    // took the four lines it wants would leave the screen above it with none.
+    return std::max(0.0f, std::min(h, avail * 0.60f));
+}
+
+float GuiApp::body_height(float log_h) {
+    return log_h > 0.0f ? -(log_h + splitter_extent()) : 0.0f;
+}
+
 void GuiApp::draw_log_panel(float height) {
-    ImGui::BeginChild("##log", ImVec2(0, height), ImGuiChildFlags_Borders);
-    // Log lines arrive already formatted, from here and from the engine.
-    for (const auto& s : _log) ui::TextRaw(s);
-    if (_log_autoscroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4)
-        ImGui::SetScrollHereY(1.0f);
+    if (height <= 0.0f) return;
+
+    {
+        const float line = ImGui::GetTextLineHeightWithSpacing();
+        float h = height;
+        if (splitter_h("##logsplit", &h, 3.0f * line,
+                       std::max(3.0f * line, ImGui::GetWindowHeight() * 0.8f),
+                       ImGui::GetContentRegionAvail().x)) {
+            _log_h = h / ui_scale();
+            _layout_dirty = true;
+        }
+    }
+
+    ImGui::BeginChild("##log", ImVec2(0, height), ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_HorizontalScrollbar);
+
+    // Reading back where the view sits is the whole state: pinned to the
+    // bottom means "follow", and a wheel-up on the previous frame has already
+    // moved it by the time this runs.
+    _log_follow = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f;
+    if (_log_scroll_end) {
+        _log_scroll_end = false;
+        _log_follow = true;
+    }
+    if (_log_dropped) {
+        if (!_log_follow)
+            ImGui::SetScrollY(std::max(0.0f,
+                ImGui::GetScrollY() -
+                    (float)_log_dropped * ImGui::GetTextLineHeightWithSpacing()));
+        _log_dropped = 0;
+    }
+
+    // Log lines arrive already formatted, from here and from the engine, one
+    // entry per screen line -- which is what lets the clipper skip the 4000
+    // that are not visible.
+    ImGuiListClipper clip;
+    clip.Begin((int)_log.size());
+    while (clip.Step())
+        for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++)
+            ui::TextRaw(_log[(size_t)i]);
+    clip.End();
+    if (_log_follow) ImGui::SetScrollHereY(1.0f);
+
+    if (ImGui::BeginPopupContextWindow()) {
+        if (ui::MenuItem(msg::log_follow, nullptr, _log_follow))
+            _log_scroll_end = true;
+        if (ui::MenuItem(msg::log_copy)) {
+            std::string all;
+            for (const auto& s : _log) { all += s; all += '\n'; }
+            ImGui::SetClipboardText(all.c_str());
+        }
+        if (ui::MenuItem(msg::log_clear)) {
+            _log.clear();
+            _log_dropped = 0;
+        }
+        ImGui::EndPopup();
+    }
     ImGui::EndChild();
+
+    // The way back, offered only when it is needed: scrolled off the bottom
+    // with the run still writing. Drawn over the panel's bottom-right corner
+    // so it costs no height.
+    if (!_log_follow) {
+        const ImVec2 corner = ImGui::GetItemRectMax();
+        const float bw = ImGui::CalcTextSize(msg::log_jump.get()).x +
+                         ImGui::GetStyle().FramePadding.x * 2.0f;
+        ImGui::SetNextWindowPos(ImVec2(corner.x - bw - px(24.0f),
+                                       corner.y - ImGui::GetFrameHeight() - px(8.0f)));
+        if (ImGui::Begin("##logjump", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoBackground |
+                         ImGuiWindowFlags_AlwaysAutoResize |
+                         ImGuiWindowFlags_NoFocusOnAppearing)) {
+            if (ui::Button(msg::log_jump)) _log_scroll_end = true;
+        }
+        ImGui::End();
+    }
 }
 
 void GuiApp::draw_confirm_modal() {

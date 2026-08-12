@@ -78,6 +78,120 @@ SS_MSG(menu_show_log,
     RU("Показать панель журнала"),
     TR("Günlük panelini göster"));
 
+SS_MSG(menu_show_settings,
+    EN("Show Settings Panel"),
+    JA("設定パネルを表示"),
+    ZH_HANS("显示设置面板"),
+    ZH_HANT("顯示設定面板"),
+    KO("설정 패널 표시"),
+    DE("Einstellungsbereich anzeigen"),
+    FR("Afficher le panneau des réglages"),
+    ES("Mostrar el panel de ajustes"),
+    PT("Mostrar o painel de configurações"),
+    IT("Mostra il pannello delle impostazioni"),
+    NL("Instellingenvenster tonen"),
+    RU("Показать панель настроек"),
+    TR("Ayarlar panelini göster"));
+
+SS_MSG(menu_ui_size,
+    EN("Interface Size"),
+    JA("表示サイズ"),
+    ZH_HANS("界面大小"),
+    ZH_HANT("介面大小"),
+    KO("인터페이스 크기"),
+    DE("Anzeigegröße"),
+    FR("Taille de l'interface"),
+    ES("Tamaño de la interfaz"),
+    PT("Tamanho da interface"),
+    IT("Dimensione dell'interfaccia"),
+    NL("Weergavegrootte"),
+    RU("Размер интерфейса"),
+    TR("Arayüz boyutu"));
+
+SS_MSG(ui_size_auto,
+    EN("Automatic (follow the window)"),
+    JA("自動（ウィンドウに合わせる）"),
+    ZH_HANS("自动（随窗口大小）"),
+    ZH_HANT("自動（隨視窗大小）"),
+    KO("자동(창 크기에 맞춤)"),
+    DE("Automatisch (dem Fenster folgen)"),
+    FR("Automatique (selon la fenêtre)"),
+    ES("Automático (según la ventana)"),
+    PT("Automático (conforme a janela)"),
+    IT("Automatica (segue la finestra)"),
+    NL("Automatisch (volgt het venster)"),
+    RU("Автоматически (по размеру окна)"),
+    TR("Otomatik (pencereye uy)"));
+
+SS_MSG(menu_reset_layout,
+    EN("Reset Panel Sizes"),
+    JA("パネルの大きさを元に戻す"),
+    ZH_HANS("重置面板大小"),
+    ZH_HANT("重設面板大小"),
+    KO("패널 크기 초기화"),
+    DE("Bereichsgrößen zurücksetzen"),
+    FR("Réinitialiser la taille des panneaux"),
+    ES("Restablecer el tamaño de los paneles"),
+    PT("Redefinir o tamanho dos painéis"),
+    IT("Ripristina le dimensioni dei pannelli"),
+    NL("Venstergroottes herstellen"),
+    RU("Сбросить размеры панелей"),
+    TR("Panel boyutlarını sıfırla"));
+
+SS_MSG(menu_native_dialogs,
+    EN("Use System File Dialogs"),
+    JA("システムのファイル選択画面を使う"),
+    ZH_HANS("使用系统文件对话框"),
+    ZH_HANT("使用系統檔案對話框"),
+    KO("시스템 파일 대화상자 사용"),
+    DE("Dateidialoge des Systems verwenden"),
+    FR("Utiliser les dialogues de fichiers du système"),
+    ES("Usar los diálogos de archivos del sistema"),
+    PT("Usar as caixas de diálogo de arquivo do sistema"),
+    IT("Usa le finestre file del sistema"),
+    NL("Bestandsvensters van het systeem gebruiken"),
+    RU("Использовать системные диалоги файлов"),
+    TR("Sistemin dosya pencerelerini kullan"));
+
+SS_MSG(native_dialogs_help,
+    EN("Pick files with the desktop's own file browser. Turn this off to use "
+       "the simple built-in one, which is the only option on a session where "
+       "no system dialog can be reached."),
+    JA("ファイル選択にデスクトップ標準のファイルブラウザを使います。オフにすると"
+       "内蔵の簡易ブラウザを使います。システムの選択画面を開けない環境では、"
+       "そちらだけが使えます。"),
+    ZH_HANS("用桌面自带的文件浏览器来选择文件。关闭后使用内置的简易浏览器；在无法"
+            "调用系统对话框的环境里，内置的是唯一选择。"),
+    ZH_HANT("用桌面自帶的檔案瀏覽器來選擇檔案。關閉後使用內建的簡易瀏覽器；在無法"
+            "呼叫系統對話框的環境裡，內建的是唯一選擇。"),
+    KO("바탕화면 환경의 파일 탐색기로 파일을 고릅니다. 끄면 내장된 간단한 "
+       "탐색기를 씁니다. 시스템 대화상자를 열 수 없는 환경에서는 내장 쪽만 "
+       "쓸 수 있습니다."),
+    DE("Dateien mit dem Dateibrowser der Arbeitsumgebung auswählen. "
+       "Ausgeschaltet wird der einfache eingebaute verwendet, der auf einer "
+       "Sitzung ohne erreichbaren Systemdialog die einzige Möglichkeit ist."),
+    FR("Choisir les fichiers avec le navigateur du bureau. Désactivez pour "
+       "utiliser celui, plus simple, intégré au programme, qui est le seul "
+       "possible sur une session sans dialogue système accessible."),
+    ES("Elegir archivos con el navegador del escritorio. Desactívelo para usar "
+       "el sencillo navegador integrado, que es la única opción en una sesión "
+       "donde no hay ningún diálogo del sistema accesible."),
+    PT("Escolher arquivos com o navegador do próprio ambiente de trabalho. "
+       "Desative para usar o navegador interno mais simples, que é a única "
+       "opção numa sessão sem nenhuma caixa de diálogo do sistema acessível."),
+    IT("Scegli i file con il browser dell'ambiente desktop. Disattivalo per "
+       "usare quello semplice incorporato, che è l'unica possibilità in una "
+       "sessione dove nessuna finestra di sistema è raggiungibile."),
+    NL("Bestanden kiezen met de bestandsbeheerder van de werkomgeving. Zet dit "
+       "uit voor de eenvoudige ingebouwde versie, die de enige mogelijkheid is "
+       "in een sessie zonder bereikbaar systeemvenster."),
+    RU("Выбирать файлы через файловый менеджер рабочего стола. Выключите, "
+       "чтобы пользоваться простым встроенным, — в сеансе, где системный "
+       "диалог недоступен, он единственный возможный."),
+    TR("Dosyaları masaüstünün kendi dosya tarayıcısıyla seçin. Kapatınca "
+       "yerleşik basit tarayıcı kullanılır; sistem penceresine erişilemeyen "
+       "bir oturumda tek seçenek odur."));
+
 SS_MSG(menu_open_dataset,
     EN("Open Dataset Folder..."),
     JA("データセットフォルダを開く…"),
@@ -1404,7 +1518,7 @@ SS_MSG(resume,
 // "&&" is ImGui's escape for a literal ampersand; keep it in every language
 // that keeps the ampersand, and drop it where the conjunction is a word.
 SS_MSG(stop_and_save,
-    EN("Stop && Save"),  JA("停止して保存"),   ZH_HANS("停止并保存"), ZH_HANT("停止並儲存"),
+    EN("Stop and Save"),  JA("停止して保存"),   ZH_HANS("停止并保存"), ZH_HANT("停止並儲存"),
     KO("멈추고 저장"),    DE("Anhalten und speichern"),
     FR("Arrêter et enregistrer"), ES("Detener y guardar"),
     PT("Parar e salvar"), IT("Ferma e salva"), NL("Stoppen en opslaan"),
@@ -1601,6 +1715,71 @@ SS_MSG(vram_help,
     TR("GPU belleği (GiB): bu sürecin kullandığı / sistem genelinde kullanılan "
        "/ aygıtın kapasitesi. “?”, arka ucun o değeri sorgulayamadığı "
        "anlamına gelir."));
+
+// ===========================================================================
+// Log panel
+// ===========================================================================
+
+SS_MSG(log_follow,
+    EN("Follow New Output"),
+    JA("新しい出力を追いかける"),
+    ZH_HANS("跟随新输出"),
+    ZH_HANT("跟隨新輸出"),
+    KO("새 출력 따라가기"),
+    DE("Neuer Ausgabe folgen"),
+    FR("Suivre les nouvelles lignes"),
+    ES("Seguir la salida nueva"),
+    PT("Acompanhar a saída nova"),
+    IT("Segui il nuovo output"),
+    NL("Nieuwe uitvoer volgen"),
+    RU("Следить за новым выводом"),
+    TR("Yeni çıktıyı izle"));
+
+SS_MSG(log_jump,
+    EN("Jump to latest"),
+    JA("最新へ移動"),
+    ZH_HANS("跳到最新"),
+    ZH_HANT("跳到最新"),
+    KO("최신으로 이동"),
+    DE("Zum Neuesten springen"),
+    FR("Aller au plus récent"),
+    ES("Ir a lo más reciente"),
+    PT("Ir para o mais recente"),
+    IT("Vai al più recente"),
+    NL("Naar het nieuwste"),
+    RU("Перейти к последнему"),
+    TR("En sona git"));
+
+SS_MSG(log_copy,
+    EN("Copy All"),
+    JA("すべてコピー"),
+    ZH_HANS("全部复制"),
+    ZH_HANT("全部複製"),
+    KO("모두 복사"),
+    DE("Alles kopieren"),
+    FR("Tout copier"),
+    ES("Copiar todo"),
+    PT("Copiar tudo"),
+    IT("Copia tutto"),
+    NL("Alles kopiëren"),
+    RU("Копировать всё"),
+    TR("Tümünü kopyala"));
+
+SS_MSG(log_clear,
+    EN("Clear"),
+    JA("消去"),
+    ZH_HANS("清空"),
+    ZH_HANT("清空"),
+    KO("지우기"),
+    DE("Leeren"),
+    FR("Effacer"),
+    ES("Vaciar"),
+    PT("Limpar"),
+    IT("Svuota"),
+    NL("Wissen"),
+    RU("Очистить"),
+    TR("Temizle"));
+
 
 // ===========================================================================
 // Stop-training confirmation

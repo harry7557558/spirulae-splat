@@ -3,6 +3,7 @@
 #include "app/gui/SegmentPanel.h"
 #include "i18n/catalog/Log.h"
 
+#include "app/gui/Layout.h"
 #include "app/gui/MaskPrompt.h"
 #include "app/gui/Subprocess.h"
 #include "app/gui/Ui.h"

@@ -6,6 +6,7 @@
 #include "i18n/catalog/Log.h"
 #include "app/gui/Fonts.h"
 #include "app/gui/GuiApp.h"
+#include "app/gui/Layout.h"
 #include "i18n/catalog/Brand.h"
 
 #ifdef _WIN32
@@ -66,34 +67,6 @@ void release_own_console() {
 }
 #endif  // _WIN32
 
-void apply_style(float scale) {
-    ImGuiStyle& style = ImGui::GetStyle();
-    ImGui::StyleColorsDark();
-    style.WindowRounding = 4.0f;
-    style.FrameRounding = 3.0f;
-    style.GrabRounding = 3.0f;
-    style.TabRounding = 3.0f;
-    style.ScrollbarRounding = 3.0f;
-    style.FramePadding = ImVec2(6, 4);
-    style.ItemSpacing = ImVec2(8, 6);
-    ImVec4* c = style.Colors;
-    c[ImGuiCol_WindowBg]         = ImVec4(0.10f, 0.105f, 0.12f, 1.0f);
-    c[ImGuiCol_ChildBg]          = ImVec4(0.115f, 0.12f, 0.135f, 1.0f);
-    c[ImGuiCol_FrameBg]          = ImVec4(0.19f, 0.20f, 0.23f, 1.0f);
-    c[ImGuiCol_FrameBgHovered]   = ImVec4(0.24f, 0.25f, 0.29f, 1.0f);
-    c[ImGuiCol_FrameBgActive]    = ImVec4(0.28f, 0.30f, 0.34f, 1.0f);
-    c[ImGuiCol_Button]           = ImVec4(0.22f, 0.32f, 0.44f, 1.0f);
-    c[ImGuiCol_ButtonHovered]    = ImVec4(0.28f, 0.40f, 0.55f, 1.0f);
-    c[ImGuiCol_ButtonActive]     = ImVec4(0.33f, 0.47f, 0.64f, 1.0f);
-    c[ImGuiCol_Header]           = ImVec4(0.20f, 0.25f, 0.32f, 1.0f);
-    c[ImGuiCol_HeaderHovered]    = ImVec4(0.26f, 0.32f, 0.41f, 1.0f);
-    c[ImGuiCol_HeaderActive]     = ImVec4(0.30f, 0.37f, 0.48f, 1.0f);
-    c[ImGuiCol_PlotLines]        = ImVec4(0.45f, 0.75f, 1.0f, 1.0f);
-    c[ImGuiCol_PlotHistogram]    = ImVec4(0.30f, 0.55f, 0.85f, 1.0f);  // also the ProgressBar fill
-    style.ScaleAllSizes(scale);
-    style.FontScaleMain = scale;
-}
-
 }  // namespace
 
 int spirula_gui_main(int argc, char** argv) {
@@ -143,13 +116,14 @@ int spirula_gui_main(int argc, char** argv) {
 
     float xscale = 1.0f, yscale = 1.0f;
     glfwGetWindowContentScale(window, &xscale, &yscale);
-    apply_style(xscale > 0.0f ? xscale : 1.0f);
+    gui::apply_style(xscale > 0.0f ? xscale : 1.0f);
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
     {
         gui::GuiApp app;
+        app.set_dpi_scale(xscale > 0.0f ? xscale : 1.0f);
         // The atlas has to exist before the first frame, and the language it
         // depends on is only settled once GuiApp has read its settings file.
         app.fonts().ensure();
@@ -202,6 +176,10 @@ int spirula_gui_main(int argc, char** argv) {
             // language changed or a font download finished.
             app.fonts().ensure();
             sync_title();
+            // Dragging the window to a monitor with a different DPI is the
+            // only thing that changes this, and it is one GLFW read.
+            glfwGetWindowContentScale(window, &xscale, &yscale);
+            app.set_dpi_scale(xscale > 0.0f ? xscale : 1.0f);
 
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();

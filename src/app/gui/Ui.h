@@ -27,6 +27,7 @@
 // one message therefore share an ID too -- wrap one in ImGui::PushID() exactly
 // as you would for two identical literals.
 
+#include "app/gui/Layout.h"
 #include "i18n/Message.h"
 
 #include "imgui.h"
@@ -98,6 +99,11 @@ inline void TextWrapped(const Msg& m, std::initializer_list<Arg> a) {
 inline void TextDisabled(const Msg& m) {
     ImGui::TextDisabled("%s", m.get());
 }
+inline void TextDisabledWrapped(const Msg& m) {
+    ImGui::PushTextWrapPos();
+    ImGui::TextDisabled("%s", m.get());
+    ImGui::PopTextWrapPos();
+}
 inline void TextDisabled(const Msg& m, std::initializer_list<Arg> a) {
     ImGui::TextDisabled("%s", format(m, a).c_str());
 }
@@ -151,17 +157,22 @@ inline void TextColoredWrappedRaw(const ImVec4& c, const std::string& s) {
 // screens carries. Kept here rather than in ConfigUI.h so that the wrapped-text
 // tooltip and the widgets it annotates cannot drift apart.
 
-inline void help_on_hover_raw(const char* text) {
+inline void help_on_hover_raw(const char* text,
+                              ImGuiHoveredFlags extra = 0) {
     if (!text || !*text) return;
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) &&
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | extra) &&
         ImGui::BeginTooltip()) {
-        ImGui::PushTextWrapPos(420.0f);
+        ImGui::PushTextWrapPos(gui::px(420.0f));
         ImGui::TextUnformatted(text);
         ImGui::PopTextWrapPos();
         ImGui::EndTooltip();
     }
 }
 inline void help_on_hover(const Msg& m) { help_on_hover_raw(m.get()); }
+// For an item that may be greyed out, where the help is what explains why.
+inline void help_on_hover_disabled(const Msg& m) {
+    help_on_hover_raw(m.get(), ImGuiHoveredFlags_AllowWhenDisabled);
+}
 inline void help_on_hover(const Msg& m, std::initializer_list<Arg> a) {
     help_on_hover_raw(format(m, a).c_str());
 }
@@ -245,6 +256,10 @@ inline bool MenuItem(const Msg& m, const char* shortcut, bool* selected,
 }
 inline bool MenuItem(const Msg& m, std::initializer_list<Arg> a) {
     return ImGui::MenuItem(detail::label(format(m, a), m));
+}
+// An entry whose face is a number, not a word: the interface-size percentages.
+inline bool MenuItemRaw(const char* s, bool selected = false) {
+    return ImGui::MenuItem(s, nullptr, selected);
 }
 inline bool CollapsingHeader(const Msg& m, ImGuiTreeNodeFlags flags = 0) {
     return ImGui::CollapsingHeader(detail::label(m), flags);

@@ -2,6 +2,8 @@
 
 #include "app/gui/ViewportPanel.h"
 
+#include "app/gui/Layout.h"
+
 #include "app/TrainerCore.h"
 #include "app/gui/Ui.h"
 
@@ -477,8 +479,8 @@ void ViewportPanel::draw_controls(bool engine) {
 
     // ---- display group ----
     if (engine && !_buffer_keys.empty()) {
-        place(130);
-        ImGui::SetNextItemWidth(130);
+        place(px(130.0f));
+        ImGui::SetNextItemWidth(px(130.0f));
         // Buffer names ("color", "depth") come from the engine.
         if (ui::BeginComboRaw("##buffer", _buffer_keys[_buffer_idx].c_str())) {
             for (int i = 0; i < (int)_buffer_keys.size(); i++)
@@ -502,8 +504,8 @@ void ViewportPanel::draw_controls(bool engine) {
         place(check_w(msg::viewport_cameras));
         if (ui::Checkbox(msg::viewport_cameras, &_show_cams)) _dirty = true;
         if (_show_cams) {
-            place(110);
-            ImGui::SetNextItemWidth(110);
+            place(px(110.0f));
+            ImGui::SetNextItemWidth(px(110.0f));
             if (ui::SliderFloatRaw("##fsize", &_frustum_scale, 0.1f, 10.0f,
                                    "size x%.2f", ImGuiSliderFlags_Logarithmic))
                 _dirty = true;
@@ -514,8 +516,8 @@ void ViewportPanel::draw_controls(bool engine) {
     if (ui::Checkbox(msg::viewport_grid, &_show_grid)) _dirty = true;
     ui::help_on_hover(msg::viewport_cameras_help);
     if (engine) {
-        place(66);
-        ImGui::SetNextItemWidth(66);
+        place(px(66.0f));
+        ImGui::SetNextItemWidth(px(66.0f));
         // Only the first entry is a word; the rest are numbers, and a
         // percentage is a percentage in every language.
         const char* scales[] = {msg::viewport_scale_auto.get(),
@@ -556,12 +558,13 @@ void ViewportPanel::draw_controls(bool engine) {
     // A training session renders what it is training; only a file being
     // LOOKED at can be drawn a different way than it was made.
     if (engine && _scene_options) {
-        float w_group = 80.0f + 120.0f + check_w(msg::viewport_linear_color) +
+        float w_group = px(80.0f) + px(120.0f) +
+                        check_w(msg::viewport_linear_color) +
                         2.0f * st.ItemSpacing.x;
-        if (_sh_degree_max > 0) w_group += kShW + st.ItemSpacing.x;
+        if (_sh_degree_max > 0) w_group += px(kShW) + st.ItemSpacing.x;
         place_group(w_group);
-        place(80);
-        ImGui::SetNextItemWidth(80);
+        place(px(80.0f));
+        ImGui::SetNextItemWidth(px(80.0f));
         // Primitive names are identifiers (they are what --primitive takes).
         if (ui::ComboRaw("##primitive", &_primitive_idx, kViewerPrimitives,
                          kNumViewerPrimitives)) {
@@ -571,8 +574,8 @@ void ViewportPanel::draw_controls(bool engine) {
         ui::help_on_hover(msg::viewport_primitive_help);
 
         if (_sh_degree_max > 0) {
-            place(kShW);
-            ImGui::SetNextItemWidth(kShW);
+            place(px(kShW));
+            ImGui::SetNextItemWidth(px(kShW));
             // Capped at what the file actually carries -- bands it has not got
             // cannot be drawn, so there is nothing above the top end to offer.
             // Degrees are numbers in every language.
@@ -582,8 +585,8 @@ void ViewportPanel::draw_controls(bool engine) {
             ui::help_on_hover(msg::viewport_sh_degree_help);
         }
 
-        place(120);
-        ImGui::SetNextItemWidth(120);
+        place(px(120.0f));
+        ImGui::SetNextItemWidth(px(120.0f));
         // Gamut names are standards ("DCI-P3"); only the "none" row is a word.
         const char* gamuts[kNumViewerGamuts];
         gamuts[0] = msg::viewport_gamut_none.get();
@@ -610,24 +613,25 @@ void ViewportPanel::draw_controls(bool engine) {
     static const spirula::i18n::Msg* kNavModes[] = {
         &msg::nav_turntable, &msg::nav_trackball,
         &msg::nav_first_person, &msg::nav_free_fly};
-    const float w_fov = fov_max() > 0 ? 120.0f
+    const float w_fov = fov_max() > 0 ? px(120.0f)
                                       : text_w("360\xc2\xb0 x 180\xc2\xb0");
-    place_group(150.0f + 100.0f + 160.0f + w_fov + 3.0f * st.ItemSpacing.x);
+    place_group(px(150.0f) + px(100.0f) + px(160.0f) + w_fov +
+                3.0f * st.ItemSpacing.x);
     int nav = (int)_cam.mode;
-    place(150);
-    ImGui::SetNextItemWidth(150);
+    place(px(150.0f));
+    ImGui::SetNextItemWidth(px(150.0f));
     if (ui::ComboRaw("##navmode", &nav,
                      {kNavModes[0], kNavModes[1], kNavModes[2], kNavModes[3]}))
         _cam.mode = (NavCamera::Mode)nav;
     ui::help_on_hover(msg::viewport_nav_help,
                       {kNavModes[0]->get(), kNavModes[1]->get(),
                        kNavModes[2]->get(), kNavModes[3]->get()});
-    place(100);
-    ImGui::SetNextItemWidth(100);
+    place(px(100.0f));
+    ImGui::SetNextItemWidth(px(100.0f));
     ui::SliderFloatRaw("##speed", &_cam.speed_exp, -2.0f, 2.0f, "spd 10^%.1f");
     ui::help_on_hover(msg::viewport_speed_help);
-    place(160);
-    ImGui::SetNextItemWidth(160);
+    place(px(160.0f));
+    ImGui::SetNextItemWidth(px(160.0f));
     if (ui::BeginComboRaw("##cammodel", kViewerCameraModels[_cam_model].label->get())) {
         for (int i = 0; i < 4; i++)
             if (ui::Selectable(*kViewerCameraModels[i].label, i == _cam_model)) {
@@ -643,7 +647,7 @@ void ViewportPanel::draw_controls(bool engine) {
     ui::help_on_hover(msg::viewport_projection_help);
     place(w_fov);
     if (fov_max() > 0) {
-        ImGui::SetNextItemWidth(120);
+        ImGui::SetNextItemWidth(px(120.0f));
         if (ui::SliderFloatRaw("##fov", &_fov_deg[_cam_model],
                                fov_min(), fov_max(), "fov %.0f\xc2\xb0"))
             _dirty = true;

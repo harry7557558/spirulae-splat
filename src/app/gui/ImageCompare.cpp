@@ -3,6 +3,7 @@
 #include "app/gui/ImageCompare.h"
 
 #include "app/TrainerCore.h"
+#include "app/gui/Layout.h"
 #include "app/gui/Ui.h"
 #include "engine/Engine.h"
 #include "external/stb_image.h"
@@ -451,14 +452,14 @@ void ImageCompare::draw_image_picker() {
     char fmt[32];
     std::snprintf(fmt, sizeof fmt, "%%d / %d", std::max(n, 1));
     int one_based = _index + 1;
-    place(190);
-    ImGui::SetNextItemWidth(190);
+    place(px(190.0f));
+    ImGui::SetNextItemWidth(px(190.0f));
     if (ui::SliderIntRaw("##imgidx", &one_based, 1, std::max(n, 1), fmt))
         select(one_based - 1);
     ui::help_on_hover(msg::compare_slider_help);
 
-    place(260);
-    ImGui::SetNextItemWidth(260);
+    place(px(260.0f));
+    ImGui::SetNextItemWidth(px(260.0f));
     // File names are file names in every language.
     if (ui::BeginComboRaw("##imgname", n > 0 ? base(_index).c_str() : "")) {
         ImGui::SetNextItemWidth(-1);

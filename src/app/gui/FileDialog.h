@@ -1,8 +1,12 @@
 #pragma once
 
-// Minimal built-in ImGui file/folder browser (modal popup) -- no native
-// dialog dependency, so it behaves identically on Linux/Windows/macOS and
-// over remote X/WSLg sessions.
+// The one picker every screen calls. It shows the DESKTOP's file dialog when
+// this session has one (src/app/gui/NativeDialog.h) and falls back to the
+// minimal ImGui browser below it when it does not -- a bare X server, a
+// container, a machine with neither zenity nor kdialog installed. Callers see
+// the same interface either way.
+
+#include "app/gui/NativeDialog.h"
 
 #include <string>
 #include <vector>
@@ -12,6 +16,13 @@ namespace gui {
 class FileDialog {
 public:
     enum class Mode { Folder, File };
+
+    // Whether to prefer the desktop's picker. Persisted by GuiApp; the
+    // built-in browser is what a user who cannot get the system one to appear
+    // (or does not want it) falls back to.
+    void use_native(bool on) { _use_native = on; }
+    bool native_enabled() const { return _use_native; }
+    bool native_available() const { return NativeDialog::available(); }
 
     // Arm the dialog; it opens on the next draw() call. `extensions` filters
     // File mode (lowercase, with dot, e.g. {".mp4", ".mov"}); empty = all
@@ -30,7 +41,7 @@ public:
     // Armed or on screen. ImGui shows one modal at a time, so a caller that is
     // itself a modal has to step aside for this one and needs to know when it
     // is gone -- whether the user confirmed or cancelled.
-    bool is_open() const { return _is_open || _want_open; }
+    bool is_open() const { return _is_open || _want_open || _native.busy(); }
 
     const std::string& result() const { return _result; }
     const std::vector<std::string>& results() const { return _results; }
@@ -56,6 +67,8 @@ private:
     std::vector<std::string> _results;
     bool _want_open = false;
     bool _is_open = false;
+    NativeDialog _native;
+    bool _use_native = true;
 };
 
 }  // namespace gui

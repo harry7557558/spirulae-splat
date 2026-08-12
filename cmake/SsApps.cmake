@@ -183,6 +183,23 @@ if(SS_BUILD_GUI)
     list(APPEND SS_TOOL_DEFS SS_TOOL_GUI=1)
     list(APPEND SS_TOOL_LIBS imgui_glfw OpenGL::GL)
 
+    # The desktop's own file picker (src/app/gui/NativeDialog.h). Windows and
+    # macOS need the platform toolkit for it; Linux spawns zenity/kdialog and
+    # links nothing.
+    if(WIN32)
+        list(APPEND SS_TOOL_LIBS ole32 uuid shell32)
+    elseif(APPLE)
+        # Objective-C++ is enabled here rather than in the top-level project()
+        # call, because this one file is the only thing in the tree that is not
+        # portable C++ and a CUDA/Linux build should not have to have a
+        # compiler for it.
+        enable_language(OBJCXX)
+        set_source_files_properties(${SS_SRC}/app/gui/NativeDialogMac.mm
+            PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        list(APPEND SS_TOOL_SOURCES ${SS_SRC}/app/gui/NativeDialogMac.mm)
+        list(APPEND SS_TOOL_LIBS "-framework AppKit")
+    endif()
+
     # In-process segmentation (interactive preview + dataset masking) and, when
     # patented modules are enabled, in-process video decoding. Both are
     # optional: DatasetPrep falls back to python + reference/scripts/mask.py

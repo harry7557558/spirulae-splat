@@ -2,6 +2,7 @@
 
 #include "app/gui/FileDialog.h"
 
+#include "app/gui/Layout.h"
 #include "app/gui/Ui.h"
 
 #include "i18n/catalog/Gui.h"
@@ -55,6 +56,16 @@ void FileDialog::open(const std::string& title, Mode mode,
     _selected.clear();
     _result.clear();
     _results.clear();
+    if (_use_native && NativeDialog::available()) {
+        // A second request while one is up is a repeated click, not a reason
+        // to put the fallback browser on top of the system picker.
+        if (_native.busy()) return;
+        if (_native.open(title,
+                         mode == Mode::Folder ? NativeDialog::Mode::Folder
+                                              : NativeDialog::Mode::File,
+                         extensions, _cwd, _multi))
+            return;
+    }
     _want_open = true;
     refresh();
 }
@@ -102,6 +113,18 @@ void FileDialog::refresh() {
 }
 
 bool FileDialog::draw() {
+    if (_native.busy()) {
+        if (!_native.poll()) return false;
+        _results = _native.results();
+        if (_results.empty()) return false;    // cancelled
+        _result = _results[0];
+        // Where the next pick starts from, so the two browsers share one
+        // notion of "last used".
+        std::error_code ec;
+        const fs::path p(_results[0]);
+        _cwd = (fs::is_directory(p, ec) ? p : p.parent_path()).string();
+        return true;
+    }
     if (_want_open) {
         ImGui::OpenPopup(_title.c_str());
         _want_open = false;
@@ -110,7 +133,10 @@ bool FileDialog::draw() {
     if (!_is_open) return false;
 
     bool confirmed = false;
-    ImGui::SetNextWindowSize(ImVec2(680, 480), ImGuiCond_Appearing);
+    const ImVec2 screen = ImGui::GetMainViewport()->WorkSize;
+    ImGui::SetNextWindowSize(ImVec2(std::min(px(680.0f), screen.x * 0.95f),
+                                    std::min(px(480.0f), screen.y * 0.9f)),
+                             ImGuiCond_Appearing);
     if (ui::BeginPopupModalRaw(_title.c_str(), &_is_open)) {
         std::error_code ec;
 
@@ -131,7 +157,7 @@ bool FileDialog::draw() {
         }
 #ifdef _WIN32
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(70);
+        ImGui::SetNextItemWidth(px(70.0f));
         if (ui::BeginComboRaw("##drives", msg::fd_drive.get())) {
             for (char d = 'A'; d <= 'Z'; d++) {
                 std::string root = std::string(1, d) + ":\\";
@@ -159,7 +185,7 @@ bool FileDialog::draw() {
         }
 
         // ---- listing ----
-        float footer = ImGui::GetFrameHeightWithSpacing() + 8;
+        float footer = ImGui::GetFrameHeightWithSpacing() + px(8.0f);
         if (ImGui::BeginChild("##list", ImVec2(0, -footer), ImGuiChildFlags_Borders)) {
             for (const auto& e : _entries) {
                 const bool sel = is_selected(e.name);
