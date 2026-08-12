@@ -342,6 +342,7 @@ enum class SaveClass : uint8_t {
   X(ViewerHeights                  , "viewer.heights",                    Viewer   , Never) \
   X(ViewerCmodels                  , "viewer.cmodels",                    Viewer   , Never) \
   X(ViewerDist                     , "viewer.dist",                       Viewer   , Never) \
+  X(ViewerDistTier                 , "viewer.dist_tier",                  Viewer   , Never) \
   X(ViewerC2w                      , "viewer.c2w",                        Viewer   , Never) \
   X(ViewerOverlaySegs              , "viewer.overlay_segs",               Viewer   , Never) \
   X(ViewerOverlayColors            , "viewer.overlay_colors",             Viewer   , Never) \

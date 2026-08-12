@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
         std::vector<float> v_intr(N_CAM * 4),
             v_dist(N_CAM * kCameraDistortionParams, 0.f), v_c2w(N_CAM * 12);
         std::vector<int32_t> v_w(N_CAM, 320), v_h(N_CAM, 240),
-            v_model(N_CAM, 0);
+            v_model(N_CAM, 0), v_tier(N_CAM, 0);
         for (int i = 0; i < N_CAM; i++) {
             v_intr[4 * i + 0] = 260 + 5 * i;
             v_intr[4 * i + 1] = 262 + 5 * i;
@@ -233,12 +233,27 @@ int main(int argc, char** argv) {
             v_c2w[12 * i + 11] = 1.5f;
         }
         v_model[2] = 1;  // one fisheye frustum
+        // Mixed tiers across the table: the frustum fill dispatches the tier
+        // per camera, so a single-tier dataset would not exercise it (the
+        // view camera's tier used to stand in, drawing every frustum
+        // undistorted). Cameras 0/3 stay NONE. The fixture rows are scaled
+        // up here -- a frustum is a few dozen pixels wide, so a mild lens
+        // bends its edges by less than the byte-comparison tolerance.
+        const std::vector<float> rows = dist_fixture::distortion_rows(1);
+        for (int i : {1, 2, 4, 5}) {
+            int tier = i == 2 ? 2 : (i == 5 ? 3 : 1);  // fisheye: no RATIONAL
+            v_tier[i] = tier;
+            for (int k = 0; k < kCameraDistortionParams; k++)
+                v_dist[(size_t)i * kCameraDistortionParams + k] =
+                    8.0f * rows[dist_fixture::row_offset(tier, 1) + k];
+        }
         engine_viewer_init(ttv(v_model.data(), {N_CAM}),
                            ttv(v_intr.data(), {N_CAM, 4}),
                            ttv(v_dist.data(), {N_CAM, kCameraDistortionParams}),
+                           ttv(v_tier.data(), {N_CAM}),
                            ttv(v_c2w.data(), {N_CAM, 3, 4}),
                            ttv(v_w.data(), {N_CAM}),
-                           ttv(v_h.data(), {N_CAM}), 0.25f);
+                           ttv(v_h.data(), {N_CAM}), 0.8f);
         engine_viewer_set_grid(/*radius=*/4.0f, /*view_distance=*/3.0f);
 
         // view camera = render camera 0 (device copies)

@@ -107,13 +107,56 @@ inline void default_stream_wait_viewer() {
 inline constexpr int kNumFrustumSegments = 16;
 inline constexpr int kNumFrustumFaces = 8;
 
+// Ray through a frustum-boundary point, falling back to the last valid uv
+// toward the principal point when the model's domain rejects it (NaN if none
+// is). The tier is a RUNTIME value here -- the fill draws a whole camera
+// table in one launch and a dataset may mix tiers, so it cannot be the
+// launch-wide template argument the projection kernels use. Uniform per
+// block (one camera per block).
 template<CameraDistortionType distortion>
+__device__ __forceinline__ float3 _frustum_ray(
+    float2 uv, int camera_model,
+    const CameraDistortionCoeffsBuffer& dist_coeffs_buffer, uint32_t bid
+) {
+    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
+    float3 raydir = float3{NAN, NAN, NAN};
+    if (!SlangDistortion<distortion>::generate_ray(uv, camera_model, dist_coeffs, &raydir)) {
+        float t0 = 0.0f, t1 = 1.0f;
+        for (int iter = 0; iter < 12; ++iter) {
+            float t = 0.5f*(t0+t1);
+            float3 temp;
+            if (SlangDistortion<distortion>::generate_ray(uv*t, camera_model, dist_coeffs, &temp))
+                t0 = t, raydir = temp;
+            else
+                t1 = t;
+        }
+    }
+    return raydir;
+}
+
+__device__ __forceinline__ float3 frustum_ray(
+    float2 uv, int camera_model, int distortion,
+    const CameraDistortionCoeffsBuffer& dist_coeffs_buffer, uint32_t bid
+) {
+    switch ((CameraDistortionType)distortion) {
+        case CameraDistortionType::OpenCV:
+            return _frustum_ray<CameraDistortionType::OpenCV>(uv, camera_model, dist_coeffs_buffer, bid);
+        case CameraDistortionType::ThinPrism:
+            return _frustum_ray<CameraDistortionType::ThinPrism>(uv, camera_model, dist_coeffs_buffer, bid);
+        case CameraDistortionType::Rational:
+            return _frustum_ray<CameraDistortionType::Rational>(uv, camera_model, dist_coeffs_buffer, bid);
+        default:
+            return _frustum_ray<CameraDistortionType::None>(uv, camera_model, dist_coeffs_buffer, bid);
+    }
+}
+
 __global__ void fill_frustum_segments_kernel(
     const float4* __restrict__ intrins, // [N, 4]
     const int32_t* __restrict__ widths, // [N]
     const int32_t* __restrict__ heights, // [N]
     const int* __restrict__ camera_models, // [N]
     CameraDistortionCoeffsBuffer dist_coeffs_buffer, // [N, ...]
+    const int32_t* __restrict__ distortions, // [N] CameraDistortionType, or null
     const float* __restrict__ camera_to_worlds,  // [N, 3, 4]
     float size,
     float4* __restrict__ lss_buffer,  // [N, 8*kNumFrustumSegments, 2*4]
@@ -128,7 +171,7 @@ __global__ void fill_frustum_segments_kernel(
     float width = (float)widths[bid];
     float height = (float)heights[bid];
     CameraModelType camera_model = (CameraModelType)camera_models[bid];
-    auto dist_coeffs = dist_coeffs_buffer.load<distortion>(bid);
+    int distortion = distortions ? distortions[bid] : 0;
     float2 corners[4] = {
         {-cx / fx, -cy / fy},
         {(width-cx) / fx, -cy / fy},
@@ -156,21 +199,8 @@ __global__ void fill_frustum_segments_kernel(
         int corner_idx = i / kNumFrustumSegments;
         float2 uv = corners[corner_idx] + (corners[(corner_idx+1)%4] - corners[corner_idx])
              * ((float)(i % kNumFrustumSegments) / kNumFrustumSegments);
-        float3 raydir = float3{NAN, NAN, NAN};
-        bool valid = SlangDistortion<distortion>::generate_ray(uv, (int)camera_model, dist_coeffs, &raydir);
-        if (!valid) {
-            // binary search for valid
-            float t0 = 0.0f, t1 = 1.0f;
-            for (int iter = 0; iter < 12; ++iter) {
-                float t = 0.5f*(t0+t1);
-                float3 temp;
-                if (SlangDistortion<distortion>::generate_ray(uv*t, (int)camera_model, dist_coeffs, &temp))
-                    t0 = t, raydir = temp;
-                else
-                    t1 = t;
-            }
-        }
-        float3 p = raydir;
+        float3 p = frustum_ray(uv, (int)camera_model, distortion,
+                               dist_coeffs_buffer, bid);
         if (camera_model == CameraModelType::FISHEYE || camera_model == CameraModelType::EQUISOLID ||
             camera_model == CameraModelType::EQUIRECTANGULAR)
             // Wide / full-sphere models: place frustum verts on a sphere shell
@@ -230,21 +260,8 @@ __global__ void fill_frustum_segments_kernel(
                 corners[1] * u*(1.0f-v) +
                 corners[2] * u*v +
                 corners[3] * (1.0f-u)*v;
-            float3 raydir = float3{NAN, NAN, NAN};
-            bool valid = SlangDistortion<distortion>::generate_ray(uv, (int)camera_model, dist_coeffs, &raydir);
-            if (!valid) {
-                // binary search for valid
-                float t0 = 0.0f, t1 = 1.0f;
-                for (int iter = 0; iter < 12; ++iter) {
-                    float t = 0.5f*(t0+t1);
-                    float3 temp;
-                    if (SlangDistortion<distortion>::generate_ray(uv*t, (int)camera_model, dist_coeffs, &temp))
-                        t0 = t, raydir = temp;
-                    else
-                        t1 = t;
-                }
-            }
-            float3 p = raydir;
+            float3 p = frustum_ray(uv, (int)camera_model, distortion,
+                                   dist_coeffs_buffer, bid);
         if (camera_model == CameraModelType::FISHEYE || camera_model == CameraModelType::EQUISOLID ||
                 camera_model == CameraModelType::EQUIRECTANGULAR)
                 p = normalize(p) * sqrtf((2.0f*sxy*sxy + sz*sz) / 3.0f);
@@ -1193,6 +1210,7 @@ void engine_viewer_init(
     TorchTensorView camera_models,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
+    TorchTensorView distortions,
     TorchTensorView camera_to_worlds,
     TorchTensorView widths,
     TorchTensorView heights,
@@ -1216,6 +1234,7 @@ void engine_viewer_init(
     v.d_camera_models    = _hv_to_dv<int32_t>(PoolSlot::ViewerCmodels, camera_models);
     v.d_dist_coeffs      = _hv_to_dv<float>(PoolSlot::ViewerDist,
                               TorchTensorView(std::get<0>(dist_coeffs), 4, {N * (int64_t)kCameraDistortionParams}));
+    v.d_distortions      = _hv_to_dv<int32_t>(PoolSlot::ViewerDistTier, distortions);
     v.d_camera_to_worlds = _hv_to_dv<float>(PoolSlot::ViewerC2w,
                               TorchTensorView(std::get<0>(camera_to_worlds), 4, {N * 12LL}));
 
@@ -1505,7 +1524,6 @@ namespace {
 // Build the BVH into engine().viewer.bvh_* pool slots. Runs the same kernel
 // dance as blit_train_cameras_tensor's show-cams branch but emits to
 // dedicated "viewer.*" keys so the buffers survive across calls.
-template<CameraDistortionType distortion>
 void _viewer_build_bvh()
 {
     auto& v = engine().viewer;
@@ -1524,13 +1542,14 @@ void _viewer_build_bvh()
                             {(int64_t)n, (int64_t)kCameraDistortionParams});
     CameraDistortionCoeffsBuffer dist_buf(dist_tv);
 
-    fill_frustum_segments_kernel<distortion>
+    fill_frustum_segments_kernel
     <<<_LAUNCH_ARGS_1D(n * 4 * kNumFrustumSegments, 4 * kNumFrustumSegments)>>>(
         (const float4*)v.d_intrins.data_ptr(),
         v.d_widths.data_ptr(),
         v.d_heights.data_ptr(),
         v.d_camera_models.data_ptr(),
         dist_buf,
+        v.d_distortions.data_ptr(),
         v.d_camera_to_worlds.data_ptr(),
         v.camera_size,
         lss_buffer,
@@ -1681,9 +1700,7 @@ void engine_blit_view(
             // buffers are populated relative to the default stream, so the
             // viewer stream must wait on the default stream once more before
             // the blit kernel reads them.
-            #define BUILD(D) _viewer_build_bvh<D>()
-            _SS_DISPATCH_DISTORTION(distortion, BUILD);
-            #undef BUILD
+            _viewer_build_bvh();
             viewer_stream_wait_default();
         }
         lss_buffer = (const float4*)DevicePool::global().acquire<float4>(
@@ -1744,6 +1761,7 @@ void blit_train_cameras_tensor(
     TorchTensorView heights,          // [N] int32
     TorchTensorView camera_models,    // [N] int32
     TorchTensorView dist_coeffs,
+    TorchTensorView distortions,      // [N] int32 CameraDistortionType
     TorchTensorView camera_to_worlds, // [N, 3, 4] float32
     TorchTensorView thumbnails,       // [B, H, W, 4] uint8
     float camera_size,
@@ -1793,20 +1811,18 @@ void blit_train_cameras_tensor(
     uint32_t num_tri = (uint32_t)(n * 4 * kNumFrustumFaces * kNumFrustumFaces);
     float4* lss_buffer = DevicePool::global().acquire<float4>(PoolSlot::VisLss, (size_t)num_lss * 2);
     float4* tri_buffer = DevicePool::global().acquire<float4>(PoolSlot::VisTri, (size_t)num_tri * 4);
-    #define LAUNCH(D) \
-        fill_frustum_segments_kernel<D> \
-        <<<_LAUNCH_ARGS_1D(n * 4 * kNumFrustumSegments, 4 * kNumFrustumSegments)>>>( \
-            (float4*)std::get<0>(intrins), \
-            (int32_t*)std::get<0>(widths), \
-            (int32_t*)std::get<0>(heights), \
-            (int32_t*)std::get<0>(camera_models), \
-            dist_coeffs, \
-            (float*)std::get<0>(camera_to_worlds), \
-            camera_size, \
-            lss_buffer, \
-            tri_buffer)
-    _SS_DISPATCH_DISTORTION(distortion, LAUNCH);
-    #undef LAUNCH
+    fill_frustum_segments_kernel
+    <<<_LAUNCH_ARGS_1D(n * 4 * kNumFrustumSegments, 4 * kNumFrustumSegments)>>>(
+        (float4*)std::get<0>(intrins),
+        (int32_t*)std::get<0>(widths),
+        (int32_t*)std::get<0>(heights),
+        (int32_t*)std::get<0>(camera_models),
+        dist_coeffs,
+        (int32_t*)std::get<0>(distortions),
+        (float*)std::get<0>(camera_to_worlds),
+        camera_size,
+        lss_buffer,
+        tri_buffer);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     float3* root_aabb = DevicePool::global().acquire<float3>(PoolSlot::VisRootAabb, 2);

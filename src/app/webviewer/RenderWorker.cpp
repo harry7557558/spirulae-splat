@@ -533,6 +533,7 @@ float viewer_upload_cameras(const PostSplitCameras& post) {
         tvp(post.post_models.data(), 4, {post.n_post}),
         tvp(post.intrins.data(), 4, {post.n_post, 4}),
         tvp(post.dist_coeffs.data(), 4, {post.n_post, kCameraDistortionParams}),
+        tvp(post.post_distortions.data(), 4, {post.n_post}),
         tvp(post.c2w_flip.data(), 4, {post.n_post, 3, 4}),
         tvp(post.post_widths.data(), 4, {post.n_post}),
         tvp(post.post_heights.data(), 4, {post.n_post}),

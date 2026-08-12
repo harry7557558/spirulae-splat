@@ -42,6 +42,7 @@ void blit_train_cameras_tensor(
     TorchTensorView heights,          // [N] int32
     TorchTensorView camera_models,    // [N] int32
     TorchTensorView dist_coeffs,
+    TorchTensorView distortions,      // [N] int32 CameraDistortionType
     TorchTensorView camera_to_worlds, // [N, 3, 4] float32
     TorchTensorView thumbnails,       // [B, H, W, 4] uint8
     float camera_size,

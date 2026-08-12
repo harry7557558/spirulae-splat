@@ -63,13 +63,13 @@ float funmap_ordered(uint32_t u) {
 /* ---- param mirrors (see shaders/visualizer.slang) ---- */
 
 struct VisFrustumParams {
-    uint64_t intrins, widths, heights, camera_models, dist_coeffs,
+    uint64_t intrins, widths, heights, camera_models, dist_coeffs, distortions,
         camera_to_worlds, lss_buffer, tri_buffer;
     float size;
     uint32_t N;
     uint32_t _pad0;
 };
-static_assert(sizeof(VisFrustumParams) == 8 * 8 + 3 * 4 + 4 /*pad*/,
+static_assert(sizeof(VisFrustumParams) == 9 * 8 + 3 * 4 + 4 /*pad*/,
               "layout");
 
 struct VisAabbParams {
@@ -281,9 +281,11 @@ RootBox compute_root_box(const void* root_aabb_dev) {
     return box;
 }
 
+// The tier travels per camera (p.distortions), not as kDistortion: the table
+// may mix tiers, and the view camera's tier says nothing about the dataset's.
 void fill_frustums(int64_t n, const void* intrins, const void* widths,
                    const void* heights, const void* camera_models,
-                   const void* dist_coeffs, uint32_t dist_spec,
+                   const void* dist_coeffs, const void* distortions,
                    const void* c2w, float size, void* lss_buffer,
                    void* tri_buffer) {
     VisFrustumParams p{};
@@ -292,13 +294,14 @@ void fill_frustums(int64_t n, const void* intrins, const void* widths,
     p.heights = (uint64_t)heights;
     p.camera_models = (uint64_t)camera_models;
     p.dist_coeffs = vkk::or_fallback(dist_coeffs);
+    p.distortions = (uint64_t)distortions;
     p.camera_to_worlds = (uint64_t)c2w;
     p.lss_buffer = (uint64_t)lss_buffer;
     p.tri_buffer = (uint64_t)tri_buffer;
     p.size = size;
     p.N = (uint32_t)n;
     vkk::dispatch("visualizer.vis_fill_frustum",
-                 backend::vk::SpecList{0u, dist_spec}, (uint32_t)n, 1, 1, &p,
+                 backend::vk::SpecList{0u, 0u}, (uint32_t)n, 1, 1, &p,
                  sizeof(p));
 }
 
@@ -413,7 +416,7 @@ void run_blit(const TorchTensorView& render_rgbs,
 
 /* ---- engine-cached BVH build (mirrors _viewer_build_bvh) ---- */
 
-void _viewer_build_bvh(uint32_t dist_spec) {
+void _viewer_build_bvh() {
     auto& v = engine().viewer;
     int64_t n = v.N_post;
 
@@ -428,7 +431,7 @@ void _viewer_build_bvh(uint32_t dist_spec) {
 
     fill_frustums(n, v.d_intrins.data_ptr(), v.d_widths.data_ptr(),
                   v.d_heights.data_ptr(), v.d_camera_models.data_ptr(),
-                  v.d_dist_coeffs.data_ptr(), dist_spec,
+                  v.d_dist_coeffs.data_ptr(), v.d_distortions.data_ptr(),
                   v.d_camera_to_worlds.data_ptr(), v.camera_size, lss_buffer,
                   tri_buffer);
 
@@ -537,6 +540,7 @@ void engine_viewer_init(
     TorchTensorView camera_models,
     TorchTensorView intrins,
     TorchTensorView dist_coeffs,
+    TorchTensorView distortions,
     TorchTensorView camera_to_worlds,
     TorchTensorView widths,
     TorchTensorView heights,
@@ -562,6 +566,8 @@ void engine_viewer_init(
         PoolSlot::ViewerDist,
         TorchTensorView(std::get<0>(dist_coeffs), 4,
                         {N * (int64_t)kCameraDistortionParams}));
+    v.d_distortions =
+        _hv_to_dv<int32_t>(PoolSlot::ViewerDistTier, distortions);
     v.d_camera_to_worlds = _hv_to_dv<float>(
         PoolSlot::ViewerC2w,
         TorchTensorView(std::get<0>(camera_to_worlds), 4, {N * 12LL}));
@@ -721,7 +727,7 @@ void engine_blit_view(
     BlitGeom geom;
     if (show_training_cameras || show_overlay) {
         if (!v.bvh_built || v.bvh_camera_size != v.camera_size)
-            _viewer_build_bvh(dist_spec);
+            _viewer_build_bvh();
         geom.lss_buffer = DevicePool::global().acquire<float4>(
             PoolSlot::ViewerLss, (size_t)v.bvh_num_lss * 2);
         geom.lss_nodes = v.bvh_lss_nodes_ptr;
@@ -759,6 +765,7 @@ void blit_train_cameras_tensor(
     TorchTensorView heights,
     TorchTensorView camera_models,
     TorchTensorView dist_coeffs,
+    TorchTensorView distortions,
     TorchTensorView camera_to_worlds,
     TorchTensorView thumbnails,
     float camera_size,
@@ -797,7 +804,8 @@ void blit_train_cameras_tensor(
                   (const void*)std::get<0>(widths),
                   (const void*)std::get<0>(heights),
                   (const void*)std::get<0>(camera_models),
-                  (const void*)std::get<0>(dist_coeffs), dist_spec,
+                  (const void*)std::get<0>(dist_coeffs),
+                  (const void*)std::get<0>(distortions),
                   (const void*)std::get<0>(camera_to_worlds), camera_size,
                   lss_buffer, tri_buffer);
 

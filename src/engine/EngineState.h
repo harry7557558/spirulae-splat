@@ -440,7 +440,8 @@ struct PpispState {
 
 // Viewer state: device-side per-post-camera thumbnail cache, BVH cache for
 // the training-camera frustum visualization, and a copy of the static
-// dataset-wide camera arrays (intrins / dist_coeffs / c2w / model / W / H).
+// dataset-wide camera arrays (intrins / dist_coeffs + tier / c2w / model /
+// W / H).
 // All allocated lazily on engine_viewer_init(); kernels gated on
 // `initialized` so the training loop pays zero cost until the viewer asks.
 struct EngineViewerState {
@@ -453,6 +454,7 @@ struct EngineViewerState {
     DeviceVector<int32_t> d_heights;          // [N_post]
     DeviceVector<int32_t> d_camera_models;    // [N_post]
     DeviceVector<float>   d_dist_coeffs;      // [N_post, 8]
+    DeviceVector<int32_t> d_distortions;      // [N_post] CameraDistortionType
     DeviceVector<float>   d_camera_to_worlds; // [N_post, 3, 4] (y/z-flipped form)
     float  camera_size = 0.0f;                // frustum render scale, from knn-dist
 

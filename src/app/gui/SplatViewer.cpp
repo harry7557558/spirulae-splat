@@ -361,13 +361,15 @@ void SplatViewer::run(std::string path) {
             std::vector<float> c2w{1, 0, 0, center[0],
                                    0, 1, 0, center[1],
                                    0, 0, 1, center[2]};
-            std::vector<int32_t> models_i{0}, w_i{64}, h_i{64};   // 0 = PINHOLE
+            std::vector<int32_t> models_i{0}, w_i{64}, h_i{64},   // 0 = PINHOLE
+                                 dist_tier{0};                    // 0 = None
             auto tvi = [](std::vector<int32_t>& v, std::vector<int64_t> shape) {
                 return TorchTensorView{(uint64_t)(uintptr_t)v.data(),
                                        (uint32_t)sizeof(int32_t), std::move(shape)};
             };
             engine_viewer_init(tvi(models_i, {1}), tv(intrins, {1, 4}),
-                               tv(dist, {1, kCameraDistortionParams}), tv(c2w, {1, 3, 4}),
+                               tv(dist, {1, kCameraDistortionParams}),
+                               tvi(dist_tier, {1}), tv(c2w, {1, 3, 4}),
                                tvi(w_i, {1}), tvi(h_i, {1}),
                                /*camera_size=*/radius * 1e-3f);
             // A file has no grid extent of its own; the model's does, and it

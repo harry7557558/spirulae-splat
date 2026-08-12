@@ -30,8 +30,8 @@
 #include "int8_compat.slang"
 #include "dist_spec.slang"
 
-// generate_ray with the tier folded from kDistortion, taking the full 8-float
-// storage row: the callers keep their groupshared barriers at top level.
+// generate_ray taking the full 8-float storage row: the callers keep their
+// groupshared barriers at top level.
 [ForceInline]
 bool _vis_ray<D : ICameraDistortion>(float2 uv, int camera_model,
                                      float row[kDistCoeffRow],
@@ -44,12 +44,31 @@ bool _vis_ray<D : ICameraDistortion>(float2 uv, int camera_model,
 
 #define _vis_ray_call(D) ok = _vis_ray<D>(uv, camera_model, row, raydir)
 
+// Tier folded from kDistortion: the blit's view camera, one per dispatch.
 [ForceInline]
 bool vis_ray(float2 uv, int camera_model, float row[kDistCoeffRow],
              out float3 raydir) {
     bool ok = false;
     raydir = float3(0.0f);
     SS_DISPATCH_DIST(_vis_ray_call)
+    return ok;
+}
+
+// Tier as a RUNTIME value: the frustum fill draws a whole camera table in one
+// dispatch and a dataset may mix tiers, so the spec constant (which carries
+// the view camera's tier) cannot stand in for the per-camera one. Uniform per
+// workgroup -- one camera per workgroup.
+[ForceInline]
+bool vis_ray_dyn(float2 uv, int camera_model, int tier,
+                 float row[kDistCoeffRow], out float3 raydir) {
+    bool ok = false;
+    raydir = float3(0.0f);
+    switch (tier) {
+    case 0:  _vis_ray_call(DistNone); break;
+    case 1:  _vis_ray_call(DistOpenCV); break;
+    case 2:  _vis_ray_call(DistThinPrism); break;
+    default: _vis_ray_call(DistRational); break;
+    }
     return ok;
 }
 #undef _vis_ray_call
@@ -84,12 +103,13 @@ float funmap_ordered(uint u) {
 // per camera. Mirrors fill_frustum_segments_kernel.
 // ---------------------------------------------------------------------------
 
-struct VisFrustumParams {  // 76 -> 80 bytes: pushed directly
+struct VisFrustumParams {  // 84 -> 88 bytes: pushed directly
     float4* intrins;         // [N]
     int* widths;             // [N]
     int* heights;            // [N]
     int* camera_models;      // [N]
     float* dist_coeffs;      // [N,8] or null
+    int* distortions;        // [N] CameraDistortionType, or null
     float* camera_to_worlds; // [N,3,4]
     float4* lss_buffer;      // [N, 8*kNumFrustumSegments, 2]
     float4* tri_buffer;      // [N, 4*kNumFrustumFaces^2, 4]
@@ -101,15 +121,16 @@ struct VisFrustumParams {  // 76 -> 80 bytes: pushed directly
 groupshared float3 _vis_polylines[4 * kNumFrustumSegments];
 
 [ForceInline]
-float3 frustum_ray(float2 uv, int camera_model, float dist[kDistCoeffRow]) {
+float3 frustum_ray(float2 uv, int camera_model, int tier,
+                   float dist[kDistCoeffRow]) {
     float3 raydir = float3(asfloat(0x7fc00000u));  // NaN
-    if (!vis_ray(uv, camera_model, dist, raydir)) {
+    if (!vis_ray_dyn(uv, camera_model, tier, dist, raydir)) {
         // binary search for the last valid uv toward the center
         float t0 = 0.0f, t1 = 1.0f;
         for (int iter = 0; iter < 12; ++iter) {
             float t = 0.5f * (t0 + t1);
             float3 temp;
-            if (vis_ray(uv * t, camera_model, dist, temp)) {
+            if (vis_ray_dyn(uv * t, camera_model, tier, dist, temp)) {
                 t0 = t;
                 raydir = temp;
             } else {
@@ -132,6 +153,7 @@ void vis_fill_frustum(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float width = float(p.widths[bid]);
     float height = float(p.heights[bid]);
     int camera_model = p.camera_models[bid];
+    int tier = is_null(p.distortions) ? 0 : p.distortions[bid];
     float dist[kDistCoeffRow];
     [ForceUnroll]
     for (int k = 0; k < kDistCoeffRow; k++)
@@ -166,7 +188,7 @@ void vis_fill_frustum(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float2 uv = corners[corner_idx] +
                     (corners[(corner_idx + 1) % 4] - corners[corner_idx]) *
                         (float(i % kNumFrustumSegments) / kNumFrustumSegments);
-        float3 pt = frustum_ray(uv, camera_model, dist);
+        float3 pt = frustum_ray(uv, camera_model, tier, dist);
         if (wide)
             pt = normalize(pt) * sqrt((2.0f * sxy * sxy + sz * sz) / 3.0f);
         else
@@ -229,7 +251,7 @@ void vis_fill_frustum(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
             float2 uv = corners[0] * (1.0f - u) * (1.0f - v) +
                         corners[1] * u * (1.0f - v) + corners[2] * u * v +
                         corners[3] * (1.0f - u) * v;
-            float3 pt = frustum_ray(uv, camera_model, dist);
+            float3 pt = frustum_ray(uv, camera_model, tier, dist);
             if (wide)
                 pt = normalize(pt) *
                      sqrt((2.0f * sxy * sxy + sz * sz) / 3.0f);

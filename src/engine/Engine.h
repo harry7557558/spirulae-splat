@@ -510,22 +510,23 @@ void engine_copy_grads_to_host(
 // --- Viewer ---
 //
 // engine_viewer_init: lazy one-shot upload of the dataset-wide POST-split
-// camera arrays (intrins / dist_coeffs / c2w / camera_models / W / H) and
-// allocation of the device-side per-camera thumbnail cache + done-mask.
+// camera arrays (intrins / dist_coeffs + tier / c2w / camera_models / W / H)
+// and allocation of the device-side per-camera thumbnail cache + done-mask.
 // After this, every set_training_data / set_training_data_warped also runs
 // the thumbnail-fill kernel for any new post-camera ids in the batch (cheap
 // kernel; gated on host counter once all cams have a thumbnail). Idempotent;
 // safe to call multiple times (re-uploads + resets thumbnail state).
 //
-// camera_models / intrins / dist_coeffs / camera_to_worlds / widths /
-// heights are at POST-split layout (length N_post == sum over input
+// camera_models / intrins / dist_coeffs / distortions / camera_to_worlds /
+// widths / heights are at POST-split layout (length N_post == sum over input
 // cameras of K), matching the DataManager's post-split arrays.
 //
 // camera_size: the visualization-frustum scale (knn-style), in world units.
 void engine_viewer_init(
     TorchTensorView camera_models,   // [N_post]   int32
     TorchTensorView intrins,         // [N_post,4] float32
-    TorchTensorView dist_coeffs,     // [N_post,10] float32
+    TorchTensorView dist_coeffs,     // [N_post,8] float32
+    TorchTensorView distortions,     // [N_post]   int32 CameraDistortionType
     TorchTensorView camera_to_worlds,// [N_post,3,4] float32 (y/z-flipped form)
     TorchTensorView widths,          // [N_post]   int32
     TorchTensorView heights,         // [N_post]   int32
