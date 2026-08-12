@@ -92,14 +92,6 @@ bash build_develop.bash -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=vulkan 
 
 If it builds successfully, you get `build/spirula` binary. Run it with no arguments for the GUI, or as `spirula sfm`, `spirula train` and `spirula sam` for the command-line tools (`--help` on any of them).
 
-### macOS special note:
-
-Vulkan driver on macOS is MoltenVK. Before trying above build command, install the dependencies with [Homebrew](https://brew.sh/):
-
-```bash
-brew install cmake ninja molten-vk vulkan-headers vulkan-loader
-```
-
 ### Notes regarding third-party licensing
 
 `-DSS_ENABLE_PATENTED=ON` enables decoding video on the GPU instead of shelling out to ffmpeg (about 15x faster frame extraction, and without need to install ffmpeg). However, AVC/HEVC bitstream parsers carry third-party patent exposure. If you turn this on, you are responsible for ensuring compliance with local patent laws regarding AVC/HEVC playback.

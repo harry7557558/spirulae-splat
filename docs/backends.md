@@ -55,7 +55,7 @@ no in-shader branching:
 
 | suffix | feature | fallback when absent |
 |---|---|---|
-| `.atomicadd` | `VK_EXT_shader_atomic_float` | CAS-loop emulation (MoltenVK, llvmpipe) |
+| `.atomicadd` | `VK_EXT_shader_atomic_float` | CAS-loop emulation (Intel ANV) |
 | `.noint64` | `shaderInt64` | `uint2` word-pair emulation for keys, morton codes, indexing |
 | `.int8` | `shaderInt8` + `storageBuffer8BitAccess` | packed u32 word access |
 

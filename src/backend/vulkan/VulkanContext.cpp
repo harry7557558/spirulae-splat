@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <thread>
 #include <vector>
 #include "core/Env.h"
@@ -170,6 +171,49 @@ void enable_portability(VkInstanceCreateInfo& ici,
     ici.ppEnabledExtensionNames = exts.data();
 }
 
+// MoltenVK tuning, on every instance this file creates. The names reach a
+// layer no other driver answers to, so this is inert everywhere else.
+//
+// Fast math: MoltenVK hands the Metal compiler -ffast-math for every shader
+// unless told otherwise, which is a wider licence than the CUDA build takes.
+// With it on, msloss_parity, optimgeo_parity and meshing_parity all exceed
+// their tolerance against the CUDA reference, and all three pass with it off.
+// Correctness first; SS_VK_FAST_MATH=1 puts it back for A/B timing.
+//
+// Log level: MoltenVK narrates instance and device lifetime at Info (2). The
+// enumeration instance alone would print two lines per run, so hold it to
+// errors (1) unless SS_VK_VERBOSE asks for the rest.
+struct MvkSettings {
+    int32_t fast_math;
+    int32_t log_level;
+    VkLayerSettingEXT items[2];
+    VkLayerSettingsCreateInfoEXT create_info{
+        VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT};
+
+    MvkSettings() {
+        const char* fm = spirula::env("VK_FAST_MATH");
+        fast_math = fm && fm[0] == '1' ? 1 : 0;
+        log_level = spirula::env("VK_VERBOSE") ? 2 : 1;
+        items[0] = {"MoltenVK", "MVK_CONFIG_FAST_MATH_ENABLED",
+                    VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &fast_math};
+        items[1] = {"MoltenVK", "MVK_CONFIG_LOG_LEVEL",
+                    VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &log_level};
+        create_info.settingCount = (uint32_t)std::size(items);
+        create_info.pSettings = items;
+    }
+};
+
+// `s` must outlive the vkCreateInstance call it is attached to.
+void enable_mvk_settings(VkInstanceCreateInfo& ici,
+                         std::vector<const char*>& exts, MvkSettings& s) {
+    if (!has_instance_extension(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME)) return;
+    exts.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+    ici.enabledExtensionCount = (uint32_t)exts.size();
+    ici.ppEnabledExtensionNames = exts.data();
+    s.create_info.pNext = ici.pNext;
+    ici.pNext = &s.create_info;
+}
+
 // --- device enumeration / selection (backs the backend::device_* API) ---
 // Physical devices are addressed by their vkEnumeratePhysicalDevices index;
 // enumeration uses a throwaway instance so listing devices never initializes
@@ -198,6 +242,8 @@ const std::vector<EnumeratedDevice>& enumerate_devices() {
         ici.pApplicationInfo = &app;
         std::vector<const char*> inst_exts;
         enable_portability(ici, inst_exts);
+        MvkSettings mvk;
+        enable_mvk_settings(ici, inst_exts, mvk);
         VkInstance inst = VK_NULL_HANDLE;
         if (vkCreateInstance(&ici, nullptr, &inst) != VK_SUCCESS) return out;
         uint32_t n = 0;
@@ -287,30 +333,8 @@ void Context::init() {
         ici.ppEnabledLayerNames = &validation;
     }
 
-    // MoltenVK hands the Metal compiler -ffast-math for every shader unless
-    // told otherwise, which is a wider licence than the CUDA build takes:
-    // with it on, msloss_parity, optimgeo_parity and meshing_parity all
-    // exceed their tolerance against the CUDA reference, and all three pass
-    // with it off. Correctness first; SS_VK_FAST_MATH=1 puts it back for A/B
-    // timing. The setting names a layer no other driver answers to, so this
-    // is inert everywhere else.
-    const int32_t fast_math = [] {
-        const char* e = spirula::env("VK_FAST_MATH");
-        return e && e[0] == '1' ? 1 : 0;
-    }();
-    const VkLayerSettingEXT mvk_setting{
-        "MoltenVK", "MVK_CONFIG_FAST_MATH_ENABLED",
-        VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &fast_math};
-    VkLayerSettingsCreateInfoEXT settings{
-        VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT};
-    settings.settingCount = 1;
-    settings.pSettings = &mvk_setting;
-    if (has_instance_extension(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME)) {
-        inst_exts.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
-        ici.enabledExtensionCount = (uint32_t)inst_exts.size();
-        ici.ppEnabledExtensionNames = inst_exts.data();
-        ici.pNext = &settings;
-    }
+    MvkSettings mvk;
+    enable_mvk_settings(ici, inst_exts, mvk);
 
     VkResult r = vkCreateInstance(&ici, nullptr, &_instance);
     if (r != VK_SUCCESS) {

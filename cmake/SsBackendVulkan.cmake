@@ -12,7 +12,8 @@ message(STATUS "SS_BACKEND=vulkan: portable engine layer + "
 # The command-line tools are this build's primary artifact; the GUI is opt-in.
 set(SS_BUILD_CLI ON)
 
-find_package(Vulkan REQUIRED)
+include(SsVulkan)
+ss_vulkan_lib()
 find_package(Threads REQUIRED)
 
 # ---------------------------------------------------------------------------
@@ -60,7 +61,7 @@ list(APPEND SS_VULKAN_SOURCES ${SS_SPIRV_EMBED})
 add_library(ss_backend_vulkan STATIC ${SS_VULKAN_SOURCES})
 target_compile_definitions(ss_backend_vulkan PUBLIC SS_BACKEND_VULKAN)
 target_include_directories(ss_backend_vulkan PUBLIC ${SS_SRC})
-target_link_libraries(ss_backend_vulkan PUBLIC Vulkan::Vulkan ss_i18n)
+target_link_libraries(ss_backend_vulkan PUBLIC ss_vulkan ss_i18n)
 
 # ---------------------------------------------------------------------------
 # Tests (run manually; see backend/vulkan/README.md)

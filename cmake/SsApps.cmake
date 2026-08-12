@@ -38,7 +38,13 @@ function(ss_configure_app target)
     )
     set_property(TARGET ${target} PROPERTY CXX_STANDARD 17)
 
-    set_property(TARGET ${target} PROPERTY BUILD_RPATH "$ORIGIN")
+    # Sibling libraries first, in each linker's own spelling -- $ORIGIN is a
+    # Linux-ism the Mach-O loader does not read.
+    if(APPLE)
+        set_property(TARGET ${target} PROPERTY BUILD_RPATH "@loader_path")
+    else()
+        set_property(TARGET ${target} PROPERTY BUILD_RPATH "$ORIGIN")
+    endif()
 endfunction()
 
 # ---------------------------------------------------------------------------

@@ -36,7 +36,7 @@ for A/B testing):
 - `VK_EXT_shader_atomic_float` (`shaderBufferFloat32AtomicAdd`) — training
   backward passes (~1,069 float atomicAdd sites). Every entry that calls
   `atomic_add_f32` is compiled twice by `shaders/spirv_tool.cpp`: the base
-  blob uses a CAS-loop emulation (MoltenVK, llvmpipe), and a
+  blob uses a CAS-loop emulation (Intel ANV), and a
   `.atomicadd`-suffixed blob uses native `OpAtomicFAddEXT`; the pipeline
   layer picks per device at module load (no in-shader branch). Unlike
   VkSplat, both variants are always built.

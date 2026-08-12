@@ -743,8 +743,25 @@ bool fill_params(const ResolvedPtr& d, size_t bytes, int value,
     return true;
 }
 
+// Stream-ordered device fill, shared by both memset entry points.
+void record_fill(const ResolvedPtr& d, size_t bytes, VkDeviceSize fill,
+                 uint32_t word, Stream stream) {
+    std::optional<prof::Scope> _pms;
+    if (prof::enabled()) _pms.emplace(prof::MEMSET, bytes);
+    vk::StreamImpl* st = vk::stream_impl(stream);
+    if (!st) return;
+    VkCommandBuffer cb = vk::stream_begin(st);
+    if (cb == VK_NULL_HANDLE) return;
+    vkCmdFillBuffer(cb, d.alloc.buffer, d.offset, fill, word);
+    vk::stream_barrier(cb);
+}
+
 }  // namespace
 
+// Ordered against other work on the default stream but not a host wait --
+// cudaMemset's semantics, which the CUDA backend gets for free. Tensor::zero()
+// issues ~22 of these per training step, so draining the queue and submitting
+// alone instead cost 18% of a run on Apple silicon and 10% on an RTX 5070.
 void memset_sync(void* dst, int value, size_t bytes) {
     if (bytes == 0) return;
     ResolvedPtr d = resolve(dst);
@@ -761,12 +778,7 @@ void memset_sync(void* dst, int value, size_t bytes) {
     if (!fill_params(d, bytes, value, &fill, &word,
                      "memset_sync: unaligned or out-of-range fill"))
         return;
-    std::optional<prof::Scope> _pms;
-    if (prof::enabled()) _pms.emplace(prof::MEMSET, bytes);
-    vk::Context::get().wait(vk::flush_all_streams());
-    vk::record_and_wait([&](VkCommandBuffer cb) {
-        vkCmdFillBuffer(cb, d.alloc.buffer, d.offset, fill, word);
-    });
+    record_fill(d, bytes, fill, word, kDefaultStream);
 }
 
 void memset_async(void* dst, int value, size_t bytes, Stream stream) {
@@ -782,13 +794,7 @@ void memset_async(void* dst, int value, size_t bytes, Stream stream) {
     if (!fill_params(d, bytes, value, &fill, &word,
                      "memset_async: unaligned or out-of-range fill"))
         return;
-    std::optional<prof::Scope> _pms;
-    if (prof::enabled()) _pms.emplace(prof::MEMSET, bytes);
-    vk::StreamImpl* st = vk::stream_impl(stream);
-    VkCommandBuffer cb = vk::stream_begin(st);
-    if (cb == VK_NULL_HANDLE) return;
-    vkCmdFillBuffer(cb, d.alloc.buffer, d.offset, fill, word);
-    vk::stream_barrier(cb);
+    record_fill(d, bytes, fill, word, stream);
 }
 
 bool is_device_pointer(const void* ptr) {

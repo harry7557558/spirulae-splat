@@ -19,7 +19,8 @@
 # then one generated TU per library that registers its blobs with
 # nn/vk/EmbeddedSpirv.h's process registry. Three libraries, one pipeline cache.
 
-find_package(Vulkan REQUIRED)
+include(SsVulkan)
+ss_vulkan_lib()
 find_package(Threads REQUIRED)
 
 include(SsSlang)
@@ -122,7 +123,7 @@ target_include_directories(ss_nn PUBLIC ${SS_SRC})
 if(SS_ENABLE_PATENTED)
     target_compile_definitions(ss_nn PUBLIC SS_HAVE_VIDEO=1)
 endif()
-target_link_libraries(ss_nn PUBLIC Vulkan::Vulkan Threads::Threads)
+target_link_libraries(ss_nn PUBLIC ss_vulkan Threads::Threads)
 target_compile_options(ss_nn PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
 set_property(TARGET ss_nn PROPERTY CXX_STANDARD 17)

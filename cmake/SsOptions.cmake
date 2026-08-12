@@ -117,6 +117,23 @@ if(NOT SS_BACKEND STREQUAL "cuda" AND NOT SS_BACKEND STREQUAL "vulkan")
 endif()
 
 # ---------------------------------------------------------------------------
+# How macOS gets Vulkan (cmake/SsVulkan.cmake)
+#
+# static (default): MoltenVK linked into the binary, which is then copyable to
+# any Mac. loader: the installed Vulkan loader, the only way to reach
+# validation layers.
+# ---------------------------------------------------------------------------
+set(SS_MACOS_VULKAN "static" CACHE STRING
+    "macOS Vulkan linkage: static (MoltenVK in the binary) | loader")
+set_property(CACHE SS_MACOS_VULKAN PROPERTY STRINGS static loader)
+
+if(APPLE AND NOT SS_MACOS_VULKAN STREQUAL "static"
+         AND NOT SS_MACOS_VULKAN STREQUAL "loader")
+    message(FATAL_ERROR
+        "SS_MACOS_VULKAN must be 'static' or 'loader', got '${SS_MACOS_VULKAN}'")
+endif()
+
+# ---------------------------------------------------------------------------
 # Structure from Motion (src/sfm/)
 #
 # The native replacement for the COLMAP subprocess. It is Vulkan-only and needs

@@ -162,12 +162,21 @@ embedded into the binary. On an offline machine, transfer a matching `slangc`
 and point `-DSS_SLANGC=` at it.
 
 **macOS.** Vulkan backend only, through MoltenVK; `build_develop.bash` works
-as on Linux. Dependencies: `brew install cmake ninja molten-vk vulkan-headers
-vulkan-loader`. Three things are macOS-only in the build:
+as on Linux. Dependencies: `brew install cmake ninja`. Four things are
+macOS-only in the build: `cmake/SsVulkan.cmake` fetches a pinned universal
+MoltenVK and links it *statically* (`SS_MACOS_VULKAN=static`, the default) so
+the binary carries its own driver and copies to any Mac — the release tarball
+supplies the Vulkan headers too, so nothing comes from Homebrew;
 `cmake/SsSlang.cmake` pins a different Slang release (the one this project
-pins publishes no macOS assets), `build_develop.bash` reads free memory from
-`vm_stat` rather than `/proc`, and `ss_i18n` links CoreFoundation, which
+pins publishes no macOS assets); `build_develop.bash` reads free memory from
+`vm_stat` rather than `/proc`; and `ss_i18n` links CoreFoundation, which
 `i18n/Locale.cpp` asks for the user's locale.
+
+A static build has no loader, so it cannot load validation layers.
+`-DSS_MACOS_VULKAN=loader` links the installed loader instead (needs
+`brew install molten-vk vulkan-headers vulkan-loader`); the binary is then
+tied to that install and is not redistributable. `-DSS_MOLTENVK_DIR=` points
+at an unpacked `MoltenVK-macos` release for an offline build.
 
 ```bash
 export CXXFLAGS="-nostdinc++ -isystem $(xcrun --show-sdk-path)/usr/include/c++/v1"

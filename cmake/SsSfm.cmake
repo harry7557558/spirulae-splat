@@ -12,7 +12,8 @@
 # identically under either SS_BACKEND. Converging it onto the engine's
 # device is a later step (docs/notes/sfm-port-plan.md phase 6).
 
-find_package(Vulkan REQUIRED)
+include(SsVulkan)
+ss_vulkan_lib()
 find_package(Threads REQUIRED)
 
 set(SS_SFM_SRC ${SS_SRC}/sfm)
@@ -159,7 +160,7 @@ add_library(ss_sfm STATIC
     ${SS_SRC}/external/stb_image_impl.cpp
 )
 target_include_directories(ss_sfm PUBLIC ${SS_SRC})
-target_link_libraries(ss_sfm PUBLIC Vulkan::Vulkan Threads::Threads ss_i18n)
+target_link_libraries(ss_sfm PUBLIC ss_vulkan Threads::Threads ss_i18n)
 
 # The learned frontend (src/aliked/) is optional: it sits on the inference
 # layer, which is SS_BUILD_SAM. Without it `--features aliked-*` is a
