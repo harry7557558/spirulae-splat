@@ -7,6 +7,8 @@
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wsign-compare"
 #  pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+// Apple clang deprecates sprintf; the HDR writer uses it and stb is vendored.
+#  pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION

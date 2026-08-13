@@ -257,6 +257,17 @@ gradient at the end of the kernel for this reason — or force the load into
 an MSL temporary by giving it a bitcast (`asfloat` off a `uint*` buffer,
 as `misc.slang`'s RoPE does).
 
+Groupshared memory is not exempt, and a loop is where it bites. `vis_blit`'s
+BVH descent pops a node index off `_blit_stack[tid][stackSize]` and then
+visits two children, the first of which pushes back into that same slot;
+SPIRV-Cross emitted the pop *inside* the child loop, once per iteration, so
+child 1 read what child 0 had just pushed and the descent left half the tree
+unvisited (macOS drew fragmented overlay lines for months). `[ForceUnroll]`
+on the two-iteration child loop fixes it, because unrolling leaves nowhere
+to re-materialize the read; a rolled loop that both reads and writes one
+groupshared slot needs that, or the value copied somewhere the store cannot
+reach.
+
 **2. One pointer type per buffer, and never a 3-component vector.**
 SPIRV-Cross drops the bitcast between two physical-storage pointer types
 and emits `reinterpret_cast<device T*>` of the *loaded value*, which the

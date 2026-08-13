@@ -10,6 +10,10 @@
 # build's -j governs how many slangc run concurrently -- bounding peak RAM the
 # same way source compiles are -- and Ninja prints "[n/m] SPIR-V <name>" as each
 # finishes.
+
+# Where SlangcRetry.cmake lives. Captured at file scope: inside the function
+# below, CMAKE_CURRENT_LIST_DIR is the *caller's* directory, not this one.
+set(SS_SPIRV_LIST_DIR ${CMAKE_CURRENT_LIST_DIR})
 #
 # ss_setup_spirv(<shared_dir> <vk_dir> <slangc> <spirv_dir> <embed_cpp> <debug>)
 # defines the custom commands producing <embed_cpp>.
@@ -49,6 +53,22 @@ function(ss_setup_spirv shared_dir vk_dir slangc spirv_dir embed_cpp debug)
         message(STATUS "spirv_tool discover: ${disc_err}")
     endif()
 
+    # slangc is memory-hungry on the big shaders and can crash. Cap the whole set by
+    # memory instead. Serializing outright would cost the better part of an
+    # hour for 680 blobs; SlangcRetry.cmake mops up whatever still slips through.
+    cmake_host_system_information(RESULT _ss_ram QUERY AVAILABLE_PHYSICAL_MEMORY)
+    cmake_host_system_information(RESULT _ss_cores QUERY NUMBER_OF_LOGICAL_CORES)
+    math(EXPR _ss_spirv_jobs "${_ss_ram} / 3500")
+    if(_ss_spirv_jobs GREATER _ss_cores)
+        set(_ss_spirv_jobs ${_ss_cores})
+    endif()
+    if(_ss_spirv_jobs LESS 1)
+        set(_ss_spirv_jobs 1)
+    endif()
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS ss_spirv=${_ss_spirv_jobs})
+    message(STATUS "SPIR-V: at most ${_ss_spirv_jobs} concurrent slangc "
+                   "(${_ss_ram} MB available)")
+
     string(REPLACE "\n" ";" manifest_lines "${manifest}")
     set(blob_outputs "")
     foreach(line ${manifest_lines})
@@ -70,12 +90,19 @@ function(ss_setup_spirv shared_dir vk_dir slangc spirv_dir embed_cpp debug)
         string(REPLACE " " ";" dep_list "${deps}")
 
         set(out ${spirv_dir}/${name}.spv)
+        # Through SlangcRetry.cmake rather than directly: see the crash it
+        # exists for. '|' joins the arguments because -D cannot carry a list.
+        set(_blob_cmd "${slangc}|${source}|-entry|${entry}|-o|${out}")
+        foreach(_arg ${incdirs} ${spirv_args} ${define_args})
+            string(APPEND _blob_cmd "|${_arg}")
+        endforeach()
         add_custom_command(
             OUTPUT ${out}
-            COMMAND ${slangc} ${source} -entry ${entry} -o ${out}
-                ${incdirs} ${spirv_args} ${define_args}
+            COMMAND ${CMAKE_COMMAND} -DSS_CMD=${_blob_cmd} -DSS_BLOB=${name}
+                    -P ${SS_SPIRV_LIST_DIR}/SlangcRetry.cmake
             DEPENDS ${dep_list}
             COMMENT "SPIR-V ${name}"
+            JOB_POOL ss_spirv
             VERBATIM)
         list(APPEND blob_outputs ${out})
     endforeach()

@@ -1016,7 +1016,12 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
         wj.mask = std::move(mask);
         wj.path = dst.string();
         writers.submit(std::move(wj));
-        progress.update(++done, done == (int)files.size());
+        // Sequenced deliberately: `update(++done, done == n)` leaves the
+        // argument's read of `done` unsequenced against the increment, so
+        // whether the last image is reported as the last one came down to the
+        // compiler's evaluation order.
+        ++done;
+        progress.update(done, done == (int)files.size());
     }
     // The last few masks are still in the queue; the caller goes straight on to
     // structure from motion, which will look for them.

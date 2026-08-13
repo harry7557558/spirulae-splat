@@ -61,18 +61,20 @@ Keep reference dumps out of git (`parity_refs/` is gitignored).
 
 ### macOS / MoltenVK
 
-All 17 parity tools pass against a CUDA reference on Apple silicon except
-`engine_render_parity`, which fails on its blit channel only (~0.9% of bytes
-against a 0.2% cap; its float channel passes at 0.0001%). The same reference
-passes on Linux Vulkan at ~0.15%, which is the control: the gap is Apple's,
-not the test's. Both numbers grew when the viewer learned to draw distorted
-frustums — the failure scales with how much overlay line is on screen, so
-Linux now sits close enough to the cap to be worth watching.
-The differing bytes lie on the
-viewer's grid and frustum overlay lines, which `vis_blit` ray-traces as swept
-spheres and antialiases with MSAA: a grazing ray that hits on one device
-misses on the other, and one flipped sample of four moves a byte by more than
-the cap allows. Nothing outside the overlay differs.
+All 17 parity tools pass against a CUDA reference on Apple silicon, at
+essentially the Linux numbers (`engine_render_parity`'s blit channel: 0.157%
+of bytes on macOS against 0.152% on Linux, cap 0.2%).
+
+`engine_render_parity` used to fail here on that channel, and the failure was
+worth more than its number: the viewer's grid and frustum lines came out
+*fragmented on macOS only*. It was not antialiasing, which is what this
+section claimed for a while. `vis_blit`'s BVH descent read the popped node
+inside a two-iteration child loop, and SPIRV-Cross re-materialized that
+threadgroup read once per child instead of keeping it — so the second child
+was read after the first child's push had overwritten the slot, and the
+descent walked into the wrong subtree. The `[ForceUnroll]` on both child
+loops is what keeps the pop a value; see the first MoltenVK rule in
+`src/backend/vulkan/README.md`.
 
 Three tools -- `msloss_parity`, `optimgeo_parity`, `meshing_parity` -- pass
 only because `VulkanContext::init()` turns MoltenVK's default Metal fast-math

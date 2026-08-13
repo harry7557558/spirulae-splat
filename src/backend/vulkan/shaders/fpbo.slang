@@ -222,7 +222,10 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         cid_1 = inside ? p.camera_id_bounds[gid + 1] : 0;
     }
 
-    PbSplat s;
+    // Zero-initialized, not merely declared: every read is under the same
+    // `inside` guard as the load, but slangc 2026.12.1 (the macOS pin) cannot
+    // see that and warns 160 times across this file's variants.
+    PbSplat s = {};
     PbGrads g = pb_grads_zero();
     if (inside) {
         s = pb_load_splat(p.means, p.quats, p.scales, p.opacities,

@@ -1013,6 +1013,7 @@ void vis_blit(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 --stackSize;
                 uint elem = _blit_stack[tid][stackSize];
                 int2 node = p.lss_nodes[elem];
+                [ForceUnroll]
                 for (uint ci = 0; ci < 2; ci++) {
                     int childIdx = ci == 0 ? node.x : node.y;
                     if (childIdx < 0) {
@@ -1069,6 +1070,7 @@ void vis_blit(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 --stackSize;
                 uint elem = _blit_stack[tid][stackSize];
                 int2 node = p.tri_nodes[elem];
+                [ForceUnroll]
                 for (uint ci = 0; ci < 2; ci++) {
                     int childIdx = ci == 0 ? node.x : node.y;
                     if (childIdx < 0) {
