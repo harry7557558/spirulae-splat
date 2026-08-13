@@ -18,6 +18,10 @@
 #include "i18n/catalog/Train.h"
 #include "i18n/catalog/TrainFields.h"
 
+#include "app/gui/GlLoader.h"
+#include "app_generated/app_banner.h"
+#include "external/stb_image.h"
+
 #include "imgui.h"
 #include "imgui_stdlib.h"
 
@@ -1510,6 +1514,84 @@ void GuiApp::draw_language_menu() {
 // Home
 // ===========================================================================
 
+namespace {
+
+// The masthead texture, decoded and uploaded on the first home screen. There
+// is one window and the image never changes, so it outlives every caller and
+// the driver frees it with the context.
+unsigned banner_texture(int* w, int* h) {
+    static int bw = 0, bh = 0;
+    static const unsigned tex = [] {
+        int comp = 0;
+        unsigned char* px = stbi_load_from_memory(
+            kAppBanner, (int)kAppBannerSize, &bw, &bh, &comp, 4);
+        if (!px) return 0u;
+        unsigned id = 0;
+        glGenTextures(1, &id);
+        glBindTexture(GL_TEXTURE_2D, id);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bw, bh, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, px);
+        stbi_image_free(px);
+        return id;
+    }();
+    *w = bw;
+    *h = bh;
+    return tex;
+}
+
+}  // namespace
+
+// The home masthead: the artwork across the whole window, with the product
+// name and tagline over its foot. The words are drawn here rather than baked
+// into the image so they stay translatable, and the image carries none.
+void GuiApp::draw_home_banner(float avail, float indent) {
+    int bw = 0, bh = 0;
+    const unsigned tex = banner_texture(&bw, &bh);
+    if (!tex || bw <= 0 || bh <= 0) return;
+
+    // A share of the window rather than a fixed height: a short window should
+    // not lose a third of itself to the masthead. Clamped at both ends -- the
+    // floor is what the name and tagline need, the ceiling keeps it a band.
+    const float h = std::clamp(ImGui::GetContentRegionAvail().y * 0.21f,
+                               px(120.0f), px(320.0f));
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const ImVec2 p1(p0.x + avail, p0.y + h);
+
+    // Cover, not fit: crop to the band's aspect so the artwork fills the width
+    // whatever the window is doing.
+    const float want = avail / h, have = (float)bw / (float)bh;
+    ImVec2 uv0(0.0f, 0.0f), uv1(1.0f, 1.0f);
+    const float f = have > want ? want / have : have / want;
+    if (have > want) {
+        uv0.x = 0.5f - 0.5f * f;
+        uv1.x = 0.5f + 0.5f * f;
+    } else {
+        uv0.y = 0.5f - 0.5f * f;
+        uv1.y = 0.5f + 0.5f * f;
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddImage((ImTextureID)(intptr_t)tex, p0, p1, uv0, uv1);
+    // The artwork is bright everywhere, so the text needs its own ground.
+    const ImU32 clear = IM_COL32(14, 15, 18, 0), dark = IM_COL32(14, 15, 18, 232);
+    dl->AddRectFilledMultiColor(ImVec2(p0.x, p0.y + h * 0.30f), p1,
+                                clear, clear, dark, dark);
+
+    ImGui::SetCursorScreenPos(ImVec2(p0.x + indent, p1.y - px(76.0f)));
+    ImGui::SetWindowFontScale(1.7f);
+    ui::Text(spirula::i18n::msg::brand::product);
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::SetCursorScreenPos(ImVec2(p0.x + indent, p1.y - px(30.0f)));
+    ui::TextColored(kDim, spirula::i18n::msg::brand::tagline);
+
+    ImGui::SetCursorScreenPos(ImVec2(p0.x, p1.y));
+}
+
 void GuiApp::draw_home() {
     // The column is centred and never wider than the window: at 480 px it is
     // wide enough for the longest button label in any language, and on a
@@ -1517,15 +1599,12 @@ void GuiApp::draw_home() {
     const float avail = ImGui::GetContentRegionAvail().x;
     const float w = std::max(std::min(px(480.0f), avail - px(16.0f)), px(200.0f));
     const float bh = px(42.0f);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                         std::max(0.0f, (avail - w) * 0.5f));
-    ImGui::BeginChild("##home", ImVec2(w, 0));
-    ImGui::Dummy(ImVec2(0, px(40.0f)));
+    const float indent = std::max(0.0f, (avail - w) * 0.5f);
 
-    ImGui::SetWindowFontScale(1.7f);
-    ui::Text(spirula::i18n::msg::brand::product);
-    ImGui::SetWindowFontScale(1.0f);
-    ui::TextDisabledWrapped(spirula::i18n::msg::brand::tagline);
+    draw_home_banner(avail, indent);
+
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
+    ImGui::BeginChild("##home", ImVec2(w, 0));
     ImGui::Dummy(ImVec2(0, px(24.0f)));
 
     // A session (possibly still training) exists -- offer the way back.

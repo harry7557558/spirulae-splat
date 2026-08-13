@@ -162,6 +162,7 @@ private:
     // ---- screens ----
     void draw_menu_bar();
     void draw_home();
+    void draw_home_banner(float avail, float indent);
     void draw_new_dataset();
     void draw_dataset_source();       // input list / output / resume
     void draw_dataset_basics();       // the four or five knobs a beginner needs

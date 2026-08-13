@@ -29,6 +29,7 @@ Always build through the dev scripts.
 | `SsSlang.cmake` | `ss_find_slangc()` — pinned version, PATH lookup, fetch on miss |
 | `SsEmbed.cmake` | `ss_embed_file()` — bake a file into a byte-array header |
 | `SsApps.cmake` | the `spirula` executable — every tool the build has, in one binary (backend-agnostic) |
+| `SsPackage.cmake` | the `macos_app` / `macos_dmg` targets ([Packaging](#packaging)) |
 
 Exactly one backend module runs. It leaves behind `SS_WITH_TORCH` and
 `SS_APP_LIBS`, which is the whole contract `SsApps.cmake` depends on.
@@ -189,6 +190,73 @@ to the VS-bundled CMake/Ninja —
 the torch extension build is not supported on Windows, and a broken torch
 install aborts configure from inside `TorchConfig.cmake` (which `QUIET` cannot
 suppress).
+
+## Packaging
+
+Only macOS has a packaging step, because only macOS has a form the binary is
+not already in. A Linux or Windows build is one file that runs where it lands;
+a Mac wants an `.app`, or the Dock shows a Terminal icon and Finder has no way
+to launch it.
+
+```bash
+cmake --build build --target macos_app   # build/Spirula Studio.app
+cmake --build build --target macos_dmg   # ... and the disk image around it
+```
+
+Both run `tools/package_macos.sh`, which is also usable directly
+(`--build-dir`, `--out`, `--sign IDENTITY`, `--dmg`). It assembles the bundle
+from the built `spirula` plus an icon resampled from `assets/icon.png` — via
+`sips` and `iconutil`, which are in the base system, so packaging needs no
+Xcode.
+
+### The icon
+
+`tools/make_icon.py` renders everything in `assets/` and is the only thing
+that writes them; it needs `pip install taichi`, takes a few minutes, and
+nothing in the build or in packaging imports it. Each platform takes a
+different form:
+
+| file | who reads it |
+|---|---|
+| `icon.png` | 1024², macOS canvas (824 of artwork, rounded). `package_macos.sh` resamples it into the bundle's `.icns` |
+| `icon.ico` | compiled into the `.exe` by `src/app/app.rc`. The resource is named `GLFW_ICON`, which is what GLFW's Win32 backend looks up for the window class — so Explorer, the taskbar and the window all get it from this one line |
+| `icon_128.png` | embedded and handed to `glfwSetWindowIcon` on X11 (`GuiMain.cpp`). Not called on Windows, which already has the resource, nor on macOS, where GLFW answers `GLFW_FEATURE_UNAVAILABLE` — a window there has no icon of its own |
+| `banner.png` | embedded, and drawn across the top of the GUI's home screen (`GuiApp::draw_home_banner`). Same shape and camera as the icon, framed wide and close |
+
+The derived forms are committed rather than generated, because a Windows build
+must not need Python. The two desktop ones are cropped past the macOS inset,
+which would otherwise leave them a tenth smaller than every neighbour in a
+taskbar. The banner carries no text — the product name and tagline are drawn
+over it by ImGui, so they stay translatable.
+
+The bundle carries **one binary**. That is only honest because a default
+macOS build links MoltenVK statically (`cmake/SsVulkan.cmake`), and the script
+checks rather than trusts it: `otool -L` output naming anything outside
+`/usr/lib` or `/System/Library` fails the packaging, since a bundle missing a
+dylib works on the build machine and nowhere else.
+
+Signing is ad-hoc (`--sign -`) by default. That is not optional decoration:
+Apple silicon kills an unsigned arm64 binary on exec, and copying the
+executable into the bundle invalidates whatever signature it had. It is enough
+for a Mac the app is copied to directly, and *not* enough for one it is
+downloaded to — the quarantine flag then wants a Developer ID signature and a
+notarized bundle:
+
+```bash
+bash tools/package_macos.sh --build-dir build --dmg --sign "Developer ID Application: ..."
+xcrun notarytool submit "build/Spirula Studio.dmg" --keychain-profile ... --wait
+xcrun stapler staple "build/Spirula Studio.dmg"
+```
+
+Notarization needs a paid Apple Developer account, so it is not wired into the
+build.
+
+One behaviour is bundle-specific: a Finder launch inherits launchd's PATH
+(`/usr/bin:/bin:/usr/sbin:/sbin`), which has no Homebrew in it, so COLMAP,
+ffmpeg and python3 would be missing from an app that finds them fine when
+started from a shell. `gui::add_desktop_search_paths()`
+(`src/app/gui/AppPaths.h`) appends the package managers' directories at
+startup, after any PATH the process actually inherited.
 
 ## Build-time cost
 

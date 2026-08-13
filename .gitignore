@@ -1,6 +1,7 @@
 .vscode/
 .claude/
 .fuse_hidden*
+.DS_Store
 .torch_extensions/*
 
 outputs/

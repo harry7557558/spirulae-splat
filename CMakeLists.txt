@@ -13,6 +13,7 @@ project(spirula_studio LANGUAGES C CXX)  # CUDA enabled by the cuda backend modu
 #   SsNn.cmake             inference layer + SAM + video (optional; Vulkan-only)
 #   SsI18n.cmake           ss_i18n, the translation library (a leaf)
 #   SsApps.cmake           the `spirula` executable (every tool in one)
+#   SsPackage.cmake        the redistributable form of it (macOS .app / .dmg)
 #
 # Each backend module leaves SS_APP_LIBS behind for the shared app targets.
 
@@ -51,5 +52,8 @@ if(SS_BUILD_SAM)
 endif()
 
 include(SsApps)
+
+# After SsApps: the packaging targets depend on the `spirula` target.
+include(SsPackage)
 
 message(STATUS "spirula_studio configured (backend: ${SS_BACKEND}).")

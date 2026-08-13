@@ -101,4 +101,27 @@ std::string exe_dir() {
     return p.empty() ? p : fs::path(p).parent_path().string();
 }
 
+void add_desktop_search_paths() {
+#ifdef __APPLE__
+    const char* dirs[] = { "/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin" };
+    const char* cur = std::getenv("PATH");
+    std::string path = cur ? cur : "";
+    for (const char* dir : dirs) {
+        std::error_code ec;
+        if (!fs::is_directory(dir, ec)) continue;
+        bool have = false;
+        for (size_t i = 0; i <= path.size() && !have; ) {
+            size_t end = path.find(':', i);
+            if (end == std::string::npos) end = path.size();
+            have = path.compare(i, end - i, dir) == 0;
+            i = end + 1;
+        }
+        if (have) continue;
+        if (!path.empty()) path += ':';
+        path += dir;
+    }
+    setenv("PATH", path.c_str(), 1);
+#endif
+}
+
 }  // namespace gui

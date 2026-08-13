@@ -178,6 +178,19 @@ if(SS_BUILD_GUI)
         UiFont)
     ss_cjk_faces()
 
+    # The window icon X11 wants handed to it (GuiMain.cpp). Windows gets its
+    # from app.rc below and macOS from the bundle, so this is the small one.
+    ss_embed_file(
+        ${SS_ROOT}/assets/icon_128.png
+        ${CMAKE_BINARY_DIR}/app_generated/app_icon.h
+        AppIcon)
+
+    # The home screen's masthead.
+    ss_embed_file(
+        ${SS_ROOT}/assets/banner.png
+        ${CMAKE_BINARY_DIR}/app_generated/app_banner.h
+        AppBanner)
+
     file(GLOB SS_GUI_SOURCES CONFIGURE_DEPENDS ${SS_SRC}/app/gui/*.cpp)
     list(APPEND SS_TOOL_SOURCES ${SS_GUI_SOURCES})
     list(APPEND SS_TOOL_DEFS SS_TOOL_GUI=1)
@@ -189,11 +202,10 @@ if(SS_BUILD_GUI)
     if(WIN32)
         list(APPEND SS_TOOL_LIBS ole32 uuid shell32)
     elseif(APPLE)
-        # Objective-C++ is enabled here rather than in the top-level project()
-        # call, because this one file is the only thing in the tree that is not
-        # portable C++ and a CUDA/Linux build should not have to have a
-        # compiler for it.
-        enable_language(OBJCXX)
+        # Deliberately no enable_language(OBJCXX): CMake would then hand every
+        # .m in the build to clang as Objective-C++, and GLFW's whole Cocoa
+        # layer is .m. Left disabled, a .mm compiles as CXX, and clang reads
+        # the extension the same way -- which is all this one file needs.
         set_source_files_properties(${SS_SRC}/app/gui/NativeDialogMac.mm
             PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         list(APPEND SS_TOOL_SOURCES ${SS_SRC}/app/gui/NativeDialogMac.mm)
@@ -220,6 +232,14 @@ if(SS_BUILD_CLI OR SS_BUILD_GUI)
     # FrameExtract is claimed by both the segmentation tool and the GUI.
     list(REMOVE_DUPLICATES SS_TOOL_SOURCES)
     list(REMOVE_DUPLICATES SS_TOOL_LIBS)
+
+    # app.rc carries the icon Explorer and the taskbar draw, which is a link
+    # input on Windows and has no counterpart elsewhere: macOS reads the
+    # bundle's .icns, and Linux has only the window icon GuiMain.cpp sets.
+    if(WIN32)
+        enable_language(RC)
+        list(APPEND SS_TOOL_SOURCES ${SS_SRC}/app/app.rc)
+    endif()
 
     add_executable(spirula ${SS_SRC}/app/Main.cpp ${SS_TOOL_SOURCES})
     ss_configure_app(spirula)

@@ -28,4 +28,10 @@ std::string cache_dir();
 std::string exe_path();
 std::string exe_dir();
 
+// macOS, and a no-op everywhere else. A Finder launch inherits launchd's PATH
+// -- /usr/bin:/bin:/usr/sbin:/sbin -- so colmap, ffmpeg and python3, resolved
+// by name, are invisible to the bundle though the same binary finds them from
+// a shell. Appends, so an inherited PATH still wins where it has one.
+void add_desktop_search_paths();
+
 }  // namespace gui

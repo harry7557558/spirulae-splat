@@ -1,0 +1,7 @@
+// Windows resources for `spirula`.
+//
+// GLFW_ICON is the name GLFW's Win32 backend looks up when it registers the
+// window class (glfw/src/win32_window.c), so this one line is both the icon
+// Explorer draws on the .exe and the one the window and taskbar get -- no
+// glfwSetWindowIcon call on this platform.
+GLFW_ICON ICON "../../assets/icon.ico"

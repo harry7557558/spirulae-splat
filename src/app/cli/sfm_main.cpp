@@ -312,6 +312,17 @@ static bool isImageExt(const std::string& e) {
            s == ".ppm" || s == ".pgm";
 }
 
+// macOS writes an AppleDouble sidecar, `._<name>`, beside any file it has to
+// attach metadata to on a filesystem with nowhere to put it -- an exFAT or
+// NTFS drive, an SMB share. The sidecar keeps the original's extension, so it
+// passes every extension test here: `._00333.jpg` enumerates as an image, and
+// `._00168.bin` as a feature file, where the reader can only report that the
+// magic is wrong and the whole reconstruction stops.
+static bool isSidecar(const fs::path& p) {
+    const std::string n = p.filename().string();
+    return n.size() > 2 && n[0] == '.' && n[1] == '_';
+}
+
 // Does `root` hold any image outside `nested`? This is what decides whether
 // `auto DATASET` may quietly reinterpret itself as `auto DATASET/images`.
 //
@@ -333,7 +344,8 @@ static bool holdsImagesOutside(const fs::path& root, const fs::path& nested) {
             if (fs::equivalent(it->path(), nested, ec)) it.disable_recursion_pending();
             continue;
         }
-        if (it->is_regular_file(ec) && isImageExt(it->path().extension().string()))
+        if (it->is_regular_file(ec) && isImageExt(it->path().extension().string()) &&
+            !isSidecar(it->path()))
             return true;
     }
     return false;
@@ -717,7 +729,7 @@ static void resolveImageNames(std::vector<Reconstruction>& models, const std::st
     if (imagedir.empty()) return;
     std::map<std::string, std::string> stem2name;
     for (const auto& e : fs::recursive_directory_iterator(imagedir))
-        if (e.is_regular_file()) {
+        if (e.is_regular_file() && !isSidecar(e.path())) {
             fs::path rel = relativeTo(e.path(), imagedir);
             fs::path stem = rel;
             stem.replace_extension();
@@ -839,7 +851,8 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
             it.disable_recursion_pending();
             continue;
         }
-        if (it->is_regular_file() && isImageExt(it->path().extension().string()))
+        if (it->is_regular_file() && isImageExt(it->path().extension().string()) &&
+            !isSidecar(it->path()))
             found.push_back(it->path());
     }
     if (found.empty()) {
@@ -1115,7 +1128,8 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
     // convention for `images.bin` names.
     std::vector<fs::path> files;
     for (const auto& e : fs::recursive_directory_iterator(featdir))
-        if (e.is_regular_file() && e.path().extension() == ".bin") files.push_back(e.path());
+        if (e.is_regular_file() && e.path().extension() == ".bin" && !isSidecar(e.path()))
+            files.push_back(e.path());
     std::sort(files.begin(), files.end());
     if (files.size() < 2) {
         L::fail(Tag::Match, M::match_need_two, {featdir});
@@ -1223,13 +1237,20 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
     auto matchFn = [&](size_t b, size_t e, std::vector<std::vector<FeatureMatch>>& mout) {
         matcher->matchBatch(feats, pairs, b, e, mout);
     };
+    // Every 200 pairs is a line a second on a fast GPU and a line every five
+    // minutes on an Apple M2 matching 8192-feature images -- which reads as a
+    // hung program, in the GUI especially. Rate-limit by time instead, with
+    // the count still there for anyone parsing it.
     std::function<void(size_t, size_t)> progress;
-    if (verbose)
-        progress = [&](size_t done, size_t total_pairs) {
-            if (done % 200 == 0 || done == total_pairs)
-                L::err(Tag::Match, M::match_progress,
-                       {(long long)done, (long long)total_pairs});
+    if (verbose) {
+        progress = [&, last = 0.0](size_t done, size_t total_pairs) mutable {
+            const double t = now();
+            if (done != total_pairs && t - last < 2.0) return;
+            last = t;
+            L::err(Tag::Match, M::match_progress,
+                   {(long long)done, (long long)total_pairs});
         };
+    }
 
     if (verify) {
         // Verification runs on a worker pool fed by the (serial, GPU-bound)

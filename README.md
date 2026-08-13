@@ -83,7 +83,7 @@ Pass `-DCMAKE_C_COMPILER` and `-DCMAKE_CXX_COMPILER` to the first `cmake` comman
 
 If it builds successfully, you get `build\spirula.exe`. Run it with no arguments for the GUI, or `spirula train --help` / `spirula sfm --help` / `spirula sam --help` for the command-line tools.
 
-### Linux / macOS:
+### Linux:
 
 ```bash
 cd spirulae-splat/
@@ -91,6 +91,17 @@ bash build_develop.bash -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=vulkan 
 ```
 
 If it builds successfully, you get `build/spirula` binary. Run it with no arguments for the GUI, or as `spirula sfm`, `spirula train` and `spirula sam` for the command-line tools (`--help` on any of them).
+
+### macOS:
+
+```bash
+cd spirulae-splat/
+bash build_develop.bash -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=vulkan -DSS_ENABLE_PATENTED=ON
+cmake --build build --target macos_app
+cmake --build build --target macos_dmg
+```
+
+If it builds successfully, you get `build/spirula` binary similar to Linux. Additionally, it wraps that binary in a double-clickable `build/Spirula Studio.app`, as well as disk image `build/Spirula Studio.dmg`. MoltenVK is statically linked by default and will run on a Mac without dependency installed.
 
 ### Notes regarding third-party licensing
 
