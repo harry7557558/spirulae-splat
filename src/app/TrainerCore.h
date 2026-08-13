@@ -174,6 +174,9 @@ public:
     std::mutex engine_mutex;
     std::atomic<bool> paused{false};
     std::atomic<bool> stop_requested{false};
+    // Clear before stop_requested to end the run without writing the final
+    // checkpoint: whatever the last periodic save left on disk is the result.
+    std::atomic<bool> save_on_stop{true};
     std::atomic<bool> render_pending{false};
     std::atomic<int>  cur_step{0};
 
@@ -189,7 +192,8 @@ public:
     void setup_engine();
 
     // The training loop. Returns when all steps ran or stop_requested was
-    // set (a final checkpoint is saved either way unless steps_per_save==0).
+    // set (a final checkpoint is saved either way unless steps_per_save==0
+    // or save_on_stop was cleared).
     void train(const TrainerCallbacks& cb = {});
 
     // One step: build the EngineStepConfig for `step` and run it. This is the

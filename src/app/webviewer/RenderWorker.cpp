@@ -163,12 +163,15 @@ struct RenderWorker::Impl {
             res.id = p.id;
             res.W = p.q.W;
             res.H = p.q.H;
+            const auto t0 = std::chrono::steady_clock::now();
             try {
                 res.rgb8 = render_once(p.q, res);
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "[viewer] render error: %s\n", e.what());
                 res.error = e.what();
             }
+            res.secs = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
             {
                 std::lock_guard<std::mutex> lk(mu);
                 result = std::move(res);

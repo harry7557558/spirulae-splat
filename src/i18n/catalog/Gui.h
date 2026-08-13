@@ -207,35 +207,20 @@ SS_MSG(menu_open_dataset,
     RU("Открыть папку набора данных…"),
     TR("Veri kümesi klasörü aç…"));
 
-SS_MSG(menu_new_from_photos,
-    EN("New Dataset from Photos..."),
-    JA("写真から新しいデータセットを作成…"),
-    ZH_HANS("从照片新建数据集…"),
-    ZH_HANT("從相片新建資料集…"),
-    KO("사진으로 새 데이터셋 만들기…"),
-    DE("Neuer Datensatz aus Fotos …"),
-    FR("Nouveau jeu de données à partir de photos…"),
-    ES("Nuevo conjunto de datos a partir de fotos…"),
-    PT("Novo conjunto de dados a partir de fotos…"),
-    IT("Nuovo set di dati da fotografie…"),
-    NL("Nieuwe dataset uit foto's…"),
-    RU("Создать набор данных из фотографий…"),
-    TR("Fotoğraflardan yeni veri kümesi…"));
-
-SS_MSG(menu_new_from_video,
-    EN("New Dataset from Video..."),
-    JA("動画から新しいデータセットを作成…"),
-    ZH_HANS("从视频新建数据集…"),
-    ZH_HANT("從影片新建資料集…"),
-    KO("동영상으로 새 데이터셋 만들기…"),
-    DE("Neuer Datensatz aus Video …"),
-    FR("Nouveau jeu de données à partir d'une vidéo…"),
-    ES("Nuevo conjunto de datos a partir de un vídeo…"),
-    PT("Novo conjunto de dados a partir de um vídeo…"),
-    IT("Nuovo set di dati da un video…"),
-    NL("Nieuwe dataset uit video…"),
-    RU("Создать набор данных из видео…"),
-    TR("Videodan yeni veri kümesi…"));
+SS_MSG(menu_new_dataset,
+    EN("New Dataset..."),
+    JA("新しいデータセット…"),
+    ZH_HANS("新建数据集…"),
+    ZH_HANT("新建資料集…"),
+    KO("새 데이터셋…"),
+    DE("Neuer Datensatz …"),
+    FR("Nouveau jeu de données…"),
+    ES("Nuevo conjunto de datos…"),
+    PT("Novo conjunto de dados…"),
+    IT("Nuovo set di dati…"),
+    NL("Nieuwe dataset…"),
+    RU("Создать набор данных…"),
+    TR("Yeni veri kümesi…"));
 
 // ===========================================================================
 // File dialog titles
@@ -517,133 +502,67 @@ SS_MSG(home_open_dataset_help,
        "(sparse/0), Nerfstudio (transforms.json) veya Metashape dışa "
        "aktarımları. Biçim kendiliğinden algılanır."));
 
-SS_MSG(home_from_photos,
-    EN("Create Dataset from Photos..."),
-    JA("写真からデータセットを作成…"),
-    ZH_HANS("从照片创建数据集…"),
-    ZH_HANT("從相片建立資料集…"),
-    KO("사진으로 데이터셋 만들기…"),
-    DE("Datensatz aus Fotos erstellen …"),
-    FR("Créer un jeu de données à partir de photos…"),
-    ES("Crear un conjunto de datos a partir de fotos…"),
-    PT("Criar um conjunto de dados a partir de fotos…"),
-    IT("Crea un set di dati da fotografie…"),
-    NL("Dataset maken uit foto's…"),
-    RU("Создать набор данных из фотографий…"),
-    TR("Fotoğraflardan veri kümesi oluştur…"));
+SS_MSG(home_new_dataset,
+    EN("Create Dataset from Photos or Video..."),
+    JA("写真や動画からデータセットを作成…"),
+    ZH_HANS("从照片或视频创建数据集…"),
+    ZH_HANT("從相片或影片建立資料集…"),
+    KO("사진이나 동영상으로 데이터셋 만들기…"),
+    DE("Datensatz aus Fotos oder Video erstellen …"),
+    FR("Créer un jeu de données à partir de photos ou d'une vidéo…"),
+    ES("Crear un conjunto de datos a partir de fotos o vídeo…"),
+    PT("Criar um conjunto de dados a partir de fotos ou vídeo…"),
+    IT("Crea un set di dati da fotografie o video…"),
+    NL("Dataset maken uit foto's of video…"),
+    RU("Создать набор данных из фотографий или видео…"),
+    TR("Fotoğraflardan veya videodan veri kümesi oluştur…"));
 
-SS_MSG(home_from_photos_help,
-    EN("Pick a folder of overlapping photos of a scene or object (subfolders "
-       "are included). The camera positions are worked out for you and the "
-       "result opens straight in the trainer."),
-    JA("シーンや被写体を重なりを持たせて撮った写真のフォルダを選びます"
-       "（サブフォルダも含みます）。カメラ位置は自動で求められ、結果は"
-       "そのままトレーナーで開きます。"),
-    ZH_HANS("选择一个装有场景或物体重叠照片的文件夹（含子文件夹）。"
-            "相机位置会自动求解，结果直接在训练器中打开。"),
-    ZH_HANT("選擇一個裝有場景或物體重疊相片的資料夾（含子資料夾）。"
-            "相機位置會自動求解，結果直接在訓練器中開啟。"),
-    KO("장면이나 물체를 겹치게 찍은 사진 폴더를 고르세요(하위 폴더 포함). "
-       "카메라 위치는 자동으로 계산되고 결과는 곧바로 트레이너에서 열립니다."),
-    DE("Wählen Sie einen Ordner mit einander überlappenden Fotos einer Szene "
-       "oder eines Objekts (Unterordner werden mitgenommen). Die "
-       "Kamerapositionen werden für Sie berechnet und das Ergebnis öffnet "
-       "sich direkt im Trainer."),
-    FR("Choisissez un dossier de photos d'une scène ou d'un objet qui se "
-       "recouvrent (les sous-dossiers sont inclus). Les positions de caméra "
-       "sont calculées pour vous et le résultat s'ouvre directement dans "
-       "l'atelier."),
-    ES("Elija una carpeta con fotos superpuestas de una escena u objeto (se "
-       "incluyen las subcarpetas). Las posiciones de cámara se calculan "
-       "automáticamente y el resultado se abre directamente en el entrenador."),
-    PT("Escolha uma pasta com fotos sobrepostas de uma cena ou objeto (as "
-       "subpastas são incluídas). As posições de câmera são calculadas para "
-       "você e o resultado abre direto no treinador."),
-    IT("Scelga una cartella di fotografie sovrapposte di una scena o di un "
-       "oggetto (le sottocartelle sono incluse). Le posizioni della "
-       "fotocamera vengono calcolate automaticamente e il risultato si apre "
-       "direttamente nell'addestratore."),
-    NL("Kies een map met overlappende foto's van een scène of object "
-       "(submappen tellen mee). De camerposities worden voor u berekend en "
-       "het resultaat opent meteen in de trainer."),
-    RU("Выберите папку с перекрывающимися фотографиями сцены или объекта "
-       "(вложенные папки тоже учитываются). Положения камер будут вычислены "
-       "автоматически, а результат сразу откроется в тренажёре."),
-    TR("Bir sahnenin veya nesnenin birbiriyle örtüşen fotoğraflarının "
-       "bulunduğu bir klasör seçin (alt klasörler de alınır). Kamera "
-       "konumları sizin için hesaplanır ve sonuç doğrudan eğiticide açılır."));
-
-SS_MSG(home_from_video,
-    EN("Create Dataset from Video..."),
-    JA("動画からデータセットを作成…"),
-    ZH_HANS("从视频创建数据集…"),
-    ZH_HANT("從影片建立資料集…"),
-    KO("동영상으로 데이터셋 만들기…"),
-    DE("Datensatz aus Video erstellen …"),
-    FR("Créer un jeu de données à partir d'une vidéo…"),
-    ES("Crear un conjunto de datos a partir de un vídeo…"),
-    PT("Criar um conjunto de dados a partir de um vídeo…"),
-    IT("Crea un set di dati da un video…"),
-    NL("Dataset maken uit video…"),
-    RU("Создать набор данных из видео…"),
-    TR("Videodan veri kümesi oluştur…"));
-
-SS_MSG(home_from_video_help,
-    EN("Pick a video walking around a scene or object. The least blurry "
-       "frames are pulled out of it, then the camera positions are worked out "
-       "from those. Several clips of one scene can be picked at once -- they "
-       "reconstruct together, one camera each."),
-    JA("シーンや被写体のまわりを歩いて撮った動画を選びます。ぶれの少ない"
-       "フレームが取り出され、そこからカメラ位置が求められます。同じシーンの"
-       "クリップは一度に複数選べます。まとめて再構成され、それぞれが1台の"
-       "カメラになります。"),
-    ZH_HANS("选择一段绕着场景或物体行走拍摄的视频。系统会挑出最清晰的帧，"
-            "再从这些帧求解相机位置。同一场景的多段视频可以一次选中，"
-            "它们会一起重建，各自作为一台相机。"),
-    ZH_HANT("選擇一段繞著場景或物體行走拍攝的影片。系統會挑出最清晰的影格，"
-            "再從這些影格求解相機位置。同一場景的多段影片可以一次選取，"
-            "它們會一起重建，各自作為一台相機。"),
-    KO("장면이나 물체 주위를 걸으며 찍은 동영상을 고르세요. 흔들림이 가장 "
-       "적은 프레임을 뽑아내고 그 프레임들로 카메라 위치를 계산합니다. 같은 "
-       "장면의 클립은 한 번에 여러 개 고를 수 있으며, 함께 재구성되고 각각 "
-       "하나의 카메라가 됩니다."),
-    DE("Wählen Sie ein Video, das um eine Szene oder ein Objekt herumführt. "
-       "Daraus werden die am wenigsten verwackelten Bilder gezogen und aus "
-       "ihnen die Kamerapositionen berechnet. Mehrere Clips derselben Szene "
-       "lassen sich auf einmal auswählen -- sie werden gemeinsam "
-       "rekonstruiert, jeder als eigene Kamera."),
-    FR("Choisissez une vidéo qui fait le tour d'une scène ou d'un objet. Les "
-       "images les moins floues en sont extraites, puis les positions de "
-       "caméra en sont déduites. Plusieurs séquences d'une même scène peuvent "
-       "être choisies d'un coup : elles sont reconstruites ensemble, chacune "
-       "avec sa propre caméra."),
-    ES("Elija un vídeo que recorra una escena u objeto. Se extraen los "
-       "fotogramas menos borrosos y a partir de ellos se calculan las "
-       "posiciones de cámara. Se pueden elegir varios clips de una misma "
-       "escena a la vez: se reconstruyen juntos, cada uno como una cámara."),
-    PT("Escolha um vídeo que percorra uma cena ou objeto. Os quadros menos "
-       "tremidos são extraídos e a partir deles as posições de câmera são "
-       "calculadas. Vários clipes de uma mesma cena podem ser escolhidos de "
-       "uma vez: eles são reconstruídos juntos, cada um como uma câmera."),
-    IT("Scelga un video che gira attorno a una scena o a un oggetto. Ne "
-       "vengono estratti i fotogrammi meno mossi e da questi si ricavano le "
-       "posizioni della fotocamera. Si possono scegliere più clip della "
-       "stessa scena in una volta: vengono ricostruite insieme, ciascuna come "
-       "fotocamera a sé."),
-    NL("Kies een video die om een scène of object heen loopt. De minst "
-       "bewogen beelden worden eruit gehaald en daaruit worden de "
-       "cameraposities berekend. Meerdere clips van één scène kunnen in één "
-       "keer worden gekozen: ze worden samen gereconstrueerd, elk als eigen "
-       "camera."),
-    RU("Выберите видео, снятое при обходе сцены или объекта. Из него "
-       "извлекаются наименее смазанные кадры, и уже по ним вычисляются "
-       "положения камер. Несколько роликов одной сцены можно выбрать сразу: "
-       "они восстанавливаются вместе, каждый как отдельная камера."),
-    TR("Bir sahnenin ya da nesnenin çevresinde dolaşarak çekilmiş bir video "
-       "seçin. İçinden en az bulanık kareler ayıklanır, kamera konumları da "
-       "bu karelerden hesaplanır. Aynı sahneye ait birden çok klip bir arada "
-       "seçilebilir: birlikte yeniden oluşturulur ve her biri ayrı bir kamera "
-       "olur."));
+SS_MSG(home_new_dataset_help,
+    EN("Photos of a scene or object, video clips walking around one, or "
+       "several of both in one capture. Each input gets its own camera, the "
+       "camera positions are worked out for you, and the result opens "
+       "straight in the trainer."),
+    JA("シーンや被写体の写真、そのまわりを歩いて撮った動画、あるいはその両方を"
+       "まとめて選べます。入力ごとに1台のカメラになり、カメラ位置は自動で"
+       "求められ、結果はそのままトレーナーで開きます。"),
+    ZH_HANS("场景或物体的照片、绕着它行走拍摄的视频，或者两者一起。每个输入"
+            "各自作为一台相机，相机位置会自动求解，结果直接在训练器中打开。"),
+    ZH_HANT("場景或物體的相片、繞著它行走拍攝的影片，或者兩者一起。每個輸入"
+            "各自作為一台相機，相機位置會自動求解，結果直接在訓練器中開啟。"),
+    KO("장면이나 물체의 사진, 그 주위를 걸으며 찍은 동영상, 또는 둘 다를 한 "
+       "번에 고를 수 있습니다. 입력마다 하나의 카메라가 되고, 카메라 위치는 "
+       "자동으로 계산되며 결과는 곧바로 트레이너에서 열립니다."),
+    DE("Fotos einer Szene oder eines Objekts, Videos, die darum herumführen, "
+       "oder beides in einer Aufnahme. Jede Eingabe bekommt ihre eigene "
+       "Kamera, die Kamerapositionen werden für Sie berechnet, und das "
+       "Ergebnis öffnet sich direkt im Trainer."),
+    FR("Des photos d'une scène ou d'un objet, des vidéos qui en font le tour, "
+       "ou les deux dans une même prise. Chaque entrée reçoit sa propre "
+       "caméra, les positions de caméra sont calculées pour vous et le "
+       "résultat s'ouvre directement dans l'atelier."),
+    ES("Fotos de una escena u objeto, vídeos que lo recorren, o ambos en una "
+       "misma captura. Cada entrada recibe su propia cámara, las posiciones "
+       "de cámara se calculan automáticamente y el resultado se abre "
+       "directamente en el entrenador."),
+    PT("Fotos de uma cena ou objeto, vídeos que percorrem a cena, ou os dois "
+       "na mesma captura. Cada entrada recebe a sua própria câmera, as "
+       "posições de câmera são calculadas para você e o resultado abre direto "
+       "no treinador."),
+    IT("Fotografie di una scena o di un oggetto, video che vi girano attorno, "
+       "oppure entrambi nella stessa ripresa. Ogni ingresso riceve la propria "
+       "fotocamera, le posizioni della fotocamera vengono calcolate "
+       "automaticamente e il risultato si apre direttamente nell'addestratore."),
+    NL("Foto's van een scène of object, video's die eromheen lopen, of allebei "
+       "in één opname. Elke invoer krijgt een eigen camera, de cameraposities "
+       "worden voor u berekend en het resultaat opent meteen in de trainer."),
+    RU("Фотографии сцены или объекта, видео с обходом вокруг них, или и то и "
+       "другое в одной съёмке. Каждый вход получает свою камеру, положения "
+       "камер вычисляются автоматически, а результат сразу откроется в "
+       "тренажёре."),
+    TR("Bir sahnenin veya nesnenin fotoğrafları, çevresinde dolaşan videolar "
+       "veya ikisi birden aynı çekimde. Her girdi kendi kamerasını alır, "
+       "kamera konumları sizin için hesaplanır ve sonuç doğrudan eğiticide "
+       "açılır."));
 
 SS_MSG(home_drop_hint,
     EN("...or drop a dataset folder, photo folders, video files, or a model or "
@@ -998,39 +917,41 @@ SS_MSG(opt_steps,
 
 SS_MSG(opt_steps_help,
     EN("How long to optimize. 30000 is a solid default; small scenes can look "
-       "good at 10000-15000, and quality saturates beyond ~30000."),
+       "good at 10000-15000, and large ones sometimes need more than 30000."),
     JA("最適化を続ける長さです。30000 が手堅い既定値で、小さなシーンなら "
-       "10000〜15000 でも十分見栄えがします。30000 を超えると品質はほぼ"
-       "頭打ちになります。"),
+       "10000〜15000 でも十分見栄えがします。大きなシーンでは 30000 を超える"
+       "こともあります。"),
     ZH_HANS("优化的时长。30000 是稳妥的默认值；小场景在 10000-15000 就已经不错，"
-            "超过约 30000 后质量趋于饱和。"),
+            "大场景有时需要超过 30000。"),
     ZH_HANT("最佳化的時長。30000 是穩妥的預設值；小場景在 10000-15000 就已經不錯，"
-            "超過約 30000 後品質趨於飽和。"),
+            "大場景有時需要超過 30000。"),
     KO("얼마나 오래 최적화할지입니다. 30000이 무난한 기본값이고, 작은 장면은 "
-       "10000~15000에서도 보기 좋습니다. 3만을 넘으면 품질이 거의 포화됩니다."),
+       "10000~15000에서도 보기 좋으며, 큰 장면은 30000을 넘겨야 할 때도 "
+       "있습니다."),
     DE("Wie lange optimiert wird. 30000 ist ein solider Standardwert; kleine "
-       "Szenen sehen bei 10000-15000 schon gut aus, und jenseits von etwa "
-       "30000 sättigt die Qualität."),
+       "Szenen sehen bei 10000-15000 schon gut aus, große brauchen manchmal "
+       "mehr als 30000."),
     FR("Durée de l'optimisation. 30000 est une valeur par défaut solide ; les "
-       "petites scènes rendent déjà bien à 10000-15000, et la qualité sature "
-       "au-delà d'environ 30000."),
+       "petites scènes rendent déjà bien à 10000-15000, et les grandes "
+       "demandent parfois plus de 30000."),
     ES("Cuánto tiempo optimizar. 30000 es un valor por defecto sólido; las "
-       "escenas pequeñas ya se ven bien con 10000-15000, y la calidad se "
-       "satura más allá de unos 30000."),
+       "escenas pequeñas ya se ven bien con 10000-15000, y las grandes a "
+       "veces necesitan más de 30000."),
     PT("Por quanto tempo otimizar. 30000 é um padrão sólido; cenas pequenas "
-       "já ficam boas com 10000-15000, e a qualidade satura acima de ~30000."),
+       "já ficam boas com 10000-15000, e as grandes às vezes precisam de mais "
+       "de 30000."),
     IT("Per quanto tempo ottimizzare. 30000 è un valore predefinito solido; "
-       "le scene piccole rendono bene già a 10000-15000 e oltre i 30000 circa "
-       "la qualità si satura."),
+       "le scene piccole rendono bene già a 10000-15000, quelle grandi a "
+       "volte chiedono più di 30000."),
     NL("Hoe lang er geoptimaliseerd wordt. 30000 is een degelijke standaard; "
-       "kleine scènes zien er bij 10000-15000 al goed uit, en boven ongeveer "
-       "30000 verzadigt de kwaliteit."),
+       "kleine scènes zien er bij 10000-15000 al goed uit, grote hebben soms "
+       "meer dan 30000 nodig."),
     RU("Сколько длится оптимизация. 30000 — надёжное значение по умолчанию; "
-       "небольшие сцены хорошо выглядят уже на 10000-15000, а после примерно "
-       "30000 качество перестаёт расти."),
+       "небольшие сцены хорошо выглядят уже на 10000-15000, а большим иногда "
+       "нужно больше 30000."),
     TR("Ne kadar süre iyileştirileceği. 30000 sağlam bir varsayılandır; küçük "
-       "sahneler 10000-15000'de bile iyi görünür ve yaklaşık 30000'den sonra "
-       "kalite doyuma ulaşır."));
+       "sahneler 10000-15000'de bile iyi görünür, büyükleri bazen 30000'den "
+       "fazlasını ister."));
 
 SS_MSG(opt_max_splats,
     EN("Max splats"),    JA("スプラット数の上限"), ZH_HANS("最大泼溅数"),
@@ -1041,43 +962,48 @@ SS_MSG(opt_max_splats,
 
 SS_MSG(opt_max_splats_help,
     EN("Upper bound on the number of Gaussians. More captures more detail but "
-       "uses more VRAM and renders slower. ~1M suits most scenes; large "
-       "outdoor scenes may want 2-4M."),
+       "uses more VRAM and renders slower. ~1M suits most small scenes; large "
+       "or highly detailed scenes may need more."),
     JA("ガウシアンの個数の上限です。多いほど細部を捉えられますが、VRAM を"
-       "多く使い描画も遅くなります。ほとんどのシーンは 100 万程度で足り、"
-       "広い屋外シーンでは 200 万〜400 万が向くこともあります。"),
+       "多く使い描画も遅くなります。小さめのシーンはたいてい 100 万程度で"
+       "足り、広いシーンや細部の多いシーンではもっと必要になることがあります。"),
     ZH_HANS("高斯基元数量的上限。数量越多细节越丰富，但显存占用更大、渲染更慢。"
-            "约 100 万适合大多数场景；大型室外场景可能需要 200 万到 400 万。"),
+            "约 100 万适合大多数小场景；大场景或细节很多的场景可能需要更多。"),
     ZH_HANT("高斯基元數量的上限。數量越多細節越豐富，但顯示記憶體佔用更大、算繪更慢。"
-            "約 100 萬適合大多數場景；大型室外場景可能需要 200 萬到 400 萬。"),
+            "約 100 萬適合大多數小場景；大場景或細節很多的場景可能需要更多。"),
     KO("가우시안 개수의 상한입니다. 많을수록 디테일이 살아나지만 VRAM을 더 "
-       "쓰고 렌더링이 느려집니다. 대부분의 장면은 100만 정도면 충분하고, 넓은 "
-       "야외 장면은 200만~400만이 필요할 수 있습니다."),
+       "쓰고 렌더링이 느려집니다. 작은 장면은 대개 100만이면 충분하고, 넓거나 "
+       "세부가 많은 장면은 더 필요할 수 있습니다."),
     DE("Obergrenze für die Zahl der Gaußfunktionen. Mehr erfasst mehr Details, "
        "braucht aber mehr VRAM und rendert langsamer. Rund 1 Mio. passt für "
-       "die meisten Szenen; große Außenszenen wollen eher 2-4 Mio."),
+       "die meisten kleinen Szenen; große oder sehr detailreiche brauchen "
+       "mehr."),
     FR("Borne supérieure du nombre de gaussiennes. Davantage capture plus de "
        "détails, mais consomme plus de VRAM et rend plus lentement. Environ "
-       "1 M convient à la plupart des scènes ; les grandes scènes extérieures "
-       "demandent plutôt 2 à 4 M."),
+       "1 M convient à la plupart des petites scènes ; les grandes ou très "
+       "détaillées en demandent davantage."),
     ES("Límite superior del número de gaussianas. Más captura más detalle, "
        "pero usa más VRAM y renderiza más lento. Alrededor de 1 M vale para "
-       "la mayoría de escenas; las escenas exteriores grandes piden 2-4 M."),
+       "casi todas las escenas pequeñas; las grandes o muy detalladas piden "
+       "más."),
     PT("Limite superior do número de gaussianas. Mais captura mais detalhe, "
-       "mas usa mais VRAM e renderiza mais devagar. Cerca de 1 M serve para a "
-       "maioria das cenas; cenas externas grandes podem pedir 2-4 M."),
+       "mas usa mais VRAM e renderiza mais devagar. Cerca de 1 M serve para "
+       "quase todas as cenas pequenas; as grandes ou muito detalhadas pedem "
+       "mais."),
     IT("Limite superiore al numero di gaussiane. Di più cattura più "
        "dettaglio, ma usa più VRAM e rende più lentamente. Circa 1 M va bene "
-       "per quasi tutte le scene; le grandi scene esterne vogliono 2-4 M."),
+       "per quasi tutte le scene piccole; quelle grandi o molto dettagliate "
+       "ne chiedono di più."),
     NL("Bovengrens voor het aantal gaussianen. Meer vangt meer detail, maar "
        "kost meer VRAM en rendert trager. Ongeveer 1 mln past bij de meeste "
-       "scènes; grote buitenscènes willen eerder 2-4 mln."),
+       "kleine scènes; grote of zeer gedetailleerde hebben er meer nodig."),
     RU("Верхняя граница числа гауссиан. Больше — больше деталей, но и больше "
        "видеопамяти и медленнее отрисовка. Около 1 млн подходит большинству "
-       "сцен; крупным уличным сценам может понадобиться 2-4 млн."),
+       "небольших сцен; крупным или очень детальным нужно больше."),
     TR("Gauss sayısının üst sınırı. Daha çoğu daha fazla ayrıntı yakalar ama "
-       "daha çok VRAM kullanır ve daha yavaş işler. Çoğu sahne için ~1 M "
-       "uygundur; büyük dış mekân sahneleri 2-4 M isteyebilir."));
+       "daha çok VRAM kullanır ve daha yavaş işler. Küçük sahnelerin çoğuna "
+       "~1 M yeter; büyük ya da çok ayrıntılı sahneler daha fazlasını "
+       "isteyebilir."));
 
 SS_MSG(opt_primitive,
     EN("Primitive"),     JA("プリミティブ"),   ZH_HANS("基元"),     ZH_HANT("基元"),
@@ -1086,56 +1012,64 @@ SS_MSG(opt_primitive,
     TR("İlkel"));
 
 SS_MSG(opt_primitive_help,
-    EN("Splat primitive. 3dgs: standard 3D Gaussian splatting. mip: "
-       "anti-aliased Mip-Splatting, reduces shimmering when zooming out. "
-       "3dgut: Unscented-Transform projection, exact for distorted "
-       "(fisheye/equirectangular) cameras."),
-    JA("スプラットのプリミティブです。3dgs は標準の 3D ガウススプラッティング。"
-       "mip はアンチエイリアスされた Mip-Splatting で、引いたときのちらつきを"
-       "抑えます。3dgut は無香料変換による投影で、歪んだカメラ（魚眼・"
-       "正距円筒）でも正確です。"),
-    ZH_HANS("泼溅基元。3dgs：标准三维高斯泼溅。mip：抗锯齿的 Mip-Splatting，"
-            "拉远时闪烁更少。3dgut：无迹变换投影，对畸变相机（鱼眼／等距柱状）"
-            "是精确的。"),
-    ZH_HANT("潑濺基元。3dgs：標準三維高斯潑濺。mip：抗鋸齒的 Mip-Splatting，"
-            "拉遠時閃爍更少。3dgut：無跡變換投影，對變形相機（魚眼／等距柱狀）"
-            "是精確的。"),
-    KO("스플랫 프리미티브입니다. 3dgs: 표준 3D 가우시안 스플래팅. mip: "
-       "앤티에일리어싱된 Mip-Splatting으로 축소할 때 깜빡임이 줄어듭니다. "
-       "3dgut: 무향 변환 투영으로, 왜곡된 카메라(어안·정거원통)에서도 "
-       "정확합니다."),
-    DE("Das Splat-Primitiv. 3dgs: klassisches 3D-Gaussian-Splatting. mip: "
+    EN("Splat primitive. 3dgs: standard 3D Gaussian splatting, the most "
+       "compatible with existing viewers. mip: anti-aliased Mip-Splatting, "
+       "reduces shimmering when zooming out. 3dgut: Unscented-Transform "
+       "projection, exact for distorted (fisheye/equirectangular) cameras."),
+    JA("スプラットのプリミティブです。3dgs は標準の 3D ガウススプラッティング"
+       "で、既存のビューアとの互換性がいちばん高い選択です。mip はアンチ"
+       "エイリアスされた Mip-Splatting で、引いたときのちらつきを抑えます。"
+       "3dgut は無香料変換による投影で、歪んだカメラ（魚眼・正距円筒）でも"
+       "正確です。"),
+    ZH_HANS("泼溅基元。3dgs：标准三维高斯泼溅，与现有查看器的兼容性最好。"
+            "mip：抗锯齿的 Mip-Splatting，拉远时闪烁更少。3dgut：无迹变换投影，"
+            "对畸变相机（鱼眼／等距柱状）是精确的。"),
+    ZH_HANT("潑濺基元。3dgs：標準三維高斯潑濺，與現有檢視器的相容性最好。"
+            "mip：抗鋸齒的 Mip-Splatting，拉遠時閃爍更少。3dgut：無跡變換投影，"
+            "對變形相機（魚眼／等距柱狀）是精確的。"),
+    KO("스플랫 프리미티브입니다. 3dgs: 표준 3D 가우시안 스플래팅으로, 기존 "
+       "뷰어와의 호환성이 가장 좋습니다. mip: 앤티에일리어싱된 Mip-Splatting"
+       "으로 축소할 때 깜빡임이 줄어듭니다. 3dgut: 무향 변환 투영으로, 왜곡된 "
+       "카메라(어안·정거원통)에서도 정확합니다."),
+    DE("Das Splat-Primitiv. 3dgs: klassisches 3D-Gaussian-Splatting, am "
+       "besten mit vorhandenen Betrachtern verträglich. mip: "
        "kantengeglättetes Mip-Splatting, flimmert beim Herauszoomen weniger. "
        "3dgut: Projektion per Unscented Transform, exakt für verzeichnete "
        "Kameras (Fischauge / equirektangular)."),
-    FR("La primitive de splat. 3dgs : Gaussian splatting 3D classique. mip : "
-       "Mip-Splatting anticrénelé, scintille moins en dézoomant. 3dgut : "
-       "projection par transformée non parfumée, exacte pour les caméras "
-       "distordues (fisheye / équirectangulaire)."),
-    ES("La primitiva de splat. 3dgs: Gaussian splatting 3D estándar. mip: "
-       "Mip-Splatting con antialiasing, parpadea menos al alejar. 3dgut: "
-       "proyección por transformada no aromática, exacta para cámaras "
-       "distorsionadas (ojo de pez / equirectangular)."),
-    PT("A primitiva de splat. 3dgs: Gaussian splatting 3D padrão. mip: "
-       "Mip-Splatting com antisserrilhamento, cintila menos ao afastar. "
-       "3dgut: projeção por transformada unscented, exata para câmeras "
-       "distorcidas (olho de peixe / equirretangular)."),
-    IT("La primitiva di splat. 3dgs: Gaussian splatting 3D classico. mip: "
-       "Mip-Splatting con antialiasing, sfarfalla meno allontanandosi. "
-       "3dgut: proiezione con trasformata unscented, esatta per fotocamere "
-       "distorte (fisheye / equirettangolare)."),
-    NL("De splat-primitief. 3dgs: standaard 3D Gaussian splatting. mip: "
-       "anti-aliased Mip-Splatting, flikkert minder bij uitzoomen. 3dgut: "
-       "projectie via unscented transform, exact voor vervormde camera's "
-       "(fisheye / equirectangulair)."),
-    RU("Примитив сплата. 3dgs — обычный 3D Gaussian splatting. mip — "
-       "сглаженный Mip-Splatting, меньше мерцает при отдалении. 3dgut — "
-       "проекция через сигма-точечное преобразование, точна для камер с "
-       "искажениями (фишай, равнопромежуточная)."),
-    TR("Splat ilkeli. 3dgs: standart 3B Gaussian splatting. mip: kenar "
-       "yumuşatmalı Mip-Splatting, uzaklaşırken daha az titrer. 3dgut: "
-       "unscented dönüşüm izdüşümü, bozulmalı kameralar (balıkgözü / "
-       "eşdikdörtgen) için tam doğrudur."));
+    FR("La primitive de splat. 3dgs : Gaussian splatting 3D classique, le "
+       "plus compatible avec les visionneuses existantes. mip : Mip-Splatting "
+       "anticrénelé, scintille moins en dézoomant. 3dgut : projection par "
+       "transformée non parfumée, exacte pour les caméras distordues "
+       "(fisheye / équirectangulaire)."),
+    ES("La primitiva de splat. 3dgs: Gaussian splatting 3D estándar, el más "
+       "compatible con los visores existentes. mip: Mip-Splatting con "
+       "antialiasing, parpadea menos al alejar. 3dgut: proyección por "
+       "transformada no aromática, exacta para cámaras distorsionadas (ojo de "
+       "pez / equirectangular)."),
+    PT("A primitiva de splat. 3dgs: Gaussian splatting 3D padrão, o mais "
+       "compatível com os visualizadores existentes. mip: Mip-Splatting com "
+       "antisserrilhamento, cintila menos ao afastar. 3dgut: projeção por "
+       "transformada unscented, exata para câmeras distorcidas (olho de peixe "
+       "/ equirretangular)."),
+    IT("La primitiva di splat. 3dgs: Gaussian splatting 3D classico, il più "
+       "compatibile con i visualizzatori esistenti. mip: Mip-Splatting con "
+       "antialiasing, sfarfalla meno allontanandosi. 3dgut: proiezione con "
+       "trasformata unscented, esatta per fotocamere distorte (fisheye / "
+       "equirettangolare)."),
+    NL("De splat-primitief. 3dgs: standaard 3D Gaussian splatting, het best "
+       "verenigbaar met bestaande viewers. mip: anti-aliased Mip-Splatting, "
+       "flikkert minder bij uitzoomen. 3dgut: projectie via unscented "
+       "transform, exact voor vervormde camera's (fisheye / equirectangulair)."),
+    RU("Примитив сплата. 3dgs — обычный 3D Gaussian splatting, лучше всего "
+       "совместимый с существующими просмотрщиками. mip — сглаженный "
+       "Mip-Splatting, меньше мерцает при отдалении. 3dgut — проекция через "
+       "сигма-точечное преобразование, точна для камер с искажениями (фишай, "
+       "равнопромежуточная)."),
+    TR("Splat ilkeli. 3dgs: standart 3B Gaussian splatting; var olan "
+       "görüntüleyicilerle en uyumlu olanıdır. mip: kenar yumuşatmalı "
+       "Mip-Splatting, uzaklaşırken daha az titrer. 3dgut: unscented dönüşüm "
+       "izdüşümü, bozulmalı kameralar (balıkgözü / eşdikdörtgen) için tam "
+       "doğrudur."));
 
 SS_MSG(opt_resolution,
     EN("Image resolution"), JA("画像の解像度"), ZH_HANS("图像分辨率"),
@@ -1192,97 +1126,102 @@ SS_MSG(opt_mask_mode,
     ES("Modo de máscara"), PT("Modo de máscara"), IT("Modalità maschera"),
     NL("Maskermodus"),   RU("Режим маски"),  TR("Maske kipi"));
 
-SS_MSG(opt_mask_mode_ignore,
-    EN("ignore"),        JA("無視"),          ZH_HANS("忽略"),     ZH_HANT("忽略"),
-    KO("무시"),           DE("ignorieren"),   FR("ignorer"),      ES("ignorar"),
-    PT("ignorar"),       IT("ignora"),       NL("negeren"),      RU("игнорировать"),
-    TR("yok say"));
+SS_MSG(opt_mask_mode_exclude,
+    EN("Ignore distractors"),
+    JA("邪魔物を無視"),   ZH_HANS("忽略干扰物"), ZH_HANT("忽略干擾物"),
+    KO("방해물 무시"),    DE("Störendes ignorieren"),
+    FR("Ignorer les gêneurs"), ES("Ignorar los elementos molestos"),
+    PT("Ignorar o que atrapalha"), IT("Ignorare i disturbi"),
+    NL("Storende dingen negeren"), RU("Игнорировать помехи"),
+    TR("Rahatsız edicileri yok say"));
 
-SS_MSG(opt_mask_mode_segment,
-    EN("segment"),       JA("切り出し"),      ZH_HANS("分割"),     ZH_HANT("分割"),
-    KO("분할"),           DE("freistellen"),  FR("détourer"),     ES("recortar"),
-    PT("recortar"),      IT("ritaglia"),     NL("uitsnijden"),   RU("вырезать"),
-    TR("ayır"));
+SS_MSG(opt_mask_mode_cut_out,
+    EN("Cut out background"),
+    JA("背景を切り抜く"),  ZH_HANS("裁掉背景"),  ZH_HANT("裁掉背景"),
+    KO("배경 잘라내기"),   DE("Hintergrund freistellen"),
+    FR("Détourer l'arrière-plan"), ES("Recortar el fondo"),
+    PT("Recortar o fundo"), IT("Ritagliare lo sfondo"),
+    NL("Achtergrond uitsnijden"), RU("Вырезать фон"),
+    TR("Arka planı ayır"));
 
 SS_MSG(opt_mask_mode_help,
-    EN("What a mask means, where one is used. ignore: masked-out pixels are "
-       "left out of the loss -- for distractors (people, cars, the "
-       "photographer's shadow, the area outside a fisheye circle, blown-out "
-       "sky). segment: masked-out pixels are trained as empty, so the "
-       "background is cut away and only the masked subject is reconstructed "
-       "-- for object captures. Has no effect on a dataset without masks."),
-    JA("マスクがある場合の意味です。「無視」ではマスクされた画素を損失から"
-       "外します。通行人、車、撮影者の影、魚眼の円外、白飛びした空といった"
-       "邪魔物向けです。「切り出し」ではマスクされた画素を空として学習するので、"
+    EN("What a mask means, where one is used. Ignore distractors: masked-out "
+       "pixels are left out of the loss -- for people, cars, the "
+       "photographer's shadow, or the area outside a fisheye circle. Cut out "
+       "background: masked-out pixels are trained as empty, so the background "
+       "is cut away and only the masked subject is reconstructed -- for "
+       "object captures. Has no effect on a dataset without masks."),
+    JA("マスクがある場合の意味です。「邪魔物を無視」ではマスクされた画素を"
+       "損失から外します。通行人、車、撮影者の影、魚眼の円外といったものに"
+       "向きます。「背景を切り抜く」ではマスクされた画素を空として学習するので、"
        "背景が取り除かれ、マスクされた被写体だけが再構成されます。物体の撮影"
        "向けです。マスクのないデータセットでは効果はありません。"),
-    ZH_HANS("有蒙版时蒙版的含义。忽略：被遮住的像素不计入损失——用于干扰物"
-            "（行人、汽车、摄影者的影子、鱼眼圆之外的区域、过曝的天空）。"
-            "分割：被遮住的像素按空白训练，于是背景被裁掉，只重建被蒙版选中的"
-            "主体——用于物体拍摄。数据集没有蒙版时不起作用。"),
-    ZH_HANT("有遮罩時遮罩的含意。忽略：被遮住的像素不計入損失——用於干擾物"
-            "（行人、汽車、攝影者的影子、魚眼圓之外的區域、過曝的天空）。"
-            "分割：被遮住的像素按空白訓練，於是背景被裁掉，只重建被遮罩選中的"
-            "主體——用於物體拍攝。資料集沒有遮罩時不起作用。"),
-    KO("마스크가 있을 때 마스크의 의미입니다. 무시: 가려진 픽셀을 손실에서 "
-       "제외합니다 — 지나가는 사람, 차, 촬영자의 그림자, 어안 원 바깥, 날아간 "
-       "하늘 같은 방해물용입니다. 분할: 가려진 픽셀을 빈 곳으로 학습해 배경을 "
-       "잘라내고 마스크된 피사체만 재구성합니다 — 물체 촬영용입니다. 마스크가 "
-       "없는 데이터셋에서는 아무 효과가 없습니다."),
-    DE("Was eine Maske bedeutet, wo eine vorliegt. ignorieren: maskierte "
-       "Pixel bleiben aus der Verlustfunktion heraus -- für Störendes "
-       "(Passanten, Autos, der eigene Schatten, der Bereich außerhalb des "
-       "Fischaugenkreises, ausgefressener Himmel). freistellen: maskierte "
-       "Pixel werden als leer trainiert, der Hintergrund fällt weg und nur "
-       "das maskierte Motiv wird rekonstruiert -- für Objektaufnahmen. Ohne "
-       "Masken im Datensatz ohne Wirkung."),
-    FR("Ce que signifie un masque, là où il y en a un. ignorer : les pixels "
-       "masqués sont exclus de la fonction de coût -- pour les gêneurs "
-       "(passants, voitures, votre propre ombre, la zone hors du cercle "
-       "fisheye, un ciel cramé). détourer : les pixels masqués sont entraînés "
+    ZH_HANS("有蒙版时蒙版的含义。“忽略干扰物”：被遮住的像素不计入损失——用于"
+            "行人、汽车、摄影者的影子、鱼眼圆之外的区域。“裁掉背景”：被遮住的"
+            "像素按空白训练，于是背景被裁掉，只重建被蒙版选中的主体——用于物体"
+            "拍摄。数据集没有蒙版时不起作用。"),
+    ZH_HANT("有遮罩時遮罩的含意。「忽略干擾物」：被遮住的像素不計入損失——用於"
+            "行人、汽車、攝影者的影子、魚眼圓之外的區域。「裁掉背景」：被遮住的"
+            "像素按空白訓練，於是背景被裁掉，只重建被遮罩選中的主體——用於物體"
+            "拍攝。資料集沒有遮罩時不起作用。"),
+    KO("마스크가 있을 때 마스크의 의미입니다. 방해물 무시: 가려진 픽셀을 "
+       "손실에서 뺍니다 — 지나가는 사람, 차, 촬영자의 그림자, 어안 원 바깥에 "
+       "씁니다. 배경 잘라내기: 가려진 픽셀을 빈 곳으로 학습해 배경을 잘라내고 "
+       "마스크된 피사체만 재구성합니다 — 물체 촬영용입니다. 마스크가 없는 "
+       "데이터셋에서는 아무 효과가 없습니다."),
+    DE("Was eine Maske bedeutet, wo eine vorliegt. Störendes ignorieren: "
+       "maskierte Pixel bleiben aus der Verlustfunktion heraus -- für "
+       "Passanten, Autos, den eigenen Schatten oder den Bereich außerhalb des "
+       "Fischaugenkreises. Hintergrund freistellen: maskierte Pixel werden als "
+       "leer trainiert, der Hintergrund fällt weg und nur das maskierte Motiv "
+       "wird rekonstruiert -- für Objektaufnahmen. Ohne Masken im Datensatz "
+       "ohne Wirkung."),
+    FR("Ce que signifie un masque, là où il y en a un. Ignorer les gêneurs : "
+       "les pixels masqués sont retirés de la fonction de coût -- pour les "
+       "passants, les voitures, votre propre ombre ou la zone hors du cercle "
+       "fisheye. Détourer l'arrière-plan : les pixels masqués sont entraînés "
        "comme vides, l'arrière-plan disparaît et seul le sujet masqué est "
        "reconstruit -- pour les prises d'objet. Sans effet sur un jeu de "
        "données sans masques."),
-    ES("Qué significa una máscara, donde la hay. ignorar: los píxeles "
-       "enmascarados quedan fuera de la función de pérdida -- para elementos "
-       "molestos (transeúntes, coches, la sombra del fotógrafo, la zona fuera "
-       "del círculo de ojo de pez, un cielo quemado). recortar: los píxeles "
+    ES("Qué significa una máscara, donde la hay. Ignorar los elementos "
+       "molestos: los píxeles enmascarados quedan fuera de la función de "
+       "pérdida -- para transeúntes, coches, la sombra del fotógrafo o la "
+       "zona fuera del círculo de ojo de pez. Recortar el fondo: los píxeles "
        "enmascarados se entrenan como vacíos, el fondo se elimina y solo se "
        "reconstruye el sujeto enmascarado -- para capturas de objetos. Sin "
        "efecto en un conjunto sin máscaras."),
-    PT("O que uma máscara significa, onde houver uma. ignorar: os pixels "
-       "mascarados ficam de fora da função de perda -- para elementos "
-       "indesejados (pessoas passando, carros, a sombra do fotógrafo, a área "
-       "fora do círculo olho de peixe, céu estourado). recortar: os pixels "
-       "mascarados são treinados como vazios, o fundo é removido e só o "
-       "sujeito mascarado é reconstruído -- para capturas de objetos. Sem "
-       "efeito num conjunto sem máscaras."),
-    IT("Che cosa significa una maschera, dove ce n'è una. ignora: i pixel "
-       "mascherati restano fuori dalla funzione di perdita -- per gli "
-       "elementi di disturbo (passanti, automobili, l'ombra del fotografo, "
-       "l'area fuori dal cerchio fisheye, un cielo bruciato). ritaglia: i "
-       "pixel mascherati vengono addestrati come vuoti, lo sfondo sparisce e "
-       "si ricostruisce solo il soggetto mascherato -- per le riprese di "
-       "oggetti. Senza effetto su un set di dati senza maschere."),
-    NL("Wat een masker betekent, waar er een is. negeren: gemaskeerde pixels "
-       "blijven buiten de verliesfunctie -- voor stoorelementen (voorbijgangers, "
-       "auto's, de eigen schaduw, het gebied buiten de fisheye-cirkel, "
-       "overbelichte lucht). uitsnijden: gemaskeerde pixels worden als leeg "
-       "getraind, de achtergrond valt weg en alleen het gemaskeerde onderwerp "
-       "wordt gereconstrueerd -- voor objectopnamen. Zonder maskers in de "
-       "dataset heeft dit geen effect."),
-    RU("Что означает маска там, где она есть. игнорировать: закрытые маской "
-       "пиксели не входят в функцию потерь — для помех (прохожие, машины, "
-       "собственная тень, область вне круга фишая, выбитое небо). вырезать: "
-       "закрытые маской пиксели обучаются как пустота, фон отсекается и "
-       "восстанавливается только объект под маской — для съёмки предметов. На "
-       "наборе без масок ничего не меняет."),
-    TR("Maske varsa maskenin ne anlama geldiği. yok say: maskelenen pikseller "
-       "kayıp işlevinin dışında kalır -- geçen insanlar, arabalar, "
-       "fotoğrafçının gölgesi, balıkgözü dairesinin dışı, yanmış gökyüzü gibi "
-       "istenmeyenler için. ayır: maskelenen pikseller boş olarak eğitilir, "
-       "arka plan kesilir ve yalnızca maskelenen özne yeniden oluşturulur -- "
-       "nesne çekimleri için. Maskesiz bir veri kümesinde etkisi yoktur."));
+    PT("O que uma máscara significa, onde houver uma. Ignorar o que atrapalha: "
+       "os pixels mascarados ficam de fora da função de perda -- para pessoas "
+       "passando, carros, a sombra do fotógrafo ou a área fora do círculo olho "
+       "de peixe. Recortar o fundo: os pixels mascarados são treinados como "
+       "vazios, o fundo é removido e só o sujeito mascarado é reconstruído -- "
+       "para capturas de objetos. Sem efeito num conjunto sem máscaras."),
+    IT("Che cosa significa una maschera, dove ce n'è una. Ignorare i "
+       "disturbi: i pixel mascherati restano fuori dalla funzione di perdita "
+       "-- per passanti, automobili, l'ombra del fotografo o l'area fuori dal "
+       "cerchio fisheye. Ritagliare lo sfondo: i pixel mascherati vengono "
+       "addestrati come vuoti, lo sfondo sparisce e si ricostruisce solo il "
+       "soggetto mascherato -- per le riprese di oggetti. Senza effetto su un "
+       "set di dati senza maschere."),
+    NL("Wat een masker betekent, waar er een is. Storende dingen negeren: "
+       "gemaskeerde pixels tellen niet mee in het verlies -- voor "
+       "voorbijgangers, auto's, de schaduw van de fotograaf of het gebied "
+       "buiten de fisheye-cirkel. Achtergrond uitsnijden: gemaskeerde pixels "
+       "worden als leeg getraind, de achtergrond valt weg en alleen het "
+       "gemaskeerde onderwerp wordt gereconstrueerd -- voor opnamen van een "
+       "object. Zonder maskers in de dataset zonder effect."),
+    RU("Что означает маска там, где она есть. Игнорировать помехи: закрытые "
+       "маской пиксели не входят в функцию потерь -- для прохожих, машин, "
+       "тени фотографа или области вне круга «рыбьего глаза». Вырезать фон: "
+       "закрытые маской пиксели обучаются как пустота, фон удаляется и "
+       "восстанавливается только объект под маской -- для съёмки предметов. "
+       "Без масок в наборе ни на что не влияет."),
+    TR("Maske varsa maskenin ne anlama geldiği. Rahatsız edicileri yok say: "
+       "maskelenen pikseller yitim işlevine girmez -- yoldan geçenler, "
+       "arabalar, fotoğrafçının gölgesi ya da balıkgözü dairesinin dışı için. "
+       "Arka planı ayır: maskelenen pikseller boş olarak eğitilir, arka plan "
+       "kalkar ve yalnızca maskelenen konu yeniden oluşturulur -- nesne "
+       "çekimleri için. Maskesiz bir veri kümesinde etkisi yoktur."));
 
 SS_MSG(opt_sh_degree,
     EN("Color detail (SH)"),
@@ -1465,6 +1404,43 @@ SS_MSG(training_complete,
     RU("Обучение завершено."),
     TR("Eğitim tamamlandı."));
 
+SS_MSG(training_stopped_unsaved,
+    EN("Stopped without saving."),
+    JA("保存せずに停止しました。"),
+    ZH_HANS("已停止，未保存。"),
+    ZH_HANT("已停止，未儲存。"),
+    KO("저장하지 않고 멈췄습니다."),
+    DE("Ohne Speichern angehalten."),
+    FR("Arrêté sans enregistrer."),
+    ES("Detenido sin guardar."),
+    PT("Parado sem salvar."),
+    IT("Fermato senza salvare."),
+    NL("Gestopt zonder opslaan."),
+    RU("Остановлено без сохранения."),
+    TR("Kaydetmeden durduruldu."));
+
+SS_MSG(unsaved_note,
+    EN("Nothing more was written; what is in {0} is the last automatic save."),
+    JA("以降は何も書き出していません。{0} にあるのは直前の自動保存までです。"),
+    ZH_HANS("之后没有再写入任何东西；{0} 里的是上一次自动保存的内容。"),
+    ZH_HANT("之後沒有再寫入任何東西；{0} 裡的是上一次自動儲存的內容。"),
+    KO("그 뒤로는 아무것도 쓰지 않았습니다. {0}에 있는 것은 직전 자동 저장까지입니다."),
+    DE("Es wurde nichts mehr geschrieben; in {0} steht die letzte automatische "
+       "Speicherung."),
+    FR("Rien de plus n'a été écrit ; ce qui est dans {0} est la dernière "
+       "sauvegarde automatique."),
+    ES("No se escribió nada más; lo que hay en {0} es el último guardado "
+       "automático."),
+    PT("Nada mais foi escrito; o que está em {0} é o último salvamento "
+       "automático."),
+    IT("Non è stato scritto altro; quello che sta in {0} è l'ultimo "
+       "salvataggio automatico."),
+    NL("Er is niets meer weggeschreven; wat in {0} staat is de laatste "
+       "automatische opslag."),
+    RU("Больше ничего не записано; в {0} лежит последнее автоматическое "
+       "сохранение."),
+    TR("Başka bir şey yazılmadı; {0} içindeki son otomatik kayıttır."));
+
 SS_MSG(saved_to,
     EN("Saved to {0}"),  JA("{0} に保存しました"), ZH_HANS("已保存到 {0}"),
     ZH_HANT("已儲存到 {0}"), KO("{0}에 저장했습니다"), DE("Gespeichert unter {0}"),
@@ -1517,6 +1493,92 @@ SS_MSG(resume,
 
 // "&&" is ImGui's escape for a literal ampersand; keep it in every language
 // that keeps the ampersand, and drop it where the conjunction is a word.
+SS_MSG(stop,
+    EN("Stop"),          JA("停止"),          ZH_HANS("停止"),     ZH_HANT("停止"),
+    KO("멈춤"),           DE("Anhalten"),     FR("Arrêter"),      ES("Detener"),
+    PT("Parar"),         IT("Ferma"),        NL("Stoppen"),      RU("Остановить"),
+    TR("Durdur"));
+
+SS_MSG(stop_help,
+    EN("Ends the run. Asks first whether to save a final checkpoint; either "
+       "way the result stays loaded for viewing."),
+    JA("実行を終了します。最後のチェックポイントを保存するかどうかを先に"
+       "尋ねます。どちらを選んでも結果は表示用に読み込んだままです。"),
+    ZH_HANS("结束这次训练。会先问是否保存最后一个检查点；无论选哪个，结果都"
+            "留在内存中以便查看。"),
+    ZH_HANT("結束這次訓練。會先問是否儲存最後一個檢查點；無論選哪個，結果都"
+            "留在記憶體中以便檢視。"),
+    KO("실행을 끝냅니다. 마지막 체크포인트를 저장할지 먼저 묻고, 어느 쪽이든 "
+       "결과는 볼 수 있도록 그대로 둡니다."),
+    DE("Beendet den Lauf. Fragt vorher, ob ein letzter Prüfpunkt gespeichert "
+       "werden soll; in beiden Fällen bleibt das Ergebnis zum Betrachten "
+       "geladen."),
+    FR("Termine l'exécution. Demande d'abord s'il faut enregistrer un dernier "
+       "point de sauvegarde ; dans les deux cas le résultat reste chargé pour "
+       "être consulté."),
+    ES("Termina la ejecución. Antes pregunta si guardar un último punto de "
+       "control; en ambos casos el resultado sigue cargado para verlo."),
+    PT("Termina a execução. Antes pergunta se deve salvar um último ponto de "
+       "verificação; nos dois casos o resultado continua carregado para "
+       "visualização."),
+    IT("Termina l'esecuzione. Prima chiede se salvare un ultimo punto di "
+       "controllo; in entrambi i casi il risultato resta caricato per "
+       "guardarlo."),
+    NL("Beëindigt de run. Vraagt eerst of er nog een laatste controlepunt "
+       "moet worden opgeslagen; het resultaat blijft in beide gevallen geladen "
+       "om te bekijken."),
+    RU("Завершает прогон. Сначала спрашивает, сохранять ли последнюю "
+       "контрольную точку; в обоих случаях результат остаётся загруженным для "
+       "просмотра."),
+    TR("Çalışmayı bitirir. Önce son bir denetim noktası kaydedilsin mi diye "
+       "sorar; her iki durumda da sonuç görüntülemek için yüklü kalır."));
+
+SS_MSG(stop_without_saving,
+    EN("Stop without Saving"),
+    JA("保存せずに停止"),  ZH_HANS("不保存并停止"), ZH_HANT("不儲存並停止"),
+    KO("저장하지 않고 멈춤"), DE("Anhalten ohne zu speichern"),
+    FR("Arrêter sans enregistrer"), ES("Detener sin guardar"),
+    PT("Parar sem salvar"), IT("Ferma senza salvare"),
+    NL("Stoppen zonder opslaan"), RU("Остановить без сохранения"),
+    TR("Kaydetmeden durdur"));
+
+SS_MSG(stop_without_saving_help,
+    EN("End the run without writing anything else to disk: what stays in the "
+       "output folder is what the last automatic save left there. The result "
+       "is still loaded for viewing."),
+    JA("ディスクには何も書き足さずに実行を終了します。出力フォルダに残るのは"
+       "直前の自動保存までです。結果は表示用に読み込んだままです。"),
+    ZH_HANS("结束这次训练，不再往磁盘写任何东西：输出文件夹里留下的仍是上一次"
+            "自动保存的内容。结果仍留在内存中以便查看。"),
+    ZH_HANT("結束這次訓練，不再往磁碟寫任何東西：輸出資料夾裡留下的仍是上一次"
+            "自動儲存的內容。結果仍留在記憶體中以便檢視。"),
+    KO("디스크에 더 쓰지 않고 실행을 끝냅니다. 출력 폴더에 남는 것은 직전 자동 "
+       "저장까지입니다. 결과는 볼 수 있도록 그대로 둡니다."),
+    DE("Beendet den Lauf, ohne noch etwas auf die Festplatte zu schreiben: im "
+       "Ausgabeordner bleibt stehen, was die letzte automatische Speicherung "
+       "dort gelassen hat. Das Ergebnis bleibt zum Betrachten geladen."),
+    FR("Termine l'exécution sans plus rien écrire sur le disque : ce qui reste "
+       "dans le dossier de sortie est ce que la dernière sauvegarde "
+       "automatique y a laissé. Le résultat reste chargé pour être consulté."),
+    ES("Termina la ejecución sin escribir nada más en el disco: en la carpeta "
+       "de salida queda lo que dejó el último guardado automático. El "
+       "resultado sigue cargado para verlo."),
+    PT("Termina a execução sem escrever mais nada no disco: na pasta de saída "
+       "fica o que o último salvamento automático deixou. O resultado "
+       "continua carregado para visualização."),
+    IT("Termina l'esecuzione senza scrivere altro su disco: nella cartella di "
+       "uscita resta quello che ha lasciato l'ultimo salvataggio automatico. "
+       "Il risultato resta caricato per guardarlo."),
+    NL("Beëindigt de run zonder nog iets naar schijf te schrijven: in de "
+       "uitvoermap blijft staan wat de laatste automatische opslag daar "
+       "achterliet. Het resultaat blijft geladen om te bekijken."),
+    RU("Завершает прогон, ничего больше не записывая на диск: в папке вывода "
+       "останется то, что оставило последнее автоматическое сохранение. "
+       "Результат остаётся загруженным для просмотра."),
+    TR("Diske başka bir şey yazmadan çalışmayı bitirir: çıktı klasöründe son "
+       "otomatik kaydın bıraktığı şey kalır. Sonuç görüntülemek için yüklü "
+       "kalır."));
+
 SS_MSG(stop_and_save,
     EN("Stop and Save"),  JA("停止して保存"),   ZH_HANS("停止并保存"), ZH_HANT("停止並儲存"),
     KO("멈추고 저장"),    DE("Anhalten und speichern"),
@@ -1796,83 +1858,64 @@ SS_MSG(confirm_title,
     NL("Training stoppen?"), RU("Остановить обучение?"), TR("Eğitim durdurulsun mu?"));
 
 SS_MSG(confirm_intro,
-    EN("Training is in progress."),
-    JA("学習が進行中です。"),
-    ZH_HANS("训练正在进行。"),
-    ZH_HANT("訓練正在進行。"),
-    KO("학습이 진행 중입니다."),
-    DE("Das Training läuft."),
-    FR("L'entraînement est en cours."),
-    ES("El entrenamiento está en marcha."),
-    PT("O treinamento está em andamento."),
-    IT("L'addestramento è in corso."),
-    NL("De training loopt."),
-    RU("Идёт обучение."),
-    TR("Eğitim sürüyor."));
+    EN("Training is paused while you decide."),
+    JA("決めるあいだ、学習は一時停止しています。"),
+    ZH_HANS("训练已暂停，等待你的选择。"),
+    ZH_HANT("訓練已暫停，等待你的選擇。"),
+    KO("결정하는 동안 학습을 멈춰 두었습니다."),
+    DE("Das Training ist angehalten, solange Sie entscheiden."),
+    FR("L'entraînement est en pause le temps de votre choix."),
+    ES("El entrenamiento está en pausa mientras decide."),
+    PT("O treinamento está pausado enquanto você decide."),
+    IT("L'addestramento è in pausa mentre decide."),
+    NL("De training staat stil terwijl u kiest."),
+    RU("Обучение приостановлено, пока вы выбираете."),
+    TR("Siz karar verirken eğitim duraklatıldı."));
 
 SS_MSG(confirm_quit,
-    EN("Stop training, save a final checkpoint, and exit?"),
-    JA("学習を停止して最後のチェックポイントを保存し、終了しますか？"),
-    ZH_HANS("停止训练、保存最后一个检查点并退出吗？"),
-    ZH_HANT("停止訓練、儲存最後一個檢查點並結束嗎？"),
-    KO("학습을 멈추고 마지막 체크포인트를 저장한 뒤 종료할까요?"),
-    DE("Training anhalten, einen letzten Prüfpunkt speichern und beenden?"),
-    FR("Arrêter l'entraînement, enregistrer un dernier point de sauvegarde et "
-       "quitter ?"),
-    ES("¿Detener el entrenamiento, guardar un último punto de control y salir?"),
-    PT("Parar o treinamento, salvar um último ponto de verificação e sair?"),
-    IT("Fermare l'addestramento, salvare un ultimo punto di controllo e "
-       "uscire?"),
-    NL("Training stoppen, een laatste controlepunt opslaan en afsluiten?"),
-    RU("Остановить обучение, сохранить последнюю контрольную точку и выйти?"),
-    TR("Eğitimi durdurup son bir denetim noktası kaydedelim ve çıkalım mı?"));
+    EN("Stop training and exit?"),
+    JA("学習を停止して終了しますか？"),
+    ZH_HANS("停止训练并退出吗？"),
+    ZH_HANT("停止訓練並結束嗎？"),
+    KO("학습을 멈추고 종료할까요?"),
+    DE("Training anhalten und beenden?"),
+    FR("Arrêter l'entraînement et quitter ?"),
+    ES("¿Detener el entrenamiento y salir?"),
+    PT("Parar o treinamento e sair?"),
+    IT("Fermare l'addestramento e uscire?"),
+    NL("Training stoppen en afsluiten?"),
+    RU("Остановить обучение и выйти?"),
+    TR("Eğitimi durdurup çıkalım mı?"));
 
 SS_MSG(confirm_home,
-    EN("Stop training, save a final checkpoint, and go to the home screen?"),
-    JA("学習を停止して最後のチェックポイントを保存し、ホーム画面に戻りますか？"),
-    ZH_HANS("停止训练、保存最后一个检查点并回到主页吗？"),
-    ZH_HANT("停止訓練、儲存最後一個檢查點並回到首頁嗎？"),
-    KO("학습을 멈추고 마지막 체크포인트를 저장한 뒤 홈 화면으로 갈까요?"),
-    DE("Training anhalten, einen letzten Prüfpunkt speichern und zum "
-       "Startbildschirm gehen?"),
-    FR("Arrêter l'entraînement, enregistrer un dernier point de sauvegarde et "
-       "revenir à l'accueil ?"),
-    ES("¿Detener el entrenamiento, guardar un último punto de control e ir a "
-       "la pantalla de inicio?"),
-    PT("Parar o treinamento, salvar um último ponto de verificação e ir para a "
-       "tela inicial?"),
-    IT("Fermare l'addestramento, salvare un ultimo punto di controllo e "
-       "tornare alla schermata iniziale?"),
-    NL("Training stoppen, een laatste controlepunt opslaan en naar het "
-       "startscherm gaan?"),
-    RU("Остановить обучение, сохранить последнюю контрольную точку и перейти "
-       "на главный экран?"),
-    TR("Eğitimi durdurup son bir denetim noktası kaydedelim ve ana ekrana "
-       "dönelim mi?"));
+    EN("Stop training and go to the home screen?"),
+    JA("学習を停止してホーム画面に戻りますか？"),
+    ZH_HANS("停止训练并回到主页吗？"),
+    ZH_HANT("停止訓練並回到首頁嗎？"),
+    KO("학습을 멈추고 홈 화면으로 갈까요?"),
+    DE("Training anhalten und zum Startbildschirm gehen?"),
+    FR("Arrêter l'entraînement et revenir à l'accueil ?"),
+    ES("¿Detener el entrenamiento e ir a la pantalla de inicio?"),
+    PT("Parar o treinamento e ir para a tela inicial?"),
+    IT("Fermare l'addestramento e tornare alla schermata iniziale?"),
+    NL("Training stoppen en naar het beginscherm gaan?"),
+    RU("Остановить обучение и вернуться на главный экран?"),
+    TR("Eğitimi durdurup ana ekrana dönelim mi?"));
 
 SS_MSG(confirm_open,
-    EN("Stop training, save a final checkpoint, and open the new dataset?"),
-    JA("学習を停止して最後のチェックポイントを保存し、新しいデータセットを"
-       "開きますか？"),
-    ZH_HANS("停止训练、保存最后一个检查点并打开新的数据集吗？"),
-    ZH_HANT("停止訓練、儲存最後一個檢查點並開啟新的資料集嗎？"),
-    KO("학습을 멈추고 마지막 체크포인트를 저장한 뒤 새 데이터셋을 열까요?"),
-    DE("Training anhalten, einen letzten Prüfpunkt speichern und den neuen "
-       "Datensatz öffnen?"),
-    FR("Arrêter l'entraînement, enregistrer un dernier point de sauvegarde et "
-       "ouvrir le nouveau jeu de données ?"),
-    ES("¿Detener el entrenamiento, guardar un último punto de control y abrir "
-       "el nuevo conjunto de datos?"),
-    PT("Parar o treinamento, salvar um último ponto de verificação e abrir o "
-       "novo conjunto de dados?"),
-    IT("Fermare l'addestramento, salvare un ultimo punto di controllo e "
-       "aprire il nuovo set di dati?"),
-    NL("Training stoppen, een laatste controlepunt opslaan en de nieuwe "
-       "dataset openen?"),
-    RU("Остановить обучение, сохранить последнюю контрольную точку и открыть "
-       "новый набор данных?"),
-    TR("Eğitimi durdurup son bir denetim noktası kaydedelim ve yeni veri "
-       "kümesini açalım mı?"));
+    EN("Stop training and open the new dataset?"),
+    JA("学習を停止して新しいデータセットを開きますか？"),
+    ZH_HANS("停止训练并打开新的数据集吗？"),
+    ZH_HANT("停止訓練並開啟新的資料集嗎？"),
+    KO("학습을 멈추고 새 데이터셋을 열까요?"),
+    DE("Training anhalten und den neuen Datensatz öffnen?"),
+    FR("Arrêter l'entraînement et ouvrir le nouveau jeu de données ?"),
+    ES("¿Detener el entrenamiento y abrir el nuevo conjunto de datos?"),
+    PT("Parar o treinamento e abrir o novo conjunto de dados?"),
+    IT("Fermare l'addestramento e aprire il nuovo set di dati?"),
+    NL("Training stoppen en de nieuwe dataset openen?"),
+    RU("Остановить обучение и открыть новый набор данных?"),
+    TR("Eğitimi durdurup yeni veri kümesini açalım mı?"));
 
 SS_MSG(keep_training,
     EN("Keep Training"), JA("学習を続ける"),   ZH_HANS("继续训练"),  ZH_HANT("繼續訓練"),
@@ -1880,6 +1923,37 @@ SS_MSG(keep_training,
     ES("Seguir entrenando"), PT("Continuar treinando"),
     IT("Continua l'addestramento"), NL("Doorgaan met trainen"),
     RU("Продолжить обучение"), TR("Eğitime devam et"));
+
+SS_MSG(keep_training_help,
+    EN("Close this and carry on from where the run was paused."),
+    JA("これを閉じて、一時停止したところから続けます。"),
+    ZH_HANS("关掉这个对话框，从暂停的地方继续训练。"),
+    ZH_HANT("關掉這個對話框，從暫停的地方繼續訓練。"),
+    KO("이 창을 닫고 멈춘 자리에서 이어서 학습합니다."),
+    DE("Schließt dies und macht dort weiter, wo der Lauf angehalten wurde."),
+    FR("Ferme cette fenêtre et reprend là où l'exécution a été mise en pause."),
+    ES("Cierra esto y sigue desde donde se pausó la ejecución."),
+    PT("Fecha isto e continua de onde a execução foi pausada."),
+    IT("Chiude questa finestra e riprende da dove l'esecuzione è stata messa "
+       "in pausa."),
+    NL("Sluit dit en gaat verder waar de run is stilgezet."),
+    RU("Закрывает это окно и продолжает с места, где прогон был приостановлен."),
+    TR("Bunu kapatır ve çalışmanın duraklatıldığı yerden devam eder."));
+
+SS_MSG(confirm_stop,
+    EN("Stop training and keep the result loaded for viewing?"),
+    JA("学習を停止し、結果は表示用に読み込んだままにしますか？"),
+    ZH_HANS("停止训练，并把结果留在内存中以便查看吗？"),
+    ZH_HANT("停止訓練，並把結果留在記憶體中以便檢視嗎？"),
+    KO("학습을 멈추고 결과는 볼 수 있도록 그대로 둘까요?"),
+    DE("Training anhalten und das Ergebnis zum Betrachten geladen lassen?"),
+    FR("Arrêter l'entraînement et garder le résultat chargé pour le consulter ?"),
+    ES("¿Detener el entrenamiento y dejar el resultado cargado para verlo?"),
+    PT("Parar o treinamento e deixar o resultado carregado para visualização?"),
+    IT("Fermare l'addestramento e lasciare il risultato caricato per guardarlo?"),
+    NL("Training stoppen en het resultaat geladen laten om te bekijken?"),
+    RU("Остановить обучение и оставить результат загруженным для просмотра?"),
+    TR("Eğitimi durdurup sonucu görüntülemek için yüklü bırakalım mı?"));
 
 // ===========================================================================
 // Viewport
@@ -2306,30 +2380,20 @@ SS_MSG(viewport_speed_help,
        "görüntüleyicisindeki Move Speed sürgüsü)."));
 
 SS_MSG(viewport_projection_help,
-    EN("Projection used for the viewport (preview and training render) -- "
-       "same options as the web viewer."),
-    JA("ビューポート（プレビューと学習中の描画）で使う投影方式です。"
-       "ウェブビューアと同じ選択肢です。"),
-    ZH_HANS("视口（预览与训练渲染）使用的投影方式——与网页查看器的选项相同。"),
-    ZH_HANT("檢視區（預覽與訓練算繪）使用的投影方式——與網頁檢視器的選項相同。"),
-    KO("뷰포트(미리보기와 학습 렌더링)에 쓰는 투영 방식입니다. 웹 뷰어와 같은 "
-       "선택지입니다."),
-    DE("Projektion für das Fenster (Vorschau und Trainingsdarstellung) -- "
-       "dieselben Möglichkeiten wie im Web-Betrachter."),
-    FR("Projection utilisée pour la vue (aperçu et rendu d'entraînement) -- "
-       "les mêmes choix que dans la visionneuse web."),
-    ES("Proyección usada en la vista (vista previa y render de entrenamiento): "
-       "las mismas opciones que en el visor web."),
-    PT("Projeção usada na vista (prévia e renderização de treinamento) -- as "
-       "mesmas opções do visualizador web."),
+    EN("Projection used for the viewport (preview and training render)."),
+    JA("ビューポート（プレビューと学習中の描画）で使う投影方式です。"),
+    ZH_HANS("视口（预览与训练渲染）使用的投影方式。"),
+    ZH_HANT("檢視區（預覽與訓練算繪）使用的投影方式。"),
+    KO("뷰포트(미리보기와 학습 렌더링)에 쓰는 투영 방식입니다."),
+    DE("Projektion für das Fenster (Vorschau und Trainingsdarstellung)."),
+    FR("Projection utilisée pour la vue (aperçu et rendu d'entraînement)."),
+    ES("Proyección usada en la vista (vista previa y render de entrenamiento)."),
+    PT("Projeção usada na vista (prévia e renderização de treinamento)."),
     IT("Proiezione usata per la vista (anteprima e rendering di "
-       "addestramento) -- le stesse opzioni del visualizzatore web."),
-    NL("Projectie voor het beeld (voorbeeld en trainingsweergave) -- dezelfde "
-       "keuzes als in de webviewer."),
-    RU("Проекция для окна (предпросмотр и отрисовка при обучении) — те же "
-       "варианты, что и в веб-просмотрщике."),
-    TR("Görünüm için kullanılan izdüşüm (önizleme ve eğitim işlemesi) -- web "
-       "görüntüleyicisiyle aynı seçenekler."));
+       "addestramento)."),
+    NL("Projectie voor het beeld (voorbeeld en trainingsweergave)."),
+    RU("Проекция для окна (предпросмотр и отрисовка при обучении)."),
+    TR("Görünüm için kullanılan izdüşüm (önizleme ve eğitim işlemesi)."));
 
 SS_MSG(viewport_open_a_dataset,
     EN("Open a dataset to see it here"),
@@ -2898,28 +2962,19 @@ SS_MSG(viewer_run_config_unreadable,
     TR("Çalışmanın ayarları okunamadı ({0}); varsayılanlar kullanılıyor."));
 
 SS_MSG(confirm_open_splat,
-    EN("Stop training, save a final checkpoint, and open the model file?"),
-    JA("学習を停止して最後のチェックポイントを保存し、モデルファイルを"
-       "開きますか？"),
-    ZH_HANS("停止训练、保存最后一个检查点并打开该模型文件吗？"),
-    ZH_HANT("停止訓練、儲存最後一個檢查點並開啟該模型檔案嗎？"),
-    KO("학습을 멈추고 마지막 체크포인트를 저장한 뒤 모델 파일을 열까요?"),
-    DE("Training anhalten, einen letzten Prüfpunkt speichern und die "
-       "Modelldatei öffnen?"),
-    FR("Arrêter l'entraînement, enregistrer un dernier point de sauvegarde et "
-       "ouvrir le fichier de modèle ?"),
-    ES("¿Detener el entrenamiento, guardar un último punto de control y abrir "
-       "el archivo de modelo?"),
-    PT("Parar o treinamento, salvar um último ponto de verificação e abrir o "
-       "arquivo de modelo?"),
-    IT("Fermare l'addestramento, salvare un ultimo punto di controllo e aprire "
-       "il file del modello?"),
-    NL("Training stoppen, een laatste checkpoint opslaan en het modelbestand "
-       "openen?"),
-    RU("Остановить обучение, сохранить последнюю контрольную точку и открыть "
-       "файл модели?"),
-    TR("Eğitimi durdurup son bir kontrol noktası kaydedelim ve model dosyasını "
-       "açalım mı?"));
+    EN("Stop training and open the model file?"),
+    JA("学習を停止してモデルファイルを開きますか？"),
+    ZH_HANS("停止训练并打开该模型文件吗？"),
+    ZH_HANT("停止訓練並開啟該模型檔案嗎？"),
+    KO("학습을 멈추고 모델 파일을 열까요?"),
+    DE("Training anhalten und die Modelldatei öffnen?"),
+    FR("Arrêter l'entraînement et ouvrir le fichier de modèle ?"),
+    ES("¿Detener el entrenamiento y abrir el archivo de modelo?"),
+    PT("Parar o treinamento e abrir o arquivo de modelo?"),
+    IT("Fermare l'addestramento e aprire il file del modello?"),
+    NL("Training stoppen en het modelbestand openen?"),
+    RU("Остановить обучение и открыть файл модели?"),
+    TR("Eğitimi durdurup model dosyasını açalım mı?"));
 
 
 // ===========================================================================
@@ -4015,26 +4070,19 @@ SS_MSG(batch_running_preset,
     RU("Пресет: {0}"),
     TR("Hazır ayar: {0}"));
 SS_MSG(confirm_batch,
-    EN("Stop training, save a last checkpoint and start the batch?"),
-    JA("学習を止めて最後のチェックポイントを保存し、バッチを開始しますか？"),
-    ZH_HANS("要停止训练、保存最后一个检查点，然后开始批量训练吗？"),
-    ZH_HANT("要停止訓練、儲存最後一個檢查點，然後開始批次訓練嗎？"),
-    KO("학습을 멈추고 마지막 체크포인트를 저장한 뒤 일괄 실행을 시작할까요?"),
-    DE("Training stoppen, einen letzten Checkpoint speichern und den Stapel "
-       "starten?"),
-    FR("Arrêter l'entraînement, enregistrer un dernier point de reprise et "
-       "lancer le lot ?"),
-    ES("¿Detener el entrenamiento, guardar un último punto de control y empezar "
-       "el lote?"),
-    PT("Parar o treinamento, salvar um último ponto de verificação e iniciar o "
-       "lote?"),
-    IT("Fermare l'addestramento, salvare un ultimo checkpoint e avviare il "
-       "batch?"),
-    NL("Training stoppen, een laatste controlepunt opslaan en de batch starten?"),
-    RU("Остановить обучение, сохранить последнюю контрольную точку и запустить "
-       "пакет?"),
-    TR("Eğitimi durdurup son bir denetim noktası kaydedelim ve toplu işi "
-       "başlatalım mı?"));
+    EN("Stop training and start the batch?"),
+    JA("学習を停止してバッチを開始しますか？"),
+    ZH_HANS("要停止训练并开始批量训练吗？"),
+    ZH_HANT("要停止訓練並開始批次訓練嗎？"),
+    KO("학습을 멈추고 일괄 실행을 시작할까요?"),
+    DE("Training anhalten und den Stapel starten?"),
+    FR("Arrêter l'entraînement et lancer le lot ?"),
+    ES("¿Detener el entrenamiento y empezar el lote?"),
+    PT("Parar o treinamento e iniciar o lote?"),
+    IT("Fermare l'addestramento e avviare il batch?"),
+    NL("Training stoppen en de batch starten?"),
+    RU("Остановить обучение и запустить пакет?"),
+    TR("Eğitimi durdurup toplu işi başlatalım mı?"));
 SS_MSG(batch_show_list,
     EN("Batch list"),
     JA("バッチの一覧"),
@@ -5229,30 +5277,41 @@ SS_MSG(mesh_max_cameras,
     TR("Kullanılacak fotoğraflar"));
 
 SS_MSG(mesh_max_cameras_help,
-    EN("0 uses every photo, which is slowest and best. A smaller number picks "
-       "a well-spread subset."),
-    JA("0 ならすべての写真を使います（最も遅く、最も良い）。小さい数にすると"
-       "満遍なく散らばった一部だけを使います。"),
-    ZH_HANS("0 表示用上全部照片，最慢也最好。填小一点会挑一批分布均匀的照片。"),
-    ZH_HANT("0 表示用上全部相片，最慢也最好。填小一點會挑一批分布均勻的相片。"),
-    KO("0이면 사진을 모두 씁니다. 가장 느리고 가장 좋습니다. 작게 잡으면 고르게 "
-       "퍼진 일부만 고릅니다."),
-    DE("0 nutzt jedes Foto -- am langsamsten und am besten. Eine kleinere Zahl "
-       "wählt eine gut verteilte Teilmenge."),
-    FR("0 utilise toutes les photos : le plus lent et le meilleur. Un nombre "
-       "plus petit choisit un sous-ensemble bien réparti."),
-    ES("0 usa todas las fotos: lo más lento y lo mejor. Un número menor elige "
-       "un subconjunto bien repartido."),
-    PT("0 usa todas as fotos: o mais lento e o melhor. Um número menor escolhe "
-       "um subconjunto bem espalhado."),
-    IT("0 usa tutte le foto: il più lento e il migliore. Un numero più piccolo "
+    EN("0 uses every photo, which is best but can be slow on a dataset with "
+       "many of them. A smaller positive number picks a well-spread subset."),
+    JA("0 ならすべての写真を使います。いちばん良い結果になりますが、写真の"
+       "多いデータセットでは時間がかかります。正の小さい数にすると満遍なく"
+       "散らばった一部だけを使います。"),
+    ZH_HANS("0 表示用上全部照片，效果最好，但照片很多的数据集会比较慢。"
+            "填一个较小的正数会挑一批分布均匀的照片。"),
+    ZH_HANT("0 表示用上全部相片，效果最好，但相片很多的資料集會比較慢。"
+            "填一個較小的正數會挑一批分布均勻的相片。"),
+    KO("0이면 사진을 모두 씁니다. 결과는 가장 좋지만 사진이 많은 데이터셋에서는 "
+       "느릴 수 있습니다. 작은 양수를 넣으면 고르게 퍼진 일부만 고릅니다."),
+    DE("0 nutzt jedes Foto -- das beste Ergebnis, bei einem Datensatz mit "
+       "vielen Fotos aber langsam. Eine kleinere positive Zahl wählt eine gut "
+       "verteilte Teilmenge."),
+    FR("0 utilise toutes les photos : c'est le meilleur résultat, mais cela "
+       "peut être lent sur un jeu de données qui en compte beaucoup. Un "
+       "nombre positif plus petit choisit un sous-ensemble bien réparti."),
+    ES("0 usa todas las fotos: es lo mejor, pero puede ser lento en un "
+       "conjunto con muchas. Un número positivo menor elige un subconjunto "
+       "bien repartido."),
+    PT("0 usa todas as fotos: é o melhor, mas pode ser lento num conjunto com "
+       "muitas. Um número positivo menor escolhe um subconjunto bem "
+       "espalhado."),
+    IT("0 usa tutte le foto: è il risultato migliore, ma può essere lento su "
+       "un set di dati che ne contiene molte. Un numero positivo più piccolo "
        "sceglie un sottoinsieme ben distribuito."),
-    NL("0 gebruikt elke foto: het traagst en het best. Een kleiner getal kiest "
-       "een goed verspreide selectie."),
-    RU("0 берёт все фотографии -- дольше всего и лучше всего. Меньшее число "
-       "выбирает равномерно разбросанное подмножество."),
-    TR("0 tüm fotoğrafları kullanır; en yavaş ve en iyi olan budur. Daha küçük "
-       "bir sayı iyi dağılmış bir alt küme seçer."));
+    NL("0 gebruikt elke foto: dat is het best, maar bij een dataset met veel "
+       "foto's kan het traag zijn. Een kleiner positief getal kiest een goed "
+       "verspreide selectie."),
+    RU("0 берёт все фотографии — результат лучший, но на наборе с большим их "
+       "числом это медленно. Меньшее положительное число выбирает равномерно "
+       "разбросанное подмножество."),
+    TR("0 tüm fotoğrafları kullanır; en iyi sonuç budur ama fotoğrafı çok "
+       "olan bir veri kümesinde yavaş olabilir. Daha küçük bir pozitif sayı "
+       "iyi dağılmış bir alt küme seçer."));
 
 SS_MSG(mesh_texture_size,
     EN("Texture size"),
@@ -5784,12 +5843,13 @@ SS_MSG(compare_mask_dim,
     IT("Maschera: scurita"), NL("Masker: gedimd"), RU("Маска: затемнить"),
     TR("Maske: karartılmış"));
 
-SS_MSG(compare_mask_ignore,
-    EN("Mask: ignored"), JA("マスク: 無視"),    ZH_HANS("遮罩：忽略"),
-    ZH_HANT("遮罩：忽略"), KO("마스크: 무시"),  DE("Maske: ignoriert"),
-    FR("Masque : ignoré"), ES("Máscara: ignorada"), PT("Máscara: ignorada"),
-    IT("Maschera: ignorata"), NL("Masker: genegeerd"), RU("Маска: игнорировать"),
-    TR("Maske: yok sayılmış"));
+SS_MSG(compare_mask_unmarked,
+    EN("Mask: unmarked"), JA("マスク: 印なし"), ZH_HANS("遮罩：不标出"),
+    ZH_HANT("遮罩：不標出"), KO("마스크: 표시 없음"), DE("Maske: unmarkiert"),
+    FR("Masque : non marqué"), ES("Máscara: sin marcar"),
+    PT("Máscara: sem marcação"), IT("Maschera: non segnata"),
+    NL("Masker: niet gemarkeerd"), RU("Маска: без пометки"),
+    TR("Maske: işaretsiz"));
 
 SS_MSG(compare_mask_hide,
     EN("Mask: black"),   JA("マスク: 黒"), ZH_HANS("遮罩：黑色"),

@@ -188,6 +188,7 @@ struct VideoFacts {
     double fps = 0.0;
     long long frames = 0;     // duration * fps; the container's own count is
                               // not printed by `ffmpeg -i`
+    int width = 0, height = 0;   // one frame, before any scaling
 };
 bool ffmpeg_probe_video(const std::string& ffmpeg_exe, const std::string& path,
                         VideoFacts& out, const std::atomic<bool>& cancel);

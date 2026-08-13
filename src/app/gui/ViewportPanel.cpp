@@ -863,13 +863,12 @@ void ViewportPanel::draw_engine(bool training, const ImVec2& avail, int step) {
         ViewResult res;
         if (_worker.try_get_result(_pending, res)) {
             _pending = 0;
-            // What that render cost, for idle_step_interval(). Includes the
-            // wait for the training loop to yield the engine mutex, which is
-            // the honest number: that wait is time the trainer is not
-            // stepping either.
-            double took = now - _last_submit;
-            if (took > 0) _render_secs = _render_secs > 0
-                ? 0.8 * _render_secs + 0.2 * took : took;
+            // What that render cost, for idle_step_interval(); timed on the
+            // worker (ViewResult::secs), so the frames this panel spent not
+            // being drawn -- the other preview mode, another screen -- are not
+            // charged to it.
+            if (res.secs > 0) _render_secs = _render_secs > 0
+                ? 0.8 * _render_secs + 0.2 * res.secs : res.secs;
             if (res.error.empty()) {
                 upload(res);
                 _last_error.clear();

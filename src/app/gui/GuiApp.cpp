@@ -1153,8 +1153,6 @@ void GuiApp::handle_dialog_result(const std::vector<std::string>& paths) {
             break;
         case PickAction::SourceImages:
         case PickAction::SourceVideo:
-            // Picking from Home starts a dataset; the panel's own Add buttons
-            // extend the one on screen.
             add_sources(paths, /*replace=*/_screen != Screen::NewDataset);
             _screen = Screen::NewDataset;
             break;
@@ -1378,15 +1376,7 @@ void GuiApp::draw_menu_bar() {
             _pick = PickAction::OpenDataset;
             _dialog.open(msg::menu_open_dataset.get(), FileDialog::Mode::Folder);
         }
-        if (ui::MenuItem(msg::menu_new_from_photos)) {
-            _pick = PickAction::SourceImages;
-            _dialog.open(msg::pick_photo_folder.get(), FileDialog::Mode::Folder);
-        }
-        if (ui::MenuItem(msg::menu_new_from_video)) {
-            _pick = PickAction::SourceVideo;
-            _dialog.open(msg::pick_videos.get(), FileDialog::Mode::File,
-                         video_dialog_filters(), "", /*multi_select=*/true);
-        }
+        if (ui::MenuItem(msg::menu_new_dataset)) _screen = Screen::NewDataset;
         if (ui::MenuItem(msg::menu_open_splat)) {
             _pick = PickAction::SplatFile;
             _dialog.open(msg::viewer_pick_file.get(), FileDialog::Mode::File,
@@ -1622,18 +1612,12 @@ void GuiApp::draw_home() {
     }
     ui::help_on_hover(msg::home_open_dataset_help);
 
-    if (ui::Button(msg::home_from_photos, ImVec2(-1, bh))) {
-        _pick = PickAction::SourceImages;
-        _dialog.open(msg::pick_photo_folder.get(), FileDialog::Mode::Folder);
-    }
-    ui::help_on_hover(msg::home_from_photos_help);
-
-    if (ui::Button(msg::home_from_video, ImVec2(-1, bh))) {
-        _pick = PickAction::SourceVideo;
-        _dialog.open(msg::pick_videos.get(), FileDialog::Mode::File,
-                     video_dialog_filters(), "", /*multi_select=*/true);
-    }
-    ui::help_on_hover(msg::home_from_video_help);
+    // Photos and video are one screen and one input list: a capture can hold
+    // both, so splitting the entry point in two only asked a question with no
+    // right answer. The list is added to there, or dropped onto the window.
+    if (ui::Button(msg::home_new_dataset, ImVec2(-1, bh)))
+        _screen = Screen::NewDataset;
+    ui::help_on_hover(msg::home_new_dataset_help);
 
     if (ui::Button(msg::home_open_splat, ImVec2(-1, bh))) {
         _pick = PickAction::SplatFile;
@@ -1854,7 +1838,7 @@ void GuiApp::draw_dataset_source() {
 
     if (ui::Button(dmsg::add_video)) {
         _pick = PickAction::SourceVideo;
-        _dialog.open(msg::pick_video_file.get(), FileDialog::Mode::File,
+        _dialog.open(msg::pick_videos.get(), FileDialog::Mode::File,
                      video_dialog_filters(), "", /*multi_select=*/true);
     }
     ui::help_on_hover(dmsg::add_video_help);
@@ -1914,6 +1898,63 @@ void GuiApp::draw_dataset_source() {
 // The basics
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// The closed picker's tooltip: what the control decides, then what the model
+// standing in it is for. Two paragraphs rather than one message, because only
+// the second one changes with the selection.
+void lens_tooltip(const Msg& model_help) {
+    if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) ||
+        !ImGui::BeginTooltip())
+        return;
+    ImGui::PushTextWrapPos(px(420.0f));
+    ui::Text(dmsg::camera_lens_help);
+    ImGui::Separator();
+    ui::Text(model_help);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+}
+
+// The lens pickers. ImGui's Combo takes a flat list of strings and has
+// nowhere to hang a description on a row, so the popup is built by hand:
+// which physical camera each model is for is the whole of the question, and
+// one tooltip on the closed combo cannot answer it row by row.
+bool sfm_lens_combo(const char* id, int* idx) {
+    const auto labels = sfm_camera_model_labels();
+    const auto helps = sfm_camera_model_helps();
+    if (!ui::BeginComboRaw(id, labels[(size_t)*idx]->get())) return false;
+    bool changed = false;
+    for (int i = 0; i < (int)labels.size(); i++) {
+        if (ui::Selectable(*labels[(size_t)i], i == *idx)) {
+            *idx = i;
+            changed = true;
+        }
+        ui::help_on_hover(*helps[(size_t)i]);
+    }
+    ImGui::EndCombo();
+    return changed;
+}
+
+// The same for COLMAP's, whose rows are COLMAP's own model names -- what a
+// user who read its documentation is looking for -- with the translated
+// sentence beside them rather than instead of them.
+bool colmap_lens_combo(const char* id, int* idx) {
+    const auto helps = colmap_camera_model_helps();
+    if (!ui::BeginComboRaw(id, kColmapCameraModels[*idx])) return false;
+    bool changed = false;
+    for (int i = 0; i < kNumColmapCameraModels; i++) {
+        if (ui::SelectableRaw(kColmapCameraModels[i], i == *idx)) {
+            *idx = i;
+            changed = true;
+        }
+        ui::help_on_hover(*helps[(size_t)i]);
+    }
+    ImGui::EndCombo();
+    return changed;
+}
+
+}  // namespace
+
 void GuiApp::draw_dataset_basics() {
     const bool builtin = effective_engine() == Engine::BuiltIn;
 
@@ -1949,20 +1990,22 @@ void GuiApp::draw_dataset_basics() {
             int idx = 0;
             for (int i = 0; i < kNumSfmCameraModels; i++)
                 if (model == kSfmCameraModels[i]) idx = i;
-            // The distortion models' own names stay put; the parenthetical
-            // that says which to pick is translated (i18n/catalog/Dataset.h).
-            if (ui::ComboRaw(ui::detail::label(dmsg::camera_lens), &idx,
-                             sfm_camera_model_labels()))
+            if (sfm_lens_combo(ui::detail::label(dmsg::camera_lens), &idx))
                 model = kSfmCameraModels[idx];
+            lens_tooltip(*sfm_camera_model_helps()[idx]);
         } else {
             int idx = 0;
             for (int i = 0; i < kNumColmapCameraModels; i++)
                 if (_colmap_job.camera_model == kColmapCameraModels[i]) idx = i;
-            if (ui::ComboRaw(ui::detail::label(dmsg::camera_lens), &idx,
-                             kColmapCameraModels, kNumColmapCameraModels))
+            if (colmap_lens_combo(ui::detail::label(dmsg::camera_lens), &idx))
                 _colmap_job.camera_model = kColmapCameraModels[idx];
+            lens_tooltip(*colmap_camera_model_helps()[idx]);
         }
-        ui::help_on_hover(dmsg::camera_lens_help);
+        if (!_sources.empty())
+            draw_lens_warning(_sources[0],
+                              builtin ? _sources[0].camera_model
+                                      : _colmap_job.camera_model,
+                              builtin);
         if (!builtin && _sources.size() > 1)
             ui::TextColoredWrapped(kWarn, dmsg::colmap_one_lens_warning);
     } else {
@@ -2040,15 +2083,66 @@ void GuiApp::draw_source_cameras() {
         int idx = 0;
         for (int m = 0; m < kNumSfmCameraModels; m++)
             if (s.camera_model == kSfmCameraModels[m]) idx = m;
-        if (ui::ComboRaw("##lens", &idx, sfm_camera_model_labels()))
+        if (sfm_lens_combo("##lens", &idx))
             s.camera_model = kSfmCameraModels[idx];
+        lens_tooltip(*sfm_camera_model_helps()[(size_t)idx]);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(px(90.0f));
         ui::InputFloat(dmsg::focal_x_width, &s.focal_factor, 0, 0, "%.4g");
         ui::help_on_hover(dmsg::focal_x_width_help);
+        draw_lens_warning(s, s.camera_model, /*builtin=*/true);
         ImGui::PopID();
     }
     ImGui::Unindent();
+}
+
+bool GuiApp::input_pixel_size(const PrepInput& s, int& w, int& h) {
+    w = h = 0;
+    if (s.path.empty()) return false;
+    auto it = _input_size.find(s.path);
+    if (it == _input_size.end()) {
+        std::pair<int, int> size{0, 0};
+        std::error_code ec;
+        if (s.is_video) {
+            // One `ffmpeg -i`, and only for a file that is already there:
+            // this runs from the draw, and a path being typed names nothing.
+            if (fs::is_regular_file(s.path, ec)) {
+                static const std::atomic<bool> never{false};
+                VideoFacts f;
+                if (ffmpeg_probe_video(_ffmpeg_exe, s.path, f, never))
+                    size = {f.width, f.height};
+            }
+        } else if (fs::is_directory(s.path, ec)) {
+            int iw = 0, ih = 0;
+            if (DatasetPrep::first_image_dims(s.path, iw, ih)) size = {iw, ih};
+        }
+        it = _input_size.emplace(s.path, size).first;
+    }
+    w = it->second.first;
+    h = it->second.second;
+    return w > 0 && h > 0;
+}
+
+void GuiApp::draw_lens_warning(const PrepInput& s, const std::string& model,
+                               bool builtin) {
+    const bool fisheye = builtin ? sfm_model_is_fisheye(model)
+                                 : colmap_model_is_fisheye(model);
+    // COLMAP has no panorama model, so the question only arises for the
+    // built-in engine.
+    const bool pano = builtin && model == "equirectangular";
+    // A dual-lens file is two fisheye circles per frame whatever its pixel
+    // dimensions are, so this one needs no measurement.
+    if (is_dual_fisheye_path(s.path)) {
+        if (pano) ui::TextColoredWrapped(kWarn, dmsg::lens_warn_dual_fisheye);
+        else if (!fisheye)
+            ui::TextColoredWrapped(kWarn, dmsg::lens_warn_needs_fisheye);
+        return;
+    }
+    if (!pano) return;
+    int w = 0, h = 0;
+    if (!input_pixel_size(s, w, h)) return;
+    if (std::fabs((double)w / (double)h - 2.0) <= 0.02) return;
+    ui::TextColoredWrapped(kWarn, dmsg::lens_warn_not_2to1, {w, h});
 }
 
 // ---------------------------------------------------------------------------
@@ -3948,7 +4042,9 @@ void GuiApp::draw_batch_progress() {
 // generated editor does: a flag the user set by hand is off limits to the
 // macro options (see train_resolve_macros()).
 void GuiApp::draw_basic_options() {
-    const float w = 170.0f;
+    // Wide enough for the longest value any of these dropdowns offers, and
+    // scaled: at 200% the labels are twice the size and the box is not.
+    const float w = px(170.0f);
 
     // A macro option: one dropdown standing for the several flags
     // train_resolve_macros() fills in behind it. The value written is the
@@ -4045,7 +4141,8 @@ void GuiApp::draw_basic_options() {
         int mi = _cfg.apply_loss_for_mask ? 1 : 0;
         ImGui::SetNextItemWidth(w);
         if (ui::Combo(msg::opt_mask_mode, &mi,
-                      {&msg::opt_mask_mode_ignore, &msg::opt_mask_mode_segment})) {
+                      {&msg::opt_mask_mode_exclude,
+                       &msg::opt_mask_mode_cut_out})) {
             _cfg.apply_loss_for_mask = mi == 1;
             _cfg_ui.touched.insert("apply_loss_for_mask");
         }
@@ -4089,10 +4186,14 @@ void GuiApp::draw_train_controls() {
             if (ph == TrainRunner::Phase::TrainError)
                 ui::TextColoredWrappedRaw(kErr, _runner.error());
             if (ph == TrainRunner::Phase::Done) {
-                ui::TextColored(kOk, msg::training_complete);
+                const bool saved = _runner.saved_on_stop();
+                ui::TextColored(saved ? kOk : kWarn,
+                                saved ? msg::training_complete
+                                      : msg::training_stopped_unsaved);
                 if (auto* s = _runner.session()) {
                     ImGui::PushTextWrapPos();
-                    ui::TextDisabled(msg::saved_to, {s->out_dir.string()});
+                    ui::TextDisabled(saved ? msg::saved_to : msg::unsaved_note,
+                                     {s->out_dir.string()});
                     ImGui::PopTextWrapPos();
                 }
             }
@@ -4128,11 +4229,15 @@ void GuiApp::draw_train_controls() {
             bool stopping = _runner.session() &&
                             _runner.session()->stop_requested.load();
             ImGui::BeginDisabled(stopping);
-            if (ui::Button(stopping ? msg::stopping : msg::stop_and_save,
-                           ImVec2(half, 32)))
-                _runner.request_stop();
+            // Asks first: whether the run's last minutes reach the disk is
+            // the one thing about stopping that cannot be undone afterwards.
+            if (ui::Button(stopping ? msg::stopping : msg::stop,
+                           ImVec2(half, 32))) {
+                _pending = Pending::StopHere;
+                _open_confirm = true;
+            }
             ImGui::EndDisabled();
-            ui::help_on_hover(msg::stop_and_save_help);
+            ui::help_on_hover(msg::stop_help);
             break;
         }
     }
@@ -4156,16 +4261,30 @@ void GuiApp::draw_metrics() {
     const auto& last = pts.back();
     // PSNR / SSIM / loss are the metric names the literature and the logs use;
     // they are not translated, only the numbers change.
-    char overlay[64];
-    std::snprintf(overlay, sizeof overlay, "\n\n\nPSNR %.2f", last.psnr);
-    ui::PlotLinesRaw("##psnr", psnr.data(), (int)psnr.size(), overlay,
-                     ImVec2(-8, 64));
+    ui::PlotLinesRaw("##psnr", psnr.data(), (int)psnr.size(), nullptr,
+                     ImVec2(-8, px(64.0f)));
+    // The score, placed in the plot's own rectangle rather than handed to
+    // PlotLines as its overlay: that one is drawn against the TOP of the
+    // frame, and the leading blank lines that used to push it down vanished
+    // whenever a larger interface size made them taller than the frame.
+    {
+        char v[32];
+        std::snprintf(v, sizeof v, "PSNR %.2f", last.psnr);
+        const ImVec2 lo = ImGui::GetItemRectMin();
+        const ImVec2 hi = ImGui::GetItemRectMax();
+        const ImVec2 sz = ImGui::CalcTextSize(v);
+        const float pad = ImGui::GetStyle().FramePadding.y;
+        const ImVec2 at(std::max(lo.x, (lo.x + hi.x - sz.x) * 0.5f),
+                        std::max(lo.y, hi.y - sz.y - pad));
+        ImGui::GetWindowDrawList()->AddText(
+            at, ImGui::GetColorU32(ImGuiCol_Text), v);
+    }
     char line[96];
     std::snprintf(line, sizeof line, "%.3f", last.ssim);
     char loss[96];
     std::snprintf(loss, sizeof loss, "%.4f", last.rgb_loss);
-    ui::Text(msg::status_metrics,
-             {format_count(last.num_splats), line, loss});
+    ui::TextWrapped(msg::status_metrics,
+                    {format_count(last.num_splats), line, loss});
 }
 
 void GuiApp::draw_status_strip() {
@@ -4237,20 +4356,31 @@ void GuiApp::draw_vram_readout(float x0, float avail) {
     if (sized && m.has_used)
         color = used_f >= 0.9f ? kErr : used_f >= 0.7f ? kWarn : kOk;
 
+    // The same three numbers vram_help names, in that order: what this run
+    // costs is the one a user is deciding on, and it is not recoverable from
+    // the other two.
     const std::string label =
-        sized ? part(m.has_used || m.has_process, (uint64_t)used) + " / " +
+        sized ? part(m.has_process, m.process_bytes) + " / " +
+                    part(m.has_used, m.used_bytes) + " / " +
                     format_gib(m.total_bytes) + " GiB"
               : "VRAM " + part(m.has_process, m.process_bytes) + " GiB";
 
     const ImGuiStyle& st = ImGui::GetStyle();
-    const float bar_w = sized ? px(120.0f) : 0.0f;
-    const float gap = sized ? st.ItemInnerSpacing.x : 0.0f;
     const float text_w = ImGui::CalcTextSize(label.c_str()).x;
-    const float target = x0 + avail - bar_w - gap - text_w - px(8.0f);
     ImGui::SameLine();
+    // The bar is the first thing to give when the row is short -- the numbers
+    // beside it say everything it does. Without this the readout ran off the
+    // right edge of a narrow panel, or of any panel at a large interface size.
+    float bar_w = sized ? px(120.0f) : 0.0f;
+    float gap = sized ? st.ItemInnerSpacing.x : 0.0f;
+    float target = x0 + avail - bar_w - gap - text_w - px(8.0f);
+    if (target <= ImGui::GetCursorPosX()) {
+        bar_w = gap = 0.0f;
+        target = x0 + avail - text_w - px(8.0f);
+    }
     if (target > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(target);
 
-    if (sized) {
+    if (bar_w > 0.0f) {
         const float h = ImGui::GetTextLineHeight();
         const ImVec2 p = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -4269,16 +4399,7 @@ void GuiApp::draw_vram_readout(float x0, float avail) {
         dl->AddRect(p, ImVec2(p.x + bar_w, p.y + h),
                     ImGui::GetColorU32(ImGuiCol_Border), r);
         ui::InvisibleButtonRaw("##vram", ImVec2(bar_w, h));
-        if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
-            ui::TextColoredRaw(color,
-                               part(m.has_process, m.process_bytes) + " / " +
-                                   part(m.has_used, m.used_bytes) + " / " +
-                                   part(m.has_total, m.total_bytes) + " GiB");
-            ImGui::PushTextWrapPos(px(360.0f));
-            ui::Text(msg::vram_help);
-            ImGui::PopTextWrapPos();
-            ImGui::EndTooltip();
-        }
+        ui::help_on_hover(msg::vram_help);
         ImGui::SameLine(0.0f, gap);
     }
     ui::TextColoredRaw(sized ? kDim : color, label);
@@ -4390,7 +4511,13 @@ void GuiApp::draw_confirm_modal() {
         _open_confirm = false;
         _confirm_shown = true;
         _stop_confirmed = false;
+        _confirm_was_paused = _runner.paused();
+        _runner.set_paused(true);
     }
+    // Every way out of the modal restores the pause state first: a stop
+    // request breaks out of the pause gate on its own, so this only decides
+    // what the run goes back to when the user keeps training.
+    auto resume = [this] { _runner.set_paused(_confirm_was_paused); };
     if (ui::BeginPopupModal(msg::confirm_title, nullptr,
                             ImGuiWindowFlags_AlwaysAutoResize)) {
         ui::Text(msg::confirm_intro);
@@ -4401,33 +4528,44 @@ void GuiApp::draw_confirm_modal() {
                : _pending == Pending::GoHome     ? msg::confirm_home
                : _pending == Pending::OpenSplat  ? msg::confirm_open_splat
                : _pending == Pending::StartBatch ? msg::confirm_batch
+               : _pending == Pending::StopHere   ? msg::confirm_stop
                                                  : msg::confirm_open);
         ImGui::Spacing();
-        if (ui::Button(msg::stop_and_save, ImVec2(150, 0))) {
+        auto stop = [&](bool save) {
             // A batch is a training session too, and this is the user saying
             // they want the engine back. Give up the queue with it -- except
             // when the queue is what they are starting.
             if (_pending != Pending::StartBatch) cancel_batch();
-            _runner.request_stop();
+            resume();
+            _runner.request_stop(save);
             _stop_confirmed = true;
             _confirm_shown = false;
             // run_pending_if_stopped() completes the action once the stop
             // lands (phase leaves Training).
             ImGui::CloseCurrentPopup();
-        }
+        };
+        const float bw = px(190.0f);
+        if (ui::Button(msg::stop_and_save, ImVec2(bw, 0))) stop(true);
+        ui::help_on_hover(msg::stop_and_save_help);
         ImGui::SameLine();
-        if (ui::Button(msg::keep_training, ImVec2(150, 0))) {
+        if (ui::Button(msg::stop_without_saving, ImVec2(bw, 0))) stop(false);
+        ui::help_on_hover(msg::stop_without_saving_help);
+        ImGui::SameLine();
+        if (ui::Button(msg::keep_training, ImVec2(bw, 0))) {
             _pending = Pending::None;
             _pending_path.clear();
             _confirm_shown = false;
+            resume();
             ImGui::CloseCurrentPopup();
         }
+        ui::help_on_hover(msg::keep_training_help);
         ImGui::EndPopup();
     } else if (_confirm_shown) {
         // Dismissed (Esc / click-away): treat as "keep training".
         _pending = Pending::None;
         _pending_path.clear();
         _confirm_shown = false;
+        resume();
     }
 }
 

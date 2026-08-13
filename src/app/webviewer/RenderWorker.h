@@ -107,6 +107,11 @@ struct ViewResult {
     // client's normalized frame; pick_hit false = background / invalid ray.
     bool pick_hit = false;
     float pick_point[3] = {0, 0, 0};
+    // What this render cost, including the wait for the engine mutex -- time
+    // the training loop was not stepping either. Measured on the worker, not
+    // across submit/try_get_result: a client that stops polling for a while
+    // would otherwise charge its own absence to the render.
+    double secs = 0.0;
 };
 
 class RenderWorker {

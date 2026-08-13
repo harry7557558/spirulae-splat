@@ -893,7 +893,7 @@ void TrainerSession::train(const TrainerCallbacks& cb) {
         engine_vram_mb = (double)(cap + engine_get_scratch_bytes()) / (1024.0 * 1024.0);
     }
 
-    if (cfg.steps_per_save != 0) {
+    if (cfg.steps_per_save != 0 && save_on_stop.load()) {
         std::lock_guard<std::mutex> lk(engine_mutex);
         save_checkpoint(step);
         log(lfmt(lmsg::checkpoint_saved, {fs::absolute(out_dir).string()}));

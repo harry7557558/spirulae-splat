@@ -23,7 +23,9 @@
 #include "app/gui/ViewportPanel.h"
 
 #include <deque>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace gui {
@@ -69,7 +71,12 @@ private:
     enum class Engine { BuiltIn, Colmap };
     // Session-destroying actions deferred behind the "stop training?"
     // confirmation (and executed once the stop has completed).
-    enum class Pending { None, GoHome, OpenDataset, OpenSplat, Quit, StartBatch };
+    // StopHere is the Stop button itself: nothing follows the stop, but it
+    // goes through the same confirmation so that "without saving" is offered
+    // on every route out of a run.
+    enum class Pending {
+        None, GoHome, OpenDataset, OpenSplat, Quit, StartBatch, StopHere
+    };
 
     // ---- persistence (recents + tool paths) ----
     static std::string settings_path();
@@ -167,6 +174,15 @@ private:
     void draw_dataset_source();       // input list / output / resume
     void draw_dataset_basics();       // the four or five knobs a beginner needs
     void draw_source_cameras();       // one lens per input, when there are several
+    // The line under a lens picker when the input contradicts the model --
+    // a panorama model on frames that are not 2:1, an ordinary lens on a
+    // dual-fisheye capture. Silent unless it is sure: an input whose size
+    // could not be measured is not a complaint.
+    void draw_lens_warning(const PrepInput& s, const std::string& model,
+                           bool builtin);
+    // First photograph in a folder, or one frame of a video. Probed once per
+    // path (an image header, or one `ffmpeg -i`) and remembered.
+    bool input_pixel_size(const PrepInput& s, int& w, int& h);
     void draw_masking_options();
     // Opens "Try the mask" on the input the combo points at, which is also the
     // input whose clicks and stencil it edits.
@@ -241,7 +257,10 @@ private:
     bool _quit = false;
     bool _open_confirm = false;      // arm the stop-training modal
     bool _confirm_shown = false;     // modal currently expected open
-    bool _stop_confirmed = false;    // user chose "Stop & Save"
+    bool _stop_confirmed = false;    // user chose one of the two stops
+    // Training is paused for as long as the modal is up -- deciding should not
+    // cost GPU time. This is what it goes back to if the user keeps training.
+    bool _confirm_was_paused = false;
     Pending _pending = Pending::None;
     std::string _pending_path;       // dataset dir for Pending::OpenDataset
     bool _pending_batch_skip = false;  // Pending::StartBatch's argument
@@ -341,6 +360,9 @@ private:
     // objects are prompts for (MaskSettings::clicks_source) and which one's
     // stencil the panel edits.
     int _mask_preview_input = 0;
+    // input_pixel_size()'s cache, keyed by input path. A zero pair is a
+    // remembered "could not tell", so nothing is probed twice.
+    std::map<std::string, std::pair<int, int>> _input_size;
 
     // Segmentation checkpoints.
     std::string _model_id = "sam3-q4_0";

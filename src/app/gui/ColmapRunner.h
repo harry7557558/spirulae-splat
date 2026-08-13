@@ -34,6 +34,7 @@
 // datasets need nothing: images/ is the default).
 
 #include "app/gui/DatasetPrep.h"   // MaskClick
+#include "i18n/catalog/Dataset.h"
 
 #include <atomic>
 #include <mutex>
@@ -50,6 +51,23 @@ inline const char* kColmapCameraModels[] = {
     "SIMPLE_RADIAL_FISHEYE", "RADIAL_FISHEYE",
 };
 inline constexpr int kNumColmapCameraModels = 10;
+
+// The description shown beside each of them. COLMAP's names stay COLMAP's --
+// they are what a user who read its documentation is looking for -- so the
+// sentence saying which camera each one is for is what carries the meaning.
+// Several of them are the same lens with fewer coefficients, and share one.
+inline std::vector<const spirula::i18n::Msg*> colmap_camera_model_helps() {
+    namespace m = spirula::i18n::msg::dataset;
+    return {&m::lens_opencv_help, &m::lens_pinhole_help,
+            &m::lens_simple_pinhole_help, &m::lens_radial_help,
+            &m::lens_radial_help, &m::lens_full_opencv_help,
+            &m::lens_fisheye_kb_help, &m::lens_fisheye_thin_prism_help,
+            &m::lens_fisheye_kb_help, &m::lens_fisheye_kb_help};
+}
+
+inline bool colmap_model_is_fisheye(const std::string& m) {
+    return m.size() > 7 && m.compare(m.size() - 7, 7, "FISHEYE") == 0;
+}
 
 struct ColmapJob {
     // What the user picked, in order (see PrepInput). Frame extraction and

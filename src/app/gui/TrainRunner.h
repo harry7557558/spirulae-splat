@@ -57,10 +57,18 @@ public:
 
     void set_paused(bool p);
     bool paused() const;
-    void request_stop();          // graceful: finish step, save checkpoint
+    // Graceful: finish the step in flight, then save a final checkpoint
+    // unless `save` is false. Refusing to save is sticky for the session --
+    // shutdown() asks to stop too, and must not undo the user's answer.
+    void request_stop(bool save = true);
     void shutdown();              // stop + join (app exit / new session)
 
     Phase phase() const { return _phase.load(); }
+    // Did the finished run write a final checkpoint? False only after a stop
+    // the user asked not to save.
+    bool saved_on_stop() const {
+        return !_session || _session->save_on_stop.load();
+    }
     bool engine_ready() const { return _engine_ready.load(); }
     // The engine is a process-global singleton, and something else (a splat
     // file in the viewer, the mesh preview) has just reset it -- which takes

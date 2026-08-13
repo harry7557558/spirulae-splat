@@ -622,41 +622,21 @@ SS_MSG(engine_colmap,
     TR("COLMAP (ayrıca kurulur)"));
 
 SS_MSG(engine_colmap_help,
-    EN("Drive an external COLMAP instead. Worth having for comparison, and "
-       "for the features it has that the built-in engine does not yet -- "
-       "neural features and matching, in particular."),
-    JA("代わりに外部の COLMAP を動かします。比較用として、また内蔵エンジンに"
-       "まだない機能、とくにニューラル特徴とマッチングのために役立ちます。"),
-    ZH_HANS("改为驱动外部的 COLMAP。留着它有用：可以做对比，也能用上内置引擎"
-            "还没有的功能，尤其是神经网络特征和匹配。"),
-    ZH_HANT("改為驅動外部的 COLMAP。留著它有用：可以做對比，也能用上內建引擎"
-            "還沒有的功能，尤其是神經網路特徵和配對。"),
-    KO("대신 외부 COLMAP을 실행합니다. 비교용으로도, 내장 엔진에 아직 없는 "
-       "기능—특히 신경망 특징점과 매칭—을 쓰기 위해서도 쓸모가 있습니다."),
-    DE("Stattdessen ein externes COLMAP steuern. Nützlich zum Vergleich und "
-       "wegen der Funktionen, die die eingebaute Engine noch nicht hat -- "
-       "neuronale Merkmale und Zuordnung vor allem."),
-    FR("Piloter un COLMAP externe à la place. Utile pour comparer, et pour ce "
-       "qu'il sait faire et que le moteur intégré ne fait pas encore -- les "
-       "descripteurs et l'appariement neuronaux, notamment."),
-    ES("Controlar un COLMAP externo en su lugar. Útil para comparar y por lo "
-       "que sabe hacer y el motor integrado todavía no: en particular, "
-       "características y emparejamiento neuronales."),
-    PT("Controlar um COLMAP externo em vez disso. Útil para comparar e pelo "
-       "que ele faz e o motor integrado ainda não: em especial, "
-       "características e correspondência neurais."),
-    IT("Pilotare invece un COLMAP esterno. Utile per confrontare e per ciò "
-       "che sa fare e il motore integrato ancora no: in particolare "
-       "caratteristiche e corrispondenze neurali."),
+    EN("Drive an external COLMAP instead. Worth having for comparison."),
+    JA("代わりに外部の COLMAP を動かします。比較用として役立ちます。"),
+    ZH_HANS("改为驱动外部的 COLMAP。留着它可以做对比。"),
+    ZH_HANT("改為驅動外部的 COLMAP。留著它可以做對比。"),
+    KO("대신 외부 COLMAP을 실행합니다. 비교용으로 쓸모가 있습니다."),
+    DE("Stattdessen ein externes COLMAP steuern. Nützlich zum Vergleich."),
+    FR("Piloter un COLMAP externe à la place. Utile pour comparer."),
+    ES("Controlar un COLMAP externo en su lugar. Útil para comparar."),
+    PT("Controlar um COLMAP externo em vez disso. Útil para comparar."),
+    IT("Pilotare invece un COLMAP esterno. Utile per confrontare."),
     NL("In plaats daarvan een externe COLMAP aansturen. Nuttig om te "
-       "vergelijken en voor wat het kan en de ingebouwde engine nog niet -- "
-       "neurale kenmerken en matching in het bijzonder."),
-    RU("Вместо этого запускать внешний COLMAP. Пригодится для сравнения и "
-       "ради того, чего встроенный движок пока не умеет, — прежде всего "
-       "нейросетевых признаков и сопоставления."),
-    TR("Onun yerine harici bir COLMAP çalıştırın. Karşılaştırma için ve "
-       "yerleşik motorda henüz olmayan yetenekler için -- özellikle sinir "
-       "ağı tabanlı öznitelikler ve eşleştirme için -- işe yarar."));
+       "vergelijken."),
+    RU("Вместо этого запускать внешний COLMAP. Пригодится для сравнения."),
+    TR("Onun yerine harici bir COLMAP çalıştırın. Karşılaştırma için işe "
+       "yarar."));
 
 // ===========================================================================
 // The basics
@@ -702,44 +682,41 @@ SS_MSG(quality_high,
 SS_MSG(quality_help_builtin,
     EN("Working resolution, how many features are found per image, and how "
        "many image pairs are compared. Higher finds more cameras in difficult "
-       "scenes and takes longer -- roughly quadratically."),
+       "scenes and takes longer."),
     JA("作業解像度、1枚あたりに検出する特徴の数、比較する画像ペアの数をまとめて"
        "決めます。上げるほど難しいシーンでもカメラが見つかりますが、時間は"
-       "おおよそ二乗で伸びます。"),
+       "長くなります。"),
     ZH_HANS("工作分辨率、每张图像找多少特征，以及比较多少对图像。调高在困难场景"
-            "里能找到更多相机，但耗时大致按平方增长。"),
+            "里能找到更多相机，但更耗时。"),
     ZH_HANT("工作解析度、每張影像找多少特徵，以及比較多少對影像。調高在困難場景"
-            "裡能找到更多相機，但耗時大致按平方增長。"),
+            "裡能找到更多相機，但更耗時。"),
     KO("작업 해상도, 이미지당 찾는 특징점 수, 비교하는 이미지 쌍의 수를 함께 "
-       "정합니다. 높일수록 어려운 장면에서도 카메라를 더 많이 찾지만 시간은 "
-       "대략 제곱으로 늘어납니다."),
+       "정합니다. 높일수록 어려운 장면에서도 카메라를 더 많이 찾지만 시간이 더 "
+       "걸립니다."),
     DE("Arbeitsauflösung, wie viele Merkmale je Bild gefunden werden und wie "
        "viele Bildpaare verglichen werden. Höher findet in schwierigen Szenen "
-       "mehr Kameras und dauert länger -- ungefähr quadratisch."),
+       "mehr Kameras und dauert länger."),
     FR("Résolution de travail, nombre de points caractéristiques par image et "
        "nombre de paires d'images comparées. Plus haut trouve plus de caméras "
-       "dans les scènes difficiles et prend plus de temps -- à peu près au "
-       "carré."),
+       "dans les scènes difficiles et prend plus de temps."),
     ES("Resolución de trabajo, cuántas características se buscan por imagen y "
        "cuántos pares de imágenes se comparan. Más alto encuentra más cámaras "
-       "en escenas difíciles y tarda más, aproximadamente al cuadrado."),
+       "en escenas difíciles y tarda más."),
     PT("Resolução de trabalho, quantas características são encontradas por "
        "imagem e quantos pares de imagens são comparados. Mais alto encontra "
-       "mais câmeras em cenas difíceis e demora mais, aproximadamente ao "
-       "quadrado."),
+       "mais câmeras em cenas difíceis e demora mais."),
     IT("Risoluzione di lavoro, quante caratteristiche si cercano per immagine "
        "e quante coppie di immagini si confrontano. Più alto trova più "
-       "fotocamere nelle scene difficili e richiede più tempo, all'incirca in "
-       "modo quadratico."),
+       "fotocamere nelle scene difficili e richiede più tempo."),
     NL("Werkresolutie, hoeveel kenmerken per beeld worden gevonden en hoeveel "
        "beeldparen worden vergeleken. Hoger vindt meer camera's in lastige "
-       "scènes en duurt langer -- ongeveer kwadratisch."),
+       "scènes en duurt langer."),
     RU("Рабочее разрешение, сколько особых точек ищется на снимке и сколько "
        "пар снимков сравнивается. Выше — больше найденных камер в сложных "
-       "сценах и дольше, примерно квадратично."),
+       "сценах и дольше."),
     TR("Çalışma çözünürlüğü, görüntü başına kaç öznitelik bulunacağı ve kaç "
        "görüntü çiftinin karşılaştırılacağı. Yüksek olan zor sahnelerde daha "
-       "çok kamera bulur ve kabaca karesel olarak uzar."));
+       "çok kamera bulur ve daha uzun sürer."));
 
 SS_MSG(quality_help_colmap,
     EN("Feature count used for matching (4k / 8k / 16k). Higher finds more "
@@ -785,65 +762,66 @@ SS_MSG(camera_lens,
 
 SS_MSG(camera_lens_help,
     EN("The lens distortion the reconstruction fits. OpenCV suits nearly "
-       "every phone and camera. Pick a fisheye model for an action camera or "
+       "every phone and camera. Pick a fisheye model for a fisheye camera or "
        "a 360 rig -- a fisheye reconstructed as a normal lens comes out "
        "badly, and nothing detects that for you. Pinhole is only for images "
        "that are already undistorted."),
     JA("再構成が当てはめるレンズ歪みモデルです。OpenCV はほぼすべてのスマホ・"
-       "カメラに合います。アクションカメラや360度リグでは魚眼モデルを選んで"
+       "カメラに合います。魚眼カメラや360度リグでは魚眼モデルを選んで"
        "ください。魚眼を通常レンズとして再構成すると結果は悪くなり、それを"
        "自動で検出する仕組みはありません。Pinhole は歪み補正済みの画像専用です。"),
     ZH_HANS("重建要拟合的镜头畸变模型。OpenCV 几乎适用于所有手机和相机。"
-            "运动相机或 360 相机组请选鱼眼模型——把鱼眼当普通镜头重建结果会很差，"
+            "鱼眼相机或 360 相机组请选鱼眼模型——把鱼眼当普通镜头重建结果会很差，"
             "而且没有任何机制会替你发现。Pinhole 只用于已经去畸变的图像。"),
     ZH_HANT("重建要擬合的鏡頭變形模型。OpenCV 幾乎適用於所有手機和相機。"
-            "運動相機或 360 相機組請選魚眼模型——把魚眼當普通鏡頭重建結果會很差，"
+            "魚眼相機或 360 相機組請選魚眼模型——把魚眼當普通鏡頭重建結果會很差，"
             "而且沒有任何機制會替你發現。Pinhole 只用於已經去變形的影像。"),
     KO("재구성이 맞출 렌즈 왜곡 모델입니다. OpenCV는 거의 모든 휴대폰과 카메라에 "
-       "맞습니다. 액션캠이나 360 리그라면 어안 모델을 고르세요. 어안을 일반 "
+       "맞습니다. 어안 카메라나 360 리그라면 어안 모델을 고르세요. 어안을 일반 "
        "렌즈로 재구성하면 결과가 나빠지는데, 그걸 대신 알아채 주는 장치는 "
        "없습니다. Pinhole은 이미 왜곡을 보정한 이미지에만 씁니다."),
     DE("Das Verzeichnungsmodell, das die Rekonstruktion anpasst. OpenCV passt "
-       "zu fast jedem Telefon und jeder Kamera. Für eine Actionkamera oder ein "
-       "360-Rig ein Fischaugenmodell wählen -- ein als Normalobjektiv "
+       "zu fast jedem Telefon und jeder Kamera. Für eine Fischaugenkamera oder "
+       "ein 360-Rig ein Fischaugenmodell wählen -- ein als Normalobjektiv "
        "rekonstruiertes Fischauge wird schlecht, und niemand merkt das für "
        "Sie. Pinhole ist nur für bereits entzerrte Bilder."),
     FR("Le modèle de distorsion que la reconstruction ajuste. OpenCV convient "
        "à presque tous les téléphones et appareils. Choisissez un modèle "
-       "fisheye pour une caméra d'action ou un rig 360 : un fisheye "
+       "fisheye pour une caméra fisheye ou un rig 360 : un fisheye "
        "reconstruit comme un objectif normal donne un mauvais résultat, et "
        "rien ne le détecte pour vous. Pinhole ne sert qu'aux images déjà "
        "corrigées."),
     ES("El modelo de distorsión que ajusta la reconstrucción. OpenCV vale "
        "para casi todos los teléfonos y cámaras. Elija un modelo de ojo de "
-       "pez para una cámara de acción o un equipo 360: un ojo de pez "
+       "pez para una cámara de ojo de pez o un equipo 360: un ojo de pez "
        "reconstruido como objetivo normal sale mal, y nada lo detecta por "
        "usted. Pinhole solo sirve para imágenes ya corregidas."),
     PT("O modelo de distorção que a reconstrução ajusta. OpenCV serve para "
        "quase todo telefone e câmera. Escolha um modelo olho de peixe para "
-       "uma câmera de ação ou um conjunto 360: um olho de peixe reconstruído "
-       "como lente normal sai ruim, e nada detecta isso por você. Pinhole só "
-       "serve para imagens já corrigidas."),
+       "uma câmera olho de peixe ou um conjunto 360: um olho de peixe "
+       "reconstruído como lente normal sai ruim, e nada detecta isso por "
+       "você. Pinhole só serve para imagens já corrigidas."),
     IT("Il modello di distorsione che la ricostruzione adatta. OpenCV va bene "
-       "per quasi ogni telefono e fotocamera. Per una action cam o un rig 360 "
-       "scelga un modello fisheye: un fisheye ricostruito come obiettivo "
-       "normale viene male, e nulla se ne accorge al posto suo. Pinhole serve "
-       "solo per immagini già corrette."),
+       "per quasi ogni telefono e fotocamera. Per una fotocamera fisheye o un "
+       "rig 360 scelga un modello fisheye: un fisheye ricostruito come "
+       "obiettivo normale viene male, e nulla se ne accorge al posto suo. "
+       "Pinhole serve solo per immagini già corrette."),
     NL("Het vervormingsmodel dat de reconstructie past. OpenCV past bij bijna "
-       "elke telefoon en camera. Kies een fisheye-model voor een actiecamera "
-       "of een 360-rig -- een fisheye die als gewone lens wordt "
-       "gereconstrueerd komt er slecht uit, en niets merkt dat voor u op. "
-       "Pinhole is alleen voor al ontvormde beelden."),
+       "elke telefoon en camera. Kies een fisheye-model voor een "
+       "fisheye-camera of een 360-rig -- een fisheye die als gewone lens "
+       "wordt gereconstrueerd komt er slecht uit, en niets merkt dat voor u "
+       "op. Pinhole is alleen voor al ontvormde beelden."),
     RU("Модель искажений объектива, которую подгоняет реконструкция. OpenCV "
-       "подходит почти любому телефону и фотоаппарату. Для экшн-камеры или "
-       "360-риг выберите модель фишай: фишай, восстановленный как обычный "
-       "объектив, выходит плохо, и заметить это за вас некому. Pinhole — "
-       "только для уже исправленных изображений."),
-    TR("Yeniden oluşturmanın uyduracağı objektif bozulma modeli. OpenCV neredeyse "
-       "her telefona ve kameraya uyar. Aksiyon kamerası veya 360 düzeneği için "
-       "balıkgözü modeli seçin -- normal objektif gibi yeniden oluşturulan bir "
-       "balıkgözü kötü çıkar ve bunu sizin yerinize fark eden bir şey yoktur. "
-       "Pinhole yalnızca bozulması giderilmiş görüntüler içindir."));
+       "подходит почти любому телефону и фотоаппарату. Для камеры «рыбий "
+       "глаз» или 360-рига выберите модель фишай: фишай, восстановленный как "
+       "обычный объектив, выходит плохо, и заметить это за вас некому. "
+       "Pinhole — только для уже исправленных изображений."),
+    TR("Yeniden oluşturmanın uyduracağı objektif bozulma modeli. OpenCV "
+       "neredeyse her telefona ve kameraya uyar. Balıkgözü kamera veya 360 "
+       "düzeneği için balıkgözü modeli seçin -- normal objektif gibi yeniden "
+       "oluşturulan bir balıkgözü kötü çıkar ve bunu sizin yerinize fark eden "
+       "bir şey yoktur. Pinhole yalnızca bozulması giderilmiş görüntüler "
+       "içindir."));
 
 SS_MSG(colmap_one_lens_warning,
     EN("COLMAP fits this one lens model to every input. Switch to the "
@@ -1047,30 +1025,30 @@ SS_MSG(camera_sharing,
     TR("Kamera paylaşımı"));
 
 SS_MSG(camera_sharing_one,
-    EN("one shared camera"),
+    EN("One shared camera"),
     JA("共有カメラ1台"), ZH_HANS("共用一台相机"), ZH_HANT("共用一台相機"),
-    KO("공유 카메라 하나"), DE("eine gemeinsame Kamera"), FR("une caméra partagée"),
-    ES("una cámara compartida"), PT("uma câmera compartilhada"),
-    IT("una fotocamera condivisa"), NL("één gedeelde camera"),
-    RU("одна общая камера"), TR("tek ortak kamera"));
+    KO("공유 카메라 하나"), DE("Eine gemeinsame Kamera"), FR("Une caméra partagée"),
+    ES("Una cámara compartida"), PT("Uma câmera compartilhada"),
+    IT("Una fotocamera condivisa"), NL("Één gedeelde camera"),
+    RU("Одна общая камера"), TR("Tek ortak kamera"));
 
 SS_MSG(camera_sharing_folder,
-    EN("one camera per folder"),
+    EN("One camera per folder"),
     JA("フォルダごとに1台"), ZH_HANS("每个文件夹一台相机"), ZH_HANT("每個資料夾一台相機"),
-    KO("폴더마다 카메라 하나"), DE("eine Kamera je Ordner"),
-    FR("une caméra par dossier"), ES("una cámara por carpeta"),
-    PT("uma câmera por pasta"), IT("una fotocamera per cartella"),
-    NL("één camera per map"), RU("по камере на папку"),
-    TR("klasör başına bir kamera"));
+    KO("폴더마다 카메라 하나"), DE("Eine Kamera je Ordner"),
+    FR("Une caméra par dossier"), ES("Una cámara por carpeta"),
+    PT("Uma câmera por pasta"), IT("Una fotocamera per cartella"),
+    NL("Één camera per map"), RU("По камере на папку"),
+    TR("Klasör başına bir kamera"));
 
 SS_MSG(camera_sharing_image,
-    EN("one camera per image"),
+    EN("One camera per image"),
     JA("画像ごとに1台"), ZH_HANS("每张图像一台相机"), ZH_HANT("每張影像一台相機"),
-    KO("이미지마다 카메라 하나"), DE("eine Kamera je Bild"),
-    FR("une caméra par image"), ES("una cámara por imagen"),
-    PT("uma câmera por imagem"), IT("una fotocamera per immagine"),
-    NL("één camera per beeld"), RU("по камере на снимок"),
-    TR("görüntü başına bir kamera"));
+    KO("이미지마다 카메라 하나"), DE("Eine Kamera je Bild"),
+    FR("Une caméra par image"), ES("Una cámara por imagen"),
+    PT("Uma câmera por imagem"), IT("Una fotocamera per immagine"),
+    NL("Één camera per beeld"), RU("По камере на снимок"),
+    TR("Görüntü başına bir kamera"));
 
 SS_MSG(camera_sharing_help,
     EN("How lens parameters are shared. \"Shared\" when everything was shot "
@@ -1195,42 +1173,42 @@ SS_MSG(matching_gpu_preselect,
 
 SS_MSG(matching_help_builtin,
     EN("Which pairs of images are compared. Automatic is right almost always: "
-       "neighbouring frames for video, every pair below a hundred images, GPU "
+       "neighbouring frames for short video, every pair below 100 images, GPU "
        "pre-selection above that."),
     JA("どの画像の組み合わせを比較するかです。ほとんどの場合「自動」で正しく、"
-       "動画なら隣接フレーム、100 枚未満ならすべての組み合わせ、それ以上なら "
-       "GPU による事前選択が使われます。"),
-    ZH_HANS("比较哪些图像配对。“自动”几乎总是对的：视频用相邻帧，不足一百张时"
+       "短い動画なら隣接フレーム、100 枚未満ならすべての組み合わせ、それ以上"
+       "なら GPU による事前選択が使われます。"),
+    ZH_HANS("比较哪些图像配对。“自动”几乎总是对的：短视频用相邻帧，不足 100 张时"
             "比较所有配对，超过则用 GPU 预筛选。"),
-    ZH_HANT("比較哪些影像配對。「自動」幾乎總是對的：影片用相鄰影格，不足一百張時"
+    ZH_HANT("比較哪些影像配對。「自動」幾乎總是對的：短影片用相鄰影格，不足 100 張時"
             "比較所有配對，超過則用 GPU 預篩選。"),
-    KO("어떤 이미지 쌍을 비교할지입니다. 거의 언제나 '자동'이 맞습니다. 동영상은 "
-       "이웃 프레임, 100장 미만이면 모든 쌍, 그보다 많으면 GPU 사전 선별을 "
-       "씁니다."),
+    KO("어떤 이미지 쌍을 비교할지입니다. 거의 언제나 '자동'이 맞습니다. 짧은 "
+       "동영상은 이웃 프레임, 100장 미만이면 모든 쌍, 그보다 많으면 GPU 사전 "
+       "선별을 씁니다."),
     DE("Welche Bildpaare verglichen werden. Automatisch ist fast immer "
-       "richtig: benachbarte Bilder bei Video, jedes Paar unter hundert "
+       "richtig: benachbarte Bilder bei kurzem Video, jedes Paar unter 100 "
        "Bildern, darüber GPU-Vorauswahl."),
     FR("Quelles paires d'images sont comparées. Automatique a presque "
-       "toujours raison : images voisines pour la vidéo, toutes les paires en "
-       "dessous de cent images, présélection GPU au-delà."),
+       "toujours raison : images voisines pour une vidéo courte, toutes les "
+       "paires en dessous de 100 images, présélection GPU au-delà."),
     ES("Qué pares de imágenes se comparan. Automático acierta casi siempre: "
-       "fotogramas vecinos en vídeo, todos los pares por debajo de cien "
+       "fotogramas vecinos en vídeo corto, todos los pares por debajo de 100 "
        "imágenes y preselección en GPU por encima."),
     PT("Quais pares de imagens são comparados. Automático acerta quase "
-       "sempre: quadros vizinhos em vídeo, todos os pares abaixo de cem "
+       "sempre: quadros vizinhos em vídeo curto, todos os pares abaixo de 100 "
        "imagens e pré-seleção na GPU acima disso."),
     IT("Quali coppie di immagini vengono confrontate. Automatico è quasi "
-       "sempre giusto: fotogrammi vicini per il video, tutte le coppie sotto "
-       "le cento immagini, preselezione su GPU oltre."),
+       "sempre giusto: fotogrammi vicini per un video breve, tutte le coppie "
+       "sotto le 100 immagini, preselezione su GPU oltre."),
     NL("Welke beeldparen worden vergeleken. Automatisch klopt bijna altijd: "
-       "naburige beelden bij video, elk paar onder de honderd beelden, "
+       "naburige beelden bij korte video, elk paar onder de 100 beelden, "
        "GPU-voorselectie daarboven."),
     RU("Какие пары снимков сравниваются. «Автоматически» почти всегда верно: "
-       "соседние кадры для видео, все пары при менее чем ста снимках и "
-       "предварительный отбор на GPU сверх того."),
+       "соседние кадры для короткого видео, все пары при менее чем 100 "
+       "снимках и предварительный отбор на GPU сверх того."),
     TR("Hangi görüntü çiftlerinin karşılaştırılacağı. Otomatik neredeyse her "
-       "zaman doğrudur: videoda komşu kareler, yüz görüntünün altında her "
-       "çift, üstünde GPU ön seçimi."));
+       "zaman doğrudur: kısa videoda komşu kareler, 100 görüntünün altında "
+       "her çift, üstünde GPU ön seçimi."));
 
 SS_MSG(matching_exhaustive,
     EN("Exhaustive"),    JA("総当たり"),      ZH_HANS("穷举"),     ZH_HANT("窮舉"),
@@ -2203,40 +2181,87 @@ SS_MSG(use_found_masks_help,
 // ---------------------------------------------------------------------------
 
 SS_MSG(lens_opencv,
-    EN("OpenCV (most cameras)"),
-    JA("OpenCV（ほとんどのカメラ）"),
-    ZH_HANS("OpenCV（多数相机）"),
-    ZH_HANT("OpenCV（多數相機）"),
-    KO("OpenCV(대부분의 카메라)"),
-    DE("OpenCV (die meisten Kameras)"),
-    FR("OpenCV (la plupart des appareils)"),
-    ES("OpenCV (la mayoría de cámaras)"),
-    PT("OpenCV (a maioria das câmeras)"),
-    IT("OpenCV (quasi tutte le fotocamere)"),
-    NL("OpenCV (de meeste camera's)"),
-    RU("OpenCV (большинство камер)"),
-    TR("OpenCV (çoğu kamera)"));
+    EN("OpenCV"),
+    JA("OpenCV"),        ZH_HANS("OpenCV"),   ZH_HANT("OpenCV"),  KO("OpenCV"),
+    DE("OpenCV"),        FR("OpenCV"),        ES("OpenCV"),       PT("OpenCV"),
+    IT("OpenCV"),        NL("OpenCV"),        RU("OpenCV"),       TR("OpenCV"));
+
+SS_MSG(lens_opencv_help,
+    EN("The usual choice: an ordinary lens, corrected for barrel and "
+       "pincushion distortion. Phones, compacts, SLRs, and action cameras "
+       "that are not in a fisheye mode."),
+    JA("ふつうはこれです。通常のレンズを、樽型・糸巻き型のゆがみを含めて"
+       "補正します。スマートフォン、コンパクト、一眼、魚眼モードでない"
+       "アクションカメラ向けです。"),
+    ZH_HANS("一般就选它：普通镜头，校正桶形和枕形畸变。手机、卡片机、单反，"
+            "以及没有开鱼眼模式的运动相机。"),
+    ZH_HANT("一般就選它：普通鏡頭，校正桶形和枕形變形。手機、輕便相機、單眼，"
+            "以及沒有開魚眼模式的運動相機。"),
+    KO("보통은 이것입니다. 일반 렌즈를 통형·실패형 왜곡까지 보정합니다. "
+       "휴대폰, 콤팩트, DSLR, 어안 모드가 아닌 액션캠에 씁니다."),
+    DE("Die übliche Wahl: ein gewöhnliches Objektiv, korrigiert um "
+       "tonnen- und kissenförmige Verzeichnung. Telefone, Kompakte, "
+       "Spiegelreflex und Actionkameras, die nicht im Fischaugenmodus sind."),
+    FR("Le choix habituel : un objectif ordinaire, corrigé de la distorsion "
+       "en barillet et en coussinet. Téléphones, compacts, reflex et caméras "
+       "d'action qui ne sont pas en mode fisheye."),
+    ES("La opción habitual: un objetivo normal, corregido de distorsión de "
+       "barril y de cojín. Teléfonos, compactas, réflex y cámaras de acción "
+       "que no estén en modo ojo de pez."),
+    PT("A escolha habitual: uma lente comum, corrigida de distorção de barril "
+       "e de almofada. Telefones, compactas, reflex e câmeras de ação que não "
+       "estejam em modo olho de peixe."),
+    IT("La scelta abituale: un obiettivo comune, corretto dalla distorsione a "
+       "barile e a cuscinetto. Telefoni, compatte, reflex e action cam che "
+       "non siano in modalità fisheye."),
+    NL("De gewone keuze: een normaal objectief, gecorrigeerd voor ton- en "
+       "kussenvormige vertekening. Telefoons, compacts, spiegelreflex en "
+       "actiecamera's die niet in een fisheye-stand staan."),
+    RU("Обычный выбор: обыкновенный объектив с поправкой на бочкообразную и "
+       "подушкообразную дисторсию. Телефоны, компакты, зеркальные камеры и "
+       "экшн-камеры не в режиме «рыбий глаз»."),
+    TR("Alışılmış seçim: sıradan bir objektif, fıçı ve yastık bozulmasına "
+       "göre düzeltilir. Telefonlar, kompaktlar, SLR'ler ve balıkgözü "
+       "kipinde olmayan aksiyon kameraları."));
 
 SS_MSG(lens_pinhole,
-    EN("Pinhole (no distortion)"),
-    JA("ピンホール（歪みなし）"),
-    ZH_HANS("针孔（无畸变）"),
-    ZH_HANT("針孔（無變形）"),
-    KO("핀홀(왜곡 없음)"),
-    DE("Lochkamera (ohne Verzeichnung)"),
-    FR("Sténopé (sans distorsion)"),
-    ES("Estenopeica (sin distorsión)"),
-    PT("Estenopeica (sem distorção)"),
-    IT("Stenopeica (senza distorsione)"),
-    NL("Gaatjescamera (zonder vervorming)"),
-    RU("Точечная камера (без дисторсии)"),
-    TR("İğne deliği (bozulmasız)"));
+    EN("Pinhole"),
+    JA("ピンホール"),     ZH_HANS("针孔"),      ZH_HANT("針孔"),
+    KO("핀홀"),           DE("Lochkamera"),   FR("Sténopé"),      ES("Estenopeica"),
+    PT("Estenopeica"),   IT("Stenopeica"),   NL("Gaatjescamera"),
+    RU("Точечная камера"), TR("İğne deliği"));
+
+SS_MSG(lens_pinhole_help,
+    EN("An ideal lens with no distortion at all and a separate focal length "
+       "for each axis. For photographs that have already been undistorted."),
+    JA("ゆがみのない理想レンズで、焦点距離は縦横それぞれ持ちます。すでに"
+       "ゆがみ補正済みの写真向けです。"),
+    ZH_HANS("完全没有畸变的理想镜头，横竖各有一个焦距。用于已经做过畸变校正的"
+            "照片。"),
+    ZH_HANT("完全沒有變形的理想鏡頭，橫豎各有一個焦距。用於已經做過變形校正的"
+            "相片。"),
+    KO("왜곡이 전혀 없는 이상적인 렌즈로, 초점거리를 축마다 따로 가집니다. "
+       "이미 왜곡을 편 사진에 씁니다."),
+    DE("Ein ideales Objektiv ganz ohne Verzeichnung, mit eigener Brennweite "
+       "je Achse. Für Aufnahmen, die schon entzerrt sind."),
+    FR("Un objectif idéal, sans aucune distorsion, avec une focale par axe. "
+       "Pour des photographies déjà redressées."),
+    ES("Un objetivo ideal, sin distorsión alguna, con una focal por eje. Para "
+       "fotografías que ya se han corregido."),
+    PT("Uma lente ideal, sem distorção nenhuma, com uma distância focal por "
+       "eixo. Para fotografias que já foram corrigidas."),
+    IT("Un obiettivo ideale, senza alcuna distorsione, con una focale per "
+       "asse. Per fotografie già corrette."),
+    NL("Een ideaal objectief zonder enige vertekening, met een eigen "
+       "brandpuntsafstand per as. Voor foto's die al ontvertekend zijn."),
+    RU("Идеальный объектив совсем без дисторсии, с отдельным фокусным "
+       "расстоянием по каждой оси. Для уже исправленных снимков."),
+    TR("Hiç bozulması olmayan ideal bir objektif; her eksen için ayrı odak "
+       "uzaklığı. Bozulması zaten giderilmiş fotoğraflar için."));
 
 SS_MSG(lens_simple_pinhole,
     EN("Simple pinhole"),
-    JA("簡易ピンホール"),
-    ZH_HANS("简化针孔"),
-    ZH_HANT("簡化針孔"),
+    JA("単純ピンホール"),  ZH_HANS("简单针孔"),  ZH_HANT("簡單針孔"),
     KO("간단 핀홀"),
     DE("Einfache Lochkamera"),
     FR("Sténopé simple"),
@@ -2246,6 +2271,36 @@ SS_MSG(lens_simple_pinhole,
     NL("Eenvoudige gaatjescamera"),
     RU("Простая точечная камера"),
     TR("Basit iğne deliği"));
+
+SS_MSG(lens_simple_pinhole_help,
+    EN("The same ideal lens with one focal length for both axes. For "
+       "already-undistorted photographs from a camera with square pixels."),
+    JA("同じ理想レンズで、焦点距離は縦横共通の1つです。画素が正方形の"
+       "カメラの、ゆがみ補正済みの写真向けです。"),
+    ZH_HANS("同样是理想镜头，但横竖共用一个焦距。用于像素为正方形的相机、"
+            "且已做过畸变校正的照片。"),
+    ZH_HANT("同樣是理想鏡頭，但橫豎共用一個焦距。用於像素為正方形的相機、"
+            "且已做過變形校正的相片。"),
+    KO("같은 이상적인 렌즈지만 초점거리를 두 축이 함께 씁니다. 화소가 정사각형인 "
+       "카메라의, 왜곡을 이미 편 사진에 씁니다."),
+    DE("Dasselbe ideale Objektiv mit einer Brennweite für beide Achsen. Für "
+       "schon entzerrte Aufnahmen einer Kamera mit quadratischen Pixeln."),
+    FR("Le même objectif idéal avec une seule focale pour les deux axes. Pour "
+       "des photographies déjà redressées, d'un appareil à pixels carrés."),
+    ES("El mismo objetivo ideal con una sola focal para ambos ejes. Para "
+       "fotografías ya corregidas de una cámara de píxeles cuadrados."),
+    PT("A mesma lente ideal com uma só distância focal para os dois eixos. "
+       "Para fotografias já corrigidas de uma câmera de pixels quadrados."),
+    IT("Lo stesso obiettivo ideale con una sola focale per entrambi gli assi. "
+       "Per fotografie già corrette, da una fotocamera a pixel quadrati."),
+    NL("Hetzelfde ideale objectief met één brandpuntsafstand voor beide "
+       "assen. Voor al ontvertekende foto's van een camera met vierkante "
+       "pixels."),
+    RU("Тот же идеальный объектив с одним фокусным расстоянием на обе оси. "
+       "Для уже исправленных снимков камеры с квадратными пикселями."),
+    TR("Aynı ideal objektif, iki eksen için tek odak uzaklığıyla. Kare "
+       "pikselli bir kameranın, bozulması zaten giderilmiş fotoğrafları "
+       "için."));
 
 SS_MSG(lens_radial,
     EN("Radial"),
@@ -2262,6 +2317,43 @@ SS_MSG(lens_radial,
     RU("Радиальная"),
     TR("Işınsal"));
 
+SS_MSG(lens_radial_help,
+    EN("Radial distortion only, with no tangential terms. Fewer numbers to "
+       "fit than OpenCV, which helps when there are few photographs or they "
+       "overlap little."),
+    JA("放射方向のゆがみだけを扱い、接線方向の項はありません。OpenCV より"
+       "求めるべき数が少ないので、写真が少ない・重なりが乏しいときに向きます。"),
+    ZH_HANS("只处理径向畸变，没有切向项。要拟合的参数比 OpenCV 少，照片少或"
+            "重叠不多时更稳。"),
+    ZH_HANT("只處理徑向變形，沒有切向項。要擬合的參數比 OpenCV 少，相片少或"
+            "重疊不多時更穩。"),
+    KO("방사 왜곡만 다루고 접선 항은 없습니다. OpenCV보다 맞출 값이 적어 사진이 "
+       "적거나 겹침이 부족할 때 알맞습니다."),
+    DE("Nur radiale Verzeichnung, ohne tangentiale Glieder. Weniger zu "
+       "schätzende Zahlen als bei OpenCV, was bei wenigen oder kaum "
+       "überlappenden Aufnahmen hilft."),
+    FR("Distorsion radiale seule, sans termes tangentiels. Moins de nombres à "
+       "ajuster qu'OpenCV, ce qui aide quand les photographies sont peu "
+       "nombreuses ou se recouvrent peu."),
+    ES("Solo distorsión radial, sin términos tangenciales. Menos números que "
+       "ajustar que con OpenCV, lo que ayuda cuando hay pocas fotografías o "
+       "se solapan poco."),
+    PT("Só distorção radial, sem termos tangenciais. Menos números a ajustar "
+       "que o OpenCV, o que ajuda quando há poucas fotografias ou elas se "
+       "sobrepõem pouco."),
+    IT("Solo distorsione radiale, senza termini tangenziali. Meno numeri da "
+       "stimare rispetto a OpenCV, il che aiuta quando le fotografie sono "
+       "poche o si sovrappongono poco."),
+    NL("Alleen radiale vertekening, zonder tangentiële termen. Minder te "
+       "schatten getallen dan OpenCV, wat helpt bij weinig of nauwelijks "
+       "overlappende foto's."),
+    RU("Только радиальная дисторсия, без тангенциальных членов. Подбирать "
+       "нужно меньше чисел, чем в OpenCV, — это выручает, когда снимков мало "
+       "или они плохо перекрываются."),
+    TR("Yalnızca ışınsal bozulma, teğetsel terimler olmadan. OpenCV'ye göre "
+       "daha az sayı oturtulur; fotoğraf az olduğunda veya az örtüştüğünde "
+       "işe yarar."));
+
 SS_MSG(lens_full_opencv,
     EN("Full OpenCV"),
     JA("OpenCV（全パラメータ）"),
@@ -2276,6 +2368,43 @@ SS_MSG(lens_full_opencv,
     NL("Volledige OpenCV"),
     RU("OpenCV (полная модель)"),
     TR("Tam OpenCV"));
+
+SS_MSG(lens_full_opencv_help,
+    EN("OpenCV with its whole set of distortion terms. Worth it only for a "
+       "strongly distorted wide lens photographed often enough to pin all of "
+       "them down."),
+    JA("OpenCV のゆがみ項をすべて使います。ゆがみの大きい広角レンズを、"
+       "すべての項を決められるだけ多く撮った場合にだけ意味があります。"),
+    ZH_HANS("使用 OpenCV 的全部畸变项。只有畸变很大的广角镜头、并且拍得足够多能"
+            "定住所有参数时才值得。"),
+    ZH_HANT("使用 OpenCV 的全部變形項。只有變形很大的廣角鏡頭、並且拍得足夠多能"
+            "定住所有參數時才值得。"),
+    KO("OpenCV의 왜곡 항을 모두 씁니다. 왜곡이 큰 광각 렌즈를, 모든 항을 정할 "
+       "만큼 충분히 찍었을 때에만 쓸모가 있습니다."),
+    DE("OpenCV mit dem vollen Satz an Verzeichnungsgliedern. Lohnt sich nur "
+       "bei einem stark verzeichnenden Weitwinkel, das oft genug fotografiert "
+       "wurde, um alle festzulegen."),
+    FR("OpenCV avec l'ensemble de ses termes de distorsion. N'en vaut la "
+       "peine que pour un grand-angle très déformant, photographié assez "
+       "souvent pour tous les fixer."),
+    ES("OpenCV con todos sus términos de distorsión. Solo compensa con un "
+       "gran angular muy distorsionado, fotografiado las veces suficientes "
+       "para fijarlos todos."),
+    PT("OpenCV com todo o seu conjunto de termos de distorção. Só compensa "
+       "com uma grande-angular muito distorcida, fotografada o bastante para "
+       "fixar todos eles."),
+    IT("OpenCV con tutti i suoi termini di distorsione. Conviene solo con un "
+       "grandangolo molto distorcente, fotografato abbastanza da fissarli "
+       "tutti."),
+    NL("OpenCV met de volledige reeks vertekeningstermen. Alleen de moeite "
+       "waard bij een sterk vertekenende groothoek die vaak genoeg is "
+       "gefotografeerd om ze alle vast te leggen."),
+    RU("OpenCV со всем набором членов дисторсии. Оправдан только для сильно "
+       "искажающего широкоугольника, снятого достаточно много раз, чтобы "
+       "определить их все."),
+    TR("OpenCV'nin bozulma terimlerinin tamamıyla. Yalnızca çok bozan bir "
+       "geniş açı objektif, hepsini belirleyecek kadar çok çekildiyse "
+       "değer."));
 
 SS_MSG(lens_fisheye_kb,
     EN("Fisheye (Kannala-Brandt)"),
@@ -2292,6 +2421,42 @@ SS_MSG(lens_fisheye_kb,
     RU("Фишай (Каннала — Брандт)"),
     TR("Balıkgözü (Kannala-Brandt)"));
 
+SS_MSG(lens_fisheye_kb_help,
+    EN("A fisheye lens, up to about 180 degrees across. The standard model "
+       "for one fisheye, and for the wide modes of most action cameras."),
+    JA("およそ180度までの魚眼レンズです。単一の魚眼、および多くのアクション"
+       "カメラの広角モードの標準的なモデルです。"),
+    ZH_HANS("视场约到 180 度的鱼眼镜头。单个鱼眼的标准模型，多数运动相机的广角"
+            "模式也是这个。"),
+    ZH_HANT("視場約到 180 度的魚眼鏡頭。單個魚眼的標準模型，多數運動相機的廣角"
+            "模式也是這個。"),
+    KO("대략 180도까지의 어안 렌즈입니다. 어안 하나에 대한 표준 모델이며, 대부분 "
+       "액션캠의 광각 모드도 이것입니다."),
+    DE("Ein Fischaugenobjektiv bis etwa 180 Grad. Das Standardmodell für ein "
+       "einzelnes Fischauge und für die Weitwinkelmodi der meisten "
+       "Actionkameras."),
+    FR("Un objectif fisheye, jusqu'à environ 180 degrés. Le modèle standard "
+       "pour un fisheye, et pour les modes grand-angle de la plupart des "
+       "caméras d'action."),
+    ES("Un objetivo ojo de pez, de hasta unos 180 grados. El modelo estándar "
+       "para un ojo de pez, y para los modos angulares de casi todas las "
+       "cámaras de acción."),
+    PT("Uma lente olho de peixe, de até cerca de 180 graus. O modelo padrão "
+       "para um olho de peixe, e para os modos grande-angulares da maioria "
+       "das câmeras de ação."),
+    IT("Un obiettivo fisheye, fino a circa 180 gradi. Il modello standard per "
+       "un fisheye singolo e per le modalità grandangolari di quasi tutte le "
+       "action cam."),
+    NL("Een fisheye-objectief, tot ongeveer 180 graden. Het standaardmodel "
+       "voor één fisheye, en voor de groothoekstanden van de meeste "
+       "actiecamera's."),
+    RU("Объектив «рыбий глаз» примерно до 180 градусов. Стандартная модель "
+       "для одного фишая и для широкоугольных режимов большинства "
+       "экшн-камер."),
+    TR("Yaklaşık 180 dereceye kadar bir balıkgözü objektif. Tek balıkgözü "
+       "için ve çoğu aksiyon kamerasının geniş açı kipleri için standart "
+       "model."));
+
 SS_MSG(lens_fisheye_thin_prism,
     EN("Fisheye (thin prism)"),
     JA("魚眼（薄プリズム）"),
@@ -2307,20 +2472,207 @@ SS_MSG(lens_fisheye_thin_prism,
     RU("Фишай (тонкая призма)"),
     TR("Balıkgözü (ince prizma)"));
 
+SS_MSG(lens_fisheye_thin_prism_help,
+    EN("A fisheye with extra distortion parameters. This is the one to pick "
+       "for very wide fisheye cameras, such as the lenses of a typical 360 "
+       "camera before stitching."),
+    JA("ゆがみのパラメータを追加で持つ魚眼です。画角の非常に広い魚眼カメラ、"
+       "たとえばステッチ前の一般的な360度カメラのレンズにはこれを選びます。"),
+    ZH_HANS("带有额外畸变参数的鱼眼。视角非常大的鱼眼相机就选这个，例如常见 "
+            "360 相机拼接之前的镜头。"),
+    ZH_HANT("帶有額外變形參數的魚眼。視角非常大的魚眼相機就選這個，例如常見 "
+            "360 相機拼接之前的鏡頭。"),
+    KO("왜곡 파라미터를 더 가진 어안입니다. 화각이 아주 넓은 어안 카메라, "
+       "이를테면 이어 붙이기 전의 일반적인 360도 카메라 렌즈에는 이것을 "
+       "고릅니다."),
+    DE("Ein Fischauge mit zusätzlichen Verzeichnungsparametern. Das ist die "
+       "Wahl für sehr weitwinklige Fischaugenkameras, etwa die Objektive "
+       "einer üblichen 360-Kamera vor dem Zusammenfügen."),
+    FR("Un fisheye avec des paramètres de distorsion supplémentaires. C'est "
+       "le choix pour les caméras fisheye très ouvertes, par exemple les "
+       "objectifs d'une caméra 360 courante avant assemblage."),
+    ES("Un ojo de pez con parámetros de distorsión adicionales. Es el que se "
+       "elige para cámaras de ojo de pez muy angulares, como los objetivos de "
+       "una cámara 360 corriente antes de unir las imágenes."),
+    PT("Um olho de peixe com parâmetros de distorção a mais. É o que se "
+       "escolhe para câmeras olho de peixe muito abertas, como as lentes de "
+       "uma câmera 360 comum antes da costura."),
+    IT("Un fisheye con parametri di distorsione in più. È quello da scegliere "
+       "per fotocamere fisheye molto aperte, per esempio gli obiettivi di una "
+       "comune fotocamera a 360 gradi prima della cucitura."),
+    NL("Een fisheye met extra vertekeningsparameters. Dit is de keuze voor "
+       "zeer wijde fisheye-camera's, zoals de objectieven van een gewone "
+       "360-camera vóór het aaneennaaien."),
+    RU("Фишай с дополнительными параметрами дисторсии. Это выбор для очень "
+       "широких фишай-камер — например, объективов обычной 360-камеры до "
+       "сшивки."),
+    TR("Fazladan bozulma parametreleri olan bir balıkgözü. Çok geniş açılı "
+       "balıkgözü kameralar için bu seçilir; örneğin sıradan bir 360 "
+       "kameranın, birleştirmeden önceki objektifleri."));
+
 SS_MSG(lens_equirectangular,
-    EN("Equirectangular (360\xc2\xb0 panorama)"),
-    JA("正距円筒（360度パノラマ）"),
-    ZH_HANS("等距柱状（360 度全景）"),
-    ZH_HANT("等距柱狀（360 度全景）"),
-    KO("정거원통(360도 파노라마)"),
-    DE("Äquirektangulär (360\xc2\xb0-Panorama)"),
-    FR("Équirectangulaire (panorama 360\xc2\xb0)"),
-    ES("Equirrectangular (panorama 360\xc2\xb0)"),
-    PT("Equirretangular (panorama 360\xc2\xb0)"),
-    IT("Equirettangolare (panorama 360\xc2\xb0)"),
-    NL("Equirectangulair (360\xc2\xb0-panorama)"),
-    RU("Эквиректангулярная (панорама 360\xc2\xb0)"),
-    TR("Eş dikdörtgen (360\xc2\xb0 panorama)"));
+    EN("Equirectangular panorama"),
+    JA("正距円筒パノラマ"),
+    ZH_HANS("等距柱状全景"),
+    ZH_HANT("等距柱狀全景"),
+    KO("정거원통 파노라마"),
+    DE("Äquirektangulares Panorama"),
+    FR("Panorama équirectangulaire"),
+    ES("Panorama equirrectangular"),
+    PT("Panorama equirretangular"),
+    IT("Panorama equirettangolare"),
+    NL("Equirectangulair panorama"),
+    RU("Эквиректангулярная панорама"),
+    TR("Eş dikdörtgen panorama"));
+
+SS_MSG(lens_equirectangular_help,
+    EN("One image covering the whole sphere, twice as wide as it is tall -- "
+       "what a 360 camera writes once its own software has stitched its two "
+       "lenses together. Not for the raw two-circle frames themselves."),
+    JA("全天球を1枚に収めた、横が縦の2倍の画像です。360度カメラが自前の"
+       "ソフトで2つのレンズを合成したあとに書き出すものです。円が2つ並んだ"
+       "生の画面には使いません。"),
+    ZH_HANS("整个球面装在一张图里，宽是高的两倍——360 相机用自带软件把两个镜头"
+            "拼接之后导出的就是这种。不要用于还是两个圆的原始画面。"),
+    ZH_HANT("整個球面裝在一張圖裡，寬是高的兩倍——360 相機用自帶軟體把兩個鏡頭"
+            "拼接之後匯出的就是這種。不要用於還是兩個圓的原始畫面。"),
+    KO("온 구면을 한 장에 담은, 가로가 세로의 두 배인 이미지입니다. 360도 "
+       "카메라가 자체 소프트웨어로 두 렌즈를 이어 붙인 뒤 내보내는 것이 이것"
+       "입니다. 원이 두 개인 원본 화면에는 쓰지 않습니다."),
+    DE("Ein Bild, das die ganze Kugel abdeckt und doppelt so breit wie hoch "
+       "ist -- das, was eine 360-Kamera schreibt, nachdem ihre eigene "
+       "Software die beiden Objektive zusammengefügt hat. Nicht für die rohen "
+       "Bilder mit den zwei Kreisen."),
+    FR("Une image qui couvre toute la sphère, deux fois plus large que haute "
+       "-- ce qu'écrit une caméra 360 une fois que son logiciel a assemblé "
+       "ses deux objectifs. Pas pour les images brutes à deux cercles."),
+    ES("Una imagen que cubre toda la esfera, el doble de ancha que de alta: "
+       "lo que escribe una cámara 360 cuando su propio programa ya ha unido "
+       "los dos objetivos. No para los fotogramas en bruto de dos círculos."),
+    PT("Uma imagem que cobre toda a esfera, duas vezes mais larga que alta -- "
+       "o que uma câmera 360 grava depois de o seu próprio programa costurar "
+       "as duas lentes. Não para os quadros crus de dois círculos."),
+    IT("Un'immagine che copre tutta la sfera, larga il doppio dell'altezza: "
+       "quello che scrive una fotocamera a 360 gradi dopo che il suo "
+       "programma ha cucito i due obiettivi. Non per i fotogrammi grezzi a "
+       "due cerchi."),
+    NL("Eén beeld dat de hele bol beslaat, twee keer zo breed als hoog -- wat "
+       "een 360-camera wegschrijft zodra haar eigen software de twee "
+       "objectieven aaneen heeft genaaid. Niet voor de rauwe beelden met twee "
+       "cirkels."),
+    RU("Одно изображение на всю сферу, вдвое шире, чем выше, — то, что "
+       "360-камера записывает после того, как её собственная программа сшила "
+       "два объектива. Не для исходных кадров с двумя кругами."),
+    TR("Tüm küreyi kaplayan, eni boyunun iki katı olan tek bir görüntü -- 360 "
+       "kameranın, kendi yazılımı iki objektifi birleştirdikten sonra "
+       "yazdığı şey. İki daireli ham kareler için değil."));
+
+SS_MSG(lens_warn_not_2to1,
+    EN("A panorama has to be twice as wide as it is tall; this input is "
+       "{0} x {1}. Reconstruction will read the wrong angle out of every "
+       "pixel."),
+    JA("パノラマは横が縦の2倍でなければなりませんが、この入力は {0} x {1} "
+       "です。このままでは各画素の角度が誤って読み取られます。"),
+    ZH_HANS("全景必须宽是高的两倍，而这个输入是 {0} x {1}。这样重建会把每个"
+            "像素的角度算错。"),
+    ZH_HANT("全景必須寬是高的兩倍，而這個輸入是 {0} x {1}。這樣重建會把每個"
+            "像素的角度算錯。"),
+    KO("파노라마는 가로가 세로의 두 배여야 하는데 이 입력은 {0} x {1}입니다. "
+       "이대로면 재구성이 픽셀마다 잘못된 각도를 읽습니다."),
+    DE("Ein Panorama muss doppelt so breit wie hoch sein; diese Eingabe ist "
+       "{0} x {1}. Die Rekonstruktion liest dann aus jedem Pixel den falschen "
+       "Winkel."),
+    FR("Un panorama doit être deux fois plus large que haut ; cette entrée "
+       "fait {0} x {1}. La reconstruction lira alors un angle faux dans "
+       "chaque pixel."),
+    ES("Un panorama tiene que ser el doble de ancho que de alto; esta entrada "
+       "es de {0} x {1}. La reconstrucción leerá un ángulo equivocado en cada "
+       "píxel."),
+    PT("Um panorama tem de ser duas vezes mais largo que alto; esta entrada é "
+       "de {0} x {1}. A reconstrução vai ler um ângulo errado em cada pixel."),
+    IT("Un panorama deve essere largo il doppio dell'altezza; questo ingresso "
+       "è {0} x {1}. La ricostruzione leggerà un angolo sbagliato da ogni "
+       "pixel."),
+    NL("Een panorama moet twee keer zo breed als hoog zijn; deze invoer is "
+       "{0} x {1}. De reconstructie leest dan uit elke pixel de verkeerde "
+       "hoek."),
+    RU("Панорама должна быть вдвое шире, чем выше, а этот вход — {0} x {1}. "
+       "Восстановление возьмёт из каждого пикселя неверный угол."),
+    TR("Bir panoramanın eni boyunun iki katı olmalıdır; bu girdi {0} x {1}. "
+       "Yeniden oluşturma her pikselden yanlış açıyı okur."));
+
+SS_MSG(lens_warn_dual_fisheye,
+    EN("This capture records two fisheye circles per frame, not a stitched "
+       "panorama. Pick a fisheye model -- Fisheye (thin prism) is the one "
+       "these cameras fit."),
+    JA("この素材は1フレームに魚眼の円を2つ記録しており、合成済みのパノラマ"
+       "ではありません。魚眼のモデルを選んでください。これらのカメラには"
+       "「魚眼（薄プリズム）」が合います。"),
+    ZH_HANS("这份素材每帧记录两个鱼眼圆，并不是拼接好的全景。请选鱼眼模型——"
+            "这类相机适合“鱼眼（薄棱镜）”。"),
+    ZH_HANT("這份素材每格記錄兩個魚眼圓，並不是拼接好的全景。請選魚眼模型——"
+            "這類相機適合「魚眼（薄稜鏡）」。"),
+    KO("이 촬영본은 한 프레임에 어안 원을 두 개 기록하며, 이어 붙인 파노라마가 "
+       "아닙니다. 어안 모델을 고르세요. 이런 카메라에는 '어안(얇은 프리즘)'이 "
+       "맞습니다."),
+    DE("Diese Aufnahme zeichnet zwei Fischaugenkreise je Bild auf, kein "
+       "zusammengefügtes Panorama. Wählen Sie ein Fischaugenmodell -- "
+       "Fisheye (dünnes Prisma) passt zu diesen Kameras."),
+    FR("Cette prise enregistre deux cercles fisheye par image, pas un "
+       "panorama assemblé. Choisissez un modèle fisheye : Fisheye (prisme "
+       "mince) est celui qui convient à ces caméras."),
+    ES("Esta toma graba dos círculos de ojo de pez por fotograma, no un "
+       "panorama unido. Elija un modelo de ojo de pez: Ojo de pez (prisma "
+       "delgado) es el que encaja con estas cámaras."),
+    PT("Esta captura grava dois círculos olho de peixe por quadro, não um "
+       "panorama costurado. Escolha um modelo olho de peixe: Olho de peixe "
+       "(prisma fino) é o que serve para essas câmeras."),
+    IT("Questa ripresa registra due cerchi fisheye per fotogramma, non un "
+       "panorama cucito. Scelga un modello fisheye: Fisheye (prisma sottile) "
+       "è quello adatto a queste fotocamere."),
+    NL("Deze opname legt per beeld twee fisheye-cirkels vast, geen "
+       "aaneengenaaid panorama. Kies een fisheye-model -- Fisheye (dun "
+       "prisma) past bij deze camera's."),
+    RU("Эта съёмка записывает по два круга «рыбьего глаза» на кадр, а не "
+       "сшитую панораму. Выберите модель фишая — этим камерам подходит "
+       "«Фишай (тонкая призма)»."),
+    TR("Bu çekim kare başına iki balıkgözü dairesi kaydeder, birleştirilmiş "
+       "bir panorama değil. Bir balıkgözü modeli seçin -- bu kameralara "
+       "Balıkgözü (ince prizma) uyar."));
+
+SS_MSG(lens_warn_needs_fisheye,
+    EN("This capture is two fisheye circles per frame. An ordinary lens model "
+       "may not fit them -- pick Fisheye (thin prism)."),
+    JA("この素材は1フレームに魚眼の円が2つあります。通常のレンズモデルでは"
+       "合わないことがあります。「魚眼（薄プリズム）」を選んでください。"),
+    ZH_HANS("这份素材每帧是两个鱼眼圆，普通镜头模型可能拟合不了——请选“鱼眼"
+            "（薄棱镜）”。"),
+    ZH_HANT("這份素材每格是兩個魚眼圓，普通鏡頭模型可能擬合不了——請選「魚眼"
+            "（薄稜鏡）」。"),
+    KO("이 촬영본은 한 프레임에 어안 원이 두 개입니다. 일반 렌즈 모델로는 맞지 "
+       "않을 수 있으니 '어안(얇은 프리즘)'을 고르세요."),
+    DE("Diese Aufnahme besteht aus zwei Fischaugenkreisen je Bild. Ein "
+       "gewöhnliches Objektivmodell passt darauf womöglich nicht -- wählen "
+       "Sie Fisheye (dünnes Prisma)."),
+    FR("Cette prise comporte deux cercles fisheye par image. Un modèle "
+       "d'objectif ordinaire risque de ne pas s'y ajuster : choisissez "
+       "Fisheye (prisme mince)."),
+    ES("Esta toma son dos círculos de ojo de pez por fotograma. Un modelo de "
+       "objetivo normal puede no ajustarse a ellos: elija Ojo de pez (prisma "
+       "delgado)."),
+    PT("Esta captura tem dois círculos olho de peixe por quadro. Um modelo de "
+       "lente comum pode não se ajustar a eles -- escolha Olho de peixe "
+       "(prisma fino)."),
+    IT("Questa ripresa è fatta di due cerchi fisheye per fotogramma. Un "
+       "modello di obiettivo comune potrebbe non adattarcisi: scelga Fisheye "
+       "(prisma sottile)."),
+    NL("Deze opname bestaat uit twee fisheye-cirkels per beeld. Een gewoon "
+       "objectiefmodel past daar mogelijk niet op -- kies Fisheye (dun "
+       "prisma)."),
+    RU("В этой съёмке по два круга «рыбьего глаза» на кадр. Обычная модель "
+       "объектива может к ним не подойти — выберите «Фишай (тонкая призма)»."),
+    TR("Bu çekim kare başına iki balıkgözü dairesidir. Sıradan bir objektif "
+       "modeli bunlara oturmayabilir -- Balıkgözü (ince prizma) seçin."));
 
 // ---------------------------------------------------------------------------
 // The common-subject palette (src/app/gui/MaskPrompt.h)
@@ -3842,74 +4194,79 @@ SS_MSG(features_help,
        "fetch a small checkpoint (3-4 MB) on first use, find fewer but "
        "better-localized keypoints, and match markedly more image pairs on "
        "hard captures. N32 samples more positions per descriptor -- slower, "
-       "slightly stronger."),
+       "slightly stronger for datasets without strong rotation."),
     JA("どの検出器と記述子を使うかです。SIFT は古典的な選択で、何もダウンロード"
        "しません。ALIKED は学習型のフロントエンドで、初回に小さな"
        "チェックポイント（3〜4 MB）を取得します。キーポイントの数は少ない"
        "ものの位置が正確で、難しい撮影ではマッチする画像ペアが目に見えて"
-       "増えます。N32 は記述子あたりのサンプル位置が多く、遅いぶん少し強力です。"),
+       "増えます。N32 は記述子あたりのサンプル位置が多く、遅いぶん、回転の大きくないデータセットでは少し強力です。"),
     ZH_HANS("使用哪种检测器和描述子。SIFT 是经典选择，什么都不用下载。"
             "ALIKED 是学习型前端：首次使用会取一个小的检查点（3-4 MB），"
             "找到的关键点更少但定位更准，在困难拍摄上匹配上的图像对明显更多。"
-            "N32 每个描述子采样更多位置——更慢，略强。"),
+            "N32 每个描述子采样更多位置——更慢，在没有大幅旋转的数据集上略强。"),
     ZH_HANT("使用哪種偵測器和描述子。SIFT 是經典選擇，什麼都不用下載。"
             "ALIKED 是學習型前端：首次使用會取一個小的檢查點（3-4 MB），"
             "找到的關鍵點更少但定位更準，在困難拍攝上配對上的影像對明顯更多。"
-            "N32 每個描述子取樣更多位置——更慢，略強。"),
+            "N32 每個描述子取樣更多位置——更慢，在沒有大幅旋轉的資料集上略強。"),
     KO("어떤 검출기와 기술자를 쓸지입니다. SIFT는 고전적인 선택이며 내려받을 것이 "
        "없습니다. ALIKED는 학습형 프런트엔드로, 처음 쓸 때 작은 체크포인트"
        "(3~4 MB)를 받아옵니다. 키포인트 수는 적지만 위치가 더 정확하고, 어려운 "
        "촬영에서 매칭되는 이미지 쌍이 눈에 띄게 늘어납니다. N32는 기술자당 더 "
-       "많은 위치를 표본화합니다 — 더 느리고 조금 더 강합니다."),
+       "많은 위치를 표본화합니다 — 더 느리지만, 회전이 크지 않은 데이터셋에서는 "
+       "조금 더 강합니다."),
     DE("Welcher Detektor und Deskriptor. SIFT ist der klassische und braucht "
        "keinen Download. Die ALIKED-Varianten sind ein gelerntes Frontend: sie "
        "holen beim ersten Gebrauch einen kleinen Prüfpunkt (3-4 MB), finden "
        "weniger, aber genauer verortete Schlüsselpunkte und ordnen bei "
        "schwierigen Aufnahmen deutlich mehr Bildpaare zu. N32 tastet je "
-       "Deskriptor mehr Stellen ab -- langsamer, etwas stärker."),
+       "Deskriptor mehr Stellen ab -- langsamer, bei Datensätzen ohne starke "
+       "Drehung etwas stärker."),
     FR("Quel détecteur et quel descripteur. SIFT est le classique et ne "
        "demande aucun téléchargement. Les options ALIKED forment un frontal "
        "appris : elles récupèrent un petit point de sauvegarde (3-4 Mo) au "
        "premier usage, trouvent moins de points mais mieux localisés, et "
        "apparient nettement plus de paires sur les prises difficiles. N32 "
        "échantillonne plus de positions par descripteur -- plus lent, un peu "
-       "plus solide."),
+       "plus solide sur les jeux de données sans forte rotation."),
     ES("Qué detector y descriptor. SIFT es el clásico y no necesita descargar "
        "nada. Las opciones ALIKED son un frontal aprendido: bajan un pequeño "
        "punto de control (3-4 MB) la primera vez, encuentran menos puntos "
        "pero mejor localizados, y emparejan bastantes más pares de imágenes "
        "en capturas difíciles. N32 muestrea más posiciones por descriptor: "
-       "más lento, algo más robusto."),
+       "más lento, algo más robusto en conjuntos sin rotaciones fuertes."),
     PT("Qual detector e descritor. O SIFT é o clássico e não precisa baixar "
        "nada. As opções ALIKED são um front-end aprendido: buscam um pequeno "
        "ponto de verificação (3-4 MB) no primeiro uso, encontram menos pontos "
        "mas melhor localizados, e casam bem mais pares de imagens em capturas "
        "difíceis. O N32 amostra mais posições por descritor -- mais lento, um "
-       "pouco mais forte."),
+       "pouco mais forte em conjuntos sem rotação acentuada."),
     IT("Quale rilevatore e descrittore. SIFT è quello classico e non richiede "
        "scaricamenti. Le opzioni ALIKED sono un frontend appreso: al primo "
        "uso prelevano un piccolo punto di controllo (3-4 MB), trovano meno "
        "punti chiave ma meglio localizzati e mettono in corrispondenza molte "
        "più coppie nelle riprese difficili. N32 campiona più posizioni per "
-       "descrittore: più lento, un po' più robusto."),
+       "descrittore: più lento, un po' più robusto sui set di dati senza "
+       "forti rotazioni."),
     NL("Welke detector en descriptor. SIFT is de klassieke en hoeft niets te "
        "downloaden. De ALIKED-opties zijn een geleerde frontend: ze halen bij "
        "eerste gebruik een klein controlepunt (3-4 MB) op, vinden minder maar "
        "beter geplaatste sleutelpunten en matchen bij lastige opnamen "
        "merkbaar meer beeldparen. N32 bemonstert meer posities per descriptor "
-       "-- trager, iets sterker."),
+       "-- trager, bij datasets zonder sterke rotatie iets sterker."),
     RU("Какой детектор и дескриптор. SIFT — классический, ничего скачивать не "
        "нужно. Варианты ALIKED — обученный фронтенд: при первом использовании "
        "они получают небольшую контрольную точку (3-4 МБ), находят меньше "
        "ключевых точек, но точнее локализованных, и на сложных съёмках "
        "сопоставляют заметно больше пар. N32 берёт больше позиций на "
-       "дескриптор — медленнее, чуть надёжнее."),
+       "дескриптор — медленнее, на наборах без сильного поворота чуть "
+       "надёжнее."),
     TR("Hangi bulucu ve betimleyici. SIFT klasik olanıdır ve indirme "
        "gerektirmez. ALIKED seçenekleri öğrenilmiş bir ön uçtur: ilk "
        "kullanımda küçük bir denetim noktası (3-4 MB) indirir, daha az ama "
        "daha iyi konumlanmış anahtar nokta bulur ve zor çekimlerde belirgin "
        "biçimde daha çok görüntü çiftini eşleştirir. N32 betimleyici başına "
-       "daha çok konum örnekler -- daha yavaş, biraz daha güçlü."));
+       "daha çok konum örnekler -- daha yavaş, güçlü dönme içermeyen veri "
+       "kümelerinde biraz daha güçlü."));
 
 SS_MSG(matcher,
     EN("Matcher"),       JA("マッチャー"),    ZH_HANS("匹配器"),   ZH_HANT("配對器"),
@@ -3933,52 +4290,41 @@ SS_MSG(matcher_lightglue,
     RU("LightGlue (обученный)"), TR("LightGlue (öğrenilmiş)"));
 
 SS_MSG(matcher_help,
-    EN("How descriptors are matched. LightGlue is a learned matcher: it finds "
-       "far more correct correspondences on hard pairs, and costs tens of "
-       "milliseconds per pair instead of a few, so it runs behind pair "
-       "selection."),
+    EN("How descriptors are matched. LightGlue is a learned matcher: it "
+       "generally gives a better success rate on hard pairs, at the cost of "
+       "much slower matching."),
     JA("記述子をどう照合するかです。LightGlue は学習型のマッチャーで、難しい"
-       "ペアでも正しい対応を格段に多く見つけます。1 ペアあたり数ミリ秒ではなく"
-       "数十ミリ秒かかるため、ペア選択の後段で動きます。"),
-    ZH_HANS("描述子如何匹配。LightGlue 是学习型匹配器：在困难配对上能找到多得多"
-            "的正确对应，代价是每对要几十毫秒而不是几毫秒，所以它跑在配对筛选之后。"),
-    ZH_HANT("描述子如何比對。LightGlue 是學習型配對器：在困難配對上能找到多得多"
-            "的正確對應，代價是每對要幾十毫秒而不是幾毫秒，所以它跑在配對篩選之後。"),
+       "ペアでも成功率がおおむね高くなりますが、照合はずっと遅くなります。"),
+    ZH_HANS("描述子如何匹配。LightGlue 是学习型匹配器：在困难配对上成功率通常"
+            "更高，代价是匹配慢得多。"),
+    ZH_HANT("描述子如何比對。LightGlue 是學習型配對器：在困難配對上成功率通常"
+            "更高，代價是比對慢得多。"),
     KO("기술자를 어떻게 맞출지입니다. LightGlue는 학습형 매처로, 어려운 쌍에서 "
-       "올바른 대응을 훨씬 많이 찾아냅니다. 쌍당 몇 밀리초가 아니라 수십 밀리초가 "
-       "들기 때문에 쌍 선별 뒤에 실행됩니다."),
+       "대체로 성공률이 더 높지만 매칭이 훨씬 느립니다."),
     DE("Wie Deskriptoren zugeordnet werden. LightGlue ist ein gelernter "
-       "Zuordner: er findet bei schwierigen Paaren weit mehr richtige "
-       "Entsprechungen und kostet je Paar zig statt weniger Millisekunden, "
-       "läuft also hinter der Paarauswahl."),
+       "Zuordner: er hat bei schwierigen Paaren meist eine bessere "
+       "Trefferquote, ordnet dafür aber viel langsamer zu."),
     FR("Comment les descripteurs sont appariés. LightGlue est un apparieur "
-       "appris : il trouve bien plus de correspondances justes sur les paires "
-       "difficiles, et coûte des dizaines de millisecondes par paire au lieu "
-       "de quelques-unes, donc il s'exécute après la sélection des paires."),
+       "appris : il réussit généralement mieux sur les paires difficiles, au "
+       "prix d'un appariement bien plus lent."),
     ES("Cómo se emparejan los descriptores. LightGlue es un emparejador "
-       "aprendido: encuentra muchas más correspondencias correctas en pares "
-       "difíciles y cuesta decenas de milisegundos por par en vez de unos "
-       "pocos, así que se ejecuta tras la selección de pares."),
+       "aprendido: suele acertar más en pares difíciles, a costa de un "
+       "emparejamiento mucho más lento."),
     PT("Como os descritores são casados. O LightGlue é um correspondedor "
-       "aprendido: encontra muito mais correspondências corretas em pares "
-       "difíceis e custa dezenas de milissegundos por par em vez de poucos, "
-       "então roda depois da seleção de pares."),
+       "aprendido: costuma ter mais sucesso em pares difíceis, ao custo de um "
+       "casamento bem mais lento."),
     IT("Come vengono abbinati i descrittori. LightGlue è un abbinatore "
-       "appreso: trova molte più corrispondenze corrette sulle coppie "
-       "difficili e costa decine di millisecondi per coppia invece di pochi, "
-       "perciò gira dopo la selezione delle coppie."),
+       "appreso: in genere riesce meglio sulle coppie difficili, al prezzo di "
+       "un abbinamento molto più lento."),
     NL("Hoe descriptors worden gematcht. LightGlue is een geleerde matcher: "
-       "die vindt bij lastige paren veel meer juiste overeenkomsten en kost "
-       "tientallen milliseconden per paar in plaats van enkele, dus draait hij "
-       "na de paarselectie."),
+       "die slaagt bij lastige paren doorgaans beter, maar matcht wel veel "
+       "trager."),
     RU("Как сопоставляются дескрипторы. LightGlue — обученный сопоставитель: "
-       "на трудных парах он находит гораздо больше верных соответствий и "
-       "стоит десятков миллисекунд на пару вместо единиц, поэтому работает "
-       "после отбора пар."),
+       "на трудных парах он обычно успешнее, но сопоставляет намного "
+       "медленнее."),
     TR("Betimleyicilerin nasıl eşleştirileceği. LightGlue öğrenilmiş bir "
-       "eşleştiricidir: zor çiftlerde çok daha fazla doğru karşılık bulur ve "
-       "çift başına birkaç yerine onlarca milisaniye harcar, bu yüzden çift "
-       "seçiminin ardından çalışır."));
+       "eşleştiricidir: zor çiftlerde genellikle daha başarılıdır, "
+       "karşılığında eşleştirme çok daha yavaştır."));
 
 SS_MSG(matcher_needs_learned,
     EN("LightGlue needs the learned descriptors -- pick an ALIKED frontend "
@@ -4046,70 +4392,50 @@ SS_MSG(mapper_bottom_up,
 SS_MSG(mapper_schedule_help,
     EN("How the scene is built. Flat grows one reconstruction image by image, "
        "and is the default for any capture. Bottom-up cuts the view graph "
-       "into small groups, reconstructs them independently and merges upwards "
-       "-- worth trying on a large capture, where the flat schedule's "
-       "whole-model passes start to dominate."),
+       "into small groups, reconstructs them independently and merges "
+       "upwards."),
     JA("シーンをどう組み立てるかです。フラットは1つの再構成を画像ごとに"
        "育てていく方式で、どの撮影でも既定です。ボトムアップはビューグラフを"
-       "小さなグループに切り、それぞれを独立に再構成してから上へ統合します。"
-       "大規模な撮影では、フラット方式のモデル全体を走査するパスが支配的に"
-       "なってくるので、試す価値があります。"),
+       "小さなグループに切り、それぞれを独立に再構成してから上へ統合します。"),
     ZH_HANS("场景如何构建。扁平方式逐张图像地扩展同一个重建，是任何拍摄的默认选择。"
-            "自下而上把视图图切成小组，各自独立重建后再向上合并——在大规模拍摄上"
-            "值得一试，因为那时扁平方式的全模型遍历会开始主导耗时。"),
+            "自下而上把视图图切成小组，各自独立重建后再向上合并。"),
     ZH_HANT("場景如何建構。扁平方式逐張影像地擴展同一個重建，是任何拍攝的預設選擇。"
-            "由下而上把視圖圖切成小組，各自獨立重建後再向上合併——在大規模拍攝上"
-            "值得一試，因為那時扁平方式的全模型走訪會開始主導耗時。"),
+            "由下而上把視圖圖切成小組，各自獨立重建後再向上合併。"),
     KO("장면을 어떻게 만들지입니다. 평면 방식은 재구성 하나를 이미지마다 키워 "
        "가며, 어떤 촬영에서든 기본값입니다. 상향식은 뷰 그래프를 작은 묶음으로 "
-       "자르고 각각 독립적으로 재구성한 뒤 위로 병합합니다. 규모가 큰 촬영에서는 "
-       "평면 방식의 전체 모델 패스가 시간을 지배하기 시작하므로 시도해 볼 만합니다."),
+       "자르고 각각 독립적으로 재구성한 뒤 위로 병합합니다."),
     DE("Wie die Szene aufgebaut wird. Flach lässt eine Rekonstruktion Bild für "
-       "Bild wachsen und ist die Vorgabe für jede Aufnahme. Von unten "
-       "zerlegt den Sichtgraphen in kleine Gruppen, rekonstruiert sie "
-       "unabhängig und führt sie nach oben zusammen -- bei einer großen "
-       "Aufnahme einen Versuch wert, wo die Ganzmodell-Durchgänge des flachen "
-       "Ablaufs zu dominieren beginnen."),
+       "Bild wachsen und ist die Vorgabe für jede Aufnahme. Von unten zerlegt "
+       "den Sichtgraphen in kleine Gruppen, rekonstruiert sie unabhängig und "
+       "führt sie nach oben zusammen."),
     FR("Comment la scène est construite. Le mode plat fait croître une seule "
        "reconstruction image par image, et c'est la valeur par défaut pour "
        "toute prise. Le mode ascendant découpe le graphe de vues en petits "
-       "groupes, les reconstruit indépendamment et fusionne vers le haut -- à "
-       "essayer sur une grande prise, où les passes sur le modèle entier du "
-       "mode plat finissent par dominer."),
+       "groupes, les reconstruit indépendamment et fusionne vers le haut."),
     ES("Cómo se construye la escena. El modo plano hace crecer una sola "
        "reconstrucción imagen a imagen, y es lo predeterminado en cualquier "
        "captura. El ascendente corta el grafo de vistas en grupos pequeños, "
-       "los reconstruye por separado y los fusiona hacia arriba: vale la pena "
-       "probarlo en capturas grandes, donde las pasadas sobre el modelo "
-       "entero del modo plano empiezan a dominar."),
+       "los reconstruye por separado y los fusiona hacia arriba."),
     PT("Como a cena é construída. O modo plano faz uma única reconstrução "
        "crescer imagem a imagem, e é o padrão para qualquer captura. O "
        "ascendente corta o grafo de vistas em grupos pequenos, reconstrói "
-       "cada um em separado e mescla para cima -- vale tentar numa captura "
-       "grande, em que as passagens sobre o modelo inteiro do modo plano "
-       "começam a dominar."),
+       "cada um em separado e mescla para cima."),
     IT("Come viene costruita la scena. Il modo piatto fa crescere una sola "
        "ricostruzione immagine dopo immagine ed è l'impostazione predefinita "
        "per qualsiasi ripresa. Quello dal basso taglia il grafo delle viste in "
        "piccoli gruppi, li ricostruisce in modo indipendente e li unisce verso "
-       "l'alto: vale la pena provarlo su una ripresa grande, dove le passate "
-       "sull'intero modello del modo piatto cominciano a dominare."),
+       "l'alto."),
     NL("Hoe de scène wordt opgebouwd. Vlak laat één reconstructie beeld voor "
        "beeld groeien en is de standaard voor elke opname. Bottom-up knipt de "
        "beeldgraaf in kleine groepen, reconstrueert die apart en voegt ze naar "
-       "boven samen -- het proberen waard bij een grote opname, waar de "
-       "passes over het hele model van het vlakke schema gaan overheersen."),
+       "boven samen."),
     RU("Как строится сцена. Плоская схема наращивает одну реконструкцию снимок "
        "за снимком и подходит любой съёмке. Схема снизу вверх режет граф видов "
-       "на небольшие группы, восстанавливает их независимо и объединяет "
-       "вверх — стоит попробовать на крупной съёмке, где проходы плоской схемы "
-       "по всей модели начинают преобладать."),
+       "на небольшие группы, восстанавливает их независимо и объединяет вверх."),
     TR("Sahnenin nasıl kurulacağı. Düz plan tek bir yeniden oluşturmayı "
        "görüntü görüntü büyütür ve her çekim için varsayılandır. Aşağıdan "
        "yukarı plan görünüm çizgesini küçük öbeklere böler, her birini ayrı "
-       "yeniden oluşturur ve yukarı doğru birleştirir -- düz planın tüm model "
-       "geçişlerinin ağır basmaya başladığı büyük çekimlerde denemeye "
-       "değer."));
+       "yeniden oluşturur ve yukarı doğru birleştirir."));
 
 SS_MSG(sequential_overlap,
     EN("Sequential overlap"),
@@ -4345,90 +4671,90 @@ SS_MSG(keep_intermediate,
 SS_MSG(keep_intermediate_help,
     EN("Keep features/ and matches.bin in the output folder after a "
        "successful run. They are large, and only useful for re-running the "
-       "mapper by hand with spirula-sfm."),
+       "mapper by hand with `spirula sfm`."),
     JA("実行が成功したあとも、出力フォルダに features/ と matches.bin を"
-       "残します。サイズが大きく、spirula-sfm で手動でマッパーを再実行する"
+       "残します。サイズが大きく、`spirula sfm` で手動でマッパーを再実行する"
        "とき以外は使いません。"),
     ZH_HANS("运行成功后仍在输出文件夹里保留 features/ 和 matches.bin。它们体积很大，"
-            "只有在用 spirula-sfm 手动重跑建图时才有用。"),
+            "只有在用 `spirula sfm` 手动重跑建图时才有用。"),
     ZH_HANT("執行成功後仍在輸出資料夾裡保留 features/ 和 matches.bin。它們體積很大，"
-            "只有在用 spirula-sfm 手動重跑建圖時才有用。"),
+            "只有在用 `spirula sfm` 手動重跑建圖時才有用。"),
     KO("실행이 성공한 뒤에도 출력 폴더에 features/와 matches.bin을 남깁니다. "
-       "크기가 크고, spirula-sfm으로 매퍼를 손수 다시 돌릴 때만 쓸모가 있습니다."),
+       "크기가 크고, `spirula sfm`으로 매퍼를 손수 다시 돌릴 때만 쓸모가 있습니다."),
     DE("features/ und matches.bin nach einem erfolgreichen Lauf im "
        "Ausgabeordner behalten. Sie sind groß und nur nützlich, um den Mapper "
-       "von Hand mit spirula-sfm erneut laufen zu lassen."),
-    FR("Conserver features/ et matches.bin dans le dossier de sortie après "
-       "une exécution réussie. Ils sont volumineux et ne servent qu'à relancer "
-       "le mapper à la main avec spirula-sfm."),
+       "von Hand mit `spirula sfm` erneut laufen zu lassen."),
+    FR("Conserver features/ et matches.bin dans le dossier de sortie après une "
+       "exécution réussie. Ils sont volumineux et ne servent qu'à relancer le "
+       "mapper à la main avec `spirula sfm`."),
     ES("Conservar features/ y matches.bin en la carpeta de salida tras una "
        "ejecución correcta. Son grandes y solo sirven para volver a lanzar el "
-       "mapeador a mano con spirula-sfm."),
+       "mapeador a mano con `spirula sfm`."),
     PT("Manter features/ e matches.bin na pasta de saída após uma execução "
        "bem-sucedida. São grandes e só servem para rodar o mapeador à mão com "
-       "o spirula-sfm."),
+       "o `spirula sfm`."),
     IT("Conservare features/ e matches.bin nella cartella di destinazione dopo "
        "un'esecuzione riuscita. Sono grandi e servono solo per rilanciare a "
-       "mano il mapper con spirula-sfm."),
+       "mano il mapper con `spirula sfm`."),
     NL("features/ en matches.bin na een geslaagde run in de uitvoermap "
        "bewaren. Ze zijn groot en alleen nuttig om de mapper met de hand "
-       "opnieuw te draaien met spirula-sfm."),
+       "opnieuw te draaien met `spirula sfm`."),
     RU("Оставлять features/ и matches.bin в папке результатов после успешного "
        "запуска. Они большие и нужны, только чтобы вручную перезапустить "
-       "маппер через spirula-sfm."),
+       "маппер через `spirula sfm`."),
     TR("Başarılı bir çalıştırmadan sonra features/ ve matches.bin dosyalarını "
        "çıktı klasöründe tutar. Büyüktürler ve yalnızca haritalayıcıyı "
-       "spirula-sfm ile elle yeniden çalıştırmak için işe yararlar."));
+       "`spirula sfm` ile elle yeniden çalıştırmak için işe yararlar."));
 
 SS_MSG(extra_sfm_flags_hint,
-    EN("extra spirula-sfm flags, e.g. --max-error 2"),
-    JA("spirula-sfm への追加オプション（例: --max-error 2）"),
-    ZH_HANS("额外的 spirula-sfm 参数，例如 --max-error 2"),
-    ZH_HANT("額外的 spirula-sfm 參數，例如 --max-error 2"),
-    KO("추가 spirula-sfm 옵션, 예: --max-error 2"),
-    DE("zusätzliche spirula-sfm-Optionen, z. B. --max-error 2"),
-    FR("options spirula-sfm supplémentaires, p. ex. --max-error 2"),
-    ES("opciones adicionales de spirula-sfm, p. ej. --max-error 2"),
-    PT("opções adicionais do spirula-sfm, por exemplo --max-error 2"),
-    IT("opzioni aggiuntive per spirula-sfm, ad es. --max-error 2"),
-    NL("extra spirula-sfm-opties, bijv. --max-error 2"),
-    RU("дополнительные ключи spirula-sfm, например --max-error 2"),
-    TR("ek spirula-sfm seçenekleri, örn. --max-error 2"));
+    EN("extra `spirula sfm` flags, e.g. --max-error 2"),
+    JA("`spirula sfm` への追加オプション（例: --max-error 2）"),
+    ZH_HANS("额外的 `spirula sfm` 参数，例如 --max-error 2"),
+    ZH_HANT("額外的 `spirula sfm` 參數，例如 --max-error 2"),
+    KO("추가 `spirula sfm` 옵션, 예: --max-error 2"),
+    DE("zusätzliche `spirula sfm`-Optionen, z. B. --max-error 2"),
+    FR("options `spirula sfm` supplémentaires, p. ex. --max-error 2"),
+    ES("opciones adicionales de `spirula sfm`, p. ej. --max-error 2"),
+    PT("opções adicionais do `spirula sfm`, por exemplo --max-error 2"),
+    IT("opzioni aggiuntive per `spirula sfm`, ad es. --max-error 2"),
+    NL("extra `spirula sfm`-opties, bijv. --max-error 2"),
+    RU("дополнительные ключи `spirula sfm`, например --max-error 2"),
+    TR("ek `spirula sfm` seçenekleri, örn. --max-error 2"));
 
 SS_MSG(extra_sfm_flags_help,
-    EN("Passed to `spirula-sfm auto` verbatim. Everything this panel does not "
-       "show is reachable here; run `spirula-sfm auto --help` for the list."),
-    JA("`spirula-sfm auto` にそのまま渡されます。このパネルに出ていない設定は"
-       "すべてここから指定できます。一覧は `spirula-sfm auto --help` で"
+    EN("Passed to `spirula sfm auto` verbatim. Everything this panel does not "
+       "show is reachable here; run `spirula sfm auto --help` for the list."),
+    JA("`spirula sfm auto` にそのまま渡されます。このパネルに出ていない設定は"
+       "すべてここから指定できます。一覧は `spirula sfm auto --help` で"
        "確認できます。"),
-    ZH_HANS("原样传给 `spirula-sfm auto`。这个面板没有列出的一切都可以在这里指定；"
-            "运行 `spirula-sfm auto --help` 查看完整列表。"),
-    ZH_HANT("原樣傳給 `spirula-sfm auto`。這個面板沒有列出的一切都可以在這裡指定；"
-            "執行 `spirula-sfm auto --help` 查看完整清單。"),
-    KO("`spirula-sfm auto`에 그대로 전달됩니다. 이 패널에 없는 것은 모두 여기서 "
-       "지정할 수 있습니다. 목록은 `spirula-sfm auto --help`로 확인하세요."),
-    DE("Wird unverändert an `spirula-sfm auto` weitergereicht. Alles, was "
+    ZH_HANS("原样传给 `spirula sfm auto`。这个面板没有列出的一切都可以在这里指定；"
+            "运行 `spirula sfm auto --help` 查看完整列表。"),
+    ZH_HANT("原樣傳給 `spirula sfm auto`。這個面板沒有列出的一切都可以在這裡指定；"
+            "執行 `spirula sfm auto --help` 查看完整清單。"),
+    KO("`spirula sfm auto`에 그대로 전달됩니다. 이 패널에 없는 것은 모두 여기서 "
+       "지정할 수 있습니다. 목록은 `spirula sfm auto --help`로 확인하세요."),
+    DE("Wird unverändert an `spirula sfm auto` weitergereicht. Alles, was "
        "dieses Fenster nicht zeigt, ist hier erreichbar; die Liste liefert "
-       "`spirula-sfm auto --help`."),
-    FR("Transmis tel quel à `spirula-sfm auto`. Tout ce que ce panneau "
-       "n'affiche pas est accessible ici ; lancez `spirula-sfm auto --help` "
+       "`spirula sfm auto --help`."),
+    FR("Transmis tel quel à `spirula sfm auto`. Tout ce que ce panneau "
+       "n'affiche pas est accessible ici ; lancez `spirula sfm auto --help` "
        "pour la liste."),
-    ES("Se pasa tal cual a `spirula-sfm auto`. Todo lo que este panel no "
-       "muestra se alcanza desde aquí; ejecute `spirula-sfm auto --help` para "
+    ES("Se pasa tal cual a `spirula sfm auto`. Todo lo que este panel no "
+       "muestra se alcanza desde aquí; ejecute `spirula sfm auto --help` para "
        "ver la lista."),
-    PT("Repassado tal e qual para `spirula-sfm auto`. Tudo o que este painel "
-       "não mostra é alcançável aqui; rode `spirula-sfm auto --help` para ver "
+    PT("Repassado tal e qual para `spirula sfm auto`. Tudo o que este painel "
+       "não mostra é alcançável aqui; rode `spirula sfm auto --help` para ver "
        "a lista."),
-    IT("Passato così com'è a `spirula-sfm auto`. Tutto ciò che questo pannello "
-       "non mostra è raggiungibile qui; per l'elenco esegua `spirula-sfm auto "
+    IT("Passato così com'è a `spirula sfm auto`. Tutto ciò che questo pannello "
+       "non mostra è raggiungibile qui; per l'elenco esegua `spirula sfm auto "
        "--help`."),
-    NL("Wordt letterlijk doorgegeven aan `spirula-sfm auto`. Alles wat dit "
-       "paneel niet toont, is hier bereikbaar; draai `spirula-sfm auto --help` "
+    NL("Wordt letterlijk doorgegeven aan `spirula sfm auto`. Alles wat dit "
+       "paneel niet toont, is hier bereikbaar; draai `spirula sfm auto --help` "
        "voor de lijst."),
-    RU("Передаётся в `spirula-sfm auto` как есть. Всё, чего нет на этой панели, "
-       "доступно отсюда; список выдаёт `spirula-sfm auto --help`."),
-    TR("`spirula-sfm auto` komutuna olduğu gibi aktarılır. Bu panelin "
-       "göstermediği her şeye buradan ulaşılır; liste için `spirula-sfm auto "
+    RU("Передаётся в `spirula sfm auto` как есть. Всё, чего нет на этой "
+       "панели, доступно отсюда; список выдаёт `spirula sfm auto --help`."),
+    TR("`spirula sfm auto` komutuna olduğu gibi aktarılır. Bu panelin "
+       "göstermediği her şeye buradan ulaşılır; liste için `spirula sfm auto "
        "--help` çalıştırın."));
 
 SS_MSG(section_fallbacks,
@@ -6004,45 +6330,47 @@ SS_MSG(model_sam21_large_label,
 
 SS_MSG(model_sam21_large_blurb,
     EN("Click or draw a box to select an object; no text prompts. The most "
-       "accurate of the four and the one to pick for thin structure -- hair, "
-       "railings, foliage. ~470 ms per frame. Apache-2.0."),
+       "accurate of the four and the one to pick for thin structure -- "
+       "railings, wires and cables, foliage. ~470 ms per frame. Apache-2.0."),
     JA("クリックまたは矩形で対象を選びます。テキストのプロンプトはありません。"
-       "4つの中でいちばん正確で、髪、手すり、葉のような細い構造にはこれを"
-       "選んでください。1 フレームおよそ 470 ms。Apache-2.0。"),
-    ZH_HANS("用点击或拉框来选对象；不支持文字提示。四者中最准确，头发、栏杆、"
+       "4つの中でいちばん正確で、手すり、電線やケーブル、葉のような細い構造には"
+       "これを選んでください。1 フレームおよそ 470 ms。Apache-2.0。"),
+    ZH_HANS("用点击或拉框来选对象；不支持文字提示。四者中最准确，栏杆、电线电缆、"
             "枝叶这类细结构就选它。每帧约 470 毫秒。Apache-2.0。"),
-    ZH_HANT("用點擊或拉框來選物件；不支援文字提示。四者中最準確，頭髮、欄杆、"
+    ZH_HANT("用點擊或拉框來選物件；不支援文字提示。四者中最準確，欄杆、電線電纜、"
             "枝葉這類細結構就選它。每格約 470 毫秒。Apache-2.0。"),
     KO("클릭하거나 상자를 그려 물체를 고릅니다. 텍스트 프롬프트는 없습니다. "
-       "넷 중 가장 정확하며 머리카락, 난간, 잎사귀 같은 가느다란 구조에는 이것을 "
-       "고르세요. 프레임당 약 470 ms. Apache-2.0."),
+       "넷 중 가장 정확하며 난간, 전선과 케이블, 잎사귀 같은 가느다란 구조에는 "
+       "이것을 고르세요. 프레임당 약 470 ms. Apache-2.0."),
     DE("Zum Auswählen anklicken oder einen Rahmen ziehen; keine Texteingaben. "
-       "Das genaueste der vier und die Wahl für feine Strukturen -- Haare, "
-       "Geländer, Laub. Etwa 470 ms je Bild. Apache-2.0."),
+       "Das genaueste der vier und die Wahl für feine Strukturen -- Geländer, "
+       "Drähte und Kabel, Laub. Etwa 470 ms je Bild. Apache-2.0."),
     FR("Cliquez ou tracez un cadre pour sélectionner un objet ; pas d'invite "
        "textuelle. Le plus précis des quatre et celui à prendre pour les "
-       "structures fines -- cheveux, garde-corps, feuillage. Environ 470 ms "
-       "par image. Apache-2.0."),
+       "structures fines -- garde-corps, fils et câbles, feuillage. Environ "
+       "470 ms par image. Apache-2.0."),
     ES("Haga clic o dibuje un recuadro para elegir un objeto; sin "
        "indicaciones de texto. El más preciso de los cuatro y el indicado "
-       "para estructuras finas: pelo, barandillas, follaje. Unos 470 ms por "
-       "fotograma. Apache-2.0."),
+       "para estructuras finas: barandillas, cables y tendidos, follaje. Unos "
+       "470 ms por fotograma. Apache-2.0."),
     PT("Clique ou desenhe uma caixa para escolher um objeto; sem comandos de "
        "texto. O mais preciso dos quatro e o indicado para estruturas finas: "
-       "cabelo, corrimãos, folhagem. Cerca de 470 ms por quadro. Apache-2.0."),
+       "corrimãos, fios e cabos, folhagem. Cerca de 470 ms por quadro. "
+       "Apache-2.0."),
     IT("Clicchi o tracci un rettangolo per scegliere un oggetto; niente "
        "testo. Il più preciso dei quattro e quello da prendere per le "
-       "strutture sottili: capelli, ringhiere, fogliame. Circa 470 ms per "
+       "strutture sottili: ringhiere, fili e cavi, fogliame. Circa 470 ms per "
        "fotogramma. Apache-2.0."),
     NL("Klik of trek een kader om een object te kiezen; geen tekstprompts. Het "
-       "nauwkeurigste van de vier en de keuze voor fijne structuur -- haar, "
-       "leuningen, gebladerte. Ongeveer 470 ms per beeld. Apache-2.0."),
+       "nauwkeurigste van de vier en de keuze voor fijne structuur -- "
+       "leuningen, draden en kabels, gebladerte. Ongeveer 470 ms per beeld. "
+       "Apache-2.0."),
     RU("Щелчок или рамка выбирают объект; текстовых запросов нет. Самая точная "
-       "из четырёх и та, что нужна для тонких структур — волос, перил, "
-       "листвы. Около 470 мс на кадр. Apache-2.0."),
+       "из четырёх и та, что нужна для тонких структур — перил, проводов и "
+       "кабелей, листвы. Около 470 мс на кадр. Apache-2.0."),
     TR("Nesne seçmek için tıklayın veya kutu çizin; metin istemi yok. Dördü "
-       "arasında en doğru olanı ve ince yapılar için seçilecek olanı -- saç, "
-       "korkuluk, yaprak. Kare başına ~470 ms. Apache-2.0."));
+       "arasında en doğru olanı ve ince yapılar için seçilecek olanı -- "
+       "korkuluk, tel ve kablo, yaprak. Kare başına ~470 ms. Apache-2.0."));
 
 SS_MSG(model_sam21_baseplus_label,
     EN("SAM 2.1 Base+"),  JA("SAM 2.1 Base+"), ZH_HANS("SAM 2.1 Base+"),
@@ -6205,85 +6533,80 @@ SS_MSG(license_sam3_summary,
     EN("SAM 3 is Meta's model, not part of Spirula Studio, and it comes with "
        "its own licence -- which is not a standard one. It is free to use, "
        "including commercially, but only on Meta's terms, so we cannot ship "
-       "it with the app or accept them for you.\n\n"
-       "Please read it before continuing -- it is short, and it is the actual "
+       "it with the app or accept them for you.\n\n "
+       "Please read it before continuing -- it is the actual "
        "agreement, not this summary of it."),
     JA("SAM 3 は Meta のモデルで、Spirula Studio の一部ではなく、独自の"
        "ライセンスが付いています。それは標準的なライセンスではありません。"
        "商用を含めて無償で使えますが、あくまで Meta の条件のもとでです。"
        "そのため、当アプリに同梱することも、条件への同意を代行することも"
        "できません。\n\n"
-       "続ける前にお読みください。短い文書ですし、実際の契約はこの要約では"
-       "なくそちらです。"),
+       "続ける前にお読みください。実際の契約はこの要約ではなくそちらです。"),
     ZH_HANS("SAM 3 是 Meta 的模型，不属于 Spirula Studio，并且带有它自己的"
             "许可协议——那不是一份标准协议。它可以免费使用，包括商业用途，"
             "但只在 Meta 的条件之下。因此我们既不能随应用一起分发它，"
             "也不能代你接受这些条件。\n\n"
-            "请在继续之前阅读它——它很短，而且真正的协议是它，不是这段摘要。"),
+            "请在继续之前阅读它——真正的协议是它，不是这段摘要。"),
     ZH_HANT("SAM 3 是 Meta 的模型，不屬於 Spirula Studio，並且帶有它自己的"
             "授權條款——那不是一份標準條款。它可以免費使用，包括商業用途，"
             "但只在 Meta 的條件之下。因此我們既不能隨應用一起散布它，"
             "也不能代你接受這些條件。\n\n"
-            "請在繼續之前閱讀它——它很短，而且真正的協議是它，不是這段摘要。"),
+            "請在繼續之前閱讀它——真正的協議是它，不是這段摘要。"),
     KO("SAM 3는 Meta의 모델로 Spirula Studio의 일부가 아니며, 자체 라이선스가 "
        "딸려 있습니다. 그것은 표준 라이선스가 아닙니다. 상업적 사용을 포함해 "
        "무료로 쓸 수 있지만 어디까지나 Meta의 조건 아래에서입니다. 그래서 저희는 "
        "이 모델을 앱과 함께 배포할 수도, 조건을 대신 수락할 수도 없습니다.\n\n"
-       "계속하기 전에 읽어 주세요. 길지 않으며, 실제 계약은 이 요약이 아니라 "
-       "그 문서입니다."),
+       "계속하기 전에 읽어 주세요. 실제 계약은 이 요약이 아니라 그 문서입니다."),
     DE("SAM 3 ist Metas Modell, nicht Teil von Spirula Studio, und bringt "
        "eine eigene Lizenz mit -- keine übliche. Es ist kostenlos nutzbar, "
        "auch kommerziell, aber nur zu Metas Bedingungen; wir dürfen es daher "
        "weder mit der Anwendung ausliefern noch die Bedingungen für Sie "
-       "annehmen.\n\n"
-       "Bitte lesen Sie sie, bevor Sie fortfahren -- sie ist kurz, und sie "
-       "ist die eigentliche Vereinbarung, nicht diese Zusammenfassung."),
+       "annehmen.\n\n "
+       "Bitte lesen Sie sie, bevor Sie fortfahren -- sie ist die eigentliche "
+       "Vereinbarung, nicht diese Zusammenfassung."),
     FR("SAM 3 est le modèle de Meta, il ne fait pas partie de Spirula Studio "
        "et il vient avec sa propre licence -- qui n'est pas une licence "
        "standard. Il est gratuit à utiliser, y compris commercialement, mais "
        "uniquement aux conditions de Meta ; nous ne pouvons donc ni le livrer "
-       "avec l'application ni les accepter à votre place.\n\n"
-       "Merci de la lire avant de continuer : elle est courte, et c'est elle "
-       "l'accord véritable, pas ce résumé."),
+       "avec l'application ni les accepter à votre place.\n\n "
+       "Merci de la lire avant de continuer : c'est elle l'accord véritable, "
+       "pas ce résumé."),
     ES("SAM 3 es el modelo de Meta, no forma parte de Spirula Studio y viene "
        "con su propia licencia, que no es una licencia estándar. Su uso es "
        "gratuito, también comercial, pero solo en los términos de Meta, así "
        "que no podemos distribuirlo con la aplicación ni aceptarlos por "
-       "usted.\n\n"
-       "Léala antes de continuar: es breve, y es ella el acuerdo real, no "
-       "este resumen."),
+       "usted.\n\n "
+       "Léala antes de continuar: es ella el acuerdo real, no este resumen."),
     PT("O SAM 3 é o modelo da Meta, não faz parte do Spirula Studio e vem com "
        "a própria licença -- que não é uma licença padrão. É gratuito, "
        "inclusive para uso comercial, mas só nos termos da Meta, então não "
-       "podemos distribuí-lo com o aplicativo nem aceitá-los por você.\n\n"
-       "Leia-a antes de continuar: é curta, e é ela o acordo de verdade, não "
+       "podemos distribuí-lo com o aplicativo nem aceitá-los por "
+       "você.\n\nLeia-a antes de continuar: é ela o acordo de verdade, não "
        "este resumo."),
     IT("SAM 3 è il modello di Meta, non fa parte di Spirula Studio e ha una "
        "licenza propria, che non è una licenza standard. È gratuito, anche "
        "per uso commerciale, ma solo alle condizioni di Meta: non possiamo "
-       "quindi distribuirlo con l'applicazione né accettarle al posto suo.\n\n"
-       "La legga prima di proseguire: è breve, ed è lei l'accordo vero, non "
-       "questo riassunto."),
+       "quindi distribuirlo con l'applicazione né accettarle al posto suo.\n\n "
+       "La legga prima di proseguire: è lei l'accordo vero, non questo "
+       "riassunto."),
     NL("SAM 3 is het model van Meta, hoort niet bij Spirula Studio en komt met "
        "een eigen licentie -- geen standaardlicentie. Het is gratis te "
        "gebruiken, ook commercieel, maar alleen op Meta's voorwaarden; we "
        "mogen het dus niet met de toepassing meeleveren en ze ook niet voor u "
-       "aanvaarden.\n\n"
-       "Lees ze voordat u doorgaat: ze zijn kort, en zij vormen de "
-       "werkelijke overeenkomst, niet deze samenvatting."),
+       "aanvaarden.\n\nLees ze voordat u doorgaat: zij vormen de werkelijke "
+       "overeenkomst, niet deze samenvatting."),
     RU("SAM 3 — модель Meta, она не входит в Spirula Studio и поставляется со "
        "своей лицензией, а она не стандартная. Пользоваться моделью можно "
        "бесплатно, в том числе коммерчески, но только на условиях Meta, "
        "поэтому мы не вправе ни поставлять её вместе с программой, ни "
-       "принимать эти условия за вас.\n\n"
-       "Прочитайте её, прежде чем продолжить: она короткая, и настоящее "
-       "соглашение — это она, а не данная выжимка."),
+       "принимать эти условия за вас.\n\n "
+       "Прочитайте её, прежде чем продолжить: настоящее соглашение — это она, "
+       "а не данная выжимка."),
     TR("SAM 3 Meta'nın modelidir, Spirula Studio'nun parçası değildir ve kendi "
        "lisansıyla gelir -- bu standart bir lisans değildir. Ticari kullanım "
        "dâhil ücretsizdir, ama yalnızca Meta'nın koşullarıyla; bu yüzden onu "
        "uygulamayla birlikte dağıtamayız ve koşulları sizin adınıza kabul "
-       "edemeyiz.\n\n"
-       "Devam etmeden önce lütfen okuyun -- kısadır ve gerçek sözleşme bu "
+       "edemeyiz.\n\nDevam etmeden önce lütfen okuyun -- gerçek sözleşme bu "
        "özet değil, o metindir."));
 
 SS_MSG(license_sam2_title,

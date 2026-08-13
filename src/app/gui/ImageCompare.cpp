@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -173,11 +174,14 @@ void ImageCompare::worker_loop() {
         }
         Shot s;
         s.job = j;
+        const auto t0 = std::chrono::steady_clock::now();
         try {
             run_job(j, s);
         } catch (const std::exception& e) {
             s.error = e.what();
         }
+        s.secs = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
         s.id = id;
         bool more;
         {
@@ -302,7 +306,6 @@ void ImageCompare::submit(const Job& j) {
     // of after the whole step this job would otherwise queue behind.
     _session->render_pending = true;
     _cv.notify_one();
-    _submitted_at = ImGui::GetTime();
 }
 
 void ImageCompare::poll() {
@@ -315,8 +318,8 @@ void ImageCompare::poll() {
         _result = Shot{};
     }
     _in_flight = 0;
-    const double took = ImGui::GetTime() - _submitted_at;
-    if (took > 0) _job_secs = _job_secs > 0 ? 0.7 * _job_secs + 0.3 * took : took;
+    if (s.secs > 0)
+        _job_secs = _job_secs > 0 ? 0.7 * _job_secs + 0.3 * s.secs : s.secs;
     if (!s.error.empty()) {
         _error = s.error;
         return;
@@ -361,7 +364,7 @@ void ImageCompare::rebuild_textures() {
     auto composite = [&](const uint8_t* rgb, int w, int h,
                          std::vector<uint8_t>& out) {
         out.assign(rgb, rgb + (size_t)w * h * 3);
-        if (_mask_show == MaskShow::Ignore || _shot.mask.empty()) return;
+        if (_mask_show == MaskShow::Unmarked || _shot.mask.empty()) return;
         for (int y = 0; y < h; y++) {
             const int my = (h == ph) ? y : (int)((int64_t)y * ph / h);
             for (int x = 0; x < w; x++) {
@@ -521,7 +524,7 @@ void ImageCompare::draw_toolbar(bool training) {
         ImGui::SetNextItemWidth(w);
         int m = (int)_mask_show;
         if (ui::ComboRaw("##maskshow", &m,
-                         {&msg::compare_mask_dim, &msg::compare_mask_ignore,
+                         {&msg::compare_mask_dim, &msg::compare_mask_unmarked,
                           &msg::compare_mask_hide})) {
             _mask_show = (MaskShow)m;
             _tex_dirty = true;

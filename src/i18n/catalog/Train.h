@@ -62,58 +62,58 @@ SS_MSG(preset_3dgs_help,
     TR("Çoğu veri kümesinde iyi çalışan genel yöntem."));
 
 SS_MSG(preset_360_camera,
-    EN("360 / fisheye camera"),
-    JA("360度・魚眼カメラ"),
-    ZH_HANS("360 度／鱼眼相机"),
-    ZH_HANT("360 度／魚眼相機"),
-    KO("360도·어안 카메라"),
-    DE("360-Grad-/Fisheye-Kamera"),
-    FR("Caméra 360 / fisheye"),
-    ES("Cámara 360 / ojo de pez"),
-    PT("Câmera 360 / olho de peixe"),
-    IT("Fotocamera 360 / fisheye"),
-    NL("360-graden-/fisheyecamera"),
-    RU("Камера 360 / фишай"),
-    TR("360 derece / balıkgözü kamera"));
+    EN("360 camera"),
+    JA("360度カメラ"),
+    ZH_HANS("360 度相机"),
+    ZH_HANT("360 度相機"),
+    KO("360도 카메라"),
+    DE("360-Grad-Kamera"),
+    FR("Caméra 360"),
+    ES("Cámara 360"),
+    PT("Câmera 360"),
+    IT("Fotocamera 360"),
+    NL("360-gradencamera"),
+    RU("Камера 360"),
+    TR("360 derece kamera"));
 
 SS_MSG(preset_360_camera_help,
     EN("Preset for training on original distorted images captured by 360 "
-       "cameras (e.g. Insta360, DJI Osmo). Recommended if your dataset "
-       "contains fisheye images with a circle visible."),
-    JA("360度カメラ（Insta360、DJI Osmo など）で撮った歪んだ元画像のまま学習"
-       "するためのプリセットです。円形に写った魚眼画像が含まれるデータセットに"
+       "cameras. Recommended if your dataset contains very wide fisheye "
+       "images with a circle visible."),
+    JA("360度カメラで撮った歪んだ元画像のまま学習するためのプリセットです。"
+       "画角が非常に広く、円形に写った魚眼画像が含まれるデータセットに"
        "向いています。"),
-    ZH_HANS("用于直接在 360 相机（如 Insta360、DJI Osmo）拍摄的原始畸变图像上"
-            "训练。如果数据集里的鱼眼图像能看到圆形边界，推荐用它。"),
-    ZH_HANT("用於直接在 360 相機（如 Insta360、DJI Osmo）拍攝的原始變形影像上"
-            "訓練。若資料集裡的魚眼影像看得到圓形邊界，建議使用。"),
-    KO("360도 카메라(Insta360, DJI Osmo 등)로 찍은 왜곡된 원본 이미지를 그대로 "
-       "학습하기 위한 프리셋입니다. 원형이 보이는 어안 이미지가 들어 있는 "
+    ZH_HANS("用于直接在 360 相机拍摄的原始畸变图像上训练。如果数据集里的鱼眼"
+            "图像视角很大、能看到圆形边界，推荐用它。"),
+    ZH_HANT("用於直接在 360 相機拍攝的原始變形影像上訓練。若資料集裡的魚眼"
+            "影像視角很大、看得到圓形邊界，建議使用。"),
+    KO("360도 카메라로 찍은 왜곡된 원본 이미지를 그대로 학습하기 위한 "
+       "프리셋입니다. 화각이 아주 넓고 원형이 보이는 어안 이미지가 들어 있는 "
        "데이터셋에 알맞습니다."),
     DE("Voreinstellung für das Training auf den unbearbeiteten, verzeichneten "
-       "Bildern von 360-Grad-Kameras (z. B. Insta360, DJI Osmo). Empfohlen, "
-       "wenn der Datensatz Fisheye-Bilder mit sichtbarem Kreis enthält."),
+       "Bildern von 360-Grad-Kameras. Empfohlen, wenn der Datensatz sehr "
+       "weitwinklige Fisheye-Bilder mit sichtbarem Kreis enthält."),
     FR("Préréglage pour l'entraînement sur les images d'origine, distordues, "
-       "des caméras 360 (Insta360, DJI Osmo…). Recommandé si le jeu de données "
-       "contient des images fisheye où le cercle est visible."),
+       "des caméras 360. Recommandé si le jeu de données contient des images "
+       "fisheye très ouvertes où le cercle est visible."),
     ES("Preajuste para entrenar con las imágenes originales distorsionadas de "
-       "cámaras 360 (Insta360, DJI Osmo…). Recomendado si el conjunto de datos "
-       "contiene imágenes de ojo de pez con el círculo visible."),
+       "cámaras 360. Recomendado si el conjunto de datos contiene imágenes de "
+       "ojo de pez muy angulares con el círculo visible."),
     PT("Predefinição para treinar com as imagens originais distorcidas de "
-       "câmeras 360 (Insta360, DJI Osmo…). Recomendada se o conjunto de dados "
-       "contiver imagens olho-de-peixe com o círculo visível."),
+       "câmeras 360. Recomendada se o conjunto de dados contiver imagens "
+       "olho-de-peixe muito abertas com o círculo visível."),
     IT("Preimpostazione per addestrare sulle immagini originali distorte delle "
-       "fotocamere 360 (Insta360, DJI Osmo…). Consigliata se il set di dati "
-       "contiene immagini fisheye con il cerchio visibile."),
+       "fotocamere 360. Consigliata se il set di dati contiene immagini "
+       "fisheye molto aperte con il cerchio visibile."),
     NL("Voorinstelling om te trainen op de originele, vervormde beelden van "
-       "360-gradencamera's (Insta360, DJI Osmo…). Aanbevolen als de dataset "
+       "360-gradencamera's. Aanbevolen als de dataset zeer wijde "
        "fisheyebeelden met een zichtbare cirkel bevat."),
-    RU("Пресет для обучения на исходных искажённых снимках камер 360 "
-       "(Insta360, DJI Osmo и подобных). Рекомендуется, если в наборе данных "
-       "есть кадры «рыбий глаз» с видимым кругом."),
-    TR("360 derece kameraların (Insta360, DJI Osmo vb.) çektiği özgün, bozuk "
-       "görüntüler üzerinde eğitim için hazır ayar. Veri kümenizde çemberi "
-       "görünen balıkgözü görüntüler varsa önerilir."));
+    RU("Пресет для обучения на исходных искажённых снимках камер 360. "
+       "Рекомендуется, если в наборе данных есть очень широкие кадры «рыбий "
+       "глаз» с видимым кругом."),
+    TR("360 derece kameraların çektiği özgün, bozuk görüntüler üzerinde "
+       "eğitim için hazır ayar. Veri kümenizde çemberi görünen, çok geniş "
+       "açılı balıkgözü görüntüler varsa önerilir."));
 
 SS_MSG(preset_in_the_wild,
     EN("Internet or mixed photos"),
@@ -263,31 +263,36 @@ SS_MSG(preset_meshing,
     TR("Ağ (mesh) çıkarmak için"));
 
 SS_MSG(preset_meshing_help,
-    EN("Preset for training splats for meshing. Use `spirula mesh` to convert "
-       "trained splats to mesh."),
-    JA("メッシュ化のためにスプラットを学習するプリセットです。学習後は "
-       "`spirula mesh` でメッシュに変換します。"),
-    ZH_HANS("为生成网格而训练泼溅的预设。训练完后用 `spirula mesh` 转成网格。"),
-    ZH_HANT("為產生網格而訓練潑濺的預設。訓練完後用 `spirula mesh` 轉成網格。"),
-    KO("메시로 만들기 위해 스플랫을 학습하는 프리셋입니다. 학습한 뒤 "
-       "`spirula mesh`로 메시로 변환하세요."),
-    DE("Voreinstellung für das Training von Splats zur Netzerzeugung. Mit "
-       "`spirula mesh` werden die trainierten Splats in ein Netz umgewandelt."),
-    FR("Préréglage pour entraîner des splats en vue du maillage. Utilisez "
-       "`spirula mesh` pour convertir les splats entraînés en maillage."),
-    ES("Preajuste para entrenar splats con vistas al mallado. Use "
-       "`spirula mesh` para convertir los splats entrenados en una malla."),
-    PT("Predefinição para treinar splats visando a malha. Use `spirula mesh` "
-       "para converter os splats treinados em malha."),
-    IT("Preimpostazione per addestrare splat in vista della mesh. Usi "
-       "`spirula mesh` per convertire gli splat addestrati in mesh."),
-    NL("Voorinstelling om splats te trainen met het oog op mesh-generatie. "
-       "Gebruik `spirula mesh` om de getrainde splats in een mesh om te "
-       "zetten."),
-    RU("Пресет для обучения сплатов под построение меша. Преобразовать "
-       "обученные сплаты в меш можно командой `spirula mesh`."),
-    TR("Ağ çıkarmak üzere splat eğitmek için hazır ayar. Eğitilen splat'ları "
-       "ağa dönüştürmek için `spirula mesh` kullanın."));
+    EN("Preset for training splats for meshing, aimed at the quality of the "
+       "mesh geometry rather than at how the splats themselves look."),
+    JA("メッシュ化のためにスプラットを学習するプリセットです。スプラット自体の"
+       "見た目よりも、生成されるメッシュ形状の質を重視します。"),
+    ZH_HANS("为生成网格而训练泼溅的预设。它看重的是生成网格几何的质量，"
+            "而不是泼溅本身的观感。"),
+    ZH_HANT("為產生網格而訓練潑濺的預設。它看重的是產生網格幾何的品質，"
+            "而不是潑濺本身的觀感。"),
+    KO("메시로 만들기 위해 스플랫을 학습하는 프리셋입니다. 스플랫 자체의 "
+       "겉모습보다 만들어질 메시 형상의 품질을 우선합니다."),
+    DE("Voreinstellung für das Training von Splats zur Netzerzeugung. Sie "
+       "zielt auf die Qualität der Netzgeometrie, nicht darauf, wie die Splats "
+       "selbst aussehen."),
+    FR("Préréglage pour entraîner des splats en vue du maillage. Il vise la "
+       "qualité de la géométrie du maillage plutôt que l'aspect des splats "
+       "eux-mêmes."),
+    ES("Preajuste para entrenar splats con vistas al mallado. Busca la calidad "
+       "de la geometría de la malla más que el aspecto de los propios splats."),
+    PT("Predefinição para treinar splats visando a malha. Mira a qualidade da "
+       "geometria da malha, e não a aparência dos próprios splats."),
+    IT("Preimpostazione per addestrare splat in vista della mesh. Punta alla "
+       "qualità della geometria della mesh più che all'aspetto degli splat "
+       "stessi."),
+    NL("Voorinstelling om splats te trainen met het oog op mesh-generatie. Ze "
+       "mikt op de kwaliteit van de meshgeometrie, niet op hoe de splats er "
+       "zelf uitzien."),
+    RU("Пресет для обучения сплатов под построение меша. Он нацелен на "
+       "качество геометрии меша, а не на то, как выглядят сами сплаты."),
+    TR("Ağ çıkarmak üzere splat eğitmek için hazır ayar. Splat'ların kendi "
+       "görünüşünden çok, üretilecek ağ geometrisinin niteliğini gözetir."));
 
 SS_MSG(preset_academic_baseline,
     EN("Academic baseline"),

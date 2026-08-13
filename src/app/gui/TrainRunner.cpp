@@ -59,8 +59,10 @@ bool TrainRunner::paused() const {
     return _session && _session->paused.load();
 }
 
-void TrainRunner::request_stop() {
-    if (_session) _session->stop_requested = true;
+void TrainRunner::request_stop(bool save) {
+    if (!_session) return;
+    if (!save) _session->save_on_stop = false;
+    _session->stop_requested = true;
 }
 
 void TrainRunner::shutdown() {

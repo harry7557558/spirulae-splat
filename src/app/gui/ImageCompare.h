@@ -54,7 +54,7 @@ public:
 
 private:
     // What the region the mask excludes looks like.
-    enum class MaskShow { Dim = 0, Ignore = 1, Hide = 2 };
+    enum class MaskShow { Dim = 0, Unmarked = 1, Hide = 2 };
 
     // What the worker was asked for. Equality decides whether the pair on
     // screen still answers the current selection.
@@ -87,6 +87,11 @@ private:
         std::vector<uint8_t> src;          // the file itself, when asked for
         float psnr = -1.0f;                // < 0 = no unmasked pixel to score
         int  step = -1;
+        // What the job cost, measured on the worker. Timed there and not
+        // across submit/poll: the panel is only polled while it is drawn, so
+        // a spell on the other preview (or any stall in the frame loop) would
+        // otherwise be charged to the render and stall the pacing below.
+        double secs = 0.0;
         std::string error;
     };
 
@@ -172,7 +177,6 @@ private:
     int    _rendered_step = -1;
     int    _last_seen_step = -1;
     double _last_step_time = -1.0;
-    double _submitted_at = 0.0;
     double _job_secs = 0.0;
     double _step_secs = 0.0;
 };

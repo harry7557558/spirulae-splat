@@ -1516,42 +1516,40 @@ SS_MSG(warp_spherical_to_pinhole,
     TR("Panoramaları küp yüzlerine böl"));
 SS_MSG(warp_spherical_to_pinhole_help,
     EN("Split each 360 panorama into six cube faces before training. Turn this "
-       "off to train directly on the panorama, which keeps the original pixels "
-       "but cannot use depth or normal supervision."),
+       "off to train directly on the panorama, which keeps the original "
+       "pixels."),
     JA("学習の前に、360 度パノラマを 6 つのキューブ面に分割します。オフにする"
-       "とパノラマのまま学習するので元の画素は保てますが、深度や法線による誘導"
-       "は使えません。"),
+       "とパノラマのまま学習するので、元の画素をそのまま保てます。"),
     ZH_HANS("训练前把每张 360 度全景图拆成六个立方体面。关闭则直接在全景图上训"
-            "练，保留原始像素，但无法使用深度或法线监督。"),
+            "练，保留原始像素。"),
     ZH_HANT("訓練前把每張 360 度全景影像拆成六個立方體面。關閉則直接在全景影像"
-            "上訓練，保留原始像素，但無法使用深度或法線監督。"),
+            "上訓練，保留原始像素。"),
     KO("학습 전에 360도 파노라마를 여섯 개의 큐브 면으로 나눕니다. 끄면 파노라"
-       "마 그대로 학습해 원본 픽셀을 지키지만, 깊이나 노멀 안내는 쓸 수 없습니"
-       "다."),
-    DE("Jedes 360-Grad-Panorama vor dem Training in sechs Würfelflächen teilen. "
-       "Abgeschaltet wird direkt auf dem Panorama trainiert, was die Originalpixel "
-       "bewahrt, aber Tiefen- und Normalenführung ausschließt."),
-    FR("Découper chaque panorama 360 en six faces de cube avant l'entraînement. "
-       "Décoché, l'entraînement se fait directement sur le panorama, ce qui conserve "
-       "les pixels d'origine mais interdit le guidage par profondeur ou normales."),
+       "마 그대로 학습해 원본 픽셀을 지킵니다."),
+    DE("Jedes 360-Grad-Panorama vor dem Training in sechs Würfelflächen "
+       "teilen. Abgeschaltet wird direkt auf dem Panorama trainiert, was die "
+       "Originalpixel bewahrt."),
+    FR("Découper chaque panorama 360 en six faces de cube avant "
+       "l'entraînement. Décoché, l'entraînement se fait directement sur le "
+       "panorama, ce qui conserve les pixels d'origine."),
     ES("Dividir cada panorámica 360 en seis caras de cubo antes de entrenar. "
-       "Sin marcar se entrena directamente sobre la panorámica, lo que conserva "
-       "los píxeles originales pero impide la guía por profundidad o normales."),
-    PT("Dividir cada panorama 360 em seis faces de cubo antes de treinar. Desmarcado, "
-       "treina-se diretamente no panorama, o que preserva os pixels originais "
-       "mas impede a orientação por profundidade ou normais."),
-    IT("Dividere ogni panorama 360 in sei facce di cubo prima dell'addestramento. "
-       "Disattivato si addestra direttamente sul panorama, il che conserva i "
-       "pixel originali ma esclude la guida da profondità o normali."),
-    NL("Elk 360-panorama vóór de training opsplitsen in zes kubusvlakken. Uitgevinkt "
-       "wordt er rechtstreeks op het panorama getraind, wat de originele pixels "
-       "behoudt maar diepte- of normalensturing uitsluit."),
-    RU("Перед обучением разбивать каждую 360-панораму на шесть граней куба. Выключено "
-       "— обучение идёт прямо по панораме: исходные пиксели сохраняются, но направление "
-       "по глубине и нормалям недоступно."),
-    TR("Eğitimden önce her 360 derece panoramayı altı küp yüzüne böler. Kapatılırsa "
-       "doğrudan panorama üzerinde eğitilir; özgün pikseller korunur ama derinlik "
-       "ya da normal rehberliği kullanılamaz."));
+       "Sin marcar se entrena directamente sobre la panorámica, lo que "
+       "conserva los píxeles originales."),
+    PT("Dividir cada panorama 360 em seis faces de cubo antes de treinar. "
+       "Desmarcado, treina-se diretamente no panorama, o que preserva os "
+       "pixels originais."),
+    IT("Dividere ogni panorama 360 in sei facce di cubo prima "
+       "dell'addestramento. Disattivato si addestra direttamente sul "
+       "panorama, il che conserva i pixel originali."),
+    NL("Elk 360-panorama vóór de training opsplitsen in zes kubusvlakken. "
+       "Uitgevinkt wordt er rechtstreeks op het panorama getraind, wat de "
+       "originele pixels behoudt."),
+    RU("Перед обучением разбивать каждую 360-панораму на шесть граней куба. "
+       "Выключено — обучение идёт прямо по панораме, и исходные пиксели "
+       "сохраняются."),
+    TR("Eğitimden önce her 360 derece panoramayı altı küp yüzüne böler. "
+       "Kapatılırsa doğrudan panorama üzerinde eğitilir ve özgün pikseller "
+       "korunur."));
 
 SS_MSG(deblur_training_images,
     EN("Deblur training images"), JA("学習画像のぶれを補正"),
@@ -2082,52 +2080,50 @@ SS_MSG(background_mode,
     KO("배경"), DE("Hintergrund"), FR("Arrière-plan"), ES("Fondo"),
     PT("Fundo"), IT("Sfondo"), NL("Achtergrond"), RU("Фон"), TR("Arka plan"));
 SS_MSG(background_mode_help,
-    EN("What fills pixels no splat covers. `black` is the usual choice, `noise` "
-       "discourages a semi-transparent haze from forming in empty space, and "
-       "`sh` learns a skybox so distant background is represented instead of "
-       "ignored."),
+    EN("What fills pixels no splat covers. `black` is the usual choice, "
+       "`noise` discourages background transparency, and `sh` learns a skybox "
+       "so distant background is represented instead of ignored."),
     JA("スプラットが覆っていない画素を何で埋めるかです。`black` が通常の選択で"
-       "す。`noise` は何もない空間に半透明のもやができるのを防ぎます。`sh` は"
-       "スカイボックスを学習し、遠景を無視せずに表現します。"),
-    ZH_HANS("没有泼溅覆盖的像素用什么填充。`black` 是常规选择；`noise` 可以防"
-            "止空处形成半透明雾状物；`sh` 会学习一个天空盒，让远景被表示出来而"
-            "不是被忽略。"),
-    ZH_HANT("沒有潑濺覆蓋的像素用什麼填滿。`black` 是常規選擇；`noise` 可以防"
-            "止空處形成半透明霧狀物；`sh` 會學習一個天空盒，讓遠景被表示出來而"
-            "不是被忽略。"),
+       "す。`noise` は背景が透けるのを抑えます。`sh` はスカイボックスを学習し、"
+       "遠景を無視せずに表現します。"),
+    ZH_HANS("没有泼溅覆盖的像素用什么填充。`black` 是常规选择；`noise` 可以抑"
+            "制背景透明；`sh` 会学习一个天空盒，让远景被表示出来而不是被忽略。"),
+    ZH_HANT("沒有潑濺覆蓋的像素用什麼填滿。`black` 是常規選擇；`noise` 可以抑"
+            "制背景透明；`sh` 會學習一個天空盒，讓遠景被表示出來而不是被忽略。"),
     KO("스플랫이 덮지 않은 픽셀을 무엇으로 채울지입니다. `black`이 보통 선택이"
-       "고, `noise`는 빈 공간에 반투명한 안개가 생기는 것을 막으며, `sh`는 스"
-       "카이박스를 학습해 먼 배경을 무시하지 않고 표현합니다."),
-    DE("Womit Pixel gefüllt werden, die kein Splat bedeckt. `black` ist die übliche "
-       "Wahl, `noise` verhindert, dass sich im leeren Raum ein halbdurchsichtiger "
-       "Schleier bildet, und `sh` lernt eine Skybox, sodass ferner Hintergrund "
+       "고, `noise`는 배경이 비치는 것을 억제하며, `sh`는 스카이박스를 학습해 "
+       "먼 배경을 무시하지 않고 표현합니다."),
+    DE("Womit Pixel gefüllt werden, die kein Splat bedeckt. `black` ist die "
+       "übliche Wahl, `noise` hält den Hintergrund davon ab, durchsichtig zu "
+       "werden, und `sh` lernt eine Skybox, sodass ferner Hintergrund "
        "dargestellt statt ignoriert wird."),
-    FR("Ce qui remplit les pixels qu'aucun splat ne couvre. `black` est le choix "
-       "habituel, `noise` empêche la formation d'un voile semi-transparent dans "
-       "le vide, et `sh` apprend un skybox pour que l'arrière-plan lointain soit "
+    FR("Ce qui remplit les pixels qu'aucun splat ne couvre. `black` est le "
+       "choix habituel, `noise` décourage la transparence de l'arrière-plan, "
+       "et `sh` apprend un skybox pour que l'arrière-plan lointain soit "
        "représenté au lieu d'être ignoré."),
     ES("Con qué se rellenan los píxeles que ningún splat cubre. `black` es la "
-       "opción habitual, `noise` evita que se forme una neblina semitransparente "
-       "en el vacío, y `sh` aprende un skybox para que el fondo lejano se represente "
-       "en vez de ignorarse."),
+       "opción habitual, `noise` desalienta la transparencia del fondo, y "
+       "`sh` aprende un skybox para que el fondo lejano se represente en vez "
+       "de ignorarse."),
     PT("Com o que são preenchidos os pixels que nenhum splat cobre. `black` é "
-       "a escolha habitual, `noise` evita que se forme uma névoa semitransparente "
-       "no vazio, e `sh` aprende um skybox para que o fundo distante seja representado "
-       "em vez de ignorado."),
-    IT("Con che cosa vengono riempiti i pixel che nessuno splat copre. `black` "
-       "è la scelta abituale, `noise` evita che nel vuoto si formi una foschia "
-       "semitrasparente, e `sh` impara uno skybox così lo sfondo lontano viene "
+       "a escolha habitual, `noise` desencoraja a transparência do fundo, e "
+       "`sh` aprende um skybox para que o fundo distante seja representado em "
+       "vez de ignorado."),
+    IT("Con che cosa vengono riempiti i pixel che nessuno splat copre. "
+       "`black` è la scelta abituale, `noise` scoraggia la trasparenza dello "
+       "sfondo, e `sh` impara uno skybox così lo sfondo lontano viene "
        "rappresentato invece che ignorato."),
     NL("Waarmee pixels worden gevuld die geen enkele splat bedekt. `black` is "
-       "de gebruikelijke keuze, `noise` voorkomt dat er in lege ruimte een halfdoorzichtige "
-       "waas ontstaat, en `sh` leert een skybox zodat verre achtergrond wordt "
+       "de gebruikelijke keuze, `noise` ontmoedigt doorzichtigheid van de "
+       "achtergrond, en `sh` leert een skybox zodat verre achtergrond wordt "
        "weergegeven in plaats van genegeerd."),
-    RU("Чем заполняются пиксели, не покрытые ни одним сплатом. `black` — обычный "
-       "выбор, `noise` мешает образованию полупрозрачной дымки в пустоте, а `sh` "
-       "обучает скайбокс, чтобы дальний фон был представлен, а не проигнорирован."),
-    TR("Hiçbir splat'ın kaplamadığı pikselleri neyin dolduracağı. `black` olağan "
-       "seçimdir, `noise` boşlukta yarı saydam bir pusun oluşmasını engeller, "
-       "`sh` ise bir gökyüzü kutusu öğrenerek uzak arka planın yok sayılmak yerine "
+    RU("Чем заполняются пиксели, не покрытые ни одним сплатом. `black` — "
+       "обычный выбор, `noise` не даёт фону становиться прозрачным, а `sh` "
+       "обучает скайбокс, чтобы дальний фон был представлен, а не "
+       "проигнорирован."),
+    TR("Hiçbir splat'ın kaplamadığı pikselleri neyin dolduracağı. `black` "
+       "olağan seçimdir, `noise` arka planın saydamlaşmasını caydırır, `sh` "
+       "ise bir gökyüzü kutusu öğrenerek uzak arka planın yok sayılmak yerine "
        "temsil edilmesini sağlar."));
 
 SS_MSG(background_sh_degree,
@@ -2399,47 +2395,48 @@ SS_MSG(use_camera_optimizer_help,
 // ===========================================================================
 
 SS_MSG(quality,
-    EN("Quality"), JA("品質"), ZH_HANS("质量"), ZH_HANT("品質"), KO("품질"),
-    DE("Qualität"), FR("Qualité"), ES("Calidad"), PT("Qualidade"),
-    IT("Qualità"), NL("Kwaliteit"), RU("Качество"), TR("Kalite"));
+    EN("Detail level"), JA("精細さ"), ZH_HANS("细节水平"), ZH_HANT("細節水準"),
+    KO("디테일 수준"),
+    DE("Detailgrad"), FR("Niveau de détail"), ES("Nivel de detalle"),
+    PT("Nível de detalhe"), IT("Livello di dettaglio"), NL("Detailniveau"),
+    RU("Уровень детализации"), TR("Ayrıntı düzeyi"));
 SS_MSG(quality_help,
     EN("Overall detail level, setting the splat budget and how long training "
-       "runs. Higher looks better, takes longer and produces a larger file. Whatever "
-       "you set by hand always wins over this."),
-    JA("全体の精細さです。スプラット数の上限と学習の長さをまとめて決めます。上"
-       "げるほどきれいになりますが、時間がかかりファイルも大きくなります。手で"
-       "設定した項目は、常にこの設定より優先されます。"),
-    ZH_HANS("整体细节水平，同时决定泼溅数量上限和训练时长。越高效果越好，但耗"
-            "时更久、文件更大。你手动设过的项目始终优先于这里。"),
-    ZH_HANT("整體細節水準，同時決定潑濺數量上限和訓練長度。越高效果越好，但耗"
-            "時更久、檔案更大。你手動設過的項目始終優先於這裡。"),
-    KO("전체적인 디테일 수준으로, 스플랫 예산과 학습 길이를 함께 정합니다. 높"
-       "일수록 결과가 좋아지지만 시간이 오래 걸리고 파일이 커집니다. 직접 설정"
-       "한 값은 언제나 이 설정보다 우선합니다."),
+       "runs. Use a higher level for larger datasets, or for datasets with "
+       "more detail in them."),
+    JA("全体の精細さです。スプラット数の上限と学習の長さをまとめて決めます。"
+       "データセットが大きいときや、細部の多いデータセットでは高い段階を"
+       "使ってください。"),
+    ZH_HANS("整体细节水平，同时决定泼溅数量上限和训练时长。数据集较大、或者"
+            "细节较多时，请选更高的档位。"),
+    ZH_HANT("整體細節水準，同時決定潑濺數量上限和訓練長度。資料集較大、或者"
+            "細節較多時，請選更高的檔位。"),
+    KO("전체적인 디테일 수준으로, 스플랫 예산과 학습 길이를 함께 정합니다. "
+       "데이터셋이 크거나 세부가 많다면 더 높은 단계를 쓰세요."),
     DE("Gesamtdetailgrad; legt das Splat-Budget und die Trainingsdauer fest. "
-       "Höher sieht besser aus, dauert länger und ergibt eine größere Datei. "
-       "Was Sie von Hand einstellen, hat immer Vorrang davor."),
-    FR("Niveau de détail global : fixe le budget de splats et la durée de l'entraînement. "
-       "Plus haut rend mieux, prend plus de temps et produit un fichier plus "
-       "gros. Tout ce que vous réglez à la main l'emporte toujours sur ce choix."),
+       "Für größere Datensätze oder solche mit mehr Details eine höhere Stufe "
+       "wählen."),
+    FR("Niveau de détail global : fixe le budget de splats et la durée de "
+       "l'entraînement. Prenez un niveau plus élevé pour les grands jeux de "
+       "données, ou pour ceux qui contiennent plus de détails."),
     ES("Nivel de detalle general: fija el presupuesto de splats y la duración "
-       "del entrenamiento. Más alto se ve mejor, tarda más y produce un archivo "
-       "mayor. Lo que ajuste a mano siempre prevalece sobre esto."),
-    PT("Nível de detalhe geral: define o orçamento de splats e a duração do treinamento. "
-       "Mais alto fica melhor, demora mais e gera um arquivo maior. O que você "
-       "ajustar à mão sempre prevalece sobre isto."),
-    IT("Livello di dettaglio complessivo: fissa il budget di splat e la durata "
-       "dell'addestramento. Più alto rende meglio, richiede più tempo e produce "
-       "un file più grande. Ciò che imposta a mano prevale sempre su questo."),
-    NL("Algemeen detailniveau: bepaalt het splatbudget en hoe lang er wordt getraind. "
-       "Hoger ziet er beter uit, duurt langer en geeft een groter bestand. Wat "
-       "je met de hand instelt, gaat hier altijd voor."),
-    RU("Общий уровень детализации: задаёт бюджет сплатов и длительность обучения. "
-       "Выше — красивее, дольше и больше файл. Всё, что вы задали вручную, всегда "
-       "важнее этого."),
+       "del entrenamiento. Use un nivel más alto con conjuntos de datos "
+       "grandes, o con más detalle dentro."),
+    PT("Nível de detalhe geral: define o orçamento de splats e a duração do "
+       "treinamento. Use um nível mais alto para conjuntos de dados maiores, "
+       "ou com mais detalhe dentro."),
+    IT("Livello di dettaglio complessivo: fissa il budget di splat e la "
+       "durata dell'addestramento. Usi un livello più alto per set di dati "
+       "grandi, o con più dettaglio dentro."),
+    NL("Algemeen detailniveau: bepaalt het splatbudget en hoe lang er wordt "
+       "getraind. Neem een hoger niveau bij grotere datasets, of datasets met "
+       "meer detail erin."),
+    RU("Общий уровень детализации: задаёт бюджет сплатов и длительность "
+       "обучения. Для больших наборов данных или наборов с большим "
+       "количеством деталей берите уровень выше."),
     TR("Genel ayrıntı düzeyi; splat bütçesini ve eğitimin ne kadar süreceğini "
-       "birlikte belirler. Yükseldikçe daha iyi görünür, daha uzun sürer ve dosya "
-       "büyür. Elle ayarladığınız her şey buna göre önceliklidir."));
+       "birlikte belirler. Daha büyük veri kümelerinde ya da içinde daha çok "
+       "ayrıntı olanlarda daha yüksek bir düzey kullanın."));
 
 SS_MSG(cap_max,
     EN("Maximum splats"), JA("スプラット数の上限"), ZH_HANS("泼溅数量上限"),
@@ -2498,45 +2495,41 @@ SS_MSG(distraction_robustness,
     NL("Bestandheid tegen stoorelementen"), RU("Устойчивость к помехам"),
     TR("İstenmeyen nesnelere dayanıklılık"));
 SS_MSG(distraction_robustness_help,
-    EN("Ignore people, cars and anything else that moves between photos. Splats "
-       "are no longer spent on them, at the cost of some sensitivity to real "
-       "detail. Whatever you set by hand always wins over this."),
+    EN("Ignore people, cars and anything else that moves between photos. "
+       "Splats are no longer spent on them, at the cost of some sensitivity "
+       "to real detail."),
     JA("写真ごとに動く人や車などを無視します。そうしたものにスプラットを使わな"
-       "くなりますが、本物の細部への感度は少し下がります。手で設定した項目は、"
-       "常にこの設定より優先されます。"),
+       "くなりますが、本物の細部への感度は少し下がります。"),
     ZH_HANS("忽略在照片之间移动的行人、车辆等。不再为它们分配泼溅，代价是对真"
-            "实细节的敏感度略有下降。你手动设过的项目始终优先于这里。"),
+            "实细节的敏感度略有下降。"),
     ZH_HANT("忽略在照片之間移動的行人、車輛等。不再為它們分配潑濺，代價是對真"
-            "實細節的敏感度略有下降。你手動設過的項目始終優先於這裡。"),
+            "實細節的敏感度略有下降。"),
     KO("사진마다 움직이는 사람, 자동차 등을 무시합니다. 그런 것에 스플랫을 쓰"
-       "지 않게 되지만, 실제 디테일에 대한 민감도는 조금 떨어집니다. 직접 설정"
-       "한 값은 언제나 이 설정보다 우선합니다."),
-    DE("Personen, Autos und alles andere ignorieren, was sich zwischen den Fotos "
-       "bewegt. Auf sie werden keine Splats mehr verwendet, um den Preis etwas "
-       "geringerer Empfindlichkeit für echte Details. Was Sie von Hand einstellen, "
-       "hat immer Vorrang davor."),
+       "지 않게 되지만, 실제 디테일에 대한 민감도는 조금 떨어집니다."),
+    DE("Personen, Autos und alles andere ignorieren, was sich zwischen den "
+       "Fotos bewegt. Auf sie werden keine Splats mehr verwendet, um den "
+       "Preis etwas geringerer Empfindlichkeit für echte Details."),
     FR("Ignorer les passants, les voitures et tout ce qui bouge d'une photo à "
        "l'autre. Plus aucun splat n'y est consacré, au prix d'une sensibilité "
-       "un peu moindre aux vrais détails. Tout ce que vous réglez à la main l'emporte "
-       "toujours sur ce choix."),
-    ES("Ignorar personas, coches y cualquier otra cosa que se mueva entre fotos. "
-       "Ya no se gastan splats en ellos, a costa de algo de sensibilidad al detalle "
-       "real. Lo que ajuste a mano siempre prevalece sobre esto."),
-    PT("Ignorar pessoas, carros e qualquer outra coisa que se mova entre as fotos. "
-       "Deixam de ser gastos splats com eles, ao custo de alguma sensibilidade "
-       "ao detalhe real. O que você ajustar à mão sempre prevalece sobre isto."),
-    IT("Ignorare persone, automobili e tutto ciò che si muove da una foto all'altra. "
-       "Non vengono più spesi splat su di loro, al costo di un po' di sensibilità "
-       "al dettaglio reale. Ciò che imposta a mano prevale sempre su questo."),
+       "un peu moindre aux vrais détails."),
+    ES("Ignorar personas, coches y cualquier otra cosa que se mueva entre "
+       "fotos. Ya no se gastan splats en ellos, a costa de algo de "
+       "sensibilidad al detalle real."),
+    PT("Ignorar pessoas, carros e qualquer outra coisa que se mova entre as "
+       "fotos. Deixam de ser gastos splats com eles, ao custo de alguma "
+       "sensibilidade ao detalhe real."),
+    IT("Ignorare persone, automobili e tutto ciò che si muove da una foto "
+       "all'altra. Non vengono più spesi splat su di loro, al costo di un po' "
+       "di sensibilità al dettaglio reale."),
     NL("Mensen, auto's en al het andere dat tussen de foto's beweegt negeren. "
-       "Daar gaan geen splats meer heen, ten koste van iets minder gevoel voor "
-       "echt detail. Wat je met de hand instelt, gaat hier altijd voor."),
+       "Daar gaan geen splats meer heen, ten koste van iets minder gevoel "
+       "voor echt detail."),
     RU("Игнорировать людей, машины и всё остальное, что меняется от снимка к "
-       "снимку. Сплаты на них больше не тратятся ценой некоторой потери чувствительности "
-       "к настоящим деталям. Всё, что вы задали вручную, всегда важнее этого."),
-    TR("Fotoğraflar arasında yer değiştiren insanları, arabaları ve benzerlerini "
-       "yok sayar. Onlara artık splat harcanmaz; karşılığında gerçek ayrıntıya "
-       "duyarlılık biraz azalır. Elle ayarladığınız her şey buna göre önceliklidir."));
+       "снимку. Сплаты на них больше не тратятся ценой некоторой потери "
+       "чувствительности к настоящим деталям."),
+    TR("Fotoğraflar arasında yer değiştiren insanları, arabaları ve "
+       "benzerlerini yok sayar. Onlara artık splat harcanmaz; karşılığında "
+       "gerçek ayrıntıya duyarlılık biraz azalır."));
 
 SS_MSG(min_init_fraction,
     EN("Minimum starting splats"), JA("開始時のスプラット数の下限"),
@@ -4048,62 +4041,54 @@ SS_MSG(floater_suppression,
     TR("Uçuşan artıkların bastırılması"));
 SS_MSG(floater_suppression_help,
     EN("Clean up floating blobs and see-through surfaces. Tightens the depth "
-       "and colour consistency penalties and holds view-dependent colour back; "
-       "`strong` gives the crispest geometry but can flatten thin or genuinely "
-       "translucent detail. Whatever you set by hand always wins over this."),
+       "and colour consistency penalties and holds view-dependent colour "
+       "back; `strong` gives the crispest geometry but can flatten thin or "
+       "genuinely translucent detail."),
     JA("浮いた塊や透けて見える面を整理します。深度と色の一貫性ペナルティを強め、"
        "視点依存の色を抑えます。`strong` はもっともくっきりしたジオメトリにな"
-       "りますが、薄いものや本当に半透明なものが平坦になることがあります。手で"
-       "設定した項目は、常にこの設定より優先されます。"),
+       "りますが、薄いものや本当に半透明なものが平坦になることがあります。"),
     ZH_HANS("清理漂浮的团块和穿透的表面。它会加强深度和颜色一致性惩罚，并抑制"
             "视角相关颜色；`strong` 给出最清爽的几何，但可能压平细薄或真正半透"
-            "明的细节。你手动设过的项目始终优先于这里。"),
+            "明的细节。"),
     ZH_HANT("清理漂浮的團塊和穿透的表面。它會加強深度和顏色一致性懲罰，並抑制"
             "視角相關顏色；`strong` 給出最清爽的幾何，但可能壓平細薄或真正半透"
-            "明的細節。你手動設過的項目始終優先於這裡。"),
+            "明的細節。"),
     KO("떠다니는 덩어리와 비쳐 보이는 면을 정리합니다. 깊이와 색 일관성 페널티"
        "를 강화하고 시점 의존 색을 억제하며, `strong`은 가장 또렷한 지오메트리"
-       "를 주지만 얇거나 실제로 반투명한 디테일을 납작하게 만들 수 있습니다. "
-       "직접 설정한 값은 언제나 이 설정보다 우선합니다."),
+       "를 주지만 얇거나 실제로 반투명한 디테일을 납작하게 만들 수 있습니다."),
     DE("Schwebende Klumpen und durchscheinende Flächen aufräumen. Verschärft "
-       "die Strafen für Tiefen- und Farbkonsistenz und hält blickabhängige Farbe "
-       "zurück; `strong` liefert die knackigste Geometrie, kann aber dünne oder "
-       "tatsächlich lichtdurchlässige Details flach machen. Was Sie von Hand "
-       "einstellen, hat immer Vorrang davor."),
-    FR("Nettoyer les amas flottants et les surfaces qui transparaissent. Resserre "
-       "les pénalités de cohérence de profondeur et de couleur et bride la couleur "
-       "dépendante de la vue ; `strong` donne la géométrie la plus nette mais "
-       "peut aplatir les détails fins ou réellement translucides. Tout ce que "
-       "vous réglez à la main l'emporte toujours sur ce choix."),
+       "die Strafen für Tiefen- und Farbkonsistenz und hält blickabhängige "
+       "Farbe zurück; `strong` liefert die knackigste Geometrie, kann aber "
+       "dünne oder tatsächlich lichtdurchlässige Details flach machen."),
+    FR("Nettoyer les amas flottants et les surfaces qui transparaissent. "
+       "Resserre les pénalités de cohérence de profondeur et de couleur et "
+       "bride la couleur dépendante de la vue ; `strong` donne la géométrie "
+       "la plus nette mais peut aplatir les détails fins ou réellement "
+       "translucides."),
     ES("Limpiar los grumos flotantes y las superficies que se transparentan. "
-       "Aprieta las penalizaciones de coherencia de profundidad y color y frena "
-       "el color dependiente de la vista; `strong` da la geometría más nítida "
-       "pero puede aplanar detalles finos o realmente translúcidos. Lo que ajuste "
-       "a mano siempre prevalece sobre esto."),
+       "Aprieta las penalizaciones de coherencia de profundidad y color y "
+       "frena el color dependiente de la vista; `strong` da la geometría más "
+       "nítida pero puede aplanar detalles finos o realmente translúcidos."),
     PT("Limpar os grumos flutuantes e as superfícies que ficam transparentes. "
-       "Aperta as penalidades de coerência de profundidade e cor e segura a cor "
-       "dependente da vista; `strong` dá a geometria mais nítida, mas pode achatar "
-       "detalhes finos ou realmente translúcidos. O que você ajustar à mão sempre "
-       "prevalece sobre isto."),
+       "Aperta as penalidades de coerência de profundidade e cor e segura a "
+       "cor dependente da vista; `strong` dá a geometria mais nítida, mas "
+       "pode achatar detalhes finos ou realmente translúcidos."),
     IT("Ripulire i grumi fluttuanti e le superfici che si vedono attraverso. "
        "Stringe le penalità di coerenza di profondità e colore e trattiene il "
        "colore dipendente dalla vista; `strong` dà la geometria più nitida ma "
-       "può appiattire i dettagli sottili o davvero traslucidi. Ciò che imposta "
-       "a mano prevale sempre su questo."),
+       "può appiattire i dettagli sottili o davvero traslucidi."),
     NL("Zwevende klodders en doorschijnende oppervlakken opruimen. Het scherpt "
-       "de straffen voor diepte- en kleurconsistentie aan en houdt kijkrichtingafhankelijke "
-       "kleur in toom; `strong` geeft de strakste geometrie maar kan dun of werkelijk "
-       "doorschijnend detail platslaan. Wat je met de hand instelt, gaat hier "
-       "altijd voor."),
+       "de straffen voor diepte- en kleurconsistentie aan en houdt "
+       "kijkrichtingafhankelijke kleur in toom; `strong` geeft de strakste "
+       "geometrie maar kan dun of werkelijk doorschijnend detail platslaan."),
     RU("Убрать висящие сгустки и просвечивающие поверхности. Усиливает штрафы "
        "за согласованность глубины и цвета и придерживает цвет, зависящий от "
        "вида; `strong` даёт самую чёткую геометрию, но может сплющить тонкие "
-       "или по-настоящему полупрозрачные детали. Всё, что вы задали вручную, "
-       "всегда важнее этого."),
+       "или по-настоящему полупрозрачные детали."),
     TR("Havada duran topakları ve içi görünen yüzeyleri temizler. Derinlik ve "
-       "renk tutarlılığı cezalarını sıkar, bakışa bağlı rengi dizginler; `strong` "
-       "en keskin geometriyi verir ama ince ya da gerçekten yarı saydam ayrıntıları "
-       "düzleştirebilir. Elle ayarladığınız her şey buna göre önceliklidir."));
+       "renk tutarlılığı cezalarını sıkar, bakışa bağlı rengi dizginler; "
+       "`strong` en keskin geometriyi verir ama ince ya da gerçekten yarı "
+       "saydam ayrıntıları düzleştirebilir."));
 
 SS_MSG(depth_distortion_reg,
     EN("Depth consistency"), JA("深度の一貫性"), ZH_HANS("深度一致性"),
@@ -5056,36 +5041,36 @@ SS_MSG(erank_reg_help,
        "bozulmaları ve kamera hareket ederken oluşan titremeyi azaltır."));
 
 SS_MSG(erank_reg_s3,
-    EN("Thickness (erank)"), JA("厚み（erank）"), ZH_HANS("厚度（erank）"),
-    ZH_HANT("厚度（erank）"), KO("두께(erank)"), DE("Dicke (erank)"),
-    FR("Épaisseur (erank)"), ES("Grosor (erank)"), PT("Espessura (erank)"),
-    IT("Spessore (erank)"), NL("Dikte (erank)"), RU("Толщина (erank)"),
-    TR("Kalınlık (erank)"));
+    EN("Flatness (erank)"), JA("平坦さ（erank）"), ZH_HANS("扁平度（erank）"),
+    ZH_HANT("扁平度（erank）"), KO("납작함(erank)"), DE("Flachheit (erank)"),
+    FR("Aplatissement (erank)"), ES("Aplanamiento (erank)"),
+    PT("Achatamento (erank)"), IT("Appiattimento (erank)"),
+    NL("Vlakheid (erank)"), RU("Плоскостность (erank)"),
+    TR("Yassılık (erank)"));
 SS_MSG(erank_reg_s3_help,
-    EN("Discourage splats from collapsing into flat sheets, keeping some thickness "
-       "in every direction."),
-    JA("スプラットが平らな板に潰れるのを避け、どの方向にもある程度の厚みを残し"
-       "ます。"),
-    ZH_HANS("抑制泼溅塌成扁平薄片，让它在每个方向上都保留一定厚度。"),
-    ZH_HANT("抑制潑濺塌成扁平薄片，讓它在每個方向上都保留一定厚度。"),
-    KO("스플랫이 납작한 판으로 무너지는 것을 막고 모든 방향으로 어느 정도 두께"
-       "를 남깁니다."),
-    DE("Verhindern, dass Splats zu flachen Blättern zusammenfallen, und in jeder "
-       "Richtung etwas Dicke bewahren."),
-    FR("Décourager l'effondrement des splats en feuilles plates, en gardant un "
-       "peu d'épaisseur dans toutes les directions."),
-    ES("Desalentar que los splats se aplasten en láminas planas, conservando "
-       "algo de grosor en todas las direcciones."),
-    PT("Desencorajar que os splats desabem em folhas planas, mantendo alguma "
-       "espessura em todas as direções."),
-    IT("Scoraggiare il collasso degli splat in fogli piatti, mantenendo un po' "
-       "di spessore in ogni direzione."),
-    NL("Voorkomen dat splats tot platte vellen instorten en in elke richting "
-       "wat dikte behouden."),
-    RU("Не давать сплатам схлопываться в плоские листы, сохраняя некоторую толщину "
-       "во всех направлениях."),
-    TR("Splat'ların düz levhalara çökmesini caydırır ve her yönde bir miktar "
-       "kalınlık bırakır."));
+    EN("Encourage splats to collapse into flat sheets, so they line up with "
+       "surfaces better."),
+    JA("スプラットが平らな板に潰れるように促し、面によく沿うようにします。"),
+    ZH_HANS("鼓励泼溅塌成扁平薄片，让它更好地贴合表面。"),
+    ZH_HANT("鼓勵潑濺塌成扁平薄片，讓它更好地貼合表面。"),
+    KO("스플랫이 납작한 판으로 무너지도록 유도해 표면에 더 잘 들어맞게 "
+       "합니다."),
+    DE("Splats dazu bringen, zu flachen Blättern zusammenzufallen, damit sie "
+       "sich besser an Oberflächen anlegen."),
+    FR("Encourager les splats à s'effondrer en feuilles plates, pour qu'ils "
+       "épousent mieux les surfaces."),
+    ES("Animar a los splats a aplastarse en láminas planas, para que se "
+       "ajusten mejor a las superficies."),
+    PT("Incentivar os splats a desabarem em folhas planas, para que se ajustem "
+       "melhor às superfícies."),
+    IT("Incoraggiare il collasso degli splat in fogli piatti, così da "
+       "aderire meglio alle superfici."),
+    NL("Splats aanmoedigen tot platte vellen in te storten, zodat ze beter op "
+       "oppervlakken aansluiten."),
+    RU("Побуждать сплаты схлопываться в плоские листы, чтобы они лучше "
+       "ложились на поверхности."),
+    TR("Splat'ları düz levhalara çökmeye özendirir, böylece yüzeylere daha "
+       "iyi otururlar."));
 
 SS_MSG(scale_regularization_weight,
     EN("Stretched splat penalty"), JA("細長いスプラットのペナルティ"),
@@ -7343,39 +7328,45 @@ SS_MSG(use_fused_proj_bwd_optim,
     TR("Geri yayılım ve güncellemeyi birleştir"));
 SS_MSG(use_fused_proj_bwd_optim_help,
     EN("Merge the backward pass and the parameter update into one operation. "
-       "Uses noticeably less memory at large splat counts, for a small speed "
-       "cost."),
+       "Uses noticeably less memory at large splat counts. Not available with "
+       "`split_batch`, where it is silently turned off."),
     JA("逆伝播とパラメータ更新を一つの処理にまとめます。スプラット数が多いとき"
-       "に目に見えてメモリが減り、速度はわずかに落ちます。"),
+       "に目に見えてメモリが減ります。`split_batch` とは併用できず、その場合は"
+       "何も告げずに無効になります。"),
     ZH_HANS("把反向传播和参数更新合并成一次操作。在泼溅数量很大时能明显省下内"
-            "存，代价是速度略有下降。"),
+            "存。它不能和 `split_batch` 一起用，那时会被静默关闭。"),
     ZH_HANT("把反向傳播和參數更新合併成一次操作。在潑濺數量很大時能明顯省下記"
-            "憶體，代價是速度略有下降。"),
+            "憶體。它不能和 `split_batch` 一起用，那時會被靜默關閉。"),
     KO("역전파와 파라미터 갱신을 하나의 연산으로 합칩니다. 스플랫이 많을 때 메"
-       "모리를 눈에 띄게 아끼며, 속도는 조금 느려집니다."),
-    DE("Rückwärtsschritt und Parameteraktualisierung zu einer Operation zusammenfassen. "
-       "Braucht bei hohen Splat-Zahlen spürbar weniger Speicher, zum Preis eines "
-       "kleinen Geschwindigkeitsverlusts."),
+       "모리를 눈에 띄게 아낍니다. `split_batch`와는 함께 쓸 수 없으며, 그럴 "
+       "때는 아무 말 없이 꺼집니다."),
+    DE("Rückwärtsschritt und Parameteraktualisierung zu einer Operation "
+       "zusammenfassen. Braucht bei hohen Splat-Zahlen spürbar weniger "
+       "Speicher. Mit `split_batch` nicht verfügbar und dann stillschweigend "
+       "abgeschaltet."),
     FR("Fusionner la rétropropagation et la mise à jour des paramètres en une "
        "seule opération. Consomme nettement moins de mémoire quand les splats "
-       "sont nombreux, pour un léger coût en vitesse."),
+       "sont nombreux. Incompatible avec `split_batch`, où l'option est "
+       "désactivée sans avertissement."),
     ES("Fusionar la retropropagación y la actualización de parámetros en una "
-       "sola operación. Usa notablemente menos memoria con muchos splats, a un "
-       "pequeño coste de velocidad."),
-    PT("Fundir a retropropagação e a atualização de parâmetros numa única operação. "
-       "Usa bem menos memória com muitos splats, a um pequeno custo de velocidade."),
+       "sola operación. Usa notablemente menos memoria con muchos splats. No "
+       "está disponible con `split_batch`, donde se desactiva sin avisar."),
+    PT("Fundir a retropropagação e a atualização de parâmetros numa única "
+       "operação. Usa bem menos memória com muitos splats. Não está "
+       "disponível com `split_batch`, onde é desligada sem aviso."),
     IT("Unire la retropropagazione e l'aggiornamento dei parametri in una sola "
-       "operazione. Usa nettamente meno memoria con molti splat, a un piccolo "
-       "costo in velocità."),
-    NL("De terugwaartse stap en de parameterupdate samenvoegen tot één bewerking. "
-       "Gebruikt merkbaar minder geheugen bij grote splataantallen, tegen een "
-       "kleine snelheidsprijs."),
-    RU("Объединить обратный проход и обновление параметров в одну операцию. При "
-       "большом числе сплатов заметно экономит память ценой небольшой потери "
-       "скорости."),
+       "operazione. Usa nettamente meno memoria con molti splat. Non è "
+       "disponibile con `split_batch`, dove viene disattivata senza avvisare."),
+    NL("De terugwaartse stap en de parameterupdate samenvoegen tot één "
+       "bewerking. Gebruikt merkbaar minder geheugen bij grote "
+       "splataantallen. Niet beschikbaar met `split_batch`, waar de optie "
+       "zonder melding wordt uitgezet."),
+    RU("Объединить обратный проход и обновление параметров в одну операцию. "
+       "При большом числе сплатов заметно экономит память. С `split_batch` "
+       "недоступно и в этом случае молча отключается."),
     TR("Geri yayılımı ve parametre güncellemesini tek bir işlemde birleştirir. "
-       "Splat sayısı yüksekken belirgin biçimde daha az bellek kullanır, karşılığında "
-       "hızdan az miktarda verir."));
+       "Splat sayısı yüksekken belirgin biçimde daha az bellek kullanır. "
+       "`split_batch` ile birlikte kullanılamaz; o durumda sessizce kapatılır."));
 
 SS_MSG(packed,
     EN("Compact projection storage"), JA("投影結果をコンパクトに保存"),

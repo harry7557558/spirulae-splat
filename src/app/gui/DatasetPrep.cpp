@@ -275,6 +275,19 @@ bool ffmpeg_probe_video(const std::string& ffmpeg_exe, const std::string& path,
                     if (f == std::string::npos ||
                         line.find("Video:") == std::string::npos)
                         return;
+                    // The frame size off the same line. The 16-pixel floor is
+                    // what rejects the fourcc ("0x31637661"), which is also
+                    // digits on both sides of an x.
+                    for (size_t i = 1; i + 1 < line.size() && !out.width; i++) {
+                        if (line[i] != 'x') continue;
+                        size_t b = i, e = i + 1;
+                        while (b > 0 && std::isdigit((unsigned char)line[b - 1])) b--;
+                        while (e < line.size() && std::isdigit((unsigned char)line[e])) e++;
+                        if (b == i || e == i + 1) continue;
+                        const int w = std::atoi(line.c_str() + b);
+                        const int h = std::atoi(line.c_str() + i + 1);
+                        if (w >= 16 && h >= 16) { out.width = w; out.height = h; }
+                    }
                     size_t b = f;
                     while (b > 0 && (std::isdigit((unsigned char)line[b - 1]) ||
                                      line[b - 1] == '.'))

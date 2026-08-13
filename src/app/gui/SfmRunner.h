@@ -61,6 +61,23 @@ inline std::vector<const spirula::i18n::Msg*> sfm_camera_model_labels() {
             &m::lens_fisheye_thin_prism, &m::lens_equirectangular};
 }
 
+// The sentence beside each of them: which physical camera it is for. The
+// choice is the one thing on the screen a user cannot check afterwards -- a
+// dual-fisheye 360 clip fitted with the panorama model reconstructs into
+// nothing -- so the picker carries a description per row, not one per combo.
+inline std::vector<const spirula::i18n::Msg*> sfm_camera_model_helps() {
+    namespace m = spirula::i18n::msg::dataset;
+    return {&m::lens_opencv_help, &m::lens_pinhole_help,
+            &m::lens_simple_pinhole_help, &m::lens_radial_help,
+            &m::lens_full_opencv_help, &m::lens_fisheye_kb_help,
+            &m::lens_fisheye_thin_prism_help, &m::lens_equirectangular_help};
+}
+
+// Does this model describe a fisheye circle rather than a rectilinear frame?
+inline bool sfm_model_is_fisheye(const std::string& m) {
+    return m == "opencv-fisheye" || m == "thin-prism-fisheye";
+}
+
 struct SfmJob {
     // ---- shared with ColmapRunner's path ----
     PrepJob prep;
