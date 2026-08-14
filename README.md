@@ -56,14 +56,14 @@ Spirula Studio trains 3D Gaussian Splatting models &ndash; from raw photo/video 
 - **July 12, 2026: GUI** &ndash; A training GUI has been implemented. CLI training will remain accessible.
 
 
-# Download
+## Download
 
 Binaries for Windows, Linux, and macOS may be downloaded from [GitHub Release](https://github.com/harry7557558/spirulae-splat/releases/). Simply select the one for your platform, download and unzip, and double click to open the GUI.
 
 If you are training on remote/cloud GPUs, you may use the CLI &ndash; Run `spirula --help` for details. By default, `spirula train` command will serve a viewer on an HTTP port, one you can forward over ssh and view training progress in your web browser.
 
 
-# Build from source
+## Build from source
 
 To build from source, Spirula Studio provides two backends:
 
@@ -163,7 +163,7 @@ If it builds successfully, you get `build/spirula` binary.
 
 </details>
 
-# Gallery
+## Gallery
 
 You can find some professional-quality splats trained by Spirula Studio from [Megascapes Library](https://library.getmegascapes.com/) and their [SuperSplat page](https://superspl.at/user/megascapes).
 
@@ -176,7 +176,7 @@ Some splats created by the author of Spirula Studio can also be found on my [Sup
 ![](https://s3-eu-west-1.amazonaws.com/images.playcanvas.com/splat/0bcb61c6/v1/m.webp)&nbsp;
 ![](https://s3-eu-west-1.amazonaws.com/images.playcanvas.com/splat/cdd6f9a2/v1/m.webp)&nbsp; -->
 
-# Trivia
+## Trivia
 
 Spirula Studio (formerly spirulae-splat) is named after the now-inactive project [spirulae](https://github.com/harry7557558/spirulae), which was named after the [deep-ocean cephalopod mollusk](https://en.wikipedia.org/wiki/Spirula).
 
