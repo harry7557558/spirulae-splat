@@ -65,7 +65,7 @@ set(SS_VK_SHADERS ${SS_SRC}/backend/vulkan/shaders)   # Vulkan-only entry points
 
 # The version the apps report with --version. Declared here and nowhere else;
 # it used to be read out of pyproject.toml, back when there was a package.
-set(SS_VERSION "dev")
+set(SS_VERSION "2026.8.14")
 
 # ---------------------------------------------------------------------------
 # Options
