@@ -61,6 +61,15 @@ struct MaskClick {
     std::string source;
 };
 
+// One camera folder found INSIDE an input: a capture handed over already split
+// into cam/, cam0/, cam1/ is several cameras in one folder, and one of them
+// being a fisheye does not make the others one.
+struct SubCamera {
+    std::string rel;                 // "cam0", relative to the input's images
+    std::string camera_model;        // empty = the input's own
+    float focal_factor = 0.0f;       // 0 = no focal prior
+};
+
 // One thing the user picked: a video file, or a folder of photos. A job holds
 // a list of them, because a capture is often shot as several clips, or on a rig
 // whose lenses each write their own file -- and those only reconstruct together
@@ -87,6 +96,9 @@ struct PrepInput {
     // job's dataset-wide one; a factor of 0 means no focal prior.
     std::string camera_model;
     float focal_factor = 0.0f;       // fx = fy = factor * image width
+    // The camera folders found under this input, when it arrived with more
+    // than one. Empty means the lens above describes all of it.
+    std::vector<SubCamera> subcameras;
     // Areas of the frame that are never scene -- the fisheye border, a
     // watermark, the rig in shot. Per input because it describes a lens, and
     // resolved per camera folder when it asks for the border to be fitted
@@ -223,6 +235,11 @@ bool ffmpeg_extract_frame(const std::string& ffmpeg_exe, const std::string& vide
 void resolve_photo_folder(const std::string& picked, std::string& images,
                           std::string& masks);
 
+// The immediate sub-folders of `dir` that hold images, sorted -- the camera
+// folders of a capture that was handed over already split. Empty when the
+// images sit in `dir` itself, which is the ordinary case.
+std::vector<std::string> camera_subfolders(const std::string& dir);
+
 // Does this folder hold any image at all, at any depth? Follows directory
 // symlinks (a prepared capture's images/ is often a link into the raw one) and
 // stops at the first hit, so it is cheap enough for the UI thread.
@@ -268,11 +285,9 @@ bool is_mask_folder(const std::string& path);
 
 class DatasetPrep {
 public:
-    // `film` may be null: a caller with no screen wants the pipeline without
-    // the thumbnails.
-    DatasetPrep(RunProgress* progress, FilmStrip* film,
+    DatasetPrep(RunProgress* progress, RunFilms films,
                 const std::atomic<bool>& cancel)
-        : _prog(progress), _film(film), _cancel(cancel) {}
+        : _prog(progress), _films(films), _cancel(cancel) {}
 
     // Called once, immediately before masking starts, and free to replace the
     // job's mask_* fields with whatever the screen says by then -- which is
@@ -337,7 +352,7 @@ private:
     int exec(const std::vector<std::string>& argv);
 
     RunProgress* _prog;
-    FilmStrip* _film;
+    RunFilms _films;
     const std::atomic<bool>& _cancel;
 };
 

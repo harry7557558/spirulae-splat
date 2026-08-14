@@ -14,6 +14,10 @@
 #include "i18n/catalog/Sfm.h"
 #endif
 
+#ifndef _WIN32
+#include <ftw.h>
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -73,6 +77,20 @@ bool child_line_is_notable(const std::string& l) {
 #endif
 }
 
+// NOT std::filesystem::remove_all -- on the torch build libtorch.so interposes
+// an ABI-incompatible copy (see AGENTS.md gotchas).
+void remove_tree(const fs::path& p) {
+#ifndef _WIN32
+    nftw(p.string().c_str(),
+         [](const char* f, const struct stat*, int, struct FTW*) {
+             return ::remove(f);
+         }, 16, FTW_DEPTH | FTW_PHYS);
+#else
+    std::error_code ec;
+    std::filesystem::remove_all(p, ec);
+#endif
+}
+
 // The mapper only writes a model when it finishes, so any model on disk is
 // from a completed run.
 bool has_model(const fs::path& sparse) {
@@ -100,20 +118,25 @@ SfmRunner::~SfmRunner() {
     if (_worker.joinable()) _worker.join();
 }
 
-void SfmRunner::start(const SfmJob& job, FilmStrip* film) {
+void SfmRunner::start(const SfmJob& job, RunFilms films) {
     if (_state.load() == State::Running) return;
     if (_worker.joinable()) _worker.join();
     _cancel = false;
     _partial = false;
-    _film = film;
+    _films = films;
     _prog.reset();
-    if (_film) _film->clear();
+    if (_films.frames) _films.frames->clear();
+    if (_films.masks) _films.masks->clear();
     {
         std::lock_guard<std::mutex> lk(_mu);
         _error.clear();
         _dataset_dir.clear();
         _image_dir.clear();
         _mask_dir.clear();
+        _progress_dir.clear();
+        _features_dir.clear();
+        _matches_path.clear();
+        _sfm_image_dir.clear();
         _live = job;
     }
     _state = State::Running;
@@ -148,6 +171,7 @@ void SfmRunner::take_reconstruction(SfmJob& job) {
                        i < _live.prep.inputs.size(); i++) {
         job.prep.inputs[i].camera_model = _live.prep.inputs[i].camera_model;
         job.prep.inputs[i].focal_factor = _live.prep.inputs[i].focal_factor;
+        job.prep.inputs[i].subcameras = _live.prep.inputs[i].subcameras;
     }
 }
 
@@ -189,6 +213,22 @@ std::string SfmRunner::mask_dir() {
     std::lock_guard<std::mutex> lk(_mu);
     return _mask_dir;
 }
+std::string SfmRunner::progress_dir() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _progress_dir;
+}
+std::string SfmRunner::features_dir() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _features_dir;
+}
+std::string SfmRunner::matches_path() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _matches_path;
+}
+std::string SfmRunner::sfm_image_dir() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _sfm_image_dir;
+}
 void SfmRunner::log(const std::string& line, bool detail) {
     _prog.note(line, detail);
 }
@@ -200,7 +240,10 @@ void SfmRunner::set_stage_if_new(Stage st, const char* s) {
 
 void SfmRunner::set_stage(Stage st, const std::string& s) {
     _prog.enter(st, s);
-    log("==== " + s + " ====");
+    // One line per step, and the skeleton the default log view is read as:
+    // without it a step whose own output is all detail looks like nothing
+    // happening at all.
+    log("==== " + s + " ====", /*detail=*/false);
 }
 
 // spirula-sfm's own progress lines. Reading them is a little grubby, but it is
@@ -265,31 +308,58 @@ void SfmRunner::note_progress(const std::string& l) {
 // into the panel wins over a preset-derived one.
 void SfmRunner::append_camera_overrides(const SfmJob& job, const PrepResult& prep,
                                         std::vector<std::string>& argv) {
+    // One group per row the panel showed: an input, or a camera folder inside
+    // one. `rel` is the group's path under the image directory, which is what
+    // `--camera-model PREFIX=MODEL` matches an image name against; empty means
+    // the whole capture, and only a lone input with no camera folders is that.
+    struct Group {
+        std::string rel;
+        std::string camera_model;
+        float focal_factor = 0.0f;
+    };
+    std::vector<Group> groups;
     for (const PrepInput& in : job.prep.inputs) {
-        const std::string prefix = in.subdir.empty() ? "" : in.subdir + "=";
-        // For a lone input the panel's own "Camera / lens" is the single source
-        // of truth and has already been passed; only a named group adds one.
-        if (!in.subdir.empty() && !in.camera_model.empty()) {
-            argv.push_back("--camera-model");
-            argv.push_back(prefix + in.camera_model);
+        if (in.subcameras.empty()) {
+            groups.push_back({in.subdir, in.camera_model, in.focal_factor});
+            continue;
         }
-        if (!(in.focal_factor > 0)) continue;
-        if (in.subdir.empty() && job.init_focal_px > 0) continue;
+        for (const SubCamera& sc : in.subcameras) {
+            const std::string rel =
+                in.subdir.empty() ? sc.rel
+                                  : (fs::path(in.subdir) / sc.rel).generic_string();
+            groups.push_back({rel, sc.camera_model.empty() ? in.camera_model
+                                                           : sc.camera_model,
+                              sc.focal_factor > 0 ? sc.focal_factor
+                                                  : in.focal_factor});
+        }
+    }
+
+    for (const Group& g : groups) {
+        const std::string prefix = g.rel.empty() ? "" : g.rel + "=";
+        // For the whole capture the panel's own "Camera / lens" is the single
+        // source of truth and has already been passed; only a named group adds
+        // one.
+        if (!g.rel.empty() && !g.camera_model.empty()) {
+            argv.push_back("--camera-model");
+            argv.push_back(prefix + g.camera_model);
+        }
+        if (!(g.focal_factor > 0)) continue;
+        if (g.rel.empty() && job.init_focal_px > 0) continue;
         const std::string dir =
-            (in.subdir.empty() ? fs::path(prep.image_dir)
-                               : fs::path(prep.image_dir) / in.subdir).string();
+            (g.rel.empty() ? fs::path(prep.image_dir)
+                           : fs::path(prep.image_dir) / g.rel).string();
         int W = 0, H = 0;
         if (!DatasetPrep::first_image_dims(dir, W, H)) {
             log(fmt(lmsg::sfm_focal_unreadable, {dir}));
             continue;
         }
         char buf[32];
-        std::snprintf(buf, sizeof buf, "%g", (double)in.focal_factor * W);
+        std::snprintf(buf, sizeof buf, "%g", (double)g.focal_factor * W);
         argv.push_back("--focal");
         argv.push_back(prefix + buf);
         log(fmt(lmsg::sfm_initial_focal,
-                {in.subdir.empty() ? lmsg::sfm_the_capture.get() : in.subdir.c_str(),
-                 buf, in.focal_factor, (long long)W}));
+                {g.rel.empty() ? lmsg::sfm_the_capture.get() : g.rel.c_str(),
+                 buf, g.focal_factor, (long long)W}));
     }
 }
 
@@ -321,10 +391,20 @@ void SfmRunner::run(SfmJob job) {
             log(fmt(lmsg::sfm_will_overwrite, {(ws / "sparse").string()}),
                 /*detail=*/false);
 
+        // Where the child will write its snapshots, and the two files it
+        // leaves behind. Published before the stages that produce them, so the
+        // screen is already watching when the first one lands.
+        {
+            std::lock_guard<std::mutex> lk(_mu);
+            _progress_dir = (ws / ".progress").string();
+            _features_dir = (ws / "features").string();
+            _matches_path = (ws / "matches.bin").string();
+        }
+
         // ---- 1. frames and masks ------------------------------------------
         PrepResult prep;
         {
-            DatasetPrep dp(&_prog, _film, _cancel);
+            DatasetPrep dp(&_prog, _films, _cancel);
             std::string err;
             if (!dp.run(job.prep, prep, err,
                         [this](PrepJob& p) { take_masking(p); }))
@@ -346,6 +426,10 @@ void SfmRunner::run(SfmJob job) {
         } else {
             set_stage(Stage::Features, lmsg::stage_reconstructing_features.get());
             take_reconstruction(job);
+            {
+                std::lock_guard<std::mutex> lk(_mu);
+                _sfm_image_dir = prep.image_dir;
+            }
             std::vector<std::string> argv = {
                 // The child is this same executable, so it has the same
                 // thirteen languages -- tell it which one, or its output
@@ -353,6 +437,7 @@ void SfmRunner::run(SfmJob job) {
                 exe_path(), "--lang", spirula::i18n::code(spirula::i18n::current()),
                 "sfm", "auto", prep.image_dir,
                 "-o", ws.string(),
+                "--progress-dir", (ws / ".progress").string(),
                 "--quality", pick(kQuality, job.quality, 2),
                 "--data-type", pick(kDataType, job.data_type),
                 "--camera-model", job.camera_model,
@@ -434,18 +519,16 @@ void SfmRunner::run(SfmJob job) {
             return fail(lmsg::err_no_reconstruction.get());
 
         // ---- 3. tidy up ----------------------------------------------------
+        // The snapshots are this screen's channel and nothing reads them once
+        // the run is over; they go whether or not the intermediates are kept.
+        remove_tree(ws / ".progress");
         if (!job.keep_intermediate) {
             set_stage(Stage::Finishing, lmsg::stage_cleaning_up.get());
-            for (const char* name : {"features", "matches.bin"}) {
-                const fs::path p = ws / name;
-                if (!fs::exists(p, ec)) continue;
-                if (fs::is_directory(p, ec)) {
-                    for (fs::directory_iterator it(p, ec), end; !ec && it != end;
-                         it.increment(ec))
-                        fs::remove(it->path(), ec);
-                }
-                fs::remove(p, ec);
-            }
+            // Recursive: the feature files MIRROR the image tree, so a capture
+            // with camera folders puts them in features/cam0/... and a
+            // single-level sweep removed nothing and left the directory.
+            remove_tree(ws / "features");
+            fs::remove(ws / "matches.bin", ec);
         }
 
         if (reads_photos_in_place(job.prep.inputs))

@@ -97,13 +97,14 @@ ColmapRunner::~ColmapRunner() {
     if (_worker.joinable()) _worker.join();
 }
 
-void ColmapRunner::start(const ColmapJob& job, FilmStrip* film) {
+void ColmapRunner::start(const ColmapJob& job, RunFilms films) {
     if (_state.load() == State::Running) return;
     if (_worker.joinable()) _worker.join();
     _cancel = false;
-    _film = film;
+    _films = films;
     _prog.reset();
-    if (_film) _film->clear();
+    if (_films.frames) _films.frames->clear();
+    if (_films.masks) _films.masks->clear();
     {
         std::lock_guard<std::mutex> lk(_mu);
         _error.clear();
@@ -181,7 +182,7 @@ void ColmapRunner::log(const std::string& line, bool detail) {
 
 void ColmapRunner::set_stage(Stage st, const std::string& s) {
     _prog.enter(st, s);
-    log("==== " + s + " ====");
+    log("==== " + s + " ====", /*detail=*/false);
 }
 
 int ColmapRunner::exec(const std::vector<std::string>& argv) {
@@ -338,7 +339,7 @@ void ColmapRunner::run(ColmapJob job) {
             pj.force_external_masking = job.force_external_masking;
             pj.python_exe = job.python_exe;
 
-            DatasetPrep dp(&_prog, _film, _cancel);
+            DatasetPrep dp(&_prog, _films, _cancel);
             if (!dp.run(pj, prep, err, [this](PrepJob& p) { take_masking(p); }))
                 return fail(err);
         }

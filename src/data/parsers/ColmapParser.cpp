@@ -400,6 +400,42 @@ BakedIntrins bake_colmap_intrins(const ColmapCamera& cam) {
     return o;
 }
 
+}  // namespace
+
+bool colmap_preview_intrins(int model_id, int width, int height,
+                            const std::vector<double>& params,
+                            PreviewIntrins& out) {
+    const auto& table = colmap_model_table();
+    const auto it = table.find(model_id);
+    if (it == table.end() || (int)params.size() != it->second.num_params)
+        return false;
+    ColmapCamera cam;
+    cam.model = it->second.name;
+    cam.width = (uint64_t)width;
+    cam.height = (uint64_t)height;
+    cam.params = params;
+    BakedIntrins bi;
+    try {
+        bi = bake_colmap_intrins(cam);
+    } catch (const std::exception&) {
+        return false;
+    }
+    // A model with no exact tier comes back asking to be fitted, which needs
+    // the images. The caller draws a plain frustum instead.
+    if (bi.source.source_model >= 0) return false;
+    out.fx = bi.fx;
+    out.fy = bi.fy;
+    out.cx = bi.cx;
+    out.cy = bi.cy;
+    out.model = (int32_t)bi.model;
+    out.distortion = (int32_t)bi.distortion;
+    static_assert(kCameraDistortionParams == 8, "PreviewIntrins::dist width");
+    std::copy(bi.dist.begin(), bi.dist.end(), out.dist.begin());
+    return true;
+}
+
+namespace {
+
 // One line per distinct outcome rather than per camera record: an image
 // collection run through COLMAP without --ImageReader.single_camera has one
 // camera record per photo, and the same sentence a thousand times is noise.

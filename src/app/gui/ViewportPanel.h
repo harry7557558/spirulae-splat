@@ -44,10 +44,13 @@ class ViewportPanel {
 public:
     // Dataset preview (needs load_dataset() done; no GPU engine).
     void attach_preview(spirula::TrainerSession& session);
-    // The same GL preview over a bare point cloud -- a .ply that turned out to
-    // hold points rather than Gaussians. No cameras, so no frusta.
+    // The same GL preview over parsed data with no session behind it: a .ply
+    // that turned out to hold points rather than Gaussians, or a reconstruction
+    // still being built. `with_cameras` offers the frustum controls -- a point
+    // file has none to show, a live model is half about them.
     void attach_preview_data(const ParsedDataset& ds, const PostSplitCameras& post,
-                             const std::string& key, float radius = 1.0f);
+                             const std::string& key, float radius = 1.0f,
+                             bool with_cameras = false);
     // The same GL preview over an extracted triangle mesh, shaded.
     // `to_normalized` is the row-major 3x4 similarity into the navigated
     // frame (PreviewRenderer's convention); nullptr for identity.

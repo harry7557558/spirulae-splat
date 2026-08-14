@@ -48,6 +48,28 @@ struct ColmapCamera {
     std::vector<double>  params;      // model-specific, COLMAP order
 };
 
+// What a COLMAP camera record means to the renderer: which model, which
+// distortion tier, and its coefficients. Exposed for a caller that only wants
+// to DRAW the camera -- the live SfM preview, whose model is not on disk yet --
+// so it needs neither the images nor the re-distort fit the parser runs.
+struct PreviewIntrins {
+    float fx = 0, fy = 0, cx = 0, cy = 0;
+    int32_t model = 0;         // CameraModelType
+    int32_t distortion = 0;    // CameraDistortionType
+    // kCameraDistortionParams wide; the literal is here because core/Common.cuh
+    // defines the same constant for the device side and the two headers cannot
+    // both be included in one translation unit.
+    std::array<float, 8> dist{};
+};
+
+// False for a model id this reader does not know, a parameter count that does
+// not match it, or a source model no tier represents exactly -- the last of
+// which the parser answers by fitting and resampling, which is more than a
+// frustum needs.
+bool colmap_preview_intrins(int model_id, int width, int height,
+                            const std::vector<double>& params,
+                            PreviewIntrins& out);
+
 struct ColmapImage {
     int32_t                image_id  = -1;
     std::array<double, 4>  qvec{};    // (w, x, y, z), world->camera

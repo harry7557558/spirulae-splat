@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 
+#include "sfm/core/Progress.h"
 #include "sfm/core/Camera.h"
 #include "sfm/core/Features.h"
 #include "sfm/core/Matches.h"
@@ -605,8 +606,12 @@ inline std::vector<TwoViewMatches> verifyPairs(
         for (size_t k = 0; k < m.size(); k++)
             if (g.inlier_mask[k]) inl.push_back(m[k]);
         if (inl.empty()) return;
+        const uint32_t n_inl = (uint32_t)inl.size();
         results[p] = {i, j, (int)g.config, std::move(inl)};
         kept[p] = 1;
+        // A no-op without --progress-dir. Called from the workers, which is
+        // what the lock inside it is for.
+        progress::pair(i, j, n_inl);
     };
 
     // How many pairs to ask the matcher for at once. Independent of the worker

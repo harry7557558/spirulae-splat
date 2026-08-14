@@ -22,10 +22,27 @@
 
 namespace gui {
 
-// Longest side of a stored thumbnail. 256 keeps a twelve-frame ring under
-// 2.4 MB and still reads at the size the panel draws.
+// Longest side of a stored thumbnail, and how many are kept. 256 x 24 is under
+// 5 MB and still reads at the size the panel draws.
 inline constexpr int kFilmMaxSide = 256;
-inline constexpr int kFilmSlots = 12;
+inline constexpr int kFilmSlots = 24;
+inline constexpr size_t kMaxOverlay = 250;
+
+// What to draw on top of a frame: feature positions in the source image's own
+// pixels. Empty for the steps that have nothing to overlay.
+struct FramePoints {
+    const float* xy = nullptr;   // 2 floats per point
+    size_t count = 0;
+};
+
+class FilmStrip;
+
+// The strips a run feeds as it works, one per step that produces pictures.
+// Either may be null: a caller with no screen wants the pipeline without them.
+struct RunFilms {
+    FilmStrip* frames = nullptr;
+    FilmStrip* masks = nullptr;
+};
 
 class FilmStrip {
 public:
@@ -36,9 +53,10 @@ public:
     // the downscale off the hot path entirely.
     bool wants(double min_interval_s = 0.12) const;
     // `rgb` is w*h*3 tightly packed; `mask`, when given, is w*h with 255 where
-    // the pixel is kept. Downscales and copies, so the caller may reuse both.
+    // the pixel is kept. Downscales and copies, so the caller may reuse all
+    // three.
     void offer(const uint8_t* rgb, int w, int h, const std::string& name,
-               const uint8_t* mask = nullptr);
+               const uint8_t* mask = nullptr, FramePoints points = {});
     void clear();
 
     // ---- consumer (UI thread, GL context current) ----
@@ -53,6 +71,10 @@ private:
         std::vector<uint8_t> rgb;    // downscaled, masked already composited
         int w = 0, h = 0;
         std::string name;
+        // Overlay points as fractions of the thumbnail, already thinned to
+        // kMaxOverlay: eight thousand dots on a 72-pixel picture is a
+        // rectangle, and drawing them all costs a draw command each.
+        std::vector<float> pts;
         uint64_t seq = 0;
         GLuint tex = 0;
         uint64_t uploaded = 0;

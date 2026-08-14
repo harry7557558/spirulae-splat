@@ -167,7 +167,7 @@ void GuiApp::shutdown() {
     _segment.destroy_gl();
     _colmap.cancel();
     _sfm.cancel();
-    _film.destroy_gl();
+    reset_dataset_preview();
     _download.cancel();
     _font_download.cancel();
     _runner.shutdown();
@@ -206,10 +206,12 @@ void GuiApp::load_settings() {
         else if (k == "ui_scale") _scale.set_user(std::clamp((float)atof(v.c_str()),
                                                              0.0f, 3.0f));
         else if (k == "panel_w") _panel_w = (float)atof(v.c_str());
+        else if (k == "ds_panel_w") _ds_panel_w = (float)atof(v.c_str());
         else if (k == "log_h") _log_h = (float)atof(v.c_str());
         else if (k == "show_log") _show_log = v != "0";
         else if (k == "log_details") _log_details = v != "0";
-        else if (k == "show_film") _show_film = v != "0";
+        else if (k == "show_preview") _show_preview = v != "0";
+        else if (k == "preview_h") _preview_h = (float)atof(v.c_str());
         else if (k == "show_settings") _show_settings = v != "0";
         else if (k == "native_dialogs") _dialog.use_native(v != "0");
     }
@@ -219,6 +221,8 @@ void GuiApp::load_settings() {
     // file, must not be able to leave a panel unreachably small or wide.
     _panel_w = std::clamp(_panel_w, 220.0f, 900.0f);
     _log_h = std::clamp(_log_h, 60.0f, 800.0f);
+    _preview_h = std::clamp(_preview_h, 60.0f, 800.0f);
+    _ds_panel_w = std::clamp(_ds_panel_w, 320.0f, 1200.0f);
 
     // The settings file is the third step of the chain and loses to both
     // --lang and SS_LANG, so the whole chain is re-run rather than the stored
@@ -241,10 +245,12 @@ void GuiApp::save_settings() {
     std::fprintf(f, "lang=%s\n", spirula::i18n::code(spirula::i18n::current()));
     std::fprintf(f, "ui_scale=%.3f\n", _scale.user());
     std::fprintf(f, "panel_w=%.1f\n", _panel_w);
+    std::fprintf(f, "ds_panel_w=%.1f\n", _ds_panel_w);
     std::fprintf(f, "log_h=%.1f\n", _log_h);
     std::fprintf(f, "show_log=%d\n", _show_log ? 1 : 0);
     std::fprintf(f, "log_details=%d\n", _log_details ? 1 : 0);
-    std::fprintf(f, "show_film=%d\n", _show_film ? 1 : 0);
+    std::fprintf(f, "show_preview=%d\n", _show_preview ? 1 : 0);
+    std::fprintf(f, "preview_h=%.1f\n", _preview_h);
     std::fprintf(f, "show_settings=%d\n", _show_settings ? 1 : 0);
     std::fprintf(f, "native_dialogs=%d\n", _dialog.native_enabled() ? 1 : 0);
     for (const auto& l : _accepted_licenses)
@@ -1025,6 +1031,33 @@ void GuiApp::refresh_sources() {
     if (!gone_inputs.empty() && _mask.clicks.empty()) {
         _mask.object_count = 1;
         _mask.current_object = 0;
+    }
+
+    // Camera folders inside each input. A capture that arrives already split
+    // into cam/, cam0/, cam1/ needs one lens each -- one of them being a
+    // fisheye does not make the others one -- and the folders are the only
+    // place that shows.
+    for (PrepInput& s : _sources) {
+        std::vector<std::string> found;
+        if (!s.is_video && !s.path.empty()) {
+            std::error_code ec;
+            if (fs::is_directory(s.path, ec)) found = camera_subfolders(s.path);
+        }
+        // One folder is a nested layout, not a choice to make.
+        if (found.size() < 2) {
+            s.subcameras.clear();
+            continue;
+        }
+        std::vector<SubCamera> next;
+        next.reserve(found.size());
+        for (const std::string& rel : found) {
+            SubCamera sc;
+            sc.rel = rel;
+            for (const SubCamera& old : s.subcameras)
+                if (old.rel == rel) sc = old;
+            next.push_back(std::move(sc));
+        }
+        s.subcameras.swap(next);
     }
 
     // The output folder follows the input until the user takes it over.
@@ -1820,8 +1853,10 @@ void GuiApp::start_dataset_job() {
     // The preview holds a multi-gigabyte backbone; the run about to start
     // wants that VRAM for reconstruction.
     _segment.close();
-    if (effective_engine() == Engine::BuiltIn) _sfm.start(_sfm_job, &_film);
-    else                                      _colmap.start(_colmap_job, &_film);
+    reset_dataset_preview();
+    const RunFilms films{&_film_frames, &_film_masks};
+    if (effective_engine() == Engine::BuiltIn) _sfm.start(_sfm_job, films);
+    else                                      _colmap.start(_colmap_job, films);
     // One run each: a re-do that stayed armed would throw the same step away
     // again the next time the button is pressed.
     _redo_frames = _redo_masks = false;
@@ -2045,7 +2080,17 @@ void GuiApp::draw_dataset_basics() {
     // one capture with two lens models in it, and forcing one on both makes
     // half of it unusable. COLMAP's feature_extractor takes a single model for
     // the run, so that path keeps one control and says so.
-    const bool per_input_lens = builtin && _sources.size() > 1;
+    // One lens each once there is more than one camera to tell apart: several
+    // inputs, or one input that arrived already split into camera folders.
+    // Only under "one camera per folder", though -- a single shared camera
+    // makes the choice meaningless, and one camera per image makes it a list
+    // nobody wants to read.
+    bool any_subcameras = false;
+    for (const PrepInput& s : _sources)
+        any_subcameras = any_subcameras || !s.subcameras.empty();
+    const bool per_folder = _sfm_job.camera_mode == 1;
+    const bool per_input_lens =
+        builtin && per_folder && (_sources.size() > 1 || any_subcameras);
     if (!per_input_lens) {
         ImGui::SetNextItemWidth(px(220.0f));
         if (builtin) {
@@ -2066,7 +2111,7 @@ void GuiApp::draw_dataset_basics() {
             lens_tooltip(*colmap_camera_model_helps()[idx]);
         }
         if (!_sources.empty())
-            draw_lens_warning(_sources[0],
+            draw_lens_warning(_sources[0].path, _sources[0].is_video,
                               builtin ? _sources[0].camera_model
                                       : _colmap_job.camera_model,
                               builtin);
@@ -2142,58 +2187,88 @@ void GuiApp::draw_source_cameras() {
     ui::Text(dmsg::camera_lens_per_input);
     ui::help_on_hover(dmsg::camera_lens_per_input_help);
     ImGui::Indent();
-    for (size_t i = 0; i < _sources.size(); i++) {
-        PrepInput& s = _sources[i];
-        ImGui::PushID((int)i);
-        ui::TextRaw(s.subdir);
-        if (ImGui::IsItemHovered()) ui::SetTooltipRaw(s.path);
+    // `label` names the row, `dir` is the folder it measures, and model/focal
+    // are what the row edits -- an input with no camera folders under it is
+    // one row, an input with three is three.
+    auto row = [&](const char* id, const std::string& label,
+                   const std::string& dir, std::string& model, float& focal) {
+        ImGui::PushID(id);
+        ui::TextRaw(label);
+        if (ImGui::IsItemHovered()) ui::SetTooltipRaw(dir);
         ImGui::SameLine(px(200.0f));
         ImGui::SetNextItemWidth(px(220.0f));
         int idx = 0;
         for (int m = 0; m < kNumSfmCameraModels; m++)
-            if (s.camera_model == kSfmCameraModels[m]) idx = m;
-        if (sfm_lens_combo("##lens", &idx))
-            s.camera_model = kSfmCameraModels[idx];
+            if (model == kSfmCameraModels[m]) idx = m;
+        if (sfm_lens_combo("##lens", &idx)) model = kSfmCameraModels[idx];
         lens_tooltip(*sfm_camera_model_helps()[(size_t)idx]);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(px(90.0f));
-        ui::InputFloat(dmsg::focal_x_width, &s.focal_factor, 0, 0, "%.4g");
+        ui::InputFloat(dmsg::focal_x_width, &focal, 0, 0, "%.4g");
         ui::help_on_hover(dmsg::focal_x_width_help);
-        draw_lens_warning(s, s.camera_model, /*builtin=*/true);
+        draw_lens_warning(dir, /*is_video=*/false, model, /*builtin=*/true);
+        ImGui::PopID();
+    };
+
+    for (size_t i = 0; i < _sources.size(); i++) {
+        PrepInput& s = _sources[i];
+        ImGui::PushID((int)i);
+        if (s.subcameras.empty()) {
+            const std::string label =
+                s.subdir.empty() ? fs::path(s.path).filename().string() : s.subdir;
+            row("input", label, s.path, s.camera_model, s.focal_factor);
+        } else {
+            // The input itself is a heading here: every image under it is in
+            // one of the camera folders, so the input's own lens covers none.
+            if (_sources.size() > 1) {
+                ui::TextDisabledRaw(s.subdir.empty() ? s.path : s.subdir);
+                ImGui::Indent();
+            }
+            for (size_t k = 0; k < s.subcameras.size(); k++) {
+                SubCamera& sc = s.subcameras[k];
+                if (sc.camera_model.empty()) sc.camera_model = s.camera_model;
+                row(sc.rel.c_str(), sc.rel,
+                    (fs::path(s.path) / sc.rel).string(), sc.camera_model,
+                    sc.focal_factor);
+            }
+            if (_sources.size() > 1) ImGui::Unindent();
+        }
         ImGui::PopID();
     }
     ImGui::Unindent();
 }
 
-bool GuiApp::input_pixel_size(const PrepInput& s, int& w, int& h) {
+bool GuiApp::input_pixel_size(const std::string& path, bool is_video,
+                              int& w, int& h) {
     w = h = 0;
-    if (s.path.empty()) return false;
-    auto it = _input_size.find(s.path);
+    if (path.empty()) return false;
+    const std::string& s_path = path;
+    auto it = _input_size.find(path);
     if (it == _input_size.end()) {
         std::pair<int, int> size{0, 0};
         std::error_code ec;
-        if (s.is_video) {
+        if (is_video) {
             // One `ffmpeg -i`, and only for a file that is already there:
             // this runs from the draw, and a path being typed names nothing.
-            if (fs::is_regular_file(s.path, ec)) {
+            if (fs::is_regular_file(s_path, ec)) {
                 static const std::atomic<bool> never{false};
                 VideoFacts f;
-                if (ffmpeg_probe_video(_ffmpeg_exe, s.path, f, never))
+                if (ffmpeg_probe_video(_ffmpeg_exe, s_path, f, never))
                     size = {f.width, f.height};
             }
-        } else if (fs::is_directory(s.path, ec)) {
+        } else if (fs::is_directory(s_path, ec)) {
             int iw = 0, ih = 0;
-            if (DatasetPrep::first_image_dims(s.path, iw, ih)) size = {iw, ih};
+            if (DatasetPrep::first_image_dims(s_path, iw, ih)) size = {iw, ih};
         }
-        it = _input_size.emplace(s.path, size).first;
+        it = _input_size.emplace(path, size).first;
     }
     w = it->second.first;
     h = it->second.second;
     return w > 0 && h > 0;
 }
 
-void GuiApp::draw_lens_warning(const PrepInput& s, const std::string& model,
-                               bool builtin) {
+void GuiApp::draw_lens_warning(const std::string& path, bool is_video,
+                               const std::string& model, bool builtin) {
     const bool fisheye = builtin ? sfm_model_is_fisheye(model)
                                  : colmap_model_is_fisheye(model);
     // COLMAP has no panorama model, so the question only arises for the
@@ -2201,7 +2276,7 @@ void GuiApp::draw_lens_warning(const PrepInput& s, const std::string& model,
     const bool pano = builtin && model == "equirectangular";
     // A dual-lens file is two fisheye circles per frame whatever its pixel
     // dimensions are, so this one needs no measurement.
-    if (is_dual_fisheye_path(s.path)) {
+    if (is_dual_fisheye_path(path)) {
         if (pano) ui::TextColoredWrapped(kWarn, dmsg::lens_warn_dual_fisheye);
         else if (!fisheye)
             ui::TextColoredWrapped(kWarn, dmsg::lens_warn_needs_fisheye);
@@ -2209,7 +2284,7 @@ void GuiApp::draw_lens_warning(const PrepInput& s, const std::string& model,
     }
     if (!pano) return;
     int w = 0, h = 0;
-    if (!input_pixel_size(s, w, h)) return;
+    if (!input_pixel_size(path, is_video, w, h)) return;
     if (std::fabs((double)w / (double)h - 2.0) <= 0.02) return;
     ui::TextColoredWrapped(kWarn, dmsg::lens_warn_not_2to1, {w, h});
 }
@@ -2466,6 +2541,191 @@ void GuiApp::draw_dataset_steps() {
                            p.detail.empty() ? nullptr : p.detail.c_str());
     else if (!p.detail.empty())
         ui::TextDisabledRaw(p.detail);
+}
+
+// Which of the three previews the running step implies. Frames, masks and
+// feature extraction all show pictures, so they share one.
+int GuiApp::preview_for_stage() {
+    // A finished run keeps showing what its last step was on: the model is
+    // what somebody was watching when it ended, and falling back to the frames
+    // would hide it behind a click nobody knows to make.
+    if (!dataset_busy()) return _preview_last_stage;
+    switch (dataset_steps()->current()) {
+        case Stage::Frames:    return 0;
+        case Stage::Masks:     return 1;
+        case Stage::Features:  return 2;
+        case Stage::Matching:  return 3;
+        case Stage::Mapping:
+        case Stage::Finishing: return 4;
+    }
+    return -1;
+}
+
+// What the child has written about itself since the last look. Two stats and,
+// when something changed, a file of about a megabyte -- so it runs at 2 Hz
+// rather than every frame.
+void GuiApp::poll_sfm_progress() {
+    if (effective_engine() != Engine::BuiltIn) return;
+    const double now = ImGui::GetTime();
+    if (_sfm_polled_at > 0.0 && now - _sfm_polled_at < 0.5) return;
+    _sfm_polled_at = now;
+
+    // The frames of the extraction step are shown by whoever writes them; the
+    // features are read off disk, which is what this watcher is for.
+    if (dataset_busy() && dataset_steps()->current() == Stage::Features)
+        _features.start(_sfm.sfm_image_dir(), _sfm.features_dir(),
+                        &_film_features);
+
+    const std::string dir = _sfm.progress_dir();
+    if (dir.empty()) return;
+
+    PairMatrix pm;
+    if (read_pair_matrix(dir, _pairs_mtime, pm)) _matrix.set(pm);
+    // matches.bin is the whole truth and outlives the live file, which the run
+    // deletes with the rest of the intermediates.
+    if (!dataset_busy() &&
+        read_pair_matrix_from_matches(_sfm.matches_path(), _matches_mtime, pm))
+        _matrix.set(pm);
+
+    LiveModel lm;
+    if (read_live_model(dir, _model_mtime, lm)) {
+        _live_model = std::move(lm);
+        // The mapper's own output is a wall of per-registration detail, so the
+        // default log used to go quiet for the whole of the longest step. The
+        // snapshot has the exact counts and needs no line parsed out of a
+        // translated sentence, so say it here instead -- and give the step a
+        // real bar rather than a spinner.
+        if (dataset_busy() && _live_model.n_images) {
+            RunProgress& p = _sfm.steps();
+            p.count(Stage::Mapping, _live_model.n_registered, _live_model.n_images);
+            p.note(Stage::Mapping,
+                   i18n::format(dmsg::model_live_counts,
+                                {(long long)_live_model.n_registered,
+                                 (long long)_live_model.n_images,
+                                 (long long)_live_model.n_points}),
+                   /*detail=*/false);
+        }
+        // Same key every time: the pose the user navigated to belongs to the
+        // scene, not to the snapshot, and re-framing on every one of them
+        // would make the view unusable while it is most worth watching.
+        _model_view.attach_preview_data(_live_model.ds, _live_model.post,
+                                        "sfm-live", /*radius=*/1.0f,
+                                        /*with_cameras=*/true);
+        _model_attached = true;
+    }
+}
+
+void GuiApp::reset_dataset_preview() {
+    _features.stop();
+    _model_view.detach();
+    _model_view.destroy_gl();
+    _model_attached = false;
+    _live_model = LiveModel{};
+    _matrix.clear();
+    _matrix.destroy_gl();
+    for (FilmStrip* f : {&_film_frames, &_film_masks, &_film_features}) {
+        f->clear();
+        f->destroy_gl();
+    }
+    _model_mtime = _pairs_mtime = _matches_mtime = 0;
+    _preview_tab = -1;
+    _preview_last_stage = -1;
+}
+
+bool GuiApp::preview_has_content() const {
+    return _film_frames.has_frames() || _film_masks.has_frames() ||
+           _film_features.has_frames() || !_matrix.empty() || _model_attached;
+}
+
+// The frames / match map / model area. Which one it shows follows the running
+// step until the user picks one, because the step that is running is the one
+// worth looking at and nobody should have to keep up with it by hand.
+//
+// `height` of 0 asks for the splitter, which is what the one-column layout
+// needs; a column of its own hands its own height down instead.
+void GuiApp::draw_dataset_preview(float height) {
+    FilmStrip* strips[3] = {&_film_frames, &_film_masks, &_film_features};
+    const bool avail[5] = {_film_frames.has_frames(), _film_masks.has_frames(),
+                           _film_features.has_frames(), !_matrix.empty(),
+                           _model_attached};
+    bool any_avail = false;
+    for (bool v : avail) any_avail = any_avail || v;
+    if (!any_avail) return;
+
+    if (ui::Checkbox(dmsg::show_run_preview, &_show_preview)) save_settings();
+    ui::help_on_hover(dmsg::show_run_preview_help);
+    if (!_show_preview) return;
+
+    const int implied = preview_for_stage();
+    if (dataset_busy() && implied >= 0) _preview_last_stage = implied;
+    int tab = _preview_tab >= 0 ? _preview_tab : (implied >= 0 ? implied : 0);
+    if (!avail[tab]) {
+        for (int i = 0; i < 5; i++)
+            if (avail[i]) { tab = i; break; }
+    }
+
+    const Msg* names[5] = {&dmsg::view_frames, &dmsg::view_masks,
+                           &dmsg::view_features, &dmsg::view_matrix,
+                           &dmsg::view_model};
+    bool first = true;
+    for (int i = 0; i < 5; i++) {
+        if (!avail[i]) continue;
+        if (!first) ImGui::SameLine();
+        first = false;
+        if (ui::RadioButton(*names[i], tab == i)) {
+            tab = i;
+            // Picking one pins it: following the run is the default, not the
+            // rule, and a user who opened the match map to look at a seam
+            // should not lose it the moment mapping starts.
+            _preview_tab = i;
+        }
+    }
+    if (tab == 3) ui::help_on_hover(dmsg::matrix_help);
+
+    // In a column of its own the height is the column's; otherwise a splitter,
+    // as the log has -- the model view is worth a lot of height and the film
+    // strip very little, and only the user knows which they are looking at.
+    float h = height;
+    if (h <= 0.0f) {
+        h = px(_preview_h);
+        if (tab <= 2) h = std::min(h, px(120.0f));
+        const float line = ImGui::GetTextLineHeightWithSpacing();
+        float want = h;
+        if (splitter_h("##previewsplit", &want, 2.0f * line, px(600.0f),
+                       ImGui::GetContentRegionAvail().x)) {
+            _preview_h = want / ui_scale();
+            _layout_dirty = true;
+            h = want;
+        }
+    } else {
+        h = std::max(px(60.0f), h - ImGui::GetCursorPosY() +
+                                    ImGui::GetCursorStartPos().y);
+    }
+
+    if (tab <= 2) {
+        strips[tab]->draw(h - px(8.0f));
+        return;
+    }
+    if (tab == 3) {
+        ImGui::BeginChild("##matrix", ImVec2(0, h));
+        _matrix.draw(std::min(h - px(8.0f), ImGui::GetContentRegionAvail().x));
+        ImGui::EndChild();
+        return;
+    }
+    ui::Text(dmsg::model_live_counts,
+             {(long long)_live_model.n_registered, (long long)_live_model.n_images,
+              (long long)_live_model.n_points});
+    if (_live_model.empty()) {
+        ui::TextDisabledWrapped(dmsg::model_waiting);
+        return;
+    }
+    // Width capped against the height: the band is as wide as the window, and
+    // a 1600x150 letterbox of a 90-degree view shows a slice of the scene with
+    // everything in it apparently enormous.
+    const float w = std::min(ImGui::GetContentRegionAvail().x, h * 16.0f / 9.0f);
+    ImGui::BeginChild("##livemodel", ImVec2(w, h));
+    _model_view.draw(/*training=*/false);
+    ImGui::EndChild();
 }
 
 // Re-doing one step of what is already in the output folder, instead of the
@@ -2740,26 +3000,12 @@ void GuiApp::draw_tool_locations() {
 // The screen
 // ---------------------------------------------------------------------------
 
-void GuiApp::draw_new_dataset() {
-    const bool running = dataset_busy();
-
-    if (ui::Button(msg::back_home)) _screen = Screen::Home;
-    ImGui::SameLine();
-    ImGui::SetWindowFontScale(1.2f);
-    const bool from_video = !_sources.empty() && _sources[0].is_video;
-    ui::Text(from_video ? dmsg::title_from_video : dmsg::title_from_photos);
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::Spacing();
-
-    // Three bands: the form scrolls, the run controls and the log below it do
-    // not. Without that a window too short for the whole form pushed the log
-    // off the bottom -- and the log is what a reconstruction is watched
-    // through. The action band's height is measured from the last frame,
-    // because how tall it is depends on what it is saying.
-    const float log_h = log_height(ImGui::GetContentRegionAvail().y - _ds_action_h);
-    ImGui::BeginChild("##dsform",
-                      ImVec2(0, -(log_h + (log_h > 0 ? splitter_extent() : 0) +
-                                  _ds_action_h)));
+// The form, and under it the button that acts on it. One column of the screen
+// when a run has something to show beside it, the whole of it otherwise.
+void GuiApp::draw_dataset_form(float height, bool running) {
+    // The action band's height is measured from the last frame, because how
+    // tall it is depends on what it is saying.
+    ImGui::BeginChild("##dsform", ImVec2(0, height - _ds_action_h));
 
     // What is greyed out is decided per section, by whether the step that
     // reads it has started -- see dataset_locked. The whole form used to grey
@@ -2827,21 +3073,8 @@ void GuiApp::draw_new_dataset() {
             ui::TextDisabled(dmsg::pick_input_first);
         }
         if (ready) draw_dataset_rerun(probe_workspace(_workspace, _sources));
-    } else {
-        if (ui::Button(dmsg::cancel, ImVec2(px(200.0f), px(34.0f))))
-            cancel_dataset_job();
-        ImGui::SameLine();
-        ImGui::BeginGroup();
-        draw_dataset_steps();
-        ImGui::EndGroup();
-    }
-
-    // The strip outlives the run: whether the masks came out right is asked
-    // once they are finished, not only while they are being made.
-    if (_film.has_frames()) {
-        if (ui::Checkbox(dmsg::show_frames_strip, &_show_film)) save_settings();
-        ui::help_on_hover(dmsg::show_frames_strip_help);
-        if (_show_film) _film.draw(px(72.0f));
+    } else if (ui::Button(dmsg::cancel, ImVec2(px(200.0f), px(34.0f)))) {
+        cancel_dataset_job();
     }
 
     // Both runners report through the same three states.
@@ -2869,8 +3102,7 @@ void GuiApp::draw_new_dataset() {
     if (st.done) {
         if (effective_engine() == Engine::BuiltIn && _sfm.partial())
             ui::TextColoredWrapped(kWarn, dmsg::partial_reconstruction);
-        ui::TextColored(kOk, dmsg::done_at, {st.dir});
-        ImGui::SameLine();
+        ui::TextColoredWrapped(kOk, dmsg::done_at, {st.dir});
         if (ui::Button(dmsg::open_in_trainer)) {
             if (training_busy()) {
                 _pending = Pending::OpenDataset;
@@ -2887,6 +3119,72 @@ void GuiApp::draw_new_dataset() {
         ui::TextColored(kDim, dmsg::cancelled);
     }
     _ds_action_h = ImGui::GetCursorPosY() - action_y0;
+}
+
+void GuiApp::draw_new_dataset() {
+    const bool running = dataset_busy();
+
+    if (ui::Button(msg::back_home)) {
+        _screen = Screen::Home;
+        // The preview holds GL buffers and a decoding thread for a screen that
+        // is no longer up.
+        if (!dataset_busy()) reset_dataset_preview();
+    }
+    ImGui::SameLine();
+    ImGui::SetWindowFontScale(1.2f);
+    const bool from_video = !_sources.empty() && _sources[0].is_video;
+    ui::Text(from_video ? dmsg::title_from_video : dmsg::title_from_photos);
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::Spacing();
+
+    // What the run says about itself, read before the layout is decided:
+    // whether there is anything to show is what decides whether the screen is
+    // one column or two.
+    poll_sfm_progress();
+
+    // The log spans the bottom whatever the body does above it: it is the one
+    // panel that is read across everything, and it is what a run used to be
+    // watched entirely through.
+    const float log_h = log_height(ImGui::GetContentRegionAvail().y);
+    const float body_h = ImGui::GetContentRegionAvail().y - log_h -
+                         (log_h > 0 ? splitter_extent() : 0);
+
+    // Side by side only when there is a preview AND room for both. On a narrow
+    // window the preview goes under the form instead, which is worth less but
+    // costs the form nothing it cannot scroll.
+    const bool wide = ImGui::GetContentRegionAvail().x >= px(1000.0f);
+    const bool two_col = preview_has_content() && wide;
+
+    ImGui::BeginChild("##dsbody", ImVec2(0, body_h));
+    if (two_col) {
+        const float w = std::clamp(_ds_panel_w * ui_scale(), px(320.0f),
+                                   std::max(px(320.0f),
+                                            ImGui::GetContentRegionAvail().x * 0.6f));
+        const float col_h = ImGui::GetContentRegionAvail().y;
+        ImGui::BeginChild("##dsleft", ImVec2(w, col_h));
+        draw_dataset_form(col_h, running);
+        ImGui::EndChild();
+        float dragged = w;
+        if (splitter_v("##dspanelsplit", &dragged, px(320.0f),
+                       ImGui::GetWindowWidth() * 0.75f, col_h)) {
+            _ds_panel_w = dragged / ui_scale();
+            _layout_dirty = true;
+        }
+        ImGui::BeginGroup();
+        draw_dataset_steps();
+        draw_dataset_preview(ImGui::GetContentRegionAvail().y);
+        ImGui::EndGroup();
+    } else {
+        const float avail = ImGui::GetContentRegionAvail().y;
+        // The step strip belongs beside the Cancel button when it has no
+        // column of its own.
+        draw_dataset_form(avail - _ds_preview_h_used, running);
+        const float y0 = ImGui::GetCursorPosY();
+        if (running) draw_dataset_steps();
+        draw_dataset_preview(0.0f);
+        _ds_preview_h_used = ImGui::GetCursorPosY() - y0;
+    }
+    ImGui::EndChild();
 
     draw_log_panel(log_h);
 

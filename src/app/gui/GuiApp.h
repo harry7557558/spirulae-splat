@@ -11,8 +11,11 @@
 #include "app/gui/Fonts.h"
 #include "app/gui/ConfigUI.h"
 #include "app/gui/FileDialog.h"
+#include "app/gui/FeatureWatcher.h"
 #include "app/gui/FilmStrip.h"
 #include "app/gui/ImageCompare.h"
+#include "app/gui/MatchMatrix.h"
+#include "app/gui/SfmProgress.h"
 #include "app/gui/Layout.h"
 #include "app/gui/MeshRunner.h"
 #include "app/gui/ModelCache.h"
@@ -35,6 +38,8 @@ class GuiApp {
 public:
     static constexpr float kDefaultPanelW = 420.0f;
     static constexpr float kDefaultLogH = 150.0f;
+    static constexpr float kDefaultPreviewH = 260.0f;
+    static constexpr float kDefaultDsPanelW = 560.0f;
 
     GuiApp();
     ~GuiApp();
@@ -190,14 +195,28 @@ private:
     // a panorama model on frames that are not 2:1, an ordinary lens on a
     // dual-fisheye capture. Silent unless it is sure: an input whose size
     // could not be measured is not a complaint.
-    void draw_lens_warning(const PrepInput& s, const std::string& model,
-                           bool builtin);
+    void draw_lens_warning(const std::string& path, bool is_video,
+                           const std::string& model, bool builtin);
     // First photograph in a folder, or one frame of a video. Probed once per
     // path (an image header, or one `ffmpeg -i`) and remembered.
-    bool input_pixel_size(const PrepInput& s, int& w, int& h);
+    bool input_pixel_size(const std::string& path, bool is_video,
+                          int& w, int& h);
     void draw_masking_options();
     // The step list and its bars, in place of the one stage line.
     void draw_dataset_steps();
+    // The form and the button that acts on it, `height` tall.
+    void draw_dataset_form(float height, bool running);
+    // The frames / match map / model area, and the poll that feeds it from what
+    // the running child writes. `height` of 0 means "as tall as the splitter
+    // says", which is what the one-column layout uses.
+    void draw_dataset_preview(float height);
+    bool preview_has_content() const;
+    void poll_sfm_progress();
+    // Which of the three the running step implies, or -1 for none.
+    int preview_for_stage();
+    // Release everything the preview holds -- GL buffers, the watcher thread,
+    // the snapshot. Called when the screen is left and at shutdown.
+    void reset_dataset_preview();
     // "Re-run masking only" and friends: what probe_workspace already knows,
     // as the actions it implies.
     void draw_dataset_rerun(const WorkspaceState& prior);
@@ -356,9 +375,28 @@ private:
     ColmapJob _colmap_job;
     SfmRunner _sfm;
     SfmJob _sfm_job;
-    // The frames and masks a run is producing, as they are produced.
-    FilmStrip _film;
-    bool _show_film = true;
+    // ---- what a running job shows about itself ----
+    // One strip per step that produces pictures: the frames as they are
+    // written, the masks as they are made, and the frames again with the
+    // features found on them. Separate because they answer different questions
+    // and a run that does all three would otherwise overwrite its own evidence.
+    FilmStrip _film_frames, _film_masks, _film_features;
+    FeatureWatcher _features;
+    MatchMatrix _matrix;
+    // The model as the mapper builds it, drawn by the same GL preview the
+    // trainer screen uses before training starts.
+    ViewportPanel _model_view;
+    LiveModel _live_model;
+    bool _model_attached = false;
+    // Snapshot files already read, by their write time; 0 means "not yet".
+    int64_t _model_mtime = 0, _pairs_mtime = 0, _matches_mtime = 0;
+    double _sfm_polled_at = -1.0;
+    bool _show_preview = true;
+    // Which view the panel shows: -1 follows the running step, otherwise the
+    // one the user picked and wants to keep.
+    int _preview_tab = -1;
+    // The last step a run was on, so a finished run keeps showing its result.
+    int _preview_last_stage = -1;
     // Stages a re-run is to redo rather than reuse, set by draw_dataset_rerun
     // and consumed by start_dataset_job.
     bool _redo_frames = false, _redo_masks = false;
@@ -461,12 +499,19 @@ private:
     UiScale _scale;
     float _panel_w = kDefaultPanelW;
     float _log_h = kDefaultLogH;
+    float _preview_h = kDefaultPreviewH;
+    // The New Dataset screen's own column width; the trainer's _panel_w is a
+    // different screen with a different sensible size.
+    float _ds_panel_w = kDefaultDsPanelW;
     bool _show_settings = true;
     bool _layout_dirty = false;      // a splitter moved -> persist once idle
     // The New Dataset screen's run/status band, measured last frame: the form
     // above it is sized against this, and how tall it is depends on what the
     // run is saying.
     float _ds_action_h = 0.0f;
+    // ... and what the preview took under it when the window is too narrow for
+    // two columns, measured the same way.
+    float _ds_preview_h_used = 0.0f;
     // Masks sitting beside the photos are adopted automatically; this is the
     // way out for a folder whose masks/ describes something else.
     bool _use_found_masks = true;

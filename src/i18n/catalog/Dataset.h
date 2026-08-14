@@ -169,64 +169,255 @@ SS_MSG(step_locked,
     TR("Bu adım çoktan başladı, bu yüzden ayarları bu çalışma için sabit. "
        "Sonraki bir adımın okuduğu ayarlar hâlâ değiştirilebilir."));
 
-SS_MSG(show_frames_strip,
-    EN("Show the frames as they are written"),
-    JA("書き出されるフレームを表示する"),
-    ZH_HANS("显示正在写出的画面"),
-    ZH_HANT("顯示正在寫出的畫面"),
-    KO("써 나가는 프레임을 보여주기"),
-    DE("Die Bilder zeigen, während sie geschrieben werden"),
-    FR("Montrer les images au fur et à mesure"),
-    ES("Mostrar los fotogramas según se escriben"),
-    PT("Mostrar os quadros conforme são escritos"),
-    IT("Mostra i fotogrammi mentre vengono scritti"),
-    NL("De beelden tonen terwijl ze worden weggeschreven"),
-    RU("Показывать кадры по мере записи"),
-    TR("Kareleri yazılırken göster"));
+SS_MSG(show_run_preview,
+    EN("Show what the run is doing"),
+    JA("実行中の様子を表示する"),
+    ZH_HANS("显示运行过程"),
+    ZH_HANT("顯示執行過程"),
+    KO("진행 중인 모습 보여주기"),
+    DE("Zeigen, woran der Lauf gerade arbeitet"),
+    FR("Montrer ce que fait l'exécution"),
+    ES("Mostrar lo que está haciendo la ejecución"),
+    PT("Mostrar o que a execução está fazendo"),
+    IT("Mostra che cosa sta facendo l'esecuzione"),
+    NL("Tonen waar de run mee bezig is"),
+    RU("Показывать, чем занят запуск"),
+    TR("Çalışmanın ne yaptığını göster"));
 
-SS_MSG(show_frames_strip_help,
-    EN("A mask is the one thing a counter cannot tell you about: \"1400 images "
-       "masked\" says nothing about whether the prompt caught what you meant. "
-       "Masked-out areas are tinted red, exactly as in Try the mask."),
-    JA("マスクだけは数字ではわかりません。「1400 枚にマスクを作成」と出ていても、"
-       "狙ったものを捉えられたかはわかりません。隠される部分は「マスクを試す」と"
-       "同じように赤く染まります。"),
-    ZH_HANS("蒙版是计数说明不了的：显示“已给 1400 张图做蒙版”，并不告诉你提示词有没有"
+SS_MSG(show_run_preview_help,
+    EN("The frames as they are written, then the match map, then the model "
+       "being built -- whichever the running step is on. A mask is the one "
+       "thing a counter cannot tell you about: \"1400 images masked\" says "
+       "nothing about whether the prompt caught what you meant. Masked-out "
+       "areas are tinted red, exactly as in Try the mask."),
+    JA("書き出されるフレーム、照合マップ、組み上がっていくモデルを、"
+       "そのとき動いている工程に合わせて表示します。マスクだけは数字ではわかりません。"
+       "「1400 枚にマスクを作成」と出ていても、狙ったものを捉えられたかはわかりません。"
+       "隠される部分は「マスクを試す」と同じように赤く染まります。"),
+    ZH_HANS("依次显示正在写出的画面、匹配图和正在搭起来的模型 —— 跟着当前运行的步骤走。"
+            "蒙版是计数说明不了的：显示“已给 1400 张图做蒙版”，并不告诉你提示词有没有"
             "抓到你想要的东西。被遮住的区域会染成红色，和“试一下蒙版”里一样。"),
-    ZH_HANT("遮罩是計數說明不了的：顯示「已為 1400 張影像做遮罩」，並不告訴你提示詞有沒有"
+    ZH_HANT("依次顯示正在寫出的畫面、比對圖和正在搭起來的模型 —— 跟著目前執行的步驟走。"
+            "遮罩是計數說明不了的：顯示「已為 1400 張影像做遮罩」，並不告訴你提示詞有沒有"
             "抓到你想要的東西。被遮住的區域會染成紅色，和「試一下遮罩」裡一樣。"),
-    KO("마스크는 숫자로 알 수 없는 하나입니다. \"1400장 마스크 완료\"라고 해도 "
-       "프롬프트가 원하던 것을 잡았는지는 알 수 없습니다. 가려지는 부분은 "
+    KO("써 나가는 프레임, 정합 지도, 쌓여 가는 모델을 지금 도는 단계에 맞춰 "
+       "보여줍니다. 마스크는 숫자로 알 수 없는 하나입니다. \"1400장 마스크 완료\"라고 "
+       "해도 프롬프트가 원하던 것을 잡았는지는 알 수 없습니다. 가려지는 부분은 "
        "\"마스크 시험\"과 똑같이 붉게 물듭니다."),
-    DE("Eine Maske ist das Einzige, worüber ein Zähler nichts sagt: \"1400 "
-       "Bilder maskiert\" verrät nicht, ob der Text getroffen hat, was gemeint "
-       "war. Ausmaskierte Bereiche sind rot getönt, genau wie in \"Maske "
-       "ausprobieren\"."),
-    FR("Un masque est la seule chose qu'un compteur ne dit pas : \"1400 images "
-       "masquées\" n'indique pas si la description a attrapé ce que vous "
-       "vouliez. Les zones masquées sont teintées en rouge, comme dans "
-       "\"Essayer le masque\"."),
-    ES("Una máscara es lo único que un contador no cuenta: \"1400 imágenes "
-       "enmascaradas\" no dice si la descripción atrapó lo que querías. Las "
-       "zonas tapadas salen teñidas de rojo, igual que en \"Probar la "
-       "máscara\"."),
-    PT("Uma máscara é a única coisa que um contador não conta: \"1400 imagens "
-       "mascaradas\" não diz se a descrição pegou o que você queria. As áreas "
-       "tapadas ficam tingidas de vermelho, como em \"Testar a máscara\"."),
-    IT("Una maschera è l'unica cosa che un contatore non dice: \"1400 immagini "
-       "mascherate\" non dice se la descrizione ha preso ciò che volevi. Le "
-       "zone coperte sono tinte di rosso, come in \"Prova la maschera\"."),
-    NL("Een masker is het enige waarover een teller niets zegt: \"1400 "
+    DE("Die Bilder, während sie geschrieben werden, dann die Zuordnungskarte, "
+       "dann das entstehende Modell -- je nachdem, welcher Schritt gerade "
+       "läuft. Eine Maske ist das Einzige, worüber ein Zähler nichts sagt: "
+       "\"1400 Bilder maskiert\" verrät nicht, ob der Text getroffen hat, was "
+       "gemeint war. Ausmaskierte Bereiche sind rot getönt, genau wie in "
+       "\"Maske ausprobieren\"."),
+    FR("Les images au fur et à mesure, puis la carte d'appariement, puis le "
+       "modèle en construction -- selon l'étape en cours. Un masque est la "
+       "seule chose qu'un compteur ne dit pas : \"1400 images masquées\" "
+       "n'indique pas si la description a attrapé ce que vous vouliez. Les "
+       "zones masquées sont teintées en rouge, comme dans \"Essayer le "
+       "masque\"."),
+    ES("Los fotogramas según se escriben, luego el mapa de emparejado, luego el "
+       "modelo que se va armando, según el paso en curso. Una máscara es lo "
+       "único que un contador no cuenta: \"1400 imágenes enmascaradas\" no dice "
+       "si la descripción atrapó lo que querías. Las zonas tapadas salen "
+       "teñidas de rojo, igual que en \"Probar la máscara\"."),
+    PT("Os quadros conforme são escritos, depois o mapa de pareamento, depois o "
+       "modelo sendo montado -- conforme a etapa em curso. Uma máscara é a "
+       "única coisa que um contador não conta: \"1400 imagens mascaradas\" não "
+       "diz se a descrição pegou o que você queria. As áreas tapadas ficam "
+       "tingidas de vermelho, como em \"Testar a máscara\"."),
+    IT("I fotogrammi mentre vengono scritti, poi la mappa dei confronti, poi il "
+       "modello che si sta costruendo, secondo il passo in corso. Una maschera "
+       "è l'unica cosa che un contatore non dice: \"1400 immagini mascherate\" "
+       "non dice se la descrizione ha preso ciò che volevi. Le zone coperte "
+       "sono tinte di rosso, come in \"Prova la maschera\"."),
+    NL("De beelden terwijl ze worden weggeschreven, dan de koppelkaart, dan het "
+       "model dat wordt opgebouwd -- afhankelijk van de lopende stap. Een "
+       "masker is het enige waarover een teller niets zegt: \"1400 "
        "afbeeldingen gemaskeerd\" vertelt niet of de omschrijving ving wat je "
        "bedoelde. Weggemaskeerde delen kleuren rood, net als in \"Masker "
        "uitproberen\"."),
-    RU("Маска -- единственное, о чём счётчик ничего не говорит: \"замаскировано "
-       "1400 изображений\" не сообщает, поймал ли запрос то, что вы имели в "
-       "виду. Скрытые области подкрашены красным, как и в \"Проверить маску\"."),
-    TR("Maske, bir sayacın anlatamayacağı tek şeydir: \"1400 görüntü "
-       "maskelendi\" ifadesi, metnin istediğinizi yakalayıp yakalamadığını "
-       "söylemez. Maskelenen alanlar, \"Maskeyi dene\" bölümündeki gibi "
-       "kırmızıya boyanır."));
+    RU("Кадры по мере записи, затем карта сопоставлений, затем собираемая "
+       "модель -- смотря какой шаг идёт. Маска -- единственное, о чём счётчик "
+       "ничего не говорит: \"замаскировано 1400 изображений\" не сообщает, "
+       "поймал ли запрос то, что вы имели в виду. Скрытые области подкрашены "
+       "красным, как и в \"Проверить маску\"."),
+    TR("Kareler yazılırken, sonra eşleşme haritası, sonra kurulmakta olan model "
+       "-- hangi adım çalışıyorsa o. Maske, bir sayacın anlatamayacağı tek "
+       "şeydir: \"1400 görüntü maskelendi\" ifadesi, metnin istediğinizi "
+       "yakalayıp yakalamadığını söylemez. Maskelenen alanlar, \"Maskeyi "
+       "dene\" bölümündeki gibi kırmızıya boyanır."));
+
+// ---------------------------------------------------------------------------
+// What the preview panel shows: frames, the match matrix, the model
+// ---------------------------------------------------------------------------
+
+SS_MSG(view_frames,
+    EN("Frames"),        JA("フレーム"),      ZH_HANS("画面"),      ZH_HANT("畫面"),
+    KO("프레임"),         DE("Bilder"),       FR("Images"),       ES("Fotogramas"),
+    PT("Quadros"),       IT("Fotogrammi"),   NL("Beelden"),      RU("Кадры"),
+    TR("Kareler"));
+
+SS_MSG(view_masks,
+    EN("Masks"),         JA("マスク"),        ZH_HANS("蒙版"),      ZH_HANT("遮罩"),
+    KO("마스크"),         DE("Masken"),       FR("Masques"),      ES("Máscaras"),
+    PT("Máscaras"),      IT("Maschere"),     NL("Maskers"),      RU("Маски"),
+    TR("Maskeler"));
+
+SS_MSG(view_features,
+    EN("Features"),      JA("特徴点"),        ZH_HANS("特征点"),    ZH_HANT("特徵點"),
+    KO("특징점"),         DE("Merkmale"),     FR("Points"),       ES("Puntos"),
+    PT("Pontos"),        IT("Punti"),        NL("Kenmerken"),    RU("Признаки"),
+    TR("Öznitelikler"));
+
+SS_MSG(view_matrix,
+    EN("Match map"),
+    JA("照合マップ"),
+    ZH_HANS("匹配图"),
+    ZH_HANT("比對圖"),
+    KO("정합 지도"),
+    DE("Zuordnungskarte"),
+    FR("Carte d'appariement"),
+    ES("Mapa de emparejado"),
+    PT("Mapa de pareamento"),
+    IT("Mappa dei confronti"),
+    NL("Koppelkaart"),
+    RU("Карта сопоставлений"),
+    TR("Eşleşme haritası"));
+
+SS_MSG(view_model,
+    EN("Model"),         JA("モデル"),        ZH_HANS("模型"),      ZH_HANT("模型"),
+    KO("모델"),           DE("Modell"),       FR("Modèle"),       ES("Modelo"),
+    PT("Modelo"),        IT("Modello"),      NL("Model"),        RU("Модель"),
+    TR("Model"));
+
+SS_MSG(matrix_help,
+    EN("Which images were matched to which, brightest where the most points "
+       "survived. A capture shot as a walk gives a bright diagonal; if the walk "
+       "came back on itself, the corners light up too. A diagonal with dark "
+       "corners is a loop that did not close, which is what splits a "
+       "reconstruction in two."),
+    JA("どの画像どうしが照合できたかを示します。残った点が多いほど明るくなります。"
+       "歩きながら撮ると対角線が明るくなり、元の場所まで戻ってくると四隅も光ります。"
+       "対角線だけで四隅が暗いのは、輪が閉じていない状態です。"
+       "再構成が二つに割れるのはこれが原因です。"),
+    ZH_HANS("显示哪些图像互相匹配上了，留下的点越多越亮。边走边拍会出现明亮的对角线；"
+            "如果走回了原处，四角也会亮起来。只有对角线而四角发暗，说明回环没有闭合，"
+            "重建裂成两半就是这么来的。"),
+    ZH_HANT("顯示哪些影像互相比對上了，留下的點越多越亮。邊走邊拍會出現明亮的對角線；"
+            "如果走回了原處，四角也會亮起來。只有對角線而四角發暗，說明回環沒有閉合，"
+            "重建裂成兩半就是這麼來的。"),
+    KO("어떤 이미지끼리 맞춰졌는지 보여줍니다. 남은 점이 많을수록 밝습니다. "
+       "걸으면서 찍으면 밝은 대각선이 생기고, 제자리로 돌아오면 네 귀퉁이도 "
+       "밝아집니다. 대각선만 있고 귀퉁이가 어두우면 고리가 닫히지 않은 것이고, "
+       "재구성이 둘로 갈라지는 원인이 바로 이것입니다."),
+    DE("Welche Bilder einander zugeordnet wurden, am hellsten dort, wo die "
+       "meisten Punkte übrig blieben. Eine im Gehen gefilmte Aufnahme ergibt "
+       "eine helle Diagonale; kam der Weg auf sich selbst zurück, leuchten auch "
+       "die Ecken. Eine Diagonale mit dunklen Ecken ist eine Schleife, die sich "
+       "nicht geschlossen hat -- und genau das zerteilt eine Rekonstruktion."),
+    FR("Quelles images ont été appariées entre elles, le plus clair là où le "
+       "plus de points ont survécu. Une prise faite en marchant donne une "
+       "diagonale claire ; si le trajet est revenu sur lui-même, les coins "
+       "s'allument aussi. Une diagonale aux coins sombres est une boucle non "
+       "fermée, ce qui coupe une reconstruction en deux."),
+    ES("Qué imágenes se emparejaron con cuáles; más claro donde sobrevivieron "
+       "más puntos. Una toma hecha caminando da una diagonal clara; si el "
+       "recorrido volvió sobre sí mismo, también se encienden las esquinas. Una "
+       "diagonal con esquinas oscuras es un bucle que no cerró, que es lo que "
+       "parte en dos una reconstrucción."),
+    PT("Quais imagens foram pareadas com quais, mais claro onde sobraram mais "
+       "pontos. Uma captura feita andando dá uma diagonal clara; se o percurso "
+       "voltou sobre si mesmo, os cantos também acendem. Uma diagonal com "
+       "cantos escuros é um laço que não fechou, e é isso que parte uma "
+       "reconstrução em duas."),
+    IT("Quali immagini sono state confrontate con quali, più chiaro dove sono "
+       "rimasti più punti. Una ripresa fatta camminando dà una diagonale "
+       "chiara; se il percorso è tornato su se stesso si accendono anche gli "
+       "angoli. Una diagonale con gli angoli scuri è un anello che non si è "
+       "chiuso, ed è ciò che spezza in due una ricostruzione."),
+    NL("Welke beelden aan welke zijn gekoppeld, het helderst waar de meeste "
+       "punten overbleven. Een opname die al lopend is gemaakt geeft een "
+       "heldere diagonaal; kwam de route op zichzelf terug, dan lichten de "
+       "hoeken ook op. Een diagonaal met donkere hoeken is een lus die niet "
+       "sloot, en dat is wat een reconstructie in tweeën breekt."),
+    RU("Какие изображения сопоставились с какими; ярче там, где уцелело больше "
+       "точек. Съёмка на ходу даёт яркую диагональ; если путь вернулся к "
+       "началу, загораются и углы. Диагональ с тёмными углами -- это незамкнутая "
+       "петля, и именно она разрывает реконструкцию надвое."),
+    TR("Hangi görüntülerin hangileriyle eşleştiği; en çok nokta kalan yerde en "
+       "parlak. Yürüyerek yapılan bir çekim parlak bir köşegen verir; yol "
+       "kendine döndüyse köşeler de yanar. Köşeleri karanlık bir köşegen, "
+       "kapanmamış bir halkadır ve bir yeniden kurmayı ikiye bölen de budur."));
+
+SS_MSG(matrix_cell_pair,
+    EN("Images {0} and {1} -- matched points: {2}"),
+    JA("画像 {0} と {1} -- 対応した点: {2}"),
+    ZH_HANS("图像 {0} 与 {1} —— 匹配上的点：{2}"),
+    ZH_HANT("影像 {0} 與 {1} —— 比對上的點：{2}"),
+    KO("이미지 {0} 과 {1} -- 맞춰진 점: {2}"),
+    DE("Bilder {0} und {1} -- zugeordnete Punkte: {2}"),
+    FR("Images {0} et {1} -- points appariés : {2}"),
+    ES("Imágenes {0} y {1} -- puntos emparejados: {2}"),
+    PT("Imagens {0} e {1} -- pontos pareados: {2}"),
+    IT("Immagini {0} e {1} -- punti confrontati: {2}"),
+    NL("Beelden {0} en {1} -- gekoppelde punten: {2}"),
+    RU("Изображения {0} и {1} -- сопоставленные точки: {2}"),
+    TR("Görüntü {0} ile {1} -- eşleşen nokta: {2}"));
+
+SS_MSG(matrix_cell_range,
+    EN("Images {0}-{1} and {2}-{3} -- matched points: {4}"),
+    JA("画像 {0}-{1} と {2}-{3} -- 対応した点: {4}"),
+    ZH_HANS("图像 {0}-{1} 与 {2}-{3} —— 匹配上的点：{4}"),
+    ZH_HANT("影像 {0}-{1} 與 {2}-{3} —— 比對上的點：{4}"),
+    KO("이미지 {0}-{1} 과 {2}-{3} -- 맞춰진 점: {4}"),
+    DE("Bilder {0}-{1} und {2}-{3} -- zugeordnete Punkte: {4}"),
+    FR("Images {0}-{1} et {2}-{3} -- points appariés : {4}"),
+    ES("Imágenes {0}-{1} y {2}-{3} -- puntos emparejados: {4}"),
+    PT("Imagens {0}-{1} e {2}-{3} -- pontos pareados: {4}"),
+    IT("Immagini {0}-{1} e {2}-{3} -- punti confrontati: {4}"),
+    NL("Beelden {0}-{1} en {2}-{3} -- gekoppelde punten: {4}"),
+    RU("Изображения {0}-{1} и {2}-{3} -- сопоставленные точки: {4}"),
+    TR("Görüntü {0}-{1} ile {2}-{3} -- eşleşen nokta: {4}"));
+
+SS_MSG(model_live_counts,
+    EN("Placed cameras: {0} of {1}   Points: {2}"),
+    JA("配置できたカメラ: {0} / {1}   点: {2}"),
+    ZH_HANS("已定位相机：{0} / {1}   点：{2}"),
+    ZH_HANT("已定位相機：{0} / {1}   點：{2}"),
+    KO("자리를 잡은 카메라: {0} / {1}   점: {2}"),
+    DE("Platzierte Kameras: {0} von {1}   Punkte: {2}"),
+    FR("Caméras placées : {0} sur {1}   Points : {2}"),
+    ES("Cámaras situadas: {0} de {1}   Puntos: {2}"),
+    PT("Câmeras posicionadas: {0} de {1}   Pontos: {2}"),
+    IT("Fotocamere collocate: {0} su {1}   Punti: {2}"),
+    NL("Geplaatste camera's: {0} van {1}   Punten: {2}"),
+    RU("Размещено камер: {0} из {1}   Точек: {2}"),
+    TR("Yerleşen kamera: {0} / {1}   Nokta: {2}"));
+
+SS_MSG(model_waiting,
+    EN("Nothing placed yet -- the first two views have to agree before there is "
+       "anything to draw."),
+    JA("まだ何も配置されていません。最初の二枚が一致するまで描くものがありません。"),
+    ZH_HANS("还没有定位任何相机 —— 要等最初两张视图对上，才有东西可画。"),
+    ZH_HANT("還沒有定位任何相機 —— 要等最初兩張視圖對上，才有東西可畫。"),
+    KO("아직 자리를 잡은 것이 없습니다. 처음 두 장이 맞아야 그릴 것이 생깁니다."),
+    DE("Noch nichts platziert -- erst müssen sich die ersten beiden Ansichten "
+       "einig werden, bevor es etwas zu zeichnen gibt."),
+    FR("Rien de placé pour l'instant : il faut que les deux premières vues "
+       "s'accordent avant qu'il y ait quelque chose à dessiner."),
+    ES("Todavía no hay nada situado: las dos primeras vistas tienen que "
+       "coincidir antes de que haya algo que dibujar."),
+    PT("Ainda nada posicionado -- as duas primeiras vistas precisam concordar "
+       "antes de haver algo para desenhar."),
+    IT("Ancora niente collocato: le prime due viste devono trovarsi d'accordo "
+       "prima che ci sia qualcosa da disegnare."),
+    NL("Nog niets geplaatst -- de eerste twee aanzichten moeten het eens worden "
+       "voordat er iets te tekenen valt."),
+    RU("Пока ничего не размещено -- сначала должны сойтись первые два вида, и "
+       "только тогда появится что рисовать."),
+    TR("Henüz hiçbir şey yerleşmedi -- çizilecek bir şey olması için önce ilk "
+       "iki görüntünün anlaşması gerekiyor."));
 
 // ---------------------------------------------------------------------------
 // Re-doing one step of a run that is already on disk

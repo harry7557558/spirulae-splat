@@ -31,6 +31,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "sfm/core/Progress.h"
 #include "sfm/core/Features.h"
 #include "sfm/core/Model.h"
 #include "sfm/geometry/AbsolutePose.h"
@@ -3046,6 +3047,9 @@ private:
             slog::out(slog::Tag::Map, spirula::i18n::msg::sfm::map_registered,
                      {(long long)img, (long long)r.num_inliers, (long long)X.size(),
                       (long long)rec_.numRegistered()});
+        // Rate-limited inside, and a no-op without --progress-dir: this is the
+        // one point at which the model visibly grows.
+        progress::model(rec_);
         return true;
     }
 

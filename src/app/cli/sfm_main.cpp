@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "sfm/SfmConfig.h"
+#include "sfm/core/Progress.h"
 #include "sfm/core/CameraSetup.h"
 #include "sfm/core/Log.h"
 #include "sfm/core/Features.h"
@@ -123,6 +124,7 @@ static void ownOptionsAuto(FILE* out) {
              H::opt_auto_output.get());
     helpLine(out, "--no-masks", "", H::opt_no_masks.get());
     helpLine(out, "--no-manage", "", H::opt_no_manage_auto.get());
+    helpLine(out, "--progress-dir DIR", "", H::opt_progress_dir.get());
     helpLine(out, "-h, --help", "", H::opt_help.get());
 }
 static void ownOptionsExtract(FILE* out) {
@@ -131,12 +133,14 @@ static void ownOptionsExtract(FILE* out) {
 }
 static void ownOptionsMatch(FILE* out) {
     helpLine(out, "-o, --output FILE", "", H::opt_match_output.get());
+    helpLine(out, "--progress-dir DIR", "", H::opt_progress_dir.get());
     helpLine(out, "-h, --help", "", H::opt_help.get());
 }
 static void ownOptionsMap(FILE* out) {
     helpLine(out, "-o, --output DIR", "", H::opt_map_output.get());
     helpLine(out, "--audit", "", H::opt_map_audit.get());
     helpLine(out, "--no-manage", "", H::opt_no_manage_map.get());
+    helpLine(out, "--progress-dir DIR", "", H::opt_progress_dir.get());
     helpLine(out, "-h, --help", "", H::opt_help.get());
 }
 static void ownOptionsMerge(FILE* out) {
@@ -681,17 +685,21 @@ static std::vector<Reconstruction> runMapper(Mapper& mapper, const MatchesDataba
     const bool bup = cfg.mapper_mode == "bottom-up" || cfg.mapper_mode == "hierarchical";
     AssembleOptions ao = cfg.assemble;
     ao.verbose = !cfg.quiet;
+    std::vector<Reconstruction> models;
     if (!bup) {
         ao.tag = "map";
-        return assembleModels(mapper, mapper.run(), cfg.manager, ao, ast);
+        models = assembleModels(mapper, mapper.run(), cfg.manager, ao, ast);
+    } else {
+        ao.tag = "bup";
+        BottomUpStats bs;
+        BottomUpOptions bo = cfg.bup;
+        bo.verbose = !cfg.quiet;
+        models = bottomUpReconstruct(mapper, db, feats, bo, cfg.manager, ao, bs);
+        ast = bs.assemble;
     }
-    ao.tag = "bup";
-    BottomUpStats bs;
-    BottomUpOptions bo = cfg.bup;
-    bo.verbose = !cfg.quiet;
-    std::vector<Reconstruction> models =
-        bottomUpReconstruct(mapper, db, feats, bo, cfg.manager, ao, bs);
-    ast = bs.assemble;
+    // The assembly passes move images between models, so the last snapshot the
+    // mapper took is not what came out. Leave the largest result on screen.
+    if (!models.empty()) sfm::progress::model(models.front(), /*force=*/true);
     return models;
 }
 
@@ -1345,7 +1353,9 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
         if (calib) storeCameraSetup(db, calib->cameras);
         if (verbose)
             L::err(Tag::Match, M::match_verifying, {(long long)verificationThreadCount(vopt)});
+        sfm::progress::begin_matching((uint32_t)feats.size());
         db.pairs = verifyPairs(feats, pairs, matchFn, vopt, &stats.putative, progress);
+        sfm::progress::flush();
         for (const TwoViewMatches& tvm : db.pairs) stats.inliers += tvm.matches.size();
     } else {
         const size_t batch = std::max(1, opt.batch_pairs);
@@ -1379,6 +1389,11 @@ static int cmdMatch(int argc, char** argv) {
         if (a == "--output" || a == "-o") {
             if (i + 1 >= argc) return usageError("match", "--output: missing value");
             output = argv[++i];
+            continue;
+        }
+        if (a == "--progress-dir") {
+            if (i + 1 >= argc) return usageError("match", "--progress-dir: missing value");
+            sfm::progress::set_dir(argv[++i]);
             continue;
         }
         if (a == "--camera-model" || a == "--focal") {
@@ -1438,6 +1453,11 @@ static int cmdMap(int argc, char** argv) {
         if (a == "--output" || a == "-o") {
             if (i + 1 >= argc) return usageError("map", "--output: missing value");
             output = argv[++i];
+            continue;
+        }
+        if (a == "--progress-dir") {
+            if (i + 1 >= argc) return usageError("map", "--progress-dir: missing value");
+            sfm::progress::set_dir(argv[++i]);
             continue;
         }
         // Before the table, which also owns "audit" -- as the assembler's
@@ -1785,6 +1805,11 @@ static int cmdAuto(int argc, char** argv) {
         if (a == "--output" || a == "-o") {
             if (i + 1 >= argc) return usageError("auto", "--output: missing value");
             workspace = argv[++i];
+            continue;
+        }
+        if (a == "--progress-dir") {
+            if (i + 1 >= argc) return usageError("auto", "--progress-dir: missing value");
+            sfm::progress::set_dir(argv[++i]);
             continue;
         }
         if (a == "--no-masks") { cfg.mask_dir.clear(); maskdir_explicit = true; continue; }

@@ -939,6 +939,50 @@ SS_MSG(opt_auto_output,
     TR("Yazılacak çalışma alanı: features/, matches.bin ve sparse/0.. buraya "
        "iner."));
 
+SS_MSG(opt_progress_dir,
+    EN("Write snapshots of the run into DIR while it goes -- the current model "
+       "and the pair matrix -- for a front end that is watching. Off by "
+       "default; the graphical interface passes it to its own child."),
+    JA("実行中の様子を DIR に書き出します。今の再構成と画像ペアの対応表で、"
+       "画面で見ているものが読み取ります。既定では書き出しません。"
+       "グラフィカル版が自分の子プロセスに渡します。"),
+    ZH_HANS("运行时把过程快照写入 DIR —— 当前的重建结果和图像配对表 —— 供正在观察的"
+            "界面读取。默认不写。图形界面会把它传给自己的子进程。"),
+    ZH_HANT("執行時把過程快照寫入 DIR —— 目前的重建結果和影像配對表 —— 供正在觀察的"
+            "介面讀取。預設不寫。圖形介面會把它傳給自己的子行程。"),
+    KO("실행 중의 상태를 DIR 에 씁니다. 지금까지의 재구성과 이미지 짝 표로, "
+       "화면에서 지켜보는 쪽이 읽습니다. 기본값은 쓰지 않기입니다. "
+       "그래픽 화면이 자기 자식 프로세스에 넘깁니다."),
+    DE("Während des Laufs Momentaufnahmen nach DIR schreiben -- das aktuelle "
+       "Modell und die Paarmatrix -- für eine Oberfläche, die zusieht. "
+       "Standardmäßig aus; die grafische Oberfläche gibt es ihrem eigenen "
+       "Kindprozess mit."),
+    FR("Écrire des instantanés de l'exécution dans DIR au fur et à mesure -- le "
+       "modèle courant et la matrice des paires -- pour une interface qui "
+       "regarde. Désactivé par défaut ; l'interface graphique le passe à son "
+       "propre processus enfant."),
+    ES("Escribir instantáneas de la ejecución en DIR sobre la marcha (el modelo "
+       "actual y la matriz de pares) para una interfaz que está mirando. "
+       "Desactivado por omisión; la interfaz gráfica se lo pasa a su propio "
+       "proceso hijo."),
+    PT("Escrever instantâneos da execução em DIR conforme ela anda -- o modelo "
+       "atual e a matriz de pares -- para uma interface que está olhando. "
+       "Desligado por padrão; a interface gráfica passa isso ao próprio "
+       "processo filho."),
+    IT("Scrivere istantanee dell'esecuzione in DIR mentre procede -- il modello "
+       "corrente e la matrice delle coppie -- per un'interfaccia che sta "
+       "guardando. Disattivo per impostazione predefinita; l'interfaccia "
+       "grafica lo passa al proprio processo figlio."),
+    NL("Tijdens de run momentopnamen naar DIR schrijven -- het huidige model en "
+       "de parenmatrix -- voor een schil die meekijkt. Standaard uit; de "
+       "grafische schil geeft het aan zijn eigen kindproces mee."),
+    RU("По ходу работы писать снимки в DIR -- текущую модель и матрицу пар -- "
+       "для оболочки, которая за этим следит. По умолчанию выключено; "
+       "графическая оболочка передаёт это своему дочернему процессу."),
+    TR("Çalışma sürerken anlık görüntüleri DIR içine yaz -- şu anki model ve "
+       "çift dizeyi -- izleyen bir arayüz için. Öntanımlı olarak kapalı; "
+       "grafik arayüz bunu kendi alt sürecine geçirir."));
+
 SS_MSG(opt_no_masks,
     EN("Ignore a masks directory even if one is sitting beside the images."),
     JA("画像の隣にマスクのディレクトリがあっても無視します。"),

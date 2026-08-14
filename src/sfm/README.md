@@ -52,6 +52,14 @@ images/ ──► extract ──► features/ ─┐
 
 `spirula sfm auto` runs all of it from two knobs, `--quality` and `--data-type`.
 
+`--progress-dir DIR` adds a second, optional output: `model.bin` (the poses and
+a subsample of the points as they stand) and `pairs.bin` (a binned inlier count
+per image pair), rewritten at most every 1.5 s and renamed into place so a
+reader never sees half of one. It is off unless asked for, and it exists so a
+front end can show a run rather than tail it — the GUI passes it to its own
+child and polls the two files (`src/sfm/core/Progress.h`,
+`src/app/gui/SfmProgress.h`). Nothing in the pipeline reads them back.
+
 The `map` box is one incremental reconstruction of the whole capture by default.
 `--mapper bottom-up` replaces it with the opposite schedule (`map/Bottomup.h`,
 D57): the verified view graph is cut by normalized cut into *atoms* of a few

@@ -132,7 +132,7 @@ public:
 
     // `film` is the screen's thumbnail strip, or null for a caller that has
     // none; it outlives the run.
-    void start(const SfmJob& job, FilmStrip* film = nullptr);
+    void start(const SfmJob& job, RunFilms films = {});
     // Replace the settings no stage has read yet, so the screen's masking and
     // reconstruction options stay live while an earlier stage works. The
     // inputs, the output folder and the frame settings define the run and are
@@ -154,6 +154,13 @@ public:
     std::string mask_dir();
     // 0..1 within the current stage, or -1 when it cannot be estimated.
     float progress() const;
+    // Where the child is writing its snapshots, and the two folders the screen
+    // reads alongside them. Set once the run has decided its workspace; empty
+    // before that and for a run that produced neither.
+    std::string progress_dir();
+    std::string features_dir();
+    std::string matches_path();
+    std::string sfm_image_dir();
     // Done, but under half the images registered (or a high reprojection
     // error). The dataset is usable; the user should know it has gaps.
     bool partial() const { return _partial.load(); }
@@ -180,9 +187,11 @@ private:
     std::atomic<bool> _cancel{false};
     std::atomic<bool> _partial{false};
     RunProgress _prog;
-    FilmStrip* _film = nullptr;
+    RunFilms _films;
     std::mutex _mu;
     std::string _error, _dataset_dir, _image_dir, _mask_dir;
+    // Absolute; what the screen polls while the run is going.
+    std::string _progress_dir, _features_dir, _matches_path, _sfm_image_dir;
     SfmJob _live;                        // guarded by _mu; see update()
 };
 

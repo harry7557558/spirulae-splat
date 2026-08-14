@@ -181,7 +181,7 @@ public:
 
     ~ColmapRunner();
 
-    void start(const ColmapJob& job, FilmStrip* film = nullptr);
+    void start(const ColmapJob& job, RunFilms films = {});
     // Replace the settings no stage has read yet; see SfmRunner::update.
     void update(const ColmapJob& job);
     void cancel();
@@ -211,7 +211,7 @@ private:
     std::atomic<State> _state{State::Idle};
     std::atomic<bool> _cancel{false};
     RunProgress _prog;
-    FilmStrip* _film = nullptr;
+    RunFilms _films;
     std::mutex _mu;                      // guards the strings below
     std::string _error, _dataset_dir, _image_dir, _mask_dir;
     ColmapJob _live;                     // guarded by _mu; see update()

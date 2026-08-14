@@ -1,0 +1,264 @@
+// SfmProgress.cpp -- see SfmProgress.h.
+
+#include "app/gui/SfmProgress.h"
+
+#include "core/CameraModel.h"
+
+#include "sfm/core/Progress.h"
+#ifdef SS_TOOL_SFM
+#include "sfm/core/Features.h"
+#include "sfm/core/Matches.h"
+#endif
+
+#include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+
+namespace fs = std::filesystem;
+
+namespace gui {
+
+namespace {
+
+// Whole file, or empty when it is not there. A snapshot is at most ~1 MB and
+// arrives by rename, so there is no partial read to guard against.
+std::string slurp_if_newer(const fs::path& p, int64_t& mtime) {
+    std::error_code ec;
+    const auto t = fs::last_write_time(p, ec);
+    if (ec) return {};
+    const int64_t stamp = t.time_since_epoch().count();
+    if (stamp == mtime) return {};
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return {};
+    std::string b((std::istreambuf_iterator<char>(f)),
+                  std::istreambuf_iterator<char>());
+    mtime = stamp;
+    return b;
+}
+
+// A cursor that refuses to run off the end, so a truncated file yields an
+// empty result instead of a crash.
+struct Reader {
+    const char* p;
+    const char* end;
+    bool ok = true;
+    bool take(void* dst, size_t n) {
+        if (!ok || (size_t)(end - p) < n) return ok = false;
+        std::memcpy(dst, p, n);
+        p += n;
+        return true;
+    }
+    uint32_t u32() { uint32_t v = 0; take(&v, 4); return v; }
+    uint64_t u64() { uint64_t v = 0; take(&v, 8); return v; }
+    float f32() { float v = 0; take(&v, 4); return v; }
+};
+
+}  // namespace
+
+bool read_live_model(const std::string& dir, int64_t& mtime, LiveModel& out) {
+    const std::string b = slurp_if_newer(fs::path(dir) / "model.bin", mtime);
+    if (b.size() < 24 || std::memcmp(b.data(), "VKPM", 4) != 0) return false;
+
+    Reader r{b.data() + 4, b.data() + b.size()};
+    if (r.u32() != 2) return false;
+    LiveModel m;
+    m.n_images = r.u32();
+    m.n_registered = r.u32();
+    m.n_points = r.u64();
+
+    ParsedDataset& ds = m.ds;
+    ds.num_cameras = (int64_t)m.n_registered;
+    ds.c2w.resize((size_t)m.n_registered * 12);
+    ds.intrins.resize((size_t)m.n_registered * 4);
+    ds.widths.resize(m.n_registered);
+    ds.heights.resize(m.n_registered);
+    ds.camera_models.assign(m.n_registered, (int32_t)CameraModelType::PINHOLE);
+    ds.camera_distortions.assign(m.n_registered,
+                                 (int32_t)CameraDistortionType::None);
+    ds.dist_coeffs.assign((size_t)m.n_registered * kCameraDistortionParams, 0.0f);
+    std::vector<double> params;
+    for (uint32_t i = 0; i < m.n_registered; i++) {
+        for (int k = 0; k < 12; k++) ds.c2w[(size_t)i * 12 + k] = r.f32();
+        const int w = (int)r.u32(), h = (int)r.u32();
+        ds.widths[i] = (int32_t)w;
+        ds.heights[i] = (int32_t)h;
+        const int model_id = (int)r.u32();
+        const uint32_t np = r.u32();
+        if (!r.ok || np > 16) return false;
+        params.resize(np);
+        for (uint32_t k = 0; k < np; k++) r.take(&params[k], 8);
+        // The parser's own mapping, so a fisheye draws as a fisheye rather
+        // than as the pinhole a bare focal length would suggest.
+        PreviewIntrins pi;
+        if (colmap_preview_intrins(model_id, w, h, params, pi)) {
+            ds.camera_models[i] = pi.model;
+            ds.camera_distortions[i] = pi.distortion;
+            ds.intrins[(size_t)i * 4 + 0] = pi.fx;
+            ds.intrins[(size_t)i * 4 + 1] = pi.fy;
+            ds.intrins[(size_t)i * 4 + 2] = pi.cx;
+            ds.intrins[(size_t)i * 4 + 3] = pi.cy;
+            for (int k = 0; k < kCameraDistortionParams; k++)
+                ds.dist_coeffs[(size_t)i * kCameraDistortionParams + k] = pi.dist[k];
+        } else if (params.size() >= 4) {
+            // A model the parser will not map without a fit; a plain frustum
+            // from whatever the first four parameters are is still the right
+            // place in space.
+            for (int k = 0; k < 4; k++)
+                ds.intrins[(size_t)i * 4 + k] = (float)params[k];
+        }
+    }
+    const uint32_t n_pts = r.u32();
+    if (!r.ok) return false;
+    ds.points.xyz.resize((size_t)n_pts * 3);
+    ds.points.rgb.resize((size_t)n_pts * 3);
+    for (uint32_t i = 0; i < n_pts; i++) {
+        for (int k = 0; k < 3; k++) ds.points.xyz[(size_t)i * 3 + k] = r.f32();
+        r.take(&ds.points.rgb[(size_t)i * 3], 3);
+    }
+    if (!r.ok) return false;
+
+    // The preview frames a scene by putting the camera one unit from the
+    // origin, because a parsed dataset arrives centred on its poses and scaled
+    // to fit. A model straight out of the mapper is in whatever frame the seed
+    // pair fixed, so give it the same similarity the parsers record: centre on
+    // the camera positions, scale so they fit inside the unit sphere.
+    float centre[3] = {0, 0, 0};
+    if (m.n_registered) {
+        for (uint32_t i = 0; i < m.n_registered; i++)
+            for (int k = 0; k < 3; k++)
+                centre[k] += ds.c2w[(size_t)i * 12 + k * 4 + 3];
+        for (float& c : centre) c /= (float)m.n_registered;
+    }
+    float radius = 0.0f;
+    for (uint32_t i = 0; i < m.n_registered; i++) {
+        float d = 0.0f;
+        for (int k = 0; k < 3; k++) {
+            const float v = ds.c2w[(size_t)i * 12 + k * 4 + 3] - centre[k];
+            d += v * v;
+        }
+        radius = std::max(radius, std::sqrt(d));
+    }
+    // One or two cameras have no spread to measure; the points are all there
+    // is to frame by until the third arrives.
+    if (radius <= 1e-6f && n_pts) {
+        for (uint32_t i = 0; i < n_pts; i++) {
+            float d = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                const float v = ds.points.xyz[(size_t)i * 3 + k] - centre[k];
+                d += v * v;
+            }
+            radius = std::max(radius, std::sqrt(d));
+        }
+        radius *= 0.25f;   // points reach far past the cameras that saw them
+    }
+    if (!(radius > 1e-6f)) radius = 1.0f;
+    ds.train_frame_scale = radius;
+    // normalized -> train, which is what the field holds: scale then offset.
+    ds.train_to_normalized = {radius, 0, 0, centre[0],
+                              0, radius, 0, centre[1],
+                              0, 0, radius, centre[2],
+                              0, 0, 0, 1};
+
+    // The frustum-size heuristic reads only these two, and a live model has no
+    // camera bake behind it to fill the rest from.
+    m.post.n_post = ds.num_cameras;
+    m.post.c2w_flip = ds.c2w;
+
+    out = std::move(m);
+    return true;
+}
+
+namespace {
+
+void note_peak(PairMatrix& m) {
+    m.peak = 0;
+    for (uint32_t v : m.counts) m.peak = std::max(m.peak, v);
+}
+
+}  // namespace
+
+bool read_pair_matrix(const std::string& dir, int64_t& mtime, PairMatrix& out) {
+    const std::string b = slurp_if_newer(fs::path(dir) / "pairs.bin", mtime);
+    if (b.size() < 16 || std::memcmp(b.data(), "VKPP", 4) != 0) return false;
+    Reader r{b.data() + 4, b.data() + b.size()};
+    if (r.u32() != 1) return false;
+    PairMatrix m;
+    m.n_images = r.u32();
+    m.bins = r.u32();
+    if (!r.ok || m.bins == 0 || m.bins > sfm::progress::kMatrixBins) return false;
+    m.counts.resize((size_t)m.bins * m.bins);
+    if (!r.take(m.counts.data(), m.counts.size() * 4)) return false;
+    note_peak(m);
+    out = std::move(m);
+    return true;
+}
+
+bool read_pair_matrix_from_matches(const std::string& matches_path,
+                                   int64_t& mtime, PairMatrix& out) {
+#ifndef SS_TOOL_SFM
+    (void)matches_path; (void)mtime; (void)out;
+    return false;
+#else
+    std::error_code ec;
+    const auto t = fs::last_write_time(matches_path, ec);
+    if (ec) return false;
+    const int64_t stamp = t.time_since_epoch().count();
+    if (stamp == mtime) return false;
+
+    sfm::MatchesDatabase db;
+    try {
+        db = sfm::readMatches(matches_path);
+    } catch (const std::exception&) {
+        return false;
+    }
+    mtime = stamp;
+    PairMatrix m;
+    m.n_images = (uint32_t)db.images.size();
+    if (m.n_images == 0) return false;
+    m.bins = std::min(m.n_images, sfm::progress::kMatrixBins);
+    m.counts.assign((size_t)m.bins * m.bins, 0);
+    for (const sfm::TwoViewMatches& p : db.pairs) {
+        if (p.image1 >= m.n_images || p.image2 >= m.n_images) continue;
+        const uint32_t a = (uint32_t)((uint64_t)p.image1 * m.bins / m.n_images);
+        const uint32_t b = (uint32_t)((uint64_t)p.image2 * m.bins / m.n_images);
+        m.counts[(size_t)a * m.bins + b] += (uint32_t)p.matches.size();
+        m.counts[(size_t)b * m.bins + a] += (uint32_t)p.matches.size();
+    }
+    note_peak(m);
+    out = std::move(m);
+    return true;
+#endif
+}
+
+bool read_keypoints(const std::string& features_dir, const std::string& rel_stem,
+                    int width, int height, std::vector<float>& xy_out) {
+    xy_out.clear();
+#ifndef SS_TOOL_SFM
+    (void)features_dir; (void)rel_stem; (void)width; (void)height;
+    return false;
+#else
+    const fs::path p = fs::path(features_dir) / (rel_stem + ".bin");
+    std::error_code ec;
+    if (!fs::exists(p, ec)) return false;
+    sfm::FeatureSet fs_;
+    try {
+        fs_ = sfm::readFeatures(p.string(), /*with_descriptors=*/false);
+    } catch (const std::exception&) {
+        return false;
+    }
+    // The extractor may have measured on a downscaled copy; the file says which
+    // size its coordinates are in, so the caller's image size is what they have
+    // to be brought to.
+    const float sx = fs_.width > 0 && width > 0 ? (float)width / fs_.width : 1.0f;
+    const float sy = fs_.height > 0 && height > 0 ? (float)height / fs_.height : 1.0f;
+    xy_out.reserve(fs_.keypoints.size() * 2);
+    for (const sfm::Keypoint& k : fs_.keypoints) {
+        xy_out.push_back(k.x * sx);
+        xy_out.push_back(k.y * sy);
+    }
+    return true;
+#endif
+}
+
+}  // namespace gui

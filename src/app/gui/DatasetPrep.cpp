@@ -539,6 +539,21 @@ bool any_image(const fs::path& p) {
 
 bool folder_has_images(const std::string& dir) { return any_image(dir); }
 
+std::vector<std::string> camera_subfolders(const std::string& dir) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    // One level only, and any_image stops at the first hit, so this stays cheap
+    // enough for the draw that asks it.
+    for (fs::directory_iterator it(dir, kWalk, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (!it->is_directory(ec)) continue;
+        if (is_mask_folder(it->path().string())) continue;
+        if (any_image(it->path())) out.push_back(it->path().filename().string());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 bool folder_looks_like_dataset(const std::string& dir) {
     std::error_code ec;
     const fs::path p(dir);
@@ -729,6 +744,11 @@ bool DatasetPrep::run(const PrepJob& job_in, PrepResult& out, std::string& error
         const PrepInput& in = job.inputs[0];
         out.image_dir = fs::absolute(in.path).string();
         out.image_dir_cfg = out.image_dir;
+        // A capture handed over already split into cam/, cam0/, cam1/ is
+        // several cameras, exactly as a multi-track video is -- and the folders
+        // are what says so, since this path copies nothing.
+        if (camera_subfolders(out.image_dir).size() > 1)
+            out.per_folder_cameras = true;
         per[0].images = per[0].images_rel = out.image_dir;
         if (in.mask_dir.empty()) {
             // Nothing came with them, so anything generated goes in the
@@ -944,10 +964,10 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
         (void)decoded;
         progress.update(written);
     };
-    if (_film) {
+    if (_films.frames) {
         sinks.preview = [this](const uint8_t* rgb, int w, int h,
                                const std::string& name) {
-            if (_film->wants()) _film->offer(rgb, w, h, name);
+            if (_films.frames->wants()) _films.frames->offer(rgb, w, h, name);
         };
     }
 
@@ -1277,9 +1297,10 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
             return false;
         }
         if (!stencil.apply(todo_files[k], image_root, mask, error)) return false;
-        if (_film && _film->wants())
-            _film->offer(img.data.data(), img.width, img.height,
-                         todo_files[k].filename().string(), mask.data.data());
+        if (_films.masks && _films.masks->wants())
+            _films.masks->offer(img.data.data(), img.width, img.height,
+                                todo_files[k].filename().string(),
+                                mask.data.data());
         app::WriteJob wj;
         wj.mask = std::move(mask);
         wj.path = todo_dst[k].string();

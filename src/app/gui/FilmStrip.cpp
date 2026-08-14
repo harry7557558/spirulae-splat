@@ -21,7 +21,7 @@ bool FilmStrip::wants(double min_interval_s) const {
 }
 
 void FilmStrip::offer(const uint8_t* rgb, int w, int h, const std::string& name,
-                      const uint8_t* mask) {
+                      const uint8_t* mask, FramePoints points) {
     if (!rgb || w <= 0 || h <= 0) return;
     const int step = std::max(1, (std::max(w, h) + kFilmMaxSide - 1) / kFilmMaxSide);
     const int dw = std::max(1, w / step), dh = std::max(1, h / step);
@@ -58,12 +58,25 @@ void FilmStrip::offer(const uint8_t* rgb, int w, int h, const std::string& name,
         }
     }
 
+    // Fractions of the picture, so the panel can draw them at whatever size it
+    // ends up giving the thumbnail.
+    std::vector<float> pts;
+    if (points.xy && points.count) {
+        const size_t thin = points.count / kMaxOverlay + 1;
+        pts.reserve(points.count / thin * 2);
+        for (size_t i = 0; i < points.count; i += thin) {
+            pts.push_back(points.xy[i * 2 + 0] / (float)w);
+            pts.push_back(points.xy[i * 2 + 1] / (float)h);
+        }
+    }
+
     std::lock_guard<std::mutex> lk(_mu);
     Slot& s = _slots[_seq % kFilmSlots];
     s.rgb.swap(out);
     s.w = dw;
     s.h = dh;
     s.name = name;
+    s.pts.swap(pts);
     s.seq = ++_seq;
 }
 
@@ -71,6 +84,7 @@ void FilmStrip::clear() {
     std::lock_guard<std::mutex> lk(_mu);
     for (Slot& s : _slots) {
         s.rgb.clear();
+        s.pts.clear();
         s.w = s.h = 0;
         s.seq = 0;
         s.uploaded = 0;
@@ -96,8 +110,13 @@ bool FilmStrip::draw(float height) {
     std::sort(order, order + n,
               [this](int a, int b) { return _slots[a].seq < _slots[b].seq; });
 
-    ImGui::BeginChild("##film", ImVec2(0, height + px(4.0f)), 0,
-                      ImGuiWindowFlags_HorizontalScrollbar);
+    // A thumbnail is worth about this much height and no more; a column tall
+    // enough for several rows gets several rows rather than one enormous one.
+    const float row_h = std::min(height, px(150.0f));
+    ImGui::BeginChild("##film", ImVec2(0, height + px(4.0f)));
+    const float avail_w = ImGui::GetContentRegionAvail().x;
+    const float gap = ImGui::GetStyle().ItemSpacing.x;
+    float row_x = 0.0f;
     for (int i = 0; i < n; i++) {
         Slot& s = _slots[order[i]];
         if (s.uploaded != s.seq && s.w > 0) {
@@ -113,9 +132,26 @@ bool FilmStrip::draw(float height) {
             s.uploaded = s.seq;
         }
         if (!s.tex) continue;
-        if (i) ImGui::SameLine();
-        const float w = height * (float)s.w / (float)std::max(1, s.h);
-        ImGui::Image((ImTextureID)(intptr_t)s.tex, ImVec2(w, height));
+        const float w = row_h * (float)s.w / (float)std::max(1, s.h);
+        if (row_x > 0.0f && row_x + w <= avail_w) {
+            ImGui::SameLine();
+        } else if (row_x > 0.0f) {
+            row_x = 0.0f;
+        }
+        row_x += w + gap;
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        ImGui::Image((ImTextureID)(intptr_t)s.tex, ImVec2(w, row_h));
+        // Feature positions, drawn over the picture rather than baked into it:
+        // the same thumbnail is shown before extraction reaches it.
+        if (!s.pts.empty()) {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImU32 col = IM_COL32(120, 255, 140, 220);
+            for (size_t k = 0; k + 1 < s.pts.size(); k += 2) {
+                const float x = at.x + s.pts[k] * w;
+                const float y = at.y + s.pts[k + 1] * row_h;
+                dl->AddRectFilled(ImVec2(x, y), ImVec2(x + 1.5f, y + 1.5f), col);
+            }
+        }
         if (ImGui::IsItemHovered() && !s.name.empty())
             ui::SetTooltipRaw(s.name);
     }
