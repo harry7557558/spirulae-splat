@@ -5,13 +5,13 @@
 # Spirula Studio
 
 ![GPLv3 License](https://img.shields.io/badge/License-GPLv3-blue.svg)&nbsp;
-![GitHub Release](https://img.shields.io/github/v/release/harry7557558/spirulae-splat)&nbsp;
+![GitHub Releases](https://img.shields.io/github/v/release/harry7557558/spirula-studio)&nbsp;
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue)
 
-[**Download**](https://github.com/harry7557558/spirulae-splat/releases/) &#8226;
+[**Download**](https://github.com/harry7557558/spirula-studio/releases/) &#8226;
 [**Build from Source**](#build-from-source) &#8226;
 [**Gallery**](#gallery) &#8226;
-[**Web Viewer**](https://harry7557558.github.io/spirulae-splat/viewer/)
+[**Web Viewer**](https://harry7557558.github.io/spirula-studio/viewer/)
 
 </div>
 
@@ -45,7 +45,7 @@ Spirula Studio trains 3D Gaussian Splatting models &ndash; from raw photo/video 
 
 ## News
 
-- **August 14, 2026: macOS support** &ndash; Support for training on macOS/Apple Silicon has been validated. The app can now be downloaded from [GitHub Release](https://github.com/harry7557558/spirulae-splat/releases/).
+- **August 14, 2026: macOS support** &ndash; Support for training on macOS/Apple Silicon has been validated. The app can now be downloaded from [Releases page](https://github.com/harry7557558/spirula-studio/releases/).
 
 - **August 8, 2026: Multilingual support** &ndash; Multilingual support has been added, available to both GUI and CLI. Supported languages: English, 日本語, 简体中文, 繁體中文, 한국어, Deutsch, Français, Español, Português, Italiano, Nederlands, Русский, Türkçe.
 
@@ -58,7 +58,7 @@ Spirula Studio trains 3D Gaussian Splatting models &ndash; from raw photo/video 
 
 ## Download
 
-Binaries for Windows, Linux, and macOS may be downloaded from [GitHub Release](https://github.com/harry7557558/spirulae-splat/releases/). Simply select the one for your platform, download and unzip, and double click to open the GUI.
+Binaries for Windows, Linux, and macOS can be downloaded from [Releases page](https://github.com/harry7557558/spirula-studio/releases/). Simply select the one for your platform, download and unzip, and double click to open the GUI.
 
 If you are training on remote/cloud GPUs, you may use the CLI &ndash; Run `spirula --help` for details. By default, `spirula train` command will serve a viewer on an HTTP port, one you can forward over ssh and view training progress in your web browser.
 
@@ -89,7 +89,7 @@ Make sure you have Vulkan SDK installed. On macOS, MoltenVK is automatically fet
 ### Windows with MSVC:
 
 ```bat
-cd spirulae-splat\
+cd spirula-studio\
 build_develop.bat -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=vulkan -DSS_ENABLE_PATENTED=ON
 ```
 
@@ -98,7 +98,7 @@ If it builds successfully, you get `build\spirula.exe`.
 ### Windows with GCC/Clang:
 
 ```bat
-cd spirulae-splat\
+cd spirula-studio\
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=vulkan -DSS_ENABLE_PATENTED=ON -DCMAKE_MAKE_PROGRAM=Ninja
 cmake --build build -j
 ```
@@ -110,7 +110,7 @@ If it builds successfully, you get `build\spirula.exe`.
 ### Linux:
 
 ```bash
-cd spirulae-splat/
+cd spirula-studio/
 bash build_develop.bash -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=vulkan -DSS_ENABLE_PATENTED=ON
 ```
 
@@ -119,7 +119,7 @@ If it builds successfully, you get `build/spirula` binary.
 ### macOS:
 
 ```bash
-cd spirulae-splat/
+cd spirula-studio/
 bash build_develop.bash -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=vulkan -DSS_ENABLE_PATENTED=ON
 cmake --build build --target macos_app
 cmake --build build --target macos_dmg
@@ -146,7 +146,7 @@ Make sure you have a recent version of CUDA installed. On Windows, you also need
 ### Windows:
 
 ```bat
-cd spirulae-splat\
+cd spirula-studio\
 build_develop.bat -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=cuda
 ```
 
@@ -155,7 +155,7 @@ If it builds successfully, you get `build\spirula.exe`.
 ### Linux:
 
 ```bash
-cd spirulae-splat/
+cd spirula-studio/
 bash build_develop.bash -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=cuda
 ```
 
