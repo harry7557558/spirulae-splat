@@ -4,14 +4,17 @@
 
 #include "external/stb_image.h"
 #include "external/stb_image_write.h"
+#include "nn/core/Parallel.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <utility>
 
 namespace app {
@@ -619,39 +622,82 @@ int64_t apply_frame_stencil(const FrameStencilRun& run,
             continue;
         }
 
-        // Every frame of one camera gets the same stencil, so the PNG is
-        // encoded once per frame size and the rest are copies of that file. A
-        // 1920-square gray mask measured ~150 ms to encode, which is a quarter
-        // of an hour over a two-track 2800-frame capture.
+        // Every frame of one camera gets the same stencil, so it is rasterized
+        // once per distinct frame size.
         struct Sized {
             std::vector<uint8_t> px;
             std::string first;
         };
         std::map<std::pair<int, int>, Sized> cache;
+        struct Item { std::string dst; int w, h; bool merge; };
+        std::vector<Item> items;
+        items.reserve(files.size());
         for (const std::string& f : files) {
             if (sinks.cancel && sinks.cancel->load()) return written;
-            if (sinks.progress) sinks.progress(++seen, total);
             int w = 0, h = 0;
             if (!image_size(f, w, h)) continue;
             Sized& s = cache[{w, h}];
             if (s.px.empty() && !rasterize_frame_mask(fm, w, h, s.px, error)) return -1;
-
             const fs::path dst =
                 mask_root / rel / (fs::path(f).stem().string() + ".png");
             fs::create_directories(dst.parent_path(), ec);
-            const bool merge = !run.replace && fs::exists(dst, ec);
-            if (!merge && !s.first.empty()) {
-                fs::copy_file(s.first, dst, fs::copy_options::overwrite_existing, ec);
+            items.push_back({dst.string(), w, h, !run.replace && fs::exists(dst, ec)});
+        }
+
+        // A frame that already has a mask -- segmentation ran -- cannot share
+        // one: it costs a PNG decode and a re-encode, 131 ms per 2880-square
+        // fisheye frame. They are independent, so they go on every core.
+        std::vector<size_t> merges;
+        for (size_t i = 0; i < items.size(); i++)
+            if (items[i].merge) merges.push_back(i);
+        std::atomic<bool> failed{false};
+        std::atomic<int64_t> done{0};
+        std::mutex sink_mu;
+        std::string merge_error;
+        nn::parallel_for((int64_t)merges.size(), [&](int64_t lo, int64_t hi) {
+            for (int64_t k = lo; k < hi; k++) {
+                if (failed.load() ||
+                    (sinks.cancel && sinks.cancel->load())) return;
+                const Item& it = items[merges[(size_t)k]];
+                std::vector<uint8_t> px = cache.at({it.w, it.h}).px;
+                intersect_with_file(px, it.w, it.h, it.dst);
+                if (!stbi_write_png(it.dst.c_str(), it.w, it.h, 1, px.data(), it.w)) {
+                    std::lock_guard<std::mutex> lk(sink_mu);
+                    merge_error = it.dst;
+                    failed = true;
+                    return;
+                }
+                if (sinks.progress) {
+                    std::lock_guard<std::mutex> lk(sink_mu);
+                    sinks.progress(seen + (++done), total);
+                }
+            }
+        }, 1);
+        if (failed.load()) {
+            error = merge_error;
+            return -1;
+        }
+        written += (int64_t)merges.size();
+        seen += (int64_t)merges.size();
+
+        // The rest share one stencil image: encode it once, copy the file for
+        // every other frame of that size. A 1920-square gray mask costs ~150 ms
+        // to encode -- a quarter of an hour over a two-track 2800-frame capture.
+        for (const Item& it : items) {
+            if (it.merge) continue;
+            if (sinks.cancel && sinks.cancel->load()) return written;
+            if (sinks.progress) sinks.progress(++seen, total);
+            Sized& s = cache.at({it.w, it.h});
+            if (!s.first.empty()) {
+                fs::copy_file(s.first, it.dst, fs::copy_options::overwrite_existing, ec);
                 if (!ec) { written++; continue; }
             }
-            std::vector<uint8_t> px = s.px;
-            if (merge) intersect_with_file(px, w, h, dst.string());
-            if (!stbi_write_png(dst.string().c_str(), w, h, 1, px.data(), w)) {
-                error = dst.string();
+            if (!stbi_write_png(it.dst.c_str(), it.w, it.h, 1, s.px.data(), it.w)) {
+                error = it.dst;
                 return -1;
             }
             written++;
-            if (!merge && s.first.empty()) s.first = dst.string();
+            if (s.first.empty()) s.first = it.dst;
         }
     }
     return written;

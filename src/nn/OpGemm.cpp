@@ -1,7 +1,12 @@
 #include "nn/core/Error.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstring>
+#include "core/Env.h"
+#include "nn/core/Log.h"
 #include "nn/Ops.h"
+#include "nn/vk/Memory.h"
 #include "nn/vk/Stream.h"
 
 namespace nn {
@@ -43,6 +48,106 @@ int64_t coop_tile_m(uint32_t subgroup) { return (int64_t)(256u / subgroup / 2u) 
 
 // -1 = follow the device probe; 0/1 = forced by set_coop_matrix_enabled().
 int g_coop_override = -1;
+
+// Which tiled kernel this device runs fastest, timed once per process: no
+// Vulkan property predicts it. On 5184x3072x1024 the wide tile wins 8.6 vs 2.8
+// TFLOP/s on an RTX 5070 and loses 0.33 vs 0.82 on an M2, whose register file
+// cannot hold its 64 accumulators. Costs one pipeline compile and ~4 ms, once;
+// SS_NN_GEMM_KERNEL=wide|narrow pins it.
+struct TileKernel {
+    const char* entry;
+    int64_t     tile;    // output tile edge
+    bool        n_on_x;  // gemm_nt_big alone wants N on the x axis
+};
+struct TileKernels {
+    TileKernel f16;  // fp16 weights, M and N past kBigTileLimit
+    TileKernel any;  // everything else that reaches the tiled path
+};
+
+const TileKernel kWide{"gemm.gemm_nt_big", 128, true};
+const TileKernel kNarrow{"gemm.gemm_nt_narrow", 64, false};
+const TileKernel kSquare{"gemm.gemm_nt", 64, false};
+
+void dispatch_tile(const TileKernel& k, const vk::SpecList& spec, int64_t M, int64_t N,
+                   const GemmParams& p) {
+    const uint32_t tm = (uint32_t)((M + k.tile - 1) / k.tile);
+    const uint32_t tn = (uint32_t)((N + k.tile - 1) / k.tile);
+    NN_CHECK(tm <= 65535 && tn <= 65535,
+               "gemm: %lldx%lld output exceeds the dispatch grid cap", (long long)M,
+               (long long)N);
+    vk::Stream::get().dispatch(k.entry, spec, k.n_on_x ? tn : tm, k.n_on_x ? tm : tn, 1,
+                               &p, sizeof(p));
+}
+
+double time_tile(const TileKernel& k, const vk::SpecList& spec, int64_t M, int64_t N,
+                 const GemmParams& p) {
+    using clock = std::chrono::steady_clock;
+    dispatch_tile(k, spec, M, N, p);   // pay the pipeline compile outside the timer
+    vk::Stream::get().sync();
+    const auto t0 = clock::now();
+    for (int i = 0; i < 3; ++i) dispatch_tile(k, spec, M, N, p);
+    vk::Stream::get().sync();
+    return std::chrono::duration<double, std::milli>(clock::now() - t0).count();
+}
+
+TileKernels probe_tile_kernels() {
+    const TileKernels wide{kWide, kSquare};
+    const TileKernels narrow{kNarrow, kNarrow};
+    if (const char* forced = spirula::env("NN_GEMM_KERNEL")) {
+        if (std::strcmp(forced, "narrow") == 0) return narrow;
+        if (std::strcmp(forced, "wide") == 0) return wide;
+    }
+    // Big enough that both candidates fill the device: at 512x512 the wide tile
+    // makes 16 workgroups and loses on a 5070 it beats 3x in real use. This is
+    // 256 workgroups, 4.3 GFLOP, 22 MiB.
+    const int64_t M = 2048, N = 2048, K = 512;
+    const uint64_t bytes = (uint64_t)M * K * 4 + (uint64_t)N * K * 2 + (uint64_t)M * N * 4;
+    const vk::DevicePtr base = vk::device_alloc(bytes, "gemm probe");
+    if (!base) return wide;
+
+    GemmParams p{};
+    p.x = base;
+    p.w = p.x + (uint64_t)M * K * 4;
+    p.out = p.w + (uint64_t)N * K * 2;
+    p.bias = vk::or_fallback(0);
+    p.residual = vk::or_fallback(0);
+    p.M = (uint32_t)M;
+    p.N = (uint32_t)N;
+    p.K = (uint32_t)K;
+    p.alpha = 1.0f;
+    p.x_row_stride = (uint32_t)K;
+    vk::Stream::get().fill(p.x, 0x3f000000u, (uint64_t)M * K * 4);
+    vk::Stream::get().fill(p.w, 0x38003800u, (uint64_t)N * K * 2);
+
+    const vk::SpecList spec{1u, 0u, 0u, 0u, 0u};   // fp16 weights, bare epilogue
+    double t_wide = 0, t_narrow = 0;
+    try {
+        t_wide = time_tile(kWide, spec, M, N, p);
+        t_narrow = time_tile(kNarrow, spec, M, N, p);
+    } catch (const std::exception& e) {
+        NN_LOG_WARN("gemm tile probe failed (%s); keeping the wide tile\n", e.what());
+        vk::device_free(base);
+        return wide;
+    }
+    vk::device_free(base);
+
+    // A margin, not a comparison: a tie should keep the better-travelled path.
+    const bool pick_narrow = t_narrow < 0.9 * t_wide;
+    NN_LOG_INFO("gemm: %s tile (%.2f ms wide, %.2f ms narrow)\n",
+                pick_narrow ? "narrow" : "wide", t_wide, t_narrow);
+    return pick_narrow ? narrow : wide;
+}
+
+GemmTile g_tile_override = GemmTile::Measured;
+
+const TileKernels& tile_kernels() {
+    static const TileKernels wide{kWide, kSquare};
+    static const TileKernels narrow{kNarrow, kNarrow};
+    if (g_tile_override == GemmTile::Wide) return wide;
+    if (g_tile_override == GemmTile::Narrow) return narrow;
+    static const TileKernels measured = probe_tile_kernels();
+    return measured;
+}
 
 void dispatch_gemm(const Tensor& out, const Tensor& x_in, const Tensor& w_in,
                    const Tensor& bias, const Tensor& residual, Act act, float alpha,
@@ -134,21 +239,15 @@ void dispatch_gemm(const Tensor& out, const Tensor& x_in, const Tensor& w_in,
         // gemm_nt_big keeps the weight tile packed as fp16 in shared, so it has
         // nothing to offer an fp32 second operand (a matmul against another
         // activation) and does not handle one.
-        const bool big =
+        const bool wide =
             M >= kBigTileLimit && N >= kBigTileLimit && w.dtype == DType::F16;
-        const int64_t tile = big ? 128 : 64;
-        const uint32_t tm = (uint32_t)((M + tile - 1) / tile);
-        const uint32_t tn = (uint32_t)((N + tile - 1) / tile);
-        NN_CHECK(tm <= 65535 && tn <= 65535,
-                   "gemm: %lldx%lld output exceeds the dispatch grid cap", (long long)M,
-                   (long long)N);
-        // gemm_nt_big wants N on x (see the comment there); gemm_nt wants M.
-        vk::Stream::get().dispatch(big ? "gemm.gemm_nt_big" : "gemm.gemm_nt", spec,
-                                   big ? tn : tm, big ? tm : tn, 1, &p, sizeof(p));
+        dispatch_tile(wide ? tile_kernels().f16 : tile_kernels().any, spec, M, N, p);
     }
 }
 
 }  // namespace
+
+void set_gemm_tile(GemmTile t) { g_tile_override = t; }
 
 bool coop_matrix_enabled() {
     if (g_coop_override >= 0) return g_coop_override != 0;

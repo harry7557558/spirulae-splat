@@ -618,47 +618,45 @@ SS_MSG(linked_copied_kept,
     RU("  связано: {0}, скопировано: {1}, уже было: {2}"),
     TR("  {0} bağlandı, {1} kopyalandı, {2} zaten vardı"));
 
-SS_MSG(clicks_other_input_unmasked,
-    EN("Note: {0} is not the input the clicked objects were drawn on and there "
-       "is no text prompt, so its frames are left unmasked. Add a prompt, or "
-       "click the object on this input too."),
-    JA("メモ: {0} はクリックで指定した対象を描いた入力ではなく、文字の指定も"
-       "ないため、この入力のフレームはマスクされません。プロンプトを入れるか、"
-       "この入力でも対象をクリックしてください。"),
-    ZH_HANS("提示：{0} 不是当初点选对象所在的输入，也没有文字提示，所以它的帧"
-            "不会生成蒙版。请填写提示词，或在这个输入上也点选一次对象。"),
-    ZH_HANT("提示：{0} 不是當初點選對象所在的輸入，也沒有文字提示，所以它的影格"
-            "不會產生遮罩。請填寫提示詞，或在這個輸入上也點選一次對象。"),
-    KO("참고: {0}은(는) 클릭으로 지정한 대상을 그린 입력이 아니고 텍스트 "
-       "프롬프트도 없어서, 이 입력의 프레임에는 마스크가 생기지 않습니다. "
-       "프롬프트를 넣거나 이 입력에서도 대상을 클릭하세요."),
-    DE("Hinweis: {0} ist nicht die Eingabe, auf der die Objekte angeklickt "
-       "wurden, und es gibt keinen Texthinweis -- ihre Bilder bleiben also "
-       "unmaskiert. Geben Sie einen Prompt ein, oder klicken Sie das Objekt "
-       "auch auf dieser Eingabe an."),
-    FR("Note : {0} n'est pas l'entrée sur laquelle les objets ont été cliqués, "
-       "et il n'y a pas d'invite textuelle ; ses images restent donc non "
-       "masquées. Ajoutez une invite, ou cliquez aussi l'objet sur cette "
-       "entrée."),
-    ES("Nota: {0} no es la entrada sobre la que se pulsaron los objetos y no "
-       "hay indicación de texto, así que sus fotogramas quedan sin máscara. "
-       "Añada una indicación, o pulse el objeto también en esta entrada."),
-    PT("Nota: {0} não é a entrada em que os objetos foram clicados e não há "
-       "texto de comando, então seus quadros ficam sem máscara. Acrescente um "
-       "comando, ou clique no objeto também nesta entrada."),
-    IT("Nota: {0} non è l'ingresso su cui gli oggetti sono stati cliccati e non "
-       "c'è un prompt testuale, quindi i suoi fotogrammi restano senza "
-       "maschera. Aggiunga un prompt, oppure clicchi l'oggetto anche su questo "
-       "ingresso."),
-    NL("Let op: {0} is niet de invoer waarop de objecten zijn aangeklikt en er "
-       "is geen tekstprompt, dus de beelden ervan blijven ongemaskeerd. Voeg "
-       "een prompt toe, of klik het object ook op deze invoer aan."),
-    RU("Примечание: {0} — не тот вход, на котором отмечались объекты, и "
-       "текстового запроса нет, поэтому его кадры остаются без масок. Введите "
-       "запрос или отметьте объект и на этом входе."),
-    TR("Not: {0}, nesnelerin tıklandığı girdi değil ve metin istemi de yok; bu "
-       "yüzden kareleri maskesiz kalıyor. Bir istem ekleyin ya da nesneyi bu "
-       "girdide de tıklayın."));
+SS_MSG(err_inputs_without_prompt,
+    EN("Nothing to mask by for {0}. A clicked object prompts only the input it "
+       "was drawn on, so either click the object on every input, or add a text "
+       "prompt."),
+    JA("{0} をマスクする手がかりがありません。クリックした対象はそれを描いた"
+       "入力にしか効かないため、すべての入力で対象をクリックするか、文字の"
+       "プロンプトを追加してください。"),
+    ZH_HANS("没有可用来给 {0} 生成蒙版的提示。点选的对象只对标注它的那个输入"
+            "有效，请在每个输入上都点选一次对象，或者加上文字提示。"),
+    ZH_HANT("沒有可用來給 {0} 產生遮罩的提示。點選的對象只對標註它的那個輸入"
+            "有效，請在每個輸入上都點選一次對象，或者加上文字提示。"),
+    KO("{0}을(를) 마스킹할 근거가 없습니다. 클릭한 대상은 그것을 그린 입력에만 "
+       "적용되므로, 모든 입력에서 대상을 클릭하거나 텍스트 프롬프트를 "
+       "추가하세요."),
+    DE("Für {0} gibt es nichts, wonach maskiert werden könnte. Ein angeklicktes "
+       "Objekt gilt nur für die Eingabe, auf der es eingezeichnet wurde -- "
+       "klicken Sie es also auf jeder Eingabe an, oder ergänzen Sie einen "
+       "Texthinweis."),
+    FR("Rien pour masquer {0}. Un objet cliqué ne vaut que pour l'entrée sur "
+       "laquelle il a été tracé : cliquez-le sur chaque entrée, ou ajoutez une "
+       "invite textuelle."),
+    ES("No hay con qué enmascarar {0}. Un objeto marcado solo vale para la "
+       "entrada en la que se marcó: márquelo en cada entrada, o añada una "
+       "indicación de texto."),
+    PT("Não há com que mascarar {0}. Um objeto clicado só vale para a entrada "
+       "em que foi marcado: marque-o em cada entrada, ou acrescente um comando "
+       "de texto."),
+    IT("Non c'è nulla con cui mascherare {0}. Un oggetto cliccato vale solo per "
+       "l'ingresso su cui è stato tracciato: lo clicchi su ogni ingresso, "
+       "oppure aggiunga un testo."),
+    NL("Er is niets om {0} mee te maskeren. Een aangeklikt object geldt alleen "
+       "voor de invoer waarop het is gezet: klik het op elke invoer aan, of "
+       "voeg een tekstprompt toe."),
+    RU("Нечем маскировать {0}. Отмеченный объект действует только на том входе, "
+       "где его указали: отметьте его на каждом входе или добавьте текстовый "
+       "запрос."),
+    TR("{0} için maskeleyecek bir şey yok. Tıklanan nesne yalnızca "
+       "işaretlendiği girdi için geçerlidir: nesneyi her girdide tıklayın ya da "
+       "bir metin istemi ekleyin."));
 
 SS_MSG(warn_unreadable_skipped,
     EN("warning: could not read {0}; skipped"),

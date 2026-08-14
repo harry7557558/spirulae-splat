@@ -53,6 +53,10 @@ struct MaskClick {
     int   object = 0;
     long long frame = 0;
     float position = 0.0f;      // 0..1 through the capture
+    // PrepInput::path of the input it was drawn on; empty is the only one. The
+    // same coordinates on another capture point at something else, so a click
+    // never crosses inputs.
+    std::string source;
 };
 
 // One thing the user picked: a video file, or a folder of photos. A job holds
@@ -106,15 +110,10 @@ struct PrepJob {
     std::string mask_negative_prompt;
     bool mask_keep_subject = false;  // prompt names what to KEEP, not remove
     int  mask_max_image_size = 1600;
-    // Clicked objects. The only way to prompt a SAM 2 checkpoint, and usable
-    // alongside a text prompt on a SAM 3 one.
+    // Clicked objects, each tagged with its input (MaskClick::source). The only
+    // way to prompt a SAM 2 checkpoint. Without a text prompt every input needs
+    // its own, and run() refuses the job rather than half-mask the capture.
     std::vector<MaskClick> mask_clicks;
-    // Which input they were drawn on ("" = the only one). A click is a point on
-    // a frame of one capture; carrying it into a second video would prompt the
-    // model with whatever happens to be at those coordinates there, which is
-    // the bug that looks like a working feature. Inputs it does not name are
-    // masked from the text prompt alone, or skipped when there is none.
-    std::string mask_clicks_source;
 
     // Built-in: a checkpoint file (ModelCache resolves it). External: the
     // model name reference/scripts/mask.py understands.

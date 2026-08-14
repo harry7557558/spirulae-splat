@@ -13,6 +13,10 @@
 // 4x4 accumulators per thread. Shared memory 2 * 16 * 65 * 4 = 8.3 KiB, inside
 // the 16 KiB Vulkan floor. The +1 padding on the fast axis keeps the
 // four-per-thread staging stores off the same bank.
+//
+// Every loop indexing `acc`/`a`/`b` is [ForceUnroll], never [unroll]: rolled,
+// those arrays stay dynamically indexed, which on Metal means thread-local
+// *memory*. See src/backend/vulkan/README.md, "slangc [unroll]".
 
 #include "_common.slang"
 
@@ -59,8 +63,8 @@ void gemm_nt(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
     const uint ty = t >> 4;
 
     float acc[4][4];
-    [unroll] for (int i = 0; i < 4; ++i)
-        [unroll] for (int j = 0; j < 4; ++j) acc[i][j] = 0.0f;
+    [ForceUnroll] for (int i = 0; i < 4; ++i)
+        [ForceUnroll] for (int j = 0; j < 4; ++j) acc[i][j] = 0.0f;
 
     // Staging assignment: 1024 elements per tile, 4 per thread, laid out so the
     // four are consecutive along K (coalesced global reads).
@@ -72,7 +76,7 @@ void gemm_nt(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
         {
             uint m = tile_m + load_row;
             bool in_m = m < p.M;
-            [unroll] for (uint u = 0; u < 4; ++u) {
+            [ForceUnroll] for (uint u = 0; u < 4; ++u) {
                 uint k = k0 + load_k0 + u;
                 float v = 0.0f;
                 if (in_m && k < p.K)
@@ -84,7 +88,7 @@ void gemm_nt(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
         {
             uint n = tile_n + load_row;
             bool in_n = n < p.N;
-            [unroll] for (uint u = 0; u < 4; ++u) {
+            [ForceUnroll] for (uint u = 0; u < 4; ++u) {
                 uint k = k0 + load_k0 + u;
                 float v = 0.0f;
                 if (in_n && k < p.K) v = load_elem(p.w, n * p.K + k, kWeightF16 != 0);
@@ -93,22 +97,22 @@ void gemm_nt(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
         }
         GroupMemoryBarrierWithGroupSync();
 
-        [unroll(4)]
+        [ForceUnroll]
         for (uint kk = 0; kk < BK; ++kk) {
             float a[4], b[4];
-            [unroll] for (int i = 0; i < 4; ++i) a[i] = sA[kk][ty * 4 + i];
-            [unroll] for (int j = 0; j < 4; ++j) b[j] = sB[kk][tx * 4 + j];
-            [unroll] for (int i = 0; i < 4; ++i)
-                [unroll] for (int j = 0; j < 4; ++j) acc[i][j] += a[i] * b[j];
+            [ForceUnroll] for (int i = 0; i < 4; ++i) a[i] = sA[kk][ty * 4 + i];
+            [ForceUnroll] for (int j = 0; j < 4; ++j) b[j] = sB[kk][tx * 4 + j];
+            [ForceUnroll] for (int i = 0; i < 4; ++i)
+                [ForceUnroll] for (int j = 0; j < 4; ++j) acc[i][j] += a[i] * b[j];
         }
         GroupMemoryBarrierWithGroupSync();
     }
 
     // ---- epilogue ----
-    [unroll] for (uint i = 0; i < 4; ++i) {
+    [ForceUnroll] for (uint i = 0; i < 4; ++i) {
         uint m = tile_m + ty * 4 + i;
         if (m >= p.M) continue;
-        [unroll] for (uint j = 0; j < 4; ++j) {
+        [ForceUnroll] for (uint j = 0; j < 4; ++j) {
             uint n = tile_n + tx * 4 + j;
             if (n >= p.N) continue;
             float v = acc[i][j] * p.alpha;
@@ -173,8 +177,8 @@ void gemm_nt_big(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
     const uint ty = t >> 4;    // row lane
 
     float acc[8][8];
-    [unroll] for (int i = 0; i < 8; ++i)
-        [unroll] for (int j = 0; j < 8; ++j) acc[i][j] = 0.0f;
+    [ForceUnroll] for (int i = 0; i < 8; ++i)
+        [ForceUnroll] for (int j = 0; j < 8; ++j) acc[i][j] = 0.0f;
 
     // Staging. A: WM*WK elements, 8 per thread, WK consecutive along K per row
     // so the global reads coalesce. W: WN*WK/2 packed words, 4 per thread, each
@@ -195,9 +199,9 @@ void gemm_nt_big(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
     for (uint k0 = 0; k0 < p.K + WK; k0 += WK) {
         // Stage what the previous pass fetched, except on the priming pass.
         if (k0 > 0) {
-            [unroll] for (uint u = 0; u < 8; ++u)
+            [ForceUnroll] for (uint u = 0; u < 8; ++u)
                 wA[load_k * (WM + 1) + load_row + u * 16u] = ra[u];
-            [unroll] for (uint u = 0; u < 4; ++u)
+            [ForceUnroll] for (uint u = 0; u < 4; ++u)
                 wB[wkp * (WN + 1) + wcol + u * 32u] = rb[u];
             GroupMemoryBarrierWithGroupSync();
         }
@@ -207,13 +211,13 @@ void gemm_nt_big(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
         if (k0 < p.K) {
             const uint ka = k0 + load_k;
             const uint kb = k0 + wkp * 2u;
-            [unroll] for (uint u = 0; u < 8; ++u) {
+            [ForceUnroll] for (uint u = 0; u < 8; ++u) {
                 const uint m = tile_m + load_row + u * 16u;
                 ra[u] = (m < p.M && ka < p.K)
                             ? load_elem(p.x, m * p.x_row_stride + ka, kInputF16 != 0)
                             : 0.0f;
             }
-            [unroll] for (uint u = 0; u < 4; ++u) {
+            [ForceUnroll] for (uint u = 0; u < 4; ++u) {
                 const uint n = tile_n + wcol + u * 32u;
                 const float w0 =
                     (n < p.N && kb < p.K) ? load_elem(p.w, n * p.K + kb, true) : 0.0f;
@@ -225,31 +229,107 @@ void gemm_nt_big(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
         }
         if (k0 == 0) continue;   // nothing staged yet
 
-        [unroll] for (uint kp = 0; kp < WK / 2; ++kp) {
+        [ForceUnroll] for (uint kp = 0; kp < WK / 2; ++kp) {
             float b0[8], b1[8];
-            [unroll] for (int j = 0; j < 8; ++j) {
+            [ForceUnroll] for (int j = 0; j < 8; ++j) {
                 const float2 h = unpack_half2(wB[kp * (WN + 1) + tx + uint(j) * 16u]);
                 b0[j] = h.x;
                 b1[j] = h.y;
             }
             float a[8];
-            [unroll] for (int i = 0; i < 8; ++i)
+            [ForceUnroll] for (int i = 0; i < 8; ++i)
                 a[i] = wA[(kp * 2u) * (WM + 1) + ty + uint(i) * 16u];
-            [unroll] for (int i = 0; i < 8; ++i)
-                [unroll] for (int j = 0; j < 8; ++j) acc[i][j] += a[i] * b0[j];
-            [unroll] for (int i = 0; i < 8; ++i)
+            [ForceUnroll] for (int i = 0; i < 8; ++i)
+                [ForceUnroll] for (int j = 0; j < 8; ++j) acc[i][j] += a[i] * b0[j];
+            [ForceUnroll] for (int i = 0; i < 8; ++i)
                 a[i] = wA[(kp * 2u + 1u) * (WM + 1) + ty + uint(i) * 16u];
-            [unroll] for (int i = 0; i < 8; ++i)
-                [unroll] for (int j = 0; j < 8; ++j) acc[i][j] += a[i] * b1[j];
+            [ForceUnroll] for (int i = 0; i < 8; ++i)
+                [ForceUnroll] for (int j = 0; j < 8; ++j) acc[i][j] += a[i] * b1[j];
         }
         GroupMemoryBarrierWithGroupSync();
     }
 
-    [unroll] for (uint i = 0; i < 8; ++i) {
+    [ForceUnroll] for (uint i = 0; i < 8; ++i) {
         const uint m = tile_m + ty + i * 16u;
         if (m >= p.M) continue;
-        [unroll] for (uint j = 0; j < 8; ++j) {
+        [ForceUnroll] for (uint j = 0; j < 8; ++j) {
             const uint n = tile_n + tx + j * 16u;
+            if (n >= p.N) continue;
+            float v = acc[i][j] * p.alpha;
+            if (kHasBias != 0) v += asfloat(p.bias[n]);
+            if (kHasResidual != 0) v += p.residual[m * p.N + n];
+            p.out[m * p.N + n] = apply_act(v, kAct);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Narrow variant: gemm_nt's tile and staging, 2x8 accumulators, interleaved
+// columns (gemm_nt_big says why interleaved).
+//
+// A quarter of gemm_nt_big's accumulator registers for 0.625 shared floats per
+// FMA against gemm_nt's 0.5 -- the trade for a register file that cannot hold
+// 64 of them. M2: 820 GFLOP/s against gemm_nt_big's 330; RTX 5070: 2.8 TFLOP/s
+// against 8.6.
+// ---------------------------------------------------------------------------
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void gemm_nt_narrow(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
+                    uniform GemmParams p) {
+    const uint tile_m = gid.x * BM;
+    const uint tile_n = gid.y * BN;
+    const uint t = tid.x;
+    const uint tx = t & 7u;    // 8 column lanes, 8 columns each
+    const uint ty = t >> 3;    // 32 row lanes, 2 rows each
+
+    float acc[2][8];
+    [ForceUnroll] for (int i = 0; i < 2; ++i)
+        [ForceUnroll] for (int j = 0; j < 8; ++j) acc[i][j] = 0.0f;
+
+    const uint load_row = t >> 2;
+    const uint load_k0 = (t & 3u) * 4u;
+
+    for (uint k0 = 0; k0 < p.K; k0 += BK) {
+        {
+            uint m = tile_m + load_row;
+            bool in_m = m < p.M;
+            [ForceUnroll] for (uint u = 0; u < 4; ++u) {
+                uint k = k0 + load_k0 + u;
+                float v = 0.0f;
+                if (in_m && k < p.K)
+                    v = load_elem(p.x, m * p.x_row_stride + k, kInputF16 != 0);
+                sA[load_k0 + u][load_row] = v;
+            }
+        }
+        {
+            uint n = tile_n + load_row;
+            bool in_n = n < p.N;
+            [ForceUnroll] for (uint u = 0; u < 4; ++u) {
+                uint k = k0 + load_k0 + u;
+                float v = 0.0f;
+                if (in_n && k < p.K) v = load_elem(p.w, n * p.K + k, kWeightF16 != 0);
+                sB[load_k0 + u][load_row] = v;
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
+
+        [ForceUnroll]
+        for (uint kk = 0; kk < BK; ++kk) {
+            float a[2], b[8];
+            [ForceUnroll] for (int i = 0; i < 2; ++i) a[i] = sA[kk][ty + uint(i) * 32u];
+            [ForceUnroll] for (int j = 0; j < 8; ++j) b[j] = sB[kk][tx + uint(j) * 8u];
+            [ForceUnroll] for (int i = 0; i < 2; ++i)
+                [ForceUnroll] for (int j = 0; j < 8; ++j) acc[i][j] += a[i] * b[j];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    [ForceUnroll] for (uint i = 0; i < 2; ++i) {
+        uint m = tile_m + ty + i * 32u;
+        if (m >= p.M) continue;
+        [ForceUnroll] for (uint j = 0; j < 8; ++j) {
+            uint n = tile_n + tx + j * 8u;
             if (n >= p.N) continue;
             float v = acc[i][j] * p.alpha;
             if (kHasBias != 0) v += asfloat(p.bias[n]);

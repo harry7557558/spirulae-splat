@@ -236,6 +236,22 @@ still compile + emit identical CUDA exports with 2026.2.1):
   explicitly, and treat parity coverage of every scalar gradient as
   mandatory.
 
+### slangc `[unroll]` is a hint; `[ForceUnroll]` is the one that unrolls
+
+`[unroll]` leaves the loop rolled in the emitted SPIR-V (31 `OpLoopMerge` in
+`src/nn/shaders/gemm.slang`, 4 after switching). Drivers that consume SPIR-V
+unroll it themselves, so nothing shows. MoltenVK does not: SPIRV-Cross
+reproduces the loop, a function-scope array indexed by the loop variable stays
+dynamically indexed, and Metal keeps such an array in *memory* rather than
+registers. The GEMM's `acc[4][4]` landing there is what made SAM 3 image
+encoding take 90 s on an M2; `[ForceUnroll]` alone brought it to 16 s, with no
+measurable difference on an RTX 5070.
+
+Not a blanket win — unrolling costs registers, and Apple runs out sooner. The
+matcher's 32-word descriptor loop is **8x slower** unrolled on the same M2
+(49 -> 416 ms per 8192x8192 pair). Use it where a small indexed array must live
+in registers, and measure on Apple either way.
+
 ## MoltenVK (macOS): two rules the SPIR-V -> MSL step imposes
 
 MoltenVK translates our SPIR-V to Metal Shading Language through

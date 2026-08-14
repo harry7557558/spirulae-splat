@@ -81,6 +81,16 @@ only because `VulkanContext::init()` turns MoltenVK's default Metal fast-math
 off. `SS_VK_FAST_MATH=1` puts it back, and they fail again; that is the knob
 to reach for when measuring what the setting costs.
 
+Speed is a separate question from parity, and macOS answers it differently. Two
+kernel choices that cost nothing elsewhere cost an order of magnitude here, and
+both are measured at run time rather than assumed: the GEMM tiling
+(`OpGemm.cpp`, `SS_NN_GEMM_KERNEL` pins it) and the matcher's dot product
+(`integerDotProduct4x8BitPackedUnsignedAccelerated`, `SS_SFM_NO_DOT4` pins it).
+With those, an M2 runs SAM 3 image encoding at 12x an RTX 5070 (7.4 s vs 0.64 s,
+was 140x) and brute-force matching at 22x (43 vs 1.9 ms per 8192x8192 pair, was
+64x); the matcher's remainder is DP4A, which Apple has no instruction for. The
+third is "slangc `[unroll]`" in `src/backend/vulkan/README.md`.
+
 ## 2. GUI / viewer checks
 
 The web viewer can be driven headlessly over the Chrome DevTools Protocol.

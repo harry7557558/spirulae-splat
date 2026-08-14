@@ -71,6 +71,12 @@ void matmul_nt(const Tensor& out, const Tensor& a, const Tensor& b, float alpha 
 bool coop_matrix_enabled();
 void set_coop_matrix_enabled(bool on);
 
+// Which tiled fp32 kernel the big shapes use; OpGemm.cpp measures it per
+// device. This forces it, so one process can check both -- they accumulate over
+// K in the same order, so a disagreement is a tiling bug, not precision.
+enum class GemmTile { Measured, Wide, Narrow };
+void set_gemm_tile(GemmTile t);
+
 // ================
 // Normalization
 // ================

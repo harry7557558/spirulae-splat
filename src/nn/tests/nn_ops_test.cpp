@@ -190,12 +190,12 @@ void test_gemm(vk::Arena& arena) {
         check("gemm fp16 weights", readback(to), want, 2e-4f);
     }
 
-    // The 128x128 tile, which OpGemm only selects at M >= 128, N >= 128 with an
-    // fp16 weight -- so none of the cases above reach it. The ragged sizes are
-    // the point: they land mid-tile on all three axes, which is where a staging
-    // or tail-guard mistake shows up.
-    {
+    // Both tilings OpGemm picks between at M, N >= 128 with an fp16 weight, on
+    // every device rather than only the one it measured faster. Ragged on all
+    // three axes, which is where a staging or tail-guard mistake shows up.
+    for (GemmTile tile : {GemmTile::Wide, GemmTile::Narrow}) {
         vk::ArenaScope scope(arena);
+        set_gemm_tile(tile);
         const int M = 300, N = 201, K = 141;
         auto x = randn((size_t)M * K);
         auto w = randn((size_t)N * K, 0.1f);
@@ -216,8 +216,11 @@ void test_gemm(vk::Arena& arena) {
                     s += (double)x[(size_t)m * K + k] * w[(size_t)n * K + k];
                 want[(size_t)m * N + n] = act_ref((float)s + b[n], Act::Relu);
             }
-        check("gemm 300x201x141 wide tile", readback(to), want, 2e-4f);
+        check(tile == GemmTile::Wide ? "gemm 300x201x141 wide tile"
+                                     : "gemm 300x201x141 narrow tile",
+              readback(to), want, 2e-4f);
     }
+    set_gemm_tile(GemmTile::Measured);
 
     // Cooperative matrix. N and K are multiples of 16 (the shape the tensor-core
     // path requires) while M is not, so the row tail is still exercised; the

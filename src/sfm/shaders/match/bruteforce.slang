@@ -49,13 +49,13 @@
 // 64 queries. Measured: the kernel was L2-bandwidth-bound, not ALU-bound, once
 // DP4A landed.
 
-// dot4add_u8packed lowers to OpUDot with PackedVectorFormat4x8Bit, which needs
-// VK_KHR_shader_integer_dot_product. Gen11/Gen12 Intel integrated parts do not
-// expose it, so the shader is compiled a second time with -DNO_DOT4 and the
-// same arithmetic spelled out: four byte extracts and four multiply-adds. It is
-// the identical integer result, just without the DP4A instruction, and it is
-// what `match_nodot` is. Everything below calls udot4add and never the
-// intrinsic directly.
+// dot4add_u8packed lowers to OpUDot with PackedVectorFormat4x8Bit. Where the
+// device has no such instruction the shader is built again with -DNO_DOT4, the
+// same arithmetic spelled out -- identical integer result, and `match_nodot`.
+// The chooser is integerDotProduct4x8BitPackedUnsignedAccelerated, not whether
+// the extension is present: MoltenVK advertises it on Apple silicon and expands
+// it worse than the spelling below (114 vs 43 ms for one 8192x8192 pair on an
+// M2). Everything below calls udot4add, never the intrinsic.
 #ifdef NO_DOT4
 uint udot4add(uint a, uint b, uint acc) {
     [unroll] for (uint s = 0; s < 32u; s += 8u)

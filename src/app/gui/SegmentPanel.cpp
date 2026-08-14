@@ -338,7 +338,7 @@ void SegmentPanel::start_job(const MaskSettings& s, const app::FrameMask& stenci
     // about this one. The run is where they all come together.
     std::vector<MaskClick> clicks;
     for (const MaskClick& c : s.clicks)
-        if (c.frame == frame.index) clicks.push_back(c);
+        if (mine(c) && c.frame == frame.index) clicks.push_back(c);
     const MaskSettings settings = s;
     const bool frame_dirty = _frame_dirty;
     _frame_dirty = false;
@@ -813,6 +813,7 @@ void SegmentPanel::draw_image(MaskSettings& settings, app::FrameStencil& stencil
         c.object = settings.current_object;
         c.frame = frame.index;
         c.position = frame.position;
+        c.source = _input;
         settings.clicks.push_back(c);
         start_job(settings, shown);
     }
@@ -834,7 +835,7 @@ void SegmentPanel::draw_image(MaskSettings& settings, app::FrameStencil& stencil
     }
 
     for (const MaskClick& c : settings.clicks) {
-        if (c.frame != frame.index) continue;
+        if (!mine(c) || c.frame != frame.index) continue;
         const ImVec2 p(origin.x + c.x / (float)_tex_w * size.x,
                        origin.y + c.y / (float)_tex_h * size.y);
         const ImU32 col = c.positive ? object_color(c.object)
@@ -962,7 +963,7 @@ void SegmentPanel::draw_objects(MaskSettings& settings, bool& edited) {
         int here = 0, elsewhere = 0;
         const long long cur = _frames.empty() ? 0 : _frames[(size_t)_frame_idx].index;
         for (const MaskClick& c : settings.clicks)
-            if (c.object == o) (c.frame == cur ? here : elsewhere)++;
+            if (mine(c) && c.object == o) (c.frame == cur ? here : elsewhere)++;
 
         const ImU32 col = object_color(o);
         ImGui::ColorButton("##col", ImGui::ColorConvertU32ToFloat4(col),
@@ -984,7 +985,9 @@ void SegmentPanel::draw_objects(MaskSettings& settings, bool& edited) {
             if (ui::SmallButton(dmsg::object_clear)) {
                 auto& v = settings.clicks;
                 v.erase(std::remove_if(v.begin(), v.end(),
-                                       [o](const MaskClick& c) { return c.object == o; }),
+                                       [&](const MaskClick& c) {
+                                           return mine(c) && c.object == o;
+                                       }),
                         v.end());
                 edited = true;
             }
@@ -999,7 +1002,10 @@ void SegmentPanel::draw_objects(MaskSettings& settings, bool& edited) {
     if (settings.object_count > 1) {
         ImGui::SameLine();
         if (ui::SmallButton(dmsg::object_clear_all)) {
-            settings.clicks.clear();
+            auto& v = settings.clicks;
+            v.erase(std::remove_if(v.begin(), v.end(),
+                                   [&](const MaskClick& c) { return mine(c); }),
+                    v.end());
             settings.object_count = 1;
             settings.current_object = 0;
             edited = true;

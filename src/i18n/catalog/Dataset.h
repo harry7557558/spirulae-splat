@@ -1881,34 +1881,36 @@ SS_MSG(mask_forget_clicks_help,
        "tıklamanız gerekmez."));
 
 // {0} is the input the clicks were drawn on.
-SS_MSG(mask_clicks_one_input_only,
-    EN("They describe one frame of {0}, so only that input is masked. Add a "
-       "text prompt to cover the others."),
-    JA("これらは {0} の1フレームを指しているため、マスクされるのはその入力だけ"
-       "です。ほかもカバーするにはテキストのプロンプトを追加してください。"),
-    ZH_HANS("它们描述的是 {0} 的某一帧，所以只有这个输入会被蒙版。"
-            "要覆盖其他输入，请加上文本提示。"),
-    ZH_HANT("它們描述的是 {0} 的某一影格，所以只有這個輸入會被遮罩。"
-            "要涵蓋其他輸入，請加上文字提示。"),
-    KO("이것들은 {0}의 한 프레임을 가리키므로 그 입력만 마스킹됩니다. 나머지도 "
-       "덮으려면 텍스트 프롬프트를 추가하세요."),
-    DE("Sie beschreiben ein Bild von {0}, also wird nur diese Eingabe "
-       "maskiert. Für die übrigen einen Textbefehl ergänzen."),
-    FR("Ils décrivent une image de {0} : seule cette entrée est masquée. "
-       "Ajoutez une invite textuelle pour couvrir les autres."),
-    ES("Describen un fotograma de {0}, así que solo se enmascara esa entrada. "
-       "Añada una indicación de texto para cubrir las demás."),
-    PT("Eles descrevem um quadro de {0}, então só essa entrada é mascarada. "
-       "Adicione um comando de texto para cobrir as outras."),
-    IT("Descrivono un fotogramma di {0}, quindi viene mascherato solo quell'"
-       "ingresso. Aggiunga un testo per coprire gli altri."),
-    NL("Ze beschrijven één beeld van {0}, dus alleen die invoer wordt "
-       "gemaskeerd. Voeg een tekstprompt toe om de rest te dekken."),
-    RU("Они описывают один кадр входа {0}, поэтому маскируется только он. "
-       "Добавьте текстовый запрос, чтобы охватить остальные."),
-    TR("Bunlar {0} girdisinin bir karesini betimliyor, dolayısıyla yalnızca o "
-       "girdi maskelenir. Diğerlerini de kapsamak için bir metin istemi "
-       "ekleyin."));
+SS_MSG(mask_inputs_need_clicks,
+    EN("They prompt only the input they were drawn on. Still without one: {0}. "
+       "Click the object there too, or add a text prompt."),
+    JA("クリックした対象は、それを描いた入力にしか効きません。まだないのは "
+       "{0} です。そちらでも対象をクリックするか、文字のプロンプトを追加して"
+       "ください。"),
+    ZH_HANS("点选的对象只对标注它的那个输入有效。还没有的是：{0}。请在那里也"
+            "点选一次，或者加上文字提示。"),
+    ZH_HANT("點選的對象只對標註它的那個輸入有效。還沒有的是：{0}。請在那裡也"
+            "點選一次，或者加上文字提示。"),
+    KO("클릭한 대상은 그것을 그린 입력에만 적용됩니다. 아직 없는 입력: {0}. "
+       "거기서도 대상을 클릭하거나 텍스트 프롬프트를 추가하세요."),
+    DE("Sie gelten nur für die Eingabe, auf der sie eingezeichnet wurden. Noch "
+       "ohne: {0}. Klicken Sie das Objekt auch dort an, oder ergänzen Sie einen "
+       "Texthinweis."),
+    FR("Ils ne valent que pour l'entrée sur laquelle ils ont été tracés. "
+       "Toujours sans : {0}. Cliquez-y aussi l'objet, ou ajoutez une invite "
+       "textuelle."),
+    ES("Solo valen para la entrada en la que se marcaron. Aún sin ninguno: {0}. "
+       "Marque el objeto ahí también, o añada una indicación de texto."),
+    PT("Só valem para a entrada em que foram marcados. Ainda sem: {0}. Marque o "
+       "objeto ali também, ou acrescente um comando de texto."),
+    IT("Valgono solo per l'ingresso su cui sono stati tracciati. Ancora senza: "
+       "{0}. Clicchi l'oggetto anche lì, oppure aggiunga un testo."),
+    NL("Ze gelden alleen voor de invoer waarop ze zijn gezet. Nog zonder: {0}. "
+       "Klik het object daar ook aan, of voeg een tekstprompt toe."),
+    RU("Они действуют только на том входе, где их указали. Пока без них: {0}. "
+       "Отметьте объект и там или добавьте текстовый запрос."),
+    TR("Yalnızca işaretlendikleri girdi için geçerlidirler. Hâlâ olmayan: {0}. "
+       "Nesneyi orada da tıklayın ya da bir metin istemi ekleyin."));
 
 SS_MSG(mask_pick_input_first,
     EN("Pick the photos or video first."),
@@ -6836,32 +6838,6 @@ SS_MSG(log_clicks_dropped_input_gone,
        "больше не в списке."),
     TR("Tıklanan nesneler bırakıldı: üzerlerinde işaretlendikleri {0} girdisi "
        "artık listede değil."));
-
-SS_MSG(log_clicks_dropped_switched,
-    EN("Clicked objects dropped: they were drawn on {0}, which is not the "
-       "input being previewed now."),
-    JA("クリックした物体を破棄しました。{0} で指定されたもので、いま"
-       "プレビューしている入力とは異なるためです。"),
-    ZH_HANS("已丢弃点选的物体：它们是在 {0} 上标注的，而现在预览的不是那个输入。"),
-    ZH_HANT("已丟棄點選的物體：它們是在 {0} 上標註的，而現在預覽的不是那個輸入。"),
-    KO("클릭한 물체를 버렸습니다. {0}에서 지정한 것인데, 지금 미리보기 중인 "
-       "입력이 아닙니다."),
-    DE("Angeklickte Objekte verworfen: sie wurden auf {0} eingezeichnet, und "
-       "das ist nicht die jetzt betrachtete Eingabe."),
-    FR("Objets cliqués abandonnés : ils avaient été tracés sur {0}, qui n'est "
-       "pas l'entrée actuellement prévisualisée."),
-    ES("Se descartaron los objetos marcados: se marcaron sobre {0}, que no es "
-       "la entrada que se está previsualizando ahora."),
-    PT("Objetos clicados descartados: foram marcados em {0}, que não é a "
-       "entrada em prévia agora."),
-    IT("Oggetti cliccati scartati: erano stati tracciati su {0}, che non è "
-       "l'ingresso ora in anteprima."),
-    NL("Aangeklikte objecten vervallen: ze waren gezet op {0}, en dat is niet "
-       "de invoer die nu wordt bekeken."),
-    RU("Отмеченные объекты сброшены: они указаны на входе {0}, а сейчас "
-       "просматривается другой."),
-    TR("Tıklanan nesneler bırakıldı: {0} üzerinde işaretlenmişlerdi, oysa şu "
-       "an önizlenen girdi o değil."));
 
 SS_MSG(log_drop_no_images,
     EN("Dropped folder contains no dataset or images: {0}"),

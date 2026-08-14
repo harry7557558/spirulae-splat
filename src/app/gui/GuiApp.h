@@ -356,9 +356,8 @@ private:
     bool _border_enable = false;
     MaskSettings _mask;
     SegmentPanel _segment;
-    // Which input "Try the mask" runs on, and so which input the clicked
-    // objects are prompts for (MaskSettings::clicks_source) and which one's
-    // stencil the panel edits.
+    // Which input "Try the mask" runs on: which input a new clicked object
+    // prompts (MaskClick::source) and which one's stencil the panel edits.
     int _mask_preview_input = 0;
     // input_pixel_size()'s cache, keyed by input path. A zero pair is a
     // remembered "could not tell", so nothing is probed twice.

@@ -950,6 +950,36 @@ static std::string source_folder_base(const PrepInput& s) {
     return is_reserved_dataset_name(n) ? n + "_input" : n;
 }
 
+// Click sources that name an input the list no longer holds.
+static std::vector<std::string> dropped_click_sources(
+    const std::vector<PrepInput>& sources, const std::vector<MaskClick>& clicks) {
+    std::vector<std::string> gone;
+    for (const MaskClick& c : clicks) {
+        if (c.source.empty()) continue;
+        bool here = false;
+        for (const PrepInput& s : sources) here = here || s.path == c.source;
+        if (!here && std::find(gone.begin(), gone.end(), c.source) == gone.end())
+            gone.push_back(c.source);
+    }
+    return gone;
+}
+
+// Inputs no click prompts, named as the picker names them. A clicks-only job
+// needs this empty; DatasetPrep::run refuses it otherwise.
+static std::string inputs_without_clicks(const std::vector<PrepInput>& sources,
+                                         const std::vector<MaskClick>& clicks) {
+    std::string out;
+    for (const PrepInput& s : sources) {
+        bool prompted = false;
+        for (const MaskClick& c : clicks)
+            prompted = prompted || c.source.empty() || c.source == s.path;
+        if (prompted) continue;
+        if (!out.empty()) out += ", ";
+        out += s.subdir.empty() ? s.path : s.subdir;
+    }
+    return out;
+}
+
 void GuiApp::refresh_sources() {
     // One input keeps the layout a one-video dataset has always had: frames
     // straight into images/ (and cam0/, cam1/ under it for a dual-lens file).
@@ -975,20 +1005,19 @@ void GuiApp::refresh_sources() {
 
     if (_mask_preview_input >= (int)_sources.size()) _mask_preview_input = 0;
 
-    // Clicked objects belong to one input's frames. If that input is no longer
-    // in the list there is nothing for them to describe, so they go.
-    if (!_mask.clicks.empty()) {
-        bool still_here = false;
-        for (const PrepInput& s : _sources)
-            still_here = still_here || s.path == _mask.clicks_source;
-        if (!still_here) {
-            log(i18n::format(dmsg::log_clicks_dropped_input_gone,
-                             {_mask.clicks_source}));
-            _mask.clicks.clear();
-            _mask.clicks_source.clear();
-            _mask.object_count = 1;
-            _mask.current_object = 0;
-        }
+    // Clicks describe one input's frames; when it leaves the list, they go.
+    const std::vector<std::string> gone_inputs =
+        dropped_click_sources(_sources, _mask.clicks);
+    for (const std::string& gone : gone_inputs) {
+        log(i18n::format(dmsg::log_clicks_dropped_input_gone, {gone}));
+        auto& v = _mask.clicks;
+        v.erase(std::remove_if(v.begin(), v.end(),
+                               [&](const MaskClick& c) { return c.source == gone; }),
+                v.end());
+    }
+    if (!gone_inputs.empty() && _mask.clicks.empty()) {
+        _mask.object_count = 1;
+        _mask.current_object = 0;
     }
 
     // The output folder follows the input until the user takes it over.
@@ -1729,7 +1758,6 @@ void GuiApp::sync_dataset_jobs() {
     prep.mask_keep_subject = _mask.keep_subject;
     prep.mask_max_image_size = _mask.max_image_size;
     prep.mask_clicks = _mask.clicks;
-    prep.mask_clicks_source = _mask.clicks_source;
     prep.mask_model_path = selected_model_path();
     prep.force_external_masking = _sfm_job.prep.force_external_masking;
     if (const ModelEntry* e = find_model(_model_id))
@@ -2155,11 +2183,6 @@ void GuiApp::open_mask_preview() {
         return;
     }
     const PrepInput& s = _sources[(size_t)_mask_preview_input];
-    // The clicks made from here are prompts for THIS input; record which one so
-    // the run does not carry them into a different capture
-    // (PrepJob::mask_clicks_source). The stencil needs no such note -- it is
-    // stored on the input it describes.
-    _mask.clicks_source = s.path;
     // The preview reads the video the same way preparation will: in process
     // where the driver can, ffmpeg where it cannot or where the job said to.
     _segment.open(s.path, s.is_video, _mask_enable ? selected_model_path() : "",
@@ -2264,9 +2287,11 @@ void GuiApp::draw_masking_options() {
                 _mask.current_object = 0;
             }
             ui::help_on_hover(dmsg::mask_forget_clicks_help);
-            if (_sources.size() > 1 && _mask.prompt.empty())
-                ui::TextColoredWrapped(kWarn, dmsg::mask_clicks_one_input_only,
-                                       {_mask.clicks_source});
+            const std::string unprompted =
+                inputs_without_clicks(_sources, _mask.clicks);
+            if (!unprompted.empty() && _mask.prompt.empty())
+                ui::TextColoredWrapped(kWarn, dmsg::mask_inputs_need_clicks,
+                                       {unprompted});
         }
     } else if (_mask_enable) {
         ui::TextWrappedRaw(backends().masking_note);
@@ -2277,11 +2302,8 @@ void GuiApp::draw_masking_options() {
     // the stencil half of it needs no model, so it must not sit behind one.
     if (ui::Button(dmsg::mask_try)) open_mask_preview();
     ui::help_on_hover(dmsg::mask_try_help);
-    // Which input it opens, once there is a choice. Clicks belong to the frames
-    // of one capture, so this also decides which input they prompt -- and
-    // switching after clicking would silently reattribute them, so they are
-    // dropped instead, loudly. The stencil needs no such care: it is stored on
-    // the input it describes.
+    // Which input it opens, and so which input a NEW click prompts; the ones
+    // already made stay with their own (MaskClick::source).
     if (_sources.size() > 1) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(px(220.0f));
@@ -2291,14 +2313,6 @@ void GuiApp::draw_masking_options() {
         if (ui::ComboRaw(ui::detail::label(dmsg::mask_on_input), &pick,
                          names.data(), (int)names.size()) &&
             pick != _mask_preview_input) {
-            if (!_mask.clicks.empty() &&
-                _mask.clicks_source != _sources[(size_t)pick].path) {
-                log(i18n::format(dmsg::log_clicks_dropped_switched,
-                                 {_mask.clicks_source}));
-                _mask.clicks.clear();
-                _mask.object_count = 1;
-                _mask.current_object = 0;
-            }
             _mask_preview_input = pick;
             // An open panel is showing the old input's frames and editing its
             // stencil; point both at the new one.

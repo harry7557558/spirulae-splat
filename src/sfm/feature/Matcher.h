@@ -76,10 +76,10 @@ struct IFeatureMatcher {
 class BruteForceMatcher : public IFeatureMatcher {
 public:
     explicit BruteForceMatcher(const MatchOptions& opt = {}) : opt_(opt) {
-        // DP4A where the device has it, the unpacked equivalent where it does
-        // not (Intel Gen11/Gen12 integrated). Same integer result either way --
-        // see bruteforce.slang -- so this only costs matching throughput.
-        dot4_ = VkContext::probeCaps(opt.device).intDotProduct;
+        // DP4A where the device has the instruction, the unpacked equivalent
+        // where it lacks it (Intel Gen11/Gen12) or only emulates it (Apple).
+        // Same integer result either way -- see bruteforce.slang.
+        dot4_ = VkContext::probeCaps(opt.device).intDotProductFast;
         // SS_SFM_NO_DOT4=1 forces the fallback on a device that has DP4A,
         // which is how "same integer result" gets checked without the hardware
         // that lacks it.

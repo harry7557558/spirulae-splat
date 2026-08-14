@@ -146,12 +146,12 @@ fs::path under(const std::string& base, const std::string& sub) {
     return sub.empty() ? fs::path(base) : fs::path(base) / sub;
 }
 
-// Are the job's clicked objects prompts for THIS input? See
-// PrepJob::mask_clicks_source: an unnamed source means the clicks were drawn
-// before there was anything to distinguish, which is the single-input case.
-bool clicks_apply_to(const PrepJob& job, const PrepInput& in) {
-    return job.mask_clicks.empty() || job.mask_clicks_source.empty() ||
-           job.mask_clicks_source == in.path;
+// The clicks that prompt this input; an unnamed source is the single-input case.
+std::vector<MaskClick> clicks_for(const PrepJob& job, const PrepInput& in) {
+    std::vector<MaskClick> out;
+    for (const MaskClick& c : job.mask_clicks)
+        if (c.source.empty() || c.source == in.path) out.push_back(c);
+    return out;
 }
 
 std::string round_to(double v, int decimals) {
@@ -584,6 +584,21 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
             error = lmsg::err_mask_no_target.get();
             return false;
         }
+        // Half-masking reads as a masking run that worked, so refuse instead:
+        // without a text prompt, every input needs clicks of its own.
+        if (job.mask_prompt.empty()) {
+            std::string unprompted;
+            for (size_t i = 0; i < job.inputs.size(); i++) {
+                if (per[i].have_masks || !clicks_for(job, job.inputs[i]).empty())
+                    continue;
+                if (!unprompted.empty()) unprompted += ", ";
+                unprompted += job.inputs[i].path;
+            }
+            if (!unprompted.empty()) {
+                error = fmt(lmsg::err_inputs_without_prompt, {unprompted});
+                return false;
+            }
+        }
         for (size_t i = 0; i < job.inputs.size(); i++) {
             // Already masked: by the decoder in the same pass, or by whoever
             // made the masks this input arrived with. Segmenting over those
@@ -703,10 +718,10 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
     fx.keep = window > 1 ? window : 0;
     fx.max_frames = job.max_frames;
     fx.quality = 95;
-    const bool clicks_here = clicks_apply_to(job, in);
+    const std::vector<MaskClick> clicks = clicks_for(job, in);
     if (job.mask_enable && !job.force_external_masking &&
         !job.mask_model_path.empty() &&
-        (!job.mask_prompt.empty() || clicks_here)) {
+        (!job.mask_prompt.empty() || !clicks.empty())) {
         // Masking rides along on the decode: the frame is already on the
         // device, so this is far cheaper than a second pass over the JPEGs.
         _stage(lmsg::stage_extract_mask_gpu.get());
@@ -715,10 +730,13 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
         fx.mask.neg_text = job.mask_negative_prompt;
         fx.mask.keep_prompted = job.mask_keep_subject;
         fx.mask.max_size = job.mask_max_image_size;
+        // Always: these frames are a video, and the memory bank is what carries
+        // the subject across them (generate_masks_builtin says what detection
+        // alone finds without it).
         fx.mask.video = true;
         // This path reads the video itself, so a click's decoded index means
         // the same thing here as it did in the preview.
-        if (clicks_here) fx.mask.seeds = seeds_from_clicks(job.mask_clicks, 0);
+        fx.mask.seeds = seeds_from_clicks(clicks, 0);
     }
 
     app::FrameExtractSinks sinks;
@@ -922,14 +940,6 @@ bool DatasetPrep::generate_masks(const PrepJob& job, const PrepInput& in,
                                  const std::string& masks,
                                  const std::string& masks_rel,
                                  std::string& error) {
-    // A click describes one frame of one capture (see PrepJob::mask_clicks_
-    // source), so an input it does not belong to has only the text prompt --
-    // and if there is none, nothing at all to mask by. Saying so beats writing
-    // masks from a prompt the user never gave for these images.
-    if (!clicks_apply_to(job, in) && job.mask_prompt.empty()) {
-        _log(fmt(lmsg::clicks_other_input_unmasked, {in.path}));
-        return true;
-    }
     const bool want_builtin = !job.force_external_masking &&
                               backends().builtin_masking &&
                               !job.mask_model_path.empty();
@@ -971,23 +981,16 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
     mo.neg_text = job.mask_negative_prompt;
     mo.keep_prompted = job.mask_keep_subject;
     mo.max_size = job.mask_max_image_size;
-    // A folder of photos is not a video: consecutive files may be anywhere in
-    // the scene, so tracking across them would carry a memory bank that does
-    // not apply. Clicks are the exception and force it on -- a click says
-    // nothing about any frame but its own, so without a memory bank to carry
-    // the object forward there is nothing to propagate, and the input in that
-    // case is an ordered capture (this path also masks frames that ffmpeg
-    // extracted, which is where a clicked object usually arrives).
-    const bool clicks_here = clicks_apply_to(job, in);
-    mo.video = clicks_here && !job.mask_clicks.empty();
-    // For a folder of photos the preview counted the same files in the same
-    // order, so a click's frame index is exact. For frames ffmpeg extracted it
-    // is not -- the preview measured against the video and ffmpeg resampled it
-    // to a different rate -- and the fraction through the capture is the part
-    // that survives, so the index is recomputed from it here.
-    if (clicks_here)
-        mo.seeds = seeds_from_clicks(job.mask_clicks,
-                                     in.is_video ? (int64_t)files.size() : 0);
+    // Frames extracted from a video ARE a video, and the memory bank is what
+    // finds the subject on them. Unrelated photos get no bank -- tracking
+    // across them would carry one that does not apply -- unless a click needs it,
+    // since a click says nothing about any frame but its own.
+    const std::vector<MaskClick> clicks = clicks_for(job, in);
+    mo.video = in.is_video || !clicks.empty();
+    // A photo folder's index is exact (the preview counted the same files in
+    // the same order); ffmpeg resampled the video to a different rate, so there
+    // the fraction through the capture is what survives.
+    mo.seeds = seeds_from_clicks(clicks, in.is_video ? (int64_t)files.size() : 0);
 
     sam::Masker masker;
     if (!masker.init(mo, error)) return false;

@@ -119,6 +119,10 @@ struct VkDeviceCaps {
     bool float64AtomicAdd = false;  // ... and its f64 counterpart
     bool int64Atomics = false;      // shaderInt64 + shaderBufferInt64Atomics
     bool intDotProduct = false;     // VK_KHR_shader_integer_dot_product
+    // ... and whether the packed uint8x4 form is a hardware instruction. A
+    // driver may emulate it (MoltenVK does, worse than our own spelling: 114 vs
+    // 43 ms per 8192x8192 pair on an M2), so this is what picks the blob.
+    bool intDotProductFast = false;
 };
 
 class VkContext {
@@ -729,6 +733,14 @@ private:
         if (dot_ext) { fDot.pNext = f2.pNext; f2.pNext = &fDot; }
         vkGetPhysicalDeviceFeatures2(phys, &f2);
 
+        VkPhysicalDeviceShaderIntegerDotProductProperties pDot{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_PROPERTIES};
+        if (dot_ext) {
+            VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            p2.pNext = &pDot;
+            vkGetPhysicalDeviceProperties2(phys, &p2);
+        }
+
         VkDeviceCaps c;
         c.float64 = f2.features.shaderFloat64 == VK_TRUE;
         c.float32AtomicAdd = atomic_float_ext &&
@@ -740,6 +752,9 @@ private:
         c.int64Atomics = f2.features.shaderInt64 == VK_TRUE &&
                          f12.shaderBufferInt64Atomics == VK_TRUE;
         c.intDotProduct = dot_ext && fDot.shaderIntegerDotProduct == VK_TRUE;
+        c.intDotProductFast =
+            c.intDotProduct &&
+            pDot.integerDotProduct4x8BitPackedUnsignedAccelerated == VK_TRUE;
         return c;
     }
 

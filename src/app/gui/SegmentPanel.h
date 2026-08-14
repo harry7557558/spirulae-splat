@@ -47,15 +47,11 @@ struct MaskSettings {
     bool keep_subject = false;       // prompt names what to KEEP
     int  max_image_size = 1600;
     float threshold = 0.5f;
-    // Clicked objects, across every frame the user visited.
+    // Clicked objects, across every frame and every input the user visited;
+    // each carries the input it was drawn on (MaskClick::source).
     std::vector<MaskClick> clicks;
     int object_count = 1;            // how many the user has opened
     int current_object = 0;          // which one a new click joins
-    // The input they were drawn on. A click is a point on a frame of ONE
-    // capture, so a dataset built from several videos has to know which of them
-    // these describe -- the others are masked from the text prompt alone
-    // (PrepJob::mask_clicks_source).
-    std::string clicks_source;
 };
 
 class SegmentPanel {
@@ -106,6 +102,9 @@ private:
     // not switched off by the job's "always use ffmpeg"? False means every
     // frame this panel shows comes from ffmpeg.
     bool builtin_decode() const;
+
+    // The settings hold every input's clicks; these are the ones on this picture.
+    bool mine(const MaskClick& c) const { return c.source == _input; }
 
     bool _open = false;
     std::string _model_path;
