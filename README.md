@@ -55,8 +55,6 @@ Spirula Studio trains 3D Gaussian Splatting models &ndash; from raw photo/video 
 
 - **July 12, 2026: GUI** &ndash; A training GUI has been implemented. CLI training will remain accessible.
 
-<br/>
-
 
 # Download
 
@@ -164,8 +162,6 @@ bash build_develop.bash -DSS_BUILD_CLI=ON -DSS_BUILD_GUI=ON -DSS_BACKEND=cuda
 If it builds successfully, you get `build/spirula` binary.
 
 </details>
-
-<br/>
 
 # Gallery
 
