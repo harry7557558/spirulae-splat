@@ -90,8 +90,8 @@ user why.
 
 Turning it on buys in-process GPU decoding: roughly 15× faster frame
 extraction (a 127-second 1080p30 clip in ten seconds rather than minutes),
-masking that rides along on the same device pass, and no ffmpeg to install.
-Nothing else in the build changes.
+`spirula sam extract`'s masking riding along on the same device pass, and no
+ffmpeg to install. Nothing else in the build changes.
 
 If you distribute binaries, decide for your jurisdiction and your users before
 shipping one built with it on.

@@ -101,6 +101,240 @@ SS_MSG(stage_running,
     PT("{0}…"),          IT("{0}…"),         NL("{0}…"),         RU("{0}…"),
     TR("{0}…"));
 
+// ---------------------------------------------------------------------------
+// The steps a run goes through, as the strip above the log names them. Short
+// nouns, not the sentences the log uses: this is a row of six.
+// ---------------------------------------------------------------------------
+
+SS_MSG(step_frames,
+    EN("Frames"),        JA("フレーム"),      ZH_HANS("帧"),       ZH_HANT("影格"),
+    KO("프레임"),         DE("Bilder"),       FR("Images"),       ES("Fotogramas"),
+    PT("Quadros"),       IT("Fotogrammi"),   NL("Beelden"),      RU("Кадры"),
+    TR("Kareler"));
+
+SS_MSG(step_masks,
+    EN("Masks"),         JA("マスク"),        ZH_HANS("蒙版"),      ZH_HANT("遮罩"),
+    KO("마스크"),         DE("Masken"),       FR("Masques"),      ES("Máscaras"),
+    PT("Máscaras"),      IT("Maschere"),     NL("Maskers"),      RU("Маски"),
+    TR("Maskeler"));
+
+SS_MSG(step_features,
+    EN("Features"),      JA("特徴点"),        ZH_HANS("特征点"),    ZH_HANT("特徵點"),
+    KO("특징점"),         DE("Merkmale"),     FR("Points"),       ES("Puntos"),
+    PT("Pontos"),        IT("Punti"),        NL("Kenmerken"),    RU("Признаки"),
+    TR("Öznitelikler"));
+
+SS_MSG(step_matching,
+    EN("Matching"),      JA("照合"),          ZH_HANS("匹配"),      ZH_HANT("比對"),
+    KO("정합"),           DE("Zuordnung"),    FR("Appariement"),  ES("Emparejado"),
+    PT("Pareamento"),    IT("Confronto"),    NL("Koppelen"),     RU("Сопоставление"),
+    TR("Eşleştirme"));
+
+SS_MSG(step_mapping,
+    EN("Mapping"),       JA("再構成"),        ZH_HANS("重建"),      ZH_HANT("重建"),
+    KO("재구성"),         DE("Rekonstruktion"), FR("Reconstruction"),
+    ES("Reconstrucción"), PT("Reconstrução"), IT("Ricostruzione"),
+    NL("Reconstructie"), RU("Реконструкция"), TR("Yeniden kurma"));
+
+SS_MSG(step_finishing,
+    EN("Finishing"),     JA("仕上げ"),        ZH_HANS("收尾"),      ZH_HANT("收尾"),
+    KO("마무리"),         DE("Abschluss"),    FR("Finalisation"), ES("Cierre"),
+    PT("Fecho"),         IT("Chiusura"),     NL("Afronden"),     RU("Завершение"),
+    TR("Bitiriş"));
+
+SS_MSG(step_locked,
+    EN("This step has already started, so what it was told is fixed for this "
+       "run. Anything a later step reads can still be changed."),
+    JA("この工程はすでに始まっているので、指示は今回の実行では変えられません。"
+       "あとの工程が読む設定はまだ変えられます。"),
+    ZH_HANS("这一步已经开始，本次运行中它的设置不能再改。后面步骤要读的设置仍然可以改。"),
+    ZH_HANT("這一步已經開始，本次執行中它的設定不能再改。後面步驟要讀的設定仍然可以改。"),
+    KO("이 단계는 이미 시작해서 이번 실행에서는 설정을 바꿀 수 없습니다. "
+       "뒤의 단계가 읽는 설정은 아직 바꿀 수 있습니다."),
+    DE("Dieser Schritt läuft bereits, seine Vorgaben stehen für diesen Lauf "
+       "fest. Was ein späterer Schritt liest, lässt sich noch ändern."),
+    FR("Cette étape a déjà commencé : ses réglages sont figés pour cette "
+       "exécution. Ce qu'une étape suivante lit reste modifiable."),
+    ES("Este paso ya empezó, así que sus ajustes quedan fijos en esta "
+       "ejecución. Lo que lee un paso posterior todavía se puede cambiar."),
+    PT("Esta etapa já começou, por isso os ajustes dela ficam fixos nesta "
+       "execução. O que uma etapa posterior lê ainda pode mudar."),
+    IT("Questo passo è già iniziato, quindi le sue impostazioni sono fissate "
+       "per questa esecuzione. Ciò che legge un passo successivo si può ancora "
+       "cambiare."),
+    NL("Deze stap is al begonnen, dus zijn instellingen liggen vast voor deze "
+       "run. Wat een latere stap leest, kan nog veranderen."),
+    RU("Этот шаг уже начался, поэтому его настройки закреплены на этот запуск. "
+       "То, что читает более поздний шаг, ещё можно изменить."),
+    TR("Bu adım çoktan başladı, bu yüzden ayarları bu çalışma için sabit. "
+       "Sonraki bir adımın okuduğu ayarlar hâlâ değiştirilebilir."));
+
+SS_MSG(show_frames_strip,
+    EN("Show the frames as they are written"),
+    JA("書き出されるフレームを表示する"),
+    ZH_HANS("显示正在写出的画面"),
+    ZH_HANT("顯示正在寫出的畫面"),
+    KO("써 나가는 프레임을 보여주기"),
+    DE("Die Bilder zeigen, während sie geschrieben werden"),
+    FR("Montrer les images au fur et à mesure"),
+    ES("Mostrar los fotogramas según se escriben"),
+    PT("Mostrar os quadros conforme são escritos"),
+    IT("Mostra i fotogrammi mentre vengono scritti"),
+    NL("De beelden tonen terwijl ze worden weggeschreven"),
+    RU("Показывать кадры по мере записи"),
+    TR("Kareleri yazılırken göster"));
+
+SS_MSG(show_frames_strip_help,
+    EN("A mask is the one thing a counter cannot tell you about: \"1400 images "
+       "masked\" says nothing about whether the prompt caught what you meant. "
+       "Masked-out areas are tinted red, exactly as in Try the mask."),
+    JA("マスクだけは数字ではわかりません。「1400 枚にマスクを作成」と出ていても、"
+       "狙ったものを捉えられたかはわかりません。隠される部分は「マスクを試す」と"
+       "同じように赤く染まります。"),
+    ZH_HANS("蒙版是计数说明不了的：显示“已给 1400 张图做蒙版”，并不告诉你提示词有没有"
+            "抓到你想要的东西。被遮住的区域会染成红色，和“试一下蒙版”里一样。"),
+    ZH_HANT("遮罩是計數說明不了的：顯示「已為 1400 張影像做遮罩」，並不告訴你提示詞有沒有"
+            "抓到你想要的東西。被遮住的區域會染成紅色，和「試一下遮罩」裡一樣。"),
+    KO("마스크는 숫자로 알 수 없는 하나입니다. \"1400장 마스크 완료\"라고 해도 "
+       "프롬프트가 원하던 것을 잡았는지는 알 수 없습니다. 가려지는 부분은 "
+       "\"마스크 시험\"과 똑같이 붉게 물듭니다."),
+    DE("Eine Maske ist das Einzige, worüber ein Zähler nichts sagt: \"1400 "
+       "Bilder maskiert\" verrät nicht, ob der Text getroffen hat, was gemeint "
+       "war. Ausmaskierte Bereiche sind rot getönt, genau wie in \"Maske "
+       "ausprobieren\"."),
+    FR("Un masque est la seule chose qu'un compteur ne dit pas : \"1400 images "
+       "masquées\" n'indique pas si la description a attrapé ce que vous "
+       "vouliez. Les zones masquées sont teintées en rouge, comme dans "
+       "\"Essayer le masque\"."),
+    ES("Una máscara es lo único que un contador no cuenta: \"1400 imágenes "
+       "enmascaradas\" no dice si la descripción atrapó lo que querías. Las "
+       "zonas tapadas salen teñidas de rojo, igual que en \"Probar la "
+       "máscara\"."),
+    PT("Uma máscara é a única coisa que um contador não conta: \"1400 imagens "
+       "mascaradas\" não diz se a descrição pegou o que você queria. As áreas "
+       "tapadas ficam tingidas de vermelho, como em \"Testar a máscara\"."),
+    IT("Una maschera è l'unica cosa che un contatore non dice: \"1400 immagini "
+       "mascherate\" non dice se la descrizione ha preso ciò che volevi. Le "
+       "zone coperte sono tinte di rosso, come in \"Prova la maschera\"."),
+    NL("Een masker is het enige waarover een teller niets zegt: \"1400 "
+       "afbeeldingen gemaskeerd\" vertelt niet of de omschrijving ving wat je "
+       "bedoelde. Weggemaskeerde delen kleuren rood, net als in \"Masker "
+       "uitproberen\"."),
+    RU("Маска -- единственное, о чём счётчик ничего не говорит: \"замаскировано "
+       "1400 изображений\" не сообщает, поймал ли запрос то, что вы имели в "
+       "виду. Скрытые области подкрашены красным, как и в \"Проверить маску\"."),
+    TR("Maske, bir sayacın anlatamayacağı tek şeydir: \"1400 görüntü "
+       "maskelendi\" ifadesi, metnin istediğinizi yakalayıp yakalamadığını "
+       "söylemez. Maskelenen alanlar, \"Maskeyi dene\" bölümündeki gibi "
+       "kırmızıya boyanır."));
+
+// ---------------------------------------------------------------------------
+// Re-doing one step of a run that is already on disk
+// ---------------------------------------------------------------------------
+
+SS_MSG(rerun_section,
+    EN("Re-do one step"),
+    JA("一つの工程だけやり直す"),
+    ZH_HANS("只重做一步"),
+    ZH_HANT("只重做一步"),
+    KO("한 단계만 다시 하기"),
+    DE("Einen Schritt wiederholen"),
+    FR("Refaire une seule étape"),
+    ES("Rehacer un solo paso"),
+    PT("Refazer uma etapa"),
+    IT("Rifare un solo passo"),
+    NL("Eén stap opnieuw doen"),
+    RU("Переделать один шаг"),
+    TR("Tek bir adımı yenile"));
+
+SS_MSG(rerun_section_help,
+    EN("This folder already holds part of a run. Pick a step to throw away and "
+       "do again; everything before it is kept. A bad mask prompt costs the "
+       "masking pass, not the extraction as well."),
+    JA("このフォルダーには前回の途中結果が残っています。やり直す工程を選んでください。"
+       "その前の結果はそのまま使います。マスクの指定を間違えても、やり直すのは"
+       "マスクだけで、フレームの書き出しからにはなりません。"),
+    ZH_HANS("这个文件夹里已经有上次运行的一部分结果。选一步丢掉重做，它之前的都保留。"
+            "蒙版提示词写错了，只需重做蒙版，不必连抽帧一起重来。"),
+    ZH_HANT("這個資料夾裡已經有上次執行的一部分結果。選一步丟掉重做，它之前的都保留。"
+            "遮罩提示詞寫錯了，只需重做遮罩，不必連抽格一起重來。"),
+    KO("이 폴더에는 지난 실행의 일부가 남아 있습니다. 버리고 다시 할 단계를 "
+       "고르세요. 그 앞의 결과는 그대로 씁니다. 마스크 문구를 잘못 써도 "
+       "다시 하는 것은 마스크뿐이고 프레임 추출까지는 아닙니다."),
+    DE("In diesem Ordner liegt schon ein Teil eines Laufs. Wählen Sie den "
+       "Schritt, der verworfen und neu gemacht wird; alles davor bleibt. Ein "
+       "schlechter Masken-Text kostet den Maskendurchgang, nicht auch die "
+       "Bildausgabe."),
+    FR("Ce dossier contient déjà une partie d'une exécution. Choisissez "
+       "l'étape à jeter et à refaire ; tout ce qui précède est conservé. Une "
+       "mauvaise description de masque coûte la passe de masquage, pas aussi "
+       "l'extraction."),
+    ES("Esta carpeta ya guarda parte de una ejecución. Elige el paso que se "
+       "tira y se rehace; todo lo anterior se conserva. Una descripción de "
+       "máscara equivocada cuesta la pasada de máscaras, no también la "
+       "extracción."),
+    PT("Esta pasta já guarda parte de uma execução. Escolha a etapa a jogar "
+       "fora e refazer; tudo antes dela fica. Uma descrição de máscara errada "
+       "custa a passagem de máscaras, não também a extração."),
+    IT("Questa cartella contiene già parte di un'esecuzione. Scegli il passo "
+       "da buttare e rifare; tutto ciò che viene prima resta. Una descrizione "
+       "di maschera sbagliata costa la passata di mascheratura, non anche "
+       "l'estrazione."),
+    NL("In deze map staat al een deel van een run. Kies de stap die wordt "
+       "weggegooid en opnieuw gedaan; alles ervoor blijft staan. Een verkeerde "
+       "maskeromschrijving kost de maskeerronde, niet ook het uitpakken."),
+    RU("В этой папке уже лежит часть запуска. Выберите шаг, который надо "
+       "выбросить и сделать заново; всё до него остаётся. Неудачный запрос для "
+       "маски стоит прохода масок, а не ещё и извлечения кадров."),
+    TR("Bu klasörde bir çalışmanın bir bölümü zaten duruyor. Atılıp yeniden "
+       "yapılacak adımı seçin; ondan öncesi kalır. Kötü bir maske metni yalnız "
+       "maskeleme geçişine mal olur, kare çıkarmaya da değil."));
+
+SS_MSG(rerun_frames,
+    EN("Frames again"),
+    JA("フレームからやり直す"),
+    ZH_HANS("重新抽帧"),
+    ZH_HANT("重新抽格"),
+    KO("프레임부터 다시"),
+    DE("Bilder neu"),
+    FR("Refaire les images"),
+    ES("Rehacer los fotogramas"),
+    PT("Refazer os quadros"),
+    IT("Rifai i fotogrammi"),
+    NL("Beelden opnieuw"),
+    RU("Кадры заново"),
+    TR("Kareler yeniden"));
+
+SS_MSG(rerun_masks,
+    EN("Masks again"),
+    JA("マスクからやり直す"),
+    ZH_HANS("重做蒙版"),
+    ZH_HANT("重做遮罩"),
+    KO("마스크부터 다시"),
+    DE("Masken neu"),
+    FR("Refaire les masques"),
+    ES("Rehacer las máscaras"),
+    PT("Refazer as máscaras"),
+    IT("Rifai le maschere"),
+    NL("Maskers opnieuw"),
+    RU("Маски заново"),
+    TR("Maskeler yeniden"));
+
+SS_MSG(rerun_model,
+    EN("Reconstruction again"),
+    JA("再構成からやり直す"),
+    ZH_HANS("重新重建"),
+    ZH_HANT("重新重建"),
+    KO("재구성부터 다시"),
+    DE("Rekonstruktion neu"),
+    FR("Refaire la reconstruction"),
+    ES("Rehacer la reconstrucción"),
+    PT("Refazer a reconstrução"),
+    IT("Rifai la ricostruzione"),
+    NL("Reconstructie opnieuw"),
+    RU("Реконструкция заново"),
+    TR("Yeniden kurma yeniden"));
+
 SS_MSG(open_in_trainer,
     EN("Open in Trainer"),
     JA("トレーナーで開く"),

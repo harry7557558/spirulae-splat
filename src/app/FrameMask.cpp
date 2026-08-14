@@ -583,7 +583,11 @@ std::map<std::string, std::vector<std::string>> group_frames_by_camera(
         if (!skip.empty() &&
             it->path().lexically_normal().generic_string().rfind(skip, 0) == 0)
             continue;
-        const fs::path rel = fs::relative(it->path(), root, ec);
+        // Lexical: fs::relative resolves symlinks, and an images/ of links
+        // into a raw capture then relativizes to "../../<capture>/...", which
+        // puts the masks in the folder the run was only asked to read.
+        fs::path rel = it->path().lexically_relative(root);
+        if (rel.empty() || *rel.begin() == "..") rel = it->path().filename();
         groups[rel.parent_path().generic_string()].push_back(it->path().string());
     }
     for (auto& [k, v] : groups) std::sort(v.begin(), v.end());

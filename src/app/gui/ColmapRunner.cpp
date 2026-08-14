@@ -97,26 +97,67 @@ ColmapRunner::~ColmapRunner() {
     if (_worker.joinable()) _worker.join();
 }
 
-void ColmapRunner::start(const ColmapJob& job) {
+void ColmapRunner::start(const ColmapJob& job, FilmStrip* film) {
     if (_state.load() == State::Running) return;
     if (_worker.joinable()) _worker.join();
     _cancel = false;
+    _film = film;
+    _prog.reset();
+    if (_film) _film->clear();
     {
         std::lock_guard<std::mutex> lk(_mu);
         _error.clear();
         _dataset_dir.clear();
         _image_dir.clear();
         _mask_dir.clear();
+        _live = job;
     }
     _state = State::Running;
     _worker = std::thread([this, job] { run(job); });
 }
 
+void ColmapRunner::update(const ColmapJob& job) {
+    std::lock_guard<std::mutex> lk(_mu);
+    _live = job;
+}
+
+void ColmapRunner::take_reconstruction(ColmapJob& job) {
+    std::lock_guard<std::mutex> lk(_mu);
+    // Everything from "Cameras" down in ColmapJob: what feature extraction and
+    // everything after it reads. The inputs, the workspace and the video
+    // settings are the run and stay as they were started.
+    const std::vector<PrepInput> inputs = job.inputs;
+    const std::string workspace = job.workspace;
+    const bool resume = job.resume;
+    const float fps = job.video_fps;
+    const int sharp = job.sharp_window, maxf = job.max_frames;
+    job = _live;
+    job.inputs = inputs;
+    job.workspace = workspace;
+    job.resume = resume;
+    job.video_fps = fps;
+    job.sharp_window = sharp;
+    job.max_frames = maxf;
+}
+
+void ColmapRunner::take_masking(PrepJob& prep) {
+    std::lock_guard<std::mutex> lk(_mu);
+    prep.mask_enable = _live.mask_enable;
+    prep.mask_prompt = _live.mask_prompt;
+    prep.mask_negative_prompt = _live.mask_negative_prompt;
+    prep.mask_keep_subject = _live.mask_keep_subject;
+    prep.mask_max_image_size = _live.mask_max_image_size;
+    prep.mask_clicks = _live.mask_clicks;
+    prep.mask_model_path = _live.mask_model_path;
+    prep.mask_model_name = _live.mask_model;
+    prep.force_external_masking = _live.force_external_masking;
+    prep.python_exe = _live.python_exe;
+}
+
 void ColmapRunner::cancel() { _cancel = true; }
 
 std::string ColmapRunner::stage() {
-    std::lock_guard<std::mutex> lk(_mu);
-    return _stage;
+    return _prog.stage(_prog.current()).detail;
 }
 std::string ColmapRunner::error() {
     std::lock_guard<std::mutex> lk(_mu);
@@ -134,24 +175,12 @@ std::string ColmapRunner::mask_dir() {
     std::lock_guard<std::mutex> lk(_mu);
     return _mask_dir;
 }
-std::vector<std::string> ColmapRunner::drain_log() {
-    std::lock_guard<std::mutex> lk(_mu);
-    std::vector<std::string> out;
-    out.swap(_log);
-    return out;
+void ColmapRunner::log(const std::string& line, bool detail) {
+    _prog.note(line, detail);
 }
 
-void ColmapRunner::log(const std::string& line) {
-    std::lock_guard<std::mutex> lk(_mu);
-    _log.push_back(line);
-    if (_log.size() > 5000) _log.erase(_log.begin(), _log.begin() + 1000);
-}
-
-void ColmapRunner::set_stage(const std::string& s) {
-    {
-        std::lock_guard<std::mutex> lk(_mu);
-        _stage = s;
-    }
+void ColmapRunner::set_stage(Stage st, const std::string& s) {
+    _prog.enter(st, s);
     log("==== " + s + " ====");
 }
 
@@ -216,7 +245,7 @@ std::string ColmapRunner::resolve_vocab_tree(const ColmapJob& job) {
     }
     // Download into the cache.
     fs::path dst = fs::path(cache_dir()) / kVocabTreeName;
-    set_stage(lmsg::stage_vocab_download.get());
+    set_stage(Stage::Matching, lmsg::stage_vocab_download.get());
     if (!command_exists("curl")) {
         log("curl not found -- download it manually:");
         log(std::string("  ") + kVocabTreeUrl + " -> " + dst.string());
@@ -252,6 +281,7 @@ double ColmapRunner::model_reproj_error(const ColmapJob& job,
 
 void ColmapRunner::run(ColmapJob job) {
     auto fail = [&](const std::string& why) {
+        _prog.finish(_cancel.load() ? StageStatus::Skipped : StageStatus::Failed);
         std::lock_guard<std::mutex> lk(_mu);
         _error = why;
         _state = _cancel.load() ? State::Cancelled : State::Failed;
@@ -290,6 +320,8 @@ void ColmapRunner::run(ColmapJob job) {
             pj.inputs = job.inputs;
             pj.workspace = job.workspace;
             pj.resume = job.resume;
+            pj.redo_frames = job.redo_frames;
+            pj.redo_masks = job.redo_masks;
             pj.video_fps = job.video_fps;
             pj.sharp_window = job.sharp_window;
             pj.max_frames = job.max_frames;
@@ -306,10 +338,9 @@ void ColmapRunner::run(ColmapJob job) {
             pj.force_external_masking = job.force_external_masking;
             pj.python_exe = job.python_exe;
 
-            DatasetPrep dp([this](const std::string& l) { log(l); },
-                           [this](const std::string& s) { set_stage(s); },
-                           _cancel);
-            if (!dp.run(pj, prep, err)) return fail(err);
+            DatasetPrep dp(&_prog, _film, _cancel);
+            if (!dp.run(pj, prep, err, [this](PrepJob& p) { take_masking(p); }))
+                return fail(err);
         }
         const std::string images = prep.image_dir;
         const std::string image_dir_cfg = prep.image_dir_cfg;
@@ -358,7 +389,9 @@ void ColmapRunner::run(ColmapJob job) {
         }
 
         // ---- 3. feature extraction -----------------------------------------
-        set_stage(aliked ? lmsg::stage_colmap_features_aliked.get()
+        take_reconstruction(job);
+        set_stage(Stage::Features,
+                  aliked ? lmsg::stage_colmap_features_aliked.get()
                          : lmsg::stage_colmap_features.get());
         std::vector<std::string> fe = {job.colmap_exe, "feature_extractor",
             "--database_path", db,
@@ -426,7 +459,7 @@ void ColmapRunner::run(ColmapJob job) {
             std::string vt = resolve_vocab_tree(job);
             if (vt.empty())
                 return fail("no vocabulary tree available (see log)");
-            set_stage(lmsg::stage_match_vocab.get());
+            set_stage(Stage::Matching, lmsg::stage_match_vocab.get());
             ma = {job.colmap_exe, "vocab_tree_matcher",
                   "--database_path", db,
                   "--VocabTreeMatching.vocab_tree_path", vt};
@@ -441,7 +474,7 @@ void ColmapRunner::run(ColmapJob job) {
                 else if ((vt = resolve_vocab_tree(job)).empty())
                     log("warning: no vocabulary tree; loop detection disabled");
             }
-            set_stage(lmsg::stage_match_sequential.get());
+            set_stage(Stage::Matching, lmsg::stage_match_sequential.get());
             ma = {job.colmap_exe, "sequential_matcher",
                   "--database_path", db,
                   "--SequentialMatching.overlap", std::to_string(job.seq_overlap),
@@ -454,7 +487,7 @@ void ColmapRunner::run(ColmapJob job) {
                 ma.push_back(vt);
             }
         } else if (matcher == 1) {
-            set_stage(lmsg::stage_match_exhaustive.get());
+            set_stage(Stage::Matching, lmsg::stage_match_exhaustive.get());
             ma = {job.colmap_exe, "exhaustive_matcher", "--database_path", db};
         }
         if (!match_type.empty()) {
@@ -481,7 +514,7 @@ void ColmapRunner::run(ColmapJob job) {
         if (rc != 0) return fail("colmap matcher failed (see log)");
 
         // ---- 5. sparse reconstruction ----------------------------------------
-        set_stage(lmsg::stage_colmap_mapper.get());
+        set_stage(Stage::Mapping, lmsg::stage_colmap_mapper.get());
         fs::create_directories(ws / "sparse");
         bool fisheye = is_fisheye_model(job.camera_model);
         bool ba_gpu = job.ba_use_gpu;
@@ -553,7 +586,8 @@ void ColmapRunner::run(ColmapJob job) {
         // interrupted mapper leaves nothing and simply reruns; features and
         // matches were reused from the database either way.)
         std::vector<std::pair<int64_t, fs::path>> models;
-        if (job.resume && !(models = enumerate_models()).empty()) {
+        if (job.resume && !job.redo_model &&
+            !(models = enumerate_models()).empty()) {
             log("Resume: " + std::to_string(models.size()) +
                 " existing model(s) under sparse/; skipping the mapper "
                 "(delete sparse/ to re-reconstruct)");
@@ -582,7 +616,7 @@ void ColmapRunner::run(ColmapJob job) {
         // the few seconds. A merge is kept only when the merged model
         // registers more images than the base.
         if (models.size() > 1 && job.merge_models) {
-            set_stage(lmsg::stage_merge_models.get());
+            set_stage(Stage::Mapping, lmsg::stage_merge_models.get());
             fs::path cur = best;
             int64_t cur_n = -models[0].first;
             fs::path acc = ws / "sparse" / ".merge_acc";
@@ -640,7 +674,7 @@ void ColmapRunner::run(ColmapJob job) {
         // against the input (mean reprojection error via model_analyzer)
         // and REVERTED when it got worse or non-finite.
         if (job.final_bundle_adjust) {
-            set_stage(lmsg::stage_bundle_adjust.get());
+            set_stage(Stage::Finishing, lmsg::stage_bundle_adjust.get());
             fs::path tmp = ws / "sparse" / ".ba_tmp";
             remove_tree(tmp);
             fs::create_directories(tmp);
@@ -684,7 +718,8 @@ void ColmapRunner::run(ColmapJob job) {
                 "dataset later, set image_dir to " + image_dir_cfg +
                 " under the dataset-parsing options");
 
-        set_stage(lmsg::stage_done.get());
+        set_stage(Stage::Finishing, lmsg::stage_done.get());
+        _prog.finish(StageStatus::Done);
         {
             std::lock_guard<std::mutex> lk(_mu);
             _dataset_dir = ws.string();

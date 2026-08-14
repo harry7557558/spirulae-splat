@@ -60,6 +60,12 @@ struct FrameExtractSinks {
     std::function<void(const std::string&)> log;
     // (frames written so far, frames decoded so far). Called per written frame.
     std::function<void(int64_t, int64_t)> progress;
+    // A frame worth showing, RGB8 tightly packed, on the extraction thread with
+    // the picture still on the host. Copy what you need and return -- the
+    // decoder does not wait, and a caller that cannot keep up should decline
+    // frames rather than slow it down.
+    std::function<void(const uint8_t* rgb, int w, int h,
+                       const std::string& name)> preview;
     // Polled between frames; set it to stop early. Frames already written stay.
     const std::atomic<bool>* cancel = nullptr;
 };

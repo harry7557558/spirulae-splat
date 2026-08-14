@@ -25,6 +25,8 @@
 // do, so the GUI can say so instead of failing at run time.
 
 #include "app/FrameMask.h"
+#include "app/gui/FilmStrip.h"
+#include "app/gui/PrepProgress.h"
 
 #include <atomic>
 #include <functional>
@@ -96,6 +98,12 @@ struct PrepJob {
     std::vector<PrepInput> inputs;   // in the order the user added them
     std::string workspace;           // output dataset dir (created)
     bool resume = true;              // reuse what a previous run completed
+    // Steps a re-run is redoing rather than reusing: their output is thrown
+    // away even though `resume` would have kept it. Everything before them is
+    // still reused, which is the whole point -- a bad mask prompt should not
+    // cost the extraction as well.
+    bool redo_frames = false;
+    bool redo_masks = false;
 
     // ---- video extraction ----
     float video_fps = 2.0f;          // kept frames per second
@@ -260,14 +268,21 @@ bool is_mask_folder(const std::string& path);
 
 class DatasetPrep {
 public:
-    using LogFn   = std::function<void(const std::string&)>;
-    using StageFn = std::function<void(const std::string&)>;
+    // `film` may be null: a caller with no screen wants the pipeline without
+    // the thumbnails.
+    DatasetPrep(RunProgress* progress, FilmStrip* film,
+                const std::atomic<bool>& cancel)
+        : _prog(progress), _film(film), _cancel(cancel) {}
 
-    DatasetPrep(LogFn log, StageFn stage, const std::atomic<bool>& cancel)
-        : _log(std::move(log)), _stage(std::move(stage)), _cancel(cancel) {}
+    // Called once, immediately before masking starts, and free to replace the
+    // job's mask_* fields with whatever the screen says by then -- which is
+    // what lets the masking options stay editable while frames are extracted.
+    // Anything else it touches has already been acted on.
+    using RefreshFn = std::function<void(PrepJob&)>;
 
     // False with `error` set on failure ("cancelled" when the token was set).
-    bool run(const PrepJob& job, PrepResult& out, std::string& error);
+    bool run(const PrepJob& job, PrepResult& out, std::string& error,
+             const RefreshFn& refresh_masks = {});
 
     // Recursive, matching what COLMAP's feature_extractor indexes. `skip` is a
     // sub-folder not to descend into: a masks/ nested under the images is full
@@ -278,16 +293,18 @@ public:
     static bool first_image_dims(const std::string& dir, int& w, int& h);
 
 private:
+    void log(const std::string& s, bool detail = true);
+    void enter(Stage s, const std::string& text);
+
     // One input's frames. `images` / `masks` are that input's own folders
-    // (images/<subdir>, masks/<subdir>); `masked` comes back true when the
-    // frames were masked on the way out of the decoder, which is the pass that
-    // never has to read them back.
+    // (images/<subdir>, masks/<subdir>); `masked` comes back true only when a
+    // resumed run found masks already sitting beside them.
     bool extract_video(const PrepJob& job, const PrepInput& in,
                        const std::string& images, const std::string& masks,
                        PrepResult& out, bool& masked, std::string& error);
     bool extract_video_builtin(const PrepJob& job, const PrepInput& in,
-                               const std::string& images, const std::string& masks,
-                               PrepResult& out, bool& masked, std::string& error);
+                               const std::string& images,
+                               PrepResult& out, std::string& error);
     bool extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
                               const std::string& images, PrepResult& out,
                               std::string& error);
@@ -300,23 +317,27 @@ private:
     // Masks for ONE input's images. Run per input rather than over the whole
     // tree so the tracker's memory bank never crosses from one capture into the
     // next, and so clicks reach only the input they were drawn on.
+    //
+    // `folded` comes back true when the input's stencil was intersected into
+    // the masks as they were produced, which is what lets apply_stencil be
+    // skipped -- it would otherwise decode and re-encode every mask again.
     bool generate_masks(const PrepJob& job, const PrepInput& in,
                         const std::string& images, const std::string& images_rel,
                         const std::string& masks, const std::string& masks_rel,
-                        std::string& error);
+                        bool& folded, std::string& error);
     bool generate_masks_builtin(const PrepJob& job, const PrepInput& in,
                                 const std::string& images, const std::string& masks,
-                                std::string& error);
+                                bool& folded, std::string& error);
     bool generate_masks_python(const PrepJob& job, const std::string& images_rel,
                                const std::string& masks_rel, std::string& error);
-    // The static stencil, intersected with whatever masking already wrote. No
-    // model and no GPU, so it runs whether or not segmentation did.
+    // The static stencil on its own, for the masks segmentation did not make.
+    // No model and no GPU, so it runs whether or not segmentation did.
     bool apply_stencil(const PrepInput& in, const std::string& images,
                        const std::string& masks, std::string& error);
     int exec(const std::vector<std::string>& argv);
 
-    LogFn _log;
-    StageFn _stage;
+    RunProgress* _prog;
+    FilmStrip* _film;
     const std::atomic<bool>& _cancel;
 };
 

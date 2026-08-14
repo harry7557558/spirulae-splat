@@ -167,6 +167,7 @@ void GuiApp::shutdown() {
     _segment.destroy_gl();
     _colmap.cancel();
     _sfm.cancel();
+    _film.destroy_gl();
     _download.cancel();
     _font_download.cancel();
     _runner.shutdown();
@@ -207,6 +208,8 @@ void GuiApp::load_settings() {
         else if (k == "panel_w") _panel_w = (float)atof(v.c_str());
         else if (k == "log_h") _log_h = (float)atof(v.c_str());
         else if (k == "show_log") _show_log = v != "0";
+        else if (k == "log_details") _log_details = v != "0";
+        else if (k == "show_film") _show_film = v != "0";
         else if (k == "show_settings") _show_settings = v != "0";
         else if (k == "native_dialogs") _dialog.use_native(v != "0");
     }
@@ -240,6 +243,8 @@ void GuiApp::save_settings() {
     std::fprintf(f, "panel_w=%.1f\n", _panel_w);
     std::fprintf(f, "log_h=%.1f\n", _log_h);
     std::fprintf(f, "show_log=%d\n", _show_log ? 1 : 0);
+    std::fprintf(f, "log_details=%d\n", _log_details ? 1 : 0);
+    std::fprintf(f, "show_film=%d\n", _show_film ? 1 : 0);
     std::fprintf(f, "show_settings=%d\n", _show_settings ? 1 : 0);
     std::fprintf(f, "native_dialogs=%d\n", _dialog.native_enabled() ? 1 : 0);
     for (const auto& l : _accepted_licenses)
@@ -256,23 +261,25 @@ void GuiApp::add_recent(std::string path) {
 
 // One entry per SCREEN line: the panel clips with a list clipper and
 // compensates its scroll for trimmed lines, and both want a uniform height.
-void GuiApp::log(const std::string& s) {
+void GuiApp::log(const std::string& s, bool detail) {
     size_t at = 0;
     do {
         const size_t nl = s.find('\n', at);
-        _log.push_back(s.substr(at, nl == std::string::npos ? nl : nl - at));
+        _log.push_back({s.substr(at, nl == std::string::npos ? nl : nl - at),
+                        detail});
         at = nl == std::string::npos ? nl : nl + 1;
     } while (at != std::string::npos);
     while (_log.size() > 4000) {
+        if (!_log.front().detail || _log_details) _log_dropped++;
         _log.pop_front();
-        _log_dropped++;
     }
+    _log_shown_dirty = true;
 }
 
 void GuiApp::append_logs() {
     for (auto& s : _runner.drain_log()) log(s);
-    for (auto& s : _colmap.drain_log()) log(s);
-    for (auto& s : _sfm.drain_log()) log(s);
+    for (auto& l : _colmap.steps().drain()) log(l.text, l.detail);
+    for (auto& l : _sfm.steps().drain()) log(l.text, l.detail);
     for (auto& s : _splat.drain_log()) log(s);
     for (auto& s : _mesh_view.drain_log()) log(s);
     for (auto& s : _mesh.drain_log()) log(s);
@@ -1718,6 +1725,16 @@ bool GuiApp::dataset_busy() const {
            _colmap.state() == ColmapRunner::State::Running;
 }
 
+RunProgress* GuiApp::dataset_steps() {
+    return effective_engine() == Engine::BuiltIn ? &_sfm.steps() : &_colmap.steps();
+}
+
+bool GuiApp::dataset_locked(Stage s) {
+    if (!dataset_busy()) return false;
+    const bool builtin = _sfm.state() == SfmRunner::State::Running;
+    return (builtin ? _sfm.steps() : _colmap.steps()).ran(s);
+}
+
 void GuiApp::cancel_dataset_job() {
     _sfm.cancel();
     _colmap.cancel();
@@ -1786,6 +1803,16 @@ void GuiApp::sync_dataset_jobs() {
     _colmap_job.mask_clicks = prep.mask_clicks;
     _colmap_job.mask_model_path = prep.mask_model_path;
     _colmap_job.mask_model = prep.mask_model_name;
+
+    _sfm_job.prep.redo_frames = _colmap_job.redo_frames = _redo_frames;
+    _sfm_job.prep.redo_masks = _colmap_job.redo_masks = _redo_masks;
+}
+
+void GuiApp::update_dataset_job() {
+    if (!dataset_busy()) return;
+    sync_dataset_jobs();
+    if (_sfm.state() == SfmRunner::State::Running) _sfm.update(_sfm_job);
+    else                                           _colmap.update(_colmap_job);
 }
 
 void GuiApp::start_dataset_job() {
@@ -1793,8 +1820,12 @@ void GuiApp::start_dataset_job() {
     // The preview holds a multi-gigabyte backbone; the run about to start
     // wants that VRAM for reconstruction.
     _segment.close();
-    if (effective_engine() == Engine::BuiltIn) _sfm.start(_sfm_job);
-    else                                      _colmap.start(_colmap_job);
+    if (effective_engine() == Engine::BuiltIn) _sfm.start(_sfm_job, &_film);
+    else                                      _colmap.start(_colmap_job, &_film);
+    // One run each: a re-do that stayed armed would throw the same step away
+    // again the next time the button is pressed.
+    _redo_frames = _redo_masks = false;
+    _sfm_job.redo_model = _colmap_job.redo_model = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1986,6 +2017,11 @@ bool colmap_lens_combo(const char* id, int* idx) {
 void GuiApp::draw_dataset_basics() {
     const bool builtin = effective_engine() == Engine::BuiltIn;
 
+    // Everything down to the frame-rate control is read by feature extraction
+    // and after; the frame settings below it were read the moment the run
+    // began. Hence two guards rather than one round the lot.
+    ImGui::BeginDisabled(dataset_locked(Stage::Features));
+
     // Quality means the same thing to both engines even though it moves
     // different knobs, so it is one control.
     ImGui::SetNextItemWidth(px(220.0f));
@@ -2071,9 +2107,12 @@ void GuiApp::draw_dataset_basics() {
         }
     }
 
+    ImGui::EndDisabled();
+
     bool any_video = false;
     for (const PrepInput& s : _sources) any_video = any_video || s.is_video;
     if (any_video) {
+        ImGui::BeginDisabled(dataset_locked(Stage::Frames));
         ImGui::SetNextItemWidth(px(220.0f));
         ui::InputFloat(dmsg::frames_per_second, &_sfm_job.prep.video_fps,
                        0, 0, "%.2g");
@@ -2089,7 +2128,9 @@ void GuiApp::draw_dataset_basics() {
             ImGui::PopTextWrapPos();
             ui::help_on_hover_raw(backends().video_reason.c_str());
         }
+        ImGui::EndDisabled();
     }
+    if (dataset_busy()) ui::help_on_hover_disabled(dmsg::step_locked);
 }
 
 // One lens per input, in place of the single "Camera / lens" control, once
@@ -2367,6 +2408,102 @@ void GuiApp::draw_masking_options() {
 }
 
 // ---------------------------------------------------------------------------
+// What the run is doing
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const Msg& step_name(Stage s) {
+    switch (s) {
+        case Stage::Frames:    return dmsg::step_frames;
+        case Stage::Masks:     return dmsg::step_masks;
+        case Stage::Features:  return dmsg::step_features;
+        case Stage::Matching:  return dmsg::step_matching;
+        case Stage::Mapping:   return dmsg::step_mapping;
+        case Stage::Finishing: return dmsg::step_finishing;
+    }
+    return dmsg::step_frames;
+}
+
+ImVec4 step_color(StageStatus st) {
+    switch (st) {
+        case StageStatus::Running: return kOk;
+        case StageStatus::Failed:  return kErr;
+        case StageStatus::Done:    return ImGui::GetStyle().Colors[ImGuiCol_Text];
+        default:                   return kDim;
+    }
+}
+
+}  // namespace
+
+// The six steps as a row, the running one with its own bar under it. This is
+// what the log used to be the only view of.
+void GuiApp::draw_dataset_steps() {
+    RunProgress* prog = dataset_steps();
+    Stage running = Stage::Frames;
+    bool any = false;
+    for (int i = 0; i < kNumStages; i++) {
+        const Stage s = (Stage)i;
+        const StageProgress p = prog->stage(s);
+        if (i) {
+            ImGui::SameLine(0.0f, px(6.0f));
+            ui::TextDisabledRaw(">");
+            ImGui::SameLine(0.0f, px(6.0f));
+        }
+        ui::TextColored(step_color(p.status), step_name(s));
+        if (p.status == StageStatus::Running) {
+            running = s;
+            any = true;
+        }
+    }
+
+    if (!any) return;
+    const StageProgress p = prog->stage(running);
+    // A step that can say how far through it is gets a bar; one that cannot
+    // (the mapper counts registrations, not a total) gets its own sentence.
+    if (p.fraction >= 0.0f)
+        ui::ProgressBarRaw(p.fraction, ImVec2(-1, 0),
+                           p.detail.empty() ? nullptr : p.detail.c_str());
+    else if (!p.detail.empty())
+        ui::TextDisabledRaw(p.detail);
+}
+
+// Re-doing one step of what is already in the output folder, instead of the
+// whole run. The rules are probe_workspace's; this only names them.
+void GuiApp::draw_dataset_rerun(const WorkspaceState& prior) {
+    if (!prior.resumable() && !prior.model) return;
+    if (!ui::CollapsingHeader(dmsg::rerun_section)) return;
+    ImGui::Indent();
+    ui::TextDisabledWrapped(dmsg::rerun_section_help);
+
+    const bool builtin = effective_engine() == Engine::BuiltIn;
+    bool* redo_model = builtin ? &_sfm_job.redo_model : &_colmap_job.redo_model;
+    bool go = false;
+    if (prior.frames) {
+        if (ui::Button(dmsg::rerun_frames)) {
+            _redo_frames = _redo_masks = true;   // the masks describe the frames
+            *redo_model = go = true;
+        }
+        ImGui::SameLine();
+    }
+    if (prior.masks) {
+        if (ui::Button(dmsg::rerun_masks)) {
+            _redo_masks = true;
+            *redo_model = go = true;
+        }
+        ImGui::SameLine();
+    }
+    if (ui::Button(dmsg::rerun_model)) {
+        *redo_model = go = true;
+    }
+    ImGui::NewLine();
+    ImGui::Unindent();
+    // Every route re-reconstructs: a model built from frames or masks that have
+    // just been replaced describes neither.
+    if (go) start_dataset_job();
+}
+
+// ---------------------------------------------------------------------------
 // Advanced: built-in SfM
 // ---------------------------------------------------------------------------
 
@@ -2624,8 +2761,14 @@ void GuiApp::draw_new_dataset() {
                       ImVec2(0, -(log_h + (log_h > 0 ? splitter_extent() : 0) +
                                   _ds_action_h)));
 
+    // What is greyed out is decided per section, by whether the step that
+    // reads it has started -- see dataset_locked. The whole form used to grey
+    // the instant a run began, which left nothing to do for the twenty minutes
+    // a capture takes to extract, and nothing to look at but the log.
+    //
+    // The inputs and the engine define the run and are the exception: they are
+    // fixed the moment it starts.
     ImGui::BeginDisabled(running);
-
     draw_dataset_source();
 
     // The selector appears only when both engines are usable: a Vulkan user
@@ -2646,20 +2789,28 @@ void GuiApp::draw_new_dataset() {
             save_settings();
         }
     }
+    ImGui::EndDisabled();
 
     ImGui::Spacing();
     ui::SeparatorText(dmsg::section_settings);
     draw_dataset_basics();
     ImGui::Spacing();
+    ImGui::BeginDisabled(dataset_locked(Stage::Masks));
     draw_masking_options();
+    ImGui::EndDisabled();
     ImGui::Spacing();
 
+    ImGui::BeginDisabled(dataset_locked(Stage::Features));
     if (effective_engine() == Engine::BuiltIn) draw_sfm_advanced();
     else                                       draw_colmap_options();
+    ImGui::EndDisabled();
+    // Tool locations are settings of the application, not of the run.
     draw_tool_locations();
 
-    ImGui::EndDisabled();
     ImGui::EndChild();
+
+    // Edits made above reach the running job at the step that reads them.
+    update_dataset_job();
 
     // ---- run / status ----
     const float action_y0 = ImGui::GetCursorPosY();
@@ -2675,18 +2826,22 @@ void GuiApp::draw_new_dataset() {
             ImGui::SameLine();
             ui::TextDisabled(dmsg::pick_input_first);
         }
+        if (ready) draw_dataset_rerun(probe_workspace(_workspace, _sources));
     } else {
         if (ui::Button(dmsg::cancel, ImVec2(px(200.0f), px(34.0f))))
             cancel_dataset_job();
         ImGui::SameLine();
-        const bool builtin = _sfm.state() == SfmRunner::State::Running;
-        // The stage name comes from the runner and is a diagnostic, not copy.
-        const std::string stage = builtin ? _sfm.stage() : _colmap.stage();
-        const float frac = builtin ? _sfm.progress() : -1.0f;
-        if (frac >= 0.0f)
-            ui::ProgressBarRaw(frac, ImVec2(-1, 0), stage.c_str());
-        else
-            ui::Text(dmsg::stage_running, {stage});
+        ImGui::BeginGroup();
+        draw_dataset_steps();
+        ImGui::EndGroup();
+    }
+
+    // The strip outlives the run: whether the masks came out right is asked
+    // once they are finished, not only while they are being made.
+    if (_film.has_frames()) {
+        if (ui::Checkbox(dmsg::show_frames_strip, &_show_film)) save_settings();
+        ui::help_on_hover(dmsg::show_frames_strip_help);
+        if (_show_film) _film.draw(px(72.0f));
     }
 
     // Both runners report through the same three states.
@@ -4471,28 +4626,47 @@ void GuiApp::draw_log_panel(float height) {
         _log_dropped = 0;
     }
 
+    // A dataset run says far more than it means. The default view is the lines
+    // that answer "what happened"; everything else is behind Details, which is
+    // where a bug report is copied from.
+    if (_log_shown_dirty) {
+        _log_shown.clear();
+        for (size_t i = 0; i < _log.size(); i++)
+            if (_log_details || !_log[i].detail) _log_shown.push_back(i);
+        _log_shown_dirty = false;
+    }
+
     // Log lines arrive already formatted, from here and from the engine, one
     // entry per screen line -- which is what lets the clipper skip the 4000
     // that are not visible.
     ImGuiListClipper clip;
-    clip.Begin((int)_log.size());
+    clip.Begin((int)_log_shown.size());
     while (clip.Step())
         for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++)
-            ui::TextRaw(_log[(size_t)i]);
+            ui::TextRaw(_log[_log_shown[(size_t)i]].text);
     clip.End();
     if (_log_follow) ImGui::SetScrollHereY(1.0f);
 
     if (ImGui::BeginPopupContextWindow()) {
         if (ui::MenuItem(msg::log_follow, nullptr, _log_follow))
             _log_scroll_end = true;
+        if (ui::MenuItem(msg::log_details, nullptr, _log_details)) {
+            _log_details = !_log_details;
+            _log_shown_dirty = true;
+            _log_scroll_end = true;
+            save_settings();
+        }
         if (ui::MenuItem(msg::log_copy)) {
+            // Everything, whichever view is up: a log copied for somebody else
+            // to read is not the summary.
             std::string all;
-            for (const auto& s : _log) { all += s; all += '\n'; }
+            for (const auto& e : _log) { all += e.text; all += '\n'; }
             ImGui::SetClipboardText(all.c_str());
         }
         if (ui::MenuItem(msg::log_clear)) {
             _log.clear();
             _log_dropped = 0;
+            _log_shown_dirty = true;
         }
         ImGui::EndPopup();
     }

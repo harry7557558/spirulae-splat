@@ -30,9 +30,15 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
+#include <map>
+#include <mutex>
+#include <thread>
 
 namespace fs = std::filesystem;
 namespace lmsg = spirula::i18n::msg::log;
@@ -75,6 +81,19 @@ bool is_image_file(const fs::path& p) {
            e == ".tif" || e == ".tiff" || e == ".bmp";
 }
 
+// Throw away what a previous run generated, for a step being re-done. Only
+// under the workspace: photos read where they are belong to the user, and a
+// re-run must not be able to delete the capture.
+void clear_generated(const fs::path& dir, const fs::path& workspace) {
+    std::error_code ec;
+    const fs::path d = fs::weakly_canonical(dir, ec);
+    const fs::path w = fs::weakly_canonical(workspace, ec);
+    if (d == w || w.empty()) return;
+    for (fs::path up = d.parent_path(); !up.empty() && up != up.root_path();
+         up = up.parent_path())
+        if (up == w) { remove_tree(d); return; }
+}
+
 // Every walk over an image tree follows directory symlinks. A prepared capture
 // whose images/ and masks/ are links into the raw one is an ordinary layout,
 // and the default iterator returns nothing at all for it -- which reads as "no
@@ -102,23 +121,56 @@ std::vector<fs::path> walk_images(const fs::path& dir, const fs::path& skip = {}
     return out;
 }
 
+// Where a file sits under the tree it was walked from. Lexical on purpose:
+// fs::relative resolves symlinks, and an images/ of links into a raw capture
+// then relativizes to "../../<capture>/..." -- which sent every generated mask
+// into the folder the run was only asked to read.
+fs::path under_root(const fs::path& file, const fs::path& root) {
+    fs::path rel = file.lexically_relative(root);
+    if (rel.empty() || *rel.begin() == "..") rel = file.filename();
+    return rel;
+}
+
+// The frame number the masker should be given for each file, taken from the
+// digits the extractors end a frame's name with. Only when the whole list is
+// one camera: cam0/ and cam1/ restart the numbering, and a frame id that goes
+// backwards re-triggers seeds that have already been applied.
+bool frame_ids_from_stems(const std::vector<fs::path>& files,
+                          std::vector<int64_t>& ids) {
+    ids.clear();
+    if (files.empty()) return false;
+    const fs::path dir = files.front().parent_path();
+    for (const fs::path& f : files) {
+        if (f.parent_path() != dir) return false;
+        const std::string stem = f.stem().string();
+        size_t b = stem.size();
+        while (b > 0 && std::isdigit((unsigned char)stem[b - 1])) b--;
+        if (b == stem.size()) return false;
+        ids.push_back(std::strtoll(stem.c_str() + b, nullptr, 10));
+    }
+    return true;
+}
+
 #ifdef SS_BUILD_SAM
 // Preview clicks -> the seeds the masker takes. Clicks of one object made on
 // one frame become ONE prompt (several positive points describe one thing);
 // clicks of the same object on another frame become a second prompt, which the
 // masker applies as a correction when it gets there.
 //
-// `total_frames` is how many frames the run will see, and is only needed when
-// the click's own frame numbering does not survive to it -- see MaskClick.
-// Pass 0 to keep the recorded index.
+// `exact` says the click's own frame number means the same thing to the run
+// that is about to happen; otherwise only the fraction through the capture
+// survives and the frame is looked up in `ids` -- see MaskClick.
 std::vector<sam::SeedPrompt> seeds_from_clicks(const std::vector<MaskClick>& clicks,
-                                               int64_t total_frames) {
+                                               const std::vector<int64_t>& ids,
+                                               bool exact) {
     std::vector<sam::SeedPrompt> seeds;
     for (const MaskClick& c : clicks) {
-        const int64_t frame =
-            total_frames > 1
-                ? (int64_t)std::llround((double)c.position * (double)(total_frames - 1))
-                : (total_frames == 1 ? 0 : c.frame);
+        int64_t frame = c.frame;
+        if (!exact && !ids.empty()) {
+            const double at = std::min(1.0, std::max(0.0, (double)c.position)) *
+                              (double)(ids.size() - 1);
+            frame = ids[(size_t)std::llround(at)];
+        }
         sam::SeedPrompt* seed = nullptr;
         for (sam::SeedPrompt& s : seeds)
             if (s.object == c.object && s.frame == frame) seed = &s;
@@ -133,6 +185,128 @@ std::vector<sam::SeedPrompt> seeds_from_clicks(const std::vector<MaskClick>& cli
     }
     return seeds;
 }
+
+// Reading a frame is ~10-20 ms of CPU that the model it feeds does not need
+// the CPU for. One thread ahead of the masking loop hides all of it, which is
+// what pays for masking the written frames instead of the decoded ones.
+class ImagePrefetch {
+public:
+    ImagePrefetch(std::vector<fs::path> files, const std::atomic<bool>& cancel)
+        : _files(std::move(files)), _cancel(cancel), _worker([this] { run(); }) {}
+    ~ImagePrefetch() {
+        {
+            std::lock_guard<std::mutex> lk(_mu);
+            _stop = true;
+        }
+        _space.notify_all();
+        _worker.join();
+    }
+    ImagePrefetch(const ImagePrefetch&) = delete;
+    ImagePrefetch& operator=(const ImagePrefetch&) = delete;
+
+    // The next file in the order given; empty when it could not be read.
+    // Called at most once per file, so it cannot outrun the reader.
+    nn::Image take() {
+        std::unique_lock<std::mutex> lk(_mu);
+        _ready.wait(lk, [this] { return !_queue.empty(); });
+        nn::Image img = std::move(_queue.front());
+        _queue.pop_front();
+        _space.notify_one();
+        return img;
+    }
+
+private:
+    // Two in hand plus the one being masked: a 4K frame is ~25 MB, and the
+    // depth buys nothing beyond covering one decode.
+    static constexpr size_t kDepth = 2;
+
+    void run() {
+        for (const fs::path& f : _files) {
+            if (_cancel.load()) break;
+            nn::Image img = nn::load_image(f.string());
+            std::unique_lock<std::mutex> lk(_mu);
+            _space.wait(lk, [this] { return _queue.size() < kDepth || _stop; });
+            if (_stop) return;
+            _queue.push_back(std::move(img));
+            _ready.notify_one();
+        }
+    }
+
+    std::vector<fs::path> _files;
+    const std::atomic<bool>& _cancel;
+    std::deque<nn::Image> _queue;
+    std::mutex _mu;
+    std::condition_variable _ready, _space;
+    bool _stop = false;
+    std::thread _worker;
+};
+
+// One input's stencil, resolved per camera folder and rasterized once per
+// frame size, so a generated mask can be intersected with it in memory.
+class StencilRaster {
+public:
+    using ReportFn = std::function<void(const std::string& camera,
+                                        const app::BorderDetect&)>;
+
+    void build(const app::FrameStencil& st, const fs::path& root,
+               const std::vector<fs::path>& files, const ReportFn& report) {
+        std::map<std::string, std::vector<std::string>> groups;
+        std::error_code ec;
+        for (const fs::path& f : files) {
+            groups[under_root(f, root).parent_path().generic_string()]
+                .push_back(f.string());
+        }
+        for (auto& [camera, group] : groups) {
+            app::FrameMask fm = st.mask;
+            app::BorderDetect border;
+            if (st.detect_border) {
+                app::BorderDetectOptions o;
+                o.shrink = st.shrink;
+                border = app::detect_fisheye_border(group, o);
+                // First, so the shapes drawn on top are applied to it in order.
+                if (border.found) fm.shapes.insert(fm.shapes.begin(), border.shape);
+            }
+            if (report) report(camera, border);
+            if (!fm.empty()) _fm[camera] = std::move(fm);
+        }
+    }
+
+    bool apply(const fs::path& file, const fs::path& root, sam::Mask& mask,
+               std::string& error) {
+        if (_fm.empty() || mask.data.empty()) return true;
+        std::error_code ec;
+        const auto it =
+            _fm.find(under_root(file, root).parent_path().generic_string());
+        if (it == _fm.end()) return true;
+
+        Key key{it->first, mask.width, mask.height};
+        auto cached = _cache.find(key);
+        if (cached == _cache.end()) {
+            std::vector<uint8_t> px;
+            if (!app::rasterize_frame_mask(it->second, mask.width, mask.height,
+                                           px, error))
+                return false;
+            cached = _cache.emplace(key, std::move(px)).first;
+        }
+        const std::vector<uint8_t>& px = cached->second;
+        for (size_t i = 0; i < mask.data.size() && i < px.size(); i++)
+            if (!px[i]) mask.data[i] = 0;
+        return true;
+    }
+
+private:
+    struct Key {
+        std::string camera;
+        int w, h;
+        bool operator<(const Key& o) const {
+            if (camera != o.camera) return camera < o.camera;
+            if (w != o.w) return w < o.w;
+            return h < o.h;
+        }
+    };
+    std::map<std::string, app::FrameMask> _fm;
+    std::map<Key, std::vector<uint8_t>> _cache;
+};
 #endif
 
 std::string lower_ext(const std::string& path) {
@@ -179,13 +353,16 @@ class RateLimitedProgress {
 public:
     using Clock = std::chrono::steady_clock;
 
-    RateLimitedProgress(std::function<void(const std::string&)> log,
+    RateLimitedProgress(RunProgress* prog, Stage stage,
                         const spirula::i18n::Msg& noun, int64_t total)
-        : _log(std::move(log)), _noun(&noun), _total(total),
+        : _prog(prog), _stage(stage), _noun(&noun), _total(total),
           _start(Clock::now()), _last(_start) {}
 
     void update(int64_t done, bool force = false) {
         const auto now = Clock::now();
+        // The counter itself is cheap and drives the bar, so it is not
+        // rate-limited; only the sentence built from it is.
+        _prog->count(_stage, done, _total);
         const double since =
             std::chrono::duration<double>(now - _last).count();
         if (!force && (done == _reported || since < 2.0)) return;
@@ -206,8 +383,8 @@ public:
         // phrase and still parse.
         const std::string noun = _noun->get();
         if (measured <= 0 || elapsed <= 0.5) {
-            _log(_total > 0 ? fmt(lmsg::prog_count_total, {noun, done, _total})
-                            : fmt(lmsg::prog_count, {noun, done}));
+            say(_total > 0 ? fmt(lmsg::prog_count_total, {noun, done, _total})
+                           : fmt(lmsg::prog_count, {noun, done}));
             return;
         }
         const double per = elapsed / (double)measured;
@@ -215,17 +392,25 @@ public:
             per >= 0.5 ? fmt(lmsg::rate_each, {round_to(per, 1)})
                        : fmt(lmsg::rate_per_second, {round_to(1.0 / per, 0)});
         if (_total <= 0)
-            _log(fmt(lmsg::prog_count_rate, {noun, done, rate}));
+            say(fmt(lmsg::prog_count_rate, {noun, done, rate}));
         else if (_total > done)
-            _log(fmt(lmsg::prog_count_total_rate_eta,
-                     {noun, done, _total, rate,
-                      human_duration(per * (double)(_total - done))}));
+            say(fmt(lmsg::prog_count_total_rate_eta,
+                    {noun, done, _total, rate,
+                     human_duration(per * (double)(_total - done))}));
         else
-            _log(fmt(lmsg::prog_count_total_rate, {noun, done, _total, rate}));
+            say(fmt(lmsg::prog_count_total_rate, {noun, done, _total, rate}));
     }
 
 private:
-    std::function<void(const std::string&)> _log;
+    // The same sentence in both places: under the step's bar, where it is the
+    // answer to "how long", and in the log, which keeps the history.
+    void say(const std::string& s) {
+        _prog->detail(_stage, s);
+        _prog->note(_stage, s, /*detail=*/true);
+    }
+
+    RunProgress* _prog;
+    Stage _stage;
     const spirula::i18n::Msg* _noun;
     int64_t     _total = 0;
     int64_t     _reported = -1;
@@ -472,18 +657,29 @@ bool DatasetPrep::first_image_dims(const std::string& dir, int& W, int& H) {
     return false;
 }
 
+void DatasetPrep::log(const std::string& s, bool detail) {
+    _prog->note(s, detail);
+}
+
+void DatasetPrep::enter(Stage s, const std::string& text) {
+    _prog->enter(s, text);
+}
+
 int DatasetPrep::exec(const std::vector<std::string>& argv) {
     std::string cmd;
     for (const auto& a : argv) cmd += (cmd.empty() ? "$ " : " ") + a;
-    _log(cmd);
-    return run_process(argv, "", _log, _cancel);
+    log(cmd);
+    return run_process(argv, "", [this](const std::string& l) { log(l); },
+                       _cancel);
 }
 
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
-bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
+bool DatasetPrep::run(const PrepJob& job_in, PrepResult& out, std::string& error,
+                      const RefreshFn& refresh_masks) {
+    PrepJob job = job_in;
 #ifdef SS_BUILD_SAM
     // Hand the GPU back on the way out, by whichever of the dozen exits is
     // taken. A SAM 3 checkpoint is about 2 GB of VRAM and the inference layer's
@@ -510,9 +706,11 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
     struct Prepared {
         std::string images, masks;      // absolute
         std::string images_rel, masks_rel;  // relative to the workspace
-        // This input's masks already exist: written on the way out of the
-        // decoder, brought along by the input, or kept by a resumed run.
+        // This input's masks already exist: brought along by the input, or
+        // kept by a resumed run.
         bool have_masks = false;
+        // Segmentation already intersected this input's stencil into them.
+        bool stencil_folded = false;
     };
     std::vector<Prepared> per(job.inputs.size());
     // A masks/ nested under the images is not a folder of views (see
@@ -543,7 +741,7 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
             per[0].have_masks = true;
             out.mask_dir = out.mask_dir_cfg = per[0].masks;
             skip_dir = per[0].masks;
-            _log(fmt(lmsg::using_bundled_masks, {out.mask_dir}));
+            log(fmt(lmsg::using_bundled_masks, {out.mask_dir}), /*detail=*/false);
         }
     } else {
         out.image_dir = (ws / "images").string();
@@ -573,11 +771,16 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
     }
 
     out.n_images = count_images(out.image_dir, skip_dir);
-    _log(fmt(lmsg::found_images, {(long long)out.n_images, out.image_dir}));
+    log(fmt(lmsg::found_images, {(long long)out.n_images, out.image_dir}),
+        /*detail=*/false);
     if (out.n_images < 3) {
         error = fmt(lmsg::err_too_few_images, {(long long)out.n_images});
         return false;
     }
+
+    // The frames exist now, so what masking is asked to do can still be the
+    // answer the user gave while watching them go by.
+    if (refresh_masks) refresh_masks(job);
 
     if (job.mask_enable) {
         if (job.mask_prompt.empty() && job.mask_clicks.empty()) {
@@ -600,22 +803,29 @@ bool DatasetPrep::run(const PrepJob& job, PrepResult& out, std::string& error) {
             }
         }
         for (size_t i = 0; i < job.inputs.size(); i++) {
-            // Already masked: by the decoder in the same pass, or by whoever
-            // made the masks this input arrived with. Segmenting over those
-            // would replace an answer the user already has.
+            // A re-done masking pass writes one mask per frame that exists
+            // now; anything else in there described a frame set that no longer
+            // does. clear_generated refuses a folder outside the workspace, so
+            // masks an input brought with it are safe.
+            if (job.redo_masks && job.inputs[i].mask_dir.empty())
+                clear_generated(per[i].masks, ws);
+            // Already masked by whoever made the masks this input arrived
+            // with. Segmenting over those would replace an answer the user
+            // already has.
             if (per[i].have_masks) continue;
             if (!generate_masks(job, job.inputs[i], per[i].images,
                                 per[i].images_rel, per[i].masks, per[i].masks_rel,
-                                error))
+                                per[i].stencil_folded, error))
                 return false;
         }
     }
 
     for (size_t i = 0; i < job.inputs.size(); i++) {
         if (job.inputs[i].stencil.empty()) continue;
+        want_masks = true;
+        if (per[i].stencil_folded) continue;
         if (!apply_stencil(job.inputs[i], per[i].images, per[i].masks, error))
             return false;
-        want_masks = true;
     }
     // Masks are whatever ended up in the dataset's own masks/ -- generated
     // here, written by the decoder, or linked in beside gathered photos. The
@@ -639,17 +849,21 @@ bool DatasetPrep::extract_video(const PrepJob& job, const PrepInput& in,
                                 bool& masked, std::string& error) {
     // Resume: frames are moved into place in one batch after selection, so a
     // non-empty folder means a previous extraction of THIS input finished.
-    if (job.resume) {
+    if (job.redo_frames) clear_generated(images, job.workspace);
+    if (job.resume && !job.redo_frames) {
         const int have = count_images(images);
         if (have > 0) {
-            _log(fmt(lmsg::resume_keep_frames, {(long long)have, images}));
+            log(fmt(lmsg::resume_keep_frames, {(long long)have, images}),
+                /*detail=*/false);
             std::error_code ec;
             if (fs::is_directory(fs::path(images) / "cam1", ec))
                 out.per_folder_cameras = true;
-            if (job.mask_enable) {
+            // Masks a previous run left. Not when this one is re-doing them:
+            // `masked` is what makes run() skip the masking pass entirely.
+            if (job.mask_enable && !job.redo_masks) {
                 std::error_code mec;
                 if (fs::is_directory(masks, mec) && !fs::is_empty(masks, mec)) {
-                    _log(fmt(lmsg::resume_keep_masks, {masks}));
+                    log(fmt(lmsg::resume_keep_masks, {masks}), /*detail=*/false);
                     masked = true;
                 }
             }
@@ -659,27 +873,30 @@ bool DatasetPrep::extract_video(const PrepJob& job, const PrepInput& in,
 
     const bool want_builtin = !job.force_external_decode && backends().builtin_video;
     if (want_builtin) {
-        if (extract_video_builtin(job, in, images, masks, out, masked, error))
-            return true;
+        if (extract_video_builtin(job, in, images, out, error)) return true;
         if (_cancel.load()) return false;
         // A container or profile the driver cannot decode is exactly what the
         // fallback is for, and the user should not have to know which is which.
-        _log(fmt(lmsg::decode_fallback_ffmpeg, {error}));
+        log(fmt(lmsg::decode_fallback_ffmpeg, {error}), /*detail=*/false);
     }
     return extract_video_ffmpeg(job, in, images, out, error);
 }
 
+// Extraction writes frames and nothing else. Masking used to ride along on the
+// decode, which was cheaper by one JPEG decode per frame and cost the user the
+// ability to see the frames before deciding what to mask, to re-mask without
+// re-extracting, and to have photos and video take the same path. The decode it
+// saved is hidden behind the model anyway (generate_masks_builtin reads ahead).
 bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
                                         const std::string& images,
-                                        const std::string& masks, PrepResult& out,
-                                        bool& masked, std::string& error) {
+                                        PrepResult& out, std::string& error) {
 #ifndef SS_HAVE_VIDEO
-    (void)job; (void)in; (void)images; (void)masks; (void)out; (void)masked;
+    (void)job; (void)in; (void)images; (void)out;
     error = backends().video_reason;
     return false;
 #else
-    _stage(lmsg::stage_extract_gpu.get());
-    _log(fmt(lmsg::video_input, {in.path}));
+    enter(Stage::Frames, lmsg::stage_extract_gpu.get());
+    log(fmt(lmsg::video_input, {in.path}), /*detail=*/false);
 
     // fps -> "one frame every N source frames". The source rate is what the
     // container states; a variable-rate file is close enough for this.
@@ -713,53 +930,34 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
     app::FrameExtractJob fx;
     fx.input = in.path;
     fx.image_dir = images;
-    fx.mask_dir = masks;
     fx.skip = skip;
     fx.keep = window > 1 ? window : 0;
     fx.max_frames = job.max_frames;
     fx.quality = 95;
-    const std::vector<MaskClick> clicks = clicks_for(job, in);
-    if (job.mask_enable && !job.force_external_masking &&
-        !job.mask_model_path.empty() &&
-        (!job.mask_prompt.empty() || !clicks.empty())) {
-        // Masking rides along on the decode: the frame is already on the
-        // device, so this is far cheaper than a second pass over the JPEGs.
-        _stage(lmsg::stage_extract_mask_gpu.get());
-        fx.mask.model = job.mask_model_path;
-        fx.mask.text = job.mask_prompt;
-        fx.mask.neg_text = job.mask_negative_prompt;
-        fx.mask.keep_prompted = job.mask_keep_subject;
-        fx.mask.max_size = job.mask_max_image_size;
-        // Always: these frames are a video, and the memory bank is what carries
-        // the subject across them (generate_masks_builtin says what detection
-        // alone finds without it).
-        fx.mask.video = true;
-        // This path reads the video itself, so a click's decoded index means
-        // the same thing here as it did in the preview.
-        fx.mask.seeds = seeds_from_clicks(clicks, 0);
-    }
 
     app::FrameExtractSinks sinks;
-    sinks.log = _log;
+    sinks.log = [this](const std::string& l) { log(l); };
     sinks.cancel = &_cancel;
-    RateLimitedProgress progress(_log,
-                                 fx.mask.model.empty()
-                                     ? lmsg::noun_frames_written
-                                     : lmsg::noun_frames_written_masked,
+    RateLimitedProgress progress(_prog, Stage::Frames, lmsg::noun_frames_written,
                                  expect);
     sinks.progress = [&](int64_t written, int64_t decoded) {
         (void)decoded;
         progress.update(written);
     };
+    if (_film) {
+        sinks.preview = [this](const uint8_t* rgb, int w, int h,
+                               const std::string& name) {
+            if (_film->wants()) _film->offer(rgb, w, h, name);
+        };
+    }
 
     app::FrameExtractStats stats;
     if (!app::extract_frames(fx, sinks, stats, error)) return false;
-    _log(app::format_extract_stats(stats, images, !fx.mask.model.empty()));
+    log(app::format_extract_stats(stats, images, /*masked=*/false));
     if (stats.written == 0) {
         error = lmsg::err_no_frames_extracted.get();
         return false;
     }
-    if (!fx.mask.model.empty()) masked = true;
     return true;
 #endif
 }
@@ -772,7 +970,7 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
         error = fmt(lmsg::err_ffmpeg_missing, {job.ffmpeg_exe});
         return false;
     }
-    _log(fmt(lmsg::video_input, {in.path}));
+    log(fmt(lmsg::video_input, {in.path}), /*detail=*/false);
 
     // Multi-track videos (Insta360 .insv): one folder per track, one camera
     // per folder, as in reference/scripts/extract_frames.py.
@@ -795,12 +993,14 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
         const fs::path out_dir = streams.size() > 1
             ? fs::path(images) / ("cam" + std::to_string(tr))
             : fs::path(images);
-        if (job.resume && count_images(out_dir.string()) > 0) {
-            _log(fmt(lmsg::resume_keep_frames_dir, {out_dir.string()}));
+        if (job.resume && !job.redo_frames &&
+            count_images(out_dir.string()) > 0) {
+            log(fmt(lmsg::resume_keep_frames_dir, {out_dir.string()}),
+                /*detail=*/false);
             continue;
         }
         if (streams.size() > 1) {
-            _stage(fmt(lmsg::stage_split_track, {(long long)tr}));
+            enter(Stage::Frames, fmt(lmsg::stage_split_track, {(long long)tr}));
             const fs::path tmp_track =
                 ws / ("track_cam" + std::to_string(tr) + ".mp4");
             int rc = exec({job.ffmpeg_exe, "-nostdin", "-y", "-i", in.path,
@@ -814,8 +1014,8 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
             track_path = tmp_track.string();
         }
 
-        _stage(window > 1 ? lmsg::stage_extract_candidates.get()
-                          : lmsg::stage_extract_ffmpeg.get());
+        enter(Stage::Frames, window > 1 ? lmsg::stage_extract_candidates.get()
+                                       : lmsg::stage_extract_ffmpeg.get());
         const fs::path cand = ws / "frames_tmp";
         remove_tree(cand);
         std::error_code ec;
@@ -831,17 +1031,19 @@ bool DatasetPrep::extract_video_ffmpeg(const PrepJob& job, const PrepInput& in,
             return false;
         }
 
-        if (window > 1) _stage(lmsg::stage_select_sharpest.get());
+        if (window > 1) enter(Stage::Frames, lmsg::stage_select_sharpest.get());
         fs::create_directories(out_dir, ec);
-        const int kept = select_sharpest_frames(cand.string(), out_dir.string(), "",
-                                                window, job.max_frames, _log, _cancel);
+        const int kept = select_sharpest_frames(
+            cand.string(), out_dir.string(), "", window, job.max_frames,
+            [this](const std::string& l) { log(l); }, _cancel);
         remove_tree(cand);
         if (streams.size() > 1) fs::remove(track_path, ec);
         if (kept < 0) {
             error = _cancel.load() ? "cancelled" : "frame selection failed";
             return false;
         }
-        _log(fmt(lmsg::kept_frames, {(long long)kept, out_dir.string()}));
+        log(fmt(lmsg::kept_frames, {(long long)kept, out_dir.string()}),
+            /*detail=*/false);
     }
     return true;
 }
@@ -868,7 +1070,7 @@ bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
         error = fmt(lmsg::err_not_a_folder, {in.path});
         return false;
     }
-    _stage(lmsg::stage_collecting_photos.get());
+    enter(Stage::Frames, lmsg::stage_collecting_photos.get());
 
     // The masks come across too, into the folder that mirrors the images -- a
     // mask is found by its image's relative name, so the two trees have to move
@@ -892,14 +1094,15 @@ bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
                          &lmsg::noun_masks_collected});
 
     for (const Tree& t : trees) {
-        _log(fmt(*t.moving, {t.from.string(), t.to.string()}));
+        log(fmt(*t.moving, {t.from.string(), t.to.string()}), /*detail=*/false);
         const std::vector<fs::path> files = walk_images(t.from);
         if (files.empty()) {
             error = fmt(*t.empty, {t.from.string()});
             return false;
         }
         int linked = 0, copied = 0, kept = 0;
-        RateLimitedProgress progress(_log, *t.counted, (int64_t)files.size());
+        RateLimitedProgress progress(_prog, Stage::Frames, *t.counted,
+                                     (int64_t)files.size());
         for (const fs::path& f : files) {
             if (_cancel.load()) { error = lmsg::err_cancelled.get(); return false; }
             fs::path rel = f.lexically_relative(t.from);
@@ -923,7 +1126,7 @@ bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
             }
             progress.update(linked + copied + kept);
         }
-        _log(fmt(lmsg::linked_copied_kept,
+        log(fmt(lmsg::linked_copied_kept,
                  {(long long)linked, (long long)copied, (long long)kept}));
     }
     if (with_masks) have_masks = true;
@@ -939,11 +1142,12 @@ bool DatasetPrep::generate_masks(const PrepJob& job, const PrepInput& in,
                                  const std::string& images_rel,
                                  const std::string& masks,
                                  const std::string& masks_rel,
-                                 std::string& error) {
+                                 bool& folded, std::string& error) {
     const bool want_builtin = !job.force_external_masking &&
                               backends().builtin_masking &&
                               !job.mask_model_path.empty();
-    if (want_builtin) return generate_masks_builtin(job, in, images, masks, error);
+    if (want_builtin)
+        return generate_masks_builtin(job, in, images, masks, folded, error);
     if (!job.mask_clicks.empty()) {
         // The Python fallback is lang-segment-anything: text in, masks out. It
         // has no way to take a click, so saying so beats writing masks that
@@ -957,13 +1161,13 @@ bool DatasetPrep::generate_masks(const PrepJob& job, const PrepInput& in,
 bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in,
                                          const std::string& images,
                                          const std::string& masks,
-                                         std::string& error) {
+                                         bool& folded, std::string& error) {
 #ifndef SS_BUILD_SAM
-    (void)job; (void)in; (void)images; (void)masks;
+    (void)job; (void)in; (void)images; (void)masks; (void)folded;
     error = backends().masking_reason;
     return false;
 #else
-    _stage(lmsg::stage_masks_builtin.get());
+    enter(Stage::Masks, lmsg::stage_masks_builtin.get());
 
     std::error_code ec;
     // Never the masks themselves: a nested masks/ is only possible for photos
@@ -973,6 +1177,18 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
     if (files.empty()) {
         error = lmsg::err_no_images_to_mask.get();
         return false;
+    }
+    const fs::path image_root(images);
+    // Frames the built-in decoder wrote are still named after the source frame
+    // they were chosen from; ffmpeg's were renumbered by frame selection, and a
+    // photo folder's clicks were recorded against its own sorted order.
+    std::vector<int64_t> ids;
+    const bool by_stem = in.is_video && !job.force_external_decode &&
+                         backends().builtin_video &&
+                         frame_ids_from_stems(files, ids);
+    if (!by_stem) {
+        ids.resize(files.size());
+        for (size_t i = 0; i < ids.size(); i++) ids[i] = (int64_t)i;
     }
 
     sam::MaskOptions mo;
@@ -987,50 +1203,86 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
     // since a click says nothing about any frame but its own.
     const std::vector<MaskClick> clicks = clicks_for(job, in);
     mo.video = in.is_video || !clicks.empty();
-    // A photo folder's index is exact (the preview counted the same files in
-    // the same order); ffmpeg resampled the video to a different rate, so there
-    // the fraction through the capture is what survives.
-    mo.seeds = seeds_from_clicks(clicks, in.is_video ? (int64_t)files.size() : 0);
+    // A click's own frame number survives whenever the numbering it was
+    // recorded against did; ffmpeg resampled the video, so there only the
+    // fraction through the capture is meaningful.
+    mo.seeds = seeds_from_clicks(clicks, ids, /*exact=*/!in.is_video || by_stem);
+
+    // The stencil goes in here rather than in a pass of its own: it is one AND
+    // over a mask that is already in memory, against a decode and a re-encode
+    // of every PNG on disk (~131 ms per 2880-square fisheye frame).
+    StencilRaster stencil;
+    if (!in.stencil.empty()) {
+        stencil.build(in.stencil, image_root, files,
+                      [&](const std::string& camera, const app::BorderDetect& d) {
+                          const std::string name =
+                              camera.empty() ? in.path : camera;
+                          if (!in.stencil.detect_border) return;
+                          if (!d.found) {
+                              log(fmt(lmsg::frame_mask_no_border, {name}), false);
+                              return;
+                          }
+                          char pct[16];
+                          std::snprintf(pct, sizeof pct, "%.0f",
+                                        100.0f * d.kept_fraction);
+                          log(fmt(lmsg::frame_mask_border, {name, pct}), false);
+                      });
+        folded = true;
+    }
 
     sam::Masker masker;
     if (!masker.init(mo, error)) return false;
 
     const fs::path mask_root(masks);
     fs::create_directories(mask_root, ec);
-    const fs::path image_root(images);
+
+    // What a resumed run still has to do, decided before anything is read: the
+    // prefetcher below reads ahead, and reading a frame whose mask is already
+    // on disk is the one decode that buys nothing.
+    std::vector<size_t> todo;
+    std::vector<fs::path> todo_files, todo_dst;
+    int done = 0;
+    for (size_t i = 0; i < files.size(); i++) {
+        // Masks mirror the image tree, so cam0/ and cam1/ keep their names.
+        const fs::path rel = under_root(files[i], image_root);
+        const fs::path dst = mask_root / rel.parent_path() /
+                             (rel.stem().string() + ".png");
+        if (job.resume && !job.redo_masks && fs::exists(dst, ec)) {
+            ++done;
+            continue;
+        }
+        fs::create_directories(dst.parent_path(), ec);
+        todo.push_back(i);
+        todo_files.push_back(files[i]);
+        todo_dst.push_back(dst);
+    }
 
     // Encoding a 1080p mask costs about a third of what the model costs to
     // produce it, and none of it needs the GPU.
     app::WriterPool writers;
-    int done = 0;
-    int64_t index = -1;
-    RateLimitedProgress progress(_log, lmsg::noun_images_masked,
+    ImagePrefetch reader(todo_files, _cancel);
+    RateLimitedProgress progress(_prog, Stage::Masks, lmsg::noun_images_masked,
                                  (int64_t)files.size());
-    for (const fs::path& f : files) {
-        ++index;
+    for (size_t k = 0; k < todo.size(); k++) {
         if (_cancel.load()) { error = lmsg::err_cancelled.get(); return false; }
-        // Masks mirror the image tree, so cam0/ and cam1/ keep their names.
-        fs::path rel = fs::relative(f, image_root, ec);
-        if (ec || rel.empty()) rel = f.filename();
-        const fs::path dst = mask_root / rel.parent_path() /
-                             (rel.stem().string() + ".png");
-        if (job.resume && fs::exists(dst, ec)) { ++done; continue; }
-        fs::create_directories(dst.parent_path(), ec);
-
-        nn::Image img = nn::load_image(f.string());
+        nn::Image img = reader.take();
         if (img.empty()) {
-            _log(fmt(lmsg::warn_unreadable_skipped, {f.string()}));
+            log(fmt(lmsg::warn_unreadable_skipped, {todo_files[k].string()}), false);
             continue;
         }
         sam::Mask mask;
-        if (!masker.run(img, mask, nullptr, index)) {
+        if (!masker.run(img, mask, nullptr, ids[todo[k]])) {
             error = fmt(lmsg::err_masking_failed_on,
-                        {f.filename().string(), masker.lastError()});
+                        {todo_files[k].filename().string(), masker.lastError()});
             return false;
         }
+        if (!stencil.apply(todo_files[k], image_root, mask, error)) return false;
+        if (_film && _film->wants())
+            _film->offer(img.data.data(), img.width, img.height,
+                         todo_files[k].filename().string(), mask.data.data());
         app::WriteJob wj;
         wj.mask = std::move(mask);
-        wj.path = dst.string();
+        wj.path = todo_dst[k].string();
         writers.submit(std::move(wj));
         // Sequenced deliberately: `update(++done, done == n)` leaves the
         // argument's read of `done` unsequenced against the increment, so
@@ -1058,10 +1310,10 @@ bool DatasetPrep::apply_stencil(const PrepInput& in, const std::string& images,
     // read. Cutting the border into them would edit the user's own data.
     if (!in.mask_dir.empty() &&
         fs::weakly_canonical(masks, ec) == fs::weakly_canonical(in.mask_dir, ec)) {
-        _log(fmt(lmsg::stencil_keeps_bundled, {in.path}));
+        log(fmt(lmsg::stencil_keeps_bundled, {in.path}), /*detail=*/false);
         return true;
     }
-    _stage(lmsg::stage_frame_mask.get());
+    enter(Stage::Masks, lmsg::stage_frame_mask.get());
 
     app::FrameStencilRun run;
     run.image_dir = images;
@@ -1069,7 +1321,7 @@ bool DatasetPrep::apply_stencil(const PrepInput& in, const std::string& images,
     run.skip_dir = masks;
     run.stencil = in.stencil;
 
-    RateLimitedProgress progress(_log, lmsg::noun_images_masked,
+    RateLimitedProgress progress(_prog, Stage::Masks, lmsg::noun_images_masked,
                                  (int64_t)count_images(images, masks));
     app::FrameStencilSinks sinks;
     sinks.cancel = &_cancel;
@@ -1081,12 +1333,12 @@ bool DatasetPrep::apply_stencil(const PrepInput& in, const std::string& images,
         if (!in.stencil.detect_border) return;
         const std::string name = camera.empty() ? in.path : camera;
         if (!d.found) {
-            _log(fmt(lmsg::frame_mask_no_border, {name}));
+            log(fmt(lmsg::frame_mask_no_border, {name}), /*detail=*/false);
             return;
         }
         char pct[16];
         std::snprintf(pct, sizeof pct, "%.0f", 100.0f * d.kept_fraction);
-        _log(fmt(lmsg::frame_mask_border, {name, pct}));
+        log(fmt(lmsg::frame_mask_border, {name, pct}), /*detail=*/false);
     };
 
     if (app::apply_frame_stencil(run, sinks, error) < 0) return false;
@@ -1105,7 +1357,7 @@ bool DatasetPrep::generate_masks_python(const PrepJob& job,
                                         const std::string& images_rel,
                                         const std::string& masks_rel,
                                         std::string& error) {
-    _stage(lmsg::stage_masks_python.get());
+    enter(Stage::Masks, lmsg::stage_masks_python.get());
     if (!command_exists(job.python_exe)) {
         error = fmt(lmsg::err_python_missing, {job.python_exe});
         return false;
@@ -1140,9 +1392,9 @@ bool DatasetPrep::generate_masks_python(const PrepJob& job,
     std::string install_hint;
     std::string cmd;
     for (const auto& a : argv) cmd += (cmd.empty() ? "$ " : " ") + a;
-    _log(cmd);
+    log(cmd);
     const int rc = run_process(argv, "", [&](const std::string& l) {
-        _log(l);
+        log(l);
         if (l.find("not found or not installed properly") != std::string::npos ||
             l.find("ModuleNotFoundError") != std::string::npos)
             install_hint = l;

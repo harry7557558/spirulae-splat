@@ -34,6 +34,8 @@
 // datasets need nothing: images/ is the default).
 
 #include "app/gui/DatasetPrep.h"   // MaskClick
+#include "app/gui/FilmStrip.h"
+#include "app/gui/PrepProgress.h"
 #include "i18n/catalog/Dataset.h"
 
 #include <atomic>
@@ -89,6 +91,12 @@ struct ColmapJob {
     std::string python_exe = "python3";  // for the masking script
     bool force_external_decode = false;  // ffmpeg even when we could decode
     bool force_external_masking = false; // mask.py even when we could segment
+
+    // Steps a re-run redoes rather than reuses; see PrepJob.
+    bool redo_frames = false;
+    bool redo_masks = false;
+    bool redo_model = false;             // reconstruct again over existing
+                                         // frames, masks and features
 
     // Cameras
     std::string camera_model = "OPENCV"; // ImageReader.camera_model
@@ -173,22 +181,26 @@ public:
 
     ~ColmapRunner();
 
-    void start(const ColmapJob& job);
+    void start(const ColmapJob& job, FilmStrip* film = nullptr);
+    // Replace the settings no stage has read yet; see SfmRunner::update.
+    void update(const ColmapJob& job);
     void cancel();
 
     State state() const { return _state.load(); }
+    RunProgress& steps() { return _prog; }
     std::string stage();                 // current pipeline stage label
     std::string error();                 // set when Failed
     std::string dataset_dir();           // valid when Done
     std::string image_dir();             // image_dir to train with ("" = default)
     std::string mask_dir();              // mask_dir to train with ("" = none)
-    std::vector<std::string> drain_log();
 
 private:
     void run(ColmapJob job);
-    void log(const std::string& line);
+    void take_reconstruction(ColmapJob& job);
+    void take_masking(PrepJob& prep);
+    void log(const std::string& line, bool detail = true);
     int  exec(const std::vector<std::string>& argv);
-    void set_stage(const std::string& s);
+    void set_stage(Stage st, const std::string& s);
     bool check_colmap_version(const ColmapJob& job, std::string& err);
     std::string resolve_vocab_tree(const ColmapJob& job);
     // Mean reprojection error of a model (colmap model_analyzer); a large
@@ -198,9 +210,11 @@ private:
     std::thread _worker;
     std::atomic<State> _state{State::Idle};
     std::atomic<bool> _cancel{false};
-    std::mutex _mu;                      // guards strings + log below
-    std::string _stage, _error, _dataset_dir, _image_dir, _mask_dir;
-    std::vector<std::string> _log;
+    RunProgress _prog;
+    FilmStrip* _film = nullptr;
+    std::mutex _mu;                      // guards the strings below
+    std::string _error, _dataset_dir, _image_dir, _mask_dir;
+    ColmapJob _live;                     // guarded by _mu; see update()
 };
 
 }  // namespace gui

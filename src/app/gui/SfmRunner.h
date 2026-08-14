@@ -29,6 +29,8 @@
 // run() body here changes.
 
 #include "app/gui/DatasetPrep.h"
+#include "app/gui/FilmStrip.h"
+#include "app/gui/PrepProgress.h"
 #include "i18n/catalog/Dataset.h"
 
 #include <atomic>
@@ -83,6 +85,8 @@ struct SfmJob {
     PrepJob prep;
 
     // ---- reconstruction ----
+    // Reconstruct again over frames and masks that are already there.
+    bool redo_model = false;
     int quality = 2;                  // 0 low, 1 medium, 2 high, 3 extreme
     int data_type = 0;                // 0 individual photos, 1 video, 2 internet
     std::string camera_model = "opencv";
@@ -126,10 +130,20 @@ public:
     // "" when spirula-sfm is available, otherwise why it is not.
     static std::string availability();
 
-    void start(const SfmJob& job);
+    // `film` is the screen's thumbnail strip, or null for a caller that has
+    // none; it outlives the run.
+    void start(const SfmJob& job, FilmStrip* film = nullptr);
+    // Replace the settings no stage has read yet, so the screen's masking and
+    // reconstruction options stay live while an earlier stage works. The
+    // inputs, the output folder and the frame settings define the run and are
+    // never taken from here.
+    void update(const SfmJob& job);
     void cancel();
 
     State state() const { return _state.load(); }
+    // Which step the run is on, how far through, and its lines -- everything
+    // the dataset screen draws.
+    RunProgress& steps() { return _prog; }
     std::string stage();
     std::string error();
     std::string dataset_dir();
@@ -139,19 +153,21 @@ public:
     // masks were only read, which is what photos used where they are do.
     std::string mask_dir();
     // 0..1 within the current stage, or -1 when it cannot be estimated.
-    float progress() const { return _progress.load(); }
+    float progress() const;
     // Done, but under half the images registered (or a high reprojection
     // error). The dataset is usable; the user should know it has gaps.
     bool partial() const { return _partial.load(); }
-    std::vector<std::string> drain_log();
 
 private:
     void run(SfmJob job);
-    void log(const std::string& line);
-    void set_stage(const std::string& s);
+    // The two halves of update(), applied where the run reaches them.
+    void take_reconstruction(SfmJob& job);
+    void take_masking(PrepJob& prep);
+    void log(const std::string& line, bool detail = true);
+    void set_stage(Stage st, const std::string& s);
     // Stage changes driven by the child's output, which repeats a
     // stage's lines many times over.
-    void set_stage_if_new(const char* s);
+    void set_stage_if_new(Stage st, const char* s);
     // Reads one spirula-sfm output line for a progress fraction.
     void note_progress(const std::string& line);
     // Per-input `--camera-model DIR=MODEL` / `--focal DIR=PX`, resolved against
@@ -162,11 +178,12 @@ private:
     std::thread _worker;
     std::atomic<State> _state{State::Idle};
     std::atomic<bool> _cancel{false};
-    std::atomic<float> _progress{-1.0f};
     std::atomic<bool> _partial{false};
+    RunProgress _prog;
+    FilmStrip* _film = nullptr;
     std::mutex _mu;
-    std::string _stage, _error, _dataset_dir, _image_dir, _mask_dir;
-    std::vector<std::string> _log;
+    std::string _error, _dataset_dir, _image_dir, _mask_dir;
+    SfmJob _live;                        // guarded by _mu; see update()
 };
 
 }  // namespace gui

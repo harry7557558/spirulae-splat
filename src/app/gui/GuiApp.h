@@ -11,6 +11,7 @@
 #include "app/gui/Fonts.h"
 #include "app/gui/ConfigUI.h"
 #include "app/gui/FileDialog.h"
+#include "app/gui/FilmStrip.h"
 #include "app/gui/ImageCompare.h"
 #include "app/gui/Layout.h"
 #include "app/gui/MeshRunner.h"
@@ -158,8 +159,19 @@ private:
     bool colmap_available() const;
     Engine effective_engine() const;
     bool dataset_busy() const;
+    // Which step a running job is on, or nullptr when none is. Both runners
+    // report through the same object, so the screen reads one thing.
+    RunProgress* dataset_steps();
+    // Has the running job already read what `s` decides? A section of the form
+    // is greyed only once the step that consumes it has started -- the whole
+    // form used to grey the moment a run began, which left nothing to do for
+    // the twenty minutes a capture takes to extract.
+    bool dataset_locked(Stage s);
     void start_dataset_job();
     void cancel_dataset_job();
+    // Push edits made while a job runs into the runner, which takes each half
+    // as it reaches it (SfmRunner::update).
+    void update_dataset_job();
     // Copies the panel-level state into whichever job struct will run.
     void sync_dataset_jobs();
     // Path of the selected checkpoint, or "" when it is not downloaded yet.
@@ -184,6 +196,11 @@ private:
     // path (an image header, or one `ffmpeg -i`) and remembered.
     bool input_pixel_size(const PrepInput& s, int& w, int& h);
     void draw_masking_options();
+    // The step list and its bars, in place of the one stage line.
+    void draw_dataset_steps();
+    // "Re-run masking only" and friends: what probe_workspace already knows,
+    // as the actions it implies.
+    void draw_dataset_rerun(const WorkspaceState& prior);
     // Opens "Try the mask" on the input the combo points at, which is also the
     // input whose clicks and stencil it edits.
     void open_mask_preview();
@@ -251,7 +268,7 @@ private:
     void rescan_found_masks();
     void run_pending_if_stopped();
     void append_logs();
-    void log(const std::string& s);
+    void log(const std::string& s, bool detail = false);
 
     Screen _screen = Screen::Home;
     bool _quit = false;
@@ -339,6 +356,12 @@ private:
     ColmapJob _colmap_job;
     SfmRunner _sfm;
     SfmJob _sfm_job;
+    // The frames and masks a run is producing, as they are produced.
+    FilmStrip _film;
+    bool _show_film = true;
+    // Stages a re-run is to redo rather than reuse, set by draw_dataset_rerun
+    // and consumed by start_dataset_job.
+    bool _redo_frames = false, _redo_masks = false;
     // Panel-level state, copied into whichever job runs. The inputs are kept as
     // the struct both runners take (PrepInput), so the panel edits the thing
     // that runs instead of a parallel copy of it: a video file or photo folder
@@ -412,7 +435,18 @@ private:
     // the panel was last drawn: every one of them moves the remaining text up
     // by a line, which walks the passage a user has scrolled back to off the
     // top of the panel unless the scroll position is moved with it.
-    std::deque<std::string> _log;
+    struct LogEntry {
+        std::string text;
+        // A line of the stream behind the progress bars, rather than one of the
+        // handful that answer "what happened". Hidden unless Details is on.
+        bool detail = false;
+    };
+    std::deque<LogEntry> _log;
+    // Which entries the panel is showing, rebuilt when the log or the Details
+    // toggle changes rather than every frame.
+    std::vector<size_t> _log_shown;
+    bool _log_shown_dirty = true;
+    bool _log_details = false;
     size_t _log_dropped = 0;
     bool _log_follow = true;
     // Set from the jump button and the context menu, which are both drawn in

@@ -1782,6 +1782,21 @@ SS_MSG(vram_help,
 // Log panel
 // ===========================================================================
 
+SS_MSG(log_details,
+    EN("Show Every Line"),
+    JA("すべての行を表示"),
+    ZH_HANS("显示每一行"),
+    ZH_HANT("顯示每一行"),
+    KO("모든 줄 보기"),
+    DE("Jede Zeile anzeigen"),
+    FR("Afficher toutes les lignes"),
+    ES("Mostrar todas las líneas"),
+    PT("Mostrar todas as linhas"),
+    IT("Mostra tutte le righe"),
+    NL("Elke regel tonen"),
+    RU("Показывать все строки"),
+    TR("Her satırı göster"));
+
 SS_MSG(log_follow,
     EN("Follow New Output"),
     JA("新しい出力を追いかける"),

@@ -112,8 +112,8 @@ src/
 │   ├── Tools.h  Main.cpp   the subcommand table and the only main()
 │   ├── cli/                main.cpp (`spirula train`), mesh_main.cpp (mesh),
 │   │                         sfm_main.cpp (sfm), sam_main.cpp (sam)
-│   ├── FrameExtract.{h,cpp}  video -> sharp (optionally masked) frames, shared
-│   │                         by `spirula sam` and the GUI
+│   ├── FrameExtract.{h,cpp}  video -> sharp frames (`spirula sam extract` also
+│   │                         masks them in the same pass; the GUI masks after)
 │   ├── WriterPool.h        threads that encode/write images while the GPU runs
 │   │                         the next frame; every masking loop uses it
 │   ├── gui/                Dear ImGui desktop app (`spirula` with no arguments)

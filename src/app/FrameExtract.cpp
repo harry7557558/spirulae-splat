@@ -131,6 +131,9 @@ bool extract_track(const FrameExtractJob& o, const FrameExtractSinks& sinks,
                 }
 
                 const bool jpeg = o.quality >= 0 && o.quality <= 100;
+                if (sinks.preview && image.channels == 3)
+                    sinks.preview(image.data.data(), image.width, image.height,
+                                  std::string(stem));
                 WriteJob job;
                 job.path = (image_dir / (std::string(stem) + (jpeg ? ".jpg" : ".png"))).string();
                 job.quality = o.quality;

@@ -11,6 +11,7 @@
 // For the stage tags the child prints; a build without the module has no child
 // to read (see availability()).
 #include "sfm/core/Log.h"
+#include "i18n/catalog/Sfm.h"
 #endif
 
 #include <algorithm>
@@ -48,6 +49,30 @@ const char* pick(const char* const (&table)[N], int i, int fallback = 0) {
     return table[(i >= 0 && i < N) ? i : fallback];
 }
 
+// Is this line of the child's output worth showing to somebody who is not
+// debugging? Its own [run] block -- what it was asked for and what it got --
+// and anything it flagged. Everything else is the stream behind the bars.
+//
+// Both halves are asked of the same catalog the child printed from, so a
+// `--lang ja` run classifies as well as an English one.
+bool child_line_is_notable(const std::string& l) {
+#ifndef SS_TOOL_SFM
+    (void)l;
+    return false;
+#else
+    const std::string run = sfm::slog::prefix(sfm::slog::Tag::Run);
+    if (l.compare(0, run.size(), run) == 0) return true;
+    for (const char* word : {spirula::i18n::msg::sfm::word_warning.get(),
+                             spirula::i18n::msg::sfm::word_error.get()}) {
+        const size_t at = l.find(word);
+        // After the tag column, not anywhere: a path with "error" in it is not
+        // a warning.
+        if (at != std::string::npos && at <= run.size() + 2) return true;
+    }
+    return false;
+#endif
+}
+
 // The mapper only writes a model when it finishes, so any model on disk is
 // from a completed run.
 bool has_model(const fs::path& sparse) {
@@ -75,28 +100,78 @@ SfmRunner::~SfmRunner() {
     if (_worker.joinable()) _worker.join();
 }
 
-void SfmRunner::start(const SfmJob& job) {
+void SfmRunner::start(const SfmJob& job, FilmStrip* film) {
     if (_state.load() == State::Running) return;
     if (_worker.joinable()) _worker.join();
     _cancel = false;
-    _progress = -1.0f;
     _partial = false;
+    _film = film;
+    _prog.reset();
+    if (_film) _film->clear();
     {
         std::lock_guard<std::mutex> lk(_mu);
         _error.clear();
         _dataset_dir.clear();
         _image_dir.clear();
         _mask_dir.clear();
+        _live = job;
     }
     _state = State::Running;
     _worker = std::thread([this, job] { run(job); });
 }
 
+void SfmRunner::update(const SfmJob& job) {
+    std::lock_guard<std::mutex> lk(_mu);
+    _live = job;
+}
+
+void SfmRunner::take_reconstruction(SfmJob& job) {
+    std::lock_guard<std::mutex> lk(_mu);
+    job.quality = _live.quality;
+    job.data_type = _live.data_type;
+    job.camera_model = _live.camera_model;
+    job.camera_mode = _live.camera_mode;
+    job.pairs = _live.pairs;
+    job.overlap = _live.overlap;
+    job.loop_closure = _live.loop_closure;
+    job.init_focal_px = _live.init_focal_px;
+    job.max_features = _live.max_features;
+    job.max_image_size = _live.max_image_size;
+    job.mapper = _live.mapper;
+    job.features = _live.features;
+    job.matcher = _live.matcher;
+    job.keep_intermediate = _live.keep_intermediate;
+    job.extra_args = _live.extra_args;
+    // The lens is a reconstruction setting that happens to be stored on the
+    // input it describes. The list itself cannot change while a run is live.
+    for (size_t i = 0; i < job.prep.inputs.size() &&
+                       i < _live.prep.inputs.size(); i++) {
+        job.prep.inputs[i].camera_model = _live.prep.inputs[i].camera_model;
+        job.prep.inputs[i].focal_factor = _live.prep.inputs[i].focal_factor;
+    }
+}
+
+void SfmRunner::take_masking(PrepJob& prep) {
+    std::lock_guard<std::mutex> lk(_mu);
+    prep.mask_enable = _live.prep.mask_enable;
+    prep.mask_prompt = _live.prep.mask_prompt;
+    prep.mask_negative_prompt = _live.prep.mask_negative_prompt;
+    prep.mask_keep_subject = _live.prep.mask_keep_subject;
+    prep.mask_max_image_size = _live.prep.mask_max_image_size;
+    prep.mask_clicks = _live.prep.mask_clicks;
+    prep.mask_model_path = _live.prep.mask_model_path;
+    prep.mask_model_name = _live.prep.mask_model_name;
+    prep.force_external_masking = _live.prep.force_external_masking;
+    prep.python_exe = _live.prep.python_exe;
+}
+
 void SfmRunner::cancel() { _cancel = true; }
 
 std::string SfmRunner::stage() {
-    std::lock_guard<std::mutex> lk(_mu);
-    return _stage;
+    return _prog.stage(_prog.current()).detail;
+}
+float SfmRunner::progress() const {
+    return _prog.stage(_prog.current()).fraction;
 }
 std::string SfmRunner::error() {
     std::lock_guard<std::mutex> lk(_mu);
@@ -114,33 +189,17 @@ std::string SfmRunner::mask_dir() {
     std::lock_guard<std::mutex> lk(_mu);
     return _mask_dir;
 }
-std::vector<std::string> SfmRunner::drain_log() {
-    std::lock_guard<std::mutex> lk(_mu);
-    std::vector<std::string> out;
-    out.swap(_log);
-    return out;
+void SfmRunner::log(const std::string& line, bool detail) {
+    _prog.note(line, detail);
 }
 
-void SfmRunner::log(const std::string& line) {
-    std::lock_guard<std::mutex> lk(_mu);
-    _log.push_back(line);
-    if (_log.size() > 5000) _log.erase(_log.begin(), _log.begin() + 1000);
+void SfmRunner::set_stage_if_new(Stage st, const char* s) {
+    if (_prog.current() == st && _prog.stage(st).detail == s) return;
+    set_stage(st, s);
 }
 
-void SfmRunner::set_stage_if_new(const char* s) {
-    {
-        std::lock_guard<std::mutex> lk(_mu);
-        if (_stage == s) return;
-    }
-    set_stage(s);
-}
-
-void SfmRunner::set_stage(const std::string& s) {
-    {
-        std::lock_guard<std::mutex> lk(_mu);
-        _stage = s;
-    }
-    _progress = -1.0f;
+void SfmRunner::set_stage(Stage st, const std::string& s) {
+    _prog.enter(st, s);
     log("==== " + s + " ====");
 }
 
@@ -172,21 +231,20 @@ void SfmRunner::note_progress(const std::string& l) {
     unsigned long a = 0, b = 0;
     if (tagged(Tag::Extract)) {
         if (!fraction(a, b)) return;
-        set_stage_if_new(lmsg::stage_finding_features.get());
-        _progress = (float)((double)a / (double)b);
+        set_stage_if_new(Stage::Features, lmsg::stage_finding_features.get());
+        _prog.count(Stage::Features, (int64_t)a, (int64_t)b);
         return;
     }
     if (tagged(Tag::Match)) {
         if (!fraction(a, b)) return;
-        set_stage_if_new(lmsg::stage_matching_images.get());
-        _progress = (float)((double)a / (double)b);
+        set_stage_if_new(Stage::Matching, lmsg::stage_matching_images.get());
+        _prog.count(Stage::Matching, (int64_t)a, (int64_t)b);
         return;
     }
-    if (tagged(Tag::Map)) {
+    if (tagged(Tag::Map) || tagged(Tag::Merge) || tagged(Tag::Orient)) {
         // The mapper counts registrations rather than working towards a
         // total, so this is a stage change and a spinner, not a fraction.
-        set_stage_if_new(lmsg::stage_reconstructing.get());
-        _progress = -1.0f;
+        set_stage_if_new(Stage::Mapping, lmsg::stage_reconstructing.get());
     }
 #else
     (void)l;
@@ -237,6 +295,7 @@ void SfmRunner::append_camera_overrides(const SfmJob& job, const PrepResult& pre
 
 void SfmRunner::run(SfmJob job) {
     auto fail = [&](const std::string& why) {
+        _prog.finish(_cancel.load() ? StageStatus::Skipped : StageStatus::Failed);
         std::lock_guard<std::mutex> lk(_mu);
         _error = why;
         _state = _cancel.load() ? State::Cancelled : State::Failed;
@@ -257,18 +316,19 @@ void SfmRunner::run(SfmJob job) {
         if (prior.resumable() && !job.prep.resume)
             return fail(lmsg::err_unfinished_run.get());
         if (prior.resumable())
-            log(fmt(lmsg::sfm_resuming, {ws.string()}));
+            log(fmt(lmsg::sfm_resuming, {ws.string()}), /*detail=*/false);
         if (prior.model)
-            log(fmt(lmsg::sfm_will_overwrite, {(ws / "sparse").string()}));
+            log(fmt(lmsg::sfm_will_overwrite, {(ws / "sparse").string()}),
+                /*detail=*/false);
 
         // ---- 1. frames and masks ------------------------------------------
         PrepResult prep;
         {
-            DatasetPrep dp([this](const std::string& l) { log(l); },
-                           [this](const std::string& s) { set_stage(s); },
-                           _cancel);
+            DatasetPrep dp(&_prog, _film, _cancel);
             std::string err;
-            if (!dp.run(job.prep, prep, err)) return fail(err);
+            if (!dp.run(job.prep, prep, err,
+                        [this](PrepJob& p) { take_masking(p); }))
+                return fail(err);
         }
         if (prep.per_folder_cameras && job.camera_mode == 0) {
             log(lmsg::one_camera_per_folder.get());
@@ -280,10 +340,12 @@ void SfmRunner::run(SfmJob job) {
         // when this run's own leftovers are there to say the model is ours. A
         // sparse/ on its own is somebody else's dataset (or a finished one),
         // and skipping the mapper for it would "reconstruct" by doing nothing.
-        if (job.prep.resume && prior.features && has_model(ws / "sparse")) {
+        if (job.prep.resume && !job.redo_model && prior.features &&
+            has_model(ws / "sparse")) {
             log(lmsg::sfm_resume_skip_recon.get());
         } else {
-            set_stage(lmsg::stage_reconstructing_features.get());
+            set_stage(Stage::Features, lmsg::stage_reconstructing_features.get());
+            take_reconstruction(job);
             std::vector<std::string> argv = {
                 // The child is this same executable, so it has the same
                 // thirteen languages -- tell it which one, or its output
@@ -349,7 +411,7 @@ void SfmRunner::run(SfmJob job) {
             for (const auto& a : argv) cmd += (cmd.empty() ? "$ " : " ") + a;
             log(cmd);
             const int rc = run_process(argv, "", [this](const std::string& l) {
-                log(l);
+                log(l, !child_line_is_notable(l));
                 note_progress(l);
             }, _cancel);
             if (rc == kCancelled) return fail(lmsg::err_cancelled.get());
@@ -373,7 +435,7 @@ void SfmRunner::run(SfmJob job) {
 
         // ---- 3. tidy up ----------------------------------------------------
         if (!job.keep_intermediate) {
-            set_stage(lmsg::stage_cleaning_up.get());
+            set_stage(Stage::Finishing, lmsg::stage_cleaning_up.get());
             for (const char* name : {"features", "matches.bin"}) {
                 const fs::path p = ws / name;
                 if (!fs::exists(p, ec)) continue;
@@ -389,8 +451,8 @@ void SfmRunner::run(SfmJob job) {
         if (reads_photos_in_place(job.prep.inputs))
             log(fmt(lmsg::photos_referenced_in_place, {prep.image_dir_cfg}));
 
-        set_stage(lmsg::stage_done.get());
-        _progress = 1.0f;
+        set_stage(Stage::Finishing, lmsg::stage_done.get());
+        _prog.finish(StageStatus::Done);
         {
             std::lock_guard<std::mutex> lk(_mu);
             _dataset_dir = ws.string();
