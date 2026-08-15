@@ -409,3 +409,52 @@ void l2_normalize_rows(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
         p.out[row * p.cols + c] = v * inv;
     }
 }
+
+// out[r] = softmax(x[r]) over the last dimension -- and on a channel-last
+// [H, W, C] map that IS torch's softmax(dim=1) over channels, with no permute.
+// Metric3D's depth regressor takes it over 256 bins per pixel and its convex
+// upsampler over 9 neighbours per output pixel.
+//
+// Two passes over the row (max, then exp-sum) rather than an online rescale:
+// the reduction is a groupshared tree for the same reason l2_normalize_rows'
+// is, and an online form would make the order wave-width dependent.
+groupshared float g_soft_partial[WG];
+
+[shader("compute")]
+[numthreads(WG, 1, 1)]
+void softmax_rows(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
+                  uniform NormalizeParams p) {
+    uint row = gid.y * p.groups_per_row + gid.x;
+    uint t = tid.x;
+
+    float hi = -3.402823466e+38f;
+    if (row < p.rows)
+        for (uint c = t; c < p.cols; c += uint(WG))
+            hi = max(hi, load_elem(p.x, row * p.cols + c, kInputF16 != 0));
+    g_soft_partial[t] = hi;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint s = uint(WG) / 2u; s > 0u; s >>= 1) {
+        if (t < s) g_soft_partial[t] = max(g_soft_partial[t], g_soft_partial[t + s]);
+        GroupMemoryBarrierWithGroupSync();
+    }
+    float m = g_soft_partial[0];
+    GroupMemoryBarrierWithGroupSync();
+
+    float acc = 0.0f;
+    if (row < p.rows)
+        for (uint c = t; c < p.cols; c += uint(WG))
+            acc += exp(load_elem(p.x, row * p.cols + c, kInputF16 != 0) - m);
+    g_soft_partial[t] = acc;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint s = uint(WG) / 2u; s > 0u; s >>= 1) {
+        if (t < s) g_soft_partial[t] += g_soft_partial[t + s];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (row >= p.rows) return;
+
+    float inv = 1.0f / g_soft_partial[0];
+    for (uint c = t; c < p.cols; c += uint(WG)) {
+        float v = load_elem(p.x, row * p.cols + c, kInputF16 != 0);
+        p.out[row * p.cols + c] = exp(v - m) * inv;
+    }
+}

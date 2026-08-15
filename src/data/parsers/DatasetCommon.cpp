@@ -306,7 +306,8 @@ namespace {
 
 // 5- / 6-face cubemap axis tables. MUST match DataManager.cpp's
 // kAxesFisheye5 / kAxesEquirect6 -- the engine's GPU warp kernel reads its
-// own copies; these drive the camera poses.
+// own copies; these drive the camera poses, and dsparse::warp_axes hands them
+// to `spirula geometry` so its depth and normals land in the same faces.
 const double kAxes5[5][3][3] = {
     {{1,0,0},{0,1,0},{0,0,1}},
     {{0,1,0},{0,0,1},{1,0,0}},
@@ -324,6 +325,14 @@ const double kAxes6[6][3][3] = {
 };
 
 }  // namespace
+
+namespace dsparse {
+const double* warp_axes(int K) {
+    if (K == 5) return &kAxes5[0][0][0];
+    if (K == 6) return &kAxes6[0][0][0];
+    return nullptr;
+}
+}  // namespace dsparse
 
 PostSplitCameras bake_post_split(const ParsedDataset& ds,
                                  bool warp_to_pinhole,

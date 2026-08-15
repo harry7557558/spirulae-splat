@@ -13,20 +13,18 @@
 // downloads behind the user's back: `spirula sfm` prints what it is fetching
 // and from where, and --aliked-model points at a file instead.
 
-#include <cstdint>
+#include "nn/io/Fetch.h"
+
 #include <string>
 
 namespace aliked {
 
-// A checkpoint we know how to fetch. `sha256` is lowercase hex, and is checked
-// after download and on every subsequent load of the cached file -- a
-// truncated or tampered artifact must not reach the parser.
+// A checkpoint we know how to fetch. The download, the cache directory and the
+// SHA-256 check are nn::ensure_file's; what is model-specific is which
+// artifact and what to call it.
 struct ModelSource {
-    const char* id;      // "aliked-n16rot" -- what --features spells
-    const char* file;    // basename in the cache directory
-    const char* url;
-    const char* sha256;
-    uint64_t    bytes;   // approximate, for the "downloading N MB" line
+    const char*   id;    // "aliked-n16rot" -- what --features spells
+    nn::FetchFile onnx;
 };
 
 // Null when `id` is not one of ours.

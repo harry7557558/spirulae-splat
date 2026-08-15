@@ -921,6 +921,49 @@ SS_MSG(parsed_dataset,
     TR("Kamera: {0} (bölmeden sonra {1}), başlangıç noktası: {2} "
        "(train_frame_scale={3})"));
 
+// Printed only when --input-depth-is-ray-depth was left unset and there are
+// depth maps to read; {0} is the convention the lens picked.
+SS_MSG(ray_depth_resolved,
+    EN("Depth maps read as {0} (--input-depth-is-ray-depth)"),
+    JA("深度マップを{0}として読み込みます（--input-depth-is-ray-depth）"),
+    ZH_HANS("深度图按{0}读取（--input-depth-is-ray-depth）"),
+    ZH_HANT("深度圖依{0}讀取（--input-depth-is-ray-depth）"),
+    KO("깊이 맵을 {0}(으)로 읽습니다(--input-depth-is-ray-depth)"),
+    DE("Tiefenkarten werden als {0} gelesen (--input-depth-is-ray-depth)"),
+    FR("Cartes de profondeur lues comme {0} (--input-depth-is-ray-depth)"),
+    ES("Los mapas de profundidad se leen como {0} (--input-depth-is-ray-depth)"),
+    PT("Mapas de profundidade lidos como {0} (--input-depth-is-ray-depth)"),
+    IT("Mappe di profondità lette come {0} (--input-depth-is-ray-depth)"),
+    NL("Dieptekaarten gelezen als {0} (--input-depth-is-ray-depth)"),
+    RU("Карты глубины читаются как {0} (--input-depth-is-ray-depth)"),
+    TR("Derinlik haritaları {0} olarak okunuyor (--input-depth-is-ray-depth)"));
+
+SS_MSG(ray_depth_along_ray,
+    EN("distance along the ray"), JA("光線に沿った距離"),
+    ZH_HANS("沿光线的距离"), ZH_HANT("沿光線的距離"),
+    KO("광선을 따라 잰 거리"),
+    DE("Abstand entlang des Strahls"),
+    FR("distance le long du rayon"),
+    ES("distancia a lo largo del rayo"),
+    PT("distância ao longo do raio"),
+    IT("distanza lungo il raggio"),
+    NL("afstand langs de straal"),
+    RU("расстояние вдоль луча"),
+    TR("ışın boyunca mesafe"));
+
+SS_MSG(ray_depth_straight_ahead,
+    EN("distance straight ahead"), JA("正面方向の距離"),
+    ZH_HANS("正前方的距离"), ZH_HANT("正前方的距離"),
+    KO("정면 거리"),
+    DE("Abstand geradeaus"),
+    FR("distance droit devant"),
+    ES("distancia hacia delante"),
+    PT("distância em frente"),
+    IT("distanza in avanti"),
+    NL("afstand recht vooruit"),
+    RU("расстояние прямо вперёд"),
+    TR("ileri doğru mesafe"));
+
 SS_MSG(output_directory,
     EN("Output directory: {0}"),
     JA("出力先フォルダー: {0}"),

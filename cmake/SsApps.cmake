@@ -109,6 +109,16 @@ if((SS_BUILD_CLI OR SS_BUILD_GUI) AND SS_BUILD_SAM)
              ${SS_SRC}/app/FrameExtract.cpp)
         list(APPEND SS_TOOL_LIBS ss_video)
     endif()
+
+    # ---- monocular depth and normals ----
+    # Rides on SS_BUILD_SAM because that is what builds the inference layer;
+    # the dataset side is the engine's parsers, which every app target has.
+    list(APPEND SS_TOOL_SOURCES
+         ${SS_SRC}/app/cli/geometry_main.cpp
+         ${SS_SRC}/app/GeometryWarp.cpp
+         ${SS_SRC}/app/DepthPng.cpp)
+    list(APPEND SS_TOOL_DEFS SS_TOOL_GEOMETRY=1)
+    list(APPEND SS_TOOL_LIBS ss_metric3d)
 endif()
 
 # ---------------------------------------------------------------------------

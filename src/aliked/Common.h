@@ -9,6 +9,7 @@
 #include "nn/core/Half.h"
 #include "nn/core/Log.h"
 #include "nn/core/Parallel.h"
+#include "nn/io/Onnx.h"
 
 namespace nn { namespace vk {} }
 
@@ -21,5 +22,9 @@ using ::nn::log_level;
 using ::nn::now_ms;
 using ::nn::ScopedTimer;
 using ::nn::parallel_for;
+using ::nn::OnnxFile;
+using ::nn::OnnxNode;
+using ::nn::OnnxTensor;
+using ::nn::read_onnx;
 
 }  // namespace aliked

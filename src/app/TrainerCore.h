@@ -91,6 +91,9 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
 struct RunState {
     float train_frame_scale = 1.0f;
     bool  splat_linear = false;
+    // Resolved against the dataset's lenses when the flag is unset; see
+    // TrainerCore.cpp.
+    bool  input_depth_is_ray_depth = false;
     bool  bilagrid_rgb_init    = false;
     bool  bilagrid_depth_init  = false;
     bool  bilagrid_normal_init = false;

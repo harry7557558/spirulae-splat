@@ -147,7 +147,7 @@ set_property(TARGET ss_sam PROPERTY CXX_STANDARD 17)
 #
 # Its checkpoints are ONNX files fetched from COLMAP's releases and parsed in
 # process, so this needs no protobuf, no onnxruntime and no converter --
-# src/aliked/model/Onnx.cpp is a varint walk.
+# src/nn/io/Onnx.cpp is a varint walk.
 #
 # The ops it needs that nn/ did not have -- deformable convolution, point-wise
 # grid sample, average pooling, row L2 normalization -- are general and went
@@ -164,6 +164,27 @@ target_link_libraries(ss_aliked PUBLIC ss_nn)
 target_compile_options(ss_aliked PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
 set_property(TARGET ss_aliked PROPERTY CXX_STANDARD 17)
+
+# ---------------------------------------------------------------------------
+# ss_metric3d -- Metric3D v2 monocular depth and normals
+#
+# Same shape as ss_aliked: the checkpoint is an ONNX file fetched from the
+# onnx-community exports and parsed in process. The general ops it needed --
+# tanh / elu / silu, padded average pooling, fractional-scale nearest resize,
+# row softmax -- went into nn/shaders. What is here is the RAFT decoder's
+# convex upsampler, its GRU blend, and the two places its six-channel state is
+# taken apart.
+# ---------------------------------------------------------------------------
+ss_nn_shaders(metric3d ${SS_SRC}/metric3d/shaders SS_METRIC3D_EMBED)
+
+file(GLOB_RECURSE SS_METRIC3D_SOURCES CONFIGURE_DEPENDS ${SS_SRC}/metric3d/*.cpp)
+list(FILTER SS_METRIC3D_SOURCES EXCLUDE REGEX "/tests/")
+
+add_library(ss_metric3d STATIC ${SS_METRIC3D_SOURCES} ${SS_METRIC3D_EMBED})
+target_link_libraries(ss_metric3d PUBLIC ss_nn)
+target_compile_options(ss_metric3d PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
+set_property(TARGET ss_metric3d PROPERTY CXX_STANDARD 17)
 
 # ---------------------------------------------------------------------------
 # ss_video -- container demux + VK_KHR_video_decode_*
@@ -190,13 +211,13 @@ endif()
 # ---------------------------------------------------------------------------
 file(GLOB SS_NN_TESTS CONFIGURE_DEPENDS
      ${SS_SRC}/nn/tests/*.cpp ${SS_SRC}/sam/tests/*.cpp
-     ${SS_SRC}/aliked/tests/*.cpp)
+     ${SS_SRC}/aliked/tests/*.cpp ${SS_SRC}/metric3d/tests/*.cpp)
 foreach(test_src ${SS_NN_TESTS})
     get_filename_component(test_name ${test_src} NAME_WE)
     add_executable(${test_name} ${test_src})
     # Every test links every library above it: the three are small, and one
     # rule here beats a per-directory list that drifts.
-    target_link_libraries(${test_name} PRIVATE ss_sam ss_aliked)
+    target_link_libraries(${test_name} PRIVATE ss_sam ss_aliked ss_metric3d)
     set_property(TARGET ${test_name} PROPERTY CXX_STANDARD 17)
     target_compile_options(${test_name} PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)

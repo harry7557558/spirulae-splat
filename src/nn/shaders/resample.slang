@@ -32,6 +32,19 @@ struct ResizeParams {
     uint   groups_per_row;
 };
 
+struct ScaledResizeParams {
+    float* out;
+    uint*  x;
+    uint   Ho;
+    uint   Wo;
+    uint   Hi;
+    uint   Wi;
+    uint   C;
+    uint   groups_per_row;
+    float  inv_scale_y;
+    float  inv_scale_x;
+};
+
 // Source coordinate for output index `o` along one axis.
 float src_coord(uint o, uint n_out, uint n_in) {
     if (kAlignCorners != 0) {
@@ -58,6 +71,28 @@ void resize_bilinear(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
     float sx = src_coord(xo, p.Wo, p.Wi);
     p.out[i] = sample_bilinear(p.x, kInputF16 != 0, int(p.Hi), int(p.Wi), int(p.C),
                                int(c), sy, sx);
+}
+
+// Nearest-neighbour resample at an arbitrary scale.
+//
+// `scale` is the factor the CALLER asked torch for, not `n_out / n_in`, and
+// the two differ: F.interpolate(scale_factor=s, mode='nearest') sizes the
+// output floor(n_in * s) and then maps src = floor(dst / s) with the original
+// s. Metric3D's DPT read_0 upsamples by exactly 7/2, where reconstructing the
+// scale from the sizes lands on a different source row every few outputs.
+[shader("compute")]
+[numthreads(WG, 1, 1)]
+void resize_nearest(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
+                    uniform ScaledResizeParams p) {
+    uint i = fold_index(gid, tid, p.groups_per_row, uint(WG));
+    if (i >= p.Ho * p.Wo * p.C) return;
+    uint c = i % p.C;
+    uint rest = i / p.C;
+    uint xo = rest % p.Wo;
+    uint yo = rest / p.Wo;
+    uint ys = min(uint(floor(float(yo) * p.inv_scale_y)), p.Hi - 1u);
+    uint xs = min(uint(floor(float(xo) * p.inv_scale_x)), p.Wi - 1u);
+    p.out[i] = load_elem(p.x, (ys * p.Wi + xs) * p.C + c, kInputF16 != 0);
 }
 
 // Nearest-neighbour 2x upsample -- what the seg head's PixelDecoder uses
@@ -101,14 +136,14 @@ void maxpool2x2(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
     p.out[i] = best;
 }
 
-// nn.AvgPool2d(kernel, stride), no padding. ALIKED's encoder feeds blocks 3
-// and 4 from 2x and 4x pooled copies of the input.
+// nn.AvgPool2d(kernel, stride, padding). ALIKED's encoder feeds blocks 3 and 4
+// from 2x and 4x pooled copies of the input; Metric3D's GRU cascade pools with
+// padding=1 between resolutions.
 //
-// torch with ceil_mode=False drops any window that would run off the edge, so
-// every window here is complete and the divisor is exactly kh*kw -- which is
-// also why `count_include_pad` never comes into it. The bounds test stays
-// because an out-of-range output index must not read, not because a partial
-// window is expected.
+// The divisor is always kh*kw, never the number of taps actually inside the
+// image -- that is torch's `count_include_pad=True` default, and it is what
+// makes an edge window darker than an interior one. ceil_mode=False sizes the
+// output so no window starts past the padded edge.
 struct PoolParams {
     float* out;
     uint*  x;
@@ -121,6 +156,8 @@ struct PoolParams {
     uint   kw;
     uint   stride_y;
     uint   stride_x;
+    uint   pad_y;
+    uint   pad_x;
     uint   groups_per_row;
 };
 
@@ -137,12 +174,12 @@ void avgpool(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
 
     float sum = 0.0f;
     for (uint ky = 0; ky < p.kh; ++ky) {
-        uint y = yo * p.stride_y + ky;
-        if (y >= p.Hi) continue;
+        int y = int(yo * p.stride_y + ky) - int(p.pad_y);
+        if (y < 0 || y >= int(p.Hi)) continue;
         for (uint kx = 0; kx < p.kw; ++kx) {
-            uint x = xo * p.stride_x + kx;
-            if (x >= p.Wi) continue;
-            sum += load_elem(p.x, (y * p.Wi + x) * p.C + c, kInputF16 != 0);
+            int x = int(xo * p.stride_x + kx) - int(p.pad_x);
+            if (x < 0 || x >= int(p.Wi)) continue;
+            sum += load_elem(p.x, (uint(y) * p.Wi + uint(x)) * p.C + c, kInputF16 != 0);
         }
     }
     p.out[i] = sum / float(p.kh * p.kw);

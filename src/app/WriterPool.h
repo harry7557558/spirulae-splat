@@ -12,12 +12,14 @@
 // The queue is bounded, so a slow disk still applies back-pressure instead of
 // growing until memory runs out; `submit` blocks when it is full.
 
+#include "app/DepthPng.h"
 #include "nn/core/Log.h"
 #include "nn/io/Image.h"
 #include "sam/Sam.h"
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -26,12 +28,14 @@
 
 namespace app {
 
-// An image job or a mask job: whichever member is non-empty is the one written.
+// An image, a mask or a depth job: whichever member is non-empty is written.
 struct WriteJob {
-    nn::Image   image;      // RGB, or empty for a mask job
-    sam::Mask   mask;
-    std::string path;
-    int         quality = 95;
+    nn::Image             image;    // RGB
+    sam::Mask             mask;
+    std::vector<uint16_t> depth;    // 16-bit grayscale, `depth_w` x `depth_h`
+    int                   depth_w = 0, depth_h = 0;
+    std::string           path;
+    int                   quality = 95;
 };
 
 class WriterPool {
@@ -89,9 +93,13 @@ private:
                 space_.notify_one();
             }
             const double t0 = nn::now_ms();
-            const bool ok = job.image.empty()
-                                ? sam::save_mask_png(job.mask, job.path)
-                                : nn::save_image(job.image, job.path, job.quality);
+            const bool ok =
+                !job.depth.empty()
+                    ? save_depth_png16(job.path, job.depth.data(), job.depth_w,
+                                       job.depth_h)
+                    : (job.image.empty() ? sam::save_mask_png(job.mask, job.path)
+                                         : nn::save_image(job.image, job.path,
+                                                          job.quality));
             if (!ok) {
                 ++failures_;
                 NN_LOG_ERROR("could not write %s\n", job.path.c_str());

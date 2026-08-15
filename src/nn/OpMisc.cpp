@@ -68,7 +68,13 @@ struct MaskExportParams {
 
 struct PoolParams {
     uint64_t out, x;
-    uint32_t Ho, Wo, Hi, Wi, C, kh, kw, stride_y, stride_x, groups_per_row;
+    uint32_t Ho, Wo, Hi, Wi, C, kh, kw, stride_y, stride_x, pad_y, pad_x, groups_per_row;
+};
+
+struct ScaledResizeParams {
+    uint64_t out, x;
+    uint32_t Ho, Wo, Hi, Wi, C, groups_per_row;
+    float    inv_scale_y, inv_scale_x;
 };
 
 struct GridSampleParams {
@@ -297,19 +303,39 @@ void maxpool2x2(const Tensor& out, const Tensor& in) {
     resize_op("resample.maxpool2x2", out, in);
 }
 
-void avgpool(const Tensor& out, const Tensor& in, int kernel, int stride) {
+void resize_nearest(const Tensor& out, const Tensor& in, float scale_y, float scale_x) {
+    NN_CHECK(out.ndim == 3 && in.ndim == 3, "resize_nearest expects [H, W, C] tensors");
+    NN_CHECK(out.shape[2] == in.shape[2], "resize_nearest: channel counts differ");
+    NN_CHECK(scale_y > 0.0f && scale_x > 0.0f, "resize_nearest: scale must be positive");
+    ScaledResizeParams p{};
+    p.out = out.ptr;
+    p.x = in.ptr;
+    p.Ho = (uint32_t)out.shape[0];
+    p.Wo = (uint32_t)out.shape[1];
+    p.Hi = (uint32_t)in.shape[0];
+    p.Wi = (uint32_t)in.shape[1];
+    p.C = (uint32_t)out.shape[2];
+    p.inv_scale_y = 1.0f / scale_y;
+    p.inv_scale_x = 1.0f / scale_x;
+    vk::SpecList spec{(uint32_t)(in.dtype == DType::F16), 0u, 0u};
+    vk::Stream::get().dispatchFlat("resample.resize_nearest", spec, out.numel(), 256, &p,
+                                   sizeof(p), &p.groups_per_row);
+}
+
+void avgpool(const Tensor& out, const Tensor& in, int kernel, int stride, int pad) {
     NN_CHECK(out.ndim == 3 && in.ndim == 3, "avgpool expects [H, W, C] tensors");
     NN_CHECK(out.shape[2] == in.shape[2], "avgpool: channel counts differ");
     NN_CHECK(kernel > 0, "avgpool: kernel must be positive");
     if (stride <= 0) stride = kernel;
     // torch with ceil_mode=False; say so here rather than let a mis-sized
     // output silently read past the last complete window.
-    const int64_t want_h = (in.shape[0] - kernel) / stride + 1;
-    const int64_t want_w = (in.shape[1] - kernel) / stride + 1;
+    const int64_t want_h = (in.shape[0] + 2 * pad - kernel) / stride + 1;
+    const int64_t want_w = (in.shape[1] + 2 * pad - kernel) / stride + 1;
     NN_CHECK(out.shape[0] == want_h && out.shape[1] == want_w,
-             "avgpool(%d, %d) of %lldx%lld is %lldx%lld, but out is %lldx%lld", kernel,
-             stride, (long long)in.shape[0], (long long)in.shape[1], (long long)want_h,
-             (long long)want_w, (long long)out.shape[0], (long long)out.shape[1]);
+             "avgpool(%d, %d, pad %d) of %lldx%lld is %lldx%lld, but out is %lldx%lld",
+             kernel, stride, pad, (long long)in.shape[0], (long long)in.shape[1],
+             (long long)want_h, (long long)want_w, (long long)out.shape[0],
+             (long long)out.shape[1]);
 
     PoolParams p{};
     p.out = out.ptr;
@@ -321,6 +347,7 @@ void avgpool(const Tensor& out, const Tensor& in, int kernel, int stride) {
     p.C = (uint32_t)out.shape[2];
     p.kh = p.kw = (uint32_t)kernel;
     p.stride_y = p.stride_x = (uint32_t)stride;
+    p.pad_y = p.pad_x = (uint32_t)pad;
     vk::SpecList spec{(uint32_t)(in.dtype == DType::F16), 0u, 0u};
     vk::Stream::get().dispatchFlat("resample.avgpool", spec, out.numel(), 256, &p,
                                    sizeof(p), &p.groups_per_row);
@@ -369,6 +396,24 @@ void l2_normalize_rows(const Tensor& out, const Tensor& x, float eps) {
     vk::SpecList spec{(uint32_t)(x.dtype == DType::F16), 0u, 0u};
     vk::Stream::get().dispatch("misc.l2_normalize_rows", spec, fold.per_row, fold.rows, 1,
                                &p, sizeof(p));
+}
+
+void softmax_rows(const Tensor& out, const Tensor& x) {
+    NN_CHECK(out.rows() == x.rows() && out.cols() == x.cols(),
+             "softmax_rows: shapes differ");
+    const int64_t rows = x.rows();
+    if (rows == 0) return;
+
+    NormalizeParams p{};
+    p.out = out.ptr;
+    p.x = x.ptr;
+    p.rows = (uint32_t)rows;
+    p.cols = (uint32_t)x.cols();
+    const vk::Stream::Fold fold = vk::Stream::fold1D(rows, 1);
+    p.groups_per_row = fold.per_row;
+    vk::SpecList spec{(uint32_t)(x.dtype == DType::F16), 0u, 0u};
+    vk::Stream::get().dispatch("misc.softmax_rows", spec, fold.per_row, fold.rows, 1, &p,
+                               sizeof(p));
 }
 
 void resize_binarize(const Tensor& out_u8, const Tensor& logits, int64_t Ho, int64_t Wo,

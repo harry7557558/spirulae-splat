@@ -21,7 +21,7 @@ lightglue` runs the whole pipeline.
 
 ## The checkpoint is an ONNX file
 
-`model/Onnx.cpp` is a ~300-line varint walk of protobuf that reads
+`nn/io/Onnx.cpp` is a ~400-line varint walk of protobuf that reads
 *initializers only* — the graph structure is hard-coded in `AlikedModel.cpp`,
 so nothing has to understand a node, an operator or a shape rule.
 
@@ -45,7 +45,6 @@ conv before it, with the epsilon read from the node rather than assumed.
 ```
 Aliked.h              the public surface: Extractor, ExtractOptions, Features
 Common.h              the names borrowed from nn/, as sam/Common.h does
-model/Onnx.{h,cpp}    the protobuf walk
 model/Fetch.{h,cpp}   URL + SHA-256 table, cache, download through curl
 model/Weights.{h,cpp} initializers -> device tensors; BN folding; hparams
 model/AlikedModel.cpp the forward pass, read against nets/aliked.py

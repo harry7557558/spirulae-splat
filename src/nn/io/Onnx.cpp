@@ -1,14 +1,16 @@
-#include "aliked/model/Onnx.h"
+#include "nn/io/Onnx.h"
 
 #include "nn/core/Error.h"
 #include "nn/core/Half.h"
 #include "nn/core/Log.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <unordered_set>
 
-namespace aliked {
+namespace nn {
 namespace {
 
 // ONNX TensorProto.DataType, the handful that can appear as a weight.
@@ -21,6 +23,9 @@ enum : int32_t {
     kDouble = 11,
     kFloat16 = 10,
 };
+
+// TensorProto.DataLocation
+constexpr int64_t kLocationExternal = 1;
 
 const char* dtype_name(int32_t t) {
     switch (t) {
@@ -186,11 +191,79 @@ void decode_raw(const Reader& raw, int32_t dt, int64_t count, std::vector<float>
     }
 }
 
-OnnxTensor read_tensor_proto(Reader r) {
+// Where a TensorProto says its bytes really are. An export over 2 GB has to
+// put them beside the model (protobuf's own message limit), and Metric3D's
+// giant2 does: `location` names a sibling file, `offset` and `length` a slice
+// of it.
+struct ExternalRef {
+    std::string location;
+    uint64_t    offset = 0;
+    uint64_t    length = 0;
+};
+
+// The model file's bytes, plus lazily-opened handles on whatever sibling files
+// its initializers point at. One handle per location, because a checkpoint
+// with external data has one such file and thousands of tensors in it.
+struct Loader {
+    std::string          path;
+    std::string          dir;
+    std::vector<uint8_t> buf;
+    std::unordered_map<std::string, std::shared_ptr<std::ifstream>> external;
+    std::vector<uint8_t> scratch;
+
+    void open(const std::string& p) {
+        path = p;
+        const size_t slash = p.find_last_of("/\\");
+        dir = (slash == std::string::npos) ? std::string() : p.substr(0, slash + 1);
+
+        std::ifstream fin(p, std::ios::binary | std::ios::ate);
+        NN_CHECK((bool)fin, "cannot open '%s'", p.c_str());
+        const std::streamoff size = fin.tellg();
+        NN_CHECK(size > 16, "'%s' is %lld bytes; not an ONNX model", p.c_str(),
+                 (long long)size);
+        fin.seekg(0);
+        buf.resize((size_t)size);
+        NN_CHECK((bool)fin.read(reinterpret_cast<char*>(buf.data()), size),
+                 "cannot read '%s'", p.c_str());
+    }
+
+    // Reads the slice into `scratch` and returns a Reader over it. The buffer
+    // is reused across tensors, so the returned Reader is valid only until the
+    // next call -- every caller decodes before asking for another.
+    Reader readExternal(const ExternalRef& ref, const char* name) {
+        NN_CHECK(!ref.location.empty(), "initializer '%s' is external with no location",
+                 name);
+        auto it = external.find(ref.location);
+        if (it == external.end()) {
+            const std::string full = dir + ref.location;
+            auto fin = std::make_shared<std::ifstream>(full, std::ios::binary);
+            NN_CHECK((bool)*fin,
+                     "'%s' keeps its weights in '%s', which cannot be opened.\n"
+                     "  An external-data export is two files; fetch both into the "
+                     "same directory.",
+                     path.c_str(), full.c_str());
+            it = external.emplace(ref.location, std::move(fin)).first;
+        }
+        std::ifstream& fin = *it->second;
+        scratch.resize((size_t)ref.length);
+        fin.clear();
+        fin.seekg((std::streamoff)ref.offset);
+        NN_CHECK((bool)fin.read(reinterpret_cast<char*>(scratch.data()),
+                                (std::streamsize)ref.length),
+                 "initializer '%s': cannot read %llu bytes at offset %llu of '%s'", name,
+                 (unsigned long long)ref.length, (unsigned long long)ref.offset,
+                 ref.location.c_str());
+        return Reader{scratch.data(), scratch.data() + scratch.size(), path.c_str()};
+    }
+};
+
+OnnxTensor read_tensor_proto(Loader& L, Reader r) {
     OnnxTensor t;
     int32_t dt = 0;
     Reader raw{}, float_data{};
     bool has_raw = false, has_float = false;
+    int64_t location = 0;
+    ExternalRef ext;
 
     Field f;
     while (next_field(r, f)) {
@@ -215,8 +288,25 @@ OnnxTensor read_tensor_proto(Reader r) {
             case 9:  // raw_data
                 if (f.wire == 2) { raw = f.bytes; has_raw = true; }
                 break;
+            case 13: {  // external_data: repeated StringStringEntryProto
+                if (f.wire != 2) break;
+                Reader e = f.bytes;
+                std::string key, value;
+                Field ef;
+                while (next_field(e, ef)) {
+                    if (ef.number == 1 && ef.wire == 2) key = to_string(ef.bytes);
+                    else if (ef.number == 2 && ef.wire == 2) value = to_string(ef.bytes);
+                }
+                if (key == "location") ext.location = value;
+                else if (key == "offset") ext.offset = std::strtoull(value.c_str(), nullptr, 10);
+                else if (key == "length") ext.length = std::strtoull(value.c_str(), nullptr, 10);
+                break;
+            }
+            case 14:  // data_location
+                location = (int64_t)f.value;
+                break;
             default:
-                break;  // segment, string_data, external_data, doc_string, ...
+                break;  // segment, string_data, doc_string, ...
         }
     }
 
@@ -224,8 +314,11 @@ OnnxTensor read_tensor_proto(Reader r) {
     const int64_t count = t.numel();
     if (count < 0 || count > (int64_t)1 << 32)
         nn::fail("initializer '%s' declares %lld elements", name, (long long)count);
+    t.was_f16 = (dt == kFloat16);
 
-    if (has_raw) {
+    if (location == kLocationExternal) {
+        decode_raw(L.readExternal(ext, name), dt, count, t.data, name);
+    } else if (has_raw) {
         decode_raw(raw, dt, count, t.data, name);
     } else if (has_float && dt == kFloat) {
         // The non-raw encoding: 4-byte little-endian floats, packed.
@@ -287,6 +380,38 @@ void scan_node(Reader r, OnnxNode& out, std::unordered_map<std::string, float>& 
     out.inputs = std::move(inputs);
 }
 
+// The one walk all three entry points share. `sink` is null to skip initializer
+// payloads entirely, which is what makes a structure-only pass cheap.
+OnnxFile walk(const std::string& path, bool want_nodes,
+              const std::function<void(OnnxTensor&&)>* sink) {
+    Loader L;
+    L.open(path);
+
+    Reader model{L.buf.data(), L.buf.data() + L.buf.size(), path.c_str()};
+    Reader graph{};
+    bool has_graph = false;
+
+    Field f;
+    while (next_field(model, f)) {
+        if (f.number == 7 && f.wire == 2) { graph = f.bytes; has_graph = true; }
+    }
+    NN_CHECK(has_graph, "'%s' has no graph; not an ONNX model", path.c_str());
+
+    OnnxFile out;
+    size_t n_init = 0;
+    while (next_field(graph, f)) {
+        if (f.number == 5 && f.wire == 2) {
+            ++n_init;
+            if (sink) (*sink)(read_tensor_proto(L, f.bytes));
+        } else if (f.number == 1 && f.wire == 2 && want_nodes) {
+            out.nodes.emplace_back();
+            scan_node(f.bytes, out.nodes.back(), out.bn_epsilon);
+        }
+    }
+    NN_CHECK(n_init != 0, "'%s' has no initializers", path.c_str());
+    return out;
+}
+
 }  // namespace
 
 std::string OnnxTensor::shapeString() const {
@@ -314,61 +439,53 @@ const OnnxNode* OnnxFile::producer(const std::string& tensor) const {
 std::unordered_map<std::string, std::string> OnnxFile::linearWeights() const {
     std::unordered_set<std::string> inits;
     for (const OnnxTensor& t : initializers) inits.insert(t.name);
+    // A structure-only pass has no initializer list to test against, so the
+    // producer walk is the only evidence: a MatMul operand nothing produces is
+    // an initializer.
+    const bool know_inits = !initializers.empty();
 
     std::unordered_map<std::string, std::string> out;
     for (const OnnxNode& n : nodes) {
         if (n.op_type != "Add" || n.inputs.size() != 2) continue;
         for (int b = 0; b < 2; ++b) {
             const std::string& bias = n.inputs[b];
-            if (!inits.count(bias)) continue;
+            if (know_inits ? !inits.count(bias) : producer(bias) != nullptr) continue;
             const size_t dot = bias.rfind(".bias");
             if (dot == std::string::npos || dot + 5 != bias.size()) continue;
             const OnnxNode* mm = producer(n.inputs[1 - b]);
             if (!mm || mm->op_type != "MatMul" || mm->inputs.size() != 2) continue;
             // MatMul's second operand is the weight when it is an initializer.
-            if (inits.count(mm->inputs[1])) out[bias.substr(0, dot)] = mm->inputs[1];
+            const std::string& w = mm->inputs[1];
+            if (know_inits ? inits.count(w) != 0 : producer(w) == nullptr)
+                out[bias.substr(0, dot)] = w;
         }
     }
     return out;
 }
 
 OnnxFile read_onnx(const std::string& path) {
-    std::ifstream fin(path, std::ios::binary | std::ios::ate);
-    NN_CHECK((bool)fin, "cannot open '%s'", path.c_str());
-    const std::streamoff size = fin.tellg();
-    NN_CHECK(size > 16, "'%s' is %lld bytes; not an ONNX model", path.c_str(),
-             (long long)size);
-    fin.seekg(0);
-    std::vector<uint8_t> buf((size_t)size);
-    NN_CHECK((bool)fin.read(reinterpret_cast<char*>(buf.data()), size),
-             "cannot read '%s'", path.c_str());
-
-    Reader model{buf.data(), buf.data() + buf.size(), path.c_str()};
-    Reader graph{};
-    bool has_graph = false;
-
-    Field f;
-    while (next_field(model, f)) {
-        if (f.number == 7 && f.wire == 2) { graph = f.bytes; has_graph = true; }
-    }
-    NN_CHECK(has_graph, "'%s' has no graph; not an ONNX model", path.c_str());
-
     OnnxFile out;
-    while (next_field(graph, f)) {
-        if (f.number == 5 && f.wire == 2) {
-            out.initializers.push_back(read_tensor_proto(f.bytes));
-        } else if (f.number == 1 && f.wire == 2) {
-            out.nodes.emplace_back();
-            scan_node(f.bytes, out.nodes.back(), out.bn_epsilon);
-        }
-    }
-    NN_CHECK(!out.initializers.empty(), "'%s' has no initializers", path.c_str());
+    std::function<void(OnnxTensor&&)> sink = [&](OnnxTensor&& t) {
+        out.initializers.push_back(std::move(t));
+    };
+    OnnxFile structure = walk(path, /*want_nodes=*/true, &sink);
+    out.nodes = std::move(structure.nodes);
+    out.bn_epsilon = std::move(structure.bn_epsilon);
 
     size_t elems = 0;
     for (const OnnxTensor& t : out.initializers) elems += t.data.size();
-    NN_LOG_DEBUG("[aliked] %s: %zu initializers, %.2f MB of weights\n", path.c_str(),
+    NN_LOG_DEBUG("[onnx] %s: %zu initializers, %.2f MB of weights\n", path.c_str(),
                  out.initializers.size(), (double)elems * 4.0 / 1e6);
     return out;
 }
 
-}  // namespace aliked
+OnnxFile read_onnx_structure(const std::string& path) {
+    return walk(path, /*want_nodes=*/true, nullptr);
+}
+
+void read_onnx_initializers(const std::string& path,
+                            const std::function<void(OnnxTensor&&)>& sink) {
+    walk(path, /*want_nodes=*/false, &sink);
+}
+
+}  // namespace nn

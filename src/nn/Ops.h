@@ -28,6 +28,9 @@ enum class Act : uint32_t {
     Sigmoid = 4,
     Selu = 5,      // nn.SELU() -- ALIKED's gate, in every block and both heads
     LogSigmoid = 6,// F.logsigmoid -- LightGlue's matchability term
+    Tanh = 7,      // torch.tanh -- Metric3D's ConvGRU candidate and hidden init
+    Elu = 8,       // F.elu(alpha=1) -- its normal head's concentration channel
+    Silu = 9,      // F.silu -- the SwiGLU FFN in DINOv2 giant2
 };
 
 enum class AttnBias : uint32_t {
@@ -200,9 +203,16 @@ void resize_bilinear(const Tensor& out, const Tensor& in, bool align_corners = f
 void upsample_nearest2x(const Tensor& out, const Tensor& in);
 void maxpool2x2(const Tensor& out, const Tensor& in);
 
-// nn.AvgPool2d(kernel, stride), no padding, ceil_mode = False. `out` must be
-// sized [(Hi-kernel)/stride + 1, ...]; stride 0 means "same as kernel".
-void avgpool(const Tensor& out, const Tensor& in, int kernel, int stride = 0);
+// F.interpolate(scale_factor=(sy, sx), mode='nearest'). Pass the SCALE the
+// reference asked for, not out/in: torch sizes the output floor(in * s) and
+// still maps with the original s, and at 7/2 the two disagree.
+void resize_nearest(const Tensor& out, const Tensor& in, float scale_y, float scale_x);
+
+// nn.AvgPool2d(kernel, stride, padding), ceil_mode = False, and torch's
+// count_include_pad = True (the divisor is always kernel^2). `out` must be
+// sized [(Hi + 2*pad - kernel)/stride + 1, ...]; stride 0 means "same as
+// kernel".
+void avgpool(const Tensor& out, const Tensor& in, int kernel, int stride = 0, int pad = 0);
 
 // out[N, C] = bilinear sample of in[H, W, C] at `pos`, an f32 [N, 2] tensor of
 // normalized (x, y) in [-1, 1]. Reads zero outside, i.e. torch's
@@ -212,6 +222,10 @@ void grid_sample_points(const Tensor& out, const Tensor& in, const Tensor& pos,
 
 // F.normalize(x, p=2, dim=-1). `out` may alias `x`.
 void l2_normalize_rows(const Tensor& out, const Tensor& x, float eps = 1e-12f);
+
+// softmax over the last dimension. On a channel-last [H, W, C] map that is
+// torch's softmax(dim=1) over channels. `out` may alias `x`.
+void softmax_rows(const Tensor& out, const Tensor& x);
 
 // Resize a single-channel logit map to [Ho, Wo], threshold, and write packed
 // 0/255 bytes. `out` is a U8 tensor; the buffer must be 4-byte rounded (every

@@ -94,6 +94,10 @@ src/
 │                             -- READ src/nn/README.md
 ├── sam/                    SAM 2 / SAM 3 segmentation, on top of nn/
 │                             -- READ src/sam/README.md
+├── aliked/                 ALIKED keypoints + LightGlue, on top of nn/
+│                             -- READ src/aliked/README.md
+├── metric3d/               Metric3D v2 depth + normals, on top of nn/
+│                             -- READ src/metric3d/README.md
 ├── video/                  container demux + VK_KHR_video_decode_*, on top of
 │                             nn/. PATENT-GATED: compiled only with
 │                             SS_ENABLE_PATENTED=ON -- READ src/video/README.md
@@ -111,7 +115,8 @@ src/
 │   │                         one executable, dispatched on argv[1]
 │   ├── Tools.h  Main.cpp   the subcommand table and the only main()
 │   ├── cli/                main.cpp (`spirula train`), mesh_main.cpp (mesh),
-│   │                         sfm_main.cpp (sfm), sam_main.cpp (sam)
+│   │                         sfm_main.cpp (sfm), sam_main.cpp (sam),
+│   │                         geometry_main.cpp (depth + normals)
 │   ├── FrameExtract.{h,cpp}  video -> sharp frames (`spirula sam extract` also
 │   │                         masks them in the same pass; the GUI masks after)
 │   ├── WriterPool.h        threads that encode/write images while the GPU runs
@@ -161,7 +166,8 @@ Use
 
 Everything builds into **one executable**, `build/spirula`: no arguments opens
 the GUI, `spirula sfm|train|sam|mesh` are the command-line tools, and a symlink
-named `spirula-sfm` runs that tool directly (`src/app/Tools.h`). The GUI runs
+named `spirula-sfm` runs that tool directly (`src/app/Tools.h`);
+`spirula geometry` estimates depth and normals for a dataset. The GUI runs
 reconstruction by re-running itself as a child process, so there is no sibling
 binary to keep next to it. `-DSS_SEPARATE_TOOLS=ON` also builds the old
 per-tool executables.
@@ -229,8 +235,8 @@ Rules:
 
 ## The Vulkan-only subsystems
 
-`src/sfm/`, `src/nn/`, `src/sam/` and `src/video/` are **not** part of the
-two-backend rule below. They are Vulkan + Slang only, carry their own Vulkan
+`src/sfm/`, `src/nn/`, `src/sam/`, `src/aliked/`, `src/metric3d/` and
+`src/video/` are **not** part of the two-backend rule below. They are Vulkan + Slang only, carry their own Vulkan
 context, share nothing with the training engine, and are absent from a CUDA
 build by default (`SS_BUILD_SFM` / `SS_BUILD_SAM` default OFF there).
 Nothing in them goes through `cmake/sources.txt`.
@@ -238,8 +244,10 @@ Nothing in them goes through `cmake/sources.txt`.
 The layering runs one way and must keep doing so:
 
 ```
-app/gui, app/cli ──► sam ──► nn ──► nn/vk
-                 └──► video ──┘
+app/gui, app/cli ──► sam ──────┬──► nn ──► nn/vk
+                 ├──► aliked ──┤
+                 ├──► metric3d ┤
+                 └──► video ───┘
                  └──► sfm  (its own vk/, independent of nn/)
 ```
 
@@ -508,6 +516,20 @@ no ceremony — do not ask, do not leave a note saying you removed it.
   then reconstruction as a *child process*, then training) so no two overlap;
   do not casually make two of them concurrent. Converging is
   `docs/notes/sfm-port-plan.md` phase 6.
+- **The camera models exist twice, on purpose, and only twice.** The device
+  copy is `shaders/projection_utils.slang`; the host copy is
+  `data/CameraMath.h`, which the GUI's frustum wireframe and `spirula
+  geometry`'s resampling both call. A third copy is a bug waiting to be found
+  by nobody -- `spirula geometry --check` is what tests the host one, by
+  round-tripping an analytic plane through every camera model.
+- **"Is this lens too wide for one pinhole?" is asked in two places and must
+  get the same answer.** `spirula geometry --split auto` splits a frame into
+  pinhole faces and then writes RAY depth; the trainer's
+  `--input-depth-is-ray-depth`, left unset, has to know that happened, and the
+  two never meet. Both call `camhost::pinhole_coverage` against the same 0.75,
+  which is deliberately blind to the distortion coefficients so the answer
+  cannot move between builds. `--check` compares the closed form to counting
+  the pixels.
 - **Segmentation weights are never committed or bundled.** They are Meta's,
   under Meta's licences, and SAM 3's is not GPLv3-compatible. They are fetched
   at run time after the user has seen the terms -- `src/app/gui/ModelCache.cpp`

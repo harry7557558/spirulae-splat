@@ -53,6 +53,7 @@ constexpr const char* kToolTrain = "train";
 constexpr const char* kToolMesh  = "mesh";
 constexpr const char* kToolSfm   = "sfm";
 constexpr const char* kToolSam   = "sam";
+constexpr const char* kToolGeometry = "geometry";
 constexpr const char* kToolGui   = "gui";
 
 }  // namespace app
@@ -68,6 +69,9 @@ int spirula_sfm_main(int argc, char** argv);
 #endif
 #ifdef SS_TOOL_SAM
 int spirula_sam_main(int argc, char** argv);
+#endif
+#ifdef SS_TOOL_GEOMETRY
+int spirula_geometry_main(int argc, char** argv);
 #endif
 #ifdef SS_TOOL_GUI
 int spirula_gui_main(int argc, char** argv);

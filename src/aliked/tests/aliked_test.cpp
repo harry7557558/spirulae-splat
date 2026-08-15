@@ -94,10 +94,10 @@ void check_checkpoint(const std::string& path) {
     // would show up as "the file is always corrupt" long after the fact.
     for (const char* id : {"aliked-n16rot", "aliked-n32", "aliked-lightglue"}) {
         const ModelSource* src = find_model_source(id);
-        if (!src || path.find(src->file) == std::string::npos) continue;
+        if (!src || path.find(src->onnx.file) == std::string::npos) continue;
         const std::string got = sha256_file(path);
-        check(got == src->sha256, "%s hashes to %s, expected %s", src->file, got.c_str(),
-              src->sha256);
+        check(got == src->onnx.sha256, "%s hashes to %s, expected %s",
+              src->onnx.file, got.c_str(), src->onnx.sha256);
         break;
     }
 

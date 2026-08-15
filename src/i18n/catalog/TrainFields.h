@@ -4558,55 +4558,57 @@ SS_MSG(input_depth_is_ray_depth,
     TR("Derinlik haritaları ışın mesafesini ölçer"));
 SS_MSG(input_depth_is_ray_depth_help,
     EN("Whether the supplied depth maps measure distance along the camera ray "
-       "instead of distance straight ahead. Most AI-predicted depth is the latter, "
-       "so leave this off; turn it on for very wide fisheye captures where straight-ahead "
-       "depth is meaningless."),
+       "instead of distance straight ahead. Leave this unset and the lens decides: "
+       "distance along the ray for a capture wide enough that `spirula geometry` "
+       "had to split it into pinhole faces, straight ahead otherwise."),
     JA("与えた深度マップが、正面方向の距離ではなくカメラの光線に沿った距離かど"
-       "うかです。AI が推定する深度はたいてい正面方向なのでオフのままにし、正"
-       "面方向の深度が意味をなさない超広角の魚眼撮影ではオンにしてください。"),
-    ZH_HANS("提供的深度图记录的是沿相机光线的距离，还是正前方的距离。AI 预测的"
-            "深度多为后者，所以通常保持关闭；正前方深度失去意义的超广角鱼眼拍"
-            "摄才需要打开。"),
-    ZH_HANT("提供的深度圖記錄的是沿相機光線的距離，還是正前方的距離。AI 預測的"
-            "深度多為後者，所以通常保持關閉；正前方深度失去意義的超廣角魚眼拍"
-            "攝才需要開啟。"),
+       "うかです。未指定のままにするとレンズから判断します。`spirula geometry` が"
+       "ピンホール面に分割するほど広い撮影なら光線に沿った距離、それ以外は正面方向です。"),
+    ZH_HANS("提供的深度图记录的是沿相机光线的距离，还是正前方的距离。留空则"
+            "由镜头决定：宽到 `spirula geometry` 必须拆成针孔面的拍摄用沿光线的"
+            "距离，其余用正前方。"),
+    ZH_HANT("提供的深度圖記錄的是沿相機光線的距離，還是正前方的距離。留空則"
+            "由鏡頭決定：寬到 `spirula geometry` 必須拆成針孔面的拍攝用沿光線的"
+            "距離，其餘用正前方。"),
     KO("제공한 깊이 맵이 정면 거리 대신 카메라 광선을 따라 잰 거리인지 여부입"
-       "니다. AI가 예측한 깊이는 대개 정면 거리이므로 꺼 두고, 정면 거리가 의"
-       "미 없는 초광각 어안 촬영에서만 켜십시오."),
+       "니다. 비워 두면 렌즈가 정합니다. `spirula geometry` 가 핀홀 면으로 나눠야 할 "
+       "만큼 넓은 촬영은 광선 거리, 그 밖은 정면 거리입니다."),
     DE("Ob die gelieferten Tiefenkarten den Abstand entlang des Kamerastrahls "
-       "statt geradeaus messen. KI-geschätzte Tiefe ist meist Letzteres, also "
-       "ausgeschaltet lassen; für sehr weite Fisheye-Aufnahmen einschalten, bei "
-       "denen Tiefe geradeaus keinen Sinn ergibt."),
+       "statt geradeaus messen. Ohne Angabe entscheidet das Objektiv: Abstand "
+       "entlang des Strahls bei einer Aufnahme, die `spirula geometry` in "
+       "Lochkamera-Flächen zerlegen musste, sonst geradeaus."),
     FR("Les cartes de profondeur fournies mesurent-elles la distance le long "
-       "du rayon de la caméra plutôt que la distance droit devant. La profondeur "
-       "estimée par l'IA est presque toujours la seconde, donc à laisser décoché "
-       "; à cocher pour les prises fisheye très ouvertes où la profondeur droit "
-       "devant n'a pas de sens."),
+       "du rayon de la caméra plutôt que la distance droit devant. Sans valeur, "
+       "l'objectif décide : distance le long du rayon pour une prise assez large "
+       "pour que `spirula geometry` ait dû la découper en faces sténopé, droit "
+       "devant sinon."),
     ES("Si los mapas de profundidad suministrados miden la distancia a lo largo "
-       "del rayo de la cámara en vez de la distancia hacia delante. La profundidad "
-       "estimada por la IA suele ser la segunda, así que déjelo desactivado; "
-       "actívelo para capturas de ojo de pez muy abiertas donde la distancia "
-       "hacia delante no significa nada."),
+       "del rayo de la cámara en vez de la distancia hacia delante. Sin valor "
+       "decide el objetivo: distancia a lo largo del rayo para una toma tan "
+       "abierta que `spirula geometry` tuvo que dividirla en caras estenopeicas, "
+       "y hacia delante en los demás casos."),
     PT("Se os mapas de profundidade fornecidos medem a distância ao longo do "
-       "raio da câmera em vez da distância em frente. A profundidade estimada "
-       "pela IA costuma ser a segunda, então deixe desligado; ligue para capturas "
-       "olho de peixe muito abertas em que a distância em frente não faz sentido."),
+       "raio da câmera em vez da distância em frente. Sem valor quem decide é a "
+       "lente: distância ao longo do raio para uma captura tão aberta que o "
+       "`spirula geometry` teve de dividi-la em faces estenopeicas, em frente "
+       "nos outros casos."),
     IT("Se le mappe di profondità fornite misurano la distanza lungo il raggio "
-       "della camera invece della distanza in avanti. La profondità stimata dall'IA "
-       "è quasi sempre la seconda, quindi lasciare disattivato; attivare per "
-       "riprese fisheye molto aperte in cui la profondità in avanti non ha senso."),
+       "della camera invece della distanza in avanti. Senza valore decide "
+       "l'obiettivo: distanza lungo il raggio per una ripresa così ampia che "
+       "`spirula geometry` ha dovuto dividerla in facce stenopeiche, in avanti "
+       "altrimenti."),
     NL("Of de aangeleverde dieptekaarten de afstand langs de camerastraal meten "
-       "in plaats van recht vooruit. Door AI voorspelde diepte is meestal het "
-       "laatste, dus laat dit uit; zet het aan bij zeer wijde fisheye-opnamen "
-       "waar diepte recht vooruit niets betekent."),
-    RU("Измеряют ли поданные карты глубины расстояние вдоль луча камеры, а не "
-       "прямо вперёд. Предсказанная ИИ глубина — почти всегда второе, поэтому "
-       "оставьте выключенным; включайте для очень широких фишай-съёмок, где глубина "
-       "прямо вперёд бессмысленна."),
+       "in plaats van recht vooruit. Laat dit leeg en de lens beslist: afstand "
+       "langs de straal bij een opname die `spirula geometry` in "
+       "gaatjescamera-vlakken moest splitsen, anders recht vooruit."),
+    RU("Измеряют ли поданные карты глубины расстояние вдоль луча камеры, "
+       "а не прямо вперёд. Если не задано, решает объектив: расстояние вдоль "
+       "луча для съёмки настолько широкой, что `spirula geometry` пришлось "
+       "разбить её на пинхол-грани, иначе — прямо вперёд."),
     TR("Verilen derinlik haritalarının ileri doğru mesafe yerine kamera ışını "
-       "boyunca mesafeyi ölçüp ölçmediği. Yapay zekânın kestirdiği derinlik çoğunlukla "
-       "ikincisidir, bu yüzden kapalı bırakın; ileri doğru derinliğin anlamsız "
-       "olduğu çok geniş balıkgözü çekimlerinde açın."));
+       "boyunca mesafeyi ölçüp ölçmediği. Boş bırakılırsa objektif karar verir: "
+       "`spirula geometry` ın iğne deliği yüzlerine bölmek zorunda kaldığı kadar "
+       "geniş çekimlerde ışın boyunca mesafe, diğerlerinde ileri doğru."));
 
 SS_MSG(supervision_warmup,
     EN("Predicted-geometry guidance start"), JA("推定ジオメトリの誘導開始"),

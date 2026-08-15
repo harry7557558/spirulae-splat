@@ -7,7 +7,8 @@
 //   * BatchNorm folding. The export did not fold it (8 BatchNormalization
 //     nodes, running_mean / running_var present as initializers), so every
 //     conv-then-BN pair becomes one conv with a bias. The epsilon comes from
-//     the node attribute, not from PyTorch's default -- Onnx.cpp reads it.
+//     the node attribute, not from PyTorch's default -- nn/io/Onnx.cpp
+//     reads it.
 //   * Hyperparameters. `aliked-n16rot` and `aliked-n32` have byte-identical
 //     graph structure and differ only in M, the number of SDDH sample
 //     positions. So M is read from desc_head.agg_weights, not from the id, and
@@ -17,7 +18,7 @@
 // costs memory in this model is the full-resolution activations, and halving
 // 2.7 MB against that is not worth a second numeric path.
 
-#include "aliked/model/Onnx.h"
+#include "aliked/Common.h"
 #include "nn/Tensor.h"
 
 #include <string>

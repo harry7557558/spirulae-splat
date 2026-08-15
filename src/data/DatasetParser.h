@@ -340,6 +340,13 @@ void assign_val_split(ParsedDataset& ds, float validation_fraction);
 std::string find_aux_file(const std::string& aux_dir, const std::string& rel_name,
                           const char* suffix_tag);
 
+// The face orientations a wide camera is split into: 5 for a fisheye, 6 (a
+// cube map) for an equirectangular one. [K][3][3] row-major, rows (x, y, z) of
+// each face's frame in camera coordinates; null for any other K. Exposed
+// because `spirula geometry` has to resample into the SAME faces the trainer
+// will later render, and two tables would drift.
+const double* warp_axes(int K);
+
 // Outlier-frame mask via geometric median of camera positions. Returns
 // keep-flags, all-true when threshold is inf. positions = [N, 3].
 std::vector<char> outlier_keep_mask(const std::vector<double>& positions,

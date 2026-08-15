@@ -6,6 +6,7 @@
 #include "checkpoint/Resume.h"
 #include "config/TrainConfigJson.h"
 #include "i18n/catalog/Log.h"
+#include "data/CameraMath.h"
 #include "data/Knn.h"
 
 #ifndef _WIN32
@@ -121,6 +122,24 @@ ColorResolution resolve_color(const TrainConfig& c) {
     }
     r.convert_seed = convert.value_or(false);
     return r;
+}
+
+// What `depths/` measures when the flag does not say. `spirula geometry`
+// writes ray depth exactly when it had to split the frame, so this asks the
+// same question of the same lens. Wrong is silent: the loss still trains, on
+// a depth field bent by a secant.
+bool resolve_ray_depth(const TrainConfig& c, const ParsedDataset& ds) {
+    if (c.input_depth_is_ray_depth.has_value()) return *c.input_depth_is_ray_depth;
+    int64_t wide = 0;
+    for (int64_t i = 0; i < ds.num_cameras; i++)
+        if (camhost::pinhole_coverage(ds.camera_models[(size_t)i],
+                                      ds.widths[(size_t)i], ds.heights[(size_t)i],
+                                      ds.intrins[(size_t)i * 4 + 0],
+                                      ds.intrins[(size_t)i * 4 + 1]) <= 0.75)
+            wide++;
+    // A dataset that mixes the two has no right answer; the majority is the
+    // one that leaves fewer frames misread.
+    return wide * 2 > ds.num_cameras;
 }
 
 
@@ -325,7 +344,7 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
         cfg.loss.color_shift_reg_beta =
             std::max(0.0f, 1.0f - 1.0f / std::max(c.color_shift_reg_ema_period, 1));
     }
-    cfg.loss.input_depth_is_ray_depth = c.input_depth_is_ray_depth;
+    cfg.loss.input_depth_is_ray_depth = st.input_depth_is_ray_depth;
 
     // ---- optim ---------------------------------------------------------
     float means_lr = scheduled_lr(step, max_steps_lr, c.means_lr, c.means_lr_final);
@@ -711,6 +730,12 @@ void TrainerSession::setup_engine() {
     st = RunState{};
     st.train_frame_scale = ds.train_frame_scale;
     st.splat_linear      = color.splat_linear;
+    st.input_depth_is_ray_depth = resolve_ray_depth(cfg, ds);
+    if (has_depth && !cfg.input_depth_is_ray_depth.has_value())
+        log(lfmt(lmsg::ray_depth_resolved,
+                 {(st.input_depth_is_ray_depth ? lmsg::ray_depth_along_ray
+                                               : lmsg::ray_depth_straight_ahead)
+                      .get()}));
     int optim_bits = cfg.quantization_level == 0 ? 32 : 8;
     int value_bits = cfg.quantization_level == 0 ? 32 : 16;
     // num_train_data resolves to the POST-split camera count -- the

@@ -1076,6 +1076,102 @@ void test_learned_frontend(vk::Arena& arena) {
 }
 
 // ================
+// The monocular-geometry ops (src/metric3d/)
+// ================
+
+void test_geometry(vk::Arena& arena) {
+    {   // tanh / elu / silu -- the ConvGRU's gates, the normal head's
+        // concentration channel, and giant2's SwiGLU.
+        vk::ArenaScope scope(arena);
+        const int N = 4096;
+        auto x = randn(N, 3.0f);
+        Tensor tx = upload_f32(arena, x, N);
+        struct Case { Act act; const char* name; float (*ref)(float); };
+        const Case cases[] = {
+            {Act::Tanh, "tanh", [](float v) { return std::tanh(v); }},
+            {Act::Elu,  "elu",  [](float v) { return v > 0 ? v : std::exp(v) - 1.0f; }},
+            {Act::Silu, "silu", [](float v) { return v / (1.0f + std::exp(-v)); }},
+        };
+        for (const Case& c : cases) {
+            Tensor to = arena_tensor(arena, DType::F32, N);
+            unary(to, tx, c.act);
+            std::vector<float> want(x.size());
+            for (size_t i = 0; i < x.size(); ++i) want[i] = c.ref(x[i]);
+            check(c.name, readback(to), want, 1e-5f);
+        }
+    }
+    {   // AvgPool2d(3, stride=2, padding=1) -- pool2x between GRU resolutions.
+        // count_include_pad=True is the whole point: every window divides by 9,
+        // so an edge output is smaller than the mean of the taps it saw.
+        vk::ArenaScope scope(arena);
+        const int Hi = 15, Wi = 11, C = 4, k = 3, stride = 2, pad = 1;
+        const int Ho = (Hi + 2 * pad - k) / stride + 1;
+        const int Wo = (Wi + 2 * pad - k) / stride + 1;
+        auto x = randn((size_t)Hi * Wi * C);
+        Tensor to = arena_tensor(arena, DType::F32, Ho, Wo, C);
+        avgpool(to, upload_f32(arena, x, Hi, Wi, C), k, stride, pad);
+        std::vector<float> want((size_t)Ho * Wo * C, 0.0f);
+        for (int y = 0; y < Ho; ++y)
+            for (int xx = 0; xx < Wo; ++xx)
+                for (int c = 0; c < C; ++c) {
+                    double s = 0;
+                    for (int dy = 0; dy < k; ++dy)
+                        for (int dx = 0; dx < k; ++dx) {
+                            const int sy = y * stride + dy - pad, sx = xx * stride + dx - pad;
+                            if (sy < 0 || sy >= Hi || sx < 0 || sx >= Wi) continue;
+                            s += x[((size_t)sy * Wi + sx) * C + c];
+                        }
+                    want[((size_t)y * Wo + xx) * C + c] = (float)(s / (k * k));
+                }
+        check("avgpool 3x3 s2 pad1", readback(to), want, 1e-5f);
+    }
+    {   // resize_nearest at 7/2 -- the DPT read_0 upsample. The reference is
+        // torch's src = floor(dst / scale) with the ASKED-FOR scale, which is
+        // not the same as floor(dst * Hi / Ho) once Ho = floor(Hi * 7/2).
+        vk::ArenaScope scope(arena);
+        const int Hi = 9, Wi = 7, C = 3;
+        const float s = 3.5f;
+        const int Ho = (int)std::floor(Hi * s), Wo = (int)std::floor(Wi * s);
+        auto x = randn((size_t)Hi * Wi * C);
+        Tensor to = arena_tensor(arena, DType::F32, Ho, Wo, C);
+        resize_nearest(to, upload_f32(arena, x, Hi, Wi, C), s, s);
+        std::vector<float> want((size_t)Ho * Wo * C);
+        for (int y = 0; y < Ho; ++y)
+            for (int xx = 0; xx < Wo; ++xx) {
+                const int sy = std::min((int)std::floor(y / s), Hi - 1);
+                const int sx = std::min((int)std::floor(xx / s), Wi - 1);
+                for (int c = 0; c < C; ++c)
+                    want[((size_t)y * Wo + xx) * C + c] = x[((size_t)sy * Wi + sx) * C + c];
+            }
+        check("resize_nearest 7/2", readback(to), want, 0.0f);
+    }
+    {   // softmax_rows over 256 depth bins per pixel, and over the 9 neighbours
+        // the convex upsampler weights. A row far from zero checks the
+        // max-subtraction; without it exp() overflows and every weight is NaN.
+        vk::ArenaScope scope(arena);
+        for (int cols : {9, 256}) {
+            const int rows = 257;
+            auto x = randn((size_t)rows * cols, 4.0f);
+            for (int c = 0; c < cols; ++c) x[(size_t)3 * cols + c] += 200.0f;
+            Tensor to = arena_tensor(arena, DType::F32, rows, cols);
+            softmax_rows(to, upload_f32(arena, x, rows, cols));
+            std::vector<float> want((size_t)rows * cols);
+            for (int r = 0; r < rows; ++r) {
+                float m = -std::numeric_limits<float>::infinity();
+                for (int c = 0; c < cols; ++c) m = std::fmax(m, x[(size_t)r * cols + c]);
+                double sum = 0;
+                for (int c = 0; c < cols; ++c) sum += std::exp(x[(size_t)r * cols + c] - m);
+                for (int c = 0; c < cols; ++c)
+                    want[(size_t)r * cols + c] =
+                        (float)(std::exp(x[(size_t)r * cols + c] - m) / sum);
+            }
+            check(cols == 9 ? "softmax_rows 9" : "softmax_rows 256", readback(to), want,
+                  1e-6f);
+        }
+    }
+}
+
+// ================
 // Benchmark (test_ops --bench)
 // ================
 //
@@ -1218,6 +1314,7 @@ int main(int argc, char** argv) {
         std::printf("Convolution\n");    test_conv(arena);
         std::printf("Spatial / gather\n"); test_spatial(arena);
         std::printf("Learned frontend\n"); test_learned_frontend(arena);
+        std::printf("Monocular geometry\n"); test_geometry(arena);
 
         std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     } catch (const std::exception& e) {

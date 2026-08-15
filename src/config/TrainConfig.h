@@ -200,7 +200,7 @@ inline int train_tier_rank(const char* tier) {
     X(int, reg_warmup_length, 0, "geometry", "advanced", "")                 \
     X(float, depth_supervision_weight, 0.0f, "geometry", "advanced", "")     \
     X(float, normal_supervision_weight, 0.01f, "geometry", "basic", "")      \
-    X(bool, input_depth_is_ray_depth, false, "geometry", "basic", "")        \
+    X(std::optional<bool>, input_depth_is_ray_depth, std::nullopt, "geometry", "basic", "") \
     X(int, supervision_warmup, 0, "geometry", "expert", "")                  \
     X(float, mean_median_depth_weight, 0.0f, "geometry", "advanced", "")     \
     X(float, median_depth_normal_reg_weight, 0.0f, "geometry", "expert", "") \

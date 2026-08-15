@@ -20,7 +20,6 @@
 
 #include "aliked/Common.h"
 #include "aliked/model/Fetch.h"
-#include "aliked/model/Onnx.h"
 #include "nn/Ops.h"
 #include "nn/Tensor.h"
 #include "nn/vk/EmbeddedSpirv.h"

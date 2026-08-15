@@ -5,6 +5,7 @@
 //   spirula sfm auto ...       structure from motion
 //   spirula train ...          the trainer
 //   spirula sam segment ...    segmentation
+//   spirula geometry ...       depth and normals for a dataset
 //   spirula mesh ...           mesh extraction
 //
 // A first argument that is not a subcommand goes to the GUI untouched, so
@@ -57,6 +58,9 @@ const std::vector<Tool>& tools() {
 #endif
 #ifdef SS_TOOL_SAM
         {app::kToolSam, &cmsg::tool_sam, spirula_sam_main},
+#endif
+#ifdef SS_TOOL_GEOMETRY
+        {app::kToolGeometry, &cmsg::tool_geometry, spirula_geometry_main},
 #endif
 #ifdef SS_TOOL_MESH
         {app::kToolMesh, &cmsg::tool_mesh, spirula_mesh_main},
