@@ -368,11 +368,12 @@ int main(int argc, char** argv) {
             std::vector<uint16_t> dep((size_t)n_in);
             for (int64_t i = 0; i < n_in; i++)
                 dep[i] = (uint16_t)(1000 + (i % 997));
+            for (int64_t i = 0; i < n_in; i += 53) dep[i] = 0;  // "no data"
             float* o_dep = alloc_out<float>(n_out);
             launch_redistort_depth(
                 "FISHEYE", "THIN_PRISM", d_intr, d_dist, d_src_m, d_src_p,
-                upload(dep), 2, B, g.in_h, g.in_w, 1,
-                o_dep, g.out_h, g.out_w, refH, refW, 0.0f);
+                upload(dep), 2, B, g.in_h, g.in_w,
+                o_dep, g.out_h, g.out_w, refH, refW);
             readback_f(o_dep, n_out);
 
             auto nrm = r.bytes(n_in * 3);

@@ -76,11 +76,10 @@ __global__ void warp_depth_wide_to_pinhole_kernel(
         float2 uv;
         bool valid = to_pixel(raydir, &uv);
         float out = 0.0f;
-        if (valid) {
-            float d = bilinear_byte_norm<T_in>(
-                wide_depth, bid, 0, uv.x * sx, uv.y * sy, norm_inv, 0.0f);
+        float d;
+        if (valid && bilinear_depth_valid<T_in>(
+                wide_depth, bid, uv.x * sx, uv.y * sy, norm_inv, false, &d))
             out = _wide_depth_to_face_ray_depth(d, raydir, input_is_ray_depth);
-        }
         pinhole_depth.at(bid, ki, j, i, 0) = out;
     }
 }
@@ -116,10 +115,12 @@ __global__ void warp_depth_equirectangular_to_pinhole_kernel(
             0.5f * (float)w + f * atan2f(raydir.x, raydir.z),
             0.5f * (float)h + f * atan2f(raydir.y, hypotf(raydir.x, raydir.z))
         };
-        float d = bilinear_byte_norm_wrap_u<T_in>(
-            wide_depth, bid, 0, uv.x, uv.y, norm_inv, 0.0f);
+        float d;
         pinhole_depth.at(bid, ki, j, i, 0) =
-            _wide_depth_to_face_ray_depth(d, raydir, input_is_ray_depth);
+            bilinear_depth_valid<T_in>(wide_depth, bid, uv.x, uv.y, norm_inv,
+                                       /*wrap_u=*/true, &d)
+                ? _wide_depth_to_face_ray_depth(d, raydir, input_is_ray_depth)
+                : 0.0f;
     }
 }
 
@@ -135,18 +136,9 @@ __forceinline__ __device__ float3 _warp_one_normal(
     float3 axis_x, float3 axis_y, float3 axis_z
 ) {
     float3 n;
-    if (wrap_u) {
-        n.x = bilinear_byte_norm_wrap_u<T_in>(wide_normal, bid, 0, x, y, norm_inv, 0.0f) + decode_off;
-        n.y = bilinear_byte_norm_wrap_u<T_in>(wide_normal, bid, 1, x, y, norm_inv, 0.0f) + decode_off;
-        n.z = bilinear_byte_norm_wrap_u<T_in>(wide_normal, bid, 2, x, y, norm_inv, 0.0f) + decode_off;
-    } else {
-        n.x = bilinear_byte_norm<T_in>(wide_normal, bid, 0, x, y, norm_inv, 0.0f) + decode_off;
-        n.y = bilinear_byte_norm<T_in>(wide_normal, bid, 1, x, y, norm_inv, 0.0f) + decode_off;
-        n.z = bilinear_byte_norm<T_in>(wide_normal, bid, 2, x, y, norm_inv, 0.0f) + decode_off;
-    }
-    // "no data" sentinel (byte 0 -> -1 per channel; sum <= -2.366 == invalid,
-    // matching the loss kernel's ref_normal validity test).
-    if (n.x + n.y + n.z <= -2.366f) return make_float3(-1.0f, -1.0f, -1.0f);
+    if (!bilinear_normal_valid<T_in>(wide_normal, bid, x, y, norm_inv,
+                                     decode_off, wrap_u, &n))
+        return make_float3(-1.0f, -1.0f, -1.0f);
     float3 ax = normalize(axis_x), ay = normalize(axis_y), az = normalize(axis_z);
     float3 r = make_float3(dot(ax, n), dot(ay, n), dot(az, n));
     float rl = length(r);
@@ -504,7 +496,7 @@ __global__ void warp_image_pinhole_to_wide_kernel(
         }
         else {
             for (int c = 0; c < C; c++)
-                total[c] += weight * get_pixel_bilinear(pinhole_images, bid, ki, c, uv.x, uv.y);
+                total[c] += weight * get_pixel_bilinear(pinhole_images, bid, ki, c, xy.x, xy.y);
         }
 
         total_count += weight;

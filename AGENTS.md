@@ -344,7 +344,7 @@ Rationale that cannot be recovered any other way, and keep it dense:
 
 ### Budget
 
-Rules of thumb, not a linter, but a 40-line block should feel wrong:
+Enforced, not advisory — the build fails on a block over budget:
 
 - file header: **≤ 10 lines** — what this file is for and its one non-obvious
   constraint; everything longer goes to `docs/` or the subsystem README
@@ -353,12 +353,24 @@ Rules of thumb, not a linter, but a 40-line block should feel wrong:
 
 Section banners (see Conventions below) are exempt — they are structure, not
 prose. So is an untitled horizontal rule used to separate top-level
-definitions, which several subsystems use consistently.
+definitions, which several subsystems use consistently. Neither a divider rule
+nor a blank `//` counts toward a block; lines carrying prose do.
 
-`tools/check_comments.sh` enforces the one part of this a script can decide:
-every file a comment names must exist. It runs from `build_develop.bash` and
-fails the build. A citation into a deleted file is unfollowable, and the
-reader cannot tell it from a live one.
+Two scripts guard this, and both fail the build:
+
+- `tools/check_comment_length.py` counts the budget above over every block an
+  **uncommitted change touches**, staged or not. The standing debt in files
+  you did not open never blocks you; `--all` lists it for a deliberate cleanup
+  pass. It runs from `cmake/SsChecks.cmake`, so a bare `ninja` fails the same
+  way `build_develop.bash` does, and it skips itself when git or python is
+  missing (neither is a build dependency). `SS_SKIP_COMMENT_CHECK=1` skips one
+  build — needing it twice means the comment wanted cutting.
+- `tools/check_comments.sh` enforces the other part a script can decide: every
+  file a comment names must exist. A citation into a deleted file is
+  unfollowable, and the reader cannot tell it from a live one.
+
+Neither script can tell narration from rationale. A four-line block that
+survives by losing its fourth line has not been fixed.
 
 ### When you edit a file
 

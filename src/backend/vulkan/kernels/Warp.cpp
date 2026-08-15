@@ -420,20 +420,19 @@ void launch_redistort_depth(
     const int*   d_source_models,
     const float* d_source_params,
     const void* d_in, uint32_t elem_size,
-    int B, int in_H, int in_W, int C,
+    int B, int in_H, int in_W,
     float* d_float_out, int out_H, int out_W,
-    int ref_H, int ref_W,
-    float invalid)
+    int ref_H, int ref_W)
 {
     const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
-    dispatch_warp("warp.redistort_img",
+    dispatch_warp("warp.redistort_depth",
                   make_redistort_params(
                       d_intrins, d_dist_coeffs,
                       {d_source_models, d_source_params},
-                      d_in, d_float_out, B, in_H, in_W, C, out_H, out_W,
+                      d_in, d_float_out, B, in_H, in_W, 1, out_H, out_W,
                       elem_size == 2 ? kElemU16 : kElemF32,
                       (CameraModelType)cd.cam, ref_H, ref_W, 1.0f, 0.0f,
-                      invalid),
+                      0.0f),
                   {cd.dist});
 }
 

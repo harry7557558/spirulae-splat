@@ -413,10 +413,9 @@ void launch_redistort_depth(
     const int*   d_source_models,
     const float* d_source_params,
     const void* d_in, uint32_t elem_size,   // 2 = uint16 raw counts, 4 = float
-    int B, int in_H, int in_W, int C,
+    int B, int in_H, int in_W,
     float* d_float_out, int out_H, int out_W,
-    int ref_H, int ref_W,
-    float invalid);
+    int ref_H, int ref_W);
 
 
 void launch_redistort_mask(

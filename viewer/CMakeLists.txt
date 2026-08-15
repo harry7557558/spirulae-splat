@@ -91,3 +91,6 @@ add_custom_command(TARGET ssv_wasm POST_BUILD
           "${CMAKE_BINARY_DIR}/ssv_wasm.wasm" "${CMAKE_SOURCE_DIR}/js/ssv_wasm.wasm"
   COMMENT "Copying WASM artifacts into js/"
 )
+
+# Last: makes ssv_wasm depend on the repo's comment-length lint (docs/build.md).
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SsChecks.cmake)

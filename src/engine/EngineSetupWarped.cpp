@@ -6,10 +6,10 @@
 // post-split output buffer; no intermediate full-resolution float image
 // is ever materialized.
 //
-// Depth / normal GT are unsupported on this path (the warp kernels operate
-// only on RGB + binary mask). PPISP IS supported: it runs render-side on
-// the post-split pinhole sub-cameras, and N_grids must be sized to the
-// post-split camera count (one parameter slot per sub-camera).
+// Depth and normal GT go through the same warp: depth comes out as per-face
+// ray depth, normals rotated into each face's camera frame. PPISP runs
+// render-side on the post-split pinhole sub-cameras, so N_grids must be sized
+// to the post-split camera count (one parameter slot per sub-camera).
 
 #include "engine/Engine.h"
 #include "engine/EngineCommon.h"
@@ -266,8 +266,8 @@ void set_training_data_warped(
             launch_redistort_depth(
                 input_model_name, input_distortion, d_intrins, d_dist,
                 d_src_models, d_src_params, d_depth_in, d_elem,
-                B_in, depth_in_H, depth_in_W, 1,
-                d_depth_out, out_H, out_W, in_H, in_W, 0.0f);
+                B_in, depth_in_H, depth_in_W,
+                d_depth_out, out_H, out_W, in_H, in_W);
         } else if (cm == CameraModelType::EQUIRECTANGULAR) {
             launch_warp_depth_equi(
                 d_depth_in, d_elem, B_in, depth_in_H, depth_in_W,
@@ -284,6 +284,16 @@ void set_training_data_warped(
         TorchTensorView dv((uint64_t)d_depth_out, 4,
                            {(int64_t)B_post, (int64_t)out_H, (int64_t)out_W, 1LL});
         engine().gt.depth = DeviceTensor3D<float>(dv);
+        // The other two warps convert on the way out; re-distort only moves
+        // the sampling coordinate, so a linear (z) input is still linear here
+        // and needs the same pass set_training_data runs.
+        if (redistort_only && !input_depth_is_ray_depth)
+            linear_depth_to_ray_depth_inplace(
+                engine().camera.model_str, engine().camera.distortion_str,
+                _dv_tv(engine().camera.intrins),
+                _dt2d_tv(engine().camera.dist_coeffs),
+                engine().camera.width, engine().camera.height,
+                engine().gt.depth);
     }
 
     // ---- Normal warp ------------------------------------------------------

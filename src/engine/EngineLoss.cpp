@@ -470,16 +470,16 @@ std::map<std::string, float> engine_compute_loss_backward(
     TorchTensorView loss_map_buf = compute_loss_map ?
         _pool_tv_zero(PoolSlot::EngLossMap, C, H, W, 1) : _tv_null();
 
-    // v_losses: constant vector [1, 0, 1, 1, ...] (1 for all, 0 for psnr slot)
-    // Initialized once; pool never shrinks so pointer is stable
-    static bool v_losses_initialized = false;
+    // v_losses: constant vector [1, 0, 1, 1, ...] (1 for all, 0 for psnr slot).
+    // Uploaded once per engine lifetime; the flag lives in EngineState so
+    // engine_reset() clears it along with the buffer it describes.
     TorchTensorView v_losses_buf = _pool_tv_1d(PoolSlot::EngVLosses, (int)LossIndex::length);
-    if (!v_losses_initialized) {
+    if (!engine().v_losses_uploaded) {
         float h_v[(int)LossIndex::length];
         for (int i = 0; i < (int)LossIndex::length; i++) h_v[i] = 1.0f;
         h_v[(int)LossIndex::RgbPSNR] = 0.0f;
         backend::memcpy_sync((void*)std::get<0>(v_losses_buf), h_v, sizeof(h_v), backend::MemcpyKind::HostToDevice);
-        v_losses_initialized = true;
+        engine().v_losses_uploaded = true;
     }
 
     // Render outputs from forward pass (pool-backed, already populated)

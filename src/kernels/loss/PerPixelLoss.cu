@@ -146,13 +146,13 @@ __global__ void per_pixel_losses_forward_kernel(
         // a single-tap read (weight 1 on the diagonal).
         float ref_depth_v = 1.f;
         if (ref_depth) {
-            ref_depth_v = bilinear_sample_f(
+            ref_depth_v = bilinear_sample_gt_depth(
                 ref_depth, (int)batch_idx, x_dst, y_dst,
                 W_render, H_render, W_ref_depth, H_ref_depth);
         }
         float3 ref_normal_v = make_float3(0);
         if (ref_normal) {
-            ref_normal_v = bilinear_sample_f3(
+            ref_normal_v = bilinear_sample_gt_normal(
                 ref_normal, (int)batch_idx, x_dst, y_dst,
                 W_render, H_render, W_ref_normal, H_ref_normal);
         }
@@ -317,12 +317,12 @@ __global__ void per_pixel_losses_backward_kernel(
     float3 ref_normal_v = make_float3(0);
     bool   ref_alpha_v  = false;
     if (ref_depth) {
-        ref_depth_v = bilinear_sample_f(
+        ref_depth_v = bilinear_sample_gt_depth(
             ref_depth, (int)batch_idx, x_dst, y_dst,
             W_render, H_render, W_ref_depth, H_ref_depth);
     }
     if (ref_normal) {
-        ref_normal_v = bilinear_sample_f3(
+        ref_normal_v = bilinear_sample_gt_normal(
             ref_normal, (int)batch_idx, x_dst, y_dst,
             W_render, H_render, W_ref_normal, H_ref_normal);
     }
@@ -383,13 +383,13 @@ __global__ void per_pixel_losses_backward_kernel(
     // buffers MUST be zeroed before the kernel launch -- EngineLoss does
     // that via _pool_alloc_f_zero / cudaMemsetAsync.
     if (v_ref_depth) {
-        bilinear_scatter_add_f(
-            v_ref_depth, (int)batch_idx, x_dst, y_dst,
+        bilinear_scatter_add_gt_depth(
+            ref_depth, v_ref_depth, (int)batch_idx, x_dst, y_dst,
             W_render, H_render, W_ref_depth, H_ref_depth, temp_v_ref_depth);
     }
     if (v_ref_normal) {
-        bilinear_scatter_add_f3(
-            v_ref_normal, (int)batch_idx, x_dst, y_dst,
+        bilinear_scatter_add_gt_normal(
+            ref_normal, v_ref_normal, (int)batch_idx, x_dst, y_dst,
             W_render, H_render, W_ref_normal, H_ref_normal, temp_v_ref_normal);
     }
 }
@@ -633,6 +633,41 @@ __global__ void avg_pool_downsample_float_kernel(
     }
 }
 
+// GT geometry does not pool like an image: averaging a sentinel (0 depth,
+// black normal) into a 2x2 block grows a ring of plausible-looking wrong
+// supervision around every hole, one pixel per level. All-sentinel stays one.
+template<int channels>
+__global__ void avg_pool_downsample_gt_geometry_kernel(
+    const TensorView<float, 4> image_hs,
+    TensorView<float, 4> image_ls
+) {
+    uint32_t xid = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t yid = blockIdx.y * blockDim.y + threadIdx.y;
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    if (yid >= image_ls.shape[1] || xid >= image_ls.shape[2])
+        return;
+    float acc[channels] = {};
+    int n = 0;
+    for (int dy = 0; dy < 2; ++dy)
+        for (int dx = 0; dx < 2; ++dx) {
+            float v[channels];
+            for (int c = 0; c < channels; ++c)
+                v[c] = image_hs.at(bid, 2*yid+dy, 2*xid+dx, c);
+            if (channels == 1) {
+                if (!(v[0] > 0.0f)) continue;
+            } else {
+                float s = v[0] + v[1] + v[2];
+                float l2 = v[0]*v[0] + v[1]*v[1] + v[2]*v[2];
+                if (!(s > -2.366f && l2 > 1e-12f)) continue;
+            }
+            for (int c = 0; c < channels; ++c) acc[c] += v[c];
+            ++n;
+        }
+    for (int c = 0; c < channels; ++c)
+        image_ls.at(bid, yid, xid, c) =
+            n ? acc[c] / (float)n : (channels == 1 ? 0.0f : -1.0f);
+}
+
 template<typename uintx_t>
 __global__ void avg_pool_downsample_integral_kernel(
     const TensorView<uintx_t, 4> image_hs,
@@ -678,6 +713,19 @@ static void _avg_pool_downsample_float(const TorchTensorView& src, const TorchTe
     long b = s[0], h = s[1], w = s[2], c = s[3];
     avg_pool_downsample_float_kernel<<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(
         _tv_view4(src), _tv_view4(dst));
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+static void _avg_pool_downsample_gt_geometry(const TorchTensorView& src,
+                                             const TorchTensorView& dst) {
+    const auto& s = std::get<2>(dst);
+    long b = s[0], h = s[1], w = s[2], c = s[3];
+    if (c == 1)
+        avg_pool_downsample_gt_geometry_kernel<1>
+            <<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(_tv_view4(src), _tv_view4(dst));
+    else
+        avg_pool_downsample_gt_geometry_kernel<3>
+            <<<_LAUNCH_ARGS_3D(w, h, b, 16, 16, 1)>>>(_tv_view4(src), _tv_view4(dst));
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -816,6 +864,15 @@ LossValues compute_multi_scale_per_pixel_losses(
                 _avg_pool_downsample_float(prev, curr);
             }
         };
+        auto ds_geo = [&](TorchTensorView& prev, TorchTensorView& curr, const std::string& name, int C) {
+            if (_has(prev)) {
+                const auto& pps = std::get<2>(prev);
+                long nH = std::max((long)1, (long)pps[1] / 2);
+                long nW = std::max((long)1, (long)pps[2] / 2);
+                curr = _pool_alloc_f(pfx + name, B, nH, nW, C);
+                _avg_pool_downsample_gt_geometry(prev, curr);
+            }
+        };
         auto ds_b = [&](TorchTensorView& prev, TorchTensorView& curr, const std::string& name) {
             if (_has(prev)) {
                 const auto& pps = std::get<2>(prev);
@@ -829,10 +886,10 @@ LossValues compute_multi_scale_per_pixel_losses(
         ds_f(render_rgb_s[sc-1], render_rgb_s[sc], "rrgb", 3);
         ds_f(ref_rgb_s[sc-1], ref_rgb_s[sc], "frgb", 3);
         ds_f(render_depth_s[sc-1], render_depth_s[sc], "rd", 1);
-        ds_f(ref_depth_s[sc-1], ref_depth_s[sc], "fd", 1);
+        ds_geo(ref_depth_s[sc-1], ref_depth_s[sc], "fd", 1);
         ds_f(render_normal_s[sc-1], render_normal_s[sc], "rn", 3);
         ds_f(depth_normal_s[sc-1], depth_normal_s[sc], "dn", 3);
-        ds_f(ref_normal_s[sc-1], ref_normal_s[sc], "fn", 3);
+        ds_geo(ref_normal_s[sc-1], ref_normal_s[sc], "fn", 3);
         ds_f(render_Ts_s[sc-1], render_Ts_s[sc], "rT", 1);
         ds_f(rgb_dist_s[sc-1], rgb_dist_s[sc], "rgbd", 3);
         ds_f(depth_dist_s[sc-1], depth_dist_s[sc], "dd", 1);

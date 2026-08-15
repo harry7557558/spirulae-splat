@@ -30,6 +30,7 @@ Always build through the dev scripts.
 | `SsEmbed.cmake` | `ss_embed_file()` — bake a file into a byte-array header |
 | `SsApps.cmake` | the `spirula` executable — every tool the build has, in one binary (backend-agnostic) |
 | `SsPackage.cmake` | the `macos_app` / `macos_dmg` targets ([Packaging](#packaging)) |
+| `SsChecks.cmake` | the source lints ([Lints](#lints)) — included last, so every target above depends on them |
 
 Exactly one backend module runs. It leaves behind `SS_WITH_TORCH` and
 `SS_APP_LIBS`, which is the whole contract `SsApps.cmake` depends on.
@@ -44,9 +45,9 @@ build_develop.bat [cmake args...]
 ```
 
 Both run codegen first (skipped gracefully if `python3` is missing — the
-generated files are committed) and then configure + build into `build/`.
-`build_develop.bash` additionally caps the job count by available RAM
-(~750 MB/job) and runs `tools/check_ss_prefix.sh`.
+generated files are committed), then the [lints](#lints), then configure +
+build into `build/`. `build_develop.bash` additionally caps the job count by
+available RAM (~750 MB/job).
 
 ## The matrix
 
@@ -76,6 +77,7 @@ without reconfiguring, e.g. `-B build_cuda` and `-B build`.
 | `SS_BUILD_SAM` | `ON` for `vulkan`, `OFF` for `cuda` | `ss_nn` + `ss_sam` + `spirula sam` + `nn_ops_test` / `sam_pipeline_test`, and the GUI's in-process masking. Same rule as SfM. |
 | `SS_ENABLE_PATENTED` | `OFF` | `ss_video` — container demux + `VK_KHR_video_decode_*`. **Read the note below before turning it on.** |
 | `SS_SFM_REALS` / `SS_SFM_LOSSES` | all | trim the bundle-adjustment shader variant matrix while iterating (`src/sfm/README.md`) |
+| `SS_CHECK_COMMENTS` | `ON` | run the comment-length lint on every build ([Lints](#lints)) |
 
 ### `SS_ENABLE_PATENTED`
 
@@ -95,6 +97,44 @@ ffmpeg to install. Nothing else in the build changes.
 
 If you distribute binaries, decide for your jurisdiction and your users before
 shipping one built with it on.
+
+## Lints
+
+Five checks guard the source. Each fails the build, and each skips itself when
+its interpreter is missing — none of them is a dependency of a fresh checkout.
+
+| check | what it refuses |
+|---|---|
+| `tools/check_ss_prefix.sh` | an `SS_*` name `<signal.h>` or `winuser.h` already owns (`tools/ss_reserved_names.txt`) |
+| `tools/check_i18n.sh` | a text-bearing ImGui call that skipped the `ui::` wrappers |
+| `tools/check_font_coverage.py` | a translation that outgrew the embedded font subsets |
+| `tools/check_comments.sh` | a comment citing a file that is not in the tree |
+| `tools/check_comment_length.py` | a comment block over the [budget](../AGENTS.md#budget) |
+
+The first four run from `build_develop.bash` only. The comment-length check
+also runs from CMake (`cmake/SsChecks.cmake`) as the `ss_check_comment_length`
+target, which every other target is made to depend on — so a bare `ninja`, a
+`make`, or `cmake --build build --target spirula` fails on it just as the dev
+scripts do. `build_develop.bat` runs it directly, and the standalone viewer
+build includes the same module.
+
+### The comment-length check
+
+It reads the **uncommitted** diff — staged, unstaged and untracked alike — and
+flags only the comment blocks those changes touch. Standing debt in a file you
+did not open never blocks a build; `--all` lists it for a deliberate cleanup
+pass. Divider rules, blank `//` lines and section banners do not count toward
+a block.
+
+```bash
+python3 tools/check_comment_length.py          # what the build will say
+python3 tools/check_comment_length.py --all    # the whole tree, for cleanup
+SS_SKIP_COMMENT_CHECK=1 ninja -C build         # skip it for one build
+cmake -B build -DSS_CHECK_COMMENTS=OFF         # or for a whole build tree
+```
+
+Neither escape hatch is a fix: the comment is still over budget, and the next
+person to touch that file inherits it.
 
 ## Targets
 

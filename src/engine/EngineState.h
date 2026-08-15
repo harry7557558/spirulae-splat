@@ -515,6 +515,10 @@ struct EngineState {
     int     num_sh         = 0;
     int     sh_degree      = 0;
     bool    packed         = false;
+    // PoolSlot::EngVLosses (the per-pixel loss cotangent seed) is uploaded
+    // once. Not a function-local static: engine_reset() frees the pool, and a
+    // flag outliving it leaves the next scene reading the reallocated buffer.
+    bool    v_losses_uploaded = false;
 
     WorldSplats    world;
     CameraTable    camera;

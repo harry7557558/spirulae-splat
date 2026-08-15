@@ -15,12 +15,21 @@ rem ---------------------------------------------------------------------------
 where python >nul 2>&1 || goto :skip_codegen
 python tools\codegen\generate_headers.py || goto :codegen_warn
 python tools\codegen\generate_kernel_instantiation.py || goto :codegen_warn
-goto :msvc_env
+goto :comment_check
 :codegen_warn
 echo codegen failed -- continuing with committed generated files
-goto :msvc_env
+goto :comment_check
 :skip_codegen
 echo python not found -- skipping codegen (using committed generated files)
+
+rem ---------------------------------------------------------------------------
+rem Comment-length gate (AGENTS.md). Also wired into CMake
+rem (cmake/SsChecks.cmake), which covers a bare cmake/ninja build; running it
+rem here fails before the configure step rather than after it.
+rem ---------------------------------------------------------------------------
+:comment_check
+where python >nul 2>&1 || goto :msvc_env
+python tools\check_comment_length.py || exit /b 1
 
 rem ---------------------------------------------------------------------------
 rem MSVC environment. vcvars64 is called even when cl is already on PATH: a

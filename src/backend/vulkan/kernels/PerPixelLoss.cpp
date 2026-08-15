@@ -447,6 +447,24 @@ void avg_pool_downsample_float_vk(const TorchTensorView& src,
                    sizeof(p));
 }
 
+void avg_pool_downsample_gt_geometry_vk(const TorchTensorView& src,
+                                        const TorchTensorView& dst) {
+    const auto& ss = std::get<2>(src);
+    const auto& ds = std::get<2>(dst);
+    MsPoolParams p{};
+    p.hs = std::get<0>(src);
+    p.ls = std::get<0>(dst);
+    p.B = (int32_t)ds[0];
+    p.C = (int32_t)ds[3];
+    p.hsH = (int32_t)ss[1];
+    p.hsW = (int32_t)ss[2];
+    p.lsH = (int32_t)ds[1];
+    p.lsW = (int32_t)ds[2];
+    p.scale = 1;
+    dispatch_tiles("multi_scale_loss.ms_downsample_gt_geo", p.lsW, p.lsH, p.B,
+                   &p, sizeof(p));
+}
+
 void avg_pool_downsample_bool_vk(const TorchTensorView& src,
                                  const TorchTensorView& dst) {
     const auto& ss = std::get<2>(src);
@@ -586,6 +604,16 @@ LossValues compute_multi_scale_per_pixel_losses(
                 avg_pool_downsample_float_vk(prev, curr);
             }
         };
+        auto ds_geo = [&](TorchTensorView& prev, TorchTensorView& curr,
+                          const std::string& name, int C) {
+            if (_has(prev)) {
+                const auto& pps = std::get<2>(prev);
+                long nH = std::max((long)1, (long)pps[1] / 2);
+                long nW = std::max((long)1, (long)pps[2] / 2);
+                curr = _pool_alloc_f(pfx + name, B, nH, nW, C);
+                avg_pool_downsample_gt_geometry_vk(prev, curr);
+            }
+        };
         auto ds_b = [&](TorchTensorView& prev, TorchTensorView& curr,
                         const std::string& name) {
             if (_has(prev)) {
@@ -600,10 +628,10 @@ LossValues compute_multi_scale_per_pixel_losses(
         ds_f(render_rgb_s[sc - 1], render_rgb_s[sc], "rrgb", 3);
         ds_f(ref_rgb_s[sc - 1], ref_rgb_s[sc], "frgb", 3);
         ds_f(render_depth_s[sc - 1], render_depth_s[sc], "rd", 1);
-        ds_f(ref_depth_s[sc - 1], ref_depth_s[sc], "fd", 1);
+        ds_geo(ref_depth_s[sc - 1], ref_depth_s[sc], "fd", 1);
         ds_f(render_normal_s[sc - 1], render_normal_s[sc], "rn", 3);
         ds_f(depth_normal_s[sc - 1], depth_normal_s[sc], "dn", 3);
-        ds_f(ref_normal_s[sc - 1], ref_normal_s[sc], "fn", 3);
+        ds_geo(ref_normal_s[sc - 1], ref_normal_s[sc], "fn", 3);
         ds_f(render_Ts_s[sc - 1], render_Ts_s[sc], "rT", 1);
         ds_f(rgb_dist_s[sc - 1], rgb_dist_s[sc], "rgbd", 3);
         ds_f(depth_dist_s[sc - 1], depth_dist_s[sc], "dd", 1);

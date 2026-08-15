@@ -29,6 +29,13 @@ fi
 # pointer reads exactly like a live one.
 bash tools/check_comments.sh >/dev/null || { bash tools/check_comments.sh; exit 1; }
 
+# Comment blocks in uncommitted work must fit the AGENTS.md budget. Also wired
+# into CMake (cmake/SsChecks.cmake), which covers a bare cmake/ninja build;
+# running it here fails before the configure step rather than after it.
+if command -v python3 >/dev/null 2>&1; then
+    python3 tools/check_comment_length.py || exit 1
+fi
+
 cmake -G Ninja -B build "$@" || exit $?
 
 # Repair the ninja dependency log.

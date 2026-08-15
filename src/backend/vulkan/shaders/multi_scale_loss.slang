@@ -141,8 +141,38 @@ void _ms_taps(int x_dst, int y_dst, int W_dst, int H_dst, int W_src, int H_src,
 }
 
 [ForceInline]
-float _ms_sample_f(float* src, int b, int x_dst, int y_dst, int W_dst,
-                   int H_dst, int W_src, int H_src) {
+float3 _ms_load_f3(float* src, gindex_t i) {
+    return float3(src[3 * i], src[3 * i + 1], src[3 * i + 2]);
+}
+
+// Interpolation.cuh revalidate_weights mirror: the "no ground truth here"
+// sentinel (0 depth, black normal) is dropped from the blend rather than
+// averaged into it. False means the destination pixel has no GT at all.
+[ForceInline]
+bool _ms_revalidate(bool v00, bool v10, bool v01, bool v11, inout float w00,
+                    inout float w10, inout float w01, inout float w11) {
+    if (!v00) w00 = 0.0f;
+    if (!v10) w10 = 0.0f;
+    if (!v01) w01 = 0.0f;
+    if (!v11) w11 = 0.0f;
+    float sw = w00 + w10 + w01 + w11;
+    if (sw <= 0.0f) return false;
+    float inv = 1.0f / sw;
+    w00 *= inv; w10 *= inv; w01 *= inv; w11 *= inv;
+    return true;
+}
+
+[ForceInline]
+bool _ms_gt_depth_valid(float d) { return d > 0.0f; }
+
+[ForceInline]
+bool _ms_gt_normal_valid(float3 n) {
+    return n.x + n.y + n.z > -2.366f && dot(n, n) > 1e-12f;
+}
+
+[ForceInline]
+float _ms_sample_gt_depth(float* src, int b, int x_dst, int y_dst, int W_dst,
+                          int H_dst, int W_src, int H_src) {
     int x0, y0, x1, y1;
     float w00, w01, w10, w11;
     _ms_taps(x_dst, y_dst, W_dst, H_dst, W_src, H_src, x0, y0, x1, y1, w00,
@@ -152,17 +182,16 @@ float _ms_sample_f(float* src, int b, int x_dst, int y_dst, int W_dst,
     float v10 = src[plane + y0 * W_src + x1];
     float v01 = src[plane + y1 * W_src + x0];
     float v11 = src[plane + y1 * W_src + x1];
+    if (!_ms_revalidate(_ms_gt_depth_valid(v00), _ms_gt_depth_valid(v10),
+                        _ms_gt_depth_valid(v01), _ms_gt_depth_valid(v11),
+                        w00, w10, w01, w11))
+        return 0.0f;
     return w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
 }
 
 [ForceInline]
-float3 _ms_load_f3(float* src, gindex_t i) {
-    return float3(src[3 * i], src[3 * i + 1], src[3 * i + 2]);
-}
-
-[ForceInline]
-float3 _ms_sample_f3(float* src, int b, int x_dst, int y_dst, int W_dst,
-                     int H_dst, int W_src, int H_src) {
+float3 _ms_sample_gt_normal(float* src, int b, int x_dst, int y_dst, int W_dst,
+                            int H_dst, int W_src, int H_src) {
     int x0, y0, x1, y1;
     float w00, w01, w10, w11;
     _ms_taps(x_dst, y_dst, W_dst, H_dst, W_src, H_src, x0, y0, x1, y1, w00,
@@ -172,7 +201,61 @@ float3 _ms_sample_f3(float* src, int b, int x_dst, int y_dst, int W_dst,
     float3 v10 = _ms_load_f3(src, plane + y0 * W_src + x1);
     float3 v01 = _ms_load_f3(src, plane + y1 * W_src + x0);
     float3 v11 = _ms_load_f3(src, plane + y1 * W_src + x1);
+    if (!_ms_revalidate(_ms_gt_normal_valid(v00), _ms_gt_normal_valid(v10),
+                        _ms_gt_normal_valid(v01), _ms_gt_normal_valid(v11),
+                        w00, w10, w01, w11))
+        return float3(-1.0f);
     return w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+}
+
+[ForceInline]
+void _ms_scatter_add_gt_depth(float* src, float* dst, int b, int x_dst,
+                              int y_dst, int W_dst, int H_dst, int W_src,
+                              int H_src, float dvalue) {
+    int x0, y0, x1, y1;
+    float w00, w01, w10, w11;
+    _ms_taps(x_dst, y_dst, W_dst, H_dst, W_src, H_src, x0, y0, x1, y1, w00,
+             w01, w10, w11);
+    gindex_t plane = (gindex_t)b * (gindex_t)H_src * (gindex_t)W_src;
+    gindex_t i00 = plane + y0 * W_src + x0;
+    gindex_t i10 = plane + y0 * W_src + x1;
+    gindex_t i01 = plane + y1 * W_src + x0;
+    gindex_t i11 = plane + y1 * W_src + x1;
+    if (!_ms_revalidate(_ms_gt_depth_valid(src[i00]), _ms_gt_depth_valid(src[i10]),
+                        _ms_gt_depth_valid(src[i01]), _ms_gt_depth_valid(src[i11]),
+                        w00, w10, w01, w11))
+        return;
+    if (w00 != 0.0f) atomic_add_f32(dst + i00, w00 * dvalue);
+    if (w10 != 0.0f) atomic_add_f32(dst + i10, w10 * dvalue);
+    if (w01 != 0.0f) atomic_add_f32(dst + i01, w01 * dvalue);
+    if (w11 != 0.0f) atomic_add_f32(dst + i11, w11 * dvalue);
+}
+
+[ForceInline]
+void _ms_scatter_add_gt_normal(float* src, float* dst, int b, int x_dst,
+                               int y_dst, int W_dst, int H_dst, int W_src,
+                               int H_src, float3 dvalue) {
+    int x0, y0, x1, y1;
+    float w00, w01, w10, w11;
+    _ms_taps(x_dst, y_dst, W_dst, H_dst, W_src, H_src, x0, y0, x1, y1, w00,
+             w01, w10, w11);
+    gindex_t plane = (gindex_t)b * (gindex_t)H_src * (gindex_t)W_src;
+    gindex_t idx[4] = { plane + y0 * W_src + x0, plane + y0 * W_src + x1,
+                        plane + y1 * W_src + x0, plane + y1 * W_src + x1 };
+    if (!_ms_revalidate(_ms_gt_normal_valid(_ms_load_f3(src, idx[0])),
+                        _ms_gt_normal_valid(_ms_load_f3(src, idx[1])),
+                        _ms_gt_normal_valid(_ms_load_f3(src, idx[2])),
+                        _ms_gt_normal_valid(_ms_load_f3(src, idx[3])),
+                        w00, w10, w01, w11))
+        return;
+    float w[4] = { w00, w10, w01, w11 };
+    for (int k = 0; k < 4; k++) {
+        if (w[k] == 0.0f) continue;
+        float* q = dst + 3 * idx[k];
+        atomic_add_f32(q + 0, w[k] * dvalue.x);
+        atomic_add_f32(q + 1, w[k] * dvalue.y);
+        atomic_add_f32(q + 2, w[k] * dvalue.z);
+    }
 }
 
 [ForceInline]
@@ -184,54 +267,6 @@ bool _ms_nearest_b(uint* src, int b, int x_dst, int y_dst, int W_dst,
     int y = max(0, min(H_src - 1, int(floor(v + 0.5f))));
     uint plane = uint(b) * uint(H_src) * uint(W_src);
     return _ms_load_u8(src, plane + uint(y) * uint(W_src) + uint(x)) != 0u;
-}
-
-[ForceInline]
-void _ms_scatter_add_f(float* dst, int b, int x_dst, int y_dst, int W_dst,
-                       int H_dst, int W_src, int H_src, float dvalue) {
-    int x0, y0, x1, y1;
-    float w00, w01, w10, w11;
-    _ms_taps(x_dst, y_dst, W_dst, H_dst, W_src, H_src, x0, y0, x1, y1, w00,
-             w01, w10, w11);
-    gindex_t plane = (gindex_t)b * (gindex_t)H_src * (gindex_t)W_src;
-    if (w00 != 0.0f) atomic_add_f32(dst + (plane + y0 * W_src + x0), w00 * dvalue);
-    if (w10 != 0.0f) atomic_add_f32(dst + (plane + y0 * W_src + x1), w10 * dvalue);
-    if (w01 != 0.0f) atomic_add_f32(dst + (plane + y1 * W_src + x0), w01 * dvalue);
-    if (w11 != 0.0f) atomic_add_f32(dst + (plane + y1 * W_src + x1), w11 * dvalue);
-}
-
-[ForceInline]
-void _ms_scatter_add_f3(float* dst, int b, int x_dst, int y_dst, int W_dst,
-                        int H_dst, int W_src, int H_src, float3 dvalue) {
-    int x0, y0, x1, y1;
-    float w00, w01, w10, w11;
-    _ms_taps(x_dst, y_dst, W_dst, H_dst, W_src, H_src, x0, y0, x1, y1, w00,
-             w01, w10, w11);
-    gindex_t plane = (gindex_t)b * (gindex_t)H_src * (gindex_t)W_src;
-    if (w00 != 0.0f) {
-        float* q = dst + 3 * (plane + y0 * W_src + x0);
-        atomic_add_f32(q + 0, w00 * dvalue.x);
-        atomic_add_f32(q + 1, w00 * dvalue.y);
-        atomic_add_f32(q + 2, w00 * dvalue.z);
-    }
-    if (w10 != 0.0f) {
-        float* q = dst + 3 * (plane + y0 * W_src + x1);
-        atomic_add_f32(q + 0, w10 * dvalue.x);
-        atomic_add_f32(q + 1, w10 * dvalue.y);
-        atomic_add_f32(q + 2, w10 * dvalue.z);
-    }
-    if (w01 != 0.0f) {
-        float* q = dst + 3 * (plane + y1 * W_src + x0);
-        atomic_add_f32(q + 0, w01 * dvalue.x);
-        atomic_add_f32(q + 1, w01 * dvalue.y);
-        atomic_add_f32(q + 2, w01 * dvalue.z);
-    }
-    if (w11 != 0.0f) {
-        float* q = dst + 3 * (plane + y1 * W_src + x1);
-        atomic_add_f32(q + 0, w11 * dvalue.x);
-        atomic_add_f32(q + 1, w11 * dvalue.y);
-        atomic_add_f32(q + 2, w11 * dvalue.z);
-    }
 }
 
 // Which accumulator row(s) a raw-loss index adds into (mirrors
@@ -265,16 +300,16 @@ void _ms_load_pixel(PplParams p, int batch_idx, gindex_t idx, int x_dst,
     render_depth = (p.in_flags & kInRenderDepth) != 0 ? p.render_depth[idx] : 1.0f;
     ref_depth_v = 1.0f;
     if ((p.in_flags & kInRefDepth) != 0)
-        ref_depth_v = _ms_sample_f(p.ref_depth, batch_idx, x_dst, y_dst,
-                                   p.W_render, p.H_render, p.W_ref_depth,
-                                   p.H_ref_depth);
+        ref_depth_v = _ms_sample_gt_depth(p.ref_depth, batch_idx, x_dst,
+                                          y_dst, p.W_render, p.H_render,
+                                          p.W_ref_depth, p.H_ref_depth);
     render_normal = (p.in_flags & kInRenderNormal) != 0 ? _ms_load_f3(p.render_normal, idx) : float3(0.0f);
     depth_normal = (p.in_flags & kInDepthNormal) != 0 ? _ms_load_f3(p.depth_normal, idx) : float3(0.0f);
     ref_normal_v = float3(0.0f);
     if ((p.in_flags & kInRefNormal) != 0)
-        ref_normal_v = _ms_sample_f3(p.ref_normal, batch_idx, x_dst, y_dst,
-                                     p.W_render, p.H_render, p.W_ref_normal,
-                                     p.H_ref_normal);
+        ref_normal_v = _ms_sample_gt_normal(p.ref_normal, batch_idx, x_dst,
+                                            y_dst, p.W_render, p.H_render,
+                                            p.W_ref_normal, p.H_ref_normal);
     render_Ts = (p.in_flags & kInRenderTs) != 0 ? p.render_Ts[idx] : 1.0f;
     rgb_dist = (p.in_flags & kInRgbDist) != 0 ? _ms_load_f3(p.rgb_dist, idx) : float3(0.0f);
     depth_dist = (p.in_flags & kInDepthDist) != 0 ? p.depth_dist[idx] : 0.0f;
@@ -468,13 +503,14 @@ void ppl_bwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     // GT-resolution outputs: bilinear atomic scatter (buffers pre-zeroed by
     // the host launcher).
     if ((p.out_flags & kOutVRefDepth) != 0)
-        _ms_scatter_add_f(p.v_ref_depth, int(batch_idx), x_dst, y_dst,
-                          p.W_render, p.H_render, p.W_ref_depth,
-                          p.H_ref_depth, v_ref_depth);
+        _ms_scatter_add_gt_depth(p.ref_depth, p.v_ref_depth, int(batch_idx),
+                                 x_dst, y_dst, p.W_render, p.H_render,
+                                 p.W_ref_depth, p.H_ref_depth, v_ref_depth);
     if ((p.out_flags & kOutVRefNormal) != 0)
-        _ms_scatter_add_f3(p.v_ref_normal, int(batch_idx), x_dst, y_dst,
-                           p.W_render, p.H_render, p.W_ref_normal,
-                           p.H_ref_normal, v_ref_normal);
+        _ms_scatter_add_gt_normal(p.ref_normal, p.v_ref_normal,
+                                  int(batch_idx), x_dst, y_dst, p.W_render,
+                                  p.H_render, p.W_ref_normal, p.H_ref_normal,
+                                  v_ref_normal);
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +620,38 @@ void ms_downsample_f(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         gindex_t obase = ((gindex_t)bid * p.lsH + yid) * (gindex_t)p.lsW + xid;
         p.ls[obase * p.C + c] = 0.25f * v;
     }
+}
+
+// GT geometry does not pool like an image: a 2x2 block that mixes real values
+// with the "no ground truth here" sentinel (0 depth, black normal) must not
+// average the two. C picks the rule -- 1 = depth, 3 = normal.
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void ms_downsample_gt_geo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                          uniform MsPoolParams p) {
+    uint xid = wg.x * 16 + (tid % 16u);
+    uint yid = wg.y * 16 + (tid / 16u);
+    uint bid = wg.z;
+    if (yid >= uint(p.lsH) || xid >= uint(p.lsW)) return;
+    uint ys[2] = { min(2 * yid, uint(p.hsH - 1)), min(2 * yid + 1, uint(p.hsH - 1)) };
+    uint xs[2] = { min(2 * xid, uint(p.hsW - 1)), min(2 * xid + 1, uint(p.hsW - 1)) };
+    gindex_t base = ((gindex_t)bid * p.hsH) * (gindex_t)p.hsW;
+    float3 acc = float3(0.0f);
+    int n = 0;
+    for (int dy = 0; dy < 2; dy++)
+        for (int dx = 0; dx < 2; dx++) {
+            gindex_t i = (base + ys[dy] * p.hsW + xs[dx]) * p.C;
+            float3 v = float3(p.hs[i], 0.0f, 0.0f);
+            if (p.C == 3) v = float3(p.hs[i], p.hs[i + 1], p.hs[i + 2]);
+            bool ok = p.C == 1 ? _ms_gt_depth_valid(v.x) : _ms_gt_normal_valid(v);
+            if (!ok) continue;
+            acc += v;
+            n++;
+        }
+    gindex_t obase = (((gindex_t)bid * p.lsH + yid) * (gindex_t)p.lsW + xid) * p.C;
+    float3 outv = n != 0 ? acc / float(n) : float3(p.C == 1 ? 0.0f : -1.0f);
+    p.ls[obase] = outv.x;
+    if (p.C == 3) { p.ls[obase + 1] = outv.y; p.ls[obase + 2] = outv.z; }
 }
 
 [shader("compute")]

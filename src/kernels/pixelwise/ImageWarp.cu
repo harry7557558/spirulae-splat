@@ -280,7 +280,7 @@ __global__ void warp_image_equirectangular_to_pinhole_byte_to_float_kernel(
         for (int c = 0; c < C; c++)
             pinhole_images.at(bid, ki, j, i, c) =
                 bilinear_byte_norm_wrap_u<T_in>(
-                    equirectangular_image, bid, c, uv.x, uv.y, norm_inv, 0.5f);
+                    equirectangular_image, bid, c, uv.x, uv.y, norm_inv);
     }
 }
 
@@ -323,8 +323,8 @@ __global__ void warp_mask_wide_to_pinhole_kernel(
         bool valid = to_pixel(raydir, &uv);
         uint8_t out = 0;
         if (valid) {
-            int xs = (int)floorf(uv.x + 0.5f);
-            int ys = (int)floorf(uv.y + 0.5f);
+            int xs = (int)floorf(uv.x);
+            int ys = (int)floorf(uv.y);
             if (xs >= 0 && xs < W && ys >= 0 && ys < H) {
                 out = (wide_mask.at(bid, ys, xs, 0) != 0) ? 1 : 0;
             }
@@ -359,8 +359,8 @@ __global__ void warp_mask_equirectangular_to_pinhole_kernel(
         float3 raydir = axis_z + tx * axis_x + ty * axis_y;
         float u = 0.5f * (float)w + f * atan2f(raydir.x, raydir.z);
         float v = 0.5f * (float)h + f * atan2f(raydir.y, hypotf(raydir.x, raydir.z));
-        int xs = (int)floorf(u + 0.5f);
-        int ys = (int)floorf(v + 0.5f);
+        int xs = (int)floorf(u);
+        int ys = (int)floorf(v);
         // wrap u for equirectangular (panoramic continuity); clamp v.
         if (xs < 0) xs += w; else if (xs >= w) xs -= w;
         if (ys < 0) ys = 0; if (ys >= h) ys = h - 1;

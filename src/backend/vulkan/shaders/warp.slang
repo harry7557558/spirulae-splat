@@ -53,6 +53,16 @@ float _wp_tap(uint* buf, int kind, gindex_t plane, int H, int W, int C,
     return _wp_load(buf, idx, kind) * norm_inv;
 }
 
+// wrap_u variant: x is already wrapped, and y clamps rather than pads (the
+// pole half-row -- see bilinear_byte_norm_wrap_u).
+[ForceInline]
+float _wp_tap_wrap(uint* buf, int kind, gindex_t plane, int H, int W, int C,
+                   int cid, int x_, int y_, float norm_inv) {
+    y_ = clamp(y_, 0, H - 1);
+    gindex_t idx = (plane + gindex_t(y_) * W + x_) * C + cid;
+    return _wp_load(buf, idx, kind) * norm_inv;
+}
+
 [ForceInline]
 int _wp_wrap_x(int v, int W) {
     int r = v % W;
@@ -71,6 +81,7 @@ int _wp_wrap_x(int v, int W) {
 float _wp_bilinear(uint* buf, int kind, gindex_t plane, int H, int W, int C,
                    int cid, float x, float y, float norm_inv, float padding,
                    bool wrap_u) {
+    x -= 0.5f; y -= 0.5f;
     if (!wrap_u) {
         x = clamp(x, -8.0f, float(W) + 8.0f);
         y = clamp(y, -8.0f, float(H) + 8.0f);
@@ -83,10 +94,99 @@ float _wp_bilinear(uint* buf, int kind, gindex_t plane, int H, int W, int C,
         x0 = _wp_wrap_x(x0, W);
         x1 = _wp_wrap_x(x1, W);
     }
+    if (wrap_u)
+        return _wp_tap_wrap(buf, kind, plane, H, W, C, cid, x0, y0, norm_inv) * (wx0 * wy0)
+             + _wp_tap_wrap(buf, kind, plane, H, W, C, cid, x1, y0, norm_inv) * (wx1 * wy0)
+             + _wp_tap_wrap(buf, kind, plane, H, W, C, cid, x0, y1, norm_inv) * (wx0 * wy1)
+             + _wp_tap_wrap(buf, kind, plane, H, W, C, cid, x1, y1, norm_inv) * (wx1 * wy1);
     return _wp_tap(buf, kind, plane, H, W, C, cid, x0, y0, norm_inv, padding) * (wx0 * wy0)
          + _wp_tap(buf, kind, plane, H, W, C, cid, x1, y0, norm_inv, padding) * (wx1 * wy0)
          + _wp_tap(buf, kind, plane, H, W, C, cid, x0, y1, norm_inv, padding) * (wx0 * wy1)
          + _wp_tap(buf, kind, plane, H, W, C, cid, x1, y1, norm_inv, padding) * (wx1 * wy1);
+}
+
+// Mirrors bilinear_depth_valid / bilinear_normal_valid in
+// core/Interpolation.cuh: a GT sentinel tap is dropped, not averaged in.
+// `w` is indexed q = 2*dy + dx.
+struct _WpTaps {
+    int x[2], y[2];
+    float w[4];
+    bool x_ok[2];
+};
+
+[ForceInline]
+_WpTaps _wp_taps(float x, float y, int W, bool wrap_u) {
+    _WpTaps t;
+    x -= 0.5f; y -= 0.5f;
+    if (!wrap_u) {
+        // float->int of an unbounded projected uv is undefined; the window is
+        // wide enough that every tap still lands out of frame.
+        x = clamp(x, -8.0f, float(W) + 8.0f);
+        y = clamp(y, -1e6f, 1e6f);
+    }
+    int x0 = int(floor(x)), y0 = int(floor(y));
+    float fx = x - float(x0), fy = y - float(y0);
+    t.y[0] = y0; t.y[1] = y0 + 1;
+    t.w[0] = (1.0f - fx) * (1.0f - fy);
+    t.w[1] = fx * (1.0f - fy);
+    t.w[2] = (1.0f - fx) * fy;
+    t.w[3] = fx * fy;
+    [ForceUnroll]
+    for (int k = 0; k < 2; k++) {
+        int xv = x0 + k;
+        if (wrap_u) {
+            t.x[k] = _wp_wrap_x(xv, W);
+            t.x_ok[k] = true;
+        } else {
+            t.x[k] = xv;
+            t.x_ok[k] = xv >= 0 && xv < W;
+        }
+    }
+    return t;
+}
+
+// False (and out 0) when no tap carries depth.
+[ForceInline]
+bool _wp_bilinear_depth(uint* buf, int kind, gindex_t plane, int H, int W,
+                        float x, float y, float norm_inv, bool wrap_u,
+                        out float outv) {
+    _WpTaps t = _wp_taps(x, y, W, wrap_u);
+    float acc = 0.0f, wsum = 0.0f;
+    for (int q = 0; q < 4; q++) {
+        int yv = t.y[q >> 1], xi = q & 1;
+        if (!t.x_ok[xi] || yv < 0 || yv >= H) continue;
+        gindex_t idx = plane + gindex_t(yv) * W + t.x[xi];
+        float d = _wp_load(buf, idx, kind) * norm_inv;
+        if (d <= 0.0f) continue;
+        acc += t.w[q] * d;
+        wsum += t.w[q];
+    }
+    outv = wsum > 0.0f ? acc / wsum : 0.0f;
+    return wsum > 0.0f;
+}
+
+// Not renormalized here: the callers rotate into their own frame first.
+[ForceInline]
+bool _wp_bilinear_normal(uint* buf, int kind, gindex_t plane, int H, int W,
+                         float x, float y, float norm_inv, float decode_off,
+                         bool wrap_u, out float3 outn) {
+    _WpTaps t = _wp_taps(x, y, W, wrap_u);
+    float3 acc = float3(0.0f);
+    float wsum = 0.0f;
+    for (int q = 0; q < 4; q++) {
+        int yv = t.y[q >> 1], xi = q & 1;
+        if (!t.x_ok[xi] || yv < 0 || yv >= H) continue;
+        gindex_t base = (plane + gindex_t(yv) * W + t.x[xi]) * 3;
+        float3 n = float3(_wp_load(buf, base + 0, kind),
+                          _wp_load(buf, base + 1, kind),
+                          _wp_load(buf, base + 2, kind)) * norm_inv + decode_off;
+        // Black decodes to -1 per channel; a float map spells "no data" as 0.
+        if (n.x + n.y + n.z <= -2.366f || dot(n, n) <= 1e-12f) continue;
+        acc += t.w[q] * n;
+        wsum += t.w[q];
+    }
+    outn = wsum > 0.0f ? acc / wsum : float3(-1.0f);
+    return wsum > 0.0f;
 }
 
 [ForceInline]
@@ -177,10 +277,9 @@ float3 _wp_one_normal(uint* src, int kind, gindex_t plane, int H, int W,
                       bool wrap_u, float3 axis_x, float3 axis_y,
                       float3 axis_z) {
     float3 n;
-    n.x = _wp_bilinear(src, kind, plane, H, W, 3, 0, x, y, norm_inv, 0.0f, wrap_u) + decode_off;
-    n.y = _wp_bilinear(src, kind, plane, H, W, 3, 1, x, y, norm_inv, 0.0f, wrap_u) + decode_off;
-    n.z = _wp_bilinear(src, kind, plane, H, W, 3, 2, x, y, norm_inv, 0.0f, wrap_u) + decode_off;
-    if (n.x + n.y + n.z <= -2.366f) return float3(-1.0f);
+    if (!_wp_bilinear_normal(src, kind, plane, H, W, x, y, norm_inv,
+                             decode_off, wrap_u, n))
+        return float3(-1.0f);
     float3 ax = normalize(axis_x), ay = normalize(axis_y), az = normalize(axis_z);
     float3 r = float3(dot(ax, n), dot(ay, n), dot(az, n));
     float rl = length(r);
@@ -305,12 +404,11 @@ void _wp_depth_wide<D : ICameraDistortion>(WarpParams p, int i, int j,
                                      p.dist_coeffs, p.source_models,
                                      p.source_params, bid, uv);
         float outv = 0.0f;
-        if (valid) {
-            float d = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, 1,
-                                   0, uv.x * sx, uv.y * sy, p.norm_inv, 0.0f,
-                                   false);
+        float d;
+        if (valid && _wp_bilinear_depth(p.src, p.elem_kind, plane, p.Hin,
+                                        p.Win, uv.x * sx, uv.y * sy,
+                                        p.norm_inv, false, d))
             outv = _wp_face_ray_depth(d, raydir, p.ray_depth != 0);
-        }
         p.dst[((gindex_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i] = outv;
     }
 }
@@ -341,10 +439,11 @@ void warp_depth_equi(uniform WarpParams p, uint3 wg: SV_GroupID,
         _wp_axes(p.axes, ki, ax, ay, az);
         float3 raydir = az + tx * ax + ty * ay;
         float2 uv = _wp_equi_uv(raydir, p.Hin, p.Win);
-        float d = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, 1, 0,
-                               uv.x, uv.y, p.norm_inv, 0.0f, true);
+        float d;
+        bool ok = _wp_bilinear_depth(p.src, p.elem_kind, plane, p.Hin, p.Win,
+                                     uv.x, uv.y, p.norm_inv, true, d);
         p.dst[((gindex_t(bid) * p.K + ki) * p.Hout + j) * p.Wout + i] =
-            _wp_face_ray_depth(d, raydir, p.ray_depth != 0);
+            ok ? _wp_face_ray_depth(d, raydir, p.ray_depth != 0) : 0.0f;
     }
 }
 
@@ -451,8 +550,8 @@ uint _wp_mask_byte<D : ICameraDistortion>(WarpMaskParams p, uint n,
     int xs, ys;
     if (equi) {
         float2 uv = _wp_equi_uv(raydir, p.Hin, p.Win);
-        xs = int(floor(uv.x + 0.5f));
-        ys = int(floor(uv.y + 0.5f));
+        xs = int(floor(uv.x));
+        ys = int(floor(uv.y));
         // wrap u for equirectangular (panoramic continuity); clamp v.
         if (xs < 0) xs += p.Win; else if (xs >= p.Win) xs -= p.Win;
         ys = clamp(ys, 0, p.Hin - 1);
@@ -462,8 +561,8 @@ uint _wp_mask_byte<D : ICameraDistortion>(WarpMaskParams p, uint n,
         if (!_wp_to_pixel<D>(p.camera_model, raydir, intrin, p.dist_coeffs,
                              p.source_models, p.source_params, int(bid), uv))
             return 0u;
-        xs = int(floor(clamp(uv.x + 0.5f, -8.0f, float(p.Win) + 8.0f)));
-        ys = int(floor(clamp(uv.y + 0.5f, -8.0f, float(p.Hin) + 8.0f)));
+        xs = int(floor(clamp(uv.x, -8.0f, float(p.Win) + 8.0f)));
+        ys = int(floor(clamp(uv.y, -8.0f, float(p.Hin) + 8.0f)));
         if (xs < 0 || xs >= p.Win || ys < 0 || ys >= p.Hin) return 0u;
     }
     gindex_t idx = gindex_t(bid) * p.Hin * p.Win + gindex_t(ys) * p.Win + xs;
@@ -567,6 +666,35 @@ void redistort_img(uniform WarpParams p, uint3 wg: SV_GroupID,
 }
 #undef _rd_img_call
 
+// Depth keeps its 0 = "no ground truth here" sentinel out of the blend, which
+// redistort_img cannot do -- there the padding value IS a colour.
+[ForceInline]
+void _rd_depth<D : ICameraDistortion>(WarpParams p, int i, int j, int bid) {
+    float2 uv_src;
+    float d = 0.0f;
+    if (_rd_lookup<D>(p.intrins, p.dist_coeffs, p.source_models,
+                      p.source_params, p.camera_model, bid, i, j,
+                      _rd_scale(p.Wout, p.Hout, p.ref_W, p.ref_H),
+                      _rd_scale(p.Win, p.Hin, p.ref_W, p.ref_H), uv_src))
+        _wp_bilinear_depth(p.src, p.elem_kind, gindex_t(bid) * p.Hin * p.Win,
+                           p.Hin, p.Win, uv_src.x, uv_src.y, p.norm_inv,
+                           false, d);
+    p.dst[(gindex_t(bid) * p.Hout + j) * p.Wout + i] = d;
+}
+
+#define _rd_depth_call(D) _rd_depth<D>(p, i, j, bid)
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void redistort_depth(uniform WarpParams p, uint3 wg: SV_GroupID,
+                     uint tid: SV_GroupIndex) {
+    int i, j, bid;
+    float tx, ty;
+    if (!_wp_tile(p, wg, tid, i, j, bid, tx, ty)) return;
+    SS_DISPATCH_DIST(_rd_depth_call)
+}
+#undef _rd_depth_call
+
 [ForceInline]
 void _rd_normal<D : ICameraDistortion>(WarpParams p, int i, int j, int bid) {
     float2 uv_src;
@@ -575,18 +703,15 @@ void _rd_normal<D : ICameraDistortion>(WarpParams p, int i, int j, int bid) {
                       p.source_params, p.camera_model, bid, i, j,
                       _rd_scale(p.Wout, p.Hout, p.ref_W, p.ref_H),
                       _rd_scale(p.Win, p.Hin, p.ref_W, p.ref_H), uv_src)) {
-        gindex_t plane = gindex_t(bid) * p.Hin * p.Win;
         float3 s;
-        s.x = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, 3, 0,
-                           uv_src.x, uv_src.y, p.norm_inv, 0.0f, false) + p.decode_off;
-        s.y = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, 3, 1,
-                           uv_src.x, uv_src.y, p.norm_inv, 0.0f, false) + p.decode_off;
-        s.z = _wp_bilinear(p.src, p.elem_kind, plane, p.Hin, p.Win, 3, 2,
-                           uv_src.x, uv_src.y, p.norm_inv, 0.0f, false) + p.decode_off;
-        float sl = length(s);
-        // The pose is unchanged, so a camera-frame normal needs no rotation.
-        if (s.x + s.y + s.z > -2.366f && sl > 1e-8f)
-            n = s / sl;
+        if (_wp_bilinear_normal(p.src, p.elem_kind,
+                                gindex_t(bid) * p.Hin * p.Win, p.Hin, p.Win,
+                                uv_src.x, uv_src.y, p.norm_inv, p.decode_off,
+                                false, s)) {
+            float sl = length(s);
+            // The pose is unchanged, so a camera-frame normal needs no rotation.
+            if (sl > 1e-8f) n = s / sl;
+        }
     }
     gindex_t base = ((gindex_t(bid) * p.Hout + j) * p.Wout + i) * 3;
     p.dst[base + 0] = n.x;
@@ -621,8 +746,8 @@ uint _rd_mask_byte<D : ICameraDistortion>(WarpMaskParams p, uint n) {
                        int(j), _rd_scale(p.Wout, p.Hout, p.ref_W, p.ref_H),
                        _rd_scale(p.Win, p.Hin, p.ref_W, p.ref_H), uv))
         return 0u;
-    int xs = int(floor(clamp(uv.x + 0.5f, -8.0f, float(p.Win) + 8.0f)));
-    int ys = int(floor(clamp(uv.y + 0.5f, -8.0f, float(p.Hin) + 8.0f)));
+    int xs = int(floor(clamp(uv.x, -8.0f, float(p.Win) + 8.0f)));
+    int ys = int(floor(clamp(uv.y, -8.0f, float(p.Hin) + 8.0f)));
     if (xs < 0 || xs >= p.Win || ys < 0 || ys >= p.Hin) return 0u;
     gindex_t idx = gindex_t(bid) * p.Hin * p.Win + gindex_t(ys) * p.Win + xs;
     return _wp_load(p.src, idx, kElemU8) != 0.0f ? 1u : 0u;

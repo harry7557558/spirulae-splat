@@ -11,8 +11,11 @@ quant-grad), rasterization bwd, tile intersect, warp, FPBO, optimizer (general
 meshing (activation, LBVH, occupancy/bisection/color, moment raster, the
 per-camera samplers and the visibility cull), plus
 `backend/tests/engine/` which drives the *real* engine end to end
-(render parity, train parity). `backend/vulkan/tests/` adds 3 Vulkan-only
-smoke tests (runtime, pipeline, sort/scan).
+(render parity, train parity, and `engine_reset_state`, which is
+self-checking rather than dump-then-compare: it trains the same scene twice
+across an `engine_reset()` and the two must land in the same place).
+`backend/vulkan/tests/` adds 3 Vulkan-only smoke tests (runtime, pipeline,
+sort/scan).
 
 **The same source builds under both backends.** Each file only touches
 `backend::`, the generated launch declarations, and `Tensor.h`. The workflow
@@ -134,6 +137,7 @@ expectation, one executable. Neither exists yet.
 | config field | add the row in `src/config/TrainConfig.h`; check `spirula train --help` and the GUI's All Options editor |
 | training-loop logic | `TrainerCore.cpp` — `build_step_config()` is the only place it lives |
 | build system | every mode in [build.md](build.md) |
+| a comment you wrote | `python3 tools/check_comment_length.py` — the build runs it anyway ([lints](build.md#lints)) |
 | anything | one short training run per backend on a public scene |
 
 ## Profiling

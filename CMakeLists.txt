@@ -14,6 +14,8 @@ project(spirula_studio LANGUAGES C CXX)  # CUDA enabled by the cuda backend modu
 #   SsI18n.cmake           ss_i18n, the translation library (a leaf)
 #   SsApps.cmake           the `spirula` executable (every tool in one)
 #   SsPackage.cmake        the redistributable form of it (macOS .app / .dmg)
+#   SsChecks.cmake         the source lints every build runs (last: it makes
+#                            every target above depend on them)
 #
 # Each backend module leaves SS_APP_LIBS behind for the shared app targets.
 
@@ -55,5 +57,8 @@ include(SsApps)
 
 # After SsApps: the packaging targets depend on the `spirula` target.
 include(SsPackage)
+
+# Last: every target above gains a dependency on the lints.
+include(SsChecks)
 
 message(STATUS "spirula_studio configured (backend: ${SS_BACKEND}).")

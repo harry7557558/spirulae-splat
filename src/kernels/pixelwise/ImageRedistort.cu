@@ -87,6 +87,46 @@ __global__ void redistort_image_kernel(
     }
 }
 
+// Depth keeps its 0 = "no ground truth here" sentinel out of the blend (see
+// BilinearSample.cuh), which the plain image kernel above cannot do -- there
+// the padding value IS a colour.
+template<CameraDistortionType distortion, typename T_in>
+__global__ void redistort_depth_kernel(
+    CameraModelType camera_model,
+    const float4 *__restrict__ intrins,
+    const CameraDistortionCoeffsBuffer dist_coeffs_buffer,
+    const int *__restrict__ source_models,
+    const float *__restrict__ source_params,
+    TensorView<T_in, 4>  in_depth,                       // [B, H, W, 1]
+    TensorView<float, 4> out_depth,                      // [B, H, W, 1]
+    int ref_H, int ref_W,
+    float norm_inv
+) {
+    const int B = in_depth.shape[0],
+              H = out_depth.shape[1],
+              W = out_depth.shape[2];
+    uint32_t bid = blockIdx.z * blockDim.z + threadIdx.z;
+    uint32_t i   = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t j   = blockIdx.y * blockDim.y + threadIdx.y;
+    if (bid >= B || i >= W || j >= H) return;
+
+    float4 intrin = intrins[bid];
+    auto coeffs = dist_coeffs_buffer.load<distortion>(bid);
+    auto to_source = make_ray_to_pixel<distortion, true>(
+        bid, camera_model, intrins, dist_coeffs_buffer, source_models, source_params);
+    float2 scale_out = { (float)W / (float)ref_W, (float)H / (float)ref_H };
+    float2 scale_in  = { (float)in_depth.shape[2] / (float)ref_W,
+                         (float)in_depth.shape[1] / (float)ref_H };
+
+    float d = 0.0f;
+    float2 uv_src;
+    if (_redistort_lookup<distortion>(
+            to_source, camera_model, intrin, coeffs, scale_out, scale_in, i, j, &uv_src))
+        bilinear_depth_valid<T_in>(in_depth, bid, uv_src.x, uv_src.y,
+                                   norm_inv, /*wrap_u=*/false, &d);
+    out_depth.at(bid, j, i, 0) = d;
+}
+
 // Nearest lookup, and out-of-frame is masked OUT rather than padded: the fitted
 // camera can see a little past the source image, exactly as the wide->pinhole
 // mask warp does.
@@ -122,8 +162,8 @@ __global__ void redistort_mask_kernel(
     uint8_t out = 0;
     if (_redistort_lookup<distortion>(
             to_source, camera_model, intrin, coeffs, scale_out, scale_in, i, j, &uv_src)) {
-        int xs = (int)floorf(uv_src.x + 0.5f);
-        int ys = (int)floorf(uv_src.y + 0.5f);
+        int xs = (int)floorf(uv_src.x);
+        int ys = (int)floorf(uv_src.y);
         if (xs >= 0 && xs < Win && ys >= 0 && ys < Hin)
             out = (in_mask.at(bid, ys, xs, 0) != 0) ? 1 : 0;
     }
@@ -165,13 +205,13 @@ __global__ void redistort_normal_kernel(
     if (_redistort_lookup<distortion>(
             to_source, camera_model, intrin, coeffs, scale_out, scale_in, i, j, &uv_src)) {
         float3 s;
-        s.x = bilinear_byte_norm<T_in>(in_normal, bid, 0, uv_src.x, uv_src.y, norm_inv, 0.0f) + decode_off;
-        s.y = bilinear_byte_norm<T_in>(in_normal, bid, 1, uv_src.x, uv_src.y, norm_inv, 0.0f) + decode_off;
-        s.z = bilinear_byte_norm<T_in>(in_normal, bid, 2, uv_src.x, uv_src.y, norm_inv, 0.0f) + decode_off;
-        float sl = length(s);
-        // The pose is unchanged, so a camera-frame normal needs no rotation.
-        if (s.x + s.y + s.z > -2.366f && sl > 1e-8f)
-            n = s / sl;
+        if (bilinear_normal_valid<T_in>(in_normal, bid, uv_src.x, uv_src.y,
+                                        norm_inv, decode_off,
+                                        /*wrap_u=*/false, &s)) {
+            float sl = length(s);
+            // The pose is unchanged, so a camera-frame normal needs no rotation.
+            if (sl > 1e-8f) n = s / sl;
+        }
     }
     out_normal.at(bid, j, i, 0) = n.x;
     out_normal.at(bid, j, i, 1) = n.y;
@@ -250,31 +290,30 @@ void launch_redistort_depth(
     const int*   d_source_models,
     const float* d_source_params,
     const void* d_in, uint32_t elem_size,   // 2 = uint16 raw counts, 4 = float
-    int B, int in_H, int in_W, int C,
+    int B, int in_H, int in_W,
     float* d_float_out, int out_H, int out_W,
-    int ref_H, int ref_W,
-    float invalid)
+    int ref_H, int ref_W)
 {
     CameraModelType cm = cmt(camera_model);
     CameraDistortionCoeffsBuffer dcb(const_cast<float*>(d_dist_coeffs));
     const float4* intr = (const float4*)d_intrins;
-    auto out = _rd_f32(d_float_out, B, out_H, out_W, C);
+    auto out = _rd_f32(d_float_out, B, out_H, out_W, 1);
 
     // Depth is raw counts either way, so norm_inv stays 1 -- same convention as
     // the wide warp.
     #define _RD_LAUNCH(D)                                                        \
         if (elem_size == 2)                                                      \
-            redistort_image_kernel<D, uint16_t>                                  \
+            redistort_depth_kernel<D, uint16_t>                                  \
                 <<<_LAUNCH_ARGS_3D(out_W, out_H, B, 16, 16, 1)>>>(               \
                     cm, intr, dcb, d_source_models, d_source_params,             \
-                    _rd_in((const uint16_t*)d_in, B, in_H, in_W, C), out,        \
-                    ref_H, ref_W, 1.0f, invalid);                                \
+                    _rd_in((const uint16_t*)d_in, B, in_H, in_W, 1), out,        \
+                    ref_H, ref_W, 1.0f);                                         \
         else                                                                     \
-            redistort_image_kernel<D, float>                                     \
+            redistort_depth_kernel<D, float>                                     \
                 <<<_LAUNCH_ARGS_3D(out_W, out_H, B, 16, 16, 1)>>>(               \
                     cm, intr, dcb, d_source_models, d_source_params,             \
-                    _rd_in((const float*)d_in, B, in_H, in_W, C), out,           \
-                    ref_H, ref_W, 1.0f, invalid);
+                    _rd_in((const float*)d_in, B, in_H, in_W, 1), out,           \
+                    ref_H, ref_W, 1.0f);
     _SS_DISPATCH_DISTORTION(distortion, _RD_LAUNCH);
     #undef _RD_LAUNCH
     CHECK_DEVICE_ERROR(cudaGetLastError());
