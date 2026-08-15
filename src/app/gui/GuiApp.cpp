@@ -1787,6 +1787,35 @@ std::string GuiApp::selected_model_path() const {
     return model_path(*e);
 }
 
+// Fetch the selected checkpoint, from wherever the screen offers it. Consent
+// first, every time the family has not been agreed to (ModelCache.h says why).
+void GuiApp::request_model_download() {
+    const ModelEntry* e = find_model(_model_id);
+    if (!e || model_is_cached(*e)) return;
+    if (_download.state() == ModelDownload::State::Running) return;
+    if (license_accepted(e->family)) {
+        _download.start(*e);
+    } else {
+        _license_prompt = e->family;
+        _license_tick = false;
+    }
+}
+
+// Would the run reach the built-in masker and find no checkpoint? That is a
+// download, not something the run can do anything about, so it is asked before
+// starting rather than reported twenty minutes in.
+bool GuiApp::mask_model_missing() const {
+    if (!_mask_enable || _sfm_job.prep.force_external_masking) return false;
+    if (!backends().builtin_masking) return false;
+    // Inputs that arrived with their own masks are never segmented, so a job
+    // made only of those needs no model at all.
+    bool all_bring_masks = !_sources.empty();
+    for (const PrepInput& s : _sources)
+        all_bring_masks = all_bring_masks && !s.mask_dir.empty();
+    if (all_bring_masks) return false;
+    return selected_model_path().empty();
+}
+
 // The panel edits one set of fields; each runner gets its own struct because
 // their remaining options do not overlap. This is the one place they are
 // copied across, so a field cannot be set on the screen and silently not run.
@@ -2381,14 +2410,7 @@ void GuiApp::draw_masking_options() {
 
         const bool downloading = _download.state() == ModelDownload::State::Running;
         if (entry && !model_is_cached(*entry) && !downloading) {
-            if (ui::Button(dmsg::mask_get_model)) {
-                // Consent first, every time the family has not been agreed to.
-                if (license_accepted(entry->family)) _download.start(*entry);
-                else {
-                    _license_prompt = entry->family;
-                    _license_tick = false;
-                }
-            }
+            if (ui::Button(dmsg::mask_get_model)) request_model_download();
             ImGui::SameLine();
             ui::TextDisabled(dmsg::mask_one_time_download);
         } else if (downloading) {
@@ -3148,13 +3170,26 @@ void GuiApp::draw_dataset_form(float height, bool running) {
     if (!running) {
         bool ready = !_sources.empty() && !_workspace.empty();
         for (const PrepInput& s : _sources) ready = ready && !s.path.empty();
-        ImGui::BeginDisabled(!ready);
+        const bool need_model = mask_model_missing();
+        ImGui::BeginDisabled(!ready || need_model);
         if (ui::Button(dmsg::create_dataset, ImVec2(px(200.0f), px(34.0f))))
             start_dataset_job();
         ImGui::EndDisabled();
         if (!ready) {
             ImGui::SameLine();
             ui::TextDisabled(dmsg::pick_input_first);
+        } else if (need_model) {
+            // The masking options carry the same button, but they are a
+            // scroll away by the time somebody is reaching for this one.
+            ImGui::SameLine();
+            ui::TextDisabled(dmsg::mask_model_first);
+            ImGui::SameLine();
+            if (_download.state() == ModelDownload::State::Running)
+                ui::ProgressBarRaw(std::max(_download.progress(), 0.0f),
+                                   ImVec2(px(200.0f), 0),
+                                   _download.status().c_str());
+            else if (ui::Button(dmsg::mask_get_model))
+                request_model_download();
         }
         if (ready) draw_dataset_rerun(probe_workspace(_workspace, _sources));
     } else if (ui::Button(dmsg::cancel, ImVec2(px(200.0f), px(34.0f)))) {

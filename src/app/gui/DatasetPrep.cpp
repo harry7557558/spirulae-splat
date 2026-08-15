@@ -1260,11 +1260,16 @@ bool DatasetPrep::generate_masks(const PrepJob& job, const PrepInput& in,
                                  const std::string& masks,
                                  const std::string& masks_rel,
                                  bool& folded, std::string& error) {
-    const bool want_builtin = !job.force_external_masking &&
-                              backends().builtin_masking &&
-                              !job.mask_model_path.empty();
-    if (want_builtin)
+    if (!job.force_external_masking && backends().builtin_masking) {
+        // A missing checkpoint is a download, not an install. Falling through
+        // to the Python masker answered "the model is not here" with "pip
+        // install lang-segment-anything", which is advice for another problem.
+        if (job.mask_model_path.empty()) {
+            error = lmsg::err_mask_model_not_downloaded.get();
+            return false;
+        }
         return generate_masks_builtin(job, in, images, masks, folded, error);
+    }
     if (!job.mask_clicks.empty()) {
         // The Python fallback is lang-segment-anything: text in, masks out. It
         // has no way to take a click, so saying so beats writing masks that

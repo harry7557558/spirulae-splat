@@ -2380,6 +2380,38 @@ SS_MSG(err_mask_generation_failed,
     RU("Не удалось создать маски."),
     TR("Maske üretimi başarısız oldu."));
 
+SS_MSG(err_mask_model_not_downloaded,
+    EN("The masking model has not been downloaded yet. Get it under the masking "
+       "options -- it is a one-time download -- and start the run again."),
+    JA("マスク用のモデルがまだダウンロードされていません。マスクの設定から取得して"
+       "ください。ダウンロードは初回だけです。そのうえで、もう一度実行してください。"),
+    ZH_HANS("遮罩用的模型还没有下载。请在遮罩选项里获取它，只需下载一次，"
+            "然后重新开始运行。"),
+    ZH_HANT("遮罩用的模型還沒有下載。請在遮罩選項裡取得它，只需下載一次，"
+            "然後重新開始執行。"),
+    KO("마스킹에 쓸 모델을 아직 내려받지 않았습니다. 마스크 설정에서 받으세요. "
+       "내려받기는 한 번뿐입니다. 그런 다음 다시 실행하세요."),
+    DE("Das Maskierungsmodell ist noch nicht heruntergeladen. Holen Sie es "
+       "unter den Maskierungsoptionen -- einmalig -- und starten Sie den Lauf "
+       "erneut."),
+    FR("Le modèle de masquage n'est pas encore téléchargé. Obtenez-le dans les "
+       "options de masquage -- c'est un téléchargement unique -- puis relancez "
+       "le traitement."),
+    ES("El modelo de enmascarado todavía no está descargado. Obténgalo en las "
+       "opciones de enmascarado -- es una descarga única -- y vuelva a iniciar "
+       "la ejecución."),
+    PT("O modelo de máscara ainda não foi baixado. Obtenha-o nas opções de "
+       "máscara -- é um download único -- e inicie a execução de novo."),
+    IT("Il modello per le maschere non è ancora stato scaricato. Lo ottenga "
+       "dalle opzioni delle maschere -- si scarica una volta sola -- e avvii di "
+       "nuovo l'elaborazione."),
+    NL("Het maskeermodel is nog niet gedownload. Haal het op bij de "
+       "maskeeropties -- eenmalig -- en start de verwerking opnieuw."),
+    RU("Модель для масок ещё не загружена. Получите её в настройках масок -- "
+       "загрузка нужна только один раз -- и запустите обработку снова."),
+    TR("Maskeleme modeli henüz indirilmedi. Maskeleme seçeneklerinden getirin "
+       "-- bir kez indirilir -- ve işlemi yeniden başlatın."));
+
 SS_MSG(err_mask_missing_packages,
     EN("Mask generation failed: the Python packages are missing. Install "
        "lang-segment-anything (pip install git+https://github.com/"

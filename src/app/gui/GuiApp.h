@@ -182,6 +182,9 @@ private:
     void sync_dataset_jobs();
     // Path of the selected checkpoint, or "" when it is not downloaded yet.
     std::string selected_model_path() const;
+    // Fetch it (with consent), and whether a run would need it and not find it.
+    void request_model_download();
+    bool mask_model_missing() const;
     bool license_accepted(const std::string& family) const;
 
     // ---- screens ----

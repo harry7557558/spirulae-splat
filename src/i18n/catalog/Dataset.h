@@ -2240,6 +2240,21 @@ SS_MSG(mask_get_model,
     ES("Obtener el modelo"), PT("Obter o modelo"), IT("Ottieni il modello"),
     NL("Model ophalen"), RU("Получить модель"), TR("Modeli getir"));
 
+SS_MSG(mask_model_first,
+    EN("the masking model has not been downloaded yet"),
+    JA("マスク用のモデルがまだダウンロードされていません"),
+    ZH_HANS("还没有下载遮罩用的模型"),
+    ZH_HANT("還沒有下載遮罩用的模型"),
+    KO("마스킹 모델을 아직 내려받지 않았습니다"),
+    DE("das Maskierungsmodell ist noch nicht heruntergeladen"),
+    FR("le modèle de masquage n'est pas encore téléchargé"),
+    ES("el modelo de enmascarado todavía no está descargado"),
+    PT("o modelo de máscara ainda não foi baixado"),
+    IT("il modello per le maschere non è ancora stato scaricato"),
+    NL("het maskeermodel is nog niet gedownload"),
+    RU("модель для масок ещё не загружена"),
+    TR("maskeleme modeli henüz indirilmedi"));
+
 SS_MSG(mask_one_time_download,
     EN("one-time download, kept for next time"),
     JA("初回だけのダウンロードで、次回以降は再利用します"),
