@@ -507,7 +507,8 @@ void SegmentPanel::start_job(const MaskSettings& s, const app::FrameMask& stenci
             std::string sig = settings.prompt + "|" + settings.negative_prompt + "|" +
                               std::to_string((int)settings.keep_subject) + "|" +
                               std::to_string(settings.max_image_size) + "|" +
-                              std::to_string(settings.threshold);
+                              std::to_string(settings.threshold) + "|" +
+                              std::to_string(settings.nms);
             for (const MaskClick& c : clicks)
                 sig += "|" + std::to_string(c.object) + ":" + std::to_string(c.x) +
                        "," + std::to_string(c.y) + (c.positive ? "+" : "-");
@@ -521,6 +522,7 @@ void SegmentPanel::start_job(const MaskSettings& s, const app::FrameMask& stenci
                 mo.keep_prompted = settings.keep_subject;
                 mo.max_size = settings.max_image_size;
                 mo.threshold = settings.threshold;
+                mo.nms = settings.nms;
                 mo.video = false;      // one still frame, no memory bank
                 for (const MaskClick& c : clicks) {
                     sam::SeedPrompt seed;

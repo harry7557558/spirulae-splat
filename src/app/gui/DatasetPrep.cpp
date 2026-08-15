@@ -1217,12 +1217,16 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
     mo.neg_text = job.mask_negative_prompt;
     mo.keep_prompted = job.mask_keep_subject;
     mo.max_size = job.mask_max_image_size;
-    // Frames extracted from a video ARE a video, and the memory bank is what
-    // finds the subject on them. Unrelated photos get no bank -- tracking
-    // across them would carry one that does not apply -- unless a click needs it,
-    // since a click says nothing about any frame but its own.
+    mo.threshold = job.mask_threshold;
+    mo.nms = job.mask_nms;
+    mo.detect_every = job.mask_detect_every;
+    mo.memory_frames = job.mask_memory_frames;
+    // Photos never get a memory bank -- tracking across unrelated frames would
+    // carry one that does not apply -- and a video only when it was asked for.
+    // A click needs one either way, since it says nothing about any frame but
+    // its own.
     const std::vector<MaskClick> clicks = clicks_for(job, in);
-    mo.video = in.is_video || !clicks.empty();
+    mo.video = (in.is_video && job.mask_memory) || !clicks.empty();
     // A click's own frame number survives whenever the numbering it was
     // recorded against did; ffmpeg resampled the video, so there only the
     // fraction through the capture is meaningful.

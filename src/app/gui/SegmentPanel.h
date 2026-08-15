@@ -47,6 +47,7 @@ struct MaskSettings {
     bool keep_subject = false;       // prompt names what to KEEP
     int  max_image_size = 1600;
     float threshold = 0.5f;
+    float nms = 0.1f;
     // Clicked objects, across every frame and every input the user visited;
     // each carries the input it was drawn on (MaskClick::source).
     std::vector<MaskClick> clicks;

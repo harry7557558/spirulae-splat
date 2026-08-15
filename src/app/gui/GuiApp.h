@@ -411,6 +411,13 @@ private:
     std::string _workspace_auto;
     bool _resume = true;
     bool _mask_enable = false;
+    // PrepJob::mask_memory. Off by default: a prompt that matches a crowd pays
+    // one model pass per object per frame for it. The two below only apply
+    // with it on, and are kept here rather than in MaskSettings because the
+    // preview segments one still frame and has no bank to tune.
+    bool _mask_memory = false;
+    int  _mask_detect_every = 1;
+    int  _mask_memory_frames = 0;
     // The static stencils are kept on the inputs themselves (PrepInput::
     // stencil); this only says whether the run is given them, so that turning
     // the option off and on again does not throw away what was drawn.

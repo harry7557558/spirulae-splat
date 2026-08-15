@@ -130,6 +130,21 @@ struct PrepJob {
     std::string mask_negative_prompt;
     bool mask_keep_subject = false;  // prompt names what to KEEP, not remove
     int  mask_max_image_size = 1600;
+    float mask_threshold = 0.5f;     // detection score a match must reach
+    // Box IoU above which the weaker of two detections of one phrase is
+    // dropped. Low values thin out a crowd: two people who overlap by a fifth
+    // of their boxes are one detection at 0.1.
+    float mask_nms = 0.1f;
+    // Follow the prompted objects through a video with the model's memory bank
+    // rather than segmenting each frame alone: one extra model pass per live
+    // instance per frame. Clicks turn it on whatever this says.
+    bool mask_memory = false;
+    // Both only bite with the bank on. The detector runs every Nth frame, the
+    // bank carrying the instances in between; and each instance keeps at most
+    // this many spatial memory frames, below the checkpoint's own (7) -- memory
+    // attention is linear in it and is most of a tracked frame. 0 = the model's.
+    int  mask_detect_every = 1;
+    int  mask_memory_frames = 0;
     // Clicked objects, each tagged with its input (MaskClick::source). The only
     // way to prompt a SAM 2 checkpoint. Without a text prompt every input needs
     // its own, and run() refuses the job rather than half-mask the capture.

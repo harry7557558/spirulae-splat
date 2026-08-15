@@ -2530,6 +2530,406 @@ SS_MSG(mask_negative_help_remove,
        "Необязательно."),
     TR("Yukarıdaki satıra uysa bile kalacak istisnalar. İsteğe bağlı."));
 
+SS_MSG(mask_advanced,
+    EN("Advanced masking"),
+    JA("マスクの詳細設定"),
+    ZH_HANS("蒙版高级设置"),
+    ZH_HANT("遮罩進階設定"),
+    KO("마스킹 고급 설정"),
+    DE("Erweiterte Maskierung"),
+    FR("Masquage avancé"),
+    ES("Enmascarado avanzado"),
+    PT("Mascaramento avançado"),
+    IT("Mascheratura avanzata"),
+    NL("Geavanceerd maskeren"),
+    RU("Дополнительно о масках"),
+    TR("Gelişmiş maskeleme"));
+
+SS_MSG(mask_threshold,
+    EN("Detection threshold"),
+    JA("検出のしきい値"),
+    ZH_HANS("检测阈值"),
+    ZH_HANT("偵測門檻"),
+    KO("검출 임계값"),
+    DE("Erkennungsschwelle"),
+    FR("Seuil de détection"),
+    ES("Umbral de detección"),
+    PT("Limiar de detecção"),
+    IT("Soglia di rilevamento"),
+    NL("Detectiedrempel"),
+    RU("Порог обнаружения"),
+    TR("Algılama eşiği"));
+
+SS_MSG(mask_threshold_help,
+    EN("How sure the model must be before something counts as a match. Lower "
+       "catches more -- the half-hidden person at the edge of the frame -- and "
+       "starts masking things you did not name; higher keeps only the obvious "
+       "ones."),
+    JA("何かを一致と見なすまでに、モデルがどれだけ確信している必要があるかです。"
+       "低くすると拾う範囲が広がり、画面の端で半分隠れた人まで取れますが、"
+       "指定していないものまでマスクし始めます。高くすると明らかなものだけが"
+       "残ります。"),
+    ZH_HANS("模型要有多确信才算命中。调低会找到更多——画面边缘半遮住的人也能取到"
+            "——但也会开始蒙住你没点名的东西；调高则只留下明显的。"),
+    ZH_HANT("模型要有多確信才算命中。調低會找到更多——畫面邊緣半遮住的人也能取到"
+            "——但也會開始遮住你沒點名的東西；調高則只留下明顯的。"),
+    KO("무언가를 일치로 인정하기까지 모델이 얼마나 확신해야 하는지입니다. "
+       "낮추면 화면 끝에 반쯤 가린 사람까지 더 많이 잡지만, 지정하지 않은 "
+       "것까지 마스킹하기 시작합니다. 높이면 확실한 것만 남습니다."),
+    DE("Wie sicher das Modell sein muss, damit etwas als Treffer zählt. "
+       "Niedriger fängt mehr ein -- die halb verdeckte Person am Bildrand -- "
+       "und maskiert auch Dinge, die Sie nicht genannt haben; höher behält nur "
+       "das Offensichtliche."),
+    FR("À quel point le modèle doit être sûr pour qu'une chose compte comme "
+       "une correspondance. Plus bas attrape davantage -- la personne à moitié "
+       "cachée au bord de l'image -- et se met à masquer ce que vous n'avez "
+       "pas nommé ; plus haut ne garde que l'évident."),
+    ES("Cuánta seguridad necesita el modelo para dar algo por acertado. Más "
+       "bajo capta más -- la persona medio tapada en el borde del fotograma -- "
+       "y empieza a enmascarar cosas que no nombró; más alto deja solo lo "
+       "evidente."),
+    PT("Quanta certeza o modelo precisa ter para algo contar como acerto. Mais "
+       "baixo capta mais -- a pessoa meio escondida na beira do quadro -- e "
+       "passa a mascarar coisas que você não nomeou; mais alto deixa só o "
+       "evidente."),
+    IT("Quanto deve essere sicuro il modello perché qualcosa conti come "
+       "corrispondenza. Più bassa prende di più -- la persona mezza nascosta "
+       "al bordo del fotogramma -- e inizia a mascherare cose che non ha "
+       "nominato; più alta lascia solo l'evidente."),
+    NL("Hoe zeker het model moet zijn voordat iets als treffer telt. Lager "
+       "pakt meer op -- de half verscholen persoon aan de rand van het beeld "
+       "-- en gaat ook dingen maskeren die je niet noemde; hoger houdt alleen "
+       "het overduidelijke."),
+    RU("Насколько модель должна быть уверена, чтобы счесть что-то совпадением. "
+       "Ниже -- берётся больше, вплоть до наполовину скрытого человека у края "
+       "кадра, но маскируется и то, что вы не называли; выше -- остаётся "
+       "только очевидное."),
+    TR("Bir şeyin eşleşme sayılması için modelin ne kadar emin olması "
+       "gerektiği. Düşürmek daha çoğunu yakalar -- karenin kenarındaki yarı "
+       "gizli kişiyi de -- ama adını koymadığınız şeyleri de maskelemeye "
+       "başlar; yükseltmek yalnızca bariz olanları bırakır."));
+
+SS_MSG(mask_nms,
+    EN("Overlap threshold"),
+    JA("重なりのしきい値"),
+    ZH_HANS("重叠阈值"),
+    ZH_HANT("重疊門檻"),
+    KO("겹침 임계값"),
+    DE("Überlappungsschwelle"),
+    FR("Seuil de recouvrement"),
+    ES("Umbral de solapamiento"),
+    PT("Limiar de sobreposição"),
+    IT("Soglia di sovrapposizione"),
+    NL("Overlapdrempel"),
+    RU("Порог перекрытия"),
+    TR("Örtüşme eşiği"));
+
+SS_MSG(mask_nms_help,
+    EN("When two detections of the same phrase overlap by more than this, only "
+       "the stronger one is kept. The default is strict, which thins out a "
+       "crowd: raise it when people standing close together are left "
+       "unmasked."),
+    JA("同じ語句の検出どうしがこれ以上重なった場合、強いほうだけを残します。"
+       "既定値は厳しめで、人が密集した場面では取りこぼしが出ます。近くに"
+       "立っている人がマスクされないときは値を上げてください。"),
+    ZH_HANS("同一个短语的两个检测重叠超过这个比例时，只保留更强的那个。默认值"
+            "偏严，人多的场面会少标出一些；靠得很近的人没被蒙住时，把它调高。"),
+    ZH_HANT("同一個語句的兩個偵測重疊超過這個比例時，只保留較強的那個。預設值"
+            "偏嚴，人多的場面會少標出一些；靠得很近的人沒被遮住時，把它調高。"),
+    KO("같은 문구의 검출 둘이 이보다 많이 겹치면 강한 쪽만 남깁니다. 기본값은 "
+       "엄격한 편이라 사람이 몰린 장면에서는 일부가 빠집니다. 가까이 선 사람이 "
+       "마스킹되지 않으면 값을 올리세요."),
+    DE("Überlappen sich zwei Treffer derselben Formulierung stärker als das, "
+       "bleibt nur der stärkere. Der Standard ist streng und dünnt eine "
+       "Menschenmenge aus: erhöhen Sie ihn, wenn dicht beieinanderstehende "
+       "Personen unmaskiert bleiben."),
+    FR("Quand deux détections de la même formulation se recouvrent plus que "
+       "cela, seule la plus forte est gardée. La valeur par défaut est stricte "
+       "et éclaircit une foule : augmentez-la si des personnes serrées l'une "
+       "contre l'autre restent non masquées."),
+    ES("Cuando dos detecciones de la misma expresión se solapan más que esto, "
+       "solo se queda la más fuerte. El valor por defecto es estricto y aclara "
+       "una multitud: súbalo si personas muy juntas quedan sin enmascarar."),
+    PT("Quando duas detecções da mesma expressão se sobrepõem mais do que "
+       "isso, fica só a mais forte. O padrão é estrito e rareia uma multidão: "
+       "aumente-o se pessoas bem próximas ficarem sem máscara."),
+    IT("Quando due rilevamenti della stessa frase si sovrappongono più di "
+       "così, resta solo il più forte. Il valore predefinito è severo e dirada "
+       "una folla: lo alzi se persone vicine tra loro restano senza maschera."),
+    NL("Als twee treffers van dezelfde omschrijving elkaar meer dan dit "
+       "overlappen, blijft alleen de sterkste over. De standaard is streng en "
+       "dunt een menigte uit: verhoog hem als mensen die dicht bij elkaar "
+       "staan ongemaskeerd blijven."),
+    RU("Если два обнаружения одной и той же фразы перекрываются сильнее этого, "
+       "остаётся только более уверенное. Значение по умолчанию строгое и "
+       "прореживает толпу: поднимите его, если стоящие вплотную люди остаются "
+       "без маски."),
+    TR("Aynı ifadeye ait iki algılama bundan fazla örtüşürse yalnızca güçlü "
+       "olan kalır. Varsayılan katıdır ve kalabalığı seyreltir: birbirine "
+       "yakın duran kişiler maskelenmeden kalıyorsa yükseltin."));
+
+SS_MSG(mask_max_size,
+    EN("Maximum image size"),
+    JA("画像の最大サイズ"),
+    ZH_HANS("图像最大尺寸"),
+    ZH_HANT("影像最大尺寸"),
+    KO("이미지 최대 크기"),
+    DE("Maximale Bildgröße"),
+    FR("Taille d'image maximale"),
+    ES("Tamaño máximo de imagen"),
+    PT("Tamanho máximo da imagem"),
+    IT("Dimensione massima dell'immagine"),
+    NL("Maximale beeldgrootte"),
+    RU("Максимальный размер изображения"),
+    TR("En büyük görüntü boyutu"));
+
+SS_MSG(mask_max_size_help,
+    EN("Longest side the masking works at. The masks come back at the "
+       "original resolution either way, so a smaller value only saves work per "
+       "frame and coarsens the mask edges. 0 takes the frame at its own size."),
+    JA("マスク処理を行うときの画像の長辺です。マスクは元の解像度に戻して"
+       "書き出されるので、小さくすると1フレームあたりの処理が軽くなり、"
+       "マスクの境目が粗くなります。0 で元のサイズのまま扱います。"),
+    ZH_HANS("做蒙版时图像长边的像素数。蒙版最后都会放回原分辨率，所以调小只是"
+            "每帧更省，边缘更糙。填 0 表示按原尺寸处理。"),
+    ZH_HANT("做遮罩時影像長邊的像素數。遮罩最後都會放回原解析度，所以調小只是"
+            "每格更省，邊緣更粗糙。填 0 表示按原尺寸處理。"),
+    KO("마스킹을 수행할 때 이미지 긴 변의 픽셀 수입니다. 마스크는 어차피 원래 "
+       "해상도로 되돌려 저장되므로, 줄이면 프레임당 작업만 가벼워지고 "
+       "가장자리가 거칠어집니다. 0이면 원래 크기 그대로 씁니다."),
+    DE("Längste Seite, mit der die Maskierung arbeitet. Die Masken kommen "
+       "ohnehin in der ursprünglichen Auflösung heraus, ein kleinerer Wert "
+       "spart also nur Arbeit je Bild und macht die Maskenkanten gröber. 0 "
+       "nimmt das Bild in seiner eigenen Größe."),
+    FR("Plus grand côté sur lequel le masquage travaille. Les masques "
+       "ressortent de toute façon à la résolution d'origine : une valeur plus "
+       "petite ne fait qu'alléger le travail par image et grossir les bords du "
+       "masque. 0 prend l'image telle quelle."),
+    ES("Lado mayor con el que trabaja el enmascarado. Las máscaras salen en la "
+       "resolución original de todos modos, así que un valor menor solo ahorra "
+       "trabajo por fotograma y engrosa los bordes. 0 toma la imagen tal cual."),
+    PT("Maior lado com que o mascaramento trabalha. As máscaras saem na "
+       "resolução original de qualquer forma, então um valor menor só alivia o "
+       "trabalho por quadro e engrossa as bordas. 0 usa a imagem como está."),
+    IT("Lato più lungo su cui lavora la mascheratura. Le maschere escono "
+       "comunque alla risoluzione originale, quindi un valore più piccolo "
+       "alleggerisce solo il lavoro per fotogramma e ingrossa i bordi. 0 "
+       "prende l'immagine com'è."),
+    NL("Langste zijde waarmee het maskeren werkt. De maskers komen er hoe dan "
+       "ook in de oorspronkelijke resolutie uit, dus een kleinere waarde "
+       "scheelt alleen werk per beeld en maakt de maskerranden grover. 0 neemt "
+       "het beeld op zijn eigen grootte."),
+    RU("Длинная сторона, с которой работает маскирование. Маски всё равно "
+       "выходят в исходном разрешении, так что меньшее значение лишь экономит "
+       "работу на кадр и огрубляет края маски. 0 -- брать кадр как есть."),
+    TR("Maskelemenin çalıştığı en uzun kenar. Maskeler yine özgün "
+       "çözünürlükte çıkar, yani küçük bir değer sadece kare başına işi "
+       "azaltır ve maske kenarlarını kabalaştırır. 0, kareyi olduğu gibi "
+       "alır."));
+
+SS_MSG(mask_memory,
+    EN("Track objects across frames"),
+    JA("フレームをまたいで物体を追跡する"),
+    ZH_HANS("跨帧跟踪物体"),
+    ZH_HANT("跨影格追蹤物體"),
+    KO("프레임을 넘어 물체 추적"),
+    DE("Objekte über Bilder hinweg verfolgen"),
+    FR("Suivre les objets d'une image à l'autre"),
+    ES("Seguir los objetos entre fotogramas"),
+    PT("Seguir os objetos entre quadros"),
+    IT("Seguire gli oggetti tra i fotogrammi"),
+    NL("Objecten over beelden heen volgen"),
+    RU("Отслеживать объекты между кадрами"),
+    TR("Nesneleri kareler boyunca izle"));
+
+SS_MSG(mask_memory_help,
+    EN("Follow each object from frame to frame with the model's video memory, "
+       "instead of segmenting every frame on its own. It keeps an object the "
+       "model loses sight of for a frame or two, and costs one extra pass per "
+       "object per frame -- a shot full of them is several times slower. "
+       "Clicked objects use it whatever this says."),
+    JA("フレームごとに別々に切り出すのではなく、モデルの動画メモリを使って"
+       "物体をフレームからフレームへ追いかけます。少しの間見失った物体も"
+       "残せますが、物体ひとつにつき毎フレーム余分な推論が一回かかるので、"
+       "写っている物体が多いと何倍も遅くなります。クリックした物体は、"
+       "この設定にかかわらず常に使います。"),
+    ZH_HANS("借助模型的视频记忆把每个物体从一帧跟到下一帧，而不是逐帧单独分割。"
+            "短暂看不见的物体也能保住，但每个物体每帧都要多跑一次模型，"
+            "画面里物体一多就会慢上好几倍。点选的物体无论这里怎么设都会用它。"),
+    ZH_HANT("藉助模型的影片記憶把每個物體從一影格追到下一影格，而不是逐格"
+            "單獨分割。短暫看不見的物體也能保住，但每個物體每格都要多跑一次"
+            "模型，畫面裡物體一多就會慢上好幾倍。點選的物體無論這裡怎麼設"
+            "都會用它。"),
+    KO("프레임마다 따로 분할하지 않고, 모델의 비디오 메모리로 각 물체를 "
+       "프레임에서 프레임으로 따라갑니다. 잠깐 놓친 물체도 유지되지만, 물체 "
+       "하나마다 프레임마다 모델을 한 번씩 더 돌리므로 물체가 많은 촬영은 몇 "
+       "배로 느려집니다. 클릭한 물체는 이 설정과 상관없이 항상 사용합니다."),
+    DE("Jedes Objekt mit dem Videogedächtnis des Modells von Bild zu Bild "
+       "weiterverfolgen, statt jedes Bild für sich zu segmentieren. Das hält "
+       "ein Objekt, das für ein, zwei Bilder verloren geht, kostet aber einen "
+       "zusätzlichen Durchlauf je Objekt und Bild -- eine Aufnahme voller "
+       "Objekte wird um ein Vielfaches langsamer. Angeklickte Objekte nutzen "
+       "es in jedem Fall."),
+    FR("Suivre chaque objet d'une image à l'autre grâce à la mémoire vidéo du "
+       "modèle, au lieu de segmenter chaque image isolément. Cela conserve un "
+       "objet perdu de vue pendant une image ou deux, mais coûte une passe "
+       "supplémentaire par objet et par image : une prise pleine d'objets "
+       "devient plusieurs fois plus lente. Les objets cliqués l'utilisent quoi "
+       "qu'il en soit."),
+    ES("Seguir cada objeto de un fotograma al siguiente con la memoria de "
+       "vídeo del modelo, en lugar de segmentar cada fotograma por separado. "
+       "Mantiene un objeto que se pierde de vista uno o dos fotogramas, pero "
+       "cuesta una pasada más por objeto y fotograma: una toma llena de ellos "
+       "se vuelve varias veces más lenta. Los objetos marcados con clic lo "
+       "usan de todos modos."),
+    PT("Seguir cada objeto de um quadro para o seguinte com a memória de vídeo "
+       "do modelo, em vez de segmentar cada quadro sozinho. Mantém um objeto "
+       "que some por um ou dois quadros, mas custa uma passagem a mais por "
+       "objeto e por quadro: uma tomada cheia deles fica várias vezes mais "
+       "lenta. Os objetos clicados usam isso de qualquer forma."),
+    IT("Seguire ogni oggetto da un fotogramma all'altro con la memoria video "
+       "del modello, invece di segmentare ogni fotogramma per conto suo. "
+       "Mantiene un oggetto perso di vista per uno o due fotogrammi, ma costa "
+       "una passata in più per oggetto e per fotogramma: una ripresa piena di "
+       "oggetti diventa parecchie volte più lenta. Gli oggetti cliccati la "
+       "usano comunque."),
+    NL("Elk object met het videogeheugen van het model van beeld naar beeld "
+       "volgen, in plaats van elk beeld apart te segmenteren. Dat houdt een "
+       "object vast dat een beeld of twee uit zicht raakt, maar kost een extra "
+       "doorloop per object per beeld: een opname vol objecten wordt vele "
+       "malen trager. Aangeklikte objecten gebruiken het hoe dan ook."),
+    RU("Вести каждый объект от кадра к кадру через видеопамять модели, а не "
+       "сегментировать каждый кадр отдельно. Объект, пропавший из виду на "
+       "кадр-другой, тогда не теряется, но каждый объект на каждом кадре "
+       "стоит лишнего прохода модели: съёмка, полная объектов, идёт в "
+       "несколько раз дольше. Объекты, отмеченные щелчком, используют её в "
+       "любом случае."),
+    TR("Her kareyi tek başına bölütlemek yerine, her nesneyi modelin video "
+       "belleğiyle kareden kareye izler. Bir iki kare gözden kaybolan nesneyi "
+       "korur, ama nesne başına her karede fazladan bir geçiş demektir: nesne "
+       "dolu bir çekim birkaç kat yavaşlar. Tıklanan nesneler bu ayardan "
+       "bağımsız olarak bunu kullanır."));
+
+SS_MSG(mask_detect_every,
+    EN("Detect every N frames"),
+    JA("検出する間隔（フレーム）"),
+    ZH_HANS("每隔几帧检测一次"),
+    ZH_HANT("每隔幾格偵測一次"),
+    KO("몇 프레임마다 검출"),
+    DE("Nur jedes N-te Bild erkennen"),
+    FR("Détecter une image sur N"),
+    ES("Detectar cada N fotogramas"),
+    PT("Detectar a cada N quadros"),
+    IT("Rilevare ogni N fotogrammi"),
+    NL("Elk N-de beeld detecteren"),
+    RU("Обнаруживать раз в N кадров"),
+    TR("N karede bir algıla"));
+
+SS_MSG(mask_detect_every_help,
+    EN("Look for new objects only every Nth frame and let the memory carry the "
+       "ones already found in between. Bigger is faster and slower to notice "
+       "something that walks into the shot. 1 = every frame."),
+    JA("新しい物体を探すのは N フレームに 1 回だけにして、その間は見つけ済みの"
+       "ものをメモリで持ち越します。大きくすると速くなりますが、途中で入って"
+       "きたものが見つかるのは遅くなります。1 で毎フレーム検出します。"),
+    ZH_HANS("只每隔 N 帧找一次新物体，中间已经找到的靠记忆带过去。调大更快，"
+            "但中途走进画面的东西会晚一些才被发现。填 1 表示每帧都检测。"),
+    ZH_HANT("只每隔 N 格找一次新物體，中間已經找到的靠記憶帶過去。調大更快，"
+            "但中途走進畫面的東西會晚一些才被發現。填 1 表示每格都偵測。"),
+    KO("새 물체는 N 프레임마다 한 번만 찾고, 그 사이에는 이미 찾은 것을 "
+       "메모리로 이어 갑니다. 크게 잡으면 빨라지지만 도중에 들어온 것을 늦게 "
+       "알아차립니다. 1이면 매 프레임 검출합니다."),
+    DE("Nur jedes N-te Bild nach neuen Objekten durchsuchen und die bereits "
+       "gefundenen dazwischen vom Gedächtnis tragen lassen. Größer ist "
+       "schneller und bemerkt später, was ins Bild läuft. 1 = jedes Bild."),
+    FR("Ne chercher de nouveaux objets qu'une image sur N ; entre-temps, la "
+       "mémoire porte ceux déjà trouvés. Plus grand est plus rapide et "
+       "remarque plus tard ce qui entre dans le champ. 1 = chaque image."),
+    ES("Buscar objetos nuevos solo cada N fotogramas; entre medias, la memoria "
+       "lleva los ya encontrados. Más grande es más rápido y tarda más en "
+       "notar lo que entra en cuadro. 1 = cada fotograma."),
+    PT("Procurar objetos novos só a cada N quadros; no intervalo, a memória "
+       "carrega os já encontrados. Maior é mais rápido e demora mais a notar o "
+       "que entra em cena. 1 = todos os quadros."),
+    IT("Cercare nuovi oggetti solo ogni N fotogrammi; nel mezzo la memoria "
+       "porta quelli già trovati. Più grande è più veloce e nota più tardi ciò "
+       "che entra in campo. 1 = ogni fotogramma."),
+    NL("Alleen elk N-de beeld op nieuwe objecten doorzoeken; daartussen draagt "
+       "het geheugen de al gevonden objecten. Groter is sneller en merkt later "
+       "op wat het beeld in loopt. 1 = elk beeld."),
+    RU("Искать новые объекты лишь раз в N кадров, а между ними вести уже "
+       "найденные памятью. Больше -- быстрее, но позже заметит то, что вошло в "
+       "кадр. 1 -- каждый кадр."),
+    TR("Yeni nesneleri yalnızca N karede bir ara; arada bulunmuş olanları "
+       "bellek taşır. Büyütmek hızlandırır ama kareye gireni daha geç fark "
+       "eder. 1 = her kare."));
+
+SS_MSG(mask_memory_frames,
+    EN("Memory frames"),
+    JA("記憶するフレーム数"),
+    ZH_HANS("记忆帧数"),
+    ZH_HANT("記憶影格數"),
+    KO("기억할 프레임 수"),
+    DE("Gedächtnisbilder"),
+    FR("Images en mémoire"),
+    ES("Fotogramas de memoria"),
+    PT("Quadros de memória"),
+    IT("Fotogrammi di memoria"),
+    NL("Geheugenbeelden"),
+    RU("Кадров в памяти"),
+    TR("Bellekteki kare sayısı"));
+
+SS_MSG(mask_memory_frames_help,
+    EN("How many past frames each tracked object remembers, at most. Tracking "
+       "costs about the same multiple of this, so 2 or 3 is much faster than "
+       "the model's own 7 -- at the price of losing an object that stayed "
+       "hidden longer. 0 = the model's own."),
+    JA("追跡している物体ひとつが覚えておく過去のフレーム数の上限です。追跡の"
+       "処理量はこれにほぼ比例するので、2 や 3 にすればモデル本来の 7 より"
+       "ずっと速くなります。そのぶん長く隠れていた物体は見失います。"
+       "0 でモデルの既定値になります。"),
+    ZH_HANS("每个被跟踪的物体最多记住多少个过去的帧。跟踪的开销大致与它成正比，"
+            "所以设成 2 或 3 会比模型自带的 7 快得多，代价是被挡住太长时间"
+            "的物体会跟丢。填 0 用模型自己的值。"),
+    ZH_HANT("每個被追蹤的物體最多記住多少個過去的影格。追蹤的開銷大致與它成"
+            "正比，所以設成 2 或 3 會比模型自帶的 7 快得多，代價是被擋住"
+            "太長時間的物體會追丟。填 0 用模型自己的值。"),
+    KO("추적 중인 물체 하나가 기억하는 지난 프레임의 최대 개수입니다. 추적 "
+       "비용이 여기에 거의 비례하므로 2나 3으로 두면 모델 기본값 7보다 훨씬 "
+       "빠릅니다. 대신 오래 가려져 있던 물체는 놓칩니다. 0이면 모델의 "
+       "기본값입니다."),
+    DE("Wie viele vergangene Bilder sich ein verfolgtes Objekt höchstens "
+       "merkt. Der Aufwand des Verfolgens ist dazu proportional, 2 oder 3 ist "
+       "also deutlich schneller als die 7 des Modells -- um den Preis, ein "
+       "länger verdecktes Objekt zu verlieren. 0 = der Wert des Modells."),
+    FR("Combien d'images passées un objet suivi retient au plus. Le coût du "
+       "suivi y est proportionnel : 2 ou 3 est bien plus rapide que les 7 du "
+       "modèle, au prix d'un objet perdu s'il est resté caché plus longtemps. "
+       "0 = la valeur du modèle."),
+    ES("Cuántos fotogramas pasados recuerda como mucho cada objeto seguido. El "
+       "coste del seguimiento es proporcional a esto, así que 2 o 3 es mucho "
+       "más rápido que los 7 del modelo, a cambio de perder un objeto que "
+       "estuvo tapado más tiempo. 0 = el valor del modelo."),
+    PT("Quantos quadros passados cada objeto rastreado guarda, no máximo. O "
+       "custo do rastreamento é proporcional a isso, então 2 ou 3 é bem mais "
+       "rápido que os 7 do modelo, ao preço de perder um objeto escondido por "
+       "mais tempo. 0 = o valor do modelo."),
+    IT("Quanti fotogrammi passati ricorda al massimo ogni oggetto inseguito. "
+       "Il costo dell'inseguimento è proporzionale, quindi 2 o 3 è molto più "
+       "veloce dei 7 del modello, al prezzo di perdere un oggetto rimasto "
+       "nascosto più a lungo. 0 = il valore del modello."),
+    NL("Hoeveel eerdere beelden een gevolgd object hoogstens onthoudt. De "
+       "kosten van het volgen zijn hieraan evenredig, dus 2 of 3 is veel "
+       "sneller dan de 7 van het model -- ten koste van een object dat langer "
+       "verstopt zat. 0 = de waarde van het model."),
+    RU("Сколько прошедших кадров помнит каждый отслеживаемый объект. Стоимость "
+       "отслеживания этому пропорциональна, так что 2-3 заметно быстрее "
+       "модельных 7 -- ценой объекта, скрытого дольше. 0 -- значение модели."),
+    TR("İzlenen her nesnenin en çok kaç geçmiş kareyi hatırladığı. İzlemenin "
+       "maliyeti bununla orantılıdır, bu yüzden 2 ya da 3 modelin kendi 7 "
+       "değerinden çok daha hızlıdır; bedeli, daha uzun süre gizlenen bir "
+       "nesneyi kaybetmektir. 0 = modelin kendi değeri."));
+
 SS_MSG(use_found_masks,
     EN("Use the masks found next to the photos"),
     JA("写真のとなりで見つかったマスクを使う"),

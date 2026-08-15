@@ -172,6 +172,11 @@ struct ColmapJob {
     std::string mask_model_path;
     std::string mask_model = "sam2.1_hiera_large";
     int mask_max_image_size = 1600;
+    float mask_threshold = 0.5f;         // all four: see PrepJob in DatasetPrep.h
+    float mask_nms = 0.1f;
+    bool mask_memory = false;            // track objects across a video's frames
+    int mask_detect_every = 1;
+    int mask_memory_frames = 0;
     std::vector<MaskClick> mask_clicks;  // clicked objects, see DatasetPrep.h
 };
 

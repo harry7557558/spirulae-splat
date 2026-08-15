@@ -1807,6 +1807,11 @@ void GuiApp::sync_dataset_jobs() {
     prep.mask_negative_prompt = _mask.negative_prompt;
     prep.mask_keep_subject = _mask.keep_subject;
     prep.mask_max_image_size = _mask.max_image_size;
+    prep.mask_threshold = _mask.threshold;
+    prep.mask_nms = _mask.nms;
+    prep.mask_memory = _mask_memory;
+    prep.mask_detect_every = _mask_detect_every;
+    prep.mask_memory_frames = _mask_memory_frames;
     prep.mask_clicks = _mask.clicks;
     prep.mask_model_path = selected_model_path();
     prep.force_external_masking = _sfm_job.prep.force_external_masking;
@@ -1833,6 +1838,11 @@ void GuiApp::sync_dataset_jobs() {
     _colmap_job.mask_negative_prompt = prep.mask_negative_prompt;
     _colmap_job.mask_keep_subject = prep.mask_keep_subject;
     _colmap_job.mask_max_image_size = prep.mask_max_image_size;
+    _colmap_job.mask_threshold = prep.mask_threshold;
+    _colmap_job.mask_nms = prep.mask_nms;
+    _colmap_job.mask_memory = prep.mask_memory;
+    _colmap_job.mask_detect_every = prep.mask_detect_every;
+    _colmap_job.mask_memory_frames = prep.mask_memory_frames;
     _colmap_job.mask_clicks = prep.mask_clicks;
     _colmap_job.mask_model_path = prep.mask_model_path;
     _colmap_job.mask_model = prep.mask_model_name;
@@ -2478,6 +2488,50 @@ void GuiApp::draw_masking_options() {
         ImGui::PopTextWrapPos();
     }
     draw_subject_palette(_mask.prompt, _mask.negative_prompt, keep_subject);
+
+    if (ui::CollapsingHeader(dmsg::mask_advanced)) {
+        // The preview reads these three off the same fields, so a prompt tried
+        // there is tried at the settings that will run.
+        ImGui::SetNextItemWidth(px(220.0f));
+        ui::SliderFloat(dmsg::mask_threshold, &_mask.threshold, 0.05f, 0.95f,
+                        "%.2f");
+        ui::help_on_hover(dmsg::mask_threshold_help);
+        ImGui::SetNextItemWidth(px(220.0f));
+        ui::SliderFloat(dmsg::mask_nms, &_mask.nms, 0.05f, 0.95f, "%.2f");
+        ui::help_on_hover(dmsg::mask_nms_help);
+        ImGui::SetNextItemWidth(px(220.0f));
+        if (ui::InputInt(dmsg::mask_max_size, &_mask.max_image_size))
+            _mask.max_image_size = std::max(0, _mask.max_image_size);
+        ui::help_on_hover(dmsg::mask_max_size_help);
+
+        // The rest is the memory bank, which photos never get.
+        bool any_video = false;
+        for (const PrepInput& s : _sources) any_video = any_video || s.is_video;
+        if (any_video) {
+            // A clicked object means nothing on any frame but its own without
+            // the bank, so it forces the option on and the box shows what will
+            // run.
+            const bool forced = !_mask.clicks.empty();
+            bool memory = _mask_memory || forced;
+            ImGui::BeginDisabled(forced);
+            if (ui::Checkbox(dmsg::mask_memory, &memory)) _mask_memory = memory;
+            ImGui::EndDisabled();
+            ui::help_on_hover_disabled(dmsg::mask_memory_help);
+
+            ImGui::Indent();
+            ImGui::BeginDisabled(!memory);
+            ImGui::SetNextItemWidth(px(200.0f));
+            if (ui::InputInt(dmsg::mask_detect_every, &_mask_detect_every))
+                _mask_detect_every = std::clamp(_mask_detect_every, 1, 1000);
+            ui::help_on_hover_disabled(dmsg::mask_detect_every_help);
+            ImGui::SetNextItemWidth(px(200.0f));
+            if (ui::InputInt(dmsg::mask_memory_frames, &_mask_memory_frames))
+                _mask_memory_frames = std::clamp(_mask_memory_frames, 0, 7);
+            ui::help_on_hover_disabled(dmsg::mask_memory_frames_help);
+            ImGui::EndDisabled();
+            ImGui::Unindent();
+        }
+    }
 
     ImGui::Unindent();
 }
