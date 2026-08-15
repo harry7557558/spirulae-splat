@@ -1353,7 +1353,7 @@ static int matchFeatureDir(const std::string& featdir, const SfmConfig& cfg, Pai
         if (calib) storeCameraSetup(db, calib->cameras);
         if (verbose)
             L::err(Tag::Match, M::match_verifying, {(long long)verificationThreadCount(vopt)});
-        sfm::progress::begin_matching((uint32_t)feats.size());
+        sfm::progress::begin_matching((uint32_t)feats.size(), pairs);
         db.pairs = verifyPairs(feats, pairs, matchFn, vopt, &stats.putative, progress);
         sfm::progress::flush();
         for (const TwoViewMatches& tvm : db.pairs) stats.inliers += tvm.matches.size();

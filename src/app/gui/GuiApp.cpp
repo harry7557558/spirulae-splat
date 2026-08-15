@@ -440,6 +440,9 @@ void GuiApp::open_dataset(std::string dir, std::string image_dir,
     add_recent(dir);
     save_settings();
     detach_session_views();
+    // Training is the end of the dataset screen's business with the run, so
+    // this is where what it left for the screen to read goes.
+    reset_dataset_preview();
     _runner.load_dataset(_cfg, _preset);
     _screen = Screen::Train;
 }
@@ -2627,8 +2630,10 @@ void GuiApp::poll_sfm_progress() {
     // The frames of the extraction step are shown by whoever writes them; the
     // features are read off disk, which is what this watcher is for.
     if (dataset_busy() && dataset_steps()->current() == Stage::Features)
-        _features.start(_sfm.sfm_image_dir(), _sfm.features_dir(),
-                        &_film_features);
+        _features.start(_sfm.sfm_image_dir(), _sfm.sfm_mask_dir(),
+                        _sfm.features_dir(), &_film_features);
+    _pairs_view.configure(_sfm.sfm_image_dir(), _sfm.sfm_mask_dir(),
+                          _sfm.features_dir(), _sfm.matches_path());
 
     const std::string dir = _sfm.progress_dir();
     if (dir.empty()) return;
@@ -2669,7 +2674,12 @@ void GuiApp::poll_sfm_progress() {
     }
 }
 
+// Everything the dataset screen holds about a run, given up: the previews, and
+// the files behind them. The run leaves its features and its matches on disk
+// precisely so that this screen can go on reading them after it ends, so this
+// -- the screen being done with them -- is where they go.
 void GuiApp::reset_dataset_preview() {
+    _sfm.sweep_intermediates();
     _features.stop();
     _model_view.detach();
     _model_view.destroy_gl();
@@ -2677,7 +2687,9 @@ void GuiApp::reset_dataset_preview() {
     _live_model = LiveModel{};
     _matrix.clear();
     _matrix.destroy_gl();
-    for (FilmStrip* f : {&_film_frames, &_film_masks, &_film_features}) {
+    _pairs_view.clear();
+    _pairs_view.destroy_gl();
+    for (FilmReel* f : {&_film_frames, &_film_masks, &_film_features}) {
         f->clear();
         f->destroy_gl();
     }
@@ -2698,7 +2710,7 @@ bool GuiApp::preview_has_content() const {
 // `height` of 0 asks for the splitter, which is what the one-column layout
 // needs; a column of its own hands its own height down instead.
 void GuiApp::draw_dataset_preview(float height) {
-    FilmStrip* strips[3] = {&_film_frames, &_film_masks, &_film_features};
+    FilmReel* reels[3] = {&_film_frames, &_film_masks, &_film_features};
     const bool avail[5] = {_film_frames.has_frames(), _film_masks.has_frames(),
                            _film_features.has_frames(), !_matrix.empty(),
                            _model_attached};
@@ -2737,12 +2749,11 @@ void GuiApp::draw_dataset_preview(float height) {
     if (tab == 3) ui::help_on_hover(dmsg::matrix_help);
 
     // In a column of its own the height is the column's; otherwise a splitter,
-    // as the log has -- the model view is worth a lot of height and the film
-    // strip very little, and only the user knows which they are looking at.
+    // as the log has -- what any of these views is worth depends entirely on
+    // which one the user is looking at, so it is theirs to set.
     float h = height;
     if (h <= 0.0f) {
         h = px(_preview_h);
-        if (tab <= 2) h = std::min(h, px(120.0f));
         const float line = ImGui::GetTextLineHeightWithSpacing();
         float want = h;
         if (splitter_h("##previewsplit", &want, 2.0f * line, px(600.0f),
@@ -2757,12 +2768,31 @@ void GuiApp::draw_dataset_preview(float height) {
     }
 
     if (tab <= 2) {
-        strips[tab]->draw(h - px(8.0f));
+        reels[tab]->draw(h - px(8.0f));
         return;
     }
     if (tab == 3) {
         ImGui::BeginChild("##matrix", ImVec2(0, h));
-        _matrix.draw(std::min(h - px(8.0f), ImGui::GetContentRegionAvail().x));
+        const float avail = ImGui::GetContentRegionAvail().x;
+        // The map keeps its square and the pair it points at gets the rest of
+        // the row, down to nothing on a column too narrow to hold both. The
+        // legend goes under the map, inside the same height.
+        const float side =
+            std::min(h - px(8.0f) - ImGui::GetTextLineHeightWithSpacing(),
+                     avail > px(520.0f) ? avail * 0.5f : avail);
+        uint32_t a = 0, b = 0;
+        // Grouped so the pair view sits beside the map rather than beside the
+        // legend under it.
+        ImGui::BeginGroup();
+        if (_matrix.draw(side, a, b)) _pairs_view.show(a, b);
+        ImGui::EndGroup();
+        const float rest = avail - side - ImGui::GetStyle().ItemSpacing.x;
+        if (rest > px(160.0f)) {
+            ImGui::SameLine();
+            ImGui::BeginChild("##pairview", ImVec2(rest, h - px(8.0f)));
+            _pairs_view.draw(ImGui::GetContentRegionAvail());
+            ImGui::EndChild();
+        }
         ImGui::EndChild();
         return;
     }

@@ -131,11 +131,11 @@ bool extract_track(const FrameExtractJob& o, const FrameExtractSinks& sinks,
                 }
 
                 const bool jpeg = o.quality >= 0 && o.quality <= 100;
-                if (sinks.preview && image.channels == 3)
-                    sinks.preview(image.data.data(), image.width, image.height,
-                                  std::string(stem));
                 WriteJob job;
                 job.path = (image_dir / (std::string(stem) + (jpeg ? ".jpg" : ".png"))).string();
+                if (sinks.preview && image.channels == 3)
+                    sinks.preview(image.data.data(), image.width, image.height,
+                                  job.path);
                 job.quality = o.quality;
                 job.image = std::move(image);
                 t0 = nn::now_ms();

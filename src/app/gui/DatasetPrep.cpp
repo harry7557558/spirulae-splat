@@ -349,17 +349,25 @@ std::string human_duration(double seconds) {
 // Rate-limited by wall clock rather than by a frame count: the same call site
 // serves a decode running at a thousand frames a second and a segmentation
 // running at one every two seconds.
+//
+// Counts are reported against the whole step's tally, so what is on screen is
+// the run's position through every input rather than through this one.
 class RateLimitedProgress {
 public:
     using Clock = std::chrono::steady_clock;
 
     RateLimitedProgress(RunProgress* prog, Stage stage,
-                        const spirula::i18n::Msg& noun, int64_t total)
-        : _prog(prog), _stage(stage), _noun(&noun), _total(total),
-          _start(Clock::now()), _last(_start) {}
+                        const spirula::i18n::Msg& noun, StageTally& tally)
+        : _prog(prog), _stage(stage), _noun(&noun), _tally(&tally),
+          _base(tally.done), _start(Clock::now()), _last(_start) {}
 
-    void update(int64_t done, bool force = false) {
+    void update(int64_t in_segment, bool force = false) {
         const auto now = Clock::now();
+        // Never backwards: an input that reports nothing still leaves the bar
+        // where the last one left it.
+        _tally->done = std::max(_tally->done, _base + in_segment);
+        const int64_t done = _tally->done;
+        _total = _tally->total;
         // The counter itself is cheap and drives the bar, so it is not
         // rate-limited; only the sentence built from it is.
         _prog->count(_stage, done, _total);
@@ -412,11 +420,32 @@ private:
     RunProgress* _prog;
     Stage _stage;
     const spirula::i18n::Msg* _noun;
+    StageTally* _tally;
+    int64_t     _base = 0;           // the tally when this input started
     int64_t     _total = 0;
     int64_t     _reported = -1;
     int64_t     _anchor_done = -1;   // count at the first report; see update()
     Clock::time_point _start, _last;
 };
+
+// One frame is written every this many source frames, from the run's kept
+// frame rate and what the container says it holds.
+int frame_skip(const PrepJob& job, double src_fps) {
+    return std::max(1, (int)std::lround(src_fps / std::max(job.video_fps, 0.01f)));
+}
+
+// What a video is expected to yield, for the step's bar. The extraction loop
+// stops on the real end of stream either way.
+int64_t expected_frames(const PrepJob& job, double src_fps, int64_t src_frames,
+                        int tracks) {
+    int64_t expect = src_frames > 0
+                         ? (src_frames / frame_skip(job, src_fps)) * (int64_t)tracks
+                         : 0;
+    if (job.max_frames > 0 &&
+        (expect == 0 || expect > (int64_t)job.max_frames * tracks))
+        expect = (int64_t)job.max_frames * tracks;
+    return expect;
+}
 
 }  // namespace
 
@@ -688,6 +717,40 @@ int DatasetPrep::exec(const std::vector<std::string>& argv) {
                        _cancel);
 }
 
+int64_t DatasetPrep::estimate_frames(const PrepJob& job, const PrepInput& in,
+                                     const std::string& images) {
+    // What a resumed run keeps is exactly what is there already.
+    if (job.resume && !job.redo_frames) {
+        const int have = count_images(images);
+        if (have > 0) return have;
+    }
+    if (!in.is_video) {
+        int64_t n = (int64_t)walk_images(in.path).size();
+        // The masks an input brings move in the same pass (gather_photos).
+        if (!in.mask_dir.empty()) n += (int64_t)walk_images(in.mask_dir).size();
+        return n;
+    }
+    // The probe has to match the path the extraction will take: the two count
+    // tracks differently, and ffmpeg resamples the video rather than stepping
+    // through the frames the container holds.
+#ifdef SS_HAVE_VIDEO
+    if (!job.force_external_decode && backends().builtin_video) {
+        std::string err;
+        const int tracks = app::video_track_count(in.path, err);
+        video::VideoReader r;
+        if (tracks > 0 && r.open(in.path))
+            return expected_frames(job, r.info().fps > 1.0 ? r.info().fps : 30.0,
+                                   r.info().frame_count, tracks);
+    }
+#endif
+    VideoFacts facts;
+    if (ffmpeg_probe_video(job.ffmpeg_exe, in.path, facts, _cancel) &&
+        facts.fps > 1.0)
+        return expected_frames(job, facts.fps, facts.frames,
+                               is_dual_fisheye_path(in.path) ? 2 : 1);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -766,6 +829,10 @@ bool DatasetPrep::run(const PrepJob& job_in, PrepResult& out, std::string& error
     } else {
         out.image_dir = (ws / "images").string();
         out.image_dir_cfg = "images";
+        // Every input is measured before any of them is extracted, so the bar
+        // covers the whole step from the first frame rather than restarting on
+        // each input (StageTally).
+        std::vector<int64_t> planned(job.inputs.size(), 0);
         for (size_t i = 0; i < job.inputs.size(); i++) {
             const PrepInput& in = job.inputs[i];
             Prepared& p = per[i];
@@ -776,6 +843,12 @@ bool DatasetPrep::run(const PrepJob& job_in, PrepResult& out, std::string& error
             // Several inputs share one image tree only by living in their own
             // folders, and a folder is what makes them separate cameras.
             if (!in.subdir.empty()) out.per_folder_cameras = true;
+            planned[i] = estimate_frames(job, in, p.images);
+            _frames_tally.plan(planned[i]);
+        }
+        for (size_t i = 0; i < job.inputs.size(); i++) {
+            const PrepInput& in = job.inputs[i];
+            Prepared& p = per[i];
             if (in.is_video) {
                 if (!extract_video(job, in, p.images, p.masks, out, p.have_masks,
                                    error))
@@ -784,6 +857,10 @@ bool DatasetPrep::run(const PrepJob& job_in, PrepResult& out, std::string& error
                                       error)) {
                 return false;
             }
+            int64_t produced = count_images(p.images);
+            if (!in.is_video && !in.mask_dir.empty())
+                produced += count_images(p.masks);
+            _frames_tally.settle(produced, planned[i]);
             // Masks an input brought with it are in the dataset now, so they
             // count even when nothing asked for masking.
             if (p.have_masks && !in.mask_dir.empty()) want_masks = true;
@@ -802,6 +879,7 @@ bool DatasetPrep::run(const PrepJob& job_in, PrepResult& out, std::string& error
     // answer the user gave while watching them go by.
     if (refresh_masks) refresh_masks(job);
 
+    std::vector<int64_t> mask_planned(job.inputs.size(), 0);
     if (job.mask_enable) {
         if (job.mask_prompt.empty() && job.mask_clicks.empty()) {
             error = lmsg::err_mask_no_target.get();
@@ -822,6 +900,22 @@ bool DatasetPrep::run(const PrepJob& job_in, PrepResult& out, std::string& error
                 return false;
             }
         }
+        for (size_t i = 0; i < job.inputs.size(); i++)
+            if (!per[i].have_masks) {
+                mask_planned[i] = count_images(per[i].images, per[i].masks);
+                _masks_tally.plan(mask_planned[i]);
+            }
+    }
+    // The step's bar covers the stencil pass as well as segmentation, so both
+    // are planned before either runs.
+    std::vector<int64_t> stencil_planned(job.inputs.size(), 0);
+    for (size_t i = 0; i < job.inputs.size(); i++)
+        if (!job.inputs[i].stencil.empty()) {
+            stencil_planned[i] = count_images(per[i].images, per[i].masks);
+            _masks_tally.plan(stencil_planned[i]);
+        }
+
+    if (job.mask_enable) {
         for (size_t i = 0; i < job.inputs.size(); i++) {
             // A re-done masking pass writes one mask per frame that exists
             // now; anything else in there described a frame set that no longer
@@ -837,15 +931,22 @@ bool DatasetPrep::run(const PrepJob& job_in, PrepResult& out, std::string& error
                                 per[i].images_rel, per[i].masks, per[i].masks_rel,
                                 per[i].stencil_folded, error))
                 return false;
+            _masks_tally.settle(mask_planned[i], mask_planned[i]);
         }
     }
 
     for (size_t i = 0; i < job.inputs.size(); i++) {
         if (job.inputs[i].stencil.empty()) continue;
         want_masks = true;
-        if (per[i].stencil_folded) continue;
+        // Segmentation intersected it as it went, so the pass planned for it
+        // is not going to run.
+        if (per[i].stencil_folded) {
+            _masks_tally.drop(stencil_planned[i]);
+            continue;
+        }
         if (!apply_stencil(job.inputs[i], per[i].images, per[i].masks, error))
             return false;
+        _masks_tally.settle(stencil_planned[i], stencil_planned[i]);
     }
     // Masks are whatever ended up in the dataset's own masks/ -- generated
     // here, written by the decoder, or linked in beside gathered photos. The
@@ -929,23 +1030,12 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
     if (tracks > 1) out.per_folder_cameras = true;
 
     double src_fps = 30.0;
-    int64_t src_frames = 0;
     {
         video::VideoReader r;
-        if (r.open(in.path)) {
-            if (r.info().fps > 1.0) src_fps = r.info().fps;
-            src_frames = r.info().frame_count;
-        }
+        if (r.open(in.path) && r.info().fps > 1.0) src_fps = r.info().fps;
     }
     const int window = std::max(job.sharp_window, 1);
-    int skip = (int)std::lround(src_fps / std::max(job.video_fps, 0.01f));
-    skip = std::max(skip, 1);
-
-    // What the container claims, for the estimate; the loop stops on the real
-    // end of stream either way.
-    int64_t expect = src_frames > 0 ? (src_frames / skip) * (int64_t)tracks : 0;
-    if (job.max_frames > 0 && (expect == 0 || expect > (int64_t)job.max_frames * tracks))
-        expect = (int64_t)job.max_frames * tracks;
+    const int skip = frame_skip(job, src_fps);
 
     app::FrameExtractJob fx;
     fx.input = in.path;
@@ -959,15 +1049,22 @@ bool DatasetPrep::extract_video_builtin(const PrepJob& job, const PrepInput& in,
     sinks.log = [this](const std::string& l) { log(l); };
     sinks.cancel = &_cancel;
     RateLimitedProgress progress(_prog, Stage::Frames, lmsg::noun_frames_written,
-                                 expect);
+                                 _frames_tally);
     sinks.progress = [&](int64_t written, int64_t decoded) {
         (void)decoded;
         progress.update(written);
     };
     if (_films.frames) {
-        sinks.preview = [this](const uint8_t* rgb, int w, int h,
-                               const std::string& name) {
-            if (_films.frames->wants()) _films.frames->offer(rgb, w, h, name);
+        const fs::path root(images);
+        sinks.preview = [this, root](const uint8_t* rgb, int w, int h,
+                                     const std::string& path) {
+            FilmFrame f;
+            f.name = under_root(fs::path(path), root).generic_string();
+            f.image_path = path;
+            // Registered whether or not its picture is wanted: the reel's
+            // slider covers every frame, and the ones nobody watched go by are
+            // read back from disk.
+            _films.frames->add(f, _films.frames->wants() ? rgb : nullptr, w, h);
         };
     }
 
@@ -1122,7 +1219,7 @@ bool DatasetPrep::gather_photos(const PrepJob& job, const PrepInput& in,
         }
         int linked = 0, copied = 0, kept = 0;
         RateLimitedProgress progress(_prog, Stage::Frames, *t.counted,
-                                     (int64_t)files.size());
+                                     _frames_tally);
         for (const fs::path& f : files) {
             if (_cancel.load()) { error = lmsg::err_cancelled.get(); return false; }
             fs::path rel = f.lexically_relative(t.from);
@@ -1286,7 +1383,7 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
     app::WriterPool writers;
     ImagePrefetch reader(todo_files, _cancel);
     RateLimitedProgress progress(_prog, Stage::Masks, lmsg::noun_images_masked,
-                                 (int64_t)files.size());
+                                 _masks_tally);
     for (size_t k = 0; k < todo.size(); k++) {
         if (_cancel.load()) { error = lmsg::err_cancelled.get(); return false; }
         nn::Image img = reader.take();
@@ -1301,10 +1398,14 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
             return false;
         }
         if (!stencil.apply(todo_files[k], image_root, mask, error)) return false;
-        if (_films.masks && _films.masks->wants())
-            _films.masks->offer(img.data.data(), img.width, img.height,
-                                todo_files[k].filename().string(),
-                                mask.data.data());
+        if (_films.masks) {
+            FilmFrame f;
+            f.name = under_root(todo_files[k], image_root).generic_string();
+            f.image_path = todo_files[k].string();
+            f.mask_path = todo_dst[k].string();
+            _films.masks->add(f, _films.masks->wants() ? img.data.data() : nullptr,
+                              img.width, img.height, mask.data.data());
+        }
         app::WriteJob wj;
         wj.mask = std::move(mask);
         wj.path = todo_dst[k].string();
@@ -1347,7 +1448,7 @@ bool DatasetPrep::apply_stencil(const PrepInput& in, const std::string& images,
     run.stencil = in.stencil;
 
     RateLimitedProgress progress(_prog, Stage::Masks, lmsg::noun_images_masked,
-                                 (int64_t)count_images(images, masks));
+                                 _masks_tally);
     app::FrameStencilSinks sinks;
     sinks.cancel = &_cancel;
     sinks.progress = [&](int64_t done, int64_t total) {

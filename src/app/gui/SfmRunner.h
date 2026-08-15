@@ -29,7 +29,7 @@
 // run() body here changes.
 
 #include "app/gui/DatasetPrep.h"
-#include "app/gui/FilmStrip.h"
+#include "app/gui/FilmReel.h"
 #include "app/gui/PrepProgress.h"
 #include "i18n/catalog/Dataset.h"
 
@@ -130,8 +130,8 @@ public:
     // "" when spirula-sfm is available, otherwise why it is not.
     static std::string availability();
 
-    // `film` is the screen's thumbnail strip, or null for a caller that has
-    // none; it outlives the run.
+    // `films` are the screen's picture reels, null for a caller with no
+    // screen; they outlive the run.
     void start(const SfmJob& job, RunFilms films = {});
     // Replace the settings no stage has read yet, so the screen's masking and
     // reconstruction options stay live while an earlier stage works. The
@@ -160,7 +160,19 @@ public:
     std::string progress_dir();
     std::string features_dir();
     std::string matches_path();
+    // The two folders the reconstruction is reading, absolute: what the
+    // previews draw their pictures from. `sfm_mask_dir` is "" when the dataset
+    // has none.
     std::string sfm_image_dir();
+    std::string sfm_mask_dir();
+    // Throw away what the last run left for the screen to read: the snapshot
+    // directory, the feature files and matches.bin. Deliberately NOT done when
+    // the run ends -- going back to the features or the match map after a
+    // reconstruction finishes is the ordinary thing to do, and they are the
+    // only copy of what it found. Call it when the screen is done with them:
+    // leaving the dataset screen, or closing the app. A no-op while a run is
+    // going, and for a job that asked to keep them.
+    void sweep_intermediates();
     // Done, but under half the images registered (or a high reprojection
     // error). The dataset is usable; the user should know it has gaps.
     bool partial() const { return _partial.load(); }
@@ -191,7 +203,11 @@ private:
     std::mutex _mu;
     std::string _error, _dataset_dir, _image_dir, _mask_dir;
     // Absolute; what the screen polls while the run is going.
-    std::string _progress_dir, _features_dir, _matches_path, _sfm_image_dir;
+    std::string _progress_dir, _features_dir, _matches_path;
+    std::string _sfm_image_dir, _sfm_mask_dir;
+    // The workspace whose intermediates are still on disk, "" when there are
+    // none to sweep (see sweep_intermediates).
+    std::string _sweep_dir;
     SfmJob _live;                        // guarded by _mu; see update()
 };
 

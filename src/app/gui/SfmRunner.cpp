@@ -137,6 +137,8 @@ void SfmRunner::start(const SfmJob& job, RunFilms films) {
         _features_dir.clear();
         _matches_path.clear();
         _sfm_image_dir.clear();
+        _sfm_mask_dir.clear();
+        _sweep_dir.clear();
         _live = job;
     }
     _state = State::Running;
@@ -233,6 +235,28 @@ std::string SfmRunner::matches_path() {
 std::string SfmRunner::sfm_image_dir() {
     std::lock_guard<std::mutex> lk(_mu);
     return _sfm_image_dir;
+}
+std::string SfmRunner::sfm_mask_dir() {
+    std::lock_guard<std::mutex> lk(_mu);
+    return _sfm_mask_dir;
+}
+
+void SfmRunner::sweep_intermediates() {
+    if (_state.load() == State::Running) return;
+    std::string ws;
+    {
+        std::lock_guard<std::mutex> lk(_mu);
+        ws.swap(_sweep_dir);
+    }
+    if (ws.empty()) return;
+    const fs::path dir(ws);
+    remove_tree(dir / ".progress");
+    // Recursive: the feature files MIRROR the image tree, so a capture with
+    // camera folders puts them in features/cam0/... and a single-level sweep
+    // removed nothing and left the directory.
+    remove_tree(dir / "features");
+    std::error_code ec;
+    fs::remove(dir / "matches.bin", ec);
 }
 void SfmRunner::log(const std::string& line, bool detail) {
     _prog.note(line, detail);
@@ -415,6 +439,15 @@ void SfmRunner::run(SfmJob job) {
                         [this](PrepJob& p) { take_masking(p); }))
                 return fail(err);
         }
+        {
+            // The folders the previews draw from, published as soon as they
+            // exist rather than beside the reconstruction: a run that finds a
+            // model already there skips that step, and the screen still wants
+            // to show the images it kept.
+            std::lock_guard<std::mutex> lk(_mu);
+            _sfm_image_dir = prep.image_dir;
+            _sfm_mask_dir = prep.mask_dir;
+        }
         if (prep.per_folder_cameras && job.camera_mode == 0) {
             log(lmsg::one_camera_per_folder.get());
             job.camera_mode = 1;
@@ -431,10 +464,6 @@ void SfmRunner::run(SfmJob job) {
         } else {
             set_stage(Stage::Features, lmsg::stage_reconstructing_features.get());
             take_reconstruction(job);
-            {
-                std::lock_guard<std::mutex> lk(_mu);
-                _sfm_image_dir = prep.image_dir;
-            }
             std::vector<std::string> argv = {
                 // The child is this same executable, so it has the same
                 // thirteen languages -- tell it which one, or its output
@@ -524,16 +553,13 @@ void SfmRunner::run(SfmJob job) {
             return fail(lmsg::err_no_reconstruction.get());
 
         // ---- 3. tidy up ----------------------------------------------------
-        // The snapshots are this screen's channel and nothing reads them once
-        // the run is over; they go whether or not the intermediates are kept.
-        remove_tree(ws / ".progress");
-        if (!job.keep_intermediate) {
-            set_stage(Stage::Finishing, lmsg::stage_cleaning_up.get());
-            // Recursive: the feature files MIRROR the image tree, so a capture
-            // with camera folders puts them in features/cam0/... and a
-            // single-level sweep removed nothing and left the directory.
-            remove_tree(ws / "features");
-            fs::remove(ws / "matches.bin", ec);
+        // What the run leaves behind is swept by sweep_intermediates(), not
+        // here: the screen goes on reading the snapshots, the feature files
+        // and matches.bin after the run ends, which is when a user actually
+        // looks at the features and the match map.
+        {
+            std::lock_guard<std::mutex> lk(_mu);
+            _sweep_dir = job.keep_intermediate ? "" : ws.string();
         }
 
         if (reads_photos_in_place(job.prep.inputs))

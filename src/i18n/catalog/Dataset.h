@@ -252,6 +252,49 @@ SS_MSG(show_run_preview_help,
 // What the preview panel shows: frames, the match matrix, the model
 // ---------------------------------------------------------------------------
 
+SS_MSG(reel_follow,
+    EN("Latest"),        JA("最新"),          ZH_HANS("最新"),      ZH_HANT("最新"),
+    KO("최신"),           DE("Neueste"),      FR("Dernière"),     ES("La última"),
+    PT("A última"),      IT("L'ultima"),     NL("Nieuwste"),     RU("Последний"),
+    TR("En yeni"));
+
+SS_MSG(reel_follow_help,
+    EN("Keep up with the step as it works. Turn this off, or drag the slider "
+       "back, to look at a picture it has already been past -- the run carries "
+       "on either way."),
+    JA("進行に合わせて最新の一枚を表示し続けます。これを切るか、スライダーを戻すと、"
+       "すでに通り過ぎた画像を見られます。どちらでも処理は止まりません。"),
+    ZH_HANS("跟着这一步的进度显示最新的一张。关掉它，或者把滑块往回拖，"
+            "就能看已经处理过的图像；无论哪种，运行都不会停。"),
+    ZH_HANT("跟著這一步的進度顯示最新的一張。關掉它，或者把滑桿往回拖，"
+            "就能看已經處理過的影像；無論哪種，執行都不會停。"),
+    KO("작업이 진행되는 대로 가장 최근 장면을 보여 줍니다. 이것을 끄거나 슬라이더를 "
+       "뒤로 끌면 이미 지나간 이미지를 볼 수 있고, 어느 쪽이든 실행은 계속됩니다."),
+    DE("Mit dem Schritt mitgehen und immer das neueste Bild zeigen. Ausschalten "
+       "oder den Regler zurückziehen, um ein bereits verarbeitetes Bild "
+       "anzusehen -- der Lauf geht so oder so weiter."),
+    FR("Suivre l'étape et montrer toujours la dernière image. Décochez, ou "
+       "ramenez le curseur en arrière, pour revoir une image déjà traitée : le "
+       "traitement continue dans les deux cas."),
+    ES("Seguir el paso y mostrar siempre la imagen más reciente. Desactívelo, o "
+       "arrastre el control hacia atrás, para ver una imagen ya procesada: la "
+       "ejecución sigue igual."),
+    PT("Acompanhar a etapa e mostrar sempre a imagem mais recente. Desligue, ou "
+       "arraste o controle para trás, para ver uma imagem já processada -- a "
+       "execução continua de qualquer forma."),
+    IT("Segue il passo e mostra sempre l'immagine più recente. Disattivalo, o "
+       "riporta indietro il cursore, per rivedere un'immagine già elaborata: "
+       "l'esecuzione prosegue comunque."),
+    NL("Loopt mee met de stap en toont steeds het nieuwste beeld. Zet het uit, "
+       "of sleep de schuif terug, om een al verwerkt beeld te bekijken -- de "
+       "verwerking gaat hoe dan ook door."),
+    RU("Показывать самый свежий кадр по ходу шага. Снимите галочку или "
+       "перетащите ползунок назад, чтобы посмотреть уже пройденное "
+       "изображение -- работа при этом не прерывается."),
+    TR("Adım ilerledikçe en yeni görüntüyü gösterir. Kapatın ya da kaydırıcıyı "
+       "geri çekin; böylece çoktan geçilmiş bir görüntüye bakabilirsiniz, "
+       "çalışma yine de sürer."));
+
 SS_MSG(view_frames,
     EN("Frames"),        JA("フレーム"),      ZH_HANS("画面"),      ZH_HANT("畫面"),
     KO("프레임"),         DE("Bilder"),       FR("Images"),       ES("Fotogramas"),
@@ -379,6 +422,82 @@ SS_MSG(matrix_cell_range,
     NL("Beelden {0}-{1} en {2}-{3} -- gekoppelde punten: {4}"),
     RU("Изображения {0}-{1} и {2}-{3} -- сопоставленные точки: {4}"),
     TR("Görüntü {0}-{1} ile {2}-{3} -- eşleşen nokta: {4}"));
+
+SS_MSG(matrix_key_matched,
+    EN("Matched"),        JA("対応あり"),      ZH_HANS("已匹配"),     ZH_HANT("已比對"),
+    KO("대응됨"),          DE("Zugeordnet"),   FR("Appariées"),    ES("Emparejadas"),
+    PT("Pareadas"),      IT("Confrontate"),  NL("Gekoppeld"),    RU("Сопоставлено"),
+    TR("Eşleşti"));
+
+SS_MSG(matrix_key_none,
+    EN("No match"),
+    JA("対応なし"),
+    ZH_HANS("无匹配"),
+    ZH_HANT("無比對"),
+    KO("대응 없음"),
+    DE("Keine Übereinstimmung"),
+    FR("Aucune correspondance"),
+    ES("Sin coincidencias"),
+    PT("Sem correspondência"),
+    IT("Nessuna corrispondenza"),
+    NL("Geen overeenkomst"),
+    RU("Совпадений нет"),
+    TR("Eşleşme yok"));
+
+SS_MSG(matrix_key_pending,
+    EN("Waiting"),       JA("待機中"),        ZH_HANS("等待中"),     ZH_HANT("等待中"),
+    KO("대기 중"),        DE("Wartet"),       FR("En attente"),   ES("En espera"),
+    PT("Em espera"),     IT("In attesa"),    NL("Wacht"),        RU("В очереди"),
+    TR("Bekliyor"));
+
+SS_MSG(matrix_key_skipped,
+    EN("Not paired"),
+    JA("組み合わせ対象外"),
+    ZH_HANS("未配对"),
+    ZH_HANT("未配對"),
+    KO("짝짓지 않음"),
+    DE("Nicht gepaart"),
+    FR("Non appairées"),
+    ES("No emparejadas"),
+    PT("Não pareadas"),
+    IT("Non accoppiate"),
+    NL("Niet gepaard"),
+    RU("Не в парах"),
+    TR("Eşleştirilmedi"));
+
+SS_MSG(matrix_pair_hint,
+    EN("Point at the map to see the two images behind a cell, the features "
+       "found on them and the matches between them."),
+    JA("マップの上にカーソルを置くと、そのマスの二枚の画像と、そこで見つかった"
+       "特徴点、そして両者の対応が表示されます。"),
+    ZH_HANS("把光标放在图上，就能看到该格对应的两张图像、在它们上面找到的特征点，"
+            "以及两者之间的匹配。"),
+    ZH_HANT("把游標放在圖上，就能看到該格對應的兩張影像、在它們上面找到的特徵點，"
+            "以及兩者之間的比對。"),
+    KO("지도 위에 커서를 올리면 그 칸에 해당하는 두 이미지와 거기서 찾은 특징점, "
+       "그리고 둘 사이의 대응을 볼 수 있습니다."),
+    DE("Auf die Karte zeigen, um die beiden Bilder hinter einer Zelle zu sehen, "
+       "die darauf gefundenen Merkmale und die Zuordnungen zwischen ihnen."),
+    FR("Pointez la carte pour voir les deux images derrière une case, les points "
+       "qui y ont été trouvés et les appariements entre eux."),
+    ES("Apunte al mapa para ver las dos imágenes que hay tras una celda, los "
+       "puntos encontrados en ellas y los emparejamientos entre ambas."),
+    PT("Aponte para o mapa para ver as duas imagens por trás de uma célula, os "
+       "pontos encontrados nelas e os pareamentos entre as duas."),
+    IT("Punta sulla mappa per vedere le due immagini dietro una cella, i punti "
+       "trovati su di esse e i confronti fra le due."),
+    NL("Wijs de kaart aan om de twee beelden achter een vakje te zien, de "
+       "kenmerken die erop gevonden zijn en de koppelingen ertussen."),
+    RU("Наведите курсор на карту, чтобы увидеть два изображения за ячейкой, "
+       "найденные на них признаки и сопоставления между ними."),
+    TR("Bir hücrenin arkasındaki iki görüntüyü, üzerlerinde bulunan öznitelikleri "
+       "ve aralarındaki eşleşmeleri görmek için haritanın üzerine gelin."));
+
+SS_MSG(matrix_pair_matches,
+    EN("Matches: {0}"),  JA("対応: {0}"),     ZH_HANS("匹配：{0}"),   ZH_HANT("比對：{0}"),
+    KO("대응: {0}"),      DE("Zuordnungen: {0}"), FR("Appariements : {0}"),
+    ES("Emparejamientos: {0}"), PT("Pareamentos: {0}"), IT("Confronti: {0}"),
+    NL("Koppelingen: {0}"), RU("Сопоставлений: {0}"), TR("Eşleşme: {0}"));
 
 SS_MSG(model_live_counts,
     EN("Placed cameras: {0} of {1}   Points: {2}"),

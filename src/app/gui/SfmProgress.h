@@ -35,10 +35,18 @@ struct LiveModel {
 struct PairMatrix {
     uint32_t n_images = 0, bins = 0;
     std::vector<uint32_t> counts;   // bins*bins, symmetric
+    // Candidate pairs in the cell, and how many of them verification has
+    // reached. Both empty when the source cannot say (a finished matches.bin
+    // holds the pairs that survived and nothing about the rest), which is what
+    // `staged()` asks before a cell is drawn as pending or as filtered out.
+    std::vector<uint32_t> planned, verified;
     uint32_t peak = 0;
     bool empty() const { return bins == 0 || counts.empty(); }
-    uint32_t at(uint32_t r, uint32_t c) const {
-        return r < bins && c < bins ? counts[(size_t)r * bins + c] : 0;
+    bool staged() const { return planned.size() == counts.size(); }
+    uint32_t at(uint32_t r, uint32_t c) const { return cell(counts, r, c); }
+    uint32_t cell(const std::vector<uint32_t>& v, uint32_t r, uint32_t c) const {
+        const size_t i = (size_t)r * bins + c;
+        return r < bins && c < bins && i < v.size() ? v[i] : 0;
     }
 };
 
@@ -53,14 +61,31 @@ bool read_pair_matrix(const std::string& dir, int64_t& mtime, PairMatrix& out);
 bool read_pair_matrix_from_matches(const std::string& matches_path,
                                    int64_t& mtime, PairMatrix& out);
 
+// A keypoint as a preview draws it: where it is, and how big the detector said
+// the feature was. `r` is 0 when the detector reports no scale -- ALIKED has
+// none -- and those are drawn at a fixed size.
+struct KeyPoint2D {
+    float x = 0, y = 0, r = 0;
+};
+
 // Keypoints of one extracted image, in its own pixels, or false when the
 // feature file is not there yet. Descriptors are skipped -- they are the file,
-// and nothing here looks at them.
+// and nothing here looks at them. `width` / `height` of 0 asks for the
+// coordinates in whatever size the extractor measured them at.
 //
 // `rel_stem` is the image's path under the image directory without its
 // extension ("cam0/01973"): the feature files mirror the image tree, so that
 // stems from different camera folders cannot collide.
 bool read_keypoints(const std::string& features_dir, const std::string& rel_stem,
-                    int width, int height, std::vector<float>& xy_out);
+                    int width, int height, std::vector<KeyPoint2D>& out);
+bool read_keypoints_file(const std::string& path, int width, int height,
+                         std::vector<KeyPoint2D>& out);
+
+// The image order a reconstruction numbers by: the feature files' stems,
+// sorted, which is exactly how matching indexes its images. Falls back to the
+// names a finished matches.bin carries, since a finished run deletes the
+// feature files it was given.
+std::vector<std::string> read_image_stems(const std::string& features_dir,
+                                          const std::string& matches_path);
 
 }  // namespace gui

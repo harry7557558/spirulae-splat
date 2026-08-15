@@ -1772,26 +1772,24 @@ private:
         return n;
     }
 
-    // Color each point by the mean of its observations' keypoint colors (COLMAP's
-    // ExtractColorsForAllImages, but the samples were taken once at extraction so
-    // no image is decoded again here). Points whose features carry no color keep
-    // the neutral-gray default.
-    void assignColors(Reconstruction& rec) const {
-        for (auto& kv : rec.points3D) {
-            Point3D& p = kv.second;
-            uint32_t acc[3] = {0, 0, 0}, n = 0;
-            for (const TrackElement& e : p.track) {
-                const FeatureSet& fs = feats_[e.image_id];
-                if (!fs.hasColors()) continue;
-                const uint8_t* c = &fs.colors[(size_t)e.point2D_idx * 3];
-                acc[0] += c[0]; acc[1] += c[1]; acc[2] += c[2]; n++;
-            }
-            if (n) {
-                p.rgb[0] = (uint8_t)((acc[0] + n / 2) / n);
-                p.rgb[1] = (uint8_t)((acc[1] + n / 2) / n);
-                p.rgb[2] = (uint8_t)((acc[2] + n / 2) / n);
-            }
+    // The mean of one point's observations' keypoint colors (COLMAP's
+    // ExtractColorsForAllImages, but the samples were taken once at extraction
+    // so no image is decoded again here). `rgb` is left alone -- the neutral
+    // gray a Point3D starts with -- when no observation carries a color.
+    void pointColor(const Point3D& p, uint8_t rgb[3]) const {
+        uint32_t acc[3] = {0, 0, 0}, n = 0;
+        for (const TrackElement& e : p.track) {
+            const FeatureSet& fs = feats_[e.image_id];
+            if (!fs.hasColors()) continue;
+            const uint8_t* c = &fs.colors[(size_t)e.point2D_idx * 3];
+            acc[0] += c[0]; acc[1] += c[1]; acc[2] += c[2]; n++;
         }
+        if (!n) return;
+        for (int k = 0; k < 3; k++) rgb[k] = (uint8_t)((acc[k] + n / 2) / n);
+    }
+
+    void assignColors(Reconstruction& rec) const {
+        for (auto& kv : rec.points3D) pointColor(kv.second, kv.second.rgb);
     }
 
     // Grow the current model until nothing else registers, or until it has
@@ -3048,8 +3046,13 @@ private:
                      {(long long)img, (long long)r.num_inliers, (long long)X.size(),
                       (long long)rec_.numRegistered()});
         // Rate-limited inside, and a no-op without --progress-dir: this is the
-        // one point at which the model visibly grows.
-        progress::model(rec_);
+        // one point at which the model visibly grows. The colouring runs only
+        // over the points a snapshot writes, which is why it is a callback and
+        // not an assignColors pass per registration.
+        progress::model(rec_, false,
+                        [this](const Point3D& p, uint8_t rgb[3]) {
+                            pointColor(p, rgb);
+                        });
         return true;
     }
 

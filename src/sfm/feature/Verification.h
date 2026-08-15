@@ -568,10 +568,11 @@ inline std::vector<TwoViewMatches> verifyPairs(
     std::vector<char> kept(pairs.size(), 0);
     uint64_t putative = 0;
 
-    // Verify one pair in place; the only work a worker does.
-    auto verifyOne = [&](size_t p, std::vector<FeatureMatch>& m) {
-        uint32_t i = pairs[p].first, j = pairs[p].second;
-        if ((int)m.size() < tv.min_num_inliers) return;  // below the inlier floor
+    // Verify one pair in place, returning the inliers it kept; the only work a
+    // worker does.
+    auto verifyBody = [&](size_t p, std::vector<FeatureMatch>& m,
+                          uint32_t i, uint32_t j) -> uint32_t {
+        if ((int)m.size() < tv.min_num_inliers) return 0;  // below the inlier floor
         // The threshold is in extraction pixels; each image converts it to its
         // own (D47). They differ whenever the extractor downscaled one image
         // more than the other, which a mixed-resolution capture does routinely.
@@ -600,18 +601,25 @@ inline std::vector<TwoViewMatches> verifyPairs(
             tvp.ransac.max_error = tv.ransac.max_error * sc;  // extraction px -> source px
             g = estimateTwoView(q1, q2, tvp);
         }
-        if (g.config == TwoViewConfig::Degenerate || g.config == TwoViewConfig::Undefined) return;
+        if (g.config == TwoViewConfig::Degenerate || g.config == TwoViewConfig::Undefined) return 0;
         std::vector<FeatureMatch> inl;
         inl.reserve(g.num_inliers);
         for (size_t k = 0; k < m.size(); k++)
             if (g.inlier_mask[k]) inl.push_back(m[k]);
-        if (inl.empty()) return;
+        if (inl.empty()) return 0;
         const uint32_t n_inl = (uint32_t)inl.size();
         results[p] = {i, j, (int)g.config, std::move(inl)};
         kept[p] = 1;
-        // A no-op without --progress-dir. Called from the workers, which is
-        // what the lock inside it is for.
-        progress::pair(i, j, n_inl);
+        return n_inl;
+    };
+
+    auto verifyOne = [&](size_t p, std::vector<FeatureMatch>& m) {
+        const uint32_t i = pairs[p].first, j = pairs[p].second;
+        // Every pair, kept or not: a screen watching the matrix cannot tell a
+        // pair that failed from one nothing has reached yet unless both are
+        // reported. A no-op without --progress-dir, and called from the
+        // workers, which is what the lock inside it is for.
+        progress::pair(i, j, verifyBody(p, m, i, j));
     };
 
     // How many pairs to ask the matcher for at once. Independent of the worker

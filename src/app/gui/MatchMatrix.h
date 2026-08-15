@@ -26,9 +26,11 @@ public:
     bool empty() const { return _m.empty(); }
     void clear();
 
-    // Draws it `size` pixels square, with a hover readout of the image range
-    // under the cursor. GL context must be current.
-    void draw(float size);
+    // Draws it `size` pixels square, with a legend and a hover readout of the
+    // image range under the cursor. True while a cell is hovered, with `img_r`
+    // and `img_c` the two images it stands for -- what the pair view draws.
+    // GL context must be current.
+    bool draw(float size, uint32_t& img_r, uint32_t& img_c);
     void destroy_gl();
 
 private:

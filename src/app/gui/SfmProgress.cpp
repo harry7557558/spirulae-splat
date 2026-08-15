@@ -11,6 +11,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -182,13 +183,18 @@ bool read_pair_matrix(const std::string& dir, int64_t& mtime, PairMatrix& out) {
     const std::string b = slurp_if_newer(fs::path(dir) / "pairs.bin", mtime);
     if (b.size() < 16 || std::memcmp(b.data(), "VKPP", 4) != 0) return false;
     Reader r{b.data() + 4, b.data() + b.size()};
-    if (r.u32() != 1) return false;
+    if (r.u32() != 2) return false;
     PairMatrix m;
     m.n_images = r.u32();
     m.bins = r.u32();
     if (!r.ok || m.bins == 0 || m.bins > sfm::progress::kMatrixBins) return false;
-    m.counts.resize((size_t)m.bins * m.bins);
-    if (!r.take(m.counts.data(), m.counts.size() * 4)) return false;
+    const size_t n = (size_t)m.bins * m.bins;
+    m.counts.resize(n);
+    m.planned.resize(n);
+    m.verified.resize(n);
+    if (!r.take(m.counts.data(), n * 4)) return false;
+    if (!r.take(m.planned.data(), n * 4)) return false;
+    if (!r.take(m.verified.data(), n * 4)) return false;
     note_peak(m);
     out = std::move(m);
     return true;
@@ -206,24 +212,25 @@ bool read_pair_matrix_from_matches(const std::string& matches_path,
     const int64_t stamp = t.time_since_epoch().count();
     if (stamp == mtime) return false;
 
-    sfm::MatchesDatabase db;
-    try {
-        db = sfm::readMatches(matches_path);
-    } catch (const std::exception&) {
-        return false;
-    }
+    // The pair table alone: the match arrays behind it are most of the file
+    // and this only counts them.
+    sfm::MatchesIndex idx;
+    if (!sfm::indexMatches(matches_path, idx)) return false;
     mtime = stamp;
     PairMatrix m;
-    m.n_images = (uint32_t)db.images.size();
+    m.n_images = (uint32_t)idx.images.size();
     if (m.n_images == 0) return false;
     m.bins = std::min(m.n_images, sfm::progress::kMatrixBins);
     m.counts.assign((size_t)m.bins * m.bins, 0);
-    for (const sfm::TwoViewMatches& p : db.pairs) {
+    // A finished file holds the pairs that survived and says nothing about the
+    // ones that were tried and failed, so it cannot fill `planned` /
+    // `verified`: what is left is the count, and the drawing says so.
+    for (const sfm::MatchesIndex::Entry& p : idx.pairs) {
         if (p.image1 >= m.n_images || p.image2 >= m.n_images) continue;
         const uint32_t a = (uint32_t)((uint64_t)p.image1 * m.bins / m.n_images);
         const uint32_t b = (uint32_t)((uint64_t)p.image2 * m.bins / m.n_images);
-        m.counts[(size_t)a * m.bins + b] += (uint32_t)p.matches.size();
-        m.counts[(size_t)b * m.bins + a] += (uint32_t)p.matches.size();
+        m.counts[(size_t)a * m.bins + b] += p.count;
+        if (a != b) m.counts[(size_t)b * m.bins + a] += p.count;
     }
     note_peak(m);
     out = std::move(m);
@@ -232,18 +239,23 @@ bool read_pair_matrix_from_matches(const std::string& matches_path,
 }
 
 bool read_keypoints(const std::string& features_dir, const std::string& rel_stem,
-                    int width, int height, std::vector<float>& xy_out) {
-    xy_out.clear();
+                    int width, int height, std::vector<KeyPoint2D>& out) {
+    return read_keypoints_file((fs::path(features_dir) / (rel_stem + ".bin")).string(),
+                               width, height, out);
+}
+
+bool read_keypoints_file(const std::string& path, int width, int height,
+                         std::vector<KeyPoint2D>& out) {
+    out.clear();
 #ifndef SS_TOOL_SFM
-    (void)features_dir; (void)rel_stem; (void)width; (void)height;
+    (void)path; (void)width; (void)height;
     return false;
 #else
-    const fs::path p = fs::path(features_dir) / (rel_stem + ".bin");
     std::error_code ec;
-    if (!fs::exists(p, ec)) return false;
+    if (!fs::exists(path, ec)) return false;
     sfm::FeatureSet fs_;
     try {
-        fs_ = sfm::readFeatures(p.string(), /*with_descriptors=*/false);
+        fs_ = sfm::readFeatures(path, /*with_descriptors=*/false);
     } catch (const std::exception&) {
         return false;
     }
@@ -252,13 +264,45 @@ bool read_keypoints(const std::string& features_dir, const std::string& rel_stem
     // to be brought to.
     const float sx = fs_.width > 0 && width > 0 ? (float)width / fs_.width : 1.0f;
     const float sy = fs_.height > 0 && height > 0 ? (float)height / fs_.height : 1.0f;
-    xy_out.reserve(fs_.keypoints.size() * 2);
-    for (const sfm::Keypoint& k : fs_.keypoints) {
-        xy_out.push_back(k.x * sx);
-        xy_out.push_back(k.y * sy);
-    }
+    out.reserve(fs_.keypoints.size());
+    for (const sfm::Keypoint& k : fs_.keypoints)
+        // Radius from the detector's sigma the way OpenCV's drawKeypoints does
+        // it: the circle is the region the descriptor was measured over, not
+        // the pixel it sits on.
+        out.push_back({k.x * sx, k.y * sy, k.scale * 3.0f * 0.5f * (sx + sy)});
     return true;
 #endif
+}
+
+std::vector<std::string> read_image_stems(const std::string& features_dir,
+                                          const std::string& matches_path) {
+    std::vector<fs::path> files;
+    std::error_code ec;
+    const fs::path root(features_dir);
+    for (fs::recursive_directory_iterator it(root, ec), end; !ec && it != end;
+         it.increment(ec))
+        if (it->is_regular_file(ec) && it->path().extension() == ".bin")
+            files.push_back(it->path());
+    // Sorted paths are what matching numbers its images by; a directory walk
+    // arrives in whatever order the filesystem chose.
+    std::sort(files.begin(), files.end());
+    std::vector<std::string> stems;
+    stems.reserve(files.size());
+    for (const fs::path& f : files) {
+        fs::path rel = f.lexically_relative(root);
+        if (rel.empty() || *rel.begin() == "..") rel = f.filename();
+        stems.push_back((rel.parent_path() / rel.stem()).generic_string());
+    }
+#ifdef SS_TOOL_SFM
+    if (stems.empty() && !matches_path.empty()) {
+        sfm::MatchesIndex idx;
+        if (sfm::indexMatches(matches_path, idx))
+            for (const sfm::ImageEntry& im : idx.images) stems.push_back(im.name);
+    }
+#else
+    (void)matches_path;
+#endif
+    return stems;
 }
 
 }  // namespace gui

@@ -13,10 +13,14 @@
 // seconds on a large one, and a screen wants the same cadence from both.
 
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace sfm {
 
+struct Point3D;
 struct Reconstruction;
 
 namespace progress {
@@ -39,11 +43,24 @@ bool enabled();
 // The model as it stands, subsampled to kMaxPoints. Call it as often as is
 // convenient; it returns immediately until the interval has passed, unless
 // `force` says this is the last word on a stage.
-void model(const Reconstruction& rec, bool force = false);
+//
+// `color` fills one point's rgb, and is called only for the points a snapshot
+// actually writes: the mapper colours a model when it finishes one, so without
+// it every preview of a model under construction is neutral grey.
+using PointColor = std::function<void(const Point3D&, uint8_t rgb[3])>;
+void model(const Reconstruction& rec, bool force = false,
+           const PointColor& color = {});
 
-// Matching is about to verify pairs among `n_images` images.
-void begin_matching(uint32_t n_images);
-// One verified pair. Safe to call from the verification workers.
+// pairs.bin: "VKPP", u32 version=2, u32 images, u32 bins, then three
+// bins*bins u32 planes -- summed inliers, candidate pairs, verified pairs.
+// The last two are what tell a cell nothing has reached it yet from a cell
+// pairing was never going to try.
+//
+// Matching is about to verify `pairs` among `n_images` images.
+void begin_matching(uint32_t n_images,
+                    const std::vector<std::pair<uint32_t, uint32_t>>& pairs);
+// One verified pair, `inliers` of 0 meaning it did not survive verification.
+// Safe to call from the verification workers.
 void pair(uint32_t image1, uint32_t image2, uint32_t inliers);
 
 // Write whatever is buffered, whatever the clock says. Call at the end of a

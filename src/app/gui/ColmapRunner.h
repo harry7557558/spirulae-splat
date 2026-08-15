@@ -34,7 +34,7 @@
 // datasets need nothing: images/ is the default).
 
 #include "app/gui/DatasetPrep.h"   // MaskClick
-#include "app/gui/FilmStrip.h"
+#include "app/gui/FilmReel.h"
 #include "app/gui/PrepProgress.h"
 #include "i18n/catalog/Dataset.h"
 

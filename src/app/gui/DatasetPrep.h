@@ -25,9 +25,10 @@
 // do, so the GUI can say so instead of failing at run time.
 
 #include "app/FrameMask.h"
-#include "app/gui/FilmStrip.h"
+#include "app/gui/FilmReel.h"
 #include "app/gui/PrepProgress.h"
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <string>
@@ -298,6 +299,33 @@ WorkspaceState probe_workspace(const std::string& workspace,
 // SfM default and `mask_dir = "masks"` the dataparsers'.
 bool is_mask_folder(const std::string& path);
 
+// One counter for a whole step, rather than one per input: a job with three
+// videos in it should fill the bar once and never wind it back, which is the
+// only thing a user watching a long extraction is reading it for.
+//
+// `total` is a sum of estimates -- what a container says it holds, which is
+// what the step can know before it runs -- and each input replaces its own
+// share of it with what it actually produced as it finishes.
+struct StageTally {
+    int64_t done = 0;      // items produced so far, over every input
+    int64_t total = 0;     // over every input, an estimate until they are done
+    int64_t started = 0;   // `done` when the input now running began
+
+    void plan(int64_t estimate) { total += estimate; }
+    void settle(int64_t produced, int64_t estimated) {
+        done = std::max(done, started + produced);
+        total += produced - estimated;
+        clamp();
+        started = done;
+    }
+    // A planned pass that turned out not to be needed.
+    void drop(int64_t estimated) {
+        total -= estimated;
+        clamp();
+    }
+    void clamp() { total = std::max(total, done); }
+};
+
 class DatasetPrep {
 public:
     DatasetPrep(RunProgress* progress, RunFilms films,
@@ -365,10 +393,17 @@ private:
     bool apply_stencil(const PrepInput& in, const std::string& images,
                        const std::string& masks, std::string& error);
     int exec(const std::vector<std::string>& argv);
+    // What this input is expected to put in images/, for the step's bar: the
+    // container's frame count at the run's sampling rate for a video, the file
+    // count for photos, and what is already there for an input a resumed run
+    // is going to keep.
+    int64_t estimate_frames(const PrepJob& job, const PrepInput& in,
+                            const std::string& images);
 
     RunProgress* _prog;
     RunFilms _films;
     const std::atomic<bool>& _cancel;
+    StageTally _frames_tally, _masks_tally;
 };
 
 }  // namespace gui

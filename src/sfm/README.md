@@ -53,9 +53,11 @@ images/ ──► extract ──► features/ ─┐
 `spirula sfm auto` runs all of it from two knobs, `--quality` and `--data-type`.
 
 `--progress-dir DIR` adds a second, optional output: `model.bin` (the poses and
-a subsample of the points as they stand) and `pairs.bin` (a binned inlier count
-per image pair), rewritten at most every 1.5 s and renamed into place so a
-reader never sees half of one. It is off unless asked for, and it exists so a
+a subsample of the points as they stand, coloured) and `pairs.bin` (per binned
+image pair: the inliers, how many pairs were candidates and how many have been
+verified, so a front end can tell "not reached yet" from "found nothing"),
+rewritten at most every 1.5 s and renamed into place so a reader never sees
+half of one. It is off unless asked for, and it exists so a
 front end can show a run rather than tail it — the GUI passes it to its own
 child and polls the two files (`src/sfm/core/Progress.h`,
 `src/app/gui/SfmProgress.h`). Nothing in the pipeline reads them back.

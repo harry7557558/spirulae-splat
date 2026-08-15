@@ -12,9 +12,10 @@
 #include "app/gui/ConfigUI.h"
 #include "app/gui/FileDialog.h"
 #include "app/gui/FeatureWatcher.h"
-#include "app/gui/FilmStrip.h"
+#include "app/gui/FilmReel.h"
 #include "app/gui/ImageCompare.h"
 #include "app/gui/MatchMatrix.h"
+#include "app/gui/PairPreview.h"
 #include "app/gui/SfmProgress.h"
 #include "app/gui/Layout.h"
 #include "app/gui/MeshRunner.h"
@@ -376,13 +377,15 @@ private:
     SfmRunner _sfm;
     SfmJob _sfm_job;
     // ---- what a running job shows about itself ----
-    // One strip per step that produces pictures: the frames as they are
+    // One reel per step that produces pictures: the frames as they are
     // written, the masks as they are made, and the frames again with the
     // features found on them. Separate because they answer different questions
     // and a run that does all three would otherwise overwrite its own evidence.
-    FilmStrip _film_frames, _film_masks, _film_features;
+    FilmReel _film_frames, _film_masks, _film_features;
     FeatureWatcher _features;
     MatchMatrix _matrix;
+    // The two images behind whichever cell of the match map the cursor is on.
+    PairPreview _pairs_view;
     // The model as the mapper builds it, drawn by the same GL preview the
     // trainer screen uses before training starts.
     ViewportPanel _model_view;

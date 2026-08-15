@@ -194,4 +194,83 @@ inline MatchesDatabase readMatches(const std::string& path) {
     return db;
 }
 
+// ---- one pair at a time -------------------------------------------------
+//
+// The pair table without the matches themselves, for a reader that wants to
+// draw one pair out of a file whose match arrays are most of a gigabyte. The
+// GUI's match map is the caller: it needs every pair's size to draw, and one
+// pair's contents only when the cursor is over it.
+
+struct MatchesIndex {
+    struct Entry {
+        uint32_t image1 = 0, image2 = 0, count = 0;
+        uint64_t offset = 0;      // first idx1 of this pair's array
+    };
+    std::vector<ImageEntry> images;
+    std::vector<Entry> pairs;
+};
+
+inline bool indexMatches(const std::string& path, MatchesIndex& out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    // A file still being written hands back nonsense counts, and this one is
+    // read while a run is going. The smallest a pair can be on disk is 16
+    // bytes, so the file's own size is what bounds them.
+    f.seekg(0, std::ios::end);
+    const uint64_t bytes = (uint64_t)f.tellg();
+    f.seekg(0);
+    char magic[4];
+    f.read(magic, 4);
+    uint32_t version = 0, nimg = 0;
+    f.read((char*)&version, 4);
+    f.read((char*)&nimg, 4);
+    if (!f || std::memcmp(magic, "VKMT", 4) != 0) return false;
+    MatchesIndex idx;
+    idx.images.resize(nimg);
+    for (uint32_t i = 0; i < nimg; i++) {
+        uint32_t len = 0;
+        f.read((char*)&len, 4);
+        if (!f || len > (1u << 20)) return false;
+        idx.images[i].name.resize(len);
+        f.read(&idx.images[i].name[0], len);
+        f.read((char*)&idx.images[i].num_features, 4);
+    }
+    uint32_t npairs = 0;
+    f.read((char*)&npairs, 4);
+    if (!f || (uint64_t)npairs * 16 > bytes) return false;
+    idx.pairs.reserve(npairs);
+    for (uint32_t i = 0; i < npairs; i++) {
+        MatchesIndex::Entry e;
+        int32_t config = 0;
+        f.read((char*)&e.image1, 4);
+        f.read((char*)&e.image2, 4);
+        f.read((char*)&config, 4);
+        f.read((char*)&e.count, 4);
+        if (!f) return false;
+        e.offset = (uint64_t)f.tellg();
+        idx.pairs.push_back(e);
+        f.seekg((std::streamoff)e.count * 8, std::ios::cur);
+        if (!f) return false;
+    }
+    out = std::move(idx);
+    return true;
+}
+
+inline bool readPairMatches(const std::string& path,
+                            const MatchesIndex::Entry& e,
+                            std::vector<FeatureMatch>& out) {
+    out.clear();
+    if (!e.count) return true;
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.seekg((std::streamoff)e.offset);
+    out.resize(e.count);
+    for (uint32_t i = 0; i < e.count && f; i++) {
+        f.read((char*)&out[i].idx1, 4);
+        f.read((char*)&out[i].idx2, 4);
+    }
+    if (!f) { out.clear(); return false; }
+    return true;
+}
+
 }  // namespace sfm

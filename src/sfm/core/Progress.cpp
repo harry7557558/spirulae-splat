@@ -35,7 +35,7 @@ struct State {
 
     // The pair matrix, binned down to kMatrixBins per side.
     uint32_t n_images = 0, bins = 0;
-    std::vector<uint32_t> counts;
+    std::vector<uint32_t> counts, planned, verified;
     bool pairs_dirty = false;
 };
 
@@ -83,14 +83,24 @@ void write_pairs_locked() {
     State& s = state();
     if (!s.pairs_dirty || s.counts.empty()) return;
     std::string b;
-    b.reserve(16 + s.counts.size() * 4);
+    b.reserve(16 + s.counts.size() * 12);
     put(b, "VKPP", 4);
-    put_u32(b, 1);
+    put_u32(b, 2);
     put_u32(b, s.n_images);
     put_u32(b, s.bins);
     put(b, s.counts.data(), s.counts.size() * 4);
+    put(b, s.planned.data(), s.planned.size() * 4);
+    put(b, s.verified.data(), s.verified.size() * 4);
     write_atomic("pairs.bin", b);
     s.pairs_dirty = false;
+}
+
+// Which cell of the matrix a pair of images falls in.
+size_t cell_of(const State& s, uint32_t image1, uint32_t image2, size_t& mirror) {
+    const uint32_t a = (uint32_t)((uint64_t)image1 * s.bins / s.n_images);
+    const uint32_t b = (uint32_t)((uint64_t)image2 * s.bins / s.n_images);
+    mirror = (size_t)b * s.bins + a;
+    return (size_t)a * s.bins + b;
 }
 
 }  // namespace
@@ -110,7 +120,7 @@ bool enabled() {
     return !s.dir.empty();
 }
 
-void model(const Reconstruction& rec, bool force) {
+void model(const Reconstruction& rec, bool force, const PointColor& color) {
     State& s = state();
     std::lock_guard<std::mutex> lk(s.mu);
     if (s.dir.empty()) return;
@@ -174,18 +184,30 @@ void model(const Reconstruction& rec, bool force) {
         put_f32(b, (float)kv.second.xyz.x);
         put_f32(b, (float)kv.second.xyz.y);
         put_f32(b, (float)kv.second.xyz.z);
-        put(b, kv.second.rgb, 3);
+        uint8_t rgb[3] = {kv.second.rgb[0], kv.second.rgb[1], kv.second.rgb[2]};
+        if (color) color(kv.second, rgb);
+        put(b, rgb, 3);
     }
     write_atomic("model.bin", b);
 }
 
-void begin_matching(uint32_t n_images) {
+void begin_matching(uint32_t n_images,
+                    const std::vector<std::pair<uint32_t, uint32_t>>& pairs) {
     State& s = state();
     std::lock_guard<std::mutex> lk(s.mu);
     if (s.dir.empty() || n_images == 0) return;
     s.n_images = n_images;
     s.bins = n_images < kMatrixBins ? n_images : kMatrixBins;
     s.counts.assign((size_t)s.bins * s.bins, 0);
+    s.planned.assign((size_t)s.bins * s.bins, 0);
+    s.verified.assign((size_t)s.bins * s.bins, 0);
+    for (const auto& p : pairs) {
+        if (p.first >= n_images || p.second >= n_images) continue;
+        size_t mirror = 0;
+        const size_t c = cell_of(s, p.first, p.second, mirror);
+        s.planned[c]++;
+        if (mirror != c) s.planned[mirror]++;
+    }
     s.pairs_started = false;
     s.pairs_dirty = true;
 }
@@ -195,10 +217,14 @@ void pair(uint32_t image1, uint32_t image2, uint32_t inliers) {
     std::lock_guard<std::mutex> lk(s.mu);
     if (s.dir.empty() || s.counts.empty()) return;
     if (image1 >= s.n_images || image2 >= s.n_images) return;
-    const uint32_t a = (uint32_t)((uint64_t)image1 * s.bins / s.n_images);
-    const uint32_t bi = (uint32_t)((uint64_t)image2 * s.bins / s.n_images);
-    s.counts[(size_t)a * s.bins + bi] += inliers;
-    s.counts[(size_t)bi * s.bins + a] += inliers;
+    size_t mirror = 0;
+    const size_t c = cell_of(s, image1, image2, mirror);
+    s.counts[c] += inliers;
+    s.verified[c]++;
+    if (mirror != c) {
+        s.counts[mirror] += inliers;
+        s.verified[mirror]++;
+    }
     s.pairs_dirty = true;
     if (due(s.pairs_at, s.pairs_started)) write_pairs_locked();
 }
