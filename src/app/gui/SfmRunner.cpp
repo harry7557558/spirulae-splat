@@ -519,7 +519,9 @@ void SfmRunner::run(SfmJob job) {
                 argv.push_back("--image-gamut");
                 argv.push_back(job.image_gamut);
             }
-            if (job.image_is_linear) argv.push_back("--image-linear");
+            if (job.image_is_linear.has_value())
+                argv.push_back(*job.image_is_linear ? "--image-linear"
+                                                    : "--no-image-linear");
             if (job.point_color_in_image_space) {
                 argv.push_back("--point-color");
                 argv.push_back("image");

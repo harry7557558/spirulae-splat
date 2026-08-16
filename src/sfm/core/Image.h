@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -81,7 +82,8 @@ inline void sampleColor(const GrayImage& img, float x, float y, uint8_t out[3]) 
 // convert to sRGB on decode, which luma and the learned frontend assume.
 GrayImage loadGrayImage(const std::string& path, int max_image_size = 3200,
                         bool want_color = false, const std::string& mask_path = "",
-                        const std::string& gamut = "", bool is_linear = false);
+                        const std::string& gamut = "",
+                        std::optional<bool> is_linear = std::nullopt);
 
 // Read just the pixel dimensions from an image header (no full decode).
 // Returns false if the file is not a decodable image.

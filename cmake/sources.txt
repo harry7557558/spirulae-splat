@@ -18,6 +18,7 @@
 [cuda]
 # Everything the CUDA `csrc` library compiles.
 src/instantiations/*.cu
+src/core/*.cpp
 src/kernels/background/*.cu
 src/kernels/bilagrid/*.cu
 src/kernels/bilagrid/*.cpp
@@ -45,6 +46,7 @@ src/external/*.c
 [portable]
 # The same list minus the CUDA kernels. Compiled as csrc_portable by the
 # Vulkan build.
+src/core/*.cpp
 src/kernels/bilagrid/*.cpp
 src/mesh/*.cpp
 src/engine/*.cpp

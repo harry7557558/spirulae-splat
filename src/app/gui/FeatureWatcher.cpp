@@ -19,7 +19,7 @@ bool is_image(const fs::path& p) {
     std::string e = p.extension().string();
     for (char& c : e) c = (char)std::tolower((unsigned char)c);
     return e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".webp" ||
-           e == ".tif" || e == ".tiff" || e == ".bmp";
+           e == ".tif" || e == ".tiff" || e == ".bmp" || e == ".exr";
 }
 
 }  // namespace

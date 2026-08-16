@@ -6923,38 +6923,58 @@ SS_MSG(image_color_is_linear,
     TR("Girdi görüntüleri doğrusal"));
 SS_MSG(image_color_is_linear_help,
     EN("Treat the input images as linear light rather than ordinary display-encoded "
-       "photos. Set this for renders or captures exported in linear."),
+       "photos. `auto` reads an EXR as linear, which is what that format promises, "
+       "and everything else as display-encoded; set it explicitly for an EXR whose "
+       "pixels are display-encoded anyway."),
     JA("入力画像を、通常の表示用に符号化された写真ではなくリニア光として扱いま"
-       "す。リニアで書き出したレンダリングや撮影データではこれを設定してくださ"
-       "い。"),
-    ZH_HANS("把输入图像当作线性光，而不是普通的显示编码照片。以线性方式导出的"
-            "渲染图或素材应打开它。"),
-    ZH_HANT("把輸入影像當作線性光，而不是普通的顯示編碼照片。以線性方式匯出的"
-            "算圖或素材應開啟它。"),
+       "す。auto では EXR をリニア（その形式の約束）として、それ以外は表示用の"
+       "符号化として読み込みます。中身が表示用に符号化された EXR では明示的に"
+       "設定してください。"),
+    ZH_HANS("把输入图像当作线性光，而不是普通的显示编码照片。auto 会把 EXR 按"
+            "线性读取（这是该格式的约定），其他格式按显示编码；若 EXR 里存的"
+            "其实是显示编码的像素，请明确设置。"),
+    ZH_HANT("把輸入影像當作線性光，而不是普通的顯示編碼照片。auto 會把 EXR 依"
+            "線性讀取（這是該格式的約定），其他格式依顯示編碼；若 EXR 裡存的"
+            "其實是顯示編碼的像素，請明確設定。"),
     KO("입력 이미지를 일반적인 디스플레이 인코딩 사진이 아니라 선형 광으로 취"
-       "급합니다. 선형으로 내보낸 렌더나 촬영본이라면 켜십시오."),
+       "급합니다. auto는 EXR을 선형으로(그 형식의 약속입니다), 그 밖의 형식은 "
+       "디스플레이 인코딩으로 읽습니다. 내용이 디스플레이 인코딩인 EXR이라면 "
+       "직접 설정하십시오."),
     DE("Die Eingabebilder als lineares Licht behandeln statt als übliche, für "
-       "die Anzeige codierte Fotos. Für Renderings oder Aufnahmen einschalten, "
-       "die linear exportiert wurden."),
+       "die Anzeige codierte Fotos. `auto` liest eine EXR als linear -- das sagt "
+       "dieses Format zu -- und alles andere als für die Anzeige codiert; bei "
+       "einer EXR mit trotzdem anzeigecodierten Pixeln ausdrücklich setzen."),
     FR("Traiter les images d'entrée comme de la lumière linéaire plutôt que comme "
-       "des photos encodées pour l'affichage. À activer pour des rendus ou des "
-       "prises exportés en linéaire."),
+       "des photos encodées pour l'affichage. « auto » lit un EXR comme linéaire, "
+       "ce que ce format promet, et tout le reste comme encodé pour l'affichage ; "
+       "à régler explicitement pour un EXR dont les pixels sont malgré tout "
+       "encodés pour l'affichage."),
     ES("Tratar las imágenes de entrada como luz lineal en vez de fotos codificadas "
-       "para pantalla. Actívelo para renders o capturas exportados en lineal."),
+       "para pantalla. «auto» lee un EXR como lineal, que es lo que ese formato "
+       "promete, y todo lo demás como codificado para pantalla; indíquelo "
+       "explícitamente si un EXR guarda píxeles codificados para pantalla."),
     PT("Tratar as imagens de entrada como luz linear em vez de fotos codificadas "
-       "para exibição. Ative para renderizações ou capturas exportadas em linear."),
+       "para exibição. «auto» lê um EXR como linear, que é o que esse formato "
+       "promete, e todo o resto como codificado para exibição; defina "
+       "explicitamente se um EXR guardar pixels codificados para exibição."),
     IT("Trattare le immagini in ingresso come luce lineare invece che come foto "
-       "codificate per la visualizzazione. Da attivare per render o riprese esportati "
-       "in lineare."),
+       "codificate per la visualizzazione. «auto» legge un EXR come lineare, che è "
+       "ciò che quel formato promette, e tutto il resto come codificato per la "
+       "visualizzazione; impostarlo esplicitamente per un EXR che contiene comunque "
+       "pixel codificati per la visualizzazione."),
     NL("De invoerbeelden als lineair licht behandelen in plaats van als gewone, "
-       "voor weergave gecodeerde foto's. Zet dit aan voor renders of opnamen "
-       "die lineair zijn geëxporteerd."),
+       "voor weergave gecodeerde foto's. `auto` leest een EXR als lineair -- dat "
+       "belooft dat formaat -- en al het andere als voor weergave gecodeerd; stel "
+       "het uitdrukkelijk in voor een EXR met toch voor weergave gecodeerde "
+       "pixels."),
     RU("Считать входные изображения линейным светом, а не обычными фотографиями "
-       "с кодировкой для дисплея. Включайте для рендеров или съёмок, выгруженных "
-       "в линейном виде."),
+       "с кодировкой для дисплея. «auto» читает EXR как линейный -- это обещает "
+       "сам формат -- а всё остальное как закодированное для дисплея; задайте "
+       "явно, если в EXR всё же лежат пиксели с кодировкой для дисплея."),
     TR("Girdi görüntülerini ekran için kodlanmış sıradan fotoğraflar yerine doğrusal "
-       "ışık olarak ele alır. Doğrusal olarak dışa aktarılmış render veya çekimlerde "
-       "açın."));
+       "ışık olarak ele alır. `auto`, bir EXR'yi doğrusal okur -- o biçimin verdiği "
+       "söz budur -- diğer her şeyi ekran için kodlanmış sayar; pikselleri yine de "
+       "ekran için kodlanmış bir EXR'de açıkça ayarlayın."));
 
 SS_MSG(image_color_gamut,
     EN("Input color space"), JA("入力の色空間"), ZH_HANS("输入色彩空间"),
@@ -6964,35 +6984,51 @@ SS_MSG(image_color_gamut,
     NL("Kleurruimte van de invoer"), RU("Цветовое пространство входа"),
     TR("Girdi renk uzayı"));
 SS_MSG(image_color_gamut_help,
-    EN("Color space the input images were captured in. Leave empty for ordinary "
-       "sRGB or Rec.709 photos. No tone mapping is applied."),
-    JA("入力画像が記録された色空間です。通常の sRGB や Rec.709 の写真では空の"
-       "ままにしてください。トーンマッピングは行いません。"),
-    ZH_HANS("输入图像所记录的色彩空间。普通 sRGB 或 Rec.709 照片留空即可。不会"
-            "做任何色调映射。"),
-    ZH_HANT("輸入影像所記錄的色彩空間。普通 sRGB 或 Rec.709 照片留空即可。不會"
-            "做任何色調映射。"),
-    KO("입력 이미지가 촬영된 색 공간입니다. 일반 sRGB나 Rec.709 사진이면 비워"
-       " 두십시오. 톤 매핑은 적용하지 않습니다."),
-    DE("Farbraum, in dem die Eingabebilder aufgenommen wurden. Für gewöhnliche "
-       "sRGB- oder Rec.709-Fotos leer lassen. Es wird kein Tone Mapping angewandt."),
+    EN("Color space the input images were captured in. `none` takes it from the "
+       "file for an EXR and assumes sRGB for anything else; `Rec.709` pins sRGB "
+       "primaries whatever the file says. No tone mapping is applied."),
+    JA("入力画像が記録された色空間です。`none` は EXR ならファイルから読み取り、"
+       "それ以外は sRGB とみなします。`Rec.709` はファイルの内容にかかわらず "
+       "sRGB の原色に固定します。トーンマッピングは行いません。"),
+    ZH_HANS("输入图像所记录的色彩空间。`none` 对 EXR 取自文件，其他格式按 sRGB；"
+            "`Rec.709` 则不论文件如何都固定为 sRGB 原色。不会做任何色调映射。"),
+    ZH_HANT("輸入影像所記錄的色彩空間。`none` 對 EXR 取自檔案，其他格式依 sRGB；"
+            "`Rec.709` 則不論檔案如何都固定為 sRGB 原色。不會做任何色調映射。"),
+    KO("입력 이미지가 촬영된 색 공간입니다. `none`은 EXR이면 파일에서 읽고 그 "
+       "밖의 형식은 sRGB로 간주하며, `Rec.709`은 파일 내용과 상관없이 sRGB "
+       "원색으로 고정합니다. 톤 매핑은 적용하지 않습니다."),
+    DE("Farbraum, in dem die Eingabebilder aufgenommen wurden. `none` übernimmt "
+       "ihn bei einer EXR aus der Datei und nimmt sonst sRGB an; `Rec.709` legt "
+       "die sRGB-Primärfarben fest, was auch immer die Datei sagt. Es wird kein "
+       "Tone Mapping angewandt."),
     FR("Espace colorimétrique dans lequel les images d'entrée ont été prises. "
-       "Laisser vide pour des photos sRGB ou Rec.709 ordinaires. Aucun mappage "
-       "tonal n'est appliqué."),
-    ES("Espacio de color en el que se capturaron las imágenes de entrada. Déjelo "
-       "vacío para fotos sRGB o Rec.709 corrientes. No se aplica ningún mapeo "
-       "de tonos."),
-    PT("Espaço de cor em que as imagens de entrada foram capturadas. Deixe vazio "
-       "para fotos sRGB ou Rec.709 comuns. Nenhum mapeamento de tons é aplicado."),
-    IT("Spazio colore in cui sono state acquisite le immagini in ingresso. Lasciare "
-       "vuoto per normali foto sRGB o Rec.709. Non viene applicato alcun tone "
-       "mapping."),
-    NL("Kleurruimte waarin de invoerbeelden zijn opgenomen. Laat leeg voor gewone "
-       "sRGB- of Rec.709-foto's. Er wordt geen tone mapping toegepast."),
-    RU("Цветовое пространство, в котором сняты входные изображения. Для обычных "
-       "снимков sRGB или Rec.709 оставьте пустым. Тональная компрессия не применяется."),
-    TR("Girdi görüntülerinin çekildiği renk uzayı. Sıradan sRGB veya Rec.709 "
-       "fotoğraflar için boş bırakın. Hiçbir ton eşlemesi uygulanmaz."));
+       "« none » le lit dans le fichier pour un EXR et suppose sRGB pour tout le "
+       "reste ; « Rec.709 » impose les primaires sRGB quoi que dise le fichier. "
+       "Aucun mappage tonal n'est appliqué."),
+    ES("Espacio de color en el que se capturaron las imágenes de entrada. «none» "
+       "lo toma del archivo si es un EXR y supone sRGB en los demás casos; "
+       "«Rec.709» fija los primarios sRGB diga lo que diga el archivo. No se "
+       "aplica ningún mapeo de tonos."),
+    PT("Espaço de cor em que as imagens de entrada foram capturadas. «none» "
+       "lê-o do arquivo se for um EXR e assume sRGB nos demais casos; «Rec.709» "
+       "fixa os primários sRGB seja o que for que o arquivo diga. Nenhum "
+       "mapeamento de tons é aplicado."),
+    IT("Spazio colore in cui sono state acquisite le immagini in ingresso. «none» "
+       "lo prende dal file per un EXR e presume sRGB per tutto il resto; "
+       "«Rec.709» fissa i primari sRGB qualunque cosa dica il file. Non viene "
+       "applicato alcun tone mapping."),
+    NL("Kleurruimte waarin de invoerbeelden zijn opgenomen. `none` haalt hem bij "
+       "een EXR uit het bestand en gaat verder uit van sRGB; `Rec.709` legt de "
+       "sRGB-primaries vast, wat het bestand ook zegt. Er wordt geen tone "
+       "mapping toegepast."),
+    RU("Цветовое пространство, в котором сняты входные изображения. «none» берёт "
+       "его из файла для EXR и считает sRGB для всего остального; «Rec.709» "
+       "закрепляет основные цвета sRGB, что бы ни было в файле. Тональная "
+       "компрессия не применяется."),
+    TR("Girdi görüntülerinin çekildiği renk uzayı. `none`, bir EXR için bunu "
+       "dosyadan alır, diğer her şeyde sRGB varsayar; `Rec.709` ise dosya ne "
+       "derse desin sRGB ana renklerini sabitler. Hiçbir ton eşlemesi "
+       "uygulanmaz."));
 
 SS_MSG(splat_color_is_linear,
     EN("Train splats in linear light"), JA("スプラットをリニアで学習"),
@@ -8276,6 +8312,18 @@ SS_MSG(choice_disk,
     PT("disco"),         IT("disco"),        NL("schijf"),       RU("диск"),
     TR("disk"));
 
+SS_MSG(choice_from_the_file,
+    EN("from the file"),  JA("ファイルから"),  ZH_HANS("取自文件"),  ZH_HANT("取自檔案"),
+    KO("파일에서"),        DE("aus der Datei"), FR("d'après le fichier"),
+    ES("según el archivo"), PT("conforme o arquivo"), IT("dal file"),
+    NL("uit het bestand"), RU("из файла"),     TR("dosyadan"));
+
+SS_MSG(choice_same_as_input,
+    EN("same as the input"), JA("入力と同じ"),  ZH_HANS("与输入相同"), ZH_HANT("與輸入相同"),
+    KO("입력과 동일"),       DE("wie die Eingabe"), FR("comme l'entrée"),
+    ES("igual que la entrada"), PT("igual à entrada"), IT("come l'ingresso"),
+    NL("zoals de invoer"),  RU("как у входа"),  TR("girdiyle aynı"));
+
 // ---------------------------------------------------------------------------
 // flag + value -> label. Null for anything not listed, which is most of them.
 // ---------------------------------------------------------------------------
@@ -8320,6 +8368,11 @@ inline constexpr ChoiceText kChoiceText[] = {
     {"cache_images", "cpu",  &choice_cpu},
     {"cache_images", "gpu",  &choice_gpu},
     {"cache_images", "disk", &choice_disk},
+
+    // `none` is the UNSET value for these two, not a colour space -- Rec.709
+    // is the explicit one. Labelled so the dropdown cannot read as "no gamut".
+    {"image_color_gamut", "none", &choice_from_the_file},
+    {"splat_color_gamut", "none", &choice_same_as_input},
 };
 inline constexpr size_t kNumChoiceText =
     sizeof(kChoiceText) / sizeof(kChoiceText[0]);

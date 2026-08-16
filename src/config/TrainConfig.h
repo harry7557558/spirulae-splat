@@ -260,8 +260,8 @@ inline int train_tier_rank(const char* tier) {
     X(int, ppisp_lr_warmup, 500, "correction", "advanced", "")               \
                                                                              \
     /* ==== colorspace -- linear vs display encoding, and which gamut ==== */\
-    X(bool, image_color_is_linear, false, "colorspace", "basic", "")         \
-    X(std::string, image_color_gamut, "", "colorspace", "basic", "ACES2065-1|ACEScg|Rec.2020|AdobeRGB|DCI-P3|none") \
+    X(std::optional<bool>, image_color_is_linear, std::nullopt, "colorspace", "basic", "") \
+    X(std::string, image_color_gamut, "", "colorspace", "basic", "Rec.709|ACES2065-1|ACEScg|Rec.2020|AdobeRGB|DCI-P3|none") \
     X(std::optional<bool>, splat_color_is_linear, std::nullopt, "colorspace", "basic", "") \
     X(std::string, splat_color_gamut, "", "colorspace", "basic", "Rec.709|ACES2065-1|ACEScg|Rec.2020|AdobeRGB|DCI-P3|none") \
     X(std::optional<bool>, convert_initial_point_cloud_color, std::nullopt, "colorspace", "basic", "") \

@@ -1,6 +1,7 @@
 // DataManager — see DataManager.h for the public contract.
 
 #include "data/DataManager.h"
+#include "core/ExrImage.h"
 #include "i18n/catalog/Data.h"
 
 #include "external/stb_image.h"
@@ -365,13 +366,31 @@ static void _warn_rgb_dim_mismatch_once(
     }
 }
 
+// `decode_threads` is what an EXR may use: 1 on the worker pool, which is
+// already 16 wide, and every core for a lone image the viewer asked for.
 void decode_rgb_into(const std::string& path,
                      int expected_h, int expected_w,
                      PixelDType dtype,
-                     uint8_t* dst)
+                     uint8_t* dst,
+                     int decode_threads = 1)
 {
     int w, h, ch;
-    if (dtype == PixelDType::UINT16) {
+    if (dtype == PixelDType::FLOAT32) {
+        exr::Info info;
+        exr::Options opt;
+        opt.threads = decode_threads;
+        std::vector<float> px;
+        const std::string err = exr::decode(path, opt, info, px);
+        if (!err.empty())
+            throw std::runtime_error("DataManager: failed to load EXR '" + path + "': " + err);
+        if (info.width == expected_w && info.height == expected_h) {
+            std::memcpy(dst, px.data(), px.size() * sizeof(float));
+        } else {
+            _warn_rgb_dim_mismatch_once(path, info.width, info.height, expected_w, expected_h);
+            cpu_bilinear_resize<float, 3>(px.data(), info.height, info.width,
+                                          (float*)dst, expected_h, expected_w);
+        }
+    } else if (dtype == PixelDType::UINT16) {
         stbi_us* img = stbi_load_16(path.c_str(), &w, &h, &ch, 3);
         if (!img) throw std::runtime_error("DataManager: failed to load 16-bit RGB '" + path + "': " + stbi_failure_reason());
         if (w == expected_w && h == expected_h) {
@@ -392,7 +411,7 @@ void decode_rgb_into(const std::string& path,
         }
         stbi_image_free(img);
     } else {
-        throw std::runtime_error("DataManager: float RGB inputs not supported in stb_image path");
+        throw std::runtime_error("DataManager: unsupported RGB pixel type for '" + path + "'");
     }
 }
 
@@ -464,15 +483,23 @@ void decode_normal_into(const std::string& path,
 bool probe_image_shape(const std::string& path, int& w, int& h) {
     int ch;
     if (path.empty()) return false;
+    if (exr::is_exr(path)) {
+        exr::Info info;
+        if (!exr::probe(path, info).empty()) return false;
+        w = info.width;
+        h = info.height;
+        return true;
+    }
     return stbi_info(path.c_str(), &w, &h, &ch) != 0;
 }
 
-// Detect on-disk RGB dtype (8-bit vs 16-bit). Both are decided by a single
-// stbi_is_16_bit() probe.
+// On-disk RGB dtype. EXR is float32 whatever it stores: half carries values
+// above 1, and 16-bit normalized would clip every one of them.
 PixelDType probe_pixel_dtype(const std::string& path,
                              PixelDType fallback = PixelDType::UINT8)
 {
     if (path.empty()) return fallback;
+    if (exr::is_exr(path)) return PixelDType::FLOAT32;
     if (stbi_is_16_bit(path.c_str())) return PixelDType::UINT16;
     return PixelDType::UINT8;
 }
@@ -1979,7 +2006,8 @@ void DataManagerImpl::fetch_one(int32_t index, DecodedBatch& out) {
         fill_batch_from_cache(out);
     } else {
         decode_rgb_into(_image_filenames[index], out.input_height,
-                        out.input_width, out.rgb_dtype, out.rgb_buffer.data());
+                        out.input_width, out.rgb_dtype, out.rgb_buffer.data(),
+                        /*decode_threads=*/0);
         if (!out.mask_buffer.empty()) {
             bool synth = !_synth_white_mask.empty() &&
                          _synth_white_mask[(size_t)index];

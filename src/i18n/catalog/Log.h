@@ -918,6 +918,73 @@ SS_MSG(ray_depth_straight_ahead,
     RU("расстояние прямо вперёд"),
     TR("ileri doğru mesafe"));
 
+// Printed when the input images are EXRs and no colour space was given on the
+// command line; {0} is the gamut read out of the file.
+SS_MSG(exr_color_space,
+    EN("EXR input read as linear {0} (--image-color-gamut, --image-color-is-linear)"),
+    JA("EXR 入力を線形 {0} として読み込みます"
+       "（--image-color-gamut, --image-color-is-linear）"),
+    ZH_HANS("EXR 输入按线性 {0} 读取（--image-color-gamut、--image-color-is-linear）"),
+    ZH_HANT("EXR 輸入依線性 {0} 讀取（--image-color-gamut、--image-color-is-linear）"),
+    KO("EXR 입력을 선형 {0}(으)로 읽습니다"
+       "(--image-color-gamut, --image-color-is-linear)"),
+    DE("EXR-Eingabe wird als lineares {0} gelesen "
+       "(--image-color-gamut, --image-color-is-linear)"),
+    FR("Entrée EXR lue comme {0} linéaire "
+       "(--image-color-gamut, --image-color-is-linear)"),
+    ES("Entrada EXR leída como {0} lineal "
+       "(--image-color-gamut, --image-color-is-linear)"),
+    PT("Entrada EXR lida como {0} linear "
+       "(--image-color-gamut, --image-color-is-linear)"),
+    IT("Ingresso EXR letto come {0} lineare "
+       "(--image-color-gamut, --image-color-is-linear)"),
+    NL("EXR-invoer gelezen als lineair {0} "
+       "(--image-color-gamut, --image-color-is-linear)"),
+    RU("Вход EXR читается как линейный {0} "
+       "(--image-color-gamut, --image-color-is-linear)"),
+    TR("EXR girdisi doğrusal {0} olarak okunuyor "
+       "(--image-color-gamut, --image-color-is-linear)"));
+
+// The same, for a run that declared the transfer itself and left only the
+// primaries to the file.
+SS_MSG(exr_gamut_from_file,
+    EN("EXR colour space {0}, from the file (--image-color-gamut)"),
+    JA("EXR の色空間は {0} です（ファイルの情報、--image-color-gamut）"),
+    ZH_HANS("EXR 色彩空间为 {0}（取自文件，--image-color-gamut）"),
+    ZH_HANT("EXR 色彩空間為 {0}（取自檔案，--image-color-gamut）"),
+    KO("EXR 색 공간은 {0}입니다(파일에서 읽음, --image-color-gamut)"),
+    DE("EXR-Farbraum {0}, aus der Datei (--image-color-gamut)"),
+    FR("Espace colorimétrique EXR {0}, d'après le fichier (--image-color-gamut)"),
+    ES("Espacio de color EXR {0}, según el archivo (--image-color-gamut)"),
+    PT("Espaço de cor EXR {0}, conforme o arquivo (--image-color-gamut)"),
+    IT("Spazio colore EXR {0}, dal file (--image-color-gamut)"),
+    NL("EXR-kleurruimte {0}, uit het bestand (--image-color-gamut)"),
+    RU("Цветовое пространство EXR {0}, из файла (--image-color-gamut)"),
+    TR("EXR renk uzayı {0}, dosyadan (--image-color-gamut)"));
+
+SS_MSG(exr_gamut_unknown,
+    EN("The EXR's color primaries match no known color space; reading it as Rec.709"),
+    JA("EXR の原色はどの既知の色空間とも一致しません。Rec.709 として読み込みます"),
+    ZH_HANS("EXR 的色彩基色不属于任何已知色彩空间，按 Rec.709 读取"),
+    ZH_HANT("EXR 的色彩基色不屬於任何已知色彩空間，依 Rec.709 讀取"),
+    KO("EXR의 원색이 알려진 색 공간과 일치하지 않습니다. Rec.709로 읽습니다"),
+    DE("Die Primärfarben der EXR passen zu keinem bekannten Farbraum; "
+       "sie wird als Rec.709 gelesen"),
+    FR("Les primaires de l'EXR ne correspondent à aucun espace connu ; "
+       "lecture en Rec.709"),
+    ES("Los primarios del EXR no coinciden con ningún espacio conocido; "
+       "se lee como Rec.709"),
+    PT("Os primários do EXR não correspondem a nenhum espaço conhecido; "
+       "lido como Rec.709"),
+    IT("I primari dell'EXR non corrispondono ad alcuno spazio noto; "
+       "viene letto come Rec.709"),
+    NL("De primaire kleuren van de EXR passen bij geen bekende kleurruimte; "
+       "hij wordt als Rec.709 gelezen"),
+    RU("Основные цвета EXR не совпадают ни с одним известным пространством; "
+       "файл читается как Rec.709"),
+    TR("EXR'nin ana renkleri bilinen hiçbir renk uzayıyla eşleşmiyor; "
+       "Rec.709 olarak okunuyor"));
+
 SS_MSG(output_directory,
     EN("Output directory: {0}"),
     JA("出力先フォルダー: {0}"),

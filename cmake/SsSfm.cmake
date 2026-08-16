@@ -153,11 +153,12 @@ list(FILTER SS_SFM_SOURCES EXCLUDE REGEX "/tests/")
 add_library(ss_sfm STATIC
     ${SS_SFM_SOURCES}
     ${_sfm_embed_cpp}
-    # stb_image is instantiated once for the repository. As an archive member it
-    # is only pulled in when nothing else already provides it, so spirula-gui --
-    # which links the engine, and with it the same TU -- does not see a
-    # duplicate definition.
+    # Instantiated once for the repository. As archive members these are only
+    # pulled in when nothing else provides them, so spirula-gui -- which links
+    # the engine, and with it the same TUs -- sees no duplicate definition.
     ${SS_SRC}/external/stb_image_impl.cpp
+    ${SS_SRC}/core/ExrImage.cpp
+    ${SS_SRC}/external/miniz.c
 )
 target_include_directories(ss_sfm PUBLIC ${SS_SRC})
 target_link_libraries(ss_sfm PUBLIC ss_vulkan Threads::Threads ss_i18n)

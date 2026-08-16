@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <atomic>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -128,7 +129,7 @@ struct PrepJob {
     // The photographs' colour space. Frames convert to sRGB before the
     // segmenter sees them, which is what it was trained on.
     std::string image_gamut;
-    bool image_is_linear = false;
+    std::optional<bool> image_is_linear;
 
     // ---- masking ----
     bool mask_enable = false;

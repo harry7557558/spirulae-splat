@@ -9,6 +9,7 @@
 
 #include "app_generated/mask_py.h"   // kMaskPy[], from reference/scripts/mask.py
 
+#include "core/ExrImage.h"
 #include "external/stb_image.h"      // stbi_info (image size probe)
 
 #ifdef SS_BUILD_SAM
@@ -78,7 +79,7 @@ bool is_image_file(const fs::path& p) {
     std::string e = p.extension().string();
     for (auto& c : e) c = (char)std::tolower((unsigned char)c);
     return e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".webp" ||
-           e == ".tif" || e == ".tiff" || e == ".bmp";
+           e == ".tif" || e == ".tiff" || e == ".bmp" || e == ".exr";
 }
 
 // Throw away what a previous run generated, for a step being re-done. Only
@@ -192,7 +193,7 @@ std::vector<sam::SeedPrompt> seeds_from_clicks(const std::vector<MaskClick>& cli
 class ImagePrefetch {
 public:
     ImagePrefetch(std::vector<fs::path> files, const std::atomic<bool>& cancel,
-                  std::string gamut, bool is_linear)
+                  std::string gamut, std::optional<bool> is_linear)
         : _files(std::move(files)), _cancel(cancel), _gamut(std::move(gamut)),
           _is_linear(is_linear), _worker([this] { run(); }) {}
     ~ImagePrefetch() {
@@ -237,7 +238,7 @@ private:
     std::vector<fs::path> _files;
     const std::atomic<bool>& _cancel;
     std::string _gamut;
-    bool _is_linear = false;
+    std::optional<bool> _is_linear;
     std::deque<nn::Image> _queue;
     std::mutex _mu;
     std::condition_variable _ready, _space;
@@ -711,6 +712,13 @@ int DatasetPrep::count_images(const std::string& dir, const std::string& skip) {
 bool DatasetPrep::first_image_dims(const std::string& dir, int& W, int& H) {
     for (const fs::path& f : walk_images(dir)) {
         int c = 0;
+        if (exr::is_exr(f.string())) {
+            exr::Info info;
+            if (!exr::probe(f.string(), info).empty()) continue;
+            W = info.width;
+            H = info.height;
+            return true;
+        }
         if (stbi_info(f.string().c_str(), &W, &H, &c) != 0) return true;
     }
     return false;

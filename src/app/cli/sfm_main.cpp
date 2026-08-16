@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "core/ColorSpace.h"
+#include "core/ExrImage.h"
 #include "sfm/SfmConfig.h"
 #include "sfm/core/Progress.h"
 #include "sfm/core/CameraSetup.h"
@@ -314,7 +315,7 @@ static bool isImageExt(const std::string& e) {
     std::string s;
     for (char c : e) s += (char)std::tolower((unsigned char)c);
     return s == ".jpg" || s == ".jpeg" || s == ".png" || s == ".bmp" || s == ".tga" ||
-           s == ".ppm" || s == ".pgm";
+           s == ".ppm" || s == ".pgm" || s == ".exr";
 }
 
 // macOS writes an AppleDouble sidecar, `._<name>`, beside any file it has to
@@ -435,6 +436,35 @@ static void orientModels(std::vector<Reconstruction>& models, bool enabled, bool
         const Sim3 T = orientModel(models[i]);
         if (verbose)
             L::err(Tag::Orient, M::orient_done, {(long long)i, L::num(T.scale, 4)});
+    }
+}
+
+// An EXR carries its own colour space. Reading it needs no declaration -- the
+// decoder falls back to the file's own -- but --point-color and the reported
+// space both do, so adopt it before any stage runs.
+static void adoptExrColorSpace(SfmConfig& cfg, const std::string& imagedir,
+                               const std::set<std::string>& seen) {
+    const bool take_gamut = !seen.count("image-gamut");
+    const bool take_linear = !seen.count("image-linear");
+    if (!take_gamut && !take_linear) return;
+    std::error_code ec, walk;
+    for (auto it = fs::recursive_directory_iterator(
+             imagedir, fs::directory_options::follow_directory_symlink, walk);
+         !walk && it != fs::recursive_directory_iterator(); it.increment(walk)) {
+        if (!it->is_regular_file(ec)) continue;
+        if (!isImageExt(it->path().extension().string()) || isSidecar(it->path()))
+            continue;
+        exr::Info info;
+        if (!exr::declared_color_space(it->path().string(), info)) return;
+        if (take_gamut) cfg.image_gamut = info.gamut;
+        if (take_linear) cfg.image_is_linear = info.is_linear;
+        const std::string name =
+            cfg.image_gamut.empty() ? "Rec.709" : cfg.image_gamut;
+        if (take_linear) L::out(Tag::Run, M::run_exr_color, {name});
+        else             L::out(Tag::Run, M::run_exr_gamut_from_file, {name});
+        if (take_gamut && !info.gamut_known)
+            L::warn(Tag::Run, M::run_exr_gamut_unknown, {});
+        return;
     }
 }
 
@@ -1056,6 +1086,7 @@ static int cmdExtract(int argc, char** argv) {
 
     // ---- directory (batch) ----
     if (fs::is_directory(image)) {
+        adoptExrColorSpace(cfg, image, seen);
         fs::path outdir = output.empty() ? fs::path("features") : fs::path(output);
         ExtractStats st;
         int rc = extractDirectory(image, outdir, cfg, st);
@@ -1885,6 +1916,7 @@ static int cmdAuto(int argc, char** argv) {
         fs::path sibling = p.parent_path() / "masks";
         if (fs::is_directory(sibling)) cfg.mask_dir = sibling.string();
     }
+    adoptExrColorSpace(cfg, imagedir, seen);
 
     fs::path ws(workspace);
     fs::create_directories(ws);

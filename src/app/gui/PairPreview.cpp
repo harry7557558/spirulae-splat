@@ -33,7 +33,7 @@ constexpr size_t kMaxLines = 160;
 // by walking, which is what makes probing the list here the cheap way back.
 std::string image_for_stem(const std::string& dir, const std::string& stem) {
     static const char* const kExt[] = {".jpg", ".JPG", ".jpeg", ".png", ".PNG",
-                                       ".webp", ".tif", ".tiff", ".bmp"};
+                                       ".webp", ".tif", ".tiff", ".bmp", ".exr"};
     std::error_code ec;
     for (const char* e : kExt) {
         const fs::path p = fs::path(dir) / (stem + e);
@@ -58,7 +58,7 @@ std::vector<std::string> stems_from_images(const std::string& dir) {
         std::string e = it->path().extension().string();
         for (char& c : e) c = (char)std::tolower((unsigned char)c);
         if (e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".webp" ||
-            e == ".tif" || e == ".tiff" || e == ".bmp")
+            e == ".tif" || e == ".tiff" || e == ".bmp" || e == ".exr")
             files.push_back(it->path());
     }
     std::sort(files.begin(), files.end());

@@ -36,6 +36,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -123,7 +124,7 @@ struct SfmJob {
     // SfM, AI masking, depth and normals -- converts to sRGB first, which is
     // what those detectors and models were trained on. Empty = Rec.709/sRGB.
     std::string image_gamut;
-    bool image_is_linear = false;
+    std::optional<bool> image_is_linear;
     // false: the sparse point cloud stays sRGB (train with
     // convert-initial-point-cloud-color on). true: written in the images' space.
     bool point_color_in_image_space = false;

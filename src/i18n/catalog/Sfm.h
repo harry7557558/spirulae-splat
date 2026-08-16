@@ -149,6 +149,61 @@ SS_MSG(run_cameras,
     RU("Объектив: {0}   Группировка камер: {1}"),
     TR("Objektif: {0}   Kamera gruplaması: {1}"));
 
+// The images are EXRs and the transfer was left to them; {0} is the gamut in
+// force. Everything here converts to sRGB before it looks at a pixel.
+SS_MSG(run_exr_color,
+    EN("EXR input read as linear {0}"),
+    JA("EXR 入力を線形 {0} として読み込みます"),
+    ZH_HANS("EXR 输入按线性 {0} 读取"),
+    ZH_HANT("EXR 輸入依線性 {0} 讀取"),
+    KO("EXR 입력을 선형 {0}(으)로 읽습니다"),
+    DE("EXR-Eingabe wird als lineares {0} gelesen"),
+    FR("Entrée EXR lue comme {0} linéaire"),
+    ES("Entrada EXR leída como {0} lineal"),
+    PT("Entrada EXR lida como {0} linear"),
+    IT("Ingresso EXR letto come {0} lineare"),
+    NL("EXR-invoer gelezen als lineair {0}"),
+    RU("Вход EXR читается как линейный {0}"),
+    TR("EXR girdisi doğrusal {0} olarak okunuyor"));
+
+SS_MSG(run_exr_gamut_from_file,
+    EN("EXR colour space: {0}, from the file"),
+    JA("EXR の色空間: {0}（ファイルの情報）"),
+    ZH_HANS("EXR 色彩空间: {0}（取自文件）"),
+    ZH_HANT("EXR 色彩空間: {0}（取自檔案）"),
+    KO("EXR 색 공간: {0}(파일에서 읽음)"),
+    DE("EXR-Farbraum: {0}, aus der Datei"),
+    FR("Espace colorimétrique EXR : {0}, d'après le fichier"),
+    ES("Espacio de color EXR: {0}, según el archivo"),
+    PT("Espaço de cor EXR: {0}, conforme o arquivo"),
+    IT("Spazio colore EXR: {0}, dal file"),
+    NL("EXR-kleurruimte: {0}, uit het bestand"),
+    RU("Цветовое пространство EXR: {0}, из файла"),
+    TR("EXR renk uzayı: {0}, dosyadan"));
+
+SS_MSG(run_exr_gamut_unknown,
+    EN("The EXR's color primaries match no known color space; reading it as Rec.709"),
+    JA("EXR の原色はどの既知の色空間とも一致しません。Rec.709 として読み込みます"),
+    ZH_HANS("EXR 的色彩基色不属于任何已知色彩空间，按 Rec.709 读取"),
+    ZH_HANT("EXR 的色彩基色不屬於任何已知色彩空間，依 Rec.709 讀取"),
+    KO("EXR의 원색이 알려진 색 공간과 일치하지 않습니다. Rec.709로 읽습니다"),
+    DE("Die Primärfarben der EXR passen zu keinem bekannten Farbraum; "
+       "sie wird als Rec.709 gelesen"),
+    FR("Les primaires de l'EXR ne correspondent à aucun espace connu ; "
+       "lecture en Rec.709"),
+    ES("Los primarios del EXR no coinciden con ningún espacio conocido; "
+       "se lee como Rec.709"),
+    PT("Os primários do EXR não correspondem a nenhum espaço conhecido; "
+       "lido como Rec.709"),
+    IT("I primari dell'EXR non corrispondono ad alcuno spazio noto; "
+       "viene letto come Rec.709"),
+    NL("De primaire kleuren van de EXR passen bij geen bekende kleurruimte; "
+       "hij wordt als Rec.709 gelezen"),
+    RU("Основные цвета EXR не совпадают ни с одним известным пространством; "
+       "файл читается как Rec.709"),
+    TR("EXR'nin ana renkleri bilinen hiçbir renk uzayıyla eşleşmiyor; "
+       "Rec.709 olarak okunuyor"));
+
 SS_MSG(run_masks,
     EN("Masks: {0}"),
     JA("マスク: {0}"),

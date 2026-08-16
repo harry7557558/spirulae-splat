@@ -118,45 +118,79 @@ SS_MSG(input_gamut_help,
        "çevirir; bu algılayıcılar ve modeller bununla eğitildi."));
 
 SS_MSG(input_is_linear,
-    EN("Input images are linear light"),
-    JA("入力画像はリニア光"),
-    ZH_HANS("输入图像为线性光"),
-    ZH_HANT("輸入影像為線性光"),
-    KO("입력 이미지는 선형 광"),
-    DE("Eingabebilder sind lineares Licht"),
-    FR("Images d'entrée en lumière linéaire"),
-    ES("Las imágenes de entrada son luz lineal"),
-    PT("As imagens de entrada são luz linear"),
-    IT("Le immagini di ingresso sono luce lineare"),
-    NL("Invoerbeelden zijn lineair licht"),
-    RU("Исходные изображения — линейный свет"),
-    TR("Girdi görüntüleri doğrusal ışık"));
+    EN("Input light encoding"),
+    JA("入力の光エンコード"),
+    ZH_HANS("输入的光编码"),
+    ZH_HANT("輸入的光編碼"),
+    KO("입력 광 인코딩"),
+    DE("Lichtcodierung der Eingabe"),
+    FR("Encodage de la lumière"),
+    ES("Codificación de la luz de entrada"),
+    PT("Codificação da luz de entrada"),
+    IT("Codifica della luce in ingresso"),
+    NL("Lichtcodering van de invoer"),
+    RU("Кодировка света на входе"),
+    TR("Girdi ışık kodlaması"));
+
+// Item 0 of BOTH colour-space pickers: an EXR declares its own, and this is
+// what says "do not override it".
+SS_MSG(space_from_file,
+    EN("From the file"), JA("ファイルから"), ZH_HANS("取自文件"),
+    ZH_HANT("取自檔案"), KO("파일에서"), DE("Aus der Datei"),
+    FR("D'après le fichier"), ES("Según el archivo"), PT("Conforme o arquivo"),
+    IT("Dal file"), NL("Uit het bestand"), RU("Из файла"), TR("Dosyadan"));
+
+SS_MSG(transfer_linear,
+    EN("Linear light"), JA("リニア光"), ZH_HANS("线性光"), ZH_HANT("線性光"),
+    KO("선형 광"), DE("Lineares Licht"), FR("Lumière linéaire"),
+    ES("Luz lineal"), PT("Luz linear"), IT("Luce lineare"),
+    NL("Lineair licht"), RU("Линейный свет"), TR("Doğrusal ışık"));
+
+SS_MSG(transfer_display,
+    EN("Display-encoded"), JA("表示用エンコード"), ZH_HANS("显示编码"),
+    ZH_HANT("顯示編碼"), KO("디스플레이 인코딩"), DE("Anzeigecodiert"),
+    FR("Encodé pour l'affichage"), ES("Codificado para pantalla"),
+    PT("Codificado para exibição"), IT("Codificato per la visualizzazione"),
+    NL("Voor weergave gecodeerd"), RU("С кодировкой для дисплея"),
+    TR("Ekran için kodlanmış"));
 
 SS_MSG(input_is_linear_help,
-    EN("On for scene-linear captures (EXR, linear 16-bit). Off for ordinary "
-       "display-encoded photographs."),
-    JA("シーンリニア素材（EXR、リニア 16 ビット）ではオン。通常の表示用エンコード"
-       "写真ではオフ。"),
-    ZH_HANS("场景线性素材（EXR、线性 16 位）请开启；普通显示编码照片则关闭。"),
-    ZH_HANT("場景線性素材（EXR、線性 16 位元）請開啟；一般顯示編碼照片則關閉。"),
-    KO("장면 선형 소재(EXR, 선형 16비트)에서 켜고, 보통의 디스플레이 인코딩 "
-       "사진에서는 끕니다."),
-    DE("An für szenenlineare Aufnahmen (EXR, lineare 16 Bit), aus für normale "
-       "anzeigecodierte Fotos."),
-    FR("Activé pour les prises scène-linéaire (EXR, 16 bits linéaire), désactivé "
-       "pour les photographies encodées pour l'affichage."),
-    ES("Activado para capturas escena-lineal (EXR, 16 bits lineal); desactivado "
-       "para fotografías codificadas para pantalla."),
-    PT("Ligado para capturas cena-linear (EXR, 16 bits linear); desligado para "
-       "fotografias codificadas para exibição."),
-    IT("Attivo per riprese scena-lineare (EXR, 16 bit lineare), spento per "
-       "fotografie codificate per lo schermo."),
-    NL("Aan voor scène-lineaire opnamen (EXR, lineair 16-bits), uit voor gewone "
-       "weergavegecodeerde foto's."),
-    RU("Включите для сцен-линейных съёмок (EXR, линейные 16 бит); выключите для "
-       "обычных экранно закодированных фотографий."),
-    TR("Sahne-doğrusal çekimler (EXR, doğrusal 16 bit) için açık; sıradan ekran "
-       "kodlu fotoğraflar için kapalı."));
+    EN("Whether the pictures hold scene-linear light (EXR, linear 16-bit) or "
+       "ordinary display-encoded values. Read from an EXR's own header unless "
+       "you set it here."),
+    JA("写真がシーンリニアの光（EXR、リニア 16 ビット）か、通常の表示用に"
+       "エンコードされた値かです。ここで設定しない限り、EXR のヘッダーから"
+       "読み取ります。"),
+    ZH_HANS("照片存的是场景线性光（EXR、线性 16 位），还是普通的显示编码数值。"
+            "除非在此设置，否则取自 EXR 自己的文件头。"),
+    ZH_HANT("照片存的是場景線性光（EXR、線性 16 位元），還是普通的顯示編碼數值。"
+            "除非在此設定，否則取自 EXR 自己的檔頭。"),
+    KO("사진이 장면 선형 광(EXR, 선형 16비트)인지 보통의 디스플레이 인코딩 "
+       "값인지입니다. 여기서 설정하지 않으면 EXR 헤더에서 읽습니다."),
+    DE("Ob die Bilder szenenlineares Licht (EXR, lineare 16 Bit) oder gewöhnliche "
+       "anzeigecodierte Werte enthalten. Wird aus dem Kopf einer EXR gelesen, "
+       "solange Sie es hier nicht setzen."),
+    FR("Si les images contiennent de la lumière scène-linéaire (EXR, 16 bits "
+       "linéaire) ou des valeurs encodées pour l'affichage. Lu dans l'en-tête "
+       "d'un EXR tant que vous ne le réglez pas ici."),
+    ES("Si las fotos guardan luz escena-lineal (EXR, 16 bits lineal) o valores "
+       "corrientes codificados para pantalla. Se lee de la cabecera de un EXR "
+       "mientras no lo fije aquí."),
+    PT("Se as fotos guardam luz cena-linear (EXR, 16 bits linear) ou valores "
+       "comuns codificados para exibição. Lido do cabeçalho de um EXR enquanto "
+       "não o definir aqui."),
+    IT("Se le foto contengono luce scena-lineare (EXR, 16 bit lineare) o comuni "
+       "valori codificati per la visualizzazione. Letto dall'intestazione di un "
+       "EXR finché non lo imposti qui."),
+    NL("Of de foto's scène-lineair licht (EXR, lineair 16-bits) bevatten of "
+       "gewone voor weergave gecodeerde waarden. Wordt uit de kop van een EXR "
+       "gelezen zolang u het hier niet instelt."),
+    RU("Хранят ли снимки сцен-линейный свет (EXR, линейные 16 бит) или обычные "
+       "значения с кодировкой для дисплея. Читается из заголовка EXR, пока вы не "
+       "зададите это здесь."),
+    TR("Fotoğrafların sahne-doğrusal ışık (EXR, doğrusal 16 bit) mi yoksa "
+       "sıradan ekran için kodlanmış değerler mi tuttuğu. Burada ayarlamadığınız "
+       "sürece bir EXR'nin başlığından okunur."));
 
 SS_MSG(point_color_image_space,
     EN("Point cloud colours in the input colour space"),
@@ -7862,6 +7896,24 @@ SS_MSG(license_no_browser,
 // ===========================================================================
 // Log lines this screen writes
 // ===========================================================================
+
+// The pictures are EXRs, so the colour space under Advanced was filled in from
+// their header; {0} is the gamut it found.
+SS_MSG(log_exr_color_space,
+    EN("These are EXR images: reading them as linear {0}, from the file."),
+    JA("EXR 画像です。ファイルの情報に従い、線形 {0} として読み込みます。"),
+    ZH_HANS("这些是 EXR 图像：按文件所记录的线性 {0} 读取。"),
+    ZH_HANT("這些是 EXR 影像：依檔案所記錄的線性 {0} 讀取。"),
+    KO("EXR 이미지입니다. 파일에 기록된 대로 선형 {0}(으)로 읽습니다."),
+    DE("Das sind EXR-Bilder: Sie werden laut Datei als lineares {0} gelesen."),
+    FR("Ce sont des images EXR : elles sont lues comme {0} linéaire, "
+       "d'après le fichier."),
+    ES("Son imágenes EXR: se leen como {0} lineal, según el archivo."),
+    PT("São imagens EXR: lidas como {0} linear, conforme o arquivo."),
+    IT("Sono immagini EXR: vengono lette come {0} lineare, dal file."),
+    NL("Dit zijn EXR-beelden: ze worden gelezen als lineair {0}, uit het bestand."),
+    RU("Это снимки EXR: они читаются как линейный {0}, по данным файла."),
+    TR("Bunlar EXR görüntüleri: dosyaya göre doğrusal {0} olarak okunuyor."));
 
 SS_MSG(log_masks_attached,
     EN("Using {0} as the masks for the images beside it."),

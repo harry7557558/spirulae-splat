@@ -61,6 +61,7 @@ def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str,
             file_path = file_path.relative_to(image_dir)
             image_files.append(file_path)
 
+    unreadable = []
     for image_path in tqdm(sorted(image_files)):
         mask_path = mask_dir / (str(image_path) + ".png")
         if is_valid_mask(mask_path):
@@ -68,6 +69,7 @@ def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str,
         try:
             image = Image.open(image_dir / image_path).convert("RGB")
         except:
+            unreadable.append(image_path)
             continue
         with redirect_stdout(StringIO()):
             pos_outputs, neg_outputs = predictor(image)
@@ -107,6 +109,14 @@ def process(predictor, dataset_dir: str, image_dir: str, mask_dir: str,
             ax2.imshow(result_mask)
             plt.show()
             # break
+
+    # Pillow reads no EXR, so an EXR capture masked through this script would
+    # otherwise come out silently unmasked. The built-in masking reads them.
+    if unreadable:
+        exts = sorted({p.suffix.lower() for p in unreadable})
+        print(f"WARNING: {len(unreadable)} file(s) could not be read and have no "
+              f"mask ({', '.join(exts)}). Pillow cannot open these; use the "
+              f"built-in masking instead of this script.")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@
 #include "sfm/core/Image.h"
 
 #include "core/ColorSpace.h"
+#include "core/ExrImage.h"
 
 #include <algorithm>
 
@@ -82,13 +83,30 @@ static void resizeGrayFromRgb(const unsigned char* rgb, int w, int h, int dw, in
 
 GrayImage loadGrayImage(const std::string& path, int max_image_size, bool want_color,
                         const std::string& mask_path,
-                        const std::string& gamut, bool is_linear) {
+                        const std::string& gamut, std::optional<bool> is_linear) {
     int w = 0, h = 0, chan = 0;
     // Force 3 channels; we do our own luma so behavior is decoder-independent.
-    unsigned char* rgb = stbi_load(path.c_str(), &w, &h, &chan, 3);
-    if (!rgb)
-        throw std::runtime_error("cannot decode image " + path + ": " + stbi_failure_reason());
-    colorspace::to_srgb_inplace(rgb, (size_t)w * h, gamut, is_linear);
+    // An EXR decodes on this thread: the pool above already owns every core.
+    std::vector<uint8_t> exr_rgb;
+    unsigned char* rgb = nullptr;
+    if (exr::is_exr(path)) {
+        exr::Info info;
+        exr::Options opt;
+        opt.threads = 1;
+        const std::string err =
+            exr::decode_srgb8(path, opt, info, exr_rgb, gamut, is_linear);
+        if (!err.empty())
+            throw std::runtime_error("cannot decode image " + path + ": " + err);
+        w = info.width;
+        h = info.height;
+        rgb = exr_rgb.data();
+    } else {
+        rgb = stbi_load(path.c_str(), &w, &h, &chan, 3);
+        if (!rgb)
+            throw std::runtime_error("cannot decode image " + path + ": " + stbi_failure_reason());
+        colorspace::to_srgb_inplace(rgb, (size_t)w * h, gamut,
+                                    is_linear.value_or(false));
+    }
 
     GrayImage img;
     img.orig_width = w;
@@ -117,7 +135,7 @@ GrayImage loadGrayImage(const std::string& path, int max_image_size, bool want_c
     } else {
         resizeGrayFromRgb(rgb, w, h, dw, dh, img.data);
     }
-    stbi_image_free(rgb);
+    if (exr_rgb.empty()) stbi_image_free(rgb);
     // Kept at the mask file's own resolution: applyMask() samples it in uv, so
     // resampling it to match `img` would only lose detail (D39).
     if (!mask_path.empty()) img.mask = loadMask(mask_path);
@@ -168,6 +186,13 @@ Mask loadMask(const std::string& path) {
 }
 
 bool imageSize(const std::string& path, int& width, int& height) {
+    if (exr::is_exr(path)) {
+        exr::Info info;
+        if (!exr::probe(path, info).empty()) return false;
+        width = info.width;
+        height = info.height;
+        return true;
+    }
     int comp = 0;
     return stbi_info(path.c_str(), &width, &height, &comp) != 0;
 }

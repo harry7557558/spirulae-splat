@@ -109,11 +109,13 @@ list(FILTER SS_NN_SOURCES EXCLUDE REGEX "/tests/")
 add_library(ss_nn STATIC
     ${SS_NN_SOURCES}
     ${SS_NN_EMBED}
-    # stb is instantiated once for the repository. As archive members these are
-    # only pulled in when nothing else already provides them, so a target that
-    # also links the engine (spirula-gui) does not see a duplicate definition.
+    # Instantiated once for the repository. As archive members these are only
+    # pulled in when nothing else provides them, so a target that also links
+    # the engine (spirula-gui) does not see a duplicate definition.
     ${SS_SRC}/external/stb_image_impl.cpp
     ${SS_SRC}/external/stb_image_write_impl.cpp
+    ${SS_SRC}/core/ExrImage.cpp
+    ${SS_SRC}/external/miniz.c
 )
 target_include_directories(ss_nn PUBLIC ${SS_SRC})
 # PUBLIC and on ss_nn, not on ss_video: the flag means "this build

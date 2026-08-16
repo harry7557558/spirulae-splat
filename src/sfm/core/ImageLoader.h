@@ -40,6 +40,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -56,7 +57,7 @@ struct ImageLoadOptions {
     bool want_color = false;      // also decode a downscaled RGB buffer (for point colors)
     // The files' colour space; decoded pixels are converted to sRGB.
     std::string gamut;
-    bool is_linear = false;
+    std::optional<bool> is_linear;
     // Keypoint masks (sfm/core/Mask.h), one per entry of the `paths` passed to
     // loadImagesInOrder and in the same order; "" means "no mask for this
     // image". Empty (the default) skips mask decoding entirely. Masks are

@@ -6,6 +6,7 @@
 // declarations. They pull in nothing: no libpng, no libjpeg, no ffmpeg.
 
 #include "core/ColorSpace.h"
+#include "core/ExrImage.h"
 #include "nn/core/Log.h"
 #include "nn/io/Image.h"
 
@@ -19,9 +20,22 @@
 namespace nn {
 
 Image load_image(const std::string& path, const std::string& gamut,
-                 bool is_linear) {
+                 std::optional<bool> is_linear) {
     Image img;
     int w = 0, h = 0, c = 0;
+    if (exr::is_exr(path)) {
+        exr::Info info;
+        const std::string err =
+            exr::decode_srgb8(path, exr::Options(), info, img.data, gamut, is_linear);
+        if (!err.empty()) {
+            NN_LOG_ERROR("load_image: cannot read '%s': %s\n", path.c_str(), err.c_str());
+            return Image();
+        }
+        img.width = info.width;
+        img.height = info.height;
+        img.channels = 3;
+        return img;
+    }
     uint8_t* data = stbi_load(path.c_str(), &w, &h, &c, 3);
     if (!data) {
         NN_LOG_ERROR("load_image: cannot read '%s': %s\n", path.c_str(),
@@ -33,7 +47,8 @@ Image load_image(const std::string& path, const std::string& gamut,
     img.channels = 3;
     img.data.assign(data, data + (size_t)w * h * 3);
     stbi_image_free(data);
-    colorspace::to_srgb_inplace(img.data.data(), (size_t)w * h, gamut, is_linear);
+    colorspace::to_srgb_inplace(img.data.data(), (size_t)w * h, gamut,
+                                is_linear.value_or(false));
     return img;
 }
 

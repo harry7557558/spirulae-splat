@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -59,7 +60,7 @@ struct Options {
     bool overwrite = false;
     // The dataset's colour space; frames convert to sRGB before inference.
     std::string image_gamut;
-    bool image_is_linear = false;
+    std::optional<bool> image_is_linear;   // unset: an EXR's own header decides
 };
 
 void help_row(const char* flags, const spirula::i18n::Msg& m, int col = 26) {
@@ -92,7 +93,7 @@ void usage() {
     help_row("--split auto|yes|no", G::opt_split);
     help_row("--overwrite", G::opt_overwrite);
     help_row("--image-gamut <name>", G::opt_image_gamut);
-    help_row("--image-linear", G::opt_image_linear);
+    help_row("--image-linear / --no-image-linear", G::opt_image_linear);
     // English, like the other deep diagnostics in this repository: what it
     // prints is a table of numerical errors, read by whoever changed the warp.
     std::fprintf(stderr, "    --check                   "
@@ -421,6 +422,7 @@ int spirula_geometry_main(int argc, char** argv) {
         else if (a == "--overwrite") o.overwrite = true;
         else if (a == "--image-gamut") o.image_gamut = next();
         else if (a == "--image-linear") o.image_is_linear = true;
+        else if (a == "--no-image-linear") o.image_is_linear = false;
         else if (a == "--device") device = next();
         else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "unknown option '%s'\n\n", a.c_str());

@@ -109,7 +109,7 @@ private:
         if (!_images.empty()) {
             // The extension is the capture's, not the map's.
             for (const char* ext : {".jpg", ".jpeg", ".png", ".webp", ".tif",
-                                    ".tiff", ".bmp", ".JPG", ".PNG"}) {
+                                    ".tiff", ".bmp", ".exr", ".JPG", ".PNG"}) {
                 fs::path p = _images / rel;
                 p.replace_extension(ext);
                 if (!fs::is_regular_file(p, ec)) {
@@ -226,7 +226,8 @@ bool run_geometry_step(const GeometryJob& job, const std::string& dataset,
         argv.push_back("--image-gamut");
         argv.push_back(job.image_gamut);
     }
-    if (job.image_is_linear) argv.push_back("--image-linear");
+    if (job.image_is_linear.has_value())
+        argv.push_back(*job.image_is_linear ? "--image-linear" : "--no-image-linear");
 
     std::string cmd;
     for (const std::string& a : argv) cmd += (cmd.empty() ? "$ " : " ") + a;

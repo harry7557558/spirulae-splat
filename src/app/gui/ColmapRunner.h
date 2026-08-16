@@ -41,6 +41,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -182,7 +183,7 @@ struct ColmapJob {
 
     // The photographs' colour space; masking and geometry convert to sRGB.
     std::string image_gamut;
-    bool image_is_linear = false;
+    std::optional<bool> image_is_linear;
 
     // Depth and normals, written after the reconstruction from the dataset it
     // produced. Shared with the built-in path (SfmJob), which runs the same

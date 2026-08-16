@@ -6,6 +6,7 @@
 #include "checkpoint/Resume.h"
 #include "config/TrainConfigJson.h"
 #include "core/ColorSpace.h"
+#include "core/ExrImage.h"
 #include "i18n/catalog/Log.h"
 #include "data/CameraMath.h"
 #include "data/Knn.h"
@@ -75,8 +76,10 @@ Mat3f invert3x3(const Mat3f& m) { return colorspace::invert3x3(m); }
 
 ColorResolution resolve_color(const TrainConfig& c) {
     ColorResolution r;
-    r.image_gamut  = c.image_color_gamut;
-    r.image_linear = c.image_color_is_linear;
+    // "Rec.709" is how the config says "sRGB, and do not take the file's word
+    // for it"; resolved it is the identity, same as the unset "".
+    r.image_gamut  = c.image_color_gamut == "Rec.709" ? "" : c.image_color_gamut;
+    r.image_linear = c.image_color_is_linear.value_or(false);
     std::optional<bool> convert = c.convert_initial_point_cloud_color;
 
     r.splat_gamut = c.splat_color_gamut;
@@ -509,6 +512,23 @@ void TrainerSession::load_dataset() {
     pcfg.metashape_ply           = cfg.metashape_ply;
     pcfg.metashape_psx           = cfg.metashape_psx;
     ds = parse_dataset(cfg.data, pcfg, cfg.data_format);
+
+    // An EXR carries its own colour space, and nothing downstream can recover
+    // it: DataManager hands the engine the file's raw scene-linear floats. The
+    // two halves are adopted independently, so declaring one keeps the other.
+    exr::Info exr_info;
+    if (!ds.image_filenames.empty() &&
+        exr::declared_color_space(ds.image_filenames.front(), exr_info)) {
+        const bool take_gamut = cfg.image_color_gamut.empty();
+        const bool take_linear = !cfg.image_color_is_linear.has_value();
+        if (take_gamut) cfg.image_color_gamut = exr_info.gamut;
+        if (take_linear) cfg.image_color_is_linear = exr_info.is_linear;
+        const std::string name =
+            cfg.image_color_gamut.empty() ? "Rec.709" : cfg.image_color_gamut;
+        if (take_linear)     log(lfmt(lmsg::exr_color_space, {name}));
+        else if (take_gamut) log(lfmt(lmsg::exr_gamut_from_file, {name}));
+        if (take_gamut && !exr_info.gamut_known) log(lmsg::exr_gamut_unknown.get());
+    }
 
     // relative_scale scales the world: point means here, and the c2w
     // translations pre-bake so the baked viewmats follow.

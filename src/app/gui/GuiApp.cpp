@@ -3,6 +3,7 @@
 #include "app/gui/GuiApp.h"
 
 #include "core/ColorSpace.h"
+#include "core/ExrImage.h"
 
 #include "checkpoint/SplatPly.h"
 #include "data/Json.h"
@@ -1187,6 +1188,10 @@ void GuiApp::add_sources(const std::vector<std::string>& paths, bool replace) {
         // are remembered nowhere: a run must never quietly cost an hour of
         // inference nobody asked for. (Not mid-run: that would disable it.)
         if (!dataset_busy()) _geometry = GeometryJob{};
+        // ... and a different capture is a different colour space.
+        _sfm_job.image_gamut.clear();
+        _sfm_job.image_is_linear.reset();
+        _color_space_touched = false;
     }
     for (const std::string& path : inputs) _sources.push_back(make_source(path, _use_found_masks));
     for (const std::string& masks : mask_folders) {
@@ -1223,7 +1228,32 @@ void GuiApp::add_sources(const std::vector<std::string>& paths, bool replace) {
         _colmap_job.camera_mode = 1;
     }
     if (_mask_preview_input >= (int)_sources.size()) _mask_preview_input = 0;
+    adopt_exr_color_space();
     refresh_sources();
+}
+
+// A folder of EXRs declares its own colour space, and the picker for it is
+// under Advanced where nobody would think to look. Fill it in and say so.
+void GuiApp::adopt_exr_color_space() {
+    if (_color_space_touched) return;
+    std::error_code ec;
+    for (const PrepInput& s : _sources) {
+        if (s.is_video) continue;
+        for (fs::recursive_directory_iterator it(s.path, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            if (!it->is_regular_file(ec)) continue;
+            std::string e = it->path().extension().string();
+            for (char& c : e) c = (char)std::tolower((unsigned char)c);
+            if (e != ".exr") continue;
+            exr::Info info;
+            if (!exr::declared_color_space(it->path().string(), info)) return;
+            _sfm_job.image_gamut = info.gamut;
+            _sfm_job.image_is_linear = info.is_linear;
+            log(i18n::format(dmsg::log_exr_color_space,
+                             {info.gamut.empty() ? "Rec.709" : info.gamut}));
+            return;
+        }
+    }
 }
 
 void GuiApp::handle_dialog_result(const std::vector<std::string>& paths) {
@@ -3105,24 +3135,39 @@ void GuiApp::draw_dataset_rerun(const WorkspaceState& prior) {
 void GuiApp::draw_color_space_options(bool with_point_color) {
     ui::SeparatorText(dmsg::section_color_space);
 
+    // Item 0 of both pickers means "leave it to the file", which is what the
+    // child processes do when the flag is absent; anything else is stated on
+    // their command line, so an EXR header that lies can be overruled.
     ImGui::SetNextItemWidth(px(260.0f));
     int gamut = 0;
     for (int i = 0; i < (int)std::size(colorspace::kGamuts); i++)
-        if (_sfm_job.image_gamut == colorspace::kGamuts[i]) gamut = i;
+        if (_sfm_job.image_gamut == colorspace::kGamuts[i]) gamut = i + 1;
     if (ui::Combo(dmsg::input_gamut, &gamut,
-                  {&dmsg::gamut_rec709, &dmsg::gamut_aces2065_1,
-                   &dmsg::gamut_acescg, &dmsg::gamut_rec2020,
-                   &dmsg::gamut_adobergb, &dmsg::gamut_dcip3}))
-        _sfm_job.image_gamut = gamut == 0 ? "" : colorspace::kGamuts[gamut];
+                  {&dmsg::space_from_file, &dmsg::gamut_rec709,
+                   &dmsg::gamut_aces2065_1, &dmsg::gamut_acescg,
+                   &dmsg::gamut_rec2020, &dmsg::gamut_adobergb,
+                   &dmsg::gamut_dcip3})) {
+        _sfm_job.image_gamut = gamut == 0 ? "" : colorspace::kGamuts[gamut - 1];
+        _color_space_touched = true;
+    }
     ui::help_on_hover(dmsg::input_gamut_help);
 
-    ui::Checkbox(dmsg::input_is_linear, &_sfm_job.image_is_linear);
+    ImGui::SetNextItemWidth(px(260.0f));
+    int transfer = !_sfm_job.image_is_linear.has_value() ? 0
+                                                        : (*_sfm_job.image_is_linear ? 1 : 2);
+    if (ui::Combo(dmsg::input_is_linear, &transfer,
+                  {&dmsg::space_from_file, &dmsg::transfer_linear,
+                   &dmsg::transfer_display})) {
+        _sfm_job.image_is_linear =
+            transfer == 0 ? std::optional<bool>{} : std::optional<bool>(transfer == 1);
+        _color_space_touched = true;
+    }
     ui::help_on_hover(dmsg::input_is_linear_help);
 
     // COLMAP writes its own point cloud, so the choice is the built-in SfM's.
     if (!with_point_color) return;
-    ImGui::BeginDisabled(colorspace::is_identity(_sfm_job.image_gamut,
-                                                 _sfm_job.image_is_linear));
+    ImGui::BeginDisabled(colorspace::is_identity(
+        _sfm_job.image_gamut, _sfm_job.image_is_linear.value_or(false)));
     ui::Checkbox(dmsg::point_color_image_space,
                  &_sfm_job.point_color_in_image_space);
     ui::help_on_hover(dmsg::point_color_image_space_help);

@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -34,7 +35,7 @@ struct GeometryJob {
     bool overwrite = false;       // recompute maps that are already on disk
     // The dataset's colour space; frames convert to sRGB before inference.
     std::string image_gamut;
-    bool image_is_linear = false;
+    std::optional<bool> image_is_linear;
 };
 
 // One checkpoint the screen offers, largest last. Index 1 is the default: it

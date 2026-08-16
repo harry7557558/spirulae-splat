@@ -305,6 +305,9 @@ private:
     // images go into, and the default workspace.
     void refresh_sources();
     void rescan_found_masks();
+    // Adopt the EXR colour space when the pictures are EXRs, unless the user
+    // has already set one by hand.
+    void adopt_exr_color_space();
     void run_pending_if_stopped();
     void append_logs();
     void log(const std::string& s, bool detail = false);
@@ -321,6 +324,7 @@ private:
     std::string _pending_path;       // dataset dir for Pending::OpenDataset
     bool _pending_batch_skip = false;  // Pending::StartBatch's argument
     bool _parse_dirty = false;       // dataparser option edited -> reload
+    bool _color_space_touched = false;  // see adopt_exr_color_space
     bool _device_locked = false;     // backend initialized -> device fixed
 
     // Config being edited + the preset baseline it diffs against.

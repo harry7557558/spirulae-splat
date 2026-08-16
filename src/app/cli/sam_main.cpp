@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <future>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -153,7 +154,7 @@ void usage() {
                  H::label_common.get());
     help_row("--max-size <n>", H::common_max_size);
     help_row("--image-gamut <name>", H::common_image_gamut);
-    help_row("--image-linear", H::common_image_linear);
+    help_row("--image-linear / --no-image-linear", H::common_image_linear);
     std::fprintf(stderr,
                  "%s SS_NN_LOG=0..3  SS_VK_DEVICE  SS_PROFILE=1\n"
                  "             SS_VK_VALIDATION=1  SS_NN_DEBUG_SYNC=1\n",
@@ -197,7 +198,7 @@ struct Options {
 
     // The frames' colour space; they convert to sRGB before the model sees them.
     std::string image_gamut;
-    bool image_is_linear = false;
+    std::optional<bool> image_is_linear;   // unset: an EXR's own header decides
 
     // `mask`
     std::string shape_spec, mask_image, preview;
@@ -236,6 +237,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--image") o.image = next("--image");
         else if (a == "--image-gamut") o.image_gamut = next("--image-gamut");
         else if (a == "--image-linear") o.image_is_linear = true;
+        else if (a == "--no-image-linear") o.image_is_linear = false;
         else if (a == "--frames") o.frames = next("--frames");
         else if (a == "--out") o.out_dir = next("--out");
         else if (a == "--text") o.text = next("--text");
@@ -438,7 +440,8 @@ int cmd_track(const Options& o) {
         if (!e.is_regular_file()) continue;
         std::string ext = e.path().extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp")
+        if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" ||
+            ext == ".exr")
             files.push_back(e.path().string());
     }
     std::sort(files.begin(), files.end());
@@ -567,7 +570,7 @@ int cmd_track(const Options& o) {
 
 void write_preview(const std::string& frame, const app::FrameMask& fm,
                    const std::string& path, const std::string& gamut,
-                   bool is_linear) {
+                   std::optional<bool> is_linear) {
     nn::Image img = nn::load_image(frame, gamut, is_linear);
     if (img.empty()) return;
     std::vector<uint8_t> px;

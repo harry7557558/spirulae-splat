@@ -2,6 +2,8 @@
 
 #include "app/gui/FrameSelect.h"
 
+#include "core/ExrImage.h"
+
 #include "external/stb_image.h"
 
 #include <algorithm>
@@ -24,8 +26,18 @@ namespace {
 // Laplacian. Returns -1 on decode failure.
 double sharpness_score(const std::string& path) {
     int W = 0, H = 0, C = 0;
-    unsigned char* img = stbi_load(path.c_str(), &W, &H, &C, 3);
-    if (!img) return -1.0;
+    std::vector<uint8_t> exr_rgb;
+    unsigned char* img = nullptr;
+    if (exr::is_exr(path)) {
+        exr::Info info;
+        if (!exr::decode_srgb8(path, exr::Options(), info, exr_rgb).empty()) return -1.0;
+        W = info.width;
+        H = info.height;
+        img = exr_rgb.data();
+    } else {
+        img = stbi_load(path.c_str(), &W, &H, &C, 3);
+        if (!img) return -1.0;
+    }
 
     constexpr int S = 512;
     std::vector<float> gray((size_t)S * S);
@@ -49,7 +61,7 @@ double sharpness_score(const std::string& path) {
             mean += v;
         }
     }
-    stbi_image_free(img);
+    if (exr_rgb.empty()) stbi_image_free(img);
     mean /= (double)S * S;
     for (auto& v : gray) v -= (float)mean;
 

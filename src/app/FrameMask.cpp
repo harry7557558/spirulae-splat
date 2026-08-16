@@ -2,6 +2,8 @@
 
 #include "app/FrameMask.h"
 
+#include "core/ExrImage.h"
+
 #include "external/stb_image.h"
 #include "external/stb_image_write.h"
 #include "nn/core/Parallel.h"
@@ -56,6 +58,15 @@ struct Gray {
 Gray load_gray(const std::string& path) {
     Gray g;
     int comp = 0;
+    if (exr::is_exr(path)) {
+        exr::Info info;
+        exr::Options opt;
+        opt.channels = 1;
+        if (!exr::decode_srgb8(path, opt, info, g.px).empty()) return Gray{};
+        g.w = info.width;
+        g.h = info.height;
+        return g;
+    }
     unsigned char* d = stbi_load(path.c_str(), &g.w, &g.h, &comp, 1);
     if (!d) return Gray{};
     g.px.assign(d, d + (size_t)g.w * g.h);
@@ -335,12 +346,26 @@ std::string format_mask_shapes(const std::vector<MaskShape>& shapes) {
 
 bool image_size(const std::string& path, int& width, int& height) {
     int comp = 0;
+    if (exr::is_exr(path)) {
+        exr::Info info;
+        if (!exr::probe(path, info).empty()) return false;
+        width = info.width;
+        height = info.height;
+        return true;
+    }
     return stbi_info(path.c_str(), &width, &height, &comp) != 0;
 }
 
 bool load_rgb(const std::string& path, int& width, int& height,
               std::vector<uint8_t>& out) {
     int comp = 0;
+    if (exr::is_exr(path)) {
+        exr::Info info;
+        if (!exr::decode_srgb8(path, exr::Options(), info, out).empty()) return false;
+        width = info.width;
+        height = info.height;
+        return true;
+    }
     unsigned char* d = stbi_load(path.c_str(), &width, &height, &comp, 3);
     if (!d) return false;
     out.assign(d, d + (size_t)width * height * 3);
@@ -548,7 +573,7 @@ bool is_image_file(const fs::path& p) {
     std::string e = p.extension().string();
     for (char& c : e) c = (char)std::tolower((unsigned char)c);
     return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".bmp" ||
-           e == ".tif" || e == ".tiff" || e == ".webp";
+           e == ".tif" || e == ".tiff" || e == ".webp" || e == ".exr";
 }
 
 void intersect_with_file(std::vector<uint8_t>& px, int w, int h,

@@ -7,6 +7,7 @@
 // blits it. Pixels are 8-bit and interleaved; device tensors are nn::Tensor.
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,11 +21,11 @@ struct Image {
     bool empty() const { return data.empty(); }
 };
 
-// Decodes to RGB. An unreadable or unsupported file logs and returns empty().
-// `gamut` / `is_linear` describe the file (core/ColorSpace.h names); pixels
-// convert to sRGB, which is what every model here was trained on.
+// Decodes to RGB; an unreadable file logs and returns empty(). `gamut` /
+// `is_linear` describe the file (core/ColorSpace.h names, an unset half read
+// from an EXR's header); pixels convert to sRGB, what the models expect.
 Image load_image(const std::string& path, const std::string& gamut = "",
-                 bool is_linear = false);
+                 std::optional<bool> is_linear = std::nullopt);
 
 // Writes RGB. `quality` in 0..100 selects JPEG, anything else lossless PNG --
 // the same convention as reference/scripts/extract_frames.py.
