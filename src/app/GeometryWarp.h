@@ -16,6 +16,12 @@
 
 namespace app {
 
+// [sh, sw, channels] bytes -> [dh, dw, 3] floats in 0..1, what sampleFace
+// takes. Area average, not bilinear: at a 2x downscale bilinear reads two of
+// every three source pixels and aliases the structure the normals are made of.
+std::vector<float> resize_area(const uint8_t* src, int sw, int sh, int channels,
+                               int dw, int dh);
+
 // One camera, as data/DatasetParser.h describes it.
 struct GeometryCamera {
     int   model = 0;        // CameraModelType

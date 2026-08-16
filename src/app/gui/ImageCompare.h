@@ -1,14 +1,14 @@
 #pragma once
 
 // ImageCompare -- the training preview's second mode: one training frame's
-// ground truth beside the render of the same camera.
+// ground truth beside the render of the same camera, one row per modality the
+// run actually loaded (photo, and depth / normals where they are supervised).
 //
 // The pair comes out of the engine (engine_preview_forward), so what is on
 // screen is what the loss compares -- the same decode, mask, downscale,
 // fisheye / equirectangular split and per-image colour correction. Zoom and
-// pan are shared by the two panes, which is the point: the question this mode
-// answers is whether the render is soft because the model is, or because the
-// photograph was.
+// pan are shared by every pane: the question this mode answers is whether the
+// render is soft because the model is, or because the photograph was.
 //
 // GUI thread only, plus the one worker it starts for the engine call.
 // attach() once the engine is ready; detach() BEFORE the session goes away.
@@ -82,6 +82,11 @@ private:
         int  lay_cols = 1, lay_rows = 1;   // the canvas, in cells
         std::vector<FaceCell> cells;       // one per view, in view order
         std::vector<uint8_t> gt, render;   // [pack_rows*view_h, pack_cols*view_w, 3]
+        // The supervision modalities on the same grid, already coloured
+        // (app/DepthColor.h) so the UI thread only uploads. Empty when the
+        // run does not load them.
+        std::vector<uint8_t> gt_depth, render_depth;
+        std::vector<uint8_t> gt_normal, render_normal;
         std::vector<uint8_t> mask;         // the same grid; empty when there is none
         int  src_w = 0, src_h = 0;
         std::vector<uint8_t> src;          // the file itself, when asked for
@@ -138,6 +143,8 @@ private:
     bool _source_gt = false;
     bool _smooth = false;
     bool _live = true;
+    bool _show_depth = true;
+    bool _show_normal = true;
     std::string _filter;          // the picker's file-name search
     float _row_w = 0.0f, _row_used = 0.0f;   // toolbar packing (see place)
 
@@ -163,6 +170,11 @@ private:
     // Readback scratch, worker thread only. Reused across jobs: see run_job.
     std::vector<float> _wgt, _wrender;
     std::vector<uint8_t> _walpha;
+    // The supervision modalities, read back inside the engine mutex and
+    // coloured outside it: colouring 2 MPx would hold the trainer up for
+    // nothing.
+    std::vector<float> _wgt_depth, _wr_depth, _wgt_normal, _wr_normal;
+    std::vector<uint8_t> _wmodrgb;   // one of them coloured, before packing
 
     // ---- what is on screen ----
     Shot _shot;
@@ -171,6 +183,7 @@ private:
     bool _dirty = true;           // the selection changed; re-request
     bool _tex_dirty = true;       // the composite changed; re-upload
     Pane _gt, _render;
+    Pane _gt_depth, _render_depth, _gt_normal, _render_normal;
     std::string _error;
 
     // ---- refresh pacing while training (see draw) ----

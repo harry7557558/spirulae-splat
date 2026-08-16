@@ -1994,9 +1994,14 @@ void DataManagerImpl::fetch_one(int32_t index, DecodedBatch& out) {
             // Neither: the row stays zero, which is what the training path
             // leaves for an image with no mask of its own.
         }
+        if (!out.depth_buffer.empty() && !_depth_filenames[index].empty())
+            decode_depth_into(_depth_filenames[index], out.depth_height,
+                              out.depth_width, out.depth_dtype,
+                              out.depth_buffer.data());
+        if (!out.normal_buffer.empty() && !_normal_filenames[index].empty())
+            decode_normal_into(_normal_filenames[index], out.normal_height,
+                               out.normal_width, out.normal_buffer.data());
     }
-    // Depth / normal slots stay as allocate_batch left them (zero); the
-    // preview forward runs without them.
     out.build_views();
 }
 

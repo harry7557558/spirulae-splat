@@ -282,12 +282,11 @@ struct WorkspaceState {
     bool frames = false;    // images/ this run would extract into
     bool features = false;  // features/, matches.bin, database.db -- reusable
     bool masks = false;     // masks/ this run would generate into
-    // sparse/: a reconstruction, which a new run replaces rather than resumes.
-    // Deliberately NOT evidence of a resumable run: a folder holding one opens
-    // in the trainer when it is dropped, so anything that gets this far with a
-    // sparse/ in it is someone else's dataset or a finished one, and the honest
-    // thing to do is warn that it is about to be written over.
+    // A reconstruction any dataset reader can open: this run's own sparse/, or
+    // the transforms.json / Metashape export of a dataset that arrived
+    // finished. A run pointed at one ADDS to it rather than rebuilding it.
     bool model = false;
+    bool geometry = false;  // normals/ or depths/, which a run adds to
     // Something a resumed run can pick up instead of redoing.
     bool resumable() const { return frames || features || masks; }
 };

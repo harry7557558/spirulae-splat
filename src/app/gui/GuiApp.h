@@ -13,6 +13,7 @@
 #include "app/gui/FileDialog.h"
 #include "app/gui/FeatureWatcher.h"
 #include "app/gui/FilmReel.h"
+#include "app/gui/GeometryPanel.h"
 #include "app/gui/ImageCompare.h"
 #include "app/gui/MatchMatrix.h"
 #include "app/gui/PairPreview.h"
@@ -206,6 +207,17 @@ private:
     bool input_pixel_size(const std::string& path, bool is_video,
                           int& w, int& h);
     void draw_masking_options();
+    void draw_geometry_options();
+    // Opens the geometry preview on the output folder when it already holds a
+    // reconstruction -- the only case where the real cameras are known -- and
+    // on the input the mask combo points at otherwise.
+    void open_geometry_preview();
+    // Fetch the selected checkpoint. No consent gate: the Metric3D exports are
+    // CC0 and BSD (src/metric3d/model/Fetch.h), unlike the SAM weights. The
+    // largest is two files, so what is pending is a queue.
+    void request_geometry_download();
+    void pump_geometry_download();
+    bool geometry_model_missing() const;
     // The step list and its bars, in place of the one stage line.
     void draw_dataset_steps();
     // The form and the button that acts on it, `height` tall.
@@ -224,6 +236,9 @@ private:
     // "Re-run masking only" and friends: what probe_workspace already knows,
     // as the actions it implies.
     void draw_dataset_rerun(const WorkspaceState& prior);
+    // What the output folder holds, at 1 Hz rather than per frame: the answer
+    // now costs a directory scan (a Metashape export is found by extension).
+    const WorkspaceState& workspace_state();
     // Opens "Try the mask" on the input the combo points at, which is also the
     // input whose clicks and stencil it edits.
     void open_mask_preview();
@@ -384,7 +399,7 @@ private:
     // written, the masks as they are made, and the frames again with the
     // features found on them. Separate because they answer different questions
     // and a run that does all three would otherwise overwrite its own evidence.
-    FilmReel _film_frames, _film_masks, _film_features;
+    FilmReel _film_frames, _film_masks, _film_features, _film_geometry;
     FeatureWatcher _features;
     MatchMatrix _matrix;
     // The two images behind whichever cell of the match map the cursor is on.
@@ -404,8 +419,13 @@ private:
     // The last step a run was on, so a finished run keeps showing its result.
     int _preview_last_stage = -1;
     // Stages a re-run is to redo rather than reuse, set by draw_dataset_rerun
-    // and consumed by start_dataset_job.
-    bool _redo_frames = false, _redo_masks = false;
+    // and by the checkbox beside the output folder, consumed by
+    // start_dataset_job. Without one, what is there is reused.
+    bool _redo_frames = false, _redo_masks = false, _redo_model = false;
+    // ... and the same for the maps, which is an overwrite rather than a step
+    // to skip. Separate from GeometryJob::overwrite so pressing the button
+    // does not leave the option ticked for every run after it.
+    bool _redo_geometry = false;
     // Panel-level state, copied into whichever job runs. The inputs are kept as
     // the struct both runners take (PrepInput), so the panel edits the thing
     // that runs instead of a parallel copy of it: a video file or photo folder
@@ -433,11 +453,21 @@ private:
     // Which input "Try the mask" runs on: which input a new clicked object
     // prompts (MaskClick::source) and which one's stencil the panel edits.
     int _mask_preview_input = 0;
+
+    // ---- depth and normals ----
+    // One job for both engines (SfmJob / ColmapJob carry a copy), the panel
+    // that tries it on one frame, and the checkpoint fetch.
+    GeometryJob _geometry;
+    GeometryPanel _geometry_panel;
+    FileDownload _geom_download;
+    std::vector<GeometryDownload> _geom_queue;
     // input_pixel_size()'s cache, keyed by input path. A zero pair is a
     // remembered "could not tell", so nothing is probed twice.
     std::map<std::string, std::pair<int, int>> _input_size;
 
-    // Segmentation checkpoints.
+    // The segmentation checkpoint in use. Not persisted -- neither is any
+    // other masking or geometry setting, so a fresh session never runs a
+    // model the last one happened to pick.
     std::string _model_id = "sam3-q4_0";
     ModelDownload _download;
 
@@ -528,6 +558,11 @@ private:
     // Masks sitting beside the photos are adopted automatically; this is the
     // way out for a folder whose masks/ describes something else.
     bool _use_found_masks = true;
+
+    // workspace_state()'s cache: what it was asked about and when.
+    WorkspaceState _ws_state;
+    std::string _ws_state_key;
+    double _ws_state_at = -1.0;
 
     // VRAM readout on the status strip, polled from the backend at ~2 Hz.
     backend::MemoryUsage _vram;

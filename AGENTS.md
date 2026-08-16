@@ -168,8 +168,8 @@ Everything builds into **one executable**, `build/spirula`: no arguments opens
 the GUI, `spirula sfm|train|sam|mesh` are the command-line tools, and a symlink
 named `spirula-sfm` runs that tool directly (`src/app/Tools.h`);
 `spirula geometry` estimates depth and normals for a dataset. The GUI runs
-reconstruction by re-running itself as a child process, so there is no sibling
-binary to keep next to it. `-DSS_SEPARATE_TOOLS=ON` also builds the old
+reconstruction and that estimation by re-running itself as a child process, so
+there is no sibling binary to keep next to it. `-DSS_SEPARATE_TOOLS=ON` also builds the old
 per-tool executables.
 
 Backends build into different trees; keep them separate (`-B build_cuda`,

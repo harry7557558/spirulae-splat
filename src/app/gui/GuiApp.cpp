@@ -14,6 +14,7 @@
 #include "i18n/Locale.h"
 #include "i18n/catalog/Brand.h"
 #include "i18n/catalog/Dataset.h"
+#include "i18n/catalog/Geometry.h"
 #include "i18n/catalog/Gui.h"
 #include "i18n/catalog/Train.h"
 #include "i18n/catalog/TrainFields.h"
@@ -38,6 +39,7 @@ namespace i18n = spirula::i18n;
 namespace msg = spirula::i18n::msg::gui;
 namespace fld = spirula::i18n::msg::field;
 namespace dmsg = spirula::i18n::msg::dataset;
+namespace gmsg = spirula::i18n::msg::geometry;
 using spirula::i18n::Msg;
 
 namespace gui {
@@ -165,10 +167,13 @@ void GuiApp::shutdown() {
     _viewing_splat = false;
     _segment.close();
     _segment.destroy_gl();
+    _geometry_panel.close();
+    _geometry_panel.destroy_gl();
     _colmap.cancel();
     _sfm.cancel();
     reset_dataset_preview();
     _download.cancel();
+    _geom_download.cancel();
     _font_download.cancel();
     _runner.shutdown();
 }
@@ -199,7 +204,6 @@ void GuiApp::load_settings() {
         else if (k == "python_exe" && !v.empty()) _python_exe = v;
         else if (k == "sfm_engine") _engine = v == "colmap" ? Engine::Colmap
                                                             : Engine::BuiltIn;
-        else if (k == "mask_model" && !v.empty()) _model_id = v;
         else if (k == "accepted_license" && !v.empty() && !license_accepted(v))
             _accepted_licenses.push_back(v);
         else if (k == "lang" && !v.empty()) saved_lang = v;
@@ -241,7 +245,6 @@ void GuiApp::save_settings() {
     std::fprintf(f, "python_exe=%s\n", _python_exe.c_str());
     std::fprintf(f, "sfm_engine=%s\n",
                  _engine == Engine::Colmap ? "colmap" : "builtin");
-    std::fprintf(f, "mask_model=%s\n", _model_id.c_str());
     std::fprintf(f, "lang=%s\n", spirula::i18n::code(spirula::i18n::current()));
     std::fprintf(f, "ui_scale=%.3f\n", _scale.user());
     std::fprintf(f, "panel_w=%.1f\n", _panel_w);
@@ -1178,6 +1181,10 @@ void GuiApp::add_sources(const std::vector<std::string>& paths, bool replace) {
     if (replace && !inputs.empty()) {
         _sources.clear();
         _mask_preview_input = 0;
+        // A different capture is a different job, and the geometry options
+        // are remembered nowhere: a run must never quietly cost an hour of
+        // inference nobody asked for. (Not mid-run: that would disable it.)
+        if (!dataset_busy()) _geometry = GeometryJob{};
     }
     for (const std::string& path : inputs) _sources.push_back(make_source(path, _use_found_masks));
     for (const std::string& masks : mask_folders) {
@@ -1332,6 +1339,9 @@ void GuiApp::frame() {
 
     append_logs();
     run_pending_if_stopped();
+    // vit-giant2 is two files, so the fetch is a queue that has to be stepped
+    // on from somewhere that runs whatever screen is up.
+    pump_geometry_download();
     // Before the reload check below: between two batch rows the runner is
     // briefly idle, and a stale _parse_dirty would start a dataset parse right
     // where the next row wants the engine.
@@ -1816,6 +1826,18 @@ bool GuiApp::mask_model_missing() const {
     return selected_model_path().empty();
 }
 
+const WorkspaceState& GuiApp::workspace_state() {
+    std::string key = _workspace;
+    for (const PrepInput& s : _sources) key += '\n' + s.path + '\n' + s.mask_dir;
+    const double now = ImGui::GetTime();
+    if (key != _ws_state_key || _ws_state_at < 0.0 || now - _ws_state_at > 1.0) {
+        _ws_state_key = std::move(key);
+        _ws_state_at = now;
+        _ws_state = probe_workspace(_workspace, _sources);
+    }
+    return _ws_state;
+}
+
 // The panel edits one set of fields; each runner gets its own struct because
 // their remaining options do not overlap. This is the one place they are
 // copied across, so a field cannot be set on the screen and silently not run.
@@ -1881,6 +1903,15 @@ void GuiApp::sync_dataset_jobs() {
 
     _sfm_job.prep.redo_frames = _colmap_job.redo_frames = _redo_frames;
     _sfm_job.prep.redo_masks = _colmap_job.redo_masks = _redo_masks;
+    _sfm_job.redo_model = _colmap_job.redo_model = _redo_model;
+    // The same step either way: `spirula geometry` over the finished dataset.
+    _sfm_job.geometry = _colmap_job.geometry = _geometry;
+    _sfm_job.geometry.overwrite = _colmap_job.geometry.overwrite =
+        _geometry.overwrite || _redo_geometry;
+    // A settings file written by a build that HAS the inference layer must not
+    // make a run on one that has not fail at the last step.
+    _sfm_job.geometry.enable = _colmap_job.geometry.enable =
+        _geometry.enable && geometry_availability().empty();
 }
 
 void GuiApp::update_dataset_job() {
@@ -1895,14 +1926,14 @@ void GuiApp::start_dataset_job() {
     // The preview holds a multi-gigabyte backbone; the run about to start
     // wants that VRAM for reconstruction.
     _segment.close();
+    _geometry_panel.close();
     reset_dataset_preview();
-    const RunFilms films{&_film_frames, &_film_masks};
+    const RunFilms films{&_film_frames, &_film_masks, &_film_geometry};
     if (effective_engine() == Engine::BuiltIn) _sfm.start(_sfm_job, films);
     else                                      _colmap.start(_colmap_job, films);
     // One run each: a re-do that stayed armed would throw the same step away
     // again the next time the button is pressed.
-    _redo_frames = _redo_masks = false;
-    _sfm_job.redo_model = _colmap_job.redo_model = false;
+    _redo_frames = _redo_masks = _redo_model = _redo_geometry = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -2019,15 +2050,23 @@ void GuiApp::draw_dataset_source() {
     // would write over. The output folder is often the input folder -- that is
     // the point of the images/ + masks/ layout -- so the input's own images do
     // not count as either (probe_workspace).
-    const WorkspaceState prior = probe_workspace(_workspace, _sources);
+    const WorkspaceState& prior = workspace_state();
     if (prior.resumable()) {
         ui::Checkbox(dmsg::resume_previous, &_resume);
         ui::help_on_hover(dmsg::resume_previous_help);
         ImGui::SameLine();
         ui::TextDisabled(dmsg::unfinished_run_detected);
     }
-    if (prior.model)
-        ui::TextColoredWrapped(kWarn, dmsg::would_overwrite_model);
+    // A finished dataset in the output folder is REUSED, which is what lets a
+    // capture somebody else reconstructed be given masks, depth and normals
+    // without an hour of rebuilding it.
+    if (prior.model) {
+        ui::TextColoredWrapped(_redo_model ? kWarn : kOk,
+                               _redo_model ? dmsg::model_will_be_replaced
+                                           : dmsg::model_found_reuse);
+        ui::Checkbox(dmsg::reconstruct_again, &_redo_model);
+        ui::help_on_hover(dmsg::reconstruct_again_help);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2341,6 +2380,8 @@ void GuiApp::open_mask_preview() {
         return;
     }
     const PrepInput& s = _sources[(size_t)_mask_preview_input];
+    // One backbone on the device at a time; see open_geometry_preview.
+    _geometry_panel.close();
     // The preview reads the video the same way preparation will: in process
     // where the driver can, ffmpeg where it cannot or where the job said to.
     _segment.open(s.path, s.is_video, _mask_enable ? selected_model_path() : "",
@@ -2397,10 +2438,8 @@ void GuiApp::draw_masking_options() {
                     cached ? std::string(catalog[i].label->get())
                            : i18n::format(dmsg::mask_model_needs_download,
                                           {catalog[i].label->get()});
-                if (ui::SelectableRaw(label, (int)i == model_idx)) {
+                if (ui::SelectableRaw(label, (int)i == model_idx))
                     _model_id = catalog[i].id;
-                    save_settings();
-                }
                 if (ImGui::IsItemHovered()) ui::SetTooltip(*catalog[i].blurb);
             }
             ImGui::EndCombo();
@@ -2562,6 +2601,169 @@ void GuiApp::draw_masking_options() {
 }
 
 // ---------------------------------------------------------------------------
+// Depth and normals
+// ---------------------------------------------------------------------------
+
+bool GuiApp::geometry_model_missing() const {
+    if (!_geometry.enable) return false;
+    if (!geometry_availability().empty()) return false;
+    return !geometry_model_cached(_geometry.model);
+}
+
+void GuiApp::request_geometry_download() {
+    if (_geom_download.state() == FileDownload::State::Running) return;
+    _geom_queue = geometry_model_downloads(_geometry.model);
+    pump_geometry_download();
+}
+
+void GuiApp::pump_geometry_download() {
+    if (_geom_download.state() == FileDownload::State::Running) return;
+    // A failed part means the rest is pointless: vit-giant2's weights are
+    // useless without the sibling the graph names.
+    if (_geom_download.state() == FileDownload::State::Failed ||
+        _geom_download.state() == FileDownload::State::Cancelled)
+        _geom_queue.clear();
+    if (_geom_queue.empty()) return;
+    const GeometryDownload d = _geom_queue.front();
+    _geom_queue.erase(_geom_queue.begin());
+    _geom_download.start(d.url, d.dest, d.bytes);
+}
+
+void GuiApp::open_geometry_preview() {
+    // One multi-gigabyte backbone at a time: the mask preview holds SAM and
+    // this one holds Metric3D, and the inference layer's pool is process-wide.
+    _segment.close();
+    const PrepInput* in =
+        _sources.empty() ? nullptr
+                         : &_sources[(size_t)std::min((size_t)_mask_preview_input,
+                                                      _sources.size() - 1)];
+    _geometry_panel.open(in ? in->path : std::string(), in && in->is_video,
+                         _workspace, in ? in->camera_model : std::string("opencv"),
+                         in ? in->focal_factor : 0.0f, _ffmpeg_exe,
+                         _sfm_job.prep.force_external_decode);
+}
+
+void GuiApp::draw_geometry_options() {
+    const std::string why = geometry_availability();
+    if (!why.empty()) {
+        // Nothing here can work in this build, so offer no switch at all --
+        // one that fails when the run reaches it is worse than its absence.
+        ui::TextDisabledWrapped(dmsg::geom_unavailable);
+        ui::help_on_hover_raw(why.c_str());
+        return;
+    }
+
+    ui::Checkbox(dmsg::geom_enable, &_geometry.enable);
+    ui::help_on_hover(dmsg::geom_enable_help);
+    if (!_geometry.enable) return;
+
+    ImGui::Indent();
+
+    // ---- the checkpoint ----
+    const auto& catalog = geometry_models();
+    int model_idx = 1;
+    for (size_t i = 0; i < catalog.size(); i++)
+        if (_geometry.model == catalog[i].id) model_idx = (int)i;
+    ImGui::SetNextItemWidth(px(260.0f));
+    if (ui::BeginCombo(dmsg::geom_model, catalog[(size_t)model_idx].label->get())) {
+        for (size_t i = 0; i < catalog.size(); i++) {
+            const bool cached = geometry_model_cached(catalog[i].id);
+            const std::string label =
+                cached ? std::string(catalog[i].label->get())
+                       : i18n::format(dmsg::mask_model_needs_download,
+                                      {catalog[i].label->get()});
+            if (ui::SelectableRaw(label, (int)i == model_idx))
+                _geometry.model = catalog[i].id;
+            if (ImGui::IsItemHovered()) ui::SetTooltip(*catalog[i].blurb);
+        }
+        ImGui::EndCombo();
+    }
+    ui::TextDisabled(*catalog[(size_t)model_idx].blurb);
+
+    const bool downloading = _geom_download.state() == FileDownload::State::Running;
+    if (downloading) {
+        // The overlay is a byte count from curl, not a sentence.
+        ui::ProgressBarRaw(std::max(_geom_download.progress(), 0.0f),
+                           ImVec2(px(260.0f), 0), _geom_download.status().c_str());
+        ImGui::SameLine();
+        // The mask download's Stop button carries the same message; two of
+        // them can be on screen at once, so this one needs its own ID.
+        ImGui::PushID("geomdl");
+        if (ui::Button(dmsg::stop)) {
+            _geom_queue.clear();
+            _geom_download.cancel();
+        }
+        ImGui::PopID();
+    } else if (geometry_model_missing()) {
+        if (ui::Button(dmsg::geom_get_model)) request_geometry_download();
+        ImGui::SameLine();
+        ui::TextDisabledRaw(human_bytes(catalog[(size_t)model_idx].bytes));
+        if (_geom_download.state() == FileDownload::State::Failed)
+            ui::TextColoredWrappedRaw(kErr, _geom_download.status());
+    } else {
+        ui::TextColored(kOk, dmsg::geom_model_ready);
+    }
+
+    // ---- what it writes ----
+    ui::Checkbox(dmsg::geom_write_normals, &_geometry.want_normal);
+    ImGui::SameLine();
+    ui::Checkbox(dmsg::geom_write_depth, &_geometry.want_depth);
+    ui::help_on_hover(gmsg::opt_depth);
+    if (!_geometry.want_normal && !_geometry.want_depth)
+        ui::TextColoredWrapped(kWarn, dmsg::geom_nothing_to_write);
+
+    if (ui::Button(dmsg::geom_try)) open_geometry_preview();
+    ui::help_on_hover(dmsg::geom_try_help);
+
+    if (ui::CollapsingHeader(dmsg::geom_advanced)) {
+        ImGui::SetNextItemWidth(px(220.0f));
+        if (ui::InputInt(dmsg::geom_max_size, &_geometry.max_size))
+            _geometry.max_size = std::clamp(_geometry.max_size, 224, 4096);
+        ui::help_on_hover(gmsg::opt_max_size);
+
+        // png / jpg / relative / mm are what config.json and the flag spell,
+        // so the values stay as they are and the label carries the meaning.
+        ImGui::SetNextItemWidth(px(220.0f));
+        int fmt = _geometry.normal_jpg ? 1 : 0;
+        static const char* kFormats[] = {"png", "jpg"};
+        if (ui::ComboRaw(ui::detail::label(dmsg::geom_normal_format), &fmt,
+                         kFormats, 2))
+            _geometry.normal_jpg = fmt == 1;
+        ui::help_on_hover(gmsg::opt_normal_format);
+        if (_geometry.normal_jpg) {
+            ImGui::SetNextItemWidth(px(220.0f));
+            if (ui::InputInt(dmsg::geom_jpeg_quality, &_geometry.jpeg_quality))
+                _geometry.jpeg_quality = std::clamp(_geometry.jpeg_quality, 1, 99);
+            ui::help_on_hover(gmsg::opt_jpeg_quality);
+        }
+
+        ImGui::BeginDisabled(!_geometry.want_depth);
+        ImGui::SetNextItemWidth(px(220.0f));
+        int units = _geometry.depth_mm ? 1 : 0;
+        static const char* kUnits[] = {"relative", "mm"};
+        if (ui::ComboRaw(ui::detail::label(dmsg::geom_depth_units), &units,
+                         kUnits, 2))
+            _geometry.depth_mm = units == 1;
+        ui::help_on_hover_disabled(gmsg::opt_depth_units);
+        ImGui::EndDisabled();
+
+        static const char* kTri[] = {"auto", "yes", "no"};
+        ImGui::SetNextItemWidth(px(220.0f));
+        ui::ComboRaw(ui::detail::label(dmsg::geom_split), &_geometry.split, kTri, 3);
+        ui::help_on_hover(gmsg::opt_split);
+        ImGui::SetNextItemWidth(px(220.0f));
+        ui::ComboRaw(ui::detail::label(dmsg::geom_ray_depth), &_geometry.ray_depth,
+                     kTri, 3);
+        ui::help_on_hover(gmsg::opt_ray_depth);
+
+        ui::Checkbox(dmsg::geom_overwrite, &_geometry.overwrite);
+        ui::help_on_hover(gmsg::opt_overwrite);
+    }
+
+    ImGui::Unindent();
+}
+
+// ---------------------------------------------------------------------------
 // What the run is doing
 // ---------------------------------------------------------------------------
 
@@ -2574,6 +2776,7 @@ const Msg& step_name(Stage s) {
         case Stage::Features:  return dmsg::step_features;
         case Stage::Matching:  return dmsg::step_matching;
         case Stage::Mapping:   return dmsg::step_mapping;
+        case Stage::Geometry:  return dmsg::step_geometry;
         case Stage::Finishing: return dmsg::step_finishing;
     }
     return dmsg::step_frames;
@@ -2634,6 +2837,7 @@ int GuiApp::preview_for_stage() {
         case Stage::Masks:     return 1;
         case Stage::Features:  return 2;
         case Stage::Matching:  return 3;
+        case Stage::Geometry:  return 5;
         case Stage::Mapping:
         case Stage::Finishing: return 4;
     }
@@ -2711,7 +2915,8 @@ void GuiApp::reset_dataset_preview() {
     _matrix.destroy_gl();
     _pairs_view.clear();
     _pairs_view.destroy_gl();
-    for (FilmReel* f : {&_film_frames, &_film_masks, &_film_features}) {
+    for (FilmReel* f : {&_film_frames, &_film_masks, &_film_features,
+                        &_film_geometry}) {
         f->clear();
         f->destroy_gl();
     }
@@ -2722,7 +2927,8 @@ void GuiApp::reset_dataset_preview() {
 
 bool GuiApp::preview_has_content() const {
     return _film_frames.has_frames() || _film_masks.has_frames() ||
-           _film_features.has_frames() || !_matrix.empty() || _model_attached;
+           _film_features.has_frames() || !_matrix.empty() || _model_attached ||
+           _film_geometry.has_frames();
 }
 
 // The frames / match map / model area. Which one it shows follows the running
@@ -2732,10 +2938,12 @@ bool GuiApp::preview_has_content() const {
 // `height` of 0 asks for the splitter, which is what the one-column layout
 // needs; a column of its own hands its own height down instead.
 void GuiApp::draw_dataset_preview(float height) {
-    FilmReel* reels[3] = {&_film_frames, &_film_masks, &_film_features};
-    const bool avail[5] = {_film_frames.has_frames(), _film_masks.has_frames(),
+    // Null where the view is not a reel: the match map and the model.
+    FilmReel* reels[6] = {&_film_frames, &_film_masks, &_film_features,
+                          nullptr, nullptr, &_film_geometry};
+    const bool avail[6] = {_film_frames.has_frames(), _film_masks.has_frames(),
                            _film_features.has_frames(), !_matrix.empty(),
-                           _model_attached};
+                           _model_attached, _film_geometry.has_frames()};
     bool any_avail = false;
     for (bool v : avail) any_avail = any_avail || v;
     if (!any_avail) return;
@@ -2748,15 +2956,15 @@ void GuiApp::draw_dataset_preview(float height) {
     if (dataset_busy() && implied >= 0) _preview_last_stage = implied;
     int tab = _preview_tab >= 0 ? _preview_tab : (implied >= 0 ? implied : 0);
     if (!avail[tab]) {
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < 6; i++)
             if (avail[i]) { tab = i; break; }
     }
 
-    const Msg* names[5] = {&dmsg::view_frames, &dmsg::view_masks,
+    const Msg* names[6] = {&dmsg::view_frames, &dmsg::view_masks,
                            &dmsg::view_features, &dmsg::view_matrix,
-                           &dmsg::view_model};
+                           &dmsg::view_model, &dmsg::view_geometry};
     bool first = true;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         if (!avail[i]) continue;
         if (!first) ImGui::SameLine();
         first = false;
@@ -2789,7 +2997,7 @@ void GuiApp::draw_dataset_preview(float height) {
                                     ImGui::GetCursorStartPos().y);
     }
 
-    if (tab <= 2) {
+    if (reels[tab]) {
         reels[tab]->draw(h - px(8.0f));
         return;
     }
@@ -2837,35 +3045,44 @@ void GuiApp::draw_dataset_preview(float height) {
 // Re-doing one step of what is already in the output folder, instead of the
 // whole run. The rules are probe_workspace's; this only names them.
 void GuiApp::draw_dataset_rerun(const WorkspaceState& prior) {
-    if (!prior.resumable() && !prior.model) return;
+    if (!prior.resumable() && !prior.model && !prior.geometry) return;
     if (!ui::CollapsingHeader(dmsg::rerun_section)) return;
     ImGui::Indent();
     ui::TextDisabledWrapped(dmsg::rerun_section_help);
 
-    const bool builtin = effective_engine() == Engine::BuiltIn;
-    bool* redo_model = builtin ? &_sfm_job.redo_model : &_colmap_job.redo_model;
     bool go = false;
     if (prior.frames) {
         if (ui::Button(dmsg::rerun_frames)) {
             _redo_frames = _redo_masks = true;   // the masks describe the frames
-            *redo_model = go = true;
+            _redo_model = go = true;
         }
         ImGui::SameLine();
     }
     if (prior.masks) {
         if (ui::Button(dmsg::rerun_masks)) {
             _redo_masks = true;
-            *redo_model = go = true;
+            _redo_model = go = true;
         }
         ImGui::SameLine();
     }
     if (ui::Button(dmsg::rerun_model)) {
-        *redo_model = go = true;
+        _redo_model = go = true;
+    }
+    // Depth and normals are the one step that reruns on its own: they are read
+    // off the finished dataset and nothing downstream of them exists.
+    if (prior.geometry) {
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!_geometry.enable);
+        if (ui::Button(dmsg::rerun_geometry)) {
+            _redo_geometry = go = true;
+        }
+        ImGui::EndDisabled();
+        ui::help_on_hover_disabled(dmsg::rerun_geometry_help);
     }
     ImGui::NewLine();
     ImGui::Unindent();
-    // Every route re-reconstructs: a model built from frames or masks that have
-    // just been replaced describes neither.
+    // Every route but the last re-reconstructs: a model built from frames or
+    // masks that have just been replaced describes neither.
     if (go) start_dataset_job();
 }
 
@@ -3152,6 +3369,11 @@ void GuiApp::draw_dataset_form(float height, bool running) {
     ImGui::EndDisabled();
     ImGui::Spacing();
 
+    ImGui::BeginDisabled(dataset_locked(Stage::Geometry));
+    draw_geometry_options();
+    ImGui::EndDisabled();
+    ImGui::Spacing();
+
     ImGui::BeginDisabled(dataset_locked(Stage::Features));
     if (effective_engine() == Engine::BuiltIn) draw_sfm_advanced();
     else                                       draw_colmap_options();
@@ -3170,28 +3392,37 @@ void GuiApp::draw_dataset_form(float height, bool running) {
     if (!running) {
         bool ready = !_sources.empty() && !_workspace.empty();
         for (const PrepInput& s : _sources) ready = ready && !s.path.empty();
-        const bool need_model = mask_model_missing();
-        ImGui::BeginDisabled(!ready || need_model);
-        if (ui::Button(dmsg::create_dataset, ImVec2(px(200.0f), px(34.0f))))
+        const bool need_mask_model = mask_model_missing();
+        const bool need_geom_model = geometry_model_missing();
+        // The button names what pressing it does: a folder that already holds
+        // a reconstruction is added to, not built.
+        const bool adding = workspace_state().model && !_redo_model;
+        ImGui::BeginDisabled(!ready || need_mask_model || need_geom_model);
+        if (ui::Button(adding ? dmsg::update_dataset : dmsg::create_dataset,
+                       ImVec2(px(200.0f), px(34.0f))))
             start_dataset_job();
         ImGui::EndDisabled();
         if (!ready) {
             ImGui::SameLine();
             ui::TextDisabled(dmsg::pick_input_first);
-        } else if (need_model) {
-            // The masking options carry the same button, but they are a
-            // scroll away by the time somebody is reaching for this one.
+        } else if (need_mask_model || need_geom_model) {
+            // The options above carry the same buttons, but they are a scroll
+            // away by the time somebody is reaching for this one.
+            FileDownload& dl = need_mask_model ? _download : _geom_download;
             ImGui::SameLine();
-            ui::TextDisabled(dmsg::mask_model_first);
+            ui::TextDisabled(need_mask_model ? dmsg::mask_model_first
+                                             : dmsg::geom_model_first);
             ImGui::SameLine();
-            if (_download.state() == ModelDownload::State::Running)
-                ui::ProgressBarRaw(std::max(_download.progress(), 0.0f),
-                                   ImVec2(px(200.0f), 0),
-                                   _download.status().c_str());
-            else if (ui::Button(dmsg::mask_get_model))
-                request_model_download();
+            if (dl.state() == FileDownload::State::Running)
+                ui::ProgressBarRaw(std::max(dl.progress(), 0.0f),
+                                   ImVec2(px(200.0f), 0), dl.status().c_str());
+            else if (ui::Button(need_mask_model ? dmsg::mask_get_model
+                                                : dmsg::geom_get_model)) {
+                if (need_mask_model) request_model_download();
+                else                 request_geometry_download();
+            }
         }
-        if (ready) draw_dataset_rerun(probe_workspace(_workspace, _sources));
+        if (ready) draw_dataset_rerun(workspace_state());
     } else if (ui::Button(dmsg::cancel, ImVec2(px(200.0f), px(34.0f)))) {
         cancel_dataset_job();
     }
@@ -3317,6 +3548,7 @@ void GuiApp::draw_new_dataset() {
             _segment.draw(_mask, _sources[(size_t)_mask_preview_input].stencil);
         }
     }
+    if (_geometry_panel.is_open()) _geometry_panel.draw(_geometry);
     draw_license_modal();
 }
 

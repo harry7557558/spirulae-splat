@@ -564,9 +564,17 @@ void TrainerSession::load_dataset() {
     post = bake_post_split(
         ds, cfg.warp_to_pinhole, cfg.warp_spherical_to_pinhole);
 
-    // Warp-path feature guards.
-    has_depth  = !ds.depth_filenames.empty()  && cfg.load_depths;
-    has_normal = !ds.normal_filenames.empty() && cfg.load_normals;
+    // Warp-path guards, plus: a modality no weight reads is not loaded at all.
+    // Alpha is in the depth list because its validity mask IS the reference
+    // depth (per_pixel_losses.slang, `alpha_mask`).
+    const bool alpha_reads_depth =
+        cfg.apply_loss_for_mask &&
+        (cfg.alpha_loss_weight > 0.0f || cfg.alpha_loss_weight_under > 0.0f);
+    has_depth  = !ds.depth_filenames.empty()  && cfg.load_depths &&
+                 (cfg.depth_supervision_weight > 0.0f || alpha_reads_depth);
+    has_normal = !ds.normal_filenames.empty() && cfg.load_normals &&
+                 (cfg.normal_supervision_weight > 0.0f ||
+                  cfg.median_normal_supervision_weight > 0.0f);
     if (post.direct_equirect && (has_depth || has_normal))
         throw std::runtime_error(
             "Direct equirectangular training (warp_spherical_to_pinhole=0) "

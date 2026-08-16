@@ -127,6 +127,33 @@ void sample(const float* img, int w, int h, int C, float px, float py, float* ou
 
 }  // namespace
 
+std::vector<float> resize_area(const uint8_t* src, int sw, int sh, int channels,
+                               int dw, int dh) {
+    std::vector<float> out((size_t)dw * dh * 3, 0.0f);
+    if (!src || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || channels < 3)
+        return out;
+    nn::parallel_for(dh, [&](int64_t y0, int64_t y1) {
+        for (int64_t y = y0; y < y1; ++y) {
+            const int sy0 = (int)((double)y * sh / dh);
+            const int sy1 = std::max(sy0 + 1, (int)((double)(y + 1) * sh / dh));
+            for (int x = 0; x < dw; ++x) {
+                const int sx0 = (int)((double)x * sw / dw);
+                const int sx1 = std::max(sx0 + 1, (int)((double)(x + 1) * sw / dw));
+                double acc[3] = {0, 0, 0};
+                for (int sy = sy0; sy < sy1; ++sy)
+                    for (int sx = sx0; sx < sx1; ++sx) {
+                        const uint8_t* p = &src[((size_t)sy * sw + sx) * channels];
+                        for (int c = 0; c < 3; ++c) acc[c] += p[c];
+                    }
+                const double n = (double)(sy1 - sy0) * (sx1 - sx0) * 255.0;
+                for (int c = 0; c < 3; ++c)
+                    out[((size_t)y * dw + x) * 3 + c] = (float)(acc[c] / n);
+            }
+        }
+    });
+    return out;
+}
+
 void GeometryWarp::plan(const GeometryCamera& cam, int out_w, int out_h, bool split,
                         int patch, int max_face) {
     out_w_ = out_w;

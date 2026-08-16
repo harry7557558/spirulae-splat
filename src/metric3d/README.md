@@ -5,7 +5,9 @@ surface normal map out, with no onnxruntime, no PyTorch and no converter.
 
 Status: **done and wired in.** `spirula geometry <dataset>` writes the
 `normals/` and `depths/` a training run reads, and the forward pass matches
-onnxruntime on the same checkpoint to a relative L2 of 1.5e-3.
+onnxruntime on the same checkpoint to a relative L2 of 1.5e-3. The GUI runs it
+as the last step of a dataset run (`src/app/gui/GeometryRunner.h`) and tries it
+on one frame first (`src/app/gui/GeometryPanel.h`).
 
 It replaces `reference/scripts/predict_geometry.py`, which loaded the same
 weights through `torch.hub` and needed a CUDA PyTorch, mmcv and the model's own
@@ -255,7 +257,6 @@ could not produce.
 
 ## Not done yet
 
-- **The GUI.** CLI only, by request.
 - **Sky.** `predict_geometry.py` had a `--sky` mode that pulled in Depth
   Anything 3 and lang-segment-anything to find sky and flatten the depth there.
   Nothing of that is here; the 99.9th-percentile normalization in

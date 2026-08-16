@@ -36,13 +36,6 @@ namespace gui {
 
 namespace {
 
-bool is_image_file(const fs::path& p) {
-    std::string e = p.extension().string();
-    for (auto& c : e) c = (char)std::tolower((unsigned char)c);
-    return e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".webp" ||
-           e == ".tif" || e == ".tiff" || e == ".bmp";
-}
-
 // One colour per object, so a dot on the image and a row in the list are
 // obviously the same thing. Red is reserved for negative clicks.
 ImU32 object_color(int object) {
@@ -87,11 +80,12 @@ SegmentPanel::~SegmentPanel() {
 void SegmentPanel::open(const std::string& input, bool is_video,
                         const std::string& model_path,
                         const std::string& ffmpeg_exe, bool force_ffmpeg) {
-    _input = input;
-    _is_video = is_video;
+    _src = PreviewSource{};
+    _src.input = input;
+    _src.is_video = is_video;
+    _src.ffmpeg_exe = ffmpeg_exe.empty() ? "ffmpeg" : ffmpeg_exe;
+    _src.builtin_decode = !force_ffmpeg && backends().builtin_video;
     _model_path = model_path;
-    _ffmpeg_exe = ffmpeg_exe.empty() ? "ffmpeg" : ffmpeg_exe;
-    _force_ffmpeg = force_ffmpeg;
     _frame_idx = 0;
     _frame_dirty = true;
     _needs_run = true;
@@ -106,7 +100,8 @@ void SegmentPanel::open(const std::string& input, bool is_video,
         _status.clear();
         _error.clear();
     }
-    collect_frames(input, is_video);
+    // A dozen spread through the capture is enough to judge a prompt.
+    collect_preview_frames(_src, is_video ? 8 : 12, _frames, _all_files, _cancel);
     _open = true;
 }
 
@@ -136,81 +131,6 @@ void SegmentPanel::destroy_gl() {
     }
 }
 
-bool SegmentPanel::builtin_decode() const {
-    return !_force_ffmpeg && backends().builtin_video;
-}
-
-void SegmentPanel::collect_frames(const std::string& input, bool is_video) {
-    _frames.clear();
-    _all_files.clear();
-    _video_seconds = 0.0;
-    std::error_code ec;
-    if (is_video) {
-        // Frames are decoded on demand; the list is just how many offers the
-        // slider makes. Seeking is not supported by the decoder, so "frame N"
-        // means "the Nth frame we sample while reading forward", and the
-        // decoded index each offer lands on is filled in below.
-        constexpr int kOffers = 8;
-        long long total = 0;
-#ifdef SS_HAVE_VIDEO
-        if (builtin_decode()) {
-            video::VideoReader r;
-            if (r.open(input)) {
-                total = r.info().frame_count;
-                // Free here, and the only thing a later fallback would be
-                // missing: ffmpeg seeks by time, not by frame.
-                if (r.info().fps > 0.0)
-                    _video_seconds = (double)total / r.info().fps;
-            }
-        }
-#endif
-        if (total <= 0) {
-            // No in-process decoding on this machine, or it could not open the
-            // file: ffmpeg is what will read this video, in the preview and in
-            // the run, so ffmpeg is who to ask how long it is. The duration is
-            // what the frame worker seeks by -- it has no reader to count
-            // frames with.
-            VideoFacts facts;
-            if (ffmpeg_probe_video(_ffmpeg_exe, input, facts, _cancel)) {
-                _video_seconds = facts.duration;
-                total = facts.frames;
-            }
-        }
-        total = std::max(total, (long long)kOffers);
-        for (int i = 0; i < kOffers; i++) {
-            Frame f;
-            f.index = std::min(total - 1, (long long)i * (total / kOffers));
-            f.position = (float)((double)f.index / (double)std::max(1LL, total - 1));
-            _frames.push_back(f);
-        }
-        return;
-    }
-    std::vector<std::string> all;
-    // follow_directory_symlink for the same reason DatasetPrep walks that way:
-    // a prepared capture's images/ is often a link into the raw one, and the
-    // default iterator quietly returns nothing for it.
-    for (fs::recursive_directory_iterator it(
-             input, fs::directory_options::skip_permission_denied |
-                        fs::directory_options::follow_directory_symlink, ec), end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_regular_file(ec) && is_image_file(it->path()))
-            all.push_back(it->path().string());
-    std::sort(all.begin(), all.end());
-    _all_files = all;
-    // A dozen spread through the capture is enough to judge a prompt, and
-    // keeps the slider meaningful on a 3000-photo folder. The index kept is
-    // the one in the FULL list, because that is what the masking run counts.
-    const size_t n = all.size();
-    const size_t offers = std::min<size_t>(n, 12);
-    for (size_t i = 0; i < offers; i++) {
-        Frame f;
-        f.index = offers > 1 ? (long long)(i * (n - 1) / (offers - 1)) : 0;
-        f.path = all[(size_t)f.index];
-        f.position = n > 1 ? (float)((double)f.index / (double)(n - 1)) : 0.0f;
-        _frames.push_back(f);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Finding the border
 // ---------------------------------------------------------------------------
@@ -235,11 +155,11 @@ void SegmentPanel::start_detect() {
     _detecting = true;
 
     const std::vector<std::string> files = _all_files;
-    const std::string input = _input;
-    const bool is_video = _is_video;
-    const std::string ffmpeg_exe = _ffmpeg_exe;
-    const bool builtin = builtin_decode();
-    const double video_seconds = _video_seconds;
+    const std::string input = _src.input;
+    const bool is_video = _src.is_video;
+    const std::string ffmpeg_exe = _src.ffmpeg_exe;
+    const bool builtin = _src.builtin_decode;
+    const double video_seconds = _src.video_seconds;
 
     _worker = std::thread([this, files, input, is_video, ffmpeg_exe, builtin,
                            video_seconds] {
@@ -324,15 +244,10 @@ void SegmentPanel::start_job(const MaskSettings& s, const app::FrameMask& stenci
     if (_worker.joinable()) _worker.join();
 
     const int idx = _frame_idx;
-    const Frame frame = (idx >= 0 && idx < (int)_frames.size()) ? _frames[idx]
-                                                                : Frame{};
-    const std::string frame_path = frame.path;
-    const std::string input = _input;
-    const bool is_video = _is_video;
+    const PreviewFrame frame =
+        (idx >= 0 && idx < (int)_frames.size()) ? _frames[idx] : PreviewFrame{};
+    const PreviewSource src = _src;
     const std::string model = _model_path;
-    const std::string ffmpeg_exe = _ffmpeg_exe;
-    const bool builtin = builtin_decode();
-    const double video_seconds = _video_seconds;
     // Only what was drawn on THIS frame: the preview segments one still, with
     // no memory bank, so a click made on another frame has nothing to say
     // about this one. The run is where they all come together.
@@ -350,9 +265,8 @@ void SegmentPanel::start_job(const MaskSettings& s, const app::FrameMask& stenci
         _status = dmsg::preview_working.get();
     }
 
-    _worker = std::thread([this, settings, model, frame, frame_path, input, is_video,
-                           idx, clicks, frame_dirty, ffmpeg_exe, builtin,
-                           video_seconds, stencil] {
+    _worker = std::thread([this, settings, model, frame, src, idx, clicks,
+                           frame_dirty, stencil] {
         // Every failure below leaves through `return set_error(...)`, so the
         // flag cannot be cleared at the end of the function: one early exit
         // would strand it at true, and start_job() refuses to run while it is
@@ -388,68 +302,16 @@ void SegmentPanel::start_job(const MaskSettings& s, const app::FrameMask& stenci
             Job& j = *_job;
 
             // ---- the frame ----
-            const std::string key = is_video ? ("#" + std::to_string(idx))
-                                             : frame_path;
+            const std::string key = src.is_video ? ("#" + std::to_string(idx))
+                                                 : frame.path;
             if (frame_dirty || j.frame_key != key || j.frame.empty()) {
                 set_status(dmsg::preview_loading_frame);
                 Rgb img;
-                if (is_video) {
-#ifdef SS_HAVE_VIDEO
-                    if (builtin) {
-                        // No seek: read forward to the frame this offer names.
-                        video::VideoReader r;
-                        if (r.open(input)) {
-                            for (long long i = 0; i <= frame.index; i++) {
-                                if (_cancel.load()) return;
-                                nn::Image f = r.readFrame();
-                                if (f.empty()) break;
-                                img.w = f.width;
-                                img.h = f.height;
-                                img.px = std::move(f.data);
-                            }
-                        }
-                    }
-#else
-                    (void)builtin;
-#endif
-                    // The same fallback the dataset run takes when the driver
-                    // cannot decode (DatasetPrep::extract_video): shell out to
-                    // ffmpeg. It is a whole subprocess for one still, which is
-                    // why it is not the first choice -- but it is the only
-                    // thing between "no hardware decoding" and a panel that
-                    // shows nothing at all, and the run will read this video
-                    // the same way.
-                    if (img.empty()) {
-                        if (!command_exists(ffmpeg_exe))
-                            return set_error(spirula::i18n::format(
-                                dmsg::preview_needs_ffmpeg, {ffmpeg_exe}));
-                        // ffmpeg seeks by time, and the very end of a file is
-                        // past the last frame often enough to be worth backing
-                        // away from.
-                        const double at = std::min(
-                            (double)frame.position * video_seconds,
-                            std::max(0.0, video_seconds - 0.1));
-                        const fs::path tmp =
-                            fs::temp_directory_path() /
-                            ("spirula-mask-preview-" +
-                             std::to_string(
-                                 std::chrono::steady_clock::now()
-                                     .time_since_epoch()
-                                     .count()) +
-                             ".jpg");
-                        const bool ok = ffmpeg_extract_frame(
-                            ffmpeg_exe, input, at, tmp.string(), _cancel);
-                        if (_cancel.load()) return;
-                        if (ok) app::load_rgb(tmp.string(), img.w, img.h, img.px);
-                        std::error_code rm;
-                        fs::remove(tmp, rm);
-                    }
-                    if (img.empty())
-                        return set_error(dmsg::preview_frame_unreadable.get());
-                } else {
-                    if (frame_path.empty() ||
-                        !app::load_rgb(frame_path, img.w, img.h, img.px))
-                        return set_error(dmsg::preview_frame_unreadable.get());
+                std::string err;
+                if (!load_preview_frame(src, frame, img.w, img.h, img.px, err,
+                                        _cancel)) {
+                    if (_cancel.load()) return;
+                    return set_error(err);
                 }
                 j.frame = std::move(img);
                 j.frame_key = key;
@@ -753,7 +615,8 @@ void SegmentPanel::draw_image(MaskSettings& settings, app::FrameStencil& stencil
     auto to_screen = [&](float u, float v) {
         return ImVec2(origin.x + u * size.x, origin.y + v * size.y);
     };
-    const Frame frame = _frames.empty() ? Frame{} : _frames[(size_t)_frame_idx];
+    const PreviewFrame frame =
+        _frames.empty() ? PreviewFrame{} : _frames[(size_t)_frame_idx];
     const bool hovered = ImGui::IsItemHovered();
 
     // The selected shape owns the mouse over its handles and over its body:
@@ -815,7 +678,7 @@ void SegmentPanel::draw_image(MaskSettings& settings, app::FrameStencil& stencil
         c.object = settings.current_object;
         c.frame = frame.index;
         c.position = frame.position;
-        c.source = _input;
+        c.source = _src.input;
         settings.clicks.push_back(c);
         start_job(settings, shown);
     }

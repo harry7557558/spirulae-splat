@@ -35,6 +35,7 @@
 
 #include "app/gui/DatasetPrep.h"   // MaskClick
 #include "app/gui/FilmReel.h"
+#include "app/gui/GeometryRunner.h"
 #include "app/gui/PrepProgress.h"
 #include "i18n/catalog/Dataset.h"
 
@@ -178,6 +179,11 @@ struct ColmapJob {
     int mask_detect_every = 1;
     int mask_memory_frames = 0;
     std::vector<MaskClick> mask_clicks;  // clicked objects, see DatasetPrep.h
+
+    // Depth and normals, written after the reconstruction from the dataset it
+    // produced. Shared with the built-in path (SfmJob), which runs the same
+    // child over the same folder.
+    GeometryJob geometry;
 };
 
 class ColmapRunner {
@@ -203,6 +209,7 @@ private:
     void run(ColmapJob job);
     void take_reconstruction(ColmapJob& job);
     void take_masking(PrepJob& prep);
+    void take_geometry(ColmapJob& job);
     void log(const std::string& line, bool detail = true);
     int  exec(const std::vector<std::string>& argv);
     void set_stage(Stage st, const std::string& s);

@@ -744,26 +744,6 @@ SS_MSG(sfm_resuming,
     RU("Продолжаем предыдущий запуск в {0}"),
     TR("{0} içindeki önceki çalıştırma sürdürülüyor"));
 
-SS_MSG(sfm_will_overwrite,
-    EN("Note: {0} already holds a reconstruction; this run writes over it."),
-    JA("メモ: {0} にはすでに復元結果があります。今回の実行で上書きします。"),
-    ZH_HANS("提示：{0} 中已有一份重建结果，本次运行会覆盖它。"),
-    ZH_HANT("提示：{0} 中已有一份重建結果，本次執行會覆蓋它。"),
-    KO("참고: {0}에 이미 복원 결과가 있습니다. 이번 실행이 덮어씁니다."),
-    DE("Hinweis: {0} enthält bereits eine Rekonstruktion; dieser Lauf "
-       "überschreibt sie."),
-    FR("Note : {0} contient déjà une reconstruction ; cette exécution "
-       "l'écrase."),
-    ES("Nota: {0} ya contiene una reconstrucción; esta ejecución la sobrescribe."),
-    PT("Nota: {0} já contém uma reconstrução; esta execução vai sobrescrevê-la."),
-    IT("Nota: {0} contiene già una ricostruzione; questa esecuzione la "
-       "sovrascrive."),
-    NL("Let op: {0} bevat al een reconstructie; deze uitvoering overschrijft "
-       "die."),
-    RU("Примечание: в {0} уже есть реконструкция; этот запуск её перезапишет."),
-    TR("Not: {0} zaten bir yeniden kurulum içeriyor; bu çalıştırma onu "
-       "üzerine yazacak."));
-
 SS_MSG(one_camera_per_folder,
     EN("images/ holds one folder per camera: switching to one camera per "
        "folder"),
@@ -788,32 +768,6 @@ SS_MSG(one_camera_per_folder,
        "папку»"),
     TR("images/ her kamera için bir klasör içeriyor: klasör başına bir kameraya "
        "geçiliyor"));
-
-SS_MSG(sfm_resume_skip_recon,
-    EN("Resume: a reconstruction already exists under sparse/; skipping "
-       "(delete it to reconstruct again)"),
-    JA("再開: sparse/ にすでに復元結果があります。とばします"
-       "（やり直すには削除してください）"),
-    ZH_HANS("继续：sparse/ 下已有重建结果，跳过（想重做请先删除）"),
-    ZH_HANT("繼續：sparse/ 下已有重建結果，略過（想重做請先刪除）"),
-    KO("이어서 진행: sparse/ 아래에 이미 복원 결과가 있어 건너뜁니다(다시 "
-       "하려면 지우세요)"),
-    DE("Fortsetzen: unter sparse/ liegt bereits eine Rekonstruktion; "
-       "übersprungen (zum Neuaufbau löschen)"),
-    FR("Reprise : une reconstruction existe déjà sous sparse/ ; étape ignorée "
-       "(supprimez-la pour recommencer)"),
-    ES("Reanudar: ya hay una reconstrucción en sparse/; se omite (bórrela para "
-       "reconstruir de nuevo)"),
-    PT("Retomar: já existe uma reconstrução em sparse/; pulando (apague-a para "
-       "reconstruir de novo)"),
-    IT("Ripresa: sotto sparse/ esiste già una ricostruzione; saltata (la "
-       "cancelli per rifarla)"),
-    NL("Hervatten: onder sparse/ staat al een reconstructie; overgeslagen "
-       "(verwijder die om opnieuw te reconstrueren)"),
-    RU("Продолжение: в sparse/ уже есть реконструкция; пропускаем (удалите её, "
-       "чтобы построить заново)"),
-    TR("Sürdürme: sparse/ altında zaten bir yeniden kurulum var; atlanıyor "
-       "(yeniden kurmak için silin)"));
 
 SS_MSG(sfm_partial,
     EN("Note: only part of the capture reconstructed. It will still train, but "
@@ -2753,6 +2707,120 @@ SS_MSG(err_no_exe_path,
        "выполнить этап реконструкции."),
     TR("Bu program kendi yolunu belirleyemedi, bu yüzden yeniden oluşturma "
        "adımını çalıştıramıyor."));
+
+SS_MSG(stage_geometry,
+    EN("Estimating depth and normals"),
+    JA("深度と法線を推定しています"),
+    ZH_HANS("正在估计深度与法线"),
+    ZH_HANT("正在估計深度與法線"),
+    KO("깊이와 법선을 추정하는 중"),
+    DE("Tiefe und Normalen werden geschätzt"),
+    FR("Estimation de la profondeur et des normales"),
+    ES("Estimando profundidad y normales"),
+    PT("A estimar profundidade e normais"),
+    IT("Stima di profondità e normali"),
+    NL("Diepte en normalen worden geschat"),
+    RU("Оценка глубины и нормалей"),
+    TR("Derinlik ve normaller kestiriliyor"));
+
+SS_MSG(sfm_reusing_model,
+    EN("{0} already holds a reconstruction; keeping it and only adding to it "
+       "(tick \"Reconstruct again\" to replace it)"),
+    JA("{0} にはすでに再構成結果があります。それを残し、上に足すだけにします"
+       "（置き換えるには「再構成をやり直す」を有効にしてください）"),
+    ZH_HANS("{0} 中已有一份重建结果，将保留它并只在其上追加（要替换请勾选"
+            "“重新重建”）"),
+    ZH_HANT("{0} 中已有一份重建結果，將保留它並只在其上追加（要取代請勾選"
+            "「重新重建」）"),
+    KO("{0} 에 이미 재구성 결과가 있어 그대로 두고 위에 더하기만 합니다"
+       "(바꾸려면 \"다시 재구성\" 을 켜세요)"),
+    DE("{0} enthält bereits eine Rekonstruktion; sie bleibt und es wird nur "
+       "ergänzt (\"Neu rekonstruieren\" ersetzt sie)"),
+    FR("{0} contient déjà une reconstruction ; elle est conservée et seulement "
+       "complétée (cochez « Reconstruire à nouveau » pour la remplacer)"),
+    ES("{0} ya contiene una reconstrucción; se conserva y solo se le añade "
+       "(marque «Reconstruir de nuevo» para sustituirla)"),
+    PT("{0} já contém uma reconstrução; fica e apenas se lhe acrescenta "
+       "(marque \"Reconstruir de novo\" para a substituir)"),
+    IT("{0} contiene già una ricostruzione; resta e le si aggiunge soltanto "
+       "(spunta \"Ricostruisci di nuovo\" per sostituirla)"),
+    NL("{0} bevat al een reconstructie; die blijft en er wordt alleen aan "
+       "toegevoegd (vink \"Opnieuw reconstrueren\" aan om hem te vervangen)"),
+    RU("В {0} уже есть реконструкция; она сохраняется, к ней только добавляется "
+       "(чтобы заменить, включите «Реконструировать заново»)"),
+    TR("{0} zaten bir yeniden kurma içeriyor; korunur ve yalnızca üzerine eklenir "
+       "(değiştirmek için \"Yeniden kur\" seçeneğini işaretleyin)"));
+
+SS_MSG(err_no_geometry_module,
+    EN("This build cannot estimate depth and normals (-DSS_BUILD_SAM=OFF); use "
+       "`spirula geometry` from a build that has it."),
+    JA("このビルドでは深度と法線を推定できません（-DSS_BUILD_SAM=OFF）。"
+       "対応したビルドの `spirula geometry` を使ってください。"),
+    ZH_HANS("这个构建无法估计深度与法线（-DSS_BUILD_SAM=OFF）；请用带该功能的构建"
+            "运行 `spirula geometry`。"),
+    ZH_HANT("這個組建無法估計深度與法線（-DSS_BUILD_SAM=OFF）；請用帶該功能的組建"
+            "執行 `spirula geometry`。"),
+    KO("이 빌드에서는 깊이와 법선을 추정할 수 없습니다(-DSS_BUILD_SAM=OFF). 해당 "
+       "기능이 있는 빌드의 `spirula geometry` 를 쓰세요."),
+    DE("Diese Fassung kann Tiefe und Normalen nicht schätzen "
+       "(-DSS_BUILD_SAM=OFF); `spirula geometry` aus einer Fassung nutzen, die "
+       "es kann."),
+    FR("Cette version ne peut pas estimer profondeur et normales "
+       "(-DSS_BUILD_SAM=OFF) ; utilisez `spirula geometry` d'une version qui le "
+       "peut."),
+    ES("Esta compilación no puede estimar profundidad ni normales "
+       "(-DSS_BUILD_SAM=OFF); use `spirula geometry` de una que sí pueda."),
+    PT("Esta compilação não consegue estimar profundidade nem normais "
+       "(-DSS_BUILD_SAM=OFF); use `spirula geometry` de uma que consiga."),
+    IT("Questa build non può stimare profondità e normali (-DSS_BUILD_SAM=OFF); "
+       "usa `spirula geometry` da una build che lo fa."),
+    NL("Deze build kan diepte en normalen niet schatten (-DSS_BUILD_SAM=OFF); "
+       "gebruik `spirula geometry` uit een build die het wel kan."),
+    RU("Эта сборка не умеет оценивать глубину и нормали (-DSS_BUILD_SAM=OFF); "
+       "используйте `spirula geometry` из сборки, где это есть."),
+    TR("Bu yapı derinlik ve normalleri kestiremez (-DSS_BUILD_SAM=OFF); bunu "
+       "yapabilen bir yapıdan `spirula geometry` kullanın."));
+
+SS_MSG(err_spawn_geometry,
+    EN("could not start the depth and normal estimation ({0})"),
+    JA("深度と法線の推定を起動できませんでした（{0}）"),
+    ZH_HANS("无法启动深度与法线估计程序（{0}）"),
+    ZH_HANT("無法啟動深度與法線估計程式（{0}）"),
+    KO("깊이와 법선 추정을 시작할 수 없습니다({0})"),
+    DE("die Schätzung von Tiefe und Normalen konnte nicht gestartet werden ({0})"),
+    FR("impossible de lancer l'estimation de profondeur et de normales ({0})"),
+    ES("no se pudo iniciar la estimación de profundidad y normales ({0})"),
+    PT("não foi possível iniciar a estimativa de profundidade e normais ({0})"),
+    IT("non è stato possibile avviare la stima di profondità e normali ({0})"),
+    NL("kon het schatten van diepte en normalen niet starten ({0})"),
+    RU("не удалось запустить оценку глубины и нормалей ({0})"),
+    TR("derinlik ve normal kestirimi başlatılamadı ({0})"));
+
+SS_MSG(err_geometry_failed,
+    EN("estimating depth and normals failed (see the log). The reconstruction "
+       "itself is finished and can be trained on as it is."),
+    JA("深度と法線の推定に失敗しました（ログを見てください）。再構成そのものは"
+       "完了しているので、そのまま学習に使えます。"),
+    ZH_HANS("深度与法线估计失败（请看日志）。重建本身已经完成，可以直接拿来训练。"),
+    ZH_HANT("深度與法線估計失敗（請看記錄）。重建本身已經完成，可以直接拿來訓練。"),
+    KO("깊이와 법선 추정에 실패했습니다(로그를 보세요). 재구성 자체는 끝났으므로 "
+       "그대로 학습에 쓸 수 있습니다."),
+    DE("das Schätzen von Tiefe und Normalen ist fehlgeschlagen (siehe Log). Die "
+       "Rekonstruktion selbst ist fertig und kann so trainiert werden."),
+    FR("l'estimation de la profondeur et des normales a échoué (voir le journal). "
+       "La reconstruction elle-même est terminée et peut servir telle quelle."),
+    ES("falló la estimación de profundidad y normales (mire el registro). La "
+       "reconstrucción en sí está terminada y sirve tal cual."),
+    PT("a estimativa de profundidade e normais falhou (veja o registo). A "
+       "reconstrução em si está concluída e serve tal como está."),
+    IT("la stima di profondità e normali è fallita (vedi il registro). La "
+       "ricostruzione è comunque completa e si può addestrare così com'è."),
+    NL("het schatten van diepte en normalen is mislukt (zie het logboek). De "
+       "reconstructie zelf is af en kan zo gebruikt worden."),
+    RU("оценка глубины и нормалей не удалась (см. журнал). Сама реконструкция "
+       "завершена, и на ней можно обучать как есть."),
+    TR("derinlik ve normal kestirimi başarısız oldu (günlüğe bakın). Yeniden "
+       "kurmanın kendisi tamamlandı ve olduğu gibi eğitilebilir."));
 
 }  // namespace log
 }  // namespace msg

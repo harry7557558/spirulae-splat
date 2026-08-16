@@ -42,4 +42,18 @@ void make_picture(const uint8_t* rgb, int w, int h, const uint8_t* mask,
 bool load_picture(const std::string& image_path, const std::string& mask_path,
                   int max_side, Picture& out);
 
+// One panel of a row picture.
+struct PicturePanel {
+    std::string path;
+    // A 16-bit depth PNG, coloured with the training viewport's ramp
+    // (app/DepthColor.h) rather than shown as the grey its high byte gives.
+    bool depth = false;
+};
+
+// Several files as ONE picture, side by side at a common height: a frame's
+// photograph, normal map and depth map are only worth anything read together.
+// A panel that will not load is skipped; false when none of them did.
+bool load_picture_row(const std::vector<PicturePanel>& panels, int max_side,
+                      Picture& out);
+
 }  // namespace gui

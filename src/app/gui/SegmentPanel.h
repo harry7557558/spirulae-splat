@@ -29,6 +29,7 @@
 #include "app/FrameMask.h"
 #include "app/gui/DatasetPrep.h"   // MaskClick
 #include "app/gui/GlLoader.h"
+#include "app/gui/PreviewFrames.h"
 
 #include <atomic>
 #include <memory>
@@ -87,7 +88,6 @@ private:
 
     void start_job(const MaskSettings& s, const app::FrameMask& stencil);
     void start_detect();
-    void collect_frames(const std::string& input, bool is_video);
     void upload_preview();
     void upload_stencil(const app::FrameMask& stencil);
     void draw_image(MaskSettings& settings, app::FrameStencil& stencil,
@@ -99,35 +99,13 @@ private:
     // border this panel found, shrunk by the current amount.
     app::FrameMask resolved(const app::FrameStencil& stencil) const;
 
-    // Is the built-in decoder both compiled in and usable on this device, and
-    // not switched off by the job's "always use ffmpeg"? False means every
-    // frame this panel shows comes from ffmpeg.
-    bool builtin_decode() const;
-
     // The settings hold every input's clicks; these are the ones on this picture.
-    bool mine(const MaskClick& c) const { return c.source == _input; }
+    bool mine(const MaskClick& c) const { return c.source == _src.input; }
 
     bool _open = false;
     std::string _model_path;
-    std::string _input;
-    bool _is_video = false;
-    std::string _ffmpeg_exe = "ffmpeg";
-    bool _force_ffmpeg = false;
-    // How long the video is, in seconds, when ffmpeg had to be asked. Zero for
-    // a folder of photos, and for a video the built-in decoder can seek by
-    // frame -- the ffmpeg path is the only one that needs a timestamp.
-    double _video_seconds = 0.0;
-
-    // One offer on the frame slider. `index` is what the masking run will call
-    // this frame and `position` is where it falls in the capture; a click
-    // records both, because which of the two survives depends on which
-    // extraction path runs (see MaskClick).
-    struct Frame {
-        std::string path;       // empty for a video: decoded on demand
-        long long   index = 0;
-        float       position = 0.0f;
-    };
-    std::vector<Frame> _frames;
+    PreviewSource _src;
+    std::vector<PreviewFrame> _frames;
     // Every image of a photo input, which is what the border fit reads. The
     // slider offers a dozen of them; a fit wants a spread of two dozen.
     std::vector<std::string> _all_files;

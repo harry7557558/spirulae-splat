@@ -30,6 +30,7 @@
 
 #include "app/gui/DatasetPrep.h"
 #include "app/gui/FilmReel.h"
+#include "app/gui/GeometryRunner.h"
 #include "app/gui/PrepProgress.h"
 #include "i18n/catalog/Dataset.h"
 
@@ -83,9 +84,13 @@ inline bool sfm_model_is_fisheye(const std::string& m) {
 struct SfmJob {
     // ---- shared with ColmapRunner's path ----
     PrepJob prep;
+    // ... and so is this: the depth and normal maps are written after the
+    // reconstruction, from the dataset it produced, whichever engine made it.
+    GeometryJob geometry;
 
     // ---- reconstruction ----
-    // Reconstruct again over frames and masks that are already there.
+    // Replace the model in the output folder. A run left to itself REUSES one,
+    // which is how a finished dataset gets masks and geometry without a rebuild.
     bool redo_model = false;
     int quality = 2;                  // 0 low, 1 medium, 2 high, 3 extreme
     int data_type = 0;                // 0 individual photos, 1 video, 2 internet
@@ -179,9 +184,10 @@ public:
 
 private:
     void run(SfmJob job);
-    // The two halves of update(), applied where the run reaches them.
+    // The three parts of update(), applied where the run reaches them.
     void take_reconstruction(SfmJob& job);
     void take_masking(PrepJob& prep);
+    void take_geometry(SfmJob& job);
     void log(const std::string& line, bool detail = true);
     void set_stage(Stage st, const std::string& s);
     // Stage changes driven by the child's output, which repeats a

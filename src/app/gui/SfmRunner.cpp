@@ -127,6 +127,7 @@ void SfmRunner::start(const SfmJob& job, RunFilms films) {
     _prog.reset();
     if (_films.frames) _films.frames->clear();
     if (_films.masks) _films.masks->clear();
+    if (_films.geometry) _films.geometry->clear();
     {
         std::lock_guard<std::mutex> lk(_mu);
         _error.clear();
@@ -175,6 +176,11 @@ void SfmRunner::take_reconstruction(SfmJob& job) {
         job.prep.inputs[i].focal_factor = _live.prep.inputs[i].focal_factor;
         job.prep.inputs[i].subcameras = _live.prep.inputs[i].subcameras;
     }
+}
+
+void SfmRunner::take_geometry(SfmJob& job) {
+    std::lock_guard<std::mutex> lk(_mu);
+    job.geometry = _live.geometry;
 }
 
 void SfmRunner::take_masking(PrepJob& prep) {
@@ -408,17 +414,13 @@ void SfmRunner::run(SfmJob job) {
         if (std::string why = availability(); !why.empty()) return fail(why);
 
         // What was there before this run touched anything. Not a reason to
-        // refuse: an existing sparse/ (see WorkspaceState::model), nor the
-        // input's own images -- writing the dataset next to the images it was
-        // built from is the layout every parser expects.
+        // refuse: neither an existing model nor the input's own images, which
+        // the dataset is deliberately written next to.
         const WorkspaceState prior = probe_workspace(ws.string(), job.prep.inputs);
         if (prior.resumable() && !job.prep.resume)
             return fail(lmsg::err_unfinished_run.get());
         if (prior.resumable())
             log(fmt(lmsg::sfm_resuming, {ws.string()}), /*detail=*/false);
-        if (prior.model)
-            log(fmt(lmsg::sfm_will_overwrite, {(ws / "sparse").string()}),
-                /*detail=*/false);
 
         // Where the child will write its snapshots, and the two files it
         // leaves behind. Published before the stages that produce them, so the
@@ -454,13 +456,11 @@ void SfmRunner::run(SfmJob job) {
         }
 
         // ---- 2. reconstruction --------------------------------------------
-        // Resume: a completed model means the mapper already ran -- but only
-        // when this run's own leftovers are there to say the model is ours. A
-        // sparse/ on its own is somebody else's dataset (or a finished one),
-        // and skipping the mapper for it would "reconstruct" by doing nothing.
-        if (job.prep.resume && !job.redo_model && prior.features &&
-            has_model(ws / "sparse")) {
-            log(lmsg::sfm_resume_skip_recon.get());
+        // A model already in the output folder is reused whoever made it, so
+        // a finished dataset can be given masks and geometry instead.
+        const bool reuse_model = prior.model && !job.redo_model;
+        if (reuse_model) {
+            log(fmt(lmsg::sfm_reusing_model, {ws.string()}), /*detail=*/false);
         } else {
             set_stage(Stage::Features, lmsg::stage_reconstructing_features.get());
             take_reconstruction(job);
@@ -549,14 +549,23 @@ void SfmRunner::run(SfmJob job) {
             }
         }
 
-        if (!has_model(ws / "sparse"))
+        // Only for a run that reconstructed: a reused model may be a
+        // transforms.json or a Metashape export, which has no sparse/ at all.
+        if (!reuse_model && !has_model(ws / "sparse"))
             return fail(lmsg::err_no_reconstruction.get());
 
-        // ---- 3. tidy up ----------------------------------------------------
-        // What the run leaves behind is swept by sweep_intermediates(), not
-        // here: the screen goes on reading the snapshots, the feature files
-        // and matches.bin after the run ends, which is when a user actually
-        // looks at the features and the match map.
+        // ---- 3. depth and normals -------------------------------------------
+        take_geometry(job);
+        if (job.geometry.enable) {
+            std::string err;
+            if (!run_geometry_step(job.geometry, ws.string(), prep.image_dir,
+                                   _prog, _films.geometry, _cancel, err))
+                return fail(err);
+        }
+
+        // ---- 4. tidy up ----------------------------------------------------
+        // Swept by sweep_intermediates(), not here: the screen goes on
+        // reading the snapshots and matches.bin after the run ends.
         {
             std::lock_guard<std::mutex> lk(_mu);
             _sweep_dir = job.keep_intermediate ? "" : ws.string();

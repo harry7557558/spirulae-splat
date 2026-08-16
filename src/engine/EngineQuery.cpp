@@ -176,6 +176,52 @@ void engine_copy_gt_alpha_to_host(TorchTensorView out) {
                t.numel() * sizeof(bool), backend::MemcpyKind::DeviceToHost);
 }
 
+std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_gt_depth_shape() {
+    auto& t = engine().gt.depth;
+    if (t.data_ptr() == nullptr) return {0, 0, 0, 0};
+    return {t.template size<0>(), t.template size<1>(), t.template size<2>(), 1LL};
+}
+
+std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_gt_normal_shape() {
+    auto& t = engine().gt.normal;
+    if (t.data_ptr() == nullptr) return {0, 0, 0, 0};
+    return {t.template size<0>(), t.template size<1>(), t.template size<2>(), 3LL};
+}
+
+void engine_copy_gt_depth_to_host(TorchTensorView out) {
+    auto& t = engine().gt.depth;
+    if (t.data_ptr() == nullptr || std::get<0>(out) == 0) return;
+    backend::memcpy_sync((void*)std::get<0>(out), t.data_ptr(),
+               t.numel() * sizeof(float), backend::MemcpyKind::DeviceToHost);
+}
+
+void engine_copy_gt_normal_to_host(TorchTensorView out) {
+    auto& t = engine().gt.normal;
+    if (t.data_ptr() == nullptr || std::get<0>(out) == 0) return;
+    backend::memcpy_sync((void*)std::get<0>(out), t.data_ptr(),
+               t.numel() * sizeof(float3), backend::MemcpyKind::DeviceToHost);
+}
+
+void engine_copy_render_depth_normal_to_host(TorchTensorView out) {
+    auto& depth = std::get<1>(engine().fwd.renders);
+    if (depth.data_ptr() == nullptr || std::get<0>(out) == 0) return;
+    const int64_t C = depth.template size<0>();
+    const int64_t H = depth.template size<1>();
+    const int64_t W = depth.template size<2>();
+    TorchTensorView normal = _pool_tv(PoolSlot::EngDepthNormal, C, H, W, 3);
+    // is_ray_depth is what EngineLoss.cpp passes; the rasterizer renders ray
+    // depth whatever the primitive.
+    depth_to_normal_forward(
+        engine().camera.model_str, engine().camera.distortion_str,
+        _dv_tv(engine().camera.intrins), _dt2d_tv(engine().camera.dist_coeffs),
+        /*is_ray_depth=*/true, DeviceTensor3D<float>(_dt3d_tv(depth)),
+        DeviceTensor3D<float3>(normal));
+    backend::memcpy_sync((void*)std::get<0>(out),
+                         (void*)(uintptr_t)std::get<0>(normal),
+                         (size_t)(C * H * W) * sizeof(float3),
+                         backend::MemcpyKind::DeviceToHost);
+}
+
 
 std::vector<std::tuple<std::string, size_t, size_t>> engine_get_pool_breakdown() {
     return DevicePool::global().getBreakdown();

@@ -235,19 +235,21 @@ std::map<std::string, float> engine_train_step_managed(
 // ---------------------------------------------------------------------------
 static TorchTensorView _tv_null() { return {0, 0, {}}; }
 
-// Install a decoded batch as GT + camera params and run the forward pass.
-// Shared by the eval stream and the by-index preview; both want the decode,
-// mask and warp training used, and neither wants loss, backward or optim.
+// Install a decoded batch as GT + camera params and run the forward pass;
+// neither caller wants loss, backward or optim. `with_geometry` installs the
+// depth and normal GT too, which costs the linear->ray conversion.
 static void _install_and_forward(const DecodedBatch& b, std::string primitive,
-                                 int sh_degree, bool packed) {
+                                 int sh_degree, bool packed,
+                                 bool with_geometry = false) {
+    const bool geom = with_geometry;
     if (b.K <= 1 && b.input_source_models.empty()) {
         set_camera_params((int)b.width, (int)b.height,
                           camera_model_to_string(b.model),
                           camera_distortion_to_string(b.distortion),
                           b.viewmats_view, b.intrins_view, b.dist_coeffs_view);
-        // No depth/normal: both callers compare RGB only, and skipping them
-        // avoids the linear->ray depth conversion pass.
-        set_training_data(b.rgb_view, _tv_null(), _tv_null(),
+        set_training_data(b.rgb_view,
+                          geom ? b.depth_view : _tv_null(),
+                          geom ? b.normal_view : _tv_null(),
                           b.mask_view, true);
     } else {
         // b.model / b.distortion are already PINHOLE / NONE when K > 1; at
@@ -262,8 +264,10 @@ static void _install_and_forward(const DecodedBatch& b, std::string primitive,
             b.input_num, (int)b.input_height, (int)b.input_width,
             b.K, (int)b.height, (int)b.width,
             b.rgb_view, b.mask_view, (int)b.mask_height, (int)b.mask_width,
-            _tv_null(), 0, 0,
-            _tv_null(), 0, 0,
+            geom ? b.depth_view : _tv_null(),
+            geom ? (int)b.depth_height : 0, geom ? (int)b.depth_width : 0,
+            geom ? b.normal_view : _tv_null(),
+            geom ? (int)b.normal_height : 0, geom ? (int)b.normal_width : 0,
             true,
             b.input_intrins_view, b.input_dist_coeffs_view,
             b.input_source_models_view, b.input_source_params_view,
@@ -302,7 +306,10 @@ int engine_preview_forward(int index, std::string primitive, int sh_degree,
     // a preview is one call at a time under the engine mutex.
     static DecodedBatch b;
     engine().dm->fetch_one((int32_t)index, b);
-    _install_and_forward(b, std::move(primitive), sh_degree, packed);
+    // With the geometry GT: this is the panel that shows what the loss
+    // compares, and the depth and normal rows are half of that.
+    _install_and_forward(b, std::move(primitive), sh_degree, packed,
+                         /*with_geometry=*/true);
 
     if (apply_color_correction) {
         // POST-split camera ids, the same ones the training step hands the

@@ -48,15 +48,20 @@ struct FilmFrame {
     std::string image_path;
     std::string mask_path;     // "" when there is none
     std::string points_path;   // feature file to overlay; "" for none
+    // Set instead of the three above when the frame is a ROW -- the geometry
+    // step's photograph, normal map and depth map of one frame, which are
+    // only worth anything read together (Picture.h).
+    std::vector<PicturePanel> panels;
 };
 
 class FilmReel;
 
 // The reels a run feeds as it works, one per step that produces pictures.
-// Either may be null: a caller with no screen wants the pipeline without them.
+// Any may be null: a caller with no screen wants the pipeline without them.
 struct RunFilms {
     FilmReel* frames = nullptr;
     FilmReel* masks = nullptr;
+    FilmReel* geometry = nullptr;
 };
 
 class FilmReel {
@@ -73,6 +78,10 @@ public:
     // `f.image_path` when it is asked for.
     void add(const FilmFrame& f, const uint8_t* rgb = nullptr, int w = 0,
              int h = 0, const uint8_t* mask = nullptr, FramePoints points = {});
+    // Appends `f` AND reads its files now, on the calling thread. The reel
+    // follows the newest picture it HOLDS (see draw), so a producer that only
+    // registers paths never advances the slider.
+    void add_loaded(const FilmFrame& f);
     void clear();
 
     // ---- consumer (UI thread, GL context current) ----
@@ -93,6 +102,8 @@ private:
 
     // The cache entry for `index`, or null. Caller holds _mu.
     Slot* find(int index);
+    // Register `f` at the end, with `pic` as its picture when it has one.
+    void append(const FilmFrame& f, Picture&& pic, std::vector<KeyPoint2D>&& pts);
     void put(int index, Picture&& p, std::vector<KeyPoint2D>&& pts);
     void start_loader();
     void stop_loader();

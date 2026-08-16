@@ -19,7 +19,6 @@
 #include "metric3d/model/Fetch.h"
 #include "nn/core/Error.h"
 #include "nn/core/Log.h"
-#include "nn/core/Parallel.h"
 #include "nn/io/Image.h"
 #include "nn/vk/Context.h"
 
@@ -111,33 +110,6 @@ bool tri(const char* v, Tri& out) {
 // ---------------------------------------------------------------------------
 // Host image handling
 // ---------------------------------------------------------------------------
-
-// Area average, not the bilinear one next door in DataManager: at a 2x or 3x
-// downscale bilinear reads two of every three source pixels, and aliases the
-// fine structure the normals are made of.
-std::vector<float> resize_area(const nn::Image& img, int dw, int dh) {
-    std::vector<float> out((size_t)dw * dh * 3, 0.0f);
-    nn::parallel_for(dh, [&](int64_t y0, int64_t y1) {
-        for (int64_t y = y0; y < y1; ++y) {
-            const int sy0 = (int)((double)y * img.height / dh);
-            const int sy1 = std::max(sy0 + 1, (int)((double)(y + 1) * img.height / dh));
-            for (int x = 0; x < dw; ++x) {
-                const int sx0 = (int)((double)x * img.width / dw);
-                const int sx1 = std::max(sx0 + 1, (int)((double)(x + 1) * img.width / dw));
-                double acc[3] = {0, 0, 0};
-                for (int sy = sy0; sy < sy1; ++sy)
-                    for (int sx = sx0; sx < sx1; ++sx) {
-                        const uint8_t* p = &img.data[((size_t)sy * img.width + sx) * 3];
-                        for (int c = 0; c < 3; ++c) acc[c] += p[c];
-                    }
-                const double n = (double)(sy1 - sy0) * (sx1 - sx0) * 255.0;
-                for (int c = 0; c < 3; ++c)
-                    out[((size_t)y * dw + x) * 3 + c] = (float)(acc[c] / n);
-            }
-        }
-    });
-    return out;
-}
 
 // The scale a depth map is stored against. Not the maximum: the network
 // clamps its own output at 200, and a few sky pixels there would leave a whole
@@ -591,9 +563,13 @@ int spirula_geometry_main(int argc, char** argv) {
 
         for (int64_t i = 0; i < N; ++i) {
             const app::GeometryWarp& warp = warps[(size_t)group[(size_t)i]];
-            const fs::path np = out_path(normal_dir, i,
-                                         o.normal_format == "jpg" ? ".jpg" : ".png");
-            const fs::path dp = out_path(depth_dir, i, ".png");
+            // out_path creates the folder it names, so a map that was not asked
+            // for must not have its path built: it would leave an empty depths/
+            // in the dataset for a normals-only run.
+            fs::path np, dp;
+            if (o.want_normal)
+                np = out_path(normal_dir, i, o.normal_format == "jpg" ? ".jpg" : ".png");
+            if (o.want_depth) dp = out_path(depth_dir, i, ".png");
             const bool need_normal = o.want_normal && (o.overwrite || !fs::exists(np, ec));
             const bool need_depth = o.want_depth && (o.overwrite || !fs::exists(dp, ec));
             if (!need_normal && !need_depth) { ++skipped; continue; }
@@ -604,7 +580,9 @@ int spirula_geometry_main(int argc, char** argv) {
                 continue;
             }
             const std::vector<float> src =
-                resize_area(img, warp.sampleWidth(), warp.sampleHeight());
+                app::resize_area(img.data.data(), img.width, img.height,
+                                 img.channels, warp.sampleWidth(),
+                                 warp.sampleHeight());
 
             const double t0 = nn::now_ms();
             std::vector<std::vector<float>> face_depth, face_normal;
@@ -677,8 +655,10 @@ int spirula_geometry_main(int argc, char** argv) {
                 writers.submit(std::move(job));
             }
 
+            // Every image, not every tenth: one costs about a second, and
+            // the GUI drives its bar and its preview reel off these lines.
             ++written;
-            if (written % 10 == 0 || i + 1 == N) {
+            {
                 const double each = model_ms / (double)written;
                 std::printf("\r%s   ",
                             format(G::log_progress,

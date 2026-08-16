@@ -105,6 +105,7 @@ void ColmapRunner::start(const ColmapJob& job, RunFilms films) {
     _prog.reset();
     if (_films.frames) _films.frames->clear();
     if (_films.masks) _films.masks->clear();
+    if (_films.geometry) _films.geometry->clear();
     {
         std::lock_guard<std::mutex> lk(_mu);
         _error.clear();
@@ -139,6 +140,11 @@ void ColmapRunner::take_reconstruction(ColmapJob& job) {
     job.video_fps = fps;
     job.sharp_window = sharp;
     job.max_frames = maxf;
+}
+
+void ColmapRunner::take_geometry(ColmapJob& job) {
+    std::lock_guard<std::mutex> lk(_mu);
+    job.geometry = _live.geometry;
 }
 
 void ColmapRunner::take_masking(PrepJob& prep) {
@@ -296,28 +302,24 @@ void ColmapRunner::run(ColmapJob job) {
         const fs::path ws = job.workspace;
         fs::create_directories(ws);
 
-        // Interrupted-run handling: either resume (reuse everything the
-        // previous run completed) or insist on a clean folder -- never
-        // silently mix a fresh run into stale artifacts.
-        {
-            // See SfmRunner: an existing sparse/ is not a resumable run, and
-            // the input's own images are not leftovers.
-            const WorkspaceState prior = probe_workspace(ws.string(), job.inputs);
-            if (prior.resumable() && !job.resume)
-                return fail("the workspace already contains an unfinished run "
-                            "(database.db / extracted frames / masks); enable "
-                            "\"Resume previous run\" to reuse it, or choose "
-                            "another folder");
-            if (prior.resumable())
-                log("Resuming previous run in " + ws.string() +
-                    " (completed stages are reused)");
-            if (prior.model)
-                log("Note: " + (ws / "sparse").string() +
-                    " already holds a reconstruction; this run writes over it.");
-        }
+        // Resume reuses what the last run completed, or a clean folder is
+        // insisted on; a model already there is reused whoever made it, and the
+        // input's own images are not leftovers (see SfmRunner).
+        const WorkspaceState prior = probe_workspace(ws.string(), job.inputs);
+        const bool reuse_model = prior.model && !job.redo_model;
+        if (prior.resumable() && !job.resume)
+            return fail("the workspace already contains an unfinished run "
+                        "(database.db / extracted frames / masks); enable "
+                        "\"Resume previous run\" to reuse it, or choose "
+                        "another folder");
+        if (prior.resumable())
+            log("Resuming previous run in " + ws.string() +
+                " (completed stages are reused)");
+        if (reuse_model)
+            log(spirula::i18n::format(lmsg::sfm_reusing_model, {ws.string()}));
 
         std::string err;
-        if (!check_colmap_version(job, err)) return fail(err);
+        if (!reuse_model && !check_colmap_version(job, err)) return fail(err);
 
         // ---- 1. frames and masks (shared with the built-in SfM path) -------
         PrepResult prep;
@@ -363,361 +365,361 @@ void ColmapRunner::run(ColmapJob job) {
             job.camera_mode = 1;
         }
 
-        // Quality knobs (per run_colmap.bash: fewer features = much faster
-        // matching; O(n^2) in feature count). ALIKED extracts far fewer,
-        // higher-quality keypoints than SIFT.
-        bool aliked = job.feature_type == 1;
-        int features = job.max_num_features > 0 ? job.max_num_features
-                     : aliked ? (job.quality == 0 ? 1024
-                               : job.quality == 1 ? 2048 : 4096)
-                     : (job.quality == 0 ? 4096
-                      : job.quality == 1 ? 8192 : 16384);
-        const std::string db = (ws / "database.db").string();
+        // Everything COLMAP does, skipped whole for a run pointed at a
+        // finished dataset: extracting and matching into a database that is not
+        // there costs an hour to arrive at the model already sitting there.
+        if (!reuse_model) {
+            // Quality knobs (per run_colmap.bash: fewer features = much faster
+            // matching; O(n^2) in feature count). ALIKED extracts far fewer,
+            // higher-quality keypoints than SIFT.
+            bool aliked = job.feature_type == 1;
+            int features = job.max_num_features > 0 ? job.max_num_features
+                         : aliked ? (job.quality == 0 ? 1024
+                                   : job.quality == 1 ? 2048 : 4096)
+                         : (job.quality == 0 ? 4096
+                          : job.quality == 1 ? 8192 : 16384);
+            const std::string db = (ws / "database.db").string();
 
-        // Initial camera parameters: an explicit ImageReader.camera_params
-        // string wins; otherwise compose one from the focal-length factor
-        // (fx = fy = factor * width, centered principal point, zero
-        // distortion). A good initial focal length stabilizes mapper
-        // initialization a lot, especially for fisheye lenses.
-        std::string cam_params = job.camera_params;
-        if (cam_params.empty() && job.init_focal_factor > 0) {
-            int W = 0, H = 0;
-            if (DatasetPrep::first_image_dims(images, W, H)) {
-                cam_params = compose_camera_params(
-                    job.camera_model, (double)job.init_focal_factor * W,
-                    0.5 * W, 0.5 * H);
-                if (cam_params.empty())
-                    log("warning: no camera_params template for " +
-                        job.camera_model + "; skipping the initial focal length");
-                else
-                    log("Initial camera (" + job.camera_model + ", " +
-                        std::to_string(W) + "x" + std::to_string(H) +
-                        "): " + cam_params);
+            // An explicit ImageReader.camera_params wins; otherwise compose
+            // one from the focal factor. A good initial focal length stabilizes
+            // mapper initialization a lot, especially for fisheye lenses.
+            std::string cam_params = job.camera_params;
+            if (cam_params.empty() && job.init_focal_factor > 0) {
+                int W = 0, H = 0;
+                if (DatasetPrep::first_image_dims(images, W, H)) {
+                    cam_params = compose_camera_params(
+                        job.camera_model, (double)job.init_focal_factor * W,
+                        0.5 * W, 0.5 * H);
+                    if (cam_params.empty())
+                        log("warning: no camera_params template for " +
+                            job.camera_model + "; skipping the initial focal length");
+                    else
+                        log("Initial camera (" + job.camera_model + ", " +
+                            std::to_string(W) + "x" + std::to_string(H) +
+                            "): " + cam_params);
+                } else {
+                    log("warning: could not read an image size; skipping the "
+                        "initial focal length");
+                }
+            }
+
+            // ---- 3. feature extraction -----------------------------------------
+            take_reconstruction(job);
+            set_stage(Stage::Features,
+                      aliked ? lmsg::stage_colmap_features_aliked.get()
+                             : lmsg::stage_colmap_features.get());
+            std::vector<std::string> fe = {job.colmap_exe, "feature_extractor",
+                "--database_path", db,
+                "--image_path", images,
+                "--ImageReader.camera_model", job.camera_model};
+            if (aliked) {
+                fe.push_back("--FeatureExtraction.type");
+                fe.push_back("ALIKED");
+                fe.push_back("--AlikedExtraction.max_num_features");
+                fe.push_back(std::to_string(features));
             } else {
-                log("warning: could not read an image size; skipping the "
-                    "initial focal length");
+                fe.push_back("--SiftExtraction.max_num_features");
+                fe.push_back(std::to_string(features));
             }
-        }
-
-        // ---- 3. feature extraction -----------------------------------------
-        take_reconstruction(job);
-        set_stage(Stage::Features,
-                  aliked ? lmsg::stage_colmap_features_aliked.get()
-                         : lmsg::stage_colmap_features.get());
-        std::vector<std::string> fe = {job.colmap_exe, "feature_extractor",
-            "--database_path", db,
-            "--image_path", images,
-            "--ImageReader.camera_model", job.camera_model};
-        if (aliked) {
-            fe.push_back("--FeatureExtraction.type");
-            fe.push_back("ALIKED");
-            fe.push_back("--AlikedExtraction.max_num_features");
-            fe.push_back(std::to_string(features));
-        } else {
-            fe.push_back("--SiftExtraction.max_num_features");
-            fe.push_back(std::to_string(features));
-        }
-        if (!cam_params.empty()) {
-            fe.push_back("--ImageReader.camera_params");
-            fe.push_back(cam_params);
-        }
-        if (job.camera_mode == 0) {
-            fe.push_back("--ImageReader.single_camera");
-            fe.push_back("1");
-        } else if (job.camera_mode == 1) {
-            fe.push_back("--ImageReader.single_camera_per_folder");
-            fe.push_back("1");
-        }
-        int size_cap = job.max_image_size > 0 ? job.max_image_size
-                     : job.quality == 0 ? 2000 : 0;
-        if (size_cap > 0) {
-            fe.push_back("--FeatureExtraction.max_image_size");
-            fe.push_back(std::to_string(size_cap));
-        }
-        if (job.estimate_affine_shape && !aliked) {
-            fe.push_back("--SiftExtraction.estimate_affine_shape");
-            fe.push_back("1");
-        }
-        if (have_masks) {
-            fe.push_back("--ImageReader.mask_path");
-            fe.push_back(prep.mask_dir);
-        }
-        int rc = exec(fe);
-        if (rc == kCancelled) return fail("cancelled");
-        if (rc != 0) return fail("colmap feature_extractor failed (see log)");
-
-        // ---- 4. matching -----------------------------------------------------
-        // The matcher is an explicit choice (the GUI presets sequential for
-        // video / exhaustive for photos; stale configs fall back the same
-        // way). The vocabulary tree (matcher + sequential loop detection)
-        // indexes SIFT descriptors only.
-        bool any_video = false;
-        for (const PrepInput& in : job.inputs) any_video = any_video || in.is_video;
-        int matcher = job.matcher;
-        if (matcher < 1 || matcher > 3)
-            matcher = any_video ? 2 : (n_images <= 400 ? 1 : 3);
-        std::string match_type;   // FeatureMatching.type ("" = COLMAP default)
-        if (aliked)
-            match_type = job.lightglue ? "ALIKED_LIGHTGLUE" : "ALIKED_BRUTEFORCE";
-        else if (job.lightglue)
-            match_type = "SIFT_LIGHTGLUE";
-        std::vector<std::string> ma;
-        if (matcher == 3) {
-            if (aliked)
-                return fail("vocabulary-tree matching requires SIFT features "
-                            "(the tree indexes SIFT descriptors); pick the "
-                            "sequential or exhaustive matcher for ALIKED");
-            std::string vt = resolve_vocab_tree(job);
-            if (vt.empty())
-                return fail("no vocabulary tree available (see log)");
-            set_stage(Stage::Matching, lmsg::stage_match_vocab.get());
-            ma = {job.colmap_exe, "vocab_tree_matcher",
-                  "--database_path", db,
-                  "--VocabTreeMatching.vocab_tree_path", vt};
-        }
-        if (matcher == 2) {
-            std::string vt;
-            if (job.seq_loop_closure) {
-                if (aliked)
-                    log("note: loop detection needs SIFT descriptors "
-                        "(vocabulary tree); relying on quadratic overlap "
-                        "for loop closure");
-                else if ((vt = resolve_vocab_tree(job)).empty())
-                    log("warning: no vocabulary tree; loop detection disabled");
+            if (!cam_params.empty()) {
+                fe.push_back("--ImageReader.camera_params");
+                fe.push_back(cam_params);
             }
-            set_stage(Stage::Matching, lmsg::stage_match_sequential.get());
-            ma = {job.colmap_exe, "sequential_matcher",
-                  "--database_path", db,
-                  "--SequentialMatching.overlap", std::to_string(job.seq_overlap),
-                  "--SequentialMatching.quadratic_overlap",
-                  job.seq_quadratic_overlap ? "1" : "0"};
-            if (!vt.empty()) {
-                ma.push_back("--SequentialMatching.loop_detection");
-                ma.push_back("1");
-                ma.push_back("--SequentialMatching.vocab_tree_path");
-                ma.push_back(vt);
+            if (job.camera_mode == 0) {
+                fe.push_back("--ImageReader.single_camera");
+                fe.push_back("1");
+            } else if (job.camera_mode == 1) {
+                fe.push_back("--ImageReader.single_camera_per_folder");
+                fe.push_back("1");
             }
-        } else if (matcher == 1) {
-            set_stage(Stage::Matching, lmsg::stage_match_exhaustive.get());
-            ma = {job.colmap_exe, "exhaustive_matcher", "--database_path", db};
-        }
-        if (!match_type.empty()) {
-            ma.push_back("--FeatureMatching.type");
-            ma.push_back(match_type);
-        }
-        if (job.estimate_affine_shape && !aliked) {
-            ma.push_back("--FeatureMatching.guided_matching");
-            ma.push_back("1");
-        }
-        // Wrong-match suppression (repetitive scenes).
-        if (job.match_max_ratio > 0 && !aliked) {
-            char b[16];
-            std::snprintf(b, sizeof b, "%g", job.match_max_ratio);
-            ma.push_back("--SiftMatching.max_ratio");
-            ma.push_back(b);
-        }
-        if (job.min_inliers_per_pair > 0) {
-            ma.push_back("--TwoViewGeometry.min_num_inliers");
-            ma.push_back(std::to_string(job.min_inliers_per_pair));
-        }
-        rc = exec(ma);
-        if (rc == kCancelled) return fail("cancelled");
-        if (rc != 0) return fail("colmap matcher failed (see log)");
-
-        // ---- 5. sparse reconstruction ----------------------------------------
-        set_stage(Stage::Mapping, lmsg::stage_colmap_mapper.get());
-        fs::create_directories(ws / "sparse");
-        bool fisheye = is_fisheye_model(job.camera_model);
-        bool ba_gpu = job.ba_use_gpu;
-        if (ba_gpu && fisheye) {
-            ba_gpu = false;
-            log("note: COLMAP's GPU bundle adjustment does not support "
-                "fisheye camera models; using the CPU backend");
-        }
-        // Low-distortion perspective models map more stably with the
-        // distortion coefficients FIXED at their initial values; the final
-        // refinement pass then recovers them (run_colmap.bash's advice).
-        // Fisheye models need their distortion refined during mapping.
-        bool no_extra = job.camera_model == "PINHOLE" ||
-                        job.camera_model == "SIMPLE_PINHOLE";
-        bool fix_extra = !no_extra &&
-                         (job.mapper_extra_params == 2 ||
-                          (job.mapper_extra_params == 0 && !fisheye));
-        std::vector<std::string> mp = {job.colmap_exe, "mapper",
-                   "--database_path", db,
-                   "--image_path", images,
-                   "--output_path", (ws / "sparse").string(),
-                   "--Mapper.ba_use_gpu", ba_gpu ? "1" : "0",
-                   "--Mapper.structure_less_registration_fallback", "0"};
-        if (fix_extra) {
-            mp.push_back("--Mapper.ba_refine_extra_params");
-            mp.push_back("0");
-            log(job.final_bundle_adjust
-                ? "Distortion held fixed during mapping; the final "
-                  "refinement pass recovers it"
-                : "warning: distortion held fixed during mapping but the "
-                  "final refinement pass is disabled -- coefficients stay "
-                  "at their initial values");
-        }
-        if (job.min_num_matches > 0) {
-            mp.push_back("--Mapper.min_num_matches");
-            mp.push_back(std::to_string(job.min_num_matches));
-        }
-        // Stricter image registration (repetitive scenes).
-        char fbuf[16];
-        if (job.abs_pose_min_num_inliers > 0) {
-            mp.push_back("--Mapper.abs_pose_min_num_inliers");
-            mp.push_back(std::to_string(job.abs_pose_min_num_inliers));
-        }
-        if (job.abs_pose_min_inlier_ratio > 0) {
-            std::snprintf(fbuf, sizeof fbuf, "%g", job.abs_pose_min_inlier_ratio);
-            mp.push_back("--Mapper.abs_pose_min_inlier_ratio");
-            mp.push_back(fbuf);
-        }
-        if (job.abs_pose_max_error > 0) {
-            std::snprintf(fbuf, sizeof fbuf, "%g", job.abs_pose_max_error);
-            mp.push_back("--Mapper.abs_pose_max_error");
-            mp.push_back(fbuf);
-        }
-        // COLMAP may emit several models (sparse/0, sparse/1, ...); the
-        // trainer auto-picks the one with the most registered images.
-        auto enumerate_models = [&]() {
-            std::vector<std::pair<int64_t, fs::path>> ms;   // (-count, dir)
-            std::error_code ec;
-            for (fs::directory_iterator it(ws / "sparse", ec), end;
-                 !ec && it != end; it.increment(ec))
-                if (it->path().filename().string().rfind(".", 0) != 0 &&
-                    fs::exists(it->path() / "cameras.bin"))
-                    ms.push_back({-model_num_images(it->path()), it->path()});
-            std::sort(ms.begin(), ms.end());
-            return ms;
-        };
-        // Resume: the mapper only writes models on completion, so any
-        // existing model is from a FINISHED mapper run -- reuse it. (An
-        // interrupted mapper leaves nothing and simply reruns; features and
-        // matches were reused from the database either way.)
-        std::vector<std::pair<int64_t, fs::path>> models;
-        if (job.resume && !job.redo_model &&
-            !(models = enumerate_models()).empty()) {
-            log("Resume: " + std::to_string(models.size()) +
-                " existing model(s) under sparse/; skipping the mapper "
-                "(delete sparse/ to re-reconstruct)");
-        } else {
-            rc = exec(mp);
+            int size_cap = job.max_image_size > 0 ? job.max_image_size
+                         : job.quality == 0 ? 2000 : 0;
+            if (size_cap > 0) {
+                fe.push_back("--FeatureExtraction.max_image_size");
+                fe.push_back(std::to_string(size_cap));
+            }
+            if (job.estimate_affine_shape && !aliked) {
+                fe.push_back("--SiftExtraction.estimate_affine_shape");
+                fe.push_back("1");
+            }
+            if (have_masks) {
+                fe.push_back("--ImageReader.mask_path");
+                fe.push_back(prep.mask_dir);
+            }
+            int rc = exec(fe);
             if (rc == kCancelled) return fail("cancelled");
-            if (rc != 0) return fail("colmap mapper failed (see log)");
-            models = enumerate_models();
-        }
-        if (models.empty())
-            return fail("mapper produced no reconstruction (too few matches? "
-                        "try higher quality or more overlapping images)");
-        fs::path best = models[0].second;
-        if (models.size() > 1) {
-            std::string counts;
-            for (auto& m : models)
-                counts += (counts.empty() ? "" : ", ") + std::to_string(-m.first);
-            log("Note: mapper produced " + std::to_string(models.size()) +
-                " partial models (" + counts + " images)");
-        }
+            if (rc != 0) return fail("colmap feature_extractor failed (see log)");
 
-        // ---- 6. merge partial models (best effort) ---------------------------
-        // model_merger only succeeds when two models share registered
-        // frames, which mapper partials usually don't -- but when it works
-        // it recovers a broken-apart reconstruction, so it's always worth
-        // the few seconds. A merge is kept only when the merged model
-        // registers more images than the base.
-        if (models.size() > 1 && job.merge_models) {
-            set_stage(Stage::Mapping, lmsg::stage_merge_models.get());
-            fs::path cur = best;
-            int64_t cur_n = -models[0].first;
-            fs::path acc = ws / "sparse" / ".merge_acc";
-            fs::path tmp = ws / "sparse" / ".merge_tmp";
-            int merged = 0;
-            for (size_t i = 1; i < models.size(); i++) {
+            // ---- 4. matching -----------------------------------------------------
+            // An explicit choice: the GUI presets sequential for video and
+            // exhaustive for photos. The vocabulary tree is SIFT-only.
+            bool any_video = false;
+            for (const PrepInput& in : job.inputs) any_video = any_video || in.is_video;
+            int matcher = job.matcher;
+            if (matcher < 1 || matcher > 3)
+                matcher = any_video ? 2 : (n_images <= 400 ? 1 : 3);
+            std::string match_type;   // FeatureMatching.type ("" = COLMAP default)
+            if (aliked)
+                match_type = job.lightglue ? "ALIKED_LIGHTGLUE" : "ALIKED_BRUTEFORCE";
+            else if (job.lightglue)
+                match_type = "SIFT_LIGHTGLUE";
+            std::vector<std::string> ma;
+            if (matcher == 3) {
+                if (aliked)
+                    return fail("vocabulary-tree matching requires SIFT features "
+                                "(the tree indexes SIFT descriptors); pick the "
+                                "sequential or exhaustive matcher for ALIKED");
+                std::string vt = resolve_vocab_tree(job);
+                if (vt.empty())
+                    return fail("no vocabulary tree available (see log)");
+                set_stage(Stage::Matching, lmsg::stage_match_vocab.get());
+                ma = {job.colmap_exe, "vocab_tree_matcher",
+                      "--database_path", db,
+                      "--VocabTreeMatching.vocab_tree_path", vt};
+            }
+            if (matcher == 2) {
+                std::string vt;
+                if (job.seq_loop_closure) {
+                    if (aliked)
+                        log("note: loop detection needs SIFT descriptors "
+                            "(vocabulary tree); relying on quadratic overlap "
+                            "for loop closure");
+                    else if ((vt = resolve_vocab_tree(job)).empty())
+                        log("warning: no vocabulary tree; loop detection disabled");
+                }
+                set_stage(Stage::Matching, lmsg::stage_match_sequential.get());
+                ma = {job.colmap_exe, "sequential_matcher",
+                      "--database_path", db,
+                      "--SequentialMatching.overlap", std::to_string(job.seq_overlap),
+                      "--SequentialMatching.quadratic_overlap",
+                      job.seq_quadratic_overlap ? "1" : "0"};
+                if (!vt.empty()) {
+                    ma.push_back("--SequentialMatching.loop_detection");
+                    ma.push_back("1");
+                    ma.push_back("--SequentialMatching.vocab_tree_path");
+                    ma.push_back(vt);
+                }
+            } else if (matcher == 1) {
+                set_stage(Stage::Matching, lmsg::stage_match_exhaustive.get());
+                ma = {job.colmap_exe, "exhaustive_matcher", "--database_path", db};
+            }
+            if (!match_type.empty()) {
+                ma.push_back("--FeatureMatching.type");
+                ma.push_back(match_type);
+            }
+            if (job.estimate_affine_shape && !aliked) {
+                ma.push_back("--FeatureMatching.guided_matching");
+                ma.push_back("1");
+            }
+            // Wrong-match suppression (repetitive scenes).
+            if (job.match_max_ratio > 0 && !aliked) {
+                char b[16];
+                std::snprintf(b, sizeof b, "%g", job.match_max_ratio);
+                ma.push_back("--SiftMatching.max_ratio");
+                ma.push_back(b);
+            }
+            if (job.min_inliers_per_pair > 0) {
+                ma.push_back("--TwoViewGeometry.min_num_inliers");
+                ma.push_back(std::to_string(job.min_inliers_per_pair));
+            }
+            rc = exec(ma);
+            if (rc == kCancelled) return fail("cancelled");
+            if (rc != 0) return fail("colmap matcher failed (see log)");
+
+            // ---- 5. sparse reconstruction ----------------------------------------
+            set_stage(Stage::Mapping, lmsg::stage_colmap_mapper.get());
+            fs::create_directories(ws / "sparse");
+            bool fisheye = is_fisheye_model(job.camera_model);
+            bool ba_gpu = job.ba_use_gpu;
+            if (ba_gpu && fisheye) {
+                ba_gpu = false;
+                log("note: COLMAP's GPU bundle adjustment does not support "
+                    "fisheye camera models; using the CPU backend");
+            }
+            // Low-distortion perspective models map more stably with the
+            // coefficients FIXED, the final pass recovering them; fisheye models
+            // need theirs refined during mapping (run_colmap.bash's advice).
+            bool no_extra = job.camera_model == "PINHOLE" ||
+                            job.camera_model == "SIMPLE_PINHOLE";
+            bool fix_extra = !no_extra &&
+                             (job.mapper_extra_params == 2 ||
+                              (job.mapper_extra_params == 0 && !fisheye));
+            std::vector<std::string> mp = {job.colmap_exe, "mapper",
+                       "--database_path", db,
+                       "--image_path", images,
+                       "--output_path", (ws / "sparse").string(),
+                       "--Mapper.ba_use_gpu", ba_gpu ? "1" : "0",
+                       "--Mapper.structure_less_registration_fallback", "0"};
+            if (fix_extra) {
+                mp.push_back("--Mapper.ba_refine_extra_params");
+                mp.push_back("0");
+                log(job.final_bundle_adjust
+                    ? "Distortion held fixed during mapping; the final "
+                      "refinement pass recovers it"
+                    : "warning: distortion held fixed during mapping but the "
+                      "final refinement pass is disabled -- coefficients stay "
+                      "at their initial values");
+            }
+            if (job.min_num_matches > 0) {
+                mp.push_back("--Mapper.min_num_matches");
+                mp.push_back(std::to_string(job.min_num_matches));
+            }
+            // Stricter image registration (repetitive scenes).
+            char fbuf[16];
+            if (job.abs_pose_min_num_inliers > 0) {
+                mp.push_back("--Mapper.abs_pose_min_num_inliers");
+                mp.push_back(std::to_string(job.abs_pose_min_num_inliers));
+            }
+            if (job.abs_pose_min_inlier_ratio > 0) {
+                std::snprintf(fbuf, sizeof fbuf, "%g", job.abs_pose_min_inlier_ratio);
+                mp.push_back("--Mapper.abs_pose_min_inlier_ratio");
+                mp.push_back(fbuf);
+            }
+            if (job.abs_pose_max_error > 0) {
+                std::snprintf(fbuf, sizeof fbuf, "%g", job.abs_pose_max_error);
+                mp.push_back("--Mapper.abs_pose_max_error");
+                mp.push_back(fbuf);
+            }
+            // COLMAP may emit several models (sparse/0, sparse/1, ...); the
+            // trainer auto-picks the one with the most registered images.
+            auto enumerate_models = [&]() {
+                std::vector<std::pair<int64_t, fs::path>> ms;   // (-count, dir)
+                std::error_code ec;
+                for (fs::directory_iterator it(ws / "sparse", ec), end;
+                     !ec && it != end; it.increment(ec))
+                    if (it->path().filename().string().rfind(".", 0) != 0 &&
+                        fs::exists(it->path() / "cameras.bin"))
+                        ms.push_back({-model_num_images(it->path()), it->path()});
+                std::sort(ms.begin(), ms.end());
+                return ms;
+            };
+            // The mapper only writes models on completion, so any existing
+            // one is from a FINISHED run -- reuse it. An interrupted mapper
+            // leaves nothing and simply reruns.
+            std::vector<std::pair<int64_t, fs::path>> models;
+            if (job.resume && !job.redo_model &&
+                !(models = enumerate_models()).empty()) {
+                log("Resume: " + std::to_string(models.size()) +
+                    " existing model(s) under sparse/; skipping the mapper "
+                    "(delete sparse/ to re-reconstruct)");
+            } else {
+                rc = exec(mp);
+                if (rc == kCancelled) return fail("cancelled");
+                if (rc != 0) return fail("colmap mapper failed (see log)");
+                models = enumerate_models();
+            }
+            if (models.empty())
+                return fail("mapper produced no reconstruction (too few matches? "
+                            "try higher quality or more overlapping images)");
+            fs::path best = models[0].second;
+            if (models.size() > 1) {
+                std::string counts;
+                for (auto& m : models)
+                    counts += (counts.empty() ? "" : ", ") + std::to_string(-m.first);
+                log("Note: mapper produced " + std::to_string(models.size()) +
+                    " partial models (" + counts + " images)");
+            }
+
+            // ---- 6. merge partial models (best effort) ---------------------------
+            // model_merger needs two models sharing registered frames, which
+            // partials usually lack -- but it recovers a broken-apart one.
+            if (models.size() > 1 && job.merge_models) {
+                set_stage(Stage::Mapping, lmsg::stage_merge_models.get());
+                fs::path cur = best;
+                int64_t cur_n = -models[0].first;
+                fs::path acc = ws / "sparse" / ".merge_acc";
+                fs::path tmp = ws / "sparse" / ".merge_tmp";
+                int merged = 0;
+                for (size_t i = 1; i < models.size(); i++) {
+                    remove_tree(tmp);
+                    fs::create_directories(tmp);
+                    rc = exec({job.colmap_exe, "model_merger",
+                               "--input_path1", cur.string(),
+                               "--input_path2", models[i].second.string(),
+                               "--output_path", tmp.string()});
+                    if (rc == kCancelled) return fail("cancelled");
+                    int64_t n = rc == 0 ? model_num_images(tmp) : 0;
+                    if (n > cur_n) {
+                        remove_tree(acc);
+                        std::error_code ec;
+                        fs::rename(tmp, acc, ec);
+                        if (ec) break;
+                        cur = acc;
+                        cur_n = n;
+                        merged++;
+                        log("Merged " + models[i].second.filename().string() +
+                            " -> " + std::to_string(n) + " images");
+                    } else {
+                        log("Could not merge " +
+                            models[i].second.filename().string() +
+                            " (models share no registered frames); skipped");
+                    }
+                }
+                remove_tree(tmp);
+                if (merged > 0) {
+                    // Persist as the next sparse/<N> so the trainer's
+                    // largest-model auto-pick finds it.
+                    int next = 0;
+                    while (fs::exists(ws / "sparse" / std::to_string(next))) next++;
+                    fs::path dst = ws / "sparse" / std::to_string(next);
+                    std::error_code ec;
+                    fs::rename(acc, dst, ec);
+                    if (!ec) {
+                        best = dst;
+                        log("Merged model written to sparse/" +
+                            std::to_string(next) + " (" + std::to_string(cur_n) +
+                            " images); the trainer auto-picks it");
+                    }
+                }
+            }
+
+            // ---- 7. bundle-adjustment refinement ---------------------------------
+            // Releases what the mapper fixed, but NOT a fisheye's principal
+            // point: with the 8 thin-prism coefficients it diverges.
+            if (job.final_bundle_adjust) {
+                set_stage(Stage::Finishing, lmsg::stage_bundle_adjust.get());
+                fs::path tmp = ws / "sparse" / ".ba_tmp";
                 remove_tree(tmp);
                 fs::create_directories(tmp);
-                rc = exec({job.colmap_exe, "model_merger",
-                           "--input_path1", cur.string(),
-                           "--input_path2", models[i].second.string(),
-                           "--output_path", tmp.string()});
+                rc = exec({job.colmap_exe, "bundle_adjuster",
+                           "--input_path", best.string(),
+                           "--output_path", tmp.string(),
+                           "--BundleAdjustment.refine_focal_length", "1",
+                           "--BundleAdjustment.refine_principal_point",
+                           fisheye ? "0" : "1",
+                           "--BundleAdjustment.refine_extra_params", "1"});
                 if (rc == kCancelled) return fail("cancelled");
-                int64_t n = rc == 0 ? model_num_images(tmp) : 0;
-                if (n > cur_n) {
-                    remove_tree(acc);
+                double before = model_reproj_error(job, best.string());
+                double after = rc == 0 ? model_reproj_error(job, tmp.string()) : 1e30;
+                log(spirula::i18n::format(
+                    spirula::i18n::msg::log::colmap_reproj_error,
+                    {before, after}));
+                if (rc == 0 && std::isfinite(after) &&
+                    (after <= before || !std::isfinite(before))) {
                     std::error_code ec;
-                    fs::rename(tmp, acc, ec);
-                    if (ec) break;
-                    cur = acc;
-                    cur_n = n;
-                    merged++;
-                    log("Merged " + models[i].second.filename().string() +
-                        " -> " + std::to_string(n) + " images");
+                    for (const char* f : {"cameras.bin", "images.bin",
+                                          "points3D.bin", "frames.bin",
+                                          "rigs.bin"}) {
+                        if (!fs::exists(tmp / f, ec)) continue;
+                        fs::rename(tmp / f, best / f, ec);
+                    }
+                    log("Refinement kept");
                 } else {
-                    log("Could not merge " +
-                        models[i].second.filename().string() +
-                        " (models share no registered frames); skipped");
+                    log("warning: bundle_adjuster " +
+                        std::string(rc != 0 ? "failed" : "made the model worse") +
+                        "; keeping the mapper result");
                 }
-            }
-            remove_tree(tmp);
-            if (merged > 0) {
-                // Persist as the next sparse/<N> so the trainer's
-                // largest-model auto-pick finds it.
-                int next = 0;
-                while (fs::exists(ws / "sparse" / std::to_string(next))) next++;
-                fs::path dst = ws / "sparse" / std::to_string(next);
-                std::error_code ec;
-                fs::rename(acc, dst, ec);
-                if (!ec) {
-                    best = dst;
-                    log("Merged model written to sparse/" +
-                        std::to_string(next) + " (" + std::to_string(cur_n) +
-                        " images); the trainer auto-picks it");
-                }
+                remove_tree(tmp);
             }
         }
 
-        // ---- 7. bundle-adjustment refinement ---------------------------------
-        // Runs on the LARGEST (or merged) model, releasing what the mapper
-        // held fixed: focal length, distortion, and (perspective models
-        // only) the principal point -- releasing pp together with the 8
-        // thin-prism coefficients on a ~200-degree fisheye can diverge to
-        // astronomic reprojection errors. The refined model is checked
-        // against the input (mean reprojection error via model_analyzer)
-        // and REVERTED when it got worse or non-finite.
-        if (job.final_bundle_adjust) {
-            set_stage(Stage::Finishing, lmsg::stage_bundle_adjust.get());
-            fs::path tmp = ws / "sparse" / ".ba_tmp";
-            remove_tree(tmp);
-            fs::create_directories(tmp);
-            rc = exec({job.colmap_exe, "bundle_adjuster",
-                       "--input_path", best.string(),
-                       "--output_path", tmp.string(),
-                       "--BundleAdjustment.refine_focal_length", "1",
-                       "--BundleAdjustment.refine_principal_point",
-                       fisheye ? "0" : "1",
-                       "--BundleAdjustment.refine_extra_params", "1"});
-            if (rc == kCancelled) return fail("cancelled");
-            double before = model_reproj_error(job, best.string());
-            double after = rc == 0 ? model_reproj_error(job, tmp.string()) : 1e30;
-            log(spirula::i18n::format(
-                spirula::i18n::msg::log::colmap_reproj_error,
-                {before, after}));
-            if (rc == 0 && std::isfinite(after) &&
-                (after <= before || !std::isfinite(before))) {
-                std::error_code ec;
-                for (const char* f : {"cameras.bin", "images.bin",
-                                      "points3D.bin", "frames.bin",
-                                      "rigs.bin"}) {
-                    if (!fs::exists(tmp / f, ec)) continue;
-                    fs::rename(tmp / f, best / f, ec);
-                }
-                log("Refinement kept");
-            } else {
-                log("warning: bundle_adjuster " +
-                    std::string(rc != 0 ? "failed" : "made the model worse") +
-                    "; keeping the mapper result");
-            }
-            remove_tree(tmp);
+        // ---- depth and normals ---------------------------------------------
+        take_geometry(job);
+        if (job.geometry.enable) {
+            std::string gerr;
+            if (!run_geometry_step(job.geometry, ws.string(), images, _prog,
+                                   _films.geometry, _cancel, gerr))
+                return fail(gerr);
         }
 
         // No marker file is written: the image dir is handed to the GUI

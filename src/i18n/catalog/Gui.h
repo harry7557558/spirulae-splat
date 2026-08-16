@@ -6121,6 +6121,143 @@ SS_MSG(compare_pane_render,
     PT("Renderização"),  IT("Render"),       NL("Render"),       RU("Рендер"),
     TR("Görüntüleme"));
 
+SS_MSG(compare_pane_gt_depth,
+    EN("Reference depth"),
+    JA("参照の深度"),      ZH_HANS("参考深度"),  ZH_HANT("參考深度"),
+    KO("참조 깊이"),       DE("Referenztiefe"), FR("Profondeur de référence"),
+    ES("Profundidad de referencia"), PT("Profundidade de referência"),
+    IT("Profondità di riferimento"), NL("Referentiediepte"),
+    RU("Эталонная глубина"), TR("Referans derinlik"));
+
+SS_MSG(compare_pane_render_depth,
+    EN("Rendered depth"),
+    JA("レンダリングの深度"), ZH_HANS("渲染深度"),  ZH_HANT("算繪深度"),
+    KO("렌더링 깊이"),      DE("Gerenderte Tiefe"), FR("Profondeur rendue"),
+    ES("Profundidad renderizada"), PT("Profundidade renderizada"),
+    IT("Profondità del render"), NL("Gerenderde diepte"),
+    RU("Глубина рендера"), TR("Görüntülenen derinlik"));
+
+SS_MSG(compare_pane_gt_normal,
+    EN("Reference normals"),
+    JA("参照の法線"),      ZH_HANS("参考法线"),  ZH_HANT("參考法線"),
+    KO("참조 법선"),       DE("Referenznormalen"), FR("Normales de référence"),
+    ES("Normales de referencia"), PT("Normais de referência"),
+    IT("Normali di riferimento"), NL("Referentienormalen"),
+    RU("Эталонные нормали"), TR("Referans normaller"));
+
+SS_MSG(compare_pane_render_normal,
+    EN("Rendered normals"),
+    JA("レンダリングの法線"), ZH_HANS("渲染法线"),  ZH_HANT("算繪法線"),
+    KO("렌더링 법선"),      DE("Gerenderte Normalen"), FR("Normales rendues"),
+    ES("Normales renderizadas"), PT("Normais renderizadas"),
+    IT("Normali del render"), NL("Gerenderde normalen"),
+    RU("Нормали рендера"), TR("Görüntülenen normaller"));
+
+SS_MSG(compare_show_depth,
+    EN("Depth"),         JA("深度"),          ZH_HANS("深度"),     ZH_HANT("深度"),
+    KO("깊이"),           DE("Tiefe"),        FR("Profondeur"),   ES("Profundidad"),
+    PT("Profundidade"),  IT("Profondità"),   NL("Diepte"),       RU("Глубина"),
+    TR("Derinlik"));
+
+SS_MSG(compare_show_depth_help,
+    EN("A row for the depth the run supervises against, beside the depth the "
+       "model renders. Each is coloured over its own range -- the depth term "
+       "correlates them and ignores scale, so only the shape is comparable."),
+    JA("学習が教師にしている深度と、モデルが描いた深度を並べた段を出します。"
+       "色はそれぞれの範囲で付けます。深度項は両者の相関を取ってスケールを無視"
+       "するので、比べられるのは形だけです。"),
+    ZH_HANS("增加一行：训练用作监督的深度，与模型渲染出的深度并排。两者各按自身"
+            "范围上色——深度项计算相关性、忽略尺度，所以能比较的只有形状。"),
+    ZH_HANT("增加一列：訓練用作監督的深度，與模型算繪出的深度並排。兩者各按自身"
+            "範圍上色——深度項計算相關性、忽略尺度，所以能比較的只有形狀。"),
+    KO("학습이 교사로 쓰는 깊이와 모델이 그린 깊이를 나란히 놓은 줄을 켭니다. "
+       "색은 각자의 범위로 칠합니다. 깊이 항은 둘의 상관을 보고 배율을 무시하므로 "
+       "비교할 수 있는 것은 형태뿐입니다."),
+    DE("Eine Zeile für die Tiefe, gegen die trainiert wird, neben der Tiefe, "
+       "die das Modell rendert. Jede ist über ihren eigenen Bereich eingefärbt "
+       "-- der Tiefenterm korreliert sie und ignoriert den Maßstab, also ist "
+       "nur die Form vergleichbar."),
+    FR("Une rangée pour la profondeur qui sert de référence, à côté de celle "
+       "que le modèle rend. Chacune est colorée sur sa propre plage : le terme "
+       "de profondeur les corrèle et ignore l'échelle, seule la forme est donc "
+       "comparable."),
+    ES("Una fila para la profundidad con la que se supervisa, junto a la que "
+       "renderiza el modelo. Cada una se colorea sobre su propio rango: el "
+       "término de profundidad las correlaciona e ignora la escala, así que "
+       "solo la forma es comparable."),
+    PT("Uma linha para a profundidade que serve de referência, ao lado da que o "
+       "modelo renderiza. Cada uma é colorida sobre o seu próprio intervalo: o "
+       "termo de profundidade correlaciona-as e ignora a escala, por isso só a "
+       "forma é comparável."),
+    IT("Una riga per la profondità usata come riferimento, accanto a quella che "
+       "il modello rende. Ognuna è colorata sul proprio intervallo: il termine "
+       "di profondità le correla e ignora la scala, quindi è confrontabile solo "
+       "la forma."),
+    NL("Een rij voor de diepte waartegen de run traint, naast de diepte die het "
+       "model rendert. Elk is over zijn eigen bereik ingekleurd -- de "
+       "diepteterm correleert ze en negeert schaal, dus alleen de vorm is "
+       "vergelijkbaar."),
+    RU("Ряд для глубины, по которой идёт обучение, рядом с глубиной, которую "
+       "рисует модель. Каждая раскрашена по своему диапазону: член глубины "
+       "коррелирует их и не смотрит на масштаб, так что сравнима только форма."),
+    TR("Eğitimin denetim için kullandığı derinlik ile modelin görüntülediği "
+       "derinliği yan yana koyan bir satır. Her biri kendi aralığına göre "
+       "renklendirilir; derinlik terimi ikisini ilişkilendirir ve ölçeği yok "
+       "sayar, dolayısıyla yalnızca biçim karşılaştırılabilir."));
+
+SS_MSG(compare_show_normal,
+    EN("Normals"),        JA("法線"),          ZH_HANS("法线"),     ZH_HANT("法線"),
+    KO("법선"),            DE("Normalen"),     FR("Normales"),     ES("Normales"),
+    PT("Normais"),        IT("Normali"),      NL("Normalen"),     RU("Нормали"),
+    TR("Normaller"));
+
+SS_MSG(compare_show_normal_help,
+    EN("A row for the normals the run supervises against, beside the normals "
+       "the model has. No primitive renders normals, so the right-hand pane is "
+       "the one derived from the rendered depth -- which is what the normal "
+       "term compares."),
+    JA("学習が教師にしている法線と、モデルの法線を並べた段を出します。法線を直接"
+       "描くプリミティブは無いので、右側はレンダリングした深度から求めた法線です。"
+       "法線項が比べているのもそれです。"),
+    ZH_HANS("增加一行：训练用作监督的法线，与模型的法线并排。没有任何基元直接渲染"
+            "法线，所以右侧是从渲染深度求出的法线——法线项比较的也正是它。"),
+    ZH_HANT("增加一列：訓練用作監督的法線，與模型的法線並排。沒有任何基元直接算繪"
+            "法線，所以右側是從算繪深度求出的法線——法線項比較的也正是它。"),
+    KO("학습이 교사로 쓰는 법선과 모델의 법선을 나란히 놓은 줄을 켭니다. 법선을 "
+       "직접 그리는 프리미티브는 없으므로 오른쪽은 렌더링한 깊이에서 구한 법선이고, "
+       "법선 항이 비교하는 것도 그것입니다."),
+    DE("Eine Zeile für die Normalen, gegen die trainiert wird, neben denen des "
+       "Modells. Kein Primitiv rendert Normalen, die rechte Fläche zeigt also "
+       "die aus der gerenderten Tiefe abgeleiteten -- genau die, die der "
+       "Normalenterm vergleicht."),
+    FR("Une rangée pour les normales qui servent de référence, à côté de celles "
+       "du modèle. Aucune primitive ne rend de normales : le panneau de droite "
+       "montre celles dérivées de la profondeur rendue, celles-là mêmes que "
+       "compare le terme de normales."),
+    ES("Una fila para las normales con las que se supervisa, junto a las del "
+       "modelo. Ninguna primitiva renderiza normales, así que el panel derecho "
+       "muestra las derivadas de la profundidad renderizada, que son las que "
+       "compara el término de normales."),
+    PT("Uma linha para as normais que servem de referência, ao lado das do "
+       "modelo. Nenhuma primitiva renderiza normais, por isso o painel da "
+       "direita mostra as derivadas da profundidade renderizada, que são as que "
+       "o termo de normais compara."),
+    IT("Una riga per le normali usate come riferimento, accanto a quelle del "
+       "modello. Nessuna primitiva rende normali, quindi il riquadro di destra "
+       "mostra quelle ricavate dalla profondità resa, le stesse che il termine "
+       "di normali confronta."),
+    NL("Een rij voor de normalen waartegen de run traint, naast die van het "
+       "model. Geen enkele primitief rendert normalen, dus het rechterpaneel "
+       "toont die uit de gerenderde diepte afgeleid -- precies wat de "
+       "normaalterm vergelijkt."),
+    RU("Ряд для нормалей, по которым идёт обучение, рядом с нормалями модели. "
+       "Ни один примитив не рисует нормали, поэтому справа — выведенные из "
+       "отрисованной глубины, те самые, что сравнивает член нормалей."),
+    TR("Eğitimin denetim için kullandığı normaller ile modelin normallerini yan "
+       "yana koyan bir satır. Hiçbir ilkel normal görüntülemez; sağdaki bölme, "
+       "görüntülenen derinlikten türetilenleri gösterir -- normal teriminin "
+       "karşılaştırdığı da bunlardır."));
+
 SS_MSG(compare_waiting,
     EN("Start training to put a photograph next to the render of the same "
        "camera."),

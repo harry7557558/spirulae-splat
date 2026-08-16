@@ -473,6 +473,19 @@ std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_render_rgb_shape();
 void engine_copy_gt_rgb_to_host(TorchTensorView out);   // float [B, H, W, 3]
 void engine_copy_gt_alpha_to_host(TorchTensorView out); // bool  [B, H, W, 1]
 
+// The supervision modalities, at whatever resolution the files are -- the
+// loss samples them rather than resizing them, so these need not be the
+// render's shape. {0,0,0,0} when the DataManager was not asked for them.
+std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_gt_depth_shape();
+std::tuple<int64_t, int64_t, int64_t, int64_t> engine_get_gt_normal_shape();
+void engine_copy_gt_depth_to_host(TorchTensorView out);  // float [B, H, W, 1]
+void engine_copy_gt_normal_to_host(TorchTensorView out); // float [B, H, W, 3]
+
+// The normal the loss derives from the rendered depth, with the same kernel
+// and the camera the last forward installed. No primitive renders normals
+// (engine_primitive_pixel_type), so this IS the render's normal.
+void engine_copy_render_depth_normal_to_host(TorchTensorView out); // [B,H,W,3]
+
 
 void engine_copy_render_to_host(
     TorchTensorView out_rgb,      // [C, H, W, 3] float32, CPU

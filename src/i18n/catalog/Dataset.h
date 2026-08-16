@@ -1070,44 +1070,6 @@ SS_MSG(unfinished_run_detected,
     TR("(bu klasörde yarım kalmış bir çalıştırma bulundu)"));
 
 // IRREVERSIBLE -- human review in every language.
-SS_MSG(would_overwrite_model,
-    EN("This folder already holds a reconstruction (sparse/). Creating the "
-       "dataset writes a new one over it -- point the output somewhere else "
-       "to keep the old one."),
-    JA("このフォルダにはすでに再構成結果（sparse/）があります。データセットを"
-       "作成すると新しい結果で上書きされます。古いものを残したい場合は、"
-       "出力先を別の場所にしてください。"),
-    ZH_HANS("这个文件夹里已经有一份重建结果（sparse/）。创建数据集会用新的覆盖"
-            "掉它——想保留旧的，请把输出指到别处。"),
-    ZH_HANT("這個資料夾裡已經有一份重建結果（sparse/）。建立資料集會用新的覆蓋"
-            "掉它——想保留舊的，請把輸出指到別處。"),
-    KO("이 폴더에는 이미 재구성 결과(sparse/)가 있습니다. 데이터셋을 만들면 그 "
-       "위에 새로 덮어씁니다. 예전 것을 남기려면 출력을 다른 곳으로 지정하세요."),
-    DE("In diesem Ordner liegt bereits eine Rekonstruktion (sparse/). Beim "
-       "Erstellen des Datensatzes wird sie überschrieben -- die Ausgabe "
-       "woandershin legen, um die alte zu behalten."),
-    FR("Ce dossier contient déjà une reconstruction (sparse/). Créer le jeu de "
-       "données l'écrasera : pointez la sortie ailleurs pour conserver "
-       "l'ancienne."),
-    ES("Esta carpeta ya contiene una reconstrucción (sparse/). Crear el "
-       "conjunto de datos la sobrescribirá: apunte la salida a otro sitio "
-       "para conservar la anterior."),
-    PT("Esta pasta já contém uma reconstrução (sparse/). Criar o conjunto de "
-       "dados vai sobrescrevê-la -- aponte a saída para outro lugar para "
-       "manter a antiga."),
-    IT("Questa cartella contiene già una ricostruzione (sparse/). Creare il "
-       "set di dati la sovrascriverà: indichi un'altra destinazione per "
-       "conservare quella vecchia."),
-    NL("Deze map bevat al een reconstructie (sparse/). Het maken van de "
-       "dataset schrijft er een nieuwe overheen -- wijs de uitvoer ergens "
-       "anders aan om de oude te behouden."),
-    RU("В этой папке уже есть реконструкция (sparse/). Создание набора данных "
-       "перезапишет её — укажите другую папку результатов, чтобы сохранить "
-       "прежнюю."),
-    TR("Bu klasörde zaten bir yeniden oluşturma var (sparse/). Veri kümesini "
-       "oluşturmak onun üzerine yenisini yazar -- eskisini korumak için "
-       "çıktıyı başka bir yere yönlendirin."));
-
 // ===========================================================================
 // Reconstruction engine
 // ===========================================================================
@@ -7857,6 +7819,733 @@ SS_MSG(log_dataset_settings_changed,
     NL("Datasetinstellingen gewijzigd; dataset wordt opnieuw geladen"),
     RU("Параметры набора данных изменились; перезагрузка"),
     TR("Veri kümesi ayarları değişti; veri kümesi yeniden yükleniyor"));
+
+// ---------------------------------------------------------------------------
+// Depth and normals
+// ---------------------------------------------------------------------------
+
+SS_MSG(step_geometry,
+    EN("Depth"),         JA("深度"),          ZH_HANS("深度"),      ZH_HANT("深度"),
+    KO("깊이"),           DE("Tiefe"),        FR("Profondeur"),   ES("Profundidad"),
+    PT("Profundidade"),  IT("Profondità"),   NL("Diepte"),       RU("Глубина"),
+    TR("Derinlik"));
+
+SS_MSG(view_geometry,
+    EN("Depth & normals"),
+    JA("深度と法線"),      ZH_HANS("深度与法线"), ZH_HANT("深度與法線"),
+    KO("깊이와 법선"),     DE("Tiefe und Normalen"),
+    FR("Profondeur et normales"), ES("Profundidad y normales"),
+    PT("Profundidade e normais"), IT("Profondità e normali"),
+    NL("Diepte en normalen"), RU("Глубина и нормали"),
+    TR("Derinlik ve normaller"));
+
+SS_MSG(model_found_reuse,
+    EN("This folder already holds a reconstruction. It is kept as it is, and "
+       "only the steps below are run over it."),
+    JA("このフォルダにはすでに再構成結果があります。そのまま残し、下の工程だけを"
+       "その上で実行します。"),
+    ZH_HANS("这个文件夹里已经有一份重建结果。它会原样保留，只在其之上运行下面的"
+            "步骤。"),
+    ZH_HANT("這個資料夾裡已經有一份重建結果。它會原樣保留，只在其之上執行下面的"
+            "步驟。"),
+    KO("이 폴더에는 이미 재구성 결과가 있습니다. 그대로 두고, 그 위에서 아래 "
+       "단계만 실행합니다."),
+    DE("In diesem Ordner liegt bereits eine Rekonstruktion. Sie bleibt, wie sie "
+       "ist; darüber laufen nur die Schritte unten."),
+    FR("Ce dossier contient déjà une reconstruction. Elle est conservée telle "
+       "quelle, et seules les étapes ci-dessous s'exécutent par-dessus."),
+    ES("Esta carpeta ya contiene una reconstrucción. Se conserva tal cual y "
+       "solo se ejecutan sobre ella los pasos de abajo."),
+    PT("Esta pasta já contém uma reconstrução. Fica como está, e só os passos "
+       "abaixo correm sobre ela."),
+    IT("Questa cartella contiene già una ricostruzione. Resta com'è, e sopra di "
+       "essa girano solo i passi qui sotto."),
+    NL("Deze map bevat al een reconstructie. Die blijft zoals hij is; alleen de "
+       "stappen hieronder draaien eroverheen."),
+    RU("В этой папке уже есть реконструкция. Она остаётся как есть, поверх неё "
+       "выполняются только шаги ниже."),
+    TR("Bu klasörde zaten bir yeniden kurma var. Olduğu gibi kalır ve üzerinde "
+       "yalnızca aşağıdaki adımlar çalışır."));
+
+SS_MSG(model_will_be_replaced,
+    EN("The reconstruction in this folder will be replaced by a new one."),
+    JA("このフォルダの再構成結果は、新しいものに置き換えられます。"),
+    ZH_HANS("这个文件夹里的重建结果会被新的替换掉。"),
+    ZH_HANT("這個資料夾裡的重建結果會被新的取代。"),
+    KO("이 폴더의 재구성 결과는 새것으로 바뀝니다."),
+    DE("Die Rekonstruktion in diesem Ordner wird durch eine neue ersetzt."),
+    FR("La reconstruction de ce dossier sera remplacée par une nouvelle."),
+    ES("La reconstrucción de esta carpeta será sustituida por una nueva."),
+    PT("A reconstrução desta pasta será substituída por uma nova."),
+    IT("La ricostruzione in questa cartella sarà sostituita da una nuova."),
+    NL("De reconstructie in deze map wordt door een nieuwe vervangen."),
+    RU("Реконструкция в этой папке будет заменена новой."),
+    TR("Bu klasördeki yeniden kurma yenisiyle değiştirilecek."));
+
+SS_MSG(reconstruct_again,
+    EN("Reconstruct again"),
+    JA("再構成をやり直す"), ZH_HANS("重新重建"),  ZH_HANT("重新重建"),
+    KO("다시 재구성"),     DE("Neu rekonstruieren"),
+    FR("Reconstruire à nouveau"), ES("Reconstruir de nuevo"),
+    PT("Reconstruir de novo"), IT("Ricostruisci di nuovo"),
+    NL("Opnieuw reconstrueren"), RU("Реконструировать заново"),
+    TR("Yeniden kur"));
+
+SS_MSG(reconstruct_again_help,
+    EN("Build the cameras again from the images, replacing what is here. Leave "
+       "it off to add masks, depth and normals to a dataset that is already "
+       "reconstructed -- including one COLMAP, Nerfstudio or Metashape made."),
+    JA("画像からカメラを求め直し、いまあるものを置き換えます。オフのままにすると、"
+       "すでに再構成済みのデータセット（COLMAP や Nerfstudio、Metashape が作った"
+       "ものも含む）に、マスクや深度・法線を足すだけになります。"),
+    ZH_HANS("从图像重新求解相机，替换现有结果。保持关闭，就只是给已经重建好的数据"
+            "集补上蒙版和深度、法线——包括 COLMAP、Nerfstudio 或 Metashape 做的。"),
+    ZH_HANT("從影像重新求解相機，取代現有結果。保持關閉，就只是給已經重建好的資料"
+            "集補上遮罩和深度、法線——包括 COLMAP、Nerfstudio 或 Metashape 做的。"),
+    KO("이미지에서 카메라를 다시 구해 지금 있는 것을 대체합니다. 꺼 두면 이미 "
+       "재구성된 데이터셋(COLMAP, Nerfstudio, Metashape 이 만든 것 포함)에 마스크와 "
+       "깊이·법선만 더합니다."),
+    DE("Die Kameras erneut aus den Bildern bestimmen und das Vorhandene "
+       "ersetzen. Aus gelassen, kommen zu einem bereits rekonstruierten "
+       "Datensatz nur Masken, Tiefe und Normalen hinzu -- auch zu einem von "
+       "COLMAP, Nerfstudio oder Metashape."),
+    FR("Recalculer les caméras à partir des images et remplacer ce qui est là. "
+       "Laissé désactivé, cela ajoute seulement masques, profondeur et normales "
+       "à un jeu déjà reconstruit -- y compris par COLMAP, Nerfstudio ou "
+       "Metashape."),
+    ES("Volver a calcular las cámaras desde las imágenes, sustituyendo lo que "
+       "hay. Si se deja apagado, solo añade máscaras, profundidad y normales a "
+       "un conjunto ya reconstruido, incluido uno de COLMAP, Nerfstudio o "
+       "Metashape."),
+    PT("Voltar a calcular as câmaras a partir das imagens, substituindo o que "
+       "está aqui. Deixado desligado, só acrescenta máscaras, profundidade e "
+       "normais a um conjunto já reconstruído, incluindo um do COLMAP, "
+       "Nerfstudio ou Metashape."),
+    IT("Ricalcolare le fotocamere dalle immagini, sostituendo ciò che c'è. "
+       "Lasciato spento, aggiunge soltanto maschere, profondità e normali a un "
+       "insieme già ricostruito, anche di COLMAP, Nerfstudio o Metashape."),
+    NL("De camera's opnieuw uit de beelden bepalen en vervangen wat er staat. "
+       "Uit gelaten voegt dit alleen maskers, diepte en normalen toe aan een "
+       "reeds gereconstrueerde dataset -- ook een van COLMAP, Nerfstudio of "
+       "Metashape."),
+    RU("Заново определить камеры по изображениям, заменив то, что есть. Если "
+       "оставить выключенным, к уже реконструированному набору — в том числе "
+       "сделанному COLMAP, Nerfstudio или Metashape — только добавятся маски, "
+       "глубина и нормали."),
+    TR("Kameraları görüntülerden yeniden hesaplar ve buradakini değiştirir. "
+       "Kapalı bırakılırsa, zaten yeniden kurulmuş bir veri kümesine -- COLMAP, "
+       "Nerfstudio ya da Metashape'in yaptığı biri dahil -- yalnızca maske, "
+       "derinlik ve normaller eklenir."));
+
+SS_MSG(update_dataset,
+    EN("Update Dataset"),
+    JA("データセットを更新"), ZH_HANS("更新数据集"), ZH_HANT("更新資料集"),
+    KO("데이터셋 갱신"),    DE("Datensatz ergänzen"),
+    FR("Compléter le jeu de données"), ES("Actualizar el conjunto de datos"),
+    PT("Atualizar o conjunto de dados"), IT("Aggiorna il set di dati"),
+    NL("Dataset bijwerken"), RU("Дополнить набор данных"),
+    TR("Veri kümesini güncelle"));
+
+SS_MSG(rerun_geometry,
+    EN("Depth and normals again"),
+    JA("深度と法線をやり直す"), ZH_HANS("重算深度与法线"), ZH_HANT("重算深度與法線"),
+    KO("깊이와 법선 다시"),   DE("Tiefe und Normalen neu"),
+    FR("Refaire profondeur et normales"),
+    ES("Rehacer profundidad y normales"),
+    PT("Refazer profundidade e normais"),
+    IT("Rifai profondità e normali"),
+    NL("Diepte en normalen opnieuw"),
+    RU("Глубина и нормали заново"),
+    TR("Derinlik ve normaller yeniden"));
+
+SS_MSG(rerun_geometry_help,
+    EN("Estimate every map again, including the ones already on disk. The "
+       "reconstruction is not touched: nothing downstream of these maps exists."),
+    JA("すでにディスクにあるものも含め、すべてのマップを推定し直します。再構成には"
+       "触れません。これらのマップの下流には何もないからです。"),
+    ZH_HANS("重新估计所有图，包括磁盘上已有的。不动重建结果：这些图的下游没有任何"
+            "东西。"),
+    ZH_HANT("重新估計所有圖，包括磁碟上已有的。不動重建結果：這些圖的下游沒有任何"
+            "東西。"),
+    KO("디스크에 이미 있는 것까지 포함해 모든 맵을 다시 추정합니다. 재구성은 "
+       "건드리지 않습니다. 이 맵들의 하류에는 아무것도 없습니다."),
+    DE("Alle Karten neu schätzen, auch die schon vorhandenen. Die Rekonstruktion "
+       "bleibt unangetastet: hinter diesen Karten kommt nichts mehr."),
+    FR("Réestimer toutes les cartes, y compris celles déjà sur le disque. La "
+       "reconstruction n'est pas touchée : rien ne dépend de ces cartes."),
+    ES("Volver a estimar todos los mapas, incluidos los que ya están en disco. "
+       "No se toca la reconstrucción: nada depende de estos mapas."),
+    PT("Voltar a estimar todos os mapas, incluindo os que já estão no disco. A "
+       "reconstrução não é tocada: nada depende destes mapas."),
+    IT("Ristimare tutte le mappe, comprese quelle già su disco. La ricostruzione "
+       "non viene toccata: da queste mappe non dipende nulla."),
+    NL("Alle kaarten opnieuw schatten, ook die al op schijf staan. De "
+       "reconstructie blijft ongemoeid: er hangt niets aan deze kaarten."),
+    RU("Пересчитать все карты, включая уже лежащие на диске. Реконструкция не "
+       "трогается: за этими картами ничего не следует."),
+    TR("Diskte zaten bulunanlar dahil bütün haritaları yeniden kestir. Yeniden "
+       "kurmaya dokunulmaz: bu haritaların ardında bir şey yoktur."));
+
+SS_MSG(geom_unavailable,
+    EN("This build cannot estimate depth and normals."),
+    JA("このビルドでは深度と法線を推定できません。"),
+    ZH_HANS("这个构建无法估计深度与法线。"),
+    ZH_HANT("這個組建無法估計深度與法線。"),
+    KO("이 빌드에서는 깊이와 법선을 추정할 수 없습니다."),
+    DE("Diese Fassung kann Tiefe und Normalen nicht schätzen."),
+    FR("Cette version ne peut pas estimer profondeur et normales."),
+    ES("Esta compilación no puede estimar profundidad ni normales."),
+    PT("Esta compilação não consegue estimar profundidade nem normais."),
+    IT("Questa build non può stimare profondità e normali."),
+    NL("Deze build kan diepte en normalen niet schatten."),
+    RU("Эта сборка не умеет оценивать глубину и нормали."),
+    TR("Bu yapı derinlik ve normalleri kestiremez."));
+
+SS_MSG(geom_enable,
+    EN("Estimate depth and normals"),
+    JA("深度と法線を推定する"), ZH_HANS("估计深度与法线"), ZH_HANT("估計深度與法線"),
+    KO("깊이와 법선 추정"),    DE("Tiefe und Normalen schätzen"),
+    FR("Estimer profondeur et normales"),
+    ES("Estimar profundidad y normales"),
+    PT("Estimar profundidade e normais"),
+    IT("Stima profondità e normali"),
+    NL("Diepte en normalen schatten"),
+    RU("Оценивать глубину и нормали"),
+    TR("Derinlik ve normalleri kestir"));
+
+SS_MSG(geom_enable_help,
+    EN("After the reconstruction, run a monocular network over every image and "
+       "write the maps beside them. Training reads them by name and uses them "
+       "to keep flat things flat -- walls, floors, tables -- which is where "
+       "splatting without them goes wrong. About a second an image."),
+    JA("再構成のあと、各画像に単眼ネットワークをかけ、マップを画像の隣に書き出し"
+       "ます。学習は名前でそれを見つけ、壁・床・机のような平らな面を平らに保つの"
+       "に使います。これが無いスプラッティングが崩れるのはまさにそこです。1 枚あ"
+       "たり約 1 秒。"),
+    ZH_HANS("重建之后，对每张图跑一遍单目网络，把结果写在图像旁边。训练会按名字读"
+            "取它们，用来让平的地方保持平——墙面、地板、桌面，正是没有它们时泼溅"
+            "最容易出错的地方。每张约一秒。"),
+    ZH_HANT("重建之後，對每張圖跑一遍單目網路，把結果寫在影像旁邊。訓練會按名字讀"
+            "取它們，用來讓平的地方保持平——牆面、地板、桌面，正是沒有它們時潑濺"
+            "最容易出錯的地方。每張約一秒。"),
+    KO("재구성 뒤에 모든 이미지에 단안 신경망을 돌려 맵을 이미지 옆에 씁니다. 학습은 "
+       "이름으로 그것을 찾아 벽·바닥·책상 같은 평평한 면을 평평하게 유지하는 데 "
+       "씁니다. 그것이 없을 때 스플래팅이 무너지는 지점입니다. 장당 약 1 초."),
+    DE("Nach der Rekonstruktion ein monokulares Netz über jedes Bild laufen "
+       "lassen und die Karten daneben schreiben. Das Training findet sie am "
+       "Namen und hält damit Flaches flach -- Wände, Böden, Tische -- genau da, "
+       "wo Splatting ohne sie danebengeht. Etwa eine Sekunde je Bild."),
+    FR("Après la reconstruction, faire passer un réseau monoculaire sur chaque "
+       "image et écrire les cartes à côté. L'entraînement les trouve par leur "
+       "nom et s'en sert pour garder plat ce qui est plat -- murs, sols, tables "
+       "-- là précisément où le splatting dérape sans elles. Environ une seconde "
+       "par image."),
+    ES("Tras la reconstrucción, pasar una red monocular por cada imagen y "
+       "escribir los mapas al lado. El entrenamiento los encuentra por su nombre "
+       "y los usa para mantener plano lo que es plano -- paredes, suelos, mesas "
+       "--, justo donde el splatting falla sin ellos. Alrededor de un segundo "
+       "por imagen."),
+    PT("Depois da reconstrução, passar uma rede monocular por cada imagem e "
+       "escrever os mapas ao lado. O treino encontra-os pelo nome e usa-os para "
+       "manter plano o que é plano -- paredes, chãos, mesas --, precisamente "
+       "onde o splatting falha sem eles. Cerca de um segundo por imagem."),
+    IT("Dopo la ricostruzione, far passare una rete monoculare su ogni immagine "
+       "e scrivere le mappe accanto. L'addestramento le trova per nome e le usa "
+       "per tenere piatto ciò che è piatto -- muri, pavimenti, tavoli -- proprio "
+       "dove lo splatting sbaglia senza. Circa un secondo per immagine."),
+    NL("Na de reconstructie een monoculair netwerk over elk beeld halen en de "
+       "kaarten ernaast schrijven. De training vindt ze op naam en houdt er vlak "
+       "mee wat vlak is -- muren, vloeren, tafels -- precies waar splatting "
+       "zonder hen misgaat. Ongeveer een seconde per beeld."),
+    RU("После реконструкции прогнать по каждому изображению монокулярную сеть и "
+       "записать карты рядом. Обучение находит их по имени и держит плоское "
+       "плоским — стены, полы, столы, — именно там, где сплаттинг без них "
+       "ошибается. Около секунды на изображение."),
+    TR("Yeniden kurmadan sonra her görüntüde tek gözlü bir ağ çalıştırıp "
+       "haritaları yanlarına yazar. Eğitim onları adıyla bulur ve düz olanı düz "
+       "tutmakta kullanır -- duvarlar, zeminler, masalar -- ki bunlar olmadan "
+       "splatting tam orada yanılır. Görüntü başına yaklaşık bir saniye."));
+
+SS_MSG(geom_model,
+    EN("Geometry model"),
+    JA("ジオメトリのモデル"), ZH_HANS("几何模型"),  ZH_HANT("幾何模型"),
+    KO("기하 모델"),         DE("Geometriemodell"),
+    FR("Modèle de géométrie"), ES("Modelo de geometría"),
+    PT("Modelo de geometria"), IT("Modello di geometria"),
+    NL("Geometriemodel"),    RU("Модель геометрии"),
+    TR("Geometri modeli"));
+
+SS_MSG(geom_model_small,
+    EN("Metric3D v2 small"),
+    JA("Metric3D v2 スモール"), ZH_HANS("Metric3D v2 小"), ZH_HANT("Metric3D v2 小"),
+    KO("Metric3D v2 스몰"),   DE("Metric3D v2 klein"),
+    FR("Metric3D v2 petit"), ES("Metric3D v2 pequeño"),
+    PT("Metric3D v2 pequeno"), IT("Metric3D v2 piccolo"),
+    NL("Metric3D v2 klein"), RU("Metric3D v2 малая"),
+    TR("Metric3D v2 küçük"));
+
+SS_MSG(geom_model_small_blurb,
+    EN("72 MB, about 0.12 s an image. Enough to try the idea out; the normals "
+       "are visibly coarser."),
+    JA("72 MB、1 枚あたり約 0.12 秒。試すには十分ですが、法線は目に見えて粗く"
+       "なります。"),
+    ZH_HANS("72 MB，每张约 0.12 秒。用来试试足够，但法线明显更粗。"),
+    ZH_HANT("72 MB，每張約 0.12 秒。用來試試足夠，但法線明顯更粗。"),
+    KO("72 MB, 장당 약 0.12 초. 시험해 보기에는 충분하지만 법선이 눈에 띄게 "
+       "거칩니다."),
+    DE("72 MB, etwa 0,12 s je Bild. Zum Ausprobieren genug; die Normalen sind "
+       "sichtbar gröber."),
+    FR("72 Mo, environ 0,12 s par image. Assez pour essayer ; les normales sont "
+       "visiblement plus grossières."),
+    ES("72 MB, unos 0,12 s por imagen. Basta para probar; las normales son "
+       "visiblemente más bastas."),
+    PT("72 MB, cerca de 0,12 s por imagem. Chega para experimentar; as normais "
+       "são visivelmente mais grosseiras."),
+    IT("72 MB, circa 0,12 s per immagine. Basta per provare; le normali sono "
+       "visibilmente più grossolane."),
+    NL("72 MB, ongeveer 0,12 s per beeld. Genoeg om het te proberen; de normalen "
+       "zijn zichtbaar grover."),
+    RU("72 МБ, около 0,12 с на изображение. Хватит, чтобы попробовать; нормали "
+       "заметно грубее."),
+    TR("72 MB, görüntü başına yaklaşık 0,12 s. Denemek için yeter; normaller "
+       "gözle görülür biçimde kabadır."));
+
+SS_MSG(geom_model_large,
+    EN("Metric3D v2 large"),
+    JA("Metric3D v2 ラージ"), ZH_HANS("Metric3D v2 大"), ZH_HANT("Metric3D v2 大"),
+    KO("Metric3D v2 라지"),  DE("Metric3D v2 groß"),
+    FR("Metric3D v2 grand"), ES("Metric3D v2 grande"),
+    PT("Metric3D v2 grande"), IT("Metric3D v2 grande"),
+    NL("Metric3D v2 groot"), RU("Metric3D v2 большая"),
+    TR("Metric3D v2 büyük"));
+
+SS_MSG(geom_model_large_blurb,
+    EN("790 MB, about 0.8 s an image. What the reference pipeline runs, and the "
+       "right choice for almost every capture."),
+    JA("790 MB、1 枚あたり約 0.8 秒。参照実装が使うもので、ほとんどの撮影ではこれ"
+       "が正解です。"),
+    ZH_HANS("790 MB，每张约 0.8 秒。参考实现用的就是它，几乎所有拍摄都该选这个。"),
+    ZH_HANT("790 MB，每張約 0.8 秒。參考實作用的就是它，幾乎所有拍攝都該選這個。"),
+    KO("790 MB, 장당 약 0.8 초. 참조 구현이 쓰는 것이며 거의 모든 촬영에 알맞습니다."),
+    DE("790 MB, etwa 0,8 s je Bild. Was die Referenzpipeline nutzt, und für fast "
+       "jede Aufnahme die richtige Wahl."),
+    FR("790 Mo, environ 0,8 s par image. Ce qu'utilise le pipeline de référence, "
+       "et le bon choix pour presque toute prise."),
+    ES("790 MB, unos 0,8 s por imagen. Es lo que usa la tubería de referencia y "
+       "la elección adecuada para casi toda toma."),
+    PT("790 MB, cerca de 0,8 s por imagem. É o que o pipeline de referência usa "
+       "e a escolha certa para quase toda captura."),
+    IT("790 MB, circa 0,8 s per immagine. È ciò che usa la pipeline di "
+       "riferimento e la scelta giusta per quasi ogni ripresa."),
+    NL("790 MB, ongeveer 0,8 s per beeld. Wat de referentiepijplijn gebruikt, en "
+       "voor bijna elke opname de juiste keuze."),
+    RU("790 МБ, около 0,8 с на изображение. То, что использует эталонный "
+       "конвейер, и верный выбор почти для любой съёмки."),
+    TR("790 MB, görüntü başına yaklaşık 0,8 s. Referans işlem hattının "
+       "kullandığı ve neredeyse her çekim için doğru seçim."));
+
+SS_MSG(geom_model_giant,
+    EN("Metric3D v2 giant"),
+    JA("Metric3D v2 ジャイアント"), ZH_HANS("Metric3D v2 巨型"),
+    ZH_HANT("Metric3D v2 巨型"), KO("Metric3D v2 자이언트"),
+    DE("Metric3D v2 riesig"), FR("Metric3D v2 géant"),
+    ES("Metric3D v2 gigante"), PT("Metric3D v2 gigante"),
+    IT("Metric3D v2 gigante"), NL("Metric3D v2 reusachtig"),
+    RU("Metric3D v2 гигантская"), TR("Metric3D v2 devasa"));
+
+SS_MSG(geom_model_giant_blurb,
+    EN("2.6 GB of download and 2.6 GB on the card, about 2 s an image, for a "
+       "modest gain over large."),
+    JA("ダウンロード 2.6 GB、カード上も 2.6 GB、1 枚あたり約 2 秒。ラージからの"
+       "伸びはわずかです。"),
+    ZH_HANS("下载 2.6 GB，显存也占 2.6 GB，每张约 2 秒，相比“大”只有小幅提升。"),
+    ZH_HANT("下載 2.6 GB，顯存也佔 2.6 GB，每張約 2 秒，相比「大」只有小幅提升。"),
+    KO("내려받기 2.6 GB, 카드에서도 2.6 GB, 장당 약 2 초이며 라지 대비 향상은 "
+       "크지 않습니다."),
+    DE("2,6 GB Download und 2,6 GB auf der Karte, etwa 2 s je Bild, für einen "
+       "bescheidenen Gewinn gegenüber groß."),
+    FR("2,6 Go à télécharger et 2,6 Go sur la carte, environ 2 s par image, pour "
+       "un gain modeste sur le grand."),
+    ES("2,6 GB de descarga y 2,6 GB en la tarjeta, unos 2 s por imagen, para una "
+       "ganancia modesta sobre el grande."),
+    PT("2,6 GB de transferência e 2,6 GB na placa, cerca de 2 s por imagem, para "
+       "um ganho modesto sobre o grande."),
+    IT("2,6 GB da scaricare e 2,6 GB sulla scheda, circa 2 s per immagine, per "
+       "un guadagno modesto sul grande."),
+    NL("2,6 GB download en 2,6 GB op de kaart, ongeveer 2 s per beeld, voor een "
+       "bescheiden winst boven groot."),
+    RU("2,6 ГБ загрузки и 2,6 ГБ на карте, около 2 с на изображение, ради "
+       "скромного выигрыша над большой."),
+    TR("2,6 GB indirme ve kartta 2,6 GB, görüntü başına yaklaşık 2 s; büyüğe "
+       "göre kazanç ölçülüdür."));
+
+SS_MSG(geom_get_model,
+    EN("Get the geometry model"),
+    JA("ジオメトリのモデルを取得"), ZH_HANS("获取几何模型"), ZH_HANT("取得幾何模型"),
+    KO("기하 모델 받기"),         DE("Geometriemodell holen"),
+    FR("Obtenir le modèle de géométrie"),
+    ES("Obtener el modelo de geometría"),
+    PT("Obter o modelo de geometria"),
+    IT("Ottieni il modello di geometria"),
+    NL("Geometriemodel ophalen"), RU("Получить модель геометрии"),
+    TR("Geometri modelini getir"));
+
+SS_MSG(geom_model_ready,
+    EN("Geometry model ready."),
+    JA("ジオメトリのモデルの準備ができました。"),
+    ZH_HANS("几何模型已就绪。"), ZH_HANT("幾何模型已就緒。"),
+    KO("기하 모델이 준비되었습니다."), DE("Geometriemodell bereit."),
+    FR("Modèle de géométrie prêt."), ES("Modelo de geometría listo."),
+    PT("Modelo de geometria pronto."), IT("Modello di geometria pronto."),
+    NL("Geometriemodel gereed."), RU("Модель геометрии готова."),
+    TR("Geometri modeli hazır."));
+
+SS_MSG(geom_model_first,
+    EN("the geometry model has not been downloaded yet"),
+    JA("ジオメトリのモデルがまだダウンロードされていません"),
+    ZH_HANS("还没有下载几何模型"), ZH_HANT("還沒有下載幾何模型"),
+    KO("기하 모델을 아직 내려받지 않았습니다"),
+    DE("das Geometriemodell ist noch nicht heruntergeladen"),
+    FR("le modèle de géométrie n'est pas encore téléchargé"),
+    ES("el modelo de geometría todavía no está descargado"),
+    PT("o modelo de geometria ainda não foi transferido"),
+    IT("il modello di geometria non è ancora scaricato"),
+    NL("het geometriemodel is nog niet gedownload"),
+    RU("модель геометрии ещё не скачана"),
+    TR("geometri modeli henüz indirilmedi"));
+
+SS_MSG(geom_write_normals,
+    EN("Normal maps"),
+    JA("法線マップ"),     ZH_HANS("法线图"),    ZH_HANT("法線圖"),
+    KO("법선 맵"),        DE("Normalenkarten"), FR("Cartes de normales"),
+    ES("Mapas de normales"), PT("Mapas de normais"), IT("Mappe di normali"),
+    NL("Normaalkaarten"), RU("Карты нормалей"), TR("Normal haritaları"));
+
+SS_MSG(geom_write_depth,
+    EN("Depth maps"),
+    JA("深度マップ"),     ZH_HANS("深度图"),    ZH_HANT("深度圖"),
+    KO("깊이 맵"),        DE("Tiefenkarten"),  FR("Cartes de profondeur"),
+    ES("Mapas de profundidad"), PT("Mapas de profundidade"),
+    IT("Mappe di profondità"), NL("Dieptekaarten"), RU("Карты глубины"),
+    TR("Derinlik haritaları"));
+
+SS_MSG(geom_nothing_to_write,
+    EN("Neither map is selected, so this step would write nothing."),
+    JA("どちらのマップも選ばれていないので、この工程は何も書き出しません。"),
+    ZH_HANS("两种图都没勾选，这一步不会写出任何东西。"),
+    ZH_HANT("兩種圖都沒勾選，這一步不會寫出任何東西。"),
+    KO("어느 맵도 선택되지 않아 이 단계는 아무것도 쓰지 않습니다."),
+    DE("Keine der beiden Karten ist gewählt, dieser Schritt schriebe also nichts."),
+    FR("Aucune des deux cartes n'est cochée : cette étape n'écrirait rien."),
+    ES("No hay ningún mapa seleccionado, así que este paso no escribiría nada."),
+    PT("Nenhum dos mapas está selecionado, por isso este passo não escreveria nada."),
+    IT("Nessuna delle due mappe è selezionata, quindi questo passo non scriverebbe nulla."),
+    NL("Geen van beide kaarten is aangevinkt, dus deze stap zou niets schrijven."),
+    RU("Ни одна карта не выбрана, поэтому этот шаг ничего не запишет."),
+    TR("İki harita da seçili değil, bu adım hiçbir şey yazmaz."));
+
+SS_MSG(geom_try,
+    EN("Try it on one frame..."),
+    JA("1 フレームで試す…"), ZH_HANS("在一帧上试一下…"), ZH_HANT("在一格上試一下…"),
+    KO("한 프레임에서 시험…"), DE("An einem Bild ausprobieren …"),
+    FR("Essayer sur une image…"), ES("Probar en un fotograma…"),
+    PT("Testar num fotograma…"), IT("Prova su un fotogramma…"),
+    NL("Op één beeld uitproberen…"), RU("Проверить на одном кадре…"),
+    TR("Tek karede dene…"));
+
+SS_MSG(geom_try_help,
+    EN("The same network and the same camera handling the run uses, on one "
+       "picture. It also says how long one image takes, which is the only "
+       "honest way to know what the whole capture will cost."),
+    JA("実行時と同じネットワーク・同じカメラ処理を、1 枚の絵に対して走らせます。"
+       "1 枚あたりの所要時間も出るので、撮影全体にどれだけかかるかを正しく見積も"
+       "れます。"),
+    ZH_HANS("用与正式运行完全相同的网络和相机处理，跑一张图。它还会给出单张耗时，"
+            "这是估算整段拍摄要花多久的唯一可靠办法。"),
+    ZH_HANT("用與正式執行完全相同的網路和相機處理，跑一張圖。它還會給出單張耗時，"
+            "這是估算整段拍攝要花多久的唯一可靠辦法。"),
+    KO("실행 때와 똑같은 신경망과 똑같은 카메라 처리를 그림 한 장에 돌립니다. 장당 "
+       "걸리는 시간도 알려 주므로 촬영 전체의 비용을 정확히 가늠할 수 있습니다."),
+    DE("Dasselbe Netz und dieselbe Kamerabehandlung wie im Lauf, an einem Bild. "
+       "Es nennt auch die Zeit je Bild -- die einzige ehrliche Art zu wissen, was "
+       "die ganze Aufnahme kostet."),
+    FR("Le même réseau et le même traitement de caméra que l'exécution, sur une "
+       "image. Il donne aussi le temps par image, seule façon honnête de savoir "
+       "ce que coûtera toute la prise."),
+    ES("La misma red y el mismo tratamiento de cámara que la ejecución, sobre una "
+       "imagen. También indica el tiempo por imagen, la única forma honesta de "
+       "saber qué costará toda la toma."),
+    PT("A mesma rede e o mesmo tratamento de câmara que a execução, sobre uma "
+       "imagem. Também diz o tempo por imagem, a única forma honesta de saber o "
+       "que custará toda a captura."),
+    IT("La stessa rete e lo stesso trattamento della fotocamera dell'esecuzione, "
+       "su un'immagine. Dice anche il tempo per immagine, l'unico modo onesto di "
+       "sapere quanto costerà l'intera ripresa."),
+    NL("Hetzelfde netwerk en dezelfde camerabehandeling als de run, op één beeld. "
+       "Het noemt ook de tijd per beeld, de enige eerlijke manier om te weten wat "
+       "de hele opname kost."),
+    RU("Та же сеть и та же обработка камеры, что и в запуске, на одном снимке. "
+       "Заодно называет время на изображение — единственный честный способ узнать, "
+       "во что обойдётся вся съёмка."),
+    TR("Çalıştırmadaki ağın ve kamera işleyişinin aynısı, tek bir resim üzerinde. "
+       "Görüntü başına süreyi de söyler; bütün çekimin neye mal olacağını bilmenin "
+       "tek dürüst yolu budur."));
+
+SS_MSG(geom_advanced,
+    EN("Advanced geometry"),
+    JA("ジオメトリの詳細設定"), ZH_HANS("几何高级设置"), ZH_HANT("幾何進階設定"),
+    KO("기하 고급 설정"),      DE("Erweiterte Geometrie"),
+    FR("Géométrie avancée"),  ES("Geometría avanzada"),
+    PT("Geometria avançada"), IT("Geometria avanzata"),
+    NL("Geavanceerde geometrie"), RU("Дополнительно о геометрии"),
+    TR("Gelişmiş geometri"));
+
+SS_MSG(geom_max_size,
+    EN("Inference size"),
+    JA("推論サイズ"),     ZH_HANS("推理尺寸"),  ZH_HANT("推論尺寸"),
+    KO("추론 크기"),      DE("Inferenzgröße"), FR("Taille d'inférence"),
+    ES("Tamaño de inferencia"), PT("Tamanho de inferência"),
+    IT("Dimensione d'inferenza"), NL("Inferentiegrootte"),
+    RU("Размер вывода"), TR("Çıkarım boyutu"));
+
+SS_MSG(geom_normal_format,
+    EN("Normal map format"),
+    JA("法線マップの形式"), ZH_HANS("法线图格式"), ZH_HANT("法線圖格式"),
+    KO("법선 맵 형식"),    DE("Format der Normalenkarten"),
+    FR("Format des normales"), ES("Formato de las normales"),
+    PT("Formato das normais"), IT("Formato delle normali"),
+    NL("Formaat normaalkaarten"), RU("Формат карт нормалей"),
+    TR("Normal haritası biçimi"));
+
+SS_MSG(geom_jpeg_quality,
+    EN("JPEG quality"),
+    JA("JPEG 品質"),      ZH_HANS("JPEG 质量"), ZH_HANT("JPEG 品質"),
+    KO("JPEG 품질"),      DE("JPEG-Qualität"), FR("Qualité JPEG"),
+    ES("Calidad JPEG"),   PT("Qualidade JPEG"), IT("Qualità JPEG"),
+    NL("JPEG-kwaliteit"), RU("Качество JPEG"), TR("JPEG kalitesi"));
+
+SS_MSG(geom_depth_units,
+    EN("Depth units"),
+    JA("深度の単位"),     ZH_HANS("深度单位"),  ZH_HANT("深度單位"),
+    KO("깊이 단위"),      DE("Tiefeneinheit"), FR("Unités de profondeur"),
+    ES("Unidades de profundidad"), PT("Unidades de profundidade"),
+    IT("Unità di profondità"), NL("Diepte-eenheden"), RU("Единицы глубины"),
+    TR("Derinlik birimi"));
+
+SS_MSG(geom_split,
+    EN("Split wide frames"),
+    JA("広い画角を分割"),  ZH_HANS("拆分广角画面"), ZH_HANT("拆分廣角畫面"),
+    KO("넓은 화각 분할"),  DE("Weite Bilder zerlegen"),
+    FR("Découper les images larges"), ES("Dividir cuadros amplios"),
+    PT("Dividir quadros largos"), IT("Dividi i fotogrammi ampi"),
+    NL("Brede beelden splitsen"), RU("Разбивать широкие кадры"),
+    TR("Geniş kareleri böl"));
+
+SS_MSG(geom_ray_depth,
+    EN("Store ray depth"),
+    JA("光線深度で保存"),  ZH_HANS("保存光线深度"), ZH_HANT("儲存光線深度"),
+    KO("광선 깊이로 저장"), DE("Strahltiefe speichern"),
+    FR("Enregistrer la profondeur radiale"),
+    ES("Guardar profundidad radial"), PT("Guardar profundidade radial"),
+    IT("Salva la profondità radiale"), NL("Straaldiepte opslaan"),
+    RU("Хранить лучевую глубину"), TR("Işın derinliğini sakla"));
+
+SS_MSG(geom_overwrite,
+    EN("Recompute maps that already exist"),
+    JA("すでにあるマップも作り直す"),
+    ZH_HANS("重新计算已有的图"), ZH_HANT("重新計算已有的圖"),
+    KO("이미 있는 맵도 다시 계산"),
+    DE("Vorhandene Karten neu berechnen"),
+    FR("Recalculer les cartes déjà présentes"),
+    ES("Recalcular los mapas que ya existen"),
+    PT("Recalcular os mapas que já existem"),
+    IT("Ricalcola le mappe già presenti"),
+    NL("Bestaande kaarten opnieuw berekenen"),
+    RU("Пересчитывать уже существующие карты"),
+    TR("Zaten var olan haritaları yeniden hesapla"));
+
+// ---- the preview panel ----
+
+SS_MSG(geom_preview_title,
+    EN("Depth and normals on one frame"),
+    JA("1 フレームの深度と法線"),
+    ZH_HANS("单帧的深度与法线"), ZH_HANT("單格的深度與法線"),
+    KO("한 프레임의 깊이와 법선"),
+    DE("Tiefe und Normalen an einem Bild"),
+    FR("Profondeur et normales sur une image"),
+    ES("Profundidad y normales en un fotograma"),
+    PT("Profundidade e normais num fotograma"),
+    IT("Profondità e normali su un fotogramma"),
+    NL("Diepte en normalen op één beeld"),
+    RU("Глубина и нормали на одном кадре"),
+    TR("Tek karede derinlik ve normaller"));
+
+SS_MSG(geom_preview_legend,
+    EN("A normal map is right when flat things read as one flat colour and "
+       "edges are crisp. Black is where no face of the frame reached."),
+    JA("平らな面が 1 色に読め、稜線がはっきりしていれば法線は正しく出ています。"
+       "黒はどの面も届かなかった場所です。"),
+    ZH_HANS("平面读起来是一整片同色、边缘清晰，法线就是对的。黑色是画面任何一个面"
+            "都没覆盖到的地方。"),
+    ZH_HANT("平面讀起來是一整片同色、邊緣清晰，法線就是對的。黑色是畫面任何一個面"
+            "都沒覆蓋到的地方。"),
+    KO("평평한 면이 한 가지 색으로 읽히고 모서리가 또렷하면 법선이 맞은 것입니다. "
+       "검은색은 어느 면도 닿지 않은 곳입니다."),
+    DE("Eine Normalenkarte stimmt, wenn Flächen als eine einzige Farbe lesen und "
+       "Kanten scharf sind. Schwarz ist, wohin keine Fläche des Bildes reichte."),
+    FR("Une carte de normales est juste quand les surfaces planes se lisent d'une "
+       "seule couleur et que les arêtes sont nettes. Le noir est là où aucune "
+       "face de l'image n'a atteint."),
+    ES("Un mapa de normales es correcto cuando las superficies planas se leen de "
+       "un solo color y las aristas son nítidas. El negro es donde no llegó "
+       "ninguna cara del cuadro."),
+    PT("Um mapa de normais está certo quando as superfícies planas se leem de uma "
+       "só cor e as arestas são nítidas. O preto é onde nenhuma face do quadro "
+       "chegou."),
+    IT("Una mappa di normali è giusta quando le superfici piane si leggono di un "
+       "solo colore e gli spigoli sono netti. Il nero è dove nessuna faccia del "
+       "fotogramma è arrivata."),
+    NL("Een normaalkaart klopt als vlakke dingen als één kleur lezen en randen "
+       "scherp zijn. Zwart is waar geen enkel vlak van het beeld kwam."),
+    RU("Карта нормалей верна, когда плоское читается одним цветом, а рёбра "
+       "чёткие. Чёрное — куда не дотянулась ни одна грань кадра."),
+    TR("Bir normal haritası, düz yüzeyler tek renk okunuyor ve kenarlar keskinse "
+       "doğrudur. Siyah, karenin hiçbir yüzünün ulaşmadığı yerdir."));
+
+SS_MSG(geom_preview_reading,
+    EN("reading the dataset..."),
+    JA("データセットを読み込んでいます..."),
+    ZH_HANS("正在读取数据集……"), ZH_HANT("正在讀取資料集……"),
+    KO("데이터셋을 읽는 중..."), DE("Datensatz wird gelesen..."),
+    FR("lecture du jeu de données..."), ES("leyendo el conjunto de datos..."),
+    PT("a ler o conjunto de dados..."), IT("lettura del set di dati..."),
+    NL("dataset wordt gelezen..."), RU("чтение набора данных..."),
+    TR("veri kümesi okunuyor..."));
+
+SS_MSG(geom_preview_running,
+    EN("estimating depth and normals..."),
+    JA("深度と法線を推定しています..."),
+    ZH_HANS("正在估计深度与法线……"), ZH_HANT("正在估計深度與法線……"),
+    KO("깊이와 법선을 추정하는 중..."),
+    DE("Tiefe und Normalen werden geschätzt..."),
+    FR("estimation de la profondeur et des normales..."),
+    ES("estimando profundidad y normales..."),
+    PT("a estimar profundidade e normais..."),
+    IT("stima di profondità e normali..."),
+    NL("diepte en normalen worden geschat..."),
+    RU("оценка глубины и нормалей..."),
+    TR("derinlik ve normaller kestiriliyor..."));
+
+SS_MSG(geom_preview_from_dataset,
+    EN("Using the cameras of the reconstruction in the output folder. Images: {0}"),
+    JA("出力フォルダの再構成結果のカメラを使っています。画像: {0}"),
+    ZH_HANS("正在使用输出文件夹中重建结果的相机。图像: {0}"),
+    ZH_HANT("正在使用輸出資料夾中重建結果的相機。影像: {0}"),
+    KO("출력 폴더에 있는 재구성 결과의 카메라를 씁니다. 이미지: {0}"),
+    DE("Es werden die Kameras der Rekonstruktion im Ausgabeordner benutzt. Bilder: {0}"),
+    FR("Utilise les caméras de la reconstruction du dossier de sortie. Images : {0}"),
+    ES("Se usan las cámaras de la reconstrucción de la carpeta de salida. Imágenes: {0}"),
+    PT("A usar as câmaras da reconstrução na pasta de saída. Imagens: {0}"),
+    IT("Si usano le fotocamere della ricostruzione nella cartella di uscita. Immagini: {0}"),
+    NL("Gebruikt de camera's van de reconstructie in de uitvoermap. Beelden: {0}"),
+    RU("Используются камеры реконструкции из папки вывода. Изображений: {0}"),
+    TR("Çıktı klasöründeki yeniden kurmanın kameraları kullanılıyor. Görüntü: {0}"));
+
+SS_MSG(geom_preview_assumed_lens,
+    EN("Nothing is reconstructed yet, so this assumes the lens named on the "
+       "screen ({0}) with no distortion. The run itself uses the "
+       "reconstruction's own cameras."),
+    JA("まだ再構成が無いので、画面で指定したレンズ（{0}）を歪み無しと仮定して"
+       "います。実行時は再構成結果のカメラを使います。"),
+    ZH_HANS("目前还没有重建结果，所以这里假定画面上选的镜头（{0}）且无畸变。"
+            "正式运行时会使用重建结果自己的相机。"),
+    ZH_HANT("目前還沒有重建結果，所以這裡假定畫面上選的鏡頭（{0}）且無畸變。"
+            "正式執行時會使用重建結果自己的相機。"),
+    KO("아직 재구성이 없어서 화면에서 고른 렌즈({0})를 왜곡 없이 가정합니다. 실제 "
+       "실행은 재구성 결과의 카메라를 씁니다."),
+    DE("Noch ist nichts rekonstruiert, daher wird das auf dem Bildschirm genannte "
+       "Objektiv ({0}) ohne Verzeichnung angenommen. Der Lauf selbst nimmt die "
+       "Kameras der Rekonstruktion."),
+    FR("Rien n'est encore reconstruit : on suppose l'objectif indiqué à l'écran "
+       "({0}) sans distorsion. L'exécution, elle, utilise les caméras de la "
+       "reconstruction."),
+    ES("Todavía no hay nada reconstruido, así que se supone el objetivo indicado "
+       "en pantalla ({0}) sin distorsión. La ejecución usa las cámaras de la "
+       "reconstrucción."),
+    PT("Ainda não há nada reconstruído, por isso assume-se a objetiva indicada no "
+       "ecrã ({0}) sem distorção. A execução usa as câmaras da reconstrução."),
+    IT("Non c'è ancora nulla di ricostruito, quindi si assume l'obiettivo "
+       "indicato a schermo ({0}) senza distorsione. L'esecuzione usa le "
+       "fotocamere della ricostruzione."),
+    NL("Er is nog niets gereconstrueerd, dus dit veronderstelt de op het scherm "
+       "genoemde lens ({0}) zonder vervorming. De run zelf gebruikt de camera's "
+       "van de reconstructie."),
+    RU("Реконструкции ещё нет, поэтому берётся объектив, названный на экране "
+       "({0}), без дисторсии. Сам запуск использует камеры реконструкции."),
+    TR("Henüz yeniden kurulmuş bir şey yok, bu yüzden ekranda belirtilen mercek "
+       "({0}) bozulmasız varsayılıyor. Çalıştırmanın kendisi yeniden kurmanın "
+       "kameralarını kullanır."));
+
+SS_MSG(geom_preview_nothing,
+    EN("no picture to work on"),
+    JA("対象になる絵がありません"),
+    ZH_HANS("没有可用来处理的图"), ZH_HANT("沒有可用來處理的圖"),
+    KO("작업할 그림이 없습니다"), DE("kein Bild zum Arbeiten"),
+    FR("aucune image sur laquelle travailler"),
+    ES("no hay ninguna imagen sobre la que trabajar"),
+    PT("não há imagem sobre a qual trabalhar"),
+    IT("nessuna immagine su cui lavorare"),
+    NL("geen beeld om mee te werken"),
+    RU("нет изображения для работы"),
+    TR("üzerinde çalışılacak resim yok"));
+
+SS_MSG(geom_preview_cost,
+    EN("Faces: {0} at {1}x{2}, time per image: {3} ms"),
+    JA("面: {0}（{1}x{2}）、1 枚あたり: {3} ms"),
+    ZH_HANS("面: {0}（{1}x{2}）, 每张耗时: {3} ms"),
+    ZH_HANT("面: {0}（{1}x{2}）, 每張耗時: {3} ms"),
+    KO("면: {0} ({1}x{2}), 장당 시간: {3} ms"),
+    DE("Flächen: {0} zu {1}x{2}, Zeit je Bild: {3} ms"),
+    FR("Faces : {0} en {1}x{2}, temps par image : {3} ms"),
+    ES("Caras: {0} a {1}x{2}, tiempo por imagen: {3} ms"),
+    PT("Faces: {0} a {1}x{2}, tempo por imagem: {3} ms"),
+    IT("Facce: {0} a {1}x{2}, tempo per immagine: {3} ms"),
+    NL("Vlakken: {0} op {1}x{2}, tijd per beeld: {3} ms"),
+    RU("Граней: {0} по {1}x{2}, время на изображение: {3} мс"),
+    TR("Yüz: {0}, {1}x{2}, görüntü başına süre: {3} ms"));
+
+SS_MSG(geom_preview_total,
+    EN("Images: {0}, estimated total: {1}"),
+    JA("画像: {0}、全体の見込み: {1}"),
+    ZH_HANS("图像: {0}, 预计总耗时: {1}"),
+    ZH_HANT("影像: {0}, 預計總耗時: {1}"),
+    KO("이미지: {0}, 전체 예상: {1}"),
+    DE("Bilder: {0}, geschätzt insgesamt: {1}"),
+    FR("Images : {0}, total estimé : {1}"),
+    ES("Imágenes: {0}, total estimado: {1}"),
+    PT("Imagens: {0}, total estimado: {1}"),
+    IT("Immagini: {0}, totale stimato: {1}"),
+    NL("Beelden: {0}, geschat totaal: {1}"),
+    RU("Изображений: {0}, всего ориентировочно: {1}"),
+    TR("Görüntü: {0}, tahmini toplam: {1}"));
+
+SS_MSG(geom_view_photo,
+    EN("Photo"),          JA("写真"),          ZH_HANS("照片"),      ZH_HANT("照片"),
+    KO("사진"),            DE("Foto"),         FR("Photo"),        ES("Foto"),
+    PT("Foto"),           IT("Foto"),         NL("Foto"),         RU("Фото"),
+    TR("Fotoğraf"));
+
+SS_MSG(geom_view_normals,
+    EN("Normals"),        JA("法線"),          ZH_HANS("法线"),      ZH_HANT("法線"),
+    KO("법선"),            DE("Normalen"),     FR("Normales"),     ES("Normales"),
+    PT("Normais"),        IT("Normali"),      NL("Normalen"),     RU("Нормали"),
+    TR("Normaller"));
+
+SS_MSG(geom_view_depth,
+    EN("Depth"),          JA("深度"),          ZH_HANS("深度"),      ZH_HANT("深度"),
+    KO("깊이"),            DE("Tiefe"),        FR("Profondeur"),   ES("Profundidad"),
+    PT("Profundidade"),   IT("Profondità"),   NL("Diepte"),       RU("Глубина"),
+    TR("Derinlik"));
 
 }  // namespace dataset
 }  // namespace msg

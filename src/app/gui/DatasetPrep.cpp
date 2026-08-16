@@ -583,14 +583,10 @@ std::vector<std::string> camera_subfolders(const std::string& dir) {
     return out;
 }
 
-bool folder_looks_like_dataset(const std::string& dir) {
+// A camera .xml next to a point-cloud .ply, which is what MetashapeParser
+// probes for.
+static bool metashape_export_here(const fs::path& p) {
     std::error_code ec;
-    const fs::path p(dir);
-    if (fs::exists(p / "transforms.json", ec) ||
-        fs::is_directory(p / "sparse", ec) || fs::is_directory(p / "colmap", ec))
-        return true;
-    // Metashape export: a camera .xml next to a point-cloud .ply (what
-    // MetashapeParser probes for).
     bool has_xml = false, has_ply = false;
     for (fs::directory_iterator it(p, ec), end; !ec && it != end;
          it.increment(ec)) {
@@ -601,6 +597,15 @@ bool folder_looks_like_dataset(const std::string& dir) {
         has_ply = has_ply || e == ".ply";
     }
     return has_xml && has_ply;
+}
+
+bool folder_looks_like_dataset(const std::string& dir) {
+    std::error_code ec;
+    const fs::path p(dir);
+    if (fs::exists(p / "transforms.json", ec) ||
+        fs::is_directory(p / "sparse", ec) || fs::is_directory(p / "colmap", ec))
+        return true;
+    return metashape_export_here(p);
 }
 
 WorkspaceState probe_workspace(const std::string& workspace,
@@ -627,7 +632,13 @@ WorkspaceState probe_workspace(const std::string& workspace,
     st.masks = has_content(ws / "masks") && !is_input(ws / "masks", true);
     st.features = has_content(ws / "features") || fs::exists(ws / "matches.bin", ec) ||
                   fs::exists(ws / "database.db", ec);
-    st.model = has_content(ws / "sparse");
+    // Stricter than folder_looks_like_dataset, which answers "where should a
+    // dropped folder go" and takes an empty sparse/ for a model. An empty one
+    // is a directory somebody made, and reconstructing into it is right.
+    st.model = has_content(ws / "sparse") || has_content(ws / "colmap") ||
+               fs::exists(ws / "transforms.json", ec) ||
+               metashape_export_here(ws);
+    st.geometry = has_content(ws / "normals") || has_content(ws / "depths");
     return st;
 }
 

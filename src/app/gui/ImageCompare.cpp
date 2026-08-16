@@ -2,6 +2,7 @@
 
 #include "app/gui/ImageCompare.h"
 
+#include "app/DepthColor.h"
 #include "app/TrainerCore.h"
 #include "app/gui/Layout.h"
 #include "app/gui/Ui.h"
@@ -104,6 +105,27 @@ void pack_mask(const uint8_t* src, int views, int h, int w, int mh, int mw,
     }
 }
 
+// uint8 [views, sh, sw, 3] -> uint8 [rows*h, cols*w, 3]. Nearest, because a
+// supervision modality keeps whatever resolution its files are.
+void pack_bytes(const uint8_t* src, int views, int h, int w, int sh, int sw,
+                int cols, int rows, std::vector<uint8_t>& dst) {
+    const int W = cols * w;
+    dst.assign((size_t)rows * h * W * 3, 0);
+    for (int v = 0; v < views; v++) {
+        const uint8_t* s = src + (size_t)v * sh * sw * 3;
+        const int oy = (v / cols) * h, ox = (v % cols) * w;
+        for (int y = 0; y < h; y++) {
+            const int my = (sh == h) ? y : (int)((int64_t)y * sh / h);
+            const uint8_t* sr = s + (size_t)my * sw * 3;
+            uint8_t* d = dst.data() + ((size_t)(oy + y) * W + ox) * 3;
+            for (int x = 0; x < w; x++) {
+                const int mx = (sw == w) ? x : (int)((int64_t)x * sw / w);
+                for (int c = 0; c < 3; c++) d[x * 3 + c] = sr[mx * 3 + c];
+            }
+        }
+    }
+}
+
 std::string lower(std::string s) {
     for (char& c : s) c = (char)std::tolower((unsigned char)c);
     return s;
@@ -156,7 +178,8 @@ void ImageCompare::detach() {
 }
 
 void ImageCompare::destroy_gl() {
-    for (Pane* p : {&_gt, &_render})
+    for (Pane* p : {&_gt, &_render, &_gt_depth, &_render_depth,
+                    &_gt_normal, &_render_normal})
         if (p->tex) { glDeleteTextures(1, &p->tex); p->tex = 0; }
 }
 
@@ -207,6 +230,11 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
     alpha.clear();
     int64_t B = 0, H = 0, W = 0, C = 0;
     int64_t mh = 0, mw = 0;   // the mask's own resolution, which need not be H, W
+    int64_t dh = 0, dw = 0, nh = 0, nw = 0;   // ... and the modalities'
+    _wgt_depth.clear();
+    _wr_depth.clear();
+    _wgt_normal.clear();
+    _wr_normal.clear();
     {
         std::lock_guard<std::mutex> lk(s.engine_mutex);
         engine_preview_forward(j.index, s.cfg.primitive, sh_deg,
@@ -240,6 +268,39 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
             engine_copy_gt_alpha_to_host(
                 TorchTensorView{(uint64_t)(uintptr_t)alpha.data(), 1,
                                 {B, mh, mw, 1LL}});
+        }
+
+        // The supervision modalities. Only what the run loads: a reference
+        // pane for something no weight reads would be a picture of nothing.
+        auto tv = [](std::vector<float>& v, int64_t b, int64_t h, int64_t w,
+                     int64_t c) {
+            return TorchTensorView{(uint64_t)(uintptr_t)v.data(), 4, {b, h, w, c}};
+        };
+        if (s.has_depth) {
+            auto sh = engine_get_gt_depth_shape();
+            if (std::get<0>(sh) == B) {
+                dh = std::get<1>(sh);
+                dw = std::get<2>(sh);
+                _wgt_depth.resize((size_t)(B * dh * dw));
+                engine_copy_gt_depth_to_host(tv(_wgt_depth, B, dh, dw, 1));
+            }
+            _wr_depth.resize((size_t)(B * H * W));
+            engine_copy_render_to_host(TorchTensorView{0, 0, {}},
+                                       tv(_wr_depth, B, H, W, 1),
+                                       TorchTensorView{0, 0, {}},
+                                       TorchTensorView{0, 0, {}},
+                                       TorchTensorView{0, 0, {}});
+        }
+        if (s.has_normal) {
+            auto sh = engine_get_gt_normal_shape();
+            if (std::get<0>(sh) == B) {
+                nh = std::get<1>(sh);
+                nw = std::get<2>(sh);
+                _wgt_normal.resize((size_t)(B * nh * nw * 3));
+                engine_copy_gt_normal_to_host(tv(_wgt_normal, B, nh, nw, 3));
+            }
+            _wr_normal.resize((size_t)(B * H * W * 3));
+            engine_copy_render_depth_normal_to_host(tv(_wr_normal, B, H, W, 3));
         }
     }
 
@@ -280,6 +341,25 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
     if (!alpha.empty())
         pack_mask(alpha.data(), out.views, (int)H, (int)W, (int)mh, (int)mw,
                   out.pack_cols, out.pack_rows, out.mask);
+
+    // Coloured over ALL the views at once, so a split capture's faces share
+    // one depth range instead of each getting its own.
+    auto colour = [&](const std::vector<float>& src, int64_t sh, int64_t sw,
+                      bool normal, bool skip_zero, std::vector<uint8_t>& dst) {
+        if (src.empty() || sh <= 0 || sw <= 0) return;
+        const size_t n = (size_t)(B * sh * sw);
+        _wmodrgb.resize(n * 3);
+        if (normal) app::normal_to_rgb(src.data(), n, _wmodrgb.data());
+        else        app::depth_to_rgb(src.data(), n, skip_zero, _wmodrgb.data());
+        pack_bytes(_wmodrgb.data(), out.views, (int)H, (int)W, (int)sh, (int)sw,
+                   out.pack_cols, out.pack_rows, dst);
+    };
+    // 0 is the trainer's "no ground truth here" and must not drag the range
+    // down to it; the render's own depth has no such sentinel.
+    colour(_wgt_depth, dh, dw, false, true, out.gt_depth);
+    colour(_wr_depth, H, W, false, false, out.render_depth);
+    colour(_wgt_normal, nh, nw, true, false, out.gt_normal);
+    colour(_wr_normal, H, W, true, false, out.render_normal);
 
     if (j.source_gt && j.index < (int)s.ds.image_filenames.size()) {
         int w = 0, h = 0, ch = 0;
@@ -407,6 +487,12 @@ void ImageCompare::rebuild_textures() {
     if (use_src) to_pane(_gt, _shot.src.data(), _shot.src_w, _shot.src_h, false, buf);
     else         to_pane(_gt, _shot.gt.data(), pw, ph, true, buf);
     to_pane(_render, _shot.render.data(), pw, ph, true, buf);
+    struct { Pane* pane; const std::vector<uint8_t>* px; } extra[] = {
+        {&_gt_depth, &_shot.gt_depth},     {&_render_depth, &_shot.render_depth},
+        {&_gt_normal, &_shot.gt_normal},   {&_render_normal, &_shot.render_normal},
+    };
+    for (auto& e : extra)
+        if (!e.px->empty()) to_pane(*e.pane, e.px->data(), pw, ph, true, buf);
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +634,19 @@ void ImageCompare::draw_toolbar(bool training) {
     ImGui::EndDisabled();
     ui::help_on_hover(split ? msg::compare_source_gt_split
                             : msg::compare_source_gt_help);
+
+    // Only where the run loads them: a toggle for a row that cannot appear
+    // says the dataset has something it has not.
+    if (_session->has_depth) {
+        place(check_w(msg::compare_show_depth));
+        ui::Checkbox(msg::compare_show_depth, &_show_depth);
+        ui::help_on_hover(msg::compare_show_depth_help);
+    }
+    if (_session->has_normal) {
+        place(check_w(msg::compare_show_normal));
+        ui::Checkbox(msg::compare_show_normal, &_show_normal);
+        ui::help_on_hover(msg::compare_show_normal_help);
+    }
 
     place(check_w(msg::compare_smooth));
     ui::Checkbox(msg::compare_smooth, &_smooth);
@@ -696,14 +795,34 @@ void ImageCompare::draw_pane(const Pane& p, const ImVec2& box,
     ImGui::EndChild();
 }
 
+// One row per modality, reference on the left and render on the right, all
+// six sharing the zoom: a depth map is judged against the photograph beside
+// it far more often than on its own.
 void ImageCompare::draw_panes(const ImVec2& avail) {
-    const float half = std::max(64.0f,
-                                (avail.x - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
-    const ImVec2 box(half, avail.y);
+    struct Row {
+        const Pane* a; const Pane* b;
+        const spirula::i18n::Msg* ca; const spirula::i18n::Msg* cb;
+    };
+    Row rows[3];
+    int n = 0;
+    rows[n++] = {&_gt, &_render, &msg::compare_pane_gt, &msg::compare_pane_render};
+    if (_show_depth && !_shot.gt_depth.empty())
+        rows[n++] = {&_gt_depth, &_render_depth, &msg::compare_pane_gt_depth,
+                     &msg::compare_pane_render_depth};
+    if (_show_normal && !_shot.gt_normal.empty())
+        rows[n++] = {&_gt_normal, &_render_normal, &msg::compare_pane_gt_normal,
+                     &msg::compare_pane_render_normal};
+
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float half = std::max(64.0f, (avail.x - st.ItemSpacing.x) * 0.5f);
+    const float rh =
+        std::max(64.0f, (avail.y - st.ItemSpacing.y * (n - 1)) / (float)n);
     _hot = false;
-    draw_pane(_gt, box, msg::compare_pane_gt);
-    ImGui::SameLine();
-    draw_pane(_render, box, msg::compare_pane_render);
+    for (int i = 0; i < n; i++) {
+        draw_pane(*rows[i].a, ImVec2(half, rh), *rows[i].ca);
+        ImGui::SameLine();
+        draw_pane(*rows[i].b, ImVec2(half, rh), *rows[i].cb);
+    }
     handle_view_input();
 }
 
