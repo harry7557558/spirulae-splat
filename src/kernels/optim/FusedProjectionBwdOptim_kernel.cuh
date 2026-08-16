@@ -550,9 +550,9 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     // update features_dc
     if (inside) {
         float3 v_dc = v_splat_world.features_dc;
-        // Linear -> sRGB Jacobian inversion on the gradient: divides the
-        // working-color-space grad by d(sRGB)/d(linear) so the Adam update
-        // is computed in the linear domain (matches fused_adamtr_linear_rgb).
+        // Adam runs on x = splat_dc_encode(dc), so the gradient is carried to
+        // x-space by dx/d(dc) = d(sRGB)/d(linear) at the DC colour. Rescaling
+        // the gradient alone would be a no-op -- the step below is the point.
         if constexpr (color_trust_linear) {
             v_dc.x /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * splat_world.features_dc.x + 0.5f);
             v_dc.y /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * splat_world.features_dc.y + 0.5f);
@@ -577,23 +577,27 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
         float3 delta = make_float3(-lr_features_dc * inv_bias_correction1) * (g1_feature_dc / denom);
 
         if constexpr (color_trust_linear) {
-            // Trust-region clip in the working color space (matches
-            // fused_adamtr_rgb_optim_kernel). delta_max = kSh0*sqrt(4*eps_tr*c/opac).
+            // The encode now supplies the sqrt(c) brightness scaling the
+            // working-space clip used to, so the rail is a bare radius. The
+            // 2 (not 4) makes it identical to that clip wherever it binds.
             float opac = sigmoid(splat_world.opacity);
-            float3 c = fmaxf(kSh0 * splat_world.features_dc + 0.5f, (1.0f/255.0f)*(1.0f/255.0f));
-            float inv_opac = 1.0f / fmaxf(opac, 1e-12f);
-            float3 clip = kSh0 * sqrtf(make_float3(
-                4.0f * eps_tr * c.x * inv_opac,
-                4.0f * eps_tr * c.y * inv_opac,
-                4.0f * eps_tr * c.z * inv_opac));
-            delta.x = fminf(fmaxf(delta.x, -clip.x), clip.x);
-            delta.y = fminf(fmaxf(delta.y, -clip.y), clip.y);
-            delta.z = fminf(fmaxf(delta.z, -clip.z), clip.z);
+            float clip = kSh0 * sqrtf(2.0f * eps_tr / fmaxf(opac, 1e-12f));
+            delta.x = fminf(fmaxf(delta.x, -clip), clip);
+            delta.y = fminf(fmaxf(delta.y, -clip), clip);
+            delta.z = fminf(fmaxf(delta.z, -clip), clip);
             delta.x = isfinite(delta.x) ? delta.x : 0.0f;
             delta.y = isfinite(delta.y) ? delta.y : 0.0f;
             delta.z = isfinite(delta.z) ? delta.z : 0.0f;
+            splats_world.features_dc(gid) = make_float3(
+                SlangPixelWise::splat_dc_decode(
+                    SlangPixelWise::splat_dc_encode(splat_world.features_dc.x) + delta.x),
+                SlangPixelWise::splat_dc_decode(
+                    SlangPixelWise::splat_dc_encode(splat_world.features_dc.y) + delta.y),
+                SlangPixelWise::splat_dc_decode(
+                    SlangPixelWise::splat_dc_encode(splat_world.features_dc.z) + delta.z));
+        } else {
+            splats_world.features_dc(gid) = splat_world.features_dc + delta;
         }
-        splats_world.features_dc(gid) = splat_world.features_dc + delta;
         if constexpr (NON_SH_QUANT) {
             if (non_sh.enabled) {
                 nq_g1_dc = g1_feature_dc;
@@ -643,22 +647,16 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
     float* sh_ptr = splats_world.features_sh(gid);
     [[maybe_unused]] const float reg_weight = sh_reg_weight * (1.0f / fmaxf((float)num_sh, 1.0f));
 
-    // Per-channel DC color + clip radius for trust-region SH update (mirrors
-    // fused_adamtr_rgb_sh_optim_kernel). c_dc is unclamped (used for the
-    // linear->sRGB Jacobian inversion); c_dc_clamped is the clamped variant
-    // (used for the clip radius). Both are computed once per splat from DC.
-    float3 c_dc = make_float3(0.0f), c_dc_clamped = make_float3(0.0f);
+    // SH stays in coefficient space. Linearizing the DC encode about the DC
+    // colour needs |sh| << c_dc, which does not hold: measured |sh| p99 is
+    // ~1.1 against a median c_dc of ~0.02, and the reparameterized SH diverged.
+    float3 c_dc = make_float3(0.0f);
     float3 clip_dc = make_float3(0.0f);
-    if constexpr (color_trust_linear || color_trust_linear) {
-        if (inside) {
-            c_dc = kSh0 * splat_world.features_dc + 0.5f;
-            c_dc_clamped = fmaxf(c_dc, (1.0f/255.0f)*(1.0f/255.0f));
-        }
-    }
     if constexpr (color_trust_linear) {
         if (inside) {
-            float opac = sigmoid(splat_world.opacity);
-            float inv_opac = 1.0f / fmaxf(opac, 1e-12f);
+            c_dc = kSh0 * splat_world.features_dc + 0.5f;
+            float3 c_dc_clamped = fmaxf(c_dc, (1.0f/255.0f)*(1.0f/255.0f));
+            float inv_opac = 1.0f / fmaxf(sigmoid(splat_world.opacity), 1e-12f);
             clip_dc = kSh0 * sqrtf(make_float3(
                 4.0f * eps_tr * c_dc_clamped.x * inv_opac,
                 4.0f * eps_tr * c_dc_clamped.y * inv_opac,
@@ -773,9 +771,6 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
                 v_sh_ptr[3*j+1] + reg_weight * sh_coeff.y,
                 v_sh_ptr[3*j+2] + reg_weight * sh_coeff.z
             );
-            // Linear -> sRGB Jacobian inversion on the per-channel grad
-            // (matches fused_adamtr_linear_rgb_sh_optim_kernel). c_dc is the
-            // DC color in [0, 1]; the divisor is d(sRGB)/d(linear) at that c.
             if constexpr (color_trust_linear) {
                 v_sh_coeff.x /= SlangPixelWise::linear_rgb_to_srgb_grad(c_dc.x);
                 v_sh_coeff.y /= SlangPixelWise::linear_rgb_to_srgb_grad(c_dc.y);
@@ -790,7 +785,6 @@ __global__ void fused_projection_bwd_optimizer_3dgs_kernel
                 -lr_sh * g1_updated.z / denom.z
             );
             if constexpr (color_trust_linear) {
-                // Per-channel trust-region clip using the DC's clip radius.
                 sh_delta.x = fminf(fmaxf(sh_delta.x, -clip_dc.x), clip_dc.x);
                 sh_delta.y = fminf(fmaxf(sh_delta.y, -clip_dc.y), clip_dc.y);
                 sh_delta.z = fminf(fmaxf(sh_delta.z, -clip_dc.z), clip_dc.z);

@@ -339,10 +339,6 @@ void launch_adamtr_rgb(bool is_linear, TorchTensorView param,
                        &p.wgs_per_row);
 }
 
-// NOTE: mirrors the CUDA launch exactly, including its quirk — the grid is
-// sized for num_gs threads and num_params = num_gs, so only the first
-// num_gs SCALARS of the [N, K, 3] SH tensor are updated per call (see
-// shaders/optim_color.slang).
 void launch_adamtr_rgb_sh(bool is_linear, TorchTensorView param,
                           TorchTensorView grad, TorchTensorView exp_avg,
                           TorchTensorView exp_avg_sq, TorchTensorView colors,
@@ -354,6 +350,7 @@ void launch_adamtr_rgb_sh(bool is_linear, TorchTensorView param,
     if (num_gs == 0) return;
     int64_t num_sh = tv_numel(param) / colors_numel;
     if (num_sh == 0) return;
+    int64_t num_params = num_gs * num_sh * 3;
     AdamTrRgbShParams p{};
     p.param = std::get<0>(param);
     p.grad = std::get<0>(grad);
@@ -369,10 +366,10 @@ void launch_adamtr_rgb_sh(bool is_linear, TorchTensorView param,
     p.grad_scale = grad_scale;
     p.is_linear = is_linear ? 1u : 0u;
     p.zero_grad = zero_grad ? 1u : 0u;
-    p.num_params = checked_u32_numel(num_gs, "fused_adamtr_rgb_sh_optim");
+    p.num_params = checked_u32_numel(num_params, "fused_adamtr_rgb_sh_optim");
     p.num_sh = (uint32_t)num_sh;
     vkk::dispatch_flat("optim_color.fused_adamtr_rgb_sh",
-                       backend::vk::SpecList{}, num_gs, 256, &p, sizeof(p),
+                       backend::vk::SpecList{}, num_params, 256, &p, sizeof(p),
                        &p.wgs_per_row);
 }
 

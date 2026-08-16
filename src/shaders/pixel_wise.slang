@@ -77,7 +77,8 @@ float linear_rgb_to_srgb_grad(float x) {
 [Differentiable]
 [CudaDeviceExport]
 float srgb_to_linear_rgb(float x) {
-    return x < 0.055f ?
+    // 0.04045 is the branch point (= 12.92 * 0.0031308); 0.055 is the offset.
+    return x < 0.04045f ?
         x * (1.0f / 12.92f) :
         pow((1.0f / 1.055f) * (x + 0.055f), 2.4f);
 }
@@ -87,6 +88,31 @@ float srgb_to_linear_rgb_grad(float x) {
     var dp_x = diffPair(x, 1.0);
     var dp_y = fwd_diff(srgb_to_linear_rgb)(dp_x);
     return dp_y.d;
+}
+
+// Splat DC coefficient <-> an affine map of sqrt(colour), scaled to
+// dx/d(dc) == 1 at colour 0.5, continued linearly below 0 for wide-gamut
+// negatives. An sRGB encode here cost 1.5 dB: its toe frees near-black splats.
+[ForceInline]
+[CudaDeviceExport]
+float splat_dc_encode(float dc) {
+    const float kSh0 = 0.28209479177387814f;
+    const float a = 1.0f / 255.0f;            // sqrt of the black floor
+    float s = sqrt(0.5f + a * a);
+    float u = kSh0 * dc + 0.5f;
+    float w = u >= 0.0f ? 2.0f * sqrt(u + a * a) : 2.0f * a + u / a;
+    return (w - 2.0f * s) * s / kSh0;
+}
+
+[ForceInline]
+[CudaDeviceExport]
+float splat_dc_decode(float x) {
+    const float kSh0 = 0.28209479177387814f;
+    const float a = 1.0f / 255.0f;
+    float s = sqrt(0.5f + a * a);
+    float w = x * kSh0 / s + 2.0f * s;
+    float u = w >= 2.0f * a ? 0.25f * w * w - a * a : (w - 2.0f * a) * a;
+    return (u - 0.5f) / kSh0;
 }
 
 [Differentiable]

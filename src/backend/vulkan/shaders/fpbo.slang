@@ -482,21 +482,20 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float3 g2v = float3(g2[0], g2[1], g2[2]);
         float3 denom = oq_sqrt3(g2v * ibc2) + float3(kFpboEps);
         float3 delta = float3(-p.lr_features_dc * ibc1) * (g1v / denom);
+        float3 new_dc;
         if (kColorTrust != 0) {
             float opac = _fp_sigmoid(s.in_opacity);
-            float3 c = max(kSh0 * s.dc + float3(0.5f),
-                           float3((1.0f / 255.0f) * (1.0f / 255.0f)));
-            float inv_opac = 1.0f / max(opac, 1e-12f);
-            float3 clipv =
-                kSh0 * oq_sqrt3(float3(4.0f * p.eps_tr * c.x * inv_opac,
-                                        4.0f * p.eps_tr * c.y * inv_opac,
-                                        4.0f * p.eps_tr * c.z * inv_opac));
-            delta = clamp(delta, -clipv, clipv);
+            float clip = kSh0 * sqrt(2.0f * p.eps_tr / max(opac, 1e-12f));
+            delta = clamp(delta, float3(-clip), float3(clip));
             delta.x = isfinite(delta.x) ? delta.x : 0.0f;
             delta.y = isfinite(delta.y) ? delta.y : 0.0f;
             delta.z = isfinite(delta.z) ? delta.z : 0.0f;
+            new_dc = float3(splat_dc_decode(splat_dc_encode(s.dc.x) + delta.x),
+                            splat_dc_decode(splat_dc_encode(s.dc.y) + delta.y),
+                            splat_dc_decode(splat_dc_encode(s.dc.z) + delta.z));
+        } else {
+            new_dc = s.dc + delta;
         }
-        float3 new_dc = s.dc + delta;
         p.features_dc[3 * gid] = new_dc.x;
         p.features_dc[3 * gid + 1] = new_dc.y;
         p.features_dc[3 * gid + 2] = new_dc.z;
@@ -556,8 +555,7 @@ void fpbo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         c_dc = kSh0 * s.dc + float3(0.5f);
         float3 c_dc_clamped =
             max(c_dc, float3((1.0f / 255.0f) * (1.0f / 255.0f)));
-        float opac = _fp_sigmoid(s.in_opacity);
-        float inv_opac = 1.0f / max(opac, 1e-12f);
+        float inv_opac = 1.0f / max(_fp_sigmoid(s.in_opacity), 1e-12f);
         clip_dc = kSh0 *
                   oq_sqrt3(float3(4.0f * p.eps_tr * c_dc_clamped.x * inv_opac,
                                    4.0f * p.eps_tr * c_dc_clamped.y * inv_opac,

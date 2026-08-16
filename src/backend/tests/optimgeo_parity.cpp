@@ -259,7 +259,8 @@ int main(int argc, char** argv) {
             backend::device_synchronize();
             readback_f(acc, d_p, 3 * N);
             readback_f(acc, d_g, 3 * N);   // zero_grad check
-            readback_f(acc, d_g1, 3 * N);  // untouched (CUDA quirk mirrored)
+            readback_f(acc, d_g1, 3 * N);
+            readback_f(acc, d_g2, 3 * N);
 
             // sh variant
             std::vector<float> sg1(3 * K * N), sg2(3 * K * N),
@@ -280,6 +281,8 @@ int main(int argc, char** argv) {
             backend::device_synchronize();
             readback_f(acc, d_sp, 3 * K * N);
             readback_f(acc, d_sg, 3 * K * N);
+            readback_f(acc, d_sg1, 3 * K * N);
+            readback_f(acc, d_sg2, 3 * K * N);
         }
     }
 

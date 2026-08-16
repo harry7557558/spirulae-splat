@@ -233,7 +233,9 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
     for (int64_t i = 0; i < num && all_same; i++)
         for (int d = 0; d < 3; d++)
             if (pts.rgb[pick[i]*3 + d] != pts.rgb[pick[0]*3]) { all_same = false; break; }
-    Mat3f inv_image = invert3x3(gamut_to_rec709(color.image_gamut));
+    // Rec.709 -> the SPLAT gamut: the seeds feed the renderer, which works in
+    // the splat space. The image gamut only matches it by default.
+    Mat3f to_splat = invert3x3(gamut_to_rec709(color.splat_gamut));
     for (int64_t i = 0; i < num; i++) {
         float col[3];
         for (int d = 0; d < 3; d++)
@@ -242,12 +244,12 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
             // sRGB -> linear
             if (color.splat_linear || !color.splat_gamut.empty())
                 for (int d = 0; d < 3; d++)
-                    col[d] = col[d] < 0.055f ? col[d] / 12.92f
+                    col[d] = col[d] < 0.04045f ? col[d] / 12.92f
                         : std::pow(std::max((col[d] + 0.055f) / 1.055f, 0.f), 2.4f);
             if (!color.splat_gamut.empty()) {
                 float t[3] = {col[0], col[1], col[2]};
                 for (int r = 0; r < 3; r++)
-                    col[r] = inv_image[r*3+0]*t[0] + inv_image[r*3+1]*t[1] + inv_image[r*3+2]*t[2];
+                    col[r] = to_splat[r*3+0]*t[0] + to_splat[r*3+1]*t[1] + to_splat[r*3+2]*t[2];
                 if (!color.splat_linear)
                     for (int d = 0; d < 3; d++)
                         col[d] = col[d] < 0.0031308f ? 12.92f * col[d]

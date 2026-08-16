@@ -392,6 +392,8 @@ inline bool train_apply_preset(TrainConfig& c, const std::string& name) {
         c.image_color_gamut = "Rec.2020";
         c.image_color_is_linear = false;
         c.background_mode = "noise";
+        c.features_dc_lr = 0.0015f;
+        c.features_sh_lr = 0.000075f;
         return true;
     }
     if (name == "synthetic") {

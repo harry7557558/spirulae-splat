@@ -54,7 +54,8 @@ void fused_adamtr_rgb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float3 v_val = float3(p.exp_avg_sq[3 * idx], p.exp_avg_sq[3 * idx + 1],
                           p.exp_avg_sq[3 * idx + 2]);
 
-    // Convert gradient to linear color space
+    // Carry the gradient to x = splat_dc_encode(dc), the space Adam and its
+    // moments live in when the working colour space is linear.
     if (p.is_linear != 0) {
         v.x /= linear_rgb_to_srgb_grad(kTrSh0 * x.x + 0.5f);
         v.y /= linear_rgb_to_srgb_grad(kTrSh0 * x.y + 0.5f);
@@ -71,28 +72,43 @@ void fused_adamtr_rgb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float3 delta = float3(-step_size, -step_size, -step_size) *
                    (m_val / denom);
 
-    // Trust region: clip |delta| by the per-channel radius derived from the
-    // DC color and opacity (see ColorOptim.cu for the derivation).
+    // Trust region. splat_dc_encode already scales the step by brightness, so
+    // the linear path clips a bare radius (the 2 makes it identical to the
+    // colour-proportional one wherever that binds).
     float opac = _tr_sigmoid(p.opacities[idx]);
-    float3 rgb = max(kTrSh0 * x + float3(0.5f),
-                     float3((1.0f / 255.0f) * (1.0f / 255.0f)));
     float inv_opac = 1.0f / max(opac, 1e-12f);
-    float3 clipv =
-        kTrSh0 * float3(sqrt(max(4.0f * p.eps_tr * rgb.x * inv_opac, 0.0f)),
-                        sqrt(max(4.0f * p.eps_tr * rgb.y * inv_opac, 0.0f)),
-                        sqrt(max(4.0f * p.eps_tr * rgb.z * inv_opac, 0.0f)));
+    float3 clipv;
+    if (p.is_linear != 0) {
+        clipv = float3(kTrSh0 * sqrt(max(2.0f * p.eps_tr * inv_opac, 0.0f)));
+    } else {
+        float3 rgb = max(kTrSh0 * x + float3(0.5f),
+                         float3((1.0f / 255.0f) * (1.0f / 255.0f)));
+        clipv =
+            kTrSh0 * float3(sqrt(max(4.0f * p.eps_tr * rgb.x * inv_opac, 0.0f)),
+                            sqrt(max(4.0f * p.eps_tr * rgb.y * inv_opac, 0.0f)),
+                            sqrt(max(4.0f * p.eps_tr * rgb.z * inv_opac, 0.0f)));
+    }
 
     delta = clamp(delta, -clipv, clipv);
     delta.x = isfinite(delta.x) ? delta.x : 0.0f;
     delta.y = isfinite(delta.y) ? delta.y : 0.0f;
     delta.z = isfinite(delta.z) ? delta.z : 0.0f;
 
-    // NOTE: like the CUDA kernel, exp_avg / exp_avg_sq are NOT written back
-    // (fused_adam_linear_rgb_optim next to it does persist them) — kept
-    // bit-compatible for parity; flagged upstream rather than fixed here.
-    p.rgbs[3 * idx] = x.x + delta.x;
-    p.rgbs[3 * idx + 1] = x.y + delta.y;
-    p.rgbs[3 * idx + 2] = x.z + delta.z;
+    float3 new_dc = x + delta;
+    if (p.is_linear != 0) {
+        new_dc = float3(splat_dc_decode(splat_dc_encode(x.x) + delta.x),
+                        splat_dc_decode(splat_dc_encode(x.y) + delta.y),
+                        splat_dc_decode(splat_dc_encode(x.z) + delta.z));
+    }
+    p.rgbs[3 * idx] = new_dc.x;
+    p.rgbs[3 * idx + 1] = new_dc.y;
+    p.rgbs[3 * idx + 2] = new_dc.z;
+    p.exp_avg[3 * idx] = m_val.x;
+    p.exp_avg[3 * idx + 1] = m_val.y;
+    p.exp_avg[3 * idx + 2] = m_val.z;
+    p.exp_avg_sq[3 * idx] = v_val.x;
+    p.exp_avg_sq[3 * idx + 1] = v_val.y;
+    p.exp_avg_sq[3 * idx + 2] = v_val.z;
 
     // Last, per optimizer.slang's fused_adam_fwd.
     if (p.zero_grad != 0) {
@@ -117,16 +133,11 @@ struct AdamTrRgbShParams {  // 96 bytes: pushed directly
     float grad_scale;
     uint is_linear;
     uint zero_grad;
-    uint num_params;  // == num_gs: mirrors the CUDA launch (see below)
+    uint num_params;  // num_gs * num_sh * 3, scalar-indexed
     uint num_sh;
     uint wgs_per_row;
 };
 
-// NOTE: mirrors the CUDA kernel + launch EXACTLY, including its quirk: the
-// launcher passes num_params = num_gs (not num_gs * num_sh * 3) and sizes
-// the grid for num_gs threads, so only the first num_gs SCALARS of the
-// [N, K, 3] SH tensor are updated per call. Kept bit-compatible for parity;
-// flagged upstream rather than silently fixed here.
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void fused_adamtr_rgb_sh(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
@@ -141,7 +152,9 @@ void fused_adamtr_rgb_sh(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float m_val = p.exp_avg[idx];
     float v_val = p.exp_avg_sq[idx];
 
-    // Convert gradient to linear color space (per-channel DC color)
+    // SH stays in coefficient space -- the DC reparameterization does not
+    // extend here, because linearizing it about the DC colour needs
+    // |sh| << c, which 3DGS does not satisfy.
     float c = p.rgbs[(idx / (3 * p.num_sh)) * 3 + (idx % 3)] * kTrSh0 + 0.5f;
     if (p.is_linear != 0) v /= linear_rgb_to_srgb_grad(c);
 
@@ -158,8 +171,9 @@ void fused_adamtr_rgb_sh(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                                    0.0f));
 
     delta = clamp(delta, -clip, clip);
-    // NOTE: no exp_avg / exp_avg_sq writeback, matching CUDA (see above).
     p.param[idx] += delta;
+    p.exp_avg[idx] = m_val;
+    p.exp_avg_sq[idx] = v_val;
 
     // Last, per optimizer.slang's fused_adam_fwd.
     if (p.zero_grad != 0) p.grad[idx] = 0.0f;

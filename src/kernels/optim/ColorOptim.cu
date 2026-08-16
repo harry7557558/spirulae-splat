@@ -124,13 +124,14 @@ __global__ void fused_adamtr_rgb_optim_kernel(
         float3 m_val = exp_avg[idx];
         float3 v_val = exp_avg_sq[idx];
 
-        // Convert gradient to linear color space
+        // Carry the gradient to x = splat_dc_encode(dc), the space Adam and
+        // its moments live in when the working colour space is linear.
         if (is_linear) {
             v.x /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.x + 0.5f);
             v.y /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.y + 0.5f);
             v.z /= SlangPixelWise::linear_rgb_to_srgb_grad(kSh0 * x.z + 0.5f);
         }
-        
+
         // Update momentum
         m_val = beta1 * m_val + (1.0f - beta1) * v;
         v_val = beta2 * v_val + (1.0f - beta2) * v * v;
@@ -139,13 +140,18 @@ __global__ void fused_adamtr_rgb_optim_kernel(
         float3 denom = sqrtf(v_val / bias_correction2) + eps;
         float3 delta = -step_size * (m_val / denom);
 
-        // Compute trust region
+        // Trust region. splat_dc_encode already scales the step by brightness,
+        // so the linear path clips a bare radius (the 2 makes it identical to
+        // the colour-proportional one wherever that binds).
         float opac = opacities[idx];
         opac = sigmoid(opac);
-        // float3 rgb = fmaxf(kSh0 * x + 0.5f, (0.5f/255.0f)*(0.5f/255.0f));
-        // float3 rgb = fmaxf(kSh0 * x + 0.5f, 0.5f/255.0f);
-        float3 rgb = fmaxf(kSh0 * x + 0.5f, (1.0f/255.0f)*(1.0f/255.0f));
-        float3 clip = kSh0 * sqrtf(4.0f * eps_tr * rgb / fmaxf(opac, 1e-12f));
+        float3 clip;
+        if (is_linear) {
+            clip = make_float3(kSh0 * sqrtf(2.0f * eps_tr / fmaxf(opac, 1e-12f)));
+        } else {
+            float3 rgb = fmaxf(kSh0 * x + 0.5f, (1.0f/255.0f)*(1.0f/255.0f));
+            clip = kSh0 * sqrtf(4.0f * eps_tr * rgb / fmaxf(opac, 1e-12f));
+        }
 
         // clip and update
         delta.x = fminf(fmaxf(delta.x, -clip.x), clip.x);
@@ -154,7 +160,16 @@ __global__ void fused_adamtr_rgb_optim_kernel(
         delta.x = isfinite(delta.x) ? delta.x : 0.0f;
         delta.y = isfinite(delta.y) ? delta.y : 0.0f;
         delta.z = isfinite(delta.z) ? delta.z : 0.0f;
-        rgbs[idx] += delta;
+        if (is_linear) {
+            rgbs[idx] = make_float3(
+                SlangPixelWise::splat_dc_decode(SlangPixelWise::splat_dc_encode(x.x) + delta.x),
+                SlangPixelWise::splat_dc_decode(SlangPixelWise::splat_dc_encode(x.y) + delta.y),
+                SlangPixelWise::splat_dc_decode(SlangPixelWise::splat_dc_encode(x.z) + delta.z));
+        } else {
+            rgbs[idx] = x + delta;
+        }
+        exp_avg[idx] = m_val;
+        exp_avg_sq[idx] = v_val;
     }
 }
 
@@ -280,11 +295,13 @@ __global__ void fused_adamtr_rgb_sh_optim_kernel(
         float m_val = exp_avg[idx];
         float v_val = exp_avg_sq[idx];
 
-        // Convert gradient to linear color space
+        // SH stays in coefficient space -- the DC reparameterization does not
+        // extend here, because linearizing it about the DC colour needs
+        // |sh| << c, which 3DGS does not satisfy.
         float c = rgbs[(idx / (3*num_sh)) * 3 + (idx % 3)] * kSh0 + 0.5f;
         if (is_linear)
             v /= SlangPixelWise::linear_rgb_to_srgb_grad(c);
-        
+
         // Update momentum
         m_val = beta1 * m_val + (1.0f - beta1) * v;
         v_val = beta2 * v_val + (1.0f - beta2) * v * v;
@@ -296,14 +313,14 @@ __global__ void fused_adamtr_rgb_sh_optim_kernel(
         // Compute trust region
         float opac = opacities[idx / (3*num_sh)];
         opac = sigmoid(opac);
-        // c = fmaxf(c, (0.5f/255.0f)*(0.5f/255.0f));
-        // c = fmaxf(c, 0.5f/255.0f);
         c = fmaxf(c, (1.0f/255.0f)*(1.0f/255.0f));
         float clip = kSh0 * sqrtf(4.0f * eps_tr * c / fmaxf(opac, 1e-12f));
 
         // clip and update
         delta = fminf(fmaxf(delta, -clip), clip);
         param[idx] += delta;
+        exp_avg[idx] = m_val;
+        exp_avg_sq[idx] = v_val;
     }
 }
 
@@ -330,11 +347,12 @@ void fused_adamtr_linear_rgb_sh_optim(
     const int num_sh = (int)(_tv_numel(param) / colors_numel);
     if (num_sh == 0)
         return;
+    const int num_params = num_gs * num_sh * 3;
 
     auto kfn = zero_grad ? fused_adamtr_rgb_sh_optim_kernel<true,  true>
                          : fused_adamtr_rgb_sh_optim_kernel<true,  false>;
-    kfn<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
-        num_gs,
+    kfn<<<_LAUNCH_ARGS_1D(num_params, 256)>>>(
+        num_params,
         num_sh,
         _tv_f(param),
         _tv_f(grad),
@@ -378,11 +396,12 @@ void fused_adamtr_rgb_sh_optim(
     const int num_sh = (int)(_tv_numel(param) / colors_numel);
     if (num_sh == 0)
         return;
+    const int num_params = num_gs * num_sh * 3;
 
     auto kfn = zero_grad ? fused_adamtr_rgb_sh_optim_kernel<false, true>
                          : fused_adamtr_rgb_sh_optim_kernel<false, false>;
-    kfn<<<_LAUNCH_ARGS_1D(num_gs, 256)>>>(
-        num_gs,
+    kfn<<<_LAUNCH_ARGS_1D(num_params, 256)>>>(
+        num_params,
         num_sh,
         _tv_f(param),
         _tv_f(grad),
