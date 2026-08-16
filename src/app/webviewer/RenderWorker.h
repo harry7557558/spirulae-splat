@@ -37,6 +37,9 @@ struct ViewerRenderConfig {
     // Distortion render enabled when a distortion regularizer is configured;
     // also enabled on demand when a *_distortion buffer is requested.
     bool  distortion_reg_on = false;
+    // Splat colours are stored in a linear and/or wide-gamut space, so the
+    // render is converted to sRGB before display and `rgb_raw` is offered.
+    bool  color_space_on = false;
     // Viewer-client c2w remap into the training frame.
     float train_frame_scale = 1.0f;
     std::array<float, 16> train_to_normalized{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};

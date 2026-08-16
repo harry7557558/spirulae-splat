@@ -410,6 +410,56 @@ SS_MSG(opt_depth_units,
        "yok sayar. `mm` milimetre saklar: okunaklıdır ama 65,5 m ötesini "
        "düzleştirir."));
 
+SS_MSG(opt_image_gamut,
+    EN("Colour primaries the dataset's images are in. Frames convert to sRGB "
+       "before inference, which is what the model was trained on."),
+    JA("データセット画像の色域。推論の前に sRGB へ変換します。モデルはそれで"
+       "学習されています。"),
+    ZH_HANS("数据集图像的色域。推理前转换为 sRGB，模型即以此训练。"),
+    ZH_HANT("資料集影像的色域。推論前轉換為 sRGB，模型即以此訓練。"),
+    KO("데이터셋 이미지의 색역. 추론 전에 sRGB 로 변환하며, 모델이 그것으로 "
+       "학습되었습니다."),
+    DE("Farbprimärvalenzen der Bilder des Datensatzes. Frames werden vor der "
+       "Inferenz nach sRGB gewandelt, worauf das Modell trainiert wurde."),
+    FR("Primaires de couleur des images du jeu de données. Les images passent "
+       "en sRGB avant l'inférence, ce sur quoi le modèle a été entraîné."),
+    ES("Primarios de color de las imágenes del conjunto. Los fotogramas pasan "
+       "a sRGB antes de la inferencia, que es con lo que se entrenó el modelo."),
+    PT("Primárias de cor das imagens do conjunto. Os quadros passam a sRGB "
+       "antes da inferência, que é com o que o modelo foi treinado."),
+    IT("Primarie di colore delle immagini del set. I fotogrammi passano a sRGB "
+       "prima dell'inferenza, su cui il modello è stato addestrato."),
+    NL("Kleurprimairen van de beelden in de dataset. Frames gaan naar sRGB voor "
+       "de inferentie, waarop het model is getraind."),
+    RU("Основные цвета изображений набора. Кадры переводятся в sRGB перед "
+       "выводом — на этом обучалась модель."),
+    TR("Veri kümesi görüntülerinin renk birincilleri. Kareler çıkarımdan önce "
+       "sRGB'ye çevrilir; model bununla eğitildi."));
+
+SS_MSG(opt_image_linear,
+    EN("Treat the dataset's images as linear light rather than "
+       "display-encoded."),
+    JA("データセット画像を表示用エンコードではなくリニア光として扱います。"),
+    ZH_HANS("将数据集图像视为线性光而非显示编码。"),
+    ZH_HANT("將資料集影像視為線性光而非顯示編碼。"),
+    KO("데이터셋 이미지를 디스플레이 인코딩이 아니라 선형 광으로 취급합니다."),
+    DE("Bilder des Datensatzes als lineares Licht statt als anzeigecodiert "
+       "behandeln."),
+    FR("Traiter les images du jeu de données comme de la lumière linéaire "
+       "plutôt qu'encodées pour l'affichage."),
+    ES("Tratar las imágenes del conjunto como luz lineal en vez de codificadas "
+       "para pantalla."),
+    PT("Tratar as imagens do conjunto como luz linear em vez de codificadas "
+       "para exibição."),
+    IT("Trattare le immagini del set come luce lineare anziché codificate per "
+       "lo schermo."),
+    NL("Beelden van de dataset als lineair licht behandelen in plaats van "
+       "weergavegecodeerd."),
+    RU("Считать изображения набора линейным светом, а не экранно "
+       "закодированными."),
+    TR("Veri kümesi görüntülerini ekran kodlu değil, doğrusal ışık olarak ele "
+       "al."));
+
 SS_MSG(opt_overwrite,
     EN("Recompute maps that are already on disk. Without it a run continues "
        "where the last one stopped."),

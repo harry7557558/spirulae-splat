@@ -191,8 +191,10 @@ std::vector<sam::SeedPrompt> seeds_from_clicks(const std::vector<MaskClick>& cli
 // what pays for masking the written frames instead of the decoded ones.
 class ImagePrefetch {
 public:
-    ImagePrefetch(std::vector<fs::path> files, const std::atomic<bool>& cancel)
-        : _files(std::move(files)), _cancel(cancel), _worker([this] { run(); }) {}
+    ImagePrefetch(std::vector<fs::path> files, const std::atomic<bool>& cancel,
+                  std::string gamut, bool is_linear)
+        : _files(std::move(files)), _cancel(cancel), _gamut(std::move(gamut)),
+          _is_linear(is_linear), _worker([this] { run(); }) {}
     ~ImagePrefetch() {
         {
             std::lock_guard<std::mutex> lk(_mu);
@@ -223,7 +225,7 @@ private:
     void run() {
         for (const fs::path& f : _files) {
             if (_cancel.load()) break;
-            nn::Image img = nn::load_image(f.string());
+            nn::Image img = nn::load_image(f.string(), _gamut, _is_linear);
             std::unique_lock<std::mutex> lk(_mu);
             _space.wait(lk, [this] { return _queue.size() < kDepth || _stop; });
             if (_stop) return;
@@ -234,6 +236,8 @@ private:
 
     std::vector<fs::path> _files;
     const std::atomic<bool>& _cancel;
+    std::string _gamut;
+    bool _is_linear = false;
     std::deque<nn::Image> _queue;
     std::mutex _mu;
     std::condition_variable _ready, _space;
@@ -1397,7 +1401,7 @@ bool DatasetPrep::generate_masks_builtin(const PrepJob& job, const PrepInput& in
     // Encoding a 1080p mask costs about a third of what the model costs to
     // produce it, and none of it needs the GPU.
     app::WriterPool writers;
-    ImagePrefetch reader(todo_files, _cancel);
+    ImagePrefetch reader(todo_files, _cancel, job.image_gamut, job.image_is_linear);
     RateLimitedProgress progress(_prog, Stage::Masks, lmsg::noun_images_masked,
                                  _masks_tally);
     for (size_t k = 0; k < todo.size(); k++) {

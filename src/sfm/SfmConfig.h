@@ -96,6 +96,14 @@ struct SfmConfig {
     int max_image_size = 0;
     std::string mask_dir;
 
+    // The input files' colour space. Pixels convert to sRGB on decode, which
+    // is what the detectors and the AI models were trained on.
+    std::string image_gamut = "Rec.709";
+    bool image_is_linear = false;
+    // "srgb" leaves point colours there; "image" writes them back in the
+    // photographs' space (trainer: convert_initial_point_cloud_color off).
+    std::string point_color_space = "srgb";
+
     // Camera setup. The string forms are what the table and the GUI see; the
     // parsed forms live in `camera` after finalize(). `--camera-model` and
     // `--focal` also accept PREFIX=VALUE, which the CLI routes straight into
@@ -220,6 +228,13 @@ struct SfmConfig {
       20000, "", max_image_size)                                                                   \
     F(mask_dir, "masks", CMD_AUTO | CMD_EXTRACT, Tier::Basic, "pipeline", 0, 0, "", masks)         \
     F(mask_dir, "mask-dir", CMD_AUTO | CMD_EXTRACT, Tier::Alias, "pipeline", 0, 0, "", mask_dir)   \
+    /* ---- colour ---- */                                                                         \
+    F(image_gamut, "image-gamut", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "colour", 0, 0,          \
+      "Rec.709|ACES2065-1|ACEScg|Rec.2020|AdobeRGB|DCI-P3", image_gamut)                           \
+    F(image_is_linear, "image-linear", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "colour", 0, 0, "", \
+      image_linear)                                                                                \
+    F(point_color_space, "point-color", CMD_AUTO | CMD_EXTRACT, Tier::Advanced, "colour", 0, 0,    \
+      "srgb|image", point_color)                                                                   \
     /* ---- camera ---- */                                                                         \
     F(camera_mode, "camera-mode", CMD_AUTO | CMD_MATCH | CMD_MAP, Tier::Basic, "camera", 0, 0,     \
       "single|folder|image", camera_mode)                                                          \

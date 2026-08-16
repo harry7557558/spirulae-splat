@@ -2,6 +2,8 @@
 
 #include "app/gui/GuiApp.h"
 
+#include "core/ColorSpace.h"
+
 #include "checkpoint/SplatPly.h"
 #include "data/Json.h"
 #include "app/gui/AppPaths.h"
@@ -1912,6 +1914,16 @@ void GuiApp::sync_dataset_jobs() {
     // make a run on one that has not fail at the last step.
     _sfm_job.geometry.enable = _colmap_job.geometry.enable =
         _geometry.enable && geometry_availability().empty();
+    // One colour space for the whole run: SfM, masking and geometry all read
+    // the same photographs.
+    _colmap_job.image_gamut = _sfm_job.image_gamut;
+    _colmap_job.image_is_linear = _sfm_job.image_is_linear;
+    _sfm_job.geometry.image_gamut = _colmap_job.geometry.image_gamut =
+        _sfm_job.image_gamut;
+    _sfm_job.geometry.image_is_linear = _colmap_job.geometry.image_is_linear =
+        _sfm_job.image_is_linear;
+    _sfm_job.prep.image_gamut = _sfm_job.image_gamut;
+    _sfm_job.prep.image_is_linear = _sfm_job.image_is_linear;
 }
 
 void GuiApp::update_dataset_job() {
@@ -3087,6 +3099,37 @@ void GuiApp::draw_dataset_rerun(const WorkspaceState& prior) {
 }
 
 // ---------------------------------------------------------------------------
+// Advanced: the photographs' colour space
+// ---------------------------------------------------------------------------
+
+void GuiApp::draw_color_space_options(bool with_point_color) {
+    ui::SeparatorText(dmsg::section_color_space);
+
+    ImGui::SetNextItemWidth(px(260.0f));
+    int gamut = 0;
+    for (int i = 0; i < (int)std::size(colorspace::kGamuts); i++)
+        if (_sfm_job.image_gamut == colorspace::kGamuts[i]) gamut = i;
+    if (ui::Combo(dmsg::input_gamut, &gamut,
+                  {&dmsg::gamut_rec709, &dmsg::gamut_aces2065_1,
+                   &dmsg::gamut_acescg, &dmsg::gamut_rec2020,
+                   &dmsg::gamut_adobergb, &dmsg::gamut_dcip3}))
+        _sfm_job.image_gamut = gamut == 0 ? "" : colorspace::kGamuts[gamut];
+    ui::help_on_hover(dmsg::input_gamut_help);
+
+    ui::Checkbox(dmsg::input_is_linear, &_sfm_job.image_is_linear);
+    ui::help_on_hover(dmsg::input_is_linear_help);
+
+    // COLMAP writes its own point cloud, so the choice is the built-in SfM's.
+    if (!with_point_color) return;
+    ImGui::BeginDisabled(colorspace::is_identity(_sfm_job.image_gamut,
+                                                 _sfm_job.image_is_linear));
+    ui::Checkbox(dmsg::point_color_image_space,
+                 &_sfm_job.point_color_in_image_space);
+    ui::help_on_hover(dmsg::point_color_image_space_help);
+    ImGui::EndDisabled();
+}
+
+// ---------------------------------------------------------------------------
 // Advanced: built-in SfM
 // ---------------------------------------------------------------------------
 
@@ -3156,6 +3199,8 @@ void GuiApp::draw_sfm_advanced() {
     ui::InputTextWithHintRaw("##sfmextra", dmsg::extra_sfm_flags_hint,
                              &_sfm_job.extra_args);
     ui::help_on_hover(dmsg::extra_sfm_flags_help);
+
+    draw_color_space_options(/*with_point_color=*/true);
 
     ui::SeparatorText(dmsg::section_fallbacks);
     ImGui::BeginDisabled(!backends().builtin_video);
@@ -3297,6 +3342,8 @@ void GuiApp::draw_colmap_options() {
         ImGui::PopID();
         ImGui::SameLine();
         ui::Text(dmsg::colmap_vocab_tree);
+
+        draw_color_space_options(/*with_point_color=*/false);
     }
 }
 

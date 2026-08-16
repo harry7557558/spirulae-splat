@@ -242,6 +242,7 @@ private:
     // Opens "Try the mask" on the input the combo points at, which is also the
     // input whose clicks and stencil it edits.
     void open_mask_preview();
+    void draw_color_space_options(bool with_point_color);
     void draw_sfm_advanced();
     void draw_colmap_options();
     void draw_tool_locations();

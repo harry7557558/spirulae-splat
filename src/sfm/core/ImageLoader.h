@@ -54,6 +54,9 @@ struct ImageLoadOptions {
     int max_image_size = 3200;    // long-edge clamp, COLMAP's default
     int num_threads = 0;          // 0 = hardware_concurrency, 1 = decode inline
     bool want_color = false;      // also decode a downscaled RGB buffer (for point colors)
+    // The files' colour space; decoded pixels are converted to sRGB.
+    std::string gamut;
+    bool is_linear = false;
     // Keypoint masks (sfm/core/Mask.h), one per entry of the `paths` passed to
     // loadImagesInOrder and in the same order; "" means "no mask for this
     // image". Empty (the default) skips mask decoding entirely. Masks are
@@ -169,7 +172,8 @@ inline void loadImagesInOrder(const std::vector<std::string>& paths, const Image
         static const std::string kNoMask;
         const std::string& mp = i < opt.mask_paths.size() ? opt.mask_paths[i] : kNoMask;
         try {
-            out = loadGrayImage(paths[i], opt.max_image_size, opt.want_color, mp);
+            out = loadGrayImage(paths[i], opt.max_image_size, opt.want_color, mp,
+                                opt.gamut, opt.is_linear);
         } catch (const std::exception& e) {
             err = e.what();
         }

@@ -264,9 +264,11 @@ struct RenderWorker::Impl {
         const std::string& primitive =
             q.primitive.empty() ? cfg.primitive : q.primitive;
 
+        const bool want_raw = cfg.color_space_on && q.key == "rgb_raw";
         std::vector<float> rgb(npx * 3), depth(npx), Ts(npx);
         std::vector<float> median(want_median ? npx : 0);
         std::vector<float> rgbd, depthd;
+        std::vector<float> rgb_raw(want_raw ? npx * 3 : 0);
 
         std::vector<uint8_t> out_host(npx * 3);
         {
@@ -285,7 +287,7 @@ struct RenderWorker::Impl {
                 tvp(rgb.data(), 4, {1, H, W, 3}),
                 tvp(depth.data(), 4, {1, H, W, 1}),
                 tvp(Ts.data(), 4, {1, H, W, 1}),
-                tv_null(),
+                want_raw ? tvp(rgb_raw.data(), 4, {1, H, W, 3}) : tv_null(),
                 want_median ? tvp(median.data(), 4, {1, H, W, 1}) : tv_null());
             if (want_dist) {
                 rgbd.resize(npx * 3);
@@ -386,6 +388,7 @@ struct RenderWorker::Impl {
             const std::vector<float>* buf = nullptr;
             int C = 3;
             if (q.key == "rgb")               { buf = &rgb; }
+            else if (q.key == "rgb_raw")      { buf = want_raw ? &rgb_raw : &rgb; }
             else if (q.key == "depth")        { buf = &depth; C = 1; }
             else if (q.key == "alpha")        { buf = &alpha3; }
             else if (q.key == "depth_normal") { local = depth_normal_display(depth); buf = &local; }
@@ -504,7 +507,9 @@ bool RenderWorker::try_get_result(uint64_t id, ViewResult& out) {
 const ViewerRenderConfig& RenderWorker::config() const { return _impl->cfg; }
 
 std::vector<std::string> RenderWorker::buffer_keys() const {
-    std::vector<std::string> keys = {"rgb", "depth", "alpha", "depth_normal"};
+    std::vector<std::string> keys = {"rgb"};
+    if (_impl->cfg.color_space_on) keys.push_back("rgb_raw");
+    for (const char* k : {"depth", "alpha", "depth_normal"}) keys.push_back(k);
     if (_impl->cfg.output_median) {
         keys.push_back("depth_median");
         keys.push_back("normal_median");

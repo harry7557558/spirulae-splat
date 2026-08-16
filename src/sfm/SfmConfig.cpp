@@ -218,7 +218,8 @@ const char* groupLabel(const char* group) {
     namespace F = spirula::i18n::msg::sfmfield;
     struct Row { const char* key; const spirula::i18n::Msg* msg; };
     static const Row kRows[] = {
-        {"pipeline", &F::group_pipeline}, {"camera", &F::group_camera},
+        {"pipeline", &F::group_pipeline}, {"colour", &F::group_colour},
+        {"camera", &F::group_camera},
         {"features", &F::group_features}, {"matching", &F::group_matching},
         {"mapper", &F::group_mapper},     {"manage", &F::group_manage},
         {"merge", &F::group_merge},       {"input", &F::group_input},

@@ -37,6 +37,11 @@ SS_MSG(group_pipeline,
     KO("파이프라인"), DE("Ablauf"), FR("chaîne"), ES("cadena"), PT("cadeia"),
     IT("catena"), NL("keten"), RU("конвейер"), TR("işlem hattı"));
 
+SS_MSG(group_colour,
+    EN("colour"), JA("色"), ZH_HANS("颜色"), ZH_HANT("顏色"), KO("색"),
+    DE("Farbe"), FR("couleur"), ES("color"), PT("cor"), IT("colore"),
+    NL("kleur"), RU("цвет"), TR("renk"));
+
 SS_MSG(group_camera,
     EN("camera"), JA("カメラ"), ZH_HANS("相机"), ZH_HANT("相機"), KO("카메라"),
     DE("Kamera"), FR("caméra"), ES("cámara"), PT("câmera"), IT("camera"),
@@ -334,6 +339,104 @@ SS_MSG(mask_dir_help,
     NL("Andere naam voor --masks"),
     RU("Другое имя для --masks"),
     TR("--masks için başka bir ad"));
+
+// ===========================================================================
+// colour
+// ===========================================================================
+
+SS_MSG(image_gamut_help,
+    EN("Colour primaries the input images were captured in. Pixels are "
+       "converted to sRGB before feature extraction, which is what the "
+       "detectors and the AI models expect"),
+    JA("入力画像が撮影された色域。特徴抽出の前に sRGB へ変換されます。検出器と "
+       "AI モデルはそれを前提としています"),
+    ZH_HANS("输入图像拍摄时使用的色域。像素在特征提取前转换为 sRGB，检测器和 AI "
+            "模型都以此为前提"),
+    ZH_HANT("輸入影像拍攝時使用的色域。像素在特徵擷取前轉換為 sRGB，偵測器與 AI "
+            "模型都以此為前提"),
+    KO("입력 이미지가 촬영된 색역. 픽셀은 특징 추출 전에 sRGB 로 변환되며, "
+       "검출기와 AI 모델이 이를 전제로 합니다"),
+    DE("Farbprimärvalenzen der Eingabebilder. Pixel werden vor der "
+       "Merkmalsextraktion nach sRGB gewandelt, worauf die Detektoren und die "
+       "KI-Modelle ausgelegt sind"),
+    FR("Primaires de couleur des images d'entrée. Les pixels passent en sRGB "
+       "avant l'extraction, ce que les détecteurs et les modèles d'IA "
+       "attendent"),
+    ES("Primarios de color de las imágenes de entrada. Los píxeles pasan a sRGB "
+       "antes de la extracción, que es lo que esperan los detectores y los "
+       "modelos de IA"),
+    PT("Primárias de cor das imagens de entrada. Os pixels passam a sRGB antes "
+       "da extração, que é o que os detectores e os modelos de IA esperam"),
+    IT("Primarie di colore delle immagini di ingresso. I pixel passano a sRGB "
+       "prima dell'estrazione, che è ciò che i rilevatori e i modelli di IA si "
+       "aspettano"),
+    NL("Kleurprimairen van de invoerbeelden. Pixels gaan naar sRGB voor de "
+       "extractie, waarop de detectoren en de AI-modellen zijn gebouwd"),
+    RU("Основные цвета исходных изображений. Пиксели переводятся в sRGB перед "
+       "выделением признаков — именно этого ждут детекторы и модели ИИ"),
+    TR("Girdi görüntülerinin çekildiği renk birincilleri. Pikseller öznitelik "
+       "çıkarımından önce sRGB'ye çevrilir; algılayıcılar ve yapay zekâ "
+       "modelleri bunu bekler"));
+
+SS_MSG(image_linear_help,
+    EN("Treat the input images as linear light rather than display-encoded"),
+    JA("入力画像を表示用エンコードではなくリニア光として扱う"),
+    ZH_HANS("将输入图像视为线性光而非显示编码"),
+    ZH_HANT("將輸入影像視為線性光而非顯示編碼"),
+    KO("입력 이미지를 디스플레이 인코딩이 아니라 선형 광으로 취급"),
+    DE("Eingabebilder als lineares Licht statt als anzeigecodiert behandeln"),
+    FR("Traiter les images d'entrée comme de la lumière linéaire plutôt "
+       "qu'encodées pour l'affichage"),
+    ES("Tratar las imágenes de entrada como luz lineal en vez de codificadas "
+       "para pantalla"),
+    PT("Tratar as imagens de entrada como luz linear em vez de codificadas "
+       "para exibição"),
+    IT("Trattare le immagini di ingresso come luce lineare anziché codificate "
+       "per lo schermo"),
+    NL("Invoerbeelden als lineair licht behandelen in plaats van "
+       "weergavegecodeerd"),
+    RU("Считать исходные изображения линейным светом, а не экранно "
+       "закодированными"),
+    TR("Girdi görüntülerini ekran kodlu değil, doğrusal ışık olarak ele al"));
+
+SS_MSG(point_color_help,
+    EN("Colour space the sparse point cloud is written in. srgb matches the "
+       "trainer's convert-initial-point-cloud-color; image writes the points "
+       "in the same space as the photographs"),
+    JA("疎な点群を書き出す色空間。srgb は学習側の "
+       "convert-initial-point-cloud-color に対応し、image は写真と同じ空間で"
+       "書き出します"),
+    ZH_HANS("稀疏点云写出的色彩空间。srgb 与训练端的 "
+            "convert-initial-point-cloud-color 对应，image 则与照片同一空间"),
+    ZH_HANT("稀疏點雲寫出的色彩空間。srgb 與訓練端的 "
+            "convert-initial-point-cloud-color 對應，image 則與照片同一空間"),
+    KO("희소 점 구름을 기록할 색 공간. srgb 는 학습 쪽의 "
+       "convert-initial-point-cloud-color 에 대응하고, image 는 사진과 같은 "
+       "공간으로 씁니다"),
+    DE("Farbraum, in dem die dünne Punktwolke geschrieben wird. srgb passt zu "
+       "convert-initial-point-cloud-color des Trainings; image schreibt die "
+       "Punkte im Raum der Fotos"),
+    FR("Espace colorimétrique du nuage de points épars. srgb correspond au "
+       "convert-initial-point-cloud-color de l'entraînement ; image écrit les "
+       "points dans l'espace des photographies"),
+    ES("Espacio de color del nube de puntos dispersa. srgb concuerda con el "
+       "convert-initial-point-cloud-color del entrenamiento; image escribe los "
+       "puntos en el espacio de las fotografías"),
+    PT("Espaço de cor da nuvem de pontos esparsa. srgb combina com o "
+       "convert-initial-point-cloud-color do treino; image escreve os pontos "
+       "no espaço das fotografias"),
+    IT("Spazio colore in cui è scritta la nuvola di punti sparsa. srgb combacia "
+       "con convert-initial-point-cloud-color dell'addestramento; image scrive "
+       "i punti nello spazio delle fotografie"),
+    NL("Kleurruimte waarin de dunne puntenwolk wordt geschreven. srgb sluit aan "
+       "op convert-initial-point-cloud-color van de training; image schrijft de "
+       "punten in de ruimte van de foto's"),
+    RU("Цветовое пространство разреженного облака точек. srgb соответствует "
+       "convert-initial-point-cloud-color обучения; image пишет точки в "
+       "пространстве фотографий"),
+    TR("Seyrek nokta bulutunun yazıldığı renk uzayı. srgb, eğitimdeki "
+       "convert-initial-point-cloud-color ile eşleşir; image noktaları "
+       "fotoğraflarla aynı uzayda yazar"));
 
 // ===========================================================================
 // camera

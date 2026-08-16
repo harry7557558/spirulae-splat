@@ -222,6 +222,11 @@ bool run_geometry_step(const GeometryJob& job, const std::string& dataset,
     if (job.want_depth) argv.push_back("--depth");
     if (!job.want_normal) argv.push_back("--no-normal");
     if (job.overwrite) argv.push_back("--overwrite");
+    if (!job.image_gamut.empty()) {
+        argv.push_back("--image-gamut");
+        argv.push_back(job.image_gamut);
+    }
+    if (job.image_is_linear) argv.push_back("--image-linear");
 
     std::string cmd;
     for (const std::string& a : argv) cmd += (cmd.empty() ? "$ " : " ") + a;

@@ -5,6 +5,7 @@
 #include "checkpoint/Adapt.h"
 #include "checkpoint/Resume.h"
 #include "config/TrainConfigJson.h"
+#include "core/ColorSpace.h"
 #include "i18n/catalog/Log.h"
 #include "data/CameraMath.h"
 #include "data/Knn.h"
@@ -67,41 +68,10 @@ static void remove_tree(const std::filesystem::path& p) {
 // ===========================================================================
 
 Mat3f gamut_to_rec709(const std::string& name) {
-    if (name.empty()) return {1,0,0, 0,1,0, 0,0,1};
-    if (name == "ACES2065-1") return {
-        2.5247180476f, -1.1325619434f, -0.3921561044f,
-        -0.2776344819f, 1.3709123773f, -0.0932778953f,
-        -0.0165202369f, -0.1479259606f, 1.1644461975f};
-    if (name == "ACEScg") return {
-        1.7072552160f, -0.6200352595f, -0.0872199564f,
-        -0.1311566587f, 1.1391010566f, -0.0079443978f,
-        -0.0245499075f, -0.1248045805f, 1.1493544880f};
-    if (name == "Rec.2020") return {
-        1.6604910021f, -0.5876411388f, -0.0728498633f,
-        -0.1245504745f, 1.1328998971f, -0.0083494226f,
-        -0.0181507634f, -0.1005788980f, 1.1187296614f};
-    if (name == "AdobeRGB") return {
-        1.3983671735f, -0.3983451225f, 0.0000054016f,
-        -0.0000103176f, 0.9999916496f, -0.0000039459f,
-        -0.0000003709f, -0.0429269510f, 1.0429319656f};
-    if (name == "DCI-P3") return {
-        1.1548337042f, -0.1451763523f, -0.0096573518f,
-        -0.0393300117f, 1.0378282998f, 0.0015017119f,
-        -0.0184786235f, -0.0689101110f, 1.0873887345f};
-    throw std::runtime_error("unsupported color gamut: " + name);
+    return colorspace::gamut_to_rec709(name);
 }
 
-Mat3f invert3x3(const Mat3f& m) {
-    float a = m[0], b = m[1], c = m[2],
-          d = m[3], e = m[4], g = m[5],
-          h = m[6], i = m[7], j = m[8];
-    float det = a*(e*j - g*i) - b*(d*j - g*h) + c*(d*i - e*h);
-    if (std::abs(det) < 1e-20f) throw std::runtime_error("singular color matrix");
-    float inv = 1.0f / det;
-    return {(e*j - g*i)*inv, (c*i - b*j)*inv, (b*g - c*e)*inv,
-            (g*h - d*j)*inv, (a*j - c*h)*inv, (c*d - a*g)*inv,
-            (d*i - e*h)*inv, (b*h - a*i)*inv, (a*e - b*d)*inv};
-}
+Mat3f invert3x3(const Mat3f& m) { return colorspace::invert3x3(m); }
 
 ColorResolution resolve_color(const TrainConfig& c) {
     ColorResolution r;
@@ -241,20 +211,10 @@ SeedSplats seed_splats(const ColmapPoints3D& pts, const TrainConfig& cfg,
         for (int d = 0; d < 3; d++)
             col[d] = all_same ? uni(rng) : pts.rgb[pick[i]*3 + d] / 255.f;
         if (color.convert_seed) {
-            // sRGB -> linear
-            if (color.splat_linear || !color.splat_gamut.empty())
-                for (int d = 0; d < 3; d++)
-                    col[d] = col[d] < 0.04045f ? col[d] / 12.92f
-                        : std::pow(std::max((col[d] + 0.055f) / 1.055f, 0.f), 2.4f);
-            if (!color.splat_gamut.empty()) {
-                float t[3] = {col[0], col[1], col[2]};
-                for (int r = 0; r < 3; r++)
-                    col[r] = to_splat[r*3+0]*t[0] + to_splat[r*3+1]*t[1] + to_splat[r*3+2]*t[2];
-                if (!color.splat_linear)
-                    for (int d = 0; d < 3; d++)
-                        col[d] = col[d] < 0.0031308f ? 12.92f * col[d]
-                            : 1.055f * std::pow(std::max(col[d], 0.f), 1.f/2.4f) - 0.055f;
-            }
+            for (int d = 0; d < 3; d++) col[d] = colorspace::srgb_to_linear(col[d]);
+            colorspace::apply3x3(to_splat, col);
+            if (!color.splat_linear)
+                for (int d = 0; d < 3; d++) col[d] = colorspace::linear_to_srgb(col[d]);
         }
         for (int d = 0; d < 3; d++)
             s.features_dc[i*3 + d] = (col[d] - 0.5f) / 0.28209479177387814f;
@@ -978,6 +938,8 @@ ViewerRenderConfig TrainerSession::make_viewer_config() const {
     vc.distortion_reg_on = cfg.rgb_distortion_reg != 0.0f ||
                            cfg.depth_distortion_reg != 0.0f ||
                            cfg.normal_distortion_reg != 0.0f;
+    const auto color = resolve_color(cfg);
+    vc.color_space_on = color.splat_linear || !color.splat_gamut.empty();
     vc.train_frame_scale = ds.train_frame_scale;
     vc.train_to_normalized = ds.train_to_normalized;
     vc.base_camera_size = viewer_base_camera_size;

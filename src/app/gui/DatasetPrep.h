@@ -125,6 +125,11 @@ struct PrepJob {
     bool  force_external_decode = false;
     std::string ffmpeg_exe = "ffmpeg";
 
+    // The photographs' colour space. Frames convert to sRGB before the
+    // segmenter sees them, which is what it was trained on.
+    std::string image_gamut;
+    bool image_is_linear = false;
+
     // ---- masking ----
     bool mask_enable = false;
     std::string mask_prompt;         // "people; cars; ..."

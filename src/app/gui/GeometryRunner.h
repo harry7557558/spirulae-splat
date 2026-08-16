@@ -32,6 +32,9 @@ struct GeometryJob {
     int  ray_depth = 0;
     int  split = 0;
     bool overwrite = false;       // recompute maps that are already on disk
+    // The dataset's colour space; frames convert to sRGB before inference.
+    std::string image_gamut;
+    bool image_is_linear = false;
 };
 
 // One checkpoint the screen offers, largest last. Index 1 is the default: it

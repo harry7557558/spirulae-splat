@@ -119,6 +119,15 @@ struct SfmJob {
     int matcher = 0;
     bool keep_intermediate = false;   // keep features/ and matches.bin
 
+    // What colour space the photographs are in. Everything that reads pixels --
+    // SfM, AI masking, depth and normals -- converts to sRGB first, which is
+    // what those detectors and models were trained on. Empty = Rec.709/sRGB.
+    std::string image_gamut;
+    bool image_is_linear = false;
+    // false: the sparse point cloud stays sRGB (train with
+    // convert-initial-point-cloud-color on). true: written in the images' space.
+    bool point_color_in_image_space = false;
+
     // Extra flags typed by the user, appended verbatim. The escape hatch for
     // everything the panel does not surface -- `spirula-sfm auto --help` lists
     // the lot, and this is how an expert reaches it without us mirroring 130

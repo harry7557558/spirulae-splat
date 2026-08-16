@@ -35,6 +35,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/ColorSpace.h"
 #include "sfm/SfmConfig.h"
 #include "sfm/core/Progress.h"
 #include "sfm/core/CameraSetup.h"
@@ -435,6 +436,18 @@ static void orientModels(std::vector<Reconstruction>& models, bool enabled, bool
         if (verbose)
             L::err(Tag::Orient, M::orient_done, {(long long)i, L::num(T.scale, 4)});
     }
+}
+
+// Point colours are sampled from images the loader converted to sRGB, which is
+// where "srgb" leaves them. "image" puts them back in the photographs' space,
+// for a trainer run with convert_initial_point_cloud_color off.
+static void recolorPoints(std::vector<Reconstruction>& models, const SfmConfig& cfg) {
+    if (cfg.point_color_space != "image") return;
+    if (colorspace::is_identity(cfg.image_gamut, cfg.image_is_linear)) return;
+    for (Reconstruction& m : models)
+        for (auto& kv : m.points3D)
+            colorspace::from_srgb_inplace(kv.second.rgb, 1, cfg.image_gamut,
+                                          cfg.image_is_linear);
 }
 
 // Write every reconstruction the mapper produced as <dir>/0, <dir>/1, ...
@@ -908,6 +921,8 @@ static int extractDirectory(const std::string& imagedir, const fs::path& outdir,
     lopt.max_image_size = cfg.max_image_size;
     lopt.num_threads = cfg.decode_threads;
     lopt.want_color = true;  // sample per-keypoint colors while the image is hot
+    lopt.gamut = cfg.image_gamut;
+    lopt.is_linear = cfg.image_is_linear;
     if (cfg.decode_budget_mb > 0)
         lopt.memory_budget_bytes = (size_t)cfg.decode_budget_mb << 20;
 
@@ -1068,7 +1083,8 @@ static int cmdExtract(int argc, char** argv) {
             L::warn(Tag::Extract, M::match_no_mask_for,
                     {image, cfg.mask_dir});
     }
-    GrayImage img = loadGrayImage(image, cfg.max_image_size, /*want_color=*/true, maskpath);
+    GrayImage img = loadGrayImage(image, cfg.max_image_size, /*want_color=*/true, maskpath,
+                                  cfg.image_gamut, cfg.image_is_linear);
     if (cfg.sift.verbose)
         L::err(Tag::Extract, M::extract_to_gray,
                {image, img.width, img.height});
@@ -1675,6 +1691,7 @@ static int cmdMap(int argc, char** argv) {
         printExtraModels(models, feats);
     }
     orientModels(models, cfg.orient, opt.verbose);
+    recolorPoints(models, cfg);
     if (!output.empty()) writeModels(models, output, opt.verbose);
     return 0;
 }
@@ -1766,6 +1783,7 @@ static int cmdMerge(int argc, char** argv) {
                {(long long)covered_after, (long long)covered_before});
 
     orientModels(models, cfg.orient, mo.verbose);
+    recolorPoints(models, cfg);
     writeModels(models, fs::path(output), mo.verbose);
     // In place, the models that were absorbed must not stay behind as stale
     // directories claiming to be reconstructions.
@@ -1970,6 +1988,7 @@ static int cmdAuto(int argc, char** argv) {
 
     resolveImageNames(models, imagedir);
     orientModels(models, cfg.orient, verbose);
+    recolorPoints(models, cfg);
     writeModels(models, sparsedir, verbose);
 
     // The mapper reports its own breakdown when `run()` returns; the passes

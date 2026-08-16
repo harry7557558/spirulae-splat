@@ -152,6 +152,8 @@ void usage() {
                          "--validate  --img-size <n>\n",
                  H::label_common.get());
     help_row("--max-size <n>", H::common_max_size);
+    help_row("--image-gamut <name>", H::common_image_gamut);
+    help_row("--image-linear", H::common_image_linear);
     std::fprintf(stderr,
                  "%s SS_NN_LOG=0..3  SS_VK_DEVICE  SS_PROFILE=1\n"
                  "             SS_VK_VALIDATION=1  SS_NN_DEBUG_SYNC=1\n",
@@ -193,6 +195,10 @@ struct Options {
     int img_size = 0;
     int detect_every = 1, memory_frames = 0, max_size = 1600;
 
+    // The frames' colour space; they convert to sRGB before the model sees them.
+    std::string image_gamut;
+    bool image_is_linear = false;
+
     // `mask`
     std::string shape_spec, mask_image, preview;
     bool print_only = false, replace = false;
@@ -228,6 +234,8 @@ bool parse_args(int argc, char** argv, Options& o) {
         float v[4];
         if (a == "--model") o.model = next("--model");
         else if (a == "--image") o.image = next("--image");
+        else if (a == "--image-gamut") o.image_gamut = next("--image-gamut");
+        else if (a == "--image-linear") o.image_is_linear = true;
         else if (a == "--frames") o.frames = next("--frames");
         else if (a == "--out") o.out_dir = next("--out");
         else if (a == "--text") o.text = next("--text");
@@ -381,7 +389,7 @@ int cmd_segment(const Options& o) {
     sam::Session session;
     if (!load_session(o, session)) return 1;
 
-    nn::Image image = nn::load_image(o.image);
+    nn::Image image = nn::load_image(o.image, o.image_gamut, o.image_is_linear);
     if (image.empty()) return 1;
     if (!session.encodeImage(image)) {
         std::fprintf(stderr, "%s\n",
@@ -475,7 +483,9 @@ int cmd_track(const Options& o) {
     std::future<nn::Image> ahead;
     auto load_at = [&](size_t i) {
         return std::async(std::launch::async,
-                          [p = files[i]] { return nn::load_image(p); });
+                          [p = files[i], g = o.image_gamut, l = o.image_is_linear] {
+                              return nn::load_image(p, g, l);
+                          });
     };
     if (!files.empty()) ahead = load_at(0);
 
@@ -556,8 +566,9 @@ int cmd_track(const Options& o) {
 // ---------------------------------------------------------------------------
 
 void write_preview(const std::string& frame, const app::FrameMask& fm,
-                   const std::string& path) {
-    nn::Image img = nn::load_image(frame);
+                   const std::string& path, const std::string& gamut,
+                   bool is_linear) {
+    nn::Image img = nn::load_image(frame, gamut, is_linear);
     if (img.empty()) return;
     std::vector<uint8_t> px;
     std::string err;
@@ -642,7 +653,8 @@ int cmd_mask(const Options& o) {
             const auto groups = app::group_frames_by_camera(run.image_dir, run.skip_dir);
             const auto it = groups.find(rel);
             if (it != groups.end() && !it->second.empty())
-                write_preview(it->second.front(), fm, preview_left);
+                write_preview(it->second.front(), fm, preview_left,
+                              o.image_gamut, o.image_is_linear);
             preview_left.clear();
         }
     };

@@ -515,6 +515,15 @@ void SfmRunner::run(SfmJob job) {
                 argv.push_back("--max-image-size");
                 argv.push_back(std::to_string(job.max_image_size));
             }
+            if (!job.image_gamut.empty()) {
+                argv.push_back("--image-gamut");
+                argv.push_back(job.image_gamut);
+            }
+            if (job.image_is_linear) argv.push_back("--image-linear");
+            if (job.point_color_in_image_space) {
+                argv.push_back("--point-color");
+                argv.push_back("image");
+            }
             if (!prep.mask_dir.empty()) {
                 argv.push_back("--masks");
                 argv.push_back(prep.mask_dir);

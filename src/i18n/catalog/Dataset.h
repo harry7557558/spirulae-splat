@@ -66,6 +66,186 @@ SS_MSG(section_advanced,
     PT("Avançado"),      IT("Avanzate"),     NL("Geavanceerd"),  RU("Дополнительно"),
     TR("Gelişmiş"));
 
+SS_MSG(section_color_space,
+    EN("Colour Space"),   JA("色空間"),         ZH_HANS("色彩空间"),  ZH_HANT("色彩空間"),
+    KO("색 공간"),         DE("Farbraum"),      FR("Espace colorimétrique"),
+    ES("Espacio de color"), PT("Espaço de cor"), IT("Spazio colore"),
+    NL("Kleurruimte"),    RU("Цветовое пространство"), TR("Renk uzayı"));
+
+SS_MSG(input_gamut,
+    EN("Input colour space"), JA("入力の色域"),  ZH_HANS("输入色域"),  ZH_HANT("輸入色域"),
+    KO("입력 색역"),          DE("Eingabefarbraum"), FR("Espace des entrées"),
+    ES("Espacio de entrada"), PT("Espaço de entrada"), IT("Spazio d'ingresso"),
+    NL("Invoerkleurruimte"),  RU("Цветовое пространство входа"),
+    TR("Girdi renk uzayı"));
+
+SS_MSG(input_gamut_help,
+    EN("Colour primaries the photographs were captured in. Reconstruction, AI "
+       "masking and depth/normal estimation convert them to sRGB first, which "
+       "is what those detectors and models were trained on."),
+    JA("写真が撮影された色域です。再構成・AI マスキング・深度/法線推定は先に "
+       "sRGB へ変換します。検出器もモデルもそれで学習されています。"),
+    ZH_HANS("照片拍摄时使用的色域。重建、AI 遮罩与深度/法线估计会先转换为 sRGB，"
+            "这些检测器和模型都以此训练。"),
+    ZH_HANT("照片拍攝時使用的色域。重建、AI 遮罩與深度/法線估計會先轉換為 sRGB，"
+            "這些偵測器與模型都以此訓練。"),
+    KO("사진이 촬영된 색역입니다. 재구성, AI 마스킹, 깊이/법선 추정은 먼저 sRGB 로 "
+       "변환하며, 그 검출기와 모델이 그것으로 학습되었습니다."),
+    DE("Farbprimärvalenzen der Aufnahmen. Rekonstruktion, KI-Maskierung und "
+       "Tiefen-/Normalenschätzung wandeln sie zuerst nach sRGB, worauf diese "
+       "Detektoren und Modelle trainiert wurden."),
+    FR("Primaires de couleur des photographies. La reconstruction, le masquage "
+       "par IA et l'estimation de profondeur/normales les passent d'abord en "
+       "sRGB, ce sur quoi ces détecteurs et modèles ont été entraînés."),
+    ES("Primarios de color de las fotografías. La reconstrucción, el "
+       "enmascarado por IA y la estimación de profundidad/normales las pasan "
+       "antes a sRGB, que es con lo que se entrenaron esos detectores y "
+       "modelos."),
+    PT("Primárias de cor das fotografias. A reconstrução, o mascaramento por IA "
+       "e a estimativa de profundidade/normais passam-nas antes a sRGB, que é "
+       "com o que esses detectores e modelos foram treinados."),
+    IT("Primarie di colore delle fotografie. Ricostruzione, mascheratura con IA "
+       "e stima di profondità/normali le portano prima a sRGB, su cui quei "
+       "rilevatori e modelli sono stati addestrati."),
+    NL("Kleurprimairen van de foto's. Reconstructie, AI-maskering en diepte-/"
+       "normaalschatting zetten ze eerst om naar sRGB, waarop die detectoren en "
+       "modellen zijn getraind."),
+    RU("Основные цвета снимков. Реконструкция, ИИ-маскирование и оценка "
+       "глубины/нормалей сначала переводят их в sRGB — на этом обучались эти "
+       "детекторы и модели."),
+    TR("Fotoğrafların çekildiği renk birincilleri. Yeniden oluşturma, yapay "
+       "zekâ maskeleme ve derinlik/normal kestirimi onları önce sRGB'ye "
+       "çevirir; bu algılayıcılar ve modeller bununla eğitildi."));
+
+SS_MSG(input_is_linear,
+    EN("Input images are linear light"),
+    JA("入力画像はリニア光"),
+    ZH_HANS("输入图像为线性光"),
+    ZH_HANT("輸入影像為線性光"),
+    KO("입력 이미지는 선형 광"),
+    DE("Eingabebilder sind lineares Licht"),
+    FR("Images d'entrée en lumière linéaire"),
+    ES("Las imágenes de entrada son luz lineal"),
+    PT("As imagens de entrada são luz linear"),
+    IT("Le immagini di ingresso sono luce lineare"),
+    NL("Invoerbeelden zijn lineair licht"),
+    RU("Исходные изображения — линейный свет"),
+    TR("Girdi görüntüleri doğrusal ışık"));
+
+SS_MSG(input_is_linear_help,
+    EN("On for scene-linear captures (EXR, linear 16-bit). Off for ordinary "
+       "display-encoded photographs."),
+    JA("シーンリニア素材（EXR、リニア 16 ビット）ではオン。通常の表示用エンコード"
+       "写真ではオフ。"),
+    ZH_HANS("场景线性素材（EXR、线性 16 位）请开启；普通显示编码照片则关闭。"),
+    ZH_HANT("場景線性素材（EXR、線性 16 位元）請開啟；一般顯示編碼照片則關閉。"),
+    KO("장면 선형 소재(EXR, 선형 16비트)에서 켜고, 보통의 디스플레이 인코딩 "
+       "사진에서는 끕니다."),
+    DE("An für szenenlineare Aufnahmen (EXR, lineare 16 Bit), aus für normale "
+       "anzeigecodierte Fotos."),
+    FR("Activé pour les prises scène-linéaire (EXR, 16 bits linéaire), désactivé "
+       "pour les photographies encodées pour l'affichage."),
+    ES("Activado para capturas escena-lineal (EXR, 16 bits lineal); desactivado "
+       "para fotografías codificadas para pantalla."),
+    PT("Ligado para capturas cena-linear (EXR, 16 bits linear); desligado para "
+       "fotografias codificadas para exibição."),
+    IT("Attivo per riprese scena-lineare (EXR, 16 bit lineare), spento per "
+       "fotografie codificate per lo schermo."),
+    NL("Aan voor scène-lineaire opnamen (EXR, lineair 16-bits), uit voor gewone "
+       "weergavegecodeerde foto's."),
+    RU("Включите для сцен-линейных съёмок (EXR, линейные 16 бит); выключите для "
+       "обычных экранно закодированных фотографий."),
+    TR("Sahne-doğrusal çekimler (EXR, doğrusal 16 bit) için açık; sıradan ekran "
+       "kodlu fotoğraflar için kapalı."));
+
+SS_MSG(point_color_image_space,
+    EN("Point cloud colours in the input colour space"),
+    JA("点群の色を入力の色空間で"),
+    ZH_HANS("点云颜色使用输入色彩空间"),
+    ZH_HANT("點雲顏色使用輸入色彩空間"),
+    KO("점 구름 색을 입력 색 공간으로"),
+    DE("Punktwolkenfarben im Eingabefarbraum"),
+    FR("Couleurs du nuage de points dans l'espace d'entrée"),
+    ES("Colores de la nube de puntos en el espacio de entrada"),
+    PT("Cores da nuvem de pontos no espaço de entrada"),
+    IT("Colori della nuvola di punti nello spazio d'ingresso"),
+    NL("Puntenwolkkleuren in de invoerkleurruimte"),
+    RU("Цвета облака точек в цветовом пространстве входа"),
+    TR("Nokta bulutu renkleri girdi renk uzayında"));
+
+SS_MSG(point_color_image_space_help,
+    EN("Off leaves the sparse point cloud in sRGB, which the trainer converts "
+       "with \"Convert seed point colours\". On writes it in the photographs' "
+       "own space, for training with that conversion off."),
+    JA("オフなら疎な点群は sRGB のままで、学習側の「シード点の色を変換」が処理"
+       "します。オンなら写真と同じ空間で書き出し、その変換をオフにして学習します。"),
+    ZH_HANS("关闭时稀疏点云保持 sRGB，由训练端的\"转换种子点颜色\"处理；开启则以"
+            "照片自身的空间写出，训练时关掉该转换。"),
+    ZH_HANT("關閉時稀疏點雲保持 sRGB，由訓練端的「轉換種子點顏色」處理；開啟則以"
+            "照片自身的空間寫出，訓練時關掉該轉換。"),
+    KO("끄면 희소 점 구름은 sRGB 로 남고 학습 쪽의 \"시드 점 색 변환\"이 처리합니다. "
+       "켜면 사진과 같은 공간으로 써서, 그 변환을 끄고 학습합니다."),
+    DE("Aus lässt die dünne Punktwolke in sRGB, was das Training mit "
+       "\"Startpunktfarben umrechnen\" erledigt. An schreibt sie im Raum der "
+       "Fotos, für ein Training mit ausgeschalteter Umrechnung."),
+    FR("Désactivé laisse le nuage épars en sRGB, que l'entraînement traite avec "
+       "« Convertir les couleurs des points de départ ». Activé l'écrit dans "
+       "l'espace des photographies, pour un entraînement sans cette conversion."),
+    ES("Desactivado deja la nube dispersa en sRGB, de lo que se encarga "
+       "«Convertir los colores de los puntos iniciales» en el entrenamiento. "
+       "Activado la escribe en el espacio de las fotografías, para entrenar sin "
+       "esa conversión."),
+    PT("Desligado deixa a nuvem esparsa em sRGB, do que trata «Converter as "
+       "cores dos pontos iniciais» no treino. Ligado escreve-a no espaço das "
+       "fotografias, para treinar sem essa conversão."),
+    IT("Spento lascia la nuvola sparsa in sRGB, di cui si occupa «Converti i "
+       "colori dei punti iniziali» nell'addestramento. Attivo la scrive nello "
+       "spazio delle fotografie, per addestrare con quella conversione spenta."),
+    NL("Uit laat de dunne puntenwolk in sRGB, waar \"Kleuren van startpunten "
+       "omzetten\" in de training voor zorgt. Aan schrijft haar in de ruimte van "
+       "de foto's, om te trainen met die omzetting uit."),
+    RU("Выключено оставляет разреженное облако в sRGB, чем занимается "
+       "«Преобразовать цвета начальных точек» при обучении. Включено пишет его в "
+       "пространстве фотографий — для обучения с выключенным преобразованием."),
+    TR("Kapalı, seyrek nokta bulutunu sRGB'de bırakır; bunu eğitimdeki "
+       "\"Başlangıç noktası renklerini dönüştür\" halleder. Açık, onu "
+       "fotoğrafların uzayında yazar; o dönüşüm kapalıyken eğitmek için."));
+
+SS_MSG(gamut_rec709,
+    EN("sRGB / Rec.709"), JA("sRGB / Rec.709"), ZH_HANS("sRGB / Rec.709"),
+    ZH_HANT("sRGB / Rec.709"), KO("sRGB / Rec.709"), DE("sRGB / Rec.709"),
+    FR("sRGB / Rec.709"), ES("sRGB / Rec.709"), PT("sRGB / Rec.709"),
+    IT("sRGB / Rec.709"), NL("sRGB / Rec.709"), RU("sRGB / Rec.709"),
+    TR("sRGB / Rec.709"));
+
+SS_MSG(gamut_aces2065_1,
+    EN("ACES2065-1"), JA("ACES2065-1"), ZH_HANS("ACES2065-1"), ZH_HANT("ACES2065-1"),
+    KO("ACES2065-1"), DE("ACES2065-1"), FR("ACES2065-1"), ES("ACES2065-1"),
+    PT("ACES2065-1"), IT("ACES2065-1"), NL("ACES2065-1"), RU("ACES2065-1"),
+    TR("ACES2065-1"));
+
+SS_MSG(gamut_acescg,
+    EN("ACEScg"), JA("ACEScg"), ZH_HANS("ACEScg"), ZH_HANT("ACEScg"), KO("ACEScg"),
+    DE("ACEScg"), FR("ACEScg"), ES("ACEScg"), PT("ACEScg"), IT("ACEScg"),
+    NL("ACEScg"), RU("ACEScg"), TR("ACEScg"));
+
+SS_MSG(gamut_rec2020,
+    EN("Rec.2020"), JA("Rec.2020"), ZH_HANS("Rec.2020"), ZH_HANT("Rec.2020"),
+    KO("Rec.2020"), DE("Rec.2020"), FR("Rec.2020"), ES("Rec.2020"),
+    PT("Rec.2020"), IT("Rec.2020"), NL("Rec.2020"), RU("Rec.2020"),
+    TR("Rec.2020"));
+
+SS_MSG(gamut_adobergb,
+    EN("Adobe RGB"), JA("Adobe RGB"), ZH_HANS("Adobe RGB"), ZH_HANT("Adobe RGB"),
+    KO("Adobe RGB"), DE("Adobe RGB"), FR("Adobe RGB"), ES("Adobe RGB"),
+    PT("Adobe RGB"), IT("Adobe RGB"), NL("Adobe RGB"), RU("Adobe RGB"),
+    TR("Adobe RGB"));
+
+SS_MSG(gamut_dcip3,
+    EN("DCI-P3"), JA("DCI-P3"), ZH_HANS("DCI-P3"), ZH_HANT("DCI-P3"), KO("DCI-P3"),
+    DE("DCI-P3"), FR("DCI-P3"), ES("DCI-P3"), PT("DCI-P3"), IT("DCI-P3"),
+    NL("DCI-P3"), RU("DCI-P3"), TR("DCI-P3"));
+
 SS_MSG(create_dataset,
     EN("Create Dataset"), JA("データセットを作成"), ZH_HANS("创建数据集"),
     ZH_HANT("建立資料集"), KO("데이터셋 만들기"), DE("Datensatz erstellen"),

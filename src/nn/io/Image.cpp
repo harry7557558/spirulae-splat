@@ -5,6 +5,7 @@
 // tree by external/stb_image{,_write}_impl.cpp; this file takes only their
 // declarations. They pull in nothing: no libpng, no libjpeg, no ffmpeg.
 
+#include "core/ColorSpace.h"
 #include "nn/core/Log.h"
 #include "nn/io/Image.h"
 
@@ -17,7 +18,8 @@
 
 namespace nn {
 
-Image load_image(const std::string& path) {
+Image load_image(const std::string& path, const std::string& gamut,
+                 bool is_linear) {
     Image img;
     int w = 0, h = 0, c = 0;
     uint8_t* data = stbi_load(path.c_str(), &w, &h, &c, 3);
@@ -31,6 +33,7 @@ Image load_image(const std::string& path) {
     img.channels = 3;
     img.data.assign(data, data + (size_t)w * h * 3);
     stbi_image_free(data);
+    colorspace::to_srgb_inplace(img.data.data(), (size_t)w * h, gamut, is_linear);
     return img;
 }
 

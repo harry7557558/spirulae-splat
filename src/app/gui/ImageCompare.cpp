@@ -226,8 +226,15 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
     // mapped scratch is faulted in and zeroed by the kernel on every job.
     std::vector<float>& gt = _wgt;
     std::vector<float>& render = _wrender;
+    std::vector<float>& render_raw = _wrender_raw;
     std::vector<uint8_t>& alpha = _walpha;
     alpha.clear();
+    render_raw.clear();
+    // The source file is shown undecoded, so pair it with the render before
+    // the working-space -> sRGB conversion rather than after.
+    const auto color = spirula::resolve_color(s.cfg);
+    const bool want_raw = j.source_gt &&
+                          (color.splat_linear || !color.splat_gamut.empty());
     int64_t B = 0, H = 0, W = 0, C = 0;
     int64_t mh = 0, mw = 0;   // the mask's own resolution, which need not be H, W
     int64_t dh = 0, dw = 0, nh = 0, nw = 0;   // ... and the modalities'
@@ -251,10 +258,14 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
         }
         render.resize((size_t)n);
         gt.resize((size_t)n);
+        if (want_raw) render_raw.resize((size_t)n);
         engine_copy_render_to_host(
             TorchTensorView{(uint64_t)(uintptr_t)render.data(), 4, {B, H, W, C}},
             TorchTensorView{0, 0, {}}, TorchTensorView{0, 0, {}},
-            TorchTensorView{0, 0, {}}, TorchTensorView{0, 0, {}});
+            want_raw ? TorchTensorView{(uint64_t)(uintptr_t)render_raw.data(), 4,
+                                       {B, H, W, C}}
+                     : TorchTensorView{0, 0, {}},
+            TorchTensorView{0, 0, {}});
         engine_copy_gt_rgb_to_host(
             TorchTensorView{(uint64_t)(uintptr_t)gt.data(), 4, {B, H, W, C}});
         // The mask keeps its own resolution: the loss samples it rather than
@@ -336,7 +347,8 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
     pack_shape(out.views, out.pack_cols, out.pack_rows);
     pack_rgb(gt.data(), out.views, (int)H, (int)W, (int)C,
              out.pack_cols, out.pack_rows, out.gt);
-    pack_rgb(render.data(), out.views, (int)H, (int)W, (int)C,
+    pack_rgb(render_raw.empty() ? render.data() : render_raw.data(),
+             out.views, (int)H, (int)W, (int)C,
              out.pack_cols, out.pack_rows, out.render);
     if (!alpha.empty())
         pack_mask(alpha.data(), out.views, (int)H, (int)W, (int)mh, (int)mw,

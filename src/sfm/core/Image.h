@@ -76,14 +76,12 @@ inline void sampleColor(const GrayImage& img, float x, float y, uint8_t out[3]) 
     }
 }
 
-// Decode an image file to RGB(A), then to grayscale float. With `want_color`,
-// the returned GrayImage also carries a downscaled interleaved-RGB buffer; with
-// a non-empty `mask_path`, it also carries the decoded keypoint mask (a mask
-// that fails to decode is reported as an empty Mask, not an exception -- a bad
-// mask must not lose the image). Declared here, defined in image.cpp (which is
-// the single TU that pulls in the stb implementation).
+// A mask that fails to decode comes back empty, never as an exception -- a bad
+// mask must not lose the image. `gamut` / `is_linear` describe the file; pixels
+// convert to sRGB on decode, which luma and the learned frontend assume.
 GrayImage loadGrayImage(const std::string& path, int max_image_size = 3200,
-                        bool want_color = false, const std::string& mask_path = "");
+                        bool want_color = false, const std::string& mask_path = "",
+                        const std::string& gamut = "", bool is_linear = false);
 
 // Read just the pixel dimensions from an image header (no full decode).
 // Returns false if the file is not a decodable image.

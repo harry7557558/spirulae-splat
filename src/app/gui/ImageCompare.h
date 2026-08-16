@@ -169,6 +169,9 @@ private:
     Shot _result;                 // guarded by _mu until poll() takes it
     // Readback scratch, worker thread only. Reused across jobs: see run_job.
     std::vector<float> _wgt, _wrender;
+    // Working-space render, fetched only alongside the source file so both
+    // panes show the colour space they are stored in.
+    std::vector<float> _wrender_raw;
     std::vector<uint8_t> _walpha;
     // The supervision modalities, read back inside the engine mutex and
     // coloured outside it: colouring 2 MPx would hold the trainer up for

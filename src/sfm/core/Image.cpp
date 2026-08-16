@@ -6,6 +6,8 @@
 // this library and the engine, which carries that TU too.
 #include "sfm/core/Image.h"
 
+#include "core/ColorSpace.h"
+
 #include <algorithm>
 
 #include "external/stb_image.h"
@@ -79,12 +81,14 @@ static void resizeGrayFromRgb(const unsigned char* rgb, int w, int h, int dw, in
 }
 
 GrayImage loadGrayImage(const std::string& path, int max_image_size, bool want_color,
-                        const std::string& mask_path) {
+                        const std::string& mask_path,
+                        const std::string& gamut, bool is_linear) {
     int w = 0, h = 0, chan = 0;
     // Force 3 channels; we do our own luma so behavior is decoder-independent.
     unsigned char* rgb = stbi_load(path.c_str(), &w, &h, &chan, 3);
     if (!rgb)
         throw std::runtime_error("cannot decode image " + path + ": " + stbi_failure_reason());
+    colorspace::to_srgb_inplace(rgb, (size_t)w * h, gamut, is_linear);
 
     GrayImage img;
     img.orig_width = w;

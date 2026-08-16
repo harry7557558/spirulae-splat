@@ -160,6 +160,8 @@ void ColmapRunner::take_masking(PrepJob& prep) {
     prep.mask_detect_every = _live.mask_detect_every;
     prep.mask_memory_frames = _live.mask_memory_frames;
     prep.mask_clicks = _live.mask_clicks;
+    prep.image_gamut = _live.image_gamut;
+    prep.image_is_linear = _live.image_is_linear;
     prep.mask_model_path = _live.mask_model_path;
     prep.mask_model_name = _live.mask_model;
     prep.force_external_masking = _live.force_external_masking;
