@@ -21,5 +21,6 @@ void engine_reset() {
     // the underlying device memory. Pool buffer keys will be re-acquired
     // (and resized) by the next scene's engine_* init calls.
     engine() = EngineState{};
+    engine_scenes_forget();
     freeAllDeviceMemory();
 }

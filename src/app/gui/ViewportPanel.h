@@ -85,6 +85,23 @@ public:
     void detach();
     bool attached() const { return _mode == Mode::Engine; }
 
+    // Hide the controls the view link makes shared -- navigation, camera
+    // model, field of view, reset -- so a row of linked panels shows them
+    // once, drawn by draw_nav_controls() wherever the owner wants them.
+    void show_nav_controls(bool on) { _nav_controls = on; }
+    void draw_nav_controls();
+
+    // How tall the last draw()'s control rows were, and extra height to leave
+    // under them. A row of panels whose controls wrap differently would
+    // otherwise render at different sizes, which is not a comparison.
+    float controls_height() const { return _controls_h; }
+    void set_controls_pad(float px) { _controls_pad = px; }
+
+    // Where this panel's model sits in the SHARED frame the camera navigates
+    // (row-major 3x4 similarity, scale*R | t; identity by default). Applied to
+    // the CAMERA, not the geometry, so moving a model costs nothing.
+    void set_model_transform(const float a[12]);
+
     // Side-by-side: adopt `src`'s navigation pose, camera model and FOV, so
     // two panels showing the same scene stay locked to one view. `moved()`
     // says whether this panel's own pose changed on the last draw, which is
@@ -140,6 +157,11 @@ private:
     // Camera-to-orbit-target distance (normalized frame); drives the
     // zoom-adaptive grid cell size.
     float nav_dist() const;
+    // The navigation pose expressed in the MODEL's frame -- what both
+    // renderers are actually given (see set_model_transform).
+    void model_c2w(float out[12]) const;
+    void model_point(const float shared[3], float out[3]) const;
+    void shared_point(const float model[3], float out[3]) const;
     void build_request(ViewRequest& q, int W, int H) const;
     void view_matrix(float out[16]) const;   // row-major world-to-view
     void upload(const ViewResult& res);
@@ -172,6 +194,15 @@ private:
     // splat file has none, so the frustum controls are hidden rather than
     // shown doing nothing.
     bool _has_cameras = true;
+
+    // Model frame -> shared navigation frame (see set_model_transform), and
+    // its scale, cached because every render divides by it.
+    float _m2s[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
+    float _m2s_scale = 1.0f;
+    bool _m2s_identity = true;
+    bool _nav_controls = true;
+    float _controls_h = 0.0f;
+    float _controls_pad = 0.0f;
 
     // ---- render options a VIEWER may change (a training session may not:
     // what it renders has to be what it is training) ----

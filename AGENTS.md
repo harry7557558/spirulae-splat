@@ -514,7 +514,10 @@ no ceremony — do not ask, do not leave a note saying you removed it.
   (H2D / D2H / D2D / memset / device / host), header-only, both backends.
 - **The engine is a process-global singleton.** Call `engine_reset()` between
   runs that swap datasets, or the new run inherits the old splats, camera
-  table, optimizer moments and color-space matrices.
+  table, optimizer moments and color-space matrices. The one exception is
+  read-only: `engine_scene_*` keeps several splat SETS resident and binds one
+  per render, which is how the GUI shows four models side by side
+  (`docs/notes/compare-view.md`).
 - **`build/_deps` on WSL drvfs** may need `git config safe.directory` entries
   for the FetchContent'd GLFW/imgui.
 - **A static library whose only content is a static initializer is not

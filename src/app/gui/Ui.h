@@ -332,6 +332,10 @@ inline bool SliderFloat(const Msg& m, float* v, float lo, float hi,
                         const char* fmt = "%.3f") {
     return ImGui::SliderFloat(detail::label(m), v, lo, hi, fmt);
 }
+inline bool SliderFloat3(const Msg& m, float v[3], float lo, float hi,
+                         const char* fmt = "%.3f") {
+    return ImGui::SliderFloat3(detail::label(m), v, lo, hi, fmt);
+}
 inline bool InputInt(const Msg& m, int* v, int step = 0, int step_fast = 0) {
     return ImGui::InputInt(detail::label(m), v, step, step_fast);
 }

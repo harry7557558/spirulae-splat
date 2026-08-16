@@ -595,6 +595,36 @@ void engine_blit_view(
     TorchTensorView out_rgb          // [H,W,3] uint8, pre-allocated CUDA
 );
 
+// --- Viewer scenes (docs/notes/compare-view.md) ---
+//
+// Several splat sets resident at once, one bound at a time; activating one is
+// a pointer swap. Viewer-only: a slot has no optimizer or densify state.
+constexpr int kMaxEngineScenes = 8;
+
+void engine_scene_set_data_3dgs(
+    int slot,
+    int64_t num_splats,
+    TorchTensorView means,
+    TorchTensorView quats,
+    TorchTensorView scales,
+    TorchTensorView opacities,
+    TorchTensorView features_dc,
+    TorchTensorView features_sh
+);
+
+// The model's own colour space, applied by engine_scene_activate. Two models
+// trained in different spaces are converted each its own way, which is the
+// whole point of carrying it here rather than in the engine's one slot.
+void engine_scene_set_color_space(int slot, bool enabled, bool is_linear,
+                                  std::vector<float> color_matrix);
+
+// Bind `slot` to the world buffers. Throws when the slot holds nothing.
+void engine_scene_activate(int slot);
+bool engine_scene_loaded(int slot);
+void engine_scene_free(int slot);
+// Drop every slot without freeing (engine_reset has already freed the pool).
+void engine_scenes_forget();
+
 // Pool VRAM breakdown: [(key, used_bytes, cap_bytes), ...]
 std::vector<std::tuple<std::string, size_t, size_t>> engine_get_pool_breakdown();
 // Same, with an authoritative category tag: [(key, category, used, cap), ...]

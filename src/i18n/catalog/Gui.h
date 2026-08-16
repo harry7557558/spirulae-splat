@@ -2976,6 +2976,295 @@ SS_MSG(viewer_run_config_unreadable,
        "умолчанию."),
     TR("Çalışmanın ayarları okunamadı ({0}); varsayılanlar kullanılıyor."));
 
+SS_MSG(compare_add_model,
+    EN("Add a model"),
+    JA("モデルを追加"),
+    ZH_HANS("添加模型"),
+    ZH_HANT("新增模型"),
+    KO("모델 추가"),
+    DE("Modell hinzufügen"),
+    FR("Ajouter un modèle"),
+    ES("Añadir un modelo"),
+    PT("Adicionar um modelo"),
+    IT("Aggiungi un modello"),
+    NL("Een model toevoegen"),
+    RU("Добавить модель"),
+    TR("Model ekle"));
+
+SS_MSG(compare_add_model_help,
+    EN("Show another model beside this one. Up to four are shown at once, on "
+       "one camera, so what differs between the panes is the model."),
+    JA("このモデルの隣にもう一つ表示します。最大4つまで、同じカメラで並べて"
+       "表示されるので、ペインごとの違いはモデルそのものだけになります。"),
+    ZH_HANS("在这个模型旁边再显示一个。最多同时显示四个，共用同一台相机，"
+            "所以各窗格之间的差别只在于模型本身。"),
+    ZH_HANT("在這個模型旁邊再顯示一個。最多同時顯示四個，共用同一台相機，"
+            "所以各窗格之間的差別只在於模型本身。"),
+    KO("이 모델 옆에 다른 모델을 함께 봅니다. 한 번에 네 개까지, 같은 카메라로 "
+       "보여 주므로 창마다 다른 것은 모델뿐입니다."),
+    DE("Ein weiteres Modell daneben zeigen. Bis zu vier auf einmal, mit einer "
+       "gemeinsamen Kamera, sodass sich die Bereiche nur im Modell "
+       "unterscheiden."),
+    FR("Afficher un autre modèle à côté de celui-ci. Jusqu'à quatre à la fois, "
+       "sur une seule caméra, de sorte que seule la différence de modèle "
+       "sépare les volets."),
+    ES("Mostrar otro modelo junto a este. Hasta cuatro a la vez, con una sola "
+       "cámara, de modo que lo único que cambia entre los paneles es el "
+       "modelo."),
+    PT("Mostrar outro modelo ao lado deste. Até quatro de uma vez, com uma só "
+       "câmera, de modo que o que muda entre os painéis é o modelo."),
+    IT("Mostri un altro modello accanto a questo. Fino a quattro insieme, con "
+       "una sola telecamera, così tra i riquadri cambia solo il modello."),
+    NL("Nog een model ernaast tonen. Maximaal vier tegelijk, met één camera, "
+       "zodat alleen het model tussen de vensters verschilt."),
+    RU("Показать рядом ещё одну модель. До четырёх сразу, с одной камерой, так "
+       "что панели различаются только моделью."),
+    TR("Bunun yanında başka bir model gösterin. Aynı anda dörde kadar, tek bir "
+       "kamerayla; böylece bölmeler arasındaki tek fark modeldir."));
+
+SS_MSG(compare_full,
+    EN("Four models is as many as fit."),
+    JA("表示できるモデルは4つまでです。"),
+    ZH_HANS("最多只能同时显示四个模型。"),
+    ZH_HANT("最多只能同時顯示四個模型。"),
+    KO("모델은 네 개까지만 들어갑니다."),
+    DE("Mehr als vier Modelle passen nicht."),
+    FR("Quatre modèles, c'est tout ce qui tient."),
+    ES("Caben cuatro modelos como máximo."),
+    PT("Cabem no máximo quatro modelos."),
+    IT("Più di quattro modelli non ci stanno."),
+    NL("Meer dan vier modellen passen er niet."),
+    RU("Больше четырёх моделей не помещается."),
+    TR("Dörtten fazla model sığmıyor."));
+
+SS_MSG(compare_from_file,
+    EN("From a file..."),
+    JA("ファイルから…"),
+    ZH_HANS("从文件…"),
+    ZH_HANT("從檔案…"),
+    KO("파일에서…"),
+    DE("Aus einer Datei …"),
+    FR("Depuis un fichier…"),
+    ES("Desde un archivo…"),
+    PT("De um arquivo…"),
+    IT("Da un file…"),
+    NL("Uit een bestand…"),
+    RU("Из файла…"),
+    TR("Bir dosyadan…"));
+
+SS_MSG(compare_link_views,
+    EN("Move all views together"),
+    JA("すべてのビューを一緒に動かす"),
+    ZH_HANS("所有视图一起转"),
+    ZH_HANT("所有檢視一起轉"),
+    KO("모든 화면을 함께 움직이기"),
+    DE("Alle Ansichten zusammen bewegen"),
+    FR("Déplacer toutes les vues ensemble"),
+    ES("Mover todas las vistas juntas"),
+    PT("Mover todas as vistas juntas"),
+    IT("Muovi tutte le viste insieme"),
+    NL("Alle beelden samen bewegen"),
+    RU("Двигать все виды вместе"),
+    TR("Tüm görünümleri birlikte oynat"));
+
+SS_MSG(compare_link_views_help,
+    EN("One camera for every pane, so the same part of the scene is on screen "
+       "in all of them at once."),
+    JA("すべてのペインが同じカメラを使うので、シーンの同じ場所が同時に映ります。"),
+    ZH_HANS("所有窗格共用一台相机，因此同一处场景会同时出现在每个窗格里。"),
+    ZH_HANT("所有窗格共用一台相機，因此同一處場景會同時出現在每個窗格裡。"),
+    KO("모든 창이 카메라를 공유하므로 장면의 같은 부분이 동시에 보입니다."),
+    DE("Eine Kamera für alle Bereiche, sodass überall gleichzeitig dieselbe "
+       "Stelle der Szene zu sehen ist."),
+    FR("Une seule caméra pour tous les volets, si bien que le même endroit de "
+       "la scène est visible partout en même temps."),
+    ES("Una sola cámara para todos los paneles, de modo que en todos se vea a "
+       "la vez la misma parte de la escena."),
+    PT("Uma só câmera para todos os painéis, de modo que a mesma parte da cena "
+       "apareça em todos ao mesmo tempo."),
+    IT("Una sola telecamera per tutti i riquadri, così in ciascuno si vede "
+       "insieme lo stesso punto della scena."),
+    NL("Eén camera voor alle vensters, zodat overal tegelijk hetzelfde deel "
+       "van de scène te zien is."),
+    RU("Одна камера на все панели, поэтому во всех сразу видно одно и то же "
+       "место сцены."),
+    TR("Tüm bölmeler için tek bir kamera; böylece sahnenin aynı yeri hepsinde "
+       "aynı anda görünür."));
+
+SS_MSG(compare_placement_help,
+    EN("Where this model sits, and where its pane is."),
+    JA("このモデルの置き場所と、ペインの並び順です。"),
+    ZH_HANS("这个模型摆在哪里，以及它的窗格排在第几个。"),
+    ZH_HANT("這個模型擺在哪裡，以及它的窗格排在第幾個。"),
+    KO("이 모델을 어디에 놓을지와, 창이 몇 번째인지입니다."),
+    DE("Wo dieses Modell steht und an welcher Stelle sein Bereich liegt."),
+    FR("Où se place ce modèle, et à quel rang se trouve son volet."),
+    ES("Dónde se coloca este modelo y en qué lugar queda su panel."),
+    PT("Onde este modelo fica e em que lugar está o painel dele."),
+    IT("Dove sta questo modello e in che posizione sta il suo riquadro."),
+    NL("Waar dit model staat en op welke plek zijn venster zit."),
+    RU("Где стоит эта модель и на каком месте её панель."),
+    TR("Bu modelin nerede durduğu ve bölmesinin kaçıncı sırada olduğu."));
+
+SS_MSG(compare_align_first,
+    EN("Place in the first model's frame"),
+    JA("最初のモデルの座標に合わせる"),
+    ZH_HANS("放到第一个模型的坐标里"),
+    ZH_HANT("放到第一個模型的座標裡"),
+    KO("첫 모델의 좌표에 맞추기"),
+    DE("In den Rahmen des ersten Modells setzen"),
+    FR("Placer dans le repère du premier modèle"),
+    ES("Colocar en el marco del primer modelo"),
+    PT("Colocar no referencial do primeiro modelo"),
+    IT("Colloca nel sistema del primo modello"),
+    NL("In het assenstelsel van het eerste model zetten"),
+    RU("Поместить в систему координат первой модели"),
+    TR("İlk modelin çerçevesine yerleştir"));
+
+SS_MSG(compare_align_first_help,
+    EN("Two reconstructions of one scene share coordinates, so this lines them "
+       "up exactly. Turn it off for a model that has nothing to do with the "
+       "first one, and it is framed on its own instead."),
+    JA("同じシーンを再構成した2つのモデルは座標を共有するので、これでぴったり"
+       "重なります。最初のモデルと無関係なモデルではオフにすると、それ自体に"
+       "合わせて表示されます。"),
+    ZH_HANS("同一场景的两次重建共用坐标，打开它就能精确对齐。若这个模型与第一个"
+            "毫无关系，请关掉它，模型会按自身范围取景。"),
+    ZH_HANT("同一場景的兩次重建共用座標，開啟它就能精確對齊。若這個模型與第一個"
+            "毫無關係，請關掉它，模型會依自身範圍取景。"),
+    KO("같은 장면을 두 번 복원한 모델은 좌표가 같으므로 이것으로 정확히 "
+       "겹칩니다. 첫 모델과 무관한 모델이라면 꺼 두세요. 그러면 그 모델 자체에 "
+       "맞춰 보여 줍니다."),
+    DE("Zwei Rekonstruktionen einer Szene teilen sich die Koordinaten, das "
+       "bringt sie genau zur Deckung. Für ein Modell, das mit dem ersten "
+       "nichts zu tun hat, ausschalten -- dann wird es für sich gerahmt."),
+    FR("Deux reconstructions d'une même scène partagent leurs coordonnées : "
+       "cela les superpose exactement. Désactivez-le pour un modèle sans "
+       "rapport avec le premier, il sera alors cadré pour lui-même."),
+    ES("Dos reconstrucciones de una misma escena comparten coordenadas, así "
+       "que esto las superpone con exactitud. Desactívelo para un modelo que "
+       "no tenga que ver con el primero: se encuadrará por sí solo."),
+    PT("Duas reconstruções de uma mesma cena partilham coordenadas, então isto "
+       "as sobrepõe com exatidão. Desligue para um modelo que nada tenha a ver "
+       "com o primeiro: ele será enquadrado por si só."),
+    IT("Due ricostruzioni della stessa scena condividono le coordinate, quindi "
+       "così si sovrappongono esattamente. Lo disattivi per un modello che con "
+       "il primo non c'entra: verrà inquadrato per conto suo."),
+    NL("Twee reconstructies van dezelfde scène delen coördinaten, dus hiermee "
+       "vallen ze precies samen. Zet het uit voor een model dat niets met het "
+       "eerste te maken heeft; dat wordt dan op zichzelf ingekaderd."),
+    RU("Две реконструкции одной сцены имеют общие координаты, поэтому так они "
+       "совпадут точно. Для модели, не связанной с первой, выключите -- она "
+       "будет вписана сама по себе."),
+    TR("Aynı sahnenin iki yeniden oluşturması koordinatları paylaşır, bu da "
+       "onları tam olarak üst üste getirir. İlkiyle ilgisi olmayan bir model "
+       "için kapatın; o zaman kendi başına çerçevelenir."));
+
+SS_MSG(compare_position,
+    EN("Position"),
+    JA("位置"),
+    ZH_HANS("位置"),
+    ZH_HANT("位置"),
+    KO("위치"),
+    DE("Position"),
+    FR("Position"),
+    ES("Posición"),
+    PT("Posição"),
+    IT("Posizione"),
+    NL("Positie"),
+    RU("Положение"),
+    TR("Konum"));
+
+SS_MSG(compare_rotation,
+    EN("Rotation"),
+    JA("回転"),
+    ZH_HANS("旋转"),
+    ZH_HANT("旋轉"),
+    KO("회전"),
+    DE("Drehung"),
+    FR("Rotation"),
+    ES("Rotación"),
+    PT("Rotação"),
+    IT("Rotazione"),
+    NL("Draaiing"),
+    RU("Поворот"),
+    TR("Döndürme"));
+
+SS_MSG(compare_size,
+    EN("Size"),
+    JA("大きさ"),
+    ZH_HANS("大小"),
+    ZH_HANT("大小"),
+    KO("크기"),
+    DE("Größe"),
+    FR("Taille"),
+    ES("Tamaño"),
+    PT("Tamanho"),
+    IT("Dimensione"),
+    NL("Grootte"),
+    RU("Размер"),
+    TR("Boyut"));
+
+SS_MSG(compare_reset_placement,
+    EN("Put it back"),
+    JA("元に戻す"),
+    ZH_HANS("放回原处"),
+    ZH_HANT("放回原處"),
+    KO("원래대로"),
+    DE("Zurücksetzen"),
+    FR("Remettre en place"),
+    ES("Devolver a su sitio"),
+    PT("Voltar ao lugar"),
+    IT("Rimetti a posto"),
+    NL("Terugzetten"),
+    RU("Вернуть на место"),
+    TR("Yerine geri koy"));
+
+SS_MSG(compare_move_left,
+    EN("Move left"),
+    JA("左へ"),
+    ZH_HANS("左移"),
+    ZH_HANT("左移"),
+    KO("왼쪽으로"),
+    DE("Nach links"),
+    FR("Vers la gauche"),
+    ES("A la izquierda"),
+    PT("Para a esquerda"),
+    IT("A sinistra"),
+    NL("Naar links"),
+    RU("Влево"),
+    TR("Sola al"));
+
+SS_MSG(compare_move_right,
+    EN("Move right"),
+    JA("右へ"),
+    ZH_HANS("右移"),
+    ZH_HANT("右移"),
+    KO("오른쪽으로"),
+    DE("Nach rechts"),
+    FR("Vers la droite"),
+    ES("A la derecha"),
+    PT("Para a direita"),
+    IT("A destra"),
+    NL("Naar rechts"),
+    RU("Вправо"),
+    TR("Sağa al"));
+
+SS_MSG(compare_remove,
+    EN("Close this one"),
+    JA("これを閉じる"),
+    ZH_HANS("关掉这个"),
+    ZH_HANT("關掉這個"),
+    KO("이것 닫기"),
+    DE("Dieses schließen"),
+    FR("Fermer celui-ci"),
+    ES("Cerrar este"),
+    PT("Fechar este"),
+    IT("Chiudi questo"),
+    NL("Deze sluiten"),
+    RU("Закрыть эту"),
+    TR("Bunu kapat"));
+
 SS_MSG(confirm_open_splat,
     EN("Stop training and open the model file?"),
     JA("学習を停止してモデルファイルを開きますか？"),
@@ -5578,21 +5867,6 @@ SS_MSG(mesh_open_in_viewer,
     NL("Alleen de mesh openen"),
     RU("Открыть только меш"),
     TR("Yalnızca ağı aç"));
-
-SS_MSG(mesh_link_views,
-    EN("Move both views together"),
-    JA("両方のビューを一緒に動かす"),
-    ZH_HANS("两个视图一起转"),
-    ZH_HANT("兩個檢視一起轉"),
-    KO("두 화면을 함께 움직이기"),
-    DE("Beide Ansichten zusammen bewegen"),
-    FR("Déplacer les deux vues ensemble"),
-    ES("Mover las dos vistas juntas"),
-    PT("Mover as duas vistas juntas"),
-    IT("Muovi le due viste insieme"),
-    NL("Beide beelden samen bewegen"),
-    RU("Двигать оба вида вместе"),
-    TR("İki görünümü birlikte oynat"));
 
 SS_MSG(mesh_pick_model,
     EN("Pick a trained model"),

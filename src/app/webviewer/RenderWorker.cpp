@@ -277,6 +277,11 @@ struct RenderWorker::Impl {
             // Trainer.render's "post-processor + D->H inside the lock".
             std::lock_guard<std::mutex> lk(*hooks.engine_mutex);
 
+            // Several models can be resident at once (a comparison viewer);
+            // binding one is a pointer swap, so it is done per render rather
+            // than by whoever last touched the engine.
+            if (cfg.scene_slot >= 0) engine_scene_activate(cfg.scene_slot);
+
             set_camera_params(W, H, q.model, "NONE",
                               tvp(vm, 4, {1, 4, 4}),
                               tvp(intr, 4, {1, 4}),

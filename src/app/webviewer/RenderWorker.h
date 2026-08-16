@@ -47,6 +47,9 @@ struct ViewerRenderConfig {
     // of viewer_upload_cameras). Multiplied by ViewRequest::cam_size_scale
     // per render; 0 disables live frustum-size updates.
     float base_camera_size = 0.0f;
+    // Which engine scene slot this worker renders (Engine.h "Viewer scenes").
+    // < 0 = whatever is bound, which is what a training session wants.
+    int scene_slot = -1;
 };
 
 struct ViewerHooks {

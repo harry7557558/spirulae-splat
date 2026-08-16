@@ -1,26 +1,16 @@
 #pragma once
 
 // SplatViewer -- a FILE open for looking at, with no dataset and no training
-// behind it: a 3D Gaussian Splatting model, an SfM point cloud, or an
-// extracted triangle mesh. What it turns out to be decides which renderer
-// the viewport uses; opening it is the same action either way, which is what
-// makes "drop a file on the window" work.
+// behind it: a 3DGS model, an SfM point cloud, or an extracted triangle mesh.
+// What it turns out to be decides which renderer draws it; opening it is the
+// same action either way, which is what makes "drop a file on the window" work.
 //
-// The engine renders from `world` splats and a camera; a training run is only
-// one way to fill those in. This fills them from a file instead, so the same
-// RenderWorker the training viewport uses (and the same one the web viewer
-// uses) can show a finished model -- ours, or anyone else's 3D Gaussian
-// Splatting PLY.
+// Splats go into an ENGINE SCENE SLOT (Engine.h "Viewer scenes"), not into the
+// engine's one world, so several of these can be open at once. Taking the
+// engine over is the owner's job (CompareView); this only fills and frees a
+// slot. Detach anything rendering from it BEFORE close().
 //
-// Lifetime, and why it matters here more than usual: THE ENGINE IS A PROCESS-
-// GLOBAL SINGLETON. Opening a file calls engine_reset() and takes it over, so
-// a training run and an open file cannot coexist; GuiApp routes an open
-// through the same "stop training?" confirmation as any other session-
-// destroying action, and closes the viewer before setting a run up. Detach
-// anything rendering from this (the viewport's RenderWorker) BEFORE close().
-//
-// Loading runs on a worker thread: a large model is a few hundred MB of PLY
-// and the window has to stay responsive while it lands.
+// Loading runs on a worker thread: a large model is a few hundred MB of PLY.
 
 #include "app/webviewer/RenderWorker.h"
 #include "data/DatasetParser.h"
@@ -38,19 +28,18 @@ namespace gui {
 class SplatViewer {
 public:
     enum class State { Idle, Loading, Ready, Failed };
-    // What the file turned out to hold. A `.ply` is a container, not a
-    // format: the same extension carries Gaussians, an SfM point cloud and a
-    // mesh, and only the property list says which. Points and meshes open in
-    // the GL preview renderer the trainer uses before a run; only Splats need
-    // the engine (and so only Splats take it over).
+    // What the file turned out to hold: a `.ply` is a container, not a format,
+    // and only its property list says which of the three it is. Points and
+    // meshes draw on the GL preview; only Splats take a scene slot.
     enum class Kind { Splats, Points, Mesh };
 
     ~SplatViewer();
 
-    // Accepts a splat .ply, a step-*.ckpt directory, or a run directory (whose
-    // newest checkpoint is used). Asynchronous; watch state().
-    void open(const std::string& path);
-    // Give the engine back. Safe to call when nothing is open.
+    // A splat .ply, a step-*.ckpt directory, or a run directory (whose newest
+    // checkpoint is used). Asynchronous; watch state(). `engine_mutex` is
+    // shared by every open model -- one scene is bound at a time.
+    void open(const std::string& path, int scene_slot, std::mutex* engine_mutex);
+    // Give the slot back. Safe to call when nothing is open.
     void close();
 
     State state() const { return _state.load(); }
@@ -70,6 +59,12 @@ public:
     ViewerHooks make_hooks();
     // Identity of what is loaded, for the viewport's framing memory.
     std::string scene_key();
+
+    // The frame this model was fitted to, in the file's own coordinates:
+    // normalized = (model - center) / unit. Mapping between two of these is
+    // what puts two models on one camera.
+    const float* frame_center() const { return _center; }
+    float frame_unit() const { return _unit; }
 
     // Valid once ready() with kind() == Points: a dataset with no cameras and
     // the cloud in it, which is all PreviewRenderer needs.
@@ -111,9 +106,11 @@ private:
     std::atomic<int64_t> _num_splats{0};
     std::atomic<int> _sh_degree{0};
     std::atomic<int64_t> _num_faces{0};
-    // True once this object has called engine_reset(): what close() has to
-    // undo, and what says a half-finished load still left the engine dirty.
-    std::atomic<bool> _owns_engine{false};
+    // The engine scene slot this object filled, or < 0 for none: what close()
+    // has to free, and what says a half-finished load still left one behind.
+    std::atomic<int> _scene_slot{-1};
+    int _pending_slot = -1;            // what the worker is filling
+    std::mutex* _engine_mutex = nullptr;
 
     std::mutex _mu;                    // guards everything below
     std::string _error, _path, _file;
@@ -121,6 +118,9 @@ private:
     bool _linear = false;
     ViewerRenderConfig _cfg;
     std::vector<std::string> _log;
+    // The fitted normalized frame, written by the worker before Ready.
+    float _center[3] = {0, 0, 0};
+    float _unit = 1.0f;
     // Points only. Written by the worker before it publishes Ready, read by
     // the GUI thread after; the state flag is the handoff.
     ParsedDataset _points;
@@ -128,12 +128,6 @@ private:
     // Mesh only, same handoff.
     meshing::MeshData _mesh;
     float _mesh_t2n[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
-
-    // Handed to the RenderWorker as ViewerHooks::engine_mutex. Nothing else
-    // touches the engine while a file is open, but the worker still takes it:
-    // the hook is not optional, and it is what makes a future second reader
-    // safe by construction.
-    std::mutex _engine_mutex;
 };
 
 }  // namespace gui

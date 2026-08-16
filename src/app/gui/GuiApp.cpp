@@ -147,6 +147,11 @@ GuiApp::GuiApp() {
     // Built-in when it is there, COLMAP when it is not; effective_engine()
     // overrides this anyway if the stored choice is unavailable.
     if (!builtin_sfm_available()) _engine = Engine::Colmap;
+    _compare.set_pick_file([this] {
+        _pick = PickAction::AddSplatFile;
+        _dialog.open(msg::viewer_pick_file.get(), FileDialog::Mode::File,
+                     kViewableExtensions);
+    });
 }
 
 GuiApp::~GuiApp() = default;
@@ -158,16 +163,12 @@ void GuiApp::shutdown() {
     detach_session_views();
     _viewport.destroy_gl();
     _images.destroy_gl();
-    _mesh_viewport.detach();
-    _mesh_viewport.destroy_gl();
     _mesh.cancel();
-    _mesh_view.close();
+    // destroy_gl while the context is still current; close() then stops the
+    // render workers before the engine goes back.
+    _compare.destroy_gl();
+    _compare.close();
     _mesh_preview_open = false;
-    _mesh_splats_open = false;
-    // Before ~SplatViewer, which hands the engine back: the viewport's render
-    // worker must have stopped reading from it first.
-    _splat.close();
-    _viewing_splat = false;
     _segment.close();
     _segment.destroy_gl();
     _geometry_panel.close();
@@ -202,6 +203,10 @@ void GuiApp::load_settings() {
         if (k == "recent" && !v.empty() &&
             std::find(_recents.begin(), _recents.end(), v) == _recents.end())
             _recents.push_back(v);
+        else if (k == "recent_model" && !v.empty() &&
+                 std::find(_model_recents.begin(), _model_recents.end(), v) ==
+                     _model_recents.end())
+            _model_recents.push_back(v);
         else if (k == "colmap_exe" && !v.empty()) _colmap_exe = v;
         else if (k == "ffmpeg_exe" && !v.empty()) _ffmpeg_exe = v;
         else if (k == "python_exe" && !v.empty()) _python_exe = v;
@@ -243,6 +248,8 @@ void GuiApp::save_settings() {
     if (!f) return;
     for (const auto& r : _recents)
         std::fprintf(f, "recent=%s\n", r.c_str());
+    for (const auto& r : _model_recents)
+        std::fprintf(f, "recent_model=%s\n", r.c_str());
     std::fprintf(f, "colmap_exe=%s\n", _colmap_exe.c_str());
     std::fprintf(f, "ffmpeg_exe=%s\n", _ffmpeg_exe.c_str());
     std::fprintf(f, "python_exe=%s\n", _python_exe.c_str());
@@ -271,6 +278,14 @@ void GuiApp::add_recent(std::string path) {
     if (_recents.size() > 10) _recents.resize(10);
 }
 
+void GuiApp::add_model_recent(std::string path) {
+    _model_recents.erase(
+        std::remove(_model_recents.begin(), _model_recents.end(), path),
+        _model_recents.end());
+    _model_recents.insert(_model_recents.begin(), std::move(path));
+    if (_model_recents.size() > 10) _model_recents.resize(10);
+}
+
 // One entry per SCREEN line: the panel clips with a list clipper and
 // compensates its scroll for trimmed lines, and both want a uniform height.
 void GuiApp::log(const std::string& s, bool detail) {
@@ -292,8 +307,7 @@ void GuiApp::append_logs() {
     for (auto& s : _runner.drain_log()) log(s);
     for (auto& l : _colmap.steps().drain()) log(l.text, l.detail);
     for (auto& l : _sfm.steps().drain()) log(l.text, l.detail);
-    for (auto& s : _splat.drain_log()) log(s);
-    for (auto& s : _mesh_view.drain_log()) log(s);
+    for (auto& s : _compare.drain_log()) log(s);
     for (auto& s : _mesh.drain_log()) log(s);
     for (auto& s : _download.drain_log()) log(s);
     for (auto& s : _font_download.drain_log()) log(s);
@@ -485,12 +499,20 @@ void GuiApp::open_splat(std::string path) {
     _log.clear();
     close_mesh_preview();
     detach_session_views();
-    _viewing_splat = false;
     // Opening a file resets the engine; a finished run's session cannot be
     // rendered from once that has happened.
     _runner.note_engine_taken();
-    _splat.open(path);
+    _compare.open(path);
+    add_model_recent(path);
+    save_settings();
     _screen = Screen::Viewer;
+}
+
+void GuiApp::add_splat(std::string path) {
+    if (path.empty()) return;
+    _compare.add(path);
+    add_model_recent(path);
+    save_settings();
 }
 
 void GuiApp::request_open_splat(std::string path) {
@@ -504,15 +526,11 @@ void GuiApp::request_open_splat(std::string path) {
 }
 
 // The engine is a process-global singleton and the viewer is holding it, so
-// this has to run before a training session can be set up -- and the viewport
-// has to stop rendering from it first.
+// this has to run before a training session can be set up. CompareView::close
+// stops its render workers before handing the engine back.
 void GuiApp::close_splat() {
-    if (_splat.state() == SplatViewer::State::Idle) return;
-    if (_viewing_splat) {
-        _viewport.detach();
-        _viewing_splat = false;
-    }
-    _splat.close();
+    _compare.close();
+    _mesh_preview_open = false;
 }
 
 void GuiApp::launch_training(const TrainConfig& cfg, const std::string& preset) {
@@ -826,6 +844,30 @@ void GuiApp::handle_drop(const std::vector<std::string>& paths) {
                 datasets.push_back(p);
         if (datasets.size() == paths.size() && !datasets.empty()) {
             for (const std::string& d : datasets) add_batch_row(d);
+            return;
+        }
+    }
+    // Several models dropped together open side by side, which is what the
+    // viewer is for.
+    {
+        std::vector<std::string> models;
+        for (const std::string& p : paths) {
+            if (!fs::is_regular_file(p, ec)) break;
+            std::string ext = fs::path(p).extension().string();
+            for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+            if (std::find(kViewableExtensions.begin(), kViewableExtensions.end(),
+                          ext) == kViewableExtensions.end())
+                break;
+            models.push_back(p);
+        }
+        if (models.size() == paths.size() && models.size() > 1 &&
+            !training_busy()) {
+            open_splat(models[0]);
+            for (size_t i = 1; i < models.size() &&
+                               i < (size_t)CompareView::kMaxModels; i++)
+                add_splat(models[i]);
+            if (models.size() > (size_t)CompareView::kMaxModels)
+                log(msg::compare_full.get());
             return;
         }
     }
@@ -1287,6 +1329,9 @@ void GuiApp::handle_dialog_result(const std::vector<std::string>& paths) {
         case PickAction::SplatFile:
             request_open_splat(path);
             break;
+        case PickAction::AddSplatFile:
+            add_splat(path);
+            break;
         case PickAction::MeshSource:
             set_mesh_source(path);
             break;
@@ -1406,36 +1451,12 @@ void GuiApp::frame() {
         }
     }
 
-    // Viewport backend transitions: a splat file once it is on the device, the
-    // GL dataset preview once a dataset is parsed, the engine renderer once
-    // training has set the engine up. The file case is exclusive with the
-    // other two -- it owns the engine while it is open.
-    if (_viewing_splat || _splat.ready()) {
-        if (_splat.ready() && !_viewing_splat) {
-            if (_splat.kind() == SplatViewer::Kind::Points)
-                _viewport.attach_preview_data(_splat.points(), _splat.post(),
-                                              _splat.scene_key());
-            else if (_splat.kind() == SplatViewer::Kind::Mesh)
-                _viewport.attach_preview_mesh(_splat.mesh(),
-                                              _splat.mesh_to_normalized(),
-                                              _splat.scene_key());
-            else {
-                _viewport.attach_scene(_splat.render_config(), _splat.make_hooks(),
-                                       _splat.scene_key());
-                // A file being looked at can be drawn a different way than it
-                // was trained; a training session cannot, so only this path
-                // offers the controls.
-                _viewport.enable_scene_options(
-                    _splat.render_config().primitive, _splat.sh_degree(),
-                    _splat.gamut(), _splat.linear_color(),
-                    [this](const char* g, bool lin) {
-                        _splat.set_color_space(g, lin);
-                    },
-                    [this] { _splat.release_screen_buffers(); });
-            }
-            _viewing_splat = true;
-        }
-        _images.detach();   // the file owns the engine while it is open
+    // Viewport backend transitions: open model files once they are on the
+    // device, the GL dataset preview once a dataset is parsed, the engine
+    // renderer once training set the engine up -- the first excludes the rest.
+    if (_compare.holds_engine()) {
+        _compare.poll();
+        _images.detach();   // the files own the engine while they are open
     } else if (_runner.engine_ready()) {
         if (!_viewport.attached() && _runner.session())
             _viewport.attach(*_runner.session());
@@ -3807,46 +3828,12 @@ void GuiApp::draw_viewer() {
                      kViewableExtensions);
     }
     ImGui::SameLine();
-    // The file's own path, which is what identifies it.
-    ui::TextDisabledRaw(_splat.file().empty() ? _splat.path() : _splat.file());
-    if (_splat.ready()) {
-        ImGui::SameLine();
-        if (_splat.kind() == SplatViewer::Kind::Points)
-            ui::TextDisabled(msg::viewer_point_count,
-                             {(long long)_splat.num_splats()});
-        else if (_splat.kind() == SplatViewer::Kind::Mesh)
-            ui::TextDisabled(msg::viewer_mesh_count,
-                             {(long long)_splat.num_splats(),
-                              (long long)_splat.num_faces()});
-        else
-            ui::TextDisabled(msg::viewer_splat_count,
-                             {(long long)_splat.num_splats(),
-                              (long long)_splat.sh_degree()});
-    }
+    _compare.set_recents(_model_recents);
+    _compare.draw_toolbar();
 
     const float log_h = log_height(ImGui::GetContentRegionAvail().y);
-    ImGui::BeginChild("##viewer", ImVec2(0, body_height(log_h)),
-                      ImGuiChildFlags_Borders);
-    switch (_splat.state()) {
-        case SplatViewer::State::Loading:
-            ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.4f));
-            ui::TextDisabled(msg::viewer_loading);
-            break;
-        case SplatViewer::State::Failed:
-            ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.4f));
-            ui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), msg::viewer_failed);
-            ui::TextDisabledRaw(_splat.error());
-            break;
-        case SplatViewer::State::Ready:
-            // Nothing is training, so nothing changes between frames unless
-            // the camera does: the viewport renders on demand.
-            _viewport.draw(/*training=*/false);
-            break;
-        default:
-            ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.4f));
-            ui::TextDisabled(msg::viewer_nothing_open);
-            break;
-    }
+    ImGui::BeginChild("##viewer", ImVec2(0, body_height(log_h)));
+    _compare.draw(0.0f);
     ImGui::EndChild();
     draw_log_panel(log_h);
 }
@@ -3923,40 +3910,27 @@ void GuiApp::start_meshing() {
 }
 
 void GuiApp::close_mesh_preview() {
-    if (_mesh_preview_open) {
-        _mesh_viewport.detach();
-        _mesh_view.close();
-        _mesh_preview_open = false;
-    }
-    if (_mesh_splats_open) {
-        close_splat();
-        _mesh_splats_open = false;
-    }
+    if (!_mesh_preview_open) return;
+    _compare.close();
+    _mesh_preview_open = false;
 }
 
 void GuiApp::open_mesh_preview() {
-    close_mesh_preview();
-    // Whatever else had the engine (a file opened from the viewer screen)
-    // has to let go before the splat side takes it -- and the viewport has to
-    // stop rendering from it first, which close_splat does.
+    // Whatever else had the engine (a file opened from the viewer screen) has
+    // to let go before the splats take it.
     close_splat();
     const std::string out = _mesh.output_path();
     if (out.empty()) return;
-    _mesh_view.open(out);
-    _mesh_preview_open = true;
-    // The left-hand panel is the model the mesh came from, on the engine.
-    // Opening it resets the engine, so it is skipped only while a run is
-    // actually USING it -- a finished run has already saved its checkpoint and
-    // hands the engine over exactly as the viewer screen does. (Requiring an
-    // idle runner meant that meshing a model right after training it -- the
-    // ordinary case -- silently showed the mesh alone.)
+    // The model the mesh came from goes FIRST, which puts the surface in the
+    // splats' frame rather than one fitted to itself. Skipped only while a run
+    // is USING the engine -- requiring an IDLE one hid every train-then-mesh.
     if (!training_busy()) {
         detach_session_views();
-        _viewing_splat = false;
         _runner.note_engine_taken();
-        _splat.open(_mesh_job.checkpoint);
-        _mesh_splats_open = true;
+        _compare.add(_mesh_job.checkpoint, &msg::mesh_side_splats);
     }
+    _compare.add(out, &msg::mesh_side_mesh);
+    _mesh_preview_open = true;
 }
 
 void GuiApp::draw_mesh_options() {
@@ -4105,65 +4079,6 @@ void GuiApp::draw_mesh_options() {
     }
 }
 
-void GuiApp::draw_mesh_preview(float height) {
-    // The splat panel is drawn from the moment it is asked for, not from the
-    // moment it is ready: a large model takes seconds to land, and a panel
-    // that appears only on success turns "it failed" into "it silently showed
-    // you one side".
-    const bool both = _mesh_splats_open;
-    const bool linked = both && _splat.ready();
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    const float w = both ? (avail.x - spacing) * 0.5f : avail.x;
-
-    // One panel, one loader: whatever state it is in, say so rather than
-    // drawing an empty viewport.
-    auto side = [&](const Msg& title, SplatViewer& src, ViewportPanel& panel) {
-        ui::Text(title);
-        switch (src.state()) {
-            case SplatViewer::State::Loading:
-                ui::TextDisabled(msg::viewer_loading);
-                break;
-            case SplatViewer::State::Failed:
-                ui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), msg::viewer_failed);
-                ui::TextDisabledRaw(src.error());
-                break;
-            case SplatViewer::State::Ready:
-                panel.draw(/*training=*/false);
-                break;
-            default:
-                ui::TextDisabled(msg::viewer_nothing_open);
-                break;
-        }
-    };
-
-    if (both) {
-        ImGui::BeginChild("##meshleft", ImVec2(w, height),
-                          ImGuiChildFlags_Borders);
-        side(msg::mesh_side_splats, _splat, _viewport);
-        ImGui::EndChild();
-        ImGui::SameLine();
-    }
-
-    ImGui::BeginChild("##meshright", ImVec2(w, height),
-                      ImGuiChildFlags_Borders);
-    side(msg::mesh_side_mesh, _mesh_view, _mesh_viewport);
-    ImGui::EndChild();
-
-    // The link, applied after both panels have handled their input. The
-    // master is the panel being dragged (sticky for the whole drag), else
-    // whichever one moved this frame.
-    if (linked && _mesh_link_views) {
-        ViewportPanel* master = nullptr;
-        if (_viewport.dragging()) master = &_viewport;
-        else if (_mesh_viewport.dragging()) master = &_mesh_viewport;
-        else if (_viewport.moved()) master = &_viewport;
-        else if (_mesh_viewport.moved()) master = &_mesh_viewport;
-        if (master == &_viewport) _mesh_viewport.sync_view_from(_viewport);
-        else if (master == &_mesh_viewport) _viewport.sync_view_from(_mesh_viewport);
-    }
-}
-
 void GuiApp::draw_mesh() {
     // The run finished while this screen was up: show what it made, ONCE.
     // Doing this here rather than in frame() keeps the engine take-over on the
@@ -4180,37 +4095,6 @@ void GuiApp::draw_mesh() {
     ImGui::SameLine();
     ui::Text(msg::mesh_title);
 
-    // Attach the produced geometry once its loader has published it -- and,
-    // when the splats are being shown next to it, once THEY have landed too:
-    // the mesh is then placed in the SPLATS' normalized frame rather than in
-    // one fitted to itself, so both panels are literally the same view and
-    // the linked camera means something. (The two frames would otherwise
-    // differ by however much culling and floaters move the median.)
-    if (_mesh_preview_open && _mesh_view.ready() &&
-        _mesh_view.kind() == SplatViewer::Kind::Mesh &&
-        !_mesh_viewport.preview_active() &&
-        (!_mesh_splats_open || _splat.state() != SplatViewer::State::Loading)) {
-        const float* t2n = _mesh_view.mesh_to_normalized();
-        float shared[12];
-        if (_mesh_splats_open && _splat.ready()) {
-            // render_config().train_to_normalized is normalized -> model
-            // (a uniform scale + centre); the mesh wants its inverse.
-            const auto& m = _splat.render_config().train_to_normalized;
-            const float unit = m[0] != 0.0f ? m[0] : 1.0f;
-            const float inv = 1.0f / unit;
-            const float t[12] = {inv, 0, 0, -inv * m[3],
-                                 0, inv, 0, -inv * m[7],
-                                 0, 0, inv, -inv * m[11]};
-            for (int i = 0; i < 12; i++) shared[i] = t[i];
-            t2n = shared;
-        }
-        _mesh_viewport.attach_preview_mesh(_mesh_view.mesh(), t2n,
-                                           _mesh_view.scene_key());
-        // Both panels start on the same pose; the link keeps them there.
-        if (_mesh_splats_open && _splat.ready())
-            _mesh_viewport.sync_view_from(_viewport);
-    }
-
     const bool running = _mesh.busy();
     const float log_h = log_height(ImGui::GetContentRegionAvail().y);
 
@@ -4222,12 +4106,9 @@ void GuiApp::draw_mesh() {
             ui::Text(msg::mesh_done, {(long long)_mesh.num_verts(),
                                       (long long)_mesh.num_faces()});
         ui::TextDisabledRaw(_mesh.output_path());
-        if (_mesh_splats_open && _splat.ready())
-            ui::Checkbox(msg::mesh_link_views, &_mesh_link_views);
-        ImGui::SameLine();
         if (ui::Button(msg::mesh_open_in_viewer)) {
-            // Hand both panels back first: the viewer screen reuses _splat,
-            // which is holding this preview's model.
+            // Hand both panels back first: the viewer screen reuses _compare,
+            // which is holding this preview's models.
             const std::string out = _mesh.output_path();
             close_mesh_preview();
             request_open_splat(out);
@@ -4238,7 +4119,9 @@ void GuiApp::draw_mesh() {
         ImGui::PushID("again");
         if (ui::Button(msg::mesh_start)) close_mesh_preview();
         ImGui::PopID();
-        draw_mesh_preview(ImGui::GetContentRegionAvail().y);
+        _compare.set_recents(_model_recents);
+        _compare.draw_toolbar();
+        _compare.draw(0.0f);
     } else {
         ImGui::BeginDisabled(running);
         draw_mesh_options();

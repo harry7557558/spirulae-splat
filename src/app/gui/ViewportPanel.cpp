@@ -159,12 +159,65 @@ float ViewportPanel::nav_dist() const {
     return std::sqrt(dx*dx + dy*dy + dz*dz);
 }
 
+void ViewportPanel::set_model_transform(const float a[12]) {
+    // Called every frame by the owner; a render costs too much to submit one
+    // for a placement that has not moved.
+    if (std::memcmp(_m2s, a, sizeof _m2s) == 0) return;
+    for (int i = 0; i < 12; i++) _m2s[i] = a[i];
+    _m2s_scale = std::sqrt(a[0]*a[0] + a[4]*a[4] + a[8]*a[8]);
+    if (!(_m2s_scale > 1e-20f)) _m2s_scale = 1.0f;
+    static const float kI[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
+    _m2s_identity = std::memcmp(_m2s, kI, sizeof kI) == 0;
+    _dirty = true;
+}
+
+// Shared -> model: R^T (x - t) / s, with the 3x3 written as s*R.
+void ViewportPanel::model_point(const float shared[3], float out[3]) const {
+    if (_m2s_identity) {
+        for (int i = 0; i < 3; i++) out[i] = shared[i];
+        return;
+    }
+    const float inv = 1.0f / (_m2s_scale * _m2s_scale);
+    float e[3] = {shared[0] - _m2s[3], shared[1] - _m2s[7], shared[2] - _m2s[11]};
+    for (int r = 0; r < 3; r++)
+        out[r] = inv * (_m2s[0*4+r]*e[0] + _m2s[1*4+r]*e[1] + _m2s[2*4+r]*e[2]);
+}
+
+void ViewportPanel::shared_point(const float model[3], float out[3]) const {
+    if (_m2s_identity) {
+        for (int i = 0; i < 3; i++) out[i] = model[i];
+        return;
+    }
+    for (int r = 0; r < 3; r++)
+        out[r] = _m2s[r*4+0]*model[0] + _m2s[r*4+1]*model[1] +
+                 _m2s[r*4+2]*model[2] + _m2s[r*4+3];
+}
+
+void ViewportPanel::model_c2w(float out[12]) const {
+    _cam.c2w(out);
+    if (_m2s_identity) return;
+    const float s = _m2s_scale;
+    float m[12];
+    std::memcpy(m, out, sizeof m);
+    // Rotation by R^T (orthonormal, so the basis stays a rotation); position
+    // through the full inverse similarity.
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++) {
+            float v = 0.0f;
+            for (int k = 0; k < 3; k++) v += _m2s[k*4+r] * m[k*4+c];
+            out[r*4 + c] = v / s;
+        }
+    float p[3] = {m[3], m[7], m[11]}, q[3];
+    model_point(p, q);
+    out[3] = q[0]; out[7] = q[1]; out[11] = q[2];
+}
+
 void ViewportPanel::build_request(ViewRequest& q, int W, int H) const {
     if (_scene_options) {
         q.primitive = kViewerPrimitives[_primitive_idx];
         q.sh_degree = _sh_degree;
     }
-    _cam.c2w(q.c2w);
+    model_c2w(q.c2w);
     compute_intrinsics(W, H, q.fx, q.fy);
     q.cx = 0.5f * (float)W;
     q.cy = 0.5f * (float)H;
@@ -174,15 +227,15 @@ void ViewportPanel::build_request(ViewRequest& q, int W, int H) const {
     q.key = _buffer_keys.empty() ? "rgb" : _buffer_keys[_buffer_idx];
     q.show_cams = _show_cams;
     q.show_grid = _show_grid;
-    q.grid_dist = nav_dist();
-    for (int i = 0; i < 3; i++) q.grid_target[i] = _cam.target[i];
+    q.grid_dist = nav_dist() / _m2s_scale;
+    model_point(_cam.target, q.grid_target);
     q.cam_size_scale = _frustum_scale;
 }
 
 // Row-major world-to-view for the GL preview (inverse of the camera c2w).
 void ViewportPanel::view_matrix(float out[16]) const {
     float m[12];
-    _cam.c2w(m);
+    model_c2w(m);
     // c2w columns are the view axes; view = [R^T | -R^T pos].
     for (int r = 0; r < 3; r++) {
         float ax = m[0*4 + r], ay = m[1*4 + r], az = m[2*4 + r];
@@ -556,9 +609,6 @@ void ViewportPanel::draw_controls(bool engine) {
         _preview.set_mesh_display(_mesh_shade, _mesh_flat, _mesh_color_on);
     }
 
-    place(button_w(msg::viewport_reset_view));
-    if (ui::Button(msg::viewport_reset_view)) reset_view();
-
     // ---- how the model is rendered (viewer only) ----
     // A training session renders what it is training; only a file being
     // LOOKED at can be drawn a different way than it was made.
@@ -611,10 +661,35 @@ void ViewportPanel::draw_controls(bool engine) {
         ui::help_on_hover(msg::viewport_gamut_help);
     }
 
-    // ---- navigation + camera group ----
-    // The four modes behave exactly as the web viewer's do; only the words
-    // are localized. The tooltip names them by substitution so it always uses
-    // the same words the combo just showed.
+    if (_nav_controls) draw_nav_controls();
+}
+
+// The four modes behave exactly as the web viewer's do; only the words are
+// localized. The tooltip names them by substitution so it always uses the same
+// words the combo just showed.
+void ViewportPanel::draw_nav_controls() {
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float row_w = ImGui::GetContentRegionAvail().x;
+    auto text_w = [](const char* s) { return ImGui::CalcTextSize(s).x; };
+    auto button_w = [&](const spirula::i18n::Msg& m) {
+        return text_w(m.get()) + 2.0f * st.FramePadding.x;
+    };
+    float used = 0.0f;
+    auto place = [&](float w) {
+        if (used > 0.0f && used + st.ItemSpacing.x + w <= row_w) {
+            ImGui::SameLine();
+            used += st.ItemSpacing.x + w;
+        } else {
+            used = w;
+        }
+    };
+    auto place_group = [&](float w) {
+        if (used > 0.0f && used + st.ItemSpacing.x + w > row_w) used = 0.0f;
+    };
+
+    place(button_w(msg::viewport_reset_view));
+    if (ui::Button(msg::viewport_reset_view)) reset_view();
+
     static const spirula::i18n::Msg* kNavModes[] = {
         &msg::nav_turntable, &msg::nav_trackball,
         &msg::nav_first_person, &msg::nav_free_fly};
@@ -666,7 +741,10 @@ void ViewportPanel::draw_controls(bool engine) {
 }
 
 void ViewportPanel::draw(bool training, int step) {
+    const float y0 = ImGui::GetCursorPosY();
     draw_controls(_mode == Mode::Engine);
+    _controls_h = ImGui::GetCursorPosY() - y0;
+    if (_controls_pad > 0.0f) ImGui::Dummy(ImVec2(1.0f, _controls_pad));
 
     const double now = ImGui::GetTime();
     note_motion(now);
@@ -709,10 +787,12 @@ void ViewportPanel::draw_preview(const ImVec2& avail) {
     // Same intrinsics as the engine render request -> seamless transition.
     float fx, fy;
     compute_intrinsics(W, H, fx, fy);
+    float target[3];
+    model_point(_cam.target, target);
     unsigned tex = _preview.render(W, H, view,
                                    (PreviewProjection)_cam_model,
                                    fx / (0.5f * W), fy / (0.5f * H),
-                                   _home_dist, nav_dist(), _cam.target,
+                                   _home_dist, nav_dist() / _m2s_scale, target,
                                    _show_cams, _frustum_scale, _show_grid);
     if (!tex) {
         ui::TextDisabled(msg::viewport_render_failed);
@@ -732,12 +812,16 @@ void ViewportPanel::draw_preview(const ImVec2& avail) {
         float dcv[3];
         if (viewer_pixel_ray(_cam_model, u, v, dcv)) {
             float m[12];
-            _cam.c2w(m);
+            model_c2w(m);
             float ro[3] = {m[3], m[7], m[11]}, rd[3], p[3];
             // CV ray -> world through the OpenGL c2w (y/z column flip).
             for (int r = 0; r < 3; r++)
                 rd[r] = m[r*4+0]*dcv[0] - m[r*4+1]*dcv[1] - m[r*4+2]*dcv[2];
-            if (_preview.pick_point(ro, rd, p)) recenter_at(p);
+            float hit[3];
+            if (_preview.pick_point(ro, rd, p)) {
+                shared_point(p, hit);
+                recenter_at(hit);
+            }
         }
     }
 
@@ -878,7 +962,11 @@ void ViewportPanel::draw_engine(bool training, const ImVec2& avail, int step) {
                 upload(res);
                 _last_error.clear();
                 // Double-click centering result (background clicks miss).
-                if (res.pick_hit) recenter_at(res.pick_point);
+                if (res.pick_hit) {
+                    float hit[3];
+                    shared_point(res.pick_point, hit);
+                    recenter_at(hit);
+                }
             } else {
                 _last_error = res.error;
             }
@@ -895,6 +983,10 @@ void ViewportPanel::draw_engine(bool training, const ImVec2& avail, int step) {
     // viewport about the same slice of themselves.
     int W = 0, H = 0;
     render_size(avail, W, H);
+    // The viewport changed size -- the window was resized, or a pane was added
+    // or removed beside this one. Without this the last render is aspect-fit
+    // into the new box, black bars and all, until something else dirties it.
+    if (W != _tex_w || H != _tex_h) _dirty = true;
     bool live = false;
     if (training && _auto_refresh) {
         if (_moving)

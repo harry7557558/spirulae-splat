@@ -8,6 +8,7 @@
 #include "config/TrainConfig.h"
 #include "app/gui/BatchTrain.h"
 #include "app/gui/ColmapRunner.h"
+#include "app/gui/CompareView.h"
 #include "app/gui/Fonts.h"
 #include "app/gui/ConfigUI.h"
 #include "app/gui/FileDialog.h"
@@ -23,7 +24,6 @@
 #include "app/gui/ModelCache.h"
 #include "app/gui/SegmentPanel.h"
 #include "app/gui/SfmRunner.h"
-#include "app/gui/SplatViewer.h"
 #include "app/gui/TrainPreset.h"
 #include "app/gui/TrainRunner.h"
 #include "app/gui/ViewportPanel.h"
@@ -73,7 +73,7 @@ private:
         None, OpenDataset, SourceImages, SourceVideo, SourceReplace, Workspace,
         OutputPrefix, VocabTree, MaskModelFile, SplatFile,
         PresetFile, PresetSaveFolder, BatchDataset, BatchOutput, BatchPresetFile,
-        MeshSource, MeshPhotos, MeshOutput
+        MeshSource, MeshPhotos, MeshOutput, AddSplatFile
     };
     // Which reconstruction back end the New Dataset screen runs.
     enum class Engine { BuiltIn, Colmap };
@@ -92,6 +92,7 @@ private:
     void save_settings();
     // By value: callers pass elements of _recents, which this mutates.
     void add_recent(std::string path);
+    void add_model_recent(std::string path);
 
     // ---- actions ----
     // By value: callers pass elements of _recents, which open_dataset
@@ -109,6 +110,8 @@ private:
     // confirmation as any other session-destroying action.
     void open_splat(std::string path);
     void request_open_splat(std::string path);
+    // Another model beside the ones already open, in the same view.
+    void add_splat(std::string path);
     // Give the engine back and leave the screen. Called before anything that
     // needs the engine for itself.
     void close_splat();
@@ -252,7 +255,6 @@ private:
     void draw_viewer();
     void draw_mesh();
     void draw_mesh_options();
-    void draw_mesh_preview(float height);
     // Set the meshing source (and derive the output name from it). Shared by
     // the picker, the drop handler and the "mesh this run" shortcut.
     void set_mesh_source(const std::string& path);
@@ -367,21 +369,20 @@ private:
     // released together with the viewport (detach_session_views).
     ImageCompare _images;
     bool _preview_images = false;    // which of the two the trainer screen shows
-    SplatViewer _splat;
-    // The viewport is showing _splat rather than _runner's session.
-    bool _viewing_splat = false;
+    // Finished models opened for looking at, up to four side by side. The one
+    // object, shared by the viewer screen and the meshing preview: it owns the
+    // engine while it is open, and the engine is a singleton.
+    CompareView _compare;
+    // Model files opened here, most recent first, offered by the "add a
+    // model" menu. Separate from _recents, which holds datasets.
+    std::vector<std::string> _model_recents;
 
     // ---- meshing ----
     // The extraction runs as a child process (MeshRunner); the preview after
-    // it is two panels of the same scene -- the splats on the engine
-    // renderer, the mesh on the GL one -- with their navigation linked.
+    // it is _compare holding the splats it came from and the surface.
     MeshRunner _mesh;
     MeshJob _mesh_job;
-    SplatViewer _mesh_view;          // the produced file, as geometry
-    ViewportPanel _mesh_viewport;    // the right-hand panel
-    bool _mesh_preview_open = false; // the mesh side is attached
-    bool _mesh_splats_open = false;  // the splat side is attached too
-    bool _mesh_link_views = true;
+    bool _mesh_preview_open = false; // _compare is showing this screen's result
     // The MeshRunner::run_id() whose result has already been opened. The
     // runner stays Done for the rest of the session, so without this the
     // screen would reopen the preview the frame after it is closed -- which

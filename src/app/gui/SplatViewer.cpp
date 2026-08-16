@@ -80,8 +80,9 @@ SplatViewer::~SplatViewer() {
     close();
 }
 
-void SplatViewer::open(const std::string& path) {
-    if (_worker.joinable()) _worker.join();
+void SplatViewer::open(const std::string& path, int scene_slot,
+                       std::mutex* engine_mutex) {
+    close();
     {
         std::lock_guard<std::mutex> lk(_mu);
         _error.clear();
@@ -90,15 +91,18 @@ void SplatViewer::open(const std::string& path) {
     }
     _num_splats = 0;
     _sh_degree = 0;
+    _engine_mutex = engine_mutex;
+    _pending_slot = scene_slot;
     _state = State::Loading;
     _worker = std::thread([this, path] { run(path); });
 }
 
 void SplatViewer::close() {
     if (_worker.joinable()) _worker.join();
-    if (_owns_engine.exchange(false)) {
-        std::lock_guard<std::mutex> lk(_engine_mutex);
-        engine_reset();
+    const int slot = _scene_slot.exchange(-1);
+    if (slot >= 0) {
+        std::lock_guard<std::mutex> lk(*_engine_mutex);
+        engine_scene_free(slot);
     }
     _state = State::Idle;
     _num_splats = 0;
@@ -142,19 +146,19 @@ bool SplatViewer::linear_color() const {
 }
 
 void SplatViewer::set_color_space(const char* gamut, bool linear) {
-    if (!_owns_engine.load()) return;
+    const int slot = _scene_slot.load();
+    if (slot < 0) return;
     const std::string g = gamut ? gamut : "";
     const bool on = linear || !g.empty();
     {
-        std::lock_guard<std::mutex> lk(_engine_mutex);
+        std::lock_guard<std::mutex> lk(*_engine_mutex);
         // Splat side only: there is no GT image to convert here.
         auto vec = [](const spirula::Mat3f& m) {
             return std::vector<float>(m.begin(), m.end());
         };
-        engine_init_color_space(
-            on, linear,
-            on ? vec(spirula::gamut_to_rec709(g)) : std::vector<float>{},
-            false, false, std::vector<float>{});
+        engine_scene_set_color_space(
+            slot, on, linear,
+            on ? vec(spirula::gamut_to_rec709(g)) : std::vector<float>{});
     }
     std::lock_guard<std::mutex> lk(_mu);
     _gamut = g;
@@ -162,14 +166,14 @@ void SplatViewer::set_color_space(const char* gamut, bool linear) {
 }
 
 void SplatViewer::release_screen_buffers() {
-    if (!_owns_engine.load()) return;
-    std::lock_guard<std::mutex> lk(_engine_mutex);
+    if (_scene_slot.load() < 0) return;
+    std::lock_guard<std::mutex> lk(*_engine_mutex);
     engine_release_screen_buffers();
 }
 
 ViewerHooks SplatViewer::make_hooks() {
     ViewerHooks hooks;
-    hooks.engine_mutex = &_engine_mutex;
+    hooks.engine_mutex = _engine_mutex;
     // No training step to warm the SH degree up against: every band the file
     // carries is drawn from the first frame.
     hooks.current_step = [] { return 1 << 20; };
@@ -195,6 +199,11 @@ void SplatViewer::run(std::string path) {
         std::lock_guard<std::mutex> lk(_mu);
         _error = why;
         _state = State::Failed;
+    };
+    auto set_frame = [&](const float center[3], float unit) {
+        std::lock_guard<std::mutex> lk(_mu);
+        for (int i = 0; i < 3; i++) _center[i] = center[i];
+        _unit = unit;
     };
     try {
         // A mesh is not a checkpoint, so it is resolved before
@@ -226,6 +235,7 @@ void SplatViewer::run(std::string path) {
             const float inv = unit > 1e-20f ? 1.0f / unit : 1.0f;
             const int64_t nv = (int64_t)m.V.size();
             const int64_t nf = (int64_t)m.F.size();
+            set_frame(center, unit);
             {
                 std::lock_guard<std::mutex> lk(_mu);
                 _mesh = std::move(m);
@@ -271,6 +281,7 @@ void SplatViewer::run(std::string path) {
                                       0, 0, unit, center[2],
                                       0, 0, 0, 1};
             const int64_t n = ds.points.num();
+            set_frame(center, unit);
             {
                 std::lock_guard<std::mutex> lk(_mu);
                 _points = std::move(ds);
@@ -316,6 +327,7 @@ void SplatViewer::run(std::string path) {
         float center[3], radius;
         scene_extent(c.means, c.num, center, radius);
         const float unit = view_distance_for(radius);
+        set_frame(center, unit);
 
         ViewerRenderConfig vc;
         vc.primitive = cfg.primitive;
@@ -335,55 +347,30 @@ void SplatViewer::run(std::string path) {
                                   0, 0, unit, center[2],
                                   0, 0, 0, 1};
         vc.base_camera_size = 0.0f;   // no cameras to draw
+        vc.scene_slot = _pending_slot;
 
         {
-            std::lock_guard<std::mutex> lk(_engine_mutex);
-            // Takes the engine over, which is why open() is a session-
-            // destroying action for GuiApp.
-            engine_reset();
-            _owns_engine = true;
+            std::lock_guard<std::mutex> lk(*_engine_mutex);
             const int64_t K = c.dim_sh() - 1;
-            set_data_3dgs(c.num,
+            // Claimed before the upload, not after: an upload that throws part
+            // way still leaves buffers for close() to free.
+            _scene_slot = _pending_slot;
+            engine_scene_set_data_3dgs(
+                          _pending_slot, c.num,
                           tv(c.means,       {c.num, 3}),
                           tv(c.quats,       {c.num, 4}),
                           tv(c.scales,      {c.num, 3}),
                           tv(c.opacities,   {c.num, 1}),
                           tv(c.features_dc, {c.num, 3}),
                           tv(c.features_sh, {c.num, K, 3}));
-            // engine_blit_view refuses to run before engine_viewer_init, and
-            // that wants at least one camera -- so a file with none gets one
-            // placeholder, parked at the scene centre and sized to nothing.
-            // Nothing draws it: the viewer screen has no "show cameras"
-            // control, because there are none to show. What the call is
-            // really for is the state the axes/grid overlay lives in.
-            std::vector<float> intrins{32, 32, 32, 32};
-            std::vector<float> dist((size_t)kCameraDistortionParams, 0.0f);
-            std::vector<float> c2w{1, 0, 0, center[0],
-                                   0, 1, 0, center[1],
-                                   0, 0, 1, center[2]};
-            std::vector<int32_t> models_i{0}, w_i{64}, h_i{64},   // 0 = PINHOLE
-                                 dist_tier{0};                    // 0 = None
-            auto tvi = [](std::vector<int32_t>& v, std::vector<int64_t> shape) {
-                return TorchTensorView{(uint64_t)(uintptr_t)v.data(),
-                                       (uint32_t)sizeof(int32_t), std::move(shape)};
-            };
-            engine_viewer_init(tvi(models_i, {1}), tv(intrins, {1, 4}),
-                               tv(dist, {1, kCameraDistortionParams}),
-                               tvi(dist_tier, {1}), tv(c2w, {1, 3, 4}),
-                               tvi(w_i, {1}), tvi(h_i, {1}),
-                               /*camera_size=*/radius * 1e-3f);
-            // A file has no grid extent of its own; the model's does, and it
-            // is the frame the overlay is drawn in.
-            engine_viewer_set_grid(radius, unit);
             const bool cs_on = color.splat_linear || !color.splat_gamut.empty();
             auto vec = [](const spirula::Mat3f& m) {
                 return std::vector<float>(m.begin(), m.end());
             };
-            engine_init_color_space(
-                cs_on, color.splat_linear,
+            engine_scene_set_color_space(
+                _pending_slot, cs_on, color.splat_linear,
                 cs_on ? vec(spirula::gamut_to_rec709(color.splat_gamut))
-                      : std::vector<float>{},
-                false, false, std::vector<float>{});
+                      : std::vector<float>{});
         }
 
         _num_splats = c.num;
