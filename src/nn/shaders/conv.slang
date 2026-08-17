@@ -16,9 +16,10 @@
 
 #include "_common.slang"
 
-// Spec ids 0..1.
+// Spec ids 0..2.
 [SpecializationConstant] const int kInputF16 = 0;
 [SpecializationConstant] const int kAct      = 0;
+[SpecializationConstant] const int kPadEdge  = 0;   // im2col only
 
 static const int WG = 256;
 
@@ -65,8 +66,13 @@ void im2col(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID,
     int x = int(xo * p.stride_x + kx) - int(p.pad_x);
 
     float v = 0.0f;
-    if (y >= 0 && y < int(p.Hi) && x >= 0 && x < int(p.Wi))
+    if (kPadEdge != 0) {
+        y = clamp(y, 0, int(p.Hi) - 1);
+        x = clamp(x, 0, int(p.Wi) - 1);
         v = load_elem(p.x, (uint(y) * p.Wi + uint(x)) * p.Ci + ci, kInputF16 != 0);
+    } else if (y >= 0 && y < int(p.Hi) && x >= 0 && x < int(p.Wi)) {
+        v = load_elem(p.x, (uint(y) * p.Wi + uint(x)) * p.Ci + ci, kInputF16 != 0);
+    }
     p.out[i] = v;
 }
 

@@ -2784,6 +2784,14 @@ void GuiApp::draw_geometry_options() {
             _geometry.max_size = std::clamp(_geometry.max_size, 224, 4096);
         ui::help_on_hover(gmsg::opt_max_size);
 
+        // Enabled whatever the checkpoint is: a Metric3D run passes it and
+        // ignores it, and disabling it would need this screen to know which
+        // family an .onnx the user pointed at belongs to.
+        ImGui::SetNextItemWidth(px(220.0f));
+        if (ui::InputInt(dmsg::geom_num_tokens, &_geometry.num_tokens))
+            _geometry.num_tokens = std::clamp(_geometry.num_tokens, 256, 8192);
+        ui::help_on_hover(gmsg::opt_num_tokens);
+
         // png / jpg / relative / mm are what config.json and the flag spell,
         // so the values stay as they are and the label carries the meaning.
         ImGui::SetNextItemWidth(px(220.0f));

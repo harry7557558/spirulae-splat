@@ -17,7 +17,7 @@
 #include "app/GeometryWarp.h"
 #include "data/CameraMath.h"
 #include "data/DatasetParser.h"
-#include "metric3d/Metric3D.h"
+#include "app/GeometryModel.h"
 #include "nn/core/Log.h"
 #endif
 
@@ -148,7 +148,7 @@ struct GeometryPanel::Job {
     PreviewSource src;
     bool listed = false;
 #ifdef SS_TOOL_GEOMETRY
-    metric3d::Predictor pred;
+    app::GeometryModel pred;
     std::string loaded_model;
     // The dataset's own cameras, when the output folder holds one. Parallel to
     // the frame list the panel offers.
@@ -373,8 +373,20 @@ void GeometryPanel::start_job(const GeometryJob& settings) {
             if (!have_cam)
                 cam = lens_camera(lens, focal_factor, j.frame.w, j.frame.h);
 
+            // ---- the model ----
+            // Before the warp: which input sizes round-trip is a property of
+            // the network, and the run loads it in the same order.
+            const bool just_loaded = j.loaded_model != settings.model;
+            if (just_loaded) {
+                set_status(dmsg::preview_loading_model);
+                j.loaded_model.clear();
+                j.pred.load(settings.model);
+                j.loaded_model = settings.model;
+            }
+            if (_cancel.load()) return;
+
             // Planned exactly as the run plans it.
-            const int patch = metric3d::Predictor::sizeGranularity();
+            const int patch = j.pred.sizeGranularity();
             double s = 1.0;
             if (settings.max_size > 0 &&
                 std::max(cam.width, cam.height) > settings.max_size)
@@ -389,16 +401,6 @@ void GeometryPanel::start_job(const GeometryJob& settings) {
             app::GeometryWarp warp;
             warp.plan(cam, ow, oh, split, patch, settings.max_size);
 
-            // ---- the model ----
-            const bool just_loaded = j.loaded_model != settings.model;
-            if (just_loaded) {
-                set_status(dmsg::preview_loading_model);
-                j.loaded_model.clear();
-                j.pred.load(settings.model);
-                j.loaded_model = settings.model;
-            }
-            if (_cancel.load()) return;
-
             // ---- run ----
             set_status(dmsg::geom_preview_running);
             const std::vector<float> rgb =
@@ -411,10 +413,10 @@ void GeometryPanel::start_job(const GeometryJob& settings) {
             // -- and that number is what the whole-capture estimate is made of.
             if (just_loaded) {
                 warp.sampleFace(0, rgb.data(), face_rgb);
-                metric3d::PredictOptions warm;
+                app::GeometryRequest warm =
+                    face_request(warp, settings.num_tokens);
                 warm.want_normal = false;
-                j.pred.predict(face_rgb.data(), warp.faceWidth(), warp.faceHeight(),
-                               warm);
+                j.pred.predict(face_rgb.data(), warm);
                 if (_cancel.load()) return;
             }
             const double t0 = nn::now_ms();
@@ -424,11 +426,8 @@ void GeometryPanel::start_job(const GeometryJob& settings) {
                 // Both, whatever the checkboxes say: they decide what the
                 // RUN writes, and a pane that appears without another forward
                 // pass is worth the decoder head.
-                metric3d::PredictOptions po;
-                po.want_depth = true;
-                po.want_normal = true;
-                metric3d::Prediction p = j.pred.predict(
-                    face_rgb.data(), warp.faceWidth(), warp.faceHeight(), po);
+                app::GeometryPrediction p = j.pred.predict(
+                    face_rgb.data(), face_request(warp, settings.num_tokens));
                 face_depth.push_back(std::move(p.depth));
                 face_normal.push_back(std::move(p.normal));
             }

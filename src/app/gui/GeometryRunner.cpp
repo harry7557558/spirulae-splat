@@ -12,6 +12,7 @@
 
 #ifdef SS_TOOL_GEOMETRY
 #include "metric3d/model/Fetch.h"
+#include "moge/model/Fetch.h"
 #include "nn/io/Fetch.h"
 #endif
 
@@ -39,6 +40,9 @@ const char* kTri[] = {"auto", "yes", "no"};
 constexpr uint64_t kSmallBytes = 75778144ull;
 constexpr uint64_t kLargeBytes = 825204259ull;
 constexpr uint64_t kGiantBytes = 1401125724ull + 1355808768ull;
+constexpr uint64_t kMogeSBytes = 140852051ull;
+constexpr uint64_t kMogeBBytes = 419411850ull;
+constexpr uint64_t kMogeLBytes = 1324265014ull;
 
 std::string trim_right(const std::string& s) {
     size_t n = s.size();
@@ -145,6 +149,12 @@ private:
 
 const std::vector<GeometryModel>& geometry_models() {
     static const std::vector<GeometryModel> kModels = {
+        {"moge2-vits", &dmsg::geom_model_moge_s, &dmsg::geom_model_moge_s_blurb,
+         kMogeSBytes},
+        {"moge2-vitb", &dmsg::geom_model_moge_b, &dmsg::geom_model_moge_b_blurb,
+         kMogeBBytes},
+        {"moge2-vitl", &dmsg::geom_model_moge_l, &dmsg::geom_model_moge_l_blurb,
+         kMogeLBytes},
         {"metric3d-vit-small", &dmsg::geom_model_small,
          &dmsg::geom_model_small_blurb, kSmallBytes},
         {"metric3d-vit-large", &dmsg::geom_model_large,
@@ -158,14 +168,18 @@ const std::vector<GeometryModel>& geometry_models() {
 std::vector<GeometryDownload> geometry_model_downloads(const std::string& id) {
     std::vector<GeometryDownload> out;
 #ifdef SS_TOOL_GEOMETRY
-    const metric3d::ModelSource* src = metric3d::find_model_source(id);
-    if (!src) return out;
     std::error_code ec;
-    for (const nn::FetchFile* f : {&src->onnx, &src->data}) {
-        if (!f->file) continue;
-        const std::string dest = nn::cached_path(*f);
-        if (fs::exists(dest, ec)) continue;
-        out.push_back({f->url, dest, f->bytes});
+    auto want = [&](const nn::FetchFile& f) {
+        if (!f.file) return;
+        const std::string dest = nn::cached_path(f);
+        if (fs::exists(dest, ec)) return;
+        out.push_back({f.url, dest, f.bytes});
+    };
+    if (const moge::ModelSource* m = moge::find_model_source(id)) {
+        want(m->onnx);
+    } else if (const metric3d::ModelSource* src = metric3d::find_model_source(id)) {
+        want(src->onnx);
+        want(src->data);
     }
 #else
     (void)id;
@@ -175,7 +189,7 @@ std::vector<GeometryDownload> geometry_model_downloads(const std::string& id) {
 
 bool geometry_model_cached(const std::string& id) {
 #ifdef SS_TOOL_GEOMETRY
-    if (!metric3d::find_model_source(id)) {
+    if (!moge::find_model_source(id) && !metric3d::find_model_source(id)) {
         std::error_code ec;
         return fs::is_regular_file(id, ec);   // a file the user pointed at
     }
@@ -213,6 +227,7 @@ bool run_geometry_step(const GeometryJob& job, const std::string& dataset,
         "geometry", dataset,
         "--model", job.model,
         "--max-size", std::to_string(job.max_size),
+        "--num-tokens", std::to_string(job.num_tokens),
         "--normal-format", job.normal_jpg ? "jpg" : "png",
         "--jpeg-quality", std::to_string(job.jpeg_quality),
         "--depth-units", job.depth_mm ? "mm" : "relative",

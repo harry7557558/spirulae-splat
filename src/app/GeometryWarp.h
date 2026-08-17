@@ -56,10 +56,13 @@ public:
     // carry its half-extent in their LENGTH; row 2 is the unit optical axis.
     const double* faceAxes() const { return axes_; }
 
-    // Focal length in the pixels the network sees. Metric3D's depth is
-    // canonical to a focal of 1000, so metres are the prediction times this
-    // over 1000.
+    // The pinhole a face IS, in its own pixels. Metric3D's depth is canonical
+    // to a focal of 1000, so metres are the prediction times faceFocal() over
+    // 1000; MoGe needs all four to resolve its point map's z shift.
     double faceFocal() const { return face_focal_; }
+    double faceFocalY() const { return face_focal_y_; }
+    double faceCx() const { return face_cx_; }
+    double faceCy() const { return face_cy_; }
 
     // The resolution to hand `sampleFace`: full unless `max_face` capped the
     // faces, and NOT the output resolution, which is capped independently.
@@ -99,7 +102,7 @@ private:
     // slot per face: only the overlap names more than one.
     std::vector<int64_t> contrib_off_;
     std::vector<Contrib> contrib_;
-    double face_focal_ = 0.0;
+    double face_focal_ = 0.0, face_focal_y_ = 0.0, face_cx_ = 0.0, face_cy_ = 0.0;
 };
 
 }  // namespace app

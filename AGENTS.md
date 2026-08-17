@@ -98,6 +98,9 @@ src/
 │                             -- READ src/aliked/README.md
 ├── metric3d/               Metric3D v2 depth + normals, on top of nn/
 │                             -- READ src/metric3d/README.md
+├── moge/                   MoGe-2 point maps + normals + a sky mask, on top of
+│                             nn/. The DEFAULT geometry model
+│                             -- READ src/moge/README.md
 ├── video/                  container demux + VK_KHR_video_decode_*, on top of
 │                             nn/. PATENT-GATED: compiled only with
 │                             SS_ENABLE_PATENTED=ON -- READ src/video/README.md
@@ -235,8 +238,8 @@ Rules:
 
 ## The Vulkan-only subsystems
 
-`src/sfm/`, `src/nn/`, `src/sam/`, `src/aliked/`, `src/metric3d/` and
-`src/video/` are **not** part of the two-backend rule below. They are Vulkan + Slang only, carry their own Vulkan
+`src/sfm/`, `src/nn/`, `src/sam/`, `src/aliked/`, `src/metric3d/`,
+`src/moge/` and `src/video/` are **not** part of the two-backend rule below. They are Vulkan + Slang only, carry their own Vulkan
 context, share nothing with the training engine, and are absent from a CUDA
 build by default (`SS_BUILD_SFM` / `SS_BUILD_SAM` default OFF there).
 Nothing in them goes through `cmake/sources.txt`.
@@ -247,6 +250,7 @@ The layering runs one way and must keep doing so:
 app/gui, app/cli ──► sam ──────┬──► nn ──► nn/vk
                  ├──► aliked ──┤
                  ├──► metric3d ┤
+                 ├──► moge ────┤
                  └──► video ───┘
                  └──► sfm  (its own vk/, independent of nn/)
 ```
@@ -545,6 +549,12 @@ no ceremony — do not ask, do not leave a note saying you removed it.
   which is deliberately blind to the distortion coefficients so the answer
   cannot move between builds. `--check` compares the closed form to counting
   the pixels.
+- **Two monocular geometry models sit behind `spirula geometry`, and they
+  answer different questions.** Metric3D v2 predicts depth; MoGe-2 predicts an
+  affine POINT MAP that needs the camera's focal length to become one, plus a
+  metric scale and a sky mask. `app/GeometryModel.h` is the one seam between
+  them and `--model` is what picks; a caller that reaches past it into
+  `metric3d::` or `moge::` has hard-coded a family.
 - **Segmentation weights are never committed or bundled.** They are Meta's,
   under Meta's licences, and SAM 3's is not GPLv3-compatible. They are fetched
   at run time after the user has seen the terms -- `src/app/gui/ModelCache.cpp`

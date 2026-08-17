@@ -8307,6 +8307,112 @@ SS_MSG(geom_model,
     NL("Geometriemodel"),    RU("Модель геометрии"),
     TR("Geometri modeli"));
 
+SS_MSG(geom_model_moge_s,
+    EN("MoGe-2 small"),
+    JA("MoGe-2 スモール"), ZH_HANS("MoGe-2 小"), ZH_HANT("MoGe-2 小"),
+    KO("MoGe-2 스몰"),     DE("MoGe-2 klein"),
+    FR("MoGe-2 petit"),    ES("MoGe-2 pequeño"),
+    PT("MoGe-2 pequeno"),  IT("MoGe-2 piccolo"),
+    NL("MoGe-2 klein"),    RU("MoGe-2 малая"),
+    TR("MoGe-2 küçük"));
+
+SS_MSG(geom_model_moge_s_blurb,
+    EN("141 MB, about 0.3 s an image. The quickest of the three; its normals "
+       "are visibly coarser."),
+    JA("141 MB、1 枚あたり約 0.3 秒。3 つの中で最も速いですが、法線は目に見えて"
+       "粗くなります。"),
+    ZH_HANS("141 MB，每张约 0.3 秒。三者中最快，但法线明显更粗。"),
+    ZH_HANT("141 MB，每張約 0.3 秒。三者中最快，但法線明顯更粗。"),
+    KO("141 MB, 장당 약 0.3 초. 셋 중 가장 빠르지만 법선이 눈에 띄게 거칩니다."),
+    DE("141 MB, etwa 0,3 s je Bild. Das schnellste der drei; die Normalen sind "
+       "sichtbar gröber."),
+    FR("141 Mo, environ 0,3 s par image. Le plus rapide des trois ; ses "
+       "normales sont visiblement plus grossières."),
+    ES("141 MB, unos 0,3 s por imagen. El más rápido de los tres; sus normales "
+       "son visiblemente más bastas."),
+    PT("141 MB, cerca de 0,3 s por imagem. O mais rápido dos três; as suas "
+       "normais são visivelmente mais grosseiras."),
+    IT("141 MB, circa 0,3 s per immagine. Il più rapido dei tre; le sue normali "
+       "sono visibilmente più grossolane."),
+    NL("141 MB, ongeveer 0,3 s per beeld. De snelste van de drie; de normalen "
+       "zijn zichtbaar grover."),
+    RU("141 МБ, около 0,3 с на изображение. Самая быстрая из трёх; нормали "
+       "заметно грубее."),
+    TR("141 MB, görüntü başına yaklaşık 0,3 s. Üçünün en hızlısı; normalleri "
+       "gözle görülür biçimde daha kabadır."));
+
+SS_MSG(geom_model_moge_b,
+    EN("MoGe-2 base"),
+    JA("MoGe-2 ベース"), ZH_HANS("MoGe-2 中"), ZH_HANT("MoGe-2 中"),
+    KO("MoGe-2 베이스"), DE("MoGe-2 mittel"),
+    FR("MoGe-2 moyen"),  ES("MoGe-2 medio"),
+    PT("MoGe-2 médio"),  IT("MoGe-2 medio"),
+    NL("MoGe-2 middel"), RU("MoGe-2 средняя"),
+    TR("MoGe-2 orta"));
+
+SS_MSG(geom_model_moge_b_blurb,
+    EN("419 MB, about 0.4 s an image. The default: metric depth, and the sky "
+       "written as no ground truth rather than as a wall."),
+    JA("419 MB、1 枚あたり約 0.4 秒。既定値です。深度は実寸で、空は壁ではなく"
+       "「正解なし」として書き出されます。"),
+    ZH_HANS("419 MB，每张约 0.4 秒。默认项：深度为真实尺度，天空写成“无真值”"
+            "而不是一堵墙。"),
+    ZH_HANT("419 MB，每張約 0.4 秒。預設項：深度為真實尺度，天空寫成「無真值」"
+            "而不是一堵牆。"),
+    KO("419 MB, 장당 약 0.4 초. 기본값입니다. 깊이는 실측 단위이고 하늘은 벽이 "
+       "아니라 정답 없음으로 기록됩니다."),
+    DE("419 MB, etwa 0,4 s je Bild. Die Vorgabe: metrische Tiefe, und der "
+       "Himmel wird als fehlende Referenz statt als Wand geschrieben."),
+    FR("419 Mo, environ 0,4 s par image. Le choix par défaut : profondeur "
+       "métrique, et le ciel écrit comme absence de vérité plutôt qu'en mur."),
+    ES("419 MB, unos 0,4 s por imagen. La opción por defecto: profundidad "
+       "métrica, y el cielo escrito como sin referencia en vez de como muro."),
+    PT("419 MB, cerca de 0,4 s por imagem. A predefinição: profundidade "
+       "métrica, e o céu escrito como sem referência em vez de como parede."),
+    IT("419 MB, circa 0,4 s per immagine. Il valore predefinito: profondità "
+       "metrica, e il cielo scritto come assenza di riferimento anziché muro."),
+    NL("419 MB, ongeveer 0,4 s per beeld. De standaard: metrische diepte, en "
+       "de lucht geschreven als ontbrekende referentie in plaats van als muur."),
+    RU("419 МБ, около 0,4 с на изображение. Значение по умолчанию: глубина в "
+       "метрах, а небо пишется как отсутствие эталона, а не как стена."),
+    TR("419 MB, görüntü başına yaklaşık 0,4 s. Varsayılan: metrik derinlik ve "
+       "gökyüzü duvar yerine referans yok olarak yazılır."));
+
+SS_MSG(geom_model_moge_l,
+    EN("MoGe-2 large"),
+    JA("MoGe-2 ラージ"), ZH_HANS("MoGe-2 大"), ZH_HANT("MoGe-2 大"),
+    KO("MoGe-2 라지"),   DE("MoGe-2 groß"),
+    FR("MoGe-2 grand"),  ES("MoGe-2 grande"),
+    PT("MoGe-2 grande"), IT("MoGe-2 grande"),
+    NL("MoGe-2 groot"),  RU("MoGe-2 большая"),
+    TR("MoGe-2 büyük"));
+
+SS_MSG(geom_model_moge_l_blurb,
+    EN("1.3 GB of download and 630 MB on the card, about 0.7 s an image, for "
+       "the sharpest maps of the three."),
+    JA("ダウンロード 1.3 GB、カード上は 630 MB、1 枚あたり約 0.7 秒。3 つの中で"
+       "最も鮮明なマップになります。"),
+    ZH_HANS("下载 1.3 GB，显存占 630 MB，每张约 0.7 秒，贴图是三者中最清晰的。"),
+    ZH_HANT("下載 1.3 GB，顯存佔 630 MB，每張約 0.7 秒，貼圖是三者中最清晰的。"),
+    KO("내려받기 1.3 GB, 카드에서 630 MB, 장당 약 0.7 초로 셋 중 가장 선명한 "
+       "맵을 냅니다."),
+    DE("1,3 GB Download und 630 MB auf der Karte, etwa 0,7 s je Bild, für die "
+       "schärfsten Karten der drei."),
+    FR("1,3 Go à télécharger et 630 Mo sur la carte, environ 0,7 s par image, "
+       "pour les cartes les plus nettes des trois."),
+    ES("1,3 GB de descarga y 630 MB en la tarjeta, unos 0,7 s por imagen, para "
+       "los mapas más nítidos de los tres."),
+    PT("1,3 GB de transferência e 630 MB na placa, cerca de 0,7 s por imagem, "
+       "para os mapas mais nítidos dos três."),
+    IT("1,3 GB da scaricare e 630 MB sulla scheda, circa 0,7 s per immagine, "
+       "per le mappe più nitide dei tre."),
+    NL("1,3 GB download en 630 MB op de kaart, ongeveer 0,7 s per beeld, voor "
+       "de scherpste kaarten van de drie."),
+    RU("1,3 ГБ загрузки и 630 МБ на карте, около 0,7 с на изображение, ради "
+       "самых резких карт из трёх."),
+    TR("1,3 GB indirme ve kartta 630 MB, görüntü başına yaklaşık 0,7 s; üçünün "
+       "en keskin haritaları."));
+
 SS_MSG(geom_model_small,
     EN("Metric3D v2 small"),
     JA("Metric3D v2 スモール"), ZH_HANS("Metric3D v2 小"), ZH_HANT("Metric3D v2 小"),
@@ -8539,6 +8645,14 @@ SS_MSG(geom_max_size,
     ES("Tamaño de inferencia"), PT("Tamanho de inferência"),
     IT("Dimensione d'inferenza"), NL("Inferentiegrootte"),
     RU("Размер вывода"), TR("Çıkarım boyutu"));
+
+SS_MSG(geom_num_tokens,
+    EN("Tokens (MoGe)"),
+    JA("トークン数 (MoGe)"), ZH_HANS("词元数 (MoGe)"), ZH_HANT("詞元數 (MoGe)"),
+    KO("토큰 수 (MoGe)"),   DE("Tokens (MoGe)"),  FR("Jetons (MoGe)"),
+    ES("Tokens (MoGe)"),    PT("Tokens (MoGe)"),
+    IT("Token (MoGe)"),     NL("Tokens (MoGe)"),
+    RU("Токены (MoGe)"),    TR("Belirteçler (MoGe)"));
 
 SS_MSG(geom_normal_format,
     EN("Normal map format"),

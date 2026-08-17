@@ -9,14 +9,13 @@
 #include "app/Tools.h"
 
 #include "app/DepthPng.h"
+#include "app/GeometryModel.h"
 #include "app/GeometryWarp.h"
 #include "app/WriterPool.h"
 #include "data/CameraMath.h"
 #include "data/DatasetParser.h"
 #include "i18n/Locale.h"
 #include "i18n/catalog/Geometry.h"
-#include "metric3d/Metric3D.h"
-#include "metric3d/model/Fetch.h"
 #include "nn/core/Error.h"
 #include "nn/core/Log.h"
 #include "nn/io/Image.h"
@@ -46,10 +45,13 @@ enum class Tri { Auto, Yes, No };
 
 struct Options {
     std::string dataset;
-    std::string model = "metric3d-vit-large";
-    // Metric3D's own inference size, 2.5x quicker than 1600 and no worse
-    // (metric3d/README.md). A ceiling on one face, not on the frame.
+    std::string model = "moge2-vitb";
+    // The written maps' longest side, and Metric3D's inference size on top of
+    // that (metric3d/README.md). A ceiling on one face, not on the frame.
     int  max_size = 1064;
+    // MoGe's ViT budget, which is what sets ITS cost -- the top of the range
+    // its own inference offers (moge/README.md). Metric3D ignores it.
+    int  num_tokens = 3600;
     bool want_depth = false;
     bool want_normal = true;
     std::string normal_format = "png";
@@ -85,6 +87,7 @@ void usage() {
     std::fprintf(stderr, "\n%s\n", G::head_options.get());
     help_row("--model <id|file>", G::opt_model);
     help_row("--max-size <n>", G::opt_max_size);
+    help_row("--num-tokens <n>", G::opt_num_tokens);
     help_row("--depth", G::opt_depth);
     help_row("--normal-format png|jpg", G::opt_normal_format);
     help_row("--jpeg-quality <n>", G::opt_jpeg_quality);
@@ -102,7 +105,7 @@ void usage() {
                  G::label_common.get());
     std::fprintf(stderr, "%s SS_NN_LOG=0..3  SS_VK_DEVICE  SS_PROFILE=1\n",
                  G::label_environment.get());
-    std::fprintf(stderr, "\n    %s\n", metric3d::model_id_list().c_str());
+    std::fprintf(stderr, "\n    %s\n", app::geometry_model_ids().c_str());
 }
 
 bool tri(const char* v, Tri& out) {
@@ -117,9 +120,9 @@ bool tri(const char* v, Tri& out) {
 // Host image handling
 // ---------------------------------------------------------------------------
 
-// The scale a depth map is stored against. Not the maximum: the network
-// clamps its own output at 200, and a few sky pixels there would leave a whole
-// room inside 1% of the 16-bit range.
+// The scale a depth map is stored against. Not the maximum: a handful of
+// horizon pixels a hundred times further than anything else would leave a
+// whole room inside 1% of the 16-bit range.
 float depth_scale(const std::vector<float>& depth) {
     std::vector<float> v;
     v.reserve(depth.size());
@@ -192,7 +195,9 @@ int self_check() {
         std::copy(std::begin(c.dist), std::end(c.dist), std::begin(cam.dist));
 
         app::GeometryWarp warp;
-        const int patch = metric3d::Predictor::sizeGranularity();
+        // The coarsest granularity either model asks for. The check is about
+        // cameras; this only decides the sizes it runs them at.
+        const int patch = 28;
         // Uncapped faces on purpose: what is left after a correct rotation is
         // bilinear interpolation of a curve, and that error falls with the
         // square of the face's pixels.
@@ -412,6 +417,7 @@ int spirula_geometry_main(int argc, char** argv) {
         else if (a == "--check") return self_check();
         else if (a == "--model") o.model = next();
         else if (a == "--max-size") o.max_size = std::atoi(next());
+        else if (a == "--num-tokens") o.num_tokens = std::atoi(next());
         else if (a == "--depth") o.want_depth = true;
         else if (a == "--no-normal") o.want_normal = false;
         else if (a == "--normal-format") o.normal_format = next();
@@ -478,8 +484,14 @@ int spirula_geometry_main(int argc, char** argv) {
                                     (long long)N, (long long)group_first.size()})
                                 .c_str());
 
+        // ---- the model ------------------------------------------------------
+        // Before the warps: which input sizes round-trip is the network's, and
+        // Metric3D's decoder crops where MoGe resamples its own output.
+        app::GeometryModel pred;
+        pred.load(o.model);
+
         // ---- one warp plan per camera --------------------------------------
-        const int patch = metric3d::Predictor::sizeGranularity();
+        const int patch = pred.sizeGranularity();
         std::vector<app::GeometryWarp> warps(group_first.size());
         for (size_t g = 0; g < group_first.size(); ++g) {
             const int64_t i = group_first[g];
@@ -561,10 +573,6 @@ int spirula_geometry_main(int argc, char** argv) {
             return out;
         };
 
-        // ---- the model -------------------------------------------------------
-        metric3d::Predictor pred;
-        pred.load(o.model);
-
         app::WriterPool writers;
         const double t_start = nn::now_ms();
         int64_t written = 0, skipped = 0;
@@ -599,11 +607,10 @@ int spirula_geometry_main(int argc, char** argv) {
             std::vector<float> face_rgb;
             for (int k = 0; k < warp.faces(); ++k) {
                 warp.sampleFace(k, src.data(), face_rgb);
-                metric3d::PredictOptions po;
-                po.want_depth = need_depth;
-                po.want_normal = need_normal;
-                metric3d::Prediction p =
-                    pred.predict(face_rgb.data(), warp.faceWidth(), warp.faceHeight(), po);
+                app::GeometryRequest rq = app::face_request(warp, o.num_tokens);
+                rq.want_depth = need_depth;
+                rq.want_normal = need_normal;
+                app::GeometryPrediction p = pred.predict(face_rgb.data(), rq);
                 NN_CHECK(p.width == warp.faceWidth() && p.height == warp.faceHeight(),
                          "the network returned %dx%d for a %dx%d face", p.width,
                          p.height, warp.faceWidth(), warp.faceHeight());
@@ -649,8 +656,9 @@ int spirula_geometry_main(int argc, char** argv) {
             if (need_depth) {
                 // 0 is the trainer's "no ground truth here", so a covered pixel
                 // never rounds into it.
-                const float inv = o.depth_mm ? (float)warp.faceFocal()
-                                             : 1.0f / depth_scale(depth);
+                const float inv =
+                    o.depth_mm ? (float)pred.depthToMillimetres(warp.faceFocal())
+                               : 1.0f / depth_scale(depth);
                 app::WriteJob job;
                 job.path = dp.string();
                 job.depth_w = warp.outWidth();

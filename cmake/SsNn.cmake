@@ -189,6 +189,21 @@ target_compile_options(ss_metric3d PRIVATE
 set_property(TARGET ss_metric3d PROPERTY CXX_STANDARD 17)
 
 # ---------------------------------------------------------------------------
+# ss_moge -- MoGe-2 monocular point maps, normals and a validity mask
+#
+# The only one of these libraries with NO shaders of its own, hence no
+# ss_nn_shaders() edge: the ops it needed were general and went into nn/.
+# ---------------------------------------------------------------------------
+file(GLOB_RECURSE SS_MOGE_SOURCES CONFIGURE_DEPENDS ${SS_SRC}/moge/*.cpp)
+list(FILTER SS_MOGE_SOURCES EXCLUDE REGEX "/tests/")
+
+add_library(ss_moge STATIC ${SS_MOGE_SOURCES})
+target_link_libraries(ss_moge PUBLIC ss_nn)
+target_compile_options(ss_moge PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
+set_property(TARGET ss_moge PROPERTY CXX_STANDARD 17)
+
+# ---------------------------------------------------------------------------
 # ss_video -- container demux + VK_KHR_video_decode_*
 #
 # Gated on SS_ENABLE_PATENTED: H.264 / H.265 / AV1 bitstream parsing is the
@@ -213,13 +228,14 @@ endif()
 # ---------------------------------------------------------------------------
 file(GLOB SS_NN_TESTS CONFIGURE_DEPENDS
      ${SS_SRC}/nn/tests/*.cpp ${SS_SRC}/sam/tests/*.cpp
-     ${SS_SRC}/aliked/tests/*.cpp ${SS_SRC}/metric3d/tests/*.cpp)
+     ${SS_SRC}/aliked/tests/*.cpp ${SS_SRC}/metric3d/tests/*.cpp
+     ${SS_SRC}/moge/tests/*.cpp)
 foreach(test_src ${SS_NN_TESTS})
     get_filename_component(test_name ${test_src} NAME_WE)
     add_executable(${test_name} ${test_src})
-    # Every test links every library above it: the three are small, and one
+    # Every test links every library above it: the four are small, and one
     # rule here beats a per-directory list that drifts.
-    target_link_libraries(${test_name} PRIVATE ss_sam ss_aliked ss_metric3d)
+    target_link_libraries(${test_name} PRIVATE ss_sam ss_aliked ss_metric3d ss_moge)
     set_property(TARGET ${test_name} PROPERTY CXX_STANDARD 17)
     target_compile_options(${test_name} PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)

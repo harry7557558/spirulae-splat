@@ -206,12 +206,16 @@ void GeometryWarp::plan(const GeometryCamera& cam, int out_w, int out_h, bool sp
         fw_ = out_w;
         fh_ = out_h;
         face_focal_ = fx;
+        face_focal_y_ = fy;
+        face_cx_ = cx;
+        face_cy_ = cy;
     } else {
         int side = std::min(natural, max_face > 0 ? max_face : natural);
         side = std::max(patch, side / patch * patch);
         fw_ = fh_ = side;
         // tx spans -1..1 over the side, and the in-plane axes are longer than 1.
-        face_focal_ = side * 0.5 / kOverlap;
+        face_focal_ = face_focal_y_ = side * 0.5 / kOverlap;
+        face_cx_ = face_cy_ = side * 0.5;
     }
 
     // ---- forward: where each face pixel reads from ------------------------

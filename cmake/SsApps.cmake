@@ -115,10 +115,11 @@ if((SS_BUILD_CLI OR SS_BUILD_GUI) AND SS_BUILD_SAM)
     # the dataset side is the engine's parsers, which every app target has.
     list(APPEND SS_TOOL_SOURCES
          ${SS_SRC}/app/cli/geometry_main.cpp
+         ${SS_SRC}/app/GeometryModel.cpp
          ${SS_SRC}/app/GeometryWarp.cpp
          ${SS_SRC}/app/DepthPng.cpp)
     list(APPEND SS_TOOL_DEFS SS_TOOL_GEOMETRY=1)
-    list(APPEND SS_TOOL_LIBS ss_metric3d)
+    list(APPEND SS_TOOL_LIBS ss_metric3d ss_moge)
 endif()
 
 # ---------------------------------------------------------------------------

@@ -22,8 +22,9 @@ namespace gui {
 struct GeometryJob {
     bool enable = false;
     // A model id (geometry_models()) or a path to an .onnx file.
-    std::string model = "metric3d-vit-large";
+    std::string model = "moge2-vitb";
     int  max_size = 1064;         // longest side of one face the network runs
+    int  num_tokens = 3600;       // MoGe's ViT budget; Metric3D ignores it
     bool want_normal = true;
     bool want_depth = false;
     bool normal_jpg = false;
@@ -38,9 +39,9 @@ struct GeometryJob {
     std::optional<bool> image_is_linear;
 };
 
-// One checkpoint the screen offers, largest last. Index 1 is the default: it
-// is what the reference pipeline runs and what the timings in
-// src/metric3d/README.md were measured on.
+// One checkpoint the screen offers, MoGe's three first and each family's
+// largest last. Index 1 is the default -- moge2-vitb, which is metric, rejects
+// the sky, and is quicker than Metric3D's large.
 struct GeometryModel {
     const char* id;               // what --model spells
     const spirula::i18n::Msg* label;

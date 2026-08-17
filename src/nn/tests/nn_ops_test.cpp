@@ -654,6 +654,37 @@ void test_conv(vk::Arena& arena) {
                 }
         check("conv2d 3x3 pad1 + relu", readback(to), want, 2e-4f);
     }
+    {   // padding_mode='replicate'. Every 3x3 in MoGe's head pads this way, and
+        // the difference from zero padding is confined to one ring of pixels --
+        // which is exactly the ring a depth map's edge artefacts live on.
+        vk::ArenaScope scope(arena);
+        const int Hi = 11, Wi = 9, Ci = 8, Co = 6, kh = 3, kw = 3;
+        auto x = randn((size_t)Hi * Wi * Ci);
+        auto w = randn((size_t)Co * Ci * kh * kw, 0.1f);
+        Tensor to = arena_tensor(arena, DType::F32, Hi, Wi, Co);
+        ConvOpts o;
+        o.pad_y = o.pad_x = 1;
+        o.pad_replicate = true;
+        conv2d(arena, to, upload_f32(arena, x, Hi, Wi, Ci),
+               upload_f32(arena, w, Co, (int64_t)Ci * kh * kw), kh, kw, o);
+
+        std::vector<float> want((size_t)Hi * Wi * Co);
+        for (int y = 0; y < Hi; ++y)
+            for (int xx = 0; xx < Wi; ++xx)
+                for (int co = 0; co < Co; ++co) {
+                    double s = 0;
+                    for (int ci = 0; ci < Ci; ++ci)
+                        for (int ky = 0; ky < kh; ++ky)
+                            for (int kx = 0; kx < kw; ++kx) {
+                                const int sy = std::min(std::max(y + ky - 1, 0), Hi - 1);
+                                const int sx = std::min(std::max(xx + kx - 1, 0), Wi - 1);
+                                s += (double)x[((size_t)sy * Wi + sx) * Ci + ci] *
+                                     w[(((size_t)co * Ci + ci) * kh + ky) * kw + kx];
+                            }
+                    want[((size_t)y * Wi + xx) * Co + co] = (float)s;
+                }
+        check("conv2d 3x3 replicate pad", readback(to), want, 2e-4f);
+    }
     {
         vk::ArenaScope scope(arena);
         const int Hi = 16, Wi = 16, C = 24, k = 7;
@@ -1091,6 +1122,7 @@ void test_geometry(vk::Arena& arena) {
             {Act::Tanh, "tanh", [](float v) { return std::tanh(v); }},
             {Act::Elu,  "elu",  [](float v) { return v > 0 ? v : std::exp(v) - 1.0f; }},
             {Act::Silu, "silu", [](float v) { return v / (1.0f + std::exp(-v)); }},
+            {Act::Exp,  "exp",  [](float v) { return std::exp(v); }},
         };
         for (const Case& c : cases) {
             Tensor to = arena_tensor(arena, DType::F32, N);

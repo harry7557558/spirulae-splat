@@ -170,6 +170,47 @@ SS_MSG(opt_max_size,
        "tavan olarak görür; çok geniş bir çekim ayrıntısının çoğunu korur. "
        "1064 modelin kendi işlem hattının kullandığı boyuttur."));
 
+SS_MSG(opt_num_tokens,
+    EN("How many patches MoGe's transformer runs, which is what sets its cost "
+       "rather than the image size. Its own range is 1200 to 3600, and it is "
+       "capped at what the image holds. Metric3D ignores this."),
+    JA("MoGe のトランスフォーマーが処理するパッチ数です。画像の大きさではなく"
+       "これが処理量を決めます。本来の範囲は 1200 から 3600 で、画像が持つ数が"
+       "上限になります。Metric3D では無視されます。"),
+    ZH_HANS("MoGe 的 Transformer 处理多少个图块，决定其开销的是这个而不是图像"
+            "大小。其自身范围是 1200 到 3600，并以图像所含的数量为上限。"
+            "Metric3D 会忽略此项。"),
+    ZH_HANT("MoGe 的 Transformer 處理多少個圖塊，決定其開銷的是這個而不是影像"
+            "大小。其自身範圍是 1200 到 3600，並以影像所含的數量為上限。"
+            "Metric3D 會忽略此項。"),
+    KO("MoGe 의 트랜스포머가 처리하는 패치 수입니다. 이미지 크기가 아니라 이 "
+       "값이 비용을 정합니다. 자체 범위는 1200 에서 3600 이고 이미지가 가진 "
+       "수가 상한입니다. Metric3D 는 무시합니다."),
+    DE("Wie viele Kacheln MoGes Transformer verarbeitet; das bestimmt die "
+       "Kosten, nicht die Bildgröße. Sein eigener Bereich ist 1200 bis 3600, "
+       "begrenzt durch das, was das Bild hergibt. Metric3D ignoriert dies."),
+    FR("Combien de tuiles le transformeur de MoGe traite : c'est cela qui fixe "
+       "son coût, pas la taille de l'image. Sa plage propre va de 1200 à 3600, "
+       "plafonnée par ce que contient l'image. Metric3D l'ignore."),
+    ES("Cuántos parches procesa el transformador de MoGe, que es lo que fija su "
+       "coste y no el tamaño de la imagen. Su rango propio va de 1200 a 3600, "
+       "limitado por lo que la imagen contiene. Metric3D lo ignora."),
+    PT("Quantos blocos o transformador do MoGe processa, que é o que define o "
+       "seu custo e não o tamanho da imagem. O seu intervalo é de 1200 a 3600, "
+       "limitado pelo que a imagem contém. O Metric3D ignora isto."),
+    IT("Quante patch elabora il transformer di MoGe: è questo a fissarne il "
+       "costo, non la dimensione dell'immagine. Il suo intervallo va da 1200 a "
+       "3600, limitato da quanto contiene l'immagine. Metric3D lo ignora."),
+    NL("Hoeveel vlakjes MoGe's transformer verwerkt; dat bepaalt de kosten, "
+       "niet de beeldgrootte. Zijn eigen bereik is 1200 tot 3600, begrensd "
+       "door wat het beeld bevat. Metric3D negeert dit."),
+    RU("Сколько фрагментов обрабатывает трансформер MoGe — именно это задаёт "
+       "стоимость, а не размер изображения. Собственный диапазон от 1200 до "
+       "3600, с потолком по числу в изображении. Metric3D это игнорирует."),
+    TR("MoGe'nin dönüştürücüsünün işlediği yama sayısı; maliyeti görüntü "
+       "boyutu değil bu belirler. Kendi aralığı 1200 ile 3600 arasıdır ve "
+       "görüntünün içerdiğiyle sınırlanır. Metric3D bunu yok sayar."));
+
 SS_MSG(opt_depth,
     EN("Also write depth maps. Off by default: the normals are what a "
        "reconstruction usually wants, and depth doubles both the time on disk "

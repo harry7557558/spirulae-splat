@@ -70,6 +70,7 @@ static const int ACT_LOGSIGMOID = 6; // F.logsigmoid       -- LightGlue
 static const int ACT_TANH      = 7;  // torch.tanh         -- Metric3D's ConvGRU
 static const int ACT_ELU       = 8;  // F.elu(alpha=1)     -- its normal kappa
 static const int ACT_SILU      = 9;  // F.silu             -- SwiGLU (ViT-giant2)
+static const int ACT_EXP       = 10; // torch.exp          -- MoGe's z remap
 
 // nn.SELU's constants, which are fixed by the paper (Klambauer et al. 2017)
 // and are what torch hard-codes -- not tunable, and not the same as ELU's.
@@ -112,6 +113,7 @@ float apply_act(float x, int kind) {
         case ACT_TANH:      return tanh(x);
         case ACT_ELU:       return (x > 0.0f) ? x : (exp(x) - 1.0f);
         case ACT_SILU:      return x / (1.0f + exp(-x));
+        case ACT_EXP:       return exp(x);
         default:            return x;
     }
 }

@@ -31,6 +31,7 @@ enum class Act : uint32_t {
     Tanh = 7,      // torch.tanh -- Metric3D's ConvGRU candidate and hidden init
     Elu = 8,       // F.elu(alpha=1) -- its normal head's concentration channel
     Silu = 9,      // F.silu -- the SwiGLU FFN in DINOv2 giant2
+    Exp = 10,      // torch.exp -- MoGe's `remap_output='exp'` on the point map
 };
 
 enum class AttnBias : uint32_t {
@@ -155,6 +156,9 @@ struct ConvOpts {
     int pad_y = 0, pad_x = 0;
     Act act = Act::None;
     Tensor bias;
+    // nn.Conv2d(padding_mode='replicate'), which every 3x3 in MoGe's head uses.
+    // Only conv2d honours it; the depthwise and deformable kernels zero-pad.
+    bool pad_replicate = false;
 };
 
 // out[Ho, Wo, Co] = conv2d(in[Hi, Wi, Ci], w[Co, Ci, kh, kw]).

@@ -104,7 +104,8 @@ void conv2d(vk::Arena& arena, const Tensor& out, const Tensor& in, const Tensor&
         ip.pad_x = (uint32_t)o.pad_x;
         ip.p0 = (uint32_t)p0;
         ip.P = (uint32_t)P;
-        vk::SpecList spec{(uint32_t)(in.dtype == DType::F16), 0u};
+        vk::SpecList spec{(uint32_t)(in.dtype == DType::F16), 0u,
+                          (uint32_t)o.pad_replicate};
         vk::Stream::get().dispatchFlat("conv.im2col", spec, P * K, 256, &ip, sizeof(ip),
                                        &ip.groups_per_row);
 
