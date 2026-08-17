@@ -180,8 +180,8 @@ float[RawLossIndex::length] per_pixel_losses(
 
     // Depth - Pearson correlation in log space
     depth_mask &= mask;
-    render_depth = float(depth_mask) * log(max(render_depth, 1e-4));
-    ref_depth = float(depth_mask) * log(max(ref_depth, 1e-4));
+    render_depth = float(depth_mask) * max(render_depth, 1e-4);
+    ref_depth = float(depth_mask) * max(ref_depth, 1e-4);
     losses[RawLossIndex::DepthSupX] = render_depth;
     losses[RawLossIndex::DepthSupY] = ref_depth;
     losses[RawLossIndex::DepthSupXX] = render_depth * render_depth;
