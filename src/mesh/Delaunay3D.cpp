@@ -1,30 +1,22 @@
 /*
- * Delaunay3D.cpp
+ * Delaunay3D.cpp -- self-contained multithreaded 3D Delaunay triangulation.
  *
- * Self-contained, multithreaded 3D Delaunay triangulation.
+ * A port of geogram's GEO::ParallelDelaunay3d (Bowyer-Watson insertion, BRIO /
+ * Hilbert reordering, structural-filtering locate), depending on nothing but
+ * the standard library: predicates become a long-double static filter with a
+ * Simulation-of-Simplicity tie-break, the cavity grows instead of overflowing,
+ * and GEO::Thread becomes a std::thread pool.
  *
- * Ported from geogram's parallel 3D Delaunay implementation
- * (GEO::ParallelDelaunay3d), which is based on ideas and a prototype by
- * Alain Filbois, and concepts from CGAL and tetgen. The incremental
- * Bowyer-Watson algorithm, the BRIO spatial reordering and the
- * structural-filtering locate() are all from geogram.
+ * Splat clouds are far more degenerate than this algorithm assumes, so every
+ * loop that can spin on them is bounded -- docs/notes/delaunay-degeneracy.md.
  *
- *  Original copyright:
  *  Copyright (c) 2000-2022 Inria, All rights reserved. (BSD-3-Clause)
  *  Contact: Bruno Levy, https://www.inria.fr/fr/bruno-levy
- *
- * This standalone version removes all geogram dependencies:
- *   - geometric predicates are replaced by a long-double static-filter
- *     implementation (orient_3d is exact for the float32-derived data we use;
- *     in_sphere uses a filtered long-double evaluation with a symbolic
- *     perturbation tie-break),
- *   - the per-cell atomic status array, the cavity hash structure and the
- *     BRIO/Hilbert spatial sort are ported verbatim (retyped),
- *   - GEO::Thread / Process are replaced by a small std::thread pool.
  */
 
 #include "mesh/Delaunay3D.h"
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -116,7 +108,8 @@ namespace {
 
     namespace PCK {
 
-        typedef long double real;
+        // typedef long double real;
+        typedef double real;
 
         inline Sign sgn(real x) {
             return (x > 0) ? POSITIVE : ((x < 0) ? NEGATIVE : ZERO);
@@ -456,36 +449,51 @@ namespace {
 
     class Cavity {
     public:
-        typedef uint8_t local_index_t;
+        Cavity() { resize_hash(INIT_H); }
 
-        Cavity() { clear(); }
-
+        // O(1): the stamp invalidates the table rather than clearing it, and
+        // a cavity is cleared once per insertion.
         void clear() {
             nb_f_ = 0;
-            OK_ = true;
             non_manifold_ = false;
-            ::memset(h2t_, END_OF_LIST, sizeof(h2t_));
+            if(++generation_ == 0) {
+                std::fill(h2g_.begin(), h2g_.end(), index_t(0));
+                generation_ = 1;
+            }
         }
-
-        bool OK() const { return OK_; }
 
         void new_facet(
             index_t tglobal, index_t boundary_f,
             index_t v0, index_t v1, index_t v2
         ) {
-            if(!OK_) return;
-            local_index_t new_t = local_index_t(nb_f_);
-            if(nb_f_ == MAX_F) { OK_ = false; return; }
-            set_vv2t(v0, v1, new_t);
-            set_vv2t(v1, v2, new_t);
-            set_vv2t(v2, v0, new_t);
-            if(!OK_) return;
-            ++nb_f_;
+            if(nb_f_ == index_t(tglobal_.size())) {
+                index_t n = std::max(2*nb_f_, INIT_F);
+                tglobal_.resize(n);
+                boundary_f_.resize(n);
+                f2v_.resize(n);
+            }
+            // Grown rather than capped: the overflow path this replaces could
+            // not tell a pinched boundary from a sound one. Load stays under
+            // 1/2, which is what makes the probe loops terminate.
+            if(6*(nb_f_+1) > index_t(h2t_.size())) {
+                index_t n = index_t(h2t_.size());
+                while(6*(nb_f_+1) > n) n *= 2;
+                resize_hash(n);
+                for(index_t f = 0; f < nb_f_; ++f) {
+                    set_vv2t(f2v_[f][0], f2v_[f][1], f);
+                    set_vv2t(f2v_[f][1], f2v_[f][2], f);
+                    set_vv2t(f2v_[f][2], f2v_[f][0], f);
+                }
+            }
+            index_t new_t = nb_f_++;
             tglobal_[new_t] = tglobal;
             boundary_f_[new_t] = boundary_f;
             f2v_[new_t][0] = v0;
             f2v_[new_t][1] = v1;
             f2v_[new_t][2] = v2;
+            set_vv2t(v0, v1, new_t);
+            set_vv2t(v1, v2, new_t);
+            set_vv2t(v2, v0, new_t);
         }
 
         index_t nb_facets() const { return nb_f_; }
@@ -500,74 +508,74 @@ namespace {
             index_t v0 = f2v_[f][0];
             index_t v1 = f2v_[f][1];
             index_t v2 = f2v_[f][2];
-            t0 = tglobal_[get_vv2t(v2,v1)];
-            t1 = tglobal_[get_vv2t(v0,v2)];
-            t2 = tglobal_[get_vv2t(v1,v0)];
+            t0 = facet_tet_across(v2,v1);
+            t1 = facet_tet_across(v0,v2);
+            t2 = facet_tet_across(v1,v0);
         }
 
-        // True iff the recorded facets form a valid (manifold) cavity boundary.
         // In a closed, oriented boundary every directed edge belongs to exactly
-        // one facet, so set_vv2t() never sees the same directed edge twice. On
-        // exactly-degenerate input (a point lying on the plane of a boundary
-        // facet) the conflict region can fail to be a topological ball and its
-        // boundary pinches, making some directed edge appear in two facets;
-        // set_vv2t() flags that. stellate_cavity() assumes a manifold boundary,
-        // so such a cavity must be skipped rather than triangulated.
+        // one facet, so set_vv2t() never sees one twice. A conflict region that
+        // is not a topological ball pinches, and some edge then appears twice.
         bool boundary_is_manifold() const { return !non_manifold_; }
 
     private:
-        static constexpr index_t        MAX_H = 1033;
-        static constexpr local_index_t  END_OF_LIST = 255;
-        static constexpr index_t        MAX_F = 128;
+        static constexpr index_t INIT_H = 1024;
+        static constexpr index_t INIT_F = 128;
 
-        index_t hash(index_t v1, index_t v2) const {
-            return (((index_t(v1+1) * 73856093) ^
-                     (index_t(v2+1) * 83492791)) % MAX_H);
+        void resize_hash(index_t n) {
+            h2t_.assign(n, NO_INDEX);
+            h2v_.assign(n, 0);
+            h2g_.assign(n, 0);
+            generation_ = 1;
         }
 
-        void set_vv2t(index_t v1, index_t v2, local_index_t f) {
+        index_t hash(index_t v1, index_t v2) const {
+            index_t h = ((v1+1) * 73856093u) ^ ((v2+1) * 83492791u);
+            return (h ^ (h >> 16)) & (index_t(h2t_.size()) - 1);
+        }
+
+        void set_vv2t(index_t v1, index_t v2, index_t f) {
             uint64_t K = (uint64_t(v1+1) << 32) | uint64_t(v2+1);
-            index_t h = hash(v1,v2);
-            index_t cur = h;
-            do {
-                if(h2t_[cur] == END_OF_LIST) {
+            index_t mask = index_t(h2t_.size()) - 1;
+            for(index_t cur = hash(v1,v2); ; cur = (cur+1) & mask) {
+                if(h2g_[cur] != generation_) {
+                    h2g_[cur] = generation_;
                     h2t_[cur] = f;
                     h2v_[cur] = K;
                     return;
                 }
                 if(h2v_[cur] == K) {
-                    // This directed edge is already owned by another facet: the
-                    // cavity boundary is non-manifold (pinched). Flag it and keep
-                    // the first owner so get_vv2t() stays well defined.
                     non_manifold_ = true;
                     return;
                 }
-                cur = (cur+1)%MAX_H;
-            } while(cur != h);
-            OK_ = false;
+            }
         }
 
-        local_index_t get_vv2t(index_t v1, index_t v2) const {
+        // NO_INDEX when the opposite half of the edge is missing, which only a
+        // boundary that is not closed can do -- never an out of range facet.
+        index_t facet_tet_across(index_t v1, index_t v2) const {
+            index_t f = get_vv2t(v1,v2);
+            return (f == NO_INDEX) ? NO_INDEX : tglobal_[f];
+        }
+
+        index_t get_vv2t(index_t v1, index_t v2) const {
             uint64_t K = (uint64_t(v1+1) << 32) | uint64_t(v2+1);
-            index_t h = hash(v1,v2);
-            index_t cur = h;
-            do {
-                if(h2v_[cur] == K) {
-                    return h2t_[cur];
-                }
-                cur = (cur+1)%MAX_H;
-            } while(cur != h);
-            return END_OF_LIST;
+            index_t mask = index_t(h2t_.size()) - 1;
+            for(index_t cur = hash(v1,v2); ; cur = (cur+1) & mask) {
+                if(h2g_[cur] != generation_) return NO_INDEX;
+                if(h2v_[cur] == K) return h2t_[cur];
+            }
         }
 
-        local_index_t  h2t_[MAX_H];
-        uint64_t       h2v_[MAX_H];
-        index_t nb_f_;
-        index_t tglobal_[MAX_F];
-        index_t boundary_f_[MAX_F];
-        index_t f2v_[MAX_F][3];
-        bool OK_;
-        bool non_manifold_;
+        vector<index_t>  h2t_;
+        vector<uint64_t> h2v_;
+        vector<index_t>  h2g_;
+        index_t generation_ = 0;
+        index_t nb_f_ = 0;
+        vector<index_t> tglobal_;
+        vector<index_t> boundary_f_;
+        vector<std::array<index_t,3> > f2v_;
+        bool non_manifold_ = false;
     };
 
     /*********************** spatial sort (BRIO/Hilbert) *******************/
@@ -798,6 +806,14 @@ namespace {
     public:
         static constexpr index_t NO_THREAD = CellStatusArray::FREE_CELL;
 
+        // Every loop a degenerate or contended configuration can spin in is
+        // bounded, so that a point is dropped where the algorithm would
+        // otherwise never finish. Healthy input stays far below all four.
+        static constexpr index_t MAX_RANDOM_TRIES = 4096;
+        static constexpr index_t MAX_WALK_STEPS = 1u << 20;
+        static constexpr index_t MAX_ROLLBACKS = 1u << 20;
+        static constexpr index_t MAX_LOCATE_INEXACT_STEPS = 2500;
+
         Delaunay3dThread(
             ParallelDelaunay3d* master, index_t pool_begin, index_t pool_end
         );
@@ -827,43 +843,59 @@ namespace {
         Delaunay3dThread* thread(index_t t);
 
         void run() override {
-            finished_ = false;
-            if(work_begin_ == NO_INDEX || work_end_ == NO_INDEX) return;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                finished_ = false;
+            }
+            if(work_begin_ != NO_INDEX && work_end_ != NO_INDEX) insert_work();
+            // Under the lock, and on every exit: a thread parked on this one in
+            // wait_for_event() has nothing else left to wake it.
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                finished_ = true;
+            }
+            send_event();
+        }
+
+        void insert_work() {
             memory_overflow_ = false;
             b_hint_ = NO_TETRAHEDRON;
             e_hint_ = NO_TETRAHEDRON;
             direction_ = true;
-            while(work_end_ >= work_begin_ && !memory_overflow_) {
+            index_t nb_retries = 0;
+            // work_end_ wraps to NO_INDEX once a range starting at 0 has been
+            // consumed backwards, which restarts the loop 2^32 entries past the
+            // end of reorder_.
+            while(work_end_ >= work_begin_ && work_end_ != NO_INDEX &&
+                  !memory_overflow_) {
                 index_t v = direction_ ? work_begin_ : work_end_;
                 index_t& hint = direction_ ? b_hint_ : e_hint_;
                 bool success = insert(reorder_[v], hint);
                 send_event();
                 if(success) {
+                    nb_retries = 0;
                     if(direction_) ++work_begin_;
                     else --work_end_;
-                } else {
-                    ++nb_rollbacks_;
-                    if(interfering_thread_ != NO_THREAD) {
-                        if(id() < interfering_thread_) {
-                            wait_for_event(interfering_thread_);
-                        } else {
-                            direction_ = !direction_;
-                        }
-                    } else if(!memory_overflow_) {
-                        // Genuine failure unrelated to a thread conflict (e.g. a
-                        // point whose neighborhood is so degenerate that locate
-                        // cannot resolve it). Retrying would spin on the same
-                        // point forever; skip it to guarantee forward progress.
-                        // (memory_overflow_ is left to the sequential pass.)
-                        if(direction_) ++work_begin_;
-                        else --work_end_;
+                    continue;
+                }
+                ++nb_rollbacks_;
+                if(memory_overflow_) continue;  // the loop condition ends it
+                if(interfering_thread_ != NO_THREAD &&
+                   ++nb_retries < MAX_ROLLBACKS) {
+                    if(id() < interfering_thread_) {
+                        wait_for_event(interfering_thread_);
+                    } else {
+                        direction_ = !direction_;
                     }
+                } else {
+                    // Either a genuine failure (a point whose neighborhood is
+                    // too degenerate for locate to resolve) or a cell no live
+                    // thread will release. Retrying spins, so skip the point.
+                    nb_retries = 0;
+                    if(direction_) ++work_begin_;
+                    else --work_end_;
                 }
             }
-            finished_ = true;
-            mutex_.lock();
-            send_event();
-            mutex_.unlock();
         }
 
         static constexpr index_t NO_TETRAHEDRON = NO_INDEX;
@@ -992,10 +1024,8 @@ namespace {
                 return true;
             }
 
-            index_t t_bndry = NO_TETRAHEDRON;
-            index_t f_bndry = NO_INDEX;
             cavity_.clear();
-            bool ok = find_conflict_zone(v,t,t_bndry,f_bndry);
+            bool ok = find_conflict_zone(v,t);
 
             if(nb_tets_to_create_ > nb_free_ && Process::is_running_threads()) {
                 memory_overflow_ = true;
@@ -1010,27 +1040,16 @@ namespace {
                 return true;
             }
 
-            index_t new_tet = NO_INDEX;
-            if(cavity_.OK()) {
-                // On exactly-degenerate input (e.g. a point lying on the plane
-                // of a cavity boundary facet, which the weight-only in_sphere
-                // perturbation cannot push off) the conflict region may fail to
-                // be a topological ball, leaving a non-manifold boundary that
-                // stellate_cavity would turn into corrupt adjacency -> later
-                // segfaults / infinite loops. Skip such a point instead of
-                // corrupting the mesh: the triangulation is left unchanged
-                // (find_conflict_zone only set per-cell status, which
-                // release_tets() clears). For the downstream meshing this loses
-                // at most a handful of points in pinch configurations and never
-                // affects well-posed input.
-                if(!cavity_.boundary_is_manifold()) {
-                    release_tets();
-                    return true;
-                }
-                new_tet = stellate_cavity(v);
-            } else {
-                new_tet = stellate_conflict_zone_iterative(v,t_bndry,f_bndry);
+            // Stellating a pinched boundary builds adjacency that points
+            // outside the cell array; stellating one p cannot see all of
+            // builds inverted cells that later walks get lost among.
+            if((!cavity_.boundary_is_manifold() ||
+                !cavity_is_star_shaped(vertex_ptr(v))) &&
+               !restrict_cavity_to_seed(vertex_ptr(v))) {
+                release_tets();
+                return true;
             }
+            index_t new_tet = stellate_cavity(v);
 
             for(index_t i = 0; i < tets_to_delete_.size()-1; ++i) {
                 cell_next_[tets_to_delete_[i]] = tets_to_delete_[i+1];
@@ -1044,9 +1063,73 @@ namespace {
             return true;
         }
 
-        bool find_conflict_zone(
-            index_t v, index_t t, index_t& t_bndry, index_t& f_bndry
-        ) {
+        // Every tetrahedron stellate_cavity() would build is positive exactly
+        // when p sees the outer side of every finite boundary facet. Facets
+        // through the vertex at infinity carry no orientation to check.
+        bool cavity_is_star_shaped(const double* p) const {
+            for(index_t f = 0; f < cavity_.nb_facets(); ++f) {
+                const double* pv[3];
+                bool finite = true;
+                for(index_t lv = 0; lv < 3; ++lv) {
+                    index_t v = cavity_.facet_vertex(f,lv);
+                    if(v == NO_INDEX) { finite = false; break; }
+                    pv[lv] = vertex_ptr(v);
+                }
+                if(!finite) continue;
+                if(PCK::orient_3d(p, pv[0], pv[1], pv[2]) != POSITIVE) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // p must be strictly inside for a 1->4 split of t to stay valid. A
+        // virtual tet has one facet to be on the outer side of instead.
+        bool split_is_valid(index_t t, const double* p) const {
+            const double* pv[4];
+            index_t at_infinity = NO_INDEX;
+            for(index_t lv = 0; lv < 4; ++lv) {
+                index_t v = tet_vertex(t,lv);
+                pv[lv] = (v == NO_INDEX) ? nullptr : vertex_ptr(v);
+                if(v == NO_INDEX) at_infinity = lv;
+            }
+            if(at_infinity != NO_INDEX) {
+                pv[at_infinity] = p;
+                return PCK::orient_3d(pv[0],pv[1],pv[2],pv[3]) == POSITIVE;
+            }
+            for(index_t lf = 0; lf < 4; ++lf) {
+                const double* opposite = pv[lf];
+                pv[lf] = p;
+                Sign s = PCK::orient_3d(pv[0],pv[1],pv[2],pv[3]);
+                pv[lf] = opposite;
+                if(s != POSITIVE) return false;
+            }
+            return true;
+        }
+
+        // Fall back to splitting the located tet alone: its boundary is a
+        // tetrahedron, hence always a ball. Dropping the point instead leaves
+        // the cospherical cluster untriangulated and then loses all of it.
+        bool restrict_cavity_to_seed(const double* p) {
+            index_t seed = tets_to_delete_[0];
+            if(!split_is_valid(seed, p)) return false;
+            for(index_t i = 1; i < tets_to_delete_.size(); ++i) {
+                mark_tet_as_neighbor(tets_to_delete_[i]);
+            }
+            tets_to_delete_.resize(1);
+            cavity_.clear();
+            for(index_t lf = 0; lf < 4; ++lf) {
+                cavity_.new_facet(
+                    seed, lf,
+                    tet_vertex(seed, tet_facet_vertex(lf,0)),
+                    tet_vertex(seed, tet_facet_vertex(lf,1)),
+                    tet_vertex(seed, tet_facet_vertex(lf,2))
+                );
+            }
+            return cavity_.boundary_is_manifold();
+        }
+
+        bool find_conflict_zone(index_t v, index_t t) {
             nb_tets_to_create_ = 0;
             const double* p = vertex_ptr(v);
             if(weighted_ && !tet_is_in_conflict(t,p)) {
@@ -1054,10 +1137,7 @@ namespace {
                 return true;
             }
             mark_tet_as_conflict(t);
-            bool result = find_conflict_zone_iterative(p,t);
-            t_bndry = t_boundary_;
-            f_bndry = f_boundary_;
-            return result;
+            return find_conflict_zone_iterative(p,t);
         }
 
         bool find_conflict_zone_iterative(const double* p, index_t t_in) {
@@ -1091,8 +1171,6 @@ namespace {
                         S_.push_back(t2);
                         continue;
                     }
-                    t_boundary_ = t;
-                    f_boundary_ = lf;
                     ++nb_tets_to_create_;
                     cavity_.new_facet(
                         t, lf,
@@ -1137,7 +1215,8 @@ namespace {
             const double* p, index_t hint = NO_TETRAHEDRON, Sign* orient = nullptr
         ) {
             {
-                index_t new_hint = locate_inexact(p, hint, 2500);
+                index_t new_hint =
+                    locate_inexact(p, hint, MAX_LOCATE_INEXACT_STEPS);
                 if(new_hint == NO_TETRAHEDRON) return NO_TETRAHEDRON;
                 hint = new_hint;
             }
@@ -1154,8 +1233,10 @@ namespace {
                     }
                 }
             }
+            index_t tries = 0;
             do {
                 if(hint == NO_TETRAHEDRON) {
+                    if(++tries > MAX_RANDOM_TRIES) return NO_TETRAHEDRON;
                     hint = thread_safe_random(max_used_t_);
                 }
                 if(tet_is_free(hint) || (!owns_tet(hint) && !acquire_tet(hint))) {
@@ -1165,7 +1246,14 @@ namespace {
                     for(index_t f = 0; f < 4; ++f) {
                         if(tet_vertex(hint,f) == VERTEX_AT_INFINITY) {
                             index_t new_hint = tet_adjacent(hint,f);
-                            if(tet_is_free(new_hint) || !acquire_tet(new_hint)) {
+                            if(new_hint == NO_TETRAHEDRON ||
+                               tet_is_free(new_hint) ||
+                               (!owns_tet(new_hint) &&
+                                !acquire_tet(new_hint))) {
+                                if(new_hint != NO_TETRAHEDRON &&
+                                   owns_tet(new_hint)) {
+                                    release_tet(new_hint);
+                                }
                                 new_hint = NO_TETRAHEDRON;
                             }
                             release_tet(hint);
@@ -1181,13 +1269,10 @@ namespace {
             Sign orient_local[4];
             if(orient == nullptr) orient = orient_local;
 
-            // A non-degenerate straight-line walk visits every tet at most once,
-            // so it cannot take more than max_used_t_ steps. On exactly
-            // degenerate input (flat / zero-volume tets) the orientation tests
-            // can become inconsistent and the walk can cycle; bound it so locate
-            // fails cleanly (the caller then skips the point) instead of looping
-            // forever.
-            index_t walk_budget = 2 * max_used_t_ + 16;
+            // The walk cycles when degenerate input (flat / zero-volume tets)
+            // makes the orientation tests inconsistent, so it is bounded; a real
+            // walk is a few steps, O(nb_tets^(1/3)) after a random restart.
+            index_t walk_budget = MAX_WALK_STEPS;
 
         still_walking:
             {
@@ -1197,7 +1282,10 @@ namespace {
                     return NO_TETRAHEDRON;
                 }
                 if(t_pred != NO_TETRAHEDRON) release_tet(t_pred);
-                if(tet_is_free(t)) return NO_TETRAHEDRON;
+                if(tet_is_free(t)) {
+                    if(owns_tet(t)) release_tet(t);
+                    return NO_TETRAHEDRON;
+                }
                 if(!owns_tet(t) && !acquire_tet(t)) return NO_TETRAHEDRON;
                 if(!tet_is_real(t)) {
                     release_tet(t);
@@ -1229,7 +1317,9 @@ namespace {
                     }
                     if(tet_is_virtual(t_next)) {
                         release_tet(t);
-                        if(!acquire_tet(t_next)) return NO_TETRAHEDRON;
+                        if(!owns_tet(t_next) && !acquire_tet(t_next)) {
+                            return NO_TETRAHEDRON;
+                        }
                         for(index_t lf = 0; lf < 4; ++lf) orient[lf] = POSITIVE;
                         return t_next;
                     }
@@ -1287,12 +1377,14 @@ namespace {
         index_t locate_inexact(
             const double* p, index_t hint, index_t max_iter
         ) const {
-            while(hint == NO_TETRAHEDRON) {
+            for(index_t tries = 0;
+                hint == NO_TETRAHEDRON && tries < MAX_RANDOM_TRIES; ++tries) {
                 hint = thread_safe_random(max_used_t_);
                 if(tet_is_free(hint) || tet_thread(hint) != NO_THREAD) {
                     hint = NO_TETRAHEDRON;
                 }
             }
+            if(hint == NO_TETRAHEDRON) return NO_TETRAHEDRON;
             if(tet_is_virtual(hint)) {
                 for(index_t lf = 0; lf < 4; ++lf) {
                     if(tet_vertex(hint, lf) == VERTEX_AT_INFINITY) {
@@ -1326,7 +1418,11 @@ namespace {
                     if(tet_is_virtual(t_next)) return t_next;
                     t_pred = t;
                     t = t_next;
-                    if(--max_iter != 0) goto still_walking;
+                    // Decrementing inside the facet loop (geogram's form) does
+                    // not end the walk at zero: it falls through to the next
+                    // facet, and a step there wraps max_iter to 2^32-1.
+                    if(max_iter-- == 0) return t;
+                    goto still_walking;
                 }
             }
             return t;
@@ -1346,15 +1442,8 @@ namespace {
         index_t tet_vertex(index_t t, index_t lv) const {
             return cell_to_v_store_[4*t + lv];
         }
-        index_t find_tet_vertex(index_t t, index_t v) const {
-            const index_t* T = &(cell_to_v_store_[4*t]);
-            return find_4(T,v);
-        }
         index_t finite_tet_vertex(index_t t, index_t lv) const {
             return cell_to_v_store_[4*t + lv];
-        }
-        void set_tet_vertex(index_t t, index_t lv, index_t v) {
-            cell_to_v_store_[4*t + lv] = v;
         }
         index_t tet_adjacent(index_t t, index_t lf) const {
             return cell_to_cell_store_[4*t + lf];
@@ -1365,23 +1454,6 @@ namespace {
         index_t find_tet_adjacent(index_t t1, index_t t2) const {
             const index_t* T = &(cell_to_cell_store_[4*t1]);
             return find_4(T,t2);
-        }
-        index_t get_facet_by_halfedge(index_t t, index_t v1, index_t v2) const {
-            const index_t* T = &(cell_to_v_store_[4*t]);
-            index_t lv1 = find_4(T,v1);
-            index_t lv2 = find_4(T,v2);
-            return index_t(halfedge_facet_[lv1][lv2]);
-        }
-        void get_facets_by_halfedge(
-            index_t t, index_t v1, index_t v2, index_t& f12, index_t& f21
-        ) const {
-            const index_t* T = &(cell_to_v_store_[4*t]);
-            index_t lv1 =
-                index_t((T[1]==v1) | ((T[2]==v1)*2) | ((T[3]==v1)*3));
-            index_t lv2 =
-                index_t((T[1]==v2) | ((T[2]==v2)*2) | ((T[3]==v2)*3));
-            f12 = index_t(halfedge_facet_[lv1][lv2]);
-            f21 = index_t(halfedge_facet_[lv2][lv1]);
         }
 
         static constexpr index_t END_OF_LIST = NO_INDEX;
@@ -1430,6 +1502,9 @@ namespace {
         }
 
         void send_event() { cond_.notify_all(); }
+        // One event is enough: this is a backoff, not a condition to wait for.
+        // finished_ is written under the same mutex, so a thread that has
+        // already exited cannot be waited on.
         void wait_for_event(index_t t) {
             Delaunay3dThread* thrd = thread(t);
             std::unique_lock<std::mutex> L(thrd->mutex_);
@@ -1437,125 +1512,6 @@ namespace {
                 thrd->cond_.wait(L);
             }
         }
-
-        /****** iterative stellate_conflict_zone *****************/
-
-        class StellateConflictStack {
-        public:
-            void push(index_t t1, index_t t1fbord, index_t t1fprev) {
-                store_.resize(store_.size()+1);
-                top().t1 = t1;
-                top().t1fbord = uint8_t(t1fbord);
-                top().t1fprev = uint8_t(t1fprev);
-            }
-            void save_locals(index_t new_t, index_t t1ft2, index_t t2ft1) {
-                top().new_t = new_t;
-                top().t1ft2 = uint8_t(t1ft2);
-                top().t2ft1 = uint8_t(t2ft1);
-            }
-            void get_parameters(
-                index_t& t1, index_t& t1fbord, index_t& t1fprev
-            ) const {
-                t1      = top().t1;
-                t1fbord = index_t(top().t1fbord);
-                t1fprev = index_t(top().t1fprev);
-            }
-            void get_locals(
-                index_t& new_t, index_t& t1ft2, index_t& t2ft1
-            ) const {
-                new_t = top().new_t;
-                t1ft2 = index_t(top().t1ft2);
-                t2ft1 = index_t(top().t2ft1);
-            }
-            void pop() { store_.pop_back(); }
-            bool empty() const { return store_.empty(); }
-        private:
-            struct Frame {
-                index_t t1;
-                index_t new_t;
-                uint8_t t1fbord;
-                uint8_t t1fprev;
-                uint8_t t1ft2;
-                uint8_t t2ft1;
-            };
-            Frame& top() { return *store_.rbegin(); }
-            const Frame& top() const { return *store_.rbegin(); }
-            std::vector<Frame> store_;
-        };
-
-        index_t stellate_conflict_zone_iterative(
-            index_t v, index_t t1, index_t t1fbord,
-            index_t t1fprev = NO_INDEX
-        ) {
-            S2_.push(t1, t1fbord, t1fprev);
-            index_t new_t;
-            index_t t1ft2;
-            index_t t2;
-            index_t t2fbord;
-            index_t t2ft1;
-
-        entry_point:
-            S2_.get_parameters(t1, t1fbord, t1fprev);
-
-            new_t = new_tetrahedron(
-                tet_vertex(t1,0), tet_vertex(t1,1),
-                tet_vertex(t1,2), tet_vertex(t1,3)
-            );
-            set_tet_vertex(new_t, t1fbord, v);
-            {
-                index_t tbord = tet_adjacent(t1,t1fbord);
-                set_tet_adjacent(new_t, t1fbord, tbord);
-                set_tet_adjacent(tbord, find_tet_adjacent(tbord,t1), new_t);
-            }
-            for(t1ft2 = 0; t1ft2 < 4; ++t1ft2) {
-                if(t1ft2 == t1fprev || tet_adjacent(new_t,t1ft2) != NO_INDEX) {
-                    continue;
-                }
-                if(!get_neighbor_along_conflict_zone_border(
-                       t1,t1fbord,t1ft2, t2,t2fbord,t2ft1)) {
-                    S2_.save_locals(new_t, t1ft2, t2ft1);
-                    S2_.push(t2, t2fbord, t2ft1);
-                    goto entry_point;
-                return_point:
-                    index_t result = new_t;
-                    S2_.pop();
-                    if(S2_.empty()) return result;
-                    S2_.get_parameters(t1, t1fbord, t1fprev);
-                    S2_.get_locals(new_t, t1ft2, t2ft1);
-                    t2 = result;
-                }
-                set_tet_adjacent(t2, t2ft1, new_t);
-                set_tet_adjacent(new_t, t1ft2, t2);
-            }
-            goto return_point;
-        }
-
-        bool get_neighbor_along_conflict_zone_border(
-            index_t t1, index_t t1fborder, index_t t1ft2,
-            index_t& t2, index_t& t2fborder, index_t& t2ft1
-        ) const {
-            index_t ev1 =
-                tet_vertex(t1, index_t(halfedge_facet_[t1ft2][t1fborder]));
-            index_t ev2 =
-                tet_vertex(t1, index_t(halfedge_facet_[t1fborder][t1ft2]));
-            index_t cur_t = t1;
-            index_t cur_f = t1ft2;
-            index_t next_t = tet_adjacent(cur_t,cur_f);
-            while(tet_is_marked_as_conflict(next_t)) {
-                cur_t = next_t;
-                cur_f = get_facet_by_halfedge(cur_t,ev1,ev2);
-                next_t = tet_adjacent(cur_t, cur_f);
-            }
-            index_t f12,f21;
-            get_facets_by_halfedge(next_t, ev1, ev2, f12, f21);
-            t2 = tet_adjacent(next_t,f21);
-            index_t v_neigh_opposite = tet_vertex(next_t,f12);
-            t2ft1 = find_tet_vertex(t2, v_neigh_opposite);
-            t2fborder = cur_f;
-            return(t2 != cur_t);
-        }
-
-        StellateConflictStack S2_;
 
     private:
         ParallelDelaunay3d* master_;
@@ -1582,8 +1538,6 @@ namespace {
 
         vector<index_t> S_;
         index_t nb_tets_to_create_;
-        index_t t_boundary_;
-        index_t f_boundary_;
 
         bool direction_;
         index_t work_begin_;
@@ -1604,18 +1558,10 @@ namespace {
         std::mutex mutex_;
 
         static char tet_facet_vertex_[4][3];
-        static char halfedge_facet_[4][4];
 
         Cavity cavity_;
 
         friend class ParallelDelaunay3d;
-    };
-
-    char Delaunay3dThread::halfedge_facet_[4][4] = {
-        {4, 2, 3, 1},
-        {3, 4, 0, 2},
-        {1, 3, 4, 0},
-        {2, 0, 1, 4}
     };
 
     char Delaunay3dThread::tet_facet_vertex_[4][3] = {
@@ -1704,8 +1650,6 @@ namespace {
         nb_rollbacks_ = 0;
         nb_failed_locate_ = 0;
         nb_tets_to_create_ = 0;
-        t_boundary_ = NO_TETRAHEDRON;
-        f_boundary_ = NO_INDEX;
         v1_ = NO_INDEX;
         v2_ = NO_INDEX;
         v3_ = NO_INDEX;
@@ -1938,7 +1882,10 @@ namespace delaunay3d {
     ) {
         Delaunay3DResult result;
         result.nb_vertices = nb_points;
-        if(nb_points < 4) {
+        // 7 tetrahedra per point are preallocated and addressed as 4*t+lv in
+        // 32 bits, so beyond this the cell arrays silently wrap.
+        constexpr int MAX_POINTS = 150000000;
+        if(nb_points < 4 || nb_points > MAX_POINTS) {
             result.num_threads = 0;
             return result;
         }

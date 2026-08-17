@@ -317,10 +317,11 @@ if(SS_BUILD_CLI OR SS_BUILD_GUI)
 endif()
 
 # ---------------------------------------------------------------------------
-# Host-side tests for src/core/. Backend-agnostic -- both builds get them, and
-# they link the engine library because that is where core/*.cpp is compiled.
+# Host-side tests for src/core/ and src/mesh/. Backend-agnostic -- both builds
+# get them, and they link the engine library, which is where those .cpp live.
 # ---------------------------------------------------------------------------
-file(GLOB SS_CORE_TESTS CONFIGURE_DEPENDS ${SS_SRC}/core/tests/*.cpp)
+file(GLOB SS_CORE_TESTS CONFIGURE_DEPENDS
+     ${SS_SRC}/core/tests/*.cpp ${SS_SRC}/mesh/tests/*.cpp)
 foreach(test_src ${SS_CORE_TESTS})
     get_filename_component(test_name ${test_src} NAME_WE)
     add_executable(${test_name} ${test_src})
