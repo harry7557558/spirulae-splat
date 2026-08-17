@@ -1,5 +1,6 @@
 #include "nn/io/Fetch.h"
 
+#include "core/Env.h"
 #include "core/Sha256.h"
 #include "nn/core/Error.h"
 #include "nn/core/Log.h"
@@ -73,6 +74,12 @@ std::string ensure_file(const FetchFile& f, const char* tag) {
                     f.file);
         fs::remove(dst, ec);
     }
+
+    NN_CHECK(!spirula::env_on("NO_AUTO_FETCH"),
+             "%s is not in the model cache, and this process may not download "
+             "it.\n  Get it from the application's own download button, or "
+             "fetch\n    %s\n  to\n    %s\n  by hand.",
+             f.file, f.url, dst.string().c_str());
 
     fs::create_directories(dst.parent_path(), ec);
     NN_CHECK(!ec, "cannot create %s: %s", dst.parent_path().string().c_str(),

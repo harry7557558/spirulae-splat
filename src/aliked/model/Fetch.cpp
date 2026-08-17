@@ -26,7 +26,8 @@ const ModelSource kSources[] = {
     {"aliked-lightglue",
      {"aliked-lightglue.onnx",
       "https://github.com/colmap/colmap/releases/download/3.13.0/aliked-lightglue.onnx",
-      "b9a5de7204648b18a8cf5dcac819f9d30de1a5961ef03756803c8b86c2dceb8d", 0ull}},
+      "b9a5de7204648b18a8cf5dcac819f9d30de1a5961ef03756803c8b86c2dceb8d",
+      45804950ull}},
 };
 
 }  // namespace

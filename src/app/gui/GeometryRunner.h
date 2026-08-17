@@ -8,6 +8,7 @@
 // list, so a flag cannot reach only the built-in path.
 
 #include "app/gui/FilmReel.h"
+#include "app/gui/ModelCache.h"
 #include "app/gui/PrepProgress.h"
 #include "i18n/Message.h"
 
@@ -54,11 +55,7 @@ bool geometry_model_cached(const std::string& id);
 // What is left to fetch for `id`, in order; empty when it is all there or
 // `id` is a path the user pointed at. vit-giant2 is two files -- the reader
 // resolves the second one by name, so both land in the same directory.
-struct GeometryDownload {
-    std::string url, dest;
-    uint64_t bytes = 0;
-};
-std::vector<GeometryDownload> geometry_model_downloads(const std::string& id);
+std::vector<PendingDownload> geometry_model_downloads(const std::string& id);
 
 // "" when this build can estimate geometry, otherwise why it cannot.
 std::string geometry_availability();

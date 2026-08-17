@@ -219,8 +219,11 @@ private:
     // CC0 and BSD (src/metric3d/model/Fetch.h), unlike the SAM weights. The
     // largest is two files, so what is pending is a queue.
     void request_geometry_download();
-    void pump_geometry_download();
     bool geometry_model_missing() const;
+    // The same for the learned frontend, whose detector and matcher are two
+    // downloads of their own (src/aliked/model/Fetch.h).
+    void request_feature_download();
+    bool feature_model_missing() const;
     // The step list and its bars, in place of the one stage line.
     void draw_dataset_steps();
     // The form and the button that acts on it, `height` tall.
@@ -247,6 +250,7 @@ private:
     void open_mask_preview();
     void draw_color_space_options(bool with_point_color);
     void draw_sfm_advanced();
+    void draw_feature_download();
     void draw_colmap_options();
     void draw_tool_locations();
     void draw_license_modal();
@@ -400,6 +404,10 @@ private:
     ColmapJob _colmap_job;
     SfmRunner _sfm;
     SfmJob _sfm_job;
+    // ALIKED and LightGlue, when the advanced options ask for them. Fetched
+    // here rather than by the run's child process, whose download nobody
+    // asked for and nobody can see.
+    DownloadQueue _feat_download;
     // ---- what a running job shows about itself ----
     // One reel per step that produces pictures: the frames as they are
     // written, the masks as they are made, and the frames again with the
@@ -465,8 +473,7 @@ private:
     // that tries it on one frame, and the checkpoint fetch.
     GeometryJob _geometry;
     GeometryPanel _geometry_panel;
-    FileDownload _geom_download;
-    std::vector<GeometryDownload> _geom_queue;
+    DownloadQueue _geom_download;
     // input_pixel_size()'s cache, keyed by input path. A zero pair is a
     // remembered "could not tell", so nothing is probed twice.
     std::map<std::string, std::pair<int, int>> _input_size;

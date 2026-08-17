@@ -5489,6 +5489,43 @@ SS_MSG(matcher_needs_learned,
     TR("LightGlue öğrenilmiş betimleyicilere ihtiyaç duyar -- etkinleştirmek "
        "için yukarıdan bir ALIKED ön ucu seçin."));
 
+SS_MSG(feat_get_model,
+    EN("Get the feature model"),
+    JA("特徴のモデルを取得"), ZH_HANS("获取特征模型"), ZH_HANT("取得特徵模型"),
+    KO("특징 모델 받기"), DE("Merkmalsmodell holen"),
+    FR("Obtenir le modèle de points caractéristiques"),
+    ES("Obtener el modelo de características"),
+    PT("Obter o modelo de características"),
+    IT("Ottieni il modello delle caratteristiche"),
+    NL("Kenmerkmodel ophalen"), RU("Получить модель особых точек"),
+    TR("Öznitelik modelini getir"));
+
+SS_MSG(feat_model_ready,
+    EN("Feature model ready."),
+    JA("特徴のモデルの準備ができました。"),
+    ZH_HANS("特征模型已就绪。"), ZH_HANT("特徵模型已就緒。"),
+    KO("특징 모델이 준비되었습니다."), DE("Merkmalsmodell bereit."),
+    FR("Modèle de points caractéristiques prêt."),
+    ES("Modelo de características listo."),
+    PT("Modelo de características pronto."),
+    IT("Modello delle caratteristiche pronto."),
+    NL("Kenmerkmodel gereed."), RU("Модель особых точек готова."),
+    TR("Öznitelik modeli hazır."));
+
+SS_MSG(feat_model_first,
+    EN("the feature model has not been downloaded yet"),
+    JA("特徴のモデルがまだダウンロードされていません"),
+    ZH_HANS("还没有下载特征模型"), ZH_HANT("還沒有下載特徵模型"),
+    KO("특징 모델을 아직 내려받지 않았습니다"),
+    DE("das Merkmalsmodell ist noch nicht heruntergeladen"),
+    FR("le modèle de points caractéristiques n'est pas encore téléchargé"),
+    ES("el modelo de características todavía no está descargado"),
+    PT("o modelo de características ainda não foi baixado"),
+    IT("il modello delle caratteristiche non è ancora stato scaricato"),
+    NL("het kenmerkmodel is nog niet gedownload"),
+    RU("модель особых точек ещё не загружена"),
+    TR("öznitelik modeli henüz indirilmedi"));
+
 SS_MSG(mapper_schedule,
     EN("Mapper schedule"), JA("マッパーの進め方"), ZH_HANS("建图策略"), ZH_HANT("建圖策略"),
     KO("매퍼 진행 방식"), DE("Mapper-Ablauf"), FR("Ordonnancement du mapper"),

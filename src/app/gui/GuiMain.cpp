@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,14 @@ namespace {
 
 void glfw_error_callback(int error, const char* description) {
     std::fprintf(stderr, "[glfw] error %d: %s\n", error, description);
+}
+
+void set_no_auto_fetch() {
+#ifdef _WIN32
+    _putenv_s("SS_NO_AUTO_FETCH", "1");
+#else
+    setenv("SS_NO_AUTO_FETCH", "1", 1);
+#endif
 }
 
 // X11 only. Windows finds the same icon by name in app.rc when GLFW registers
@@ -114,6 +123,10 @@ int spirula_gui_main(int argc, char** argv) {
     // Before anything spawns a child, including the tools this binary re-runs
     // itself as: a Finder launch starts with almost nothing on PATH.
     gui::add_desktop_search_paths();
+    // Checkpoints are fetched by the screen that asked for them, with a
+    // progress bar and a button. Inherited by the children, so nothing this
+    // window starts runs a curl the user did not press anything for.
+    set_no_auto_fetch();
 
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {

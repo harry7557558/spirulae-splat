@@ -165,15 +165,13 @@ const std::vector<GeometryModel>& geometry_models() {
     return kModels;
 }
 
-std::vector<GeometryDownload> geometry_model_downloads(const std::string& id) {
-    std::vector<GeometryDownload> out;
+std::vector<PendingDownload> geometry_model_downloads(const std::string& id) {
+    std::vector<PendingDownload> out;
 #ifdef SS_TOOL_GEOMETRY
-    std::error_code ec;
     auto want = [&](const nn::FetchFile& f) {
         if (!f.file) return;
         const std::string dest = nn::cached_path(f);
-        if (fs::exists(dest, ec)) return;
-        out.push_back({f.url, dest, f.bytes});
+        if (!file_is_cached(dest, f.bytes)) out.push_back({f.url, dest, f.bytes});
     };
     if (const moge::ModelSource* m = moge::find_model_source(id)) {
         want(m->onnx);

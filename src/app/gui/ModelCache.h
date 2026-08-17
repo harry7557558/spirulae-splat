@@ -67,6 +67,11 @@ const LicenseInfo& license_for(const std::string& family);
 std::string model_path(const ModelEntry& e);
 bool model_is_cached(const ModelEntry& e);
 
+// Is `path` a checkpoint of about `bytes` and not a half-finished download?
+// A truncated file that escaped the ".part" rename would fail deep inside a
+// weight loader, and a screen that called it ready would have lied.
+bool file_is_cached(const std::string& path, uint64_t bytes);
+
 // A single background download. One at a time is enough for the GUI, so this
 // is a plain object the screen owns rather than a queue.
 //
@@ -109,6 +114,31 @@ private:
 // The name this used to have, kept because the download it manages is still
 // almost always a model.
 using ModelDownload = FileDownload;
+
+// One file a run needs on disk before it can start.
+struct PendingDownload {
+    std::string url, dest;
+    uint64_t bytes = 0;
+};
+
+// Several of them, fetched one at a time: a checkpoint that comes in two
+// parts, or a front end whose detector and matcher are separate artifacts.
+class DownloadQueue {
+public:
+    // Replaces what was pending. Ignored while a file is in flight.
+    void start(std::vector<PendingDownload> files);
+    // Starts the next file once the last one is done; call it every frame.
+    void pump();
+    void cancel();
+
+    bool running() const { return _dl.state() == FileDownload::State::Running; }
+    // The file in flight, or the last one -- what the progress bar reads.
+    FileDownload& current() { return _dl; }
+
+private:
+    FileDownload _dl;
+    std::vector<PendingDownload> _rest;
+};
 
 // Human-readable size, for a prompt: "707 MB", "1.8 GB".
 std::string human_bytes(uint64_t b);

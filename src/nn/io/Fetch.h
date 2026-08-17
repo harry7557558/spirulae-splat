@@ -32,10 +32,9 @@ struct FetchFile {
 std::string model_cache_dir();
 std::string cached_path(const FetchFile& f);
 
-// A path to a verified local copy, downloading through the system `curl` if
-// needed. `tag` prefixes the progress lines ("aliked", "metric3d"). Throws
-// nn::Error with an actionable message -- including the URL to fetch by hand --
-// when curl is missing, the download fails, or the hash does not match.
+// A verified local copy, fetched with the system `curl` if missing; `tag`
+// prefixes its progress lines. Throws nn::Error naming the URL to fetch by
+// hand -- and, with SS_NO_AUTO_FETCH set, instead of downloading at all.
 std::string ensure_file(const FetchFile& f, const char* tag);
 
 // Lowercase hex SHA-256 of a file's contents. Empty when it cannot be read.

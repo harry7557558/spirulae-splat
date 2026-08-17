@@ -178,6 +178,7 @@ void GuiApp::shutdown() {
     reset_dataset_preview();
     _download.cancel();
     _geom_download.cancel();
+    _feat_download.cancel();
     _font_download.cancel();
     _runner.shutdown();
 }
@@ -1416,9 +1417,10 @@ void GuiApp::frame() {
 
     append_logs();
     run_pending_if_stopped();
-    // vit-giant2 is two files, so the fetch is a queue that has to be stepped
-    // on from somewhere that runs whatever screen is up.
-    pump_geometry_download();
+    // vit-giant2 is two files, and so is ALIKED with LightGlue: both fetches
+    // are queues, stepped on from somewhere that runs whatever screen is up.
+    _geom_download.pump();
+    _feat_download.pump();
     // Before the reload check below: between two batch rows the runner is
     // briefly idle, and a stale _parse_dirty would start a dataset parse right
     // where the next row wants the engine.
@@ -2674,22 +2676,7 @@ bool GuiApp::geometry_model_missing() const {
 }
 
 void GuiApp::request_geometry_download() {
-    if (_geom_download.state() == FileDownload::State::Running) return;
-    _geom_queue = geometry_model_downloads(_geometry.model);
-    pump_geometry_download();
-}
-
-void GuiApp::pump_geometry_download() {
-    if (_geom_download.state() == FileDownload::State::Running) return;
-    // A failed part means the rest is pointless: vit-giant2's weights are
-    // useless without the sibling the graph names.
-    if (_geom_download.state() == FileDownload::State::Failed ||
-        _geom_download.state() == FileDownload::State::Cancelled)
-        _geom_queue.clear();
-    if (_geom_queue.empty()) return;
-    const GeometryDownload d = _geom_queue.front();
-    _geom_queue.erase(_geom_queue.begin());
-    _geom_download.start(d.url, d.dest, d.bytes);
+    _geom_download.start(geometry_model_downloads(_geometry.model));
 }
 
 void GuiApp::open_geometry_preview() {
@@ -2743,26 +2730,23 @@ void GuiApp::draw_geometry_options() {
     }
     ui::TextDisabled(*catalog[(size_t)model_idx].blurb);
 
-    const bool downloading = _geom_download.state() == FileDownload::State::Running;
-    if (downloading) {
+    FileDownload& geom_dl = _geom_download.current();
+    if (_geom_download.running()) {
         // The overlay is a byte count from curl, not a sentence.
-        ui::ProgressBarRaw(std::max(_geom_download.progress(), 0.0f),
-                           ImVec2(px(260.0f), 0), _geom_download.status().c_str());
+        ui::ProgressBarRaw(std::max(geom_dl.progress(), 0.0f),
+                           ImVec2(px(260.0f), 0), geom_dl.status().c_str());
         ImGui::SameLine();
         // The mask download's Stop button carries the same message; two of
         // them can be on screen at once, so this one needs its own ID.
         ImGui::PushID("geomdl");
-        if (ui::Button(dmsg::stop)) {
-            _geom_queue.clear();
-            _geom_download.cancel();
-        }
+        if (ui::Button(dmsg::stop)) _geom_download.cancel();
         ImGui::PopID();
     } else if (geometry_model_missing()) {
         if (ui::Button(dmsg::geom_get_model)) request_geometry_download();
         ImGui::SameLine();
         ui::TextDisabledRaw(human_bytes(catalog[(size_t)model_idx].bytes));
-        if (_geom_download.state() == FileDownload::State::Failed)
-            ui::TextColoredWrappedRaw(kErr, _geom_download.status());
+        if (geom_dl.state() == FileDownload::State::Failed)
+            ui::TextColoredWrappedRaw(kErr, geom_dl.status());
     } else {
         ui::TextColored(kOk, dmsg::geom_model_ready);
     }
@@ -2775,8 +2759,14 @@ void GuiApp::draw_geometry_options() {
     if (!_geometry.want_normal && !_geometry.want_depth)
         ui::TextColoredWrapped(kWarn, dmsg::geom_nothing_to_write);
 
+    // Behind the checkpoint, unlike "Try the mask": there is no half of this
+    // panel that works without one, and opening it would have the panel fetch
+    // the weights itself.
+    ImGui::BeginDisabled(geometry_model_missing());
     if (ui::Button(dmsg::geom_try)) open_geometry_preview();
-    ui::help_on_hover(dmsg::geom_try_help);
+    ImGui::EndDisabled();
+    ui::help_on_hover_disabled(geometry_model_missing() ? dmsg::geom_model_first
+                                                        : dmsg::geom_try_help);
 
     if (ui::CollapsingHeader(dmsg::geom_advanced)) {
         ImGui::SetNextItemWidth(px(220.0f));
@@ -3121,34 +3111,53 @@ void GuiApp::draw_dataset_rerun(const WorkspaceState& prior) {
     ImGui::Indent();
     ui::TextDisabledWrapped(dmsg::rerun_section_help);
 
+    // Each button starts a run of its own, so each is behind exactly the
+    // checkpoints its steps read -- a missing geometry model must not stop a
+    // rerun of the masks.
+    const bool need_mask_model = mask_model_missing();
+    const bool need_feat_model = feature_model_missing();
+
     bool go = false;
     if (prior.frames) {
+        ImGui::BeginDisabled(need_mask_model || need_feat_model);
         if (ui::Button(dmsg::rerun_frames)) {
             _redo_frames = _redo_masks = true;   // the masks describe the frames
             _redo_model = go = true;
         }
+        ImGui::EndDisabled();
+        if (need_mask_model || need_feat_model)
+            ui::help_on_hover_disabled(need_mask_model ? dmsg::mask_model_first
+                                                       : dmsg::feat_model_first);
         ImGui::SameLine();
     }
     if (prior.masks) {
+        ImGui::BeginDisabled(need_mask_model);
         if (ui::Button(dmsg::rerun_masks)) {
             _redo_masks = true;
             _redo_model = go = true;
         }
+        ImGui::EndDisabled();
+        if (need_mask_model) ui::help_on_hover_disabled(dmsg::mask_model_first);
         ImGui::SameLine();
     }
+    ImGui::BeginDisabled(need_feat_model);
     if (ui::Button(dmsg::rerun_model)) {
         _redo_model = go = true;
     }
+    ImGui::EndDisabled();
+    if (need_feat_model) ui::help_on_hover_disabled(dmsg::feat_model_first);
     // Depth and normals are the one step that reruns on its own: they are read
     // off the finished dataset and nothing downstream of them exists.
     if (prior.geometry) {
         ImGui::SameLine();
-        ImGui::BeginDisabled(!_geometry.enable);
+        const bool need_geom_model = geometry_model_missing();
+        ImGui::BeginDisabled(!_geometry.enable || need_geom_model);
         if (ui::Button(dmsg::rerun_geometry)) {
             _redo_geometry = go = true;
         }
         ImGui::EndDisabled();
-        ui::help_on_hover_disabled(dmsg::rerun_geometry_help);
+        ui::help_on_hover_disabled(need_geom_model ? dmsg::geom_model_first
+                                                   : dmsg::rerun_geometry_help);
     }
     ImGui::NewLine();
     ImGui::Unindent();
@@ -3207,6 +3216,46 @@ void GuiApp::draw_color_space_options(bool with_point_color) {
 // Advanced: built-in SfM
 // ---------------------------------------------------------------------------
 
+// Would the reconstruction reach the learned frontend and find no checkpoint?
+// The same question mask_model_missing() asks, of the other download.
+bool GuiApp::feature_model_missing() const {
+    if (effective_engine() != Engine::BuiltIn) return false;
+    return !sfm_features_cached(_sfm_job.features, _sfm_job.matcher);
+}
+
+void GuiApp::request_feature_download() {
+    _feat_download.start(
+        sfm_feature_downloads(_sfm_job.features, _sfm_job.matcher));
+}
+
+// The detector and, with LightGlue, the matcher: what they cost and a button
+// that gets them. Under the two combos that chose them.
+void GuiApp::draw_feature_download() {
+    FileDownload& dl = _feat_download.current();
+    if (_feat_download.running()) {
+        ui::ProgressBarRaw(std::max(dl.progress(), 0.0f), ImVec2(px(260.0f), 0),
+                           dl.status().c_str());
+        ImGui::SameLine();
+        ImGui::PushID("featdl");
+        if (ui::Button(dmsg::stop)) _feat_download.cancel();
+        ImGui::PopID();
+        return;
+    }
+    if (!feature_model_missing()) {
+        ui::TextColored(kOk, dmsg::feat_model_ready);
+        return;
+    }
+    uint64_t bytes = 0;
+    for (const PendingDownload& d :
+         sfm_feature_downloads(_sfm_job.features, _sfm_job.matcher))
+        bytes += d.bytes;
+    if (ui::Button(dmsg::feat_get_model)) request_feature_download();
+    ImGui::SameLine();
+    ui::TextDisabledRaw(human_bytes(bytes));
+    if (dl.state() == FileDownload::State::Failed)
+        ui::TextColoredWrappedRaw(kErr, dl.status());
+}
+
 void GuiApp::draw_sfm_advanced() {
     if (!ui::CollapsingHeader(dmsg::section_advanced)) return;
 
@@ -3236,6 +3285,7 @@ void GuiApp::draw_sfm_advanced() {
         ImGui::EndDisabled();
         ui::help_on_hover(learned ? dmsg::matcher_help
                                   : dmsg::matcher_needs_learned);
+        if (learned) draw_feature_download();
     }
 
     ImGui::SetNextItemWidth(px(260.0f));
@@ -3514,11 +3564,13 @@ void GuiApp::draw_dataset_form(float height, bool running) {
         bool ready = !_sources.empty() && !_workspace.empty();
         for (const PrepInput& s : _sources) ready = ready && !s.path.empty();
         const bool need_mask_model = mask_model_missing();
+        const bool need_feat_model = feature_model_missing();
         const bool need_geom_model = geometry_model_missing();
+        const bool need_model = need_mask_model || need_feat_model || need_geom_model;
         // The button names what pressing it does: a folder that already holds
         // a reconstruction is added to, not built.
         const bool adding = workspace_state().model && !_redo_model;
-        ImGui::BeginDisabled(!ready || need_mask_model || need_geom_model);
+        ImGui::BeginDisabled(!ready || need_model);
         if (ui::Button(adding ? dmsg::update_dataset : dmsg::create_dataset,
                        ImVec2(px(200.0f), px(34.0f))))
             start_dataset_job();
@@ -3526,21 +3578,27 @@ void GuiApp::draw_dataset_form(float height, bool running) {
         if (!ready) {
             ImGui::SameLine();
             ui::TextDisabled(dmsg::pick_input_first);
-        } else if (need_mask_model || need_geom_model) {
+        } else if (need_model) {
             // The options above carry the same buttons, but they are a scroll
-            // away by the time somebody is reaching for this one.
-            FileDownload& dl = need_mask_model ? _download : _geom_download;
+            // away by the time somebody is reaching for this one. One missing
+            // checkpoint at a time; the next takes its place once this lands.
+            FileDownload& dl = need_mask_model ? _download
+                               : need_feat_model ? _feat_download.current()
+                                                 : _geom_download.current();
             ImGui::SameLine();
-            ui::TextDisabled(need_mask_model ? dmsg::mask_model_first
-                                             : dmsg::geom_model_first);
+            ui::TextDisabled(need_mask_model   ? dmsg::mask_model_first
+                             : need_feat_model ? dmsg::feat_model_first
+                                               : dmsg::geom_model_first);
             ImGui::SameLine();
             if (dl.state() == FileDownload::State::Running)
                 ui::ProgressBarRaw(std::max(dl.progress(), 0.0f),
                                    ImVec2(px(200.0f), 0), dl.status().c_str());
-            else if (ui::Button(need_mask_model ? dmsg::mask_get_model
-                                                : dmsg::geom_get_model)) {
-                if (need_mask_model) request_model_download();
-                else                 request_geometry_download();
+            else if (ui::Button(need_mask_model   ? dmsg::mask_get_model
+                                : need_feat_model ? dmsg::feat_get_model
+                                                  : dmsg::geom_get_model)) {
+                if (need_mask_model)      request_model_download();
+                else if (need_feat_model) request_feature_download();
+                else                      request_geometry_download();
             }
         }
         if (ready) draw_dataset_rerun(workspace_state());

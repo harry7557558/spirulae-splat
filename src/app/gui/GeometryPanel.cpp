@@ -377,6 +377,8 @@ void GeometryPanel::start_job(const GeometryJob& settings) {
             // Before the warp: which input sizes round-trip is a property of
             // the network, and the run loads it in the same order.
             const bool just_loaded = j.loaded_model != settings.model;
+            if (just_loaded && !geometry_model_cached(settings.model))
+                return set_error(lmsg::err_geometry_model_not_downloaded.get());
             if (just_loaded) {
                 set_status(dmsg::preview_loading_model);
                 j.loaded_model.clear();

@@ -2476,6 +2476,39 @@ SS_MSG(err_mask_model_not_downloaded,
     TR("Maskeleme modeli henüz indirilmedi. Maskeleme seçeneklerinden getirin "
        "-- bir kez indirilir -- ve işlemi yeniden başlatın."));
 
+SS_MSG(err_geometry_model_not_downloaded,
+    EN("The geometry model has not been downloaded yet. Get it under the depth "
+       "and normal options -- it is a one-time download -- and try again."),
+    JA("ジオメトリのモデルがまだダウンロードされていません。深度と法線の設定から"
+       "取得してください。ダウンロードは初回だけです。そのうえで、もう一度お試し"
+       "ください。"),
+    ZH_HANS("几何模型还没有下载。请在深度与法线选项里获取它，只需下载一次，"
+            "然后再试一次。"),
+    ZH_HANT("幾何模型還沒有下載。請在深度與法線選項裡取得它，只需下載一次，"
+            "然後再試一次。"),
+    KO("기하 모델을 아직 내려받지 않았습니다. 깊이와 법선 설정에서 받으세요. "
+       "내려받기는 한 번뿐입니다. 그런 다음 다시 시도하세요."),
+    DE("Das Geometriemodell ist noch nicht heruntergeladen. Holen Sie es unter "
+       "den Tiefen- und Normalenoptionen -- einmalig -- und versuchen Sie es "
+       "erneut."),
+    FR("Le modèle de géométrie n'est pas encore téléchargé. Obtenez-le dans les "
+       "options de profondeur et de normales -- c'est un téléchargement "
+       "unique -- puis réessayez."),
+    ES("El modelo de geometría todavía no está descargado. Obténgalo en las "
+       "opciones de profundidad y normales -- es una descarga única -- e "
+       "inténtelo de nuevo."),
+    PT("O modelo de geometria ainda não foi baixado. Obtenha-o nas opções de "
+       "profundidade e normais -- é um download único -- e tente de novo."),
+    IT("Il modello di geometria non è ancora stato scaricato. Lo ottenga dalle "
+       "opzioni di profondità e normali -- si scarica una volta sola -- e "
+       "riprovi."),
+    NL("Het geometriemodel is nog niet gedownload. Haal het op bij de opties "
+       "voor diepte en normalen -- eenmalig -- en probeer het opnieuw."),
+    RU("Модель геометрии ещё не загружена. Получите её в настройках глубины и "
+       "нормалей -- загрузка нужна только один раз -- и попробуйте снова."),
+    TR("Geometri modeli henüz indirilmedi. Derinlik ve normal seçeneklerinden "
+       "getirin -- bir kez indirilir -- ve yeniden deneyin."));
+
 SS_MSG(err_mask_missing_packages,
     EN("Mask generation failed: the Python packages are missing. Install "
        "lang-segment-anything (pip install git+https://github.com/"

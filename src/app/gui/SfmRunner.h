@@ -136,6 +136,11 @@ struct SfmJob {
     std::string extra_args;
 };
 
+// What a learned frontend still has to fetch, in order; empty for SIFT with
+// brute force, and empty once both artifacts are cached.
+std::vector<PendingDownload> sfm_feature_downloads(int features, int matcher);
+bool sfm_features_cached(int features, int matcher);
+
 class SfmRunner {
 public:
     enum class State { Idle, Running, Done, Failed, Cancelled };

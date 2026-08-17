@@ -14,6 +14,11 @@
 #include "i18n/catalog/Sfm.h"
 #endif
 
+#if defined(SS_TOOL_SFM) && defined(SS_HAVE_ALIKED) && SS_HAVE_ALIKED
+#include "aliked/model/Fetch.h"
+#include "nn/io/Fetch.h"
+#endif
+
 #ifndef _WIN32
 #include <ftw.h>
 #endif
@@ -102,6 +107,31 @@ bool has_model(const fs::path& sparse) {
 }
 
 }  // namespace
+
+std::vector<PendingDownload> sfm_feature_downloads(int features, int matcher) {
+    std::vector<PendingDownload> out;
+#if defined(SS_TOOL_SFM) && defined(SS_HAVE_ALIKED) && SS_HAVE_ALIKED
+    auto want = [&](const char* id) {
+        const aliked::ModelSource* src = aliked::find_model_source(id);
+        if (!src) return;
+        const std::string dest = nn::cached_path(src->onnx);
+        if (!file_is_cached(dest, src->onnx.bytes))
+            out.push_back({src->onnx.url, dest, src->onnx.bytes});
+    };
+    if (features > 0) want(pick(kFeatures, features));
+    // The matcher combo is only read with a learned frontend, which is what
+    // the command line does too (pick(kMatcher, features == 0 ? 0 : matcher)).
+    if (features > 0 && matcher == 1) want("aliked-lightglue");
+#else
+    (void)features;
+    (void)matcher;
+#endif
+    return out;
+}
+
+bool sfm_features_cached(int features, int matcher) {
+    return sfm_feature_downloads(features, matcher).empty();
+}
 
 std::string SfmRunner::availability() {
 #ifndef SS_TOOL_SFM

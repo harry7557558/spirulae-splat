@@ -92,13 +92,14 @@ std::string model_path(const ModelEntry& e) {
 }
 
 bool model_is_cached(const ModelEntry& e) {
+    return file_is_cached(model_path(e), e.bytes);
+}
+
+bool file_is_cached(const std::string& path, uint64_t bytes) {
     std::error_code ec;
-    const fs::path p = model_path(e);
-    if (!fs::is_regular_file(p, ec)) return false;
-    // A truncated file that somehow escaped the .part rename would fail deep
-    // inside the weight loader with an unhelpful message; catch it here. The
-    // catalog sizes are approximate, so this is a floor, not an equality.
-    return fs::file_size(p, ec) > e.bytes / 2;
+    if (!fs::is_regular_file(path, ec)) return false;
+    // The catalog sizes are approximate, so this is a floor, not an equality.
+    return fs::file_size(path, ec) > bytes / 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +231,34 @@ void FileDownload::run(std::string url, std::string dest,
     }
     log("Saved to " + dst.string());
     _state = State::Done;
+}
+
+// ---------------------------------------------------------------------------
+// Queue
+// ---------------------------------------------------------------------------
+
+void DownloadQueue::start(std::vector<PendingDownload> files) {
+    if (running()) return;
+    _rest = std::move(files);
+    pump();
+}
+
+void DownloadQueue::pump() {
+    if (running()) return;
+    // A part that failed or was stopped makes the rest pointless: half a
+    // checkpoint is not a checkpoint.
+    if (_dl.state() == FileDownload::State::Failed ||
+        _dl.state() == FileDownload::State::Cancelled)
+        _rest.clear();
+    if (_rest.empty()) return;
+    const PendingDownload d = _rest.front();
+    _rest.erase(_rest.begin());
+    _dl.start(d.url, d.dest, d.bytes);
+}
+
+void DownloadQueue::cancel() {
+    _rest.clear();
+    _dl.cancel();
 }
 
 }  // namespace gui
