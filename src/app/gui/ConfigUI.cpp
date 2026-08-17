@@ -34,17 +34,107 @@ namespace {
 constexpr float kFieldWidth = 170.0f;
 const ImVec4 kModifiedColor(1.0f, 0.72f, 0.25f, 1.0f);
 
-bool icontains(const char* hay, const char* needle) {
-    if (!*needle) return true;
-    size_t nlen = std::strlen(needle);
-    for (const char* h = hay; *h; h++) {
-        size_t i = 0;
-        while (i < nlen && h[i] &&
-               std::tolower((unsigned char)h[i]) == std::tolower((unsigned char)needle[i]))
-            i++;
-        if (i == nlen) return true;
+std::vector<std::string> split_choices(const char* choices) {
+    std::vector<std::string> out;
+    std::string ch = choices;
+    size_t pos = 0;
+    while (pos <= ch.size()) {
+        size_t bar = ch.find('|', pos);
+        out.push_back(ch.substr(pos, bar == std::string::npos
+                                         ? std::string::npos : bar - pos));
+        if (bar == std::string::npos) break;
+        pos = bar + 1;
     }
-    return false;
+    return out;
+}
+
+// ---- search ------------------------------------------------------------------
+
+// ASCII only: the catalogs are UTF-8 and std::tolower would mangle a
+// continuation byte under a non-C locale.
+std::string lower_ascii(std::string s) {
+    for (char& c : s)
+        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+    return s;
+}
+
+// The UI's language and English both, since the flag names, `--help` and
+// every config.json are English whatever the labels are showing. NOT all 13:
+// Spanish "superficie" answering an English "sup" is noise, not reach.
+void add_text(std::string& out, const Msg& m) {
+    out += ' ';
+    out += m.get();
+    const char* en = m.in(spirula::i18n::Lang::en);
+    if (en != m.get()) { out += ' '; out += en; }
+}
+
+// Everything one field can be found by.
+std::string field_text(const char* key, const char* section, const Msg& name,
+                       const Msg& help, const char* choices) {
+    std::string s = key;
+    add_text(s, name);
+    add_text(s, help);
+    if (const Msg* m = spirula::i18n::msg::train::section_label(section))
+        add_text(s, *m);
+    for (const std::string& c : split_choices(choices)) {
+        s += ' ';
+        s += c;
+        if (const Msg* m = fld::choice_label(key, c.c_str())) add_text(s, *m);
+    }
+    return lower_ascii(s);
+}
+
+enum : size_t {
+#define SS_FIELD_INDEX(type, member, default_, section, tier, choices)         \
+    kField_##member,
+    SS_CONFIG_FIELDS(SS_FIELD_INDEX)
+#undef SS_FIELD_INDEX
+    kNumFields
+};
+
+const std::vector<std::string>& field_texts() {
+    static std::vector<std::string> texts;
+    static spirula::i18n::Lang built = spirula::i18n::Lang::en;
+    if (texts.size() != kNumFields || built != spirula::i18n::current()) {
+        built = spirula::i18n::current();
+        texts.clear();
+        texts.reserve(kNumFields);
+#define SS_FIELD_TEXT(type, member, default_, section, tier, choices)          \
+        texts.push_back(field_text(#member, section, fld::member,              \
+                                   fld::member##_help, choices));
+        SS_CONFIG_FIELDS(SS_FIELD_TEXT)
+#undef SS_FIELD_TEXT
+    }
+    return texts;
+}
+
+// Space, `_` and `-` all separate, so `depth sup`, `depth-sup` and
+// `depth_sup` are one query, and each token may match anywhere: `depth weight`
+// finds depth_supervision_weight without naming what is between them.
+std::vector<std::string> query_tokens(const char* q) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (const char* c = q;; c++) {
+        if (*c && !std::strchr(" \t_-+/,.", *c)) { cur += *c; continue; }
+        if (!cur.empty()) { out.push_back(lower_ascii(cur)); cur.clear(); }
+        if (!*c) break;
+    }
+    return out;
+}
+
+void refresh_matches(ConfigUIState& st) {
+    // The language is part of the key: switching it rebuilds the texts below.
+    std::string query = st.search +
+                        std::to_string((unsigned)spirula::i18n::current());
+    if (st.match.size() == kNumFields && st.match_query == query) return;
+    st.match_query = query;
+    st.match.assign(kNumFields, 1);
+    std::vector<std::string> tokens = query_tokens(st.search);
+    if (tokens.empty()) return;
+    const std::vector<std::string>& texts = field_texts();
+    for (size_t i = 0; i < kNumFields; i++)
+        for (const std::string& t : tokens)
+            if (texts[i].find(t) == std::string::npos) { st.match[i] = 0; break; }
 }
 
 // ---- value -> display string (tooltips / reset labels) ---------------------
@@ -66,20 +156,6 @@ template <typename T, size_t N> std::string value_str(const std::array<T, N>& v)
 }
 
 // ---- per-type widgets -------------------------------------------------------
-
-std::vector<std::string> split_choices(const char* choices) {
-    std::vector<std::string> out;
-    std::string ch = choices;
-    size_t pos = 0;
-    while (pos <= ch.size()) {
-        size_t bar = ch.find('|', pos);
-        out.push_back(ch.substr(pos, bar == std::string::npos
-                                         ? std::string::npos : bar - pos));
-        if (bar == std::string::npos) break;
-        pos = bar + 1;
-    }
-    return out;
-}
 
 bool draw_value(const char*, bool& v, const char*) {
     return ui::CheckboxRaw("##v", &v);
@@ -275,51 +351,75 @@ bool draw_config_editor(TrainConfig& cfg, const TrainConfig& defaults,
                        : st.tier >= kNumTierChoices - 1 ? kTrainNumTiers - 1
                                                         : st.tier;
 
-    // Search matches the flag name as well as the translated text: someone
-    // who read `--help` or a config.json types `depth_distortion_reg`, and
-    // someone who did not types what they see.
-    auto passes = [&](const char* key, const char* tier, const Msg& name,
-                      const Msg& help, bool modified) {
+    refresh_matches(st);
+    auto passes = [&](size_t idx, const char* key, const char* tier,
+                      bool modified) {
         if (gui_managed(key)) return false;
         if (train_tier_rank(tier) > max_tier) return false;
         if (st.modified_only && !modified) return false;
-        if (st.search[0] && !icontains(key, st.search) &&
-            !icontains(name.get(), st.search) && !icontains(help.get(), st.search))
-            return false;
-        return true;
+        return st.match[idx] != 0;
     };
+
+    // A filter change is what opens sections; between changes the fold state
+    // is the user's, so a section can be collapsed while the filter is on.
+    const std::string filter_key =
+        searching ? std::string(st.search) + (st.modified_only ? "\x01" : "")
+                  : std::string();
+    const bool filter_changed = filter_key != st.filter_key;
+    if (filter_changed) {
+        if (searching && !st.filtering) {
+            std::memcpy(st.saved_open, st.open, sizeof st.open);
+            std::memset(st.sticky, 0, sizeof st.sticky);
+        } else if (!searching) {
+            for (int i = 0; i < kTrainNumSections; i++)
+                st.open[i] = st.sticky[i] ? st.sticky[i] > 0 : st.saved_open[i];
+        }
+        st.filter_key = filter_key;
+        st.filtering = searching;
+    }
 
     // Pass 1: per-section visible-field counts (sections are contiguous in
     // the field table, so pass 2 can stream headings).
     int vis[kTrainNumSections] = {0};
 #define SS_COUNT(type, member, default_, section, tier, choices)               \
-    if (passes(#member, tier, fld::member, fld::member##_help,                 \
+    if (passes(kField_##member, #member, tier,                                 \
                !(cfg.member == defaults.member)))                              \
         vis[train_section_index(section)]++;
     SS_CONFIG_FIELDS(SS_COUNT)
 #undef SS_COUNT
 
+    if (filter_changed && searching)
+        for (int i = 0; i < kTrainNumSections; i++)
+            if (vis[i]) st.open[i] = true;
+
     // Pass 2: draw.
     bool any_changed = false;
     const char* cur_section = "";
     bool section_open = false;
+    int cur_index = 0;
 #define SS_DRAW(type, member, default_, section, tier, choices)                \
     if (std::strcmp(cur_section, section) != 0) {                              \
         cur_section = section;                                                 \
-        if (vis[train_section_index(section)] == 0) {                          \
+        cur_index = train_section_index(section);                              \
+        if (vis[cur_index] == 0) {                                             \
             section_open = false;                                              \
         } else {                                                               \
-            if (searching) ImGui::SetNextItemOpen(true);                       \
+            ImGui::SetNextItemOpen(st.open[cur_index]);                        \
             section_open = ui::CollapsingHeader(section_label(section));       \
+            if (section_open != st.open[cur_index]) {                          \
+                st.open[cur_index] = section_open;                             \
+                if (searching) st.sticky[cur_index] = section_open ? 1 : -1;   \
+            }                                                                  \
         }                                                                      \
     }                                                                          \
     if (section_open &&                                                        \
-        passes(#member, tier, fld::member, fld::member##_help,                 \
+        passes(kField_##member, #member, tier,                                 \
                !(cfg.member == defaults.member)) &&                            \
         field_row(#member, fld::member, fld::member##_help,                    \
                   cfg.member, defaults.member, choices)) {                     \
         any_changed = true;                                                    \
         st.touched.insert(#member);                                            \
+        if (searching) st.sticky[cur_index] = 1;                               \
     }
     SS_CONFIG_FIELDS(SS_DRAW)
 #undef SS_DRAW

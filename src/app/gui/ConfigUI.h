@@ -22,6 +22,7 @@
 
 #include <set>
 #include <string>
+#include <vector>
 
 namespace gui {
 
@@ -35,6 +36,19 @@ struct ConfigUIState {
     // a macro's reach for good -- see train_resolve_macros(). Reset when the
     // whole config is, i.e. on a preset change.
     std::set<std::string> touched;
+
+    // Section fold state, ours rather than ImGui's: filtering force-opens the
+    // sections it hits, and clearing the filter restores what was open before
+    // it, keeping what the user opened or edited while it was on.
+    bool open[kTrainNumSections] = {};
+    bool saved_open[kTrainNumSections] = {};
+    signed char sticky[kTrainNumSections] = {};   // -1 closed, +1 open, 0 unset
+    std::string filter_key;
+    bool filtering = false;
+
+    // What `search` matches, per field; recomputed when the box changes.
+    std::string match_query;
+    std::vector<char> match;
 };
 
 // How one value of a `choices` field is written in a dropdown: the value
