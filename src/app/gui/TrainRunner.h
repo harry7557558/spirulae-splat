@@ -85,10 +85,8 @@ public:
     // Latest per-step progress (copy).
     spirula::TrainerProgress latest_progress();
     double eta_seconds();         // < 0 when unknown
-    // Since the step loop began -- not since Start, so that it and the ETA
-    // add up to the run rather than counting the parse and engine setup.
-    // < 0 before training, and frozen once the loop ends.
-    double elapsed_seconds();
+    // Since the step loop began
+    double elapsed_seconds();       //< 0 before training, and frozen once the loop ends.
     void get_metrics(std::vector<MetricPoint>& out);
     std::vector<std::string> drain_log();
 
