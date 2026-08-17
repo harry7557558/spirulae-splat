@@ -39,7 +39,10 @@ DIVIDER = re.compile(r"^[=\-*_~#+<>.!/ ]*$")
 
 
 def run(args):
-    p = subprocess.run(args, capture_output=True, text=True)
+    # Explicit utf-8: text=True decodes with the locale codec, and a diff
+    # touching i18n/catalog/ is full of bytes cp1252 has no character for.
+    p = subprocess.run(args, capture_output=True, encoding="utf-8",
+                       errors="replace")
     return p.stdout if p.returncode == 0 else None
 
 
