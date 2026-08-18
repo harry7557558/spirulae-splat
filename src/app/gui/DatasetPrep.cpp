@@ -55,7 +55,7 @@ inline std::string fmt(const spirula::i18n::Msg& m,
 namespace gui {
 
 const char* const kVideoExtensions[kNumVideoExtensions] = {
-    ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".insv", ".avi",
+    ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".insv", ".osv", ".avi",
     ".mts", ".m2ts", ".360", ".ts", ".wmv",
 };
 
@@ -462,7 +462,7 @@ bool is_video_path(const std::string& path) {
 }
 
 bool is_dual_fisheye_path(const std::string& path) {
-    return lower_ext(path) == ".insv";
+    return lower_ext(path) == ".insv" || lower_ext(path) == ".osv";
 }
 
 // ---------------------------------------------------------------------------

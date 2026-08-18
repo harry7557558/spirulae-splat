@@ -1171,7 +1171,8 @@ static PrepInput make_source(const std::string& path,
     s.camera_model = "opencv";
     if (is_dual_fisheye_path(path)) {
         s.camera_model = "thin-prism-fisheye";
-        s.focal_factor = kInsta360FocalFactor;
+        // Commented - We don't assume every camera is Insta360 X5
+        // s.focal_factor = kInsta360FocalFactor;
     }
     return s;
 }

@@ -180,11 +180,7 @@ void SegmentPanel::start_detect() {
             bool decoded = false;
 #ifdef SS_HAVE_VIDEO
             if (builtin) {
-                // The decoder cannot seek, so this reads forward from the
-                // start. Frames are cheap (~1000 per second) and a fit only
-                // needs the camera to have moved, which a few seconds of a
-                // handheld capture gives; reading the whole file would not buy
-                // a better circle.
+                // The decoder cannot seek, so this reads forward from the start.
                 video::VideoReader r;
                 if (r.open(input)) {
                     const long long total = std::max(1LL, (long long)r.info().frame_count);

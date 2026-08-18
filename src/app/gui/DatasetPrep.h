@@ -205,7 +205,7 @@ const Backends& backends();
 
 // Video container extensions the GUI offers, in the file dialog and for
 // drag-and-drop. Sized here so a range-for over it works from another TU.
-inline constexpr int kNumVideoExtensions = 12;
+inline constexpr int kNumVideoExtensions = 13;
 extern const char* const kVideoExtensions[kNumVideoExtensions];
 
 // Does this path name one of them? (Extension only; the file need not exist.)
