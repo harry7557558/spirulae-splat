@@ -17,6 +17,7 @@
 #include "app/webviewer/Viewer.h"
 
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -84,6 +85,8 @@ public:
     // Latest per-step progress (copy).
     spirula::TrainerProgress latest_progress();
     double eta_seconds();         // < 0 when unknown
+    // Since the step loop began
+    double elapsed_seconds();       //< 0 before training, and frozen once the loop ends.
     void get_metrics(std::vector<MetricPoint>& out);
     std::vector<std::string> drain_log();
 
@@ -99,6 +102,8 @@ private:
 
     mutable std::mutex _mu;       // guards everything below
     std::string _error;
+    std::chrono::steady_clock::time_point _train_start{};  // {} = not started
+    std::chrono::steady_clock::time_point _train_end{};    // {} = still running
     spirula::TrainerProgress _latest;
     std::deque<double> _latencies;
     std::vector<MetricPoint> _metrics;

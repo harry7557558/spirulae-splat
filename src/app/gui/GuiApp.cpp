@@ -60,7 +60,7 @@ std::string format_gib(uint64_t bytes) {
     return buf;
 }
 
-std::string format_eta(double s) {
+std::string format_duration(double s) {
     if (s < 0) return "--:--";
     int t = (int)(s + 0.5);
     char buf[32];
@@ -5161,10 +5161,12 @@ void GuiApp::draw_status_strip() {
         char ms[32];
         std::snprintf(ms, sizeof ms, "%.0f", p.step_latency * 1000.0);
         ui::Text(_runner.paused() ? msg::status_rate_paused : msg::status_rate,
-                 {ms, format_eta(_runner.eta_seconds()),
+                 {ms, format_duration(_runner.elapsed_seconds()),
+                  format_duration(_runner.eta_seconds()),
                   format_count((double)p.num_splats)});
     } else if (ph == TrainRunner::Phase::Done && p.total_steps > 0) {
-        ui::ProgressBar(1.0f, ImVec2(-8, 0), msg::status_done_steps, {p.step + 1});
+        ui::ProgressBar(1.0f, ImVec2(-8, 0), msg::status_done_steps,
+                        {p.step + 1, format_duration(_runner.elapsed_seconds())});
         ui::TextDisabled(msg::status_explore);
     } else if (ph == TrainRunner::Phase::Preparing) {
         ui::ProgressBar(-(float)ImGui::GetTime(), ImVec2(-8, 0),
