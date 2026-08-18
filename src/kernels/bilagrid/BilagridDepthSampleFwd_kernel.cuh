@@ -70,6 +70,13 @@ __global__ void bilagrid_depth_uniform_sample_forward_kernel(
 #endif
     sr *= scalar;
 
+    // 0 is "no ground truth here"; the log-linear transform below would map it
+    // to whatever exp(a*log(0)+b) rounds to on this backend.
+    if (!(sr > 0.0f)) {
+        output[g_offset] = 0.0f;
+        return;
+    }
+
     // grid coords
 #ifdef PATCHED
     offsets += (ni * m + mi) * 2;

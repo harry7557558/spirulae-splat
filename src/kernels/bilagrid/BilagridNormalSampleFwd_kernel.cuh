@@ -61,6 +61,17 @@ __global__ void bilagrid_normal_uniform_sample_forward_kernel(
     float sr = normal_in[g_offset+0];
     float sg = normal_in[g_offset+1];
     float sb = normal_in[g_offset+2];
+
+    // "No normal here" (core/Interpolation.cuh's gt_normal_valid) must survive
+    // the grid: normalizing it would hand the loss a plausible direction to
+    // train the sky and the unwarped corners against.
+    if (!(sr + sg + sb > -2.366f && sr*sr + sg*sg + sb*sb > 0.25f)) {
+        normal_out[g_offset+0] = sr;
+        normal_out[g_offset+1] = sg;
+        normal_out[g_offset+2] = sb;
+        return;
+    }
+
     float inv_norm = rsqrtf(sr*sr + sg*sg + sb*sb + 1e-20f);
 
     // grid coords

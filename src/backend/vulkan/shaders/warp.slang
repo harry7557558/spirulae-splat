@@ -180,8 +180,8 @@ bool _wp_bilinear_normal(uint* buf, int kind, gindex_t plane, int H, int W,
         float3 n = float3(_wp_load(buf, base + 0, kind),
                           _wp_load(buf, base + 1, kind),
                           _wp_load(buf, base + 2, kind)) * norm_inv + decode_off;
-        // Black decodes to -1 per channel; a float map spells "no data" as 0.
-        if (n.x + n.y + n.z <= -2.366f || dot(n, n) <= 1e-12f) continue;
+        // GT normal validity: core/Interpolation.cuh's gt_normal_valid.
+        if (n.x + n.y + n.z <= -2.366f || dot(n, n) <= 0.25f) continue;
         acc += t.w[q] * n;
         wsum += t.w[q];
     }
@@ -254,17 +254,16 @@ float2 _wp_equi_uv(float3 raydir, int h, int w) {
         0.5f * float(h) + f * atan2(raydir.y, length(float2(raydir.x, raydir.z))));
 }
 
-// _wide_depth_to_face_ray_depth mirror: convert a sampled wide-frame depth
-// to per-face RAY depth. Linear (z) input is divided by cos(theta) w.r.t.
-// the INPUT optical axis; rays at/behind the input +z plane are dropped.
-// d <= 0 is the invalid sentinel.
+// _wide_depth_to_face_ray_depth mirror: linear (z) input divides by cos(theta)
+// off the INPUT axis, and past 85 degrees that secant is too steep to supervise
+// on. d <= 0 is the invalid sentinel.
 [ForceInline]
 float _wp_face_ray_depth(float d, float3 raydir, bool input_is_ray_depth) {
     if (d <= 0.0f) return 0.0f;
     if (input_is_ray_depth) return d;
     float rl = length(raydir);
     float rz = raydir.z;
-    if (rz <= 1e-6f * rl) return 0.0f;
+    if (rz <= 0.08715574f * rl) return 0.0f;   // cos(85 deg)
     return d * rl / rz;
 }
 

@@ -541,14 +541,14 @@ no ceremony — do not ask, do not leave a note saying you removed it.
   geometry`'s resampling both call. A third copy is a bug waiting to be found
   by nobody -- `spirula geometry --check` is what tests the host one, by
   round-tripping an analytic plane through every camera model.
-- **"Is this lens too wide for one pinhole?" is asked in two places and must
-  get the same answer.** `spirula geometry --split auto` splits a frame into
-  pinhole faces and then writes RAY depth; the trainer's
+- **"Is this lens too wide for one pinhole?" is asked in three places and must
+  get the same answer.** `spirula geometry --split auto` (CLI and GUI panel)
+  splits a frame into pinhole faces and then writes RAY depth; the trainer's
   `--input-depth-is-ray-depth`, left unset, has to know that happened, and the
-  two never meet. Both call `camhost::pinhole_coverage` against the same 0.75,
-  which is deliberately blind to the distortion coefficients so the answer
-  cannot move between builds. `--check` compares the closed form to counting
-  the pixels.
+  two never meet. All of them call `camhost::splits_to_pinhole_faces`, which
+  owns the 0.75 threshold and is deliberately blind to the distortion
+  coefficients so the answer cannot move between builds. `--check` compares the
+  closed form to counting the pixels.
 - **Two monocular geometry models sit behind `spirula geometry`, and they
   answer different questions.** Metric3D v2 predicts depth; MoGe-2 predicts an
   affine POINT MAP that needs the camera's focal length to become one, plus a

@@ -676,15 +676,9 @@ void ray_depth_to_linear_depth_backward(
 }
 
 
-// In-place conversion of LINEAR (z) depth to RAY depth (Euclidean distance
-// along the camera ray). Used for supervision depth maps that store linear
-// depth while the rasterizer renders ray depth. We reuse
-// ray_depth_to_linear_depth_factor (linear = ray * factor, factor =
-// sign(z)/length(raydir)); the inverse is ray = linear / factor. The
-// intrinsics are at the *image* resolution; (sx, sy) rescale them to the depth
-// map resolution (depth maps may differ in size from the rendered image). The
-// zero sentinel (no GT) and degenerate rays (undistort failure -> factor 0)
-// map to 0 (i.e. "no supervision here").
+// LINEAR (z) -> RAY depth in place. Intrinsics come in at the IMAGE
+// resolution; (sx, sy) rescale them to the depth map's own. The zero sentinel,
+// a failed undistort and anything past 85 degrees off axis all leave 0.
 template<CameraDistortionType distortion>
 __global__ void linear_depth_to_ray_depth_inplace_kernel(
     CameraModelType camera_model,
@@ -716,7 +710,8 @@ __global__ void linear_depth_to_ray_depth_inplace_kernel(
         {fx, fy, cx, cy}, dist_coeffs,
         (int)camera_model
     );
-    float out_depth = (factor > 0.0f) ? (in_depth / factor) : 0.0f;
+    // factor is cos(theta); 0.08715574 is cos(85 deg).
+    float out_depth = (factor > 0.08715574f) ? (in_depth / factor) : 0.0f;
     depths.store1(bid, j, i, out_depth);
 }
 

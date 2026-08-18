@@ -69,9 +69,12 @@ __device__ __forceinline__ bool revalidate_weights(
 
 __device__ __forceinline__ bool gt_depth_valid(float d) { return d > 0.0f; }
 
+// A GT normal is a unit vector: black (sum <= -2.366) and mid-grey (length
+// ~0) are both "no normal here". 0.25 is what `spirula geometry` writes with,
+// and a blend of unit normals only falls under it past 120 degrees apart.
 __device__ __forceinline__ bool gt_normal_valid(float3 n) {
     return n.x + n.y + n.z > -2.366f &&
-           n.x * n.x + n.y * n.y + n.z * n.z > 1e-12f;
+           n.x * n.x + n.y * n.y + n.z * n.z > 0.25f;
 }
 
 } // namespace _bilinear_detail

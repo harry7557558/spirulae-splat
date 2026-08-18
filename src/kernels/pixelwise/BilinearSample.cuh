@@ -228,8 +228,8 @@ inline __device__ bool bilinear_normal_valid(
             (float)image.at(bid, yv, t.x[xi], 0) * norm_inv + decode_off,
             (float)image.at(bid, yv, t.x[xi], 1) * norm_inv + decode_off,
             (float)image.at(bid, yv, t.x[xi], 2) * norm_inv + decode_off);
-        // Black decodes to -1 per channel; a float map spells "no data" as 0.
-        if (n.x + n.y + n.z <= -2.366f || dot(n, n) <= 1e-12f) continue;
+        // GT normal validity: core/Interpolation.cuh's gt_normal_valid.
+        if (n.x + n.y + n.z <= -2.366f || dot(n, n) <= 0.25f) continue;
         acc  += t.w[q] * n;
         wsum += t.w[q];
     }

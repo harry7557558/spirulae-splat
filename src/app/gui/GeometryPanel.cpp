@@ -397,8 +397,8 @@ void GeometryPanel::start_job(const GeometryJob& settings) {
             const int oh = std::max(patch, (int)(cam.height * s) / patch * patch);
             const bool split =
                 settings.split == 0
-                    ? camhost::pinhole_coverage(cam.model, cam.width, cam.height,
-                                                cam.fx, cam.fy) <= 0.75
+                    ? camhost::splits_to_pinhole_faces(cam.model, cam.width,
+                                                       cam.height, cam.fx, cam.fy)
                     : settings.split == 1;
             app::GeometryWarp warp;
             warp.plan(cam, ow, oh, split, patch, settings.max_size);

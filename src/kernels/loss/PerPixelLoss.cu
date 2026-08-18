@@ -656,9 +656,10 @@ __global__ void avg_pool_downsample_gt_geometry_kernel(
             if (channels == 1) {
                 if (!(v[0] > 0.0f)) continue;
             } else {
+                // core/Interpolation.cuh's gt_normal_valid.
                 float s = v[0] + v[1] + v[2];
                 float l2 = v[0]*v[0] + v[1]*v[1] + v[2]*v[2];
-                if (!(s > -2.366f && l2 > 1e-12f)) continue;
+                if (!(s > -2.366f && l2 > 0.25f)) continue;
             }
             for (int c = 0; c < channels; ++c) acc[c] += v[c];
             ++n;

@@ -150,14 +150,13 @@ float[RawLossIndex::length] per_pixel_losses(
     // so the mean-vs-median L1 term sees the raw linear depth.
     float mean_depth_raw = render_depth;
 
-    // Derive per-pixel validity masks (was passed in as 4 separate bool buffers).
-    //   mask         (RGB)          : 1 if no external mask, else gt_alpha.
-    //   depth_mask                  : ref_depth != 0 (sentinel for "no gt").
-    //   normal_mask                 : sum(ref_normal) > -2.366 (sentinel).
-    //   alpha_mask  (alpha sup)     : same as depth_mask (current semantics).
+    // Per-pixel validity. 0 depth is the "no gt" sentinel and drives the alpha
+    // supervision as well; normal_mask is gt_normal_valid, spelled out here
+    // because core/Interpolation.cuh is CUDA-only.
     bool mask = has_mask ? ref_alpha : true;
     bool depth_mask = (ref_depth != 0.0f);
-    bool normal_mask = (ref_normal.x + ref_normal.y + ref_normal.z > -2.366f);
+    bool normal_mask = (ref_normal.x + ref_normal.y + ref_normal.z > -2.366f &&
+                        dot(ref_normal, ref_normal) > 0.25f);
     bool alpha_mask = (ref_depth != 0.0f);
 
     // RGB - L1 and L2, plus YUV (BT.601) per-channel L1/L2, for training.

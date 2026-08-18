@@ -154,10 +154,10 @@ changing any of it:
 
 Uncovered pixels are written **black** in the normal map and **0** in the
 depth map, which are the two sentinels the loss masks on
-(`sum(ref_normal) > -2.366` and `ref_depth != 0`). Mid-grey is only what the
-*model's input* gets, where a black border would read as an edge; carrying it
-into the output would supervise everything behind a fisheye's dead corners
-towards a normal of zero.
+(`gt_normal_valid` and `ref_depth != 0`). Mid-grey is only what the *model's
+input* gets, where a black border would read as an edge; it is never carried
+into the output, and the loss drops it as well -- a real normal is unit
+length, and mid-grey decodes to zero.
 
 The faces are private to this warp -- the output is written in the source
 camera's frame, and a training run that splits the same capture does its own

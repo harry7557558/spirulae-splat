@@ -47,11 +47,13 @@ bool generate_ray(double u, double v, int model, int tier, const float* d, doubl
 bool project_ray(const double ray[3], int model, int tier, const float* d, double out[2]);
 
 // What fraction of this frame ONE pinhole undistortion at the same intrinsics
-// keeps: 1 for perspective, 0 for a panorama, a closed-form integral for the
-// two angular models. Blind to the distortion coefficients and to cx / cy on
-// purpose -- measuring the real lens is an iterative solve, and a threshold
-// that flips under -ffast-math is a dataset that trains differently on two
-// machines. Both callers are in AGENTS.md, and they must not disagree.
+// keeps. Blind to the distortion coefficients and to cx / cy on purpose: a
+// threshold that flips under -ffast-math trains differently on two machines.
 double pinhole_coverage(int model, int width, int height, double fx, double fy);
+
+// Whether `spirula geometry --split auto` resamples this lens into pinhole
+// faces, and so whether the depth map it wrote is RAY depth. The trainer's
+// --input-depth-is-ray-depth default asks this rather than re-spelling it.
+bool splits_to_pinhole_faces(int model, int width, int height, double fx, double fy);
 
 }  // namespace camhost

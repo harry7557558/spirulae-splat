@@ -26,6 +26,12 @@ python3 tools/codegen/generate_backend_api.py
 # generate_vulkan_stubs.py takes arguments; see below
 ```
 
+The one exception is `src/shaders/build.bash`, which runs from `src/` and needs
+`slangc` on PATH. **The dev build scripts do NOT run it.** Editing anything
+under `src/shaders/` and skipping it leaves the two backends computing
+different things: Vulkan compiles the Slang, CUDA compiles the committed
+`src/generated/*.cuh`.
+
 ---
 
 ## `generate_headers.py` — `.cu` → `.cuh` declarations

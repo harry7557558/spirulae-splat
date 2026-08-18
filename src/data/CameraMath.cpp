@@ -204,4 +204,10 @@ double pinhole_coverage(int model, int width, int height, double fx, double fy) 
     return std::fmin(1.0, area / (2.0 * U * V));
 }
 
+bool splits_to_pinhole_faces(int model, int width, int height, double fx,
+                             double fy) {
+    // A quarter of the frame is what one undistortion may throw away.
+    return pinhole_coverage(model, width, height, fx, fy) <= 0.75;
+}
+
 }  // namespace camhost

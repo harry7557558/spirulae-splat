@@ -344,12 +344,14 @@ int self_check() {
         const float zero[kCameraDistortionParams] = {};
         const int tier = (int)CameraDistortionType::None;
         const double got = camhost::pinhole_coverage(c.model, c.w, c.h, c.fx, c.fy);
+        const char* verdict = camhost::splits_to_pinhole_faces(
+            c.model, c.w, c.h, c.fx, c.fy) ? "split" : "undistort";
         // Only the two angular models integrate anything; a perspective lens
         // is 1 by definition and a panorama is 0 by fiat.
         if (c.model != (int)CameraModelType::FISHEYE &&
             c.model != (int)CameraModelType::EQUISOLID) {
             std::printf("  ok   %-30s coverage %.4f  (by definition)   %s\n", c.name,
-                        got, got <= 0.75 ? "split" : "undistort");
+                        got, verdict);
             continue;
         }
         int64_t inside = 0, total = 0;
@@ -369,8 +371,7 @@ int self_check() {
         const bool ok = std::fabs(got - want) < 0.01;
         if (!ok) ++failures;
         std::printf("  %s %-30s coverage %.4f  (counted %.4f)  %s\n",
-                    ok ? "ok  " : "FAIL", c.name, got, want,
-                    got <= 0.75 ? "split" : "undistort");
+                    ok ? "ok  " : "FAIL", c.name, got, want, verdict);
     }
 
     std::printf("\n%s\n", failures ? "FAILURES" : "camera round trip is exact");
@@ -523,13 +524,10 @@ int spirula_geometry_main(int argc, char** argv) {
             const int ow = std::max(patch, (int)(cam.width * s) / patch * patch);
             const int oh = std::max(patch, (int)(cam.height * s) / patch * patch);
 
-            // The rule the trainer's --input-depth-is-ray-depth resolves with
-            // too: split when one undistortion would throw away more than a
-            // quarter of the frame (data/CameraMath.h).
             const bool split =
                 o.split == Tri::Auto
-                    ? camhost::pinhole_coverage(cam.model, cam.width, cam.height,
-                                                cam.fx, cam.fy) <= 0.75
+                    ? camhost::splits_to_pinhole_faces(cam.model, cam.width,
+                                                       cam.height, cam.fx, cam.fy)
                     : o.split == Tri::Yes;
             warps[g].plan(cam, ow, oh, split, patch, o.max_size);
 
@@ -637,9 +635,8 @@ int spirula_geometry_main(int argc, char** argv) {
                 job.image.channels = 3;
                 job.image.data.resize(normal.size());
                 // BLACK is the trainer's "no normal here": it decodes
-                // byte/127.5 - 1 and masks on sum <= -2.366
-                // (shaders/per_pixel_losses.slang), which mid-grey passes as a
-                // valid normal of zero. A unit normal sums to at least -1.732.
+                // byte/127.5 - 1 and masks on a sum <= -2.366 or a length
+                // under 0.25 (core/Interpolation.cuh's gt_normal_valid).
                 for (size_t p = 0; p * 3 < normal.size(); ++p) {
                     const float* v = &normal[p * 3];
                     uint8_t* out = &job.image.data[p * 3];

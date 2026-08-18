@@ -336,7 +336,9 @@ void lin_to_ray_depth(uint3 gtid: SV_DispatchThreadID,
     float in_depth = p.depths[o];
     float factor = 0.0f;
     SS_DISPATCH_DIST(_l2r_call)
-    p.depths[o] = (factor > 0.0f) ? (in_depth / factor) : 0.0f;
+    // factor is cos(theta); 0.08715574 is cos(85 deg), past which 1/cos turns
+    // a pixel of depth quantization into metres of GT.
+    p.depths[o] = (factor > 0.08715574f) ? (in_depth / factor) : 0.0f;
 }
 
 // ---------------------------------------------------------------------------

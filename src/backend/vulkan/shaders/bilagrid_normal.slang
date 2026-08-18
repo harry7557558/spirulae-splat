@@ -144,6 +144,15 @@ void bilagrid_normal_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float sr = p.normal_in[g_off3 + 0];
     float sg = p.normal_in[g_off3 + 1];
     float sb = p.normal_in[g_off3 + 2];
+
+    // "No normal here" must survive the grid; see the CUDA kernel.
+    if (!(sr + sg + sb > -2.366f && sr * sr + sg * sg + sb * sb > 0.25f)) {
+        p.output[g_off3 + 0] = sr;
+        p.output[g_off3 + 1] = sg;
+        p.output[g_off3 + 2] = sb;
+        return;
+    }
+
     float inv_norm = 1.0f / sqrt(sr * sr + sg * sg + sb * sb + 1e-20f);
 
     float gz = 0.5f + 0.5f * sb * inv_norm;

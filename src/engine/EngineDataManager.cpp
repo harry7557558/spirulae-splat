@@ -240,7 +240,8 @@ static TorchTensorView _tv_null() { return {0, 0, {}}; }
 // depth and normal GT too, which costs the linear->ray conversion.
 static void _install_and_forward(const DecodedBatch& b, std::string primitive,
                                  int sh_degree, bool packed,
-                                 bool with_geometry = false) {
+                                 bool with_geometry = false,
+                                 bool input_depth_is_ray_depth = true) {
     const bool geom = with_geometry;
     if (b.K <= 1 && b.input_source_models.empty()) {
         set_camera_params((int)b.width, (int)b.height,
@@ -250,7 +251,7 @@ static void _install_and_forward(const DecodedBatch& b, std::string primitive,
         set_training_data(b.rgb_view,
                           geom ? b.depth_view : _tv_null(),
                           geom ? b.normal_view : _tv_null(),
-                          b.mask_view, true);
+                          b.mask_view, input_depth_is_ray_depth);
     } else {
         // b.model / b.distortion are already PINHOLE / NONE when K > 1; at
         // K == 1 (re-distort) they are the camera the parser fitted.
@@ -268,7 +269,7 @@ static void _install_and_forward(const DecodedBatch& b, std::string primitive,
             geom ? (int)b.depth_height : 0, geom ? (int)b.depth_width : 0,
             geom ? b.normal_view : _tv_null(),
             geom ? (int)b.normal_height : 0, geom ? (int)b.normal_width : 0,
-            true,
+            input_depth_is_ray_depth,
             b.input_intrins_view, b.input_dist_coeffs_view,
             b.input_source_models_view, b.input_source_params_view,
             (uint64_t)b.axes_dev);
@@ -296,7 +297,8 @@ int engine_eval_forward(std::string primitive, int sh_degree, bool packed) {
 }
 
 int engine_preview_forward(int index, std::string primitive, int sh_degree,
-                           bool packed, bool apply_color_correction) {
+                           bool packed, bool apply_color_correction,
+                           bool input_depth_is_ray_depth) {
     if (!engine().dm)
         throw std::runtime_error(
             "engine_preview_forward: DataManager not configured — call "
@@ -309,7 +311,7 @@ int engine_preview_forward(int index, std::string primitive, int sh_degree,
     // With the geometry GT: this is the panel that shows what the loss
     // compares, and the depth and normal rows are half of that.
     _install_and_forward(b, std::move(primitive), sh_degree, packed,
-                         /*with_geometry=*/true);
+                         /*with_geometry=*/true, input_depth_is_ray_depth);
 
     if (apply_color_correction) {
         // POST-split camera ids, the same ones the training step hands the

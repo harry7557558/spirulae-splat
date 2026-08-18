@@ -16,14 +16,9 @@
 // float at the POST-split (render) resolution, so the loss kernel's bilinear
 // sampler collapses to a 1:1 read (same projection as the rendered face).
 
-// Convert a sampled wide-frame depth value to the per-face RAY depth (= the
-// distance |P| from the camera center, which is rotation-invariant, so the
-// same value serves every face). The rasterizer renders ray depth, so this is
-// the convention the loss expects. Ray-depth input is copied as-is; linear (z)
-// input is divided by cos(theta) w.r.t. the INPUT optical axis. That cosine is
-// non-positive for rays at / behind the input +z axis (the side / back faces
-// of a wide capture), where linear depth is ill-defined -- those are dropped
-// (0 = "no GT"). d <= 0 is the invalid sentinel and passes through unchanged.
+// Wide-frame depth -> the per-face RAY depth the rasterizer renders: |P| from
+// the centre, so one value serves every face. Linear (z) divides by cos(theta)
+// off the INPUT axis, and 85 degrees is where that secant reaches 11x.
 __forceinline__ __device__ float _wide_depth_to_face_ray_depth(
     float d, float3 raydir, bool input_is_ray_depth
 ) {
@@ -31,7 +26,7 @@ __forceinline__ __device__ float _wide_depth_to_face_ray_depth(
     if (input_is_ray_depth) return d;
     float rl = length(raydir);
     float rz = raydir.z;
-    if (rz <= 1e-6f * rl) return 0.0f;
+    if (rz <= 0.08715574f * rl) return 0.0f;   // cos(85 deg)
     return d * rl / rz;
 }
 

@@ -443,7 +443,8 @@ int engine_eval_forward(std::string primitive, int sh_degree, bool packed);
 // -- take the same mutex the trainer does. Returns the POST-split view count
 // (K) for that image.
 int engine_preview_forward(int index, std::string primitive, int sh_degree,
-                           bool packed, bool apply_color_correction);
+                           bool packed, bool apply_color_correction,
+                           bool input_depth_is_ray_depth);
 
 // --- Debug rendering ---
 

@@ -373,16 +373,16 @@ void engine_bilagrid_forward(TorchTensorView cam_indices) {
         DeviceTensor3D<float> post_depth;
         post_depth.resize(PoolSlot::EngBgDepthPost, C_batch, H_d, W_d);
 
-        // Compute per-image scalar (median quantile) over pre-bilagrid depth
-        // (the un-transformed gt.depth) and scatter into the per-camera
-        // scalars table at the cam_indices slots.
+        // One median per image over the pre-bilagrid depth, scattered into
+        // the per-camera table: the uniform sampler reads scalars[cam], so a
+        // batch-wide (`patched`) median would leave every slot but 0 unwritten.
         float* scalar_full = engine().bilagrid_depth.scalars.data_ptr();
         float* tmp_scalars = DevicePool::global().acquire<float>(
             PoolSlot::EngBgDepthTmpScalars, (size_t)C_batch);
         TorchTensorView depth_tv((uint64_t)engine().bilagrid_depth.fwd_pre.data_ptr(),
             4, {C_batch, H_d, W_d, 1, 1});
         TorchTensorView scalar_tv((uint64_t)tmp_scalars, 4, {C_batch});
-        compute_depth_scalars_tensor(depth_tv, /*patched=*/true, scalar_tv);
+        compute_depth_scalars_tensor(depth_tv, /*patched=*/false, scalar_tv);
         // Scatter tmp_scalars -> scalar_full at cam_indices.
         if (cam_idx_dev != nullptr) {
             bilagrid_scatter_floats(tmp_scalars, cam_idx_dev, C_batch,

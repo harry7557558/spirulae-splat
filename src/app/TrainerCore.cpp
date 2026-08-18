@@ -103,16 +103,22 @@ ColorResolution resolve_color(const TrainConfig& c) {
 // a depth field bent by a secant.
 bool resolve_ray_depth(const TrainConfig& c, const ParsedDataset& ds) {
     if (c.input_depth_is_ray_depth.has_value()) return *c.input_depth_is_ray_depth;
-    int64_t wide = 0;
-    for (int64_t i = 0; i < ds.num_cameras; i++)
-        if (camhost::pinhole_coverage(ds.camera_models[(size_t)i],
-                                      ds.widths[(size_t)i], ds.heights[(size_t)i],
-                                      ds.intrins[(size_t)i * 4 + 0],
-                                      ds.intrins[(size_t)i * 4 + 1]) <= 0.75)
+    int64_t wide = 0, voters = 0;
+    for (int64_t i = 0; i < ds.num_cameras; i++) {
+        // A frame with no depth map has no opinion on what the depth maps are.
+        if (!ds.depth_filenames.empty() && ds.depth_filenames[(size_t)i].empty())
+            continue;
+        voters++;
+        if (camhost::splits_to_pinhole_faces(ds.camera_models[(size_t)i],
+                                             ds.widths[(size_t)i],
+                                             ds.heights[(size_t)i],
+                                             ds.intrins[(size_t)i * 4 + 0],
+                                             ds.intrins[(size_t)i * 4 + 1]))
             wide++;
+    }
     // A dataset that mixes the two has no right answer; the majority is the
     // one that leaves fewer frames misread.
-    return wide * 2 > ds.num_cameras;
+    return wide * 2 > voters;
 }
 
 

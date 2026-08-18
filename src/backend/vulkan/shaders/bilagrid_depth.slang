@@ -64,6 +64,12 @@ void bilagrid_depth_fwd(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     float scalar = kPatched != 0 ? p.scalars[0] : p.scalars[g_id];
     float sr = p.depth[g_off] * scalar;
 
+    // 0 is "no ground truth here"; see the CUDA kernel.
+    if (!(sr > 0.0f)) {
+        p.output[g_off] = 0.0f;
+        return;
+    }
+
     float gz = sr / (sr + 1.0f);
     gz = min(max(gz, 0.0f), 1.0f);
     float x = gx * float(p.W - 1);

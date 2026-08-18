@@ -246,7 +246,8 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
     {
         std::lock_guard<std::mutex> lk(s.engine_mutex);
         engine_preview_forward(j.index, s.cfg.primitive, sh_deg,
-                               s.cfg.packed || s.cfg.use_bvh, j.color_correct);
+                               s.cfg.packed || s.cfg.use_bvh, j.color_correct,
+                               s.st.input_depth_is_ray_depth);
         auto shape = engine_get_render_rgb_shape();
         B = std::get<0>(shape); H = std::get<1>(shape);
         W = std::get<2>(shape); C = std::get<3>(shape);

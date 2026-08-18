@@ -167,7 +167,8 @@ bool _ms_gt_depth_valid(float d) { return d > 0.0f; }
 
 [ForceInline]
 bool _ms_gt_normal_valid(float3 n) {
-    return n.x + n.y + n.z > -2.366f && dot(n, n) > 1e-12f;
+    // core/Interpolation.cuh's gt_normal_valid.
+    return n.x + n.y + n.z > -2.366f && dot(n, n) > 0.25f;
 }
 
 [ForceInline]
