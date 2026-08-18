@@ -43,12 +43,8 @@ double TrainRunner::eta_seconds() {
 }
 
 double TrainRunner::elapsed_seconds() {
-    using Clock = std::chrono::steady_clock;
-    std::lock_guard<std::mutex> lk(_mu);
-    if (_train_start == Clock::time_point{}) return -1.0;
-    const Clock::time_point end =
-        _train_end == Clock::time_point{} ? Clock::now() : _train_end;
-    return std::chrono::duration<double>(end - _train_start).count();
+    if (!_session) return -1.0;
+    return _session->elapsed_seconds();
 }
 
 void TrainRunner::get_metrics(std::vector<MetricPoint>& out) {
@@ -113,7 +109,6 @@ void TrainRunner::start_training(const TrainConfig& cfg, const std::string& pres
         std::lock_guard<std::mutex> lk(_mu);
         _error.clear();
         _latest = {};
-        _train_start = _train_end = {};
         _latencies.clear();
         _metrics.clear();
     }
@@ -143,10 +138,6 @@ void TrainRunner::start_training(const TrainConfig& cfg, const std::string& pres
                     {(long long)s->cfg.viewer_port}));
             }
 
-            {
-                std::lock_guard<std::mutex> lk(_mu);
-                _train_start = std::chrono::steady_clock::now();
-            }
             _phase = Phase::Training;
             spirula::TrainerCallbacks cb;
             cb.on_step = [this](const spirula::TrainerProgress& p) {
@@ -167,16 +158,9 @@ void TrainRunner::start_training(const TrainConfig& cfg, const std::string& pres
                 _metrics.push_back(m);
             };
             s->train(cb);
-            // Stamped before the phase flips, so a strip that sees Done never
-            // reads a clock still running.
-            {
-                std::lock_guard<std::mutex> lk(_mu);
-                _train_end = std::chrono::steady_clock::now();
-            }
             _phase = Phase::Done;
         } catch (const std::exception& e) {
             std::lock_guard<std::mutex> lk(_mu);
-            _train_end = std::chrono::steady_clock::now();
             _error = e.what();
             _phase = Phase::TrainError;
         }

@@ -857,15 +857,50 @@ std::map<std::string, float> TrainerSession::train_step(int step) {
         cfg.packed || cfg.use_bvh, sc);
 }
 
+void TrainerSession::pause_clock_start() {
+    std::lock_guard<std::mutex> lk(_time_mutex);
+    _pause_start = std::chrono::steady_clock::now();
+}
+
+void TrainerSession::pause_clock_stop() {
+    std::lock_guard<std::mutex> lk(_time_mutex);
+    if (_pause_start == std::chrono::steady_clock::time_point{}) return;
+    _paused_s += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - _pause_start).count();
+    _pause_start = {};
+}
+
+double TrainerSession::elapsed_seconds() const {
+    using Clock = std::chrono::steady_clock;
+    std::lock_guard<std::mutex> lk(_time_mutex);
+    if (_start_time == Clock::time_point{}) return 0.0;
+    const Clock::time_point now =
+        _end_time == Clock::time_point{} ? Clock::now() : _end_time;
+    double s = std::chrono::duration<double>(now - _start_time).count() -
+               _paused_s;
+    if (_pause_start != Clock::time_point{})
+        s -= std::chrono::duration<double>(now - _pause_start).count();
+    return std::max(0.0, s);
+}
+
 void TrainerSession::train(const TrainerCallbacks& cb) {
-    _start_time = std::chrono::steady_clock::now();
+    {
+        std::lock_guard<std::mutex> lk(_time_mutex);
+        _start_time = std::chrono::steady_clock::now();
+        _end_time = _pause_start = {};
+        _paused_s = 0.0;
+    }
 
     int step = start_step;
     for (; step < cfg.num_iterations; step++) {
         // Pause gate + render-fairness yield: give viewer render workers an
         // uncontended window to take the engine mutex.
-        while (paused.load() && !stop_requested.load())
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (paused.load() && !stop_requested.load()) {
+            pause_clock_start();
+            while (paused.load() && !stop_requested.load())
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            pause_clock_stop();
+        }
         if (stop_requested.load()) break;
         while (render_pending.load())
             std::this_thread::sleep_for(std::chrono::microseconds(500));
@@ -898,8 +933,11 @@ void TrainerSession::train(const TrainerCallbacks& cb) {
         }
     }
 
-    training_time_s = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - _start_time).count();
+    {
+        std::lock_guard<std::mutex> lk(_time_mutex);
+        _end_time = std::chrono::steady_clock::now();
+    }
+    training_time_s = elapsed_seconds();
     // Pool capacities are a monotonic high-water mark, so reading them after
     // the loop gives the training-time peak.
     {
@@ -917,8 +955,7 @@ void TrainerSession::train(const TrainerCallbacks& cb) {
 
 std::string TrainerSession::progress_json() {
     int step = cur_step.load();
-    double elapsed = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - _start_time).count();
+    double elapsed = elapsed_seconds();
     double avg = 0.0;
     size_t nlat = 0;
     {

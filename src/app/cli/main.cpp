@@ -493,12 +493,10 @@ int spirula_train_main(int argc, char** argv) {
         }
 
         // ---- Train loop ------------------------------------------------------
-        auto t0 = std::chrono::steady_clock::now();
         TrainerCallbacks cb;
         cb.on_step = [&](const TrainerProgress& p) {
             if (p.step % 100 == 0 || p.step == p.total_steps - 1) {
-                double dt = std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - t0).count();
+                double dt = session.elapsed_seconds();
                 // The step and the elapsed time are padded/rounded here rather
                 // than by the message, so the numbers keep their column while
                 // the words around them change length per language.
