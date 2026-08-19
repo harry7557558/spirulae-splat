@@ -85,6 +85,22 @@ struct MsPoolParams {
 };
 static_assert(sizeof(MsPoolParams) == 2 * 8 + 10 * 4, "layout");
 
+struct MsPoolMaskedParams {
+    uint64_t hs, ls, mask;
+    int32_t B, C;
+    int32_t hsH, hsW;
+    int32_t lsH, lsW;
+    int32_t _pad0;
+};
+static_assert(sizeof(MsPoolMaskedParams) == 3 * 8 + 8 * 4, "layout");
+
+struct MsZeroMaskedParams {
+    uint64_t grad, mask;
+    int32_t B, C, H, W;
+    int32_t _pad0;
+};
+static_assert(sizeof(MsZeroMaskedParams) == 2 * 8 + 6 * 4, "layout");
+
 struct MsPoolBoolParams {
     uint64_t src, dst;
     int32_t B;
@@ -102,14 +118,21 @@ struct MsAddScaledParams {
 static_assert(sizeof(MsAddScaledParams) == 2 * 8 + 2 * 4, "layout");
 
 struct SsimParams {
-    uint64_t img1, img2, masks, dL_dimg1, ssim_val, loss_map;
+    uint64_t img1, img2, masks, mask_w, dL_dimg1, ssim_val, loss_map;
     int32_t B, H, W;
     int32_t Bm, Hm, Wm;
     float dL_dmap, map_weight;
     int32_t mode;
     uint32_t flags;
 };
-static_assert(sizeof(SsimParams) == 6 * 8 + 10 * 4, "layout");
+static_assert(sizeof(SsimParams) == 7 * 8 + 10 * 4, "layout");
+
+struct SsimCovParams {
+    uint64_t masks, tmp, out;
+    int32_t B, H, W;
+    int32_t Bm, Hm, Wm;
+};
+static_assert(sizeof(SsimCovParams) == 3 * 8 + 6 * 4, "layout");
 
 constexpr uint32_t kSsimHasMask = 1u << 0;
 constexpr uint32_t kSsimHasVal = 1u << 1;
@@ -124,11 +147,11 @@ struct CannyParams {
 static_assert(sizeof(CannyParams) == 3 * 8 + 4 * 4, "layout");
 
 struct ResidLumaParams {
-    uint64_t render, ref, out;
+    uint64_t render, ref, mask_in, out;
     int32_t B, H, W;
-    int32_t _pad0;
+    int32_t has_mask;
 };
-static_assert(sizeof(ResidLumaParams) == 3 * 8 + 4 * 4, "layout");
+static_assert(sizeof(ResidLumaParams) == 4 * 8 + 4 * 4, "layout");
 
 struct TukeyParams {
     uint64_t data, c_buf;
@@ -292,6 +315,7 @@ void launch_fused_ssim_inplace(
     p.img1 = std::get<0>(img1);
     p.img2 = std::get<0>(img2);
     p.masks = vkk::or_fallback(std::get<0>(mask));
+    p.mask_w = vkk::or_fallback(nullptr);
     p.dL_dimg1 = vkk::or_fallback(std::get<0>(dL_dimg1));
     p.ssim_val = vkk::or_fallback(ssim_buf);
     p.loss_map = vkk::or_fallback(std::get<0>(ssim_loss_map));
@@ -306,6 +330,21 @@ void launch_fused_ssim_inplace(
             p.Wm = (int32_t)ms[2];
         }
         p.flags |= kSsimHasMask;
+
+        // Coverage is what turns the masked window sums into means over the
+        // observed pixels; without a mask the kernel skips the divide.
+        const size_t n = (size_t)B * H * W;
+        float* cov = DevicePool::global().acquire<float>(PoolSlot::SsimMaskWeight, n);
+        float* tmp = DevicePool::global().acquire<float>(PoolSlot::SsimMaskWeightTmp, n);
+        SsimCovParams cp{};
+        cp.masks = p.masks;
+        cp.tmp = (uint64_t)tmp;
+        cp.out = (uint64_t)cov;
+        cp.B = B; cp.H = H; cp.W = W;
+        cp.Bm = p.Bm; cp.Hm = p.Hm; cp.Wm = p.Wm;
+        dispatch_tiles("fused_ssim.ssim_mask_cov_x", W, H, B, &cp, sizeof(cp));
+        dispatch_tiles("fused_ssim.ssim_mask_cov_y", W, H, B, &cp, sizeof(cp));
+        p.mask_w = (uint64_t)cov;
     }
     p.dL_dmap = dL_dmap;
     p.map_weight = ssim_loss_map_weight;
@@ -394,10 +433,12 @@ void robust_canny_residual_vk(const TorchTensorView& render,
     ResidLumaParams lp{};
     lp.render = std::get<0>(render);
     lp.ref = std::get<0>(ref);
+    lp.mask_in = vkk::or_fallback(mask_ptr);
     lp.out = (uint64_t)resid;
     lp.B = B;
     lp.H = H;
     lp.W = W;
+    lp.has_mask = mask_ptr != 0 ? 1 : 0;
     dispatch_tiles("canny.residual_luma", W, H, B, &lp, sizeof(lp));
 
     float* temp = DevicePool::global().acquire<float>(
@@ -444,6 +485,39 @@ void avg_pool_downsample_float_vk(const TorchTensorView& src,
     p.lsW = (int32_t)ds[2];
     p.scale = 1;
     dispatch_tiles("multi_scale_loss.ms_downsample_f", p.lsW, p.lsH, p.B, &p,
+                   sizeof(p));
+}
+
+void avg_pool_downsample_masked_float_vk(const TorchTensorView& src,
+                                         const TorchTensorView& mask,
+                                         const TorchTensorView& dst) {
+    const auto& ss = std::get<2>(src);
+    const auto& ds = std::get<2>(dst);
+    MsPoolMaskedParams p{};
+    p.hs = std::get<0>(src);
+    p.ls = std::get<0>(dst);
+    p.mask = std::get<0>(mask);
+    p.B = (int32_t)ds[0];
+    p.C = (int32_t)ds[3];
+    p.hsH = (int32_t)ss[1];
+    p.hsW = (int32_t)ss[2];
+    p.lsH = (int32_t)ds[1];
+    p.lsW = (int32_t)ds[2];
+    dispatch_tiles("multi_scale_loss.ms_downsample_masked_f", p.lsW, p.lsH,
+                   p.B, &p, sizeof(p));
+}
+
+void zero_masked_grad_vk(const TorchTensorView& grad,
+                         const TorchTensorView& mask) {
+    const auto& gs = std::get<2>(grad);
+    MsZeroMaskedParams p{};
+    p.grad = std::get<0>(grad);
+    p.mask = std::get<0>(mask);
+    p.B = (int32_t)gs[0];
+    p.C = (int32_t)gs[3];
+    p.H = (int32_t)gs[1];
+    p.W = (int32_t)gs[2];
+    dispatch_tiles("multi_scale_loss.ms_zero_masked_grad", p.W, p.H, p.B, &p,
                    sizeof(p));
 }
 
@@ -625,8 +699,26 @@ LossValues compute_multi_scale_per_pixel_losses(
             }
         };
 
-        ds_f(render_rgb_s[sc - 1], render_rgb_s[sc], "rrgb", 3);
-        ds_f(ref_rgb_s[sc - 1], ref_rgb_s[sc], "frgb", 3);
+        // Both sides of the rgb comparison pool over the same unmasked
+        // children, so the coarse render and the coarse gt stay comparable.
+        auto ds_rgb = [&](TorchTensorView& prev, TorchTensorView& curr,
+                          const std::string& name) {
+            const TorchTensorView& mk = ref_alpha_s[sc - 1];
+            const auto& pps = std::get<2>(prev);
+            const auto& mks = std::get<2>(mk);
+            // A mask at its own resolution cannot index this image's children.
+            const bool same = _has(mk) && mks[0] == pps[0] &&
+                              mks[1] == pps[1] && mks[2] == pps[2];
+            if (!has_mask || !same) {
+                ds_f(prev, curr, name, 3);
+                return;
+            }
+            curr = _pool_alloc_f(pfx + name, B, std::max((long)1, (long)pps[1] / 2),
+                                 std::max((long)1, (long)pps[2] / 2), 3);
+            avg_pool_downsample_masked_float_vk(prev, mk, curr);
+        };
+        ds_rgb(render_rgb_s[sc - 1], render_rgb_s[sc], "rrgb");
+        ds_rgb(ref_rgb_s[sc - 1], ref_rgb_s[sc], "frgb");
         ds_f(render_depth_s[sc - 1], render_depth_s[sc], "rd", 1);
         ds_geo(ref_depth_s[sc - 1], ref_depth_s[sc], "fd", 1);
         ds_f(render_normal_s[sc - 1], render_normal_s[sc], "rn", 3);
@@ -860,6 +952,16 @@ LossValues compute_multi_scale_per_pixel_losses(
         upsample_grad(scale_grads.v_normal_dist, grads_out.v_normal_dist, 3);
         upsample_grad(scale_grads.v_median_depth, grads_out.v_median_depth, 1);
         upsample_grad(scale_grads.v_median_normal, grads_out.v_median_normal, 3);
+    }
+
+    // Scale 0 already leaves masked pixels at zero gradient; only the
+    // upsampled coarse scales put anything there.
+    if (num_loss_scales > 1 && has_mask && _has(grads_out.v_render_rgb) &&
+            _has(ref_alpha)) {
+        const auto& gs = std::get<2>(grads_out.v_render_rgb);
+        const auto& ms = std::get<2>(ref_alpha);
+        if (gs[0] == ms[0] && gs[1] == ms[1] && gs[2] == ms[2])
+            zero_masked_grad_vk(grads_out.v_render_rgb, ref_alpha);
     }
 
     // Scale total losses by 1/num_scales (device-side).

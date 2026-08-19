@@ -302,6 +302,8 @@ enum class SaveClass : uint8_t {
   X(RdtedMaxDepth                  , "rdted_max_depth",                   Other    , Never) \
   X(SemiOffloadedAdamBuf           , "semi_offloaded_adam_buf",           Other    , Never) \
   X(SsimScalar                     , "ssim_scalar",                       Other    , Never) \
+  X(SsimMaskWeight                 , "ssim.mask_weight",                  Image    , Never) \
+  X(SsimMaskWeightTmp              , "ssim.mask_weight_tmp",              Image    , Never) \
   /* ---- densify scratch ---- */ \
   X(DensifyQuantileTemp            , "densify_quantile_temp",             Other    , Never) \
   X(DensifyInvMedian               , "densify_inv_median",                Other    , Never) \

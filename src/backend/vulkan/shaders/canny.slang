@@ -39,10 +39,12 @@ struct CannyParams {
 };
 
 groupshared float _cn_pixels[(CB + 2 * CH) * (CB + 2 * CH)];       // 24x24
+groupshared float _cn_valid[(CB + 2 * CH) * (CB + 2 * CH)];        // 24x24
 groupshared float _cn_blurred[(CB + 2 * CH1) * (CB + 2 * CH1)];    // 20x20
 groupshared float2 _cn_filtered[(CB + 2 * CH2) * (CB + 2 * CH2)];  // 18x18
 
 #define PIX(y, x) _cn_pixels[(y) * (CB + 2 * CH) + (x)]
+#define VLD(y, x) _cn_valid[(y) * (CB + 2 * CH) + (x)]
 #define BLR(y, x) _cn_blurred[(y) * (CB + 2 * CH1) + (x)]
 #define FLT(y, x) _cn_filtered[(y) * (CB + 2 * CH2) + (x)]
 
@@ -53,20 +55,26 @@ void _cn_body(CannyParams p, uint3 wg, uint tid, int tx, int ty) {
     int yid = int(wg.y) * CB + ty;
     int bid = int(wg.z);
 
-    // 5x5 blur.
+    // 5x5 blur over the unmasked samples only. Gating canny's output at the
+    // end instead lets the mask silhouette -- a step from distractor to scene
+    // -- register as the strongest edge in the image.
     for (int t = int(tid); t < (CB + 2 * CH1) * (CB + 2 * CH1); t += 256) {
         int y = t / (CB + 2 * CH1);
         int x = t % (CB + 2 * CH1);
-        float total = 0.0f;
+        float total = 0.0f, weight = 0.0f;
         [ForceUnroll]
         for (int cy = -2; cy <= 2; cy++)
             [ForceUnroll]
             for (int cx = -2; cx <= 2; cx++) {
                 int yi = y - CH1 + cy;
                 int xi = x - CH1 + cx;
-                total += kBlur5[cy + 2][cx + 2] * PIX(yi + CH, xi + CH);
+                float w = kBlur5[cy + 2][cx + 2] * VLD(yi + CH, xi + CH);
+                total += w * PIX(yi + CH, xi + CH);
+                weight += w;
             }
-        BLR(y, x) = total;
+        // Zero weight is >2px inside the mask, out of reach of any unmasked
+        // output pixel: canny reads blurred values at most 2px away.
+        BLR(y, x) = weight > 0.0f ? total / weight : 0.0f;
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -126,6 +134,8 @@ void canny_rgb(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         float3 rgb = float3(p.img_in[3 * pix], p.img_in[3 * pix + 1],
                             p.img_in[3 * pix + 2]);
         PIX(y, x) = dot(rgb, float3(0.299f, 0.587f, 0.114f));
+        VLD(y, x) = (p.has_mask != 0 && u8_load(p.mask_in, (uint)pix) == 0u)
+            ? 0.0f : 1.0f;
     }
     GroupMemoryBarrierWithGroupSync();
     _cn_body(p, wg, tid, tx, ty);
@@ -144,13 +154,17 @@ void canny_scalar(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         int x = t % (CB + 2 * CH);
         int yi = min(max(int(wg.y) * CB + y - CH, 0), p.H - 1);
         int xi = min(max(int(wg.x) * CB + x - CH, 0), p.W - 1);
-        PIX(y, x) = p.img_in[((gindex_t)bid * p.H + yi) * (gindex_t)p.W + xi];
+        gindex_t pix = ((gindex_t)bid * p.H + yi) * (gindex_t)p.W + xi;
+        PIX(y, x) = p.img_in[pix];
+        VLD(y, x) = (p.has_mask != 0 && u8_load(p.mask_in, (uint)pix) == 0u)
+            ? 0.0f : 1.0f;
     }
     GroupMemoryBarrierWithGroupSync();
     _cn_body(p, wg, tid, tx, ty);
 }
 
 #undef PIX
+#undef VLD
 #undef BLR
 #undef FLT
 
@@ -158,9 +172,10 @@ void canny_scalar(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 struct ResidLumaParams {
     float* render;  // [B,H,W,3]
     float* ref;     // [B,H,W,3]
+    uint* mask_in;  // [B,H,W] bool bytes, or fallback
     float* out;     // [B,H,W]
     int B, H, W;
-    int _pad0;
+    int has_mask;
 };
 
 [shader("compute")]
@@ -172,6 +187,13 @@ void residual_luma(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     int bid = int(wg.z);
     if (xid >= p.W || yid >= p.H || bid >= p.B) return;
     gindex_t idx = ((gindex_t)bid * p.H + yid) * (gindex_t)p.W + xid;
+    // Infinity, not zero: the quantile counts only strictly positive finite
+    // values, so a masked residual is dropped instead of dragging the Tukey
+    // cutoff around. The Tukey pass turns it into a real zero.
+    if (p.has_mask != 0 && u8_load(p.mask_in, (uint)idx) == 0u) {
+        p.out[idx] = 1.0f / 0.0f;
+        return;
+    }
     float dx = p.render[3 * idx] - p.ref[3 * idx];
     float dy = p.render[3 * idx + 1] - p.ref[3 * idx + 1];
     float dz = p.render[3 * idx + 2] - p.ref[3 * idx + 2];
@@ -197,7 +219,7 @@ void tukey_inplace(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     int b = int(idx / uint(p.N));
     float c = p.c_buf[b];
     float r = p.data[idx];
-    if (!(c > 0.0f) || r >= c) {
+    if (!(c > 0.0f) || !(r < c)) {  // !(r < c) also catches the masked infinity
         p.data[idx] = 0.0f;
         return;
     }

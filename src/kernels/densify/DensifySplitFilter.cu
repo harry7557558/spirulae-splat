@@ -240,6 +240,7 @@ __global__ void canny_edge_filter_kernel(
 
     // load pixels
     __shared__ float shared_pixels[BLOCK+2*HALO][BLOCK+2*HALO];
+    __shared__ float shared_valid[BLOCK+2*HALO][BLOCK+2*HALO];
     #pragma unroll
     for (int batch = 0; batch < (BLOCK+2*HALO)*(BLOCK+2*HALO); batch += BLOCK*BLOCK) {
         int tid = batch + threadIdx.y * BLOCK + threadIdx.x;
@@ -249,11 +250,15 @@ __global__ void canny_edge_filter_kernel(
             int yi = min(max((int)(blockIdx.y * BLOCK) + y - HALO, 0), H-1);
             int xi = min(max((int)(blockIdx.x * BLOCK) + x - HALO, 0), W-1);
             shared_pixels[y][x] = dot(img_in.load3(bid, yi, xi), float3{0.299f, 0.587f, 0.114f});
+            shared_valid[y][x] = (mask_in == nullptr) ? 1.0f :
+                (float)mask_in[(&img_in.at(bid, yi, xi, 0) - img_in.data)/3];
         }
     }
     __syncthreads();
 
-    // 5x5 blur
+    // 5x5 blur over the unmasked samples only. Gating canny's output at the
+    // end instead lets the mask silhouette -- a step from distractor to scene
+    // -- register as the strongest edge in the image.
     __shared__ float shared_blurred[BLOCK+2*HALO1][BLOCK+2*HALO1];
     #pragma unroll
     for (int batch = 0; batch < (BLOCK+2*HALO1)*(BLOCK+2*HALO1); batch += BLOCK*BLOCK) {
@@ -262,15 +267,19 @@ __global__ void canny_edge_filter_kernel(
         int x = tid % (BLOCK+2*HALO1);
         if (y >= BLOCK+2*HALO1)
             continue;
-        float total = 0.0f;
+        float total = 0.0f, weight = 0.0f;
         for (int cy = -2; cy <= 2; ++cy)
             for (int cx = -2; cx <= 2; ++cx) {
                 float conv_weight = blur_filter_5x5[cy+2][cx+2];
                 int yi = y - HALO1 + cy;
                 int xi = x - HALO1 + cx;
-                total += conv_weight * shared_pixels[yi+HALO][xi+HALO];
+                float w = conv_weight * shared_valid[yi+HALO][xi+HALO];
+                total += w * shared_pixels[yi+HALO][xi+HALO];
+                weight += w;
             }
-        shared_blurred[y][x] = total;
+        // Zero weight is >2px inside the mask, out of reach of any unmasked
+        // output pixel: canny reads blurred values at most 2px away.
+        shared_blurred[y][x] = weight > 0.0f ? total / weight : 0.0f;
     }
     __syncthreads();
 
@@ -357,6 +366,7 @@ __global__ void _robust_residual_luma_kernel(
     int B, int H, int W,
     const float3* __restrict__ render,
     const float3* __restrict__ ref,
+    const bool* __restrict__ mask_in,
     float* __restrict__ out  // [B, H, W]
 ) {
     int xid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -364,6 +374,13 @@ __global__ void _robust_residual_luma_kernel(
     int bid = blockIdx.z * blockDim.z + threadIdx.z;
     if (xid >= W || yid >= H || bid >= B) return;
     size_t idx = ((size_t)bid * H + yid) * W + xid;
+    // Infinity, not zero: the quantile below counts only strictly positive
+    // finite values, so a masked residual is dropped instead of dragging the
+    // Tukey cutoff around. The Tukey pass turns it into a real zero.
+    if (mask_in != nullptr && !mask_in[idx]) {
+        out[idx] = INFINITY;
+        return;
+    }
     float3 d;
     d.x = render[idx].x - ref[idx].x;
     d.y = render[idx].y - ref[idx].y;
@@ -388,7 +405,7 @@ __global__ void _robust_tukey_inplace_kernel(
     int b = (int)(idx / (size_t)N);
     float c = c_buf[b];
     float r = data[idx];
-    if (!(c > 0.0f) || r >= c) {
+    if (!(c > 0.0f) || !(r < c)) {  // !(r < c) also catches the masked infinity
         data[idx] = 0.0f;
         return;
     }
@@ -418,6 +435,7 @@ __global__ void canny_edge_filter_kernel_scalar(
     const uint32_t H = img_in.shape[1], W = img_in.shape[2];
 
     __shared__ float shared_pixels[BLOCK+2*HALO][BLOCK+2*HALO];
+    __shared__ float shared_valid[BLOCK+2*HALO][BLOCK+2*HALO];
     #pragma unroll
     for (int batch = 0; batch < (BLOCK+2*HALO)*(BLOCK+2*HALO); batch += BLOCK*BLOCK) {
         int tid = batch + threadIdx.y * BLOCK + threadIdx.x;
@@ -427,6 +445,8 @@ __global__ void canny_edge_filter_kernel_scalar(
             int yi = min(max((int)(blockIdx.y * BLOCK) + y - HALO, 0), H-1);
             int xi = min(max((int)(blockIdx.x * BLOCK) + x - HALO, 0), W-1);
             shared_pixels[y][x] = img_in.load1(bid, yi, xi);
+            shared_valid[y][x] = (mask_in == nullptr) ? 1.0f :
+                (float)mask_in[&img_in.at(bid, yi, xi, 0) - img_in.data];
         }
     }
     __syncthreads();
@@ -439,15 +459,19 @@ __global__ void canny_edge_filter_kernel_scalar(
         int x = tid % (BLOCK+2*HALO1);
         if (y >= BLOCK+2*HALO1)
             continue;
-        float total = 0.0f;
+        float total = 0.0f, weight = 0.0f;
         for (int cy = -2; cy <= 2; ++cy)
             for (int cx = -2; cx <= 2; ++cx) {
                 float conv_weight = blur_filter_5x5[cy+2][cx+2];
                 int yi = y - HALO1 + cy;
                 int xi = x - HALO1 + cx;
-                total += conv_weight * shared_pixels[yi+HALO][xi+HALO];
+                float w = conv_weight * shared_valid[yi+HALO][xi+HALO];
+                total += w * shared_pixels[yi+HALO][xi+HALO];
+                weight += w;
             }
-        shared_blurred[y][x] = total;
+        // Zero weight is >2px inside the mask, out of reach of any unmasked
+        // output pixel: canny reads blurred values at most 2px away.
+        shared_blurred[y][x] = weight > 0.0f ? total / weight : 0.0f;
     }
     __syncthreads();
 
@@ -517,6 +541,7 @@ void robust_canny_residual_tensor(
         B, H, W,
         (const float3*)render.data_ptr(),
         (const float3*)ref.data_ptr(),
+        mask_in_ptr,
         resid
     );
     CHECK_DEVICE_ERROR(cudaGetLastError());

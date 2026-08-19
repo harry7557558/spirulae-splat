@@ -655,6 +655,75 @@ void ms_downsample_gt_geo(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     if (p.C == 3) { p.ls[obase + 1] = outv.y; p.ls[obase + 2] = outv.z; }
 }
 
+
+// RGB does not pool across a mask edge either: a box mean of two background
+// pixels and two distractor pixels is a colour the render is then asked to
+// match. Averaging only the unmasked children keeps every scale comparable.
+struct MsPoolMaskedParams {
+    float* hs;
+    float* ls;
+    uint* mask;  // [B,hsH,hsW] bool bytes
+    int B, C;
+    int hsH, hsW;
+    int lsH, lsW;
+    int _pad0;
+};
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void ms_downsample_masked_f(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                            uniform MsPoolMaskedParams p) {
+    uint xid = wg.x * 16 + (tid % 16u);
+    uint yid = wg.y * 16 + (tid / 16u);
+    uint bid = wg.z;
+    if (yid >= uint(p.lsH) || xid >= uint(p.lsW)) return;
+    uint ys[2] = { min(2 * yid, uint(p.hsH - 1)), min(2 * yid + 1, uint(p.hsH - 1)) };
+    uint xs[2] = { min(2 * xid, uint(p.hsW - 1)), min(2 * xid + 1, uint(p.hsW - 1)) };
+    gindex_t base = ((gindex_t)bid * p.hsH) * (gindex_t)p.hsW;
+    float acc[3] = { 0.0f, 0.0f, 0.0f };
+    float box[3] = { 0.0f, 0.0f, 0.0f };
+    int n = 0;
+    for (int dy = 0; dy < 2; dy++)
+        for (int dx = 0; dx < 2; dx++) {
+            gindex_t i = base + ys[dy] * p.hsW + xs[dx];
+            bool valid = u8_load(p.mask, (uint)i) != 0u;
+            for (int c = 0; c < p.C; c++) {
+                float v = p.hs[i * p.C + c];
+                box[c] += 0.25f * v;
+                if (valid) acc[c] += v;
+            }
+            n += valid ? 1 : 0;
+        }
+    gindex_t obase = ((gindex_t)bid * p.lsH + yid) * (gindex_t)p.lsW + xid;
+    // All four masked: the coarse pixel is masked too, so the value is unused.
+    for (int c = 0; c < p.C; c++)
+        p.ls[obase * p.C + c] = n != 0 ? acc[c] / float(n) : box[c];
+}
+
+// The coarse-scale grad is scattered back uniformly over all four children,
+// masked ones included -- the one path that lets a masked pixel be trained
+// toward the distractor the mask exists to ignore.
+struct MsZeroMaskedParams {
+    float* grad;
+    uint* mask;
+    int B, C, H, W;
+    int _pad0;
+};
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void ms_zero_masked_grad(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                         uniform MsZeroMaskedParams p) {
+    uint xid = wg.x * 16 + (tid % 16u);
+    uint yid = wg.y * 16 + (tid / 16u);
+    uint bid = wg.z;
+    if (yid >= uint(p.H) || xid >= uint(p.W)) return;
+    gindex_t i = ((gindex_t)bid * p.H + yid) * (gindex_t)p.W + xid;
+    if (u8_load(p.mask, (uint)i) != 0u) return;
+    for (int c = 0; c < p.C; c++)
+        p.grad[i * p.C + c] = 0.0f;
+}
+
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void ms_upsample_f(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,

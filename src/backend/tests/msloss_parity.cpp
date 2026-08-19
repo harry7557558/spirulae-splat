@@ -19,10 +19,6 @@
 //  - loose: LossValues (atomic raw-loss accumulation with different block
 //    geometries), the SSIM display scalar, and scaled-GT v_ref_depth /
 //    v_ref_normal (multi-tap atomic scatter).
-//  - skipped: the SSIM scalar when a mask is present -- CUDA's masked-pixel
-//    path overwrites a thread's whole accumulator with 3.0 ("TODO: mask
-//    this"), making the total depend on the thread->pixel mapping, which
-//    differs between CUDA's 24x24 and Vulkan's 16x16 tiles.
 //
 // Known EXPECTED mismatches (display-only SSIM scalar; stay within the loose
 // failure budget): (a) CUDA sums ssim over tile-grid positions, so images
@@ -281,8 +277,7 @@ void run_ms_cfg(Rng& r, const MsCfg& c) {
     g_loose.push_back(lv.median_depth_normal_reg);
     g_loose.push_back(lv.median_normal_sup);
     g_loose.push_back(lv.median_render_normal_reg);
-    if (!c.with_alpha)  // masked SSIM scalar is not cross-backend comparable
-        g_loose.push_back(lv.ssim);
+    g_loose.push_back(lv.ssim);
 
     (void)n_grads;
     std::printf("msloss_parity: cfg %-12s done\n", c.name);
