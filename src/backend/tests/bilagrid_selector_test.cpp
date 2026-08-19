@@ -165,6 +165,38 @@ static void test_override(const char* val, int expect, const char* label) {
     CHECK(sel.pinned() && pinned, label);
 }
 
+// ---------------------------------------------------------------------------
+// Test E: the shipping tables never explore v2. One dispatch of its atomic
+// scatter can outlive a 2 s OS GPU watchdog and lose the device.
+// ---------------------------------------------------------------------------
+static void test_opt_in_never_explored(const std::vector<BwdArm>& table,
+                                       const char* label) {
+    BilagridBwdSelector sel(table);
+    ContextKey k{1, 1080, 1920, 8, 16, 16};
+    Sim sim;
+    // Price v2 as the runaway winner: only the opt-in gate can keep it unpicked.
+    std::vector<double> base(table.size(), 1.0);
+    for (size_t i = 0; i < table.size(); i++)
+        if (table[i].impl == BwdImpl::V2Scatter) base[i] = 0.01;
+    bool picked_v2 = false;
+    for (int i = 0; i < 2000; i++) {
+        int a = sel.sample(k);
+        if (table[a].impl == BwdImpl::V2Scatter) picked_v2 = true;
+        sel.update(k, a, sim.time(base, a));
+    }
+    CHECK(!picked_v2, label);
+}
+
+static void test_opt_in_still_pinnable() {
+    setenv("SS_BILAGRID_BWD", "v2", 1);
+    BilagridBwdSelector sel(affine_arms());
+    unsetenv("SS_BILAGRID_BWD");
+    ContextKey k{0, 1080, 1920, 8, 16, 16};
+    int a = sel.sample(k);
+    CHECK(sel.pinned() && affine_arms()[a].impl == BwdImpl::V2Scatter,
+          "SS_BILAGRID_BWD=v2 still reaches the opt-in arm");
+}
+
 int main() {
     std::fprintf(stderr, "== BilagridBwdSelector unit test ==\n");
     test_forced_init();
@@ -175,6 +207,10 @@ int main() {
     test_override("v1", 0, "SS_BILAGRID_BWD=v1 pins first v1 (arm 0)");
     test_override("v1:8", 5, "SS_BILAGRID_BWD=v1:8 pins tile=8 (arm 5)");
     test_override("#3", 3, "SS_BILAGRID_BWD=#3 pins raw index 3");
+    std::fprintf(stderr, "[opt-in arms]\n");
+    test_opt_in_never_explored(affine_arms(), "affine table never explores v2");
+    test_opt_in_never_explored(ppisp_arms(), "ppisp table never explores v2");
+    test_opt_in_still_pinnable();
 
     if (g_fail) {
         std::fprintf(stderr, "\n== %d CHECK(s) FAILED ==\n", g_fail);

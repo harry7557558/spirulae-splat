@@ -45,6 +45,8 @@ struct BwdArm {
     // to the no-split path / minimal atomics + max serial work). Ignored (-1)
     // for V2Scatter.
     int target_tile_size;
+    // Never explored by the bandit; reachable only by pinning SS_BILAGRID_BWD.
+    bool opt_in = false;
 };
 
 // Arm sets are PER BILAGRID TYPE and TUNABLE: edit these tables after profiling
@@ -59,21 +61,43 @@ struct BwdArm {
 
 // PPISP (9-channel, nonlinear): tile-only. v2's atomic scatter was measured
 // slower than v1 at every tested resolution/GPU (catastrophic on AMD: up to
-// 384 ms), so it is intentionally excluded -- exploring it only wastes warmup.
+// 384 ms), so it is opt-in -- exploring it only wastes warmup.
 inline const std::vector<BwdArm>& ppisp_arms() {
     static const std::vector<BwdArm> arms = {
         { BwdImpl::V1Gather, 2 }, { BwdImpl::V1Gather, 3 },
         { BwdImpl::V1Gather, 4 }, { BwdImpl::V1Gather, 5 },
         { BwdImpl::V1Gather, 6 }, { BwdImpl::V1Gather, 8 },
-        { BwdImpl::V2Scatter, -1 },
+        { BwdImpl::V2Scatter, -1, true },
     };
     return arms;
 }
 
-// Affine (12-channel, LINEAR): tiles + v2. Unlike PPISP, the affine transform
-// is cheap per pixel, so v2's fused per-pixel scatter can beat v1 on some
-// datasets/hardware -- worth keeping as an arm. Index 6 = v2.
+// Affine (12-channel, LINEAR): tiles + opt-in v2. v2 fires 8x12 atomics per
+// pixel into a 2048-cell table: seconds at full resolution on an iGPU, which
+// outlives the 2 s Windows GPU watchdog and loses the device (Strix Halo).
 inline const std::vector<BwdArm>& affine_arms() {
+    static const std::vector<BwdArm> arms = {
+        { BwdImpl::V1Gather, 2 }, { BwdImpl::V1Gather, 3 },
+        { BwdImpl::V1Gather, 4 }, { BwdImpl::V1Gather, 5 },
+        { BwdImpl::V1Gather, 6 }, { BwdImpl::V1Gather, 8 },
+        { BwdImpl::V2Scatter, -1, true },
+    };
+    return arms;
+}
+
+// Log-linear (9-channel, nonlinear exp-diagonal): shares PPISP's table, and its
+// v2 loses the same way (8 ms NV / 173 ms AMD vs tile ~0.6-0.9 ms).
+inline const std::vector<BwdArm>& loglinear_arms() { return ppisp_arms(); }
+
+// Depth (2-channel) / normal (3-channel): GT-side grids, needs_image_grad=false.
+// v2 loses worst of all here -- the tiny geometry grid (4x8x8) puts thousands of
+// pixels on every cell, ~50x the v1 gather.
+inline const std::vector<BwdArm>& depth_arms() { return ppisp_arms(); }
+inline const std::vector<BwdArm>& normal_arms() { return ppisp_arms(); }
+
+// Unit tests only: the shipping tables keep v2 opt-in, which would leave the
+// bandit's v2 paths uncovered.
+inline const std::vector<BwdArm>& default_arms() {
     static const std::vector<BwdArm> arms = {
         { BwdImpl::V1Gather, 2 }, { BwdImpl::V1Gather, 3 },
         { BwdImpl::V1Gather, 4 }, { BwdImpl::V1Gather, 5 },
@@ -82,23 +106,6 @@ inline const std::vector<BwdArm>& affine_arms() {
     };
     return arms;
 }
-
-// Log-linear (9-channel, nonlinear exp-diagonal): tile-only. Its v2 scatter is
-// IMPLEMENTED and reachable, but dropped from the default arm set -- like PPISP
-// (RGB nonlinear) v2 loses (8 ms NV / 173 ms AMD vs tile ~0.6-0.9 ms). To
-// re-enable, add `{ BwdImpl::V2Scatter, -1 }` here.
-inline const std::vector<BwdArm>& loglinear_arms() { return ppisp_arms(); }
-
-// Depth (2-channel) / normal (3-channel): GT-side grids, needs_image_grad=false.
-// Their v2 (pure scatter) is IMPLEMENTED and reachable, but is dropped from the
-// default arm set: benchmarks show it loses badly on the tiny geometry grids
-// (4x8x8 -> thousands of pixels/cell -> atomic contention, ~50x the v1 gather).
-// To re-enable, add `{ BwdImpl::V2Scatter, -1 }` to these tables.
-inline const std::vector<BwdArm>& depth_arms() { return ppisp_arms(); }
-inline const std::vector<BwdArm>& normal_arms() { return ppisp_arms(); }
-
-// Generic default (used by unit tests): tiles + v2.
-inline const std::vector<BwdArm>& default_arms() { return affine_arms(); }
 
 // ---------------------------------------------------------------------------
 // Context key: what the fast/slow choice depends on
@@ -134,11 +141,8 @@ public:
         double warmup_tau = 8.0;     // per-key noise decay constant (updates)
         int min_count = 2;           // forced samples per arm before TS
         // Only re-probe (staleness) arms whose trusted mean is within this
-        // factor of the current best. Clearly-inferior arms (e.g. v2's atomic
-        // scatter on AMD, ~10-60x the best v1) are measured once during forced
-        // init and then never re-probed -- otherwise a periodic re-probe of a
-        // catastrophic arm dominates the runtime. Generous enough (8x) to keep
-        // re-probing merely-slower arms so a genuine ranking change is caught.
+        // factor of the current best, else a periodic re-probe of a clearly-
+        // inferior arm dominates the runtime. 8x still catches a ranking flip.
         double reprobe_factor = 8.0;
         uint64_t seed = 42;
     };
@@ -174,6 +178,7 @@ public:
         {
             int n_new = 0, pick = -1;
             for (int i = 0; i < n; i++) {
+                if (arms_[i].opt_in) continue;
                 if (bk.arms[i].count < params_.min_count) {
                     // reservoir pick among under-sampled arms (uniform)
                     std::uniform_int_distribution<int> d(0, n_new);
@@ -198,6 +203,7 @@ public:
             }
             int stale = -1, worst = params_.max_no_update - 1;
             for (int i = 0; i < n; i++) {
+                if (arms_[i].opt_in) continue;
                 if (bk.arms[i].num_no_update <= worst) continue;
                 if (have_best && bk.arms[i].count >= params_.min_count &&
                     bk.arms[i].mean() > best_mean * params_.reprobe_factor)
@@ -209,19 +215,20 @@ public:
         }
 
         // 3) Thompson draw: one Gaussian per arm, pick the min predicted cost.
-        int best = 0;
+        int best = -1;
         double best_val = 0.0;
         for (int i = 0; i < n; i++) {
+            if (arms_[i].opt_in) continue;
             const Stat& s = bk.arms[i];
             std::normal_distribution<double> d(s.mean(),
                                                s.stdev_mean(bk.warmup_noise));
             double v = d(rng_);
-            if (i == 0 || v < best_val) {
+            if (best < 0 || v < best_val) {
                 best_val = v;
                 best = i;
             }
         }
-        return best;
+        return best < 0 ? 0 : best;
     }
 
     // Feed back the measured GPU time (ms) for the arm returned by sample().

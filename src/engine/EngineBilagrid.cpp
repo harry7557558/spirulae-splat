@@ -37,7 +37,7 @@ static constexpr backend::Stream kBilagridStream = (backend::Stream)0;
 static spirula::bilagrid::BwdTimingRing& g_bg_bwd_timer =
     *new spirula::bilagrid::BwdTimingRing();
 static std::vector<spirula::bilagrid::BwdMeasurement> g_bg_bwd_meas;
-// Per-type selectors (different arm sets: PPISP is tile-only; affine adds v2).
+// Per-type selectors; each family owns its arm table and its learned stats.
 static spirula::bilagrid::BilagridBwdSelector
     g_bg_sel_affine(spirula::bilagrid::affine_arms());
 static spirula::bilagrid::BilagridBwdSelector
