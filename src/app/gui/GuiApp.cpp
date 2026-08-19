@@ -44,6 +44,7 @@ namespace fld = spirula::i18n::msg::field;
 namespace dmsg = spirula::i18n::msg::dataset;
 namespace gmsg = spirula::i18n::msg::geometry;
 using spirula::i18n::Msg;
+using spirula::format_duration;
 
 namespace gui {
 
@@ -57,15 +58,6 @@ const ImVec4 kDim(0.6f, 0.6f, 0.6f, 1.0f);
 std::string format_gib(uint64_t bytes) {
     char buf[32];
     std::snprintf(buf, sizeof buf, "%.2f", (double)bytes / (1024.0 * 1024.0 * 1024.0));
-    return buf;
-}
-
-std::string format_duration(double s) {
-    if (s < 0) return "--:--";
-    int t = (int)(s + 0.5);
-    char buf[32];
-    if (t >= 3600) std::snprintf(buf, sizeof buf, "%d:%02d:%02d", t/3600, (t/60)%60, t%60);
-    else           std::snprintf(buf, sizeof buf, "%d:%02d", t/60, t%60);
     return buf;
 }
 
@@ -5159,7 +5151,7 @@ void GuiApp::draw_status_strip() {
     if (ph == TrainRunner::Phase::Training && p.total_steps > 0) {
         float frac = (float)(p.step + 1) / (float)p.total_steps;
         ui::ProgressBar(frac, ImVec2(-8, 0), msg::status_step,
-                        {p.step + 1, p.total_steps});
+                        {p.step + 1, p.total_steps, (int)(frac * 100.0f)});
         char ms[32];
         std::snprintf(ms, sizeof ms, "%.0f", p.step_latency * 1000.0);
         ui::Text(_runner.paused() ? msg::status_rate_paused : msg::status_rate,

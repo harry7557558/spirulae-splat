@@ -489,6 +489,18 @@ std::string train_config_unsupported(const TrainConfig& c) {
     return {};
 }
 
+std::string format_duration(double seconds) {
+    if (seconds < 0) return "--:--";
+    int t = (int)(seconds + 0.5);
+    char buf[32];
+    if (t >= 3600)
+        std::snprintf(buf, sizeof buf, "%d:%02d:%02d", t / 3600, (t / 60) % 60,
+                      t % 60);
+    else
+        std::snprintf(buf, sizeof buf, "%d:%02d", t / 60, t % 60);
+    return buf;
+}
+
 // Unported-feature guards: fail early rather than ignore a flag.
 void TrainerSession::check_config() {
     if (std::string what = train_config_unsupported(cfg); !what.empty())
@@ -889,6 +901,21 @@ double TrainerSession::elapsed_seconds() const {
     return std::max(0.0, s);
 }
 
+double TrainerSession::avg_step_latency() const {
+    std::lock_guard<std::mutex> lk(_progress_mutex);
+    if (_step_latencies.empty()) return -1.0;
+    double sum = 0.0;
+    for (double v : _step_latencies) sum += v;
+    return sum / (double)_step_latencies.size();
+}
+
+double TrainerSession::eta_seconds() const {
+    const double avg = avg_step_latency();
+    const int step = cur_step.load();
+    if (avg < 0.0 || step <= 0) return -1.0;
+    return std::max(0, cfg.num_iterations - step) * avg;
+}
+
 void TrainerSession::train(const TrainerCallbacks& cb) {
     {
         std::lock_guard<std::mutex> lk(_time_mutex);
@@ -983,17 +1010,10 @@ void TrainerSession::train(const TrainerCallbacks& cb) {
 std::string TrainerSession::progress_json() {
     int step = cur_step.load();
     double elapsed = elapsed_seconds();
-    double avg = 0.0;
-    size_t nlat = 0;
-    {
-        std::lock_guard<std::mutex> lk(_progress_mutex);
-        for (double v : _step_latencies) avg += v;
-        nlat = _step_latencies.size();
-    }
-    if (nlat) avg /= (double)nlat;
+    double avg = avg_step_latency();
+    double eta = eta_seconds();
     char buf[256];
-    if (nlat && step > 0) {
-        double eta = (cfg.num_iterations - step) * avg;
+    if (eta >= 0.0) {
         std::snprintf(buf, sizeof buf,
             "{\"step\": %d, \"total_steps\": %d, \"elapsed_time\": %.3f, "
             "\"eta\": %.3f, \"latency_ms\": %.3f, \"paused\": %s}",
