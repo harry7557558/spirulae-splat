@@ -44,6 +44,7 @@ std::tuple<
     DistortionType dist_type,  // distortion channel set (None/D/RGB_D; DN/RGB_DN need a normal primitive)
     DeviceTensor3D<float> loss_map,  // [..., image_height, image_width, 1]
     DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
+    DensifyAccumMode accum_mode,
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts, // [..., image_height, image_width, 1]

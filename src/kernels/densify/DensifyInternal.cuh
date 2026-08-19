@@ -8,15 +8,16 @@
 
 #include "kernels/densify/DensifyCommon.cuh"
 
-// Quantile over |x| across the finite elements of each of B rows of N.
-// Writes B values; `return_reciprocal` emits 1/q instead of q.
-// Uses PoolSlot::DensifyQuantileTemp scratch.
-void quantile_of_abs_of_finite_elements_internal(
+// Quantile across the strictly-positive finite elements of each of B rows of N.
+// `return_reciprocal` emits 1/q; `abs_input` folds negatives in as |x| rather
+// than dropping them. Uses PoolSlot::DensifyQuantileTemp scratch.
+void quantile_of_positive_finite_elements_internal(
     const float* inputs_ptr,
     int B,
     int N,
     float q,
     bool return_reciprocal,
+    bool abs_input,
     float* outputs_ptr
 );
 

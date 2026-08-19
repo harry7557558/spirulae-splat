@@ -306,7 +306,9 @@ enum class SaveClass : uint8_t {
   X(SsimMaskWeightTmp              , "ssim.mask_weight_tmp",              Image    , Never) \
   /* ---- densify scratch ---- */ \
   X(DensifyQuantileTemp            , "densify_quantile_temp",             Other    , Never) \
-  X(DensifyInvMedian               , "densify_inv_median",                Other    , Never) \
+  X(DensifyMapNorm                 , "densify_map_norm",                  Other    , Never) \
+  X(DensifyScoreGather             , "densify_score_gather",              Other    , Never) \
+  X(DensifyScoreClip               , "densify_score_clip",                Other    , Never) \
   X(DensifyClipScale               , "densify_clip_scale",                Other    , Never) \
   X(DensifyUpdateWeight            , "densify_update_weight",             Other    , Never) \
   X(DensifyWswrSortingValues       , "densify_wswr_sorting_values",       Other    , Never) \

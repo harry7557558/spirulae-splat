@@ -146,6 +146,13 @@ std::map<std::string, float> engine_compute_loss_backward(
     bool compute_loss_map,
     int loss_map_mode,
     float robust_edge_aware_quantile,
+    // Per-side survival factor for the *_nms modes (see LossConfig).
+    float nms_falloff,
+    // In-place post-processing of the finished loss map (see LossConfig).
+    bool loss_map_normalize,
+    float loss_map_clip_quantile,
+    // DensifyAccumMode as an int (see LossConfig::loss_map_accum_mode).
+    int loss_map_accum_mode,
     // Image-space overexposure regularization weight (see LossConfig).
     // Zero (default) disables the kernel launch entirely.
     float overexposure_reg_weight = 0.0f,

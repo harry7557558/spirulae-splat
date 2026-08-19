@@ -29,6 +29,13 @@ kCameraVariants = [
     ("CameraModelType::EQUIRECTANGULAR", "CameraDistortionType::None"),
 ]
 
+# DensifyAccumMode (primitives/Primitive.cuh): how the raster backward reduces
+# the densification error map to one score per splat.
+kAccumModes = [
+    "DensifyAccumMode::None", "DensifyAccumMode::Max",
+    "DensifyAccumMode::Sum",  "DensifyAccumMode::Avg",
+]
+
 # Interleaved [3DGS, Mip, 3DGUT] per SH degree; the `includes` lists below rely
 # on that ordering to route each block to the right primitive header.
 kPrimitives = [
@@ -314,10 +321,10 @@ def generate_RasterizationBwd():
     map_body = [*itertools.product(
         ["Vanilla3DGS<0>"],
         ["DistortionType::None", "DistortionType::D", "DistortionType::RGB_D"],  # dist_type
-        ["true", "false"],   # output_accum_weight
+        kAccumModes,
         ["true", "false"],   # output_median
     )]
-    includes = [("primitives/Primitive3DGS.cuh", "kernels/raster/RasterizationBwd_kernel.cuh")] * 12
+    includes = [("primitives/Primitive3DGS.cuh", "kernels/raster/RasterizationBwd_kernel.cuh")] * len(map_body)
 
     generate_kernel_instantiation("RasterizationBwd", definition, map_header, map_body, includes)
 
@@ -346,7 +353,7 @@ def generate_RasterizationEval3DBwd():
         for cam, dist in kCameraVariants
         for dt in ("DistortionType::None", "DistortionType::D", "DistortionType::RGB_D")
         for viewmat_grad in ("true", "false")
-        for accum_weight in ("true", "false")
+        for accum_weight in kAccumModes
         for median in ("true", "false")
     ]
     includes = [("primitives/Primitive3DGUT.cuh", "kernels/raster/RasterizationEval3DBwd_kernel.cuh")] * len(map_body)

@@ -373,3 +373,6 @@ void increment_int32_inplace(DeviceVector<int32_t> data, int64_t n);
 
 
 void float_add_into(DeviceVector<float> dst, DeviceVector<float> src, int64_t n);
+
+
+void float_max_into(DeviceVector<float> dst, DeviceVector<float> src, int64_t n);

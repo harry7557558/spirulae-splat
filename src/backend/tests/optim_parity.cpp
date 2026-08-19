@@ -242,7 +242,7 @@ int main(int argc, char** argv) {
         if (!gq) readback_f(acc, d_grad, NUMEL);  // zero_grad untouched here
     }
 
-    // ---- float_add_into / increment_int32_inplace ----
+    // ---- float_add_into / float_max_into / increment_int32_inplace ----
     {
         const int64_t n = 5000;
         std::vector<float> dst(n), src(n);
@@ -254,6 +254,12 @@ int main(int argc, char** argv) {
                        DeviceVector<float>(ttv(d_src, {n, 1})), n);
         backend::device_synchronize();
         readback_f(acc, d_dst, n);
+
+        float* d_dst_m = upload(dst);
+        float_max_into(DeviceVector<float>(ttv(d_dst_m, {n, 1})),
+                       DeviceVector<float>(ttv(d_src, {n, 1})), n);
+        backend::device_synchronize();
+        readback_f(acc, d_dst_m, n);
 
         const int64_t ni = 4097;
         std::vector<int32_t> data(ni);

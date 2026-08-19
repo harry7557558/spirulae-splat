@@ -2,7 +2,7 @@
 //
 // Part of the Densify family -- see DensifyCommon.cuh.
 
-#include "kernels/densify/DensifyCommon.cuh"
+#include "kernels/densify/DensifyInternal.cuh"
 
 #include "kernels/projection/CameraVariants.cuh"
 
@@ -270,6 +270,85 @@ __global__ void densify_update_weight_kernel(
         accum.y += 1.0f;
     }
     accum_buffer[idx] = accum;
+}
+
+
+// buf holds [num, den] planar (DensifyAccumMode::Avg); the quotient lands
+// back in the numerator lane so the score stays a contiguous [N] buffer.
+__global__ void densify_accum_finalize_kernel(
+    long num_splats,
+    float* __restrict__ buf
+) {
+    long idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_splats)
+        return;
+    float den = buf[num_splats + idx];
+    buf[idx] = den > 0.0f ? buf[idx] / den : 0.0f;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void densify_accum_finalize_tensor(
+    int64_t num_splats,
+    DeviceVector<float> accum  // [2 * num_splats], planar num then den
+) {
+    if (num_splats <= 0 || accum.data_ptr() == nullptr)
+        return;
+    densify_accum_finalize_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+        (long)num_splats, accum.data_ptr());
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
+__global__ void densify_gather_score_kernel(
+    long num_splats,
+    const float2* __restrict__ accum_buffer,
+    float* __restrict__ out
+) {
+    long idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_splats)
+        return;
+    out[idx] = accum_buffer[idx].x;
+}
+
+__global__ void densify_clip_score_kernel(
+    long num_splats,
+    float2* __restrict__ accum_buffer,
+    const float* __restrict__ cutoff  // [1]
+) {
+    long idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_splats)
+        return;
+    float c = cutoff[0];
+    float v = accum_buffer[idx].x;
+    // !(v <= c) also catches NaN, which would otherwise survive every ranking.
+    if (c > 0.0f && !(v <= c))
+        accum_buffer[idx].x = c;
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void densify_clip_score_tensor(
+    int64_t num_splats,
+    DeviceVector<float2> accum_buffer,  // [N, 2]; only .x is clipped
+    float quantile
+) {
+    if (num_splats <= 0 || accum_buffer.data_ptr() == nullptr)
+        return;
+    if (!(quantile > 0.0f && quantile < 1.0f))
+        return;
+    // The selector wants a contiguous row, and .x is strided; gather first.
+    float* gathered = DevicePool::global().acquire<float>(
+        PoolSlot::DensifyScoreGather, (size_t)num_splats);
+    float* cutoff = DevicePool::global().acquire<float>(
+        PoolSlot::DensifyScoreClip, 1);
+    densify_gather_score_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+        (long)num_splats, accum_buffer.data_ptr(), gathered);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+    quantile_of_positive_finite_elements_internal(
+        gathered, 1, (int)num_splats, quantile, /*return_reciprocal=*/false,
+        /*abs_input=*/false, cutoff);
+    densify_clip_score_kernel<<<_LAUNCH_ARGS_1D(num_splats, 256)>>>(
+        (long)num_splats, accum_buffer.data_ptr(), cutoff);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 

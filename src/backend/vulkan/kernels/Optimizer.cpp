@@ -249,6 +249,18 @@ void float_add_into(DeviceVector<float> dst, DeviceVector<float> src,
                        &p, sizeof(p), &p.wgs_per_row);
 }
 
+void float_max_into(DeviceVector<float> dst, DeviceVector<float> src,
+                    int64_t n) {
+    if (n == 0 || dst.data_ptr() == nullptr || src.data_ptr() == nullptr)
+        return;
+    FloatAddParams p{};
+    p.dst = (uint64_t)dst.data_ptr();
+    p.src = (uint64_t)src.data_ptr();
+    p.n = checked_u32_numel(n, "float_max_into");
+    vkk::dispatch_flat("optimizer.float_max", backend::vk::SpecList{}, n, 256,
+                       &p, sizeof(p), &p.wgs_per_row);
+}
+
 void increment_int32_inplace(DeviceVector<int32_t> data, int64_t n) {
     if (n == 0 || data.data_ptr() == nullptr) return;
     IncI32Params p{};

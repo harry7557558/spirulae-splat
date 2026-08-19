@@ -7,10 +7,10 @@
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    CameraDistortionType::Rational,
+    CameraDistortionType::OpenCV,
     DistortionType::RGB_D,
-    true,
     false,
+    DensifyAccumMode::Max,
     true
 >(
     cudaStream_t stream,
@@ -47,16 +47,17 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGUT<0>::ScreenBuffer v_splat_sbuffer,
     float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    CameraDistortionType::Rational,
+    CameraDistortionType::OpenCV,
     DistortionType::RGB_D,
-    true,
     false,
+    DensifyAccumMode::Max,
     false
 >(
     cudaStream_t stream,
@@ -93,16 +94,17 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGUT<0>::ScreenBuffer v_splat_sbuffer,
     float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    CameraDistortionType::Rational,
+    CameraDistortionType::OpenCV,
     DistortionType::RGB_D,
     false,
-    true,
+    DensifyAccumMode::Sum,
     true
 >(
     cudaStream_t stream,
@@ -139,16 +141,17 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGUT<0>::ScreenBuffer v_splat_sbuffer,
     float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    CameraDistortionType::Rational,
+    CameraDistortionType::OpenCV,
     DistortionType::RGB_D,
     false,
-    true,
+    DensifyAccumMode::Sum,
     false
 >(
     cudaStream_t stream,
@@ -185,16 +188,17 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGUT<0>::ScreenBuffer v_splat_sbuffer,
     float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    CameraDistortionType::Rational,
+    CameraDistortionType::OpenCV,
     DistortionType::RGB_D,
     false,
-    false,
+    DensifyAccumMode::Avg,
     true
 >(
     cudaStream_t stream,
@@ -231,16 +235,17 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGUT<0>::ScreenBuffer v_splat_sbuffer,
     float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
     CameraModelType::PINHOLE,
-    CameraDistortionType::Rational,
+    CameraDistortionType::OpenCV,
     DistortionType::RGB_D,
     false,
-    false,
+    DensifyAccumMode::Avg,
     false
 >(
     cudaStream_t stream,
@@ -277,16 +282,17 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGUT<0>::ScreenBuffer v_splat_sbuffer,
     float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    CameraDistortionType::None,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::ThinPrism,
     DistortionType::None,
     true,
-    true,
+    DensifyAccumMode::None,
     true
 >(
     cudaStream_t stream,
@@ -323,16 +329,17 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGUT<0>::ScreenBuffer v_splat_sbuffer,
     float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    CameraDistortionType::None,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::ThinPrism,
     DistortionType::None,
     true,
-    true,
+    DensifyAccumMode::None,
     false
 >(
     cudaStream_t stream,
@@ -369,16 +376,17 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGUT<0>::ScreenBuffer v_splat_sbuffer,
     float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );
 
 template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>,
-    CameraModelType::FISHEYE,
-    CameraDistortionType::None,
+    CameraModelType::PINHOLE,
+    CameraDistortionType::ThinPrism,
     DistortionType::None,
     true,
-    false,
+    DensifyAccumMode::Max,
     true
 >(
     cudaStream_t stream,
@@ -415,5 +423,6 @@ template void rasterize_to_pixels_eval3d_bwd_kernel_wrapper<
     Vanilla3DGUT<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGUT<0>::ScreenBuffer v_splat_sbuffer,
     float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
 );

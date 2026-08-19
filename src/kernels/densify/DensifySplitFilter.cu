@@ -547,8 +547,9 @@ void robust_canny_residual_tensor(
     CHECK_DEVICE_ERROR(cudaGetLastError());
 
     // 2) per-image q-quantile of |r| -> Tukey cutoff c.
-    quantile_of_abs_of_finite_elements_internal(
-        resid, B, (int)N, quantile, /*return_reciprocal=*/false, c_buf);
+    quantile_of_positive_finite_elements_internal(
+        resid, B, (int)N, quantile, /*return_reciprocal=*/false,
+        /*abs_input=*/true, c_buf);
 
     // 3) in-place Tukey biweight: resid <- |r| * (1 - (r/c)^2)^2, zero past c.
     _robust_tukey_inplace_kernel<<<_LAUNCH_ARGS_1D((size_t)B * N, 256)>>>(

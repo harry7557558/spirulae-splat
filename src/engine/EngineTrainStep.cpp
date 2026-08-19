@@ -98,6 +98,10 @@ static std::map<std::string, float> _engine_step_fwd_bwd_only(
         cfg.loss.compute_loss_map,
         cfg.loss.loss_map_mode,
         cfg.loss.robust_edge_aware_quantile,
+        cfg.loss.nms_falloff,
+        cfg.loss.loss_map_normalize,
+        cfg.loss.loss_map_clip_quantile,
+        cfg.loss.loss_map_accum_mode,
         cfg.loss.overexposure_reg_weight,
         cfg.loss.color_shift_reg_weight,
         cfg.loss.color_shift_reg_beta);
@@ -200,6 +204,27 @@ std::map<std::string, float> _engine_train_step_after_setup(
 }
 
 
+// The mode this step's raster backward will use -- None when nothing asked
+// for a loss map, so the accumulator stays one lane wide.
+static DensifyAccumMode _step_accum_mode(const EngineStepConfig& cfg) {
+    return cfg.loss.compute_loss_map ? (DensifyAccumMode)cfg.loss.loss_map_accum_mode
+                                     : DensifyAccumMode::None;
+}
+
+// Fold one sub-batch's raster-bwd accum_weight into `dst` exactly as the
+// unsplit kernel folds a batch's cameras: Max reduces with atomicMax, Sum and
+// Avg with atomicAdd (Avg over both planar lanes, divided later).
+static void _fold_accum_weight(DeviceVector<float>& dst, int64_t num_splats) {
+    if (engine().fwd.accum_weight.data_ptr() == nullptr) return;
+    const DensifyAccumMode mode = engine().fwd.accum_mode;
+    const int64_t n = num_splats * accum_lanes(mode);
+    if (mode == DensifyAccumMode::Max)
+        float_max_into(dst, engine().fwd.accum_weight, n);
+    else
+        float_add_into(dst, engine().fwd.accum_weight, n);
+}
+
+
 // Sub-batched (one-camera-per-sub-batch) train step. Pre-conditions:
 //   * !cfg.optim.use_fused_proj_bwd_optim   (FPBO path is incompatible)
 //   * !cfg.optim.use_color_trust_region     (TR kernels not yet threaded)
@@ -211,6 +236,7 @@ std::map<std::string, float> _engine_train_step_after_setup(
 // at the end. The splat Adam kernel reads grad_scale = 1/B from engine
 // state so per-image grad magnitude vs regularization weight stays
 // batch-size invariant.
+
 static std::map<std::string, float> _engine_train_step_split_one_per_camera(
     int step, int max_steps,
     std::string primitive,
@@ -273,21 +299,20 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
         cfg_sub.loss.color_shift_reg_beta = powf(beta_orig, 1.0f / (float)B);
     }
 
-    // Persistent accumulator for per-sub-batch raster-bwd accum_weight
-    // outputs. The raster_bwd pool buffer ("raster_bwd.accum_weight") is
-    // zeroed + overwritten on every call, so engine().fwd.accum_weight
-    // points at only the LAST sub-batch's contribution by default; we
-    // float_add_into() each sub-batch's value here and then re-point
-    // engine().fwd.accum_weight at this buffer for the densify pass.
+    // The raster_bwd pool buffer ("raster_bwd.accum_weight") is zeroed and
+    // overwritten on every call, so engine().fwd.accum_weight would otherwise
+    // carry only the LAST sub-batch. Folded here, then re-pointed for densify.
     int64_t N_splats = engine().cur_num_splats;
     DeviceVector<float> accum_weight_sum;
-    accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum, N_splats);
+    accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum,
+                            N_splats * accum_lanes(_step_accum_mode(cfg)));
     accum_weight_sum.zero();
     // Drop the previous step's re-pointed view (set below for densify): when
     // this step's raster bwd doesn't produce accum_weight (e.g. score_blend_
     // world_grad == 1), the stale view would otherwise pass the null check in
     // the loop and dangle once the pool moves (densify growth, viewer render).
     engine().fwd.accum_weight = DeviceVector<float>();
+    engine().fwd.accum_mode = DensifyAccumMode::None;
 
     std::map<std::string, float> agg;
 
@@ -324,7 +349,7 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
         // raster_bwd pool buffer for this sub-batch; we sum it into our
         // persistent buffer before raster_bwd overwrites it next iter.
         if (engine().fwd.accum_weight.data_ptr() != nullptr) {
-            float_add_into(accum_weight_sum, engine().fwd.accum_weight, N_splats);
+            _fold_accum_weight(accum_weight_sum, N_splats);
         }
 
         // Aggregate loss values across sub-batches as a mean.
@@ -340,10 +365,8 @@ static std::map<std::string, float> _engine_train_step_split_one_per_camera(
     }
     for (auto& [key, val] : agg) val /= (float)B;
 
-    // Re-point engine().fwd.accum_weight at the accumulator so densify sees
-    // the per-splat score summed across all sub-batches (matching the
-    // unsplit raster_bwd output which would have aggregated cameras in a
-    // single kernel launch via atomicAdd).
+    // Reduced across sub-batches the way the unsplit raster_bwd reduces the
+    // cameras of one launch: atomicMax, not a sum.
     engine().fwd.accum_weight = accum_weight_sum;
 
     // Single end-of-step optim + densify pass. The splat Adam kernels read
@@ -418,10 +441,12 @@ std::map<std::string, float> engine_train_step_hetero(
 
     int64_t N_splats = engine().cur_num_splats;
     DeviceVector<float> accum_weight_sum;
-    accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum, N_splats);
+    accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum,
+                            N_splats * accum_lanes(_step_accum_mode(cfg)));
     accum_weight_sum.zero();
     // Drop the previous step's re-pointed view (see per-sub-batch path).
     engine().fwd.accum_weight = DeviceVector<float>();
+    engine().fwd.accum_mode = DensifyAccumMode::None;
 
     std::map<std::string, float> agg;
     int64_t kcam = 0;   // global camera index across the whole step
@@ -455,7 +480,7 @@ std::map<std::string, float> engine_train_step_hetero(
                 step, primitive, sh_degree, packed, bgi_c, cfg_sub);
 
             if (engine().fwd.accum_weight.data_ptr() != nullptr) {
-                float_add_into(accum_weight_sum, engine().fwd.accum_weight, N_splats);
+                _fold_accum_weight(accum_weight_sum, N_splats);
             }
 
             if (kcam == 0) {
@@ -472,7 +497,7 @@ std::map<std::string, float> engine_train_step_hetero(
     }
     for (auto& [key, val] : agg) val /= (float)total_cams;
 
-    // Densify sees the per-splat score summed across every camera of the step.
+    // Densify sees the per-splat score maxed across every camera of the step.
     engine().fwd.accum_weight = accum_weight_sum;
 
     engine().optim.skip_grad_zero      = false;
@@ -606,10 +631,12 @@ static std::map<std::string, float> _engine_train_step_split_warped(
 
     int64_t N_splats = engine().cur_num_splats;
     DeviceVector<float> accum_weight_sum;
-    accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum, N_splats);
+    accum_weight_sum.resize(PoolSlot::EngSubbatchAccumWeightSum,
+                            N_splats * accum_lanes(_step_accum_mode(cfg)));
     accum_weight_sum.zero();
     // Drop the previous step's re-pointed view (see per-sub-batch path).
     engine().fwd.accum_weight = DeviceVector<float>();
+    engine().fwd.accum_mode = DensifyAccumMode::None;
 
     std::map<std::string, float> agg;
 
@@ -654,7 +681,7 @@ static std::map<std::string, float> _engine_train_step_split_warped(
             step, primitive, sh_degree, packed, bgi_k, cfg_sub);
 
         if (engine().fwd.accum_weight.data_ptr() != nullptr) {
-            float_add_into(accum_weight_sum, engine().fwd.accum_weight, N_splats);
+            _fold_accum_weight(accum_weight_sum, N_splats);
         }
 
         if (k == 0) {

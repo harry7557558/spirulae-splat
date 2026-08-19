@@ -34,6 +34,7 @@
 // twice and compares the second return value.
 
 #include <kernels/loss/PerPixelLoss.cuh>
+#include <kernels/densify/Densify.cuh>
 #include <core/Tensor.h>
 
 #include <array>
@@ -49,6 +50,11 @@ using backend::MemcpyKind;
 
 template <bool invert_quantile>
 int batch_quantile_masked_radix_select(
+    const float* d_x, int B, int N, float q, float* d_out, uint32_t* temp,
+    backend::Stream stream);
+
+template <bool invert_quantile>
+int batch_quantile_positive_radix_select(
     const float* d_x, int B, int N, float q, float* d_out, uint32_t* temp,
     backend::Stream stream);
 
@@ -113,6 +119,7 @@ struct MsCfg {
     bool minimal;         // rgb+Ts only (all other modalities null)
     int loss_map_mode;    // DensifyLossMapMode
     float quantile;
+    float nms_falloff;    // *_nms modes only; 0 = the hard canny suppression
 };
 
 void run_ms_cfg(Rng& r, const MsCfg& c) {
@@ -234,7 +241,7 @@ void run_ms_cfg(Rng& r, const MsCfg& c) {
             ttv(v_losses, {(int)LossIndex::length}), needs, num_train,
             cams ? ttv(cams, {c.B}) : ttv_null(),
             ttv(loss_map_out, {c.B, c.H, c.W, 1}), c.loss_map_mode,
-            c.quantile, grads);
+            c.quantile, c.nms_falloff, grads);
     };
 
     run_once();  // primes the one-behind readouts
@@ -262,7 +269,6 @@ void run_ms_cfg(Rng& r, const MsCfg& c) {
     }
     if (c.loss_map_mode != (int)DensifyLossMapMode::None)
         readback_f(g_tight, loss_map_out, np);
-
     g_loose.push_back(lv.rgb_loss);
     g_loose.push_back(lv.rgb_psnr);
     g_loose.push_back(lv.depth_sup);
@@ -302,15 +308,51 @@ void run_quantile(Rng& r) {
     for (float q : {0.5f, 0.9f}) {
         float* out_a = alloc_zero<float>(B);
         float* out_b = alloc_zero<float>(B);
+        float* out_c = alloc_zero<float>(B);
         batch_quantile_masked_radix_select<false>(d_x, B, N, q, out_a, temp,
                                                   backend::kDefaultStream);
         batch_quantile_masked_radix_select<true>(d_x, B, N, q, out_b, temp,
                                                  backend::kDefaultStream);
+        // Same rows, negatives dropped instead of folded in as |x|.
+        batch_quantile_positive_radix_select<false>(d_x, B, N, q, out_c, temp,
+                                                    backend::kDefaultStream);
         backend::device_synchronize();
         readback_f(g_tight, out_a, B);
         readback_f(g_tight, out_b, B);
+        readback_f(g_tight, out_c, B);
     }
     std::printf("msloss_parity: cfg %-12s done\n", "quantile");
+}
+
+// ---------------------------------------------------------------------------
+// Loss-map conditioning (median normalize + quantile clip), in place.
+// ---------------------------------------------------------------------------
+
+void run_normalize_clip(Rng& r) {
+    const int64_t B = 3, H = 37, W = 53, N = H * W;
+    std::vector<float> h = r.vec(B * N, 0.0f, 1.0f);
+    // The population the quantiles are taken over excludes these. The tiny
+    // negatives are the real map's flat-region background: folded in as |x|
+    // they would put the median in the noise floor.
+    for (size_t i = 0; i < h.size(); i += 3) h[i] = -h[i] * 1e-8f;
+    for (size_t i = 0; i < h.size(); i += 11) h[i] = 0.0f;
+    for (size_t i = 5; i < h.size(); i += 401)
+        h[i] = std::numeric_limits<float>::infinity();
+    for (size_t i = 7; i < h.size(); i += 509)
+        h[i] = std::numeric_limits<float>::quiet_NaN();
+    // Spikes: what the clip exists to flatten.
+    for (size_t i = 3; i < h.size(); i += 257) h[i] = 1e4f;
+
+    const struct { bool norm; float q; } cases[] = {
+        {true, 1.0f}, {false, 0.98f}, {true, 0.98f}, {false, 1.0f},
+    };
+    for (const auto& c : cases) {
+        float* d = upload(h);
+        normalize_clip_map_inplace_tensor(ttv(d, {B, H, W, 1}), c.norm, c.q);
+        backend::device_synchronize();
+        readback_f(g_tight, d, B * N);
+    }
+    std::printf("msloss_parity: cfg %-12s done\n", "norm_clip");
 }
 
 int main(int argc, char** argv) {
@@ -326,28 +368,39 @@ int main(int argc, char** argv) {
     const MsCfg cfgs[] = {
         // Full modality set, equal-shape GT, mask, 3 scales, LossFull map.
         {"full", 2, 64, 80, 3, 0, 0, 0, 0, 0, 0, true, false, false,
-         (int)DensifyLossMapMode::LossFull, 0.9f},
+         (int)DensifyLossMapMode::LossFull, 0.9f, 0.5f},
         // Scaled GT modalities (bilinear paths), camera indices, no mask,
         // 2 scales, full-SSIM map; checks the SSIM scalar.
         {"scaled_gt", 2, 40, 48, 2, 80, 96, 30, 36, 0, 0, false, true, false,
-         (int)DensifyLossMapMode::SsimFull, 0.9f},
+         (int)DensifyLossMapMode::SsimFull, 0.9f, 0.5f},
         // Minimal modalities, robust edge-aware map (residual + quantile +
         // tukey + canny), equal-res mask (canny indexes the mask at render
         // resolution), single scale.
         {"robust_edge", 1, 48, 64, 1, 0, 0, 0, 0, 0, 0, true, false, true,
-         (int)DensifyLossMapMode::RobustEdgeAware, 0.85f},
+         (int)DensifyLossMapMode::RobustEdgeAware, 0.85f, 0.5f},
         // Plain edge-aware map (canny of GT rgb), 2 scales.
         {"edge_aware", 1, 32, 32, 2, 0, 0, 0, 0, 0, 0, true, false, true,
-         (int)DensifyLossMapMode::EdgeAware, 0.9f},
+         (int)DensifyLossMapMode::EdgeAware, 0.9f, 0.5f},
         // SSIM contrast*structure and structure-only map variants; the
         // latter with a smaller-resolution mask (SSIM's clamped mask path).
         {"ssim_cs", 1, 32, 32, 1, 0, 0, 0, 0, 0, 0, false, false, true,
-         (int)DensifyLossMapMode::SsimContrastStruct, 0.9f},
+         (int)DensifyLossMapMode::SsimContrastStruct, 0.9f, 0.5f},
         {"ssim_str", 1, 32, 32, 1, 0, 0, 0, 0, 16, 16, true, false, true,
-         (int)DensifyLossMapMode::SsimStructure, 0.9f},
+         (int)DensifyLossMapMode::SsimStructure, 0.9f, 0.5f},
+        // The NMS variants: same maps, thinned to their ridges. Multi-scale
+        // on the loss_full one, since NMS runs per scale.
+        {"loss_nms", 1, 40, 48, 2, 0, 0, 0, 0, 0, 0, true, false, false,
+         (int)DensifyLossMapMode::LossFullNms, 0.9f, 0.5f},
+        {"ssim_f_nms", 1, 32, 32, 1, 0, 0, 0, 0, 0, 0, false, false, true,
+         (int)DensifyLossMapMode::SsimFullNms, 0.9f, 0.0f},
+        {"ssim_cs_nms", 1, 32, 32, 1, 0, 0, 0, 0, 0, 0, false, false, true,
+         (int)DensifyLossMapMode::SsimContrastStructNms, 0.9f, 0.25f},
+        {"ssim_str_nms", 1, 32, 32, 1, 0, 0, 0, 0, 16, 16, true, false, true,
+         (int)DensifyLossMapMode::SsimStructureNms, 0.9f, 1.0f},
     };
     for (const MsCfg& c : cfgs) run_ms_cfg(r, c);
     run_quantile(r);
+    run_normalize_clip(r);
 
     auto write_all = [&](const char* path) {
         std::ofstream f(path, std::ios::binary);

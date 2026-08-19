@@ -55,7 +55,7 @@ template <
 #if IS_EVAL3D
     bool output_viewmat_grad,
 #endif
-    bool output_accum_weight,
+    DensifyAccumMode accum_mode,
     bool output_median
 >
 #if IS_EVAL3D
@@ -97,7 +97,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
     typename SplatPrimitive::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den  // Avg lane 2, else null
 #if IS_EVAL3D
     ,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
@@ -156,6 +157,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     [[maybe_unused]] __shared__ DStore v_distortion_out[dist_any(dist_type) ? BLOCK_SIZE : 1];
     [[maybe_unused]] __shared__ float dist_W[dist_any(dist_type) ? BLOCK_SIZE : 1];        // 1 - T_final
 
+    constexpr bool output_accum_weight = accum_any(accum_mode);
     __shared__ float accum_weight_map[output_accum_weight ? BLOCK_SIZE : 1];
 
     // median depth backward state (per pixel). v_median = dL/d(median depth).
@@ -370,6 +372,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         // accumulate gradient
         typename SplatPrimitive::FragmentBwd v_splat = SplatPrimitive::FragmentBwd::zero(splat);
         [[maybe_unused]] float accum_weight = 0.0f;
+        [[maybe_unused]] float accum_weight_den = 0.0f;
 
         // at t=0, thread 0 (back-most survivor) undoes pixel 0; at t=1 it undoes
         // pixel 1 while thread 1 undoes pixel 0; etc. -> each pixel sees survivors
@@ -536,8 +539,14 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             }
 
             if constexpr (output_accum_weight) {
-                // accum_weight += accum_weight_map[pix_id] * alpha * T0;
-                accum_weight = fmaxf(accum_weight, accum_weight_map[pix_id] * alpha * T0);
+                const float w = alpha * T0;  // this splat's contribution here
+                if constexpr (accum_mode == DensifyAccumMode::Max) {
+                    accum_weight = fmaxf(accum_weight, accum_weight_map[pix_id] * w);
+                } else {
+                    accum_weight += accum_weight_map[pix_id] * w;
+                    if constexpr (accum_mode == DensifyAccumMode::Avg)
+                        accum_weight_den += w;
+                }
             }
 
         #if IS_EVAL3D
@@ -557,8 +566,16 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         if (active) {
             v_splat.atomicStore(v_splat_wbuffer, v_splat_sbuffer, splat_wid, splat_sid);
             if constexpr (output_accum_weight) {
-                // atomicAddFVec(o_accum_weight + splat_wid, accum_weight);
-                atomicMax(o_accum_weight + splat_wid, accum_weight);
+                if constexpr (accum_mode == DensifyAccumMode::Max) {
+                    atomicMax(o_accum_weight + splat_wid, accum_weight);
+                } else {
+                    atomicAdd(o_accum_weight + splat_wid, accum_weight);
+                    // Denominator lane: planar, so the numerator stays a
+                    // contiguous [N] score once finalize divides in place.
+                    if constexpr (accum_mode == DensifyAccumMode::Avg)
+                        atomicAdd(o_accum_weight_den + splat_wid,
+                                  accum_weight_den);
+                }
             }
         }
     }  // for splat_b (within segment)
@@ -629,7 +646,7 @@ template <
 #if IS_EVAL3D
     bool output_viewmat_grad,
 #endif
-    bool output_accum_weight,
+    DensifyAccumMode accum_mode,
     bool output_median
 >
 #if IS_EVAL3D
@@ -672,7 +689,8 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     // grad inputs
     typename SplatPrimitive::WorldBuffer v_splat_wbuffer,
     typename SplatPrimitive::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den  // Avg lane 2, else null
 #if IS_EVAL3D
     ,
     float *__restrict__ v_viewmats // [B, C, 4, 4]
@@ -700,7 +718,7 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
     #if IS_EVAL3D
         output_viewmat_grad,
     #endif
-        output_accum_weight,
+        accum_mode,
         output_median
     ><<<grid, threads, 0, stream>>>(
         I, N, n_isects,
@@ -716,7 +734,8 @@ void rasterize_to_pixels_bwd_kernel_wrapper(
         v_median,
         v_distortions_output_buffer,
         v_splat_wbuffer, v_splat_sbuffer,
-        o_accum_weight
+        o_accum_weight,
+        o_accum_weight_den
     #if IS_EVAL3D
         , v_viewmats
     #endif

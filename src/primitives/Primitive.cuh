@@ -31,6 +31,16 @@ constexpr bool dist_has_depth(DistortionType t)  { return t != DistortionType::N
 constexpr bool dist_has_normal(DistortionType t)
     { return t == DistortionType::DN || t == DistortionType::RGB_DN; }
 
+// How the error map reduces to one score per splat (DensifyConfig::accum_mode).
+// Avg's buffer is 2N planar -- numerator then denominator -- divided in place
+// once every camera has landed.
+enum class DensifyAccumMode : int {
+    None = 0, Max = 1, Sum = 2, Avg = 3
+};
+constexpr bool accum_any(DensifyAccumMode m) { return m != DensifyAccumMode::None; }
+constexpr int accum_lanes(DensifyAccumMode m)
+    { return m == DensifyAccumMode::Avg ? 2 : 1; }
+
 // Depth distortion operates on log depth (ln z). This floor keeps the log/exp
 // and the 1/z gradient chain finite for non-positive depths (the eval3d path
 // already guarantees z > 0; the 2D path does not). Must match in fwd + bwd.

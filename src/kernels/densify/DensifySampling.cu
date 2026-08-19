@@ -19,13 +19,25 @@ int batch_quantile_masked_radix_select(
     cudaStream_t stream
 );
 
+template<bool invert_quantile>
+int batch_quantile_positive_radix_select(
+    const float* d_x,
+    int B,
+    int N,
+    float q,
+    float* d_out,
+    uint32_t* temp,
+    cudaStream_t stream
+);
+
 // Internal helper: pool-allocated quantile computation
-void quantile_of_abs_of_finite_elements_internal(
+void quantile_of_positive_finite_elements_internal(
     const float* inputs_ptr,
     int B,
     int N,
     float q,
     bool return_reciprocal,
+    bool abs_input,
     float* outputs_ptr
 ) {
     if (B == 0)
@@ -33,15 +45,13 @@ void quantile_of_abs_of_finite_elements_internal(
     float* temp_ptr = DevicePool::global().acquire<float>(
         PoolSlot::DensifyQuantileTemp, 1024 * B);
 
-    (return_reciprocal ? batch_quantile_masked_radix_select<true> :
-        batch_quantile_masked_radix_select<false>
-    )(
-        inputs_ptr,
-        B, N, q,
-        outputs_ptr,
-        (uint32_t*)temp_ptr,
-        (cudaStream_t)0
-    );
+    auto fn = abs_input
+        ? (return_reciprocal ? batch_quantile_masked_radix_select<true>
+                             : batch_quantile_masked_radix_select<false>)
+        : (return_reciprocal ? batch_quantile_positive_radix_select<true>
+                             : batch_quantile_positive_radix_select<false>);
+    fn(inputs_ptr, B, N, q, outputs_ptr, (uint32_t*)temp_ptr,
+       (cudaStream_t)0);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
@@ -57,45 +67,80 @@ void quantile_of_abs_of_finite_elements_tensor(
     if (B == 0) return;
     int N = (int)(total / B);
 
-    quantile_of_abs_of_finite_elements_internal(
-        inputs.data_ptr(), B, N, q, return_reciprocal,
+    quantile_of_positive_finite_elements_internal(
+        inputs.data_ptr(), B, N, q, return_reciprocal, /*abs_input=*/true,
         outputs.data_ptr()
     );
 }
 
-__global__ void multiply_by_inverse_median_kernel(
-    int B,
+// `!(v <= c)` also catches NaN and +inf, so a spike of either kind lands on
+// the cutoff rather than poisoning the row.
+__global__ void _normalize_clip_map_kernel(
+    int64_t total,
     int N,
     float* __restrict__ data,
-    const float* __restrict__ quantiles
+    const float* __restrict__ inv_median,  // [B], null to skip
+    const float* __restrict__ clip         // [B], null to skip
 ) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= B*N)
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total)
         return;
-    data[idx] *= quantiles[idx / N];
+    int b = (int)(idx / N);
+    float v = data[idx];
+    if (clip != nullptr) {
+        float c = clip[b];
+        if (!(v <= c)) v = c;
+    }
+    if (inv_median != nullptr)
+        v *= inv_median[b];
+    data[idx] = v;
 }
 
 /*[AutoHeaderGeneratorExport]*/
-void normalize_by_median_inplace_tensor(
-    DeviceVector<float> data
+void normalize_clip_map_inplace_tensor(
+    TorchTensorView data,  // [B, ...], rows normalized independently
+    bool normalize_median,
+    float clip_quantile
 ) {
-    int64_t total = data.size();
-    // treat as 1-batch
-    int B = 1;
-    int N = (int)total;
+    // Quantiles are scale-equivariant, so clipping against the un-normalized
+    // cutoff and rescaling after is the documented normalize-then-clip result
+    // in one pass over the data.
+    const bool do_clip = (clip_quantile > 0.0f && clip_quantile < 1.0f);
+    if (!normalize_median && !do_clip)
+        return;
+    float* ptr = (float*)std::get<0>(data);
+    if (ptr == nullptr)
+        return;
+    const auto& shape = std::get<2>(data);
+    if (shape.empty())
+        return;
+    int64_t total = 1;
+    for (size_t i = 0; i < shape.size(); i++) total *= shape[i];
+    if (shape[0] <= 0 || total <= 0)
+        return;
+    int B = (int)shape[0];
+    int N = (int)(total / shape[0]);
 
-    // pool-allocate inv_median [B]
-    float* inv_median = DevicePool::global().acquire<float>(
-        PoolSlot::DensifyInvMedian, B);
+    float* norm = DevicePool::global().acquire<float>(
+        PoolSlot::DensifyMapNorm, 2 * (size_t)B);
+    float* inv_median = norm;
+    float* clip = norm + B;
 
-    quantile_of_abs_of_finite_elements_internal(
-        data.data_ptr(), B, N, 0.5f, true, inv_median);
+    if (normalize_median)
+        quantile_of_positive_finite_elements_internal(
+            ptr, B, N, 0.5f, /*return_reciprocal=*/true, /*abs_input=*/false,
+            inv_median);
+    if (do_clip)
+        quantile_of_positive_finite_elements_internal(
+            ptr, B, N, clip_quantile, /*return_reciprocal=*/false,
+            /*abs_input=*/false, clip);
 
-    multiply_by_inverse_median_kernel<<<_LAUNCH_ARGS_1D(B*N, 256)>>>(
-        B, N,
-        data.data_ptr(),
-        inv_median
+    _normalize_clip_map_kernel<<<_LAUNCH_ARGS_1D(total, 256)>>>(
+        total, N, ptr,
+        normalize_median ? inv_median : nullptr,
+        do_clip ? clip : nullptr
     );
+    CHECK_DEVICE_ERROR(cudaGetLastError());
 }
 
 

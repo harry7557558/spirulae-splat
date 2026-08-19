@@ -437,9 +437,7 @@ void increment_int32_inplace(DeviceVector<int32_t> data, int64_t n) {
 }
 
 
-// dst[i] += src[i] for i in [0, n). Used by the sub-batched training
-// dispatcher to accumulate per-sub-batch raster-bwd accum_weight buffers
-// into a persistent buffer that densify consumes at the end of the step.
+// dst[i] += src[i] for i in [0, n).
 __global__ void float_add_into_kernel(float* __restrict__ dst,
                                       const float* __restrict__ src,
                                       int64_t n) {
@@ -451,5 +449,22 @@ __global__ void float_add_into_kernel(float* __restrict__ dst,
 void float_add_into(DeviceVector<float> dst, DeviceVector<float> src, int64_t n) {
     if (n == 0 || dst.data_ptr() == nullptr || src.data_ptr() == nullptr) return;
     float_add_into_kernel<<<(n + 255) / 256, 256>>>(dst.data_ptr(), src.data_ptr(), n);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+// dst[i] = max(dst[i], src[i]). Folds per-sub-batch accum_weight the way
+// raster_bwd folds a batch's cameras (atomicMax): a sum would score a splat
+// by how many cameras saw it rather than by its error.
+__global__ void float_max_into_kernel(float* __restrict__ dst,
+                                      const float* __restrict__ src,
+                                      int64_t n) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) dst[idx] = fmaxf(dst[idx], src[idx]);
+}
+
+/*[AutoHeaderGeneratorExport]*/
+void float_max_into(DeviceVector<float> dst, DeviceVector<float> src, int64_t n) {
+    if (n == 0 || dst.data_ptr() == nullptr || src.data_ptr() == nullptr) return;
+    float_max_into_kernel<<<(n + 255) / 256, 256>>>(dst.data_ptr(), src.data_ptr(), n);
     CHECK_DEVICE_ERROR(cudaGetLastError());
 }

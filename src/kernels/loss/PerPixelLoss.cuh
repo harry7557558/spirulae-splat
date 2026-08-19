@@ -91,19 +91,9 @@ struct PerPixelGrads {
     TorchTensorView v_median_depth, v_median_normal;
 };
 
-// What gets accumulated into the densification loss_map. Numeric values are
-// shared with the `densify_loss_map_mode` config flag.
-//   None              -> loss_map_out is left null upstream; no kernel writes.
-//   LossFull          -> per-pixel L1/L2/aux + full SSIM(LCS).
-//   SsimFull          -> full SSIM(LCS) only.
-//   SsimContrastStruct -> SSIM contrast*structure (D_/B), no luminance.
-//   SsimStructure     -> SSIM structure only (D_/(2*sqrt(sig1*sig2)+C2)).
-//   EdgeAware         -> canny edge magnitude of GT rgb (Plenoxels-style
-//                        edge guidance, https://arxiv.org/abs/2603.08661).
-//   RobustEdgeAware   -> RobustNeRF-style Tukey biweight on the luma of
-//                        |render - GT|, followed by canny. Suppresses both
-//                        well-reconstructed regions and distractor pixels
-//                        (residuals above the q-quantile).
+// Numeric values are shared with the `densify_loss_map_mode` config flag, and
+// the per-mode meanings with its help text in i18n/catalog/TrainFields.h.
+// EdgeAware is Plenoxels' edge guidance (https://arxiv.org/abs/2603.08661).
 enum class DensifyLossMapMode : int {
     None = 0,
     LossFull = 1,
@@ -112,7 +102,22 @@ enum class DensifyLossMapMode : int {
     SsimStructure = 4,
     EdgeAware = 5,
     RobustEdgeAware = 6,
+    LossFullNms = 7,
+    SsimFullNms = 8,
+    SsimContrastStructNms = 9,
+    SsimStructureNms = 10,
 };
+
+// A *Nms mode is its base plus canny's non-maximum-suppression step (see
+// loss_map_nms in PerPixelLoss.cu), so everything upstream switches on base.
+constexpr bool densify_loss_map_has_nms(DensifyLossMapMode m) {
+    return m >= DensifyLossMapMode::LossFullNms;
+}
+constexpr DensifyLossMapMode densify_loss_map_base(DensifyLossMapMode m) {
+    return densify_loss_map_has_nms(m)
+        ? (DensifyLossMapMode)((int)m - (int)DensifyLossMapMode::LossFullNms + 1)
+        : m;
+}
 
 // Mode dispatched to the SSIM kernel (the SSIM kernel doesn't need to know
 // about per-pixel L1/L2 or edge-aware; those are handled outside it).
@@ -178,5 +183,6 @@ LossValues compute_multi_scale_per_pixel_losses(
     TorchTensorView loss_map_out,
     int loss_map_mode,
     float robust_edge_aware_quantile,
+    float nms_falloff,
     PerPixelGrads& grads_out
 );

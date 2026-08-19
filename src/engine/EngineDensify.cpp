@@ -204,20 +204,27 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
         );
     }
 
-    // Update densification score using accum_weight from rasterization
-    // backward, optionally geometrically blended with the world-grad score
-    // (||dL/dmean_world|| * max post-exp scale) written by the optim step:
-    //   weight = accum_weight^(1-w) * world_grad_score^w.
-    // w == 0: accum_weight only (no world-grad buffer allocated at all).
-    // w == 1: world-grad score only, passed as the single score buffer (the
-    //         Python side also skips the loss map / raster-bwd accum_weight
-    //         production in this case).
+    // weight = accum_weight^(1-w) * world_grad_score^w, where w == 0 leaves
+    // the world-grad buffer unallocated and w == 1 passes that score alone
+    // (TrainerCore then also skips producing the loss map).
     if (densify_ongoing && use_revised && dv_accum_buf.data_ptr() != nullptr) {
         const float blend_w = cfg.score_blend_world_grad;
         DeviceVector<float> wg_score = engine().fwd.world_grad_score;
 
+        // Avg's raster-bwd buffer is [sum(w*a*T), sum(a*T)] planar; divide it
+        // down to a plain [N] score now that every camera has landed.
+        if (engine().fwd.accum_mode == DensifyAccumMode::Avg &&
+            engine().fwd.accum_weight.data_ptr() != nullptr) {
+            densify_accum_finalize_tensor(cur_num_splats,
+                                          engine().fwd.accum_weight);
+        }
+
         DeviceVector<float> score;
         DeviceVector<float> score2;  // stays null unless 0 < w < 1
+        // Only the opacity-gradient fallback wants the opacity weighting:
+        // accum_weight (max of loss_map * alpha * T) and the world-grad score
+        // already carry it, and re-applying would square the factor.
+        bool weight_by_opacity = false;
         if (blend_w >= 1.0f && wg_score.data_ptr() != nullptr) {
             score = wg_score;
         } else {
@@ -225,6 +232,7 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
                 score = engine().fwd.accum_weight;
             } else {
                 score = engine().grad.opacities.data_ptr() ? engine().grad.opacities : dv_opacs;
+                weight_by_opacity = true;
             }
             if (blend_w > 0.0f && wg_score.data_ptr() != nullptr)
                 score2 = wg_score;
@@ -234,13 +242,19 @@ int engine_densify_step(int step, int max_steps, const DensifyConfig& cfg) {
             cur_num_splats,
             dv_radii,
             nullptr,
-            (float*)dv_opacs.data_ptr(),
+            weight_by_opacity ? (float*)dv_opacs.data_ptr() : nullptr,
             score,
             score2,
             blend_w,
             dv_accum_buf,
             cfg.score_mode
         );
+
+        // Clip what densification samples, and what the score preview reads:
+        // both take dv_accum_buf. Clipping above the q-quantile leaves that
+        // quantile where it was, so repeating it every step does not ratchet.
+        densify_clip_score_tensor(cur_num_splats, dv_accum_buf,
+                                  cfg.score_clip_quantile);
     }
 
     int num_added = 0;

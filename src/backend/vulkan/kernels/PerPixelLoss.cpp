@@ -575,6 +575,32 @@ void avg_pool_upsample_float_vk(const TorchTensorView& hs_dst,
     dispatch_tiles("multi_scale_loss.ms_upsample_f", dW, dH, dB, &p, sizeof(p));
 }
 
+// Mirrors MsNmsParams in shaders/multi_scale_loss.slang.
+struct MsNmsParams {
+    uint64_t img, fails;
+    int32_t B, H, W;
+    float falloff;
+};
+static_assert(sizeof(MsNmsParams) == 2 * 8 + 4 * 4, "layout");
+
+// Two passes so the suppression is in place; see PerPixelLoss.cu.
+void loss_map_nms_inplace_vk(const TorchTensorView& img,
+                             const std::string& key, float falloff) {
+    const auto& sh = std::get<2>(img);
+    long B = sh[0], H = sh[1], W = sh[2];
+    if (B <= 0 || H <= 0 || W <= 0 || falloff >= 1.0f) return;
+    TorchTensorView fails = _pool_alloc_b(key, B, H, W);
+    MsNmsParams p{};
+    p.img = std::get<0>(img);
+    p.fails = std::get<0>(fails);
+    p.falloff = std::max(falloff, 0.0f);
+    p.B = (int32_t)B;
+    p.H = (int32_t)H;
+    p.W = (int32_t)W;
+    dispatch_tiles("multi_scale_loss.ms_nms_mask", W, H, B, &p, sizeof(p));
+    dispatch_tiles("multi_scale_loss.ms_nms_apply", W, H, B, &p, sizeof(p));
+}
+
 void vector_add_scaled_vk(float* dst, const float* src, float scale, int n) {
     MsAddScaledParams p{};
     p.dst = (uint64_t)dst;
@@ -613,9 +639,12 @@ LossValues compute_multi_scale_per_pixel_losses(
     TorchTensorView loss_map_out,
     int loss_map_mode,
     float robust_edge_aware_quantile,
+    float nms_falloff,
     PerPixelGrads& grads_out
 ) {
-    const auto _mode = (DensifyLossMapMode)loss_map_mode;
+    const auto _mode = densify_loss_map_base((DensifyLossMapMode)loss_map_mode);
+    const bool _nms =
+        densify_loss_map_has_nms((DensifyLossMapMode)loss_map_mode);
     const bool _per_pixel_write = (_mode == DensifyLossMapMode::LossFull);
     const int _ssim_mode = [&]() -> int {
         switch (_mode) {
@@ -894,6 +923,13 @@ LossValues compute_multi_scale_per_pixel_losses(
                     robust_edge_aware_quantile, loss_map_scale);
             }
         }
+
+        // Thin the finished map before the pyramid folds it in, so each
+        // scale is suppressed against its own neighbourhood.
+        if (_nms && _has(loss_map_scale))
+            loss_map_nms_inplace_vk(loss_map_scale,
+                                    "ppl.nms.s" + std::to_string(scale),
+                                    nms_falloff);
 
         if (scale == 0) ssim_val = ssim;
 

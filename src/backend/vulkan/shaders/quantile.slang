@@ -1,18 +1,20 @@
 // Batched masked quantile radix-select (Vulkan backend), mirroring
-// kernels/densify/Quantile.cu. Selects the q-quantile of |x| over the strictly-positive
-// finite elements of each row, excluding exact-max occurrences (pass 0
-// subtracts them), via 4 radix passes over 8-bit digits of the float's bit
-// image. All accumulation is integer (histograms + atomics), so results are
-// bit-exact across backends and devices -> tight parity channel.
+// kernels/densify/Quantile.cu: the q-quantile over each row's strictly-positive
+// finite elements, minus exact-max occurrences, via 4 radix passes over the
+// float bit image. All accumulation is integer, so results are bit-exact
+// across backends -> tight parity channel.
 //
-// Spec constants (IDs by declaration order):
-//   0: kInvert -- 0: output the quantile value; 1: output its reciprocal
-//      (the CUDA template's invert_quantile parameter).
+// Spec constants (IDs by declaration order), mirroring the CUDA template:
+//   0: kInvert -- 1 outputs the reciprocal of the quantile.
+//   1: kAbsInput -- 1 selects over |x|, 0 over x so negatives drop out.
 
 #include "int64_compat.slang"
 
 [SpecializationConstant]
 const int kInvert = 0;
+
+[SpecializationConstant]
+const int kAbsInput = 1;
 
 static const int kTileElems = 4096;
 static const uint kPosInfBits = 0x7f800000u;
@@ -32,6 +34,11 @@ struct QuantileParams {
     float q;
     uint wgs_per_row;        // tile axis folds across (wg.x, wg.y)
 };
+
+[ForceInline]
+uint _qt_key(float x) {
+    return asuint(kAbsInput != 0 ? abs(x) : x);
+}
 
 [ForceInline]
 bool _qt_pos_finite(uint u) {
@@ -79,7 +86,7 @@ void qt_find_row_max(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
         int end = min(start + kTileElems, p.N);
         gindex_t base = (gindex_t)row * (gindex_t)p.N;
         for (int i = start + int(tid); i < end; i += 256) {
-            uint u = asuint(abs(p.x[base + i]));
+            uint u = _qt_key(p.x[base + i]);
             if (_qt_pos_finite(u) && u > local_max) local_max = u;
         }
     }
@@ -112,7 +119,7 @@ void qt_hist_pass(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
 
         if (p.pass == 0) {
             for (int i = start + int(tid); i < end; i += 256) {
-                uint u = asuint(abs(p.x[base + i]));
+                uint u = _qt_key(p.x[base + i]);
                 if (!_qt_pos_finite(u)) continue;
                 InterlockedAdd(_qt_shist[(u >> 24) & 255u], 1u);
                 if (u == max_bits) local_max_count++;
@@ -122,7 +129,7 @@ void qt_hist_pass(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
             uint mask = 0xFFFFFFFFu << (32 - 8 * p.pass);
             uint shift = uint(24 - 8 * p.pass);
             for (int i = start + int(tid); i < end; i += 256) {
-                uint u = asuint(abs(p.x[base + i]));
+                uint u = _qt_key(p.x[base + i]);
                 if (!_qt_pos_finite(u)) continue;
                 if ((u & mask) == prefix)
                     InterlockedAdd(_qt_shist[(u >> shift) & 255u], 1u);

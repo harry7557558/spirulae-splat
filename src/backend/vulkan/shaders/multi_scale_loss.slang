@@ -812,3 +812,82 @@ void ms_add_scaled(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     uint i = wg.x * 32 + tid;
     if (i < uint(p.n)) p.dst[i] += p.src[i] * p.scale;
 }
+
+
+// ---------------------------------------------------------------------------
+// Loss-map NMS (kernels/loss/PerPixelLoss.cu loss_map_nms_*_kernel)
+// ---------------------------------------------------------------------------
+
+// Sobel x; transposed for y. Must match _nms_sobel_3x3 in PerPixelLoss.cu.
+static const float kNmsSobel[3][3] = {
+    { -1.0f, 0.0f, 1.0f },
+    { -2.0f, 0.0f, 2.0f },
+    { -1.0f, 0.0f, 1.0f },
+};
+
+struct MsNmsParams {
+    float* img;    // [B,H,W,1]
+    uint* fails;   // [B,H,W] bytes, 0..2 sides outranking the pixel
+    int B, H, W;
+    float falloff;
+};
+
+static const int NMS_BLOCK = 16;
+static const int NMS_HALO = 1;
+static const int NMS_TILE = NMS_BLOCK + 2 * NMS_HALO;
+groupshared float _nms_tile[NMS_TILE * NMS_TILE];
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void ms_nms_mask(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                 uniform MsNmsParams p) {
+    int lx = int(tid % 16u), ly = int(tid / 16u);
+    int x0 = int(wg.x) * NMS_BLOCK, y0 = int(wg.y) * NMS_BLOCK;
+    int bid = int(wg.z);
+
+    for (int i = int(tid); i < NMS_TILE * NMS_TILE; i += 256) {
+        int ty = i / NMS_TILE, tx = i % NMS_TILE;
+        int yi = clamp(y0 + ty - NMS_HALO, 0, p.H - 1);
+        int xi = clamp(x0 + tx - NMS_HALO, 0, p.W - 1);
+        _nms_tile[i] = p.img[((gindex_t)bid * p.H + yi) * (gindex_t)p.W + xi];
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    int xid = x0 + lx, yid = y0 + ly;
+    if (yid >= p.H || xid >= p.W) return;
+
+    int ty = ly + NMS_HALO, tx = lx + NMS_HALO;
+    float gx = 0.0f, gy = 0.0f;
+    for (int cy = -1; cy <= 1; cy++)
+        for (int cx = -1; cx <= 1; cx++) {
+            float v = _nms_tile[(ty + cy) * NMS_TILE + (tx + cx)];
+            gx += kNmsSobel[cy + 1][cx + 1] * v;
+            gy += kNmsSobel[cx + 1][cy + 1] * v;
+        }
+
+    uint n_fail = 0;
+    float g = sqrt(gx * gx + gy * gy);
+    if (g > 0.0f) {
+        int dx = clamp(int(round(gx / g)), -NMS_HALO, NMS_HALO);
+        int dy = clamp(int(round(gy / g)), -NMS_HALO, NMS_HALO);
+        float v = _nms_tile[ty * NMS_TILE + tx];
+        // Masked-out neighbours sit at 0, so they can only protect a pixel.
+        n_fail = (v < _nms_tile[(ty + dy) * NMS_TILE + (tx + dx)] ? 1u : 0u) +
+                 (v < _nms_tile[(ty - dy) * NMS_TILE + (tx - dx)] ? 1u : 0u);
+    }
+    gindex_t idx = ((gindex_t)bid * p.H + yid) * (gindex_t)p.W + xid;
+    u8_store(p.fails, (uint)idx, n_fail);
+}
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void ms_nms_apply(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+                  uniform MsNmsParams p) {
+    uint xid = wg.x * 16 + (tid % 16u);
+    uint yid = wg.y * 16 + (tid / 16u);
+    if (yid >= uint(p.H) || xid >= uint(p.W)) return;
+    gindex_t idx = ((gindex_t)wg.z * p.H + yid) * (gindex_t)p.W + xid;
+    uint n = u8_load(p.fails, (uint)idx);
+    float m = n == 0u ? 1.0f : (n == 1u ? p.falloff : p.falloff * p.falloff);
+    p.img[idx] *= m;
+}

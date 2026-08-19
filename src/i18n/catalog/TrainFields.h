@@ -3126,40 +3126,46 @@ SS_MSG(densify_loss_map_mode_help,
        "the raw color error. `edge_aware` chases edges in the reference photos "
        "whether or not they are already reconstructed well. `robust_edge_aware` "
        "does the same but ignores the worst-matching pixels, so moving people "
-       "and cars do not attract splats. `none` spreads new splats evenly."),
+       "and cars do not attract splats. `none` spreads new splats evenly. Any mode with `_nms` first thins the "
+       "error down to its ridge lines, so splats land on the sharpest edge rather than spreading across the blur around it."),
     JA("新しいスプラットをどこに足すかを、どの種類の誤差で決めるかです。`ssim_structure` "
        "は明るさの違いを無視して、模様やエッジの食い違いを狙います。`ssim_full`、"
        "`ssim_cs`、`loss_full` の順に、生の色の誤差をより多く取り込みます。`edge_aware` "
        "は、すでにうまく再現できているかどうかに関わらず、元写真のエッジを追い"
        "ます。`robust_edge_aware` は同じですが、いちばん合っていない画素を無視"
        "するので、動く人や車にスプラットが集まりません。`none` は新しいスプラ"
-       "ットを均等に散らします。"),
+       "ットを均等に散らします。`_nms` の付いたモードは、まず誤差を稜線だけに"
+       "細らせるので、ぼやけた広がりではなく、いちばん鋭いところにスプラットが乗ります。"),
     ZH_HANS("用哪种误差决定在哪里新增泼溅。`ssim_structure` 忽略明暗差异，专门"
             "盯住图案和边缘的不一致。`ssim_full`、`ssim_cs`、`loss_full` 依次"
             "纳入更多原始颜色误差。`edge_aware` 追踪参考照片中的边缘，无论那里"
             "是否已经重建得很好。`robust_edge_aware` 与之相同，但忽略最不匹配"
             "的像素，因此移动的行人和车辆不会吸引泼溅。`none` 则把新泼溅均匀铺"
-            "开。"),
+            "开。带 `_nms` 的模式会先把误差收细成一条线，因此泼溅落在最清晰的边缘上，"
+            "而不是散布在它周围的模糊里。"),
     ZH_HANT("用哪種誤差決定在哪裡新增潑濺。`ssim_structure` 忽略明暗差異，專門"
             "盯住圖案和邊緣的不一致。`ssim_full`、`ssim_cs`、`loss_full` 依次"
             "納入更多原始顏色誤差。`edge_aware` 追蹤參考照片中的邊緣，無論那裡"
             "是否已經重建得很好。`robust_edge_aware` 與之相同，但忽略最不吻合"
             "的像素，因此移動的行人和車輛不會吸引潑濺。`none` 則把新潑濺均勻鋪"
-            "開。"),
+            "開。帶 `_nms` 的模式會先把誤差收細成一條線，因此潑濺落在最清晰的邊緣上，"
+            "而不是散布在它周圍的模糊裡。"),
     KO("새 스플랫을 어디에 추가할지 어떤 종류의 오차로 정할지입니다. `ssim_structure`는"
        " 밝기 차이를 무시하고 무늬와 가장자리의 불일치를 노립니다. `ssim_full`, "
        "`ssim_cs`, `loss_full` 순으로 원본 색 오차를 점점 더 많이 반영합니다. "
        "`edge_aware`는 이미 잘 복원됐는지와 상관없이 원본 사진의 가장자리를 좇"
        "습니다. `robust_edge_aware`는 같지만 가장 안 맞는 픽셀을 무시하므로 움"
        "직이는 사람과 차에 스플랫이 몰리지 않습니다. `none`은 새 스플랫을 고르"
-       "게 흩뿌립니다."),
+       "게 흩뿌립니다. `_nms`가 붙은 방식은 오차를 먼저 능선만 남기고 얇게 깎아"
+       "내므로, 흐릿하게 번진 곳이 아니라 가장 날카로운 가장자리에 스플랫이 놓입니다."),
     DE("Welche Art von Fehler entscheidet, wo neue Splats hinzukommen. `ssim_structure` "
        "zielt auf abweichende Muster und Kanten und ignoriert Helligkeitsunterschiede. "
        "`ssim_full`, `ssim_cs` und `loss_full` nehmen zunehmend mehr vom reinen "
        "Farbfehler auf. `edge_aware` verfolgt Kanten in den Vorlagefotos, gleich "
        "ob sie schon gut rekonstruiert sind. `robust_edge_aware` tut dasselbe, "
        "ignoriert aber die am schlechtesten passenden Pixel, sodass bewegte Personen "
-       "und Autos keine Splats anziehen. `none` verteilt neue Splats gleichmäßig."),
+       "und Autos keine Splats anziehen. `none` verteilt neue Splats gleichmäßig. Jeder Modus mit `_nms` dünnt den "
+       "Fehler zuerst auf seine Gratlinien aus, sodass Splats auf der schärfsten Kante landen statt in der Unschärfe darum herum."),
     FR("Quel type d'erreur décide où ajouter de nouveaux splats. `ssim_structure` "
        "vise les motifs et les contours qui ne correspondent pas, en ignorant "
        "les écarts de luminosité. `ssim_full`, `ssim_cs` et `loss_full` intègrent "
@@ -3167,7 +3173,8 @@ SS_MSG(densify_loss_map_mode_help,
        "contours des photos de référence, qu'ils soient déjà bien reconstruits "
        "ou non. `robust_edge_aware` fait de même mais ignore les pixels qui correspondent "
        "le moins, de sorte que passants et voitures n'attirent pas de splats. "
-       "`none` répartit les nouveaux splats uniformément."),
+       "`none` répartit les nouveaux splats uniformément. Tout mode avec `_nms` "
+       "amincit d'abord l'erreur jusqu'à ses lignes de crête, de sorte que les splats se posent sur le contour le plus net plutôt que dans le flou autour."),
     ES("Qué tipo de error decide dónde se añaden splats nuevos. `ssim_structure` "
        "apunta a los patrones y bordes que no coinciden e ignora las diferencias "
        "de brillo. `ssim_full`, `ssim_cs` y `loss_full` incorporan progresivamente "
@@ -3175,7 +3182,8 @@ SS_MSG(densify_loss_map_mode_help,
        "de referencia, estén ya bien reconstruidos o no. `robust_edge_aware` "
        "hace lo mismo pero ignora los píxeles que peor coinciden, de modo que "
        "personas y coches en movimiento no atraen splats. `none` reparte los "
-       "splats nuevos de manera uniforme."),
+       "splats nuevos de manera uniforme. Cualquier modo con `_nms` adelgaza primero "
+       "el error hasta sus líneas de cresta, de modo que los splats caen en el borde más nítido y no en el desenfoque que lo rodea."),
     PT("Que tipo de erro decide onde novos splats são acrescentados. `ssim_structure` "
        "mira os padrões e bordas que não coincidem e ignora diferenças de brilho. "
        "`ssim_full`, `ssim_cs` e `loss_full` incorporam progressivamente mais "
@@ -3183,7 +3191,8 @@ SS_MSG(densify_loss_map_mode_help,
        "estejam ou não já bem reconstruídas. `robust_edge_aware` faz o mesmo, "
        "mas ignora os pixels que pior coincidem, de modo que pessoas e carros "
        "em movimento não atraem splats. `none` espalha os novos splats de forma "
-       "uniforme."),
+       "uniforme. Qualquer modo com `_nms` afina primeiro o erro até às suas linhas "
+       "de crista, de modo que os splats assentam na borda mais nítida e não no desfoque à volta dela."),
     IT("Che tipo di errore decide dove aggiungere nuovi splat. `ssim_structure` "
        "punta a motivi e bordi che non corrispondono e ignora le differenze di "
        "luminosità. `ssim_full`, `ssim_cs` e `loss_full` includono via via più "
@@ -3191,14 +3200,16 @@ SS_MSG(densify_loss_map_mode_help,
        "che siano già ricostruiti bene o no. `robust_edge_aware` fa lo stesso "
        "ma ignora i pixel che corrispondono peggio, così persone e automobili "
        "in movimento non attirano splat. `none` distribuisce i nuovi splat in "
-       "modo uniforme."),
+       "modo uniforme. Ogni modalità con `_nms` assottiglia prima l'errore fino alle "
+       "sue linee di cresta, così gli splat si posano sul bordo più nitido e non nella sfocatura attorno."),
     NL("Welk soort fout bepaalt waar nieuwe splats bij komen. `ssim_structure` "
        "mikt op patronen en randen die niet kloppen en negeert helderheidsverschillen. "
        "`ssim_full`, `ssim_cs` en `loss_full` nemen stapsgewijs meer van de ruwe "
        "kleurfout mee. `edge_aware` volgt randen in de referentiefoto's, of die "
        "nu al goed gereconstrueerd zijn of niet. `robust_edge_aware` doet hetzelfde "
        "maar negeert de slechtst passende pixels, zodat bewegende mensen en auto's "
-       "geen splats aantrekken. `none` verdeelt nieuwe splats gelijkmatig."),
+       "geen splats aantrekken. `none` verdeelt nieuwe splats gelijkmatig. Elke modus met `_nms` dunt de fout "
+       "eerst uit tot haar ribbellijnen, zodat splats op de scherpste rand landen en niet in de onscherpte eromheen."),
     RU("Какая именно ошибка решает, куда добавлять новые сплаты. `ssim_structure` "
        "целится в несовпадающие узоры и края и не смотрит на разницу яркости. "
        "`ssim_full`, `ssim_cs` и `loss_full` последовательно добавляют всё больше "
@@ -3206,7 +3217,8 @@ SS_MSG(densify_loss_map_mode_help,
        "независимо от того, восстановлены они уже хорошо или нет. `robust_edge_aware` "
        "делает то же, но пропускает хуже всего совпадающие пиксели, поэтому идущие "
        "люди и машины не притягивают сплаты. `none` распределяет новые сплаты "
-       "равномерно."),
+       "равномерно. Любой режим с `_nms` сначала утончает ошибку до её гребней, "
+       "поэтому сплаты ложатся на самый резкий край, а не расплываются вокруг него."),
     TR("Yeni splat'ların nereye ekleneceğine hangi tür hatanın karar vereceği. "
        "`ssim_structure` parlaklık farklarını yok sayar ve uyuşmayan desenlerle "
        "kenarları hedefler. `ssim_full`, `ssim_cs` ve `loss_full` sırayla ham "
@@ -3214,7 +3226,8 @@ SS_MSG(densify_loss_map_mode_help,
        "olsun olmasın kaynak fotoğraflardaki kenarların peşine düşer. `robust_edge_aware` "
        "aynısını yapar ama en kötü uyuşan pikselleri yok sayar; böylece hareket "
        "eden insanlar ve arabalar splat çekmez. `none` ise yeni splat'ları eşit "
-       "dağıtır."));
+       "dağıtır. `_nms` içeren her kip, hatayı önce sırt çizgilerine kadar inceltir; "
+       "böylece splat'lar çevredeki bulanıklığa yayılmak yerine en keskin kenara oturur."));
 
 SS_MSG(densify_robust_edge_aware_quantile,
     EN("Ignored worst-error share"), JA("無視する誤差上位の割合"),
@@ -3285,6 +3298,350 @@ SS_MSG(densify_robust_edge_aware_quantile_help,
        "sayar; hareketli istenmeyenlerle dolu çekimlere uyar. Yüksek değerler "
        "daha çoğunu tutar; büyük hataların gerçek ayrıntı olduğu temiz çekimlere "
        "uyar."));
+
+SS_MSG(densify_nms_falloff,
+    EN("Edge thinning softness"), JA("エッジ細線化の強さ"),
+    ZH_HANS("边缘细化的柔和度"), ZH_HANT("邊緣細化的柔和度"),
+    KO("가장자리 세선화 강도"),
+    DE("Weichheit der Kantenverdünnung"),
+    FR("Douceur de l'amincissement des contours"),
+    ES("Suavidad del adelgazamiento de bordes"),
+    PT("Suavidade do afinamento de bordas"),
+    IT("Morbidezza dell'assottigliamento dei bordi"),
+    NL("Zachtheid van het randen uitdunnen"),
+    RU("Мягкость утончения краёв"),
+    TR("Kenar inceltmenin yumuşaklığı"));
+SS_MSG(densify_nms_falloff_help,
+    EN("Only used by the `_nms` error measures. Each of the two neighbours across "
+       "an edge that beats a pixel multiplies its error by this. 0 is the strict "
+       "version, which keeps only the crest and can break up leafy, grainy scenes "
+       "into speckle. 1 turns the thinning off. Values near the middle keep edges "
+       "sharp while leaving noisy areas smooth."),
+    JA("`_nms` の誤差の測り方だけで使います。エッジをまたぐ両隣のうち、その画"
+       "素より大きいものひとつにつき、誤差をこの値で掛けます。0 は厳密版で、"
+       "尾根だけを残すため、葉や細かい模様のシーンが点々に崩れることがありま"
+       "す。1 "
+       "は細線化を切ります。中くらいの値なら、エッジは鋭いまま、ざらついた場"
+       "所はなめらかに保てます。"),
+    ZH_HANS("仅供 `_nms` 误差度量使用。跨越边缘的两个相邻像素中，每有一个比该"
+            "像素大，就把它的误差乘以这个值。0 是严格版，只保留最高的一条线，可"
+            "能把树叶这类细碎的场景打散成小点。1 关闭细化。取中间值可以让"
+            "边缘保持清晰，同时让噪声多的区域保持平滑。"),
+    ZH_HANT("僅供 `_nms` 誤差度量使用。跨越邊緣的兩個相鄰像素中，每有一個比該"
+            "像素大，就把它的誤差乘以這個值。0 是嚴格版，只保留最高的一條線，可"
+            "能把樹葉這類細碎的場景打散成小點。1 關閉細化。取中間值可以讓"
+            "邊緣保持清晰，同時讓雜訊多的區域保持平滑。"),
+    KO("`_nms` 오차 측정 방식에서만 쓰입니다. 가장자리를 사이에 둔 두 이웃 화소"
+       " 중 해당 화소보다 큰 것 하나마다 오차에 이 값을 곱합니다. 0은 엄격한 방"
+       "식으로 마루만 남기므로 잎이나 거친 질감의 장면이 잔점으로 부서질 수 있"
+       "습니다. 1은 세선화를 끕니다. 중간값이면 가장자리는 또렷하게, 잡음이 많은"
+       " 영역은 매끄럽게 유지됩니다."),
+    DE("Nur von den `_nms`-Fehlermaßen benutzt. Jeder der beiden Nachbarn quer "
+       "zur Kante, der ein Pixel übertrifft, multipliziert dessen Fehler damit. "
+       "0 ist die strenge Variante, die nur den Grat behält und laubige, körnige "
+       "Szenen in Sprenkel zerlegen kann. 1 schaltet die Verdünnung ab. Mittlere "
+       "Werte halten Kanten scharf und verrauschte Flächen glatt."),
+    FR("Utilisé uniquement par les mesures d'erreur `_nms`. Chacun des deux voisins "
+       "en travers d'un contour qui dépasse un pixel multiplie son erreur par "
+       "cette valeur. 0 est la version stricte, qui ne garde que la crête et peut "
+       "réduire les scènes feuillues ou granuleuses en mouchetis. 1 désactive "
+       "l'amincissement. Les valeurs moyennes gardent les contours nets tout en "
+       "laissant lisses les zones bruitées."),
+    ES("Solo lo usan las medidas de error `_nms`. Cada uno de los dos vecinos al "
+       "otro lado de un borde que supere a un píxel multiplica su error por este "
+       "valor. 0 es la versión estricta, que solo conserva la cresta y puede romper "
+       "las escenas frondosas o granulosas en motas. 1 desactiva el adelgazamiento. "
+       "Los valores intermedios mantienen los bordes nítidos y las zonas ruidosas "
+       "suaves."),
+    PT("Só é usado pelas medidas de erro `_nms`. Cada um dos dois vizinhos do outro "
+       "lado de uma borda que supere um pixel multiplica o erro dele por este valor. "
+       "0 é a versão estrita, que guarda apenas a crista e pode partir cenas "
+       "folhosas ou granulosas em salpicos. 1 desliga o afinamento. Valores "
+       "intermédios mantêm as bordas nítidas e as zonas ruidosas suaves."),
+    IT("Usato solo dalle misure d'errore `_nms`. Ciascuno dei due vicini attraverso "
+       "un bordo che supera un pixel ne moltiplica l'errore per questo valore. 0 "
+       "è la versione rigida, che tiene solo la cresta e può sbriciolare in "
+       "puntini le scene fogliose o granulose. 1 disattiva l'assottigliamento. "
+       "I valori intermedi tengono i bordi nitidi e lisce le zone rumorose."),
+    NL("Alleen gebruikt door de `_nms`-foutmaten. Elk van de twee buren aan de "
+       "overkant van een rand die een pixel overtreft, vermenigvuldigt diens fout "
+       "hiermee. 0 is de strikte versie, die alleen de kam bewaart en bladerrijke, "
+       "korrelige scènes tot spikkels kan breken. 1 zet het uitdunnen uit. "
+       "Middenwaarden houden randen scherp en ruisrijke vlakken glad."),
+    RU("Используется только мерами ошибки `_nms`. Каждый из двух соседей поперёк "
+       "края, превосходящий пиксель, умножает его ошибку на это число. 0 — строгий "
+       "вариант: остаётся только гребень, из-за чего лиственные и зернистые сцены "
+       "могут рассыпаться в крапинки. 1 отключает утончение. Средние значения "
+       "оставляют края резкими, а шумные участки гладкими."),
+    TR("Yalnızca `_nms` hata ölçüleri kullanır. Bir kenarın karşısındaki iki "
+       "komşudan pikseli aşan her biri, o pikselin hatasını bununla çarpar. 0 katı "
+       "sürümdür; yalnızca sırtı tutar ve yapraklı, taneli sahneleri beneklere "
+       "ayırabilir. 1 inceltmeyi kapatır. Orta değerler kenarları keskin, gürültülü "
+       "alanları düz bırakır."));
+
+SS_MSG(densify_loss_map_normalize,
+    EN("Level error across photos"), JA("写真ごとに誤差をそろえる"),
+    ZH_HANS("统一各照片的误差尺度"), ZH_HANT("統一各照片的誤差尺度"),
+    KO("사진 간 오차 수준 맞추기"),
+    DE("Fehler zwischen Fotos angleichen"),
+    FR("Égaliser l'erreur entre les photos"),
+    ES("Igualar el error entre fotos"),
+    PT("Igualar o erro entre fotos"),
+    IT("Uniformare l'errore tra le foto"),
+    NL("Fout tussen foto's gelijktrekken"),
+    RU("Выравнивать ошибку между фото"),
+    TR("Hatayı fotoğraflar arasında eşitle"));
+SS_MSG(densify_loss_map_normalize_help,
+    EN("Divide each photo's detail error by its own middle value before it decides "
+       "where splats are added, so a dark or cluttered photo counts as much as a "
+       "bright, simple one. Off leaves the raw error, and a few photos can then "
+       "decide most of where detail goes."),
+    JA("どこにスプラットを足すかを決める前に、各写真の細部の誤差をその写真自身"
+       "の中央値で割ります。暗い写真や込み入った写真も、明るく単純な写真と同じ"
+       "だけ効きます。切ると生の誤差のままなので、一部の写真が細部の行き先をほ"
+       "ぼ決めてしまうことがあります。"),
+    ZH_HANS("在决定往哪里加泼溅之前，先用每张照片自己的中位值去除它的细节误差，"
+            "这样较暗或细节密集的照片和明亮简单的照片同样有分量。关闭则保留原始误"
+            "差，少数照片可能决定大部分细节的去向。"),
+    ZH_HANT("在決定往哪裡加潑濺之前，先用每張照片自己的中位值去除它的細節誤差，"
+            "這樣較暗或細節密集的照片和明亮簡單的照片同樣有分量。關閉則保留原始誤"
+            "差，少數照片可能決定大部分細節的去向。"),
+    KO("스플랫을 어디에 더할지 정하기 전에, 사진마다 그 사진 자신의 중간값으로 "
+       "디테일 오차를 나눕니다. 그러면 어둡거나 복잡한 사진도 밝고 단순한 사진"
+       "만큼 반영됩니다. 끄면 원래 오차를 그대로 쓰므로 몇 장의 사진이 디테일의"
+       " 행선지를 대부분 정해 버릴 수 있습니다."),
+    DE("Den Detailfehler jedes Fotos durch dessen eigenen mittleren Wert teilen, "
+       "bevor er entscheidet, wo Splats ergänzt werden. So zählt ein dunkles oder "
+       "unruhiges Foto so viel wie ein helles, einfaches. Aus bleibt der rohe "
+       "Fehler, und wenige Fotos bestimmen dann den größten Teil davon, wohin "
+       "Detail geht."),
+    FR("Diviser l'erreur de détail de chaque photo par sa propre valeur médiane "
+       "avant qu'elle ne décide où ajouter des splats, pour qu'une photo sombre "
+       "ou chargée compte autant qu'une photo claire et simple. Désactivé laisse "
+       "l'erreur brute, et quelques photos décident alors de l'essentiel du "
+       "placement du détail."),
+    ES("Dividir el error de detalle de cada foto por su propio valor central antes "
+       "de que decida dónde se añaden splats, para que una foto oscura o recargada "
+       "cuente tanto como una clara y sencilla. Desactivado deja el error en bruto, "
+       "y unas pocas fotos deciden entonces casi todo el reparto del detalle."),
+    PT("Dividir o erro de detalhe de cada foto pelo seu próprio valor central antes "
+       "de decidir onde acrescentar splats, para que uma foto escura ou carregada "
+       "conte tanto como uma clara e simples. Desligado deixa o erro em bruto, e "
+       "então poucas fotos decidem quase todo o destino do detalhe."),
+    IT("Dividere l'errore di dettaglio di ogni foto per il proprio valore centrale "
+       "prima che decida dove aggiungere gli splat, così una foto scura o affollata "
+       "pesa quanto una chiara e semplice. Spento lascia l'errore grezzo, e poche "
+       "foto decidono quasi tutta la destinazione del dettaglio."),
+    NL("De detailfout van elke foto delen door haar eigen middenwaarde voordat die "
+       "bepaalt waar splats bij komen, zodat een donkere of drukke foto net zoveel "
+       "meetelt als een heldere, eenvoudige. Uit laat de ruwe fout staan, en dan "
+       "bepalen een paar foto's het grootste deel van waar detail heen gaat."),
+    RU("Делить ошибку детализации каждого фото на его собственное срединное "
+       "значение, прежде чем она решает, куда добавлять сплаты: тогда тёмный или "
+       "загромождённый кадр весит столько же, сколько светлый и простой. Выключено "
+       "оставляет исходную ошибку, и тогда несколько кадров решают почти всё "
+       "распределение деталей."),
+    TR("Splat'ların nereye ekleneceğine karar vermeden önce her fotoğrafın ayrıntı "
+       "hatasını kendi orta değerine böler; böylece karanlık ya da kalabalık bir "
+       "fotoğraf, aydınlık ve yalın bir fotoğraf kadar sayılır. Kapalıyken ham hata "
+       "kalır ve ayrıntının nereye gideceğini birkaç fotoğraf belirleyebilir."));
+
+SS_MSG(densify_loss_map_clip_quantile,
+    EN("Error spike cutoff"), JA("誤差スパイクの上限"),
+    ZH_HANS("误差尖峰上限"), ZH_HANT("誤差尖峰上限"), KO("오차 급등 상한"),
+    DE("Obergrenze für Fehlerspitzen"),
+    FR("Plafond des pics d'erreur"),
+    ES("Tope de los picos de error"),
+    PT("Limite dos picos de erro"),
+    IT("Tetto dei picchi di errore"),
+    NL("Bovengrens voor foutpieken"),
+    RU("Порог обрезки всплесков ошибки"),
+    TR("Hata sıçraması üst sınırı"));
+SS_MSG(densify_loss_map_clip_quantile_help,
+    EN("Cap each photo's detail error at this share of its own pixels, so a handful "
+       "of extreme pixels cannot pull every new splat toward them. 1 leaves it "
+       "uncapped and costs nothing; 0.99 trims the worst one percent of each photo."),
+    JA("各写真の細部の誤差を、その写真の画素のこの割合のところで頭打ちにします。"
+       "ごく少数の極端な画素に新しいスプラットが引き寄せられなくなります。1 は"
+       "頭打ちなしで、処理も増えません。0.99 は各写真の上位 1 パーセントを削り"
+       "ます。"),
+    ZH_HANS("把每张照片的细节误差截断在自身像素的这一比例处，使极少数极端像素无"
+            "法把新泼溅全都吸引过去。1 表示不截断，也不增加开销；0.99 会削掉每"
+            "张照片最差的百分之一。"),
+    ZH_HANT("把每張照片的細節誤差截斷在自身像素的這一比例處，使極少數極端像素無"
+            "法把新潑濺全都吸引過去。1 表示不截斷，也不增加開銷；0.99 會削掉每"
+            "張照片最差的百分之一。"),
+    KO("각 사진의 디테일 오차를 그 사진 화소의 이 비율에서 잘라 냅니다. 그러면 "
+       "극단적인 화소 몇 개가 새 스플랫을 전부 끌어당기지 못합니다. 1은 자르지 "
+       "않으며 비용도 없고, 0.99는 사진마다 가장 나쁜 1퍼센트를 깎습니다."),
+    DE("Den Detailfehler jedes Fotos bei diesem Anteil seiner eigenen Pixel "
+       "abschneiden, damit eine Handvoll extremer Pixel nicht jeden neuen Splat zu "
+       "sich zieht. 1 schneidet nichts ab und kostet nichts; 0,99 kappt das "
+       "schlechteste Prozent jedes Fotos."),
+    FR("Plafonner l'erreur de détail de chaque photo à cette part de ses propres "
+       "pixels, pour qu'une poignée de pixels extrêmes n'attire pas vers eux chaque "
+       "nouveau splat. 1 ne plafonne rien et ne coûte rien ; 0,99 rogne le pire "
+       "pour cent de chaque photo."),
+    ES("Limitar el error de detalle de cada foto a esta proporción de sus propios "
+       "píxeles, para que un puñado de píxeles extremos no atraiga hacia sí cada "
+       "splat nuevo. 1 no limita nada y no cuesta nada; 0,99 recorta el peor uno "
+       "por ciento de cada foto."),
+    PT("Limitar o erro de detalhe de cada foto a esta proporção dos seus próprios "
+       "pixels, para que um punhado de pixels extremos não puxe para si cada splat "
+       "novo. 1 não limita nada e não custa nada; 0,99 corta o pior um por cento "
+       "de cada foto."),
+    IT("Limitare l'errore di dettaglio di ogni foto a questa quota dei suoi stessi "
+       "pixel, così una manciata di pixel estremi non tira verso di sé ogni nuovo "
+       "splat. 1 non limita nulla e non costa nulla; 0,99 taglia l'uno per cento "
+       "peggiore di ogni foto."),
+    NL("De detailfout van elke foto afkappen bij dit deel van haar eigen pixels, "
+       "zodat een handvol extreme pixels niet elke nieuwe splat naar zich toe trekt. "
+       "1 kapt niets af en kost niets; 0,99 snoeit de slechtste procent van elke "
+       "foto weg."),
+    RU("Обрезать ошибку детализации каждого фото на этой доле его собственных "
+       "пикселей, чтобы горстка крайних пикселей не стягивала к себе каждый новый "
+       "сплат. 1 не обрезает ничего и ничего не стоит; 0,99 срезает худший процент "
+       "каждого кадра."),
+    TR("Her fotoğrafın ayrıntı hatasını kendi piksellerinin bu oranında keser; "
+       "böylece bir avuç uç piksel her yeni splat'ı kendine çekemez. 1 hiç kesmez "
+       "ve maliyeti yoktur; 0,99 her fotoğrafın en kötü yüzde birini budar."));
+
+SS_MSG(densify_accum_mode,
+    EN("Combine error over a photo"), JA("写真内での誤差のまとめ方"),
+    ZH_HANS("单张照片内的误差合并方式"), ZH_HANT("單張照片內的誤差合併方式"),
+    KO("사진 안에서 오차를 합치는 방식"),
+    DE("Fehler über ein Foto zusammenfassen"),
+    FR("Combiner l'erreur sur une photo"),
+    ES("Combinar el error en una foto"),
+    PT("Combinar o erro numa foto"),
+    IT("Combinare l'errore su una foto"),
+    NL("Fout over een foto samenvoegen"),
+    RU("Сведение ошибки по фотографии"),
+    TR("Hatayı bir fotoğraf boyunca birleştirme"));
+SS_MSG(densify_accum_mode_help,
+    EN("How the error under one splat is turned into its score. `max` takes its "
+       "worst pixel, so a splat covering one bad spot still counts. `sum` adds the "
+       "error up, which favours large splats and busy areas. `avg` takes the "
+       "average over the area it covers, which judges big and small splats alike."),
+    JA("1 つのスプラットが覆う誤差を、どうやってそのスプラットの点数にするかで"
+       "す。`max` はいちばん悪い画素を取るので、悪い部分が 1 つでもあれば効きま"
+       "す。`sum` は誤差を足すので、大きなスプラットや込み入った場所が有利にな"
+       "ります。`avg` は覆っている範囲の平均を取るので、大小のスプラットを同じ"
+       "ものさしで測ります。"),
+    ZH_HANS("如何把一个泼溅覆盖范围内的误差变成它的分数。`max` 取其中最差的像"
+            "素，因此只要覆盖到一处很差的地方就会计入。`sum` 把误差累加，会偏"
+            "向大泼溅和繁杂区域。`avg` 取覆盖范围内的平均值，对大小泼溅一视同"
+            "仁。"),
+    ZH_HANT("如何把一個潑濺覆蓋範圍內的誤差變成它的分數。`max` 取其中最差的像"
+            "素，因此只要覆蓋到一處很差的地方就會計入。`sum` 把誤差累加，會偏"
+            "向大潑濺和繁雜區域。`avg` 取覆蓋範圍內的平均值，對大小潑濺一視同"
+            "仁。"),
+    KO("스플랫 하나가 덮은 오차를 그 스플랫의 점수로 바꾸는 방식입니다. `max` "
+       "는 가장 나쁜 화소를 취하므로 나쁜 지점 하나만 덮어도 반영됩니다. `sum` "
+       "은 오차를 더하므로 큰 스플랫과 복잡한 영역에 유리합니다. `avg` 는 덮은 "
+       "범위의 평균을 취하므로 크고 작은 스플랫을 같은 기준으로 봅니다."),
+    DE("Wie der Fehler unter einem Splat zu dessen Punktzahl wird. `max` nimmt "
+       "sein schlechtestes Pixel, sodass ein Splat schon zählt, wenn er eine "
+       "schlechte Stelle überdeckt. `sum` addiert den Fehler auf, was große Splats "
+       "und unruhige Flächen bevorzugt. `avg` nimmt den Mittelwert über die "
+       "überdeckte Fläche und misst große wie kleine Splats gleich."),
+    FR("Comment l'erreur sous un splat devient sa note. `max` prend son pire "
+       "pixel, donc un splat qui couvre un seul mauvais endroit compte quand même. "
+       "`sum` additionne l'erreur, ce qui favorise les gros splats et les zones "
+       "chargées. `avg` prend la moyenne sur la surface couverte, ce qui juge "
+       "petits et gros splats de la même façon."),
+    ES("Cómo el error bajo un splat se convierte en su puntuación. `max` toma su "
+       "peor píxel, así que un splat que cubre un solo punto malo ya cuenta. `sum` "
+       "suma el error, lo que favorece a los splats grandes y las zonas recargadas. "
+       "`avg` toma la media sobre el área que cubre, que juzga igual a grandes y "
+       "pequeños."),
+    PT("Como o erro sob um splat se torna a sua pontuação. `max` toma o seu pior "
+       "pixel, por isso um splat que cobre um único ponto mau já conta. `sum` soma "
+       "o erro, o que favorece splats grandes e zonas carregadas. `avg` toma a "
+       "média sobre a área que cobre, julgando grandes e pequenos por igual."),
+    IT("Come l'errore sotto uno splat diventa il suo punteggio. `max` prende il "
+       "suo pixel peggiore, così uno splat che copre anche un solo punto brutto "
+       "conta lo stesso. `sum` somma l'errore, il che favorisce splat grandi e "
+       "zone affollate. `avg` prende la media sull'area coperta, giudicando grandi "
+       "e piccoli allo stesso modo."),
+    NL("Hoe de fout onder een splat zijn score wordt. `max` neemt het slechtste "
+       "pixel, dus een splat die één slechte plek bedekt telt al mee. `sum` telt "
+       "de fout op, wat grote splats en drukke vlakken bevoordeelt. `avg` neemt "
+       "het gemiddelde over het bedekte gebied en meet grote en kleine splats "
+       "gelijk."),
+    RU("Как ошибка под сплатом превращается в его оценку. `max` берёт худший "
+       "пиксель, поэтому сплат засчитывается, даже если задевает лишь одно плохое "
+       "место. `sum` складывает ошибку, что выгодно крупным сплатам и насыщенным "
+       "участкам. `avg` берёт среднее по покрытой площади и судит крупные и мелкие "
+       "сплаты одинаково."),
+    TR("Bir splat'ın altındaki hatanın onun puanına nasıl dönüştüğü. `max` en kötü "
+       "pikseli alır; böylece tek bir kötü noktayı örten splat da sayılır. `sum` "
+       "hatayı toplar, bu da büyük splat'ları ve kalabalık alanları öne çıkarır. "
+       "`avg` örttüğü alanın ortalamasını alır ve büyük ile küçük splat'ları aynı "
+       "ölçüyle değerlendirir."));
+
+SS_MSG(densify_score_clip_quantile,
+    EN("Score spike cutoff"), JA("点数スパイクの上限"),
+    ZH_HANS("分数尖峰上限"), ZH_HANT("分數尖峰上限"), KO("점수 급등 상한"),
+    DE("Obergrenze für Punktzahlspitzen"),
+    FR("Plafond des pics de note"),
+    ES("Tope de los picos de puntuación"),
+    PT("Limite dos picos de pontuação"),
+    IT("Tetto dei picchi di punteggio"),
+    NL("Bovengrens voor scorepieken"),
+    RU("Порог обрезки всплесков оценки"),
+    TR("Puan sıçraması üst sınırı"));
+SS_MSG(densify_score_clip_quantile_help,
+    EN("Cap the finished per-splat score at this share of the splats, so a few "
+       "runaway splats cannot soak up every new one. Applies after the error has "
+       "been combined over each photo and across steps, and is what the "
+       "refinement-score view draws. 1 leaves it uncapped and costs nothing."),
+    JA("仕上がったスプラットごとの点数を、スプラット全体のこの割合のところで頭"
+       "打ちにします。ごく少数の突出したスプラットが、新しいスプラットを独り占"
+       "めしなくなります。写真ごとの合算と各ステップ間の合算のあとに効き、点数"
+       "表示もこの値を映します。1 は頭打ちなしで、処理も増えません。"),
+    ZH_HANS("把最终的每个泼溅分数截断在全体泼溅的这一比例处，使少数失控的泼溅"
+            "无法吞掉所有新增额度。它在按照片合并以及跨步合并之后生效，细化分"
+            "数视图显示的也是它。1 表示不截断，也不增加开销。"),
+    ZH_HANT("把最終的每個潑濺分數截斷在全體潑濺的這一比例處，使少數失控的潑濺"
+            "無法吞掉所有新增額度。它在按照片合併以及跨步合併之後生效，細化分"
+            "數檢視顯示的也是它。1 表示不截斷，也不增加開銷。"),
+    KO("완성된 스플랫별 점수를 전체 스플랫의 이 비율에서 잘라 냅니다. 그러면 몇"
+       "몇 개의 큰 스플랫이 새 스플랫을 독차지하지 못합니다. 사진별 합산과 단계 "
+       "합산이 끝난 뒤에 적용되며, 정밀화 점수 보기에 그려지는 값도 이것입니다. "
+       "1은 자르지 않으며 비용도 없습니다."),
+    DE("Die fertige Punktzahl je Splat bei diesem Anteil der Splats abschneiden, "
+       "damit wenige ausreißende Splats nicht jeden neuen aufsaugen. Wirkt, nachdem "
+       "der Fehler je Foto und über die Schritte zusammengefasst wurde, und ist "
+       "das, was die Punktzahl-Ansicht zeichnet. 1 schneidet nichts ab."),
+    FR("Plafonner la note finale par splat à cette part des splats, pour qu'une "
+       "poignée de splats emballés n'absorbe pas tous les nouveaux. S'applique "
+       "après la combinaison par photo et entre les étapes, et c'est ce que "
+       "dessine la vue des notes. 1 ne plafonne rien et ne coûte rien."),
+    ES("Limitar la puntuación final por splat a esta proporción de los splats, "
+       "para que unos pocos splats desbocados no absorban todos los nuevos. Se "
+       "aplica tras combinar el error por foto y entre pasos, y es lo que dibuja "
+       "la vista de puntuación. 1 no limita nada y no cuesta nada."),
+    PT("Limitar a pontuação final por splat a esta proporção dos splats, para que "
+       "uns poucos splats descontrolados não absorvam todos os novos. Aplica-se "
+       "depois de combinar o erro por foto e entre passos, e é o que a vista de "
+       "pontuação desenha. 1 não limita nada e não custa nada."),
+    IT("Limitare il punteggio finale per splat a questa quota degli splat, così "
+       "pochi splat impazziti non si prendono tutti quelli nuovi. Si applica dopo "
+       "aver combinato l'errore per foto e tra i passi, ed è ciò che disegna la "
+       "vista dei punteggi. 1 non limita nulla e non costa nulla."),
+    NL("De uiteindelijke score per splat afkappen bij dit deel van de splats, "
+       "zodat een paar op hol geslagen splats niet alle nieuwe opslokken. Werkt "
+       "nadat de fout per foto en over de stappen is samengevoegd, en is wat de "
+       "scoreweergave tekent. 1 kapt niets af en kost niets."),
+    RU("Обрезать итоговую оценку сплата на этой доле сплатов, чтобы несколько "
+       "разогнавшихся сплатов не забрали себе все новые. Действует после сведения "
+       "ошибки по фотографии и по шагам, и именно это рисует вид оценок. "
+       "1 не обрезает ничего и ничего не стоит."),
+    TR("Bitmiş splat başına puanı, splat'ların bu oranında keser; böylece birkaç "
+       "kontrolden çıkmış splat yeni splat'ların tümünü yutamaz. Hata fotoğraf "
+       "başına ve adımlar arasında birleştirildikten sonra uygulanır ve iyileştirme "
+       "puanı görünümünün çizdiği de budur. 1 hiç kesmez ve maliyeti yoktur."));
 
 SS_MSG(use_long_axis_split,
     EN("Split along the long axis"), JA("長い軸で分割する"),
@@ -8288,6 +8645,12 @@ SS_MSG(choice_max,
     PT("máximo"),        IT("massimo"),      NL("maximum"),      RU("максимум"),
     TR("en büyük"));
 
+SS_MSG(choice_sum,
+    EN("sum"),           JA("合計"),          ZH_HANS("求和"),     ZH_HANT("求和"),
+    KO("합계"),           DE("Summe"),        FR("somme"),        ES("suma"),
+    PT("soma"),          IT("somma"),        NL("som"),          RU("сумма"),
+    TR("toplam"));
+
 SS_MSG(choice_median,
     EN("median"),        JA("中央値"),        ZH_HANS("中位数"),   ZH_HANT("中位數"),
     KO("중앙값"),         DE("Median"),       FR("médiane"),      ES("mediana"),
@@ -8364,6 +8727,10 @@ inline constexpr ChoiceText kChoiceText[] = {
     {"densify_score_mode", "mean",   &choice_mean},
     {"densify_score_mode", "max",    &choice_max},
     {"densify_score_mode", "median", &choice_median},
+
+    {"densify_accum_mode", "max", &choice_max},
+    {"densify_accum_mode", "sum", &choice_sum},
+    {"densify_accum_mode", "avg", &choice_mean},
 
     {"cache_images", "cpu",  &choice_cpu},
     {"cache_images", "gpu",  &choice_gpu},

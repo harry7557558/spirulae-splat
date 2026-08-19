@@ -6,8 +6,8 @@
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
-    DistortionType::RGB_D,
-    true,
+    DistortionType::D,
+    DensifyAccumMode::None,
     false
 >(
     cudaStream_t stream,
@@ -39,13 +39,14 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
-    DistortionType::RGB_D,
-    false,
+    DistortionType::D,
+    DensifyAccumMode::Max,
     true
 >(
     cudaStream_t stream,
@@ -77,13 +78,14 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
-    DistortionType::RGB_D,
-    false,
+    DistortionType::D,
+    DensifyAccumMode::Max,
     false
 >(
     cudaStream_t stream,
@@ -115,5 +117,240 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
+);
+
+template void rasterize_to_pixels_bwd_kernel_wrapper<
+    Vanilla3DGS<0>,
+    DistortionType::D,
+    DensifyAccumMode::Sum,
+    true
+>(
+    cudaStream_t stream,
+    const uint32_t I,
+    const uint32_t N,   // zero if packed
+    const uint32_t n_isects,
+    // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
+    const Vanilla3DGS<0>::WorldBuffer splat_wbuffer,
+    const Vanilla3DGS<0>::ScreenBuffer splat_sbuffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    // fwd outputs
+    const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
+    const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    RenderOutput::Buffer render_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
+    const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
+    const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
+    // grad outputs
+    RenderOutput::Buffer v_render_output_buffer,
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
+    RenderOutput::Buffer v_distortions_output_buffer,
+    // grad inputs
+    Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
+    Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
+);
+
+template void rasterize_to_pixels_bwd_kernel_wrapper<
+    Vanilla3DGS<0>,
+    DistortionType::D,
+    DensifyAccumMode::Sum,
+    false
+>(
+    cudaStream_t stream,
+    const uint32_t I,
+    const uint32_t N,   // zero if packed
+    const uint32_t n_isects,
+    // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
+    const Vanilla3DGS<0>::WorldBuffer splat_wbuffer,
+    const Vanilla3DGS<0>::ScreenBuffer splat_sbuffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    // fwd outputs
+    const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
+    const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    RenderOutput::Buffer render_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
+    const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
+    const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
+    // grad outputs
+    RenderOutput::Buffer v_render_output_buffer,
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
+    RenderOutput::Buffer v_distortions_output_buffer,
+    // grad inputs
+    Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
+    Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
+);
+
+template void rasterize_to_pixels_bwd_kernel_wrapper<
+    Vanilla3DGS<0>,
+    DistortionType::D,
+    DensifyAccumMode::Avg,
+    true
+>(
+    cudaStream_t stream,
+    const uint32_t I,
+    const uint32_t N,   // zero if packed
+    const uint32_t n_isects,
+    // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
+    const Vanilla3DGS<0>::WorldBuffer splat_wbuffer,
+    const Vanilla3DGS<0>::ScreenBuffer splat_sbuffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    // fwd outputs
+    const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
+    const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    RenderOutput::Buffer render_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
+    const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
+    const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
+    // grad outputs
+    RenderOutput::Buffer v_render_output_buffer,
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
+    RenderOutput::Buffer v_distortions_output_buffer,
+    // grad inputs
+    Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
+    Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
+);
+
+template void rasterize_to_pixels_bwd_kernel_wrapper<
+    Vanilla3DGS<0>,
+    DistortionType::D,
+    DensifyAccumMode::Avg,
+    false
+>(
+    cudaStream_t stream,
+    const uint32_t I,
+    const uint32_t N,   // zero if packed
+    const uint32_t n_isects,
+    // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
+    const Vanilla3DGS<0>::WorldBuffer splat_wbuffer,
+    const Vanilla3DGS<0>::ScreenBuffer splat_sbuffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    // fwd outputs
+    const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
+    const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    RenderOutput::Buffer render_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
+    const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
+    const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
+    // grad outputs
+    RenderOutput::Buffer v_render_output_buffer,
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
+    RenderOutput::Buffer v_distortions_output_buffer,
+    // grad inputs
+    Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
+    Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
+);
+
+template void rasterize_to_pixels_bwd_kernel_wrapper<
+    Vanilla3DGS<0>,
+    DistortionType::RGB_D,
+    DensifyAccumMode::None,
+    true
+>(
+    cudaStream_t stream,
+    const uint32_t I,
+    const uint32_t N,   // zero if packed
+    const uint32_t n_isects,
+    // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
+    const Vanilla3DGS<0>::WorldBuffer splat_wbuffer,
+    const Vanilla3DGS<0>::ScreenBuffer splat_sbuffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    // fwd outputs
+    const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
+    const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    RenderOutput::Buffer render_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
+    const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
+    const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
+    // grad outputs
+    RenderOutput::Buffer v_render_output_buffer,
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
+    RenderOutput::Buffer v_distortions_output_buffer,
+    // grad inputs
+    Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
+    Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
+);
+
+template void rasterize_to_pixels_bwd_kernel_wrapper<
+    Vanilla3DGS<0>,
+    DistortionType::RGB_D,
+    DensifyAccumMode::None,
+    false
+>(
+    cudaStream_t stream,
+    const uint32_t I,
+    const uint32_t N,   // zero if packed
+    const uint32_t n_isects,
+    // fwd inputs
+    const uint32_t *__restrict__ gaussian_ids,  // [nnz] optional, for packed mode
+    const Vanilla3DGS<0>::WorldBuffer splat_wbuffer,
+    const Vanilla3DGS<0>::ScreenBuffer splat_sbuffer,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    // fwd outputs
+    const float *__restrict__ render_Ts,      // [..., image_height, image_width, 1]
+    const int32_t *__restrict__ last_ids, // [..., image_height, image_width]
+    RenderOutput::Buffer render_output_buffer,
+    RenderOutput::Buffer render_distortion_buffer,
+    const float *__restrict__ loss_map_buffer,           // [..., image_height, image_width, 1]
+    const float *__restrict__ accum_weight_map_buffer,           // [..., image_height, image_width, 1]
+    // grad outputs
+    RenderOutput::Buffer v_render_output_buffer,
+    const float *__restrict__ v_render_Ts, // [..., image_height, image_width, 1]
+    const float *__restrict__ v_median, // [..., image_height, image_width, 1], optional
+    RenderOutput::Buffer v_distortions_output_buffer,
+    // grad inputs
+    Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
+    Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );

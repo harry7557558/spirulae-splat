@@ -27,8 +27,10 @@ void quantile_of_abs_of_finite_elements_tensor(
 );
 
 
-void normalize_by_median_inplace_tensor(
-    DeviceVector<float> data
+void normalize_clip_map_inplace_tensor(
+    TorchTensorView data,  // [B, ...], rows normalized independently
+    bool normalize_median,
+    float clip_quantile
 );
 
 
@@ -83,6 +85,19 @@ void densify_clip_scale_tensor(
     float max_scale2d,
     float clip_hardness,
     float max_scale3d
+);
+
+
+void densify_accum_finalize_tensor(
+    int64_t num_splats,
+    DeviceVector<float> accum  // [2 * num_splats], planar num then den
+);
+
+
+void densify_clip_score_tensor(
+    int64_t num_splats,
+    DeviceVector<float2> accum_buffer,  // [N, 2]; only .x is clipped
+    float quantile
 );
 
 

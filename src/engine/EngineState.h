@@ -139,6 +139,9 @@ struct ForwardCache {
     RenderOutput::TensorTuple         distortions;  // [C,H,W,...] D=W*S-C^2, only the dist_type channels allocated
     DistortionType                    dist_type = DistortionType::None;  // which distortion channels the forward emitted
     DeviceVector<float>               accum_weight; // [max_num_splats] per-splat score from raster bwd
+    // What produced accum_weight, so densify folds and finalizes it the same
+    // way regardless of which train-step path filled it.
+    DensifyAccumMode                  accum_mode = DensifyAccumMode::None;
     // [max_num_splats] per-splat ||dL/dmean_world|| * max post-exp world
     // scale, written by the splat optim step (both FPBO and non-FPBO paths)
     // when OptimConfig::write_densify_world_grad_score is set. Consumed by

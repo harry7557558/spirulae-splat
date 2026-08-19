@@ -25,10 +25,10 @@ struct Raster2dBwdParams {
     uint64_t v_out_rgb, v_out_depth, v_render_Ts, v_median, v_dist_rgb,
         v_dist_depth;
     uint64_t v_s_xy, v_s_depth, v_s_conic, v_s_opac, v_s_rgb;
-    uint64_t o_accum_weight;
+    uint64_t o_accum_weight, o_accum_weight_den;
     uint32_t I, N, n_isects, width, height, tile_width, tile_height, _pad0;
 };
-static_assert(sizeof(Raster2dBwdParams) == 27 * 8 + 8 * 4,
+static_assert(sizeof(Raster2dBwdParams) == 28 * 8 + 8 * 4,
               "params layout must match the slang struct");
 
 // Mirrors Raster3dgutBwdParams.
@@ -40,10 +40,10 @@ struct Raster3dgutBwdParams {
     uint64_t v_out_rgb, v_out_depth, v_render_Ts, v_median, v_dist_rgb,
         v_dist_depth;
     uint64_t v_means, v_quats, v_scales, v_s_opac, v_s_rgb;
-    uint64_t o_accum_weight, v_viewmats;
+    uint64_t o_accum_weight, o_accum_weight_den, v_viewmats;
     uint32_t I, N, n_isects, width, height, tile_width, tile_height, _pad0;
 };
-static_assert(sizeof(Raster3dgutBwdParams) == 33 * 8 + 8 * 4,
+static_assert(sizeof(Raster3dgutBwdParams) == 34 * 8 + 8 * 4,
               "params layout must match the slang struct");
 
 uint32_t dist_spec_bwd(DistortionType dist_type) {
@@ -80,6 +80,7 @@ std::tuple<
     std::optional<RenderOutput::TensorTuple> distortion_fwd_outputs,
     DistortionType dist_type,
     DeviceTensor3D<float> accum_weight_map,
+    DensifyAccumMode accum_mode,
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,
     const DeviceTensor3D<float> v_median,
@@ -88,7 +89,9 @@ std::tuple<
     std::optional<std::vector<DeviceTensorFloatND>> v_splats_s
 ) {
     const uint32_t spec_dist = dist_spec_bwd(dist_type);
-    const bool aw = accum_weight_map.data_ptr() != nullptr;
+    if (accum_weight_map.data_ptr() == nullptr)
+        accum_mode = DensifyAccumMode::None;
+    const bool aw = accum_any(accum_mode);
     const bool md = v_median.data_ptr() != nullptr;
     const bool packed = gaussian_ids.data_ptr() != nullptr;
 
@@ -100,7 +103,8 @@ std::tuple<
             splats_s, PoolSlot::RasterBwdVScreen);
     DeviceVector<float> o_accum_weight;
     if (aw) {
-        o_accum_weight.resize(PoolSlot::RasterBwdAccumWeight, num_splats);
+        o_accum_weight.resize(PoolSlot::RasterBwdAccumWeight,
+                              num_splats * accum_lanes(accum_mode));
         o_accum_weight.zero();
     }
 
@@ -155,6 +159,9 @@ std::tuple<
         p.v_s_opac = (uint64_t)vsb.raw_data(3);
         p.v_s_rgb = (uint64_t)vsb.raw_data(4);
         p.o_accum_weight = vkk::or_fallback(o_accum_weight.data_ptr());
+        p.o_accum_weight_den = vkk::or_fallback(
+            accum_mode == DensifyAccumMode::Avg
+                ? o_accum_weight.data_ptr() + num_splats : nullptr);
         p.I = I;
         p.N = packed ? 0u : (uint32_t)num_splats;
         p.n_isects = n_isects;
@@ -166,7 +173,7 @@ std::tuple<
         // Spec IDs: cam(0, unused), dist(1), median(2), accum(3),
         // viewmat(4, unused), packed(5).
         backend::vk::SpecList spec{0u,           spec_dist,
-                                   md ? 1u : 0u, aw ? 1u : 0u,
+                                   md ? 1u : 0u, (uint32_t)accum_mode,
                                    0u,           packed ? 1u : 0u};
         vkk::dispatch_ring("rasterize_bwd.rasterize_bwd_2d", spec, I,
                            tile_height * 2, tile_width * 2, &p, sizeof(p));
@@ -204,6 +211,7 @@ std::tuple<
     DistortionType dist_type,
     DeviceTensor3D<float> loss_map,
     DeviceTensor3D<float> accum_weight_map,
+    DensifyAccumMode accum_mode,
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,
     const DeviceTensor3D<float> v_median,
@@ -215,7 +223,9 @@ std::tuple<
     (void)loss_map;  // declared but unused by the CUDA kernel as well
     const vkk::CamDistSpec cd = vkk::cam_dist_spec(camera_model, distortion);
     const uint32_t spec_dist = dist_spec_bwd(dist_type);
-    const bool aw = accum_weight_map.data_ptr() != nullptr;
+    if (accum_weight_map.data_ptr() == nullptr)
+        accum_mode = DensifyAccumMode::None;
+    const bool aw = accum_any(accum_mode);
     const bool md = v_median.data_ptr() != nullptr;
     const bool packed = gaussian_ids.data_ptr() != nullptr;
 
@@ -235,7 +245,8 @@ std::tuple<
     }
     DeviceVector<float> o_accum_weight;
     if (aw) {
-        o_accum_weight.resize(PoolSlot::RasterBwdAccumWeight, num_splats);
+        o_accum_weight.resize(PoolSlot::RasterBwdAccumWeight,
+                              num_splats * accum_lanes(accum_mode));
         o_accum_weight.zero();
     }
 
@@ -297,6 +308,9 @@ std::tuple<
         p.v_s_opac = (uint64_t)vsb.raw_data(1);
         p.v_s_rgb = (uint64_t)vsb.raw_data(2);
         p.o_accum_weight = vkk::or_fallback(o_accum_weight.data_ptr());
+        p.o_accum_weight_den = vkk::or_fallback(
+            accum_mode == DensifyAccumMode::Avg
+                ? o_accum_weight.data_ptr() + num_splats : nullptr);
         p.v_viewmats = vkk::or_fallback(v_viewmats_buf.data_ptr());
         p.I = I;
         p.N = packed ? 0u : (uint32_t)num_splats;
@@ -310,7 +324,7 @@ std::tuple<
         // packed(5), distortion tier(6).
         backend::vk::SpecList spec{
             cd.cam,         spec_dist,
-            md ? 1u : 0u,   aw ? 1u : 0u,
+            md ? 1u : 0u,   (uint32_t)accum_mode,
             need_viewmat_grad ? 1u : 0u, packed ? 1u : 0u,
             cd.dist};
         vkk::dispatch_ring("rasterize_bwd.rasterize_bwd_3dgut", spec, I,

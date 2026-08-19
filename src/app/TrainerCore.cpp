@@ -246,7 +246,18 @@ int densify_loss_map_mode_int(const std::string& mode) {
     if (mode == "ssim_structure")    return 4;
     if (mode == "edge_aware")        return 5;
     if (mode == "robust_edge_aware") return 6;
+    if (mode == "loss_full_nms")       return 7;
+    if (mode == "ssim_full_nms")       return 8;
+    if (mode == "ssim_cs_nms")         return 9;
+    if (mode == "ssim_structure_nms")  return 10;
     throw std::runtime_error("unknown densify_loss_map_mode: " + mode);
+}
+
+int densify_accum_mode_int(const std::string& mode) {
+    if (mode == "max") return (int)DensifyAccumMode::Max;
+    if (mode == "sum") return (int)DensifyAccumMode::Sum;
+    if (mode == "avg") return (int)DensifyAccumMode::Avg;
+    throw std::runtime_error("unknown densify_accum_mode: " + mode);
 }
 
 }  // namespace
@@ -309,6 +320,10 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
     cfg.loss.loss_map_mode = loss_map_mode;
     cfg.loss.compute_loss_map = (loss_map_mode != 0);
     cfg.loss.robust_edge_aware_quantile = c.densify_robust_edge_aware_quantile;
+    cfg.loss.nms_falloff = c.densify_nms_falloff;
+    cfg.loss.loss_map_normalize = c.densify_loss_map_normalize;
+    cfg.loss.loss_map_clip_quantile = c.densify_loss_map_clip_quantile;
+    cfg.loss.loss_map_accum_mode = densify_accum_mode_int(c.densify_accum_mode);
     cfg.loss.overexposure_reg_weight = c.overexposure_reg;
     if (st.bilagrid_rgb_init || st.ppisp_init) {
         cfg.loss.color_shift_reg_weight = c.color_shift_reg_weight;
@@ -367,6 +382,7 @@ EngineStepConfig build_step_config(const TrainConfig& c, const RunState& st, int
         : c.densify_score_mode == "max" ? 1
         : c.densify_score_mode == "median" ? 2 : 3;
     cfg.densify.score_blend_world_grad = c.densify_score_blend_world_grad;
+    cfg.densify.score_clip_quantile = c.densify_score_clip_quantile;
     cfg.densify.las_split_opacity_k_init   = c.long_axis_split_opacity_k[0];
     cfg.densify.las_split_opacity_k_final  = c.long_axis_split_opacity_k[1];
     cfg.densify.las_split_opacity_k_warmup = (int)c.long_axis_split_opacity_k[2];

@@ -165,19 +165,20 @@ int main(int argc, char** argv) {
         int dist;  // distortion tier, index into dist_fixture::kTierNames
         DistortionType dt;
         bool median;
-        bool aw;
+        DensifyAccumMode aw;
         bool vmg;  // 3dgut viewmat grad
     };
     // The 3dgs backward never sees the camera, so the tier sweep lives on the
     // 3dgut rows; the 3dgs rows carry it through the projection only.
     const Cfg cfgs[] = {
-        {0, false, 0, 0, DistortionType::None, false, false, false},
-        {0, false, 0, 1, DistortionType::RGB_D, true, true, false},
-        {0, true, 1, 2, DistortionType::D, false, false, false},
-        {2, false, 0, 0, DistortionType::None, false, false, true},
-        {2, false, 1, 2, DistortionType::D, true, true, false},
-        {2, false, 0, 1, DistortionType::RGB_D, false, false, false},
-        {2, true, 0, 3, DistortionType::D, false, false, false},
+        {0, false, 0, 0, DistortionType::None, false, DensifyAccumMode::None, false},
+        {0, false, 0, 1, DistortionType::RGB_D, true, DensifyAccumMode::Max, false},
+        {0, true, 1, 2, DistortionType::D, false, DensifyAccumMode::Sum, false},
+        {0, true, 1, 2, DistortionType::D, false, DensifyAccumMode::Avg, false},
+        {2, false, 0, 0, DistortionType::None, false, DensifyAccumMode::None, true},
+        {2, false, 1, 2, DistortionType::D, true, DensifyAccumMode::Max, false},
+        {2, false, 0, 1, DistortionType::RGB_D, false, DensifyAccumMode::Sum, false},
+        {2, true, 0, 3, DistortionType::D, false, DensifyAccumMode::Avg, false},
     };
     const char* cams[4] = {"PINHOLE", "FISHEYE", "EQUISOLID",
                            "EQUIRECTANGULAR"};
@@ -280,8 +281,8 @@ int main(int argc, char** argv) {
             dist_fwd_opt = distortions;
             v_dist_opt = v_dists;
         }
-        DeviceTensor3D<float> awmap_t =
-            cfg.aw ? t3f1(d_awmap) : DeviceTensor3D<float>{};
+        DeviceTensor3D<float> awmap_t = accum_any(cfg.aw)
+            ? t3f1(d_awmap) : DeviceTensor3D<float>{};
         DeviceTensor3D<float> v_med_t =
             cfg.median ? t3f1(d_v_med) : DeviceTensor3D<float>{};
 
@@ -296,7 +297,7 @@ int main(int argc, char** argv) {
                     aabb_2d, W, H,
                     tile_offsets, flatten_ids, render_Ts, last_ids, renders,
                     dist_fwd_opt, cfg.dt, DeviceTensor3D<float>{}, awmap_t,
-                    v_renders, t3f1(d_v_T), v_med_t, v_dist_opt,
+                    cfg.aw, v_renders, t3f1(d_v_T), v_med_t, v_dist_opt,
                     std::nullopt, std::nullopt, cfg.vmg);
             backend::device_synchronize();
             if (check_error()) return 1;
@@ -306,18 +307,21 @@ int main(int argc, char** argv) {
                 readback(acc, v_s[c].data_ptr(), v_s[c].numel());
             if (cfg.vmg)
                 readback(acc, v_viewmats.data_ptr(), (int64_t)C * 16);
-            if (cfg.aw) readback(acc, aw_out.data_ptr(), N);
+            if (accum_any(cfg.aw))
+                readback(acc, aw_out.data_ptr(), N * accum_lanes(cfg.aw));
         } else {
             auto [v_w, v_s, aw_out] = rasterize_to_pixels_3dgs_bwd(
                 N, in_splats, splats_s, gauss_ids, W, H, tile_offsets,
                 flatten_ids, render_Ts, last_ids, renders, dist_fwd_opt,
-                cfg.dt, awmap_t, v_renders, t3f1(d_v_T), v_med_t, v_dist_opt,
+                cfg.dt, awmap_t, cfg.aw, v_renders, t3f1(d_v_T), v_med_t,
+                v_dist_opt,
                 std::nullopt, std::nullopt);
             backend::device_synchronize();
             if (check_error()) return 1;
             for (int c = 0; c < 5; c++)  // v screen xy/depth/conic/opac/rgb
                 readback(acc, v_s[c].data_ptr(), v_s[c].numel());
-            if (cfg.aw) readback(acc, aw_out.data_ptr(), N);
+            if (accum_any(cfg.aw))
+                readback(acc, aw_out.data_ptr(), N * accum_lanes(cfg.aw));
         }
     }
 

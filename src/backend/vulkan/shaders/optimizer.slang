@@ -315,6 +315,14 @@ void float_add(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
     if (idx < p.n) p.dst[idx] += p.src[idx];
 }
 
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void float_max(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
+               uniform FloatAddParams p) {
+    uint idx = (wg.y * p.wgs_per_row + wg.x) * 256 + tid;
+    if (idx < p.n) p.dst[idx] = max(p.dst[idx], p.src[idx]);
+}
+
 struct IncI32Params {  // 16 bytes: pushed directly
     int* data;
     uint n;

@@ -4,7 +4,9 @@
 // outputs are bit-exact against CUDA.
 //
 // Referenced by the portable engine layer (BilagridBindings.cpp, <true>) and
-// by the multi-scale loss's RobustEdgeAware path (<false>).
+// by the multi-scale loss's RobustEdgeAware path (<false>). The _positive_
+// entry drops negatives from the population instead of folding them in as
+// |x| -- see the CUDA comment on it.
 
 #include <core/Tensor.h>
 
@@ -34,8 +36,8 @@ void dispatch_blocks(const char* entry, const backend::vk::SpecList& spec,
 
 }  // namespace
 
-template <bool invert_quantile>
-int batch_quantile_masked_radix_select(
+template <bool invert_quantile, bool abs_input>
+static int _batch_quantile_radix_select(
     const float* d_x,   // [B*N], row-major
     int B,
     int N,
@@ -61,7 +63,8 @@ int batch_quantile_masked_radix_select(
     backend::memset_async(d_row_max_bits, 0, 5 * row_bytes,
                           backend::kDefaultStream);
 
-    const backend::vk::SpecList spec{invert_quantile ? 1u : 0u};
+    const backend::vk::SpecList spec{invert_quantile ? 1u : 0u,
+                                     abs_input ? 1u : 0u};
 
     QuantileParams p{};
     p.x = (uint64_t)d_x;
@@ -94,7 +97,28 @@ int batch_quantile_masked_radix_select(
     return 0;
 }
 
+template <bool invert_quantile>
+int batch_quantile_masked_radix_select(const float* d_x, int B, int N, float q,
+                                       float* d_out, uint32_t* temp,
+                                       backend::Stream stream) {
+    return _batch_quantile_radix_select<invert_quantile, true>(
+        d_x, B, N, q, d_out, temp, stream);
+}
+
+template <bool invert_quantile>
+int batch_quantile_positive_radix_select(const float* d_x, int B, int N,
+                                         float q, float* d_out,
+                                         uint32_t* temp,
+                                         backend::Stream stream) {
+    return _batch_quantile_radix_select<invert_quantile, false>(
+        d_x, B, N, q, d_out, temp, stream);
+}
+
 template int batch_quantile_masked_radix_select<false>(
     const float*, int, int, float, float*, uint32_t*, backend::Stream);
 template int batch_quantile_masked_radix_select<true>(
+    const float*, int, int, float, float*, uint32_t*, backend::Stream);
+template int batch_quantile_positive_radix_select<false>(
+    const float*, int, int, float, float*, uint32_t*, backend::Stream);
+template int batch_quantile_positive_radix_select<true>(
     const float*, int, int, float, float*, uint32_t*, backend::Stream);

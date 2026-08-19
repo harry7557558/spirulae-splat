@@ -11,6 +11,14 @@ constexpr int kThreadsPerBlock = 256;
 constexpr int kTileElems = 4096;   // Tune this if you want more/fewer blocks.
 constexpr uint32_t kPosInfBits = 0x7f800000u;
 
+// abs_input=false keeps the sign bit, so negatives land at or above
+// 0x80000000 and positive_finite_bits rejects them: the same code selects
+// over |x| or over the strictly-positive x only.
+template<bool abs_input>
+__device__ __forceinline__ uint32_t select_key(float x) {
+    return __float_as_uint(abs_input ? fabsf(x) : x);
+}
+
 __device__ __forceinline__ bool positive_finite_bits(uint32_t u) {
     // Strictly positive and finite:
     //   +0 excluded  -> u > 0
@@ -49,6 +57,7 @@ __device__ __forceinline__ uint32_t block_reduce_max_u32(uint32_t v) {
     return s[0];
 }
 
+template<bool abs_input>
 __global__ void find_row_max_kernel(
     const float* __restrict__ x,   // [B*N], row-major
     int B,
@@ -68,7 +77,7 @@ __global__ void find_row_max_kernel(
 
     uint32_t local_max = 0u;
     for (int i = start + threadIdx.x; i < end; i += blockDim.x) {
-        uint32_t u = __float_as_uint(fabsf(row_ptr[i]));
+        uint32_t u = select_key<abs_input>(row_ptr[i]);
         if (positive_finite_bits(u) && u > local_max) {
             local_max = u;
         }
@@ -80,6 +89,7 @@ __global__ void find_row_max_kernel(
     }
 }
 
+template<bool abs_input>
 __global__ void hist_pass_kernel(
     const float* __restrict__ x,         // [B*N]
     int B,
@@ -116,7 +126,7 @@ __global__ void hist_pass_kernel(
         uint32_t local_max_count = 0u;
 
         for (int i = start + threadIdx.x; i < end; i += blockDim.x) {
-            uint32_t u = __float_as_uint(fabsf(row_ptr[i]));
+            uint32_t u = select_key<abs_input>(row_ptr[i]);
             if (!positive_finite_bits(u)) continue;
 
             atomicAdd(&shist[(u >> 24) & 255u], 1u);
@@ -133,7 +143,7 @@ __global__ void hist_pass_kernel(
         const uint32_t shift = 24 - 8 * pass;
 
         for (int i = start + threadIdx.x; i < end; i += blockDim.x) {
-            uint32_t u = __float_as_uint(fabsf(row_ptr[i]));
+            uint32_t u = select_key<abs_input>(row_ptr[i]);
             if (!positive_finite_bits(u)) continue;
 
             // Only keep candidates that match the already chosen high bytes.
@@ -268,8 +278,8 @@ struct QuantileWorkspace {
 
 } // namespace
 
-template<bool invert_quantile>
-int batch_quantile_masked_radix_select(
+template<bool invert_quantile, bool abs_input>
+static int _batch_quantile_radix_select(
     const float* d_x,   // [B*N], row-major
     int B,
     int N,
@@ -298,7 +308,7 @@ int batch_quantile_masked_radix_select(
     // 1) Find the per-row maximum positive finite value.
     {
         const int total_blocks = B * tiles_per_row;
-        find_row_max_kernel<<<total_blocks, kThreadsPerBlock, 0, stream>>>(
+        find_row_max_kernel<abs_input><<<total_blocks, kThreadsPerBlock, 0, stream>>>(
             d_x, B, N, tiles_per_row, ws.d_row_max_bits
         );
         err = cudaPeekAtLastError();
@@ -317,7 +327,7 @@ int batch_quantile_masked_radix_select(
 
         {
             const int total_blocks = B * tiles_per_row;
-            hist_pass_kernel<<<total_blocks, kThreadsPerBlock, 0, stream>>>(
+            hist_pass_kernel<abs_input><<<total_blocks, kThreadsPerBlock, 0, stream>>>(
                 d_x, B, N, tiles_per_row, pass,
                 ws.d_row_max_bits,
                 ws.d_row_prefix,
@@ -351,22 +361,32 @@ int batch_quantile_masked_radix_select(
     return cudaSuccess;
 }
 
-template int batch_quantile_masked_radix_select<false>(
-    const float* d_x,   // [B*N], row-major
-    int B,
-    int N,
-    float q,
-    float* d_out,       // [B]
-    uint32_t* temp,  // [(256+5)*B]
+template<bool invert_quantile>
+int batch_quantile_masked_radix_select(
+    const float* d_x, int B, int N, float q, float* d_out, uint32_t* temp,
     cudaStream_t stream
-);
+) {
+    return _batch_quantile_radix_select<invert_quantile, true>(
+        d_x, B, N, q, d_out, temp, stream);
+}
 
-template int batch_quantile_masked_radix_select<true>(
-    const float* d_x,   // [B*N], row-major
-    int B,
-    int N,
-    float q,
-    float* d_out,       // [B]
-    uint32_t* temp,  // [(256+5)*B]
+// Same selection over the strictly-positive elements only: a map whose
+// meaningless background is tiny NEGATIVE noise (degenerate flat-region SSIM)
+// has its |x| median sitting in that noise, not in the signal.
+template<bool invert_quantile>
+int batch_quantile_positive_radix_select(
+    const float* d_x, int B, int N, float q, float* d_out, uint32_t* temp,
     cudaStream_t stream
-);
+) {
+    return _batch_quantile_radix_select<invert_quantile, false>(
+        d_x, B, N, q, d_out, temp, stream);
+}
+
+template int batch_quantile_masked_radix_select<false>(
+    const float*, int, int, float, float*, uint32_t*, cudaStream_t);
+template int batch_quantile_masked_radix_select<true>(
+    const float*, int, int, float, float*, uint32_t*, cudaStream_t);
+template int batch_quantile_positive_radix_select<false>(
+    const float*, int, int, float, float*, uint32_t*, cudaStream_t);
+template int batch_quantile_positive_radix_select<true>(
+    const float*, int, int, float, float*, uint32_t*, cudaStream_t);

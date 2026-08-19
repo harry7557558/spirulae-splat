@@ -4,6 +4,7 @@
 
 #include "engine/Engine.h"    // engine render + viewer entry points
 #include "core/Camera.h"    // camera_model_from_name
+#include "app/DepthColor.h"  // error_scale -- shared with the error pane
 
 #include <algorithm>
 #include <atomic>
@@ -413,21 +414,19 @@ struct RenderWorker::Impl {
                 buf = &local;
             }
             else if (q.key == "refinement_score") {
-                // Densification score: per-splat accum weight (raster bwd)
-                // normalized and rendered as a flat color, shown
-                // single-channel (turbo colormap). Padded to max splats.
+                // Per-splat accum weight as a flat colour, single-channel
+                // (turbo), padded to max splats. app::error_scale is the
+                // error pane's normalizer: one scale across both views.
                 int64_t nsp = engine_get_cur_num_splats();
                 int64_t nmax = engine_get_max_num_splats();
                 std::vector<float> aw((size_t)nsp * 2, 0.0f);
                 engine_copy_accum_buffer(tvp(aw.data(), 4, {nsp, 2}));
-                double mean = 0.0;
-                for (int64_t i = 0; i < nsp; i++) mean += aw[i*2];
-                mean = nsp > 0 ? mean / nsp : 0.0;
+                std::vector<float> score((size_t)nsp);
+                for (int64_t i = 0; i < nsp; i++) score[i] = aw[i*2];
+                const float hi = app::error_scale(score.data(), (size_t)nsp);
                 std::vector<float> dc((size_t)nmax * 3, 0.0f);
                 for (int64_t i = 0; i < nsp; i++) {
-                    float x = aw[i*2];
-                    if (mean > 0) x = (float)(x / mean);
-                    x = (x - 0.5f) / 0.28f;
+                    float x = (score[i] / hi - 0.5f) / 0.28f;
                     dc[i*3] = dc[i*3+1] = dc[i*3+2] = x;
                 }
                 std::vector<float> vis = debug_render(dc, 0);

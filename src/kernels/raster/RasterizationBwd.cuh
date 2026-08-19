@@ -37,6 +37,7 @@ std::tuple<
     std::optional<RenderOutput::TensorTuple> distortion_fwd_outputs,  // forward D
     DistortionType dist_type,  // distortion channel set (None/D/RGB_D)
     DeviceTensor3D<float> accum_weight_map,  // [I, H, W]
+    DensifyAccumMode accum_mode,
     // gradients of outputs
     RenderOutput::TensorTuple v_render_outputs,
     const DeviceTensor3D<float> v_render_Ts,

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "primitives/Primitive.cuh"  // DensifyAccumMode
+
 // EngineConfig -- per-step config structs accepted by the engine_*_step
 // entrypoints. Every numeric field below is the already-resolved value for
 // this step: scheduling lives in the caller (TrainerCore), never here.
@@ -35,6 +37,18 @@ struct LossConfig {
     // outlier rejection (more pixels treated as distractors). Ignored
     // unless loss_map_mode == 6. Typical values: 0.8-0.95; default 0.9.
     float robust_edge_aware_quantile = 0.9f;
+    // What a *_nms mode keeps per side that outranks the pixel along the ridge
+    // normal: 0 is canny's hard suppression, 1 disables the pass entirely.
+    float nms_falloff = 0.5f;
+    // In-place conditioning of the finished loss map, in this order: divide
+    // each image by the median of its nonzero finite pixels, then clip to
+    // this quantile of the same population. Quantile >= 1 skips the clip.
+    bool  loss_map_normalize     = false;
+    float loss_map_clip_quantile = 1.0f;
+    // DensifyAccumMode (primitives/Primitive.cuh) as an int: how the raster
+    // backward reduces the map to one score per splat. Ignored when the map
+    // is off.
+    int   loss_map_accum_mode    = (int)DensifyAccumMode::Max;
     // Image-space overexposure regularization weight. When non-zero, a
     // dedicated kernel adds dL/dx of L = w * mean(max(-x, x-1, 0)^2) directly
     // into v_render_rgb (in the pre-bilagrid / pre-PPISP / pre-color-space
@@ -180,6 +194,10 @@ struct DensifyConfig {
     // in between = geometric blend, ranking-invariant to each score's global
     // scale. Requires OptimConfig::write_densify_world_grad_score when > 0.
     float score_blend_world_grad        = 0.0f;
+    // Clips the per-splat score that densification actually samples -- after
+    // both the image-to-splat and the across-step reduction -- at this
+    // quantile of the positive scores. Outside (0, 1) nothing is clipped.
+    float score_clip_quantile           = 1.0f;
     // Long-axis-split opacity split factor `k`, linearly scheduled from
     // `las_split_opacity_k_init` to `..._final` over `..._warmup` steps.
     float las_split_opacity_k_init      = 0.5f;

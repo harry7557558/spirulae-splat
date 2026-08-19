@@ -140,6 +140,7 @@ static void _engine_raster_proj_backward(
     TorchTensorView v_render_depth,
     TorchTensorView v_render_Ts_tv,
     const DeviceTensor3D<float>& accum_weight_map,
+    DensifyAccumMode accum_mode,
     const DeviceTensor3D<float>& v_median = DeviceTensor3D<float>(),
     TorchTensorView v_rgb_dist = _tv_null(),
     TorchTensorView v_depth_dist = _tv_null(),
@@ -229,6 +230,7 @@ static void _engine_raster_proj_backward(
             distortion_fwd_opt,  // forward distortion D (for S reconstruction)
             dist_type,
             accum_weight_map,
+            accum_mode,
             v_render_outputs,
             v_render_Ts,
             v_median,
@@ -238,7 +240,10 @@ static void _engine_raster_proj_backward(
         );
         v_splats_w_out = vw;
         v_splats_s_out = vs;
-        if (accum_weight.data_ptr()) engine().fwd.accum_weight = accum_weight;
+        if (accum_weight.data_ptr()) {
+            engine().fwd.accum_weight = accum_weight;
+            engine().fwd.accum_mode = accum_mode;
+        }
     } else if (engine().primitive == "3dgut") {
         auto [vw, vs, vviewmats, accum_weight] = rasterize_to_pixels_3dgut_bwd(
             engine().cur_num_splats,
@@ -262,6 +267,7 @@ static void _engine_raster_proj_backward(
             dist_type,
             DeviceTensor3D<float>(),  // loss_map
             accum_weight_map,
+            accum_mode,
             v_render_outputs,
             v_render_Ts,
             v_median,
@@ -272,7 +278,10 @@ static void _engine_raster_proj_backward(
         );
         v_splats_w_out = vw;
         v_splats_s_out = vs;
-        if (accum_weight.data_ptr()) engine().fwd.accum_weight = accum_weight;
+        if (accum_weight.data_ptr()) {
+            engine().fwd.accum_weight = accum_weight;
+            engine().fwd.accum_mode = accum_mode;
+        }
     } else {
         throw std::runtime_error("engine raster/proj backward: unknown primitive: " + engine().primitive);
     }
@@ -419,7 +428,8 @@ void engine_backward_from_render_grad(
                (size_t)C * H * W * 1 * sizeof(float), backend::MemcpyKind::Auto);
 
     DeviceTensor3D<float> accum_weight_map;  // empty: no loss-map weighting
-    _engine_raster_proj_backward(v_rgb_buf, v_depth_buf, v_Ts_buf, accum_weight_map);
+    _engine_raster_proj_backward(v_rgb_buf, v_depth_buf, v_Ts_buf, accum_weight_map,
+                                 DensifyAccumMode::None);
 }
 
 
@@ -434,6 +444,10 @@ static std::map<std::string, float> _engine_loss(
     bool compute_loss_map,
     int loss_map_mode,
     float robust_edge_aware_quantile,
+    float nms_falloff,
+    bool loss_map_normalize,
+    float loss_map_clip_quantile,
+    int loss_map_accum_mode,
     float overexposure_reg_weight,
     float color_shift_reg_weight,
     float color_shift_reg_beta,
@@ -651,8 +665,15 @@ static std::map<std::string, float> _engine_loss(
         loss_map_buf,
         loss_map_mode,
         robust_edge_aware_quantile,
+        nms_falloff,
         pixel_grads
     );
+
+    // The one place the error map is conditioned, so the preview copy below
+    // and the raster backward aggregation read the same picture.
+    if (compute_loss_map && _tv_valid(loss_map_buf))
+        normalize_clip_map_inplace_tensor(loss_map_buf, loss_map_normalize,
+                                          loss_map_clip_quantile);
 
     if (map_only) {
         backend::memcpy_sync((void*)std::get<0>(map_out),
@@ -836,6 +857,7 @@ static std::map<std::string, float> _engine_loss(
         pixel_grads.v_render_depth,
         pixel_grads.v_render_Ts,
         accum_weight_map,
+        (DensifyAccumMode)loss_map_accum_mode,
         has_median ? DeviceTensor3D<float>(pixel_grads.v_median_depth)
                    : DeviceTensor3D<float>(),
         pixel_grads.v_rgb_dist,
@@ -887,13 +909,20 @@ std::map<std::string, float> engine_compute_loss_backward(
     bool compute_loss_map,
     int loss_map_mode,
     float robust_edge_aware_quantile,
+    float nms_falloff,
+    bool loss_map_normalize,
+    float loss_map_clip_quantile,
+    int loss_map_accum_mode,
     float overexposure_reg_weight,
     float color_shift_reg_weight,
     float color_shift_reg_beta
 ) {
     return _engine_loss(loss_weights, w_ssim, num_loss_scales,
                         loss_scale_min_pixels, compute_loss_map, loss_map_mode,
-                        robust_edge_aware_quantile, overexposure_reg_weight,
+                        robust_edge_aware_quantile, nms_falloff,
+                        loss_map_normalize,
+                        loss_map_clip_quantile, loss_map_accum_mode,
+                        overexposure_reg_weight,
                         color_shift_reg_weight, color_shift_reg_beta,
                         _tv_null());
 }
@@ -908,6 +937,9 @@ bool engine_preview_loss_map(const LossConfig& loss, TorchTensorView out) {
     // gradient this call does not compute.
     _engine_loss(loss.weights, loss.w_ssim, loss.num_loss_scales,
                  loss.loss_scale_min_pixels, true, loss.loss_map_mode,
-                 loss.robust_edge_aware_quantile, 0.0f, 0.0f, 0.0f, out);
+                 loss.robust_edge_aware_quantile, loss.nms_falloff,
+                 loss.loss_map_normalize,
+                 loss.loss_map_clip_quantile, loss.loss_map_accum_mode,
+                 0.0f, 0.0f, 0.0f, out);
     return true;
 }

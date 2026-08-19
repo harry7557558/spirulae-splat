@@ -821,6 +821,108 @@ __global__ void vector_add_scaled_kernel(
     if (i < n) dst[i] += src[i] * scale;
 }
 
+// Sobel x; transposed for y. Must match canny_filter_3x3 in
+// kernels/densify/DensifySplitFilter.cu, which is __constant__ in that TU.
+__constant__ float _nms_sobel_3x3[3][3] = {
+    { -1.0f, 0.0f, 1.0f },
+    { -2.0f, 0.0f, 2.0f },
+    { -1.0f, 0.0f, 1.0f },
+};
+
+// Canny's NMS step run on the loss map itself, not on a gradient magnitude:
+// its Sobel gives a ridge normal, and each of the two neighbours along it that
+// outranks the pixel costs it one falloff factor. Stores that count, 0..2.
+__global__ void loss_map_nms_mask_kernel(
+    TensorView<float, 4> img,      // [B, H, W, 1]
+    uint8_t* __restrict__ fails    // [B, H, W], 0..2 sides outranking
+) {
+    constexpr int BLOCK = 32;
+    constexpr int HALO = 1;  // Sobel at the centre pixel + one step along it
+
+    const int32_t xid = blockIdx.x * BLOCK + threadIdx.x;
+    const int32_t yid = blockIdx.y * BLOCK + threadIdx.y;
+    const int32_t bid = blockIdx.z;
+    const int H = (int)img.shape[1], W = (int)img.shape[2];
+
+    __shared__ float tile[BLOCK + 2 * HALO][BLOCK + 2 * HALO];
+    #pragma unroll
+    for (int batch = 0; batch < (BLOCK+2*HALO)*(BLOCK+2*HALO); batch += BLOCK*BLOCK) {
+        int tid = batch + threadIdx.y * BLOCK + threadIdx.x;
+        int y = tid / (BLOCK + 2 * HALO);
+        int x = tid % (BLOCK + 2 * HALO);
+        if (y < BLOCK + 2 * HALO) {
+            int yi = min(max((int)(blockIdx.y * BLOCK) + y - HALO, 0), H - 1);
+            int xi = min(max((int)(blockIdx.x * BLOCK) + x - HALO, 0), W - 1);
+            tile[y][x] = img.load1(bid, yi, xi);
+        }
+    }
+    __syncthreads();
+
+    if (yid >= H || xid >= W)
+        return;
+
+    const int ty = (int)threadIdx.y + HALO, tx = (int)threadIdx.x + HALO;
+    float gx = 0.0f, gy = 0.0f;
+    #pragma unroll
+    for (int cy = -1; cy <= 1; ++cy)
+        #pragma unroll
+        for (int cx = -1; cx <= 1; ++cx) {
+            float v = tile[ty + cy][tx + cx];
+            gx += _nms_sobel_3x3[cy + 1][cx + 1] * v;
+            gy += _nms_sobel_3x3[cx + 1][cy + 1] * v;
+        }
+
+    uint8_t n_fail = 0;
+    float g = sqrtf(gx * gx + gy * gy);
+    if (g > 0.0f) {
+        int dx = min(max((int)roundf(gx / g), -HALO), HALO);
+        int dy = min(max((int)roundf(gy / g), -HALO), HALO);
+        float v = tile[ty][tx];
+        // Masked-out neighbours sit at 0, so they can only protect a pixel.
+        n_fail = (uint8_t)((v < tile[ty + dy][tx + dx] ? 1 : 0) +
+                           (v < tile[ty - dy][tx - dx] ? 1 : 0));
+    }
+    fails[(size_t)(bid * H + yid) * W + xid] = n_fail;
+}
+
+// Pass 2 of the in-place suppression. Overwriting inside pass 1 would race
+// (a block's neighbours read the pixels it writes) and a float scratch would
+// cost 4x this 1-byte count.
+__global__ void loss_map_nms_apply_kernel(
+    TensorView<float, 4> img,
+    const uint8_t* __restrict__ fails,
+    float falloff
+) {
+    const int32_t xid = blockIdx.x * blockDim.x + threadIdx.x;
+    const int32_t yid = blockIdx.y * blockDim.y + threadIdx.y;
+    const int32_t bid = blockIdx.z;
+    const int H = (int)img.shape[1], W = (int)img.shape[2];
+    if (yid >= H || xid >= W)
+        return;
+    const float lut[3] = {1.0f, falloff, falloff * falloff};
+    img.at(bid, yid, xid, 0) *=
+        lut[fails[(size_t)(bid * H + yid) * W + xid]];
+}
+
+// falloff 0 is the hard suppression canny does; 1 leaves the map untouched.
+static void _loss_map_nms_inplace(const TorchTensorView& img,
+                                  const std::string& key, float falloff) {
+    const auto& sh = std::get<2>(img);
+    long B = sh[0], H = sh[1], W = sh[2];
+    if (B <= 0 || H <= 0 || W <= 0 || falloff >= 1.0f)
+        return;
+    falloff = fmaxf(falloff, 0.0f);
+    uint8_t* fails = (uint8_t*)DevicePool::global().acquire_dynamic(
+        VramCategory::Image, key, (size_t)(B * H * W));
+    auto view = _tv_view4(img);
+    loss_map_nms_mask_kernel<<<_LAUNCH_ARGS_3D(W, H, B, 32, 32, 1)>>>(view, fails);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+    loss_map_nms_apply_kernel<<<_LAUNCH_ARGS_3D(W, H, B, 32, 32, 1)>>>(
+        view, fails, falloff);
+    CHECK_DEVICE_ERROR(cudaGetLastError());
+}
+
+
 __global__ void avg_pool_upsample_float_kernel(
     TensorView<float, 4> image_hs,
     const TensorView<float, 4> image_ls,
@@ -869,9 +971,11 @@ LossValues compute_multi_scale_per_pixel_losses(
     TorchTensorView loss_map_out,
     int loss_map_mode,
     float robust_edge_aware_quantile,
+    float nms_falloff,
     PerPixelGrads& grads_out
 ) {
-    const auto _mode = (DensifyLossMapMode)loss_map_mode;
+    const auto _mode = densify_loss_map_base((DensifyLossMapMode)loss_map_mode);
+    const bool _nms = densify_loss_map_has_nms((DensifyLossMapMode)loss_map_mode);
     // Per-pixel L1/L2/aux terms contribute to the loss map only for LossFull.
     const bool _per_pixel_write = (_mode == DensifyLossMapMode::LossFull);
     // SSIM kernel mode: skip its loss_map write entirely for None,
@@ -1163,6 +1267,13 @@ LossValues compute_multi_scale_per_pixel_losses(
                 CHECK_DEVICE_ERROR(cudaGetLastError());
             }
         }
+
+        // Thin the finished map before the pyramid folds it in, so each
+        // scale is suppressed against its own neighbourhood.
+        if (_nms && _has(loss_map_scale))
+            _loss_map_nms_inplace(loss_map_scale,
+                                  "ppl.nms.s" + std::to_string(scale),
+                                  nms_falloff);
 
         if (scale == 0)
             ssim_val = ssim;

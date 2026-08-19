@@ -7,7 +7,7 @@
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
     DistortionType::None,
-    true,
+    DensifyAccumMode::None,
     true
 >(
     cudaStream_t stream,
@@ -39,13 +39,14 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
     DistortionType::None,
-    true,
+    DensifyAccumMode::None,
     false
 >(
     cudaStream_t stream,
@@ -77,13 +78,14 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
     DistortionType::None,
-    false,
+    DensifyAccumMode::Max,
     true
 >(
     cudaStream_t stream,
@@ -115,13 +117,14 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
     DistortionType::None,
-    false,
+    DensifyAccumMode::Max,
     false
 >(
     cudaStream_t stream,
@@ -153,13 +156,14 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
-    DistortionType::D,
-    true,
+    DistortionType::None,
+    DensifyAccumMode::Sum,
     true
 >(
     cudaStream_t stream,
@@ -191,13 +195,14 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
-    DistortionType::D,
-    true,
+    DistortionType::None,
+    DensifyAccumMode::Sum,
     false
 >(
     cudaStream_t stream,
@@ -229,13 +234,14 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
-    DistortionType::D,
-    false,
+    DistortionType::None,
+    DensifyAccumMode::Avg,
     true
 >(
     cudaStream_t stream,
@@ -267,13 +273,14 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
-    DistortionType::D,
-    false,
+    DistortionType::None,
+    DensifyAccumMode::Avg,
     false
 >(
     cudaStream_t stream,
@@ -305,13 +312,14 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );
 
 template void rasterize_to_pixels_bwd_kernel_wrapper<
     Vanilla3DGS<0>,
-    DistortionType::RGB_D,
-    true,
+    DistortionType::D,
+    DensifyAccumMode::None,
     true
 >(
     cudaStream_t stream,
@@ -343,5 +351,6 @@ template void rasterize_to_pixels_bwd_kernel_wrapper<
     // grad inputs
     Vanilla3DGS<0>::WorldBuffer v_splat_wbuffer,
     Vanilla3DGS<0>::ScreenBuffer v_splat_sbuffer,
-    float *__restrict__ o_accum_weight
+    float *__restrict__ o_accum_weight,
+    float *__restrict__ o_accum_weight_den
 );

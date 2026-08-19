@@ -1,37 +1,13 @@
-// Tile rasterization backward (Vulkan backend), closely following
-// kernels/raster/RasterizationEval3DBwd_kernel.cuh (which also generates the 2D
-// backward via IS_EVAL3D=0; two entries here because the fragment types
-// differ). Geometry matches CUDA: a 32-thread workgroup owns one 8x8
-// sub-tile (TILE_SIZE_DX x TILE_SIZE_DY = 64 pixels, 2 pixels/thread at
-// state load), grid (I, tile_height*2, tile_width*2); the macro-tile
-// gaussian range is scanned back-to-front, survivors of the ellipse/box
-// sub-tile test are compacted into shared, and the batch sweep is a
-// diagonal systolic walk: at step t, thread k undoes pixel (t - k) for its
-// survivor splat k, so every pixel sees splats strictly back-to-front.
+// Tile rasterization backward (Vulkan backend), following
+// kernels/raster/RasterizationEval3DBwd_kernel.cuh (which also generates the
+// 2D backward via IS_EVAL3D=0; two entries here because the fragment types
+// differ). The sweep schedule, the survivor compaction and the portability
+// substitutions behind them are documented in backend/vulkan/README.md.
 //
-// Portability substitutions vs the CUDA kernel (see backend README):
-//  - __syncwarp() stepping -> full workgroup barriers (the block IS one
-//    CUDA warp; barriers make the schedule subgroup-size independent). The
-//    sweep body lives in an inlined function so its early-outs are returns,
-//    never skipping the caller's barrier.
-//  - __ballot_sync survivor compaction -> WavePrefixCountBits + per-wave
-//    totals staged in groupshared (valid under pinned full subgroups).
-//  - atomicAdd/atomicMax on floats -> atomic_add_f32 / atomic_max_f32_nonneg
-//    (atomic_float.slang), with CUDA atomicAddFVec's isfinite filter.
-//
-// Render pixel type is RGB_D for all current primitives; color state is
-// carried as float4 (rgb, depth) so RenderOutput dot/mul/add are plain
-// vector ops. Distortion state also uses float4 with the inactive channels
-// zeroed in v_dist (their contributions vanish identically).
-//
-// Variants (specialization constants, matching the CUDA template axes):
-//   kCameraModel  = CameraModelType 0..3 (3dgut entry only)
-//   kDistType     = 0 None | 1 D | 2 RGB_D
-//   kOutputMedian = 0 | 1
-//   kAccumWeight  = 0 | 1  (o_accum_weight + accum_weight_map wired)
-//   kViewmatGrad  = 0 | 1  (3dgut entry only)
-//   kPacked       = 0 | 1  (gaussian_ids present)
-//   kDistortion   = CameraDistortionType 0..3 (3dgut entry only), last
+// Two constraints a reader cannot recover from the code: the sweep body is an
+// inlined function so its early-outs are returns and never skip the caller's
+// barrier, and the SpecializationConstant declaration order below IS the spec
+// ID order RasterizeBwd.cpp pushes.
 
 #define CudaDeviceExport ForceInline
 #include "int64_compat.slang"
@@ -43,17 +19,18 @@
 #include "dist_spec.slang"
 
 [SpecializationConstant]
-const int kCameraModel = 0;
+const int kCameraModel = 0;   // CameraModelType; 3dgut entry only
 [SpecializationConstant]
-const int kDistType = 0;
+const int kDistType = 0;      // 0 None | 1 D | 2 RGB_D
 [SpecializationConstant]
 const int kOutputMedian = 0;
 [SpecializationConstant]
-const int kAccumWeight = 0;
+const int kAccumWeight = 0;   // DensifyAccumMode
+static const int kAccumMax = 1, kAccumSum = 2, kAccumAvg = 3;
 [SpecializationConstant]
-const int kViewmatGrad = 0;
+const int kViewmatGrad = 0;   // 3dgut entry only
 [SpecializationConstant]
-const int kPacked = 0;
+const int kPacked = 0;        // gaussian_ids present
 
 static const uint TILE_SIZE_DX = 8;
 static const uint TILE_SIZE_DY = 8;
@@ -255,7 +232,8 @@ struct Raster2dBwdParams {  // via params ring
     float* v_s_conic;
     float* v_s_opac;
     float* v_s_rgb;
-    uint* o_accum_weight;   // kAccumWeight; float bits (atomic_max_f32_nonneg)
+    uint* o_accum_weight;   // kAccumWeight; Max writes float bits, else float
+    float* o_accum_weight_den;  // kAccumAvg lane 2
     uint32_t I;
     uint32_t N;
     uint32_t n_isects;
@@ -312,7 +290,7 @@ void _rb2_alpha_vjp(Frag2d_ s, float px, float py, float v_alpha,
 [ForceInline]
 void _rb2_step(Raster2dBwdParams p, int pix_id, int splat_idx, bool active,
                uint wg_y, uint wg_z, Frag2d_ splat, inout Frag2d_ v_splat,
-               inout float accum_weight) {
+               inout float accum_weight, inout float accum_weight_den) {
     if (pix_id < 0 || pix_id >= (int)RB_BLOCK || !active) return;
     if (splat_idx > _rb_bin[pix_id]) return;
     int gx = int(wg_z * TILE_SIZE_DX) + pix_id % (int)TILE_SIZE_DX;
@@ -336,7 +314,13 @@ void _rb2_step(Raster2dBwdParams p, int pix_id, int splat_idx, bool active,
         float T0 = _rb_Tg[pix_id].x;  // just updated: T0 stored in .x
         // CUDA computes the weight with the pre-update T0 = T1/(1-alpha);
         // _rb_pixel_grad stored exactly that, so reuse it.
-        accum_weight = max(accum_weight, _rb_awmap[pix_id] * alpha * T0);
+        float w = alpha * T0;
+        if (kAccumWeight == kAccumMax)
+            accum_weight = max(accum_weight, _rb_awmap[pix_id] * w);
+        else {
+            accum_weight += _rb_awmap[pix_id] * w;
+            if (kAccumWeight == kAccumAvg) accum_weight_den += w;
+        }
     }
 }
 
@@ -449,10 +433,11 @@ void rasterize_bwd_2d(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
             Frag2d_ v_splat = {float2(0.0f), 0.0f, float3(0.0f), 0.0f,
                                float3(0.0f)};
             float accum_weight = 0.0f;
+            float accum_weight_den = 0.0f;
 
             for (int t = 0; t < batch_size + (int)RB_BLOCK - 1; t++) {
                 _rb2_step(p, t - int(tid), splat_idx, active, wg.y, wg.z,
-                          splat, v_splat, accum_weight);
+                          splat, v_splat, accum_weight, accum_weight_den);
                 GroupMemoryBarrierWithGroupSync();
             }
 
@@ -471,8 +456,14 @@ void rasterize_bwd_2d(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 _rb_atomic_add(p.v_s_rgb + 3 * splat_sid, v_splat.rgb.x);
                 _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 1, v_splat.rgb.y);
                 _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 2, v_splat.rgb.z);
-                if (kAccumWeight != 0)
+                if (kAccumWeight == kAccumMax)
                     atomic_max_f32_nonneg(p.o_accum_weight + wid, accum_weight);
+                else if (kAccumWeight != 0) {
+                    atomic_add_f32((float*)p.o_accum_weight + wid, accum_weight);
+                    if (kAccumWeight == kAccumAvg)
+                        atomic_add_f32(p.o_accum_weight_den + wid,
+                                       accum_weight_den);
+                }
             }
         }
         GroupMemoryBarrierWithGroupSync();  // done reading surv[]
@@ -515,7 +506,8 @@ struct Raster3dgutBwdParams {  // via params ring
     float* v_scales;
     float* v_s_opac;
     float* v_s_rgb;
-    uint* o_accum_weight;  // float bits (atomic_max_f32_nonneg)
+    uint* o_accum_weight;  // kAccumWeight; Max writes float bits, else float
+    float* o_accum_weight_den;  // kAccumAvg lane 2
     float* v_viewmats;   // [I,16], kViewmatGrad
     uint32_t I;
     uint32_t N;
@@ -546,6 +538,7 @@ struct VFrag3dgut_ {
 void _rb3_step(Raster3dgutBwdParams p, int pix_id, int splat_idx,
                bool active, float3 ray_o, Frag3dgut_ splat,
                inout VFrag3dgut_ v_splat, inout float accum_weight,
+               inout float accum_weight_den,
                inout float3 total_v_ray_o) {
     if (pix_id < 0 || pix_id >= (int)RB_BLOCK || !active) return;
     float4 rb = _rb_raybin[pix_id];
@@ -590,7 +583,13 @@ void _rb3_step(Raster3dgutBwdParams p, int pix_id, int splat_idx,
 
     if (kAccumWeight != 0) {
         float T0 = _rb_Tg[pix_id].x;
-        accum_weight = max(accum_weight, _rb_awmap[pix_id] * alpha * T0);
+        float w = alpha * T0;
+        if (kAccumWeight == kAccumMax)
+            accum_weight = max(accum_weight, _rb_awmap[pix_id] * w);
+        else {
+            accum_weight += _rb_awmap[pix_id] * w;
+            if (kAccumWeight == kAccumAvg) accum_weight_den += w;
+        }
     }
     if (kViewmatGrad != 0) {
         total_v_ray_o += v_ray_o_a + v_ray_o_c;
@@ -764,10 +763,12 @@ void rasterize_bwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
             v_splat.opacity = 0.0f;
             v_splat.rgb = float3(0.0f);
             float accum_weight = 0.0f;
+            float accum_weight_den = 0.0f;
 
             for (int t = 0; t < batch_size + (int)RB_BLOCK - 1; t++) {
                 _rb3_step(p, t - int(tid), splat_idx, active, ray_o, splat,
-                          v_splat, accum_weight, total_v_ray_o);
+                          v_splat, accum_weight, accum_weight_den,
+                          total_v_ray_o);
                 GroupMemoryBarrierWithGroupSync();
             }
 
@@ -790,9 +791,16 @@ void rasterize_bwd_3dgut(uint3 wg: SV_GroupID, uint tid: SV_GroupThreadID,
                 _rb_atomic_add(p.v_s_rgb + 3 * splat_sid, v_splat.rgb.x);
                 _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 1, v_splat.rgb.y);
                 _rb_atomic_add(p.v_s_rgb + 3 * splat_sid + 2, v_splat.rgb.z);
-                if (kAccumWeight != 0)
+                if (kAccumWeight == kAccumMax)
                     atomic_max_f32_nonneg(p.o_accum_weight + splat_wid,
                                           accum_weight);
+                else if (kAccumWeight != 0) {
+                    atomic_add_f32((float*)p.o_accum_weight + splat_wid,
+                                   accum_weight);
+                    if (kAccumWeight == kAccumAvg)
+                        atomic_add_f32(p.o_accum_weight_den + splat_wid,
+                                       accum_weight_den);
+                }
             }
         }
         GroupMemoryBarrierWithGroupSync();

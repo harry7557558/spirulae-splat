@@ -89,6 +89,28 @@ struct RelocLasParams {
 static_assert(sizeof(RelocLasParams) == 34 * 8 + 12 * 4,
               "params layout must match the slang struct");
 
+// Mirror AccumFinalizeParams / ScoreGatherParams / ScoreClipParams.
+struct AccumFinalizeParams {
+    uint64_t accum;
+    uint32_t num_splats, wgs_per_row;
+};
+static_assert(sizeof(AccumFinalizeParams) == 8 + 2 * 4, "params layout");
+
+struct ScorePairParams {  // gather and clip share this shape
+    uint64_t accum_buffer, other;
+    uint32_t num_splats, wgs_per_row;
+};
+static_assert(sizeof(ScorePairParams) == 2 * 8 + 2 * 4, "params layout");
+
+// Mirrors NormalizeClipMapParams.
+struct NormalizeClipMapParams {
+    uint64_t data, inv_median, clip;
+    uint32_t B, N, use_median, use_clip, wgs_per_row;
+    uint32_t _pad0;
+};
+static_assert(sizeof(NormalizeClipMapParams) == 3 * 8 + 6 * 4,
+              "params layout must match the slang struct");
+
 // Mirrors CopyQshPairsParams.
 struct CopyQshPairsParams {
     uint64_t src_indices, dst_indices, packed, bounds;
@@ -827,4 +849,101 @@ void add_splats_mcmc_tensor(
                           /*dst_indices=*/nullptr, sh_value_packed.data_ptr(),
                           sh_value_bounds.data_ptr(), num_sh, num_sh_buffer,
                           sh_value_bits, sh_value_bounds_per_splat);
+}
+
+
+// The quantile radix-select this shares with the CUDA path (Quantile.cpp).
+// Positive-only: the map's background is tiny NEGATIVE noise, which an |x|
+// population would put the median in.
+template <bool invert_quantile>
+int batch_quantile_positive_radix_select(const float* d_x, int B, int N,
+                                         float q, float* d_out,
+                                         uint32_t* temp,
+                                         backend::Stream stream);
+
+void normalize_clip_map_inplace_tensor(
+    TorchTensorView data,
+    bool normalize_median,
+    float clip_quantile
+) {
+    const bool do_clip = (clip_quantile > 0.0f && clip_quantile < 1.0f);
+    if (!normalize_median && !do_clip) return;
+    float* ptr = (float*)std::get<0>(data);
+    if (ptr == nullptr) return;
+    const auto& shape = std::get<2>(data);
+    if (shape.empty()) return;
+    int64_t total = 1;
+    for (size_t i = 0; i < shape.size(); i++) total *= shape[i];
+    if (shape[0] <= 0 || total <= 0) return;
+    const int B = (int)shape[0];
+    const int N = (int)(total / shape[0]);
+
+    float* norm = DevicePool::global().acquire<float>(PoolSlot::DensifyMapNorm,
+                                                      2 * (size_t)B);
+    float* inv_median = norm;
+    float* clip = norm + B;
+    float* temp = DevicePool::global().acquire<float>(
+        PoolSlot::DensifyQuantileTemp, 1024 * (size_t)B);
+
+    if (normalize_median)
+        batch_quantile_positive_radix_select<true>(ptr, B, N, 0.5f, inv_median,
+                                                   (uint32_t*)temp,
+                                                   backend::kDefaultStream);
+    if (do_clip)
+        batch_quantile_positive_radix_select<false>(ptr, B, N, clip_quantile,
+                                                    clip, (uint32_t*)temp,
+                                                    backend::kDefaultStream);
+
+    NormalizeClipMapParams p{};
+    p.data = (uint64_t)ptr;
+    p.inv_median = (uint64_t)inv_median;
+    p.clip = (uint64_t)clip;
+    p.B = (uint32_t)B;
+    p.N = (uint32_t)N;
+    p.use_median = normalize_median ? 1u : 0u;
+    p.use_clip = do_clip ? 1u : 0u;
+    vkk::dispatch_flat("densify.normalize_clip_map", {}, total, 256, &p,
+                       sizeof(p), &p.wgs_per_row);
+}
+
+
+void densify_accum_finalize_tensor(int64_t num_splats,
+                                   DeviceVector<float> accum) {
+    if (num_splats <= 0 || accum.data_ptr() == nullptr) return;
+    AccumFinalizeParams p{};
+    p.accum = (uint64_t)accum.data_ptr();
+    p.num_splats = (uint32_t)num_splats;
+    vkk::dispatch_flat("densify.densify_accum_finalize", {}, num_splats, 256,
+                       &p, sizeof(p), &p.wgs_per_row);
+}
+
+void densify_clip_score_tensor(int64_t num_splats,
+                               DeviceVector<float2> accum_buffer,
+                               float quantile) {
+    if (num_splats <= 0 || accum_buffer.data_ptr() == nullptr) return;
+    if (!(quantile > 0.0f && quantile < 1.0f)) return;
+
+    // The selector wants a contiguous row, and .x is strided; gather first.
+    float* gathered = DevicePool::global().acquire<float>(
+        PoolSlot::DensifyScoreGather, (size_t)num_splats);
+    float* cutoff =
+        DevicePool::global().acquire<float>(PoolSlot::DensifyScoreClip, 1);
+    float* temp = DevicePool::global().acquire<float>(
+        PoolSlot::DensifyQuantileTemp, 1024);
+
+    ScorePairParams p{};
+    p.accum_buffer = (uint64_t)accum_buffer.data_ptr();
+    p.other = (uint64_t)gathered;
+    p.num_splats = (uint32_t)num_splats;
+    vkk::dispatch_flat("densify.densify_gather_score", {}, num_splats, 256, &p,
+                       sizeof(p), &p.wgs_per_row);
+
+    batch_quantile_positive_radix_select<false>(gathered, 1, (int)num_splats,
+                                                quantile, cutoff,
+                                                (uint32_t*)temp,
+                                                backend::kDefaultStream);
+
+    p.other = (uint64_t)cutoff;
+    vkk::dispatch_flat("densify.densify_clip_score", {}, num_splats, 256, &p,
+                       sizeof(p), &p.wgs_per_row);
 }
