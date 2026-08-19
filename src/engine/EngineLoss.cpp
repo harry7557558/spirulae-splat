@@ -423,8 +423,10 @@ void engine_backward_from_render_grad(
 }
 
 
-std::map<std::string, float> engine_compute_loss_backward(
-    int step,
+// Shared by engine_compute_loss_backward and engine_preview_loss_map: a valid
+// `map_out` stops after the per-pixel loss and copies the loss map there,
+// before anything that mutates a gradient or an optimizer moment.
+static std::map<std::string, float> _engine_loss(
     std::array<float, (int)LossWeightIndex::length> loss_weights,
     float w_ssim,
     int num_loss_scales,
@@ -434,8 +436,10 @@ std::map<std::string, float> engine_compute_loss_backward(
     float robust_edge_aware_quantile,
     float overexposure_reg_weight,
     float color_shift_reg_weight,
-    float color_shift_reg_beta
+    float color_shift_reg_beta,
+    TorchTensorView map_out
 ) {
+    const bool map_only = _tv_valid(map_out);
     // Validate that forward was run
     if (std::get<0>(engine().fwd.renders) .data_ptr() == nullptr)
         throw std::runtime_error("engine_compute_loss_backward: forward_3dgs must be called first");
@@ -443,7 +447,7 @@ std::map<std::string, float> engine_compute_loss_backward(
         throw std::runtime_error("engine_compute_loss_backward: set_training_data must be called first");
 
     // Allocate and zero gradient buffers from pool
-    _alloc_grad_buffers();
+    if (!map_only) _alloc_grad_buffers();
 
     int64_t C = engine().camera.num;
     int64_t H = engine().camera.height;
@@ -649,6 +653,14 @@ std::map<std::string, float> engine_compute_loss_backward(
         robust_edge_aware_quantile,
         pixel_grads
     );
+
+    if (map_only) {
+        backend::memcpy_sync((void*)std::get<0>(map_out),
+                             (void*)std::get<0>(loss_map_buf),
+                             (size_t)(C * H * W) * sizeof(float),
+                             backend::MemcpyKind::DeviceToHost);
+        return {};
+    }
 
     // --- Color-shift regularizer (combined bilagrid + PPISP) ---
     // Inject the design-(1) gradient on v_render_rgb BEFORE either bilagrid /
@@ -863,4 +875,39 @@ std::map<std::string, float> engine_compute_loss_backward(
         loss_weights[(int)LossWeightIndex::MedianRenderNormalReg]);
 
     return loss_dict;
+}
+
+
+std::map<std::string, float> engine_compute_loss_backward(
+    int step,
+    std::array<float, (int)LossWeightIndex::length> loss_weights,
+    float w_ssim,
+    int num_loss_scales,
+    int loss_scale_min_pixels,
+    bool compute_loss_map,
+    int loss_map_mode,
+    float robust_edge_aware_quantile,
+    float overexposure_reg_weight,
+    float color_shift_reg_weight,
+    float color_shift_reg_beta
+) {
+    return _engine_loss(loss_weights, w_ssim, num_loss_scales,
+                        loss_scale_min_pixels, compute_loss_map, loss_map_mode,
+                        robust_edge_aware_quantile, overexposure_reg_weight,
+                        color_shift_reg_weight, color_shift_reg_beta,
+                        _tv_null());
+}
+
+
+bool engine_preview_loss_map(const LossConfig& loss, TorchTensorView out) {
+    if (!loss.compute_loss_map || loss.loss_map_mode == 0) return false;
+    if (!engine().gt.has_gt) return false;
+    if (!_tv_valid(out))
+        throw std::runtime_error("engine_preview_loss_map: null destination");
+    // The regularizer weights are dropped: each of them only ever adds to a
+    // gradient this call does not compute.
+    _engine_loss(loss.weights, loss.w_ssim, loss.num_loss_scales,
+                 loss.loss_scale_min_pixels, true, loss.loss_map_mode,
+                 loss.robust_edge_aware_quantile, 0.0f, 0.0f, 0.0f, out);
+    return true;
 }

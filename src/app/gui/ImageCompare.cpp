@@ -127,6 +127,53 @@ void pack_bytes(const uint8_t* src, int views, int h, int w, int sh, int sw,
     }
 }
 
+// How the modality blocks fill the panel. Blocks pack `bc` to a row, a pair
+// spanning pair_w x pair_h cells; only the LAST block can be a lone pane, so a
+// row is as wide as its blocks and as tall as the tallest of them.
+struct GridPlan {
+    int bc;
+    int pair_w, pair_h;
+    int cols, rows;        // cells
+    float cell_w, cell_h;
+};
+
+GridPlan grid_shape(int n, bool lone, int bc, int pair_w, int pair_h) {
+    GridPlan g{bc, pair_w, pair_h, 0, 0, 0.0f, 0.0f};
+    for (int first = 0; first < n; first += bc) {
+        const int last = std::min(first + bc, n);
+        const bool has_lone = lone && last == n;
+        const int pairs = last - first - (has_lone ? 1 : 0);
+        g.cols = std::max(g.cols, pairs * pair_w + (has_lone ? 1 : 0));
+        g.rows += pairs > 0 ? pair_h : 1;
+    }
+    return g;
+}
+
+// The arrangement that draws the pictures largest. Every pane shares one
+// canvas aspect, so the winner is simply the cell shape closest to it.
+GridPlan plan_grid(int n, bool lone, const ImVec2& avail, float aspect,
+                   const ImVec2& spacing, const ImVec2& chrome) {
+    GridPlan best = grid_shape(n, lone, 1, 2, 1);
+    float best_score = -1e30f;
+    for (int stacked = 0; stacked < 2; stacked++) {
+        for (int bc = 1; bc <= n; bc++) {
+            GridPlan g = grid_shape(n, lone, bc, stacked ? 1 : 2,
+                                    stacked ? 2 : 1);
+            g.cell_w = (avail.x - spacing.x * (g.cols - 1)) / g.cols;
+            g.cell_h = (avail.y - spacing.y * (g.rows - 1)) / g.rows;
+            float score = std::min((g.cell_w - chrome.x) / aspect,
+                                   g.cell_h - chrome.y);
+            // A pair is read across, so stacking has to win by a margin.
+            if (stacked) score *= 0.97f;
+            if (score > best_score) {
+                best_score = score;
+                best = g;
+            }
+        }
+    }
+    return best;
+}
+
 std::string lower(std::string s) {
     for (char& c : s) c = (char)std::tolower((unsigned char)c);
     return s;
@@ -156,7 +203,9 @@ void ImageCompare::attach(spirula::TrainerSession& session) {
                         (int)std::max<int64_t>(session.ds.num_cameras - 1, 0));
     _error.clear();
     _shot = Shot{};
-    _requested = Job{-1, false, false};
+    _requested = Job{-1, false, false, false};
+    _has_error_map =
+        spirula::build_step_config(session.cfg, session.st, 0).loss.compute_loss_map;
     _dirty = true;
     _running = true;
     _worker = std::thread([this] { worker_loop(); });
@@ -180,7 +229,7 @@ void ImageCompare::detach() {
 
 void ImageCompare::destroy_gl() {
     for (Pane* p : {&_gt, &_render, &_gt_depth, &_render_depth,
-                    &_gt_normal, &_render_normal})
+                    &_gt_normal, &_render_normal, &_err_map})
         if (p->tex) { glDeleteTextures(1, &p->tex); p->tex = 0; }
 }
 
@@ -243,11 +292,16 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
     _wr_depth.clear();
     _wgt_normal.clear();
     _wr_normal.clear();
+    bool got_err = false;
+    // This step's config, so the forward renders the channels the trainer's
+    // does and the error map is weighted the way this step weights it.
+    const LossConfig loss =
+        spirula::build_step_config(s.cfg, s.st, out.step).loss;
     {
         std::lock_guard<std::mutex> lk(s.engine_mutex);
         engine_preview_forward(j.index, s.cfg.primitive, sh_deg,
                                s.cfg.packed || s.cfg.use_bvh, j.color_correct,
-                               s.st.input_depth_is_ray_depth);
+                               loss);
         auto shape = engine_get_render_rgb_shape();
         B = std::get<0>(shape); H = std::get<1>(shape);
         W = std::get<2>(shape); C = std::get<3>(shape);
@@ -315,6 +369,11 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
             _wr_normal.resize((size_t)(B * H * W * 3));
             engine_copy_render_depth_normal_to_host(tv(_wr_normal, B, H, W, 3));
         }
+
+        if (j.error_map) {
+            _werr.resize((size_t)(B * H * W));
+            got_err = engine_preview_loss_map(loss, tv(_werr, B, H, W, 1));
+        }
     }
 
     // Scored over the pixels the loss is computed on, which is why the mask
@@ -374,6 +433,20 @@ void ImageCompare::run_job(const Job& j, Shot& out) {
     colour(_wr_depth, H, W, false, false, out.render_depth);
     colour(_wgt_normal, nh, nw, true, false, out.gt_normal);
     colour(_wr_normal, H, W, true, false, out.render_normal);
+
+    if (got_err) {
+        const size_t n = (size_t)(B * H * W);
+        double sum = 0.0;
+        for (size_t i = 0; i < n; i++) {
+            sum += _werr[i];
+            out.err_max = std::max(out.err_max, _werr[i]);
+        }
+        out.err_mean = n > 0 ? (float)(sum / (double)n) : 0.0f;
+        _wmodrgb.resize(n * 3);
+        app::error_to_rgb(_werr.data(), n, 0.0f, _wmodrgb.data());
+        pack_bytes(_wmodrgb.data(), out.views, (int)H, (int)W, (int)H, (int)W,
+                   out.pack_cols, out.pack_rows, out.err_map);
+    }
 
     if (j.source_gt && j.index < (int)s.ds.image_filenames.size()) {
         const std::string& src = s.ds.image_filenames[(size_t)j.index];
@@ -514,6 +587,7 @@ void ImageCompare::rebuild_textures() {
     struct { Pane* pane; const std::vector<uint8_t>* px; } extra[] = {
         {&_gt_depth, &_shot.gt_depth},     {&_render_depth, &_shot.render_depth},
         {&_gt_normal, &_shot.gt_normal},   {&_render_normal, &_shot.render_normal},
+        {&_err_map, &_shot.err_map},
     };
     for (auto& e : extra)
         if (!e.px->empty()) to_pane(*e.pane, e.px->data(), pw, ph, true, buf);
@@ -671,6 +745,11 @@ void ImageCompare::draw_toolbar(bool training) {
         ui::Checkbox(msg::compare_show_normal, &_show_normal);
         ui::help_on_hover(msg::compare_show_normal_help);
     }
+    if (_has_error_map) {
+        place(check_w(msg::compare_show_error));
+        ui::Checkbox(msg::compare_show_error, &_show_error);
+        ui::help_on_hover(msg::compare_show_error_help);
+    }
 
     place(check_w(msg::compare_smooth));
     ui::Checkbox(msg::compare_smooth, &_smooth);
@@ -819,33 +898,90 @@ void ImageCompare::draw_pane(const Pane& p, const ImVec2& box,
     ImGui::EndChild();
 }
 
-// One row per modality, reference on the left and render on the right, all
-// six sharing the zoom: a depth map is judged against the photograph beside
-// it far more often than on its own.
-void ImageCompare::draw_panes(const ImVec2& avail) {
-    struct Row {
-        const Pane* a; const Pane* b;
-        const spirula::i18n::Msg* ca; const spirula::i18n::Msg* cb;
-    };
-    Row rows[3];
+// One block per modality: a reference / render pair, or the error map on its
+// own. They share the zoom, because a depth map is judged against the
+// photograph beside it far more often than on its own.
+struct ImageCompare::Block {
+    const Pane* pane[2];
+    const spirula::i18n::Msg* caption[2];
+    int n;
+};
+
+int ImageCompare::collect(Block* out) const {
     int n = 0;
-    rows[n++] = {&_gt, &_render, &msg::compare_pane_gt, &msg::compare_pane_render};
+    out[n++] = {{&_gt, &_render},
+                {&msg::compare_pane_gt, &msg::compare_pane_render}, 2};
     if (_show_depth && !_shot.gt_depth.empty())
-        rows[n++] = {&_gt_depth, &_render_depth, &msg::compare_pane_gt_depth,
-                     &msg::compare_pane_render_depth};
+        out[n++] = {{&_gt_depth, &_render_depth},
+                    {&msg::compare_pane_gt_depth,
+                     &msg::compare_pane_render_depth}, 2};
     if (_show_normal && !_shot.gt_normal.empty())
-        rows[n++] = {&_gt_normal, &_render_normal, &msg::compare_pane_gt_normal,
-                     &msg::compare_pane_render_normal};
+        out[n++] = {{&_gt_normal, &_render_normal},
+                    {&msg::compare_pane_gt_normal,
+                     &msg::compare_pane_render_normal}, 2};
+    if (_show_error && !_shot.err_map.empty())
+        out[n++] = {{&_err_map, nullptr}, {&msg::compare_pane_error, nullptr}, 1};
+    return n;
+}
+
+void ImageCompare::draw_panes(const ImVec2& avail) {
+    Block blocks[4];
+    const int n = collect(blocks);
+    const bool lone = blocks[n - 1].n == 1;
 
     const ImGuiStyle& st = ImGui::GetStyle();
-    const float half = std::max(64.0f, (avail.x - st.ItemSpacing.x) * 0.5f);
-    const float rh =
-        std::max(64.0f, (avail.y - st.ItemSpacing.y * (n - 1)) / (float)n);
+    // What a pane spends on its border, padding and caption before the picture
+    // gets any of it -- the grid is chosen on what is left, not on the box.
+    const ImVec2 chrome(
+        2.0f * (st.WindowPadding.x + st.ChildBorderSize),
+        2.0f * (st.WindowPadding.y + st.ChildBorderSize) +
+            ImGui::GetTextLineHeight() + st.ItemSpacing.y);
+    const float aspect = _render.canvas_h > 0
+        ? (float)_render.canvas_w / (float)_render.canvas_h : 1.0f;
+    const GridPlan g = plan_grid(n, lone, avail, aspect, st.ItemSpacing, chrome);
+
+    // The cell is what fits; the box is only what the picture needs of it.
+    // Trimming the slack and centring what is left keeps every border tight
+    // around a picture instead of framing empty space beside it.
+    const float drawn = std::max(
+        std::min((g.cell_w - chrome.x) / aspect, g.cell_h - chrome.y), 32.0f);
+    const ImVec2 box(drawn * aspect + chrome.x, drawn + chrome.y);
+    const float step_x = box.x + st.ItemSpacing.x;
+    const float step_y = box.y + st.ItemSpacing.y;
+
+    const ImVec2 cur = ImGui::GetCursorPos();
+    const ImVec2 base(
+        cur.x + std::max(0.0f, (avail.x - g.cols * step_x +
+                                st.ItemSpacing.x) * 0.5f),
+        cur.y + std::max(0.0f, (avail.y - g.rows * step_y +
+                                st.ItemSpacing.y) * 0.5f));
+
     _hot = false;
-    for (int i = 0; i < n; i++) {
-        draw_pane(*rows[i].a, ImVec2(half, rh), *rows[i].ca);
-        ImGui::SameLine();
-        draw_pane(*rows[i].b, ImVec2(half, rh), *rows[i].cb);
+    int cell_y = 0;
+    for (int first = 0; first < n; first += g.bc) {
+        const int last = std::min(first + g.bc, n);
+        const bool has_lone = lone && last == n;
+        const int pairs = last - first - (has_lone ? 1 : 0);
+        const int wide = pairs * g.pair_w + (has_lone ? 1 : 0);
+        const int tall = pairs > 0 ? g.pair_h : 1;
+        // Every row is centred on the widest, so a short last row sits under
+        // the middle of the others rather than off to one side.
+        float x = base.x + (g.cols - wide) * step_x * 0.5f;
+        const float y = base.y + cell_y * step_y;
+        for (int i = first; i < last; i++) {
+            const Block& b = blocks[i];
+            for (int k = 0; k < b.n; k++) {
+                // The second of a pair is one cell along the block; a lone
+                // pane takes one cell, centred down the row.
+                const float ox = b.n == 2 ? (float)(k * (g.pair_w - 1)) : 0.0f;
+                const float oy = b.n == 2 ? (float)(k * (g.pair_h - 1))
+                                          : (tall - 1) * 0.5f;
+                ImGui::SetCursorPos(ImVec2(x + ox * step_x, y + oy * step_y));
+                draw_pane(*b.pane[k], box, *b.caption[k]);
+            }
+            x += (b.n == 2 ? g.pair_w : 1) * step_x;
+        }
+        cell_y += tall;
     }
     handle_view_input();
 }
@@ -892,7 +1028,8 @@ void ImageCompare::draw(bool training, int step) {
     // enough to follow the optimization without taking much of it. Paced in
     // ITERATIONS from the measured cost of a job against the cost of a step,
     // so the share it takes does not depend on how fast the dataset trains.
-    const Job want{_index, _color_correct, _source_gt};
+    const Job want{_index, _color_correct, _source_gt,
+                   _show_error && _has_error_map};
     bool follow = false;
     if (training && _live && _rendered_step >= 0 && step >= 0) {
         const int interval = (_job_secs > 0 && _step_secs > 0)
@@ -945,6 +1082,15 @@ void ImageCompare::draw(bool training, int step) {
     if (_shot.step >= 0) {
         ImGui::SameLine();
         ui::TextDisabled(msg::compare_at_step, {(long long)_shot.step});
+    }
+    if (!_shot.err_map.empty()) {
+        ImGui::SameLine();
+        // %g, because the modes differ by orders of magnitude.
+        char mean[24], max[24];
+        std::snprintf(mean, sizeof mean, "%.3g", (double)_shot.err_mean);
+        std::snprintf(max, sizeof max, "%.3g", (double)_shot.err_max);
+        ui::TextDisabled(msg::compare_error_stats, {mean, max});
+        ui::help_on_hover(msg::compare_show_error_help);
     }
 
     ImVec2 avail = ImGui::GetContentRegionAvail();

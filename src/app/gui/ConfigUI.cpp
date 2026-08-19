@@ -171,22 +171,25 @@ bool draw_value(const char*, float& v, const char*) {
     return ui::InputFloatRaw("##v", &v, "%g");
 }
 
-bool draw_value(const char* key, std::string& v, const char* choices) {
+// `blank_none`: the "none" token IS the empty value, true where the default is
+// empty. Where the default is a real word "none" is a value like any other,
+// and writing "" gives the trainer a spelling no parser knows.
+bool draw_value(const char* key, std::string& v, const char* choices,
+                bool blank_none = true) {
     std::string ch = choices;
     if (ch.empty() || ch == "none") {
         ImGui::SetNextItemWidth(kFieldWidth);
         return ui::InputTextRaw("##v", &v);
     }
-    // Literal[...] -> dropdown; the "none" token maps to the empty string.
     std::vector<std::string> opts = split_choices(choices);
-    std::string cur = v.empty() ? "none" : v;
+    std::string cur = (blank_none && v.empty()) ? "none" : v;
     bool changed = false;
     ImGui::SetNextItemWidth(kFieldWidth);
     if (ui::BeginComboRaw("##v", choice_display(key, cur).c_str())) {
         for (const auto& o : opts) {
             bool sel = (o == cur);
             if (ui::SelectableRaw(choice_display(key, o), sel)) {
-                v = (o == "none") ? "" : o;
+                v = (blank_none && o == "none") ? "" : o;
                 changed = true;
             }
             if (sel) ImGui::SetItemDefaultFocus();
@@ -245,12 +248,23 @@ bool draw_value(const char*, std::array<int, N>& v, const char*) {
 
 // ---- one field row -----------------------------------------------------------
 
+// Only a string widget cares what the default is (see draw_value above).
+template <typename T>
+bool draw_value_of(const char* key, T& v, const T&, const char* choices) {
+    return draw_value(key, v, choices);
+}
+
+bool draw_value_of(const char* key, std::string& v, const std::string& def,
+                   const char* choices) {
+    return draw_value(key, v, choices, /*blank_none=*/def.empty());
+}
+
 template <typename T>
 bool field_row(const char* cli_key, const Msg& name, const Msg& help,
                T& v, const T& def, const char* choices) {
     bool modified = !(v == def);
     ImGui::PushID(cli_key);
-    bool changed = draw_value(cli_key, v, choices);
+    bool changed = draw_value_of(cli_key, v, def, choices);
     bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
                                         ImGuiHoveredFlags_AllowWhenDisabled);
     ImGui::OpenPopupOnItemClick("ctx", ImGuiPopupFlags_MouseButtonRight);

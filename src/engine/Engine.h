@@ -155,6 +155,11 @@ std::map<std::string, float> engine_compute_loss_backward(
     float color_shift_reg_beta    = 0.0f
 );
 
+// The densification error map for the last forward -- the buffer
+// engine_compute_loss_backward hands the raster backward -- into a host
+// [C, H, W, 1]. Touches no gradient, optimizer or colour-transform state.
+bool engine_preview_loss_map(const LossConfig& loss, TorchTensorView out);
+
 // --- Backward from supplied output cotangents (no loss) ---
 //
 // Seeds the rasterization backward with caller-supplied per-pixel cotangents
@@ -448,7 +453,7 @@ int engine_eval_forward(std::string primitive, int sh_degree, bool packed);
 // (K) for that image.
 int engine_preview_forward(int index, std::string primitive, int sh_degree,
                            bool packed, bool apply_color_correction,
-                           bool input_depth_is_ray_depth);
+                           const LossConfig& loss);
 
 // --- Debug rendering ---
 

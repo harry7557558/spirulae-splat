@@ -6489,6 +6489,92 @@ SS_MSG(compare_pane_render_normal,
     IT("Normali del render"), NL("Gerenderde normalen"),
     RU("Нормали рендера"), TR("Görüntülenen normaller"));
 
+SS_MSG(compare_pane_error,
+    EN("Detail error"),
+    JA("詳細の誤差"),      ZH_HANS("细节误差"),  ZH_HANT("細節誤差"),
+    KO("디테일 오차"),      DE("Detailfehler"), FR("Erreur de détail"),
+    ES("Error de detalle"), PT("Erro de detalhe"),
+    IT("Errore di dettaglio"), NL("Detailfout"),
+    RU("Ошибка детализации"), TR("Ayrıntı hatası"));
+
+SS_MSG(compare_show_error,
+    EN("Error map"),     JA("誤差マップ"),     ZH_HANS("误差图"),   ZH_HANT("誤差圖"),
+    KO("오차 맵"),        DE("Fehlerkarte"),  FR("Carte d'erreur"), ES("Mapa de error"),
+    PT("Mapa de erro"),  IT("Mappa dell'errore"), NL("Foutkaart"),
+    RU("Карта ошибки"),  TR("Hata haritası"));
+
+SS_MSG(compare_show_error_help,
+    EN("The error map this run hands to the backward pass, where it becomes "
+       "each splat's need-more-detail score. It is multi-scale and "
+       "post-processed exactly as the detail error measure sets it, so the "
+       "warm colours are where new splats will go."),
+    JA("この学習が逆伝播に渡している誤差マップそのものです。各スプラットの"
+       "「もっと細かくすべき」スコアはここから積み上がります。詳細の誤差の測り方"
+       "の設定どおりに多重解像度と後処理を通してあるので、暖色の場所に新しい"
+       "スプラットが足されます。"),
+    ZH_HANS("本次训练真正送入反向传播的误差图，每个泼溅的“需要更多细节”评分就是"
+            "从这里累积的。它按细节误差度量的设置做过多尺度与后处理，所以暖色的"
+            "地方就是新泼溅将要落下的位置。"),
+    ZH_HANT("本次訓練真正送入反向傳播的誤差圖，每個潑濺的「需要更多細節」評分就是"
+            "從這裡累積的。它按細節誤差度量的設定做過多尺度與後處理，所以暖色的"
+            "地方就是新潑濺將要落下的位置。"),
+    KO("이 학습이 실제로 역전파에 넘기는 오차 맵입니다. 각 스플랫의 "
+       "「더 자세히 그려야 한다」 점수가 여기서 쌓입니다. 디테일 오차 측정 방식이 "
+       "정한 그대로 다중 해상도와 후처리를 거치므로, 따뜻한 색이 새 스플랫이 "
+       "놓일 자리입니다."),
+    DE("Genau die Fehlerkarte, die dieser Lauf an den Rückwärtsdurchlauf gibt "
+       "und aus der jeder Splat seinen Detailbedarf bezieht. Sie ist "
+       "mehrskalig und nachbearbeitet, genau wie das Detailfehlermaß es "
+       "einstellt -- warme Farben zeigen, wo neue Splats hinkommen."),
+    FR("La carte d'erreur que cette session transmet réellement à la passe "
+       "arrière, d'où chaque splat tire son score de besoin de détail. Elle "
+       "est multi-échelle et post-traitée exactement comme la mesure d'erreur "
+       "de détail le règle : les couleurs chaudes montrent où iront les "
+       "nouveaux splats."),
+    ES("El mapa de error que esta ejecución entrega de verdad a la pasada "
+       "hacia atrás, del que cada splat saca su puntuación de necesidad de "
+       "detalle. Es multiescala y está posprocesado tal como lo fija la "
+       "medida de error de detalle: los colores cálidos indican dónde irán "
+       "los splats nuevos."),
+    PT("O mapa de erro que esta execução entrega de facto à passagem para "
+       "trás, de onde cada splat tira a sua pontuação de necessidade de "
+       "detalhe. É multiescala e pós-processado exatamente como a medida de "
+       "erro de detalhe define: as cores quentes mostram onde vão os splats "
+       "novos."),
+    IT("La mappa dell'errore che questa esecuzione passa davvero al passaggio "
+       "all'indietro, da cui ogni splat ricava il punteggio di bisogno di "
+       "dettaglio. È multiscala e post-elaborata esattamente come la imposta "
+       "la misura dell'errore di dettaglio: i colori caldi mostrano dove "
+       "andranno gli splat nuovi."),
+    NL("Precies de foutkaart die deze run aan de terugwaartse stap geeft en "
+       "waaruit elke splat zijn detailbehoefte haalt. Ze is multischaal en "
+       "nabewerkt zoals de detailfoutmaat het instelt -- warme kleuren laten "
+       "zien waar nieuwe splats komen."),
+    RU("Та самая карта ошибки, которую этот запуск передаёт в обратный проход "
+       "и из которой каждый сплат берёт свою потребность в детализации. Она "
+       "многомасштабная и обработана ровно так, как задаёт мера ошибки "
+       "детализации: тёплые цвета показывают, где появятся новые сплаты."),
+    TR("Bu çalışmanın geri geçişe gerçekten verdiği hata haritası; her "
+       "splat'ın daha fazla ayrıntı gereksinimi puanı buradan birikir. Çok "
+       "ölçeklidir ve ayrıntı hata ölçüsünün belirlediği gibi son işlemden "
+       "geçmiştir: sıcak renkler yeni splat'ların nereye gideceğini "
+       "gösterir."));
+
+SS_MSG(compare_error_stats,
+    EN("Error: mean {0}, max {1}"),
+    JA("誤差: 平均 {0}、最大 {1}"),
+    ZH_HANS("误差：平均 {0}，最大 {1}"),
+    ZH_HANT("誤差：平均 {0}，最大 {1}"),
+    KO("오차: 평균 {0}, 최대 {1}"),
+    DE("Fehler: Mittel {0}, Max. {1}"),
+    FR("Erreur : moyenne {0}, max {1}"),
+    ES("Error: media {0}, máx. {1}"),
+    PT("Erro: média {0}, máx. {1}"),
+    IT("Errore: media {0}, max {1}"),
+    NL("Fout: gemiddeld {0}, max {1}"),
+    RU("Ошибка: среднее {0}, максимум {1}"),
+    TR("Hata: ortalama {0}, en çok {1}"));
+
 SS_MSG(compare_show_depth,
     EN("Depth"),         JA("深度"),          ZH_HANS("深度"),     ZH_HANT("深度"),
     KO("깊이"),           DE("Tiefe"),        FR("Profondeur"),   ES("Profundidad"),

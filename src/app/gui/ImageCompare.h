@@ -1,17 +1,17 @@
 #pragma once
 
 // ImageCompare -- the training preview's second mode: one training frame's
-// ground truth beside the render of the same camera, one row per modality the
-// run actually loaded (photo, and depth / normals where they are supervised).
+// ground truth beside the render of the same camera, one block per modality
+// the run loaded (photo, depth / normals where supervised, the densification
+// error map), on a grid draw_panes fits to the picture's shape.
 //
-// The pair comes out of the engine (engine_preview_forward), so what is on
-// screen is what the loss compares -- the same decode, mask, downscale,
-// fisheye / equirectangular split and per-image colour correction. Zoom and
-// pan are shared by every pane: the question this mode answers is whether the
-// render is soft because the model is, or because the photograph was.
+// The panes come out of the engine (engine_preview_forward,
+// engine_preview_loss_map), so what is on screen is what the loss compares
+// and what densification scores. Zoom and pan are shared: the question this
+// mode answers is whether the render is soft because the model is, or
+// because the photograph was.
 //
-// GUI thread only, plus the one worker it starts for the engine call.
-// attach() once the engine is ready; detach() BEFORE the session goes away.
+// GUI thread only, plus its one worker. detach() BEFORE the session goes away.
 
 #include "app/gui/GlLoader.h"
 
@@ -63,9 +63,11 @@ private:
         bool color_correct = true;
         // Show the file itself rather than the downscaled copy the loss sees.
         bool source_gt = false;
+        // Also compute the densification error map, which costs a loss pass.
+        bool error_map = false;
         bool operator==(const Job& o) const {
             return index == o.index && color_correct == o.color_correct &&
-                   source_gt == o.source_gt;
+                   source_gt == o.source_gt && error_map == o.error_map;
         }
     };
 
@@ -87,6 +89,9 @@ private:
         // run does not load them.
         std::vector<uint8_t> gt_depth, render_depth;
         std::vector<uint8_t> gt_normal, render_normal;
+        // The densification error map on the same grid, on the depth ramp.
+        std::vector<uint8_t> err_map;
+        float err_mean = 0.0f, err_max = 0.0f;
         std::vector<uint8_t> mask;         // the same grid; empty when there is none
         int  src_w = 0, src_h = 0;
         std::vector<uint8_t> src;          // the file itself, when asked for
@@ -125,6 +130,9 @@ private:
     // Put the next control on this row if `w` still fits, else start a row.
     void place(float w);
     void draw_panes(const ImVec2& avail);
+    // One modality's panes: the reference / render pair, or a lone map.
+    struct Block;
+    int  collect(Block* out) const;
     void draw_pane(const Pane& p, const ImVec2& box,
                    const spirula::i18n::Msg& caption);
     void handle_view_input();
@@ -145,6 +153,10 @@ private:
     bool _live = true;
     bool _show_depth = true;
     bool _show_normal = true;
+    bool _show_error = true;
+    // Whether this run builds a densification error map at all -- a mode of
+    // `none`, or a score taken entirely from the world gradient, builds none.
+    bool _has_error_map = false;
     std::string _filter;          // the picker's file-name search
     float _row_w = 0.0f, _row_used = 0.0f;   // toolbar packing (see place)
 
@@ -177,16 +189,17 @@ private:
     // coloured outside it: colouring 2 MPx would hold the trainer up for
     // nothing.
     std::vector<float> _wgt_depth, _wr_depth, _wgt_normal, _wr_normal;
+    std::vector<float> _werr;
     std::vector<uint8_t> _wmodrgb;   // one of them coloured, before packing
 
     // ---- what is on screen ----
     Shot _shot;
-    Job  _requested{-1, false, false};   // never equals a real selection
+    Job  _requested{-1, false, false, false};  // never equals a real selection
     uint64_t _in_flight = 0;
     bool _dirty = true;           // the selection changed; re-request
     bool _tex_dirty = true;       // the composite changed; re-upload
     Pane _gt, _render;
-    Pane _gt_depth, _render_depth, _gt_normal, _render_normal;
+    Pane _gt_depth, _render_depth, _gt_normal, _render_normal, _err_map;
     std::string _error;
 
     // ---- refresh pacing while training (see draw) ----

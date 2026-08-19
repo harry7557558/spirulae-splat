@@ -208,8 +208,12 @@ float[RawLossIndex::length] per_pixel_losses(
     median_normal = normalize_normal(median_normal, median_normal_mask);
     // 1) mean vs median depth L1, only where both depths are nonzero
     bool mean_median_mask = mask && (mean_depth_raw > 1e-10f) && (median_depth > 1e-10f);
+    // Clamped INSIDE the log: where the mask is 0 a depth is 0 too, and
+    // 0 * log(0) is a NaN -- every pixel of the loss_full densify error map
+    // on a run with no median depth.
     losses[RawLossIndex::MeanMedianDepthSup] = weights[LossWeightIndex::MeanMedianDepthSup] *
-        float(mean_median_mask) * abs(log(mean_depth_raw) - log(median_depth));
+        float(mean_median_mask) * abs(log(max(mean_depth_raw, 1e-10f)) -
+                                      log(max(median_depth, 1e-10f)));
     // 2) median normal vs depth (mean) normal
     losses[RawLossIndex::MedianDepthNormalReg] = weights[LossWeightIndex::MedianDepthNormalReg] *
         float(median_normal_mask & depth_normal_mask) * normal_loss(median_normal, depth_normal);

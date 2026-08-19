@@ -53,6 +53,45 @@ inline void depth_to_rgb(const float* depth, size_t n, bool skip_zero,
     }
 }
 
+// [n] non-negative error values -> [n*3] bytes on the same turbo ramp. `hi`
+// saturates it; 0 asks for the 99.5th percentile, so a handful of outlier
+// pixels cannot flatten the rest. Returns the normalizer used.
+inline float error_to_rgb(const float* err, size_t n, float hi, uint8_t* out) {
+    if (hi <= 0.0f && n > 0) {
+        float mx = 0.0f;
+        for (size_t i = 0; i < n; i++)
+            if (std::isfinite(err[i]) && err[i] > mx) mx = err[i];
+        // 1024 linear bins: the ramp resolves 256 steps, so a finer quantile
+        // than this buys nothing.
+        constexpr int kBins = 1024;
+        size_t hist[kBins] = {};
+        size_t total = 0;
+        if (mx > 0.0f) {
+            for (size_t i = 0; i < n; i++) {
+                const float v = err[i];
+                if (!std::isfinite(v) || v <= 0.0f) continue;
+                int b = (int)(v / mx * (float)(kBins - 1));
+                hist[b < 0 ? 0 : (b >= kBins ? kBins - 1 : b)]++;
+                total++;
+            }
+        }
+        size_t acc = 0;
+        int b = 0;
+        for (; b + 1 < kBins; b++) {
+            acc += hist[b];
+            if ((double)acc >= 0.995 * (double)total) break;
+        }
+        hi = mx * (float)(b + 1) / (float)kBins;
+    }
+    if (!(hi > 0.0f)) hi = 1.0f;
+    for (size_t i = 0; i < n; i++) {
+        const float v = err[i];
+        turbo(std::isfinite(v) ? std::fmin(1.0f, std::fmax(0.0f, v / hi)) : 0.0f,
+              out + i * 3);
+    }
+    return hi;
+}
+
 // [n*3] unit normals -> [n*3] bytes, the encoding `spirula geometry` writes
 // and the loss decodes: byte/127.5 - 1, and BLACK where there is none.
 inline void normal_to_rgb(const float* normal, size_t n, uint8_t* out) {

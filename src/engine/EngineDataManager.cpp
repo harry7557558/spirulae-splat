@@ -246,7 +246,8 @@ static TorchTensorView _tv_null() { return {0, 0, {}}; }
 static void _install_and_forward(const DecodedBatch& b, std::string primitive,
                                  int sh_degree, bool packed,
                                  bool with_geometry = false,
-                                 bool input_depth_is_ray_depth = true) {
+                                 bool input_depth_is_ray_depth = true,
+                                 int dist_type = 0) {
     const bool geom = with_geometry;
     if (b.K <= 1 && b.input_source_models.empty()) {
         set_camera_params((int)b.width, (int)b.height,
@@ -280,7 +281,8 @@ static void _install_and_forward(const DecodedBatch& b, std::string primitive,
             (uint64_t)b.axes_dev);
     }
 
-    forward_3dgs(std::move(primitive), sh_degree, packed);
+    forward_3dgs(std::move(primitive), sh_degree, packed,
+                 /*output_median=*/false, dist_type);
 }
 
 int engine_eval_forward(std::string primitive, int sh_degree, bool packed) {
@@ -303,7 +305,7 @@ int engine_eval_forward(std::string primitive, int sh_degree, bool packed) {
 
 int engine_preview_forward(int index, std::string primitive, int sh_degree,
                            bool packed, bool apply_color_correction,
-                           bool input_depth_is_ray_depth) {
+                           const LossConfig& loss) {
     if (!engine().dm)
         throw std::runtime_error(
             "engine_preview_forward: DataManager not configured — call "
@@ -313,10 +315,17 @@ int engine_preview_forward(int index, std::string primitive, int sh_degree,
     // a preview is one call at a time under the engine mutex.
     static DecodedBatch b;
     engine().dm->fetch_one((int32_t)index, b);
-    // With the geometry GT: this is the panel that shows what the loss
-    // compares, and the depth and normal rows are half of that.
+    // With the geometry GT and the training step's distortion channels: this
+    // renders what the loss compares, so a loss map read off this forward
+    // carries the same terms the trainer's does.
+    const DistortionType dist_type = engine_distortion_type(
+        engine_primitive_pixel_type(primitive),
+        loss.weights[(int)LossWeightIndex::RgbDistReg],
+        loss.weights[(int)LossWeightIndex::DepthDistReg],
+        loss.weights[(int)LossWeightIndex::NormalDistReg]);
     _install_and_forward(b, std::move(primitive), sh_degree, packed,
-                         /*with_geometry=*/true, input_depth_is_ray_depth);
+                         /*with_geometry=*/true, loss.input_depth_is_ray_depth,
+                         (int)dist_type);
 
     if (apply_color_correction) {
         // POST-split camera ids, the same ones the training step hands the
