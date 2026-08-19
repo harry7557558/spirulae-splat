@@ -150,7 +150,7 @@ float MeshRunner::progress() const {
     const float lo = _stage_lo.load();
     if (lo < 0.0f) return -1.0f;
 #if 1
-    return std::powf(lo, 2.0f);
+    return std::pow(lo, 2.0f);
 #else
     const float hi = _stage_hi.load();
     const float sub = _stage_frac.load();
