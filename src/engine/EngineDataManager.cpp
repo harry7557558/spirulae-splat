@@ -230,6 +230,11 @@ std::map<std::string, float> engine_train_step_managed(
 }
 
 
+void engine_resolve_data_error(bool retry) {
+    if (engine().dm) engine().dm->resolve_data_error(retry);
+}
+
+
 // ---------------------------------------------------------------------------
 // Forward-only paths: take a batch, install it, render it. See Engine.h.
 // ---------------------------------------------------------------------------

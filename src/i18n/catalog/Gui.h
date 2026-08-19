@@ -1955,6 +1955,68 @@ SS_MSG(keep_training_help,
     RU("Закрывает это окно и продолжает с места, где прогон был приостановлен."),
     TR("Bunu kapatır ve çalışmanın duraklatıldığı yerden devam eder."));
 
+SS_MSG(data_error_title,
+    EN("Dataset file unreadable"),
+    JA("データセットのファイルを読めません"),
+    ZH_HANS("无法读取数据集文件"),
+    ZH_HANT("無法讀取資料集檔案"),
+    KO("데이터셋 파일을 읽을 수 없음"),
+    DE("Datensatzdatei nicht lesbar"),
+    FR("Fichier du jeu de données illisible"),
+    ES("Archivo del conjunto de datos ilegible"),
+    PT("Ficheiro do conjunto de dados ilegível"),
+    IT("File del set di dati illeggibile"),
+    NL("Datasetbestand onleesbaar"),
+    RU("Файл набора данных не читается"),
+    TR("Veri kümesi dosyası okunamıyor"));
+
+SS_MSG(data_error_intro,
+    EN("Training is paused here and nothing is lost. Put the file back, then "
+       "retry."),
+    JA("ここで学習は一時停止していて、失われたものはありません。ファイルを"
+       "戻してから、やり直してください。"),
+    ZH_HANS("训练已在此暂停，没有任何损失。把文件放回去，然后重试。"),
+    ZH_HANT("訓練已在此暫停，沒有任何損失。把檔案放回去，然後重試。"),
+    KO("여기서 학습이 멈춰 있고 잃은 것은 없습니다. 파일을 되돌려 놓고 다시 "
+       "시도하세요."),
+    DE("Das Training pausiert hier, nichts geht verloren. Legen Sie die Datei "
+       "zurück und versuchen Sie es erneut."),
+    FR("L'entraînement est en pause ici et rien n'est perdu. Remettez le "
+       "fichier en place, puis réessayez."),
+    ES("El entrenamiento está en pausa aquí y no se pierde nada. Vuelve a "
+       "poner el archivo y reinténtalo."),
+    PT("O treinamento está pausado aqui e nada se perde. Coloque o ficheiro de "
+       "volta e tente novamente."),
+    IT("L'addestramento è in pausa qui e non si perde nulla. Rimetti a posto "
+       "il file, poi riprova."),
+    NL("De training staat hier stil en er gaat niets verloren. Zet het bestand "
+       "terug en probeer het opnieuw."),
+    RU("Обучение приостановлено здесь, ничего не потеряно. Верните файл на "
+       "место и повторите."),
+    TR("Eğitim burada duraklatıldı ve hiçbir şey kaybolmadı. Dosyayı geri "
+       "koyup yeniden deneyin."));
+
+SS_MSG(data_error_retry,
+    EN("Retry"), JA("やり直す"), ZH_HANS("重试"), ZH_HANT("重試"),
+    KO("다시 시도"), DE("Erneut versuchen"), FR("Réessayer"),
+    ES("Reintentar"), PT("Tentar de novo"), IT("Riprova"),
+    NL("Opnieuw proberen"), RU("Повторить"), TR("Yeniden dene"));
+
+SS_MSG(data_error_retry_help,
+    EN("Read the file again and carry on from this step."),
+    JA("ファイルを読み直して、このステップから続けます。"),
+    ZH_HANS("重新读取该文件，并从这一步继续。"),
+    ZH_HANT("重新讀取該檔案，並從這一步繼續。"),
+    KO("파일을 다시 읽고 이 단계부터 이어서 진행합니다."),
+    DE("Liest die Datei erneut und macht ab diesem Schritt weiter."),
+    FR("Relit le fichier et reprend à partir de cette étape."),
+    ES("Vuelve a leer el archivo y sigue desde este paso."),
+    PT("Lê o ficheiro de novo e continua a partir deste passo."),
+    IT("Rilegge il file e riprende da questo passo."),
+    NL("Leest het bestand opnieuw en gaat verder vanaf deze stap."),
+    RU("Читает файл заново и продолжает с этого шага."),
+    TR("Dosyayı yeniden okur ve bu adımdan devam eder."));
+
 SS_MSG(confirm_stop,
     EN("Stop training and keep the result loaded for viewing?"),
     JA("学習を停止し、結果は表示用に読み込んだままにしますか？"),

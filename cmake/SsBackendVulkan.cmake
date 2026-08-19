@@ -24,6 +24,11 @@ find_package(Threads REQUIRED)
 ss_collect_portable_sources(SS_PORTABLE_SOURCES)
 
 add_library(csrc_portable OBJECT ${SS_PORTABLE_SOURCES})
+# Without this the whole portable engine builds at -O0 (CMAKE_BUILD_TYPE is
+# deliberately empty), which the CUDA path avoids by applying the same list.
+target_compile_options(csrc_portable PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>
+    $<$<COMPILE_LANGUAGE:C>:${SPLAT_C_FLAGS}>)
 target_compile_definitions(csrc_portable PUBLIC SS_BACKEND_VULKAN)
 target_include_directories(csrc_portable PUBLIC ${SS_SRC} ${CMAKE_BINARY_DIR})
 target_link_libraries(csrc_portable PUBLIC ss_i18n)
@@ -59,6 +64,8 @@ file(GLOB SS_VULKAN_SOURCES CONFIGURE_DEPENDS
 list(APPEND SS_VULKAN_SOURCES ${SS_SPIRV_EMBED})
 
 add_library(ss_backend_vulkan STATIC ${SS_VULKAN_SOURCES})
+target_compile_options(ss_backend_vulkan PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
 target_compile_definitions(ss_backend_vulkan PUBLIC SS_BACKEND_VULKAN)
 target_include_directories(ss_backend_vulkan PUBLIC ${SS_SRC})
 target_link_libraries(ss_backend_vulkan PUBLIC ss_vulkan ss_i18n)
@@ -72,6 +79,8 @@ foreach(test_src ${SS_VULKAN_TESTS})
     get_filename_component(test_name ${test_src} NAME_WE)
     add_executable(${test_name} ${test_src})
     target_link_libraries(${test_name} PRIVATE ss_backend_vulkan)
+    target_compile_options(${test_name} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
 endforeach()
 
 # Cross-backend parity tools (the same sources build in the CUDA branch, where
@@ -81,6 +90,8 @@ foreach(test_src ${SS_PARITY_TESTS})
     get_filename_component(test_name ${test_src} NAME_WE)
     add_executable(${test_name} ${test_src})
     target_link_libraries(${test_name} PRIVATE ss_backend_vulkan)
+    target_compile_options(${test_name} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
 endforeach()
 
 # Engine-level parity tools: drive the real engine (forward_3dgs + background
@@ -93,6 +104,8 @@ foreach(test_src ${SS_ENGINE_TESTS})
     add_executable(${test_name} ${test_src})
     target_link_libraries(${test_name} PRIVATE csrc_portable
         ss_backend_vulkan Threads::Threads)
+    target_compile_options(${test_name} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
 endforeach()
 
 # The app targets build against the

@@ -30,9 +30,19 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
+
+
+// Thrown by next_train_step() / next_val_batch() when a decode worker is
+// parked on a file it could not read. Answer with resolve_data_error().
+class DataDecodeError : public std::runtime_error {
+public:
+    explicit DataDecodeError(const std::string& what)
+        : std::runtime_error(what) {}
+};
 
 
 // ===========================================================================
@@ -326,6 +336,18 @@ public:
     // nor the prefetch queues, so it may run between training steps. RGB and
     // mask only -- its caller is the GUI's ground-truth-vs-render view.
     void fetch_one(int32_t index, DecodedBatch& out);
+
+    // ---- Decode faults ----------------------------------------------------
+
+    // Non-empty while a decode worker is parked on a file it could not read
+    // (moved, renamed, deleted, permissions). The pipeline stays paused, and
+    // the batch in flight is untouched, until this is answered.
+    std::string data_error() const;
+
+    // true re-runs the parked decode -- the run continues where it stopped
+    // once the file is back. false abandons the pipeline: the ready queues
+    // close, so the next fetch throws instead of blocking forever.
+    void resolve_data_error(bool retry);
 
     // ---- Stats ------------------------------------------------------------
 

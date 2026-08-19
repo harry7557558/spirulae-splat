@@ -132,6 +132,11 @@ struct TrainerProgress {
 struct TrainerCallbacks {
     // Called after every completed step, engine mutex released.
     std::function<void(const TrainerProgress&)> on_step;
+
+    // A dataset file went unreadable mid-run; blocks as long as the front end
+    // needs. true retries the decode, false stops the run (still saving a
+    // checkpoint). Unset fails the run outright, which is what a script wants.
+    std::function<bool(const std::string&)> on_data_error;
 };
 
 class TrainerSession {

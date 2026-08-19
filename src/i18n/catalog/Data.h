@@ -1010,6 +1010,50 @@ SS_MSG(vk_device_lacks_features,
     TR("istenen aygıt '{0}' gereken özelliklere sahip değil (bufferDeviceAddress "
        "ve timelineSemaphore ile Vulkan 1.2)"));
 
+// ===========================================================================
+// Decode faults
+// ===========================================================================
+
+SS_MSG(file_gone,
+    EN("{0} is no longer there — moved, renamed or deleted while the run was "
+       "using it"),
+    JA("{0} が見つかりません。実行中に移動・改名・削除されました"),
+    ZH_HANS("{0} 已经不在了 — 运行期间它被移动、改名或删除了"),
+    ZH_HANT("{0} 已經不在了 — 執行期間它被移動、改名或刪除了"),
+    KO("{0} 이(가) 없습니다 — 실행 중에 옮겨졌거나 이름이 바뀌었거나 "
+       "지워졌습니다"),
+    DE("{0} ist nicht mehr da — während des Laufs verschoben, umbenannt oder "
+       "gelöscht"),
+    FR("{0} n'est plus là — déplacé, renommé ou supprimé pendant l'exécution"),
+    ES("{0} ya no está — se movió, se renombró o se borró durante la "
+       "ejecución"),
+    PT("{0} já não está lá — foi movido, renomeado ou apagado durante a "
+       "execução"),
+    IT("{0} non c'è più — spostato, rinominato o eliminato durante "
+       "l'esecuzione"),
+    NL("{0} is er niet meer — tijdens de run verplaatst, hernoemd of "
+       "verwijderd"),
+    RU("{0} больше нет — файл переместили, переименовали или удалили во время "
+       "прогона"),
+    TR("{0} artık yok — çalışma sırasında taşınmış, adı değiştirilmiş ya da "
+       "silinmiş"));
+
+SS_MSG(file_unreadable,
+    EN("{0} could not be read"),
+    JA("{0} を読み込めませんでした"),
+    ZH_HANS("无法读取 {0}"),
+    ZH_HANT("無法讀取 {0}"),
+    KO("{0} 을(를) 읽지 못했습니다"),
+    DE("{0} konnte nicht gelesen werden"),
+    FR("{0} n'a pas pu être lu"),
+    ES("No se pudo leer {0}"),
+    PT("Não foi possível ler {0}"),
+    IT("Non è stato possibile leggere {0}"),
+    NL("{0} kon niet worden gelezen"),
+    RU("Не удалось "
+       "прочитать {0}"),
+    TR("{0} okunamadı"));
+
 }  // namespace data
 }  // namespace msg
 }  // namespace i18n

@@ -301,6 +301,7 @@ private:
     // The splitter and then the panel. Call after the body child has ended.
     void draw_log_panel(float height);
     void draw_confirm_modal();
+    void draw_data_error_modal();
     void handle_dialog_result(const std::vector<std::string>& paths);
     // Take paths onto the input list, `replace` clearing what was there (a
     // fresh pick from Home) rather than adding to it (the panel's Add buttons).
@@ -323,6 +324,7 @@ private:
     bool _open_confirm = false;      // arm the stop-training modal
     bool _confirm_shown = false;     // modal currently expected open
     bool _stop_confirmed = false;    // user chose one of the two stops
+    bool _data_error_shown = false;  // unreadable-file modal currently open
     // Training is paused for as long as the modal is up -- deciding should not
     // cost GPU time. This is what it goes back to if the user keeps training.
     bool _confirm_was_paused = false;

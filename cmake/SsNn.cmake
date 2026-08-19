@@ -127,7 +127,8 @@ if(SS_ENABLE_PATENTED)
 endif()
 target_link_libraries(ss_nn PUBLIC ss_vulkan Threads::Threads)
 target_compile_options(ss_nn PRIVATE
-    $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
+    $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>
+    $<$<COMPILE_LANGUAGE:C>:${SPLAT_C_FLAGS}>)
 set_property(TARGET ss_nn PROPERTY CXX_STANDARD 17)
 
 # ---------------------------------------------------------------------------

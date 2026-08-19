@@ -11,8 +11,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <tuple>
 #include <type_traits>
 #include <future>
@@ -30,6 +33,16 @@ using spirula::i18n::format;
 // Small utilities
 // ===========================================================================
 namespace {
+
+// Why a decode failed, for a message a user reads. stbi_failure_reason() is
+// a global every decode thread writes, so a missing file -- the common case,
+// a dataset moved mid-run -- is diagnosed from the filesystem instead.
+std::string decode_failure(const std::string& path) {
+    std::error_code ec;
+    return format(std::filesystem::exists(path, ec) ? dmsg::file_unreadable
+                                                    : dmsg::file_gone,
+                  {path});
+}
 
 // File suffix (lowercased extension). Returns "" if none.
 std::string lower_suffix(const std::string& path) {
@@ -68,6 +81,21 @@ public:
         _q.pop_front();
         _cv_not_full.notify_one();
         return true;
+    }
+
+    enum class Pop { Ok, Timeout, Closed };
+
+    // pop() with a deadline, so a consumer can check on the decode workers
+    // instead of blocking forever behind one that is parked on a file error.
+    Pop pop_for(T& out, std::chrono::milliseconds wait) {
+        std::unique_lock<std::mutex> lk(_m);
+        if (!_cv_not_empty.wait_for(lk, wait, [&]{ return _closed || !_q.empty(); }))
+            return Pop::Timeout;
+        if (_q.empty()) return Pop::Closed;
+        out = std::move(_q.front());
+        _q.pop_front();
+        _cv_not_full.notify_one();
+        return Pop::Ok;
     }
 
     // Wake everyone; subsequent pop()s drain remaining items then return false.
@@ -245,19 +273,18 @@ inline void cpu_nearest_resize_u8(const uint8_t* src, int sh, int sw,
 }
 
 
-// Felzenszwalb-Huttenlocher 1D lower-envelope squared-Euclidean DT.
-// f[i] = function value (0 at sources, +INF -- or any large/INF value -- at
-// non-sources, or a previous row pass's d^2 in the second sweep).
-// d[q] = min over i of f[i] + (q-i)^2.
-// v / z are scratch (length n / n+1). INF entries are skipped (no parabola).
-inline void dt_1d_squared(const double* f, double* d, int n,
+// Felzenszwalb-Huttenlocher 1D lower-envelope squared-Euclidean DT:
+// d[q] = min over i of f[i] + (q-i)^2, over the i whose f[i] is finite.
+// v / z are scratch of length n / n+1.
+inline void dt_1d_squared(const float* f, float* d, int n,
                           int* v, double* z)
 {
+    const float  INF_F = std::numeric_limits<float>::infinity();
     const double INF_D = std::numeric_limits<double>::infinity();
     int first = 0;
-    while (first < n && std::isinf(f[first])) ++first;
+    while (first < n && !std::isfinite(f[first])) ++first;
     if (first >= n) {
-        for (int q = 0; q < n; ++q) d[q] = INF_D;
+        for (int q = 0; q < n; ++q) d[q] = INF_F;
         return;
     }
     int k = 0;
@@ -265,14 +292,17 @@ inline void dt_1d_squared(const double* f, double* d, int n,
     z[0] = -INF_D;
     z[1] = +INF_D;
     for (int q = first + 1; q < n; ++q) {
-        if (std::isinf(f[q])) continue;
+        if (!std::isfinite(f[q])) continue;   // NaN too: it makes s NaN below
         double s;
         for (;;) {
             int vk = v[k];
-            double aq = f[q]  + (double)q  * (double)q;
-            double av = f[vk] + (double)vk * (double)vk;
+            // Intersections in double though f is float: at 4K the operands
+            // reach ~3e7 and the subtraction cancels, which is where a float
+            // envelope would start picking the wrong parabola.
+            double aq = (double)f[q]  + (double)q  * (double)q;
+            double av = (double)f[vk] + (double)vk * (double)vk;
             s = (aq - av) / (2.0 * (double)(q - vk));
-            if (s > z[k]) break;
+            if (k == 0 || s > z[k]) break;    // k == 0: never index v below 0
             --k;
         }
         ++k;
@@ -280,35 +310,64 @@ inline void dt_1d_squared(const double* f, double* d, int n,
         z[k] = s;
         z[k+1] = +INF_D;
     }
+    const int kmax = k;
     k = 0;
     for (int q = 0; q < n; ++q) {
-        while (z[k+1] < (double)q) ++k;
+        while (k < kmax && z[k+1] < (double)q) ++k;
         double dq = (double)(q - v[k]);
-        d[q] = dq * dq + f[v[k]];
+        d[q] = (float)(dq * dq + (double)f[v[k]]);
     }
 }
 
+// One row of the 2D DT, straight off the mask bytes. Along a single row the
+// Euclidean distance is just |dx| to the nearest source, so two linear sweeps
+// give the same answer as the parabola envelope for half the time.
+inline void dt_row_squared(const uint8_t* m, int w, uint8_t src_value, float* d)
+{
+    const float INF_F = std::numeric_limits<float>::infinity();
+    int last = -1;
+    for (int x = 0; x < w; ++x) {
+        if (m[x] == src_value) last = x;
+        d[x] = (last < 0) ? INF_F : (float)(x - last);
+    }
+    int next = -1;
+    for (int x = w - 1; x >= 0; --x) {
+        if (m[x] == src_value) next = x;
+        const float back = (next < 0) ? INF_F : (float)(next - x);
+        const float best = d[x] < back ? d[x] : back;
+        d[x] = best * best;                   // INF squared stays INF
+    }
+}
+
+// Columns are transformed a block at a time rather than one at a time: 16
+// floats is one cache line, and the naive per-column walk strides the whole
+// image twice per column, which measured 64% of the transform at 3840^2.
+constexpr int kColBlock = 16;
+
 // 2D squared-Euclidean DT via separable 1D passes (row, then col).
 // `src_value` selects which mask value (0 or 1) acts as the source set.
+// `cols` / `cols_out` are scratch of kColBlock * h.
 inline void dt2d_squared(const uint8_t* mask, int h, int w, uint8_t src_value,
-                         double* d2_out,
-                         double* tmp_line, double* tmp_out_line,
+                         float* d2_out, float* cols, float* cols_out,
                          int* v_buf, double* z_buf)
 {
-    const double INF_D = std::numeric_limits<double>::infinity();
+    for (int y = 0; y < h; ++y)
+        dt_row_squared(mask + (size_t)y * w, w, src_value,
+                       d2_out + (size_t)y * w);
 
-    for (int y = 0; y < h; ++y) {
-        const uint8_t* mrow = mask   + (size_t)y * w;
-              double*  drow = d2_out + (size_t)y * w;
-        for (int x = 0; x < w; ++x)
-            tmp_line[x] = (mrow[x] == src_value) ? 0.0 : INF_D;
-        dt_1d_squared(tmp_line, drow, w, v_buf, z_buf);
-    }
-
-    for (int x = 0; x < w; ++x) {
-        for (int y = 0; y < h; ++y) tmp_line[y] = d2_out[(size_t)y * w + x];
-        dt_1d_squared(tmp_line, tmp_out_line, h, v_buf, z_buf);
-        for (int y = 0; y < h; ++y) d2_out[(size_t)y * w + x] = tmp_out_line[y];
+    for (int x0 = 0; x0 < w; x0 += kColBlock) {
+        const int nc = std::min(kColBlock, w - x0);
+        for (int y = 0; y < h; ++y) {
+            const float* src = d2_out + (size_t)y * w + x0;
+            for (int c = 0; c < nc; ++c) cols[(size_t)c * h + y] = src[c];
+        }
+        for (int c = 0; c < nc; ++c)
+            dt_1d_squared(cols + (size_t)c * h, cols_out + (size_t)c * h,
+                          h, v_buf, z_buf);
+        for (int y = 0; y < h; ++y) {
+            float* dst = d2_out + (size_t)y * w + x0;
+            for (int c = 0; c < nc; ++c) dst[c] = cols_out[(size_t)c * h + y];
+        }
     }
 }
 
@@ -320,25 +379,27 @@ inline void apply_mask_boundary_offset_in_place(uint8_t* mask, int h, int w,
 {
     if (offset_px == 0.0f || h <= 0 || w <= 0 || (h == 1 && w == 1)) return;
 
-    int mx = std::max(h, w);
-    std::vector<double> d2_fg((size_t)h * w);
-    std::vector<double> d2_bg((size_t)h * w);
-    std::vector<double> line_in((size_t)mx);
-    std::vector<double> line_out((size_t)mx);
-    std::vector<int>    v_buf((size_t)mx);
-    std::vector<double> z_buf((size_t)mx + 1);
+    const int mx = std::max(h, w);
+    // new[] over vector: the row pass writes every element, so vector's
+    // value-initialising zero fill is 118 MB of pure memset at 3840^2.
+    std::unique_ptr<float[]>  d2_fg(new float[(size_t)h * w]);
+    std::unique_ptr<float[]>  d2_bg(new float[(size_t)h * w]);
+    std::unique_ptr<float[]>  cols(new float[(size_t)kColBlock * h]);
+    std::unique_ptr<float[]>  cols_out(new float[(size_t)kColBlock * h]);
+    std::unique_ptr<int[]>    v_buf(new int[mx]);
+    std::unique_ptr<double[]> z_buf(new double[(size_t)mx + 1]);
 
-    dt2d_squared(mask, h, w, /*src_value=*/1, d2_fg.data(),
-                 line_in.data(), line_out.data(), v_buf.data(), z_buf.data());
-    dt2d_squared(mask, h, w, /*src_value=*/0, d2_bg.data(),
-                 line_in.data(), line_out.data(), v_buf.data(), z_buf.data());
+    dt2d_squared(mask, h, w, /*src_value=*/1, d2_fg.get(),
+                 cols.get(), cols_out.get(), v_buf.get(), z_buf.get());
+    dt2d_squared(mask, h, w, /*src_value=*/0, d2_bg.get(),
+                 cols.get(), cols_out.get(), v_buf.get(), z_buf.get());
 
-    const double off = (double)offset_px;
     for (size_t i = 0; i < (size_t)h * w; ++i) {
-        double sd = std::sqrt(d2_fg[i]) - std::sqrt(d2_bg[i]);
-        mask[i] = (sd <= off) ? 1 : 0;
+        float sd = std::sqrt(d2_fg[i]) - std::sqrt(d2_bg[i]);
+        mask[i] = (sd <= offset_px) ? 1 : 0;
     }
 }
+
 
 // Modality decoders. `dst_h` / `dst_w` are the BATCH-slot shape (= group
 // shape); when the file is smaller it is upsampled (nearest for mask,
@@ -382,7 +443,7 @@ void decode_rgb_into(const std::string& path,
         std::vector<float> px;
         const std::string err = exr::decode(path, opt, info, px);
         if (!err.empty())
-            throw std::runtime_error("DataManager: failed to load EXR '" + path + "': " + err);
+            throw std::runtime_error(decode_failure(path) + " (" + err + ")");
         if (info.width == expected_w && info.height == expected_h) {
             std::memcpy(dst, px.data(), px.size() * sizeof(float));
         } else {
@@ -392,7 +453,7 @@ void decode_rgb_into(const std::string& path,
         }
     } else if (dtype == PixelDType::UINT16) {
         stbi_us* img = stbi_load_16(path.c_str(), &w, &h, &ch, 3);
-        if (!img) throw std::runtime_error("DataManager: failed to load 16-bit RGB '" + path + "': " + stbi_failure_reason());
+        if (!img) throw std::runtime_error(decode_failure(path));
         if (w == expected_w && h == expected_h) {
             std::memcpy(dst, img, (size_t)w * h * 3 * sizeof(stbi_us));
         } else {
@@ -402,7 +463,7 @@ void decode_rgb_into(const std::string& path,
         stbi_image_free(img);
     } else if (dtype == PixelDType::UINT8) {
         stbi_uc* img = stbi_load(path.c_str(), &w, &h, &ch, 3);
-        if (!img) throw std::runtime_error("DataManager: failed to load 8-bit RGB '" + path + "': " + stbi_failure_reason());
+        if (!img) throw std::runtime_error(decode_failure(path));
         if (w == expected_w && h == expected_h) {
             std::memcpy(dst, img, (size_t)w * h * 3);
         } else {
@@ -422,7 +483,7 @@ void decode_mask_into(const std::string& path,
 {
     int w, h, ch;
     stbi_uc* img = stbi_load(path.c_str(), &w, &h, &ch, 1);
-    if (!img) throw std::runtime_error("DataManager: failed to load mask '" + path + "': " + stbi_failure_reason());
+    if (!img) throw std::runtime_error(decode_failure(path));
 
     // Binarize on-disk pixels first so the broadcast / resize always emits
     // strict 0/1 (matches the kernel's bool semantics).
@@ -454,7 +515,7 @@ void decode_depth_into(const std::string& path,
     if (dtype != PixelDType::UINT16)
         throw std::runtime_error("DataManager: only 16-bit depth PNGs are supported in stb_image path");
     stbi_us* img = stbi_load_16(path.c_str(), &w, &h, &ch, 1);
-    if (!img) throw std::runtime_error("DataManager: failed to load 16-bit depth '" + path + "': " + stbi_failure_reason());
+    if (!img) throw std::runtime_error(decode_failure(path));
     if (w == dst_w && h == dst_h) {
         std::memcpy(dst, img, (size_t)w * h * sizeof(stbi_us));
     } else {
@@ -469,7 +530,7 @@ void decode_normal_into(const std::string& path,
 {
     int w, h, ch;
     stbi_uc* img = stbi_load(path.c_str(), &w, &h, &ch, 3);
-    if (!img) throw std::runtime_error("DataManager: failed to load normal '" + path + "': " + stbi_failure_reason());
+    if (!img) throw std::runtime_error(decode_failure(path));
     if (w == dst_w && h == dst_h) {
         std::memcpy(dst, img, (size_t)w * h * 3);
     } else {
@@ -602,6 +663,9 @@ public:
     const DecodedBatch& next_train_batch();
     const DecodedBatch* next_val_batch();
     void                fetch_one(int32_t index, DecodedBatch& out);
+
+    std::string data_error() const;
+    void        resolve_data_error(bool retry);
 
     int64_t num_train()    const { return (int64_t)_train_indices.size(); }
     int64_t num_val()      const { return (int64_t)_val_indices.size(); }
@@ -750,6 +814,15 @@ private:
     std::atomic<bool>        _stop{false};
     std::atomic<int64_t>     _next_batch_id{0};
 
+    // A decode that threw. The worker parks here rather than letting the
+    // exception escape its thread (which is std::terminate), so a dataset
+    // moved mid-run pauses the pipeline instead of killing the process.
+    std::mutex               _fault_mu;
+    std::condition_variable  _fault_cv;
+    std::string              _fault_msg;
+    bool                     _fault_parked  = false;
+    bool                     _fault_give_up = false;
+
     // The objects currently held alive on behalf of the most recent
     // next_*() return value.
     std::shared_ptr<TrainStep>    _last_train_step_held;
@@ -803,6 +876,9 @@ private:
     void worker_loop_mask();
     void worker_loop_depth();
     void worker_loop_normal();
+    // Run `decode`, parking the thread on a throw until the front end answers
+    // resolve_data_error(). False means abandon the job and exit the worker.
+    bool decode_or_park(const std::function<void()>& decode);
     void enqueue_batch(IndexGroup& group, int batch_size,
                        BoundedQueue<std::shared_ptr<DecodedBatch>>& ready_q);
     // Disk-mode: allocate + enqueue decode jobs for a whole training step
@@ -1225,11 +1301,20 @@ void DataManagerImpl::preload_cpu_cache() {
     std::atomic<int64_t> next_idx{0};
     std::atomic<int64_t> done_count{0};
     std::mutex           print_mu;
+    // A decode that throws must not escape its thread. Latch the first one,
+    // abandon the sweep, and rethrow it from the constructor after the join.
+    std::mutex           err_mu;
+    std::exception_ptr   first_err;
     std::vector<std::thread> ts;
     ts.reserve(n_threads);
     for (int t = 0; t < n_threads; ++t) {
         ts.emplace_back([&]() {
+          try {
             for (;;) {
+                {
+                    std::lock_guard<std::mutex> lk(err_mu);
+                    if (first_err) return;
+                }
                 int64_t i = next_idx.fetch_add(1);
                 if (i >= N) return;
                 int W = _widths[i], H = _heights[i];
@@ -1285,9 +1370,14 @@ void DataManagerImpl::preload_cpu_cache() {
                     std::fflush(stderr);
                 }
             }
+          } catch (...) {
+            std::lock_guard<std::mutex> lk(err_mu);
+            if (!first_err) first_err = std::current_exception();
+          }
         });
     }
     for (auto& th : ts) th.join();
+    if (first_err) std::rethrow_exception(first_err);
     std::fprintf(stderr, "\n");
     std::fflush(stderr);
 }
@@ -1674,6 +1764,7 @@ void DataManagerImpl::start_disk_pipeline() {
 
 void DataManagerImpl::stop_disk_pipeline() {
     _stop.store(true);
+    _fault_cv.notify_all();          // parked workers must leave before join
     _q_rgb->close();
     _q_mask->close();
     _q_depth->close();
@@ -1686,6 +1777,50 @@ void DataManagerImpl::stop_disk_pipeline() {
 }
 
 
+// A decode threw: the first worker to arrive latches the message, the rest
+// wait behind it, and everyone re-runs the same job once the front end says
+// retry. Returning false means give up -- the caller must not publish.
+bool DataManagerImpl::decode_or_park(const std::function<void()>& decode) {
+    for (;;) {
+        try {
+            decode();
+            return true;
+        } catch (const std::exception& e) {
+            std::unique_lock<std::mutex> lk(_fault_mu);
+            if (_fault_give_up || _stop.load()) return false;
+            if (!_fault_parked) {
+                _fault_parked = true;
+                _fault_msg    = e.what();
+            }
+            _fault_cv.wait(lk, [&]{
+                return !_fault_parked || _fault_give_up || _stop.load();
+            });
+            if (_fault_give_up || _stop.load()) return false;
+        }
+    }
+}
+
+std::string DataManagerImpl::data_error() const {
+    std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(_fault_mu));
+    return _fault_parked ? _fault_msg : std::string();
+}
+
+void DataManagerImpl::resolve_data_error(bool retry) {
+    {
+        std::lock_guard<std::mutex> lk(_fault_mu);
+        _fault_parked = false;
+        if (!retry) _fault_give_up = true;
+    }
+    _fault_cv.notify_all();
+    // Nothing will finish the parked batches, so let the consumer's pop fail
+    // instead of blocking on a pipeline that has stopped producing.
+    if (!retry) {
+        _q_ready_train->close();
+        _q_ready_val->close();
+    }
+}
+
+
 void DataManagerImpl::worker_loop_rgb() {
     DecodeJob job;
     while (_q_rgb->pop(job)) {
@@ -1695,8 +1830,10 @@ void DataManagerImpl::worker_loop_rgb() {
         int H = b.input_height, W = b.input_width;
         size_t row = (size_t)H * W * 3 * pixel_dtype_size(b.rgb_dtype);
         uint8_t* dst = b.rgb_buffer.data() + (size_t)job.slot * row;
-        decode_rgb_into(_image_filenames[job.ds_index], H, W,
-                        b.rgb_dtype, dst);
+        if (!decode_or_park([&]{
+                decode_rgb_into(_image_filenames[job.ds_index], H, W,
+                                b.rgb_dtype, dst); }))
+            return;
         publish_if_done(job);
     }
 }
@@ -1711,8 +1848,10 @@ void DataManagerImpl::worker_loop_mask() {
         uint8_t* dst = b.mask_buffer.data() + (size_t)job.slot * row;
         if (_synth_white_mask.empty() ||
             !_synth_white_mask[(size_t)job.ds_index]) {
-            decode_mask_into(_mask_filenames[job.ds_index], H, W,
-                             _cfg.mask_boundary_offset, dst);
+            if (!decode_or_park([&]{
+                    decode_mask_into(_mask_filenames[job.ds_index], H, W,
+                                     _cfg.mask_boundary_offset, dst); }))
+                return;
         } else {
             // Synthesized all-white: skip disk read, fill the slot directly.
             std::memset(dst, 1, (size_t)H * W);
@@ -1729,8 +1868,10 @@ void DataManagerImpl::worker_loop_depth() {
         int H = b.depth_height, W = b.depth_width;
         size_t row = (size_t)H * W * pixel_dtype_size(b.depth_dtype);
         uint8_t* dst = b.depth_buffer.data() + (size_t)job.slot * row;
-        decode_depth_into(_depth_filenames[job.ds_index], H, W,
-                          b.depth_dtype, dst);
+        if (!decode_or_park([&]{
+                decode_depth_into(_depth_filenames[job.ds_index], H, W,
+                                  b.depth_dtype, dst); }))
+            return;
         publish_if_done(job);
     }
 }
@@ -1743,7 +1884,9 @@ void DataManagerImpl::worker_loop_normal() {
         int H = b.normal_height, W = b.normal_width;
         size_t row = (size_t)H * W * 3;
         uint8_t* dst = b.normal_buffer.data() + (size_t)job.slot * row;
-        decode_normal_into(_normal_filenames[job.ds_index], H, W, dst);
+        if (!decode_or_park([&]{
+                decode_normal_into(_normal_filenames[job.ds_index], H, W, dst); }))
+            return;
         publish_if_done(job);
     }
 }
@@ -1962,8 +2105,14 @@ const TrainStep& DataManagerImpl::next_train_step() {
         return next_step_cpu();
     }
     std::shared_ptr<TrainStep> s;
-    if (!_q_ready_train->pop(s))
-        throw std::runtime_error("DataManager: train prefetch queue closed");
+    for (;;) {
+        auto r = _q_ready_train->pop_for(s, std::chrono::milliseconds(100));
+        if (r == BoundedQueue<std::shared_ptr<TrainStep>>::Pop::Ok) break;
+        std::string err = data_error();
+        if (!err.empty()) throw DataDecodeError(err);
+        if (r == BoundedQueue<std::shared_ptr<TrainStep>>::Pop::Closed)
+            throw std::runtime_error("DataManager: train prefetch queue closed");
+    }
     _last_train_step_held = s;
     return *_last_train_step_held;
 }
@@ -1984,8 +2133,14 @@ const DecodedBatch* DataManagerImpl::next_val_batch() {
                                _val_sampler, _cfg.val_batch_size);
     }
     std::shared_ptr<DecodedBatch> b;
-    if (!_q_ready_val->pop(b))
-        throw std::runtime_error("DataManager: val prefetch queue closed");
+    for (;;) {
+        auto r = _q_ready_val->pop_for(b, std::chrono::milliseconds(100));
+        if (r == BoundedQueue<std::shared_ptr<DecodedBatch>>::Pop::Ok) break;
+        std::string err = data_error();
+        if (!err.empty()) throw DataDecodeError(err);
+        if (r == BoundedQueue<std::shared_ptr<DecodedBatch>>::Pop::Closed)
+            throw std::runtime_error("DataManager: val prefetch queue closed");
+    }
     _last_val_held = b;
     return _last_val_held.get();
 }
@@ -2078,6 +2233,8 @@ const TrainStep&    DataManager::next_train_step()         { return _impl->next_
 const DecodedBatch& DataManager::next_train_batch()        { return _impl->next_train_batch(); }
 const DecodedBatch* DataManager::next_val_batch()          { return _impl->next_val_batch(); }
 void      DataManager::fetch_one(int32_t i, DecodedBatch& o) { _impl->fetch_one(i, o); }
+std::string DataManager::data_error() const { return _impl->data_error(); }
+void      DataManager::resolve_data_error(bool r) { _impl->resolve_data_error(r); }
 int64_t   DataManager::num_train()      const              { return _impl->num_train(); }
 int64_t   DataManager::num_val()        const              { return _impl->num_val(); }
 bool      DataManager::has_val()        const              { return _impl->has_val(); }

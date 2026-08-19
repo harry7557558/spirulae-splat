@@ -175,7 +175,8 @@ else()
     target_compile_definitions(ss_sfm PUBLIC SS_HAVE_ALIKED=0)
 endif()
 target_compile_options(ss_sfm PRIVATE
-    $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
+    $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>
+    $<$<COMPILE_LANGUAGE:C>:${SPLAT_C_FLAGS}>)
 set_property(TARGET ss_sfm PROPERTY CXX_STANDARD 17)
 
 # Most of the pipeline is still header-only (the split into translation units is
@@ -192,4 +193,6 @@ foreach(test_src ${SS_SFM_TESTS})
     add_executable(${test_name} ${test_src})
     target_link_libraries(${test_name} PRIVATE ss_sfm)
     set_property(TARGET ${test_name} PROPERTY CXX_STANDARD 17)
+    target_compile_options(${test_name} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
 endforeach()

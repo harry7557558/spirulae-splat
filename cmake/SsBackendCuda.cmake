@@ -141,6 +141,7 @@ endif()
 
 target_compile_options(csrc PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>
+    $<$<COMPILE_LANGUAGE:C>:${SPLAT_C_FLAGS}>
     $<$<COMPILE_LANGUAGE:CUDA>:${SPLAT_NVCC_FLAGS}>
 )
 
@@ -165,5 +166,7 @@ if(SS_BUILD_BACKEND_TESTS)
             ${SS_SRC}
             ${CUDAToolkit_INCLUDE_DIRS})
         target_link_libraries(${test_name} PRIVATE csrc CUDA::cudart)
+        target_compile_options(${test_name} PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
     endforeach()
 endif()

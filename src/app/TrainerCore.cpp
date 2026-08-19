@@ -913,11 +913,32 @@ void TrainerSession::train(const TrainerCallbacks& cb) {
 
         auto step_start = std::chrono::steady_clock::now();
         std::map<std::string, float> losses;
+        std::string data_error;
         {
             std::lock_guard<std::mutex> lk(engine_mutex);
             if (step > 0 && cfg.steps_per_save > 0 && step % cfg.steps_per_save == 0)
                 save_checkpoint(step);
-            losses = train_step(step);
+            try {
+                losses = train_step(step);
+            } catch (const DataDecodeError& e) {
+                data_error = e.what();
+            }
+        }
+        // Asking outside the lock: the front end may sit on this for minutes
+        // while the user puts the dataset back, and the viewport still wants
+        // to render.
+        if (!data_error.empty()) {
+            if (!cb.on_data_error) {
+                engine_resolve_data_error(false);
+                throw std::runtime_error(data_error);
+            }
+            pause_clock_start();          // waiting on a human is not run time
+            const bool retry = cb.on_data_error(data_error);
+            pause_clock_stop();
+            engine_resolve_data_error(retry);
+            if (!retry) break;
+            --step;                      // this step never ran
+            continue;
         }
         cur_step = step + 1;
         double latency = std::chrono::duration<double>(

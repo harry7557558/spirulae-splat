@@ -418,6 +418,10 @@ std::map<std::string, float> engine_train_step_managed(
     bool packed,
     const EngineStepConfig& cfg);
 
+// Answer the DataDecodeError a managed step threw: true re-runs the decode
+// the worker is parked on, false abandons the pipeline. See DataManager.h.
+void engine_resolve_data_error(bool retry);
+
 // Pull the next batch from the DataManager, install it as GT + camera params,
 // and run the forward pass only -- no loss, no backward, no optimizer, no
 // densification. What an eval pass needs: it reuses the same decode, mask and

@@ -145,6 +145,10 @@ if(SS_BUILD_GUI)
         GIT_TAG        v1.92.8
         GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(glfw imgui)
+    # glfw brings its own CMakeLists and CMAKE_BUILD_TYPE is empty, so its C
+    # sources would build at -O0 like everything else that is not told.
+    target_compile_options(glfw PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:${SPLAT_C_FLAGS}>)
 
     find_package(OpenGL REQUIRED)
 
@@ -159,6 +163,8 @@ if(SS_BUILD_GUI)
         ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
         ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
     )
+    target_compile_options(imgui_glfw PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:${SPLAT_CXX_FLAGS}>)
     target_include_directories(imgui_glfw PUBLIC
         ${imgui_SOURCE_DIR}
         ${imgui_SOURCE_DIR}/backends
