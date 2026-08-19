@@ -1056,6 +1056,24 @@ SS_MSG(checkpoint_saved,
     RU("Контрольная точка сохранена: {0}"),
     TR("Denetim noktası şuraya kaydedildi: {0}"));
 
+// Labelled rather than inflected ("Steps: 3", not "3 steps") -- see
+// src/i18n/README.md. Steps counts what THIS run did, so it pairs with a
+// time that also excludes whatever a resumed checkpoint already had.
+SS_MSG(train_finished,
+    EN("Training complete. Steps: {0}   Time: {1}"),
+    JA("学習が完了しました。ステップ: {0}   所要時間: {1}"),
+    ZH_HANS("训练完成。步数：{0}   用时：{1}"),
+    ZH_HANT("訓練完成。步數：{0}   用時：{1}"),
+    KO("학습이 끝났습니다. 스텝: {0}   소요 시간: {1}"),
+    DE("Training abgeschlossen. Schritte: {0}   Zeit: {1}"),
+    FR("Entraînement terminé. Étapes : {0}   Durée : {1}"),
+    ES("Entrenamiento terminado. Pasos: {0}   Tiempo: {1}"),
+    PT("Treinamento concluído. Passos: {0}   Tempo: {1}"),
+    IT("Addestramento completato. Passi: {0}   Tempo: {1}"),
+    NL("Training klaar. Stappen: {0}   Tijd: {1}"),
+    RU("Обучение завершено. Шагов: {0}   Время: {1}"),
+    TR("Eğitim tamamlandı. Adım: {0}   Süre: {1}"));
+
 SS_MSG(eval_split_empty,
     EN("Eval: the eval split is empty; nothing to score."),
     JA("評価: 評価用の分割が空です。採点するものがありません。"),

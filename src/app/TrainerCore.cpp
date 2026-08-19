@@ -1005,6 +1005,11 @@ void TrainerSession::train(const TrainerCallbacks& cb) {
         save_checkpoint(step);
         log(lfmt(lmsg::checkpoint_saved, {fs::absolute(out_dir).string()}));
     }
+
+    // Steps THIS run, not cur_step: a resumed run's clock starts here too, and
+    // a count that included the checkpoint's steps would not match the time.
+    log(lfmt(lmsg::train_finished, {cur_step.load() - start_step,
+                                    format_duration(training_time_s)}));
 }
 
 std::string TrainerSession::progress_json() {
