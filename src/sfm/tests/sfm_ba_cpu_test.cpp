@@ -344,6 +344,18 @@ Reference referenceSolve(const BAProblem& P, double lambda, double lossParam,
         }
     });
 
+    // The intrinsics prior, on the same footing as the data term: it touches no
+    // point, so it lands before the damping and before the elimination.
+    for (size_t g = 0; g < P.priors.size(); g++) {
+        const BAProblem::Group& gr = P.groups[g];
+        double gp[12] = {}, H[144] = {};
+        camPriorEval(P.priors[g], gr.model, &P.intr[gr.intr_offset], gr.n_intr, gp, H, 12);
+        for (uint32_t i = 0; i < gr.n_intr; i++) {
+            R.g[gr.intr_col + i] += gp[i];
+            for (uint32_t j = 0; j < gr.n_intr; j++)
+                R.S[(size_t)(gr.intr_col + i) * n + gr.intr_col + j] += H[i * 12 + j];
+        }
+    }
     for (uint32_t i = 0; i < n; i++) R.S[(size_t)i * n + i] *= 1.0 + lambda;
     R.dP.assign(3 * (size_t)P.num_points, 0.0);
     std::vector<double> Vi(9 * (size_t)P.num_points);
@@ -428,12 +440,24 @@ double relMax(const double* a, const double* b, size_t n) {
     return d / std::max(s, 1e-300);
 }
 
+// A deadzone small enough that the term is active on makeProblem's cameras,
+// which is what the wiring has to be tested against.
+void addPriors(BAProblem& P) {
+    P.priors.assign(P.groups.size(), CamPrior{});
+    for (size_t g = 0; g < P.groups.size(); g++) {
+        P.priors[g].w = 500.0 + 7.0 * g;
+        P.priors[g].dead = 0.02;
+        P.priors[g].rmax = 0.7;
+    }
+}
+
 // One LM iteration of the solver against the reference: the assembled S and g,
 // and the parameters the step leaves behind.
 void testAgainstReference(uint32_t model, uint32_t groups, const char* loss, bool cg,
-                          uint32_t nImg = 9, int nfree = -1) {
+                          uint32_t nImg = 9, int nfree = -1, bool prior = false) {
     const double lambda = 1e-2;
     BAProblem P = makeProblem(model, nImg, 90, groups, 0.15, 7 * model + groups, nfree);
+    if (prior) addPriors(P);
     if (P.num_obs < 100) {
         printf("model %u: too few observations, skipped\n", model);
         return;
@@ -467,9 +491,11 @@ void testAgainstReference(uint32_t model, uint32_t groups, const char* loss, boo
                 dS = std::max(dS, std::fabs(S[(size_t)i * (i + 1) / 2 + j] - ref));
                 sS = std::max(sS, std::fabs(ref));
             }
-        snprintf(name, sizeof name, "S  model=%u groups=%u n=%u f=%d", model, groups, nImg, nfree);
+        snprintf(name, sizeof name, "S  model=%u groups=%u n=%u f=%d%s", model, groups, nImg,
+                 nfree, prior ? " prior" : "");
         report(name, dS / sS, 1e-10);
-        snprintf(name, sizeof name, "g  model=%u groups=%u n=%u f=%d", model, groups, nImg, nfree);
+        snprintf(name, sizeof name, "g  model=%u groups=%u n=%u f=%d%s", model, groups, nImg,
+                 nfree, prior ? " prior" : "");
         report(name, relMax(g.data(), R.g.data(), P.n_dim), 1e-10);
     }
 
@@ -486,8 +512,8 @@ void testAgainstReference(uint32_t model, uint32_t groups, const char* loss, boo
                                       std::max(1.0, std::fabs(want)));
             smax = std::max(smax, std::fabs(R.dU[gr.intr_col + j]));
         }
-    snprintf(name, sizeof name, "%s step model=%u groups=%u %s", cg ? "cg " : "dU ", model, groups,
-             loss);
+    snprintf(name, sizeof name, "%s step model=%u groups=%u %s%s", cg ? "cg " : "dU ", model,
+             groups, loss, prior ? " prior" : "");
     report(name, dmax / std::max(smax, 1e-300), cg ? 1e-6 : 1e-9);
 
     double pmax = 0, psc = 0;
@@ -582,6 +608,15 @@ int run(int argc, char** argv) {
         testAgainstReference(3, 1, "huber", false, nImg, 6);
         testAgainstReference(8, 1, "huber", false, nImg, 10);
     }
+    // The intrinsics prior, on both linear solvers and with a group shared by
+    // every image as well as one per image (the two preconditioner shapes).
+    for (uint32_t model : {2u, 3u, 6u, 7u, 8u})
+        for (uint32_t groups : {1u, 9u})
+            testAgainstReference(model, groups, "huber", false, 9, -1, true);
+    testAgainstReference(3, 1, "huber", true, 9, -1, true);
+    testAgainstReference(3, 9, "huber", true, 9, -1, true);
+    testAgainstReference(7, 9, "huber", true, 9, -1, true);
+    testAgainstReference(3, 1, "huber", false, 9, 4, true);
 
     if (!quick)
         for (uint32_t model : {3u, 6u, 7u, 8u})

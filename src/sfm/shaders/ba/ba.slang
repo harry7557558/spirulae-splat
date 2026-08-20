@@ -663,3 +663,4 @@ void jac_thin_prism_fisheye(uint3 t : SV_DispatchThreadID) { jac_impl<ThinPrismF
 
 #include "cholesky.slang"
 #include "cg.slang"
+#include "prior.slang"

@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include "sfm/ba/CamPrior.h"
+
 // Camera model registry; must match the entry points in sfm/shaders/ba/ba.slang.
 // `n_intr` is how many parameters the kernel *reads* for this model (its
 // ICameraModel::kNumIntr). How many of them bundle adjustment may *change* is
@@ -62,6 +64,9 @@ struct BAProblem {
     };
     std::vector<uint32_t> image_group;   // per image
     std::vector<Group> groups;
+    // Per group, empty when nothing regularizes the intrinsics. Only the
+    // caller that knows what the lens should look like can fill this in.
+    std::vector<CamPrior> priors;
 
     // parameters (host copy, double)
     std::vector<double> poses;   // 6 per image

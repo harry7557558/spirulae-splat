@@ -17,6 +17,7 @@
 #include <map>
 #include <vector>
 
+#include "core/Env.h"
 #include "sfm/ba/Problem.h"
 #include "sfm/ba/Solver.h"
 #include "sfm/core/Model.h"
@@ -82,6 +83,13 @@ struct BundleOptions {
     VkContext* shared_ctx = nullptr;
     // Host worker threads, for the `cpu` scalar; 0 = hardware_concurrency.
     int threads = 0;
+    // Distortion prior (sfm/ba/CamPrior.h): weight per observation of the
+    // group, and the deviation that costs nothing. 0 weight disables it.
+    double prior = 0, prior_dead = 0.25;
+    // Per camera id, the radius its picture reaches in pixels, the disc the
+    // prior is measured over. Without it the term falls back to how far the
+    // observations themselves reach.
+    const std::map<uint32_t, double>* radius_px = nullptr;
 };
 
 // The problem built from a reconstruction, plus what writing the solution back
@@ -199,8 +207,27 @@ inline BundleLayout buildBundle(Reconstruction& rec, const BundleOptions& bopt) 
         img_group[i] = camGroup[imgOf[i]->camera_id];
         group_images[img_group[i]]++;
     }
+    // What the prior is scaled and sized to: how much evidence each group has,
+    // and how far from its principal point the observations actually reach.
+    std::vector<double> group_obs(camIds.size(), 0.0), group_r2(camIds.size(), 0.0);
+    {
+        std::vector<double> gcx(camIds.size()), gcy(camIds.size());
+        for (size_t g = 0; g < camIds.size(); g++) {
+            gcx[g] = rec.cameras[camIds[g]].cx;
+            gcy[g] = rec.cameras[camIds[g]].cy;
+        }
+        for (uint32_t o = 0; o < P.num_obs; o++) {
+            const uint32_t g = img_group[P.obs_image[o]];
+            const double dx = P.obs_xy[2 * o] - gcx[g], dy = P.obs_xy[2 * o + 1] - gcy[g];
+            group_obs[g] += 1.0;
+            group_r2[g] = std::max(group_r2[g], dx * dx + dy * dy);
+        }
+    }
+
     P.groups.resize(camIds.size());
+    P.priors.assign(camIds.size(), CamPrior{});
     P.intr.clear();
+    bool any_prior = false;
     for (size_t g = 0; g < camIds.size(); g++) {
         const Camera& c = rec.cameras[camIds[g]];
         const bool pp = bopt.refine_principal_point && group_images[g] >= bopt.pp_min_images;
@@ -212,6 +239,30 @@ inline BundleLayout buildBundle(Reconstruction& rec, const BundleOptions& bopt) 
         for (uint32_t i = 0; i < ni; i++) P.intr.push_back(ps[i]);
         P.groups[g] = {off, P.free_intr, nf, (uint32_t)camBaModel(c.model)};
         P.free_intr += nf;
+
+        CamPrior& pr = P.priors[g];
+        double rpx = std::sqrt(group_r2[g]);
+        if (bopt.radius_px) {
+            auto it = bopt.radius_px->find(camIds[g]);
+            if (it != bopt.radius_px->end()) rpx = it->second;
+        }
+        pr.rmax = rpx / std::max(c.focal(), 1e-6);
+        pr.w = bopt.prior * group_obs[g];
+        pr.dead = bopt.prior_dead;
+        any_prior = any_prior || pr.active();
+    }
+    if (!any_prior) P.priors.clear();
+    if (spirula::env("SFM_PRIOR_DUMP")) {
+        int n = 0;
+        double worst = 0;
+        for (size_t g = 0; g < P.priors.size(); g++) {
+            const double s = camPriorDeviation(P.groups[g].model,
+                                               &P.intr[P.groups[g].intr_offset], P.priors[g].rmax);
+            worst = std::max(worst, s);
+            n += s > P.priors[g].dead;
+        }
+        fprintf(stderr, "[prior] %zu groups, %d over the deadzone, worst %.3f\n",
+                P.priors.size(), n, worst);
     }
     P.image_group = std::move(img_group);
 

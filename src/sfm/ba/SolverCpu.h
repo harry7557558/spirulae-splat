@@ -77,7 +77,7 @@ public:
             });
         });
         for (double v : part_) total += v;
-        return total;
+        return total + priorCost();
     }
 
     void solve() {
@@ -169,6 +169,7 @@ public:
         jacobianPass();
         pointPrep(damping);
         schurAssemble(damping);
+        priorAdd(damping, false);
     }
     std::vector<double> packedS() const { return S_.data(); }
     std::vector<double> gradient() const { return g_; }
@@ -179,10 +180,12 @@ public:
         jacobianPass();
         pointPrep(damping);
         cgCamDiag(damping);
+        priorAdd(damping, true);
         cgPrecFactor();
         cgIters_ = runPCG((uint32_t)opt_.cg_max_iters);
         std::vector<double> xcg = g_;
         schurAssemble(damping);
+        priorAdd(damping, false);
         S_.factorSolve(g_.data(), *pool_, nthreads_);
         double dmax = 0, xmax = 0;
         for (uint32_t i = 0; i < n_; i++) {
@@ -219,6 +222,8 @@ private:
             model_[i] = (uint8_t)g.model;
         }
         exclusive_ = exclusiveGroups(P_);
+        grpImg_.assign(P_.groups.size(), 0);
+        for (uint32_t i = nImg_; i-- > 0;) grpImg_[P_.image_group[i]] = i;
 
         // Columns of an intrinsics group that more than one image refines are
         // the only ones an image-per-task assembly cannot own outright.
@@ -420,11 +425,13 @@ private:
         prof_.prep += lap();
         if (cg) {
             cgCamDiag(damping);
+            priorAdd(damping, true);
             cgPrecFactor();
             prof_.schur += lap();
             cgIters_ = runPCG(cgMaxit_);
         } else {
             schurAssemble(damping);
+            priorAdd(damping, false);
             prof_.schur += lap();
             S_.factorSolve(g_.data(), *pool_, nthreads_);
         }
@@ -559,6 +566,51 @@ private:
             }
         }
         g_[col] += v;
+    }
+
+    // The prior sees no point, so the Schur complement leaves its blocks
+    // untouched: they add straight onto the group's intrinsics columns.
+    double priorCost() const {
+        double c = 0;
+        for (size_t gi = 0; gi < P_.priors.size(); gi++) {
+            const BAProblem::Group& gr = P_.groups[gi];
+            double g[12] = {}, H[144] = {};
+            c += camPriorEval(P_.priors[gi], gr.model, &P_.intr[gr.intr_offset], gr.n_intr, g,
+                              H, 12);
+        }
+        return c;
+    }
+
+    void priorAdd(double lambda, bool cg) {
+        const double dmp = 1.0 + lambda;
+        for (size_t gi = 0; gi < P_.priors.size(); gi++) {
+            const BAProblem::Group& gr = P_.groups[gi];
+            if (!gr.n_intr || !P_.priors[gi].active()) continue;
+            double gp[12] = {}, H[144] = {};
+            camPriorEval(P_.priors[gi], gr.model, &P_.intr[gr.intr_offset], gr.n_intr, gp, H, 12);
+            const uint32_t n = std::min<uint32_t>(gr.n_intr, 12);
+            for (uint32_t i = 0; i < n; i++) {
+                H[i * 12 + i] *= dmp;
+                g_[gr.intr_col + i] += gp[i];
+            }
+            if (!cg) {
+                for (uint32_t i = 0; i < n; i++)
+                    for (uint32_t j = 0; j <= i; j++)
+                        S_.row(gr.intr_col + i)[gr.intr_col + j] += H[i * 12 + j];
+                continue;
+            }
+            // One image carries the group's block: the matvec sums the
+            // intrinsics rows over every image that shares it.
+            double* B = &cgB_[(size_t)kCamBlk * grpImg_[gi]];
+            double* M = exclusive_ ? &cgM_[(size_t)kCamBlk * grpImg_[gi]]
+                                   : &cgM_[(size_t)kCamBlk * (nImg_ + gi)];
+            const uint32_t off = exclusive_ ? 6 : 0;
+            for (uint32_t i = 0; i < n; i++)
+                for (uint32_t j = 0; j <= i; j++) {
+                    B[pidx(6 + i, 6 + j)] += H[i * 12 + j];
+                    M[pidx(off + i, off + j)] += H[i * 12 + j];
+                }
+        }
     }
 
     void schurAssemble(double lambda) {
@@ -1052,6 +1104,7 @@ private:
     bool useCG_ = false, haveFallback_ = false, cgConverged_ = false;
     uint32_t cgMaxit_ = 100, cgIters_ = 0;
 
+    std::vector<uint32_t> grpImg_;  // per group, one image that refines it
     std::vector<double> Jc_, Jp_, res_, App_, W_, Bp_, Bp0_, g_;
     std::vector<double> poses0_, intr0_, points0_;
     std::vector<double> sbuf_, sgbuf_, part_;

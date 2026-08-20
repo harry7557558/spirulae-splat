@@ -261,7 +261,14 @@ struct MapperOptions {
     double audit_min_shift_frac = 0.01;
     int audit_ransac_trials = 1000;
     int min_image_points = 5;          // de-register images that fall below this
-    double max_extra_param = 1.0;      // |distortion param| beyond this = bogus
+    // Distortion prior for bundle adjustment (sfm/ba/CamPrior.h): weight per
+    // observation of the group (0 turns it off), then the RMS fractional radial
+    // displacement it lets through free.
+    double cam_prior = 1.0, cam_prior_dead = 0.25;
+    // Distortion the runaway backstop zeroes, in the same units. Far outside
+    // the deadzone: the prior is what keeps a camera out of there, and this is
+    // only for a model that fell in anyway (D36).
+    double max_distortion = 1.0;
     CamModel camera_model = CamModel::Radial;  // distortion model for new cameras (D29)
     // Starting intrinsics per camera id, built by sfm/core/CameraSetup.h from
     // --camera-model / --focal / EXIF (D46). A camera with no entry here falls
@@ -1243,6 +1250,7 @@ public:
         bo.loss_param = (float)(opt_.ba_loss_param * medianPixelScale());
         bo.refine_principal_point = opt_.refine_principal_point || pp_free_;
         bo.pp_min_images = opt_.pp_min_images;
+        setCameraPrior(bo);
         bo.solver = opt_.ba_solver;
         if (coarse && opt_.ba_growth_rtol > 0) {
             bo.rtol = opt_.ba_growth_rtol;
@@ -3187,6 +3195,7 @@ private:
             bo.loss_param = (float)(opt_.ba_loss_param * medianPixelScale());
             bo.refine_principal_point = opt_.refine_principal_point || pp_free_;
             bo.pp_min_images = opt_.pp_min_images;
+            setCameraPrior(bo);
             // Convergence-adaptive iterations (D38): the first round of a
             // growth refine runs to a loose tolerance -- most refines stop
             // there because the model barely changed. A round beyond the
@@ -3556,6 +3565,34 @@ private:
         im.registered = false;
     }
 
+    static double envNum(const char* key, double dflt) {
+        const char* v = spirula::env(key);
+        return v && *v ? std::atof(v) : dflt;
+    }
+
+    void setCameraPrior(BundleOptions& bo) {
+        bo.prior = envNum("SFM_CAM_PRIOR", opt_.cam_prior);
+        bo.prior_dead = envNum("SFM_CAM_PRIOR_DEAD", opt_.cam_prior_dead);
+        bo.radius_px = &keypointRadius();
+    }
+
+    // How far each group's *picture* reaches: the farthest keypoint any of its
+    // images detected, in that camera's pixels. Not the tracked radius -- the
+    // usual runaway is a fold just outside what the tracks constrain.
+    const std::map<uint32_t, double>& keypointRadius() {
+        if (!kp_radius_.empty()) return kp_radius_;
+        for (uint32_t i = 0; i < cam_ids_.size(); i++) {
+            const double cx = 0.5 * feats_[i].width, cy = 0.5 * feats_[i].height;
+            double& m = kp_radius_[cam_ids_[i]];
+            for (uint32_t f = 0; f < feats_[i].count(); f++) {
+                const Vec2 p = kp(i, f);
+                m = std::max(m, (p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy));
+            }
+        }
+        for (auto& kv : kp_radius_) kv.second = std::sqrt(kv.second);
+        return kp_radius_;
+    }
+
     // A camera that left the physically plausible regime is pulled back in
     // rather than getting its images de-registered (where COLMAP kills the
     // images, fatal when a camera group covers many of them). If the wild
@@ -3565,6 +3602,7 @@ private:
     // reprojection filter exposes exactly the observations that depended on
     // them, and de-registration proceeds from evidence (D36).
     void sanitizeCameras() {
+        const std::map<uint32_t, double>& support = keypointRadius();
         for (auto& kv : rec_.cameras) {
             Camera& c = kv.second;
             const Camera& d = default_cams_.at(kv.first);
@@ -3574,11 +3612,21 @@ private:
                 c.setFocal(d.focal());
                 fixed++;
             }
-            // FullOpenCV's k4..k6 are the rational denominator, but in the same
-            // normalized-radius units as k1..k3, so one threshold covers both.
-            for (double* k : {&c.k1, &c.k2, &c.k3, &c.k4, &c.k5, &c.k6, &c.p1, &c.p2,
-                              &c.sx1, &c.sy1})
-                if (std::fabs(*k) > opt_.max_extra_param) { *k = 0; fixed++; }
+            // Judged by what the coefficients do to the image over the radii
+            // the capture covers, not by their size: large high-order terms
+            // that cancel are ordinary, small ones that fold the image are not.
+            auto sup = support.find(kv.first);
+            double ps[12];
+            packIntrinsics(c, ps);
+            if (sup != support.end() &&
+                camPriorDeviation((uint32_t)camBaModel(c.model), ps,
+                                  sup->second / std::max(c.focal(), 1e-6)) >
+                    envNum("SFM_MAX_DIST", opt_.max_distortion)) {
+                for (double* k : {&c.k1, &c.k2, &c.k3, &c.k4, &c.k5, &c.k6, &c.p1, &c.p2,
+                                  &c.sx1, &c.sy1})
+                    *k = 0;
+                fixed++;
+            }
             // The mapper never has evidence to move the principal point far
             // from the center (COLMAP does not refine it at all during
             // mapping); a large excursion is BA absorbing something else.
@@ -3630,6 +3678,7 @@ private:
     std::set<uint32_t> focal_known_;  // cameras whose focal is no longer a guess
     bool pp_free_ = false;            // inside polish(): release the principal point
     std::map<uint32_t, Camera> default_cams_;  // pristine per-group defaults
+    std::map<uint32_t, double> kp_radius_;     // per camera, see keypointRadius
     // Best intrinsics any admitted model has produced for each camera group,
     // with the number of images that constrained them (D45; recordCameras).
     std::map<uint32_t, std::pair<Camera, double>> cam_consensus_;

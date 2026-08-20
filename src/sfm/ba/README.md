@@ -21,6 +21,7 @@ sfm/shaders/
   ba/ba.slang        kernels: cost, Jacobian+assembly, Schur, updates; bindings & push constants
   ba/cholesky.slang  in-place packed dense Cholesky + triangular solves
   ba/cg.slang        implicit-Schur block-Jacobi PCG (device-side loop, no host round-trips)
+  ba/prior.slang     the intrinsics prior on the device, one thread per camera group
   common/camera.slang  pose + ICameraModel interface + every camera model
   common/loss.slang    ILoss: trivial / Huber / Cauchy (selected at shader compile, param at runtime)
   common/real.slang    Real = float | double | DF, atomic accumulation API, rexp/rsin/rcos/rlog
@@ -30,6 +31,7 @@ sfm/shaders/
 sfm/ba/
   Problem.h          model registry, camera groups, column layout, per-model obs lists,
                        BAL problem loading
+  CamPrior.h         the intrinsics prior: metric, deadzone, Gauss-Newton blocks
   Options.h          scalar config, solver selection, options and stats
   Solver.h           LM driver (records one command buffer per iteration)
   SolverCpu.h        the same solver on the host -- see "Host fallback" below
@@ -335,6 +337,41 @@ global BA: a 152-image capture 1.85 s against 0.81 s, a 1015-image one
 (`n_dim = 6102`) 3.6 s against 2.4 s, both at identical final cost. Peak
 memory is slightly *below* the GPU path's, which uploads a copy of the problem
 tables. `SS_SFM_MAP_PROF=1` prints the per-phase breakdown.
+
+### Intrinsics prior
+
+Optional, per camera group, and off unless the caller fills `BAProblem::priors`
+(`sfm/map/Bundle.h` does, from `MapperOptions::cam_prior*`). Three deadzone
+quadratic terms, `0.5 w (x - c)^2` for `x > c` and nothing below `c`:
+
+* **Distortion.** `x` is the RMS *fractional* radial displacement over the disc
+  the group's observations actually cover -- `sqrt(<(radial(r) - 1)^2>)` under
+  the area measure, six-point Gauss-Legendre in `(r/rmax)^2`, which is exact for
+  every polynomial model. Tangential and thin-prism coefficients enter the same
+  metric with the azimuth averaged out (`2.5 r^2` and `0.5 r^2` per
+  coefficient, both orthogonal to the radial terms). Measuring the *function*
+  rather than the coefficients is the whole point: `k1..k3` of order 1e4 that
+  cancel to a tame `radial(r)` are ordinary in a rational model and cost
+  nothing here, while coefficients well under 1 that fold the image do not.
+* **Focal.** `x = |log(f / f_ref)|`, with `f` the geometric mean for the
+  two-focal models. Inactive without a reference camera.
+* **Principal point.** `x = |pp - pp_ref| / half-diagonal`; only bites when the
+  principal point is free at all.
+
+Gradient and Hessian are exact for the first term and Gauss-Newton for the
+other two; the distortion Hessian is `w a J^T J + w c/s^3 u u^T` with
+`a = 1 - c/s` and `u = J^T rho`, which is PSD wherever the term is active. The
+prior sees no point, so the Schur complement passes it through untouched and it
+is simply added onto the group's intrinsics columns of `S` (dense) or of `B`
+and the preconditioner block (CG) after the assembly kernels, with the same
+`(1+lambda)` on the diagonal the data term gets. `cost_prior` adds its share of
+the objective, without which the LM accept/reject would compare two different
+functions.
+
+Weights are *per observation of the group*, so the prior keeps its share of the
+objective as a model grows: a lens with little evidence behind it is held near
+the reference, and one with a lot is free to move -- inside the deadzone the
+term is exactly zero either way.
 
 ### LM loop
 

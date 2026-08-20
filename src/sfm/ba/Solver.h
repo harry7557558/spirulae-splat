@@ -82,6 +82,7 @@ inline const VkDeviceCaps& cachedDeviceCaps(int deviceIndex) {
 class BundleSolver {
     enum class LinSolve { DenseObs, DensePair, CG };
     static constexpr uint32_t kCamBlk = kMaxCamDof * (kMaxCamDof + 1) / 2;  // matches cg.slang
+    static constexpr uint32_t kPriorN = 4, kPriorL = 20;  // records in sfm/shaders/ba/prior.slang
 
 public:
     // With `shared` the solver runs on a caller-owned persistent context:
@@ -207,6 +208,9 @@ public:
         bCgScal_ = mkReal(8);
         bCgPart_ = mkReal(cgAllocated_ ? 2 * (uint64_t)npart : 1);
         bPrecBlocks_ = mkUint(cgAllocated_ ? P_.prec_blocks.size() : 4);
+        const bool prior = !P_.priors.empty();
+        bPrior_ = mkReal(prior ? kPriorN * P_.groups.size() : 1);
+        bPriorL_ = mkUint(prior ? kPriorL * P_.groups.size() : 1);
 
         // binding order must match sfm/shaders/ba/ba.slang + cg.slang; atomic views
         // alias the same VkBuffer at the odd bindings
@@ -221,6 +225,7 @@ public:
             bCamRanges_.buf, bCamObs_.buf, bCgR_.buf, bCgZ_.buf, bCgP_.buf, bCgSp_.buf,
             bCgV_.buf, bCgB_.buf, bCgM_.buf, bCgScal_.buf, bCgPart_.buf,
             bCgSp_.buf, bCgB_.buf, bCgM_.buf, bCamChunks_.buf, bPrecBlocks_.buf,
+            bPrior_.buf, bPriorL_.buf,
         };
         ownBufs_ = {&bObs_, &bObsImage_, &bObsPoint_, &bImageGroup_, &bGroupInfo_,
                     &bPoses_, &bIntr_, &bPoints_, &bObsRanges_, &bModelObs_, &bJcOff_,
@@ -229,7 +234,8 @@ public:
                     &bBp0_, &bJc_, &bRes_,
                     &bPairEntries_, &bPairChunks_, &bW_, &bYp_, &bY_,
                     &bCamRanges_, &bCamObs_, &bCamChunks_, &bCgR_, &bCgZ_, &bCgP_, &bCgSp_,
-                    &bCgV_, &bCgB_, &bCgM_, &bCgScal_, &bCgPart_, &bPrecBlocks_};
+                    &bCgV_, &bCgB_, &bCgM_, &bCgScal_, &bCgPart_, &bPrecBlocks_,
+                    &bPrior_, &bPriorL_};
         double t_buf = prof_lap();
         ctx_.createDescriptors(binds);
         // Fresh-from-the-driver allocations happen to arrive zeroed; memory
@@ -282,6 +288,10 @@ public:
         for (const BAProblem::ModelRange& mr : P_.model_ranges) {
             entries.push_back(kModels[mr.model].cost_entry);
             entries.push_back(kModels[mr.model].jac_entry);
+        }
+        if (prior) {
+            entries.push_back("cost_prior");
+            entries.push_back("intr_prior");
         }
         // A shared context keeps its pipelines across solver instances; the
         // caller owning it must keep (real, loss) fixed, since the module is
@@ -338,6 +348,15 @@ public:
         if (P_.use_pair_schur) {
             up.push_back({&bPairEntries_, P_.pair_entries.data(), P_.pair_entries.size() * 4});
             up.push_back({&bPairChunks_, P_.pair_chunks.data(), P_.pair_chunks.size() * 4});
+        }
+        std::vector<double> pv;
+        std::vector<uint32_t> pl;
+        std::vector<uint8_t> pvp;
+        if (prior) {
+            packPrior(pv, pl);
+            packReals(pvp, pv.data(), pv.size(), opt_.real);
+            up.push_back({&bPrior_, pvp.data(), pvp.size()});
+            up.push_back({&bPriorL_, pl.data(), pl.size() * 4});
         }
         if (cgAllocated_) {
             up.push_back({&bCamRanges_, P_.cam_obs_ranges.data(), P_.cam_obs_ranges.size() * 4});
@@ -708,6 +727,49 @@ private:
         return b / (1024.0 * 1024.0);
     }
 
+    // Between the assembly and whatever consumes S: the prior's blocks are the
+    // group's alone, so one thread writes each without atomics.
+    void recordPrior(VkCommandBuffer cb, float damping, bool cg) {
+        if (P_.priors.empty()) return;
+        Push p;
+        p.u0 = (uint32_t)P_.groups.size();
+        p.u1 = cg ? 1 : 0;
+        p.u2 = P_.num_images;
+        p.u3 = P_.prec_exclusive ? 1 : 0;
+        p.f0 = damping;
+        ctx_.dispatch(cb, "intr_prior", ((uint32_t)P_.groups.size() + 63) / 64, p);
+        ctx_.barrier(cb);
+    }
+
+    // Per group, the two device records prior.slang reads. Field order must
+    // match the kPr*/kPl* offsets there.
+    void packPrior(std::vector<double>& v, std::vector<uint32_t>& l) const {
+        const size_t ng = P_.groups.size();
+        v.assign(kPriorN * ng, 0.0);
+        l.assign(kPriorL * ng, 0);
+        std::vector<uint32_t> rep(ng, 0);
+        for (uint32_t i = P_.num_images; i-- > 0;) rep[P_.image_group[i]] = i;
+        for (size_t g = 0; g < ng; g++) {
+            const CamPrior& pr = P_.priors[g];
+            double* d = &v[kPriorN * g];
+            d[0] = pr.w;
+            d[1] = pr.dead;
+            d[2] = pr.rmax;
+            const CamPriorLayout& L = kCamPriorLayout[P_.groups[g].model];
+            uint32_t* q = &l[kPriorL * g];
+            q[0] = L.nrad;
+            q[1] = L.nden;
+            q[2] = L.ntan;
+            q[3] = L.nprism;
+            for (int i = 0; i < 4; i++) q[4 + i] = L.rad[i];
+            for (int i = 0; i < 3; i++) q[8 + i] = L.den[i];
+            for (int i = 0; i < 2; i++) q[11 + i] = L.tan[i];
+            for (int i = 0; i < 2; i++) q[13 + i] = L.prism[i];
+            q[15] = rep[g];
+            q[16] = (uint32_t)kModels[P_.groups[g].model].n_intr;
+        }
+    }
+
     void recordCost(VkCommandBuffer cb) {
         ctx_.fillZero(cb, bCost_);
         ctx_.barrier(cb);
@@ -717,6 +779,11 @@ private:
             p.u1 = mr.offset;
             p.f0 = opt_.loss_param;
             ctx_.dispatch(cb, kModels[mr.model].cost_entry, (mr.count + 255) / 256, p);
+        }
+        if (!P_.priors.empty()) {
+            Push p;
+            p.u0 = (uint32_t)P_.groups.size();
+            ctx_.dispatch(cb, "cost_prior", ((uint32_t)P_.groups.size() + 63) / 64, p);
         }
         ctx_.barrier(cb);
     }
@@ -793,11 +860,13 @@ private:
                 p.u2 = P_.num_images;  // group blocks follow the per-image ones
                 ctx_.dispatch(cb, "cg_cam_diag", P_.num_cam_chunks, p);
                 ctx_.barrier(cb);
+                recordPrior(cb, damping, true);
                 p.u0 = P_.num_prec_blocks;
                 ctx_.dispatch(cb, "cg_prec_fact", (P_.num_prec_blocks + 255) / 256, p);
             }
         }
         ctx_.barrier(cb);
+        if (dense) recordPrior(cb, damping, false);
     }
 
     // Record the device-side PCG loop (see cg.slang). A fixed iteration count
@@ -998,4 +1067,5 @@ private:
     GpuBuffer bPairEntries_, bPairChunks_, bW_, bYp_, bY_;
     GpuBuffer bCamRanges_, bCamObs_, bCamChunks_, bCgR_, bCgZ_, bCgP_, bCgSp_;
     GpuBuffer bCgV_, bCgB_, bCgM_, bCgScal_, bCgPart_, bPrecBlocks_;
+    GpuBuffer bPrior_, bPriorL_;
 };
